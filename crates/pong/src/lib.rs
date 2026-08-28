@@ -231,6 +231,13 @@ mod wasm_api {
         // here, but keeping the start fn explicit documents the contract.
     }
 
+    /// The protocol version this build speaks — the page's plain-JS lobby
+    /// browser uses it instead of hardcoding a number that can drift.
+    #[wasm_bindgen]
+    pub fn proto_version() -> u16 {
+        pong_core::proto::PROTO_VERSION
+    }
+
     #[wasm_bindgen]
     pub fn start_local() {
         super::run_local();

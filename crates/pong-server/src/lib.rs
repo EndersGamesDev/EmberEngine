@@ -92,7 +92,14 @@ struct Lobby {
     /// conn id -> in-game player id
     pids: HashMap<u64, u8>,
     inputs: HashMap<u8, PlayerIn>,
-    next_pid: u8,
+}
+
+/// Smallest player id not held by a current member (never collides, unlike
+/// a wrapping counter in a long-lived lobby).
+fn alloc_pid(lobby: &Lobby) -> u8 {
+    (0..u8::MAX)
+        .find(|p| !lobby.pids.values().any(|v| v == p))
+        .unwrap_or(0)
 }
 
 pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
@@ -310,9 +317,10 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
             lobby.sim.step(&|pid| inputs.get(&pid).copied().unwrap_or_default());
 
             for &(killer, victim) in &lobby.sim.events {
-                let msg = S2C::Kill { killer, victim };
-                for &m in &lobby.members {
-                    let _ = send_to(&conns, m, &msg);
+                if let Ok(text) = serde_json::to_string(&S2C::Kill { killer, victim }) {
+                    for &m in &lobby.members {
+                        let _ = send_text_to(&conns, m, &text);
+                    }
                 }
             }
             if tick % STATE_EVERY_TICKS == 0 {
@@ -340,10 +348,13 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
                         .map(|b| BState { x: b.pos[0], z: b.pos[1], vx: b.vel[0], vz: b.vel[1] })
                         .collect(),
                 };
-                for &m in &lobby.members {
-                    if !send_to(&conns, m, &state) {
-                        // Stalled pipe: drop the peer, the game plays on.
-                        dead_conns.push(m);
+                // Serialize once per lobby, not once per recipient.
+                if let Ok(text) = serde_json::to_string(&state) {
+                    for &m in &lobby.members {
+                        if !send_text_to(&conns, m, &text) {
+                            // Stalled pipe: drop the peer, the game plays on.
+                            dead_conns.push(m);
+                        }
                     }
                 }
             }
@@ -386,12 +397,13 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
 }
 
 fn send_to(conns: &HashMap<u64, Conn>, id: u64, msg: &S2C) -> bool {
+    let Ok(text) = serde_json::to_string(msg) else { return false };
+    send_text_to(conns, id, &text)
+}
+
+fn send_text_to(conns: &HashMap<u64, Conn>, id: u64, text: &str) -> bool {
     let Some(c) = conns.get(&id) else { return false };
-    let text = match serde_json::to_string(msg) {
-        Ok(t) => t,
-        Err(_) => return false,
-    };
-    match c.tx.try_send(Message::text(text)) {
+    match c.tx.try_send(Message::text(text.to_owned())) {
         Ok(()) => true,
         Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => false,
     }
@@ -551,10 +563,8 @@ fn handle_event(
                         members: vec![id],
                         pids: HashMap::new(),
                         inputs: HashMap::new(),
-                        next_pid: 0,
                     };
-                    let pid = lobby.next_pid;
-                    lobby.next_pid += 1;
+                    let pid = alloc_pid(&lobby);
                     lobby.pids.insert(id, pid);
                     lobby.sim.add_player(pid);
                     conns.get_mut(&id).unwrap().lobby = Some(name.clone());
@@ -599,8 +609,7 @@ fn handle_event(
                             return;
                         }
                     }
-                    let pid = lobby.next_pid;
-                    lobby.next_pid = lobby.next_pid.wrapping_add(1);
+                    let pid = alloc_pid(lobby);
                     lobby.members.push(id);
                     lobby.pids.insert(id, pid);
                     lobby.sim.add_player(pid);
@@ -658,12 +667,12 @@ fn drop_conn(
 /// Take a player out of their game; the game keeps running for the rest,
 /// and the lobby dies when the last player leaves.
 fn leave_lobby(id: u64, conns: &mut HashMap<u64, Conn>, lobbies: &mut HashMap<String, Lobby>) {
-    let Some(name) = conns.get_mut(&id).and_then(|c| {
+    let Some(name) = conns.get_mut(&id).and_then(|c| c.lobby.take()) else { return };
+    // Reset the parked timer only when a lobby was actually left — a bare
+    // LeaveLobby spam must not refresh the sweep deadline.
+    if let Some(c) = conns.get_mut(&id) {
         c.lobbyless_since = Instant::now();
-        c.lobby.take()
-    }) else {
-        return;
-    };
+    }
     let Some(lobby) = lobbies.get_mut(&name) else { return };
 
     lobby.members.retain(|&m| m != id);

@@ -231,16 +231,27 @@ impl EmberGame for ShooterGame {
                     self.latest.remove(&id);
                 }
                 S2C::State { players, bullets, .. } => {
-                    self.from.clear();
+                    // Compute current render positions from the OLD from/to
+                    // pair BEFORE replacing anything, then interpolate from
+                    // there toward the new state. Snap (no slide) for a
+                    // first sighting or a teleport-sized jump (respawn).
+                    let mut new_from = HashMap::with_capacity(players.len());
                     for p in &players {
-                        self.from.insert(p.id, PSnap { x: self.render_pos(p.id).x, z: self.render_pos(p.id).y });
+                        let snap = match self.to.get(&p.id) {
+                            Some(prev_to) => {
+                                let cur = self.render_pos(p.id);
+                                let (dx, dz) = (p.x - prev_to.x, p.z - prev_to.z);
+                                if dx * dx + dz * dz > 6.0 * 6.0 {
+                                    PSnap { x: p.x, z: p.z } // respawn teleport
+                                } else {
+                                    PSnap { x: cur.x, z: cur.y }
+                                }
+                            }
+                            None => PSnap { x: p.x, z: p.z },
+                        };
+                        new_from.insert(p.id, snap);
                     }
-                    // First snapshot for a player: snap, don't slide in.
-                    for p in &players {
-                        if !self.to.contains_key(&p.id) {
-                            self.from.insert(p.id, PSnap { x: p.x, z: p.z });
-                        }
-                    }
+                    self.from = new_from;
                     self.to = players.iter().map(|p| (p.id, PSnap { x: p.x, z: p.z })).collect();
                     self.latest = players.into_iter().map(|p| (p.id, p)).collect();
                     self.t = 0.0;
@@ -258,8 +269,15 @@ impl EmberGame for ShooterGame {
                     status_event = Some(line);
                 }
                 S2C::Error { message } => {
-                    self.lost = true;
-                    set_status(&format!("server error: {message}"));
+                    if self.my_id.is_none() {
+                        // Failed to even get into a game (bad password, name
+                        // taken, ...): dead end, tell the player.
+                        self.lost = true;
+                        set_status(&format!("server error: {message}"));
+                    } else {
+                        // In-game errors are informational, keep playing.
+                        status_event = Some(format!("server: {message}"));
+                    }
                 }
                 S2C::Pong { .. } | S2C::LobbyList { .. } => {}
             }
@@ -377,11 +395,14 @@ impl EmberGame for ShooterGame {
             }
         }
 
-        // Bullets: glowing blue tracers, extrapolated between states.
+        // Bullets: glowing blue tracers, extrapolated between states —
+        // bounded to ~2 state intervals so a stall doesn't fly tracers
+        // through walls and off the arena.
+        let age = self.bullets_age.min(0.12);
         for b in &self.bullets {
             inst(
                 &mut frame,
-                Vec3::new(b.x + b.vx * self.bullets_age, 0.85, b.z + b.vz * self.bullets_age),
+                Vec3::new(b.x + b.vx * age, 0.85, b.z + b.vz * age),
                 Vec3::splat(0.3),
                 GLOW_BLUE,
             );

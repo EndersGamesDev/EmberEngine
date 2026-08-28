@@ -33,7 +33,10 @@ pub fn generate_arena(seed: u64) -> Vec<Obstacle> {
         state = state
             .wrapping_mul(6364136223846793005)
             .wrapping_add(1442695040888963407);
-        ((state >> 33) as u32) as f32 / u32::MAX as f32
+        // Top 32 bits over 2^32: uniform in [0, 1). (Dividing 31 bits by
+        // u32::MAX halved the range and put every obstacle in one half of
+        // the arena.)
+        ((state >> 32) as u32) as f32 / (u32::MAX as f32 + 1.0)
     };
     let mut obstacles = Vec::with_capacity(14);
     for _ in 0..14 {
@@ -195,9 +198,12 @@ impl Sim {
                 if active < MAX_BULLETS_PER_PLAYER {
                     let p = &mut self.players[i];
                     p.cooldown = FIRE_COOLDOWN;
+                    // Spawn just in front of the center: the swept collision
+                    // below skips the owner, and starting further out would
+                    // leave a point-blank dead zone.
                     let muzzle = [
-                        p.pos[0] + p.aim[0] * (PLAYER_R + BULLET_R + 0.15),
-                        p.pos[1] + p.aim[1] * (PLAYER_R + BULLET_R + 0.15),
+                        p.pos[0] + p.aim[0] * 0.2,
+                        p.pos[1] + p.aim[1] * 0.2,
                     ];
                     new_bullets.push(Bullet {
                         pos: muzzle,
@@ -210,16 +216,40 @@ impl Sim {
         }
         self.bullets.extend(new_bullets);
 
-        // Bullets: integrate, expire, collide with world and players.
+        // Bullets: swept player collision (segment vs circle — no tunneling,
+        // no point-blank dead zone), then integrate, then world collision.
         let mut hits: Vec<(u8, u8)> = Vec::new(); // (owner, victim)
         let obstacles = std::mem::take(&mut self.obstacles);
-        self.bullets.retain_mut(|b| {
+        let players = &self.players;
+        let mut bullets = std::mem::take(&mut self.bullets);
+        bullets.retain_mut(|b| {
             b.ttl -= dt;
             if b.ttl <= 0.0 {
                 return false;
             }
-            b.pos[0] += b.vel[0] * dt;
-            b.pos[1] += b.vel[1] * dt;
+            let p0 = b.pos;
+            let p1 = [p0[0] + b.vel[0] * dt, p0[1] + b.vel[1] * dt];
+            let (sx, sz) = (p1[0] - p0[0], p1[1] - p0[1]);
+            let seg_len_sq = sx * sx + sz * sz;
+            let rr = PLAYER_R + BULLET_R;
+            for p in players.iter() {
+                if !p.alive || p.id == b.owner {
+                    continue;
+                }
+                // Closest point on [p0, p1] to the player's center.
+                let t = if seg_len_sq <= 1e-8 {
+                    0.0
+                } else {
+                    (((p.pos[0] - p0[0]) * sx + (p.pos[1] - p0[1]) * sz) / seg_len_sq)
+                        .clamp(0.0, 1.0)
+                };
+                let (ex, ez) = (p.pos[0] - (p0[0] + sx * t), p.pos[1] - (p0[1] + sz * t));
+                if ex * ex + ez * ez < rr * rr {
+                    hits.push((b.owner, p.id));
+                    return false;
+                }
+            }
+            b.pos = p1;
             if b.pos[0].abs() > ARENA_HALF - BULLET_R || b.pos[1].abs() > ARENA_HALF - BULLET_R {
                 return false;
             }
@@ -231,19 +261,9 @@ impl Sim {
             }) {
                 return false;
             }
-            for p in self.players.iter() {
-                if !p.alive || p.id == b.owner {
-                    continue;
-                }
-                let (dx, dz) = (p.pos[0] - b.pos[0], p.pos[1] - b.pos[1]);
-                let rr = PLAYER_R + BULLET_R;
-                if dx * dx + dz * dz < rr * rr {
-                    hits.push((b.owner, p.id));
-                    return false;
-                }
-            }
             true
         });
+        self.bullets = bullets;
         self.obstacles = obstacles;
 
         // Apply damage after the bullet pass (avoids double-borrow).
@@ -285,6 +305,53 @@ mod tests {
             assert!(o.max[0] < ARENA_HALF - 4.0 && o.max[1] < ARENA_HALF - 4.0);
             assert!(o.min[0] > -(ARENA_HALF - 4.0) && o.min[1] > -(ARENA_HALF - 4.0));
         }
+    }
+
+    #[test]
+    fn arena_covers_all_quadrants() {
+        // Guards the RNG range: a half-range generator (the [0, 0.5) bug)
+        // could never place obstacles at negative z.
+        let (mut neg_x, mut neg_z, mut pos_x, mut pos_z) = (false, false, false, false);
+        for seed in 0..16u64 {
+            for o in generate_arena(seed) {
+                let cx = (o.min[0] + o.max[0]) * 0.5;
+                let cz = (o.min[1] + o.max[1]) * 0.5;
+                neg_x |= cx < -3.0;
+                pos_x |= cx > 3.0;
+                neg_z |= cz < -3.0;
+                pos_z |= cz > 3.0;
+            }
+        }
+        assert!(
+            neg_x && neg_z && pos_x && pos_z,
+            "obstacles must appear in all four quadrants across seeds"
+        );
+    }
+
+    #[test]
+    fn point_blank_shots_connect() {
+        let mut sim = Sim::new(4);
+        sim.obstacles.clear();
+        sim.add_player(0);
+        sim.add_player(1);
+        let mut inputs = HashMap::new();
+        inputs.insert(0, PlayerIn { mv: [0.0, 0.0], aim: [1.0, 0.0], fire: true });
+        // Victim glued right in front of the shooter, inside the old
+        // dead zone.
+        let mut killed = false;
+        for _ in 0..600 {
+            sim.players.iter_mut().for_each(|p| match p.id {
+                0 if p.alive => p.pos = [0.0, 0.0],
+                1 if p.alive => p.pos = [0.4, 0.0],
+                _ => {}
+            });
+            step_with(&mut sim, &inputs);
+            if !sim.events.is_empty() {
+                killed = true;
+                break;
+            }
+        }
+        assert!(killed, "point-blank shots must connect");
     }
 
     #[test]
