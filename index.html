@@ -144,7 +144,8 @@
       if (r.ok) serverCfg = await r.json();
     } catch {}
     const V = serverCfg.v || '0';
-    const { default: init, start_local, start_online } = await import(`./pkg/pong.js?v=${V}`);
+    const { default: init, start_local, start_online, proto_version } =
+      await import(`./pkg/pong.js?v=${V}`);
     const fail = (msg) => {
       const el = $('loading') || $('status');
       if (el) el.textContent = 'failed to start: ' + (msg || 'see browser console');
@@ -204,7 +205,8 @@
       goOnline('create', $('lobby-name').value.trim(), $('lobby-pw').value));
 
     // ---- lobby browser: plain JS speaks the JSON protocol for listing
-    $('btn-refresh').addEventListener('click', () => {
+    $('btn-refresh').addEventListener('click', async () => {
+      await ready; // proto_version() needs the instantiated module
       const url = serverUrl();
       const note = $('list-note') || document.createElement('span');
       note.id = 'list-note';
@@ -218,7 +220,7 @@
       setTimeout(() => finish('server not reachable'), 6000);
       ws.onerror = () => finish('server not reachable');
       ws.onopen = () => {
-        ws.send(JSON.stringify({ t: 'hello', proto: 1, handle: 'browser' }));
+        ws.send(JSON.stringify({ t: 'hello', proto: proto_version(), handle: 'browser' }));
         ws.send(JSON.stringify({ t: 'list_lobbies' }));
       };
       ws.onmessage = (e) => {

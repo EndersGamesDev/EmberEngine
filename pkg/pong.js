@@ -1,3 +1,13 @@
+/**
+ * The protocol version this build speaks — the page's plain-JS lobby
+ * browser uses it instead of hardcoding a number that can drift.
+ * @returns {number}
+ */
+export function proto_version() {
+    const ret = wasm.proto_version();
+    return ret;
+}
+
 export function start_local() {
     wasm.start_local();
 }
@@ -2302,7 +2312,7 @@ function __wbg_get_imports() {
             return ret;
         },
         __wbindgen_cast_0000000000000008: function(arg0, arg1) {
-            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("MessageEvent")], shim_idx: 180, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
+            // Cast intrinsic for `Closure(Closure { owned: true, function: Function { arguments: [NamedExternref("MessageEvent")], shim_idx: 170, ret: Unit, inner_ret: Some(Unit) }, mutable: true }) -> Externref`.
             const ret = makeMutClosure(arg0, arg1, wasm_bindgen__convert__closures_____invoke__h5f74a5ad2a4dfd16);
             return ret;
         },
