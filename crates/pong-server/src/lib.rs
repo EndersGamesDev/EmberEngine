@@ -74,6 +74,10 @@ struct Conn {
     tx: SyncSender<Message>,
     peer: String,
     handle: Option<String>, // set by Hello
+    /// Client protocol version from Hello. Listing is allowed for any
+    /// version (the hub browses without loading the game); entering a
+    /// game requires the current one.
+    proto: u16,
     lobby: Option<String>,
     created: Instant,
     /// Since when this conn has been outside any game.
@@ -444,6 +448,7 @@ fn handle_event(
                     tx,
                     peer,
                     handle: None,
+                    proto: 0,
                     lobby: None,
                     created: now,
                     lobbyless_since: now,
@@ -467,21 +472,16 @@ fn handle_event(
             let has_handle = c.handle.is_some();
             match (msg, has_handle) {
                 (C2S::Hello { proto, handle }, false) => {
-                    if proto != PROTO_VERSION {
-                        let _ = send_to(conns, id, &S2C::Error {
-                            message: format!(
-                                "protocol mismatch: server v{PROTO_VERSION}, client v{proto} — reload the page"
-                            ),
-                        });
-                        drop_conn(id, conns, lobbies);
-                        return;
-                    }
+                    // Any version may Hello and LIST (the hub browses
+                    // lobbies without the game loaded); Create/Join below
+                    // enforce the current protocol.
                     let handle = {
                         let h = sanitize_text(&handle, MAX_HANDLE_LEN);
                         if h.is_empty() { "player".to_string() } else { h }
                     };
                     let c = conns.get_mut(&id).unwrap();
                     c.handle = Some(handle);
+                    c.proto = proto;
                     let _ = send_to(conns, id, &S2C::Welcome {
                         proto: PROTO_VERSION,
                         motd: "ember arena — cubes with guns".into(),
@@ -522,6 +522,15 @@ fn handle_event(
                     let _ = send_to(conns, id, &S2C::LobbyList { lobbies: list });
                 }
                 (C2S::CreateLobby { name, password }, true) => {
+                    if conns.get(&id).unwrap().proto != PROTO_VERSION {
+                        let _ = send_to(conns, id, &S2C::Error {
+                            message: format!(
+                                "this build speaks protocol v{}, the live game is v{PROTO_VERSION} — play the live version",
+                                conns.get(&id).unwrap().proto
+                            ),
+                        });
+                        return;
+                    }
                     let name = sanitize_text(&name, MAX_LOBBY_LEN);
                     let password = password
                         .map(|p| sanitize_text(&p, MAX_PASSWORD_LEN))
@@ -579,6 +588,15 @@ fn handle_event(
                     let _ = send_to(conns, id, &joined);
                 }
                 (C2S::JoinLobby { name, password }, true) => {
+                    if conns.get(&id).unwrap().proto != PROTO_VERSION {
+                        let _ = send_to(conns, id, &S2C::Error {
+                            message: format!(
+                                "this build speaks protocol v{}, the live game is v{PROTO_VERSION} — play the live version",
+                                conns.get(&id).unwrap().proto
+                            ),
+                        });
+                        return;
+                    }
                     let name = sanitize_text(&name, MAX_LOBBY_LEN);
                     if conns.get(&id).unwrap().lobby.is_some() {
                         let _ = send_to(conns, id, &S2C::Error {

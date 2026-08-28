@@ -126,6 +126,19 @@ unreachable server makes launch pause ~4 s before the offline fallback.
     must not match their own ssh command line (see deploy script).
   - `adler` — RTX 4090: reserved for asset baking, Linux/Vulkan testing, CI-style builds.
 
+## Games hub
+
+**<https://enderpeer.github.io/ember/>** is a games hub: an active-lobby
+showcase loads first (jump into any running game), below it the catalog from
+`games.json` — every game with a version picker where the newest build is
+always the "live" one and old builds stay playable from frozen
+`games/<game>/<version>/` directories on gh-pages. Clicking any game
+auto-creates an account (a generated handle like `neon-fox-42`, stored only
+in the player's browser, renameable via the header chip) — no forms.
+The hub lists lobbies without loading a game bundle: the server lets any
+protocol version Hello + list, and enforces the live protocol only on
+create/join.
+
 ## Pong
 
 **Play: <https://enderpeer.github.io/ember/>** — local (2 players, one

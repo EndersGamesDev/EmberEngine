@@ -137,6 +137,38 @@ fn drop_in_arena_flow_with_password() {
 }
 
 #[test]
+fn old_proto_may_list_but_not_join() {
+    let port = start_server();
+    // A current-proto host opens a lobby.
+    let mut host = connect(port, "alice");
+    send(&mut host, &C2S::CreateLobby { name: "arena".into(), password: None });
+    recv_until(&mut host, 5, |m| matches!(m, S2C::GameJoined { .. }).then_some(()));
+
+    // A stale client (or the hub's proto-0 browser) may list...
+    let (mut old, _) = tungstenite::connect(format!("ws://127.0.0.1:{port}")).unwrap();
+    if let MaybeTlsStream::Plain(s) = old.get_ref() {
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    }
+    send(&mut old, &C2S::Hello { proto: 0, handle: "browser".into() });
+    recv_until(&mut old, 5, |m| matches!(m, S2C::Welcome { .. }).then_some(()));
+    send(&mut old, &C2S::ListLobbies);
+    recv_until(&mut old, 5, |m| match m {
+        S2C::LobbyList { lobbies } => (lobbies.len() == 1).then_some(()),
+        _ => None,
+    });
+
+    // ...but entering a game requires the live protocol.
+    send(&mut old, &C2S::JoinLobby { name: "arena".into(), password: None });
+    recv_until(&mut old, 5, |m| match m {
+        S2C::Error { message } => {
+            assert!(message.contains("live version"), "{message}");
+            Some(())
+        }
+        _ => None,
+    });
+}
+
+#[test]
 fn message_before_hello_disconnects() {
     let port = start_server();
     let (mut ws, _) = tungstenite::connect(format!("ws://127.0.0.1:{port}")).unwrap();
