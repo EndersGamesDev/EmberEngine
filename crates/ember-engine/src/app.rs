@@ -1,0 +1,196 @@
+use std::sync::Arc;
+
+use web_time::Instant;
+use winit::application::ApplicationHandler;
+use winit::event::{ElementState, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+#[cfg(not(target_arch = "wasm32"))]
+use winit::keyboard::KeyCode;
+use winit::keyboard::PhysicalKey;
+use winit::window::{Window, WindowId};
+
+use crate::input::InputState;
+use crate::renderer::Renderer;
+use crate::EmberGame;
+
+#[cfg(target_arch = "wasm32")]
+use std::{cell::RefCell, rc::Rc};
+
+pub struct EngineConfig {
+    pub title: String,
+}
+
+impl Default for EngineConfig {
+    fn default() -> Self {
+        Self {
+            title: "ember".to_string(),
+        }
+    }
+}
+
+struct App<G: EmberGame> {
+    config: EngineConfig,
+    window: Option<Arc<Window>>,
+    renderer: Option<Renderer>,
+    /// On the web the renderer is created by an async task (no blocking on
+    /// wasm); it lands here and is picked up on the next redraw.
+    #[cfg(target_arch = "wasm32")]
+    pending_renderer: Rc<RefCell<Option<Renderer>>>,
+    game: G,
+    input: InputState,
+    last_frame: Instant,
+}
+
+impl<G: EmberGame> ApplicationHandler for App<G> {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        // On desktop `resumed` fires once at startup; guard so a second call
+        // (possible on some platforms) doesn't rebuild the GPU context.
+        if self.window.is_some() {
+            return;
+        }
+        let window = Arc::new(
+            event_loop
+                .create_window(Window::default_attributes().with_title(&self.config.title))
+                .expect("failed to create window"),
+        );
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.renderer = Some(pollster::block_on(Renderer::new(window.clone())));
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            use winit::platform::web::WindowExtWebSys;
+            let canvas = window.canvas().expect("no canvas");
+            let document = web_sys::window().unwrap().document().unwrap();
+            let root = document
+                .get_element_by_id("ember-root")
+                .unwrap_or_else(|| document.body().expect("no body").into());
+            root.append_child(&canvas).expect("append canvas");
+            let _ = canvas.focus(); // keyboard events go to the canvas
+            let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(1280u32, 720u32));
+
+            let pending = Rc::clone(&self.pending_renderer);
+            let win = window.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let renderer = Renderer::new(win.clone()).await;
+                *pending.borrow_mut() = Some(renderer);
+                win.request_redraw();
+            });
+        }
+
+        window.request_redraw();
+        self.window = Some(window);
+        self.last_frame = Instant::now();
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Focused(false) => self.input.clear(),
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let PhysicalKey::Code(code) = event.physical_key {
+                    match event.state {
+                        ElementState::Pressed => self.input.press(code),
+                        ElementState::Released => self.input.release(code),
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if code == KeyCode::Escape {
+                        event_loop.exit();
+                    }
+                }
+            }
+            WindowEvent::Resized(size) => {
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.resize(size.width, size.height);
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    if self.renderer.is_none() {
+                        if let Some(r) = self.pending_renderer.borrow_mut().take() {
+                            self.renderer = Some(r);
+                            self.last_frame = Instant::now();
+                        }
+                    }
+                    // winit's web backend doesn't track the canvas CSS size,
+                    // so sync the backing store to layout ourselves (wgpu
+                    // sets canvas width/height on surface configure).
+                    if let (Some(window), Some(renderer)) =
+                        (self.window.as_ref(), self.renderer.as_mut())
+                    {
+                        use winit::platform::web::WindowExtWebSys;
+                        if let Some(canvas) = window.canvas() {
+                            let dpr = web_sys::window()
+                                .map(|w| w.device_pixel_ratio())
+                                .unwrap_or(1.0);
+                            let w = (canvas.client_width() as f64 * dpr) as u32;
+                            let h = (canvas.client_height() as f64 * dpr) as u32;
+                            if w > 0 && h > 0 {
+                                renderer.resize_if_changed(w, h);
+                            }
+                        }
+                    }
+                }
+
+                let now = Instant::now();
+                // Clamp dt so a debugger pause or long stall doesn't teleport
+                // everything on the next frame.
+                let dt = now.duration_since(self.last_frame).as_secs_f32().min(0.1);
+                self.last_frame = now;
+
+                let frame = self.game.update(&self.input, dt);
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.render(&frame);
+                }
+                // Continuous rendering: immediately schedule the next frame.
+                if let Some(window) = self.window.as_ref() {
+                    window.request_redraw();
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+pub fn run<G: EmberGame + 'static>(config: EngineConfig, game: G) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // try_init: a no-op if the game already configured logging.
+        let _ = env_logger::Builder::from_env(
+            env_logger::Env::default()
+                .default_filter_or("info,wgpu_core=warn,wgpu_hal=warn,naga=warn"),
+        )
+        .try_init();
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        console_error_panic_hook::set_once();
+        let _ = console_log::init_with_level(log::Level::Info);
+    }
+
+    let event_loop = EventLoop::new().expect("failed to create event loop");
+    event_loop.set_control_flow(ControlFlow::Poll);
+    let app = App {
+        config,
+        window: None,
+        renderer: None,
+        #[cfg(target_arch = "wasm32")]
+        pending_renderer: Rc::new(RefCell::new(None)),
+        game,
+        input: InputState::default(),
+        last_frame: Instant::now(),
+    };
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut app = app;
+        event_loop.run_app(&mut app).expect("event loop error");
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        use winit::platform::web::EventLoopExtWebSys;
+        event_loop.spawn_app(app); // returns immediately; runs on rAF
+    }
+}

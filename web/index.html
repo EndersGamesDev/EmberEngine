@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ember pong</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      background: #06101f;
+      color: #c7d2e4;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    h1 { margin: 18px 0 0; font-size: 1.4rem; letter-spacing: 0.16em; font-weight: 600; }
+    h1 span { color: #f0b429; }
+    #ember-root canvas {
+      width: min(1280px, 96vw);
+      aspect-ratio: 16 / 9;
+      height: auto !important;
+      border-radius: 10px;
+      outline: none;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.55);
+      background: #000;
+    }
+    .controls { display: flex; gap: 28px; font-size: 0.95rem; }
+    .controls b { color: #6ea8fe; }
+    .controls b.p2 { color: #f2705f; }
+    kbd {
+      background: #14243c; border: 1px solid #2a3f60; border-bottom-width: 3px;
+      border-radius: 5px; padding: 1px 7px; font-family: inherit;
+    }
+    .foot { font-size: 0.8rem; opacity: 0.65; margin-bottom: 16px; }
+    .foot a { color: #6ea8fe; }
+    #loading { font-size: 0.9rem; opacity: 0.8; }
+  </style>
+</head>
+<body>
+  <h1>ember <span>pong</span></h1>
+  <div class="controls">
+    <div><b>Player 1</b> (blue, near): <kbd>A</kbd> <kbd>D</kbd></div>
+    <div><b class="p2">Player 2</b> (red, far): <kbd>←</kbd> <kbd>→</kbd></div>
+    <div>First to 7</div>
+  </div>
+  <div id="ember-root"><span id="loading">loading engine…</span></div>
+  <div class="foot">
+    ember — a from-scratch Rust/wgpu engine ·
+    <a href="https://github.com/enderPeer/ember">source on GitHub</a> ·
+    needs WebGPU or WebGL2
+  </div>
+  <script type="module">
+    import init from './pkg/pong.js';
+    init()
+      .then(() => document.getElementById('loading')?.remove())
+      .catch((e) => {
+        const el = document.getElementById('loading');
+        if (el) el.textContent = 'failed to start: ' + e;
+        console.error(e);
+      });
+  </script>
+</body>
+</html>

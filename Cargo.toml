@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ember-engine",
+    "crates/ember-net",
+    "crates/ember-server",
+    "crates/game",
+    "crates/pong",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+
+[workspace.dependencies]
+winit = "0.30"
+wgpu = "24"
+pollster = "0.4"
+glam = "0.29"
+log = "0.4"
+env_logger = "0.11"
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", features = ["use-std"] }
+bytemuck = { version = "1", features = ["derive"] }
+
+# Fast iteration: our code compiles light, dependencies compile optimized once.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

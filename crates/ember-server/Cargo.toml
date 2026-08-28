@@ -1,0 +1,9 @@
+[package]
+name = "ember-server"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+ember-net = { path = "../ember-net" }
+log.workspace = true
+env_logger.workspace = true
