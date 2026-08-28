@@ -87,7 +87,10 @@
       </div>
 
       <div class="card">
-        <h2>Online — play someone over the internet</h2>
+        <h2>Online — arena shooter</h2>
+        <div class="hint">Drop-in deathmatch for up to 8 cubes with sidearms.
+          <b>WASD</b> move · <b>mouse</b> aim · <b>click / space</b> fire.
+          Whoever creates a lobby is hosting; joiners drop straight in.</div>
         <div>
           <label for="handle">your handle</label>
           <input id="handle" maxlength="20" placeholder="player">
@@ -102,7 +105,7 @@
             <input id="lobby-pw" maxlength="40" placeholder="none">
           </div>
         </div>
-        <button id="btn-create">Create lobby &amp; wait</button>
+        <button id="btn-create">Create arena &amp; play</button>
         <div>
           <label>open lobbies <button id="btn-refresh" class="small">refresh</button></label>
           <div id="lobby-rows"><span id="list-note">press refresh to browse lobbies</span></div>
@@ -125,7 +128,8 @@
   <div class="foot">
     ember — a from-scratch Rust/wgpu engine ·
     <a href="https://github.com/enderPeer/ember">source on GitHub</a> ·
-    needs WebGPU or WebGL2 · online play: your handle &amp; lobby name are visible to other players
+    needs WebGPU or WebGL2 · local mode is classic pong (A/D vs ←/→) ·
+    online play: your handle &amp; lobby name are visible to other players
   </div>
 
   <script type="module">
@@ -226,7 +230,7 @@
           const row = document.createElement('div');
           row.className = 'lobby-row';
           const label = document.createElement('span');
-          label.textContent = `${l.name} — hosted by ${l.host} `;
+          label.textContent = `${l.name} — ${l.host} · ${l.players}/${l.cap} `;
           if (l.has_password) {
             const lock = document.createElement('span');
             lock.className = 'lock';
