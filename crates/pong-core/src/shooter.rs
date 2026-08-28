@@ -4,7 +4,10 @@
 
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 pub const ARENA_HALF: f32 = 24.0;
-pub const MOVE_SPEED: f32 = 12.0;
+pub const MOVE_SPEED: f32 = 9.0;
+/// Shift: faster. C: slower (and a lower profile, cosmetically).
+pub const SPRINT_MULT: f32 = 1.6;
+pub const CROUCH_MULT: f32 = 0.55;
 pub const PLAYER_R: f32 = 0.6;
 pub const BULLET_SPEED: f32 = 34.0;
 pub const BULLET_R: f32 = 0.22;
@@ -61,11 +64,13 @@ fn spawn_point(slot: u32) -> [f32; 2] {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PlayerIn {
-    /// Held movement intent, -1..1 per axis.
+    /// Held movement intent, -1..1 per axis (world space).
     pub mv: [f32; 2],
     /// Aim direction (normalized by the sim if not).
     pub aim: [f32; 2],
     pub fire: bool,
+    pub sprint: bool,
+    pub crouch: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -76,6 +81,7 @@ pub struct PlayerSt {
     pub hp: u8,
     pub score: u32,
     pub alive: bool,
+    pub crouch: bool,
     pub respawn_in: f32,
     pub cooldown: f32,
     deaths: u32,
@@ -116,6 +122,7 @@ impl Sim {
             hp: MAX_HP,
             score: 0,
             alive: true,
+            crouch: false,
             respawn_in: 0.0,
             cooldown: 0.0,
             deaths: slot,
@@ -171,13 +178,23 @@ impl Sim {
                 let len = len_sq.sqrt();
                 mv = [mv[0] / len, mv[1] / len];
             }
+            // Stance decides speed (server-authoritative: no speed cheats).
+            let speed = MOVE_SPEED
+                * if input.crouch {
+                    CROUCH_MULT
+                } else if input.sprint {
+                    SPRINT_MULT
+                } else {
+                    1.0
+                };
             let pos = self.players[i].pos;
-            let try_x = [pos[0] + mv[0] * MOVE_SPEED * dt, pos[1]];
+            let try_x = [pos[0] + mv[0] * speed * dt, pos[1]];
             let pos = if self.blocked(try_x, PLAYER_R) { pos } else { try_x };
-            let try_z = [pos[0], pos[1] + mv[1] * MOVE_SPEED * dt];
+            let try_z = [pos[0], pos[1] + mv[1] * speed * dt];
             let pos = if self.blocked(try_z, PLAYER_R) { pos } else { try_z };
             let p = &mut self.players[i];
             p.pos = pos;
+            p.crouch = input.crouch;
 
             // Aim.
             let mut aim = input.aim;
@@ -329,13 +346,38 @@ mod tests {
     }
 
     #[test]
+    fn sprint_and_crouch_change_speed() {
+        let run = |sprint: bool, crouch: bool| -> f32 {
+            let mut sim = Sim::new(9);
+            sim.obstacles.clear();
+            sim.add_player(0);
+            sim.players[0].pos = [-20.0, 0.0];
+            let mut inputs = HashMap::new();
+            inputs.insert(0, PlayerIn { mv: [1.0, 0.0], aim: [1.0, 0.0], fire: false, sprint, crouch });
+            for _ in 0..60 {
+                step_with(&mut sim, &inputs);
+            }
+            sim.players[0].pos[0] + 20.0
+        };
+        let normal = run(false, false);
+        let sprint = run(true, false);
+        let crouch = run(false, true);
+        assert!((normal - MOVE_SPEED).abs() < 0.2);
+        assert!((sprint - MOVE_SPEED * SPRINT_MULT).abs() < 0.3);
+        assert!((crouch - MOVE_SPEED * CROUCH_MULT).abs() < 0.2);
+        // Crouch wins if both are held.
+        let both = run(true, true);
+        assert!((both - crouch).abs() < 0.2);
+    }
+
+    #[test]
     fn point_blank_shots_connect() {
         let mut sim = Sim::new(4);
         sim.obstacles.clear();
         sim.add_player(0);
         sim.add_player(1);
         let mut inputs = HashMap::new();
-        inputs.insert(0, PlayerIn { mv: [0.0, 0.0], aim: [1.0, 0.0], fire: true });
+        inputs.insert(0, PlayerIn { mv: [0.0, 0.0], aim: [1.0, 0.0], fire: true, ..Default::default() });
         // Victim glued right in front of the shooter, inside the old
         // dead zone.
         let mut killed = false;
@@ -360,7 +402,7 @@ mod tests {
         sim.add_player(0);
         sim.players[0].pos = [ARENA_HALF - PLAYER_R - 0.05, 0.0];
         let mut inputs = HashMap::new();
-        inputs.insert(0, PlayerIn { mv: [1.0, 0.0], aim: [1.0, 0.0], fire: false });
+        inputs.insert(0, PlayerIn { mv: [1.0, 0.0], aim: [1.0, 0.0], fire: false, ..Default::default() });
         for _ in 0..30 {
             step_with(&mut sim, &inputs);
         }
@@ -376,7 +418,7 @@ mod tests {
         sim.players[0].pos = [-5.0, 0.0];
         sim.players[1].pos = [5.0, 0.0];
         let mut inputs = HashMap::new();
-        inputs.insert(0, PlayerIn { mv: [0.0, 0.0], aim: [1.0, 0.0], fire: true });
+        inputs.insert(0, PlayerIn { mv: [0.0, 0.0], aim: [1.0, 0.0], fire: true, ..Default::default() });
         let mut killed_at = None;
         for i in 0..600 {
             // Keep the victim parked.
@@ -416,7 +458,7 @@ mod tests {
         sim.players[0].pos = [0.0, 0.0];
         let mut inputs = HashMap::new();
         // Fire along +x forever with no cooldown constraint violations.
-        inputs.insert(0, PlayerIn { mv: [0.0, 0.0], aim: [1.0, 0.0], fire: true });
+        inputs.insert(0, PlayerIn { mv: [0.0, 0.0], aim: [1.0, 0.0], fire: true, ..Default::default() });
         for _ in 0..240 {
             step_with(&mut sim, &inputs);
             // Teleport bullets back so they never expire or leave.

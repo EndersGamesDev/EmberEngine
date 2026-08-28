@@ -14,6 +14,8 @@ pub struct InputState {
     /// Current viewport aspect ratio — what the game needs (together with
     /// its own camera) to unproject the cursor into the world.
     aspect: f32,
+    /// Raw mouse movement accumulated since the last frame (mouse-look).
+    mouse_delta: (f32, f32),
 }
 
 impl Default for InputState {
@@ -23,6 +25,7 @@ impl Default for InputState {
             mouse: HashSet::new(),
             cursor_ndc: None,
             aspect: 16.0 / 9.0,
+            mouse_delta: (0.0, 0.0),
         }
     }
 }
@@ -47,6 +50,22 @@ impl InputState {
 
     pub fn aspect(&self) -> f32 {
         self.aspect
+    }
+
+    /// Raw mouse movement (px) accumulated since the previous frame.
+    /// Only meaningful while the cursor is captured (mouse-look).
+    pub fn mouse_delta(&self) -> (f32, f32) {
+        self.mouse_delta
+    }
+
+    pub(crate) fn add_mouse_delta(&mut self, dx: f32, dy: f32) {
+        self.mouse_delta.0 += dx;
+        self.mouse_delta.1 += dy;
+    }
+
+    /// Called by the engine after each game update.
+    pub(crate) fn end_frame(&mut self) {
+        self.mouse_delta = (0.0, 0.0);
     }
 
     pub(crate) fn press(&mut self, key: KeyCode) {

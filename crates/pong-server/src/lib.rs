@@ -343,6 +343,7 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
                             hp: p.hp,
                             score: p.score,
                             alive: p.alive,
+                            crouch: p.crouch,
                         })
                         .collect(),
                     bullets: lobby
@@ -655,12 +656,15 @@ fn handle_event(
                 (C2S::LeaveLobby, true) => {
                     leave_lobby(id, conns, lobbies);
                 }
-                (C2S::Input { mx, my, ax, az, fire }, true) => {
+                (C2S::Input { mx, my, ax, az, fire, sprint, crouch }, true) => {
                     let Some(lobby_name) = conns.get(&id).unwrap().lobby.clone() else { return };
                     let Some(lobby) = lobbies.get_mut(&lobby_name) else { return };
                     let Some(&pid) = lobby.pids.get(&id) else { return };
                     // The sim sanitizes magnitudes/NaN on use.
-                    lobby.inputs.insert(pid, PlayerIn { mv: [mx, my], aim: [ax, az], fire });
+                    lobby.inputs.insert(
+                        pid,
+                        PlayerIn { mv: [mx, my], aim: [ax, az], fire, sprint, crouch },
+                    );
                 }
             }
         }

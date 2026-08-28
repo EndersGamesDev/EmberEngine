@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTO_VERSION: u16 = 3;
+pub const PROTO_VERSION: u16 = 4;
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
 pub const MAX_PASSWORD_LEN: usize = 40;
@@ -44,6 +44,7 @@ pub struct PState {
     pub hp: u8,
     pub score: u32,
     pub alive: bool,
+    pub crouch: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
@@ -64,8 +65,19 @@ pub enum C2S {
     CreateLobby { name: String, password: Option<String> },
     JoinLobby { name: String, password: Option<String> },
     LeaveLobby,
-    /// Held intents: movement, aim, trigger. Doubles as the keepalive.
-    Input { mx: f32, my: f32, ax: f32, az: f32, fire: bool },
+    /// Held intents: movement, aim, trigger, stance. Doubles as the
+    /// keepalive.
+    Input {
+        mx: f32,
+        my: f32,
+        ax: f32,
+        az: f32,
+        fire: bool,
+        #[serde(default)]
+        sprint: bool,
+        #[serde(default)]
+        crouch: bool,
+    },
     Ping { nonce: u32 },
 }
 
@@ -136,6 +148,8 @@ mod tests {
             ax: 0.5,
             az: -0.5,
             fire: true,
+            sprint: true,
+            crouch: false,
         })
         .unwrap();
         assert!(s.contains("\"t\":\"input\""));

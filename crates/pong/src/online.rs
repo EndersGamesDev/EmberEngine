@@ -5,11 +5,16 @@
 
 use std::collections::HashMap;
 
-use ember_engine::glam::{Mat4, Vec2, Vec3};
+use ember_engine::glam::{Vec2, Vec3};
 use ember_engine::{Camera, EmberGame, Frame, InputState, Instance, KeyCode, MouseButton};
 use pong_core::proto::{BState, C2S, PState, PlayerMeta, S2C, PROTO_VERSION, STATE_EVERY_TICKS};
 use pong_core::shooter::{generate_arena, Obstacle, MAX_HP};
 use serde::Deserialize;
+
+/// Mouse-look sensitivity, radians per pixel.
+const LOOK_SENS: f32 = 0.0026;
+const EYE_STAND: f32 = 1.45;
+const EYE_CROUCH: f32 = 0.85;
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct OnlineConfig {
@@ -87,24 +92,11 @@ fn push_gun(frame: &mut Frame, hand: Vec3, aim: Vec2) {
     part(Vec3::new(0.02, -0.14, 0.0), Vec3::new(0.15, 0.26, 0.13), GUNMETAL_DARK);
 }
 
-/// Cursor ray ∩ the plane the game plays on (y = 0.55).
-fn cursor_world(camera: &Camera, aspect: f32, ndc: [f32; 2]) -> Option<Vec2> {
-    let inv = camera.view_proj(aspect).inverse();
-    if inv == Mat4::ZERO {
-        return None;
-    }
-    let near = inv.project_point3(Vec3::new(ndc[0], ndc[1], 0.001));
-    let far = inv.project_point3(Vec3::new(ndc[0], ndc[1], 0.999));
-    let dir = far - near;
-    if dir.y.abs() < 1e-5 {
-        return None;
-    }
-    let t = (0.55 - near.y) / dir.y;
-    if t < 0.0 {
-        return None;
-    }
-    let p = near + dir * t;
-    Some(Vec2::new(p.x, p.z))
+/// Deterministic cosmetic obstacle height (the sim is 2D; every client
+/// derives the same height from the obstacle's own coordinates).
+fn obstacle_height(o: &Obstacle) -> f32 {
+    let h = (o.min[0] * 7.31 + o.max[1] * 3.17 + o.max[0] * 1.13).abs();
+    1.7 + (h - h.floor()) * 1.6
 }
 
 #[derive(Clone, Copy, Default)]
@@ -125,8 +117,12 @@ pub struct ShooterGame {
     latest: HashMap<u8, PState>,
     bullets: Vec<BState>,
     bullets_age: f32,
-    cam_target: Vec2,
     aim: Vec2,
+    yaw: f32,
+    pitch: f32,
+    eye_h: f32,
+    bob_t: f32,
+    time: f32,
     since_input: f32,
     since_ping: f32,
     since_status: f32,
@@ -149,8 +145,12 @@ impl ShooterGame {
             latest: HashMap::new(),
             bullets: Vec::new(),
             bullets_age: 0.0,
-            cam_target: Vec2::ZERO,
             aim: Vec2::new(1.0, 0.0),
+            yaw: 0.0,
+            pitch: 0.0,
+            eye_h: EYE_STAND,
+            bob_t: 0.0,
+            time: 0.0,
             since_input: 0.0,
             since_ping: 0.0,
             since_status: 0.0,
@@ -217,7 +217,9 @@ impl EmberGame for ShooterGame {
                     for m in players {
                         self.metas.insert(m.id, m);
                     }
-                    status_event = Some("in the arena — WASD move · mouse aim · click fire".into());
+                    status_event = Some(
+                        "in the arena — click to capture mouse · WASD move · Shift sprint · C crouch · click fire".into(),
+                    );
                 }
                 S2C::PlayerJoined { meta } => {
                     status_event = Some(format!("{} joined the arena", meta.handle));
@@ -287,40 +289,48 @@ impl EmberGame for ShooterGame {
             set_status("connection lost — reload to play again");
         }
 
-        // Camera follows my cube.
-        let my_pos = self.my_id.map(|id| self.render_pos(id)).unwrap_or(Vec2::ZERO);
-        let k = 1.0 - (-dt * 6.0).exp();
-        self.cam_target += (my_pos - self.cam_target) * k;
-        let camera = Camera {
-            eye: Vec3::new(self.cam_target.x, 30.0, self.cam_target.y + 19.0),
-            target: Vec3::new(self.cam_target.x, 0.0, self.cam_target.y),
-            fov_y_deg: 55.0,
-        };
+        // ---- first-person look: raw mouse deltas -> yaw/pitch ----
+        self.time += dt;
+        let (mdx, mdy) = input.mouse_delta();
+        self.yaw += mdx * LOOK_SENS;
+        self.pitch = (self.pitch - mdy * LOOK_SENS).clamp(-1.45, 1.45);
+        let (fz, fx) = self.yaw.sin_cos();
+        self.aim = Vec2::new(fx, fz);
+        let forward2 = self.aim;
+        // Camera right (from look_at basis: cross(forward, up)).
+        let right2 = Vec2::new(-fz, fx);
 
-        // Aim at the cursor; keep the last aim if the cursor is elsewhere.
-        if let Some(ndc) = input.cursor_ndc() {
-            if let Some(world) = cursor_world(&camera, input.aspect(), ndc) {
-                let dir = world - my_pos;
-                if dir.length_squared() > 0.05 {
-                    self.aim = dir.normalize();
-                }
-            }
+        // ---- stance + camera-relative movement ----
+        let sprint = input.down(KeyCode::ShiftLeft) || input.down(KeyCode::ShiftRight);
+        let crouch = input.down(KeyCode::KeyC);
+        let target_eye = if crouch { EYE_CROUCH } else { EYE_STAND };
+        self.eye_h += (target_eye - self.eye_h) * (1.0 - (-dt * 12.0).exp());
+
+        let mut mv = forward2 * input.axis(KeyCode::KeyS, KeyCode::KeyW)
+            + right2 * input.axis(KeyCode::KeyA, KeyCode::KeyD);
+        if mv.length_squared() > 1.0 {
+            mv = mv.normalize();
         }
+        let moving = mv.length_squared() > 0.01;
+        let fire = input.mouse_down(MouseButton::Left) || input.down(KeyCode::Space);
+
+        // Walk bob (cosmetic, client-side only).
+        if moving {
+            self.bob_t += dt * if sprint { 11.0 } else if crouch { 5.5 } else { 8.0 };
+        }
+        let bob = if moving { (self.bob_t).sin() * 0.035 } else { 0.0 };
 
         // Send intents at a fixed cadence (also the keepalive).
         if self.my_id.is_some() && !self.lost && self.since_input >= 0.05 {
             self.since_input = 0.0;
-            let mv = Vec2::new(
-                input.axis(KeyCode::KeyA, KeyCode::KeyD),
-                input.axis(KeyCode::KeyW, KeyCode::KeyS),
-            );
-            let fire = input.mouse_down(MouseButton::Left) || input.down(KeyCode::Space);
             self.chan.send(&C2S::Input {
                 mx: mv.x,
                 my: mv.y,
                 ax: self.aim.x,
                 az: self.aim.y,
                 fire,
+                sprint,
+                crouch,
             });
         }
         if self.since_ping > 4.0 {
@@ -337,6 +347,13 @@ impl EmberGame for ShooterGame {
 
         self.t += dt * (60.0 / STATE_EVERY_TICKS as f32);
 
+        // ---- first-person camera at my interpolated position ----
+        let my_pos = self.my_id.map(|id| self.render_pos(id)).unwrap_or(Vec2::ZERO);
+        let (ps, pc) = self.pitch.sin_cos();
+        let look = Vec3::new(fx * pc, ps, fz * pc);
+        let eye = Vec3::new(my_pos.x, self.eye_h + bob, my_pos.y);
+        let camera = Camera { eye, target: eye + look, fov_y_deg: 70.0 };
+
         // ---- build the scene ----
         let mut frame = Frame { camera, instances: Vec::with_capacity(96) };
         let half = self.arena_half;
@@ -344,7 +361,7 @@ impl EmberGame for ShooterGame {
             frame.instances.push(Instance::new(p, s, c));
         };
 
-        // Floor + boundary walls.
+        // Floor + enclosing walls (tall enough to feel like a room).
         inst(&mut frame, Vec3::new(0.0, -0.5, 0.0), Vec3::new(half * 2.0 + 2.0, 1.0, half * 2.0 + 2.0), Vec3::new(0.12, 0.13, 0.17));
         for (px, pz, sx, sz) in [
             (half + 0.45, 0.0, 0.9, half * 2.0 + 2.7),
@@ -352,23 +369,26 @@ impl EmberGame for ShooterGame {
             (0.0, half + 0.45, half * 2.0 + 2.7, 0.9),
             (0.0, -half - 0.45, half * 2.0 + 2.7, 0.9),
         ] {
-            inst(&mut frame, Vec3::new(px, 0.75, pz), Vec3::new(sx, 1.5, sz), Vec3::new(0.28, 0.30, 0.36));
+            inst(&mut frame, Vec3::new(px, 1.75, pz), Vec3::new(sx, 3.5, sz), Vec3::new(0.26, 0.28, 0.34));
         }
-        // Obstacles from the shared seed.
+        // Obstacles from the shared seed, with deterministic cosmetic
+        // height variation (cover you can crouch behind, blocks you can't
+        // see over).
         for o in &self.obstacles {
             let cx = (o.min[0] + o.max[0]) * 0.5;
             let cz = (o.min[1] + o.max[1]) * 0.5;
+            let h = obstacle_height(o);
             inst(
                 &mut frame,
-                Vec3::new(cx, 1.1, cz),
-                Vec3::new(o.max[0] - o.min[0], 2.2, o.max[1] - o.min[1]),
+                Vec3::new(cx, h * 0.5, cz),
+                Vec3::new(o.max[0] - o.min[0], h, o.max[1] - o.min[1]),
                 Vec3::new(0.30, 0.33, 0.40),
             );
         }
 
-        // Players.
+        // Other players (my own body is the camera).
         for (&id, p) in &self.latest {
-            if !p.alive {
+            if !p.alive || Some(id) == self.my_id {
                 continue;
             }
             let pos = self.render_pos(id);
@@ -378,40 +398,61 @@ impl EmberGame for ShooterGame {
                 .map(|m| Vec3::from_array(m.color))
                 .unwrap_or(Vec3::splat(0.6));
             let aim = Vec2::new(p.ax, p.az);
-            // Body, head, gun.
-            inst(&mut frame, Vec3::new(pos.x, 0.55, pos.y), Vec3::new(1.0, 1.1, 1.0), color);
-            inst(&mut frame, Vec3::new(pos.x, 1.35, pos.y), Vec3::splat(0.55), color * 0.7);
-            let hand = Vec3::new(pos.x, 0.85, pos.y) + Vec3::new(aim.x, 0.0, aim.y) * 0.55;
-            let aim_used = if Some(id) == self.my_id { self.aim } else { aim };
-            push_gun(&mut frame, hand, aim_used);
-            // HP pips above the head.
+            let (body_h, head_y, hand_y, pip_y) = if p.crouch {
+                (0.75, 0.95, 0.62, 1.5)
+            } else {
+                (1.1, 1.35, 0.85, 2.0)
+            };
+            inst(&mut frame, Vec3::new(pos.x, body_h * 0.5, pos.y), Vec3::new(1.0, body_h, 1.0), color);
+            inst(&mut frame, Vec3::new(pos.x, head_y, pos.y), Vec3::splat(0.55), color * 0.7);
+            let hand = Vec3::new(pos.x, hand_y, pos.y) + Vec3::new(aim.x, 0.0, aim.y) * 0.55;
+            push_gun(&mut frame, hand, aim);
             for h in 0..p.hp {
                 inst(
                     &mut frame,
-                    Vec3::new(pos.x - 0.3 + h as f32 * 0.3, 2.0, pos.y),
+                    Vec3::new(pos.x - 0.3 + h as f32 * 0.3, pip_y, pos.y),
                     Vec3::splat(0.16),
                     Vec3::new(0.3, 0.9, 0.4),
                 );
             }
         }
 
-        // Bullets: glowing blue tracers, extrapolated between states —
-        // bounded to ~2 state intervals so a stall doesn't fly tracers
-        // through walls and off the arena.
+        // Bullets: glowing tracers near eye height, extrapolation bounded
+        // to ~2 state intervals so stalls don't fly them through walls.
         let age = self.bullets_age.min(0.12);
         for b in &self.bullets {
             inst(
                 &mut frame,
-                Vec3::new(b.x + b.vx * age, 0.85, b.z + b.vz * age),
-                Vec3::splat(0.3),
+                Vec3::new(b.x + b.vx * age, 1.25, b.z + b.vz * age),
+                Vec3::splat(0.26),
                 GLOW_BLUE,
             );
         }
 
-        // My aim marker on the ground.
-        if self.my_id.is_some() {
-            let m = my_pos + self.aim * 3.2;
-            inst(&mut frame, Vec3::new(m.x, 0.04, m.y), Vec3::new(0.4, 0.06, 0.4), GLOW_BLUE * 0.8);
+        // ---- viewmodel: the sidearm in hand, plus muzzle flash ----
+        let me_alive = self
+            .my_id
+            .and_then(|id| self.latest.get(&id))
+            .map(|p| p.alive)
+            .unwrap_or(false);
+        if me_alive {
+            let f3 = Vec3::new(fx, 0.0, fz);
+            let right3 = Vec3::new(-fz, 0.0, fx);
+            let base = eye + f3 * 0.5 + right3 * 0.24
+                + Vec3::new(0.0, -0.30 + bob * 0.4 + self.pitch * 0.10, 0.0);
+            push_gun(&mut frame, base, forward2);
+            // Muzzle flash synced to the fire cooldown cadence.
+            if fire && (self.time % 0.18) < 0.06 {
+                inst(
+                    &mut frame,
+                    base + f3 * 0.95 + Vec3::new(0.0, 0.1, 0.0),
+                    Vec3::splat(0.14),
+                    Vec3::new(1.0, 0.9, 0.5),
+                );
+            }
+            // Aim dot floating on the sight line (occluded by walls,
+            // which reads like a laser sight).
+            inst(&mut frame, eye + look * 4.0, Vec3::splat(0.05), GLOW_BLUE);
         }
 
         frame

@@ -200,7 +200,10 @@ impl EmberGame for LocalGame {
 
 pub fn run_local() {
     ember_engine::run(
-        EngineConfig { title: "ember pong — P1: A/D, P2: ←/→".to_string() },
+        EngineConfig {
+            title: "ember pong — P1: A/D, P2: ←/→".to_string(),
+            ..Default::default()
+        },
         LocalGame::new(),
     );
 }
@@ -208,7 +211,10 @@ pub fn run_local() {
 pub fn run_online(cfg: OnlineConfig) -> Result<(), String> {
     let game = online::ShooterGame::connect(&cfg)?;
     ember_engine::run(
-        EngineConfig { title: format!("ember arena — {}", cfg.lobby) },
+        EngineConfig {
+            title: format!("ember arena — {}", cfg.lobby),
+            capture_mouse: true,
+        },
         game,
     );
     Ok(())

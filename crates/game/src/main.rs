@@ -201,7 +201,7 @@ fn main() {
     };
 
     ember_engine::run(
-        EngineConfig { title },
+        EngineConfig { title, ..Default::default() },
         Game {
             session,
             world,

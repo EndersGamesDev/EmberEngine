@@ -111,7 +111,15 @@ fn drop_in_arena_flow_with_password() {
     });
 
     // Guest holds fire: bullets must appear in the state stream.
-    send(&mut guest, &C2S::Input { mx: 0.0, my: 0.0, ax: 1.0, az: 0.0, fire: true });
+    send(&mut guest, &C2S::Input {
+        mx: 0.0,
+        my: 0.0,
+        ax: 1.0,
+        az: 0.0,
+        fire: true,
+        sprint: false,
+        crouch: false,
+    });
     recv_until(&mut host, 5, |m| match m {
         S2C::State { bullets, players, .. } => {
             assert!(players.len() == 2);

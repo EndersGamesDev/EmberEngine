@@ -71,6 +71,8 @@ fn main() {
                 ax: (t * 1.7).cos(),
                 az: (t * 1.7).sin(),
                 fire: true,
+                sprint: (t as u64) % 3 == 0,
+                crouch: false,
             });
         }
         if last_ping.elapsed() >= Duration::from_secs(4) {

@@ -41,12 +41,16 @@ const FRAME_STALL_THRESHOLD_MS: u128 = 100;
 
 pub struct EngineConfig {
     pub title: String,
+    /// FPS-style mouse capture: clicking the window grabs the cursor
+    /// (pointer lock on the web) and mouse-look deltas start flowing.
+    pub capture_mouse: bool,
 }
 
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
             title: "ember".to_string(),
+            capture_mouse: false,
         }
     }
 }
@@ -111,6 +115,17 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
         self.last_frame = Instant::now();
     }
 
+    fn device_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: winit::event::DeviceEvent,
+    ) {
+        if let winit::event::DeviceEvent::MouseMotion { delta } = event {
+            self.input.add_mouse_delta(delta.0 as f32, delta.1 as f32);
+        }
+    }
+
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
@@ -144,10 +159,23 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                 }
             }
             WindowEvent::CursorLeft { .. } => self.input.set_cursor_ndc(None),
-            WindowEvent::MouseInput { state, button, .. } => match state {
-                ElementState::Pressed => self.input.mouse_press(button),
-                ElementState::Released => self.input.mouse_release(button),
-            },
+            WindowEvent::MouseInput { state, button, .. } => {
+                match state {
+                    ElementState::Pressed => self.input.mouse_press(button),
+                    ElementState::Released => self.input.mouse_release(button),
+                }
+                // Clicking (re)captures the mouse for FPS look. Cheap to
+                // re-request; also restores capture after Esc on the web.
+                if self.config.capture_mouse && state == ElementState::Pressed {
+                    if let Some(window) = self.window.as_ref() {
+                        use winit::window::CursorGrabMode;
+                        let _ = window
+                            .set_cursor_grab(CursorGrabMode::Locked)
+                            .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined));
+                        window.set_cursor_visible(false);
+                    }
+                }
+            }
             WindowEvent::RedrawRequested => {
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -224,6 +252,7 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                 }
 
                 let frame = self.game.update(&self.input, dt);
+                self.input.end_frame();
                 if let Some(renderer) = self.renderer.as_mut() {
                     renderer.render(&frame);
                 }

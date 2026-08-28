@@ -77,15 +77,16 @@
 </head>
 <body>
   <header>
-    <h1><a href="../../../">⬅ games</a> &nbsp; ember <span>arena</span> <small style="opacity:.5">v3</small></h1>
+    <h1><a href="../../../">⬅ games</a> &nbsp; ember <span>arena</span> <small style="opacity:.5">v4</small></h1>
     <div id="account" title="click to rename">…</div>
   </header>
 
   <div id="menu" class="card">
-    <h2>Arena Shooter — drop-in deathmatch</h2>
-    <div class="hint"><b>WASD</b> move · <b>mouse</b> aim · <b>click / space</b> fire ·
-      3 HP, respawn in 2.5 s · up to 8 players. Whoever creates a lobby is hosting;
-      joiners drop straight in.</div>
+    <h2>Arena Shooter — first-person drop-in deathmatch</h2>
+    <div class="hint"><b>Click the game to capture your mouse</b> (Esc releases) ·
+      <b>WASD</b> move · <b>mouse</b> look · <b>click / space</b> fire ·
+      <b>Shift</b> sprint · <b>C</b> crouch · 3 HP, respawn in 2.5 s · up to 8 players.
+      Whoever creates a lobby is hosting; joiners drop straight in.</div>
     <div style="display:flex; gap:8px;">
       <div style="flex:1">
         <label for="lobby-name">lobby name</label>
@@ -105,7 +106,12 @@
 
   <div id="game" hidden>
     <div id="status">…</div>
-    <div id="ember-root"><span id="loading">loading engine…</span></div>
+    <div id="stage" style="position:relative">
+      <div id="ember-root"><span id="loading">loading engine…</span></div>
+      <div id="crosshair" style="position:absolute; left:50%; top:50%;
+        transform:translate(-50%,-50%); pointer-events:none; color:#9fe0ff;
+        font-size:20px; text-shadow:0 0 6px #123;">+</div>
+    </div>
   </div>
 
   <script type="module">

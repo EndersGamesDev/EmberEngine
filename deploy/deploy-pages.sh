@@ -26,14 +26,18 @@ echo "== publishing gh-pages =="
 PAGES_DIR="$(mktemp -d -t ember-pages-XXXX)"
 git worktree add "$PAGES_DIR" gh-pages
 
+# Live version dirs (older versions stay frozen on the branch untouched).
+ARENA_LIVE="games/arena/v4"
+PONG_LIVE="games/pong/v2"
+
 rm -rf "$PAGES_DIR"/index.html "$PAGES_DIR"/pkg \
-    "$PAGES_DIR"/games/arena/v3 "$PAGES_DIR"/games/pong/v2 "$PAGES_DIR"/games.json
-mkdir -p "$PAGES_DIR"/games/arena/v3 "$PAGES_DIR"/games/pong/v2
+    "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$PONG_LIVE" "$PAGES_DIR"/games.json
+mkdir -p "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$PONG_LIVE"
 cp web/index.html web/games.json "$PAGES_DIR"/
-cp web/games/arena/v3/index.html "$PAGES_DIR"/games/arena/v3/
-cp web/games/pong/v2/index.html "$PAGES_DIR"/games/pong/v2/
-cp -r web/pkg "$PAGES_DIR"/games/arena/v3/pkg
-cp -r web/pkg "$PAGES_DIR"/games/pong/v2/pkg
+cp "web/$ARENA_LIVE/index.html" "$PAGES_DIR/$ARENA_LIVE/"
+cp "web/$PONG_LIVE/index.html" "$PAGES_DIR/$PONG_LIVE/"
+cp -r web/pkg "$PAGES_DIR/$ARENA_LIVE/pkg"
+cp -r web/pkg "$PAGES_DIR/$PONG_LIVE/pkg"
 cp -r web/pkg "$PAGES_DIR"/pkg
 touch "$PAGES_DIR"/.nojekyll
 
