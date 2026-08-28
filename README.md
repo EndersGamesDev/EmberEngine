@@ -31,9 +31,13 @@ crates/
   ember-server/   headless dedicated server: single 60 Hz sim thread,
                   thread-per-connection IO feeding it events over channels
   game/           the arena client: net session, world interpolation, scene
-  pong/           3D pong — first playable; native bin + wasm lib
-web/              static page for the wasm build (deployed to GitHub Pages)
-deploy/           deploy-specht.sh — package, remote-build, restart
+  pong/           3D pong client — local + online modes; native bin + wasm lib
+  pong-core/      shared pong sim (deterministic, 60 Hz) + online JSON protocol
+  pong-server/    public matchmaking + match server (WebSocket, lobbies with
+                  optional passwords, authoritative sim per match)
+web/              static page: menu, lobby browser, wasm game (GitHub Pages)
+deploy/           deploy-specht.sh (arena server) · deploy-pages.sh (web) ·
+                  deploy-pong-online.sh (pong server + tunnel + server.json)
 docs/             design documents (atw-first-rendering.md is adopted policy)
 ```
 
@@ -124,12 +128,26 @@ unreachable server makes launch pause ~4 s before the offline fallback.
 
 ## Pong
 
-**Play online: <https://enderpeer.github.io/ember/>** — Player 1 (blue,
-near): `A`/`D` · Player 2 (red, far): `←`/`→` · first to 7. Score pips sit on
-top of the walls. The sim is pure, deterministic, fixed 60 Hz
-(`crates/pong/src/sim.rs`) — the shape a networked version would replicate.
+**Play: <https://enderpeer.github.io/ember/>** — local (2 players, one
+keyboard: `A`/`D` vs `←`/`→`, first to 7) or **online matchmaking**: pick a
+handle, create a lobby (password optional) or join an open one from the
+list. The match server is authoritative (the shared deterministic 60 Hz sim
+in `crates/pong-core/src/sim.rs` runs server-side); clients stream inputs
+and interpolate 30 Hz state. Either key set steers your paddle online, and
+player 2 gets a flipped camera so they also play from "their" side.
 
-Native: `cargo run -p pong --bin pong-app`
+Online infrastructure: `pong-server` (WebSocket + JSON, `pong-core/proto.rs`)
+runs on specht bound to loopback, fronted by a **Cloudflare quick tunnel** —
+a free public `https://….trycloudflare.com` domain that CHANGES every time
+the tunnel restarts. `deploy/deploy-pong-online.sh` rebuilds + restarts
+server and tunnel, then publishes the fresh domain to `server.json` on the
+Pages site (fetched cache-busted, so the page always finds the current
+server; its `v` stamp also cache-busts the wasm bundle per deploy). Server
+log: `~/pong-server.log`, tunnel log: `~/cloudflared.log` on specht.
+Headless check: `cargo run -p pong-server --example wsbot -- <URL> create|join <LOBBY> [PW|-] [HANDLE] [SECS]`.
+
+Native: `cargo run -p pong --bin pong-app` (local) or
+`pong-app online wss://… create|join LOBBY [PASSWORD|-] [HANDLE]`
 
 Web build (needs `wasm32-unknown-unknown` target + `wasm-bindgen-cli`):
 

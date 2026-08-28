@@ -17,6 +17,20 @@ git worktree add "$PAGES_DIR" gh-pages
 rm -rf "$PAGES_DIR"/index.html "$PAGES_DIR"/pkg
 cp -r web/index.html web/pkg "$PAGES_DIR"/
 touch "$PAGES_DIR"/.nojekyll
+# Bump the deploy stamp in server.json (preserving the ws url): the page
+# uses it to cache-bust the wasm bundle once per deploy.
+python - "$PAGES_DIR/server.json" <<'EOF'
+import json, os, sys, time
+p = sys.argv[1]
+d = {}
+if os.path.exists(p):
+    try:
+        d = json.load(open(p))
+    except Exception:
+        d = {}
+d["v"] = str(int(time.time()))
+json.dump(d, open(p, "w"))
+EOF
 (
     cd "$PAGES_DIR"
     git add -A

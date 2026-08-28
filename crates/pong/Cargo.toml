@@ -13,8 +13,19 @@ path = "src/main.rs"
 
 [dependencies]
 ember-engine = { path = "../ember-engine" }
+pong-core = { path = "../pong-core" }
 glam.workspace = true
 tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
+rustls.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = [
+    "WebSocket", "MessageEvent", "Event", "CloseEvent", "ErrorEvent",
+    "Document", "Window", "Element", "Node",
+] }

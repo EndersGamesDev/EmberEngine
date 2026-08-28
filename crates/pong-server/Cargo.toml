@@ -1,0 +1,17 @@
+[package]
+name = "pong-server"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+pong-core = { path = "../pong-core" }
+serde_json.workspace = true
+# rustls feature is for the wss-capable example/e2e bot, not the server
+# itself (TLS terminates at the tunnel).
+tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+# The wss-capable wsbot example must install a TLS crypto provider.
+rustls.workspace = true
