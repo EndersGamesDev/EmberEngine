@@ -124,7 +124,8 @@ cargo build --target wasm32-unknown-unknown --release -p pong --lib
 wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/pong.wasm
 ```
 
-then publish `web/` to the `gh-pages` branch.
+then publish `web/` to the `gh-pages` branch — or just run
+`bash deploy/deploy-pages.sh`, which does all of the above.
 
 ## Run
 
