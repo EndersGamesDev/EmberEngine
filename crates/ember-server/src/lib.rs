@@ -417,23 +417,27 @@ fn handle_event(
                     tracing::warn!("conn {conn}: duplicate Hello, dropping");
                     remove_conn(conn, conns);
                 }
+                // Anything else before Hello — Ping included — is a protocol
+                // violation: an unauthenticated peer must not be served, and
+                // a pre-Hello ping loop could otherwise park an admission
+                // slot indefinitely by refreshing `last_seen` forever.
+                (_, false) => {
+                    tracing::warn!("conn {conn}: message before Hello, dropping");
+                    remove_conn(conn, conns);
+                }
                 (ClientMsg::Input { move_dir }, true) => {
                     if let Some(p) = c.player.as_mut() {
                         p.dir = sanitize_dir(move_dir);
                     }
                 }
-                (ClientMsg::Input { .. }, false) => {
-                    tracing::warn!("conn {conn}: Input before Hello, dropping");
-                    remove_conn(conn, conns);
-                }
-                (ClientMsg::Ping { nonce }, _) => {
+                (ClientMsg::Ping { nonce }, true) => {
                     // A peer that pings but never drains its socket fills the
                     // queue; treat a full queue as a dead connection.
                     if c.tx.try_send(ServerMsg::Pong { nonce }).is_err() {
                         remove_conn(conn, conns);
                     }
                 }
-                (ClientMsg::Bye, _) => {
+                (ClientMsg::Bye, true) => {
                     remove_conn(conn, conns);
                 }
             }
