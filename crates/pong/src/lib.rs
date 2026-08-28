@@ -13,15 +13,29 @@ const P1_COLOR: Vec3 = Vec3::new(0.25, 0.55, 0.95);
 const P2_COLOR: Vec3 = Vec3::new(0.92, 0.32, 0.28);
 const BALL_COLOR: Vec3 = Vec3::new(0.95, 0.93, 0.80);
 
+/// Moving state as of the step before the latest one, for render-side
+/// interpolation between fixed sim steps.
+#[derive(Clone, Copy)]
+struct PrevState {
+    p1_x: f32,
+    p2_x: f32,
+    ball: [f32; 2],
+}
+
 struct Pong {
     sim: Sim,
     /// Render-time accumulator driving fixed sim steps.
     accumulator: f32,
+    prev: PrevState,
 }
 
 impl Pong {
     fn new() -> Self {
-        Self { sim: Sim::new(), accumulator: 0.0 }
+        Self {
+            sim: Sim::new(),
+            accumulator: 0.0,
+            prev: PrevState { p1_x: 0.0, p2_x: 0.0, ball: [0.0, 0.0] },
+        }
     }
 }
 
@@ -34,8 +48,16 @@ impl EmberGame for Pong {
         self.accumulator = (self.accumulator + dt).min(0.25);
         while self.accumulator >= FIXED_DT {
             self.accumulator -= FIXED_DT;
+            self.prev = PrevState {
+                p1_x: self.sim.p1_x,
+                p2_x: self.sim.p2_x,
+                ball: self.sim.ball_pos,
+            };
             self.sim.step(p1, p2);
             if let Some((scorer, won)) = self.sim.event {
+                // The ball teleports to center on a point; don't smear the
+                // interpolation across that jump.
+                self.prev.ball = self.sim.ball_pos;
                 if won {
                     tracing::info!("player {} WINS the game!", scorer + 1);
                 } else {
@@ -48,6 +70,19 @@ impl EmberGame for Pong {
                 }
             }
         }
+
+        // Render interpolation: blend between the previous and current sim
+        // step by the accumulator remainder, so motion stays smooth at any
+        // display rate (including exactly 60 Hz, where step counts per
+        // frame alternate between 0 and 2 without this).
+        let alpha = (self.accumulator / FIXED_DT).clamp(0.0, 1.0);
+        let lerp = |a: f32, b: f32| a + (b - a) * alpha;
+        let p1_x = lerp(self.prev.p1_x, self.sim.p1_x);
+        let p2_x = lerp(self.prev.p2_x, self.sim.p2_x);
+        let ball = [
+            lerp(self.prev.ball[0], self.sim.ball_pos[0]),
+            lerp(self.prev.ball[1], self.sim.ball_pos[1]),
+        ];
 
         let mut frame = Frame {
             camera: Camera {
@@ -92,13 +127,13 @@ impl EmberGame for Pong {
         // Paddles.
         inst(
             &mut frame,
-            Vec3::new(self.sim.p1_x, 0.5, PADDLE_Z),
+            Vec3::new(p1_x, 0.5, PADDLE_Z),
             Vec3::new(PADDLE_HALF_W * 2.0, 1.0, 0.8),
             P1_COLOR,
         );
         inst(
             &mut frame,
-            Vec3::new(self.sim.p2_x, 0.5, -PADDLE_Z),
+            Vec3::new(p2_x, 0.5, -PADDLE_Z),
             Vec3::new(PADDLE_HALF_W * 2.0, 1.0, 0.8),
             P2_COLOR,
         );
@@ -110,7 +145,7 @@ impl EmberGame for Pong {
         };
         inst(
             &mut frame,
-            Vec3::new(self.sim.ball_pos[0], ball_y, self.sim.ball_pos[1]),
+            Vec3::new(ball[0], ball_y, ball[1]),
             Vec3::splat(BALL_R * 2.0),
             BALL_COLOR,
         );

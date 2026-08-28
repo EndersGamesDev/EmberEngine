@@ -21,7 +21,9 @@
     h1 { margin: 18px 0 0; font-size: 1.4rem; letter-spacing: 0.16em; font-weight: 600; }
     h1 span { color: #f0b429; }
     #ember-root canvas {
-      width: min(1280px, 96vw);
+      /* !important on both axes: winit writes inline styles on the canvas
+         (e.g. on scale change) and inline beats non-important rules. */
+      width: min(1280px, 96vw) !important;
       aspect-ratio: 16 / 9;
       height: auto !important;
       border-radius: 10px;
@@ -56,13 +58,24 @@
   </div>
   <script type="module">
     import init from './pkg/pong.js';
-    init()
-      .then(() => document.getElementById('loading')?.remove())
-      .catch((e) => {
-        const el = document.getElementById('loading');
-        if (el) el.textContent = 'failed to start: ' + e;
-        console.error(e);
-      });
+
+    // The engine removes #loading itself once the GPU is actually up;
+    // init() resolving only means the wasm module started. Surface async
+    // failures (adapter/device panics) that happen after init() resolves.
+    const fail = (msg) => {
+      const el = document.getElementById('loading');
+      if (el) el.textContent = 'failed to start: ' + (msg || 'see browser console');
+    };
+    window.addEventListener('error', (e) => fail(e.message));
+    window.addEventListener('unhandledrejection', (e) => fail(e.reason));
+
+    // Keyboard focus lives on the canvas; a stray click elsewhere would
+    // silently kill both players' controls. Any click returns focus.
+    document.addEventListener('pointerdown', () => {
+      document.querySelector('#ember-root canvas')?.focus();
+    });
+
+    init().catch((e) => { fail(e); console.error(e); });
   </script>
 </body>
 </html>

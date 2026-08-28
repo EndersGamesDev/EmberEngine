@@ -107,6 +107,9 @@ pub struct Renderer {
     present_layout: wgpu::BindGroupLayout,
     present_bind: wgpu::BindGroup,
     present_sampler: wgpu::Sampler,
+    /// Set when the surface format itself is non-sRGB (WebGPU canvases):
+    /// the present pass renders into an sRGB reinterpreting view.
+    surface_view_format: Option<wgpu::TextureFormat>,
 }
 
 impl Renderer {
@@ -149,10 +152,29 @@ impl Renderer {
             .await
             .expect("failed to create device");
 
+        let caps = surface.get_capabilities(&adapter);
         let mut config = surface
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
             .expect("surface not supported by adapter");
         config.present_mode = wgpu::PresentMode::AutoVsync;
+        // The presenter writes LINEAR light (sampled from the sRGB
+        // SceneFrame), so the swapchain must sRGB-encode on write or the
+        // whole image displays gamma-crushed dark. Default format order is
+        // driver/browser-defined and often non-sRGB (always, on the web).
+        let mut surface_view_format: Option<wgpu::TextureFormat> = None;
+        if !config.format.is_srgb() {
+            if let Some(srgb) = caps.formats.iter().copied().find(|f| f.is_srgb()) {
+                config.format = srgb;
+            } else {
+                // WebGPU canvases expose only non-sRGB formats; render the
+                // present pass into an sRGB *view* of the surface instead.
+                let srgb = config.format.add_srgb_suffix();
+                if srgb != config.format {
+                    config.view_formats.push(srgb);
+                    surface_view_format = Some(srgb);
+                }
+            }
+        }
         surface.configure(&device, &config);
 
         let scene_scale = 1.0;
@@ -309,7 +331,7 @@ impl Renderer {
                 entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
+                    format: surface_view_format.unwrap_or(config.format),
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -339,6 +361,7 @@ impl Renderer {
             present_layout,
             present_bind,
             present_sampler,
+            surface_view_format,
         }
     }
 
@@ -377,9 +400,10 @@ impl Renderer {
                 return;
             }
         };
-        let surface_view = surface_tex
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let surface_view = surface_tex.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: self.surface_view_format,
+            ..Default::default()
+        });
 
         let aspect = self.scene.width as f32 / self.scene.height.max(1) as f32;
         let vp = frame.camera.view_proj(aspect);

@@ -40,6 +40,9 @@ pub struct Sim {
     pub serves: u32,
     /// Set for one step when someone scores or wins: (scorer index, won).
     pub event: Option<(usize, bool)>,
+    /// After a win the final score stays on the board through the (longer)
+    /// serve pause; it resets when the next game's serve launches.
+    pending_reset: bool,
 }
 
 impl Sim {
@@ -53,6 +56,7 @@ impl Sim {
             phase: Phase::Serving { timer: SERVE_PAUSE, dir: 1.0 },
             serves: 0,
             event: None,
+            pending_reset: false,
         }
     }
 
@@ -71,6 +75,12 @@ impl Sim {
                 if timer > 0.0 {
                     self.phase = Phase::Serving { timer, dir };
                 } else {
+                    // A finished game's score stays visible through the
+                    // pause; a new game starts with the serve.
+                    if self.pending_reset {
+                        self.pending_reset = false;
+                        self.score = [0, 0];
+                    }
                     // Alternate the serve angle left/right deterministically.
                     let side = if self.serves % 2 == 0 { 1.0 } else { -1.0 };
                     let angle = 0.45_f32; // ~26 degrees
@@ -147,7 +157,7 @@ impl Sim {
         let won = self.score[scorer] >= WIN_SCORE;
         self.event = Some((scorer, won));
         if won {
-            self.score = [0, 0];
+            self.pending_reset = true;
         }
         self.ball_pos = [0.0, 0.0];
         self.ball_vel = [0.0, 0.0];
@@ -163,8 +173,9 @@ mod tests {
     use super::*;
 
     fn run_serve(sim: &mut Sim) {
-        // Step through the serve pause until the ball launches.
-        for _ in 0..((SERVE_PAUSE / FIXED_DT) as u32 + 2) {
+        // Step through the serve pause (double-length after a win) until
+        // the ball launches.
+        for _ in 0..((SERVE_PAUSE * 2.0 / FIXED_DT) as u32 + 2) {
             sim.step(0.0, 0.0);
             if sim.phase == Phase::Playing {
                 return;
@@ -237,7 +248,13 @@ mod tests {
         sim.p2_x = 6.0; // out of the way
         sim.step(0.0, 0.0);
         assert_eq!(sim.event, Some((0, true)));
-        assert_eq!(sim.score, [0, 0], "scores reset after a win");
+        assert_eq!(
+            sim.score,
+            [WIN_SCORE, 3],
+            "final score stays on the board through the win pause"
+        );
+        run_serve(&mut sim);
+        assert_eq!(sim.score, [0, 0], "scores reset when the next game serves");
     }
 
     #[test]

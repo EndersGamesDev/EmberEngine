@@ -93,7 +93,9 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                 .unwrap_or_else(|| document.body().expect("no body").into());
             root.append_child(&canvas).expect("append canvas");
             let _ = canvas.focus(); // keyboard events go to the canvas
-            let _ = window.request_inner_size(winit::dpi::PhysicalSize::new(1280u32, 720u32));
+            // NOTE: no request_inner_size here — winit would pin an inline
+            // CSS size that overrides the page's responsive width rule. CSS
+            // owns layout; the per-frame sync below owns the backing store.
 
             let pending = Rc::clone(&self.pending_renderer);
             let win = window.clone();
@@ -137,6 +139,14 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                         if let Some(r) = self.pending_renderer.borrow_mut().take() {
                             self.renderer = Some(r);
                             self.last_frame = Instant::now();
+                            // The GPU is actually up: only now drop the
+                            // page's "loading" placeholder.
+                            if let Some(el) = web_sys::window()
+                                .and_then(|w| w.document())
+                                .and_then(|d| d.get_element_by_id("loading"))
+                            {
+                                el.remove();
+                            }
                         }
                     }
                     // winit's web backend doesn't track the canvas CSS size,
@@ -157,6 +167,16 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                             }
                         }
                     }
+                }
+
+                // The sim must not advance while the renderer is still
+                // initializing (async on wasm): the game would play out
+                // invisibly against a blank canvas.
+                if self.renderer.is_none() {
+                    if let Some(window) = self.window.as_ref() {
+                        window.request_redraw();
+                    }
+                    return;
                 }
 
                 let now = Instant::now();
@@ -205,7 +225,12 @@ pub fn run<G: EmberGame + 'static>(config: EngineConfig, game: G) {
     }
 
     let event_loop = EventLoop::new().expect("failed to create event loop");
+    #[cfg(not(target_arch = "wasm32"))]
     event_loop.set_control_flow(ControlFlow::Poll);
+    // On the web the redraw loop is rAF-driven and self-sustaining; Poll
+    // would busy-spin the event loop between frames.
+    #[cfg(target_arch = "wasm32")]
+    event_loop.set_control_flow(ControlFlow::Wait);
     let app = App {
         config,
         window: None,
