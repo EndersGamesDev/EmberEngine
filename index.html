@@ -129,9 +129,18 @@
   </div>
 
   <script type="module">
-    import init, { start_local, start_online } from './pkg/pong.js';
-
     const $ = (id) => document.getElementById(id);
+
+    // server.json is fetched with a unique query so the Pages CDN can never
+    // serve a stale tunnel domain; its "v" (deploy stamp) cache-busts the
+    // wasm bundle exactly once per deploy.
+    let serverCfg = {};
+    try {
+      const r = await fetch(`server.json?ts=${Date.now()}`, { cache: 'no-store' });
+      if (r.ok) serverCfg = await r.json();
+    } catch {}
+    const V = serverCfg.v || '0';
+    const { default: init, start_local, start_online } = await import(`./pkg/pong.js?v=${V}`);
     const fail = (msg) => {
       const el = $('loading') || $('status');
       if (el) el.textContent = 'failed to start: ' + (msg || 'see browser console');
@@ -148,16 +157,9 @@
     // ---- server url: server.json (rotating tunnel domain) -> override box
     const urlBox = $('server-url');
     urlBox.value = localStorage.getItem('ember-server-url') || '';
-    try {
-      const r = await fetch('server.json', { cache: 'no-store' });
-      if (r.ok) {
-        const j = await r.json();
-        if (j.ws && !localStorage.getItem('ember-server-url-manual')) {
-          urlBox.value = j.ws;
-        }
-        if (j.ws && !urlBox.value) urlBox.value = j.ws;
-      }
-    } catch {}
+    if (serverCfg.ws && (!localStorage.getItem('ember-server-url-manual') || !urlBox.value)) {
+      urlBox.value = serverCfg.ws;
+    }
     urlBox.addEventListener('change', () => {
       localStorage.setItem('ember-server-url', urlBox.value.trim());
       localStorage.setItem('ember-server-url-manual', '1');
@@ -166,7 +168,8 @@
     const myHandle = () => ($('handle').value.trim() || 'player');
 
     // ---- boot the wasm module (menu decides when a game starts)
-    let ready = init().catch((e) => { fail(e); console.error(e); });
+    let ready = init({ module_or_path: `./pkg/pong_bg.wasm?v=${V}` })
+      .catch((e) => { fail(e); console.error(e); });
 
     const showGame = () => { $('menu').hidden = true; $('game').hidden = false; };
 
