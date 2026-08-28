@@ -1,5 +1,5 @@
-//! End-to-end over real WebSockets: create a passworded lobby, reject a bad
-//! password, play a bit of the match, and reopen the lobby on disconnect.
+//! End-to-end over real WebSockets: create a passworded game, reject a bad
+//! password, drop a second player in, shoot, and drop out.
 
 use std::net::{TcpListener, TcpStream};
 use std::time::{Duration, Instant};
@@ -35,7 +35,6 @@ fn send(ws: &mut Ws, msg: &C2S) {
     ws.send(Message::text(serde_json::to_string(msg).unwrap())).unwrap();
 }
 
-/// Next parsed message, skipping WS control frames.
 fn recv(ws: &mut Ws) -> S2C {
     loop {
         match ws.read().unwrap() {
@@ -46,7 +45,6 @@ fn recv(ws: &mut Ws) -> S2C {
     }
 }
 
-/// Wait (skipping other messages) until `pred` returns Some.
 fn recv_until<T>(ws: &mut Ws, secs: u64, mut pred: impl FnMut(S2C) -> Option<T>) -> T {
     let deadline = Instant::now() + Duration::from_secs(secs);
     while Instant::now() < deadline {
@@ -58,70 +56,84 @@ fn recv_until<T>(ws: &mut Ws, secs: u64, mut pred: impl FnMut(S2C) -> Option<T>)
 }
 
 #[test]
-fn full_match_flow_with_password() {
+fn drop_in_arena_flow_with_password() {
     let port = start_server();
 
-    // Host creates a passworded lobby.
+    // Host creates a passworded game and is inside it immediately.
     let mut host = connect(port, "alice");
-    send(&mut host, &C2S::CreateLobby { name: "duel".into(), password: Some("s3cret".into()) });
-    match recv(&mut host) {
-        S2C::LobbyCreated { name } => assert_eq!(name, "duel"),
-        other => panic!("expected LobbyCreated, got {other:?}"),
-    }
+    send(&mut host, &C2S::CreateLobby { name: "arena".into(), password: Some("s3cret".into()) });
+    let (host_pid, seed) = recv_until(&mut host, 5, |m| match m {
+        S2C::GameJoined { id, seed, players, .. } => {
+            assert_eq!(players.len(), 1);
+            Some((id, seed))
+        }
+        _ => None,
+    });
 
-    // Guest sees it in the list, flagged as passworded.
+    // Guest sees it listed with player count and the password flag.
     let mut guest = connect(port, "bob");
     send(&mut guest, &C2S::ListLobbies);
     match recv(&mut guest) {
         S2C::LobbyList { lobbies } => {
             assert_eq!(lobbies.len(), 1);
-            assert_eq!(lobbies[0].name, "duel");
+            assert_eq!(lobbies[0].name, "arena");
             assert_eq!(lobbies[0].host, "alice");
             assert!(lobbies[0].has_password);
+            assert_eq!((lobbies[0].players, lobbies[0].cap), (1, 8));
         }
         other => panic!("expected LobbyList, got {other:?}"),
     }
 
-    // Wrong password is rejected without disconnecting.
-    send(&mut guest, &C2S::JoinLobby { name: "duel".into(), password: Some("nope".into()) });
+    // Wrong password rejected without disconnecting.
+    send(&mut guest, &C2S::JoinLobby { name: "arena".into(), password: Some("nope".into()) });
     match recv(&mut guest) {
         S2C::Error { message } => assert!(message.contains("password"), "{message}"),
         other => panic!("expected Error, got {other:?}"),
     }
 
-    // Correct password starts the match for both, with correct roles.
-    send(&mut guest, &C2S::JoinLobby { name: "duel".into(), password: Some("s3cret".into()) });
-    let (g_role, g_opp) = recv_until(&mut guest, 5, |m| match m {
-        S2C::MatchStart { role, opponent } => Some((role, opponent)),
+    // Correct password drops the guest into the SAME arena (same seed).
+    send(&mut guest, &C2S::JoinLobby { name: "arena".into(), password: Some("s3cret".into()) });
+    let (guest_pid, guest_seed) = recv_until(&mut guest, 5, |m| match m {
+        S2C::GameJoined { id, seed, players, .. } => {
+            assert_eq!(players.len(), 2, "joiner sees the full roster");
+            Some((id, seed))
+        }
         _ => None,
     });
-    assert_eq!((g_role, g_opp.as_str()), (1, "alice"));
-    let (h_role, h_opp) = recv_until(&mut host, 5, |m| match m {
-        S2C::MatchStart { role, opponent } => Some((role, opponent)),
+    assert_eq!(guest_seed, seed, "all players share the arena seed");
+    assert_ne!(guest_pid, host_pid);
+    recv_until(&mut host, 5, |m| match m {
+        S2C::PlayerJoined { meta } => {
+            assert_eq!(meta.handle, "bob");
+            Some(())
+        }
         _ => None,
     });
-    assert_eq!((h_role, h_opp.as_str()), (0, "bob"));
 
-    // Host holds right; both peers must see paddle 0 move right in states.
-    send(&mut host, &C2S::Input { axis: 1.0 });
-    let moved = recv_until(&mut guest, 5, |m| match m {
-        S2C::State { paddles, .. } if paddles[0] > 1.0 => Some(paddles[0]),
+    // Guest holds fire: bullets must appear in the state stream.
+    send(&mut guest, &C2S::Input { mx: 0.0, my: 0.0, ax: 1.0, az: 0.0, fire: true });
+    recv_until(&mut host, 5, |m| match m {
+        S2C::State { bullets, players, .. } => {
+            assert!(players.len() == 2);
+            (!bullets.is_empty()).then_some(())
+        }
         _ => None,
     });
-    assert!(moved > 1.0);
 
-    // Guest disconnects; host gets OpponentLeft and the lobby reopens.
+    // Guest leaves; host is told and the game keeps running.
     drop(guest);
-    recv_until(&mut host, 5, |m| matches!(m, S2C::OpponentLeft).then_some(()));
-
-    // A new guest can join the reopened lobby (same name, same password).
-    let mut guest2 = connect(port, "carol");
-    send(&mut guest2, &C2S::JoinLobby { name: "duel".into(), password: Some("s3cret".into()) });
-    let role = recv_until(&mut guest2, 5, |m| match m {
-        S2C::MatchStart { role, .. } => Some(role),
+    recv_until(&mut host, 10, |m| match m {
+        S2C::PlayerLeft { id } => {
+            assert_eq!(id, guest_pid);
+            Some(())
+        }
         _ => None,
     });
-    assert_eq!(role, 1);
+    // Host still receives states alone.
+    recv_until(&mut host, 5, |m| match m {
+        S2C::State { players, .. } => (players.len() == 1).then_some(()),
+        _ => None,
+    });
 }
 
 #[test]
@@ -132,7 +144,6 @@ fn message_before_hello_disconnects() {
         s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     }
     send(&mut ws, &C2S::ListLobbies);
-    // Server closes on protocol violation: reads must end in error/close.
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         assert!(Instant::now() < deadline, "server never closed the connection");

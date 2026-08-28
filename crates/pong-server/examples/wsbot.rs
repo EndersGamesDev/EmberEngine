@@ -1,9 +1,9 @@
-//! Headless online verification client (works over ws:// and wss://).
+//! Headless arena bot (works over ws:// and wss://).
 //!
-//!     cargo run -p pong-server --example wsbot -- <URL> create|join <LOBBY> [PASSWORD] [HANDLE] [SECS]
+//!     cargo run -p pong-server --example wsbot -- <URL> create|join <LOBBY> [PASSWORD|-] [HANDLE] [SECS]
 //!
-//! Creates or joins a lobby, plays sinusoid inputs once the match starts,
-//! and reports how many state updates it saw. Exit 0 = the online loop works.
+//! Creates or joins a game, runs in circles spraying bullets, and reports
+//! how many state updates it saw. Exit 0 = the online loop works.
 
 use std::time::{Duration, Instant};
 
@@ -13,7 +13,7 @@ use tungstenite::Message;
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let url = args.next().expect("usage: wsbot URL create|join LOBBY [PASSWORD] [HANDLE] [SECS]");
+    let url = args.next().expect("usage: wsbot URL create|join LOBBY [PASSWORD|-] [HANDLE] [SECS]");
     let action = args.next().expect("create|join");
     let lobby = args.next().expect("lobby name");
     let password = args.next().filter(|p| !p.is_empty() && p != "-");
@@ -52,17 +52,26 @@ fn main() {
     }
 
     let started = Instant::now();
-    let mut in_match = false;
+    let mut in_game = false;
+    let mut my_id: Option<u8> = None;
     let mut states: u64 = 0;
-    let mut last_scores = [0u32; 2];
+    let mut kills_seen: u64 = 0;
+    let mut max_players = 0usize;
+    let mut bullets_seen: u64 = 0;
     let mut last_input = Instant::now() - Duration::from_secs(1);
     let mut last_ping = Instant::now();
 
     while started.elapsed() < Duration::from_secs(secs) {
-        if in_match && last_input.elapsed() >= Duration::from_millis(100) {
+        if in_game && last_input.elapsed() >= Duration::from_millis(50) {
             last_input = Instant::now();
             let t = started.elapsed().as_secs_f32();
-            send(&mut ws, &C2S::Input { axis: (t * 1.3).sin() });
+            send(&mut ws, &C2S::Input {
+                mx: (t * 0.9).cos(),
+                my: (t * 0.9).sin(),
+                ax: (t * 1.7).cos(),
+                az: (t * 1.7).sin(),
+                fire: true,
+            });
         }
         if last_ping.elapsed() >= Duration::from_secs(4) {
             last_ping = Instant::now();
@@ -71,23 +80,34 @@ fn main() {
         match ws.read() {
             Ok(Message::Text(t)) => match serde_json::from_str::<S2C>(t.as_str()) {
                 Ok(S2C::Welcome { .. }) => println!("wsbot {handle}: welcomed"),
-                Ok(S2C::LobbyCreated { name }) => println!("wsbot {handle}: created \"{name}\", waiting"),
-                Ok(S2C::MatchStart { role, opponent }) => {
-                    println!("wsbot {handle}: match started, role {role} vs {opponent}");
-                    in_match = true;
+                Ok(S2C::GameJoined { id, seed, players, .. }) => {
+                    println!(
+                        "wsbot {handle}: in the arena as #{id} (seed {seed}, {} players)",
+                        players.len()
+                    );
+                    my_id = Some(id);
+                    in_game = true;
                 }
-                Ok(S2C::State { scores, .. }) => {
+                Ok(S2C::PlayerJoined { meta }) => println!("wsbot {handle}: {} joined", meta.handle),
+                Ok(S2C::PlayerLeft { id }) => println!("wsbot {handle}: #{id} left"),
+                Ok(S2C::State { players, bullets, .. }) => {
                     states += 1;
-                    last_scores = scores;
+                    max_players = max_players.max(players.len());
+                    bullets_seen += bullets.len() as u64;
                 }
-                Ok(S2C::MatchEvent { scorer, won, scores }) => {
-                    println!("wsbot {handle}: player {} scored (won={won}, {scores:?})", scorer + 1)
+                Ok(S2C::Kill { killer, victim }) => {
+                    kills_seen += 1;
+                    let me = my_id.unwrap_or(255);
+                    if killer == me {
+                        println!("wsbot {handle}: fragged #{victim}!");
+                    } else if victim == me {
+                        println!("wsbot {handle}: fragged by #{killer}");
+                    }
                 }
                 Ok(S2C::Error { message }) => {
                     eprintln!("WSBOT FAIL: server error: {message}");
                     std::process::exit(1);
                 }
-                Ok(S2C::OpponentLeft) => println!("wsbot {handle}: opponent left"),
                 Ok(_) => {}
                 Err(e) => {
                     eprintln!("WSBOT FAIL: bad server message: {e}");
@@ -109,11 +129,13 @@ fn main() {
         }
     }
 
-    // Expect ~30 states/sec while in match; accept a third to tolerate the
-    // waiting period before the opponent arrived.
-    if !in_match || states < 10 {
-        eprintln!("WSBOT FAIL: in_match={in_match} states={states}");
+    if !in_game || states < 10 || bullets_seen == 0 {
+        eprintln!(
+            "WSBOT FAIL: in_game={in_game} states={states} bullets_seen={bullets_seen}"
+        );
         std::process::exit(1);
     }
-    println!("WSBOT OK: states={states} scores={last_scores:?}");
+    println!(
+        "WSBOT OK: states={states} max_players={max_players} bullets_seen={bullets_seen} kills_seen={kills_seen}"
+    );
 }

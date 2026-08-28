@@ -132,6 +132,22 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                     renderer.resize(size.width, size.height);
                 }
             }
+            WindowEvent::CursorMoved { position, .. } => {
+                if let Some(window) = self.window.as_ref() {
+                    let size = window.inner_size();
+                    if size.width > 0 && size.height > 0 {
+                        self.input.set_cursor_ndc(Some([
+                            (position.x as f32 / size.width as f32) * 2.0 - 1.0,
+                            1.0 - (position.y as f32 / size.height as f32) * 2.0,
+                        ]));
+                    }
+                }
+            }
+            WindowEvent::CursorLeft { .. } => self.input.set_cursor_ndc(None),
+            WindowEvent::MouseInput { state, button, .. } => match state {
+                ElementState::Pressed => self.input.mouse_press(button),
+                ElementState::Released => self.input.mouse_release(button),
+            },
             WindowEvent::RedrawRequested => {
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -177,6 +193,12 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                         window.request_redraw();
                     }
                     return;
+                }
+
+                if let Some(window) = self.window.as_ref() {
+                    let size = window.inner_size();
+                    self.input
+                        .set_aspect(size.width as f32 / size.height.max(1) as f32);
                 }
 
                 let now = Instant::now();

@@ -12,12 +12,25 @@ use std::sync::Arc;
 use glam::{Mat4, Vec3};
 use winit::window::Window;
 
-/// One draw unit: an axis-aligned colored box.
+/// One draw unit: a colored box, optionally rotated around Y.
 #[derive(Clone, Copy, Debug)]
 pub struct Instance {
     pub position: Vec3,
     pub scale: Vec3,
     pub color: Vec3,
+    /// Rotation around the Y axis, radians. 0 = axis-aligned.
+    pub yaw: f32,
+}
+
+impl Instance {
+    pub fn new(position: Vec3, scale: Vec3, color: Vec3) -> Self {
+        Self { position, scale, color, yaw: 0.0 }
+    }
+
+    pub fn with_yaw(mut self, yaw: f32) -> Self {
+        self.yaw = yaw;
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -70,6 +83,7 @@ struct InstanceRaw {
     pos: [f32; 3],
     scale: [f32; 3],
     color: [f32; 3],
+    yaw: f32,
 }
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -243,7 +257,7 @@ impl Renderer {
                     wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<InstanceRaw>() as u64,
                         step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &wgpu::vertex_attr_array![2 => Float32x3, 3 => Float32x3, 4 => Float32x3],
+                        attributes: &wgpu::vertex_attr_array![2 => Float32x3, 3 => Float32x3, 4 => Float32x3, 5 => Float32],
                     },
                 ],
             },
@@ -417,6 +431,7 @@ impl Renderer {
                 pos: i.position.to_array(),
                 scale: i.scale.to_array(),
                 color: i.color.to_array(),
+                yaw: i.yaw,
             })
             .collect();
         if raws.len() > self.instance_cap {

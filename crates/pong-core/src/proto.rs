@@ -1,10 +1,13 @@
 //! Online protocol: JSON text frames over WebSocket. JSON (rather than the
 //! arena's binary postcard) because the lobby browser on the web page speaks
-//! it natively from JavaScript, and pong traffic is tiny (~30 Hz, <200 B).
+//! it natively from JavaScript, and traffic is small (~30 Hz states).
+//!
+//! v2: the match is the drop-in arena shooter. A lobby IS a running game —
+//! creating one starts it with the host inside; joiners drop straight in.
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTO_VERSION: u16 = 1;
+pub const PROTO_VERSION: u16 = 2;
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
 pub const MAX_PASSWORD_LEN: usize = 40;
@@ -18,6 +21,37 @@ pub struct LobbyInfo {
     pub name: String,
     pub host: String,
     pub has_password: bool,
+    pub players: u8,
+    pub cap: u8,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct PlayerMeta {
+    pub id: u8,
+    pub handle: String,
+    pub color: [f32; 3],
+}
+
+/// Per-player state inside a State broadcast.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
+pub struct PState {
+    pub id: u8,
+    pub x: f32,
+    pub z: f32,
+    /// Aim direction (normalized).
+    pub ax: f32,
+    pub az: f32,
+    pub hp: u8,
+    pub score: u32,
+    pub alive: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
+pub struct BState {
+    pub x: f32,
+    pub z: f32,
+    pub vx: f32,
+    pub vz: f32,
 }
 
 /// Client -> server.
@@ -30,8 +64,8 @@ pub enum C2S {
     CreateLobby { name: String, password: Option<String> },
     JoinLobby { name: String, password: Option<String> },
     LeaveLobby,
-    /// Held paddle intent, -1..1. Doubles as the in-match keepalive.
-    Input { axis: f32 },
+    /// Held intents: movement, aim, trigger. Doubles as the keepalive.
+    Input { mx: f32, my: f32, ax: f32, az: f32, fire: bool },
     Ping { nonce: u32 },
 }
 
@@ -44,22 +78,38 @@ pub enum S2C {
     /// connection stays open.
     Error { message: String },
     LobbyList { lobbies: Vec<LobbyInfo> },
-    /// You created a lobby and are waiting for an opponent.
-    LobbyCreated { name: String },
-    /// A match begins. role 0 = near/blue paddle (+z), 1 = far/red (-z).
-    MatchStart { role: u8, opponent: String },
+    /// You are in a game (created or joined). `players` includes yourself;
+    /// generate the arena locally from `seed`.
+    GameJoined {
+        id: u8,
+        seed: u64,
+        arena_half: f32,
+        players: Vec<PlayerMeta>,
+    },
+    PlayerJoined { meta: PlayerMeta },
+    PlayerLeft { id: u8 },
     State {
         tick: u64,
-        ball: [f32; 2],
-        paddles: [f32; 2],
-        scores: [u32; 2],
-        serving: bool,
+        players: Vec<PState>,
+        bullets: Vec<BState>,
     },
-    /// A point (or the game) was decided. Scores are post-event.
-    MatchEvent { scorer: u8, won: bool, scores: [u32; 2] },
-    /// Opponent disconnected/left; you are back to waiting in the lobby.
-    OpponentLeft,
+    Kill { killer: u8, victim: u8 },
     Pong { nonce: u32 },
+}
+
+/// Stable per-player color, by in-lobby id.
+pub fn color_for(id: u8) -> [f32; 3] {
+    const PALETTE: [[f32; 3]; 8] = [
+        [0.25, 0.55, 0.95], // blue
+        [0.92, 0.32, 0.28], // red
+        [0.30, 0.80, 0.40], // green
+        [0.95, 0.75, 0.20], // yellow
+        [0.70, 0.40, 0.90], // purple
+        [0.95, 0.50, 0.20], // orange
+        [0.25, 0.80, 0.80], // teal
+        [0.90, 0.45, 0.70], // pink
+    ];
+    PALETTE[id as usize % PALETTE.len()]
 }
 
 pub fn sanitize_text(s: &str, max: usize) -> String {
@@ -74,55 +124,38 @@ pub fn sanitize_text(s: &str, max: usize) -> String {
         .collect()
 }
 
-/// Movement intents from the network are untrusted.
-pub fn sanitize_axis(axis: f32) -> f32 {
-    if axis.is_finite() {
-        axis.clamp(-1.0, 1.0)
-    } else {
-        0.0
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn json_roundtrip() {
-        let msgs = vec![
-            serde_json::to_string(&C2S::Hello { proto: PROTO_VERSION, handle: "ender".into() })
-                .unwrap(),
-            serde_json::to_string(&C2S::CreateLobby {
-                name: "duel".into(),
-                password: Some("hunter2".into()),
-            })
-            .unwrap(),
-        ];
-        assert!(msgs[0].contains("\"t\":\"hello\""));
-        let back: C2S = serde_json::from_str(&msgs[1]).unwrap();
-        match back {
-            C2S::CreateLobby { name, password } => {
-                assert_eq!(name, "duel");
-                assert_eq!(password.as_deref(), Some("hunter2"));
-            }
-            other => panic!("wrong variant: {other:?}"),
-        }
-        let s = serde_json::to_string(&S2C::State {
-            tick: 42,
-            ball: [1.0, -2.0],
-            paddles: [0.5, -0.5],
-            scores: [3, 4],
-            serving: false,
+        let s = serde_json::to_string(&C2S::Input {
+            mx: 1.0,
+            my: 0.0,
+            ax: 0.5,
+            az: -0.5,
+            fire: true,
+        })
+        .unwrap();
+        assert!(s.contains("\"t\":\"input\""));
+        let back: C2S = serde_json::from_str(&s).unwrap();
+        assert!(matches!(back, C2S::Input { fire: true, .. }));
+
+        let s = serde_json::to_string(&S2C::GameJoined {
+            id: 2,
+            seed: 987654321,
+            arena_half: 24.0,
+            players: vec![PlayerMeta { id: 2, handle: "ender".into(), color: color_for(2) }],
         })
         .unwrap();
         let back: S2C = serde_json::from_str(&s).unwrap();
-        assert!(matches!(back, S2C::State { tick: 42, .. }));
+        assert!(matches!(back, S2C::GameJoined { id: 2, seed: 987654321, .. }));
     }
 
     #[test]
     fn sanitizers() {
         assert_eq!(sanitize_text("  hi\u{7}there  ", 5), "hithe");
-        assert_eq!(sanitize_axis(f32::NAN), 0.0);
-        assert_eq!(sanitize_axis(5.0), 1.0);
+        assert_eq!(sanitize_text("\u{7}\u{8}", 5), "");
     }
 }

@@ -1,11 +1,15 @@
-//! Online mode: a platform-split WebSocket channel plus the client-side
-//! game that renders the server-authoritative match with interpolation.
+//! Online arena shooter client: renders the server-authoritative match,
+//! aims with the mouse (cursor unprojected onto the ground plane), and
+//! carries the cyberpunk sidearm — rebuilt out of cubes: gunmetal slide,
+//! bronze barrel and trigger guard, glowing blue circuit strip.
 
-use ember_engine::{EmberGame, Frame, InputState, KeyCode};
-use pong_core::proto::{C2S, S2C, PROTO_VERSION, STATE_EVERY_TICKS};
+use std::collections::HashMap;
+
+use ember_engine::glam::{Mat4, Vec2, Vec3};
+use ember_engine::{Camera, EmberGame, Frame, InputState, Instance, KeyCode, MouseButton};
+use pong_core::proto::{BState, C2S, PState, PlayerMeta, S2C, PROTO_VERSION, STATE_EVERY_TICKS};
+use pong_core::shooter::{generate_arena, Obstacle, MAX_HP};
 use serde::Deserialize;
-
-use crate::{build_scene, SceneParams};
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct OnlineConfig {
@@ -54,176 +58,342 @@ fn set_status(text: &str) {
     tracing::info!(status = %text);
 }
 
+// ---- the sidearm, in cubes (palette from the concept art) ----
+
+const GUNMETAL: Vec3 = Vec3::new(0.16, 0.17, 0.20);
+const GUNMETAL_DARK: Vec3 = Vec3::new(0.11, 0.11, 0.13);
+const BRONZE: Vec3 = Vec3::new(0.46, 0.32, 0.21);
+const GLOW_BLUE: Vec3 = Vec3::new(0.20, 0.65, 1.00);
+
+/// Push the pistol into the frame: held at `hand`, pointing along `aim`.
+/// Local space is +X forward; each part is rotated by the shared yaw.
+fn push_gun(frame: &mut Frame, hand: Vec3, aim: Vec2) {
+    let yaw = -aim.y.atan2(aim.x);
+    let rot = |p: Vec3| -> Vec3 {
+        let (s, c) = yaw.sin_cos();
+        Vec3::new(p.x * c + p.z * s, p.y, -p.x * s + p.z * c)
+    };
+    let mut part = |offset: Vec3, scale: Vec3, color: Vec3| {
+        frame
+            .instances
+            .push(Instance::new(hand + rot(offset), scale, color).with_yaw(yaw));
+    };
+    // Slide (dark gunmetal), barrel tip (bronze), glow strip (blue),
+    // trigger guard (bronze), grip (near-black).
+    part(Vec3::new(0.34, 0.12, 0.0), Vec3::new(0.74, 0.17, 0.15), GUNMETAL);
+    part(Vec3::new(0.76, 0.09, 0.0), Vec3::new(0.16, 0.13, 0.13), BRONZE);
+    part(Vec3::new(0.32, 0.03, 0.0), Vec3::new(0.58, 0.045, 0.17), GLOW_BLUE);
+    part(Vec3::new(0.18, -0.06, 0.0), Vec3::new(0.14, 0.06, 0.11), BRONZE);
+    part(Vec3::new(0.02, -0.14, 0.0), Vec3::new(0.15, 0.26, 0.13), GUNMETAL_DARK);
+}
+
+/// Cursor ray ∩ the plane the game plays on (y = 0.55).
+fn cursor_world(camera: &Camera, aspect: f32, ndc: [f32; 2]) -> Option<Vec2> {
+    let inv = camera.view_proj(aspect).inverse();
+    if inv == Mat4::ZERO {
+        return None;
+    }
+    let near = inv.project_point3(Vec3::new(ndc[0], ndc[1], 0.001));
+    let far = inv.project_point3(Vec3::new(ndc[0], ndc[1], 0.999));
+    let dir = far - near;
+    if dir.y.abs() < 1e-5 {
+        return None;
+    }
+    let t = (0.55 - near.y) / dir.y;
+    if t < 0.0 {
+        return None;
+    }
+    let p = near + dir * t;
+    Some(Vec2::new(p.x, p.z))
+}
+
 #[derive(Clone, Copy, Default)]
-struct NetSnap {
-    ball: [f32; 2],
-    paddles: [f32; 2],
+struct PSnap {
+    x: f32,
+    z: f32,
 }
 
-#[derive(PartialEq)]
-enum OnlinePhase {
-    Waiting,
-    Playing,
-    Lost,
-}
-
-pub struct OnlineGame {
+pub struct ShooterGame {
     chan: net::NetChan,
-    handle: String,
-    phase: OnlinePhase,
-    role: u8,
-    opponent: String,
-    from: NetSnap,
-    to: NetSnap,
+    my_id: Option<u8>,
+    arena_half: f32,
+    obstacles: Vec<Obstacle>,
+    metas: HashMap<u8, PlayerMeta>,
+    from: HashMap<u8, PSnap>,
+    to: HashMap<u8, PSnap>,
     t: f32,
-    scores: [u32; 2],
-    serving: bool,
-    last_axis: f32,
+    latest: HashMap<u8, PState>,
+    bullets: Vec<BState>,
+    bullets_age: f32,
+    cam_target: Vec2,
+    aim: Vec2,
     since_input: f32,
     since_ping: f32,
-    anim_t: f32,
+    since_status: f32,
+    lost: bool,
 }
 
-impl OnlineGame {
+impl ShooterGame {
     pub fn connect(cfg: &OnlineConfig) -> Result<Self, String> {
         let chan = net::NetChan::connect(&cfg.url, cfg.opening_msgs()?)?;
         set_status("connecting…");
         Ok(Self {
             chan,
-            handle: cfg.handle.clone(),
-            phase: OnlinePhase::Waiting,
-            role: 0,
-            opponent: String::new(),
-            from: NetSnap::default(),
-            to: NetSnap::default(),
+            my_id: None,
+            arena_half: 24.0,
+            obstacles: Vec::new(),
+            metas: HashMap::new(),
+            from: HashMap::new(),
+            to: HashMap::new(),
             t: 1.0,
-            scores: [0, 0],
-            serving: true,
-            last_axis: 0.0,
+            latest: HashMap::new(),
+            bullets: Vec::new(),
+            bullets_age: 0.0,
+            cam_target: Vec2::ZERO,
+            aim: Vec2::new(1.0, 0.0),
             since_input: 0.0,
             since_ping: 0.0,
-            anim_t: 0.0,
+            since_status: 0.0,
+            lost: false,
         })
     }
 
-    fn render_snap(&self) -> NetSnap {
+    fn render_pos(&self, id: u8) -> Vec2 {
         let a = self.t.clamp(0.0, 1.0);
-        let lerp = |x: f32, y: f32| x + (y - x) * a;
-        NetSnap {
-            ball: [
-                lerp(self.from.ball[0], self.to.ball[0]),
-                lerp(self.from.ball[1], self.to.ball[1]),
-            ],
-            paddles: [
-                lerp(self.from.paddles[0], self.to.paddles[0]),
-                lerp(self.from.paddles[1], self.to.paddles[1]),
-            ],
-        }
+        let f = self.from.get(&id).copied().unwrap_or_default();
+        let to = self.to.get(&id).copied().unwrap_or_default();
+        Vec2::new(f.x + (to.x - f.x) * a, f.z + (to.z - f.z) * a)
     }
 
-    fn me_vs_them(&self) -> String {
-        // scores[0] is always the near/blue player (role 0).
-        let (me, them) = if self.role == 0 {
-            (self.scores[0], self.scores[1])
-        } else {
-            (self.scores[1], self.scores[0])
-        };
-        format!("{} {me} : {them} {}", self.handle, self.opponent)
+    fn handle_of(&self, id: u8) -> String {
+        self.metas
+            .get(&id)
+            .map(|m| m.handle.clone())
+            .unwrap_or_else(|| format!("player {id}"))
+    }
+
+    fn scoreboard(&self) -> String {
+        let mut rows: Vec<&PState> = self.latest.values().collect();
+        rows.sort_by(|a, b| b.score.cmp(&a.score).then(a.id.cmp(&b.id)));
+        let list = rows
+            .iter()
+            .take(4)
+            .map(|p| {
+                let me = if Some(p.id) == self.my_id { "▶" } else { "" };
+                format!("{me}{} {}", self.handle_of(p.id), p.score)
+            })
+            .collect::<Vec<_>>()
+            .join("  ·  ");
+        let hp = self
+            .my_id
+            .and_then(|id| self.latest.get(&id))
+            .map(|p| {
+                if p.alive {
+                    "♥".repeat(p.hp as usize) + &"♡".repeat((MAX_HP - p.hp) as usize)
+                } else {
+                    "respawning…".into()
+                }
+            })
+            .unwrap_or_default();
+        format!("{hp}   {list}   ({} in arena)", self.latest.len())
     }
 }
 
-impl EmberGame for OnlineGame {
+impl EmberGame for ShooterGame {
     fn update(&mut self, input: &InputState, dt: f32) -> Frame {
-        self.anim_t += dt;
         self.since_input += dt;
         self.since_ping += dt;
+        self.since_status += dt;
+        self.bullets_age += dt;
 
+        let mut status_event: Option<String> = None;
         while let Some(msg) = self.chan.poll() {
             match msg {
-                S2C::Welcome { .. } => set_status("connected — waiting in lobby…"),
-                S2C::LobbyCreated { name } => {
-                    set_status(&format!("lobby \"{name}\" created — waiting for an opponent…"));
+                S2C::Welcome { .. } => set_status("connected…"),
+                S2C::GameJoined { id, seed, arena_half, players } => {
+                    self.my_id = Some(id);
+                    self.arena_half = arena_half;
+                    self.obstacles = generate_arena(seed);
+                    for m in players {
+                        self.metas.insert(m.id, m);
+                    }
+                    status_event = Some("in the arena — WASD move · mouse aim · click fire".into());
                 }
-                S2C::MatchStart { role, opponent } => {
-                    self.role = role;
-                    self.opponent = opponent;
-                    self.phase = OnlinePhase::Playing;
-                    self.scores = [0, 0];
-                    self.from = NetSnap::default();
-                    self.to = NetSnap::default();
-                    set_status(&format!("match vs {} — {}", self.opponent, self.me_vs_them()));
+                S2C::PlayerJoined { meta } => {
+                    status_event = Some(format!("{} joined the arena", meta.handle));
+                    self.metas.insert(meta.id, meta);
                 }
-                S2C::State { ball, paddles, scores, serving, .. } => {
-                    self.from = self.render_snap();
-                    self.to = NetSnap { ball, paddles };
+                S2C::PlayerLeft { id } => {
+                    status_event = Some(format!("{} left", self.handle_of(id)));
+                    self.metas.remove(&id);
+                    self.from.remove(&id);
+                    self.to.remove(&id);
+                    self.latest.remove(&id);
+                }
+                S2C::State { players, bullets, .. } => {
+                    self.from.clear();
+                    for p in &players {
+                        self.from.insert(p.id, PSnap { x: self.render_pos(p.id).x, z: self.render_pos(p.id).y });
+                    }
+                    // First snapshot for a player: snap, don't slide in.
+                    for p in &players {
+                        if !self.to.contains_key(&p.id) {
+                            self.from.insert(p.id, PSnap { x: p.x, z: p.z });
+                        }
+                    }
+                    self.to = players.iter().map(|p| (p.id, PSnap { x: p.x, z: p.z })).collect();
+                    self.latest = players.into_iter().map(|p| (p.id, p)).collect();
                     self.t = 0.0;
-                    self.scores = scores;
-                    self.serving = serving;
+                    self.bullets = bullets;
+                    self.bullets_age = 0.0;
                 }
-                S2C::MatchEvent { scorer, won, scores } => {
-                    self.scores = scores;
-                    let i_scored = scorer == self.role;
-                    let line = if won {
-                        if i_scored { "🏆 YOU WIN the game!" } else { "opponent wins the game" }
-                    } else if i_scored {
-                        "you score!"
+                S2C::Kill { killer, victim } => {
+                    let line = if Some(victim) == self.my_id {
+                        format!("☠ you were fragged by {}", self.handle_of(killer))
+                    } else if Some(killer) == self.my_id {
+                        format!("✚ you fragged {}", self.handle_of(victim))
                     } else {
-                        "opponent scores"
+                        format!("{} fragged {}", self.handle_of(killer), self.handle_of(victim))
                     };
-                    set_status(&format!("{line}  ·  {}", self.me_vs_them()));
-                }
-                S2C::OpponentLeft => {
-                    self.phase = OnlinePhase::Waiting;
-                    set_status("opponent left — lobby is open again, waiting…");
+                    status_event = Some(line);
                 }
                 S2C::Error { message } => {
-                    self.phase = OnlinePhase::Lost;
+                    self.lost = true;
                     set_status(&format!("server error: {message}"));
                 }
                 S2C::Pong { .. } | S2C::LobbyList { .. } => {}
             }
         }
-        if self.chan.is_dead() && self.phase != OnlinePhase::Lost {
-            self.phase = OnlinePhase::Lost;
+        if self.chan.is_dead() && !self.lost {
+            self.lost = true;
             set_status("connection lost — reload to play again");
         }
 
-        // Input: either key set steers YOUR paddle. With the flipped camera
-        // (role 1) screen-left is +x, so invert to keep controls natural.
-        if self.phase == OnlinePhase::Playing {
-            let mut axis = (input.axis(KeyCode::KeyA, KeyCode::KeyD)
-                + input.axis(KeyCode::ArrowLeft, KeyCode::ArrowRight))
-            .clamp(-1.0, 1.0);
-            if self.role == 1 {
-                axis = -axis;
+        // Camera follows my cube.
+        let my_pos = self.my_id.map(|id| self.render_pos(id)).unwrap_or(Vec2::ZERO);
+        let k = 1.0 - (-dt * 6.0).exp();
+        self.cam_target += (my_pos - self.cam_target) * k;
+        let camera = Camera {
+            eye: Vec3::new(self.cam_target.x, 30.0, self.cam_target.y + 19.0),
+            target: Vec3::new(self.cam_target.x, 0.0, self.cam_target.y),
+            fov_y_deg: 55.0,
+        };
+
+        // Aim at the cursor; keep the last aim if the cursor is elsewhere.
+        if let Some(ndc) = input.cursor_ndc() {
+            if let Some(world) = cursor_world(&camera, input.aspect(), ndc) {
+                let dir = world - my_pos;
+                if dir.length_squared() > 0.05 {
+                    self.aim = dir.normalize();
+                }
             }
-            if axis != self.last_axis || self.since_input > 0.1 {
-                self.last_axis = axis;
-                self.since_input = 0.0;
-                self.chan.send(&C2S::Input { axis });
-            }
+        }
+
+        // Send intents at a fixed cadence (also the keepalive).
+        if self.my_id.is_some() && !self.lost && self.since_input >= 0.05 {
+            self.since_input = 0.0;
+            let mv = Vec2::new(
+                input.axis(KeyCode::KeyA, KeyCode::KeyD),
+                input.axis(KeyCode::KeyW, KeyCode::KeyS),
+            );
+            let fire = input.mouse_down(MouseButton::Left) || input.down(KeyCode::Space);
+            self.chan.send(&C2S::Input {
+                mx: mv.x,
+                my: mv.y,
+                ax: self.aim.x,
+                az: self.aim.y,
+                fire,
+            });
         }
         if self.since_ping > 4.0 {
             self.since_ping = 0.0;
             self.chan.send(&C2S::Ping { nonce: 1 });
         }
+        if let Some(line) = status_event {
+            self.since_status = 0.0;
+            set_status(&format!("{line}   |   {}", self.scoreboard()));
+        } else if self.since_status > 1.0 && self.my_id.is_some() && !self.lost {
+            self.since_status = 0.0;
+            set_status(&self.scoreboard());
+        }
 
-        // Advance interpolation: one state interval covers from->to.
         self.t += dt * (60.0 / STATE_EVERY_TICKS as f32);
-        let snap = self.render_snap();
-        let ball_y = if self.serving {
-            0.5 + (self.anim_t * 6.0).sin().abs() * 0.4
-        } else {
-            0.5
+
+        // ---- build the scene ----
+        let mut frame = Frame { camera, instances: Vec::with_capacity(96) };
+        let half = self.arena_half;
+        let inst = |frame: &mut Frame, p: Vec3, s: Vec3, c: Vec3| {
+            frame.instances.push(Instance::new(p, s, c));
         };
-        build_scene(&SceneParams {
-            p1_x: snap.paddles[0],
-            p2_x: snap.paddles[1],
-            ball: snap.ball,
-            ball_y,
-            scores: self.scores,
-            flip: self.role == 1,
-        })
+
+        // Floor + boundary walls.
+        inst(&mut frame, Vec3::new(0.0, -0.5, 0.0), Vec3::new(half * 2.0 + 2.0, 1.0, half * 2.0 + 2.0), Vec3::new(0.12, 0.13, 0.17));
+        for (px, pz, sx, sz) in [
+            (half + 0.45, 0.0, 0.9, half * 2.0 + 2.7),
+            (-half - 0.45, 0.0, 0.9, half * 2.0 + 2.7),
+            (0.0, half + 0.45, half * 2.0 + 2.7, 0.9),
+            (0.0, -half - 0.45, half * 2.0 + 2.7, 0.9),
+        ] {
+            inst(&mut frame, Vec3::new(px, 0.75, pz), Vec3::new(sx, 1.5, sz), Vec3::new(0.28, 0.30, 0.36));
+        }
+        // Obstacles from the shared seed.
+        for o in &self.obstacles {
+            let cx = (o.min[0] + o.max[0]) * 0.5;
+            let cz = (o.min[1] + o.max[1]) * 0.5;
+            inst(
+                &mut frame,
+                Vec3::new(cx, 1.1, cz),
+                Vec3::new(o.max[0] - o.min[0], 2.2, o.max[1] - o.min[1]),
+                Vec3::new(0.30, 0.33, 0.40),
+            );
+        }
+
+        // Players.
+        for (&id, p) in &self.latest {
+            if !p.alive {
+                continue;
+            }
+            let pos = self.render_pos(id);
+            let color = self
+                .metas
+                .get(&id)
+                .map(|m| Vec3::from_array(m.color))
+                .unwrap_or(Vec3::splat(0.6));
+            let aim = Vec2::new(p.ax, p.az);
+            // Body, head, gun.
+            inst(&mut frame, Vec3::new(pos.x, 0.55, pos.y), Vec3::new(1.0, 1.1, 1.0), color);
+            inst(&mut frame, Vec3::new(pos.x, 1.35, pos.y), Vec3::splat(0.55), color * 0.7);
+            let hand = Vec3::new(pos.x, 0.85, pos.y) + Vec3::new(aim.x, 0.0, aim.y) * 0.55;
+            let aim_used = if Some(id) == self.my_id { self.aim } else { aim };
+            push_gun(&mut frame, hand, aim_used);
+            // HP pips above the head.
+            for h in 0..p.hp {
+                inst(
+                    &mut frame,
+                    Vec3::new(pos.x - 0.3 + h as f32 * 0.3, 2.0, pos.y),
+                    Vec3::splat(0.16),
+                    Vec3::new(0.3, 0.9, 0.4),
+                );
+            }
+        }
+
+        // Bullets: glowing blue tracers, extrapolated between states.
+        for b in &self.bullets {
+            inst(
+                &mut frame,
+                Vec3::new(b.x + b.vx * self.bullets_age, 0.85, b.z + b.vz * self.bullets_age),
+                Vec3::splat(0.3),
+                GLOW_BLUE,
+            );
+        }
+
+        // My aim marker on the ground.
+        if self.my_id.is_some() {
+            let m = my_pos + self.aim * 3.2;
+            inst(&mut frame, Vec3::new(m.x, 0.04, m.y), Vec3::new(0.4, 0.06, 0.4), GLOW_BLUE * 0.8);
+        }
+
+        frame
     }
 }
 
@@ -273,7 +443,6 @@ mod net {
                 let dead = Arc::clone(&dead);
                 std::thread::spawn(move || {
                     loop {
-                        // Outbound first…
                         loop {
                             match out_rx.try_recv() {
                                 Ok(msg) => {
@@ -290,7 +459,6 @@ mod net {
                                 }
                             }
                         }
-                        // …then poll one inbound frame (20 ms max).
                         match ws.read() {
                             Ok(Message::Text(t)) => {
                                 if let Ok(msg) = serde_json::from_str::<S2C>(t.as_str()) {
@@ -331,8 +499,8 @@ mod net {
         }
     }
 
-    /// C2S is small and only built from owned data; re-serialize instead of
-    /// deriving Clone on the protocol type.
+    /// C2S is small; re-serialize instead of deriving Clone on the
+    /// protocol type.
     fn clone_c2s(msg: &C2S) -> C2S {
         serde_json::from_str(&serde_json::to_string(msg).unwrap()).unwrap()
     }

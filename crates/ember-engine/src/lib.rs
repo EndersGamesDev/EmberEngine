@@ -20,6 +20,7 @@ pub use renderer::{Camera, Frame, Instance};
 // Re-exported so game code doesn't need its own winit/glam dependency for
 // the common cases.
 pub use glam;
+pub use winit::event::MouseButton;
 pub use winit::keyboard::KeyCode;
 
 /// The game side of the engine contract: called once per frame with input

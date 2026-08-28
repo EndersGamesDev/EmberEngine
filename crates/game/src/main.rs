@@ -46,19 +46,11 @@ impl Game {
         let mut frame = Frame { camera, instances: Vec::new() };
         let half = self.world.arena_half;
         // Ground slab, top surface at y = 0.
-        frame.instances.push(Instance {
-            position: Vec3::new(0.0, -0.5, 0.0),
-            scale: Vec3::new(half * 2.0 + 2.0, 1.0, half * 2.0 + 2.0),
-            color: Vec3::new(0.16, 0.17, 0.20),
-        });
+        frame.instances.push(Instance::new(Vec3::new(0.0, -0.5, 0.0), Vec3::new(half * 2.0 + 2.0, 1.0, half * 2.0 + 2.0), Vec3::new(0.16, 0.17, 0.20)));
         // Arena corner markers.
         for &sx in &[-1.0f32, 1.0] {
             for &sz in &[-1.0f32, 1.0] {
-                frame.instances.push(Instance {
-                    position: Vec3::new(half * sx, 0.75, half * sz),
-                    scale: Vec3::new(0.5, 1.5, 0.5),
-                    color: Vec3::new(0.35, 0.37, 0.42),
-                });
+                frame.instances.push(Instance::new(Vec3::new(half * sx, 0.75, half * sz), Vec3::new(0.5, 1.5, 0.5), Vec3::new(0.35, 0.37, 0.42)));
             }
         }
         frame
@@ -66,11 +58,7 @@ impl Game {
 
     fn push_player(frame: &mut Frame, pos: Vec2, color: [f32; 3], is_me: bool) {
         let scale = if is_me { 1.15 } else { 1.0 };
-        frame.instances.push(Instance {
-            position: Vec3::new(pos.x, scale * 0.5, pos.y),
-            scale: Vec3::splat(scale),
-            color: Vec3::from_array(color),
-        });
+        frame.instances.push(Instance::new(Vec3::new(pos.x, scale * 0.5, pos.y), Vec3::splat(scale), Vec3::from_array(color)));
     }
 }
 

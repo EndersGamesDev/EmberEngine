@@ -46,7 +46,7 @@ fn build_scene(p: &SceneParams) -> Frame {
     };
     let mut frame = Frame { camera, instances: Vec::with_capacity(32) };
     let inst = |frame: &mut Frame, pos: Vec3, scale: Vec3, color: Vec3| {
-        frame.instances.push(Instance { position: pos, scale, color });
+        frame.instances.push(Instance::new(pos, scale, color));
     };
 
     // Court: floor, side walls, dashed center line.
@@ -206,9 +206,9 @@ pub fn run_local() {
 }
 
 pub fn run_online(cfg: OnlineConfig) -> Result<(), String> {
-    let game = online::OnlineGame::connect(&cfg)?;
+    let game = online::ShooterGame::connect(&cfg)?;
     ember_engine::run(
-        EngineConfig { title: format!("ember pong — online: {}", cfg.lobby) },
+        EngineConfig { title: format!("ember arena — {}", cfg.lobby) },
         game,
     );
     Ok(())

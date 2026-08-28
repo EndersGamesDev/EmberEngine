@@ -3,4 +3,5 @@
 //! headless matchmaking server build on this.
 
 pub mod proto;
+pub mod shooter;
 pub mod sim;

@@ -10,6 +10,7 @@ struct VsIn {
     @location(2) i_pos: vec3<f32>,
     @location(3) i_scale: vec3<f32>,
     @location(4) i_color: vec3<f32>,
+    @location(5) i_yaw: f32,
 };
 
 struct VsOut {
@@ -20,11 +21,23 @@ struct VsOut {
 
 @vertex
 fn vs_main(in: VsIn) -> VsOut {
-    let world = in.pos * in.i_scale + in.i_pos;
+    let c = cos(in.i_yaw);
+    let s = sin(in.i_yaw);
+    let scaled = in.pos * in.i_scale;
+    let rotated = vec3<f32>(
+        scaled.x * c + scaled.z * s,
+        scaled.y,
+        -scaled.x * s + scaled.z * c,
+    );
+    let world = rotated + in.i_pos;
     var out: VsOut;
     out.clip = camera.view_proj * vec4<f32>(world, 1.0);
-    // Axis-aligned scaling only, so the normal is unchanged in direction.
-    out.normal = in.normal;
+    // Uniform-per-axis scale + Y rotation: rotate the normal the same way.
+    out.normal = vec3<f32>(
+        in.normal.x * c + in.normal.z * s,
+        in.normal.y,
+        -in.normal.x * s + in.normal.z * c,
+    );
     out.color = in.i_color;
     return out;
 }
