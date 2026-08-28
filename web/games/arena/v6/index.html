@@ -77,7 +77,7 @@
 </head>
 <body>
   <header>
-    <h1><a href="../../../">⬅ games</a> &nbsp; ember <span>arena</span> <small style="opacity:.5">v5</small></h1>
+    <h1><a href="../../../">⬅ games</a> &nbsp; ember <span>arena</span> <small style="opacity:.5">v6</small></h1>
     <div id="account" title="click to rename">…</div>
   </header>
 
@@ -85,7 +85,8 @@
     <h2>Arena Shooter — first-person drop-in deathmatch</h2>
     <div class="hint"><b>Click the game to capture your mouse</b> (Esc releases) ·
       <b>WASD</b> move · <b>mouse</b> look · <b>click / space</b> fire ·
-      <b>Shift</b> sprint · <b>C</b> crouch · 3 HP, respawn in 2.5 s · up to 8 players.
+      <b>Shift</b> sprint · <b>C</b> crouch · <b>Tab</b> scoreboard ·
+      sound on 🔊 · 3 HP, respawn in 2.5 s · up to 8 players.
       Whoever creates a lobby is hosting; joiners drop straight in.</div>
     <div style="display:flex; gap:8px;">
       <div style="flex:1">
@@ -111,6 +112,11 @@
       <div id="crosshair" style="position:absolute; left:50%; top:50%;
         transform:translate(-50%,-50%); pointer-events:none; color:#9fe0ff;
         font-size:20px; text-shadow:0 0 6px #123;">+</div>
+      <pre id="scoreboard" hidden style="position:absolute; left:50%; top:14%;
+        transform:translateX(-50%); margin:0; padding:14px 22px;
+        background:rgba(6,16,31,0.88); border:1px solid #1d3050;
+        border-radius:10px; color:#dce6f5; font-size:15px; line-height:1.5;
+        pointer-events:none;"></pre>
     </div>
   </div>
 

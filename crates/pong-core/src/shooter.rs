@@ -18,6 +18,10 @@ pub const MAX_BULLETS_PER_PLAYER: usize = 10;
 pub const MAX_HP: u8 = 3;
 pub const RESPAWN_SECS: f32 = 2.5;
 pub const MAX_PLAYERS: usize = 8;
+/// Lag compensation: hit tests may rewind targets at most this many ticks
+/// (300 ms) toward what the shooter was seeing.
+pub const MAX_REWIND_TICKS: u16 = 18;
+const HISTORY_LEN: usize = MAX_REWIND_TICKS as usize + 2;
 const SPAWN_RING_R: f32 = ARENA_HALF - 4.0;
 
 /// Axis-aligned obstacle on the XZ plane.
@@ -124,6 +128,10 @@ pub struct PlayerIn {
     pub fire: bool,
     pub sprint: bool,
     pub crouch: bool,
+    /// How many ticks behind the present this player's view is (derived by
+    /// the server from the client's reported view tick, clamped). Bullets
+    /// they fire hit-test against targets rewound this far.
+    pub delay_ticks: u16,
 }
 
 #[derive(Clone, Debug)]
@@ -146,7 +154,12 @@ pub struct Bullet {
     pub vel: [f32; 2],
     pub ttl: f32,
     pub owner: u8,
+    /// Owner's view delay when fired: targets rewind this far on hit tests.
+    pub delay: u16,
 }
+
+/// One tick's snapshot of player positions, for lag-compensated rewinds.
+type HistoryFrame = Vec<(u8, [f32; 2], bool)>;
 
 pub struct Sim {
     pub obstacles: Vec<Obstacle>,
@@ -154,6 +167,10 @@ pub struct Sim {
     pub bullets: Vec<Bullet>,
     /// (killer, victim) pairs from the last step.
     pub events: Vec<(u8, u8)>,
+    /// Ticks stepped since creation; State broadcasts echo it and clients
+    /// report it back as their view tick.
+    pub tick: u64,
+    history: std::collections::VecDeque<HistoryFrame>,
 }
 
 impl Sim {
@@ -163,6 +180,8 @@ impl Sim {
             players: Vec::new(),
             bullets: Vec::new(),
             events: Vec::new(),
+            tick: 0,
+            history: std::collections::VecDeque::new(),
         }
     }
 
@@ -187,8 +206,20 @@ impl Sim {
         self.bullets.retain(|b| b.owner != id);
     }
 
+    /// Target position for a hit test, rewound `delay` ticks for lag
+    /// compensation (falls back to the present when history is short).
+    fn rewound(&self, id: u8, delay: u16) -> Option<([f32; 2], bool)> {
+        if delay == 0 {
+            return None;
+        }
+        let idx = self.history.len().checked_sub(1 + delay as usize)?;
+        let frame = self.history.get(idx)?;
+        frame.iter().find(|(pid, _, _)| *pid == id).map(|&(_, pos, alive)| (pos, alive))
+    }
+
     pub fn step(&mut self, inputs: &dyn Fn(u8) -> PlayerIn) {
         self.events.clear();
+        self.tick += 1;
         let dt = FIXED_DT;
 
         // Players: respawn timers, movement (axis-separated slide), firing.
@@ -248,17 +279,25 @@ impl Sim {
                         vel: [p.aim[0] * BULLET_SPEED, p.aim[1] * BULLET_SPEED],
                         ttl: BULLET_TTL,
                         owner,
+                        delay: input.delay_ticks.min(MAX_REWIND_TICKS),
                     });
                 }
             }
         }
         self.bullets.extend(new_bullets);
 
+        // Record this tick's positions for lag-compensated rewinds.
+        self.history
+            .push_back(self.players.iter().map(|p| (p.id, p.pos, p.alive)).collect());
+        if self.history.len() > HISTORY_LEN {
+            self.history.pop_front();
+        }
+
         // Bullets: swept player collision (segment vs circle — no tunneling,
-        // no point-blank dead zone), then integrate, then world collision.
+        // no point-blank dead zone) against targets REWOUND by the shooter's
+        // view delay, then integrate, then world collision.
         let mut hits: Vec<(u8, u8)> = Vec::new(); // (owner, victim)
         let obstacles = std::mem::take(&mut self.obstacles);
-        let players = &self.players;
         let mut bullets = std::mem::take(&mut self.bullets);
         bullets.retain_mut(|b| {
             b.ttl -= dt;
@@ -270,18 +309,25 @@ impl Sim {
             let (sx, sz) = (p1[0] - p0[0], p1[1] - p0[1]);
             let seg_len_sq = sx * sx + sz * sz;
             let rr = PLAYER_R + BULLET_R;
-            for p in players.iter() {
-                if !p.alive || p.id == b.owner {
+            for p in self.players.iter() {
+                if p.id == b.owner {
                     continue;
                 }
-                // Closest point on [p0, p1] to the player's center.
+                // Where the shooter SAW this target when firing.
+                let (tpos, talive) = self
+                    .rewound(p.id, b.delay)
+                    .unwrap_or((p.pos, p.alive));
+                if !talive || !p.alive {
+                    continue;
+                }
+                // Closest point on [p0, p1] to the (rewound) center.
                 let t = if seg_len_sq <= 1e-8 {
                     0.0
                 } else {
-                    (((p.pos[0] - p0[0]) * sx + (p.pos[1] - p0[1]) * sz) / seg_len_sq)
+                    (((tpos[0] - p0[0]) * sx + (tpos[1] - p0[1]) * sz) / seg_len_sq)
                         .clamp(0.0, 1.0)
                 };
-                let (ex, ez) = (p.pos[0] - (p0[0] + sx * t), p.pos[1] - (p0[1] + sz * t));
+                let (ex, ez) = (tpos[0] - (p0[0] + sx * t), tpos[1] - (p0[1] + sz * t));
                 if ex * ex + ez * ez < rr * rr {
                     hits.push((b.owner, p.id));
                     return false;
@@ -374,7 +420,10 @@ mod tests {
             sim.add_player(0);
             sim.players[0].pos = [-20.0, 0.0];
             let mut inputs = HashMap::new();
-            inputs.insert(0, PlayerIn { mv: [1.0, 0.0], aim: [1.0, 0.0], fire: false, sprint, crouch });
+            inputs.insert(
+                0,
+                PlayerIn { mv: [1.0, 0.0], aim: [1.0, 0.0], fire: false, sprint, crouch, ..Default::default() },
+            );
             for _ in 0..60 {
                 step_with(&mut sim, &inputs);
             }
@@ -469,6 +518,51 @@ mod tests {
         let victim = sim.players.iter().find(|p| p.id == 1).unwrap();
         assert!(victim.alive);
         assert_eq!(victim.hp, MAX_HP);
+    }
+
+    #[test]
+    fn lag_compensation_rewinds_targets() {
+        // The target stood at (6, 0) for a while, then dodged to (6, 5).
+        // A shooter whose view is 12 ticks behind still sees it at the old
+        // spot and fires there: with rewind the shot lands, without it the
+        // same shot whiffs.
+        let run = |delay: u16| -> bool {
+            let mut sim = Sim::new(5);
+            sim.obstacles.clear();
+            sim.add_player(0); // shooter
+            sim.add_player(1); // target
+            sim.players[0].pos = [0.0, 0.0];
+            sim.players[1].pos = [6.0, 0.0];
+            let idle = HashMap::new();
+            for _ in 0..15 {
+                sim.players[0].pos = [0.0, 0.0];
+                sim.players[1].pos = [6.0, 0.0];
+                step_with(&mut sim, &idle);
+            }
+            // The dodge (teleport keeps the geometry exact).
+            sim.players.iter_mut().find(|p| p.id == 1).unwrap().pos = [6.0, 5.0];
+            let mut inputs = HashMap::new();
+            inputs.insert(0, PlayerIn {
+                mv: [0.0, 0.0],
+                aim: [1.0, 0.0],
+                fire: true,
+                delay_ticks: delay,
+                ..Default::default()
+            });
+            // Bullet flight to x=6 takes ~11 ticks — still inside the
+            // 12-tick rewind window.
+            for _ in 0..12 {
+                sim.players[0].pos = [0.0, 0.0];
+                sim.players.iter_mut().find(|p| p.id == 1).unwrap().pos = [6.0, 5.0];
+                step_with(&mut sim, &inputs);
+                if sim.players.iter().find(|p| p.id == 1).unwrap().hp < MAX_HP {
+                    return true;
+                }
+            }
+            false
+        };
+        assert!(run(12), "rewound shot must land where the shooter saw the target");
+        assert!(!run(0), "without rewind the dodged shot must miss");
     }
 
     #[test]

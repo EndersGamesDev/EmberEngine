@@ -5,6 +5,7 @@
 //! Online: either key set steers YOUR paddle; the server is authoritative.
 
 mod online;
+mod sound;
 
 use ember_engine::glam::Vec3;
 use ember_engine::{Camera, EmberGame, EngineConfig, Frame, InputState, Instance, KeyCode};

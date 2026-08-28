@@ -11,6 +11,8 @@ use pong_core::proto::{BState, C2S, PState, PlayerMeta, S2C, PROTO_VERSION, STAT
 use pong_core::shooter::{generate_arena, move_circle, stance_speed, Obstacle, MAX_HP};
 use serde::Deserialize;
 
+use crate::sound::{Audio, Sfx};
+
 /// Mouse-look sensitivity, radians per pixel.
 const LOOK_SENS: f32 = 0.0026;
 const EYE_STAND: f32 = 1.45;
@@ -45,6 +47,30 @@ impl OnlineConfig {
             action,
         ])
     }
+}
+
+/// Tab scoreboard: a monospace overlay on the web page (safe text-only
+/// rendering), nothing on native (the status log already carries scores).
+fn set_scoreboard(text: Option<&str>) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(el) = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.get_element_by_id("scoreboard"))
+        {
+            match text {
+                Some(t) => {
+                    el.set_text_content(Some(t));
+                    let _ = el.remove_attribute("hidden");
+                }
+                None => {
+                    let _ = el.set_attribute("hidden", "");
+                }
+            }
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = text;
 }
 
 /// Show progress where the player can see it: the page's #status element on
@@ -133,6 +159,12 @@ pub struct ShooterGame {
     was_alive: bool,
     history: VecDeque<Cmd>,
     next_seq: u32,
+    last_tick: u64,
+    audio: Option<Audio>,
+    /// Client-side deaths tally (from Kill events since we joined).
+    deaths: HashMap<u8, u32>,
+    since_score_ui: f32,
+    score_shown: bool,
     aim: Vec2,
     yaw: f32,
     pitch: f32,
@@ -166,6 +198,11 @@ impl ShooterGame {
             was_alive: false,
             history: VecDeque::new(),
             next_seq: 1,
+            last_tick: 0,
+            audio: Audio::new(),
+            deaths: HashMap::new(),
+            since_score_ui: 1.0,
+            score_shown: false,
             aim: Vec2::new(1.0, 0.0),
             yaw: 0.0,
             pitch: 0.0,
@@ -191,6 +228,26 @@ impl ShooterGame {
             .get(&id)
             .map(|m| m.handle.clone())
             .unwrap_or_else(|| format!("player {id}"))
+    }
+
+    /// Full Tab-overlay scoreboard: frags and deaths, sorted.
+    fn scoreboard_text(&self) -> String {
+        let mut rows: Vec<&PState> = self.latest.values().collect();
+        rows.sort_by(|a, b| b.score.cmp(&a.score).then(a.id.cmp(&b.id)));
+        let mut s = format!("{:<20} {:>6} {:>7}\n", "PLAYER", "FRAGS", "DEATHS");
+        s.push_str(&"─".repeat(35));
+        s.push('\n');
+        for p in rows {
+            let me = if Some(p.id) == self.my_id { "▶ " } else { "  " };
+            let state = if p.alive { "" } else { " ☠" };
+            s.push_str(&format!(
+                "{me}{:<18} {:>6} {:>7}{state}\n",
+                self.handle_of(p.id),
+                p.score,
+                self.deaths.get(&p.id).copied().unwrap_or(0),
+            ));
+        }
+        s
     }
 
     fn scoreboard(&self) -> String {
@@ -255,8 +312,45 @@ impl EmberGame for ShooterGame {
                     self.from.remove(&id);
                     self.to.remove(&id);
                     self.latest.remove(&id);
+                    self.deaths.remove(&id);
                 }
-                S2C::State { players, bullets, .. } => {
+                S2C::State { tick, players, bullets } => {
+                    self.last_tick = tick;
+                    // ---- audio cues from state diffs (before overwrite) ----
+                    if let Some(audio) = self.audio.as_ref() {
+                        // New bullets per owner = shots fired.
+                        let mut prev: HashMap<u8, usize> = HashMap::new();
+                        for b in &self.bullets {
+                            *prev.entry(b.owner).or_insert(0) += 1;
+                        }
+                        let mut curr: HashMap<u8, (usize, [f32; 2])> = HashMap::new();
+                        for b in &bullets {
+                            let e = curr.entry(b.owner).or_insert((0, [b.x, b.z]));
+                            e.0 += 1;
+                        }
+                        for (&owner, &(n, pos)) in &curr {
+                            if n > prev.get(&owner).copied().unwrap_or(0) {
+                                if Some(owner) == self.my_id {
+                                    audio.play(Sfx::Shot, 0.5);
+                                } else {
+                                    let d = (Vec2::new(pos[0], pos[1]) - self.pred_pos).length();
+                                    audio.play(Sfx::Shot, (0.45 * (1.0 - d / 40.0)).clamp(0.05, 0.45));
+                                }
+                            }
+                        }
+                        // HP drops: hurt (me) / hitmarker (them).
+                        for p in &players {
+                            if let Some(old) = self.latest.get(&p.id) {
+                                if p.hp < old.hp && p.alive {
+                                    if Some(p.id) == self.my_id {
+                                        audio.play(Sfx::Hurt, 0.6);
+                                    } else {
+                                        audio.play(Sfx::Hit, 0.35);
+                                    }
+                                }
+                            }
+                        }
+                    }
                     // Compute current render positions from the OLD from/to
                     // pair BEFORE replacing anything, then interpolate from
                     // there toward the new state. Snap (no slide) for a
@@ -308,6 +402,11 @@ impl EmberGame for ShooterGame {
                                 self.pred_pos = server;
                                 self.own_render = server;
                                 self.history.clear();
+                                if newly_alive {
+                                    if let Some(a) = self.audio.as_ref() {
+                                        a.play(Sfx::Respawn, 0.4);
+                                    }
+                                }
                             } else {
                                 self.pred_pos = rebased;
                             }
@@ -315,6 +414,16 @@ impl EmberGame for ShooterGame {
                     }
                 }
                 S2C::Kill { killer, victim } => {
+                    *self.deaths.entry(victim).or_insert(0) += 1;
+                    if let Some(a) = self.audio.as_ref() {
+                        if Some(killer) == self.my_id {
+                            a.play(Sfx::Kill, 0.5);
+                        } else if Some(victim) == self.my_id {
+                            a.play(Sfx::Death, 0.55);
+                        } else {
+                            a.play(Sfx::Hit, 0.12);
+                        }
+                    }
                     let line = if Some(victim) == self.my_id {
                         format!("☠ you were fragged by {}", self.handle_of(killer))
                     } else if Some(killer) == self.my_id {
@@ -397,8 +506,14 @@ impl EmberGame for ShooterGame {
                     self.history.pop_front();
                 }
             }
+            // The sim tick our remote-player rendering currently shows —
+            // the server rewinds our hit tests to it (lag compensation).
+            let view_tick = self.last_tick.saturating_sub(
+                ((1.0 - self.t.clamp(0.0, 1.0)) * STATE_EVERY_TICKS as f32).round() as u64,
+            );
             self.chan.send(&C2S::Input {
                 seq,
+                view_tick,
                 mx: mv.x,
                 my: mv.y,
                 ax: self.aim.x,
@@ -428,6 +543,20 @@ impl EmberGame for ShooterGame {
         } else if self.since_status > 1.0 && self.my_id.is_some() && !self.lost {
             self.since_status = 0.0;
             set_status(&self.scoreboard());
+        }
+
+        // ---- Tab scoreboard overlay ----
+        self.since_score_ui += dt;
+        let tab = input.down(KeyCode::Tab);
+        if tab && self.my_id.is_some() {
+            if self.since_score_ui > 0.25 || !self.score_shown {
+                self.since_score_ui = 0.0;
+                set_scoreboard(Some(&self.scoreboard_text()));
+                self.score_shown = true;
+            }
+        } else if self.score_shown {
+            set_scoreboard(None);
+            self.score_shown = false;
         }
 
         self.t += dt * (60.0 / STATE_EVERY_TICKS as f32);

@@ -6,9 +6,30 @@
       "tag": "online multiplayer · first person · up to 8",
       "desc": "First-person drop-in deathmatch in a generated arena. WASD + mouse look, Shift sprint, C crouch, click to fire. Create a lobby (password optional) or join anyone above.",
       "versions": [
-        { "v": "v5", "path": "games/arena/v5/", "live": true, "note": "live server" },
-        { "v": "v4", "path": "games/arena/v4/", "live": false, "note": "no prediction (archived)" },
-        { "v": "v3", "path": "games/arena/v3/", "live": false, "note": "top-down (archived)" }
+        {
+          "v": "v6",
+          "path": "games/arena/v6/",
+          "live": true,
+          "note": "live server"
+        },
+        {
+          "v": "v5",
+          "path": "games/arena/v5/",
+          "live": false,
+          "note": "no lag comp / silent (archived)"
+        },
+        {
+          "v": "v4",
+          "path": "games/arena/v4/",
+          "live": false,
+          "note": "no prediction (archived)"
+        },
+        {
+          "v": "v3",
+          "path": "games/arena/v3/",
+          "live": false,
+          "note": "top-down (archived)"
+        }
       ]
     },
     {
@@ -17,8 +38,18 @@
       "tag": "local · 2 players, one keyboard",
       "desc": "The first ember game. A/D vs arrow keys, first to 7.",
       "versions": [
-        { "v": "v2", "path": "games/pong/v2/", "live": true, "note": "current build" },
-        { "v": "v1", "path": "games/pong/v1/", "live": false, "note": "first web build (archived)" }
+        {
+          "v": "v2",
+          "path": "games/pong/v2/",
+          "live": true,
+          "note": "current build"
+        },
+        {
+          "v": "v1",
+          "path": "games/pong/v1/",
+          "live": false,
+          "note": "first web build (archived)"
+        }
       ]
     }
   ]

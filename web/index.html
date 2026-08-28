@@ -167,7 +167,7 @@
       const r = await fetch(`games.json?ts=${Date.now()}`, { cache: 'no-store' });
       if (r.ok) catalog = await r.json();
     } catch {}
-    let arenaLivePath = 'games/arena/v5/';
+    let arenaLivePath = 'games/arena/v6/';
     for (const g of catalog.games) {
       if (g.id === 'arena') {
         const live = g.versions.find((v) => v.live) || g.versions[0];

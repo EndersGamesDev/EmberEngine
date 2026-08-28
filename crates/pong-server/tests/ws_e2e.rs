@@ -113,6 +113,7 @@ fn drop_in_arena_flow_with_password() {
     // Guest holds fire: bullets must appear in the state stream.
     send(&mut guest, &C2S::Input {
         seq: 1,
+        view_tick: 0,
         mx: 0.0,
         my: 0.0,
         ax: 1.0,

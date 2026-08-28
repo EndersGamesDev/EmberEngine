@@ -67,6 +67,7 @@ fn main() {
             let t = started.elapsed().as_secs_f32();
             send(&mut ws, &C2S::Input {
                 seq: (t * 20.0) as u32,
+                view_tick: 0,
                 mx: (t * 0.9).cos(),
                 my: (t * 0.9).sin(),
                 ax: (t * 1.7).cos(),
