@@ -1,8 +1,7 @@
 # ember
 
-A 3D game and its engine, built from scratch in Rust. No general-purpose engine —
-the engine exists to serve exactly one game and gets to make sharp trade-offs
-because of it.
+https://enderpeer.github.io/ember/
+#Ender build this with ai 
 
 ## Design pillars
 
