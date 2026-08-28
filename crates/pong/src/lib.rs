@@ -37,9 +37,9 @@ impl EmberGame for Pong {
             self.sim.step(p1, p2);
             if let Some((scorer, won)) = self.sim.event {
                 if won {
-                    log::info!("player {} WINS the game!", scorer + 1);
+                    tracing::info!("player {} WINS the game!", scorer + 1);
                 } else {
-                    log::info!(
+                    tracing::info!(
                         "player {} scores ({} : {})",
                         scorer + 1,
                         self.sim.score[0],

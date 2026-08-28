@@ -16,6 +16,29 @@ use crate::EmberGame;
 #[cfg(target_arch = "wasm32")]
 use std::{cell::RefCell, rc::Rc};
 
+/// Install the native tracing pipeline: `RUST_LOG`-style filtering via
+/// EnvFilter, plus a bridge so `log` records from wgpu/winit land in the
+/// same output. Idempotent — game code may call it before `run()` to get
+/// tracing during its own startup (e.g. connecting), and `run()` calls it
+/// again harmlessly.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn init_diagnostics() {
+    use std::io::IsTerminal;
+    use tracing_subscriber::EnvFilter;
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new("info,wgpu_core=warn,wgpu_hal=warn,naga=warn")
+    });
+    let _ = tracing_log::LogTracer::init();
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        // No color codes when output is redirected to a file.
+        .with_ansi(std::io::stdout().is_terminal())
+        .try_init();
+}
+
+/// A frame gap above this is reported as a stall.
+const FRAME_STALL_THRESHOLD_MS: u128 = 100;
+
 pub struct EngineConfig {
     pub title: String,
 }
@@ -39,6 +62,8 @@ struct App<G: EmberGame> {
     game: G,
     input: InputState,
     last_frame: Instant,
+    /// Rate limit for stall warnings so one bad stretch doesn't spam.
+    last_stall_warn: Option<Instant>,
 }
 
 impl<G: EmberGame> ApplicationHandler for App<G> {
@@ -135,10 +160,26 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                 }
 
                 let now = Instant::now();
+                let raw_gap = now.duration_since(self.last_frame);
                 // Clamp dt so a debugger pause or long stall doesn't teleport
                 // everything on the next frame.
-                let dt = now.duration_since(self.last_frame).as_secs_f32().min(0.1);
+                let dt = raw_gap.as_secs_f32().min(0.1);
                 self.last_frame = now;
+
+                // Stall detection: a gap well above any vsync interval means
+                // the loop was starved (GC, OS hitch, hidden tab, GPU stall).
+                if self.renderer.is_some() && raw_gap.as_millis() > FRAME_STALL_THRESHOLD_MS {
+                    let ok_to_warn = self
+                        .last_stall_warn
+                        .map_or(true, |t| now.duration_since(t).as_secs() >= 1);
+                    if ok_to_warn {
+                        self.last_stall_warn = Some(now);
+                        tracing::warn!(
+                            stall_ms = raw_gap.as_millis() as u64,
+                            "frame stall: gap since previous frame exceeded {FRAME_STALL_THRESHOLD_MS} ms"
+                        );
+                    }
+                }
 
                 let frame = self.game.update(&self.input, dt);
                 if let Some(renderer) = self.renderer.as_mut() {
@@ -156,14 +197,7 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
 
 pub fn run<G: EmberGame + 'static>(config: EngineConfig, game: G) {
     #[cfg(not(target_arch = "wasm32"))]
-    {
-        // try_init: a no-op if the game already configured logging.
-        let _ = env_logger::Builder::from_env(
-            env_logger::Env::default()
-                .default_filter_or("info,wgpu_core=warn,wgpu_hal=warn,naga=warn"),
-        )
-        .try_init();
-    }
+    init_diagnostics();
     #[cfg(target_arch = "wasm32")]
     {
         console_error_panic_hook::set_once();
@@ -181,6 +215,7 @@ pub fn run<G: EmberGame + 'static>(config: EngineConfig, game: G) {
         game,
         input: InputState::default(),
         last_frame: Instant::now(),
+        last_stall_warn: None,
     };
 
     #[cfg(not(target_arch = "wasm32"))]

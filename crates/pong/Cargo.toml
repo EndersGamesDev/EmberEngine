@@ -14,7 +14,7 @@ path = "src/main.rs"
 [dependencies]
 ember-engine = { path = "../ember-engine" }
 glam.workspace = true
-log.workspace = true
+tracing.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

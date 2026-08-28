@@ -1,7 +1,15 @@
 use std::net::TcpListener;
 
 fn main() -> std::io::Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // RUST_LOG still works: EnvFilter reads it, defaulting to info.
+    use std::io::IsTerminal;
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        // No color codes when logging to a file (nohup deployment).
+        .with_ansi(std::io::stdout().is_terminal())
+        .init();
 
     let mut bind = format!("127.0.0.1:{}", ember_net::DEFAULT_PORT);
     let mut max_players = 32usize;

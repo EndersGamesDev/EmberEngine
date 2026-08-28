@@ -12,6 +12,8 @@ mod app;
 mod input;
 
 pub use app::{run, EngineConfig};
+#[cfg(not(target_arch = "wasm32"))]
+pub use app::init_diagnostics;
 pub use input::InputState;
 pub use renderer::{Camera, Frame, Instance};
 

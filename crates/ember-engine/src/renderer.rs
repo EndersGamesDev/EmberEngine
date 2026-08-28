@@ -127,7 +127,7 @@ impl Renderer {
             .await
             .expect("no compatible GPU adapter found");
         let info = adapter.get_info();
-        log::info!("GPU: {} ({:?})", info.name, info.backend);
+        tracing::info!(gpu = %info.name, backend = ?info.backend, "GPU adapter selected");
 
         // On the web the GL/WebGL2 fallback path has tighter limits; request
         // only what that path can give so one code path runs everywhere.
@@ -373,7 +373,7 @@ impl Renderer {
                 return;
             }
             Err(e) => {
-                log::warn!("dropped frame: {e:?}");
+                tracing::warn!(error = ?e, "dropped frame");
                 return;
             }
         };

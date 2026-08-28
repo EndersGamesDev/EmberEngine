@@ -58,6 +58,21 @@ cargo run -p ember-net --example netbot -- 127.0.0.1:7777 bot 6   # headless che
 
 If the server is unreachable the client runs offline (local-only cube).
 
+### Diagnostics (tracing)
+
+All crates emit structured [tracing](https://docs.rs/tracing) events
+(`RUST_LOG` filtering still works; wgpu/winit `log` records are bridged in;
+on wasm, events land in the browser console). Built-in stall/lag detection:
+
+| Where  | Signal | Meaning |
+|--------|--------|---------|
+| server | `sim stall: fell behind the tick clock` | sim thread starved >10 ticks; clock resynced |
+| server | `tick_overruns` / `max_tick_busy_us` in `server health` | tick body exceeded its 16.7 ms budget |
+| server | `client lagging` / `client recovered from lag` | joined client silent >3 s (kick at 10 s) |
+| client | `frame stall` | >100 ms gap between frames (GC, OS hitch, hidden tab) |
+| client | `snapshot stream stale` / `recovered` | no server snapshot for >300 ms (lag spike) |
+| client | `network lag: high round-trip time` | keepalive RTT >250 ms (RTT shown in the periodic `online` status) |
+
 Known limitations (accepted for now): snapshot interpolation degenerates to
 snap-to-latest at frame rates ≤ 60 fps (a proper ~100 ms interpolation delay
 buffer is future work), and the client connects before the window opens, so an

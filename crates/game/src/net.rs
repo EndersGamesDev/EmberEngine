@@ -29,6 +29,9 @@ pub struct NetClient {
     pub rx: Receiver<ServerMsg>,
     dead: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
+    /// Epoch for Ping nonces: pings carry `started.elapsed()` in ms, so a
+    /// Pong's nonce subtracted from the current elapsed time is the RTT.
+    started: std::time::Instant,
 }
 
 impl NetClient {
@@ -93,6 +96,7 @@ impl NetClient {
             });
         }
 
+        let started = std::time::Instant::now();
         let stream = Arc::new(Mutex::new(stream));
         {
             let stream = Arc::clone(&stream);
@@ -109,8 +113,10 @@ impl NetClient {
                     since_ping += step;
                     if since_ping >= KEEPALIVE_INTERVAL {
                         since_ping = Duration::ZERO;
+                        // Timestamped nonce -> the Pong measures RTT.
+                        let nonce = started.elapsed().as_millis() as u32;
                         let mut s = stream.lock().unwrap();
-                        if write_msg(&mut *s, &ClientMsg::Ping { nonce: 0 }).is_err() {
+                        if write_msg(&mut *s, &ClientMsg::Ping { nonce }).is_err() {
                             break;
                         }
                     }
@@ -118,7 +124,12 @@ impl NetClient {
             });
         }
 
-        Ok((NetClient { stream, rx, dead, stop }, welcome))
+        Ok((NetClient { stream, rx, dead, stop, started }, welcome))
+    }
+
+    /// Milliseconds since this connection's Ping epoch.
+    pub fn elapsed_ms(&self) -> u32 {
+        self.started.elapsed().as_millis() as u32
     }
 
     pub fn send(&mut self, msg: &ClientMsg) -> io::Result<()> {

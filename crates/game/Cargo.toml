@@ -7,5 +7,4 @@ version.workspace = true
 ember-engine = { path = "../ember-engine" }
 ember-net = { path = "../ember-net" }
 glam.workspace = true
-log.workspace = true
-env_logger.workspace = true
+tracing.workspace = true

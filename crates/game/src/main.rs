@@ -22,6 +22,11 @@ enum Session {
     Offline { pos: Vec2 },
 }
 
+/// A snapshot gap above this (at 60 Hz ≈ 16 ms cadence) is a lag spike.
+const SNAPSHOT_STALE_AFTER: Duration = Duration::from_millis(300);
+/// Round-trip times above this get flagged.
+const HIGH_RTT_MS: u32 = 250;
+
 struct Game {
     session: Session,
     world: World,
@@ -30,6 +35,10 @@ struct Game {
     reported_disconnect: bool,
     frames: u64,
     last_status_log: Instant,
+    /// Most recent measured round-trip time (from keepalive Ping/Pong).
+    last_rtt_ms: Option<u32>,
+    /// Set while the snapshot stream is stale (lag spike in progress).
+    stale_since: Option<Instant>,
 }
 
 impl Game {
@@ -85,7 +94,37 @@ impl EmberGame for Game {
         match &mut self.session {
             Session::Online(net) => {
                 for msg in net.rx.try_iter() {
-                    self.world.handle(msg);
+                    if let ember_net::ServerMsg::Pong { nonce } = msg {
+                        // Keepalive pings carry a send timestamp as nonce.
+                        let rtt = net.elapsed_ms().saturating_sub(nonce);
+                        self.last_rtt_ms = Some(rtt);
+                        if rtt > HIGH_RTT_MS {
+                            tracing::warn!(rtt_ms = rtt, "network lag: high round-trip time");
+                        }
+                    } else {
+                        self.world.handle(msg);
+                    }
+                }
+
+                // Staleness: the server streams snapshots at 60 Hz, so a
+                // long gap means the link or the server is stalling.
+                if !net.is_dead() {
+                    if let Some(age) = self.world.snapshot_age() {
+                        if age > SNAPSHOT_STALE_AFTER {
+                            if self.stale_since.is_none() {
+                                self.stale_since = Some(Instant::now());
+                                tracing::warn!(
+                                    age_ms = age.as_millis() as u64,
+                                    "snapshot stream stale: no server state received"
+                                );
+                            }
+                        } else if let Some(since) = self.stale_since.take() {
+                            tracing::info!(
+                                outage_ms = since.elapsed().as_millis() as u64,
+                                "snapshot stream recovered"
+                            );
+                        }
+                    }
                 }
                 // Re-send on change, plus a periodic keepalive well under the
                 // server's timeout.
@@ -98,16 +137,17 @@ impl EmberGame for Game {
                 }
                 if net.is_dead() && !self.reported_disconnect {
                     self.reported_disconnect = true;
-                    log::error!("disconnected from server; world is frozen (restart to reconnect)");
+                    tracing::error!("disconnected from server; world is frozen (restart to reconnect)");
                 }
                 self.world.advance(dt);
 
                 if self.last_status_log.elapsed() > Duration::from_secs(5) {
                     self.last_status_log = Instant::now();
-                    log::info!(
-                        "online: {} players, server tick {}",
-                        self.world.player_count(),
-                        self.world.last_tick
+                    tracing::info!(
+                        players = self.world.player_count(),
+                        server_tick = self.world.last_tick,
+                        rtt_ms = self.last_rtt_ms,
+                        "online"
                     );
                 }
 
@@ -130,11 +170,8 @@ impl EmberGame for Game {
 }
 
 fn main() {
-    env_logger::Builder::from_env(
-        env_logger::Env::default()
-            .default_filter_or("info,wgpu_core=warn,wgpu_hal=warn,naga=warn"),
-    )
-    .init();
+    // Tracing pipeline (RUST_LOG-compatible); idempotent with run()'s init.
+    ember_engine::init_diagnostics();
 
     let mut args = std::env::args().skip(1);
     let addr = args
@@ -148,7 +185,7 @@ fn main() {
 
     let (session, world, title) = match NetClient::connect(&addr, &name) {
         Ok((net, welcome)) => {
-            log::info!(
+            tracing::info!(
                 "connected to {addr} as {:?} \"{name}\" ({} online, {} Hz)",
                 welcome.id,
                 welcome.roster.len(),
@@ -166,7 +203,7 @@ fn main() {
             )
         }
         Err(e) => {
-            log::warn!("could not reach server {addr} ({e}); running OFFLINE");
+            tracing::warn!("could not reach server {addr} ({e}); running OFFLINE");
             (
                 Session::Offline { pos: Vec2::ZERO },
                 World::new(ARENA_HALF),
@@ -185,6 +222,8 @@ fn main() {
             reported_disconnect: false,
             frames: 0,
             last_status_log: Instant::now(),
+            last_rtt_ms: None,
+            stale_since: None,
         },
     );
 }

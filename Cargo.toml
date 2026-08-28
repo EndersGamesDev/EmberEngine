@@ -18,7 +18,11 @@ wgpu = "24"
 pollster = "0.4"
 glam = "0.29"
 log = "0.4"
-env_logger = "0.11"
+# "log" feature: when no tracing subscriber is installed (wasm), events fall
+# back to `log` records, which console_log prints.
+tracing = { version = "0.1", features = ["log"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-log = "0.2"
 serde = { version = "1", features = ["derive"] }
 postcard = { version = "1", features = ["use-std"] }
 bytemuck = { version = "1", features = ["derive"] }

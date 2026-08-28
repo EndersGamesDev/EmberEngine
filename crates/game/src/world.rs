@@ -3,6 +3,7 @@
 //! renders smoothly at any frame rate.
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use ember_net::{PlayerId, PlayerMeta, PlayerState, ServerMsg, TICK_HZ};
 use glam::Vec2;
@@ -26,6 +27,8 @@ pub struct World {
     pub arena_half: f32,
     players: HashMap<PlayerId, Entry>,
     pub last_tick: u64,
+    /// When the most recent snapshot arrived; drives staleness detection.
+    last_snapshot_at: Option<Instant>,
 }
 
 impl World {
@@ -35,7 +38,13 @@ impl World {
             arena_half,
             players: HashMap::new(),
             last_tick: 0,
+            last_snapshot_at: None,
         }
+    }
+
+    /// Time since the last snapshot arrived, once at least one has.
+    pub fn snapshot_age(&self) -> Option<Duration> {
+        self.last_snapshot_at.map(|t| t.elapsed())
     }
 
     pub fn add_meta(&mut self, meta: PlayerMeta) {
@@ -55,12 +64,12 @@ impl World {
     pub fn handle(&mut self, msg: ServerMsg) {
         match msg {
             ServerMsg::PlayerJoined { meta } => {
-                log::info!("{} joined ({:?})", meta.name, meta.id);
+                tracing::info!("{} joined ({:?})", meta.name, meta.id);
                 self.add_meta(meta);
             }
             ServerMsg::PlayerLeft { id } => {
                 if let Some(e) = self.players.remove(&id) {
-                    log::info!("{} left ({id:?})", e.meta.name);
+                    tracing::info!("{} left ({id:?})", e.meta.name);
                 }
             }
             ServerMsg::Snapshot { tick, players } => {
@@ -70,6 +79,7 @@ impl World {
                     return;
                 }
                 self.last_tick = tick;
+                self.last_snapshot_at = Some(Instant::now());
                 for ps in players {
                     self.apply_state(ps);
                 }
@@ -89,7 +99,7 @@ impl World {
             None => {
                 // Snapshot mentioned someone we have no meta for (shouldn't
                 // happen, but stay resilient): show a gray placeholder.
-                log::debug!("snapshot for unknown {:?}", ps.id);
+                tracing::debug!("snapshot for unknown {:?}", ps.id);
                 self.players.insert(
                     ps.id,
                     Entry {
