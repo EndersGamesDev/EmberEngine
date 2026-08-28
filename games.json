@@ -1,0 +1,23 @@
+{
+  "games": [
+    {
+      "id": "arena",
+      "title": "Arena Shooter",
+      "tag": "online multiplayer · up to 8",
+      "desc": "Drop-in deathmatch. Cubes with sidearms in a generated arena — WASD, mouse aim, click to fire. Create a lobby (password optional) or join anyone below.",
+      "versions": [
+        { "v": "v3", "path": "games/arena/v3/", "live": true, "note": "live server" }
+      ]
+    },
+    {
+      "id": "pong",
+      "title": "Pong Classic",
+      "tag": "local · 2 players, one keyboard",
+      "desc": "The first ember game. A/D vs arrow keys, first to 7.",
+      "versions": [
+        { "v": "v2", "path": "games/pong/v2/", "live": true, "note": "current build" },
+        { "v": "v1", "path": "games/pong/v1/", "live": false, "note": "first web build (archived)" }
+      ]
+    }
+  ]
+}

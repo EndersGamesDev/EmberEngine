@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ember pong</title>
+  <title>ember games</title>
   <style>
     :root { color-scheme: dark; }
     body {
@@ -12,154 +12,144 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      justify-content: flex-start;
-      gap: 14px;
+      gap: 16px;
       background: #06101f;
       color: #c7d2e4;
       font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      padding-bottom: 24px;
     }
-    h1 { margin: 18px 0 0; font-size: 1.4rem; letter-spacing: 0.16em; font-weight: 600; }
+    header {
+      width: min(920px, 94vw);
+      display: flex; align-items: baseline; justify-content: space-between;
+      margin-top: 20px;
+    }
+    h1 { margin: 0; font-size: 1.5rem; letter-spacing: 0.16em; font-weight: 600; }
     h1 span { color: #f0b429; }
-    .cards { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; max-width: 900px; }
+    #account {
+      font-size: 0.85rem; color: #9fb4d8; cursor: pointer;
+      background: #0b1830; border: 1px solid #1d3050; border-radius: 999px;
+      padding: 5px 12px;
+    }
+    #account b { color: #6ea8fe; }
+    section { width: min(920px, 94vw); }
+    h2 { font-size: 0.95rem; color: #9fb4d8; letter-spacing: 0.08em;
+         text-transform: uppercase; margin: 8px 0 10px; }
+    h2 .dot { color: #43d17c; }
+    .cards { display: flex; gap: 16px; flex-wrap: wrap; }
     .card {
       background: #0b1830; border: 1px solid #1d3050; border-radius: 12px;
-      padding: 18px 20px; min-width: 280px; max-width: 400px;
+      padding: 18px 20px; flex: 1 1 300px; max-width: 450px;
       display: flex; flex-direction: column; gap: 10px;
     }
-    .card h2 { margin: 0 0 4px; font-size: 1.0rem; color: #9fb4d8; }
-    label { font-size: 0.8rem; opacity: 0.8; display: block; margin-bottom: 2px; }
-    input {
-      width: 100%; box-sizing: border-box; background: #08122a;
-      border: 1px solid #23406b; border-radius: 6px; color: #dce6f5;
-      padding: 7px 9px; font: inherit;
+    .card h3 { margin: 0; font-size: 1.1rem; }
+    .tag { font-size: 0.78rem; color: #f0b429; }
+    .desc { font-size: 0.9rem; opacity: 0.85; line-height: 1.45; }
+    .playrow { display: flex; gap: 10px; align-items: center; margin-top: auto; }
+    select {
+      background: #08122a; border: 1px solid #23406b; border-radius: 6px;
+      color: #dce6f5; padding: 7px 9px; font: inherit;
     }
     button {
       background: #1c4d8f; color: #eaf1fb; border: 0; border-radius: 7px;
-      padding: 9px 14px; font: inherit; cursor: pointer;
+      padding: 9px 16px; font: inherit; cursor: pointer;
     }
     button:hover { background: #2661b1; }
-    button.small { padding: 4px 10px; font-size: 0.85rem; }
+    button.small { padding: 4px 12px; font-size: 0.85rem; }
     #lobby-rows { display: flex; flex-direction: column; gap: 6px; }
     .lobby-row {
       display: flex; align-items: center; justify-content: space-between; gap: 8px;
-      background: #08122a; border-radius: 7px; padding: 7px 10px; font-size: 0.9rem;
+      background: #0b1830; border: 1px solid #1d3050;
+      border-radius: 9px; padding: 10px 14px; font-size: 0.92rem;
     }
     .lobby-row .lock { opacity: 0.7; }
-    .hint, #list-note { font-size: 0.8rem; opacity: 0.65; }
-    .controls { display: flex; gap: 28px; font-size: 0.95rem; }
-    .controls b { color: #6ea8fe; }
-    .controls b.p2 { color: #f2705f; }
-    kbd {
-      background: #14243c; border: 1px solid #2a3f60; border-bottom-width: 3px;
-      border-radius: 5px; padding: 1px 7px; font-family: inherit;
+    #list-note { font-size: 0.85rem; opacity: 0.65; }
+    details { width: min(920px, 94vw); }
+    summary { font-size: 0.8rem; opacity: 0.6; cursor: pointer; }
+    input {
+      width: 100%; box-sizing: border-box; background: #08122a;
+      border: 1px solid #23406b; border-radius: 6px; color: #dce6f5;
+      padding: 7px 9px; font: inherit; margin-top: 4px;
     }
-    #game[hidden], #menu[hidden] { display: none; }
-    #status { font-size: 0.95rem; color: #f0b429; min-height: 1.3em; }
-    #ember-root canvas {
-      /* !important on both axes: winit writes inline styles on the canvas
-         (e.g. on scale change) and inline beats non-important rules. */
-      width: min(1280px, 96vw) !important;
-      aspect-ratio: 16 / 9;
-      height: auto !important;
-      border-radius: 10px;
-      outline: none;
-      box-shadow: 0 8px 40px rgba(0,0,0,0.55);
-      background: #000;
-    }
-    .foot { font-size: 0.8rem; opacity: 0.65; margin: 10px 0 16px; }
+    .foot { font-size: 0.8rem; opacity: 0.65; }
     .foot a { color: #6ea8fe; }
-    #loading { font-size: 0.9rem; opacity: 0.8; }
   </style>
 </head>
 <body>
-  <h1>ember <span>pong</span></h1>
+  <header>
+    <h1>ember <span>games</span></h1>
+    <div id="account" title="click to rename">…</div>
+  </header>
 
-  <div id="menu">
-    <div class="cards">
-      <div class="card">
-        <h2>Local — 2 players, one keyboard</h2>
-        <div class="controls">
-          <div><b>P1</b> <kbd>A</kbd> <kbd>D</kbd></div>
-          <div><b class="p2">P2</b> <kbd>←</kbd> <kbd>→</kbd></div>
-          <div>First to 7</div>
-        </div>
-        <button id="btn-local">Play local</button>
-      </div>
+  <section>
+    <h2><span class="dot">●</span> live now — jump into a running game</h2>
+    <div id="lobby-rows"><span id="list-note">looking for open games…</span></div>
+  </section>
 
-      <div class="card">
-        <h2>Online — arena shooter</h2>
-        <div class="hint">Drop-in deathmatch for up to 8 cubes with sidearms.
-          <b>WASD</b> move · <b>mouse</b> aim · <b>click / space</b> fire.
-          Whoever creates a lobby is hosting; joiners drop straight in.</div>
-        <div>
-          <label for="handle">your handle</label>
-          <input id="handle" maxlength="20" placeholder="player">
-        </div>
-        <div style="display:flex; gap:8px;">
-          <div style="flex:1">
-            <label for="lobby-name">lobby name</label>
-            <input id="lobby-name" maxlength="24" placeholder="my-lobby">
-          </div>
-          <div style="flex:1">
-            <label for="lobby-pw">password (optional)</label>
-            <input id="lobby-pw" maxlength="40" placeholder="none">
-          </div>
-        </div>
-        <button id="btn-create">Create arena &amp; play</button>
-        <div>
-          <label>open lobbies <button id="btn-refresh" class="small">refresh</button></label>
-          <div id="lobby-rows"><span id="list-note">press refresh to browse lobbies</span></div>
-        </div>
-        <details>
-          <summary class="hint">server</summary>
-          <label for="server-url">websocket url (auto-filled from server.json — the tunnel domain
-            changes whenever the server restarts)</label>
-          <input id="server-url" placeholder="wss://…trycloudflare.com">
-        </details>
-      </div>
-    </div>
-  </div>
+  <section>
+    <h2>games</h2>
+    <div class="cards" id="game-cards"></div>
+  </section>
 
-  <div id="game" hidden>
-    <div id="status">…</div>
-    <div id="ember-root"><span id="loading">loading engine…</span></div>
-  </div>
+  <details>
+    <summary>server settings</summary>
+    <label for="server-url" style="font-size:0.8rem;opacity:0.8">websocket url
+      (auto-filled from server.json — the tunnel domain changes when the server restarts)</label>
+    <input id="server-url" placeholder="wss://…trycloudflare.com">
+  </details>
 
   <div class="foot">
     ember — a from-scratch Rust/wgpu engine ·
     <a href="https://github.com/enderPeer/ember">source on GitHub</a> ·
-    needs WebGPU or WebGL2 · local mode is classic pong (A/D vs ←/→) ·
-    online play: your handle &amp; lobby name are visible to other players
+    needs WebGPU or WebGL2 · accounts are created automatically when you pick a game
+    (stored only in your browser) · handles &amp; lobby names are visible to other players
   </div>
 
   <script type="module">
     const $ = (id) => document.getElementById(id);
 
-    // server.json is fetched with a unique query so the Pages CDN can never
-    // serve a stale tunnel domain; its "v" (deploy stamp) cache-busts the
-    // wasm bundle exactly once per deploy.
+    // ---- auto account: created the first time someone clicks a game ----
+    const ACCT_KEY = 'ember-account';
+    const pick = (a) => a[Math.floor(Math.random() * a.length)];
+    function getAccount(create = false) {
+      try {
+        const a = JSON.parse(localStorage.getItem(ACCT_KEY));
+        if (a && a.handle) return a;
+      } catch {}
+      if (!create) return null;
+      const ADJ = ['swift', 'neon', 'lucky', 'stone', 'ember', 'shadow', 'turbo', 'frost', 'cosmic', 'wild'];
+      const NOUN = ['fox', 'wolf', 'hawk', 'viper', 'otter', 'lynx', 'raven', 'tiger', 'drake', 'comet'];
+      const a = {
+        handle: `${pick(ADJ)}-${pick(NOUN)}-${10 + Math.floor(Math.random() * 90)}`,
+        id: crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2),
+        created: new Date().toISOString(),
+      };
+      localStorage.setItem(ACCT_KEY, JSON.stringify(a));
+      return a;
+    }
+    function renderAccount() {
+      const a = getAccount();
+      $('account').innerHTML = a
+        ? `playing as <b></b>`
+        : 'no account yet — pick a game';
+      if (a) $('account').querySelector('b').textContent = a.handle;
+    }
+    $('account').addEventListener('click', () => {
+      const a = getAccount(true);
+      const name = prompt('Your handle (visible to other players):', a.handle);
+      if (name && name.trim()) {
+        a.handle = name.trim().slice(0, 20);
+        localStorage.setItem(ACCT_KEY, JSON.stringify(a));
+      }
+      renderAccount();
+    });
+    renderAccount();
+
+    // ---- server discovery (shared key with the game pages) ----
     let serverCfg = {};
     try {
       const r = await fetch(`server.json?ts=${Date.now()}`, { cache: 'no-store' });
       if (r.ok) serverCfg = await r.json();
     } catch {}
-    const V = serverCfg.v || '0';
-    const { default: init, start_local, start_online, proto_version } =
-      await import(`./pkg/pong.js?v=${V}`);
-    const fail = (msg) => {
-      const el = $('loading') || $('status');
-      if (el) el.textContent = 'failed to start: ' + (msg || 'see browser console');
-    };
-    window.addEventListener('error', (e) => fail(e.message));
-    window.addEventListener('unhandledrejection', (e) => fail(e.reason));
-
-    // Keyboard focus lives on the canvas once the game runs; clicks
-    // anywhere bring it back so controls can't silently die.
-    document.addEventListener('pointerdown', () => {
-      document.querySelector('#ember-root canvas')?.focus();
-    });
-
-    // ---- server url: server.json (rotating tunnel domain) -> override box
     const urlBox = $('server-url');
     urlBox.value = localStorage.getItem('ember-server-url') || '';
     if (serverCfg.ws && (!localStorage.getItem('ember-server-url-manual') || !urlBox.value)) {
@@ -170,64 +160,88 @@
       localStorage.setItem('ember-server-url-manual', '1');
     });
     const serverUrl = () => urlBox.value.trim();
-    const myHandle = () => ($('handle').value.trim() || 'player');
 
-    // ---- boot the wasm module (menu decides when a game starts)
-    let ready = init({ module_or_path: `./pkg/pong_bg.wasm?v=${V}` })
-      .catch((e) => { fail(e); console.error(e); });
+    // ---- games catalog: newest version is always the live one ----
+    let catalog = { games: [] };
+    try {
+      const r = await fetch(`games.json?ts=${Date.now()}`, { cache: 'no-store' });
+      if (r.ok) catalog = await r.json();
+    } catch {}
+    let arenaLivePath = 'games/arena/v3/';
+    for (const g of catalog.games) {
+      if (g.id === 'arena') {
+        const live = g.versions.find((v) => v.live) || g.versions[0];
+        if (live) arenaLivePath = live.path;
+      }
+    }
 
-    const showGame = () => { $('menu').hidden = true; $('game').hidden = false; };
-
-    $('btn-local').addEventListener('click', async () => {
-      await ready;
-      showGame();
-      $('status').textContent = 'local match — P1: A/D · P2: ←/→ · first to 7';
-      start_local();
-    });
-
-    const goOnline = async (action, lobby, password) => {
-      const url = serverUrl();
-      if (!url) { alert('No server URL — the server may be offline right now.'); return; }
-      if (!lobby) { alert('Enter a lobby name.'); return; }
-      await ready;
-      showGame();
-      $('status').textContent = 'connecting…';
-      try {
-        start_online(JSON.stringify({
-          url, action, lobby,
-          password: password || null,
-          handle: myHandle(),
-        }));
-      } catch (e) { fail(e); console.error(e); }
+    const launch = (path, pending) => {
+      getAccount(true); // clicking a game auto-creates the account
+      renderAccount();
+      if (pending) sessionStorage.setItem('ember-pending', JSON.stringify(pending));
+      else sessionStorage.removeItem('ember-pending');
+      location.href = path;
     };
 
-    $('btn-create').addEventListener('click', () =>
-      goOnline('create', $('lobby-name').value.trim(), $('lobby-pw').value));
+    const cards = $('game-cards');
+    for (const g of catalog.games) {
+      const card = document.createElement('div');
+      card.className = 'card';
+      const h = document.createElement('h3');
+      h.textContent = g.title;
+      const tag = document.createElement('div');
+      tag.className = 'tag';
+      tag.textContent = g.tag;
+      const desc = document.createElement('div');
+      desc.className = 'desc';
+      desc.textContent = g.desc;
+      const row = document.createElement('div');
+      row.className = 'playrow';
+      const sel = document.createElement('select');
+      for (const v of g.versions) {
+        const opt = document.createElement('option');
+        opt.value = v.path;
+        opt.textContent = v.live ? `${v.v} — live` : `${v.v} — ${v.note || 'archived'}`;
+        if (v.live) opt.selected = true;
+        sel.append(opt);
+      }
+      const btn = document.createElement('button');
+      btn.textContent = 'Play';
+      btn.addEventListener('click', () => launch(sel.value));
+      row.append(sel, btn);
+      card.append(h, tag, desc, row);
+      cards.append(card);
+    }
 
-    // ---- lobby browser: plain JS speaks the JSON protocol for listing
-    $('btn-refresh').addEventListener('click', async () => {
-      await ready; // proto_version() needs the instantiated module
+    // ---- live lobbies showcase: loads for everyone, refreshes itself ----
+    // Listing needs no game bundle: the server allows any proto to browse.
+    function refreshLobbies() {
       const url = serverUrl();
-      const note = $('list-note') || document.createElement('span');
-      note.id = 'list-note';
       const rows = $('lobby-rows');
-      rows.replaceChildren(note);
-      if (!url) { note.textContent = 'no server url (server offline?)'; return; }
-      note.textContent = 'loading…';
+      const setNote = (msg) => {
+        const note = document.createElement('span');
+        note.id = 'list-note';
+        note.textContent = msg;
+        rows.replaceChildren(note);
+      };
+      if (!url) { setNote('game server is offline right now'); return; }
       let done = false;
       const ws = new WebSocket(url);
-      const finish = (msg) => { if (!done) { done = true; note.textContent = msg; ws.close(); } };
-      setTimeout(() => finish('server not reachable'), 6000);
-      ws.onerror = () => finish('server not reachable');
+      const finish = (msg) => { if (!done) { done = true; if (msg) setNote(msg); ws.close(); } };
+      setTimeout(() => finish('game server not reachable'), 6000);
+      ws.onerror = () => finish('game server not reachable');
       ws.onopen = () => {
-        ws.send(JSON.stringify({ t: 'hello', proto: proto_version(), handle: 'browser' }));
+        ws.send(JSON.stringify({ t: 'hello', proto: 0, handle: 'browser' }));
         ws.send(JSON.stringify({ t: 'list_lobbies' }));
       };
       ws.onmessage = (e) => {
         let m; try { m = JSON.parse(e.data); } catch { return; }
         if (m.t !== 'lobby_list') return;
         done = true; ws.close();
-        if (!m.lobbies.length) { note.textContent = 'no open lobbies — create one!'; return; }
+        if (!m.lobbies.length) {
+          setNote('no open games right now — create one below (Arena Shooter → Play)');
+          return;
+        }
         rows.replaceChildren(...m.lobbies.map((l) => {
           const row = document.createElement('div');
           row.className = 'lobby-row';
@@ -245,13 +259,15 @@
           btn.addEventListener('click', () => {
             const pw = l.has_password ? prompt(`Password for "${l.name}":`) : null;
             if (l.has_password && pw === null) return;
-            goOnline('join', l.name, pw);
+            launch(arenaLivePath, { action: 'join', lobby: l.name, password: pw });
           });
           row.append(label, btn);
           return row;
         }));
       };
-    });
+    }
+    refreshLobbies();
+    setInterval(refreshLobbies, 10000);
   </script>
 </body>
 </html>
