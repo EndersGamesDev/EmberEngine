@@ -95,7 +95,8 @@ struct Lobby {
     members: Vec<u64>,
     /// conn id -> in-game player id
     pids: HashMap<u64, u8>,
-    inputs: HashMap<u8, PlayerIn>,
+    /// pid -> (held intent, its client sequence number).
+    inputs: HashMap<u8, (PlayerIn, u32)>,
 }
 
 /// Smallest player id not held by a current member (never collides, unlike
@@ -318,7 +319,9 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
         let mut dead_conns: Vec<u64> = Vec::new();
         for lobby in lobbies.values_mut() {
             let inputs = &lobby.inputs;
-            lobby.sim.step(&|pid| inputs.get(&pid).copied().unwrap_or_default());
+            lobby
+                .sim
+                .step(&|pid| inputs.get(&pid).map(|(i, _)| *i).unwrap_or_default());
 
             for &(killer, victim) in &lobby.sim.events {
                 if let Ok(text) = serde_json::to_string(&S2C::Kill { killer, victim }) {
@@ -344,6 +347,7 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
                             score: p.score,
                             alive: p.alive,
                             crouch: p.crouch,
+                            ack: lobby.inputs.get(&p.id).map(|(_, s)| *s).unwrap_or(0),
                         })
                         .collect(),
                     bullets: lobby
@@ -656,14 +660,14 @@ fn handle_event(
                 (C2S::LeaveLobby, true) => {
                     leave_lobby(id, conns, lobbies);
                 }
-                (C2S::Input { mx, my, ax, az, fire, sprint, crouch }, true) => {
+                (C2S::Input { seq, mx, my, ax, az, fire, sprint, crouch }, true) => {
                     let Some(lobby_name) = conns.get(&id).unwrap().lobby.clone() else { return };
                     let Some(lobby) = lobbies.get_mut(&lobby_name) else { return };
                     let Some(&pid) = lobby.pids.get(&id) else { return };
                     // The sim sanitizes magnitudes/NaN on use.
                     lobby.inputs.insert(
                         pid,
-                        PlayerIn { mv: [mx, my], aim: [ax, az], fire, sprint, crouch },
+                        (PlayerIn { mv: [mx, my], aim: [ax, az], fire, sprint, crouch }, seq),
                     );
                 }
             }

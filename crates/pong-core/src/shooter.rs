@@ -62,6 +62,59 @@ fn spawn_point(slot: u32) -> [f32; 2] {
     [angle.cos() * SPAWN_RING_R, angle.sin() * SPAWN_RING_R]
 }
 
+fn blocked(pos: [f32; 2], r: f32, obstacles: &[Obstacle]) -> bool {
+    if pos[0].abs() > ARENA_HALF - r || pos[1].abs() > ARENA_HALF - r {
+        return true;
+    }
+    obstacles.iter().any(|o| {
+        let cx = pos[0].clamp(o.min[0], o.max[0]);
+        let cz = pos[1].clamp(o.min[1], o.max[1]);
+        let (dx, dz) = (pos[0] - cx, pos[1] - cz);
+        dx * dx + dz * dz < r * r
+    })
+}
+
+/// Stance-adjusted movement speed. Crouch wins if both are held.
+pub fn stance_speed(sprint: bool, crouch: bool) -> f32 {
+    MOVE_SPEED
+        * if crouch {
+            CROUCH_MULT
+        } else if sprint {
+            SPRINT_MULT
+        } else {
+            1.0
+        }
+}
+
+/// Player movement: sanitize the intent, then integrate one axis at a time
+/// so walls slide. Shared VERBATIM by the server sim and the client's
+/// prediction, so both compute the exact same result.
+pub fn move_circle(
+    pos: [f32; 2],
+    mv: [f32; 2],
+    speed: f32,
+    dt: f32,
+    obstacles: &[Obstacle],
+) -> [f32; 2] {
+    let mut mv = mv;
+    if !mv[0].is_finite() || !mv[1].is_finite() {
+        mv = [0.0, 0.0];
+    }
+    let len_sq = mv[0] * mv[0] + mv[1] * mv[1];
+    if len_sq > 1.0 {
+        let len = len_sq.sqrt();
+        mv = [mv[0] / len, mv[1] / len];
+    }
+    let try_x = [pos[0] + mv[0] * speed * dt, pos[1]];
+    let pos = if blocked(try_x, PLAYER_R, obstacles) { pos } else { try_x };
+    let try_z = [pos[0], pos[1] + mv[1] * speed * dt];
+    if blocked(try_z, PLAYER_R, obstacles) {
+        pos
+    } else {
+        try_z
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PlayerIn {
     /// Held movement intent, -1..1 per axis (world space).
@@ -134,18 +187,6 @@ impl Sim {
         self.bullets.retain(|b| b.owner != id);
     }
 
-    fn blocked(&self, pos: [f32; 2], r: f32) -> bool {
-        if pos[0].abs() > ARENA_HALF - r || pos[1].abs() > ARENA_HALF - r {
-            return true;
-        }
-        self.obstacles.iter().any(|o| {
-            let cx = pos[0].clamp(o.min[0], o.max[0]);
-            let cz = pos[1].clamp(o.min[1], o.max[1]);
-            let (dx, dz) = (pos[0] - cx, pos[1] - cz);
-            dx * dx + dz * dz < r * r
-        })
-    }
-
     pub fn step(&mut self, inputs: &dyn Fn(u8) -> PlayerIn) {
         self.events.clear();
         let dt = FIXED_DT;
@@ -168,30 +209,10 @@ impl Sim {
                 continue;
             }
 
-            // Sanitize + apply movement, one axis at a time so walls slide.
-            let mut mv = input.mv;
-            if !mv[0].is_finite() || !mv[1].is_finite() {
-                mv = [0.0, 0.0];
-            }
-            let len_sq = mv[0] * mv[0] + mv[1] * mv[1];
-            if len_sq > 1.0 {
-                let len = len_sq.sqrt();
-                mv = [mv[0] / len, mv[1] / len];
-            }
-            // Stance decides speed (server-authoritative: no speed cheats).
-            let speed = MOVE_SPEED
-                * if input.crouch {
-                    CROUCH_MULT
-                } else if input.sprint {
-                    SPRINT_MULT
-                } else {
-                    1.0
-                };
-            let pos = self.players[i].pos;
-            let try_x = [pos[0] + mv[0] * speed * dt, pos[1]];
-            let pos = if self.blocked(try_x, PLAYER_R) { pos } else { try_x };
-            let try_z = [pos[0], pos[1] + mv[1] * speed * dt];
-            let pos = if self.blocked(try_z, PLAYER_R) { pos } else { try_z };
+            // Shared movement code (also used by client prediction);
+            // stance speed is server-authoritative — no speed cheats.
+            let speed = stance_speed(input.sprint, input.crouch);
+            let pos = move_circle(self.players[i].pos, input.mv, speed, dt, &self.obstacles);
             let p = &mut self.players[i];
             p.pos = pos;
             p.crouch = input.crouch;

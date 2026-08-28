@@ -112,6 +112,7 @@ fn drop_in_arena_flow_with_password() {
 
     // Guest holds fire: bullets must appear in the state stream.
     send(&mut guest, &C2S::Input {
+        seq: 1,
         mx: 0.0,
         my: 0.0,
         ax: 1.0,
@@ -119,6 +120,15 @@ fn drop_in_arena_flow_with_password() {
         fire: true,
         sprint: false,
         crouch: false,
+    });
+    // The next state must echo the input's seq back as this player's ack.
+    recv_until(&mut guest, 5, |m| match m {
+        S2C::State { players, .. } => players
+            .iter()
+            .find(|p| p.id == guest_pid)
+            .filter(|p| p.ack == 1)
+            .map(|_| ()),
+        _ => None,
     });
     recv_until(&mut host, 5, |m| match m {
         S2C::State { bullets, players, .. } => {

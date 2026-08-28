@@ -3,12 +3,12 @@
 //! carries the cyberpunk sidearm — rebuilt out of cubes: gunmetal slide,
 //! bronze barrel and trigger guard, glowing blue circuit strip.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use ember_engine::glam::{Vec2, Vec3};
 use ember_engine::{Camera, EmberGame, Frame, InputState, Instance, KeyCode, MouseButton};
 use pong_core::proto::{BState, C2S, PState, PlayerMeta, S2C, PROTO_VERSION, STATE_EVERY_TICKS};
-use pong_core::shooter::{generate_arena, Obstacle, MAX_HP};
+use pong_core::shooter::{generate_arena, move_circle, stance_speed, Obstacle, MAX_HP};
 use serde::Deserialize;
 
 /// Mouse-look sensitivity, radians per pixel.
@@ -105,6 +105,15 @@ struct PSnap {
     z: f32,
 }
 
+/// One sent input command, kept until the server acks it — the base of
+/// client-side movement prediction.
+struct Cmd {
+    seq: u32,
+    mv: [f32; 2],
+    speed: f32,
+    sent_at: f32,
+}
+
 pub struct ShooterGame {
     chan: net::NetChan,
     my_id: Option<u8>,
@@ -117,6 +126,13 @@ pub struct ShooterGame {
     latest: HashMap<u8, PState>,
     bullets: Vec<BState>,
     bullets_age: f32,
+    /// Client-side movement prediction: instant response locally, rebased
+    /// on the server's authoritative position + unacked-command replay.
+    pred_pos: Vec2,
+    own_render: Vec2,
+    was_alive: bool,
+    history: VecDeque<Cmd>,
+    next_seq: u32,
     aim: Vec2,
     yaw: f32,
     pitch: f32,
@@ -145,6 +161,11 @@ impl ShooterGame {
             latest: HashMap::new(),
             bullets: Vec::new(),
             bullets_age: 0.0,
+            pred_pos: Vec2::ZERO,
+            own_render: Vec2::ZERO,
+            was_alive: false,
+            history: VecDeque::new(),
+            next_seq: 1,
             aim: Vec2::new(1.0, 0.0),
             yaw: 0.0,
             pitch: 0.0,
@@ -201,6 +222,7 @@ impl ShooterGame {
 
 impl EmberGame for ShooterGame {
     fn update(&mut self, input: &InputState, dt: f32) -> Frame {
+        self.time += dt;
         self.since_input += dt;
         self.since_ping += dt;
         self.since_status += dt;
@@ -214,6 +236,8 @@ impl EmberGame for ShooterGame {
                     self.my_id = Some(id);
                     self.arena_half = arena_half;
                     self.obstacles = generate_arena(seed);
+                    self.history.clear();
+                    self.was_alive = false; // first State snaps the prediction
                     for m in players {
                         self.metas.insert(m.id, m);
                     }
@@ -259,6 +283,36 @@ impl EmberGame for ShooterGame {
                     self.t = 0.0;
                     self.bullets = bullets;
                     self.bullets_age = 0.0;
+
+                    // Reconcile my prediction: rebase on the authoritative
+                    // position and replay every not-yet-acked command.
+                    if let Some(my) = self.my_id.and_then(|id| self.latest.get(&id)) {
+                        let server = Vec2::new(my.x, my.z);
+                        let newly_alive = my.alive && !self.was_alive;
+                        self.was_alive = my.alive;
+                        if my.alive {
+                            while self.history.front().map_or(false, |c| c.seq <= my.ack) {
+                                self.history.pop_front();
+                            }
+                            let mut p = [server.x, server.y];
+                            let mut it = self.history.iter().peekable();
+                            while let Some(c) = it.next() {
+                                let end =
+                                    it.peek().map(|n| n.sent_at).unwrap_or(self.time);
+                                let dur = (end - c.sent_at).clamp(0.0, 0.3);
+                                p = move_circle(p, c.mv, c.speed, dur, &self.obstacles);
+                            }
+                            let rebased = Vec2::new(p[0], p[1]);
+                            if newly_alive || rebased.distance(self.pred_pos) > 4.0 {
+                                // Respawn / teleport: snap everything.
+                                self.pred_pos = server;
+                                self.own_render = server;
+                                self.history.clear();
+                            } else {
+                                self.pred_pos = rebased;
+                            }
+                        }
+                    }
                 }
                 S2C::Kill { killer, victim } => {
                     let line = if Some(victim) == self.my_id {
@@ -290,7 +344,6 @@ impl EmberGame for ShooterGame {
         }
 
         // ---- first-person look: raw mouse deltas -> yaw/pitch ----
-        self.time += dt;
         let (mdx, mdy) = input.mouse_delta();
         self.yaw += mdx * LOOK_SENS;
         self.pitch = (self.pitch - mdy * LOOK_SENS).clamp(-1.45, 1.45);
@@ -320,10 +373,32 @@ impl EmberGame for ShooterGame {
         }
         let bob = if moving { (self.bob_t).sin() * 0.035 } else { 0.0 };
 
-        // Send intents at a fixed cadence (also the keepalive).
+        let me_alive = self
+            .my_id
+            .and_then(|id| self.latest.get(&id))
+            .map(|p| p.alive)
+            .unwrap_or(false);
+        let speed = stance_speed(sprint, crouch);
+
+        // Send intents at a fixed cadence (also the keepalive), remembering
+        // each command until the server acks it.
         if self.my_id.is_some() && !self.lost && self.since_input >= 0.05 {
             self.since_input = 0.0;
+            let seq = self.next_seq;
+            self.next_seq = self.next_seq.wrapping_add(1);
+            if me_alive {
+                self.history.push_back(Cmd {
+                    seq,
+                    mv: [mv.x, mv.y],
+                    speed,
+                    sent_at: self.time,
+                });
+                if self.history.len() > 64 {
+                    self.history.pop_front();
+                }
+            }
             self.chan.send(&C2S::Input {
+                seq,
                 mx: mv.x,
                 my: mv.y,
                 ax: self.aim.x,
@@ -333,6 +408,16 @@ impl EmberGame for ShooterGame {
                 crouch,
             });
         }
+
+        // Predict my own movement locally — instant response; the State
+        // handler above rebases this on the server's authority.
+        if me_alive {
+            let p = move_circle(self.pred_pos.to_array(), [mv.x, mv.y], speed, dt, &self.obstacles);
+            self.pred_pos = Vec2::new(p[0], p[1]);
+        }
+        // Tight smoothing absorbs reconciliation nudges without adding lag.
+        let k = 1.0 - (-dt * 25.0).exp();
+        self.own_render += (self.pred_pos - self.own_render) * k;
         if self.since_ping > 4.0 {
             self.since_ping = 0.0;
             self.chan.send(&C2S::Ping { nonce: 1 });
@@ -347,8 +432,8 @@ impl EmberGame for ShooterGame {
 
         self.t += dt * (60.0 / STATE_EVERY_TICKS as f32);
 
-        // ---- first-person camera at my interpolated position ----
-        let my_pos = self.my_id.map(|id| self.render_pos(id)).unwrap_or(Vec2::ZERO);
+        // ---- first-person camera at my PREDICTED position ----
+        let my_pos = self.own_render;
         let (ps, pc) = self.pitch.sin_cos();
         let look = Vec3::new(fx * pc, ps, fz * pc);
         let eye = Vec3::new(my_pos.x, self.eye_h + bob, my_pos.y);
@@ -430,11 +515,6 @@ impl EmberGame for ShooterGame {
         }
 
         // ---- viewmodel: the sidearm in hand, plus muzzle flash ----
-        let me_alive = self
-            .my_id
-            .and_then(|id| self.latest.get(&id))
-            .map(|p| p.alive)
-            .unwrap_or(false);
         if me_alive {
             let f3 = Vec3::new(fx, 0.0, fz);
             let right3 = Vec3::new(-fz, 0.0, fx);

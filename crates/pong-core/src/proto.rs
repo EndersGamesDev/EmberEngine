@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTO_VERSION: u16 = 4;
+pub const PROTO_VERSION: u16 = 5;
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
 pub const MAX_PASSWORD_LEN: usize = 40;
@@ -45,6 +45,10 @@ pub struct PState {
     pub score: u32,
     pub alive: bool,
     pub crouch: bool,
+    /// Sequence number of this player's last applied Input — their own
+    /// client rebases its movement prediction on it.
+    #[serde(default)]
+    pub ack: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
@@ -68,6 +72,9 @@ pub enum C2S {
     /// Held intents: movement, aim, trigger, stance. Doubles as the
     /// keepalive.
     Input {
+        /// Client-assigned sequence number, echoed back as PState.ack.
+        #[serde(default)]
+        seq: u32,
         mx: f32,
         my: f32,
         ax: f32,
@@ -143,6 +150,7 @@ mod tests {
     #[test]
     fn json_roundtrip() {
         let s = serde_json::to_string(&C2S::Input {
+            seq: 7,
             mx: 1.0,
             my: 0.0,
             ax: 0.5,
