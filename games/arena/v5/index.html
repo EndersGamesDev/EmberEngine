@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ember arena</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 14px;
+      background: #06101f;
+      color: #c7d2e4;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      padding-bottom: 20px;
+    }
+    header {
+      width: min(1280px, 96vw);
+      display: flex; align-items: baseline; justify-content: space-between;
+      margin-top: 16px;
+    }
+    h1 { margin: 0; font-size: 1.3rem; letter-spacing: 0.16em; font-weight: 600; }
+    h1 span { color: #f0b429; }
+    h1 a { color: #6ea8fe; text-decoration: none; font-size: 0.85rem; letter-spacing: 0; }
+    #account {
+      font-size: 0.85rem; color: #9fb4d8; cursor: pointer;
+      background: #0b1830; border: 1px solid #1d3050; border-radius: 999px;
+      padding: 5px 12px;
+    }
+    #account b { color: #6ea8fe; }
+    .card {
+      background: #0b1830; border: 1px solid #1d3050; border-radius: 12px;
+      padding: 18px 20px; width: min(560px, 94vw); box-sizing: border-box;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .card h2 { margin: 0 0 4px; font-size: 1.0rem; color: #9fb4d8; }
+    .hint { font-size: 0.85rem; opacity: 0.75; line-height: 1.4; }
+    .hint b { color: #6ea8fe; }
+    label { font-size: 0.8rem; opacity: 0.8; display: block; margin-bottom: 2px; }
+    input {
+      width: 100%; box-sizing: border-box; background: #08122a;
+      border: 1px solid #23406b; border-radius: 6px; color: #dce6f5;
+      padding: 7px 9px; font: inherit;
+    }
+    button {
+      background: #1c4d8f; color: #eaf1fb; border: 0; border-radius: 7px;
+      padding: 9px 14px; font: inherit; cursor: pointer;
+    }
+    button:hover { background: #2661b1; }
+    button.small { padding: 4px 10px; font-size: 0.85rem; }
+    #lobby-rows { display: flex; flex-direction: column; gap: 6px; }
+    .lobby-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      background: #08122a; border-radius: 7px; padding: 7px 10px; font-size: 0.9rem;
+    }
+    #list-note { font-size: 0.8rem; opacity: 0.65; }
+    #game[hidden], #menu[hidden] { display: none; }
+    #status { font-size: 0.95rem; color: #f0b429; min-height: 1.3em; }
+    #ember-root canvas {
+      /* !important on both axes: winit writes inline styles on the canvas
+         (e.g. on scale change) and inline beats non-important rules. */
+      width: min(1280px, 96vw) !important;
+      aspect-ratio: 16 / 9;
+      height: auto !important;
+      border-radius: 10px;
+      outline: none;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.55);
+      background: #000;
+    }
+    #loading { font-size: 0.9rem; opacity: 0.8; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><a href="../../../">⬅ games</a> &nbsp; ember <span>arena</span> <small style="opacity:.5">v5</small></h1>
+    <div id="account" title="click to rename">…</div>
+  </header>
+
+  <div id="menu" class="card">
+    <h2>Arena Shooter — first-person drop-in deathmatch</h2>
+    <div class="hint"><b>Click the game to capture your mouse</b> (Esc releases) ·
+      <b>WASD</b> move · <b>mouse</b> look · <b>click / space</b> fire ·
+      <b>Shift</b> sprint · <b>C</b> crouch · 3 HP, respawn in 2.5 s · up to 8 players.
+      Whoever creates a lobby is hosting; joiners drop straight in.</div>
+    <div style="display:flex; gap:8px;">
+      <div style="flex:1">
+        <label for="lobby-name">lobby name</label>
+        <input id="lobby-name" maxlength="24" placeholder="my-arena">
+      </div>
+      <div style="flex:1">
+        <label for="lobby-pw">password (optional)</label>
+        <input id="lobby-pw" maxlength="40" placeholder="none">
+      </div>
+    </div>
+    <button id="btn-create">Create arena &amp; play</button>
+    <div>
+      <label>open games <button id="btn-refresh" class="small">refresh</button></label>
+      <div id="lobby-rows"><span id="list-note">loading…</span></div>
+    </div>
+  </div>
+
+  <div id="game" hidden>
+    <div id="status">…</div>
+    <div id="stage" style="position:relative">
+      <div id="ember-root"><span id="loading">loading engine…</span></div>
+      <div id="crosshair" style="position:absolute; left:50%; top:50%;
+        transform:translate(-50%,-50%); pointer-events:none; color:#9fe0ff;
+        font-size:20px; text-shadow:0 0 6px #123;">+</div>
+    </div>
+  </div>
+
+  <script type="module">
+    const $ = (id) => document.getElementById(id);
+    const ROOT = new URL('../../../', location);
+
+    const fail = (msg) => {
+      const el = $('loading') || $('status');
+      if (el) el.textContent = 'failed to start: ' + (msg || 'see browser console');
+    };
+    window.addEventListener('error', (e) => fail(e.message));
+    window.addEventListener('unhandledrejection', (e) => fail(e.reason));
+    document.addEventListener('pointerdown', () => {
+      document.querySelector('#ember-root canvas')?.focus();
+    });
+
+    // ---- account (auto-created by the hub; self-heals on direct visits)
+    const ACCT_KEY = 'ember-account';
+    const pick = (a) => a[Math.floor(Math.random() * a.length)];
+    function getAccount() {
+      try {
+        const a = JSON.parse(localStorage.getItem(ACCT_KEY));
+        if (a && a.handle) return a;
+      } catch {}
+      const ADJ = ['swift', 'neon', 'lucky', 'stone', 'ember', 'shadow', 'turbo', 'frost', 'cosmic', 'wild'];
+      const NOUN = ['fox', 'wolf', 'hawk', 'viper', 'otter', 'lynx', 'raven', 'tiger', 'drake', 'comet'];
+      const a = {
+        handle: `${pick(ADJ)}-${pick(NOUN)}-${10 + Math.floor(Math.random() * 90)}`,
+        id: crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2),
+        created: new Date().toISOString(),
+      };
+      localStorage.setItem(ACCT_KEY, JSON.stringify(a));
+      return a;
+    }
+    function renderAccount() {
+      $('account').innerHTML = 'playing as <b></b>';
+      $('account').querySelector('b').textContent = getAccount().handle;
+    }
+    $('account').addEventListener('click', () => {
+      const a = getAccount();
+      const name = prompt('Your handle (visible to other players):', a.handle);
+      if (name && name.trim()) {
+        a.handle = name.trim().slice(0, 20);
+        localStorage.setItem(ACCT_KEY, JSON.stringify(a));
+      }
+      renderAccount();
+    });
+    renderAccount();
+
+    // ---- server discovery
+    let serverCfg = {};
+    try {
+      const r = await fetch(new URL(`server.json?ts=${Date.now()}`, ROOT), { cache: 'no-store' });
+      if (r.ok) serverCfg = await r.json();
+    } catch {}
+    const overridden = localStorage.getItem('ember-server-url-manual')
+      ? localStorage.getItem('ember-server-url') : null;
+    const serverUrl = () => (overridden || serverCfg.ws || '').trim();
+
+    const V = serverCfg.v || '0';
+    const { default: init, start_online, proto_version } = await import(`./pkg/pong.js?v=${V}`);
+    let ready = init({ module_or_path: `./pkg/pong_bg.wasm?v=${V}` })
+      .catch((e) => { fail(e); console.error(e); });
+
+    const showGame = () => { $('menu').hidden = true; $('game').hidden = false; };
+
+    const goOnline = async (action, lobby, password) => {
+      const url = serverUrl();
+      if (!url) { alert('No server URL — the server may be offline right now.'); return; }
+      if (!lobby) { alert('Enter a lobby name.'); return; }
+      await ready;
+      showGame();
+      $('status').textContent = 'connecting…';
+      try {
+        start_online(JSON.stringify({
+          url, action, lobby,
+          password: password || null,
+          handle: getAccount().handle,
+        }));
+      } catch (e) { fail(e); console.error(e); }
+    };
+
+    $('btn-create').addEventListener('click', () =>
+      goOnline('create', $('lobby-name').value.trim(), $('lobby-pw').value));
+
+    // ---- lobby browser
+    function refreshLobbies() {
+      const url = serverUrl();
+      const rows = $('lobby-rows');
+      const setNote = (msg) => {
+        const note = document.createElement('span');
+        note.id = 'list-note';
+        note.textContent = msg;
+        rows.replaceChildren(note);
+      };
+      if (!url) { setNote('server offline?'); return; }
+      let done = false;
+      const ws = new WebSocket(url);
+      const finish = (msg) => { if (!done) { done = true; if (msg) setNote(msg); ws.close(); } };
+      setTimeout(() => finish('server not reachable'), 6000);
+      ws.onerror = () => finish('server not reachable');
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ t: 'hello', proto: proto_version(), handle: 'browser' }));
+        ws.send(JSON.stringify({ t: 'list_lobbies' }));
+      };
+      ws.onmessage = (e) => {
+        let m; try { m = JSON.parse(e.data); } catch { return; }
+        if (m.t !== 'lobby_list') return;
+        done = true; ws.close();
+        if (!m.lobbies.length) { setNote('no open games — create one!'); return; }
+        rows.replaceChildren(...m.lobbies.map((l) => {
+          const row = document.createElement('div');
+          row.className = 'lobby-row';
+          const label = document.createElement('span');
+          label.textContent = `${l.name} — ${l.host} · ${l.players}/${l.cap} `;
+          if (l.has_password) {
+            const lock = document.createElement('span');
+            lock.textContent = '🔒';
+            label.append(lock);
+          }
+          const btn = document.createElement('button');
+          btn.className = 'small';
+          btn.textContent = 'Join';
+          btn.addEventListener('click', () => {
+            const pw = l.has_password ? prompt(`Password for "${l.name}":`) : null;
+            if (l.has_password && pw === null) return;
+            goOnline('join', l.name, pw);
+          });
+          row.append(label, btn);
+          return row;
+        }));
+      };
+    }
+
+    // ---- pending join handed over from the hub's live-lobby showcase
+    let pending = null;
+    try { pending = JSON.parse(sessionStorage.getItem('ember-pending')); } catch {}
+    sessionStorage.removeItem('ember-pending');
+    if (pending && pending.lobby) {
+      await ready;
+      goOnline(pending.action || 'join', pending.lobby, pending.password);
+    } else {
+      await ready;
+      refreshLobbies();
+    }
+  </script>
+</body>
+</html>
