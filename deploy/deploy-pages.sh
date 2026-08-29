@@ -51,18 +51,36 @@ if [ ! -f "$PAGES_DIR/games/pong/v1/index.html" ]; then
 fi
 
 # Bump the deploy stamp in server.json (preserving the ws url): the pages
-# use it to cache-bust the wasm bundles once per deploy.
-python - "$PAGES_DIR/server.json" <<'EOF'
+# use it to cache-bust the wasm bundles once per deploy. The stamp also
+# records the protocol version this bundle speaks, so a bump is caught
+# HERE — the moment it ships — rather than at the first failed join.
+PROTO="$(grep -oE 'PROTO_VERSION: u16 = [0-9]+' crates/pong-core/src/proto.rs | grep -oE '[0-9]+$')"
+echo "== shipping protocol v$PROTO =="
+python - "$PAGES_DIR/server.json" "$PROTO" <<'EOF'
 import json, os, sys, time
-p = sys.argv[1]
+p, proto = sys.argv[1], int(sys.argv[2])
 d = {}
 if os.path.exists(p):
     try:
         d = json.load(open(p))
     except Exception:
         d = {}
+was = d.get("proto")
 d["v"] = str(int(time.time()))
+d["proto"] = proto
 json.dump(d, open(p, "w"))
+if was is not None and was != proto:
+    print(f"""
+!! PROTOCOL BUMP: v{was} -> v{proto}
+!! The game server speaks the OLD version until it is redeployed, and the
+!! server only lets a client create or join a lobby on an exact match. So
+!! from the moment this page is live until pong-server is rebuilt from the
+!! same commit, players get:
+!!     "this build speaks protocol v{proto}, the live game is v{was}"
+!! Redeploy pong-server in the SAME window. Archived pages stay frozen on
+!! v{was} and will refuse to join once the server moves - expected, and
+!! they already say "archived" in the hub.
+""")
 EOF
 
 (
