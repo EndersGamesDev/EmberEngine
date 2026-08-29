@@ -67,6 +67,87 @@ pub fn walk_speed_to_phase_delta(speed: f32, dt: f32) -> f32 {
     speed * dt * 6.0
 }
 
+/// One bounds-normalized AI-generated mesh part.
+pub struct MeshPart {
+    pub mesh: u32,
+    /// Uniform scale from mesh units to world (target height / mesh height).
+    pub scale: f32,
+    /// Mesh-space bounds center; parts pivot around their middle.
+    pub center: [f32; 3],
+}
+
+/// An articulated character: five AI-generated parts (arm/leg/boot reused
+/// for both sides), animated like the blocky humanoid.
+pub struct PartCharacter {
+    pub head: MeshPart,
+    pub torso: MeshPart,
+    pub arm: MeshPart,
+    pub leg: MeshPart,
+    pub boot: MeshPart,
+}
+
+/// Place `part` so its bounds-center lands at world (x, y, z) after yaw.
+fn push_part(
+    frame: &mut Frame,
+    part: &MeshPart,
+    body_scale: f32,
+    target: Vec3,
+    yaw: f32,
+    col: Vec3,
+) {
+    let s = part.scale * body_scale;
+    let c = part.center;
+    // Engine transform: world = rotate_yaw(v * s) + i_pos. Cancel the mesh's
+    // own center (rotated) so the part pivots around its middle.
+    let cr = rotate(Vec2::new(c[0] * s, c[2] * s), yaw);
+    let i_pos = Vec3::new(target.x - cr.x, target.y - c[1] * s, target.z - cr.y);
+    frame.instances.push(
+        Instance::new(i_pos, Vec3::splat(s), col)
+            .with_yaw(yaw)
+            .with_mesh(part.mesh),
+    );
+}
+
+/// Push the articulated part-character. `amp` (0..1) is the walk-swing
+/// amplitude envelope — eases limbs in/out for smooth starts and stops.
+pub fn push_character_parts(
+    frame: &mut Frame,
+    pos: Vec2,
+    facing_yaw: f32,
+    color: [f32; 3],
+    is_me: bool,
+    walk_phase: f32,
+    amp: f32,
+    ch: &PartCharacter,
+) {
+    let body = if is_me { 1.1 } else { 1.0 };
+    let col = Vec3::from_array(color);
+    // Parts are front-view renders: add PI so their faces align with facing.
+    let facing_yaw = facing_yaw + std::f32::consts::PI;
+    let swing = walk_phase.sin() * amp;
+    let bob = walk_phase.sin().abs() * 0.035 * amp;
+    // Step lift: the forward-swinging foot rises.
+    let lift_l = swing.max(0.0) * 0.06;
+    let lift_r = (-swing).max(0.0) * 0.06;
+
+    // (part, local x, local z, center height, extra y) placements.
+    let placements: [(&MeshPart, f32, f32, f32, f32); 8] = [
+        (&ch.boot, -0.13, swing * 0.20, 0.09, lift_l),
+        (&ch.boot, 0.13, -swing * 0.20, 0.09, lift_r),
+        (&ch.leg, -0.13, swing * 0.16, 0.455, lift_l * 0.5),
+        (&ch.leg, 0.13, -swing * 0.16, 0.455, lift_r * 0.5),
+        (&ch.arm, -0.36, -swing * 0.14, 1.055, 0.0),
+        (&ch.arm, 0.36, swing * 0.14, 1.055, 0.0),
+        (&ch.torso, 0.0, 0.0, 1.055, bob),
+        (&ch.head, 0.0, 0.0, 1.55, bob),
+    ];
+    for (part, lx, lz, cy, extra_y) in placements {
+        let w = rotate(Vec2::new(lx * body, lz * body), facing_yaw);
+        let target = Vec3::new(pos.x + w.x, cy * body + extra_y + bob * 0.3, pos.y + w.y);
+        push_part(frame, part, body, target, facing_yaw, col);
+    }
+}
+
 /// A full-body character mesh (AI-generated GLB), bounds-normalized at
 /// registration so any authoring scale/origin stands feet-on-ground.
 pub struct MeshCharacter {

@@ -38,6 +38,79 @@ const MESH_CHAR: u32 = 3;
 /// First mesh id after the fixed set; GLB monument parts land here.
 const MESH_MONUMENT: u32 = 6;
 
+/// Load the articulated part character: five GLBs in assets/models/parts/
+/// (head, torso, arm, leg, boot — arm/leg/boot shared by both sides).
+/// All five must load; otherwise the caller falls back.
+fn load_part_character(
+    first_mesh: u32,
+) -> (Vec<MeshData>, Option<character::PartCharacter>) {
+    // (file stem, target world height).
+    const PARTS: [(&str, f32); 5] = [
+        ("part-head", 0.34),
+        ("part-torso", 0.68),
+        ("part-arm", 0.66),
+        ("part-leg", 0.55),
+        ("part-boot", 0.19),
+    ];
+    let mut meshes = Vec::new();
+    let mut infos = Vec::new();
+    for (i, (stem, target_h)) in PARTS.iter().enumerate() {
+        let candidates = [
+            format!("{}/../../assets/models/parts/{stem}.glb", env!("CARGO_MANIFEST_DIR")),
+            format!("assets/models/parts/{stem}.glb"),
+        ];
+        let mut loaded = None;
+        for path in candidates {
+            if let Ok(bytes) = std::fs::read(&path) {
+                match ember_engine::assets::load_glb(&bytes) {
+                    Ok(parts) => {
+                        // Merge multi-part GLBs into one mesh.
+                        let mut merged = MeshData::default();
+                        for p in parts {
+                            merged.vertices.extend(p.mesh.vertices);
+                        }
+                        loaded = Some(merged);
+                        break;
+                    }
+                    Err(e) => tracing::error!(path, error = %e, "part GLB load failed"),
+                }
+            }
+        }
+        let Some(mesh) = loaded else {
+            tracing::info!(stem, "part GLB missing; articulated character unavailable");
+            return (Vec::new(), None);
+        };
+        let (mut min, mut max) = ([f32::MAX; 3], [f32::MIN; 3]);
+        for v in &mesh.vertices {
+            for a in 0..3 {
+                min[a] = min[a].min(v.pos[a]);
+                max[a] = max[a].max(v.pos[a]);
+            }
+        }
+        let h = (max[1] - min[1]).max(1e-3);
+        infos.push(character::MeshPart {
+            mesh: first_mesh + i as u32,
+            scale: target_h / h,
+            center: [
+                (min[0] + max[0]) * 0.5,
+                (min[1] + max[1]) * 0.5,
+                (min[2] + max[2]) * 0.5,
+            ],
+        });
+        meshes.push(mesh);
+    }
+    let mut it = infos.into_iter();
+    let pc = character::PartCharacter {
+        head: it.next().unwrap(),
+        torso: it.next().unwrap(),
+        arm: it.next().unwrap(),
+        leg: it.next().unwrap(),
+        boot: it.next().unwrap(),
+    };
+    tracing::info!("articulated part character loaded (5 parts)");
+    (meshes, Some(pc))
+}
+
 /// Load the AI-generated full-body character (assets/models/character.glb),
 /// returning its meshes plus bounds for feet/height normalization.
 fn load_mesh_character(first_mesh: u32) -> (Vec<MeshData>, Option<character::MeshCharacter>) {
@@ -194,16 +267,18 @@ struct Game {
     last_rtt_ms: Option<u32>,
     /// Set while the snapshot stream is stale (lag spike in progress).
     stale_since: Option<Instant>,
-    /// Per-player (facing_yaw, walk_phase) animation state.
-    anim: HashMap<ember_net::PlayerId, (f32, f32)>,
+    /// Per-player (facing_yaw, walk_phase, swing_amplitude) animation state.
+    anim: HashMap<ember_net::PlayerId, (f32, f32, f32)>,
     /// Animation state for the offline local player.
-    offline_anim: (f32, f32),
+    offline_anim: (f32, f32, f32),
     /// Static cover props for the current arena layout.
     layouts: Option<props::Layouts>,
     /// Number of monument GLB part meshes registered after MESH_MONUMENT.
     monument_parts: u32,
     /// AI-generated full-body player mesh; None = blocky humanoid fallback.
     mesh_character: Option<character::MeshCharacter>,
+    /// Articulated five-part AI character (preferred when present).
+    part_character: Option<character::PartCharacter>,
 }
 
 impl Game {
@@ -250,15 +325,46 @@ impl Game {
         frame
     }
 
-    /// Advance one animation slot from a velocity, returning (yaw, phase).
-    fn advance_anim(slot: &mut (f32, f32), vel: Vec2, dt: f32) -> (f32, f32) {
-        let speed = vel.length();
-        if speed > 0.05 {
-            slot.0 = vel.x.atan2(vel.y);
-            slot.1 += walk_speed_to_phase_delta(speed, dt);
+    /// Best available character: articulated parts > single mesh > boxes.
+    #[allow(clippy::too_many_arguments)]
+    fn push_best_character(
+        &self,
+        frame: &mut Frame,
+        pos: Vec2,
+        yaw: f32,
+        color: [f32; 3],
+        is_me: bool,
+        phase: f32,
+        amp: f32,
+    ) {
+        if let Some(pc) = &self.part_character {
+            character::push_character_parts(frame, pos, yaw, color, is_me, phase, amp, pc);
+        } else if let Some(mc) = &self.mesh_character {
+            character::push_character_mesh(frame, pos, yaw, color, is_me, phase, mc);
         } else {
-            slot.1 = 0.0;
+            push_character(frame, pos, yaw, color, is_me, phase, MESH_CHAR);
         }
+    }
+
+    /// Advance one animation slot from a velocity: smoothed facing (shortest
+    /// arc), walk phase, and an eased swing amplitude for soft starts/stops.
+    fn advance_anim(slot: &mut (f32, f32, f32), vel: Vec2, dt: f32) -> (f32, f32, f32) {
+        let speed = vel.length();
+        let moving = speed > 0.05;
+        if moving {
+            let target = vel.x.atan2(vel.y);
+            let mut diff = target - slot.0;
+            while diff > std::f32::consts::PI {
+                diff -= std::f32::consts::TAU;
+            }
+            while diff < -std::f32::consts::PI {
+                diff += std::f32::consts::TAU;
+            }
+            slot.0 += diff * (1.0 - (-12.0 * dt).exp());
+            slot.1 += walk_speed_to_phase_delta(speed, dt);
+        }
+        let amp_target = if moving { 1.0 } else { 0.0 };
+        slot.2 += (amp_target - slot.2) * (1.0 - (-9.0 * dt).exp());
         *slot
     }
 }
@@ -344,14 +450,9 @@ impl EmberGame for Game {
                 let mut seen: Vec<(ember_net::PlayerId, Vec2, Vec2, [f32; 3], bool)> =
                     self.world.render_players().collect();
                 for (id, pos, vel, color, is_me) in seen.drain(..) {
-                    let slot = self.anim.entry(id).or_insert((0.0, 0.0));
-                    let (yaw, phase) = Self::advance_anim(slot, vel, dt);
-                    match &self.mesh_character {
-                        Some(mc) => character::push_character_mesh(
-                            &mut frame, pos, yaw, color, is_me, phase, mc,
-                        ),
-                        None => push_character(&mut frame, pos, yaw, color, is_me, phase, MESH_CHAR),
-                    }
+                    let slot = self.anim.entry(id).or_insert((0.0, 0.0, 0.0));
+                    let (yaw, phase, amp) = Self::advance_anim(slot, vel, dt);
+                    self.push_best_character(&mut frame, pos, yaw, color, is_me, phase, amp);
                 }
                 frame
             }
@@ -361,13 +462,10 @@ impl EmberGame for Game {
                 *pos = pos.clamp(Vec2::splat(-ARENA_HALF), Vec2::splat(ARENA_HALF));
                 let me = *pos;
                 let mut frame = self.arena_frame(Camera::default());
-                let (yaw, phase) = Self::advance_anim(&mut self.offline_anim, vel, dt);
-                match &self.mesh_character {
-                    Some(mc) => character::push_character_mesh(
-                        &mut frame, me, yaw, [0.9, 0.9, 0.9], true, phase, mc,
-                    ),
-                    None => push_character(&mut frame, me, yaw, [0.9, 0.9, 0.9], true, phase, MESH_CHAR),
-                }
+                let mut slot = self.offline_anim;
+                let (yaw, phase, amp) = Self::advance_anim(&mut slot, vel, dt);
+                self.offline_anim = slot;
+                self.push_best_character(&mut frame, me, yaw, [0.9, 0.9, 0.9], true, phase, amp);
                 frame
             }
         }
@@ -422,6 +520,9 @@ fn main() {
     let monument_parts = monument.len() as u32;
     let (char_meshes, mesh_character) =
         load_mesh_character(MESH_MONUMENT + monument_parts);
+    let (part_meshes, part_character) = load_part_character(
+        MESH_MONUMENT + monument_parts + char_meshes.len() as u32,
+    );
     let mut meshes = vec![
         plane_mesh(12.0, load_texture("floor_basalt.png")),
         box_mesh(4.0, load_texture("wall_basalt.png")),
@@ -432,6 +533,7 @@ fn main() {
     ];
     meshes.extend(monument);
     meshes.extend(char_meshes);
+    meshes.extend(part_meshes);
 
     ember_engine::run(
         EngineConfig {
@@ -450,10 +552,11 @@ fn main() {
             last_rtt_ms: None,
             stale_since: None,
             anim: HashMap::new(),
-            offline_anim: (0.0, 0.0),
+            offline_anim: (0.0, 0.0, 0.0),
             layouts: props::load_layouts(),
             monument_parts,
             mesh_character,
+            part_character,
         },
     );
 }
