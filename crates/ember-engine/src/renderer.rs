@@ -17,6 +17,8 @@ use winit::window::Window;
 pub struct MeshVertex {
     pub pos: [f32; 3],
     pub normal: [f32; 3],
+    /// Texture coordinate; [0,0] for untextured meshes.
+    pub uv: [f32; 2],
 }
 
 /// A triangle-list mesh the game registers at startup (EngineConfig.meshes).
@@ -25,6 +27,17 @@ pub struct MeshVertex {
 #[derive(Clone, Debug, Default)]
 pub struct MeshData {
     pub vertices: Vec<MeshVertex>,
+    /// Optional RGBA8 texture sampled via the mesh's UVs. None = a shared
+    /// 1x1 white pixel, i.e. the classic instance-color-only look.
+    pub texture: Option<TextureData>,
+}
+
+/// Raw RGBA8 pixels for a mesh texture.
+#[derive(Clone, Debug)]
+pub struct TextureData {
+    pub width: u32,
+    pub height: u32,
+    pub rgba8: Vec<u8>,
 }
 
 /// One draw unit: a colored mesh instance (default: the unit cube),
@@ -98,6 +111,7 @@ impl Default for Frame {
 struct Vertex {
     pos: [f32; 3],
     normal: [f32; 3],
+    uv: [f32; 2],
 }
 
 #[repr(C)]
@@ -123,6 +137,13 @@ struct SceneTargets {
     height: u32,
 }
 
+/// GPU-side mesh: vertex buffer, vertex count, texture bind group.
+struct MeshEntry {
+    buf: wgpu::Buffer,
+    count: u32,
+    bind: wgpu::BindGroup,
+}
+
 /// Owns the GPU. The only place in the engine that touches wgpu.
 pub struct Renderer {
     surface: wgpu::Surface<'static>,
@@ -135,8 +156,8 @@ pub struct Renderer {
     scene_pipeline: wgpu::RenderPipeline,
     camera_buf: wgpu::Buffer,
     camera_bind: wgpu::BindGroup,
-    /// Vertex buffers per mesh id (0 = built-in cube).
-    meshes: Vec<(wgpu::Buffer, u32)>,
+    /// Per mesh id (0 = built-in cube): buffer, count, texture bind group.
+    meshes: Vec<MeshEntry>,
     instance_buf: wgpu::Buffer,
     instance_cap: usize,
     // Presenter.
@@ -241,30 +262,122 @@ impl Renderer {
         });
 
         use wgpu::util::DeviceExt;
-        let mut meshes: Vec<(wgpu::Buffer, u32)> = Vec::with_capacity(1 + extra_meshes.len());
+
+        // Per-mesh textures: group(1) of the scene pass. Meshes without a
+        // texture share a 1x1 white pixel, keeping the instance-color look.
+        let mesh_tex_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("mesh texture layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let mesh_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("mesh sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let white = TextureData { width: 1, height: 1, rgba8: vec![255, 255, 255, 255] };
+
+        let mut mesh_textures: Vec<Option<TextureData>> = std::iter::once(None)
+            .chain(extra_meshes.iter().map(|m| m.texture.clone()))
+            .collect();
+        // Native debug aid: EMBER_DEBUG_TEXTURE=<path.png> textures the
+        // built-in cube (mesh 0) without any game-side changes.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Ok(path) = std::env::var("EMBER_DEBUG_TEXTURE") {
+            match load_png_rgba8(&path) {
+                Ok(t) => {
+                    tracing::info!(path, w = t.width, h = t.height, "debug texture on mesh 0");
+                    mesh_textures[0] = Some(t);
+                }
+                Err(e) => tracing::error!(path, error = %e, "EMBER_DEBUG_TEXTURE load failed"),
+            }
+        }
+
+        let make_bind = |data: &TextureData, label: &str| -> wgpu::BindGroup {
+            let tex = device.create_texture_with_data(
+                &queue,
+                &wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: data.width,
+                        height: data.height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                },
+                wgpu::util::TextureDataOrder::LayerMajor,
+                &data.rgba8,
+            );
+            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &mesh_tex_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&mesh_sampler),
+                    },
+                ],
+            })
+        };
+
+        let mut meshes: Vec<MeshEntry> = Vec::with_capacity(1 + extra_meshes.len());
         let cube_vertices = cube_vertices();
-        meshes.push((
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        meshes.push(MeshEntry {
+            buf: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("mesh 0 (cube)"),
                 contents: bytemuck::cast_slice(&cube_vertices),
                 usage: wgpu::BufferUsages::VERTEX,
             }),
-            cube_vertices.len() as u32,
-        ));
+            count: cube_vertices.len() as u32,
+            bind: make_bind(mesh_textures[0].as_ref().unwrap_or(&white), "mesh 0 texture"),
+        });
         for (i, m) in extra_meshes.iter().enumerate() {
             let verts: Vec<Vertex> = m
                 .vertices
                 .iter()
-                .map(|v| Vertex { pos: v.pos, normal: v.normal })
+                .map(|v| Vertex { pos: v.pos, normal: v.normal, uv: v.uv })
                 .collect();
-            meshes.push((
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            meshes.push(MeshEntry {
+                buf: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some(&format!("mesh {}", i + 1)),
                     contents: bytemuck::cast_slice(&verts),
                     usage: wgpu::BufferUsages::VERTEX,
                 }),
-                verts.len() as u32,
-            ));
+                count: verts.len() as u32,
+                bind: make_bind(
+                    mesh_textures[i + 1].as_ref().unwrap_or(&white),
+                    &format!("mesh {} texture", i + 1),
+                ),
+            });
         }
 
         let camera_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -298,7 +411,7 @@ impl Renderer {
         let scene_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("scene pipeline layout"),
-                bind_group_layouts: &[&camera_layout],
+                bind_group_layouts: &[&camera_layout, &mesh_tex_layout],
                 push_constant_ranges: &[],
             });
         let scene_pipeline = build_scene_pipeline(&device, &scene_pipeline_layout, &shader);
@@ -499,9 +612,10 @@ impl Renderer {
                 pass.set_bind_group(0, &self.camera_bind, &[]);
                 pass.set_vertex_buffer(1, self.instance_buf.slice(..));
                 for (mi, range) in &ranges {
-                    let (buf, count) = &self.meshes[*mi];
-                    pass.set_vertex_buffer(0, buf.slice(..));
-                    pass.draw(0..*count, range.clone());
+                    let mesh = &self.meshes[*mi];
+                    pass.set_bind_group(1, &mesh.bind, &[]);
+                    pass.set_vertex_buffer(0, mesh.buf.slice(..));
+                    pass.draw(0..mesh.count, range.clone());
                 }
             }
         }
@@ -669,12 +783,12 @@ fn build_scene_pipeline(
                 wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Vertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2],
                 },
                 wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<InstanceRaw>() as u64,
                     step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &wgpu::vertex_attr_array![2 => Float32x3, 3 => Float32x3, 4 => Float32x3, 5 => Float32],
+                    attributes: &wgpu::vertex_attr_array![3 => Float32x3, 4 => Float32x3, 5 => Float32x3, 6 => Float32],
                 },
             ],
         },
@@ -759,6 +873,13 @@ fn check_mtime(path: &str, tracked: &mut Option<std::time::SystemTime>) -> bool 
     }
 }
 
+/// Decode a PNG file into RGBA8 (native debug/tooling path).
+#[cfg(not(target_arch = "wasm32"))]
+fn load_png_rgba8(path: &str) -> Result<TextureData, String> {
+    let img = image::open(path).map_err(|e| e.to_string())?.to_rgba8();
+    Ok(TextureData { width: img.width(), height: img.height(), rgba8: img.into_raw() })
+}
+
 fn create_instance_buf(device: &wgpu::Device, cap: usize) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("instances"),
@@ -791,8 +912,9 @@ fn cube_vertices() -> Vec<Vertex> {
             center + u3 * 0.5 + v3 * 0.5,
             center - u3 * 0.5 + v3 * 0.5,
         ];
+        let uvs = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
         for idx in [0usize, 1, 2, 0, 2, 3] {
-            verts.push(Vertex { pos: corners[idx].to_array(), normal: n });
+            verts.push(Vertex { pos: corners[idx].to_array(), normal: n, uv: uvs[idx] });
         }
     }
     verts

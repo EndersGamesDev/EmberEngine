@@ -54,6 +54,10 @@ fn collect(
                 .read_normals()
                 .map(|n| n.collect())
                 .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
+            let uvs: Vec<[f32; 2]> = reader
+                .read_tex_coords(0)
+                .map(|t| t.into_f32().collect())
+                .unwrap_or_default();
             // De-index into a flat triangle list (the renderer is unindexed).
             let indices: Vec<u32> = reader
                 .read_indices()
@@ -72,6 +76,7 @@ fn collect(
                             .transform_vector3(Vec3::from(n))
                             .normalize_or_zero()
                             .to_array(),
+                        uv: uvs.get(i as usize).copied().unwrap_or([0.0, 0.0]),
                     })
                 })
                 .collect();
@@ -82,7 +87,7 @@ fn collect(
                 .base_color_factor();
             out.push(GlbPart {
                 name: name.clone(),
-                mesh: MeshData { vertices },
+                mesh: MeshData { vertices, texture: None },
                 color: [color[0], color[1], color[2]],
             });
         }

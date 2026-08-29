@@ -3,20 +3,25 @@ struct CameraUniform {
 };
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
 
+@group(1) @binding(0) var mesh_tex: texture_2d<f32>;
+@group(1) @binding(1) var mesh_samp: sampler;
+
 struct VsIn {
     @location(0) pos: vec3<f32>,
     @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
     // Per-instance:
-    @location(2) i_pos: vec3<f32>,
-    @location(3) i_scale: vec3<f32>,
-    @location(4) i_color: vec3<f32>,
-    @location(5) i_yaw: f32,
+    @location(3) i_pos: vec3<f32>,
+    @location(4) i_scale: vec3<f32>,
+    @location(5) i_color: vec3<f32>,
+    @location(6) i_yaw: f32,
 };
 
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) normal: vec3<f32>,
     @location(1) color: vec3<f32>,
+    @location(2) uv: vec2<f32>,
 };
 
 @vertex
@@ -39,6 +44,7 @@ fn vs_main(in: VsIn) -> VsOut {
         -in.normal.x * s + in.normal.z * c,
     );
     out.color = in.i_color;
+    out.uv = in.uv;
     return out;
 }
 
@@ -47,6 +53,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let sun = normalize(vec3<f32>(0.4, 1.0, 0.3));
     let ambient = 0.35;
     let diff = max(dot(normalize(in.normal), sun), 0.0);
-    let lit = in.color * (ambient + (1.0 - ambient) * diff);
+    // Untextured meshes sample the shared 1x1 white pixel, so albedo
+    // reduces to the instance color exactly as before.
+    let albedo = textureSample(mesh_tex, mesh_samp, in.uv).rgb * in.color;
+    let lit = albedo * (ambient + (1.0 - ambient) * diff);
     return vec4<f32>(lit, 1.0);
 }

@@ -620,6 +620,7 @@ dependencies = [
  "console_log",
  "glam",
  "gltf",
+ "image",
  "log",
  "pollster",
  "tracing",
