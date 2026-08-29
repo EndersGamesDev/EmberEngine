@@ -4,12 +4,18 @@
       "id": "arena",
       "title": "Arena Shooter",
       "tag": "online multiplayer · first person · up to 8",
-      "desc": "First-person drop-in deathmatch in a generated arena. WASD + mouse look, RMB zoom, R reload, Shift sprint, C crouch — grab glowing pads to upgrade your pistol. Blender-built viewmodel with hands.",
+      "desc": "First-person drop-in deathmatch in a generated arena. WASD + mouse look, RMB zoom, R reload, Shift sprint, C crouch — crouching also shrinks your hitbox. Grab glowing pads to upgrade your pistol. Textured basalt arena, armored players, Blender-built viewmodel with hands.",
       "versions": [
+        {
+          "v": "v8",
+          "path": "games/arena/v8/",
+          "live": true,
+          "note": "textured graphics update"
+        },
         {
           "v": "v7",
           "path": "games/arena/v7/",
-          "live": true,
+          "live": false,
           "note": "live server"
         },
         {
