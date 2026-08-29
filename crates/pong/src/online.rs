@@ -336,6 +336,10 @@ pub struct ShooterGame {
     flash: HashMap<u8, f32>,
     /// Impact spark particles: (position, velocity, ttl).
     particles: Vec<(Vec3, Vec3, f32)>,
+    /// Visual (height, vertical velocity) per bullet, parallel to `bullets`:
+    /// MY bullets fly along my full aim ray (pitch included) visually while
+    /// the authoritative 2D path stays the server's.
+    bullet_vis: Vec<(f32, f32)>,
 }
 
 impl ShooterGame {
@@ -386,6 +390,7 @@ impl ShooterGame {
             kill_t: 0.0,
             flash: HashMap::new(),
             particles: Vec::new(),
+            bullet_vis: Vec::new(),
         })
     }
 
@@ -622,6 +627,40 @@ impl EmberGame for ShooterGame {
                     self.to = players.iter().map(|p| (p.id, PSnap { x: p.x, z: p.z })).collect();
                     self.latest = players.into_iter().map(|p| (p.id, p)).collect();
                     self.t = 0.0;
+                    // Carry per-bullet visual heights across states (order is
+                    // stable server-side: retain + append), matching by
+                    // predicted position; new bullets near ME inherit my
+                    // aim pitch so the tracer flies where the crosshair points.
+                    let carry_age = self.bullets_age;
+                    let mut used = vec![false; self.bullets.len()];
+                    let mut new_vis = Vec::with_capacity(bullets.len());
+                    for b in &bullets {
+                        let mut vis = None;
+                        for (i, ob) in self.bullets.iter().enumerate() {
+                            if used[i] {
+                                continue;
+                            }
+                            let px = ob.x + ob.vx * carry_age;
+                            let pz = ob.z + ob.vz * carry_age;
+                            let (dx, dz) = (b.x - px, b.z - pz);
+                            if dx * dx + dz * dz < 2.25 {
+                                used[i] = true;
+                                let (y0, vy) = self.bullet_vis.get(i).copied().unwrap_or((1.25, 0.0));
+                                vis = Some((y0 + vy * carry_age, vy));
+                                break;
+                            }
+                        }
+                        new_vis.push(vis.unwrap_or_else(|| {
+                            let (dx, dz) = (b.x - self.own_render.x, b.z - self.own_render.y);
+                            if dx * dx + dz * dz < 2.25 {
+                                let h_speed = (b.vx * b.vx + b.vz * b.vz).sqrt();
+                                (self.eye_h - 0.06, h_speed * self.pitch.tan())
+                            } else {
+                                (1.25, 0.0)
+                            }
+                        }));
+                    }
+                    self.bullet_vis = new_vis;
                     self.bullets = bullets;
                     self.bullets_age = 0.0;
 
@@ -1008,10 +1047,12 @@ impl EmberGame for ShooterGame {
         // Bullets: glowing tracers near eye height, extrapolation bounded
         // to ~2 state intervals so stalls don't fly them through walls.
         let age = self.bullets_age.min(0.12);
-        for b in &self.bullets {
+        for (i, b) in self.bullets.iter().enumerate() {
+            let (y0, vy) = self.bullet_vis.get(i).copied().unwrap_or((1.25, 0.0));
+            let y = (y0 + vy * age).max(0.12);
             inst(
                 &mut frame,
-                Vec3::new(b.x + b.vx * age, 1.25, b.z + b.vz * age),
+                Vec3::new(b.x + b.vx * age, y, b.z + b.vz * age),
                 Vec3::splat(0.26),
                 GLOW_BLUE,
             );
