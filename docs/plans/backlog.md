@@ -2,6 +2,16 @@
 
 Follow-ups and known gaps, one line each; pull into a milestone plan before working. Frictions with the orchestration itself go to the orchestration repo's backlog instead.
 
+Presenter and input work is planned in `docs/presenter-architecture.md` and `docs/input-latch.md`, not here and not in `docs/plans/milestone-1.md` — those two documents are the plan of record for the presenter split, the `SceneFrame` contract, the two-consumer input latch, and the capture policy, restated against the v7 renderer. Items below that they now own are marked.
+
+## Architecture (from the v7 re-framing)
+
+- The scene and present command buffers reach the queue in one `submit` call (`crates/ember-engine/src/renderer.rs:798-799`) under a comment claiming the ATW sliced-submission rule — a one-line fix, independent of the split (`docs/presenter-architecture.md` §5).
+- Shader hot-reload rebuilds both the scene and the present pipeline from one clock (`crates/ember-engine/src/renderer.rs:807-835`) and needs re-homing before the presenter split can be written (`docs/presenter-architecture.md` §8.1).
+- The scene-Hz throttle lives inside the renderer, so the renderer decides whether the renderer runs (`crates/ember-engine/src/renderer.rs:608-612`); the clock belongs above both GPU stages (`docs/presenter-architecture.md` §8.2).
+- `cursor_ndc()` and `aspect()` have no callers anywhere in the workspace, and the shooter's head comment claiming cursor unprojection (`crates/pong/src/online.rs:2`) is stale — it aims with relative deltas. The API is worth keeping; nobody should assume a shipped game is exercising it (`docs/input-latch.md` §7).
+- Pointer capture fires on any mouse press with no button filter (`crates/ember-engine/src/app.rs:195-203`), so in the one game that opts in the fire button is also the capture gesture; and `cursor_ndc` goes stale rather than `None` under pointer lock (`docs/input-latch.md` §7).
+
 ## Infrastructure
 
 - Server lane: no `ember` loop account exists on any server; provisioning on adler (designated CI/build box) is blocked pending owner action — until then no builds/tests/gates can run (compute never runs on the workstation).

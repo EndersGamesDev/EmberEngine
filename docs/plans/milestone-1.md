@@ -1,5 +1,11 @@
 NOTE 2026-08-29: written against the v6-era tree; superseded in part by upstream Arena v7 — re-framing into architecture docs is in progress.
 
+**Status at v7 (`c48d72b`): that re-framing has landed, and the presenter and input designs are no longer maintained here.** `docs/presenter-architecture.md` is the plan of record for §2.1, §2.2, §2.10 and bite 0; `docs/input-latch.md` is the plan of record for §2.6, §2.7, bite 3 and bite 4. Both restate their design against the v7 renderer rather than the v6-era one, and both carry the coordination items where the v6 shape does not fit v7 — read them before sizing any of those sections. What remains live here and nowhere else: bites 1, 2, 5, 7 and 9, and the verification lane in §5.
+
+**Three prerequisites were met upstream rather than by a bite**, and are marked at their bites below: per-mesh textures and UVs landed (`README.md:95-97`), retiring bite 8 outright; the egui overlay landed with a scene-Hz throttle and a frame-age readout (`README.md:105-108`), meeting bite 6's observability rationale without its ring; and WGSL hot-reload landed in the same roadmap item, which is new surface area the split has to re-home (`docs/presenter-architecture.md` §8.1).
+
+**Two citations in this plan are stale against v7 and must not be used to size work.** `crates/pong/src/online.rs:114-131`, cited in §2.3 and in bite 1's oracle as the shooter's cursor unprojection, is now lobby-join message construction; no cursor unprojection exists anywhere in the workspace, and the shooter aims with relative mouse deltas (`crates/pong/src/online.rs:644-653`). `crates/pong/src/online.rs:357`, cited in §2.6 as the fire button, is now `crates/pong/src/online.rs:667`. The design conclusions drawn from both still hold; only their evidence moved.
+
 # Milestone 1 — fly camera on a real presenter (ATW stages A and B)
 
 Roadmap item 1 reads "first triangle → textured cube → fly camera (WASD + mouse; fly camera lands as rotation-only warp, ATW stage B)". The adoption survey (`docs/plans/adoption-survey.md`) establishes two facts that shape the whole plan:
@@ -179,6 +185,8 @@ Each bite is independently gate-able: it builds, it does not regress the two shi
 
 ### Bite 0 — extract the presenter (required by the survey)
 
+**NOT IN THE v7 TREE.** This bite was built and gate-proven, then deliberately dropped when upstream's renderer grew past it; `main` at `c48d72b` has no `presenter.rs`, no `gpu.rs`, and no `scene_frame.rs`. The extraction survives only on `archive/v6-stack`, and its design is restated against the current renderer in `docs/presenter-architecture.md`, which is what should be implemented — not this sketch and not a cherry-pick of the archived commit. The record below is kept for the deviations it measured, which that document carries forward as constraints.
+
 **LANDED** 2026-08-28, commit a4dd8a7 (six files, +764/−465, five gates green). Deviations from the sketch, accepted: no `SceneFrameRing` yet (bite 6 owns it); stage entry points and `Gpu` are `pub(crate)` (a reachable `pub fn` taking a `pub(crate)` type trips `-D private_interfaces`); scene and present are two queue submissions (closer to the ATW slicing rule); the surface is acquired after the scene render, so a `Lost`/`Outdated` surface now wastes one scene render but drops the same frame. On-screen pixel identity across the three clients is still unverified — needs a human with a display.
 
 The pure refactor that makes the split real. Split `renderer.rs` into `gpu.rs`, `scene_frame.rs`, `renderer.rs`, `presenter.rs`; introduce `SceneFrame` with pose, projection, and timestamp; move `Surface` ownership into `Presenter`; define `PresentTarget` with the `Surface` arm implemented; rewire `app.rs` to call the scene pass and the present pass as two steps. Behaviour is unchanged throughout: one scene and one present per redraw, identity warp, one ring slot.
@@ -235,6 +243,8 @@ Add `guard_deg` to `Projection`, render the scene at the widened FOV, and have t
 
 ### Bite 6 — scene-rate throttle and a ring of two
 
+**PARTIALLY SUPERSEDED at v7.** The observability half landed upstream: the egui rig ships a scene-Hz throttle and a scene-age readout (`crates/ember-engine/src/overlay.rs:78-93`), and the scene pass is skipped while capped so the presenter re-presents the last frame (`crates/ember-engine/src/renderer.rs:608-612`). So the reason this bite existed — that warp is invisible at display rate and needs an oracle — is already met, and `EngineConfig::scene_hz_cap` is not needed. What remains outstanding is the ring of two, and one structural problem the upstream version introduced: the throttle state and the skip decision live inside the renderer, so the renderer decides whether the renderer runs (`docs/presenter-architecture.md` §8.2). Re-homing the clock above both stages is the live part of this bite.
+
 Present every redraw, render the scene on a rate cap, publish into a two-slot ring, and cycle the cap from the keyboard with a trace line reporting scene Hz against present Hz.
 
 - Files: `crates/ember-engine/src/app.rs`, `scene_frame.rs`, `presenter.rs`.
@@ -252,6 +262,8 @@ A new minimal crate implementing `EmberGame` with WASD plus mouse: `update` adva
 - Oracle: `cargo run -p flycam`. Manual, and this is the milestone's headline check: at a 15 Hz scene cap, mouse-look stays glued to the mouse while world motion visibly steps; disabling warp under the same cap makes the view judder with the scene. The difference between those two must be obvious without instrumentation.
 
 ### Bite 8 — textured cube
+
+**DEAD — landed upstream at v7.** Per-mesh textures and UVs shipped with the textures half of roadmap item 1 (`README.md:95-97`): `MeshVertex` carries a `uv` (`crates/ember-engine/src/renderer.rs:17-22`), each mesh gets a texture bind group at group(1) with a shared 1x1 white pixel standing in for untextured meshes (`crates/ember-engine/src/renderer.rs:291-415`), and instances are bucketed by mesh id into one instanced draw per mesh (`crates/ember-engine/src/renderer.rs:644-663`). Real PNG assets replaced the procedural checker this bite proposed, so the vertex-layout and location-numbering analysis below is historical. The scene pass having grown a mesh table is itself a coordination item for the split (`docs/presenter-architecture.md` §8.3).
 
 Add `uv` to `Vertex` at `@location(6)` (locations 2–5 belong to the instance buffer since `yaw` took 5), generate a procedural checker texture, add its bind group to the scene pass, and sample it modulated by the instance colour.
 
@@ -313,6 +325,8 @@ Landing this milestone makes three README statements true that are currently not
 
 - The 0.6 line (`README.md:90-92`) claims a `SceneFrame` and a presenter that owns the swapchain; both become real at bite 0.
 - The layering line (`README.md:44`) predates the adopted ATW document and omits the presenter stage; it should be restated as game → sim → scene renderer → presenter → platform.
-- Item 1's "first triangle → textured cube" (`README.md:95`) describes work that was largely done at 0.5; only texturing (bite 8) is outstanding, and the item's real content is the fly camera and stage B.
+- Item 1's "first triangle → textured cube" (`README.md:95`) describes work that was largely done at 0.5; only texturing (bite 8) is outstanding, and the item's real content is the fly camera and stage B. **Resolved upstream at v7**: the item was split into a checked textures half and an open fly-camera half (`README.md:95-97`), which is the reconciliation this line asked for.
+
+Roadmap item 5 also went from planned to checked upstream (`README.md:105-108`), which changes what §2.8 and bite 6 are for — see the mark on bite 6. Its second half, hot-reloadable WGSL, is not anticipated anywhere in this plan and is the one piece of new upstream surface area that makes the presenter split harder rather than easier (`docs/presenter-architecture.md` §8.1).
 
 A fourth README problem appeared with the upstream commits and is *not* fixed by this milestone: the "## Pong" section (`README.md:142-150`) still describes online play as two-player paddle pong with a flipped camera and names `crates/pong-core/src/sim.rs` as the server-side sim, when online play is now the arena shooter over `pong-core/src/shooter.rs`. Nothing in this plan touches it, and it should not be folded into a milestone-1 push — it belongs to whoever reconciles the shooter's own documentation. It is recorded here so the next person to edit this README does not assume the section was reviewed and found correct.
