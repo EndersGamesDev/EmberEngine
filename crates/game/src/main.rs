@@ -133,13 +133,6 @@ fn load_part_character(
 fn load_skinned_character(
     first_mesh: u32,
 ) -> (Vec<MeshData>, Option<ember_engine::rig::RigCharacter>) {
-    use ember_engine::glam::Vec3;
-    use ember_engine::rig::joint;
-
-    const JOINT_NAMES: [&str; joint::COUNT] = [
-        "root", "spine", "neck", "shoulder_l", "elbow_l", "wrist_l", "shoulder_r", "elbow_r",
-        "wrist_r", "hip_l", "knee_l", "ankle_l", "hip_r", "knee_r", "ankle_r",
-    ];
     let base = [
         format!("{}/../../assets/models", env!("CARGO_MANIFEST_DIR")),
         "assets/models".to_string(),
@@ -151,61 +144,18 @@ fn load_skinned_character(
         ) else {
             continue;
         };
-        // Bind positions: {"joints": {"root": [x, y, z], ...}}.
-        let mut bind = [Vec3::ZERO; joint::COUNT];
-        let mut missing = None;
-        for (i, name) in JOINT_NAMES.iter().enumerate() {
-            match parse_joint(&json, name) {
-                Some(v) => bind[i] = v,
-                None => missing = Some(*name),
+        match ember_engine::rig::skinned_from_glb(&glb, &json, first_mesh) {
+            Ok((meshes, rc)) => {
+                tracing::info!(parts = rc.parts.len(), "skinned character loaded");
+                return (meshes, Some(rc));
             }
-        }
-        if let Some(name) = missing {
-            tracing::error!(name, "swat-rig.json is missing a joint; skipping skinned model");
-            return (Vec::new(), None);
-        }
-        let parts = match ember_engine::assets::load_glb(&glb) {
-            Ok(p) => p,
             Err(e) => {
-                tracing::error!(error = %e, "swat-parts.glb load failed");
+                tracing::error!(error = %e, "skinned character load failed");
                 return (Vec::new(), None);
             }
-        };
-        // Node names are "rig_<joint>"; anything else is ignored.
-        let mut meshes = Vec::new();
-        let mut bound = Vec::new();
-        for part in parts {
-            let stem = part.name.trim_start_matches("rig_");
-            let stem = stem.split('.').next().unwrap_or(stem);
-            let Some(j) = JOINT_NAMES.iter().position(|n| *n == stem) else {
-                tracing::warn!(name = part.name, "skinned part has no matching joint");
-                continue;
-            };
-            bound.push((first_mesh + meshes.len() as u32, j));
-            meshes.push(part.mesh);
         }
-        if bound.is_empty() {
-            tracing::error!("swat-parts.glb has no rig_<joint> nodes");
-            return (Vec::new(), None);
-        }
-        tracing::info!(parts = bound.len(), "skinned character loaded");
-        let rc = ember_engine::rig::skinned_rig(&bind, &bound);
-        return (meshes, Some(rc));
     }
     (Vec::new(), None)
-}
-
-/// Pull one `"name": [x, y, z]` triple out of the rig JSON. Small enough
-/// to not be worth a serde dependency in the game crate.
-fn parse_joint(json: &str, name: &str) -> Option<ember_engine::glam::Vec3> {
-    let start = json.find(&format!("\"{name}\""))? + name.len() + 2;
-    let open = start + json[start..].find('[')?;
-    let close = open + json[open..].find(']')?;
-    let nums: Vec<f32> = json[open + 1..close]
-        .split(',')
-        .filter_map(|s| s.trim().parse().ok())
-        .collect();
-    (nums.len() == 3).then(|| ember_engine::glam::Vec3::new(nums[0], nums[1], nums[2]))
 }
 
 /// Fixed camera from EMBER_CAM ("ex,ey,ez,tx,ty,tz"), for reviewing assets

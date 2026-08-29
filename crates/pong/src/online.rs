@@ -119,14 +119,26 @@ const PART_GLBS: [(&[u8], f32); 5] = [
     ),
 ];
 
-/// Build the jointed rig character from the embedded GLBs, registered
-/// starting at `first_mesh`. All five or none.
+/// The artist-made SWAT operator, split one mesh per rig joint by
+/// tools/swat_split.py and embedded so the wasm build ships it too.
+const SWAT_GLB: &[u8] = include_bytes!("../../../assets/models/swat-parts.glb");
+const SWAT_RIG: &str = include_str!("../../../assets/models/swat-rig.json");
+
+/// Build the player character, registered starting at `first_mesh`: the
+/// SWAT operator when it loads, else the five AI-generated parts.
 pub(crate) fn part_meshes(
     first_mesh: u32,
 ) -> (
     Vec<ember_engine::MeshData>,
     Option<ember_engine::rig::RigCharacter>,
 ) {
+    match ember_engine::rig::skinned_from_glb(SWAT_GLB, SWAT_RIG, first_mesh) {
+        Ok((meshes, rc)) => {
+            tracing::info!("swat operator loaded ({} parts)", rc.parts.len());
+            return (meshes, Some(rc));
+        }
+        Err(e) => tracing::warn!("swat operator unusable ({e}); AI-generated parts"),
+    }
     let mut meshes = Vec::new();
     let mut sources = Vec::new();
     for (i, (bytes, _target_h)) in PART_GLBS.iter().enumerate() {

@@ -221,6 +221,58 @@ pub fn skeleton_from_bind(pos: &[Vec3; joint::COUNT]) -> (Skeleton, HumanoidDims
     (Skeleton { joints, correction }, dims)
 }
 
+/// Engine joint names, in `joint` index order — the node-name suffixes
+/// tools/swat_split.py writes ("rig_head", "rig_shoulder_l", ...).
+pub const JOINT_NAMES: [&str; joint::COUNT] = [
+    "root", "spine", "neck", "shoulder_l", "elbow_l", "wrist_l", "shoulder_r", "elbow_r",
+    "wrist_r", "hip_l", "knee_l", "ankle_l", "hip_r", "knee_r", "ankle_r",
+];
+
+/// Pull one `"name": [x, y, z]` triple out of the rig JSON. The file is
+/// ours and tiny, so this avoids a serde dependency in the engine.
+fn parse_joint(json: &str, name: &str) -> Option<Vec3> {
+    let start = json.find(&format!("\"{name}\""))? + name.len() + 2;
+    let open = start + json[start..].find('[')?;
+    let close = open + json[open..].find(']')?;
+    let nums: Vec<f32> = json[open + 1..close]
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    (nums.len() == 3).then(|| Vec3::new(nums[0], nums[1], nums[2]))
+}
+
+/// Load a split skinned model: a GLB whose nodes are named `rig_<joint>`
+/// plus the JSON of bind-pose joint positions that tools/swat_split.py
+/// writes beside it. Returns the meshes to register (starting at
+/// `first_mesh`) and the rig that drives them.
+pub fn skinned_from_glb(
+    glb: &[u8],
+    rig_json: &str,
+    first_mesh: u32,
+) -> Result<(Vec<MeshData>, RigCharacter), String> {
+    let mut bind = [Vec3::ZERO; joint::COUNT];
+    for (i, name) in JOINT_NAMES.iter().enumerate() {
+        bind[i] = parse_joint(rig_json, name).ok_or_else(|| format!("rig json lacks {name}"))?;
+    }
+    let parts = crate::assets::load_glb(glb)?;
+    let mut meshes = Vec::new();
+    let mut bound = Vec::new();
+    for part in parts {
+        // Blender suffixes duplicate node names ("rig_neck.001").
+        let stem = part.name.trim_start_matches("rig_");
+        let stem = stem.split('.').next().unwrap_or(stem);
+        let Some(j) = JOINT_NAMES.iter().position(|n| *n == stem) else {
+            continue;
+        };
+        bound.push((first_mesh + meshes.len() as u32, j));
+        meshes.push(part.mesh);
+    }
+    if bound.is_empty() {
+        return Err("no rig_<joint> nodes in the glb".into());
+    }
+    Ok((meshes, skinned_rig(&bind, &bound)))
+}
+
 /// Assemble a rig from an imported skinned model: every part is already in
 /// bind space, so its anchor is its joint's bind position, at model scale
 /// and unrotated. `parts` pairs a registered mesh id with its joint.

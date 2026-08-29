@@ -27,7 +27,7 @@ PAGES_DIR="$(mktemp -d -t ember-pages-XXXX)"
 git worktree add "$PAGES_DIR" gh-pages
 
 # Live version dirs (older versions stay frozen on the branch untouched).
-ARENA_LIVE="games/arena/v9"
+ARENA_LIVE="games/arena/v10"
 PONG_LIVE="games/pong/v2"
 
 rm -rf "$PAGES_DIR"/index.html "$PAGES_DIR"/pkg \
