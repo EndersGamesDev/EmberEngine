@@ -131,7 +131,10 @@ pub(crate) fn part_meshes(
     let mut sources = Vec::new();
     for (i, (bytes, _target_h)) in PART_GLBS.iter().enumerate() {
         match ember_engine::rig::source_from_glb_bytes(bytes, first_mesh + i as u32) {
-            Ok((mesh, src)) => {
+            Ok((mesh, mut src)) => {
+                // The embedded v1 parts are single-view concepts facing the
+                // camera; the rig flips them to its +Z forward.
+                src.flipped = true;
                 meshes.push(mesh);
                 sources.push(src);
             }

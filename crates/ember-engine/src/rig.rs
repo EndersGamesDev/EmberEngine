@@ -263,6 +263,10 @@ pub struct PartSource {
     pub mesh: u32,
     pub min: [f32; 3],
     pub max: [f32; 3],
+    /// Mesh authored facing the camera (-Z): give it half a turn to face
+    /// the rig's +Z forward. Single-view v1 meshes need this; multi-view
+    /// Hunyuan-2mv meshes come out already facing +Z.
+    pub flipped: bool,
 }
 
 impl PartSource {
@@ -300,6 +304,7 @@ pub fn source_from_glb_bytes(bytes: &[u8], mesh_id: u32) -> Result<(MeshData, Pa
     Ok((
         merged,
         PartSource {
+            flipped: false,
             mesh: mesh_id,
             min,
             max,
@@ -376,14 +381,15 @@ pub fn veteran_rig(s: &VeteranSources) -> RigCharacter {
                    target_h: f32,
                    mirror_x: bool,
                    tint: Vec3,
-                   pre_rot: Quat| {
+                   extra_rot: Quat| {
+        let base = if src.flipped { flip } else { Quat::IDENTITY };
         parts.push(RigPart {
             mesh: src.mesh,
             joint,
             anchor,
             offset,
             scale: target_h / src.height(),
-            pre_rot,
+            pre_rot: base * extra_rot,
             mirror_x,
             tint: Some(tint),
         });
@@ -403,7 +409,7 @@ pub fn veteran_rig(s: &VeteranSources) -> RigCharacter {
         torso_h,
         false,
         tan,
-        flip,
+        Quat::IDENTITY,
     );
     if let Some(p) = s.pelvis {
         add(
@@ -414,7 +420,7 @@ pub fn veteran_rig(s: &VeteranSources) -> RigCharacter {
             0.28,
             false,
             olive,
-            flip,
+            Quat::IDENTITY,
         );
     }
     add(
@@ -425,7 +431,7 @@ pub fn veteran_rig(s: &VeteranSources) -> RigCharacter {
         0.30,
         false,
         skin,
-        flip,
+        Quat::IDENTITY,
     );
     if let Some(hm) = s.helmet {
         add(
@@ -436,7 +442,7 @@ pub fn veteran_rig(s: &VeteranSources) -> RigCharacter {
             0.26,
             false,
             olive,
-            flip,
+            Quat::IDENTITY,
         );
     }
     if let Some(bp) = s.backpack {
@@ -448,18 +454,18 @@ pub fn veteran_rig(s: &VeteranSources) -> RigCharacter {
             0.52,
             false,
             tan * 0.8,
-            flip,
+            Quat::IDENTITY,
         );
     }
     if let Some(rf) = s.rifle {
         // Slung diagonally across the back until a proper held pose exists.
-        let sling = flip * Quat::from_rotation_z(0.6);
+        let sling = Quat::from_rotation_z(0.6);
         add(
             rf,
             joint::SPINE,
             rf.anchor(0.5, 0.5, 0.5),
-            Vec3::new(0.0, 0.28, -0.30),
-            0.28,
+            Vec3::new(0.0, 0.30, -0.34),
+            0.34,
             false,
             gunmetal,
             sling,
@@ -494,7 +500,7 @@ pub fn veteran_rig(s: &VeteranSources) -> RigCharacter {
             dims.upperarm_len + 0.05,
             mirror_x,
             olive,
-            flip,
+            Quat::IDENTITY,
         );
         let fa = s.forearm.unwrap_or(arm);
         let fa_h = if s.forearm.is_some() {
@@ -510,7 +516,7 @@ pub fn veteran_rig(s: &VeteranSources) -> RigCharacter {
             fa_h,
             mirror_x,
             skin,
-            flip,
+            Quat::IDENTITY,
         );
         if let Some(h) = s.hand {
             add(
@@ -518,10 +524,10 @@ pub fn veteran_rig(s: &VeteranSources) -> RigCharacter {
                 wr,
                 h.anchor(0.5, 1.0, 0.5),
                 Vec3::ZERO,
-                0.19,
+                0.155,
                 mirror_x,
                 glove,
-                flip,
+                Quat::IDENTITY,
             );
         }
         let th = s.thigh.unwrap_or(leg);
@@ -533,7 +539,7 @@ pub fn veteran_rig(s: &VeteranSources) -> RigCharacter {
             dims.thigh_len + 0.05,
             mirror_x,
             trouser,
-            flip,
+            Quat::IDENTITY,
         );
         let sn = s.shin.unwrap_or(leg);
         add(
@@ -544,7 +550,7 @@ pub fn veteran_rig(s: &VeteranSources) -> RigCharacter {
             dims.shin_len + 0.04,
             mirror_x,
             trouser,
-            flip,
+            Quat::IDENTITY,
         );
         // Boot pivots above the heel, a third of the way along the foot.
         add(
@@ -555,7 +561,7 @@ pub fn veteran_rig(s: &VeteranSources) -> RigCharacter {
             dims.ankle_h + 0.10,
             mirror_x,
             leather,
-            flip,
+            Quat::IDENTITY,
         );
     }
     RigCharacter { skel, dims, parts }

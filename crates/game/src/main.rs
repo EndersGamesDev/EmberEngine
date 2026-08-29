@@ -111,6 +111,7 @@ fn load_part_character(
             mesh: first_mesh + i as u32,
             min,
             max,
+            flipped: true, // single-view concepts face the camera
         });
         meshes.push(mesh);
     }
@@ -678,6 +679,7 @@ fn main() {
                 mesh: MESH_MONUMENT,
                 min,
                 max,
+                flipped: true,
             }
         });
     }
