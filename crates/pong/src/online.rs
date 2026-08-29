@@ -67,6 +67,33 @@ pub(crate) fn load_assets() -> (Vec<ember_engine::MeshData>, Option<Assets>) {
     }
 }
 
+/// Environment textures, embedded so the wasm build ships them (arena v8).
+const TEX_FLOOR: &[u8] = include_bytes!("../../../assets/textures/floor_basalt.png");
+const TEX_WALL: &[u8] = include_bytes!("../../../assets/textures/wall_basalt.png");
+const TEX_ARMOR: &[u8] = include_bytes!("../../../assets/textures/player_armor.png");
+
+fn tex(bytes: &[u8], name: &str) -> Option<ember_engine::TextureData> {
+    match ember_engine::TextureData::from_png_bytes(bytes) {
+        Ok(t) => Some(t),
+        Err(e) => {
+            tracing::warn!(name, "texture decode failed ({e}); untextured");
+            None
+        }
+    }
+}
+
+/// Textured environment meshes, registered after the viewmodel GLB parts:
+/// env_base + 0 = floor plane (12x tiles), + 1 = wall/cover box (4x),
+/// + 2 = armor box (players, pads).
+pub(crate) fn env_meshes() -> Vec<ember_engine::MeshData> {
+    use ember_engine::MeshData;
+    vec![
+        MeshData::textured_plane(12.0, tex(TEX_FLOOR, "floor_basalt")),
+        MeshData::textured_box(4.0, tex(TEX_WALL, "wall_basalt")),
+        MeshData::textured_box(1.0, tex(TEX_ARMOR, "player_armor")),
+    ]
+}
+
 /// Weapon-level accent color (the glow strip on the pistol).
 fn weapon_accent(level: u8) -> Vec3 {
     match level {
@@ -252,6 +279,8 @@ pub struct ShooterGame {
     since_ping: f32,
     since_status: f32,
     lost: bool,
+    /// First mesh id of env_meshes() (floor, wall, armor); 0 = untextured.
+    env_base: u32,
 }
 
 impl ShooterGame {
@@ -294,7 +323,13 @@ impl ShooterGame {
             since_ping: 0.0,
             since_status: 0.0,
             lost: false,
+            env_base: 0,
         })
+    }
+
+    /// Where env_meshes() got registered (set by run_online after load).
+    pub fn set_env_base(&mut self, base: u32) {
+        self.env_base = base;
     }
 
     fn render_pos(&self, id: u8) -> Vec2 {
@@ -717,14 +752,29 @@ impl EmberGame for ShooterGame {
         };
 
         // Floor + enclosing walls (tall enough to feel like a room).
+        // env_base > 0: textured basalt set (arena v8); else the classic flats.
+        let env = self.env_base;
         inst(&mut frame, Vec3::new(0.0, -0.5, 0.0), Vec3::new(half * 2.0 + 2.0, 1.0, half * 2.0 + 2.0), Vec3::new(0.12, 0.13, 0.17));
+        if env > 0 {
+            frame.instances.push(
+                Instance::new(Vec3::new(0.0, 0.004, 0.0), Vec3::new(half * 2.0 + 2.0, 1.0, half * 2.0 + 2.0), Vec3::ONE)
+                    .with_mesh(env),
+            );
+        }
         for (px, pz, sx, sz) in [
             (half + 0.45, 0.0, 0.9, half * 2.0 + 2.7),
             (-half - 0.45, 0.0, 0.9, half * 2.0 + 2.7),
             (0.0, half + 0.45, half * 2.0 + 2.7, 0.9),
             (0.0, -half - 0.45, half * 2.0 + 2.7, 0.9),
         ] {
-            inst(&mut frame, Vec3::new(px, 1.75, pz), Vec3::new(sx, 3.5, sz), Vec3::new(0.26, 0.28, 0.34));
+            if env > 0 {
+                frame.instances.push(
+                    Instance::new(Vec3::new(px, 1.75, pz), Vec3::new(sx, 3.5, sz), Vec3::splat(0.95))
+                        .with_mesh(env + 1),
+                );
+            } else {
+                inst(&mut frame, Vec3::new(px, 1.75, pz), Vec3::new(sx, 3.5, sz), Vec3::new(0.26, 0.28, 0.34));
+            }
         }
         // Weapon-upgrade pads: base slab always, a spinning pickup while
         // active (positions are seeded, availability comes from State).
@@ -756,12 +806,13 @@ impl EmberGame for ShooterGame {
             let cx = (o.min[0] + o.max[0]) * 0.5;
             let cz = (o.min[1] + o.max[1]) * 0.5;
             let h = obstacle_height(o);
-            inst(
-                &mut frame,
-                Vec3::new(cx, h * 0.5, cz),
-                Vec3::new(o.max[0] - o.min[0], h, o.max[1] - o.min[1]),
-                Vec3::new(0.30, 0.33, 0.40),
-            );
+            let pos = Vec3::new(cx, h * 0.5, cz);
+            let size = Vec3::new(o.max[0] - o.min[0], h, o.max[1] - o.min[1]);
+            if env > 0 {
+                frame.instances.push(Instance::new(pos, size, Vec3::splat(0.85)).with_mesh(env + 1));
+            } else {
+                inst(&mut frame, pos, size, Vec3::new(0.30, 0.33, 0.40));
+            }
         }
 
         // Other players (my own body is the camera).
@@ -781,8 +832,20 @@ impl EmberGame for ShooterGame {
             } else {
                 (1.1, 1.35, 0.85, 2.0)
             };
-            inst(&mut frame, Vec3::new(pos.x, body_h * 0.5, pos.y), Vec3::new(1.0, body_h, 1.0), color);
-            inst(&mut frame, Vec3::new(pos.x, head_y, pos.y), Vec3::splat(0.55), color * 0.7);
+            // Armor-textured body/head when env meshes exist (team tint stays).
+            if env > 0 {
+                frame.instances.push(
+                    Instance::new(Vec3::new(pos.x, body_h * 0.5, pos.y), Vec3::new(1.0, body_h, 1.0), color)
+                        .with_mesh(env + 2),
+                );
+                frame.instances.push(
+                    Instance::new(Vec3::new(pos.x, head_y, pos.y), Vec3::splat(0.55), color * 0.7)
+                        .with_mesh(env + 2),
+                );
+            } else {
+                inst(&mut frame, Vec3::new(pos.x, body_h * 0.5, pos.y), Vec3::new(1.0, body_h, 1.0), color);
+                inst(&mut frame, Vec3::new(pos.x, head_y, pos.y), Vec3::splat(0.55), color * 0.7);
+            }
             let hand = Vec3::new(pos.x, hand_y, pos.y) + Vec3::new(aim.x, 0.0, aim.y) * 0.55;
             let accent = weapon_accent(p.weapon);
             if let Some(a) = &self.assets {

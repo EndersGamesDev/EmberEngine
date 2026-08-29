@@ -213,8 +213,12 @@ pub fn run_online(cfg: OnlineConfig) -> Result<(), String> {
     // Tracing first, so asset-loading diagnostics are visible.
     #[cfg(not(target_arch = "wasm32"))]
     ember_engine::init_diagnostics();
-    let (meshes, assets) = online::load_assets();
-    let game = online::ShooterGame::connect(&cfg, assets)?;
+    let (mut meshes, assets) = online::load_assets();
+    // Textured environment set (arena v8): registered after the GLB parts.
+    let env_base = meshes.len() as u32 + 1; // 0 is the built-in cube
+    meshes.extend(online::env_meshes());
+    let mut game = online::ShooterGame::connect(&cfg, assets)?;
+    game.set_env_base(env_base);
     ember_engine::run(
         EngineConfig {
             title: format!("ember arena — {}", cfg.lobby),

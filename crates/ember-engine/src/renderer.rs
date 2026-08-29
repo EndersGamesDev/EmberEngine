@@ -40,9 +40,9 @@ pub struct TextureData {
     pub rgba8: Vec<u8>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl TextureData {
-    /// Decode PNG bytes (e.g. from include_bytes!) into RGBA8.
+    /// Decode PNG bytes (e.g. from include_bytes!) into RGBA8. Works on all
+    /// targets — wasm games embed their texture bytes.
     pub fn from_png_bytes(bytes: &[u8]) -> Result<Self, String> {
         let img = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
             .map_err(|e| e.to_string())?
@@ -50,6 +50,65 @@ impl TextureData {
         Ok(Self { width: img.width(), height: img.height(), rgba8: img.into_raw() })
     }
 }
+
+impl MeshData {
+    /// Axis-aligned unit box, every face UV-tiled `tiles` times.
+    pub fn textured_box(tiles: f32, texture: Option<TextureData>) -> Self {
+        let mut vertices = Vec::with_capacity(36);
+        let uvs = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+        for (n, u, v) in CUBE_FACES {
+            let n3 = Vec3::from(n);
+            let u3 = Vec3::from(u);
+            let v3 = Vec3::from(v);
+            let center = n3 * 0.5;
+            let corners = [
+                center - u3 * 0.5 - v3 * 0.5,
+                center + u3 * 0.5 - v3 * 0.5,
+                center + u3 * 0.5 + v3 * 0.5,
+                center - u3 * 0.5 + v3 * 0.5,
+            ];
+            for idx in [0usize, 1, 2, 0, 2, 3] {
+                vertices.push(MeshVertex {
+                    pos: corners[idx].to_array(),
+                    normal: n,
+                    uv: [uvs[idx][0] * tiles, uvs[idx][1] * tiles],
+                });
+            }
+        }
+        Self { vertices, texture }
+    }
+
+    /// Flat unit plane at y = 0 facing +Y, UVs tiled `tiles` times.
+    pub fn textured_plane(tiles: f32, texture: Option<TextureData>) -> Self {
+        let corners = [
+            Vec3::new(-0.5, 0.0, -0.5),
+            Vec3::new(0.5, 0.0, -0.5),
+            Vec3::new(0.5, 0.0, 0.5),
+            Vec3::new(-0.5, 0.0, 0.5),
+        ];
+        let uvs = [[0.0, 0.0], [tiles, 0.0], [tiles, tiles], [0.0, tiles]];
+        let mut vertices = Vec::with_capacity(6);
+        for idx in [0usize, 1, 2, 0, 2, 3] {
+            vertices.push(MeshVertex {
+                pos: corners[idx].to_array(),
+                normal: [0.0, 1.0, 0.0],
+                uv: uvs[idx],
+            });
+        }
+        Self { vertices, texture }
+    }
+}
+
+/// (normal, tangent u, tangent v) per cube face — shared by the built-in
+/// cube and MeshData::textured_box.
+const CUBE_FACES: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
+    ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+    ([0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+    ([1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]),
+    ([-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]),
+    ([0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]),
+    ([0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+];
 
 /// One draw unit: a colored mesh instance (default: the unit cube),
 /// optionally rotated around Y.
