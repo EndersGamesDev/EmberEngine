@@ -45,6 +45,16 @@ for mat in bpy.data.materials:
 # Join every mesh into one object: glTF then exports one mesh with one
 # primitive per material (4 textures total instead of one copy per part).
 meshes = [o for o in bpy.data.objects if o.type == "MESH"]
+# Join merges UV layers by name; mismatched names leave TEXCOORD_0 empty
+# and the model samples a single texel. Normalize to one shared name.
+for o in meshes:
+    me = o.data
+    if not me.uv_layers:
+        continue
+    keep = me.uv_layers.active or me.uv_layers[0]
+    for extra in [layer for layer in me.uv_layers if layer != keep]:
+        me.uv_layers.remove(extra)
+    keep.name = "UVMap"
 bpy.ops.object.select_all(action="DESELECT")
 for o in meshes:
     o.select_set(True)

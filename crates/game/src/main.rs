@@ -127,6 +127,87 @@ fn load_part_character(
     (meshes, Some(pc), sources)
 }
 
+/// Load the artist-made skinned character: swat-parts.glb (one mesh per
+/// rig joint, textured) plus swat-rig.json (bind-pose joint positions).
+/// Both are produced by tools/swat_split.py.
+fn load_skinned_character(
+    first_mesh: u32,
+) -> (Vec<MeshData>, Option<ember_engine::rig::RigCharacter>) {
+    use ember_engine::glam::Vec3;
+    use ember_engine::rig::joint;
+
+    const JOINT_NAMES: [&str; joint::COUNT] = [
+        "root", "spine", "neck", "shoulder_l", "elbow_l", "wrist_l", "shoulder_r", "elbow_r",
+        "wrist_r", "hip_l", "knee_l", "ankle_l", "hip_r", "knee_r", "ankle_r",
+    ];
+    let base = [
+        format!("{}/../../assets/models", env!("CARGO_MANIFEST_DIR")),
+        "assets/models".to_string(),
+    ];
+    for dir in base {
+        let (Ok(glb), Ok(json)) = (
+            std::fs::read(format!("{dir}/swat-parts.glb")),
+            std::fs::read_to_string(format!("{dir}/swat-rig.json")),
+        ) else {
+            continue;
+        };
+        // Bind positions: {"joints": {"root": [x, y, z], ...}}.
+        let mut bind = [Vec3::ZERO; joint::COUNT];
+        let mut missing = None;
+        for (i, name) in JOINT_NAMES.iter().enumerate() {
+            match parse_joint(&json, name) {
+                Some(v) => bind[i] = v,
+                None => missing = Some(*name),
+            }
+        }
+        if let Some(name) = missing {
+            tracing::error!(name, "swat-rig.json is missing a joint; skipping skinned model");
+            return (Vec::new(), None);
+        }
+        let parts = match ember_engine::assets::load_glb(&glb) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!(error = %e, "swat-parts.glb load failed");
+                return (Vec::new(), None);
+            }
+        };
+        // Node names are "rig_<joint>"; anything else is ignored.
+        let mut meshes = Vec::new();
+        let mut bound = Vec::new();
+        for part in parts {
+            let stem = part.name.trim_start_matches("rig_");
+            let stem = stem.split('.').next().unwrap_or(stem);
+            let Some(j) = JOINT_NAMES.iter().position(|n| *n == stem) else {
+                tracing::warn!(name = part.name, "skinned part has no matching joint");
+                continue;
+            };
+            bound.push((first_mesh + meshes.len() as u32, j));
+            meshes.push(part.mesh);
+        }
+        if bound.is_empty() {
+            tracing::error!("swat-parts.glb has no rig_<joint> nodes");
+            return (Vec::new(), None);
+        }
+        tracing::info!(parts = bound.len(), "skinned character loaded");
+        let rc = ember_engine::rig::skinned_rig(&bind, &bound);
+        return (meshes, Some(rc));
+    }
+    (Vec::new(), None)
+}
+
+/// Pull one `"name": [x, y, z]` triple out of the rig JSON. Small enough
+/// to not be worth a serde dependency in the game crate.
+fn parse_joint(json: &str, name: &str) -> Option<ember_engine::glam::Vec3> {
+    let start = json.find(&format!("\"{name}\""))? + name.len() + 2;
+    let open = start + json[start..].find('[')?;
+    let close = open + json[open..].find(']')?;
+    let nums: Vec<f32> = json[open + 1..close]
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    (nums.len() == 3).then(|| ember_engine::glam::Vec3::new(nums[0], nums[1], nums[2]))
+}
+
 /// Fixed camera from EMBER_CAM ("ex,ey,ez,tx,ty,tz"), for reviewing assets
 /// up close in screenshots. Parsed once; None when unset or malformed.
 fn debug_camera() -> Option<Camera> {
@@ -351,6 +432,8 @@ struct Game {
     monument_parts: u32,
     /// Draw the (artist-made) full-body mesh instead of the jointed rig.
     prefer_mesh: bool,
+    /// The artist-made model split per joint and driven by the rig.
+    skinned_character: Option<ember_engine::rig::RigCharacter>,
     /// AI-generated full-body player mesh; None = blocky humanoid fallback.
     mesh_character: Option<character::MeshCharacter>,
     /// Articulated five-part AI character (preferred when present).
@@ -446,6 +529,13 @@ impl Game {
         phase: f32,
         amp: f32,
     ) {
+        // Artist-made skinned model first: AAA meshes on the jointed rig.
+        if let Some(sc) = &self.skinned_character {
+            let pose = ember_engine::rig::walk_pose(phase, amp, 0.0, self.time_s, &sc.dims);
+            let scale = if is_me { 1.1 } else { 1.0 };
+            ember_engine::rig::push_rig(frame, &sc.parts, &sc.skel, &pose, pos, yaw, color, scale);
+            return;
+        }
         if self.prefer_mesh {
             if let Some(mc) = &self.mesh_character {
                 character::push_character_mesh(frame, pos, yaw, color, is_me, phase, mc);
@@ -647,16 +737,26 @@ fn main() {
     let monument_parts = monument.len() as u32;
     let (char_meshes, mesh_character, swat_loaded) =
         load_mesh_character(MESH_MONUMENT + monument_parts);
-    // The artist-made swat model outranks the jointed rig visually;
-    // EMBER_CHAR=rig compares against the rig again.
-    let prefer_mesh = swat_loaded && std::env::var("EMBER_CHAR").as_deref() != Ok("rig");
-    let (part_meshes, part_character, part_sources) =
-        load_part_character(MESH_MONUMENT + monument_parts + char_meshes.len() as u32);
+    // The artist-made model split per joint: AAA meshes AND animation.
+    // EMBER_CHAR=rig falls back to the AI-generated rig, =mesh to the
+    // unanimated full-body model.
+    let char_pref = std::env::var("EMBER_CHAR").unwrap_or_default();
+    let (skinned_meshes, skinned_character) = if char_pref == "rig" || char_pref == "mesh" {
+        (Vec::new(), None)
+    } else {
+        load_skinned_character(MESH_MONUMENT + monument_parts + char_meshes.len() as u32)
+    };
+    let prefer_mesh = swat_loaded && char_pref == "mesh";
+    let (part_meshes, part_character, part_sources) = load_part_character(
+        MESH_MONUMENT + monument_parts + (char_meshes.len() + skinned_meshes.len()) as u32,
+    );
     // Jointed rig: dedicated v2 segment GLBs (assets/models/parts2/vet-*.glb)
     // upgrade the character part by part; the v1 five + monument helmet fill
     // whatever is missing. EMBER_CHAR=puppet keeps the old path.
     let mut extra_meshes: Vec<MeshData> = Vec::new();
-    let mut next_id = MESH_MONUMENT + monument_parts + (char_meshes.len() + part_meshes.len()) as u32;
+    let mut next_id = MESH_MONUMENT
+        + monument_parts
+        + (char_meshes.len() + skinned_meshes.len() + part_meshes.len()) as u32;
     let mut load_v2 = |stem: &str| -> Option<character::PartSource> {
         let candidates = [
             format!(
@@ -736,6 +836,7 @@ fn main() {
     ];
     meshes.extend(monument);
     meshes.extend(char_meshes);
+    meshes.extend(skinned_meshes);
     meshes.extend(part_meshes);
     meshes.extend(extra_meshes);
 
@@ -763,6 +864,7 @@ fn main() {
             part_character,
             rig_character,
             prefer_mesh,
+            skinned_character,
             time_s: 0.0,
         },
     );

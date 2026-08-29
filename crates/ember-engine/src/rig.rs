@@ -43,7 +43,33 @@ pub struct JointDef {
 
 pub struct Skeleton {
     pub joints: [JointDef; joint::COUNT],
+    /// Per-joint rest correction, applied inside the joint before the
+    /// animation rotation. Identity for rigs authored in the engine's rest
+    /// pose; for an imported model it takes the bind pose (arms out) to a
+    /// natural standing pose, so one animation drives both.
+    pub correction: [Quat; joint::COUNT],
 }
+
+/// Parent of each joint, shared by every skeleton builder.
+const PARENTS: [Option<usize>; joint::COUNT] = {
+    use joint::*;
+    let mut p = [None; COUNT];
+    p[SPINE] = Some(ROOT);
+    p[NECK] = Some(SPINE);
+    p[SHOULDER_L] = Some(SPINE);
+    p[ELBOW_L] = Some(SHOULDER_L);
+    p[WRIST_L] = Some(ELBOW_L);
+    p[SHOULDER_R] = Some(SPINE);
+    p[ELBOW_R] = Some(SHOULDER_R);
+    p[WRIST_R] = Some(ELBOW_R);
+    p[HIP_L] = Some(ROOT);
+    p[KNEE_L] = Some(HIP_L);
+    p[ANKLE_L] = Some(KNEE_L);
+    p[HIP_R] = Some(ROOT);
+    p[KNEE_R] = Some(HIP_R);
+    p[ANKLE_R] = Some(KNEE_R);
+    p
+};
 
 /// Segment lengths of the humanoid skeleton, in character units
 /// (a ~1.8-tall figure; `push_rig`'s scale_mult resizes the whole rig).
@@ -112,7 +138,109 @@ pub fn humanoid(d: &HumanoidDims) -> Skeleton {
         set(knee, Some(hip), Vec3::new(0.0, -d.thigh_len, 0.0));
         set(ankle, Some(knee), Vec3::new(0.0, -d.shin_len, 0.0));
     }
-    Skeleton { joints }
+    Skeleton {
+        joints,
+        correction: [Quat::IDENTITY; COUNT],
+    }
+}
+
+/// Build a skeleton from an imported model's bind-pose joint positions
+/// (engine space, Y up), plus the dimensions its animation needs.
+///
+/// Joint offsets come straight from the measured positions, so meshes
+/// anchored at those points stay connected. Corrections rotate each limb
+/// from its bind direction to a natural standing direction: an arms-out
+/// A-pose becomes a figure with its arms down, without touching the mesh.
+pub fn skeleton_from_bind(pos: &[Vec3; joint::COUNT]) -> (Skeleton, HumanoidDims) {
+    use joint::*;
+    let mut joints = [JointDef {
+        parent: None,
+        offset: Vec3::ZERO,
+    }; COUNT];
+    for j in 0..COUNT {
+        let parent = PARENTS[j];
+        joints[j] = JointDef {
+            parent,
+            offset: match parent {
+                Some(p) => pos[j] - pos[p],
+                None => Vec3::ZERO,
+            },
+        };
+    }
+
+    // Rest direction per limb joint: arms hang slightly out and forward,
+    // legs straight down. Joints not listed keep their parent's frame.
+    let want = |x: f32, y: f32, z: f32| Vec3::new(x, y, z).normalize();
+    let targets: [(usize, usize, Vec3); 8] = [
+        (SHOULDER_L, ELBOW_L, want(0.18, -1.0, 0.06)),
+        (ELBOW_L, WRIST_L, want(0.06, -1.0, 0.10)),
+        (SHOULDER_R, ELBOW_R, want(-0.18, -1.0, 0.06)),
+        (ELBOW_R, WRIST_R, want(-0.06, -1.0, 0.10)),
+        (HIP_L, KNEE_L, want(0.0, -1.0, 0.02)),
+        (KNEE_L, ANKLE_L, want(0.0, -1.0, -0.02)),
+        (HIP_R, KNEE_R, want(0.0, -1.0, 0.02)),
+        (KNEE_R, ANKLE_R, want(0.0, -1.0, -0.02)),
+    ];
+    // acc[j] is the joint's world rotation at rest; a joint's correction is
+    // whatever its parent's rest frame still needs to reach that.
+    let mut acc = [Quat::IDENTITY; COUNT];
+    let mut correction = [Quat::IDENTITY; COUNT];
+    for j in 0..COUNT {
+        let parent_acc = PARENTS[j].map_or(Quat::IDENTITY, |p| acc[p]);
+        acc[j] = match targets.iter().find(|(from, ..)| *from == j) {
+            Some((_, child, desired)) => {
+                let bind_dir = (pos[*child] - pos[j]).normalize_or_zero();
+                if bind_dir == Vec3::ZERO {
+                    parent_acc
+                } else {
+                    Quat::from_rotation_arc(bind_dir, *desired)
+                }
+            }
+            None => parent_acc,
+        };
+        correction[j] = (parent_acc.inverse() * acc[j]).normalize();
+    }
+
+    let len = |a: usize, b: usize| (pos[b] - pos[a]).length();
+    let thigh_len = len(HIP_L, KNEE_L);
+    let shin_len = len(KNEE_L, ANKLE_L);
+    let ankle_h = pos[ANKLE_L].y;
+    let dims = HumanoidDims {
+        // Keeps the soles on the ground once the legs stand vertical.
+        pelvis_h: thigh_len + shin_len + ankle_h,
+        hip_w: (pos[HIP_L].x - pos[HIP_R].x).abs(),
+        thigh_len,
+        shin_len,
+        ankle_h,
+        spine_len: len(SPINE, NECK),
+        shoulder_w: (pos[SHOULDER_L].x - pos[SHOULDER_R].x).abs(),
+        upperarm_len: len(SHOULDER_L, ELBOW_L),
+        forearm_len: len(ELBOW_L, WRIST_L),
+        neck_len: 0.13,
+    };
+    (Skeleton { joints, correction }, dims)
+}
+
+/// Assemble a rig from an imported skinned model: every part is already in
+/// bind space, so its anchor is its joint's bind position, at model scale
+/// and unrotated. `parts` pairs a registered mesh id with its joint.
+pub fn skinned_rig(bind: &[Vec3; joint::COUNT], parts: &[(u32, usize)]) -> RigCharacter {
+    let (skel, dims) = skeleton_from_bind(bind);
+    let parts = parts
+        .iter()
+        .map(|&(mesh, joint)| RigPart {
+            mesh,
+            joint,
+            anchor: bind[joint],
+            offset: Vec3::ZERO,
+            scale: 1.0,
+            pre_rot: Quat::IDENTITY,
+            mirror_x: false,
+            // Textured model: keep the authored colors.
+            tint: None,
+        })
+        .collect();
+    RigCharacter { skel, dims, parts }
 }
 
 /// A posed skeleton: per-joint local rotation plus the root position
@@ -139,7 +267,12 @@ pub fn world_joints(skel: &Skeleton, pose: &Pose) -> [(Vec3, Quat); joint::COUNT
             Some(p) => out[p],
             None => (pose.root_pos, Quat::IDENTITY),
         };
-        out[i] = (pp + pr * j.offset, (pr * pose.local_rot[i]).normalize());
+        // The correction sits innermost: it poses the bind skeleton, then
+        // the animation swings that corrected limb in its parent's frame.
+        out[i] = (
+            pp + pr * j.offset,
+            (pr * pose.local_rot[i] * skel.correction[i]).normalize(),
+        );
     }
     out
 }
@@ -647,6 +780,61 @@ mod tests {
             "right ankle z {}",
             j[joint::ANKLE_R].0.z
         );
+    }
+
+    /// An imported A-pose bind skeleton, arms out along X (Mixamo-like).
+    fn bind_a_pose() -> [Vec3; joint::COUNT] {
+        use joint::*;
+        let mut p = [Vec3::ZERO; COUNT];
+        p[ROOT] = Vec3::new(0.0, 0.96, 0.0);
+        p[SPINE] = Vec3::new(0.0, 1.07, 0.0);
+        p[NECK] = Vec3::new(0.0, 1.51, 0.0);
+        for (s, sh, el, wr, hip, knee, ankle) in [
+            (1.0f32, SHOULDER_L, ELBOW_L, WRIST_L, HIP_L, KNEE_L, ANKLE_L),
+            (-1.0, SHOULDER_R, ELBOW_R, WRIST_R, HIP_R, KNEE_R, ANKLE_R),
+        ] {
+            p[sh] = Vec3::new(s * 0.16, 1.42, 0.0);
+            p[el] = Vec3::new(s * 0.39, 1.34, 0.0);
+            p[wr] = Vec3::new(s * 0.58, 1.28, 0.0);
+            p[hip] = Vec3::new(s * 0.11, 0.90, 0.0);
+            p[knee] = Vec3::new(s * 0.13, 0.47, 0.0);
+            p[ankle] = Vec3::new(s * 0.16, 0.14, 0.0);
+        }
+        p
+    }
+
+    #[test]
+    fn imported_bind_pose_retargets_arms_down() {
+        let bind = bind_a_pose();
+        let (skel, dims) = skeleton_from_bind(&bind);
+        // Segment lengths survive the retarget.
+        assert!((dims.upperarm_len - (bind[joint::ELBOW_L] - bind[joint::SHOULDER_L]).length()).abs() < 1e-5);
+        assert!((dims.pelvis_h - (dims.thigh_len + dims.shin_len + dims.ankle_h)).abs() < 1e-5);
+
+        let j = world_joints(&skel, &walk_pose(0.0, 0.0, 0.0, 0.0, &dims));
+        // Arms hang: each wrist sits well below its shoulder and much
+        // closer to the body than the arms-out bind pose.
+        for (sh, wr) in [(joint::SHOULDER_L, joint::WRIST_L), (joint::SHOULDER_R, joint::WRIST_R)] {
+            let (s, w) = (j[sh].0, j[wr].0);
+            assert!(w.y < s.y - 0.4, "wrist y {} vs shoulder {}", w.y, s.y);
+            assert!((w.x - s.x).abs() < 0.2, "wrist x drift {}", w.x - s.x);
+        }
+        // Soles land on the ground and the head stays on top.
+        assert!(j[joint::ANKLE_L].0.y < 0.20, "ankle {}", j[joint::ANKLE_L].0.y);
+        assert!(j[joint::NECK].0.y > 1.4, "neck {}", j[joint::NECK].0.y);
+    }
+
+    #[test]
+    fn retargeted_arms_still_swing_when_walking() {
+        let bind = bind_a_pose();
+        let (skel, dims) = skeleton_from_bind(&bind);
+        let front = world_joints(&skel, &walk_pose(std::f32::consts::FRAC_PI_2, 1.0, 0.0, 0.0, &dims));
+        let back = world_joints(&skel, &walk_pose(-std::f32::consts::FRAC_PI_2, 1.0, 0.0, 0.0, &dims));
+        // The same wrist travels fore/aft between opposite phases.
+        let travel = (front[joint::WRIST_L].0.z - back[joint::WRIST_L].0.z).abs();
+        assert!(travel > 0.15, "wrist z travel {travel}");
+        // Legs still swing in opposition.
+        assert!(front[joint::ANKLE_L].0.z > front[joint::ANKLE_R].0.z);
     }
 
     #[test]
