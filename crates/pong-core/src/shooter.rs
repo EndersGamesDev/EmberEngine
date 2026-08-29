@@ -1458,6 +1458,15 @@ mod tests {
             sim.obstacles.clear();
             sim.pads.clear();
             sim.add_player(0);
+            // Headroom, so this test measures what it claims to. At the
+            // clamp a round descends tan(1.45) * BULLET_SPEED * dt ~= 4.67
+            // units in its FIRST tick, and bullets are extended into the
+            // list before that same tick's sweep runs — so a straight-down
+            // shot fired from ground level is culled by the floor before it
+            // can be inspected at all. That culling is correct, and is
+            // asserted on its own in the test below; it is just not the
+            // property being pinned here.
+            sim.players[0].y = 8.0;
             let mut inputs = HashMap::new();
             inputs.insert(
                 0,
@@ -1589,5 +1598,48 @@ mod tests {
         // The clamp is what keeps tan() finite: an unclamped pi/2 would make
         // the vertical speed infinite and the bullet's height NaN.
         assert!(sim.players[0].pitch.tan().is_finite());
+    }
+
+    #[test]
+    fn a_shot_into_the_ground_is_culled_by_the_floor() {
+        // The behaviour that broke the test above, pinned in its own right:
+        // firing at your own feet must stop at the floor, not leave a round
+        // skimming along underneath the arena hitting people from below.
+        // The spawn happens before the same tick's sweep, so at the clamp
+        // this is culled within one tick of being fired.
+        let mut sim = Sim::new(25);
+        sim.obstacles.clear();
+        sim.pads.clear();
+        sim.add_player(0);
+        let mut inputs = HashMap::new();
+        inputs.insert(
+            0,
+            PlayerIn {
+                aim: [1.0, 0.0],
+                pitch: -MAX_PITCH,
+                fire: true,
+                ..Default::default()
+            },
+        );
+        step_with(&mut sim, &inputs);
+        assert!(
+            sim.bullets.is_empty(),
+            "a straight-down shot must be stopped by the floor, not fly under the arena"
+        );
+
+        // Negative control: the same shot from high enough up survives the
+        // tick, so the assertion above is about the floor and not about
+        // steep shots failing to spawn at all.
+        let mut sim = Sim::new(25);
+        sim.obstacles.clear();
+        sim.pads.clear();
+        sim.add_player(0);
+        sim.players[0].y = 8.0;
+        step_with(&mut sim, &inputs);
+        assert_eq!(
+            sim.bullets.len(),
+            1,
+            "the same steep shot with headroom below must still be in flight"
+        );
     }
 }

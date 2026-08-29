@@ -42,7 +42,7 @@ Mesh ids are allocated in a fixed order in `crates/pong/src/lib.rs`. Adding part
 
 ## Assets
 
-**glTF/GLB only.** There is no FBX importer anywhere in the workspace, and adding one is not the answer — the pipeline converts offline. Full recipe, the five silent-failure modes, and the conventions: **`docs/model-pipeline.md`**. Read it before converting anything.
+**glTF/GLB only.** There is no FBX importer anywhere in the workspace, and adding one is not the answer — the pipeline converts offline. Full recipe, the four production paths, the silent-failure modes and the conventions: **`docs/asset-pipeline.md`**. Read it before converting anything.
 
 Large artist source stays **out of git** (see `.gitignore`); only the converted `.glb` and its sidecar are committed.
 
