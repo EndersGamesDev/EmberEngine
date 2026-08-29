@@ -130,8 +130,13 @@ Worked example: `tools/swat_split.py` (Mixamo-rigged FBX → 15 GLB parts
 - **No blending** (`BlendState::REPLACE`): there is no additive or
   transparent anything. A muzzle flash or a glow can only be an opaque
   mesh.
-- `baseColorFactor` should be **white**. `push_parts` multiplies its own
-  per-instance colour in, so a tinted factor double-tints the texture.
+- `baseColorFactor` should be **white**, and the failure differs by path.
+  The viewmodel path (`push_parts`) multiplies its own per-instance colour
+  in, so a tinted factor **double-tints**. The skinned character path
+  ignores the factor entirely — `skinned_from_glb` takes only `part.mesh`
+  and `push_rig` supplies the colour — so a tinted factor is silently
+  **discarded**. Different symptom, same rule: author it white and let the
+  runtime colour it.
 
 ## Running it for a new model
 
@@ -190,7 +195,11 @@ Miss a rename and every remote player sprouts your prop, silently. Verify the na
 
 So any prop that will be animated per-part ships a **sidecar JSON** beside the GLB carrying each part's pivot in engine space — `swat-rig.json` is the precedent, written by `swat_split.py`, read by `rig.rs`.
 
-**Key order in that sidecar matters.** `rig.rs`'s reader is a substring scanner: it finds `"<name>"` and takes the **next** `[ … ]`. If a bare list of part-name strings appears before the pivot map, every part's first match lands inside that list and the next `[` is the *first* part's pivot — so every part silently shares one pivot, with no parse error. Put the per-part maps **first**, and never give a list of part names a key that could collide with a pivot key (`part_order`, not `parts`).
+**Key order in that sidecar used to matter, and the reason is worth keeping.** `rig.rs`'s reader is a substring scanner. It originally found `"<name>"` and took the **next** `[ … ]`, so a bare list of part-name strings written before the pivot map made every part's first match land inside that list — and every joint then silently resolved to the *first* pivot in the map, with no parse error. `swat-rig.json` escaped it only because its `"parts"` list happens to come last.
+
+Fixed in `bbe82c3`: the key must now be followed by a colon and an array, and every occurrence is tried, so order cannot matter. `rig_json_joints_resolve_whatever_the_key_order` pins it.
+
+The hazard is recorded because the parser is still a scanner rather than a real JSON reader, and the next format written against it can reintroduce the shape. Cheap insurance: give a list of part names a key that cannot collide with a pivot key — `part_order`, not `parts`.
 
 ## Driving the animation
 
