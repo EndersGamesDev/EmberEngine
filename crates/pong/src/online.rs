@@ -327,6 +327,15 @@ pub struct ShooterGame {
     /// Per-player (yaw, walk_phase, amplitude) + previous render position.
     anim: HashMap<u8, (f32, f32, f32)>,
     prev_pos: HashMap<u8, Vec2>,
+    // ---- shot-feel feedback (v9.1) ----
+    /// Crosshair hitmarker time remaining.
+    hitmarker_t: f32,
+    /// Kill-confirm marker time remaining.
+    kill_t: f32,
+    /// Per-victim white damage-flash time remaining.
+    flash: HashMap<u8, f32>,
+    /// Impact spark particles: (position, velocity, ttl).
+    particles: Vec<(Vec3, Vec3, f32)>,
 }
 
 impl ShooterGame {
@@ -373,6 +382,10 @@ impl ShooterGame {
             part_character: None,
             anim: HashMap::new(),
             prev_pos: HashMap::new(),
+            hitmarker_t: 0.0,
+            kill_t: 0.0,
+            flash: HashMap::new(),
+            particles: Vec::new(),
         })
     }
 
@@ -554,16 +567,34 @@ impl EmberGame for ShooterGame {
                             let my_id = new_me.id;
                             let my_gone = curr.get(&my_id).map(|e| e.0).unwrap_or(0)
                                 < prev_counts.get(&my_id).copied().unwrap_or(0);
-                            let enemy_hurt = players.iter().any(|p| {
-                                p.id != my_id
-                                    && self
-                                        .latest
-                                        .get(&p.id)
-                                        .map(|old| p.hp < old.hp)
-                                        .unwrap_or(false)
-                            });
-                            if my_gone && enemy_hurt {
+                            let hurt: Vec<(u8, f32, f32)> = players
+                                .iter()
+                                .filter(|p| {
+                                    p.id != my_id
+                                        && self
+                                            .latest
+                                            .get(&p.id)
+                                            .map(|old| p.hp < old.hp)
+                                            .unwrap_or(false)
+                                })
+                                .map(|p| (p.id, p.x, p.z))
+                                .collect();
+                            if my_gone && !hurt.is_empty() {
                                 sfx.push((Sfx::Hit, 0.35));
+                                // Visual confirmation: crosshair marker plus
+                                // a damage flash and spark burst on the victim.
+                                self.hitmarker_t = 0.14;
+                                for &(id, x, z) in &hurt {
+                                    self.flash.insert(id, 0.18);
+                                    for k in 0..6 {
+                                        let a = k as f32 * std::f32::consts::TAU / 6.0;
+                                        self.particles.push((
+                                            Vec3::new(x, 1.1, z),
+                                            Vec3::new(a.cos() * 2.2, 1.8, a.sin() * 2.2),
+                                            0.3,
+                                        ));
+                                    }
+                                }
                             }
                         }
                     }
@@ -630,6 +661,8 @@ impl EmberGame for ShooterGame {
                 S2C::Kill { killer, victim } => {
                     if Some(killer) == self.my_id {
                         sfx.push((Sfx::Kill, 0.5));
+                        // Big red confirm marker: the elimination register.
+                        self.kill_t = 0.55;
                     } else if Some(victim) == self.my_id {
                         sfx.push((Sfx::Death, 0.55));
                     } else {
@@ -787,6 +820,20 @@ impl EmberGame for ShooterGame {
 
         self.t += dt * (60.0 / STATE_EVERY_TICKS as f32);
 
+        // Shot-feel timers and impact particles.
+        self.hitmarker_t = (self.hitmarker_t - dt).max(0.0);
+        self.kill_t = (self.kill_t - dt).max(0.0);
+        self.flash.retain(|_, t| {
+            *t -= dt;
+            *t > 0.0
+        });
+        self.particles.retain_mut(|(p, v, ttl)| {
+            v.y -= 9.0 * dt;
+            *p += *v * dt;
+            *ttl -= dt;
+            *ttl > 0.0
+        });
+
         // ---- first-person camera at my PREDICTED position ----
         let my_pos = self.own_render;
         let (ps, pc) = self.pitch.sin_cos();
@@ -886,6 +933,20 @@ impl EmberGame for ShooterGame {
             } else {
                 (1.1, 1.35, 0.85, 2.0)
             };
+            // Hitbox truth ring: a flat plate exactly the server's hit
+            // circle footprint (radius PLAYER_R) — what you aim at is real.
+            let flash = self.flash.get(&id).copied().unwrap_or(0.0) / 0.18;
+            frame.instances.push(Instance::new(
+                Vec3::new(pos.x, 0.02, pos.y),
+                Vec3::new(1.2, 0.04, 1.2),
+                color * (0.45 + flash * 0.5),
+            ));
+            // Damage flash: victim blinks toward white.
+            let fc = Vec3::new(
+                color.x + (1.0 - color.x) * flash,
+                color.y + (1.0 - color.y) * flash,
+                color.z + (1.0 - color.z) * flash,
+            );
             // Articulated puppet when parts loaded; textured/plain boxes else.
             if let Some(pc) = &self.part_character {
                 let prev = self.prev_pos.insert(id, pos).unwrap_or(pos);
@@ -898,8 +959,8 @@ impl EmberGame for ShooterGame {
                     &mut frame,
                     pos,
                     aim_yaw,
-                    [color.x, color.y, color.z],
-                    1.0,
+                    [fc.x, fc.y, fc.z],
+                    0.95,
                     slot.1,
                     slot.2,
                     p.crouch,
@@ -936,6 +997,14 @@ impl EmberGame for ShooterGame {
             }
         }
 
+        // Impact sparks: short-lived glowing shards on confirmed hits.
+        for (p, _, ttl) in &self.particles {
+            frame.instances.push(
+                Instance::new(*p, Vec3::splat(0.09 * (ttl / 0.3)), Vec3::new(1.0, 0.62, 0.2))
+                    .with_yaw(*ttl * 12.0),
+            );
+        }
+
         // Bullets: glowing tracers near eye height, extrapolation bounded
         // to ~2 state intervals so stalls don't fly them through walls.
         let age = self.bullets_age.min(0.12);
@@ -946,6 +1015,27 @@ impl EmberGame for ShooterGame {
                 Vec3::splat(0.26),
                 GLOW_BLUE,
             );
+        }
+
+        // ---- crosshair markers: hit (white X) and kill (red X, larger) ----
+        if self.hitmarker_t > 0.0 || self.kill_t > 0.0 {
+            let f3 = Vec3::new(fx, 0.0, fz);
+            let right3 = Vec3::new(-fz, 0.0, fx);
+            let up = Vec3::Y;
+            let center = eye + Vec3::new(fx * pc, ps, fz * pc) * 1.2;
+            let (off, size, col) = if self.kill_t > 0.0 {
+                (0.045, 0.016, Vec3::new(1.0, 0.15, 0.1))
+            } else {
+                (0.028, 0.009, Vec3::new(1.0, 1.0, 1.0))
+            };
+            let _ = f3;
+            for (sx, sy) in [(-1.0f32, -1.0f32), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                frame.instances.push(Instance::new(
+                    center + right3 * (off * sx) + up * (off * sy),
+                    Vec3::splat(size),
+                    col,
+                ));
+            }
         }
 
         // ---- viewmodel: the sidearm in hand, plus muzzle flash ----
