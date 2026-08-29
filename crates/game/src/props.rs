@@ -41,6 +41,9 @@ pub fn load_layouts() -> Option<Layouts> {
     for path in candidates {
         if let Ok(text) = std::fs::read_to_string(&path) {
             match serde_json::from_str::<Layouts>(&text) {
+                Ok(l) if l.layouts.is_empty() => {
+                    tracing::warn!(path, "layout file has no layouts; ignoring");
+                }
                 Ok(l) => {
                     tracing::info!(path, layouts = l.layouts.len(), "arena layouts loaded");
                     return Some(l);
