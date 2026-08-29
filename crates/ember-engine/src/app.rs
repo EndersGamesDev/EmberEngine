@@ -72,6 +72,9 @@ struct App<G: EmberGame> {
     last_frame: Instant,
     /// Rate limit for stall warnings so one bad stretch doesn't spam.
     last_stall_warn: Option<Instant>,
+    /// Debug overlay / ATW rig (F3), native only.
+    #[cfg(not(target_arch = "wasm32"))]
+    overlay: Option<crate::overlay::Overlay>,
 }
 
 impl<G: EmberGame> ApplicationHandler for App<G> {
@@ -115,6 +118,10 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
             });
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.overlay = Some(crate::overlay::Overlay::new(&window));
+        }
         window.request_redraw();
         self.window = Some(window);
         self.last_frame = Instant::now();
@@ -132,6 +139,21 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        // Overlay first: F3 toggles it; a visible overlay may consume input.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let (Some(overlay), Some(window)) = (self.overlay.as_mut(), self.window.as_ref()) {
+            if let WindowEvent::KeyboardInput { event: key, .. } = &event {
+                if key.state == ElementState::Pressed
+                    && key.physical_key == PhysicalKey::Code(KeyCode::F3)
+                {
+                    overlay.visible = !overlay.visible;
+                    return;
+                }
+            }
+            if overlay.on_window_event(window, &event) {
+                return;
+            }
+        }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Focused(false) => self.input.clear(),
@@ -258,6 +280,24 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
 
                 let frame = self.game.update(&self.input, dt);
                 self.input.end_frame();
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Some(renderer) = self.renderer.as_mut() {
+                    let draw = match (self.overlay.as_mut(), self.window.as_ref()) {
+                        (Some(overlay), Some(window)) => {
+                            renderer.set_scene_hz_cap(overlay.scene_hz_cap);
+                            if overlay.visible {
+                                let age = renderer.scene_age_ms();
+                                let size = renderer.surface_size();
+                                Some(overlay.run(window, dt, age, size))
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    };
+                    renderer.render_with_overlay(&frame, draw);
+                }
+                #[cfg(target_arch = "wasm32")]
                 if let Some(renderer) = self.renderer.as_mut() {
                     renderer.render(&frame);
                 }
@@ -297,6 +337,8 @@ pub fn run<G: EmberGame + 'static>(config: EngineConfig, game: G) {
         input: InputState::default(),
         last_frame: Instant::now(),
         last_stall_warn: None,
+        #[cfg(not(target_arch = "wasm32"))]
+        overlay: None,
     };
 
     #[cfg(not(target_arch = "wasm32"))]

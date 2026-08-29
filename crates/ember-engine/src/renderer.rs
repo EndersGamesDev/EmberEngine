@@ -187,6 +187,13 @@ pub struct Renderer {
     present_pipeline_layout: wgpu::PipelineLayout,
     #[cfg(not(target_arch = "wasm32"))]
     shader_reload: ShaderReload,
+    /// Scene-pass Hz cap for the ATW rig; 0 = uncapped (overlay-controlled).
+    #[cfg(not(target_arch = "wasm32"))]
+    scene_hz_cap: f32,
+    #[cfg(not(target_arch = "wasm32"))]
+    last_scene_at: std::time::Instant,
+    #[cfg(not(target_arch = "wasm32"))]
+    egui_renderer: Option<egui_wgpu::Renderer>,
 }
 
 /// Tracks shader sources on disk for native WGSL hot-reload.
@@ -499,7 +506,30 @@ impl Renderer {
             present_pipeline_layout,
             #[cfg(not(target_arch = "wasm32"))]
             shader_reload: ShaderReload::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            scene_hz_cap: 0.0,
+            #[cfg(not(target_arch = "wasm32"))]
+            last_scene_at: std::time::Instant::now(),
+            #[cfg(not(target_arch = "wasm32"))]
+            egui_renderer: None,
         }
+    }
+
+    /// ATW rig: cap the scene pass rate (0 = uncapped). Presenter unaffected.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_scene_hz_cap(&mut self, hz: f32) {
+        self.scene_hz_cap = hz.max(0.0);
+    }
+
+    /// Milliseconds since the last scene pass actually rendered.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn scene_age_ms(&self) -> f32 {
+        self.last_scene_at.elapsed().as_secs_f32() * 1000.0
+    }
+
+    /// Current surface size in pixels.
+    pub fn surface_size(&self) -> [u32; 2] {
+        [self.config.width, self.config.height]
     }
 
     /// Resize only when the size actually changed (cheap to call per frame).
@@ -526,8 +556,36 @@ impl Renderer {
     }
 
     pub fn render(&mut self, frame: &Frame) {
+        self.render_impl(
+            frame,
+            #[cfg(not(target_arch = "wasm32"))]
+            None,
+        );
+    }
+
+    /// Render plus an optional overlay composited after the present pass
+    /// (presenter-side, never into the SceneFrame — ATW doc §6).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn render_with_overlay(&mut self, frame: &Frame, overlay: Option<crate::overlay::OverlayDraw>) {
+        self.render_impl(frame, overlay);
+    }
+
+    fn render_impl(
+        &mut self,
+        frame: &Frame,
+        #[cfg(not(target_arch = "wasm32"))] overlay: Option<crate::overlay::OverlayDraw>,
+    ) {
         #[cfg(not(target_arch = "wasm32"))]
         self.maybe_reload_shaders();
+
+        // ATW rig throttle: skip the scene pass while capped — the presenter
+        // below keeps re-presenting the last SceneFrame (that staleness is
+        // exactly what the rig exists to demonstrate).
+        #[cfg(not(target_arch = "wasm32"))]
+        let scene_pass_due = self.scene_hz_cap <= 0.0
+            || self.last_scene_at.elapsed().as_secs_f32() >= 1.0 / self.scene_hz_cap;
+        #[cfg(target_arch = "wasm32")]
+        let scene_pass_due = true;
 
         let surface_tex = match self.surface.get_current_texture() {
             Ok(t) => t,
@@ -545,6 +603,11 @@ impl Renderer {
             ..Default::default()
         });
 
+        let scene_cmd = if scene_pass_due {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.last_scene_at = std::time::Instant::now();
+        }
         let aspect = self.scene.width as f32 / self.scene.height.max(1) as f32;
         let vp = frame.camera.view_proj(aspect);
         self.queue
@@ -630,6 +693,10 @@ impl Renderer {
                 }
             }
         }
+        Some(scene_enc.finish())
+        } else {
+            None
+        };
 
         let mut present_enc = self
             .device
@@ -656,8 +723,54 @@ impl Renderer {
             pass.draw(0..3, 0..1);
         }
 
+        // Overlay (ATW doc §6): composited AFTER the warp/present pass onto
+        // the swapchain — UI never bakes into the reprojectable SceneFrame.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(draw) = overlay {
+            let egui_renderer = self.egui_renderer.get_or_insert_with(|| {
+                egui_wgpu::Renderer::new(
+                    &self.device,
+                    self.surface_view_format.unwrap_or(self.config.format),
+                    None,
+                    1,
+                    false,
+                )
+            });
+            for (id, delta) in &draw.textures_delta.set {
+                egui_renderer.update_texture(&self.device, &self.queue, *id, delta);
+            }
+            egui_renderer.update_buffers(
+                &self.device,
+                &self.queue,
+                &mut present_enc,
+                &draw.primitives,
+                &draw.screen,
+            );
+            {
+                let rpass = present_enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("overlay pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &surface_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                let mut rpass = rpass.forget_lifetime();
+                egui_renderer.render(&mut rpass, &draw.primitives, &draw.screen);
+            }
+            for id in &draw.textures_delta.free {
+                egui_renderer.free_texture(id);
+            }
+        }
+
         self.queue
-            .submit([scene_enc.finish(), present_enc.finish()]);
+            .submit(scene_cmd.into_iter().chain([present_enc.finish()]));
         surface_tex.present();
     }
 

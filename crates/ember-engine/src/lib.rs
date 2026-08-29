@@ -7,6 +7,8 @@
 //! `renderer` owns the GPU; nothing above it touches wgpu directly.
 
 pub mod assets;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod overlay;
 pub mod renderer;
 
 mod app;

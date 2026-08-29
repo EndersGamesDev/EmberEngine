@@ -20,6 +20,10 @@ tracing-subscriber.workspace = true
 tracing-log.workspace = true
 # PNG decode for EMBER_DEBUG_TEXTURE and native tooling paths.
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Debug overlay (ATW test rig): egui 0.31 pairs with wgpu 24 / winit 0.30.
+egui = "0.31"
+egui-wgpu = "0.31"
+egui-winit = "0.31"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wgpu = { workspace = true, features = ["webgl"] }
