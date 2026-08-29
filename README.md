@@ -94,7 +94,10 @@ unreachable server makes launch pause ~4 s before the offline fallback.
       compiled to wasm (WebGPU with WebGL2 fallback), hosted on GitHub Pages
 - [ ] 1. First triangle → textured cube → fly camera (WASD + mouse;
       fly camera lands as rotation-only warp, ATW stage B)
-- [ ] 2. glTF loading (Blender becomes the level editor)
+- [x] **2 (first half). glTF mesh pipeline**: Blender (scripted, headless)
+      → .glb → engine multi-mesh instancing; the arena viewmodel (pistol +
+      hands) is authored via `tools/make_assets.py`. Level editing and
+      textures still ahead.
 - [ ] 3. Depth buffer, Blinn-Phong lighting, basic shadow mapping
 - [ ] 4. Fixed-timestep loop + physics (rapier)
 - [ ] 5. egui debug overlay + hot-reloadable WGSL shaders

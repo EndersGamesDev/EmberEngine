@@ -13,9 +13,20 @@ pub enum Sfx {
     Kill,
     Death,
     Respawn,
+    Upgrade,
+    Reload,
 }
 
-const ALL: [Sfx; 6] = [Sfx::Shot, Sfx::Hit, Sfx::Hurt, Sfx::Kill, Sfx::Death, Sfx::Respawn];
+const ALL: [Sfx; 8] = [
+    Sfx::Shot,
+    Sfx::Hit,
+    Sfx::Hurt,
+    Sfx::Kill,
+    Sfx::Death,
+    Sfx::Respawn,
+    Sfx::Upgrade,
+    Sfx::Reload,
+];
 
 /// Mono f32 samples at 44.1 kHz.
 fn synth(sfx: Sfx) -> Vec<f32> {
@@ -60,6 +71,19 @@ fn synth(sfx: Sfx) -> Vec<f32> {
         Sfx::Death => sweep(0.32, 420.0, 70.0, 0.5, 9.0, 0.15),
         // Respawn: soft rise.
         Sfx::Respawn => sweep(0.2, 240.0, 640.0, 0.0, 10.0, 0.0),
+        // Weapon upgrade: bright triumphant rise.
+        Sfx::Upgrade => {
+            let mut a = sweep(0.08, 420.0, 420.0, 0.2, 14.0, 0.0);
+            a.extend(sweep(0.16, 640.0, 1050.0, 0.2, 10.0, 0.0));
+            a
+        }
+        // Reload: two mechanical clicks with a gap.
+        Sfx::Reload => {
+            let mut a = sweep(0.035, 1900.0, 1500.0, 0.85, 70.0, 0.2);
+            a.extend(std::iter::repeat(0.0).take((0.08 * SAMPLE_RATE as f32) as usize));
+            a.extend(sweep(0.045, 1300.0, 900.0, 0.85, 60.0, 0.2));
+            a
+        }
     }
 }
 
@@ -99,20 +123,21 @@ mod platform {
     use super::{synth, Sfx, ALL, SAMPLE_RATE};
     use std::cell::RefCell;
     use std::collections::HashMap;
+    use std::rc::Rc;
 
-    pub struct Audio {
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::JsCast;
+
+    struct Inner {
         ctx: RefCell<Option<web_sys::AudioContext>>,
         buffers: RefCell<HashMap<Sfx, web_sys::AudioBuffer>>,
     }
 
-    impl Audio {
-        pub fn new() -> Option<Audio> {
-            // Context creation is deferred to the first play(): browsers
-            // only allow audio after a user gesture.
-            Some(Audio { ctx: RefCell::new(None), buffers: RefCell::new(HashMap::new()) })
-        }
-
-        pub fn play(&self, sfx: Sfx, vol: f32) {
+    impl Inner {
+        /// Create/resume the context. MUST be called from a user-gesture
+        /// call stack at least once (Safari and autoplay policies) — the
+        /// pointerdown listener below guarantees that.
+        fn ensure(&self) {
             let mut ctx_slot = self.ctx.borrow_mut();
             if ctx_slot.is_none() {
                 *ctx_slot = web_sys::AudioContext::new().ok();
@@ -129,10 +154,41 @@ mod platform {
                     }
                 }
             }
+            if let Some(ctx) = ctx_slot.as_ref() {
+                let _ = ctx.resume();
+            }
+        }
+    }
+
+    pub struct Audio {
+        inner: Rc<Inner>,
+        /// Kept alive for the page's lifetime: every click re-ensures the
+        /// context (also un-suspends it after tab switches).
+        _gesture: Closure<dyn FnMut(web_sys::Event)>,
+    }
+
+    impl Audio {
+        pub fn new() -> Option<Audio> {
+            let inner = Rc::new(Inner {
+                ctx: RefCell::new(None),
+                buffers: RefCell::new(HashMap::new()),
+            });
+            let gesture = {
+                let inner = Rc::clone(&inner);
+                Closure::<dyn FnMut(web_sys::Event)>::new(move |_| inner.ensure())
+            };
+            let doc = web_sys::window()?.document()?;
+            doc.add_event_listener_with_callback("pointerdown", gesture.as_ref().unchecked_ref())
+                .ok()?;
+            Some(Audio { inner, _gesture: gesture })
+        }
+
+        pub fn play(&self, sfx: Sfx, vol: f32) {
+            // No creation here: outside a gesture stack it would be blocked
+            // anyway; the pointerdown listener owns initialization.
+            let ctx_slot = self.inner.ctx.borrow();
             let Some(ctx) = ctx_slot.as_ref() else { return };
-            // A suspended context resumes after a gesture; fire-and-forget.
-            let _ = ctx.resume();
-            let buffers = self.buffers.borrow();
+            let buffers = self.inner.buffers.borrow();
             let Some(buf) = buffers.get(&sfx) else { return };
             let (Ok(src), Ok(gain)) = (ctx.create_buffer_source(), ctx.create_gain()) else {
                 return;

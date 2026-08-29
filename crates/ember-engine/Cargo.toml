@@ -9,6 +9,7 @@ wgpu.workspace = true
 glam.workspace = true
 tracing.workspace = true
 bytemuck.workspace = true
+gltf = "1"
 # std::time::Instant panics on wasm; web-time is std on native, Performance
 # on the web.
 web-time = "1"

@@ -67,6 +67,8 @@ const MAX_WS_MESSAGE: usize = 16 * 1024;
 enum Ev {
     Connected { id: u64, tx: SyncSender<Message>, peer: String },
     Msg { id: u64, msg: C2S },
+    /// Measured WS ping round-trip for this connection (bounds its rewind).
+    Rtt { id: u64, rtt_ms: u32 },
     Disconnected { id: u64 },
 }
 
@@ -84,6 +86,10 @@ struct Conn {
     lobbyless_since: Instant,
     last_seen: Instant,
     msgs_this_tick: u32,
+    /// Measured transport RTT in sim ticks; floors how far back this
+    /// client's view_tick claim may reach (anti "free 300 ms rewind").
+    /// Generous until the first measurement arrives.
+    rtt_ticks: u64,
 }
 
 /// A lobby IS a running shooter game.
@@ -234,7 +240,18 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: Sender<Ev>) {
         return;
     }
 
+    let mut last_ws_ping = Instant::now();
+    let mut ping_sent_at: Option<Instant> = None;
     'outer: loop {
+        // Measure transport RTT with WS pings (browsers and tungstenite
+        // clients auto-pong); the hub uses it to bound lag-comp rewinds.
+        if last_ws_ping.elapsed() >= Duration::from_secs(5) {
+            last_ws_ping = Instant::now();
+            ping_sent_at = Some(Instant::now());
+            if ws.send(Message::Ping(Default::default())).is_err() {
+                break;
+            }
+        }
         loop {
             match rx.try_recv() {
                 Ok(msg) => {
@@ -263,7 +280,15 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: Sender<Ev>) {
                 }
             },
             Ok(Message::Close(_)) => break,
-            Ok(Message::Ping(_) | Message::Pong(_)) => {}
+            Ok(Message::Ping(_)) => {}
+            Ok(Message::Pong(_)) => {
+                if let Some(t) = ping_sent_at.take() {
+                    let rtt_ms = t.elapsed().as_millis().min(u32::MAX as u128) as u32;
+                    if events_tx.send(Ev::Rtt { id, rtt_ms }).is_err() {
+                        break;
+                    }
+                }
+            }
             Ok(_) => {
                 tracing::debug!(conn = id, "binary frame from client; dropping");
                 break;
@@ -319,15 +344,18 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
         let mut dead_conns: Vec<u64> = Vec::new();
         for lobby in lobbies.values_mut() {
             let inputs = &lobby.inputs;
-            let cur_tick = lobby.sim.tick;
+            // This step runs as tick cur_tick + 1, and history frame
+            // len-1-d resolves to tick (cur_tick+1)-d — so the delay must
+            // be measured from the POST-step tick or every rewind lands one
+            // tick after the view the client reported.
+            let apply_tick = lobby.sim.tick + 1;
             lobby.sim.step(&|pid| {
                 inputs
                     .get(&pid)
                     .map(|(i, _, view_tick)| {
                         let mut i = *i;
-                        // Lag compensation: how far behind the present this
-                        // client's rendered view is (clamped in the sim).
-                        i.delay_ticks = cur_tick.saturating_sub(*view_tick).min(u16::MAX as u64) as u16;
+                        i.delay_ticks =
+                            apply_tick.saturating_sub(*view_tick).min(u16::MAX as u64) as u16;
                         i
                     })
                     .unwrap_or_default()
@@ -357,6 +385,10 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
                             score: p.score,
                             alive: p.alive,
                             crouch: p.crouch,
+                            weapon: p.weapon,
+                            ammo: p.ammo,
+                            reloading: p.reload_t > 0.0,
+                            deaths: p.death_count,
                             ack: lobby.inputs.get(&p.id).map(|(_, s, _)| *s).unwrap_or(0),
                         })
                         .collect(),
@@ -372,6 +404,7 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
                             owner: b.owner,
                         })
                         .collect(),
+                    pads: lobby.sim.pads.iter().map(|p| p.respawn_t <= 0.0).collect(),
                 };
                 // Serialize once per lobby, not once per recipient.
                 if let Ok(text) = serde_json::to_string(&state) {
@@ -475,8 +508,17 @@ fn handle_event(
                     lobbyless_since: now,
                     last_seen: now,
                     msgs_this_tick: 0,
+                    rtt_ticks: 18,
                 },
             );
+        }
+        Ev::Rtt { id, rtt_ms } => {
+            if let Some(c) = conns.get_mut(&id) {
+                let ticks = ((rtt_ms as f32 / 1000.0) * 60.0).ceil() as u64;
+                // Smooth toward the newest measurement, biased downward so a
+                // one-off spike doesn't widen the rewind window for long.
+                c.rtt_ticks = if ticks < c.rtt_ticks { ticks } else { (c.rtt_ticks + ticks) / 2 };
+            }
         }
         Ev::Disconnected { id } => {
             drop_conn(id, conns, lobbies);
@@ -676,12 +718,19 @@ fn handle_event(
                 (C2S::LeaveLobby, true) => {
                     leave_lobby(id, conns, lobbies);
                 }
-                (C2S::Input { seq, view_tick, mx, my, ax, az, fire, sprint, crouch }, true) => {
-                    let Some(lobby_name) = conns.get(&id).unwrap().lobby.clone() else { return };
+                (C2S::Input { seq, view_tick, mx, my, ax, az, fire, sprint, crouch, reload }, true) => {
+                    let conn = conns.get(&id).unwrap();
+                    let rtt_ticks = conn.rtt_ticks;
+                    let Some(lobby_name) = conn.lobby.clone() else { return };
                     let Some(lobby) = lobbies.get_mut(&lobby_name) else { return };
                     let Some(&pid) = lobby.pids.get(&id) else { return };
-                    // The sim sanitizes magnitudes/NaN on use; view_tick is
-                    // clamped to the present + rewind window at use.
+                    // The sim sanitizes magnitudes/NaN on use. view_tick is
+                    // clamped above by the present and FLOORED by what this
+                    // connection's measured latency can justify (one-way +
+                    // interpolation + jitter slack) — a zero-ping client
+                    // cannot claim a free 300 ms rewind.
+                    let allowed_delay = rtt_ticks / 2 + 6;
+                    let floor = lobby.sim.tick.saturating_sub(allowed_delay);
                     lobby.inputs.insert(
                         pid,
                         (
@@ -691,10 +740,11 @@ fn handle_event(
                                 fire,
                                 sprint,
                                 crouch,
+                                reload,
                                 delay_ticks: 0,
                             },
                             seq,
-                            view_tick.min(lobby.sim.tick),
+                            view_tick.clamp(floor, lobby.sim.tick),
                         ),
                     );
                 }

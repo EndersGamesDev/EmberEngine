@@ -75,6 +75,7 @@ fn main() {
                 fire: true,
                 sprint: (t as u64) % 3 == 0,
                 crouch: false,
+                reload: false,
             });
         }
         if last_ping.elapsed() >= Duration::from_secs(4) {

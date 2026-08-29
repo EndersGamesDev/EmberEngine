@@ -44,6 +44,9 @@ pub struct EngineConfig {
     /// FPS-style mouse capture: clicking the window grabs the cursor
     /// (pointer lock on the web) and mouse-look deltas start flowing.
     pub capture_mouse: bool,
+    /// Extra meshes registered at startup; instances reference them by id
+    /// (1..=N, in order — 0 is the built-in cube).
+    pub meshes: Vec<crate::renderer::MeshData>,
 }
 
 impl Default for EngineConfig {
@@ -51,6 +54,7 @@ impl Default for EngineConfig {
         Self {
             title: "ember".to_string(),
             capture_mouse: false,
+            meshes: Vec::new(),
         }
     }
 }
@@ -83,9 +87,10 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                 .expect("failed to create window"),
         );
 
+        let meshes = std::mem::take(&mut self.config.meshes);
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.renderer = Some(pollster::block_on(Renderer::new(window.clone())));
+            self.renderer = Some(pollster::block_on(Renderer::new(window.clone(), meshes)));
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -104,7 +109,7 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
             let pending = Rc::clone(&self.pending_renderer);
             let win = window.clone();
             wasm_bindgen_futures::spawn_local(async move {
-                let renderer = Renderer::new(win.clone()).await;
+                let renderer = Renderer::new(win.clone(), meshes).await;
                 *pending.borrow_mut() = Some(renderer);
                 win.request_redraw();
             });

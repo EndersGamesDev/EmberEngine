@@ -8,10 +8,82 @@ use std::collections::{HashMap, VecDeque};
 use ember_engine::glam::{Vec2, Vec3};
 use ember_engine::{Camera, EmberGame, Frame, InputState, Instance, KeyCode, MouseButton};
 use pong_core::proto::{BState, C2S, PState, PlayerMeta, S2C, PROTO_VERSION, STATE_EVERY_TICKS};
-use pong_core::shooter::{generate_arena, move_circle, stance_speed, Obstacle, MAX_HP};
+use pong_core::shooter::{
+    generate_arena, generate_pads, move_circle, stance_speed, weapon_name, weapon_stats,
+    Obstacle, MAX_HP, RELOAD_SECS,
+};
 use serde::Deserialize;
 
 use crate::sound::{Audio, Sfx};
+
+/// One colored piece of a loaded GLB model.
+#[derive(Clone)]
+pub(crate) struct Part {
+    pub mesh: u32,
+    pub color: Vec3,
+    pub is_strip: bool,
+}
+
+/// The Blender-authored viewmodel: pistol parts + hands/arms parts.
+#[derive(Clone, Default)]
+pub(crate) struct Assets {
+    pub gun: Vec<Part>,
+    pub arms: Vec<Part>,
+}
+
+const VIEWMODEL_GLB: &[u8] = include_bytes!("../assets/viewmodel.glb");
+
+/// Load the GLB into engine meshes + part lists. Falls back to the classic
+/// cube pistol when the asset is missing/broken.
+pub(crate) fn load_assets() -> (Vec<ember_engine::MeshData>, Option<Assets>) {
+    match ember_engine::assets::load_glb(VIEWMODEL_GLB) {
+        Ok(parts) => {
+            let mut meshes = Vec::new();
+            let mut assets = Assets::default();
+            for p in parts {
+                let part = Part {
+                    mesh: meshes.len() as u32 + 1, // 0 is the built-in cube
+                    color: Vec3::from_array(p.color),
+                    is_strip: p.name == "strip",
+                };
+                meshes.push(p.mesh);
+                if p.name.starts_with("arm") || p.name.starts_with("hand") {
+                    assets.arms.push(part);
+                } else {
+                    assets.gun.push(part);
+                }
+            }
+            tracing::info!(
+                gun_parts = assets.gun.len(),
+                arm_parts = assets.arms.len(),
+                "viewmodel glb loaded"
+            );
+            (meshes, Some(assets))
+        }
+        Err(e) => {
+            tracing::warn!("viewmodel glb unusable ({e}); using cube fallback");
+            (Vec::new(), None)
+        }
+    }
+}
+
+/// Weapon-level accent color (the glow strip on the pistol).
+fn weapon_accent(level: u8) -> Vec3 {
+    match level {
+        3 => Vec3::new(1.0, 0.25, 0.20),
+        2 => Vec3::new(1.0, 0.55, 0.15),
+        _ => GLOW_BLUE,
+    }
+}
+
+fn push_parts(frame: &mut Frame, parts: &[Part], pos: Vec3, yaw: f32, accent: Vec3) {
+    for p in parts {
+        let color = if p.is_strip { accent } else { p.color };
+        frame
+            .instances
+            .push(Instance::new(pos, Vec3::ONE, color).with_yaw(yaw).with_mesh(p.mesh));
+    }
+}
 
 /// Mouse-look sensitivity, radians per pixel.
 const LOOK_SENS: f32 = 0.0026;
@@ -96,9 +168,9 @@ const GUNMETAL_DARK: Vec3 = Vec3::new(0.11, 0.11, 0.13);
 const BRONZE: Vec3 = Vec3::new(0.46, 0.32, 0.21);
 const GLOW_BLUE: Vec3 = Vec3::new(0.20, 0.65, 1.00);
 
-/// Push the pistol into the frame: held at `hand`, pointing along `aim`.
+/// Cube-fallback pistol: held at `hand`, pointing along `aim`.
 /// Local space is +X forward; each part is rotated by the shared yaw.
-fn push_gun(frame: &mut Frame, hand: Vec3, aim: Vec2) {
+fn push_gun(frame: &mut Frame, hand: Vec3, aim: Vec2, accent: Vec3) {
     let yaw = -aim.y.atan2(aim.x);
     let rot = |p: Vec3| -> Vec3 {
         let (s, c) = yaw.sin_cos();
@@ -113,7 +185,7 @@ fn push_gun(frame: &mut Frame, hand: Vec3, aim: Vec2) {
     // trigger guard (bronze), grip (near-black).
     part(Vec3::new(0.34, 0.12, 0.0), Vec3::new(0.74, 0.17, 0.15), GUNMETAL);
     part(Vec3::new(0.76, 0.09, 0.0), Vec3::new(0.16, 0.13, 0.13), BRONZE);
-    part(Vec3::new(0.32, 0.03, 0.0), Vec3::new(0.58, 0.045, 0.17), GLOW_BLUE);
+    part(Vec3::new(0.32, 0.03, 0.0), Vec3::new(0.58, 0.045, 0.17), accent);
     part(Vec3::new(0.18, -0.06, 0.0), Vec3::new(0.14, 0.06, 0.11), BRONZE);
     part(Vec3::new(0.02, -0.14, 0.0), Vec3::new(0.15, 0.26, 0.13), GUNMETAL_DARK);
 }
@@ -161,8 +233,13 @@ pub struct ShooterGame {
     next_seq: u32,
     last_tick: u64,
     audio: Option<Audio>,
-    /// Client-side deaths tally (from Kill events since we joined).
-    deaths: HashMap<u8, u32>,
+    assets: Option<Assets>,
+    pads_pos: Vec<[f32; 2]>,
+    pads_active: Vec<bool>,
+    /// ADS: 0 = hip, 1 = fully zoomed (RMB).
+    zoom: f32,
+    /// Local time when my current reload started (drives the viewmodel dip).
+    reload_started: Option<f32>,
     since_score_ui: f32,
     score_shown: bool,
     aim: Vec2,
@@ -178,7 +255,7 @@ pub struct ShooterGame {
 }
 
 impl ShooterGame {
-    pub fn connect(cfg: &OnlineConfig) -> Result<Self, String> {
+    pub fn connect(cfg: &OnlineConfig, assets: Option<Assets>) -> Result<Self, String> {
         let chan = net::NetChan::connect(&cfg.url, cfg.opening_msgs()?)?;
         set_status("connecting…");
         Ok(Self {
@@ -200,7 +277,11 @@ impl ShooterGame {
             next_seq: 1,
             last_tick: 0,
             audio: Audio::new(),
-            deaths: HashMap::new(),
+            assets,
+            pads_pos: Vec::new(),
+            pads_active: Vec::new(),
+            zoom: 0.0,
+            reload_started: None,
             since_score_ui: 1.0,
             score_shown: false,
             aim: Vec2::new(1.0, 0.0),
@@ -240,12 +321,9 @@ impl ShooterGame {
         for p in rows {
             let me = if Some(p.id) == self.my_id { "▶ " } else { "  " };
             let state = if p.alive { "" } else { " ☠" };
-            s.push_str(&format!(
-                "{me}{:<18} {:>6} {:>7}{state}\n",
-                self.handle_of(p.id),
-                p.score,
-                self.deaths.get(&p.id).copied().unwrap_or(0),
-            ));
+            // Char-truncated so 20-char/unicode handles can't break columns.
+            let name: String = self.handle_of(p.id).chars().take(16).collect();
+            s.push_str(&format!("{me}{name:<16} {:>6} {:>7}{state}\n", p.score, p.deaths));
         }
         s
     }
@@ -262,18 +340,26 @@ impl ShooterGame {
             })
             .collect::<Vec<_>>()
             .join("  ·  ");
-        let hp = self
-            .my_id
-            .and_then(|id| self.latest.get(&id))
+        let me = self.my_id.and_then(|id| self.latest.get(&id));
+        let hp = me
             .map(|p| {
                 if p.alive {
-                    "♥".repeat(p.hp as usize) + &"♡".repeat((MAX_HP - p.hp) as usize)
+                    "♥".repeat(p.hp as usize) + &"♡".repeat(MAX_HP.saturating_sub(p.hp) as usize)
                 } else {
                     "respawning…".into()
                 }
             })
             .unwrap_or_default();
-        format!("{hp}   {list}   ({} in arena)", self.latest.len())
+        let gun = me
+            .map(|p| {
+                if p.reloading {
+                    format!("{} ⟳", weapon_name(p.weapon))
+                } else {
+                    format!("{} {}/{}", weapon_name(p.weapon), p.ammo, weapon_stats(p.weapon).mag)
+                }
+            })
+            .unwrap_or_default();
+        format!("{hp}  {gun}   {list}   ({} in arena)", self.latest.len())
     }
 }
 
@@ -286,14 +372,25 @@ impl EmberGame for ShooterGame {
         self.bullets_age += dt;
 
         let mut status_event: Option<String> = None;
+        // Queue sounds and play at the end under a budget: a backlogged
+        // burst (hidden tab catching up) must not blast every buffered cue.
+        let mut sfx: Vec<(Sfx, f32)> = Vec::new();
+        let mut drained: Vec<S2C> = Vec::new();
         while let Some(msg) = self.chan.poll() {
+            drained.push(msg);
+        }
+        let suppress_sfx = drained.len() > 6;
+        for msg in drained {
             match msg {
                 S2C::Welcome { .. } => set_status("connected…"),
                 S2C::GameJoined { id, seed, arena_half, players } => {
                     self.my_id = Some(id);
                     self.arena_half = arena_half;
                     self.obstacles = generate_arena(seed);
+                    self.pads_pos = generate_pads(seed);
+                    self.pads_active = vec![true; self.pads_pos.len()];
                     self.history.clear();
+                    self.reload_started = None;
                     self.was_alive = false; // first State snaps the prediction
                     for m in players {
                         self.metas.insert(m.id, m);
@@ -312,42 +409,72 @@ impl EmberGame for ShooterGame {
                     self.from.remove(&id);
                     self.to.remove(&id);
                     self.latest.remove(&id);
-                    self.deaths.remove(&id);
                 }
-                S2C::State { tick, players, bullets } => {
+                S2C::State { tick, players, bullets, pads } => {
                     self.last_tick = tick;
+                    self.pads_active = pads;
                     // ---- audio cues from state diffs (before overwrite) ----
-                    if let Some(audio) = self.audio.as_ref() {
-                        // New bullets per owner = shots fired.
-                        let mut prev: HashMap<u8, usize> = HashMap::new();
+                    {
+                        // Bullet counts per owner; position tracks the
+                        // NEWEST bullet (drives distance falloff).
+                        let mut prev_counts: HashMap<u8, usize> = HashMap::new();
                         for b in &self.bullets {
-                            *prev.entry(b.owner).or_insert(0) += 1;
+                            *prev_counts.entry(b.owner).or_insert(0) += 1;
                         }
                         let mut curr: HashMap<u8, (usize, [f32; 2])> = HashMap::new();
                         for b in &bullets {
                             let e = curr.entry(b.owner).or_insert((0, [b.x, b.z]));
                             e.0 += 1;
+                            e.1 = [b.x, b.z];
                         }
+                        // Remote shots (mine are cued from ammo below).
                         for (&owner, &(n, pos)) in &curr {
-                            if n > prev.get(&owner).copied().unwrap_or(0) {
-                                if Some(owner) == self.my_id {
-                                    audio.play(Sfx::Shot, 0.5);
-                                } else {
-                                    let d = (Vec2::new(pos[0], pos[1]) - self.pred_pos).length();
-                                    audio.play(Sfx::Shot, (0.45 * (1.0 - d / 40.0)).clamp(0.05, 0.45));
-                                }
+                            if Some(owner) != self.my_id
+                                && n > prev_counts.get(&owner).copied().unwrap_or(0)
+                            {
+                                let d = (Vec2::new(pos[0], pos[1]) - self.pred_pos).length();
+                                sfx.push((Sfx::Shot, (0.45 * (1.0 - d / 40.0)).clamp(0.05, 0.45)));
                             }
                         }
-                        // HP drops: hurt (me) / hitmarker (them).
-                        for p in &players {
-                            if let Some(old) = self.latest.get(&p.id) {
-                                if p.hp < old.hp && p.alive {
-                                    if Some(p.id) == self.my_id {
-                                        audio.play(Sfx::Hurt, 0.6);
-                                    } else {
-                                        audio.play(Sfx::Hit, 0.35);
-                                    }
-                                }
+                        // My own transitions, from authoritative state.
+                        if let (Some(me), Some(new_me)) = (
+                            self.my_id.and_then(|id| self.latest.get(&id)),
+                            self.my_id.and_then(|id| players.iter().find(|p| p.id == id)),
+                        ) {
+                            if new_me.ammo < me.ammo {
+                                sfx.push((Sfx::Shot, 0.5)); // exact own-shot cue
+                            }
+                            if new_me.hp < me.hp && new_me.alive {
+                                sfx.push((Sfx::Hurt, 0.6));
+                            }
+                            if new_me.weapon > me.weapon {
+                                sfx.push((Sfx::Upgrade, 0.55));
+                                status_event = Some(format!(
+                                    "⬆ weapon upgraded: {}!",
+                                    weapon_name(new_me.weapon)
+                                ));
+                            }
+                            if new_me.reloading && !me.reloading {
+                                sfx.push((Sfx::Reload, 0.45));
+                                self.reload_started = Some(self.time);
+                            } else if !new_me.reloading {
+                                self.reload_started = None;
+                            }
+                            // Hitmarker only when plausibly MINE: one of my
+                            // bullets vanished AND an enemy lost hp.
+                            let my_id = new_me.id;
+                            let my_gone = curr.get(&my_id).map(|e| e.0).unwrap_or(0)
+                                < prev_counts.get(&my_id).copied().unwrap_or(0);
+                            let enemy_hurt = players.iter().any(|p| {
+                                p.id != my_id
+                                    && self
+                                        .latest
+                                        .get(&p.id)
+                                        .map(|old| p.hp < old.hp)
+                                        .unwrap_or(false)
+                            });
+                            if my_gone && enemy_hurt {
+                                sfx.push((Sfx::Hit, 0.35));
                             }
                         }
                     }
@@ -403,9 +530,7 @@ impl EmberGame for ShooterGame {
                                 self.own_render = server;
                                 self.history.clear();
                                 if newly_alive {
-                                    if let Some(a) = self.audio.as_ref() {
-                                        a.play(Sfx::Respawn, 0.4);
-                                    }
+                                    sfx.push((Sfx::Respawn, 0.4));
                                 }
                             } else {
                                 self.pred_pos = rebased;
@@ -414,15 +539,12 @@ impl EmberGame for ShooterGame {
                     }
                 }
                 S2C::Kill { killer, victim } => {
-                    *self.deaths.entry(victim).or_insert(0) += 1;
-                    if let Some(a) = self.audio.as_ref() {
-                        if Some(killer) == self.my_id {
-                            a.play(Sfx::Kill, 0.5);
-                        } else if Some(victim) == self.my_id {
-                            a.play(Sfx::Death, 0.55);
-                        } else {
-                            a.play(Sfx::Hit, 0.12);
-                        }
+                    if Some(killer) == self.my_id {
+                        sfx.push((Sfx::Kill, 0.5));
+                    } else if Some(victim) == self.my_id {
+                        sfx.push((Sfx::Death, 0.55));
+                    } else {
+                        sfx.push((Sfx::Hit, 0.12));
                     }
                     let line = if Some(victim) == self.my_id {
                         format!("☠ you were fragged by {}", self.handle_of(killer))
@@ -451,11 +573,25 @@ impl EmberGame for ShooterGame {
             self.lost = true;
             set_status("connection lost — reload to play again");
         }
+        // Play the queued cues under a per-frame budget.
+        if !suppress_sfx {
+            if let Some(audio) = self.audio.as_ref() {
+                for (s, v) in sfx.into_iter().take(6) {
+                    audio.play(s, v);
+                }
+            }
+        }
+
+        // ---- ADS zoom (RMB): tighter FOV, damped sensitivity ----
+        let aiming = input.mouse_down(MouseButton::Right);
+        let zoom_target = if aiming { 1.0 } else { 0.0 };
+        self.zoom += (zoom_target - self.zoom) * (1.0 - (-dt * 14.0).exp());
 
         // ---- first-person look: raw mouse deltas -> yaw/pitch ----
+        let sens = LOOK_SENS * (1.0 - 0.45 * self.zoom);
         let (mdx, mdy) = input.mouse_delta();
-        self.yaw += mdx * LOOK_SENS;
-        self.pitch = (self.pitch - mdy * LOOK_SENS).clamp(-1.45, 1.45);
+        self.yaw += mdx * sens;
+        self.pitch = (self.pitch - mdy * sens).clamp(-1.45, 1.45);
         let (fz, fx) = self.yaw.sin_cos();
         self.aim = Vec2::new(fx, fz);
         let forward2 = self.aim;
@@ -521,6 +657,7 @@ impl EmberGame for ShooterGame {
                 fire,
                 sprint,
                 crouch,
+                reload: input.down(KeyCode::KeyR),
             });
         }
 
@@ -566,7 +703,11 @@ impl EmberGame for ShooterGame {
         let (ps, pc) = self.pitch.sin_cos();
         let look = Vec3::new(fx * pc, ps, fz * pc);
         let eye = Vec3::new(my_pos.x, self.eye_h + bob, my_pos.y);
-        let camera = Camera { eye, target: eye + look, fov_y_deg: 70.0 };
+        let camera = Camera {
+            eye,
+            target: eye + look,
+            fov_y_deg: 70.0 - 26.0 * self.zoom,
+        };
 
         // ---- build the scene ----
         let mut frame = Frame { camera, instances: Vec::with_capacity(96) };
@@ -585,6 +726,29 @@ impl EmberGame for ShooterGame {
         ] {
             inst(&mut frame, Vec3::new(px, 1.75, pz), Vec3::new(sx, 3.5, sz), Vec3::new(0.26, 0.28, 0.34));
         }
+        // Weapon-upgrade pads: base slab always, a spinning pickup while
+        // active (positions are seeded, availability comes from State).
+        for (i, pad) in self.pads_pos.iter().enumerate() {
+            let active = self.pads_active.get(i).copied().unwrap_or(false);
+            inst(
+                &mut frame,
+                Vec3::new(pad[0], 0.06, pad[1]),
+                Vec3::new(1.9, 0.12, 1.9),
+                if active { Vec3::new(0.16, 0.30, 0.42) } else { Vec3::new(0.15, 0.16, 0.20) },
+            );
+            if active {
+                let hover = 1.0 + (self.time * 2.0).sin() * 0.15;
+                frame.instances.push(
+                    Instance::new(
+                        Vec3::new(pad[0], hover, pad[1]),
+                        Vec3::splat(0.5),
+                        Vec3::new(0.55, 0.85, 1.0),
+                    )
+                    .with_yaw(self.time * 2.2),
+                );
+            }
+        }
+
         // Obstacles from the shared seed, with deterministic cosmetic
         // height variation (cover you can crouch behind, blocks you can't
         // see over).
@@ -620,7 +784,13 @@ impl EmberGame for ShooterGame {
             inst(&mut frame, Vec3::new(pos.x, body_h * 0.5, pos.y), Vec3::new(1.0, body_h, 1.0), color);
             inst(&mut frame, Vec3::new(pos.x, head_y, pos.y), Vec3::splat(0.55), color * 0.7);
             let hand = Vec3::new(pos.x, hand_y, pos.y) + Vec3::new(aim.x, 0.0, aim.y) * 0.55;
-            push_gun(&mut frame, hand, aim);
+            let accent = weapon_accent(p.weapon);
+            if let Some(a) = &self.assets {
+                let yaw = -aim.y.atan2(aim.x);
+                push_parts(&mut frame, &a.gun, hand, yaw, accent);
+            } else {
+                push_gun(&mut frame, hand, aim, accent);
+            }
             for h in 0..p.hp {
                 inst(
                     &mut frame,
@@ -645,13 +815,42 @@ impl EmberGame for ShooterGame {
 
         // ---- viewmodel: the sidearm in hand, plus muzzle flash ----
         if me_alive {
+            let me_latest = self.my_id.and_then(|id| self.latest.get(&id));
+            let my_weapon = me_latest.map(|p| p.weapon).unwrap_or(1);
+            let reloading = me_latest.map(|p| p.reloading).unwrap_or(false);
+            let accent = weapon_accent(my_weapon);
             let f3 = Vec3::new(fx, 0.0, fz);
             let right3 = Vec3::new(-fz, 0.0, fx);
-            let base = eye + f3 * 0.5 + right3 * 0.24
-                + Vec3::new(0.0, -0.30 + bob * 0.4 + self.pitch * 0.10, 0.0);
-            push_gun(&mut frame, base, forward2);
+
+            // Reload animation: the gun dips and rolls out of the way.
+            let reload_dip = if reloading {
+                let t0 = self.reload_started.unwrap_or(self.time);
+                let progress = ((self.time - t0) / RELOAD_SECS).clamp(0.0, 1.0) as f32;
+                (progress * std::f32::consts::PI).sin() * 0.24
+            } else {
+                0.0
+            };
+            // ADS pulls the gun to screen center and closer to the eye.
+            let base = eye
+                + f3 * (0.5 + 0.10 * self.zoom)
+                + right3 * (0.24 * (1.0 - self.zoom) + 0.015)
+                + Vec3::new(
+                    0.0,
+                    -0.30 + 0.075 * self.zoom + bob * 0.4 * (1.0 - self.zoom)
+                        + self.pitch * 0.10
+                        - reload_dip,
+                    0.0,
+                );
+            let yaw = -forward2.y.atan2(forward2.x);
+            if let Some(a) = &self.assets {
+                push_parts(&mut frame, &a.gun, base, yaw, accent);
+                push_parts(&mut frame, &a.arms, base, yaw, accent);
+            } else {
+                push_gun(&mut frame, base, forward2, accent);
+            }
             // Muzzle flash synced to the fire cooldown cadence.
-            if fire && (self.time % 0.18) < 0.06 {
+            let cooldown = weapon_stats(my_weapon).cooldown;
+            if fire && !reloading && (self.time % cooldown) < 0.06 {
                 inst(
                     &mut frame,
                     base + f3 * 0.95 + Vec3::new(0.0, 0.1, 0.0),
@@ -661,7 +860,7 @@ impl EmberGame for ShooterGame {
             }
             // Aim dot floating on the sight line (occluded by walls,
             // which reads like a laser sight).
-            inst(&mut frame, eye + look * 4.0, Vec3::splat(0.05), GLOW_BLUE);
+            inst(&mut frame, eye + look * 4.0, Vec3::splat(0.05), accent);
         }
 
         frame

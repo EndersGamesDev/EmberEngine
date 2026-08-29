@@ -210,11 +210,16 @@ pub fn run_local() {
 }
 
 pub fn run_online(cfg: OnlineConfig) -> Result<(), String> {
-    let game = online::ShooterGame::connect(&cfg)?;
+    // Tracing first, so asset-loading diagnostics are visible.
+    #[cfg(not(target_arch = "wasm32"))]
+    ember_engine::init_diagnostics();
+    let (meshes, assets) = online::load_assets();
+    let game = online::ShooterGame::connect(&cfg, assets)?;
     ember_engine::run(
         EngineConfig {
             title: format!("ember arena — {}", cfg.lobby),
             capture_mouse: true,
+            meshes,
         },
         game,
     );

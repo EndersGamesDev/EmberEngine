@@ -121,6 +121,7 @@ fn drop_in_arena_flow_with_password() {
         fire: true,
         sprint: false,
         crouch: false,
+        reload: false,
     });
     // The next state must echo the input's seq back as this player's ack.
     recv_until(&mut guest, 5, |m| match m {

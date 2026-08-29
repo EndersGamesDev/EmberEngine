@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTO_VERSION: u16 = 6;
+pub const PROTO_VERSION: u16 = 7;
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
 pub const MAX_PASSWORD_LEN: usize = 40;
@@ -45,6 +45,16 @@ pub struct PState {
     pub score: u32,
     pub alive: bool,
     pub crouch: bool,
+    /// Weapon level (1 pistol, 2 rapid, 3 heavy).
+    #[serde(default)]
+    pub weapon: u8,
+    #[serde(default)]
+    pub ammo: u8,
+    #[serde(default)]
+    pub reloading: bool,
+    /// Authoritative death count for the scoreboard.
+    #[serde(default)]
+    pub deaths: u32,
     /// Sequence number of this player's last applied Input — their own
     /// client rebases its movement prediction on it.
     #[serde(default)]
@@ -91,6 +101,8 @@ pub enum C2S {
         sprint: bool,
         #[serde(default)]
         crouch: bool,
+        #[serde(default)]
+        reload: bool,
     },
     Ping { nonce: u32 },
 }
@@ -118,6 +130,10 @@ pub enum S2C {
         tick: u64,
         players: Vec<PState>,
         bullets: Vec<BState>,
+        /// Weapon-pad availability, index-aligned with the seeded pad
+        /// positions every client derives locally.
+        #[serde(default)]
+        pads: Vec<bool>,
     },
     Kill { killer: u8, victim: u8 },
     Pong { nonce: u32 },
@@ -166,6 +182,7 @@ mod tests {
             fire: true,
             sprint: true,
             crouch: false,
+            reload: false,
         })
         .unwrap();
         assert!(s.contains("\"t\":\"input\""));

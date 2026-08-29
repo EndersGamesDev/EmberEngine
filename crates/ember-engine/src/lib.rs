@@ -6,6 +6,7 @@
 //! `app` is the platform layer: window, event loop, input.
 //! `renderer` owns the GPU; nothing above it touches wgpu directly.
 
+pub mod assets;
 pub mod renderer;
 
 mod app;
@@ -15,7 +16,7 @@ pub use app::{run, EngineConfig};
 #[cfg(not(target_arch = "wasm32"))]
 pub use app::init_diagnostics;
 pub use input::InputState;
-pub use renderer::{Camera, Frame, Instance};
+pub use renderer::{Camera, Frame, Instance, MeshData, MeshVertex};
 
 // Re-exported so game code doesn't need its own winit/glam dependency for
 // the common cases.

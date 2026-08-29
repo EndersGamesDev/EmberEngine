@@ -12,7 +12,23 @@ use std::sync::Arc;
 use glam::{Mat4, Vec3};
 use winit::window::Window;
 
-/// One draw unit: a colored box, optionally rotated around Y.
+/// A vertex of a registered mesh (matches the built-in cube's layout).
+#[derive(Clone, Copy, Debug)]
+pub struct MeshVertex {
+    pub pos: [f32; 3],
+    pub normal: [f32; 3],
+}
+
+/// A triangle-list mesh the game registers at startup (EngineConfig.meshes).
+/// Mesh id 0 is always the built-in unit cube; registered meshes get ids
+/// 1..=N in order.
+#[derive(Clone, Debug, Default)]
+pub struct MeshData {
+    pub vertices: Vec<MeshVertex>,
+}
+
+/// One draw unit: a colored mesh instance (default: the unit cube),
+/// optionally rotated around Y.
 #[derive(Clone, Copy, Debug)]
 pub struct Instance {
     pub position: Vec3,
@@ -20,15 +36,22 @@ pub struct Instance {
     pub color: Vec3,
     /// Rotation around the Y axis, radians. 0 = axis-aligned.
     pub yaw: f32,
+    /// Mesh id: 0 = built-in cube, 1..=N = EngineConfig.meshes entries.
+    pub mesh: u32,
 }
 
 impl Instance {
     pub fn new(position: Vec3, scale: Vec3, color: Vec3) -> Self {
-        Self { position, scale, color, yaw: 0.0 }
+        Self { position, scale, color, yaw: 0.0, mesh: 0 }
     }
 
     pub fn with_yaw(mut self, yaw: f32) -> Self {
         self.yaw = yaw;
+        self
+    }
+
+    pub fn with_mesh(mut self, mesh: u32) -> Self {
+        self.mesh = mesh;
         self
     }
 }
@@ -112,8 +135,8 @@ pub struct Renderer {
     scene_pipeline: wgpu::RenderPipeline,
     camera_buf: wgpu::Buffer,
     camera_bind: wgpu::BindGroup,
-    cube_buf: wgpu::Buffer,
-    cube_vertex_count: u32,
+    /// Vertex buffers per mesh id (0 = built-in cube).
+    meshes: Vec<(wgpu::Buffer, u32)>,
     instance_buf: wgpu::Buffer,
     instance_cap: usize,
     // Presenter.
@@ -127,7 +150,7 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub async fn new(window: Arc<Window>) -> Self {
+    pub async fn new(window: Arc<Window>, extra_meshes: Vec<MeshData>) -> Self {
         let size = window.inner_size();
 
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
@@ -201,12 +224,31 @@ impl Renderer {
         });
 
         use wgpu::util::DeviceExt;
+        let mut meshes: Vec<(wgpu::Buffer, u32)> = Vec::with_capacity(1 + extra_meshes.len());
         let cube_vertices = cube_vertices();
-        let cube_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("cube vertices"),
-            contents: bytemuck::cast_slice(&cube_vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
+        meshes.push((
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("mesh 0 (cube)"),
+                contents: bytemuck::cast_slice(&cube_vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
+            cube_vertices.len() as u32,
+        ));
+        for (i, m) in extra_meshes.iter().enumerate() {
+            let verts: Vec<Vertex> = m
+                .vertices
+                .iter()
+                .map(|v| Vertex { pos: v.pos, normal: v.normal })
+                .collect();
+            meshes.push((
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("mesh {}", i + 1)),
+                    contents: bytemuck::cast_slice(&verts),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }),
+                verts.len() as u32,
+            ));
+        }
 
         let camera_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("camera uniform"),
@@ -367,8 +409,7 @@ impl Renderer {
             scene_pipeline,
             camera_buf,
             camera_bind,
-            cube_buf,
-            cube_vertex_count: cube_vertices.len() as u32,
+            meshes,
             instance_buf,
             instance_cap,
             present_pipeline,
@@ -424,16 +465,28 @@ impl Renderer {
         self.queue
             .write_buffer(&self.camera_buf, 0, bytemuck::cast_slice(vp.as_ref()));
 
-        let raws: Vec<InstanceRaw> = frame
-            .instances
-            .iter()
-            .map(|i| InstanceRaw {
+        // Bucket instances by mesh so each mesh draws with one instanced
+        // call over a contiguous range of the shared instance buffer.
+        let mut buckets: Vec<Vec<InstanceRaw>> = vec![Vec::new(); self.meshes.len()];
+        for i in &frame.instances {
+            let m = (i.mesh as usize).min(self.meshes.len() - 1);
+            buckets[m].push(InstanceRaw {
                 pos: i.position.to_array(),
                 scale: i.scale.to_array(),
                 color: i.color.to_array(),
                 yaw: i.yaw,
-            })
-            .collect();
+            });
+        }
+        let mut raws: Vec<InstanceRaw> = Vec::with_capacity(frame.instances.len());
+        let mut ranges: Vec<(usize, std::ops::Range<u32>)> = Vec::new();
+        for (mi, b) in buckets.iter().enumerate() {
+            if b.is_empty() {
+                continue;
+            }
+            let start = raws.len() as u32;
+            raws.extend_from_slice(b);
+            ranges.push((mi, start..raws.len() as u32));
+        }
         if raws.len() > self.instance_cap {
             self.instance_cap = raws.len().next_power_of_two();
             self.instance_buf = create_instance_buf(&self.device, self.instance_cap);
@@ -483,9 +536,12 @@ impl Renderer {
             if !raws.is_empty() {
                 pass.set_pipeline(&self.scene_pipeline);
                 pass.set_bind_group(0, &self.camera_bind, &[]);
-                pass.set_vertex_buffer(0, self.cube_buf.slice(..));
                 pass.set_vertex_buffer(1, self.instance_buf.slice(..));
-                pass.draw(0..self.cube_vertex_count, 0..raws.len() as u32);
+                for (mi, range) in &ranges {
+                    let (buf, count) = &self.meshes[*mi];
+                    pass.set_vertex_buffer(0, buf.slice(..));
+                    pass.draw(0..*count, range.clone());
+                }
             }
         }
 
