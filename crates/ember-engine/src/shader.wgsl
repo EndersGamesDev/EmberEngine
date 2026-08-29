@@ -47,13 +47,20 @@ fn vs_main(in: VsIn) -> VsOut {
     return out;
 }
 
+// ACES filmic tonemap (Narkowicz fit): soft highlight rolloff instead of
+// clipping to white.
+fn aces(x: vec3<f32>) -> vec3<f32> {
+    let v = x * (2.51 * x + 0.03) / (x * (2.43 * x + 0.59) + 0.14);
+    return clamp(v, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Lighting tuning.
     let sun_dir = normalize(vec3<f32>(0.4, 1.0, 0.3));
-    let ambient = 0.22;          // base fill
-    let sun_intensity = 0.95;    // direct sun
-    let sheen_strength = 0.35;   // stylized top sheen (Blinn half-vector vs up)
+    let sun_col = vec3<f32>(1.0, 0.95, 0.85);  // warm key light
+    let sun_intensity = 1.15;
+    let sheen_strength = 0.18;   // stylized top sheen (Blinn half-vector vs up)
     let sheen_power = 8.0;
     // Fog tuning: view-depth based, fades to a dark horizon.
     let fog_density = 0.012;
@@ -65,9 +72,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     let n = normalize(in.normal);
     let ndotl = max(dot(n, sun_dir), 0.0);
+    // Hemisphere ambient: cool sky from above, warm ground bounce below.
+    let hemi = mix(
+        vec3<f32>(0.060, 0.055, 0.048),
+        vec3<f32>(0.115, 0.135, 0.180),
+        n.y * 0.5 + 0.5,
+    );
     let half_vec = normalize(sun_dir + vec3<f32>(0.0, 1.0, 0.0));
     let sheen = sheen_strength * pow(max(dot(n, half_vec), 0.0), sheen_power);
-    let lit = albedo * (ambient + sun_intensity * ndotl) + albedo * sheen;
+    let lit = aces(albedo * (hemi + sun_col * (sun_intensity * ndotl + sheen)));
 
     let fog = clamp(1.0 - exp(-in.view_depth * fog_density), 0.0, 1.0);
     return vec4<f32>(mix(lit, fog_color, fog), 1.0);
