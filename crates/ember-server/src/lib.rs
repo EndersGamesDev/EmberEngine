@@ -9,7 +9,8 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::net::{Shutdown, TcpListener, TcpStream};
+use std::io::Read;
+use std::net::{IpAddr, Shutdown, TcpListener, TcpStream};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -21,11 +22,29 @@ use ember_net::{
 
 pub struct ServerConfig {
     pub max_players: usize,
+    /// Cap on simultaneous connections from one remote IP. Without it a
+    /// single host can occupy the whole global admission cap.
+    pub max_conns_per_ip: usize,
+    /// Whether the per-IP cap also applies to loopback peers. Off by
+    /// default: the deployment binds to the WireGuard address, so a
+    /// loopback peer is local tooling (netbot, a second dev client) rather
+    /// than a stranger. Tests turn it on to exercise the cap, which is
+    /// otherwise unreachable in-process.
+    pub cap_loopback: bool,
+    /// Total time one complete client message may take to arrive (see
+    /// `DeadlineReader`). Configurable only so tests can shorten it; the
+    /// default is the deployment value.
+    pub frame_deadline: Duration,
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
-        Self { max_players: 32 }
+        Self {
+            max_players: 32,
+            max_conns_per_ip: 6,
+            cap_loopback: false,
+            frame_deadline: FRAME_DEADLINE,
+        }
     }
 }
 
@@ -34,6 +53,9 @@ enum Event {
         conn: u64,
         stream: TcpStream,
         peer: String,
+        /// Resolved once on accept; `None` if the peer address was already
+        /// unavailable, in which case the per-IP cap cannot apply.
+        ip: Option<IpAddr>,
     },
     Msg {
         conn: u64,
@@ -64,16 +86,52 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 /// hard CLIENT_TIMEOUT_SECS kick — clients keepalive every ~2 s or less).
 const LAG_THRESHOLD: Duration = Duration::from_secs(3);
 
+/// Sustained ceiling on client messages processed per connection per tick.
+/// An honest client sends one Input per frame plus an occasional Ping, so
+/// this is a wide margin; beyond it the connection is dropped as a flooder.
+/// Without it one post-Hello peer can dominate the shared event channel.
+const MSGS_PER_TICK_LIMIT: u32 = 30;
+
+/// Ceiling the per-connection message budget refills to. The budget is a
+/// token bucket rather than a per-tick counter for one reason: after a sim
+/// stall the catch-up drain delivers several ticks' worth of a client's
+/// messages in a single pass, and that backlog is the server's fault, not
+/// the client's. Eight ticks of slack absorbs it; the sustained rate above
+/// still holds, because refill is what bounds the average.
+const MSG_BURST: u32 = MSGS_PER_TICK_LIMIT * 8;
+
+/// Per-`read` syscall timeout on a client socket. Short so the reader
+/// thread returns to its own frame deadline promptly instead of parking in
+/// the kernel; it is NOT itself the idle bound (see `FRAME_DEADLINE`).
+const READ_POLL: Duration = Duration::from_millis(250);
+
+/// Total time one complete message may take, measured from when the reader
+/// starts waiting for it. A plain socket read timeout does not bound this:
+/// `read_exact` restarts it on every byte that arrives, so a peer dribbling
+/// one byte per window holds its reader and writer threads indefinitely.
+/// Sits just above CLIENT_TIMEOUT_SECS so the sim thread's own sweep
+/// normally wins the race and logs the kick — this is the backstop for when
+/// the sim thread cannot act.
+const FRAME_DEADLINE: Duration = Duration::from_secs(CLIENT_TIMEOUT_SECS + 2);
+
 struct Conn {
     tx: SyncSender<ServerMsg>,
     /// Kept solely so `remove_conn` can unblock the reader thread; the
     /// writer half shuts the socket down fully when it exits.
     sock: TcpStream,
     peer: String,
+    /// The peer's IP, for the per-IP admission cap. Counting live entries
+    /// of `conns` is what enforces that cap, so no side table can drift out
+    /// of sync with reality: a slot is released exactly when the connection
+    /// is removed.
+    ip: Option<IpAddr>,
     player: Option<Player>,
     last_seen: Instant,
     /// True while this client is flagged as lagging; cleared on any message.
     lag_flagged: bool,
+    /// Token bucket for the message-rate cap: spent per message received,
+    /// refilled `MSGS_PER_TICK_LIMIT` per tick up to `MSG_BURST`.
+    msg_budget: u32,
 }
 
 /// Runs the server on an already-bound listener. Blocks forever.
@@ -102,15 +160,20 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
                         continue;
                     }
                 };
-                let peer = stream
-                    .peer_addr()
-                    .map(|a| a.to_string())
-                    .unwrap_or_else(|_| "?".into());
+                let (peer, ip) = match stream.peer_addr() {
+                    Ok(a) => (a.to_string(), Some(a.ip())),
+                    Err(_) => ("?".to_string(), None),
+                };
                 let _ = stream.set_nodelay(true);
                 let conn = next_conn;
                 next_conn += 1;
                 if events_tx
-                    .send(Event::Connected { conn, stream, peer })
+                    .send(Event::Connected {
+                        conn,
+                        stream,
+                        peer,
+                        ip,
+                    })
                     .is_err()
                 {
                     break; // sim thread gone
@@ -122,11 +185,67 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
     sim_loop(events_tx, events_rx, cfg)
 }
 
-fn spawn_reader(conn: u64, stream: TcpStream, events_tx: Sender<Event>) {
+/// A `Read` adapter that fails the whole read once `deadline` passes, no
+/// matter how the peer paces its bytes.
+///
+/// This is the piece a socket read timeout cannot provide. `read_msg` reads
+/// a frame with `read_exact`, which loops over `read` syscalls, and the
+/// socket timeout applies per syscall — every byte that arrives restarts it.
+/// A peer sending one byte per window therefore keeps a reader thread (and,
+/// via the connection, a writer thread and an admission slot) alive forever
+/// under a plain timeout. Checking a deadline the peer cannot influence
+/// closes that.
+struct DeadlineReader<'a> {
+    inner: &'a mut TcpStream,
+    deadline: Instant,
+}
+
+impl Read for DeadlineReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        loop {
+            if Instant::now() >= self.deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "frame deadline exceeded",
+                ));
+            }
+            match self.inner.read(buf) {
+                // The socket's own poll timeout: no bytes yet, so loop back
+                // to the deadline check. Unix reports WouldBlock here and
+                // Windows TimedOut, hence both.
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) => {}
+                other => return other,
+            }
+        }
+    }
+}
+
+fn spawn_reader(
+    conn: u64,
+    stream: TcpStream,
+    events_tx: Sender<Event>,
+    frame_deadline: Duration,
+) {
     thread::spawn(move || {
         let mut stream = stream;
-        // Ends on EOF, reset, or protocol garbage.
-        while let Ok(msg) = read_msg::<_, ClientMsg>(&mut stream) {
+        // Makes the deadline below enforceable: without it a read parks in
+        // the kernel indefinitely and the deadline is never consulted. If
+        // it cannot be set, the sim thread's timeout sweep is still the
+        // outer bound, so this is a degradation, not a failure.
+        let _ = stream.set_read_timeout(Some(READ_POLL));
+        // Ends on EOF, reset, protocol garbage, or the frame deadline.
+        loop {
+            let mut reader = DeadlineReader {
+                inner: &mut stream,
+                deadline: Instant::now() + frame_deadline,
+            };
+            let Ok(msg) = read_msg::<_, ClientMsg>(&mut reader) else {
+                break;
+            };
             let is_bye = matches!(msg, ClientMsg::Bye);
             if events_tx.send(Event::Msg { conn, msg }).is_err() || is_bye {
                 break;
@@ -225,6 +344,10 @@ fn sim_loop(
         // before the hard timeout kicks them (clients keepalive every ~2 s).
         let now = Instant::now();
         for (&conn_id, c) in conns.iter_mut() {
+            // Refill the message-rate budget: one tick's worth per tick, so
+            // the sustained rate is MSGS_PER_TICK_LIMIT however bursty the
+            // drain windows are.
+            c.msg_budget = (c.msg_budget + MSGS_PER_TICK_LIMIT).min(MSG_BURST);
             if c.player.is_some() && !c.lag_flagged {
                 let silent = now.duration_since(c.last_seen);
                 if silent > LAG_THRESHOLD {
@@ -318,13 +441,35 @@ fn handle_event(
     events_tx: &Sender<Event>,
 ) {
     match ev {
-        Event::Connected { conn, stream, peer } => {
+        Event::Connected {
+            conn,
+            stream,
+            peer,
+            ip,
+        } => {
             // Admission cap BEFORE any thread is spawned for this socket.
             let conn_cap = cfg.max_players * 2 + 16;
             if conns.len() >= conn_cap {
                 tracing::warn!("conn {conn} ({peer}): connection cap {conn_cap} reached, refusing");
                 let _ = stream.shutdown(Shutdown::Both);
                 return;
+            }
+            // Per-IP cap, so one host cannot occupy the global cap above.
+            // Counted from the live map rather than a side table: the count
+            // is then correct by construction, including after a crash-drop
+            // that never ran a release path.
+            if let Some(ip) = ip {
+                if cfg.cap_loopback || !ip.is_loopback() {
+                    let from_ip = conns.values().filter(|c| c.ip == Some(ip)).count();
+                    if from_ip >= cfg.max_conns_per_ip {
+                        tracing::warn!(
+                            "conn {conn} ({peer}): per-ip cap {} reached, refusing",
+                            cfg.max_conns_per_ip
+                        );
+                        let _ = stream.shutdown(Shutdown::Both);
+                        return;
+                    }
+                }
             }
             let (reader_stream, sock) = match (stream.try_clone(), stream.try_clone()) {
                 (Ok(r), Ok(s)) => (r, s),
@@ -340,18 +485,35 @@ fn handle_event(
                     tx,
                     sock,
                     peer: peer.clone(),
+                    ip,
                     player: None,
                     last_seen: Instant::now(),
                     lag_flagged: false,
+                    // One tick's worth to start: the burst ceiling exists to
+                    // absorb a sim stall for an established client, not to
+                    // hand a fresh connection a free blast.
+                    msg_budget: MSGS_PER_TICK_LIMIT,
                 },
             );
-            spawn_reader(conn, reader_stream, events_tx.clone());
+            spawn_reader(conn, reader_stream, events_tx.clone(), cfg.frame_deadline);
             tracing::info!("conn {conn}: accepted from {peer}");
         }
         Event::Msg { conn, msg } => {
             let Some(c) = conns.get_mut(&conn) else {
                 return;
             };
+            // Message-rate cap, spent before anything else this message
+            // could buy: a flooder must not get lag-recovery bookkeeping,
+            // a liveness refresh, or a sim update out of the attempt.
+            if c.msg_budget == 0 {
+                tracing::warn!(
+                    "conn {conn}: message flood (over {}/tick sustained), dropping",
+                    MSGS_PER_TICK_LIMIT
+                );
+                remove_conn(conn, conns);
+                return;
+            }
+            c.msg_budget -= 1;
             if c.lag_flagged {
                 c.lag_flagged = false;
                 tracing::info!(
