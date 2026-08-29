@@ -6,7 +6,7 @@ Presenter and input work is planned in `docs/presenter-architecture.md` and `doc
 
 ## Architecture (from the v7 re-framing)
 
-- The scene and present command buffers reach the queue in one `submit` call (`crates/ember-engine/src/renderer.rs:798-799`) under a comment claiming the ATW sliced-submission rule — a one-line fix, independent of the split (`docs/presenter-architecture.md` §5).
+- The scene and present command buffers reach the queue in one `submit` call (`crates/ember-engine/src/renderer.rs:798-799`) under a comment claiming the ATW sliced-submission rule (`crates/ember-engine/src/renderer.rs:673-675`). Splitting the call is a one-line fix worth making for the stage boundary, but it does **not** deliver sliced scheduling — on one in-order queue the present still runs behind the scene work either way, and real slicing needs the scene emitted as several separately submitted chunks (roadmap step 7). Fix the comment along with the code (`docs/presenter-architecture.md` §5).
 - Shader hot-reload rebuilds both the scene and the present pipeline from one clock (`crates/ember-engine/src/renderer.rs:807-835`) and needs re-homing before the presenter split can be written (`docs/presenter-architecture.md` §8.1).
 - The scene-Hz throttle lives inside the renderer, so the renderer decides whether the renderer runs (`crates/ember-engine/src/renderer.rs:608-612`); the clock belongs above both GPU stages (`docs/presenter-architecture.md` §8.2).
 - `cursor_ndc()` and `aspect()` have no callers anywhere in the workspace, and the shooter's head comment claiming cursor unprojection (`crates/pong/src/online.rs:2`) is stale — it aims with relative deltas. The API is worth keeping; nobody should assume a shipped game is exercising it (`docs/input-latch.md` §7).
