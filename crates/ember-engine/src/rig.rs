@@ -230,15 +230,35 @@ pub const JOINT_NAMES: [&str; joint::COUNT] = [
 
 /// Pull one `"name": [x, y, z]` triple out of the rig JSON. The file is
 /// ours and tiny, so this avoids a serde dependency in the engine.
+///
+/// The key must be followed by `:` and an array, and every occurrence is
+/// tried. Matching the bare name anywhere would find it inside a list of
+/// part names too — and then read whichever array came next, silently
+/// giving every joint the same pivot. (Found by dev-a1 in review.)
 fn parse_joint(json: &str, name: &str) -> Option<Vec3> {
-    let start = json.find(&format!("\"{name}\""))? + name.len() + 2;
-    let open = start + json[start..].find('[')?;
-    let close = open + json[open..].find(']')?;
-    let nums: Vec<f32> = json[open + 1..close]
-        .split(',')
-        .filter_map(|s| s.trim().parse().ok())
-        .collect();
-    (nums.len() == 3).then(|| Vec3::new(nums[0], nums[1], nums[2]))
+    let key = format!("\"{name}\"");
+    let mut from = 0;
+    while let Some(hit) = json[from..].find(&key) {
+        let after = from + hit + key.len();
+        from = after;
+        let Some(body) = json[after..].trim_start().strip_prefix(':') else {
+            continue;
+        };
+        let Some(inner) = body.trim_start().strip_prefix('[') else {
+            continue;
+        };
+        let Some(close) = inner.find(']') else {
+            continue;
+        };
+        let nums: Vec<f32> = inner[..close]
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        if nums.len() == 3 {
+            return Some(Vec3::new(nums[0], nums[1], nums[2]));
+        }
+    }
+    None
 }
 
 /// Load a split skinned model: a GLB whose nodes are named `rig_<joint>`
@@ -856,6 +876,28 @@ mod tests {
             p[ankle] = Vec3::new(s * 0.16, 0.14, 0.0);
         }
         p
+    }
+
+    #[test]
+    fn rig_json_joints_resolve_whatever_the_key_order() {
+        // A list of part names before the pivot map used to hijack every
+        // lookup: the scan matched the name inside the list and then read
+        // the next array it found, so every joint shared one pivot.
+        let json = r#"{
+          "parts": ["root", "spine", "neck"],
+          "joints": {
+            "root": [1.0, 2.0, 3.0],
+            "spine": [4.0, 5.0, 6.0],
+            "neck": [7.0, 8.0, 9.0]
+          }
+        }"#;
+        assert_eq!(parse_joint(json, "root"), Some(Vec3::new(1.0, 2.0, 3.0)));
+        assert_eq!(parse_joint(json, "spine"), Some(Vec3::new(4.0, 5.0, 6.0)));
+        assert_eq!(parse_joint(json, "neck"), Some(Vec3::new(7.0, 8.0, 9.0)));
+        // The same file with the map first must of course still work.
+        let flipped = r#"{"joints": {"root": [1.0, 2.0, 3.0]}, "parts": ["root"]}"#;
+        assert_eq!(parse_joint(flipped, "root"), Some(Vec3::new(1.0, 2.0, 3.0)));
+        assert_eq!(parse_joint(flipped, "elbow_l"), None);
     }
 
     #[test]
