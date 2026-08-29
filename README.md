@@ -92,15 +92,20 @@ unreachable server makes launch pause ~4 s before the offline fallback.
       (identity warp today — see `docs/atw-first-rendering.md`, adopted)
 - [x] **0.7 First game + web build**: 3D pong (2 players, one keyboard),
       compiled to wasm (WebGPU with WebGL2 fallback), hosted on GitHub Pages
-- [ ] 1. First triangle → textured cube → fly camera (WASD + mouse;
-      fly camera lands as rotation-only warp, ATW stage B)
+- [x] **1 (textures half). Per-mesh textures + UVs**: scene pass samples a
+      per-mesh texture at group(1); GLB loader reads TEXCOORD_0; fly camera
+      still open (lands as rotation-only warp, ATW stage B)
 - [x] **2 (first half). glTF mesh pipeline**: Blender (scripted, headless)
       → .glb → engine multi-mesh instancing; the arena viewmodel (pistol +
       hands) is authored via `tools/make_assets.py`. Level editing and
       textures still ahead.
-- [ ] 3. Depth buffer, Blinn-Phong lighting, basic shadow mapping
+- [x] **3 (lighting half)**: Blinn-Phong + top sheen + view-depth fog in the
+      scene shader; shadow mapping still open
 - [ ] 4. Fixed-timestep loop + physics (rapier)
-- [ ] 5. egui debug overlay + hot-reloadable WGSL shaders
+- [x] **5. egui debug overlay + hot-reloadable WGSL shaders**: the ATW test
+      rig from the doc's §6 — F3 overlay (presenter-composited) with a
+      scene-Hz throttle + frame-age/latency readouts; shaders hot-reload
+      from disk on native
 - [ ] 6. Offline asset compiler (glTF → baked blobs)
 - [ ] 7. GPU-driven rendering pass (bindless, culling in compute, indirect draws)
 - [ ] Game-specific systems — driven by the game design, step by step
