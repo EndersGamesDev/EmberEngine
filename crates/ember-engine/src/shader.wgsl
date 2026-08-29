@@ -22,6 +22,8 @@ struct VsOut {
     @location(0) normal: vec3<f32>,
     @location(1) color: vec3<f32>,
     @location(2) uv: vec2<f32>,
+    // View-space depth (perspective w) for distance fog.
+    @location(3) view_depth: f32,
 };
 
 @vertex
@@ -45,17 +47,32 @@ fn vs_main(in: VsIn) -> VsOut {
     );
     out.color = in.i_color;
     out.uv = in.uv;
+    out.view_depth = out.clip.w;
     return out;
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let sun = normalize(vec3<f32>(0.4, 1.0, 0.3));
-    let ambient = 0.35;
-    let diff = max(dot(normalize(in.normal), sun), 0.0);
+    // Lighting tuning.
+    let sun_dir = normalize(vec3<f32>(0.4, 1.0, 0.3));
+    let ambient = 0.22;          // base fill
+    let sun_intensity = 0.95;    // direct sun
+    let sheen_strength = 0.35;   // stylized top sheen (Blinn half-vector vs up)
+    let sheen_power = 8.0;
+    // Fog tuning: view-depth based, fades to a dark horizon.
+    let fog_density = 0.012;
+    let fog_color = vec3<f32>(0.012, 0.020, 0.045);
+
     // Untextured meshes sample the shared 1x1 white pixel, so albedo
     // reduces to the instance color exactly as before.
     let albedo = textureSample(mesh_tex, mesh_samp, in.uv).rgb * in.color;
-    let lit = albedo * (ambient + (1.0 - ambient) * diff);
-    return vec4<f32>(lit, 1.0);
+
+    let n = normalize(in.normal);
+    let ndotl = max(dot(n, sun_dir), 0.0);
+    let half_vec = normalize(sun_dir + vec3<f32>(0.0, 1.0, 0.0));
+    let sheen = sheen_strength * pow(max(dot(n, half_vec), 0.0), sheen_power);
+    let lit = albedo * (ambient + sun_intensity * ndotl) + albedo * sheen;
+
+    let fog = clamp(1.0 - exp(-in.view_depth * fog_density), 0.0, 1.0);
+    return vec4<f32>(mix(lit, fog_color, fog), 1.0);
 }
