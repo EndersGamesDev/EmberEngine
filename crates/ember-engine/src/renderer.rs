@@ -147,6 +147,23 @@ pub struct Renderer {
     /// Set when the surface format itself is non-sRGB (WebGPU canvases):
     /// the present pass renders into an sRGB reinterpreting view.
     surface_view_format: Option<wgpu::TextureFormat>,
+    // Pipeline layouts kept so WGSL hot-reload can rebuild pipelines
+    // (native-only reader, hence unused on wasm).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    scene_pipeline_layout: wgpu::PipelineLayout,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    present_pipeline_layout: wgpu::PipelineLayout,
+    #[cfg(not(target_arch = "wasm32"))]
+    shader_reload: ShaderReload,
+}
+
+/// Tracks shader sources on disk for native WGSL hot-reload.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct ShaderReload {
+    frame: u32,
+    scene_mtime: Option<std::time::SystemTime>,
+    present_mtime: Option<std::time::SystemTime>,
 }
 
 impl Renderer {
@@ -278,57 +295,13 @@ impl Renderer {
             }],
         });
 
-        let scene_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("scene pipeline layout"),
-            bind_group_layouts: &[&camera_layout],
-            push_constant_ranges: &[],
-        });
-        let scene_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("scene pipeline"),
-            layout: Some(&scene_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[
-                    wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<Vertex>() as u64,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
-                    },
-                    wgpu::VertexBufferLayout {
-                        array_stride: std::mem::size_of::<InstanceRaw>() as u64,
-                        step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &wgpu::vertex_attr_array![2 => Float32x3, 3 => Float32x3, 4 => Float32x3, 5 => Float32],
-                    },
-                ],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: SCENE_FORMAT,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: Default::default(),
-            multiview: None,
-            cache: None,
-        });
+        let scene_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("scene pipeline layout"),
+                bind_group_layouts: &[&camera_layout],
+                push_constant_ranges: &[],
+            });
+        let scene_pipeline = build_scene_pipeline(&device, &scene_pipeline_layout, &shader);
 
         let instance_cap = 64;
         let instance_buf = create_instance_buf(&device, instance_cap);
@@ -373,31 +346,12 @@ impl Renderer {
                 bind_group_layouts: &[&present_layout],
                 push_constant_ranges: &[],
             });
-        let present_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("present pipeline"),
-            layout: Some(&present_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &present_shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &present_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_view_format.unwrap_or(config.format),
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview: None,
-            cache: None,
-        });
+        let present_pipeline = build_present_pipeline(
+            &device,
+            &present_pipeline_layout,
+            &present_shader,
+            surface_view_format.unwrap_or(config.format),
+        );
 
         Self {
             surface,
@@ -417,6 +371,10 @@ impl Renderer {
             present_bind,
             present_sampler,
             surface_view_format,
+            scene_pipeline_layout,
+            present_pipeline_layout,
+            #[cfg(not(target_arch = "wasm32"))]
+            shader_reload: ShaderReload::default(),
         }
     }
 
@@ -444,6 +402,9 @@ impl Renderer {
     }
 
     pub fn render(&mut self, frame: &Frame) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.maybe_reload_shaders();
+
         let surface_tex = match self.surface.get_current_texture() {
             Ok(t) => t,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
@@ -574,6 +535,63 @@ impl Renderer {
             .submit([scene_enc.finish(), present_enc.finish()]);
         surface_tex.present();
     }
+
+    /// Native-only WGSL hot-reload: every 60 rendered frames poll the shader
+    /// sources on disk and rebuild the affected pipeline when a file changed.
+    /// A shader that fails validation is logged and the old pipeline kept.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn maybe_reload_shaders(&mut self) {
+        const SCENE_SRC: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/shader.wgsl");
+        const PRESENT_SRC: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/present.wgsl");
+
+        self.shader_reload.frame = self.shader_reload.frame.wrapping_add(1);
+        if self.shader_reload.frame % 60 != 0 {
+            return;
+        }
+
+        if check_mtime(SCENE_SRC, &mut self.shader_reload.scene_mtime) {
+            if let Some(module) = self.try_compile(SCENE_SRC, "scene shader (hot-reload)") {
+                self.scene_pipeline =
+                    build_scene_pipeline(&self.device, &self.scene_pipeline_layout, &module);
+                tracing::info!(path = SCENE_SRC, "scene shader hot-reloaded");
+            }
+        }
+        if check_mtime(PRESENT_SRC, &mut self.shader_reload.present_mtime) {
+            if let Some(module) = self.try_compile(PRESENT_SRC, "present shader (hot-reload)") {
+                let format = self.surface_view_format.unwrap_or(self.config.format);
+                self.present_pipeline = build_present_pipeline(
+                    &self.device,
+                    &self.present_pipeline_layout,
+                    &module,
+                    format,
+                );
+                tracing::info!(path = PRESENT_SRC, "present shader hot-reloaded");
+            }
+        }
+    }
+
+    /// Compile WGSL from `path` under a validation error scope. None (plus an
+    /// error log) when the file is unreadable or the shader fails validation.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn try_compile(&self, path: &str, label: &str) -> Option<wgpu::ShaderModule> {
+        let source = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(path, error = %e, "shader hot-reload: read failed");
+                return None;
+            }
+        };
+        self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(label),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+        if let Some(err) = pollster::block_on(self.device.pop_error_scope()) {
+            tracing::error!(path, %err, "shader hot-reload: validation failed; keeping old pipeline");
+            return None;
+        }
+        Some(module)
+    }
 }
 
 fn create_scene_targets(
@@ -632,6 +650,113 @@ fn create_present_bind(
             },
         ],
     })
+}
+
+/// Scene render pipeline; shared by startup and WGSL hot-reload.
+fn build_scene_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("scene pipeline"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[
+                wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Vertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
+                },
+                wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<InstanceRaw>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![2 => Float32x3, 3 => Float32x3, 4 => Float32x3, 5 => Float32],
+                },
+            ],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: SCENE_FORMAT,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Less,
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: Default::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
+/// Presenter pipeline; shared by startup and WGSL hot-reload.
+fn build_present_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    target_format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("present pipeline"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: target_format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: Default::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
+/// True when the file's mtime differs from `tracked` (which is updated).
+/// The first successful stat only records the baseline and reports false.
+#[cfg(not(target_arch = "wasm32"))]
+fn check_mtime(path: &str, tracked: &mut Option<std::time::SystemTime>) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else { return false };
+    let Ok(mtime) = meta.modified() else { return false };
+    match tracked {
+        Some(prev) if *prev != mtime => {
+            *tracked = Some(mtime);
+            true
+        }
+        Some(_) => false,
+        None => {
+            *tracked = Some(mtime);
+            false
+        }
+    }
 }
 
 fn create_instance_buf(device: &wgpu::Device, cap: usize) -> wgpu::Buffer {
