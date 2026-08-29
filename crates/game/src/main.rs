@@ -10,7 +10,10 @@ mod world;
 use std::time::{Duration, Instant};
 
 use ember_engine::glam::{Vec2, Vec3};
-use ember_engine::{Camera, EmberGame, EngineConfig, Frame, InputState, Instance, KeyCode};
+use ember_engine::{
+    Camera, EmberGame, EngineConfig, Frame, InputState, Instance, KeyCode, MeshData, MeshVertex,
+    TextureData,
+};
 use ember_net::{ClientMsg, ARENA_HALF, MOVE_SPEED};
 
 use net::NetClient;
@@ -20,6 +23,87 @@ enum Session {
     Online(NetClient),
     /// Server unreachable: local-only arena so the game still runs.
     Offline { pos: Vec2 },
+}
+
+// Registered mesh ids (0 is the engine's built-in cube).
+const MESH_FLOOR: u32 = 1;
+const MESH_WALL: u32 = 2;
+const MESH_PLAYER: u32 = 3;
+
+/// Tries assets/textures/<name> relative to the workspace, then the cwd.
+/// Missing or broken files degrade to untextured rendering, never a crash.
+fn load_texture(name: &str) -> Option<TextureData> {
+    let candidates = [
+        format!("{}/../../assets/textures/{name}", env!("CARGO_MANIFEST_DIR")),
+        format!("assets/textures/{name}"),
+    ];
+    for path in candidates {
+        if let Ok(bytes) = std::fs::read(&path) {
+            match TextureData::from_png_bytes(&bytes) {
+                Ok(t) => {
+                    tracing::info!(path, w = t.width, h = t.height, "texture loaded");
+                    return Some(t);
+                }
+                Err(e) => tracing::error!(path, error = %e, "texture decode failed"),
+            }
+        }
+    }
+    tracing::warn!(name, "texture missing; rendering untextured");
+    None
+}
+
+/// Axis-aligned unit box, every face UV-tiled `tiles` times.
+fn box_mesh(tiles: f32, texture: Option<TextureData>) -> MeshData {
+    let faces: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
+        ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+        ([0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+        ([1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]),
+        ([-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]),
+        ([0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]),
+        ([0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+    ];
+    let uvs = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+    let mut vertices = Vec::with_capacity(36);
+    for (n, u, v) in faces {
+        let n3 = Vec3::from(n);
+        let u3 = Vec3::from(u);
+        let v3 = Vec3::from(v);
+        let center = n3 * 0.5;
+        let corners = [
+            center - u3 * 0.5 - v3 * 0.5,
+            center + u3 * 0.5 - v3 * 0.5,
+            center + u3 * 0.5 + v3 * 0.5,
+            center - u3 * 0.5 + v3 * 0.5,
+        ];
+        for idx in [0usize, 1, 2, 0, 2, 3] {
+            vertices.push(MeshVertex {
+                pos: corners[idx].to_array(),
+                normal: n,
+                uv: [uvs[idx][0] * tiles, uvs[idx][1] * tiles],
+            });
+        }
+    }
+    MeshData { vertices, texture }
+}
+
+/// Flat unit plane at y = 0 facing +Y, UVs tiled `tiles` times.
+fn plane_mesh(tiles: f32, texture: Option<TextureData>) -> MeshData {
+    let corners = [
+        Vec3::new(-0.5, 0.0, -0.5),
+        Vec3::new(0.5, 0.0, -0.5),
+        Vec3::new(0.5, 0.0, 0.5),
+        Vec3::new(-0.5, 0.0, 0.5),
+    ];
+    let uvs = [[0.0, 0.0], [tiles, 0.0], [tiles, tiles], [0.0, tiles]];
+    let mut vertices = Vec::with_capacity(6);
+    for idx in [0usize, 1, 2, 0, 2, 3] {
+        vertices.push(MeshVertex {
+            pos: corners[idx].to_array(),
+            normal: [0.0, 1.0, 0.0],
+            uv: uvs[idx],
+        });
+    }
+    MeshData { vertices, texture }
 }
 
 /// A snapshot gap above this (at 60 Hz ≈ 16 ms cadence) is a lag spike.
@@ -45,8 +129,26 @@ impl Game {
     fn arena_frame(&self, camera: Camera) -> Frame {
         let mut frame = Frame { camera, instances: Vec::new() };
         let half = self.world.arena_half;
-        // Ground slab, top surface at y = 0.
-        frame.instances.push(Instance::new(Vec3::new(0.0, -0.5, 0.0), Vec3::new(half * 2.0 + 2.0, 1.0, half * 2.0 + 2.0), Vec3::new(0.16, 0.17, 0.20)));
+        let span = half * 2.0 + 2.0;
+        // Ground slab, top surface at y = 0 (dark base under the floor).
+        frame.instances.push(Instance::new(Vec3::new(0.0, -0.5, 0.0), Vec3::new(span, 1.0, span), Vec3::new(0.16, 0.17, 0.20)));
+        // Textured basalt floor overlay.
+        frame.instances.push(
+            Instance::new(Vec3::new(0.0, 0.005, 0.0), Vec3::new(span, 1.0, span), Vec3::ONE)
+                .with_mesh(MESH_FLOOR),
+        );
+        // Perimeter walls (textured), overlapping at the corners.
+        for &s in &[-1.0f32, 1.0] {
+            frame.instances.push(
+                Instance::new(Vec3::new(0.0, 1.25, (half + 1.0) * s), Vec3::new(span + 1.2, 2.5, 0.6), Vec3::ONE)
+                    .with_mesh(MESH_WALL),
+            );
+            frame.instances.push(
+                Instance::new(Vec3::new((half + 1.0) * s, 1.25, 0.0), Vec3::new(span + 1.2, 2.5, 0.6), Vec3::ONE)
+                    .with_mesh(MESH_WALL)
+                    .with_yaw(std::f32::consts::FRAC_PI_2),
+            );
+        }
         // Arena corner markers.
         for &sx in &[-1.0f32, 1.0] {
             for &sz in &[-1.0f32, 1.0] {
@@ -58,7 +160,10 @@ impl Game {
 
     fn push_player(frame: &mut Frame, pos: Vec2, color: [f32; 3], is_me: bool) {
         let scale = if is_me { 1.15 } else { 1.0 };
-        frame.instances.push(Instance::new(Vec3::new(pos.x, scale * 0.5, pos.y), Vec3::splat(scale), Vec3::from_array(color)));
+        frame.instances.push(
+            Instance::new(Vec3::new(pos.x, scale * 0.5, pos.y), Vec3::splat(scale), Vec3::from_array(color))
+                .with_mesh(MESH_PLAYER),
+        );
     }
 }
 
@@ -201,7 +306,15 @@ fn main() {
     };
 
     ember_engine::run(
-        EngineConfig { title, ..Default::default() },
+        EngineConfig {
+            title,
+            meshes: vec![
+                plane_mesh(12.0, load_texture("floor_basalt.png")),
+                box_mesh(4.0, load_texture("wall_basalt.png")),
+                box_mesh(1.0, load_texture("player_armor.png")),
+            ],
+            ..Default::default()
+        },
         Game {
             session,
             world,

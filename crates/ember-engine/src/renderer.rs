@@ -40,6 +40,17 @@ pub struct TextureData {
     pub rgba8: Vec<u8>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+impl TextureData {
+    /// Decode PNG bytes (e.g. from include_bytes!) into RGBA8.
+    pub fn from_png_bytes(bytes: &[u8]) -> Result<Self, String> {
+        let img = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
+            .map_err(|e| e.to_string())?
+            .to_rgba8();
+        Ok(Self { width: img.width(), height: img.height(), rgba8: img.into_raw() })
+    }
+}
+
 /// One draw unit: a colored mesh instance (default: the unit cube),
 /// optionally rotated around Y.
 #[derive(Clone, Copy, Debug)]

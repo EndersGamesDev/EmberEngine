@@ -16,7 +16,7 @@ pub use app::{run, EngineConfig};
 #[cfg(not(target_arch = "wasm32"))]
 pub use app::init_diagnostics;
 pub use input::InputState;
-pub use renderer::{Camera, Frame, Instance, MeshData, MeshVertex};
+pub use renderer::{Camera, Frame, Instance, MeshData, MeshVertex, TextureData};
 
 // Re-exported so game code doesn't need its own winit/glam dependency for
 // the common cases.
