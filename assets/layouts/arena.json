@@ -1,0 +1,54 @@
+{
+  "layouts": [
+    {
+      "name": "Crossroads",
+      "props": [
+        { "kind": "pillar", "x": 0, "z": 0, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "crate", "x": -6, "z": 0, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "crate", "x": 6, "z": 0, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "crate", "x": 0, "z": -6, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "crate", "x": 0, "z": 6, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "barricade", "x": -8, "z": -8, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "barricade", "x": 8, "z": 8, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "barricade", "x": 8, "z": -8, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "barricade", "x": -8, "z": 8, "yaw_deg": 0, "scale": 1.0 }
+      ]
+    },
+    {
+      "name": "Boxed Garden",
+      "props": [
+        { "kind": "barricade", "x": 0, "z": 0, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "crate", "x": -4, "z": 0, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "crate", "x": 4, "z": 0, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "crate", "x": 0, "z": -4, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "crate", "x": 0, "z": 4, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "barrel", "x": -3, "z": 3, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "barrel", "x": 3, "z": 3, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "barrel", "x": 3, "z": -3, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "barrel", "x": -3, "z": -3, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "pillar", "x": -9, "z": 6, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "pillar", "x": 9, "z": 6, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "pillar", "x": 9, "z": -6, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "pillar", "x": -9, "z": -6, "yaw_deg": 0, "scale": 1.0 }
+      ]
+    },
+    {
+      "name": "Snipers Nest",
+      "props": [
+        { "kind": "crate", "x": 0, "z": 0, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "pillar", "x": -6, "z": 0, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "pillar", "x": 6, "z": 0, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "pillar", "x": 0, "z": -6, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "pillar", "x": 0, "z": 6, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "barricade", "x": -6, "z": -2, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "barricade", "x": -6, "z": 2, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "barricade", "x": 6, "z": -2, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "barricade", "x": 6, "z": 2, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "barrel", "x": -10, "z": 0, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "barrel", "x": 10, "z": 0, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "barrel", "x": 0, "z": -10, "yaw_deg": 0, "scale": 1.0 },
+        { "kind": "barrel", "x": 0, "z": 10, "yaw_deg": 0, "scale": 1.0 }
+      ]
+    }
+  ]
+}

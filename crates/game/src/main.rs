@@ -6,6 +6,7 @@
 
 mod character;
 mod net;
+mod props;
 mod world;
 
 use std::collections::HashMap;
@@ -132,6 +133,8 @@ struct Game {
     anim: HashMap<ember_net::PlayerId, (f32, f32)>,
     /// Animation state for the offline local player.
     offline_anim: (f32, f32),
+    /// Static cover props for the current arena layout.
+    layouts: Option<props::Layouts>,
 }
 
 impl Game {
@@ -163,6 +166,10 @@ impl Game {
             for &sz in &[-1.0f32, 1.0] {
                 frame.instances.push(Instance::new(Vec3::new(half * sx, 0.75, half * sz), Vec3::new(0.5, 1.5, 0.5), Vec3::new(0.35, 0.37, 0.42)));
             }
+        }
+        // Cover props (stone kinds use the wall mesh, metal kinds the torso mesh).
+        if let Some(layouts) = &self.layouts {
+            props::push_props(&mut frame, props::pick(layouts), MESH_WALL, MESH_CHAR + 1);
         }
         frame
     }
@@ -349,6 +356,7 @@ fn main() {
             stale_since: None,
             anim: HashMap::new(),
             offline_anim: (0.0, 0.0),
+            layouts: props::load_layouts(),
         },
     );
 }
