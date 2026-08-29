@@ -9,6 +9,13 @@ pub const MOVE_SPEED: f32 = 9.0;
 pub const SPRINT_MULT: f32 = 1.6;
 pub const CROUCH_MULT: f32 = 0.55;
 pub const PLAYER_R: f32 = 0.6;
+/// Crouching shrinks the HIT circle (movement blocking keeps PLAYER_R).
+pub const CROUCH_HIT_MULT: f32 = 0.72;
+
+/// Stance-dependent hit-test radius: crouch = lower profile = smaller target.
+pub fn hit_radius(crouch: bool) -> f32 {
+    if crouch { PLAYER_R * CROUCH_HIT_MULT } else { PLAYER_R }
+}
 pub const BULLET_SPEED: f32 = 34.0;
 pub const BULLET_R: f32 = 0.22;
 pub const BULLET_TTL: f32 = 1.6;
@@ -237,8 +244,10 @@ pub struct Bullet {
     pub delay: u16,
 }
 
-/// One tick's snapshot of player positions, for lag-compensated rewinds.
-type HistoryFrame = Vec<(u8, [f32; 2], bool)>;
+/// One tick's snapshot per player (id, pos, alive, crouch) for
+/// lag-compensated rewinds — stance rewinds with position, so a shot at a
+/// then-standing target uses the standing hitbox even if they since crouched.
+type HistoryFrame = Vec<(u8, [f32; 2], bool, bool)>;
 
 pub struct Sim {
     pub obstacles: Vec<Obstacle>,
@@ -296,19 +305,22 @@ impl Sim {
         // a joiner must not inherit the leaver's ghost (lag-comp hit tests
         // would land on positions the new player never occupied).
         for frame in self.history.iter_mut() {
-            frame.retain(|(pid, _, _)| *pid != id);
+            frame.retain(|(pid, _, _, _)| *pid != id);
         }
     }
 
-    /// Target position for a hit test, rewound `delay` ticks for lag
-    /// compensation (falls back to the present when history is short).
-    fn rewound(&self, id: u8, delay: u16) -> Option<([f32; 2], bool)> {
+    /// Target state for a hit test — (pos, alive, crouch) rewound `delay`
+    /// ticks for lag compensation (None when history is short or delay 0).
+    fn rewound(&self, id: u8, delay: u16) -> Option<([f32; 2], bool, bool)> {
         if delay == 0 {
             return None;
         }
         let idx = self.history.len().checked_sub(1 + delay as usize)?;
         let frame = self.history.get(idx)?;
-        frame.iter().find(|(pid, _, _)| *pid == id).map(|&(_, pos, alive)| (pos, alive))
+        frame
+            .iter()
+            .find(|(pid, _, _, _)| *pid == id)
+            .map(|&(_, pos, alive, crouch)| (pos, alive, crouch))
     }
 
     pub fn step(&mut self, inputs: &dyn Fn(u8) -> PlayerIn) {
@@ -416,9 +428,9 @@ impl Sim {
             }
         }
 
-        // Record this tick's positions for lag-compensated rewinds.
+        // Record this tick's positions + stance for lag-compensated rewinds.
         self.history
-            .push_back(self.players.iter().map(|p| (p.id, p.pos, p.alive)).collect());
+            .push_back(self.players.iter().map(|p| (p.id, p.pos, p.alive, p.crouch)).collect());
         if self.history.len() > HISTORY_LEN {
             self.history.pop_front();
         }
@@ -438,18 +450,18 @@ impl Sim {
             let p1 = [p0[0] + b.vel[0] * dt, p0[1] + b.vel[1] * dt];
             let (sx, sz) = (p1[0] - p0[0], p1[1] - p0[1]);
             let seg_len_sq = sx * sx + sz * sz;
-            let rr = PLAYER_R + BULLET_R;
             for p in self.players.iter() {
                 if p.id == b.owner {
                     continue;
                 }
-                // Where the shooter SAW this target when firing.
-                let (tpos, talive) = self
+                // Where (and in what stance) the shooter SAW this target.
+                let (tpos, talive, tcrouch) = self
                     .rewound(p.id, b.delay)
-                    .unwrap_or((p.pos, p.alive));
+                    .unwrap_or((p.pos, p.alive, p.crouch));
                 if !talive || !p.alive {
                     continue;
                 }
+                let rr = hit_radius(tcrouch) + BULLET_R;
                 // Closest point on [p0, p1] to the (rewound) center.
                 let t = if seg_len_sq <= 1e-8 {
                     0.0
@@ -789,6 +801,78 @@ mod tests {
         }
         assert_eq!(sim.events, vec![(0, 1)], "heavy weapon killed the target");
         assert!(hits <= 1, "at most one non-lethal hit before the kill (2 dmg per hit)");
+    }
+
+    #[test]
+    fn crouch_shrinks_the_hit_circle() {
+        // A graze shot aimed just inside the STANDING radius but outside the
+        // crouched one: hits a standing target, misses a crouched target.
+        let graze_z = hit_radius(false) + BULLET_R - 0.05; // inside standing
+        assert!(graze_z > hit_radius(true) + BULLET_R, "graze must clear the crouched circle");
+        let run = |crouch: bool| -> bool {
+            let mut sim = Sim::new(11);
+            sim.obstacles.clear();
+            sim.pads.clear();
+            sim.add_player(0);
+            sim.add_player(1);
+            let mut inputs = HashMap::new();
+            inputs.insert(0, PlayerIn { aim: [1.0, 0.0], fire: true, ..Default::default() });
+            inputs.insert(1, PlayerIn { crouch, ..Default::default() });
+            for _ in 0..120 {
+                sim.players.iter_mut().for_each(|p| match p.id {
+                    0 if p.alive => p.pos = [0.0, 0.0],
+                    1 if p.alive => p.pos = [5.0, graze_z],
+                    _ => {}
+                });
+                step_with(&mut sim, &inputs);
+                if sim.players.iter().find(|p| p.id == 1).unwrap().hp < MAX_HP {
+                    return true;
+                }
+            }
+            false
+        };
+        assert!(run(false), "graze shot must hit a standing target");
+        assert!(!run(true), "the same shot must miss a crouched target");
+    }
+
+    #[test]
+    fn rewind_uses_historical_stance() {
+        // Target stood (large circle) when the lagged shooter fired, then
+        // crouched. The rewound hit test must use the standing hitbox.
+        let graze_z = hit_radius(false) + BULLET_R - 0.05;
+        let mut sim = Sim::new(12);
+        sim.obstacles.clear();
+        sim.pads.clear();
+        sim.add_player(0);
+        sim.add_player(1);
+        let idle = HashMap::new();
+        // History fills while the target STANDS at the graze offset.
+        for _ in 0..15 {
+            sim.players.iter_mut().for_each(|p| match p.id {
+                0 => p.pos = [0.0, 0.0],
+                1 => p.pos = [5.0, graze_z],
+                _ => {}
+            });
+            step_with(&mut sim, &idle);
+        }
+        // Now the target crouches; a 12-tick-lagged shot sees them standing.
+        let mut inputs = HashMap::new();
+        inputs.insert(0, PlayerIn { aim: [1.0, 0.0], fire: true, delay_ticks: 12, ..Default::default() });
+        inputs.insert(1, PlayerIn { crouch: true, ..Default::default() });
+        let mut hit = false;
+        for _ in 0..12 {
+            sim.players.iter_mut().for_each(|p| match p.id {
+                0 => p.pos = [0.0, 0.0],
+                1 if p.alive => p.pos = [5.0, graze_z],
+                _ => {}
+            });
+            step_with(&mut sim, &inputs);
+            if sim.players.iter().find(|p| p.id == 1).unwrap().hp < MAX_HP {
+                hit = true;
+                break;
+            }
+        }
+        assert!(hit, "rewound shot must use the stance the shooter saw (standing)");
     }
 
     #[test]
