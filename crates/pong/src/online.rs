@@ -141,9 +141,14 @@ pub(crate) fn part_meshes(
             }
         }
     }
-    let rc = ember_engine::rig::veteran_rig(
-        sources[0], sources[1], sources[2], sources[3], sources[4], None,
-    );
+    let rc = ember_engine::rig::veteran_rig(&ember_engine::rig::VeteranSources {
+        head: Some(sources[0]),
+        torso: Some(sources[1]),
+        arm: Some(sources[2]),
+        leg: Some(sources[3]),
+        boot: Some(sources[4]),
+        ..Default::default()
+    });
     tracing::info!("jointed rig character assembled ({} parts)", rc.parts.len());
     (meshes, Some(rc))
 }
