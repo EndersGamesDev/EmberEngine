@@ -533,7 +533,9 @@ impl Game {
         if let Some(sc) = &self.skinned_character {
             let pose = ember_engine::rig::walk_pose(phase, amp, 0.0, self.time_s, &sc.dims);
             let scale = if is_me { 1.1 } else { 1.0 };
-            ember_engine::rig::push_rig(frame, &sc.parts, &sc.skel, &pose, pos, yaw, color, scale);
+            ember_engine::rig::push_rig(
+                frame, &sc.parts, &sc.skel, &pose, pos, 0.0, yaw, color, scale,
+            );
             return;
         }
         if self.prefer_mesh {
@@ -545,7 +547,9 @@ impl Game {
         if let Some(rc) = &self.rig_character {
             let pose = ember_engine::rig::walk_pose(phase, amp, 0.0, self.time_s, &rc.dims);
             let scale = if is_me { 1.1 } else { 1.0 };
-            ember_engine::rig::push_rig(frame, &rc.parts, &rc.skel, &pose, pos, yaw, color, scale);
+            ember_engine::rig::push_rig(
+                frame, &rc.parts, &rc.skel, &pose, pos, 0.0, yaw, color, scale,
+            );
         } else if let Some(pc) = &self.part_character {
             let scale = if is_me { 1.1 } else { 1.0 };
             ember_engine::puppet::push_character_parts(

@@ -102,6 +102,7 @@ fn main() {
                     sprint: (t as u64).is_multiple_of(3),
                     crouch: false,
                     reload: false,
+                    jump: false,
                 },
             );
         }

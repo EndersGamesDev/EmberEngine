@@ -9,8 +9,8 @@ use ember_engine::glam::{Vec2, Vec3};
 use ember_engine::{Camera, EmberGame, Frame, InputState, Instance, KeyCode, MouseButton};
 use pong_core::proto::{BState, PState, PlayerMeta, C2S, PROTO_VERSION, S2C, STATE_EVERY_TICKS};
 use pong_core::shooter::{
-    generate_arena, generate_pads, move_circle, stance_speed, weapon_name, weapon_stats, Obstacle,
-    MAX_HP, RELOAD_SECS,
+    generate_arena, generate_pads, move_circle, obstacle_height, stance_speed, step_vertical,
+    weapon_name, weapon_stats, Obstacle, MAX_HP, RELOAD_SECS,
 };
 use serde::Deserialize;
 
@@ -304,17 +304,12 @@ fn push_gun(frame: &mut Frame, hand: Vec3, aim: Vec2, accent: Vec3) {
     );
 }
 
-/// Deterministic cosmetic obstacle height (the sim is 2D; every client
-/// derives the same height from the obstacle's own coordinates).
-fn obstacle_height(o: &Obstacle) -> f32 {
-    let h = (o.min[0] * 7.31 + o.max[1] * 3.17 + o.max[0] * 1.13).abs();
-    1.7 + (h - h.floor()) * 1.6
-}
-
 #[derive(Clone, Copy, Default)]
 struct PSnap {
     x: f32,
     z: f32,
+    /// Feet height, so remote players stand on crates and jump visibly.
+    y: f32,
 }
 
 /// One sent input command, kept until the server acks it — the base of
@@ -323,6 +318,7 @@ struct Cmd {
     seq: u32,
     mv: [f32; 2],
     speed: f32,
+    jump: bool,
     sent_at: f32,
 }
 
@@ -341,6 +337,9 @@ pub struct ShooterGame {
     /// Client-side movement prediction: instant response locally, rebased
     /// on the server's authoritative position + unacked-command replay.
     pred_pos: Vec2,
+    /// Predicted feet height and vertical speed (jump physics).
+    pred_y: f32,
+    pred_vy: f32,
     own_render: Vec2,
     was_alive: bool,
     history: VecDeque<Cmd>,
@@ -407,6 +406,8 @@ impl ShooterGame {
             bullets: Vec::new(),
             bullets_age: 0.0,
             pred_pos: Vec2::ZERO,
+            pred_y: 0.0,
+            pred_vy: 0.0,
             own_render: Vec2::ZERO,
             was_alive: false,
             history: VecDeque::new(),
@@ -458,6 +459,14 @@ impl ShooterGame {
         let f = self.from.get(&id).copied().unwrap_or_default();
         let to = self.to.get(&id).copied().unwrap_or_default();
         Vec2::new(f.x + (to.x - f.x) * a, f.z + (to.z - f.z) * a)
+    }
+
+    /// Interpolated feet height, so a remote player's jump is visible.
+    fn render_y(&self, id: u8) -> f32 {
+        let a = self.t.clamp(0.0, 1.0);
+        let f = self.from.get(&id).copied().unwrap_or_default();
+        let to = self.to.get(&id).copied().unwrap_or_default();
+        f.y + (to.y - f.y) * a
     }
 
     fn handle_of(&self, id: u8) -> String {
@@ -686,19 +695,41 @@ impl EmberGame for ShooterGame {
                                 let cur = self.render_pos(p.id);
                                 let (dx, dz) = (p.x - prev_to.x, p.z - prev_to.z);
                                 if dx * dx + dz * dz > 6.0 * 6.0 {
-                                    PSnap { x: p.x, z: p.z } // respawn teleport
+                                    // respawn teleport
+                                    PSnap {
+                                        x: p.x,
+                                        z: p.z,
+                                        y: p.y,
+                                    }
                                 } else {
-                                    PSnap { x: cur.x, z: cur.y }
+                                    PSnap {
+                                        x: cur.x,
+                                        z: cur.y,
+                                        y: self.render_y(p.id),
+                                    }
                                 }
                             }
-                            None => PSnap { x: p.x, z: p.z },
+                            None => PSnap {
+                                x: p.x,
+                                z: p.z,
+                                y: p.y,
+                            },
                         };
                         new_from.insert(p.id, snap);
                     }
                     self.from = new_from;
                     self.to = players
                         .iter()
-                        .map(|p| (p.id, PSnap { x: p.x, z: p.z }))
+                        .map(|p| {
+                            (
+                                p.id,
+                                PSnap {
+                                    x: p.x,
+                                    z: p.z,
+                                    y: p.y,
+                                },
+                            )
+                        })
                         .collect();
                     self.latest = players.into_iter().map(|p| (p.id, p)).collect();
                     self.t = 0.0;
@@ -751,13 +782,20 @@ impl EmberGame for ShooterGame {
                                 self.history.pop_front();
                             }
                             let mut p = [server.x, server.y];
+                            let (mut y, mut vy) = (my.y, self.pred_vy);
                             let mut it = self.history.iter().peekable();
                             while let Some(c) = it.next() {
                                 let end = it.peek().map(|n| n.sent_at).unwrap_or(self.time);
                                 let dur = (end - c.sent_at).clamp(0.0, 0.3);
-                                p = move_circle(p, c.mv, c.speed, dur, &self.obstacles);
+                                p = move_circle(p, y, c.mv, c.speed, dur, &self.obstacles);
+                                let stepped =
+                                    step_vertical(p, y, vy, c.jump, dur, &self.obstacles);
+                                y = stepped.0;
+                                vy = stepped.1;
                             }
                             let rebased = Vec2::new(p[0], p[1]);
+                            self.pred_y = y;
+                            self.pred_vy = vy;
                             if newly_alive || rebased.distance(self.pred_pos) > 4.0 {
                                 // Respawn / teleport: snap everything.
                                 self.pred_pos = server;
@@ -850,7 +888,8 @@ impl EmberGame for ShooterGame {
             mv = mv.normalize();
         }
         let moving = mv.length_squared() > 0.01;
-        let fire = input.mouse_down(MouseButton::Left) || input.down(KeyCode::Space);
+        let fire = input.mouse_down(MouseButton::Left);
+        let jump = input.down(KeyCode::Space);
 
         // Walk bob (cosmetic, client-side only).
         if moving {
@@ -887,6 +926,7 @@ impl EmberGame for ShooterGame {
                     seq,
                     mv: [mv.x, mv.y],
                     speed,
+                    jump,
                     sent_at: self.time,
                 });
                 if self.history.len() > 64 {
@@ -909,6 +949,7 @@ impl EmberGame for ShooterGame {
                 sprint,
                 crouch,
                 reload: input.down(KeyCode::KeyR),
+                jump,
             });
         }
 
@@ -917,12 +958,17 @@ impl EmberGame for ShooterGame {
         if me_alive {
             let p = move_circle(
                 self.pred_pos.to_array(),
+                self.pred_y,
                 [mv.x, mv.y],
                 speed,
                 dt,
                 &self.obstacles,
             );
             self.pred_pos = Vec2::new(p[0], p[1]);
+            let (y, vy, _grounded) =
+                step_vertical(p, self.pred_y, self.pred_vy, jump, dt, &self.obstacles);
+            self.pred_y = y;
+            self.pred_vy = vy;
         }
         // Tight smoothing absorbs reconciliation nudges without adding lag.
         let k = 1.0 - (-dt * 25.0).exp();
@@ -973,7 +1019,9 @@ impl EmberGame for ShooterGame {
         let my_pos = self.own_render;
         let (ps, pc) = self.pitch.sin_cos();
         let look = Vec3::new(fx * pc, ps, fz * pc);
-        let eye = Vec3::new(my_pos.x, self.eye_h + bob, my_pos.y);
+        // The eye rides the predicted feet height, so jumping and standing
+        // on a crate raise the view.
+        let eye = Vec3::new(my_pos.x, self.pred_y + self.eye_h + bob, my_pos.y);
         let camera = Camera {
             eye,
             target: eye + look,
@@ -1084,6 +1132,7 @@ impl EmberGame for ShooterGame {
                 continue;
             }
             let pos = self.render_pos(id);
+            let feet_y = self.render_y(id);
             let color = self
                 .metas
                 .get(&id)
@@ -1099,7 +1148,7 @@ impl EmberGame for ShooterGame {
             // circle footprint (radius PLAYER_R) — what you aim at is real.
             let flash = self.flash.get(&id).copied().unwrap_or(0.0) / 0.18;
             frame.instances.push(Instance::new(
-                Vec3::new(pos.x, 0.02, pos.y),
+                Vec3::new(pos.x, feet_y + 0.02, pos.y),
                 Vec3::new(1.2, 0.04, 1.2),
                 color * (0.45 + flash * 0.5),
             ));
@@ -1132,6 +1181,7 @@ impl EmberGame for ShooterGame {
                     &rc.skel,
                     &pose,
                     pos,
+                    feet_y,
                     aim_yaw,
                     [fc.x, fc.y, fc.z],
                     0.95,
@@ -1139,7 +1189,7 @@ impl EmberGame for ShooterGame {
             } else if env > 0 {
                 frame.instances.push(
                     Instance::new(
-                        Vec3::new(pos.x, body_h * 0.5, pos.y),
+                        Vec3::new(pos.x, feet_y + body_h * 0.5, pos.y),
                         Vec3::new(1.0, body_h, 1.0),
                         color,
                     )
@@ -1147,7 +1197,7 @@ impl EmberGame for ShooterGame {
                 );
                 frame.instances.push(
                     Instance::new(
-                        Vec3::new(pos.x, head_y, pos.y),
+                        Vec3::new(pos.x, feet_y + head_y, pos.y),
                         Vec3::splat(0.55),
                         color * 0.7,
                     )

@@ -75,11 +75,60 @@ pub const MAX_REWIND_TICKS: u16 = 18;
 const HISTORY_LEN: usize = MAX_REWIND_TICKS as usize + 2;
 const SPAWN_RING_R: f32 = ARENA_HALF - 4.0;
 
+/// Downward acceleration while airborne, units/s².
+pub const GRAVITY: f32 = -24.0;
+/// Take-off speed. The apex (v²/2g ≈ 1.76) clears every crate top with a
+/// little room, and falls well short of the containers.
+pub const JUMP_VEL: f32 = 9.2;
+/// Cover comes in two classes: crates you can jump onto, and containers
+/// that stay hard cover. These bound the low class.
+pub const CRATE_MIN_H: f32 = 0.9;
+pub const CRATE_MAX_H: f32 = 1.5;
+pub const CONTAINER_MIN_H: f32 = 2.4;
+/// A player may only be pushed up onto a surface this much higher than
+/// their feet; anything taller is a wall to them.
+pub const STEP_UP: f32 = 0.35;
+
 /// Axis-aligned obstacle on the XZ plane.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Obstacle {
     pub min: [f32; 2],
     pub max: [f32; 2],
+}
+
+/// Height of a cover box, derived from its own coordinates so the server,
+/// every client's collision, and the renderer agree without sending it.
+///
+/// Roughly three in five are crates low enough to jump onto and fight from;
+/// the rest are shipping containers that stay hard cover.
+pub fn obstacle_height(o: &Obstacle) -> f32 {
+    let k = (o.min[0] * 12.9898 + o.min[1] * 78.233).sin() * 43758.547;
+    let f = k - k.floor();
+    if f < 0.6 {
+        CRATE_MIN_H + (f / 0.6) * (CRATE_MAX_H - CRATE_MIN_H)
+    } else {
+        CONTAINER_MIN_H + ((f - 0.6) / 0.4) * 0.8
+    }
+}
+
+/// The surface a player at `pos` stands on: the tallest box top they
+/// overlap, or the arena floor. Uses the same overlap test as `blocked`,
+/// so a player can only ever be supported by a box they are actually on.
+pub fn support_height(pos: [f32; 2], r: f32, obstacles: &[Obstacle]) -> f32 {
+    let mut h = 0.0f32;
+    for o in obstacles {
+        if overlaps(pos, r, o) {
+            h = h.max(obstacle_height(o));
+        }
+    }
+    h
+}
+
+fn overlaps(pos: [f32; 2], r: f32, o: &Obstacle) -> bool {
+    let cx = pos[0].clamp(o.min[0], o.max[0]);
+    let cz = pos[1].clamp(o.min[1], o.max[1]);
+    let (dx, dz) = (pos[0] - cx, pos[1] - cz);
+    dx * dx + dz * dz < r * r
 }
 
 /// Deterministic arena from a seed: every client and the server generate
@@ -159,16 +208,16 @@ pub struct Pad {
     pub respawn_t: f32,
 }
 
-fn blocked(pos: [f32; 2], r: f32, obstacles: &[Obstacle]) -> bool {
+/// Is this spot blocked for a player whose feet are at `y`? The arena wall
+/// always blocks; a box only blocks while the player's feet are below its
+/// top, so you can walk across boxes you have jumped onto.
+fn blocked(pos: [f32; 2], y: f32, r: f32, obstacles: &[Obstacle]) -> bool {
     if pos[0].abs() > ARENA_HALF - r || pos[1].abs() > ARENA_HALF - r {
         return true;
     }
-    obstacles.iter().any(|o| {
-        let cx = pos[0].clamp(o.min[0], o.max[0]);
-        let cz = pos[1].clamp(o.min[1], o.max[1]);
-        let (dx, dz) = (pos[0] - cx, pos[1] - cz);
-        dx * dx + dz * dz < r * r
-    })
+    obstacles
+        .iter()
+        .any(|o| overlaps(pos, r, o) && y < obstacle_height(o) - STEP_UP)
 }
 
 /// Stance-adjusted movement speed. Crouch wins if both are held.
@@ -188,6 +237,7 @@ pub fn stance_speed(sprint: bool, crouch: bool) -> f32 {
 /// prediction, so both compute the exact same result.
 pub fn move_circle(
     pos: [f32; 2],
+    y: f32,
     mv: [f32; 2],
     speed: f32,
     dt: f32,
@@ -203,17 +253,49 @@ pub fn move_circle(
         mv = [mv[0] / len, mv[1] / len];
     }
     let try_x = [pos[0] + mv[0] * speed * dt, pos[1]];
-    let pos = if blocked(try_x, PLAYER_R, obstacles) {
+    let pos = if blocked(try_x, y, PLAYER_R, obstacles) {
         pos
     } else {
         try_x
     };
     let try_z = [pos[0], pos[1] + mv[1] * speed * dt];
-    if blocked(try_z, PLAYER_R, obstacles) {
+    if blocked(try_z, y, PLAYER_R, obstacles) {
         pos
     } else {
         try_z
     }
+}
+
+/// Vertical motion for one step: gravity, jump take-off, and landing on
+/// whatever surface is under the player. Shared VERBATIM by the server sim
+/// and the client's prediction, exactly like `move_circle`.
+///
+/// Returns the new (feet height, vertical speed, grounded).
+pub fn step_vertical(
+    pos: [f32; 2],
+    y: f32,
+    vy: f32,
+    jump: bool,
+    dt: f32,
+    obstacles: &[Obstacle],
+) -> (f32, f32, bool) {
+    let ground = support_height(pos, PLAYER_R, obstacles);
+    // Landing check runs against where the feet were, so walking off a box
+    // starts a fall instead of snapping to the floor.
+    let grounded = y <= ground + 1e-3;
+    let mut vy = if grounded && vy <= 0.0 { 0.0 } else { vy };
+    if grounded && jump {
+        vy = JUMP_VEL;
+    }
+    vy += GRAVITY * dt;
+    let mut y = y + vy * dt;
+    let mut landed = false;
+    if vy <= 0.0 && y <= ground {
+        y = ground;
+        vy = 0.0;
+        landed = true;
+    }
+    (y, vy, landed || (grounded && vy <= 0.0))
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -227,6 +309,8 @@ pub struct PlayerIn {
     pub crouch: bool,
     /// Held reload intent (R).
     pub reload: bool,
+    /// Held jump intent (Space). Only takes effect while grounded.
+    pub jump: bool,
     /// How many ticks behind the present this player's view is (derived by
     /// the server from the client's reported view tick, clamped). Bullets
     /// they fire hit-test against targets rewound this far.
@@ -237,6 +321,10 @@ pub struct PlayerIn {
 pub struct PlayerSt {
     pub id: u8,
     pub pos: [f32; 2],
+    /// Feet height: 0 on the arena floor, a box top when standing on cover.
+    pub y: f32,
+    /// Vertical speed; non-zero only while airborne.
+    pub vy: f32,
     pub aim: [f32; 2],
     pub hp: u8,
     pub score: u32,
@@ -306,6 +394,8 @@ impl Sim {
         self.players.push(PlayerSt {
             id,
             pos: spawn_point(slot),
+            y: 0.0,
+            vy: 0.0,
             aim: [1.0, 0.0],
             hp: MAX_HP,
             score: 0,
@@ -362,6 +452,8 @@ impl Sim {
                     p.deaths = p.deaths.wrapping_add(1);
                     let point = spawn_point(p.deaths.wrapping_mul(3).wrapping_add(p.id as u32));
                     p.pos = point;
+                    p.y = 0.0;
+                    p.vy = 0.0;
                     p.hp = MAX_HP;
                     p.alive = true;
                     p.cooldown = 0.3;
@@ -376,9 +468,18 @@ impl Sim {
             // Shared movement code (also used by client prediction);
             // stance speed is server-authoritative — no speed cheats.
             let speed = stance_speed(input.sprint, input.crouch);
-            let pos = move_circle(self.players[i].pos, input.mv, speed, dt, &self.obstacles);
+            let (old_pos, old_y, old_vy) = (
+                self.players[i].pos,
+                self.players[i].y,
+                self.players[i].vy,
+            );
+            let pos = move_circle(old_pos, old_y, input.mv, speed, dt, &self.obstacles);
+            let (y, vy, _grounded) =
+                step_vertical(pos, old_y, old_vy, input.jump, dt, &self.obstacles);
             let p = &mut self.players[i];
             p.pos = pos;
+            p.y = y;
+            p.vy = vy;
             p.crouch = input.crouch;
 
             // Aim.
@@ -1019,5 +1120,109 @@ mod tests {
             });
             assert!(sim.bullets.len() <= MAX_BULLETS_PER_PLAYER);
         }
+    }
+
+    /// One waist-high crate at the origin, and nothing else.
+    fn one_box() -> Vec<Obstacle> {
+        vec![Obstacle {
+            min: [-1.5, -1.5],
+            max: [1.5, 1.5],
+        }]
+    }
+
+    #[test]
+    fn jump_rises_then_lands_back_on_the_floor() {
+        let obs = Vec::new();
+        let (mut y, mut vy) = (0.0f32, 0.0f32);
+        let (mut peak, mut airborne_ticks) = (0.0f32, 0);
+        // One tap: jump only on the first tick.
+        for tick in 0..180 {
+            let (ny, nvy, _) = step_vertical([0.0, 0.0], y, vy, tick == 0, FIXED_DT, &obs);
+            y = ny;
+            vy = nvy;
+            peak = peak.max(y);
+            if y > 1e-3 {
+                airborne_ticks += 1;
+            }
+        }
+        assert!(peak > 1.0 && peak < 2.0, "jump peak {peak}");
+        assert!(airborne_ticks > 20, "hang time {airborne_ticks} ticks");
+        assert!(y.abs() < 1e-3, "did not land: {y}");
+    }
+
+    #[test]
+    fn a_box_blocks_on_the_ground_but_not_from_above() {
+        let obs = one_box();
+        let top = obstacle_height(&obs[0]);
+        // Walking into the crate from outside gets stopped.
+        let walked = move_circle([-3.0, 0.0], 0.0, [1.0, 0.0], MOVE_SPEED, 0.5, &obs);
+        assert!(walked[0] < -1.5 - PLAYER_R + 0.01, "walked into box: {walked:?}");
+        // The same move with the feet above the crate's top goes through.
+        let over = move_circle([-3.0, 0.0], top + 0.1, [1.0, 0.0], MOVE_SPEED, 0.5, &obs);
+        assert!(over[0] > -1.0, "could not walk over the box: {over:?}");
+    }
+
+    #[test]
+    fn landing_on_a_box_top_supports_the_player() {
+        let obs = one_box();
+        let top = obstacle_height(&obs[0]);
+        // Falling from above the crate lands on its top, not the floor.
+        let (mut y, mut vy) = (top + 2.0, 0.0);
+        for _ in 0..240 {
+            let (ny, nvy, _) = step_vertical([0.0, 0.0], y, vy, false, FIXED_DT, &obs);
+            y = ny;
+            vy = nvy;
+        }
+        assert!((y - top).abs() < 1e-3, "settled at {y}, box top {top}");
+        // Stepping off the edge starts a fall back to the floor.
+        let (mut y, mut vy) = (top, 0.0);
+        for _ in 0..240 {
+            let (ny, nvy, _) = step_vertical([9.0, 9.0], y, vy, false, FIXED_DT, &obs);
+            y = ny;
+            vy = nvy;
+        }
+        assert!(y.abs() < 1e-3, "did not fall off the box: {y}");
+    }
+
+    #[test]
+    fn a_jump_clears_crates_but_not_containers() {
+        // apex = v^2 / 2g must clear every crate and no container, or the
+        // two cover classes stop meaning anything.
+        let apex = JUMP_VEL * JUMP_VEL / (2.0 * -GRAVITY);
+        assert!(apex > CRATE_MAX_H, "apex {apex} cannot clear a crate");
+        assert!(apex < CONTAINER_MIN_H, "apex {apex} clears containers too");
+        // And the generator must actually produce both classes.
+        let obs = generate_arena(20260829);
+        let heights: Vec<f32> = obs.iter().map(obstacle_height).collect();
+        assert!(heights.iter().any(|h| *h <= CRATE_MAX_H), "no crates: {heights:?}");
+        assert!(heights.iter().any(|h| *h >= CONTAINER_MIN_H), "no containers");
+        for h in heights {
+            assert!(
+                (CRATE_MIN_H..=CRATE_MAX_H).contains(&h) || h >= CONTAINER_MIN_H,
+                "height {h} falls between the two classes"
+            );
+        }
+    }
+
+    #[test]
+    fn the_sim_keeps_players_on_the_ground_until_they_jump() {
+        let mut sim = Sim::new(7);
+        sim.add_player(0);
+        let mut inputs = HashMap::new();
+        inputs.insert(0, PlayerIn::default());
+        for _ in 0..30 {
+            step_with(&mut sim, &inputs);
+        }
+        assert_eq!(sim.players[0].y, 0.0);
+        inputs.insert(
+            0,
+            PlayerIn {
+                jump: true,
+                ..Default::default()
+            },
+        );
+        step_with(&mut sim, &inputs);
+        step_with(&mut sim, &inputs);
+        assert!(sim.players[0].y > 0.1, "jump did not lift: {}", sim.players[0].y);
     }
 }

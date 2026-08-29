@@ -358,13 +358,16 @@ pub fn push_rig(
     skel: &Skeleton,
     pose: &Pose,
     pos: Vec2,
+    // feet_y: height of the ground under the character — 0 on the floor, a
+    // crate top when standing on cover, rising while airborne.
+    feet_y: f32,
     facing_yaw: f32,
     color: [f32; 3],
     scale_mult: f32,
 ) {
     let joints = world_joints(skel, pose);
     let face = Quat::from_rotation_y(facing_yaw);
-    let origin = Vec3::new(pos.x, 0.0, pos.y);
+    let origin = Vec3::new(pos.x, feet_y, pos.y);
     let col = Vec3::from_array(color);
     for part in parts {
         let (jp, jr) = joints[part.joint];
@@ -870,6 +873,7 @@ mod tests {
             &skel,
             &pose,
             Vec2::ZERO,
+            0.0,
             0.0,
             [1.0; 3],
             1.0,

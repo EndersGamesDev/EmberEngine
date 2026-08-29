@@ -38,6 +38,10 @@ pub struct PState {
     pub id: u8,
     pub x: f32,
     pub z: f32,
+    /// Feet height: 0 on the floor, a crate top when standing on cover.
+    /// Defaulted, so a pre-jump server simply reports everyone grounded.
+    #[serde(default)]
+    pub y: f32,
     /// Aim direction (normalized).
     pub ax: f32,
     pub az: f32,
@@ -112,6 +116,9 @@ pub enum C2S {
         crouch: bool,
         #[serde(default)]
         reload: bool,
+        /// Space. Defaulted so an older client simply never jumps.
+        #[serde(default)]
+        jump: bool,
     },
     Ping {
         nonce: u32,
@@ -210,6 +217,7 @@ mod tests {
             sprint: true,
             crouch: false,
             reload: false,
+            jump: true,
         })
         .unwrap();
         assert!(s.contains("\"t\":\"input\""));

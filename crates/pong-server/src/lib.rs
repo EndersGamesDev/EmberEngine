@@ -403,6 +403,7 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
                             id: p.id,
                             x: p.pos[0],
                             z: p.pos[1],
+                            y: p.y,
                             ax: p.aim[0],
                             az: p.aim[1],
                             hp: p.hp,
@@ -805,6 +806,7 @@ fn handle_event(
                         sprint,
                         crouch,
                         reload,
+                        jump,
                     },
                     true,
                 ) => {
@@ -836,6 +838,7 @@ fn handle_event(
                                 sprint,
                                 crouch,
                                 reload,
+                                jump,
                                 delay_ticks: 0,
                             },
                             seq,
