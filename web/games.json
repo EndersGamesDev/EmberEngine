@@ -7,9 +7,15 @@
       "desc": "First-person drop-in deathmatch in a generated arena. WASD + mouse look, RMB zoom, R reload, Shift sprint, C crouch — crouching also shrinks your hitbox. Grab glowing pads to upgrade your pistol. Textured basalt arena, armored players, Blender-built viewmodel with hands.",
       "versions": [
         {
+          "v": "v9",
+          "path": "games/arena/v9/",
+          "live": true,
+          "note": "AI-built articulated characters"
+        },
+        {
           "v": "v8",
           "path": "games/arena/v8/",
-          "live": true,
+          "live": false,
           "note": "textured graphics update"
         },
         {

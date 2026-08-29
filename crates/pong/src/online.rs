@@ -94,6 +94,47 @@ pub(crate) fn env_meshes() -> Vec<ember_engine::MeshData> {
     ]
 }
 
+/// Articulated character part meshes (decimated GLBs, ~0.1MB each) — the
+/// wasm build ships them embedded.
+const PART_GLBS: [(&[u8], f32); 5] = [
+    (include_bytes!("../../../assets/models/parts/part-head.glb"), 0.34),
+    (include_bytes!("../../../assets/models/parts/part-torso.glb"), 0.68),
+    (include_bytes!("../../../assets/models/parts/part-arm.glb"), 0.66),
+    (include_bytes!("../../../assets/models/parts/part-leg.glb"), 0.55),
+    (include_bytes!("../../../assets/models/parts/part-boot.glb"), 0.19),
+];
+
+/// Build the articulated part character from the embedded GLBs, registered
+/// starting at `first_mesh`. All five or none.
+pub(crate) fn part_meshes(
+    first_mesh: u32,
+) -> (Vec<ember_engine::MeshData>, Option<ember_engine::puppet::PartCharacter>) {
+    let mut meshes = Vec::new();
+    let mut infos = Vec::new();
+    for (i, (bytes, target_h)) in PART_GLBS.iter().enumerate() {
+        match ember_engine::puppet::part_from_glb_bytes(bytes, *target_h, first_mesh + i as u32) {
+            Ok((mesh, info)) => {
+                meshes.push(mesh);
+                infos.push(info);
+            }
+            Err(e) => {
+                tracing::warn!("character part {i} unusable ({e}); box bodies");
+                return (Vec::new(), None);
+            }
+        }
+    }
+    let mut it = infos.into_iter();
+    let pc = ember_engine::puppet::PartCharacter {
+        head: it.next().unwrap(),
+        torso: it.next().unwrap(),
+        arm: it.next().unwrap(),
+        leg: it.next().unwrap(),
+        boot: it.next().unwrap(),
+    };
+    tracing::info!("articulated character parts loaded");
+    (meshes, Some(pc))
+}
+
 /// Weapon-level accent color (the glow strip on the pistol).
 fn weapon_accent(level: u8) -> Vec3 {
     match level {
@@ -281,6 +322,11 @@ pub struct ShooterGame {
     lost: bool,
     /// First mesh id of env_meshes() (floor, wall, armor); 0 = untextured.
     env_base: u32,
+    /// Articulated player character; None = textured/plain boxes.
+    part_character: Option<ember_engine::puppet::PartCharacter>,
+    /// Per-player (yaw, walk_phase, amplitude) + previous render position.
+    anim: HashMap<u8, (f32, f32, f32)>,
+    prev_pos: HashMap<u8, Vec2>,
 }
 
 impl ShooterGame {
@@ -324,12 +370,20 @@ impl ShooterGame {
             since_status: 0.0,
             lost: false,
             env_base: 0,
+            part_character: None,
+            anim: HashMap::new(),
+            prev_pos: HashMap::new(),
         })
     }
 
     /// Where env_meshes() got registered (set by run_online after load).
     pub fn set_env_base(&mut self, base: u32) {
         self.env_base = base;
+    }
+
+    /// Install the articulated character (set by run_online after load).
+    pub fn set_parts(&mut self, pc: Option<ember_engine::puppet::PartCharacter>) {
+        self.part_character = pc;
     }
 
     fn render_pos(&self, id: u8) -> Vec2 {
@@ -832,8 +886,26 @@ impl EmberGame for ShooterGame {
             } else {
                 (1.1, 1.35, 0.85, 2.0)
             };
-            // Armor-textured body/head when env meshes exist (team tint stays).
-            if env > 0 {
+            // Articulated puppet when parts loaded; textured/plain boxes else.
+            if let Some(pc) = &self.part_character {
+                let prev = self.prev_pos.insert(id, pos).unwrap_or(pos);
+                let vel = if dt > 0.0 { (pos - prev) / dt } else { Vec2::ZERO };
+                let slot = self.anim.entry(id).or_insert((0.0, 0.0, 0.0));
+                ember_engine::puppet::advance_anim(slot, vel, dt);
+                // Bodies face where the player AIMS (shooter convention).
+                let aim_yaw = aim.x.atan2(aim.y);
+                ember_engine::puppet::push_character_parts(
+                    &mut frame,
+                    pos,
+                    aim_yaw,
+                    [color.x, color.y, color.z],
+                    1.0,
+                    slot.1,
+                    slot.2,
+                    p.crouch,
+                    pc,
+                );
+            } else if env > 0 {
                 frame.instances.push(
                     Instance::new(Vec3::new(pos.x, body_h * 0.5, pos.y), Vec3::new(1.0, body_h, 1.0), color)
                         .with_mesh(env + 2),

@@ -217,8 +217,12 @@ pub fn run_online(cfg: OnlineConfig) -> Result<(), String> {
     // Textured environment set (arena v8): registered after the GLB parts.
     let env_base = meshes.len() as u32 + 1; // 0 is the built-in cube
     meshes.extend(online::env_meshes());
+    // Articulated character parts (arena v9), after the env set.
+    let (part_meshes, parts) = online::part_meshes(meshes.len() as u32 + 1);
+    meshes.extend(part_meshes);
     let mut game = online::ShooterGame::connect(&cfg, assets)?;
     game.set_env_base(env_base);
+    game.set_parts(parts);
     ember_engine::run(
         EngineConfig {
             title: format!("ember arena — {}", cfg.lobby),

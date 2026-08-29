@@ -338,7 +338,10 @@ impl Game {
         amp: f32,
     ) {
         if let Some(pc) = &self.part_character {
-            character::push_character_parts(frame, pos, yaw, color, is_me, phase, amp, pc);
+            let scale = if is_me { 1.1 } else { 1.0 };
+            ember_engine::puppet::push_character_parts(
+                frame, pos, yaw, color, scale, phase, amp, false, pc,
+            );
         } else if let Some(mc) = &self.mesh_character {
             character::push_character_mesh(frame, pos, yaw, color, is_me, phase, mc);
         } else {

@@ -9,6 +9,7 @@
 pub mod assets;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod overlay;
+pub mod puppet;
 pub mod renderer;
 
 mod app;
