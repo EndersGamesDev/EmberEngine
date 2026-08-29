@@ -35,6 +35,30 @@ const MESH_FLOOR: u32 = 1;
 const MESH_WALL: u32 = 2;
 /// First character part mesh (head); torso and limb follow (see character.rs).
 const MESH_CHAR: u32 = 3;
+/// First mesh id after the fixed set; GLB monument parts land here.
+const MESH_MONUMENT: u32 = 6;
+
+/// Load the AI-generated helmet monument GLB (assets/models/helmet.glb),
+/// returning its part meshes; empty when absent (arena renders without it).
+fn load_monument() -> Vec<MeshData> {
+    let candidates = [
+        format!("{}/../../assets/models/helmet.glb", env!("CARGO_MANIFEST_DIR")),
+        "assets/models/helmet.glb".to_string(),
+    ];
+    for path in candidates {
+        if let Ok(bytes) = std::fs::read(&path) {
+            match ember_engine::assets::load_glb(&bytes) {
+                Ok(parts) => {
+                    tracing::info!(path, parts = parts.len(), "monument GLB loaded");
+                    return parts.into_iter().map(|p| p.mesh).collect();
+                }
+                Err(e) => tracing::error!(path, error = %e, "monument GLB load failed"),
+            }
+        }
+    }
+    tracing::warn!("no monument GLB; arena renders without it");
+    Vec::new()
+}
 
 /// Tries assets/textures/<name> relative to the workspace, then the cwd.
 /// Missing or broken files degrade to untextured rendering, never a crash.
@@ -135,6 +159,8 @@ struct Game {
     offline_anim: (f32, f32),
     /// Static cover props for the current arena layout.
     layouts: Option<props::Layouts>,
+    /// Number of monument GLB part meshes registered after MESH_MONUMENT.
+    monument_parts: u32,
 }
 
 impl Game {
@@ -170,6 +196,13 @@ impl Game {
         // Cover props (stone kinds use the wall mesh, metal kinds the torso mesh).
         if let Some(layouts) = &self.layouts {
             props::push_props(&mut frame, props::pick(layouts), MESH_WALL, MESH_CHAR + 1);
+        }
+        // AI-generated helmet monument at the arena center.
+        for part in 0..self.monument_parts {
+            frame.instances.push(
+                Instance::new(Vec3::new(0.0, 2.2, 0.0), Vec3::splat(3.0), Vec3::new(0.82, 0.84, 0.88))
+                    .with_mesh(MESH_MONUMENT + part),
+            );
         }
         frame
     }
@@ -331,17 +364,22 @@ fn main() {
         }
     };
 
+    let monument = load_monument();
+    let monument_parts = monument.len() as u32;
+    let mut meshes = vec![
+        plane_mesh(12.0, load_texture("floor_basalt.png")),
+        box_mesh(4.0, load_texture("wall_basalt.png")),
+        // Character parts (see character.rs): head, torso, limb.
+        box_mesh(1.0, load_texture("char_head.png").or_else(|| load_texture("player_armor.png"))),
+        box_mesh(1.0, load_texture("char_torso.png").or_else(|| load_texture("player_armor.png"))),
+        box_mesh(1.0, load_texture("char_limb.png").or_else(|| load_texture("player_armor.png"))),
+    ];
+    meshes.extend(monument);
+
     ember_engine::run(
         EngineConfig {
             title,
-            meshes: vec![
-                plane_mesh(12.0, load_texture("floor_basalt.png")),
-                box_mesh(4.0, load_texture("wall_basalt.png")),
-                // Character parts (see character.rs): head, torso, limb.
-                box_mesh(1.0, load_texture("char_head.png").or_else(|| load_texture("player_armor.png"))),
-                box_mesh(1.0, load_texture("char_torso.png").or_else(|| load_texture("player_armor.png"))),
-                box_mesh(1.0, load_texture("char_limb.png").or_else(|| load_texture("player_armor.png"))),
-            ],
+            meshes,
             ..Default::default()
         },
         Game {
@@ -357,6 +395,7 @@ fn main() {
             anim: HashMap::new(),
             offline_anim: (0.0, 0.0),
             layouts: props::load_layouts(),
+            monument_parts,
         },
     );
 }
