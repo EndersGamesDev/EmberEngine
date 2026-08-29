@@ -350,7 +350,13 @@ fn handle_event(
                     "client recovered from lag"
                 );
             }
-            c.last_seen = Instant::now();
+            // Only a connection that has completed Hello may refresh its
+            // liveness: pre-Hello traffic is rejected below, and refreshing
+            // first would let it park an admission slot for as long as it
+            // kept sending.
+            if c.player.is_some() {
+                c.last_seen = Instant::now();
+            }
             match (msg, c.player.is_some()) {
                 (ClientMsg::Hello { protocol, name }, false) => {
                     if protocol != PROTOCOL_VERSION {
