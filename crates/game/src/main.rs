@@ -4,10 +4,14 @@
 //!
 //!     game [SERVER_ADDR] [NAME]
 
+mod character;
 mod net;
 mod world;
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
+
+use character::{push_character, walk_speed_to_phase_delta};
 
 use ember_engine::glam::{Vec2, Vec3};
 use ember_engine::{
@@ -28,7 +32,8 @@ enum Session {
 // Registered mesh ids (0 is the engine's built-in cube).
 const MESH_FLOOR: u32 = 1;
 const MESH_WALL: u32 = 2;
-const MESH_PLAYER: u32 = 3;
+/// First character part mesh (head); torso and limb follow (see character.rs).
+const MESH_CHAR: u32 = 3;
 
 /// Tries assets/textures/<name> relative to the workspace, then the cwd.
 /// Missing or broken files degrade to untextured rendering, never a crash.
@@ -123,6 +128,10 @@ struct Game {
     last_rtt_ms: Option<u32>,
     /// Set while the snapshot stream is stale (lag spike in progress).
     stale_since: Option<Instant>,
+    /// Per-player (facing_yaw, walk_phase) animation state.
+    anim: HashMap<ember_net::PlayerId, (f32, f32)>,
+    /// Animation state for the offline local player.
+    offline_anim: (f32, f32),
 }
 
 impl Game {
@@ -158,12 +167,16 @@ impl Game {
         frame
     }
 
-    fn push_player(frame: &mut Frame, pos: Vec2, color: [f32; 3], is_me: bool) {
-        let scale = if is_me { 1.15 } else { 1.0 };
-        frame.instances.push(
-            Instance::new(Vec3::new(pos.x, scale * 0.5, pos.y), Vec3::splat(scale), Vec3::from_array(color))
-                .with_mesh(MESH_PLAYER),
-        );
+    /// Advance one animation slot from a velocity, returning (yaw, phase).
+    fn advance_anim(slot: &mut (f32, f32), vel: Vec2, dt: f32) -> (f32, f32) {
+        let speed = vel.length();
+        if speed > 0.05 {
+            slot.0 = vel.x.atan2(vel.y);
+            slot.1 += walk_speed_to_phase_delta(speed, dt);
+        } else {
+            slot.1 = 0.0;
+        }
+        *slot
     }
 }
 
@@ -245,17 +258,23 @@ impl EmberGame for Game {
                 }
 
                 let mut frame = self.arena_frame(Camera::default());
-                for (pos, color, is_me) in self.world.render_players() {
-                    Self::push_player(&mut frame, pos, color, is_me);
+                let mut seen: Vec<(ember_net::PlayerId, Vec2, Vec2, [f32; 3], bool)> =
+                    self.world.render_players().collect();
+                for (id, pos, vel, color, is_me) in seen.drain(..) {
+                    let slot = self.anim.entry(id).or_insert((0.0, 0.0));
+                    let (yaw, phase) = Self::advance_anim(slot, vel, dt);
+                    push_character(&mut frame, pos, yaw, color, is_me, phase, MESH_CHAR);
                 }
                 frame
             }
             Session::Offline { pos } => {
-                *pos += Vec2::from_array(dir) * MOVE_SPEED * dt;
+                let vel = Vec2::from_array(dir) * MOVE_SPEED;
+                *pos += vel * dt;
                 *pos = pos.clamp(Vec2::splat(-ARENA_HALF), Vec2::splat(ARENA_HALF));
                 let me = *pos;
                 let mut frame = self.arena_frame(Camera::default());
-                Self::push_player(&mut frame, me, [0.9, 0.9, 0.9], true);
+                let (yaw, phase) = Self::advance_anim(&mut self.offline_anim, vel, dt);
+                push_character(&mut frame, me, yaw, [0.9, 0.9, 0.9], true, phase, MESH_CHAR);
                 frame
             }
         }
@@ -311,7 +330,10 @@ fn main() {
             meshes: vec![
                 plane_mesh(12.0, load_texture("floor_basalt.png")),
                 box_mesh(4.0, load_texture("wall_basalt.png")),
-                box_mesh(1.0, load_texture("player_armor.png")),
+                // Character parts (see character.rs): head, torso, limb.
+                box_mesh(1.0, load_texture("char_head.png").or_else(|| load_texture("player_armor.png"))),
+                box_mesh(1.0, load_texture("char_torso.png").or_else(|| load_texture("player_armor.png"))),
+                box_mesh(1.0, load_texture("char_limb.png").or_else(|| load_texture("player_armor.png"))),
             ],
             ..Default::default()
         },
@@ -325,6 +347,8 @@ fn main() {
             last_status_log: Instant::now(),
             last_rtt_ms: None,
             stale_since: None,
+            anim: HashMap::new(),
+            offline_anim: (0.0, 0.0),
         },
     );
 }

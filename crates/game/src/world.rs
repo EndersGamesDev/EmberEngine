@@ -126,11 +126,22 @@ impl World {
         }
     }
 
-    /// (position, color, is_me) for every player, for rendering.
-    pub fn render_players(&self) -> impl Iterator<Item = (Vec2, [f32; 3], bool)> + '_ {
+    /// (id, position, velocity, color, is_me) for every player. Velocity is
+    /// derived from the snapshot interpolation (world units / second) and
+    /// zero once the entry has caught up to its target.
+    pub fn render_players(
+        &self,
+    ) -> impl Iterator<Item = (PlayerId, Vec2, Vec2, [f32; 3], bool)> + '_ {
         self.players.values().map(move |e| {
+            let vel = if e.t < 1.0 {
+                (e.to - e.from) * TICK_HZ as f32
+            } else {
+                Vec2::ZERO
+            };
             (
+                e.meta.id,
                 e.render_pos(),
+                vel,
                 e.meta.color,
                 Some(e.meta.id) == self.my_id,
             )
