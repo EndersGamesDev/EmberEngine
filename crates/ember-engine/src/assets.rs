@@ -9,7 +9,7 @@
 
 use glam::{Mat4, Vec3};
 
-use crate::renderer::{MeshData, MeshVertex};
+use crate::renderer::{MeshData, MeshVertex, TextureData};
 
 /// One named, single-colored piece of a model.
 #[derive(Clone, Debug)]
@@ -20,7 +20,7 @@ pub struct GlbPart {
 }
 
 pub fn load_glb(bytes: &[u8]) -> Result<Vec<GlbPart>, String> {
-    let (doc, buffers, _images) =
+    let (doc, buffers, images) =
         gltf::import_slice(bytes).map_err(|e| format!("glb parse: {e}"))?;
     let mut parts = Vec::new();
     let scene = doc
@@ -28,7 +28,7 @@ pub fn load_glb(bytes: &[u8]) -> Result<Vec<GlbPart>, String> {
         .or_else(|| doc.scenes().next())
         .ok_or("glb has no scene")?;
     for node in scene.nodes() {
-        collect(&node, Mat4::IDENTITY, &buffers, &mut parts);
+        collect(&node, Mat4::IDENTITY, &buffers, &images, &mut parts);
     }
     if parts.is_empty() {
         return Err("glb contains no mesh primitives".into());
@@ -36,10 +36,31 @@ pub fn load_glb(bytes: &[u8]) -> Result<Vec<GlbPart>, String> {
     Ok(parts)
 }
 
+/// Decode one embedded glTF image into engine RGBA8 (8-bit formats only).
+fn image_to_rgba8(img: &gltf::image::Data) -> Option<TextureData> {
+    use gltf::image::Format;
+    let rgba8: Vec<u8> = match img.format {
+        Format::R8G8B8A8 => img.pixels.clone(),
+        Format::R8G8B8 => img
+            .pixels
+            .chunks_exact(3)
+            .flat_map(|c| [c[0], c[1], c[2], 255])
+            .collect(),
+        Format::R8 => img.pixels.iter().flat_map(|&v| [v, v, v, 255]).collect(),
+        _ => return None,
+    };
+    Some(TextureData {
+        width: img.width,
+        height: img.height,
+        rgba8,
+    })
+}
+
 fn collect(
     node: &gltf::Node,
     parent: Mat4,
     buffers: &[gltf::buffer::Data],
+    images: &[gltf::image::Data],
     out: &mut Vec<GlbPart>,
 ) {
     let local = Mat4::from_cols_array_2d(&node.transform().matrix());
@@ -83,18 +104,21 @@ fn collect(
                 })
                 .collect();
 
-            let color = prim.material().pbr_metallic_roughness().base_color_factor();
+            let pbr = prim.material().pbr_metallic_roughness();
+            let color = pbr.base_color_factor();
+            // Embedded base-color texture, when present and 8-bit.
+            let texture = pbr
+                .base_color_texture()
+                .and_then(|info| images.get(info.texture().source().index()))
+                .and_then(image_to_rgba8);
             out.push(GlbPart {
                 name: name.clone(),
-                mesh: MeshData {
-                    vertices,
-                    texture: None,
-                },
+                mesh: MeshData { vertices, texture },
                 color: [color[0], color[1], color[2]],
             });
         }
     }
     for child in node.children() {
-        collect(&child, world, buffers, out);
+        collect(&child, world, buffers, images, out);
     }
 }

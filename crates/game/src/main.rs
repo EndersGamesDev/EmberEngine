@@ -157,17 +157,29 @@ fn mesh_bounds(mesh: &MeshData) -> ([f32; 3], [f32; 3]) {
     (min, max)
 }
 
-/// Load the AI-generated full-body character (assets/models/character.glb),
-/// returning its meshes plus bounds for feet/height normalization.
-fn load_mesh_character(first_mesh: u32) -> (Vec<MeshData>, Option<character::MeshCharacter>) {
+/// Load the full-body character mesh, preferring the artist-made SWAT
+/// operator (assets/models/swat.glb, textured) over the AI-generated
+/// character.glb. Returns meshes, placement info, and whether the swat
+/// model won (it then outranks the jointed rig visually).
+fn load_mesh_character(
+    first_mesh: u32,
+) -> (Vec<MeshData>, Option<character::MeshCharacter>, bool) {
     let candidates = [
-        format!(
-            "{}/../../assets/models/character.glb",
-            env!("CARGO_MANIFEST_DIR")
+        (
+            format!("{}/../../assets/models/swat.glb", env!("CARGO_MANIFEST_DIR")),
+            true,
         ),
-        "assets/models/character.glb".to_string(),
+        ("assets/models/swat.glb".to_string(), true),
+        (
+            format!(
+                "{}/../../assets/models/character.glb",
+                env!("CARGO_MANIFEST_DIR")
+            ),
+            false,
+        ),
+        ("assets/models/character.glb".to_string(), false),
     ];
-    for path in candidates {
+    for (path, is_swat) in candidates {
         if let Ok(bytes) = std::fs::read(&path) {
             match ember_engine::assets::load_glb(&bytes) {
                 Ok(parts) => {
@@ -181,7 +193,7 @@ fn load_mesh_character(first_mesh: u32) -> (Vec<MeshData>, Option<character::Mes
                     }
                     if max_y <= min_y {
                         tracing::error!(path, "character GLB has no vertical extent");
-                        return (Vec::new(), None);
+                        return (Vec::new(), None, false);
                     }
                     tracing::info!(
                         path,
@@ -194,16 +206,18 @@ fn load_mesh_character(first_mesh: u32) -> (Vec<MeshData>, Option<character::Mes
                         parts: meshes.len() as u32,
                         feet_y: min_y,
                         height: max_y - min_y,
-                        yaw_offset: std::f32::consts::PI, // tuned: concept faces camera
+                        // AI concepts face the camera; the Blender-exported
+                        // swat model faces +Z already.
+                        yaw_offset: if is_swat { 0.0 } else { std::f32::consts::PI },
                     };
-                    return (meshes, Some(mc));
+                    return (meshes, Some(mc), is_swat);
                 }
                 Err(e) => tracing::error!(path, error = %e, "character GLB load failed"),
             }
         }
     }
     tracing::info!("no character GLB; using the blocky humanoid");
-    (Vec::new(), None)
+    (Vec::new(), None, false)
 }
 
 /// Load the AI-generated helmet monument GLB (assets/models/helmet.glb),
@@ -335,6 +349,8 @@ struct Game {
     layouts: Option<props::Layouts>,
     /// Number of monument GLB part meshes registered after MESH_MONUMENT.
     monument_parts: u32,
+    /// Draw the (artist-made) full-body mesh instead of the jointed rig.
+    prefer_mesh: bool,
     /// AI-generated full-body player mesh; None = blocky humanoid fallback.
     mesh_character: Option<character::MeshCharacter>,
     /// Articulated five-part AI character (preferred when present).
@@ -430,6 +446,12 @@ impl Game {
         phase: f32,
         amp: f32,
     ) {
+        if self.prefer_mesh {
+            if let Some(mc) = &self.mesh_character {
+                character::push_character_mesh(frame, pos, yaw, color, is_me, phase, mc);
+                return;
+            }
+        }
         if let Some(rc) = &self.rig_character {
             let pose = ember_engine::rig::walk_pose(phase, amp, 0.0, self.time_s, &rc.dims);
             let scale = if is_me { 1.1 } else { 1.0 };
@@ -623,7 +645,11 @@ fn main() {
 
     let monument = load_monument();
     let monument_parts = monument.len() as u32;
-    let (char_meshes, mesh_character) = load_mesh_character(MESH_MONUMENT + monument_parts);
+    let (char_meshes, mesh_character, swat_loaded) =
+        load_mesh_character(MESH_MONUMENT + monument_parts);
+    // The artist-made swat model outranks the jointed rig visually;
+    // EMBER_CHAR=rig compares against the rig again.
+    let prefer_mesh = swat_loaded && std::env::var("EMBER_CHAR").as_deref() != Ok("rig");
     let (part_meshes, part_character, part_sources) =
         load_part_character(MESH_MONUMENT + monument_parts + char_meshes.len() as u32);
     // Jointed rig: dedicated v2 segment GLBs (assets/models/parts2/vet-*.glb)
@@ -736,6 +762,7 @@ fn main() {
             mesh_character,
             part_character,
             rig_character,
+            prefer_mesh,
             time_s: 0.0,
         },
     );
