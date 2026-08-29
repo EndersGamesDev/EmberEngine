@@ -314,17 +314,40 @@ pub struct RigCharacter {
     pub parts: Vec<RigPart>,
 }
 
-/// Assemble the jointed veteran from the available part meshes. With the v1
-/// asset set, `arm` doubles as upper arm + forearm and `leg` as thigh +
-/// shin; the dedicated v2 segment meshes replace them file-by-file later.
-pub fn veteran_rig(
-    head: PartSource,
-    torso: PartSource,
-    arm: PartSource,
-    leg: PartSource,
-    boot: PartSource,
-    helmet: Option<PartSource>,
-) -> RigCharacter {
+/// Everything the veteran can be assembled from. The five base meshes are
+/// required (the v1 set); each optional v2 segment upgrades detail when its
+/// GLB exists — `arm` doubles as upper arm + forearm and `leg` as thigh +
+/// shin until the dedicated segments land.
+#[derive(Default, Clone, Copy)]
+pub struct VeteranSources {
+    pub head: Option<PartSource>,
+    pub torso: Option<PartSource>,
+    pub arm: Option<PartSource>,
+    pub leg: Option<PartSource>,
+    pub boot: Option<PartSource>,
+    pub helmet: Option<PartSource>,
+    pub pelvis: Option<PartSource>,
+    pub upperarm: Option<PartSource>,
+    pub forearm: Option<PartSource>,
+    pub hand: Option<PartSource>,
+    pub thigh: Option<PartSource>,
+    pub shin: Option<PartSource>,
+    pub backpack: Option<PartSource>,
+    pub rifle: Option<PartSource>,
+}
+
+impl VeteranSources {
+    pub fn has_base(&self) -> bool {
+        self.head.is_some()
+            && self.torso.is_some()
+            && self.arm.is_some()
+            && self.leg.is_some()
+            && self.boot.is_some()
+    }
+}
+
+/// Assemble the jointed veteran from the available part meshes.
+pub fn veteran_rig(s: &VeteranSources) -> RigCharacter {
     let dims = HumanoidDims::default();
     let skel = humanoid(&dims);
     // Part concepts are authored facing the camera; half a turn aligns them
@@ -336,6 +359,15 @@ pub fn veteran_rig(
     let tan = Vec3::new(0.48, 0.40, 0.27);
     let skin = Vec3::new(0.70, 0.55, 0.44);
     let leather = Vec3::new(0.40, 0.31, 0.20);
+    let glove = Vec3::new(0.16, 0.14, 0.12);
+    let gunmetal = Vec3::new(0.13, 0.13, 0.14);
+    let (head, torso, arm, leg, boot) = (
+        s.head.expect("veteran_rig needs the base set"),
+        s.torso.unwrap(),
+        s.arm.unwrap(),
+        s.leg.unwrap(),
+        s.boot.unwrap(),
+    );
     let mut parts = Vec::new();
     let mut add = |src: PartSource,
                    joint: usize,
@@ -343,28 +375,48 @@ pub fn veteran_rig(
                    offset: Vec3,
                    target_h: f32,
                    mirror_x: bool,
-                   tint: Vec3| {
+                   tint: Vec3,
+                   pre_rot: Quat| {
         parts.push(RigPart {
             mesh: src.mesh,
             joint,
             anchor,
             offset,
             scale: target_h / src.height(),
-            pre_rot: flip,
+            pre_rot,
             mirror_x,
             tint: Some(tint),
         });
     };
-    // Torso hangs low enough to cover the hips until a pelvis part exists.
+    // Torso: with a dedicated pelvis it ends at the waist; otherwise it
+    // hangs low enough to cover the hips.
+    let (torso_h, torso_off) = if s.pelvis.is_some() {
+        (0.60, -0.04)
+    } else {
+        (0.70, -0.16)
+    };
     add(
         torso,
         joint::SPINE,
         torso.anchor(0.5, 0.0, 0.5),
-        Vec3::new(0.0, -0.16, 0.0),
-        0.70,
+        Vec3::new(0.0, torso_off, 0.0),
+        torso_h,
         false,
         tan,
+        flip,
     );
+    if let Some(p) = s.pelvis {
+        add(
+            p,
+            joint::ROOT,
+            p.anchor(0.5, 1.0, 0.5),
+            Vec3::new(0.0, 0.10, 0.0),
+            0.28,
+            false,
+            olive,
+            flip,
+        );
+    }
     add(
         head,
         joint::NECK,
@@ -373,8 +425,9 @@ pub fn veteran_rig(
         0.30,
         false,
         skin,
+        flip,
     );
-    if let Some(hm) = helmet {
+    if let Some(hm) = s.helmet {
         add(
             hm,
             joint::NECK,
@@ -383,13 +436,41 @@ pub fn veteran_rig(
             0.26,
             false,
             olive,
+            flip,
         );
     }
-    for (mirror_x, sh, el, hip, knee, ankle) in [
+    if let Some(bp) = s.backpack {
+        add(
+            bp,
+            joint::SPINE,
+            bp.anchor(0.5, 0.5, 0.5),
+            Vec3::new(0.0, 0.26, -0.20),
+            0.52,
+            false,
+            tan * 0.8,
+            flip,
+        );
+    }
+    if let Some(rf) = s.rifle {
+        // Slung diagonally across the back until a proper held pose exists.
+        let sling = flip * Quat::from_rotation_z(0.6);
+        add(
+            rf,
+            joint::SPINE,
+            rf.anchor(0.5, 0.5, 0.5),
+            Vec3::new(0.0, 0.28, -0.30),
+            0.28,
+            false,
+            gunmetal,
+            sling,
+        );
+    }
+    for (mirror_x, sh, el, wr, hip, knee, ankle) in [
         (
             false,
             joint::SHOULDER_L,
             joint::ELBOW_L,
+            joint::WRIST_L,
             joint::HIP_L,
             joint::KNEE_L,
             joint::ANKLE_L,
@@ -398,48 +479,72 @@ pub fn veteran_rig(
             true,
             joint::SHOULDER_R,
             joint::ELBOW_R,
+            joint::WRIST_R,
             joint::HIP_R,
             joint::KNEE_R,
             joint::ANKLE_R,
         ),
     ] {
-        let top = arm.anchor(0.5, 1.0, 0.5);
+        let ua = s.upperarm.unwrap_or(arm);
         add(
-            arm,
+            ua,
             sh,
-            top,
+            ua.anchor(0.5, 1.0, 0.5),
             Vec3::ZERO,
             dims.upperarm_len + 0.05,
             mirror_x,
             olive,
+            flip,
         );
+        let fa = s.forearm.unwrap_or(arm);
+        let fa_h = if s.forearm.is_some() {
+            dims.forearm_len + 0.04
+        } else {
+            dims.forearm_len + 0.12
+        };
         add(
-            arm,
+            fa,
             el,
-            top,
+            fa.anchor(0.5, 1.0, 0.5),
             Vec3::ZERO,
-            dims.forearm_len + 0.12,
+            fa_h,
             mirror_x,
             skin,
+            flip,
         );
-        let leg_top = leg.anchor(0.5, 1.0, 0.5);
+        if let Some(h) = s.hand {
+            add(
+                h,
+                wr,
+                h.anchor(0.5, 1.0, 0.5),
+                Vec3::ZERO,
+                0.19,
+                mirror_x,
+                glove,
+                flip,
+            );
+        }
+        let th = s.thigh.unwrap_or(leg);
         add(
-            leg,
+            th,
             hip,
-            leg_top,
+            th.anchor(0.5, 1.0, 0.5),
             Vec3::ZERO,
             dims.thigh_len + 0.05,
             mirror_x,
             trouser,
+            flip,
         );
+        let sn = s.shin.unwrap_or(leg);
         add(
-            leg,
+            sn,
             knee,
-            leg_top,
+            sn.anchor(0.5, 1.0, 0.5),
             Vec3::ZERO,
             dims.shin_len + 0.04,
             mirror_x,
             trouser,
+            flip,
         );
         // Boot pivots above the heel, a third of the way along the foot.
         add(
@@ -450,6 +555,7 @@ pub fn veteran_rig(
             dims.ankle_h + 0.10,
             mirror_x,
             leather,
+            flip,
         );
     }
     RigCharacter { skel, dims, parts }

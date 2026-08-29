@@ -625,30 +625,67 @@ fn main() {
     let (char_meshes, mesh_character) = load_mesh_character(MESH_MONUMENT + monument_parts);
     let (part_meshes, part_character, part_sources) =
         load_part_character(MESH_MONUMENT + monument_parts + char_meshes.len() as u32);
-    // Jointed rig (v2): assembled from the same five part meshes, with the
-    // monument helmet worn on the head. EMBER_CHAR=puppet keeps the old path.
-    let rig_character =
-        if part_sources.len() == 5 && std::env::var("EMBER_CHAR").as_deref() != Ok("puppet") {
-            let helmet = monument.first().map(|m| {
-                let (min, max) = mesh_bounds(m);
-                character::PartSource {
-                    mesh: MESH_MONUMENT,
-                    min,
-                    max,
+    // Jointed rig: dedicated v2 segment GLBs (assets/models/parts2/vet-*.glb)
+    // upgrade the character part by part; the v1 five + monument helmet fill
+    // whatever is missing. EMBER_CHAR=puppet keeps the old path.
+    let mut extra_meshes: Vec<MeshData> = Vec::new();
+    let mut next_id = MESH_MONUMENT + monument_parts + (char_meshes.len() + part_meshes.len()) as u32;
+    let mut load_v2 = |stem: &str| -> Option<character::PartSource> {
+        let candidates = [
+            format!(
+                "{}/../../assets/models/parts2/vet-{stem}.glb",
+                env!("CARGO_MANIFEST_DIR")
+            ),
+            format!("assets/models/parts2/vet-{stem}.glb"),
+        ];
+        for path in candidates {
+            if let Ok(bytes) = std::fs::read(&path) {
+                match ember_engine::rig::source_from_glb_bytes(&bytes, next_id) {
+                    Ok((mesh, src)) => {
+                        tracing::info!(stem, "v2 part mesh loaded");
+                        extra_meshes.push(mesh);
+                        next_id += 1;
+                        return Some(src);
+                    }
+                    Err(e) => tracing::error!(path, error = %e, "v2 part GLB load failed"),
                 }
-            });
-            tracing::info!(
-                "jointed rig character assembled ({} parts)",
-                13 + helmet.is_some() as usize
-            );
-            Some(character::veteran_rig(
-                part_sources[0],
-                part_sources[1],
-                part_sources[2],
-                part_sources[3],
-                part_sources[4],
-                helmet,
-            ))
+            }
+        }
+        None
+    };
+    let v1 = |i: usize| part_sources.get(i).copied();
+    let mut srcs = ember_engine::rig::VeteranSources {
+        head: load_v2("head").or(v1(0)),
+        torso: load_v2("torso").or(v1(1)),
+        upperarm: load_v2("upperarm"),
+        forearm: load_v2("forearm"),
+        hand: load_v2("hand"),
+        thigh: load_v2("thigh"),
+        shin: load_v2("shin"),
+        boot: load_v2("boot").or(v1(4)),
+        pelvis: load_v2("pelvis"),
+        backpack: load_v2("backpack"),
+        rifle: load_v2("rifle"),
+        helmet: load_v2("helmet"),
+        ..Default::default()
+    };
+    srcs.arm = v1(2).or(srcs.upperarm);
+    srcs.leg = v1(3).or(srcs.thigh);
+    if srcs.helmet.is_none() {
+        srcs.helmet = monument.first().map(|m| {
+            let (min, max) = mesh_bounds(m);
+            character::PartSource {
+                mesh: MESH_MONUMENT,
+                min,
+                max,
+            }
+        });
+    }
+    let rig_character =
+        if srcs.has_base() && std::env::var("EMBER_CHAR").as_deref() != Ok("puppet") {
+            let rc = character::veteran_rig(&srcs);
+            tracing::info!("jointed rig character assembled ({} parts)", rc.parts.len());
+            Some(rc)
         } else {
             None
         };
@@ -672,6 +709,7 @@ fn main() {
     meshes.extend(monument);
     meshes.extend(char_meshes);
     meshes.extend(part_meshes);
+    meshes.extend(extra_meshes);
 
     ember_engine::run(
         EngineConfig {
