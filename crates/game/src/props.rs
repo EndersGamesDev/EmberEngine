@@ -60,7 +60,7 @@ pub fn load_layouts() -> Option<Layouts> {
 }
 
 /// Pick a layout: EMBER_LAYOUT=<name> (case-insensitive) or the first one.
-pub fn pick<'a>(layouts: &'a Layouts) -> &'a Layout {
+pub fn pick(layouts: &Layouts) -> &Layout {
     if let Ok(want) = std::env::var("EMBER_LAYOUT") {
         if let Some(l) = layouts
             .layouts

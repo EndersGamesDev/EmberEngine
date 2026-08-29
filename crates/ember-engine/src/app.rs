@@ -267,7 +267,7 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                 if self.renderer.is_some() && raw_gap.as_millis() > FRAME_STALL_THRESHOLD_MS {
                     let ok_to_warn = self
                         .last_stall_warn
-                        .map_or(true, |t| now.duration_since(t).as_secs() >= 1);
+                        .is_none_or(|t| now.duration_since(t).as_secs() >= 1);
                     if ok_to_warn {
                         self.last_stall_warn = Some(now);
                         tracing::warn!(

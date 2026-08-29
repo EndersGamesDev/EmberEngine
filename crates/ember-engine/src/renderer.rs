@@ -180,18 +180,10 @@ impl Camera {
 }
 
 /// Everything the game wants drawn this frame.
+#[derive(Default)]
 pub struct Frame {
     pub camera: Camera,
     pub instances: Vec<Instance>,
-}
-
-impl Default for Frame {
-    fn default() -> Self {
-        Self {
-            camera: Camera::default(),
-            instances: Vec::new(),
-        }
-    }
 }
 
 #[repr(C)]
@@ -881,7 +873,7 @@ impl Renderer {
         const PRESENT_SRC: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/present.wgsl");
 
         self.shader_reload.frame = self.shader_reload.frame.wrapping_add(1);
-        if self.shader_reload.frame % 60 != 0 {
+        if !self.shader_reload.frame.is_multiple_of(60) {
             return;
         }
 

@@ -81,7 +81,10 @@ fn synth(sfx: Sfx) -> Vec<f32> {
         // Reload: two mechanical clicks with a gap.
         Sfx::Reload => {
             let mut a = sweep(0.035, 1900.0, 1500.0, 0.85, 70.0, 0.2);
-            a.extend(std::iter::repeat(0.0).take((0.08 * SAMPLE_RATE as f32) as usize));
+            a.extend(std::iter::repeat_n(
+                0.0,
+                (0.08 * SAMPLE_RATE as f32) as usize,
+            ));
             a.extend(sweep(0.045, 1300.0, 900.0, 0.85, 60.0, 0.2));
             a
         }

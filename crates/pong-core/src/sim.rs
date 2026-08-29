@@ -88,7 +88,11 @@ impl Sim {
                         self.score = [0, 0];
                     }
                     // Alternate the serve angle left/right deterministically.
-                    let side = if self.serves % 2 == 0 { 1.0 } else { -1.0 };
+                    let side = if self.serves.is_multiple_of(2) {
+                        1.0
+                    } else {
+                        -1.0
+                    };
                     let angle = 0.45_f32; // ~26 degrees
                     self.serves += 1;
                     self.ball_vel = [
@@ -170,6 +174,12 @@ impl Sim {
         let dir = if scorer == 1 { 1.0 } else { -1.0 };
         let pause = if won { SERVE_PAUSE * 2.0 } else { SERVE_PAUSE };
         self.phase = Phase::Serving { timer: pause, dir };
+    }
+}
+
+impl Default for Sim {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

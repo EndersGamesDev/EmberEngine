@@ -342,7 +342,7 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
                 Ok(ev) => handle_event(ev, &mut conns, &mut lobbies, &mut lobby_counter, &cfg),
                 Err(mpsc::RecvTimeoutError::Timeout) => break,
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err(io::Error::new(io::ErrorKind::Other, "accept thread died"));
+                    return Err(io::Error::other("accept thread died"));
                 }
             }
         }
@@ -392,7 +392,7 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
                     }
                 }
             }
-            if tick % STATE_EVERY_TICKS == 0 {
+            if tick.is_multiple_of(STATE_EVERY_TICKS) {
                 let state = S2C::State {
                     tick: lobby.sim.tick,
                     players: lobby

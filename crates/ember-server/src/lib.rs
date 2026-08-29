@@ -125,15 +125,11 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
 fn spawn_reader(conn: u64, stream: TcpStream, events_tx: Sender<Event>) {
     thread::spawn(move || {
         let mut stream = stream;
-        loop {
-            match read_msg::<_, ClientMsg>(&mut stream) {
-                Ok(msg) => {
-                    let is_bye = matches!(msg, ClientMsg::Bye);
-                    if events_tx.send(Event::Msg { conn, msg }).is_err() || is_bye {
-                        break;
-                    }
-                }
-                Err(_) => break, // EOF, reset, or protocol garbage
+        // Ends on EOF, reset, or protocol garbage.
+        while let Ok(msg) = read_msg::<_, ClientMsg>(&mut stream) {
+            let is_bye = matches!(msg, ClientMsg::Bye);
+            if events_tx.send(Event::Msg { conn, msg }).is_err() || is_bye {
+                break;
             }
         }
         let _ = events_tx.send(Event::Disconnected { conn });
@@ -186,7 +182,7 @@ fn sim_loop(
                 Ok(ev) => handle_event(ev, &mut conns, &mut next_player_id, &cfg, &events_tx),
                 Err(mpsc::RecvTimeoutError::Timeout) => break,
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err(io::Error::new(io::ErrorKind::Other, "accept thread died"));
+                    return Err(io::Error::other("accept thread died"));
                 }
             }
         }

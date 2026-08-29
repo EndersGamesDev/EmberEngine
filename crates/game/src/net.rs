@@ -95,14 +95,10 @@ impl NetClient {
             let mut reader = stream.try_clone()?;
             let dead = Arc::clone(&dead);
             std::thread::spawn(move || {
-                loop {
-                    match read_msg::<_, ServerMsg>(&mut reader) {
-                        Ok(msg) => {
-                            if tx.send(msg).is_err() {
-                                break; // game gone
-                            }
-                        }
-                        Err(_) => break, // server gone (or silent too long)
+                // Ends when the server is gone (or silent too long).
+                while let Ok(msg) = read_msg::<_, ServerMsg>(&mut reader) {
+                    if tx.send(msg).is_err() {
+                        break; // game gone
                     }
                 }
                 dead.store(true, Ordering::Relaxed);

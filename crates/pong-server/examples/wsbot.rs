@@ -99,7 +99,7 @@ fn main() {
                     ax: (t * 1.7).cos(),
                     az: (t * 1.7).sin(),
                     fire: true,
-                    sprint: (t as u64) % 3 == 0,
+                    sprint: (t as u64).is_multiple_of(3),
                     crouch: false,
                     reload: false,
                 },

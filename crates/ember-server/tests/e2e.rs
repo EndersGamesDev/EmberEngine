@@ -88,12 +88,9 @@ fn two_players_see_each_other_move() {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut saw_left = false;
     while Instant::now() < deadline && !saw_left {
-        match read_msg::<_, ServerMsg>(&mut a).unwrap() {
-            ServerMsg::PlayerLeft { id } => {
-                assert_eq!(id, b_id);
-                saw_left = true;
-            }
-            _ => {}
+        if let ServerMsg::PlayerLeft { id } = read_msg::<_, ServerMsg>(&mut a).unwrap() {
+            assert_eq!(id, b_id);
+            saw_left = true;
         }
     }
     assert!(saw_left, "A never received PlayerLeft for B");

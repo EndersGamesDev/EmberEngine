@@ -739,7 +739,7 @@ impl EmberGame for ShooterGame {
                         let newly_alive = my.alive && !self.was_alive;
                         self.was_alive = my.alive;
                         if my.alive {
-                            while self.history.front().map_or(false, |c| c.seq <= my.ack) {
+                            while self.history.front().is_some_and(|c| c.seq <= my.ack) {
                                 self.history.pop_front();
                             }
                             let mut p = [server.x, server.y];
@@ -1236,7 +1236,7 @@ impl EmberGame for ShooterGame {
             // Reload animation: the gun dips and rolls out of the way.
             let reload_dip = if reloading {
                 let t0 = self.reload_started.unwrap_or(self.time);
-                let progress = ((self.time - t0) / RELOAD_SECS).clamp(0.0, 1.0) as f32;
+                let progress = ((self.time - t0) / RELOAD_SECS).clamp(0.0, 1.0);
                 (progress * std::f32::consts::PI).sin() * 0.24
             } else {
                 0.0
