@@ -1,6 +1,39 @@
 # Gate report — branch `9mm-vertical-shot`
 
-## Re-run @ 1921fb1 — GREEN, branch passes
+## Re-run @ 80aa8b1 — GREEN (current)
+
+Re-run rather than carrying the previous green forward: the diff was not
+docs-only, because the branch merged main and brought `rig.rs` with it.
+Merges are where a green stops transferring.
+
+`cargo test --workspace`: no failures — pong-core 31, ember-server e2e
+11, ember-engine 9 (including `rig_json_joints_resolve_whatever_the_key_order`,
+confirming the merge kept the `parse_joint` fix rather than resolving it
+away). Merging to main is Ender's call.
+
+### `PROTO_VERSION` — decided: bump to 8
+
+Ender ruled to bump; the branch already carries `PROTO_VERSION = 8`, main
+is still 7, so the bump lands with the merge and takes jump with it.
+
+The deploy coupling this creates is now **self-detecting**: `server.json`
+records the protocol the bundle speaks and `deploy-pages.sh` prints a
+loud block when it changes, naming the exact error players see and that
+`pong-server` must be redeployed in the same window (27c20d6).
+
+Two corrections to the earlier framing in this file, both verified in the
+source rather than assumed:
+
+- The mismatch is **not silent**. `pong-server` sends `S2C::Error` —
+  "this build speaks protocol vN, the live game is vM — play the live
+  version" (lib.rs:628, :710) — and the client shows it (online.rs:898).
+  Archived pages fail with an accurate sentence, not a mystery.
+- The window is **two-sided**: page-first and server-first each leave one
+  side unable to join until the other moves. There is no zero-downtime
+  order without dual-version support in the server, which is not worth
+  building here. Move both together.
+
+## Re-run @ 1921fb1 — GREEN
 
 dev-a1 fixed the failure below by giving the shooter headroom
 (`players[0].y = 8.0`) rather than dropping the clamp angles, keeping
