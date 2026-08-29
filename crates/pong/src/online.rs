@@ -7,10 +7,10 @@ use std::collections::{HashMap, VecDeque};
 
 use ember_engine::glam::{Vec2, Vec3};
 use ember_engine::{Camera, EmberGame, Frame, InputState, Instance, KeyCode, MouseButton};
-use pong_core::proto::{BState, C2S, PState, PlayerMeta, S2C, PROTO_VERSION, STATE_EVERY_TICKS};
+use pong_core::proto::{BState, PState, PlayerMeta, C2S, PROTO_VERSION, S2C, STATE_EVERY_TICKS};
 use pong_core::shooter::{
-    generate_arena, generate_pads, move_circle, stance_speed, weapon_name, weapon_stats,
-    Obstacle, MAX_HP, RELOAD_SECS,
+    generate_arena, generate_pads, move_circle, stance_speed, weapon_name, weapon_stats, Obstacle,
+    MAX_HP, RELOAD_SECS,
 };
 use serde::Deserialize;
 
@@ -97,18 +97,36 @@ pub(crate) fn env_meshes() -> Vec<ember_engine::MeshData> {
 /// Articulated character part meshes (decimated GLBs, ~0.1MB each) — the
 /// wasm build ships them embedded.
 const PART_GLBS: [(&[u8], f32); 5] = [
-    (include_bytes!("../../../assets/models/parts/part-head.glb"), 0.34),
-    (include_bytes!("../../../assets/models/parts/part-torso.glb"), 0.68),
-    (include_bytes!("../../../assets/models/parts/part-arm.glb"), 0.66),
-    (include_bytes!("../../../assets/models/parts/part-leg.glb"), 0.55),
-    (include_bytes!("../../../assets/models/parts/part-boot.glb"), 0.19),
+    (
+        include_bytes!("../../../assets/models/parts/part-head.glb"),
+        0.34,
+    ),
+    (
+        include_bytes!("../../../assets/models/parts/part-torso.glb"),
+        0.68,
+    ),
+    (
+        include_bytes!("../../../assets/models/parts/part-arm.glb"),
+        0.66,
+    ),
+    (
+        include_bytes!("../../../assets/models/parts/part-leg.glb"),
+        0.55,
+    ),
+    (
+        include_bytes!("../../../assets/models/parts/part-boot.glb"),
+        0.19,
+    ),
 ];
 
 /// Build the jointed rig character from the embedded GLBs, registered
 /// starting at `first_mesh`. All five or none.
 pub(crate) fn part_meshes(
     first_mesh: u32,
-) -> (Vec<ember_engine::MeshData>, Option<ember_engine::rig::RigCharacter>) {
+) -> (
+    Vec<ember_engine::MeshData>,
+    Option<ember_engine::rig::RigCharacter>,
+) {
     let mut meshes = Vec::new();
     let mut sources = Vec::new();
     for (i, (bytes, _target_h)) in PART_GLBS.iter().enumerate() {
@@ -142,9 +160,11 @@ fn weapon_accent(level: u8) -> Vec3 {
 fn push_parts(frame: &mut Frame, parts: &[Part], pos: Vec3, yaw: f32, accent: Vec3) {
     for p in parts {
         let color = if p.is_strip { accent } else { p.color };
-        frame
-            .instances
-            .push(Instance::new(pos, Vec3::ONE, color).with_yaw(yaw).with_mesh(p.mesh));
+        frame.instances.push(
+            Instance::new(pos, Vec3::ONE, color)
+                .with_yaw(yaw)
+                .with_mesh(p.mesh),
+        );
     }
 }
 
@@ -178,7 +198,10 @@ impl OnlineConfig {
             other => return Err(format!("unknown action \"{other}\"")),
         };
         Ok(vec![
-            C2S::Hello { proto: PROTO_VERSION, handle: self.handle.clone() },
+            C2S::Hello {
+                proto: PROTO_VERSION,
+                handle: self.handle.clone(),
+            },
             action,
         ])
     }
@@ -246,11 +269,31 @@ fn push_gun(frame: &mut Frame, hand: Vec3, aim: Vec2, accent: Vec3) {
     };
     // Slide (dark gunmetal), barrel tip (bronze), glow strip (blue),
     // trigger guard (bronze), grip (near-black).
-    part(Vec3::new(0.34, 0.12, 0.0), Vec3::new(0.74, 0.17, 0.15), GUNMETAL);
-    part(Vec3::new(0.76, 0.09, 0.0), Vec3::new(0.16, 0.13, 0.13), BRONZE);
-    part(Vec3::new(0.32, 0.03, 0.0), Vec3::new(0.58, 0.045, 0.17), accent);
-    part(Vec3::new(0.18, -0.06, 0.0), Vec3::new(0.14, 0.06, 0.11), BRONZE);
-    part(Vec3::new(0.02, -0.14, 0.0), Vec3::new(0.15, 0.26, 0.13), GUNMETAL_DARK);
+    part(
+        Vec3::new(0.34, 0.12, 0.0),
+        Vec3::new(0.74, 0.17, 0.15),
+        GUNMETAL,
+    );
+    part(
+        Vec3::new(0.76, 0.09, 0.0),
+        Vec3::new(0.16, 0.13, 0.13),
+        BRONZE,
+    );
+    part(
+        Vec3::new(0.32, 0.03, 0.0),
+        Vec3::new(0.58, 0.045, 0.17),
+        accent,
+    );
+    part(
+        Vec3::new(0.18, -0.06, 0.0),
+        Vec3::new(0.14, 0.06, 0.11),
+        BRONZE,
+    );
+    part(
+        Vec3::new(0.02, -0.14, 0.0),
+        Vec3::new(0.15, 0.26, 0.13),
+        GUNMETAL_DARK,
+    );
 }
 
 /// Deterministic cosmetic obstacle height (the sim is 2D; every client
@@ -424,11 +467,18 @@ impl ShooterGame {
         s.push_str(&"─".repeat(35));
         s.push('\n');
         for p in rows {
-            let me = if Some(p.id) == self.my_id { "▶ " } else { "  " };
+            let me = if Some(p.id) == self.my_id {
+                "▶ "
+            } else {
+                "  "
+            };
             let state = if p.alive { "" } else { " ☠" };
             // Char-truncated so 20-char/unicode handles can't break columns.
             let name: String = self.handle_of(p.id).chars().take(16).collect();
-            s.push_str(&format!("{me}{name:<16} {:>6} {:>7}{state}\n", p.score, p.deaths));
+            s.push_str(&format!(
+                "{me}{name:<16} {:>6} {:>7}{state}\n",
+                p.score, p.deaths
+            ));
         }
         s
     }
@@ -460,7 +510,12 @@ impl ShooterGame {
                 if p.reloading {
                     format!("{} ⟳", weapon_name(p.weapon))
                 } else {
-                    format!("{} {}/{}", weapon_name(p.weapon), p.ammo, weapon_stats(p.weapon).mag)
+                    format!(
+                        "{} {}/{}",
+                        weapon_name(p.weapon),
+                        p.ammo,
+                        weapon_stats(p.weapon).mag
+                    )
                 }
             })
             .unwrap_or_default();
@@ -488,7 +543,12 @@ impl EmberGame for ShooterGame {
         for msg in drained {
             match msg {
                 S2C::Welcome { .. } => set_status("connected…"),
-                S2C::GameJoined { id, seed, arena_half, players } => {
+                S2C::GameJoined {
+                    id,
+                    seed,
+                    arena_half,
+                    players,
+                } => {
                     self.my_id = Some(id);
                     self.arena_half = arena_half;
                     self.obstacles = generate_arena(seed);
@@ -515,7 +575,12 @@ impl EmberGame for ShooterGame {
                     self.to.remove(&id);
                     self.latest.remove(&id);
                 }
-                S2C::State { tick, players, bullets, pads } => {
+                S2C::State {
+                    tick,
+                    players,
+                    bullets,
+                    pads,
+                } => {
                     self.last_tick = tick;
                     self.pads_active = pads;
                     // ---- audio cues from state diffs (before overwrite) ----
@@ -544,7 +609,8 @@ impl EmberGame for ShooterGame {
                         // My own transitions, from authoritative state.
                         if let (Some(me), Some(new_me)) = (
                             self.my_id.and_then(|id| self.latest.get(&id)),
-                            self.my_id.and_then(|id| players.iter().find(|p| p.id == id)),
+                            self.my_id
+                                .and_then(|id| players.iter().find(|p| p.id == id)),
                         ) {
                             if new_me.ammo < me.ammo {
                                 sfx.push((Sfx::Shot, 0.5)); // exact own-shot cue
@@ -622,7 +688,10 @@ impl EmberGame for ShooterGame {
                         new_from.insert(p.id, snap);
                     }
                     self.from = new_from;
-                    self.to = players.iter().map(|p| (p.id, PSnap { x: p.x, z: p.z })).collect();
+                    self.to = players
+                        .iter()
+                        .map(|p| (p.id, PSnap { x: p.x, z: p.z }))
+                        .collect();
                     self.latest = players.into_iter().map(|p| (p.id, p)).collect();
                     self.t = 0.0;
                     // Carry per-bullet visual heights across states (order is
@@ -643,7 +712,8 @@ impl EmberGame for ShooterGame {
                             let (dx, dz) = (b.x - px, b.z - pz);
                             if dx * dx + dz * dz < 2.25 {
                                 used[i] = true;
-                                let (y0, vy) = self.bullet_vis.get(i).copied().unwrap_or((1.25, 0.0));
+                                let (y0, vy) =
+                                    self.bullet_vis.get(i).copied().unwrap_or((1.25, 0.0));
                                 vis = Some((y0 + vy * carry_age, vy));
                                 break;
                             }
@@ -675,8 +745,7 @@ impl EmberGame for ShooterGame {
                             let mut p = [server.x, server.y];
                             let mut it = self.history.iter().peekable();
                             while let Some(c) = it.next() {
-                                let end =
-                                    it.peek().map(|n| n.sent_at).unwrap_or(self.time);
+                                let end = it.peek().map(|n| n.sent_at).unwrap_or(self.time);
                                 let dur = (end - c.sent_at).clamp(0.0, 0.3);
                                 p = move_circle(p, c.mv, c.speed, dur, &self.obstacles);
                             }
@@ -710,7 +779,11 @@ impl EmberGame for ShooterGame {
                     } else if Some(killer) == self.my_id {
                         format!("✚ you fragged {}", self.handle_of(victim))
                     } else {
-                        format!("{} fragged {}", self.handle_of(killer), self.handle_of(victim))
+                        format!(
+                            "{} fragged {}",
+                            self.handle_of(killer),
+                            self.handle_of(victim)
+                        )
                     };
                     status_event = Some(line);
                 }
@@ -773,9 +846,20 @@ impl EmberGame for ShooterGame {
 
         // Walk bob (cosmetic, client-side only).
         if moving {
-            self.bob_t += dt * if sprint { 11.0 } else if crouch { 5.5 } else { 8.0 };
+            self.bob_t += dt
+                * if sprint {
+                    11.0
+                } else if crouch {
+                    5.5
+                } else {
+                    8.0
+                };
         }
-        let bob = if moving { (self.bob_t).sin() * 0.035 } else { 0.0 };
+        let bob = if moving {
+            (self.bob_t).sin() * 0.035
+        } else {
+            0.0
+        };
 
         let me_alive = self
             .my_id
@@ -823,7 +907,13 @@ impl EmberGame for ShooterGame {
         // Predict my own movement locally — instant response; the State
         // handler above rebases this on the server's authority.
         if me_alive {
-            let p = move_circle(self.pred_pos.to_array(), [mv.x, mv.y], speed, dt, &self.obstacles);
+            let p = move_circle(
+                self.pred_pos.to_array(),
+                [mv.x, mv.y],
+                speed,
+                dt,
+                &self.obstacles,
+            );
             self.pred_pos = Vec2::new(p[0], p[1]);
         }
         // Tight smoothing absorbs reconciliation nudges without adding lag.
@@ -883,7 +973,10 @@ impl EmberGame for ShooterGame {
         };
 
         // ---- build the scene ----
-        let mut frame = Frame { camera, instances: Vec::with_capacity(96) };
+        let mut frame = Frame {
+            camera,
+            instances: Vec::with_capacity(96),
+        };
         let half = self.arena_half;
         let inst = |frame: &mut Frame, p: Vec3, s: Vec3, c: Vec3| {
             frame.instances.push(Instance::new(p, s, c));
@@ -892,11 +985,20 @@ impl EmberGame for ShooterGame {
         // Floor + enclosing walls (tall enough to feel like a room).
         // env_base > 0: textured basalt set (arena v8); else the classic flats.
         let env = self.env_base;
-        inst(&mut frame, Vec3::new(0.0, -0.5, 0.0), Vec3::new(half * 2.0 + 2.0, 1.0, half * 2.0 + 2.0), Vec3::new(0.12, 0.13, 0.17));
+        inst(
+            &mut frame,
+            Vec3::new(0.0, -0.5, 0.0),
+            Vec3::new(half * 2.0 + 2.0, 1.0, half * 2.0 + 2.0),
+            Vec3::new(0.12, 0.13, 0.17),
+        );
         if env > 0 {
             frame.instances.push(
-                Instance::new(Vec3::new(0.0, 0.004, 0.0), Vec3::new(half * 2.0 + 2.0, 1.0, half * 2.0 + 2.0), Vec3::ONE)
-                    .with_mesh(env),
+                Instance::new(
+                    Vec3::new(0.0, 0.004, 0.0),
+                    Vec3::new(half * 2.0 + 2.0, 1.0, half * 2.0 + 2.0),
+                    Vec3::ONE,
+                )
+                .with_mesh(env),
             );
         }
         for (px, pz, sx, sz) in [
@@ -907,11 +1009,20 @@ impl EmberGame for ShooterGame {
         ] {
             if env > 0 {
                 frame.instances.push(
-                    Instance::new(Vec3::new(px, 1.75, pz), Vec3::new(sx, 3.5, sz), Vec3::splat(0.95))
-                        .with_mesh(env + 1),
+                    Instance::new(
+                        Vec3::new(px, 1.75, pz),
+                        Vec3::new(sx, 3.5, sz),
+                        Vec3::splat(0.95),
+                    )
+                    .with_mesh(env + 1),
                 );
             } else {
-                inst(&mut frame, Vec3::new(px, 1.75, pz), Vec3::new(sx, 3.5, sz), Vec3::new(0.26, 0.28, 0.34));
+                inst(
+                    &mut frame,
+                    Vec3::new(px, 1.75, pz),
+                    Vec3::new(sx, 3.5, sz),
+                    Vec3::new(0.26, 0.28, 0.34),
+                );
             }
         }
         // Weapon-upgrade pads: base slab always, a spinning pickup while
@@ -922,7 +1033,11 @@ impl EmberGame for ShooterGame {
                 &mut frame,
                 Vec3::new(pad[0], 0.06, pad[1]),
                 Vec3::new(1.9, 0.12, 1.9),
-                if active { Vec3::new(0.16, 0.30, 0.42) } else { Vec3::new(0.15, 0.16, 0.20) },
+                if active {
+                    Vec3::new(0.16, 0.30, 0.42)
+                } else {
+                    Vec3::new(0.15, 0.16, 0.20)
+                },
             );
             if active {
                 let hover = 1.0 + (self.time * 2.0).sin() * 0.15;
@@ -947,7 +1062,9 @@ impl EmberGame for ShooterGame {
             let pos = Vec3::new(cx, h * 0.5, cz);
             let size = Vec3::new(o.max[0] - o.min[0], h, o.max[1] - o.min[1]);
             if env > 0 {
-                frame.instances.push(Instance::new(pos, size, Vec3::splat(0.85)).with_mesh(env + 1));
+                frame
+                    .instances
+                    .push(Instance::new(pos, size, Vec3::splat(0.85)).with_mesh(env + 1));
             } else {
                 inst(&mut frame, pos, size, Vec3::new(0.30, 0.33, 0.40));
             }
@@ -987,7 +1104,11 @@ impl EmberGame for ShooterGame {
             // Jointed rig when parts loaded; textured/plain boxes else.
             if let Some(rc) = &self.rig_character {
                 let prev = self.prev_pos.insert(id, pos).unwrap_or(pos);
-                let vel = if dt > 0.0 { (pos - prev) / dt } else { Vec2::ZERO };
+                let vel = if dt > 0.0 {
+                    (pos - prev) / dt
+                } else {
+                    Vec2::ZERO
+                };
                 let slot = self.anim.entry(id).or_insert((0.0, 0.0, 0.0));
                 ember_engine::puppet::advance_anim(slot, vel, dt);
                 let crouch = self.crouch_ease.entry(id).or_insert(0.0);
@@ -1009,16 +1130,34 @@ impl EmberGame for ShooterGame {
                 );
             } else if env > 0 {
                 frame.instances.push(
-                    Instance::new(Vec3::new(pos.x, body_h * 0.5, pos.y), Vec3::new(1.0, body_h, 1.0), color)
-                        .with_mesh(env + 2),
+                    Instance::new(
+                        Vec3::new(pos.x, body_h * 0.5, pos.y),
+                        Vec3::new(1.0, body_h, 1.0),
+                        color,
+                    )
+                    .with_mesh(env + 2),
                 );
                 frame.instances.push(
-                    Instance::new(Vec3::new(pos.x, head_y, pos.y), Vec3::splat(0.55), color * 0.7)
-                        .with_mesh(env + 2),
+                    Instance::new(
+                        Vec3::new(pos.x, head_y, pos.y),
+                        Vec3::splat(0.55),
+                        color * 0.7,
+                    )
+                    .with_mesh(env + 2),
                 );
             } else {
-                inst(&mut frame, Vec3::new(pos.x, body_h * 0.5, pos.y), Vec3::new(1.0, body_h, 1.0), color);
-                inst(&mut frame, Vec3::new(pos.x, head_y, pos.y), Vec3::splat(0.55), color * 0.7);
+                inst(
+                    &mut frame,
+                    Vec3::new(pos.x, body_h * 0.5, pos.y),
+                    Vec3::new(1.0, body_h, 1.0),
+                    color,
+                );
+                inst(
+                    &mut frame,
+                    Vec3::new(pos.x, head_y, pos.y),
+                    Vec3::splat(0.55),
+                    color * 0.7,
+                );
             }
             let hand = Vec3::new(pos.x, hand_y, pos.y) + Vec3::new(aim.x, 0.0, aim.y) * 0.55;
             let accent = weapon_accent(p.weapon);
@@ -1041,8 +1180,12 @@ impl EmberGame for ShooterGame {
         // Impact sparks: short-lived glowing shards on confirmed hits.
         for (p, _, ttl) in &self.particles {
             frame.instances.push(
-                Instance::new(*p, Vec3::splat(0.09 * (ttl / 0.3)), Vec3::new(1.0, 0.62, 0.2))
-                    .with_yaw(*ttl * 12.0),
+                Instance::new(
+                    *p,
+                    Vec3::splat(0.09 * (ttl / 0.3)),
+                    Vec3::new(1.0, 0.62, 0.2),
+                )
+                .with_yaw(*ttl * 12.0),
             );
         }
 
@@ -1104,8 +1247,7 @@ impl EmberGame for ShooterGame {
                 + right3 * (0.24 * (1.0 - self.zoom) + 0.015)
                 + Vec3::new(
                     0.0,
-                    -0.30 + 0.075 * self.zoom + bob * 0.4 * (1.0 - self.zoom)
-                        + self.pitch * 0.10
+                    -0.30 + 0.075 * self.zoom + bob * 0.4 * (1.0 - self.zoom) + self.pitch * 0.10
                         - reload_dip,
                     0.0,
                 );
@@ -1165,13 +1307,16 @@ mod net {
                     let _ = s.set_read_timeout(Some(Duration::from_millis(20)));
                 }
                 MaybeTlsStream::Rustls(s) => {
-                    let _ = s.get_ref().set_read_timeout(Some(Duration::from_millis(20)));
+                    let _ = s
+                        .get_ref()
+                        .set_read_timeout(Some(Duration::from_millis(20)));
                 }
                 _ => {}
             }
             for msg in &initial {
                 let text = serde_json::to_string(msg).map_err(|e| e.to_string())?;
-                ws.send(Message::text(text)).map_err(|e| format!("send: {e}"))?;
+                ws.send(Message::text(text))
+                    .map_err(|e| format!("send: {e}"))?;
             }
 
             let (out_tx, out_rx) = mpsc::channel::<C2S>();
@@ -1179,49 +1324,53 @@ mod net {
             let dead = Arc::new(AtomicBool::new(false));
             {
                 let dead = Arc::clone(&dead);
-                std::thread::spawn(move || {
+                std::thread::spawn(move || loop {
                     loop {
-                        loop {
-                            match out_rx.try_recv() {
-                                Ok(msg) => {
-                                    let Ok(text) = serde_json::to_string(&msg) else { continue };
-                                    if ws.send(Message::text(text)).is_err() {
-                                        dead.store(true, Ordering::Relaxed);
-                                        return;
-                                    }
-                                }
-                                Err(mpsc::TryRecvError::Empty) => break,
-                                Err(mpsc::TryRecvError::Disconnected) => {
-                                    let _ = ws.close(None);
+                        match out_rx.try_recv() {
+                            Ok(msg) => {
+                                let Ok(text) = serde_json::to_string(&msg) else {
+                                    continue;
+                                };
+                                if ws.send(Message::text(text)).is_err() {
+                                    dead.store(true, Ordering::Relaxed);
                                     return;
                                 }
                             }
-                        }
-                        match ws.read() {
-                            Ok(Message::Text(t)) => {
-                                if let Ok(msg) = serde_json::from_str::<S2C>(t.as_str()) {
-                                    if in_tx.send(msg).is_err() {
-                                        return;
-                                    }
-                                }
-                            }
-                            Ok(Message::Close(_)) => {
-                                dead.store(true, Ordering::Relaxed);
-                                return;
-                            }
-                            Ok(_) => {}
-                            Err(tungstenite::Error::Io(e))
-                                if e.kind() == std::io::ErrorKind::WouldBlock
-                                    || e.kind() == std::io::ErrorKind::TimedOut => {}
-                            Err(_) => {
-                                dead.store(true, Ordering::Relaxed);
+                            Err(mpsc::TryRecvError::Empty) => break,
+                            Err(mpsc::TryRecvError::Disconnected) => {
+                                let _ = ws.close(None);
                                 return;
                             }
                         }
                     }
+                    match ws.read() {
+                        Ok(Message::Text(t)) => {
+                            if let Ok(msg) = serde_json::from_str::<S2C>(t.as_str()) {
+                                if in_tx.send(msg).is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                        Ok(Message::Close(_)) => {
+                            dead.store(true, Ordering::Relaxed);
+                            return;
+                        }
+                        Ok(_) => {}
+                        Err(tungstenite::Error::Io(e))
+                            if e.kind() == std::io::ErrorKind::WouldBlock
+                                || e.kind() == std::io::ErrorKind::TimedOut => {}
+                        Err(_) => {
+                            dead.store(true, Ordering::Relaxed);
+                            return;
+                        }
+                    }
                 });
             }
-            Ok(NetChan { out_tx, in_rx, dead })
+            Ok(NetChan {
+                out_tx,
+                in_rx,
+                dead,
+            })
         }
 
         pub fn send(&mut self, msg: &C2S) {
@@ -1316,11 +1465,21 @@ mod net {
                 callbacks.push(cb);
             }
 
-            Ok(NetChan { ws, inbox, open, dead, pending, _callbacks: callbacks, _on_msg: on_msg })
+            Ok(NetChan {
+                ws,
+                inbox,
+                open,
+                dead,
+                pending,
+                _callbacks: callbacks,
+                _on_msg: on_msg,
+            })
         }
 
         pub fn send(&mut self, msg: &C2S) {
-            let Ok(text) = serde_json::to_string(msg) else { return };
+            let Ok(text) = serde_json::to_string(msg) else {
+                return;
+            };
             if self.open.get() {
                 if self.ws.send_with_str(&text).is_err() {
                     self.dead.set(true);

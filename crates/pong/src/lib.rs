@@ -45,7 +45,10 @@ fn build_scene(p: &SceneParams) -> Frame {
             fov_y_deg: 50.0,
         }
     };
-    let mut frame = Frame { camera, instances: Vec::with_capacity(32) };
+    let mut frame = Frame {
+        camera,
+        instances: Vec::with_capacity(32),
+    };
     let inst = |frame: &mut Frame, pos: Vec3, scale: Vec3, color: Vec3| {
         frame.instances.push(Instance::new(pos, scale, color));
     };
@@ -141,7 +144,11 @@ impl LocalGame {
         Self {
             sim: Sim::new(),
             accumulator: 0.0,
-            prev: PrevState { p1_x: 0.0, p2_x: 0.0, ball: [0.0, 0.0] },
+            prev: PrevState {
+                p1_x: 0.0,
+                p2_x: 0.0,
+                ball: [0.0, 0.0],
+            },
         }
     }
 }

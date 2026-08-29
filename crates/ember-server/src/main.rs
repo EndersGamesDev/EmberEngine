@@ -34,7 +34,7 @@ fn main() -> std::io::Result<()> {
         }
     }
 
-    let listener = TcpListener::bind(&bind)
-        .unwrap_or_else(|e| panic!("failed to bind {bind}: {e}"));
+    let listener =
+        TcpListener::bind(&bind).unwrap_or_else(|e| panic!("failed to bind {bind}: {e}"));
     ember_server::run(listener, ember_server::ServerConfig { max_players })
 }

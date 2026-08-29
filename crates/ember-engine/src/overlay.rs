@@ -98,9 +98,7 @@ impl Overlay {
 
         self.state
             .handle_platform_output(window, output.platform_output);
-        let primitives = self
-            .ctx
-            .tessellate(output.shapes, output.pixels_per_point);
+        let primitives = self.ctx.tessellate(output.shapes, output.pixels_per_point);
         OverlayDraw {
             textures_delta: output.textures_delta,
             primitives,

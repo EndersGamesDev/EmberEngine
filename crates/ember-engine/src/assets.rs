@@ -48,7 +48,9 @@ fn collect(
         let name = node.name().unwrap_or("part").to_string();
         for prim in mesh.primitives() {
             let reader = prim.reader(|b| buffers.get(b.index()).map(|d| &d.0[..]));
-            let Some(positions) = reader.read_positions() else { continue };
+            let Some(positions) = reader.read_positions() else {
+                continue;
+            };
             let positions: Vec<[f32; 3]> = positions.collect();
             let normals: Vec<[f32; 3]> = reader
                 .read_normals()
@@ -81,13 +83,13 @@ fn collect(
                 })
                 .collect();
 
-            let color = prim
-                .material()
-                .pbr_metallic_roughness()
-                .base_color_factor();
+            let color = prim.material().pbr_metallic_roughness().base_color_factor();
             out.push(GlbPart {
                 name: name.clone(),
-                mesh: MeshData { vertices, texture: None },
+                mesh: MeshData {
+                    vertices,
+                    texture: None,
+                },
                 color: [color[0], color[1], color[2]],
             });
         }

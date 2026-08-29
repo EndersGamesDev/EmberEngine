@@ -4,7 +4,7 @@
 use std::net::{TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
-use pong_core::proto::{C2S, S2C, PROTO_VERSION};
+use pong_core::proto::{C2S, PROTO_VERSION, S2C};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
@@ -24,7 +24,13 @@ fn connect(port: u16, handle: &str) -> Ws {
     if let MaybeTlsStream::Plain(s) = ws.get_ref() {
         s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     }
-    send(&mut ws, &C2S::Hello { proto: PROTO_VERSION, handle: handle.into() });
+    send(
+        &mut ws,
+        &C2S::Hello {
+            proto: PROTO_VERSION,
+            handle: handle.into(),
+        },
+    );
     match recv(&mut ws) {
         S2C::Welcome { .. } => ws,
         other => panic!("expected Welcome, got {other:?}"),
@@ -32,7 +38,8 @@ fn connect(port: u16, handle: &str) -> Ws {
 }
 
 fn send(ws: &mut Ws, msg: &C2S) {
-    ws.send(Message::text(serde_json::to_string(msg).unwrap())).unwrap();
+    ws.send(Message::text(serde_json::to_string(msg).unwrap()))
+        .unwrap();
 }
 
 fn recv(ws: &mut Ws) -> S2C {
@@ -61,9 +68,17 @@ fn drop_in_arena_flow_with_password() {
 
     // Host creates a passworded game and is inside it immediately.
     let mut host = connect(port, "alice");
-    send(&mut host, &C2S::CreateLobby { name: "arena".into(), password: Some("s3cret".into()) });
+    send(
+        &mut host,
+        &C2S::CreateLobby {
+            name: "arena".into(),
+            password: Some("s3cret".into()),
+        },
+    );
     let (host_pid, seed) = recv_until(&mut host, 5, |m| match m {
-        S2C::GameJoined { id, seed, players, .. } => {
+        S2C::GameJoined {
+            id, seed, players, ..
+        } => {
             assert_eq!(players.len(), 1);
             Some((id, seed))
         }
@@ -85,16 +100,30 @@ fn drop_in_arena_flow_with_password() {
     }
 
     // Wrong password rejected without disconnecting.
-    send(&mut guest, &C2S::JoinLobby { name: "arena".into(), password: Some("nope".into()) });
+    send(
+        &mut guest,
+        &C2S::JoinLobby {
+            name: "arena".into(),
+            password: Some("nope".into()),
+        },
+    );
     match recv(&mut guest) {
         S2C::Error { message } => assert!(message.contains("password"), "{message}"),
         other => panic!("expected Error, got {other:?}"),
     }
 
     // Correct password drops the guest into the SAME arena (same seed).
-    send(&mut guest, &C2S::JoinLobby { name: "arena".into(), password: Some("s3cret".into()) });
+    send(
+        &mut guest,
+        &C2S::JoinLobby {
+            name: "arena".into(),
+            password: Some("s3cret".into()),
+        },
+    );
     let (guest_pid, guest_seed) = recv_until(&mut guest, 5, |m| match m {
-        S2C::GameJoined { id, seed, players, .. } => {
+        S2C::GameJoined {
+            id, seed, players, ..
+        } => {
             assert_eq!(players.len(), 2, "joiner sees the full roster");
             Some((id, seed))
         }
@@ -111,18 +140,21 @@ fn drop_in_arena_flow_with_password() {
     });
 
     // Guest holds fire: bullets must appear in the state stream.
-    send(&mut guest, &C2S::Input {
-        seq: 1,
-        view_tick: 0,
-        mx: 0.0,
-        my: 0.0,
-        ax: 1.0,
-        az: 0.0,
-        fire: true,
-        sprint: false,
-        crouch: false,
-        reload: false,
-    });
+    send(
+        &mut guest,
+        &C2S::Input {
+            seq: 1,
+            view_tick: 0,
+            mx: 0.0,
+            my: 0.0,
+            ax: 1.0,
+            az: 0.0,
+            fire: true,
+            sprint: false,
+            crouch: false,
+            reload: false,
+        },
+    );
     // The next state must echo the input's seq back as this player's ack.
     recv_until(&mut guest, 5, |m| match m {
         S2C::State { players, .. } => players
@@ -133,7 +165,9 @@ fn drop_in_arena_flow_with_password() {
         _ => None,
     });
     recv_until(&mut host, 5, |m| match m {
-        S2C::State { bullets, players, .. } => {
+        S2C::State {
+            bullets, players, ..
+        } => {
             assert!(players.len() == 2);
             (!bullets.is_empty()).then_some(())
         }
@@ -161,16 +195,32 @@ fn old_proto_may_list_but_not_join() {
     let port = start_server();
     // A current-proto host opens a lobby.
     let mut host = connect(port, "alice");
-    send(&mut host, &C2S::CreateLobby { name: "arena".into(), password: None });
-    recv_until(&mut host, 5, |m| matches!(m, S2C::GameJoined { .. }).then_some(()));
+    send(
+        &mut host,
+        &C2S::CreateLobby {
+            name: "arena".into(),
+            password: None,
+        },
+    );
+    recv_until(&mut host, 5, |m| {
+        matches!(m, S2C::GameJoined { .. }).then_some(())
+    });
 
     // A stale client (or the hub's proto-0 browser) may list...
     let (mut old, _) = tungstenite::connect(format!("ws://127.0.0.1:{port}")).unwrap();
     if let MaybeTlsStream::Plain(s) = old.get_ref() {
         s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     }
-    send(&mut old, &C2S::Hello { proto: 0, handle: "browser".into() });
-    recv_until(&mut old, 5, |m| matches!(m, S2C::Welcome { .. }).then_some(()));
+    send(
+        &mut old,
+        &C2S::Hello {
+            proto: 0,
+            handle: "browser".into(),
+        },
+    );
+    recv_until(&mut old, 5, |m| {
+        matches!(m, S2C::Welcome { .. }).then_some(())
+    });
     send(&mut old, &C2S::ListLobbies);
     recv_until(&mut old, 5, |m| match m {
         S2C::LobbyList { lobbies } => (lobbies.len() == 1).then_some(()),
@@ -178,7 +228,13 @@ fn old_proto_may_list_but_not_join() {
     });
 
     // ...but entering a game requires the live protocol.
-    send(&mut old, &C2S::JoinLobby { name: "arena".into(), password: None });
+    send(
+        &mut old,
+        &C2S::JoinLobby {
+            name: "arena".into(),
+            password: None,
+        },
+    );
     recv_until(&mut old, 5, |m| match m {
         S2C::Error { message } => {
             assert!(message.contains("live version"), "{message}");
@@ -198,7 +254,10 @@ fn message_before_hello_disconnects() {
     send(&mut ws, &C2S::ListLobbies);
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        assert!(Instant::now() < deadline, "server never closed the connection");
+        assert!(
+            Instant::now() < deadline,
+            "server never closed the connection"
+        );
         match ws.read() {
             Ok(Message::Close(_)) | Err(_) => break,
             Ok(_) => {}

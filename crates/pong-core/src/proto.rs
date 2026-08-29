@@ -77,10 +77,19 @@ pub struct BState {
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum C2S {
     /// Must be the first message on a connection.
-    Hello { proto: u16, handle: String },
+    Hello {
+        proto: u16,
+        handle: String,
+    },
     ListLobbies,
-    CreateLobby { name: String, password: Option<String> },
-    JoinLobby { name: String, password: Option<String> },
+    CreateLobby {
+        name: String,
+        password: Option<String>,
+    },
+    JoinLobby {
+        name: String,
+        password: Option<String>,
+    },
     LeaveLobby,
     /// Held intents: movement, aim, trigger, stance. Doubles as the
     /// keepalive.
@@ -104,18 +113,27 @@ pub enum C2S {
         #[serde(default)]
         reload: bool,
     },
-    Ping { nonce: u32 },
+    Ping {
+        nonce: u32,
+    },
 }
 
 /// Server -> client.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum S2C {
-    Welcome { proto: u16, motd: String },
+    Welcome {
+        proto: u16,
+        motd: String,
+    },
     /// Recoverable failures (wrong password, name taken, ...). The
     /// connection stays open.
-    Error { message: String },
-    LobbyList { lobbies: Vec<LobbyInfo> },
+    Error {
+        message: String,
+    },
+    LobbyList {
+        lobbies: Vec<LobbyInfo>,
+    },
     /// You are in a game (created or joined). `players` includes yourself;
     /// generate the arena locally from `seed`.
     GameJoined {
@@ -124,8 +142,12 @@ pub enum S2C {
         arena_half: f32,
         players: Vec<PlayerMeta>,
     },
-    PlayerJoined { meta: PlayerMeta },
-    PlayerLeft { id: u8 },
+    PlayerJoined {
+        meta: PlayerMeta,
+    },
+    PlayerLeft {
+        id: u8,
+    },
     State {
         tick: u64,
         players: Vec<PState>,
@@ -135,8 +157,13 @@ pub enum S2C {
         #[serde(default)]
         pads: Vec<bool>,
     },
-    Kill { killer: u8, victim: u8 },
-    Pong { nonce: u32 },
+    Kill {
+        killer: u8,
+        victim: u8,
+    },
+    Pong {
+        nonce: u32,
+    },
 }
 
 /// Stable per-player color, by in-lobby id.
@@ -193,11 +220,22 @@ mod tests {
             id: 2,
             seed: 987654321,
             arena_half: 24.0,
-            players: vec![PlayerMeta { id: 2, handle: "ender".into(), color: color_for(2) }],
+            players: vec![PlayerMeta {
+                id: 2,
+                handle: "ender".into(),
+                color: color_for(2),
+            }],
         })
         .unwrap();
         let back: S2C = serde_json::from_str(&s).unwrap();
-        assert!(matches!(back, S2C::GameJoined { id: 2, seed: 987654321, .. }));
+        assert!(matches!(
+            back,
+            S2C::GameJoined {
+                id: 2,
+                seed: 987654321,
+                ..
+            }
+        ));
     }
 
     #[test]

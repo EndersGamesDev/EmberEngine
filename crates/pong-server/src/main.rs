@@ -24,7 +24,7 @@ fn main() -> std::io::Result<()> {
             }
         }
     }
-    let listener = TcpListener::bind(&bind)
-        .unwrap_or_else(|e| panic!("failed to bind {bind}: {e}"));
+    let listener =
+        TcpListener::bind(&bind).unwrap_or_else(|e| panic!("failed to bind {bind}: {e}"));
     pong_server::run(listener, pong_server::ServerConfig::default())
 }

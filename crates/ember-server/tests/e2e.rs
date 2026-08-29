@@ -22,7 +22,10 @@ fn connect(port: u16, name: &str) -> (TcpStream, PlayerId, usize) {
         .unwrap();
     write_msg(
         &mut stream,
-        &ClientMsg::Hello { protocol: PROTOCOL_VERSION, name: name.into() },
+        &ClientMsg::Hello {
+            protocol: PROTOCOL_VERSION,
+            name: name.into(),
+        },
     )
     .unwrap();
     match read_msg::<_, ServerMsg>(&mut stream).unwrap() {
@@ -42,7 +45,13 @@ fn two_players_see_each_other_move() {
     assert_eq!(b_roster, 2, "second player sees both in the roster");
 
     // A walks +x; B watches A move through snapshots.
-    write_msg(&mut a, &ClientMsg::Input { move_dir: [1.0, 0.0] }).unwrap();
+    write_msg(
+        &mut a,
+        &ClientMsg::Input {
+            move_dir: [1.0, 0.0],
+        },
+    )
+    .unwrap();
 
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut first_x: Option<f32> = None;
@@ -68,7 +77,10 @@ fn two_players_see_each_other_move() {
     // B joined after A, so B should NOT have gotten a PlayerJoined for A
     // (A was in B's Welcome roster instead). A join event would mean the
     // roster/broadcast split is wrong.
-    assert!(!b_saw_join, "B incorrectly received PlayerJoined for a pre-existing player");
+    assert!(
+        !b_saw_join,
+        "B incorrectly received PlayerJoined for a pre-existing player"
+    );
 
     // A watches B leave.
     write_msg(&mut b, &ClientMsg::Bye).unwrap();
@@ -92,7 +104,14 @@ fn protocol_mismatch_is_rejected() {
     let port = start_server();
     let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-    write_msg(&mut s, &ClientMsg::Hello { protocol: 9999, name: "x".into() }).unwrap();
+    write_msg(
+        &mut s,
+        &ClientMsg::Hello {
+            protocol: 9999,
+            name: "x".into(),
+        },
+    )
+    .unwrap();
     match read_msg::<_, ServerMsg>(&mut s).unwrap() {
         ServerMsg::Reject { reason } => assert!(reason.contains("protocol")),
         other => panic!("expected Reject, got {other:?}"),
@@ -104,7 +123,13 @@ fn input_before_hello_disconnects() {
     let port = start_server();
     let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-    write_msg(&mut s, &ClientMsg::Input { move_dir: [1.0, 0.0] }).unwrap();
+    write_msg(
+        &mut s,
+        &ClientMsg::Input {
+            move_dir: [1.0, 0.0],
+        },
+    )
+    .unwrap();
     // Server must close the connection: next read hits EOF (or reset).
     let res = read_msg::<_, ServerMsg>(&mut s);
     assert!(res.is_err(), "server should have dropped the connection");

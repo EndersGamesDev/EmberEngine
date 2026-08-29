@@ -26,8 +26,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use pong_core::proto::{
-    color_for, sanitize_text, BState, C2S, LobbyInfo, PState, PlayerMeta, S2C, MAX_HANDLE_LEN,
-    MAX_LOBBY_LEN, MAX_PASSWORD_LEN, PROTO_VERSION, STATE_EVERY_TICKS,
+    color_for, sanitize_text, BState, LobbyInfo, PState, PlayerMeta, C2S, MAX_HANDLE_LEN,
+    MAX_LOBBY_LEN, MAX_PASSWORD_LEN, PROTO_VERSION, S2C, STATE_EVERY_TICKS,
 };
 use pong_core::shooter::{PlayerIn, Sim, ARENA_HALF, FIXED_DT, MAX_PLAYERS};
 use tungstenite::protocol::WebSocketConfig;
@@ -40,7 +40,10 @@ pub struct ServerConfig {
 
 impl Default for ServerConfig {
     fn default() -> Self {
-        Self { max_conns: 128, max_lobbies: 64 }
+        Self {
+            max_conns: 128,
+            max_lobbies: 64,
+        }
     }
 }
 
@@ -65,11 +68,23 @@ const MSGS_PER_TICK_LIMIT: u32 = 30;
 const MAX_WS_MESSAGE: usize = 16 * 1024;
 
 enum Ev {
-    Connected { id: u64, tx: SyncSender<Message>, peer: String },
-    Msg { id: u64, msg: C2S },
+    Connected {
+        id: u64,
+        tx: SyncSender<Message>,
+        peer: String,
+    },
+    Msg {
+        id: u64,
+        msg: C2S,
+    },
     /// Measured WS ping round-trip for this connection (bounds its rewind).
-    Rtt { id: u64, rtt_ms: u32 },
-    Disconnected { id: u64 },
+    Rtt {
+        id: u64,
+        rtt_ms: u32,
+    },
+    Disconnected {
+        id: u64,
+    },
 }
 
 struct Conn {
@@ -230,11 +245,17 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: Sender<Ev>) {
         }
     };
     handshake_done.store(true, Ordering::Relaxed);
-    let _ = ws.get_ref().set_read_timeout(Some(Duration::from_millis(20)));
+    let _ = ws
+        .get_ref()
+        .set_read_timeout(Some(Duration::from_millis(20)));
 
     let (tx, rx) = mpsc::sync_channel::<Message>(OUTBOUND_QUEUE);
     if events_tx
-        .send(Ev::Connected { id, tx, peer: peer.clone() })
+        .send(Ev::Connected {
+            id,
+            tx,
+            peer: peer.clone(),
+        })
         .is_err()
     {
         return;
@@ -294,7 +315,8 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: Sender<Ev>) {
                 break;
             }
             Err(tungstenite::Error::Io(e))
-                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut => {}
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut => {
+            }
             Err(_) => break,
         }
     }
@@ -313,7 +335,9 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
     loop {
         loop {
             let now = Instant::now();
-            let Some(wait) = next_tick_at.checked_duration_since(now) else { break };
+            let Some(wait) = next_tick_at.checked_duration_since(now) else {
+                break;
+            };
             match events_rx.recv_timeout(wait) {
                 Ok(ev) => handle_event(ev, &mut conns, &mut lobbies, &mut lobby_counter, &cfg),
                 Err(mpsc::RecvTimeoutError::Timeout) => break,
@@ -428,10 +452,9 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
             .filter_map(|(&id, c)| {
                 c.msgs_this_tick = 0;
                 let silent = now.duration_since(c.last_seen) > CONN_TIMEOUT;
-                let no_hello =
-                    c.handle.is_none() && now.duration_since(c.created) > HELLO_TIMEOUT;
-                let parked = c.lobby.is_none()
-                    && now.duration_since(c.lobbyless_since) > LOBBYLESS_TIMEOUT;
+                let no_hello = c.handle.is_none() && now.duration_since(c.created) > HELLO_TIMEOUT;
+                let parked =
+                    c.lobby.is_none() && now.duration_since(c.lobbyless_since) > LOBBYLESS_TIMEOUT;
                 (silent || no_hello || parked).then_some(id)
             })
             .collect();
@@ -455,12 +478,16 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
 }
 
 fn send_to(conns: &HashMap<u64, Conn>, id: u64, msg: &S2C) -> bool {
-    let Ok(text) = serde_json::to_string(msg) else { return false };
+    let Ok(text) = serde_json::to_string(msg) else {
+        return false;
+    };
     send_text_to(conns, id, &text)
 }
 
 fn send_text_to(conns: &HashMap<u64, Conn>, id: u64, text: &str) -> bool {
-    let Some(c) = conns.get(&id) else { return false };
+    let Some(c) = conns.get(&id) else {
+        return false;
+    };
     match c.tx.try_send(Message::text(text.to_owned())) {
         Ok(()) => true,
         Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => false,
@@ -517,7 +544,11 @@ fn handle_event(
                 let ticks = ((rtt_ms as f32 / 1000.0) * 60.0).ceil() as u64;
                 // Smooth toward the newest measurement, biased downward so a
                 // one-off spike doesn't widen the rewind window for long.
-                c.rtt_ticks = if ticks < c.rtt_ticks { ticks } else { (c.rtt_ticks + ticks) / 2 };
+                c.rtt_ticks = if ticks < c.rtt_ticks {
+                    ticks
+                } else {
+                    (c.rtt_ticks + ticks) / 2
+                };
             }
         }
         Ev::Disconnected { id } => {
@@ -540,15 +571,23 @@ fn handle_event(
                     // enforce the current protocol.
                     let handle = {
                         let h = sanitize_text(&handle, MAX_HANDLE_LEN);
-                        if h.is_empty() { "player".to_string() } else { h }
+                        if h.is_empty() {
+                            "player".to_string()
+                        } else {
+                            h
+                        }
                     };
                     let c = conns.get_mut(&id).unwrap();
                     c.handle = Some(handle);
                     c.proto = proto;
-                    let _ = send_to(conns, id, &S2C::Welcome {
-                        proto: PROTO_VERSION,
-                        motd: "ember arena — cubes with guns".into(),
-                    });
+                    let _ = send_to(
+                        conns,
+                        id,
+                        &S2C::Welcome {
+                            proto: PROTO_VERSION,
+                            motd: "ember arena — cubes with guns".into(),
+                        },
+                    );
                 }
                 (C2S::Hello { .. }, true) => {
                     tracing::debug!(conn = id, "duplicate Hello; dropping");
@@ -599,27 +638,43 @@ fn handle_event(
                         .map(|p| sanitize_text(&p, MAX_PASSWORD_LEN))
                         .filter(|p| !p.is_empty());
                     if name.is_empty() {
-                        let _ = send_to(conns, id, &S2C::Error {
-                            message: "lobby name must not be empty".into(),
-                        });
+                        let _ = send_to(
+                            conns,
+                            id,
+                            &S2C::Error {
+                                message: "lobby name must not be empty".into(),
+                            },
+                        );
                         return;
                     }
                     if conns.get(&id).unwrap().lobby.is_some() {
-                        let _ = send_to(conns, id, &S2C::Error {
-                            message: "already in a game".into(),
-                        });
+                        let _ = send_to(
+                            conns,
+                            id,
+                            &S2C::Error {
+                                message: "already in a game".into(),
+                            },
+                        );
                         return;
                     }
                     if lobbies.contains_key(&name) {
-                        let _ = send_to(conns, id, &S2C::Error {
-                            message: format!("lobby \"{name}\" already exists"),
-                        });
+                        let _ = send_to(
+                            conns,
+                            id,
+                            &S2C::Error {
+                                message: format!("lobby \"{name}\" already exists"),
+                            },
+                        );
                         return;
                     }
                     if lobbies.len() >= cfg.max_lobbies {
-                        let _ = send_to(conns, id, &S2C::Error {
-                            message: "server is full of lobbies, try later".into(),
-                        });
+                        let _ = send_to(
+                            conns,
+                            id,
+                            &S2C::Error {
+                                message: "server is full of lobbies, try later".into(),
+                            },
+                        );
                         return;
                     }
                     *lobby_counter += 1;
@@ -662,21 +717,33 @@ fn handle_event(
                     }
                     let name = sanitize_text(&name, MAX_LOBBY_LEN);
                     if conns.get(&id).unwrap().lobby.is_some() {
-                        let _ = send_to(conns, id, &S2C::Error {
-                            message: "already in a game".into(),
-                        });
+                        let _ = send_to(
+                            conns,
+                            id,
+                            &S2C::Error {
+                                message: "already in a game".into(),
+                            },
+                        );
                         return;
                     }
                     let Some(lobby) = lobbies.get_mut(&name) else {
-                        let _ = send_to(conns, id, &S2C::Error {
-                            message: format!("no lobby named \"{name}\""),
-                        });
+                        let _ = send_to(
+                            conns,
+                            id,
+                            &S2C::Error {
+                                message: format!("no lobby named \"{name}\""),
+                            },
+                        );
                         return;
                     };
                     if lobby.members.len() >= MAX_PLAYERS {
-                        let _ = send_to(conns, id, &S2C::Error {
-                            message: "game is full".into(),
-                        });
+                        let _ = send_to(
+                            conns,
+                            id,
+                            &S2C::Error {
+                                message: "game is full".into(),
+                            },
+                        );
                         return;
                     }
                     if let Some(expected) = &lobby.password {
@@ -684,9 +751,13 @@ fn handle_event(
                             .map(|p| sanitize_text(&p, MAX_PASSWORD_LEN))
                             .unwrap_or_default();
                         if &given != expected {
-                            let _ = send_to(conns, id, &S2C::Error {
-                                message: "wrong password".into(),
-                            });
+                            let _ = send_to(
+                                conns,
+                                id,
+                                &S2C::Error {
+                                    message: "wrong password".into(),
+                                },
+                            );
                             return;
                         }
                     }
@@ -700,7 +771,11 @@ fn handle_event(
                         .get(&id)
                         .and_then(|c| c.handle.clone())
                         .unwrap_or_else(|| "?".into());
-                    let meta = PlayerMeta { id: pid, handle: handle.clone(), color: color_for(pid) };
+                    let meta = PlayerMeta {
+                        id: pid,
+                        handle: handle.clone(),
+                        color: color_for(pid),
+                    };
                     let joined = S2C::GameJoined {
                         id: pid,
                         seed: lobby.seed,
@@ -718,12 +793,32 @@ fn handle_event(
                 (C2S::LeaveLobby, true) => {
                     leave_lobby(id, conns, lobbies);
                 }
-                (C2S::Input { seq, view_tick, mx, my, ax, az, fire, sprint, crouch, reload }, true) => {
+                (
+                    C2S::Input {
+                        seq,
+                        view_tick,
+                        mx,
+                        my,
+                        ax,
+                        az,
+                        fire,
+                        sprint,
+                        crouch,
+                        reload,
+                    },
+                    true,
+                ) => {
                     let conn = conns.get(&id).unwrap();
                     let rtt_ticks = conn.rtt_ticks;
-                    let Some(lobby_name) = conn.lobby.clone() else { return };
-                    let Some(lobby) = lobbies.get_mut(&lobby_name) else { return };
-                    let Some(&pid) = lobby.pids.get(&id) else { return };
+                    let Some(lobby_name) = conn.lobby.clone() else {
+                        return;
+                    };
+                    let Some(lobby) = lobbies.get_mut(&lobby_name) else {
+                        return;
+                    };
+                    let Some(&pid) = lobby.pids.get(&id) else {
+                        return;
+                    };
                     // The sim sanitizes magnitudes/NaN on use. view_tick is
                     // clamped above by the present and FLOORED by what this
                     // connection's measured latency can justify (one-way +
@@ -754,11 +849,7 @@ fn handle_event(
 }
 
 /// Remove a connection entirely (disconnect/timeout/violation).
-fn drop_conn(
-    id: u64,
-    conns: &mut HashMap<u64, Conn>,
-    lobbies: &mut HashMap<String, Lobby>,
-) {
+fn drop_conn(id: u64, conns: &mut HashMap<u64, Conn>, lobbies: &mut HashMap<String, Lobby>) {
     leave_lobby(id, conns, lobbies);
     if let Some(c) = conns.remove(&id) {
         if let Some(h) = &c.handle {
@@ -771,13 +862,17 @@ fn drop_conn(
 /// Take a player out of their game; the game keeps running for the rest,
 /// and the lobby dies when the last player leaves.
 fn leave_lobby(id: u64, conns: &mut HashMap<u64, Conn>, lobbies: &mut HashMap<String, Lobby>) {
-    let Some(name) = conns.get_mut(&id).and_then(|c| c.lobby.take()) else { return };
+    let Some(name) = conns.get_mut(&id).and_then(|c| c.lobby.take()) else {
+        return;
+    };
     // Reset the parked timer only when a lobby was actually left — a bare
     // LeaveLobby spam must not refresh the sweep deadline.
     if let Some(c) = conns.get_mut(&id) {
         c.lobbyless_since = Instant::now();
     }
-    let Some(lobby) = lobbies.get_mut(&name) else { return };
+    let Some(lobby) = lobbies.get_mut(&name) else {
+        return;
+    };
 
     lobby.members.retain(|&m| m != id);
     if let Some(pid) = lobby.pids.remove(&id) {

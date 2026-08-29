@@ -7,13 +7,15 @@
 
 use std::time::{Duration, Instant};
 
-use pong_core::proto::{C2S, S2C, PROTO_VERSION};
+use pong_core::proto::{C2S, PROTO_VERSION, S2C};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::Message;
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let url = args.next().expect("usage: wsbot URL create|join LOBBY [PASSWORD|-] [HANDLE] [SECS]");
+    let url = args
+        .next()
+        .expect("usage: wsbot URL create|join LOBBY [PASSWORD|-] [HANDLE] [SECS]");
     let action = args.next().expect("create|join");
     let lobby = args.next().expect("lobby name");
     let password = args.next().filter(|p| !p.is_empty() && p != "-");
@@ -27,24 +29,46 @@ fn main() {
         std::process::exit(1);
     });
     match ws.get_ref() {
-        MaybeTlsStream::Plain(s) => s.set_read_timeout(Some(Duration::from_millis(100))).unwrap(),
-        MaybeTlsStream::Rustls(s) => {
-            s.get_ref().set_read_timeout(Some(Duration::from_millis(100))).unwrap()
-        }
+        MaybeTlsStream::Plain(s) => s
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap(),
+        MaybeTlsStream::Rustls(s) => s
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap(),
         _ => {}
     }
 
     let send = |ws: &mut tungstenite::WebSocket<MaybeTlsStream<std::net::TcpStream>>, m: &C2S| {
-        ws.send(Message::text(serde_json::to_string(m).unwrap())).unwrap_or_else(|e| {
-            eprintln!("WSBOT FAIL: send: {e}");
-            std::process::exit(1);
-        });
+        ws.send(Message::text(serde_json::to_string(m).unwrap()))
+            .unwrap_or_else(|e| {
+                eprintln!("WSBOT FAIL: send: {e}");
+                std::process::exit(1);
+            });
     };
 
-    send(&mut ws, &C2S::Hello { proto: PROTO_VERSION, handle: handle.clone() });
+    send(
+        &mut ws,
+        &C2S::Hello {
+            proto: PROTO_VERSION,
+            handle: handle.clone(),
+        },
+    );
     match action.as_str() {
-        "create" => send(&mut ws, &C2S::CreateLobby { name: lobby.clone(), password }),
-        "join" => send(&mut ws, &C2S::JoinLobby { name: lobby.clone(), password }),
+        "create" => send(
+            &mut ws,
+            &C2S::CreateLobby {
+                name: lobby.clone(),
+                password,
+            },
+        ),
+        "join" => send(
+            &mut ws,
+            &C2S::JoinLobby {
+                name: lobby.clone(),
+                password,
+            },
+        ),
         other => {
             eprintln!("WSBOT FAIL: unknown action {other}");
             std::process::exit(1);
@@ -65,18 +89,21 @@ fn main() {
         if in_game && last_input.elapsed() >= Duration::from_millis(50) {
             last_input = Instant::now();
             let t = started.elapsed().as_secs_f32();
-            send(&mut ws, &C2S::Input {
-                seq: (t * 20.0) as u32,
-                view_tick: 0,
-                mx: (t * 0.9).cos(),
-                my: (t * 0.9).sin(),
-                ax: (t * 1.7).cos(),
-                az: (t * 1.7).sin(),
-                fire: true,
-                sprint: (t as u64) % 3 == 0,
-                crouch: false,
-                reload: false,
-            });
+            send(
+                &mut ws,
+                &C2S::Input {
+                    seq: (t * 20.0) as u32,
+                    view_tick: 0,
+                    mx: (t * 0.9).cos(),
+                    my: (t * 0.9).sin(),
+                    ax: (t * 1.7).cos(),
+                    az: (t * 1.7).sin(),
+                    fire: true,
+                    sprint: (t as u64) % 3 == 0,
+                    crouch: false,
+                    reload: false,
+                },
+            );
         }
         if last_ping.elapsed() >= Duration::from_secs(4) {
             last_ping = Instant::now();
@@ -85,7 +112,9 @@ fn main() {
         match ws.read() {
             Ok(Message::Text(t)) => match serde_json::from_str::<S2C>(t.as_str()) {
                 Ok(S2C::Welcome { .. }) => println!("wsbot {handle}: welcomed"),
-                Ok(S2C::GameJoined { id, seed, players, .. }) => {
+                Ok(S2C::GameJoined {
+                    id, seed, players, ..
+                }) => {
                     println!(
                         "wsbot {handle}: in the arena as #{id} (seed {seed}, {} players)",
                         players.len()
@@ -93,9 +122,13 @@ fn main() {
                     my_id = Some(id);
                     in_game = true;
                 }
-                Ok(S2C::PlayerJoined { meta }) => println!("wsbot {handle}: {} joined", meta.handle),
+                Ok(S2C::PlayerJoined { meta }) => {
+                    println!("wsbot {handle}: {} joined", meta.handle)
+                }
                 Ok(S2C::PlayerLeft { id }) => println!("wsbot {handle}: #{id} left"),
-                Ok(S2C::State { players, bullets, .. }) => {
+                Ok(S2C::State {
+                    players, bullets, ..
+                }) => {
                     states += 1;
                     max_players = max_players.max(players.len());
                     bullets_seen += bullets.len() as u64;
@@ -135,9 +168,7 @@ fn main() {
     }
 
     if !in_game || states < 10 || bullets_seen == 0 {
-        eprintln!(
-            "WSBOT FAIL: in_game={in_game} states={states} bullets_seen={bullets_seen}"
-        );
+        eprintln!("WSBOT FAIL: in_game={in_game} states={states} bullets_seen={bullets_seen}");
         std::process::exit(1);
     }
     println!(

@@ -32,13 +32,29 @@ fn main() {
         std::process::exit(1);
     });
     stream.set_nodelay(true).unwrap();
-    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-
-    write_msg(&mut stream, &ClientMsg::Hello { protocol: PROTOCOL_VERSION, name: name.clone() })
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
+
+    write_msg(
+        &mut stream,
+        &ClientMsg::Hello {
+            protocol: PROTOCOL_VERSION,
+            name: name.clone(),
+        },
+    )
+    .unwrap();
     let my_id: PlayerId = match read_msg::<_, ServerMsg>(&mut stream) {
-        Ok(ServerMsg::Welcome { id, tick_hz, roster, .. }) => {
-            println!("netbot {name}: joined as {id:?}, tick {tick_hz} Hz, {} online", roster.len());
+        Ok(ServerMsg::Welcome {
+            id,
+            tick_hz,
+            roster,
+            ..
+        }) => {
+            println!(
+                "netbot {name}: joined as {id:?}, tick {tick_hz} Hz, {} online",
+                roster.len()
+            );
             id
         }
         Ok(ServerMsg::Reject { reason }) => {

@@ -47,7 +47,11 @@ impl TextureData {
         let img = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
             .map_err(|e| e.to_string())?
             .to_rgba8();
-        Ok(Self { width: img.width(), height: img.height(), rgba8: img.into_raw() })
+        Ok(Self {
+            width: img.width(),
+            height: img.height(),
+            rgba8: img.into_raw(),
+        })
     }
 }
 
@@ -125,7 +129,13 @@ pub struct Instance {
 
 impl Instance {
     pub fn new(position: Vec3, scale: Vec3, color: Vec3) -> Self {
-        Self { position, scale, color, rot: Quat::IDENTITY, mesh: 0 }
+        Self {
+            position,
+            scale,
+            color,
+            rot: Quat::IDENTITY,
+            mesh: 0,
+        }
     }
 
     pub fn with_yaw(mut self, yaw: f32) -> Self {
@@ -177,7 +187,10 @@ pub struct Frame {
 
 impl Default for Frame {
     fn default() -> Self {
-        Self { camera: Camera::default(), instances: Vec::new() }
+        Self {
+            camera: Camera::default(),
+            instances: Vec::new(),
+        }
     }
 }
 
@@ -376,7 +389,11 @@ impl Renderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let white = TextureData { width: 1, height: 1, rgba8: vec![255, 255, 255, 255] };
+        let white = TextureData {
+            width: 1,
+            height: 1,
+            rgba8: vec![255, 255, 255, 255],
+        };
 
         let mut mesh_textures: Vec<Option<TextureData>> = std::iter::once(None)
             .chain(extra_meshes.iter().map(|m| m.texture.clone()))
@@ -440,13 +457,20 @@ impl Renderer {
                 usage: wgpu::BufferUsages::VERTEX,
             }),
             count: cube_vertices.len() as u32,
-            bind: make_bind(mesh_textures[0].as_ref().unwrap_or(&white), "mesh 0 texture"),
+            bind: make_bind(
+                mesh_textures[0].as_ref().unwrap_or(&white),
+                "mesh 0 texture",
+            ),
         });
         for (i, m) in extra_meshes.iter().enumerate() {
             let verts: Vec<Vertex> = m
                 .vertices
                 .iter()
-                .map(|v| Vertex { pos: v.pos, normal: v.normal, uv: v.uv })
+                .map(|v| Vertex {
+                    pos: v.pos,
+                    normal: v.normal,
+                    uv: v.uv,
+                })
                 .collect();
             meshes.push(MeshEntry {
                 buf: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -533,8 +557,12 @@ impl Renderer {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let present_bind =
-            create_present_bind(&device, &present_layout, &scene.color_view, &present_sampler);
+        let present_bind = create_present_bind(
+            &device,
+            &present_layout,
+            &scene.color_view,
+            &present_sampler,
+        );
         let present_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("present pipeline layout"),
@@ -630,7 +658,11 @@ impl Renderer {
     /// Render plus an optional overlay composited after the present pass
     /// (presenter-side, never into the SceneFrame — ATW doc §6).
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn render_with_overlay(&mut self, frame: &Frame, overlay: Option<crate::overlay::OverlayDraw>) {
+    pub fn render_with_overlay(
+        &mut self,
+        frame: &Frame,
+        overlay: Option<crate::overlay::OverlayDraw>,
+    ) {
         self.render_impl(frame, overlay);
     }
 
@@ -662,102 +694,104 @@ impl Renderer {
                 return;
             }
         };
-        let surface_view = surface_tex.texture.create_view(&wgpu::TextureViewDescriptor {
-            format: self.surface_view_format,
-            ..Default::default()
-        });
+        let surface_view = surface_tex
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor {
+                format: self.surface_view_format,
+                ..Default::default()
+            });
 
         let scene_cmd = if scene_pass_due {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.last_scene_at = std::time::Instant::now();
-        }
-        let aspect = self.scene.width as f32 / self.scene.height.max(1) as f32;
-        let vp = frame.camera.view_proj(aspect);
-        self.queue
-            .write_buffer(&self.camera_buf, 0, bytemuck::cast_slice(vp.as_ref()));
-
-        // Bucket instances by mesh so each mesh draws with one instanced
-        // call over a contiguous range of the shared instance buffer.
-        let mut buckets: Vec<Vec<InstanceRaw>> = vec![Vec::new(); self.meshes.len()];
-        for i in &frame.instances {
-            let m = (i.mesh as usize).min(self.meshes.len() - 1);
-            buckets[m].push(InstanceRaw {
-                pos: i.position.to_array(),
-                scale: i.scale.to_array(),
-                color: i.color.to_array(),
-                rot: i.rot.to_array(),
-            });
-        }
-        let mut raws: Vec<InstanceRaw> = Vec::with_capacity(frame.instances.len());
-        let mut ranges: Vec<(usize, std::ops::Range<u32>)> = Vec::new();
-        for (mi, b) in buckets.iter().enumerate() {
-            if b.is_empty() {
-                continue;
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.last_scene_at = std::time::Instant::now();
             }
-            let start = raws.len() as u32;
-            raws.extend_from_slice(b);
-            ranges.push((mi, start..raws.len() as u32));
-        }
-        if raws.len() > self.instance_cap {
-            self.instance_cap = raws.len().next_power_of_two();
-            self.instance_buf = create_instance_buf(&self.device, self.instance_cap);
-        }
-        if !raws.is_empty() {
+            let aspect = self.scene.width as f32 / self.scene.height.max(1) as f32;
+            let vp = frame.camera.view_proj(aspect);
             self.queue
-                .write_buffer(&self.instance_buf, 0, bytemuck::cast_slice(&raws));
-        }
+                .write_buffer(&self.camera_buf, 0, bytemuck::cast_slice(vp.as_ref()));
 
-        // Separate command buffers per pass, per the ATW doc's sliced-
-        // submission rule: the presenter must never wait behind scene work
-        // in a single monolithic submission.
-        let mut scene_enc = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("scene encoder"),
-            });
-        {
-            let mut pass = scene_enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("scene pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.scene.color_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.008,
-                            g: 0.028,
-                            b: 0.12,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.scene.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        // Kept (not discarded): warp stage C and later SSAO/
-                        // TAA read scene depth.
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
+            // Bucket instances by mesh so each mesh draws with one instanced
+            // call over a contiguous range of the shared instance buffer.
+            let mut buckets: Vec<Vec<InstanceRaw>> = vec![Vec::new(); self.meshes.len()];
+            for i in &frame.instances {
+                let m = (i.mesh as usize).min(self.meshes.len() - 1);
+                buckets[m].push(InstanceRaw {
+                    pos: i.position.to_array(),
+                    scale: i.scale.to_array(),
+                    color: i.color.to_array(),
+                    rot: i.rot.to_array(),
+                });
+            }
+            let mut raws: Vec<InstanceRaw> = Vec::with_capacity(frame.instances.len());
+            let mut ranges: Vec<(usize, std::ops::Range<u32>)> = Vec::new();
+            for (mi, b) in buckets.iter().enumerate() {
+                if b.is_empty() {
+                    continue;
+                }
+                let start = raws.len() as u32;
+                raws.extend_from_slice(b);
+                ranges.push((mi, start..raws.len() as u32));
+            }
+            if raws.len() > self.instance_cap {
+                self.instance_cap = raws.len().next_power_of_two();
+                self.instance_buf = create_instance_buf(&self.device, self.instance_cap);
+            }
             if !raws.is_empty() {
-                pass.set_pipeline(&self.scene_pipeline);
-                pass.set_bind_group(0, &self.camera_bind, &[]);
-                pass.set_vertex_buffer(1, self.instance_buf.slice(..));
-                for (mi, range) in &ranges {
-                    let mesh = &self.meshes[*mi];
-                    pass.set_bind_group(1, &mesh.bind, &[]);
-                    pass.set_vertex_buffer(0, mesh.buf.slice(..));
-                    pass.draw(0..mesh.count, range.clone());
+                self.queue
+                    .write_buffer(&self.instance_buf, 0, bytemuck::cast_slice(&raws));
+            }
+
+            // Separate command buffers per pass, per the ATW doc's sliced-
+            // submission rule: the presenter must never wait behind scene work
+            // in a single monolithic submission.
+            let mut scene_enc =
+                self.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("scene encoder"),
+                    });
+            {
+                let mut pass = scene_enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("scene pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &self.scene.color_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.008,
+                                g: 0.028,
+                                b: 0.12,
+                                a: 1.0,
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.scene.depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            // Kept (not discarded): warp stage C and later SSAO/
+                            // TAA read scene depth.
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                if !raws.is_empty() {
+                    pass.set_pipeline(&self.scene_pipeline);
+                    pass.set_bind_group(0, &self.camera_bind, &[]);
+                    pass.set_vertex_buffer(1, self.instance_buf.slice(..));
+                    for (mi, range) in &ranges {
+                        let mesh = &self.meshes[*mi];
+                        pass.set_bind_group(1, &mesh.bind, &[]);
+                        pass.set_vertex_buffer(0, mesh.buf.slice(..));
+                        pass.draw(0..mesh.count, range.clone());
+                    }
                 }
             }
-        }
-        Some(scene_enc.finish())
+            Some(scene_enc.finish())
         } else {
             None
         };
@@ -884,10 +918,12 @@ impl Renderer {
             }
         };
         self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some(label),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
-        });
+        let module = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(label),
+                source: wgpu::ShaderSource::Wgsl(source.into()),
+            });
         if let Some(err) = pollster::block_on(self.device.pop_error_scope()) {
             tracing::error!(path, %err, "shader hot-reload: validation failed; keeping old pipeline");
             return None;
@@ -903,7 +939,11 @@ fn create_scene_targets(
 ) -> SceneTargets {
     let width = ((config.width as f32 * scale) as u32).max(1);
     let height = ((config.height as f32 * scale) as u32).max(1);
-    let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+    let size = wgpu::Extent3d {
+        width,
+        height,
+        depth_or_array_layers: 1,
+    };
     let color = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("scene color"),
         size,
@@ -1046,8 +1086,12 @@ fn build_present_pipeline(
 /// The first successful stat only records the baseline and reports false.
 #[cfg(not(target_arch = "wasm32"))]
 fn check_mtime(path: &str, tracked: &mut Option<std::time::SystemTime>) -> bool {
-    let Ok(meta) = std::fs::metadata(path) else { return false };
-    let Ok(mtime) = meta.modified() else { return false };
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    let Ok(mtime) = meta.modified() else {
+        return false;
+    };
     match tracked {
         Some(prev) if *prev != mtime => {
             *tracked = Some(mtime);
@@ -1065,7 +1109,11 @@ fn check_mtime(path: &str, tracked: &mut Option<std::time::SystemTime>) -> bool 
 #[cfg(not(target_arch = "wasm32"))]
 fn load_png_rgba8(path: &str) -> Result<TextureData, String> {
     let img = image::open(path).map_err(|e| e.to_string())?.to_rgba8();
-    Ok(TextureData { width: img.width(), height: img.height(), rgba8: img.into_raw() })
+    Ok(TextureData {
+        width: img.width(),
+        height: img.height(),
+        rgba8: img.into_raw(),
+    })
 }
 
 fn create_instance_buf(device: &wgpu::Device, cap: usize) -> wgpu::Buffer {
@@ -1102,7 +1150,11 @@ fn cube_vertices() -> Vec<Vertex> {
         ];
         let uvs = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
         for idx in [0usize, 1, 2, 0, 2, 3] {
-            verts.push(Vertex { pos: corners[idx].to_array(), normal: n, uv: uvs[idx] });
+            verts.push(Vertex {
+                pos: corners[idx].to_array(),
+                normal: n,
+                uv: uvs[idx],
+            });
         }
     }
     verts

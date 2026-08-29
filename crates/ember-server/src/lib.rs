@@ -16,8 +16,7 @@ use std::time::{Duration, Instant};
 
 use ember_net::{
     color_for, read_msg, sanitize_dir, sanitize_name, write_msg, ClientMsg, PlayerId, PlayerMeta,
-    PlayerState, ServerMsg, ARENA_HALF, CLIENT_TIMEOUT_SECS, MOVE_SPEED, PROTOCOL_VERSION,
-    TICK_HZ,
+    PlayerState, ServerMsg, ARENA_HALF, CLIENT_TIMEOUT_SECS, MOVE_SPEED, PROTOCOL_VERSION, TICK_HZ,
 };
 
 pub struct ServerConfig {
@@ -31,9 +30,18 @@ impl Default for ServerConfig {
 }
 
 enum Event {
-    Connected { conn: u64, stream: TcpStream, peer: String },
-    Msg { conn: u64, msg: ClientMsg },
-    Disconnected { conn: u64 },
+    Connected {
+        conn: u64,
+        stream: TcpStream,
+        peer: String,
+    },
+    Msg {
+        conn: u64,
+        msg: ClientMsg,
+    },
+    Disconnected {
+        conn: u64,
+    },
 }
 
 struct Player {
@@ -251,7 +259,11 @@ fn sim_loop(
         let mut players: Vec<PlayerState> = conns
             .values()
             .filter_map(|c| c.player.as_ref())
-            .map(|p| PlayerState { id: p.id, pos: p.pos, vel: p.vel })
+            .map(|p| PlayerState {
+                id: p.id,
+                pos: p.pos,
+                vel: p.vel,
+            })
             .collect();
         players.sort_by_key(|p| p.id);
         let snapshot = ServerMsg::Snapshot { tick, players };
@@ -341,7 +353,9 @@ fn handle_event(
             tracing::info!("conn {conn}: accepted from {peer}");
         }
         Event::Msg { conn, msg } => {
-            let Some(c) = conns.get_mut(&conn) else { return };
+            let Some(c) = conns.get_mut(&conn) else {
+                return;
+            };
             if c.lag_flagged {
                 c.lag_flagged = false;
                 tracing::info!(
@@ -371,7 +385,9 @@ fn handle_event(
                     let joined = conns.values().filter(|c| c.player.is_some()).count();
                     if joined >= cfg.max_players {
                         let c = conns.get_mut(&conn).unwrap();
-                        let _ = c.tx.try_send(ServerMsg::Reject { reason: "server full".into() });
+                        let _ = c.tx.try_send(ServerMsg::Reject {
+                            reason: "server full".into(),
+                        });
                         remove_conn(conn, conns);
                         return;
                     }
@@ -391,7 +407,12 @@ fn handle_event(
                         vel: [0.0, 0.0],
                         dir: [0.0, 0.0],
                     };
-                    let meta = PlayerMeta { id, name: name.clone(), color, pos: spawn };
+                    let meta = PlayerMeta {
+                        id,
+                        name: name.clone(),
+                        color,
+                        pos: spawn,
+                    };
 
                     let c = conns.get_mut(&conn).unwrap();
                     c.player = Some(player);
@@ -414,7 +435,9 @@ fn handle_event(
                     });
                     for (&other_id, other) in conns.iter() {
                         if other_id != conn && other.player.is_some() {
-                            let _ = other.tx.try_send(ServerMsg::PlayerJoined { meta: meta.clone() });
+                            let _ = other
+                                .tx
+                                .try_send(ServerMsg::PlayerJoined { meta: meta.clone() });
                         }
                     }
                     tracing::info!("conn {conn}: joined as {:?} \"{name}\"", id);

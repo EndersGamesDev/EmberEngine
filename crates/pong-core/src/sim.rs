@@ -24,13 +24,16 @@ pub const SERVE_PAUSE: f32 = 1.2;
 pub enum Phase {
     /// Ball parked at center; `timer` counts down, then it launches toward
     /// `dir` (+1.0 = toward player 1 at +z, -1.0 = toward player 2 at -z).
-    Serving { timer: f32, dir: f32 },
+    Serving {
+        timer: f32,
+        dir: f32,
+    },
     Playing,
 }
 
 pub struct Sim {
-    pub p1_x: f32, // paddle at +z (near)
-    pub p2_x: f32, // paddle at -z (far)
+    pub p1_x: f32,          // paddle at +z (near)
+    pub p2_x: f32,          // paddle at -z (far)
     pub ball_pos: [f32; 2], // (x, z)
     pub ball_vel: [f32; 2],
     pub score: [u32; 2], // [p1, p2]
@@ -53,7 +56,10 @@ impl Sim {
             ball_pos: [0.0, 0.0],
             ball_vel: [0.0, 0.0],
             score: [0, 0],
-            phase: Phase::Serving { timer: SERVE_PAUSE, dir: 1.0 },
+            phase: Phase::Serving {
+                timer: SERVE_PAUSE,
+                dir: 1.0,
+            },
             serves: 0,
             event: None,
             pending_reset: false,
@@ -139,13 +145,12 @@ impl Sim {
         // Reflect off the front face, add English from the hit offset,
         // speed up, and re-normalize.
         self.ball_pos[1] = front;
-        let speed = (self.ball_vel[0] * self.ball_vel[0]
-            + self.ball_vel[1] * self.ball_vel[1])
-            .sqrt();
+        let speed =
+            (self.ball_vel[0] * self.ball_vel[0] + self.ball_vel[1] * self.ball_vel[1]).sqrt();
         let new_speed = (speed * SPEEDUP).min(MAX_SPEED);
         let mut vx = self.ball_vel[0] + (offset / PADDLE_HALF_W) * 7.0;
         let vz_sign = -paddle_z.signum(); // away from this paddle
-        // Enforce a minimum z fraction so the ball always makes progress.
+                                          // Enforce a minimum z fraction so the ball always makes progress.
         let max_vx = new_speed * (1.0 - MIN_Z_FRACTION * MIN_Z_FRACTION).sqrt();
         vx = vx.clamp(-max_vx, max_vx);
         let vz = (new_speed * new_speed - vx * vx).sqrt() * vz_sign;
@@ -189,8 +194,7 @@ mod tests {
         let mut sim = Sim::new();
         run_serve(&mut sim);
         assert!(sim.ball_vel[1] > 0.0, "first serve goes toward +z (P1)");
-        let speed =
-            (sim.ball_vel[0].powi(2) + sim.ball_vel[1].powi(2)).sqrt();
+        let speed = (sim.ball_vel[0].powi(2) + sim.ball_vel[1].powi(2)).sqrt();
         assert!((speed - SERVE_SPEED).abs() < 1e-3);
     }
 
@@ -229,8 +233,7 @@ mod tests {
         let speed_before = 12.0_f32;
         sim.step(0.0, 0.0);
         assert!(sim.ball_vel[1] < 0.0, "ball must reflect back toward P2");
-        let speed =
-            (sim.ball_vel[0].powi(2) + sim.ball_vel[1].powi(2)).sqrt();
+        let speed = (sim.ball_vel[0].powi(2) + sim.ball_vel[1].powi(2)).sqrt();
         assert!(speed > speed_before, "ball speeds up on paddle hits");
         assert!(
             sim.ball_vel[1].abs() >= speed * MIN_Z_FRACTION - 1e-3,

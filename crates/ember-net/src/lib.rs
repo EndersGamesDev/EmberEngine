@@ -50,11 +50,18 @@ pub struct PlayerState {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ClientMsg {
     /// Must be the first message on a connection.
-    Hello { protocol: u16, name: String },
+    Hello {
+        protocol: u16,
+        name: String,
+    },
     /// Sets the held movement intent; applied until the next Input.
     /// Also serves as the liveness keepalive.
-    Input { move_dir: [f32; 2] },
-    Ping { nonce: u32 },
+    Input {
+        move_dir: [f32; 2],
+    },
+    Ping {
+        nonce: u32,
+    },
     Bye,
 }
 
@@ -67,18 +74,32 @@ pub enum ServerMsg {
         arena_half: f32,
         roster: Vec<PlayerMeta>,
     },
-    Reject { reason: String },
-    PlayerJoined { meta: PlayerMeta },
-    PlayerLeft { id: PlayerId },
-    Snapshot { tick: u64, players: Vec<PlayerState> },
-    Pong { nonce: u32 },
+    Reject {
+        reason: String,
+    },
+    PlayerJoined {
+        meta: PlayerMeta,
+    },
+    PlayerLeft {
+        id: PlayerId,
+    },
+    Snapshot {
+        tick: u64,
+        players: Vec<PlayerState>,
+    },
+    Pong {
+        nonce: u32,
+    },
 }
 
 pub fn write_msg<W: Write, T: Serialize>(w: &mut W, msg: &T) -> io::Result<()> {
-    let bytes = postcard::to_stdvec(msg)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let bytes =
+        postcard::to_stdvec(msg).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     if bytes.len() > MAX_FRAME_BYTES as usize {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "frame too large"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "frame too large",
+        ));
     }
     w.write_all(&(bytes.len() as u32).to_le_bytes())?;
     w.write_all(&bytes)?;
@@ -90,7 +111,10 @@ pub fn read_msg<R: Read, T: DeserializeOwned>(r: &mut R) -> io::Result<T> {
     r.read_exact(&mut len_bytes)?;
     let len = u32::from_le_bytes(len_bytes);
     if len > MAX_FRAME_BYTES {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "frame too large"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "frame too large",
+        ));
     }
     let mut buf = vec![0u8; len as usize];
     r.read_exact(&mut buf)?;

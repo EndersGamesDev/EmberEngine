@@ -14,7 +14,11 @@ pub const CROUCH_HIT_MULT: f32 = 0.72;
 
 /// Stance-dependent hit-test radius: crouch = lower profile = smaller target.
 pub fn hit_radius(crouch: bool) -> f32 {
-    if crouch { PLAYER_R * CROUCH_HIT_MULT } else { PLAYER_R }
+    if crouch {
+        PLAYER_R * CROUCH_HIT_MULT
+    } else {
+        PLAYER_R
+    }
 }
 pub const BULLET_SPEED: f32 = 34.0;
 pub const BULLET_R: f32 = 0.22;
@@ -35,9 +39,21 @@ pub struct WeaponStats {
 
 pub fn weapon_stats(level: u8) -> WeaponStats {
     match level {
-        3 => WeaponStats { cooldown: 0.22, mag: 6, damage: 2 },
-        2 => WeaponStats { cooldown: 0.11, mag: 12, damage: 1 },
-        _ => WeaponStats { cooldown: 0.18, mag: 8, damage: 1 },
+        3 => WeaponStats {
+            cooldown: 0.22,
+            mag: 6,
+            damage: 2,
+        },
+        2 => WeaponStats {
+            cooldown: 0.11,
+            mag: 12,
+            damage: 1,
+        },
+        _ => WeaponStats {
+            cooldown: 0.18,
+            mag: 8,
+            damage: 1,
+        },
     }
 }
 
@@ -187,7 +203,11 @@ pub fn move_circle(
         mv = [mv[0] / len, mv[1] / len];
     }
     let try_x = [pos[0] + mv[0] * speed * dt, pos[1]];
-    let pos = if blocked(try_x, PLAYER_R, obstacles) { pos } else { try_x };
+    let pos = if blocked(try_x, PLAYER_R, obstacles) {
+        pos
+    } else {
+        try_x
+    };
     let try_z = [pos[0], pos[1] + mv[1] * speed * dt];
     if blocked(try_z, PLAYER_R, obstacles) {
         pos
@@ -268,7 +288,10 @@ impl Sim {
             obstacles: generate_arena(seed),
             pads: generate_pads(seed)
                 .into_iter()
-                .map(|pos| Pad { pos, respawn_t: 0.0 })
+                .map(|pos| Pad {
+                    pos,
+                    respawn_t: 0.0,
+                })
                 .collect(),
             players: Vec::new(),
             bullets: Vec::new(),
@@ -390,10 +413,7 @@ impl Sim {
                     // Spawn just in front of the center: the swept collision
                     // below skips the owner, and starting further out would
                     // leave a point-blank dead zone.
-                    let muzzle = [
-                        p.pos[0] + p.aim[0] * 0.2,
-                        p.pos[1] + p.aim[1] * 0.2,
-                    ];
+                    let muzzle = [p.pos[0] + p.aim[0] * 0.2, p.pos[1] + p.aim[1] * 0.2];
                     new_bullets.push(Bullet {
                         pos: muzzle,
                         vel: [p.aim[0] * BULLET_SPEED, p.aim[1] * BULLET_SPEED],
@@ -429,8 +449,12 @@ impl Sim {
         }
 
         // Record this tick's positions + stance for lag-compensated rewinds.
-        self.history
-            .push_back(self.players.iter().map(|p| (p.id, p.pos, p.alive, p.crouch)).collect());
+        self.history.push_back(
+            self.players
+                .iter()
+                .map(|p| (p.id, p.pos, p.alive, p.crouch))
+                .collect(),
+        );
         if self.history.len() > HISTORY_LEN {
             self.history.pop_front();
         }
@@ -466,8 +490,7 @@ impl Sim {
                 let t = if seg_len_sq <= 1e-8 {
                     0.0
                 } else {
-                    (((tpos[0] - p0[0]) * sx + (tpos[1] - p0[1]) * sz) / seg_len_sq)
-                        .clamp(0.0, 1.0)
+                    (((tpos[0] - p0[0]) * sx + (tpos[1] - p0[1]) * sz) / seg_len_sq).clamp(0.0, 1.0)
                 };
                 let (ex, ez) = (tpos[0] - (p0[0] + sx * t), tpos[1] - (p0[1] + sz * t));
                 if ex * ex + ez * ez < rr * rr {
@@ -494,7 +517,9 @@ impl Sim {
 
         // Apply damage after the bullet pass (avoids double-borrow).
         for (owner, victim, dmg) in hits {
-            let Some(v) = self.players.iter_mut().find(|p| p.id == victim) else { continue };
+            let Some(v) = self.players.iter_mut().find(|p| p.id == victim) else {
+                continue;
+            };
             if !v.alive {
                 continue;
             }
@@ -565,7 +590,14 @@ mod tests {
             let mut inputs = HashMap::new();
             inputs.insert(
                 0,
-                PlayerIn { mv: [1.0, 0.0], aim: [1.0, 0.0], fire: false, sprint, crouch, ..Default::default() },
+                PlayerIn {
+                    mv: [1.0, 0.0],
+                    aim: [1.0, 0.0],
+                    fire: false,
+                    sprint,
+                    crouch,
+                    ..Default::default()
+                },
             );
             for _ in 0..60 {
                 step_with(&mut sim, &inputs);
@@ -590,7 +622,15 @@ mod tests {
         sim.add_player(0);
         sim.add_player(1);
         let mut inputs = HashMap::new();
-        inputs.insert(0, PlayerIn { mv: [0.0, 0.0], aim: [1.0, 0.0], fire: true, ..Default::default() });
+        inputs.insert(
+            0,
+            PlayerIn {
+                mv: [0.0, 0.0],
+                aim: [1.0, 0.0],
+                fire: true,
+                ..Default::default()
+            },
+        );
         // Victim glued right in front of the shooter, inside the old
         // dead zone.
         let mut killed = false;
@@ -615,7 +655,15 @@ mod tests {
         sim.add_player(0);
         sim.players[0].pos = [ARENA_HALF - PLAYER_R - 0.05, 0.0];
         let mut inputs = HashMap::new();
-        inputs.insert(0, PlayerIn { mv: [1.0, 0.0], aim: [1.0, 0.0], fire: false, ..Default::default() });
+        inputs.insert(
+            0,
+            PlayerIn {
+                mv: [1.0, 0.0],
+                aim: [1.0, 0.0],
+                fire: false,
+                ..Default::default()
+            },
+        );
         for _ in 0..30 {
             step_with(&mut sim, &inputs);
         }
@@ -631,7 +679,15 @@ mod tests {
         sim.players[0].pos = [-5.0, 0.0];
         sim.players[1].pos = [5.0, 0.0];
         let mut inputs = HashMap::new();
-        inputs.insert(0, PlayerIn { mv: [0.0, 0.0], aim: [1.0, 0.0], fire: true, ..Default::default() });
+        inputs.insert(
+            0,
+            PlayerIn {
+                mv: [0.0, 0.0],
+                aim: [1.0, 0.0],
+                fire: true,
+                ..Default::default()
+            },
+        );
         let mut killed_at = None;
         for i in 0..600 {
             // Keep the victim parked.
@@ -685,13 +741,16 @@ mod tests {
             // The dodge (teleport keeps the geometry exact).
             sim.players.iter_mut().find(|p| p.id == 1).unwrap().pos = [6.0, 5.0];
             let mut inputs = HashMap::new();
-            inputs.insert(0, PlayerIn {
-                mv: [0.0, 0.0],
-                aim: [1.0, 0.0],
-                fire: true,
-                delay_ticks: delay,
-                ..Default::default()
-            });
+            inputs.insert(
+                0,
+                PlayerIn {
+                    mv: [0.0, 0.0],
+                    aim: [1.0, 0.0],
+                    fire: true,
+                    delay_ticks: delay,
+                    ..Default::default()
+                },
+            );
             // Bullet flight to x=6 takes ~11 ticks — still inside the
             // 12-tick rewind window.
             for _ in 0..12 {
@@ -704,7 +763,10 @@ mod tests {
             }
             false
         };
-        assert!(run(12), "rewound shot must land where the shooter saw the target");
+        assert!(
+            run(12),
+            "rewound shot must land where the shooter saw the target"
+        );
         assert!(!run(0), "without rewind the dodged shot must miss");
     }
 
@@ -716,7 +778,15 @@ mod tests {
         sim.add_player(0);
         sim.players[0].pos = [0.0, 0.0];
         let mut inputs = HashMap::new();
-        inputs.insert(0, PlayerIn { mv: [0.0, 0.0], aim: [1.0, 0.0], fire: true, ..Default::default() });
+        inputs.insert(
+            0,
+            PlayerIn {
+                mv: [0.0, 0.0],
+                aim: [1.0, 0.0],
+                fire: true,
+                ..Default::default()
+            },
+        );
         let mag = weapon_stats(1).mag;
         // Hold fire long enough to empty the mag.
         let mut fired = 0u32;
@@ -730,7 +800,10 @@ mod tests {
             }
             prev_bullets = b;
         }
-        assert_eq!(fired, mag as u32, "exactly one magazine before auto-reload gates fire");
+        assert_eq!(
+            fired, mag as u32,
+            "exactly one magazine before auto-reload gates fire"
+        );
         // Let the auto-reload finish: ammo must be full again.
         let idle = HashMap::new();
         for _ in 0..((RELOAD_SECS / FIXED_DT) as u32 + 3) {
@@ -780,7 +853,15 @@ mod tests {
         sim.players[0].pos = [0.0, 0.0];
         sim.players[1].pos = [5.0, 0.0];
         let mut inputs = HashMap::new();
-        inputs.insert(0, PlayerIn { mv: [0.0, 0.0], aim: [1.0, 0.0], fire: true, ..Default::default() });
+        inputs.insert(
+            0,
+            PlayerIn {
+                mv: [0.0, 0.0],
+                aim: [1.0, 0.0],
+                fire: true,
+                ..Default::default()
+            },
+        );
         let mut hits = 0;
         let mut last_hp = MAX_HP;
         for _ in 0..240 {
@@ -800,7 +881,10 @@ mod tests {
             }
         }
         assert_eq!(sim.events, vec![(0, 1)], "heavy weapon killed the target");
-        assert!(hits <= 1, "at most one non-lethal hit before the kill (2 dmg per hit)");
+        assert!(
+            hits <= 1,
+            "at most one non-lethal hit before the kill (2 dmg per hit)"
+        );
     }
 
     #[test]
@@ -808,7 +892,10 @@ mod tests {
         // A graze shot aimed just inside the STANDING radius but outside the
         // crouched one: hits a standing target, misses a crouched target.
         let graze_z = hit_radius(false) + BULLET_R - 0.05; // inside standing
-        assert!(graze_z > hit_radius(true) + BULLET_R, "graze must clear the crouched circle");
+        assert!(
+            graze_z > hit_radius(true) + BULLET_R,
+            "graze must clear the crouched circle"
+        );
         let run = |crouch: bool| -> bool {
             let mut sim = Sim::new(11);
             sim.obstacles.clear();
@@ -816,8 +903,21 @@ mod tests {
             sim.add_player(0);
             sim.add_player(1);
             let mut inputs = HashMap::new();
-            inputs.insert(0, PlayerIn { aim: [1.0, 0.0], fire: true, ..Default::default() });
-            inputs.insert(1, PlayerIn { crouch, ..Default::default() });
+            inputs.insert(
+                0,
+                PlayerIn {
+                    aim: [1.0, 0.0],
+                    fire: true,
+                    ..Default::default()
+                },
+            );
+            inputs.insert(
+                1,
+                PlayerIn {
+                    crouch,
+                    ..Default::default()
+                },
+            );
             for _ in 0..120 {
                 sim.players.iter_mut().for_each(|p| match p.id {
                     0 if p.alive => p.pos = [0.0, 0.0],
@@ -857,8 +957,22 @@ mod tests {
         }
         // Now the target crouches; a 12-tick-lagged shot sees them standing.
         let mut inputs = HashMap::new();
-        inputs.insert(0, PlayerIn { aim: [1.0, 0.0], fire: true, delay_ticks: 12, ..Default::default() });
-        inputs.insert(1, PlayerIn { crouch: true, ..Default::default() });
+        inputs.insert(
+            0,
+            PlayerIn {
+                aim: [1.0, 0.0],
+                fire: true,
+                delay_ticks: 12,
+                ..Default::default()
+            },
+        );
+        inputs.insert(
+            1,
+            PlayerIn {
+                crouch: true,
+                ..Default::default()
+            },
+        );
         let mut hit = false;
         for _ in 0..12 {
             sim.players.iter_mut().for_each(|p| match p.id {
@@ -872,7 +986,10 @@ mod tests {
                 break;
             }
         }
-        assert!(hit, "rewound shot must use the stance the shooter saw (standing)");
+        assert!(
+            hit,
+            "rewound shot must use the stance the shooter saw (standing)"
+        );
     }
 
     #[test]
@@ -883,7 +1000,15 @@ mod tests {
         sim.players[0].pos = [0.0, 0.0];
         let mut inputs = HashMap::new();
         // Fire along +x forever with no cooldown constraint violations.
-        inputs.insert(0, PlayerIn { mv: [0.0, 0.0], aim: [1.0, 0.0], fire: true, ..Default::default() });
+        inputs.insert(
+            0,
+            PlayerIn {
+                mv: [0.0, 0.0],
+                aim: [1.0, 0.0],
+                fire: true,
+                ..Default::default()
+            },
+        );
         for _ in 0..240 {
             step_with(&mut sim, &inputs);
             // Teleport bullets back so they never expire or leave.

@@ -38,22 +38,23 @@ fn synth(sfx: Sfx) -> Vec<f32> {
     };
     // Pitch sweep f0->f1 over dur with exponential decay; shape morphs
     // between sine (0.0) and square (1.0).
-    let mut sweep = |dur: f32, f0: f32, f1: f32, square: f32, decay: f32, noise_amt: f32| -> Vec<f32> {
-        let n = (dur * sr) as usize;
-        let mut phase = 0.0f32;
-        (0..n)
-            .map(|i| {
-                let t = i as f32 / sr;
-                let f = f0 + (f1 - f0) * (t / dur);
-                phase += std::f32::consts::TAU * f / sr;
-                let s = phase.sin();
-                let sq = if s >= 0.0 { 1.0 } else { -1.0 };
-                let osc = s * (1.0 - square) + sq * square;
-                let env = (-t * decay).exp();
-                (osc + noise() * noise_amt) * env * 0.4
-            })
-            .collect()
-    };
+    let mut sweep =
+        |dur: f32, f0: f32, f1: f32, square: f32, decay: f32, noise_amt: f32| -> Vec<f32> {
+            let n = (dur * sr) as usize;
+            let mut phase = 0.0f32;
+            (0..n)
+                .map(|i| {
+                    let t = i as f32 / sr;
+                    let f = f0 + (f1 - f0) * (t / dur);
+                    phase += std::f32::consts::TAU * f / sr;
+                    let s = phase.sin();
+                    let sq = if s >= 0.0 { 1.0 } else { -1.0 };
+                    let osc = s * (1.0 - square) + sq * square;
+                    let env = (-t * decay).exp();
+                    (osc + noise() * noise_amt) * env * 0.4
+                })
+                .collect()
+        };
     match sfx {
         // Laser pew: fast downward square sweep with a noisy attack.
         Sfx::Shot => sweep(0.09, 950.0, 160.0, 0.7, 28.0, 0.25),
@@ -106,12 +107,18 @@ mod platform {
         pub fn new() -> Option<Audio> {
             let (stream, handle) = rodio::OutputStream::try_default().ok()?;
             let samples = ALL.iter().map(|&s| (s, synth(s))).collect();
-            Some(Audio { handle, _stream: stream, samples })
+            Some(Audio {
+                handle,
+                _stream: stream,
+                samples,
+            })
         }
 
         pub fn play(&self, sfx: Sfx, vol: f32) {
             use rodio::Source;
-            let Some(data) = self.samples.get(&sfx) else { return };
+            let Some(data) = self.samples.get(&sfx) else {
+                return;
+            };
             let buf = rodio::buffer::SamplesBuffer::new(1, SAMPLE_RATE, data.clone());
             let _ = self.handle.play_raw(buf.amplify(vol.clamp(0.0, 1.0)));
         }
@@ -145,8 +152,7 @@ mod platform {
                     let mut buffers = self.buffers.borrow_mut();
                     for &s in ALL.iter() {
                         let mut data = synth(s);
-                        if let Ok(buf) =
-                            ctx.create_buffer(1, data.len() as u32, SAMPLE_RATE as f32)
+                        if let Ok(buf) = ctx.create_buffer(1, data.len() as u32, SAMPLE_RATE as f32)
                         {
                             let _ = buf.copy_to_channel(&mut data, 0);
                             buffers.insert(s, buf);
@@ -180,7 +186,10 @@ mod platform {
             let doc = web_sys::window()?.document()?;
             doc.add_event_listener_with_callback("pointerdown", gesture.as_ref().unchecked_ref())
                 .ok()?;
-            Some(Audio { inner, _gesture: gesture })
+            Some(Audio {
+                inner,
+                _gesture: gesture,
+            })
         }
 
         pub fn play(&self, sfx: Sfx, vol: f32) {

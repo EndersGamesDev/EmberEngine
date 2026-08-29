@@ -35,7 +35,10 @@ pub struct Layouts {
 /// Load layouts from assets/layouts/arena.json (workspace or cwd relative).
 pub fn load_layouts() -> Option<Layouts> {
     let candidates = [
-        format!("{}/../../assets/layouts/arena.json", env!("CARGO_MANIFEST_DIR")),
+        format!(
+            "{}/../../assets/layouts/arena.json",
+            env!("CARGO_MANIFEST_DIR")
+        ),
         "assets/layouts/arena.json".to_string(),
     ];
     for path in candidates {
@@ -77,23 +80,39 @@ pub fn push_props(frame: &mut Frame, layout: &Layout, mesh_stone: u32, mesh_meta
     for p in &layout.props {
         // (size, center-y, mesh, tint) per kind; unknown kinds are skipped.
         let (size, y, mesh, tint) = match p.kind.as_str() {
-            "crate" => (Vec3::new(1.2, 1.2, 1.2), 0.6, mesh_metal, Vec3::new(0.75, 0.72, 0.65)),
-            "barrel" => (Vec3::new(0.8, 1.1, 0.8), 0.55, mesh_metal, Vec3::new(0.55, 0.58, 0.62)),
-            "pillar" => (Vec3::new(1.0, 3.0, 1.0), 1.5, mesh_stone, Vec3::new(0.9, 0.9, 0.9)),
-            "barricade" => (Vec3::new(2.4, 1.1, 0.5), 0.55, mesh_stone, Vec3::new(0.7, 0.7, 0.72)),
+            "crate" => (
+                Vec3::new(1.2, 1.2, 1.2),
+                0.6,
+                mesh_metal,
+                Vec3::new(0.75, 0.72, 0.65),
+            ),
+            "barrel" => (
+                Vec3::new(0.8, 1.1, 0.8),
+                0.55,
+                mesh_metal,
+                Vec3::new(0.55, 0.58, 0.62),
+            ),
+            "pillar" => (
+                Vec3::new(1.0, 3.0, 1.0),
+                1.5,
+                mesh_stone,
+                Vec3::new(0.9, 0.9, 0.9),
+            ),
+            "barricade" => (
+                Vec3::new(2.4, 1.1, 0.5),
+                0.55,
+                mesh_stone,
+                Vec3::new(0.7, 0.7, 0.72),
+            ),
             other => {
                 tracing::debug!(kind = other, "unknown prop kind skipped");
                 continue;
             }
         };
         frame.instances.push(
-            Instance::new(
-                Vec3::new(p.x, y * p.scale, p.z),
-                size * p.scale,
-                tint,
-            )
-            .with_yaw(p.yaw_deg.to_radians())
-            .with_mesh(mesh),
+            Instance::new(Vec3::new(p.x, y * p.scale, p.z), size * p.scale, tint)
+                .with_yaw(p.yaw_deg.to_radians())
+                .with_mesh(mesh),
         );
     }
 }

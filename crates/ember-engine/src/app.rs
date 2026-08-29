@@ -25,9 +25,8 @@ use std::{cell::RefCell, rc::Rc};
 pub fn init_diagnostics() {
     use std::io::IsTerminal;
     use tracing_subscriber::EnvFilter;
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new("info,wgpu_core=warn,wgpu_hal=warn,naga=warn")
-    });
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,wgpu_core=warn,wgpu_hal=warn,naga=warn"));
     let _ = tracing_log::LogTracer::init();
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -105,9 +104,9 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                 .unwrap_or_else(|| document.body().expect("no body").into());
             root.append_child(&canvas).expect("append canvas");
             let _ = canvas.focus(); // keyboard events go to the canvas
-            // NOTE: no request_inner_size here — winit would pin an inline
-            // CSS size that overrides the page's responsive width rule. CSS
-            // owns layout; the per-frame sync below owns the backing store.
+                                    // NOTE: no request_inner_size here — winit would pin an inline
+                                    // CSS size that overrides the page's responsive width rule. CSS
+                                    // owns layout; the per-frame sync below owns the backing store.
 
             let pending = Rc::clone(&self.pending_renderer);
             let win = window.clone();

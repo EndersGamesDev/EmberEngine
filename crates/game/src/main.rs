@@ -27,7 +27,9 @@ use world::World;
 enum Session {
     Online(NetClient),
     /// Server unreachable: local-only arena so the game still runs.
-    Offline { pos: Vec2 },
+    Offline {
+        pos: Vec2,
+    },
 }
 
 // Registered mesh ids (0 is the engine's built-in cube).
@@ -43,7 +45,11 @@ const MESH_MONUMENT: u32 = 6;
 /// All five must load; otherwise the caller falls back.
 fn load_part_character(
     first_mesh: u32,
-) -> (Vec<MeshData>, Option<character::PartCharacter>, Vec<character::PartSource>) {
+) -> (
+    Vec<MeshData>,
+    Option<character::PartCharacter>,
+    Vec<character::PartSource>,
+) {
     // (file stem, target world height).
     const PARTS: [(&str, f32); 5] = [
         ("part-head", 0.34),
@@ -57,7 +63,10 @@ fn load_part_character(
     let mut sources = Vec::new();
     for (i, (stem, target_h)) in PARTS.iter().enumerate() {
         let candidates = [
-            format!("{}/../../assets/models/parts/{stem}.glb", env!("CARGO_MANIFEST_DIR")),
+            format!(
+                "{}/../../assets/models/parts/{stem}.glb",
+                env!("CARGO_MANIFEST_DIR")
+            ),
             format!("assets/models/parts/{stem}.glb"),
         ];
         let mut loaded = None;
@@ -98,7 +107,11 @@ fn load_part_character(
                 (min[2] + max[2]) * 0.5,
             ],
         });
-        sources.push(character::PartSource { mesh: first_mesh + i as u32, min, max });
+        sources.push(character::PartSource {
+            mesh: first_mesh + i as u32,
+            min,
+            max,
+        });
         meshes.push(mesh);
     }
     let mut it = infos.into_iter();
@@ -147,7 +160,10 @@ fn mesh_bounds(mesh: &MeshData) -> ([f32; 3], [f32; 3]) {
 /// returning its meshes plus bounds for feet/height normalization.
 fn load_mesh_character(first_mesh: u32) -> (Vec<MeshData>, Option<character::MeshCharacter>) {
     let candidates = [
-        format!("{}/../../assets/models/character.glb", env!("CARGO_MANIFEST_DIR")),
+        format!(
+            "{}/../../assets/models/character.glb",
+            env!("CARGO_MANIFEST_DIR")
+        ),
         "assets/models/character.glb".to_string(),
     ];
     for path in candidates {
@@ -166,7 +182,12 @@ fn load_mesh_character(first_mesh: u32) -> (Vec<MeshData>, Option<character::Mes
                         tracing::error!(path, "character GLB has no vertical extent");
                         return (Vec::new(), None);
                     }
-                    tracing::info!(path, parts = meshes.len(), height = max_y - min_y, "character GLB loaded");
+                    tracing::info!(
+                        path,
+                        parts = meshes.len(),
+                        height = max_y - min_y,
+                        "character GLB loaded"
+                    );
                     let mc = character::MeshCharacter {
                         first_mesh,
                         parts: meshes.len() as u32,
@@ -188,7 +209,10 @@ fn load_mesh_character(first_mesh: u32) -> (Vec<MeshData>, Option<character::Mes
 /// returning its part meshes; empty when absent (arena renders without it).
 fn load_monument() -> Vec<MeshData> {
     let candidates = [
-        format!("{}/../../assets/models/helmet.glb", env!("CARGO_MANIFEST_DIR")),
+        format!(
+            "{}/../../assets/models/helmet.glb",
+            env!("CARGO_MANIFEST_DIR")
+        ),
         "assets/models/helmet.glb".to_string(),
     ];
     for path in candidates {
@@ -210,7 +234,10 @@ fn load_monument() -> Vec<MeshData> {
 /// Missing or broken files degrade to untextured rendering, never a crash.
 fn load_texture(name: &str) -> Option<TextureData> {
     let candidates = [
-        format!("{}/../../assets/textures/{name}", env!("CARGO_MANIFEST_DIR")),
+        format!(
+            "{}/../../assets/textures/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        ),
         format!("assets/textures/{name}"),
     ];
     for path in candidates {
@@ -321,32 +348,55 @@ impl Game {
     fn arena_frame(&self, camera: Camera) -> Frame {
         // EMBER_CAM="ex,ey,ez,tx,ty,tz" pins the camera for asset review.
         let camera = debug_camera().unwrap_or(camera);
-        let mut frame = Frame { camera, instances: Vec::new() };
+        let mut frame = Frame {
+            camera,
+            instances: Vec::new(),
+        };
         let half = self.world.arena_half;
         let span = half * 2.0 + 2.0;
         // Ground slab, top surface at y = 0 (dark base under the floor).
-        frame.instances.push(Instance::new(Vec3::new(0.0, -0.5, 0.0), Vec3::new(span, 1.0, span), Vec3::new(0.16, 0.17, 0.20)));
+        frame.instances.push(Instance::new(
+            Vec3::new(0.0, -0.5, 0.0),
+            Vec3::new(span, 1.0, span),
+            Vec3::new(0.16, 0.17, 0.20),
+        ));
         // Textured basalt floor overlay.
         frame.instances.push(
-            Instance::new(Vec3::new(0.0, 0.005, 0.0), Vec3::new(span, 1.0, span), Vec3::ONE)
-                .with_mesh(MESH_FLOOR),
+            Instance::new(
+                Vec3::new(0.0, 0.005, 0.0),
+                Vec3::new(span, 1.0, span),
+                Vec3::ONE,
+            )
+            .with_mesh(MESH_FLOOR),
         );
         // Perimeter walls (textured), overlapping at the corners.
         for &s in &[-1.0f32, 1.0] {
             frame.instances.push(
-                Instance::new(Vec3::new(0.0, 1.25, (half + 1.0) * s), Vec3::new(span + 1.2, 2.5, 0.6), Vec3::ONE)
-                    .with_mesh(MESH_WALL),
+                Instance::new(
+                    Vec3::new(0.0, 1.25, (half + 1.0) * s),
+                    Vec3::new(span + 1.2, 2.5, 0.6),
+                    Vec3::ONE,
+                )
+                .with_mesh(MESH_WALL),
             );
             frame.instances.push(
-                Instance::new(Vec3::new((half + 1.0) * s, 1.25, 0.0), Vec3::new(span + 1.2, 2.5, 0.6), Vec3::ONE)
-                    .with_mesh(MESH_WALL)
-                    .with_yaw(std::f32::consts::FRAC_PI_2),
+                Instance::new(
+                    Vec3::new((half + 1.0) * s, 1.25, 0.0),
+                    Vec3::new(span + 1.2, 2.5, 0.6),
+                    Vec3::ONE,
+                )
+                .with_mesh(MESH_WALL)
+                .with_yaw(std::f32::consts::FRAC_PI_2),
             );
         }
         // Arena corner markers.
         for &sx in &[-1.0f32, 1.0] {
             for &sz in &[-1.0f32, 1.0] {
-                frame.instances.push(Instance::new(Vec3::new(half * sx, 0.75, half * sz), Vec3::new(0.5, 1.5, 0.5), Vec3::new(0.35, 0.37, 0.42)));
+                frame.instances.push(Instance::new(
+                    Vec3::new(half * sx, 0.75, half * sz),
+                    Vec3::new(0.5, 1.5, 0.5),
+                    Vec3::new(0.35, 0.37, 0.42),
+                ));
             }
         }
         // Cover props (stone kinds use the wall mesh, metal kinds the torso mesh).
@@ -356,8 +406,12 @@ impl Game {
         // AI-generated helmet monument at the arena center.
         for part in 0..self.monument_parts {
             frame.instances.push(
-                Instance::new(Vec3::new(0.0, 2.2, 0.0), Vec3::splat(3.0), Vec3::new(0.82, 0.84, 0.88))
-                    .with_mesh(MESH_MONUMENT + part),
+                Instance::new(
+                    Vec3::new(0.0, 2.2, 0.0),
+                    Vec3::splat(3.0),
+                    Vec3::new(0.82, 0.84, 0.88),
+                )
+                .with_mesh(MESH_MONUMENT + part),
             );
         }
         frame
@@ -378,9 +432,7 @@ impl Game {
         if let Some(rc) = &self.rig_character {
             let pose = ember_engine::rig::walk_pose(phase, amp, 0.0, self.time_s, &rc.dims);
             let scale = if is_me { 1.1 } else { 1.0 };
-            ember_engine::rig::push_rig(
-                frame, &rc.parts, &rc.skel, &pose, pos, yaw, color, scale,
-            );
+            ember_engine::rig::push_rig(frame, &rc.parts, &rc.skel, &pose, pos, yaw, color, scale);
         } else if let Some(pc) = &self.part_character {
             let scale = if is_me { 1.1 } else { 1.0 };
             ember_engine::puppet::push_character_parts(
@@ -480,7 +532,9 @@ impl EmberGame for Game {
                 }
                 if net.is_dead() && !self.reported_disconnect {
                     self.reported_disconnect = true;
-                    tracing::error!("disconnected from server; world is frozen (restart to reconnect)");
+                    tracing::error!(
+                        "disconnected from server; world is frozen (restart to reconnect)"
+                    );
                 }
                 self.world.advance(dt);
 
@@ -557,7 +611,9 @@ fn main() {
             tracing::warn!("could not reach server {addr} ({e}); running OFFLINE");
             (
                 // Spawn clear of the center monument.
-                Session::Offline { pos: Vec2::new(6.0, 6.0) },
+                Session::Offline {
+                    pos: Vec2::new(6.0, 6.0),
+                },
                 World::new(ARENA_HALF),
                 "ember — OFFLINE".to_string(),
             )
@@ -566,34 +622,52 @@ fn main() {
 
     let monument = load_monument();
     let monument_parts = monument.len() as u32;
-    let (char_meshes, mesh_character) =
-        load_mesh_character(MESH_MONUMENT + monument_parts);
-    let (part_meshes, part_character, part_sources) = load_part_character(
-        MESH_MONUMENT + monument_parts + char_meshes.len() as u32,
-    );
+    let (char_meshes, mesh_character) = load_mesh_character(MESH_MONUMENT + monument_parts);
+    let (part_meshes, part_character, part_sources) =
+        load_part_character(MESH_MONUMENT + monument_parts + char_meshes.len() as u32);
     // Jointed rig (v2): assembled from the same five part meshes, with the
     // monument helmet worn on the head. EMBER_CHAR=puppet keeps the old path.
-    let rig_character = if part_sources.len() == 5
-        && std::env::var("EMBER_CHAR").as_deref() != Ok("puppet")
-    {
-        let helmet = monument.first().map(|m| {
-            let (min, max) = mesh_bounds(m);
-            character::PartSource { mesh: MESH_MONUMENT, min, max }
-        });
-        tracing::info!("jointed rig character assembled ({} parts)", 13 + helmet.is_some() as usize);
-        Some(character::veteran_rig(
-            part_sources[0], part_sources[1], part_sources[2], part_sources[3], part_sources[4], helmet,
-        ))
-    } else {
-        None
-    };
+    let rig_character =
+        if part_sources.len() == 5 && std::env::var("EMBER_CHAR").as_deref() != Ok("puppet") {
+            let helmet = monument.first().map(|m| {
+                let (min, max) = mesh_bounds(m);
+                character::PartSource {
+                    mesh: MESH_MONUMENT,
+                    min,
+                    max,
+                }
+            });
+            tracing::info!(
+                "jointed rig character assembled ({} parts)",
+                13 + helmet.is_some() as usize
+            );
+            Some(character::veteran_rig(
+                part_sources[0],
+                part_sources[1],
+                part_sources[2],
+                part_sources[3],
+                part_sources[4],
+                helmet,
+            ))
+        } else {
+            None
+        };
     let mut meshes = vec![
         plane_mesh(12.0, load_texture("floor_basalt.png")),
         box_mesh(4.0, load_texture("wall_basalt.png")),
         // Character parts (see character.rs): head, torso, limb.
-        box_mesh(1.0, load_texture("char_head.png").or_else(|| load_texture("player_armor.png"))),
-        box_mesh(1.0, load_texture("char_torso.png").or_else(|| load_texture("player_armor.png"))),
-        box_mesh(1.0, load_texture("char_limb.png").or_else(|| load_texture("player_armor.png"))),
+        box_mesh(
+            1.0,
+            load_texture("char_head.png").or_else(|| load_texture("player_armor.png")),
+        ),
+        box_mesh(
+            1.0,
+            load_texture("char_torso.png").or_else(|| load_texture("player_armor.png")),
+        ),
+        box_mesh(
+            1.0,
+            load_texture("char_limb.png").or_else(|| load_texture("player_armor.png")),
+        ),
     ];
     meshes.extend(monument);
     meshes.extend(char_meshes);

@@ -85,7 +85,10 @@ impl Default for HumanoidDims {
 /// Build the standard humanoid joint tree from segment dimensions.
 pub fn humanoid(d: &HumanoidDims) -> Skeleton {
     use joint::*;
-    let mut joints = [JointDef { parent: None, offset: Vec3::ZERO }; COUNT];
+    let mut joints = [JointDef {
+        parent: None,
+        offset: Vec3::ZERO,
+    }; COUNT];
     let mut set = |j: usize, parent: Option<usize>, offset: Vec3| {
         joints[j] = JointDef { parent, offset };
     };
@@ -93,10 +96,16 @@ pub fn humanoid(d: &HumanoidDims) -> Skeleton {
     set(SPINE, Some(ROOT), Vec3::new(0.0, 0.05, 0.0));
     set(NECK, Some(SPINE), Vec3::new(0.0, d.spine_len, 0.0));
     for (side, sh, el, wr, hip, knee, ankle) in [
-        (-1.0f32, SHOULDER_L, ELBOW_L, WRIST_L, HIP_L, KNEE_L, ANKLE_L),
+        (
+            -1.0f32, SHOULDER_L, ELBOW_L, WRIST_L, HIP_L, KNEE_L, ANKLE_L,
+        ),
         (1.0, SHOULDER_R, ELBOW_R, WRIST_R, HIP_R, KNEE_R, ANKLE_R),
     ] {
-        set(sh, Some(SPINE), Vec3::new(side * d.shoulder_w * 0.5, d.spine_len - 0.03, 0.0));
+        set(
+            sh,
+            Some(SPINE),
+            Vec3::new(side * d.shoulder_w * 0.5, d.spine_len - 0.03, 0.0),
+        );
         set(el, Some(sh), Vec3::new(0.0, -d.upperarm_len, 0.0));
         set(wr, Some(el), Vec3::new(0.0, -d.forearm_len, 0.0));
         set(hip, Some(ROOT), Vec3::new(side * d.hip_w * 0.5, 0.0, 0.0));
@@ -150,9 +159,10 @@ pub fn walk_pose(phase: f32, amp: f32, crouch: f32, idle_t: f32, d: &HumanoidDim
     // toward +Z (forward). Knees flex (positive pitch) as the leg passes
     // under the body, straighten at the stride extremes.
     let hip_amp = 0.55;
-    for (side_phase, hip, knee, ankle) in
-        [(0.0f32, HIP_L, KNEE_L, ANKLE_L), (std::f32::consts::PI, HIP_R, KNEE_R, ANKLE_R)]
-    {
+    for (side_phase, hip, knee, ankle) in [
+        (0.0f32, HIP_L, KNEE_L, ANKLE_L),
+        (std::f32::consts::PI, HIP_R, KNEE_R, ANKLE_R),
+    ] {
         let s = (phase + side_phase).sin() * amp;
         let flex = (phase + side_phase).cos().max(0.0) * amp;
         let hip_a = -hip_amp * s - 1.0 * crouch;
@@ -236,9 +246,13 @@ pub fn push_rig(
             None => col,
         };
         frame.instances.push(
-            Instance::new(origin + face * (p_local * scale_mult), sv * scale_mult, part_col)
-                .with_rot(face * r_local)
-                .with_mesh(part.mesh),
+            Instance::new(
+                origin + face * (p_local * scale_mult),
+                sv * scale_mult,
+                part_col,
+            )
+            .with_rot(face * r_local)
+            .with_mesh(part.mesh),
         );
     }
 }
@@ -283,7 +297,14 @@ pub fn source_from_glb_bytes(bytes: &[u8], mesh_id: u32) -> Result<(MeshData, Pa
     if max[1] - min[1] <= 1e-3 {
         return Err("part has no vertical extent".into());
     }
-    Ok((merged, PartSource { mesh: mesh_id, min, max }))
+    Ok((
+        merged,
+        PartSource {
+            mesh: mesh_id,
+            min,
+            max,
+        },
+    ))
 }
 
 /// The jointed veteran: a skeleton plus its bound mesh parts.
@@ -316,7 +337,13 @@ pub fn veteran_rig(
     let skin = Vec3::new(0.70, 0.55, 0.44);
     let leather = Vec3::new(0.40, 0.31, 0.20);
     let mut parts = Vec::new();
-    let mut add = |src: PartSource, joint: usize, anchor: Vec3, offset: Vec3, target_h: f32, mirror_x: bool, tint: Vec3| {
+    let mut add = |src: PartSource,
+                   joint: usize,
+                   anchor: Vec3,
+                   offset: Vec3,
+                   target_h: f32,
+                   mirror_x: bool,
+                   tint: Vec3| {
         parts.push(RigPart {
             mesh: src.mesh,
             joint,
@@ -329,23 +356,101 @@ pub fn veteran_rig(
         });
     };
     // Torso hangs low enough to cover the hips until a pelvis part exists.
-    add(torso, joint::SPINE, torso.anchor(0.5, 0.0, 0.5), Vec3::new(0.0, -0.16, 0.0), 0.70, false, tan);
-    add(head, joint::NECK, head.anchor(0.5, 0.0, 0.5), Vec3::new(0.0, 0.01, 0.0), 0.30, false, skin);
+    add(
+        torso,
+        joint::SPINE,
+        torso.anchor(0.5, 0.0, 0.5),
+        Vec3::new(0.0, -0.16, 0.0),
+        0.70,
+        false,
+        tan,
+    );
+    add(
+        head,
+        joint::NECK,
+        head.anchor(0.5, 0.0, 0.5),
+        Vec3::new(0.0, 0.01, 0.0),
+        0.30,
+        false,
+        skin,
+    );
     if let Some(hm) = helmet {
-        add(hm, joint::NECK, hm.anchor(0.5, 0.0, 0.5), Vec3::new(0.0, 0.10, 0.0), 0.26, false, olive);
+        add(
+            hm,
+            joint::NECK,
+            hm.anchor(0.5, 0.0, 0.5),
+            Vec3::new(0.0, 0.10, 0.0),
+            0.26,
+            false,
+            olive,
+        );
     }
     for (mirror_x, sh, el, hip, knee, ankle) in [
-        (false, joint::SHOULDER_L, joint::ELBOW_L, joint::HIP_L, joint::KNEE_L, joint::ANKLE_L),
-        (true, joint::SHOULDER_R, joint::ELBOW_R, joint::HIP_R, joint::KNEE_R, joint::ANKLE_R),
+        (
+            false,
+            joint::SHOULDER_L,
+            joint::ELBOW_L,
+            joint::HIP_L,
+            joint::KNEE_L,
+            joint::ANKLE_L,
+        ),
+        (
+            true,
+            joint::SHOULDER_R,
+            joint::ELBOW_R,
+            joint::HIP_R,
+            joint::KNEE_R,
+            joint::ANKLE_R,
+        ),
     ] {
         let top = arm.anchor(0.5, 1.0, 0.5);
-        add(arm, sh, top, Vec3::ZERO, dims.upperarm_len + 0.05, mirror_x, olive);
-        add(arm, el, top, Vec3::ZERO, dims.forearm_len + 0.12, mirror_x, skin);
+        add(
+            arm,
+            sh,
+            top,
+            Vec3::ZERO,
+            dims.upperarm_len + 0.05,
+            mirror_x,
+            olive,
+        );
+        add(
+            arm,
+            el,
+            top,
+            Vec3::ZERO,
+            dims.forearm_len + 0.12,
+            mirror_x,
+            skin,
+        );
         let leg_top = leg.anchor(0.5, 1.0, 0.5);
-        add(leg, hip, leg_top, Vec3::ZERO, dims.thigh_len + 0.05, mirror_x, trouser);
-        add(leg, knee, leg_top, Vec3::ZERO, dims.shin_len + 0.04, mirror_x, trouser);
+        add(
+            leg,
+            hip,
+            leg_top,
+            Vec3::ZERO,
+            dims.thigh_len + 0.05,
+            mirror_x,
+            trouser,
+        );
+        add(
+            leg,
+            knee,
+            leg_top,
+            Vec3::ZERO,
+            dims.shin_len + 0.04,
+            mirror_x,
+            trouser,
+        );
         // Boot pivots above the heel, a third of the way along the foot.
-        add(boot, ankle, boot.anchor(0.5, 1.0, 0.38), Vec3::ZERO, dims.ankle_h + 0.10, mirror_x, leather);
+        add(
+            boot,
+            ankle,
+            boot.anchor(0.5, 1.0, 0.38),
+            Vec3::ZERO,
+            dims.ankle_h + 0.10,
+            mirror_x,
+            leather,
+        );
     }
     RigCharacter { skel, dims, parts }
 }
@@ -369,14 +474,20 @@ mod tests {
         for v in [Vec3::X, Vec3::Z, Vec3::new(0.3, -0.2, 0.9)] {
             let legacy = Vec3::new(v.x * c + v.z * s, v.y, -v.x * s + v.z * c);
             let q = Quat::from_rotation_y(yaw);
-            assert!((q * v - legacy).length() < 1e-5, "glam {:?} vs legacy {legacy:?}", q * v);
+            assert!(
+                (q * v - legacy).length() < 1e-5,
+                "glam {:?} vs legacy {legacy:?}",
+                q * v
+            );
             assert!((wgsl_quat_rotate(q.to_array(), v) - legacy).length() < 1e-5);
         }
     }
 
     #[test]
     fn wgsl_formula_matches_glam_for_arbitrary_rotations() {
-        let q = (Quat::from_rotation_y(1.1) * Quat::from_rotation_x(-0.6) * Quat::from_rotation_z(0.4)).normalize();
+        let q =
+            (Quat::from_rotation_y(1.1) * Quat::from_rotation_x(-0.6) * Quat::from_rotation_z(0.4))
+                .normalize();
         for v in [Vec3::X, Vec3::Y, Vec3::Z, Vec3::new(-0.7, 0.2, 1.3)] {
             assert!((wgsl_quat_rotate(q.to_array(), v) - q * v).length() < 1e-5);
         }
@@ -402,13 +513,28 @@ mod tests {
             let phase = i as f32 / 16.0 * std::f32::consts::TAU;
             let j = world_joints(&skel, &walk_pose(phase, 1.0, 0.0, 0.0, &d));
             for ankle in [j[joint::ANKLE_L].0, j[joint::ANKLE_R].0] {
-                assert!(ankle.y > -0.02 && ankle.y < 0.45, "ankle y {} at phase {phase}", ankle.y);
+                assert!(
+                    ankle.y > -0.02 && ankle.y < 0.45,
+                    "ankle y {} at phase {phase}",
+                    ankle.y
+                );
             }
         }
         // A forward-swung hip (swing > 0 on L) puts the left ankle ahead (+Z).
-        let j = world_joints(&skel, &walk_pose(std::f32::consts::FRAC_PI_2, 1.0, 0.0, 0.0, &d));
-        assert!(j[joint::ANKLE_L].0.z > 0.1, "left ankle z {}", j[joint::ANKLE_L].0.z);
-        assert!(j[joint::ANKLE_R].0.z < -0.05, "right ankle z {}", j[joint::ANKLE_R].0.z);
+        let j = world_joints(
+            &skel,
+            &walk_pose(std::f32::consts::FRAC_PI_2, 1.0, 0.0, 0.0, &d),
+        );
+        assert!(
+            j[joint::ANKLE_L].0.z > 0.1,
+            "left ankle z {}",
+            j[joint::ANKLE_L].0.z
+        );
+        assert!(
+            j[joint::ANKLE_R].0.z < -0.05,
+            "right ankle z {}",
+            j[joint::ANKLE_R].0.z
+        );
     }
 
     #[test]
@@ -449,7 +575,12 @@ mod tests {
             1.0,
         );
         let (l, r) = (frame.instances[0], frame.instances[1]);
-        assert!((l.position.x + r.position.x).abs() < 1e-4, "{} vs {}", l.position.x, r.position.x);
+        assert!(
+            (l.position.x + r.position.x).abs() < 1e-4,
+            "{} vs {}",
+            l.position.x,
+            r.position.x
+        );
         assert!((l.position.y - r.position.y).abs() < 1e-4);
         assert!((l.scale.x + r.scale.x).abs() < 1e-4);
     }

@@ -11,7 +11,9 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ember_net::{read_msg, write_msg, ClientMsg, PlayerId, PlayerMeta, ServerMsg, PROTOCOL_VERSION};
+use ember_net::{
+    read_msg, write_msg, ClientMsg, PlayerId, PlayerMeta, ServerMsg, PROTOCOL_VERSION,
+};
 
 /// The server snapshots at 60 Hz; this much silence means it is gone.
 const SERVER_SILENCE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -55,12 +57,23 @@ impl NetClient {
         stream.set_read_timeout(Some(Duration::from_secs(5)))?;
         write_msg(
             &mut stream,
-            &ClientMsg::Hello { protocol: PROTOCOL_VERSION, name: name.to_string() },
+            &ClientMsg::Hello {
+                protocol: PROTOCOL_VERSION,
+                name: name.to_string(),
+            },
         )?;
         let welcome = match read_msg::<_, ServerMsg>(&mut stream)? {
-            ServerMsg::Welcome { id, tick_hz, arena_half, roster } => {
-                Welcome { id, tick_hz, arena_half, roster }
-            }
+            ServerMsg::Welcome {
+                id,
+                tick_hz,
+                arena_half,
+                roster,
+            } => Welcome {
+                id,
+                tick_hz,
+                arena_half,
+                roster,
+            },
             ServerMsg::Reject { reason } => {
                 return Err(io::Error::new(io::ErrorKind::ConnectionRefused, reason));
             }
@@ -124,7 +137,16 @@ impl NetClient {
             });
         }
 
-        Ok((NetClient { stream, rx, dead, stop, started }, welcome))
+        Ok((
+            NetClient {
+                stream,
+                rx,
+                dead,
+                stop,
+                started,
+            },
+            welcome,
+        ))
     }
 
     /// Milliseconds since this connection's Ping epoch.
