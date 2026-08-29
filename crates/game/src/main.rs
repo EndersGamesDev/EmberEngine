@@ -38,6 +38,47 @@ const MESH_CHAR: u32 = 3;
 /// First mesh id after the fixed set; GLB monument parts land here.
 const MESH_MONUMENT: u32 = 6;
 
+/// Load the AI-generated full-body character (assets/models/character.glb),
+/// returning its meshes plus bounds for feet/height normalization.
+fn load_mesh_character(first_mesh: u32) -> (Vec<MeshData>, Option<character::MeshCharacter>) {
+    let candidates = [
+        format!("{}/../../assets/models/character.glb", env!("CARGO_MANIFEST_DIR")),
+        "assets/models/character.glb".to_string(),
+    ];
+    for path in candidates {
+        if let Ok(bytes) = std::fs::read(&path) {
+            match ember_engine::assets::load_glb(&bytes) {
+                Ok(parts) => {
+                    let meshes: Vec<MeshData> = parts.into_iter().map(|p| p.mesh).collect();
+                    let (mut min_y, mut max_y) = (f32::MAX, f32::MIN);
+                    for m in &meshes {
+                        for v in &m.vertices {
+                            min_y = min_y.min(v.pos[1]);
+                            max_y = max_y.max(v.pos[1]);
+                        }
+                    }
+                    if max_y <= min_y {
+                        tracing::error!(path, "character GLB has no vertical extent");
+                        return (Vec::new(), None);
+                    }
+                    tracing::info!(path, parts = meshes.len(), height = max_y - min_y, "character GLB loaded");
+                    let mc = character::MeshCharacter {
+                        first_mesh,
+                        parts: meshes.len() as u32,
+                        feet_y: min_y,
+                        height: max_y - min_y,
+                        yaw_offset: std::f32::consts::PI, // tuned: concept faces camera
+                    };
+                    return (meshes, Some(mc));
+                }
+                Err(e) => tracing::error!(path, error = %e, "character GLB load failed"),
+            }
+        }
+    }
+    tracing::info!("no character GLB; using the blocky humanoid");
+    (Vec::new(), None)
+}
+
 /// Load the AI-generated helmet monument GLB (assets/models/helmet.glb),
 /// returning its part meshes; empty when absent (arena renders without it).
 fn load_monument() -> Vec<MeshData> {
@@ -161,6 +202,8 @@ struct Game {
     layouts: Option<props::Layouts>,
     /// Number of monument GLB part meshes registered after MESH_MONUMENT.
     monument_parts: u32,
+    /// AI-generated full-body player mesh; None = blocky humanoid fallback.
+    mesh_character: Option<character::MeshCharacter>,
 }
 
 impl Game {
@@ -303,7 +346,12 @@ impl EmberGame for Game {
                 for (id, pos, vel, color, is_me) in seen.drain(..) {
                     let slot = self.anim.entry(id).or_insert((0.0, 0.0));
                     let (yaw, phase) = Self::advance_anim(slot, vel, dt);
-                    push_character(&mut frame, pos, yaw, color, is_me, phase, MESH_CHAR);
+                    match &self.mesh_character {
+                        Some(mc) => character::push_character_mesh(
+                            &mut frame, pos, yaw, color, is_me, phase, mc,
+                        ),
+                        None => push_character(&mut frame, pos, yaw, color, is_me, phase, MESH_CHAR),
+                    }
                 }
                 frame
             }
@@ -314,7 +362,12 @@ impl EmberGame for Game {
                 let me = *pos;
                 let mut frame = self.arena_frame(Camera::default());
                 let (yaw, phase) = Self::advance_anim(&mut self.offline_anim, vel, dt);
-                push_character(&mut frame, me, yaw, [0.9, 0.9, 0.9], true, phase, MESH_CHAR);
+                match &self.mesh_character {
+                    Some(mc) => character::push_character_mesh(
+                        &mut frame, me, yaw, [0.9, 0.9, 0.9], true, phase, mc,
+                    ),
+                    None => push_character(&mut frame, me, yaw, [0.9, 0.9, 0.9], true, phase, MESH_CHAR),
+                }
                 frame
             }
         }
@@ -357,7 +410,8 @@ fn main() {
         Err(e) => {
             tracing::warn!("could not reach server {addr} ({e}); running OFFLINE");
             (
-                Session::Offline { pos: Vec2::ZERO },
+                // Spawn clear of the center monument.
+                Session::Offline { pos: Vec2::new(6.0, 6.0) },
                 World::new(ARENA_HALF),
                 "ember — OFFLINE".to_string(),
             )
@@ -366,6 +420,8 @@ fn main() {
 
     let monument = load_monument();
     let monument_parts = monument.len() as u32;
+    let (char_meshes, mesh_character) =
+        load_mesh_character(MESH_MONUMENT + monument_parts);
     let mut meshes = vec![
         plane_mesh(12.0, load_texture("floor_basalt.png")),
         box_mesh(4.0, load_texture("wall_basalt.png")),
@@ -375,6 +431,7 @@ fn main() {
         box_mesh(1.0, load_texture("char_limb.png").or_else(|| load_texture("player_armor.png"))),
     ];
     meshes.extend(monument);
+    meshes.extend(char_meshes);
 
     ember_engine::run(
         EngineConfig {
@@ -396,6 +453,7 @@ fn main() {
             offline_anim: (0.0, 0.0),
             layouts: props::load_layouts(),
             monument_parts,
+            mesh_character,
         },
     );
 }

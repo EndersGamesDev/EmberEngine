@@ -66,3 +66,43 @@ pub fn push_character(
 pub fn walk_speed_to_phase_delta(speed: f32, dt: f32) -> f32 {
     speed * dt * 6.0
 }
+
+/// A full-body character mesh (AI-generated GLB), bounds-normalized at
+/// registration so any authoring scale/origin stands feet-on-ground.
+pub struct MeshCharacter {
+    pub first_mesh: u32,
+    pub parts: u32,
+    /// Lowest vertex Y in mesh space (the feet).
+    pub feet_y: f32,
+    /// Mesh-space height (max Y - min Y).
+    pub height: f32,
+    /// Yaw added so the mesh's authored facing aligns with +facing.
+    pub yaw_offset: f32,
+}
+
+/// Push the mesh character: scaled to ~1.8 units tall, feet on the ground,
+/// with a walk bob and a subtle side sway (rigid mesh — no limb animation).
+pub fn push_character_mesh(
+    frame: &mut Frame,
+    pos: Vec2,
+    facing_yaw: f32,
+    color: [f32; 3],
+    is_me: bool,
+    walk_phase: f32,
+    m: &MeshCharacter,
+) {
+    let scale = (if is_me { 1.1 } else { 1.0 }) * (1.8 / m.height.max(0.01));
+    let bob = walk_phase.sin().abs() * 0.05;
+    let sway = rotate(Vec2::new(walk_phase.sin() * 0.03, 0.0), facing_yaw);
+    // Engine transform is scale-then-translate: lift by -feet_y * scale so
+    // the lowest vertex lands on y = 0, plus the bob.
+    let y = -m.feet_y * scale + bob;
+    let world = Vec3::new(pos.x + sway.x, y, pos.y + sway.y);
+    for p in 0..m.parts {
+        frame.instances.push(
+            Instance::new(world, Vec3::splat(scale), Vec3::from_array(color))
+                .with_yaw(facing_yaw + m.yaw_offset)
+                .with_mesh(m.first_mesh + p),
+        );
+    }
+}
