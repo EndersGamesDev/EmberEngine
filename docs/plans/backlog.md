@@ -11,6 +11,7 @@ Presenter and input work is planned in `docs/presenter-architecture.md` and `doc
 - The scene-Hz throttle lives inside the renderer, so the renderer decides whether the renderer runs (`crates/ember-engine/src/renderer.rs:608-612`); the clock belongs above both GPU stages (`docs/presenter-architecture.md` §8.2).
 - `cursor_ndc()` and `aspect()` have no callers anywhere in the workspace, and the shooter's head comment claiming cursor unprojection (`crates/pong/src/online.rs:2`) is stale — it aims with relative deltas. The API is worth keeping; nobody should assume a shipped game is exercising it (`docs/input-latch.md` §7).
 - Pointer capture fires on any mouse press with no button filter (`crates/ember-engine/src/app.rs:195-203`), so in the one game that opts in the fire button is also the capture gesture; and `cursor_ndc` goes stale rather than `None` under pointer lock (`docs/input-latch.md` §7).
+- Weak-device performance is assessed in `docs/weak-device-performance.md`, which owns the prioritized levers and the measurement items: backface culling is off (`crates/ember-engine/src/renderer.rs:963`), `scene_scale` is pinned at 1.0 against an uncapped device-pixel-ratio backing store (`crates/ember-engine/src/app.rs:233-234`), scene depth is stored every frame and read by nothing (`crates/ember-engine/src/renderer.rs:701-704`), the ATW rig is compiled out on the only target that is actually weak (`crates/ember-engine/src/renderer.rs:611-612`), and the workspace defines no `[profile.release]` for the wasm payload.
 
 ## Infrastructure
 
