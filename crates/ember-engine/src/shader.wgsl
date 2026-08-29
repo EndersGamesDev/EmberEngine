@@ -60,10 +60,17 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let sun_dir = normalize(vec3<f32>(0.4, 1.0, 0.3));
     let sun_col = vec3<f32>(1.0, 0.95, 0.85);  // warm key light
     let sun_intensity = 1.15;
+    // Cool fill from the opposite side. The sun points almost straight
+    // down, so without this every vertical facade — walls, crates, the
+    // skyline — falls to ambient alone and reads as a black silhouette.
+    let fill_dir = normalize(vec3<f32>(-0.55, 0.30, -0.65));
+    let fill_col = vec3<f32>(0.42, 0.50, 0.68);
+    let fill_intensity = 0.55;
     let sheen_strength = 0.18;   // stylized top sheen (Blinn half-vector vs up)
     let sheen_power = 8.0;
-    // Fog tuning: view-depth based, fades to a dark horizon.
-    let fog_density = 0.012;
+    // Fog tuning: view-depth based, fades to a dark horizon. Light enough
+    // that the skyline beyond the arena wall still reads.
+    let fog_density = 0.005;
     let fog_color = vec3<f32>(0.012, 0.020, 0.045);
 
     // Untextured meshes sample the shared 1x1 white pixel, so albedo
@@ -80,7 +87,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     );
     let half_vec = normalize(sun_dir + vec3<f32>(0.0, 1.0, 0.0));
     let sheen = sheen_strength * pow(max(dot(n, half_vec), 0.0), sheen_power);
-    let lit = aces(albedo * (hemi + sun_col * (sun_intensity * ndotl + sheen)));
+    let fill = fill_col * (fill_intensity * max(dot(n, fill_dir), 0.0));
+    let lit = aces(albedo * (hemi + fill + sun_col * (sun_intensity * ndotl + sheen)));
 
     let fog = clamp(1.0 - exp(-in.view_depth * fog_density), 0.0, 1.0);
     return vec4<f32>(mix(lit, fog_color, fog), 1.0);

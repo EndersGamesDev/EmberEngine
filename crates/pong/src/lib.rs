@@ -227,9 +227,14 @@ pub fn run_online(cfg: OnlineConfig) -> Result<(), String> {
     // Articulated character parts (arena v9), after the env set.
     let (part_meshes, parts) = online::part_meshes(meshes.len() as u32 + 1);
     meshes.extend(part_meshes);
+    // Factory skyline (arena v10), after the character.
+    let (backdrop, backdrop_base) = online::backdrop_meshes(meshes.len() as u32 + 1);
+    let backdrop_parts = backdrop.len() as u32;
+    meshes.extend(backdrop);
     let mut game = online::ShooterGame::connect(&cfg, assets)?;
     game.set_env_base(env_base);
     game.set_parts(parts);
+    game.set_backdrop(backdrop_base, backdrop_parts);
     ember_engine::run(
         EngineConfig {
             title: format!("ember arena — {}", cfg.lobby),

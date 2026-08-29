@@ -119,6 +119,45 @@ const PART_GLBS: [(&[u8], f32); 5] = [
     ),
 ];
 
+/// Fixed camera from EMBER_CAM ("ex,ey,ez,tx,ty,tz"): an overview of the
+/// arena for reviewing level and character work in screenshots. Parsed
+/// once; None when unset or malformed (and always None on the web).
+fn debug_camera() -> Option<Camera> {
+    static CAM: std::sync::OnceLock<Option<Camera>> = std::sync::OnceLock::new();
+    *CAM.get_or_init(|| {
+        let v: Vec<f32> = std::env::var("EMBER_CAM")
+            .ok()?
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        (v.len() == 6).then(|| Camera {
+            eye: Vec3::new(v[0], v[1], v[2]),
+            target: Vec3::new(v[3], v[4], v[5]),
+            fov_y_deg: 65.0,
+        })
+    })
+}
+
+/// The factory skyline ringing the arena, built from the Free Fire "Lone
+/// Wolf" street by tools/level_backdrop.py. Scenery only: it stands well
+/// outside the play space, so the sim never needs to know about it.
+const BACKDROP_GLB: &[u8] = include_bytes!("../../../assets/models/level-backdrop.glb");
+
+/// Backdrop meshes, registered starting at `first_mesh`.
+pub(crate) fn backdrop_meshes(first_mesh: u32) -> (Vec<ember_engine::MeshData>, u32) {
+    match ember_engine::assets::load_glb(BACKDROP_GLB) {
+        Ok(parts) => {
+            let meshes: Vec<ember_engine::MeshData> = parts.into_iter().map(|p| p.mesh).collect();
+            tracing::info!("backdrop loaded ({} parts)", meshes.len());
+            (meshes, first_mesh)
+        }
+        Err(e) => {
+            tracing::warn!("backdrop unusable ({e}); plain horizon");
+            (Vec::new(), 0)
+        }
+    }
+}
+
 /// The artist-made SWAT operator, split one mesh per rig joint by
 /// tools/swat_split.py and embedded so the wasm build ships it too.
 const SWAT_GLB: &[u8] = include_bytes!("../../../assets/models/swat-parts.glb");
@@ -377,6 +416,9 @@ pub struct ShooterGame {
     since_ping: f32,
     since_status: f32,
     lost: bool,
+    /// First backdrop mesh id and how many there are; 0 = no backdrop.
+    backdrop_base: u32,
+    backdrop_parts: u32,
     /// First mesh id of env_meshes() (floor, wall, armor); 0 = untextured.
     env_base: u32,
     /// Jointed player character; None = textured/plain boxes.
@@ -444,6 +486,8 @@ impl ShooterGame {
             since_status: 0.0,
             lost: false,
             env_base: 0,
+            backdrop_base: 0,
+            backdrop_parts: 0,
             rig_character: None,
             anim: HashMap::new(),
             prev_pos: HashMap::new(),
@@ -459,6 +503,12 @@ impl ShooterGame {
     /// Where env_meshes() got registered (set by run_online after load).
     pub fn set_env_base(&mut self, base: u32) {
         self.env_base = base;
+    }
+
+    /// Where the backdrop meshes got registered.
+    pub fn set_backdrop(&mut self, base: u32, parts: u32) {
+        self.backdrop_base = base;
+        self.backdrop_parts = parts;
     }
 
     /// Install the jointed character (set by run_online after load).
@@ -1034,11 +1084,11 @@ impl EmberGame for ShooterGame {
         // The eye rides the predicted feet height, so jumping and standing
         // on a crate raise the view.
         let eye = Vec3::new(my_pos.x, self.pred_y + self.eye_h + bob, my_pos.y);
-        let camera = Camera {
+        let camera = debug_camera().unwrap_or(Camera {
             eye,
             target: eye + look,
             fov_y_deg: 70.0 - 26.0 * self.zoom,
-        };
+        });
 
         // ---- build the scene ----
         let mut frame = Frame {
@@ -1053,6 +1103,15 @@ impl EmberGame for ShooterGame {
         // Floor + enclosing walls (tall enough to feel like a room).
         // env_base > 0: textured basalt set (arena v8); else the classic flats.
         let env = self.env_base;
+        // Factory skyline: the ring is already positioned in model space.
+        for part in 0..self.backdrop_parts {
+            frame.instances.push(
+                // Lifted above its texture's own value: the skyline is far
+                // enough out that fog washes most of its contrast away.
+                Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::splat(1.45))
+                    .with_mesh(self.backdrop_base + part),
+            );
+        }
         inst(
             &mut frame,
             Vec3::new(0.0, -0.5, 0.0),
