@@ -14,7 +14,7 @@ struct VsIn {
     @location(3) i_pos: vec3<f32>,
     @location(4) i_scale: vec3<f32>,
     @location(5) i_color: vec3<f32>,
-    @location(6) i_yaw: f32,
+    @location(6) i_rot: vec4<f32>,
 };
 
 struct VsOut {
@@ -26,25 +26,21 @@ struct VsOut {
     @location(3) view_depth: f32,
 };
 
+// Rotate v by the unit quaternion q (xyzw layout, matching glam).
+fn quat_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
+    return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
+}
+
 @vertex
 fn vs_main(in: VsIn) -> VsOut {
-    let c = cos(in.i_yaw);
-    let s = sin(in.i_yaw);
     let scaled = in.pos * in.i_scale;
-    let rotated = vec3<f32>(
-        scaled.x * c + scaled.z * s,
-        scaled.y,
-        -scaled.x * s + scaled.z * c,
-    );
-    let world = rotated + in.i_pos;
+    let world = quat_rotate(in.i_rot, scaled) + in.i_pos;
     var out: VsOut;
     out.clip = camera.view_proj * vec4<f32>(world, 1.0);
-    // Uniform-per-axis scale + Y rotation: rotate the normal the same way.
-    out.normal = vec3<f32>(
-        in.normal.x * c + in.normal.z * s,
-        in.normal.y,
-        -in.normal.x * s + in.normal.z * c,
-    );
+    // Rotate the normal like the position; sign() undoes mirroring from
+    // negative scale axes (magnitude of a nonuniform scale stays ignored,
+    // as before).
+    out.normal = quat_rotate(in.i_rot, in.normal * sign(in.i_scale));
     out.color = in.i_color;
     out.uv = in.uv;
     out.view_depth = out.clip.w;

@@ -11,6 +11,7 @@ pub mod assets;
 pub mod overlay;
 pub mod puppet;
 pub mod renderer;
+pub mod rig;
 
 mod app;
 mod input;

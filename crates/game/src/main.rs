@@ -43,7 +43,7 @@ const MESH_MONUMENT: u32 = 6;
 /// All five must load; otherwise the caller falls back.
 fn load_part_character(
     first_mesh: u32,
-) -> (Vec<MeshData>, Option<character::PartCharacter>) {
+) -> (Vec<MeshData>, Option<character::PartCharacter>, Vec<character::PartSource>) {
     // (file stem, target world height).
     const PARTS: [(&str, f32); 5] = [
         ("part-head", 0.34),
@@ -54,6 +54,7 @@ fn load_part_character(
     ];
     let mut meshes = Vec::new();
     let mut infos = Vec::new();
+    let mut sources = Vec::new();
     for (i, (stem, target_h)) in PARTS.iter().enumerate() {
         let candidates = [
             format!("{}/../../assets/models/parts/{stem}.glb", env!("CARGO_MANIFEST_DIR")),
@@ -78,7 +79,7 @@ fn load_part_character(
         }
         let Some(mesh) = loaded else {
             tracing::info!(stem, "part GLB missing; articulated character unavailable");
-            return (Vec::new(), None);
+            return (Vec::new(), None, Vec::new());
         };
         let (mut min, mut max) = ([f32::MAX; 3], [f32::MIN; 3]);
         for v in &mesh.vertices {
@@ -97,6 +98,7 @@ fn load_part_character(
                 (min[2] + max[2]) * 0.5,
             ],
         });
+        sources.push(character::PartSource { mesh: first_mesh + i as u32, min, max });
         meshes.push(mesh);
     }
     let mut it = infos.into_iter();
@@ -108,7 +110,37 @@ fn load_part_character(
         boot: it.next().unwrap(),
     };
     tracing::info!("articulated part character loaded (5 parts)");
-    (meshes, Some(pc))
+    (meshes, Some(pc), sources)
+}
+
+/// Fixed camera from EMBER_CAM ("ex,ey,ez,tx,ty,tz"), for reviewing assets
+/// up close in screenshots. Parsed once; None when unset or malformed.
+fn debug_camera() -> Option<Camera> {
+    static CAM: std::sync::OnceLock<Option<Camera>> = std::sync::OnceLock::new();
+    *CAM.get_or_init(|| {
+        let v: Vec<f32> = std::env::var("EMBER_CAM")
+            .ok()?
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        (v.len() == 6).then(|| Camera {
+            eye: Vec3::new(v[0], v[1], v[2]),
+            target: Vec3::new(v[3], v[4], v[5]),
+            ..Camera::default()
+        })
+    })
+}
+
+/// Mesh-space bounds of one mesh (for rig part anchoring).
+fn mesh_bounds(mesh: &MeshData) -> ([f32; 3], [f32; 3]) {
+    let (mut min, mut max) = ([f32::MAX; 3], [f32::MIN; 3]);
+    for v in &mesh.vertices {
+        for a in 0..3 {
+            min[a] = min[a].min(v.pos[a]);
+            max[a] = max[a].max(v.pos[a]);
+        }
+    }
+    (min, max)
 }
 
 /// Load the AI-generated full-body character (assets/models/character.glb),
@@ -279,10 +311,16 @@ struct Game {
     mesh_character: Option<character::MeshCharacter>,
     /// Articulated five-part AI character (preferred when present).
     part_character: Option<character::PartCharacter>,
+    /// Jointed FK rig (v2) — bending elbows/knees; preferred over the puppet.
+    rig_character: Option<character::RigCharacter>,
+    /// Wall-clock seconds since start, for idle animation.
+    time_s: f32,
 }
 
 impl Game {
     fn arena_frame(&self, camera: Camera) -> Frame {
+        // EMBER_CAM="ex,ey,ez,tx,ty,tz" pins the camera for asset review.
+        let camera = debug_camera().unwrap_or(camera);
         let mut frame = Frame { camera, instances: Vec::new() };
         let half = self.world.arena_half;
         let span = half * 2.0 + 2.0;
@@ -337,7 +375,13 @@ impl Game {
         phase: f32,
         amp: f32,
     ) {
-        if let Some(pc) = &self.part_character {
+        if let Some(rc) = &self.rig_character {
+            let pose = ember_engine::rig::walk_pose(phase, amp, 0.0, self.time_s, &rc.dims);
+            let scale = if is_me { 1.1 } else { 1.0 };
+            ember_engine::rig::push_rig(
+                frame, &rc.parts, &rc.skel, &pose, pos, yaw, color, scale,
+            );
+        } else if let Some(pc) = &self.part_character {
             let scale = if is_me { 1.1 } else { 1.0 };
             ember_engine::puppet::push_character_parts(
                 frame, pos, yaw, color, scale, phase, amp, false, pc,
@@ -375,6 +419,7 @@ impl Game {
 impl EmberGame for Game {
     fn update(&mut self, input: &InputState, dt: f32) -> Frame {
         self.frames += 1;
+        self.time_s += dt;
 
         // WASD / arrows on the XZ plane. Screen-up (W) is -Z: away from the
         // default camera, which sits on +Z looking at the origin.
@@ -523,9 +568,25 @@ fn main() {
     let monument_parts = monument.len() as u32;
     let (char_meshes, mesh_character) =
         load_mesh_character(MESH_MONUMENT + monument_parts);
-    let (part_meshes, part_character) = load_part_character(
+    let (part_meshes, part_character, part_sources) = load_part_character(
         MESH_MONUMENT + monument_parts + char_meshes.len() as u32,
     );
+    // Jointed rig (v2): assembled from the same five part meshes, with the
+    // monument helmet worn on the head. EMBER_CHAR=puppet keeps the old path.
+    let rig_character = if part_sources.len() == 5
+        && std::env::var("EMBER_CHAR").as_deref() != Ok("puppet")
+    {
+        let helmet = monument.first().map(|m| {
+            let (min, max) = mesh_bounds(m);
+            character::PartSource { mesh: MESH_MONUMENT, min, max }
+        });
+        tracing::info!("jointed rig character assembled ({} parts)", 13 + helmet.is_some() as usize);
+        Some(character::veteran_rig(
+            part_sources[0], part_sources[1], part_sources[2], part_sources[3], part_sources[4], helmet,
+        ))
+    } else {
+        None
+    };
     let mut meshes = vec![
         plane_mesh(12.0, load_texture("floor_basalt.png")),
         box_mesh(4.0, load_texture("wall_basalt.png")),
@@ -560,6 +621,8 @@ fn main() {
             monument_parts,
             mesh_character,
             part_character,
+            rig_character,
+            time_s: 0.0,
         },
     );
 }

@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Quat, Vec3};
 use winit::window::Window;
 
 /// A vertex of a registered mesh (matches the built-in cube's layout).
@@ -111,25 +111,30 @@ const CUBE_FACES: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
 ];
 
 /// One draw unit: a colored mesh instance (default: the unit cube),
-/// optionally rotated around Y.
+/// optionally rotated. Vertices are scaled first, then rotated.
 #[derive(Clone, Copy, Debug)]
 pub struct Instance {
     pub position: Vec3,
     pub scale: Vec3,
     pub color: Vec3,
-    /// Rotation around the Y axis, radians. 0 = axis-aligned.
-    pub yaw: f32,
+    /// Full rotation. `with_yaw` covers the common rotate-around-Y case.
+    pub rot: Quat,
     /// Mesh id: 0 = built-in cube, 1..=N = EngineConfig.meshes entries.
     pub mesh: u32,
 }
 
 impl Instance {
     pub fn new(position: Vec3, scale: Vec3, color: Vec3) -> Self {
-        Self { position, scale, color, yaw: 0.0, mesh: 0 }
+        Self { position, scale, color, rot: Quat::IDENTITY, mesh: 0 }
     }
 
     pub fn with_yaw(mut self, yaw: f32) -> Self {
-        self.yaw = yaw;
+        self.rot = Quat::from_rotation_y(yaw);
+        self
+    }
+
+    pub fn with_rot(mut self, rot: Quat) -> Self {
+        self.rot = rot;
         self
     }
 
@@ -190,7 +195,7 @@ struct InstanceRaw {
     pos: [f32; 3],
     scale: [f32; 3],
     color: [f32; 3],
-    yaw: f32,
+    rot: [f32; 4],
 }
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -681,7 +686,7 @@ impl Renderer {
                 pos: i.position.to_array(),
                 scale: i.scale.to_array(),
                 color: i.color.to_array(),
-                yaw: i.yaw,
+                rot: i.rot.to_array(),
             });
         }
         let mut raws: Vec<InstanceRaw> = Vec::with_capacity(frame.instances.len());
@@ -971,7 +976,7 @@ fn build_scene_pipeline(
                 wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<InstanceRaw>() as u64,
                     step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &wgpu::vertex_attr_array![3 => Float32x3, 4 => Float32x3, 5 => Float32x3, 6 => Float32],
+                    attributes: &wgpu::vertex_attr_array![3 => Float32x3, 4 => Float32x3, 5 => Float32x3, 6 => Float32x4],
                 },
             ],
         },
