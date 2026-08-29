@@ -98,6 +98,7 @@ fn main() {
                     my: (t * 0.9).sin(),
                     ax: (t * 1.7).cos(),
                     az: (t * 1.7).sin(),
+                    pitch: (t * 0.6).sin() * 0.7,
                     fire: true,
                     sprint: (t as u64).is_multiple_of(3),
                     crouch: false,

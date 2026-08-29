@@ -149,6 +149,7 @@ fn drop_in_arena_flow_with_password() {
             my: 0.0,
             ax: 1.0,
             az: 0.0,
+            pitch: 0.0,
             fire: true,
             sprint: false,
             crouch: false,

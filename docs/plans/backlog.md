@@ -27,7 +27,7 @@ Presenter and input work is planned in `docs/presenter-architecture.md` and `doc
 - ember-server has no per-connection message-rate cap (pong-server: 30 msgs/tick) — a post-Hello peer can dominate the shared event channel.
 - ember-server has no socket read timeout or handshake watchdog — a byte-dribbling client holds two threads until the 10 s sweep reaps it.
 - The README "## Pong" section still describes online play as paddle pong over `sim.rs`; online is now the arena shooter over `shooter.rs`. Rewrite outside milestone 1.
-- `Instance::yaw` rotates normals with the same matrix as positions; under non-uniform scale that breaks lighting — fine today, trap later.
+- `Instance` carries a full `rot: Quat` (not a bare yaw — `with_yaw` is just the common-case helper), and normals are rotated by the same matrix as positions; under non-uniform scale that breaks lighting. Now exercised more: bullet tracers are non-uniformly scaled rods.
 - Frozen hub game versions become unjoinable on every protocol bump; the hub needs a compatibility story (`old_proto_may_list_but_not_join` covers the server side only).
 
 ## From README known limitations

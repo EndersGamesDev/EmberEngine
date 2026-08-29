@@ -1,16 +1,15 @@
-//! Online arena shooter client: renders the server-authoritative match,
-//! aims with the mouse (cursor unprojected onto the ground plane), and
-//! carries the cyberpunk sidearm — rebuilt out of cubes: gunmetal slide,
-//! bronze barrel and trigger guard, glowing blue circuit strip.
+//! Online arena shooter client: renders the server-authoritative match and
+//! aims with relative mouse deltas under pointer lock (yaw plus a pitch the
+//! server now honours), carrying the cyberpunk sidearm.
 
 use std::collections::{HashMap, VecDeque};
 
-use ember_engine::glam::{Vec2, Vec3};
+use ember_engine::glam::{Quat, Vec2, Vec3};
 use ember_engine::{Camera, EmberGame, Frame, InputState, Instance, KeyCode, MouseButton};
 use pong_core::proto::{BState, PState, PlayerMeta, C2S, PROTO_VERSION, S2C, STATE_EVERY_TICKS};
 use pong_core::shooter::{
     generate_arena, generate_pads, move_circle, obstacle_height, stance_speed, step_vertical,
-    weapon_name, weapon_stats, Obstacle, MAX_HP, RELOAD_SECS,
+    weapon_name, weapon_stats, Obstacle, EYE_CROUCH, EYE_STAND, MAX_HP, MAX_PITCH, RELOAD_SECS,
 };
 use serde::Deserialize;
 
@@ -216,21 +215,29 @@ fn weapon_accent(level: u8) -> Vec3 {
     }
 }
 
-fn push_parts(frame: &mut Frame, parts: &[Part], pos: Vec3, yaw: f32, accent: Vec3) {
+/// Draws a part list at one transform. `rot` is a full rotation rather than
+/// a yaw so a weapon can tilt with its owner's aim elevation.
+fn push_parts(frame: &mut Frame, parts: &[Part], pos: Vec3, rot: Quat, accent: Vec3) {
     for p in parts {
         let color = if p.is_strip { accent } else { p.color };
         frame.instances.push(
             Instance::new(pos, Vec3::ONE, color)
-                .with_yaw(yaw)
+                .with_rot(rot)
                 .with_mesh(p.mesh),
         );
     }
 }
 
+/// Rotation for a weapon held at `yaw` and looking up/down by `pitch`.
+/// The model convention is +X forward / +Y up, and +Z is the right-hand
+/// axis that lifts +X toward +Y, so elevation is a Z rotation applied in
+/// model space before the world yaw.
+fn weapon_rot(yaw: f32, pitch: f32) -> Quat {
+    Quat::from_rotation_y(yaw) * Quat::from_rotation_z(pitch)
+}
+
 /// Mouse-look sensitivity, radians per pixel.
 const LOOK_SENS: f32 = 0.0026;
-const EYE_STAND: f32 = 1.45;
-const EYE_CROUCH: f32 = 0.85;
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct OnlineConfig {
@@ -404,6 +411,10 @@ pub struct ShooterGame {
     zoom: f32,
     /// Local time when my current reload started (drives the viewmodel dip).
     reload_started: Option<f32>,
+    /// Local time of my last AUTHORITATIVE shot — the server-confirmed
+    /// ammo decrement, not the trigger being held. Drives recoil, the
+    /// slide cycle and the muzzle flash.
+    shot_started: Option<f32>,
     since_score_ui: f32,
     score_shown: bool,
     aim: Vec2,
@@ -437,10 +448,6 @@ pub struct ShooterGame {
     flash: HashMap<u8, f32>,
     /// Impact spark particles: (position, velocity, ttl).
     particles: Vec<(Vec3, Vec3, f32)>,
-    /// Visual (height, vertical velocity) per bullet, parallel to `bullets`:
-    /// MY bullets fly along my full aim ray (pitch included) visually while
-    /// the authoritative 2D path stays the server's.
-    bullet_vis: Vec<(f32, f32)>,
 }
 
 impl ShooterGame {
@@ -473,6 +480,7 @@ impl ShooterGame {
             pads_active: Vec::new(),
             zoom: 0.0,
             reload_started: None,
+            shot_started: None,
             since_score_ui: 1.0,
             score_shown: false,
             aim: Vec2::new(1.0, 0.0),
@@ -496,7 +504,6 @@ impl ShooterGame {
             kill_t: 0.0,
             flash: HashMap::new(),
             particles: Vec::new(),
-            bullet_vis: Vec::new(),
         })
     }
 
@@ -691,8 +698,25 @@ impl EmberGame for ShooterGame {
                             self.my_id
                                 .and_then(|id| players.iter().find(|p| p.id == id)),
                         ) {
-                            if new_me.ammo < me.ammo {
+                            // A falling ammo count is not by itself a shot:
+                            // a pad pickup reassigns the whole magazine
+                            // (Rapid 12 -> Heavy 6) and a respawn resets it
+                            // (12 -> 8) in the same state that flips alive.
+                            // Requiring the weapon to be unchanged and the
+                            // player alive on BOTH sides rejects those two
+                            // without losing a real shot, since firing
+                            // needs alive and the weapon only changes on
+                            // pickup or respawn.
+                            if new_me.ammo < me.ammo
+                                && new_me.weapon == me.weapon
+                                && me.alive
+                                && new_me.alive
+                            {
                                 sfx.push((Sfx::Shot, 0.5)); // exact own-shot cue
+                                // Recoil and muzzle flash hang off the same
+                                // authoritative signal as the audio: a round
+                                // that the SERVER agrees left the weapon.
+                                self.shot_started = Some(self.time);
                             }
                             if new_me.hp < me.hp && new_me.alive {
                                 sfx.push((Sfx::Hurt, 0.6));
@@ -795,41 +819,12 @@ impl EmberGame for ShooterGame {
                         .collect();
                     self.latest = players.into_iter().map(|p| (p.id, p)).collect();
                     self.t = 0.0;
-                    // Carry per-bullet visual heights across states (order is
-                    // stable server-side: retain + append), matching by
-                    // predicted position; new bullets near ME inherit my
-                    // aim pitch so the tracer flies where the crosshair points.
-                    let carry_age = self.bullets_age;
-                    let mut used = vec![false; self.bullets.len()];
-                    let mut new_vis = Vec::with_capacity(bullets.len());
-                    for b in &bullets {
-                        let mut vis = None;
-                        for (i, ob) in self.bullets.iter().enumerate() {
-                            if used[i] {
-                                continue;
-                            }
-                            let px = ob.x + ob.vx * carry_age;
-                            let pz = ob.z + ob.vz * carry_age;
-                            let (dx, dz) = (b.x - px, b.z - pz);
-                            if dx * dx + dz * dz < 2.25 {
-                                used[i] = true;
-                                let (y0, vy) =
-                                    self.bullet_vis.get(i).copied().unwrap_or((1.25, 0.0));
-                                vis = Some((y0 + vy * carry_age, vy));
-                                break;
-                            }
-                        }
-                        new_vis.push(vis.unwrap_or_else(|| {
-                            let (dx, dz) = (b.x - self.own_render.x, b.z - self.own_render.y);
-                            if dx * dx + dz * dz < 2.25 {
-                                let h_speed = (b.vx * b.vx + b.vz * b.vz).sqrt();
-                                (self.eye_h - 0.06, h_speed * self.pitch.tan())
-                            } else {
-                                (1.25, 0.0)
-                            }
-                        }));
-                    }
-                    self.bullet_vis = new_vis;
+                    // Bullet heights now arrive from the server with the rest
+                    // of the bullet. What stood here was a local guess —
+                    // matching bullets across states by predicted position
+                    // and seeding new ones near me with my own aim pitch —
+                    // which drew MY tracers along my look ray while the
+                    // authoritative shot went somewhere else entirely.
                     self.bullets = bullets;
                     self.bullets_age = 0.0;
 
@@ -931,7 +926,7 @@ impl EmberGame for ShooterGame {
         let sens = LOOK_SENS * (1.0 - 0.45 * self.zoom);
         let (mdx, mdy) = input.mouse_delta();
         self.yaw += mdx * sens;
-        self.pitch = (self.pitch - mdy * sens).clamp(-1.45, 1.45);
+        self.pitch = (self.pitch - mdy * sens).clamp(-MAX_PITCH, MAX_PITCH);
         let (fz, fx) = self.yaw.sin_cos();
         self.aim = Vec2::new(fx, fz);
         let forward2 = self.aim;
@@ -1007,6 +1002,9 @@ impl EmberGame for ShooterGame {
                 my: mv.y,
                 ax: self.aim.x,
                 az: self.aim.y,
+                // The elevation the sim fires along. Previously dropped
+                // here, which is why the shot ignored where you looked.
+                pitch: self.pitch,
                 fire,
                 sprint,
                 crouch,
@@ -1277,29 +1275,35 @@ impl EmberGame for ShooterGame {
             } else {
                 inst(
                     &mut frame,
-                    Vec3::new(pos.x, body_h * 0.5, pos.y),
+                    Vec3::new(pos.x, feet_y + body_h * 0.5, pos.y),
                     Vec3::new(1.0, body_h, 1.0),
                     color,
                 );
                 inst(
                     &mut frame,
-                    Vec3::new(pos.x, head_y, pos.y),
+                    Vec3::new(pos.x, feet_y + head_y, pos.y),
                     Vec3::splat(0.55),
                     color * 0.7,
                 );
             }
-            let hand = Vec3::new(pos.x, hand_y, pos.y) + Vec3::new(aim.x, 0.0, aim.y) * 0.55;
+            // hand_y and pip_y are heights above the FEET, so both need this
+            // player's own feet height added. Without it someone standing on
+            // a crate carried their gun down at floor level.
+            let hand =
+                Vec3::new(pos.x, feet_y + hand_y, pos.y) + Vec3::new(aim.x, 0.0, aim.y) * 0.55;
             let accent = weapon_accent(p.weapon);
             if let Some(a) = &self.assets {
                 let yaw = -aim.y.atan2(aim.x);
-                push_parts(&mut frame, &a.gun, hand, yaw, accent);
+                // Remote weapons tilt with the owner's real aim elevation,
+                // so a player shooting down off a container looks like it.
+                push_parts(&mut frame, &a.gun, hand, weapon_rot(yaw, p.pitch), accent);
             } else {
                 push_gun(&mut frame, hand, aim, accent);
             }
             for h in 0..p.hp {
                 inst(
                     &mut frame,
-                    Vec3::new(pos.x - 0.3 + h as f32 * 0.3, pip_y, pos.y),
+                    Vec3::new(pos.x - 0.3 + h as f32 * 0.3, feet_y + pip_y, pos.y),
                     Vec3::splat(0.16),
                     Vec3::new(0.3, 0.9, 0.4),
                 );
@@ -1318,17 +1322,43 @@ impl EmberGame for ShooterGame {
             );
         }
 
-        // Bullets: glowing tracers near eye height, extrapolation bounded
-        // to ~2 state intervals so stalls don't fly them through walls.
+        // Bullets: tracers along the server's real 3D path, extrapolation
+        // bounded to ~2 state intervals so stalls don't fly them through
+        // walls. A round is drawn as a streak stretched along its flight
+        // direction with a hotter head, which reads as something moving
+        // fast rather than as a floating cube.
         let age = self.bullets_age.min(0.12);
-        for (i, b) in self.bullets.iter().enumerate() {
-            let (y0, vy) = self.bullet_vis.get(i).copied().unwrap_or((1.25, 0.0));
-            let y = (y0 + vy * age).max(0.12);
-            inst(
-                &mut frame,
-                Vec3::new(b.x + b.vx * age, y, b.z + b.vz * age),
-                Vec3::splat(0.26),
-                GLOW_BLUE,
+        for b in self.bullets.iter() {
+            let p = Vec3::new(b.x + b.vx * age, b.y + b.vy * age, b.z + b.vz * age);
+            let v = Vec3::new(b.vx, b.vy, b.vz);
+            let speed = v.length();
+            if speed < 1e-3 {
+                continue;
+            }
+            let dir = v / speed;
+            // Scale is applied before rotation, so a box long in X becomes
+            // a rod pointing along the flight direction.
+            let rot = Quat::from_rotation_arc(Vec3::X, dir);
+            // The trail is clamped so it cannot reach back through the
+            // camera. Your own round is only ~0.77 from the eye on the
+            // first state that carries it, so a fixed 0.68 tail would end
+            // up inside the 0.1 near plane — and the scene pass does not
+            // cull backfaces, so it would paint a solid block across the
+            // middle of the screen, right over the crosshair.
+            let back = 0.68f32.min(((p - eye).dot(dir) - 0.35).max(0.0));
+            if back > 0.02 {
+                frame.instances.push(
+                    Instance::new(
+                        p - dir * (back * 0.5),
+                        Vec3::new(back, 0.075, 0.075),
+                        GLOW_BLUE * 0.55,
+                    )
+                    .with_rot(rot),
+                );
+            }
+            frame.instances.push(
+                Instance::new(p, Vec3::new(0.22, 0.15, 0.15), Vec3::new(1.0, 0.95, 0.75))
+                    .with_rot(rot),
             );
         }
 
@@ -1359,7 +1389,6 @@ impl EmberGame for ShooterGame {
             let my_weapon = me_latest.map(|p| p.weapon).unwrap_or(1);
             let reloading = me_latest.map(|p| p.reloading).unwrap_or(false);
             let accent = weapon_accent(my_weapon);
-            let f3 = Vec3::new(fx, 0.0, fz);
             let right3 = Vec3::new(-fz, 0.0, fx);
 
             // Reload animation: the gun dips and rolls out of the way.
@@ -1370,29 +1399,55 @@ impl EmberGame for ShooterGame {
             } else {
                 0.0
             };
-            // ADS pulls the gun to screen center and closer to the eye.
+            // Recoil across the weapon's own cooldown: a fast rise and a
+            // slower settle, so a rapid weapon never fully recovers between
+            // rounds and a heavy one does. Driven by the server-confirmed
+            // shot rather than the trigger — holding fire on an empty
+            // magazine, or during a reload, must not kick.
+            let cooldown = weapon_stats(my_weapon).cooldown;
+            let recoil = self
+                .shot_started
+                .map(|t0| {
+                    let k = ((self.time - t0) / cooldown).clamp(0.0, 1.0);
+                    if k < 0.16 {
+                        k / 0.16
+                    } else {
+                        let settle = (1.0 - k) / 0.84;
+                        settle * settle
+                    }
+                })
+                .unwrap_or(0.0);
+            // ADS rides the FULL look vector rather than its horizontal
+            // part. That is what puts the sights on the shot line when
+            // pitched; the old pose used horizontal forward plus a
+            // `pitch * 0.10` nudge, so the gun and the bullet disagreed.
             let base = eye
-                + f3 * (0.5 + 0.10 * self.zoom)
+                + look * (0.5 + 0.10 * self.zoom - 0.06 * recoil)
                 + right3 * (0.24 * (1.0 - self.zoom) + 0.015)
-                + Vec3::new(
-                    0.0,
-                    -0.30 + 0.075 * self.zoom + bob * 0.4 * (1.0 - self.zoom) + self.pitch * 0.10
-                        - reload_dip,
-                    0.0,
-                );
+                + Vec3::Y
+                    * (-0.30 + 0.075 * self.zoom + bob * 0.4 * (1.0 - self.zoom) - reload_dip
+                        + 0.03 * recoil);
             let yaw = -forward2.y.atan2(forward2.x);
+            // Tilts with aim elevation, plus a muzzle-up kick per shot.
+            let rot = weapon_rot(yaw, self.pitch + 0.16 * recoil);
             if let Some(a) = &self.assets {
-                push_parts(&mut frame, &a.gun, base, yaw, accent);
-                push_parts(&mut frame, &a.arms, base, yaw, accent);
+                push_parts(&mut frame, &a.gun, base, rot, accent);
+                push_parts(&mut frame, &a.arms, base, rot, accent);
             } else {
                 push_gun(&mut frame, base, forward2, accent);
             }
-            // Muzzle flash synced to the fire cooldown cadence.
-            let cooldown = weapon_stats(my_weapon).cooldown;
-            if fire && !reloading && (self.time % cooldown) < 0.06 {
+            // Muzzle flash on a round the server agrees left the weapon.
+            // What stood here fired on `time % cooldown` while the trigger
+            // was held — a free-running clock with no relationship to
+            // whether a bullet was ever spawned or ammo remained.
+            let flashing = self
+                .shot_started
+                .map(|t0| self.time - t0 < 0.045)
+                .unwrap_or(false);
+            if flashing {
                 inst(
                     &mut frame,
-                    base + f3 * 0.95 + Vec3::new(0.0, 0.1, 0.0),
+                    base + look * 0.95,
                     Vec3::splat(0.14),
                     Vec3::new(1.0, 0.9, 0.5),
                 );

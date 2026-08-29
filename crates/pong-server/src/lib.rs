@@ -406,6 +406,7 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
                             y: p.y,
                             ax: p.aim[0],
                             az: p.aim[1],
+                            pitch: p.pitch,
                             hp: p.hp,
                             score: p.score,
                             alive: p.alive,
@@ -426,6 +427,8 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
                             z: b.pos[1],
                             vx: b.vel[0],
                             vz: b.vel[1],
+                            y: b.y,
+                            vy: b.vy,
                             owner: b.owner,
                         })
                         .collect(),
@@ -802,6 +805,7 @@ fn handle_event(
                         my,
                         ax,
                         az,
+                        pitch,
                         fire,
                         sprint,
                         crouch,
@@ -834,6 +838,7 @@ fn handle_event(
                             PlayerIn {
                                 mv: [mx, my],
                                 aim: [ax, az],
+                                pitch,
                                 fire,
                                 sprint,
                                 crouch,
