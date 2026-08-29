@@ -104,18 +104,18 @@ const PART_GLBS: [(&[u8], f32); 5] = [
     (include_bytes!("../../../assets/models/parts/part-boot.glb"), 0.19),
 ];
 
-/// Build the articulated part character from the embedded GLBs, registered
+/// Build the jointed rig character from the embedded GLBs, registered
 /// starting at `first_mesh`. All five or none.
 pub(crate) fn part_meshes(
     first_mesh: u32,
-) -> (Vec<ember_engine::MeshData>, Option<ember_engine::puppet::PartCharacter>) {
+) -> (Vec<ember_engine::MeshData>, Option<ember_engine::rig::RigCharacter>) {
     let mut meshes = Vec::new();
-    let mut infos = Vec::new();
-    for (i, (bytes, target_h)) in PART_GLBS.iter().enumerate() {
-        match ember_engine::puppet::part_from_glb_bytes(bytes, *target_h, first_mesh + i as u32) {
-            Ok((mesh, info)) => {
+    let mut sources = Vec::new();
+    for (i, (bytes, _target_h)) in PART_GLBS.iter().enumerate() {
+        match ember_engine::rig::source_from_glb_bytes(bytes, first_mesh + i as u32) {
+            Ok((mesh, src)) => {
                 meshes.push(mesh);
-                infos.push(info);
+                sources.push(src);
             }
             Err(e) => {
                 tracing::warn!("character part {i} unusable ({e}); box bodies");
@@ -123,16 +123,11 @@ pub(crate) fn part_meshes(
             }
         }
     }
-    let mut it = infos.into_iter();
-    let pc = ember_engine::puppet::PartCharacter {
-        head: it.next().unwrap(),
-        torso: it.next().unwrap(),
-        arm: it.next().unwrap(),
-        leg: it.next().unwrap(),
-        boot: it.next().unwrap(),
-    };
-    tracing::info!("articulated character parts loaded");
-    (meshes, Some(pc))
+    let rc = ember_engine::rig::veteran_rig(
+        sources[0], sources[1], sources[2], sources[3], sources[4], None,
+    );
+    tracing::info!("jointed rig character assembled ({} parts)", rc.parts.len());
+    (meshes, Some(rc))
 }
 
 /// Weapon-level accent color (the glow strip on the pistol).
@@ -322,11 +317,13 @@ pub struct ShooterGame {
     lost: bool,
     /// First mesh id of env_meshes() (floor, wall, armor); 0 = untextured.
     env_base: u32,
-    /// Articulated player character; None = textured/plain boxes.
-    part_character: Option<ember_engine::puppet::PartCharacter>,
+    /// Jointed player character; None = textured/plain boxes.
+    rig_character: Option<ember_engine::rig::RigCharacter>,
     /// Per-player (yaw, walk_phase, amplitude) + previous render position.
     anim: HashMap<u8, (f32, f32, f32)>,
     prev_pos: HashMap<u8, Vec2>,
+    /// Per-player eased crouch amount (0..1) so the pose sinks smoothly.
+    crouch_ease: HashMap<u8, f32>,
     // ---- shot-feel feedback (v9.1) ----
     /// Crosshair hitmarker time remaining.
     hitmarker_t: f32,
@@ -383,9 +380,10 @@ impl ShooterGame {
             since_status: 0.0,
             lost: false,
             env_base: 0,
-            part_character: None,
+            rig_character: None,
             anim: HashMap::new(),
             prev_pos: HashMap::new(),
+            crouch_ease: HashMap::new(),
             hitmarker_t: 0.0,
             kill_t: 0.0,
             flash: HashMap::new(),
@@ -399,9 +397,9 @@ impl ShooterGame {
         self.env_base = base;
     }
 
-    /// Install the articulated character (set by run_online after load).
-    pub fn set_parts(&mut self, pc: Option<ember_engine::puppet::PartCharacter>) {
-        self.part_character = pc;
+    /// Install the jointed character (set by run_online after load).
+    pub fn set_parts(&mut self, rc: Option<ember_engine::rig::RigCharacter>) {
+        self.rig_character = rc;
     }
 
     fn render_pos(&self, id: u8) -> Vec2 {
@@ -986,24 +984,28 @@ impl EmberGame for ShooterGame {
                 color.y + (1.0 - color.y) * flash,
                 color.z + (1.0 - color.z) * flash,
             );
-            // Articulated puppet when parts loaded; textured/plain boxes else.
-            if let Some(pc) = &self.part_character {
+            // Jointed rig when parts loaded; textured/plain boxes else.
+            if let Some(rc) = &self.rig_character {
                 let prev = self.prev_pos.insert(id, pos).unwrap_or(pos);
                 let vel = if dt > 0.0 { (pos - prev) / dt } else { Vec2::ZERO };
                 let slot = self.anim.entry(id).or_insert((0.0, 0.0, 0.0));
                 ember_engine::puppet::advance_anim(slot, vel, dt);
+                let crouch = self.crouch_ease.entry(id).or_insert(0.0);
+                let target = if p.crouch { 1.0 } else { 0.0 };
+                *crouch += (target - *crouch) * (1.0 - (-10.0 * dt).exp());
                 // Bodies face where the player AIMS (shooter convention).
                 let aim_yaw = aim.x.atan2(aim.y);
-                ember_engine::puppet::push_character_parts(
+                let pose =
+                    ember_engine::rig::walk_pose(slot.1, slot.2, *crouch, self.time, &rc.dims);
+                ember_engine::rig::push_rig(
                     &mut frame,
+                    &rc.parts,
+                    &rc.skel,
+                    &pose,
                     pos,
                     aim_yaw,
                     [fc.x, fc.y, fc.z],
                     0.95,
-                    slot.1,
-                    slot.2,
-                    p.crouch,
-                    pc,
                 );
             } else if env > 0 {
                 frame.instances.push(

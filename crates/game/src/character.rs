@@ -2,7 +2,7 @@
 //! arms, two legs) with a simple walk-swing animation. Mesh ids are
 //! registered by the caller as head, torso, limb — in that order.
 
-use ember_engine::glam::{Quat, Vec2, Vec3};
+use ember_engine::glam::{Vec2, Vec3};
 use ember_engine::{Frame, Instance};
 
 /// Number of meshes the character registers (head, torso, limb).
@@ -71,95 +71,9 @@ pub fn walk_speed_to_phase_delta(speed: f32, dt: f32) -> f32 {
 /// the web arena build).
 pub use ember_engine::puppet::{MeshPart, PartCharacter};
 
-use ember_engine::rig::{self, HumanoidDims, RigPart, Skeleton};
-
-/// Bounds + mesh id of one loaded part GLB, for rig assembly.
-#[derive(Clone, Copy)]
-pub struct PartSource {
-    pub mesh: u32,
-    pub min: [f32; 3],
-    pub max: [f32; 3],
-}
-
-impl PartSource {
-    fn height(&self) -> f32 {
-        (self.max[1] - self.min[1]).max(1e-3)
-    }
-
-    /// Mesh-space point at the given fraction of the bounds per axis.
-    fn anchor(&self, fx: f32, fy: f32, fz: f32) -> Vec3 {
-        Vec3::new(
-            self.min[0] + (self.max[0] - self.min[0]) * fx,
-            self.min[1] + (self.max[1] - self.min[1]) * fy,
-            self.min[2] + (self.max[2] - self.min[2]) * fz,
-        )
-    }
-}
-
-/// The jointed veteran (v2): a skeleton plus its bound mesh parts.
-pub struct RigCharacter {
-    pub skel: Skeleton,
-    pub dims: HumanoidDims,
-    pub parts: Vec<RigPart>,
-}
-
-/// Assemble the jointed veteran from the available part meshes. With the v1
-/// asset set, `arm` doubles as upper arm + forearm and `leg` as thigh +
-/// shin; the dedicated v2 segment meshes replace them file-by-file later.
-pub fn veteran_rig(
-    head: PartSource,
-    torso: PartSource,
-    arm: PartSource,
-    leg: PartSource,
-    boot: PartSource,
-    helmet: Option<PartSource>,
-) -> RigCharacter {
-    use rig::joint;
-    let dims = HumanoidDims::default();
-    let skel = rig::humanoid(&dims);
-    // Part concepts are authored facing the camera; half a turn aligns them
-    // with the rig's +Z forward.
-    let flip = Quat::from_rotation_y(std::f32::consts::PI);
-    // Veteran palette (untextured meshes shade from these).
-    let olive = Vec3::new(0.32, 0.34, 0.22);
-    let trouser = Vec3::new(0.29, 0.31, 0.21);
-    let tan = Vec3::new(0.48, 0.40, 0.27);
-    let skin = Vec3::new(0.70, 0.55, 0.44);
-    let leather = Vec3::new(0.40, 0.31, 0.20);
-    let mut parts = Vec::new();
-    let mut add = |src: PartSource, joint: usize, anchor: Vec3, offset: Vec3, target_h: f32, mirror_x: bool, tint: Vec3| {
-        parts.push(RigPart {
-            mesh: src.mesh,
-            joint,
-            anchor,
-            offset,
-            scale: target_h / src.height(),
-            pre_rot: flip,
-            mirror_x,
-            tint: Some(tint),
-        });
-    };
-    // Torso hangs low enough to cover the hips until a pelvis part exists.
-    add(torso, joint::SPINE, torso.anchor(0.5, 0.0, 0.5), Vec3::new(0.0, -0.16, 0.0), 0.70, false, tan);
-    add(head, joint::NECK, head.anchor(0.5, 0.0, 0.5), Vec3::new(0.0, 0.01, 0.0), 0.30, false, skin);
-    if let Some(hm) = helmet {
-        add(hm, joint::NECK, hm.anchor(0.5, 0.0, 0.5), Vec3::new(0.0, 0.10, 0.0), 0.26, false, olive);
-    }
-    for (mirror_x, sh, el, hip, knee, ankle) in [
-        (false, joint::SHOULDER_L, joint::ELBOW_L, joint::HIP_L, joint::KNEE_L, joint::ANKLE_L),
-        (true, joint::SHOULDER_R, joint::ELBOW_R, joint::HIP_R, joint::KNEE_R, joint::ANKLE_R),
-    ] {
-        let top = arm.anchor(0.5, 1.0, 0.5);
-        add(arm, sh, top, Vec3::ZERO, dims.upperarm_len + 0.05, mirror_x, olive);
-        add(arm, el, top, Vec3::ZERO, dims.forearm_len + 0.12, mirror_x, skin);
-        let leg_top = leg.anchor(0.5, 1.0, 0.5);
-        add(leg, hip, leg_top, Vec3::ZERO, dims.thigh_len + 0.05, mirror_x, trouser);
-        add(leg, knee, leg_top, Vec3::ZERO, dims.shin_len + 0.04, mirror_x, trouser);
-        // Boot pivots above the heel, a third of the way along the foot.
-        add(boot, ankle, boot.anchor(0.5, 1.0, 0.38), Vec3::ZERO, dims.ankle_h + 0.10, mirror_x, leather);
-    }
-    RigCharacter { skel, dims, parts }
-}
+/// Jointed rig veteran: shared engine implementation (also used by the web
+/// arena build).
+pub use ember_engine::rig::{veteran_rig, PartSource, RigCharacter};
 
 /// A full-body character mesh (AI-generated GLB), bounds-normalized at
 /// registration so any authoring scale/origin stands feet-on-ground.
