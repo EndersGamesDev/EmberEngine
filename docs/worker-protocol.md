@@ -48,7 +48,14 @@ This is the rule most worth keeping.
 
 - Never report work as done because it looks done. Report what was run.
 - An unbuildable environment does not lower the bar; it changes what you may claim. Write the code, review it hard, and say plainly that it has never been compiled.
-- Adversarial review is a **substitute for**, not an equivalent of, a compiler. It catches design errors a compiler cannot and misses trivia a compiler catches instantly. When both are available, run the compiler first — it is thousands of times cheaper.
+- Adversarial review is a **substitute for**, not an equivalent of, a compiler. When both are available, **gate first, then spend the review on what execution cannot reach.** They fail in different directions, and the difference is predictable:
+
+| Bug class | Found by |
+|---|---|
+| Tick order, and anything that only exists at runtime | **Execution**, in seconds. Systematically invisible to review — a reader checks the arithmetic of the new code and the expectations of the old tests, and never simulates the new tests against the loop's actual order. |
+| Data shapes, orderings nothing in the repo exercises yet, silent-failure surfaces | **Reading**. No test finds them, because every input anyone has tried has the safe shape. |
+
+Both classes cost a real bug here in one session. Gating first clears the mechanical class fast and cheaply; the review then earns its keep on the half a green test run says nothing about.
 
 ## 5. Delegation
 
