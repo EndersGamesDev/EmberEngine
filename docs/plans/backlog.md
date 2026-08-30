@@ -35,7 +35,7 @@ Presenter and input work is planned in `docs/presenter-architecture.md` and `doc
 
 - Snapshot interpolation degenerates to snap-to-latest at ≤60 fps; a proper ~100 ms interpolation delay buffer is future work.
 - The arena client connects before the window opens; an unreachable server pauses launch ~4 s before the offline fallback.
-- Do not ship a REBUILT bundle from the new home until pong-server is redeployed: main is PROTO 9, the running server is 7. Page-only edits (index.html, games.json) are safe. The redeploy gates jumping, aim elevation, authored levels and the Q shield. The gap widened rather than opened — the freeze already stood at 8 vs 7 — and the shield rides the same window rather than needing its own.
+- Do not ship a REBUILT bundle from the new home until pong-server is redeployed: main is PROTO 9, the running server is 7. Page-only edits (index.html, games.json) are safe. The redeploy gates jumping, aim elevation, authored levels and the Q shield. The gap widened rather than opened — the freeze already stood at 8 vs 7 — and the shield rides the same window rather than needing its own. The v11 page entry is STAGED on main (games.json, web/games/arena/v11/, hub fallback, ARENA_LIVE): once the server runs proto 9, one `deploy-pages.sh` run ships the shield build; nothing ships until that run.
 - Level is produced but never consumed: Sim still takes a seed and nothing reads a Level off the wire (bite 12).
 - Web editor picking: aspect()/cursor_ndc() measure winit inner_size while the wasm surface is sized from canvas.client_width()*dpr. Latent today (only the native-only editor reads them); must be measured at three window sizes and fixed WITH the web shell, not before.
 
