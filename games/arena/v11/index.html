@@ -184,12 +184,16 @@
     let ready = init({ module_or_path: `./pkg/pong_bg.wasm?v=${V}` })
       .catch((e) => { fail(e); console.error(e); });
 
+    // Handle of the lobby-list poll, cleared the moment we go online.
+    let lobbyPoll = null;
+
     const showGame = () => { $('menu').hidden = true; $('game').hidden = false; };
 
     const goOnline = async (action, lobby, password) => {
       const url = serverUrl();
       if (!url) { alert('No server URL — the server may be offline right now.'); return; }
       if (!lobby) { alert('Enter a lobby name.'); return; }
+      if (lobbyPoll !== null) { clearInterval(lobbyPoll); lobbyPoll = null; }
       await ready;
       showGame();
       $('status').textContent = 'connecting…';
@@ -264,6 +268,10 @@
     } else {
       await ready;
       refreshLobbies();
+      // Lobbies live for seconds and this list used to load exactly once, so
+      // two people waiting here for each other would never see each other's
+      // game appear. Poll like the hub does; goOnline() stops it.
+      lobbyPoll = setInterval(refreshLobbies, 10000);
     }
   </script>
 </body>
