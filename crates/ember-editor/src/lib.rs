@@ -19,6 +19,7 @@
 
 pub mod drag;
 pub mod gizmo;
+pub mod palette;
 pub mod pick;
 
 use ember_engine::glam::{Quat, Vec3};
@@ -81,6 +82,21 @@ pub const AXIS_Y: Vec3 = Vec3::new(0.10, 4.0, 0.10);
 pub const AXIS_Z: Vec3 = Vec3::new(0.10, 0.35, 4.0);
 const GRID_COLOR: Vec3 = Vec3::new(0.20, 0.24, 0.30);
 const GRID_MAJOR: Vec3 = Vec3::new(0.34, 0.40, 0.50);
+
+/// Digit keys that arm palette entries on the native shell, in order. The
+/// web shell sends the same `Cmd::Arm` from DOM buttons, so the two shells
+/// share one code path rather than two that can drift.
+const PALETTE_KEYS: [KeyCode; 9] = [
+    KeyCode::Digit1,
+    KeyCode::Digit2,
+    KeyCode::Digit3,
+    KeyCode::Digit4,
+    KeyCode::Digit5,
+    KeyCode::Digit6,
+    KeyCode::Digit7,
+    KeyCode::Digit8,
+    KeyCode::Digit9,
+];
 
 /// A flying camera. Yaw/pitch match the arena client's convention exactly, so
 /// "yaw" means the same thing in the editor and in the game — an editor whose
@@ -242,11 +258,28 @@ pub struct Obj {
     pub scale: Vec3,
     pub yaw: f32,
     pub color: Vec3,
+    /// Objects become collidable boxes on export; spawns become the points
+    /// players appear at. Carried from the palette entry that placed it.
+    pub class: palette::Class,
 }
 
 impl Obj {
     pub fn instance(&self) -> Instance {
         Instance::new(self.pos, self.scale, self.color).with_rot(Quat::from_rotation_y(self.yaw))
+    }
+
+    /// Places this object from a palette entry, sitting ON the ground rather
+    /// than centred in it — every extent in the palette is a height above
+    /// the floor, and a box half-buried at the origin is not what "place a
+    /// crate here" means.
+    pub fn from_kind(kind: &palette::Kind, at: Vec3) -> Self {
+        Self {
+            pos: Vec3::new(at.x, kind.scale.y * 0.5, at.z),
+            scale: kind.scale,
+            yaw: 0.0,
+            color: kind.color,
+            class: kind.class,
+        }
     }
 }
 
@@ -263,7 +296,15 @@ pub struct Editor {
     pub hovered: Option<gizmo::Axis>,
     /// The drag in progress, if a handle is being held.
     pub drag: Option<drag::Drag>,
+    /// Index into `palette::PALETTE` of the armed entry — what `Place` puts
+    /// down.
+    pub armed: usize,
+    /// Grid step new objects snap to. Zero means free placement.
+    pub snap: f32,
     lmb: gizmo::Edge,
+    keys: Vec<(KeyCode, gizmo::Edge)>,
+    key_place: gizmo::Edge,
+    key_delete: gizmo::Edge,
     key_w: gizmo::Edge,
     key_e: gizmo::Edge,
     key_r: gizmo::Edge,
@@ -311,10 +352,62 @@ impl Editor {
             mode: gizmo::Mode::default(),
             hovered: None,
             drag: None,
+            armed: 0,
+            snap: GRID_STEP,
             lmb: gizmo::Edge::default(),
+            // Digit keys arm palette entries on native; on the web the same
+            // commands arrive from DOM buttons. Only as many digits as the
+            // palette has entries, so key 6 with a five-entry palette does
+            // nothing rather than arming something that is not there.
+            keys: PALETTE_KEYS
+                .iter()
+                .take(palette::PALETTE.len())
+                .map(|&k| (k, gizmo::Edge::default()))
+                .collect(),
+            key_place: gizmo::Edge::default(),
+            key_delete: gizmo::Edge::default(),
             key_w: gizmo::Edge::default(),
             key_e: gizmo::Edge::default(),
             key_r: gizmo::Edge::default(),
+        }
+    }
+
+    /// Applies one queued command. Separate from `update` so a shell can be
+    /// tested against the editor without a frame loop.
+    pub fn apply(&mut self, cmd: palette::Cmd) {
+        match cmd {
+            palette::Cmd::Arm(i) => {
+                if i < palette::PALETTE.len() {
+                    self.armed = i;
+                }
+            }
+            palette::Cmd::Place => {
+                let at = palette::ground_point(self.cam.eye, self.cam.forward(), self.snap);
+                let obj = Obj::from_kind(&palette::PALETTE[self.armed], at);
+                self.objects.push(obj);
+                // Select what was just placed: the next thing anyone wants
+                // is to move it, and hunting for it with a click is friction
+                // the editor can simply remove.
+                self.selected = Some(self.objects.len() - 1);
+            }
+            palette::Cmd::Delete => {
+                if let Some(i) = self.selected {
+                    if i < self.objects.len() {
+                        self.objects.remove(i);
+                    }
+                    // Every later index shifted, so any surviving selection
+                    // would now point at a different object. Clearing is the
+                    // only answer that cannot be silently wrong.
+                    self.selected = None;
+                    self.drag = None;
+                }
+            }
+            palette::Cmd::SetMode(m) => self.mode = m,
+            palette::Cmd::Clear => {
+                self.objects.clear();
+                self.selected = None;
+                self.drag = None;
+            }
         }
     }
 
@@ -378,6 +471,7 @@ fn starter_scene() -> Vec<Obj> {
             scale: Vec3::new(2.2, h, 2.2),
             yaw: 0.0,
             color: if i % 3 == 0 { warm } else { grey },
+            class: palette::Class::Object,
         });
     }
     out
@@ -385,7 +479,30 @@ fn starter_scene() -> Vec<Obj> {
 
 impl EmberGame for Editor {
     fn update(&mut self, input: &InputState, dt: f32) -> Frame {
+        // Drained first, so a frame's behaviour is a function of the state it
+        // began with. A command pushed during this frame lands on the next.
+        for cmd in palette::drain() {
+            self.apply(cmd);
+        }
+
         let flying = self.cam.update(input, dt);
+
+        // Native shell: digit keys arm, Enter places, X deletes. These push
+        // into the SAME queue the web sidebar will, so there is one code path
+        // and no chance of the two shells drifting apart.
+        for (i, (key, edge)) in self.keys.iter_mut().enumerate() {
+            if edge.pressed(input.down(*key)) && !flying {
+                palette::push(palette::Cmd::Arm(i));
+            }
+        }
+        if self.key_place.pressed(input.down(KeyCode::Enter)) && !flying {
+            palette::push(palette::Cmd::Place);
+        }
+        // X rather than Delete: Delete is missing from a lot of compact
+        // keyboards, and X sits under the same hand as the mode keys.
+        if self.key_delete.pressed(input.down(KeyCode::KeyX)) && !flying {
+            palette::push(palette::Cmd::Delete);
+        }
 
         // Modality: while the fly drag is held, W/E/R are movement and the
         // gizmo is not listening. Released, they are the modes the user
@@ -471,12 +588,22 @@ impl EmberGame for Editor {
         let mut instances = grid_instances();
         instances.extend(axis_instances(6.0, 0.12));
 
+        // Pickable geometry, one instance per object and in the same order,
+        // so an index from `pick_nearest` indexes `objects` directly.
         for (i, obj) in self.objects.iter().enumerate() {
             let mut inst = obj.instance();
             if Some(i) == self.selected {
                 inst.color = gizmo::selected_color(obj.color);
             }
             instances.push(inst);
+        }
+        // Decoration comes AFTER, and is deliberately not pickable: it would
+        // otherwise break the one-to-one index correspondence above, and
+        // clicking a spawn's pad would select an object nobody owns.
+        for obj in self.objects.iter() {
+            if obj.class == palette::Class::Spawn {
+                instances.push(palette::spawn_decoration(obj.pos));
+            }
         }
 
         // Cage and gizmo last: they are the smallest things on screen and
@@ -755,5 +882,120 @@ mod tests {
         ed.lmb.pressed(true); // pretend the button was down last frame
         let _ = frame_of(&mut ed);
         assert!(ed.drag.is_none(), "a released button must end the drag");
+    }
+
+    #[test]
+    fn a_queued_command_is_applied_on_the_next_frame() {
+        // The whole point of the queue: a sidebar button and a digit key are
+        // the same event by the time the editor sees them.
+        palette::clear_queue();
+        let mut ed = Editor::new();
+        let before = ed.objects.len();
+        palette::push(palette::Cmd::Place);
+        let _ = frame_of(&mut ed);
+        assert_eq!(ed.objects.len(), before + 1, "Place must add an object");
+    }
+
+    #[test]
+    fn placing_selects_what_was_just_placed() {
+        // Hunting for the thing you just put down is friction the editor can
+        // simply remove — the next action is always to move it.
+        palette::clear_queue();
+        let mut ed = Editor::new();
+        ed.apply(palette::Cmd::Place);
+        assert_eq!(ed.selected, Some(ed.objects.len() - 1));
+    }
+
+    #[test]
+    fn a_placed_object_sits_on_the_ground_not_half_in_it() {
+        palette::clear_queue();
+        let mut ed = Editor::new();
+        ed.apply(palette::Cmd::Arm(1)); // container
+        ed.apply(palette::Cmd::Place);
+        let o = ed.objects.last().unwrap();
+        assert!(
+            (o.pos.y - o.scale.y * 0.5).abs() < 1e-5,
+            "a box at y={} with height {} is buried",
+            o.pos.y,
+            o.scale.y
+        );
+    }
+
+    #[test]
+    fn arming_past_the_end_of_the_palette_is_ignored() {
+        // Digit 9 with a six-entry palette, or a stale index from a sidebar
+        // built against an older build. Ignoring beats panicking on an index.
+        palette::clear_queue();
+        let mut ed = Editor::new();
+        ed.apply(palette::Cmd::Arm(999));
+        assert!(ed.armed < palette::PALETTE.len());
+    }
+
+    #[test]
+    fn deleting_clears_the_selection_rather_than_leaving_it_dangling() {
+        // Removing shifts every later index, so a surviving selection would
+        // silently point at a DIFFERENT object. That is the bug this guards.
+        palette::clear_queue();
+        let mut ed = Editor::new();
+        let before = ed.objects.len();
+        ed.selected = Some(0);
+        ed.apply(palette::Cmd::Delete);
+        assert_eq!(ed.objects.len(), before - 1);
+        assert_eq!(ed.selected, None, "a stale index is worse than none");
+        assert!(ed.drag.is_none());
+    }
+
+    #[test]
+    fn deleting_with_nothing_selected_does_nothing() {
+        palette::clear_queue();
+        let mut ed = Editor::new();
+        let before = ed.objects.len();
+        ed.selected = None;
+        ed.apply(palette::Cmd::Delete);
+        assert_eq!(ed.objects.len(), before);
+    }
+
+    #[test]
+    fn a_spawn_draws_a_pad_that_cannot_be_clicked() {
+        // Decoration must not join the pickable list: picking indexes objects
+        // one to one, and a clickable pad would select an index nobody owns.
+        palette::clear_queue();
+        let mut ed = Editor::new();
+        let spawn_idx = palette::PALETTE
+            .iter()
+            .position(|k| k.class == palette::Class::Spawn)
+            .expect("the palette has a spawn");
+        ed.apply(palette::Cmd::Arm(spawn_idx));
+        ed.apply(palette::Cmd::Place);
+
+        let pickable = ed.object_instances().len();
+        assert_eq!(pickable, ed.objects.len(), "decoration leaked into picking");
+
+        let drawn = frame_of(&mut ed).instances.len();
+        let expected_min = grid_instances().len() + 3 + ed.objects.len() + 1;
+        assert!(
+            drawn >= expected_min,
+            "a spawn must draw its pad as well as its post"
+        );
+    }
+
+    #[test]
+    fn clear_empties_the_level_and_forgets_the_selection() {
+        palette::clear_queue();
+        let mut ed = Editor::new();
+        ed.selected = Some(1);
+        ed.apply(palette::Cmd::Clear);
+        assert!(ed.objects.is_empty());
+        assert_eq!(ed.selected, None);
+    }
+
+    #[test]
+    fn a_mode_command_is_the_same_as_pressing_the_key() {
+        // The web shell has no keyboard focus on the canvas, so every mode
+        // change arrives as a command. It must reach the same state.
+        palette::clear_queue();
+        let mut ed = Editor::new();
+        ed.apply(palette::Cmd::SetMode(gizmo::Mode::Scale));
+        assert_eq!(ed.mode, gizmo::Mode::Scale);
     }
 }

@@ -11,3 +11,7 @@ assets/swat/
 assets/swat-operator-remastered.zip
 assets/9mm/
 assets/9-mm.zip
+# Build ticker, generated at publish time by deploy/stamp-version.sh. Not
+# committed: a stamped-then-committed file always names the commit BEFORE
+# itself, so the ticker would be permanently one build stale.
+/web/version.json

@@ -17,6 +17,9 @@ cd "$REPO_DIR"
 # gh-pages commit holding the original first web build (auto-run pong).
 V1_COMMIT="e7b85e8"
 
+echo "== stamping the build ticker =="
+bash deploy/stamp-version.sh
+
 echo "== building wasm =="
 cargo build --target wasm32-unknown-unknown --release -p pong --lib
 wasm-bindgen --target web --no-typescript --out-dir web/pkg \
@@ -33,7 +36,7 @@ PONG_LIVE="games/pong/v2"
 rm -rf "$PAGES_DIR"/index.html "$PAGES_DIR"/pkg \
     "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$PONG_LIVE" "$PAGES_DIR"/games.json
 mkdir -p "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$PONG_LIVE"
-cp web/index.html web/games.json "$PAGES_DIR"/
+cp web/index.html web/games.json web/version.json "$PAGES_DIR"/
 cp "web/$ARENA_LIVE/index.html" "$PAGES_DIR/$ARENA_LIVE/"
 cp "web/$PONG_LIVE/index.html" "$PAGES_DIR/$PONG_LIVE/"
 cp -r web/pkg "$PAGES_DIR/$ARENA_LIVE/pkg"
