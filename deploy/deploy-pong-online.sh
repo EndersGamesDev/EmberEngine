@@ -65,7 +65,23 @@ echo "tunnel domain: $HOST  ->  $WS_URL"
 echo "== publishing server.json to GitHub Pages =="
 PAGES_DIR="$(mktemp -d -t ember-pages-XXXX)"
 git -C "$REPO_DIR" worktree add "$PAGES_DIR" gh-pages
-printf '{"ws":"%s","v":"%s"}\n' "$WS_URL" "$(date +%s)" > "$PAGES_DIR/server.json"
+# Merge, never overwrite: server.json also carries "proto", written by
+# deploy-pages.sh at ship time. Clobbering it loses the record of which
+# protocol the live bundle speaks, so the next pages deploy has no baseline
+# to compare against and warns instead of catching a bump.
+python - "$PAGES_DIR/server.json" "$WS_URL" <<'EOF'
+import json, os, sys, time
+p, ws = sys.argv[1], sys.argv[2]
+d = {}
+if os.path.exists(p):
+    try:
+        d = json.load(open(p))
+    except Exception:
+        d = {}
+d["ws"] = ws
+d["v"] = str(int(time.time()))
+json.dump(d, open(p, "w"))
+EOF
 (
     cd "$PAGES_DIR"
     git add server.json
