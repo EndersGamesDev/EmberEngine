@@ -119,13 +119,53 @@ Input arriving between a scene submission and present therefore has two honest l
 
 ## 6. Physics is four-dimensional
 
+Physics consumes the authoritative 4D solids and their 4D poses. The visible slice is neither a collider nor a broad-phase proxy: two bodies may collide outside the current hyperplane, and a body that has no visible cross-section may still carry momentum into it on a later tick. The current project already defines its authority as a pure deterministic fixed-60-Hz simulation (`crates/pong-core/src/shooter.rs:1-5`); this design preserves that clock while replacing every spatial assumption underneath it.
+
 ### 6.1 Orientation and angular velocity
+
+`SO(4)` has dimension `4(4-1)/2 = 6`, not three. Its infinitesimal rotations form `so(4)`, the six-dimensional vector space of 4×4 skew-symmetric matrices, equivalently the bivectors `Λ²(R^4)` with plane coordinates `(xy, xz, xw, yz, yw, zw)`. Angular velocity is one of these bivectors: it states instantaneous rotation rates in coordinate planes, and a generic value is a simultaneous double rotation rather than a vector pointing along an axis. This is the dimension-independent formulation derived in [Leyvraz's rigid-body treatment](https://arxiv.org/abs/1407.8155).
+
+The proposed computational orientation is a Spin(4) pair of unit quaternions `(q_L, q_R)`. Identify a 4-vector with a quaternion `x` and act by `x' = q_L x inverse(q_R)`; every proper 4D rotation has such a pair, and `(q_L,q_R)` and `(-q_L,-q_R)` are the same rotation, as proved by the [4D quaternion representation theorem](https://arxiv.org/abs/math/0501249). This stores eight scalars subject to two unit constraints and one shared sign equivalence, exactly the required six continuous degrees of freedom.
+
+Composition is componentwise with order preserved: applying `b` and then `a` yields `(a_L b_L, a_R b_R)`. Each fixed step converts the six body-space angular-velocity components through one pinned self-dual/anti-self-dual basis into imaginary quaternion rates `(u_L,u_R)`, forms `(exp(dt u_L/2), exp(dt u_R/2))`, and multiplies that increment on the body side; world-space rates use the opposite side. The basis signs, multiplication side, and an explicit noncommuting test case are part of the math contract, because identity-only tests cannot catch reversed composition.
+
+Both quaternions are normalized independently after every integration step with the specified deterministic reciprocal-square-root routine. Serialization and state hashing then choose the shared-sign representative whose first nonzero component in `(q_L,q_R)` is positive; flipping only one quaternion is forbidden because it represents a different rotation. A zero or non-finite norm is a simulation fault, not an identity fallback.
+
+The rejected runtime representation is a 4×4 orientation matrix. It carries sixteen scalars for six freedoms, ordinary integration loses orthogonality, and Gram–Schmidt or polar repair introduces ordering and platform-dependent branch choices. A general Clifford rotor is mathematically sound but has the same eight even components and more machinery than the quaternion pair; Spin(4)'s product structure gives the smaller implementation surface.
 
 ### 6.2 Inertia and angular momentum
 
+The three-dimensional relation between angular-velocity and angular-momentum vectors relies on a dimension-specific duality. In four dimensions both quantities remain six-component bivectors, so inertia is a linear operator `I: Λ²(R^4) → Λ²(R^4)`, represented computationally as a symmetric positive-definite 6×6 body-frame matrix. In tensor notation it is rank four; [Parker's arbitrary-dimensional derivation](https://arxiv.org/abs/2302.04092) verifies that it maps bivectors to bivectors and is determined by the body's rank-two mass second moment rather than by 21 arbitrary matrix parameters.
+
+Choose plane generators `E_ij` that rotate basis vector `i` toward `j`, write `Ω = Σ ω_ij E_ij`, and derive `I` from `T_rot = 1/2 ∫ |Ωr|² dm`. The momentum relation is `ell = I omega` and the energy check is `T_rot = 1/2 transpose(omega) I omega`. In principal mass axes, if `s_i = ∫ r_i² dm`, the six diagonal plane moments are `s_i + s_j`; off-diagonal terms vanish. The cooker integrates those moments over the 4-simplex fill and the runtime may store the resulting full 6×6 matrix for fast solves, but validation rejects a matrix that is asymmetric, non-positive, or inconsistent with the cooked mass distribution.
+
+World-space inertia is not obtained by treating `omega` as a 4-vector. The orientation induces a 6×6 bivector transform `Λ²R`; therefore `I_world = (Λ²R) I_body transpose(Λ²R)` and its inverse transforms the same way. A force `f ∈ R^4` applied at center-relative point `r ∈ R^4` produces the six-component torque `r ∧ f`, and the angular-momentum update stays in that space.
+
+The implementation stores angular momentum as the dynamic state and computes `omega = inverse(I_world) ell` for integration. This survives a changing orientation without pretending that angular velocity is conserved, gives impulses an additive momentum target, and makes rollback snapshots contain the quantity external torque actually changes.
+
 ### 6.3 Collision and contact geometry
 
+Broad phase becomes four-dimensional AABB overlap with sweep-and-prune or a 4D BVH over all four spatial axes. Narrow phase operates on the cooked convex 4D decomposition: the Gilbert–Johnson–Keerthi distance algorithm was formulated for convex sets in `R^m` ([original paper](https://doi.org/10.1109/56.2083)), so its support-map loop carries over, but its working simplex may now contain five points. Overlap recovery uses a proposed 4D EPA whose expanding hull has tetrahedral boundary facets, not the triangular facets of 3D EPA; this is a new robustness burden and must be tested independently rather than described as a type-width change.
+
+Two 4D solids occupy four-volume and their boundaries are three-manifolds. At smooth, nonpenetrating generic first contact they touch at a point; after generic interpenetration the two boundary hypersurfaces intersect in a two-dimensional patch because `3 + 3 - 4 = 2`; coincident supporting hyperfacets can share a three-dimensional contact region. Polytope feature pairs can also yield line or surface intermediates, so a contact manifold cannot be modeled as “the one 3D contact point with a normal.”
+
+After EPA supplies a separating normal and witness features, manifold generation clips the two support features inside their common three-dimensional contact hyperplane. It reduces the resulting 0D-to-3D region to a deterministic bounded set of contact points chosen by stable feature ID and extremal coverage, retaining enough points to resist torque across the patch. Each point has one 4D normal and a three-dimensional tangent space for friction, one more friction freedom than a 3D contact.
+
+Continuous collision remains parameterized by separate simulation time: conservative advancement asks the 4D distance query along the bodies' time-parametric poses and finds a time of impact within the fixed tick. It does not promote time into the world coordinates. Fast bodies cannot rely on a discrete overlap test merely because the extra spatial dimension makes broad phase more expensive.
+
+The rejected collision design is to collide the rendered 3D slices. It misses off-slice impacts, changes collision results when the player changes viewpoint, turns a render LOD into gameplay authority, and can make an invisible body pass through a visible one before either cross-section overlaps.
+
 ### 6.4 Constraints, impulses, and determinism
+
+A rigid body's generalized velocity has ten components: four linear plus six angular. For a scalar normal constraint at contact offset `r` with unit normal `n_c`, the body Jacobian is `[transpose(n_c), components(r ∧ n_c)]`; the second body's block is negated. The familiar 3D `r × n` term has not gained one coordinate—it has become a six-component bivector term—and the generalized inverse mass is block diagonal with `inverse(m) I_4` and `inverse(I_world)`.
+
+The sequential-impulse equation and warm starting survive in form: solve `lambda = -(Jv + bias)/(J M^-1 transpose(J))`, clamp it to the constraint's admissible set, apply linear impulse `lambda n_c`, and apply angular impulse `lambda(r ∧ n_c)`. What changes is row width and constraint count. A point-to-point joint supplies four scalar positional rows rather than three; locking relative orientation supplies six rotational rows rather than three; a true one-parameter hinge must name its permitted rotation plane and lock the other five; and point-contact Coulomb friction solves in a three-dimensional tangent ball rather than a two-dimensional disk.
+
+Island building, shock propagation, and solver iteration count remain policy, not dimension-specific mathematics. The decision is a fixed-count projected Gauss–Seidel solver ordered by stable body-pair, feature, and constraint IDs, with no “iterate until converged” early exit in authoritative simulation. Contact reduction and warm-start caches use ordered arrays, never hash iteration order, and rollback stores or deterministically reconstructs every cached impulse that can affect the next tick.
+
+Four-dimensional physics magnifies the existing threats to determinism: GJK/EPA feature ties, near-zero predicates, contact-patch reduction, two-quaternion sign choice, normalization, parallel reductions, fused multiply-add differences, transcendental implementations, and solver ordering. The proposed authoritative scalar path uses strict IEEE-754 operations with contraction disabled, pinned software implementations for reciprocal square root and quaternion exponential, exact/adaptive signs for branch-sensitive geometry, fixed iteration counts, and canonical NaN rejection; GPU results never enter simulation. Assets are quantized and assigned stable topology IDs at cook time, while runtime state is quantized to its wire grid only after the solve, not before collision.
+
+Determinism is a gate, not an aspiration. A seeded replay records fixed-tick inputs and hashes position, Spin(4) representative, linear momentum, angular momentum, contact IDs, and warm-start impulses after every tick; native and wasm must match bit for bit, and rollback must restore tick `k`, replay to `k+n`, and reproduce the uninterrupted hashes. Until that cross-target oracle is green, the 4D solver may run in shadow or server-authoritative snapshot mode but may not replace the project's replayable authority.
 
 ## 7. Integration with the architecture corpus
 
