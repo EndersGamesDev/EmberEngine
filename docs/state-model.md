@@ -79,7 +79,9 @@ Nothing is broken — the encoder is correct. The finding is that its correctnes
 
 **Verified — the encoding is lossy in ways only level 1 could adjudicate.** `PlayerSt.reload_t` is a float countdown; `PState.reloading` is a bool derived as `reload_t > 0.0` (`crates/pong-server/src/lib.rs:414`). The client then reconstructs a reload *progress* for the viewmodel dip by starting its own local timer when the flag first goes true (`crates/pong/src/online.rs:505-510`, consumed at `crates/pong/src/online.rs:923-930`). That is a level-3 quantity destroyed by the level-2 encoding and re-manufactured at level 4 from the flag's edge. It looks right and it is cheap. It is also exactly the kind of decision that has no home: whether reload progress is part of the scene concept, or a display affordance, is a level-1 question, and there is no level 1 to ask.
 
-**Verified — the aim encoding drops a dimension.** The client integrates both yaw and pitch from mouse deltas (`crates/pong/src/online.rs:644-653`) and builds a full 3D look vector for its camera (`crates/pong/src/online.rs:774-776`). The wire carries a 2D aim only (`crates/pong-core/src/proto.rs:41-43`, sent at `crates/pong/src/online.rs:720-721`), the sim stores 2D aim (`crates/pong-core/src/shooter.rs:240`), and remote players are therefore rendered with a 2D aim (`crates/pong/src/online.rs:866`). Pitch is a level-3 property that the codec does not encode, so no remote player's gun ever points up or down. This is a deliberate consequence of a 2D sim and it is invisible in play; it is recorded here because "which properties are in the scene concept" is precisely the question that has no written answer, and pitch is currently answered differently by the camera and by the protocol.
+**Resolved — the aim encoding used to drop a dimension, and the drop was not invisible after all.** The client had always integrated both yaw and pitch from mouse deltas and built a full 3D look vector for its camera, while the wire carried a 2D aim only, the sim stored a 2D aim, and remote players were therefore drawn aiming level. This was recorded here as a deliberate consequence of a 2D sim, invisible in play. It was not invisible: because bullets were 2D too and the hit volume was a cylinder of unbounded height, *where you looked had no bearing on where your shot went*. The client even papered over it, flying your own tracers along your true look ray while the authoritative path stayed flat — so the laser dot, the tracer and the actual bullet could all disagree at once.
+
+The fix is not a 3D aim vector. `PlayerIn.aim` stays 2D and unit-length, and elevation rides beside it as a scalar `pitch` (`C2S::Input.pitch` on the wire, re-clamped server-side in the sim's sanitizer). `Bullet` gains scalar `y`/`vy` the same way, so horizontal speed stays `BULLET_SPEED` at any elevation and the TTL-bounded range does not shrink with the cosine. The hit volume gained a vertical band from shared `eye_h`/`body_h` constants that now live in `pong-core` rather than in the renderer — the point being that client and server must agree where a body *is*, which is exactly the level-1 question this document says has no home. Here it finally has one.
 
 ## 5. The network as a codec over the scene
 
@@ -180,10 +182,10 @@ Deviation 1 of §6.1. **Consequence:** a rendering property determines a gamepla
 
 **Verified.** The struct's 35 fields (`crates/pong/src/online.rs:240-280`) sort by level once the question is asked, which is what makes the conflation legible rather than merely untidy:
 
-- **level 2a (sent):** `history`, `next_seq`, `since_input`
+- **level 2a (sent):** `history`, `next_seq`, `since_input`, `pitch` (elevation is now transmitted, not merely rendered)
 - **level 2b (received):** `latest`, `bullets`, `last_tick`, `pads_active`, `metas`
 - **level 3 (local):** `pred_pos`, `was_alive`, `obstacles`, `pads_pos`, `arena_half`, `my_id`
-- **level 4 (rendered/display):** `from`, `to`, `t`, `own_render`, `bullets_age`, `zoom`, `eye_h`, `bob_t`, `aim`, `yaw`, `pitch`, `reload_started`
+- **level 4 (rendered/display):** `from`, `to`, `t`, `own_render`, `bullets_age`, `zoom`, `eye_h`, `bob_t`, `aim`, `yaw`, `reload_started`, `shot_started`
 - **level 5 / UI:** `score_shown`, `since_score_ui`, `since_status`
 
 The remainder — `chan`, `audio`, `assets`, `lost`, `since_ping`, `time` — are transport, resource and clock handles that belong to no level, which is the correct answer for them.

@@ -5,13 +5,14 @@ pipeline for a new one. Written down because most of what follows was
 learned by getting it wrong first — the failure modes are silent, and
 each one costs an afternoon to rediscover.
 
-There are two separate paths. Pick by what you are starting from:
+There are four paths. Pick by what you are starting from:
 
 | Starting from | Path | Example in the repo |
 |---|---|---|
-| Nothing but an idea | **Generated** — images → mesh | the veteran (`assets/models/parts2/vet-*.glb`) |
-| An artist's rigged model (FBX/glTF) | **Imported** — split by bone | the SWAT operator (`assets/models/swat-parts.glb`) |
-| An artist's scene/level | **Imported** — split by island | the factory skyline (`assets/models/level-backdrop.glb`) |
+| Nothing but an idea | **A** — generated: images → mesh | the veteran (`assets/models/parts2/vet-*.glb`) |
+| An artist's rigged model (FBX/glTF) | **B** — imported: split by bone | the SWAT operator (`assets/models/swat-parts.glb`) |
+| An artist's scene/level | **C** — imported: split by island | the factory skyline (`assets/models/level-backdrop.glb`) |
+| An artist's static prop, already in named parts | **D** — imported: keep the parts, add pivots | the 9mm (`tools/9mm_convert.py`) |
 
 Everything the engine consumes is a **GLB with base-color textures
 embedded**, loaded by `ember_engine::assets::load_glb`.
@@ -116,6 +117,26 @@ Worked example: `tools/swat_split.py` (Mixamo-rigged FBX → 15 GLB parts
   count is 3× the triangle count in memory.
 - The loader reads `TEXCOORD_0` and the material's base-colour texture
   only; roughness/normal/AO maps in a source archive are ignored today.
+- **8-bit only.** The image decoder accepts `R8G8B8A8`, `R8G8B8` and `R8`
+  and returns `None` for anything else — **with no log line**. A 16-bit
+  re-export from Blender therefore ships a correctly-shaped, entirely
+  untextured model. Verify the *exported* PNG's bit depth, not the
+  source's.
+- **No mipmaps** (`mip_level_count: 1`, and no mipmap filter on the
+  sampler), so a detailed texture shimmers at distance. Another reason to
+  downscale at bake time rather than ship source resolution.
+- **No backface culling** (`cull_mode: None`): the interior of an open or
+  non-manifold shape renders solid rather than vanishing.
+- **No blending** (`BlendState::REPLACE`): there is no additive or
+  transparent anything. A muzzle flash or a glow can only be an opaque
+  mesh.
+- `baseColorFactor` should be **white**, and the failure differs by path.
+  The viewmodel path (`push_parts`) multiplies its own per-instance colour
+  in, so a tinted factor **double-tints**. The skinned character path
+  ignores the factor entirely — `skinned_from_glb` takes only `part.mesh`
+  and `push_rig` supplies the colour — so a tinted factor is silently
+  **discarded**. Different symptom, same rule: author it white and let the
+  runtime colour it.
 
 ## Running it for a new model
 
@@ -133,3 +154,70 @@ is what every asset screenshot in this repo was taken with.
 Assets themselves stay out of git when they are large source archives
 (`assets/swat/`, `assets/level/` are ignored); the produced GLBs are
 committed, because the wasm build embeds them at compile time.
+
+## Path D — imported: a static multi-part prop
+
+An artist's prop with **no bones and no animation curves**, split into named parts — a weapon, a door, a machine. `tools/9mm_convert.py` is the worked example (a seven-part pistol: frame, slide, trigger, hammer, mag, ejector, slide stop).
+
+The shape of this path is different from B: there is no skeleton to split by and nothing to weight against, so **the parts arrive already separated and the job is to keep them that way**. Separate parts plus pivots is what makes animation possible at all, since the engine has no skinning for props.
+
+- **Delete the studio.** Artist scenes ship backdrops, ground planes and lights (`Plane001`, `Sky001`). Assert on the surviving object set by name and fail loudly listing what was actually found — converting whatever happened to survive is how a backdrop plane ends up welded to a pistol.
+- **Wire the base colour by hand.** Marketplace FBXs routinely link only the normal map, or nothing. A naive import→export then yields an untextured model with no error anywhere. Assert the image datablock actually decoded — a 0×0 image counts as "loaded".
+- **Do not join.** Each part costs one mesh id and one texture upload, so weigh it: a slide that must cycle earns its part, a screw does not. Seven parts at 512² is ~7 MB of VRAM; at source 2048² it would be ~112 MB for one pistol.
+- **Watch the downscale survive export.** Blender's glTF exporter copies the *original file bytes* for an on-disk image it believes unmodified, silently shipping the full-resolution texture. Pack the scaled image, then re-parse the exported PNG and fail if it is bigger than intended.
+- **The importer parents everything under a root.** Unparent with the world transform preserved (`parent_clear(CLEAR_KEEP_TRANSFORM)`, or snapshot `matrix_world` / clear `parent` / restore) *before* `transform_apply`, or the bake uses the wrong basis.
+- **A derived axis fit cannot check itself.** If the script rotates the longest axis onto +X and scales it to a target length, then "is +X longest" and "is the length right" are tautologies. Only a heuristic picks *which end* is forward, and a 180° flip leaves length, longest axis and handedness all correct — the prop ships pointing backwards, exit 0, no warning. Assert the muzzle/front is forward of the origin and near the front of the bounds.
+
+## Conventions: axes and the hold point
+
+- **Blender +X forward** (muzzle, face, front), **+Z up**. Export `export_format="GLB", export_yup=True`.
+- That lands as **engine +X forward, +Y up, +Z right** — so Blender +Y is engine **left**.
+- Points map **(x, y, z) → (x, z, −y)**.
+- **A box does not map componentwise.** That mapping negates an axis, which swaps min and max on it. Map both corners then re-derive min/max, or you emit a box with `min > max`.
+- **The origin is the hold point.** `push_parts` draws every part at one position with unit scale, so the GLB's origin *is* where the thing is held or stood — the grip for a weapon, between the feet for a character.
+- Match the established scale: the viewmodel pistol is ~0.9 units long.
+
+## The node-name contract
+
+Names are load-bearing. `load_assets` in `crates/pong/src/online.rs` classifies on them:
+
+| Name | Meaning |
+|---|---|
+| `arm*`, `hand*` | Viewmodel-only — **not** drawn on remote players |
+| anything else | Gun geometry — drawn in the viewmodel **and on every remote player** |
+| exactly `strip` | Takes the per-weapon-level accent colour |
+
+Miss a rename and every remote player sprouts your prop, silently. Verify the names **in the exported GLB**, not in Blender.
+
+## Pivots do not survive import
+
+`load_glb` **bakes each node's world transform into its vertices and discards the hierarchy**. After import nothing can rotate about anything: a slide cannot cycle, a hammer cannot fall.
+
+So any prop that will be animated per-part ships a **sidecar JSON** beside the GLB carrying each part's pivot in engine space — `swat-rig.json` is the precedent, written by `swat_split.py`, read by `rig.rs`.
+
+**Key order in that sidecar used to matter, and the reason is worth keeping.** `rig.rs`'s reader is a substring scanner. It originally found `"<name>"` and took the **next** `[ … ]`, so a bare list of part-name strings written before the pivot map made every part's first match land inside that list — and every joint then silently resolved to the *first* pivot in the map, with no parse error. `swat-rig.json` escaped it only because its `"parts"` list happens to come last.
+
+Fixed in `bbe82c3`: the key must now be followed by a colon and an array, and every occurrence is tried, so order cannot matter. `rig_json_joints_resolve_whatever_the_key_order` pins it.
+
+The hazard is recorded because the parser is still a scanner rather than a real JSON reader, and the next format written against it can reintroduce the shape. Cheap insurance: give a list of part names a key that cannot collide with a pivot key — `part_order`, not `parts`.
+
+## Driving the animation
+
+With no baked clips, prop animation is procedural: per-part transforms driven from state the sim already tracks (`cooldown`, `reload_t`, ammo transitions).
+
+Drive it from **authoritative** signals, not from input. A muzzle flash keyed to a held trigger fires on an empty magazine; keyed to a free-running clock it fires when nothing was shot. Key it to the server-confirmed ammo decrement — and then qualify *that*, because a weapon pickup and a respawn also reduce ammo.
+
+## Checklist
+
+Before committing a converted asset:
+
+- [ ] Node names satisfy the contract, verified in the **exported GLB**.
+- [ ] Exactly one UV layer, one shared name, on every mesh.
+- [ ] Exported PNG is 8-bit and no larger than intended.
+- [ ] Every primitive has `TEXCOORD_0`, a material, and a base-colour texture.
+- [ ] `baseColorFactor` is white.
+- [ ] Origin is the hold point; +X is forward; size matches the established scale.
+- [ ] Sidecar written, per-part maps **before** any name list.
+- [ ] Reviewed in-game with `EMBER_CAM` before committing.
+- [ ] Raw source gitignored; only the GLB and sidecar staged.
+- [ ] Bake wall time reported.

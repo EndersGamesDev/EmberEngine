@@ -7,7 +7,14 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTO_VERSION: u16 = 7;
+/// v8: shots carry elevation. The added fields are all `#[serde(default)]`
+/// and so would decode across the boundary — but decoding is not the test.
+/// A pre-v8 client sends no pitch and therefore fires permanently level
+/// against a server whose hit volume now has a finite top, and a v8 client
+/// against a pre-v8 server reads every bullet height as a defaulted 0.0 and
+/// draws every tracer buried in the floor. Both directions are broken in
+/// ways a version gate exists precisely to prevent, so this bumps.
+pub const PROTO_VERSION: u16 = 8;
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
 pub const MAX_PASSWORD_LEN: usize = 40;
@@ -42,9 +49,14 @@ pub struct PState {
     /// Defaulted, so a pre-jump server simply reports everyone grounded.
     #[serde(default)]
     pub y: f32,
-    /// Aim direction (normalized).
+    /// HORIZONTAL aim direction (normalized).
     pub ax: f32,
     pub az: f32,
+    /// Aim elevation in radians, positive = up. Sent so remote players'
+    /// weapons tilt with where they are actually looking; defaulted, so a
+    /// pre-pitch server simply reports everyone aiming level.
+    #[serde(default)]
+    pub pitch: f32,
     pub hp: u8,
     pub score: u32,
     pub alive: bool,
@@ -71,6 +83,14 @@ pub struct BState {
     pub z: f32,
     pub vx: f32,
     pub vz: f32,
+    /// Height above the floor and its rate of change. Sent so the client
+    /// can draw a tracer along the bullet's REAL path; it used to guess the
+    /// vertical part locally from its own aim, which is why the tracer and
+    /// the shot disagreed. Defaulted, so a pre-pitch server reads as flat.
+    #[serde(default)]
+    pub y: f32,
+    #[serde(default)]
+    pub vy: f32,
     /// Firing player — clients use it for shot audio cues.
     #[serde(default)]
     pub owner: u8,
@@ -109,6 +129,12 @@ pub enum C2S {
         my: f32,
         ax: f32,
         az: f32,
+        /// Aim elevation in radians, positive = up. A SCALAR beside the
+        /// horizontal aim, deliberately not a third component of it — the
+        /// sim keeps `ax`/`az` unit-length and reads elevation separately.
+        /// Defaulted, so an older client simply always fires level.
+        #[serde(default)]
+        pitch: f32,
         fire: bool,
         #[serde(default)]
         sprint: bool,
@@ -213,6 +239,7 @@ mod tests {
             my: 0.0,
             ax: 0.5,
             az: -0.5,
+            pitch: -0.3,
             fire: true,
             sprint: true,
             crouch: false,

@@ -19,6 +19,7 @@ Presenter and input work is planned in `docs/presenter-architecture.md` and `doc
 - Server lane: no `ember` loop account exists on any server; provisioning on adler (designated CI/build box) is blocked pending owner action — until then no builds/tests/gates can run (compute never runs on the workstation).
 - The live specht services (ember-server, pong-server + Cloudflare tunnel) run under the `ender` human account via nohup and do not survive a reboot; migrating them to the ember loop account with systemd user units is future work.
 - The Cloudflare quick-tunnel domain changes on every restart; a stable domain or a health-checked republish loop would remove the manual redeploy coupling.
+- A protocol bump has a two-sided deploy window with no zero-downtime ordering: page-first leaves the live page unable to join until the server moves, server-first the reverse. `deploy-pages.sh` now warns at ship time (27c20d6) and the refusal is an accurate sentence rather than a mystery, so this is socially mitigated, not solved. The real fix is the server publishing its own protocol version into `server.json` so the hub can warn BEFORE a join is attempted — deliberately not built, because it needs a server change and the server redeploy is itself blocked, and shipping a field nothing populates is worse than not shipping it. Revisit when the redeploy unblocks.
 
 ## From the adoption survey (at b1ef9af)
 
@@ -27,7 +28,7 @@ Presenter and input work is planned in `docs/presenter-architecture.md` and `doc
 - ember-server has no per-connection message-rate cap (pong-server: 30 msgs/tick) — a post-Hello peer can dominate the shared event channel.
 - ember-server has no socket read timeout or handshake watchdog — a byte-dribbling client holds two threads until the 10 s sweep reaps it.
 - The README "## Pong" section still describes online play as paddle pong over `sim.rs`; online is now the arena shooter over `shooter.rs`. Rewrite outside milestone 1.
-- `Instance::yaw` rotates normals with the same matrix as positions; under non-uniform scale that breaks lighting — fine today, trap later.
+- `Instance` carries a full `rot: Quat` (not a bare yaw — `with_yaw` is just the common-case helper), and normals are rotated by the same matrix as positions; under non-uniform scale that breaks lighting. Now exercised more: bullet tracers are non-uniformly scaled rods.
 - Frozen hub game versions become unjoinable on every protocol bump; the hub needs a compatibility story (`old_proto_may_list_but_not_join` covers the server side only).
 
 ## From README known limitations

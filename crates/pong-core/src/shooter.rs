@@ -20,6 +20,50 @@ pub fn hit_radius(crouch: bool) -> f32 {
         PLAYER_R
     }
 }
+
+/// Eye height above the feet, per stance. A shot leaves the weapon at eye
+/// level, so this is a bullet's starting height.
+pub const EYE_STAND: f32 = 1.45;
+pub const EYE_CROUCH: f32 = 0.85;
+/// Body height above the feet, per stance: the vertical extent of the hit
+/// volume. Matched to the silhouette the client draws (head centre plus half
+/// a head) so that what you see is what you hit — these live here, not in
+/// the renderer, because client and server must agree where a body IS.
+pub const BODY_H_STAND: f32 = 1.70;
+pub const BODY_H_CROUCH: f32 = 1.25;
+// Worth knowing before tuning either of the above: a standing shooter's
+// muzzle sits at 1.45 and a crouched target's band tops out at
+// BODY_H_CROUCH + BULLET_R = 1.47, so perfectly level fire GRAZES a
+// crouching player rather than passing over them. That is the honest
+// geometry, not a fudge — but it is a 2 cm margin, so lowering
+// BODY_H_CROUCH turns level fire into a clean miss and makes crouch
+// dramatically stronger. Aiming AT a crouched target pitches down and hits
+// solidly either way.
+
+/// Height a shot leaves from, measured from the shooter's feet.
+pub fn eye_h(crouch: bool) -> f32 {
+    if crouch {
+        EYE_CROUCH
+    } else {
+        EYE_STAND
+    }
+}
+
+/// Vertical extent of the hit volume, measured from the target's feet.
+/// Together with `hit_radius` this makes the hitbox a finite cylinder; it
+/// used to be one of infinite height, which is why pitch never mattered.
+pub fn body_h(crouch: bool) -> f32 {
+    if crouch {
+        BODY_H_CROUCH
+    } else {
+        BODY_H_STAND
+    }
+}
+
+/// Hard clamp on aim pitch, radians (~83°). The client clamps its own look
+/// identically, but that clamp is cosmetic — a peer's pitch is untrusted
+/// input and is re-clamped here, where it decides who dies.
+pub const MAX_PITCH: f32 = 1.45;
 pub const BULLET_SPEED: f32 = 34.0;
 pub const BULLET_R: f32 = 0.22;
 pub const BULLET_TTL: f32 = 1.6;
@@ -302,8 +346,17 @@ pub fn step_vertical(
 pub struct PlayerIn {
     /// Held movement intent, -1..1 per axis (world space).
     pub mv: [f32; 2],
-    /// Aim direction (normalized by the sim if not).
+    /// HORIZONTAL aim direction (normalized by the sim if not). Deliberately
+    /// stays 2D and unit-length: see `pitch`.
     pub aim: [f32; 2],
+    /// Aim elevation in radians, positive = up. Kept as a SCALAR beside the
+    /// horizontal aim rather than folded into a 3D direction, for two
+    /// reasons. A 3D-normalized aim would scale the horizontal component by
+    /// cos(pitch), shrinking a bullet's TTL-bounded range from ~54 units to
+    /// ~6.5 at full elevation; and a near-vertical aim would collapse the
+    /// horizontal length below the sanitizer's epsilon below, which is a
+    /// no-op that keeps the PREVIOUS aim — freezing the player's facing.
+    pub pitch: f32,
     pub fire: bool,
     pub sprint: bool,
     pub crouch: bool,
@@ -326,6 +379,9 @@ pub struct PlayerSt {
     /// Vertical speed; non-zero only while airborne.
     pub vy: f32,
     pub aim: [f32; 2],
+    /// Aim elevation, radians, positive = up. Broadcast so remote players'
+    /// weapons tilt with their actual aim instead of staying level.
+    pub pitch: f32,
     pub hp: u8,
     pub score: u32,
     pub alive: bool,
@@ -345,6 +401,14 @@ pub struct PlayerSt {
 pub struct Bullet {
     pub pos: [f32; 2],
     pub vel: [f32; 2],
+    /// Height above the arena floor, and its rate of change. Height is a
+    /// scalar RIDING ALONGSIDE the 2D path rather than a third component of
+    /// it: `vel` keeps its full BULLET_SPEED magnitude at any elevation, so
+    /// horizontal range, flight time and every timing-sensitive test behave
+    /// exactly as before. The ray's DIRECTION is still exactly the shooter's
+    /// look direction, because vy/BULLET_SPEED == tan(pitch).
+    pub y: f32,
+    pub vy: f32,
     pub ttl: f32,
     pub owner: u8,
     pub dmg: u8,
@@ -352,10 +416,13 @@ pub struct Bullet {
     pub delay: u16,
 }
 
-/// One tick's snapshot per player (id, pos, alive, crouch) for
-/// lag-compensated rewinds — stance rewinds with position, so a shot at a
-/// then-standing target uses the standing hitbox even if they since crouched.
-type HistoryFrame = Vec<(u8, [f32; 2], bool, bool)>;
+/// One tick's snapshot per player (id, pos, feet y, alive, crouch) for
+/// lag-compensated rewinds — stance AND height rewind with position, so a
+/// shot at a target who was then standing on a crate uses the standing
+/// hitbox at the crate's height, even if they have since crouched or
+/// dropped off it. Without the height the vertical band below would test a
+/// current position against a rewound one and miss for the wrong reason.
+type HistoryFrame = Vec<(u8, [f32; 2], f32, bool, bool)>;
 
 pub struct Sim {
     pub obstacles: Vec<Obstacle>,
@@ -397,6 +464,7 @@ impl Sim {
             y: 0.0,
             vy: 0.0,
             aim: [1.0, 0.0],
+            pitch: 0.0,
             hp: MAX_HP,
             score: 0,
             alive: true,
@@ -418,13 +486,14 @@ impl Sim {
         // a joiner must not inherit the leaver's ghost (lag-comp hit tests
         // would land on positions the new player never occupied).
         for frame in self.history.iter_mut() {
-            frame.retain(|(pid, _, _, _)| *pid != id);
+            frame.retain(|(pid, _, _, _, _)| *pid != id);
         }
     }
 
-    /// Target state for a hit test — (pos, alive, crouch) rewound `delay`
-    /// ticks for lag compensation (None when history is short or delay 0).
-    fn rewound(&self, id: u8, delay: u16) -> Option<([f32; 2], bool, bool)> {
+    /// Target state for a hit test — (pos, feet y, alive, crouch) rewound
+    /// `delay` ticks for lag compensation (None when history is short or
+    /// delay 0).
+    fn rewound(&self, id: u8, delay: u16) -> Option<([f32; 2], f32, bool, bool)> {
         if delay == 0 {
             return None;
         }
@@ -432,8 +501,8 @@ impl Sim {
         let frame = self.history.get(idx)?;
         frame
             .iter()
-            .find(|(pid, _, _, _)| *pid == id)
-            .map(|&(_, pos, alive, crouch)| (pos, alive, crouch))
+            .find(|(pid, _, _, _, _)| *pid == id)
+            .map(|&(_, pos, y, alive, crouch)| (pos, y, alive, crouch))
     }
 
     pub fn step(&mut self, inputs: &dyn Fn(u8) -> PlayerIn) {
@@ -491,6 +560,14 @@ impl Sim {
             if alen > 1e-4 {
                 p.aim = [aim[0] / alen, aim[1] / alen];
             }
+            // Elevation is sanitized and clamped HERE rather than trusted:
+            // the client's own look clamp is cosmetic, and this value now
+            // decides where a bullet goes.
+            p.pitch = if input.pitch.is_finite() {
+                input.pitch.clamp(-MAX_PITCH, MAX_PITCH)
+            } else {
+                0.0
+            };
 
             // Weapon handling: reload, then fire.
             let stats = weapon_stats(p.weapon);
@@ -518,6 +595,11 @@ impl Sim {
                     new_bullets.push(Bullet {
                         pos: muzzle,
                         vel: [p.aim[0] * BULLET_SPEED, p.aim[1] * BULLET_SPEED],
+                        // Leaves at eye level and climbs or falls at the
+                        // tangent of the aim elevation, which makes the
+                        // ray exactly the shooter's look direction.
+                        y: p.y + eye_h(p.crouch),
+                        vy: p.pitch.tan() * BULLET_SPEED,
                         ttl: BULLET_TTL,
                         owner,
                         dmg: stats.damage,
@@ -553,7 +635,7 @@ impl Sim {
         self.history.push_back(
             self.players
                 .iter()
-                .map(|p| (p.id, p.pos, p.alive, p.crouch))
+                .map(|p| (p.id, p.pos, p.y, p.alive, p.crouch))
                 .collect(),
         );
         if self.history.len() > HISTORY_LEN {
@@ -573,16 +655,19 @@ impl Sim {
             }
             let p0 = b.pos;
             let p1 = [p0[0] + b.vel[0] * dt, p0[1] + b.vel[1] * dt];
+            let y0 = b.y;
+            let y1 = b.y + b.vy * dt;
             let (sx, sz) = (p1[0] - p0[0], p1[1] - p0[1]);
             let seg_len_sq = sx * sx + sz * sz;
             for p in self.players.iter() {
                 if p.id == b.owner {
                     continue;
                 }
-                // Where (and in what stance) the shooter SAW this target.
-                let (tpos, talive, tcrouch) = self
+                // Where (in what stance, and at what height) the shooter
+                // SAW this target.
+                let (tpos, ty, talive, tcrouch) = self
                     .rewound(p.id, b.delay)
-                    .unwrap_or((p.pos, p.alive, p.crouch));
+                    .unwrap_or((p.pos, p.y, p.alive, p.crouch));
                 if !talive || !p.alive {
                     continue;
                 }
@@ -594,17 +679,68 @@ impl Sim {
                     (((tpos[0] - p0[0]) * sx + (tpos[1] - p0[1]) * sz) / seg_len_sq).clamp(0.0, 1.0)
                 };
                 let (ex, ez) = (tpos[0] - (p0[0] + sx * t), tpos[1] - (p0[1] + sz * t));
-                if ex * ex + ez * ez < rr * rr {
+                if ex * ex + ez * ez >= rr * rr {
+                    continue;
+                }
+                // Vertical band, with the bullet's own radius on both ends
+                // so it matches the horizontal sum-of-radii test. This is
+                // what turns the hit volume from a cylinder of infinite
+                // height into a real body, and so what makes pitch matter.
+                let (lo, hi) = (ty - BULLET_R, ty + body_h(tcrouch) + BULLET_R);
+                let by = b.y + (y1 - b.y) * t;
+                let mut connected = by >= lo && by <= hi;
+                if !connected && (y1 - b.y).abs() > hi - lo {
+                    // The horizontal test is swept but this one is a point
+                    // sample at the horizontal closest approach, so the two
+                    // are not required to hold at the same instant. Once a
+                    // tick's vertical travel exceeds the whole band — past
+                    // ~1.31 rad, inside MAX_PITCH — consecutive samples can
+                    // straddle a body and the shot passes clean through it.
+                    // Walk the segment, both tests at the SAME parameter so
+                    // no phantom hit can be introduced.
+                    let steps = (((y1 - b.y).abs() / (hi - lo)).ceil() as u32 * 4).min(32);
+                    for k in 0..=steps {
+                        let u = k as f32 / steps as f32;
+                        let byk = b.y + (y1 - b.y) * u;
+                        if byk < lo || byk > hi {
+                            continue;
+                        }
+                        let (gx, gz) = (tpos[0] - (p0[0] + sx * u), tpos[1] - (p0[1] + sz * u));
+                        if gx * gx + gz * gz < rr * rr {
+                            connected = true;
+                            break;
+                        }
+                    }
+                }
+                if connected {
                     hits.push((b.owner, p.id, b.dmg));
                     return false;
                 }
             }
             b.pos = p1;
+            b.y = y1;
+            // Into the floor.
+            if b.y < 0.0 {
+                return false;
+            }
             if b.pos[0].abs() > ARENA_HALF - BULLET_R || b.pos[1].abs() > ARENA_HALF - BULLET_R {
                 return false;
             }
+            // Cover now stops only what actually passes THROUGH it, so a
+            // shot arcing over a crate from a container top clears it.
+            // This pulls obstacle_height's sin() into hit registration;
+            // that is sound only because bullets are simulated server-side
+            // exclusively — clients never step their own. If client-side
+            // shot prediction is ever added, this becomes a desync source.
+            // Gated on the tick's vertical SPAN, not its end point: a
+            // climbing bullet that enters a crate's footprint below the top
+            // and ends the tick above it would otherwise pass straight
+            // through the crate's side wall. Conservative — this can only
+            // over-block — and a shot arcing down from a container top over
+            // a crate still has both endpoints above it.
             if obstacles.iter().any(|o| {
-                b.pos[0] > o.min[0] - BULLET_R
+                y0.min(b.y) < obstacle_height(o)
+                    && b.pos[0] > o.min[0] - BULLET_R
                     && b.pos[0] < o.max[0] + BULLET_R
                     && b.pos[1] > o.min[1] - BULLET_R
                     && b.pos[1] < o.max[1] + BULLET_R
@@ -1224,5 +1360,286 @@ mod tests {
         step_with(&mut sim, &inputs);
         step_with(&mut sim, &inputs);
         assert!(sim.players[0].y > 0.1, "jump did not lift: {}", sim.players[0].y);
+    }
+
+    /// Fires from `shoot_y` at a target on the floor `dist` away, holding
+    /// both players in place so only the elevation under test varies.
+    /// Returns whether the target was ever hit.
+    fn shot_connects(shoot_y: f32, dist: f32, pitch: f32) -> bool {
+        let mut sim = Sim::new(21);
+        sim.obstacles.clear();
+        sim.pads.clear();
+        sim.add_player(0);
+        sim.add_player(1);
+        let mut inputs = HashMap::new();
+        inputs.insert(
+            0,
+            PlayerIn {
+                aim: [1.0, 0.0],
+                pitch,
+                fire: true,
+                ..Default::default()
+            },
+        );
+        inputs.insert(1, PlayerIn::default());
+        for _ in 0..120 {
+            // Held every tick: gravity would otherwise pull the shooter off
+            // its perch and quietly change the elevation under test.
+            sim.players.iter_mut().for_each(|p| match p.id {
+                0 if p.alive => {
+                    p.pos = [0.0, 0.0];
+                    p.y = shoot_y;
+                    p.vy = 0.0;
+                }
+                1 if p.alive => {
+                    p.pos = [dist, 0.0];
+                    p.y = 0.0;
+                    p.vy = 0.0;
+                }
+                _ => {}
+            });
+            step_with(&mut sim, &inputs);
+            if sim.players.iter().find(|p| p.id == 1).unwrap().hp < MAX_HP {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn a_shot_from_above_needs_pitch_to_connect() {
+        // THE regression this whole vertical-shot change exists for: from a
+        // container top, level fire sails over a target on the floor, and
+        // the same shot aimed down at them lands. Before bullets had a
+        // height, both of these hit — elevation simply did not exist.
+        let shoot_y = 2.4;
+        let dist = 6.0;
+        assert!(
+            !shot_connects(shoot_y, dist, 0.0),
+            "level fire from {shoot_y} up must sail over a target on the floor"
+        );
+        // Aim at chest height: drop 3.0 over 6.0 of run.
+        let aimed = -(3.0f32 / dist).atan();
+        assert!(
+            shot_connects(shoot_y, dist, aimed),
+            "the same shot aimed down at the target must connect"
+        );
+    }
+
+    #[test]
+    fn pitch_does_not_shorten_a_shot() {
+        // The 3D-normalize trap: scaling the horizontal aim by cos(pitch)
+        // would collapse the TTL-bounded range. Horizontal speed must stay
+        // BULLET_SPEED at every elevation, so a steeply-aimed shot still
+        // reaches as far downrange as a level one.
+        // Inside the arena wall, not just inside the TTL range: bullets are
+        // culled at ARENA_HALF - BULLET_R, so a target parked beyond that is
+        // unreachable no matter how far the round could otherwise fly.
+        let far = ARENA_HALF - 4.0;
+        assert!(
+            shot_connects(0.0, far, 0.0),
+            "level fire must reach {far} units"
+        );
+        // Same distance, fired from high up and angled down to arrive.
+        let shoot_y = 8.0;
+        let aimed = -((shoot_y + EYE_STAND - 0.85) / far).atan();
+        assert!(
+            shot_connects(shoot_y, far, aimed),
+            "a steeply-angled shot must reach the same distance"
+        );
+
+        // The two range checks above are necessary but NOT sufficient: at
+        // these angles a cos(pitch)-scaled implementation would still have
+        // enough range to pass them. Pin the property itself — horizontal
+        // speed is BULLET_SPEED at any elevation — on the spawned bullet,
+        // where a 3D normalize would be caught immediately.
+        for &pitch in &[0.0, 0.4, -0.9, MAX_PITCH, -MAX_PITCH] {
+            let mut sim = Sim::new(24);
+            sim.obstacles.clear();
+            sim.pads.clear();
+            sim.add_player(0);
+            // Headroom, so this test measures what it claims to. At the
+            // clamp a round descends tan(1.45) * BULLET_SPEED * dt ~= 4.67
+            // units in its FIRST tick, and bullets are extended into the
+            // list before that same tick's sweep runs — so a straight-down
+            // shot fired from ground level is culled by the floor before it
+            // can be inspected at all. That culling is correct, and is
+            // asserted on its own in the test below; it is just not the
+            // property being pinned here.
+            sim.players[0].y = 8.0;
+            let mut inputs = HashMap::new();
+            inputs.insert(
+                0,
+                PlayerIn {
+                    aim: [1.0, 0.0],
+                    pitch,
+                    fire: true,
+                    ..Default::default()
+                },
+            );
+            step_with(&mut sim, &inputs);
+            let b = sim.bullets.first().expect("a shot must spawn a bullet");
+            let h_speed = (b.vel[0] * b.vel[0] + b.vel[1] * b.vel[1]).sqrt();
+            assert!(
+                (h_speed - BULLET_SPEED).abs() < 1e-3,
+                "horizontal speed must stay BULLET_SPEED at pitch {pitch}, got {h_speed}"
+            );
+            // And the ray must point exactly where the player looked.
+            assert!(
+                (b.vy / h_speed - pitch.tan()).abs() < 1e-3,
+                "the shot's slope must equal tan(pitch) at pitch {pitch}"
+            );
+            assert!(b.vy.is_finite(), "vertical speed must stay finite");
+        }
+    }
+
+    #[test]
+    fn cover_stops_only_what_passes_through_it() {
+        // Height-aware cover is the other half of giving bullets a height:
+        // without it, a shot fired over a container from above would still
+        // be eaten by the container's floor plan.
+        // Scan for a placement the generator makes a CONTAINER (>= 2.4);
+        // deterministic, unlike hardcoding an input to obstacle_height's hash.
+        let container = (0..400)
+            .map(|i| {
+                let x = 3.0 + i as f32 * 0.013;
+                Obstacle {
+                    min: [x, -2.0],
+                    max: [x + 1.0, 2.0],
+                }
+            })
+            .find(|o| obstacle_height(o) >= CONTAINER_MIN_H)
+            .expect("some placement must yield a container");
+        let h = obstacle_height(&container);
+
+        let run = |shoot_y: f32| -> bool {
+            let mut sim = Sim::new(22);
+            sim.obstacles.clear();
+            sim.pads.clear();
+            sim.obstacles.push(container);
+            sim.add_player(0);
+            sim.add_player(1);
+            let mut inputs = HashMap::new();
+            inputs.insert(
+                0,
+                PlayerIn {
+                    aim: [1.0, 0.0],
+                    fire: true,
+                    ..Default::default()
+                },
+            );
+            inputs.insert(1, PlayerIn::default());
+            for _ in 0..120 {
+                sim.players.iter_mut().for_each(|p| match p.id {
+                    0 if p.alive => {
+                        p.pos = [0.0, 0.0];
+                        p.y = shoot_y;
+                        p.vy = 0.0;
+                    }
+                    1 if p.alive => {
+                        p.pos = [9.0, 0.0];
+                        p.y = shoot_y;
+                        p.vy = 0.0;
+                    }
+                    _ => {}
+                });
+                step_with(&mut sim, &inputs);
+                if sim.players.iter().find(|p| p.id == 1).unwrap().hp < MAX_HP {
+                    return true;
+                }
+            }
+            false
+        };
+
+        assert!(
+            !run(0.0),
+            "a level shot from the floor must be stopped by a {h}-tall container"
+        );
+        assert!(
+            run(h),
+            "the same shot fired from the container's own top must clear it"
+        );
+    }
+
+    #[test]
+    fn pitch_is_clamped_and_nan_safe() {
+        // The client's look clamp is cosmetic; a hostile peer can send
+        // anything, and this value decides where a bullet goes.
+        let mut sim = Sim::new(23);
+        sim.obstacles.clear();
+        sim.pads.clear();
+        sim.add_player(0);
+        let mut inputs = HashMap::new();
+        inputs.insert(
+            0,
+            PlayerIn {
+                aim: [1.0, 0.0],
+                pitch: f32::NAN,
+                ..Default::default()
+            },
+        );
+        step_with(&mut sim, &inputs);
+        assert_eq!(sim.players[0].pitch, 0.0, "NaN pitch must fall back to level");
+
+        inputs.insert(
+            0,
+            PlayerIn {
+                aim: [1.0, 0.0],
+                pitch: 99.0,
+                ..Default::default()
+            },
+        );
+        step_with(&mut sim, &inputs);
+        assert!(
+            (sim.players[0].pitch - MAX_PITCH).abs() < 1e-6,
+            "out-of-range pitch must clamp to MAX_PITCH, got {}",
+            sim.players[0].pitch
+        );
+        // The clamp is what keeps tan() finite: an unclamped pi/2 would make
+        // the vertical speed infinite and the bullet's height NaN.
+        assert!(sim.players[0].pitch.tan().is_finite());
+    }
+
+    #[test]
+    fn a_shot_into_the_ground_is_culled_by_the_floor() {
+        // The behaviour that broke the test above, pinned in its own right:
+        // firing at your own feet must stop at the floor, not leave a round
+        // skimming along underneath the arena hitting people from below.
+        // The spawn happens before the same tick's sweep, so at the clamp
+        // this is culled within one tick of being fired.
+        let mut sim = Sim::new(25);
+        sim.obstacles.clear();
+        sim.pads.clear();
+        sim.add_player(0);
+        let mut inputs = HashMap::new();
+        inputs.insert(
+            0,
+            PlayerIn {
+                aim: [1.0, 0.0],
+                pitch: -MAX_PITCH,
+                fire: true,
+                ..Default::default()
+            },
+        );
+        step_with(&mut sim, &inputs);
+        assert!(
+            sim.bullets.is_empty(),
+            "a straight-down shot must be stopped by the floor, not fly under the arena"
+        );
+
+        // Negative control: the same shot from high enough up survives the
+        // tick, so the assertion above is about the floor and not about
+        // steep shots failing to spawn at all.
+        let mut sim = Sim::new(25);
+        sim.obstacles.clear();
+        sim.pads.clear();
+        sim.add_player(0);
+        sim.players[0].y = 8.0;
+        step_with(&mut sim, &inputs);
+        assert_eq!(
+            sim.bullets.len(),
+            1,
+            "the same steep shot with headroom below must still be in flight"
+        );
     }
 }
