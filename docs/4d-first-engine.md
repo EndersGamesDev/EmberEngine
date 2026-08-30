@@ -34,11 +34,41 @@ An authored two-component UV is not enough to parameterize a three-dimensional b
 
 ### 3.1 Exact cell-to-tetrahedra algorithm
 
+Let the oriented viewing hyperplane be `H = { p | dot(n, p - o) = 0 }`, with unit 4-vector normal `n`, origin point `o`, and an orthonormal world-from-slice basis `B = [b0 b1 b2]` whose columns span `H`. The slicer's input is the exterior tetrahedral boundary, not the volume fill; intersecting one boundary tetrahedron with `H` yields the triangle or quadrilateral surface patch that the 3D rasterizer needs.
+
+For every unique boundary vertex `i` reached by the plane query, compute and cache `d_i = dot(n, p_i - o)` and its sign. Reject a tetrahedron whose four signs are equal. A one-versus-three split crosses three of the tetrahedron's six edges and emits one triangle; a two-versus-two split crosses four edges and emits one quadrilateral, split into two triangles by the predeclared diagonal in the sign-mask case table. There is no other nondegenerate topology.
+
+For each crossing edge with canonical endpoint order `(a,b)`, compute `t = d_a / (d_a - d_b)`, the 4D point `p = p_a + t(p_b - p_a)`, and its slice-space position `q = transpose(B)(p-o)`. Cache that result by the stable undirected edge ID, so adjacent tetrahedra reuse the same position and attributes bit for bit. A 16-entry sign-mask table supplies polygon vertex order; compare its 3D triangle normal with the projected outward hypersurface normal and reverse the order when necessary, making the rasterizer winding follow the solid's orientation rather than the arbitrary order of cell indices.
+
+The current rasterizer contract is already the right final shape—flat 3D triangle vertices with 3D positions and normals plus texture coordinates (`crates/ember-engine/src/renderer.rs:15-32`)—but the proposed slicer owns a transient indexed buffer before the existing mesh upload expands or consumes it. The 4D complex never enters a vertex shader as if it were render-ready.
+
 ### 3.2 Degeneracy and numerical policy
+
+Classification is global per vertex and uses an adaptive-precision sign of the affine plane expression over the exact binary inputs; it never uses a cell-local epsilon. If that expression is exactly zero, the definition is the one-sided symbolic limit obtained by translating the oriented plane an infinitesimal distance along `+n`, so every shared occurrence of the vertex receives the same side without moving any stored coordinate.
+
+That rule resolves the dangerous cases decisively. A tetrahedral cell lying wholly in `H` is excluded because it has no patch in the chosen one-sided limit; a triangular face lying in `H` is owned by the limiting side rather than emitted twice; a tangent vertex or edge produces zero area and is dropped; and a genuine topology change as the plane passes a tangency occurs on one declared side instead of flickering between two floating-point answers. The slicer increments separate counters for exact-zero classifications, discarded zero-area patches, and topology changes, because a content pipeline that produces many of them is numerically legal but operationally hostile.
+
+The intersection division is performed in `f64` from the canonical endpoint order. Opposite exact signs guarantee a nonzero denominator; `t` may be clamped only when it lies within four representable steps of `[0,1]`, and anything farther outside fails the cell and reports a numerical error instead of drawing a spike. The slice basis is regenerated from the normalized orientation, checked for orthogonality and positive handedness, and attached to the slice identity so two stages cannot silently project with different bases.
+
+Crack prevention follows from three rules together: one cached sign per stable vertex, one cached intersection per stable edge, and one sign-mask topology table for every cell. Recomputing any of those independently per tetrahedron is rejected even if it looks equivalent, because roundoff on a shared triangular face would then be allowed to select different topology or positions on its two sides.
 
 ### 3.3 Execution placement and cost model
 
+The first implementation runs on the CPU and uploads an indexed 3D slice. This is a portability and topology decision: Ember's wasm target explicitly includes a WebGL fallback (`crates/ember-engine/Cargo.toml:30-35`), while GPU construction requires compute, output-size prefix sums, cross-workgroup edge deduplication, and a second path for non-compute devices. A later GPU slicer is permitted only as an oracle-checked acceleration of the same sign masks and edge identities, not as a second slicing definition.
+
+Let `B` be the number of exterior tetrahedra, `N_q` the number of 4D BVH nodes visited by the hyperplane query, `C` the candidate tetrahedra returned, `V_c` their unique vertices, and `A ≤ C` the cells actually cut. One slice performs `V_c` four-component plane evaluations, at most `6C` edge classifications, at most `4A` edge interpolations, and emits at most `2A` triangles. The traversal costs `O(N_q + C)` and is `O(B)` in the worst case of a plane crossing every BVH node; the document does not hide that worst case behind “GPU-friendly.”
+
+With a 40-byte transient vertex—3D position, 3D normal, three texture coordinates, and packed material metadata—and 32-bit indices, the worst output traffic is `40 × 4A + 4 × 6A = 184A` bytes before allocator overhead. At `A = 10,000` that is 1.84 MB per changed slice; at `A = 100,000` it is 18.4 MB, which is already too much to rebuild and upload at 60 Hz on a weak client. Static objects cache by `(asset_id, object_pose, slice_id, lod)`, and moving bodies slice only their own boundary; nevertheless, content budgets must cap active boundary cells rather than assuming caching makes arbitrary 4D detail free.
+
+The rejected first implementation is a full GPU scan of all `B` cells. It avoids CPU upload only after paying `B` classifications, needs capacity for the worst output or a count-and-prefix pass, and makes the weakest fallback run a different algorithm. CPU slicing also gives the editor, collision visualizer, headless tests, and renderer the same inspectable 3D artifact.
+
 ### 3.4 Attribute transport
+
+Every edge intersection uses the same `t` for position, smooth four-normal, intrinsic texture coordinate, vertex color, skin weights, and any declared continuous custom attribute. The interpolated four-normal is projected into the slice tangent space as `m_H = m - dot(m,n)n`, transformed by `transpose(B)`, and normalized; if its length falls below the declared tangency threshold, the patch is degenerate and is discarded rather than assigned an arbitrary normal.
+
+Material ID, crease group, collision class, and other discrete attributes do not interpolate. They belong to the oriented boundary tetrahedron or to a duplicated corner at a declared seam, so output triangles remain flat-tagged; a quadrilateral is split without crossing a material boundary because it came from one cell. Skinning, when supported, deforms the 4D vertices before distance classification, since slicing first and then applying a 3D skin can neither reveal nor remove geometry along `w` correctly.
+
+Texture continuity is therefore a property of the cooked 3D boundary coordinates, not of the transient cut polygon. Two adjacent cells that share topological corners share their interpolants through the edge cache; a deliberate chart or material seam duplicates attributes at that topology while retaining the same geometric edge point.
 
 ## 4. Position and orientation of the viewing hyperplane
 
