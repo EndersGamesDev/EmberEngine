@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ember fire</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 14px;
+      background: #06101f;
+      color: #c7d2e4;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      padding-bottom: 20px;
+    }
+    header {
+      width: min(1280px, 96vw);
+      display: flex; align-items: baseline; justify-content: space-between;
+      margin-top: 16px;
+    }
+    h1 { margin: 0; font-size: 1.3rem; letter-spacing: 0.16em; font-weight: 600; }
+    h1 span { color: #f0b429; }
+    h1 a { color: #6ea8fe; text-decoration: none; font-size: 0.85rem; letter-spacing: 0; }
+    .controls { display: flex; gap: 28px; font-size: 0.95rem; }
+    .controls b { color: #6ea8fe; }
+    kbd {
+      background: #14243c; border: 1px solid #2a3f60; border-bottom-width: 3px;
+      border-radius: 5px; padding: 1px 7px; font-family: inherit;
+    }
+    #ember-root canvas {
+      width: min(1280px, 96vw) !important;
+      aspect-ratio: 16 / 9;
+      height: auto !important;
+      border-radius: 10px;
+      outline: none;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.55);
+      background: #000;
+    }
+    #loading { font-size: 0.9rem; opacity: 0.8; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><a href="../../../">⬅ games</a> &nbsp; ember <span>fire</span> <small style="opacity:.5">v1</small></h1>
+  </header>
+  <div class="controls">
+    <div><b>Player 1</b> (near): <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> to move, <kbd>Mouse</kbd> to look, <kbd>Click</kbd> to accelerate</div>
+    <div><b>Other players</b> (far): use <kbd>WASD</kbd> for their cars</div>
+    <div>8 players racing around the track!</div>
+  </div>
+  <div id="ember-root"><span id="loading">loading engine…</span></div>
+  <script type="module">
+    const fail = (msg) => {
+      const el = document.getElementById('loading');
+      if (el) el.textContent = 'failed to start: ' + (msg || 'see browser console');
+    };
+    window.addEventListener('error', (e) => fail(e.message));
+    window.addEventListener('unhandledrejection', (e) => fail(e.reason));
+    document.addEventListener('pointerdown', () => {
+      document.querySelector('#ember-root canvas')?.focus();
+    });
+    let v = '0';
+    try {
+      const r = await fetch(new URL(`server.json?ts=${Date.now()}`, new URL('../../../', location)), { cache: 'no-store' });
+      if (r.ok) v = (await r.json()).v || '0';
+    } catch {}
+    const { default: init, start_local } = await import(`./pkg/fire.js?v=${v}`);
+    await init({ module_or_path: `./pkg/fire_bg.wasm?v=${v}` });
+    // The engine removes #loading itself once the GPU is actually up.
+    start_local();
+  </script>
+</body>
+</html>
