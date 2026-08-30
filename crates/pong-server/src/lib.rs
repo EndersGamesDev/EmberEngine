@@ -48,7 +48,13 @@ impl Default for ServerConfig {
 }
 
 const OUTBOUND_QUEUE: usize = 256;
-const CONN_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a peer may go silent before it is dropped. Generous on purpose:
+/// the browser client keeps the connection alive from a timer, and a hidden
+/// tab has its timers throttled to roughly one wake-up a minute, so anything
+/// tighter evicts a player who merely alt-tabbed - and takes the lobby with
+/// them when they were hosting. A genuinely dead peer closes its socket and
+/// is reaped by that, not by this.
+const CONN_TIMEOUT: Duration = Duration::from_secs(120);
 /// A connection must complete its WS handshake within this, total — a
 /// watchdog closes the socket otherwise (per-read timeouts alone let a
 /// byte-dribbling client hold a slot forever).
@@ -404,6 +410,7 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
                             x: p.pos[0],
                             z: p.pos[1],
                             y: p.y,
+                            vy: p.vy,
                             ax: p.aim[0],
                             az: p.aim[1],
                             pitch: p.pitch,

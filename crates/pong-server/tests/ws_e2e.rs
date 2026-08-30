@@ -276,3 +276,62 @@ fn message_before_hello_disconnects() {
         }
     }
 }
+
+/// The wire half of the jump-reconciliation fix: a state that puts a player
+/// in the air must carry the velocity that put them there. `y` alone cannot
+/// restart the client's integrator - it replays gravity from `vy`, and a
+/// state without it silently seeds that replay with zero.
+#[test]
+fn an_airborne_state_carries_the_velocity_that_made_it() {
+    let port = start_server();
+    let mut host = connect(port, "jumper");
+    send(
+        &mut host,
+        &C2S::CreateLobby {
+            name: "jump-wire".into(),
+            password: None,
+        },
+    );
+    let me = recv_until(&mut host, 5, |m| match m {
+        S2C::GameJoined { id, .. } => Some(id),
+        _ => None,
+    });
+
+    // Hold Space. One press is enough to leave the ground and the arc lasts
+    // ~0.7 s, so a handful of inputs covers it. Paced like a real client:
+    // faster than one message a tick and the server drops us as a flooder,
+    // which is exactly what the first version of this test did.
+    for seq in 1..6 {
+        send(
+            &mut host,
+            &C2S::Input {
+                seq,
+                view_tick: 0,
+                mx: 0.0,
+                my: 0.0,
+                ax: 1.0,
+                az: 0.0,
+                pitch: 0.0,
+                fire: false,
+                sprint: false,
+                crouch: false,
+                reload: false,
+                jump: true,
+                shield: false,
+            },
+        );
+        std::thread::sleep(Duration::from_millis(40));
+    }
+
+    let (y, vy) = recv_until(&mut host, 5, |m| match m {
+        S2C::State { players, .. } => players
+            .iter()
+            .find(|p| p.id == me && p.y > 0.5)
+            .map(|p| (p.y, p.vy)),
+        _ => None,
+    });
+    assert!(
+        vy != 0.0,
+        "airborne at y={y} with vy={vy}: the state dropped the velocity"
+    );
+}
