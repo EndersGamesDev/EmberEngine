@@ -771,11 +771,9 @@ dependencies = [
  "ember-engine",
  "glam",
  "pong-core",
- "serde",
  "serde_json",
  "tracing",
  "tracing-subscriber",
- "wasm-bindgen",
 ]
 
 [[package]]
