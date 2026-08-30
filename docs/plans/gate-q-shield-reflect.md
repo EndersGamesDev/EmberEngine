@@ -16,9 +16,19 @@ All three inside budget. The wasm check still emits the one pre-existing `unused
 
 `pong-core` went 34 → 41 tests: six on the sim's shield and one on the codec. `pong-server`'s three e2e stayed three, with `old_proto_may_list_but_not_join` strengthened rather than replaced.
 
-## What is NOT verified
+## Run @ 9941bfd on main — the shield SEEN, and a reflection watched on the wire
 
-**Nobody has seen the shield.** The client needs a display and a server speaking v9; this lane had neither. Both draws — the first-person swing and the third-person plate — were derived from the existing viewmodel's own numbers and reviewed by reading. Treat the geometry as unproven until someone looks at it.
+Closed the gap below the same day, by the orchestrator, after the fast-forward merge to main. Harness: wasm release bundle (41.8 s build) + `wasm-bindgen` + a debug `pong-server --bind 127.0.0.1:7778` in `claude-ember`, the arena page served locally with a scratch `server.json`, driven from the sandboxed browser pane; plus a ~90-line scratch websocket bot (scratchpad only, not repo code) that joins a lobby, walks itself into the viewer's fixed sight line, faces the viewer, and holds Q forever.
+
+**Seen, both draws.** First person: the plate swings up from below and takes the left third of the view, boss forward, gun untouched in the right hand. Third person: the bot's plate renders at chest height clearly OUTSIDE the torso with its boss visible — the 0.52-reach fix from the reading pass below, now confirmed by looking at it.
+
+**A live reflection observed end-to-end over the real server** (two headless bots, lobby `reflect-e2e`; evidence is the state stream both logged): the firing bot's round, `owner=1` heading −0.17 rad, flips mid-flight to `owner=0` heading **2.97 rad = π − 0.17** — the exact mirror — then the shooter's hp walks 3 → 0 and the server sends `KILL killer=0 victim=1`. The shield holder's magazine never left 8/8: it killed without firing. Ownership transfer, mirror maths, damage ride-along and frag credit all confirmed outside the test harness, on the wire.
+
+**Found while verifying, environmental but worth a line:** in a context that denies pointer lock (the sandboxed pane's iframe here), the wasm client dies on the first canvas click — the rejected `requestPointerLock` surfaces as an uncaught `WrongDocumentError` and the page shows "failed to start". Real tabs grant pointer lock, so players are unaffected today; a denied request still should not kill the game. Backlog line added.
+
+## What was NOT verified by the lane itself (superseded above)
+
+**Nobody had seen the shield when the lane closed.** The client needs a display and a server speaking v9; this lane had neither. Both draws — the first-person swing and the third-person plate — were derived from the existing viewmodel's own numbers and reviewed by reading. Treat the geometry as unproven until someone looks at it.
 
 Reading did catch one thing execution could not: the third-person plate was first placed 0.34 forward and 0.30 to the side of a body box that is 1.0 across, which buries it inside the torso. It now reaches 0.52 forward, matching the gun hand's own 0.55 for the same reason. That is the class of bug this repo's worker protocol says review finds and tests do not, and it is exactly what happened.
 
