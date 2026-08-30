@@ -69,7 +69,17 @@ was = d.get("proto")
 d["v"] = str(int(time.time()))
 d["proto"] = proto
 json.dump(d, open(p, "w"))
-if was is not None and was != proto:
+if was is None:
+    print(f"""
+!! NO PREVIOUS PROTOCOL RECORDED on this Pages branch, so this deploy
+!! cannot be compared against the last one. It ships v{proto}. If the
+!! running pong-server was built before v{proto}, players will be told
+!! "this build speaks protocol v{proto}, the live game is v<older>" and
+!! cannot create or join. Check the server's build before announcing.
+!! (A freshly seeded or relocated gh-pages branch lands here once; the
+!! next deploy has a baseline and compares normally.)
+""")
+elif was != proto:
     print(f"""
 !! PROTOCOL BUMP: v{was} -> v{proto}
 !! The game server speaks the OLD version until it is redeployed, and the
