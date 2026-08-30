@@ -250,6 +250,21 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                 }
 
                 if let Some(window) = self.window.as_ref() {
+                    // NOTE (checked, not yet a bug): this and `set_cursor_ndc`
+                    // below both measure `window.inner_size()`, while the
+                    // renderer's projection uses its own surface size. On
+                    // native those are the same quantity — `Resized` hands
+                    // winit's new inner size straight to `renderer.resize`
+                    // — so a picking ray and the image agree.
+                    //
+                    // On the web they are NOT: the branch above resizes the
+                    // surface from `canvas.client_width() * dpr`, which
+                    // winit's `inner_size` need not equal. Only the editor
+                    // reads `aspect()`/`cursor_ndc()`, and the editor is
+                    // native-only today, so nothing is wrong on screen
+                    // anywhere yet. It becomes wrong the moment the editor
+                    // has a web shell, which is why the fix belongs with
+                    // that work rather than ahead of it.
                     let size = window.inner_size();
                     self.input
                         .set_aspect(size.width as f32 / size.height.max(1) as f32);

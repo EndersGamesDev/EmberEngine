@@ -37,3 +37,4 @@ Presenter and input work is planned in `docs/presenter-architecture.md` and `doc
 - The arena client connects before the window opens; an unreachable server pauses launch ~4 s before the offline fallback.
 - Do not ship a REBUILT bundle from the new home until pong-server is redeployed: main is PROTO 8, the running server is 7. Page-only edits (index.html, games.json) are safe. The redeploy gates jumping, aim elevation and authored levels.
 - Level is produced but never consumed: Sim still takes a seed and nothing reads a Level off the wire (bite 12).
+- Web editor picking: aspect()/cursor_ndc() measure winit inner_size while the wasm surface is sized from canvas.client_width()*dpr. Latent today (only the native-only editor reads them); must be measured at three window sizes and fixed WITH the web shell, not before.
