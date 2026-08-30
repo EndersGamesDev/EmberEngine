@@ -771,9 +771,11 @@ dependencies = [
  "ember-engine",
  "glam",
  "pong-core",
+ "serde",
  "serde_json",
  "tracing",
  "tracing-subscriber",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -885,6 +887,17 @@ name = "find-msvc-tools"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
+
+[[package]]
+name = "fire"
+version = "0.1.0"
+dependencies = [
+ "ember-engine",
+ "glam",
+ "serde",
+ "tracing",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "flate2"

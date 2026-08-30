@@ -63,6 +63,20 @@
       ]
     },
     {
+      "id": "fire",
+      "title": "Fire Racer",
+      "tag": "local · 8 players, racing",
+      "desc": "8-player car racing around a circular track. WASD to drive, mouse to look (for player 1), click to accelerate. First to complete laps wins! Each car has unique controls on their own keyboard.",
+      "versions": [
+        {
+          "v": "v1",
+          "path": "games/fire/v1/",
+          "live": true,
+          "note": "current build"
+        }
+      ]
+    },
+    {
       "id": "pong",
       "title": "Pong Classic",
       "tag": "local · 2 players, one keyboard",

@@ -5,6 +5,7 @@ members = [
     "crates/ember-engine",
     "crates/ember-net",
     "crates/ember-server",
+    "crates/fire",
     "crates/game",
     "crates/pong",
     "crates/pong-core",
