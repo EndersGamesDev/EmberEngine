@@ -844,6 +844,8 @@ fn handle_event(
                                 crouch,
                                 reload,
                                 jump,
+                                // Nothing on the wire carries it yet.
+                                shield: false,
                                 delay_ticks: 0,
                             },
                             seq,

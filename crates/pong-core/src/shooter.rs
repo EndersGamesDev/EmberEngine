@@ -12,6 +12,13 @@ pub const PLAYER_R: f32 = 0.6;
 /// Crouching shrinks the HIT circle (movement blocking keeps PLAYER_R).
 pub const CROUCH_HIT_MULT: f32 = 0.72;
 
+/// The arc the raised off-hand shield covers, radians: 120° centred on the
+/// holder's horizontal aim, so it protects what you are looking at and
+/// nothing else. Widening this toward TAU makes the shield omnidirectional
+/// and removes the only way to beat it (flank it), so it is the tuning knob
+/// that matters most.
+pub const SHIELD_ARC: f32 = std::f32::consts::FRAC_PI_3 * 2.0;
+
 /// Stance-dependent hit-test radius: crouch = lower profile = smaller target.
 pub fn hit_radius(crouch: bool) -> f32 {
     if crouch {
@@ -109,6 +116,13 @@ pub fn weapon_name(level: u8) -> &'static str {
     }
 }
 /// Active bullets per player, so holding fire can't flood the state.
+///
+/// Counted by owner, and a reflected round changes owner — so rounds you
+/// caught on the shield sit against your own cap until they expire. Left
+/// that way deliberately: you cannot fire behind a raised shield anyway, no
+/// round lives longer than BULLET_TTL, and being briefly short of the cap
+/// after catching ten rounds in 1.6 s is a fair price for having caught
+/// them. Telling the two apart would need a flag on `Bullet`.
 pub const MAX_BULLETS_PER_PLAYER: usize = 10;
 pub const MAX_HP: u8 = 3;
 pub const RESPAWN_SECS: f32 = 2.5;
@@ -332,12 +346,20 @@ fn blocked(pos: [f32; 2], y: f32, r: f32, obstacles: &[Obstacle]) -> bool {
         .any(|o| overlaps(pos, r, o) && y < obstacle_height(o) - STEP_UP)
 }
 
-/// Stance-adjusted movement speed. Crouch wins if both are held.
-pub fn stance_speed(sprint: bool, crouch: bool) -> f32 {
+/// Stance-adjusted movement speed. Crouch wins if both are held, and a
+/// raised shield cancels sprint — you advance behind it, you do not charge
+/// behind it.
+///
+/// `shield` is a parameter rather than something callers fold into `sprint`
+/// themselves because this function is shared VERBATIM by the server sim and
+/// the client's prediction: a rule applied at one call site and not the
+/// other is a desync, and a signature change is the only way to make the
+/// compiler say so.
+pub fn stance_speed(sprint: bool, crouch: bool, shield: bool) -> f32 {
     MOVE_SPEED
         * if crouch {
             CROUCH_MULT
-        } else if sprint {
+        } else if sprint && !shield {
             SPRINT_MULT
         } else {
             1.0
@@ -432,6 +454,11 @@ pub struct PlayerIn {
     pub reload: bool,
     /// Held jump intent (Space). Only takes effect while grounded.
     pub jump: bool,
+    /// Held off-hand shield intent (Q). HELD, like every other intent here
+    /// and unlike a toggle: a toggle keeps a bit of state on each side of the
+    /// wire that a dropped packet can desync, and nothing in this struct has
+    /// ever needed one.
+    pub shield: bool,
     /// How many ticks behind the present this player's view is (derived by
     /// the server from the client's reported view tick, clamped). Bullets
     /// they fire hit-test against targets rewound this far.
@@ -454,6 +481,9 @@ pub struct PlayerSt {
     pub score: u32,
     pub alive: bool,
     pub crouch: bool,
+    /// Off-hand shield raised. Broadcast, because a shield nobody can see is
+    /// a mechanic that kills you for no visible reason.
+    pub shield: bool,
     pub weapon: u8,
     pub ammo: u8,
     /// Counting down while reloading; 0 = ready.
@@ -537,6 +567,7 @@ impl Sim {
             score: 0,
             alive: true,
             crouch: false,
+            shield: false,
             weapon: 1,
             ammo: weapon_stats(1).mag,
             reload_t: 0.0,
@@ -584,6 +615,11 @@ impl Sim {
             let input = inputs(self.players[i].id);
             if !self.players[i].alive {
                 let p = &mut self.players[i];
+                // A corpse carries no shield. Without this a player who died
+                // with Q held keeps a raised shield in every broadcast until
+                // their first live tick after respawning, and remote clients
+                // draw it.
+                p.shield = false;
                 p.respawn_in -= dt;
                 if p.respawn_in <= 0.0 {
                     p.deaths = p.deaths.wrapping_add(1);
@@ -604,7 +640,7 @@ impl Sim {
 
             // Shared movement code (also used by client prediction);
             // stance speed is server-authoritative — no speed cheats.
-            let speed = stance_speed(input.sprint, input.crouch);
+            let speed = stance_speed(input.sprint, input.crouch, input.shield);
             let (old_pos, old_y, old_vy) = (
                 self.players[i].pos,
                 self.players[i].y,
@@ -618,6 +654,7 @@ impl Sim {
             p.y = y;
             p.vy = vy;
             p.crouch = input.crouch;
+            p.shield = input.shield;
 
             // Aim.
             let mut aim = input.aim;
@@ -648,7 +685,14 @@ impl Sim {
                 }
             } else if (input.reload && p.ammo < stats.mag) || p.ammo == 0 {
                 p.reload_t = RELOAD_SECS;
-            } else if input.fire && p.cooldown == 0.0 && p.ammo > 0 {
+            } else if input.fire && !input.shield && p.cooldown == 0.0 && p.ammo > 0 {
+                // Raising the shield blocks your own trigger — the price of
+                // cover, and the reason the whole match does not degenerate
+                // into everyone holding Q. Only the trigger is blocked: the
+                // cooldown above still runs down behind the shield, so
+                // releasing Q fires on the next tick exactly as if the
+                // trigger had simply not been pulled, which is how every
+                // other held intent here behaves.
                 let owner = p.id;
                 let active = self.bullets.iter().filter(|b| b.owner == owner).count()
                     + new_bullets.iter().filter(|b| b.owner == owner).count();
@@ -781,6 +825,76 @@ impl Sim {
                     }
                 }
                 if connected {
+                    // ---- the off-hand shield ----
+                    //
+                    // Placed exactly where the damage decision was, so a
+                    // reflected round is precisely one that WOULD have hit.
+                    // The rest of the sweep's order is deliberate around it:
+                    // TTL was already charged above, so a shield never
+                    // extends a round's life; and the floor/wall/cover checks
+                    // below are skipped on the reflect tick because the round
+                    // does not advance — it departs next tick from a position
+                    // that already passed them.
+                    //
+                    // The shield is judged in the PRESENT — this tick's flag
+                    // and this tick's facing — while the body test above
+                    // stays lag-compensated. That is deliberately unlike
+                    // crouch, which rewinds with position: crouch answers
+                    // "where was the body", which is the shooter's question,
+                    // and the shield answers "is the defender blocking right
+                    // now", which is the defender's. Rewinding the flag
+                    // without also rewinding the facing it points along
+                    // would answer neither.
+                    if p.shield {
+                        let n = p.aim; // unit: the sim normalizes it on input
+                        let dot = b.vel[0] * n[0] + b.vel[1] * n[1];
+                        let speed_h = (b.vel[0] * b.vel[0] + b.vel[1] * b.vel[1]).sqrt();
+                        // Inside the cover arc iff the round is travelling
+                        // into the plate's face — its heading within half the
+                        // arc of -n. Tested on the heading rather than on the
+                        // bearing from holder to round, because the point of
+                        // contact sits by construction perpendicular to the
+                        // flight line and a bearing taken there is noise. For
+                        // anything but a point-blank shot the two agree
+                        // anyway: a round that connects with a 0.82-radius
+                        // body from 5 units out arrives within ~9° of
+                        // straight-on. cos() is a transcendental in hit
+                        // registration, sound for exactly the reason
+                        // obstacle_height's sin() is — bullets are stepped
+                        // server-side only.
+                        if speed_h > 1e-6 && -dot >= (SHIELD_ARC * 0.5).cos() * speed_h {
+                            // Mirror about the plate: v' = v - 2(v·n)n. The
+                            // normal is horizontal, so vy is untouched and a
+                            // round arcing down at you comes back arcing
+                            // down, keeping its range rather than being
+                            // launched at the sky. A mirror is an isometry,
+                            // so horizontal speed stays BULLET_SPEED and the
+                            // invariant pinned by pitch_does_not_shorten_a_shot
+                            // survives reflection. Damage rides along: catch
+                            // a Heavy round and you send two damage back.
+                            b.vel = [b.vel[0] - 2.0 * dot * n[0], b.vel[1] - 2.0 * dot * n[1]];
+                            // The round belongs to whoever caught it. It can
+                            // now kill anyone, the shooter included, and the
+                            // frag is the reflector's. remove_player drops
+                            // bullets by owner, so this also decides that a
+                            // reflected round outlives the shooter leaving
+                            // and dies with the reflector instead — which is
+                            // what the transfer means, not an accident of it.
+                            b.owner = p.id;
+                            // Nobody aimed this round, so there is nothing for
+                            // lag compensation to honour: from here it
+                            // hit-tests against the present.
+                            b.delay = 0;
+                            // Keeping the round's position for this tick is
+                            // what makes the reflection single-pass: the
+                            // players after this one in the loop are being
+                            // tested against a segment computed from the OLD
+                            // velocity, and leaving now is the only way none
+                            // of them is judged against a path the round is
+                            // no longer on. It costs one tick, 17 ms.
+                            return true;
+                        }
+                    }
                     hits.push((b.owner, p.id, b.dmg));
                     return false;
                 }
@@ -1741,6 +1855,279 @@ mod tests {
         // The clamp is what keeps tan() finite: an unclamped pi/2 would make
         // the vertical speed infinite and the bullet's height NaN.
         assert!(sim.players[0].pitch.tan().is_finite());
+    }
+
+    // ---- the off-hand shield ----
+
+    /// A shooter at the origin firing +x at a defender `dist` away, for
+    /// exactly one round on the first tick. The defender aims along
+    /// `def_aim` and holds the shield iff `shield`. Both are pinned in place
+    /// every tick so only the thing under test varies. Runs `ticks` steps.
+    fn shield_duel(dist: f32, def_aim: [f32; 2], shield: bool, ticks: u32) -> Sim {
+        let mut sim = Sim::new(31);
+        sim.obstacles.clear();
+        sim.pads.clear();
+        sim.add_player(0); // shooter
+        sim.add_player(1); // defender
+        let defender = PlayerIn {
+            aim: def_aim,
+            shield,
+            ..Default::default()
+        };
+        for t in 0..ticks {
+            sim.players.iter_mut().for_each(|p| match p.id {
+                0 if p.alive => p.pos = [0.0, 0.0],
+                1 if p.alive => p.pos = [dist, 0.0],
+                _ => {}
+            });
+            let shooter = PlayerIn {
+                aim: [1.0, 0.0],
+                // One round, on the first tick only: a held trigger would
+                // put several rounds in flight and make "the" reflected
+                // bullet ambiguous.
+                fire: t == 0,
+                ..Default::default()
+            };
+            let mut inputs = HashMap::new();
+            inputs.insert(0, shooter);
+            inputs.insert(1, defender);
+            step_with(&mut sim, &inputs);
+        }
+        sim
+    }
+
+    #[test]
+    fn a_raised_shield_sends_the_round_back() {
+        // The whole feature: a frontal round is not absorbed, it is mirrored
+        // and changes hands. 10 ticks is past the ~7 the round needs to
+        // reach the defender's circle and short of the ~15 by which it is
+        // back at the shooter and consumed, so it is caught mid-return.
+        let sim = shield_duel(5.0, [-1.0, 0.0], true, 10);
+        let b = sim
+            .bullets
+            .first()
+            .expect("a reflected round must still be in flight");
+        assert_eq!(b.owner, 1, "the round belongs to whoever caught it");
+        // Head-on off a shield facing -x: v = (+34, 0) becomes (-34, 0).
+        assert!(
+            b.vel[0] < 0.0,
+            "the round must be travelling back downrange, got {:?}",
+            b.vel
+        );
+        let speed_h = (b.vel[0] * b.vel[0] + b.vel[1] * b.vel[1]).sqrt();
+        assert!(
+            (speed_h - BULLET_SPEED).abs() < 1e-3,
+            "a mirror is an isometry; horizontal speed must survive it, got {speed_h}"
+        );
+        // Level fire, so the reflection must leave the vertical alone.
+        assert_eq!(b.vy, 0.0, "a horizontal normal cannot change vy");
+        let defender = sim.players.iter().find(|p| p.id == 1).unwrap();
+        assert_eq!(
+            defender.hp, MAX_HP,
+            "a reflected round must not also damage the reflector"
+        );
+        assert!(sim.events.is_empty());
+    }
+
+    #[test]
+    fn a_reflected_round_kills_the_shooter_and_credits_the_reflector() {
+        // The round trip: fire, catch, and be killed by your own bullet.
+        let mut sim = Sim::new(31);
+        sim.obstacles.clear();
+        sim.pads.clear();
+        sim.add_player(0);
+        sim.add_player(1);
+        sim.players[0].hp = 1; // one round back is lethal
+        let defender = PlayerIn {
+            aim: [-1.0, 0.0],
+            shield: true,
+            ..Default::default()
+        };
+        let mut killed = false;
+        for t in 0..40 {
+            sim.players.iter_mut().for_each(|p| match p.id {
+                0 if p.alive => p.pos = [0.0, 0.0],
+                1 if p.alive => p.pos = [5.0, 0.0],
+                _ => {}
+            });
+            let mut inputs = HashMap::new();
+            inputs.insert(
+                0,
+                PlayerIn {
+                    aim: [1.0, 0.0],
+                    fire: t == 0,
+                    ..Default::default()
+                },
+            );
+            inputs.insert(1, defender);
+            step_with(&mut sim, &inputs);
+            if !sim.events.is_empty() {
+                killed = true;
+                break;
+            }
+        }
+        assert!(killed, "the reflected round never came home");
+        assert_eq!(
+            sim.events,
+            vec![(1, 0)],
+            "the kill is credited to the reflector, against the shooter"
+        );
+        let reflector = sim.players.iter().find(|p| p.id == 1).unwrap();
+        assert_eq!(reflector.score, 1);
+        assert_eq!(reflector.hp, MAX_HP, "the reflector was never hit");
+        let shooter = sim.players.iter().find(|p| p.id == 0).unwrap();
+        assert!(!shooter.alive);
+        assert_eq!(shooter.death_count, 1);
+        assert_eq!(shooter.score, 0, "shooting yourself is not a frag");
+    }
+
+    #[test]
+    fn the_shield_only_covers_the_arc_it_claims() {
+        // Cover is frontal, so flanking beats it. The defender's aim is
+        // rotated off head-on by theta; the round always arrives along +x,
+        // so the angle between the round's heading and the plate's face is
+        // exactly theta and the boundary sits at SHIELD_ARC / 2.
+        let half = SHIELD_ARC * 0.5;
+        let hp_after = |theta: f32, shield: bool| -> u8 {
+            let (s, c) = theta.sin_cos();
+            let sim = shield_duel(5.0, [-c, s], shield, 20);
+            sim.players.iter().find(|p| p.id == 1).unwrap().hp
+        };
+        // Well inside the arc: caught, no damage.
+        assert_eq!(hp_after(0.0, true), MAX_HP, "head-on must be reflected");
+        assert_eq!(
+            hp_after(half - 0.1, true),
+            MAX_HP,
+            "just inside the arc must be reflected"
+        );
+        // Outside it: the shield is irrelevant and the round damages exactly
+        // as it would with no shield at all.
+        let flanked = hp_after(half + 0.1, true);
+        let bare = hp_after(half + 0.1, false);
+        assert!(
+            flanked < MAX_HP,
+            "a round from outside the arc must still damage"
+        );
+        assert_eq!(
+            flanked, bare,
+            "outside the arc the shield must change nothing"
+        );
+        // A shot in the back, with the defender facing the same way the
+        // round is travelling: the far end of the same rule.
+        let back = hp_after(std::f32::consts::PI, true);
+        assert_eq!(back, bare, "a shot in the back ignores the shield");
+    }
+
+    #[test]
+    fn a_raised_shield_holds_the_trigger() {
+        let mut sim = Sim::new(32);
+        sim.obstacles.clear();
+        sim.pads.clear();
+        sim.add_player(0);
+        let mag = weapon_stats(1).mag;
+        let mut inputs = HashMap::new();
+        inputs.insert(
+            0,
+            PlayerIn {
+                aim: [1.0, 0.0],
+                fire: true,
+                shield: true,
+                ..Default::default()
+            },
+        );
+        for _ in 0..60 {
+            step_with(&mut sim, &inputs);
+            assert!(
+                sim.bullets.is_empty(),
+                "no round may leave a weapon behind a raised shield"
+            );
+        }
+        assert_eq!(
+            sim.players[0].ammo, mag,
+            "a blocked trigger must not spend ammunition either"
+        );
+        // Lowering it restores fire on the very next tick — the cooldown ran
+        // down behind the shield, exactly as it does when the trigger is
+        // simply not pulled.
+        inputs.insert(
+            0,
+            PlayerIn {
+                aim: [1.0, 0.0],
+                fire: true,
+                shield: false,
+                ..Default::default()
+            },
+        );
+        step_with(&mut sim, &inputs);
+        assert_eq!(
+            sim.bullets.len(),
+            1,
+            "releasing the shield must fire on the same tick"
+        );
+        assert_eq!(sim.players[0].ammo, mag - 1);
+    }
+
+    #[test]
+    fn a_raised_shield_cancels_sprint() {
+        // The rule itself, on the shared function both sides call...
+        assert_eq!(stance_speed(true, false, true), stance_speed(false, false, false));
+        assert!(stance_speed(true, false, false) > stance_speed(true, false, true));
+        // ...and crouch still wins over both.
+        assert_eq!(stance_speed(true, true, true), stance_speed(false, true, false));
+
+        // ...and through the sim, where the client's prediction reads it.
+        let run = |shield: bool| -> f32 {
+            let mut sim = Sim::new(33);
+            sim.obstacles.clear();
+            sim.pads.clear();
+            sim.add_player(0);
+            sim.players[0].pos = [-20.0, 0.0];
+            let mut inputs = HashMap::new();
+            inputs.insert(
+                0,
+                PlayerIn {
+                    mv: [1.0, 0.0],
+                    aim: [1.0, 0.0],
+                    sprint: true,
+                    shield,
+                    ..Default::default()
+                },
+            );
+            for _ in 0..60 {
+                step_with(&mut sim, &inputs);
+            }
+            sim.players[0].pos[0] + 20.0
+        };
+        assert!((run(false) - MOVE_SPEED * SPRINT_MULT).abs() < 0.3);
+        assert!((run(true) - MOVE_SPEED).abs() < 0.2);
+    }
+
+    #[test]
+    fn a_corpse_carries_no_shield() {
+        let mut sim = Sim::new(34);
+        sim.obstacles.clear();
+        sim.pads.clear();
+        sim.add_player(0);
+        let mut inputs = HashMap::new();
+        inputs.insert(
+            0,
+            PlayerIn {
+                aim: [1.0, 0.0],
+                shield: true,
+                ..Default::default()
+            },
+        );
+        step_with(&mut sim, &inputs);
+        assert!(sim.players[0].shield, "a live player's Q is honoured");
+        let p = &mut sim.players[0];
+        p.hp = 0;
+        p.alive = false;
+        p.respawn_in = RESPAWN_SECS;
+        step_with(&mut sim, &inputs);
+        assert!(
+            !sim.players[0].shield,
+            "the dead broadcast no shield, whatever they are still holding"
+        );
     }
 
     #[test]

@@ -970,7 +970,7 @@ impl EmberGame for ShooterGame {
             .and_then(|id| self.latest.get(&id))
             .map(|p| p.alive)
             .unwrap_or(false);
-        let speed = stance_speed(sprint, crouch);
+        let speed = stance_speed(sprint, crouch, false);
 
         // Send intents at a fixed cadence (also the keepalive), remembering
         // each command until the server acks it.
