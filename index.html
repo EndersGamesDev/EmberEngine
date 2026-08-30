@@ -72,12 +72,31 @@
     }
     .foot { font-size: 0.8rem; opacity: 0.65; }
     .foot a { color: #6ea8fe; }
+    .headright { display: flex; align-items: center; gap: 10px; }
+    #build {
+      font-size: 0.72rem; color: #7f93b5; font-family: ui-monospace, monospace;
+      background: #0b1830; border: 1px solid #1d3050; border-radius: 999px;
+      padding: 5px 10px; white-space: nowrap;
+    }
+    #build b { color: #f0b429; font-weight: 600; }
+    .badge {
+      font-size: 0.75rem; color: #0b1830; background: #f0b429;
+      border-radius: 999px; padding: 4px 10px; font-weight: 600;
+    }
+    .badge.dim { background: #2a3d5c; color: #9fb4d8; }
+    code {
+      background: #08122a; border: 1px solid #1d3050; border-radius: 4px;
+      padding: 1px 5px; font-size: 0.85em;
+    }
   </style>
 </head>
 <body>
   <header>
-    <h1>ember <span>games</span></h1>
-    <div id="account" title="click to rename">…</div>
+    <h1>ember <span>engine</span></h1>
+    <div class="headright">
+      <div id="build" title="the build this page was published from">build …</div>
+      <div id="account" title="click to rename">…</div>
+    </div>
   </header>
 
   <section>
@@ -88,6 +107,50 @@
   <section>
     <h2>games</h2>
     <div class="cards" id="game-cards"></div>
+  </section>
+
+  <!--
+    Static markup, deliberately NOT rendered through the games loop below.
+    That loop's Play button calls launch(), whose first statement is
+    getAccount(true) — so a card rendered through it would silently mint a
+    multiplayer handle. Opening an engine tool must not create a player
+    account, so this is a plain link outside the loop.
+  -->
+  <section>
+    <h2>engine</h2>
+    <div class="cards">
+      <div class="card">
+        <h3>Level builder</h3>
+        <div class="tag">fly · place · move, rotate, scale · spawn points</div>
+        <div class="desc">
+          Fly a level with the right mouse button held (WASD, Space/Ctrl for
+          height, Shift to boost). Release it and <b>W</b>, <b>E</b>, <b>R</b>
+          switch the gizmo between move, rotate and scale; left click selects.
+          Digit keys arm a shape, <b>Enter</b> places it on the ground under
+          your aim, <b>X</b> deletes. The three world axes are drawn in red,
+          green and blue so you always know which way you are dragging.
+        </div>
+        <div class="playrow">
+          <span class="badge">native only, for now</span>
+        </div>
+        <div class="desc" style="opacity:0.7">
+          The editor runs today as a desktop window:
+          <code>cargo run -p ember-editor --bin ember-editor-app</code>.
+          The browser build is next — the sidebar has to be page HTML,
+          because the engine's debug UI is not compiled for the web at all.
+        </div>
+      </div>
+      <div class="card">
+        <h3>Character inspector</h3>
+        <div class="tag">proportions · gait</div>
+        <div class="desc">
+          Not built yet. The rig already carries ten named segment lengths and
+          a walk/idle/crouch gait, so the first useful version is a
+          proportions-and-gait viewer rather than an animation authoring tool.
+        </div>
+        <div class="playrow"><span class="badge dim">planned</span></div>
+      </div>
+    </div>
   </section>
 
   <details>
@@ -143,6 +206,32 @@
       renderAccount();
     });
     renderAccount();
+
+    // ---- build ticker: which commit this page was published from ----
+    // Written by deploy/stamp-version.sh at publish time. Cache-busted, and
+    // failure-tolerant: an old cached page meeting a missing version.json
+    // shows "unknown" rather than an empty chip, so the ticker never claims
+    // a build it cannot substantiate.
+    (async () => {
+      const el = $('build');
+      try {
+        const r = await fetch(`version.json?ts=${Date.now()}`, { cache: 'no-store' });
+        if (!r.ok) throw new Error(r.status);
+        const v = await r.json();
+        el.innerHTML = '';
+        const b = document.createElement('b');
+        b.textContent = v.version || '?';
+        el.append('build ', b);
+        if (v.commit) el.append(` · ${v.commit}`);
+        el.title = [
+          v.built ? `published ${v.built}` : null,
+          v.commit ? `commit ${v.commit}` : null,
+          v.subject || null,
+        ].filter(Boolean).join('\n');
+      } catch {
+        el.textContent = 'build unknown';
+      }
+    })();
 
     // ---- server discovery (shared key with the game pages) ----
     let serverCfg = {};
