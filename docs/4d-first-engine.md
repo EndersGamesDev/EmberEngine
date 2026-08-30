@@ -88,9 +88,34 @@ When a tilt changes `n`, the new slice basis is obtained by applying the simulat
 
 ### 5.1 Inputs that remain warpable
 
+The adopted presenter warps an already-rendered image from a scene pose toward a later view pose, with rotation-only correction first and depth-aware translation later (`docs/atw-first-rendering.md:73-88`). In a 4D-first engine that remains valid only for the subgroup that preserves the frame's slice hyperplane. The presenter is a 3D image reprojection stage, not a deferred 4D renderer.
+
+|Late change after the slice was built|Presenter action|Truthfulness|
+|---|---|---|
+|Rotation wholly inside the stored hyperplane|Apply the existing 3D rotation homography with the frame's view basis|Exact for the rotation model already adopted, subject to its guard band|
+|Translation wholly inside the stored hyperplane|Apply depth-aware 3D reprojection when that stage exists|Approximate at disocclusions, exactly the limitation already accepted for translation|
+|Projection jitter or presenter-side UI|Update the presenter without touching the slice|Safe while UI remains outside the warped scene image, as adopted (`docs/atw-first-rendering.md:102-104`)|
+|No new world or slice input|Re-present the newest complete frame|Safe; world freshness changes, slice meaning does not|
+
+The group statement is precise: the warpable rotations are the `SO(3)` stabilizer of the oriented normal `n`. A general `SO(4)` delta cannot be encoded as a 3D homography, because the frame contains color and depth only for points already in `H`; it contains no samples from the neighboring `w` positions that a tilted plane would intersect.
+
 ### 5.2 Inputs that force a slice and render
 
+Normal translation, any of the three plane-tilt components, and any simulated body motion that changes a body's intersection with `H` force a re-slice of the affected geometry and a scene render. Depth does not rescue these cases: it reconstructs 3D positions inside the old hyperplane, not geometry outside it. No guard band can contain missing fourth-dimensional samples, because a guard band widens the field of view within one slice.
+
+This is the sharp cost of the design: the adopted claim that a missed scene frame costs world freshness but not mouse-look latency remains true for ordinary within-slice look (`docs/atw-first-rendering.md:56-65`), but it is false for slice tilt and phase motion. Those controls have at least slice-build plus scene-render latency, and when the scene controller runs at 30–40 Hz they update at that cadence unless the engine can afford an additional slice-and-render. Calling a 3D warp “4D ATW” would conceal rather than solve that boundary.
+
+A frame carrying a different slice ID may still be displayed as a stale view, but it may not be warped toward the new hyperplane. The presenter either uses within-slice deltas relative to that frame's own basis or presents it unchanged until a matching slice arrives; it never blends topology between slice IDs. Cross-fading two completed slices is a possible aesthetic transition, not reprojection and not a latency guarantee.
+
+The rejected alternative is to store a thick 4D slab or several neighboring slices in every `SceneFrame` so a late tilt can interpolate between them. A finite slab only postpones the same failure to its edge, multiplies slice, shading, and memory cost on every frame, and still cannot predict topology beyond the sampled planes. If future hardware can ray-cast the authoritative 4D representation at present time, that is a new renderer and may earn a new policy; it is not an extension of the current image warp.
+
 ### 5.3 Consequence for the input latch
+
+The input latch keeps two consumers but narrows the presenter's contract. Its never-reset total and frame-relative mark remain the correct way to prevent starvation and double application (`docs/input-latch.md:50-83`), yet the late read returns only presentation-safe within-slice view deltas. Phase and slice-tilt totals have simulation marks only; consuming them changes authoritative state and therefore cannot be the cosmetic second read whose safety depends on never reaching anything sent, stored, or ticked (`docs/input-latch.md:106-112`).
+
+The proposed `SceneFrame` contract consequently gains `slice_id`, `slice_normal`, `slice_offset`, and `slice_basis` beside its pose, projection, simulation time, sequence, and input mark; the existing proposed contract already requires the rendered pose and its frame-relative input baseline to travel on the frame (`docs/presenter-architecture.md:26-44`, `docs/presenter-architecture.md:62-67`). At warp encode, the presenter verifies that the requested correction preserves the stamped plane before applying it. A failed check is a counted `reslice_required` event and an unchanged presentation, never a best-effort 3D approximation to a 4D tilt.
+
+Input arriving between a scene submission and present therefore has two honest latency classes. Within-slice look may move the displayed view immediately through ATW; phase or tilt waits for the next fixed tick, slice build, and scene completion. The UI should expose that distinction during development, because one “camera latency” number would average together a fast path and a categorically non-warpable path.
 
 ## 6. Physics is four-dimensional
 
