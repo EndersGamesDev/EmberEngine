@@ -110,6 +110,22 @@ The physics content gates are therefore stricter than the visual gates: no uncer
 
 ## 7. The network, wire, prediction, and rollback
 
+A remote position means the same quotient phase as a local position and no particular universal-cover occurrence. The session manifest identifies `A`, `nu`, window and motif data, asset hashes, numeric policy, and generator version; a snapshot carries the body's canonical fractional lattice coordinates plus its already-adopted 4D pose state. A receiver enumerates whichever images enter its own slice, view, or interaction halo, so two peers may legitimately render different lifts of the same body without disagreeing about authority.
+
+The prior proposed pose codec spends 12 position bytes and 13 Spin(4) bytes in its 25-byte 4D pose, with position relative to a sector origin (`docs/4d-first-engine.md:196-206`). The quotient extension keeps that width but replaces the four signed 24-bit sector-relative millimeter values with four unsigned 24-bit fractional coordinates modulo one. Encode `round(2^24 u_i) mod 2^24` after canonicalization, with exact half-quantum ties upward, and decode by division by `2^24`; the circular component error is at most half a quantum, including across zero.
+
+For general `A`, that fractional codec has Euclidean position error at most `norm(A)_2 sqrt(4) / 2^25`, derived by applying the matrix operator norm to four component errors bounded by `1 / 2^25`. A world whose scale makes that exceed its collision or rendering tolerance increases component width; it may not revive sectors or overwrite level-3 state with decoded values. Quaternion continuity and error policy remain those of the adopted codec rather than acquiring a second torus-specific rotation format (`docs/4d-first-engine.md:200-206`).
+
+Interpolation never lerps the two canonical representatives directly. It chooses or receives one image vector `n_01`, interpolates from `q_0` to `q_1 + A n_01` in a local lift, and canonicalizes only the sampled result; an exact face crossing therefore advances continuously. When the maximum snapshot displacement is below half the injectivity radius, deterministic closest-image selection supplies `n_01`; otherwise the sender includes the intended relative image vector because velocity alone cannot disambiguate a multi-wrap interval.
+
+The interpolation image vector is interval-relative state, not a lifetime winding. It is discarded with the snapshot pair, included in interpolation provenance and diagnostics, and never exposed as a map coordinate. At the cut locus the lexicographic rule in section 4 selects one branch, but a movement budget should prevent live snapshots from relying on that visually discontinuous tie.
+
+Prediction applies input in the local leaf basis, advances the canonical quotient phase, and canonicalizes every fixed tick with the same boundary rule as the server. Reconciliation compares the predicted and authoritative states through the authoritative image-selection rule, applies a bounded correction in that local lift, then canonicalizes; subtracting raw representatives would turn a millimeter wrap crossing into a cell-sized error. Correcting a body also transports contact image tags and joint vectors or invalidates their caches before replay.
+
+Rollback state contains canonical poses, velocities and momenta, source-manifest identity, dynamic source mutations, joint image vectors, contact image tags, and every cached impulse that can affect the next tick. Site and collider materializations are reconstructed in stable order from the manifest and current halo rather than snapshotted as an expanding chunk set. Replay hashes include the selected image tag wherever two geometrically equal cut-locus choices could otherwise diverge.
+
+Interest management asks which quotient bodies have at least one image intersecting the recipient's certified 4D interaction or slice halo. It does not ask which unbounded sector contains them, and it sends no permanent chunk address. The query cost is bounded only when body extent, lattice geometry, and halo size have a certified image-count ceiling; exceeding that ceiling rejects the session parameters rather than silently omitting a peer.
+
 ## 8. Consequences for the architecture corpus
 
 ## 9. Honest costs, failure modes, and rejection gates
