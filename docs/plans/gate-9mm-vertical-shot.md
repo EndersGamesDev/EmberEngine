@@ -1,6 +1,39 @@
 # Gate report — branch `9mm-vertical-shot`
 
-## Re-run @ 80aa8b1 — GREEN (current)
+## Run @ facedcf — GREEN (current): `ember-editor` lands
+
+| Check | Result |
+|---|---|
+| `cargo test -p ember-editor` | **18 passed, 0 failed** |
+| `cargo build --workspace --all-targets` | clean — the new member registers |
+| `cargo clippy --workspace --all-targets` | no errors; one cosmetic warning in the crate (see below) |
+| Visual: `ember-editor-app` | axes render **distinctly red/green/blue** |
+
+`the_ray_agrees_with_unprojecting_the_view_projection` **passes**: the
+hand-built basis ray and `camera.view_proj(aspect).inverse()` agree at
+three non-16:9 aspects, so neither is wrong and the later bites can build
+on the basis form. That test gives presenter-architecture.md's oracle O3
+its first consumer.
+
+**The axes were measured, not eyeballed** — brightest pixel per bar, and
+the ratio of its own channel to the next highest:
+
+| Axis | Sampled | Ratio |
+|---|---|---|
+| +X red | rgb(229, 32, 35) | 6.5× |
+| +Y green | rgb(32, 222, 49) | 4.5× |
+| +Z blue | rgb(30, 89, 226) | 2.5× |
+
+The over-drive constant (4.0) is correct. Note for anyone tuning it
+*down*: blue has the least headroom because the scene shader's cool fill
+light (`fill_col` 0.42/0.50/0.68) lifts the green channel of anything
+blue. Below roughly 2.5, re-measure rather than reason.
+
+Outstanding, cosmetic: `crates/ember-editor/src/lib.rs:356` assigns
+fields after `Default::default()` where clippy wants struct-update
+syntax. In a test; author's call.
+
+## Re-run @ 80aa8b1 — GREEN
 
 Re-run rather than carrying the previous green forward: the diff was not
 docs-only, because the branch merged main and brought `rig.rs` with it.
