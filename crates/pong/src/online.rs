@@ -10,7 +10,8 @@ use ember_engine::{Camera, EmberGame, Frame, InputState, Instance, KeyCode, Mous
 use pong_core::proto::{BState, PState, PlayerMeta, C2S, PROTO_VERSION, S2C, STATE_EVERY_TICKS};
 use pong_core::shooter::{
     generate_arena, generate_pads, move_circle, obstacle_height, stance_speed, step_vertical,
-    weapon_name, weapon_stats, Obstacle, EYE_CROUCH, EYE_STAND, MAX_HP, MAX_PITCH, RELOAD_SECS,
+    weapon_name, weapon_stats, Obstacle, EYE_CROUCH, EYE_STAND, FIXED_DT, MAX_HP, MAX_PITCH,
+    RELOAD_SECS,
 };
 use serde::Deserialize;
 
@@ -426,6 +427,10 @@ pub struct ShooterGame {
     pred_y: f32,
     pred_vy: f32,
     own_render: Vec2,
+    /// Smoothed eye height. `pred_y` is the simulation state; this is the
+    /// only thing the camera is allowed to read, so a reconciliation nudge
+    /// arrives as a glide rather than as a jolt.
+    render_y_own: f32,
     was_alive: bool,
     history: VecDeque<Cmd>,
     next_seq: u32,
@@ -501,6 +506,7 @@ impl ShooterGame {
             pred_y: 0.0,
             pred_vy: 0.0,
             own_render: Vec2::ZERO,
+            render_y_own: 0.0,
             was_alive: false,
             history: VecDeque::new(),
             next_seq: 1,
@@ -871,16 +877,30 @@ impl EmberGame for ShooterGame {
                                 self.history.pop_front();
                             }
                             let mut p = [server.x, server.y];
-                            let (mut y, mut vy) = (my.y, self.pred_vy);
+                            // BOTH halves of the vertical state come from the
+                            // server. Seeding vy from our own prediction pairs
+                            // the server's PAST height with our PRESENT speed
+                            // and re-integrates gravity across a window the
+                            // forward prediction has already covered.
+                            let (mut y, mut vy) = (my.y, my.vy);
                             let mut it = self.history.iter().peekable();
                             while let Some(c) = it.next() {
                                 let end = it.peek().map(|n| n.sent_at).unwrap_or(self.time);
                                 let dur = (end - c.sent_at).clamp(0.0, 0.3);
-                                p = move_circle(p, y, c.mv, c.speed, dur, &self.obstacles);
-                                let stepped =
-                                    step_vertical(p, y, vy, c.jump, dur, &self.obstacles);
-                                y = stepped.0;
-                                vy = stepped.1;
+                                // Replay at the server's tick length. Horizontal
+                                // motion is exact under time-splitting; gravity
+                                // is not - one 50 ms step lands 2 cm from three
+                                // 16.7 ms ones, and the error compounds.
+                                let mut left = dur;
+                                while left > 1e-6 {
+                                    let step = left.min(FIXED_DT);
+                                    p = move_circle(p, y, c.mv, c.speed, step, &self.obstacles);
+                                    let stepped =
+                                        step_vertical(p, y, vy, c.jump, step, &self.obstacles);
+                                    y = stepped.0;
+                                    vy = stepped.1;
+                                    left -= step;
+                                }
                             }
                             let rebased = Vec2::new(p[0], p[1]);
                             self.pred_y = y;
@@ -889,6 +909,7 @@ impl EmberGame for ShooterGame {
                                 // Respawn / teleport: snap everything.
                                 self.pred_pos = server;
                                 self.own_render = server;
+                                self.render_y_own = my.y;
                                 self.history.clear();
                                 if newly_alive {
                                     sfx.push((Sfx::Respawn, 0.4));
@@ -1077,6 +1098,10 @@ impl EmberGame for ShooterGame {
         // Tight smoothing absorbs reconciliation nudges without adding lag.
         let k = 1.0 - (-dt * 25.0).exp();
         self.own_render += (self.pred_pos - self.own_render) * k;
+        // The eye height gets exactly what x and z already get. `pred_y`
+        // stays the simulation state - the smoothed value must never feed
+        // back into step_vertical, or the physics chases its own tail.
+        self.render_y_own += (self.pred_y - self.render_y_own) * k;
         if self.since_ping > 4.0 {
             self.since_ping = 0.0;
             self.chan.send(&C2S::Ping { nonce: 1 });
@@ -1125,7 +1150,7 @@ impl EmberGame for ShooterGame {
         let look = Vec3::new(fx * pc, ps, fz * pc);
         // The eye rides the predicted feet height, so jumping and standing
         // on a crate raise the view.
-        let eye = Vec3::new(my_pos.x, self.pred_y + self.eye_h + bob, my_pos.y);
+        let eye = Vec3::new(my_pos.x, self.render_y_own + self.eye_h + bob, my_pos.y);
         let camera = debug_camera().unwrap_or(Camera {
             eye,
             target: eye + look,

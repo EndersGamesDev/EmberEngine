@@ -1541,7 +1541,13 @@ mod tests {
                 airborne_ticks += 1;
             }
         }
-        assert!(peak > 1.0 && peak < 2.0, "jump peak {peak}");
+        // Pinned, not bracketed: the client replays this same function, and
+        // the bug this guards against (reconciling y against a stale vy)
+        // collapsed the arc to 1.393 m - comfortably inside a 1.0..2.0 window.
+        assert!(
+            (peak - 1.686_666_7).abs() < 5e-3,
+            "jump peak {peak}, expected the discrete apex 1.6867"
+        );
         assert!(airborne_ticks > 20, "hang time {airborne_ticks} ticks");
         assert!(y.abs() < 1e-3, "did not land: {y}");
     }

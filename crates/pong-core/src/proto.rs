@@ -25,7 +25,27 @@ use serde::{Deserialize, Serialize};
 /// finite top, and the shield gives a hit a second possible outcome: a shot
 /// that used to land now legitimately comes back. `serde(default)` protects
 /// the wire format, not the meaning of a shot, so this bumps.
-pub const PROTO_VERSION: u16 = 9;
+///
+/// v10: `PState.vy`, the vertical speed at the tick being acked. Position
+/// alone cannot restart a second-order integrator. Without it a client
+/// rebases the jump replay on the server's y paired with its OWN present
+/// velocity, re-integrates gravity across a window forward prediction has
+/// already covered, and collapses its predicted arc from 1.687 m to 1.393 m,
+/// landing ~200 ms early and writing 29-160 cm of camera correction into the
+/// eye thirty times a second.
+///
+/// Additive in the sense the jump bump was: no existing interaction resolves
+/// differently and hit resolution is untouched. It bumps anyway, because the
+/// failure mode of NOT bumping is silent. A cached client that reads a field
+/// its server never sends defaults it to 0.0 and seeds every replay with
+/// zero vertical velocity - worse than the bug being fixed, and invisible.
+/// Being told to reload is the better error.
+///
+/// The general rule, since the same reconciler is one line from repeating
+/// this on any future velocity-carrying state: reconciliation must seed
+/// EVERY integrator input from the authoritative snapshot, not just the
+/// position that snapshot happens to carry.
+pub const PROTO_VERSION: u16 = 10;
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
 pub const MAX_PASSWORD_LEN: usize = 40;
@@ -60,6 +80,11 @@ pub struct PState {
     /// Defaulted, so a pre-jump server simply reports everyone grounded.
     #[serde(default)]
     pub y: f32,
+    /// Vertical speed at the tick this state acks. The client's jump replay
+    /// has to restart gravity from the server's velocity, not from its own;
+    /// defaulted, so a pre-v10 server simply reports everyone at rest.
+    #[serde(default)]
+    pub vy: f32,
     /// HORIZONTAL aim direction (normalized).
     pub ax: f32,
     pub az: f32,
@@ -309,6 +334,7 @@ mod tests {
             x: 1.0,
             z: -2.0,
             y: 0.5,
+            vy: -1.5,
             ax: 0.0,
             az: 1.0,
             pitch: 0.2,

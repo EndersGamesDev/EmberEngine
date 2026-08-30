@@ -410,6 +410,7 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
                             x: p.pos[0],
                             z: p.pos[1],
                             y: p.y,
+                            vy: p.vy,
                             ax: p.aim[0],
                             az: p.aim[1],
                             pitch: p.pitch,
