@@ -35,6 +35,14 @@ Presenter and input work is planned in `docs/presenter-architecture.md` and `doc
 
 - Snapshot interpolation degenerates to snap-to-latest at ≤60 fps; a proper ~100 ms interpolation delay buffer is future work.
 - The arena client connects before the window opens; an unreachable server pauses launch ~4 s before the offline fallback.
-- Do not ship a REBUILT bundle from the new home until pong-server is redeployed: main is PROTO 8, the running server is 7. Page-only edits (index.html, games.json) are safe. The redeploy gates jumping, aim elevation and authored levels.
+- Do not ship a REBUILT bundle from the new home until pong-server is redeployed: main is PROTO 9, the running server is 7. Page-only edits (index.html, games.json) are safe. The redeploy gates jumping, aim elevation, authored levels and the Q shield. The gap widened rather than opened — the freeze already stood at 8 vs 7 — and the shield rides the same window rather than needing its own.
 - Level is produced but never consumed: Sim still takes a seed and nothing reads a Level off the wire (bite 12).
 - Web editor picking: aspect()/cursor_ndc() measure winit inner_size while the wasm surface is sized from canvas.client_width()*dpr. Latent today (only the native-only editor reads them); must be measured at three window sizes and fixed WITH the web shell, not before.
+
+## From the Q shield (lane/q-shield-reflect)
+
+- The shield has never been SEEN. Both draws (first-person swing, third-person plate) were reasoned from the viewmodel's own numbers and reviewed by reading; nobody with a display and a v9 server has looked at them. Sizes, offsets and which hand it lands in are the first thing to check when one exists.
+- A reflected round changes owner, which the client's audio diff reads as the reflector having fired: it plays a remote-shot cue on a reflection, and can raise a false hitmarker for the original shooter (their bullet count dropped while someone else lost hp). Both are cosmetic; a reflect cue of its own would fix them properly and needs a new `Sfx` variant.
+- Reflected rounds count against the reflector's `MAX_BULLETS_PER_PLAYER`, so catching ten inside 1.6 s briefly caps their own fire. Deliberate (see the comment at the constant); telling caught rounds from fired ones needs a flag on `Bullet`.
+- The shield is judged in the present while the body hit test is lag-compensated, so a shot rewound onto a target's old position can be reflected off empty air where they no longer stand. Same family as every other lag-comp artefact, but newly visible because the round survives to show it.
+- `cargo fmt --all -- --check` is not green on main: 13 files across ember-editor, ember-engine, ember-server, game and pong disagree with rustfmt, mostly compact one-line asserts the house style prefers. Either adopt the compact form in rustfmt.toml or format the tree once; today the check cannot be a gate.

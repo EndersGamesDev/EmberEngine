@@ -1347,9 +1347,13 @@ impl EmberGame for ShooterGame {
                 let left = Vec2::new(aim.y, -aim.x);
                 push_shield(
                     &mut frame,
-                    Vec3::new(pos.x, feet_y + hand_y + 0.18, pos.y)
-                        + Vec3::new(aim.x, 0.0, aim.y) * 0.34
-                        + Vec3::new(left.x, 0.0, left.y) * 0.30,
+                    // Reaching as far forward as the gun hand does (0.55),
+                    // and for the same reason: the body box is 1.0 across,
+                    // so anything held closer than 0.5 is held INSIDE the
+                    // torso and the plate's face never shows.
+                    Vec3::new(pos.x, feet_y + hand_y + 0.20, pos.y)
+                        + Vec3::new(aim.x, 0.0, aim.y) * 0.52
+                        + Vec3::new(left.x, 0.0, left.y) * 0.34,
                     Quat::from_rotation_y(-aim.y.atan2(aim.x)),
                     SHIELD_PLATE,
                     fc * 0.85,
