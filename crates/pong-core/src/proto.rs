@@ -45,7 +45,26 @@ use serde::{Deserialize, Serialize};
 /// this on any future velocity-carrying state: reconciliation must seed
 /// EVERY integrator input from the authoritative snapshot, not just the
 /// position that snapshot happens to carry.
-pub const PROTO_VERSION: u16 = 10;
+/// v11: `PState.ack_age_ticks`, plus `Input.jump` becomes a PRESS rather
+/// than a held key.
+///
+/// The age lets a client place the state on its own clock. `ack` said WHICH
+/// command the server last had, never how long it had been integrating it,
+/// so the replay window was guessed from the send cadence and was 0-50 ms
+/// wrong - up to 46 cm of vertical position at take-off speed, alternating
+/// sign through a jump because vy does.
+///
+/// The press is a meaning change, which is what makes this a bump rather
+/// than an additive field. The server re-applies the last input every tick,
+/// so a held `jump: true` re-launched the player on every grounded tick:
+/// land on a crate with Space down and you launched again from 1.5 m, apex
+/// 3.19 m, clearing the 2.4 m containers that are supposed to be hard cover.
+/// The client now latches the rising edge (which also stops a sub-50 ms tap
+/// falling between two sends) and the server consumes it after one tick.
+/// Note what that is and is not: a contract about what the flag means, not an
+/// enforcement. A client that sets it in every packet still gets one launch
+/// per packet - so does this repo's own wsbot unless its jump mode pulses.
+pub const PROTO_VERSION: u16 = 11;
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
 pub const MAX_PASSWORD_LEN: usize = 40;
@@ -116,6 +135,11 @@ pub struct PState {
     /// client rebases its movement prediction on it.
     #[serde(default)]
     pub ack: u32,
+    /// How many ticks the server has been applying that acked command. With
+    /// it (and the round trip it lets the client solve for) the replay can
+    /// start at the instant this state describes instead of at a guess.
+    #[serde(default)]
+    pub ack_age_ticks: u16,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
@@ -183,7 +207,11 @@ pub enum C2S {
         crouch: bool,
         #[serde(default)]
         reload: bool,
-        /// Space. Defaulted so an older client simply never jumps.
+        /// A Space PRESS, not the held key: true means "the player pressed
+        /// jump since my last input", and the sim consumes it on one tick.
+        /// Held-key semantics re-launched the player on every grounded tick,
+        /// because the server keeps applying the last input it received.
+        /// Defaulted so an older client simply never jumps.
         #[serde(default)]
         jump: bool,
         /// Q, held. Defaulted so an older client simply never raises one —
@@ -348,11 +376,13 @@ mod tests {
             reloading: false,
             deaths: 1,
             ack: 42,
+            ack_age_ticks: 7,
         };
         let s = serde_json::to_string(&p).unwrap();
         assert!(s.contains("\"shield\":true"), "{s}");
         let back: PState = serde_json::from_str(&s).unwrap();
         assert!(back.shield);
+        assert_eq!(back.ack_age_ticks, 7, "the ack age has to survive the codec");
 
         // And both fields decode from a frame that predates them: this is
         // what `serde(default)` buys, and it is the whole of what it buys —

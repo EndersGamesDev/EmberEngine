@@ -431,6 +431,23 @@ pub struct ShooterGame {
     /// only thing the camera is allowed to read, so a reconciliation nudge
     /// arrives as a glide rather than as a jolt.
     render_y_own: f32,
+    /// Space last frame, and a press held until the next send frame. Sampling
+    /// the held key at 20 Hz lost any tap shorter than the send interval.
+    prev_space: bool,
+    jump_pending: bool,
+    /// The same press the server will get, held until prediction spends it.
+    /// Predicting on the raw frame edge instead let the local view and the
+    /// server disagree about whether a press near a landing happened at all.
+    /// Note what this is NOT: jump buffering. The spend test is "vy rose",
+    /// and a landing raises vy to zero, so a press made in the air is eaten
+    /// by the touchdown rather than carried across it - which matches the
+    /// server, since it consumes the flag after one tick and buffers nothing.
+    pred_jump: bool,
+    /// When the last state was drained, and a smoothed estimate of the gap
+    /// between states. Interpolating on the nominal 33.3 ms froze remotes on
+    /// every long gap and ran them fast after every short one.
+    last_state_at: f32,
+    state_interval: f32,
     was_alive: bool,
     history: VecDeque<Cmd>,
     next_seq: u32,
@@ -507,6 +524,11 @@ impl ShooterGame {
             pred_vy: 0.0,
             own_render: Vec2::ZERO,
             render_y_own: 0.0,
+            prev_space: false,
+            jump_pending: false,
+            pred_jump: false,
+            last_state_at: 0.0,
+            state_interval: 1.0 / 30.0,
             was_alive: false,
             history: VecDeque::new(),
             next_seq: 1,
@@ -664,6 +686,10 @@ impl EmberGame for ShooterGame {
             drained.push(msg);
         }
         let suppress_sfx = drained.len() > 6;
+        // The arrival-gap estimate must see at most one sample per frame:
+        // self.time advances once per frame, so every extra state drained in
+        // the same frame reads as a 0 ms gap and would collapse the estimate.
+        let mut sampled_gap = false;
         for msg in drained {
             match msg {
                 S2C::Welcome { .. } => set_status("connected…"),
@@ -856,6 +882,16 @@ impl EmberGame for ShooterGame {
                         })
                         .collect();
                     self.latest = players.into_iter().map(|p| (p.id, p)).collect();
+                    // States do not arrive on the nominal 33.3 ms grid - the
+                    // server flushes between reads and the tunnel adds jitter,
+                    // so measured gaps run 21-53 ms. Track what is actually
+                    // happening instead of assuming.
+                    if self.last_state_at > 0.0 && !sampled_gap {
+                        let gap = (self.time - self.last_state_at).clamp(0.008, 0.200);
+                        self.state_interval += (gap - self.state_interval) * 0.15;
+                    }
+                    sampled_gap = true;
+                    self.last_state_at = self.time;
                     self.t = 0.0;
                     // Bullet heights now arrive from the server with the rest
                     // of the bullet. What stood here was a local guess —
@@ -873,9 +909,22 @@ impl EmberGame for ShooterGame {
                         let newly_alive = my.alive && !self.was_alive;
                         self.was_alive = my.alive;
                         if my.alive {
-                            while self.history.front().is_some_and(|c| c.seq <= my.ack) {
+                            // KEEP the acked command: the instant this state
+                            // describes sits inside its window, at
+                            // sent_at + however long the server has been
+                            // applying it, and its tail after that point is
+                            // ours to replay. Deriving the cursor from a
+                            // command we then dropped made it available on
+                            // only two states in three, so the replay window
+                            // flipped between two lengths at 30 Hz.
+                            while self.history.front().is_some_and(|c| c.seq < my.ack) {
                                 self.history.pop_front();
                             }
+                            let state_at = self
+                                .history
+                                .front()
+                                .filter(|c| c.seq == my.ack)
+                                .map(|c| c.sent_at + my.ack_age_ticks as f32 * FIXED_DT);
                             let mut p = [server.x, server.y];
                             // BOTH halves of the vertical state come from the
                             // server. Seeding vy from our own prediction pairs
@@ -886,7 +935,25 @@ impl EmberGame for ShooterGame {
                             let mut it = self.history.iter().peekable();
                             while let Some(c) = it.next() {
                                 let end = it.peek().map(|n| n.sent_at).unwrap_or(self.time);
-                                let dur = (end - c.sent_at).clamp(0.0, 0.3);
+                                // Replay only what the server has not seen
+                                // yet: the slice of this command after the
+                                // instant the state describes.
+                                let start = state_at.map_or(c.sent_at, |s| c.sent_at.max(s));
+                                let dur = (end - start).clamp(0.0, 0.3);
+                                // A press launches on one step, exactly as the
+                                // server consumes it on one tick - and the
+                                // acked command's press is already IN the
+                                // state we are rebasing on, so replaying it
+                                // would launch the same jump twice.
+                                let mut press = c.jump && c.seq != my.ack;
+                                // An input event must never be deleted by
+                                // arithmetic: if the slice trims to nothing,
+                                // still give the press one tick to happen in.
+                                let dur = if press && dur < FIXED_DT {
+                                    FIXED_DT
+                                } else {
+                                    dur
+                                };
                                 // Replay at the server's tick length. Horizontal
                                 // motion is exact under time-splitting; gravity
                                 // is not - one 50 ms step lands 2 cm from three
@@ -896,7 +963,8 @@ impl EmberGame for ShooterGame {
                                     let step = left.min(FIXED_DT);
                                     p = move_circle(p, y, c.mv, c.speed, step, &self.obstacles);
                                     let stepped =
-                                        step_vertical(p, y, vy, c.jump, step, &self.obstacles);
+                                        step_vertical(p, y, vy, press, step, &self.obstacles);
+                                    press = false;
                                     y = stepped.0;
                                     vy = stepped.1;
                                     left -= step;
@@ -1004,7 +1072,14 @@ impl EmberGame for ShooterGame {
         }
         let moving = mv.length_squared() > 0.01;
         let fire = input.mouse_down(MouseButton::Left);
-        let jump = input.down(KeyCode::Space);
+        // A jump is a press, latched until the next send frame: sampling the
+        // held key at 20 Hz dropped taps shorter than 50 ms outright, and a
+        // held key re-launched the player off every surface they touched.
+        let space = input.down(KeyCode::Space);
+        let jump = space && !self.prev_space;
+        self.prev_space = space;
+        self.jump_pending |= jump;
+        self.pred_jump |= jump;
 
         // Walk bob (cosmetic, client-side only).
         if moving {
@@ -1039,12 +1114,19 @@ impl EmberGame for ShooterGame {
             self.since_input = 0.0;
             let seq = self.next_seq;
             self.next_seq = self.next_seq.wrapping_add(1);
+            // Whether a press happened anywhere in this send window, not
+            // whether the key happens to be down on this exact frame.
+            let jump_press = if me_alive {
+                std::mem::take(&mut self.jump_pending)
+            } else {
+                false
+            };
             if me_alive {
                 self.history.push_back(Cmd {
                     seq,
                     mv: [mv.x, mv.y],
                     speed,
-                    jump,
+                    jump: jump_press,
                     sent_at: self.time,
                 });
                 if self.history.len() > 64 {
@@ -1070,7 +1152,7 @@ impl EmberGame for ShooterGame {
                 sprint,
                 crouch,
                 reload: input.down(KeyCode::KeyR),
-                jump,
+                jump: jump_press,
                 // Sent raw: the trigger gate lives in the sim, so `fire` is
                 // reported honestly even while Q is down and the server is
                 // the only thing that decides a round did not leave.
@@ -1091,7 +1173,12 @@ impl EmberGame for ShooterGame {
             );
             self.pred_pos = Vec2::new(p[0], p[1]);
             let (y, vy, _grounded) =
-                step_vertical(p, self.pred_y, self.pred_vy, jump, dt, &self.obstacles);
+                step_vertical(p, self.pred_y, self.pred_vy, self.pred_jump, dt, &self.obstacles);
+            // A launch is the only thing that can raise vy, so that is the
+            // press being spent - exactly the one shot the server gets.
+            if vy > self.pred_vy {
+                self.pred_jump = false;
+            }
             self.pred_y = y;
             self.pred_vy = vy;
         }
@@ -1128,7 +1215,11 @@ impl EmberGame for ShooterGame {
             self.score_shown = false;
         }
 
-        self.t += dt * (60.0 / STATE_EVERY_TICKS as f32);
+        // Pace interpolation off the measured gap, with a 15% margin so a
+        // slightly late state finds us still short of the target rather than
+        // parked on it. Reaching 1.0 early is a dead stop on screen, and the
+        // clamp used to do that for 15% of wall-clock time.
+        self.t = (self.t + dt / (self.state_interval * 1.15).max(1e-3)).min(1.0);
 
         // Shot-feel timers and impact particles.
         self.hitmarker_t = (self.hitmarker_t - dt).max(0.0);

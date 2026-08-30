@@ -7,7 +7,11 @@
 //!
 //! MODES is an optional comma-separated list that switches on the parts of
 //! the protocol the default spray never touches: `shield` holds Q, `jump`
-//! holds Space, `nofire` keeps the trigger up. Two bots, one plain and one
+//! presses Space about once a second, `nofire` keeps the trigger up.
+//!
+//! `jump` PULSES deliberately. Since v11 the flag is a press the sim consumes
+//! on one tick, so a bot that held it set would re-launch off every surface
+//! it touched and make a broken build look fine. Two bots, one plain and one
 //! `shield,nofire`, are enough to watch a round get reflected - which the
 //! default bot can never do, because it never raises the plate.
 
@@ -120,7 +124,8 @@ fn main() {
                     sprint: (t as u64).is_multiple_of(3),
                     crouch: false,
                     reload: false,
-                    jump,
+                    // A press, not a level - see the module docs.
+                    jump: jump && ((t * 20.0) as u32).is_multiple_of(24),
                     shield,
                 },
             );

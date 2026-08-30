@@ -122,8 +122,9 @@ struct Lobby {
     members: Vec<u64>,
     /// conn id -> in-game player id
     pids: HashMap<u64, u8>,
-    /// pid -> (held intent, its client sequence number, client view tick).
-    inputs: HashMap<u8, (PlayerIn, u32, u64)>,
+    /// pid -> (latest intent, its client sequence number, the client view
+    /// tick it claims, and the sim tick it arrived on).
+    inputs: HashMap<u8, (PlayerIn, u32, u64, u64)>,
 }
 
 /// Smallest player id not held by a current member (never collides, unlike
@@ -251,9 +252,15 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: Sender<Ev>) {
         }
     };
     handshake_done.store(true, Ordering::Relaxed);
+    // This thread owns the socket, so the outbound queue is only drained
+    // between reads - a 20 ms timeout meant a broadcast state sat up to 20 ms
+    // before it hit the wire, and states measurably arrived 21-53 ms apart
+    // instead of the sim's clean 33.3. 5 ms cuts that smear by four at 200
+    // idle wake-ups a second per connection, which is nothing next to the
+    // 60 Hz sim it is feeding.
     let _ = ws
         .get_ref()
-        .set_read_timeout(Some(Duration::from_millis(20)));
+        .set_read_timeout(Some(Duration::from_millis(5)));
 
     let (tx, rx) = mpsc::sync_channel::<Message>(OUTBOUND_QUEUE);
     if events_tx
@@ -382,7 +389,7 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
             lobby.sim.step(&|pid| {
                 inputs
                     .get(&pid)
-                    .map(|(i, _, view_tick)| {
+                    .map(|(i, _, view_tick, _)| {
                         let mut i = *i;
                         i.delay_ticks =
                             apply_tick.saturating_sub(*view_tick).min(u16::MAX as u64) as u16;
@@ -390,6 +397,13 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
                     })
                     .unwrap_or_default()
             });
+            // A jump is a press, and this is where it is consumed. The last
+            // input is re-applied every tick, so leaving the flag set makes a
+            // held Space re-launch on every grounded tick - which is how you
+            // bunny-hopped off a crate top onto a container.
+            for (i, ..) in lobby.inputs.values_mut() {
+                i.jump = false;
+            }
 
             for &(killer, victim) in &lobby.sim.events {
                 if let Ok(text) = serde_json::to_string(&S2C::Kill { killer, victim }) {
@@ -423,7 +437,19 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
                             ammo: p.ammo,
                             reloading: p.reload_t > 0.0,
                             deaths: p.death_count,
-                            ack: lobby.inputs.get(&p.id).map(|(_, s, _)| *s).unwrap_or(0),
+                            ack: lobby.inputs.get(&p.id).map(|(_, s, _, _)| *s).unwrap_or(0),
+                            ack_age_ticks: lobby
+                                .inputs
+                                .get(&p.id)
+                                .map(|(_, _, _, recv_tick)| {
+                                    lobby
+                                        .sim
+                                        .tick
+                                        .saturating_sub(*recv_tick)
+                                        .min(u16::MAX as u64)
+                                        as u16
+                                })
+                                .unwrap_or(0),
                         })
                         .collect(),
                     bullets: lobby
@@ -841,6 +867,13 @@ fn handle_event(
                     // cannot claim a free 300 ms rewind.
                     let allowed_delay = rtt_ticks / 2 + 6;
                     let floor = lobby.sim.tick.saturating_sub(allowed_delay);
+                    // A press is an event, not a level. Two input frames can
+                    // land in the same inter-tick window - the hub drains
+                    // every queued event before it steps - and a plain
+                    // overwrite would destroy the earlier one's jump before
+                    // the sim ever saw it. Merge; the post-step clear still
+                    // makes it fire exactly once.
+                    let jump = jump || lobby.inputs.get(&pid).is_some_and(|(i, ..)| i.jump);
                     lobby.inputs.insert(
                         pid,
                         (
@@ -858,6 +891,7 @@ fn handle_event(
                             },
                             seq,
                             view_tick.clamp(floor, lobby.sim.tick),
+                            lobby.sim.tick,
                         ),
                     );
                 }

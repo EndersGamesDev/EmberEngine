@@ -335,3 +335,173 @@ fn an_airborne_state_carries_the_velocity_that_made_it() {
         "airborne at y={y} with vy={vy}: the state dropped the velocity"
     );
 }
+
+/// Jump is a press the sim consumes once, not a held key it re-applies. The
+/// server keeps re-running the last input it received every tick, so a set
+/// jump flag used to re-launch the player off every surface they landed on -
+/// including a crate top, from which the second launch clears the containers
+/// that are supposed to be unreachable hard cover.
+#[test]
+fn one_jump_press_launches_once_and_does_not_bunny_hop() {
+    let port = start_server();
+    let mut host = connect(port, "hopper");
+    send(
+        &mut host,
+        &C2S::CreateLobby {
+            name: "hop-once".into(),
+            password: None,
+        },
+    );
+    let me = recv_until(&mut host, 5, |m| match m {
+        S2C::GameJoined { id, .. } => Some(id),
+        _ => None,
+    });
+
+    // Exactly one input, with the press set. Nothing is sent afterwards, so
+    // anything that happens next is the server re-applying what it holds.
+    send(
+        &mut host,
+        &C2S::Input {
+            seq: 1,
+            view_tick: 0,
+            mx: 0.0,
+            my: 0.0,
+            ax: 1.0,
+            az: 0.0,
+            pitch: 0.0,
+            fire: false,
+            sprint: false,
+            crouch: false,
+            reload: false,
+            jump: true,
+            shield: false,
+        },
+    );
+
+    let y_of = |m: S2C, me: u8| match m {
+        S2C::State { players, .. } => players.iter().find(|p| p.id == me).map(|p| p.y),
+        _ => None,
+    };
+    // The one press must actually leave the ground.
+    let peak = recv_until(&mut host, 5, |m| y_of(m, me).filter(|y| *y > 0.5));
+    assert!(peak > 0.5, "the press never launched: {peak}");
+
+    // Then land, and stay landed. A full arc is ~0.7 s; watch twice that.
+    let mut landed = false;
+    let deadline = Instant::now() + Duration::from_millis(1600);
+    while Instant::now() < deadline {
+        if let Some(y) = y_of(recv(&mut host), me) {
+            if landed {
+                assert!(y < 0.2, "re-launched without a new press: y={y}");
+            } else if y < 0.05 {
+                landed = true;
+            }
+        }
+    }
+    assert!(landed, "never came back down");
+}
+
+/// The state has to say how long the server has been applying the command it
+/// acks, or the client cannot place the state on its own clock and guesses
+/// the replay window from its send cadence instead.
+#[test]
+fn a_state_reports_how_long_the_acked_command_has_been_applied() {
+    let port = start_server();
+    let mut host = connect(port, "acker");
+    send(
+        &mut host,
+        &C2S::CreateLobby {
+            name: "ack-age".into(),
+            password: None,
+        },
+    );
+    let me = recv_until(&mut host, 5, |m| match m {
+        S2C::GameJoined { id, .. } => Some(id),
+        _ => None,
+    });
+    send(
+        &mut host,
+        &C2S::Input {
+            seq: 9,
+            view_tick: 0,
+            mx: 1.0,
+            my: 0.0,
+            ax: 1.0,
+            az: 0.0,
+            pitch: 0.0,
+            fire: false,
+            sprint: false,
+            crouch: false,
+            reload: false,
+            jump: false,
+            shield: false,
+        },
+    );
+
+    // Nothing else is sent, so the age of seq 9 must climb tick by tick.
+    let mut ages = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while ages.len() < 4 && Instant::now() < deadline {
+        if let S2C::State { players, .. } = recv(&mut host) {
+            if let Some(p) = players.iter().find(|p| p.id == me && p.ack == 9) {
+                ages.push(p.ack_age_ticks);
+            }
+        }
+    }
+    assert!(ages.len() >= 4, "not enough states carrying the ack: {ages:?}");
+    assert!(
+        ages.windows(2).all(|w| w[1] > w[0]),
+        "ack_age_ticks did not advance: {ages:?}"
+    );
+}
+
+/// A press is an event, so it has to survive being overtaken. Two input
+/// frames can land in the same inter-tick window - the hub drains every
+/// queued event before it steps - and storing the second on top of the first
+/// used to destroy the press before the sim ever ran. Under the old held-key
+/// meaning that was free, because the next packet still carried the key down.
+#[test]
+fn a_press_survives_a_second_input_in_the_same_tick() {
+    let port = start_server();
+    let mut host = connect(port, "coalesced");
+    send(
+        &mut host,
+        &C2S::CreateLobby {
+            name: "coalesce".into(),
+            password: None,
+        },
+    );
+    let me = recv_until(&mut host, 5, |m| match m {
+        S2C::GameJoined { id, .. } => Some(id),
+        _ => None,
+    });
+
+    let input = |seq: u32, jump: bool| C2S::Input {
+        seq,
+        view_tick: 0,
+        mx: 0.0,
+        my: 0.0,
+        ax: 1.0,
+        az: 0.0,
+        pitch: 0.0,
+        fire: false,
+        sprint: false,
+        crouch: false,
+        reload: false,
+        jump,
+        shield: false,
+    };
+    // Back to back, deliberately with no sleep: the press and the packet that
+    // overtakes it reach the hub inside one 16.7 ms window.
+    send(&mut host, &input(1, true));
+    send(&mut host, &input(2, false));
+
+    let y = recv_until(&mut host, 5, |m| match m {
+        S2C::State { players, .. } => players
+            .iter()
+            .find(|p| p.id == me && p.y > 0.5)
+            .map(|p| p.y),
+        _ => None,
+    });
+    assert!(y > 0.5, "the press was overwritten before the sim saw it: {y}");
+}
