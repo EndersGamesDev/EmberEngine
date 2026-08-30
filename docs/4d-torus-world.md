@@ -92,6 +92,22 @@ The far plane remains a renderer bound, not a world boundary. Distant atmosphere
 
 ## 6. Physics and constraints in the quotient
 
+Physics remains four-dimensional and consumes source authority, never the rendered placement. Each ordinary site couples its acceptance interval to a 4D product collider whose section throughout the interval is the intact 3D collider in `E`; local materialization supplies the relevant lattice image and stable source class to broad phase before rendering. Explicit phase actors retain arbitrary 4D solids and the full contact model already adopted (`docs/4d-first-engine.md:120-168`).
+
+Broad phase tests a canonical dynamic body against every lattice image of another body or site whose bounds overlap the interaction halo. When body extents are below the quotient injectivity budget, only the minimum-image displacement can collide; otherwise more than one image may be relevant and the engine must enumerate them rather than pretend the nearest is unique. Every pair key includes the lattice image offset, so contacts on opposite images cannot share a warm-start impulse.
+
+A body can collide with its own image. For body support `K`, the cooker checks `K intersect (K + A n)` for every nonzero image offset whose bounds can overlap; the simple sufficient sphere rule is `2R < min_{n != 0} norm(A n)`. Dynamic rotation can violate a tighter shape-specific certificate even when translation cannot, so unsupported orientations are constrained or the asset is rejected; solving an overlap as an ordinary two-body contact would apply both impulses to one rigid body and conceal that its quotient shape is not embedded.
+
+Minimum-image selection is deterministic but discontinuous on the cut locus. An ordinary contact crossing that locus ends under its old image-tagged identity and begins under the new one, with no warm-start carryover; a size budget should keep actual penetration away from this ambiguity. A placed collider uses its enumerated cut-and-project lift rather than an unrelated closest source image, because selection and physical projection are part of that collider's authority.
+
+A joint is different from a contact because it remembers a route. If canonical endpoints are `q_a` and `q_b`, it stores an oriented image vector `n_ab` and evaluates `d = q_b + A n_ab - q_a`; it never recomputes `n_ab` from the current minimum image after creation. If canonicalization subtracts face vectors `k_a` and `k_b` from the two endpoints during a tick, update `n_ab` to `n_ab - k_a + k_b`, preserving the same lifted displacement exactly.
+
+Constraint islands must lift `(body_id,image_offset)` nodes, not union only canonical body IDs. A chain can cross a face and meet another image of itself, and an oriented cycle has winding `w` equal to the sum of its joint image vectors; `w != 0` is a noncontractible loop whose universal-cover endpoints differ by `A w`. Such a loop cannot shrink to a point, and a chain with total available length below `norm(A w)` has no solution, so creation and topology-changing edits must reject it before the iterative solver responds with unbounded bias or impulses.
+
+Contacts can also transmit a chain of force around the quotient and return to an earlier canonical body through a different image. Island construction retains that lifted cycle, contact reduction orders by body, feature, and image tag, and rollback restores those tags with cached impulses. The fixed iteration and stable ordering rules already required for 4D constraints remain unchanged; the quotient adds image identity and topological consistency to their deterministic key (`docs/4d-first-engine.md:158-168`).
+
+The physics content gates are therefore stricter than the visual gates: no uncertified self-overlap, no pair with more relevant images than the solver budget, no placed-product overlap that creates ambiguous ownership, no joint without an explicit image vector, and no closed constraint graph whose winding and available length are inconsistent. Failing one rejects the asset or world parameters rather than silently disabling collision at a wrap.
+
 ## 7. The network, wire, prediction, and rollback
 
 ## 8. Consequences for the architecture corpus
