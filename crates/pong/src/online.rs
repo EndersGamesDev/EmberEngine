@@ -1676,7 +1676,7 @@ mod net {
     use std::collections::VecDeque;
     use std::rc::Rc;
 
-    use pong_core::proto::{C2S, S2C};
+    use pong_core::proto::{C2S, CLIENT_PING_SECS, S2C};
     use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsCast;
 
@@ -1689,6 +1689,9 @@ mod net {
         pending: Rc<RefCell<Vec<String>>>,
         _callbacks: Vec<Closure<dyn FnMut(web_sys::Event)>>,
         _on_msg: Closure<dyn FnMut(web_sys::MessageEvent)>,
+        /// Handle of the keepalive timer, so it dies with the channel.
+        keepalive_id: Option<i32>,
+        _keepalive: Option<Closure<dyn FnMut()>>,
     }
 
     impl NetChan {
@@ -1742,6 +1745,32 @@ mod net {
                 callbacks.push(cb);
             }
 
+            // The keepalive runs on a timer, NOT on the frame loop. The game
+            // pings from its update step, and a hidden browser tab gets no
+            // requestAnimationFrame at all - so a backgrounded player went
+            // completely silent and the server dropped them, closing their
+            // lobby with them. Timers keep running when frames stop.
+            let ping = serde_json::to_string(&C2S::Ping { nonce: 1 }).unwrap_or_default();
+            let mut keepalive = None;
+            let mut keepalive_id = None;
+            if let Some(win) = web_sys::window() {
+                let ws2 = ws.clone();
+                let open2 = Rc::clone(&open);
+                let dead2 = Rc::clone(&dead);
+                let cb = Closure::<dyn FnMut()>::new(move || {
+                    if open2.get() && !dead2.get() && ws2.send_with_str(&ping).is_err() {
+                        dead2.set(true);
+                    }
+                });
+                keepalive_id = win
+                    .set_interval_with_callback_and_timeout_and_arguments_0(
+                        cb.as_ref().unchecked_ref(),
+                        (CLIENT_PING_SECS as i32) * 1000,
+                    )
+                    .ok();
+                keepalive = Some(cb);
+            }
+
             Ok(NetChan {
                 ws,
                 inbox,
@@ -1750,6 +1779,8 @@ mod net {
                 pending,
                 _callbacks: callbacks,
                 _on_msg: on_msg,
+                keepalive_id,
+                _keepalive: keepalive,
             })
         }
 
@@ -1772,6 +1803,14 @@ mod net {
 
         pub fn is_dead(&self) -> bool {
             self.dead.get()
+        }
+    }
+
+    impl Drop for NetChan {
+        fn drop(&mut self) {
+            if let (Some(win), Some(id)) = (web_sys::window(), self.keepalive_id) {
+                win.clear_interval_with_handle(id);
+            }
         }
     }
 }
