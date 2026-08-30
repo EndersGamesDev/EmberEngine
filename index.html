@@ -167,7 +167,10 @@
       const r = await fetch(`games.json?ts=${Date.now()}`, { cache: 'no-store' });
       if (r.ok) catalog = await r.json();
     } catch {}
-    let arenaLivePath = 'games/arena/v7/';
+    // Fallback for a failed games.json fetch. Must track the live version:
+    // an older build speaks an older PROTO_VERSION, and the server refuses
+    // a lobby on anything but an exact match.
+    let arenaLivePath = 'games/arena/v10/';
     for (const g of catalog.games) {
       if (g.id === 'arena') {
         const live = g.versions.find((v) => v.live) || g.versions[0];
