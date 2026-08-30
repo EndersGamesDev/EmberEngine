@@ -133,26 +133,53 @@ pub const CONTAINER_MIN_H: f32 = 2.4;
 /// their feet; anything taller is a wall to them.
 pub const STEP_UP: f32 = 0.35;
 
-/// Axis-aligned obstacle on the XZ plane.
+/// Axis-aligned obstacle on the XZ plane, with a top.
+///
+/// `h` used to be derived on demand by hashing `min` — which meant a box
+/// could not *state* how tall it was, and an authored one had no way into
+/// the sim. It is now carried. Seeded arenas fill it with exactly the old
+/// hash, so nothing observable changed when it moved.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Obstacle {
     pub min: [f32; 2],
     pub max: [f32; 2],
+    /// Top of the box; the floor is 0.
+    pub h: f32,
 }
 
-/// Height of a cover box, derived from its own coordinates so the server,
-/// every client's collision, and the renderer agree without sending it.
+impl Obstacle {
+    /// A box at seeded-arena proportions: the height the generator would
+    /// have derived for this footprint.
+    pub fn seeded(min: [f32; 2], max: [f32; 2]) -> Self {
+        Self {
+            min,
+            max,
+            h: seeded_height(min),
+        }
+    }
+}
+
+/// Height a seeded arena gives a box at this corner.
 ///
 /// Roughly three in five are crates low enough to jump onto and fight from;
-/// the rest are shipping containers that stay hard cover.
-pub fn obstacle_height(o: &Obstacle) -> f32 {
-    let k = (o.min[0] * 12.9898 + o.min[1] * 78.233).sin() * 43758.547;
+/// the rest are shipping containers that stay hard cover. Kept as the
+/// generator's own rule rather than a property of every obstacle: an
+/// authored box sets `h` directly and never consults this.
+pub fn seeded_height(min: [f32; 2]) -> f32 {
+    let k = (min[0] * 12.9898 + min[1] * 78.233).sin() * 43758.547;
     let f = k - k.floor();
     if f < 0.6 {
         CRATE_MIN_H + (f / 0.6) * (CRATE_MAX_H - CRATE_MIN_H)
     } else {
         CONTAINER_MIN_H + ((f - 0.6) / 0.4) * 0.8
     }
+}
+
+/// Height of a cover box. Now simply what the box says it is — kept as a
+/// function because the sim, the renderer and the editor all read heights
+/// through it.
+pub fn obstacle_height(o: &Obstacle) -> f32 {
+    o.h
 }
 
 /// The surface a player at `pos` stands on: the tallest box top they
@@ -197,10 +224,10 @@ pub fn generate_arena(seed: u64) -> Vec<Obstacle> {
         let cz = angle.sin() * radius;
         let hx = 0.8 + rand01() * 1.7;
         let hz = 0.8 + rand01() * 1.7;
-        obstacles.push(Obstacle {
-            min: [cx - hx, cz - hz],
-            max: [cx + hx, cz + hz],
-        });
+        obstacles.push(Obstacle::seeded(
+            [cx - hx, cz - hz],
+            [cx + hx, cz + hz],
+        ));
     }
     obstacles
 }
@@ -208,6 +235,47 @@ pub fn generate_arena(seed: u64) -> Vec<Obstacle> {
 fn spawn_point(slot: u32) -> [f32; 2] {
     let angle = slot as f32 * 2.399963; // golden angle: spread out
     [angle.cos() * SPAWN_RING_R, angle.sin() * SPAWN_RING_R]
+}
+
+/// A whole arena as data: what the editor authors, and what the sim will
+/// eventually be handed instead of a seed.
+///
+/// Today every peer regenerates the world from the lobby seed and this
+/// type is only ever *produced* — `Sim` still takes a seed and nothing
+/// reads a `Level` off the wire. That is deliberate: the format lands, is
+/// proved identical to the generator, and the protocol change that
+/// delivers it is a separate step behind a server redeploy.
+///
+/// Spawns are carried rather than derived because an authored arena
+/// decides where players start; a seeded one reproduces the golden-angle
+/// ring the sim has always used.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Level {
+    pub arena_half: f32,
+    pub obstacles: Vec<Obstacle>,
+    pub spawns: Vec<[f32; 2]>,
+}
+
+impl Level {
+    /// The arena a seed has always produced — same obstacles, same
+    /// heights, same spawn ring.
+    pub fn from_seed(seed: u64) -> Self {
+        Self {
+            arena_half: ARENA_HALF,
+            obstacles: generate_arena(seed),
+            spawns: (0..MAX_PLAYERS as u32).map(spawn_point).collect(),
+        }
+    }
+
+    /// Where player `slot` starts, wrapping if an authored level supplies
+    /// fewer spawns than players. Falls back to the seeded ring when a
+    /// level carries none, so a half-authored level still runs.
+    pub fn spawn(&self, slot: u32) -> [f32; 2] {
+        if self.spawns.is_empty() {
+            return spawn_point(slot);
+        }
+        self.spawns[slot as usize % self.spawns.len()]
+    }
 }
 
 /// Weapon-upgrade pad positions: seeded and shared, like the arena itself.
@@ -1258,12 +1326,90 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_seeded_level_is_exactly_the_arena_the_generator_made() {
+        // The whole point of bite 6: `Level` carries heights and spawns as
+        // data, and for a seed it must reproduce the world every peer
+        // already generates — bit for bit, or a client and the server
+        // would disagree about where cover is.
+        for seed in 0..256u64 {
+            let level = Level::from_seed(seed);
+            let generated = generate_arena(seed);
+            assert_eq!(
+                level.obstacles, generated,
+                "seed {seed}: level obstacles diverge from generate_arena"
+            );
+            assert_eq!(level.arena_half, ARENA_HALF);
+            for o in &level.obstacles {
+                // The height rule as it stood BEFORE `h` moved onto
+                // Obstacle, with its constants written out here rather than
+                // shared with the code under test — otherwise a later edit
+                // to the generator could quietly redefine "unchanged".
+                let k = (o.min[0] * 12.9898 + o.min[1] * 78.233).sin() * 43758.547;
+                let f = k - k.floor();
+                let want = if f < 0.6 {
+                    0.9 + (f / 0.6) * (1.5 - 0.9)
+                } else {
+                    2.4 + ((f - 0.6) / 0.4) * 0.8
+                };
+                assert!(
+                    (o.h - want).abs() < 1e-6,
+                    "seed {seed}: carried h {} != derived {want}",
+                    o.h
+                );
+                assert!(
+                    (obstacle_height(o) - o.h).abs() < f32::EPSILON,
+                    "obstacle_height must now just read the field"
+                );
+            }
+            // Spawns reproduce the golden-angle ring, and the fallback
+            // agrees with the carried list.
+            assert_eq!(level.spawns.len(), MAX_PLAYERS);
+            for slot in 0..MAX_PLAYERS as u32 {
+                assert_eq!(level.spawn(slot), spawn_point(slot), "seed {seed} slot {slot}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_authored_box_keeps_the_height_it_was_given() {
+        // The reason `h` moved at all: a box must be able to state its own
+        // height instead of having one hashed out of its position.
+        let authored = Obstacle {
+            min: [3.0, 3.0],
+            max: [5.0, 5.0],
+            h: 7.25,
+        };
+        assert_eq!(obstacle_height(&authored), 7.25);
+        // And it is honoured by the physics, not just stored: a player at
+        // floor level is blocked by it, and its top supports them.
+        let obs = vec![authored];
+        assert_eq!(support_height([4.0, 4.0], PLAYER_R, &obs), 7.25);
+        let walked = move_circle([1.0, 4.0], 0.0, [1.0, 0.0], MOVE_SPEED, 0.5, &obs);
+        assert!(walked[0] < 3.0, "authored height did not block: {walked:?}");
+    }
+
+    #[test]
+    fn a_level_with_no_spawns_still_starts_players() {
+        let level = Level {
+            arena_half: ARENA_HALF,
+            obstacles: Vec::new(),
+            spawns: Vec::new(),
+        };
+        assert_eq!(level.spawn(3), spawn_point(3));
+        // A short authored list wraps rather than panicking.
+        let two = Level {
+            arena_half: ARENA_HALF,
+            obstacles: Vec::new(),
+            spawns: vec![[1.0, 2.0], [3.0, 4.0]],
+        };
+        assert_eq!(two.spawn(0), [1.0, 2.0]);
+        assert_eq!(two.spawn(5), [3.0, 4.0]);
+    }
+
     /// One waist-high crate at the origin, and nothing else.
     fn one_box() -> Vec<Obstacle> {
-        vec![Obstacle {
-            min: [-1.5, -1.5],
-            max: [1.5, 1.5],
-        }]
+        vec![Obstacle::seeded([-1.5, -1.5], [1.5, 1.5])]
     }
 
     #[test]
@@ -1503,10 +1649,7 @@ mod tests {
         let container = (0..400)
             .map(|i| {
                 let x = 3.0 + i as f32 * 0.013;
-                Obstacle {
-                    min: [x, -2.0],
-                    max: [x + 1.0, 2.0],
-                }
+                Obstacle::seeded([x, -2.0], [x + 1.0, 2.0])
             })
             .find(|o| obstacle_height(o) >= CONTAINER_MIN_H)
             .expect("some placement must yield a container");

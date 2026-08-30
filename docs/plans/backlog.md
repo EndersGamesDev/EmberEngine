@@ -36,3 +36,4 @@ Presenter and input work is planned in `docs/presenter-architecture.md` and `doc
 - Snapshot interpolation degenerates to snap-to-latest at ≤60 fps; a proper ~100 ms interpolation delay buffer is future work.
 - The arena client connects before the window opens; an unreachable server pauses launch ~4 s before the offline fallback.
 - Do not ship a REBUILT bundle from the new home until pong-server is redeployed: main is PROTO 8, the running server is 7. Page-only edits (index.html, games.json) are safe. The redeploy gates jumping, aim elevation and authored levels.
+- Level is produced but never consumed: Sim still takes a seed and nothing reads a Level off the wire (bite 12).
