@@ -32,7 +32,7 @@ An authored two-component UV is not enough to parameterize a three-dimensional b
 
 ## 3. The slice operation
 
-### 3.1 Exact cell-to-tetrahedra algorithm
+### 3.1 Exact boundary-cell algorithm
 
 Let the oriented viewing hyperplane be `H = { p | dot(n, p - o) = 0 }`, with unit 4-vector normal `n`, origin point `o`, and an orthonormal world-from-slice basis `B = [b0 b1 b2]` whose columns span `H`. The slicer's input is the exterior tetrahedral boundary, not the volume fill; intersecting one boundary tetrahedron with `H` yields the triangle or quadrilateral surface patch that the 3D rasterizer needs.
 
@@ -71,6 +71,18 @@ Material ID, crease group, collision class, and other discrete attributes do not
 Texture continuity is therefore a property of the cooked 3D boundary coordinates, not of the transient cut polygon. Two adjacent cells that share topological corners share their interpolants through the edge cache; a deliberate chart or material seam duplicates attributes at that topology while retaining the same geometric edge point.
 
 ## 4. Position and orientation of the viewing hyperplane
+
+An oriented affine 3-hyperplane has four degrees of freedom: a unit normal `n ∈ S^3` contributes three and the signed offset `h = dot(n,o)` contributes one. Translating the eye within the hyperplane changes the 3D camera position but not the set of world points in the slice; rotating the camera within the hyperplane changes the 3D view but not the slice. Those ordinary three translational and three rotational camera freedoms sit on top of, rather than inside, the hyperplane's four freedoms.
+
+The engine represents a complete 4D view frame by a position `o ∈ R^4` and `R ∈ SO(4)`, with the first three columns spanning the visible hyperplane and the fourth column its oriented normal. The slice artifact stores the `n`, `h`, stable slice basis, source simulation tick, and monotonically increasing slice ID with which it was built. A later view may move and rotate within that stored basis without changing its geometry; a change to `n` or `h` invalidates the artifact.
+
+The player controls both kinds of freedom, but through different input classes. Ordinary locomotion supplies a three-vector in the current slice and ordinary look supplies an `SO(3)` rotation within it. A dedicated phase input changes `h` by moving along `n`, and a dedicated three-component slice-tilt input rotates `n` toward each of the three current basis directions; phase and tilt are gameplay inputs sampled only by the fixed-step simulation, never cosmetic presenter inputs.
+
+This mapping is deliberately not “the mouse controls an arbitrary `SO(4)` rotation.” Mouse yaw and pitch remain comprehensible in the visible 3D world and remain eligible for low-latency presentation correction; slice tilt is slower, explicit, and allowed to reveal, merge, or remove geometry. Games may constrain any of the three tilt components or the phase range, but the engine representation does not collapse them.
+
+A relative 4D rotation lies in the six-dimensional `SO(4)`. Its three generators wholly within the current hyperplane form the `SO(3)` stabilizer of `n` and only change the 3D camera; its other three generators rotate a basis direction with `n` and therefore change which world points satisfy the slice equation. The pipeline tests that distinction geometrically: `n_new = n_old` and `h_new = h_old` permits slice reuse, while any other result re-queries the 4D BVH, rebuilds affected cut geometry, and renders a new `SceneFrame`.
+
+When a tilt changes `n`, the new slice basis is obtained by applying the simulated 4D orientation delta to the old basis and re-orthonormalizing, not by choosing three fresh arbitrary perpendicular vectors. That parallel transport prevents a small slice tilt from causing a large, unrelated roll of the visible 3D coordinate frame; the slice ID still changes because the hyperplane changed.
 
 ## 5. The hard limit of asynchronous timewarp
 
