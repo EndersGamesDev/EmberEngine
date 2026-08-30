@@ -58,6 +58,20 @@ The player therefore gets an everywhere-continuing, nonperiodic arrangement with
 
 ## 4. Coordinates without a privileged origin
 
+A position is an equivalence class `[p]` in `T`, serialized through one deterministic representative rather than promoted to an absolute lift. Compute lattice coordinates `u = inverse(A) p`, reduce each component with `frac(u_i) = u_i - floor(u_i)`, and store `q = A frac(u)` in the half-open fundamental parallelotope `F = A[0,1)^4`. An exact positive or negative integer component becomes zero, so the upper face always belongs to the neighboring lower face; authoritative fixed-point lattice coordinates or exact boundary predicates must decide this before conversion to rendering floats.
+
+The representative is not an origin. Translating every quotient phase by the same amount and reducing again is a gauge change with identical observations, and no game rule, noise function, biome, spawn table, or network shard may branch on proximity to `q = 0` or to a face of `F`. The cell faces may appear in diagnostics only.
+
+For quotient distance between canonical points `q_a` and `q_b`, choose the lattice image `n_star` minimizing `norm(q_b + A n - q_a)` over integer `n`. If several images tie, minimize `(squared_distance,n_0,n_1,n_2,n_3)` lexicographically using the authoritative numeric representation; that makes the result antisymmetric except at an unavoidable exact cut-locus tie, where both query order and image tag are part of the contact key. For an orthogonal lattice this reduces each displacement coefficient to `[-1/2,1/2)` by subtracting `floor(r_i + 1/2)`, so an exact half-cell chooses the negative representative; a skew lattice requires a bounded closest-vector search and may not use componentwise rounding.
+
+Three distances remain deliberately distinct. Quotient geodesic distance uses the minimum image for genuine 4D bodies; a rendered or placed instance uses the particular enumerated lift whose projection lies in the frustum or interaction region; route length is a scalar accumulated from local locomotion increments for telemetry or UI. The last cannot reconstruct a location, and intrinsic displacement along the dense leaf is not recovered from two canonical endpoints: distant travel can bring their quotient phases arbitrarily close.
+
+Locomotion by physical leaf increment `e in E` updates `q` to `canonical(q + e)` and returns the integer face-crossing vector only to consumers that must transport a relation through that tick. The body stores the new canonical `q`, never `q + A w` with a lifetime winding counter `w`. A camera-centered local chart and its bounded candidate image tags may be rebuilt at any time from `q`, the source cell, and the frustum.
+
+Relational winding is allowed because topology sometimes makes it physical. A joint records which image of body `b` was connected to body `a` as an integer four-vector beside the two canonical body IDs; a path loop may likewise record its homotopy class. These are edge properties, not absolute positions, and rebasing either endpoint updates them algebraically so the represented displacement stays unchanged.
+
+The forbidden state is an ever-growing universal-cover coordinate for a player, source site, chunk, landmark, or network sector. It would install a hidden origin, make equivalent quotient histories serialize differently, eventually exhaust a fixed wire width, and let gameplay locate a wrap by inspecting history. Bounded local charts, canonical quotient phases, pairwise image tags, and explicitly requested traveled-distance counters cover the valid use cases without preserving such an absolute.
+
 ## 5. Rendering a bounded endless view
 
 ## 6. Physics and constraints in the quotient
