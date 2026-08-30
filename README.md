@@ -1,6 +1,6 @@
 # ember
 
-https://enderpeer.github.io/ember/
+https://endersgamesdev.github.io/EmberEngine/
 #Ender build this with ai 
 
 ## Design pillars
@@ -136,7 +136,7 @@ unreachable server makes launch pause ~4 s before the offline fallback.
 
 ## Games hub
 
-**<https://enderpeer.github.io/ember/>** is a games hub: an active-lobby
+**<https://endersgamesdev.github.io/EmberEngine/>** is a games hub: an active-lobby
 showcase loads first (jump into any running game), below it the catalog from
 `games.json` — every game with a version picker where the newest build is
 always the "live" one and old builds stay playable from frozen
@@ -149,7 +149,7 @@ create/join.
 
 ## Pong
 
-**Play: <https://enderpeer.github.io/ember/>** — local (2 players, one
+**Play: <https://endersgamesdev.github.io/EmberEngine/>** — local (2 players, one
 keyboard: `A`/`D` vs `←`/`→`, first to 7) or **online matchmaking**: pick a
 handle, create a lobby (password optional) or join an open one from the
 list. The match server is authoritative (the shared deterministic 60 Hz sim
