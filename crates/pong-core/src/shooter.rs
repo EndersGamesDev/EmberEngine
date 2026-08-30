@@ -139,7 +139,7 @@ pub const STEP_UP: f32 = 0.35;
 /// could not *state* how tall it was, and an authored one had no way into
 /// the sim. It is now carried. Seeded arenas fill it with exactly the old
 /// hash, so nothing observable changed when it moved.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Obstacle {
     pub min: [f32; 2],
     pub max: [f32; 2],
@@ -249,7 +249,7 @@ fn spawn_point(slot: u32) -> [f32; 2] {
 /// Spawns are carried rather than derived because an authored arena
 /// decides where players start; a seeded one reproduces the golden-angle
 /// ring the sim has always used.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Level {
     pub arena_half: f32,
     pub obstacles: Vec<Obstacle>,

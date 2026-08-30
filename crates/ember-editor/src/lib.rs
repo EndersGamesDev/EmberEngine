@@ -19,6 +19,7 @@
 
 pub mod drag;
 pub mod gizmo;
+pub mod level;
 pub mod palette;
 pub mod pick;
 
@@ -445,36 +446,27 @@ impl Editor {
 
 /// Something to look at on first run, and something to aim the picker at
 /// before a palette exists.
+/// The scene the editor opens on: a real arena the shooter would play,
+/// not a hand-arranged approximation of one.
+///
+/// `EMBER_EDITOR_SEED` picks which; the default is the seed the arena has
+/// always demoed with. Loading a `Level` rather than inventing boxes means
+/// the blank page is already a level you can fly through, export, and get
+/// back byte-identical.
 fn starter_scene() -> Vec<Obj> {
-    let mut out = Vec::new();
-    let grey = Vec3::new(0.42, 0.45, 0.50);
-    let warm = Vec3::new(0.55, 0.42, 0.30);
-    for (i, (x, z)) in [
-        (-8.0, -8.0),
-        (0.0, -10.0),
-        (8.0, -8.0),
-        (-10.0, 0.0),
-        (10.0, 0.0),
-        (-8.0, 8.0),
-        (0.0, 10.0),
-        (8.0, 8.0),
-    ]
-    .into_iter()
-    .enumerate()
+    level::from_level(&pong_core::shooter::Level::from_seed(starter_seed()))
+}
+
+fn starter_seed() -> u64 {
+    #[cfg(not(target_arch = "wasm32"))]
     {
-        // Alternating crate and container heights, matching the two cover
-        // classes the shooter already has, so the editor's default scene
-        // looks like the game it authors for.
-        let h = if i % 3 == 0 { 2.6 } else { 1.2 };
-        out.push(Obj {
-            pos: Vec3::new(x, h * 0.5, z),
-            scale: Vec3::new(2.2, h, 2.2),
-            yaw: 0.0,
-            color: if i % 3 == 0 { warm } else { grey },
-            class: palette::Class::Object,
-        });
+        if let Ok(s) = std::env::var("EMBER_EDITOR_SEED") {
+            if let Ok(v) = s.parse() {
+                return v;
+            }
+        }
     }
-    out
+    7
 }
 
 impl EmberGame for Editor {
@@ -576,7 +568,14 @@ impl EmberGame for Editor {
             let o = &mut self.objects[i];
             o.pos = x.pos;
             o.scale = x.scale;
-            o.yaw = x.yaw;
+            // Collidable boxes snap to quarter turns AS THEY ROTATE, not at
+            // save: `Obstacle` is an AABB and only a quarter turn survives
+            // export, so a free angle on screen would be a rotation the
+            // editor cannot keep. Spawns are points and rotate freely.
+            o.yaw = match o.class {
+                palette::Class::Object => level::snap_yaw(x.yaw),
+                palette::Class::Spawn => x.yaw,
+            };
         }
         // While dragging, the grabbed handle stays lit even if the cursor
         // wanders off it — the drag is still going, so the highlight would
@@ -758,10 +757,18 @@ mod tests {
         let mut ed = Editor::new();
         let f = frame_of(&mut ed);
         assert!(ed.selected.is_none());
-        // Grid + 3 axes + the starter objects, and no cage or gizmo.
+        // Grid + 3 axes + one instance per object + one pad per spawn, and
+        // no cage or gizmo. The spawn pads are drawn AFTER the objects and
+        // are deliberately not pickable, so they are counted separately
+        // here rather than folded into the object count.
+        let spawns = ed
+            .objects
+            .iter()
+            .filter(|o| o.class == palette::Class::Spawn)
+            .count();
         assert_eq!(
             f.instances.len(),
-            grid_instances().len() + 3 + ed.objects.len(),
+            grid_instances().len() + 3 + ed.objects.len() + spawns,
             "an unselected scene must not draw a cage or a gizmo"
         );
     }
