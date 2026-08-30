@@ -1,6 +1,7 @@
 //! Online arena shooter client: renders the server-authoritative match and
 //! aims with relative mouse deltas under pointer lock (yaw plus a pitch the
-//! server now honours), carrying the cyberpunk sidearm.
+//! server now honours), carrying the cyberpunk sidearm in one hand and a
+//! shield in the other.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -320,6 +321,32 @@ const GUNMETAL_DARK: Vec3 = Vec3::new(0.11, 0.11, 0.13);
 const BRONZE: Vec3 = Vec3::new(0.46, 0.32, 0.21);
 const GLOW_BLUE: Vec3 = Vec3::new(0.20, 0.65, 1.00);
 
+/// The off-hand shield plate: thin along the direction it faces, taller than
+/// it is wide. Model space is +X forward, matching the pistol, so the same
+/// yaw that points a weapon downrange turns this plate's face there too.
+const SHIELD_PLATE: Vec3 = Vec3::new(0.09, 0.54, 0.46);
+
+/// Draw a raised shield: a plate facing `yaw`, with a brighter boss just
+/// proud of its face so it reads as an object rather than a flat rectangle.
+/// Opaque, because the scene pass is `BlendState::REPLACE` and there is no
+/// transparent anything to be had — a shield you can see through is not an
+/// option here, it is a different renderer.
+fn push_shield(frame: &mut Frame, center: Vec3, rot: Quat, plate: Vec3, color: Vec3) {
+    frame
+        .instances
+        .push(Instance::new(center, plate, color).with_rot(rot));
+    // The boss sits forward along the plate's own +X, so it moves with the
+    // rotation instead of needing its own trigonometry.
+    frame.instances.push(
+        Instance::new(
+            center + rot * Vec3::new(plate.x * 0.6, 0.0, 0.0),
+            Vec3::new(plate.x * 0.7, plate.y * 0.30, plate.z * 0.30),
+            color * 0.45 + GLOW_BLUE * 0.35,
+        )
+        .with_rot(rot),
+    );
+}
+
 /// Cube-fallback pistol: held at `hand`, pointing along `aim`.
 /// Local space is +X forward; each part is rotated by the shared yaw.
 fn push_gun(frame: &mut Frame, hand: Vec3, aim: Vec2, accent: Vec3) {
@@ -409,6 +436,10 @@ pub struct ShooterGame {
     pads_active: Vec<bool>,
     /// ADS: 0 = hip, 1 = fully zoomed (RMB).
     zoom: f32,
+    /// Eased 0..1 raise of MY own shield. Driven by local input rather than
+    /// by the acked state, like the bob and the zoom: it is cosmetic, and
+    /// the sim is still the only thing that reflects a round.
+    shield_raise: f32,
     /// Local time when my current reload started (drives the viewmodel dip).
     reload_started: Option<f32>,
     /// Local time of my last AUTHORITATIVE shot — the server-confirmed
@@ -479,6 +510,7 @@ impl ShooterGame {
             pads_pos: Vec::new(),
             pads_active: Vec::new(),
             zoom: 0.0,
+            shield_raise: 0.0,
             reload_started: None,
             shot_started: None,
             since_score_ui: 1.0,
@@ -647,7 +679,7 @@ impl EmberGame for ShooterGame {
                         self.metas.insert(m.id, m);
                     }
                     status_event = Some(
-                        "in the arena — click to capture mouse · WASD move · Shift sprint · C crouch · click fire".into(),
+                        "in the arena — click to capture mouse · WASD move · Shift sprint · C crouch · Q shield (reflects!) · click fire".into(),
                     );
                 }
                 S2C::PlayerJoined { meta } => {
@@ -939,6 +971,8 @@ impl EmberGame for ShooterGame {
         // Held, like every other intent: there is no local toggle state that
         // a dropped input packet could leave disagreeing with the server.
         let shield = input.down(KeyCode::KeyQ);
+        self.shield_raise +=
+            ((if shield { 1.0 } else { 0.0 }) - self.shield_raise) * (1.0 - (-dt * 16.0).exp());
         let target_eye = if crouch { EYE_CROUCH } else { EYE_STAND };
         self.eye_h += (target_eye - self.eye_h) * (1.0 - (-dt * 12.0).exp());
 
@@ -1302,6 +1336,25 @@ impl EmberGame for ShooterGame {
             let hand =
                 Vec3::new(pos.x, feet_y + hand_y, pos.y) + Vec3::new(aim.x, 0.0, aim.y) * 0.55;
             let accent = weapon_accent(p.weapon);
+            // The off-hand shield, on the side the pistol is not. The plate
+            // is yawed only: a shield is carried upright whatever its owner
+            // is looking at, and tilting it with pitch would swing its face
+            // off the arc the sim actually protects.
+            if p.shield {
+                // Perpendicular to the aim in world XZ, matching the camera
+                // right the first-person pose uses — so both views put the
+                // shield on the same side of the body.
+                let left = Vec2::new(aim.y, -aim.x);
+                push_shield(
+                    &mut frame,
+                    Vec3::new(pos.x, feet_y + hand_y + 0.18, pos.y)
+                        + Vec3::new(aim.x, 0.0, aim.y) * 0.34
+                        + Vec3::new(left.x, 0.0, left.y) * 0.30,
+                    Quat::from_rotation_y(-aim.y.atan2(aim.x)),
+                    SHIELD_PLATE,
+                    fc * 0.85,
+                );
+            }
             if let Some(a) = &self.assets {
                 let yaw = -aim.y.atan2(aim.x);
                 // Remote weapons tilt with the owner's real aim elevation,
@@ -1465,6 +1518,32 @@ impl EmberGame for ShooterGame {
             // Aim dot floating on the sight line (occluded by walls,
             // which reads like a laser sight).
             inst(&mut frame, eye + look * 4.0, Vec3::splat(0.05), accent);
+
+            // ---- the off-hand shield, in the hand the pistol is not ----
+            // Drawn last so it is the newest instance, though the scene pass
+            // is depth-tested and the order does not decide what wins.
+            //
+            // Lowered it hangs below the frame; raised it swings up and in,
+            // taking a real bite out of the left of the view. That cost is
+            // the point: the sim charges you your trigger and your sprint
+            // for this, and it should be as obvious on screen as it is in
+            // the rules. Distance from the eye is well past the 0.1 near
+            // plane at both ends of the swing.
+            if self.shield_raise > 0.01 {
+                let k = self.shield_raise;
+                let lerp = |lo: f32, hi: f32| lo + (hi - lo) * k;
+                let center = eye
+                    + look * lerp(0.62, 0.74)
+                    - right3 * lerp(0.36, 0.26)
+                    + Vec3::Y * (lerp(-0.66, -0.09) + bob * 0.4);
+                push_shield(
+                    &mut frame,
+                    center,
+                    weapon_rot(yaw, self.pitch),
+                    SHIELD_PLATE * lerp(0.9, 1.0),
+                    GUNMETAL * 1.6 + accent * 0.10,
+                );
+            }
         }
 
         frame
