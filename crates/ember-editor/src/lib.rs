@@ -17,6 +17,7 @@
 //! release it and W/E/R select the translate/rotate/scale mode while LMB
 //! picks. One branch, no chord, and no mode that can be entered by accident.
 
+pub mod drag;
 pub mod gizmo;
 pub mod pick;
 
@@ -260,10 +261,34 @@ pub struct Editor {
     /// rather than stored across frames, so it cannot go stale against a
     /// camera that moved.
     pub hovered: Option<gizmo::Axis>,
+    /// The drag in progress, if a handle is being held.
+    pub drag: Option<drag::Drag>,
     lmb: gizmo::Edge,
     key_w: gizmo::Edge,
     key_e: gizmo::Edge,
     key_r: gizmo::Edge,
+}
+
+/// Optional startup selection, read once from `EMBER_EDITOR_SELECT`.
+///
+/// This exists for verification, not for users. Z-fighting is a flicker, so
+/// checking the selection cage means capturing several frames of a STATIC
+/// scene and diffing them — which needs the cage on screen deterministically,
+/// with no synthetic mouse in the loop. A gate that cannot reach a state
+/// cannot report on it, and without this the honest gate outcome for the
+/// cage is "unverified".
+#[cfg(not(target_arch = "wasm32"))]
+fn startup_selection() -> Option<usize> {
+    std::env::var("EMBER_EDITOR_SELECT")
+        .ok()?
+        .trim()
+        .parse::<usize>()
+        .ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn startup_selection() -> Option<usize> {
+    None
 }
 
 impl Default for Editor {
@@ -274,17 +299,33 @@ impl Default for Editor {
 
 impl Editor {
     pub fn new() -> Self {
+        let objects = starter_scene();
+        // Out-of-range is dropped rather than clamped: silently selecting a
+        // different object than the one asked for would make a verification
+        // hook lie about what it put on screen.
+        let selected = startup_selection().filter(|&i| i < objects.len());
         Self {
             cam: FlyCam::default(),
-            objects: starter_scene(),
-            selected: None,
+            objects,
+            selected,
             mode: gizmo::Mode::default(),
             hovered: None,
+            drag: None,
             lmb: gizmo::Edge::default(),
             key_w: gizmo::Edge::default(),
             key_e: gizmo::Edge::default(),
             key_r: gizmo::Edge::default(),
         }
+    }
+
+    /// The selected object's transform, for a drag to anchor against.
+    fn selected_xform(&self) -> Option<drag::Xform> {
+        let o = self.objects.get(self.selected?)?;
+        Some(drag::Xform {
+            pos: o.pos,
+            scale: o.scale,
+            yaw: o.yaw,
+        })
     }
 
     /// The ray under the cursor this frame, if the cursor is over the window.
@@ -375,19 +416,56 @@ impl EmberGame for Editor {
             _ => None,
         };
 
-        let clicked = self.lmb.pressed(input.mouse_down(MouseButton::Left));
+        let held_before = self.lmb.is_down();
+        let lmb = input.mouse_down(MouseButton::Left);
+        let clicked = self.lmb.pressed(lmb);
+        let released = held_before && !lmb;
+
+        if released {
+            self.drag = None;
+        }
         if clicked && !flying {
-            // A click on a handle is the start of a drag (bite 4), not a
-            // change of selection — otherwise grabbing the gizmo would
-            // deselect the thing it belongs to.
-            if self.hovered.is_none() {
-                self.selected = match ray {
-                    Some((org, dir)) => {
-                        pick::pick_nearest(org, dir, &self.object_instances()).map(|(i, _)| i)
-                    }
-                    None => self.selected,
-                };
+            // A click on a handle STARTS A DRAG rather than changing the
+            // selection — otherwise grabbing the gizmo would deselect the
+            // thing the gizmo belongs to.
+            match (self.hovered, self.selected_xform(), ray) {
+                (Some(axis), Some(start), Some((org, dir))) => {
+                    // `begin` returns None for a handle this data model
+                    // cannot honour (see drag.rs on rotation) or one seen too
+                    // nearly edge-on to solve. Either way: no drag, and the
+                    // selection is left alone.
+                    self.drag = drag::Drag::begin(axis, self.mode, start, org, dir);
+                }
+                _ => {
+                    self.selected = match ray {
+                        Some((org, dir)) => {
+                            pick::pick_nearest(org, dir, &self.object_instances()).map(|(i, _)| i)
+                        }
+                        None => self.selected,
+                    };
+                }
             }
+        }
+
+        // Apply the drag. Borrow of `self.drag` is finished before the
+        // objects are touched, so the two disjoint fields never overlap.
+        let dragged = match (self.drag.as_mut(), ray) {
+            (Some(d), Some((org, dir))) => d.update(org, dir),
+            // A ray that has swung to where the solve is meaningless holds
+            // the last good transform rather than snapping anywhere.
+            _ => None,
+        };
+        if let (Some(x), Some(i)) = (dragged, self.selected) {
+            let o = &mut self.objects[i];
+            o.pos = x.pos;
+            o.scale = x.scale;
+            o.yaw = x.yaw;
+        }
+        // While dragging, the grabbed handle stays lit even if the cursor
+        // wanders off it — the drag is still going, so the highlight would
+        // otherwise contradict what the object is doing.
+        if let Some(d) = self.drag.as_ref() {
+            self.hovered = Some(d.axis);
         }
 
         let mut instances = grid_instances();
@@ -618,5 +696,64 @@ mod tests {
                 inst.position
             );
         }
+    }
+
+    #[test]
+    fn a_startup_selection_out_of_range_is_dropped_not_clamped() {
+        // The hook exists so a gate can put a known state on screen. Clamping
+        // would have it quietly show a different object than the one asked
+        // for, which makes the hook lie about what it rendered.
+        let ed = Editor::new();
+        let n = ed.objects.len();
+        assert!(ed.selected.is_none_or(|i| i < n));
+    }
+
+    #[test]
+    fn grabbing_a_handle_does_not_change_the_selection() {
+        // The regression this guards: treating a gizmo click as a pick
+        // deselects the object the moment you try to move it.
+        let mut ed = Editor::new();
+        ed.selected = Some(2);
+        ed.hovered = Some(gizmo::Axis::X);
+        let before = ed.selected;
+        let _ = frame_of(&mut ed);
+        assert_eq!(ed.selected, before);
+    }
+
+    #[test]
+    fn a_drag_moves_the_object_it_was_started_on() {
+        // End-to-end over bite 4: begin a translate drag by hand, then step
+        // the ray and confirm the object followed by the DIFFERENCE.
+        let mut ed = Editor::new();
+        ed.selected = Some(0);
+        let start = ed.selected_xform().expect("something is selected");
+        let (o1, d1) = (Vec3::new(start.pos.x + 5.0, 40.0, start.pos.z), Vec3::NEG_Y);
+        ed.drag = drag::Drag::begin(gizmo::Axis::X, gizmo::Mode::Translate, start, o1, d1);
+        assert!(ed.drag.is_some(), "a perpendicular view must be grabbable");
+
+        let (o2, d2) = (Vec3::new(start.pos.x + 9.0, 40.0, start.pos.z), Vec3::NEG_Y);
+        let moved = ed.drag.as_mut().unwrap().update(o2, d2).unwrap();
+        assert!((moved.pos.x - (start.pos.x + 4.0)).abs() < 1e-3);
+        assert_eq!(moved.pos.z, start.pos.z, "a locked axis must not leak");
+    }
+
+    #[test]
+    fn releasing_the_button_ends_the_drag() {
+        let mut ed = Editor::new();
+        ed.selected = Some(1);
+        let start = ed.selected_xform().unwrap();
+        ed.drag = drag::Drag::begin(
+            gizmo::Axis::X,
+            gizmo::Mode::Translate,
+            start,
+            Vec3::new(start.pos.x + 5.0, 40.0, start.pos.z),
+            Vec3::NEG_Y,
+        );
+        assert!(ed.drag.is_some());
+        // The default InputState has no buttons held, so the first update
+        // after a press-less frame must clear it.
+        ed.lmb.pressed(true); // pretend the button was down last frame
+        let _ = frame_of(&mut ed);
+        assert!(ed.drag.is_none(), "a released button must end the drag");
     }
 }
