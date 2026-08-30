@@ -244,3 +244,18 @@ The result is neither a whole-engine rewrite nor a field-width patch. The raster
 No stage treats the visible slice as authority, and no stage changes the 60 Hz simulation to win graphics time. If stage 5 succeeds and stage 6 fails, the product is a 4D world with parallel movable slices but not the complete architecture promised here; it may be an interesting game, but it is not grounds to declare the full migration complete.
 
 ## 10. Architectural invariants
+
+The architecture is complete only while all of these remain true:
+
+1. **Spatial authority.** Authoritative positions, shapes, velocities, forces, collisions, and constraints live in `R^4`; time is a separate fixed-step parameter.
+2. **Volumetric meaning.** A dynamic solid has a validated 4D volume and oriented tetrahedral boundary; a fourth coordinate on a triangle soup is not a 4D mesh.
+3. **One slice definition.** CPU, editor, tests, and any later GPU path implement the same global vertex signs, stable edge intersections, sign-mask cases, one-sided degeneracy rule, and attribute interpolation.
+4. **Derived visibility.** Slice geometry is disposable level-4 state stamped with its level-3 source and plane; it never authors physics, network truth, or content.
+5. **Plane-aware presentation.** The presenter warps only deltas in the stamped plane's `SO(3)` stabilizer or depth-reprojects translation within that plane; normal motion and tilt require re-slicing and rendering.
+6. **Plane-valued rotation.** Orientation is a normalized, canonically signed Spin(4) quaternion pair, while angular velocity, momentum, torque, and rotational Jacobian blocks are six-component bivectors.
+7. **Physical inertia.** The 6×6 inertia operator is derived from the 4D mass distribution, maps angular velocity bivectors to angular momentum bivectors, and is never replaced by an axis-vector shortcut.
+8. **Deterministic authority.** Simulation stays at fixed 60 Hz with pinned scalar semantics, stable ordering, fixed solver iterations, rollback-complete caches, and native/wasm replay hashes as a release gate.
+9. **Attributed degradation.** Pixel scale controls raster cost, certified slice LOD controls cell/intersection cost, and neither is credited for improving the other's bottleneck; presentation and simulation cadence are protected.
+10. **Reversible adoption.** The constrained 3D subspace remains the oracle and recovery path until rendering, physics, authoring, weak-target, and comprehension gates pass with representative content.
+
+The central consequence is intentionally severe: Ember does not become 4D-first by adding `w` to positions. It becomes 4D-first only when the unsliced world is the sole source of truth, the slice is an explicit lossy render derivation, and every subsystem that can change gameplay reasons in four spatial dimensions before any subsystem reasons from pixels.
