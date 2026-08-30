@@ -1,6 +1,59 @@
 # Gate report — branch `9mm-vertical-shot`
 
-## Run @ facedcf — GREEN (current): `ember-editor` lands
+## Run @ e84cfbd — GREEN (current): selection and the gizmo
+
+`cargo test -p ember-editor` **34 passed**; workspace tests clean;
+`cargo clippy --workspace --all-targets` now silent — no errors *and* no
+warnings.
+
+### The three renderer facts the selection UX is designed around — all true
+
+Checked in the source, because the design would have been redone if any
+were false. All are on the **scene** pipeline, which is what
+`Frame::instances` draws through:
+
+| Claim | Where | Verdict |
+|---|---|---|
+| `cull_mode: None` → no inverted-hull outline | renderer.rs:1027 | true |
+| `BlendState::REPLACE` → no translucent highlight | renderer.rs:1021 | true |
+| `depth_write_enabled` + `depth_compare: Less` → gizmo is genuinely occluded | renderer.rs:1032-33 | true |
+
+So colour boost + a twelve-edge cage + a camera-ward epsilon is the right
+shape for the constraints that exist.
+
+Worth knowing for later: the **presenter** pipeline is `depth_stencil:
+None` — a depth-less fullscreen pass. That is where an always-on-top
+gizmo, a translucent highlight, or the editor sidebar could eventually
+composite without touching the scene pass's invariants, and it is the
+engine's stated architecture rather than a change to it.
+
+### Shimmer: the static scene is stable; the selected cage is NOT verified
+
+z-fighting is a flicker, so a still cannot settle it. Harness: launch,
+foreground, click, then capture three frames 320 ms apart with a static
+camera and diff them — with nothing animating, any differing pixel is
+temporal instability.
+
+- frame0 vs frame1: **0 px differ**; frame1 vs frame2: **0 px differ**
+  (whole 1280×800 frame, threshold 12/255). The unselected scene — grid,
+  boxes, axis bars, and the origin where the axes meet the grid — is
+  perfectly stable.
+- **The click never selected**: the clicked box's region is pixel-identical
+  before and after (0 of 20150 px changed). Two attempts, including a
+  nine-step cursor walk onto the target so `cursor_ndc` came from real
+  `CursorMoved` events.
+
+This is a harness limitation, not evidence about the editor: the headless
+`clicking_a_starter_box_selects_that_box` passes, and the engine's
+`cursor_ndc` maths is correct (app.rs:176-186). **The cage's
+anti-z-fighting measures remain unverified** and this gate must not be
+read as covering them.
+
+Asked for a one-line startup selection hook (an env var, or a
+`debug_assertions` default) so the cage renders without an input event;
+the same three-frame diff then answers the question directly.
+
+## Run @ facedcf — GREEN: `ember-editor` lands
 
 | Check | Result |
 |---|---|
