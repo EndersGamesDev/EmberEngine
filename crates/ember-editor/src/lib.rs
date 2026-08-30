@@ -17,6 +17,7 @@
 //! release it and W/E/R select the translate/rotate/scale mode while LMB
 //! picks. One branch, no chord, and no mode that can be entered by accident.
 
+pub mod gizmo;
 pub mod pick;
 
 use ember_engine::glam::{Quat, Vec3};
@@ -62,6 +63,18 @@ const PITCH_LIMIT: f32 = 1.5533;
 /// stop reading as R/G/B with no compile error — which is why bite 1's
 /// acceptance check is that the axes read as distinctly red, green and blue,
 /// not merely that they appear.
+///
+/// MEASURED on Vulkan at 4.0 (brightest pixel per bar, and its own channel
+/// over the next highest):
+///   +X  rgb(229,  32,  35)  6.5x
+///   +Y  rgb( 32, 222,  49)  4.5x
+///   +Z  rgb( 30,  89, 226)  2.5x
+///
+/// Blue is the one that degrades first, and not for a reason this file can
+/// see: the scene shader's fill light is cool (0.42, 0.50, 0.68), so it lifts
+/// the green channel of anything blue. The over-drive has to out-run a second
+/// light that the other two axes barely notice. There is ample headroom at
+/// 4.0; below ~2.5, re-measure rather than reason about it.
 pub const AXIS_X: Vec3 = Vec3::new(4.0, 0.06, 0.06);
 pub const AXIS_Y: Vec3 = Vec3::new(0.10, 4.0, 0.10);
 pub const AXIS_Z: Vec3 = Vec3::new(0.10, 0.35, 4.0);
@@ -242,6 +255,15 @@ pub struct Editor {
     /// Index into `objects`, not into the frame's instance list — the frame
     /// also carries the grid and the axes, and their indices shift.
     pub selected: Option<usize>,
+    pub mode: gizmo::Mode,
+    /// Which gizmo handle the cursor is over, if any. Recomputed each frame
+    /// rather than stored across frames, so it cannot go stale against a
+    /// camera that moved.
+    pub hovered: Option<gizmo::Axis>,
+    lmb: gizmo::Edge,
+    key_w: gizmo::Edge,
+    key_e: gizmo::Edge,
+    key_r: gizmo::Edge,
 }
 
 impl Default for Editor {
@@ -256,7 +278,28 @@ impl Editor {
             cam: FlyCam::default(),
             objects: starter_scene(),
             selected: None,
+            mode: gizmo::Mode::default(),
+            hovered: None,
+            lmb: gizmo::Edge::default(),
+            key_w: gizmo::Edge::default(),
+            key_e: gizmo::Edge::default(),
+            key_r: gizmo::Edge::default(),
         }
+    }
+
+    /// The ray under the cursor this frame, if the cursor is over the window.
+    pub fn cursor_ray(&self, input: &InputState) -> Option<(Vec3, Vec3)> {
+        let ndc = input.cursor_ndc()?;
+        Some(pick::ray_from_cursor(
+            &self.cam.camera(),
+            input.aspect(),
+            ndc,
+        ))
+    }
+
+    /// Centre of the current selection, which is where the gizmo sits.
+    pub fn selection_centre(&self) -> Option<Vec3> {
+        self.selected.map(|i| self.objects[i].pos)
     }
 
     /// The instances that are actually pickable, in the same order as
@@ -301,11 +344,74 @@ fn starter_scene() -> Vec<Obj> {
 
 impl EmberGame for Editor {
     fn update(&mut self, input: &InputState, dt: f32) -> Frame {
-        let _flying = self.cam.update(input, dt);
+        let flying = self.cam.update(input, dt);
+
+        // Modality: while the fly drag is held, W/E/R are movement and the
+        // gizmo is not listening. Released, they are the modes the user
+        // asked for. The edges are polled either way so a key pressed during
+        // a fly drag does not fire a mode change the moment RMB is let go.
+        let w = self.key_w.pressed(input.down(KeyCode::KeyW));
+        let e = self.key_e.pressed(input.down(KeyCode::KeyE));
+        let r = self.key_r.pressed(input.down(KeyCode::KeyR));
+        if !flying {
+            if w {
+                self.mode = gizmo::Mode::Translate;
+            }
+            if e {
+                self.mode = gizmo::Mode::Rotate;
+            }
+            if r {
+                self.mode = gizmo::Mode::Scale;
+            }
+        }
+
+        // Hover and selection both come off one ray, so what highlights is
+        // exactly what a click would take.
+        let ray = self.cursor_ray(input);
+        self.hovered = match (ray, self.selection_centre()) {
+            (Some((org, dir)), Some(centre)) => {
+                gizmo::pick_handle(org, dir, centre, self.cam.eye)
+            }
+            _ => None,
+        };
+
+        let clicked = self.lmb.pressed(input.mouse_down(MouseButton::Left));
+        if clicked && !flying {
+            // A click on a handle is the start of a drag (bite 4), not a
+            // change of selection — otherwise grabbing the gizmo would
+            // deselect the thing it belongs to.
+            if self.hovered.is_none() {
+                self.selected = match ray {
+                    Some((org, dir)) => {
+                        pick::pick_nearest(org, dir, &self.object_instances()).map(|(i, _)| i)
+                    }
+                    None => self.selected,
+                };
+            }
+        }
 
         let mut instances = grid_instances();
         instances.extend(axis_instances(6.0, 0.12));
-        instances.extend(self.object_instances());
+
+        for (i, obj) in self.objects.iter().enumerate() {
+            let mut inst = obj.instance();
+            if Some(i) == self.selected {
+                inst.color = gizmo::selected_color(obj.color);
+            }
+            instances.push(inst);
+        }
+
+        // Cage and gizmo last: they are the smallest things on screen and
+        // the ones that must not be lost behind anything drawn after them.
+        if let Some(i) = self.selected {
+            let inst = self.objects[i].instance();
+            instances.extend(gizmo::selection_cage(&inst));
+            instances.extend(gizmo::gizmo_instances(
+                self.objects[i].pos,
+                self.cam.eye,
+                self.mode,
+            ));
+        }
 
         Frame {
             camera: self.cam.camera(),
@@ -352,9 +458,11 @@ mod tests {
     fn the_camera_looks_where_forward_points() {
         // `Camera` is an eye/target pair, so the editor's yaw/pitch only mean
         // anything if target - eye reproduces forward exactly.
-        let mut cam = FlyCam::default();
-        cam.yaw = 0.9;
-        cam.pitch = -0.4;
+        let cam = FlyCam {
+            yaw: 0.9,
+            pitch: -0.4,
+            ..Default::default()
+        };
         let c = cam.camera();
         let look = (c.target - c.eye).normalize();
         assert!((look - cam.forward()).length() < 1e-6);
@@ -432,5 +540,83 @@ mod tests {
         let (org, dir) = pick::ray_from_cursor(&cam, 16.0 / 9.0, [0.0, 0.0]);
         let hit = pick::pick_nearest(org, dir, &ed.object_instances());
         assert_eq!(hit.map(|(i, _)| i), Some(4), "centre-screen pick missed");
+    }
+
+    /// Drives `update` with a scripted input, since InputState has no public
+    /// constructor for tests to build directly.
+    fn frame_of(ed: &mut Editor) -> Frame {
+        ed.update(&InputState::default(), 1.0 / 60.0)
+    }
+
+    #[test]
+    fn nothing_is_selected_until_something_is_clicked() {
+        let mut ed = Editor::new();
+        let f = frame_of(&mut ed);
+        assert!(ed.selected.is_none());
+        // Grid + 3 axes + the starter objects, and no cage or gizmo.
+        assert_eq!(
+            f.instances.len(),
+            grid_instances().len() + 3 + ed.objects.len(),
+            "an unselected scene must not draw a cage or a gizmo"
+        );
+    }
+
+    #[test]
+    fn a_selection_adds_exactly_a_cage_and_a_gizmo() {
+        let mut ed = Editor::new();
+        let plain = frame_of(&mut ed).instances.len();
+        ed.selected = Some(2);
+        let selected = frame_of(&mut ed).instances.len();
+        assert_eq!(
+            selected - plain,
+            12 + 6,
+            "selection should add twelve cage edges and six gizmo parts"
+        );
+    }
+
+    #[test]
+    fn the_selected_object_is_drawn_brighter_than_it_was() {
+        let mut ed = Editor::new();
+        let idx = 3;
+        let before = frame_of(&mut ed);
+        let base = ed.objects[idx].color;
+        // Objects are pushed after the grid and the three axes.
+        let obj_start = grid_instances().len() + 3;
+        assert_eq!(before.instances[obj_start + idx].color, base);
+
+        ed.selected = Some(idx);
+        let after = frame_of(&mut ed);
+        let lit = after.instances[obj_start + idx].color;
+        assert!(
+            lit.length() > base.length(),
+            "selected object must read brighter: {base:?} -> {lit:?}"
+        );
+    }
+
+    #[test]
+    fn modes_default_to_translate() {
+        // W is the mode the user reaches for first, and it is also the key
+        // that doubles as fly-forward — so the default must not depend on a
+        // keypress that might have been swallowed by a fly drag.
+        let ed = Editor::new();
+        assert_eq!(ed.mode, gizmo::Mode::Translate);
+    }
+
+    #[test]
+    fn the_gizmo_only_appears_where_the_selection_is() {
+        let mut ed = Editor::new();
+        ed.selected = Some(5);
+        let centre = ed.objects[5].pos;
+        assert_eq!(ed.selection_centre(), Some(centre));
+        let f = frame_of(&mut ed);
+        // The last six instances are the gizmo; each must sit near the
+        // selected object rather than at the world origin.
+        for inst in f.instances.iter().rev().take(6) {
+            assert!(
+                (inst.position - centre).length() < 30.0,
+                "a gizmo part at {:?} is nowhere near the selection at {centre:?}",
+                inst.position
+            );
+        }
     }
 }

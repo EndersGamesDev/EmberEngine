@@ -167,11 +167,9 @@
       const r = await fetch(`games.json?ts=${Date.now()}`, { cache: 'no-store' });
       if (r.ok) catalog = await r.json();
     } catch {}
-    // Fallback only: games.json is the source of truth and overwrites this
-    // below. It must name the CURRENT live build — an older one speaks an
-    // older PROTO_VERSION, and the server gates join on exact equality, so a
-    // stale fallback sends anyone who hits a games.json fetch failure into a
-    // build that is refused at the door.
+    // Fallback for a failed games.json fetch. Must track the live version:
+    // an older build speaks an older PROTO_VERSION, and the server refuses
+    // a lobby on anything but an exact match.
     let arenaLivePath = 'games/arena/v10/';
     for (const g of catalog.games) {
       if (g.id === 'arena') {
