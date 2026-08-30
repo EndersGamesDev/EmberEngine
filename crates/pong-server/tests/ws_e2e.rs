@@ -155,6 +155,7 @@ fn drop_in_arena_flow_with_password() {
             crouch: false,
             reload: false,
             jump: false,
+            shield: false,
         },
     );
     // The next state must echo the input's seq back as this player's ack.
@@ -240,6 +241,15 @@ fn old_proto_may_list_but_not_join() {
     recv_until(&mut old, 5, |m| match m {
         S2C::Error { message } => {
             assert!(message.contains("live version"), "{message}");
+            // The sentence is the whole compatibility story a frozen build's
+            // player ever sees, so it must still NAME both versions after a
+            // bump — "play the live version" alone leaves them guessing
+            // which build theirs is and which one is live.
+            assert!(message.contains("v0"), "must name the stale version: {message}");
+            assert!(
+                message.contains(&format!("v{PROTO_VERSION}")),
+                "must name the live version: {message}"
+            );
             Some(())
         }
         _ => None,

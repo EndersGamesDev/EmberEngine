@@ -28,7 +28,7 @@ The workspace maintains two parallel, non-overlapping protocols: **TCP Arena Sho
     *   Transport: WebSocket (JSON).
     *   Format: Tagged enums (`C2S`, `S2C`) using `serde`.
     *   Purpose: Matchmaking, lobby management, and state synchronization for the Pong game and the arena shooter (in `pong`).
-    *   Key items: `LobbyInfo`, `PState`, `BState`, `PROTO_VERSION` (7), `STATE_EVERY_TICKS` (2).
+    *   Key items: `LobbyInfo`, `PState`, `BState`, `PROTO_VERSION` (9), `STATE_EVERY_TICKS` (2).
 
 ## ATW-first render flow
 

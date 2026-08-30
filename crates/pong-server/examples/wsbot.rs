@@ -104,6 +104,7 @@ fn main() {
                     crouch: false,
                     reload: false,
                     jump: false,
+                    shield: false,
                 },
             );
         }

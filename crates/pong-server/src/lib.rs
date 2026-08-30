@@ -411,6 +411,7 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
                             score: p.score,
                             alive: p.alive,
                             crouch: p.crouch,
+                            shield: p.shield,
                             weapon: p.weapon,
                             ammo: p.ammo,
                             reloading: p.reload_t > 0.0,
@@ -811,6 +812,7 @@ fn handle_event(
                         crouch,
                         reload,
                         jump,
+                        shield,
                     },
                     true,
                 ) => {
@@ -844,8 +846,7 @@ fn handle_event(
                                 crouch,
                                 reload,
                                 jump,
-                                // Nothing on the wire carries it yet.
-                                shield: false,
+                                shield,
                                 delay_ticks: 0,
                             },
                             seq,

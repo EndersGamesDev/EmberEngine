@@ -7,14 +7,25 @@
 
 use serde::{Deserialize, Serialize};
 
-/// v8: shots carry elevation. The added fields are all `#[serde(default)]`
-/// and so would decode across the boundary — but decoding is not the test.
-/// A pre-v8 client sends no pitch and therefore fires permanently level
-/// against a server whose hit volume now has a finite top, and a v8 client
-/// against a pre-v8 server reads every bullet height as a defaulted 0.0 and
-/// draws every tracer buried in the floor. Both directions are broken in
-/// ways a version gate exists precisely to prevent, so this bumps.
-pub const PROTO_VERSION: u16 = 8;
+/// v9: the off-hand shield, which reflects. `shield` is `#[serde(default)]`
+/// on both the input and the player state, so both directions decode — and
+/// decoding is not the test. Ask instead what an old peer DOES.
+///
+/// A pre-v9 client against a v9 server can never raise a shield, and — the
+/// part that decides this — its own perfectly-aimed shot can now come back
+/// and kill it, sent by an opponent whose shield it does not render, with no
+/// visible cause anywhere on screen. A v9 client against a pre-v9 server has
+/// the mirror problem: the server drops the field, so holding Q raises a
+/// shield that is drawn, believed, and does nothing, while the player stands
+/// still in the open trusting it.
+///
+/// That is the same shape as the v8 pitch bump rather than the jump one.
+/// Jump was additive — an old peer played a smaller game and every existing
+/// interaction still resolved the same way. Pitch gave the hit volume a
+/// finite top, and the shield gives a hit a second possible outcome: a shot
+/// that used to land now legitimately comes back. `serde(default)` protects
+/// the wire format, not the meaning of a shot, so this bumps.
+pub const PROTO_VERSION: u16 = 9;
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
 pub const MAX_PASSWORD_LEN: usize = 40;
@@ -61,6 +72,11 @@ pub struct PState {
     pub score: u32,
     pub alive: bool,
     pub crouch: bool,
+    /// Off-hand shield raised. Sent because a shield you cannot see is a
+    /// mechanic that kills you for no visible reason; defaulted, so a
+    /// pre-shield server simply reports everyone unshielded.
+    #[serde(default)]
+    pub shield: bool,
     /// Weapon level (1 pistol, 2 rapid, 3 heavy).
     #[serde(default)]
     pub weapon: u8,
@@ -145,6 +161,10 @@ pub enum C2S {
         /// Space. Defaulted so an older client simply never jumps.
         #[serde(default)]
         jump: bool,
+        /// Q, held. Defaulted so an older client simply never raises one —
+        /// which is exactly why the version gate above had to move too.
+        #[serde(default)]
+        shield: bool,
     },
     Ping {
         nonce: u32,
@@ -245,11 +265,19 @@ mod tests {
             crouch: false,
             reload: false,
             jump: true,
+            shield: true,
         })
         .unwrap();
         assert!(s.contains("\"t\":\"input\""));
         let back: C2S = serde_json::from_str(&s).unwrap();
-        assert!(matches!(back, C2S::Input { fire: true, .. }));
+        assert!(matches!(
+            back,
+            C2S::Input {
+                fire: true,
+                shield: true,
+                ..
+            }
+        ));
 
         let s = serde_json::to_string(&S2C::GameJoined {
             id: 2,
@@ -271,6 +299,46 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn the_shield_survives_the_codec_in_both_directions() {
+        // The player state carries it, so remote shields can be drawn.
+        let p = PState {
+            id: 3,
+            x: 1.0,
+            z: -2.0,
+            y: 0.5,
+            ax: 0.0,
+            az: 1.0,
+            pitch: 0.2,
+            hp: 2,
+            score: 4,
+            alive: true,
+            crouch: false,
+            shield: true,
+            weapon: 2,
+            ammo: 7,
+            reloading: false,
+            deaths: 1,
+            ack: 42,
+        };
+        let s = serde_json::to_string(&p).unwrap();
+        assert!(s.contains("\"shield\":true"), "{s}");
+        let back: PState = serde_json::from_str(&s).unwrap();
+        assert!(back.shield);
+
+        // And both fields decode from a frame that predates them: this is
+        // what `serde(default)` buys, and it is the whole of what it buys —
+        // the version gate is what stops an old peer from PLAYING against
+        // this, for the reasons written at PROTO_VERSION.
+        let old_state = r#"{"id":1,"x":0.0,"z":0.0,"ax":1.0,"az":0.0,
+            "hp":3,"score":0,"alive":true,"crouch":false}"#;
+        let p: PState = serde_json::from_str(old_state).unwrap();
+        assert!(!p.shield, "an absent shield reads as lowered");
+        let old_input = r#"{"t":"input","mx":0.0,"my":0.0,"ax":1.0,"az":0.0,"fire":false}"#;
+        let back: C2S = serde_json::from_str(old_input).unwrap();
+        assert!(matches!(back, C2S::Input { shield: false, .. }));
     }
 
     #[test]

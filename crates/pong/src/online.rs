@@ -936,6 +936,9 @@ impl EmberGame for ShooterGame {
         // ---- stance + camera-relative movement ----
         let sprint = input.down(KeyCode::ShiftLeft) || input.down(KeyCode::ShiftRight);
         let crouch = input.down(KeyCode::KeyC);
+        // Held, like every other intent: there is no local toggle state that
+        // a dropped input packet could leave disagreeing with the server.
+        let shield = input.down(KeyCode::KeyQ);
         let target_eye = if crouch { EYE_CROUCH } else { EYE_STAND };
         self.eye_h += (target_eye - self.eye_h) * (1.0 - (-dt * 12.0).exp());
 
@@ -970,7 +973,10 @@ impl EmberGame for ShooterGame {
             .and_then(|id| self.latest.get(&id))
             .map(|p| p.alive)
             .unwrap_or(false);
-        let speed = stance_speed(sprint, crouch, false);
+        // Prediction reads the same rule the server applies, shield included
+        // — a raised shield cancels sprint, and predicting otherwise would
+        // rubber-band anyone who raised one while running.
+        let speed = stance_speed(sprint, crouch, shield);
 
         // Send intents at a fixed cadence (also the keepalive), remembering
         // each command until the server acks it.
@@ -1010,6 +1016,10 @@ impl EmberGame for ShooterGame {
                 crouch,
                 reload: input.down(KeyCode::KeyR),
                 jump,
+                // Sent raw: the trigger gate lives in the sim, so `fire` is
+                // reported honestly even while Q is down and the server is
+                // the only thing that decides a round did not leave.
+                shield,
             });
         }
 
