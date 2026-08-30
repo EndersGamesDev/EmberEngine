@@ -35,4 +35,4 @@ Presenter and input work is planned in `docs/presenter-architecture.md` and `doc
 
 - Snapshot interpolation degenerates to snap-to-latest at ≤60 fps; a proper ~100 ms interpolation delay buffer is future work.
 - The arena client connects before the window opens; an unreachable server pauses launch ~4 s before the offline fallback.
-- Deploy from the new home ships PROTO 8 while the live pong-server still speaks 7; the server redeploy (blocked on account provisioning) gates jumping, aim elevation and authored levels.
+- Do not ship a REBUILT bundle from the new home until pong-server is redeployed: main is PROTO 8, the running server is 7. Page-only edits (index.html, games.json) are safe. The redeploy gates jumping, aim elevation and authored levels.
