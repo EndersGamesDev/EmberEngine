@@ -1,9 +1,15 @@
 //! Headless arena bot (works over ws:// and wss://).
 //!
-//!     cargo run -p pong-server --example wsbot -- <URL> create|join <LOBBY> [PASSWORD|-] [HANDLE] [SECS]
+//!     cargo run -p pong-server --example wsbot -- <URL> create|join <LOBBY> [PASSWORD|-] [HANDLE] [SECS] [MODES]
 //!
 //! Creates or joins a game, runs in circles spraying bullets, and reports
 //! how many state updates it saw. Exit 0 = the online loop works.
+//!
+//! MODES is an optional comma-separated list that switches on the parts of
+//! the protocol the default spray never touches: `shield` holds Q, `jump`
+//! holds Space, `nofire` keeps the trigger up. Two bots, one plain and one
+//! `shield,nofire`, are enough to watch a round get reflected - which the
+//! default bot can never do, because it never raises the plate.
 
 use std::time::{Duration, Instant};
 
@@ -21,6 +27,17 @@ fn main() {
     let password = args.next().filter(|p| !p.is_empty() && p != "-");
     let handle = args.next().unwrap_or_else(|| format!("wsbot-{action}"));
     let secs: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(20);
+    let modes: Vec<String> = args
+        .next()
+        .map(|m| {
+            m.split(',')
+                .map(|s| s.trim().to_ascii_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    let has = |m: &str| modes.iter().any(|s| s == m);
+    let (shield, jump, nofire) = (has("shield"), has("jump"), has("nofire"));
 
     // rustls needs an explicitly installed crypto provider for wss.
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -99,12 +116,12 @@ fn main() {
                     ax: (t * 1.7).cos(),
                     az: (t * 1.7).sin(),
                     pitch: (t * 0.6).sin() * 0.7,
-                    fire: true,
+                    fire: !nofire,
                     sprint: (t as u64).is_multiple_of(3),
                     crouch: false,
                     reload: false,
-                    jump: false,
-                    shield: false,
+                    jump,
+                    shield,
                 },
             );
         }
@@ -170,11 +187,20 @@ fn main() {
         }
     }
 
-    if !in_game || states < 10 || bullets_seen == 0 {
+    // A shielding bot cannot fire - the server blocks its own trigger while
+    // the plate is up - so bullets are only evidence of a working loop when
+    // this bot was actually shooting.
+    let expects_bullets = !nofire && !shield;
+    if !in_game || states < 10 || (expects_bullets && bullets_seen == 0) {
         eprintln!("WSBOT FAIL: in_game={in_game} states={states} bullets_seen={bullets_seen}");
         std::process::exit(1);
     }
+    let modes_note = if modes.is_empty() {
+        String::new()
+    } else {
+        format!(" modes={}", modes.join(","))
+    };
     println!(
-        "WSBOT OK: states={states} max_players={max_players} bullets_seen={bullets_seen} kills_seen={kills_seen}"
+        "WSBOT OK: states={states} max_players={max_players} bullets_seen={bullets_seen} kills_seen={kills_seen}{modes_note}"
     );
 }

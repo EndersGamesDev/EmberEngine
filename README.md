@@ -165,7 +165,10 @@ server and tunnel, then publishes the fresh domain to `server.json` on the
 Pages site (fetched cache-busted, so the page always finds the current
 server; its `v` stamp also cache-busts the wasm bundle per deploy). Server
 log: `~/pong-server.log`, tunnel log: `~/cloudflared.log` on specht.
-Headless check: `cargo run -p pong-server --example wsbot -- <URL> create|join <LOBBY> [PW|-] [HANDLE] [SECS]`.
+Headless check: `cargo run -p pong-server --example wsbot -- <URL> create|join <LOBBY> [PW|-] [HANDLE] [SECS] [MODES]`.
+`MODES` is a comma-separated list of `shield`, `jump`, `nofire` — without it
+the bot never raises the shield or jumps, so a green run says nothing about
+either. Two bots, one plain and one `shield,nofire`, demonstrate a reflect.
 
 Native: `cargo run -p pong --bin pong-app` (local) or
 `pong-app online wss://… create|join LOBBY [PASSWORD|-] [HANDLE]`
