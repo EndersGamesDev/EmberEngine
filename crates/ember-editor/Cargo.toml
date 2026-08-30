@@ -18,8 +18,12 @@ ember-engine = { path = "../ember-engine" }
 # than a parallel format that would have to be kept in step.
 pong-core = { path = "../pong-core" }
 glam.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tracing-subscriber.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"

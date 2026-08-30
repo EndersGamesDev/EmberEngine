@@ -302,6 +302,8 @@ pub struct Editor {
     pub armed: usize,
     /// Grid step new objects snap to. Zero means free placement.
     pub snap: f32,
+    /// The document changed and the shell-readable snapshot is stale.
+    dirty: bool,
     lmb: gizmo::Edge,
     keys: Vec<(KeyCode, gizmo::Edge)>,
     key_place: gizmo::Edge,
@@ -355,6 +357,10 @@ impl Editor {
             drag: None,
             armed: 0,
             snap: GRID_STEP,
+            // The opening document is worth publishing: a shell that saves
+            // without editing anything should get the arena it was handed,
+            // not nothing.
+            dirty: true,
             lmb: gizmo::Edge::default(),
             // Digit keys arm palette entries on native; on the web the same
             // commands arrive from DOM buttons. Only as many digits as the
@@ -373,11 +379,29 @@ impl Editor {
         }
     }
 
+    /// Serialise the document into the shell-readable snapshot. Called
+    /// after anything that changes it, never per frame — see
+    /// `palette::set_snapshot`.
+    ///
+    /// A document that cannot currently be exported (a box dragged off the
+    /// floor) leaves the last good snapshot in place and is reported when
+    /// the shell asks, rather than replacing it with an error the Save
+    /// button would have to interpret.
+    fn publish(&self) {
+        if let Ok(json) = level::to_json(&self.objects, pong_core::shooter::ARENA_HALF) {
+            palette::set_snapshot(json);
+        }
+    }
+
     /// Applies one queued command. Separate from `update` so a shell can be
     /// tested against the editor without a frame loop.
     pub fn apply(&mut self, cmd: palette::Cmd) {
+        let mutates = !matches!(cmd, palette::Cmd::Arm { .. } | palette::Cmd::SetMode { .. });
+        if mutates {
+            self.dirty = true;
+        }
         match cmd {
-            palette::Cmd::Arm(i) => {
+            palette::Cmd::Arm { i } => {
                 if i < palette::PALETTE.len() {
                     self.armed = i;
                 }
@@ -403,7 +427,7 @@ impl Editor {
                     self.drag = None;
                 }
             }
-            palette::Cmd::SetMode(m) => self.mode = m,
+            palette::Cmd::SetMode { mode } => self.mode = mode,
             palette::Cmd::Clear => {
                 self.objects.clear();
                 self.selected = None;
@@ -484,7 +508,7 @@ impl EmberGame for Editor {
         // and no chance of the two shells drifting apart.
         for (i, (key, edge)) in self.keys.iter_mut().enumerate() {
             if edge.pressed(input.down(*key)) && !flying {
-                palette::push(palette::Cmd::Arm(i));
+                palette::push(palette::Cmd::Arm { i });
             }
         }
         if self.key_place.pressed(input.down(KeyCode::Enter)) && !flying {
@@ -531,6 +555,12 @@ impl EmberGame for Editor {
         let released = held_before && !lmb;
 
         if released {
+            // Publish on drag END, not while dragging: the document is
+            // changing every frame under the cursor and only where it comes
+            // to rest is worth serialising.
+            if self.drag.is_some() {
+                self.dirty = true;
+            }
             self.drag = None;
         }
         if clicked && !flying {
@@ -605,6 +635,13 @@ impl EmberGame for Editor {
             }
         }
 
+        // Republish once per frame that touched the document, so a shell
+        // asking for the level between frames always reads the current one.
+        if self.dirty {
+            self.publish();
+            self.dirty = false;
+        }
+
         // Cage and gizmo last: they are the smallest things on screen and
         // the ones that must not be lost behind anything drawn after them.
         if let Some(i) = self.selected {
@@ -633,8 +670,95 @@ impl EmberGame for Editor {
 pub fn engine_config() -> EngineConfig {
     EngineConfig {
         title: "ember — editor".to_string(),
+        // Load-bearing, not stylistic: capture fires on ANY mouse press with
+        // no button filter, and under pointer lock the OS cursor is gone —
+        // which would make the web sidebar unclickable until Escape, and
+        // Escape exits the process on native.
         capture_mouse: false,
         meshes: Vec::new(),
+    }
+}
+
+/// What a shell hands the editor at startup. Deliberately smaller than the
+/// arena's config: the editor has no server, no lobby and no account, and
+/// an arena-shaped config would imply a networking story that does not
+/// exist. A `level` wins over a `seed`; neither means the default seed.
+#[derive(Default, serde::Deserialize)]
+pub struct EditorConfig {
+    #[serde(default)]
+    pub seed: Option<u64>,
+    #[serde(default)]
+    pub level: Option<pong_core::shooter::Level>,
+}
+
+/// Build the opening document from a shell's config.
+pub fn objects_from_config(cfg: &EditorConfig) -> Vec<Obj> {
+    match &cfg.level {
+        Some(l) => level::from_level(l),
+        None => level::from_level(&pong_core::shooter::Level::from_seed(
+            cfg.seed.unwrap_or_else(starter_seed),
+        )),
+    }
+}
+
+// ---- wasm entry points (the editor page calls these) ----
+
+#[cfg(target_arch = "wasm32")]
+mod wasm_api {
+    use wasm_bindgen::prelude::*;
+
+    /// config JSON: `{ seed?: number, level?: <Level JSON> }`.
+    ///
+    /// Mirrors the arena's `start_online` lifecycle exactly — JSON in,
+    /// build the game, hand it to `ember_engine::run` — because that
+    /// bootstrap is proven against the engine's wasm path. Like it, this
+    /// NEVER RETURNS: the page must not wait on it.
+    #[wasm_bindgen]
+    pub fn start_editor(config_json: &str) -> Result<(), JsValue> {
+        let cfg: super::EditorConfig = if config_json.trim().is_empty() {
+            super::EditorConfig::default()
+        } else {
+            serde_json::from_str(config_json)
+                .map_err(|e| JsValue::from_str(&format!("bad editor config: {e}")))?
+        };
+        let mut editor = super::Editor::new();
+        editor.objects = super::objects_from_config(&cfg);
+        editor.selected = None;
+        // Does not return: the engine takes the event loop from here.
+        ember_engine::run(super::engine_config(), editor);
+        #[allow(unreachable_code)]
+        Ok(())
+    }
+
+    /// Push one command into the queue the native digit keys also use, so
+    /// the two shells cannot drift apart. JSON, because the alternative is
+    /// a wasm-bindgen enum mirroring `Cmd` that would have to be kept in
+    /// step by hand.
+    #[wasm_bindgen]
+    pub fn editor_cmd(cmd_json: &str) -> Result<(), JsValue> {
+        let cmd: super::palette::Cmd = serde_json::from_str(cmd_json)
+            .map_err(|e| JsValue::from_str(&format!("bad command: {e}")))?;
+        super::palette::push(cmd);
+        Ok(())
+    }
+
+    /// The current document as `Level` JSON, or an empty string before the
+    /// first frame has published one.
+    ///
+    /// Synchronous by design: the queue only goes one way, so this reads a
+    /// snapshot the editor republishes on every change rather than asking
+    /// a game nobody holds a handle to.
+    #[wasm_bindgen]
+    pub fn editor_export() -> String {
+        super::palette::snapshot().unwrap_or_default()
+    }
+
+    /// The palette as JSON, so the page renders the real entries instead of
+    /// duplicating six of them in HTML — a copy drifts the moment anyone
+    /// adds a shape, and drifts silently, because the indices still resolve.
+    #[wasm_bindgen]
+    pub fn editor_palette() -> String {
+        super::palette::palette_json()
     }
 }
 
@@ -917,7 +1041,7 @@ mod tests {
     fn a_placed_object_sits_on_the_ground_not_half_in_it() {
         palette::clear_queue();
         let mut ed = Editor::new();
-        ed.apply(palette::Cmd::Arm(1)); // container
+        ed.apply(palette::Cmd::Arm { i: 1 }); // container
         ed.apply(palette::Cmd::Place);
         let o = ed.objects.last().unwrap();
         assert!(
@@ -934,7 +1058,7 @@ mod tests {
         // built against an older build. Ignoring beats panicking on an index.
         palette::clear_queue();
         let mut ed = Editor::new();
-        ed.apply(palette::Cmd::Arm(999));
+        ed.apply(palette::Cmd::Arm { i: 999 });
         assert!(ed.armed < palette::PALETTE.len());
     }
 
@@ -972,7 +1096,7 @@ mod tests {
             .iter()
             .position(|k| k.class == palette::Class::Spawn)
             .expect("the palette has a spawn");
-        ed.apply(palette::Cmd::Arm(spawn_idx));
+        ed.apply(palette::Cmd::Arm { i: spawn_idx });
         ed.apply(palette::Cmd::Place);
 
         let pickable = ed.object_instances().len();
@@ -1002,7 +1126,7 @@ mod tests {
         // change arrives as a command. It must reach the same state.
         palette::clear_queue();
         let mut ed = Editor::new();
-        ed.apply(palette::Cmd::SetMode(gizmo::Mode::Scale));
+        ed.apply(palette::Cmd::SetMode { mode: gizmo::Mode::Scale });
         assert_eq!(ed.mode, gizmo::Mode::Scale);
     }
 }

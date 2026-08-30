@@ -98,16 +98,18 @@ pub const PALETTE: &[Kind] = &[
 ];
 
 /// Everything a shell can ask the editor to do. Deliberately small and
-/// serialisable in shape: the web side will send these as JSON.
-#[derive(Clone, Copy, PartialEq, Debug)]
+/// serialisable in shape: the web side sends these as JSON, tagged, so
+/// `{"t":"arm","i":2}` and `{"t":"place"}` are the whole vocabulary.
+#[derive(Clone, Copy, PartialEq, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "t", rename_all = "snake_case")]
 pub enum Cmd {
     /// Arm a palette entry, by index.
-    Arm(usize),
+    Arm { i: usize },
     /// Place the armed entry on the ground under the camera's aim.
     Place,
     /// Delete the current selection.
     Delete,
-    SetMode(Mode),
+    SetMode { mode: Mode },
     /// Drop every placed object. Guarded in the UI, not here.
     Clear,
 }
@@ -128,9 +130,57 @@ pub fn drain() -> Vec<Cmd> {
     MAILBOX.with(|m| m.borrow_mut().drain(..).collect())
 }
 
+/// The palette as JSON for a shell to render: index, name and class, so a
+/// page can build its sidebar from the real entries rather than a copy.
+/// Colours stay out — a DOM button is styled by CSS, not by the world
+/// colour the box will be drawn in.
+pub fn palette_json() -> String {
+    let entries: Vec<String> = PALETTE
+        .iter()
+        .enumerate()
+        .map(|(i, k)| {
+            format!(
+                r#"{{"index":{i},"name":"{}","class":"{}"}}"#,
+                k.name,
+                match k.class {
+                    Class::Object => "object",
+                    Class::Spawn => "spawn",
+                }
+            )
+        })
+        .collect();
+    format!("[{}]", entries.join(","))
+}
+
+thread_local! {
+    /// The document as JSON, refreshed whenever it CHANGES rather than
+    /// every frame.
+    ///
+    /// The mailbox above only goes one way. `ember_engine::run` moves the
+    /// game and never returns, so a shell has no handle to ask anything —
+    /// which is fine for commands going in, and useless for a Save button
+    /// that needs a value back. Keeping a snapshot here means the shell
+    /// reads the latest document synchronously, with no round trip and no
+    /// "not ready yet" state to handle. It costs one serialise per edit,
+    /// which at this scale is nothing.
+    static SNAPSHOT: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Publish the document. Called by the editor after anything that changes
+/// it — a place, a delete, the end of a drag.
+pub fn set_snapshot(json: String) {
+    SNAPSHOT.with(|s| *s.borrow_mut() = Some(json));
+}
+
+/// The latest document, or `None` before the first frame has published one.
+pub fn snapshot() -> Option<String> {
+    SNAPSHOT.with(|s| s.borrow().clone())
+}
+
 /// Empties the queue without acting on it. For tests, and for a shell that
 /// is tearing down.
 pub fn clear_queue() {
+    SNAPSHOT.with(|s| *s.borrow_mut() = None);
     MAILBOX.with(|m| m.borrow_mut().clear());
 }
 
@@ -183,12 +233,70 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_web_shells_command_vocabulary_parses() {
+        // These strings are what web/engine/index.html actually sends. The
+        // page is not compiled or type-checked against Rust, so this is the
+        // only thing standing between a renamed variant and a sidebar
+        // button that silently stops working.
+        let cases: [(&str, Cmd); 5] = [
+            (r#"{"t":"arm","i":2}"#, Cmd::Arm { i: 2 }),
+            (r#"{"t":"place"}"#, Cmd::Place),
+            (r#"{"t":"delete"}"#, Cmd::Delete),
+            (
+                r#"{"t":"set_mode","mode":"rotate"}"#,
+                Cmd::SetMode {
+                    mode: crate::gizmo::Mode::Rotate,
+                },
+            ),
+            (r#"{"t":"clear"}"#, Cmd::Clear),
+        ];
+        for (json, want) in cases {
+            let got: Cmd = serde_json::from_str(json).unwrap_or_else(|e| panic!("{json}: {e}"));
+            assert_eq!(got, want, "{json}");
+        }
+        // Every mode the sidebar offers.
+        for m in ["translate", "rotate", "scale"] {
+            let json = format!(r#"{{"t":"set_mode","mode":"{m}"}}"#);
+            serde_json::from_str::<Cmd>(&json).unwrap_or_else(|e| panic!("{json}: {e}"));
+        }
+    }
+
+    #[test]
+    fn the_palette_json_describes_every_entry() {
+        // The page builds its sidebar from this rather than duplicating the
+        // entries, so it must list all of them, in order, with the class
+        // the button's tooltip depends on.
+        let json = palette_json();
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        let arr = parsed.as_array().expect("an array");
+        assert_eq!(arr.len(), PALETTE.len());
+        for (i, (entry, kind)) in arr.iter().zip(PALETTE).enumerate() {
+            assert_eq!(entry["index"], i);
+            assert_eq!(entry["name"], kind.name);
+            let class = if kind.class == Class::Spawn { "spawn" } else { "object" };
+            assert_eq!(entry["class"], class);
+        }
+    }
+
+    #[test]
+    fn the_snapshot_is_what_was_last_published() {
+        clear_queue();
+        assert_eq!(snapshot(), None, "nothing published yet");
+        set_snapshot("{\"a\":1}".into());
+        assert_eq!(snapshot().as_deref(), Some("{\"a\":1}"));
+        set_snapshot("{\"a\":2}".into());
+        assert_eq!(snapshot().as_deref(), Some("{\"a\":2}"), "latest wins");
+        clear_queue();
+        assert_eq!(snapshot(), None, "teardown clears it");
+    }
+
+    #[test]
     fn the_queue_is_fifo_and_empties_on_drain() {
         clear_queue();
-        push(Cmd::Arm(2));
+        push(Cmd::Arm { i: 2 });
         push(Cmd::Place);
         push(Cmd::Delete);
-        assert_eq!(drain(), vec![Cmd::Arm(2), Cmd::Place, Cmd::Delete]);
+        assert_eq!(drain(), vec![Cmd::Arm { i: 2 }, Cmd::Place, Cmd::Delete]);
         assert!(drain().is_empty(), "a drain must empty the queue");
     }
 

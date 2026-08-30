@@ -26,7 +26,10 @@ use crate::{AXIS_X, AXIS_Y, AXIS_Z};
 /// What a drag on a handle does. The user asked for W/E/R; these are the
 /// modes those keys select, and they only apply while the fly drag is NOT
 /// held — see the modality note in the crate docs.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, Debug, Default, serde::Deserialize, serde::Serialize,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum Mode {
     #[default]
     Translate,
