@@ -96,4 +96,4 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
     fi
 )
 git worktree remove --force "$PAGES_DIR"
-echo "== live at https://enderpeer.github.io/ember/ =="
+echo "== live at https://endersgamesdev.github.io/EmberEngine/ =="
