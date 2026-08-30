@@ -144,4 +144,29 @@ The adopted document should later be amended in five named places but remains un
 
 ## 9. Honest costs, failure modes, and rejection gates
 
+Navigation cannot rely on unique global landmarks. Any finite landmark neighborhood recurs, quotient distance is bounded, and intrinsic leaf displacement is not recoverable from canonical endpoints, so “home is 40 km east,” distance from spawn, and a single arrow to an old place have no state-defined meaning. A bounded local compass, recently traveled route graph, rendezvous on a currently materialized body, and player-described motif sequences are valid; a route history that grows forever is the same forbidden unwrapped map in another form.
+
+A conventional world map is impossible. Drawing the compact 4D quotient hides the order in which the dense 3D leaf visits it, while drawing the entire leaf requires an unbounded sheet whose recurrent neighborhoods overlap in quotient phase. The product may offer a bounded egocentric chart with explicit expiry and uncertainty, but not a complete atlas, unique grid reference, persistent fog-of-war frontier, or proof that blank space means unvisited space.
+
+Several familiar gameplay concepts break outright: a unique capital or final treasure, permanent destruction of one site image, territory painted once and retained forever, “spawn at the farthest point,” an edge-closing battle circle, and progression measured by distance from an origin. A bounded set of dynamic entities can remain unique quotient bodies, but their images and compact-distance interactions must be accepted; if the game depends on unlimited unique settlements or permanent per-place history, unbounded procedural persistence is the honest architecture instead.
+
+The strongest perceptual risk is not a seam but recognition. Short projected vectors can make colonnades, stars, terrain cells, or encounters align; finite motifs can expose repeated asset fingerprints; near-periods can make a later valley feel like a rearranged earlier valley; and unintended self-images disclose compactness immediately. Art direction must test silhouettes and semantics, not only point distributions, because changing a texture seed cannot hide identical affordances or story beats.
+
+Phase and tilt carry an additional placement risk. Crossing a window endpoint creates or removes an intact site under the declared one-sided rule, whereas morphing its geometry would violate the placement decision; transition staging may animate a nonauthoritative cue but collision ownership changes on one simulation tick. Dense endpoint events, sites appearing inside occupied space, or gameplay that requires late-warped phase motion reject the content even if ordinary within-leaf travel is perfect.
+
+The performance floor is cubic visible-volume growth times source density plus the interaction halo, with 4D lattice enumeration and deterministic ordering before occlusion. Weak devices cannot buy their way out with pixel scale, and reducing mesh detail does not remove site records or physics candidates. A target fails when the certified minimum representation misses CPU, memory, upload, or simulation budgets; lowering population after the fact would change the world and violate deterministic networking.
+
+|Failure watched|Evidence|Rejection condition|
+|---|---|---|
+|Near-period recognition|Blind route comparisons and measured `D(delta_visual)` spectrum|Players identify earlier-looking regions above the declared chance threshold inside the target exploration horizon|
+|Lattice sightlines|Angular/ray-occupancy sweep over supported views|A dominant row or corridor remains visible within the certified far distance|
+|Self-image|Exhaustive image/support search plus playtest|An unintended player image, self-shadow, or self-collision enters a supported view or interaction halo|
+|Materialization pop|Frame capture across motion, phase, tilt, and cache churn|Ordinary within-leaf travel reveals a cache boundary, or phase creates an occupied collider without readable staging|
+|Navigation collapse|Task tests for return, rendezvous, and route explanation|Players must guess rather than use bounded local evidence, or required UI reconstructs an unbounded atlas|
+|Physics topology|Self-overlap, multi-image, winding-cycle, and rollback fixtures|Any supported asset exceeds image budget, any valid joint loop becomes unsatisfiable, or replay image tags diverge|
+|Network ambiguity|Loss, reordering, wrap interpolation, and reconciliation tests|A peer chooses a different image, shows a cell-sized correction, or requires an absolute sector address|
+|Performance floor|Worst-frustum and worst-halo measurements on each target|Minimum correct population misses a target budget after certified LOD and caching|
+
+The whole design is rejected if convincing endlessness requires recurrence distances beyond an affordable lattice and motif budget, if the game requires unique persistent places, or if quotient image topology makes physics and networking unreadable. Exact-period direct quotient would replace it only when a cell can exceed every supported view and route horizon without violating the storage budget; procedural generation would replace it only when unique persistent exploration justifies relaxing finite resident history and adopting absolute generation addresses. Those conditions, rather than attachment to the word “aperiodic,” would change the ruling.
+
 ## 10. Migration from the bounded arena
