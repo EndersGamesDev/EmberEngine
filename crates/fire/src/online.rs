@@ -55,6 +55,13 @@ pub struct Online {
     /// Last thing the server refused, for the page to show.
     pub notice: Option<String>,
     pub results: Option<Vec<u8>>,
+    /// Set by `Welcome`. `Hello` must be the first message on a connection and
+    /// `Welcome` is its acknowledgement, so anything version-gated —
+    /// create and join both are — has to wait for it. Firing them off straight
+    /// after `Hello` is speculative: if the server has not applied the `Hello`
+    /// yet, the connection's protocol is still 0 and the join is refused with
+    /// "this build speaks fire protocol v0".
+    pub welcomed: bool,
     seq: u32,
     history: VecDeque<(u32, CarInput)>,
     /// Slots the server has actually told us about. A car we have never had a
@@ -81,6 +88,7 @@ impl Online {
             lobbies: Vec::new(),
             notice: None,
             results: None,
+            welcomed: false,
             seq: 0,
             history: VecDeque::new(),
             known: [false; 8],
@@ -148,7 +156,7 @@ impl Online {
     /// Apply one server message.
     pub fn apply(&mut self, msg: S2C) {
         match msg {
-            S2C::Welcome { .. } => {}
+            S2C::Welcome { .. } => self.welcomed = true,
             S2C::Rejected { reason } => self.notice = Some(reason),
             S2C::Lobbies { lobbies } => self.lobbies = lobbies,
 

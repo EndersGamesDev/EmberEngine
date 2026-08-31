@@ -211,8 +211,22 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: Sender<Ev>) {
         loop {
             match rx.try_recv() {
                 Ok(m) => {
-                    if ws.send(m).is_err() {
+                    // write() buffers inside tungstenite; flush() puts it on
+                    // the wire. A flush that would block has NOT lost the
+                    // message — it is still buffered and the next flush sends
+                    // it — so tearing the connection down here would drop a
+                    // live peer and everything else queued for them.
+                    if let Err(e) = ws.write(m) {
+                        tracing::debug!(conn = id, "write failed: {e}");
                         break 'outer;
+                    }
+                    match ws.flush() {
+                        Ok(()) => {}
+                        Err(tungstenite::Error::Io(e)) if proto::is_transient_read(&e) => {}
+                        Err(e) => {
+                            tracing::debug!(conn = id, "flush failed: {e}");
+                            break 'outer;
+                        }
                     }
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
@@ -481,7 +495,12 @@ fn handle_event(
         }
         Ev::Disconnected { id } => drop_conn(id, conns, lobbies),
         Ev::Msg { id, msg } => {
-            let Some(c) = conns.get_mut(&id) else { return };
+            let Some(c) = conns.get_mut(&id) else {
+                // The last silent drop path in the hub. If this ever fires,
+                // an Ev::Msg overtook its own connection's Ev::Connected.
+                tracing::warn!(conn = id, "message for an unregistered connection: {msg:?}");
+                return;
+            };
             c.last_seen = Instant::now();
             c.msgs_this_tick += 1;
             if c.msgs_this_tick > MAX_MSGS_PER_TICK {
@@ -617,6 +636,11 @@ fn version_ok(id: u64, conns: &HashMap<u64, Conn>) -> bool {
     if v == proto::PROTO_VERSION {
         return true;
     }
+    // `handle` is set by Hello alongside `proto`, so a None handle here means
+    // no Hello was ever processed for this connection — a very different fault
+    // from a genuinely stale client, and worth telling apart in the log.
+    let saw_hello = conns.get(&id).map(|c| c.handle.is_some()).unwrap_or(false);
+    tracing::warn!(conn = id, proto = v, saw_hello, "refusing on protocol version");
     send_to(
         conns,
         id,

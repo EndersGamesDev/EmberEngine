@@ -60,8 +60,10 @@ pub struct OnlineGame {
     chase: Chase,
     boost_was_down: bool,
     cfg: Config,
-    /// The create/join is sent once, on the first frame the socket is open.
+    /// Hello is sent once, on the first frame the socket is open.
     greeted: bool,
+    /// Create/join is sent once, on the first frame after Welcome.
+    entered: bool,
     /// Auto-ready once, so a player who picked a lobby is not then asked to
     /// press another button the page does not have.
     readied: bool,
@@ -82,6 +84,7 @@ impl OnlineGame {
             boost_was_down: false,
             cfg,
             greeted: false,
+            entered: false,
             readied: false,
             clock: FixedStep::default(),
         })
@@ -121,11 +124,22 @@ impl EmberGame for OnlineGame {
     fn update(&mut self, input: &InputState, dt: f32) -> Frame {
         let dt = dt.clamp(0.0, 0.05);
 
-        // Announce ourselves the moment the socket is actually open. Sending
-        // before that silently drops the frames on the web.
+        // Say hello the moment the socket is open. Sending before that
+        // silently drops the frames on the web.
         if !self.greeted && self.net.status() == Status::Open {
             self.greeted = true;
             crate::net::hello(&self.net, &self.cfg.handle);
+        }
+
+        self.inbox.pump(&mut self.net);
+        while let Some(m) = self.inbox.pop() {
+            self.state.apply(m);
+        }
+
+        // ...but wait for Welcome before create/join. Both are version-gated,
+        // and the gate reads a protocol number that Hello is what sets.
+        if !self.entered && self.state.welcomed {
+            self.entered = true;
             let msg = if self.cfg.create {
                 C2S::CreateLobby {
                     name: self.cfg.lobby.clone(),
@@ -138,11 +152,6 @@ impl EmberGame for OnlineGame {
                 }
             };
             self.net.send(&msg);
-        }
-
-        self.inbox.pump(&mut self.net);
-        while let Some(m) = self.inbox.pop() {
-            self.state.apply(m);
         }
 
         if !self.readied && self.state.my_slot.is_some() {

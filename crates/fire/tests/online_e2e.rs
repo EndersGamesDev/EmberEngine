@@ -58,7 +58,16 @@ impl Peer {
         }
         assert_eq!(net.status(), Status::Open, "socket never opened");
         fire::net::hello(&net, handle);
-        Self { net, game: Online::new(), inbox: Default::default() }
+        let mut peer = Self { net, game: Online::new(), inbox: Default::default() };
+        // Wait for Welcome before returning. Hello must be the first message
+        // on a connection and Welcome acknowledges it; anything version-gated
+        // sent before then races the server's handling of Hello and is refused
+        // with "this build speaks fire protocol v0".
+        assert!(
+            peer.wait_for(Duration::from_secs(5), |g| g.welcomed),
+            "{handle}: no Welcome"
+        );
+        peer
     }
 
     fn pump(&mut self) {
@@ -81,6 +90,23 @@ impl Peer {
         false
     }
 
+    /// Everything that distinguishes the ways this can go wrong: a dead
+    /// socket, a refusal we never looked at, or a message that simply never
+    /// came. A bare `assert!` cannot tell them apart, which is what made the
+    /// last two failures look like the same bug.
+    fn dump(&self, who: &str) -> String {
+        format!(
+            "{who}: socket={:?} screen={:?} slot={:?} phase={:?} notice={:?} roster={} lobby={:?}",
+            self.net.status(),
+            self.game.screen,
+            self.game.my_slot,
+            self.game.phase,
+            self.game.notice,
+            self.game.roster.len(),
+            self.game.lobby_name,
+        )
+    }
+
     /// One client frame: apply what arrived, send an input, predict forward.
     fn frame(&mut self, input: CarInput) {
         self.pump();
@@ -96,10 +122,10 @@ fn a_client_joins_races_and_its_prediction_converges() {
     let mut me = Peer::connect(port, "driver");
 
     me.net.send(&C2S::CreateLobby { name: "castle".into(), password: None });
-    assert!(
-        me.wait_for(Duration::from_secs(3), |g| g.screen == Screen::InLobby),
-        "never joined the lobby I created"
-    );
+    if !me.wait_for(Duration::from_secs(5), |g| g.screen == Screen::InLobby) {
+        panic!("never joined the lobby I created.
+  {}", me.dump("me"));
+    }
     let slot = me.game.my_slot.expect("no grid slot");
 
     me.net.send(&C2S::Ready { ready: true });
@@ -164,9 +190,16 @@ fn two_clients_see_each_other_move() {
     let mut b = Peer::connect(port, "bob");
 
     a.net.send(&C2S::CreateLobby { name: "shared".into(), password: None });
-    assert!(a.wait_for(Duration::from_secs(3), |g| g.screen == Screen::InLobby));
+    if !a.wait_for(Duration::from_secs(5), |g| g.screen == Screen::InLobby) {
+        panic!("alice never got Joined for the lobby she created.
+  {}", a.dump("alice"));
+    }
     b.net.send(&C2S::JoinLobby { name: "shared".into(), password: None });
-    assert!(b.wait_for(Duration::from_secs(3), |g| g.screen == Screen::InLobby));
+    if !b.wait_for(Duration::from_secs(5), |g| g.screen == Screen::InLobby) {
+        panic!("bob never joined.
+  {}
+  {}", b.dump("bob"), a.dump("alice"));
+    }
 
     let a_slot = a.game.my_slot.unwrap();
     let b_slot = b.game.my_slot.unwrap();
