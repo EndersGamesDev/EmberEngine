@@ -1,25 +1,34 @@
 #!/usr/bin/env bash
 # Bring Fire Racer online multiplayer up end to end:
-#   1. build + (re)start fire-server on specht
+#   1. build + (re)start fire-server on the target host
 #   2. (re)start a Cloudflare quick tunnel in front of it — this mints a
 #      fresh https://…trycloudflare.com domain on EVERY restart
 #   3. publish the new domain to server.json on GitHub Pages as "fire_ws"
 #   4. health-check by SPEAKING THE PROTOCOL through the public URL
 #
 # Run from Windows (git-bash): bash deploy/deploy-fire-online.sh
-# Requires the specht wireproxy tunnel running locally (ssh specht works).
+# Requires the wireproxy tunnel to $EMBER_HOST running locally (ssh specht works).
 #
 # Deliberately a separate script, port, tunnel and server.json key from the
 # arena's. The two games speak different protocols with independent version
 # numbers, so redeploying one must never be able to knock the other offline.
 #
-# ACCOUNTS. specht carries more than one: the live arena runs as `ender`,
+# ACCOUNTS. the host may carry more than one: the live arena runs as `ender`,
 # deployed from a different workstation, and holds 127.0.0.1:7780. This script
 # runs as whoever `ssh specht` lands as (today `end`) and touches nothing
 # belonging to anyone else — see the pkill and the port guard below.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# The target host. specht is being decommissioned; export EMBER_HOST to point
+# this at its replacement without editing the script:
+#
+#     EMBER_HOST=newbox bash deploy/deploy-fire-online.sh
+#
+# It must be a name `ssh` already resolves and can log into without a prompt
+# (BatchMode is on everywhere below), i.e. an entry in ~/.ssh/config with a key.
+REMOTE="${EMBER_HOST:-specht}"
+
 PORT=7781
 BIND="127.0.0.1:$PORT"
 REMOTE_DIR="ember-src-fire"
@@ -51,13 +60,13 @@ TARBALL="$(mktemp -t ember-fire-src-XXXX.tar.gz)"
 git archive --format=tar.gz -o "$TARBALL" HEAD \
     Cargo.toml Cargo.lock crates/ assets/models/fire/
 echo "   $(du -h "$TARBALL" | cut -f1) of committed source"
-scp -o BatchMode=yes "$TARBALL" specht:ember-fire-src.tar.gz
+scp -o BatchMode=yes "$TARBALL" "$REMOTE":ember-fire-src.tar.gz
 rm -f "$TARBALL"
-ssh -o BatchMode=yes specht \
+ssh -o BatchMode=yes "$REMOTE" \
     "rm -rf ~/$REMOTE_DIR && mkdir ~/$REMOTE_DIR && tar xzf ~/ember-fire-src.tar.gz -C ~/$REMOTE_DIR"
 
 echo "== building fire-server (toolbox: ember-build) =="
-ssh -o BatchMode=yes specht \
+ssh -o BatchMode=yes "$REMOTE" \
     "toolbox run -c ember-build bash -lc 'source ~/.cargo/env && cd ~/$REMOTE_DIR && cargo build --release -p fire-server'"
 
 echo "== stopping our own fire-server, if any =="
@@ -66,7 +75,7 @@ echo "== stopping our own fire-server, if any =="
 # it matched nothing, said nothing (the call is wrapped in `|| true`), and the
 # launch then failed to bind a port the previous process still held — a silent
 # outage that looked like a successful deploy.
-ssh -o BatchMode=yes specht \
+ssh -o BatchMode=yes "$REMOTE" \
     "pkill -u \"\$(id -un)\" -f \"\$HOME/$REMOTE_DIR/target/release/fire-serve[r]\" 2>/dev/null; true"
 sleep 1
 
@@ -74,7 +83,7 @@ echo "== checking nobody else holds $PORT =="
 # If the port is held by another account there is nothing this script can do
 # about it, and the launch below would fail to bind. Say so plainly instead of
 # reporting success over a server that never started.
-HOLDER="$(ssh -o BatchMode=yes specht \
+HOLDER="$(ssh -o BatchMode=yes "$REMOTE" \
     "ss -ltnp 'sport = :$PORT' 2>/dev/null | tail -n +2" || true)"
 if [ -n "$HOLDER" ]; then
     echo "FAILED: something is already listening on $PORT:" >&2
@@ -86,53 +95,53 @@ if [ -n "$HOLDER" ]; then
 fi
 
 echo "== starting fire-server =="
-ssh -o BatchMode=yes -f specht \
+ssh -o BatchMode=yes -f "$REMOTE" \
     "RUST_LOG=info nohup ~/$REMOTE_DIR/target/release/fire-server $BIND >> ~/fire-server.log 2>&1 &"
 sleep 2
-if ! ssh -o BatchMode=yes specht 'pgrep -u "$(id -un)" -f "fire-serve[r]" >/dev/null'; then
+if ! ssh -o BatchMode=yes "$REMOTE" 'pgrep -u "$(id -un)" -f "fire-serve[r]" >/dev/null'; then
     echo "FAILED: fire-server is not running. Last log lines:" >&2
-    ssh -o BatchMode=yes specht 'tail -20 ~/fire-server.log' >&2 || true
+    ssh -o BatchMode=yes "$REMOTE" 'tail -20 ~/fire-server.log' >&2 || true
     exit 1
 fi
-ssh -o BatchMode=yes specht 'tail -1 ~/fire-server.log'
+ssh -o BatchMode=yes "$REMOTE" 'tail -1 ~/fire-server.log'
 
 echo "== local health check (before exposing it) =="
 # Prove the hub loop is alive on the loopback side first, so a failure here is
 # unambiguously the server rather than the tunnel.
-if ! ssh -o BatchMode=yes specht \
+if ! ssh -o BatchMode=yes "$REMOTE" \
     "toolbox run -c ember-build bash -lc 'source ~/.cargo/env && cd ~/$REMOTE_DIR && cargo run --release -q -p fire-server --example probe -- ws://$BIND'"; then
     echo "FAILED: the server is listening but did not answer Hello." >&2
-    ssh -o BatchMode=yes specht 'tail -20 ~/fire-server.log' >&2 || true
+    ssh -o BatchMode=yes "$REMOTE" 'tail -20 ~/fire-server.log' >&2 || true
     exit 1
 fi
 
 echo "== restarting tunnel (fresh domain) =="
 # Anchored on this port so it can never match the arena's tunnel.
-ssh -o BatchMode=yes specht \
+ssh -o BatchMode=yes "$REMOTE" \
     "pkill -u \"\$(id -un)\" -f \"cloudflare[d] tunnel --url http://$BIND\" 2>/dev/null; true"
-ssh -o BatchMode=yes specht ': > ~/cloudflared-fire.log'
-ssh -o BatchMode=yes -f specht \
+ssh -o BatchMode=yes "$REMOTE" ': > ~/cloudflared-fire.log'
+ssh -o BatchMode=yes -f "$REMOTE" \
     "nohup ~/bin/cloudflared tunnel --url http://$BIND --no-autoupdate >> ~/cloudflared-fire.log 2>&1 &"
 
 echo "== waiting for the tunnel domain =="
-HOST=""
+TUNNEL=""
 for _ in $(seq 1 30); do
     sleep 2
-    HOST=$(ssh -o BatchMode=yes specht \
+    TUNNEL=$(ssh -o BatchMode=yes "$REMOTE" \
         "grep -oE 'https://[a-z0-9-]+\\.trycloudflare\\.com' ~/cloudflared-fire.log | head -1" || true)
-    [ -n "$HOST" ] && break
+    [ -n "$TUNNEL" ] && break
 done
-if [ -z "$HOST" ]; then
-    echo "FAILED: no trycloudflare domain appeared; see ~/cloudflared-fire.log on specht" >&2
+if [ -z "$TUNNEL" ]; then
+    echo "FAILED: no trycloudflare domain appeared; see ~/cloudflared-fire.log on the target host" >&2
     exit 1
 fi
-WS_URL="wss://${HOST#https://}"
-echo "tunnel domain: $HOST  ->  $WS_URL"
+WS_URL="wss://${TUNNEL#https://}"
+echo "tunnel domain: $TUNNEL  ->  $WS_URL"
 
 echo "== health check THROUGH the public URL =="
 # The old shared form accepted an HTTP 101 as proof of life. A 101 only says a
 # connection thread completed the WebSocket handshake; pong-server was observed
-# on specht with its listener up and its hub loop dead, handing out 101s and
+# on the target host with its listener up and its hub loop dead, handing out 101s and
 # closing immediately — and that check would have printed ONLINE. The probe
 # sends Hello and requires Welcome, which only the hub thread can produce.
 ok=""
