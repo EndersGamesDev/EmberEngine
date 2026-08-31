@@ -3,344 +3,77 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ember fire racer</title>
+  <title>ember fire</title>
   <style>
     :root { color-scheme: dark; }
     body {
-      margin: 0; min-height: 100vh;
-      display: flex; flex-direction: column; align-items: center; gap: 14px;
-      background: #0b0a12; color: #cfc9dc;
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 14px;
+      background: #06101f;
+      color: #c7d2e4;
       font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-      padding-bottom: 24px;
+      padding-bottom: 20px;
     }
     header {
       width: min(1280px, 96vw);
       display: flex; align-items: baseline; justify-content: space-between;
-      margin-top: 16px; flex-wrap: wrap; gap: 8px;
+      margin-top: 16px;
     }
     h1 { margin: 0; font-size: 1.3rem; letter-spacing: 0.16em; font-weight: 600; }
-    h1 span { color: #d4a13a; }
-    h1 a { color: #8f7fd4; text-decoration: none; font-size: 0.85rem; letter-spacing: 0; }
-    .controls {
-      width: min(1280px, 96vw);
-      display: flex; gap: 22px; font-size: 0.9rem; flex-wrap: wrap; opacity: 0.85;
-    }
-    .controls b { color: #8f7fd4; }
+    h1 span { color: #f0b429; }
+    h1 a { color: #6ea8fe; text-decoration: none; font-size: 0.85rem; letter-spacing: 0; }
+    .controls { display: flex; gap: 28px; font-size: 0.95rem; }
+    .controls b { color: #6ea8fe; }
     kbd {
-      background: #1c1830; border: 1px solid #362f52; border-bottom-width: 3px;
-      border-radius: 5px; padding: 1px 7px; font-family: inherit; font-size: 0.85em;
+      background: #14243c; border: 1px solid #2a3f60; border-bottom-width: 3px;
+      border-radius: 5px; padding: 1px 7px; font-family: inherit;
     }
-
-    /* ---- start screen ---- */
-    #start { width: min(1280px, 96vw); }
-    .panel-box {
-      background: #14112180; border: 1px solid #2e2748; border-radius: 12px; padding: 18px 20px;
-    }
-    .modes { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
-    button {
-      font: inherit; color: #ece6ff; background: #241d3d; border: 1px solid #3d3363;
-      border-radius: 8px; padding: 8px 16px; cursor: pointer;
-    }
-    button:hover:not(:disabled) { background: #2f2650; border-color: #574a86; }
-    button:disabled { opacity: 0.45; cursor: default; }
-    button.primary { background: #4a3a1c; border-color: #7d6327; color: #ffdf9e; }
-    button.primary:hover:not(:disabled) { background: #5c4823; }
-    input {
-      font: inherit; color: #ece6ff; background: #100d1c; border: 1px solid #332c53;
-      border-radius: 7px; padding: 7px 10px; min-width: 0;
-    }
-    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
-    .row label { font-size: 0.8rem; letter-spacing: 0.14em; opacity: 0.6; min-width: 66px; }
-    #lobby-rows { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
-    .lobby {
-      display: flex; align-items: center; gap: 12px;
-      background: #191430; border: 1px solid #2c2549; border-radius: 8px; padding: 8px 12px;
-    }
-    .lobby .nm { font-weight: 600; color: #f0e6ff; }
-    .lobby .meta { font-size: 0.8rem; opacity: 0.6; margin-left: auto; }
-    .note { font-size: 0.85rem; opacity: 0.7; }
-    .note.bad { color: #ff9c8f; opacity: 1; }
-    .hidden { display: none !important; }
-
-    /* ---- stage ---- */
-    #stage { position: relative; width: min(1280px, 96vw); }
     #ember-root canvas {
-      width: 100% !important; aspect-ratio: 16 / 9; height: auto !important;
-      border-radius: 10px; display: block; background: #05040a;
+      width: min(1280px, 96vw) !important;
+      aspect-ratio: 16 / 9;
+      height: auto !important;
+      border-radius: 10px;
+      outline: none;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.55);
+      background: #000;
     }
-    #hud {
-      position: absolute; inset: 0; pointer-events: none;
-      font-variant-numeric: tabular-nums; opacity: 0; transition: opacity 0.4s ease;
-    }
-    #hud.live { opacity: 1; }
-    .panel {
-      position: absolute; background: rgba(10, 8, 18, 0.62);
-      border: 1px solid rgba(143, 127, 212, 0.28); border-radius: 10px;
-      padding: 10px 14px; backdrop-filter: blur(3px);
-    }
-    #speed { left: 18px; bottom: 18px; text-align: center; min-width: 130px; }
-    #speed .n { font-size: 2.6rem; font-weight: 700; line-height: 1; color: #f0e6ff; }
-    #speed .u { font-size: 0.72rem; letter-spacing: 0.22em; opacity: 0.6; }
-    #lap { right: 18px; top: 18px; text-align: right; }
-    #lap .n { font-size: 1.5rem; font-weight: 700; color: #f0e6ff; }
-    #lap .l { font-size: 0.7rem; letter-spacing: 0.2em; opacity: 0.6; display: block; }
-    #boost { right: 18px; bottom: 18px; display: flex; gap: 7px; align-items: center; }
-    .pip { width: 15px; height: 26px; border-radius: 4px; background: #2a2340; border: 1px solid #443a68; }
-    .pip.on { background: linear-gradient(#ffd06a, #e08a1e); border-color: #ffd06a; }
-    #boost .cap { font-size: 0.7rem; letter-spacing: 0.2em; opacity: 0.6; margin-right: 4px; }
-    #state {
-      left: 50%; top: 42%; transform: translate(-50%, -50%);
-      font-size: 3.2rem; font-weight: 800; letter-spacing: 0.06em;
-      color: #f5ead4; text-shadow: 0 4px 24px rgba(0,0,0,0.8);
-      display: none; background: none; border: none;
-    }
-    #drift {
-      left: 50%; bottom: 20px; transform: translateX(-50%);
-      letter-spacing: 0.28em; font-size: 0.8rem; color: #ffb347;
-      display: none; border-color: rgba(255,179,71,0.4);
-    }
-    #loading { font-size: 0.9rem; opacity: 0.8; padding: 40px; display: block; }
-    footer { font-size: 0.78rem; opacity: 0.45; width: min(1280px, 96vw); }
+    #loading { font-size: 0.9rem; opacity: 0.8; }
   </style>
 </head>
 <body>
   <header>
-    <h1><a href="../../../">⬅ games</a> &nbsp; ember <span>fire racer</span> <small style="opacity:.5">v1</small></h1>
+    <h1><a href="../../../">⬅ games</a> &nbsp; ember <span>fire</span> <small style="opacity:.5">v1</small></h1>
   </header>
   <div class="controls">
-    <div><b>Drive</b> <kbd>W</kbd> <kbd>S</kbd></div>
-    <div><b>Steer</b> <kbd>A</kbd> <kbd>D</kbd></div>
-    <div><b>Drift</b> <kbd>Space</kbd> — handbrake, breaks traction</div>
-    <div><b>Boost</b> <kbd>Shift</kbd> — three charges a race</div>
-    <div>3 laps of the castle bailey</div>
+    <div><b>Player 1</b> (near): <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> to move, <kbd>Mouse</kbd> to look, <kbd>Click</kbd> to accelerate</div>
+    <div><b>Other players</b> (far): use <kbd>WASD</kbd> for their cars</div>
+    <div>8 players racing around the track!</div>
   </div>
-
-  <div id="start">
-    <div class="panel-box">
-      <div class="modes">
-        <button id="btn-practice" class="primary">Practice alone</button>
-        <button id="btn-online">Race online</button>
-      </div>
-
-      <div id="online-panel" class="hidden">
-        <div class="row">
-          <label for="handle">NAME</label>
-          <input id="handle" maxlength="20" placeholder="driver" style="flex:1 1 180px">
-          <button id="btn-refresh">Refresh</button>
-        </div>
-        <div id="lobby-rows"><span class="note" id="list-note">looking for a server…</span></div>
-        <div class="row">
-          <label for="newlobby">NEW</label>
-          <input id="newlobby" maxlength="24" placeholder="lobby name" style="flex:1 1 180px">
-          <input id="newpass" maxlength="40" placeholder="password (optional)" type="password" style="flex:1 1 140px">
-          <button id="btn-create">Create</button>
-        </div>
-        <div class="note" id="online-note"></div>
-      </div>
-    </div>
-  </div>
-
-  <div id="stage" class="hidden">
-    <div id="ember-root"><span id="loading">loading engine…</span></div>
-    <div id="hud">
-      <div class="panel" id="speed"><div class="n">0</div><div class="u">KM/H</div></div>
-      <div class="panel" id="lap"><span class="l">LAP</span><span class="n">1/3</span>
-        <span class="l" style="margin-top:6px">POSITION</span><span class="n" id="place">1/8</span></div>
-      <div class="panel" id="boost"><span class="cap">BOOST</span></div>
-      <div id="state" class="panel"></div>
-      <div class="panel" id="drift">DRIFT</div>
-    </div>
-  </div>
-
-  <footer>
-    Track, car physics and lap timing live in <code>fire-core</code> — the same simulation the
-    server runs, which is what lets the client predict its own car and reconcile against the
-    server thirty times a second. Castle props generated with Hunyuan3D-2mv; every texture is
-    procedural, so none of them cost a download byte.
-  </footer>
-
+  <div id="ember-root"><span id="loading">loading engine…</span></div>
   <script type="module">
-    const $ = (id) => document.getElementById(id);
     const fail = (msg) => {
-      const el = $('loading');
+      const el = document.getElementById('loading');
       if (el) el.textContent = 'failed to start: ' + (msg || 'see browser console');
     };
     window.addEventListener('error', (e) => fail(e.message));
     window.addEventListener('unhandledrejection', (e) => fail(e.reason));
-    // Stop the arrow keys and space scrolling the page out from under the race.
-    addEventListener('keydown', (e) => {
-      if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
-    }, { passive: false });
     document.addEventListener('pointerdown', () => {
       document.querySelector('#ember-root canvas')?.focus();
     });
-
-    const ROOT = new URL('../../../', location);
-    let cfg = {};
+    let v = '0';
     try {
-      const r = await fetch(new URL(`server.json?ts=${Date.now()}`, ROOT), { cache: 'no-store' });
-      if (r.ok) cfg = await r.json();
+      const r = await fetch(new URL(`server.json?ts=${Date.now()}`, new URL('../../../', location)), { cache: 'no-store' });
+      if (r.ok) v = (await r.json()).v || '0';
     } catch {}
-    const V = cfg.v || '0';
-
-    const wasm = await import(`./pkg/fire.js?v=${V}`);
-    await wasm.default({ module_or_path: `./pkg/fire_bg.wasm?v=${V}` });
-
-    // ---- lobby browser -----------------------------------------------------
-    // Its own short-lived socket, exactly like the arena's. The engine loop
-    // never sees a menu, and this keeps working from a frozen page even when
-    // the protocol has moved on: listing is ungated on the server.
-    const fireWs = () => (cfg.fire_ws || '').trim();
-
-    const listLobbies = () => {
-      const rows = $('lobby-rows');
-      const note = (text, bad) => {
-        const s = document.createElement('span');
-        s.className = 'note' + (bad ? ' bad' : '');
-        s.textContent = text;
-        rows.replaceChildren(s);
-      };
-      const url = fireWs();
-      if (!url) { note('no online server is published right now — practice mode still works'); return; }
-      note('looking for lobbies…');
-
-      let done = false;
-      const ws = new WebSocket(url);
-      const finish = (msg, bad) => { if (!done) { done = true; if (msg) note(msg, bad); ws.close(); } };
-      setTimeout(() => finish('server did not answer', true), 6000);
-      ws.onerror = () => finish('server not reachable', true);
-      ws.onopen = () => {
-        ws.send(JSON.stringify({ t: 'hello', proto: wasm.proto_version(), handle: 'browser' }));
-        ws.send(JSON.stringify({ t: 'list_lobbies' }));
-      };
-      ws.onmessage = (e) => {
-        let m; try { m = JSON.parse(e.data); } catch { return; }
-        if (m.t !== 'lobbies') return;
-        done = true; ws.close();
-        if (!m.lobbies.length) { note('no lobbies yet — create one below'); return; }
-        rows.replaceChildren(...m.lobbies.map((l) => {
-          const row = document.createElement('div');
-          row.className = 'lobby';
-          const nm = document.createElement('span');
-          nm.className = 'nm';
-          nm.textContent = l.name + (l.has_password ? ' 🔒' : '');
-          const meta = document.createElement('span');
-          meta.className = 'meta';
-          meta.textContent = `${l.players}/${l.cap} · host ${l.host}${l.racing ? ' · racing' : ''}`;
-          const go = document.createElement('button');
-          go.textContent = 'Join';
-          go.onclick = () => {
-            const pass = l.has_password ? prompt(`Password for "${l.name}"`) : null;
-            if (l.has_password && pass === null) return;
-            launchOnline(l.name, pass, false);
-          };
-          row.append(nm, meta, go);
-          return row;
-        }));
-      };
-    };
-
-    // ---- launching ---------------------------------------------------------
-    let launched = false;
-    const showStage = () => {
-      $('start').classList.add('hidden');
-      $('stage').classList.remove('hidden');
-    };
-
-    const launchLocal = () => {
-      if (launched) return;
-      launched = true;
-      showStage();
-      wasm.start_local();
-      pollHud();
-    };
-
-    const launchOnline = (lobby, password, create) => {
-      if (launched) return;
-      const url = fireWs();
-      if (!url) { $('online-note').textContent = 'no server published'; return; }
-      launched = true;
-      showStage();
-      try {
-        wasm.start_online(JSON.stringify({
-          ws: url,
-          handle: ($('handle').value || 'driver').trim(),
-          lobby, password: password || '', create,
-        }));
-        pollHud();
-      } catch (e) {
-        launched = false;
-        $('stage').classList.add('hidden');
-        $('start').classList.remove('hidden');
-        $('online-note').className = 'note bad';
-        $('online-note').textContent = String(e);
-      }
-    };
-
-    $('btn-practice').onclick = launchLocal;
-    $('btn-online').onclick = () => {
-      $('online-panel').classList.toggle('hidden');
-      $('btn-online').classList.add('primary');
-      $('btn-practice').classList.remove('primary');
-      if (!$('online-panel').classList.contains('hidden')) listLobbies();
-    };
-    $('btn-refresh').onclick = listLobbies;
-    $('btn-create').onclick = () => {
-      const name = ($('newlobby').value || '').trim();
-      if (!name) { $('online-note').className = 'note bad'; $('online-note').textContent = 'give the lobby a name'; return; }
-      launchOnline(name, ($('newpass').value || '').trim(), true);
-    };
-
-    // ---- HUD ---------------------------------------------------------------
-    // The renderer has one scene pass, no 2D layer and no text, so the HUD
-    // lives here and reads a snapshot the game publishes every frame.
-    const speedEl = document.querySelector('#speed .n');
-    const lapEl = document.querySelector('#lap .n');
-    const placeEl = $('place');
-    const boostEl = $('boost');
-    const stateEl = $('state');
-    const driftEl = $('drift');
-    const MAX_BOOST = 3;
-    let pips = [];
-
-    const setPips = (n) => {
-      if (pips.length !== MAX_BOOST) {
-        boostEl.querySelectorAll('.pip').forEach((p) => p.remove());
-        pips = Array.from({ length: MAX_BOOST }, () => {
-          const d = document.createElement('div');
-          d.className = 'pip';
-          boostEl.appendChild(d);
-          return d;
-        });
-      }
-      pips.forEach((p, i) => p.classList.toggle('on', i < n));
-    };
-
-    const pollHud = () => {
-      const hud = $('hud');
-      const tick = () => {
-        try {
-          const h = JSON.parse(wasm.hud_json());
-          hud.classList.add('live');
-          speedEl.textContent = Math.round(h.speed);
-          lapEl.textContent = `${Math.min(h.lap + 1, h.laps)}/${h.laps}`;
-          placeEl.textContent = `${h.place}/${h.racers}`;
-          setPips(h.boost);
-          driftEl.style.display = h.drifting ? 'block' : 'none';
-          if (h.countdown > 0.01) {
-            stateEl.style.display = 'block';
-            stateEl.textContent = Math.ceil(h.countdown);
-          } else if (h.finished) {
-            stateEl.style.display = 'block';
-            stateEl.textContent = `P${h.place}`;
-          } else {
-            stateEl.style.display = 'none';
-          }
-        } catch {}
-        requestAnimationFrame(tick);
-      };
-      requestAnimationFrame(tick);
-    };
+    const { default: init, start_local } = await import(`./pkg/fire.js?v=${v}`);
+    await init({ module_or_path: `./pkg/fire_bg.wasm?v=${v}` });
+    // The engine removes #loading itself once the GPU is actually up.
+    start_local();
   </script>
 </body>
 </html>

@@ -6,6 +6,12 @@ version.workspace = true
 [dependencies]
 fire-core = { path = "../fire-core" }
 serde_json.workspace = true
-tungstenite.workspace = true
+# The rustls feature is for the wss-capable health probe, not the server
+# itself: TLS terminates at the tunnel in front of it.
+tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+# The probe must install a TLS crypto provider before connecting.
+rustls.workspace = true

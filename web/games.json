@@ -69,10 +69,16 @@
       "desc": "Arcade racing through a gothic castle bailey — a 920 m circuit with a main straight, a long sweeper, a fountain chicane and a hairpin. WASD to drive, Space for the handbrake to break traction and drift, Shift to spend one of three boost charges. Practice alone, or open a lobby and race other people on an authoritative server.",
       "versions": [
         {
-          "v": "v1",
-          "path": "games/fire/v1/",
+          "v": "v2",
+          "path": "games/fire/v2/",
           "live": true,
           "note": "castle circuit, drift + boost, online lobbies"
+        },
+        {
+          "v": "v1",
+          "path": "games/fire/v1/",
+          "live": false,
+          "note": "archived — the first build, before the castle circuit"
         }
       ]
     },

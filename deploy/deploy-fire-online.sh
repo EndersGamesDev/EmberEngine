@@ -4,47 +4,112 @@
 #   2. (re)start a Cloudflare quick tunnel in front of it — this mints a
 #      fresh https://…trycloudflare.com domain on EVERY restart
 #   3. publish the new domain to server.json on GitHub Pages as "fire_ws"
-#   4. health-check through the public URL
+#   4. health-check by SPEAKING THE PROTOCOL through the public URL
 #
 # Run from Windows (git-bash): bash deploy/deploy-fire-online.sh
 # Requires the specht wireproxy tunnel running locally (ssh specht works).
 #
-# Deliberately a separate script, tunnel and server.json key from the arena's.
-# The two games speak different protocols with independent version numbers, so
-# redeploying one must never be able to knock the other offline.
+# Deliberately a separate script, port, tunnel and server.json key from the
+# arena's. The two games speak different protocols with independent version
+# numbers, so redeploying one must never be able to knock the other offline.
+#
+# ACCOUNTS. specht carries more than one: the live arena runs as `ender`,
+# deployed from a different workstation, and holds 127.0.0.1:7780. This script
+# runs as whoever `ssh specht` lands as (today `end`) and touches nothing
+# belonging to anyone else — see the pkill and the port guard below.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-# SELinux on specht denies many ports; 7780 is the verified-bindable one and
-# the arena already holds it, so fire gets the next port up. If this ever
-# fails to bind, test candidates before assuming the server is broken.
-BIND="127.0.0.1:7781"
+PORT=7781
+BIND="127.0.0.1:$PORT"
+REMOTE_DIR="ember-src-fire"
+# Matching on our own absolute binary path means the pattern cannot hit
+# another account's server even if one is running the same program.
+BIN="$REMOTE_DIR/target/release/fire-server"
+
+cd "$REPO_DIR"
+
+# The tarball below is built with `git archive`, so ONLY COMMITTED WORK
+# DEPLOYS. Refuse to run against a dirty tree rather than quietly shipping
+# something other than what is in front of you.
+if ! git diff --quiet || ! git diff --cached --quiet; then
+    echo "FAILED: working tree is dirty. This deploys the committed tree" >&2
+    echo "        (git archive HEAD), so commit or stash first:" >&2
+    git status --short >&2
+    exit 1
+fi
+echo "== deploying $(git rev-parse --short HEAD) =="
 
 echo "== syncing source =="
-TARBALL="$(mktemp -t ember-src-XXXX.tar.gz)"
-tar --exclude='ember/target' --exclude='ember/.git' -czf "$TARBALL" \
-    -C "$(dirname "$REPO_DIR")" "$(basename "$REPO_DIR")"
-scp -o BatchMode=yes "$TARBALL" specht:ember-src.tar.gz
+# `git archive` rather than `tar` over the working tree. The old form excluded
+# only target/ and .git, so ~250 MB of untracked artist assets rode to specht
+# on every run — 351 MB to build a server that needs none of it. Limiting the
+# pathspec to the manifests and crates gives 0.49 MB and an identical build.
+# assets/models/fire is included so the `fire` client crate would also build
+# there; it is 431 KB and saves a confusing failure later.
+TARBALL="$(mktemp -t ember-fire-src-XXXX.tar.gz)"
+git archive --format=tar.gz -o "$TARBALL" HEAD \
+    Cargo.toml Cargo.lock crates/ assets/models/fire/
+echo "   $(du -h "$TARBALL" | cut -f1) of committed source"
+scp -o BatchMode=yes "$TARBALL" specht:ember-fire-src.tar.gz
 rm -f "$TARBALL"
 ssh -o BatchMode=yes specht \
-    'rm -rf ~/ember-src && mkdir ~/ember-src && tar xzf ~/ember-src.tar.gz -C ~/ember-src --strip-components=1'
+    "rm -rf ~/$REMOTE_DIR && mkdir ~/$REMOTE_DIR && tar xzf ~/ember-fire-src.tar.gz -C ~/$REMOTE_DIR"
 
 echo "== building fire-server (toolbox: ember-build) =="
 ssh -o BatchMode=yes specht \
-    'toolbox run -c ember-build bash -lc "source ~/.cargo/env && cd ~/ember-src && cargo build --release -p fire-server"'
+    "toolbox run -c ember-build bash -lc 'source ~/.cargo/env && cd ~/$REMOTE_DIR && cargo build --release -p fire-server'"
 
-echo "== restarting fire-server =="
-# Kill and launch are separate ssh calls on purpose: in a combined call the
-# launch text matches the pkill pattern and kills its own shell.
-ssh -o BatchMode=yes specht 'pkill -u ender -f "fire-serve[r]" 2>/dev/null; true'
+echo "== stopping our own fire-server, if any =="
+# Only our own account's process, and only one matching our own install path.
+# The old shared form was `pkill -u <hardcoded>`: run from the wrong account
+# it matched nothing, said nothing (the call is wrapped in `|| true`), and the
+# launch then failed to bind a port the previous process still held — a silent
+# outage that looked like a successful deploy.
+ssh -o BatchMode=yes specht \
+    "pkill -u \"\$(id -un)\" -f \"\$HOME/$REMOTE_DIR/target/release/fire-serve[r]\" 2>/dev/null; true"
+sleep 1
+
+echo "== checking nobody else holds $PORT =="
+# If the port is held by another account there is nothing this script can do
+# about it, and the launch below would fail to bind. Say so plainly instead of
+# reporting success over a server that never started.
+HOLDER="$(ssh -o BatchMode=yes specht \
+    "ss -ltnp 'sport = :$PORT' 2>/dev/null | tail -n +2" || true)"
+if [ -n "$HOLDER" ]; then
+    echo "FAILED: something is already listening on $PORT:" >&2
+    echo "  $HOLDER" >&2
+    echo "        If it shows no process name it belongs to another account" >&2
+    echo "        (the arena runs as 'ender' on 7780, deployed elsewhere)." >&2
+    echo "        Pick a free port or stop it from the machine that owns it." >&2
+    exit 1
+fi
+
+echo "== starting fire-server =="
 ssh -o BatchMode=yes -f specht \
-    "RUST_LOG=info nohup ~/ember-src/target/release/fire-server $BIND >> ~/fire-server.log 2>&1 &"
+    "RUST_LOG=info nohup ~/$REMOTE_DIR/target/release/fire-server $BIND >> ~/fire-server.log 2>&1 &"
 sleep 2
-ssh -o BatchMode=yes specht 'pgrep -af "fire-serve[r]" && tail -1 ~/fire-server.log'
+if ! ssh -o BatchMode=yes specht 'pgrep -u "$(id -un)" -f "fire-serve[r]" >/dev/null'; then
+    echo "FAILED: fire-server is not running. Last log lines:" >&2
+    ssh -o BatchMode=yes specht 'tail -20 ~/fire-server.log' >&2 || true
+    exit 1
+fi
+ssh -o BatchMode=yes specht 'tail -1 ~/fire-server.log'
+
+echo "== local health check (before exposing it) =="
+# Prove the hub loop is alive on the loopback side first, so a failure here is
+# unambiguously the server rather than the tunnel.
+if ! ssh -o BatchMode=yes specht \
+    "toolbox run -c ember-build bash -lc 'source ~/.cargo/env && cd ~/$REMOTE_DIR && cargo run --release -q -p fire-server --example probe -- ws://$BIND'"; then
+    echo "FAILED: the server is listening but did not answer Hello." >&2
+    ssh -o BatchMode=yes specht 'tail -20 ~/fire-server.log' >&2 || true
+    exit 1
+fi
 
 echo "== restarting tunnel (fresh domain) =="
-# Anchor the pattern on the fire log so this never matches the arena's tunnel.
-ssh -o BatchMode=yes specht 'pkill -u ender -f "cloudflare[d] tunnel --url http://127.0.0.1:7781" 2>/dev/null; true'
+# Anchored on this port so it can never match the arena's tunnel.
+ssh -o BatchMode=yes specht \
+    "pkill -u \"\$(id -un)\" -f \"cloudflare[d] tunnel --url http://$BIND\" 2>/dev/null; true"
 ssh -o BatchMode=yes specht ': > ~/cloudflared-fire.log'
 ssh -o BatchMode=yes -f specht \
     "nohup ~/bin/cloudflared tunnel --url http://$BIND --no-autoupdate >> ~/cloudflared-fire.log 2>&1 &"
@@ -64,11 +129,34 @@ fi
 WS_URL="wss://${HOST#https://}"
 echo "tunnel domain: $HOST  ->  $WS_URL"
 
+echo "== health check THROUGH the public URL =="
+# The old shared form accepted an HTTP 101 as proof of life. A 101 only says a
+# connection thread completed the WebSocket handshake; pong-server was observed
+# on specht with its listener up and its hub loop dead, handing out 101s and
+# closing immediately — and that check would have printed ONLINE. The probe
+# sends Hello and requires Welcome, which only the hub thread can produce.
+ok=""
+for _ in $(seq 1 10); do
+    if cargo run --release -q -p fire-server --example probe -- "$WS_URL"; then
+        ok=1
+        break
+    fi
+    sleep 3
+done
+if [ -z "$ok" ]; then
+    echo "FAILED: the tunnel is up but the server never answered Hello through it." >&2
+    echo "        Not publishing server.json — the page keeps its previous value." >&2
+    exit 1
+fi
+
 echo "== publishing server.json to GitHub Pages =="
-PAGES_DIR="$(mktemp -d -t ember-pages-XXXX)"
-git -C "$REPO_DIR" worktree add "$PAGES_DIR" gh-pages
+# Only after the probe passed: publishing first would point every player at a
+# server we had not yet proved was alive.
+#
 # Merge, never overwrite: server.json carries the arena's "ws" and "proto"
 # alongside fire's keys. Clobbering it would take the arena offline.
+PAGES_DIR="$(mktemp -d -t ember-pages-XXXX)"
+git -C "$REPO_DIR" worktree add -q "$PAGES_DIR" gh-pages
 python - "$PAGES_DIR/server.json" "$WS_URL" <<'EOF'
 import json, os, sys, time
 p, ws = sys.argv[1], sys.argv[2]
@@ -96,18 +184,5 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 )
 git -C "$REPO_DIR" worktree remove --force "$PAGES_DIR"
 
-echo "== health check through the public URL =="
-ok=""
-for _ in $(seq 1 15); do
-    sleep 2
-    code=$(curl -s -o /dev/null -w '%{http_code}' \
-        -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
-        -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: SGVsbG8sIHdvcmxkIQ==' \
-        "$HOST" || true)
-    if [ "$code" = "101" ]; then ok=1; break; fi
-done
-if [ -n "$ok" ]; then
-    echo "== ONLINE: $WS_URL (the fire page picks it up from server.json) =="
-else
-    echo "WARNING: health check did not reach 101 yet (tunnel may still be propagating)" >&2
-fi
+echo "== ONLINE: $WS_URL =="
+echo "   the fire page picks it up from server.json on its next load"

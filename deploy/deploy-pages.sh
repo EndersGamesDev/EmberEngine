@@ -6,9 +6,13 @@
 #   index.html            games hub (lobby showcase + catalog)
 #   games.json            catalog — the newest version of each game is "live"
 #   server.json           {ws, v} — current tunnel domain + deploy stamp
-#   games/arena/v3/       live arena build (page + its own frozen pkg)
+#   games/arena/v11/      live arena build (page + its own frozen pkg)
 #   games/pong/v2/        live pong build (page + its own frozen pkg)
+#   games/fire/v2/        live fire racer build (castle circuit, online)
 #   games/pong/v1/        archived first web build (materialized from history)
+#   games/fire/v1/        archived first fire build; already on the branch and
+#                         deliberately never touched again — only $FIRE_LIVE is
+#                         removed and rewritten below
 #   pkg/                  legacy root bundle, kept fresh for old cached pages
 set -euo pipefail
 
@@ -35,7 +39,7 @@ git worktree add "$PAGES_DIR" gh-pages
 # Live version dirs (older versions stay frozen on the branch untouched).
 ARENA_LIVE="games/arena/v11"
 PONG_LIVE="games/pong/v2"
-FIRE_LIVE="games/fire/v1"
+FIRE_LIVE="games/fire/v2"
 
 rm -rf "$PAGES_DIR"/index.html "$PAGES_DIR"/pkg \
     "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$PONG_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR"/games.json
