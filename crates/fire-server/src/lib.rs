@@ -243,13 +243,17 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: Sender<Ev>) {
                 match serde_json::from_str::<C2S>(&t) {
                     Ok(msg) => {
                         if events_tx.send(Ev::Msg { id, msg }).is_err() {
+                            tracing::warn!(conn = id, "hub channel closed; dropping inbound");
                             break;
                         }
                     }
                     // An unparseable frame is the peer's problem, not grounds
                     // to drop them: a newer client may send a variant this
-                    // build has never heard of.
-                    Err(e) => tracing::debug!(conn = id, "bad frame: {e}"),
+                    // build has never heard of. But it is NOT debug-level —
+                    // a frame we cannot read is indistinguishable, from the
+                    // other end, from one that was never delivered, and that
+                    // is exactly the shape of the residual join failure.
+                    Err(e) => tracing::warn!(conn = id, "undecodable frame: {e}: {t}"),
                 }
             }
             Ok(Message::Close(_)) => break,
@@ -525,6 +529,11 @@ fn handle_msg(
 ) {
     match msg {
         C2S::Hello { proto: v, handle } => {
+            // One line per connection, not per frame. This is the datum that
+            // splits the remaining "no Welcome" failure in half: if it appears
+            // and the client still never sees Welcome, the loss is
+            // server->client; if it never appears, the Hello never arrived.
+            tracing::info!(conn = id, proto = v, "hello");
             if let Some(c) = conns.get_mut(&id) {
                 c.proto = v;
                 c.handle = Some(proto::sanitize_handle(&handle));
