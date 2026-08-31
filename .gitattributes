@@ -1,0 +1,6 @@
+# core.autocrlf=true on the Windows workstations rewrites checkouts to CRLF.
+# For shell scripts that is not cosmetic: a `#!/usr/bin/env bash\r` shebang and
+# `set -euo pipefail\r` fail outright on Linux, and these scripts are meant to
+# run on the game host. CLAUDE.md already requires LF everywhere; this makes
+# git enforce it instead of relying on every tool behaving.
+*.sh text eol=lf
