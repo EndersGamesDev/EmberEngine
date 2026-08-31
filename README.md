@@ -183,6 +183,24 @@ wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknow
 then publish `web/` to the `gh-pages` branch — or just run
 `bash deploy/deploy-pages.sh`, which does all of the above.
 
+## Fire Racer
+
+**Play: <https://endersgamesdev.github.io/EmberEngine/>** — pick Fire Racer, then *Practice alone* against seven AI cars or *Race online*. `W`/`S` drive, `A`/`D` steer, `Space` is the handbrake that breaks traction into a drift, `Shift` spends one of three boost charges. Three laps of a castle bailey.
+
+Track, car physics and lap timing live in `crates/fire-core`, which is shared between the client's prediction and the authoritative server exactly as `pong-core` is for the arena — the client predicts its own car and reconciles against server state thirty times a second. The castle props are generated meshes and every texture is procedural, so none of them costs a download byte.
+
+Fire carries its **own** `PROTO_VERSION`, independent of `pong-core`'s. That is deliberate: bumping one game's protocol must never gate the other game's join. `server.json` records both, as `proto` and `fire_proto`.
+
+Online infrastructure: `fire-server` on its own port behind its own Cloudflare quick tunnel, published to `server.json` under its own `fire_ws` key — a separate script, port, tunnel and key from the arena's, so redeploying one game can never knock the other offline. `bash deploy/deploy-fire-online.sh` rebuilds, restarts, and republishes; it health-checks by speaking the protocol (Hello must be answered with Welcome) before it publishes anything, so a failed deploy leaves the previous address in place rather than pointing players at a server that never came up.
+
+### Why no link here ever carries a tunnel domain
+
+A quick tunnel mints a **new** random `*.trycloudflare.com` hostname every time it restarts, so any such URL written into this README, or into a page, would be wrong by the next restart.
+
+Nothing needs one. The hub and each game page fetch `server.json` cache-busted at load and take the current address from it, so the only link anyone needs is the stable Pages URL above — the game selector already hooks itself to whichever server is live. `server.json` is the single source of truth and the deploy scripts are the only things that write it, each merging its own key so they cannot clobber each other.
+
+What that does *not* survive is an unattended restart: the servers come back at an address `server.json` does not yet name. `deploy/watchdog.sh` closes that gap by probing the published address and redeploying when it stops answering. See `deploy/README-watchdog.md`.
+
 ## Run
 
 ```
