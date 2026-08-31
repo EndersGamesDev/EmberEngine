@@ -17,3 +17,4 @@ assets/9-mm.zip
 /web/version.json
 # Minted on gh-pages by deploy-pages.sh; a local copy is only test scaffolding.
 /web/server.json
+.watchdog-state
