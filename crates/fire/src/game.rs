@@ -9,7 +9,7 @@ use ember_engine::{
 use fire_core::ai;
 use fire_core::car::{self, CarInput};
 use fire_core::castle::{self, PropKind};
-use fire_core::sim::{Race, RaceState};
+use fire_core::sim::{FixedStep, Race, RaceState};
 
 use crate::meshes;
 use crate::texgen;
@@ -59,6 +59,12 @@ thread_local! {
 
 pub fn hud() -> Hud {
     HUD.with(|h| *h.borrow())
+}
+
+/// Publish this frame's HUD. Both play modes go through here so the page
+/// reads one shape regardless of which one is running.
+pub fn set_hud(h: Hud) {
+    HUD.with(|c| *c.borrow_mut() = h);
 }
 
 // ---- meshes ---------------------------------------------------------------
@@ -163,73 +169,23 @@ pub fn build_meshes(track: &fire_core::track::Track) -> (Vec<MeshData>, Meshes) 
 
 // ---- the game -------------------------------------------------------------
 
-pub struct Game {
-    race: Race,
-    me: usize,
-    ids: Meshes,
-    cam_dir: Vec2,
-    cam_eye: Vec3,
-    /// Rising-edge latch for boost. A held key must spend exactly one charge.
-    boost_was_down: bool,
-    started: bool,
+/// The chase camera's own state. Split out so local and online play frame the
+/// shot identically — a camera that behaves differently online would make the
+/// two modes feel like different games.
+pub struct Chase {
+    dir: Vec2,
+    eye: Vec3,
 }
 
-impl Game {
-    pub fn new(ids: Meshes) -> Self {
-        let race = Race::new(castle::track(), PLAYERS, LAPS);
-        let start = race.racers[0].car.yaw;
+impl Chase {
+    pub fn new(car: &car::Car) -> Self {
         Self {
-            cam_dir: car::forward(start),
-            cam_eye: Vec3::new(race.racers[0].car.pos.x, CAM_HEIGHT, race.racers[0].car.pos.y),
-            race,
-            me: 0,
-            ids,
-            boost_was_down: false,
-            started: false,
+            dir: car::forward(car.yaw),
+            eye: Vec3::new(car.pos.x, CAM_HEIGHT, car.pos.y),
         }
     }
 
-    fn read_input(&mut self, input: &InputState) -> CarInput {
-        let held = |a: KeyCode, b: KeyCode| input.down(a) || input.down(b);
-        let throttle = if held(KeyCode::KeyW, KeyCode::ArrowUp) {
-            1.0
-        } else if held(KeyCode::KeyS, KeyCode::ArrowDown) {
-            -1.0
-        } else {
-            0.0
-        };
-        // `steer` is left-positive, matching `Car::step`.
-        let mut steer = 0.0;
-        if held(KeyCode::KeyA, KeyCode::ArrowLeft) {
-            steer += 1.0;
-        }
-        if held(KeyCode::KeyD, KeyCode::ArrowRight) {
-            steer -= 1.0;
-        }
-        let boost_down = input.down(KeyCode::ShiftLeft) || input.down(KeyCode::ShiftRight);
-        let boost = boost_down && !self.boost_was_down;
-        self.boost_was_down = boost_down;
-        CarInput { throttle, steer, handbrake: input.down(KeyCode::Space), boost }
-    }
-
-    fn push_prop(&self, frame: &mut Frame, kind: PropKind, pos: Vec2, yaw: f32, metres: f32) {
-        let (mesh, extent, lift) = match kind {
-            PropKind::Gatehouse => (self.ids.gatehouse, self.ids.gatehouse_extent, self.ids.gatehouse_lift),
-            PropKind::Tower => (self.ids.tower, self.ids.tower_extent, self.ids.tower_lift),
-            PropKind::Fountain => (self.ids.fountain, self.ids.fountain_extent, self.ids.fountain_lift),
-        };
-        let s = if extent > 1e-4 { metres / extent } else { 1.0 };
-        frame.instances.push(
-            // Vec3::ONE: these carry a texture, and the shader multiplies the
-            // instance colour into it. Tinting here would double-tint.
-            Instance::new(Vec3::new(pos.x, lift * s, pos.y), Vec3::splat(s), Vec3::ONE)
-                .with_yaw(yaw)
-                .with_mesh(mesh),
-        );
-    }
-
-    fn update_camera(&mut self, dt: f32) -> Camera {
-        let car = &self.race.racers[self.me].car;
+    pub fn update(&mut self, car: &car::Car, dt: f32) -> Camera {
         let fwd = car::forward(car.yaw);
         let speed = car.speed();
         let vdir = if speed > 4.0 { car.vel / speed } else { fwd };
@@ -237,24 +193,70 @@ impl Game {
         let want = if want == Vec2::ZERO { fwd } else { want };
 
         let k = 1.0 - (-CAM_LAG * dt).exp();
-        self.cam_dir = (self.cam_dir + (want - self.cam_dir) * k).normalize_or_zero();
-        if self.cam_dir == Vec2::ZERO {
-            self.cam_dir = fwd;
+        self.dir = (self.dir + (want - self.dir) * k).normalize_or_zero();
+        if self.dir == Vec2::ZERO {
+            self.dir = fwd;
         }
 
         let p = Vec3::new(car.pos.x, 0.0, car.pos.y);
-        let d = Vec3::new(self.cam_dir.x, 0.0, self.cam_dir.y);
+        let d = Vec3::new(self.dir.x, 0.0, self.dir.y);
         let want_eye = p - d * CAM_DIST + Vec3::Y * CAM_HEIGHT;
-        // Lag the eye as well, so kerb strikes do not jolt the whole frame.
-        self.cam_eye += (want_eye - self.cam_eye) * k;
+        // Lag the eye too, so kerb strikes do not jolt the whole frame.
+        self.eye += (want_eye - self.eye) * k;
 
         Camera {
-            eye: self.cam_eye,
+            eye: self.eye,
             target: p + d * 10.0 + Vec3::Y * 1.4,
             // Widening with speed is the cheapest sense of velocity there is.
             fov_y_deg: FOV_BASE + FOV_SPEED_GAIN * (speed / car::MAX_SPEED).min(1.4),
         }
     }
+}
+
+/// Read the keyboard into a car intent. `boost_was_down` is the caller's
+/// rising-edge latch: a held key must spend exactly one charge.
+pub fn read_input(input: &InputState, boost_was_down: &mut bool) -> CarInput {
+    let held = |a: KeyCode, b: KeyCode| input.down(a) || input.down(b);
+    let throttle = if held(KeyCode::KeyW, KeyCode::ArrowUp) {
+        1.0
+    } else if held(KeyCode::KeyS, KeyCode::ArrowDown) {
+        -1.0
+    } else {
+        0.0
+    };
+    // `steer` is left-positive, matching `Car::step`.
+    let mut steer = 0.0;
+    if held(KeyCode::KeyA, KeyCode::ArrowLeft) {
+        steer += 1.0;
+    }
+    if held(KeyCode::KeyD, KeyCode::ArrowRight) {
+        steer -= 1.0;
+    }
+    let boost_down = input.down(KeyCode::ShiftLeft) || input.down(KeyCode::ShiftRight);
+    let boost = boost_down && !*boost_was_down;
+    *boost_was_down = boost_down;
+    CarInput { throttle, steer, handbrake: input.down(KeyCode::Space), boost }
+}
+
+pub struct Game {
+    race: Race,
+    me: usize,
+    ids: Meshes,
+    chase: Chase,
+    /// Rising-edge latch for boost. A held key must spend exactly one charge.
+    boost_was_down: bool,
+    started: bool,
+    clock: FixedStep,
+}
+
+impl Game {
+    pub fn new(ids: Meshes) -> Self {
+        let race = Race::new(castle::track(), PLAYERS, LAPS);
+        let chase = Chase::new(&race.racers[0].car);
+        Self { race, me: 0, ids, chase, boost_was_down: false, started: false, clock: FixedStep::default() }
+    }
+
+
 
     fn publish_hud(&self) {
         let me = &self.race.racers[self.me];
@@ -287,7 +289,7 @@ impl EmberGame for Game {
             self.started = true;
         }
 
-        let mine = self.read_input(input);
+        let mine = read_input(input, &mut self.boost_was_down);
         let mut inputs: Vec<CarInput> = self
             .race
             .racers
@@ -306,101 +308,18 @@ impl EmberGame for Game {
         if self.race.racers[self.me].finish_tick.is_some() {
             inputs[self.me] = ai::chase(&self.race.track, &self.race.racers[self.me].car, 0.8);
         }
-        self.race.step(&inputs, dt);
+        // Whole ticks only. `dt` here is wall-clock frame time, so stepping
+        // the sim by it directly would make the handling frame-rate dependent
+        // and the local game disagree with the server's fixed clock.
+        for _ in 0..self.clock.ticks(dt) {
+            self.race.step(&inputs, fire_core::car::DT);
+        }
 
-        let camera = self.update_camera(dt);
+        let camera = self.chase.update(&self.race.racers[self.me].car, dt);
         self.publish_hud();
 
-        let mut frame = Frame { camera, instances: Vec::with_capacity(64) };
+        scene(&self.race, &self.ids, self.me, camera)
 
-        // The track meshes are already in world space, so each is one
-        // instance at the origin with unit scale and no rotation.
-        for mesh in [
-            self.ids.ground,
-            self.ids.road,
-            self.ids.kerb_l,
-            self.ids.kerb_r,
-            self.ids.wall_l,
-            self.ids.wall_r,
-            self.ids.start,
-        ] {
-            frame
-                .instances
-                .push(Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE).with_mesh(mesh));
-        }
-
-        for p in castle::props() {
-            self.push_prop(&mut frame, p.kind, p.pos, p.yaw, p.scale);
-        }
-
-        let car_scale = if self.ids.car_extent > 1e-4 { 4.4 / self.ids.car_extent } else { 1.0 };
-        for (i, r) in self.race.racers.iter().enumerate() {
-            let c = &r.car;
-            let colour = livery(i);
-            frame.instances.push(
-                Instance::new(
-                    Vec3::new(c.pos.x, self.ids.car_lift * car_scale, c.pos.y),
-                    Vec3::splat(car_scale),
-                    colour,
-                )
-                .with_yaw(c.yaw)
-                .with_mesh(self.ids.car),
-            );
-
-            // Boost flame: an opaque wedge behind the car. There is no
-            // additive blending in this renderer, so a glow can only ever be
-            // a solid mesh — this is that, and nothing fancier.
-            if c.boosting() {
-                let back = -car::forward(c.yaw);
-                let p = c.pos + back * 2.4;
-                frame.instances.push(
-                    Instance::new(
-                        Vec3::new(p.x, 0.55, p.y),
-                        Vec3::new(0.7, 0.5, 1.8),
-                        Vec3::new(1.0, 0.62, 0.16),
-                    )
-                    .with_yaw(c.yaw),
-                );
-            }
-        }
-
-        // Remaining boost charges, floating over the player's car: the only
-        // HUD the engine can draw, since there is no 2D pass and no text.
-        let me = &self.race.racers[self.me].car;
-        for n in 0..me.boost_charges {
-            let side = (n as f32 - (car::BOOST_CHARGES - 1) as f32 * 0.5) * 0.85;
-            let r = car::right(me.yaw) * side;
-            frame.instances.push(
-                Instance::new(
-                    Vec3::new(me.pos.x + r.x, 3.1, me.pos.y + r.y),
-                    Vec3::splat(0.45),
-                    Vec3::new(1.0, 0.72, 0.2),
-                )
-                .with_yaw(me.yaw),
-            );
-        }
-
-        // Lights: three bars over the line during the countdown, going out
-        // one by one. Cheap, readable, and needs no font.
-        if self.race.state == RaceState::Countdown {
-            let (c, tan) = self.race.track.at(0.0);
-            let left = Vec2::new(-tan.y, tan.x);
-            let lit = self.race.countdown_left().ceil() as i32;
-            for n in 0..3 {
-                let p = c + left * (n as f32 - 1.0) * 3.2;
-                let on = n < lit;
-                frame.instances.push(
-                    Instance::new(
-                        Vec3::new(p.x, 7.0, p.y),
-                        Vec3::splat(1.1),
-                        if on { Vec3::new(0.9, 0.12, 0.1) } else { Vec3::new(0.12, 0.12, 0.14) },
-                    )
-                    .with_mesh(0),
-                );
-            }
-        }
-
-        frame
     }
 }
 
@@ -539,4 +458,116 @@ mod tests {
         }
         assert_eq!(pressed, 1, "a held key produced {pressed} presses");
     }
+}
+
+
+fn push_prop(frame: &mut Frame, ids: &Meshes, kind: PropKind, pos: Vec2, yaw: f32, metres: f32) {
+    let (mesh, extent, lift) = match kind {
+        PropKind::Gatehouse => (ids.gatehouse, ids.gatehouse_extent, ids.gatehouse_lift),
+        PropKind::Tower => (ids.tower, ids.tower_extent, ids.tower_lift),
+        PropKind::Fountain => (ids.fountain, ids.fountain_extent, ids.fountain_lift),
+    };
+    let s = if extent > 1e-4 { metres / extent } else { 1.0 };
+    frame.instances.push(
+        // Vec3::ONE: these carry a texture, and the shader multiplies the
+        // instance colour into it. Tinting here would double-tint.
+        Instance::new(Vec3::new(pos.x, lift * s, pos.y), Vec3::splat(s), Vec3::ONE)
+            .with_yaw(yaw)
+            .with_mesh(mesh),
+    );
+}
+
+/// Build the whole frame from a race. Shared by local and online play so
+/// the two modes cannot drift apart visually.
+pub fn scene(race: &Race, ids: &Meshes, me: usize, camera: Camera) -> Frame {
+    let mut frame = Frame { camera, instances: Vec::with_capacity(64) };
+
+    // The track meshes are already in world space, so each is one
+    // instance at the origin with unit scale and no rotation.
+    for mesh in [
+        ids.ground,
+        ids.road,
+        ids.kerb_l,
+        ids.kerb_r,
+        ids.wall_l,
+        ids.wall_r,
+        ids.start,
+    ] {
+        frame
+            .instances
+            .push(Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE).with_mesh(mesh));
+    }
+
+    for p in castle::props() {
+        push_prop(&mut frame, ids, p.kind, p.pos, p.yaw, p.scale);
+    }
+
+    let car_scale = if ids.car_extent > 1e-4 { 4.4 / ids.car_extent } else { 1.0 };
+    for (i, r) in race.racers.iter().enumerate() {
+        let c = &r.car;
+        let colour = livery(i);
+        frame.instances.push(
+            Instance::new(
+                Vec3::new(c.pos.x, ids.car_lift * car_scale, c.pos.y),
+                Vec3::splat(car_scale),
+                colour,
+            )
+            .with_yaw(c.yaw)
+            .with_mesh(ids.car),
+        );
+
+        // Boost flame: an opaque wedge behind the car. There is no
+        // additive blending in this renderer, so a glow can only ever be
+        // a solid mesh — this is that, and nothing fancier.
+        if c.boosting() {
+            let back = -car::forward(c.yaw);
+            let p = c.pos + back * 2.4;
+            frame.instances.push(
+                Instance::new(
+                    Vec3::new(p.x, 0.55, p.y),
+                    Vec3::new(0.7, 0.5, 1.8),
+                    Vec3::new(1.0, 0.62, 0.16),
+                )
+                .with_yaw(c.yaw),
+            );
+        }
+    }
+
+    // Remaining boost charges, floating over the player's car: the only
+    // HUD the engine can draw, since there is no 2D pass and no text.
+    let me = &race.racers[me].car;
+    for n in 0..me.boost_charges {
+        let side = (n as f32 - (car::BOOST_CHARGES - 1) as f32 * 0.5) * 0.85;
+        let r = car::right(me.yaw) * side;
+        frame.instances.push(
+            Instance::new(
+                Vec3::new(me.pos.x + r.x, 3.1, me.pos.y + r.y),
+                Vec3::splat(0.45),
+                Vec3::new(1.0, 0.72, 0.2),
+            )
+            .with_yaw(me.yaw),
+        );
+    }
+
+    // Lights: three bars over the line during the countdown, going out
+    // one by one. Cheap, readable, and needs no font.
+    if race.state == RaceState::Countdown {
+        let (c, tan) = race.track.at(0.0);
+        let left = Vec2::new(-tan.y, tan.x);
+        let lit = race.countdown_left().ceil() as i32;
+        for n in 0..3 {
+            let p = c + left * (n as f32 - 1.0) * 3.2;
+            let on = n < lit;
+            frame.instances.push(
+                Instance::new(
+                    Vec3::new(p.x, 7.0, p.y),
+                    Vec3::splat(1.1),
+                    if on { Vec3::new(0.9, 0.12, 0.1) } else { Vec3::new(0.12, 0.12, 0.14) },
+                )
+                .with_mesh(0),
+            );
+        }
+    }
+
+    frame
 }

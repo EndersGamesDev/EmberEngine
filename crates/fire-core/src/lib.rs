@@ -10,3 +10,4 @@ pub mod car;
 pub mod sim;
 pub mod castle;
 pub mod ai;
+pub mod proto;

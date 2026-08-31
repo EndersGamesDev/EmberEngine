@@ -1,0 +1,11 @@
+[package]
+name = "fire-server"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+fire-core = { path = "../fire-core" }
+serde_json.workspace = true
+tungstenite.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

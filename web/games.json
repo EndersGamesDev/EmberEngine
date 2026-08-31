@@ -65,14 +65,14 @@
     {
       "id": "fire",
       "title": "Fire Racer",
-      "tag": "local · you + 7 AI · 3 laps",
-      "desc": "Arcade racing through a gothic castle bailey — a 920 m circuit with a main straight, a long sweeper, a fountain chicane and a hairpin. WASD to drive, Space for the handbrake to break traction and drift, Shift to spend one of three boost charges.",
+      "tag": "local + online · 8 cars · 3 laps",
+      "desc": "Arcade racing through a gothic castle bailey — a 920 m circuit with a main straight, a long sweeper, a fountain chicane and a hairpin. WASD to drive, Space for the handbrake to break traction and drift, Shift to spend one of three boost charges. Practice alone, or open a lobby and race other people on an authoritative server.",
       "versions": [
         {
           "v": "v1",
           "path": "games/fire/v1/",
           "live": true,
-          "note": "castle circuit, drift + boost"
+          "note": "castle circuit, drift + boost, online lobbies"
         }
       ]
     },

@@ -27,6 +27,45 @@ pub const WALL_RESTITUTION: f32 = 0.35;
 /// Seconds of countdown before the lights go out.
 pub const COUNTDOWN_SECS: f32 = 3.0;
 
+/// Turns a variable frame delta into whole simulation ticks.
+///
+/// `EmberGame::update` is handed real wall-clock time — vsync-bound, and
+/// clamped to 100 ms after a stall — not a fixed 1/60. Stepping the sim by
+/// that directly means a 144 Hz machine and a 60 Hz one integrate different
+/// numbers of times with different `dt`, and, far worse, that a client
+/// predicting at render rate diverges from a server ticking at exactly `DT`.
+/// The prediction in `fire`'s online mode replays inputs at `DT`, so if the
+/// forward prediction used anything else the two would never agree.
+///
+/// So: accumulate, and only ever advance the simulation in whole `DT` steps.
+#[derive(Default, Debug)]
+pub struct FixedStep {
+    acc: f32,
+}
+
+/// Ceiling on accumulated time, seconds. Past this we drop the backlog rather
+/// than run a burst of catch-up ticks — a spiral where each frame's catch-up
+/// makes the next frame later is worse than a visible skip.
+pub const MAX_CATCHUP: f32 = 0.25;
+
+impl FixedStep {
+    /// Feed a frame delta; returns how many `DT` ticks to run now.
+    pub fn ticks(&mut self, dt: f32) -> u32 {
+        if !dt.is_finite() || dt < 0.0 {
+            return 0;
+        }
+        self.acc = (self.acc + dt).min(MAX_CATCHUP);
+        let n = (self.acc / crate::car::DT) as u32;
+        self.acc -= n as f32 * crate::car::DT;
+        n
+    }
+
+    /// Fraction of a tick left over, for interpolating the render pose.
+    pub fn alpha(&self) -> f32 {
+        self.acc / crate::car::DT
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RaceState {
     /// Waiting for enough players; cars are parked on the grid.
@@ -240,6 +279,60 @@ mod tests {
             race.step(&inputs, DT);
         }
         race
+    }
+
+    #[test]
+    fn the_fixed_step_only_ever_yields_whole_ticks() {
+        let mut fs = FixedStep::default();
+        // A 144 Hz frame is shorter than a tick: most frames run none, some
+        // run one, and over a second it must total exactly 60.
+        let mut total = 0;
+        for _ in 0..144 {
+            total += fs.ticks(1.0 / 144.0);
+        }
+        assert!((59..=61).contains(&total), "144 Hz produced {total} ticks in a second");
+
+        // A 30 Hz frame is longer than a tick: two ticks each.
+        let mut fs = FixedStep::default();
+        let mut total = 0;
+        for _ in 0..30 {
+            total += fs.ticks(1.0 / 30.0);
+        }
+        assert!((59..=61).contains(&total), "30 Hz produced {total} ticks in a second");
+    }
+
+    /// A long stall must not be repaid as a burst that makes the next frame
+    /// later still.
+    #[test]
+    fn the_fixed_step_refuses_to_spiral() {
+        let mut fs = FixedStep::default();
+        let n = fs.ticks(10.0);
+        assert!(
+            n as f32 * DT <= MAX_CATCHUP + DT,
+            "a 10 s stall asked for {n} ticks"
+        );
+    }
+
+    /// A non-finite or negative delta is a broken clock, not a long frame:
+    /// run nothing, and leave the accumulator untouched so the next good
+    /// frame behaves normally.
+    #[test]
+    fn the_fixed_step_survives_hostile_deltas() {
+        let mut fs = FixedStep::default();
+        assert_eq!(fs.ticks(f32::NAN), 0);
+        assert_eq!(fs.ticks(f32::INFINITY), 0);
+        assert_eq!(fs.ticks(-1.0), 0);
+        // ...and a normal frame afterwards still works.
+        assert_eq!(fs.ticks(DT * 3.0), 3);
+    }
+
+    /// A long but finite stall is repaid up to the ceiling and no further.
+    #[test]
+    fn a_long_stall_is_capped_not_dropped() {
+        let mut fs = FixedStep::default();
+        let n = fs.ticks(10.0);
+        assert_eq!(n, (MAX_CATCHUP / DT) as u32, "a 10 s stall yielded {n} ticks");
+        assert!(n > 0, "a stall should still advance the sim a little");
     }
 
     #[test]

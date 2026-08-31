@@ -892,10 +892,14 @@ version = "0.1.0"
 dependencies = [
  "ember-engine",
  "fire-core",
+ "fire-server",
  "glam",
  "serde",
+ "serde_json",
  "tracing",
+ "tungstenite",
  "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -904,6 +908,18 @@ version = "0.1.0"
 dependencies = [
  "glam",
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "fire-server"
+version = "0.1.0"
+dependencies = [
+ "fire-core",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+ "tungstenite",
 ]
 
 [[package]]

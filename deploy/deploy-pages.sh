@@ -77,10 +77,13 @@ fi
 # records the protocol version this bundle speaks, so a bump is caught
 # HERE — the moment it ships — rather than at the first failed join.
 PROTO="$(grep -oE 'PROTO_VERSION: u16 = [0-9]+' crates/pong-core/src/proto.rs | grep -oE '[0-9]+$')"
-echo "== shipping protocol v$PROTO =="
-python - "$PAGES_DIR/server.json" "$PROTO" <<'EOF'
+# Fire carries its own version in its own crate, on purpose: bumping one game's
+# protocol must never gate the other's join.
+FIRE_PROTO="$(grep -oE 'PROTO_VERSION: u16 = [0-9]+' crates/fire-core/src/proto.rs | grep -oE '[0-9]+$')"
+echo "== shipping arena protocol v$PROTO, fire protocol v$FIRE_PROTO =="
+python - "$PAGES_DIR/server.json" "$PROTO" "$FIRE_PROTO" <<'EOF'
 import json, os, sys, time
-p, proto = sys.argv[1], int(sys.argv[2])
+p, proto, fire_proto = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 d = {}
 if os.path.exists(p):
     try:
@@ -88,9 +91,21 @@ if os.path.exists(p):
     except Exception:
         d = {}
 was = d.get("proto")
+was_fire = d.get("fire_proto")
 d["v"] = str(int(time.time()))
 d["proto"] = proto
+d["fire_proto"] = fire_proto
 json.dump(d, open(p, "w"))
+if was_fire is not None and was_fire != fire_proto:
+    print(f"""
+!! FIRE PROTOCOL BUMP: v{was_fire} -> v{fire_proto}
+!! fire-server speaks the OLD version until it is redeployed, and the join
+!! gate is exact equality, so from now until `bash deploy/deploy-fire-online.sh`
+!! runs, players get:
+!!     "this build speaks fire protocol v{fire_proto}, the live game is v{was_fire}"
+!! The lobby LISTING keeps working at any version by design, so the browser
+!! will show lobbies nobody can enter until the server catches up.
+""")
 if was is None:
     print(f"""
 !! NO PREVIOUS PROTOCOL RECORDED on this Pages branch, so this deploy

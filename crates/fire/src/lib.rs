@@ -9,6 +9,9 @@
 
 pub mod game;
 pub mod meshes;
+pub mod net;
+pub mod online;
+pub mod online_game;
 pub mod texgen;
 pub mod trackmesh;
 
@@ -37,6 +40,23 @@ pub fn run_local() {
     );
 }
 
+/// Join a race on a server. `cfg` names the lobby; the page has already let
+/// the player pick it from the browser's own listing.
+pub fn run_online(cfg: online_game::Config) -> Result<(), String> {
+    let track = fire_core::castle::track();
+    let (meshes, ids) = game::build_meshes(&track);
+    let game = online_game::OnlineGame::connect(cfg, ids)?;
+    ember_engine::run(
+        EngineConfig {
+            title: "ember — fire racer (online)".to_string(),
+            capture_mouse: false,
+            meshes,
+        },
+        game,
+    );
+    Ok(())
+}
+
 // ---- wasm entry points ----------------------------------------------------
 
 #[cfg(target_arch = "wasm32")]
@@ -51,6 +71,21 @@ mod wasm_api {
     #[wasm_bindgen]
     pub fn start_local() {
         super::run_local();
+    }
+
+    /// `{"ws":"wss://...","handle":"...","lobby":"...","password":null,"create":false}`
+    #[wasm_bindgen]
+    pub fn start_online(config_json: &str) -> Result<(), JsValue> {
+        let cfg = super::online_game::Config::from_json(config_json)
+            .map_err(|e| JsValue::from_str(&e))?;
+        super::run_online(cfg).map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// The protocol this bundle speaks. The page shows it next to the
+    /// server's so a mismatch names both numbers instead of just failing.
+    #[wasm_bindgen]
+    pub fn proto_version() -> u16 {
+        fire_core::proto::PROTO_VERSION
     }
 
     /// The page draws the HUD: this renderer has one scene pass, no 2D layer

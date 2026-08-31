@@ -17,6 +17,18 @@ fire-core = { path = "../fire-core" }
 glam.workspace = true
 tracing.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = [
+    "WebSocket", "MessageEvent", "Event", "CloseEvent", "ErrorEvent",
+    "Document", "Window", "Element",
+] }
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tungstenite.workspace = true
+
+[dev-dependencies]
+# The online tests drive a real server over a real socket.
+fire-server = { path = "../fire-server" }
+ember-engine = { path = "../ember-engine" }
