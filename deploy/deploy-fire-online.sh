@@ -7,16 +7,16 @@
 #   4. health-check by SPEAKING THE PROTOCOL through the public URL
 #
 # Run from Windows (git-bash): bash deploy/deploy-fire-online.sh
-# Requires the wireproxy tunnel to $EMBER_HOST running locally (ssh specht works).
+# Requires ssh to the target host to work non-interactively from here.
 #
 # Deliberately a separate script, port, tunnel and server.json key from the
 # arena's. The two games speak different protocols with independent version
 # numbers, so redeploying one must never be able to knock the other offline.
 #
-# ACCOUNTS. the host may carry more than one: the live arena runs as `ender`,
-# deployed from a different workstation, and holds 127.0.0.1:7780. This script
-# runs as whoever `ssh specht` lands as (today `end`) and touches nothing
-# belonging to anyone else — see the pkill and the port guard below.
+# ACCOUNTS. The host may carry more than one: the arena historically ran as
+# `ender`, deployed from a different workstation, holding 127.0.0.1:7780. This
+# script runs as whoever the ssh lands as and touches nothing belonging to
+# anyone else — see the pkill and the port guard below.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -49,6 +49,18 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
 fi
 echo "== deploying $(git rev-parse --short HEAD) =="
 
+echo "== checking $REMOTE is reachable =="
+# Fail here with a sentence, rather than twenty lines further down with a raw
+# scp error. Especially relevant while the games are being moved to a new host:
+# the usual cause is EMBER_HOST naming something ssh has no config entry for,
+# or the wireproxy tunnel to it not being up on this workstation.
+if ! ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE" true 2>/dev/null; then
+    echo "FAILED: cannot ssh to '$REMOTE'." >&2
+    echo "        Set EMBER_HOST to the target host, check it is in ~/.ssh/config" >&2
+    echo "        with a key, and that any tunnel to it is up on this machine." >&2
+    exit 1
+fi
+
 echo "== syncing source =="
 # `git archive` rather than `tar` over the working tree. The old form excluded
 # only target/ and .git, so ~250 MB of untracked artist assets rode to specht
@@ -69,39 +81,62 @@ echo "== building fire-server (toolbox: ember-build) =="
 ssh -o BatchMode=yes "$REMOTE" \
     "toolbox run -c ember-build bash -lc 'source ~/.cargo/env && cd ~/$REMOTE_DIR && cargo build --release -p fire-server'"
 
-echo "== stopping our own fire-server, if any =="
-# Only our own account's process, and only one matching our own install path.
-# The old shared form was `pkill -u <hardcoded>`: run from the wrong account
-# it matched nothing, said nothing (the call is wrapped in `|| true`), and the
-# launch then failed to bind a port the previous process still held — a silent
-# outage that looked like a successful deploy.
-ssh -o BatchMode=yes "$REMOTE" \
-    "pkill -u \"\$(id -un)\" -f \"\$HOME/$REMOTE_DIR/target/release/fire-serve[r]\" 2>/dev/null; true"
-sleep 1
+echo "== restarting fire-server =="
+# Two ways to own the process, and they must never both be used at once. If
+# `install-watchdog.sh` has enabled the systemd unit, IT owns the lifecycle:
+# pkill+nohup here would race it, because systemd sees its child die and
+# immediately starts a replacement, and then two processes fight over the port.
+# One loses the bind, which reads exactly like "the deploy failed" while the
+# old build keeps serving. So: detect, and defer.
+#
+# The fallback is not legacy — a freshly built host has no units yet, and this
+# script has to be what brings the game up there in the first place.
+if ssh -o BatchMode=yes "$REMOTE" \
+        'systemctl --user is-enabled ember-fire.service' >/dev/null 2>&1; then
+    MANAGED=1
+    echo "   ember-fire.service is enabled; letting systemd own the restart"
+    ssh -o BatchMode=yes "$REMOTE" 'systemctl --user restart ember-fire.service'
+    sleep 2
+    if ! ssh -o BatchMode=yes "$REMOTE" \
+            'systemctl --user is-active --quiet ember-fire.service'; then
+        echo "FAILED: ember-fire.service did not come up." >&2
+        ssh -o BatchMode=yes "$REMOTE" \
+            'systemctl --user status --no-pager --lines=20 ember-fire.service' >&2 || true
+        exit 1
+    fi
+else
+    MANAGED=""
+    echo "   no systemd unit; launching directly"
+    # Only our own account's process, and only one matching our own install
+    # path. The old shared form was `pkill -u <hardcoded>`: run from the wrong
+    # account it matched nothing, said nothing (the call is wrapped in
+    # `|| true`), and the launch then failed to bind a port the previous
+    # process still held — a silent outage that looked like a good deploy.
+    ssh -o BatchMode=yes "$REMOTE" \
+        "pkill -u \"\$(id -un)\" -f \"\$HOME/$REMOTE_DIR/target/release/fire-serve[r]\" 2>/dev/null; true"
+    sleep 1
 
-echo "== checking nobody else holds $PORT =="
-# If the port is held by another account there is nothing this script can do
-# about it, and the launch below would fail to bind. Say so plainly instead of
-# reporting success over a server that never started.
-HOLDER="$(ssh -o BatchMode=yes "$REMOTE" \
-    "ss -ltnp 'sport = :$PORT' 2>/dev/null | tail -n +2" || true)"
-if [ -n "$HOLDER" ]; then
-    echo "FAILED: something is already listening on $PORT:" >&2
-    echo "  $HOLDER" >&2
-    echo "        If it shows no process name it belongs to another account" >&2
-    echo "        (the arena runs as 'ender' on 7780, deployed elsewhere)." >&2
-    echo "        Pick a free port or stop it from the machine that owns it." >&2
-    exit 1
-fi
+    echo "== checking nobody else holds $PORT =="
+    # Only meaningful in this branch: under systemd the port is legitimately
+    # held by our own unit across the restart.
+    HOLDER="$(ssh -o BatchMode=yes "$REMOTE" \
+        "ss -ltnp 'sport = :$PORT' 2>/dev/null | tail -n +2" || true)"
+    if [ -n "$HOLDER" ]; then
+        echo "FAILED: something is already listening on $PORT:" >&2
+        echo "  $HOLDER" >&2
+        echo "        A row with no process name belongs to another account and" >&2
+        echo "        cannot be stopped from here." >&2
+        exit 1
+    fi
 
-echo "== starting fire-server =="
-ssh -o BatchMode=yes -f "$REMOTE" \
-    "RUST_LOG=info nohup ~/$REMOTE_DIR/target/release/fire-server $BIND >> ~/fire-server.log 2>&1 &"
-sleep 2
-if ! ssh -o BatchMode=yes "$REMOTE" 'pgrep -u "$(id -un)" -f "fire-serve[r]" >/dev/null'; then
-    echo "FAILED: fire-server is not running. Last log lines:" >&2
-    ssh -o BatchMode=yes "$REMOTE" 'tail -20 ~/fire-server.log' >&2 || true
-    exit 1
+    ssh -o BatchMode=yes -f "$REMOTE" \
+        "RUST_LOG=info nohup ~/$REMOTE_DIR/target/release/fire-server $BIND >> ~/fire-server.log 2>&1 &"
+    sleep 2
+    if ! ssh -o BatchMode=yes "$REMOTE" 'pgrep -u "$(id -un)" -f "fire-serve[r]" >/dev/null'; then
+        echo "FAILED: fire-server is not running. Last log lines:" >&2
+        ssh -o BatchMode=yes "$REMOTE" 'tail -20 ~/fire-server.log' >&2 || true
+        exit 1
+    fi
 fi
 ssh -o BatchMode=yes "$REMOTE" 'tail -1 ~/fire-server.log'
 
@@ -116,12 +151,22 @@ if ! ssh -o BatchMode=yes "$REMOTE" \
 fi
 
 echo "== restarting tunnel (fresh domain) =="
-# Anchored on this port so it can never match the arena's tunnel.
-ssh -o BatchMode=yes "$REMOTE" \
-    "pkill -u \"\$(id -un)\" -f \"cloudflare[d] tunnel --url http://$BIND\" 2>/dev/null; true"
-ssh -o BatchMode=yes "$REMOTE" ': > ~/cloudflared-fire.log'
-ssh -o BatchMode=yes -f "$REMOTE" \
-    "nohup ~/bin/cloudflared tunnel --url http://$BIND --no-autoupdate >> ~/cloudflared-fire.log 2>&1 &"
+# Same split as the server. A quick tunnel mints a NEW random hostname every
+# time it starts, so this restart is what forces the republish below — and it
+# is also why an unattended systemd restart leaves the game healthy at an
+# address server.json does not name. A NAMED tunnel would remove both.
+if [ -n "$MANAGED" ]; then
+    # The unit truncates its own log in ExecStartPre, so the grep below still
+    # finds only the hostname from this run.
+    ssh -o BatchMode=yes "$REMOTE" 'systemctl --user restart ember-fire-tunnel.service'
+else
+    # Anchored on this port so it can never match the arena's tunnel.
+    ssh -o BatchMode=yes "$REMOTE" \
+        "pkill -u \"\$(id -un)\" -f \"cloudflare[d] tunnel --url http://$BIND\" 2>/dev/null; true"
+    ssh -o BatchMode=yes "$REMOTE" ': > ~/cloudflared-fire.log'
+    ssh -o BatchMode=yes -f "$REMOTE" \
+        "nohup ~/bin/cloudflared tunnel --url http://$BIND --no-autoupdate >> ~/cloudflared-fire.log 2>&1 &"
+fi
 
 echo "== waiting for the tunnel domain =="
 TUNNEL=""

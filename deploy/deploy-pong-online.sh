@@ -8,11 +8,12 @@
 #   4. health-check through the public URL
 #
 # Run from Windows (git-bash): bash deploy/deploy-pong-online.sh
-# Requires the wireproxy tunnel to $EMBER_HOST running locally (ssh specht works).
+# Requires ssh to the target host to work non-interactively from here.
 #
-# ACCOUNTS. the host may carry more than one, and the arena has historically run
-# as `ender`, deployed from a particular workstation. This script only ever
-# stops processes belonging to whoever `ssh specht` lands as, and refuses to
+# ACCOUNTS. The host may carry more than one. The arena historically ran as
+# `ender`, deployed from a particular workstation, while this machine lands as
+# `end`. This script only ever stops processes belonging to whoever the ssh
+# lands as, and refuses to
 # continue if the port is held by someone else. Run it from the machine whose
 # account owns the running server, or it will tell you it cannot — which is
 # the point: the previous version killed nothing, said nothing (the call was
@@ -30,8 +31,9 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 # (BatchMode is on everywhere below), i.e. an entry in ~/.ssh/config with a key.
 REMOTE="${EMBER_HOST:-specht}"
 
-# NOTE: SELinux on the target host denies many ports (7778, 8890, 8891 tested); 7780
-# is verified bindable for this account.
+# NOTE: SELinux on specht denied many ports (7778, 8890, 8891 tested); 7780 was
+# the verified-bindable one there. A new host may differ — if the bind fails,
+# test candidates before assuming the server is broken.
 PORT=7780
 BIND="127.0.0.1:$PORT"
 cd "$REPO_DIR"
@@ -44,6 +46,18 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
     exit 1
 fi
 echo "== deploying $(git rev-parse --short HEAD) =="
+
+echo "== checking $REMOTE is reachable =="
+# Fail here with a sentence, rather than twenty lines further down with a raw
+# scp error. Especially relevant while the games are being moved to a new host:
+# the usual cause is EMBER_HOST naming something ssh has no config entry for,
+# or the wireproxy tunnel to it not being up on this workstation.
+if ! ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE" true 2>/dev/null; then
+    echo "FAILED: cannot ssh to '$REMOTE'." >&2
+    echo "        Set EMBER_HOST to the target host, check it is in ~/.ssh/config" >&2
+    echo "        with a key, and that any tunnel to it is up on this machine." >&2
+    exit 1
+fi
 
 echo "== syncing source =="
 # `git archive`, not `tar` over the working tree. The old form excluded only
@@ -63,31 +77,59 @@ ssh -o BatchMode=yes "$REMOTE" \
     'toolbox run -c ember-build bash -lc "source ~/.cargo/env && cd ~/ember-src && cargo build --release -p pong-server"'
 
 echo "== restarting pong-server =="
-# Kill and launch are separate ssh calls on purpose: in a combined call the
-# launch text matches the pkill pattern and kills its own shell.
-# Only our own account's processes. `pkill -u ender` run from any other
-# account matched nothing and was swallowed by the trailing `true`.
-ssh -o BatchMode=yes "$REMOTE" 'pkill -u "$(id -un)" -f "pong-serve[r]" 2>/dev/null; true'
-sleep 1
+# Two ways to own the process, and they must never both be used at once. If
+# `install-watchdog.sh` has enabled the systemd unit, IT owns the lifecycle:
+# pkill+nohup here would race it, because systemd sees its child die and
+# immediately starts a replacement, and then two processes fight over the port.
+# One loses the bind, which reads exactly like "the deploy failed" while the
+# old build keeps serving. So: detect, and defer.
+#
+# The fallback is not legacy — a freshly built host has no units yet, and this
+# script has to be what brings the game up there in the first place.
+if ssh -o BatchMode=yes "$REMOTE" \
+        'systemctl --user is-enabled ember-pong.service' >/dev/null 2>&1; then
+    MANAGED=1
+    echo "   ember-pong.service is enabled; letting systemd own the restart"
+    ssh -o BatchMode=yes "$REMOTE" 'systemctl --user restart ember-pong.service'
+    sleep 2
+    if ! ssh -o BatchMode=yes "$REMOTE" \
+            'systemctl --user is-active --quiet ember-pong.service'; then
+        echo "FAILED: ember-pong.service did not come up." >&2
+        ssh -o BatchMode=yes "$REMOTE" \
+            'systemctl --user status --no-pager --lines=20 ember-pong.service' >&2 || true
+        exit 1
+    fi
+else
+    MANAGED=""
+    echo "   no systemd unit; launching directly"
+    # Kill and launch are separate ssh calls on purpose: in a combined call the
+    # launch text matches the pkill pattern and kills its own shell.
+    # Only our own account's processes. `pkill -u ender` run from any other
+    # account matched nothing and was swallowed by the trailing `true`.
+    ssh -o BatchMode=yes "$REMOTE" 'pkill -u "$(id -un)" -f "pong-serve[r]" 2>/dev/null; true'
+    sleep 1
 
-echo "== checking nobody else holds $PORT =="
-HOLDER="$(ssh -o BatchMode=yes "$REMOTE" \
-    "ss -ltnp 'sport = :$PORT' 2>/dev/null | tail -n +2" || true)"
-if [ -n "$HOLDER" ]; then
-    echo "FAILED: something is already listening on $PORT:" >&2
-    echo "  $HOLDER" >&2
-    echo "        A row with no process name belongs to another account and" >&2
-    echo "        cannot be stopped from here. Deploy from the machine whose" >&2
-    echo "        account owns it." >&2
-    exit 1
-fi
-ssh -o BatchMode=yes -f "$REMOTE" \
-    "RUST_LOG=info nohup ~/ember-src/target/release/pong-server --bind $BIND >> ~/pong-server.log 2>&1 &"
-sleep 2
-if ! ssh -o BatchMode=yes "$REMOTE" 'pgrep -u "$(id -un)" -f "pong-serve[r]" >/dev/null'; then
-    echo "FAILED: pong-server is not running. Last log lines:" >&2
-    ssh -o BatchMode=yes "$REMOTE" 'tail -20 ~/pong-server.log' >&2 || true
-    exit 1
+    echo "== checking nobody else holds $PORT =="
+    # Only meaningful in this branch: under systemd the port is legitimately
+    # held by our own unit across the restart.
+    HOLDER="$(ssh -o BatchMode=yes "$REMOTE" \
+        "ss -ltnp 'sport = :$PORT' 2>/dev/null | tail -n +2" || true)"
+    if [ -n "$HOLDER" ]; then
+        echo "FAILED: something is already listening on $PORT:" >&2
+        echo "  $HOLDER" >&2
+        echo "        A row with no process name belongs to another account and" >&2
+        echo "        cannot be stopped from here. Deploy from the machine whose" >&2
+        echo "        account owns it." >&2
+        exit 1
+    fi
+    ssh -o BatchMode=yes -f "$REMOTE" \
+        "RUST_LOG=info nohup ~/ember-src/target/release/pong-server --bind $BIND >> ~/pong-server.log 2>&1 &"
+    sleep 2
+    if ! ssh -o BatchMode=yes "$REMOTE" 'pgrep -u "$(id -un)" -f "pong-serve[r]" >/dev/null'; then
+        echo "FAILED: pong-server is not running. Last log lines:" >&2
+        ssh -o BatchMode=yes "$REMOTE" 'tail -20 ~/pong-server.log' >&2 || true
+        exit 1
+    fi
 fi
 ssh -o BatchMode=yes "$REMOTE" 'tail -1 ~/pong-server.log'
 
@@ -106,14 +148,24 @@ echo "== restarting tunnel (fresh domain) =="
 # Pattern must not match this command's own shell: "cloudflared.log" would
 # match a bare "cloudflare[d]" regex, so anchor on " tunnel" and truncate
 # the log in a separate call.
-# Our own account, and anchored on THIS port. A bare "cloudflare[d] tunnel"
-# pattern also matches Fire Racer's tunnel on 7781, so redeploying the arena
-# would have silently taken the other game offline.
-ssh -o BatchMode=yes "$REMOTE" \
-    "pkill -u \"\$(id -un)\" -f \"cloudflare[d] tunnel --url http://$BIND\" 2>/dev/null; true"
-ssh -o BatchMode=yes "$REMOTE" ': > ~/cloudflared.log'
-ssh -o BatchMode=yes -f "$REMOTE" \
-    "nohup ~/bin/cloudflared tunnel --url http://$BIND --no-autoupdate >> ~/cloudflared.log 2>&1 &"
+# Same split as the server. A quick tunnel mints a NEW random hostname every
+# time it starts, so this restart is what forces the republish below — and it
+# is also why an unattended systemd restart leaves the game healthy at an
+# address server.json does not name. A NAMED tunnel would remove both.
+if [ -n "$MANAGED" ]; then
+    # The unit truncates its own log in ExecStartPre, so the grep below still
+    # finds only the hostname from this run.
+    ssh -o BatchMode=yes "$REMOTE" 'systemctl --user restart ember-pong-tunnel.service'
+else
+    # Our own account, and anchored on THIS port. A bare "cloudflare[d] tunnel"
+    # pattern also matches Fire Racer's tunnel on 7781, so redeploying the
+    # arena would have silently taken the other game offline.
+    ssh -o BatchMode=yes "$REMOTE" \
+        "pkill -u \"\$(id -un)\" -f \"cloudflare[d] tunnel --url http://$BIND\" 2>/dev/null; true"
+    ssh -o BatchMode=yes "$REMOTE" ': > ~/cloudflared.log'
+    ssh -o BatchMode=yes -f "$REMOTE" \
+        "nohup ~/bin/cloudflared tunnel --url http://$BIND --no-autoupdate >> ~/cloudflared.log 2>&1 &"
+fi
 
 echo "== waiting for the tunnel domain =="
 TUNNEL=""
