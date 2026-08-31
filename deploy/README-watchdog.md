@@ -25,16 +25,15 @@ bash deploy/watchdog.sh            # loop, WATCHDOG_INTERVAL=300 by default
 bash deploy/watchdog.sh --once     # one pass, for Task Scheduler or cron
 ```
 
-## The conflict you must not create
+## How the deploys and the units coexist
 
-Once the systemd units own the processes, **do not also run the deploy scripts' own launch path**. Both bind the same ports. The deploy scripts `pkill` their own binary and relaunch it with `nohup`; systemd sees its child die, and restarts it — now two processes race for 7780/7781 and one of them loses the bind, which looks exactly like "the deploy failed" while the old build keeps serving.
+There is no conflict to avoid: as of `c71118a` both deploy scripts **detect** which world they are in.
 
-Pick one of these before enabling the units:
+`systemctl --user is-enabled ember-fire.service` (or `ember-pong`) succeeds, so systemd owns the process: the deploy restarts through `systemctl --user restart`, checks liveness with `is-active`, and restarts the tunnel the same way. It fails, so nothing is installed: the original `pkill` + `nohup` path runs exactly as before.
 
-- **Simplest:** leave the units disabled and keep deploying by hand. You get no reboot durability, which is what we had before.
-- **Correct:** change the deploy scripts' restart step to `systemctl --user restart ember-pong` (and `ember-fire`) instead of `pkill` + `nohup`, and let the units own the lifecycle. The tunnel restart, and therefore the republish, still has to happen in the deploy.
+This replaces the either/or an earlier version of this file recommended. Hard-switching the restart step to `systemctl` would have been wrong, because it creates a cycle on a fresh host: the units cannot start until the binaries exist, the binaries only exist once the deploy has run, and the deploy would have required the units. Detection removes any ordering requirement between installing units and deploying — which is exactly the situation a migration to a new box lands in.
 
-The second is the right end state. It is not done yet — the units are written and installed but left **stopped**, so nothing conflicts today.
+One consequence worth knowing: the "is anyone else holding this port" guard runs **only** in the unmanaged branch. Under systemd the port is legitimately held by our own unit across a restart, so the guard would fire on every managed deploy as a false alarm. Under `nohup` it still does its job.
 
 ## A stable hostname would delete most of this
 
