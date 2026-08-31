@@ -240,8 +240,7 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: Sender<Ev>) {
             }
             Ok(Message::Close(_)) => break,
             Ok(_) => {}
-            Err(tungstenite::Error::Io(e))
-                if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {}
+            Err(tungstenite::Error::Io(e)) if proto::is_transient_read(&e) => {}
             Err(e) => {
                 tracing::debug!(conn = id, peer = %peer, "read ended: {e}");
                 break;
@@ -256,15 +255,22 @@ fn send_to(conns: &HashMap<u64, Conn>, id: u64, msg: &S2C) -> bool {
         return false;
     };
     let Some(c) = conns.get(&id) else {
+        tracing::warn!(conn = id, "send to a connection that is gone: {msg:?}");
         return false;
     };
-    // A peer whose queue is full is not keeping up. Dropping the message is
-    // correct for state (a newer one is 33 ms away) and the disconnect path
-    // handles the rest.
-    !matches!(
-        c.tx.try_send(Message::text(text)),
-        Err(TrySendError::Full(_) | TrySendError::Disconnected(_))
-    )
+    // Every caller ignores this bool, so without the logging a dropped
+    // control message leaves no trace on either side of the wire.
+    match c.tx.try_send(Message::text(text)) {
+        Ok(()) => true,
+        Err(TrySendError::Full(_)) => {
+            tracing::warn!(conn = id, "outbound queue FULL, dropping: {msg:?}");
+            false
+        }
+        Err(TrySendError::Disconnected(_)) => {
+            tracing::debug!(conn = id, "outbound queue closed, dropping: {msg:?}");
+            false
+        }
+    }
 }
 
 fn broadcast(conns: &HashMap<u64, Conn>, lobby: &Lobby, msg: &S2C) {
@@ -479,6 +485,11 @@ fn handle_event(
             c.last_seen = Instant::now();
             c.msgs_this_tick += 1;
             if c.msgs_this_tick > MAX_MSGS_PER_TICK {
+                tracing::warn!(
+                    conn = id,
+                    n = c.msgs_this_tick,
+                    "over the per-drain message allowance, dropping: {msg:?}"
+                );
                 return;
             }
             handle_msg(id, msg, conns, lobbies, cfg);

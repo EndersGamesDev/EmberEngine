@@ -183,7 +183,15 @@ fn main() {
             }
             Ok(_) => {}
             Err(tungstenite::Error::Io(e))
-                if e.kind() == std::io::ErrorKind::WouldBlock
+                // os error 997 is Windows ERROR_IO_PENDING: a read that timed
+                // out inside an overlapped operation. Rust cannot categorise
+                // it, so it matches neither arm below and would end the loop.
+                // This example is now deploy-pong-online.sh's health check and
+                // runs on Windows, where that would be a spurious deploy
+                // failure. (fire_core::proto::is_transient_read is the same
+                // predicate; pong-server does not depend on fire-core.)
+                if e.raw_os_error() == Some(997)
+                    || e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::TimedOut => {}
             Err(e) => {
                 eprintln!("WSBOT FAIL: read: {e}");

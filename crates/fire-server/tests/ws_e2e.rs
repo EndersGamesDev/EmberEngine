@@ -55,11 +55,7 @@ fn pump(ws: &mut Client, dur: Duration, mut f: impl FnMut(S2C) -> bool) -> bool 
                 }
             }
             Ok(_) => {}
-            Err(tungstenite::Error::Io(e))
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) => {}
+            Err(tungstenite::Error::Io(e)) if proto::is_transient_read(&e) => {}
             Err(_) => break,
         }
     }

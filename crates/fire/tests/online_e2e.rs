@@ -15,7 +15,25 @@ use fire::online::{Online, Screen};
 use fire_core::car::CarInput;
 use fire_core::proto::{Phase, C2S, S2C};
 
+/// Surface the server's own warnings (dropped sends, rate-limited messages)
+/// in test output. Without this a lost control message is invisible from both
+/// ends and looks like an unexplained timeout.
+fn init_logs() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "warn".into()),
+            )
+            .with_test_writer()
+            .try_init();
+    });
+}
+
 fn start_server(laps: u32) -> u16 {
+    init_logs();
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     thread::spawn(move || {
@@ -153,14 +171,37 @@ fn two_clients_see_each_other_move() {
     let a_slot = a.game.my_slot.unwrap();
     let b_slot = b.game.my_slot.unwrap();
     assert_ne!(a_slot, b_slot);
-    assert!(
-        a.wait_for(Duration::from_secs(3), |g| g.roster.len() == 2),
-        "alice never learned bob had joined"
-    );
+    // Report enough to tell the two failure modes apart. "Never learned" can
+    // mean the message was lost, or that alice's socket died and `drain` has
+    // been returning nothing ever since — which looks identical from here.
+    if !a.wait_for(Duration::from_secs(5), |g| g.roster.len() == 2) {
+        panic!(
+            "alice never learned bob had joined.\n  \
+             alice socket: {:?}\n  bob socket: {:?}\n  \
+             alice roster: {:?}\n  alice slot {a_slot}, bob slot {b_slot}",
+            a.net.status(),
+            b.net.status(),
+            a.game.roster,
+        );
+    }
 
     a.net.send(&C2S::Ready { ready: true });
     b.net.send(&C2S::Ready { ready: true });
-    assert!(a.wait_for(Duration::from_secs(8), |g| g.phase == Phase::Racing));
+    if !a.wait_for(Duration::from_secs(10), |g| g.phase == Phase::Racing) {
+        // Either a Ready never reached the server, or a Phase never came back.
+        b.pump();
+        panic!(
+            "the race never went green.
+               alice phase {:?} socket {:?}
+  bob phase {:?} socket {:?}
+               alice roster {:?}",
+            a.game.phase,
+            a.net.status(),
+            b.game.phase,
+            b.net.status(),
+            a.game.roster,
+        );
+    }
 
     // Only alice drives; bob holds still. Alice must see bob's car where the
     // server puts it, and bob must see alice pull away.

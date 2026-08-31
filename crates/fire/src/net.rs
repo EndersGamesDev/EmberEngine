@@ -175,24 +175,31 @@ mod imp {
                         }
                     }
                     match ws.read() {
-                        Ok(Message::Text(t)) => {
-                            if let Ok(m) = serde_json::from_str::<S2C>(&t) {
+                        Ok(Message::Text(t)) => match serde_json::from_str::<S2C>(&t) {
+                            Ok(m) => {
                                 if in_tx.send(m).is_err() {
                                     return;
                                 }
                             }
-                        }
+                            // A frame this build cannot parse is the server
+                            // being newer. Say so: silently discarding it
+                            // makes a lost message indistinguishable from one
+                            // that was never sent.
+                            Err(e) => tracing::warn!("fire net: undecodable frame ({e}): {t}"),
+                        },
                         Ok(Message::Close(_)) => {
                             *st.lock().unwrap() = Status::Closed("server closed".into());
                             return;
                         }
                         Ok(_) => {}
                         Err(tungstenite::Error::Io(e))
-                            if matches!(
-                                e.kind(),
-                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                            ) => {}
+                            if fire_core::proto::is_transient_read(&e) => {}
                         Err(e) => {
+                            // The reader owns the only path messages arrive
+                            // by, so its death is total and silent from the
+                            // game's point of view: `drain` simply returns
+                            // nothing for ever. Record why.
+                            tracing::warn!("fire net: reader thread exiting: {e}");
                             *st.lock().unwrap() = Status::Closed(e.to_string());
                             return;
                         }

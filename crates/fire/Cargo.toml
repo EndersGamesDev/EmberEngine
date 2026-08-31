@@ -31,4 +31,6 @@ tungstenite.workspace = true
 [dev-dependencies]
 # The online tests drive a real server over a real socket.
 fire-server = { path = "../fire-server" }
+# So the server's dropped-message warnings surface in test output.
+tracing-subscriber.workspace = true
 ember-engine = { path = "../ember-engine" }

@@ -78,11 +78,7 @@ fn main() -> std::process::ExitCode {
                 return std::process::ExitCode::from(1);
             }
             Ok(_) => {}
-            Err(tungstenite::Error::Io(e))
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) => {}
+            Err(tungstenite::Error::Io(e)) if proto::is_transient_read(&e) => {}
             Err(e) => {
                 eprintln!("probe: read failed: {e}");
                 return std::process::ExitCode::from(1);
