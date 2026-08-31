@@ -1,6 +1,6 @@
 {
-  "version": "r109+dirty",
-  "commit": "ebe380e",
-  "built": "2026-08-30T18:41:27Z",
-  "subject": "net: the five remaining delivery and input defects"
+  "version": "r121",
+  "commit": "671d187",
+  "built": "2026-08-31T15:16:22Z",
+  "subject": "chore: force LF on shell scripts, so a Windows checkout cannot break them"
 }
