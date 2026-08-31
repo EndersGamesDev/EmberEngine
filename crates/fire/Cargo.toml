@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 ember-engine = { path = "../ember-engine" }
+fire-core = { path = "../fire-core" }
 glam.workspace = true
 tracing.workspace = true
 serde.workspace = true

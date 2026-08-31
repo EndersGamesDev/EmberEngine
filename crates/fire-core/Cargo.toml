@@ -1,0 +1,8 @@
+[package]
+name = "fire-core"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+glam.workspace = true
+serde = { workspace = true, features = ["derive"] }

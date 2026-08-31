@@ -891,10 +891,19 @@ name = "fire"
 version = "0.1.0"
 dependencies = [
  "ember-engine",
+ "fire-core",
  "glam",
  "serde",
  "tracing",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "fire-core"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "serde",
 ]
 
 [[package]]

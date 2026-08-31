@@ -44,6 +44,11 @@ embedded**, loaded by `ember_engine::assets::load_glb`.
    hangs from the top of its box), so mesh scale and origin do not
    matter — only proportions do.
 
+**Worked example — the Fire Racer props.** `assets/models/fire/fire-{car,gatehouse,tower,fountain}.glb` came through this path in one sitting: `.claude/fire-castle/gen_views.py` rendered 4 views x 4 props on adler (~32 s each), then `.claude/fire-castle/mesh-props.ps1` fed them to `gen3d_mv.py` and decimated (~135 s per prop, 9.1 min for the set). Two things that run differently from the veteran set:
+
+* **Decimate twice.** `gen3d_mv.py` leaves 30k faces, which is a hero-asset budget. These props are embedded in a wasm bundle every web player downloads, so `mesh-props.ps1` runs `decimate.py` again at 6000 faces. The four props total ~430 KB.
+* **The output has POSITION and nothing else** — no NORMAL, no TEXCOORD_0, no material. `load_glb` fills those with +Y and (0,0), which loads but renders flat-lit and samples a single texel of any texture attached. `crates/fire/src/meshes.rs` recomputes face normals and projects planar UVs on the way in. It does this in the *game* crate deliberately: the arena's character parts are POSITION-only too, so "fixing" the loader's defaults would silently restyle a live game.
+
 **Gotcha — authored facing.** A single-view concept faces the camera
 (engine −Z); a Hunyuan multi-view mesh comes out facing +Z. Mixing them
 silently renders half the character backwards. `PartSource.flipped`

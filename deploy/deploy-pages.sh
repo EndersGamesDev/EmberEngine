@@ -44,9 +44,22 @@ cp web/index.html web/games.json web/version.json "$PAGES_DIR"/
 cp "web/$ARENA_LIVE/index.html" "$PAGES_DIR/$ARENA_LIVE/"
 cp "web/$PONG_LIVE/index.html" "$PAGES_DIR/$PONG_LIVE/"
 cp "web/$FIRE_LIVE/index.html" "$PAGES_DIR/$FIRE_LIVE/"
-cp -r web/pkg "$PAGES_DIR/$ARENA_LIVE/pkg"
-cp -r web/pkg "$PAGES_DIR/$PONG_LIVE/pkg"
-cp -r web/pkg "$PAGES_DIR/$FIRE_LIVE/pkg"
+# Each game gets ONLY its own bundle. Copying the whole of web/pkg into every
+# game directory shipped pong's 18 MB wasm to fire players and fire's to pong
+# players — a fire player was downloading ~23 MB to run a ~6 MB game. The
+# root pkg/ still carries everything, because old cached pages resolve their
+# imports against it.
+copy_pkg() {
+    # $1 = destination dir, $2... = crate names whose bundle belongs there
+    local dest="$1"; shift
+    mkdir -p "$dest"
+    for crate in "$@"; do
+        cp "web/pkg/$crate.js" "web/pkg/${crate}_bg.wasm" "$dest/"
+    done
+}
+copy_pkg "$PAGES_DIR/$ARENA_LIVE/pkg" pong
+copy_pkg "$PAGES_DIR/$PONG_LIVE/pkg" pong
+copy_pkg "$PAGES_DIR/$FIRE_LIVE/pkg" fire
 cp -r web/pkg "$PAGES_DIR"/pkg
 touch "$PAGES_DIR"/.nojekyll
 

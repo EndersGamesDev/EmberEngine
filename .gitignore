@@ -15,3 +15,5 @@ assets/9-mm.zip
 # committed: a stamped-then-committed file always names the commit BEFORE
 # itself, so the ticker would be permanently one build stale.
 /web/version.json
+# Minted on gh-pages by deploy-pages.sh; a local copy is only test scaffolding.
+/web/server.json
