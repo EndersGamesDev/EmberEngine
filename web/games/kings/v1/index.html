@@ -631,16 +631,18 @@
     // Prefer a hosts[] entry that speaks this build's protocol, newest first;
     // fall back to the top-level key.
     const rNum = (v) => { const m = /(\d+)/.exec(String(v || '')); return m ? Number(m[1]) : -1; };
-    const kingsWs = () => {
-      const p = proto();
-      if (Array.isArray(cfg.hosts)) {
-        const ok = cfg.hosts
-          .filter((h) => h && typeof h.kings_ws === 'string' && h.kings_ws.trim() && (!wasm || h.kings_proto === p))
+    // Pure: (server.json object, this build's proto or null when unknown) -> url.
+    const pickWs = (c, p) => {
+      if (Array.isArray(c.hosts)) {
+        const ok = c.hosts
+          .filter((h) => h && typeof h.kings_ws === 'string' && h.kings_ws.trim() && (p == null || h.kings_proto === p))
           .sort((a, b) => rNum(b.version) - rNum(a.version));
         if (ok.length) return ok[0].kings_ws.trim();
       }
-      return (cfg.kings_ws || '').trim();
+      return (c.kings_ws || '').trim();
     };
+    window.__kingsPickWs = pickWs;
+    const kingsWs = () => pickWs(cfg, wasm ? proto() : null);
     {
       const p = proto();
       const sp = cfg.kings_proto;
