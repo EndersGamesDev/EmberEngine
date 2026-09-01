@@ -49,6 +49,7 @@
       background: #08122a; border: 1px solid #23406b; border-radius: 6px;
       color: #dce6f5; padding: 7px 9px; font: inherit;
     }
+    select.small { padding: 3px 7px; font-size: 0.78rem; text-transform: none; letter-spacing: 0; }
     button {
       background: #1c4d8f; color: #eaf1fb; border: 0; border-radius: 7px;
       padding: 9px 16px; font: inherit; cursor: pointer;
@@ -62,6 +63,7 @@
       border-radius: 9px; padding: 10px 14px; font-size: 0.92rem;
     }
     .lobby-row .lock { opacity: 0.7; }
+    .lobby-row .right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
     #list-note { font-size: 0.85rem; opacity: 0.65; }
     details { width: min(920px, 94vw); }
     summary { font-size: 0.8rem; opacity: 0.6; cursor: pointer; }
@@ -72,8 +74,8 @@
     }
     .foot { font-size: 0.8rem; opacity: 0.65; }
     .foot a { color: #6ea8fe; }
-    .headright { display: flex; align-items: center; gap: 10px; }
-    #build {
+    .headright { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+    #build, #host-chip {
       font-size: 0.72rem; color: #7f93b5; font-family: ui-monospace, monospace;
       background: #0b1830; border: 1px solid #1d3050; border-radius: 999px;
       padding: 5px 10px; white-space: nowrap;
@@ -84,16 +86,37 @@
       border-radius: 999px; padding: 4px 10px; font-weight: 600;
     }
     .badge.dim { background: #2a3d5c; color: #9fb4d8; }
+    .badge.small { font-size: 0.68rem; padding: 2px 8px; }
     code {
       background: #08122a; border: 1px solid #1d3050; border-radius: 4px;
       padding: 1px 5px; font-size: 0.85em;
     }
+    /* ---- hosts strip: the machines the games are running on ---- */
+    .h2row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+    .h2row h2 { margin-bottom: 0; }
+    .h2row .spacer { flex: 1; }
+    #host-strip { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+    .host-row {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      background: #0b1830; border: 1px solid #1d3050;
+      border-radius: 9px; padding: 9px 14px; font-size: 0.9rem;
+    }
+    .host-row.preferred { border-color: #3a5a8c; }
+    .host-row .nm { font-weight: 600; color: #dce6f5; }
+    .host-row .right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+    .pill {
+      font-size: 0.72rem; background: #08122a; border: 1px solid #1d3050;
+      border-radius: 999px; padding: 2px 8px; opacity: 0.9;
+      font-family: ui-monospace, monospace; white-space: nowrap;
+    }
+    #host-note { font-size: 0.85rem; opacity: 0.65; }
   </style>
 </head>
 <body>
   <header>
     <h1>ember <span>engine</span></h1>
     <div class="headright">
+      <div id="host-chip" title="the host this page would play on">server …</div>
       <div id="build" title="the build this page was published from">build …</div>
       <div id="account" title="click to rename">…</div>
     </div>
@@ -102,6 +125,16 @@
   <section>
     <h2><span class="dot">●</span> live now — jump into a running game</h2>
     <div id="lobby-rows"><span id="list-note">looking for open games…</span></div>
+  </section>
+
+  <section>
+    <div class="h2row">
+      <h2>hosts</h2>
+      <span class="spacer"></span>
+      <label for="host-pick" style="font-size:0.78rem; opacity:0.65">play on</label>
+      <select id="host-pick" class="small"><option value="">automatic</option></select>
+    </div>
+    <div id="host-strip"><span id="host-note">looking for hosts…</span></div>
   </section>
 
   <section>
@@ -191,6 +224,10 @@
   </div>
 
   <script type="module">
+    import {
+      keysFor, listLobbies, loadBook, probeHost, rankHosts, readPin, renderChip, writePin,
+    } from './hosts.js';
+
     const $ = (id) => document.getElementById(id);
 
     // ---- auto account: created the first time someone clicks a game ----
@@ -256,22 +293,21 @@
       }
     })();
 
-    // ---- server discovery (shared key with the game pages) ----
-    let serverCfg = {};
-    try {
-      const r = await fetch(`server.json?ts=${Date.now()}`, { cache: 'no-store' });
-      if (r.ok) serverCfg = await r.json();
-    } catch {}
+    // ---- the manual override, unchanged: it still beats everything ----
+    // Typing a URL here pins the arena to that address and takes the host
+    // picker out of the loop entirely. It is the escape hatch for the case
+    // where the address book is wrong and someone knows the right answer.
     const urlBox = $('server-url');
     urlBox.value = localStorage.getItem('ember-server-url') || '';
-    if (serverCfg.ws && (!localStorage.getItem('ember-server-url-manual') || !urlBox.value)) {
-      urlBox.value = serverCfg.ws;
-    }
     urlBox.addEventListener('change', () => {
       localStorage.setItem('ember-server-url', urlBox.value.trim());
       localStorage.setItem('ember-server-url-manual', '1');
+      refresh();
     });
-    const serverUrl = () => urlBox.value.trim();
+    const override = () =>
+      (localStorage.getItem('ember-server-url-manual')
+        ? (localStorage.getItem('ember-server-url') || '').trim()
+        : '');
 
     // ---- games catalog: newest version is always the live one ----
     let catalog = { games: [] };
@@ -328,10 +364,172 @@
       cards.append(card);
     }
 
-    // ---- live lobbies showcase: loads for everyone, refreshes itself ----
-    // Listing needs no game bundle: the server allows any proto to browse.
-    function refreshLobbies() {
-      const url = serverUrl();
+    // ---- host discovery ----------------------------------------------------
+    // The hub is the one page with no game bundle, so it filters by GAME but
+    // never by protocol: it must show the host running a v11 arena as well as
+    // the one running v12, and let the row's protocol decide which published
+    // page can join it. That is why the hello below sends proto 0 — listing is
+    // ungated on every server precisely so this page keeps working.
+    const perGame = new Map(); // game id -> { chosen, candidates }
+    let busy = false;
+
+    // The published page that speaks a given protocol for a given game. The
+    // pairing lives in games.json, not here: a host may sit on any commit, so
+    // "which build can join this lobby" is a lookup, never an assumption.
+    const pageFor = (gameId, proto) => {
+      const g = catalog.games.find((x) => x.id === gameId);
+      if (!g || typeof proto !== 'number') return null;
+      return g.versions.find((v) => v.proto === proto) || null;
+    };
+    const titleOf = (gameId) =>
+      (catalog.games.find((x) => x.id === gameId) || {}).title || gameId;
+
+    async function discoverHosts() {
+      const { book, hosts } = await loadBook('./');
+      const ov = override();
+      const pin = readPin();
+      perGame.clear();
+      await Promise.all(catalog.games.map(async (g) => {
+        const k = keysFor(g.id);
+        // The override replaces the arena's whole host list with one address:
+        // it beats the book, the pin and the ranking alike.
+        const entries = ov && g.id === 'arena'
+          ? [{ name: '', ws: ov, version: '', commit: '', updated: '' }]
+          : hosts.filter((h) => (h[k.ws] || '').trim());
+        if (!entries.length) { perGame.set(g.id, { chosen: null, candidates: [] }); return; }
+        const probes = new Map();
+        await Promise.all(entries.map(async (e) => {
+          probes.set((e.name || '').trim(), await probeHost((e[k.ws] || '').trim(), { proto: 0 }));
+        }));
+        perGame.set(g.id, rankHosts(entries, {
+          game: g.id,
+          pinned: ov && g.id === 'arena' ? '' : pin,
+          probes,
+        }));
+      }));
+
+      // Keep the settings box showing the address actually in use — the same
+      // condition as before (an emptied box goes back to auto-filling), plus
+      // one guard the single-shot version never needed: this runs every ten
+      // seconds now, and overwriting a box someone is typing into would be a
+      // new bug of our own making.
+      const arena = perGame.get('arena');
+      if ((!localStorage.getItem('ember-server-url-manual') || !urlBox.value.trim())
+          && document.activeElement !== urlBox) {
+        urlBox.value = (arena && arena.chosen && arena.chosen.url) || book.ws || '';
+      }
+      renderChip($('host-chip'), arena ? arena.chosen : null);
+      return { book, pin, ov };
+    }
+
+    // One row per MACHINE, not per server: a host running both games answers
+    // twice, and the player cares about the box. Players add up across its
+    // servers, the round trip is the best of them, and the build is the newest
+    // one it reported — a host mid-redeploy can briefly disagree with itself.
+    function stripRows() {
+      const byHost = new Map();
+      for (const [id, r] of perGame) {
+        for (const c of r.candidates) {
+          const key = c.bookName;
+          const row = byHost.get(key) || {
+            key, name: c.name, version: c.version, versionNum: -1,
+            commit: c.commit, players: 0, rtt: null, games: [], preferredFor: [],
+          };
+          if (c.name) row.name = c.name;
+          if (c.versionNum > row.versionNum) {
+            row.versionNum = c.versionNum;
+            row.version = c.version;
+            if (c.commit) row.commit = c.commit;
+          }
+          row.players += c.players;
+          if (typeof c.rttMs === 'number') {
+            row.rtt = row.rtt === null ? c.rttMs : Math.min(row.rtt, c.rttMs);
+          }
+          row.games.push(id);
+          if (r.chosen && r.chosen.bookName === key) row.preferredFor.push(id);
+          byHost.set(key, row);
+        }
+      }
+      return [...byHost.values()].sort((a, b) =>
+        (b.preferredFor.length - a.preferredFor.length)
+        || (b.versionNum - a.versionNum)
+        || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    }
+
+    function renderHosts(rows, pin, ov) {
+      const strip = $('host-strip');
+      if (!rows.length) {
+        const note = document.createElement('span');
+        note.id = 'host-note';
+        note.textContent = ov
+          ? 'no host answered at the address in server settings'
+          : 'no host answered — the games are offline right now';
+        strip.replaceChildren(note);
+      } else {
+        strip.replaceChildren(...rows.map((h) => {
+          const row = document.createElement('div');
+          row.className = 'host-row' + (h.preferredFor.length ? ' preferred' : '');
+          const nm = document.createElement('span');
+          nm.className = 'nm';
+          nm.textContent = h.name || 'unnamed host';
+          nm.title = [
+            h.commit ? `commit ${h.commit}` : 'commit unknown',
+            `runs ${h.games.map(titleOf).join(', ')}`,
+          ].join('\n');
+          const ver = document.createElement('span');
+          ver.className = 'pill';
+          ver.textContent = h.version || 'unstamped';
+          const right = document.createElement('span');
+          right.className = 'right';
+          const load = document.createElement('span');
+          load.className = 'pill';
+          load.textContent = `${h.players} playing`;
+          const rtt = document.createElement('span');
+          rtt.className = 'pill';
+          rtt.textContent = h.rtt === null ? '— ms' : `${h.rtt} ms`;
+          right.append(load, rtt);
+          if (h.preferredFor.length) {
+            const badge = document.createElement('span');
+            badge.className = 'badge small';
+            badge.textContent = 'preferred';
+            badge.title = `preferred for ${h.preferredFor.map(titleOf).join(', ')}`;
+            right.append(badge);
+          }
+          row.append(nm, ver, right);
+          return row;
+        }));
+      }
+
+      // The picker. Rebuilt every cycle, but only when its options actually
+      // changed — replacing it while it has focus would close the dropdown
+      // under the player's cursor every ten seconds.
+      const sel = $('host-pick');
+      const names = rows.map((h) => h.key).filter(Boolean);
+      if (pin && !names.includes(pin)) names.push(pin); // a pin that went away stays visible
+      const wanted = ['', ...names].join("|");
+      if (sel.dataset.options !== wanted) {
+        sel.dataset.options = wanted;
+        sel.replaceChildren(...['', ...names].map((n) => {
+          const o = document.createElement('option');
+          o.value = n;
+          o.textContent = n === ''
+            ? 'automatic'
+            : rows.some((h) => h.key === n) ? n : `${n} (not answering)`;
+          return o;
+        }));
+      }
+      sel.value = pin;
+      sel.disabled = !!ov;
+      sel.title = ov
+        ? 'a manual server URL is set in server settings, and that beats the picker'
+        : 'pin a host, or let the newest and emptiest one win';
+    }
+
+    // ---- live lobbies showcase: every game, every answering host -----------
+    // Aggregated across hosts, because a lobby lives on exactly one machine
+    // and two people who each landed on a different host would otherwise
+    // never see each other.
+    async function renderLobbies() {
       const rows = $('lobby-rows');
       const setNote = (msg) => {
         const note = document.createElement('span');
@@ -339,50 +537,96 @@
         note.textContent = msg;
         rows.replaceChildren(note);
       };
-      if (!url) { setNote('game server is offline right now'); return; }
-      let done = false;
-      const ws = new WebSocket(url);
-      const finish = (msg) => { if (!done) { done = true; if (msg) setNote(msg); ws.close(); } };
-      setTimeout(() => finish('game server not reachable'), 6000);
-      ws.onerror = () => finish('game server not reachable');
-      ws.onopen = () => {
-        ws.send(JSON.stringify({ t: 'hello', proto: 0, handle: 'browser' }));
-        ws.send(JSON.stringify({ t: 'list_lobbies' }));
-      };
-      ws.onmessage = (e) => {
-        let m; try { m = JSON.parse(e.data); } catch { return; }
-        if (m.t !== 'lobby_list') return;
-        done = true; ws.close();
-        if (!m.lobbies.length) {
-          setNote('no open games right now — create one below (Arena Shooter → Play)');
-          return;
+      const asked = [];
+      for (const [id, r] of perGame) {
+        for (const c of r.candidates) asked.push({ game: id, host: c });
+      }
+      if (!asked.length) { setNote('game server is offline right now'); return; }
+
+      const lists = await Promise.all(
+        asked.map(({ host }) => listLobbies(host.url, { proto: 0 })),
+      );
+      const all = [];
+      asked.forEach(({ game, host }, i) => {
+        for (const l of lists[i]) all.push({ game, host, lobby: l });
+      });
+      if (!all.length) {
+        setNote('no open games right now — create one below (Arena Shooter → Play)');
+        return;
+      }
+
+      rows.replaceChildren(...all.map(({ game, host, lobby: l }) => {
+        const row = document.createElement('div');
+        row.className = 'lobby-row';
+        const label = document.createElement('span');
+        label.textContent = `${l.name} — ${l.host} · ${l.players}/${l.cap} `;
+        if (l.has_password) {
+          const lock = document.createElement('span');
+          lock.className = 'lock';
+          lock.textContent = '🔒';
+          label.append(lock);
         }
-        rows.replaceChildren(...m.lobbies.map((l) => {
-          const row = document.createElement('div');
-          row.className = 'lobby-row';
-          const label = document.createElement('span');
-          label.textContent = `${l.name} — ${l.host} · ${l.players}/${l.cap} `;
-          if (l.has_password) {
-            const lock = document.createElement('span');
-            lock.className = 'lock';
-            lock.textContent = '🔒';
-            label.append(lock);
-          }
+        const right = document.createElement('span');
+        right.className = 'right';
+        const gameTag = document.createElement('span');
+        gameTag.className = 'pill';
+        gameTag.textContent = titleOf(game);
+        const hostTag = document.createElement('span');
+        hostTag.className = 'pill';
+        hostTag.textContent = host.name || 'unnamed host';
+        hostTag.title = host.url;
+        right.append(gameTag, hostTag);
+
+        const page = pageFor(game, host.proto);
+        if (page) {
           const btn = document.createElement('button');
           btn.className = 'small';
           btn.textContent = 'Join';
           btn.addEventListener('click', () => {
             const pw = l.has_password ? prompt(`Password for "${l.name}":`) : null;
             if (l.has_password && pw === null) return;
-            launch(arenaLivePath, { action: 'join', lobby: l.name, password: pw });
+            // The row's OWN host goes with the join: the game page must not
+            // re-rank and land the player on a different machine, where this
+            // lobby does not exist.
+            launch(page.path, {
+              action: 'join', lobby: l.name, password: pw,
+              ws: host.url, host: host.name || '',
+            });
           });
-          row.append(label, btn);
-          return row;
-        }));
-      };
+          right.append(btn);
+        } else {
+          const need = document.createElement('span');
+          need.className = 'badge dim small';
+          need.textContent = host.proto === null || host.proto === undefined
+            ? 'protocol unknown'
+            : `needs a proto ${host.proto} build`;
+          need.title = 'no published page speaks this host’s protocol for this game';
+          right.append(need);
+        }
+        row.append(label, right);
+        return row;
+      }));
     }
-    refreshLobbies();
-    setInterval(refreshLobbies, 10000);
+
+    async function refresh() {
+      if (busy) return;
+      busy = true;
+      try {
+        const { pin, ov } = await discoverHosts();
+        renderHosts(stripRows(), pin, ov);
+        await renderLobbies();
+      } finally {
+        busy = false;
+      }
+    }
+
+    $('host-pick').addEventListener('change', (e) => {
+      writePin(e.target.value);
+      refresh();
+    });
+
+    refresh();
+    setInterval(refresh, 10000);
   </script>
 </body>
 </html>
