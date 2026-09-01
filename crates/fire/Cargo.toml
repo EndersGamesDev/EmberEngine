@@ -13,9 +13,6 @@ path = "src/main.rs"
 
 [dependencies]
 ember-engine = { path = "../ember-engine" }
-
-[lints]
-workspace = true
 fire-core = { path = "../fire-core" }
 glam.workspace = true
 tracing.workspace = true
@@ -37,3 +34,6 @@ fire-server = { path = "../fire-server" }
 # So the server's dropped-message warnings surface in test output.
 tracing-subscriber.workspace = true
 ember-engine = { path = "../ember-engine" }
+
+[lints]
+workspace = true
