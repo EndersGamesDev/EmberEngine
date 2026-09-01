@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# A fake `scp` for deploy/tests/test-ssh-deploys.sh: log the argv, succeed.
+set -uo pipefail
+LOG="${SHIM_LOG:-/dev/null}"
+{ printf 'scp'; for a in "$@"; do printf ' [%s]' "$a"; done; printf '\n'; } >> "$LOG"
+exit 0
