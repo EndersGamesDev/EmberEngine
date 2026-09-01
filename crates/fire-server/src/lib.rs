@@ -357,9 +357,9 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
     let mut last = Instant::now();
 
     loop {
-        // Drain everything that arrived, then tick once. Draining first means
-        // an input that lands 1 ms before the tick is applied on that tick
-        // rather than the next one.
+        // Drain everything that arrived, then advance every tick now due.
+        // Draining first means an input that lands 1 ms before a tick is
+        // applied on that tick rather than the next one.
         loop {
             match events_rx.try_recv() {
                 Ok(ev) => handle_event(ev, &mut conns, &mut lobbies, cfg),
@@ -591,7 +591,7 @@ fn handle_event(
                 tracing::warn!(
                     conn = id,
                     n = c.msgs_this_tick,
-                    "over the per-drain message allowance, dropping: {msg:?}"
+                    "over the per-tick message allowance, dropping: {msg:?}"
                 );
                 return;
             }
