@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// SPDX-FileCopyrightText: 2026 Torrust project contributors
+// SPDX-FileCopyrightText: 2026 Wild Sky Maker
 
 //! Control protocol, list comparison, and atomic maintenance tests.
 //!
@@ -856,7 +856,7 @@ fn path_set_control_observes_the_file_until_every_half_conforms() {
         root.path(),
         "src/stale.rs",
         "// SPDX-License-Identifier: AGPL-3.0-only\n\
-             // SPDX-FileCopyrightText: 2026 Torrust project contributors\n\
+             // SPDX-FileCopyrightText: 2026 Wild Sky Maker\n\
              \n\
              fn stale() {}\n",
     );

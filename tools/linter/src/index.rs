@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// SPDX-FileCopyrightText: 2026 Torrust project contributors
+// SPDX-FileCopyrightText: 2026 Wild Sky Maker
 
 //! The in-file test index of ADR-T-017: one generated table per test-carrying
 //! Rust source, in that source's module documentation.
@@ -843,7 +843,7 @@ mod tests {
     /// blank line that separates it from what follows.
     fn license_header() -> &'static str {
         "// SPDX-License-Identifier: AGPL-3.0-only\n\
-         // SPDX-FileCopyrightText: 2026 Torrust project contributors\n\n"
+         // SPDX-FileCopyrightText: 2026 Wild Sky Maker\n\n"
     }
 
     /// A licence header stays the first thing in the file and the index follows

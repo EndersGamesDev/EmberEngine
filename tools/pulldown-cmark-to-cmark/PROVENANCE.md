@@ -1,1 +1,1 @@
-Vendored from `/var/home/cameronpeer/dev/orchestration/packages/pulldown-cmark-to-cmark` at orchestration commit `a7f619bfe1e86c4832b47fd6eb2ddf9ab845cf3f` on 2026-09-01. Fixes must land in the orchestration source workspace first and then be re-vendored here.
+Maintained by Wild Sky Maker as part of the ember workspace; snapshot date 2026-09-01.

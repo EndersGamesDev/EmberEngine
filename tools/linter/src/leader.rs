@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// SPDX-FileCopyrightText: 2026 Torrust project contributors
+// SPDX-FileCopyrightText: 2026 Wild Sky Maker
 
 //! The comment-leader catalog and the header region it defines.
 //!
@@ -342,13 +342,13 @@ mod tests {
     fn an_interpreter_line_moves_the_region_down_one() {
         let entry = answering_for("contrib/dev-tools/one.sh").expect("the shell row");
 
-        let headed = b"#!/usr/bin/env bash\n# SPDX-License-Identifier: AGPL-3.0-only\n# SPDX-FileCopyrightText: 2026 Torrust project contributors\n\nset -e\n";
+        let headed = b"#!/usr/bin/env bash\n# SPDX-License-Identifier: AGPL-3.0-only\n# SPDX-FileCopyrightText: 2026 Wild Sky Maker\n\nset -e\n";
 
         assert_eq!(
             entry.region(headed),
             vec![
                 &b"# SPDX-License-Identifier: AGPL-3.0-only"[..],
-                &b"# SPDX-FileCopyrightText: 2026 Torrust project contributors"[..],
+                &b"# SPDX-FileCopyrightText: 2026 Wild Sky Maker"[..],
             ],
             "the two header lines stand under the interpreter line"
         );

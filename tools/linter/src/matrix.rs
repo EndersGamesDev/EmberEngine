@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// SPDX-FileCopyrightText: 2026 Torrust project contributors
+// SPDX-FileCopyrightText: 2026 Wild Sky Maker
 
 //! The per-folder test matrix of ADR-T-017: one readme per Rust-bearing folder,
 //! each carrying one generated matrix under an authored head.

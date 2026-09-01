@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// SPDX-FileCopyrightText: 2026 Torrust project contributors
+// SPDX-FileCopyrightText: 2026 Wild Sky Maker
 
 //! The augmented Backus-Naur form of RFC 5234: a rule-list parser and a matcher.
 //!
