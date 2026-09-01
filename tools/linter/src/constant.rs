@@ -2456,12 +2456,9 @@ mod tests {
             "const lowercase: usize = 4;\n",
             "impl Widget {\n    const ASSOCIATED: usize = 5;\n}\n",
         );
-        let declarations = scan_constants(
-            "ember-demo",
-            Path::new("packages/demo/src/engine.rs"),
-            text,
-        )
-        .expect("a source");
+        let declarations =
+            scan_constants("ember-demo", Path::new("packages/demo/src/engine.rs"), text)
+                .expect("a source");
 
         assert_eq!(
             declarations.len(),

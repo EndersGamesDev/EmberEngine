@@ -661,8 +661,7 @@ mod tests {
         let mut tests = Vec::new();
 
         for (path, text) in sources {
-            tests
-                .extend(scan_source("ember-demo", Path::new(path), text).expect("a Rust source"));
+            tests.extend(scan_source("ember-demo", Path::new(path), text).expect("a Rust source"));
         }
 
         let (assets, findings) = cover(&packages, &Census::from_tests(tests, sources.len()));

@@ -891,8 +891,7 @@ mod tests {
             "a longer word carrying the spelling heads nothing"
         );
 
-        let (found, _orphans) =
-            scan_todos("ember-demo", Path::new("a.rs"), "// TODO: a notice\n");
+        let (found, _orphans) = scan_todos("ember-demo", Path::new("a.rs"), "// TODO: a notice\n");
 
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].summary(), "a notice");

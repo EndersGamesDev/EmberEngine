@@ -250,10 +250,7 @@ mod tests {
         ("ember-index-entry-script", "INDEXENTRYSCRIPT"),
         ("ember-index-health-check", "INDEXHEALTHCHECK"),
         ("linter", "LINTER"),
-        (
-            "ember-index-render-text-as-image",
-            "INDEXRENDERTEXTASIMAGE",
-        ),
+        ("ember-index-render-text-as-image", "INDEXRENDERTEXTASIMAGE"),
     ];
 
     /// An owner's prefix is computed from its crate name by one rule — strip the

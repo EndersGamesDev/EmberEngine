@@ -444,11 +444,8 @@ mod tests {
              // {acute}legacy:code:orphan{acute}\n\
              let quiet = \"// LEGACY: string data\";\n"
         );
-        let (sites, mut findings) = scan_legacy_sites(
-            "ember-demo",
-            Path::new("packages/demo/src/lib.rs"),
-            &source,
-        );
+        let (sites, mut findings) =
+            scan_legacy_sites("ember-demo", Path::new("packages/demo/src/lib.rs"), &source);
         let census = LegacyCensus {
             sites,
             files_scanned: 1,

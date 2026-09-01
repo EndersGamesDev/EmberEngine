@@ -1193,11 +1193,7 @@ mod tests {
             ),
             (
                 Vec::new(),
-                vec![carries(
-                    "code",
-                    "ember2026",
-                    "%s\"src/\" *VCHAR %s\".rs\"",
-                )],
+                vec![carries("code", "ember2026", "%s\"src/\" *VCHAR %s\".rs\"")],
             ),
         );
         let (governed, findings) = govern(&broad, &attributed);
