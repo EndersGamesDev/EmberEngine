@@ -11,6 +11,7 @@ pub mod ai;
 pub mod car;
 pub mod castle;
 pub mod hosted;
+pub mod legacy;
 pub mod proto;
 pub mod sim;
 pub mod track;
