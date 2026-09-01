@@ -58,6 +58,16 @@
     }
     .lobby .nm { font-weight: 600; color: #f0e6ff; }
     .lobby .meta { font-size: 0.8rem; opacity: 0.6; margin-left: auto; }
+    .pill {
+      font-size: 0.72rem; background: #100d1c; border: 1px solid #332c53;
+      border-radius: 999px; padding: 2px 8px; opacity: 0.9;
+      font-family: ui-monospace, monospace; white-space: nowrap;
+    }
+    #host-chip {
+      font-size: 0.72rem; color: #9a8fbe; font-family: ui-monospace, monospace;
+      background: #14112180; border: 1px solid #2e2748; border-radius: 999px;
+      padding: 5px 10px; white-space: nowrap;
+    }
     .note { font-size: 0.85rem; opacity: 0.7; }
     .note.bad { color: #ff9c8f; opacity: 1; }
     .hidden { display: none !important; }
@@ -106,6 +116,7 @@
 <body>
   <header>
     <h1><a href="../../../">⬅ games</a> &nbsp; ember <span>fire racer</span> <small style="opacity:.5">v2</small></h1>
+    <div id="host-chip" title="the host this page will race on">server …</div>
   </header>
   <div class="controls">
     <div><b>Drive</b> <kbd>W</kbd> <kbd>S</kbd></div>
@@ -160,6 +171,9 @@
   </footer>
 
   <script type="module">
+    import { chooseHost, listLobbies, loadBook, probeHost, rankHosts, renderChip }
+      from '../../../hosts.js';
+
     const $ = (id) => document.getElementById(id);
     const fail = (msg) => {
       const el = $('loading');
@@ -176,23 +190,44 @@
     });
 
     const ROOT = new URL('../../../', location);
-    let cfg = {};
-    try {
-      const r = await fetch(new URL(`server.json?ts=${Date.now()}`, ROOT), { cache: 'no-store' });
-      if (r.ok) cfg = await r.json();
-    } catch {}
-    const V = cfg.v || '0';
+    // `v` is the deploy stamp and still lives in the book's legacy top-level
+    // key, which every publish keeps writing.
+    const { book } = await loadBook(ROOT.href);
+    const V = book.v || '0';
 
     const wasm = await import(`./pkg/fire.js?v=${V}`);
     await wasm.default({ module_or_path: `./pkg/fire_bg.wasm?v=${V}` });
+    const PROTO = wasm.proto_version();
+
+    // ---- host discovery ----------------------------------------------------
+    // Fire Racer has never had a manual URL override — the one in the hub's
+    // server settings is the arena's address and pointing this page at it
+    // would be a worse bug than having no override at all. The address book
+    // is the only source here.
+    let chosen = null;    // the host we will race on
+    let candidates = [];  // it, then the fallbacks, in order
+
+    // One address, probed once, dressed as a ranked candidate so everything
+    // downstream deals with exactly one shape.
+    async function onlyHost(url) {
+      const entry = { name: '', fire_ws: url, version: '', commit: '', updated: '' };
+      const probes = new Map([['', await probeHost(url, { proto: PROTO })]]);
+      return rankHosts([entry], { game: 'fire', probes });
+    }
+
+    async function discover() {
+      const r = await chooseHost(ROOT.href, { game: 'fire', proto: PROTO });
+      chosen = r.chosen;
+      candidates = r.candidates;
+      renderChip($('host-chip'), chosen);
+    }
 
     // ---- lobby browser -----------------------------------------------------
     // Its own short-lived socket, exactly like the arena's. The engine loop
-    // never sees a menu, and this keeps working from a frozen page even when
-    // the protocol has moved on: listing is ungated on the server.
-    const fireWs = () => (cfg.fire_ws || '').trim();
-
-    const listLobbies = () => {
+    // never sees a menu. The chosen host's lobbies come first and every other
+    // host on this protocol below, each row tagged: two people who landed on
+    // different machines still have to be able to find each other.
+    const showLobbies = async () => {
       const rows = $('lobby-rows');
       const note = (text, bad) => {
         const s = document.createElement('span');
@@ -200,44 +235,43 @@
         s.textContent = text;
         rows.replaceChildren(s);
       };
-      const url = fireWs();
-      if (!url) { note('no online server is published right now — practice mode still works'); return; }
       note('looking for lobbies…');
+      await discover();
+      if (!candidates.length) {
+        note('no online server is published right now — practice mode still works');
+        return;
+      }
 
-      let done = false;
-      const ws = new WebSocket(url);
-      const finish = (msg, bad) => { if (!done) { done = true; if (msg) note(msg, bad); ws.close(); } };
-      setTimeout(() => finish('server did not answer', true), 6000);
-      ws.onerror = () => finish('server not reachable', true);
-      ws.onopen = () => {
-        ws.send(JSON.stringify({ t: 'hello', proto: wasm.proto_version(), handle: 'browser' }));
-        ws.send(JSON.stringify({ t: 'list_lobbies' }));
-      };
-      ws.onmessage = (e) => {
-        let m; try { m = JSON.parse(e.data); } catch { return; }
-        if (m.t !== 'lobbies') return;
-        done = true; ws.close();
-        if (!m.lobbies.length) { note('no lobbies yet — create one below'); return; }
-        rows.replaceChildren(...m.lobbies.map((l) => {
-          const row = document.createElement('div');
-          row.className = 'lobby';
-          const nm = document.createElement('span');
-          nm.className = 'nm';
-          nm.textContent = l.name + (l.has_password ? ' 🔒' : '');
-          const meta = document.createElement('span');
-          meta.className = 'meta';
-          meta.textContent = `${l.players}/${l.cap} · host ${l.host}${l.racing ? ' · racing' : ''}`;
-          const go = document.createElement('button');
-          go.textContent = 'Join';
-          go.onclick = () => {
-            const pass = l.has_password ? prompt(`Password for "${l.name}"`) : null;
-            if (l.has_password && pass === null) return;
-            launchOnline(l.name, pass, false);
-          };
-          row.append(nm, meta, go);
-          return row;
-        }));
-      };
+      const lists = await Promise.all(candidates.map((c) => listLobbies(c.url, { proto: PROTO })));
+      const all = [];
+      candidates.forEach((host, i) => {
+        for (const l of lists[i]) all.push({ host, lobby: l });
+      });
+      if (!all.length) { note('no lobbies yet — create one below'); return; }
+
+      rows.replaceChildren(...all.map(({ host, lobby: l }) => {
+        const row = document.createElement('div');
+        row.className = 'lobby';
+        const nm = document.createElement('span');
+        nm.className = 'nm';
+        nm.textContent = l.name + (l.has_password ? ' 🔒' : '');
+        const meta = document.createElement('span');
+        meta.className = 'meta';
+        meta.textContent = `${l.players}/${l.cap} · host ${l.host}${l.racing ? ' · racing' : ''}`;
+        const tag = document.createElement('span');
+        tag.className = 'pill';
+        tag.textContent = host.name || 'server';
+        tag.title = host.url;
+        const go = document.createElement('button');
+        go.textContent = 'Join';
+        go.onclick = () => {
+          const pass = l.has_password ? prompt(`Password for "${l.name}"`) : null;
+          if (l.has_password && pass === null) return;
+          launchOnline(l.name, pass, false, host); // this row's host, not the chosen one
+        };
+        row.append(nm, meta, tag, go);
+        return row;
+      }));
     };
 
     // ---- launching ---------------------------------------------------------
@@ -255,15 +289,43 @@
       pollHud();
     };
 
-    const launchOnline = (lobby, password, create) => {
+    const launchOnline = async (lobby, password, create, target) => {
       if (launched) return;
-      const url = fireWs();
-      if (!url) { $('online-note').textContent = 'no server published'; return; }
+      const wanted = target || chosen;
+      const note = $('online-note');
+      if (!wanted) { note.className = 'note bad'; note.textContent = 'no server answered'; return; }
       launched = true;
+
+      // Probe again RIGHT before the engine takes the socket. The list can be
+      // seconds old and a quick tunnel dies without warning; once the wasm
+      // client owns the connection there is no failover left, so this is the
+      // last moment a dead host can still be turned into a live one.
+      note.className = 'note';
+      note.textContent = 'connecting…';
+      const order = [wanted, ...candidates.filter((c) => c.url !== wanted.url)];
+      let live = null;
+      for (const c of order) {
+        // Serial on purpose: the next host only matters once this one failed.
+        const p = await probeHost(c.url, { proto: PROTO, timeoutMs: 3000 });
+        if (p.ok) { live = c; break; }
+      }
+      if (!live) {
+        launched = false;
+        note.className = 'note bad';
+        note.textContent = 'no server answered — try again in a moment';
+        return;
+      }
+      if (live.url !== wanted.url) {
+        note.textContent =
+          `${wanted.name || 'that server'} stopped answering — moved to ${live.name || 'another server'}`;
+      }
+      chosen = live;
+      renderChip($('host-chip'), live);
+
       showStage();
       try {
         wasm.start_online(JSON.stringify({
-          ws: url,
+          ws: live.url,
           handle: ($('handle').value || 'driver').trim(),
           lobby, password: password || '', create,
         }));
@@ -272,8 +334,8 @@
         launched = false;
         $('stage').classList.add('hidden');
         $('start').classList.remove('hidden');
-        $('online-note').className = 'note bad';
-        $('online-note').textContent = String(e);
+        note.className = 'note bad';
+        note.textContent = String(e);
       }
     };
 
@@ -282,14 +344,43 @@
       $('online-panel').classList.toggle('hidden');
       $('btn-online').classList.add('primary');
       $('btn-practice').classList.remove('primary');
-      if (!$('online-panel').classList.contains('hidden')) listLobbies();
+      if (!$('online-panel').classList.contains('hidden')) showLobbies();
     };
-    $('btn-refresh').onclick = listLobbies;
+    $('btn-refresh').onclick = showLobbies;
     $('btn-create').onclick = () => {
       const name = ($('newlobby').value || '').trim();
       if (!name) { $('online-note').className = 'note bad'; $('online-note').textContent = 'give the lobby a name'; return; }
-      launchOnline(name, ($('newpass').value || '').trim(), true);
+      launchOnline(name, ($('newpass').value || '').trim(), true, chosen);
     };
+
+    // ---- a join handed over from the hub's live-lobby showcase
+    // The hub already picked the machine: this lobby lives on THAT host and
+    // nowhere else, so its address is used verbatim with no re-ranking. It is
+    // still probed once, so a dead handover says so instead of hanging.
+    let pending = null;
+    try { pending = JSON.parse(sessionStorage.getItem('ember-pending')); } catch {}
+    sessionStorage.removeItem('ember-pending');
+    if (pending && pending.lobby) {
+      $('online-panel').classList.remove('hidden');
+      $('btn-online').classList.add('primary');
+      $('btn-practice').classList.remove('primary');
+      if (pending.ws) {
+        const r = await onlyHost(pending.ws);
+        chosen = r.chosen;
+        candidates = r.candidates;
+      } else {
+        // A handover from a page that predates the host list: no address came
+        // with it, so the normal pick applies.
+        await discover();
+      }
+      if (chosen && pending.host) chosen.name = chosen.name || pending.host;
+      renderChip($('host-chip'), chosen);
+      launchOnline(pending.lobby, pending.password, pending.action === 'create', chosen);
+    } else {
+      // Rank once on load so the chip is honest before anyone opens the
+      // online panel; the panel's own refresh re-ranks from there.
+      discover();
+    }
 
     // ---- HUD ---------------------------------------------------------------
     // The renderer has one scene pass, no 2D layer and no text, so the HUD
