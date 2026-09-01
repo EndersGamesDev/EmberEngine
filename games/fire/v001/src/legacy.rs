@@ -7,9 +7,7 @@ use ember_legacy::{
 };
 
 use crate::hosted::GAME_ID;
-use crate::proto::{
-    self, C2S, LobbyInfo, MAX_LOBBY_LEN, MAX_PASSWORD_LEN, PROTO_VERSION, S2C,
-};
+use crate::proto::{self, C2S, LobbyInfo, MAX_LOBBY_LEN, MAX_PASSWORD_LEN, PROTO_VERSION, S2C};
 
 /// Closed query-selector value accepted for the deployed Fire client.
 pub const LEGACY_SELECTOR: &str = "fire";
@@ -198,9 +196,7 @@ pub fn project_lobbies(lobbies: &[LegacyLobby]) -> Result<EncodedEvent, InnerCod
             racing: lobby.racing,
         })
         .collect();
-    encode(&S2C::Lobbies {
-        lobbies: projected,
-    })
+    encode(&S2C::Lobbies { lobbies: projected })
 }
 
 /// Encodes a browsing-safe refusal using Fire's deployed `rejected` variant.
@@ -268,16 +264,13 @@ impl LegacyIngress for LegacyFireAdapter {
                 password: request.password,
             },
             LegacyFireAction::LeaveLobby => LegacyIngressAction::LeaveLobby,
-            LegacyFireAction::SessionInput(input)
-                if state == LegacyConnectionState::Joined => {
+            LegacyFireAction::SessionInput(input) if state == LegacyConnectionState::Joined => {
                 LegacyIngressAction::DispatchInner(input)
             }
             LegacyFireAction::SessionInput(_) => LegacyIngressAction::Reply(event_to_frame(
                 &rejected("join a lobby before sending game input")?,
             )?),
-            LegacyFireAction::Reply(event) => {
-                LegacyIngressAction::Reply(event_to_frame(&event)?)
-            }
+            LegacyFireAction::Reply(event) => LegacyIngressAction::Reply(event_to_frame(&event)?),
         };
         Ok(action)
     }
@@ -348,9 +341,7 @@ impl LegacyIngress for LegacyFireAdapter {
             LegacyIngressRefusal::AdmissionRefused { code, message } => {
                 format!("{code}: {message}")
             }
-            LegacyIngressRefusal::InternalError => {
-                "internal session boundary failure".to_string()
-            }
+            LegacyIngressRefusal::InternalError => "internal session boundary failure".to_string(),
         };
         event_to_frame(&rejected(&message)?)
     }

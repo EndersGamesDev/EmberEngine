@@ -39,7 +39,10 @@ fn connect(port: u16, handle: &str) -> Client {
             r#"{{"type":"hello","payload":{{"outer_version":1,"handle":"{handle}"}}}}"#
         )))
         .unwrap();
-    assert!(matches!(read_outer(&mut websocket), ServerMessage::Welcome(_)));
+    assert!(matches!(
+        read_outer(&mut websocket),
+        ServerMessage::Welcome(_)
+    ));
     websocket
 }
 
@@ -58,12 +61,10 @@ fn feature_gated_fixture_exercises_canonical_host_and_drain() {
     let (port, drain) = start_host();
     let mut creator = connect(port, "alice");
     creator
-        .send(Message::text(
-            concat!(
-                r#"{"type":"create_lobby","payload":{"game_id":"fixture","#,
-                r#""game_version":1,"lobby_name":"room","password":null}}"#,
-            ),
-        ))
+        .send(Message::text(concat!(
+            r#"{"type":"create_lobby","payload":{"game_id":"fixture","#,
+            r#""game_version":1,"lobby_name":"room","password":null}}"#,
+        )))
         .unwrap();
     assert!(matches!(read_outer(&mut creator), ServerMessage::Joined(_)));
     assert_eq!(creator.read().unwrap(), Message::text("fixture-ready"));
@@ -71,20 +72,15 @@ fn feature_gated_fixture_exercises_canonical_host_and_drain() {
     creator.send(Message::text("inner-text")).unwrap();
     assert_eq!(creator.read().unwrap(), Message::text("inner-text"));
     creator.send(Message::binary(vec![1_u8, 2, 3])).unwrap();
-    assert_eq!(
-        creator.read().unwrap(),
-        Message::binary(vec![1_u8, 2, 3])
-    );
+    assert_eq!(creator.read().unwrap(), Message::binary(vec![1_u8, 2, 3]));
 
     let mut browser = connect(port, "bob");
     drain.stop_admission();
     browser
-        .send(Message::text(
-            concat!(
-                r#"{"type":"join_lobby","payload":{"game_id":"fixture","#,
-                r#""game_version":1,"lobby_name":"room","password":null}}"#,
-            ),
-        ))
+        .send(Message::text(concat!(
+            r#"{"type":"join_lobby","payload":{"game_id":"fixture","#,
+            r#""game_version":1,"lobby_name":"room","password":null}}"#,
+        )))
         .unwrap();
     let ServerMessage::Error(error) = read_outer(&mut browser) else {
         panic!("drain must return a structured browsing-state refusal");

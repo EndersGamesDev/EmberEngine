@@ -18,16 +18,16 @@ mod transport;
 pub use connection::{ClientConnection, ClientDiagnostics, ConnectionProgress};
 pub use frame::{Keepalive, WireFrame};
 pub use handshake::{
-    CanonicalHandshake, CanonicalSelection, HandshakeProgress, HandshakeProvider,
-    HandshakeUpdate, LegacyHandshake, LegacyJsonTags,
+    CanonicalHandshake, CanonicalSelection, HandshakeProgress, HandshakeProvider, HandshakeUpdate,
+    LegacyHandshake, LegacyJsonTags,
 };
 pub use hooks::{
     AcknowledgementMode, CorrectionMode, HookError, InnerFrameCodec, PredictionHooks,
     RemoteEntityHooks, ReplayContext,
 };
-pub use prediction::{InputHistory, Reconciliation, Reconciler, SequenceAllocator, SequencedInput};
+pub use prediction::{InputHistory, Reconciler, Reconciliation, SequenceAllocator, SequencedInput};
 pub use snapshot::{RemoteSnapshot, RemoteSnapshotBuffer, SnapshotPush};
 pub use transport::{
-    CloseKind, ConnectionClose, ConnectionDiagnostics, SendError, TransportConfig,
-    TransportStatus, WebSocketTransport,
+    CloseKind, ConnectionClose, ConnectionDiagnostics, SendError, TransportConfig, TransportStatus,
+    WebSocketTransport,
 };

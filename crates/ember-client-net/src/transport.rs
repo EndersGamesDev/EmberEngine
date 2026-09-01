@@ -424,8 +424,8 @@ mod imp {
     use wasm_bindgen::closure::Closure;
 
     use super::{
-        CloseKind, ConnectionClose, ConnectionDiagnostics, MAX_BROWSER_BUFFERED_BYTES,
-        SendError, TransportConfig, TransportStatus, WireFrame,
+        CloseKind, ConnectionClose, ConnectionDiagnostics, MAX_BROWSER_BUFFERED_BYTES, SendError,
+        TransportConfig, TransportStatus, WireFrame,
     };
 
     struct Shared {
@@ -476,8 +476,8 @@ mod imp {
         // Browser callback installation stays together so every closure lifetime is visible.
         #[allow(clippy::too_many_lines)]
         pub fn connect(url: &str, config: TransportConfig) -> Result<Self, String> {
-            let socket =
-                web_sys::WebSocket::new(url).map_err(|_| format!("invalid WebSocket URL: {url}"))?;
+            let socket = web_sys::WebSocket::new(url)
+                .map_err(|_| format!("invalid WebSocket URL: {url}"))?;
             socket.set_binary_type(web_sys::BinaryType::Arraybuffer);
             let shared = Rc::new(RefCell::new(Shared {
                 inbox: VecDeque::new(),
@@ -552,15 +552,14 @@ mod imp {
             socket.set_onopen(Some(on_open.as_ref().unchecked_ref()));
 
             let close_shared = Rc::clone(&shared);
-            let on_close =
-                Closure::<dyn FnMut(web_sys::CloseEvent)>::new(move |event| {
-                    let detail = if event.reason().is_empty() {
-                        format!("server closed the connection ({})", event.code())
-                    } else {
-                        event.reason()
-                    };
-                    close(&close_shared, CloseKind::Remote, detail, true);
-                });
+            let on_close = Closure::<dyn FnMut(web_sys::CloseEvent)>::new(move |event| {
+                let detail = if event.reason().is_empty() {
+                    format!("server closed the connection ({})", event.code())
+                } else {
+                    event.reason()
+                };
+                close(&close_shared, CloseKind::Remote, detail, true);
+            });
             socket.set_onclose(Some(on_close.as_ref().unchecked_ref()));
 
             let error_shared = Rc::clone(&shared);

@@ -131,11 +131,7 @@ impl LegacyRandom for HostRandom {
             digest.update(key.lobby_seed.0);
             update_length_prefixed(&mut digest, key.stream_key.0.as_bytes());
             digest.update(key.event_index.to_le_bytes());
-            digest.update(
-                u64::try_from(block_index)
-                    .unwrap_or(u64::MAX)
-                    .to_le_bytes(),
-            );
+            digest.update(u64::try_from(block_index).unwrap_or(u64::MAX).to_le_bytes());
             let result = digest.finalize();
             block.copy_from_slice(&result[..block.len()]);
         }

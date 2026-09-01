@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use ember_client_net::{
-    AcknowledgementMode, CorrectionMode, HookError, InnerFrameCodec, PredictionHooks,
-    Reconciler, RemoteEntityHooks, RemoteSnapshotBuffer, ReplayContext, WireFrame,
+    AcknowledgementMode, CorrectionMode, HookError, InnerFrameCodec, PredictionHooks, Reconciler,
+    RemoteEntityHooks, RemoteSnapshotBuffer, ReplayContext, WireFrame,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -100,11 +100,7 @@ impl RemoteEntityHooks for FakeGame {
         *from + (*to - *from) * numerator / denominator
     }
 
-    fn dead_reckon_remote(
-        &self,
-        latest: &Self::Snapshot,
-        elapsed: u64,
-    ) -> Self::RenderState {
+    fn dead_reckon_remote(&self, latest: &Self::Snapshot, elapsed: u64) -> Self::RenderState {
         *latest + i32::try_from(elapsed).unwrap_or(i32::MAX)
     }
 

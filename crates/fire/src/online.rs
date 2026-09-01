@@ -137,11 +137,7 @@ impl RemoteEntityHooks for FireRemoteHooks {
         state
     }
 
-    fn dead_reckon_remote(
-        &self,
-        latest: &Self::Snapshot,
-        elapsed: u64,
-    ) -> Self::RenderState {
+    fn dead_reckon_remote(&self, latest: &Self::Snapshot, elapsed: u64) -> Self::RenderState {
         let elapsed = u16::try_from(elapsed).unwrap_or(u16::MAX);
         let mut state = *latest;
         state.x += state.vx * DT * f32::from(elapsed);
@@ -275,8 +271,8 @@ impl Online {
                 // Straight-line extrapolation. Guessing at a remote driver's
                 // steering would look worse than a slightly stale heading.
                 self.remote_time[i] = self.remote_time[i].wrapping_add(1);
-                if let Some(state) = self.remote_snapshots[i]
-                    .sample_at(&FireRemoteHooks, self.remote_time[i])
+                if let Some(state) =
+                    self.remote_snapshots[i].sample_at(&FireRemoteHooks, self.remote_time[i])
                 {
                     apply_car_state(&mut self.race.racers[i].car, &state);
                 }

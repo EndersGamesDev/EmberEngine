@@ -5,18 +5,16 @@ use std::time::Duration;
 
 use ember_legacy::{
     AdmissionMetadata, AdmissionRefusal, DecodedInput, EncodedEvent, FactoryError, GameFactory,
-    GameKey, GameSession, InnerCodec, InnerCodecError, InnerFrame, LeaveReason,
-    LegacyCapabilities, LobbySeed, LobbyStatus, MonotonicTimestamp, OutboundEvent, OutboundTarget,
-    PeerId, SessionCreationData, SessionInput, SessionUpdate,
+    GameKey, GameSession, InnerCodec, InnerCodecError, InnerFrame, LeaveReason, LegacyCapabilities,
+    LobbySeed, LobbyStatus, MonotonicTimestamp, OutboundEvent, OutboundTarget, PeerId,
+    SessionCreationData, SessionInput, SessionUpdate,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::ai;
 use crate::car::{CarInput, DT};
 use crate::castle;
-use crate::proto::{
-    self, C2S, CarState, MAX_PLAYERS, Phase, PlayerMeta, S2C, STATE_EVERY_TICKS,
-};
+use crate::proto::{self, C2S, CarState, MAX_PLAYERS, Phase, PlayerMeta, S2C, STATE_EVERY_TICKS};
 use crate::sim::{FixedStep, Race, RaceState};
 
 /// Permanent hosted-game identifier for Fire.
@@ -326,8 +324,7 @@ impl FireSession {
             );
         }
 
-        if self.race.state != RaceState::Waiting
-            && self.race.tick.is_multiple_of(STATE_EVERY_TICKS)
+        if self.race.state != RaceState::Waiting && self.race.tick.is_multiple_of(STATE_EVERY_TICKS)
         {
             let cars = self.race_state();
             self.broadcast(
@@ -342,11 +339,7 @@ impl FireSession {
         if self.race.state == RaceState::Finished {
             self.results_left -= DT;
             if self.results_left <= 0.0 {
-                self.race = Race::new(
-                    castle::track(),
-                    usize::from(MAX_PLAYERS),
-                    self.rules.laps,
-                );
+                self.race = Race::new(castle::track(), usize::from(MAX_PLAYERS), self.rules.laps);
                 self.ready.clear();
                 self.inputs.clear();
                 self.last_phase = Phase::Waiting;
@@ -396,11 +389,7 @@ impl FireSession {
 
     fn broadcast(&self, update: &mut SessionUpdate, message: &S2C) {
         if !self.members.is_empty() {
-            push_message(
-                update,
-                OutboundTarget::Peers(self.members.clone()),
-                message,
-            );
+            push_message(update, OutboundTarget::Peers(self.members.clone()), message);
         }
     }
 
@@ -418,11 +407,7 @@ impl FireSession {
 }
 
 impl GameSession for FireSession {
-    fn step(
-        &mut self,
-        timestamp: MonotonicTimestamp,
-        inputs: Vec<SessionInput>,
-    ) -> SessionUpdate {
+    fn step(&mut self, timestamp: MonotonicTimestamp, inputs: Vec<SessionInput>) -> SessionUpdate {
         let mut update = SessionUpdate::default();
         for input in inputs {
             self.accept_input(&input, &mut update);
@@ -435,10 +420,7 @@ impl GameSession for FireSession {
         update
     }
 
-    fn join(
-        &mut self,
-        admission: AdmissionMetadata,
-    ) -> Result<SessionUpdate, AdmissionRefusal> {
+    fn join(&mut self, admission: AdmissionMetadata) -> Result<SessionUpdate, AdmissionRefusal> {
         if self.slots.contains_key(&admission.peer_id) {
             return Err(AdmissionRefusal {
                 code: "already_joined".to_string(),

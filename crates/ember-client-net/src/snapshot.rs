@@ -83,17 +83,20 @@ impl<S> RemoteSnapshotBuffer<S> {
         }
         for (from, to) in self.snapshots.iter().zip(self.snapshots.iter().skip(1)) {
             if server_timestamp <= to.server_timestamp {
-                if hooks.snap_or_smooth_remote(&from.snapshot, &to.snapshot)
-                    == CorrectionMode::Snap
+                if hooks.snap_or_smooth_remote(&from.snapshot, &to.snapshot) == CorrectionMode::Snap
                 {
                     return Some(hooks.interpolate_remote(&to.snapshot, &to.snapshot, 1, 1));
                 }
-                return Some(hooks.interpolate_remote(
-                    &from.snapshot,
-                    &to.snapshot,
-                    server_timestamp.saturating_sub(from.server_timestamp),
-                    to.server_timestamp.saturating_sub(from.server_timestamp).max(1),
-                ));
+                return Some(
+                    hooks.interpolate_remote(
+                        &from.snapshot,
+                        &to.snapshot,
+                        server_timestamp.saturating_sub(from.server_timestamp),
+                        to.server_timestamp
+                            .saturating_sub(from.server_timestamp)
+                            .max(1),
+                    ),
+                );
             }
         }
         let latest = self.snapshots.back()?;
@@ -134,15 +137,12 @@ mod tests {
             denominator: u64,
         ) -> Self::RenderState {
             let span = to - from;
-            *from + span * i64::try_from(numerator).unwrap_or(i64::MAX)
-                / i64::try_from(denominator).unwrap_or(i64::MAX)
+            *from
+                + span * i64::try_from(numerator).unwrap_or(i64::MAX)
+                    / i64::try_from(denominator).unwrap_or(i64::MAX)
         }
 
-        fn dead_reckon_remote(
-            &self,
-            latest: &Self::Snapshot,
-            elapsed: u64,
-        ) -> Self::RenderState {
+        fn dead_reckon_remote(&self, latest: &Self::Snapshot, elapsed: u64) -> Self::RenderState {
             *latest + i64::try_from(elapsed).unwrap_or(i64::MAX)
         }
 

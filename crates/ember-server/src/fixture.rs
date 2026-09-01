@@ -111,11 +111,7 @@ struct FixtureSession {
 }
 
 impl GameSession for FixtureSession {
-    fn step(
-        &mut self,
-        _timestamp: MonotonicTimestamp,
-        inputs: Vec<SessionInput>,
-    ) -> SessionUpdate {
+    fn step(&mut self, _timestamp: MonotonicTimestamp, inputs: Vec<SessionInput>) -> SessionUpdate {
         let outbound = inputs
             .into_iter()
             .map(|input| OutboundEvent {
@@ -132,10 +128,7 @@ impl GameSession for FixtureSession {
         }
     }
 
-    fn join(
-        &mut self,
-        admission: AdmissionMetadata,
-    ) -> Result<SessionUpdate, AdmissionRefusal> {
+    fn join(&mut self, admission: AdmissionMetadata) -> Result<SessionUpdate, AdmissionRefusal> {
         self.peers.insert(admission.peer_id);
         self.transport.record_metric(MetricObservation {
             name: "fixture_join".to_string(),

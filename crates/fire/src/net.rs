@@ -4,8 +4,8 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use ember_client_net::{
-    ClientConnection, ClientDiagnostics, ConnectionProgress, HookError, InnerFrameCodec,
-    Keepalive, LegacyHandshake, LegacyJsonTags, TransportConfig, TransportStatus, WireFrame,
+    ClientConnection, ClientDiagnostics, ConnectionProgress, HookError, InnerFrameCodec, Keepalive,
+    LegacyHandshake, LegacyJsonTags, TransportConfig, TransportStatus, WireFrame,
 };
 use fire_core::proto::{C2S, CLIENT_PING_SECS, S2C};
 

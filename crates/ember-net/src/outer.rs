@@ -278,7 +278,10 @@ impl fmt::Display for OuterCodecError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::FrameTooLarge { actual, maximum } => {
-                write!(formatter, "outer frame has {actual} bytes; limit is {maximum}")
+                write!(
+                    formatter,
+                    "outer frame has {actual} bytes; limit is {maximum}"
+                )
             }
             Self::MalformedJson { detail } => write!(formatter, "malformed outer JSON: {detail}"),
             Self::UnsupportedOuterVersion {
@@ -712,12 +715,10 @@ mod tests {
         );
         assert!(malformed_error.closes_connection());
 
-        let oversize_length: usize = include_str!(
-            "../tests/fixtures/outer/invalid/oversize.bytes"
-        )
-        .trim()
-        .parse()
-        .expect("oversize fixture must contain a byte count");
+        let oversize_length: usize = include_str!("../tests/fixtures/outer/invalid/oversize.bytes")
+            .trim()
+            .parse()
+            .expect("oversize fixture must contain a byte count");
         let oversize = vec![b'x'; oversize_length];
         assert!(matches!(
             decode_client_frame(&oversize),
@@ -771,9 +772,7 @@ mod tests {
             &ConnectionState::Browsing { outer_version: 1 }
         );
         assert_eq!(
-            machine.transition(StateInput::Outer(ClientMessage::ListLobbies(
-                ListLobbies
-            ))),
+            machine.transition(StateInput::Outer(ClientMessage::ListLobbies(ListLobbies))),
             StateAction::ListLobbies
         );
         let create = CreateLobby {
@@ -783,7 +782,9 @@ mod tests {
             password: None,
         };
         assert_eq!(
-            machine.transition(StateInput::Outer(ClientMessage::CreateLobby(create.clone()))),
+            machine.transition(StateInput::Outer(ClientMessage::CreateLobby(
+                create.clone()
+            ))),
             StateAction::CreateLobby(create)
         );
         let join = JoinLobby {
@@ -813,10 +814,7 @@ mod tests {
             StateAction::Close
         );
         assert_eq!(machine.state(), &ConnectionState::Closed);
-        assert_eq!(
-            machine.transition(StateInput::Control),
-            StateAction::Ignore
-        );
+        assert_eq!(machine.transition(StateInput::Control), StateAction::Ignore);
     }
 
     #[test]
@@ -832,12 +830,12 @@ mod tests {
         );
         assert_eq!(awaiting.state(), &ConnectionState::Closed);
         let mut awaiting_inner = StateMachine::new();
-        let before_join = include_str!(
-            "../tests/fixtures/outer/invalid/wrong_before_join_inner.txt"
-        );
+        let before_join =
+            include_str!("../tests/fixtures/outer/invalid/wrong_before_join_inner.txt");
         assert_rejection(
-            &awaiting_inner
-                .transition(StateInput::Inner(InnerPayload::Text(before_join.to_string()))),
+            &awaiting_inner.transition(StateInput::Inner(InnerPayload::Text(
+                before_join.to_string(),
+            ))),
             OuterErrorCode::PayloadBeforeJoin,
         );
         assert_eq!(
@@ -846,10 +844,9 @@ mod tests {
         );
 
         let mut browsing = StateMachine::new();
-        let hello = decode_client_frame(include_bytes!(
-            "../tests/fixtures/outer/client/hello.json"
-        ))
-        .expect("hello fixture is valid JSON");
+        let hello =
+            decode_client_frame(include_bytes!("../tests/fixtures/outer/client/hello.json"))
+                .expect("hello fixture is valid JSON");
         browsing.transition(StateInput::Outer(hello));
         let repeated = decode_client_frame(include_bytes!(
             "../tests/fixtures/outer/invalid/wrong_browsing_hello.json"
@@ -861,24 +858,20 @@ mod tests {
         );
         assert_eq!(browsing.state(), &ConnectionState::Closed);
         let mut browsing_inner = StateMachine::new();
-        let hello = decode_client_frame(include_bytes!(
-            "../tests/fixtures/outer/client/hello.json"
-        ))
-        .expect("hello fixture is valid JSON");
+        let hello =
+            decode_client_frame(include_bytes!("../tests/fixtures/outer/client/hello.json"))
+                .expect("hello fixture is valid JSON");
         browsing_inner.transition(StateInput::Outer(hello));
-        let inner = include_str!(
-            "../tests/fixtures/outer/invalid/wrong_before_join_inner.txt"
-        );
+        let inner = include_str!("../tests/fixtures/outer/invalid/wrong_before_join_inner.txt");
         assert_rejection(
             &browsing_inner.transition(StateInput::Inner(InnerPayload::Text(inner.to_string()))),
             OuterErrorCode::PayloadBeforeJoin,
         );
 
         let mut joined_machine = StateMachine::new();
-        let hello = decode_client_frame(include_bytes!(
-            "../tests/fixtures/outer/client/hello.json"
-        ))
-        .expect("hello fixture is valid JSON");
+        let hello =
+            decode_client_frame(include_bytes!("../tests/fixtures/outer/client/hello.json"))
+                .expect("hello fixture is valid JSON");
         joined_machine.transition(StateInput::Outer(hello));
         joined_machine
             .mark_joined(joined())

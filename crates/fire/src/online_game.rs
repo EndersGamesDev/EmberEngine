@@ -157,7 +157,9 @@ impl EmberGame for OnlineGame {
             self.state.apply(m);
         }
 
-        if !self.connection_notice && let Status::Closed(reason) = self.net.status() {
+        if !self.connection_notice
+            && let Status::Closed(reason) = self.net.status()
+        {
             self.connection_notice = true;
             self.state.notice = Some(format!("connection lost: {reason}"));
         }

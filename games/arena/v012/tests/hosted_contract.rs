@@ -104,7 +104,10 @@ fn codec_preserves_exact_json_text_frames() {
         let event = ember_legacy::EncodedEvent {
             payload: serde_json::to_vec(&message).unwrap(),
         };
-        assert_eq!(codec.encode(&event).unwrap(), InnerFrame::Text(line.to_string()));
+        assert_eq!(
+            codec.encode(&event).unwrap(),
+            InnerFrame::Text(line.to_string())
+        );
     }
     assert_eq!(
         codec.decode(&InnerFrame::Binary(Vec::new())),
@@ -183,9 +186,7 @@ fn legacy_lobby_create_join_and_refusal_match_the_deployed_wire() {
         fixture.list_response
     );
 
-    let create = decoder
-        .decode(&InnerFrame::Text(fixture.create))
-        .unwrap();
+    let create = decoder.decode(&InnerFrame::Text(fixture.create)).unwrap();
     let ArenaLegacyAction::CreateLobby {
         game_key,
         name,
@@ -397,10 +398,7 @@ fn timestamped_transcript_produces_authoritative_checkpoints() {
         panic!("Arena v12 emitted a binary join frame");
     };
     let joined_message: S2C = serde_json::from_str(&joined_text).unwrap();
-    assert!(matches!(
-        joined_message,
-        S2C::GameJoined { seed: 42, .. }
-    ));
+    assert!(matches!(joined_message, S2C::GameJoined { seed: 42, .. }));
 
     for call in trace.calls {
         let timestamp = MonotonicTimestamp::from_micros(call.timestamp_micros);
@@ -420,9 +418,7 @@ fn timestamped_transcript_produces_authoritative_checkpoints() {
             continue;
         };
         let Some(S2C::State {
-            tick,
-            mut players,
-            ..
+            tick, mut players, ..
         }) = state
         else {
             panic!("checkpoint call did not broadcast state");

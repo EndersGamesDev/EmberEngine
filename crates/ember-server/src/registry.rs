@@ -79,7 +79,11 @@ impl RegistryBuilder {
     /// Returns a duplicate-registration error when the exact key was already added.
     pub fn register(&mut self, registration: RegistryRegistration) -> Result<(), RegistryError> {
         let key = registration.key.clone();
-        if self.registrations.insert(key.clone(), registration).is_some() {
+        if self
+            .registrations
+            .insert(key.clone(), registration)
+            .is_some()
+        {
             return Err(RegistryError::DuplicateRegistration(key));
         }
         Ok(())
@@ -318,7 +322,11 @@ impl fmt::Display for RegistryError {
                 write!(formatter, "duplicate registration: {key:?}")
             }
             Self::ManifestRead { path, source } => {
-                write!(formatter, "cannot read hosted manifest {}: {source}", path.display())
+                write!(
+                    formatter,
+                    "cannot read hosted manifest {}: {source}",
+                    path.display()
+                )
             }
             Self::ManifestParse(error) => {
                 write!(formatter, "cannot parse hosted manifest: {error}")
@@ -327,13 +335,22 @@ impl fmt::Display for RegistryError {
                 write!(formatter, "hosted manifest validation failed: {errors:?}")
             }
             Self::MissingRegistration(key) => {
-                write!(formatter, "manifest entry has no compiled registration: {key:?}")
+                write!(
+                    formatter,
+                    "manifest entry has no compiled registration: {key:?}"
+                )
             }
             Self::MissingLegacyIngress(key) => {
-                write!(formatter, "manifest legacy selector has no adapter: {key:?}")
+                write!(
+                    formatter,
+                    "manifest legacy selector has no adapter: {key:?}"
+                )
             }
             Self::UnexpectedLegacyIngress(key) => {
-                write!(formatter, "compiled legacy adapter has no manifest selector: {key:?}")
+                write!(
+                    formatter,
+                    "compiled legacy adapter has no manifest selector: {key:?}"
+                )
             }
             Self::InvalidLimits { key, error } => {
                 write!(formatter, "invalid version limits for {key:?}: {error:?}")
@@ -463,30 +480,37 @@ legacy_game = "arena"
         else {
             panic!("expected semantic manifest validation failure");
         };
-        assert!(errors.iter().any(|error| matches!(
-            error,
-            ManifestValidationError::DuplicateGameKey(_)
-        )));
-        assert!(errors.iter().any(|error| matches!(
-            error,
-            ManifestValidationError::MultipleLatest { .. }
-        )));
-        assert!(errors.iter().any(|error| matches!(
-            error,
-            ManifestValidationError::MissingPackage(_)
-        )));
-        assert!(errors.iter().any(|error| matches!(
-            error,
-            ManifestValidationError::MissingLimitsProfile(_)
-        )));
-        assert!(errors.iter().any(|error| matches!(
-            error,
-            ManifestValidationError::MissingFixtureSuite(_)
-        )));
-        assert!(errors.iter().any(|error| matches!(
-            error,
-            ManifestValidationError::InvalidLegacySelector { .. }
-        )));
+        assert!(
+            errors
+                .iter()
+                .any(|error| matches!(error, ManifestValidationError::DuplicateGameKey(_)))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| matches!(error, ManifestValidationError::MultipleLatest { .. }))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| matches!(error, ManifestValidationError::MissingPackage(_)))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| matches!(error, ManifestValidationError::MissingLimitsProfile(_)))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| matches!(error, ManifestValidationError::MissingFixtureSuite(_)))
+        );
+        assert!(
+            errors.iter().any(|error| matches!(
+                error,
+                ManifestValidationError::InvalidLegacySelector { .. }
+            ))
+        );
     }
 
     #[test]

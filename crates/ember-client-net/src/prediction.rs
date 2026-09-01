@@ -189,11 +189,7 @@ impl<I> Reconciler<I> {
             .find(|entry| entry.sequence == acknowledgement)
             .map(|entry| entry.sent_at);
         for (index, entry) in self.history.entries.iter().enumerate() {
-            let next_sent_at = self
-                .history
-                .entries
-                .get(index + 1)
-                .map(|next| next.sent_at);
+            let next_sent_at = self.history.entries.get(index + 1).map(|next| next.sent_at);
             hooks.replay_one_slice(
                 predicted,
                 &entry.input,
@@ -297,7 +293,13 @@ mod tests {
             });
         }
         history.trim_acknowledged(0, AcknowledgementMode::Through);
-        assert_eq!(history.iter().map(|entry| entry.sequence).collect::<Vec<_>>(), vec![1]);
+        assert_eq!(
+            history
+                .iter()
+                .map(|entry| entry.sequence)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
     }
 
     #[test]
@@ -310,7 +312,13 @@ mod tests {
                 input: sequence,
             });
         }
-        assert_eq!(history.iter().map(|entry| entry.sequence).collect::<Vec<_>>(), vec![2, 3]);
+        assert_eq!(
+            history
+                .iter()
+                .map(|entry| entry.sequence)
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
     }
 
     #[test]

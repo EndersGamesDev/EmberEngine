@@ -46,11 +46,7 @@ impl<H: HandshakeProvider> ClientConnection<H> {
     /// # Errors
     ///
     /// Returns an immediate transport startup failure.
-    pub fn connect(
-        url: &str,
-        mut config: TransportConfig,
-        handshake: H,
-    ) -> Result<Self, String> {
+    pub fn connect(url: &str, mut config: TransportConfig, handshake: H) -> Result<Self, String> {
         if config.keepalive.is_none() {
             config.keepalive = handshake.keepalive();
         }

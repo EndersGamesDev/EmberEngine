@@ -642,8 +642,7 @@ impl Hub {
                             }));
                             return;
                         };
-                        let Ok(adapter) =
-                            catch_unwind(AssertUnwindSafe(|| factory.create()))
+                        let Ok(adapter) = catch_unwind(AssertUnwindSafe(|| factory.create()))
                         else {
                             tracing::error!(?key, "legacy adapter factory panicked");
                             drop(outbound.try_send(OutboundCommand::Close {
@@ -709,12 +708,7 @@ impl Hub {
         }
     }
 
-    fn handle_data(
-        &mut self,
-        id: u64,
-        frame: DataFrame,
-        received_at: MonotonicTimestamp,
-    ) {
+    fn handle_data(&mut self, id: u64, frame: DataFrame, received_at: MonotonicTimestamp) {
         let Some(mut connection) = self.connections.remove(&id) else {
             return;
         };
@@ -906,12 +900,15 @@ impl Hub {
                     );
                     return;
                 }
-                let transition = connection.state.transition(StateInput::Outer(
-                    outer::ClientMessage::Hello(outer::Hello {
-                        outer_version: outer::OUTER_VERSION,
-                        handle: handle.clone(),
-                    }),
-                ));
+                let transition =
+                    connection
+                        .state
+                        .transition(StateInput::Outer(outer::ClientMessage::Hello(
+                            outer::Hello {
+                                outer_version: outer::OUTER_VERSION,
+                                handle: handle.clone(),
+                            },
+                        )));
                 if !matches!(transition, StateAction::AcceptHello(_)) {
                     Self::close_detached(
                         connection,
@@ -936,7 +933,11 @@ impl Hub {
                 match projected {
                     Ok(Ok(response)) => self.send_legacy_frame(connection, response),
                     Ok(Err(error)) => {
-                        tracing::error!(connection = connection.id, ?error, "legacy list encode failed");
+                        tracing::error!(
+                            connection = connection.id,
+                            ?error,
+                            "legacy list encode failed"
+                        );
                         self.internal_error(connection, "legacy lobby projection failed");
                     }
                     Err(_) => self.internal_error(connection, "legacy lobby projection panicked"),
@@ -1084,11 +1085,8 @@ impl Hub {
     // Construction stays linear so every pre-factory admission check is visibly ordered.
     #[allow(clippy::too_many_lines)]
     fn create_lobby(&mut self, connection: &mut Connection, request: CreateLobby) {
-        let Some(key) = self.select_or_refuse(
-            connection,
-            &request.game_id,
-            request.game_version,
-        ) else {
+        let Some(key) = self.select_or_refuse(connection, &request.game_id, request.game_version)
+        else {
             return;
         };
         if self.refuse_if_draining(connection)
@@ -1237,11 +1235,8 @@ impl Hub {
     }
 
     fn join_lobby(&mut self, connection: &mut Connection, request: JoinLobby) {
-        let Some(key) = self.select_or_refuse(
-            connection,
-            &request.game_id,
-            request.game_version,
-        ) else {
+        let Some(key) = self.select_or_refuse(connection, &request.game_id, request.game_version)
+        else {
             return;
         };
         if self.refuse_if_draining(connection)
@@ -1393,7 +1388,11 @@ impl Hub {
         let decoded = match decoded {
             Ok(Ok(decoded)) => decoded,
             Ok(Err(error)) => {
-                tracing::debug!(connection = connection.id, ?error, "inner codec rejected frame");
+                tracing::debug!(
+                    connection = connection.id,
+                    ?error,
+                    "inner codec rejected frame"
+                );
                 Self::close_detached(
                     connection,
                     CloseReason::ProtocolViolation,
@@ -1454,9 +1453,7 @@ impl Hub {
             let Some(mut lobby) = self.lobbies.remove(&key) else {
                 continue;
             };
-            lobby.next_step = now
-                .checked_add(self.config.step_cadence)
-                .unwrap_or(now);
+            lobby.next_step = now.checked_add(self.config.step_cadence).unwrap_or(now);
             let inputs = std::mem::take(&mut lobby.pending_inputs);
             let started = Instant::now();
             let update = catch_unwind(AssertUnwindSafe(|| {
@@ -1553,11 +1550,7 @@ impl Hub {
                 .version_outbound
                 .get_mut(&lobby_key.game_key)
                 .is_some_and(|window| {
-                    window.charge(
-                        Instant::now(),
-                        bytes,
-                        limits.max_outbound_bytes_per_second,
-                    )
+                    window.charge(Instant::now(), bytes, limits.max_outbound_bytes_per_second)
                 });
             if !within_version_rate {
                 return Err(());
@@ -1745,11 +1738,7 @@ impl Hub {
 
     // The outbound boundary owns a refusal so callers cannot reuse a projected response.
     #[allow(clippy::needless_pass_by_value)]
-    fn send_legacy_refusal(
-        &mut self,
-        connection: &mut Connection,
-        refusal: LegacyIngressRefusal,
-    ) {
+    fn send_legacy_refusal(&mut self, connection: &mut Connection, refusal: LegacyIngressRefusal) {
         let projected = {
             let Some(adapter) = connection.legacy_ingress.as_ref() else {
                 Self::close_detached(
@@ -1765,7 +1754,11 @@ impl Hub {
         match projected {
             Ok(Ok(frame)) => self.send_legacy_frame(connection, frame),
             Ok(Err(error)) => {
-                tracing::error!(connection = connection.id, ?error, "legacy refusal encode failed");
+                tracing::error!(
+                    connection = connection.id,
+                    ?error,
+                    "legacy refusal encode failed"
+                );
                 Self::close_detached(
                     connection,
                     CloseReason::InternalError,
@@ -1820,16 +1813,16 @@ impl Hub {
             );
             return;
         }
-        let within_version_rate = self
-            .version_outbound
-            .get_mut(&selected_key)
-            .is_some_and(|window| {
-                window.charge(
-                    Instant::now(),
-                    frame.len(),
-                    limits.max_outbound_bytes_per_second,
-                )
-            });
+        let within_version_rate =
+            self.version_outbound
+                .get_mut(&selected_key)
+                .is_some_and(|window| {
+                    window.charge(
+                        Instant::now(),
+                        frame.len(),
+                        limits.max_outbound_bytes_per_second,
+                    )
+                });
         if !within_version_rate
             || !enqueue_inner(
                 connection,
@@ -1886,13 +1879,7 @@ impl Hub {
         }
     }
 
-    fn close_connection(
-        &mut self,
-        id: u64,
-        reason: CloseReason,
-        code: CloseCode,
-        detail: &str,
-    ) {
+    fn close_connection(&mut self, id: u64, reason: CloseReason, code: CloseCode, detail: &str) {
         let Some(mut connection) = self.connections.remove(&id) else {
             return;
         };
@@ -1900,13 +1887,7 @@ impl Hub {
         self.detach_connection(&connection, reason);
     }
 
-    fn close_peer(
-        &mut self,
-        peer_id: PeerId,
-        reason: CloseReason,
-        code: CloseCode,
-        detail: &str,
-    ) {
+    fn close_peer(&mut self, peer_id: PeerId, reason: CloseReason, code: CloseCode, detail: &str) {
         self.close_connection(peer_id.host_value(), reason, code, detail);
     }
 
@@ -2033,12 +2014,14 @@ fn reset_legacy_browsing_state(connection: &mut Connection) {
         return;
     };
     connection.state = StateMachine::new();
-    let action = connection.state.transition(StateInput::Outer(
-        outer::ClientMessage::Hello(outer::Hello {
-            outer_version: outer::OUTER_VERSION,
-            handle,
-        }),
-    ));
+    let action = connection
+        .state
+        .transition(StateInput::Outer(outer::ClientMessage::Hello(
+            outer::Hello {
+                outer_version: outer::OUTER_VERSION,
+                handle,
+            },
+        )));
     if !matches!(action, StateAction::AcceptHello(_)) {
         connection.state.close();
     }
@@ -2079,9 +2062,7 @@ fn next_step_after(cadence: Duration) -> Instant {
 }
 
 fn valid_handle(handle: &str) -> bool {
-    !handle.is_empty()
-        && handle.len() <= MAX_HANDLE_BYTES
-        && !handle.chars().any(char::is_control)
+    !handle.is_empty() && handle.len() <= MAX_HANDLE_BYTES && !handle.chars().any(char::is_control)
 }
 
 fn valid_lobby_request(lobby_name: &str, password: Option<&str>) -> bool {
@@ -2145,19 +2126,15 @@ fn enqueue_inner(
         InnerFrame::Text(text) => Message::text(text.clone()),
         InnerFrame::Binary(bytes) => Message::binary(bytes.clone()),
     };
-    match connection
-        .outbound
-        .try_send(OutboundCommand::Data {
-            message,
-            bytes,
-            version_frame: true,
-        })
-    {
+    match connection.outbound.try_send(OutboundCommand::Data {
+        message,
+        bytes,
+        version_frame: true,
+    }) {
         Ok(()) => {
             connection.queued_outbound_bytes =
                 connection.queued_outbound_bytes.saturating_add(bytes);
-            connection.queued_version_bytes =
-                connection.queued_version_bytes.saturating_add(bytes);
+            connection.queued_version_bytes = connection.queued_version_bytes.saturating_add(bytes);
             true
         }
         Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => false,

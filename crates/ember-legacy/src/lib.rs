@@ -170,10 +170,8 @@ pub trait LegacyClock: Send + Sync {
     /// # Errors
     ///
     /// Returns an error when host capacity or lifecycle state rejects the request.
-    fn request_schedule(
-        &self,
-        request: SchedulingRequest,
-    ) -> Result<ScheduleHandle, ScheduleError>;
+    fn request_schedule(&self, request: SchedulingRequest)
+    -> Result<ScheduleHandle, ScheduleError>;
 
     /// Cancels previously accepted future work.
     ///
@@ -952,11 +950,7 @@ pub struct LeaveReason {
 /// Object-safe deterministic simulation session for one hosted lobby.
 pub trait GameSession: Send {
     /// Applies an ordered input batch at one host-supplied monotonic timestamp.
-    fn step(
-        &mut self,
-        timestamp: MonotonicTimestamp,
-        inputs: Vec<SessionInput>,
-    ) -> SessionUpdate;
+    fn step(&mut self, timestamp: MonotonicTimestamp, inputs: Vec<SessionInput>) -> SessionUpdate;
 
     /// Applies transport-enriched inputs while preserving the frozen step contract by default.
     fn step_with_transport(
@@ -964,7 +958,10 @@ pub trait GameSession: Send {
         timestamp: MonotonicTimestamp,
         inputs: Vec<SessionInputWithTransport>,
     ) -> SessionUpdate {
-        self.step(timestamp, inputs.into_iter().map(SessionInput::from).collect())
+        self.step(
+            timestamp,
+            inputs.into_iter().map(SessionInput::from).collect(),
+        )
     }
 
     /// Admits a peer after outer key, lobby, password, and capacity checks.

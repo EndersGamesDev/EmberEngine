@@ -20,10 +20,8 @@ const CLIENT_TO_SERVER: &str =
     include_str!("fixtures/fire-v1-hosted-contract/client-to-server.jsonl");
 const SERVER_TO_CLIENT: &str =
     include_str!("fixtures/fire-v1-hosted-contract/server-to-client.jsonl");
-const LEGACY_LOBBIES: &str =
-    include_str!("fixtures/fire-v1-hosted-contract/legacy-lobbies.json");
-const LEGACY_REJECTED: &str =
-    include_str!("fixtures/fire-v1-hosted-contract/legacy-rejected.json");
+const LEGACY_LOBBIES: &str = include_str!("fixtures/fire-v1-hosted-contract/legacy-lobbies.json");
+const LEGACY_REJECTED: &str = include_str!("fixtures/fire-v1-hosted-contract/legacy-rejected.json");
 const LEGACY_TRANSCRIPT: &str =
     include_str!("fixtures/fire-v1-hosted-contract/legacy-transcript.jsonl");
 const DETERMINISTIC_TRACE: &str =
@@ -157,9 +155,8 @@ fn legacy_lobby_and_refusal_projections_are_frozen() {
         other => panic!("wrong legacy hello action: {other:?}"),
     }
 
-    let join = InnerFrame::Text(
-        r#"{"t":"join_lobby","name":"castle","password":"ember"}"#.to_string(),
-    );
+    let join =
+        InnerFrame::Text(r#"{"t":"join_lobby","name":"castle","password":"ember"}"#.to_string());
     match adapter.decode(&join).expect("legacy join must decode") {
         LegacyFireAction::JoinLobby(request) => {
             assert_eq!(request.selection, game_key());
@@ -170,12 +167,14 @@ fn legacy_lobby_and_refusal_projections_are_frozen() {
     }
 
     let mut stale = LegacyFireAdapter::default();
-    let stale_hello =
-        InnerFrame::Text(r#"{"t":"hello","proto":2,"handle":"driver"}"#.to_string());
+    let stale_hello = InnerFrame::Text(r#"{"t":"hello","proto":2,"handle":"driver"}"#.to_string());
     stale
         .decode(&stale_hello)
         .expect("stale legacy hello still receives welcome");
-    match stale.decode(&join).expect("stale join must become a refusal") {
+    match stale
+        .decode(&join)
+        .expect("stale join must become a refusal")
+    {
         LegacyFireAction::Reply(event) => {
             assert_eq!(event.payload, LEGACY_REJECTED.trim_end().as_bytes());
         }
@@ -193,7 +192,10 @@ fn shared_legacy_ingress_preserves_fire_frames() {
     let LegacyIngressAction::Hello { response, .. } = action else {
         panic!("shared Fire hello decoded to the wrong action");
     };
-    assert_eq!(response, InnerFrame::Text(r#"{"t":"welcome","proto":1}"#.to_string()));
+    assert_eq!(
+        response,
+        InnerFrame::Text(r#"{"t":"welcome","proto":1}"#.to_string())
+    );
     let projected = ingress
         .project_lobbies(&[LegacyLobbyProjection {
             game_key: game_key(),
@@ -272,7 +274,11 @@ fn seeded_timestamped_trace_reaches_frozen_authoritative_checkpoints() {
         .expect("fixture peer must join");
     assert_eq!(
         joined.outbound[0].event.payload,
-        SERVER_TO_CLIENT.lines().nth(3).expect("joined fixture").as_bytes()
+        SERVER_TO_CLIENT
+            .lines()
+            .nth(3)
+            .expect("joined fixture")
+            .as_bytes()
     );
 
     let elapsed = trace.end_at_micros - trace.created_at_micros;
@@ -290,8 +296,7 @@ fn seeded_timestamped_trace_reaches_frozen_authoritative_checkpoints() {
                 peer_id,
                 received_at: MonotonicTimestamp::from_micros(entry.at_micros),
                 input: ember_legacy::DecodedInput {
-                    payload: serde_json::to_vec(&entry.message)
-                        .expect("trace message must encode"),
+                    payload: serde_json::to_vec(&entry.message).expect("trace message must encode"),
                 },
             })
             .collect();

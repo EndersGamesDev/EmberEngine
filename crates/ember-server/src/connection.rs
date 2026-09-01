@@ -248,18 +248,15 @@ fn run_connection(
     let websocket_config = WebSocketConfig::default()
         .max_message_size(Some(config.max_ws_message_bytes))
         .max_frame_size(Some(config.max_ws_message_bytes));
-    let mut websocket = match tungstenite::accept_hdr_with_config(
-        stream,
-        callback,
-        Some(websocket_config),
-    ) {
-        Ok(websocket) => websocket,
-        Err(error) => {
-            handshake_complete.store(true, Ordering::Release);
-            tracing::debug!(connection = id, %peer, %error, "WebSocket handshake failed");
-            return;
-        }
-    };
+    let mut websocket =
+        match tungstenite::accept_hdr_with_config(stream, callback, Some(websocket_config)) {
+            Ok(websocket) => websocket,
+            Err(error) => {
+                handshake_complete.store(true, Ordering::Release);
+                tracing::debug!(connection = id, %peer, %error, "WebSocket handshake failed");
+                return;
+            }
+        };
     handshake_complete.store(true, Ordering::Release);
     drop(websocket.get_ref().set_read_timeout(Some(READ_POLL)));
 
@@ -455,6 +452,9 @@ mod tests {
             parse_ingress(Some("legacy_game=unknown"), &selectors),
             Err("unknown legacy_game selector".to_string())
         );
-        assert!(matches!(parse_ingress(None, &selectors), Ok(Ingress::Canonical)));
+        assert!(matches!(
+            parse_ingress(None, &selectors),
+            Ok(Ingress::Canonical)
+        ));
     }
 }

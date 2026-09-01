@@ -145,16 +145,8 @@ pub trait RemoteEntityHooks {
     ) -> Self::RenderState;
 
     /// Extrapolates past the newest snapshot in game-owned timestamp units.
-    fn dead_reckon_remote(
-        &self,
-        latest: &Self::Snapshot,
-        elapsed: u64,
-    ) -> Self::RenderState;
+    fn dead_reckon_remote(&self, latest: &Self::Snapshot, elapsed: u64) -> Self::RenderState;
 
     /// Decides whether a discontinuity snaps rather than interpolates.
-    fn snap_or_smooth_remote(
-        &self,
-        from: &Self::Snapshot,
-        to: &Self::Snapshot,
-    ) -> CorrectionMode;
+    fn snap_or_smooth_remote(&self, from: &Self::Snapshot, to: &Self::Snapshot) -> CorrectionMode;
 }

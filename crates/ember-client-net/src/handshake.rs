@@ -1,6 +1,4 @@
-use ember_net::outer::{
-    ClientMessage, CreateLobby, Hello, JoinLobby, ListLobbies, ServerMessage,
-};
+use ember_net::outer::{ClientMessage, CreateLobby, Hello, JoinLobby, ListLobbies, ServerMessage};
 
 use crate::{Keepalive, WireFrame};
 
@@ -373,7 +371,9 @@ mod tests {
             }),
             Ok(ClientMessage::ListLobbies(_))
         ));
-        browse.received(&text(&ServerMessage::Lobbies(Lobbies { entries: Vec::new() })));
+        browse.received(&text(&ServerMessage::Lobbies(Lobbies {
+            entries: Vec::new(),
+        })));
         assert_eq!(browse.progress(), HandshakeProgress::Browsing);
 
         let mut join = CanonicalHandshake::new(
