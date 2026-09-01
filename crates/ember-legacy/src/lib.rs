@@ -312,6 +312,12 @@ impl SessionId {
 pub struct UnicastHandle(PeerId);
 
 impl UnicastHandle {
+    /// Constructs a bounded target handle from an admitted peer identity.
+    #[must_use]
+    pub const fn from_peer_id(peer_id: PeerId) -> Self {
+        Self(peer_id)
+    }
+
     /// Returns the peer selected by this host-issued handle.
     #[must_use]
     pub const fn peer_id(self) -> PeerId {
@@ -324,6 +330,12 @@ impl UnicastHandle {
 pub struct BroadcastHandle(SessionId);
 
 impl BroadcastHandle {
+    /// Constructs a bounded target handle from an active session identity.
+    #[must_use]
+    pub const fn from_session_id(session_id: SessionId) -> Self {
+        Self(session_id)
+    }
+
     /// Returns the session selected by this host-issued handle.
     #[must_use]
     pub const fn session_id(self) -> SessionId {

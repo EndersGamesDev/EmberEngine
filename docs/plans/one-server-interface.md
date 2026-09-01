@@ -137,12 +137,14 @@ impl SessionId {
 pub struct UnicastHandle(PeerId);
 
 impl UnicastHandle {
+    pub const fn from_peer_id(peer_id: PeerId) -> Self;
     pub const fn peer_id(self) -> PeerId;
 }
 
 pub struct BroadcastHandle(SessionId);
 
 impl BroadcastHandle {
+    pub const fn from_session_id(session_id: SessionId) -> Self;
     pub const fn session_id(self) -> SessionId;
 }
 
@@ -650,3 +652,4 @@ The committed known vector for `arena/12`, a seed of 32 bytes each equal to hexa
 ## Post-freeze additive changelog
 
 - Added `pub struct FrozenKeyedRandom;` as the reference `LegacyRandom` implementation; no frozen signature changed.
+- Added `pub const fn UnicastHandle::from_peer_id(peer_id: PeerId) -> Self;` and `pub const fn BroadcastHandle::from_session_id(session_id: SessionId) -> Self;` so current host adapters can construct opaque bounded target handles; no frozen signature changed.
