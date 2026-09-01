@@ -5,6 +5,15 @@
 //! v2: the match is the drop-in arena shooter. A lobby IS a running game —
 //! creating one starts it with the host inside; joiners drop straight in.
 
+#![allow(
+    clippy::derive_partial_eq_without_eq,
+    clippy::missing_const_for_fn,
+    clippy::must_use_candidate,
+    clippy::struct_excessive_bools,
+    clippy::too_long_first_doc_paragraph,
+    clippy::unreadable_literal
+)]
+
 use serde::{Deserialize, Serialize};
 
 /// v9: the off-hand shield, which reflects. `shield` is `#[serde(default)]`

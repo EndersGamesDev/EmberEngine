@@ -2,6 +2,27 @@
 //! authoritatively on the server; clients render its broadcast state and
 //! generate the identical arena from the lobby's seed.
 
+#![allow(
+    clippy::assert_is_empty,
+    clippy::cast_lossless,
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::doc_markdown,
+    clippy::explicit_iter_loop,
+    clippy::imprecise_flops,
+    clippy::manual_midpoint,
+    clippy::missing_const_for_fn,
+    clippy::must_use_candidate,
+    clippy::similar_names,
+    clippy::struct_excessive_bools,
+    clippy::suboptimal_flops,
+    clippy::too_long_first_doc_paragraph,
+    clippy::too_many_lines,
+    clippy::unreadable_literal,
+    clippy::useless_let_if_seq
+)]
+
 /// Fixed simulation time step in seconds.
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 /// Arena boundary half-extent.
