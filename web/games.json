@@ -89,6 +89,20 @@
       ]
     },
     {
+      "id": "what-is-this",
+      "title": "what is this?",
+      "tag": "local diagnostic · browser + hardware · optional upload",
+      "desc": "A playful, staged answer to a practical question: what kind of machine and browser is this? Runs fixed wasm CPU and timing kernels, records floating-point and feature fingerprints, and keeps going when a probe is unavailable. The complete JSON report can stay on your device; sending it to the Ember server is a separate, explicit choice.",
+      "versions": [
+        {
+          "v": "v1",
+          "path": "games/what-is-this/v1/",
+          "live": true,
+          "note": "diagnostic suite + optional report submission"
+        }
+      ]
+    },
+    {
       "id": "pong",
       "title": "Pong Classic",
       "tag": "local · 2 players, one keyboard",

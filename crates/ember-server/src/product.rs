@@ -8,6 +8,7 @@ use std::sync::Arc;
 use ember_game_arena_v12::{ArenaCodec, ArenaFactory, ArenaLegacyIngressFactory, game_key};
 use ember_game_fire_v1::hosted::{self, FireCodec, FireFactory};
 use ember_game_fire_v1::legacy::LegacyFireIngressFactory;
+use ember_game_what_is_this_v1::{WhatIsThisCodec, WhatIsThisFactory};
 use ember_legacy::{MonotonicDuration, VersionLimits};
 
 use crate::{RegistryBuilder, RegistryError, RegistryRegistration};
@@ -30,7 +31,13 @@ pub(crate) fn register(builder: &mut RegistryBuilder) -> Result<(), RegistryErro
             Arc::new(FireFactory),
         )
         .with_legacy_ingress(Arc::new(LegacyFireIngressFactory)),
-    )
+    )?;
+    builder.register(RegistryRegistration::new(
+        ember_game_what_is_this_v1::game_key(),
+        what_is_this_limits(),
+        Arc::new(WhatIsThisCodec),
+        Arc::new(WhatIsThisFactory),
+    ))
 }
 
 // These nonzero profiles are startup-safe placeholders until the estate measurements named by
@@ -56,5 +63,44 @@ const fn fire_limits() -> VersionLimits {
         max_outbound_queue_bytes: 256 * 1_024,
         max_outbound_bytes_per_second: 4 * 1_024 * 1_024,
         max_step_duration: MonotonicDuration::from_micros(20_000),
+    }
+}
+
+const fn what_is_this_limits() -> VersionLimits {
+    VersionLimits {
+        max_lobbies: 32,
+        max_players_per_lobby: 1,
+        max_frame_bytes: 56 * 1_024,
+        max_messages_per_second: 4,
+        max_outbound_queue_bytes: 4 * 1_024,
+        max_outbound_bytes_per_second: 16 * 1_024,
+        max_step_duration: MonotonicDuration::from_micros(5_000),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+
+    #[test]
+    fn product_registry_contains_every_manifest_entry() {
+        let mut builder = RegistryBuilder::new();
+        register(&mut builder).expect("compiled product registrations must be unique");
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../games/hosted.toml");
+        let registry = builder
+            .load(&manifest)
+            .expect("compiled registrations must match the hosted manifest");
+        assert_eq!(
+            registry.hosted_games(),
+            ["arena", "fire", "what-is-this"].map(str::to_string)
+        );
+        assert_eq!(
+            registry
+                .exact_key("what-is-this", 1)
+                .expect("what-is-this/1 must be registered"),
+            ember_game_what_is_this_v1::game_key()
+        );
     }
 }

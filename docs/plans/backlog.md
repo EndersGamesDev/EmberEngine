@@ -103,3 +103,5 @@ Presenter and input work is planned in `docs/presenter-architecture.md` and `doc
 - One-server evergreen: provision one stable public origin and verify that its tunnel and proxy preserve the legacy game-selector query through WebSocket upgrade.
 - One-server evergreen: inventory retained client artifacts and record their immutable hashes beside each hosted version's frozen-client fixtures.
 - Arena v12: reconcile `level_fire_is_not_a_free_headshot`'s stale `0.22` rationale with the shipped `HEAD_H = 0.30` without changing the frozen balance rule.
+- what-is-this: add a durable report-sink capability only when a second hosted consumer needs it; v1 deliberately emits accepted reports through the host's structured log stream.
+- what-is-this: expose a fallible offscreen calibration seam from `ember-engine`; its current winit-owned surface loop and panicking renderer initialization cannot satisfy an optional stage's continue-on-failure contract.

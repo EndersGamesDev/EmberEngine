@@ -3,5 +3,12 @@ name = "ember-game-what-is-this-v1"
 edition.workspace = true
 version.workspace = true
 
+[dependencies]
+ember-legacy = { path = "../../../crates/ember-legacy" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tracing.workspace = true
+
 [lints]
 workspace = true

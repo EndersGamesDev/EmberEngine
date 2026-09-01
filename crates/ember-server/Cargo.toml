@@ -10,6 +10,7 @@ demo = []
 [dependencies]
 ember-game-arena-v12 = { path = "../../games/arena/v012" }
 ember-game-fire-v1 = { path = "../../games/fire/v001" }
+ember-game-what-is-this-v1 = { path = "../../games/what-is-this/v001" }
 ember-legacy = { path = "../ember-legacy" }
 ember-net = { path = "../ember-net" }
 sha2.workspace = true
