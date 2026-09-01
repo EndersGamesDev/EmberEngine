@@ -138,10 +138,19 @@ read_proto_version() {
     printf '%s\n' "$n"
 }
 
+# A failing wsl.exe (the distro cannot boot, e.g. Wsl/0x8007000e "not enough
+# memory") exits non-zero exactly like pgrep finding nothing, so `status` and
+# `down` would read an unreachable distro as "not running". Ask it something
+# that always succeeds first.
+require_distro() {
+    ctl host-name >/dev/null 2>&1 || fail "cannot run a command in the $DISTRO distro (wsl.exe failed; see its message above)"
+}
+
 # ---- subcommands ------------------------------------------------------------
 
 do_down() {
     step "stopping kings-server and its tunnel"
+    require_distro
     ctl stop-server
     ctl stop-tunnel "$BIND"
     sleep 1
@@ -162,6 +171,7 @@ do_down() {
 do_status() {
     local pid domain published
     step "kings-server ($DISTRO, $BIND)"
+    require_distro
     if pid="$(ctl server-pid)"; then
         echo "   running, pid $(printf '%s' "$pid" | tr '\n' ' ')"
         [ "$(printf '%s\n' "$pid" | wc -l)" -gt 1 ] && echo "   !! more than one kings-server process; 'down' then 'up'"
