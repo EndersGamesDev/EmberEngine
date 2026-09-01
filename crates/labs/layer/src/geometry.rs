@@ -329,6 +329,7 @@ pub fn assert_invariants() {
 mod tests {
     use super::*;
 
+    #[allow(clippy::suboptimal_flops)]
     fn cross(left: [f32; 3], right: [f32; 3]) -> [f32; 3] {
         [
             left[1] * right[2] - left[2] * right[1],
@@ -346,6 +347,7 @@ mod tests {
         value.map(|component| component / length)
     }
 
+    #[allow(clippy::suboptimal_flops)]
     fn renderer_box_point(
         midpoint_hue: [f32; 4],
         orientation_length: [f32; 4],
