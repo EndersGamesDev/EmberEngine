@@ -39,6 +39,11 @@ use tungstenite::protocol::WebSocketConfig;
 pub struct ServerConfig {
     pub max_conns: usize,
     pub max_lobbies: usize,
+    /// The host this server runs on, as published in the address book.
+    /// Empty means the server was started without a name, which is legal:
+    /// it then answers `Welcome` with an empty `host` and a page shows it
+    /// as unnamed rather than refusing to play on it.
+    pub host_name: String,
 }
 
 impl Default for ServerConfig {
@@ -46,8 +51,25 @@ impl Default for ServerConfig {
         Self {
             max_conns: 128,
             max_lobbies: 64,
+            host_name: String::new(),
         }
     }
+}
+
+/// This build's `(version, commit)`, as the deploy stamped it.
+///
+/// `option_env!` resolves at COMPILE time, so this is the build that is
+/// running and not whatever the checkout says now — which is the point: a
+/// host may sit on an old commit for months and must keep reporting that
+/// commit. A plain `cargo build` sets neither variable and both are `""`,
+/// so an unstamped binary says so instead of claiming a version it has no
+/// evidence for. `build.rs` makes cargo rebuild when either changes.
+#[must_use]
+pub fn build_stamp() -> (&'static str, &'static str) {
+    (
+        option_env!("EMBER_BUILD_VERSION").unwrap_or(""),
+        option_env!("EMBER_BUILD_COMMIT").unwrap_or(""),
+    )
 }
 
 const OUTBOUND_QUEUE: usize = 256;
@@ -168,6 +190,23 @@ fn rtt_ticks(rtt_ms: u32) -> u64 {
 #[allow(clippy::needless_pass_by_value)]
 pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
     let local = listener.local_addr()?;
+    // Identity first, before anything else this process says: a host that
+    // turns out to be serving the wrong build is diagnosed from the top of
+    // its log, and an unstamped binary has to be recognisable there too.
+    let (version, commit) = build_stamp();
+    let host = if cfg.host_name.is_empty() {
+        "<unnamed>"
+    } else {
+        cfg.host_name.as_str()
+    };
+    if version.is_empty() && commit.is_empty() {
+        tracing::info!(
+            host,
+            "pong-server: UNSTAMPED build (no EMBER_BUILD_VERSION/EMBER_BUILD_COMMIT at compile time)"
+        );
+    } else {
+        tracing::info!(host, version, commit, "pong-server build");
+    }
     tracing::info!(
         "pong-server (arena shooter) listening on {local} (proto v{PROTO_VERSION}, max {} conns, {} lobbies)",
         cfg.max_conns,
@@ -647,12 +686,28 @@ fn handle_event(
                     let c = conns.get_mut(&id).unwrap();
                     c.handle = Some(handle);
                     c.proto = proto;
+                    // The load a host is ranked on, counted here rather than
+                    // kept as a running total: a stale counter is how a host
+                    // advertises itself as empty and collects everyone.
+                    // Lobby membership is capped far below u32, so the
+                    // saturating conversion is belt and braces.
+                    let (version, commit) = build_stamp();
+                    let players = u32::try_from(
+                        lobbies.values().map(|l| l.members.len()).sum::<usize>(),
+                    )
+                    .unwrap_or(u32::MAX);
+                    let open = u32::try_from(lobbies.len()).unwrap_or(u32::MAX);
                     let _ = send_to(
                         conns,
                         id,
                         &S2C::Welcome {
                             proto: PROTO_VERSION,
                             motd: "ember arena — cubes with guns".into(),
+                            host: cfg.host_name.clone(),
+                            version: version.to_owned(),
+                            commit: commit.to_owned(),
+                            players,
+                            lobbies: open,
                         },
                     );
                 }

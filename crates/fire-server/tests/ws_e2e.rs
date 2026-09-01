@@ -21,6 +21,10 @@ fn set_read_timeout(ws: &Client, d: Duration) {
 }
 
 fn start_server() -> u16 {
+    start_named_server(String::new())
+}
+
+fn start_named_server(host_name: String) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     thread::spawn(move || {
@@ -29,6 +33,7 @@ fn start_server() -> u16 {
             fire_server::ServerConfig {
                 laps: 1,
                 max_lobbies: 8,
+                host_name,
             },
         ));
     });
@@ -505,4 +510,123 @@ fn a_disconnect_frees_the_slot_for_the_next_player() {
         }),
         "the vacated slot was not reused"
     );
+}
+
+/// The RAW `Welcome` frame. The text and not just the decoded message,
+/// because the wire key names are the contract `web/hosts.js` and the
+/// address book read, and no Rust type checks those.
+fn raw_welcome(ws: &mut Client) -> String {
+    let t0 = Instant::now();
+    while t0.elapsed() < Duration::from_secs(3) {
+        match ws.read() {
+            Ok(Message::Text(t)) if t.as_str().contains(r#""welcome""#) => {
+                return t.as_str().to_owned();
+            }
+            Ok(_) => {}
+            Err(tungstenite::Error::Io(e)) if proto::is_transient_read(&e) => {}
+            Err(e) => panic!("read failed: {e}"),
+        }
+    }
+    panic!("no Welcome within 3s");
+}
+
+/// A host answers with its own name and its live load, in one round trip —
+/// which is the whole reason a page can rank hosts without a second request.
+#[test]
+fn welcome_names_the_host_and_reports_its_live_load() {
+    let port = start_named_server("test-otter".to_string());
+
+    // Nothing running yet: named host, no load.
+    let mut alice = client(port, "alice");
+    let raw = raw_welcome(&mut alice);
+    match serde_json::from_str::<S2C>(&raw).unwrap() {
+        S2C::Welcome {
+            host,
+            players,
+            lobbies,
+            ..
+        } => {
+            assert_eq!(host, "test-otter");
+            assert_eq!(players, 0, "an idle server has nobody racing: {raw}");
+            assert_eq!(lobbies, 0);
+        }
+        other => panic!("expected Welcome, got {other:?}"),
+    }
+
+    send(
+        &mut alice,
+        &C2S::CreateLobby {
+            name: "circuit".into(),
+            password: None,
+        },
+    );
+    assert!(
+        pump(&mut alice, Duration::from_secs(2), |m| matches!(
+            m,
+            S2C::Joined { .. }
+        )),
+        "the lobby was never created"
+    );
+
+    // The next arrival is told what alice is doing. The counts are what
+    // "emptiest host wins" is decided on, so a Welcome that kept reporting
+    // zero would quietly send every player to the busiest machine.
+    let mut bob = client(port, "bob");
+    let raw = raw_welcome(&mut bob);
+    match serde_json::from_str::<S2C>(&raw).unwrap() {
+        S2C::Welcome {
+            host,
+            players,
+            lobbies,
+            ..
+        } => {
+            assert_eq!(host, "test-otter");
+            assert_eq!(players, 1, "alice is in a lobby: {raw}");
+            assert_eq!(lobbies, 1, "alice's lobby is open: {raw}");
+        }
+        other => panic!("expected Welcome, got {other:?}"),
+    }
+}
+
+/// The default configuration is a legal one: an unnamed host whose Welcome a
+/// client still decodes, carrying every key by its contract name.
+#[test]
+fn a_default_server_is_unnamed_and_its_welcome_still_decodes() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    thread::spawn(move || {
+        drop(fire_server::run(listener, fire_server::ServerConfig::default()));
+    });
+    thread::sleep(Duration::from_millis(150));
+
+    let mut ghost = client(port, "ghost");
+    let raw = raw_welcome(&mut ghost);
+    for key in ["host", "version", "commit", "players", "lobbies"] {
+        assert!(raw.contains(&format!("\"{key}\"")), "{key} missing: {raw}");
+    }
+    match serde_json::from_str::<S2C>(&raw).expect("the client must decode this") {
+        S2C::Welcome {
+            proto: v,
+            host,
+            players,
+            lobbies,
+            ..
+        } => {
+            assert_eq!(v, proto::PROTO_VERSION);
+            assert_eq!(host, "", "a server started without a name has none");
+            assert_eq!((players, lobbies), (0, 0));
+        }
+        other => panic!("expected Welcome, got {other:?}"),
+    }
+
+    // And the other direction: a client of this build against a server that
+    // predates the identity fields. Same decode, empty identity.
+    let old = format!(r#"{{"t":"welcome","proto":{}}}"#, proto::PROTO_VERSION);
+    match serde_json::from_str::<S2C>(&old).expect("an old Welcome must decode") {
+        S2C::Welcome { host, players, .. } => {
+            assert_eq!(host, "");
+            assert_eq!(players, 0);
+        }
+        other => panic!("expected Welcome, got {other:?}"),
+    }
 }
