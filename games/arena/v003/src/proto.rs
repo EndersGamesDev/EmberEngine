@@ -23,7 +23,7 @@ pub const STATE_EVERY_TICKS: u64 = 2;
 pub const CLIENT_PING_SECS: u64 = 5;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-/// Frozen Arena v3 LobbyInfo wire record.
+/// Frozen Arena v3 `LobbyInfo` wire record.
 pub struct LobbyInfo {
     /// Frozen Arena v3 name field.
     pub name: String,
@@ -38,7 +38,7 @@ pub struct LobbyInfo {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-/// Frozen Arena v3 PlayerMeta wire record.
+/// Frozen Arena v3 `PlayerMeta` wire record.
 pub struct PlayerMeta {
     /// Frozen Arena v3 id field.
     pub id: u8,
@@ -50,7 +50,7 @@ pub struct PlayerMeta {
 
 /// Per-player state inside a State broadcast.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
-/// Frozen Arena v3 PState wire record.
+/// Frozen Arena v3 `PState` wire record.
 pub struct PState {
     /// Frozen Arena v3 id field.
     pub id: u8,
@@ -72,7 +72,7 @@ pub struct PState {
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
-/// Frozen Arena v3 BState wire record.
+/// Frozen Arena v3 `BState` wire record.
 pub struct BState {
     /// Frozen Arena v3 x field.
     pub x: f32,
@@ -87,7 +87,6 @@ pub struct BState {
 /// Client -> server.
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "t", rename_all = "snake_case")]
-/// Frozen Arena v3 C2S message family.
 pub enum C2S {
     /// Must be the first message on a connection.
     Hello {
@@ -96,7 +95,7 @@ pub enum C2S {
         /// Frozen Arena v3 handle field.
         handle: String,
     },
-    /// Frozen Arena v3 ListLobbies message.
+    /// Frozen Arena v3 `ListLobbies` message.
     ListLobbies,
     CreateLobby {
         /// Frozen Arena v3 name field.
@@ -110,7 +109,7 @@ pub enum C2S {
         /// Frozen Arena v3 password field.
         password: Option<String>,
     },
-    /// Frozen Arena v3 LeaveLobby message.
+    /// Frozen Arena v3 `LeaveLobby` message.
     LeaveLobby,
     /// Held intents: movement, aim, trigger. Doubles as the keepalive.
     Input {
@@ -134,7 +133,6 @@ pub enum C2S {
 /// Server -> client.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "t", rename_all = "snake_case")]
-/// Frozen Arena v3 S2C message family.
 pub enum S2C {
     Welcome {
         /// Frozen Arena v3 proto field.

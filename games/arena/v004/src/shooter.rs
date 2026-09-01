@@ -36,7 +36,7 @@ const SPAWN_RING_R: f32 = ARENA_HALF - 4.0;
 
 /// Axis-aligned obstacle on the XZ plane.
 #[derive(Clone, Copy, Debug, PartialEq)]
-/// Frozen Arena v4 Obstacle simulation state.
+/// Frozen Arena v4 `Obstacle` simulation state.
 pub struct Obstacle {
     /// Frozen Arena v4 min field.
     pub min: [f32; 2],
@@ -47,9 +47,9 @@ pub struct Obstacle {
 /// Deterministic arena from a seed: every client and the server generate
 /// the same obstacle course. Obstacles stay inside a donut that keeps both
 /// the center brawl area and the spawn ring clear.
-#[allow(clippy::cast_precision_loss)]
+// The frozen generator's floating-point expression tree is wire-adjacent deterministic state.
+#[allow(clippy::cast_precision_loss, clippy::suboptimal_flops)]
 #[must_use]
-/// Executes the frozen Arena v4 generate arena operation.
 pub fn generate_arena(seed: u64) -> Vec<Obstacle> {
     let mut state = seed ^ 0x9e37_79b9_7f4a_7c15;
     let mut rand01 = move || -> f32 {
@@ -84,7 +84,7 @@ fn spawn_point(slot: u32) -> [f32; 2] {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-/// Frozen Arena v4 PlayerIn simulation state.
+/// Frozen Arena v4 `PlayerIn` simulation state.
 pub struct PlayerIn {
     /// Held movement intent, -1..1 per axis (world space).
     /// Frozen Arena v4 mv field.
@@ -101,7 +101,7 @@ pub struct PlayerIn {
 }
 
 #[derive(Clone, Debug)]
-/// Frozen Arena v4 PlayerSt simulation state.
+/// Frozen Arena v4 `PlayerSt` simulation state.
 pub struct PlayerSt {
     /// Frozen Arena v4 id field.
     pub id: u8,
@@ -125,7 +125,7 @@ pub struct PlayerSt {
 }
 
 #[derive(Clone, Copy, Debug)]
-/// Frozen Arena v4 Bullet simulation state.
+/// Frozen Arena v4 `Bullet` simulation state.
 pub struct Bullet {
     /// Frozen Arena v4 pos field.
     pub pos: [f32; 2],
@@ -137,7 +137,7 @@ pub struct Bullet {
     pub owner: u8,
 }
 
-/// Frozen Arena v4 Sim simulation state.
+/// Frozen Arena v4 `Sim` simulation state.
 pub struct Sim {
     /// Frozen Arena v4 obstacles field.
     pub obstacles: Vec<Obstacle>,
@@ -186,6 +186,8 @@ impl Sim {
         self.bullets.retain(|b| b.owner != id);
     }
 
+    // Rewriting the frozen squared-distance test with fused arithmetic changes its rounding.
+    #[allow(clippy::suboptimal_flops)]
     fn blocked(&self, pos: [f32; 2], r: f32) -> bool {
         if pos[0].abs() > ARENA_HALF - r || pos[1].abs() > ARENA_HALF - r {
             return true;
@@ -200,7 +202,10 @@ impl Sim {
 
     #[allow(
         clippy::cast_possible_truncation,
+        clippy::cast_lossless,
         clippy::cast_precision_loss,
+        clippy::imprecise_flops,
+        clippy::suboptimal_flops,
         clippy::too_many_lines
     )]
     /// Executes the frozen Arena v4 step operation.
@@ -390,6 +395,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::manual_midpoint, clippy::suboptimal_flops)]
     fn arena_covers_all_quadrants() {
         // Guards the RNG range: a half-range generator (the [0, 0.5) bug)
         // could never place obstacles at negative z.
@@ -411,6 +417,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::suboptimal_flops)]
     fn sprint_and_crouch_change_speed() {
         let run = |sprint: bool, crouch: bool| -> f32 {
             let mut sim = Sim::new(9);
@@ -500,6 +507,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn three_hits_kill_score_and_respawn() {
         let mut sim = Sim::new(2);
         sim.obstacles.clear(); // open field for a clean shot

@@ -168,7 +168,7 @@ impl ArenaSession {
         }
     }
 
-    fn accept_input(&mut self, session_input: SessionInput, update: &mut SessionUpdate) {
+    fn accept_input(&mut self, session_input: &SessionInput, update: &mut SessionUpdate) {
         let Some(player_id) = self
             .members
             .iter()
@@ -242,7 +242,7 @@ impl ArenaSession {
         let pending = std::mem::take(&mut self.pending_inputs);
         for input in pending {
             if input.received_at <= timestamp {
-                self.accept_input(input, update);
+                self.accept_input(&input, update);
             } else {
                 future.push(input);
             }

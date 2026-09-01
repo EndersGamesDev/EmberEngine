@@ -135,7 +135,7 @@ impl ArenaSession {
         }
     }
 
-    fn alloc_player_id(&mut self) -> u8 {
+    const fn alloc_player_id(&mut self) -> u8 {
         let player_id = self.next_player_id;
         self.next_player_id = self.next_player_id.wrapping_add(1);
         player_id
@@ -165,7 +165,7 @@ impl ArenaSession {
         }
     }
 
-    fn accept_input(&mut self, session_input: SessionInput, update: &mut SessionUpdate) {
+    fn accept_input(&mut self, session_input: &SessionInput, update: &mut SessionUpdate) {
         let Some(player_id) = self
             .members
             .iter()
@@ -235,7 +235,7 @@ impl ArenaSession {
         let pending = std::mem::take(&mut self.pending_inputs);
         for input in pending {
             if input.received_at <= timestamp {
-                self.accept_input(input, update);
+                self.accept_input(&input, update);
             } else {
                 future.push(input);
             }
