@@ -341,6 +341,7 @@ fn finish_callback(state: &Arc<Mutex<CallbackState>>, value: MapOutcome) {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
 fn take_callback(state: &Arc<Mutex<CallbackState>>) -> Option<MapOutcome> {
     state.lock().ok()?.value.take()
 }
