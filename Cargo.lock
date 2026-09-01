@@ -173,6 +173,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "arena"
+version = "0.1.0"
+dependencies = [
+ "arena-core",
+ "ember-engine",
+ "glam",
+ "rodio",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tungstenite",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "arena-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "arena-server"
+version = "0.1.0"
+dependencies = [
+ "arena-core",
+ "rustls",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+ "tungstenite",
+]
+
+[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -922,9 +959,9 @@ dependencies = [
 name = "ember-editor"
 version = "0.1.0"
 dependencies = [
+ "arena-core",
  "ember-engine",
  "glam",
- "pong-core",
  "serde_json",
  "tracing",
  "tracing-subscriber",
@@ -954,6 +991,15 @@ dependencies = [
  "web-time",
  "wgpu",
  "winit",
+]
+
+[[package]]
+name = "ember-game-arena-v1"
+version = "0.1.0"
+dependencies = [
+ "ember-legacy",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1066,15 +1112,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ember-game-pong-v1"
-version = "0.1.0"
-dependencies = [
- "ember-legacy",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "ember-game-what-is-this-v1"
 version = "0.1.0"
 dependencies = [
@@ -1106,6 +1143,7 @@ dependencies = [
 name = "ember-server"
 version = "0.1.0"
 dependencies = [
+ "ember-game-arena-v1",
  "ember-game-arena-v10",
  "ember-game-arena-v11",
  "ember-game-arena-v12",
@@ -1118,7 +1156,6 @@ dependencies = [
  "ember-game-arena-v8",
  "ember-game-arena-v9",
  "ember-game-fire-v1",
- "ember-game-pong-v1",
  "ember-game-what-is-this-v1",
  "ember-legacy",
  "ember-net",
@@ -2955,43 +2992,6 @@ name = "pollster"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
-
-[[package]]
-name = "pong"
-version = "0.1.0"
-dependencies = [
- "ember-engine",
- "glam",
- "pong-core",
- "rodio",
- "rustls",
- "serde",
- "serde_json",
- "tracing",
- "tungstenite",
- "wasm-bindgen",
- "web-sys",
-]
-
-[[package]]
-name = "pong-core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "pong-server"
-version = "0.1.0"
-dependencies = [
- "pong-core",
- "rustls",
- "serde_json",
- "tracing",
- "tracing-subscriber",
- "tungstenite",
-]
 
 [[package]]
 name = "potential_utf"
