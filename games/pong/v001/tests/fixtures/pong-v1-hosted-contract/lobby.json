@@ -1,0 +1,10 @@
+{
+  "created": "{\"t\":\"lobby_created\",\"name\":\"duel\"}",
+  "host_start": "{\"t\":\"match_start\",\"role\":0,\"opponent\":\"bob\"}",
+  "guest_start": "{\"t\":\"match_start\",\"role\":1,\"opponent\":\"alice\"}",
+  "full_refusal_code": "lobby_full",
+  "full_refusal_message": "lobby is full",
+  "waiting_status": "waiting",
+  "playing_status": "playing",
+  "opponent_left": "{\"t\":\"opponent_left\"}"
+}

@@ -1,0 +1,9 @@
+{
+  "fixture_suite": "pong-v1-hosted-contract",
+  "game_id": "pong",
+  "game_version": 1,
+  "client_to_server": "client-to-server.jsonl",
+  "server_to_client": "server-to-client.jsonl",
+  "lobby": "lobby.json",
+  "deterministic_trace": "deterministic-trace.json"
+}
