@@ -195,7 +195,7 @@ The performance corpus therefore needs later amendments, not edits in this lane:
 
 ### 7.3 Wire representation and quantization
 
-The current protocols do not contain a full 3D rigid pose to widen mechanically. The postcard `PlayerState` carries only two-component position and velocity (`crates/ember-net/src/lib.rs:43-48`), while the WebSocket `PState` carries three position scalars and horizontal aim plus pitch rather than a quaternion (`crates/pong-core/src/proto.rs:42-59`). The following costs are therefore the proposed engine pose codec, not a claim about the byte size of either current message.
+The current protocols do not contain a full 3D rigid pose to widen mechanically. The postcard `PlayerState` carries only two-component position and velocity (`crates/ember-net/src/lib.rs:43-48`), while the WebSocket `PState` carries three position scalars and horizontal aim plus pitch rather than a quaternion (`crates/pong-core/src/proto.rs:94-114`). The following costs are therefore the proposed engine pose codec, not a claim about the byte size of either current message.
 
 Raw `f32` comparison is unambiguous: a 3D position plus unit quaternion is seven scalars or 28 bytes, while a 4D position plus Spin(4) quaternion pair is twelve scalars or 48 bytes. The 4D pose costs 20 additional bytes, a 71% increase, before entity ID, velocity, tick, or framing.
 
