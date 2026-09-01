@@ -214,7 +214,7 @@ pub const fn color_for(id: u8) -> [f32; 3] {
         [0.25, 0.80, 0.80], // teal
         [0.90, 0.45, 0.70], // pink
     ];
-    PALETTE[usize::from(id) % PALETTE.len()]
+    PALETTE[id as usize % PALETTE.len()]
 }
 
 #[must_use]
@@ -267,4 +267,3 @@ mod tests {
         assert_eq!(sanitize_text("\u{7}\u{8}", 5), "");
     }
 }
-
