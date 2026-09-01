@@ -14,6 +14,7 @@
       --green: #71e7a5;
       --amber: #ffc971;
       --red: #ff8c86;
+      --blue: #8fc7ff;
     }
     * { box-sizing: border-box; }
     body {
@@ -29,9 +30,19 @@
     .eyebrow { color: var(--green); letter-spacing: 0.18em; text-transform: uppercase; font-size: 0.72rem; }
     h1 { margin: 8px 0 10px; font-size: clamp(2.4rem, 9vw, 5.8rem); line-height: 0.92; letter-spacing: -0.075em; }
     .lede { max-width: 650px; color: var(--muted); line-height: 1.65; }
+    #guess-card { margin: 28px 0 22px; }
+    #guess-card h2 { margin: 5px 0 9px; font-size: 1.25rem; }
+    #guess-card p { color: var(--muted); line-height: 1.55; }
+    .guess-row { display: grid; grid-template-columns: minmax(110px, 0.5fr) 1fr 1fr; gap: 10px; margin-top: 16px; }
+    input { min-height: 50px; width: 100%; border: 1px solid var(--line); border-radius: 10px; background: #07100c; color: var(--ink); padding: 0 14px; font: inherit; }
+    input:focus { outline: 2px solid var(--green); outline-offset: 2px; }
+    #guess-reveal { min-height: 1.5em; color: var(--blue); }
     .progress-shell { height: 10px; margin: 30px 0 10px; overflow: hidden; border: 1px solid var(--line); border-radius: 999px; background: #07100c; }
     #progress { width: 0; height: 100%; background: linear-gradient(90deg, #3ba36d, var(--green)); transition: width 280ms ease; }
     #progress-label { min-height: 1.4em; color: var(--green); font-size: 0.82rem; }
+    #telemetry { display: none; grid-template-columns: minmax(0, 1fr) auto auto; gap: 14px; align-items: baseline; margin-top: 12px; padding: 10px 13px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); font-size: 0.76rem; }
+    #telemetry.visible { display: grid; }
+    #telemetry-kernel { overflow: hidden; color: var(--blue); text-overflow: ellipsis; white-space: nowrap; }
     #stages { display: grid; gap: 9px; margin: 24px 0; padding: 0; list-style: none; }
     .stage { display: grid; grid-template-columns: 2rem 1fr auto; gap: 10px; align-items: baseline; padding: 13px 15px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--panel) 88%, transparent); }
     .stage .mark { color: #587765; }
@@ -46,6 +57,13 @@
     @keyframes reveal { from { opacity: 0; transform: translateY(8px); } }
     #verdict h2 { margin: 0 0 10px; font-size: 1.6rem; }
     #verdict-copy { color: var(--muted); line-height: 1.6; }
+    #observations { display: grid; gap: 9px; margin: 18px 0; padding: 0; list-style: none; }
+    #observations li { border-left: 2px solid var(--green); padding: 6px 0 6px 13px; color: #d5e4da; line-height: 1.5; }
+    #badges { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 9px; margin: 20px 0; }
+    .badge { display: grid; grid-template-columns: 2.7rem 1fr; gap: 9px; align-items: center; padding: 11px; border: 1px solid #3c644b; border-radius: 10px; background: #0a1710; }
+    .badge-mark { display: grid; place-items: center; width: 2.7rem; height: 2.7rem; border: 1px solid var(--green); border-radius: 50%; color: var(--green); font-size: 0.72rem; font-weight: 800; }
+    .badge strong, .badge small { display: block; }
+    .badge small { margin-top: 3px; color: var(--muted); font-size: 0.66rem; line-height: 1.35; }
     .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 20px 0; }
     .fact { padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #08110d; }
     .fact strong { display: block; color: var(--green); font-size: 1.05rem; margin-bottom: 4px; }
@@ -60,11 +78,16 @@
     #action-status { min-height: 2.6em; margin: 12px 0 0; color: var(--muted); font-size: 0.78rem; line-height: 1.5; }
     #action-status.good { color: var(--green); }
     #action-status.bad { color: var(--red); }
+    #run-again { width: 100%; margin-top: 8px; background: transparent; border-color: var(--line); }
+    [hidden] { display: none !important; }
     noscript { color: var(--red); }
     @media (max-width: 620px) {
       main { padding-top: 28px; }
       .stage { grid-template-columns: 1.5rem 1fr; }
       .stage .detail { grid-column: 2; text-align: left; }
+      .guess-row { grid-template-columns: 1fr; }
+      #telemetry { grid-template-columns: 1fr 1fr; }
+      #telemetry-kernel { grid-column: 1 / -1; }
     }
   </style>
 </head>
@@ -73,8 +96,21 @@
     <div class="eyebrow">ember diagnostic game · report schema 1</div>
     <h1>what is this?</h1>
     <p class="lede">Let’s find out what this browser is running on. Six stages reveal only what the page can measure directly; a missing feature becomes an honest “unavailable,” never a dead end.</p>
+    <section id="guess-card" class="card">
+      <div class="eyebrow">optional opening wager</div>
+      <h2>How many logical threads does this machine claim?</h2>
+      <p>One number, no stakes. The answer comes from <code>navigator.hardwareConcurrency</code>; your guess stays in this page, is never stored, and is never added to the report.</p>
+      <div class="guess-row">
+        <input id="thread-guess" type="number" min="1" max="1024" step="1" inputmode="numeric" placeholder="threads" aria-label="Logical thread guess">
+        <button id="guess-and-run" type="button">Guess &amp; Run</button>
+        <button id="skip-and-run" type="button">Skip &amp; Run</button>
+      </div>
+      <p id="guess-note">The laboratory waits for either choice.</p>
+    </section>
     <div class="progress-shell" aria-hidden="true"><div id="progress"></div></div>
-    <div id="progress-label" role="status">loading the wasm laboratory…</div>
+    <div id="progress-label" role="status">waiting for your guess, or your dignified refusal…</div>
+    <p id="guess-reveal" aria-live="polite"></p>
+    <div id="telemetry" aria-live="polite"><span id="telemetry-kernel">kernel waiting</span><span id="telemetry-count">0 samples</span><span id="telemetry-median">median —</span></div>
     <ol id="stages">
       <li class="stage" data-stage="stage.environment.v1"><span class="mark">○</span><span>environment facts</span><span class="detail">waiting</span></li>
       <li class="stage" data-stage="stage.wasm-capabilities.v1"><span class="mark">○</span><span>wasm capability probes</span><span class="detail">waiting</span></li>
@@ -88,6 +124,8 @@
       <div class="eyebrow">verdict</div>
       <h2 id="verdict-title">this is…</h2>
       <p id="verdict-copy"></p>
+      <ul id="observations"></ul>
+      <div id="badges" aria-label="Earned measurement badges"></div>
       <div id="facts" class="facts"></div>
       <p id="disclosure" class="disclosure">This report contains your browser user agent, logical processor count, device memory when exposed, screen size and pixel ratio, timer and visibility conditions, wasm feature results, capped benchmark samples and summaries, floating-point fingerprints, and GPU facts or unavailable reasons. It contains no cookies, local storage, account identifier, or data read from your files. Download stays on this device. Submit sends this JSON once to the Ember server, which writes the accepted report to its structured logs and returns a content-derived receipt.</p>
       <div class="actions">
@@ -95,6 +133,7 @@
         <button id="submit" type="button" disabled>Submit to Server</button>
       </div>
       <p id="action-status"></p>
+      <button id="run-again" type="button">Run It Again</button>
     </section>
   </main>
   <script type="module">
@@ -109,33 +148,49 @@
     const KERNEL_MAX_BATCH_TARGET_MS = 320;
     const KERNEL_TOTAL_BUDGET_MS = 5_000;
     const MEMCPY_MIB_PER_BASE_INVOCATION = 16;
+    const WASM_LOAD_DEADLINE_MS = 8_000;
+    const SERVER_LOOKUP_DEADLINE_MS = 8_000;
+    const SUBMISSION_DEADLINE_MS = 15_000;
     const TIMER_CAVEAT = 'Browser timer precision, privacy rounding, page visibility, thermal state, background work, and scheduler decisions bound the meaning of every duration; values below the observed performance.now() resolution are not distinguishable, and exact multiples of that quantum are bucketed observations rather than exact durations.';
     const GPU_UNAVAILABLE = 'ember-engine v1 exposes Renderer only through a winit-owned surface event loop; Renderer::new panics on adapter or device failure and exposes no fallible offscreen timing or adapter-info seam, so this optional stage cannot run without risking the rest of the suite.';
-    const stageReports = [];
-    const kernels = [];
-    const visibilityObservations = [];
-    const suiteStarted = performance.now();
-    const initialVisibility = document.visibilityState;
-    let hiddenDuringRun = document.hidden;
-    let environment = null;
-    let capabilities = null;
-    let floatBehavior = null;
-    let faerWasm = {
+    const STAGES = [
+      ['stage.environment.v1', 'environment facts', 2_000],
+      ['stage.wasm-capabilities.v1', 'wasm capability probes', 2_000],
+      ['stage.cpu.v1', 'CPU kernels', 100_000],
+      ['stage.float-behavior.v1', 'float behavior', 5_000],
+      ['stage.timing.v1', 'display + jank timing', 15_000],
+      ['stage.gpu.v1', 'engine GPU calibration', 3_000],
+    ];
+    const DEFAULT_FAER_VERDICT = {
       version: '0.24.4',
       compiled: true,
       configuration: 'default features disabled; std,linalg enabled; Par::Seq; no Rayon',
       consequence: 'the built client includes manual SoA plus matching faer rank-4, 6x6 LLT, and Spin(4) kernels',
     };
+    let runSerial = 0;
+    let activeRun = null;
     let wasm = null;
-    let wasmFailure = null;
+    let wasmLoadPromise = null;
     let report = null;
     let compactReport = '';
+    let submissionGeneration = 0;
 
     const progress = document.querySelector('#progress');
     const progressLabel = document.querySelector('#progress-label');
+    const guessCard = document.querySelector('#guess-card');
+    const guessInput = document.querySelector('#thread-guess');
+    const guessButton = document.querySelector('#guess-and-run');
+    const skipButton = document.querySelector('#skip-and-run');
+    const guessNote = document.querySelector('#guess-note');
+    const guessReveal = document.querySelector('#guess-reveal');
+    const telemetry = document.querySelector('#telemetry');
+    const telemetryKernel = document.querySelector('#telemetry-kernel');
+    const telemetryCount = document.querySelector('#telemetry-count');
+    const telemetryMedian = document.querySelector('#telemetry-median');
     const verdict = document.querySelector('#verdict');
     const downloadButton = document.querySelector('#download');
     const submitButton = document.querySelector('#submit');
+    const runAgainButton = document.querySelector('#run-again');
     const actionStatus = document.querySelector('#action-status');
 
     function reason(error) {
@@ -162,14 +217,14 @@
       };
     }
 
-    function recordVisibility() {
-      hiddenDuringRun ||= document.hidden;
-      visibilityObservations.push({ elapsed_ms: performance.now() - suiteStarted, state: document.visibilityState });
-      if (visibilityObservations.length > RAW_SAMPLE_CAP) visibilityObservations.shift();
+    function recordVisibility(run) {
+      if (!run || activeRun !== run || !run.running) return;
+      run.hiddenDuringRun ||= document.hidden;
+      run.visibilityObservations.push({ elapsed_ms: performance.now() - run.suiteStarted, state: document.visibilityState });
+      if (run.visibilityObservations.length > RAW_SAMPLE_CAP) run.visibilityObservations.shift();
     }
 
-    document.addEventListener('visibilitychange', recordVisibility);
-    recordVisibility();
+    document.addEventListener('visibilitychange', () => recordVisibility(activeRun));
 
     function stageElement(stageId) {
       return document.querySelector(`[data-stage="${stageId}"]`);
@@ -178,40 +233,72 @@
     function showStage(stageId, state, detail) {
       const element = stageElement(stageId);
       element.classList.remove('active', 'complete', 'unavailable');
-      element.classList.add(state);
-      element.querySelector('.mark').textContent = state === 'active' ? '◉' : state === 'complete' ? '✓' : '–';
+      if (state !== 'waiting') element.classList.add(state);
+      element.querySelector('.mark').textContent = state === 'waiting' ? '○' : state === 'active' ? '◉' : state === 'complete' ? '✓' : '–';
       element.querySelector('.detail').textContent = detail;
     }
 
-    async function runStage(stageId, name, work) {
-      const started = performance.now();
-      recordVisibility();
-      showStage(stageId, 'active', 'measuring…');
-      progressLabel.textContent = `${name}: let’s see…`;
-      let status = 'complete';
-      let unavailableReason = null;
-      try {
-        await work();
-      } catch (error) {
-        status = 'unavailable';
-        unavailableReason = reason(error);
-      }
-      const duration = performance.now() - started;
-      stageReports.push({
-        stage_id: stageId,
-        name,
-        status,
-        unavailable_reason: unavailableReason,
-        duration_ms: duration,
-      });
-      showStage(stageId, status, status === 'complete' ? `${duration.toFixed(1)} ms` : `unavailable · ${unavailableReason}`);
-      progress.style.width = `${stageReports.length / 6 * 100}%`;
-      recordVisibility();
-      await new Promise(resolve => setTimeout(resolve, 24));
+    function tokenActive(run, token) {
+      return activeRun === run && run.running && !token.cancelled;
     }
 
-    function completeKernel(kernelId, workload, unit, warmupRuns, samples, notes = []) {
-      kernels.push({
+    function requireActive(run, token) {
+      if (!tokenActive(run, token)) throw new Error('stage work cancelled after its deadline or run replacement');
+    }
+
+    function timerDelay(milliseconds) {
+      return new Promise(resolve => setTimeout(resolve, milliseconds));
+    }
+
+    async function cooperativeYield(run, token, force = false) {
+      requireActive(run, token);
+      if (document.hidden && !force) return;
+      await timerDelay(0);
+      requireActive(run, token);
+    }
+
+    async function runStage(run, stageId, name, deadlineMs, work) {
+      if (activeRun !== run || !run.running) return;
+      const started = performance.now();
+      const visibilityAtStart = document.visibilityState;
+      const token = { cancelled: false };
+      recordVisibility(run);
+      showStage(stageId, 'active', 'measuring…');
+      progressLabel.textContent = `${name}: let’s see…`;
+      const workResult = Promise.resolve()
+        .then(() => work(run, token))
+        .then(() => ({ state: 'complete', unavailableReason: null }))
+        .catch(error => ({ state: 'unavailable', unavailableReason: reason(error) }));
+      let deadlineTimer = 0;
+      const deadlineResult = new Promise(resolve => {
+        deadlineTimer = setTimeout(() => resolve({
+          state: 'unavailable',
+          unavailableReason: `${name} exceeded its ${deadlineMs} ms stage deadline while the page was ${document.visibilityState}`,
+          timedOut: true,
+        }), deadlineMs);
+      });
+      const outcome = await Promise.race([workResult, deadlineResult]);
+      clearTimeout(deadlineTimer);
+      if (outcome.timedOut) token.cancelled = true;
+      if (activeRun !== run || !run.running) return;
+      const duration = performance.now() - started;
+      run.stageReports.push({
+        stage_id: stageId,
+        name,
+        status: outcome.state,
+        unavailable_reason: outcome.unavailableReason,
+        duration_ms: duration,
+      });
+      const visibilityDetail = visibilityAtStart === document.visibilityState ? document.visibilityState : `${visibilityAtStart}→${document.visibilityState}`;
+      showStage(stageId, outcome.state, outcome.state === 'complete' ? `${duration.toFixed(1)} ms · ${visibilityDetail}` : `unavailable · ${outcome.unavailableReason}`);
+      progress.style.width = `${run.stageReports.length / STAGES.length * 100}%`;
+      recordVisibility(run);
+      await timerDelay(24);
+    }
+
+    function completeKernel(run, token, kernelId, workload, unit, warmupRuns, samples, notes = []) {
+      requireActive(run, token);
+      run.kernels.push({
         kernel_id: kernelId,
         workload,
         unit,
@@ -224,8 +311,9 @@
       });
     }
 
-    function unavailableKernel(kernelId, workload, unit, unavailableReason, notes = []) {
-      kernels.push({
+    function unavailableKernel(run, token, kernelId, workload, unit, unavailableReason, notes = []) {
+      requireActive(run, token);
+      run.kernels.push({
         kernel_id: kernelId,
         workload,
         unit,
@@ -238,7 +326,7 @@
       });
     }
 
-    function timerFacts() {
+    function timerFacts(run, token) {
       const positives = [];
       let zeroDeltaCount = 0;
       let monotonicityViolations = 0;
@@ -257,6 +345,8 @@
       }
       const resolution = positives.length ? Math.min(...positives) : null;
       completeKernel(
+        run,
+        token,
         'environment.performance-now.v2',
         'up to 4000000 consecutive performance.now() reads, stopping after 32 positive transitions or 500 ms; positive deltas summarized before raw-sample capping',
         'ms',
@@ -274,8 +364,8 @@
       };
     }
 
-    function timerQuantumNote(subject) {
-      const quantum = environment?.timer?.resolution_ms;
+    function timerQuantumNote(run, subject) {
+      const quantum = run.environment?.timer?.resolution_ms;
       if (!Number.isFinite(quantum) || quantum <= 0) return `${subject} has no measured effective timer quantum; sub-millisecond interpretation is unavailable.`;
       return `${subject} uses timestamps quantized to the measured effective performance.now() quantum of ${quantum} ms; equal-looking values and differences below that quantum are not distinguishable.`;
     }
@@ -328,37 +418,49 @@
       };
     }
 
-    async function measureCpu() {
+    function updateTelemetry(kernelId, samples) {
+      telemetry.classList.add('visible');
+      telemetryKernel.textContent = kernelId;
+      telemetryCount.textContent = `${samples.length} sample${samples.length === 1 ? '' : 's'}`;
+      const summary = summarize(samples);
+      telemetryMedian.textContent = summary ? `median ${summary.median.toFixed(4)}` : 'median —';
+    }
+
+    async function measureCpu(run, token) {
       if (!wasm) {
-        unavailableKernel('cpu.wasm-client.v1', 'load the diagnostic wasm client and its fixed kernel inventory', 'ms', wasmFailure);
-        throw new Error(wasmFailure);
+        unavailableKernel(run, token, 'cpu.wasm-client.v1', 'load the diagnostic wasm client and its fixed kernel inventory', 'ms', run.wasmFailure);
+        throw new Error(run.wasmFailure);
       }
       const inventory = JSON.parse(wasm.kernel_inventory_json());
       if (!Array.isArray(inventory) || inventory.length === 0) {
         throw new Error('diagnostic wasm returned an empty timed-kernel inventory');
       }
-      const quantum = environment?.timer?.resolution_ms;
+      const quantum = run.environment?.timer?.resolution_ms;
       if (!Number.isFinite(quantum) || quantum <= 0) {
         const unavailableReason = 'kernel is unresolvable because the bounded timer probe measured no positive performance.now() transition';
-        for (const spec of inventory) unavailableKernel(spec.kernel_id, spec.workload, spec.unit, unavailableReason, [TIMER_CAVEAT]);
+        for (const spec of inventory) unavailableKernel(run, token, spec.kernel_id, spec.workload, spec.unit, unavailableReason, [TIMER_CAVEAT]);
         throw new Error(unavailableReason);
       }
       const targetElapsedMs = quantum * KERNEL_TARGET_TIMER_QUANTA;
       const minimumSamplingWallMs = targetElapsedMs * inventory[0].sample_runs;
       if (targetElapsedMs > KERNEL_MAX_BATCH_TARGET_MS) {
         const unavailableReason = unresolvableKernelReason(quantum, `the ${KERNEL_TARGET_TIMER_QUANTA}-quantum target is ${targetElapsedMs} ms, above the ${KERNEL_MAX_BATCH_TARGET_MS} ms batch-target cap`);
-        for (const spec of inventory) unavailableKernel(spec.kernel_id, spec.workload, spec.unit, unavailableReason, [TIMER_CAVEAT]);
+        for (const spec of inventory) unavailableKernel(run, token, spec.kernel_id, spec.workload, spec.unit, unavailableReason, [TIMER_CAVEAT]);
         throw new Error(unavailableReason);
       }
       if (minimumSamplingWallMs > KERNEL_TOTAL_BUDGET_MS) {
         const unavailableReason = unresolvableKernelReason(quantum, `the ${KERNEL_TARGET_TIMER_QUANTA}-quantum target is ${targetElapsedMs} ms and cannot fit the ${KERNEL_TOTAL_BUDGET_MS} ms per-kernel budget`);
-        for (const spec of inventory) unavailableKernel(spec.kernel_id, spec.workload, spec.unit, unavailableReason, [TIMER_CAVEAT]);
+        for (const spec of inventory) unavailableKernel(run, token, spec.kernel_id, spec.workload, spec.unit, unavailableReason, [TIMER_CAVEAT]);
         throw new Error(unavailableReason);
       }
       for (const spec of inventory) {
+        requireActive(run, token);
         const workload = `${spec.workload}; every reported sample normalizes one adaptive repeated batch to one base invocation`;
+        let recorded = false;
         try {
+          updateTelemetry(spec.kernel_id, []);
           for (let index = 0; index < spec.warmup_runs; index += 1) {
+            requireActive(run, token);
             const warmupChecksum = wasm.run_kernel(spec.kernel_id);
             if (!Number.isFinite(warmupChecksum)) throw new Error(`kernel checksum was non-finite during warmup ${index + 1}`);
           }
@@ -369,7 +471,9 @@
           let repeatCount = 1;
           let checksum = 0;
           for (let index = 0; index < spec.sample_runs; index += 1) {
+            requireActive(run, token);
             while (true) {
+              requireActive(run, token);
               if (performance.now() - kernelStarted >= KERNEL_TOTAL_BUDGET_MS) {
                 throw new Error(unresolvableKernelReason(quantum, `fewer than ${spec.sample_runs} samples reached ${KERNEL_TARGET_TIMER_QUANTA} quanta within the ${KERNEL_TOTAL_BUDGET_MS} ms per-kernel budget`));
               }
@@ -383,6 +487,7 @@
                 samples.push(normalized);
                 repeatCounts.push(repeatCount);
                 batchElapsedMs.push(elapsed);
+                updateTelemetry(spec.kernel_id, samples);
                 break;
               }
               if (repeatCount >= KERNEL_MAX_REPEAT_COUNT) {
@@ -391,32 +496,39 @@
               const scaled = elapsed > 0 ? Math.ceil(repeatCount * targetElapsedMs / elapsed * 1.125) : repeatCount * 8;
               repeatCount = Math.min(KERNEL_MAX_REPEAT_COUNT, Math.max(repeatCount + 1, scaled));
             }
-            await new Promise(resolve => setTimeout(resolve, 0));
+            await cooperativeYield(run, token);
           }
           const normalizationNote = spec.unit === 'MiB/s' ? `${MEMCPY_MIB_PER_BASE_INVOCATION} MiB per base invocation × repeat count ÷ batch seconds; reported samples are bandwidth, not elapsed milliseconds` : 'batch elapsed milliseconds ÷ repeat count';
-          completeKernel(spec.kernel_id, workload, spec.unit, spec.warmup_runs, samples, [TIMER_CAVEAT, `measured timer quantum ${quantum} ms; batch target ${KERNEL_TARGET_TIMER_QUANTA} quanta (${targetElapsedMs} ms)`, `adaptive repeat counts per recorded sample: ${repeatCounts.join(', ')}`, `batch elapsed milliseconds per recorded sample: ${batchElapsedMs.join(', ')}`, `normalization: ${normalizationNote}`, `opaque checksum ${checksum}`]);
+          completeKernel(run, token, spec.kernel_id, workload, spec.unit, spec.warmup_runs, samples, [TIMER_CAVEAT, `measured timer quantum ${quantum} ms; batch target ${KERNEL_TARGET_TIMER_QUANTA} quanta (${targetElapsedMs} ms)`, `adaptive repeat counts per recorded sample: ${repeatCounts.join(', ')}`, `batch elapsed milliseconds per recorded sample: ${batchElapsedMs.join(', ')}`, `normalization: ${normalizationNote}`, `opaque checksum ${checksum}`]);
+          recorded = true;
         } catch (error) {
-          unavailableKernel(spec.kernel_id, workload, spec.unit, reason(error), [TIMER_CAVEAT]);
+          if (tokenActive(run, token)) {
+            unavailableKernel(run, token, spec.kernel_id, workload, spec.unit, reason(error), [TIMER_CAVEAT]);
+            recorded = true;
+          }
         }
+        if (!recorded) requireActive(run, token);
+        await cooperativeYield(run, token, true);
       }
+      telemetry.classList.remove('visible');
     }
 
-    function measureFloats() {
+    function measureFloats(run, token) {
       if (!wasm) {
-        floatBehavior = {
+        run.floatBehavior = {
           available: false,
-          unavailable_reason: wasmFailure,
+          unavailable_reason: run.wasmFailure,
           fma_kernel_id: 'float.fma-contraction.v1',
           fma: null,
           transcendental_kernel_id: 'float.f32-sin-cos-ulp.v1',
           transcendentals: [],
         };
-        unavailableKernel('float.fma-contraction.v1', 'classic f32 a*b+c fused-versus-separated rounding case', 'bits', wasmFailure);
-        unavailableKernel('float.f32-sin-cos-ulp.v1', '11 exact f32 inputs against baked double-precision sine and cosine references', 'ULP', wasmFailure);
-        throw new Error(wasmFailure);
+        unavailableKernel(run, token, 'float.fma-contraction.v1', 'classic f32 a*b+c fused-versus-separated rounding case', 'bits', run.wasmFailure);
+        unavailableKernel(run, token, 'float.f32-sin-cos-ulp.v1', '11 exact f32 inputs against baked double-precision sine and cosine references', 'ULP', run.wasmFailure);
+        throw new Error(run.wasmFailure);
       }
       const measured = JSON.parse(wasm.float_probe_json());
-      floatBehavior = {
+      run.floatBehavior = {
         available: true,
         unavailable_reason: null,
         fma_kernel_id: 'float.fma-contraction.v1',
@@ -425,6 +537,8 @@
         transcendentals: measured.transcendentals,
       };
       completeKernel(
+        run,
+        token,
         'float.fma-contraction.v1',
         'f32 inputs 0x3f800001 × 0x3f800001 + 0xbf800002; compare plain, separated, and explicit fused results',
         'bits',
@@ -434,6 +548,8 @@
       );
       const ulps = measured.transcendentals.flatMap(value => [value.sin_ulp, value.cos_ulp]);
       completeKernel(
+        run,
+        token,
         'float.f32-sin-cos-ulp.v1',
         '11 exact f32 inputs from minimum-normal through ±1000; wasm f32 sin/cos versus baked f64 references rounded to f32',
         'ULP',
@@ -443,23 +559,27 @@
       );
     }
 
-    function animationFrame(timeoutMs = 2500) {
+    function animationFrame(run, token, timeoutMs = 2500) {
+      if (document.hidden) return Promise.reject(new Error('requestAnimationFrame timing is unavailable while the document is hidden'));
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error(`requestAnimationFrame produced no frame within ${timeoutMs} ms`)), timeoutMs);
         requestAnimationFrame(timestamp => {
           clearTimeout(timer);
-          resolve(timestamp);
+          if (tokenActive(run, token)) resolve(timestamp);
+          else reject(new Error('requestAnimationFrame arrived after its stage was cancelled'));
         });
       });
     }
 
-    async function measureRafCadence() {
+    async function measureRafCadence(run, token) {
       const deltas = [];
-      const first = await animationFrame();
+      const first = await animationFrame(run, token);
       let previous = first;
       let timestamp = first;
       while (timestamp - first < 5000) {
-        timestamp = await animationFrame();
+        requireActive(run, token);
+        if (document.hidden) throw new Error('requestAnimationFrame cadence became unavailable when the document was hidden during its five-second window');
+        timestamp = await animationFrame(run, token);
         deltas.push(timestamp - previous);
         previous = timestamp;
       }
@@ -468,72 +588,174 @@
       const baseline = stats.median;
       const missedFrames = deltas.reduce((total, delta) => total + Math.max(0, Math.round(delta / baseline) - 1), 0);
       completeKernel(
+        run,
+        token,
         'timing.raf-cadence-5s.v1',
         'consecutive requestAnimationFrame timestamps over approximately 5 seconds',
         'ms',
         0,
         deltas,
-        [`estimated refresh ${Number.isFinite(1000 / baseline) ? (1000 / baseline).toFixed(2) : 'unavailable'} Hz`, `${missedFrames} estimated missed frames`, `document visibility at completion: ${document.visibilityState}`, timerQuantumNote('requestAnimationFrame cadence')],
+        [`estimated refresh ${Number.isFinite(1000 / baseline) ? (1000 / baseline).toFixed(2) : 'unavailable'} Hz`, `${missedFrames} estimated missed frames`, `document visibility at completion: ${document.visibilityState}`, timerQuantumNote(run, 'requestAnimationFrame cadence'), 'rAF timestamps remain scheduler observations; coarse timer precision can quantize intervals and the refresh estimate'],
       );
       return { refreshHz: 1000 / baseline, missedFrames };
     }
 
-    async function measureJank() {
+    async function measureJank(run, token) {
       if (!wasm) {
-        unavailableKernel('timing.main-thread-burst-50ms.v1', 'wasm arithmetic chunks repeated until 50 ms of monotonic wall time elapse', 'ms', wasmFailure);
-        unavailableKernel('timing.post-burst-frame-gap.v1', 'requestAnimationFrame interval spanning the controlled 50 ms compute burst', 'ms', wasmFailure);
+        unavailableKernel(run, token, 'timing.main-thread-burst-50ms.v1', 'wasm arithmetic chunks repeated until 50 ms of monotonic wall time elapse', 'ms', run.wasmFailure);
+        unavailableKernel(run, token, 'timing.post-burst-frame-gap.v1', 'requestAnimationFrame interval spanning the controlled 50 ms compute burst', 'ms', run.wasmFailure);
         return;
       }
-      const beforeFrame = await animationFrame();
+      let beforeFrame = null;
+      let frameUnavailableReason = null;
+      try {
+        beforeFrame = await animationFrame(run, token);
+      } catch (error) {
+        frameUnavailableReason = reason(error);
+      }
+      requireActive(run, token);
       const burstStarted = performance.now();
+      const burstWallStarted = Date.now();
       let checksum = 0;
-      while (performance.now() - burstStarted < 50) checksum += wasm.run_jank_chunk();
+      while (performance.now() - burstStarted < 50 && Date.now() - burstWallStarted < 1_000) checksum += wasm.run_jank_chunk();
       const burstDuration = performance.now() - burstStarted;
-      const afterFrame = await animationFrame();
+      if (!Number.isFinite(checksum)) throw new Error('controlled-burst checksum was non-finite');
+      if (!Number.isFinite(burstDuration) || burstDuration <= 0) {
+        throw new Error(`controlled burst was unresolvable under the measured performance.now() quantum of ${run.environment?.timer?.resolution_ms ?? 'unknown'} ms`);
+      }
       completeKernel(
+        run,
+        token,
         'timing.main-thread-burst-50ms.v1',
         'repeated fixed wasm arithmetic chunks until performance.now() reaches a 50 ms deadline',
         'ms',
         0,
         [burstDuration],
-        [`opaque checksum ${checksum}`, TIMER_CAVEAT, timerQuantumNote('the 50 ms burst deadline and duration'), 'the actual compute burst may overshoot the displayed 50 ms by roughly one timer quantum plus one arithmetic chunk'],
+        [`opaque checksum ${checksum}`, TIMER_CAVEAT, timerQuantumNote(run, 'the 50 ms burst deadline and duration'), 'the actual compute burst may overshoot the displayed 50 ms by roughly one timer quantum plus one arithmetic chunk; quantized values such as 50 ms are bounds, not exact sub-quantum timings'],
       );
-      completeKernel(
-        'timing.post-burst-frame-gap.v1',
-        'requestAnimationFrame timestamp gap spanning the controlled main-thread compute burst',
-        'ms',
-        0,
-        [afterFrame - beforeFrame],
-        [TIMER_CAVEAT, timerQuantumNote('the frame gap spanning the compute burst')],
-      );
+      if (beforeFrame == null || document.hidden) {
+        unavailableKernel(run, token, 'timing.post-burst-frame-gap.v1', 'requestAnimationFrame interval spanning the controlled 50 ms compute burst', 'ms', frameUnavailableReason || 'requestAnimationFrame timing became unavailable because the document was hidden', [TIMER_CAVEAT, timerQuantumNote(run, 'the frame gap spanning the compute burst')]);
+        return;
+      }
+      try {
+        const afterFrame = await animationFrame(run, token);
+        completeKernel(
+          run,
+          token,
+          'timing.post-burst-frame-gap.v1',
+          'requestAnimationFrame timestamp gap spanning the controlled 50 ms compute burst',
+          'ms',
+          0,
+          [afterFrame - beforeFrame],
+          [TIMER_CAVEAT, timerQuantumNote(run, 'the frame gap spanning the compute burst'), 'a coarse timer can quantize the observed frame gap; the report does not claim precision below its measured quantum'],
+        );
+      } catch (error) {
+        unavailableKernel(run, token, 'timing.post-burst-frame-gap.v1', 'requestAnimationFrame interval spanning the controlled 50 ms compute burst', 'ms', reason(error), [TIMER_CAVEAT, timerQuantumNote(run, 'the frame gap spanning the compute burst')]);
+      }
+    }
+
+    async function measureTiming(run, token) {
+      let rafComplete = false;
+      try {
+        await measureRafCadence(run, token);
+        rafComplete = true;
+      } catch (error) {
+        if (tokenActive(run, token)) unavailableKernel(run, token, 'timing.raf-cadence-5s.v1', 'consecutive requestAnimationFrame timestamps over approximately 5 seconds', 'ms', reason(error), [TIMER_CAVEAT, timerQuantumNote(run, 'requestAnimationFrame cadence')]);
+      }
+      requireActive(run, token);
+      await measureJank(run, token);
+      if (!rafComplete && !run.kernels.some(kernel => kernel.kernel_id === 'timing.main-thread-burst-50ms.v1' && kernel.status === 'complete')) {
+        throw new Error('both display cadence and the controlled main-thread burst were unavailable');
+      }
     }
 
     async function canonicalServerUrl() {
-      const response = await fetch(new URL(`server.json?ts=${Date.now()}`, ROOT), { cache: 'no-store' });
-      if (!response.ok) throw new Error(`server configuration returned HTTP ${response.status}`);
-      const configuration = await response.json();
-      const configured = String(configuration.canonical_ws || configuration.ws || '').trim();
-      if (!configured) throw new Error('no canonical Ember WebSocket URL is published');
-      const url = new URL(configured, location.href);
-      url.searchParams.delete('legacy_game');
-      return url.toString();
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), SERVER_LOOKUP_DEADLINE_MS);
+      try {
+        const response = await fetch(new URL(`server.json?ts=${Date.now()}`, ROOT), { cache: 'no-store', signal: controller.signal });
+        if (!response.ok) throw new Error(`server configuration returned HTTP ${response.status}`);
+        const configuration = await response.json();
+        const configured = String(configuration.canonical_ws || configuration.ws || '').trim();
+        if (!configured) throw new Error('no canonical Ember WebSocket URL is published');
+        const url = new URL(configured, location.href);
+        url.searchParams.delete('legacy_game');
+        return url.toString();
+      } catch (error) {
+        if (error?.name === 'AbortError') throw new Error(`server configuration lookup exceeded ${SERVER_LOOKUP_DEADLINE_MS} ms`);
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
     }
 
-    function renderVerdict(reportBytes) {
-      const completeCount = kernels.filter(kernel => kernel.status === 'complete').length;
-      const unavailableCount = kernels.length - completeCount;
-      const raf = kernels.find(kernel => kernel.kernel_id === 'timing.raf-cadence-5s.v1');
-      const refresh = raf?.summary?.median ? `${(1000 / raf.summary.median).toFixed(1)} Hz-ish` : 'refresh unavailable';
-      const concurrency = environment.hardware_concurrency == null ? 'thread count hidden' : `${environment.hardware_concurrency} logical threads`;
+    function fallbackPersonality(currentReport) {
+      const timer = currentReport.environment.timer;
+      const quantum = timer.resolution_ms;
+      const observations = [{
+        text: Number.isFinite(quantum)
+          ? `The smallest observed clock step was ${quantum.toFixed(4)} ms after ${timer.zero_delta_count} equal reads.`
+          : `The bounded clock probe saw ${timer.zero_delta_count} equal reads and no positive timer step.`,
+      }];
+      const threads = currentReport.environment.hardware_concurrency;
+      observations.push({ text: threads == null ? 'The browser did not expose a logical thread count.' : `The browser exposed ${threads} logical threads.` });
+      const complete = currentReport.kernels.filter(kernel => kernel.status === 'complete').length;
+      observations.push({ text: `${complete} kernels completed and ${currentReport.kernels.length - complete} reported unavailable.` });
+      return {
+        observations,
+        badges: [{
+          id: Number.isFinite(quantum) && quantum <= 0.1 ? 'timer-truthful' : 'timer-coy',
+          name: Number.isFinite(quantum) && quantum <= 0.1 ? 'Timer Truthful' : 'Timer Coy',
+          glyph: Number.isFinite(quantum) && quantum <= 0.1 ? 'dt' : 'dt?',
+          measurement: Number.isFinite(quantum) ? `smallest observed performance.now() step: ${quantum.toFixed(4)} ms` : `no positive timer step observed; ${timer.zero_delta_count} equal reads`,
+        }],
+      };
+    }
+
+    function renderVerdict(reportBytes, personality) {
+      const completeCount = report.kernels.filter(kernel => kernel.status === 'complete').length;
+      const unavailableCount = report.kernels.length - completeCount;
       document.querySelector('#verdict-title').textContent = 'this is a real browser, with receipts.';
-      document.querySelector('#verdict-copy').textContent = `It exposes ${concurrency}, looks like ${refresh}, and completed ${completeCount} measurement kernels. ${unavailableCount} kernel${unavailableCount === 1 ? '' : 's'} reported unavailable without stopping the run. This is a fingerprint and calibration record, not a synthetic compatibility score.`;
+      document.querySelector('#verdict-copy').textContent = `No synthetic compatibility score: ${completeCount} completed measurement kernels, ${unavailableCount} honest unavailable result${unavailableCount === 1 ? '' : 's'}, and the machine’s own readings below.`;
+      const observationList = document.querySelector('#observations');
+      observationList.replaceChildren(...personality.observations.map(observation => {
+        const item = document.createElement('li');
+        item.textContent = observation.text;
+        return item;
+      }));
+      const badgeList = document.querySelector('#badges');
+      badgeList.replaceChildren(...personality.badges.map(badge => {
+        const card = document.createElement('div');
+        card.className = 'badge';
+        card.dataset.badge = badge.id;
+        const mark = document.createElement('span');
+        mark.className = 'badge-mark';
+        mark.textContent = badge.glyph;
+        const words = document.createElement('span');
+        const name = document.createElement('strong');
+        name.textContent = badge.name;
+        const measurement = document.createElement('small');
+        measurement.textContent = badge.measurement;
+        words.append(name, measurement);
+        card.append(mark, words);
+        return card;
+      }));
       const facts = [
-        [capabilities.simd128.available ? 'yes' : 'no', 'wasm SIMD128'],
-        [capabilities.threads.available ? 'yes' : 'no', 'shared wasm memory'],
+        [report.capabilities.simd128.available ? 'yes' : 'no', 'wasm SIMD128'],
+        [report.capabilities.threads.available ? 'yes' : 'no', 'shared wasm memory'],
         [`${(report.total_run_wall_ms / 1000).toFixed(1)} s`, 'suite wall time'],
         [`${reportBytes.toLocaleString()} B`, 'compact JSON'],
       ];
-      document.querySelector('#facts').innerHTML = facts.map(([value, label]) => `<div class="fact"><strong>${value}</strong><span>${label}</span></div>`).join('');
+      document.querySelector('#facts').replaceChildren(...facts.map(([value, label]) => {
+        const fact = document.createElement('div');
+        fact.className = 'fact';
+        const strong = document.createElement('strong');
+        strong.textContent = value;
+        const span = document.createElement('span');
+        span.textContent = label;
+        fact.append(strong, span);
+        return fact;
+      }));
       verdict.classList.add('visible');
     }
 
@@ -552,21 +774,41 @@
     });
 
     submitButton.addEventListener('click', async () => {
+      if (!compactReport || !wasm || !activeRun || activeRun.running) return;
+      const runId = activeRun.id;
+      const generation = ++submissionGeneration;
       submitButton.disabled = true;
       actionStatus.className = '';
       actionStatus.textContent = 'Looking up the canonical server only after your click…';
       try {
         const serverUrl = await canonicalServerUrl();
+        if (!activeRun || activeRun.id !== runId || submissionGeneration !== generation) return;
         wasm.start_submission(serverUrl, compactReport);
+        const deadline = Date.now() + SUBMISSION_DEADLINE_MS;
         const poll = () => {
-          const status = JSON.parse(wasm.poll_submission_json());
-          actionStatus.textContent = status.receipt_id ? `${status.detail} Receipt: ${status.receipt_id}` : status.detail;
-          if (status.state === 'accepted') {
-            actionStatus.className = 'good';
+          if (!activeRun || activeRun.id !== runId || submissionGeneration !== generation) return;
+          if (Date.now() >= deadline) {
+            actionStatus.className = 'bad';
+            actionStatus.textContent = `Submission outcome unknown: no server acknowledgment arrived within ${SUBMISSION_DEADLINE_MS / 1000} seconds. The report may have been sent; Download Report still works.`;
+            submitButton.disabled = false;
             return;
           }
-          if (status.state === 'failed') {
+          try {
+            const status = JSON.parse(wasm.poll_submission_json());
+            actionStatus.textContent = status.receipt_id ? `${status.detail} Receipt: ${status.receipt_id}` : status.detail;
+            if (status.state === 'accepted') {
+              actionStatus.className = 'good';
+              return;
+            }
+            if (status.state === 'failed') {
+              actionStatus.className = 'bad';
+              actionStatus.textContent = `${status.detail} Download Report still works.`;
+              submitButton.disabled = false;
+              return;
+            }
+          } catch (error) {
             actionStatus.className = 'bad';
+            actionStatus.textContent = `Submission status failed: ${reason(error)}. Download Report still works.`;
             submitButton.disabled = false;
             return;
           }
@@ -574,118 +816,139 @@
         };
         poll();
       } catch (error) {
+        if (!activeRun || activeRun.id !== runId || submissionGeneration !== generation) return;
         actionStatus.className = 'bad';
-        actionStatus.textContent = `Nothing was submitted: ${reason(error)}`;
+        actionStatus.textContent = `Nothing was submitted: ${reason(error)}. Download Report still works.`;
         submitButton.disabled = false;
       }
     });
 
-    async function runSuite() {
+    async function loadWasm(run) {
+      if (!wasmLoadPromise) {
+        wasmLoadPromise = (async () => {
+          const module = await import('./pkg/what_is_this.js?v=3');
+          await module.default({ module_or_path: './pkg/what_is_this_bg.wasm?v=3' });
+          return module;
+        })();
+      }
+      let timer = 0;
       try {
-        wasm = await import('./pkg/what_is_this.js?v=2');
-        await wasm.default({ module_or_path: './pkg/what_is_this_bg.wasm?v=2' });
-        faerWasm = JSON.parse(wasm.faer_wasm_verdict_json());
+        const timedOut = new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`diagnostic wasm load exceeded ${WASM_LOAD_DEADLINE_MS} ms`)), WASM_LOAD_DEADLINE_MS);
+        });
+        const loaded = await Promise.race([wasmLoadPromise, timedOut]);
+        if (activeRun !== run || !run.running) return;
+        wasm = loaded;
+        wasm.reset_run_state();
+        run.faerWasm = JSON.parse(wasm.faer_wasm_verdict_json());
       } catch (error) {
-        wasmFailure = `diagnostic wasm module unavailable: ${reason(error)}`;
+        run.wasmFailure = `diagnostic wasm module unavailable: ${reason(error)}`;
+        wasmLoadPromise = null;
+      } finally {
+        clearTimeout(timer);
       }
+    }
 
-      await runStage('stage.environment.v1', 'environment facts', async () => {
-        const timer = timerFacts();
-        const rawMemory = navigator.deviceMemory;
-        environment = {
-          kernel_id: 'environment.browser-facts.v1',
-          user_agent: navigator.userAgent,
-          hardware_concurrency: Number.isInteger(navigator.hardwareConcurrency) ? navigator.hardwareConcurrency : null,
-          device_memory_gib: Number.isFinite(rawMemory) ? rawMemory : null,
-          screen: {
-            width: Math.max(0, Math.round(screen.width)),
-            height: Math.max(0, Math.round(screen.height)),
-            device_pixel_ratio: Number.isFinite(devicePixelRatio) ? devicePixelRatio : 1,
-          },
-          timer,
-          initial_visibility: initialVisibility,
-          final_visibility: document.visibilityState,
-          hidden_during_run: hiddenDuringRun,
-          visibility_observations: [],
-        };
-      });
-
-      await runStage('stage.wasm-capabilities.v1', 'wasm capability probes', async () => {
-        capabilities = wasmCapabilities();
-      });
-
-      await runStage('stage.cpu.v1', 'CPU kernels', measureCpu);
-      await runStage('stage.float-behavior.v1', 'float behavior', async () => measureFloats());
-
-      await runStage('stage.timing.v1', 'display + jank timing', async () => {
-        await measureRafCadence();
-        await measureJank();
-      });
-
-      await runStage('stage.gpu.v1', 'engine GPU calibration', async () => {
-        unavailableKernel('gpu.ember-fixed-scene.v1', 'fixed instanced ember-engine scene rendered offscreen for a multi-second frame-time distribution', 'ms', GPU_UNAVAILABLE);
-        throw new Error(GPU_UNAVAILABLE);
-      });
-
-      recordVisibility();
-      document.removeEventListener('visibilitychange', recordVisibility);
-      if (!environment) {
-        environment = {
-          kernel_id: 'environment.browser-facts.v1',
-          user_agent: 'unavailable: environment stage did not complete',
-          hardware_concurrency: null,
-          device_memory_gib: null,
-          screen: { width: 0, height: 0, device_pixel_ratio: 1 },
-          timer: {
-            resolution_ms: null,
-            zero_delta_count: 0,
-            monotonicity_violations: 0,
-            positive_delta_samples_ms: [],
-            positive_delta_summary: null,
-            caveat: TIMER_CAVEAT,
-          },
-          initial_visibility: initialVisibility,
-          final_visibility: document.visibilityState,
-          hidden_during_run: hiddenDuringRun,
-          visibility_observations: [],
-        };
+    function revealGuess(run) {
+      const actual = run.environment?.hardware_concurrency;
+      if (actual == null) {
+        guessReveal.textContent = run.guess == null
+          ? 'Guess skipped; the browser also declined to reveal its logical thread count.'
+          : `You guessed ${run.guess}; the browser declined to reveal the answer.`;
+      } else if (run.guess == null) {
+        guessReveal.textContent = `No guess entered. Reveal: the browser reports ${actual} logical threads.`;
+      } else if (run.guess === actual) {
+        guessReveal.textContent = `Exact: you guessed ${run.guess}, and the browser reports ${actual} logical threads.`;
+      } else {
+        guessReveal.textContent = `You guessed ${run.guess}; the browser reports ${actual} logical threads, a miss by ${Math.abs(run.guess - actual)}.`;
       }
-      if (!capabilities) {
+    }
+
+    function fallbackEnvironment(run) {
+      return {
+        kernel_id: 'environment.browser-facts.v1',
+        user_agent: 'unavailable: environment stage did not complete',
+        hardware_concurrency: null,
+        device_memory_gib: null,
+        screen: { width: 0, height: 0, device_pixel_ratio: 1 },
+        timer: {
+          resolution_ms: null,
+          zero_delta_count: 0,
+          monotonicity_violations: 0,
+          positive_delta_samples_ms: [],
+          positive_delta_summary: null,
+          caveat: TIMER_CAVEAT,
+        },
+        initial_visibility: run.initialVisibility,
+        final_visibility: document.visibilityState,
+        hidden_during_run: run.hiddenDuringRun,
+        visibility_observations: [],
+      };
+    }
+
+    function finalizeRun(run, fatalReason = null) {
+      if (activeRun !== run || !run.running) return;
+      recordVisibility(run);
+      if (fatalReason) {
+        for (const [stageId, name] of STAGES) {
+          if (run.stageReports.some(stage => stage.stage_id === stageId)) continue;
+          run.stageReports.push({
+            stage_id: stageId,
+            name,
+            status: 'unavailable',
+            unavailable_reason: `stage did not start because suite orchestration failed: ${fatalReason}`,
+            duration_ms: 0,
+          });
+          showStage(stageId, 'unavailable', `unavailable · orchestration failure: ${fatalReason}`);
+        }
+      }
+      run.environment ||= fallbackEnvironment(run);
+      if (!run.capabilities) {
         const unavailableReason = 'wasm capability stage did not complete';
-        capabilities = {
+        run.capabilities = {
           simd128: featureProbe('capability.wasm-simd128.v1', false, unavailableReason),
           threads: featureProbe('capability.wasm-threads.v1', false, unavailableReason),
           bulk_memory: featureProbe('capability.wasm-bulk-memory.v1', false, unavailableReason),
         };
       }
-      environment.final_visibility = document.visibilityState;
-      environment.hidden_during_run = hiddenDuringRun;
-      environment.visibility_observations = visibilityObservations;
-      if (!floatBehavior) {
-        floatBehavior = {
-          available: false,
-          unavailable_reason: wasmFailure || 'float probe did not complete',
-          fma_kernel_id: 'float.fma-contraction.v1',
-          fma: null,
-          transcendental_kernel_id: 'float.f32-sin-cos-ulp.v1',
-          transcendentals: [],
-        };
-      }
+      run.environment.final_visibility = document.visibilityState;
+      run.environment.hidden_during_run = run.hiddenDuringRun;
+      run.environment.visibility_observations = run.visibilityObservations;
+      run.floatBehavior ||= {
+        available: false,
+        unavailable_reason: run.wasmFailure || 'float probe did not complete',
+        fma_kernel_id: 'float.fma-contraction.v1',
+        fma: null,
+        transcendental_kernel_id: 'float.f32-sin-cos-ulp.v1',
+        transcendentals: [],
+      };
       report = {
         report_schema_version: 1,
         generated_at: new Date().toISOString(),
-        total_run_wall_ms: performance.now() - suiteStarted,
-        environment,
-        capabilities,
-        float_behavior: floatBehavior,
-        faer_wasm: faerWasm,
-        stages: stageReports,
-        kernels,
+        total_run_wall_ms: performance.now() - run.suiteStarted,
+        environment: run.environment,
+        capabilities: run.capabilities,
+        float_behavior: run.floatBehavior,
+        faer_wasm: run.faerWasm,
+        stages: run.stageReports,
+        kernels: run.kernels,
       };
       compactReport = JSON.stringify(report);
       const reportBytes = new TextEncoder().encode(compactReport).byteLength;
+      let personality = fallbackPersonality(report);
+      if (wasm) {
+        try {
+          personality = JSON.parse(wasm.verdict_json(compactReport));
+        } catch (error) {
+          actionStatus.textContent = `The tested verdict mapper declined this report: ${reason(error)}. The measurement-only fallback is shown.`;
+        }
+      }
+      run.running = false;
+      telemetry.classList.remove('visible');
+      progress.style.width = '100%';
+      progressLabel.style.color = '';
       progressLabel.textContent = reportBytes <= REPORT_BYTE_CAP ? 'complete — the machine has spoken.' : `complete, but the report is ${reportBytes - REPORT_BYTE_CAP} bytes over the submission cap.`;
-      renderVerdict(reportBytes);
+      renderVerdict(reportBytes, personality);
       downloadButton.disabled = false;
       submitButton.disabled = !wasm || reportBytes > REPORT_BYTE_CAP;
       if (!wasm) {
@@ -695,14 +958,175 @@
         actionStatus.className = 'bad';
         actionStatus.textContent = 'Download works, but submission is disabled because the compact report exceeds the 52 KiB protocol limit.';
       } else {
+        actionStatus.className = '';
         actionStatus.textContent = 'Both actions are optional. No server request is made unless you click Submit to Server.';
+      }
+      revealGuess(run);
+    }
+
+    async function runSuite(run) {
+      let fatalReason = null;
+      try {
+        await loadWasm(run);
+        if (activeRun !== run || !run.running) return;
+        await runStage(run, ...STAGES[0], async (currentRun, token) => {
+          const timer = timerFacts(currentRun, token);
+          const rawMemory = navigator.deviceMemory;
+          currentRun.environment = {
+            kernel_id: 'environment.browser-facts.v1',
+            user_agent: navigator.userAgent,
+            hardware_concurrency: Number.isInteger(navigator.hardwareConcurrency) ? navigator.hardwareConcurrency : null,
+            device_memory_gib: Number.isFinite(rawMemory) ? rawMemory : null,
+            screen: {
+              width: Math.max(0, Math.round(screen.width)),
+              height: Math.max(0, Math.round(screen.height)),
+              device_pixel_ratio: Number.isFinite(devicePixelRatio) ? devicePixelRatio : 1,
+            },
+            timer,
+            initial_visibility: currentRun.initialVisibility,
+            final_visibility: document.visibilityState,
+            hidden_during_run: currentRun.hiddenDuringRun,
+            visibility_observations: [],
+          };
+          revealGuess(currentRun);
+        });
+        await runStage(run, ...STAGES[1], async (currentRun, token) => {
+          requireActive(currentRun, token);
+          currentRun.capabilities = wasmCapabilities();
+        });
+        await runStage(run, ...STAGES[2], measureCpu);
+        await runStage(run, ...STAGES[3], async (currentRun, token) => measureFloats(currentRun, token));
+        await runStage(run, ...STAGES[4], measureTiming);
+        await runStage(run, ...STAGES[5], async (currentRun, token) => {
+          unavailableKernel(currentRun, token, 'gpu.ember-fixed-scene.v1', 'fixed instanced ember-engine scene rendered offscreen for a multi-second frame-time distribution', 'ms', GPU_UNAVAILABLE);
+          throw new Error(GPU_UNAVAILABLE);
+        });
+      } catch (error) {
+        fatalReason = reason(error);
+      } finally {
+        finalizeRun(run, fatalReason);
       }
     }
 
-    runSuite().catch(error => {
-      progressLabel.textContent = `The suite stopped before it could build a report: ${reason(error)}`;
+    function emergencyVerdict(run, error) {
+      if (activeRun !== run) return;
+      const failure = reason(error);
+      run.environment ||= fallbackEnvironment(run);
+      run.capabilities ||= {
+        simd128: featureProbe('capability.wasm-simd128.v1', false, failure),
+        threads: featureProbe('capability.wasm-threads.v1', false, failure),
+        bulk_memory: featureProbe('capability.wasm-bulk-memory.v1', false, failure),
+      };
+      run.floatBehavior ||= {
+        available: false,
+        unavailable_reason: failure,
+        fma_kernel_id: 'float.fma-contraction.v1',
+        fma: null,
+        transcendental_kernel_id: 'float.f32-sin-cos-ulp.v1',
+        transcendentals: [],
+      };
+      for (const [stageId, name] of STAGES) {
+        if (run.stageReports.some(stage => stage.stage_id === stageId)) continue;
+        run.stageReports.push({ stage_id: stageId, name, status: 'unavailable', unavailable_reason: `suite recovery path: ${failure}`, duration_ms: 0 });
+        showStage(stageId, 'unavailable', `unavailable · suite recovery path: ${failure}`);
+      }
+      report = {
+        report_schema_version: 1,
+        generated_at: new Date().toISOString(),
+        total_run_wall_ms: performance.now() - run.suiteStarted,
+        environment: run.environment,
+        capabilities: run.capabilities,
+        float_behavior: run.floatBehavior,
+        faer_wasm: run.faerWasm,
+        stages: run.stageReports,
+        kernels: run.kernels,
+      };
+      compactReport = JSON.stringify(report);
+      run.running = false;
+      const reportBytes = new TextEncoder().encode(compactReport).byteLength;
+      progress.style.width = '100%';
       progressLabel.style.color = 'var(--red)';
+      progressLabel.textContent = `complete through the recovery path: ${failure}`;
+      renderVerdict(reportBytes, fallbackPersonality(report));
+      downloadButton.disabled = false;
+      submitButton.disabled = true;
+      actionStatus.className = 'bad';
+      actionStatus.textContent = 'Download works. Submission is disabled because the suite needed its final recovery path.';
+    }
+
+    function beginRun(guess) {
+      submissionGeneration += 1;
+      if (wasm) wasm.reset_run_state();
+      report = null;
+      compactReport = '';
+      const run = {
+        id: ++runSerial,
+        running: true,
+        suiteStarted: performance.now(),
+        initialVisibility: document.visibilityState,
+        hiddenDuringRun: document.hidden,
+        visibilityObservations: [],
+        stageReports: [],
+        kernels: [],
+        environment: null,
+        capabilities: null,
+        floatBehavior: null,
+        faerWasm: { ...DEFAULT_FAER_VERDICT },
+        wasmFailure: null,
+        guess,
+      };
+      activeRun = run;
+      recordVisibility(run);
+      guessCard.hidden = true;
+      verdict.classList.remove('visible');
+      downloadButton.disabled = true;
+      submitButton.disabled = true;
+      actionStatus.className = '';
+      actionStatus.textContent = '';
+      progressLabel.style.color = '';
+      progressLabel.textContent = 'loading the wasm laboratory…';
+      runSuite(run).catch(error => emergencyVerdict(run, error));
+    }
+
+    function prepareForGuess() {
+      submissionGeneration += 1;
+      if (activeRun) activeRun.running = false;
+      if (wasm) wasm.reset_run_state();
+      activeRun = null;
+      report = null;
+      compactReport = '';
+      guessCard.hidden = false;
+      verdict.classList.remove('visible');
+      telemetry.classList.remove('visible');
+      guessReveal.textContent = '';
+      guessInput.value = '';
+      guessNote.textContent = 'The laboratory waits for either choice.';
+      progress.style.width = '0';
+      progressLabel.style.color = '';
+      progressLabel.textContent = 'waiting for your guess, or your dignified refusal…';
+      downloadButton.disabled = true;
+      submitButton.disabled = true;
+      actionStatus.className = '';
+      actionStatus.textContent = '';
+      for (const [stageId] of STAGES) showStage(stageId, 'waiting', 'waiting');
+    }
+
+    guessButton.addEventListener('click', () => {
+      const guess = Number(guessInput.value);
+      if (!Number.isInteger(guess) || guess < 1 || guess > 1024) {
+        guessNote.textContent = 'Enter one whole number from 1 through 1024, or skip with your dignity intact.';
+        guessInput.focus();
+        return;
+      }
+      beginRun(guess);
     });
+    skipButton.addEventListener('click', () => beginRun(null));
+    guessInput.addEventListener('keydown', event => {
+      if (event.key === 'Enter') guessButton.click();
+    });
+    runAgainButton.addEventListener('click', prepareForGuess);
+
+    prepareForGuess();
   </script>
 </body>
 </html>

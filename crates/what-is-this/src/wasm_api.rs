@@ -16,7 +16,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use wasm_bindgen::prelude::*;
 
-use crate::{FloatProbeResult, KernelSuite, jank_chunk, kernel_specs};
+use crate::{FloatProbeResult, KernelSuite, derive_verdict, jank_chunk, kernel_specs};
 
 thread_local! {
     static KERNELS: RefCell<KernelSuite> = RefCell::new(KernelSuite::new());
@@ -182,6 +182,29 @@ pub fn faer_wasm_verdict_json() -> String {
             .to_string(),
     })
     .unwrap_or_else(|_| "{}".to_string())
+}
+
+/// Resets per-run kernel buffers and any previous submission connection.
+#[wasm_bindgen]
+pub fn reset_run_state() {
+    KERNELS.with_borrow_mut(|kernels| *kernels = KernelSuite::new());
+    SUBMISSION.with_borrow_mut(|slot| *slot = None);
+}
+
+/// Returns the deterministic, measurement-derived verdict presentation as JSON.
+///
+/// # Errors
+///
+/// Returns a JavaScript error when the supplied document is not a valid schema-1 report.
+#[wasm_bindgen]
+pub fn verdict_json(report_json: &str) -> Result<String, JsValue> {
+    let report = serde_json::from_str::<DiagnosticReport>(report_json)
+        .map_err(|error| JsValue::from_str(&format!("report does not match schema 1: {error}")))?;
+    report
+        .validate()
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serde_json::to_string(&derive_verdict(&report))
+        .map_err(|error| JsValue::from_str(&format!("could not encode verdict: {error}")))
 }
 
 /// Validates and starts the sole opt-in network submission through the canonical outer protocol.
