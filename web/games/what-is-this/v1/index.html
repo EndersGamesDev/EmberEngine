@@ -101,7 +101,15 @@
     const ROOT = new URL('../../../', location);
     const RAW_SAMPLE_CAP = 120;
     const REPORT_BYTE_CAP = 52 * 1024;
-    const TIMER_CAVEAT = 'Browser timer precision, privacy rounding, page visibility, thermal state, background work, and scheduler decisions bound the meaning of every duration; values below the observed performance.now() resolution are not distinguishable.';
+    const TIMER_TRANSITION_TARGET = 32;
+    const TIMER_PROBE_MAX_READS = 4_000_000;
+    const TIMER_PROBE_MAX_WALL_MS = 500;
+    const KERNEL_TARGET_TIMER_QUANTA = 32;
+    const KERNEL_MAX_REPEAT_COUNT = 1_048_576;
+    const KERNEL_MAX_BATCH_TARGET_MS = 320;
+    const KERNEL_TOTAL_BUDGET_MS = 5_000;
+    const MEMCPY_MIB_PER_BASE_INVOCATION = 16;
+    const TIMER_CAVEAT = 'Browser timer precision, privacy rounding, page visibility, thermal state, background work, and scheduler decisions bound the meaning of every duration; values below the observed performance.now() resolution are not distinguishable, and exact multiples of that quantum are bucketed observations rather than exact durations.';
     const GPU_UNAVAILABLE = 'ember-engine v1 exposes Renderer only through a winit-owned surface event loop; Renderer::new panics on adapter or device failure and exposes no fallible offscreen timing or adapter-info seam, so this optional stage cannot run without risking the rest of the suite.';
     const stageReports = [];
     const kernels = [];
@@ -235,30 +243,51 @@
       let zeroDeltaCount = 0;
       let monotonicityViolations = 0;
       let previous = performance.now();
-      for (let index = 0; index < 4096; index += 1) {
+      let readCount = 0;
+      const wallStarted = Date.now();
+      while (readCount < TIMER_PROBE_MAX_READS && positives.length < TIMER_TRANSITION_TARGET) {
         const current = performance.now();
         const delta = current - previous;
         if (delta > 0) positives.push(delta);
         else if (delta === 0) zeroDeltaCount += 1;
         else monotonicityViolations += 1;
         previous = current;
+        readCount += 1;
+        if (readCount % 4096 === 0 && Date.now() - wallStarted >= TIMER_PROBE_MAX_WALL_MS) break;
       }
+      const resolution = positives.length ? Math.min(...positives) : null;
       completeKernel(
-        'environment.performance-now.v1',
-        '4096 consecutive performance.now() reads; positive deltas summarized before raw-sample capping',
+        'environment.performance-now.v2',
+        'up to 4000000 consecutive performance.now() reads, stopping after 32 positive transitions or 500 ms; positive deltas summarized before raw-sample capping',
         'ms',
         0,
         positives,
-        [TIMER_CAVEAT, `${zeroDeltaCount} equal readings; ${monotonicityViolations} backwards readings`],
+        [TIMER_CAVEAT, `${readCount} reads; ${zeroDeltaCount} equal readings; ${monotonicityViolations} backwards readings`, resolution == null ? 'effective timer quantum was not observed within the bounded probe' : `measured effective timer quantum ${resolution} ms`],
       );
       return {
-        resolution_ms: positives.length ? Math.min(...positives) : null,
+        resolution_ms: resolution,
         zero_delta_count: zeroDeltaCount,
         monotonicity_violations: monotonicityViolations,
         positive_delta_samples_ms: capSamples(positives),
         positive_delta_summary: summarize(positives),
         caveat: TIMER_CAVEAT,
       };
+    }
+
+    function timerQuantumNote(subject) {
+      const quantum = environment?.timer?.resolution_ms;
+      if (!Number.isFinite(quantum) || quantum <= 0) return `${subject} has no measured effective timer quantum; sub-millisecond interpretation is unavailable.`;
+      return `${subject} uses timestamps quantized to the measured effective performance.now() quantum of ${quantum} ms; equal-looking values and differences below that quantum are not distinguishable.`;
+    }
+
+    function unresolvableKernelReason(quantum, detail) {
+      return `kernel is unresolvable under the measured performance.now() quantum of ${quantum} ms: ${detail}`;
+    }
+
+    function normalizedKernelSample(spec, elapsedMs, repeatCount) {
+      const perInvocationMs = elapsedMs / repeatCount;
+      if (spec.unit === 'MiB/s') return MEMCPY_MIB_PER_BASE_INVOCATION * 1000 / perInvocationMs;
+      return perInvocationMs;
     }
 
     function featureProbe(kernelId, available, unavailableReason = null) {
@@ -305,22 +334,69 @@
         throw new Error(wasmFailure);
       }
       const inventory = JSON.parse(wasm.kernel_inventory_json());
+      if (!Array.isArray(inventory) || inventory.length === 0) {
+        throw new Error('diagnostic wasm returned an empty timed-kernel inventory');
+      }
+      const quantum = environment?.timer?.resolution_ms;
+      if (!Number.isFinite(quantum) || quantum <= 0) {
+        const unavailableReason = 'kernel is unresolvable because the bounded timer probe measured no positive performance.now() transition';
+        for (const spec of inventory) unavailableKernel(spec.kernel_id, spec.workload, spec.unit, unavailableReason, [TIMER_CAVEAT]);
+        throw new Error(unavailableReason);
+      }
+      const targetElapsedMs = quantum * KERNEL_TARGET_TIMER_QUANTA;
+      const minimumSamplingWallMs = targetElapsedMs * inventory[0].sample_runs;
+      if (targetElapsedMs > KERNEL_MAX_BATCH_TARGET_MS) {
+        const unavailableReason = unresolvableKernelReason(quantum, `the ${KERNEL_TARGET_TIMER_QUANTA}-quantum target is ${targetElapsedMs} ms, above the ${KERNEL_MAX_BATCH_TARGET_MS} ms batch-target cap`);
+        for (const spec of inventory) unavailableKernel(spec.kernel_id, spec.workload, spec.unit, unavailableReason, [TIMER_CAVEAT]);
+        throw new Error(unavailableReason);
+      }
+      if (minimumSamplingWallMs > KERNEL_TOTAL_BUDGET_MS) {
+        const unavailableReason = unresolvableKernelReason(quantum, `the ${KERNEL_TARGET_TIMER_QUANTA}-quantum target is ${targetElapsedMs} ms and cannot fit the ${KERNEL_TOTAL_BUDGET_MS} ms per-kernel budget`);
+        for (const spec of inventory) unavailableKernel(spec.kernel_id, spec.workload, spec.unit, unavailableReason, [TIMER_CAVEAT]);
+        throw new Error(unavailableReason);
+      }
       for (const spec of inventory) {
+        const workload = `${spec.workload}; every reported sample normalizes one adaptive repeated batch to one base invocation`;
         try {
-          for (let index = 0; index < spec.warmup_runs; index += 1) wasm.run_kernel(spec.kernel_id);
+          for (let index = 0; index < spec.warmup_runs; index += 1) {
+            const warmupChecksum = wasm.run_kernel(spec.kernel_id);
+            if (!Number.isFinite(warmupChecksum)) throw new Error(`kernel checksum was non-finite during warmup ${index + 1}`);
+          }
           const samples = [];
+          const repeatCounts = [];
+          const batchElapsedMs = [];
+          const kernelStarted = performance.now();
+          let repeatCount = 1;
           let checksum = 0;
           for (let index = 0; index < spec.sample_runs; index += 1) {
-            const started = performance.now();
-            checksum = wasm.run_kernel(spec.kernel_id);
-            const elapsed = performance.now() - started;
-            if (!Number.isFinite(checksum) || elapsed <= 0) throw new Error('kernel result was non-finite or below the observed timer resolution');
-            samples.push(spec.unit === 'MiB/s' ? 16000 / elapsed : elapsed);
+            while (true) {
+              if (performance.now() - kernelStarted >= KERNEL_TOTAL_BUDGET_MS) {
+                throw new Error(unresolvableKernelReason(quantum, `fewer than ${spec.sample_runs} samples reached ${KERNEL_TARGET_TIMER_QUANTA} quanta within the ${KERNEL_TOTAL_BUDGET_MS} ms per-kernel budget`));
+              }
+              const started = performance.now();
+              checksum = wasm.run_kernel_repeated(spec.kernel_id, repeatCount);
+              const elapsed = performance.now() - started;
+              if (!Number.isFinite(checksum)) throw new Error(`kernel checksum was non-finite after ${repeatCount} adaptive repeats`);
+              if (elapsed >= targetElapsedMs) {
+                const normalized = normalizedKernelSample(spec, elapsed, repeatCount);
+                if (!Number.isFinite(normalized)) throw new Error(unresolvableKernelReason(quantum, `normalization of ${elapsed} ms over ${repeatCount} repeats was non-finite`));
+                samples.push(normalized);
+                repeatCounts.push(repeatCount);
+                batchElapsedMs.push(elapsed);
+                break;
+              }
+              if (repeatCount >= KERNEL_MAX_REPEAT_COUNT) {
+                throw new Error(unresolvableKernelReason(quantum, `${KERNEL_MAX_REPEAT_COUNT} repeats spanned only ${elapsed} ms, below the ${targetElapsedMs} ms target`));
+              }
+              const scaled = elapsed > 0 ? Math.ceil(repeatCount * targetElapsedMs / elapsed * 1.125) : repeatCount * 8;
+              repeatCount = Math.min(KERNEL_MAX_REPEAT_COUNT, Math.max(repeatCount + 1, scaled));
+            }
             await new Promise(resolve => setTimeout(resolve, 0));
           }
-          completeKernel(spec.kernel_id, spec.workload, spec.unit, spec.warmup_runs, samples, [TIMER_CAVEAT, `opaque checksum ${checksum}`]);
+          const normalizationNote = spec.unit === 'MiB/s' ? `${MEMCPY_MIB_PER_BASE_INVOCATION} MiB per base invocation × repeat count ÷ batch seconds; reported samples are bandwidth, not elapsed milliseconds` : 'batch elapsed milliseconds ÷ repeat count';
+          completeKernel(spec.kernel_id, workload, spec.unit, spec.warmup_runs, samples, [TIMER_CAVEAT, `measured timer quantum ${quantum} ms; batch target ${KERNEL_TARGET_TIMER_QUANTA} quanta (${targetElapsedMs} ms)`, `adaptive repeat counts per recorded sample: ${repeatCounts.join(', ')}`, `batch elapsed milliseconds per recorded sample: ${batchElapsedMs.join(', ')}`, `normalization: ${normalizationNote}`, `opaque checksum ${checksum}`]);
         } catch (error) {
-          unavailableKernel(spec.kernel_id, spec.workload, spec.unit, reason(error), [TIMER_CAVEAT]);
+          unavailableKernel(spec.kernel_id, workload, spec.unit, reason(error), [TIMER_CAVEAT]);
         }
       }
     }
@@ -397,7 +473,7 @@
         'ms',
         0,
         deltas,
-        [`estimated refresh ${Number.isFinite(1000 / baseline) ? (1000 / baseline).toFixed(2) : 'unavailable'} Hz`, `${missedFrames} estimated missed frames`, `document visibility at completion: ${document.visibilityState}`],
+        [`estimated refresh ${Number.isFinite(1000 / baseline) ? (1000 / baseline).toFixed(2) : 'unavailable'} Hz`, `${missedFrames} estimated missed frames`, `document visibility at completion: ${document.visibilityState}`, timerQuantumNote('requestAnimationFrame cadence')],
       );
       return { refreshHz: 1000 / baseline, missedFrames };
     }
@@ -420,7 +496,7 @@
         'ms',
         0,
         [burstDuration],
-        [`opaque checksum ${checksum}`, TIMER_CAVEAT],
+        [`opaque checksum ${checksum}`, TIMER_CAVEAT, timerQuantumNote('the 50 ms burst deadline and duration'), 'the actual compute burst may overshoot the displayed 50 ms by roughly one timer quantum plus one arithmetic chunk'],
       );
       completeKernel(
         'timing.post-burst-frame-gap.v1',
@@ -428,7 +504,7 @@
         'ms',
         0,
         [afterFrame - beforeFrame],
-        [TIMER_CAVEAT],
+        [TIMER_CAVEAT, timerQuantumNote('the frame gap spanning the compute burst')],
       );
     }
 
@@ -506,8 +582,8 @@
 
     async function runSuite() {
       try {
-        wasm = await import('./pkg/what_is_this.js?v=1');
-        await wasm.default({ module_or_path: './pkg/what_is_this_bg.wasm?v=1' });
+        wasm = await import('./pkg/what_is_this.js?v=2');
+        await wasm.default({ module_or_path: './pkg/what_is_this_bg.wasm?v=2' });
         faerWasm = JSON.parse(wasm.faer_wasm_verdict_json());
       } catch (error) {
         wasmFailure = `diagnostic wasm module unavailable: ${reason(error)}`;

@@ -25,7 +25,7 @@ const MEMCPY_BYTES_PER_RUN: usize = 16 * 1_024 * 1_024;
 pub struct KernelSpec {
     /// Stable versioned kernel identifier.
     pub kernel_id: &'static str,
-    /// Exact work performed by one timed invocation.
+    /// Exact work performed by one base invocation before adaptive batching.
     pub workload: &'static str,
     /// Unit recorded by the browser around the invocation.
     pub unit: &'static str,
@@ -37,120 +37,120 @@ pub struct KernelSpec {
 
 const KERNEL_SPECS: [KernelSpec; 17] = [
     KernelSpec {
-        kernel_id: "cpu.rank4-soa.n16.v1",
-        workload: "manual f64 SoA 4xN projection; N=16; 64 batches per sample",
+        kernel_id: "cpu.rank4-soa.n16.v2",
+        workload: "manual f64 SoA 4xN projection; N=16; 64 batches per base invocation",
         unit: "ms",
         warmup_runs: WARMUP_RUNS,
         sample_runs: SAMPLE_RUNS,
     },
     KernelSpec {
-        kernel_id: "cpu.rank4-soa.n64.v1",
-        workload: "manual f64 SoA 4xN projection; N=64; 64 batches per sample",
+        kernel_id: "cpu.rank4-soa.n64.v2",
+        workload: "manual f64 SoA 4xN projection; N=64; 64 batches per base invocation",
         unit: "ms",
         warmup_runs: WARMUP_RUNS,
         sample_runs: SAMPLE_RUNS,
     },
     KernelSpec {
-        kernel_id: "cpu.rank4-soa.n256.v1",
-        workload: "manual f64 SoA 4xN projection; N=256; 64 batches per sample",
+        kernel_id: "cpu.rank4-soa.n256.v2",
+        workload: "manual f64 SoA 4xN projection; N=256; 64 batches per base invocation",
         unit: "ms",
         warmup_runs: WARMUP_RUNS,
         sample_runs: SAMPLE_RUNS,
     },
     KernelSpec {
-        kernel_id: "cpu.rank4-soa.n1024.v1",
-        workload: "manual f64 SoA 4xN projection; N=1024; 64 batches per sample",
+        kernel_id: "cpu.rank4-soa.n1024.v2",
+        workload: "manual f64 SoA 4xN projection; N=1024; 64 batches per base invocation",
         unit: "ms",
         warmup_runs: WARMUP_RUNS,
         sample_runs: SAMPLE_RUNS,
     },
     KernelSpec {
-        kernel_id: "cpu.rank4-faer-seq.n16.v1",
-        workload: "faer 0.24.4 prepacked f64 4xN matmul with Par::Seq; N=16; 64 batches per sample",
+        kernel_id: "cpu.rank4-faer-seq.n16.v2",
+        workload: "faer 0.24.4 prepacked f64 4xN matmul with Par::Seq; N=16; 64 batches per base invocation",
         unit: "ms",
         warmup_runs: WARMUP_RUNS,
         sample_runs: SAMPLE_RUNS,
     },
     KernelSpec {
-        kernel_id: "cpu.rank4-faer-seq.n64.v1",
-        workload: "faer 0.24.4 prepacked f64 4xN matmul with Par::Seq; N=64; 64 batches per sample",
+        kernel_id: "cpu.rank4-faer-seq.n64.v2",
+        workload: "faer 0.24.4 prepacked f64 4xN matmul with Par::Seq; N=64; 64 batches per base invocation",
         unit: "ms",
         warmup_runs: WARMUP_RUNS,
         sample_runs: SAMPLE_RUNS,
     },
     KernelSpec {
-        kernel_id: "cpu.rank4-faer-seq.n256.v1",
-        workload: "faer 0.24.4 prepacked f64 4xN matmul with Par::Seq; N=256; 64 batches per sample",
+        kernel_id: "cpu.rank4-faer-seq.n256.v2",
+        workload: "faer 0.24.4 prepacked f64 4xN matmul with Par::Seq; N=256; 64 batches per base invocation",
         unit: "ms",
         warmup_runs: WARMUP_RUNS,
         sample_runs: SAMPLE_RUNS,
     },
     KernelSpec {
-        kernel_id: "cpu.rank4-faer-seq.n1024.v1",
-        workload: "faer 0.24.4 prepacked f64 4xN matmul with Par::Seq; N=1024; 64 batches per sample",
+        kernel_id: "cpu.rank4-faer-seq.n1024.v2",
+        workload: "faer 0.24.4 prepacked f64 4xN matmul with Par::Seq; N=1024; 64 batches per base invocation",
         unit: "ms",
         warmup_runs: WARMUP_RUNS,
         sample_runs: SAMPLE_RUNS,
     },
     KernelSpec {
-        kernel_id: "cpu.cholesky6-fixed.v1",
-        workload: "fixed f64 6x6 Cholesky factor-and-solve; 1024 solves per sample",
+        kernel_id: "cpu.cholesky6-fixed.v2",
+        workload: "fixed f64 6x6 Cholesky factor-and-solve; 1024 solves per base invocation",
         unit: "ms",
         warmup_runs: WARMUP_RUNS,
         sample_runs: SAMPLE_RUNS,
     },
     KernelSpec {
-        kernel_id: "cpu.cholesky6-faer-llt-seq.v1",
-        workload: "faer 0.24.4 f64 6x6 LLT factor-and-solve with sequential storage; 1024 solves per sample",
+        kernel_id: "cpu.cholesky6-faer-llt-seq.v2",
+        workload: "faer 0.24.4 f64 6x6 LLT factor-and-solve with sequential storage; 1024 solves per base invocation",
         unit: "ms",
         warmup_runs: WARMUP_RUNS,
         sample_runs: SAMPLE_RUNS,
     },
     KernelSpec {
-        kernel_id: "cpu.spin4-pair-fixed.v1",
-        workload: "two direct f64 quaternion products forming one Spin(4) rotor pair; 8192 pairs per sample",
+        kernel_id: "cpu.spin4-pair-fixed.v2",
+        workload: "two direct f64 quaternion products forming one Spin(4) rotor pair; 8192 pairs per base invocation",
         unit: "ms",
         warmup_runs: WARMUP_RUNS,
         sample_runs: SAMPLE_RUNS,
     },
     KernelSpec {
-        kernel_id: "cpu.spin4-pair-faer-seq.v1",
-        workload: "two faer 0.24.4 preallocated f64 4x4-by-4x1 products with Par::Seq; 8192 pairs per sample",
+        kernel_id: "cpu.spin4-pair-faer-seq.v2",
+        workload: "two faer 0.24.4 preallocated f64 4x4-by-4x1 products with Par::Seq; 8192 pairs per base invocation",
         unit: "ms",
         warmup_runs: WARMUP_RUNS,
         sample_runs: SAMPLE_RUNS,
     },
     KernelSpec {
-        kernel_id: "cpu.f32-transcendentals.v1",
-        workload: "dependent f32 sin/cos/sqrt throughput loop; 65536 iterations per sample",
+        kernel_id: "cpu.f32-transcendentals.v2",
+        workload: "dependent f32 sin/cos/sqrt throughput loop; 65536 iterations per base invocation",
         unit: "ms",
         warmup_runs: WARMUP_RUNS,
         sample_runs: SAMPLE_RUNS,
     },
     KernelSpec {
-        kernel_id: "cpu.memcpy.4k.v1",
-        workload: "copy_from_slice sweep at 4096 bytes; 16 MiB transferred per sample",
+        kernel_id: "cpu.memcpy.4k.v2",
+        workload: "copy_from_slice sweep at 4096 bytes; 16 MiB transferred per base invocation",
         unit: "MiB/s",
         warmup_runs: WARMUP_RUNS,
         sample_runs: SAMPLE_RUNS,
     },
     KernelSpec {
-        kernel_id: "cpu.memcpy.64k.v1",
-        workload: "copy_from_slice sweep at 65536 bytes; 16 MiB transferred per sample",
+        kernel_id: "cpu.memcpy.64k.v2",
+        workload: "copy_from_slice sweep at 65536 bytes; 16 MiB transferred per base invocation",
         unit: "MiB/s",
         warmup_runs: WARMUP_RUNS,
         sample_runs: SAMPLE_RUNS,
     },
     KernelSpec {
-        kernel_id: "cpu.memcpy.1m.v1",
-        workload: "copy_from_slice sweep at 1048576 bytes; 16 MiB transferred per sample",
+        kernel_id: "cpu.memcpy.1m.v2",
+        workload: "copy_from_slice sweep at 1048576 bytes; 16 MiB transferred per base invocation",
         unit: "MiB/s",
         warmup_runs: WARMUP_RUNS,
         sample_runs: SAMPLE_RUNS,
     },
     KernelSpec {
-        kernel_id: "cpu.memcpy.4m.v1",
-        workload: "copy_from_slice sweep at 4194304 bytes; 16 MiB transferred per sample",
+        kernel_id: "cpu.memcpy.4m.v2",
+        workload: "copy_from_slice sweep at 4194304 bytes; 16 MiB transferred per base invocation",
         unit: "MiB/s",
         warmup_runs: WARMUP_RUNS,
         sample_runs: SAMPLE_RUNS,
@@ -500,25 +500,41 @@ impl KernelSuite {
     /// Returns an error for an identifier outside [`kernel_specs`].
     pub fn run(&mut self, kernel_id: &str) -> Result<f64, String> {
         let checksum = match kernel_id {
-            "cpu.rank4-soa.n16.v1" => self.rank16.run_manual(),
-            "cpu.rank4-soa.n64.v1" => self.rank64.run_manual(),
-            "cpu.rank4-soa.n256.v1" => self.rank256.run_manual(),
-            "cpu.rank4-soa.n1024.v1" => self.rank1024.run_manual(),
-            "cpu.rank4-faer-seq.n16.v1" => self.rank16.run_faer(),
-            "cpu.rank4-faer-seq.n64.v1" => self.rank64.run_faer(),
-            "cpu.rank4-faer-seq.n256.v1" => self.rank256.run_faer(),
-            "cpu.rank4-faer-seq.n1024.v1" => self.rank1024.run_faer(),
-            "cpu.cholesky6-fixed.v1" => self.tiny.run_fixed_cholesky(),
-            "cpu.cholesky6-faer-llt-seq.v1" => self.tiny.run_faer_cholesky(),
-            "cpu.spin4-pair-fixed.v1" => self.tiny.run_fixed_spin(),
-            "cpu.spin4-pair-faer-seq.v1" => self.tiny.run_faer_spin(),
-            "cpu.f32-transcendentals.v1" => run_transcendental_throughput(),
-            "cpu.memcpy.4k.v1" => self.memcpy4k.run(),
-            "cpu.memcpy.64k.v1" => self.memcpy64k.run(),
-            "cpu.memcpy.1m.v1" => self.memcpy1m.run(),
-            "cpu.memcpy.4m.v1" => self.memcpy4m.run(),
+            "cpu.rank4-soa.n16.v2" => self.rank16.run_manual(),
+            "cpu.rank4-soa.n64.v2" => self.rank64.run_manual(),
+            "cpu.rank4-soa.n256.v2" => self.rank256.run_manual(),
+            "cpu.rank4-soa.n1024.v2" => self.rank1024.run_manual(),
+            "cpu.rank4-faer-seq.n16.v2" => self.rank16.run_faer(),
+            "cpu.rank4-faer-seq.n64.v2" => self.rank64.run_faer(),
+            "cpu.rank4-faer-seq.n256.v2" => self.rank256.run_faer(),
+            "cpu.rank4-faer-seq.n1024.v2" => self.rank1024.run_faer(),
+            "cpu.cholesky6-fixed.v2" => self.tiny.run_fixed_cholesky(),
+            "cpu.cholesky6-faer-llt-seq.v2" => self.tiny.run_faer_cholesky(),
+            "cpu.spin4-pair-fixed.v2" => self.tiny.run_fixed_spin(),
+            "cpu.spin4-pair-faer-seq.v2" => self.tiny.run_faer_spin(),
+            "cpu.f32-transcendentals.v2" => run_transcendental_throughput(),
+            "cpu.memcpy.4k.v2" => self.memcpy4k.run(),
+            "cpu.memcpy.64k.v2" => self.memcpy64k.run(),
+            "cpu.memcpy.1m.v2" => self.memcpy1m.run(),
+            "cpu.memcpy.4m.v2" => self.memcpy4m.run(),
             _ => return Err(format!("unknown diagnostic kernel id: {kernel_id}")),
         };
+        Ok(checksum)
+    }
+
+    /// Runs one exact workload repeatedly inside one wasm call and returns the last checksum.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for zero repeats or an identifier outside [`kernel_specs`].
+    pub fn run_repeated(&mut self, kernel_id: &str, repeat_count: u32) -> Result<f64, String> {
+        if repeat_count == 0 {
+            return Err("diagnostic kernel repeat count must be nonzero".to_string());
+        }
+        let mut checksum = self.run(kernel_id)?;
+        for _ in 1..repeat_count {
+            checksum = self.run(kernel_id)?;
+        }
         Ok(checksum)
     }
 }
@@ -657,8 +673,19 @@ mod tests {
         assert!(ids.iter().all(|kernel_id| {
             kernel_id
                 .rsplit_once('.')
-                .is_some_and(|(_, version)| version == "v1")
+                .is_some_and(|(_, version)| version == "v2")
         }));
+    }
+
+    #[test]
+    fn adaptive_batches_require_work_and_preserve_finite_checksums() {
+        let mut suite = KernelSuite::new();
+        assert!(
+            suite
+                .run_repeated("cpu.rank4-soa.n16.v2", 2)
+                .is_ok_and(f64::is_finite)
+        );
+        assert!(suite.run_repeated("cpu.rank4-soa.n16.v2", 0).is_err());
     }
 
     #[test]

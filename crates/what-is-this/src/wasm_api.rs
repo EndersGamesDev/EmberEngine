@@ -142,6 +142,20 @@ pub fn run_kernel(kernel_id: &str) -> Result<f64, JsValue> {
     })
 }
 
+/// Runs repeated base invocations inside one wasm call for coarse-timer measurement.
+///
+/// # Errors
+///
+/// Returns a JavaScript error for zero repeats or an unknown kernel identifier.
+#[wasm_bindgen]
+pub fn run_kernel_repeated(kernel_id: &str, repeat_count: u32) -> Result<f64, JsValue> {
+    KERNELS.with_borrow_mut(|kernels| {
+        kernels
+            .run_repeated(kernel_id, repeat_count)
+            .map_err(|error| JsValue::from_str(&error))
+    })
+}
+
 /// Runs one short arithmetic chunk for the page's controlled 50 ms main-thread burst.
 #[wasm_bindgen]
 pub fn run_jank_chunk() -> f64 {

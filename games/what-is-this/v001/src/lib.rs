@@ -245,7 +245,7 @@ pub struct StageReport {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KernelStatus {
-    /// The fixed workload ran and produced observations.
+    /// The base workload ran in resolved batches and produced observations.
     Complete,
     /// The workload could not safely run.
     Unavailable,
@@ -257,7 +257,7 @@ pub enum KernelStatus {
 pub struct KernelMeasurement {
     /// Stable versioned kernel identifier.
     pub kernel_id: String,
-    /// Fixed workload description, including sizes and repetition counts.
+    /// Base workload and timing strategy, including adaptive batching when used.
     pub workload: String,
     /// Unit shared by raw samples and summary values.
     pub unit: String,
@@ -271,7 +271,7 @@ pub struct KernelMeasurement {
     pub raw_samples: Vec<f64>,
     /// Summary over the complete uncapped observation set.
     pub summary: Option<SummaryStats>,
-    /// Kernel-specific caveats and non-numeric facts.
+    /// Kernel-specific caveats, adaptive repeat counts, and non-numeric facts.
     pub notes: Vec<String>,
 }
 
