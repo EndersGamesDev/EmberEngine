@@ -8,8 +8,8 @@ use ember_client_net::{
     WireFrame,
 };
 use ember_game_what_is_this_v1::{
-    ClientMessage, DiagnosticReport, FaerWasmVerdict, GAME_ID, GAME_VERSION,
-    MAX_INNER_FRAME_BYTES, ServerMessage,
+    ClientMessage, DiagnosticReport, FaerWasmVerdict, GAME_ID, GAME_VERSION, MAX_INNER_FRAME_BYTES,
+    ServerMessage,
 };
 use ember_net::outer::{CreateLobby, Hello, OUTER_VERSION};
 use serde::Serialize;
@@ -47,7 +47,8 @@ impl Submission {
             receipt_id: self.receipt_id.as_deref(),
         })
         .unwrap_or_else(|_| {
-            r#"{"state":"failed","detail":"could not encode submission status","receipt_id":null}"#.to_string()
+            r#"{"state":"failed","detail":"could not encode submission status","receipt_id":null}"#
+                .to_string()
         })
     }
 
@@ -91,7 +92,8 @@ impl Submission {
                     Ok(()) => {
                         self.sent = true;
                         self.state = "submitting".to_string();
-                        self.detail = "report sent once; waiting for the server receipt".to_string();
+                        self.detail =
+                            "report sent once; waiting for the server receipt".to_string();
                     }
                     Err(error) => {
                         self.state = "failed".to_string();
@@ -103,9 +105,10 @@ impl Submission {
             ConnectionProgress::Browsing => {
                 let diagnostics = self.connection.diagnostics();
                 self.state = "failed".to_string();
-                self.detail = diagnostics.handshake.last().cloned().unwrap_or_else(|| {
-                    "server left the submission in browsing state".to_string()
-                });
+                self.detail =
+                    diagnostics.handshake.last().cloned().unwrap_or_else(|| {
+                        "server left the submission in browsing state".to_string()
+                    });
             }
             ConnectionProgress::Closed(reason) => {
                 self.state = "failed".to_string();
@@ -192,10 +195,10 @@ pub fn start_submission(server_url: &str, report_json: &str) -> Result<(), JsVal
     let message = ClientMessage::SubmitReport {
         report: Box::new(report),
     };
-    let report_frame = WireFrame::Text(
-        serde_json::to_string(&message)
-            .map_err(|error| JsValue::from_str(&format!("could not encode submission: {error}")))?,
-    );
+    let report_frame =
+        WireFrame::Text(serde_json::to_string(&message).map_err(|error| {
+            JsValue::from_str(&format!("could not encode submission: {error}"))
+        })?);
     let handshake = CanonicalHandshake::new(
         Hello {
             outer_version: OUTER_VERSION,

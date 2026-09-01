@@ -347,7 +347,9 @@ impl std::fmt::Display for ReportValidationError {
                 formatter,
                 "report is {bytes} bytes; maximum is {MAX_REPORT_BYTES}"
             ),
-            Self::NotSerializable(message) => write!(formatter, "report is not serializable: {message}"),
+            Self::NotSerializable(message) => {
+                write!(formatter, "report is not serializable: {message}")
+            }
         }
     }
 }
@@ -371,7 +373,10 @@ impl DiagnosticReport {
         }
         for stage in &self.stages {
             if stage.status == StageStatus::Unavailable
-                && stage.unavailable_reason.as_deref().is_none_or(str::is_empty)
+                && stage
+                    .unavailable_reason
+                    .as_deref()
+                    .is_none_or(str::is_empty)
             {
                 return Err(ReportValidationError::MissingUnavailableReason(
                     stage.stage_id.clone(),
@@ -561,12 +566,7 @@ impl ReportSession {
             report_json = %report_json,
             "accepted what-is-this diagnostic report"
         );
-        let mut update = Self::response(
-            peer_id,
-            &ServerMessage::Accepted {
-                receipt_id,
-            },
-        );
+        let mut update = Self::response(peer_id, &ServerMessage::Accepted { receipt_id });
         update.closes.push(CloseRequest {
             peer_id,
             reason: CloseReason::Requested,

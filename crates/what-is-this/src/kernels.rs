@@ -225,9 +225,7 @@ impl<const N: usize> ProjectionKernel<N> {
 
     fn run_manual(&mut self) -> f64 {
         for _ in 0..PROJECTION_REPEATS {
-            for (output_row, projection_row) in
-                self.manual_out.iter_mut().zip(&self.projection)
-            {
+            for (output_row, projection_row) in self.manual_out.iter_mut().zip(&self.projection) {
                 for (column, output) in output_row.iter_mut().enumerate() {
                     *output = projection_row
                         .iter()
@@ -332,12 +330,7 @@ fn quaternion_product(lhs: [f64; 4], rhs: [f64; 4]) -> [f64; 4] {
 
 fn quaternion_left_matrix(quaternion: [f64; 4]) -> [[f64; 4]; 4] {
     let [x, y, z, w] = quaternion;
-    [
-        [w, -z, y, x],
-        [z, w, -x, y],
-        [-y, x, w, z],
-        [-x, -y, -z, w],
-    ]
+    [[w, -z, y, x], [z, w, -x, y], [-y, x, w, z], [-x, -y, -z, w]]
 }
 
 struct TinyKernels {
@@ -561,17 +554,53 @@ impl FloatProbeResult {
         let separated = product + addend;
         let fused = multiplicand.mul_add(multiplier, addend);
         let references = [
-            (0xc47a_0000, -0.826_879_540_532_002_5, 0.562_379_076_290_702_9),
-            (0xc049_0fdb, 8.742_278_000_372_475e-8, -0.999_999_999_999_996_2),
-            (0xbf80_0000, -0.841_470_984_807_896_5, 0.540_302_305_868_139_8),
-            (0xbdcc_cccd, -0.099_833_418_129_499_9, 0.995_004_165_129_262_4),
+            (
+                0xc47a_0000,
+                -0.826_879_540_532_002_5,
+                0.562_379_076_290_702_9,
+            ),
+            (
+                0xc049_0fdb,
+                8.742_278_000_372_475e-8,
+                -0.999_999_999_999_996_2,
+            ),
+            (
+                0xbf80_0000,
+                -0.841_470_984_807_896_5,
+                0.540_302_305_868_139_8,
+            ),
+            (
+                0xbdcc_cccd,
+                -0.099_833_418_129_499_9,
+                0.995_004_165_129_262_4,
+            ),
             (0x0000_0000, 0.0, 1.0),
             (0x0080_0000, 1.175_494_350_822_287_5e-38, 1.0),
-            (0x3dcc_cccd, 0.099_833_418_129_499_9, 0.995_004_165_129_262_4),
-            (0x3f80_0000, 0.841_470_984_807_896_5, 0.540_302_305_868_139_8),
-            (0x3fc9_0fdb, 0.999_999_999_999_999, -4.371_139_000_186_241e-8),
-            (0x4049_0fdb, -8.742_278_000_372_475e-8, -0.999_999_999_999_996_2),
-            (0x447a_0000, 0.826_879_540_532_002_5, 0.562_379_076_290_702_9),
+            (
+                0x3dcc_cccd,
+                0.099_833_418_129_499_9,
+                0.995_004_165_129_262_4,
+            ),
+            (
+                0x3f80_0000,
+                0.841_470_984_807_896_5,
+                0.540_302_305_868_139_8,
+            ),
+            (
+                0x3fc9_0fdb,
+                0.999_999_999_999_999,
+                -4.371_139_000_186_241e-8,
+            ),
+            (
+                0x4049_0fdb,
+                -8.742_278_000_372_475e-8,
+                -0.999_999_999_999_996_2,
+            ),
+            (
+                0x447a_0000,
+                0.826_879_540_532_002_5,
+                0.562_379_076_290_702_9,
+            ),
         ];
         let transcendentals = references
             .into_iter()
@@ -583,16 +612,10 @@ impl FloatProbeResult {
                     input_bits,
                     sin_reference_f64,
                     sin_observed_bits,
-                    sin_ulp: ulp_distance(
-                        sin_observed_bits,
-                        (sin_reference_f64 as f32).to_bits(),
-                    ),
+                    sin_ulp: ulp_distance(sin_observed_bits, (sin_reference_f64 as f32).to_bits()),
                     cos_reference_f64,
                     cos_observed_bits,
-                    cos_ulp: ulp_distance(
-                        cos_observed_bits,
-                        (cos_reference_f64 as f32).to_bits(),
-                    ),
+                    cos_ulp: ulp_distance(cos_observed_bits, (cos_reference_f64 as f32).to_bits()),
                 }
             })
             .collect();
@@ -641,7 +664,10 @@ mod tests {
     #[test]
     fn classic_fma_probe_separates_fused_rounding() {
         let result = FloatProbeResult::measure();
-        assert_ne!(result.fma.fused_result_bits, result.fma.separated_result_bits);
+        assert_ne!(
+            result.fma.fused_result_bits,
+            result.fma.separated_result_bits
+        );
         assert_eq!(result.transcendentals.len(), 11);
     }
 }
