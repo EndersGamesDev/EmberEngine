@@ -1012,7 +1012,7 @@ impl Hub {
         }
     }
 
-    fn accept_hello(&mut self, connection: &mut Connection, hello: outer::Hello) {
+    fn accept_hello(&self, connection: &mut Connection, hello: outer::Hello) {
         if !valid_handle(&hello.handle) {
             self.reject_outer(
                 connection,
