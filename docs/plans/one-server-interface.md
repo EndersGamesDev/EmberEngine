@@ -111,6 +111,8 @@ pub trait LegacyRandom: Send + Sync {
     fn draw_u64(&self, key: &RandomDrawKey) -> u64;
     fn fill_bytes(&self, key: &RandomDrawKey, output: &mut [u8]);
 }
+
+pub struct FrozenKeyedRandom;
 ```
 
 The trait key is frozen at this commit; the exact byte-level derivation is finalized after the freeze and, once recorded in this document, becomes frozen gameplay semantics.
@@ -639,6 +641,12 @@ Both limits-profile identifiers contain `estate-measurement-required`; they are 
 
 ## Frozen randomness construction
 
-Pending post-freeze implementation; the trait key and required inputs are frozen above, while the exact domain separator, field encoding, hash expansion, endianness, and draw extraction will be added here before implementation is complete and will then be immutable semantics.
+`FrozenKeyedRandom` is the reference implementation and its construction is frozen semantics: each 32-byte block is SHA-256 over the exact concatenation of the ASCII domain separator `ember-legacy/random/v1` followed by one zero byte; the game-id byte length as unsigned LEB128 followed by its UTF-8 bytes; `game_version` as four-byte big-endian; the 32 lobby-seed bytes; the stream-key byte length as unsigned LEB128 followed by its UTF-8 bytes; `event_index` as eight-byte big-endian; and the block index as eight-byte big-endian.
+
+`draw_u64` uses block index zero and interprets the first eight digest bytes as big-endian; `fill_bytes` concatenates digest blocks starting at index zero and truncates only the final block, so the first eight bytes of `fill_bytes` equal the big-endian representation of `draw_u64` for the same key.
+
+The committed known vector for `arena/12`, a seed of 32 bytes each equal to hexadecimal `5a`, stream key `spawn/player`, and event index 7 has block-zero digest `fb4ca75ed6703db8979c28622a84ec2fb4a9c3f02b4a4bef9e229b5d7911c95b` and `draw_u64` value `fb4ca75ed6703db8` in hexadecimal.
 
 ## Post-freeze additive changelog
+
+- Added `pub struct FrozenKeyedRandom;` as the reference `LegacyRandom` implementation; no frozen signature changed.

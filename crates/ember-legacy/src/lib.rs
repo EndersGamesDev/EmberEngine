@@ -8,11 +8,12 @@
 // Contract names remain explicit when imported beside current runtime types.
 #![allow(clippy::module_name_repetitions)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// A permanent game identity paired with one frozen wire and rules version.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -210,6 +211,64 @@ pub trait LegacyRandom: Send + Sync {
 
     /// Fills bytes deterministically from the complete draw key.
     fn fill_bytes(&self, key: &RandomDrawKey, output: &mut [u8]);
+}
+
+/// Frozen SHA-256 counter-mode implementation of deterministic keyed draws.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FrozenKeyedRandom;
+
+impl FrozenKeyedRandom {
+    const DOMAIN: &'static [u8] = b"ember-legacy/random/v1\0";
+
+    fn update_length(hasher: &mut Sha256, mut length: usize) {
+        loop {
+            let low_bits = u8::try_from(length & 0x7f).unwrap_or_default();
+            length >>= 7;
+            if length == 0 {
+                hasher.update([low_bits]);
+                break;
+            }
+            hasher.update([low_bits | 0x80]);
+        }
+    }
+
+    fn derive_block(key: &RandomDrawKey, block_index: u64) -> [u8; 32] {
+        let game_id = key.game_key.game_id.as_bytes();
+        let stream_key = key.stream_key.0.as_bytes();
+        let mut hasher = Sha256::new();
+        hasher.update(Self::DOMAIN);
+        Self::update_length(&mut hasher, game_id.len());
+        hasher.update(game_id);
+        hasher.update(key.game_key.game_version.to_be_bytes());
+        hasher.update(key.lobby_seed.0);
+        Self::update_length(&mut hasher, stream_key.len());
+        hasher.update(stream_key);
+        hasher.update(key.event_index.to_be_bytes());
+        hasher.update(block_index.to_be_bytes());
+        let digest = hasher.finalize();
+        let mut block = [0_u8; 32];
+        block.copy_from_slice(&digest);
+        block
+    }
+}
+
+impl LegacyRandom for FrozenKeyedRandom {
+    fn draw_u64(&self, key: &RandomDrawKey) -> u64 {
+        let block = Self::derive_block(key, 0);
+        u64::from_be_bytes([
+            block[0], block[1], block[2], block[3], block[4], block[5], block[6], block[7],
+        ])
+    }
+
+    fn fill_bytes(&self, key: &RandomDrawKey, output: &mut [u8]) {
+        let mut block_index = 0_u64;
+        for chunk in output.chunks_mut(32) {
+            let block = Self::derive_block(key, block_index);
+            let chunk_length = chunk.len();
+            chunk.copy_from_slice(&block[..chunk_length]);
+            block_index = block_index.wrapping_add(1);
+        }
+    }
 }
 
 /// An opaque host-owned connection identity.
@@ -844,14 +903,53 @@ pub fn parse_hosted_manifest(source: &str) -> Result<HostedManifest, ManifestPar
 pub fn validate_hosted_manifest(
     manifest: &HostedManifest,
 ) -> Result<(), Vec<ManifestValidationError>> {
-    let errors: Vec<_> = manifest
-        .games
-        .iter()
-        .filter(|game| !is_valid_game_id(&game.game_id))
-        .map(|game| ManifestValidationError::InvalidGameId {
-            game_id: game.game_id.clone(),
-        })
-        .collect();
+    let mut errors = Vec::new();
+    let mut game_keys = BTreeSet::new();
+    let mut latest_games = BTreeSet::new();
+    let mut legacy_selectors = BTreeSet::new();
+
+    for game in &manifest.games {
+        let game_key = game.game_key();
+        if !is_valid_game_id(&game.game_id) {
+            errors.push(ManifestValidationError::InvalidGameId {
+                game_id: game.game_id.clone(),
+            });
+        }
+        if !game_keys.insert(game_key.clone()) {
+            errors.push(ManifestValidationError::DuplicateGameKey(game_key.clone()));
+        }
+        if game.latest && !latest_games.insert(game.game_id.clone()) {
+            errors.push(ManifestValidationError::MultipleLatest {
+                game_id: game.game_id.clone(),
+            });
+        }
+        if game.package.trim().is_empty() {
+            errors.push(ManifestValidationError::MissingPackage(game_key.clone()));
+        }
+        if game.limits_profile.trim().is_empty() {
+            errors.push(ManifestValidationError::MissingLimitsProfile(
+                game_key.clone(),
+            ));
+        }
+        if game.fixture_suite.trim().is_empty() {
+            errors.push(ManifestValidationError::MissingFixtureSuite(
+                game_key.clone(),
+            ));
+        }
+        if let Some(selector) = &game.legacy_game {
+            if !is_valid_legacy_selector(selector) {
+                errors.push(ManifestValidationError::InvalidLegacySelector {
+                    game_key,
+                    selector: selector.clone(),
+                });
+            } else if !legacy_selectors.insert(selector.clone()) {
+                errors.push(ManifestValidationError::DuplicateLegacySelector {
+                    selector: selector.clone(),
+                });
+            }
+        }
+    }
+
     if errors.is_empty() {
         Ok(())
     } else {
@@ -872,4 +970,121 @@ pub fn is_valid_game_id(game_id: &str) -> bool {
 #[must_use]
 pub fn is_valid_legacy_selector(selector: &str) -> bool {
     is_valid_game_id(selector)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_game(game_id: &str, game_version: u32) -> HostedGame {
+        HostedGame {
+            game_id: game_id.to_string(),
+            game_version,
+            package: format!("ember-game-{game_id}-v{game_version}"),
+            latest: true,
+            limits_profile: "measured-profile".to_string(),
+            fixture_suite: format!("{game_id}-v{game_version}-hosted-contract"),
+            legacy_game: None,
+        }
+    }
+
+    #[test]
+    fn checked_in_manifest_parses_and_validates() {
+        let source = include_str!("../../../games/hosted.toml");
+        let manifest = parse_hosted_manifest(source).expect("checked-in manifest must parse");
+        assert_eq!(manifest.games.len(), 2);
+        assert_eq!(validate_hosted_manifest(&manifest), Ok(()));
+    }
+
+    #[test]
+    fn duplicate_game_keys_are_rejected() {
+        let game = valid_game("arena", 12);
+        let manifest = HostedManifest {
+            games: vec![game.clone(), game],
+        };
+        let errors = validate_hosted_manifest(&manifest).expect_err("duplicate key must fail");
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            ManifestValidationError::DuplicateGameKey(GameKey {
+                game_id,
+                game_version: 12
+            }) if game_id == "arena"
+        )));
+    }
+
+    #[test]
+    fn two_latest_entries_for_one_game_are_rejected() {
+        let manifest = HostedManifest {
+            games: vec![valid_game("arena", 11), valid_game("arena", 12)],
+        };
+        let errors = validate_hosted_manifest(&manifest).expect_err("two latest entries must fail");
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            ManifestValidationError::MultipleLatest { game_id } if game_id == "arena"
+        )));
+    }
+
+    #[test]
+    fn missing_package_is_a_semantic_error() {
+        let source = r#"
+[[games]]
+game_id = "fire"
+game_version = 1
+latest = true
+limits_profile = "measured-profile"
+fixture_suite = "fire-v1-hosted-contract"
+"#;
+        let manifest = parse_hosted_manifest(source).expect("missing package uses its default");
+        let errors = validate_hosted_manifest(&manifest).expect_err("missing package must fail");
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            ManifestValidationError::MissingPackage(GameKey {
+                game_id,
+                game_version: 1
+            }) if game_id == "fire"
+        )));
+    }
+
+    #[test]
+    fn invalid_legacy_selector_is_rejected() {
+        let mut game = valid_game("arena", 12);
+        game.legacy_game = Some("Arena?".to_string());
+        let manifest = HostedManifest { games: vec![game] };
+        let errors =
+            validate_hosted_manifest(&manifest).expect_err("invalid legacy selector must fail");
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            ManifestValidationError::InvalidLegacySelector { selector, .. }
+                if selector == "Arena?"
+        )));
+    }
+
+    #[test]
+    fn keyed_randomness_is_repeatable_and_key_sensitive() {
+        let random = FrozenKeyedRandom;
+        let mut key = RandomDrawKey {
+            game_key: GameKey {
+                game_id: "arena".to_string(),
+                game_version: 12,
+            },
+            lobby_seed: LobbySeed([0x5a; 32]),
+            stream_key: RandomStreamKey("spawn/player".to_string()),
+            event_index: 7,
+        };
+        let first = random.draw_u64(&key);
+        assert_eq!(first, 0xfb4c_a75e_d670_3db8);
+        assert_eq!(first, random.draw_u64(&key));
+        let mut bytes = [0_u8; 40];
+        random.fill_bytes(&key, &mut bytes);
+        assert_eq!(
+            &bytes[..8],
+            &[0xfb, 0x4c, 0xa7, 0x5e, 0xd6, 0x70, 0x3d, 0xb8]
+        );
+        assert_eq!(
+            &bytes[32..],
+            &[0x93, 0xc2, 0x3a, 0xd5, 0x0d, 0x87, 0x82, 0x25]
+        );
+        key.event_index = 8;
+        assert_ne!(first, random.draw_u64(&key));
+    }
 }
