@@ -283,7 +283,7 @@ pub struct Renderer {
     #[cfg(not(target_arch = "wasm32"))]
     last_scene_at: std::time::Instant,
     #[cfg(not(target_arch = "wasm32"))]
-    overlay_renderer: Option<egui_wgpu::Renderer>,
+    egui_painter: Option<egui_wgpu::Renderer>,
 }
 
 /// Tracks shader sources on disk for native WGSL hot-reload.
@@ -622,7 +622,7 @@ impl Renderer {
             #[cfg(not(target_arch = "wasm32"))]
             last_scene_at: std::time::Instant::now(),
             #[cfg(not(target_arch = "wasm32"))]
-            overlay_renderer: None,
+            egui_painter: None,
         }
     }
 
@@ -846,7 +846,7 @@ impl Renderer {
         // the swapchain — UI never bakes into the reprojectable SceneFrame.
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(draw) = overlay {
-            let overlay_renderer = self.overlay_renderer.get_or_insert_with(|| {
+            let egui_painter = self.egui_painter.get_or_insert_with(|| {
                 egui_wgpu::Renderer::new(
                     &self.device,
                     self.surface_view_format.unwrap_or(self.config.format),
@@ -856,9 +856,9 @@ impl Renderer {
                 )
             });
             for (id, delta) in &draw.textures_delta.set {
-                overlay_renderer.update_texture(&self.device, &self.queue, *id, delta);
+                egui_painter.update_texture(&self.device, &self.queue, *id, delta);
             }
-            overlay_renderer.update_buffers(
+            egui_painter.update_buffers(
                 &self.device,
                 &self.queue,
                 &mut present_enc,
@@ -881,10 +881,10 @@ impl Renderer {
                     occlusion_query_set: None,
                 });
                 let mut rpass = rpass.forget_lifetime();
-                overlay_renderer.render(&mut rpass, &draw.primitives, &draw.screen);
+                egui_painter.render(&mut rpass, &draw.primitives, &draw.screen);
             }
             for id in &draw.textures_delta.free {
-                overlay_renderer.free_texture(id);
+                egui_painter.free_texture(id);
             }
         }
 
