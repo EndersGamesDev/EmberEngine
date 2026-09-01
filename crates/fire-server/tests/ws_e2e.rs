@@ -75,6 +75,59 @@ fn pump(ws: &mut Client, dur: Duration, mut f: impl FnMut(S2C) -> bool) -> bool 
     false
 }
 
+#[must_use]
+fn drive_until_progress(
+    a: &mut Client,
+    b: &mut Client,
+    a_slot: u8,
+    b_slot: u8,
+) -> (bool, f32, f32) {
+    let mut seq = 0u32;
+    let deadline = Instant::now() + Duration::from_secs(12);
+    let mut moved_a = 0.0f32;
+    let mut moved_b = 0.0f32;
+    let mut start_a: Option<(f32, f32)> = None;
+    let mut saw_racing = false;
+    while Instant::now() < deadline {
+        seq += 1;
+        let input = C2S::Input {
+            seq,
+            throttle: 1.0,
+            steer: 0.0,
+            handbrake: false,
+            boost: false,
+        };
+        send(a, &input);
+        send(b, &input);
+
+        pump(a, Duration::from_millis(60), |m| {
+            match m {
+                S2C::Phase {
+                    phase: Phase::Racing,
+                    ..
+                } => saw_racing = true,
+                S2C::State { cars, .. } => {
+                    let find = |slot: u8| cars.iter().find(|c| c.id == slot).copied();
+                    if let Some(c) = find(a_slot) {
+                        let p = start_a.get_or_insert((c.x, c.z));
+                        moved_a = (c.x - p.0).hypot(c.z - p.1);
+                    }
+                    if let Some(c) = find(b_slot) {
+                        moved_b = moved_b.max(c.progress);
+                    }
+                }
+                _ => {}
+            }
+            false
+        });
+        if saw_racing && moved_a > 40.0 && moved_b > 40.0 {
+            break;
+        }
+    }
+
+    (saw_racing, moved_a, moved_b)
+}
+
 #[test]
 fn two_players_join_a_lobby_and_race() {
     let port = start_server();
@@ -175,48 +228,8 @@ fn two_players_join_a_lobby_and_race() {
     );
 
     // Drive. Both hold throttle; the server is authoritative.
-    let mut seq = 0u32;
-    let deadline = Instant::now() + Duration::from_secs(12);
-    let mut moved_a = 0.0f32;
-    let mut moved_b = 0.0f32;
-    let mut start_a: Option<(f32, f32)> = None;
-    let mut saw_racing = false;
-    while Instant::now() < deadline {
-        seq += 1;
-        let input = C2S::Input {
-            seq,
-            throttle: 1.0,
-            steer: 0.0,
-            handbrake: false,
-            boost: false,
-        };
-        send(&mut a, &input);
-        send(&mut b, &input);
-
-        pump(&mut a, Duration::from_millis(60), |m| {
-            match m {
-                S2C::Phase {
-                    phase: Phase::Racing,
-                    ..
-                } => saw_racing = true,
-                S2C::State { cars, .. } => {
-                    let find = |slot: u8| cars.iter().find(|c| c.id == slot).copied();
-                    if let Some(c) = find(a_slot) {
-                        let p = start_a.get_or_insert((c.x, c.z));
-                        moved_a = ((c.x - p.0).powi(2) + (c.z - p.1).powi(2)).sqrt();
-                    }
-                    if let Some(c) = find(b_slot) {
-                        moved_b = moved_b.max(c.progress);
-                    }
-                }
-                _ => {}
-            }
-            false
-        });
-        if saw_racing && moved_a > 40.0 && moved_b > 40.0 {
-            break;
-        }
-    }
+    let (saw_racing, moved_a, moved_b) =
+        drive_until_progress(&mut a, &mut b, a_slot, b_slot);
 
     assert!(saw_racing, "the race never reached the Racing phase");
     assert!(
