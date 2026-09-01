@@ -16,7 +16,7 @@ type Client = WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>
 /// so reach through to the plain stream — these tests never use TLS.
 fn set_read_timeout(ws: &Client, d: Duration) {
     if let tungstenite::stream::MaybeTlsStream::Plain(s) = ws.get_ref() {
-        let _ = s.set_read_timeout(Some(d));
+        drop(s.set_read_timeout(Some(d)));
     }
 }
 
@@ -24,13 +24,13 @@ fn start_server() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     thread::spawn(move || {
-        let _ = fire_server::run(
+        drop(fire_server::run(
             listener,
             fire_server::ServerConfig {
                 laps: 1,
                 max_lobbies: 8,
             },
-        );
+        ));
     });
     // Give the accept loop a moment to come up.
     thread::sleep(Duration::from_millis(150));

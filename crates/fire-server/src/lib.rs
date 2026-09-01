@@ -173,7 +173,7 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
         }
     }
     drop(events_tx);
-    let _ = hub.join();
+    drop(hub.join());
     Ok(())
 }
 
@@ -181,9 +181,9 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
     let peer = stream
         .peer_addr()
         .map_or_else(|_| "?".into(), |address| address.to_string());
-    let _ = stream.set_nodelay(true);
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(15)));
+    drop(stream.set_nodelay(true));
+    drop(stream.set_read_timeout(Some(Duration::from_secs(10))));
+    drop(stream.set_write_timeout(Some(Duration::from_secs(15))));
 
     // Total handshake deadline. The per-read timeout alone is not enough: a
     // peer can send one byte per window forever and never finish.
@@ -200,7 +200,7 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
                     return;
                 }
             }
-            let _ = watch.shutdown(std::net::Shutdown::Both);
+            drop(watch.shutdown(std::net::Shutdown::Both));
         });
     }
 
@@ -220,9 +220,9 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
     // This thread owns the socket, so the outbound queue only drains between
     // reads. A short read timeout keeps a broadcast from sitting on the queue
     // for most of a tick before it reaches the wire.
-    let _ = ws
+    drop(ws
         .get_ref()
-        .set_read_timeout(Some(Duration::from_millis(5)));
+        .set_read_timeout(Some(Duration::from_millis(5))));
 
     let (tx, rx) = mpsc::sync_channel::<Message>(OUTBOUND_QUEUE);
     if events_tx
@@ -260,8 +260,8 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    let _ = ws.close(None);
-                    let _ = ws.flush();
+                    drop(ws.close(None));
+                    drop(ws.flush());
                     break 'outer;
                 }
             }
@@ -294,7 +294,7 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
             }
         }
     }
-    let _ = events_tx.send(Ev::Disconnected { id });
+    drop(events_tx.send(Ev::Disconnected { id }));
 }
 
 fn send_to(conns: &HashMap<u64, Conn>, id: u64, msg: &S2C) -> bool {
