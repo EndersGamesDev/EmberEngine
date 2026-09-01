@@ -22,13 +22,13 @@ fn init_logs() {
     use std::sync::Once;
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
-        let _ = tracing_subscriber::fmt()
+        drop(tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::try_from_default_env()
                     .unwrap_or_else(|_| "warn".into()),
             )
             .with_test_writer()
-            .try_init();
+            .try_init());
     });
 }
 
@@ -37,13 +37,13 @@ fn start_server(laps: u32) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     thread::spawn(move || {
-        let _ = fire_server::run(
+        drop(fire_server::run(
             listener,
             fire_server::ServerConfig {
                 laps,
                 max_lobbies: 8,
             },
-        );
+        ));
     });
     thread::sleep(Duration::from_millis(150));
     port

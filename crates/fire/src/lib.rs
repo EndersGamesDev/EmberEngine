@@ -1,3 +1,6 @@
+// Preserve established client simulation arithmetic and its rounding behavior.
+#![allow(clippy::suboptimal_flops)]
+
 //! Fire Racer — arcade racing through a gothic castle bailey.
 //!
 //! Controls: W/S throttle and brake, A/D steer, Space handbrake to drift,

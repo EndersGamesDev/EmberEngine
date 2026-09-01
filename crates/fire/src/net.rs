@@ -176,7 +176,7 @@ mod imp {
                         }
                     };
                     if let tungstenite::stream::MaybeTlsStream::Plain(s) = ws.get_ref() {
-                        let _ = s.set_read_timeout(Some(Duration::from_millis(5)));
+                        drop(s.set_read_timeout(Some(Duration::from_millis(5))));
                     }
                     set_status(&st, Status::Open);
                     loop {
@@ -231,7 +231,7 @@ mod imp {
 
         pub fn send(&self, msg: &C2S) {
             if let Ok(t) = serde_json::to_string(msg) {
-                let _ = self.tx.send(Message::text(t));
+                drop(self.tx.send(Message::text(t)));
             }
         }
 
