@@ -115,7 +115,7 @@ pub trait LegacyRandom: Send + Sync {
 pub struct FrozenKeyedRandom;
 ```
 
-The trait key is frozen at this commit; the exact byte-level derivation is finalized after the freeze and, once recorded in this document, becomes frozen gameplay semantics.
+The trait key froze in the interface commit; the byte-level construction recorded below was finalized additively after the freeze and is now frozen gameplay semantics.
 
 ### Session transport capability
 
