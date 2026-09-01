@@ -20,7 +20,7 @@ use crate::sound::{Audio, Sfx};
 
 /// One colored piece of a loaded GLB model.
 #[derive(Clone)]
-pub(crate) struct Part {
+pub struct Part {
     pub mesh: u32,
     pub color: Vec3,
     pub is_strip: bool,
@@ -28,7 +28,7 @@ pub(crate) struct Part {
 
 /// The Blender-authored viewmodel: pistol parts + hands/arms parts.
 #[derive(Clone, Default)]
-pub(crate) struct Assets {
+pub struct Assets {
     pub gun: Vec<Part>,
     pub arms: Vec<Part>,
 }
@@ -37,7 +37,7 @@ const VIEWMODEL_GLB: &[u8] = include_bytes!("../assets/viewmodel.glb");
 
 /// Load the GLB into engine meshes + part lists. Falls back to the classic
 /// cube pistol when the asset is missing/broken.
-pub(crate) fn load_assets() -> (Vec<ember_engine::MeshData>, Option<Assets>) {
+pub fn load_assets() -> (Vec<ember_engine::MeshData>, Option<Assets>) {
     match ember_engine::assets::load_glb(VIEWMODEL_GLB) {
         Ok(parts) => {
             let mut meshes = Vec::new();
@@ -88,7 +88,7 @@ fn tex(bytes: &[u8], name: &str) -> Option<ember_engine::TextureData> {
 /// Textured environment meshes, registered after the viewmodel GLB parts:
 /// `env_base` + 0 = floor plane (12x tiles), + 1 = wall/cover box (4x),
 /// + 2 = armor box (players, pads).
-pub(crate) fn env_meshes() -> Vec<ember_engine::MeshData> {
+pub fn env_meshes() -> Vec<ember_engine::MeshData> {
     use ember_engine::MeshData;
     vec![
         MeshData::textured_plane(12.0, tex(TEX_FLOOR, "floor_basalt")),
@@ -147,7 +147,7 @@ fn debug_camera() -> Option<Camera> {
 const BACKDROP_GLB: &[u8] = include_bytes!("../../../assets/models/level-backdrop.glb");
 
 /// Backdrop meshes, registered starting at `first_mesh`.
-pub(crate) fn backdrop_meshes(first_mesh: u32) -> (Vec<ember_engine::MeshData>, u32) {
+pub fn backdrop_meshes(first_mesh: u32) -> (Vec<ember_engine::MeshData>, u32) {
     match ember_engine::assets::load_glb(BACKDROP_GLB) {
         Ok(parts) => {
             let meshes: Vec<ember_engine::MeshData> = parts.into_iter().map(|p| p.mesh).collect();
@@ -168,7 +168,7 @@ const SWAT_RIG: &str = include_str!("../../../assets/models/swat-rig.json");
 
 /// Build the player character, registered starting at `first_mesh`: the
 /// SWAT operator when it loads, else the five AI-generated parts.
-pub(crate) fn part_meshes(
+pub fn part_meshes(
     first_mesh: u32,
 ) -> (
     Vec<ember_engine::MeshData>,
@@ -212,7 +212,7 @@ pub(crate) fn part_meshes(
 }
 
 /// Weapon-level accent color (the glow strip on the pistol).
-fn weapon_accent(level: u8) -> Vec3 {
+const fn weapon_accent(level: u8) -> Vec3 {
     match level {
         3 => Vec3::new(1.0, 0.25, 0.20),
         2 => Vec3::new(1.0, 0.55, 0.15),
@@ -280,27 +280,26 @@ impl OnlineConfig {
 
 /// Tab scoreboard: a monospace overlay on the web page (safe text-only
 /// rendering), nothing on native (the status log already carries scores).
+#[cfg(target_arch = "wasm32")]
 fn set_scoreboard(text: Option<&str>) {
-    #[cfg(target_arch = "wasm32")]
+    if let Some(el) = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id("scoreboard"))
     {
-        if let Some(el) = web_sys::window()
-            .and_then(|w| w.document())
-            .and_then(|d| d.get_element_by_id("scoreboard"))
-        {
-            match text {
-                Some(t) => {
-                    el.set_text_content(Some(t));
-                    let _ = el.remove_attribute("hidden");
-                }
-                None => {
-                    let _ = el.set_attribute("hidden", "");
-                }
+        match text {
+            Some(t) => {
+                el.set_text_content(Some(t));
+                drop(el.remove_attribute("hidden"));
+            }
+            None => {
+                drop(el.set_attribute("hidden", ""));
             }
         }
     }
-    #[cfg(not(target_arch = "wasm32"))]
-    let _ = text;
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+const fn set_scoreboard(_text: Option<&str>) {}
 
 /// Show progress where the player can see it: the page's #status element on
 /// the web, the log on native.
@@ -574,12 +573,12 @@ impl ShooterGame {
     }
 
     /// Where `env_meshes()` got registered (set by `run_online` after load).
-    pub fn set_env_base(&mut self, base: u32) {
+    pub const fn set_env_base(&mut self, base: u32) {
         self.env_base = base;
     }
 
     /// Where the backdrop meshes got registered.
-    pub fn set_backdrop(&mut self, base: u32, parts: u32) {
+    pub const fn set_backdrop(&mut self, base: u32, parts: u32) {
         self.backdrop_base = base;
         self.backdrop_parts = parts;
     }
@@ -846,8 +845,13 @@ impl EmberGame for ShooterGame {
                     // first sighting or a teleport-sized jump (respawn).
                     let mut new_from = HashMap::with_capacity(players.len());
                     for p in &players {
-                        let snap = match self.to.get(&p.id) {
-                            Some(prev_to) => {
+                        let snap = self.to.get(&p.id).map_or(
+                            PSnap {
+                                x: p.x,
+                                z: p.z,
+                                y: p.y,
+                            },
+                            |prev_to| {
                                 let cur = self.render_pos(p.id);
                                 let (dx, dz) = (p.x - prev_to.x, p.z - prev_to.z);
                                 if dx * dx + dz * dz > 6.0 * 6.0 {
@@ -864,13 +868,8 @@ impl EmberGame for ShooterGame {
                                         y: self.render_y(p.id),
                                     }
                                 }
-                            }
-                            None => PSnap {
-                                x: p.x,
-                                z: p.z,
-                                y: p.y,
                             },
-                        };
+                        );
                         new_from.insert(p.id, snap);
                     }
                     self.from = new_from;
@@ -1693,16 +1692,16 @@ mod net {
         pub fn connect(url: &str, initial: &[C2S]) -> Result<Self, String> {
             // rustls needs an explicitly installed crypto provider (both
             // backends are compiled into the tree). Err = already installed.
-            let _ = rustls::crypto::ring::default_provider().install_default();
+            drop(rustls::crypto::ring::default_provider().install_default());
             let (mut ws, _) = tungstenite::connect(url).map_err(|e| format!("connect: {e}"))?;
             match ws.get_ref() {
                 MaybeTlsStream::Plain(s) => {
-                    let _ = s.set_read_timeout(Some(Duration::from_millis(20)));
+                    drop(s.set_read_timeout(Some(Duration::from_millis(20))));
                 }
                 MaybeTlsStream::Rustls(s) => {
-                    let _ = s
+                    drop(s
                         .get_ref()
-                        .set_read_timeout(Some(Duration::from_millis(20)));
+                        .set_read_timeout(Some(Duration::from_millis(20))));
                 }
                 _ => {}
             }
@@ -1732,7 +1731,7 @@ mod net {
                                 }
                                 Err(mpsc::TryRecvError::Empty) => break,
                                 Err(mpsc::TryRecvError::Disconnected) => {
-                                    let _ = ws.close(None);
+                                    drop(ws.close(None));
                                     return;
                                 }
                             }
@@ -1768,11 +1767,11 @@ mod net {
             })
         }
 
-        pub fn send(&mut self, msg: &C2S) {
-            let _ = self.out_tx.send(clone_c2s(msg));
+        pub fn send(&self, msg: &C2S) {
+            drop(self.out_tx.send(clone_c2s(msg)));
         }
 
-        pub fn poll(&mut self) -> Option<S2C> {
+        pub fn poll(&self) -> Option<S2C> {
             self.in_rx.try_recv().ok()
         }
 
@@ -1845,7 +1844,7 @@ mod net {
                 let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
                     open.set(true);
                     for text in pending.borrow_mut().drain(..) {
-                        let _ = ws2.send_with_str(&text);
+                        drop(ws2.send_with_str(&text));
                     }
                 });
                 ws.set_onopen(Some(cb.as_ref().unchecked_ref()));

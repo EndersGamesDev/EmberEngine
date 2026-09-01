@@ -164,14 +164,14 @@ mod platform {
                         let mut data = synth(s);
                         if let Ok(buf) = ctx.create_buffer(1, data.len() as u32, SAMPLE_RATE as f32)
                         {
-                            let _ = buf.copy_to_channel(&mut data, 0);
+                            drop(buf.copy_to_channel(&mut data, 0));
                             buffers.insert(s, buf);
                         }
                     }
                 }
             }
             if let Some(ctx) = ctx_slot.as_ref() {
-                let _ = ctx.resume();
+                drop(ctx.resume());
             }
         }
     }
@@ -214,9 +214,9 @@ mod platform {
             };
             src.set_buffer(Some(buf));
             gain.gain().set_value(vol.clamp(0.0, 1.0));
-            let _ = src.connect_with_audio_node(&gain);
-            let _ = gain.connect_with_audio_node(&ctx.destination());
-            let _ = src.start();
+            drop(src.connect_with_audio_node(&gain));
+            drop(gain.connect_with_audio_node(&ctx.destination()));
+            drop(src.start());
         }
     }
 }

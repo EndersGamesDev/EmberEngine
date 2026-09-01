@@ -1,3 +1,8 @@
+// Preserve established client interpolation and simulation expression ordering.
+#![allow(clippy::suboptimal_flops)]
+// Angle normalization intentionally advances through floating-point turn boundaries.
+#![allow(clippy::while_float)]
+
 //! 3D Pong on the ember engine — local (two players, one keyboard) and
 //! online (matchmaking lobbies via pong-server over WebSocket).
 //!
