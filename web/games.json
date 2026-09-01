@@ -10,12 +10,14 @@
           "v": "v12",
           "path": "games/arena/v12/",
           "live": true,
+          "proto": 12,
           "note": "E melee through shields + headshots"
         },
         {
           "v": "v11",
           "path": "games/arena/v11/",
           "live": false,
+          "proto": 11,
           "note": "Q shield — blocks and reflects"
         },
         {
@@ -78,6 +80,7 @@
           "v": "v2",
           "path": "games/fire/v2/",
           "live": true,
+          "proto": 1,
           "note": "castle circuit, drift + boost, online lobbies"
         },
         {
