@@ -839,10 +839,10 @@
             await cooperativeYield(run, token);
           }
           const timingNote = usesTimestamp
-            ? 'primary samples use WebGPU timestamp-query around the compute pass and exclude submit, queue scheduling, completion callback, and validation readback time'
+            ? 'primary samples use WebGPU timestamp-query around the compute pass and exclude submit, queue scheduling, completion-fence mapping, and validation readback time'
             : isDispatchRoundTrip && facts.timestamp_query
-              ? 'primary samples are submit → onSubmittedWorkDone wall-clock per round trip because dispatch overhead includes queue and scheduling; a timestamp query on the first tiny shader dispatch is recorded separately'
-              : 'primary samples are submit → onSubmittedWorkDone wall-clock and include queue/scheduling overhead plus GPU execution, but exclude validation mapping after completion';
+              ? 'primary samples are submit → 4-byte validation-buffer mapAsync completion-fence wall-clock per round trip because dispatch overhead includes queue and scheduling; a timestamp query on the first tiny shader dispatch is recorded separately'
+              : 'primary samples are submit → 4-byte validation-buffer mapAsync completion-fence wall-clock and include queue/scheduling overhead, GPU execution, the fence copy, and promise/mapping scheduling, but exclude the full validation-buffer mapping after completion';
           const normalizationNote = spec.kernel_id === 'gpu.storage-copy.4m.v1'
             ? `${GPU_STORAGE_MIB_PER_BASE_INVOCATION} MiB copied per base invocation × repeat count ÷ primary batch seconds`
             : isDispatchRoundTrip ? 'primary batch milliseconds ÷ actual sequential dispatch count' : 'primary batch milliseconds ÷ repeat count';
@@ -1258,8 +1258,8 @@
     async function loadWasm(run) {
       if (!wasmLoadPromise) {
         wasmLoadPromise = (async () => {
-          const module = await import('./pkg/what_is_this.js?v=5');
-          await module.default({ module_or_path: './pkg/what_is_this_bg.wasm?v=5' });
+          const module = await import('./pkg/what_is_this.js?v=6');
+          await module.default({ module_or_path: './pkg/what_is_this_bg.wasm?v=6' });
           return module;
         })();
       }

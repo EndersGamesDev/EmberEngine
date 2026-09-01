@@ -134,6 +134,7 @@ struct GpuRunResult {
 struct CallbackState<T> {
     value: Option<T>,
     waker: Option<Waker>,
+    closed: bool,
 }
 
 struct CallbackFuture<T> {
@@ -147,6 +148,9 @@ impl<T> Future for CallbackFuture<T> {
         let Ok(mut state) = self.state.lock() else {
             return Poll::Pending;
         };
+        if state.closed {
+            return Poll::Pending;
+        }
         if let Some(value) = state.value.take() {
             Poll::Ready(value)
         } else {
@@ -156,10 +160,21 @@ impl<T> Future for CallbackFuture<T> {
     }
 }
 
+impl<T> Drop for CallbackFuture<T> {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.closed = true;
+            state.value = None;
+            state.waker = None;
+        }
+    }
+}
+
 fn callback_pair<T>() -> (CallbackFuture<T>, Arc<Mutex<CallbackState<T>>>) {
     let state = Arc::new(Mutex::new(CallbackState {
         value: None,
         waker: None,
+        closed: false,
     }));
     (
         CallbackFuture {
@@ -171,6 +186,9 @@ fn callback_pair<T>() -> (CallbackFuture<T>, Arc<Mutex<CallbackState<T>>>) {
 
 fn finish_callback<T>(state: &Arc<Mutex<CallbackState<T>>>, value: T) {
     let waker = if let Ok(mut state) = state.lock() {
+        if state.closed {
+            return;
+        }
         state.value = Some(value);
         state.waker.take()
     } else {
@@ -238,6 +256,7 @@ struct Workload {
     bind_group: wgpu::BindGroup,
     output: wgpu::Buffer,
     readback: wgpu::Buffer,
+    completion_fence: wgpu::Buffer,
     expected: Vec<f32>,
     dispatch_x: u32,
     dispatches_per_base: u32,
@@ -268,6 +287,12 @@ impl Workload {
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("what-is-this gpu validation readback"),
             size: expected.len() as u64 * size_of::<f32>() as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let completion_fence = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("what-is-this gpu completion fence"),
+            size: size_of::<f32>() as u64,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -328,6 +353,7 @@ impl Workload {
             bind_group,
             output,
             readback,
+            completion_fence,
             expected,
             dispatch_x,
             dispatches_per_base,
@@ -558,11 +584,11 @@ impl GpuSuite {
         }
     }
 
-    async fn wait_for_queue(&self) -> Result<(), String> {
-        let (future, state) = callback_pair();
-        self.queue
-            .on_submitted_work_done(move || finish_callback(&state, ()));
-        future.await;
+    async fn wait_for_completion(&self, workload: &Workload) -> Result<(), String> {
+        // wgpu 24's browser-WebGPU backend leaves Queue::on_submitted_work_done unimplemented.
+        // Mapping this four-byte copy is the equivalent supported completion fence: the copy is
+        // ordered after the dispatch and any full validation copy in the same command buffer.
+        Self::map_buffer(&workload.completion_fence).await?;
         self.lost_reason().map_or(Ok(()), Err)
     }
 
@@ -680,6 +706,13 @@ impl GpuSuite {
                 workload.output_bytes(),
             );
         }
+        encoder.copy_buffer_to_buffer(
+            &workload.output,
+            0,
+            &workload.completion_fence,
+            0,
+            size_of::<f32>() as u64,
+        );
         encoder.finish()
     }
 
@@ -692,7 +725,7 @@ impl GpuSuite {
         let commands = self.encode_batch(workload, repeat_count, include_timestamp, true);
         let started = performance_now();
         self.queue.submit([commands]);
-        self.wait_for_queue().await?;
+        self.wait_for_completion(workload).await?;
         let queue_elapsed_ms = performance_now() - started;
         let output = Self::map_buffer(&workload.readback).await?;
         let checksum = Self::validate_output(workload, &output)?;
@@ -704,7 +737,7 @@ impl GpuSuite {
             timing_method: if include_timestamp {
                 "gpu_timestamp_query"
             } else {
-                "submit_to_on_submitted_work_done_wall_clock"
+                "submit_to_map_async_completion_fence_wall_clock"
             },
             dispatch_count: repeat_count.saturating_mul(workload.dispatches_per_base),
         })
@@ -725,7 +758,7 @@ impl GpuSuite {
                 index + 1 == total,
             );
             self.queue.submit([commands]);
-            self.wait_for_queue().await?;
+            self.wait_for_completion(workload).await?;
         }
         let queue_elapsed_ms = performance_now() - started;
         let output = Self::map_buffer(&workload.readback).await?;
@@ -736,9 +769,9 @@ impl GpuSuite {
             queue_elapsed_ms,
             gpu_elapsed_ms,
             timing_method: if self.timestamp.is_some() {
-                "submit_to_on_submitted_work_done_wall_clock_with_timestamp_probe"
+                "submit_to_map_async_completion_fence_wall_clock_with_timestamp_probe"
             } else {
-                "submit_to_on_submitted_work_done_wall_clock"
+                "submit_to_map_async_completion_fence_wall_clock"
             },
             dispatch_count: total,
         })
