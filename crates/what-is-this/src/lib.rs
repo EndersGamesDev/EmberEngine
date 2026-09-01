@@ -483,9 +483,7 @@ pub fn derive_verdict(report: &DiagnosticReport) -> VerdictPersonality {
             id: "gpu-render",
             name: "Window Dressed",
             glyph: "3D",
-            measurement: format!(
-                "{frames} frames presented; median canvas cadence {median:.3} ms"
-            ),
+            measurement: format!("{frames} frames presented; median canvas cadence {median:.3} ms"),
         });
     }
 
