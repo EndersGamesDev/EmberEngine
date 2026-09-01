@@ -16,7 +16,7 @@
 
 use ember_engine::TextureData;
 
-fn u32_to_f32(value: u32) -> f32 {
+const fn u32_to_f32(value: u32) -> f32 {
     // Allocatable texture dimensions are far below f32's exact-integer limit.
     #[allow(clippy::cast_precision_loss)]
     {
@@ -24,7 +24,7 @@ fn u32_to_f32(value: u32) -> f32 {
     }
 }
 
-fn i32_to_f32(value: i32) -> f32 {
+const fn i32_to_f32(value: i32) -> f32 {
     // Noise periods and lattice coordinates stay within small texture bounds.
     #[allow(clippy::cast_precision_loss)]
     {
@@ -32,7 +32,7 @@ fn i32_to_f32(value: i32) -> f32 {
     }
 }
 
-fn f32_to_i32(value: f32) -> i32 {
+const fn f32_to_i32(value: f32) -> i32 {
     // Callers intentionally select the containing finite noise lattice cell.
     #[allow(clippy::cast_possible_truncation)]
     {
