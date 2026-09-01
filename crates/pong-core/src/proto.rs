@@ -64,7 +64,34 @@ use serde::{Deserialize, Serialize};
 /// Note what that is and is not: a contract about what the flag means, not an
 /// enforcement. A client that sets it in every packet still gets one launch
 /// per packet - so does this repo's own wsbot unless its jump mode pulses.
-pub const PROTO_VERSION: u16 = 11;
+/// v12: `Input.melee`, a headshot zone, and both are meaning changes.
+///
+/// The melee flag is a PRESS, for the same reason `jump` became one in v11:
+/// the server re-applies the last input it received every tick, so a held
+/// melee would re-swing every tick, and at one kill per connect that is not a
+/// weapon, it is a proximity field. The client latches the rising edge and the
+/// server consumes it after one tick.
+///
+/// Why this is a bump and not an additive field, by the standard test - what
+/// does an OLD peer DO when the field is absent? It plays a different game in
+/// both directions. An old client cannot swing, and worse, cannot see that
+/// melee exists: it is killed at contact range by an attack its build has no
+/// concept of, through a shield its build believes is cover. An old server
+/// silently drops the flag, so a v12 client presses E into nothing. Neither
+/// side degrades gracefully, which is exactly the case `#[serde(default)]`
+/// cannot rescue.
+///
+/// The headshot is a bump for the same reason even though it adds no field:
+/// the top HEAD_H of the hit volume now kills outright whatever the weapon.
+/// Nothing on the wire changed, but what a round DOES changed, and a client
+/// predicting against the old rule would disagree with the server about who
+/// is alive.
+///
+/// The melee deliberately does not travel as a bullet. The shield is tested
+/// inside the bullet sweep, so a strike that never becomes a bullet is never
+/// offered to it - the "goes through the shield" behaviour is structural, not
+/// a flag, and a later change to the shield cannot silently start blocking it.
+pub const PROTO_VERSION: u16 = 12;
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
 pub const MAX_PASSWORD_LEN: usize = 40;
@@ -218,6 +245,12 @@ pub enum C2S {
         /// which is exactly why the version gate above had to move too.
         #[serde(default)]
         shield: bool,
+        /// An E PRESS, not the held key: true means "the player swung since
+        /// my last input", and the sim consumes it on one tick. Defaulted, so
+        /// an older client simply never swings - but see the version note
+        /// above for why defaulting is NOT sufficient here and the gate moved.
+        #[serde(default)]
+        melee: bool,
     },
     Ping {
         nonce: u32,
@@ -319,6 +352,7 @@ mod tests {
             reload: false,
             jump: true,
             shield: true,
+            melee: true,
         })
         .unwrap();
         assert!(s.contains("\"t\":\"input\""));

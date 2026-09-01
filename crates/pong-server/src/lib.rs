@@ -401,8 +401,13 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
             // input is re-applied every tick, so leaving the flag set makes a
             // held Space re-launch on every grounded tick - which is how you
             // bunny-hopped off a crate top onto a container.
+            // Melee is a press for the same reason and is consumed in the
+            // same breath. Leaving it set would re-swing on every tick the
+            // last input is re-applied, and since every connect is a kill
+            // that is a proximity field rather than a weapon.
             for (i, ..) in lobby.inputs.values_mut() {
                 i.jump = false;
+                i.melee = false;
             }
 
             for &(killer, victim) in &lobby.sim.events {
@@ -846,6 +851,7 @@ fn handle_event(
                         reload,
                         jump,
                         shield,
+                        melee,
                     },
                     true,
                 ) => {
@@ -874,6 +880,7 @@ fn handle_event(
                     // the sim ever saw it. Merge; the post-step clear still
                     // makes it fire exactly once.
                     let jump = jump || lobby.inputs.get(&pid).is_some_and(|(i, ..)| i.jump);
+                    let melee = melee || lobby.inputs.get(&pid).is_some_and(|(i, ..)| i.melee);
                     lobby.inputs.insert(
                         pid,
                         (
@@ -887,6 +894,7 @@ fn handle_event(
                                 reload,
                                 jump,
                                 shield,
+                                melee,
                                 delay_ticks: 0,
                             },
                             seq,

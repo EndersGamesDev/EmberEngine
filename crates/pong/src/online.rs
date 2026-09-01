@@ -434,6 +434,12 @@ pub struct ShooterGame {
     /// Space last frame, and a press held until the next send frame. Sampling
     /// the held key at 20 Hz lost any tap shorter than the send interval.
     prev_space: bool,
+    /// Rising-edge latch for the melee key, and whether a swing happened
+    /// anywhere in the current send window. Same shape as the jump pair
+    /// beside it, for the same reason: at a 20 Hz send rate, sampling a
+    /// held key drops taps shorter than 50 ms outright.
+    prev_e: bool,
+    melee_pending: bool,
     jump_pending: bool,
     /// The same press the server will get, held until prediction spends it.
     /// Predicting on the raw frame edge instead let the local view and the
@@ -525,6 +531,8 @@ impl ShooterGame {
             own_render: Vec2::ZERO,
             render_y_own: 0.0,
             prev_space: false,
+            prev_e: false,
+            melee_pending: false,
             jump_pending: false,
             pred_jump: false,
             last_state_at: 0.0,
@@ -1080,6 +1088,16 @@ impl EmberGame for ShooterGame {
         self.prev_space = space;
         self.jump_pending |= jump;
         self.pred_jump |= jump;
+        // Melee, latched the same way. Note what is deliberately absent: there
+        // is no `pred_melee`. Movement is predicted because it is ours to
+        // predict, but a kill is not - the sim resolves melee server-side for
+        // exactly the reason it resolves bullets there, and a client that
+        // guessed a kill would have to un-kill someone when the server
+        // disagreed. The swing is sent; the outcome comes back.
+        let e_down = input.down(KeyCode::KeyE);
+        let melee = e_down && !self.prev_e;
+        self.prev_e = e_down;
+        self.melee_pending |= melee;
 
         // Walk bob (cosmetic, client-side only).
         if moving {
@@ -1157,6 +1175,14 @@ impl EmberGame for ShooterGame {
                 // reported honestly even while Q is down and the server is
                 // the only thing that decides a round did not leave.
                 shield,
+                // Cleared on send whether or not anyone was in reach: the
+                // server owns the cooldown, so a swing at air still costs a
+                // swing and the client never has to model that.
+                melee: if me_alive {
+                    std::mem::take(&mut self.melee_pending)
+                } else {
+                    false
+                },
             });
         }
 

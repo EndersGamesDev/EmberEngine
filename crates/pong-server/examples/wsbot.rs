@@ -127,6 +127,7 @@ fn main() {
                     // A press, not a level - see the module docs.
                     jump: jump && ((t * 20.0) as u32).is_multiple_of(24),
                     shield,
+                    melee: false,
                 },
             );
         }

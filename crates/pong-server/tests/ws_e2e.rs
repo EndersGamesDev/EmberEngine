@@ -156,6 +156,7 @@ fn drop_in_arena_flow_with_password() {
             reload: false,
             jump: false,
             shield: false,
+            melee: false,
         },
     );
     // The next state must echo the input's seq back as this player's ack.
@@ -318,6 +319,7 @@ fn an_airborne_state_carries_the_velocity_that_made_it() {
                 reload: false,
                 jump: true,
                 shield: false,
+                melee: false,
             },
         );
         std::thread::sleep(Duration::from_millis(40));
@@ -375,6 +377,7 @@ fn one_jump_press_launches_once_and_does_not_bunny_hop() {
             reload: false,
             jump: true,
             shield: false,
+            melee: false,
         },
     );
 
@@ -435,6 +438,7 @@ fn a_state_reports_how_long_the_acked_command_has_been_applied() {
             reload: false,
             jump: false,
             shield: false,
+            melee: false,
         },
     );
 
@@ -490,6 +494,7 @@ fn a_press_survives_a_second_input_in_the_same_tick() {
         reload: false,
         jump,
         shield: false,
+        melee: false,
     };
     // Back to back, deliberately with no sleep: the press and the packet that
     // overtakes it reach the hub inside one 16.7 ms window.

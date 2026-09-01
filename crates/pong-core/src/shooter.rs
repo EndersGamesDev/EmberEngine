@@ -19,6 +19,36 @@ pub const CROUCH_HIT_MULT: f32 = 0.72;
 /// that matters most.
 pub const SHIELD_ARC: f32 = std::f32::consts::FRAC_PI_3 * 2.0;
 
+/// Height of the head zone, measured DOWN from the top of the hit volume.
+/// `BODY_H_*` is documented above as "head centre plus half a head", so the
+/// top of the cylinder already IS the top of the head: the head is a sub-band
+/// just under it, never something added above. 0.22 puts a standing head at
+/// [1.48, 1.70] and a crouched one at [1.03, 1.25].
+///
+/// The value is not cosmetic and MUST stay under
+/// BODY_H_STAND - EYE_STAND = 0.25. A round leaves the muzzle at EYE_STAND
+/// 1.45 and flies level at pitch 0, so the moment the head band reaches down
+/// to 1.45, every level shot between two standing players is a headshot - and
+/// since a headshot kills outright, the pistol would one-shot the entire game
+/// without anyone aiming at a head. At 0.22 the band starts at 1.48, so level
+/// fire lands in the chest and a kill needs deliberate upward aim. The test
+/// `level_fire_is_not_a_free_headshot` pins that 3 cm and will fail loudly if
+/// this is ever raised past it.
+pub const HEAD_H: f32 = 0.22;
+
+/// Melee reach from the attacker's centre, before the target's own radius is
+/// added. 2.0 + PLAYER_R 0.6 strikes a standing target at 2.6 centre to
+/// centre, about one and a half body widths - a lunge, not a spear.
+pub const MELEE_RANGE: f32 = 2.0;
+/// Full width of the melee cone, radians (~115 deg). Wider than SHIELD_ARC on
+/// purpose: the shield answers "am I covered from that round", which wants to
+/// be demanding, while a swing at contact range wants to land when it
+/// visually should.
+pub const MELEE_ARC: f32 = 2.0;
+/// Seconds between swings. Every connect is a kill, so this is the only thing
+/// stopping melee from out-killing the pistol at range zero by spamming.
+pub const MELEE_COOLDOWN: f32 = 0.8;
+
 /// Stance-dependent hit-test radius: crouch = lower profile = smaller target.
 pub fn hit_radius(crouch: bool) -> f32 {
     if crouch {
@@ -460,6 +490,11 @@ pub struct PlayerIn {
     /// wire that a dropped packet can desync, and nothing in this struct has
     /// ever needed one.
     pub shield: bool,
+    /// A melee PRESS (E), consumed on the tick it lands, exactly like `jump`
+    /// and for the same reason: held semantics would re-swing on every tick
+    /// the server keeps applying the last input it received, and at one kill
+    /// per connect that is not a weapon, it is a proximity field.
+    pub melee: bool,
     /// How many ticks behind the present this player's view is (derived by
     /// the server from the client's reported view tick, clamped). Bullets
     /// they fire hit-test against targets rewound this far.
@@ -493,6 +528,8 @@ pub struct PlayerSt {
     pub death_count: u32,
     pub respawn_in: f32,
     pub cooldown: f32,
+    /// Counting down between melee swings; 0 = ready.
+    pub melee_cd: f32,
     deaths: u32,
 }
 
@@ -575,6 +612,7 @@ impl Sim {
             death_count: 0,
             respawn_in: 0.0,
             cooldown: 0.0,
+            melee_cd: 0.0,
             deaths: slot,
         });
     }
@@ -678,6 +716,7 @@ impl Sim {
             // Weapon handling: reload, then fire.
             let stats = weapon_stats(p.weapon);
             p.cooldown = (p.cooldown - dt).max(0.0);
+            p.melee_cd = (p.melee_cd - dt).max(0.0);
             if p.reload_t > 0.0 {
                 p.reload_t -= dt;
                 if p.reload_t <= 0.0 {
@@ -759,6 +798,82 @@ impl Sim {
         // no point-blank dead zone) against targets REWOUND by the shooter's
         // view delay, then integrate, then world collision.
         let mut hits: Vec<(u8, u8, u8)> = Vec::new(); // (owner, victim, dmg)
+
+        // ---- the melee strike (E) ----
+        //
+        // Resolved HERE, as its own pass, and deliberately never as a bullet.
+        // That is the entire reason it goes through the shield: the shield
+        // lives inside the bullet sweep below, gated on `if p.shield`, so
+        // something that never becomes a bullet never reaches it. Expressing
+        // that as structure rather than as an `if melee { skip_shield }` flag
+        // means a later change to the shield cannot quietly start blocking
+        // melee, and the shield's own tests keep their meaning untouched.
+        //
+        // Lethal on connect, so there is no damage number to balance. It goes
+        // through the same `hits` vec as a round, which is what keeps scoring,
+        // respawn, the death count and the kill event identical to every other
+        // way of dying, rather than a second path that drifts from the first.
+        //
+        // Targets are rewound by the attacker's view delay for exactly the
+        // reason bullets are: "where was the body" is the attacker's question.
+        // The shield's counter-question, "am I blocking right now", does not
+        // arise here, because there is no shield test left to answer it.
+        for i in 0..self.players.len() {
+            let (aid, apos, ay, aim, alive) = {
+                let a = &self.players[i];
+                (a.id, a.pos, a.y, a.aim, a.alive)
+            };
+            if !alive || self.players[i].melee_cd > 0.0 {
+                continue;
+            }
+            let input = inputs(aid);
+            if !input.melee {
+                continue;
+            }
+            // Charged whether or not the swing connects: a miss costs the same
+            // tempo as a hit, which is what makes spacing matter.
+            self.players[i].melee_cd = MELEE_COOLDOWN;
+            let delay = input.delay_ticks.min(MAX_REWIND_TICKS);
+            let a_top = ay + BODY_H_STAND;
+            for j in 0..self.players.len() {
+                if i == j {
+                    continue;
+                }
+                let tid = self.players[j].id;
+                let (tpos, ty, talive, tcrouch) = self.rewound(tid, delay).unwrap_or_else(|| {
+                    let t = &self.players[j];
+                    (t.pos, t.y, t.alive, t.crouch)
+                });
+                if !talive {
+                    continue;
+                }
+                // Reach is centre to centre less the target's own radius, so a
+                // crouched (narrower) target must be closed on slightly
+                // further - consistent with it being a smaller target to shoot.
+                let (dx, dz) = (tpos[0] - apos[0], tpos[1] - apos[1]);
+                let d2 = dx * dx + dz * dz;
+                let reach = MELEE_RANGE + hit_radius(tcrouch);
+                if d2 > reach * reach {
+                    continue;
+                }
+                // Facing, on the HORIZONTAL aim only - the same choice the
+                // shield makes, so look elevation never widens or narrows a
+                // swing.
+                let d = d2.sqrt();
+                if d > 1e-4 {
+                    let dot = (dx * aim[0] + dz * aim[1]) / d;
+                    if dot < (MELEE_ARC * 0.5).cos() {
+                        continue;
+                    }
+                }
+                // The bodies must overlap vertically, so you cannot knife
+                // someone standing on a container over your head.
+                if ty > a_top || ty + body_h(tcrouch) < ay {
+                    continue;
+                }
+                hits.push((aid, tid, MAX_HP));
+            }
+        }
         let obstacles = std::mem::take(&mut self.obstacles);
         let mut bullets = std::mem::take(&mut self.bullets);
         bullets.retain_mut(|b| {
@@ -800,18 +915,30 @@ impl Sim {
                 // what turns the hit volume from a cylinder of infinite
                 // height into a real body, and so what makes pitch matter.
                 let (lo, hi) = (ty - BULLET_R, ty + body_h(tcrouch) + BULLET_R);
+                // The head is the top HEAD_H of the volume. No BULLET_R pad on
+                // its underside: that boundary is internal, between head and
+                // chest, not a silhouette edge, and padding it outward would
+                // quietly make the head bigger than the one being drawn.
+                let head_lo = ty + body_h(tcrouch) - HEAD_H;
+                let travel = (y1 - b.y).abs();
                 let by = b.y + (y1 - b.y) * t;
                 let mut connected = by >= lo && by <= hi;
-                if !connected && (y1 - b.y).abs() > hi - lo {
-                    // The horizontal test is swept but this one is a point
-                    // sample at the horizontal closest approach, so the two
-                    // are not required to hold at the same instant. Once a
-                    // tick's vertical travel exceeds the whole band — past
-                    // ~1.31 rad, inside MAX_PITCH — consecutive samples can
-                    // straddle a body and the shot passes clean through it.
-                    // Walk the segment, both tests at the SAME parameter so
-                    // no phantom hit can be introduced.
-                    let steps = (((y1 - b.y).abs() / (hi - lo)).ceil() as u32 * 4).min(32);
+                let mut head = connected && by >= head_lo;
+                // Walk the segment when one tick's vertical travel could
+                // straddle the SMALLEST zone under test. This used to key on
+                // the body band, and for the body that is right - a tick
+                // cannot skip 2.14 m below ~1.31 rad. A head band is about
+                // seven times smaller and the arithmetic is unforgiving:
+                // vertical travel is tan(pitch) * BULLET_SPEED * dt, which is
+                // 0.567 * tan(pitch), so a 0.30 m head is straddled from just
+                // 0.49 rad (~28 deg) - ordinary aiming, not a trick shot.
+                // Keyed on the body band a headshot between 28 and 75 degrees
+                // would have been a coin flip, which is not worth shipping.
+                //
+                // Both tests are still evaluated at the SAME parameter, so
+                // this can only find hits that are real; it cannot invent one.
+                if travel > HEAD_H && !head {
+                    let steps = ((travel / HEAD_H).ceil() as u32 * 4).clamp(1, 32);
                     for k in 0..=steps {
                         let u = k as f32 / steps as f32;
                         let byk = b.y + (y1 - b.y) * u;
@@ -821,7 +948,14 @@ impl Sim {
                         let (gx, gz) = (tpos[0] - (p0[0] + sx * u), tpos[1] - (p0[1] + sz * u));
                         if gx * gx + gz * gz < rr * rr {
                             connected = true;
-                            break;
+                            // Keep walking only to upgrade a body hit to a head
+                            // hit: a round that passed through the head IS a
+                            // headshot, even when the closest-approach sample
+                            // happened to land in the chest.
+                            if byk >= head_lo {
+                                head = true;
+                                break;
+                            }
                         }
                     }
                 }
@@ -896,7 +1030,11 @@ impl Sim {
                             return true;
                         }
                     }
-                    hits.push((b.owner, p.id, b.dmg));
+                    // A head hit kills outright, whatever the weapon and
+                    // whatever the remaining HP. Routed as damage rather than
+                    // as a special case so respawn, scoring and the kill event
+                    // all stay on the one path.
+                    hits.push((b.owner, p.id, if head { MAX_HP } else { b.dmg }));
                     return false;
                 }
             }
@@ -2177,6 +2315,293 @@ mod tests {
             sim.bullets.len(),
             1,
             "the same steep shot with headroom below must still be in flight"
+        );
+    }
+
+    // ---- v12: melee and headshots -------------------------------------
+
+    /// Two players facing each other at `gap`, with the defender optionally
+    /// holding the shield straight at the attacker. Returns whether the
+    /// defender died within `ticks`.
+    fn melee_duel(gap: f32, shielded: bool, attacker_aim: [f32; 2], ticks: u32) -> bool {
+        let mut sim = Sim::new(11);
+        sim.obstacles.clear();
+        sim.pads.clear();
+        sim.add_player(0);
+        sim.add_player(1);
+        let mut inputs = HashMap::new();
+        inputs.insert(
+            0,
+            PlayerIn {
+                aim: attacker_aim,
+                melee: true,
+                ..Default::default()
+            },
+        );
+        inputs.insert(
+            1,
+            PlayerIn {
+                // Facing back down -x, straight into the attacker: the most
+                // favourable case the shield can possibly have.
+                aim: [-1.0, 0.0],
+                shield: shielded,
+                ..Default::default()
+            },
+        );
+        for _ in 0..ticks {
+            sim.players.iter_mut().for_each(|p| match p.id {
+                0 if p.alive => p.pos = [0.0, 0.0],
+                1 if p.alive => p.pos = [gap, 0.0],
+                _ => {}
+            });
+            step_with(&mut sim, &inputs);
+            if !sim.players.iter().find(|p| p.id == 1).unwrap().alive {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn melee_kills_through_a_raised_shield() {
+        // The headline of v12. The shield blocks and REFLECTS a round from
+        // dead ahead - `head_on_is_reflected` covers that - and a melee from
+        // the identical geometry must ignore it completely.
+        assert!(
+            melee_duel(1.5, true, [1.0, 0.0], 4),
+            "a melee must kill through a raised shield"
+        );
+        assert!(
+            melee_duel(1.5, false, [1.0, 0.0], 4),
+            "and must obviously still kill an unshielded target"
+        );
+    }
+
+    #[test]
+    fn melee_is_lethal_from_full_health() {
+        // No chip damage: one connect is a kill regardless of HP.
+        let mut sim = Sim::new(11);
+        sim.obstacles.clear();
+        sim.pads.clear();
+        sim.add_player(0);
+        sim.add_player(1);
+        assert_eq!(sim.players.iter().find(|p| p.id == 1).unwrap().hp, MAX_HP);
+        let mut inputs = HashMap::new();
+        inputs.insert(
+            0,
+            PlayerIn {
+                aim: [1.0, 0.0],
+                melee: true,
+                ..Default::default()
+            },
+        );
+        inputs.insert(1, PlayerIn::default());
+        sim.players.iter_mut().for_each(|p| match p.id {
+            0 => p.pos = [0.0, 0.0],
+            1 => p.pos = [1.5, 0.0],
+            _ => {}
+        });
+        step_with(&mut sim, &inputs);
+        let v = sim.players.iter().find(|p| p.id == 1).unwrap();
+        assert!(!v.alive, "one connect must kill outright from full health");
+        assert_eq!(
+            sim.players.iter().find(|p| p.id == 0).unwrap().score,
+            1,
+            "and must score exactly like any other kill"
+        );
+    }
+
+    #[test]
+    fn melee_misses_out_of_reach_and_behind() {
+        // Reach is MELEE_RANGE plus the target's own radius, so a standing
+        // target is struck out to 2.6 and not beyond.
+        assert!(
+            melee_duel(2.5, false, [1.0, 0.0], 4),
+            "just inside reach must connect"
+        );
+        assert!(
+            !melee_duel(3.2, false, [1.0, 0.0], 4),
+            "beyond reach must miss"
+        );
+        // Facing away: the target is behind the swing, outside the arc.
+        assert!(
+            !melee_duel(1.5, false, [-1.0, 0.0], 4),
+            "a swing away from the target must miss"
+        );
+    }
+
+    #[test]
+    fn melee_respects_its_cooldown() {
+        // Hold E down and the server must not turn it into a proximity field:
+        // the press is consumed, and the cooldown gates the next swing. Here
+        // the input stays true every tick (which is what a naive client or a
+        // hostile one sends), so only the cooldown stands between the
+        // attacker and a kill every tick.
+        let mut sim = Sim::new(11);
+        sim.obstacles.clear();
+        sim.pads.clear();
+        sim.add_player(0);
+        sim.add_player(1);
+        let mut inputs = HashMap::new();
+        inputs.insert(
+            0,
+            PlayerIn {
+                aim: [1.0, 0.0],
+                melee: true,
+                ..Default::default()
+            },
+        );
+        inputs.insert(1, PlayerIn::default());
+        // First swing lands immediately.
+        sim.players.iter_mut().for_each(|p| match p.id {
+            0 => p.pos = [0.0, 0.0],
+            1 => p.pos = [1.5, 0.0],
+            _ => {}
+        });
+        step_with(&mut sim, &inputs);
+        assert!(!sim.players.iter().find(|p| p.id == 1).unwrap().alive);
+        let cd = sim.players.iter().find(|p| p.id == 0).unwrap().melee_cd;
+        assert!(
+            (cd - MELEE_COOLDOWN).abs() < 1e-3,
+            "a swing must charge the full cooldown, got {cd}"
+        );
+        // Revive the victim in place and keep holding E: the attacker must be
+        // unable to swing again until the cooldown has run out.
+        let ticks_until_ready = (MELEE_COOLDOWN / FIXED_DT) as u32;
+        for _ in 0..(ticks_until_ready - 2) {
+            sim.players.iter_mut().for_each(|p| match p.id {
+                0 => p.pos = [0.0, 0.0],
+                1 => {
+                    p.pos = [1.5, 0.0];
+                    p.alive = true;
+                    p.hp = MAX_HP;
+                    p.respawn_in = 0.0;
+                }
+                _ => {}
+            });
+            step_with(&mut sim, &inputs);
+            assert!(
+                sim.players.iter().find(|p| p.id == 1).unwrap().alive,
+                "no second swing may land while the cooldown is running"
+            );
+        }
+    }
+
+    /// Fire one shot from `from_y` at `pitch` into a standing target `gap`
+    /// away, and report whether it died on the FIRST round that connected.
+    fn one_shot_kills(from_y: f32, gap: f32, pitch: f32) -> bool {
+        let mut sim = Sim::new(11);
+        sim.obstacles.clear();
+        sim.pads.clear();
+        sim.add_player(0);
+        sim.add_player(1);
+        let mut inputs = HashMap::new();
+        inputs.insert(
+            0,
+            PlayerIn {
+                aim: [1.0, 0.0],
+                pitch,
+                fire: true,
+                ..Default::default()
+            },
+        );
+        inputs.insert(1, PlayerIn::default());
+        for _ in 0..240 {
+            sim.players.iter_mut().for_each(|p| match p.id {
+                0 if p.alive => {
+                    p.pos = [0.0, 0.0];
+                    p.y = from_y;
+                }
+                1 if p.alive => {
+                    p.pos = [gap, 0.0];
+                    p.y = 0.0;
+                }
+                _ => {}
+            });
+            step_with(&mut sim, &inputs);
+            let v = sim.players.iter().find(|p| p.id == 1).unwrap();
+            if !v.alive {
+                return true;
+            }
+            if v.hp < MAX_HP {
+                // It connected and did NOT kill: a body hit.
+                return false;
+            }
+        }
+        panic!("the shot never connected at all - the test geometry is wrong");
+    }
+
+    #[test]
+    fn a_headshot_kills_outright() {
+        // Standing target: head band is [1.48, 1.70]. A round leaves at 1.45
+        // and climbs tan(pitch) per unit travelled, so over 5 units a pitch of
+        // 0.03 arrives at ~1.60 - the middle of the head.
+        assert!(
+            one_shot_kills(0.0, 5.0, 0.03),
+            "a round arriving in the head band must kill from full health"
+        );
+    }
+
+    #[test]
+    fn a_body_shot_still_takes_three() {
+        // The same geometry aimed down into the chest must NOT one-shot, or
+        // the head zone has swallowed the whole body.
+        assert!(
+            !one_shot_kills(0.0, 5.0, -0.05),
+            "a chest hit must not be lethal"
+        );
+    }
+
+    #[test]
+    fn level_fire_is_not_a_free_headshot() {
+        // This is the balance guard for HEAD_H, and it is the whole reason
+        // that constant is 0.22 rather than something rounder. A round leaves
+        // at EYE_STAND 1.45 and flies flat at pitch 0, so if the head band
+        // ever reaches down to 1.45 then two standing players simply shooting
+        // at each other trade instant kills without anyone aiming at a head.
+        assert!(
+            HEAD_H < BODY_H_STAND - EYE_STAND,
+            "HEAD_H {HEAD_H} must stay under {} or level fire becomes a headshot",
+            BODY_H_STAND - EYE_STAND
+        );
+        assert!(
+            !one_shot_kills(0.0, 5.0, 0.0),
+            "a flat shot between two standing players must be a body hit"
+        );
+    }
+
+    #[test]
+    fn a_steep_headshot_still_registers() {
+        // The regression guard for the sub-stepping threshold.
+        //
+        // Vertical travel in one tick is tan(pitch) * BULLET_SPEED * FIXED_DT
+        // = 0.567 * tan(pitch). The walk used to trigger only when that
+        // exceeded the whole BODY band (2.14 m), i.e. past ~1.31 rad. A head
+        // band of 0.22 is straddled from just 0.37 rad, so between those two
+        // angles consecutive samples could step clean over a head while the
+        // guard stayed asleep - and the headshot became a coin flip across
+        // the entire range of ordinary downward aiming.
+        //
+        // Fire down from a container top through the target's head. At this
+        // angle one tick covers far more than the head band, so this only
+        // passes because the walk is keyed on the SMALLEST zone under test.
+        let from_y = 3.0;
+        let gap = 3.0;
+        // Aim so the round arrives at ~1.60, the middle of the head band.
+        let drop = (from_y + EYE_STAND) - 1.60;
+        let pitch = -(drop / gap).atan();
+        let per_tick = pitch.tan().abs() * BULLET_SPEED * FIXED_DT;
+        assert!(
+            per_tick > HEAD_H,
+            "test must actually exercise the straddle case: {per_tick} vs {HEAD_H}"
+        );
+        assert!(
+            per_tick < BODY_H_STAND + 2.0 * BULLET_R,
+            "and must sit BELOW the old body-band trigger, or it proves nothing"
+        );
+        assert!(
+            one_shot_kills(from_y, gap, pitch),
+            "a steep round through the head must still be a headshot"
         );
     }
 }
