@@ -2,12 +2,17 @@
 //! authoritatively on the server; clients render its broadcast state and
 //! generate the identical arena from the lobby's seed.
 
+/// Fixed simulation time step in seconds.
 pub const FIXED_DT: f32 = 1.0 / 60.0;
+/// Arena boundary half-extent.
 pub const ARENA_HALF: f32 = 24.0;
+/// Base horizontal player speed in world units per second.
 pub const MOVE_SPEED: f32 = 9.0;
 /// Shift: faster. C: slower (and a lower profile, cosmetically).
 pub const SPRINT_MULT: f32 = 1.6;
+/// Horizontal speed multiplier while crouched.
 pub const CROUCH_MULT: f32 = 0.55;
+/// Player collision radius used for movement.
 pub const PLAYER_R: f32 = 0.6;
 /// Crouching shrinks the HIT circle (movement blocking keeps `PLAYER_R`).
 pub const CROUCH_HIT_MULT: f32 = 0.72;
@@ -65,6 +70,7 @@ pub fn hit_radius(crouch: bool) -> f32 {
 /// Eye height above the feet, per stance. A shot leaves the weapon at eye
 /// level, so this is a bullet's starting height.
 pub const EYE_STAND: f32 = 1.45;
+/// Eye height above the feet while crouched.
 pub const EYE_CROUCH: f32 = 0.85;
 /// Body height above the feet, per stance.
 ///
@@ -97,6 +103,7 @@ pub const EYE_CROUCH: f32 = 0.85;
 /// radius; it no longer also hides the part of you that was never in the
 /// hitbox to begin with.
 pub const BODY_H_STAND: f32 = 1.86;
+/// Crouched body height.
 pub const BODY_H_CROUCH: f32 = 1.55;
 // Worth knowing before tuning either of the above: they are tied to the rig
 // now, so moving one without moving the model reintroduces exactly the
@@ -133,23 +140,34 @@ pub const fn head_lo(crouch: bool) -> f32 {
 /// identically, but that clamp is cosmetic — a peer's pitch is untrusted
 /// input and is re-clamped here, where it decides who dies.
 pub const MAX_PITCH: f32 = 1.45;
+/// Horizontal bullet speed in world units per second.
 pub const BULLET_SPEED: f32 = 34.0;
+/// Bullet collision radius.
 pub const BULLET_R: f32 = 0.22;
+/// Bullet lifetime in seconds.
 pub const BULLET_TTL: f32 = 1.6;
+/// Reload duration in seconds.
 pub const RELOAD_SECS: f32 = 1.1;
+/// Highest weapon upgrade level.
 pub const MAX_WEAPON: u8 = 3;
+/// Pad cooldown after granting an upgrade.
 pub const PAD_RESPAWN_SECS: f32 = 15.0;
+/// Horizontal pickup radius around a weapon pad.
 pub const PAD_RADIUS: f32 = 1.3;
 
 /// Weapon levels: 1 = pistol, 2 = rapid, 3 = heavy. Picked up on pads,
 /// reset on death.
 #[derive(Clone, Copy, Debug)]
 pub struct WeaponStats {
+    /// Minimum interval between shots in seconds.
     pub cooldown: f32,
+    /// Magazine capacity.
     pub mag: u8,
+    /// Body-shot damage.
     pub damage: u8,
 }
 
+/// Returns the frozen tuning values for a weapon level.
 #[must_use]
 pub const fn weapon_stats(level: u8) -> WeaponStats {
     match level {
@@ -171,6 +189,7 @@ pub const fn weapon_stats(level: u8) -> WeaponStats {
     }
 }
 
+/// Returns the deployed display name for a weapon level.
 #[must_use]
 pub const fn weapon_name(level: u8) -> &'static str {
     match level {
@@ -188,8 +207,11 @@ pub const fn weapon_name(level: u8) -> &'static str {
 /// after catching ten rounds in 1.6 s is a fair price for having caught
 /// them. Telling the two apart would need a flag on `Bullet`.
 pub const MAX_BULLETS_PER_PLAYER: usize = 10;
+/// Full player hit points.
 pub const MAX_HP: u8 = 3;
+/// Delay between death and respawn in seconds.
 pub const RESPAWN_SECS: f32 = 2.5;
+/// Maximum players admitted to one Arena lobby.
 pub const MAX_PLAYERS: usize = 8;
 /// Lag compensation: hit tests may rewind targets at most this many ticks
 /// (300 ms) toward what the shooter was seeing.
@@ -205,7 +227,9 @@ pub const JUMP_VEL: f32 = 9.2;
 /// Cover comes in two classes: crates you can jump onto, and containers
 /// that stay hard cover. These bound the low class.
 pub const CRATE_MIN_H: f32 = 0.9;
+/// Maximum deterministic crate height.
 pub const CRATE_MAX_H: f32 = 1.5;
+/// Minimum deterministic hard-cover container height.
 pub const CONTAINER_MIN_H: f32 = 2.4;
 /// A player may only be pushed up onto a surface this much higher than
 /// their feet; anything taller is a wall to them.
@@ -219,7 +243,9 @@ pub const STEP_UP: f32 = 0.35;
 /// hash, so nothing observable changed when it moved.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Obstacle {
+    /// Minimum horizontal X/Z corner.
     pub min: [f32; 2],
+    /// Maximum horizontal X/Z corner.
     pub max: [f32; 2],
     /// Top of the box; the floor is 0.
     pub h: f32,
@@ -336,8 +362,11 @@ fn spawn_point(slot: u32) -> [f32; 2] {
 /// ring the sim has always used.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Level {
+    /// Arena boundary half-extent.
     pub arena_half: f32,
+    /// Authored collision obstacles.
     pub obstacles: Vec<Obstacle>,
+    /// Authored player spawn points.
     pub spawns: Vec<[f32; 2]>,
 }
 
@@ -405,8 +434,10 @@ pub fn generate_pads(seed: u64) -> Vec<[f32; 2]> {
         .collect()
 }
 
+/// One deterministic weapon-upgrade pad.
 #[derive(Clone, Debug)]
 pub struct Pad {
+    /// Horizontal pad position.
     pub pos: [f32; 2],
     /// 0 = active; counting down after a pickup.
     pub respawn_t: f32,
@@ -517,6 +548,7 @@ pub fn step_vertical(
 
 // These independent input flags are shared public simulation API and cannot be consolidated.
 #[allow(clippy::struct_excessive_bools)]
+/// One player's held intents and tick-scoped press events.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PlayerIn {
     /// Held movement intent, -1..1 per axis (world space).
@@ -532,8 +564,11 @@ pub struct PlayerIn {
     /// horizontal length below the sanitizer's epsilon below, which is a
     /// no-op that keeps the PREVIOUS aim — freezing the player's facing.
     pub pitch: f32,
+    /// Held trigger intent.
     pub fire: bool,
+    /// Held sprint intent.
     pub sprint: bool,
+    /// Held crouch intent.
     pub crouch: bool,
     /// Held reload intent (R).
     pub reload: bool,
@@ -556,41 +591,56 @@ pub struct PlayerIn {
     pub delay_ticks: u16,
 }
 
+/// Complete authoritative state for one player.
 #[derive(Clone, Debug)]
 pub struct PlayerSt {
+    /// In-lobby player identifier.
     pub id: u8,
+    /// Horizontal X/Z position.
     pub pos: [f32; 2],
     /// Feet height: 0 on the arena floor, a box top when standing on cover.
     pub y: f32,
     /// Vertical speed; non-zero only while airborne.
     pub vy: f32,
+    /// Normalized horizontal aim direction.
     pub aim: [f32; 2],
     /// Aim elevation, radians, positive = up. Broadcast so remote players'
     /// weapons tilt with their actual aim instead of staying level.
     pub pitch: f32,
+    /// Remaining hit points.
     pub hp: u8,
+    /// Authoritative kill score.
     pub score: u32,
+    /// Whether the player is active rather than awaiting respawn.
     pub alive: bool,
+    /// Whether the player uses the crouched stance.
     pub crouch: bool,
     /// Off-hand shield raised. Broadcast, because a shield nobody can see is
     /// a mechanic that kills you for no visible reason.
     pub shield: bool,
+    /// Current weapon upgrade level.
     pub weapon: u8,
+    /// Remaining magazine ammunition.
     pub ammo: u8,
     /// Counting down while reloading; 0 = ready.
     pub reload_t: f32,
     /// Authoritative death count (the scoreboard's DEATHS column).
     pub death_count: u32,
+    /// Remaining respawn delay in seconds.
     pub respawn_in: f32,
+    /// Remaining firearm cooldown in seconds.
     pub cooldown: f32,
     /// Counting down between melee swings; 0 = ready.
     pub melee_cd: f32,
     deaths: u32,
 }
 
+/// Complete authoritative state for one live bullet.
 #[derive(Clone, Copy, Debug)]
 pub struct Bullet {
+    /// Horizontal X/Z position.
     pub pos: [f32; 2],
+    /// Horizontal X/Z velocity.
     pub vel: [f32; 2],
     /// Height above the arena floor, and its rate of change. Height is a
     /// scalar RIDING ALONGSIDE the 2D path rather than a third component of
@@ -599,9 +649,13 @@ pub struct Bullet {
     /// exactly as before. The ray's DIRECTION is still exactly the shooter's
     /// look direction, because `vy / BULLET_SPEED == tan(pitch)`.
     pub y: f32,
+    /// Vertical velocity.
     pub vy: f32,
+    /// Remaining lifetime in seconds.
     pub ttl: f32,
+    /// Player currently credited as owner.
     pub owner: u8,
+    /// Body-shot damage.
     pub dmg: u8,
     /// Owner's view delay when fired: targets rewind this far on hit tests.
     pub delay: u16,
@@ -615,10 +669,15 @@ pub struct Bullet {
 /// current position against a rewound one and miss for the wrong reason.
 type HistoryFrame = Vec<(u8, [f32; 2], f32, bool, bool)>;
 
+/// Authoritative deterministic Arena v12 simulation.
 pub struct Sim {
+    /// Collision obstacles in deterministic generation order.
     pub obstacles: Vec<Obstacle>,
+    /// Weapon pads in deterministic generation order.
     pub pads: Vec<Pad>,
+    /// Players in admission order.
     pub players: Vec<PlayerSt>,
+    /// Live bullets in deterministic simulation order.
     pub bullets: Vec<Bullet>,
     /// (killer, victim) pairs from the last step.
     pub events: Vec<(u8, u8)>,
@@ -629,6 +688,7 @@ pub struct Sim {
 }
 
 impl Sim {
+    /// Constructs an empty deterministic arena from the shared lobby seed.
     #[must_use]
     pub fn new(seed: u64) -> Self {
         Self {
@@ -648,6 +708,7 @@ impl Sim {
         }
     }
 
+    /// Adds one player at the next deterministic spawn slot.
     pub fn add_player(&mut self, id: u8) {
         // Player count is capped at eight by the public protocol.
         #[allow(clippy::cast_possible_truncation)]
@@ -675,6 +736,7 @@ impl Sim {
         });
     }
 
+    /// Removes one player, owned bullets, and rewind-history entries.
     pub fn remove_player(&mut self, id: u8) {
         self.players.retain(|p| p.id != id);
         self.bullets.retain(|b| b.owner != id);
@@ -708,6 +770,7 @@ impl Sim {
         clippy::cast_sign_loss,
         clippy::too_many_lines
     )]
+    /// Advances exactly one frozen fixed tick using the current input per player.
     pub fn step(&mut self, inputs: &dyn Fn(u8) -> PlayerIn) {
         self.events.clear();
         self.tick += 1;

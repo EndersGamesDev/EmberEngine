@@ -1,0 +1,9 @@
+{
+  "hello": "{\"t\":\"hello\",\"proto\":12,\"handle\":\"  ender  \"}",
+  "welcome": "{\"t\":\"welcome\",\"proto\":12,\"motd\":\"ember arena — cubes with guns\"}",
+  "list": "{\"t\":\"list_lobbies\"}",
+  "list_response": "{\"t\":\"lobby_list\",\"lobbies\":[{\"name\":\"alpha\",\"host\":\"ender\",\"has_password\":true,\"players\":1,\"cap\":8}]}",
+  "create": "{\"t\":\"create_lobby\",\"name\":\"  alpha  \",\"password\":\"secret\"}",
+  "join": "{\"t\":\"join_lobby\",\"name\":\" alpha \",\"password\":\" secret \"}",
+  "refusal": "{\"t\":\"error\",\"message\":\"this build speaks protocol v11, the live game is v12 — play the live version\"}"
+}
