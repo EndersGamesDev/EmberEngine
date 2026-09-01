@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# A fake `ssh` for deploy/tests/test-ssh-deploys.sh.
+#
+# It logs its argv to $SHIM_LOG and answers the handful of things the deploy
+# scripts actually read back: the host's name (piped in on stdin), whether a
+# systemd unit is enabled, who holds the port, and the tunnel's minted
+# hostname. Everything else succeeds silently, which is what a real ssh to a
+# working host looks like from the script's point of view.
+#
+# The point of the shim is that the scripts' CONTROL FLOW gets exercised — the
+# name resolution, the build stamp, the launch environment, the publish — with
+# no host in existence. It is not a simulation of a host and must not grow
+# into one.
+set -uo pipefail
+
+LOG="${SHIM_LOG:-/dev/null}"
+{ printf 'ssh'; for a in "$@"; do printf ' [%s]' "$a"; done; printf '\n'; } >> "$LOG"
+
+ARGS="$*"
+case "$ARGS" in
+    *"bash -s"*)
+        # host-name.sh is piped in. Consume it, so the writing end never sees
+        # EPIPE, and answer with the name this fake host publishes under.
+        cat >/dev/null
+        echo "${SHIM_HOST_NAME:-amber-otter}"
+        ;;
+    *is-enabled*)
+        # No units installed: the scripts take their own pkill+nohup path,
+        # which is the one that has to carry EMBER_HOST_NAME.
+        exit 1
+        ;;
+    *cloudflared-fire.log*)
+        echo "https://${SHIM_TUNNEL:-test}-fire.trycloudflare.com"
+        ;;
+    *trycloudflare*)
+        echo "https://${SHIM_TUNNEL:-test}-arena.trycloudflare.com"
+        ;;
+    *"ss -ltnp"*)
+        # Nobody else holds the port.
+        ;;
+    *tail*)
+        echo "[shim] fake server log line"
+        ;;
+    *)
+        ;;
+esac
+exit 0

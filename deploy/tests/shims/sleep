@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# A fake `sleep` for deploy/tests/test-ssh-deploys.sh: return at once.
+#
+# The deploy scripts wait 15 s for DNS to publish a brand-new tunnel hostname
+# and poll every 2 s for the hostname itself. Both waits are correct and both
+# are pointless against a shim, so the test would spend half a minute proving
+# that `sleep` sleeps.
+exit 0

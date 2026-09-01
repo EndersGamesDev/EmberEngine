@@ -45,6 +45,17 @@ rm -rf "$PAGES_DIR"/index.html "$PAGES_DIR"/pkg \
     "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$PONG_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR"/games.json
 mkdir -p "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$PONG_LIVE" "$PAGES_DIR/$FIRE_LIVE"
 cp web/index.html web/games.json web/version.json "$PAGES_DIR"/
+# The shared host-picking logic (docs/hosts.md §5). It lives at the pages root
+# and every live page imports it from there, so there is one copy of the rule
+# rather than one per game. Guarded because a checkout that predates it still
+# has to be deployable: the frozen pages carry their own inline discovery and
+# read the legacy keys, so a hub without hosts.js degrades to what it did
+# before rather than breaking.
+if [ -f web/hosts.js ]; then
+    cp web/hosts.js "$PAGES_DIR"/
+else
+    echo "   note: web/hosts.js does not exist in this checkout; not copying it"
+fi
 cp "web/$ARENA_LIVE/index.html" "$PAGES_DIR/$ARENA_LIVE/"
 cp "web/$PONG_LIVE/index.html" "$PAGES_DIR/$PONG_LIVE/"
 cp "web/$FIRE_LIVE/index.html" "$PAGES_DIR/$FIRE_LIVE/"
@@ -133,6 +144,14 @@ elif was != proto:
 !! they already say "archived" in the hub.
 """)
 EOF
+
+# The top-level protocol keys just moved, and the legacy top-level ADDRESS
+# keys are defined against them: `ws` must name a host that speaks the
+# protocol the pages now ship. Recompute them from the host list immediately,
+# so a bump re-points `ws` at a host that already speaks the new version
+# instead of leaving every frozen and live page on a host they can no longer
+# join until somebody redeploys a server.
+bash "$REPO_DIR/deploy/publish-host.sh" --book "$PAGES_DIR/server.json" --recompute
 
 (
     cd "$PAGES_DIR"

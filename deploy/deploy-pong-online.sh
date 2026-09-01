@@ -38,14 +38,35 @@ PORT=7780
 BIND="127.0.0.1:$PORT"
 cd "$REPO_DIR"
 
+# Which commit this host runs. A host is allowed to stay on an older one
+# (docs/hosts.md §7): it keeps serving the frozen pages that speak its
+# protocol, and the address book carries the version so a page can prefer the
+# newest host that speaks its own.
+#
+#     EMBER_REF=v12 bash deploy/deploy-pong-online.sh
+REF="${EMBER_REF:-HEAD}"
+
 # `git archive` below deploys the COMMITTED tree, so refuse a dirty one rather
-# than shipping something other than what is in front of you.
-if ! git diff --quiet || ! git diff --cached --quiet; then
-    echo "FAILED: working tree is dirty; this deploys the committed tree." >&2
-    git status --short >&2
-    exit 1
+# than shipping something other than what is in front of you. Only when the ref
+# IS the working tree's HEAD: deploying a named older ref has nothing to do
+# with what happens to be edited here, and refusing then would mean a host
+# could not be pinned to an older build without stashing first.
+if [ "$REF" = "HEAD" ]; then
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        echo "FAILED: working tree is dirty; this deploys the committed tree." >&2
+        git status --short >&2
+        exit 1
+    fi
 fi
-echo "== deploying $(git rev-parse --short HEAD) =="
+git rev-parse --verify -q "$REF^{commit}" >/dev/null \
+    || { echo "FAILED: EMBER_REF='$REF' names no commit here." >&2; exit 1; }
+
+# The build stamp the server reports in its Welcome, and the entry publishes.
+# Read from the REF, not from HEAD: a deploy of an older commit must say it is
+# an older commit or the preferred-host rule ranks it as the newest build.
+VERSION="r$(git rev-list --count "$REF")"
+COMMIT="$(git rev-parse --short "$REF")"
+echo "== deploying $VERSION · $COMMIT (ref $REF) =="
 
 echo "== checking $REMOTE is reachable =="
 # Fail here with a sentence, rather than twenty lines further down with a raw
@@ -65,16 +86,34 @@ echo "== syncing source =="
 # every run — 351 MB to build a server that needs none of it. The manifests
 # and crates alone are ~0.5 MB and build identically.
 TARBALL="$(mktemp -t ember-src-XXXX.tar.gz)"
-git archive --format=tar.gz -o "$TARBALL" HEAD Cargo.toml Cargo.lock crates/
+git archive --format=tar.gz -o "$TARBALL" "$REF" Cargo.toml Cargo.lock crates/
 echo "   $(du -h "$TARBALL" | cut -f1) of committed source"
 scp -o BatchMode=yes "$TARBALL" "$REMOTE":ember-src.tar.gz
 rm -f "$TARBALL"
 ssh -o BatchMode=yes "$REMOTE" \
     'rm -rf ~/ember-src && mkdir ~/ember-src && tar xzf ~/ember-src.tar.gz -C ~/ember-src'
 
+echo "== resolving this host's name =="
+# The name is a property of the MACHINE, not of the workstation deploying to
+# it, so it is generated there and kept there (docs/hosts.md §6). host-name.sh
+# is piped in rather than installed: the host has no checkout of this repo.
+# A local EMBER_HOST_NAME still wins, passed through this one call's
+# environment, which is how a name collision gets broken by hand.
+HOST_NAME="$(ssh -o BatchMode=yes "$REMOTE" \
+    "EMBER_HOST_NAME='${EMBER_HOST_NAME:-}' bash -s" < "$REPO_DIR/deploy/host-name.sh")"
+HOST_NAME="$(printf '%s' "$HOST_NAME" | tr -d '[:space:]')"
+if ! printf '%s' "$HOST_NAME" | grep -qE '^[a-z0-9-]{3,32}$'; then
+    echo "FAILED: '$REMOTE' produced no usable host name ('$HOST_NAME')." >&2
+    exit 1
+fi
+echo "   $REMOTE publishes as '$HOST_NAME'"
+
 echo "== building pong-server (toolbox: ember-build) =="
+# EMBER_BUILD_VERSION/EMBER_BUILD_COMMIT are read by the server crate's
+# build.rs through option_env!, so the binary can say which commit it is in
+# its Welcome. They must be set for the BUILD, not the launch.
 ssh -o BatchMode=yes "$REMOTE" \
-    'toolbox run -c ember-build bash -lc "source ~/.cargo/env && cd ~/ember-src && cargo build --release -p pong-server"'
+    "toolbox run -c ember-build bash -lc 'source ~/.cargo/env && cd ~/ember-src && EMBER_BUILD_VERSION=$VERSION EMBER_BUILD_COMMIT=$COMMIT cargo build --release -p pong-server'"
 
 echo "== restarting pong-server =="
 # Two ways to own the process, and they must never both be used at once. If
@@ -131,8 +170,11 @@ if [ -z "$MANAGED" ]; then
         echo "        account owns it." >&2
         exit 1
     fi
+    # EMBER_HOST_NAME, never a `--name` flag. A host may be running an older
+    # commit whose binary has never heard of the flag, and an unknown flag is
+    # a crash loop where an unknown environment variable is simply ignored.
     ssh -o BatchMode=yes -f "$REMOTE" \
-        "RUST_LOG=info nohup ~/ember-src/target/release/pong-server --bind $BIND >> ~/pong-server.log 2>&1 &"
+        "EMBER_HOST_NAME=$HOST_NAME RUST_LOG=info nohup ~/ember-src/target/release/pong-server --bind $BIND >> ~/pong-server.log 2>&1 &"
     sleep 2
     if ! ssh -o BatchMode=yes "$REMOTE" 'pgrep -u "$(id -un)" -f "pong-serve[r]" >/dev/null'; then
         echo "FAILED: pong-server is not running. Last log lines:" >&2
@@ -227,40 +269,43 @@ if [ -z "$ok" ]; then
     exit 1
 fi
 
-echo "== publishing server.json to GitHub Pages =="
+echo "== publishing this host's entry to the address book =="
 # Only after the health check passed. This used to run BEFORE it, so a
 # failed deploy still pointed every player at the new domain.
+#
+# The protocol number comes from the REF being deployed, not from the working
+# tree: the entry has to say what the binary on that host actually speaks, and
+# those differ the moment EMBER_REF names an older commit.
+PROTO="$(git show "$REF:crates/pong-core/src/proto.rs" \
+    | grep -oE 'PROTO_VERSION: u16 = [0-9]+' | grep -oE '[0-9]+$')"
+[ -n "$PROTO" ] || { echo "FAILED: no PROTO_VERSION in $REF:crates/pong-core/src/proto.rs" >&2; exit 1; }
+
 PAGES_DIR="$(mktemp -d -t ember-pages-XXXX)"
 git -C "$REPO_DIR" worktree add "$PAGES_DIR" gh-pages
-# Merge, never overwrite: server.json also carries "proto", written by
-# deploy-pages.sh at ship time. Clobbering it loses the record of which
-# protocol the live bundle speaks, so the next pages deploy has no baseline
-# to compare against and warns instead of catching a bump.
-python - "$PAGES_DIR/server.json" "$WS_URL" <<'EOF'
-import json, os, sys, time
-p, ws = sys.argv[1], sys.argv[2]
-d = {}
-if os.path.exists(p):
-    try:
-        d = json.load(open(p))
-    except Exception:
-        d = {}
-d["ws"] = ws
-d["v"] = str(int(time.time()))
-json.dump(d, open(p, "w"))
-EOF
+# publish-host.sh upserts THIS host's entry and recomputes the legacy `ws`
+# from the whole list. The inline python this replaced assigned `ws` directly,
+# which is only correct while there is exactly one host: the second machine to
+# deploy took the first one's address out of the book, and a host deployed
+# from an older commit pointed every frozen page at a protocol they could not
+# join.
+bash "$REPO_DIR/deploy/publish-host.sh" \
+    --book "$PAGES_DIR/server.json" \
+    --name "$HOST_NAME" \
+    --game arena --url "$WS_URL" --proto "$PROTO" \
+    --version "$VERSION" --commit "$COMMIT" \
+    --by "$(id -un)@$REMOTE"
 (
     cd "$PAGES_DIR"
     git add server.json
     if git diff --cached --quiet; then
         echo "server.json unchanged"
     else
-        git commit -q -m "Point server.json at $WS_URL
+        git commit -q -m "Publish host $HOST_NAME: arena at $WS_URL
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
         git push -q origin gh-pages
     fi
 )
 git -C "$REPO_DIR" worktree remove --force "$PAGES_DIR"
 
-echo "== ONLINE: $WS_URL (page picks it up from server.json) =="
+echo "== ONLINE: $HOST_NAME -> $WS_URL (the page picks it from server.json) =="
