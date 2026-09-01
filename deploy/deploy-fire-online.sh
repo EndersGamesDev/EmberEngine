@@ -91,22 +91,31 @@ echo "== restarting fire-server =="
 #
 # The fallback is not legacy — a freshly built host has no units yet, and this
 # script has to be what brings the game up there in the first place.
+MANAGED=""
 if ssh -o BatchMode=yes "$REMOTE" \
         'systemctl --user is-enabled ember-fire.service' >/dev/null 2>&1; then
-    MANAGED=1
-    echo "   ember-fire.service is enabled; letting systemd own the restart"
-    ssh -o BatchMode=yes "$REMOTE" 'systemctl --user restart ember-fire.service'
-    sleep 2
-    if ! ssh -o BatchMode=yes "$REMOTE" \
-            'systemctl --user is-active --quiet ember-fire.service'; then
-        echo "FAILED: ember-fire.service did not come up." >&2
-        ssh -o BatchMode=yes "$REMOTE" \
-            'systemctl --user status --no-pager --lines=20 ember-fire.service' >&2 || true
-        exit 1
+    # `is-enabled` only reads a symlink. It does NOT prove the manager can be
+    # COMMANDED, and on specht it cannot: SELinux is Enforcing and permits the
+    # read verbs (is-enabled, show, list-units, is-system-running) while
+    # denying start/restart/stop/is-active from a non-interactive ssh session.
+    # Measured directly — enable succeeds, start returns "Access denied".
+    # Predicting from is-enabled therefore takes the systemd path and then
+    # fails on the restart, which is exactly what happened on the first real
+    # attempt. Attempt it and fall back on refusal: the restart's own exit
+    # status is the only honest signal, and the health probe below is what
+    # verifies the result either way.
+    echo "   ember-fire.service is enabled; trying systemd"
+    if ssh -o BatchMode=yes "$REMOTE" \
+            'systemctl --user restart ember-fire.service' >/dev/null 2>&1; then
+        MANAGED=1
+        echo "   systemd accepted the restart and owns the process"
+    else
+        echo "   systemd refused it; falling back to a direct launch"
     fi
-else
-    MANAGED=""
-    echo "   no systemd unit; launching directly"
+fi
+
+if [ -z "$MANAGED" ]; then
+    echo "   launching directly"
     # Only our own account's process, and only one matching our own install
     # path. The old shared form was `pkill -u <hardcoded>`: run from the wrong
     # account it matched nothing, said nothing (the call is wrapped in
