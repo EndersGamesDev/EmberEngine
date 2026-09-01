@@ -411,28 +411,7 @@ fn tick_lobbies(
             lobby.race.start_countdown();
         }
 
-        // Build the full grid: humans where they sit, AI everywhere else.
-        let inputs: Vec<CarInput> = (0..lobby.race.racers.len())
-            .map(|i| {
-                let slot = u8::try_from(i).expect("race grid fits in a wire player id");
-                match lobby.inputs.get(&slot) {
-                    Some((input, _)) => *input,
-                    None => {
-                        if lobby.slots.values().any(|s| *s == slot) {
-                            // A human holds this slot but has sent nothing
-                            // yet — coast, do not hand their car to the AI.
-                            CarInput::default()
-                        } else {
-                            ai::chase(
-                                &lobby.race.track,
-                                &lobby.race.racers[i].car,
-                                ai::DEFAULT_SKILL,
-                            )
-                        }
-                    }
-                }
-            })
-            .collect();
+        let inputs = lobby_inputs(lobby);
 
         lobby.race.step(&inputs, DT);
 
@@ -477,43 +456,8 @@ fn tick_lobbies(
             );
         }
 
-        // Only broadcast state once there is something to say. A Waiting
-        // lobby's cars are parked on a grid the client already computed for
-        // itself, so streaming it 30 times a second is pure queue pressure —
-        // and it was enough to push control messages out of a slow peer's
-        // queue while everyone sat in the lobby.
         if lobby.race.state != RaceState::Waiting && lobby.race.tick % STATE_EVERY_TICKS == 0 {
-            let cars: Vec<CarState> = lobby
-                .race
-                .racers
-                .iter()
-                .enumerate()
-                .map(|(i, racer)| {
-                    let id = u8::try_from(i).expect("race grid fits in a wire player id");
-                    CarState {
-                        id,
-                        x: racer.car.pos.x,
-                        z: racer.car.pos.y,
-                        yaw: racer.car.yaw,
-                        vx: racer.car.vel.x,
-                        vz: racer.car.vel.y,
-                        lap: racer.lap.lap,
-                        progress: racer.lap.progress,
-                        boost: racer.car.boost_charges,
-                        boosting: racer.car.boosting(),
-                        drift: racer.car.drift,
-                        ack: lobby.inputs.get(&id).map_or(0, |(_, sequence)| *sequence),
-                    }
-                })
-                .collect();
-            broadcast(
-                conns,
-                lobby,
-                &S2C::State {
-                    tick: lobby.race.tick,
-                    cars,
-                },
-            );
+            broadcast_race_state(conns, lobby);
         }
 
         // Reset for another race once the results have been shown.
@@ -538,6 +482,65 @@ fn tick_lobbies(
     for name in empty {
         lobbies.remove(&name);
     }
+}
+
+/// Build the full grid: humans where they sit, AI everywhere else.
+fn lobby_inputs(lobby: &Lobby) -> Vec<CarInput> {
+    (0..lobby.race.racers.len())
+        .map(|i| {
+            let slot = u8::try_from(i).expect("race grid fits in a wire player id");
+            match lobby.inputs.get(&slot) {
+                Some((input, _)) => *input,
+                None if lobby.slots.values().any(|candidate| *candidate == slot) => {
+                    // A human holds this slot but has sent nothing yet —
+                    // coast, do not hand their car to the AI.
+                    CarInput::default()
+                }
+                None => ai::chase(
+                    &lobby.race.track,
+                    &lobby.race.racers[i].car,
+                    ai::DEFAULT_SKILL,
+                ),
+            }
+        })
+        .collect()
+}
+
+fn broadcast_race_state(conns: &HashMap<u64, Conn>, lobby: &Lobby) {
+    // A Waiting lobby's cars are parked on a grid the client already computed
+    // for itself, so streaming it is pure queue pressure. The caller filters
+    // that phase before reaching here.
+    let cars: Vec<CarState> = lobby
+        .race
+        .racers
+        .iter()
+        .enumerate()
+        .map(|(i, racer)| {
+            let id = u8::try_from(i).expect("race grid fits in a wire player id");
+            CarState {
+                id,
+                x: racer.car.pos.x,
+                z: racer.car.pos.y,
+                yaw: racer.car.yaw,
+                vx: racer.car.vel.x,
+                vz: racer.car.vel.y,
+                lap: racer.lap.lap,
+                progress: racer.lap.progress,
+                boost: racer.car.boost_charges,
+                boosting: racer.car.boosting(),
+                drift: racer.car.drift,
+                ack: lobby.inputs.get(&id).map_or(0, |(_, sequence)| *sequence),
+            }
+        })
+        .collect();
+    broadcast(
+        conns,
+        lobby,
+        &S2C::State {
+            tick: lobby.race.tick,
+            cars,
+        },
+    );
 }
 
 fn drop_silent(conns: &mut HashMap<u64, Conn>, lobbies: &mut HashMap<String, Lobby>) {
@@ -648,45 +651,7 @@ fn handle_msg(
         }
 
         C2S::CreateLobby { name, password } => {
-            if !version_ok(id, conns) {
-                return;
-            }
-            let name = proto::sanitize(&name, proto::MAX_LOBBY_LEN);
-            if name.is_empty() {
-                send_to(
-                    conns,
-                    id,
-                    &S2C::Rejected {
-                        reason: "lobby needs a name".into(),
-                    },
-                );
-                return;
-            }
-            if lobbies.contains_key(&name) {
-                send_to(
-                    conns,
-                    id,
-                    &S2C::Rejected {
-                        reason: "that name is taken".into(),
-                    },
-                );
-                return;
-            }
-            if lobbies.len() >= cfg.max_lobbies {
-                send_to(
-                    conns,
-                    id,
-                    &S2C::Rejected {
-                        reason: "server is full".into(),
-                    },
-                );
-                return;
-            }
-            let password = password
-                .map(|p| proto::sanitize(&p, proto::MAX_PASSWORD_LEN))
-                .filter(|p| !p.is_empty());
-            lobbies.insert(name.clone(), Lobby::new(password, cfg.laps));
-            join_lobby(id, &name, None, conns, lobbies, cfg, true);
+            create_lobby(id, &name, password, conns, lobbies, cfg);
         }
 
         C2S::JoinLobby { name, password } => {
@@ -719,15 +684,6 @@ fn handle_msg(
             handbrake,
             boost,
         } => {
-            let Some(lobby_name) = conns.get(&id).and_then(|c| c.lobby.clone()) else {
-                return;
-            };
-            let Some(l) = lobbies.get_mut(&lobby_name) else {
-                return;
-            };
-            let Some(&slot) = l.slots.get(&id) else {
-                return;
-            };
             let incoming = CarInput {
                 throttle,
                 steer,
@@ -735,28 +691,85 @@ fn handle_msg(
                 boost,
             }
             .sanitized();
-            match l.inputs.get_mut(&slot) {
-                Some((held, last_seq)) => {
-                    // Out-of-order or replayed packets must not rewind the
-                    // car's intent. A stale packet is simply dropped.
-                    if seq <= *last_seq {
-                        return;
-                    }
-                    // A boost press latches until a tick consumes it, so a
-                    // press is never lost between two input packets.
-                    let pending = held.boost;
-                    *held = incoming;
-                    held.boost |= pending;
-                    *last_seq = seq;
-                }
-                None => {
-                    l.inputs.insert(slot, (incoming, seq));
-                }
-            }
+            record_input(id, seq, incoming, conns, lobbies);
         }
 
         C2S::Ping { nonce } => {
             send_to(conns, id, &S2C::Pong { nonce });
+        }
+    }
+}
+
+fn create_lobby(
+    id: u64,
+    requested_name: &str,
+    password: Option<String>,
+    conns: &mut HashMap<u64, Conn>,
+    lobbies: &mut HashMap<String, Lobby>,
+    cfg: &ServerConfig,
+) {
+    if !version_ok(id, conns) {
+        return;
+    }
+    let name = proto::sanitize(requested_name, proto::MAX_LOBBY_LEN);
+    let rejection = if name.is_empty() {
+        Some("lobby needs a name")
+    } else if lobbies.contains_key(&name) {
+        Some("that name is taken")
+    } else if lobbies.len() >= cfg.max_lobbies {
+        Some("server is full")
+    } else {
+        None
+    };
+    if let Some(reason) = rejection {
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: reason.into(),
+            },
+        );
+        return;
+    }
+
+    let password = password
+        .map(|value| proto::sanitize(&value, proto::MAX_PASSWORD_LEN))
+        .filter(|value| !value.is_empty());
+    lobbies.insert(name.clone(), Lobby::new(password, cfg.laps));
+    join_lobby(id, &name, None, conns, lobbies, cfg, true);
+}
+
+fn record_input(
+    id: u64,
+    seq: u32,
+    incoming: CarInput,
+    conns: &HashMap<u64, Conn>,
+    lobbies: &mut HashMap<String, Lobby>,
+) {
+    let Some(lobby_name) = conns.get(&id).and_then(|conn| conn.lobby.as_ref()) else {
+        return;
+    };
+    let Some(lobby) = lobbies.get_mut(lobby_name) else {
+        return;
+    };
+    let Some(&slot) = lobby.slots.get(&id) else {
+        return;
+    };
+    match lobby.inputs.get_mut(&slot) {
+        Some((held, last_seq)) => {
+            // Out-of-order or replayed packets must not rewind intent.
+            if seq <= *last_seq {
+                return;
+            }
+            // A boost press latches until a tick consumes it, so a press is
+            // never lost between two input packets.
+            let pending = held.boost;
+            *held = incoming;
+            held.boost |= pending;
+            *last_seq = seq;
+        }
+        None => {
+            lobby.inputs.insert(slot, (incoming, seq));
         }
     }
 }
