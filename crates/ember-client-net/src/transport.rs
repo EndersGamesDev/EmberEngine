@@ -632,11 +632,16 @@ mod imp {
         }
 
         pub fn send(&self, frame: WireFrame) -> Result<(), SendError> {
-            if frame.len() > self.shared.borrow().max_frame_bytes {
+            // Both borrows are hoisted into their own statements: a guard living inside a
+            // match scrutinee would still be held in every arm, and the arms borrow
+            // mutably — a double borrow that traps the whole wasm module.
+            let max_frame_bytes = self.shared.borrow().max_frame_bytes;
+            if frame.len() > max_frame_bytes {
                 self.shared.borrow_mut().diagnostics.oversized_frames += 1;
                 return Err(SendError::FrameTooLarge);
             }
-            match self.shared.borrow().status.clone() {
+            let status = self.shared.borrow().status.clone();
+            match status {
                 TransportStatus::Connecting => {
                     let mut pending = self.pending.borrow_mut();
                     if pending.len() >= self.outbox_capacity {
