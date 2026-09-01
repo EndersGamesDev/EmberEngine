@@ -44,6 +44,12 @@
 # too); WSL_UTF8=1 makes wsl.exe's own messages UTF-8 rather than UTF-16
 # so a grep over its output works.
 #
+# To keep a log of a run use `bash deploy/deploy-kings-online.sh 2>&1 | tee
+# kings-deploy.log`, NOT `> kings-deploy.log 2>&1`: wsl.exe writes the
+# distro's stdout and stderr at separate offsets of a redirected file, so a
+# later stderr line overwrites the head of the log (measured 2026-09-01: a
+# 25-byte stderr line replaced "stdout line 1"). A pipe has no offsets.
+#
 # Deliberately a separate script, port (7782), tunnel, logs and server.json
 # keys from the arena's (7780) and fire's (7781). The games speak different
 # protocols with independent version numbers, so redeploying one must never
