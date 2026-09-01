@@ -33,18 +33,22 @@ pub const SHIELD_ARC: f32 = std::f32::consts::FRAC_PI_3 * 2.0;
 /// It must also stay under `BODY_H_STAND - EYE_STAND` = 0.41. Rounds leave the
 /// muzzle at `EYE_STAND` 1.45 and fly level at pitch 0, so a band reaching down
 /// to 1.45 would make every level shot between two standing players a headshot
-/// - and with headshots lethal the pistol would one-shot the whole game with
+/// and, with headshots lethal, the pistol would one-shot the whole game with
 /// nobody aiming at a head. At 0.30 the band starts at 1.56, so level fire
 /// lands in the chest and a standing kill needs deliberate upward aim.
 /// `level_fire_is_not_a_free_headshot` pins that margin.
 pub const HEAD_H: f32 = 0.30;
 
-/// Melee reach from the attacker's centre, before the target's own radius is
-/// added. 2.0 + PLAYER_R 0.6 strikes a standing target at 2.6 centre to
+/// Melee reach from the attacker's centre.
+///
+/// Before the target's own radius is added, 2.0 + `PLAYER_R` 0.6 strikes a
+/// standing target at 2.6 centre to
 /// centre, about one and a half body widths - a lunge, not a spear.
 pub const MELEE_RANGE: f32 = 2.0;
-/// Full width of the melee cone, radians (~115 deg). Wider than SHIELD_ARC on
-/// purpose: the shield answers "am I covered from that round", which wants to
+/// Full width of the melee cone, in radians (~115 degrees).
+///
+/// This is wider than `SHIELD_ARC` on purpose: the shield answers "am I covered
+/// from that round", which wants to
 /// be demanding, while a swing at contact range wants to land when it
 /// visually should.
 pub const MELEE_ARC: f32 = 2.0;
@@ -2747,6 +2751,8 @@ mod tests {
     }
 
     #[test]
+    // This named balance test deliberately reports its constants in the runtime suite.
+    #[allow(clippy::assertions_on_constants)]
     fn level_fire_is_not_a_free_headshot() {
         // This is the balance guard for HEAD_H, and it is the whole reason
         // that constant is 0.22 rather than something rounder. A round leaves

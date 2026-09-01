@@ -446,6 +446,8 @@ impl StateMachine {
     }
 
     /// Applies one input using a total, explicit state transition.
+    // Separate rows keep every lifecycle state's treatment explicit in this total table.
+    #[allow(clippy::match_same_arms)]
     pub fn transition(&mut self, input: StateInput) -> StateAction {
         let action = match (&self.state, input) {
             (ConnectionState::Closed, _) => StateAction::Ignore,
@@ -582,7 +584,7 @@ mod tests {
         }
     }
 
-    fn assert_rejection(action: StateAction, code: OuterErrorCode) {
+    fn assert_rejection(action: &StateAction, code: OuterErrorCode) {
         assert!(matches!(
             action,
             StateAction::Reject {
@@ -826,7 +828,7 @@ mod tests {
         ))
         .expect("wrong-state list fixture is valid JSON");
         assert_rejection(
-            awaiting.transition(StateInput::Outer(list)),
+            &awaiting.transition(StateInput::Outer(list)),
             OuterErrorCode::UnexpectedMessage,
         );
         assert_eq!(awaiting.state(), &ConnectionState::Closed);
@@ -835,7 +837,7 @@ mod tests {
             "../tests/fixtures/outer/invalid/wrong_before_join_inner.txt"
         );
         assert_rejection(
-            awaiting_inner
+            &awaiting_inner
                 .transition(StateInput::Inner(InnerPayload::Text(before_join.to_string()))),
             OuterErrorCode::PayloadBeforeJoin,
         );
@@ -855,7 +857,7 @@ mod tests {
         ))
         .expect("repeated hello fixture is valid JSON");
         assert_rejection(
-            browsing.transition(StateInput::Outer(repeated)),
+            &browsing.transition(StateInput::Outer(repeated)),
             OuterErrorCode::RepeatedHello,
         );
         assert_eq!(browsing.state(), &ConnectionState::Closed);
@@ -869,7 +871,7 @@ mod tests {
             "../tests/fixtures/outer/invalid/wrong_before_join_inner.txt"
         );
         assert_rejection(
-            browsing_inner.transition(StateInput::Inner(InnerPayload::Text(inner.to_string()))),
+            &browsing_inner.transition(StateInput::Inner(InnerPayload::Text(inner.to_string()))),
             OuterErrorCode::PayloadBeforeJoin,
         );
 
@@ -887,7 +889,7 @@ mod tests {
         ))
         .expect("post-join list fixture is valid JSON");
         assert_rejection(
-            joined_machine.transition(StateInput::Outer(post_join_list)),
+            &joined_machine.transition(StateInput::Outer(post_join_list)),
             OuterErrorCode::UnexpectedMessage,
         );
         assert_eq!(joined_machine.state(), &ConnectionState::Closed);

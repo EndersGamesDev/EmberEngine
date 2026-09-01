@@ -601,7 +601,7 @@ pub enum InnerFrame {
 impl InnerFrame {
     /// Returns the charged payload size in bytes.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         match self {
             Self::Text(text) => text.len(),
             Self::Binary(bytes) => bytes.len(),
