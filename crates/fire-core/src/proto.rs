@@ -173,6 +173,7 @@ const WINDOWS_IO_PENDING: i32 = 997;
 /// as a joining player never appearing, a race that never went green, and
 /// remote cars frozen at the grid — three unrelated-looking symptoms, one
 /// cause.
+#[must_use]
 pub fn is_transient_read(e: &std::io::Error) -> bool {
     matches!(
         e.kind(),
