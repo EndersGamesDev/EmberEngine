@@ -1,0 +1,7 @@
+{"t":"hello","proto":4,"handle":"ender"}
+{"t":"list_lobbies"}
+{"t":"create_lobby","name":"alpha","password":"secret"}
+{"t":"join_lobby","name":"alpha","password":"secret"}
+{"t":"leave_lobby"}
+{"t":"input","mx":-1.0,"my":0.0,"ax":1.0,"az":0.0,"fire":true,"sprint":true,"crouch":false}
+{"t":"ping","nonce":7}
