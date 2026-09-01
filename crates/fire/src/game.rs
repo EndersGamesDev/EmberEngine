@@ -349,132 +349,6 @@ pub fn livery(i: usize) -> Vec3 {
     Vec3::from(LIVERIES[i % LIVERIES.len()])
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The mesh-id struct and the registration order are written out twice
-    /// and must agree; if they drift, every prop draws as the wrong shape.
-    #[test]
-    fn mesh_ids_match_registration_order() {
-        let track = castle::track();
-        let (list, ids) = build_meshes(&track);
-        assert_eq!(list.len(), 11, "mesh count changed — update the id struct");
-        // Ids are 1-based: list[i] has id i+1.
-        for (i, id) in [
-            ids.ground, ids.road, ids.kerb_l, ids.kerb_r, ids.wall_l,
-            ids.wall_r, ids.start, ids.car, ids.gatehouse, ids.tower, ids.fountain,
-        ]
-        .iter()
-        .enumerate()
-        {
-            let expected = u32::try_from(i).expect("mesh registration index fits u32") + 1;
-            assert_eq!(*id, expected, "mesh id {id} is not at registration slot {}", i + 1);
-        }
-        for (i, m) in list.iter().enumerate() {
-            assert!(!m.vertices.is_empty(), "mesh slot {} is empty", i + 1);
-            assert_eq!(m.vertices.len() % 3, 0, "mesh slot {} is not a triangle list", i + 1);
-        }
-    }
-
-    /// Props must have loaded from their GLBs rather than falling back to the
-    /// substitute cube — a cube has 36 vertices, so anything at exactly 36 is
-    /// a failed load hiding behind the safety net.
-    #[test]
-    fn generated_props_actually_loaded() {
-        let track = castle::track();
-        let (list, _) = build_meshes(&track);
-        for (slot, name) in [(7, "car"), (8, "gatehouse"), (9, "tower"), (10, "fountain")] {
-            assert!(
-                list[slot].vertices.len() > 100,
-                "{name} fell back to the placeholder cube ({} verts)",
-                list[slot].vertices.len()
-            );
-        }
-    }
-
-    #[test]
-    fn the_game_runs_without_input() {
-        let track = castle::track();
-        let (_, ids) = build_meshes(&track);
-        let mut g = Game::new(ids);
-        let input = InputState::default();
-        for _ in 0..60 * 30 {
-            let f = g.update(&input, 1.0 / 60.0);
-            assert!(f.camera.eye.is_finite(), "camera eye went non-finite");
-            assert!(f.camera.target.is_finite(), "camera target went non-finite");
-            assert!(!f.instances.is_empty());
-            for inst in &f.instances {
-                assert!(inst.position.is_finite(), "instance position non-finite");
-            }
-        }
-        // The countdown expires and the AI field gets moving. The player's own
-        // car stays put, and should: no keys are held. Asserting the HUD shows
-        // speed here would be asserting that a parked car drives itself.
-        assert_eq!(g.race.state, RaceState::Racing);
-        assert!(
-            g.race.racers.iter().skip(1).any(|r| r.car.speed() > 5.0),
-            "no AI car got moving"
-        );
-        assert!(g.race.racers[g.me].car.speed() < 0.5, "the unmanned player car drove off");
-        let h = hud();
-        assert_eq!(h.racers, PLAYERS);
-        assert_eq!(h.laps_total, LAPS);
-        assert!((1..=PLAYERS).contains(&h.place), "place {} out of range", h.place);
-        assert_eq!(h.boost_charges, car::BOOST_CHARGES, "player spent a charge it never pressed");
-    }
-
-    /// The player's car has to actually be wired to the simulation. The key
-    /// mapping cannot be tested from here — `InputState`'s pressed set is
-    /// private to the engine — so this drives the race directly and checks
-    /// that the seat marked `me` is the one that moves.
-    #[test]
-    fn the_player_car_is_wired_to_the_sim() {
-        let track = castle::track();
-        let (_, ids) = build_meshes(&track);
-        let mut g = Game::new(ids);
-        // Order matters: a fresh race is Waiting, and `step` is a no-op there.
-        // Arm the countdown first, then run it out, or the throttle ticks
-        // below land while the cars are still held on the grid.
-        g.race.start_countdown();
-        // The countdown is a small positive simulation constant.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let countdown_ticks = (fire_core::sim::COUNTDOWN_SECS * 60.0) as u32;
-        for _ in 0..countdown_ticks + 5 {
-            g.race.step(&[], 1.0 / 60.0);
-        }
-        assert_eq!(g.race.state, RaceState::Racing, "countdown did not finish");
-        let start = g.race.racers[g.me].car.pos;
-        let mut inputs = vec![CarInput::default(); PLAYERS];
-        inputs[g.me] = CarInput { throttle: 1.0, steer: 0.0, handbrake: false, boost: false };
-        for _ in 0..120 {
-            g.race.step(&inputs, 1.0 / 60.0);
-        }
-        let moved = (g.race.racers[g.me].car.pos - start).length();
-        assert!(moved > 10.0, "player car only moved {moved:.1} m under full throttle");
-    }
-
-    /// A held boost key must spend one charge, not all three.
-    #[test]
-    fn the_boost_latch_holds() {
-        let track = castle::track();
-        let (_, ids) = build_meshes(&track);
-        let mut g = Game::new(ids);
-        // Drive the latch directly: read_input owns the rising edge.
-        let mut pressed = 0;
-        for _ in 0..10 {
-            let boost_down = true;
-            let boost = boost_down && !g.boost_was_down;
-            g.boost_was_down = boost_down;
-            if boost {
-                pressed += 1;
-            }
-        }
-        assert_eq!(pressed, 1, "a held key produced {pressed} presses");
-    }
-}
-
-
 fn push_prop(frame: &mut Frame, ids: &Meshes, kind: PropKind, pos: Vec2, yaw: f32, metres: f32) {
     let (mesh, extent, lift) = match kind {
         PropKind::Gatehouse => (ids.gatehouse, ids.gatehouse_extent, ids.gatehouse_lift),
@@ -586,4 +460,142 @@ pub fn scene(race: &Race, ids: &Meshes, me: usize, camera: Camera) -> Frame {
     }
 
     frame
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The mesh-id struct and the registration order are written out twice
+    /// and must agree; if they drift, every prop draws as the wrong shape.
+    #[test]
+    fn mesh_ids_match_registration_order() {
+        let track = castle::track();
+        let (list, ids) = build_meshes(&track);
+        assert_eq!(list.len(), 11, "mesh count changed — update the id struct");
+        // Ids are 1-based: list[i] has id i+1.
+        for (i, id) in [
+            ids.ground, ids.road, ids.kerb_l, ids.kerb_r, ids.wall_l,
+            ids.wall_r, ids.start, ids.car, ids.gatehouse, ids.tower, ids.fountain,
+        ]
+        .iter()
+        .enumerate()
+        {
+            let expected = u32::try_from(i).expect("mesh registration index fits u32") + 1;
+            assert_eq!(*id, expected, "mesh id {id} is not at registration slot {}", i + 1);
+        }
+        for (i, mesh) in list.iter().enumerate() {
+            assert!(!mesh.vertices.is_empty(), "mesh slot {} is empty", i + 1);
+            assert_eq!(
+                mesh.vertices.len() % 3,
+                0,
+                "mesh slot {} is not a triangle list",
+                i + 1
+            );
+        }
+    }
+
+    /// Props must have loaded from their GLBs rather than falling back to the
+    /// substitute cube — a cube has 36 vertices, so anything at exactly 36 is
+    /// a failed load hiding behind the safety net.
+    #[test]
+    fn generated_props_actually_loaded() {
+        let track = castle::track();
+        let (list, _) = build_meshes(&track);
+        for (slot, name) in [(7, "car"), (8, "gatehouse"), (9, "tower"), (10, "fountain")] {
+            assert!(
+                list[slot].vertices.len() > 100,
+                "{name} fell back to the placeholder cube ({} verts)",
+                list[slot].vertices.len()
+            );
+        }
+    }
+
+    #[test]
+    fn the_game_runs_without_input() {
+        let track = castle::track();
+        let (_, ids) = build_meshes(&track);
+        let mut game = Game::new(ids);
+        let input = InputState::default();
+        for _ in 0..60 * 30 {
+            let frame = game.update(&input, 1.0 / 60.0);
+            assert!(frame.camera.eye.is_finite(), "camera eye went non-finite");
+            assert!(frame.camera.target.is_finite(), "camera target went non-finite");
+            assert!(!frame.instances.is_empty());
+            for instance in &frame.instances {
+                assert!(instance.position.is_finite(), "instance position non-finite");
+            }
+        }
+        // The countdown expires and the AI field gets moving. The player's own
+        // car stays put, and should: no keys are held. Asserting the HUD shows
+        // speed here would be asserting that a parked car drives itself.
+        assert_eq!(game.race.state, RaceState::Racing);
+        assert!(
+            game.race.racers.iter().skip(1).any(|r| r.car.speed() > 5.0),
+            "no AI car got moving"
+        );
+        assert!(
+            game.race.racers[game.me].car.speed() < 0.5,
+            "the unmanned player car drove off"
+        );
+        let hud = hud();
+        assert_eq!(hud.racers, PLAYERS);
+        assert_eq!(hud.laps_total, LAPS);
+        assert!((1..=PLAYERS).contains(&hud.place), "place {} out of range", hud.place);
+        assert_eq!(
+            hud.boost_charges,
+            car::BOOST_CHARGES,
+            "player spent a charge it never pressed"
+        );
+    }
+
+    /// The player's car has to actually be wired to the simulation. The key
+    /// mapping cannot be tested from here — `InputState`'s pressed set is
+    /// private to the engine — so this drives the race directly and checks
+    /// that the seat marked `me` is the one that moves.
+    #[test]
+    fn the_player_car_is_wired_to_the_sim() {
+        let track = castle::track();
+        let (_, ids) = build_meshes(&track);
+        let mut game = Game::new(ids);
+        // Order matters: a fresh race is Waiting, and `step` is a no-op there.
+        // Arm the countdown first, then run it out, or the throttle ticks
+        // below land while the cars are still held on the grid.
+        game.race.start_countdown();
+        // The countdown is a small positive simulation constant.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let countdown_ticks = (fire_core::sim::COUNTDOWN_SECS * 60.0) as u32;
+        for _ in 0..countdown_ticks + 5 {
+            game.race.step(&[], 1.0 / 60.0);
+        }
+        assert_eq!(game.race.state, RaceState::Racing, "countdown did not finish");
+        let start = game.race.racers[game.me].car.pos;
+        let mut inputs = vec![CarInput::default(); PLAYERS];
+        inputs[game.me] =
+            CarInput { throttle: 1.0, steer: 0.0, handbrake: false, boost: false };
+        for _ in 0..120 {
+            game.race.step(&inputs, 1.0 / 60.0);
+        }
+        let moved = (game.race.racers[game.me].car.pos - start).length();
+        assert!(moved > 10.0, "player car only moved {moved:.1} m under full throttle");
+    }
+
+    /// A held boost key must spend one charge, not all three.
+    #[test]
+    fn the_boost_latch_holds() {
+        let track = castle::track();
+        let (_, ids) = build_meshes(&track);
+        let mut game = Game::new(ids);
+        // Drive the latch directly: read_input owns the rising edge.
+        let mut pressed = 0;
+        for _ in 0..10 {
+            let boost_down = true;
+            let boost = boost_down && !game.boost_was_down;
+            game.boost_was_down = boost_down;
+            if boost {
+                pressed += 1;
+            }
+        }
+        assert_eq!(pressed, 1, "a held key produced {pressed} presses");
+    }
 }
