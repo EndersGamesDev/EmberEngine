@@ -1,3 +1,6 @@
+// Preserve the protocol's established floating-point operation ordering.
+#![allow(clippy::suboptimal_flops)]
+
 //! Shared multiplayer protocol: message types, wire framing, and the few
 //! constants both sides must agree on.
 //!
