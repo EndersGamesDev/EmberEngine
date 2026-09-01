@@ -1112,7 +1112,7 @@ mod tests {
     fn reads_a_reference_wrapped_across_a_soft_line_break() {
         assert_eq!(
             texts(&scan(
-                "Compare \u{a7}SPEC\nL-27.2 for the older statement.\n"
+                "Compare \u{a7}SPEC\nQ-27.2 for the older statement.\n"
             )),
             ["\u{a7}SPEC Q-27.2"]
         );

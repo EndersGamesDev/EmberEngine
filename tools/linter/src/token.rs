@@ -946,7 +946,7 @@ mod tests {
     fn joins_markdown_running_text_across_a_soft_break() {
         assert_eq!(
             texts(&markdown_regions(
-                "As the \u{a7}SPEC\nL-16.4.2 formula requires.\n"
+                "As the \u{a7}SPEC\nQ-16.4.2 formula requires.\n"
             )),
             ["As the \u{a7}SPEC Q-16.4.2 formula requires."]
         );

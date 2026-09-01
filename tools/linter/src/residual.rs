@@ -452,7 +452,7 @@ mod tests {
     #[test]
     fn leaves_displayed_residual_forms_alone() {
         let displayed =
-            "A shape such as `WP-8` is named here.\n\n```text\nL-160 and \u{a7}SPEC\n```\n";
+            "A shape such as `WP-8` is named here.\n\n```text\nQ-160 and \u{a7}SPEC\n```\n";
 
         assert_eq!(
             texts(&scan_residual_markdown(displayed, &declared())),
