@@ -14,6 +14,8 @@ members = [
     "crates/pong",
     "crates/pong-core",
     "crates/pong-server",
+    "games/arena/v010",
+    "games/arena/v011",
     "games/arena/v012",
     "games/fire/v001",
     "tools/cli-common",

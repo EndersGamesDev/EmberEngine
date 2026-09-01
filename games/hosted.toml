@@ -3,6 +3,24 @@
 
 [[games]]
 game_id = "arena"
+game_version = 10
+package = "ember-game-arena-v10"
+latest = false
+limits_profile = "estate-measurement-required-arena-v10"
+fixture_suite = "arena-v10-hosted-contract"
+legacy_game = "arena"
+
+[[games]]
+game_id = "arena"
+game_version = 11
+package = "ember-game-arena-v11"
+latest = false
+limits_profile = "estate-measurement-required-arena-v11"
+fixture_suite = "arena-v11-hosted-contract"
+legacy_game = "arena"
+
+[[games]]
+game_id = "arena"
 game_version = 12
 package = "ember-game-arena-v12"
 latest = true
