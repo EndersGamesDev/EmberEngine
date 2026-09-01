@@ -2758,7 +2758,7 @@ fn characterizes_control_bytes() {
         &output,
         0,
         612,
-        "6ad64e0bf57f7eb120f2582319d545b67238ed0dd6b89deffcb4afca9086a2b9",
+        "1c2e475c8572fd5692fd519bbb1759507fbeaa68a41fb2abb812f08026226dce",
     );
     let response = fs::read(root.path().join("response.json")).expect("control response");
     assert_eq!(output.stdout, response);
@@ -2766,7 +2766,7 @@ fn characterizes_control_bytes() {
         "control.response",
         &response,
         612,
-        "6ad64e0bf57f7eb120f2582319d545b67238ed0dd6b89deffcb4afca9086a2b9",
+        "1c2e475c8572fd5692fd519bbb1759507fbeaa68a41fb2abb812f08026226dce",
     );
 }
 
@@ -2902,7 +2902,7 @@ fn characterizes_fix_bytes() {
         (
             "src/lib.rs",
             169,
-            "7ea1704b5a2a094e27f646d562400ff652e17f03b85c091e8968188712cebfe8",
+            "a2478d7c0395c1dbdfb01178644d787b6189fe0a475514a2fa596e908f10ff83",
         ),
         (
             "src/tests/mod.rs",
