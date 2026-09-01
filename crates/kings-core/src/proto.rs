@@ -531,6 +531,121 @@ mod tests {
         assert_eq!(s, r#""joker_teleport""#);
     }
 
+    /// The struct keys the page reads raw off the socket (a `LobbyInfo` row
+    /// in the lobby browser, the board's pieces, seats and last action),
+    /// pinned in the ENCODE direction: a field rename here would pass every
+    /// round-trip test and break the page.
+    #[test]
+    fn the_struct_keys_are_pinned() {
+        let s = serde_json::to_string(&LobbyInfo {
+            name: "court".into(),
+            host: "ada".into(),
+            has_password: true,
+            players: 2,
+            cap: 4,
+            playing: false,
+        })
+        .unwrap();
+        assert_eq!(
+            s,
+            r#"{"name":"court","host":"ada","has_password":true,"players":2,"cap":4,"playing":false}"#
+        );
+        let s = serde_json::to_string(&PlayerMeta {
+            id: 1,
+            handle: "bob".into(),
+            seat: 2,
+        })
+        .unwrap();
+        assert_eq!(s, r#"{"id":1,"handle":"bob","seat":2}"#);
+        let s = serde_json::to_string(&PieceState {
+            id: 3,
+            owner: 0,
+            kind: Kind::Joker,
+            x: 1,
+            y: 1,
+        })
+        .unwrap();
+        assert_eq!(s, r#"{"id":3,"owner":0,"kind":"joker","x":1,"y":1}"#);
+        let s = serde_json::to_string(&SeatState {
+            seat: 0,
+            present: true,
+            alive: true,
+            garrison: false,
+            own_turns: 3,
+            timeouts: 0,
+            captured: vec![Kind::Pawn, Kind::Rook],
+        })
+        .unwrap();
+        assert_eq!(
+            s,
+            r#"{"seat":0,"present":true,"alive":true,"garrison":false,"own_turns":3,"timeouts":0,"captured":["pawn","rook"]}"#
+        );
+        let s = serde_json::to_string(&LastAction {
+            seat: 0,
+            kind: ActionKind::Move,
+            fx: 3,
+            fy: 0,
+            tx: 3,
+            ty: 1,
+            captured: None,
+            promoted: false,
+            eliminated: None,
+        })
+        .unwrap();
+        assert_eq!(
+            s,
+            r#"{"seat":0,"kind":"move","fx":3,"fy":0,"tx":3,"ty":1,"captured":null,"promoted":false,"eliminated":null}"#
+        );
+        let s = serde_json::to_string(&Formation::DEFAULT).unwrap();
+        assert_eq!(
+            s,
+            r#"{"legend":["king","queen","hero","joker"],"epic":["rook","bishop","bishop","knight","rook"]}"#
+        );
+        // The board's own keys, with an empty piece and seat list so the
+        // literal stays short; the nested shapes are pinned above.
+        let s = serde_json::to_string(&BoardState {
+            turn: 1,
+            seat: 0,
+            left_ms: 15_000,
+            quiet: 0,
+            stalls: 0,
+            pieces: Vec::new(),
+            seats: Vec::new(),
+            last: None,
+        })
+        .unwrap();
+        assert_eq!(
+            s,
+            r#"{"turn":1,"seat":0,"left_ms":15000,"quiet":0,"stalls":0,"pieces":[],"seats":[],"last":null}"#
+        );
+        let s = serde_json::to_string(&S2C::State {
+            board: BoardState {
+                turn: 1,
+                seat: 0,
+                left_ms: 15_000,
+                quiet: 0,
+                stalls: 0,
+                pieces: Vec::new(),
+                seats: Vec::new(),
+                last: None,
+            },
+        })
+        .unwrap();
+        assert!(s.starts_with(r#"{"t":"state","board":{"turn":1,"#), "{s}");
+        let s = serde_json::to_string(&S2C::Clock {
+            turn: 4,
+            seat: 2,
+            left_ms: 8_400,
+        })
+        .unwrap();
+        assert_eq!(s, r#"{"t":"clock","turn":4,"seat":2,"left_ms":8400}"#);
+        let s = serde_json::to_string(&C2S::SetFormation {
+            formation: Formation::DEFAULT,
+        })
+        .unwrap();
+        assert!(s.starts_with(r#"{"t":"set_formation","formation":{"legend":"#), "{s}");
+    }
+
     #[test]
     fn roundtrip_every_c2s_variant() {
         let all = [
@@ -693,21 +808,59 @@ mod tests {
         assert!(matches!(roundtrip(&r), S2C::Rejected { .. }));
     }
 
-    /// 64 pieces and four captured lists: the biggest frame the game sends.
+    /// 64 pieces and four captured lists: the biggest frame the game sends,
+    /// measured at its worst: every piece the longest kind name, every
+    /// captured list full of the longest kind name, every counter at its
+    /// widest, and a `last` with every option set.
     #[test]
     fn a_full_board_frame_stays_far_under_max_frame_bytes() {
         let mut state = setup([true; 4], [Formation::DEFAULT; 4]);
-        for seat in &mut state.seats {
-            seat.captured = vec![Kind::Pawn; 15];
+        assert_eq!(state.board.iter().flatten().count(), 64);
+        let longest = [
+            Kind::King,
+            Kind::Queen,
+            Kind::Rook,
+            Kind::Bishop,
+            Kind::Knight,
+            Kind::Pawn,
+            Kind::Joker,
+            Kind::Hero,
+            Kind::HeroAwake,
+        ]
+        .into_iter()
+        .max_by_key(|k| serde_json::to_string(k).unwrap().len())
+        .unwrap();
+        assert_eq!(longest, Kind::HeroAwake);
+        for slot in state.board.iter_mut().flatten() {
+            slot.kind = longest;
         }
+        for seat in &mut state.seats {
+            // A seat can take at most the other 48 pieces.
+            seat.captured = vec![longest; 48];
+            seat.own_turns = u32::MAX;
+            seat.timeouts = u8::MAX;
+        }
+        state.turn = u32::MAX;
+        state.quiet = u32::MAX;
+        state.stalls = u8::MAX;
+        state.last = Some(LastAction {
+            seat: 3,
+            kind: ActionKind::JokerTeleport,
+            fx: 9,
+            fy: 9,
+            tx: 9,
+            ty: 9,
+            captured: Some(longest),
+            promoted: true,
+            eliminated: Some(3),
+        });
         let frame = serde_json::to_string(&S2C::State {
             board: to_state(&state),
         })
         .expect("encode");
-        assert_eq!(state.board.iter().flatten().count(), 64);
         assert!(
             frame.len() < MAX_FRAME_BYTES / 4,
-            "full board is {} bytes",
+            "worst-case board is {} bytes",
             frame.len()
         );
     }
