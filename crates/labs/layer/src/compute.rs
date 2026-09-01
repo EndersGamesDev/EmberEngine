@@ -1207,7 +1207,7 @@ mod tests {
     #[test]
     fn dialect_refuses_workgroup_storage_at_registration() {
         assert_eq!(
-            refusal("var<workgroup> shared: array<u32, 4>;"),
+            refusal("var<workgroup> scratch: array<u32, 4>;"),
             ForbiddenConstruct::WorkgroupVariable
         );
     }
@@ -1223,7 +1223,7 @@ mod tests {
     #[test]
     fn dialect_refuses_atomics_at_registration() {
         assert_eq!(
-            refusal("var<workgroup> shared: atomic<u32>;"),
+            refusal("var<workgroup> scratch: atomic<u32>;"),
             ForbiddenConstruct::Atomic
         );
     }
