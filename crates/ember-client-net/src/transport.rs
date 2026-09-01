@@ -490,46 +490,48 @@ mod imp {
             let last_outbound_ms = Rc::new(Cell::new(js_sys::Date::now()));
 
             let message_shared = Rc::clone(&shared);
-            let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event| {
-                let data = event.data();
-                let frame = if let Some(text) = data.as_string() {
-                    Some(WireFrame::Text(text))
-                } else if let Ok(buffer) = data.dyn_into::<js_sys::ArrayBuffer>() {
-                    Some(WireFrame::Binary(js_sys::Uint8Array::new(&buffer).to_vec()))
-                } else {
-                    None
-                };
-                let mut shared = message_shared.borrow_mut();
-                if matches!(&shared.status, TransportStatus::Closed(_)) {
-                    return;
-                }
-                let Some(frame) = frame else {
-                    shared.diagnostics.unsupported_frames += 1;
-                    return;
-                };
-                shared.diagnostics.frames_received += 1;
-                if frame.len() > shared.max_frame_bytes {
-                    shared.diagnostics.oversized_frames += 1;
-                    shared.diagnostics.last_error =
-                        Some("incoming WebSocket data frame is too large".to_string());
-                    shared.status = TransportStatus::Closed(ConnectionClose {
-                        kind: CloseKind::Protocol,
-                        detail: "incoming WebSocket data frame is too large".to_string(),
-                        reconnectable: false,
-                    });
-                } else if shared.inbox.len() >= shared.inbox_capacity {
-                    shared.diagnostics.inbox_overflows += 1;
-                } else {
-                    shared.inbox.push_back(frame);
-                }
-            });
+            let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(
+                move |event: web_sys::MessageEvent| {
+                    let data = event.data();
+                    let frame = if let Some(text) = data.as_string() {
+                        Some(WireFrame::Text(text))
+                    } else if let Ok(buffer) = data.dyn_into::<js_sys::ArrayBuffer>() {
+                        Some(WireFrame::Binary(js_sys::Uint8Array::new(&buffer).to_vec()))
+                    } else {
+                        None
+                    };
+                    let mut shared = message_shared.borrow_mut();
+                    if matches!(&shared.status, TransportStatus::Closed(_)) {
+                        return;
+                    }
+                    let Some(frame) = frame else {
+                        shared.diagnostics.unsupported_frames += 1;
+                        return;
+                    };
+                    shared.diagnostics.frames_received += 1;
+                    if frame.len() > shared.max_frame_bytes {
+                        shared.diagnostics.oversized_frames += 1;
+                        shared.diagnostics.last_error =
+                            Some("incoming WebSocket data frame is too large".to_string());
+                        shared.status = TransportStatus::Closed(ConnectionClose {
+                            kind: CloseKind::Protocol,
+                            detail: "incoming WebSocket data frame is too large".to_string(),
+                            reconnectable: false,
+                        });
+                    } else if shared.inbox.len() >= shared.inbox_capacity {
+                        shared.diagnostics.inbox_overflows += 1;
+                    } else {
+                        shared.inbox.push_back(frame);
+                    }
+                },
+            );
             socket.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
 
             let open_shared = Rc::clone(&shared);
             let open_pending = Rc::clone(&pending);
             let open_socket = socket.clone();
             let open_last = Rc::clone(&last_outbound_ms);
-            let on_open = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+            let on_open = Closure::<dyn FnMut(web_sys::Event)>::new(move |_: web_sys::Event| {
                 open_shared.borrow_mut().status = TransportStatus::Open;
                 while let Some(frame) = open_pending.borrow_mut().pop_front() {
                     if !has_buffer_capacity(&open_socket, &frame) {
@@ -552,18 +554,20 @@ mod imp {
             socket.set_onopen(Some(on_open.as_ref().unchecked_ref()));
 
             let close_shared = Rc::clone(&shared);
-            let on_close = Closure::<dyn FnMut(web_sys::CloseEvent)>::new(move |event| {
-                let detail = if event.reason().is_empty() {
-                    format!("server closed the connection ({})", event.code())
-                } else {
-                    event.reason()
-                };
-                close(&close_shared, CloseKind::Remote, detail, true);
-            });
+            let on_close = Closure::<dyn FnMut(web_sys::CloseEvent)>::new(
+                move |event: web_sys::CloseEvent| {
+                    let detail = if event.reason().is_empty() {
+                        format!("server closed the connection ({})", event.code())
+                    } else {
+                        event.reason()
+                    };
+                    close(&close_shared, CloseKind::Remote, detail, true);
+                },
+            );
             socket.set_onclose(Some(on_close.as_ref().unchecked_ref()));
 
             let error_shared = Rc::clone(&shared);
-            let on_error = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+            let on_error = Closure::<dyn FnMut(web_sys::Event)>::new(move |_: web_sys::Event| {
                 close(
                     &error_shared,
                     CloseKind::Network,
