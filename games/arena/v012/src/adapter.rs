@@ -5,9 +5,10 @@ use std::collections::HashMap;
 use ember_legacy::{
     AdmissionMetadata, AdmissionRefusal, CloseReason, CloseRequest, DecodedInput, EncodedEvent,
     FactoryError, GameFactory, GameKey, GameSession, InnerCodec, InnerCodecError, InnerFrame,
-    LeaveReason, LegacyCapabilities, LobbyStatus, MonotonicDuration, MonotonicTimestamp,
-    OutboundEvent, OutboundTarget, PeerId, SchedulingRequest, SessionCreationData, SessionInput,
-    SessionUpdate,
+    LeaveReason, LegacyCapabilities, LegacyConnectionState, LegacyIngress, LegacyIngressAction,
+    LegacyIngressError, LegacyIngressFactory, LegacyIngressRefusal, LegacyLobbyProjection,
+    LobbyStatus, MonotonicDuration, MonotonicTimestamp, OutboundEvent, OutboundTarget, PeerId,
+    SchedulingRequest, SessionCreationData, SessionInput, SessionInputWithTransport, SessionUpdate,
 };
 
 use crate::proto::{
@@ -20,6 +21,15 @@ const GAME_ID: &str = "arena";
 const FIXED_STEP_MICROS: u64 = 16_667;
 const STALL_GRACE_STEPS: u64 = 10;
 const INITIAL_RTT_TICKS: u64 = 18;
+
+/// Returns the exact registry key implemented by this crate.
+#[must_use]
+pub fn game_key() -> GameKey {
+    GameKey {
+        game_id: GAME_ID.to_string(),
+        game_version: u32::from(PROTO_VERSION),
+    }
+}
 
 /// Exact JSON text-frame codec for Arena protocol 12.
 #[derive(Clone, Copy, Debug, Default)]
@@ -112,7 +122,7 @@ struct ArenaSession {
     sim: Sim,
     members: Vec<Member>,
     inputs: HashMap<u8, InputRecord>,
-    pending_inputs: Vec<SessionInput>,
+    pending_inputs: Vec<SessionInputWithTransport>,
     next_tick_at: MonotonicTimestamp,
     schedule_started: bool,
 }
@@ -166,7 +176,11 @@ impl ArenaSession {
         }
     }
 
-    fn accept_input(&mut self, session_input: SessionInput, update: &mut SessionUpdate) {
+    fn accept_input(
+        &mut self,
+        session_input: SessionInputWithTransport,
+        update: &mut SessionUpdate,
+    ) {
         let Some(player_id) = self
             .members
             .iter()
@@ -199,7 +213,11 @@ impl ArenaSession {
                 shield,
                 melee,
             } => {
-                let allowed_delay = INITIAL_RTT_TICKS / 2 + 6;
+                let transport_rtt_ticks = session_input.transport_rtt.map_or(
+                    INITIAL_RTT_TICKS,
+                    |duration| duration.as_micros().div_ceil(FIXED_STEP_MICROS),
+                );
+                let allowed_delay = transport_rtt_ticks / 2 + 6;
                 let floor = self.sim.tick.saturating_sub(allowed_delay);
                 let jump = jump
                     || self
@@ -398,6 +416,25 @@ impl GameSession for ArenaSession {
         timestamp: MonotonicTimestamp,
         inputs: Vec<SessionInput>,
     ) -> SessionUpdate {
+        self.step_with_transport(
+            timestamp,
+            inputs
+                .into_iter()
+                .map(|input| SessionInputWithTransport {
+                    peer_id: input.peer_id,
+                    received_at: input.received_at,
+                    transport_rtt: None,
+                    input: input.input,
+                })
+                .collect(),
+        )
+    }
+
+    fn step_with_transport(
+        &mut self,
+        timestamp: MonotonicTimestamp,
+        inputs: Vec<SessionInputWithTransport>,
+    ) -> SessionUpdate {
         self.pending_inputs.extend(inputs);
         let mut update = SessionUpdate::default();
         self.accept_ready_inputs(timestamp, &mut update);
@@ -581,6 +618,16 @@ pub struct ArenaLegacyDecoder {
     protocol: Option<u16>,
 }
 
+/// Stateless registry factory for independent Arena legacy connections.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ArenaLegacyIngressFactory;
+
+impl LegacyIngressFactory for ArenaLegacyIngressFactory {
+    fn create(&self) -> Box<dyn LegacyIngress> {
+        Box::new(ArenaLegacyDecoder::new())
+    }
+}
+
 impl ArenaLegacyDecoder {
     /// Constructs a decoder awaiting the deployed legacy hello.
     #[must_use]
@@ -705,4 +752,136 @@ impl ArenaLegacyDecoder {
             message: message.into(),
         }
     }
+}
+
+impl LegacyIngress for ArenaLegacyDecoder {
+    fn decode(
+        &mut self,
+        state: LegacyConnectionState,
+        frame: &InnerFrame,
+    ) -> Result<LegacyIngressAction, LegacyIngressError> {
+        let action = Self::decode(self, frame)?;
+        let action = match action {
+            ArenaLegacyAction::Hello {
+                handle,
+                requested_version,
+                response,
+            } => LegacyIngressAction::Hello {
+                selection: GameKey {
+                    game_id: GAME_ID.to_string(),
+                    game_version: u32::from(requested_version),
+                },
+                handle,
+                response: encode_legacy_message(&response)?,
+            },
+            ArenaLegacyAction::ListLobbies { .. } => LegacyIngressAction::ListLobbies,
+            ArenaLegacyAction::CreateLobby { .. }
+                if state == LegacyConnectionState::Joined => {
+                LegacyIngressAction::DispatchInner(ArenaCodec.decode(frame)?)
+            }
+            ArenaLegacyAction::CreateLobby {
+                game_key,
+                name,
+                password,
+            } => LegacyIngressAction::CreateLobby {
+                selection: game_key,
+                lobby_name: name,
+                password,
+            },
+            ArenaLegacyAction::JoinLobby { .. }
+                if state == LegacyConnectionState::Joined => {
+                LegacyIngressAction::DispatchInner(ArenaCodec.decode(frame)?)
+            }
+            ArenaLegacyAction::JoinLobby {
+                game_key,
+                name,
+                password,
+            } => LegacyIngressAction::JoinLobby {
+                selection: game_key,
+                lobby_name: name,
+                password,
+            },
+            ArenaLegacyAction::LeaveLobby => LegacyIngressAction::LeaveLobby,
+            ArenaLegacyAction::Reply(response) => {
+                LegacyIngressAction::Reply(encode_legacy_message(&response)?)
+            }
+            ArenaLegacyAction::Ignore if state == LegacyConnectionState::Joined => {
+                LegacyIngressAction::DispatchInner(ArenaCodec.decode(frame)?)
+            }
+            ArenaLegacyAction::Ignore => LegacyIngressAction::Ignore,
+        };
+        Ok(action)
+    }
+
+    fn project_lobbies(
+        &self,
+        entries: &[LegacyLobbyProjection],
+    ) -> Result<InnerFrame, LegacyIngressError> {
+        let entries = entries
+            .iter()
+            .map(|entry| LegacyLobbyEntry {
+                game_key: entry.game_key.clone(),
+                name: entry.lobby_name.clone(),
+                host: entry.host_handle.clone(),
+                has_password: entry.password_protected,
+                players: u8::try_from(entry.occupancy).unwrap_or(u8::MAX),
+                cap: u8::try_from(entry.capacity).unwrap_or(u8::MAX),
+            })
+            .collect::<Vec<_>>();
+        encode_legacy_message(&Self::project_lobby_list(&entries))
+    }
+
+    fn project_refusal(
+        &self,
+        refusal: &LegacyIngressRefusal,
+    ) -> Result<InnerFrame, LegacyIngressError> {
+        let response = match refusal {
+            LegacyIngressRefusal::GameNotHosted {
+                requested_game,
+                hosted_games,
+            } => Self::admission_refusal(format!(
+                "game {requested_game} is not hosted; hosted games: {}",
+                hosted_games.join(", ")
+            )),
+            LegacyIngressRefusal::VersionNotHosted {
+                requested,
+                hosted_versions,
+            } => Self::version_refusal(
+                u16::try_from(requested.game_version).unwrap_or(u16::MAX),
+                hosted_versions,
+            ),
+            LegacyIngressRefusal::InvalidRequest { message } => {
+                Self::admission_refusal(message.clone())
+            }
+            LegacyIngressRefusal::LobbyNotFound { lobby_name } => {
+                Self::admission_refusal(format!("lobby \"{lobby_name}\" does not exist"))
+            }
+            LegacyIngressRefusal::LobbyAlreadyExists { lobby_name } => {
+                Self::admission_refusal(format!("lobby \"{lobby_name}\" already exists"))
+            }
+            LegacyIngressRefusal::PasswordRejected => {
+                Self::admission_refusal("password does not match")
+            }
+            LegacyIngressRefusal::LobbyFull => Self::admission_refusal("lobby is full"),
+            LegacyIngressRefusal::ServerAtCapacity => {
+                Self::admission_refusal("server capacity is full")
+            }
+            LegacyIngressRefusal::Draining => {
+                Self::admission_refusal("server is draining; new admission is stopped")
+            }
+            LegacyIngressRefusal::AdmissionRefused { code, message } => {
+                Self::admission_refusal(format!("{code}: {message}"))
+            }
+            LegacyIngressRefusal::InternalError => {
+                Self::admission_refusal("internal session boundary failure")
+            }
+        };
+        encode_legacy_message(&response)
+    }
+}
+
+fn encode_legacy_message(message: &S2C) -> Result<InnerFrame, LegacyIngressError> {
+    serde_json::to_string(message)
+        .map(InnerFrame::Text)
+        .map_err(|error| LegacyIngressError::EncodeFailed(error.to_string()))
 }

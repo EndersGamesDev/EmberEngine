@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ember_legacy::{
-    GameFactory, GameKey, HostedManifest, InnerCodec, ManifestParseError,
+    GameFactory, GameKey, HostedManifest, InnerCodec, LegacyIngressFactory, ManifestParseError,
     ManifestValidationError, VersionLimits, VersionLimitsError, parse_hosted_manifest,
     validate_hosted_manifest,
 };
@@ -19,6 +19,7 @@ pub struct RegistryRegistration {
     limits: VersionLimits,
     codec: Arc<dyn InnerCodec>,
     factory: Arc<dyn GameFactory>,
+    legacy_ingress: Option<Arc<dyn LegacyIngressFactory>>,
 }
 
 impl RegistryRegistration {
@@ -35,7 +36,15 @@ impl RegistryRegistration {
             limits,
             codec,
             factory,
+            legacy_ingress: None,
         }
+    }
+
+    /// Adds the exact legacy adapter named by this entry's manifest selector.
+    #[must_use]
+    pub fn with_legacy_ingress(mut self, factory: Arc<dyn LegacyIngressFactory>) -> Self {
+        self.legacy_ingress = Some(factory);
+        self
     }
 
     /// Returns the exact game key supplied by the compiled version.
@@ -116,6 +125,15 @@ impl RegistryBuilder {
                     key: key.clone(),
                     error,
                 })?;
+            match (&hosted.legacy_game, &registration.legacy_ingress) {
+                (Some(_), None) => {
+                    return Err(RegistryError::MissingLegacyIngress(key));
+                }
+                (None, Some(_)) => {
+                    return Err(RegistryError::UnexpectedLegacyIngress(key));
+                }
+                (Some(_), Some(_)) | (None, None) => {}
+            }
             if let Some(selector) = &hosted.legacy_game {
                 legacy_selectors.insert(selector.clone(), key.clone());
             }
@@ -125,6 +143,7 @@ impl RegistryBuilder {
                     limits: registration.limits,
                     codec: registration.codec,
                     factory: registration.factory,
+                    legacy_ingress: registration.legacy_ingress,
                 },
             );
         }
@@ -141,6 +160,7 @@ pub(crate) struct RegistryEntry {
     limits: VersionLimits,
     codec: Arc<dyn InnerCodec>,
     factory: Arc<dyn GameFactory>,
+    legacy_ingress: Option<Arc<dyn LegacyIngressFactory>>,
 }
 
 impl RegistryEntry {
@@ -154,6 +174,10 @@ impl RegistryEntry {
 
     pub(crate) fn factory(&self) -> Arc<dyn GameFactory> {
         Arc::clone(&self.factory)
+    }
+
+    pub(crate) fn legacy_ingress(&self) -> Option<Arc<dyn LegacyIngressFactory>> {
+        self.legacy_ingress.as_ref().map(Arc::clone)
     }
 }
 
@@ -271,6 +295,10 @@ pub enum RegistryError {
     ManifestValidation(Vec<ManifestValidationError>),
     /// A manifest entry has no compiled constructor in this binary.
     MissingRegistration(GameKey),
+    /// A manifest legacy selector has no compiled adapter factory.
+    MissingLegacyIngress(GameKey),
+    /// A compiled adapter factory has no manifest legacy selector.
+    UnexpectedLegacyIngress(GameKey),
     /// A compiled entry supplied unusable resource limits.
     InvalidLimits {
         /// Exact invalid entry.
@@ -298,6 +326,12 @@ impl fmt::Display for RegistryError {
             Self::MissingRegistration(key) => {
                 write!(formatter, "manifest entry has no compiled registration: {key:?}")
             }
+            Self::MissingLegacyIngress(key) => {
+                write!(formatter, "manifest legacy selector has no adapter: {key:?}")
+            }
+            Self::UnexpectedLegacyIngress(key) => {
+                write!(formatter, "compiled legacy adapter has no manifest selector: {key:?}")
+            }
             Self::InvalidLimits { key, error } => {
                 write!(formatter, "invalid version limits for {key:?}: {error:?}")
             }
@@ -313,6 +347,8 @@ impl std::error::Error for RegistryError {
             Self::DuplicateRegistration(_)
             | Self::ManifestValidation(_)
             | Self::MissingRegistration(_)
+            | Self::MissingLegacyIngress(_)
+            | Self::UnexpectedLegacyIngress(_)
             | Self::InvalidLimits { .. } => None,
         }
     }
@@ -489,6 +525,18 @@ legacy_game = "old"
             .build_from_source(fixture::MANIFEST)
             .expect_err("manifest entry without compiled registration must fail");
         assert!(matches!(error, RegistryError::MissingRegistration(_)));
+    }
+
+    #[test]
+    fn manifest_legacy_selector_requires_compiled_adapter() {
+        let source = fixture::MANIFEST.replace(
+            "fixture_suite = \"fixture-hosted-contract\"",
+            "fixture_suite = \"fixture-hosted-contract\"\nlegacy_game = \"fixture\"",
+        );
+        let error = builder()
+            .build_from_source(&source)
+            .expect_err("manifest legacy selector without an adapter must fail");
+        assert!(matches!(error, RegistryError::MissingLegacyIngress(_)));
     }
 
     #[test]

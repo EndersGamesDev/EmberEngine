@@ -198,8 +198,7 @@ impl LegacyTransport for HostTransport {
         if !peers.contains(&peer_id) {
             return Err(TransportError::UnknownPeer);
         }
-        // The frozen capability has no host constructor for this opaque handle.
-        Err(TransportError::QueueFull)
+        Ok(UnicastHandle::from_peer_id(peer_id))
     }
 
     fn broadcast(&self, session_id: SessionId) -> Result<BroadcastHandle, TransportError> {
@@ -209,8 +208,7 @@ impl LegacyTransport for HostTransport {
         if session_id != self.session_id {
             return Err(TransportError::UnknownSession);
         }
-        // The frozen capability has no host constructor for this opaque handle.
-        Err(TransportError::QueueFull)
+        Ok(BroadcastHandle::from_session_id(session_id))
     }
 
     fn close_peer(&self, peer_id: PeerId, reason: CloseReason) -> Result<(), TransportError> {
@@ -265,5 +263,30 @@ impl SessionCapabilities {
             clock,
             transport,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_targets_receive_constructed_handles() {
+        let session_id = SessionId::from_host_value(7);
+        let peer_id = PeerId::from_host_value(11);
+        let transport = HostTransport::new(
+            GameKey {
+                game_id: "fixture".to_string(),
+                game_version: 1,
+            },
+            session_id,
+            Arc::new(AtomicBool::new(false)),
+        );
+        transport.add_peer(peer_id);
+        assert_eq!(transport.unicast(peer_id).unwrap().peer_id(), peer_id);
+        assert_eq!(
+            transport.broadcast(session_id).unwrap().session_id(),
+            session_id
+        );
     }
 }

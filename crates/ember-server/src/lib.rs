@@ -13,6 +13,8 @@ mod capabilities;
 mod connection;
 #[cfg(any(test, feature = "demo"))]
 mod fixture;
+#[cfg(not(feature = "demo"))]
+mod product;
 mod registry;
 mod runtime;
 

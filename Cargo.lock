@@ -919,6 +919,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
 
 [[package]]
+name = "ember-client-net"
+version = "0.1.0"
+dependencies = [
+ "ember-net",
+ "js-sys",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tungstenite",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "ember-editor"
 version = "0.1.0"
 dependencies = [
@@ -957,6 +971,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "ember-game-arena-v12"
+version = "0.1.0"
+dependencies = [
+ "ember-legacy",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ember-game-fire-v1"
+version = "0.1.0"
+dependencies = [
+ "ember-legacy",
+ "glam",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ember-legacy"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "sha2",
+ "toml",
+]
+
+[[package]]
 name = "ember-net"
 version = "0.1.0"
 dependencies = [
@@ -968,9 +1010,16 @@ dependencies = [
 name = "ember-server"
 version = "0.1.0"
 dependencies = [
+ "ember-game-arena-v12",
+ "ember-game-fire-v1",
+ "ember-legacy",
  "ember-net",
+ "serde_json",
+ "sha2",
  "tracing",
  "tracing-subscriber",
+ "tungstenite",
+ "url",
 ]
 
 [[package]]
