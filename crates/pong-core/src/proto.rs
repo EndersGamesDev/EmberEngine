@@ -90,6 +90,8 @@ pub struct PlayerMeta {
 }
 
 /// Per-player state inside a State broadcast.
+// The wire-format booleans are independent protocol fields and cannot be consolidated compatibly.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 pub struct PState {
     pub id: u8,
@@ -273,6 +275,7 @@ pub enum S2C {
 }
 
 /// Stable per-player color, by in-lobby id.
+#[must_use]
 pub fn color_for(id: u8) -> [f32; 3] {
     const PALETTE: [[f32; 3]; 8] = [
         [0.25, 0.55, 0.95], // blue
@@ -287,6 +290,7 @@ pub fn color_for(id: u8) -> [f32; 3] {
     PALETTE[id as usize % PALETTE.len()]
 }
 
+#[must_use]
 pub fn sanitize_text(s: &str, max: usize) -> String {
     // Strip controls, trim, THEN cap — surrounding whitespace must not
     // consume the length budget.
@@ -334,7 +338,7 @@ mod tests {
 
         let s = serde_json::to_string(&S2C::GameJoined {
             id: 2,
-            seed: 987654321,
+            seed: 987_654_321,
             arena_half: 24.0,
             players: vec![PlayerMeta {
                 id: 2,
@@ -348,7 +352,7 @@ mod tests {
             back,
             S2C::GameJoined {
                 id: 2,
-                seed: 987654321,
+                seed: 987_654_321,
                 ..
             }
         ));

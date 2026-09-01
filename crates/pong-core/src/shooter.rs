@@ -9,7 +9,7 @@ pub const MOVE_SPEED: f32 = 9.0;
 pub const SPRINT_MULT: f32 = 1.6;
 pub const CROUCH_MULT: f32 = 0.55;
 pub const PLAYER_R: f32 = 0.6;
-/// Crouching shrinks the HIT circle (movement blocking keeps PLAYER_R).
+/// Crouching shrinks the HIT circle (movement blocking keeps `PLAYER_R`).
 pub const CROUCH_HIT_MULT: f32 = 0.72;
 
 /// The arc the raised off-hand shield covers, radians: 120° centred on the
@@ -20,6 +20,7 @@ pub const CROUCH_HIT_MULT: f32 = 0.72;
 pub const SHIELD_ARC: f32 = std::f32::consts::FRAC_PI_3 * 2.0;
 
 /// Stance-dependent hit-test radius: crouch = lower profile = smaller target.
+#[must_use]
 pub fn hit_radius(crouch: bool) -> f32 {
     if crouch {
         PLAYER_R * CROUCH_HIT_MULT
@@ -48,6 +49,7 @@ pub const BODY_H_CROUCH: f32 = 1.25;
 // solidly either way.
 
 /// Height a shot leaves from, measured from the shooter's feet.
+#[must_use]
 pub fn eye_h(crouch: bool) -> f32 {
     if crouch {
         EYE_CROUCH
@@ -59,6 +61,7 @@ pub fn eye_h(crouch: bool) -> f32 {
 /// Vertical extent of the hit volume, measured from the target's feet.
 /// Together with `hit_radius` this makes the hitbox a finite cylinder; it
 /// used to be one of infinite height, which is why pitch never mattered.
+#[must_use]
 pub fn body_h(crouch: bool) -> f32 {
     if crouch {
         BODY_H_CROUCH
@@ -88,6 +91,7 @@ pub struct WeaponStats {
     pub damage: u8,
 }
 
+#[must_use]
 pub fn weapon_stats(level: u8) -> WeaponStats {
     match level {
         3 => WeaponStats {
@@ -108,6 +112,7 @@ pub fn weapon_stats(level: u8) -> WeaponStats {
     }
 }
 
+#[must_use]
 pub fn weapon_name(level: u8) -> &'static str {
     match level {
         3 => "Heavy",
@@ -120,7 +125,7 @@ pub fn weapon_name(level: u8) -> &'static str {
 /// Counted by owner, and a reflected round changes owner — so rounds you
 /// caught on the shield sit against your own cap until they expire. Left
 /// that way deliberately: you cannot fire behind a raised shield anyway, no
-/// round lives longer than BULLET_TTL, and being briefly short of the cap
+/// round lives longer than `BULLET_TTL`, and being briefly short of the cap
 /// after catching ten rounds in 1.6 s is a fair price for having caught
 /// them. Telling the two apart would need a flag on `Bullet`.
 pub const MAX_BULLETS_PER_PLAYER: usize = 10;
@@ -164,6 +169,7 @@ pub struct Obstacle {
 impl Obstacle {
     /// A box at seeded-arena proportions: the height the generator would
     /// have derived for this footprint.
+    #[must_use]
     pub fn seeded(min: [f32; 2], max: [f32; 2]) -> Self {
         Self {
             min,
@@ -179,6 +185,7 @@ impl Obstacle {
 /// the rest are shipping containers that stay hard cover. Kept as the
 /// generator's own rule rather than a property of every obstacle: an
 /// authored box sets `h` directly and never consults this.
+#[must_use]
 pub fn seeded_height(min: [f32; 2]) -> f32 {
     let k = (min[0] * 12.9898 + min[1] * 78.233).sin() * 43758.547;
     let f = k - k.floor();
@@ -192,6 +199,7 @@ pub fn seeded_height(min: [f32; 2]) -> f32 {
 /// Height of a cover box. Now simply what the box says it is — kept as a
 /// function because the sim, the renderer and the editor all read heights
 /// through it.
+#[must_use]
 pub fn obstacle_height(o: &Obstacle) -> f32 {
     o.h
 }
@@ -199,6 +207,7 @@ pub fn obstacle_height(o: &Obstacle) -> f32 {
 /// The surface a player at `pos` stands on: the tallest box top they
 /// overlap, or the arena floor. Uses the same overlap test as `blocked`,
 /// so a player can only ever be supported by a box they are actually on.
+#[must_use]
 pub fn support_height(pos: [f32; 2], r: f32, obstacles: &[Obstacle]) -> f32 {
     let mut h = 0.0f32;
     for o in obstacles {
@@ -219,6 +228,9 @@ fn overlaps(pos: [f32; 2], r: f32, o: &Obstacle) -> bool {
 /// Deterministic arena from a seed: every client and the server generate
 /// the same obstacle course. Obstacles stay inside a donut that keeps both
 /// the center brawl area and the spawn ring clear.
+// These integer-to-float casts are part of the deterministic arena formula's expression tree.
+#[allow(clippy::cast_precision_loss)]
+#[must_use]
 pub fn generate_arena(seed: u64) -> Vec<Obstacle> {
     let mut state = seed ^ 0x9e37_79b9_7f4a_7c15;
     let mut rand01 = move || -> f32 {
@@ -246,6 +258,8 @@ pub fn generate_arena(seed: u64) -> Vec<Obstacle> {
     obstacles
 }
 
+// This cast is part of the deterministic spawn formula's expression tree.
+#[allow(clippy::cast_precision_loss)]
 fn spawn_point(slot: u32) -> [f32; 2] {
     let angle = slot as f32 * 2.399_963; // golden angle: spread out
     [angle.cos() * SPAWN_RING_R, angle.sin() * SPAWN_RING_R]
@@ -273,6 +287,9 @@ pub struct Level {
 impl Level {
     /// The arena a seed has always produced — same obstacles, same
     /// heights, same spawn ring.
+    #[must_use]
+    // `MAX_PLAYERS` is eight, so this conversion cannot truncate in supported builds.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn from_seed(seed: u64) -> Self {
         Self {
             arena_half: ARENA_HALF,
@@ -284,6 +301,7 @@ impl Level {
     /// Where player `slot` starts, wrapping if an authored level supplies
     /// fewer spawns than players. Falls back to the seeded ring when a
     /// level carries none, so a half-authored level still runs.
+    #[must_use]
     pub fn spawn(&self, slot: u32) -> [f32; 2] {
         if self.spawns.is_empty() {
             return spawn_point(slot);
@@ -294,6 +312,9 @@ impl Level {
 
 /// Weapon-upgrade pad positions: seeded and shared, like the arena itself.
 /// Four pads on a mid ring, nudged outward if a pad lands inside cover.
+// These integer-to-float casts are part of the deterministic pad formula's expression tree.
+#[allow(clippy::cast_precision_loss)]
+#[must_use]
 pub fn generate_pads(seed: u64) -> Vec<[f32; 2]> {
     let obstacles = generate_arena(seed);
     let mut state = seed ^ 0x5bd1_e995_c0ff_ee00;
@@ -303,9 +324,9 @@ pub fn generate_pads(seed: u64) -> Vec<[f32; 2]> {
             .wrapping_add(1_442_695_040_888_963_407);
         ((state >> 32) as u32) as f32 / (u32::MAX as f32 + 1.0)
     };
-    (0..4)
+    (0_u8..4)
         .map(|i| {
-            let angle = i as f32 * std::f32::consts::FRAC_PI_2
+            let angle = f32::from(i) * std::f32::consts::FRAC_PI_2
                 + rand01() * 0.8
                 + std::f32::consts::FRAC_PI_4;
             let mut radius = 9.0 + rand01() * 3.0;
@@ -355,6 +376,7 @@ fn blocked(pos: [f32; 2], y: f32, r: f32, obstacles: &[Obstacle]) -> bool {
 /// the client's prediction: a rule applied at one call site and not the
 /// other is a desync, and a signature change is the only way to make the
 /// compiler say so.
+#[must_use]
 pub fn stance_speed(sprint: bool, crouch: bool, shield: bool) -> f32 {
     MOVE_SPEED
         * if crouch {
@@ -369,6 +391,7 @@ pub fn stance_speed(sprint: bool, crouch: bool, shield: bool) -> f32 {
 /// Player movement: sanitize the intent, then integrate one axis at a time
 /// so walls slide. Shared VERBATIM by the server sim and the client's
 /// prediction, so both compute the exact same result.
+#[must_use]
 pub fn move_circle(
     pos: [f32; 2],
     y: f32,
@@ -405,6 +428,7 @@ pub fn move_circle(
 /// and the client's prediction, exactly like `move_circle`.
 ///
 /// Returns the new (feet height, vertical speed, grounded).
+#[must_use]
 pub fn step_vertical(
     pos: [f32; 2],
     y: f32,
@@ -432,6 +456,8 @@ pub fn step_vertical(
     (y, vy, landed || (grounded && vy <= 0.0))
 }
 
+// These independent input flags are shared public simulation API and cannot be consolidated.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PlayerIn {
     /// Held movement intent, -1..1 per axis (world space).
@@ -502,10 +528,10 @@ pub struct Bullet {
     pub vel: [f32; 2],
     /// Height above the arena floor, and its rate of change. Height is a
     /// scalar RIDING ALONGSIDE the 2D path rather than a third component of
-    /// it: `vel` keeps its full BULLET_SPEED magnitude at any elevation, so
+    /// it: `vel` keeps its full `BULLET_SPEED` magnitude at any elevation, so
     /// horizontal range, flight time and every timing-sensitive test behave
     /// exactly as before. The ray's DIRECTION is still exactly the shooter's
-    /// look direction, because vy/BULLET_SPEED == tan(pitch).
+    /// look direction, because `vy / BULLET_SPEED == tan(pitch)`.
     pub y: f32,
     pub vy: f32,
     pub ttl: f32,
@@ -537,6 +563,7 @@ pub struct Sim {
 }
 
 impl Sim {
+    #[must_use]
     pub fn new(seed: u64) -> Self {
         Self {
             obstacles: generate_arena(seed),
@@ -556,6 +583,8 @@ impl Sim {
     }
 
     pub fn add_player(&mut self, id: u8) {
+        // Player count is capped at eight by the public protocol.
+        #[allow(clippy::cast_possible_truncation)]
         let slot = self.players.len() as u32;
         self.players.push(PlayerSt {
             id,
@@ -585,7 +614,7 @@ impl Sim {
         // Purge the id from rewind history: server-side ids are reused, and
         // a joiner must not inherit the leaver's ghost (lag-comp hit tests
         // would land on positions the new player never occupied).
-        for frame in self.history.iter_mut() {
+        for frame in &mut self.history {
             frame.retain(|(pid, _, _, _, _)| *pid != id);
         }
     }
@@ -605,6 +634,13 @@ impl Sim {
             .map(|&(_, pos, y, alive, crouch)| (pos, y, alive, crouch))
     }
 
+    // Splitting or rewriting the simulation loop or its casts could alter deterministic ordering.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss,
+        clippy::too_many_lines
+    )]
     pub fn step(&mut self, inputs: &dyn Fn(u8) -> PlayerIn) {
         self.events.clear();
         self.tick += 1;
@@ -624,7 +660,8 @@ impl Sim {
                 p.respawn_in -= dt;
                 if p.respawn_in <= 0.0 {
                     p.deaths = p.deaths.wrapping_add(1);
-                    let point = spawn_point(p.deaths.wrapping_mul(3).wrapping_add(p.id as u32));
+                    let point =
+                        spawn_point(p.deaths.wrapping_mul(3).wrapping_add(u32::from(p.id)));
                     p.pos = point;
                     p.y = 0.0;
                     p.vy = 0.0;
@@ -642,14 +679,14 @@ impl Sim {
             // Shared movement code (also used by client prediction);
             // stance speed is server-authoritative — no speed cheats.
             let speed = stance_speed(input.sprint, input.crouch, input.shield);
-            let (old_pos, old_y, old_vy) = (
+            let (old_pos, previous_y, previous_vy) = (
                 self.players[i].pos,
                 self.players[i].y,
                 self.players[i].vy,
             );
-            let pos = move_circle(old_pos, old_y, input.mv, speed, dt, &self.obstacles);
+            let pos = move_circle(old_pos, previous_y, input.mv, speed, dt, &self.obstacles);
             let (y, vy, _grounded) =
-                step_vertical(pos, old_y, old_vy, input.jump, dt, &self.obstacles);
+                step_vertical(pos, previous_y, previous_vy, input.jump, dt, &self.obstacles);
             let p = &mut self.players[i];
             p.pos = pos;
             p.y = y;
@@ -724,12 +761,12 @@ impl Sim {
         self.bullets.extend(new_bullets);
 
         // Weapon pads: tick respawns, hand out upgrades on contact.
-        for pad in self.pads.iter_mut() {
+        for pad in &mut self.pads {
             if pad.respawn_t > 0.0 {
                 pad.respawn_t = (pad.respawn_t - dt).max(0.0);
                 continue;
             }
-            for p in self.players.iter_mut() {
+            for p in &mut self.players {
                 if !p.alive || p.weapon >= MAX_WEAPON {
                     continue;
                 }
@@ -772,7 +809,7 @@ impl Sim {
             let y1 = b.y + b.vy * dt;
             let (sx, sz) = (p1[0] - p0[0], p1[1] - p0[1]);
             let seg_len_sq = sx * sx + sz * sz;
-            for p in self.players.iter() {
+            for p in &self.players {
                 if p.id == b.owner {
                     continue;
                 }
@@ -959,6 +996,13 @@ impl Sim {
 
 #[cfg(test)]
 mod tests {
+    // Test-only casts use small fixed ranges and intentionally exercise production formulas.
+    #![allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss
+    )]
+
     use super::*;
     use std::collections::HashMap;
 
@@ -986,8 +1030,8 @@ mod tests {
         let (mut neg_x, mut neg_z, mut pos_x, mut pos_z) = (false, false, false, false);
         for seed in 0..16u64 {
             for o in generate_arena(seed) {
-                let cx = (o.min[0] + o.max[0]) * 0.5;
-                let cz = (o.min[1] + o.max[1]) * 0.5;
+                let cx = f32::midpoint(o.min[0], o.max[0]);
+                let cz = f32::midpoint(o.min[1], o.max[1]);
                 neg_x |= cx < -3.0;
                 pos_x |= cx > 3.0;
                 neg_z |= cz < -3.0;
@@ -1211,7 +1255,9 @@ mod tests {
         // Hold fire long enough to empty the mag.
         let mut fired = 0u32;
         let mut prev_bullets = 0usize;
-        for _ in 0..((weapon_stats(1).cooldown / FIXED_DT) as u32 + 2) * (mag as u32 + 4) {
+        for _ in 0..((weapon_stats(1).cooldown / FIXED_DT) as u32 + 2)
+            * (u32::from(mag) + 4)
+        {
             step_with(&mut sim, &inputs);
             // Bullets fly off and expire; count spawns via ammo drops.
             let b = sim.bullets.len();
@@ -1221,7 +1267,8 @@ mod tests {
             prev_bullets = b;
         }
         assert_eq!(
-            fired, mag as u32,
+            fired,
+            u32::from(mag),
             "exactly one magazine before auto-reload gates fire"
         );
         // Let the auto-reload finish: ammo must be full again.
@@ -1595,7 +1642,7 @@ mod tests {
         assert!(apex > CRATE_MAX_H, "apex {apex} cannot clear a crate");
         assert!(apex < CONTAINER_MIN_H, "apex {apex} clears containers too");
         // And the generator must actually produce both classes.
-        let obs = generate_arena(20260829);
+        let obs = generate_arena(20_260_829);
         let heights: Vec<f32> = obs.iter().map(obstacle_height).collect();
         assert!(heights.iter().any(|h| *h <= CRATE_MAX_H), "no crates: {heights:?}");
         assert!(heights.iter().any(|h| *h >= CONTAINER_MIN_H), "no containers");
@@ -1933,7 +1980,7 @@ mod tests {
             defender.hp, MAX_HP,
             "a reflected round must not also damage the reflector"
         );
-        assert!(sim.events.is_empty());
+        assert_eq!(sim.events, Vec::<(u8, u8)>::new());
     }
 
     #[test]

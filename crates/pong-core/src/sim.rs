@@ -49,6 +49,7 @@ pub struct Sim {
 }
 
 impl Sim {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             p1_x: 0.0,
@@ -185,6 +186,9 @@ impl Default for Sim {
 
 #[cfg(test)]
 mod tests {
+    // This fixed positive duration is converted only to bound a test loop.
+    #![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+
     use super::*;
 
     fn run_serve(sim: &mut Sim) {
