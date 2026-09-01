@@ -106,3 +106,11 @@ package = "ember-game-pong-v1"
 latest = true
 limits_profile = "estate-measurement-required-pong-v1"
 fixture_suite = "pong-v1-hosted-contract"
+
+[[games]]
+game_id = "what-is-this"
+game_version = 1
+package = "ember-game-what-is-this-v1"
+latest = true
+limits_profile = "bounded-solo-report-v1"
+fixture_suite = "what-is-this-v1-hosted-contract"
