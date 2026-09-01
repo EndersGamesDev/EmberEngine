@@ -189,14 +189,26 @@ echo "== health check through the public URL =="
 # check printed ONLINE over it. wsbot speaks the protocol: it creates a lobby
 # and counts state updates, so it can only pass if the hub is actually
 # simulating. Exit 0 = the online loop works.
+# Let the hostname exist before anything asks for it. The first DNS query for
+# a brand-new *.trycloudflare.com name can land before Cloudflare has published
+# the record, and a resolver that caches that NXDOMAIN keeps returning it long
+# after the record appears. Every later attempt then fails against a poisoned
+# cache while the tunnel is provably fine from anywhere else — which is exactly
+# what happened on 2026-09-01: two arena deploys failed here with `os error
+# 11001` (host unknown) while 1.1.1.1 resolved the name instantly and the
+# tunnel answered 101. Not asking too early is the fix; retrying harder is not,
+# because by then the bad answer is already cached.
+echo "== letting the tunnel hostname propagate =="
+sleep 15
+
 ok=""
-for _ in $(seq 1 5); do
-    sleep 2
+for _ in $(seq 1 10); do
     if cargo run --release -q -p pong-server --example wsbot -- \
         "$WS_URL" create deploy-healthcheck - healthcheck 6; then
         ok=1
         break
     fi
+    sleep 3
 done
 if [ -z "$ok" ]; then
     echo "FAILED: the tunnel is up but wsbot could not create a lobby through it." >&2
