@@ -1,6 +1,6 @@
 {
-  "version": "r121",
-  "commit": "671d187",
-  "built": "2026-08-31T15:16:22Z",
-  "subject": "chore: force LF on shell scripts, so a Windows checkout cannot break them"
+  "version": "r128",
+  "commit": "3f04b99",
+  "built": "2026-09-01T11:24:15Z",
+  "subject": "deploy: attempt the systemd restart rather than predicting it from is-enabled"
 }
