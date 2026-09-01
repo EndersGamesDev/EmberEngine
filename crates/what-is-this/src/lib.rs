@@ -7,6 +7,9 @@ mod kernels;
 #[cfg(target_arch = "wasm32")]
 mod gpu;
 
+#[cfg(target_arch = "wasm32")]
+mod render_bar;
+
 use ember_game_what_is_this_v1::{DiagnosticReport, KernelMeasurement, KernelStatus};
 use serde::Serialize;
 
