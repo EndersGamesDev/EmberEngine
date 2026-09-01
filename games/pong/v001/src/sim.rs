@@ -157,9 +157,8 @@ impl Sim {
             return;
         }
 
-        let speed = (self.ball_vel[0] * self.ball_vel[0]
-            + self.ball_vel[1] * self.ball_vel[1])
-            .sqrt();
+        let speed =
+            (self.ball_vel[0] * self.ball_vel[0] + self.ball_vel[1] * self.ball_vel[1]).sqrt();
         let new_speed = (speed * SPEEDUP).min(MAX_SPEED);
         let mut vx = self.ball_vel[0] + (offset / PADDLE_HALF_W) * 7.0;
         let vz_sign = -paddle_z.signum();
@@ -179,11 +178,7 @@ impl Sim {
         self.ball_pos = [0.0, 0.0];
         self.ball_vel = [0.0, 0.0];
         let dir = if scorer == 1 { 1.0 } else { -1.0 };
-        let pause = if won {
-            SERVE_PAUSE * 2.0
-        } else {
-            SERVE_PAUSE
-        };
+        let pause = if won { SERVE_PAUSE * 2.0 } else { SERVE_PAUSE };
         self.phase = Phase::Serving { timer: pause, dir };
     }
 }
@@ -198,8 +193,8 @@ impl Default for Sim {
 #[allow(clippy::float_cmp)] // The era determinism checks require bit-identical state.
 mod tests {
     use super::{
-        COURT_END_Z, COURT_HALF_W, FIXED_DT, MIN_Z_FRACTION, PADDLE_HALF_T, PADDLE_Z,
-        Phase, SERVE_PAUSE, SERVE_SPEED, Sim, WIN_SCORE,
+        COURT_END_Z, COURT_HALF_W, FIXED_DT, MIN_Z_FRACTION, PADDLE_HALF_T, PADDLE_Z, Phase,
+        SERVE_PAUSE, SERVE_SPEED, Sim, WIN_SCORE,
     };
 
     fn run_serve(sim: &mut Sim) {
@@ -284,13 +279,7 @@ mod tests {
                 let axis = if index % 120 < 60 { 1.0 } else { -1.0 };
                 sim.step(axis, -axis);
             }
-            (
-                sim.ball_pos,
-                sim.ball_vel,
-                sim.score,
-                sim.p1_x,
-                sim.p2_x,
-            )
+            (sim.ball_pos, sim.ball_vel, sim.score, sim.p1_x, sim.p2_x)
         };
         assert_eq!(run(), run());
     }

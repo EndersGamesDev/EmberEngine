@@ -3,9 +3,9 @@
 use ember_legacy::{
     AdmissionMetadata, AdmissionRefusal, CloseReason, CloseRequest, DecodedInput, EncodedEvent,
     FactoryError, GameFactory, GameKey, GameSession, InnerCodec, InnerCodecError, InnerFrame,
-    LeaveReason, LegacyCapabilities, LobbySeed, LobbyStatus, MonotonicDuration,
-    MonotonicTimestamp, OutboundEvent, OutboundTarget, PeerId, SchedulingRequest,
-    SessionCreationData, SessionInput, SessionUpdate,
+    LeaveReason, LegacyCapabilities, LobbySeed, LobbyStatus, MonotonicDuration, MonotonicTimestamp,
+    OutboundEvent, OutboundTarget, PeerId, SchedulingRequest, SessionCreationData, SessionInput,
+    SessionUpdate,
 };
 
 use crate::proto::{
@@ -137,20 +137,15 @@ pub struct PongSession {
 impl PongSession {
     /// Constructs a lobby from immutable host data without consuming capabilities.
     #[must_use]
-    pub fn new(
-        lobby_name: String,
-        _lobby_seed: LobbySeed,
-        created_at: MonotonicTimestamp,
-    ) -> Self {
+    pub fn new(lobby_name: String, _lobby_seed: LobbySeed, created_at: MonotonicTimestamp) -> Self {
         Self {
             lobby_name,
             members: Vec::new(),
             sim: None,
             axes: [0.0, 0.0],
             tick: 0,
-            next_tick_at: created_at.saturating_add(MonotonicDuration::from_micros(
-                FIXED_STEP_MICROS,
-            )),
+            next_tick_at: created_at
+                .saturating_add(MonotonicDuration::from_micros(FIXED_STEP_MICROS)),
             schedule_started: false,
         }
     }
@@ -261,13 +256,12 @@ impl PongSession {
         }
 
         let following = due.saturating_add(FIXED_STEP_MICROS);
-        let stall_limit = following
-            .saturating_add(FIXED_STEP_MICROS.saturating_mul(STALL_GRACE_STEPS));
+        let stall_limit =
+            following.saturating_add(FIXED_STEP_MICROS.saturating_mul(STALL_GRACE_STEPS));
         if now > stall_limit {
             self.run_tick(update);
-            self.next_tick_at = MonotonicTimestamp::from_micros(
-                now.saturating_add(FIXED_STEP_MICROS),
-            );
+            self.next_tick_at =
+                MonotonicTimestamp::from_micros(now.saturating_add(FIXED_STEP_MICROS));
             return true;
         }
 
@@ -286,11 +280,7 @@ impl PongSession {
 }
 
 impl GameSession for PongSession {
-    fn step(
-        &mut self,
-        timestamp: MonotonicTimestamp,
-        inputs: Vec<SessionInput>,
-    ) -> SessionUpdate {
+    fn step(&mut self, timestamp: MonotonicTimestamp, inputs: Vec<SessionInput>) -> SessionUpdate {
         let mut update = SessionUpdate::default();
         for input in inputs {
             self.accept_input(input, &mut update);

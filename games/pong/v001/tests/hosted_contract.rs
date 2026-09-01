@@ -22,8 +22,7 @@ const CLIENT_TO_SERVER: &str =
 const SERVER_TO_CLIENT: &str =
     include_str!("fixtures/pong-v1-hosted-contract/server-to-client.jsonl");
 const LOBBY: &str = include_str!("fixtures/pong-v1-hosted-contract/lobby.json");
-const TRACE: &str =
-    include_str!("fixtures/pong-v1-hosted-contract/deterministic-trace.json");
+const TRACE: &str = include_str!("fixtures/pong-v1-hosted-contract/deterministic-trace.json");
 
 #[derive(Deserialize)]
 struct SuiteFixture {
@@ -215,7 +214,10 @@ fn lobby_join_refusal_and_reopen_match_the_era_server() {
     let extra = PeerId::from_host_value(3);
 
     let created = session.join(admission(host, "alice", created_at)).unwrap();
-    assert_eq!(created.outbound[0].event.payload, fixture.created.as_bytes());
+    assert_eq!(
+        created.outbound[0].event.payload,
+        fixture.created.as_bytes()
+    );
     assert_eq!(session.lobby_status().code, fixture.waiting_status);
     assert_eq!(
         created.scheduling,
@@ -225,8 +227,14 @@ fn lobby_join_refusal_and_reopen_match_the_era_server() {
     );
 
     let started = session.join(admission(guest, "bob", created_at)).unwrap();
-    assert_eq!(started.outbound[0].event.payload, fixture.host_start.as_bytes());
-    assert_eq!(started.outbound[1].event.payload, fixture.guest_start.as_bytes());
+    assert_eq!(
+        started.outbound[0].event.payload,
+        fixture.host_start.as_bytes()
+    );
+    assert_eq!(
+        started.outbound[1].event.payload,
+        fixture.guest_start.as_bytes()
+    );
     assert_eq!(session.lobby_status().code, fixture.playing_status);
 
     let refusal = session
@@ -242,7 +250,10 @@ fn lobby_join_refusal_and_reopen_match_the_era_server() {
             detail: None,
         },
     );
-    assert_eq!(left.outbound[0].event.payload, fixture.opponent_left.as_bytes());
+    assert_eq!(
+        left.outbound[0].event.payload,
+        fixture.opponent_left.as_bytes()
+    );
     assert_eq!(session.lobby_status().code, "waiting");
 }
 
@@ -291,11 +302,7 @@ impl LegacyTransport for PanicTransport {
         panic!("Pong v1 must not consume the transport capability");
     }
 
-    fn close_peer(
-        &self,
-        _peer_id: PeerId,
-        _reason: CloseReason,
-    ) -> Result<(), TransportError> {
+    fn close_peer(&self, _peer_id: PeerId, _reason: CloseReason) -> Result<(), TransportError> {
         panic!("Pong v1 must not consume the transport capability");
     }
 
@@ -313,9 +320,7 @@ fn factory_constructs_without_consuming_any_capability_surface() {
         assets: None,
     };
     let creation = creation([7; 32], MonotonicTimestamp::from_micros(50));
-    PongFactory::new()
-        .create(&capabilities, &creation)
-        .unwrap();
+    PongFactory::new().create(&capabilities, &creation).unwrap();
 }
 
 #[test]
