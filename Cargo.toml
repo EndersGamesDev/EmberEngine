@@ -16,6 +16,7 @@ members = [
     "crates/pong-server",
     "games/arena/v012",
     "games/fire/v001",
+    "games/pong/v001",
     "tools/cli-common",
     "tools/linter",
     "tools/pulldown-cmark-to-cmark",

@@ -1,0 +1,45 @@
+{
+  "fixture_suite": "pong-v1-hosted-contract",
+  "seed": [42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  "created_at_micros": 1000000,
+  "calls": [
+    {
+      "timestamp_micros": 1016667,
+      "frames": [
+        {"peer": "host", "frame": "{\"t\":\"input\",\"axis\":1.0}"},
+        {"peer": "guest", "frame": "{\"t\":\"input\",\"axis\":-1.0}"}
+      ],
+      "checkpoint": null
+    },
+    {
+      "timestamp_micros": 1033334,
+      "frames": [],
+      "checkpoint": {
+        "tick": 2,
+        "paddles": [0.53333336, -0.53333336],
+        "ball": [0.0, 0.0],
+        "scores": [0, 0],
+        "serving": true
+      }
+    },
+    {
+      "timestamp_micros": 1050001,
+      "frames": [
+        {"peer": "host", "frame": "{\"t\":\"input\",\"axis\":-1.0}"},
+        {"peer": "guest", "frame": "{\"t\":\"input\",\"axis\":0.5}"}
+      ],
+      "checkpoint": null
+    },
+    {
+      "timestamp_micros": 1066668,
+      "frames": [],
+      "checkpoint": {
+        "tick": 4,
+        "paddles": [0.0, -0.2666667],
+        "ball": [0.0, 0.0],
+        "scores": [0, 0],
+        "serving": true
+      }
+    }
+  ]
+}

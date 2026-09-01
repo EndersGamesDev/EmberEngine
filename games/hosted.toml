@@ -18,3 +18,11 @@ latest = true
 limits_profile = "estate-measurement-required-fire-v1"
 fixture_suite = "fire-v1-hosted-contract"
 legacy_game = "fire"
+
+[[games]]
+game_id = "pong"
+game_version = 1
+package = "ember-game-pong-v1"
+latest = true
+limits_profile = "estate-measurement-required-pong-v1"
+fixture_suite = "pong-v1-hosted-contract"
