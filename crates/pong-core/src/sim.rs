@@ -50,7 +50,7 @@ pub struct Sim {
 
 impl Sim {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             p1_x: 0.0,
             p2_x: 0.0,

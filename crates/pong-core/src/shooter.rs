@@ -14,9 +14,10 @@ pub const CROUCH_HIT_MULT: f32 = 0.72;
 
 /// The arc the raised off-hand shield covers, radians: 120° centred on the
 /// holder's horizontal aim, so it protects what you are looking at and
-/// nothing else. Widening this toward TAU makes the shield omnidirectional
-/// and removes the only way to beat it (flank it), so it is the tuning knob
-/// that matters most.
+/// nothing else.
+///
+/// Widening this toward TAU makes the shield omnidirectional and removes the
+/// only way to beat it (flank it), so it is the tuning knob that matters most.
 pub const SHIELD_ARC: f32 = std::f32::consts::FRAC_PI_3 * 2.0;
 
 /// Stance-dependent hit-test radius: crouch = lower profile = smaller target.
@@ -33,9 +34,10 @@ pub fn hit_radius(crouch: bool) -> f32 {
 /// level, so this is a bullet's starting height.
 pub const EYE_STAND: f32 = 1.45;
 pub const EYE_CROUCH: f32 = 0.85;
-/// Body height above the feet, per stance: the vertical extent of the hit
-/// volume. Matched to the silhouette the client draws (head centre plus half
-/// a head) so that what you see is what you hit — these live here, not in
+/// Body height above the feet, per stance.
+///
+/// The vertical extent matches the silhouette the client draws (head centre
+/// plus half a head) so that what you see is what you hit. These live here, not in
 /// the renderer, because client and server must agree where a body IS.
 pub const BODY_H_STAND: f32 = 1.70;
 pub const BODY_H_CROUCH: f32 = 1.25;
@@ -50,15 +52,16 @@ pub const BODY_H_CROUCH: f32 = 1.25;
 
 /// Height a shot leaves from, measured from the shooter's feet.
 #[must_use]
-pub fn eye_h(crouch: bool) -> f32 {
+pub const fn eye_h(crouch: bool) -> f32 {
     if crouch { EYE_CROUCH } else { EYE_STAND }
 }
 
 /// Vertical extent of the hit volume, measured from the target's feet.
+///
 /// Together with `hit_radius` this makes the hitbox a finite cylinder; it
 /// used to be one of infinite height, which is why pitch never mattered.
 #[must_use]
-pub fn body_h(crouch: bool) -> f32 {
+pub const fn body_h(crouch: bool) -> f32 {
     if crouch { BODY_H_CROUCH } else { BODY_H_STAND }
 }
 
@@ -84,7 +87,7 @@ pub struct WeaponStats {
 }
 
 #[must_use]
-pub fn weapon_stats(level: u8) -> WeaponStats {
+pub const fn weapon_stats(level: u8) -> WeaponStats {
     match level {
         3 => WeaponStats {
             cooldown: 0.22,
@@ -105,7 +108,7 @@ pub fn weapon_stats(level: u8) -> WeaponStats {
 }
 
 #[must_use]
-pub fn weapon_name(level: u8) -> &'static str {
+pub const fn weapon_name(level: u8) -> &'static str {
     match level {
         3 => "Heavy",
         2 => "Rapid",
@@ -192,13 +195,14 @@ pub fn seeded_height(min: [f32; 2]) -> f32 {
 /// function because the sim, the renderer and the editor all read heights
 /// through it.
 #[must_use]
-pub fn obstacle_height(o: &Obstacle) -> f32 {
+pub const fn obstacle_height(o: &Obstacle) -> f32 {
     o.h
 }
 
-/// The surface a player at `pos` stands on: the tallest box top they
-/// overlap, or the arena floor. Uses the same overlap test as `blocked`,
-/// so a player can only ever be supported by a box they are actually on.
+/// The surface a player at `pos` stands on: its tallest overlapping box or the floor.
+///
+/// This uses the same overlap test as `blocked`, so support always comes from
+/// a box the player is actually on.
 #[must_use]
 pub fn support_height(pos: [f32; 2], r: f32, obstacles: &[Obstacle]) -> f32 {
     let mut h = 0.0f32;
@@ -430,18 +434,20 @@ pub fn step_vertical(
     // Landing check runs against where the feet were, so walking off a box
     // starts a fall instead of snapping to the floor.
     let grounded = y <= ground + 1e-3;
-    let mut vy = if grounded && vy <= 0.0 { 0.0 } else { vy };
-    if grounded && jump {
-        vy = JUMP_VEL;
-    }
+    let mut vy = if grounded && jump {
+        JUMP_VEL
+    } else if grounded && vy <= 0.0 {
+        0.0
+    } else {
+        vy
+    };
     vy += GRAVITY * dt;
-    let mut y = y + vy * dt;
-    let mut landed = false;
-    if vy <= 0.0 && y <= ground {
-        y = ground;
-        vy = 0.0;
-        landed = true;
-    }
+    let y = y + vy * dt;
+    let (y, vy, landed) = if vy <= 0.0 && y <= ground {
+        (ground, 0.0, true)
+    } else {
+        (y, vy, false)
+    };
     (y, vy, landed || (grounded && vy <= 0.0))
 }
 
