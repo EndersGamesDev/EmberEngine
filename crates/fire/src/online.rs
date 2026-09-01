@@ -76,9 +76,10 @@ impl Default for Online {
 }
 
 impl Online {
+    #[must_use]
     pub fn new() -> Self {
         Self {
-            race: Race::new(castle::track(), fire_core::proto::MAX_PLAYERS as usize, 3),
+            race: Race::new(castle::track(), usize::from(fire_core::proto::MAX_PLAYERS), 3),
             screen: Screen::Browsing,
             my_slot: None,
             phase: Phase::Waiting,
@@ -95,8 +96,9 @@ impl Online {
         }
     }
 
+    #[must_use]
     pub fn my_car(&self) -> Option<&Car> {
-        let s = self.my_slot? as usize;
+        let s = usize::from(self.my_slot?);
         self.race.racers.get(s).map(|r| &r.car)
     }
 
@@ -140,7 +142,7 @@ impl Online {
             return;
         }
         for i in 0..self.race.racers.len() {
-            let is_me = self.my_slot == Some(i as u8);
+            let is_me = self.my_slot.is_some_and(|slot| usize::from(slot) == i);
             if is_me {
                 let grip = self.grip_at(self.race.racers[i].car.pos);
                 self.race.racers[i].car.step(&input, grip, dt);
@@ -161,7 +163,16 @@ impl Online {
             S2C::Lobbies { lobbies } => self.lobbies = lobbies,
 
             S2C::Joined { lobby, slot, laps, roster, .. } => {
-                self.race = Race::new(castle::track(), fire_core::proto::MAX_PLAYERS as usize, laps);
+                let race = Race::new(
+                    castle::track(),
+                    usize::from(fire_core::proto::MAX_PLAYERS),
+                    laps,
+                );
+                if usize::from(slot) >= race.racers.len() {
+                    self.notice = Some(format!("server assigned invalid player slot {slot}"));
+                    return;
+                }
+                self.race = race;
                 self.screen = Screen::InLobby;
                 self.lobby_name = Some(lobby);
                 self.my_slot = Some(slot);
@@ -202,7 +213,7 @@ impl Online {
 
     fn apply_state(&mut self, cars: &[CarState]) {
         for c in cars {
-            let i = c.id as usize;
+            let i = usize::from(c.id);
             if i >= self.race.racers.len() {
                 continue;
             }
@@ -269,7 +280,7 @@ mod tests {
         o.apply(joined(2));
         assert_eq!(o.screen, Screen::InLobby);
         assert_eq!(o.my_slot, Some(2));
-        assert_eq!(o.race.racers.len(), MAX_PLAYERS as usize);
+        assert_eq!(o.race.racers.len(), usize::from(MAX_PLAYERS));
         assert_eq!(o.race.laps_to_win, 3);
     }
 
@@ -412,5 +423,14 @@ mod tests {
         o.apply(joined(0));
         o.apply(state_for(200, 1.0, 1.0, 0));
         assert_eq!(o.my_car().unwrap().pos, o.race.racers[0].car.pos);
+    }
+
+    #[test]
+    fn an_out_of_range_join_slot_is_refused() {
+        let mut online = Online::new();
+        online.apply(joined(200));
+        assert_eq!(online.screen, Screen::Browsing);
+        assert_eq!(online.my_slot, None);
+        assert_eq!(online.notice.as_deref(), Some("server assigned invalid player slot 200"));
     }
 }

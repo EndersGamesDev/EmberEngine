@@ -141,6 +141,10 @@ mod imp {
 
     use super::Status;
 
+    fn set_status(status: &Mutex<Status>, next: Status) {
+        *status.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = next;
+    }
+
     pub struct Net {
         rx: Receiver<S2C>,
         tx: Sender<Message>,
@@ -148,6 +152,11 @@ mod imp {
     }
 
     impl Net {
+        /// Connect in a background reader thread.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the operating system cannot create that thread.
         pub fn connect(url: &str) -> Result<Self, String> {
             let (in_tx, in_rx) = mpsc::channel::<S2C>();
             let (out_tx, out_rx) = mpsc::channel::<Message>();
@@ -155,57 +164,62 @@ mod imp {
 
             let st = Arc::clone(&status);
             let url = url.to_string();
-            thread::spawn(move || {
-                let mut ws = match tungstenite::connect(&url) {
-                    Ok((ws, _)) => ws,
-                    Err(e) => {
-                        *st.lock().unwrap() = Status::Closed(e.to_string());
-                        return;
-                    }
-                };
-                if let tungstenite::stream::MaybeTlsStream::Plain(s) = ws.get_ref() {
-                    let _ = s.set_read_timeout(Some(Duration::from_millis(5)));
-                }
-                *st.lock().unwrap() = Status::Open;
-                loop {
-                    while let Ok(m) = out_rx.try_recv() {
-                        if ws.send(m).is_err() {
-                            *st.lock().unwrap() = Status::Closed("send failed".into());
-                            return;
-                        }
-                    }
-                    match ws.read() {
-                        Ok(Message::Text(t)) => match serde_json::from_str::<S2C>(&t) {
-                            Ok(m) => {
-                                if in_tx.send(m).is_err() {
-                                    return;
-                                }
-                            }
-                            // A frame this build cannot parse is the server
-                            // being newer. Say so: silently discarding it
-                            // makes a lost message indistinguishable from one
-                            // that was never sent.
-                            Err(e) => tracing::warn!("fire net: undecodable frame ({e}): {t}"),
-                        },
-                        Ok(Message::Close(_)) => {
-                            *st.lock().unwrap() = Status::Closed("server closed".into());
-                            return;
-                        }
-                        Ok(_) => {}
-                        Err(tungstenite::Error::Io(e))
-                            if fire_core::proto::is_transient_read(&e) => {}
+            thread::Builder::new()
+                .name("fire-net".into())
+                .spawn(move || {
+                    let mut ws = match tungstenite::connect(&url) {
+                        Ok((ws, _)) => ws,
                         Err(e) => {
-                            // The reader owns the only path messages arrive
-                            // by, so its death is total and silent from the
-                            // game's point of view: `drain` simply returns
-                            // nothing for ever. Record why.
-                            tracing::warn!("fire net: reader thread exiting: {e}");
-                            *st.lock().unwrap() = Status::Closed(e.to_string());
+                            set_status(&st, Status::Closed(e.to_string()));
                             return;
                         }
+                    };
+                    if let tungstenite::stream::MaybeTlsStream::Plain(s) = ws.get_ref() {
+                        let _ = s.set_read_timeout(Some(Duration::from_millis(5)));
                     }
-                }
-            });
+                    set_status(&st, Status::Open);
+                    loop {
+                        while let Ok(m) = out_rx.try_recv() {
+                            if ws.send(m).is_err() {
+                                set_status(&st, Status::Closed("send failed".into()));
+                                return;
+                            }
+                        }
+                        match ws.read() {
+                            Ok(Message::Text(t)) => match serde_json::from_str::<S2C>(&t) {
+                                Ok(m) => {
+                                    if in_tx.send(m).is_err() {
+                                        return;
+                                    }
+                                }
+                                // A frame this build cannot parse is the server
+                                // being newer. Say so: silently discarding it
+                                // makes a lost message indistinguishable from one
+                                // that was never sent.
+                                Err(e) => {
+                                    tracing::warn!("fire net: undecodable frame ({e}): {t}");
+                                }
+                            },
+                            Ok(Message::Close(_)) => {
+                                set_status(&st, Status::Closed("server closed".into()));
+                                return;
+                            }
+                            Ok(_) => {}
+                            Err(tungstenite::Error::Io(e))
+                                if fire_core::proto::is_transient_read(&e) => {}
+                            Err(e) => {
+                                // The reader owns the only path messages arrive
+                                // by, so its death is total and silent from the
+                                // game's point of view: `drain` simply returns
+                                // nothing for ever. Record why.
+                                tracing::warn!("fire net: reader thread exiting: {e}");
+                                set_status(&st, Status::Closed(e.to_string()));
+                                return;
+                            }
+                        }
+                    }
+                })
+                .map_err(|e| e.to_string())?;
 
             Ok(Self { rx: in_rx, tx: out_tx, status })
         }
@@ -222,8 +236,12 @@ mod imp {
             }
         }
 
+        #[must_use]
         pub fn status(&self) -> Status {
-            self.status.lock().unwrap().clone()
+            self.status
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
         }
     }
 }

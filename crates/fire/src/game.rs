@@ -57,6 +57,7 @@ thread_local! {
     }) };
 }
 
+#[must_use]
 pub fn hud() -> Hud {
     HUD.with(|h| *h.borrow())
 }
@@ -69,9 +70,11 @@ pub fn set_hud(h: Hud) {
 
 // ---- meshes ---------------------------------------------------------------
 
-/// Mesh ids, assigned in registration order. `EngineConfig.meshes` entries
-/// take ids 1..=N, and id 0 is the engine's built-in cube — so the order of
-/// `build_meshes` below IS this struct, and the two must change together.
+/// Mesh ids, assigned in registration order.
+///
+/// `EngineConfig.meshes` entries take ids 1..=N, and id 0 is the engine's
+/// built-in cube — so the order of `build_meshes` below IS this struct, and
+/// the two must change together.
 pub struct Meshes {
     pub ground: u32,
     pub road: u32,
@@ -114,6 +117,7 @@ fn prop_or_cube(bytes: &[u8], tex: Option<TextureData>, tiles: f32, what: &str) 
     }
 }
 
+#[must_use]
 pub fn build_meshes(track: &fire_core::track::Track) -> (Vec<MeshData>, Meshes) {
     let half = track.half_width();
     let wall_off = half + fire_core::sim::WALL_MARGIN;
@@ -178,6 +182,7 @@ pub struct Chase {
 }
 
 impl Chase {
+    #[must_use]
     pub fn new(car: &car::Car) -> Self {
         Self {
             dir: car::forward(car.yaw),
@@ -185,6 +190,7 @@ impl Chase {
         }
     }
 
+    #[must_use]
     pub fn update(&mut self, car: &car::Car, dt: f32) -> Camera {
         let fwd = car::forward(car.yaw);
         let speed = car.speed();
@@ -215,6 +221,7 @@ impl Chase {
 
 /// Read the keyboard into a car intent. `boost_was_down` is the caller's
 /// rising-edge latch: a held key must spend exactly one charge.
+#[must_use]
 pub fn read_input(input: &InputState, boost_was_down: &mut bool) -> CarInput {
     let held = |a: KeyCode, b: KeyCode| input.down(a) || input.down(b);
     let throttle = if held(KeyCode::KeyW, KeyCode::ArrowUp) {
@@ -250,6 +257,7 @@ pub struct Game {
 }
 
 impl Game {
+    #[must_use]
     pub fn new(ids: Meshes) -> Self {
         let race = Race::new(castle::track(), PLAYERS, LAPS);
         let chase = Chase::new(&race.racers[0].car);
@@ -300,7 +308,8 @@ impl EmberGame for Game {
                     mine
                 } else {
                     // Vary skill by grid slot so the field spreads out.
-                    let skill = ai::DEFAULT_SKILL - i as f32 * 0.012;
+                    let slot = u8::try_from(i).expect("local race grid fits in u8");
+                    let skill = ai::DEFAULT_SKILL - f32::from(slot) * 0.012;
                     ai::chase(&self.race.track, &r.car, skill)
                 }
             })
@@ -325,6 +334,7 @@ impl EmberGame for Game {
 
 /// Per-player livery. Deep, saturated colours that survive being multiplied
 /// into an untextured mesh under a single directional light.
+#[must_use]
 pub fn livery(i: usize) -> Vec3 {
     const LIVERIES: [[f32; 3]; 8] = [
         [0.86, 0.14, 0.16], // crimson
@@ -358,7 +368,8 @@ mod tests {
         .iter()
         .enumerate()
         {
-            assert_eq!(*id, i as u32 + 1, "mesh id {id} is not at registration slot {}", i + 1);
+            let expected = u32::try_from(i).expect("mesh registration index fits u32") + 1;
+            assert_eq!(*id, expected, "mesh id {id} is not at registration slot {}", i + 1);
         }
         for (i, m) in list.iter().enumerate() {
             assert!(!m.vertices.is_empty(), "mesh slot {} is empty", i + 1);
@@ -426,7 +437,10 @@ mod tests {
         // Arm the countdown first, then run it out, or the throttle ticks
         // below land while the cars are still held on the grid.
         g.race.start_countdown();
-        for _ in 0..(fire_core::sim::COUNTDOWN_SECS * 60.0) as u32 + 5 {
+        // The countdown is a small positive simulation constant.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let countdown_ticks = (fire_core::sim::COUNTDOWN_SECS * 60.0) as u32;
+        for _ in 0..countdown_ticks + 5 {
             g.race.step(&[], 1.0 / 60.0);
         }
         assert_eq!(g.race.state, RaceState::Racing, "countdown did not finish");
@@ -479,6 +493,7 @@ fn push_prop(frame: &mut Frame, ids: &Meshes, kind: PropKind, pos: Vec2, yaw: f3
 
 /// Build the whole frame from a race. Shared by local and online play so
 /// the two modes cannot drift apart visually.
+#[must_use]
 pub fn scene(race: &Race, ids: &Meshes, me: usize, camera: Camera) -> Frame {
     let mut frame = Frame { camera, instances: Vec::with_capacity(64) };
 
@@ -537,7 +552,8 @@ pub fn scene(race: &Race, ids: &Meshes, me: usize, camera: Camera) -> Frame {
     // HUD the engine can draw, since there is no 2D pass and no text.
     let me = &race.racers[me].car;
     for n in 0..me.boost_charges {
-        let side = (n as f32 - (car::BOOST_CHARGES - 1) as f32 * 0.5) * 0.85;
+        let side =
+            (f32::from(n) - f32::from(car::BOOST_CHARGES - 1) * 0.5) * 0.85;
         let r = car::right(me.yaw) * side;
         frame.instances.push(
             Instance::new(
@@ -554,10 +570,10 @@ pub fn scene(race: &Race, ids: &Meshes, me: usize, camera: Camera) -> Frame {
     if race.state == RaceState::Countdown {
         let (c, tan) = race.track.at(0.0);
         let left = Vec2::new(-tan.y, tan.x);
-        let lit = race.countdown_left().ceil() as i32;
-        for n in 0..3 {
-            let p = c + left * (n as f32 - 1.0) * 3.2;
-            let on = n < lit;
+        let lit = race.countdown_left().ceil().clamp(0.0, 3.0);
+        for n in 0_u8..3 {
+            let p = c + left * (f32::from(n) - 1.0) * 3.2;
+            let on = f32::from(n) < lit;
             frame.instances.push(
                 Instance::new(
                     Vec3::new(p.x, 7.0, p.y),

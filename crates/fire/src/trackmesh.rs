@@ -13,36 +13,48 @@ use fire_core::track::Track;
 
 /// Left-hand normal of a direction on the XZ plane, matching
 /// `Track::locate`'s sign convention (positive lateral is to the left).
-fn left_of(t: Vec2) -> Vec2 {
-    Vec2::new(-t.y, t.x)
+fn left_of(direction: Vec2) -> Vec2 {
+    Vec2::new(-direction.y, direction.x)
 }
 
-fn vert(p: Vec3, n: Vec3, u: f32, v: f32) -> MeshVertex {
-    MeshVertex { pos: p.to_array(), normal: n.to_array(), uv: [u, v] }
+const fn vert(position: Vec3, normal: Vec3, u: f32, v: f32) -> MeshVertex {
+    MeshVertex { pos: position.to_array(), normal: normal.to_array(), uv: [u, v] }
 }
 
 /// Walk the centreline, handing each segment's start/end centre, tangent and
 /// arc length to `f`. Shared by every ribbon below so they stay in lockstep.
-fn for_each_segment(track: &Track, mut f: impl FnMut(Vec2, Vec2, Vec2, Vec2, f32, f32)) {
-    let pts = track.centreline();
-    let n = pts.len();
-    let mut s = 0.0;
-    for i in 0..n {
-        let a = pts[i];
-        let b = pts[(i + 1) % n];
-        let seg = (b - a).length();
-        if seg < 1e-6 {
+fn for_each_segment(
+    track: &Track,
+    mut visit: impl FnMut(Vec2, Vec2, Vec2, Vec2, f32, f32),
+) {
+    let points = track.centreline();
+    let point_count = points.len();
+    let mut arc_length = 0.0;
+    for index in 0..point_count {
+        let start = points[index];
+        let end = points[(index + 1) % point_count];
+        let segment_length = (end - start).length();
+        if segment_length < 1e-6 {
             continue;
         }
-        let dir = (b - a) / seg;
+        let direction = (end - start) / segment_length;
         // Average with the neighbouring segment so the ribbon's edges meet
         // cleanly on a curve rather than fanning at each joint.
-        let prev = pts[(i + n - 1) % n];
-        let next = pts[(i + 2) % n];
-        let ta = ((a - prev).normalize_or_zero() + dir).normalize_or_zero();
-        let tb = (dir + (next - b).normalize_or_zero()).normalize_or_zero();
-        f(a, b, if ta == Vec2::ZERO { dir } else { ta }, if tb == Vec2::ZERO { dir } else { tb }, s, s + seg);
-        s += seg;
+        let previous = points[(index + point_count - 1) % point_count];
+        let next = points[(index + 2) % point_count];
+        let start_tangent =
+            ((start - previous).normalize_or_zero() + direction).normalize_or_zero();
+        let end_tangent =
+            (direction + (next - end).normalize_or_zero()).normalize_or_zero();
+        visit(
+            start,
+            end,
+            if start_tangent == Vec2::ZERO { direction } else { start_tangent },
+            if end_tangent == Vec2::ZERO { direction } else { end_tangent },
+            arc_length,
+            arc_length + segment_length,
+        );
+        arc_length += segment_length;
     }
 }
 
@@ -51,33 +63,40 @@ fn for_each_segment(track: &Track, mut f: impl FnMut(Vec2, Vec2, Vec2, Vec2, f32
 ///
 /// `tile_len` is how many metres of track one texture repeat covers along the
 /// lap; `tile_across` how many repeats span the width.
+#[must_use]
 pub fn flat_ribbon(
     track: &Track,
     offset: f32,
     width: f32,
-    y: f32,
+    elevation: f32,
     tile_len: f32,
     tile_across: f32,
     texture: Option<TextureData>,
 ) -> MeshData {
     let mut vertices = Vec::new();
     let up = Vec3::Y;
-    for_each_segment(track, |a, b, ta, tb, s0, s1| {
-        let (la, lb) = (left_of(ta), left_of(tb));
-        let (a_in, a_out) = (a + la * (offset - width * 0.5), a + la * (offset + width * 0.5));
-        let (b_in, b_out) = (b + lb * (offset - width * 0.5), b + lb * (offset + width * 0.5));
-        let p = |q: Vec2| Vec3::new(q.x, y, q.y);
-        let (v0, v1) = (s0 / tile_len, s1 / tile_len);
+    for_each_segment(track, |start, end, start_tangent, end_tangent, start_s, end_s| {
+        let (start_left, end_left) = (left_of(start_tangent), left_of(end_tangent));
+        let (start_inner, start_outer) = (
+            start + start_left * (offset - width * 0.5),
+            start + start_left * (offset + width * 0.5),
+        );
+        let (end_inner, end_outer) = (
+            end + end_left * (offset - width * 0.5),
+            end + end_left * (offset + width * 0.5),
+        );
+        let world = |point: Vec2| Vec3::new(point.x, elevation, point.y);
+        let (start_v, end_v) = (start_s / tile_len, end_s / tile_len);
         let quad = [
-            (p(a_in), 0.0, v0),
-            (p(b_in), 0.0, v1),
-            (p(b_out), tile_across, v1),
-            (p(a_in), 0.0, v0),
-            (p(b_out), tile_across, v1),
-            (p(a_out), tile_across, v0),
+            (world(start_inner), 0.0, start_v),
+            (world(end_inner), 0.0, end_v),
+            (world(end_outer), tile_across, end_v),
+            (world(start_inner), 0.0, start_v),
+            (world(end_outer), tile_across, end_v),
+            (world(start_outer), tile_across, start_v),
         ];
-        for (pos, u, v) in quad {
-            vertices.push(vert(pos, up, u, v));
+        for (position, texture_u, texture_v) in quad {
+            vertices.push(vert(position, up, texture_u, texture_v));
         }
     });
     MeshData { vertices, texture }
@@ -89,6 +108,7 @@ pub fn flat_ribbon(
 /// The renderer does not cull backfaces, so a single-sided wall is visible
 /// from both sides and costs half the triangles of a boxed one. The normal
 /// faces the track, which is the side that matters for lighting.
+#[must_use]
 pub fn wall_ribbon(
     track: &Track,
     offset: f32,
@@ -125,38 +145,43 @@ pub fn wall_ribbon(
 
 /// A band across the track at arc length `s`, `depth` metres long — the
 /// start/finish line.
+#[must_use]
 pub fn cross_band(
     track: &Track,
-    s: f32,
+    distance: f32,
     depth: f32,
     tiles: f32,
     texture: Option<TextureData>,
 ) -> MeshData {
-    let (centre, tangent) = track.at(s);
-    let l = left_of(tangent);
+    let (centre, tangent) = track.at(distance);
+    let left = left_of(tangent);
     let half = track.half_width();
-    let p = |along: f32, across: f32| {
-        let q = centre + tangent * along + l * across;
-        Vec3::new(q.x, 0.02, q.y)
+    let world = |along: f32, across: f32| {
+        let point = centre + tangent * along + left * across;
+        Vec3::new(point.x, 0.02, point.y)
     };
     let up = Vec3::Y;
-    let (d, h) = (depth * 0.5, half);
+    let (half_depth, half_width) = (depth * 0.5, half);
     let corners = [
-        (p(-d, -h), 0.0, 0.0),
-        (p(d, -h), 0.0, 1.0),
-        (p(d, h), tiles, 1.0),
-        (p(-d, -h), 0.0, 0.0),
-        (p(d, h), tiles, 1.0),
-        (p(-d, h), tiles, 0.0),
+        (world(-half_depth, -half_width), 0.0, 0.0),
+        (world(half_depth, -half_width), 0.0, 1.0),
+        (world(half_depth, half_width), tiles, 1.0),
+        (world(-half_depth, -half_width), 0.0, 0.0),
+        (world(half_depth, half_width), tiles, 1.0),
+        (world(-half_depth, half_width), tiles, 0.0),
     ];
     MeshData {
-        vertices: corners.into_iter().map(|(q, u, v)| vert(q, up, u, v)).collect(),
+        vertices: corners
+            .into_iter()
+            .map(|(position, texture_u, texture_v)| vert(position, up, texture_u, texture_v))
+            .collect(),
         texture,
     }
 }
 
 /// The courtyard floor: one big quad under everything, sized to the track's
 /// bounding box plus a margin.
+#[must_use]
 pub fn ground(track: &Track, margin: f32, tile: f32, texture: Option<TextureData>) -> MeshData {
     let mut lo = Vec2::splat(f32::INFINITY);
     let mut hi = Vec2::splat(f32::NEG_INFINITY);
@@ -235,29 +260,35 @@ mod tests {
 
     #[test]
     fn walls_stand_up_and_face_the_track() {
-        let t = castle::track();
-        let off = t.half_width() + 6.0;
-        for (offset, side) in [(off, "left"), (-off, "right")] {
-            let m = wall_ribbon(&t, offset, 5.0, 10.0, 1.0, None);
-            assert_eq!(m.vertices.len() % 3, 0);
+        let track = castle::track();
+        let wall_offset = track.half_width() + 6.0;
+        for (offset, side) in [(wall_offset, "left"), (-wall_offset, "right")] {
+            let mesh = wall_ribbon(&track, offset, 5.0, 10.0, 1.0, None);
+            assert_eq!(mesh.vertices.len() % 3, 0);
             let mut saw_top = false;
-            for v in &m.vertices {
-                let n = Vec3::from(v.normal);
-                assert!(n.y.abs() < 1e-5, "{side} wall normal should be horizontal: {n}");
-                assert!((n.length() - 1.0).abs() < 1e-3, "{side} wall normal not unit");
-                if v.pos[1] > 4.9 {
+            for vertex in &mesh.vertices {
+                let normal = Vec3::from(vertex.normal);
+                assert!(
+                    normal.y.abs() < 1e-5,
+                    "{side} wall normal should be horizontal: {normal}"
+                );
+                assert!(
+                    (normal.length() - 1.0).abs() < 1e-3,
+                    "{side} wall normal not unit"
+                );
+                if vertex.pos[1] > 4.9 {
                     saw_top = true;
                 }
             }
             assert!(saw_top, "{side} wall has no height");
             // The normal must point toward the centreline, not away from it.
-            let v = &m.vertices[0];
-            let p = Vec2::new(v.pos[0], v.pos[2]);
-            let n = Vec2::new(v.normal[0], v.normal[2]);
-            let to_line = -t.locate(p).lateral.signum();
-            let left = left_of(t.locate(p).tangent);
+            let vertex = &mesh.vertices[0];
+            let position = Vec2::new(vertex.pos[0], vertex.pos[2]);
+            let normal = Vec2::new(vertex.normal[0], vertex.normal[2]);
+            let to_line = -track.locate(position).lateral.signum();
+            let left = left_of(track.locate(position).tangent);
             assert!(
-                n.dot(left * to_line) > 0.5,
+                normal.dot(left * to_line) > 0.5,
                 "{side} wall faces away from the track"
             );
         }
@@ -269,8 +300,14 @@ mod tests {
         let m = ground(&t, 60.0, 8.0, None);
         let xs: Vec<f32> = m.vertices.iter().map(|v| v.pos[0]).collect();
         let zs: Vec<f32> = m.vertices.iter().map(|v| v.pos[2]).collect();
-        let (lo_x, hi_x) = (xs.iter().cloned().fold(f32::INFINITY, f32::min), xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max));
-        let (lo_z, hi_z) = (zs.iter().cloned().fold(f32::INFINITY, f32::min), zs.iter().cloned().fold(f32::NEG_INFINITY, f32::max));
+        let (lo_x, hi_x) = (
+            xs.iter().copied().fold(f32::INFINITY, f32::min),
+            xs.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+        );
+        let (lo_z, hi_z) = (
+            zs.iter().copied().fold(f32::INFINITY, f32::min),
+            zs.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+        );
         for p in t.centreline() {
             assert!(p.x > lo_x && p.x < hi_x && p.y > lo_z && p.y < hi_z, "centreline escapes the ground quad");
         }
