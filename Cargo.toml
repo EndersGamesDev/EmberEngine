@@ -10,6 +10,7 @@ members = [
     "crates/fire-server",
     "crates/game",
     "crates/kings-core",
+    "crates/kings-server",
     "crates/pong",
     "crates/pong-core",
     "crates/pong-server",
