@@ -10,7 +10,7 @@ Version crates may depend on `ember-legacy` and behavior-neutral pure libraries,
 
 ## Object safety
 
-`LegacyClock`, `LegacyRandom`, `LegacyTransport`, `LegacyAssets`, `InnerCodec`, `GameSession`, and `GameFactory` are object-safe by design: their methods have no type parameters, do not return `Self`, and use owned neutral values or borrowed slices, so the closed build-time registry can store heterogeneous `Arc<dyn InnerCodec>`, `Arc<dyn GameFactory>`, capability trait objects, and returned `Box<dyn GameSession>` values without monomorphizing the host per game.
+`LegacyClock`, `LegacyRandom`, `LegacyTransport`, `LegacyAssets`, `InnerCodec`, `LegacyIngress`, `LegacyIngressFactory`, `GameSession`, and `GameFactory` are object-safe by design: their methods have no type parameters, do not return `Self`, and use owned neutral values or borrowed slices, so the closed build-time registry can store heterogeneous `Arc<dyn InnerCodec>`, `Arc<dyn LegacyIngressFactory>`, `Arc<dyn GameFactory>`, capability trait objects, per-connection `Box<dyn LegacyIngress>`, and returned `Box<dyn GameSession>` values without monomorphizing the host per game.
 
 `DecodedInput` and `EncodedEvent` are version-private canonical byte envelopes opaque to the host; they avoid a generic protocol-message parameter while keeping decoding and encoding independently fixture-testable.
 
@@ -299,10 +299,121 @@ pub trait InnerCodec: Send + Sync {
     fn encode(&self, event: &EncodedEvent) -> Result<InnerFrame, InnerCodecError>;
 }
 
+pub enum LegacyConnectionState {
+    AwaitHello,
+    Browsing,
+    Joined,
+    Closed,
+}
+
+pub struct LegacyLobbyProjection {
+    pub game_key: GameKey,
+    pub lobby_name: String,
+    pub host_handle: String,
+    pub password_protected: bool,
+    pub occupancy: u16,
+    pub capacity: u16,
+    pub status: LobbyStatus,
+}
+
+pub enum LegacyIngressAction {
+    Hello {
+        selection: GameKey,
+        handle: String,
+        response: InnerFrame,
+    },
+    ListLobbies,
+    CreateLobby {
+        selection: GameKey,
+        lobby_name: String,
+        password: Option<String>,
+    },
+    JoinLobby {
+        selection: GameKey,
+        lobby_name: String,
+        password: Option<String>,
+    },
+    LeaveLobby,
+    DispatchInner(DecodedInput),
+    Reply(InnerFrame),
+    Ignore,
+}
+
+pub enum LegacyIngressRefusal {
+    GameNotHosted {
+        requested_game: String,
+        hosted_games: Vec<String>,
+    },
+    VersionNotHosted {
+        requested: GameKey,
+        hosted_versions: Vec<u32>,
+    },
+    InvalidRequest {
+        message: String,
+    },
+    LobbyNotFound {
+        lobby_name: String,
+    },
+    LobbyAlreadyExists {
+        lobby_name: String,
+    },
+    PasswordRejected,
+    LobbyFull,
+    ServerAtCapacity,
+    Draining,
+    AdmissionRefused {
+        code: String,
+        message: String,
+    },
+    InternalError,
+}
+
+pub enum LegacyIngressError {
+    WrongFrameKind,
+    InvalidFrame(String),
+    DecodeFailed(String),
+    EncodeFailed(String),
+}
+
+impl From<InnerCodecError> for LegacyIngressError {
+    fn from(error: InnerCodecError) -> Self;
+}
+
+pub trait LegacyIngress: Send {
+    fn decode(
+        &mut self,
+        state: LegacyConnectionState,
+        frame: &InnerFrame,
+    ) -> Result<LegacyIngressAction, LegacyIngressError>;
+    fn project_lobbies(
+        &self,
+        entries: &[LegacyLobbyProjection],
+    ) -> Result<InnerFrame, LegacyIngressError>;
+    fn project_refusal(
+        &self,
+        refusal: &LegacyIngressRefusal,
+    ) -> Result<InnerFrame, LegacyIngressError>;
+}
+
+pub trait LegacyIngressFactory: Send + Sync {
+    fn create(&self) -> Box<dyn LegacyIngress>;
+}
+
 pub struct SessionInput {
     pub peer_id: PeerId,
     pub received_at: MonotonicTimestamp,
     pub input: DecodedInput,
+}
+
+pub struct SessionInputWithTransport {
+    pub peer_id: PeerId,
+    pub received_at: MonotonicTimestamp,
+    pub transport_rtt: Option<MonotonicDuration>,
+    pub input: DecodedInput,
+}
+
+impl From<SessionInputWithTransport> for SessionInput {
+    fn from(input: SessionInputWithTransport) -> Self;
 }
 
 pub enum OutboundTarget {
@@ -348,6 +459,11 @@ pub trait GameSession: Send {
         timestamp: MonotonicTimestamp,
         inputs: Vec<SessionInput>,
     ) -> SessionUpdate;
+    fn step_with_transport(
+        &mut self,
+        timestamp: MonotonicTimestamp,
+        inputs: Vec<SessionInputWithTransport>,
+    ) -> SessionUpdate;
     fn join(&mut self, admission: AdmissionMetadata) -> Result<SessionUpdate, AdmissionRefusal>;
     fn leave(&mut self, peer_id: PeerId, reason: LeaveReason) -> SessionUpdate;
     fn lobby_status(&self) -> LobbyStatus;
@@ -377,7 +493,9 @@ pub trait GameFactory: Send + Sync {
 }
 ```
 
-The host supplies timestamped inputs in deterministic admission and receipt order, invokes exactly one mutable authority for each lobby, charges limits outside the session, encodes returned events through the matching codec, and enqueues only through bounded outer transport.
+The host supplies timestamped inputs in deterministic admission and receipt order, invokes exactly one mutable authority for each lobby, charges limits outside the session, encodes returned events through the matching codec, and enqueues only through bounded outer transport. `step_with_transport` has a provided implementation that removes only `transport_rtt` and invokes the frozen `step` signature; versions that consume measured RTT override it without breaking existing `GameSession` implementations.
+
+The legacy ingress traits live in `ember-legacy`, never `ember-net`: a version crate owns its deployed legacy JSON tags, field layout, sanitization, and exact response frames, while the host owns the WebSocket, manifest-selected route, state, admission, and all byte, rate, and queue budgets. The manifest selector chooses an `Arc<dyn LegacyIngressFactory>` from the closed registry and each connection receives an independent `Box<dyn LegacyIngress>`.
 
 ### Hosted manifest
 
@@ -662,3 +780,5 @@ The committed known vector for `arena/12`, a seed of 32 bytes each equal to hexa
 - Added `pub struct FrozenKeyedRandom;` as the reference `LegacyRandom` implementation; no frozen signature changed.
 - Added `pub const fn UnicastHandle::from_peer_id(peer_id: PeerId) -> Self;` and `pub const fn BroadcastHandle::from_session_id(session_id: SessionId) -> Self;` so current host adapters can construct opaque bounded target handles; no frozen signature changed.
 - Added the `LobbyNotFound`, `LobbyAlreadyExists`, `PasswordRejected`, `LobbyFull`, `AdmissionRefused`, and `ServerAtCapacity` variants to `OuterErrorCode` so ordinary admission failures remain machine-readable in `Browsing`; no frozen variant changed or was removed.
+- Added `LegacyConnectionState`, `LegacyLobbyProjection`, `LegacyIngressAction`, `LegacyIngressRefusal`, `LegacyIngressError`, and the object-safe `LegacyIngress` and `LegacyIngressFactory` traits. This is an additive version-owned exact-wire seam; the frozen inner codec and session signatures are unchanged.
+- Added `SessionInputWithTransport`, its lossless-to-the-frozen-fields `From` conversion, and the provided object-safe `GameSession::step_with_transport` method. The existing required `step(timestamp, Vec<SessionInput>)` signature remains unchanged; the host currently supplies `transport_rtt: None` until transport RTT measurement is wired.
