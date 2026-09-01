@@ -255,9 +255,9 @@ impl SessionCapabilities {
         let transport = Arc::new(HostTransport::new(game_key, session_id, shutting_down));
         Self {
             capabilities: LegacyCapabilities {
-                clock: Arc::clone(&clock),
+                clock: Arc::clone(&clock) as _,
                 random: Arc::new(HostRandom),
-                transport: Arc::clone(&transport),
+                transport: Arc::clone(&transport) as _,
                 assets: None,
             },
             clock,
