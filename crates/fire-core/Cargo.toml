@@ -7,3 +7,6 @@ version.workspace = true
 glam.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+
+[lints]
+workspace = true
