@@ -113,7 +113,11 @@ pub fn longest_extent(mesh: &MeshData) -> f32 {
 /// # Errors
 ///
 /// Returns an error if the GLB cannot be decoded or contains no mesh parts.
-pub fn prop(bytes: &[u8], texture: Option<TextureData>, tiles_per_unit: f32) -> Result<MeshData, String> {
+pub fn prop(
+    bytes: &[u8],
+    texture: Option<TextureData>,
+    tiles_per_unit: f32,
+) -> Result<MeshData, String> {
     let parts = ember_engine::assets::load_glb(bytes)?;
     // The generator emits a single part; if that ever changes, the largest
     // one is the prop and the rest is debris.
@@ -123,7 +127,11 @@ pub fn prop(bytes: &[u8], texture: Option<TextureData>, tiles_per_unit: f32) -> 
         .ok_or("glb had no parts")?
         .mesh;
     let mesh = face_normals(mesh);
-    let mut mesh = if texture.is_some() { planar_uvs(mesh, tiles_per_unit) } else { mesh };
+    let mut mesh = if texture.is_some() {
+        planar_uvs(mesh, tiles_per_unit)
+    } else {
+        mesh
+    };
     mesh.texture = texture;
     Ok(mesh)
 }
@@ -147,7 +155,11 @@ mod tests {
         MeshData {
             vertices: p
                 .iter()
-                .map(|&pos| MeshVertex { pos, normal: [0.0, 1.0, 0.0], uv: [0.0, 0.0] })
+                .map(|&pos| MeshVertex {
+                    pos,
+                    normal: [0.0, 1.0, 0.0],
+                    uv: [0.0, 0.0],
+                })
                 .collect(),
             texture: None,
         }
@@ -167,7 +179,11 @@ mod tests {
         MeshData {
             vertices: p
                 .iter()
-                .map(|&pos| MeshVertex { pos, normal: [0.0, 1.0, 0.0], uv: [0.0, 0.0] })
+                .map(|&pos| MeshVertex {
+                    pos,
+                    normal: [0.0, 1.0, 0.0],
+                    uv: [0.0, 0.0],
+                })
                 .collect(),
             texture: None,
         }
@@ -199,16 +215,31 @@ mod tests {
     fn degenerate_triangles_get_a_usable_normal() {
         let m = MeshData {
             vertices: vec![
-                MeshVertex { pos: [0.0, 0.0, 0.0], normal: [0.0, 0.0, 0.0], uv: [0.0, 0.0] },
-                MeshVertex { pos: [1.0, 0.0, 0.0], normal: [0.0, 0.0, 0.0], uv: [0.0, 0.0] },
-                MeshVertex { pos: [2.0, 0.0, 0.0], normal: [0.0, 0.0, 0.0], uv: [0.0, 0.0] },
+                MeshVertex {
+                    pos: [0.0, 0.0, 0.0],
+                    normal: [0.0, 0.0, 0.0],
+                    uv: [0.0, 0.0],
+                },
+                MeshVertex {
+                    pos: [1.0, 0.0, 0.0],
+                    normal: [0.0, 0.0, 0.0],
+                    uv: [0.0, 0.0],
+                },
+                MeshVertex {
+                    pos: [2.0, 0.0, 0.0],
+                    normal: [0.0, 0.0, 0.0],
+                    uv: [0.0, 0.0],
+                },
             ],
             texture: None,
         };
         let m = face_normals(m);
         for v in &m.vertices {
             let n = Vec3::from(v.normal);
-            assert!((n.length() - 1.0).abs() < 1e-4, "collapsed triangle gave {n}");
+            assert!(
+                (n.length() - 1.0).abs() < 1e-4,
+                "collapsed triangle gave {n}"
+            );
         }
     }
 
@@ -231,9 +262,21 @@ mod tests {
     fn ground_offset_lifts_a_centred_prop_onto_the_floor() {
         let m = MeshData {
             vertices: vec![
-                MeshVertex { pos: [0.0, -1.0, 0.0], normal: [0.0, 1.0, 0.0], uv: [0.0, 0.0] },
-                MeshVertex { pos: [1.0, 1.0, 0.0], normal: [0.0, 1.0, 0.0], uv: [0.0, 0.0] },
-                MeshVertex { pos: [0.0, 0.5, 1.0], normal: [0.0, 1.0, 0.0], uv: [0.0, 0.0] },
+                MeshVertex {
+                    pos: [0.0, -1.0, 0.0],
+                    normal: [0.0, 1.0, 0.0],
+                    uv: [0.0, 0.0],
+                },
+                MeshVertex {
+                    pos: [1.0, 1.0, 0.0],
+                    normal: [0.0, 1.0, 0.0],
+                    uv: [0.0, 0.0],
+                },
+                MeshVertex {
+                    pos: [0.0, 0.5, 1.0],
+                    normal: [0.0, 1.0, 0.0],
+                    uv: [0.0, 0.0],
+                },
             ],
             texture: None,
         };
@@ -247,10 +290,22 @@ mod tests {
     #[test]
     fn generated_props_load_and_light() {
         let props: [(&str, &[u8]); 4] = [
-            ("car", include_bytes!("../../../assets/models/fire/fire-car.glb")),
-            ("gatehouse", include_bytes!("../../../assets/models/fire/fire-gatehouse.glb")),
-            ("tower", include_bytes!("../../../assets/models/fire/fire-tower.glb")),
-            ("fountain", include_bytes!("../../../assets/models/fire/fire-fountain.glb")),
+            (
+                "car",
+                include_bytes!("../../../assets/models/fire/fire-car.glb"),
+            ),
+            (
+                "gatehouse",
+                include_bytes!("../../../assets/models/fire/fire-gatehouse.glb"),
+            ),
+            (
+                "tower",
+                include_bytes!("../../../assets/models/fire/fire-tower.glb"),
+            ),
+            (
+                "fountain",
+                include_bytes!("../../../assets/models/fire/fire-fountain.glb"),
+            ),
         ];
         for (name, bytes) in props {
             let m = prop(bytes, None, 1.0).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -260,12 +315,18 @@ mod tests {
             for v in &m.vertices {
                 let n = Vec3::from(v.normal);
                 assert!(n.is_finite(), "{name}: non-finite normal {n}");
-                assert!((n.length() - 1.0).abs() < 1e-3, "{name}: normal not unit: {n}");
+                assert!(
+                    (n.length() - 1.0).abs() < 1e-3,
+                    "{name}: normal not unit: {n}"
+                );
                 if n.y < 0.999 {
                     up_only = false;
                 }
             }
-            assert!(!up_only, "{name}: every normal still points up — face normals did not apply");
+            assert!(
+                !up_only,
+                "{name}: every normal still points up — face normals did not apply"
+            );
             assert!(longest_extent(&m) > 0.5, "{name}: suspiciously small");
         }
     }

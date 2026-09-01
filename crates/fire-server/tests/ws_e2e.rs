@@ -7,8 +7,8 @@ use std::net::TcpListener;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use fire_core::proto::{self, Phase, C2S, S2C};
-use tungstenite::{connect, Message, WebSocket};
+use fire_core::proto::{self, C2S, Phase, S2C};
+use tungstenite::{Message, WebSocket, connect};
 
 type Client = WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>;
 
@@ -24,7 +24,13 @@ fn start_server() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     thread::spawn(move || {
-        let _ = fire_server::run(listener, fire_server::ServerConfig { laps: 1, max_lobbies: 8 });
+        let _ = fire_server::run(
+            listener,
+            fire_server::ServerConfig {
+                laps: 1,
+                max_lobbies: 8,
+            },
+        );
     });
     // Give the accept loop a moment to come up.
     thread::sleep(Duration::from_millis(150));
@@ -34,12 +40,19 @@ fn start_server() -> u16 {
 fn client(port: u16, handle: &str) -> Client {
     let (mut ws, _) = connect(format!("ws://127.0.0.1:{port}")).expect("connect");
     set_read_timeout(&ws, Duration::from_millis(50));
-    send(&mut ws, &C2S::Hello { proto: proto::PROTO_VERSION, handle: handle.into() });
+    send(
+        &mut ws,
+        &C2S::Hello {
+            proto: proto::PROTO_VERSION,
+            handle: handle.into(),
+        },
+    );
     ws
 }
 
 fn send(ws: &mut Client, msg: &C2S) {
-    ws.send(Message::text(serde_json::to_string(msg).unwrap())).expect("send");
+    ws.send(Message::text(serde_json::to_string(msg).unwrap()))
+        .expect("send");
 }
 
 /// Pump messages for `dur`, handing each to `f`. Returns when `f` says stop.
@@ -69,16 +82,28 @@ fn two_players_join_a_lobby_and_race() {
     let mut b = client(port, "bob");
 
     assert!(
-        pump(&mut a, Duration::from_secs(2), |m| matches!(m, S2C::Welcome { .. })),
+        pump(&mut a, Duration::from_secs(2), |m| matches!(
+            m,
+            S2C::Welcome { .. }
+        )),
         "no welcome for the first client"
     );
     assert!(
-        pump(&mut b, Duration::from_secs(2), |m| matches!(m, S2C::Welcome { .. })),
+        pump(&mut b, Duration::from_secs(2), |m| matches!(
+            m,
+            S2C::Welcome { .. }
+        )),
         "no welcome for the second client"
     );
 
     // Alice opens a lobby.
-    send(&mut a, &C2S::CreateLobby { name: "castle".into(), password: None });
+    send(
+        &mut a,
+        &C2S::CreateLobby {
+            name: "castle".into(),
+            password: None,
+        },
+    );
     let mut a_slot = None;
     assert!(
         pump(&mut a, Duration::from_secs(2), |m| {
@@ -102,7 +127,13 @@ fn two_players_join_a_lobby_and_race() {
     );
 
     // Bob joins it.
-    send(&mut b, &C2S::JoinLobby { name: "castle".into(), password: None });
+    send(
+        &mut b,
+        &C2S::JoinLobby {
+            name: "castle".into(),
+            password: None,
+        },
+    );
     let mut b_slot = None;
     assert!(
         pump(&mut b, Duration::from_secs(2), |m| {
@@ -120,7 +151,10 @@ fn two_players_join_a_lobby_and_race() {
 
     // Alice is told about Bob.
     assert!(
-        pump(&mut a, Duration::from_secs(2), |m| matches!(m, S2C::PlayerJoined { .. })),
+        pump(&mut a, Duration::from_secs(2), |m| matches!(
+            m,
+            S2C::PlayerJoined { .. }
+        )),
         "the host was not told someone joined"
     );
 
@@ -129,7 +163,13 @@ fn two_players_join_a_lobby_and_race() {
     send(&mut b, &C2S::Ready { ready: true });
     assert!(
         pump(&mut a, Duration::from_secs(3), |m| {
-            matches!(m, S2C::Phase { phase: Phase::Countdown, .. })
+            matches!(
+                m,
+                S2C::Phase {
+                    phase: Phase::Countdown,
+                    ..
+                }
+            )
         }),
         "the countdown never started"
     );
@@ -143,13 +183,22 @@ fn two_players_join_a_lobby_and_race() {
     let mut saw_racing = false;
     while Instant::now() < deadline {
         seq += 1;
-        let input = C2S::Input { seq, throttle: 1.0, steer: 0.0, handbrake: false, boost: false };
+        let input = C2S::Input {
+            seq,
+            throttle: 1.0,
+            steer: 0.0,
+            handbrake: false,
+            boost: false,
+        };
         send(&mut a, &input);
         send(&mut b, &input);
 
         pump(&mut a, Duration::from_millis(60), |m| {
             match m {
-                S2C::Phase { phase: Phase::Racing, .. } => saw_racing = true,
+                S2C::Phase {
+                    phase: Phase::Racing,
+                    ..
+                } => saw_racing = true,
                 S2C::State { cars, .. } => {
                     let find = |slot: u8| cars.iter().find(|c| c.id == slot).copied();
                     if let Some(c) = find(a_slot) {
@@ -170,22 +219,47 @@ fn two_players_join_a_lobby_and_race() {
     }
 
     assert!(saw_racing, "the race never reached the Racing phase");
-    assert!(moved_a > 40.0, "alice's car only moved {moved_a:.1} m under full throttle");
-    assert!(moved_b > 40.0, "bob's car only covered {moved_b:.1} m of the lap");
+    assert!(
+        moved_a > 40.0,
+        "alice's car only moved {moved_a:.1} m under full throttle"
+    );
+    assert!(
+        moved_b > 40.0,
+        "bob's car only covered {moved_b:.1} m of the lap"
+    );
 }
 
 #[test]
 fn a_wrong_password_is_refused_and_the_right_one_is_not() {
     let port = start_server();
     let mut host = client(port, "host");
-    pump(&mut host, Duration::from_secs(2), |m| matches!(m, S2C::Welcome { .. }));
-    send(&mut host, &C2S::CreateLobby { name: "private".into(), password: Some("hunter2".into()) });
-    assert!(pump(&mut host, Duration::from_secs(2), |m| matches!(m, S2C::Joined { .. })));
+    pump(&mut host, Duration::from_secs(2), |m| {
+        matches!(m, S2C::Welcome { .. })
+    });
+    send(
+        &mut host,
+        &C2S::CreateLobby {
+            name: "private".into(),
+            password: Some("hunter2".into()),
+        },
+    );
+    assert!(pump(&mut host, Duration::from_secs(2), |m| matches!(
+        m,
+        S2C::Joined { .. }
+    )));
 
     let mut guest = client(port, "guest");
-    pump(&mut guest, Duration::from_secs(2), |m| matches!(m, S2C::Welcome { .. }));
+    pump(&mut guest, Duration::from_secs(2), |m| {
+        matches!(m, S2C::Welcome { .. })
+    });
 
-    send(&mut guest, &C2S::JoinLobby { name: "private".into(), password: Some("wrong".into()) });
+    send(
+        &mut guest,
+        &C2S::JoinLobby {
+            name: "private".into(),
+            password: Some("wrong".into()),
+        },
+    );
     assert!(
         pump(&mut guest, Duration::from_secs(2), |m| {
             matches!(m, S2C::Rejected { reason } if reason.contains("password"))
@@ -193,9 +267,18 @@ fn a_wrong_password_is_refused_and_the_right_one_is_not() {
         "a wrong password was accepted"
     );
 
-    send(&mut guest, &C2S::JoinLobby { name: "private".into(), password: Some("hunter2".into()) });
+    send(
+        &mut guest,
+        &C2S::JoinLobby {
+            name: "private".into(),
+            password: Some("hunter2".into()),
+        },
+    );
     assert!(
-        pump(&mut guest, Duration::from_secs(2), |m| matches!(m, S2C::Joined { .. })),
+        pump(&mut guest, Duration::from_secs(2), |m| matches!(
+            m,
+            S2C::Joined { .. }
+        )),
         "the correct password was refused"
     );
 }
@@ -207,10 +290,24 @@ fn a_version_mismatch_is_refused_with_both_versions() {
     let port = start_server();
     let (mut ws, _) = connect(format!("ws://127.0.0.1:{port}")).expect("connect");
     set_read_timeout(&ws, Duration::from_millis(50));
-    send(&mut ws, &C2S::Hello { proto: proto::PROTO_VERSION + 7, handle: "stale".into() });
-    pump(&mut ws, Duration::from_secs(2), |m| matches!(m, S2C::Welcome { .. }));
+    send(
+        &mut ws,
+        &C2S::Hello {
+            proto: proto::PROTO_VERSION + 7,
+            handle: "stale".into(),
+        },
+    );
+    pump(&mut ws, Duration::from_secs(2), |m| {
+        matches!(m, S2C::Welcome { .. })
+    });
 
-    send(&mut ws, &C2S::CreateLobby { name: "nope".into(), password: None });
+    send(
+        &mut ws,
+        &C2S::CreateLobby {
+            name: "nope".into(),
+            password: None,
+        },
+    );
     let mut reason = String::new();
     assert!(
         pump(&mut ws, Duration::from_secs(2), |m| {
@@ -222,8 +319,14 @@ fn a_version_mismatch_is_refused_with_both_versions() {
         }),
         "a stale client was allowed to create a lobby"
     );
-    assert!(reason.contains(&format!("v{}", proto::PROTO_VERSION + 7)), "{reason}");
-    assert!(reason.contains(&format!("v{}", proto::PROTO_VERSION)), "{reason}");
+    assert!(
+        reason.contains(&format!("v{}", proto::PROTO_VERSION + 7)),
+        "{reason}"
+    );
+    assert!(
+        reason.contains(&format!("v{}", proto::PROTO_VERSION)),
+        "{reason}"
+    );
 }
 
 /// Listing must work at any version: the hub's lobby browser has no game
@@ -232,13 +335,30 @@ fn a_version_mismatch_is_refused_with_both_versions() {
 fn listing_is_ungated() {
     let port = start_server();
     let mut host = client(port, "host");
-    pump(&mut host, Duration::from_secs(2), |m| matches!(m, S2C::Welcome { .. }));
-    send(&mut host, &C2S::CreateLobby { name: "open".into(), password: None });
-    assert!(pump(&mut host, Duration::from_secs(2), |m| matches!(m, S2C::Joined { .. })));
+    pump(&mut host, Duration::from_secs(2), |m| {
+        matches!(m, S2C::Welcome { .. })
+    });
+    send(
+        &mut host,
+        &C2S::CreateLobby {
+            name: "open".into(),
+            password: None,
+        },
+    );
+    assert!(pump(&mut host, Duration::from_secs(2), |m| matches!(
+        m,
+        S2C::Joined { .. }
+    )));
 
     let (mut browser, _) = connect(format!("ws://127.0.0.1:{port}")).expect("connect");
     set_read_timeout(&browser, Duration::from_millis(50));
-    send(&mut browser, &C2S::Hello { proto: 0, handle: "browser".into() });
+    send(
+        &mut browser,
+        &C2S::Hello {
+            proto: 0,
+            handle: "browser".into(),
+        },
+    );
     send(&mut browser, &C2S::ListLobbies);
     assert!(
         pump(&mut browser, Duration::from_secs(2), |m| {
@@ -261,22 +381,47 @@ fn listing_is_ungated() {
 fn a_slow_peer_still_gets_roster_updates() {
     let port = start_server();
     let mut host = client(port, "host");
-    pump(&mut host, Duration::from_secs(2), |m| matches!(m, S2C::Welcome { .. }));
-    send(&mut host, &C2S::CreateLobby { name: "patient".into(), password: None });
-    assert!(pump(&mut host, Duration::from_secs(2), |m| matches!(m, S2C::Joined { .. })));
+    pump(&mut host, Duration::from_secs(2), |m| {
+        matches!(m, S2C::Welcome { .. })
+    });
+    send(
+        &mut host,
+        &C2S::CreateLobby {
+            name: "patient".into(),
+            password: None,
+        },
+    );
+    assert!(pump(&mut host, Duration::from_secs(2), |m| matches!(
+        m,
+        S2C::Joined { .. }
+    )));
 
     // The host now sits in the lobby without reading a single frame.
     thread::sleep(Duration::from_secs(4));
 
     let mut guest = client(port, "guest");
-    pump(&mut guest, Duration::from_secs(2), |m| matches!(m, S2C::Welcome { .. }));
-    send(&mut guest, &C2S::JoinLobby { name: "patient".into(), password: None });
-    assert!(pump(&mut guest, Duration::from_secs(2), |m| matches!(m, S2C::Joined { .. })));
+    pump(&mut guest, Duration::from_secs(2), |m| {
+        matches!(m, S2C::Welcome { .. })
+    });
+    send(
+        &mut guest,
+        &C2S::JoinLobby {
+            name: "patient".into(),
+            password: None,
+        },
+    );
+    assert!(pump(&mut guest, Duration::from_secs(2), |m| matches!(
+        m,
+        S2C::Joined { .. }
+    )));
 
     // Only now does the host start reading again. The join must still be in
     // there somewhere.
     assert!(
-        pump(&mut host, Duration::from_secs(4), |m| matches!(m, S2C::PlayerJoined { .. })),
+        pump(&mut host, Duration::from_secs(4), |m| matches!(
+            m,
+            S2C::PlayerJoined { .. }
+        )),
         "a host who looked away for four seconds never learned someone joined"
     );
 }
@@ -285,13 +430,32 @@ fn a_slow_peer_still_gets_roster_updates() {
 fn a_disconnect_frees_the_slot_for_the_next_player() {
     let port = start_server();
     let mut host = client(port, "host");
-    pump(&mut host, Duration::from_secs(2), |m| matches!(m, S2C::Welcome { .. }));
-    send(&mut host, &C2S::CreateLobby { name: "revolving".into(), password: None });
-    assert!(pump(&mut host, Duration::from_secs(2), |m| matches!(m, S2C::Joined { .. })));
+    pump(&mut host, Duration::from_secs(2), |m| {
+        matches!(m, S2C::Welcome { .. })
+    });
+    send(
+        &mut host,
+        &C2S::CreateLobby {
+            name: "revolving".into(),
+            password: None,
+        },
+    );
+    assert!(pump(&mut host, Duration::from_secs(2), |m| matches!(
+        m,
+        S2C::Joined { .. }
+    )));
 
     let mut first = client(port, "first");
-    pump(&mut first, Duration::from_secs(2), |m| matches!(m, S2C::Welcome { .. }));
-    send(&mut first, &C2S::JoinLobby { name: "revolving".into(), password: None });
+    pump(&mut first, Duration::from_secs(2), |m| {
+        matches!(m, S2C::Welcome { .. })
+    });
+    send(
+        &mut first,
+        &C2S::JoinLobby {
+            name: "revolving".into(),
+            password: None,
+        },
+    );
     let mut first_slot = None;
     assert!(pump(&mut first, Duration::from_secs(2), |m| {
         if let S2C::Joined { slot, .. } = m {
@@ -305,13 +469,24 @@ fn a_disconnect_frees_the_slot_for_the_next_player() {
     // Let the hub notice the drop.
     thread::sleep(Duration::from_millis(400));
     assert!(
-        pump(&mut host, Duration::from_secs(2), |m| matches!(m, S2C::PlayerLeft { .. })),
+        pump(&mut host, Duration::from_secs(2), |m| matches!(
+            m,
+            S2C::PlayerLeft { .. }
+        )),
         "nobody was told the player left"
     );
 
     let mut second = client(port, "second");
-    pump(&mut second, Duration::from_secs(2), |m| matches!(m, S2C::Welcome { .. }));
-    send(&mut second, &C2S::JoinLobby { name: "revolving".into(), password: None });
+    pump(&mut second, Duration::from_secs(2), |m| {
+        matches!(m, S2C::Welcome { .. })
+    });
+    send(
+        &mut second,
+        &C2S::JoinLobby {
+            name: "revolving".into(),
+            password: None,
+        },
+    );
     assert!(
         pump(&mut second, Duration::from_secs(2), |m| {
             matches!(m, S2C::Joined { slot, .. } if Some(slot) == first_slot)

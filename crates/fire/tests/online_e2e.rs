@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use fire::net::{Net, Status};
 use fire::online::{Online, Screen};
 use fire_core::car::CarInput;
-use fire_core::proto::{Phase, C2S, S2C};
+use fire_core::proto::{C2S, Phase, S2C};
 
 /// Surface the server's own warnings (dropped sends, rate-limited messages)
 /// in test output. Without this a lost control message is invisible from both
@@ -37,7 +37,13 @@ fn start_server(laps: u32) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     thread::spawn(move || {
-        let _ = fire_server::run(listener, fire_server::ServerConfig { laps, max_lobbies: 8 });
+        let _ = fire_server::run(
+            listener,
+            fire_server::ServerConfig {
+                laps,
+                max_lobbies: 8,
+            },
+        );
     });
     thread::sleep(Duration::from_millis(150));
     port
@@ -125,7 +131,10 @@ fn a_client_joins_races_and_its_prediction_converges() {
     let port = start_server(2);
     let mut me = Peer::connect(port, "driver");
 
-    me.net.send(&C2S::CreateLobby { name: "castle".into(), password: None });
+    me.net.send(&C2S::CreateLobby {
+        name: "castle".into(),
+        password: None,
+    });
     assert!(
         me.wait_for(Duration::from_secs(5), |g| g.screen == Screen::InLobby),
         "never joined the lobby I created.\n  {}",
@@ -135,7 +144,8 @@ fn a_client_joins_races_and_its_prediction_converges() {
 
     me.net.send(&C2S::Ready { ready: true });
     assert!(
-        me.wait_for(Duration::from_secs(4), |g| g.phase == Phase::Countdown || g.phase == Phase::Racing),
+        me.wait_for(Duration::from_secs(4), |g| g.phase == Phase::Countdown
+            || g.phase == Phase::Racing),
         "the countdown never started"
     );
     assert!(
@@ -145,7 +155,12 @@ fn a_client_joins_races_and_its_prediction_converges() {
 
     // Drive for a few seconds, tracking how far the prediction sits from the
     // authoritative state at the moment each snapshot lands.
-    let throttle = CarInput { throttle: 1.0, steer: 0.15, handbrake: false, boost: false };
+    let throttle = CarInput {
+        throttle: 1.0,
+        steer: 0.15,
+        handbrake: false,
+        boost: false,
+    };
     let start = me.game.my_car().unwrap().pos;
     let mut worst_error = 0.0f32;
 
@@ -177,7 +192,10 @@ fn a_client_joins_races_and_its_prediction_converges() {
     }
 
     let travelled = me.game.my_car().unwrap().pos.distance(start);
-    assert!(travelled > 60.0, "the car only covered {travelled:.1} m in six seconds");
+    assert!(
+        travelled > 60.0,
+        "the car only covered {travelled:.1} m in six seconds"
+    );
 
     // Over loopback the round trip is ~0, so the prediction should track the
     // server closely. A large number here means reconciliation is not
@@ -194,13 +212,19 @@ fn two_clients_see_each_other_move() {
     let mut a = Peer::connect(port, "alice");
     let mut b = Peer::connect(port, "bob");
 
-    a.net.send(&C2S::CreateLobby { name: "shared".into(), password: None });
+    a.net.send(&C2S::CreateLobby {
+        name: "shared".into(),
+        password: None,
+    });
     assert!(
         a.wait_for(Duration::from_secs(5), |g| g.screen == Screen::InLobby),
         "alice never got Joined for the lobby she created.\n  {}",
         a.dump("alice")
     );
-    b.net.send(&C2S::JoinLobby { name: "shared".into(), password: None });
+    b.net.send(&C2S::JoinLobby {
+        name: "shared".into(),
+        password: None,
+    });
     assert!(
         b.wait_for(Duration::from_secs(5), |g| g.screen == Screen::InLobby),
         "bob never joined.\n  {}\n  {}",
@@ -244,7 +268,12 @@ fn two_clients_see_each_other_move() {
 
     // Only alice drives; bob holds still. Alice must see bob's car where the
     // server puts it, and bob must see alice pull away.
-    let throttle = CarInput { throttle: 1.0, steer: 0.0, handbrake: false, boost: false };
+    let throttle = CarInput {
+        throttle: 1.0,
+        steer: 0.0,
+        handbrake: false,
+        boost: false,
+    };
     let idle = CarInput::default();
     let a_start_seen_by_b = b.game.race.racers[usize::from(a_slot)].car.pos;
 
@@ -271,24 +300,37 @@ fn two_clients_see_each_other_move() {
 fn a_refused_join_surfaces_a_reason() {
     let port = start_server(3);
     let mut host = Peer::connect(port, "host");
-    host.net.send(&C2S::CreateLobby { name: "locked".into(), password: Some("secret".into()) });
+    host.net.send(&C2S::CreateLobby {
+        name: "locked".into(),
+        password: Some("secret".into()),
+    });
     assert!(host.wait_for(Duration::from_secs(3), |g| g.screen == Screen::InLobby));
 
     let mut guest = Peer::connect(port, "guest");
-    guest.net.send(&C2S::JoinLobby { name: "locked".into(), password: Some("nope".into()) });
+    guest.net.send(&C2S::JoinLobby {
+        name: "locked".into(),
+        password: Some("nope".into()),
+    });
     assert!(
         guest.wait_for(Duration::from_secs(3), |g| g.notice.is_some()),
         "a refused join produced no notice"
     );
     assert!(guest.game.notice.as_deref().unwrap().contains("password"));
-    assert_eq!(guest.game.screen, Screen::Browsing, "a refused client thinks it is in a lobby");
+    assert_eq!(
+        guest.game.screen,
+        Screen::Browsing,
+        "a refused client thinks it is in a lobby"
+    );
 }
 
 #[test]
 fn the_lobby_browser_sees_open_lobbies() {
     let port = start_server(3);
     let mut host = Peer::connect(port, "host");
-    host.net.send(&C2S::CreateLobby { name: "visible".into(), password: None });
+    host.net.send(&C2S::CreateLobby {
+        name: "visible".into(),
+        password: None,
+    });
     assert!(host.wait_for(Duration::from_secs(3), |g| g.screen == Screen::InLobby));
 
     let mut browser = Peer::connect(port, "browser");
@@ -299,7 +341,12 @@ fn the_lobby_browser_sees_open_lobbies() {
         }),
         "the lobby browser saw nothing"
     );
-    let l = browser.game.lobbies.iter().find(|l| l.name == "visible").unwrap();
+    let l = browser
+        .game
+        .lobbies
+        .iter()
+        .find(|l| l.name == "visible")
+        .unwrap();
     assert_eq!(l.players, 1);
     assert!(!l.has_password);
 }

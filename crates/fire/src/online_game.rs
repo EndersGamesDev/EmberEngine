@@ -8,7 +8,7 @@
 
 use ember_engine::{EmberGame, Frame, InputState};
 use fire_core::car::CarInput;
-use fire_core::proto::{Phase, C2S};
+use fire_core::proto::{C2S, Phase};
 use fire_core::sim::FixedStep;
 
 use crate::game::{self, Chase, Hud, Meshes};
@@ -50,8 +50,16 @@ impl Config {
         let lobby = get("lobby");
         Ok(Self {
             ws,
-            handle: if handle.is_empty() { "driver".into() } else { handle.to_string() },
-            lobby: if lobby.is_empty() { "castle".into() } else { lobby.to_string() },
+            handle: if handle.is_empty() {
+                "driver".into()
+            } else {
+                handle.to_string()
+            },
+            lobby: if lobby.is_empty() {
+                "castle".into()
+            } else {
+                lobby.to_string()
+            },
             password,
             create: v
                 .get("create")
@@ -112,7 +120,15 @@ impl OnlineGame {
             .as_ref()
             .and_then(|o| o.iter().position(|&i| usize::from(i) == me))
             .map_or_else(
-                || self.state.race.standings().iter().position(|&i| i == me).unwrap_or(0) + 1,
+                || {
+                    self.state
+                        .race
+                        .standings()
+                        .iter()
+                        .position(|&i| i == me)
+                        .unwrap_or(0)
+                        + 1
+                },
                 |position| position + 1,
             );
         game::set_hud(Hud {
@@ -220,7 +236,10 @@ mod tests {
         let c = Config::from_json(r#"{"ws":"ws://x:1"}"#).unwrap();
         assert_eq!(c.handle, "driver");
         assert_eq!(c.lobby, "castle");
-        assert!(c.password.is_none(), "an absent password must not become Some(\"\")");
+        assert!(
+            c.password.is_none(),
+            "an absent password must not become Some(\"\")"
+        );
         assert!(!c.create);
     }
 

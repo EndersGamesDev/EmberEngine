@@ -13,20 +13,20 @@
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use tungstenite::protocol::WebSocketConfig;
 use tungstenite::Message;
+use tungstenite::protocol::WebSocketConfig;
 
 use fire_core::ai;
 use fire_core::car::{CarInput, DT};
 use fire_core::castle;
 use fire_core::proto::{
-    self, CarState, LobbyInfo, Phase, PlayerMeta, C2S, MAX_PLAYERS, S2C, STATE_EVERY_TICKS,
+    self, C2S, CarState, LobbyInfo, MAX_PLAYERS, Phase, PlayerMeta, S2C, STATE_EVERY_TICKS,
 };
 use fire_core::sim::{Race, RaceState};
 
@@ -55,14 +55,26 @@ pub struct ServerConfig {
 
 impl Default for ServerConfig {
     fn default() -> Self {
-        Self { laps: 3, max_lobbies: 32 }
+        Self {
+            laps: 3,
+            max_lobbies: 32,
+        }
     }
 }
 
 enum Ev {
-    Connected { id: u64, tx: SyncSender<Message>, peer: String },
-    Msg { id: u64, msg: C2S },
-    Disconnected { id: u64 },
+    Connected {
+        id: u64,
+        tx: SyncSender<Message>,
+        peer: String,
+    },
+    Msg {
+        id: u64,
+        msg: C2S,
+    },
+    Disconnected {
+        id: u64,
+    },
 }
 
 struct Conn {
@@ -208,10 +220,19 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
     // This thread owns the socket, so the outbound queue only drains between
     // reads. A short read timeout keeps a broadcast from sitting on the queue
     // for most of a tick before it reaches the wire.
-    let _ = ws.get_ref().set_read_timeout(Some(Duration::from_millis(5)));
+    let _ = ws
+        .get_ref()
+        .set_read_timeout(Some(Duration::from_millis(5)));
 
     let (tx, rx) = mpsc::sync_channel::<Message>(OUTBOUND_QUEUE);
-    if events_tx.send(Ev::Connected { id, tx, peer: peer.clone() }).is_err() {
+    if events_tx
+        .send(Ev::Connected {
+            id,
+            tx,
+            peer: peer.clone(),
+        })
+        .is_err()
+    {
         return;
     }
 
@@ -370,7 +391,11 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
     }
 }
 
-fn tick_lobbies(lobbies: &mut HashMap<String, Lobby>, conns: &HashMap<u64, Conn>, cfg: &ServerConfig) {
+fn tick_lobbies(
+    lobbies: &mut HashMap<String, Lobby>,
+    conns: &HashMap<u64, Conn>,
+    cfg: &ServerConfig,
+) {
     let mut empty: Vec<String> = Vec::new();
     for (name, lobby) in lobbies.iter_mut() {
         if lobby.members.is_empty() {
@@ -398,7 +423,11 @@ fn tick_lobbies(lobbies: &mut HashMap<String, Lobby>, conns: &HashMap<u64, Conn>
                             // yet — coast, do not hand their car to the AI.
                             CarInput::default()
                         } else {
-                            ai::chase(&lobby.race.track, &lobby.race.racers[i].car, ai::DEFAULT_SKILL)
+                            ai::chase(
+                                &lobby.race.track,
+                                &lobby.race.racers[i].car,
+                                ai::DEFAULT_SKILL,
+                            )
                         }
                     }
                 }
@@ -417,7 +446,14 @@ fn tick_lobbies(lobbies: &mut HashMap<String, Lobby>, conns: &HashMap<u64, Conn>
         let phase = lobby.phase();
         if phase != lobby.last_phase {
             lobby.last_phase = phase;
-            broadcast(conns, lobby, &S2C::Phase { phase, countdown: lobby.race.countdown_left() });
+            broadcast(
+                conns,
+                lobby,
+                &S2C::Phase {
+                    phase,
+                    countdown: lobby.race.countdown_left(),
+                },
+            );
             if phase == Phase::Finished {
                 let order: Vec<u8> = lobby
                     .race
@@ -431,7 +467,14 @@ fn tick_lobbies(lobbies: &mut HashMap<String, Lobby>, conns: &HashMap<u64, Conn>
         } else if phase == Phase::Countdown && lobby.race.tick % STATE_EVERY_TICKS == 0 {
             // 30 Hz, not 60: the page only renders `ceil(countdown)`, and the
             // spare frames were queue pressure on anyone slow to poll.
-            broadcast(conns, lobby, &S2C::Phase { phase, countdown: lobby.race.countdown_left() });
+            broadcast(
+                conns,
+                lobby,
+                &S2C::Phase {
+                    phase,
+                    countdown: lobby.race.countdown_left(),
+                },
+            );
         }
 
         // Only broadcast state once there is something to say. A Waiting
@@ -463,7 +506,14 @@ fn tick_lobbies(lobbies: &mut HashMap<String, Lobby>, conns: &HashMap<u64, Conn>
                     }
                 })
                 .collect();
-            broadcast(conns, lobby, &S2C::State { tick: lobby.race.tick, cars });
+            broadcast(
+                conns,
+                lobby,
+                &S2C::State {
+                    tick: lobby.race.tick,
+                    cars,
+                },
+            );
         }
 
         // Reset for another race once the results have been shown.
@@ -474,7 +524,14 @@ fn tick_lobbies(lobbies: &mut HashMap<String, Lobby>, conns: &HashMap<u64, Conn>
                 lobby.ready.clear();
                 lobby.inputs.clear();
                 lobby.last_phase = Phase::Waiting;
-                broadcast(conns, lobby, &S2C::Phase { phase: Phase::Waiting, countdown: 0.0 });
+                broadcast(
+                    conns,
+                    lobby,
+                    &S2C::Phase {
+                        phase: Phase::Waiting,
+                        countdown: 0.0,
+                    },
+                );
             }
         }
     }
@@ -560,7 +617,13 @@ fn handle_msg(
             }
             // Listing is deliberately ungated so the hub's lobby browser
             // works from a frozen page. Entering a race is not.
-            send_to(conns, id, &S2C::Welcome { proto: proto::PROTO_VERSION });
+            send_to(
+                conns,
+                id,
+                &S2C::Welcome {
+                    proto: proto::PROTO_VERSION,
+                },
+            );
         }
 
         C2S::ListLobbies => {
@@ -590,15 +653,33 @@ fn handle_msg(
             }
             let name = proto::sanitize(&name, proto::MAX_LOBBY_LEN);
             if name.is_empty() {
-                send_to(conns, id, &S2C::Rejected { reason: "lobby needs a name".into() });
+                send_to(
+                    conns,
+                    id,
+                    &S2C::Rejected {
+                        reason: "lobby needs a name".into(),
+                    },
+                );
                 return;
             }
             if lobbies.contains_key(&name) {
-                send_to(conns, id, &S2C::Rejected { reason: "that name is taken".into() });
+                send_to(
+                    conns,
+                    id,
+                    &S2C::Rejected {
+                        reason: "that name is taken".into(),
+                    },
+                );
                 return;
             }
             if lobbies.len() >= cfg.max_lobbies {
-                send_to(conns, id, &S2C::Rejected { reason: "server is full".into() });
+                send_to(
+                    conns,
+                    id,
+                    &S2C::Rejected {
+                        reason: "server is full".into(),
+                    },
+                );
                 return;
             }
             let password = password
@@ -619,7 +700,9 @@ fn handle_msg(
         C2S::LeaveLobby => leave_lobby(id, conns, lobbies),
 
         C2S::Ready { ready } => {
-            let Some(lobby_name) = conns.get(&id).and_then(|c| c.lobby.clone()) else { return };
+            let Some(lobby_name) = conns.get(&id).and_then(|c| c.lobby.clone()) else {
+                return;
+            };
             if let Some(l) = lobbies.get_mut(&lobby_name) {
                 if ready {
                     l.ready.insert(id);
@@ -629,11 +712,29 @@ fn handle_msg(
             }
         }
 
-        C2S::Input { seq, throttle, steer, handbrake, boost } => {
-            let Some(lobby_name) = conns.get(&id).and_then(|c| c.lobby.clone()) else { return };
-            let Some(l) = lobbies.get_mut(&lobby_name) else { return };
-            let Some(&slot) = l.slots.get(&id) else { return };
-            let incoming = CarInput { throttle, steer, handbrake, boost }.sanitized();
+        C2S::Input {
+            seq,
+            throttle,
+            steer,
+            handbrake,
+            boost,
+        } => {
+            let Some(lobby_name) = conns.get(&id).and_then(|c| c.lobby.clone()) else {
+                return;
+            };
+            let Some(l) = lobbies.get_mut(&lobby_name) else {
+                return;
+            };
+            let Some(&slot) = l.slots.get(&id) else {
+                return;
+            };
+            let incoming = CarInput {
+                throttle,
+                steer,
+                handbrake,
+                boost,
+            }
+            .sanitized();
             match l.inputs.get_mut(&slot) {
                 Some((held, last_seq)) => {
                     // Out-of-order or replayed packets must not rewind the
@@ -670,7 +771,12 @@ fn version_ok(id: u64, conns: &HashMap<u64, Conn>) -> bool {
     // no Hello was ever processed for this connection — a very different fault
     // from a genuinely stale client, and worth telling apart in the log.
     let saw_hello = conns.get(&id).is_some_and(|c| c.handle.is_some());
-    tracing::warn!(conn = id, proto = v, saw_hello, "refusing on protocol version");
+    tracing::warn!(
+        conn = id,
+        proto = v,
+        saw_hello,
+        "refusing on protocol version"
+    );
     send_to(
         conns,
         id,
@@ -697,18 +803,36 @@ fn join_lobby(
     leave_lobby(id, conns, lobbies);
 
     let Some(lobby) = lobbies.get_mut(name) else {
-        send_to(conns, id, &S2C::Rejected { reason: "no such lobby".into() });
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: "no such lobby".into(),
+            },
+        );
         return;
     };
     if !creating
         && let Some(want) = &lobby.password
         && password.unwrap_or("") != want
     {
-        send_to(conns, id, &S2C::Rejected { reason: "wrong password".into() });
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: "wrong password".into(),
+            },
+        );
         return;
     }
     let Some(slot) = lobby.alloc_slot() else {
-        send_to(conns, id, &S2C::Rejected { reason: "lobby is full".into() });
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: "lobby is full".into(),
+            },
+        );
         return;
     };
 
@@ -720,7 +844,10 @@ fn join_lobby(
 
     let meta = PlayerMeta {
         id: slot,
-        handle: conns.get(&id).and_then(|c| c.handle.clone()).unwrap_or_else(|| "?".into()),
+        handle: conns
+            .get(&id)
+            .and_then(|c| c.handle.clone())
+            .unwrap_or_else(|| "?".into()),
         slot,
     };
     let list = roster(lobby, conns);
@@ -730,7 +857,13 @@ fn join_lobby(
     send_to(
         conns,
         id,
-        &S2C::Joined { lobby: name.to_string(), id: slot, slot, laps: cfg.laps, roster: list },
+        &S2C::Joined {
+            lobby: name.to_string(),
+            id: slot,
+            slot,
+            laps: cfg.laps,
+            roster: list,
+        },
     );
     send_to(conns, id, &S2C::Phase { phase, countdown });
     for m in lobby.members.iter().filter(|m| **m != id) {
@@ -740,8 +873,12 @@ fn join_lobby(
 }
 
 fn leave_lobby(id: u64, conns: &mut HashMap<u64, Conn>, lobbies: &mut HashMap<String, Lobby>) {
-    let Some(name) = conns.get_mut(&id).and_then(|c| c.lobby.take()) else { return };
-    let Some(lobby) = lobbies.get_mut(&name) else { return };
+    let Some(name) = conns.get_mut(&id).and_then(|c| c.lobby.take()) else {
+        return;
+    };
+    let Some(lobby) = lobbies.get_mut(&name) else {
+        return;
+    };
     lobby.members.retain(|m| *m != id);
     lobby.ready.remove(&id);
     if let Some(slot) = lobby.slots.remove(&id) {
@@ -773,8 +910,10 @@ mod tests {
         let mut l = Lobby::new(None, 3);
         for (i, m) in members.iter().enumerate() {
             l.members.push(*m);
-            l.slots
-                .insert(*m, u8::try_from(i).expect("test lobby fits in a wire player id"));
+            l.slots.insert(
+                *m,
+                u8::try_from(i).expect("test lobby fits in a wire player id"),
+            );
         }
         l
     }
@@ -811,9 +950,18 @@ mod tests {
         let l = &lobbies["test"];
         assert_eq!(l.race.state, RaceState::Racing);
         // Slot 0 is the human, who sent nothing and should be parked.
-        assert!(l.race.racers[0].car.speed() < 1.0, "the absent human's car drove itself");
+        assert!(
+            l.race.racers[0].car.speed() < 1.0,
+            "the absent human's car drove itself"
+        );
         // Everyone else should be racing.
-        let moving = l.race.racers.iter().skip(1).filter(|r| r.car.speed() > 5.0).count();
+        let moving = l
+            .race
+            .racers
+            .iter()
+            .skip(1)
+            .filter(|r| r.car.speed() > 5.0)
+            .count();
         assert!(moving >= 6, "only {moving} AI cars got going");
     }
 
@@ -847,7 +995,13 @@ mod tests {
         // One packet with boost set, then many ticks with no further packets.
         handle_msg(
             7,
-            C2S::Input { seq: 1, throttle: 1.0, steer: 0.0, handbrake: false, boost: true },
+            C2S::Input {
+                seq: 1,
+                throttle: 1.0,
+                steer: 0.0,
+                handbrake: false,
+                boost: true,
+            },
             &mut conns,
             &mut lobbies,
             &cfg,
@@ -874,17 +1028,32 @@ mod tests {
         conns.insert(
             7u64,
             Conn {
-                tx, peer: "t".into(), handle: Some("h".into()),
-                proto: proto::PROTO_VERSION, lobby: Some("t".into()),
-                last_seen: Instant::now(), msgs_this_tick: 0,
+                tx,
+                peer: "t".into(),
+                handle: Some("h".into()),
+                proto: proto::PROTO_VERSION,
+                lobby: Some("t".into()),
+                last_seen: Instant::now(),
+                msgs_this_tick: 0,
             },
         );
         let cfg = ServerConfig::default();
-        let send = |seq, throttle, conns: &mut HashMap<u64, Conn>, lobbies: &mut HashMap<String, Lobby>| {
+        let send = |seq,
+                    throttle,
+                    conns: &mut HashMap<u64, Conn>,
+                    lobbies: &mut HashMap<String, Lobby>| {
             handle_msg(
                 7,
-                C2S::Input { seq, throttle, steer: 0.0, handbrake: false, boost: false },
-                conns, lobbies, &cfg,
+                C2S::Input {
+                    seq,
+                    throttle,
+                    steer: 0.0,
+                    handbrake: false,
+                    boost: false,
+                },
+                conns,
+                lobbies,
+                &cfg,
             );
         };
         send(10, 1.0, &mut conns, &mut lobbies);
@@ -892,7 +1061,10 @@ mod tests {
         send(5, -1.0, &mut conns, &mut lobbies); // stale, must be dropped
         let (held, seq) = lobbies["t"].inputs[&0];
         assert_eq!(seq, 10);
-        assert_eq!(held.throttle, 1.0, "a stale packet overwrote the current intent");
+        assert_eq!(
+            held.throttle, 1.0,
+            "a stale packet overwrote the current intent"
+        );
     }
 
     #[test]
@@ -902,13 +1074,19 @@ mod tests {
         conns.insert(
             1u64,
             Conn {
-                tx, peer: "t".into(), handle: Some("h".into()),
-                proto: proto::PROTO_VERSION + 1, lobby: None,
-                last_seen: Instant::now(), msgs_this_tick: 0,
+                tx,
+                peer: "t".into(),
+                handle: Some("h".into()),
+                proto: proto::PROTO_VERSION + 1,
+                lobby: None,
+                last_seen: Instant::now(),
+                msgs_this_tick: 0,
             },
         );
         assert!(!version_ok(1, &conns), "a mismatched peer was let in");
-        let Ok(Message::Text(t)) = rx.try_recv() else { panic!("no rejection sent") };
+        let Ok(Message::Text(t)) = rx.try_recv() else {
+            panic!("no rejection sent")
+        };
         let msg: S2C = serde_json::from_str(&t).unwrap();
         match msg {
             S2C::Rejected { reason } => assert!(reason.contains("fire protocol"), "{reason}"),
@@ -928,18 +1106,29 @@ mod tests {
             conns.insert(
                 id,
                 Conn {
-                    tx, peer: "t".into(), handle: Some("h".into()),
-                    proto: proto::PROTO_VERSION, lobby: Some("t".into()),
-                    last_seen: Instant::now(), msgs_this_tick: 0,
+                    tx,
+                    peer: "t".into(),
+                    handle: Some("h".into()),
+                    proto: proto::PROTO_VERSION,
+                    lobby: Some("t".into()),
+                    last_seen: Instant::now(),
+                    msgs_this_tick: 0,
                 },
             );
         }
-        lobbies.get_mut("t").unwrap().inputs.insert(0, (CarInput::default(), 3));
+        lobbies
+            .get_mut("t")
+            .unwrap()
+            .inputs
+            .insert(0, (CarInput::default(), 3));
         leave_lobby(7, &mut conns, &mut lobbies);
         let l = &lobbies["t"];
         assert!(!l.members.contains(&7));
         assert!(!l.slots.contains_key(&7));
-        assert!(!l.inputs.contains_key(&0), "the leaver's intent outlived them");
+        assert!(
+            !l.inputs.contains_key(&0),
+            "the leaver's intent outlived them"
+        );
         assert_eq!(l.alloc_slot(), Some(0), "the freed slot was not reusable");
     }
 
@@ -953,9 +1142,13 @@ mod tests {
         conns.insert(
             7u64,
             Conn {
-                tx, peer: "t".into(), handle: Some("h".into()),
-                proto: proto::PROTO_VERSION, lobby: Some("t".into()),
-                last_seen: Instant::now(), msgs_this_tick: 0,
+                tx,
+                peer: "t".into(),
+                handle: Some("h".into()),
+                proto: proto::PROTO_VERSION,
+                lobby: Some("t".into()),
+                last_seen: Instant::now(),
+                msgs_this_tick: 0,
             },
         );
         leave_lobby(7, &mut conns, &mut lobbies);

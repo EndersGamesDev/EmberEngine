@@ -64,7 +64,10 @@ impl Track {
     /// Panics if fewer than four control points are supplied.
     #[must_use]
     pub fn new(control: Vec<Vec2>, half_width: f32) -> Self {
-        assert!(control.len() >= 4, "a closed Catmull-Rom loop needs >= 4 control points");
+        assert!(
+            control.len() >= 4,
+            "a closed Catmull-Rom loop needs >= 4 control points"
+        );
         let n = control.len();
         let mut points = Vec::with_capacity(n * SAMPLES_PER_SPAN);
         for i in 0..n {
@@ -90,7 +93,12 @@ impl Track {
             cumulative.push(acc);
         }
 
-        Self { control, points, cumulative, half_width }
+        Self {
+            control,
+            points,
+            cumulative,
+            half_width,
+        }
     }
 
     #[must_use]
@@ -164,8 +172,7 @@ impl Track {
             } else {
                 0.0
             };
-            let distance_squared =
-                (position - (start + segment * fraction)).length_squared();
+            let distance_squared = (position - (start + segment * fraction)).length_squared();
             if distance_squared < best_distance_squared {
                 best_distance_squared = distance_squared;
                 best_index = index;
@@ -180,7 +187,12 @@ impl Track {
         // 2D cross product: positive when position lies left of the tangent.
         let rel = position - (start + (end - start) * best_fraction);
         let lateral = tangent.x * rel.y - tangent.y * rel.x;
-        Locate { s, lateral, tangent, segment: best_index }
+        Locate {
+            s,
+            lateral,
+            tangent,
+            segment: best_index,
+        }
     }
 
     /// True when the car is off the racing surface.
@@ -283,8 +295,17 @@ impl LapTracker {
     /// Panics if fewer than two checkpoint sectors are requested.
     #[must_use]
     pub fn new(sectors: u16, start_s: f32) -> Self {
-        assert!(sectors >= 2, "need at least two sectors or a lap cannot be gated");
-        Self { next_sector: 1, sectors, lap: 0, last_s: start_s, progress: 0.0 }
+        assert!(
+            sectors >= 2,
+            "need at least two sectors or a lap cannot be gated"
+        );
+        Self {
+            next_sector: 1,
+            sectors,
+            lap: 0,
+            last_s: start_s,
+            progress: 0.0,
+        }
     }
 
     /// Feed the car's current arc length. Returns true on the tick a lap
@@ -380,7 +401,11 @@ mod tests {
         let len = t.length();
         let (pa, _) = t.at(len - 0.001);
         let (pb, _) = t.at(0.001);
-        assert!((pa - pb).length() < 0.05, "gap at the seam: {} m", (pa - pb).length());
+        assert!(
+            (pa - pb).length() < 0.05,
+            "gap at the seam: {} m",
+            (pa - pb).length()
+        );
     }
 
     /// The arc-length table must agree with `at`, or every distance-based
@@ -398,7 +423,11 @@ mod tests {
             prev = p;
         }
         let err = (walked - len).abs() / len;
-        assert!(err < 0.01, "arc length off by {:.3}% ({walked} vs {len})", err * 100.0);
+        assert!(
+            err < 0.01,
+            "arc length off by {:.3}% ({walked} vs {len})",
+            err * 100.0
+        );
     }
 
     /// A point on the centreline must locate with ~zero lateral offset, and
@@ -410,12 +439,24 @@ mod tests {
             let s = t.length() * i as f32 / 64.0;
             let (p, tan) = t.at(s);
             let loc = t.locate(p);
-            assert!(loc.lateral.abs() < 0.15, "on-centreline point had lateral {}", loc.lateral);
-            assert!(t.delta_s(loc.s, s).abs() < 1.0, "s mismatch: {} vs {s}", loc.s);
+            assert!(
+                loc.lateral.abs() < 0.15,
+                "on-centreline point had lateral {}",
+                loc.lateral
+            );
+            assert!(
+                t.delta_s(loc.s, s).abs() < 1.0,
+                "s mismatch: {} vs {s}",
+                loc.s
+            );
             // Step to the left of travel: +90 degrees is (-y, x).
             let left = Vec2::new(-tan.y, tan.x);
             let off = t.locate(p + left * 2.0);
-            assert!(off.lateral > 1.0, "left of the line should be positive, got {}", off.lateral);
+            assert!(
+                off.lateral > 1.0,
+                "left of the line should be positive, got {}",
+                off.lateral
+            );
         }
     }
 
@@ -479,9 +520,17 @@ mod tests {
         for i in 1..=2000 {
             let s = (len * 2.5) * i as f32 / 2000.0;
             lt.update(&t, s % len);
-            assert!(lt.progress >= prev - 1e-3, "progress went backwards at s={s}");
+            assert!(
+                lt.progress >= prev - 1e-3,
+                "progress went backwards at s={s}"
+            );
             prev = lt.progress;
         }
-        assert!((lt.progress - len * 2.5).abs() < len * 0.02, "progress {} vs {}", lt.progress, len * 2.5);
+        assert!(
+            (lt.progress - len * 2.5).abs() < len * 0.02,
+            "progress {} vs {}",
+            lt.progress,
+            len * 2.5
+        );
     }
 }

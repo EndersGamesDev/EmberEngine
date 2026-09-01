@@ -94,15 +94,50 @@ pub fn props() -> Vec<Prop> {
             scale: 26.0,
         },
         // Corner towers: the four points you navigate by.
-        Prop { kind: PropKind::Tower, pos: Vec2::new(200.0, -60.0), yaw: 0.0, scale: 30.0 },
-        Prop { kind: PropKind::Tower, pos: Vec2::new(205.0, 75.0), yaw: 0.0, scale: 30.0 },
-        Prop { kind: PropKind::Tower, pos: Vec2::new(105.0, 140.0), yaw: 0.0, scale: 26.0 },
-        Prop { kind: PropKind::Tower, pos: Vec2::new(-145.0, 128.0), yaw: 0.0, scale: 30.0 },
-        Prop { kind: PropKind::Tower, pos: Vec2::new(-205.0, 20.0), yaw: 0.0, scale: 34.0 },
-        Prop { kind: PropKind::Tower, pos: Vec2::new(-175.0, -95.0), yaw: 0.0, scale: 26.0 },
+        Prop {
+            kind: PropKind::Tower,
+            pos: Vec2::new(200.0, -60.0),
+            yaw: 0.0,
+            scale: 30.0,
+        },
+        Prop {
+            kind: PropKind::Tower,
+            pos: Vec2::new(205.0, 75.0),
+            yaw: 0.0,
+            scale: 30.0,
+        },
+        Prop {
+            kind: PropKind::Tower,
+            pos: Vec2::new(105.0, 140.0),
+            yaw: 0.0,
+            scale: 26.0,
+        },
+        Prop {
+            kind: PropKind::Tower,
+            pos: Vec2::new(-145.0, 128.0),
+            yaw: 0.0,
+            scale: 30.0,
+        },
+        Prop {
+            kind: PropKind::Tower,
+            pos: Vec2::new(-205.0, 20.0),
+            yaw: 0.0,
+            scale: 34.0,
+        },
+        Prop {
+            kind: PropKind::Tower,
+            pos: Vec2::new(-175.0, -95.0),
+            yaw: 0.0,
+            scale: 26.0,
+        },
         // The fountain the chicane is named for, in the notch between the two
         // apexes where it is a landmark rather than an obstacle.
-        Prop { kind: PropKind::Fountain, pos: Vec2::new(-20.0, 138.0), yaw: 0.0, scale: 12.0 },
+        Prop {
+            kind: PropKind::Fountain,
+            pos: Vec2::new(-20.0, 138.0),
+            yaw: 0.0,
+            scale: 12.0,
+        },
     ]
 }
 
@@ -150,7 +185,10 @@ mod tests {
         );
         // And it should still be tight enough to be a corner rather than a
         // kink you take flat out.
-        assert!(r < turning_radius(crate::car::MAX_SPEED), "the whole lap is flat out — no corner slows anyone");
+        assert!(
+            r < turning_radius(crate::car::MAX_SPEED),
+            "the whole lap is flat out — no corner slows anyone"
+        );
     }
 
     #[test]

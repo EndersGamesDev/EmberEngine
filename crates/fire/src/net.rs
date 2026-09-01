@@ -26,8 +26,8 @@ mod imp {
     use std::rc::Rc;
 
     use fire_core::proto::{C2S, S2C};
-    use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
 
     use super::Status;
 
@@ -76,16 +76,15 @@ mod imp {
             ws.set_onopen(Some(on_open.as_ref().unchecked_ref()));
 
             let s = Rc::clone(&shared);
-            let on_close = Closure::<dyn FnMut(web_sys::CloseEvent)>::new(
-                move |e: web_sys::CloseEvent| {
+            let on_close =
+                Closure::<dyn FnMut(web_sys::CloseEvent)>::new(move |e: web_sys::CloseEvent| {
                     let why = e.reason();
                     s.borrow_mut().status = Status::Closed(if why.is_empty() {
                         format!("connection closed ({})", e.code())
                     } else {
                         why
                     });
-                },
-            );
+                });
             ws.set_onclose(Some(on_close.as_ref().unchecked_ref()));
 
             let s = Rc::clone(&shared);
@@ -142,7 +141,9 @@ mod imp {
     use super::Status;
 
     fn set_status(status: &Mutex<Status>, next: Status) {
-        *status.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = next;
+        *status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = next;
     }
 
     pub struct Net {
@@ -221,7 +222,11 @@ mod imp {
                 })
                 .map_err(|e| e.to_string())?;
 
-            Ok(Self { rx: in_rx, tx: out_tx, status })
+            Ok(Self {
+                rx: in_rx,
+                tx: out_tx,
+                status,
+            })
         }
 
         pub fn send(&self, msg: &C2S) {

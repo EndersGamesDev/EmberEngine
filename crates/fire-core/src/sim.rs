@@ -288,14 +288,21 @@ mod tests {
         let f = crate::car::forward(car.yaw);
         // Signed angle from the nose to the target.
         let ang = (f.x * to.y - f.y * to.x).atan2(f.dot(to));
-        CarInput { throttle: 1.0, steer: (ang * 2.0).clamp(-1.0, 1.0), handbrake: false, boost: false }
+        CarInput {
+            throttle: 1.0,
+            steer: (ang * 2.0).clamp(-1.0, 1.0),
+            handbrake: false,
+            boost: false,
+        }
     }
 
     fn race_for(ticks: u32, laps: u32) -> Race {
         let mut race = Race::new(test_track(), 2, laps);
         race.start_countdown();
         for _ in 0..ticks {
-            let inputs: Vec<CarInput> = (0..race.racers.len()).map(|i| chase_input(&race, i)).collect();
+            let inputs: Vec<CarInput> = (0..race.racers.len())
+                .map(|i| chase_input(&race, i))
+                .collect();
             race.step(&inputs, DT);
         }
         race
@@ -310,7 +317,10 @@ mod tests {
         for _ in 0..144 {
             total += fs.ticks(1.0 / 144.0);
         }
-        assert!((59..=61).contains(&total), "144 Hz produced {total} ticks in a second");
+        assert!(
+            (59..=61).contains(&total),
+            "144 Hz produced {total} ticks in a second"
+        );
 
         // A 30 Hz frame is longer than a tick: two ticks each.
         let mut fs = FixedStep::default();
@@ -318,7 +328,10 @@ mod tests {
         for _ in 0..30 {
             total += fs.ticks(1.0 / 30.0);
         }
-        assert!((59..=61).contains(&total), "30 Hz produced {total} ticks in a second");
+        assert!(
+            (59..=61).contains(&total),
+            "30 Hz produced {total} ticks in a second"
+        );
     }
 
     /// A long stall must not be repaid as a burst that makes the next frame
@@ -351,7 +364,11 @@ mod tests {
     fn a_long_stall_is_capped_not_dropped() {
         let mut fs = FixedStep::default();
         let n = fs.ticks(10.0);
-        assert_eq!(n, (MAX_CATCHUP / DT) as u32, "a 10 s stall yielded {n} ticks");
+        assert_eq!(
+            n,
+            (MAX_CATCHUP / DT) as u32,
+            "a 10 s stall yielded {n} ticks"
+        );
         assert!(n > 0, "a stall should still advance the sim a little");
     }
 
@@ -359,7 +376,10 @@ mod tests {
     fn cars_start_on_the_grid_and_on_the_track() {
         let race = Race::new(test_track(), 8, 3);
         for (i, r) in race.racers.iter().enumerate() {
-            assert!(!race.track.off_track(r.car.pos), "grid slot {i} is off the track");
+            assert!(
+                !race.track.off_track(r.car.pos),
+                "grid slot {i} is off the track"
+            );
         }
         // No two cars share a slot.
         for i in 0..race.racers.len() {
@@ -376,7 +396,12 @@ mod tests {
         race.start_countdown();
         let before: Vec<Vec2> = race.racers.iter().map(|r| r.car.pos).collect();
         let flat_out = vec![
-            CarInput { throttle: 1.0, steer: 0.0, handbrake: false, boost: true };
+            CarInput {
+                throttle: 1.0,
+                steer: 0.0,
+                handbrake: false,
+                boost: true
+            };
             4
         ];
         for _ in 0..(COUNTDOWN_SECS * 60.0) as u32 - 2 {
@@ -410,7 +435,10 @@ mod tests {
         let order = race.standings();
         assert_eq!(order.len(), 2);
         let (a, b) = (&race.racers[order[0]], &race.racers[order[1]]);
-        assert!(a.finish_tick.unwrap() <= b.finish_tick.unwrap(), "standings out of order");
+        assert!(
+            a.finish_tick.unwrap() <= b.finish_tick.unwrap(),
+            "standings out of order"
+        );
     }
 
     /// The wall must actually contain the car — a racer who holds full lock
@@ -422,7 +450,12 @@ mod tests {
         for _ in 0..200 {
             race.step(&[CarInput::default()], DT);
         }
-        let ram = CarInput { throttle: 1.0, steer: 1.0, handbrake: false, boost: true };
+        let ram = CarInput {
+            throttle: 1.0,
+            steer: 1.0,
+            handbrake: false,
+            boost: true,
+        };
         for _ in 0..60 * 30 {
             race.step(&[ram], DT);
             let lat = race.track.locate(race.racers[0].car.pos).lateral.abs();
@@ -442,7 +475,11 @@ mod tests {
         let mut sorted = a;
         sorted.sort_unstable();
         sorted.dedup();
-        assert_eq!(sorted.len(), race.racers.len(), "standings lost or duplicated a racer");
+        assert_eq!(
+            sorted.len(),
+            race.racers.len(),
+            "standings lost or duplicated a racer"
+        );
     }
 
     #[test]
@@ -450,7 +487,10 @@ mod tests {
         let a = race_for(60 * 45, 3);
         let b = race_for(60 * 45, 3);
         for i in 0..a.racers.len() {
-            assert_eq!(a.racers[i].car.pos.to_array(), b.racers[i].car.pos.to_array());
+            assert_eq!(
+                a.racers[i].car.pos.to_array(),
+                b.racers[i].car.pos.to_array()
+            );
             assert_eq!(a.racers[i].lap.lap, b.racers[i].lap.lap);
         }
         assert_eq!(a.tick, b.tick);

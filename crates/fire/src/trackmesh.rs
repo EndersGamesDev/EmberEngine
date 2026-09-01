@@ -18,15 +18,16 @@ fn left_of(direction: Vec2) -> Vec2 {
 }
 
 const fn vert(position: Vec3, normal: Vec3, u: f32, v: f32) -> MeshVertex {
-    MeshVertex { pos: position.to_array(), normal: normal.to_array(), uv: [u, v] }
+    MeshVertex {
+        pos: position.to_array(),
+        normal: normal.to_array(),
+        uv: [u, v],
+    }
 }
 
 /// Walk the centreline, handing each segment's start/end centre, tangent and
 /// arc length to `f`. Shared by every ribbon below so they stay in lockstep.
-fn for_each_segment(
-    track: &Track,
-    mut visit: impl FnMut(Vec2, Vec2, Vec2, Vec2, f32, f32),
-) {
+fn for_each_segment(track: &Track, mut visit: impl FnMut(Vec2, Vec2, Vec2, Vec2, f32, f32)) {
     let points = track.centreline();
     let point_count = points.len();
     let mut arc_length = 0.0;
@@ -44,13 +45,20 @@ fn for_each_segment(
         let next = points[(index + 2) % point_count];
         let start_tangent =
             ((start - previous).normalize_or_zero() + direction).normalize_or_zero();
-        let end_tangent =
-            (direction + (next - end).normalize_or_zero()).normalize_or_zero();
+        let end_tangent = (direction + (next - end).normalize_or_zero()).normalize_or_zero();
         visit(
             start,
             end,
-            if start_tangent == Vec2::ZERO { direction } else { start_tangent },
-            if end_tangent == Vec2::ZERO { direction } else { end_tangent },
+            if start_tangent == Vec2::ZERO {
+                direction
+            } else {
+                start_tangent
+            },
+            if end_tangent == Vec2::ZERO {
+                direction
+            } else {
+                end_tangent
+            },
             arc_length,
             arc_length + segment_length,
         );
@@ -75,30 +83,33 @@ pub fn flat_ribbon(
 ) -> MeshData {
     let mut vertices = Vec::new();
     let up = Vec3::Y;
-    for_each_segment(track, |start, end, start_tangent, end_tangent, start_s, end_s| {
-        let (start_left, end_left) = (left_of(start_tangent), left_of(end_tangent));
-        let (start_inner, start_outer) = (
-            start + start_left * (offset - width * 0.5),
-            start + start_left * (offset + width * 0.5),
-        );
-        let (end_inner, end_outer) = (
-            end + end_left * (offset - width * 0.5),
-            end + end_left * (offset + width * 0.5),
-        );
-        let world = |point: Vec2| Vec3::new(point.x, elevation, point.y);
-        let (start_v, end_v) = (start_s / tile_len, end_s / tile_len);
-        let quad = [
-            (world(start_inner), 0.0, start_v),
-            (world(end_inner), 0.0, end_v),
-            (world(end_outer), tile_across, end_v),
-            (world(start_inner), 0.0, start_v),
-            (world(end_outer), tile_across, end_v),
-            (world(start_outer), tile_across, start_v),
-        ];
-        for (position, texture_u, texture_v) in quad {
-            vertices.push(vert(position, up, texture_u, texture_v));
-        }
-    });
+    for_each_segment(
+        track,
+        |start, end, start_tangent, end_tangent, start_s, end_s| {
+            let (start_left, end_left) = (left_of(start_tangent), left_of(end_tangent));
+            let (start_inner, start_outer) = (
+                start + start_left * (offset - width * 0.5),
+                start + start_left * (offset + width * 0.5),
+            );
+            let (end_inner, end_outer) = (
+                end + end_left * (offset - width * 0.5),
+                end + end_left * (offset + width * 0.5),
+            );
+            let world = |point: Vec2| Vec3::new(point.x, elevation, point.y);
+            let (start_v, end_v) = (start_s / tile_len, end_s / tile_len);
+            let quad = [
+                (world(start_inner), 0.0, start_v),
+                (world(end_inner), 0.0, end_v),
+                (world(end_outer), tile_across, end_v),
+                (world(start_inner), 0.0, start_v),
+                (world(end_outer), tile_across, end_v),
+                (world(start_outer), tile_across, start_v),
+            ];
+            for (position, texture_u, texture_v) in quad {
+                vertices.push(vert(position, up, texture_u, texture_v));
+            }
+        },
+    );
     MeshData { vertices, texture }
 }
 
@@ -204,7 +215,10 @@ pub fn ground(track: &Track, margin: f32, tile: f32, texture: Option<TextureData
         (p(lo.x, hi.y), 0.0, tiles.y),
     ];
     MeshData {
-        vertices: quad.into_iter().map(|(q, u, v)| vert(q, Vec3::Y, u, v)).collect(),
+        vertices: quad
+            .into_iter()
+            .map(|(q, u, v)| vert(q, Vec3::Y, u, v))
+            .collect(),
         texture,
     }
 }
@@ -223,7 +237,10 @@ mod tests {
         assert_eq!(m.vertices.len(), t.centreline().len() * 6);
         for v in &m.vertices {
             assert!(Vec3::from(v.pos).is_finite());
-            assert!((Vec3::from(v.normal).y - 1.0).abs() < 1e-5, "road normal not up");
+            assert!(
+                (Vec3::from(v.normal).y - 1.0).abs() < 1e-5,
+                "road normal not up"
+            );
         }
     }
 
@@ -309,7 +326,10 @@ mod tests {
             zs.iter().copied().fold(f32::NEG_INFINITY, f32::max),
         );
         for p in t.centreline() {
-            assert!(p.x > lo_x && p.x < hi_x && p.y > lo_z && p.y < hi_z, "centreline escapes the ground quad");
+            assert!(
+                p.x > lo_x && p.x < hi_x && p.y > lo_z && p.y < hi_z,
+                "centreline escapes the ground quad"
+            );
         }
     }
 
@@ -321,7 +341,10 @@ mod tests {
         for v in &m.vertices {
             let p = Vec2::new(v.pos[0], v.pos[2]);
             assert!(t.locate(p).lateral.abs() <= t.half_width() + 0.1);
-            assert!(t.delta_s(t.locate(p).s, 0.0).abs() < 3.0, "band is not at the line");
+            assert!(
+                t.delta_s(t.locate(p).s, 0.0).abs() < 3.0,
+                "band is not at the line"
+            );
         }
     }
 }

@@ -4,7 +4,7 @@ use std::cell::RefCell;
 
 use ember_engine::glam::{Vec2, Vec3};
 use ember_engine::{
-    Camera, EmberGame, Frame, Instance, InputState, KeyCode, MeshData, TextureData,
+    Camera, EmberGame, Frame, InputState, Instance, KeyCode, MeshData, TextureData,
 };
 use fire_core::ai;
 use fire_core::car::{self, CarInput};
@@ -129,22 +129,75 @@ pub fn build_meshes(track: &fire_core::track::Track) -> (Vec<MeshData>, Meshes) 
         // 1 ground
         trackmesh::ground(track, 90.0, 10.0, Some(texgen::turf(128))),
         // 2 road
-        trackmesh::flat_ribbon(track, 0.0, half * 2.0, 0.0, 10.0, 3.0, Some(texgen::cobblestone(256, 10))),
+        trackmesh::flat_ribbon(
+            track,
+            0.0,
+            half * 2.0,
+            0.0,
+            10.0,
+            3.0,
+            Some(texgen::cobblestone(256, 10)),
+        ),
         // 3,4 kerbs — a hair above the road so they never z-fight with it
-        trackmesh::flat_ribbon(track, half + 0.9, 1.8, 0.03, 4.0, 1.0, Some(texgen::chequer(64, 2))),
-        trackmesh::flat_ribbon(track, -(half + 0.9), 1.8, 0.03, 4.0, 1.0, Some(texgen::chequer(64, 2))),
+        trackmesh::flat_ribbon(
+            track,
+            half + 0.9,
+            1.8,
+            0.03,
+            4.0,
+            1.0,
+            Some(texgen::chequer(64, 2)),
+        ),
+        trackmesh::flat_ribbon(
+            track,
+            -(half + 0.9),
+            1.8,
+            0.03,
+            4.0,
+            1.0,
+            Some(texgen::chequer(64, 2)),
+        ),
         // 5,6 courtyard walls
-        trackmesh::wall_ribbon(track, wall_off, 6.0, 12.0, 1.0, Some(texgen::castle_stone(256, 4, 6))),
-        trackmesh::wall_ribbon(track, -wall_off, 6.0, 12.0, 1.0, Some(texgen::castle_stone(256, 4, 6))),
+        trackmesh::wall_ribbon(
+            track,
+            wall_off,
+            6.0,
+            12.0,
+            1.0,
+            Some(texgen::castle_stone(256, 4, 6)),
+        ),
+        trackmesh::wall_ribbon(
+            track,
+            -wall_off,
+            6.0,
+            12.0,
+            1.0,
+            Some(texgen::castle_stone(256, 4, 6)),
+        ),
         // 7 start/finish
         trackmesh::cross_band(track, 0.0, 4.0, 10.0, Some(texgen::chequer(64, 8))),
         // 8 the car — untextured on purpose, so the instance colour is the
         // whole livery and eight players are eight different cars
         prop_or_cube(CAR_GLB, None, 1.0, "car"),
         // 9,10,11 architecture, wearing the same stone as the walls
-        prop_or_cube(GATEHOUSE_GLB, Some(texgen::castle_stone(256, 4, 6)), 2.2, "gatehouse"),
-        prop_or_cube(TOWER_GLB, Some(texgen::castle_stone(256, 4, 6)), 2.4, "tower"),
-        prop_or_cube(FOUNTAIN_GLB, Some(texgen::castle_stone(128, 3, 4)), 2.0, "fountain"),
+        prop_or_cube(
+            GATEHOUSE_GLB,
+            Some(texgen::castle_stone(256, 4, 6)),
+            2.2,
+            "gatehouse",
+        ),
+        prop_or_cube(
+            TOWER_GLB,
+            Some(texgen::castle_stone(256, 4, 6)),
+            2.4,
+            "tower",
+        ),
+        prop_or_cube(
+            FOUNTAIN_GLB,
+            Some(texgen::castle_stone(128, 3, 4)),
+            2.0,
+            "fountain",
+        ),
     ];
 
     let ids = Meshes {
@@ -242,7 +295,12 @@ pub fn read_input(input: &InputState, boost_was_down: &mut bool) -> CarInput {
     let boost_down = input.down(KeyCode::ShiftLeft) || input.down(KeyCode::ShiftRight);
     let boost = boost_down && !*boost_was_down;
     *boost_was_down = boost_down;
-    CarInput { throttle, steer, handbrake: input.down(KeyCode::Space), boost }
+    CarInput {
+        throttle,
+        steer,
+        handbrake: input.down(KeyCode::Space),
+        boost,
+    }
 }
 
 pub struct Game {
@@ -261,14 +319,26 @@ impl Game {
     pub fn new(ids: Meshes) -> Self {
         let race = Race::new(castle::track(), PLAYERS, LAPS);
         let chase = Chase::new(&race.racers[0].car);
-        Self { race, me: 0, ids, chase, boost_was_down: false, started: false, clock: FixedStep::default() }
+        Self {
+            race,
+            me: 0,
+            ids,
+            chase,
+            boost_was_down: false,
+            started: false,
+            clock: FixedStep::default(),
+        }
     }
-
-
 
     fn publish_hud(&self) {
         let me = &self.race.racers[self.me];
-        let place = self.race.standings().iter().position(|&i| i == self.me).unwrap_or(0) + 1;
+        let place = self
+            .race
+            .standings()
+            .iter()
+            .position(|&i| i == self.me)
+            .unwrap_or(0)
+            + 1;
         HUD.with(|h| {
             *h.borrow_mut() = Hud {
                 speed_kmh: me.car.speed() * 3.6,
@@ -328,7 +398,6 @@ impl EmberGame for Game {
         self.publish_hud();
 
         scene(&self.race, &self.ids, self.me, camera)
-
     }
 }
 
@@ -369,18 +438,15 @@ fn push_prop(frame: &mut Frame, ids: &Meshes, kind: PropKind, pos: Vec2, yaw: f3
 /// the two modes cannot drift apart visually.
 #[must_use]
 pub fn scene(race: &Race, ids: &Meshes, me: usize, camera: Camera) -> Frame {
-    let mut frame = Frame { camera, instances: Vec::with_capacity(64) };
+    let mut frame = Frame {
+        camera,
+        instances: Vec::with_capacity(64),
+    };
 
     // The track meshes are already in world space, so each is one
     // instance at the origin with unit scale and no rotation.
     for mesh in [
-        ids.ground,
-        ids.road,
-        ids.kerb_l,
-        ids.kerb_r,
-        ids.wall_l,
-        ids.wall_r,
-        ids.start,
+        ids.ground, ids.road, ids.kerb_l, ids.kerb_r, ids.wall_l, ids.wall_r, ids.start,
     ] {
         frame
             .instances
@@ -391,7 +457,11 @@ pub fn scene(race: &Race, ids: &Meshes, me: usize, camera: Camera) -> Frame {
         push_prop(&mut frame, ids, p.kind, p.pos, p.yaw, p.scale);
     }
 
-    let car_scale = if ids.car_extent > 1e-4 { 4.4 / ids.car_extent } else { 1.0 };
+    let car_scale = if ids.car_extent > 1e-4 {
+        4.4 / ids.car_extent
+    } else {
+        1.0
+    };
     for (i, r) in race.racers.iter().enumerate() {
         let c = &r.car;
         let colour = livery(i);
@@ -426,8 +496,7 @@ pub fn scene(race: &Race, ids: &Meshes, me: usize, camera: Camera) -> Frame {
     // HUD the engine can draw, since there is no 2D pass and no text.
     let me = &race.racers[me].car;
     for n in 0..me.boost_charges {
-        let side =
-            (f32::from(n) - f32::from(car::BOOST_CHARGES - 1) * 0.5) * 0.85;
+        let side = (f32::from(n) - f32::from(car::BOOST_CHARGES - 1) * 0.5) * 0.85;
         let r = car::right(me.yaw) * side;
         frame.instances.push(
             Instance::new(
@@ -452,7 +521,11 @@ pub fn scene(race: &Race, ids: &Meshes, me: usize, camera: Camera) -> Frame {
                 Instance::new(
                     Vec3::new(p.x, 7.0, p.y),
                     Vec3::splat(1.1),
-                    if on { Vec3::new(0.9, 0.12, 0.1) } else { Vec3::new(0.12, 0.12, 0.14) },
+                    if on {
+                        Vec3::new(0.9, 0.12, 0.1)
+                    } else {
+                        Vec3::new(0.12, 0.12, 0.14)
+                    },
                 )
                 .with_mesh(0),
             );
@@ -475,14 +548,28 @@ mod tests {
         assert_eq!(list.len(), 11, "mesh count changed — update the id struct");
         // Ids are 1-based: list[i] has id i+1.
         for (i, id) in [
-            ids.ground, ids.road, ids.kerb_l, ids.kerb_r, ids.wall_l,
-            ids.wall_r, ids.start, ids.car, ids.gatehouse, ids.tower, ids.fountain,
+            ids.ground,
+            ids.road,
+            ids.kerb_l,
+            ids.kerb_r,
+            ids.wall_l,
+            ids.wall_r,
+            ids.start,
+            ids.car,
+            ids.gatehouse,
+            ids.tower,
+            ids.fountain,
         ]
         .iter()
         .enumerate()
         {
             let expected = u32::try_from(i).expect("mesh registration index fits u32") + 1;
-            assert_eq!(*id, expected, "mesh id {id} is not at registration slot {}", i + 1);
+            assert_eq!(
+                *id,
+                expected,
+                "mesh id {id} is not at registration slot {}",
+                i + 1
+            );
         }
         for (i, mesh) in list.iter().enumerate() {
             assert!(!mesh.vertices.is_empty(), "mesh slot {} is empty", i + 1);
@@ -520,10 +607,16 @@ mod tests {
         for _ in 0..60 * 30 {
             let frame = game.update(&input, 1.0 / 60.0);
             assert!(frame.camera.eye.is_finite(), "camera eye went non-finite");
-            assert!(frame.camera.target.is_finite(), "camera target went non-finite");
+            assert!(
+                frame.camera.target.is_finite(),
+                "camera target went non-finite"
+            );
             assert!(!frame.instances.is_empty());
             for instance in &frame.instances {
-                assert!(instance.position.is_finite(), "instance position non-finite");
+                assert!(
+                    instance.position.is_finite(),
+                    "instance position non-finite"
+                );
             }
         }
         // The countdown expires and the AI field gets moving. The player's own
@@ -541,7 +634,11 @@ mod tests {
         let hud = hud();
         assert_eq!(hud.racers, PLAYERS);
         assert_eq!(hud.laps_total, LAPS);
-        assert!((1..=PLAYERS).contains(&hud.place), "place {} out of range", hud.place);
+        assert!(
+            (1..=PLAYERS).contains(&hud.place),
+            "place {} out of range",
+            hud.place
+        );
         assert_eq!(
             hud.boost_charges,
             car::BOOST_CHARGES,
@@ -568,16 +665,27 @@ mod tests {
         for _ in 0..countdown_ticks + 5 {
             game.race.step(&[], 1.0 / 60.0);
         }
-        assert_eq!(game.race.state, RaceState::Racing, "countdown did not finish");
+        assert_eq!(
+            game.race.state,
+            RaceState::Racing,
+            "countdown did not finish"
+        );
         let start = game.race.racers[game.me].car.pos;
         let mut inputs = vec![CarInput::default(); PLAYERS];
-        inputs[game.me] =
-            CarInput { throttle: 1.0, steer: 0.0, handbrake: false, boost: false };
+        inputs[game.me] = CarInput {
+            throttle: 1.0,
+            steer: 0.0,
+            handbrake: false,
+            boost: false,
+        };
         for _ in 0..120 {
             game.race.step(&inputs, 1.0 / 60.0);
         }
         let moved = (game.race.racers[game.me].car.pos - start).length();
-        assert!(moved > 10.0, "player car only moved {moved:.1} m under full throttle");
+        assert!(
+            moved > 10.0,
+            "player car only moved {moved:.1} m under full throttle"
+        );
     }
 
     /// A held boost key must spend one charge, not all three.

@@ -59,8 +59,8 @@ fn normalized_pixel(pixel: u32, size: u32) -> f32 {
 /// Integer hash -> [0,1). Wrapping on the lattice is what makes the noise
 /// tile: callers reduce coordinates mod the period before sampling.
 fn hash2(x: i32, y: i32) -> f32 {
-    let mut h = x.cast_unsigned().wrapping_mul(0x8da6_b343)
-        ^ y.cast_unsigned().wrapping_mul(0xd816_3841);
+    let mut h =
+        x.cast_unsigned().wrapping_mul(0x8da6_b343) ^ y.cast_unsigned().wrapping_mul(0xd816_3841);
     h = h.wrapping_mul(0x2545_f491);
     h ^= h >> 15;
     h = h.wrapping_mul(0x2545_f491);
@@ -74,20 +74,14 @@ fn smooth(t: f32) -> f32 {
 /// Value noise with period `period` lattice cells in both axes, so it tiles
 /// exactly when sampled over `[0, period)`.
 fn value_noise(horizontal: f32, vertical: f32, period: i32) -> f32 {
-    let (x_cell, y_cell) = (
-        f32_to_i32(horizontal.floor()),
-        f32_to_i32(vertical.floor()),
-    );
+    let (x_cell, y_cell) = (f32_to_i32(horizontal.floor()), f32_to_i32(vertical.floor()));
     let (x_fraction, y_fraction) = (
         smooth(horizontal - horizontal.floor()),
         smooth(vertical - vertical.floor()),
     );
     let weight = |x: i32, y: i32| hash2(x.rem_euclid(period), y.rem_euclid(period));
     let (top_left, top_right) = (weight(x_cell, y_cell), weight(x_cell + 1, y_cell));
-    let (bottom_left, bottom_right) = (
-        weight(x_cell, y_cell + 1),
-        weight(x_cell + 1, y_cell + 1),
-    );
+    let (bottom_left, bottom_right) = (weight(x_cell, y_cell + 1), weight(x_cell + 1, y_cell + 1));
     let top = top_left + (top_right - top_left) * x_fraction;
     let bottom = bottom_left + (bottom_right - bottom_left) * x_fraction;
     top + (bottom - top) * y_fraction
@@ -120,7 +114,11 @@ impl Canvas {
             .checked_mul(height)
             .and_then(|pixels| pixels.checked_mul(4))
             .expect("texture byte count fits usize");
-        Self { w, h, px: vec![0; bytes] }
+        Self {
+            w,
+            h,
+            px: vec![0; bytes],
+        }
     }
 
     fn set(&mut self, x: u32, y: u32, red: f32, green: f32, blue: f32) {
@@ -135,7 +133,11 @@ impl Canvas {
     }
 
     fn into_texture(self) -> TextureData {
-        TextureData { width: self.w, height: self.h, rgba8: self.px }
+        TextureData {
+            width: self.w,
+            height: self.h,
+            rgba8: self.px,
+        }
     }
 }
 
@@ -308,7 +310,11 @@ pub fn chequer(size: u32, squares: u32) -> TextureData {
                 8,
                 2,
             );
-            let k = if sx == sy { 0.90 - wear * 0.12 } else { 0.13 + wear * 0.08 };
+            let k = if sx == sy {
+                0.90 - wear * 0.12
+            } else {
+                0.13 + wear * 0.08
+            };
             c.set(x, y, k, k, k);
         }
     }
@@ -340,7 +346,10 @@ mod tests {
                 width * height * 4,
                 "{name}: buffer length does not match dimensions"
             );
-            assert!(t.rgba8.chunks(4).all(|p| p[3] == 255), "{name}: not fully opaque");
+            assert!(
+                t.rgba8.chunks(4).all(|p| p[3] == 255),
+                "{name}: not fully opaque"
+            );
         }
     }
 
