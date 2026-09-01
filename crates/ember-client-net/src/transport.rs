@@ -2,6 +2,8 @@ use std::collections::VecDeque;
 
 use crate::{Keepalive, WireFrame};
 
+// Referenced only by the wasm transport module; the native build has no use site.
+#[cfg(target_arch = "wasm32")]
 const MAX_BROWSER_BUFFERED_BYTES: u32 = 4 * 1024 * 1024;
 
 /// Stable category for a transport closure.

@@ -175,8 +175,10 @@ pub struct PState {
     /// Weapon level (1 pistol, 2 rapid, 3 heavy).
     #[serde(default)]
     pub weapon: u8,
+    /// Rounds remaining in the current magazine.
     #[serde(default)]
     pub ammo: u8,
+    /// True while this player's reload is in progress.
     #[serde(default)]
     pub reloading: bool,
     /// Authoritative death count for the scoreboard.
@@ -210,6 +212,7 @@ pub struct BState {
     /// the shot disagreed. Defaulted, so a pre-pitch server reads as flat.
     #[serde(default)]
     pub y: f32,
+    /// Vertical velocity, paired with `y` above; defaulted for the same reason.
     #[serde(default)]
     pub vy: f32,
     /// Firing player — clients use it for shot audio cues.
