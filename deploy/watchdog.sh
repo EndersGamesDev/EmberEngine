@@ -77,6 +77,20 @@ pass() {
 
     [ -z "$want_pong$want_fire$want_pages" ] && return
 
+    # NEVER redeploy on top of people who are playing. Restarting a server
+    # drops every connected client instantly, and the watchdog is unattended,
+    # so without this it will happily kick a full lobby to ship a commit.
+    # On 2026-09-01 a manual run did exactly that: two players had joined
+    # lobby `ender` at 11:20:57 and 11:21:07 and the arena was restarted at
+    # 11:22:19, about 72 seconds later. pong-server logs a health tick every
+    # 30 s carrying players_in_game, so the answer is already on the host.
+    # A commit is never so urgent that it cannot wait one poll interval.
+    busy="$(ssh -o BatchMode=yes -o ConnectTimeout=8 "${EMBER_HOST:-specht}"         'grep -ao "players_in_game=[0-9]*" ~/pong-server.log 2>/dev/null | tail -1 | cut -d= -f2' 2>/dev/null || echo 0)"
+    if [ "${busy:-0}" -gt 0 ] 2>/dev/null; then
+        log "$busy player(s) in game; deferring redeploy to the next pass"
+        return
+    fi
+
     # Only fast-forward. A dirty tree or a diverged branch means a human is
     # mid-change; redeploying over that would ship something nobody tested.
     if ! git diff --quiet || ! git diff --cached --quiet; then
