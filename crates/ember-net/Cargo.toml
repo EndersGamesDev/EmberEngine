@@ -6,3 +6,6 @@ version.workspace = true
 [dependencies]
 serde.workspace = true
 postcard.workspace = true
+
+[lints]
+workspace = true

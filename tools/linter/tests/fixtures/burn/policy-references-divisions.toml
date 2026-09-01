@@ -1,0 +1,14 @@
+namespace = "com.torrust.index.linter.policy.references.divisions"
+version = [1, 0, 0]
+
+[set.literals]
+first = "The quarry opens at dawn"
+
+[owners.QUARRY]
+prose = '%s"packages/quarry/" ( %s"docs" / %s"notes" / %s"src" / %s"tests" ) [ "/" *VCHAR ]'
+code = '%s"packages/quarry/" ( %s"src" / %s"tests" / %s"benches" / %s"examples" ) [ "/" *VCHAR ]'
+
+[owners.QUARRY.literals]
+include = [
+  { name = "quarry-tree", literals = "first", pattern = '%s"packages/quarry" [ "/" *VCHAR ]' },
+]
