@@ -328,13 +328,12 @@ impl ArenaSession {
         }
 
         let following = due.saturating_add(FIXED_STEP_MICROS);
-        let stall_limit = following
-            .saturating_add(FIXED_STEP_MICROS.saturating_mul(STALL_GRACE_STEPS));
+        let stall_limit =
+            following.saturating_add(FIXED_STEP_MICROS.saturating_mul(STALL_GRACE_STEPS));
         if now > stall_limit {
             self.run_tick(update);
-            self.next_tick_at = MonotonicTimestamp::from_micros(
-                now.saturating_add(FIXED_STEP_MICROS),
-            );
+            self.next_tick_at =
+                MonotonicTimestamp::from_micros(now.saturating_add(FIXED_STEP_MICROS));
             return true;
         }
 
@@ -353,11 +352,7 @@ impl ArenaSession {
 }
 
 impl GameSession for ArenaSession {
-    fn step(
-        &mut self,
-        timestamp: MonotonicTimestamp,
-        inputs: Vec<SessionInput>,
-    ) -> SessionUpdate {
+    fn step(&mut self, timestamp: MonotonicTimestamp, inputs: Vec<SessionInput>) -> SessionUpdate {
         self.step_with_transport(
             timestamp,
             inputs

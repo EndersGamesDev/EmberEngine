@@ -222,8 +222,7 @@ fn suite_lobby_and_admission_refusal_fixtures_are_frozen() {
     assert_eq!(suite.game_id, "arena");
     assert_eq!(suite.game_version, 6);
 
-    let fixture: LobbyRefusalFixture =
-        serde_json::from_str(LOBBY_REFUSAL_FIXTURE).unwrap();
+    let fixture: LobbyRefusalFixture = serde_json::from_str(LOBBY_REFUSAL_FIXTURE).unwrap();
     let created_at = MonotonicTimestamp::from_micros(1_000_000);
     let creation = creation(42, created_at);
     let mut session = ArenaFactory::new()
@@ -231,9 +230,7 @@ fn suite_lobby_and_admission_refusal_fixtures_are_frozen() {
         .unwrap();
     let peer_id = PeerId::from_host_value(11);
     let joined = session.join(admission(peer_id, created_at)).unwrap();
-    let joined_frame = ArenaCodec::new()
-        .encode(&joined.outbound[0].event)
-        .unwrap();
+    let joined_frame = ArenaCodec::new().encode(&joined.outbound[0].event).unwrap();
     assert_eq!(joined_frame, InnerFrame::Text(fixture.joined));
     assert_eq!(session.lobby_status().code, fixture.status_code);
 
@@ -320,9 +317,7 @@ fn timestamped_transcript_produces_authoritative_checkpoints() {
             continue;
         };
         let Some(S2C::State {
-            tick,
-            mut players,
-            ..
+            tick, mut players, ..
         }) = state
         else {
             panic!("checkpoint call did not broadcast state");

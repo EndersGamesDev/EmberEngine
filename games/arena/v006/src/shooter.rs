@@ -131,7 +131,11 @@ pub fn move_circle(
         mv = [mv[0] / len, mv[1] / len];
     }
     let try_x = [pos[0] + mv[0] * speed * dt, pos[1]];
-    let pos = if blocked(try_x, PLAYER_R, obstacles) { pos } else { try_x };
+    let pos = if blocked(try_x, PLAYER_R, obstacles) {
+        pos
+    } else {
+        try_x
+    };
     let try_z = [pos[0], pos[1] + mv[1] * speed * dt];
     if blocked(try_z, PLAYER_R, obstacles) {
         pos
@@ -264,7 +268,10 @@ impl Sim {
         }
         let idx = self.history.len().checked_sub(1 + delay as usize)?;
         let frame = self.history.get(idx)?;
-        frame.iter().find(|(pid, _, _)| *pid == id).map(|&(_, pos, alive)| (pos, alive))
+        frame
+            .iter()
+            .find(|(pid, _, _)| *pid == id)
+            .map(|&(_, pos, alive)| (pos, alive))
     }
 
     /// Advances the authoritative state by exactly one fixed step.
@@ -282,8 +289,7 @@ impl Sim {
                 p.respawn_in -= dt;
                 if p.respawn_in <= 0.0 {
                     p.deaths = p.deaths.wrapping_add(1);
-                    let point =
-                        spawn_point(p.deaths.wrapping_mul(3).wrapping_add(u32::from(p.id)));
+                    let point = spawn_point(p.deaths.wrapping_mul(3).wrapping_add(u32::from(p.id)));
                     p.pos = point;
                     p.hp = MAX_HP;
                     p.alive = true;
@@ -322,10 +328,7 @@ impl Sim {
                     // Spawn just in front of the center: the swept collision
                     // below skips the owner, and starting further out would
                     // leave a point-blank dead zone.
-                    let muzzle = [
-                        p.pos[0] + p.aim[0] * 0.2,
-                        p.pos[1] + p.aim[1] * 0.2,
-                    ];
+                    let muzzle = [p.pos[0] + p.aim[0] * 0.2, p.pos[1] + p.aim[1] * 0.2];
                     new_bullets.push(Bullet {
                         pos: muzzle,
                         vel: [p.aim[0] * BULLET_SPEED, p.aim[1] * BULLET_SPEED],
@@ -339,8 +342,12 @@ impl Sim {
         self.bullets.extend(new_bullets);
 
         // Record this tick's positions for lag-compensated rewinds.
-        self.history
-            .push_back(self.players.iter().map(|p| (p.id, p.pos, p.alive)).collect());
+        self.history.push_back(
+            self.players
+                .iter()
+                .map(|p| (p.id, p.pos, p.alive))
+                .collect(),
+        );
         if self.history.len() > HISTORY_LEN {
             self.history.pop_front();
         }
@@ -366,9 +373,7 @@ impl Sim {
                     continue;
                 }
                 // Where the shooter SAW this target when firing.
-                let (tpos, talive) = self
-                    .rewound(p.id, b.delay)
-                    .unwrap_or((p.pos, p.alive));
+                let (tpos, talive) = self.rewound(p.id, b.delay).unwrap_or((p.pos, p.alive));
                 if !talive || !p.alive {
                     continue;
                 }
@@ -376,8 +381,7 @@ impl Sim {
                 let t = if seg_len_sq <= 1e-8 {
                     0.0
                 } else {
-                    (((tpos[0] - p0[0]) * sx + (tpos[1] - p0[1]) * sz) / seg_len_sq)
-                        .clamp(0.0, 1.0)
+                    (((tpos[0] - p0[0]) * sx + (tpos[1] - p0[1]) * sz) / seg_len_sq).clamp(0.0, 1.0)
                 };
                 let (ex, ez) = (tpos[0] - (p0[0] + sx * t), tpos[1] - (p0[1] + sz * t));
                 if ex * ex + ez * ez < rr * rr {
@@ -404,7 +408,9 @@ impl Sim {
 
         // Apply damage after the bullet pass (avoids double-borrow).
         for (owner, victim) in hits {
-            let Some(v) = self.players.iter_mut().find(|p| p.id == victim) else { continue };
+            let Some(v) = self.players.iter_mut().find(|p| p.id == victim) else {
+                continue;
+            };
             if !v.alive {
                 continue;
             }
@@ -474,7 +480,14 @@ mod tests {
             let mut inputs = HashMap::new();
             inputs.insert(
                 0,
-                PlayerIn { mv: [1.0, 0.0], aim: [1.0, 0.0], fire: false, sprint, crouch, ..Default::default() },
+                PlayerIn {
+                    mv: [1.0, 0.0],
+                    aim: [1.0, 0.0],
+                    fire: false,
+                    sprint,
+                    crouch,
+                    ..Default::default()
+                },
             );
             for _ in 0..60 {
                 step_with(&mut sim, &inputs);
@@ -499,7 +512,15 @@ mod tests {
         sim.add_player(0);
         sim.add_player(1);
         let mut inputs = HashMap::new();
-        inputs.insert(0, PlayerIn { mv: [0.0, 0.0], aim: [1.0, 0.0], fire: true, ..Default::default() });
+        inputs.insert(
+            0,
+            PlayerIn {
+                mv: [0.0, 0.0],
+                aim: [1.0, 0.0],
+                fire: true,
+                ..Default::default()
+            },
+        );
         // Victim glued right in front of the shooter, inside the old
         // dead zone.
         let mut killed = false;
@@ -524,7 +545,15 @@ mod tests {
         sim.add_player(0);
         sim.players[0].pos = [ARENA_HALF - PLAYER_R - 0.05, 0.0];
         let mut inputs = HashMap::new();
-        inputs.insert(0, PlayerIn { mv: [1.0, 0.0], aim: [1.0, 0.0], fire: false, ..Default::default() });
+        inputs.insert(
+            0,
+            PlayerIn {
+                mv: [1.0, 0.0],
+                aim: [1.0, 0.0],
+                fire: false,
+                ..Default::default()
+            },
+        );
         for _ in 0..30 {
             step_with(&mut sim, &inputs);
         }
@@ -540,7 +569,15 @@ mod tests {
         sim.players[0].pos = [-5.0, 0.0];
         sim.players[1].pos = [5.0, 0.0];
         let mut inputs = HashMap::new();
-        inputs.insert(0, PlayerIn { mv: [0.0, 0.0], aim: [1.0, 0.0], fire: true, ..Default::default() });
+        inputs.insert(
+            0,
+            PlayerIn {
+                mv: [0.0, 0.0],
+                aim: [1.0, 0.0],
+                fire: true,
+                ..Default::default()
+            },
+        );
         let mut killed_at = None;
         for i in 0..600 {
             // Keep the victim parked.
@@ -594,13 +631,16 @@ mod tests {
             // The dodge (teleport keeps the geometry exact).
             sim.players.iter_mut().find(|p| p.id == 1).unwrap().pos = [6.0, 5.0];
             let mut inputs = HashMap::new();
-            inputs.insert(0, PlayerIn {
-                mv: [0.0, 0.0],
-                aim: [1.0, 0.0],
-                fire: true,
-                delay_ticks: delay,
-                ..Default::default()
-            });
+            inputs.insert(
+                0,
+                PlayerIn {
+                    mv: [0.0, 0.0],
+                    aim: [1.0, 0.0],
+                    fire: true,
+                    delay_ticks: delay,
+                    ..Default::default()
+                },
+            );
             // Bullet flight to x=6 takes ~11 ticks — still inside the
             // 12-tick rewind window.
             for _ in 0..12 {
@@ -613,7 +653,10 @@ mod tests {
             }
             false
         };
-        assert!(run(12), "rewound shot must land where the shooter saw the target");
+        assert!(
+            run(12),
+            "rewound shot must land where the shooter saw the target"
+        );
         assert!(!run(0), "without rewind the dodged shot must miss");
     }
 
@@ -625,7 +668,15 @@ mod tests {
         sim.players[0].pos = [0.0, 0.0];
         let mut inputs = HashMap::new();
         // Fire along +x forever with no cooldown constraint violations.
-        inputs.insert(0, PlayerIn { mv: [0.0, 0.0], aim: [1.0, 0.0], fire: true, ..Default::default() });
+        inputs.insert(
+            0,
+            PlayerIn {
+                mv: [0.0, 0.0],
+                aim: [1.0, 0.0],
+                fire: true,
+                ..Default::default()
+            },
+        );
         for _ in 0..240 {
             step_with(&mut sim, &inputs);
             // Teleport bullets back so they never expire or leave.
