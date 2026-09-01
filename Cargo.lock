@@ -1086,6 +1086,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ember-lab-layer"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "naga",
+ "serde",
+ "thiserror 2.0.20",
+ "wasm-bindgen",
+ "web-sys",
+ "wgpu",
+]
+
+[[package]]
 name = "ember-legacy"
 version = "0.1.0"
 dependencies = [

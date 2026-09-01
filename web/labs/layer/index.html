@@ -3,17 +3,96 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ember compute layer</title>
+  <title>ember fragment-compute layer</title>
+  <style>
+    :root { color-scheme: dark; font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #03050d; color: #dbe7ff; display: grid; place-items: center; }
+    main { width: min(1280px, 96vw); padding: 18px 0 28px; }
+    header { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+    h1 { margin: 0 0 12px; font: 500 1.05rem/1.3 system-ui, sans-serif; letter-spacing: .16em; text-transform: uppercase; }
+    h1 span { color: #62ddff; }
+    #telemetry { display: flex; gap: 14px; font-size: .78rem; font-variant-numeric: tabular-nums; color: #9cb8dd; }
+    #telemetry strong { color: #f3c86b; font-weight: 600; }
+    .stage { position: relative; border: 1px solid #26385b; border-radius: 12px; overflow: hidden; box-shadow: 0 24px 80px #000b; }
+    canvas { width: 100%; aspect-ratio: 16 / 9; height: auto; display: block; background: #02040b; }
+    #status { position: absolute; inset: 14px auto auto 14px; margin: 0; padding: 8px 10px; border: 1px solid #38527a; border-radius: 7px; background: #071020d9; font-size: .72rem; max-width: min(620px, 80%); }
+    #status.ready { color: #83f1bf; border-color: #225f4b; }
+    #status.failed { color: #ff9c9c; border-color: #7a3030; }
+    details { margin-top: 12px; color: #9bb0cf; font-size: .72rem; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; border: 1px solid #1e2b46; background: #070b15; }
+    footer { margin-top: 12px; color: #7385a3; font: .75rem/1.5 system-ui, sans-serif; }
+  </style>
 </head>
 <body>
   <main>
-    <h1>fragment compute layer</h1>
-    <canvas id="layer-canvas" width="1280" height="720"></canvas>
-    <p id="status">loading…</p>
+    <header>
+      <h1>ember <span>fragment-compute layer</span></h1>
+      <div id="telemetry"><span>frames <strong id="frames">0</strong></span><span>median <strong id="median">—</strong></span><span>p95 <strong id="p95">—</strong></span></div>
+    </header>
+    <div class="stage">
+      <canvas id="layer-canvas" width="1280" height="720"></canvas>
+      <p id="status">requesting WebGL2 through wgpu…</p>
+    </div>
+    <details><summary>capability and invariant evidence</summary><pre id="facts">waiting</pre></details>
+    <footer>1,200 vertices and 3,000 equal-length edges. The GPU rotates in SO(5), projects 5D→4D→3D, gathers endpoints, and emits box transforms every frame. Hue is only the post-rotation fifth coordinate, mapped over the fixed range −3…+3.</footer>
   </main>
   <script type="module">
-    import init from './pkg/ember_lab_layer.js?v=1';
-    init().catch((error) => { document.querySelector('#status').textContent = `failed: ${error}`; });
+    import init, { start_layer, render_layer_frame } from './pkg/ember_lab_layer.js?v=1';
+
+    const status = document.querySelector('#status');
+    const facts = document.querySelector('#facts');
+    const frameCount = document.querySelector('#frames');
+    const median = document.querySelector('#median');
+    const p95 = document.querySelector('#p95');
+    const canvas = document.querySelector('#layer-canvas');
+    const failure = (error) => {
+      status.className = 'failed';
+      status.textContent = `refused: ${error instanceof Error ? error.message : String(error)}`;
+    };
+    addEventListener('error', event => failure(event.error || event.message));
+    addEventListener('unhandledrejection', event => failure(event.reason));
+
+    try {
+      await init({ module_or_path: './pkg/ember_lab_layer_bg.wasm?v=1' });
+      const report = JSON.parse(await start_layer(canvas));
+      facts.textContent = JSON.stringify(report, null, 2);
+      status.className = 'ready';
+      status.textContent = `ready · ${report.backend} · golden checksum ${report.capabilities.golden_checksum}`;
+      const started = performance.now();
+      let previous;
+      let frames = 0;
+      const samples = [];
+      let telemetryPending = false;
+      const updateTelemetryBetweenFrames = () => {
+        telemetryPending = false;
+        if (!samples.length) return;
+        const sorted = samples.slice().sort((left, right) => left - right);
+        const middle = Math.floor(sorted.length / 2);
+        const middleValue = sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) * 0.5;
+        const p95Value = sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)];
+        frameCount.textContent = String(frames);
+        median.textContent = `${middleValue.toFixed(2)} ms`;
+        p95.textContent = `${p95Value.toFixed(2)} ms`;
+      };
+      const frame = timestamp => {
+        if (previous !== undefined) {
+          samples.push(timestamp - previous);
+          if (samples.length > 180) samples.shift();
+        }
+        previous = timestamp;
+        render_layer_frame((timestamp - started) / 1000);
+        frames += 1;
+        if (frames % 15 === 0 && !telemetryPending) {
+          telemetryPending = true;
+          setTimeout(updateTelemetryBetweenFrames, 0);
+        }
+        requestAnimationFrame(frame);
+      };
+      requestAnimationFrame(frame);
+    } catch (error) {
+      failure(error);
+    }
   </script>
 </body>
 </html>
