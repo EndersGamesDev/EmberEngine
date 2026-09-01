@@ -1,3 +1,8 @@
+// Preserve deterministic racing simulation arithmetic and its established rounding.
+#![allow(clippy::suboptimal_flops)]
+// Course-sampling tests intentionally advance through production f32 coordinates.
+#![allow(clippy::while_float)]
+
 //! Shared racing simulation and wire protocol for Fire Racer.
 //!
 //! Deliberately a separate crate from `pong-core`: that one is shared between
