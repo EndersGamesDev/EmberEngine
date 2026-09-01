@@ -196,18 +196,28 @@ pub struct BState {
 pub enum C2S {
     /// Must be the first message on a connection.
     Hello {
+        /// Arena protocol version spoken by the client.
         proto: u16,
+        /// Requested display handle.
         handle: String,
     },
+    /// Requests the ungated legacy Arena lobby list.
     ListLobbies,
+    /// Requests creation of a named Arena lobby.
     CreateLobby {
+        /// Requested lobby name.
         name: String,
+        /// Optional lobby password.
         password: Option<String>,
     },
+    /// Requests admission to an existing Arena lobby.
     JoinLobby {
+        /// Requested lobby name.
         name: String,
+        /// Optional lobby password.
         password: Option<String>,
     },
+    /// Leaves the current Arena lobby.
     LeaveLobby,
     /// Held intents: movement, aim, trigger, stance. Doubles as the
     /// keepalive.
@@ -219,9 +229,13 @@ pub enum C2S {
         /// at — the server rewinds hit tests to it (lag compensation).
         #[serde(default)]
         view_tick: u64,
+        /// World-space movement intent on the X axis.
         mx: f32,
+        /// World-space movement intent on the Z axis.
         my: f32,
+        /// Horizontal aim X component.
         ax: f32,
+        /// Horizontal aim Z component.
         az: f32,
         /// Aim elevation in radians, positive = up. A SCALAR beside the
         /// horizontal aim, deliberately not a third component of it — the
@@ -229,11 +243,15 @@ pub enum C2S {
         /// Defaulted, so an older client simply always fires level.
         #[serde(default)]
         pitch: f32,
+        /// Held trigger intent.
         fire: bool,
+        /// Held sprint intent.
         #[serde(default)]
         sprint: bool,
+        /// Held crouch intent.
         #[serde(default)]
         crouch: bool,
+        /// Held reload intent.
         #[serde(default)]
         reload: bool,
         /// A Space PRESS, not the held key: true means "the player pressed
@@ -248,7 +266,9 @@ pub enum C2S {
         #[serde(default)]
         shield: bool,
     },
+    /// Application keepalive request.
     Ping {
+        /// Client nonce echoed in the reply.
         nonce: u32,
     },
 }
@@ -257,46 +277,69 @@ pub enum C2S {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum S2C {
+    /// Confirms the legacy hello.
     Welcome {
+        /// Live Arena protocol version.
         proto: u16,
+        /// Deployed message of the day.
         motd: String,
     },
     /// Recoverable failures (wrong password, name taken, ...). The
     /// connection stays open.
     Error {
+        /// Human-readable recoverable failure.
         message: String,
     },
+    /// Returns visible Arena lobbies using the deployed tag.
     LobbyList {
+        /// Visible, non-full lobby rows.
         lobbies: Vec<LobbyInfo>,
     },
     /// You are in a game (created or joined). `players` includes yourself;
     /// generate the arena locally from `seed`.
     GameJoined {
+        /// Assigned in-lobby player identifier.
         id: u8,
+        /// Seed used by clients and server to regenerate the arena.
         seed: u64,
+        /// Arena boundary half-extent.
         arena_half: f32,
+        /// Full roster including the newly admitted player.
         players: Vec<PlayerMeta>,
     },
+    /// Announces a newly admitted player to existing members.
     PlayerJoined {
+        /// Public metadata for the new member.
         meta: PlayerMeta,
     },
+    /// Announces a departed player.
     PlayerLeft {
+        /// Departed in-lobby player identifier.
         id: u8,
     },
+    /// Periodic authoritative simulation snapshot.
     State {
+        /// Authoritative simulation tick.
         tick: u64,
+        /// Authoritative player states in simulation order.
         players: Vec<PState>,
+        /// Authoritative bullets in simulation order.
         bullets: Vec<BState>,
         /// Weapon-pad availability, index-aligned with the seeded pad
         /// positions every client derives locally.
         #[serde(default)]
         pads: Vec<bool>,
     },
+    /// Announces one authoritative kill event.
     Kill {
+        /// Credited killer identifier.
         killer: u8,
+        /// Victim identifier.
         victim: u8,
     },
+    /// Echoes an application keepalive nonce.
     Pong {
+        /// Client nonce from the corresponding ping.
         nonce: u32,
     },
 }

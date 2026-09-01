@@ -43,6 +43,7 @@ pub const EYE_CROUCH: f32 = 0.85;
 /// a head) so that what you see is what you hit — these live here, not in
 /// the renderer, because client and server must agree where a body IS.
 pub const BODY_H_STAND: f32 = 1.70;
+/// Crouched body height.
 pub const BODY_H_CROUCH: f32 = 1.25;
 // Worth knowing before tuning either of the above: a standing shooter's
 // muzzle sits at 1.45 and a crouched target's band tops out at
@@ -104,6 +105,8 @@ pub struct WeaponStats {
     pub damage: u8,
 }
 
+/// Returns the frozen tuning values for a weapon level.
+#[must_use]
 pub fn weapon_stats(level: u8) -> WeaponStats {
     match level {
         3 => WeaponStats {
@@ -124,6 +127,8 @@ pub fn weapon_stats(level: u8) -> WeaponStats {
     }
 }
 
+/// Returns the deployed display name for a weapon level.
+#[must_use]
 pub fn weapon_name(level: u8) -> &'static str {
     match level {
         3 => "Heavy",
