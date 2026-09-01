@@ -20,10 +20,11 @@ pub const JOKER_STEP: bool = true;
 /// The joker may be placed on any empty tile on its owner's own turns
 /// `JOKER_PLACE_EVERY`, `2 * JOKER_PLACE_EVERY`, ...
 pub const JOKER_PLACE_EVERY: u32 = 5;
-/// The pawn's capture directions as `(a, b)` coefficients of the owner's
-/// `(forward, left)` basis: `f + l`, `f - l`, `-f + l`. The documented
-/// fallback if playtesting finds the third diagonal too strong is
-/// `&[(1, 1), (1, -1)]`.
+/// The pawn's capture directions: `f + l`, `f - l`, `-f + l`.
+///
+/// Each entry is `(a, b)` for `a * forward + b * left` in the owner's frame.
+/// The documented fallback if playtesting finds the third diagonal too
+/// strong is `&[(1, 1), (1, -1)]`.
 pub const PAWN_CAPTURES: &[(i8, i8)] = &[(1, 1), (1, -1), (-1, 1)];
 /// Consecutive own-turn timeouts that eliminate a seat.
 pub const TIMEOUTS_TO_ELIMINATE: u8 = 3;
@@ -91,7 +92,10 @@ impl Target {
     /// The target's tile.
     #[must_use]
     pub const fn tile(self) -> Tile {
-        Tile { x: self.x, y: self.y }
+        Tile {
+            x: self.x,
+            y: self.y,
+        }
     }
 }
 
@@ -225,11 +229,12 @@ fn hero_targets(state: &State, from: Tile, owner: u8, out: &mut Targets) {
     }
 }
 
-/// Every legal destination of the piece on `from` (the table of section
-/// 1.6), or nothing for an empty tile. Independent of whose turn it is,
-/// except that the joker's placement is offered only to the seat to move,
-/// so highlights for the other seats never show a placement they could not
-/// make.
+/// Every legal destination of the piece on `from`, or nothing for an empty
+/// tile (the table of section 1.6).
+///
+/// Independent of whose turn it is, except that the joker's placement is
+/// offered only to the seat to move, so highlights for the other seats
+/// never show a placement they could not make.
 #[must_use]
 pub fn targets(state: &State, from: Tile) -> Vec<Target> {
     let Some(piece) = state.piece(from) else {
@@ -267,6 +272,11 @@ pub fn has_any_move(state: &State, seat: u8) -> bool {
 pub enum Illegal {
     /// The game has a result; nothing is applied any more.
     GameOver,
+    /// The sender's seat is not the seat to move (`apply_move` only).
+    NotYourTurn,
+    /// The move was stamped with a turn that is not the current one
+    /// (`apply_move` only).
+    StaleTurn,
     /// A coordinate above 9.
     OffBoard,
     /// `from` is empty.
@@ -290,6 +300,8 @@ impl Illegal {
     pub const fn reason(self) -> &'static str {
         match self {
             Self::GameOver => "the game is over",
+            Self::NotYourTurn => "not your turn",
+            Self::StaleTurn => "that move was for an earlier turn",
             Self::OffBoard => "that tile is off the board",
             Self::NoPiece => "there is no piece on that tile",
             Self::NotYours => "that is not your piece",
@@ -398,15 +410,17 @@ pub fn apply(state: &mut State, from: Tile, to: Tile) -> Result<LastAction, Ille
     state.set(from, None);
     state.set(to, Some(moved));
 
-    let mut eliminated = None;
-    if let Some(v) = victim
-        && v.kind == Kind::King
-        && v.owner != owner
-        && state.seats[usize::from(v.owner)].alive
-    {
-        eliminate(state, v.owner);
-        eliminated = Some(v.owner);
-    }
+    let eliminated = match victim {
+        Some(v)
+            if v.kind == Kind::King
+                && v.owner != owner
+                && state.seats[usize::from(v.owner)].alive =>
+        {
+            eliminate(state, v.owner);
+            Some(v.owner)
+        }
+        _ => None,
+    };
 
     state.seats[usize::from(owner)].timeouts = 0;
     state.stalls = 0;
@@ -435,6 +449,33 @@ pub fn apply_xy(state: &mut State, fx: u8, fy: u8, tx: u8, ty: u8) -> Result<Las
     let from = Tile::new(fx, fy).ok_or(Illegal::OffBoard)?;
     let to = Tile::new(tx, ty).ok_or(Illegal::OffBoard)?;
     apply(state, from, to)
+}
+
+/// The server's whole check of a `C2S::Move` from `seat` (section 4.3).
+///
+/// The game is running, `seat` is to move, `turn` is the current turn, and
+/// the move is legal, checked in that order so the reason names the first
+/// thing wrong.
+///
+/// # Errors
+/// As `apply_xy`, plus `Illegal::NotYourTurn` and `Illegal::StaleTurn`.
+pub fn apply_move(
+    state: &mut State,
+    seat: u8,
+    turn: u32,
+    from: (u8, u8),
+    to: (u8, u8),
+) -> Result<LastAction, Illegal> {
+    if state.result.is_some() {
+        return Err(Illegal::GameOver);
+    }
+    if seat != state.to_move {
+        return Err(Illegal::NotYourTurn);
+    }
+    if turn != state.turn {
+        return Err(Illegal::StaleTurn);
+    }
+    apply_xy(state, from.0, from.1, to.0, to.1)
 }
 
 /// A seat is out: it takes no more turns, and unless it is a garrison every
@@ -550,9 +591,11 @@ pub fn timeout(state: &mut State) -> Option<LastAction> {
 }
 
 /// A seat's connection dropped mid-game (section 1.7): the seat is
-/// eliminated at once. If it was the seat to move its turn ends with a
-/// pass and the action is returned; otherwise the seat is simply skipped
-/// from now on, the end-of-game check runs, and `None` is returned.
+/// eliminated at once.
+///
+/// If it was the seat to move its turn ends with a pass and the action is
+/// returned; otherwise the seat is simply skipped from now on, the
+/// end-of-game check runs, and `None` is returned.
 pub fn disconnect(state: &mut State, seat: u8) -> Option<LastAction> {
     state.seats[usize::from(seat)].present = false;
     if state.result.is_some() {
@@ -665,9 +708,15 @@ mod tests {
         assert!(!has(&ts, 4, 7, TargetKind::Move) && !has(&ts, 4, 7, TargetKind::Capture));
         assert!(!tiles(&ts).contains(&(4, 8)), "blocked behind an own piece");
         assert!(has(&ts, 7, 4, TargetKind::Capture));
-        assert!(!tiles(&ts).contains(&(8, 4)), "blocked behind a foreign piece");
+        assert!(
+            !tiles(&ts).contains(&(8, 4)),
+            "blocked behind a foreign piece"
+        );
         assert!(!tiles(&ts).contains(&(0, 0)), "own king excluded");
-        assert!(has(&ts, 9, 9, TargetKind::Capture), "the foreign king is a capture");
+        assert!(
+            has(&ts, 9, 9, TargetKind::Capture),
+            "the foreign king is a capture"
+        );
 
         let rook = put(&mut st, 0, Kind::Rook, 2, 6);
         let ts = targets(&st, rook);
@@ -675,12 +724,18 @@ mod tests {
         assert!(ts.iter().all(|t| t.x == 2 || t.y == 6));
         let bishop = put(&mut st, 0, Kind::Bishop, 1, 6);
         let ts = targets(&st, bishop);
-        assert!(ts.iter().all(|t| Tile::at(t.x, t.y).colour() == Tile::at(1, 6).colour()));
+        assert!(
+            ts.iter()
+                .all(|t| Tile::at(t.x, t.y).colour() == Tile::at(1, 6).colour())
+        );
         assert!(has(&ts, 0, 7, TargetKind::Move));
         assert!(has(&ts, 0, 5, TargetKind::Move));
         assert!(has(&ts, 4, 9, TargetKind::Move));
         assert!(has(&ts, 7, 0, TargetKind::Move));
-        assert!(!tiles(&ts).contains(&(2, 6)), "the own rook is not a target");
+        assert!(
+            !tiles(&ts).contains(&(2, 6)),
+            "the own rook is not a target"
+        );
         assert_eq!(tiles(&ts).len(), 3 + 1 + 1 + 6);
     }
 
@@ -701,7 +756,10 @@ mod tests {
         assert!(has(&ts, 2, 3, TargetKind::Capture));
         assert!(!tiles(&ts).contains(&(6, 5)));
         let corner = put(&mut st, 0, Kind::Knight, 9, 0);
-        assert_eq!(tiles(&targets(&st, corner)), [(7, 1), (8, 2)].into_iter().collect());
+        assert_eq!(
+            tiles(&targets(&st, corner)),
+            [(7, 1), (8, 2)].into_iter().collect()
+        );
     }
 
     #[test]
@@ -715,7 +773,10 @@ mod tests {
             let ts = targets(&st, from);
             let fwd = from.offset(fr.f).unwrap();
             let lft = from.offset(fr.l).unwrap();
-            assert_eq!(tiles(&ts), [(fwd.x, fwd.y), (lft.x, lft.y)].into_iter().collect());
+            assert_eq!(
+                tiles(&ts),
+                [(fwd.x, fwd.y), (lft.x, lft.y)].into_iter().collect()
+            );
             assert!(ts.iter().all(|t| t.kind == TargetKind::Move));
             assert_eq!(to_local(seat, fwd), (5, 4), "seat {seat} forward is +u");
             assert_eq!(to_local(seat, lft), (4, 5), "seat {seat} left is +v");
@@ -743,7 +804,10 @@ mod tests {
             let mut st = blank([true; 4]);
             put(&mut st, seat, Kind::Pawn, from.x, from.y);
             put(&mut st, seat, Kind::Rook, fwd.x, fwd.y);
-            assert_eq!(tiles(&targets(&st, from)), [(lft.x, lft.y)].into_iter().collect());
+            assert_eq!(
+                tiles(&targets(&st, from)),
+                std::iter::once((lft.x, lft.y)).collect()
+            );
         }
     }
 
@@ -792,7 +856,8 @@ mod tests {
                 if capture {
                     put(&mut st, foreign, Kind::Rook, dest.x, dest.y);
                 }
-                let last = apply(&mut st, from, dest).unwrap_or_else(|e| panic!("seat {seat} {start:?}->{to:?}: {e}"));
+                let last = apply(&mut st, from, dest)
+                    .unwrap_or_else(|e| panic!("seat {seat} {start:?}->{to:?}: {e}"));
                 assert!(last.promoted, "seat {seat} {start:?}->{to:?}");
                 assert_eq!(last.captured, capture.then_some(Kind::Rook));
                 assert_eq!(st.piece(dest).unwrap().kind, Kind::Queen);
@@ -822,10 +887,19 @@ mod tests {
         put(&mut st, 2, Kind::Pawn, 5, 4);
         put(&mut st, 0, Kind::Pawn, 4, 5);
         let ts = targets(&st, joker);
-        assert!(!tiles(&ts).contains(&(5, 4)), "a foreign piece is not stepped on");
-        assert!(!tiles(&ts).contains(&(4, 5)), "an own piece is not stepped on");
+        assert!(
+            !tiles(&ts).contains(&(5, 4)),
+            "a foreign piece is not stepped on"
+        );
+        assert!(
+            !tiles(&ts).contains(&(4, 5)),
+            "an own piece is not stepped on"
+        );
         assert!(has(&ts, 3, 3, TargetKind::Move));
-        assert!(has(&ts, 5, 5, TargetKind::Move), "empty front-left is a step");
+        assert!(
+            has(&ts, 5, 5, TargetKind::Move),
+            "empty front-left is a step"
+        );
         assert_eq!(ts.iter().filter(|t| t.kind == TargetKind::Move).count(), 6);
         let last = mv(&mut st, (4, 4), (3, 3)).unwrap();
         assert_eq!(last.kind, ActionKind::Move);
@@ -846,13 +920,20 @@ mod tests {
         put(&mut st, 2, Kind::Pawn, 7, 3);
         put(&mut st, 0, Kind::Pawn, 2, 6);
         let ts = targets(&st, joker);
-        assert!(!tiles(&ts).contains(&(7, 3)), "a foreign piece blocks, never a capture");
+        assert!(
+            !tiles(&ts).contains(&(7, 3)),
+            "a foreign piece blocks, never a capture"
+        );
         assert!(!tiles(&ts).contains(&(2, 6)), "an own piece blocks");
         assert!(has(&ts, 7, 6, TargetKind::Teleport));
         let last = mv(&mut st, (2, 3), (7, 6)).unwrap();
         assert_eq!(last.kind, ActionKind::JokerTeleport);
         assert_eq!(st.piece(Tile::at(7, 6)).unwrap().kind, Kind::Joker);
-        assert_eq!(st.piece(Tile::at(5, 3)).unwrap().kind, Kind::Rook, "untouched");
+        assert_eq!(
+            st.piece(Tile::at(5, 3)).unwrap().kind,
+            Kind::Rook,
+            "untouched"
+        );
     }
 
     #[test]
@@ -868,7 +949,10 @@ mod tests {
         }
         let ts = targets(&st, joker);
         assert!(ts.iter().all(|t| t.kind != TargetKind::Capture));
-        assert!(has(&ts, 5, 5, TargetKind::Move), "empty front-left is a step");
+        assert!(
+            has(&ts, 5, 5, TargetKind::Move),
+            "empty front-left is a step"
+        );
         // An own piece there: nothing.
         put(&mut st, 0, Kind::Pawn, 5, 5);
         let ts = targets(&st, joker);
@@ -879,25 +963,35 @@ mod tests {
         put(&mut st, 1, Kind::Rook, 5, 5);
         let ts = targets(&st, joker);
         assert!(has(&ts, 5, 5, TargetKind::Capture));
-        assert_eq!(ts.iter().filter(|t| t.kind == TargetKind::Capture).count(), 1);
+        assert_eq!(
+            ts.iter().filter(|t| t.kind == TargetKind::Capture).count(),
+            1
+        );
         let last = mv(&mut st, (4, 4), (5, 5)).unwrap();
         assert_eq!(last.kind, ActionKind::Move);
         assert_eq!(last.captured, Some(Kind::Rook));
         assert_eq!(st.seats[0].captured, vec![Kind::Rook]);
     }
 
-    /// Knight out on odd rounds, back on even, for each seat.
-    fn knight_hop(seat: u8, round: u32) -> ((u8, u8), (u8, u8)) {
-        let (home, out) = [((1, 2), (2, 4)), ((7, 1), (5, 2)), ((8, 7), (7, 5)), ((2, 8), (4, 7))][seat as usize];
-        if round.is_multiple_of(2) { (out, home) } else { (home, out) }
+    /// Each seat's knight hops between its home tile and one free tile;
+    /// `pos` tracks where each knight stands now.
+    fn knight_hop(st: &mut State, seat: u8, pos: &mut [(u8, u8); 4]) {
+        const HOME: [(u8, u8); 4] = [(1, 2), (7, 1), (8, 7), (2, 8)];
+        const OUT: [(u8, u8); 4] = [(2, 4), (5, 2), (7, 5), (4, 7)];
+        let i = usize::from(seat);
+        let from = pos[i];
+        let to = if from == HOME[i] { OUT[i] } else { HOME[i] };
+        mv(st, from, to).unwrap();
+        pos[i] = to;
     }
 
     #[test]
     fn joker_placement_on_own_turns_5_10_15() {
         assert_eq!(JOKER_PLACE_EVERY, 5);
         let mut st = full();
+        let mut pos = [(1, 2), (7, 1), (8, 7), (2, 8)];
         let joker = Tile::at(1, 1);
-        let places = |st: &State| {
+        let place_count = |st: &State| {
             targets(st, joker)
                 .into_iter()
                 .filter(|t| t.kind == TargetKind::Place)
@@ -908,26 +1002,47 @@ mod tests {
             // Seat 0's own turn: its own_turns equals the round.
             assert_eq!(st.to_move, 0, "round {round}");
             assert_eq!(st.seats[0].own_turns, round, "round {round}");
-            let expected = if round.is_multiple_of(5) { 36 } else { 0 };
-            assert_eq!(places(&st), expected, "round {round}: placements");
+            if round.is_multiple_of(5) {
+                // Every empty tile is reachable: as a placement, or as the
+                // step or teleport that takes precedence on that tile.
+                let ts = targets(&st, joker);
+                let empty: BTreeSet<(u8, u8)> = Tile::all()
+                    .filter(|t| st.piece(*t).is_none())
+                    .map(|t| (t.x, t.y))
+                    .collect();
+                assert_eq!(tiles(&ts), empty, "round {round}");
+                let other = ts.iter().filter(|t| t.kind != TargetKind::Place).count();
+                assert_eq!(place_count(&st), empty.len() - other, "round {round}");
+                // Round 5: seat 3 is gone, so its 16 tiles are free and its
+                // vacated joker tile (1,8) is a teleport, not a placement.
+                if round == 5 {
+                    assert_eq!(empty.len(), 52);
+                    assert_eq!(place_count(&st), 51);
+                    assert!(has(&ts, 1, 8, TargetKind::Teleport));
+                }
+            } else {
+                assert_eq!(place_count(&st), 0, "round {round}: no placement");
+            }
             if round == 4 || round == 6 {
                 assert_eq!(mv(&mut st, (1, 1), (4, 4)), Err(Illegal::NotATarget));
             }
             if round == 5 {
-                assert!(targets(&st, joker).iter().all(|t| t.tile() != joker), "never its own tile");
+                assert!(
+                    targets(&st, joker).iter().all(|t| t.tile() != joker),
+                    "never its own tile"
+                );
                 // A placement is legal now (on a clone) and narrated as one.
                 let mut placed = st.clone();
                 let last = mv(&mut placed, (1, 1), (4, 4)).unwrap();
                 assert_eq!(last.kind, ActionKind::JokerPlace);
                 assert_eq!(placed.piece(Tile::at(4, 4)).unwrap().kind, Kind::Joker);
-                banked_probe = Some(placed);
+                banked_probe = Some((placed, pos));
             }
-            let (from, to) = knight_hop(0, round);
-            mv(&mut st, from, to).unwrap();
+            knight_hop(&mut st, 0, &mut pos);
             // The other seats: seat 1 times out in round 2, seat 3 leaves in
             // round 3; neither changes seat 0's own-turn count.
             for seat in 1..4u8 {
-                if !st.seats[seat as usize].alive {
+                if !st.seats[usize::from(seat)].alive {
                     continue;
                 }
                 assert_eq!(st.to_move, seat, "round {round}");
@@ -936,8 +1051,7 @@ mod tests {
                 } else if seat == 3 && round == 3 {
                     disconnect(&mut st, 3).unwrap();
                 } else {
-                    let (from, to) = knight_hop(seat, round);
-                    mv(&mut st, from, to).unwrap();
+                    knight_hop(&mut st, seat, &mut pos);
                 }
             }
         }
@@ -948,16 +1062,19 @@ mod tests {
         // Not banked: the placement skipped in round 5 was not offered in
         // round 6 (asserted in the loop), and the seat that DID place has
         // no placement on its sixth turn either.
-        let mut placed = banked_probe.unwrap();
+        let (mut placed, mut pos) = banked_probe.unwrap();
         for seat in 1..4u8 {
-            if st.seats[seat as usize].alive && placed.to_move == seat {
-                let (from, to) = knight_hop(seat, 5);
-                mv(&mut placed, from, to).unwrap();
+            if placed.seats[usize::from(seat)].alive && placed.to_move == seat {
+                knight_hop(&mut placed, seat, &mut pos);
             }
         }
         assert_eq!(placed.to_move, 0);
         assert_eq!(placed.seats[0].own_turns, 6);
-        assert!(targets(&placed, Tile::at(4, 4)).iter().all(|t| t.kind != TargetKind::Place));
+        assert!(
+            targets(&placed, Tile::at(4, 4))
+                .iter()
+                .all(|t| t.kind != TargetKind::Place)
+        );
     }
 
     #[test]
@@ -965,12 +1082,24 @@ mod tests {
         let mut st = full();
         st.seats[2].own_turns = 5;
         assert_eq!(st.to_move, 0);
-        assert!(targets(&st, Tile::at(8, 8)).iter().all(|t| t.kind != TargetKind::Place));
+        assert!(
+            targets(&st, Tile::at(8, 8))
+                .iter()
+                .all(|t| t.kind != TargetKind::Place)
+        );
         st.to_move = 2;
-        assert!(targets(&st, Tile::at(8, 8)).iter().any(|t| t.kind == TargetKind::Place));
+        assert!(
+            targets(&st, Tile::at(8, 8))
+                .iter()
+                .any(|t| t.kind == TargetKind::Place)
+        );
         // own_turns of 0 is never a placement turn.
         st.seats[2].own_turns = 0;
-        assert!(targets(&st, Tile::at(8, 8)).iter().all(|t| t.kind != TargetKind::Place));
+        assert!(
+            targets(&st, Tile::at(8, 8))
+                .iter()
+                .all(|t| t.kind != TargetKind::Place)
+        );
     }
 
     #[test]
@@ -996,7 +1125,11 @@ mod tests {
         let joker = put(&mut st, 0, Kind::Joker, 9, 3);
         put(&mut st, 2, Kind::Pawn, 8, 4);
         put(&mut st, 2, Kind::Pawn, 8, 2);
-        assert!(targets(&st, joker).iter().all(|t| t.kind != TargetKind::Capture));
+        assert!(
+            targets(&st, joker)
+                .iter()
+                .all(|t| t.kind != TargetKind::Capture)
+        );
         assert!(Tile::at(9, 3).offset(front_left(0)).is_none());
     }
 
@@ -1037,7 +1170,7 @@ mod tests {
         let last = mv(&mut st, (0, 1), (3, 3)).unwrap();
         assert_eq!(last.kind, ActionKind::HeroSwap);
         assert_eq!(last.captured, None, "the own pawn is credited to nobody");
-        assert!(st.seats[0].captured.is_empty());
+        assert_eq!(st.seats[0].captured, Vec::<Kind>::new());
         assert_eq!(st.piece(Tile::at(3, 3)).unwrap().kind, Kind::HeroAwake);
         assert_eq!(st.piece(Tile::at(3, 3)).unwrap().id, 1, "same id");
         assert_eq!(st.piece(Tile::at(0, 1)), None, "the old tile is empty");
@@ -1047,7 +1180,11 @@ mod tests {
         assert_eq!(st.quiet, 0, "a swap is progress");
         // An awake hero never sleeps again: its targets are moves.
         st.to_move = 0;
-        assert!(targets(&st, Tile::at(3, 3)).iter().all(|t| matches!(t.kind, TargetKind::Move | TargetKind::Capture)));
+        assert!(
+            targets(&st, Tile::at(3, 3))
+                .iter()
+                .all(|t| matches!(t.kind, TargetKind::Move | TargetKind::Capture))
+        );
     }
 
     #[test]
@@ -1060,7 +1197,14 @@ mod tests {
         st.set(Tile::at(7, 1), None);
         put(&mut st, 0, Kind::Queen, 7, 1);
         let ts = targets(&st, hero);
-        assert_eq!(ts, vec![Target { x: 4, y: 4, kind: TargetKind::Wake }]);
+        assert_eq!(
+            ts,
+            vec![Target {
+                x: 4,
+                y: 4,
+                kind: TargetKind::Wake
+            }]
+        );
         let last = mv(&mut st, (4, 4), (4, 4)).unwrap();
         assert_eq!(last.kind, ActionKind::HeroWake);
         assert_eq!(st.piece(hero).unwrap().kind, Kind::HeroAwake);
@@ -1083,8 +1227,16 @@ mod tests {
             let mut st = two();
             put(&mut st, 0, kind, 4, 4);
             st.seats[0].own_turns = 5;
-            assert_eq!(mv(&mut st, (4, 4), (4, 4)), Err(Illegal::SelfMove), "{kind:?}");
-            assert!(targets(&st, Tile::at(4, 4)).iter().all(|t| t.tile() != Tile::at(4, 4)));
+            assert_eq!(
+                mv(&mut st, (4, 4), (4, 4)),
+                Err(Illegal::SelfMove),
+                "{kind:?}"
+            );
+            assert!(
+                targets(&st, Tile::at(4, 4))
+                    .iter()
+                    .all(|t| t.tile() != Tile::at(4, 4))
+            );
         }
     }
 
@@ -1166,7 +1318,11 @@ mod tests {
         let last = mv(&mut st, (4, 4), (7, 4)).unwrap();
         assert_eq!(last.captured, Some(Kind::Pawn));
         assert_eq!(st.seats[0].captured, vec![Kind::Pawn]);
-        assert_eq!(st.piece(Tile::at(8, 4)).unwrap().kind, Kind::Pawn, "the second is untouched");
+        assert_eq!(
+            st.piece(Tile::at(8, 4)).unwrap().kind,
+            Kind::Pawn,
+            "the second is untouched"
+        );
         assert_eq!(count(&st, 2), 2);
     }
 
@@ -1203,7 +1359,11 @@ mod tests {
         let last = mv(&mut st, (9, 5), (9, 0)).unwrap();
         assert_eq!(last.captured, Some(Kind::King));
         assert_eq!(last.eliminated, None);
-        assert_eq!(st.piece(Tile::at(8, 0)).unwrap().owner, 1, "the garrison stays");
+        assert_eq!(
+            st.piece(Tile::at(8, 0)).unwrap().owner,
+            1,
+            "the garrison stays"
+        );
         assert_eq!(st.seats[1], seats_before[1]);
         assert_eq!(st.seats[0].captured, vec![Kind::King]);
         assert_eq!(st.result, None);
@@ -1226,7 +1386,11 @@ mod tests {
         assert_eq!((st.turn, st.to_move, own(&st)), (6, 1, [2, 2, 1, 1]));
         assert_eq!(st.seats[0].timeouts, 1);
         disconnect(&mut st, 2);
-        assert_eq!(own(&st), [2, 2, 1, 1], "another seat's elimination touches nothing");
+        assert_eq!(
+            own(&st),
+            [2, 2, 1, 1],
+            "another seat's elimination touches nothing"
+        );
         mv(&mut st, (5, 2), (7, 1)).unwrap();
         assert_eq!((st.turn, st.to_move, own(&st)), (7, 3, [2, 2, 1, 2]));
         // A legal move resets the seat's timeouts.
@@ -1234,7 +1398,10 @@ mod tests {
         assert_eq!(st.to_move, 0);
         mv(&mut st, (2, 4), (1, 2)).unwrap();
         assert_eq!(st.seats[0].timeouts, 0);
-        assert_eq!(st.quiet, 8, "eight quiet turns so far (seven moves, one timeout)");
+        assert_eq!(
+            st.quiet, 8,
+            "eight quiet turns so far (seven moves, one timeout)"
+        );
     }
 
     /// Seat 0 with a king and stuck pawns in the NE corner: no legal move.
@@ -1258,7 +1425,10 @@ mod tests {
         assert!(has_any_move(&st, 2));
 
         let last = timeout(&mut st).unwrap();
-        assert_eq!((last.seat, last.kind, last.eliminated), (2, ActionKind::Timeout, None));
+        assert_eq!(
+            (last.seat, last.kind, last.eliminated),
+            (2, ActionKind::Timeout, None)
+        );
         assert_eq!(st.seats[2].timeouts, 1);
         // A was passed for: not a timeout, a stall.
         assert_eq!(st.seats[0].timeouts, 0);
@@ -1269,7 +1439,10 @@ mod tests {
 
         timeout(&mut st).unwrap();
         assert_eq!(st.seats[2].timeouts, 2);
-        assert_eq!(st.stalls, 1, "the timeout reset the stall count, A stalled again");
+        assert_eq!(
+            st.stalls, 1,
+            "the timeout reset the stall count, A stalled again"
+        );
         assert_eq!(st.result, None);
 
         let last = timeout(&mut st).unwrap();
@@ -1359,7 +1532,11 @@ mod tests {
         put(&mut st, 0, Kind::Hero, 2, 2);
         put(&mut st, 2, Kind::Pawn, 0, 9);
         let king_hop = |st: &mut State, back: bool| {
-            let (from, to) = if back { ((9, 8), (9, 9)) } else { ((9, 9), (9, 8)) };
+            let (from, to) = if back {
+                ((9, 8), (9, 9))
+            } else {
+                ((9, 9), (9, 8))
+            };
             mv(st, from, to).unwrap();
         };
         st.quiet = 50;
@@ -1418,7 +1595,10 @@ mod tests {
         assert_eq!(st.turn, 600);
         assert_eq!(st.result, None);
         mv(&mut st, (9, 9), (9, 8)).unwrap();
-        assert_eq!(st.turn, 600, "the turn number does not advance past the cap");
+        assert_eq!(
+            st.turn, 600,
+            "the turn number does not advance past the cap"
+        );
         assert_eq!(
             st.result,
             Some(Outcome {
@@ -1546,7 +1726,10 @@ mod tests {
         let mut st = blank([true, false, false, false]);
         put(&mut st, 0, Kind::King, 0, 0);
         assert_eq!(st.result, None);
-        assert_eq!(disconnect(&mut st, 0), Some(pass(0, ActionKind::Pass, Some(0))));
+        assert_eq!(
+            disconnect(&mut st, 0),
+            Some(pass(0, ActionKind::Pass, Some(0)))
+        );
         assert_eq!(
             st.result,
             Some(Outcome {
@@ -1559,20 +1742,65 @@ mod tests {
     #[test]
     fn action_kind_derivation() {
         let at = Tile::at;
-        assert_eq!(action_kind_of(Kind::Hero, at(4, 4), at(4, 4)), ActionKind::HeroWake);
-        assert_eq!(action_kind_of(Kind::Hero, at(4, 4), at(7, 7)), ActionKind::HeroSwap);
-        assert_eq!(action_kind_of(Kind::Joker, at(4, 4), at(5, 5)), ActionKind::Move);
-        assert_eq!(action_kind_of(Kind::Joker, at(4, 4), at(3, 4)), ActionKind::Move);
+        assert_eq!(
+            action_kind_of(Kind::Hero, at(4, 4), at(4, 4)),
+            ActionKind::HeroWake
+        );
+        assert_eq!(
+            action_kind_of(Kind::Hero, at(4, 4), at(7, 7)),
+            ActionKind::HeroSwap
+        );
+        assert_eq!(
+            action_kind_of(Kind::Joker, at(4, 4), at(5, 5)),
+            ActionKind::Move
+        );
+        assert_eq!(
+            action_kind_of(Kind::Joker, at(4, 4), at(3, 4)),
+            ActionKind::Move
+        );
         // The row mirror of x = 4 is x = 5: a step, narrated as a step.
-        assert_eq!(action_kind_of(Kind::Joker, at(4, 4), at(5, 4)), ActionKind::Move);
-        assert_eq!(action_kind_of(Kind::Joker, at(5, 2), at(4, 2)), ActionKind::Move);
-        assert_eq!(action_kind_of(Kind::Joker, at(2, 3), at(7, 3)), ActionKind::JokerTeleport);
-        assert_eq!(action_kind_of(Kind::Joker, at(2, 3), at(2, 6)), ActionKind::JokerTeleport);
-        assert_eq!(action_kind_of(Kind::Joker, at(2, 3), at(7, 6)), ActionKind::JokerTeleport);
-        assert_eq!(action_kind_of(Kind::Joker, at(2, 3), at(6, 6)), ActionKind::JokerPlace);
-        assert_eq!(action_kind_of(Kind::Joker, at(2, 3), at(2, 5)), ActionKind::JokerPlace);
-        for kind in [Kind::King, Kind::Queen, Kind::Rook, Kind::Bishop, Kind::Knight, Kind::Pawn, Kind::HeroAwake] {
-            assert_eq!(action_kind_of(kind, at(2, 3), at(7, 6)), ActionKind::Move, "{kind:?}");
+        assert_eq!(
+            action_kind_of(Kind::Joker, at(4, 4), at(5, 4)),
+            ActionKind::Move
+        );
+        assert_eq!(
+            action_kind_of(Kind::Joker, at(5, 2), at(4, 2)),
+            ActionKind::Move
+        );
+        assert_eq!(
+            action_kind_of(Kind::Joker, at(2, 3), at(7, 3)),
+            ActionKind::JokerTeleport
+        );
+        assert_eq!(
+            action_kind_of(Kind::Joker, at(2, 3), at(2, 6)),
+            ActionKind::JokerTeleport
+        );
+        assert_eq!(
+            action_kind_of(Kind::Joker, at(2, 3), at(7, 6)),
+            ActionKind::JokerTeleport
+        );
+        assert_eq!(
+            action_kind_of(Kind::Joker, at(2, 3), at(6, 6)),
+            ActionKind::JokerPlace
+        );
+        assert_eq!(
+            action_kind_of(Kind::Joker, at(2, 3), at(2, 5)),
+            ActionKind::JokerPlace
+        );
+        for kind in [
+            Kind::King,
+            Kind::Queen,
+            Kind::Rook,
+            Kind::Bishop,
+            Kind::Knight,
+            Kind::Pawn,
+            Kind::HeroAwake,
+        ] {
+            assert_eq!(
+                action_kind_of(kind, at(2, 3), at(7, 6)),
+                ActionKind::Move,
+                "{kind:?}"
+            );
         }
         // The dedup in targets agrees: the row-mirror step is one Move.
         let mut st = two();
@@ -1582,14 +1810,22 @@ mod tests {
         assert_eq!(at54.len(), 1);
         assert_eq!(at54[0].kind, TargetKind::Move);
         assert!(has(&ts, 4, 5, TargetKind::Move));
-        assert!(has(&ts, 5, 5, TargetKind::Move), "the centre mirror of (4,4) is also a step");
-        assert_eq!(ts.iter().filter(|t| t.kind == TargetKind::Teleport).count(), 0);
+        assert!(
+            has(&ts, 5, 5, TargetKind::Move),
+            "the centre mirror of (4,4) is also a step"
+        );
+        assert_eq!(
+            ts.iter().filter(|t| t.kind == TargetKind::Teleport).count(),
+            0
+        );
     }
 
     #[test]
     fn illegal_reasons_are_readable() {
         let all = [
             Illegal::GameOver,
+            Illegal::NotYourTurn,
+            Illegal::StaleTurn,
             Illegal::OffBoard,
             Illegal::NoPiece,
             Illegal::NotYours,
@@ -1600,18 +1836,37 @@ mod tests {
         ];
         for e in all {
             let r = e.reason();
-            assert!(!r.is_empty());
+            assert_ne!(r, "");
             assert!(r.chars().next().unwrap().is_lowercase(), "{r}");
             assert!(!r.ends_with('.'), "{r}");
             assert_eq!(e.to_string(), r);
         }
-        for e in [Illegal::SelfMove, Illegal::OwnPiece, Illegal::DormantHero, Illegal::NotATarget] {
+        for e in [
+            Illegal::SelfMove,
+            Illegal::OwnPiece,
+            Illegal::DormantHero,
+            Illegal::NotATarget,
+        ] {
             assert!(e.reason().starts_with("cannot move there"), "{e}");
         }
         assert_eq!(Illegal::NotATarget.reason(), "cannot move there");
+        assert_eq!(Illegal::NotYourTurn.reason(), "not your turn");
 
         // And each is produced where it should be.
         let mut st = full();
+        assert_eq!(
+            apply_move(&mut st, 1, 1, (9, 3), (9, 4)),
+            Err(Illegal::NotYourTurn)
+        );
+        assert_eq!(
+            apply_move(&mut st, 0, 2, (3, 0), (4, 0)),
+            Err(Illegal::StaleTurn)
+        );
+        assert_eq!(
+            apply_move(&mut st, 0, 1, (3, 0), (3, 1)),
+            Err(Illegal::OwnPiece)
+        );
+        assert_eq!(st, full(), "a refused move leaves the state untouched");
         assert_eq!(apply_xy(&mut st, 3, 0, 4, 10), Err(Illegal::OffBoard));
         assert_eq!(apply_xy(&mut st, 10, 0, 4, 0), Err(Illegal::OffBoard));
         assert_eq!(mv(&mut st, (4, 4), (5, 5)), Err(Illegal::NoPiece));
@@ -1622,21 +1877,38 @@ mod tests {
         assert_eq!(mv(&mut st, (0, 1), (0, 1)), Err(Illegal::DormantHero));
         assert_eq!(mv(&mut st, (0, 1), (4, 4)), Err(Illegal::DormantHero));
         assert_eq!(st, full(), "a refused move leaves the state untouched");
-        let ok = apply_xy(&mut st, 3, 0, 4, 0).unwrap();
+        let ok = apply_move(&mut st, 0, 1, (3, 0), (4, 0)).unwrap();
         assert_eq!(ok.kind, ActionKind::Move);
         assert_eq!(st.to_move, 1);
-        assert_eq!(mv(&mut st, (3, 1), (4, 1)), Err(Illegal::NotYours), "not seat 0's turn now");
+        assert_eq!(st.turn, 2);
+        assert_eq!(
+            apply_move(&mut st, 0, 2, (3, 1), (4, 1)),
+            Err(Illegal::NotYourTurn)
+        );
+        assert_eq!(
+            mv(&mut st, (3, 1), (4, 1)),
+            Err(Illegal::NotYours),
+            "not seat 0's turn now"
+        );
         st.result = Some(Outcome {
             winner: None,
             end: EndReason::Abandoned,
         });
         assert_eq!(mv(&mut st, (9, 3), (9, 4)), Err(Illegal::GameOver));
+        assert_eq!(
+            apply_move(&mut st, 1, 2, (9, 3), (9, 4)),
+            Err(Illegal::GameOver)
+        );
     }
 
     #[test]
     fn targets_of_an_empty_tile_are_none() {
         let st = full();
-        assert!(targets(&st, Tile::at(5, 5)).is_empty());
-        assert!(targets(&st, Tile::at(0, 0)).is_empty(), "the king is boxed in");
+        assert_eq!(targets(&st, Tile::at(5, 5)), Vec::new());
+        assert_eq!(
+            targets(&st, Tile::at(0, 0)),
+            Vec::new(),
+            "the king is boxed in"
+        );
     }
 }

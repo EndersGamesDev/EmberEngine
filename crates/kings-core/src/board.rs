@@ -270,15 +270,15 @@ pub const fn front_left(seat: u8) -> Dir {
 pub const fn to_global(seat: u8, u: u8, v: u8) -> Tile {
     assert!(u < SIDE && v < SIDE, "local coordinate off the board");
     let fr = frame(seat);
-    let x = fr.corner.x as i16 + u as i16 * fr.f.dx as i16 + v as i16 * fr.l.dx as i16;
-    let y = fr.corner.y as i16 + u as i16 * fr.f.dy as i16 + v as i16 * fr.l.dy as i16;
+    let gx = fr.corner.x as i16 + u as i16 * fr.f.dx as i16 + v as i16 * fr.l.dx as i16;
+    let gy = fr.corner.y as i16 + u as i16 * fr.f.dy as i16 + v as i16 * fr.l.dy as i16;
     // A rotation of the board maps the board onto itself.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let t = Tile {
-        x: x as u8,
-        y: y as u8,
+    let tile = Tile {
+        x: gx as u8,
+        y: gy as u8,
     };
-    t
+    tile
 }
 
 /// Global tile to the seat's local `(u, v)`.
@@ -302,9 +302,11 @@ pub const fn in_home_block(seat: u8, t: Tile) -> bool {
     u <= HOME_MAX && v <= HOME_MAX
 }
 
-/// Whether a tile is on one of a seat's two far edges: its forward or left
-/// neighbour is off the board. Computed, not tabulated, as section 1.2
-/// says; `promotion_line_is_a_formula` pins it to `u == 9 || v == 9`.
+/// Whether a tile is on one of a seat's two far edges.
+///
+/// A far-edge tile is one whose forward or left neighbour is off the board.
+/// Computed, not tabulated, as section 1.2 says;
+/// `promotion_line_is_a_formula` pins it to `u == 9 || v == 9`.
 #[must_use]
 pub const fn on_far_edge(seat: u8, t: Tile) -> bool {
     t.offset(forward(seat)).is_none() || t.offset(left(seat)).is_none()
@@ -747,10 +749,11 @@ impl std::fmt::Display for InvalidBoard {
 
 impl std::error::Error for InvalidBoard {}
 
-/// A `State` from a wire snapshot. The inverse of `to_state`: bit-identical
-/// for every state whose clock had not yet passed the displayed deadline
-/// (the grace window is not on the wire) and whose `result` is `None` (the
-/// result travels in `Phase`, not in the board).
+/// A `State` from a wire snapshot, the inverse of `to_state`.
+///
+/// Bit-identical for every state whose clock had not yet passed the
+/// displayed deadline (the grace window is not on the wire) and whose
+/// `result` is `None` (the result travels in `Phase`, not in the board).
 ///
 /// # Errors
 /// A snapshot that describes an impossible board.
@@ -979,7 +982,11 @@ mod tests {
             assert_eq!(Dir::in_frame(1, -1, fr), d(row.4));
             assert_eq!(Dir::in_frame(-1, 1, fr), d(row.5));
             // Rotations, never reflections: l is f turned 90 degrees CCW.
-            assert_eq!((fr.l.dx, fr.l.dy), (-fr.f.dy, fr.f.dx), "seat {seat} handedness");
+            assert_eq!(
+                (fr.l.dx, fr.l.dy),
+                (-fr.f.dy, fr.f.dx),
+                "seat {seat} handedness"
+            );
             // Forward points at the next seat's corner.
             let next = frame((seat + 1) % 4).corner;
             assert_eq!(
@@ -1067,7 +1074,10 @@ mod tests {
             assert_ne!(ms[1], ms[2]);
             assert_ne!(ms[0], ms[2]);
         }
-        assert_eq!(mirrors(Tile::at(1, 1)), [Tile::at(8, 1), Tile::at(1, 8), Tile::at(8, 8)]);
+        assert_eq!(
+            mirrors(Tile::at(1, 1)),
+            [Tile::at(8, 1), Tile::at(1, 8), Tile::at(8, 8)]
+        );
         assert_eq!(rot(rot(rot(rot(Tile::at(3, 7))))), Tile::at(3, 7));
     }
 
@@ -1117,8 +1127,13 @@ mod tests {
         // Bishops on (2,0) even and (1,2) odd: accepted (the doc's
         // "[B,R,R,B,N]-style" example is in fact an opposite-colour pair).
         assert_eq!(f([K, Q, H, J], [B, R, R, B, N]).validate(), Ok(()));
-        // The knight on the ring elbow.
-        assert_eq!(f([K, Q, H, J], [R, B, N, B, R]).validate(), Ok(()));
+        // The knight on the ring elbow, bishops on (2,1) odd and (0,2) even.
+        assert_eq!(f([K, Q, H, J], [R, B, N, R, B]).validate(), Ok(()));
+        // The knight on the elbow with bishops on (2,1) and (1,2): both odd.
+        assert_eq!(
+            f([K, Q, H, J], [R, B, N, B, R]).validate(),
+            Err(FormationError::BishopsOnOneColour)
+        );
         // Wrong multisets.
         assert_eq!(
             f([K, K, H, J], default_epic).validate(),
@@ -1150,7 +1165,7 @@ mod tests {
             FormationError::EpicNotAPermutation,
             FormationError::BishopsOnOneColour,
         ] {
-            assert!(!e.reason().is_empty());
+            assert_ne!(e.reason(), "");
             assert_eq!(e.to_string(), e.reason());
         }
         // kind_at covers the three classes.

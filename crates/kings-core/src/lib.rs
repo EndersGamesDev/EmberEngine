@@ -26,4 +26,4 @@ pub mod rules;
 pub use board::{Dir, Frame, Outcome, Piece, Seat, State, Tile, setup};
 pub use clock::TurnClock;
 pub use proto::{ActionKind, EndReason, Formation, Kind, LastAction};
-pub use rules::{Illegal, Target, TargetKind, apply, disconnect, targets, timeout};
+pub use rules::{Illegal, Target, TargetKind, apply, apply_move, disconnect, targets, timeout};

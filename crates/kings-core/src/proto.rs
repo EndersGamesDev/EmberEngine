@@ -669,7 +669,8 @@ mod tests {
         }
 
         // A board with no `last`: the same board, nothing to narrate.
-        let old = r#"{"turn":1,"seat":0,"left_ms":15000,"quiet":0,"stalls":0,"pieces":[],"seats":[]}"#;
+        let old =
+            r#"{"turn":1,"seat":0,"left_ms":15000,"quiet":0,"stalls":0,"pieces":[],"seats":[]}"#;
         let board: BoardState = serde_json::from_str(old).expect("old board");
         assert_eq!(board.last, None);
     }
@@ -718,7 +719,10 @@ mod tests {
         assert_eq!(sanitize_handle(""), "player");
         assert_eq!(sanitize_handle(&"x".repeat(100)).len(), MAX_HANDLE_LEN);
         assert_eq!(sanitize("a\nb", MAX_LOBBY_LEN), "ab");
-        assert_eq!(sanitize(&"p".repeat(100), MAX_PASSWORD_LEN).len(), MAX_PASSWORD_LEN);
+        assert_eq!(
+            sanitize(&"p".repeat(100), MAX_PASSWORD_LEN).len(),
+            MAX_PASSWORD_LEN
+        );
     }
 
     /// The three symptoms this predicate caused when it was wrong are in
@@ -737,7 +741,10 @@ mod tests {
             );
         }
         let pending = Error::from_raw_os_error(WINDOWS_IO_PENDING);
-        assert!(is_transient_read(&pending), "os error 997 must be transient");
+        assert!(
+            is_transient_read(&pending),
+            "os error 997 must be transient"
+        );
         for kind in [
             ErrorKind::ConnectionReset,
             ErrorKind::ConnectionAborted,
