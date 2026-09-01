@@ -146,29 +146,37 @@ This guarantee begins only where evidence exists. Arena v7-v12 and Fire protocol
 
 ## 7. Crate disposition
 
-The final table will give each of the eleven base crates one target and one reason; new outer-protocol, shared-client, legacy-adapter, and version-crate boundaries will be named explicitly.
+The eleven-crate inventory is the base workspace's game and engine surface (`Cargo.toml:1-16`); tools remain tools and are outside this disposition. New crates are `ember-client-net`, `ember-legacy`, and the version crates under `games/`. Reusing `ember-net` for the outer protocol and `ember-server` for the host keeps the durable names attached to their intended repository-wide responsibilities.
 
 | Base crate | Target disposition | Reason |
 |---|---|---|
-| `ember-editor` | Remains the editor | Its responsibilities are outside multiplayer hosting. |
-| `ember-engine` | Remains the current engine | Every hosted version rebases onto this one engine. |
-| `ember-net` | Outer-protocol disposition to be finalized | Its present cube-world protocol must be separated from the universal lobby and session contract. |
-| `ember-server` | Becomes the sole server binary | The existing binary is the natural deploy owner, subject to evidence from its present role. |
-| `fire` | Latest Fire client plus shared-net hooks | Game presentation remains per game while generic online machinery moves out. |
-| `fire-core` | Versioned Fire simulation and codec source | A frozen Fire behavior contract needs a named in-tree version boundary. |
-| `fire-server` | Retired after migration | Generic hosting moves to the sole server and Fire behavior moves to versioned source. |
-| `game` | Demo disposition to be decided firmly | Its value as a hosted contract must be weighed against carrying a third compatibility burden. |
-| `pong` | Latest Pong client plus shared-net hooks | Game presentation remains per game while generic online machinery moves out. |
-| `pong-core` | Versioned Pong simulation and codec source | A frozen Pong behavior contract needs a named in-tree version boundary. |
-| `pong-server` | Retired after migration | Generic hosting moves to the sole server and Pong behavior moves to versioned source. |
+| `ember-editor` | Keep as the editor; retarget its Arena dependency to the latest Arena version crate. | It authors game data but owns neither hosting nor compatibility; its current direct `pong-core` dependency shows the path that must move (`crates/ember-editor/Cargo.toml:15-20`). |
+| `ember-engine` | Keep as the one current engine, with adapters outside it implementing `ember-legacy`. | Every current and historical client-side source consumer must compile against this engine; renderer ownership does not move (`crates/ember-engine/src/lib.rs:5-11`). |
+| `ember-net` | Replace the cube protocol with the universal outer WebSocket protocol and bootstrap codecs. | A repository-wide network name should own hello/list/select/framing, while game payloads and cube constants do not belong in the outer layer. |
+| `ember-server` | Replace the cube simulation with the sole host binary and registry runtime. | Its single-writer ownership is the right authority model, but admission, limits, lobby tuples, dispatch, metrics, and shutdown become game-neutral. |
+| `fire` | Keep as the local and latest Fire client; move generic networking to `ember-client-net` and implement Fire hooks. | Rendering, controls, and car-specific replay remain game code; its WebSocket channel and connection progress are shared scaffolding (`crates/fire/src/lib.rs:9-17`). |
+| `fire-core` | Move into `games/fire/v001` and remove the base crate after consumers retarget. | Its simulation and protocol jointly define Fire 1 (`crates/fire-core/src/lib.rs:6-17`), so they belong inside that frozen version boundary rather than a moving unversioned crate. |
+| `fire-server` | Delete after its generic host code, version behavior, tests, and probe move. | Connection/lobby/runtime ownership goes to `ember-server`; race behavior goes to `games/fire/v001`; retaining the binary would preserve a second deploy boundary. |
+| `game` | Retire and delete the cube-world demo rather than host it. | It is a native raw-TCP global-world demo with no catalogued lobby contract (`crates/game/src/main.rs:6-10`); keeping it would force the universal server to carry a second transport for a superseded demonstration. |
+| `pong` | Keep as the Pong Classic and latest Arena client shell; absorb local Pong `sim`, move generic networking out, and implement Arena hooks. | The crate currently contains two products: local Pong presentation and the online Arena client (`crates/pong/src/lib.rs:6-10`); neither is a server host. |
+| `pong-core` | Split and remove: move `proto` plus `shooter` to `games/arena/v012`, and move local `sim` into `pong`. | Its present module list combines an online Arena contract with unrelated local Pong simulation (`crates/pong-core/src/lib.rs:6-12`); copying the whole crate would misname the hosted game. |
+| `pong-server` | Delete after its generic host code, Arena behavior, tests, and wsbot move. | Connection/lobby/runtime ownership goes to `ember-server`; Arena behavior goes to version crates; retaining the binary would preserve the copied server and tunnel. |
+
+The cube demo is retired, not selected as the first hosted game. It exercises the easier protocol—one raw-TCP world with no lobby selector—while Arena already has public WebSocket clients, lobby browsing, exact refusal, hostile-input limits, and the largest reconciliation burden. Migrating Arena first tests the abstraction against the difficult existing contract; preserving cube world would test less and permanently charge more.
 
 ## 8. Relation to authority and time
 
-The [authority-and-time proposal](https://github.com/EndersGamesDev/EmberEngine/issues/2) treats wire-visible tick dissolution as a deliberate protocol event. Consolidation is such an event: the new outer protocol begins frequency-free and timestamped, while each game's inner payload migrates only at its own version cut. One server also gives session truth one literal writer. This design does not depend on the proposal landing unchanged.
+The [authority-and-time proposal](https://github.com/EndersGamesDev/EmberEngine/issues/2) treats wire-visible tick dissolution as a deliberate protocol event. Consolidation is such an event: the new outer protocol begins with timestamps and durations and never carries `tick_hz`; each inner protocol drops wire-visible ticks only in its own new version cut, so Arena 12 and Fire 1 may retain their present fields unchanged. One server makes “one writer of truth” literal as ownership: each lobby session has exactly one authoritative executor even if different sessions run concurrently. This design needs neither the proposal's exact types nor its landing order; if the law changes, the frequency-free outer boundary and per-version cuts still stand.
 
 ## 9. Honest costs and enforcement
 
-This section will account for larger workspace and binary surfaces, compile and lint cost, the obligation to update every hosted consumer when the moving legacy surface changes, curating a finite hosted set, security limits per codec, and the distinction between source compatibility and behavioral compatibility.
+One binary concentrates failure. A bad host release can affect every game, a global admission bug can exhaust all capacity, and a pathological version can starve siblings. The counterweight is isolation inside the process: global caps reserve headroom, each registry entry has player/lobby/frame/message/outbound/time limits, each lobby has one authority owner, queues are bounded, panics are contained at the session boundary where Rust permits, and metrics are labelled by game and version. The deployment gate must prove that overload or failure in one fixture game leaves another listable and playable.
+
+Evergreen versions increase source, compile, lint, test, link, binary, and review cost. Copy-on-write intentionally duplicates semantic code, and a legacy-surface move touches every consumer. The costs are bounded by keeping `ember-legacy` narrow, deduplicating only behavior-neutral libraries, retaining versions by an explicit policy, and requiring the moving change to update every consumer in the same series. They are not hidden behind old binaries that no current build can verify.
+
+Legacy ingress is permanent for a hosted pre-consolidation client and therefore security surface. Its selector is a closed manifest value, its outer budgets apply before legacy decode, and its wire/transcript fixtures run beside canonical ones. It receives no new game, feature, or general negotiation path. Removing it requires delisting every client that depends on it, not merely deleting inconvenient adapter code.
+
+The verification stack has distinct jobs: workspace build and lints prove every source consumer follows current Rust and internal APIs; `hosted-contract` proves frozen frames and gameplay traces; registry tests prove manifest completeness, unique keys, exact selection, and refusal contents; cross-game host tests prove isolation and limits; frozen-client end-to-end tests prove real hello/list/create/join/play transcripts; deployment probes prove the public endpoint, every selected version, drain, and rollback. Compilation is necessary plumbing evidence and never substitutes for behavior evidence.
 
 ## 10. Migration: buildable steps, visible behavior
 
@@ -176,28 +184,48 @@ Each stage is sized for one implementation lane, identifies exact responsibility
 
 ### Stage 1 — Extract the outer transport and host one latest game
 
-Move shared connection, TLS, rate-limit, and lobby ownership into the outer server while retaining one latest game behind it. Gate the outer state machine, exact keyed join, and unchanged latest-version behavior. Existing endpoints remain authoritative during this stage.
+Repurpose `ember-net` as the canonical outer protocol, repurpose `ember-server` as a WebSocket host, add the first `ember-client-net` transport seam, and adapt current `pong-core` Arena 12 behind a provisional static entry. Move the strongest admission, queue, timeout, rate-limit, lobby, and single-writer rules from `pong-server`; retire `game` and the cube-specific protocol/server behavior in the same buildable change because their old dependency contract no longer exists.
+
+Gates: workspace build/lints; outer codec and state-machine fixtures; exact `(arena,12)` create/join/refusal; no inner frame before join; byte/message/queue limits; Arena server simulation parity against `pong-server`; and cube crate absence from the workspace. Deployed clients continue using `pong-server`; no public URL changes and no client is claimed migrated.
 
 ### Stage 2 — Add the second latest game
 
-Move the second game's generic server path into the host and register its latest behavior. Gate cross-game lobby isolation, limits, codec dispatch, and parity with its old server. Both old endpoints remain available.
+Adapt `fire-core` protocol 1 behind the host, move generic Fire WebSocket/client lifecycle into `ember-client-net`, and leave car replay as a Fire hook. Keep `fire-server` and `pong-server` buildable against their existing cores for deployment continuity.
+
+Gates: Fire simulation and wire parity; one all-game list containing distinct `(arena,12,...)` and `(fire,1,...)` rows; identical lobby names coexisting; codec dispatch never crossing keys; per-version and global limits; and a fault/overload in one game leaving the other playable. Both public old servers remain authoritative, so deployed clients see no change.
 
 ### Stage 3 — Introduce the registry and version-crate layout
 
-Replace ad hoc dispatch with the manifest-backed registry and establish the moving legacy surface. The same series updates every registered consumer. Gate full registry construction, workspace lint coverage, and behavior fixtures for both latest versions.
+Add `games/hosted.toml` and `ember-legacy`; move Arena `proto` plus `shooter` into `games/arena/v012`, move Fire core into `games/fire/v001`, move local Pong `sim` into `pong`, and retarget `pong`, `fire`, `ember-editor`, `pong-server`, `fire-server`, and the sole host. This is the first proof of the update duty: the change that introduces or moves the legacy API updates every in-tree consumer in the same series, with no compatibility branch left stale.
+
+Gates: manifest/dependency/registry equality; unique keys and latest flags; workspace build/lints over every version crate and client target; `hosted-contract` wire, refusal, and deterministic traces for Arena 12 and Fire 1; editor build against the latest Arena crate; both old binaries still passing their parity tests. Deployed processes and URLs remain unchanged.
 
 ### Stage 4 — Cut the first evergreen old version
 
-Copy a latest version into a new immutable behavior identity before evolving the latest contract. Gate recorded wire fixtures, deterministic simulation traces, refusal behavior, and side-by-side old-client play so frozen semantics survive evergreen plumbing.
+Copy `games/arena/v012` to `v013` before changing wire or rules, register both, move the latest Arena client to outer version 1 plus Arena 13, and retain Arena 12 through its manifest-declared legacy selector. Any first post-consolidation gameplay change lands only in v13; if none is ready, the outer transition itself is sufficient reason for the cut because its client wire changes.
+
+Gates: unchanged v12 golden frames and deterministic trace; v12 frozen page/bundle hello, list, join, and play through `legacy_game=arena`; v13 canonical hello, tuple list, exact join, and new fixtures; simultaneous v12/v13 lobbies with the same name; refusal listing both hosted versions; and an `ember-legacy` test mutation adapted across both versions without fixture movement. Old public servers still serve deployed clients, while the new path is exercised only by staging clients.
 
 ### Stage 5 — Retire per-game server binaries
 
-Move the remaining deployment and operational responsibilities into the sole server and remove the redundant binaries. Gate responsibility coverage, resource isolation, graceful shutdown, and rollback readiness while old processes remain available.
+Move wsbot, Fire probe, end-to-end suites, occupancy, health, metrics, graceful session drain, and deployment ownership into `ember-server`; delete `pong-server` and `fire-server`; consolidate their scripts into one server build, one process, one named tunnel, and one health publication. Old already-running binaries remain available as rollback artifacts until switchover drains them; source no longer treats them as deploy targets.
+
+Gates: every old test responsibility has a named new owner; public-style probes cover canonical list and every hosted key; occupancy and drain are game/version labelled; shutdown stops admission before sessions; rollback can restore the previous one-server artifact; workspace and `hosted-contract` are green without either old crate. Deployed clients still use the old processes.
 
 ### Stage 6 — Switch deployment and drain old servers
 
-Publish the one endpoint with the old servers still running, direct new clients to it, observe compatibility and session health, stop admitting new sessions to old endpoints, and remove those processes only after their sessions drain. Gate routing, rollback, metrics, and the explicit client-compatibility matrix.
+Start the sole server and stable tunnel without stopping either old server. Publish the canonical URL to new clients and publish the same origin/path with `legacy_game=arena` and `legacy_game=fire` query selectors in the old `ws` and `fire_ws` keys. This stops new page loads from entering old processes while existing WebSocket sessions continue there. When their occupancy reaches zero, stop the old processes and tunnels; do not kill active games to complete a deploy.
+
+Gates: the compatibility matrix in §3.3 against public routing; create/play probes for every manifest key; hub all-game listing; legacy list tags for Arena and Fire; frozen-client transcripts; cross-game isolation under load; metrics and alerts from the single process; admission-stop and zero-occupancy drain; and a timed rollback that restores routing before the old artifacts are discarded. New clients see one all-game endpoint, retained frozen clients see their exact game through the same server, local-only games are unaffected, and explicitly unhosted clients receive an intelligible refusal rather than substituted gameplay.
 
 ## 11. Resolved defaults and remaining product questions
 
-The full design will choose defaults for the hosted-set policy, demo fate, compatibility-crate name, version layout, and retirement mechanics. Questions that require product judgment after those defaults will remain explicit rather than weakening the implementation contract.
+The defaults are settled: `ember-server` is the sole binary; `ember-net` owns a JSON/WebSocket outer protocol; versioned workspace crates are used instead of modules; `ember-legacy` is the deliberately unstable name and surface; public network versions are retained without automatic expiry; the cube demo is retired; Arena migrates first; old servers drain rather than being kicked; and legacy query selection exists only for already deployed Arena and Fire clients.
+
+Open product and rollout questions remain, but none changes those boundaries:
+
+- Which catalogued Arena versions have recoverable source and frozen bundles sufficient to enter the initial manifest? Base directly evidences pages v7-v12 but not a buildable source tree per version; each earlier admission needs an audit rather than a blanket promise.
+- Who owns delisting approval, player notice, and emergency security removal, and where is the supported-version notice published? The default is retain; this question assigns the exceptional decision.
+- What measured CPU, memory, outbound-byte, connection, lobby, and step-time budgets belong in the first Arena and Fire `VersionLimits` profiles? The architecture requires hard caps, while their numeric values need estate measurements.
+- What stable public domain and certificate/tunnel arrangement replaces quick-hostname publication, and how long must the legacy `server.json` keys remain cached? The design requires one stable origin and same-listener selectors; operations must choose the concrete provider configuration.
+- Which retained client artifacts are distribution commitments in addition to server source, and how are their hashes recorded beside `hosted-contract` fixtures? The server can preserve behavior only if players can still obtain or already possess the matching client.
