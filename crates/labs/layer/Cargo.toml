@@ -10,11 +10,13 @@ crate-type = ["cdylib", "rlib"]
 bytemuck.workspace = true
 naga = { version = "24", features = ["wgsl-in"] }
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 wgpu = { workspace = true, features = ["wgsl"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["Document", "Element", "HtmlCanvasElement", "Performance", "Window"] }
 wgpu = { workspace = true, features = ["webgl", "wgsl"] }
 
