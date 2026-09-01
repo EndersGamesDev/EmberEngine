@@ -90,12 +90,14 @@ pub struct Target {
 
 impl Target {
     /// The target's tile.
+    ///
+    /// # Panics
+    /// Off the board. Every target `targets` produces is on the board; a
+    /// `Target` built by hand or decoded from JSON with a coordinate above
+    /// 9 is a bug, and this refuses it instead of aliasing another tile.
     #[must_use]
     pub const fn tile(self) -> Tile {
-        Tile {
-            x: self.x,
-            y: self.y,
-        }
+        Tile::at(self.x, self.y)
     }
 }
 
@@ -880,6 +882,82 @@ mod tests {
         }
     }
 
+    /// Only a pawn promotes (section 1.6, 1.9 step 4): every other kind
+    /// reaching a far-edge tile keeps its kind and reports `promoted =
+    /// false`, an awake hero included.
+    #[test]
+    fn only_a_pawn_promotes() {
+        for seat in 0..4u8 {
+            // Movers that reach their far edge by a slide or a step.
+            // Destinations avoid the corners, where the other kings stand.
+            for (kind, start, to) in [
+                (Kind::Rook, (5, 4), (9, 4)),
+                (Kind::Queen, (5, 4), (9, 8)),
+                (Kind::King, (8, 4), (9, 4)),
+                (Kind::Knight, (7, 8), (9, 7)),
+                (Kind::HeroAwake, (5, 4), (5, 9)),
+                (Kind::Bishop, (7, 6), (9, 8)),
+                (Kind::Joker, (8, 7), (9, 8)),
+            ] {
+                let mut st = blank([true; 4]);
+                st.to_move = seat;
+                for s in 0..4u8 {
+                    let corner = to_global(s, 0, 0);
+                    put(&mut st, s, Kind::King, corner.x, corner.y);
+                }
+                let from = to_global(seat, start.0, start.1);
+                let dest = to_global(seat, to.0, to.1);
+                if kind == Kind::King {
+                    // The corner king stands in for the mover.
+                    st.set(to_global(seat, 0, 0), None);
+                }
+                put(&mut st, seat, kind, from.x, from.y);
+                assert!(on_far_edge(seat, dest), "seat {seat} {kind:?} {to:?}");
+                let last = apply(&mut st, from, dest)
+                    .unwrap_or_else(|e| panic!("seat {seat} {kind:?} {start:?}->{to:?}: {e}"));
+                assert!(!last.promoted, "seat {seat} {kind:?}");
+                assert_eq!(st.piece(dest).unwrap().kind, kind, "seat {seat}");
+                assert_eq!(st.piece(dest).unwrap().owner, seat);
+            }
+            // The joker's capture onto a far-edge tile: from local (8,8)
+            // its front-left is local (9,9), the far corner.
+            let mut st = blank([true; 4]);
+            st.to_move = seat;
+            for s in 0..4u8 {
+                let corner = to_global(s, 0, 0);
+                put(&mut st, s, Kind::King, corner.x, corner.y);
+            }
+            let from = to_global(seat, 8, 8);
+            put(&mut st, seat, Kind::Joker, from.x, from.y);
+            let fl = from.offset(front_left(seat)).unwrap();
+            assert_eq!(fl, to_global(seat, 9, 9));
+            assert!(on_far_edge(seat, fl));
+            let last = apply(&mut st, from, fl).unwrap();
+            assert_eq!(last.captured, Some(Kind::King));
+            assert!(!last.promoted);
+            assert_eq!(st.piece(fl).unwrap().kind, Kind::Joker);
+        }
+        // The joker's teleport onto a far edge: seat 0 from (0,3) to its
+        // row mirror (9,3), where u = 9.
+        let mut st = two();
+        put(&mut st, 0, Kind::Joker, 0, 3);
+        assert!(on_far_edge(0, Tile::at(9, 3)));
+        let last = mv(&mut st, (0, 3), (9, 3)).unwrap();
+        assert_eq!(last.kind, ActionKind::JokerTeleport);
+        assert!(!last.promoted);
+        assert_eq!(st.piece(Tile::at(9, 3)).unwrap().kind, Kind::Joker);
+        // A pawn on the same far-edge tile does promote: the contrast.
+        let mut st = blank([true; 4]);
+        for s in 0..4u8 {
+            let corner = to_global(s, 0, 0);
+            put(&mut st, s, Kind::King, corner.x, corner.y);
+        }
+        put(&mut st, 0, Kind::Pawn, 8, 4);
+        let last = mv(&mut st, (8, 4), (9, 4)).unwrap();
+        assert!(last.promoted);
+        assert_eq!(st.piece(Tile::at(9, 4)).unwrap().kind, Kind::Queen);
+    }
+
     #[test]
     fn joker_step_only_onto_empty() {
         let mut st = two();
@@ -1478,6 +1556,167 @@ mod tests {
         assert_eq!(st.to_move, 2);
         assert_eq!(st.turn, 3, "the pass consumed a turn number");
         assert_eq!(st.clock.left_ms, crate::clock::TURN_TOTAL_MS);
+    }
+
+    /// Section 1.9 step 4: `clock = TURN_MS` on every hand-over. The wire
+    /// field the client displays is `to_state(..).left_ms`, so the check
+    /// is made on it, from a clock that had been running.
+    #[test]
+    fn end_turn_resets_the_clock() {
+        use crate::board::to_state;
+        use crate::clock::{TURN_TOTAL_MS, TurnClock};
+        use crate::proto::TURN_MS;
+
+        // After a move.
+        let mut st = full();
+        assert!(!st.clock.tick(6_600));
+        assert_eq!(to_state(&st).left_ms, TURN_MS - 6_600);
+        mv(&mut st, (3, 0), (4, 0)).unwrap();
+        assert_eq!(st.to_move, 1);
+        assert_eq!(to_state(&st).left_ms, TURN_MS, "seat 1's turn starts full");
+        assert_eq!(st.clock, TurnClock::new());
+
+        // After a timeout, which is applied on an expired clock.
+        assert!(st.clock.tick(TURN_TOTAL_MS));
+        assert_eq!(to_state(&st).left_ms, 0);
+        timeout(&mut st).unwrap();
+        assert_eq!(st.to_move, 2);
+        assert_eq!(to_state(&st).left_ms, TURN_MS);
+        assert!(!st.clock.expired());
+
+        // After the mover's disconnect.
+        st.clock.tick(9_000);
+        disconnect(&mut st, 2).unwrap();
+        assert_eq!(st.to_move, 3);
+        assert_eq!(to_state(&st).left_ms, TURN_MS);
+
+        // After a forced pass, the seat that finally gets the turn has a
+        // full clock too.
+        let mut st = blank([true, false, true, false]);
+        stalled_seat_0(&mut st);
+        put(&mut st, 2, Kind::King, 0, 0);
+        st.to_move = 2;
+        st.seats[2].own_turns = 1;
+        st.seats[0].own_turns = 0;
+        st.clock.tick(12_345);
+        mv(&mut st, (0, 0), (1, 1)).unwrap();
+        assert_eq!(st.last.unwrap().kind, ActionKind::Pass);
+        assert_eq!(st.to_move, 2);
+        assert_eq!(to_state(&st).left_ms, TURN_MS);
+    }
+
+    /// A seat whose only legal action is the joker placement is not
+    /// force-passed: `has_any_move` is evaluated with that seat to move, so
+    /// the placement counts (section 1.5, 1.6).
+    #[test]
+    fn a_placement_only_seat_gets_its_turn() {
+        // Seat 0 clumped in the NE corner: king, joker and seven pawns
+        // filling x, y in 7..=9, every one of them stuck. The joker's three
+        // mirrors (1,8), (8,1), (1,1) are held by garrison rooks and a
+        // seat-2 rook.
+        let build = |own_turns_0: u32| {
+            let mut st = blank([true, false, true, false]);
+            put(&mut st, 0, Kind::King, 9, 9);
+            put(&mut st, 0, Kind::Joker, 8, 8);
+            for (x, y) in [(7, 7), (8, 7), (9, 7), (7, 8), (9, 8), (7, 9), (8, 9)] {
+                put(&mut st, 0, Kind::Pawn, x, y);
+            }
+            put(&mut st, 1, Kind::Rook, 8, 1);
+            put(&mut st, 3, Kind::Rook, 1, 8);
+            put(&mut st, 2, Kind::Rook, 1, 1);
+            put(&mut st, 2, Kind::King, 0, 0);
+            st.to_move = 2;
+            st.seats[2].own_turns = 1;
+            st.seats[0].own_turns = own_turns_0;
+            st
+        };
+        // Off a placement turn, seat 0 has nothing at all.
+        let st = build(3);
+        assert!(!has_any_move(&st, 0));
+        for (t, _) in st.pieces_of(0) {
+            assert!(targets(&st, t).is_empty(), "{t:?}");
+        }
+        let mut st = build(3);
+        mv(&mut st, (0, 0), (0, 1)).unwrap();
+        assert_eq!(st.to_move, 2, "own turn 4: forced pass");
+        assert_eq!(st.seats[0].own_turns, 4);
+        assert_eq!(st.stalls, 1);
+        assert_eq!(st.last.unwrap().kind, ActionKind::Pass);
+
+        // On its fifth own turn the placement is its one legal action, and
+        // the seat gets the turn.
+        let mut st = build(4);
+        mv(&mut st, (0, 0), (0, 1)).unwrap();
+        assert_eq!(st.to_move, 0, "own turn 5: the placement is a move");
+        assert_eq!(st.seats[0].own_turns, 5);
+        assert_eq!(st.stalls, 0);
+        assert_eq!(st.result, None);
+        assert_eq!(st.last.unwrap().seat, 2, "no pass was narrated");
+        assert!(has_any_move(&st, 0));
+        let ts = targets(&st, Tile::at(8, 8));
+        assert!(!ts.is_empty());
+        assert!(ts.iter().all(|t| t.kind == TargetKind::Place));
+        for (t, p) in st.pieces_of(0) {
+            if p.kind != Kind::Joker {
+                assert!(targets(&st, t).is_empty(), "{t:?}");
+            }
+        }
+        // Seen from another seat's turn the same board offers nothing: the
+        // stall check must not be run that way.
+        let mut view = st.clone();
+        view.to_move = 2;
+        assert!(!has_any_move(&view, 0));
+        // And the placement is applied.
+        let last = mv(&mut st, (8, 8), (4, 4)).unwrap();
+        assert_eq!(last.kind, ActionKind::JokerPlace);
+        assert_eq!(st.to_move, 2);
+    }
+
+    /// A forced pass does not touch `timeouts` (section 1.5): neither adds
+    /// a mark nor clears the marks already there. Only a legal move resets
+    /// the count, so a pass between two timeouts still leads to the third.
+    #[test]
+    fn forced_pass_keeps_the_timeout_count() {
+        let mut st = blank([true, false, true, false]);
+        stalled_seat_0(&mut st);
+        put(&mut st, 2, Kind::King, 0, 0);
+        st.to_move = 2;
+        st.seats[2].own_turns = 1;
+        st.seats[0].own_turns = 0;
+        st.seats[0].timeouts = 2;
+        mv(&mut st, (0, 0), (0, 1)).unwrap();
+        assert_eq!(st.last.unwrap(), pass(0, ActionKind::Pass, None));
+        assert_eq!(st.seats[0].timeouts, 2, "the pass left the count alone");
+        assert!(st.seats[0].alive);
+        assert_eq!(st.to_move, 2);
+        // Free seat 0's king: its next own turn runs a clock, and times out.
+        st.set(Tile::at(8, 8), None);
+        mv(&mut st, (0, 1), (0, 0)).unwrap();
+        assert_eq!(st.to_move, 0);
+        assert!(has_any_move(&st, 0));
+        let last = timeout(&mut st).unwrap();
+        assert_eq!(last.eliminated, Some(0), "the third mark");
+        assert!(!st.seats[0].alive);
+        assert_eq!(
+            st.result,
+            Some(Outcome {
+                winner: Some(2),
+                end: EndReason::LastKing
+            })
+        );
+    }
+
+    /// A hand-built off-board target panics at `tile()` rather than
+    /// aliasing another tile or indexing past the board.
+    #[test]
+    #[should_panic(expected = "tile off the board")]
+    fn an_off_board_target_panics_on_tile() {
+        let t = Target {
+            x: 0,
+            y: 10,
+            kind: TargetKind::Move,
+        };
+        let _ = full().piece(t.tile());
     }
 
     #[test]
