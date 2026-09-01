@@ -33,11 +33,11 @@ pub fn init_diagnostics() {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,wgpu_core=warn,wgpu_hal=warn,naga=warn"));
     let _ = tracing_log::LogTracer::init();
-    let _ = tracing_subscriber::fmt()
+    drop(tracing_subscriber::fmt()
         .with_env_filter(filter)
         // No color codes when output is redirected to a file.
         .with_ansi(std::io::stdout().is_terminal())
-        .try_init();
+        .try_init());
 }
 
 /// A frame gap above this is reported as a stall.
@@ -108,7 +108,7 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                 .get_element_by_id("ember-root")
                 .unwrap_or_else(|| document.body().expect("no body").into());
             root.append_child(&canvas).expect("append canvas");
-            let _ = canvas.focus(); // keyboard events go to the canvas
+            drop(canvas.focus()); // keyboard events go to the canvas
             // NOTE: no request_inner_size here — winit would pin an inline
             // CSS size that overrides the page's responsive width rule. CSS
             // owns layout; the per-frame sync below owns the backing store.
@@ -203,9 +203,9 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                     && let Some(window) = self.window.as_ref()
                 {
                     use winit::window::CursorGrabMode;
-                    let _ = window
+                    drop(window
                         .set_cursor_grab(CursorGrabMode::Locked)
-                        .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined));
+                        .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined)));
                     window.set_cursor_visible(false);
                 }
             }

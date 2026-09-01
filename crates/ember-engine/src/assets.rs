@@ -67,7 +67,7 @@ fn image_to_rgba8(img: &gltf::image::Data) -> Option<TextureData> {
 }
 
 fn collect(
-    node: &gltf::Node,
+    node: &gltf::Node<'_>,
     parent: Mat4,
     buffers: &[gltf::buffer::Data],
     images: &[gltf::image::Data],

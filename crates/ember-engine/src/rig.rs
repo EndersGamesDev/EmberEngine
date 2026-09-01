@@ -172,10 +172,7 @@ pub fn skeleton_from_bind(pos: &[Vec3; joint::COUNT]) -> (Skeleton, HumanoidDims
         let parent = PARENTS[j];
         joints[j] = JointDef {
             parent,
-            offset: match parent {
-                Some(p) => pos[j] - pos[p],
-                None => Vec3::ZERO,
-            },
+            offset: parent.map_or(Vec3::ZERO, |p| pos[j] - pos[p]),
         };
     }
 
@@ -374,10 +371,9 @@ impl Default for Pose {
 pub fn world_joints(skel: &Skeleton, pose: &Pose) -> [(Vec3, Quat); joint::COUNT] {
     let mut out = [(Vec3::ZERO, Quat::IDENTITY); joint::COUNT];
     for (i, j) in skel.joints.iter().enumerate() {
-        let (pp, pr) = match j.parent {
-            Some(p) => out[p],
-            None => (pose.root_pos, Quat::IDENTITY),
-        };
+        let (pp, pr) = j
+            .parent
+            .map_or((pose.root_pos, Quat::IDENTITY), |p| out[p]);
         // The correction sits innermost: it poses the bind skeleton, then
         // the animation swings that corrected limb in its parent's frame.
         out[i] = (
@@ -493,10 +489,7 @@ pub fn push_rig(
         }
         let r_local = jr * part.pre_rot;
         let p_local = jp + jr * part.offset - r_local * (part.anchor * sv);
-        let part_col = match part.tint {
-            Some(t) => t * col,
-            None => col,
-        };
+        let part_col = part.tint.map_or(col, |t| t * col);
         frame.instances.push(
             Instance::new(
                 origin + face * (p_local * scale_mult),

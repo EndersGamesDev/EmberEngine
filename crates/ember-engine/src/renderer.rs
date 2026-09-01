@@ -421,9 +421,11 @@ impl Renderer {
             rgba8: vec![255, 255, 255, 255],
         };
 
-        let mut mesh_textures: Vec<Option<TextureData>> = std::iter::once(None)
+        let mesh_textures: Vec<Option<TextureData>> = std::iter::once(None)
             .chain(extra_meshes.iter().map(|m| m.texture.clone()))
             .collect();
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut mesh_textures = mesh_textures;
         // Native debug aid: EMBER_DEBUG_TEXTURE=<path.png> textures the
         // built-in cube (mesh 0) without any game-side changes.
         #[cfg(not(target_arch = "wasm32"))]

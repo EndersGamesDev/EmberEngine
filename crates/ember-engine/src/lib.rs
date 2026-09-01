@@ -1,4 +1,6 @@
 #![recursion_limit = "256"]
+// Angle normalization intentionally advances through floating-point turn boundaries.
+#![allow(clippy::while_float)]
 
 //! Ember — a from-scratch 3D engine.
 //!
