@@ -620,13 +620,12 @@
           }
           const samples = [];
           const repeatCounts = [];
-          const queueElapsedMs = [];
-          const gpuElapsedMs = [];
-          const dispatchCounts = [];
-          const timingMethods = [];
+          const dispatchTimestampProbes = [];
           const kernelStarted = Date.now();
           let repeatCount = 1;
           let checksum = 0;
+          let dispatchesPerBase = 0;
+          let timingMethod = '';
           for (let index = 0; index < spec.sample_runs; index += 1) {
             requireActive(run, token);
             while (true) {
@@ -642,10 +641,9 @@
                 if (!Number.isFinite(normalized) || normalized <= 0) throw new Error(`GPU timing normalization was non-finite or non-positive after ${repeatCount} repeats`);
                 samples.push(normalized);
                 repeatCounts.push(repeatCount);
-                queueElapsedMs.push(measured.queue_elapsed_ms);
-                gpuElapsedMs.push(measured.gpu_elapsed_ms);
-                dispatchCounts.push(measured.dispatch_count);
-                timingMethods.push(measured.timing_method);
+                dispatchesPerBase = measured.dispatch_count / repeatCount;
+                timingMethod = measured.timing_method;
+                if (isDispatchRoundTrip && Number.isFinite(measured.gpu_elapsed_ms)) dispatchTimestampProbes.push(measured.gpu_elapsed_ms);
                 updateTelemetry(spec.kernel_id, samples);
                 break;
               }
@@ -666,7 +664,9 @@
           const normalizationNote = spec.kernel_id === 'gpu.storage-copy.4m.v1'
             ? `${GPU_STORAGE_MIB_PER_BASE_INVOCATION} MiB copied per base invocation × repeat count ÷ primary batch seconds`
             : isDispatchRoundTrip ? 'primary batch milliseconds ÷ actual sequential dispatch count' : 'primary batch milliseconds ÷ repeat count';
-          completeKernel(run, token, spec.kernel_id, workload, spec.unit, spec.warmup_runs, samples, [TIMER_CAVEAT, '3 named untimed warmups precede the 15 timed samples; the first dispatch absorbs lazy pipeline compilation outside timed regions', timingNote, `adaptive repeat counts per recorded sample: ${repeatCounts.join(', ')}`, `queue-completion wall milliseconds per recorded sample: ${queueElapsedMs.join(', ')}`, `GPU timestamp milliseconds per recorded sample (null means unavailable): ${gpuElapsedMs.map(value => value == null ? 'null' : value).join(', ')}`, `actual dispatch counts per recorded sample: ${dispatchCounts.join(', ')}`, `wgpu timing methods per recorded sample: ${timingMethods.join(', ')}`, `normalization: ${normalizationNote}`, `last validated checksum ${checksum}`, '15 observations report median and p95; thermal state and downclocking can move them, so the report claims no stability beyond this run']);
+          const timestampProbeSummary = summarize(dispatchTimestampProbes);
+          const timestampProbeNote = timestampProbeSummary ? `timestamp-query probe of the first tiny shader dispatch in each batch: median ${timestampProbeSummary.median} ms, p95 ${timestampProbeSummary.p95} ms over ${timestampProbeSummary.sample_count} probes` : 'timestamp-query probe: unavailable';
+          completeKernel(run, token, spec.kernel_id, workload, spec.unit, spec.warmup_runs, samples, [TIMER_CAVEAT, '3 named untimed warmups precede the 15 timed samples; the first dispatch absorbs lazy pipeline compilation outside timed regions', timingNote, `timing method: ${timingMethod}`, `adaptive repeat counts per recorded sample: ${repeatCounts.join(', ')}`, `dispatches per base invocation: ${dispatchesPerBase}`, ...(isDispatchRoundTrip ? [timestampProbeNote] : []), `normalization: ${normalizationNote}`, `last validated checksum ${checksum}`, '15 observations report median and p95; thermal state and downclocking can move them, so the report claims no stability beyond this run']);
           completeCount += 1;
           recorded = true;
         } catch (error) {
