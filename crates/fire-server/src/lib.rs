@@ -667,9 +667,8 @@ fn handle_msg(
             // capped far below u32, so the saturating conversion is belt
             // and braces.
             let (version, commit) = build_stamp();
-            let players =
-                u32::try_from(lobbies.values().map(|l| l.members.len()).sum::<usize>())
-                    .unwrap_or(u32::MAX);
+            let players = u32::try_from(lobbies.values().map(|l| l.members.len()).sum::<usize>())
+                .unwrap_or(u32::MAX);
             let open = u32::try_from(lobbies.len()).unwrap_or(u32::MAX);
             send_to(
                 conns,

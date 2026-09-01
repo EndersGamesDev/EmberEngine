@@ -595,7 +595,10 @@ fn a_default_server_is_unnamed_and_its_welcome_still_decodes() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     thread::spawn(move || {
-        drop(fire_server::run(listener, fire_server::ServerConfig::default()));
+        drop(fire_server::run(
+            listener,
+            fire_server::ServerConfig::default(),
+        ));
     });
     thread::sleep(Duration::from_millis(150));
 
