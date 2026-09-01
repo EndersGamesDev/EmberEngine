@@ -39,7 +39,7 @@ fn main() -> std::process::ExitCode {
     let require_empty = args.any(|a| a == "--require-empty");
 
     // Needed for wss:// through the tunnel; harmless for plain ws://.
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    drop(rustls::crypto::ring::default_provider().install_default());
 
     let t0 = Instant::now();
     let (mut ws, _) = match tungstenite::connect(&url) {
@@ -50,7 +50,7 @@ fn main() -> std::process::ExitCode {
         }
     };
     if let tungstenite::stream::MaybeTlsStream::Plain(s) = ws.get_ref() {
-        let _ = s.set_read_timeout(Some(Duration::from_millis(200)));
+        drop(s.set_read_timeout(Some(Duration::from_millis(200))));
     }
 
     let hello = C2S::Hello { proto: proto::PROTO_VERSION, handle: "probe".into() };
@@ -66,7 +66,7 @@ fn main() -> std::process::ExitCode {
                 match msg {
                     S2C::Welcome { proto: server } => {
                         if server != proto::PROTO_VERSION {
-                            let _ = ws.close(None);
+                            drop(ws.close(None));
                             eprintln!(
                                 "probe: server is ALIVE but speaks fire protocol v{server}, \
                                  this build speaks v{}",
@@ -80,7 +80,7 @@ fn main() -> std::process::ExitCode {
                             t0.elapsed().as_millis()
                         );
                         if !require_empty {
-                            let _ = ws.close(None);
+                            drop(ws.close(None));
                             return std::process::ExitCode::SUCCESS;
                         }
                         // Ask who is on the server before anyone restarts it.
@@ -91,7 +91,7 @@ fn main() -> std::process::ExitCode {
                         }
                     }
                     S2C::Lobbies { lobbies } => {
-                        let _ = ws.close(None);
+                        drop(ws.close(None));
                         let busy: Vec<_> = lobbies.iter().filter(|l| l.players > 0).collect();
                         let total: u32 = busy.iter().map(|l| l.players as u32).sum();
                         if total == 0 {
