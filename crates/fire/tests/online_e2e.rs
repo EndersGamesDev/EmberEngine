@@ -22,13 +22,15 @@ fn init_logs() {
     use std::sync::Once;
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
-        drop(tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "warn".into()),
-            )
-            .with_test_writer()
-            .try_init());
+        drop(
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| "warn".into()),
+                )
+                .with_test_writer()
+                .try_init(),
+        );
     });
 }
 

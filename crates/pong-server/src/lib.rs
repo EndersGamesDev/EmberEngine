@@ -290,9 +290,10 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
     // instead of the sim's clean 33.3. 5 ms cuts that smear by four at 200
     // idle wake-ups a second per connection, which is nothing next to the
     // 60 Hz sim it is feeding.
-    drop(ws
-        .get_ref()
-        .set_read_timeout(Some(Duration::from_millis(5))));
+    drop(
+        ws.get_ref()
+            .set_read_timeout(Some(Duration::from_millis(5))),
+    );
 
     let (tx, rx) = mpsc::sync_channel::<Message>(OUTBOUND_QUEUE);
     if events_tx.send(Ev::Connected { id, tx, peer }).is_err() {

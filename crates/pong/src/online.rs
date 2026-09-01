@@ -1699,9 +1699,10 @@ mod net {
                     drop(s.set_read_timeout(Some(Duration::from_millis(20))));
                 }
                 MaybeTlsStream::Rustls(s) => {
-                    drop(s
-                        .get_ref()
-                        .set_read_timeout(Some(Duration::from_millis(20))));
+                    drop(
+                        s.get_ref()
+                            .set_read_timeout(Some(Duration::from_millis(20))),
+                    );
                 }
                 _ => {}
             }

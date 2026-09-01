@@ -33,11 +33,13 @@ pub fn init_diagnostics() {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,wgpu_core=warn,wgpu_hal=warn,naga=warn"));
     let _ = tracing_log::LogTracer::init();
-    drop(tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        // No color codes when output is redirected to a file.
-        .with_ansi(std::io::stdout().is_terminal())
-        .try_init());
+    drop(
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            // No color codes when output is redirected to a file.
+            .with_ansi(std::io::stdout().is_terminal())
+            .try_init(),
+    );
 }
 
 /// A frame gap above this is reported as a stall.
@@ -203,9 +205,11 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                     && let Some(window) = self.window.as_ref()
                 {
                     use winit::window::CursorGrabMode;
-                    drop(window
-                        .set_cursor_grab(CursorGrabMode::Locked)
-                        .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined)));
+                    drop(
+                        window
+                            .set_cursor_grab(CursorGrabMode::Locked)
+                            .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined)),
+                    );
                     window.set_cursor_visible(false);
                 }
             }

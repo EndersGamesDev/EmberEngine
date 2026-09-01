@@ -170,9 +170,10 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
                         continue;
                     }
                 };
-                let (peer, ip) = stream
-                    .peer_addr()
-                    .map_or_else(|_| ("?".to_string(), None), |a| (a.to_string(), Some(a.ip())));
+                let (peer, ip) = stream.peer_addr().map_or_else(
+                    |_| ("?".to_string(), None),
+                    |a| (a.to_string(), Some(a.ip())),
+                );
                 drop(stream.set_nodelay(true));
                 let conn = next_conn;
                 next_conn += 1;
@@ -691,9 +692,11 @@ fn handle_hello(
     }
     for (&other_id, other) in &*conns {
         if other_id != conn && other.player.is_some() {
-            drop(other
-                .tx
-                .try_send(ServerMsg::PlayerJoined { meta: meta.clone() }));
+            drop(
+                other
+                    .tx
+                    .try_send(ServerMsg::PlayerJoined { meta: meta.clone() }),
+            );
         }
     }
     tracing::info!("conn {conn}: joined as {:?} \"{name}\"", id);

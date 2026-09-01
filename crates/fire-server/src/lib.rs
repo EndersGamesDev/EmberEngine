@@ -220,9 +220,10 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
     // This thread owns the socket, so the outbound queue only drains between
     // reads. A short read timeout keeps a broadcast from sitting on the queue
     // for most of a tick before it reaches the wire.
-    drop(ws
-        .get_ref()
-        .set_read_timeout(Some(Duration::from_millis(5))));
+    drop(
+        ws.get_ref()
+            .set_read_timeout(Some(Duration::from_millis(5))),
+    );
 
     let (tx, rx) = mpsc::sync_channel::<Message>(OUTBOUND_QUEUE);
     if events_tx

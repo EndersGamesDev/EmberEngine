@@ -371,9 +371,7 @@ impl Default for Pose {
 pub fn world_joints(skel: &Skeleton, pose: &Pose) -> [(Vec3, Quat); joint::COUNT] {
     let mut out = [(Vec3::ZERO, Quat::IDENTITY); joint::COUNT];
     for (i, j) in skel.joints.iter().enumerate() {
-        let (pp, pr) = j
-            .parent
-            .map_or((pose.root_pos, Quat::IDENTITY), |p| out[p]);
+        let (pp, pr) = j.parent.map_or((pose.root_pos, Quat::IDENTITY), |p| out[p]);
         // The correction sits innermost: it poses the bind skeleton, then
         // the animation swings that corrected limb in its parent's frame.
         out[i] = (
