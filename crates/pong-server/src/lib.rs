@@ -177,7 +177,6 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
         Arc::new(std::sync::Mutex::new(HashMap::new()));
 
     {
-        let events_tx = events_tx.clone();
         let live_conns = Arc::clone(&live_conns);
         let per_ip = Arc::clone(&per_ip);
         let max_conns = cfg.max_conns;
@@ -297,7 +296,7 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
         .send(Ev::Connected {
             id,
             tx,
-            peer: peer.clone(),
+            peer,
         })
         .is_err()
     {
