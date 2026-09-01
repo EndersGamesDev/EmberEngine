@@ -125,11 +125,16 @@ proto_of() {
 # Speak the protocol, do not settle for a handshake. A listener with a dead
 # hub loop still completes a WebSocket upgrade, which is how a broken server
 # once passed a deploy's health check.
+#
+# $3 is a label that makes the arena's lobby name unique per probe. The
+# loopback and the public probe hit the SAME server seconds apart, and a
+# second `create` under a name the first one is still holding fails for a
+# reason that has nothing to do with the server's health.
 probe_game() {
-    local id="$1" url="$2"
+    local id="$1" url="$2" label="${3:-check}"
     case "$id" in
         arena) ( cd "$SRC" && cargo run --release -q -p pong-server --example wsbot -- \
-                    "$url" create healthcheck - healthcheck 6 >/dev/null ) ;;
+                    "$url" create "health-$label" - "health-$label" 6 >/dev/null ) ;;
         fire)  ( cd "$SRC" && cargo run --release -q -p fire-server --example probe -- \
                     "$url" >/dev/null ) ;;
     esac
@@ -321,7 +326,8 @@ cmd_up() {
         say "local health check for $id"
         # Loopback first, so a failure at the public URL below is unambiguously
         # the tunnel rather than the server.
-        probe_game "$id" "ws://127.0.0.1:$port" || die "$id server is listening but did not answer"
+        probe_game "$id" "ws://127.0.0.1:$port" local \
+            || die "$id server is listening but did not answer"
     done
 
     local urls=""
@@ -343,7 +349,7 @@ cmd_up() {
     for id in $(game_ids); do
         local url; url="$(cat "$RUN/$id.url")"
         say "health check for $id through $url"
-        probe_game "$id" "$url" \
+        probe_game "$id" "$url" public \
             || die "the $id tunnel is up but the server did not answer through it"
     done
 

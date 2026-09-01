@@ -115,7 +115,8 @@ pass() {
     # Work out what each host needs before touching anything, so the global
     # refusals below are evaluated once and a host that needs nothing costs
     # one ssh and two probes.
-    local remote name state deployed wants todo="" pages_state pages_deployed want_pages=""
+    local remote name state deployed wants game url todo="" \
+          pages_state pages_deployed want_pages=""
     for remote in $HOSTS; do
         state="$STATE_DIR/.watchdog-state-$remote"
         deployed="$(cat "$state" 2>/dev/null || echo none)"
@@ -128,7 +129,6 @@ pass() {
             log "$remote ($name): origin/main moved (${deployed:0:7} -> ${head:0:7})"
             wants="$GAMES"
         else
-            local game url
             for game in $GAMES; do
                 url="$(entry_addr "$book" "$name" "$(addr_key "$game")")"
                 if [ -z "$url" ]; then
@@ -142,9 +142,16 @@ pass() {
                 fi
             done
         fi
+        # One "<ssh name>:<game>,<game>" line per host that needs work. Written
+        # as an `if` rather than `[ … ] && …` because this is the last thing
+        # the loop body evaluates, and a form whose exit status depends on
+        # "nothing to do" is not one to leave under `set -e`.
         # shellcheck disable=SC2086
-        [ -n "$(echo $wants)" ] && todo="$todo$remote:$(echo $wants | tr ' ' ',')
+        wants="$(echo $wants)"
+        if [ -n "$wants" ]; then
+            todo="$todo$remote:$(echo "$wants" | tr ' ' ',')
 "
+        fi
     done
 
     pages_state="$STATE_DIR/.watchdog-state-pages"
