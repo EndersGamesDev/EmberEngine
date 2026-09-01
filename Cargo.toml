@@ -21,6 +21,8 @@ members = [
     "games/arena/v007",
     "games/arena/v008",
     "games/arena/v009",
+    "games/arena/v010",
+    "games/arena/v011",
     "games/arena/v012",
     "games/fire/v001",
     "games/pong/v001",

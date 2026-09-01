@@ -1,0 +1,39 @@
+{
+  "seed": 42,
+  "created_at_micros": 1000000,
+  "calls": [
+    {
+      "timestamp_micros": 1010000,
+      "frames": ["{\"t\":\"input\",\"seq\":1,\"view_tick\":0,\"mx\":0.0,\"my\":1.0,\"ax\":1.0,\"az\":0.0,\"pitch\":0.0,\"fire\":false,\"sprint\":false,\"crouch\":false,\"reload\":false,\"jump\":false,\"shield\":false}"],
+      "checkpoint": null
+    },
+    {
+      "timestamp_micros": 1016667,
+      "frames": [],
+      "checkpoint": null
+    },
+    {
+      "timestamp_micros": 1033334,
+      "frames": [],
+      "checkpoint": {"tick":2,"x":20.0,"z":0.3,"y":0.0,"vy":0.0,"ack":1}
+    },
+    {
+      "timestamp_micros": 1040000,
+      "frames": [
+        "{\"t\":\"input\",\"seq\":2,\"view_tick\":2,\"mx\":0.0,\"my\":0.0,\"ax\":1.0,\"az\":0.0,\"pitch\":0.0,\"fire\":false,\"sprint\":false,\"crouch\":false,\"reload\":false,\"jump\":true,\"shield\":false}",
+        "{\"t\":\"input\",\"seq\":3,\"view_tick\":2,\"mx\":0.0,\"my\":1.0,\"ax\":1.0,\"az\":0.0,\"pitch\":0.0,\"fire\":false,\"sprint\":false,\"crouch\":false,\"reload\":false,\"jump\":false,\"shield\":false}"
+      ],
+      "checkpoint": null
+    },
+    {
+      "timestamp_micros": 1050001,
+      "frames": [],
+      "checkpoint": null
+    },
+    {
+      "timestamp_micros": 1066668,
+      "frames": [],
+      "checkpoint": {"tick":4,"x":20.0,"z":0.6,"y":0.0,"vy":0.0,"ack":3}
+    }
+  ]
+}
