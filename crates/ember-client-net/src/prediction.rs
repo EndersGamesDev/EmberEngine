@@ -349,7 +349,7 @@ mod tests {
         reconciler.record(5, Duration::from_millis(30));
         let authoritative = FakeAuthoritative {
             value: 100,
-            ack: 2,
+            ack: 1,
             timestamp: 77,
         };
         let mut predicted = 10;
