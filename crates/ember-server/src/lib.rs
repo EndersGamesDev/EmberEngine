@@ -141,6 +141,8 @@ struct Conn {
 ///
 /// Returns an error if the listener's local address is unavailable or the
 /// accept thread disconnects from the simulation loop.
+// The public API intentionally retains its established ownership-taking signature.
+#[allow(clippy::needless_pass_by_value)]
 pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
     let local = listener.local_addr()?;
     tracing::info!(
@@ -330,39 +332,8 @@ fn sim_loop(
             }
         }
 
-        // Lag detection: flag joined clients that have gone silent well
-        // before the hard timeout kicks them (clients keepalive every ~2 s).
         let now = Instant::now();
-        for (&conn_id, c) in &mut conns {
-            // Refill the message-rate budget: one tick's worth per tick, so
-            // the sustained rate is MSGS_PER_TICK_LIMIT however bursty the
-            // drain windows are.
-            c.msg_budget = (c.msg_budget + MSGS_PER_TICK_LIMIT).min(MSG_BURST);
-            if c.player.is_some() && !c.lag_flagged {
-                let silent = now.duration_since(c.last_seen);
-                if silent > LAG_THRESHOLD {
-                    c.lag_flagged = true;
-                    tracing::warn!(
-                        conn = conn_id,
-                        peer = %c.peer,
-                        silent_ms = duration_millis(silent),
-                        "client lagging: no input or keepalive received"
-                    );
-                }
-            }
-        }
-
-        // Timeouts (dead peers whose TCP hasn't reset yet).
-        let timeout = Duration::from_secs(CLIENT_TIMEOUT_SECS);
-        let stale: Vec<u64> = conns
-            .iter()
-            .filter(|(_, c)| now.duration_since(c.last_seen) > timeout)
-            .map(|(&id, _)| id)
-            .collect();
-        for conn_id in stale {
-            tracing::info!("conn {conn_id}: timed out");
-            remove_conn(conn_id, &mut conns);
-        }
+        maintain_connections(&mut conns, now);
 
         // Broadcast snapshot.
         let mut players: Vec<PlayerState> = conns
@@ -458,6 +429,37 @@ fn drain_events(
     Ok(())
 }
 
+fn maintain_connections(conns: &mut HashMap<u64, Conn>, now: Instant) {
+    // Flag joined clients before the hard timeout and refill each rate budget.
+    for (&conn_id, c) in &mut *conns {
+        c.msg_budget = (c.msg_budget + MSGS_PER_TICK_LIMIT).min(MSG_BURST);
+        if c.player.is_some() && !c.lag_flagged {
+            let silent = now.duration_since(c.last_seen);
+            if silent > LAG_THRESHOLD {
+                c.lag_flagged = true;
+                tracing::warn!(
+                    conn = conn_id,
+                    peer = %c.peer,
+                    silent_ms = duration_millis(silent),
+                    "client lagging: no input or keepalive received"
+                );
+            }
+        }
+    }
+
+    // Remove dead peers whose TCP connection has not reset yet.
+    let timeout = Duration::from_secs(CLIENT_TIMEOUT_SECS);
+    let stale: Vec<u64> = conns
+        .iter()
+        .filter(|(_, c)| now.duration_since(c.last_seen) > timeout)
+        .map(|(&id, _)| id)
+        .collect();
+    for conn_id in stale {
+        tracing::info!("conn {conn_id}: timed out");
+        remove_conn(conn_id, conns);
+    }
+}
+
 fn duration_millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
@@ -479,7 +481,7 @@ fn handle_event(
             stream,
             peer,
             ip,
-        } => handle_connected(conn, stream, peer, ip, conns, cfg, events_tx),
+        } => handle_connected(conn, stream, &peer, ip, conns, cfg, events_tx),
         Event::Msg { conn, msg } => handle_message(conn, msg, conns, next_player_id, cfg),
         Event::Disconnected { conn } => {
             remove_conn(conn, conns);
@@ -490,7 +492,7 @@ fn handle_event(
 fn handle_connected(
     conn: u64,
     stream: TcpStream,
-    peer: String,
+    peer: &str,
     ip: Option<IpAddr>,
     conns: &mut HashMap<u64, Conn>,
     cfg: &ServerConfig,
@@ -528,7 +530,7 @@ fn handle_connected(
         Conn {
             tx,
             sock,
-            peer: peer.clone(),
+            peer: peer.to_owned(),
             ip,
             player: None,
             last_seen: Instant::now(),
@@ -581,7 +583,7 @@ fn handle_message(
 
     match (msg, joined) {
         (ClientMsg::Hello { protocol, name }, false) => {
-            handle_hello(conn, protocol, name, conns, next_player_id, cfg);
+            handle_hello(conn, protocol, &name, conns, next_player_id, cfg);
         }
         (ClientMsg::Hello { .. }, true) => {
             tracing::warn!("conn {conn}: duplicate Hello, dropping");
@@ -617,7 +619,7 @@ fn handle_message(
 fn handle_hello(
     conn: u64,
     protocol: u16,
-    name: String,
+    name: &str,
     conns: &mut HashMap<u64, Conn>,
     next_player_id: &mut u32,
     cfg: &ServerConfig,
@@ -646,7 +648,7 @@ fn handle_hello(
 
     let id = PlayerId(*next_player_id);
     *next_player_id += 1;
-    let name = sanitize_name(&name);
+    let name = sanitize_name(name);
     let color = color_for(id);
     // Player IDs intentionally seed the frozen f32 wire position format.
     #[allow(clippy::cast_precision_loss)]
