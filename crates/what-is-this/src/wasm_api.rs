@@ -2,7 +2,6 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::fmt::Write as _;
 
 use ember_client_net::{
     CanonicalHandshake, CanonicalSelection, ClientConnection, ConnectionProgress, TransportConfig,
@@ -184,9 +183,11 @@ pub fn start_submission(server_url: &str, report_json: &str) -> Result<(), JsVal
     let canonical_report = serde_json::to_vec(&report)
         .map_err(|error| JsValue::from_str(&format!("could not encode report: {error}")))?;
     let digest = Sha256::digest(&canonical_report);
+    const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut lobby_name = String::from("wit-");
     for byte in digest.iter().take(6) {
-        drop(write!(&mut lobby_name, "{byte:02x}"));
+        lobby_name.push(char::from(HEX[usize::from(byte >> 4)]));
+        lobby_name.push(char::from(HEX[usize::from(byte & 0x0f)]));
     }
     let message = ClientMessage::SubmitReport {
         report: Box::new(report),

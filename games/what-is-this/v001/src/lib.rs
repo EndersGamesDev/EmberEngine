@@ -9,7 +9,6 @@
 #![allow(clippy::module_name_repetitions)]
 
 use std::collections::BTreeSet;
-use std::fmt::Write as _;
 
 use ember_legacy::{
     AdmissionMetadata, AdmissionRefusal, CloseReason, CloseRequest, DecodedInput, EncodedEvent,
@@ -630,11 +629,13 @@ impl GameSession for ReportSession {
 }
 
 fn receipt_id(report_bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
     let digest = Sha256::digest(report_bytes);
     let mut receipt = String::with_capacity(5 + digest.len() * 2);
     receipt.push_str("wit1-");
     for byte in digest {
-        drop(write!(&mut receipt, "{byte:02x}"));
+        receipt.push(char::from(HEX[usize::from(byte >> 4)]));
+        receipt.push(char::from(HEX[usize::from(byte & 0x0f)]));
     }
     receipt
 }
