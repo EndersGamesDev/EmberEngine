@@ -2,6 +2,9 @@
 //! authoritatively on the server; clients render its broadcast state and
 //! generate the identical arena from the lobby's seed.
 
+// The frozen era expression trees deliberately preserve their original f32 rounding.
+#![allow(clippy::imprecise_flops, clippy::suboptimal_flops)]
+
 /// Fixed simulation time step in seconds.
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 /// Arena boundary half-extent.
@@ -242,6 +245,7 @@ impl Sim {
     }
 
     /// Advances the authoritative state by exactly one fixed step.
+    #[allow(clippy::too_many_lines)]
     pub fn step(&mut self, inputs: &dyn Fn(u8) -> PlayerIn) {
         self.events.clear();
         let dt = FIXED_DT;
@@ -322,7 +326,7 @@ impl Sim {
             let (sx, sz) = (p1[0] - p0[0], p1[1] - p0[1]);
             let seg_len_sq = sx * sx + sz * sz;
             let rr = PLAYER_R + BULLET_R;
-            for p in players.iter() {
+            for p in players {
                 if !p.alive || p.id == b.owner {
                     continue;
                 }
@@ -400,6 +404,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::manual_midpoint)]
     fn arena_covers_all_quadrants() {
         // Guards the RNG range: a half-range generator (the [0, 0.5) bug)
         // could never place obstacles at negative z.
@@ -510,6 +515,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn three_hits_kill_score_and_respawn() {
         let mut sim = Sim::new(2);
         sim.obstacles.clear(); // open field for a clean shot
