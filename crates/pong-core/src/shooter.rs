@@ -21,21 +21,23 @@ pub const CROUCH_HIT_MULT: f32 = 0.72;
 pub const SHIELD_ARC: f32 = std::f32::consts::FRAC_PI_3 * 2.0;
 
 /// Height of the head zone, measured DOWN from the top of the hit volume.
-/// `BODY_H_*` is documented above as "head centre plus half a head", so the
-/// top of the cylinder already IS the top of the head: the head is a sub-band
-/// just under it, never something added above. 0.22 puts a standing head at
-/// [1.48, 1.70] and a crouched one at [1.03, 1.25].
 ///
-/// The value is not cosmetic and MUST stay under
-/// BODY_H_STAND - EYE_STAND = 0.25. A round leaves the muzzle at EYE_STAND
-/// 1.45 and flies level at pitch 0, so the moment the head band reaches down
-/// to 1.45, every level shot between two standing players is a headshot - and
-/// since a headshot kills outright, the pistol would one-shot the entire game
-/// without anyone aiming at a head. At 0.22 the band starts at 1.48, so level
-/// fire lands in the chest and a kill needs deliberate upward aim. The test
-/// `level_fire_is_not_a_free_headshot` pins that 3 cm and will fail loudly if
-/// this is ever raised past it.
-pub const HEAD_H: f32 = 0.22;
+/// 0.30 is not a tuning knob: it is the height of the head part the client
+/// actually draws (`ember-engine/src/rig.rs:686-694` anchors it bottom-centre
+/// at NECK + 0.01 with a target height of 0.30). Because `BODY_H_*` above is
+/// now the drawn head's TOP, subtracting the drawn head's HEIGHT puts the zone
+/// exactly on the drawn head: [1.56, 1.86] standing, [1.25, 1.55] crouched.
+/// Change the model's head and this must follow, or headshots stop landing
+/// where players aim.
+///
+/// It must also stay under `BODY_H_STAND - EYE_STAND` = 0.41. Rounds leave the
+/// muzzle at `EYE_STAND` 1.45 and fly level at pitch 0, so a band reaching down
+/// to 1.45 would make every level shot between two standing players a headshot
+/// - and with headshots lethal the pistol would one-shot the whole game with
+/// nobody aiming at a head. At 0.30 the band starts at 1.56, so level fire
+/// lands in the chest and a standing kill needs deliberate upward aim.
+/// `level_fire_is_not_a_free_headshot` pins that margin.
+pub const HEAD_H: f32 = 0.30;
 
 /// Melee reach from the attacker's centre, before the target's own radius is
 /// added. 2.0 + PLAYER_R 0.6 strikes a standing target at 2.6 centre to
@@ -66,19 +68,40 @@ pub const EYE_STAND: f32 = 1.45;
 pub const EYE_CROUCH: f32 = 0.85;
 /// Body height above the feet, per stance.
 ///
-/// The vertical extent matches the silhouette the client draws (head centre
-/// plus half a head) so that what you see is what you hit. These live here, not in
-/// the renderer, because client and server must agree where a body IS.
-pub const BODY_H_STAND: f32 = 1.70;
-pub const BODY_H_CROUCH: f32 = 1.25;
-// Worth knowing before tuning either of the above: a standing shooter's
-// muzzle sits at 1.45 and a crouched target's band tops out at
-// BODY_H_CROUCH + BULLET_R = 1.47, so perfectly level fire GRAZES a
-// crouching player rather than passing over them. That is the honest
-// geometry, not a fudge — but it is a 2 cm margin, so lowering
-// BODY_H_CROUCH turns level fire into a clean miss and makes crouch
-// dramatically stronger. Aiming AT a crouched target pitches down and hits
-// solidly either way.
+/// The vertical extent matches the silhouette the client draws, so that what
+/// you see is what you hit. These live here, not in the renderer, because
+/// client and server must agree where a body IS.
+///
+/// They were 1.70 / 1.25 and did NOT match it. The rig draws a standing head
+/// at [1.56, 1.86]: ROOT sits at `pelvis_h` 0.98, SPINE is +0.05 above it,
+/// NECK is +`spine_len` 0.52 above that (`ember-engine/src/rig.rs:128-130`,
+/// defaults at `:100-105`), and the head part is anchored bottom-centre 0.01
+/// above NECK with a target height of 0.30 (`rig.rs:686-694`). So 1.70 cut the
+/// drawn head in half and left its top 16 cm unhittable - not even for body
+/// damage. Crouched was worse: `walk_pose` sinks the root by
+/// `crouch * (thigh_len 0.44 + shin_len 0.43) * 0.36` = 0.313 (`rig.rs:434`),
+/// putting the drawn crouched head near [1.25, 1.55] against a volume that
+/// stopped at 1.25 - a crouched player's visible head sat entirely OUTSIDE
+/// their own hitbox.
+///
+/// That was survivable while every hit was worth the same. It is not
+/// survivable with a head zone, because the player aims at a head they can
+/// see. These are now the drawn heights, so `HEAD_H` below lands on the drawn
+/// head in both stances.
+///
+/// Consequence, taken deliberately: crouch is weaker than it was. The old note
+/// here observed that a standing muzzle at 1.45 merely GRAZED a crouched band
+/// topping out at 1.47. That band now reaches 1.77, so level fire connects
+/// solidly - and since 1.45 falls inside the crouched head band [1.25, 1.55],
+/// level fire at a crouched target is a headshot. Crouch still shrinks your
+/// radius; it no longer also hides the part of you that was never in the
+/// hitbox to begin with.
+pub const BODY_H_STAND: f32 = 1.86;
+pub const BODY_H_CROUCH: f32 = 1.55;
+// Worth knowing before tuning either of the above: they are tied to the rig
+// now, so moving one without moving the model reintroduces exactly the
+// aim-at-what-you-cannot-hit bug they were changed to fix. If the character
+// model changes height these follow it, and HEAD_H follows its head part.
 
 /// Height a shot leaves from, measured from the shooter's feet.
 #[must_use]
@@ -93,6 +116,17 @@ pub const fn eye_h(crouch: bool) -> f32 {
 #[must_use]
 pub const fn body_h(crouch: bool) -> f32 {
     if crouch { BODY_H_CROUCH } else { BODY_H_STAND }
+}
+
+/// Bottom of the head zone, measured from the target's feet. A round arriving
+/// at or above this, and still inside the body volume, kills outright.
+///
+/// Lives beside `body_h` and `eye_h` and for the same reason: it decides who
+/// dies, so client and server must agree on it, and the renderer must not be
+/// the one to define it.
+#[must_use]
+pub const fn head_lo(crouch: bool) -> f32 {
+    body_h(crouch) - HEAD_H
 }
 
 /// Hard clamp on aim pitch, radians (~83°). The client clamps its own look
@@ -953,7 +987,7 @@ impl Sim {
                 // its underside: that boundary is internal, between head and
                 // chest, not a silhouette edge, and padding it outward would
                 // quietly make the head bigger than the one being drawn.
-                let head_lo = ty + body_h(tcrouch) - HEAD_H;
+                let head_lo = ty + head_lo(tcrouch);
                 let travel = (y1 - b.y).abs();
                 let by = b.y + (y1 - b.y) * t;
                 let mut connected = by >= lo && by <= hi;
@@ -2387,6 +2421,57 @@ mod tests {
     }
 
     // ---- v12: melee and headshots -------------------------------------
+
+    #[test]
+    fn the_head_band_matches_the_drawn_model() {
+        // The guard for "what you see is what you hit". These numbers are the
+        // rig's, not this crate's, and the only way they stay true is if
+        // someone is told when they stop being true.
+        //
+        // Standing, from ember-engine/src/rig.rs: ROOT pelvis_h 0.98, SPINE
+        // +0.05, NECK +spine_len 0.52 => neck at 1.55; the head part is
+        // anchored 0.01 above NECK and is 0.30 tall => drawn head [1.56, 1.86].
+        let drawn_neck = 0.98 + 0.05 + 0.52;
+        let drawn_head_lo = drawn_neck + 0.01;
+        let drawn_head_hi = drawn_head_lo + 0.30;
+        assert!(
+            (BODY_H_STAND - drawn_head_hi).abs() < 1e-4,
+            "standing hit volume must top out at the drawn head: {BODY_H_STAND} vs {drawn_head_hi}"
+        );
+        assert!(
+            (head_lo(false) - drawn_head_lo).abs() < 1e-4,
+            "standing head band must start at the drawn head: {} vs {drawn_head_lo}",
+            head_lo(false)
+        );
+
+        // Crouched: walk_pose sinks the root by crouch * (0.44 + 0.43) * 0.36.
+        let sink = (0.44f32 + 0.43) * 0.36;
+        assert!(
+            (BODY_H_STAND - BODY_H_CROUCH - sink).abs() < 0.02,
+            "the crouched volume must sink with the model: {} vs {sink}",
+            BODY_H_STAND - BODY_H_CROUCH
+        );
+    }
+
+    #[test]
+    fn a_crouched_head_is_reachable_at_all() {
+        // Before the volume was tied to the model, a crouched player's drawn
+        // head sat entirely ABOVE their own hitbox, so it could not be hit for
+        // a headshot or even for body damage. Assert the band is inside the
+        // volume rather than floating above it.
+        let lo = head_lo(true);
+        assert!(
+            lo < BODY_H_CROUCH && lo > 0.0,
+            "the crouched head band [{lo}, {BODY_H_CROUCH}] must lie inside the crouched volume"
+        );
+        // And it must still be above a crouched player's OWN muzzle, or a
+        // crouched player shooting level would headshot another crouched one
+        // for free - the same trap HEAD_H is sized to avoid when standing.
+        assert!(
+            lo > EYE_CROUCH,
+            "crouched head band {lo} must sit above the crouched muzzle {EYE_CROUCH}"
+        );
+    }
 
     /// Two players facing each other at `gap`, with the defender optionally
     /// holding the shield straight at the attacker. Returns whether the
