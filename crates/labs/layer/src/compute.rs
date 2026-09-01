@@ -649,10 +649,10 @@ impl ComputeDevice {
                     .iter()
                     .any(|slot| slot.len() != index_space.len() as usize))
         {
-                return Err(LayerError::Resource(format!(
-                    "{label} initial data does not match {slot_count} slots of {} elements",
-                    index_space.len()
-                )));
+            return Err(LayerError::Resource(format!(
+                "{label} initial data does not match {slot_count} slots of {} elements",
+                index_space.len()
+            )));
         }
         let mut slots = Vec::with_capacity(slot_count);
         for slot_index in 0..slot_count {
@@ -949,14 +949,7 @@ impl ComputeDevice {
             let height = u16::try_from(kernel.height).map_err(|_| {
                 LayerError::Resource("dispatch height exceeds WebGL2 viewport range".to_string())
             })?;
-            pass.set_viewport(
-                0.0,
-                0.0,
-                f32::from(width),
-                f32::from(height),
-                0.0,
-                1.0,
-            );
+            pass.set_viewport(0.0, 0.0, f32::from(width), f32::from(height), 0.0, 1.0);
             pass.draw(0..3, 0..1);
         }
         self.queue.submit([encoder.finish()]);
