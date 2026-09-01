@@ -1,4 +1,6 @@
-//! Online protocol: JSON text frames over WebSocket. JSON (rather than the
+//! Online protocol: JSON text frames over WebSocket.
+//!
+//! JSON (rather than the
 //! arena's binary postcard) because the lobby browser on the web page speaks
 //! it natively from JavaScript, and traffic is small (~30 Hz states).
 //!

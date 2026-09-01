@@ -1,5 +1,6 @@
-//! The arena shooter sim: pure, deterministic, fixed 60 Hz. Runs
-//! authoritatively on the server; clients render its broadcast state and
+//! The arena shooter sim: pure, deterministic, fixed 60 Hz.
+//!
+//! Runs authoritatively on the server; clients render its broadcast state and
 //! generate the identical arena from the lobby's seed.
 
 /// Frozen Arena v4 fixed dt simulation value.
