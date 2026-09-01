@@ -879,7 +879,7 @@ mod tests {
         ed.selected = Some(2);
         ed.hovered = Some(gizmo::Axis::X);
         let before = ed.selected;
-        let _ = frame_of(&mut ed);
+        drop(frame_of(&mut ed));
         assert_eq!(ed.selected, before);
     }
 
@@ -916,7 +916,7 @@ mod tests {
         // The default InputState has no buttons held, so the first update
         // after a press-less frame must clear it.
         ed.lmb.pressed(true); // pretend the button was down last frame
-        let _ = frame_of(&mut ed);
+        drop(frame_of(&mut ed));
         assert!(ed.drag.is_none(), "a released button must end the drag");
     }
 
@@ -928,7 +928,7 @@ mod tests {
         let mut ed = Editor::new();
         let before = ed.objects.len();
         palette::push(palette::Cmd::Place);
-        let _ = frame_of(&mut ed);
+        drop(frame_of(&mut ed));
         assert_eq!(ed.objects.len(), before + 1, "Place must add an object");
     }
 
