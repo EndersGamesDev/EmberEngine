@@ -18,6 +18,7 @@ A **host** is one machine running the game servers (the arena's `pong-server` an
 | mirror | A host that cannot write the book and publishes its own `host.json` somewhere public instead; the book links to it |
 | version | `r<N>`, the commit count of the checkout a host was built from, plus its short sha. Higher is newer |
 | preferred host | The host a page will pick first, by the rule in §5 |
+| game id | The `id` in `games.json`: `arena`, `fire`, and whatever comes next. Every per-game key in the book is derived from it |
 
 ## 3. The address book
 
@@ -49,15 +50,17 @@ A **host** is one machine running the game servers (the arena's `pong-server` an
 }
 ```
 
-**Host entry keys.** `name` is the host's name (`[a-z0-9-]`, 3 to 32 characters) and is the merge key: publishing an entry replaces the entry with the same name. `ws` and `fire_ws` are the arena and Fire Racer addresses; a missing key means that game is not running on this host. `proto` and `fire_proto` are the protocol versions those two servers speak, present exactly when their address is. `version` and `commit` describe the build. `updated` is the UTC time of the publish. `by` is free text saying who deployed it from where, and is optional.
+**Game keys are derived from the game id, so a new game needs no new code in the book or in `hosts.js`.** The arena, being first, owns the bare names: its address key is `ws` and its protocol key is `proto`. Every other game uses `<id>_ws` and `<id>_proto`: Fire Racer is `fire_ws` and `fire_proto`, and a game with id `kings` would be `kings_ws` and `kings_proto`. The same two keys are used at the top level of the book and inside every host entry.
 
-**Legacy keys.** The top-level `ws`, `fire_ws`, `v`, `proto` and `fire_proto` predate the list and are kept so that every frozen page on gh-pages keeps working unchanged. `proto` and `fire_proto` are the protocols the **live pages** speak and are written by `deploy-pages.sh`. `ws` is the address of the preferred host among the hosts whose `proto` equals the top-level `proto`, and `fire_ws` likewise for `fire_proto`; `publish-host.sh` recomputes both every time it writes the book, and leaves them untouched when no host matches. `v` is the deploy stamp the pages use to cache-bust their bundles.
+**Host entry keys.** `name` is the host's name (`[a-z0-9-]`, 3 to 32 characters) and is the merge key: publishing an entry replaces the entry with the same name. Each game's address key holds that server's public address; a missing key means that game is not running on this host. Each game's protocol key is the version that server speaks, present exactly when its address is. `version` and `commit` describe the build. `updated` is the UTC time of the publish. `by` is free text saying who deployed it from where, and is optional.
+
+**Legacy keys.** The top-level address and protocol keys (`ws`, `proto`, `fire_ws`, `fire_proto`, and so on per game) plus `v` predate the list and are kept so that every frozen page on gh-pages keeps working unchanged. The top-level protocol keys are the protocols the **live pages** speak and are written by `deploy-pages.sh`. Each top-level address key is the address of the preferred host among the hosts whose protocol key for that game equals the top-level one; `publish-host.sh` recomputes every game's address key each time it writes the book, and leaves a key untouched when no host matches. `v` is the deploy stamp the pages use to cache-bust their bundles.
 
 **Mirrors.** A `host.json` at a mirror URL is one host entry, same keys. The pages fetch every mirror URL cache-busted, merge the entries into the list, and treat a mirror that does not answer as absent. A mirror URL is added to the book once, by a writer; after that the mirror updates its own entry as often as it likes. GitHub Pages and raw GitHub URLs both send the CORS header the fetch needs.
 
 ## 4. What a server says about itself
 
-Both servers answer `Hello` with a `Welcome` that now carries the host's identity and load, so a page can rank hosts from one round trip and show the player where they are:
+Every game server answers `Hello` with a `Welcome` that now carries the host's identity and load, so a page can rank hosts from one round trip and show the player where they are. The two servers in the tree today, and the pattern any new game server follows:
 
 | Field | Arena `Welcome` | Fire `Welcome` | Meaning |
 |---|---|---|---|
@@ -78,7 +81,7 @@ The identity comes from two places. The name is `--name <name>` on the command l
 The logic lives in `web/hosts.js`, shared by the hub and the live game pages (frozen pages keep their own inline discovery and read the legacy keys).
 
 1. **Load** the address book cache-busted, then every mirror in parallel with a short timeout, and merge the entries by name.
-2. **Filter** to the hosts that run this game (`ws` for the arena, `fire_ws` for Fire Racer) and, on a game page, speak its protocol (`proto` or `fire_proto` equal to the bundle's `proto_version()`). The hub filters by game only.
+2. **Filter** to the hosts that run this game (its address key is present) and, on a game page, speak its protocol (its protocol key equals the bundle's `proto_version()`). The hub filters by game only. `hosts.js` takes the game id and derives both keys; it knows nothing about any particular game.
 3. **Order** by version, newest first (the integer in `r<N>`; unparseable counts as zero), then by `updated`, newest first.
 4. **Probe** every candidate in parallel: open a WebSocket, send `Hello` (the page's protocol, or `0` from the hub), and wait up to five seconds for `Welcome`. The reply gives the round trip and the live `host`, `version`, `players` and `lobbies`, which override what the book said.
 5. **Pick**, among the hosts that answered and share the newest version: fewest `players`, then lowest round trip, then name. The remaining responders, in order, are the fallbacks.
@@ -88,7 +91,7 @@ A game page runs the probe again immediately before it launches the game, and mo
 
 **Showing where you are.** Every page shows a chip with the chosen host's name, version and round trip, and a tooltip with its commit and address. The hub also lists every host that answered, with its build and player count, and marks the preferred one.
 
-**Lobbies across hosts.** The hub asks every responding host for its lobby list and shows them all, each row tagged with its host. Joining a row hands the host's address to the game page whose `games.json` entry declares the same `proto`; a lobby on a host whose protocol no published page speaks is listed but not joinable, and says so. A game page lists lobbies on its chosen host, and on the other hosts of its protocol below, so two people on two hosts can still find each other.
+**Lobbies across hosts.** The hub asks every responding host for its lobby list and shows them all, each row tagged with its host. The list request is `list_lobbies` for every game; the reply is tagged `lobby_list` by the arena and `lobbies` by Fire Racer, and `hosts.js` accepts either, so a new game may use either tag. Joining a row hands the host's address to the game page whose `games.json` version entry declares the same `proto`; a lobby on a host whose protocol no published page speaks is listed but not joinable, and says so. A game page lists lobbies on its chosen host, and on the other hosts of its protocol below, so two people on two hosts can still find each other.
 
 ## 6. Names
 
@@ -102,7 +105,7 @@ A host runs whatever commit it was deployed from. `EMBER_REF` names it for the w
 
 There are three ways in, in increasing order of independence.
 
-**From a workstation over ssh.** `EMBER_HOST=<ssh name> bash deploy/deploy-pong-online.sh` and `…/deploy-fire-online.sh`, as before. They now stamp the build, start the server with its name, and publish a host entry into the book instead of overwriting the single address. `EMBER_REF` picks the commit, `EMBER_HOST_NAME` overrides the generated name.
+**From a workstation over ssh.** `EMBER_HOST=<ssh name> bash deploy/deploy-pong-online.sh` and `…/deploy-fire-online.sh`, as before. They now stamp the build, start the server with its name, and publish a host entry into the book instead of overwriting the single address: each calls `deploy/publish-host.sh --name <host> --game <id> --url <wss> --proto <n> …`, which upserts that game's two keys on the host's entry and recomputes the legacy keys. `EMBER_REF` picks the commit, `EMBER_HOST_NAME` overrides the generated name. A new game's deploy script is the same call with its own id.
 
 **On the machine itself.** `bash deploy/host.sh up` clones or updates the repo, builds both servers from `EMBER_REF`, starts them and their tunnels, proves each answers `Hello` through its public address, and publishes. `host.sh update` rebuilds only when the ref moved; `host.sh status` says what is running; `host.sh down` stops it. Configuration lives in `~/.ember/host.env`. Where the entry goes is `EMBER_PUBLISH`: `upstream` merges it into the book on the project's gh-pages (needs push rights), a `<git url>#<branch>` writes a `host.json` into that repository for use as a mirror, and `none` only prints it. Needs git, a Rust toolchain, `cloudflared`, `python3` and `curl`; the first build takes minutes, later ones seconds.
 
