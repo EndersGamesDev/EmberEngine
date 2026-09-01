@@ -1,0 +1,11 @@
+{
+  "fixture_suite": "fire-v1-hosted-contract",
+  "game_id": "fire",
+  "game_version": 1,
+  "client_to_server": "client-to-server.jsonl",
+  "server_to_client": "server-to-client.jsonl",
+  "legacy_lobbies": "legacy-lobbies.json",
+  "legacy_rejected": "legacy-rejected.json",
+  "legacy_transcript": "legacy-transcript.jsonl",
+  "deterministic_trace": "deterministic-trace.json"
+}
