@@ -4,6 +4,7 @@
 //! gesture, as browsers require).
 
 const SAMPLE_RATE: u32 = 44_100;
+const SAMPLE_RATE_F32: f32 = 44_100.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Sfx {
@@ -28,23 +29,34 @@ const ALL: [Sfx; 8] = [
     Sfx::Reload,
 ];
 
+// Sound durations are finite and nonnegative, and truncation selects a whole sample count.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn sample_count(duration: f32) -> usize {
+    (duration * SAMPLE_RATE_F32) as usize
+}
+
 /// Mono f32 samples at 44.1 kHz.
 fn synth(sfx: Sfx) -> Vec<f32> {
-    let sr = SAMPLE_RATE as f32;
+    let sr = SAMPLE_RATE_F32;
     let mut rng: u32 = 0x1234_5678;
     let mut noise = move || -> f32 {
-        rng = rng.wrapping_mul(1664525).wrapping_add(1013904223);
-        (rng >> 16) as f32 / 32768.0 - 1.0
+        rng = rng
+            .wrapping_mul(1_664_525)
+            .wrapping_add(1_013_904_223);
+        let upper = u16::try_from(rng >> 16).expect("the shifted RNG value fits in u16");
+        f32::from(upper) / 32768.0 - 1.0
     };
     // Pitch sweep f0->f1 over dur with exponential decay; shape morphs
     // between sine (0.0) and square (1.0).
     let mut sweep =
         |dur: f32, f0: f32, f1: f32, square: f32, decay: f32, noise_amt: f32| -> Vec<f32> {
-            let n = (dur * sr) as usize;
+            let n = sample_count(dur);
             let mut phase = 0.0f32;
             (0..n)
                 .map(|i| {
-                    let t = i as f32 / sr;
+                    let sample = u16::try_from(i)
+                        .expect("sound effects contain fewer than 65k samples");
+                    let t = f32::from(sample) / sr;
                     let f = f0 + (f1 - f0) * (t / dur);
                     phase += std::f32::consts::TAU * f / sr;
                     let s = phase.sin();
@@ -83,7 +95,7 @@ fn synth(sfx: Sfx) -> Vec<f32> {
             let mut a = sweep(0.035, 1900.0, 1500.0, 0.85, 70.0, 0.2);
             a.extend(std::iter::repeat_n(
                 0.0,
-                (0.08 * SAMPLE_RATE as f32) as usize,
+                sample_count(0.08),
             ));
             a.extend(sweep(0.045, 1300.0, 900.0, 0.85, 60.0, 0.2));
             a
@@ -107,10 +119,10 @@ mod platform {
     }
 
     impl Audio {
-        pub fn new() -> Option<Audio> {
+        pub fn new() -> Option<Self> {
             let (stream, handle) = rodio::OutputStream::try_default().ok()?;
             let samples = ALL.iter().map(|&s| (s, synth(s))).collect();
-            Some(Audio {
+            Some(Self {
                 handle,
                 _stream: stream,
                 samples,
