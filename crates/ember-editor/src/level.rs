@@ -20,8 +20,8 @@
 use glam::Vec3;
 use pong_core::shooter::{Level, Obstacle};
 
-use crate::palette::{Class, Kind};
 use crate::Obj;
+use crate::palette::{Class, Kind};
 
 /// A quarter turn; the only rotation an AABB can carry.
 pub const YAW_STEP: f32 = std::f32::consts::FRAC_PI_2;
@@ -32,6 +32,7 @@ pub const FLOOR_TOLERANCE: f32 = 1e-3;
 
 /// Snap a yaw to the nearest quarter turn. Applied live while rotating an
 /// object, so the editor never shows a rotation it cannot store.
+#[must_use]
 pub fn snap_yaw(yaw: f32) -> f32 {
     (yaw / YAW_STEP).round() * YAW_STEP
 }
@@ -39,8 +40,8 @@ pub fn snap_yaw(yaw: f32) -> f32 {
 /// Does this object's footprint swap X and Z? A quarter or three-quarter
 /// turn exchanges the extents; a half turn leaves an AABB unchanged.
 fn extents_swapped(yaw: f32) -> bool {
-    let quarters = (yaw / YAW_STEP).round() as i32;
-    quarters.rem_euclid(2) == 1
+    let quarter_parity = (yaw / YAW_STEP).round().rem_euclid(2.0);
+    (quarter_parity - 1.0).abs() < f32::EPSILON
 }
 
 /// The AABB an object occupies, with its rotation folded into the extents.
@@ -49,10 +50,7 @@ fn footprint(o: &Obj) -> ([f32; 2], [f32; 2]) {
     if extents_swapped(o.yaw) {
         std::mem::swap(&mut hx, &mut hz);
     }
-    (
-        [o.pos.x - hx, o.pos.z - hz],
-        [o.pos.x + hx, o.pos.z + hz],
-    )
+    ([o.pos.x - hx, o.pos.z - hz], [o.pos.x + hx, o.pos.z + hz])
 }
 
 /// Why an export was refused, with enough detail to fix it.
@@ -65,7 +63,7 @@ pub enum ExportError {
 impl std::fmt::Display for ExportError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ExportError::FloatingObject { index, base_y } => write!(
+            Self::FloatingObject { index, base_y } => write!(
                 f,
                 "object {index} floats {base_y:.2} above the floor; the sim's \
                  obstacles have a top but no bottom, so drop it to the ground \
@@ -82,13 +80,18 @@ impl std::fmt::Display for ExportError {
 /// was dragged is what ships. Spawns become points; their yaw is dropped,
 /// because `Sim::add_player` hardcodes the initial aim and a facing the
 /// game ignores would be a promise the format cannot keep.
+///
+/// # Errors
+///
+/// Returns [`ExportError::FloatingObject`] when an object does not rest on
+/// the floor and therefore cannot be represented by an `Obstacle`.
 pub fn to_level(objects: &[Obj], arena_half: f32) -> Result<Level, ExportError> {
     let mut obstacles = Vec::new();
     let mut spawns = Vec::new();
     for (index, o) in objects.iter().enumerate() {
         match o.class {
             Class::Object => {
-                let base_y = o.pos.y - o.scale.y * 0.5;
+                let base_y = f32::mul_add(o.scale.y, -0.5, o.pos.y);
                 if base_y.abs() > FLOOR_TOLERANCE {
                     return Err(ExportError::FloatingObject { index, base_y });
                 }
@@ -112,6 +115,16 @@ pub fn to_level(objects: &[Obj], arena_half: f32) -> Result<Level, ExportError> 
 /// Serialize a level for a human to commit. Pretty-printed because the
 /// round trip today is "export, commit the JSON, redeploy" and a diff
 /// nobody can read is a bad artifact.
+///
+/// # Errors
+///
+/// Returns [`ExportError::FloatingObject`] when an object does not rest on
+/// the floor and therefore cannot be represented by an `Obstacle`.
+///
+/// # Panics
+///
+/// Panics only if `serde_json` unexpectedly fails to serialize `Level`'s
+/// plain data representation.
 pub fn to_json(objects: &[Obj], arena_half: f32) -> Result<String, ExportError> {
     let level = to_level(objects, arena_half)?;
     Ok(serde_json::to_string_pretty(&level).expect("Level is plain data"))
@@ -122,6 +135,7 @@ pub fn to_json(objects: &[Obj], arena_half: f32) -> Result<String, ExportError> 
 ///
 /// Colours come from the palette entry a box's height would have placed,
 /// which keeps a loaded arena looking like an authored one.
+#[must_use]
 pub fn from_level(level: &Level) -> Vec<Obj> {
     let mut out = Vec::with_capacity(level.obstacles.len() + level.spawns.len());
     for o in &level.obstacles {
@@ -129,9 +143,9 @@ pub fn from_level(level: &Level) -> Vec<Obj> {
         let sz = o.max[1] - o.min[1];
         out.push(Obj {
             pos: Vec3::new(
-                (o.min[0] + o.max[0]) * 0.5,
+                f32::midpoint(o.min[0], o.max[0]),
                 o.h * 0.5,
-                (o.min[1] + o.max[1]) * 0.5,
+                f32::midpoint(o.min[1], o.max[1]),
             ),
             scale: Vec3::new(sx, o.h, sz),
             yaw: 0.0,
@@ -158,13 +172,8 @@ fn colour_for_height(h: f32) -> Vec3 {
     crate::palette::PALETTE
         .iter()
         .filter(|k| k.class == Class::Object)
-        .min_by(|a, b| {
-            (a.scale.y - h)
-                .abs()
-                .total_cmp(&(b.scale.y - h).abs())
-        })
-        .map(|k| k.color)
-        .unwrap_or(Vec3::new(0.42, 0.45, 0.50))
+        .min_by(|a, b| (a.scale.y - h).abs().total_cmp(&(b.scale.y - h).abs()))
+        .map_or(Vec3::new(0.42, 0.45, 0.50), |k| k.color)
 }
 
 #[cfg(test)]
@@ -186,7 +195,7 @@ mod tests {
     fn a_seeded_arena_survives_load_then_export() {
         // The round trip that matters: what the editor opens on must be
         // what it would write back, or every load silently edits the level.
-        for seed in [0u64, 1, 7, 20260830] {
+        for seed in [0u64, 1, 7, 20_260_830] {
             let level = Level::from_seed(seed);
             let objects = from_level(&level);
             let back = to_level(&objects, level.arena_half).expect("seeded arena exports");
@@ -201,7 +210,12 @@ mod tests {
                     assert!((a.min[i] - b.min[i]).abs() < 1e-4, "seed {seed}: min");
                     assert!((a.max[i] - b.max[i]).abs() < 1e-4, "seed {seed}: max");
                 }
-                assert!((a.h - b.h).abs() < 1e-6, "seed {seed}: height {} vs {}", a.h, b.h);
+                assert!(
+                    (a.h - b.h).abs() < 1e-6,
+                    "seed {seed}: height {} vs {}",
+                    a.h,
+                    b.h
+                );
             }
             assert_eq!(back.spawns.len(), level.spawns.len(), "seed {seed}: spawns");
             for (a, b) in back.spawns.iter().zip(&level.spawns) {
@@ -236,10 +250,18 @@ mod tests {
         assert_eq!(square(&none.obstacles[0]), (8.0, 2.0));
 
         let quarter = to_level(&[obj(at, long, YAW_STEP, Class::Object)], ARENA_HALF).unwrap();
-        assert_eq!(square(&quarter.obstacles[0]), (2.0, 8.0), "a quarter turn swaps extents");
+        assert_eq!(
+            square(&quarter.obstacles[0]),
+            (2.0, 8.0),
+            "a quarter turn swaps extents"
+        );
 
         let half = to_level(&[obj(at, long, 2.0 * YAW_STEP, Class::Object)], ARENA_HALF).unwrap();
-        assert_eq!(square(&half.obstacles[0]), (8.0, 2.0), "a half turn is a no-op on an AABB");
+        assert_eq!(
+            square(&half.obstacles[0]),
+            (8.0, 2.0),
+            "a half turn is a no-op on an AABB"
+        );
 
         let three = to_level(&[obj(at, long, 3.0 * YAW_STEP, Class::Object)], ARENA_HALF).unwrap();
         assert_eq!(square(&three.obstacles[0]), (2.0, 8.0));
@@ -248,10 +270,16 @@ mod tests {
     #[test]
     fn yaw_snaps_to_quarter_turns_including_negatives() {
         assert_eq!(snap_yaw(0.0), 0.0);
-        assert!((snap_yaw(0.2) - 0.0).abs() < 1e-6, "small turns round back to square");
+        assert!(
+            (snap_yaw(0.2) - 0.0).abs() < 1e-6,
+            "small turns round back to square"
+        );
         assert!((snap_yaw(1.4) - YAW_STEP).abs() < 1e-6);
-        assert!((snap_yaw(-1.4) + YAW_STEP).abs() < 1e-6, "negatives snap symmetrically");
-        assert!((snap_yaw(3.0) - 2.0 * YAW_STEP).abs() < 1e-6);
+        assert!(
+            (snap_yaw(-1.4) + YAW_STEP).abs() < 1e-6,
+            "negatives snap symmetrically"
+        );
+        assert!(2.0f32.mul_add(-YAW_STEP, snap_yaw(3.0)).abs() < 1e-6);
     }
 
     #[test]
@@ -260,8 +288,18 @@ mod tests {
         // is reachable by ordinary use. Silently flattening it would ship a
         // level that is not the one on screen.
         let objects = vec![
-            obj(Vec3::new(0.0, 0.6, 0.0), Vec3::splat(1.2), 0.0, Class::Object),
-            obj(Vec3::new(4.0, 5.0, 0.0), Vec3::splat(1.2), 0.0, Class::Object),
+            obj(
+                Vec3::new(0.0, 0.6, 0.0),
+                Vec3::splat(1.2),
+                0.0,
+                Class::Object,
+            ),
+            obj(
+                Vec3::new(4.0, 5.0, 0.0),
+                Vec3::splat(1.2),
+                0.0,
+                Class::Object,
+            ),
         ];
         match to_level(&objects, ARENA_HALF) {
             Err(ExportError::FloatingObject { index, base_y }) => {

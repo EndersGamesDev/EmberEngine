@@ -52,7 +52,10 @@ pub struct Skeleton {
 
 /// Parent of each joint, shared by every skeleton builder.
 const PARENTS: [Option<usize>; joint::COUNT] = {
-    use joint::*;
+    use joint::{
+        ANKLE_L, ANKLE_R, COUNT, ELBOW_L, ELBOW_R, HIP_L, HIP_R, KNEE_L, KNEE_R, NECK, ROOT,
+        SHOULDER_L, SHOULDER_R, SPINE, WRIST_L, WRIST_R,
+    };
     let mut p = [None; COUNT];
     p[SPINE] = Some(ROOT);
     p[NECK] = Some(SPINE);
@@ -72,10 +75,10 @@ const PARENTS: [Option<usize>; joint::COUNT] = {
 };
 
 /// Segment lengths of the humanoid skeleton, in character units
-/// (a ~1.8-tall figure; `push_rig`'s scale_mult resizes the whole rig).
+/// (a ~1.8-tall figure; `push_rig`'s `scale_mult` resizes the whole rig).
 #[derive(Clone, Copy)]
 pub struct HumanoidDims {
-    /// Ground to hip pivot. Must equal thigh_len + shin_len + ankle_h.
+    /// Ground to hip pivot. Must equal `thigh_len` + `shin_len` + `ankle_h`.
     pub pelvis_h: f32,
     pub hip_w: f32,
     pub thigh_len: f32,
@@ -109,8 +112,12 @@ impl Default for HumanoidDims {
 }
 
 /// Build the standard humanoid joint tree from segment dimensions.
+#[must_use]
 pub fn humanoid(d: &HumanoidDims) -> Skeleton {
-    use joint::*;
+    use joint::{
+        ANKLE_L, ANKLE_R, COUNT, ELBOW_L, ELBOW_R, HIP_L, HIP_R, KNEE_L, KNEE_R, NECK, ROOT,
+        SHOULDER_L, SHOULDER_R, SPINE, WRIST_L, WRIST_R,
+    };
     let mut joints = [JointDef {
         parent: None,
         offset: Vec3::ZERO,
@@ -151,8 +158,12 @@ pub fn humanoid(d: &HumanoidDims) -> Skeleton {
 /// anchored at those points stay connected. Corrections rotate each limb
 /// from its bind direction to a natural standing direction: an arms-out
 /// A-pose becomes a figure with its arms down, without touching the mesh.
+#[must_use]
 pub fn skeleton_from_bind(pos: &[Vec3; joint::COUNT]) -> (Skeleton, HumanoidDims) {
-    use joint::*;
+    use joint::{
+        ANKLE_L, ANKLE_R, COUNT, ELBOW_L, ELBOW_R, HIP_L, HIP_R, KNEE_L, KNEE_R, NECK, SHOULDER_L,
+        SHOULDER_R, SPINE, WRIST_L, WRIST_R,
+    };
     let mut joints = [JointDef {
         parent: None,
         offset: Vec3::ZERO,
@@ -222,10 +233,23 @@ pub fn skeleton_from_bind(pos: &[Vec3; joint::COUNT]) -> (Skeleton, HumanoidDims
 }
 
 /// Engine joint names, in `joint` index order — the node-name suffixes
-/// tools/swat_split.py writes ("rig_head", "rig_shoulder_l", ...).
+/// `tools/swat_split.py` writes ("`rig_head`", "`rig_shoulder_l`", ...).
 pub const JOINT_NAMES: [&str; joint::COUNT] = [
-    "root", "spine", "neck", "shoulder_l", "elbow_l", "wrist_l", "shoulder_r", "elbow_r",
-    "wrist_r", "hip_l", "knee_l", "ankle_l", "hip_r", "knee_r", "ankle_r",
+    "root",
+    "spine",
+    "neck",
+    "shoulder_l",
+    "elbow_l",
+    "wrist_l",
+    "shoulder_r",
+    "elbow_r",
+    "wrist_r",
+    "hip_l",
+    "knee_l",
+    "ankle_l",
+    "hip_r",
+    "knee_r",
+    "ankle_r",
 ];
 
 /// Pull one `"name": [x, y, z]` triple out of the rig JSON. The file is
@@ -261,10 +285,17 @@ fn parse_joint(json: &str, name: &str) -> Option<Vec3> {
     None
 }
 
-/// Load a split skinned model: a GLB whose nodes are named `rig_<joint>`
-/// plus the JSON of bind-pose joint positions that tools/swat_split.py
+/// Load a split skinned model.
+///
+/// The input is a GLB whose nodes are named `rig_<joint>` plus the JSON of
+/// bind-pose joint positions that `tools/swat_split.py`
 /// writes beside it. Returns the meshes to register (starting at
 /// `first_mesh`) and the rig that drives them.
+///
+/// # Errors
+///
+/// Returns an error when the rig JSON omits a joint, the GLB cannot be loaded
+/// or has no rig nodes, or the assigned mesh identifiers exceed `u32`.
 pub fn skinned_from_glb(
     glb: &[u8],
     rig_json: &str,
@@ -284,7 +315,12 @@ pub fn skinned_from_glb(
         let Some(j) = JOINT_NAMES.iter().position(|n| *n == stem) else {
             continue;
         };
-        bound.push((first_mesh + meshes.len() as u32, j));
+        let mesh_offset = u32::try_from(meshes.len())
+            .map_err(|_| "skinned model has more than u32::MAX meshes")?;
+        let mesh_id = first_mesh
+            .checked_add(mesh_offset)
+            .ok_or("skinned model mesh id exceeds u32::MAX")?;
+        bound.push((mesh_id, j));
         meshes.push(part.mesh);
     }
     if bound.is_empty() {
@@ -293,9 +329,11 @@ pub fn skinned_from_glb(
     Ok((meshes, skinned_rig(&bind, &bound)))
 }
 
-/// Assemble a rig from an imported skinned model: every part is already in
-/// bind space, so its anchor is its joint's bind position, at model scale
+/// Assemble a rig from an imported skinned model.
+///
+/// Every part is already in bind space, so its anchor is its joint's bind position, at model scale
 /// and unrotated. `parts` pairs a registered mesh id with its joint.
+#[must_use]
 pub fn skinned_rig(bind: &[Vec3; joint::COUNT], parts: &[(u32, usize)]) -> RigCharacter {
     let (skel, dims) = skeleton_from_bind(bind);
     let parts = parts
@@ -332,6 +370,7 @@ impl Default for Pose {
 }
 
 /// Evaluate world (character-space) transforms for every joint.
+#[must_use]
 pub fn world_joints(skel: &Skeleton, pose: &Pose) -> [(Vec3, Quat); joint::COUNT] {
     let mut out = [(Vec3::ZERO, Quat::IDENTITY); joint::COUNT];
     for (i, j) in skel.joints.iter().enumerate() {
@@ -354,8 +393,12 @@ pub fn world_joints(skel: &Skeleton, pose: &Pose) -> [(Vec3, Quat); joint::COUNT
 /// `phase` advances with distance walked (radians), `amp` eases the gait in
 /// and out (0 = standing), `crouch` (0..1) sinks into a knees-bent stance,
 /// and `idle_t` is wall-clock time driving the idle breathing sway.
+#[must_use]
 pub fn walk_pose(phase: f32, amp: f32, crouch: f32, idle_t: f32, d: &HumanoidDims) -> Pose {
-    use joint::*;
+    use joint::{
+        ANKLE_L, ANKLE_R, ELBOW_L, ELBOW_R, HIP_L, HIP_R, KNEE_L, KNEE_R, NECK, SHOULDER_L,
+        SHOULDER_R, SPINE,
+    };
     let pitch = Quat::from_rotation_x;
     let swing = phase.sin() * amp;
     let mut p = Pose::default();
@@ -370,8 +413,8 @@ pub fn walk_pose(phase: f32, amp: f32, crouch: f32, idle_t: f32, d: &HumanoidDim
     ] {
         let s = (phase + side_phase).sin() * amp;
         let flex = (phase + side_phase).cos().max(0.0) * amp;
-        let hip_a = -hip_amp * s - 1.0 * crouch;
-        let knee_a = 0.10 * amp + 0.70 * flex + 1.35 * crouch;
+        let hip_a = 1.0f32.mul_add(-crouch, -hip_amp * s);
+        let knee_a = 1.35f32.mul_add(crouch, 0.70f32.mul_add(flex, 0.10 * amp));
         p.local_rot[hip] = pitch(hip_a);
         p.local_rot[knee] = pitch(knee_a);
         // Keep the boot roughly level with the ground.
@@ -381,7 +424,7 @@ pub fn walk_pose(phase: f32, amp: f32, crouch: f32, idle_t: f32, d: &HumanoidDim
     // Torso: slight forward lean while moving or crouched, a breathing sway
     // when idle, and a counter-twist against the hips.
     let breathe = (idle_t * 1.7).sin() * 0.02 * (1.0 - amp);
-    let spine_pitch = 0.08 * amp + 0.38 * crouch + breathe;
+    let spine_pitch = 0.38f32.mul_add(crouch, 0.08 * amp) + breathe;
     p.local_rot[SPINE] = Quat::from_rotation_y(0.12 * swing) * pitch(spine_pitch);
     p.local_rot[NECK] = pitch(-spine_pitch * 0.8);
 
@@ -390,7 +433,7 @@ pub fn walk_pose(phase: f32, amp: f32, crouch: f32, idle_t: f32, d: &HumanoidDim
     for (sign, sh, el) in [(1.0f32, SHOULDER_L, ELBOW_L), (-1.0, SHOULDER_R, ELBOW_R)] {
         let s = sign * swing;
         p.local_rot[sh] = pitch(0.45 * s);
-        p.local_rot[el] = pitch(-(0.30 + 0.30 * s.max(0.0) + 0.25 * crouch));
+        p.local_rot[el] = pitch(-0.25f32.mul_add(crouch, 0.30f32.mul_add(s.max(0.0), 0.30)));
     }
 
     // Root: crouch sink, plus the walk's vaulting bob (highest mid-stride).
@@ -423,6 +466,7 @@ pub struct RigPart {
 
 /// Push a posed rig into the frame. `pos` is world XZ with feet at y = 0;
 /// `facing_yaw` matches the engine's yaw convention.
+// A rig placement is defined by these independent pose, mesh, and world inputs.
 #[allow(clippy::too_many_arguments)]
 pub fn push_rig(
     frame: &mut Frame,
@@ -478,21 +522,28 @@ pub struct PartSource {
 }
 
 impl PartSource {
+    #[must_use]
     pub fn height(&self) -> f32 {
         (self.max[1] - self.min[1]).max(1e-3)
     }
 
     /// Mesh-space point at the given fraction of the bounds per axis.
+    #[must_use]
     pub fn anchor(&self, fx: f32, fy: f32, fz: f32) -> Vec3 {
         Vec3::new(
-            self.min[0] + (self.max[0] - self.min[0]) * fx,
-            self.min[1] + (self.max[1] - self.min[1]) * fy,
-            self.min[2] + (self.max[2] - self.min[2]) * fz,
+            (self.max[0] - self.min[0]).mul_add(fx, self.min[0]),
+            (self.max[1] - self.min[1]).mul_add(fy, self.min[1]),
+            (self.max[2] - self.min[2]).mul_add(fz, self.min[2]),
         )
     }
 }
 
 /// Load GLB bytes into one merged mesh plus its bounds source.
+///
+/// # Errors
+///
+/// Returns an error when the GLB cannot be loaded or the merged mesh has no
+/// usable vertical extent.
 pub fn source_from_glb_bytes(bytes: &[u8], mesh_id: u32) -> Result<(MeshData, PartSource), String> {
     let parts = crate::assets::load_glb(bytes)?;
     let mut merged = MeshData::default();
@@ -527,7 +578,9 @@ pub struct RigCharacter {
     pub parts: Vec<RigPart>,
 }
 
-/// Everything the veteran can be assembled from. The five base meshes are
+/// Everything the veteran can be assembled from.
+///
+/// The five base meshes are
 /// required (the v1 set); each optional v2 segment upgrades detail when its
 /// GLB exists — `arm` doubles as upper arm + forearm and `leg` as thigh +
 /// shin until the dedicated segments land.
@@ -550,7 +603,8 @@ pub struct VeteranSources {
 }
 
 impl VeteranSources {
-    pub fn has_base(&self) -> bool {
+    #[must_use]
+    pub const fn has_base(&self) -> bool {
         self.head.is_some()
             && self.torso.is_some()
             && self.arm.is_some()
@@ -560,6 +614,13 @@ impl VeteranSources {
 }
 
 /// Assemble the jointed veteran from the available part meshes.
+///
+/// # Panics
+///
+/// Panics if any base mesh reported by [`VeteranSources::has_base`] is absent.
+#[must_use]
+// The assembly is declarative and remains linear so each optional mesh fallback is visible.
+#[allow(clippy::too_many_lines)]
 pub fn veteran_rig(s: &VeteranSources) -> RigCharacter {
     let dims = HumanoidDims::default();
     let skel = humanoid(&dims);
@@ -792,7 +853,11 @@ mod tests {
         let yaw = 0.7f32;
         let (s, c) = yaw.sin_cos();
         for v in [Vec3::X, Vec3::Z, Vec3::new(0.3, -0.2, 0.9)] {
-            let legacy = Vec3::new(v.x * c + v.z * s, v.y, -v.x * s + v.z * c);
+            let legacy = Vec3::new(
+                f32::mul_add(v.z, s, v.x * c),
+                v.y,
+                f32::mul_add(v.z, c, -v.x * s),
+            );
             let q = Quat::from_rotation_y(yaw);
             assert!(
                 (q * v - legacy).length() < 1e-5,
@@ -819,8 +884,8 @@ mod tests {
         let j = world_joints(&humanoid(&d), &Pose::default());
         let ankle = j[joint::ANKLE_L].0;
         assert!((ankle.y - d.ankle_h).abs() < 1e-4, "ankle at {}", ankle.y);
-        assert!((ankle.x + d.hip_w * 0.5).abs() < 1e-4);
-        assert!((j[joint::ANKLE_R].0.x - d.hip_w * 0.5).abs() < 1e-4);
+        assert!(f32::mul_add(d.hip_w, 0.5, ankle.x).abs() < 1e-4);
+        assert!(f32::mul_add(d.hip_w, -0.5, j[joint::ANKLE_R].0.x).abs() < 1e-4);
         let neck = j[joint::NECK].0;
         assert!((neck.y - (d.pelvis_h + 0.05 + d.spine_len)).abs() < 1e-4);
     }
@@ -829,8 +894,8 @@ mod tests {
     fn walking_feet_stay_near_ground_and_move_forward() {
         let d = HumanoidDims::default();
         let skel = humanoid(&d);
-        for i in 0..16 {
-            let phase = i as f32 / 16.0 * std::f32::consts::TAU;
+        for i in 0i16..16 {
+            let phase = f32::from(i) / 16.0 * std::f32::consts::TAU;
             let j = world_joints(&skel, &walk_pose(phase, 1.0, 0.0, 0.0, &d));
             for ankle in [j[joint::ANKLE_L].0, j[joint::ANKLE_R].0] {
                 assert!(
@@ -905,19 +970,29 @@ mod tests {
         let bind = bind_a_pose();
         let (skel, dims) = skeleton_from_bind(&bind);
         // Segment lengths survive the retarget.
-        assert!((dims.upperarm_len - (bind[joint::ELBOW_L] - bind[joint::SHOULDER_L]).length()).abs() < 1e-5);
+        assert!(
+            (dims.upperarm_len - (bind[joint::ELBOW_L] - bind[joint::SHOULDER_L]).length()).abs()
+                < 1e-5
+        );
         assert!((dims.pelvis_h - (dims.thigh_len + dims.shin_len + dims.ankle_h)).abs() < 1e-5);
 
         let j = world_joints(&skel, &walk_pose(0.0, 0.0, 0.0, 0.0, &dims));
         // Arms hang: each wrist sits well below its shoulder and much
         // closer to the body than the arms-out bind pose.
-        for (sh, wr) in [(joint::SHOULDER_L, joint::WRIST_L), (joint::SHOULDER_R, joint::WRIST_R)] {
+        for (sh, wr) in [
+            (joint::SHOULDER_L, joint::WRIST_L),
+            (joint::SHOULDER_R, joint::WRIST_R),
+        ] {
             let (s, w) = (j[sh].0, j[wr].0);
             assert!(w.y < s.y - 0.4, "wrist y {} vs shoulder {}", w.y, s.y);
             assert!((w.x - s.x).abs() < 0.2, "wrist x drift {}", w.x - s.x);
         }
         // Soles land on the ground and the head stays on top.
-        assert!(j[joint::ANKLE_L].0.y < 0.20, "ankle {}", j[joint::ANKLE_L].0.y);
+        assert!(
+            j[joint::ANKLE_L].0.y < 0.20,
+            "ankle {}",
+            j[joint::ANKLE_L].0.y
+        );
         assert!(j[joint::NECK].0.y > 1.4, "neck {}", j[joint::NECK].0.y);
     }
 
@@ -925,8 +1000,14 @@ mod tests {
     fn retargeted_arms_still_swing_when_walking() {
         let bind = bind_a_pose();
         let (skel, dims) = skeleton_from_bind(&bind);
-        let front = world_joints(&skel, &walk_pose(std::f32::consts::FRAC_PI_2, 1.0, 0.0, 0.0, &dims));
-        let back = world_joints(&skel, &walk_pose(-std::f32::consts::FRAC_PI_2, 1.0, 0.0, 0.0, &dims));
+        let front = world_joints(
+            &skel,
+            &walk_pose(std::f32::consts::FRAC_PI_2, 1.0, 0.0, 0.0, &dims),
+        );
+        let back = world_joints(
+            &skel,
+            &walk_pose(-std::f32::consts::FRAC_PI_2, 1.0, 0.0, 0.0, &dims),
+        );
         // The same wrist travels fore/aft between opposite phases.
         let travel = (front[joint::WRIST_L].0.z - back[joint::WRIST_L].0.z).abs();
         assert!(travel > 0.15, "wrist z travel {travel}");

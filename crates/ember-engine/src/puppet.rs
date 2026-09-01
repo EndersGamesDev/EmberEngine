@@ -1,5 +1,6 @@
-//! Shared articulated "puppet" character: five AI-generated mesh parts
-//! (head, torso, arm, leg, boot — arm/leg/boot reused for both sides)
+//! Shared articulated "puppet" character built from five AI-generated mesh parts.
+//!
+//! The head, torso, arm, leg, and boot meshes (with limbs reused on both sides) are
 //! animated with opposing limb swings, step lift, walk bob, an eased swing
 //! amplitude, and pivot-correct placement. Used by the native arena client
 //! and the web arena build.
@@ -37,6 +38,11 @@ pub const PART_SPECS: [(&str, f32); 5] = [
 
 /// Build one part from GLB bytes: merge its meshes, compute bounds, return
 /// the mesh plus its normalized placement info for `mesh_id`.
+///
+/// # Errors
+///
+/// Returns an error when the GLB cannot be loaded or the merged mesh has no
+/// usable vertical extent.
 pub fn part_from_glb_bytes(
     bytes: &[u8],
     target_height: f32,
@@ -62,9 +68,9 @@ pub fn part_from_glb_bytes(
         mesh: mesh_id,
         scale: target_height / h,
         center: [
-            (min[0] + max[0]) * 0.5,
-            (min[1] + max[1]) * 0.5,
-            (min[2] + max[2]) * 0.5,
+            f32::midpoint(min[0], max[0]),
+            f32::midpoint(min[1], max[1]),
+            f32::midpoint(min[2], max[2]),
         ],
     };
     Ok((merged, info))
@@ -72,9 +78,13 @@ pub fn part_from_glb_bytes(
 
 /// Rotate a local XZ offset by yaw, matching the scene shader's convention
 /// (x' = x*c + z*s, z' = -x*s + z*c).
+#[must_use]
 pub fn rotate(local: Vec2, yaw: f32) -> Vec2 {
     let (s, c) = yaw.sin_cos();
-    Vec2::new(local.x * c + local.y * s, -local.x * s + local.y * c)
+    Vec2::new(
+        local.y.mul_add(s, local.x * c),
+        local.y.mul_add(c, -local.x * s),
+    )
 }
 
 fn push_part(
@@ -88,7 +98,7 @@ fn push_part(
     let s = part.scale * body_scale;
     let c = part.center;
     let cr = rotate(Vec2::new(c[0] * s, c[2] * s), yaw);
-    let i_pos = Vec3::new(target.x - cr.x, target.y - c[1] * s, target.z - cr.y);
+    let i_pos = Vec3::new(target.x - cr.x, c[1].mul_add(-s, target.y), target.z - cr.y);
     frame.instances.push(
         Instance::new(i_pos, Vec3::splat(s), col)
             .with_yaw(yaw)
@@ -98,6 +108,7 @@ fn push_part(
 
 /// Push the articulated character. `amp` (0..1) eases the limb swing in and
 /// out; `crouch` lowers the whole figure.
+// A character placement is defined by these independent pose and mesh inputs.
 #[allow(clippy::too_many_arguments)]
 pub fn push_character_parts(
     frame: &mut Frame,
@@ -131,12 +142,16 @@ pub fn push_character_parts(
     ];
     for (part, lx, lz, cy, extra_y) in placements {
         let w = rotate(Vec2::new(lx * body, lz * body), facing_yaw);
-        let target = Vec3::new(pos.x + w.x, cy * body + extra_y + bob * 0.3, pos.y + w.y);
+        let target = Vec3::new(
+            pos.x + w.x,
+            bob.mul_add(0.3, f32::mul_add(cy, body, extra_y)),
+            pos.y + w.y,
+        );
         push_part(frame, part, body, target, facing_yaw, col);
     }
 }
 
-/// Animation slot: (facing_yaw, walk_phase, swing_amplitude). Advance from a
+/// Animation slot: (`facing_yaw`, `walk_phase`, `swing_amplitude`). Advance from a
 /// velocity with shortest-arc yaw smoothing and an eased amplitude.
 pub fn advance_anim(slot: &mut (f32, f32, f32), vel: Vec2, dt: f32) {
     let speed = vel.length();
@@ -150,9 +165,9 @@ pub fn advance_anim(slot: &mut (f32, f32, f32), vel: Vec2, dt: f32) {
         while diff < -std::f32::consts::PI {
             diff += std::f32::consts::TAU;
         }
-        slot.0 += diff * (1.0 - (-12.0 * dt).exp());
-        slot.1 += speed * dt * 6.0;
+        slot.0 = diff.mul_add(1.0 - (-12.0 * dt).exp(), slot.0);
+        slot.1 = (speed * dt).mul_add(6.0, slot.1);
     }
     let amp_target = if moving { 1.0 } else { 0.0 };
-    slot.2 += (amp_target - slot.2) * (1.0 - (-9.0 * dt).exp());
+    slot.2 = (amp_target - slot.2).mul_add(1.0 - (-9.0 * dt).exp(), slot.2);
 }

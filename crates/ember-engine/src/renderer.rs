@@ -1,15 +1,25 @@
-//! GPU layer. ATW-first architecture (docs/atw-first-rendering.md, stage A):
+//! GPU layer for the ATW-first architecture.
+//!
+//! In docs/atw-first-rendering.md stage A,
 //! the SCENE pass renders the world into an offscreen `SceneFrame`
 //! (color + depth) and never touches the swapchain; the PRESENTER pass owns
-//! presentation and warps the newest SceneFrame onto the surface — today an
+//! presentation and warps the newest `SceneFrame` onto the surface — today an
 //! identity blit, later rotation-only / depth-aware reprojection. UI will
-//! composite in the presenter, never in the scene. The SceneFrame may be a
+//! composite in the presenter, never in the scene. The `SceneFrame` may be a
 //! different resolution than the canvas (`scene_scale` — dynamic resolution
 //! comes for free because the presenter resamples anyway).
+
+// GPU APIs use u32 dimensions/counts and f32 scales, while Rust collections and winit use wider types.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
 
 use std::sync::Arc;
 
 use glam::{Mat4, Quat, Vec3};
+use wgpu::util::DeviceExt;
 use winit::window::Window;
 
 /// A vertex of a registered mesh (matches the built-in cube's layout).
@@ -41,8 +51,12 @@ pub struct TextureData {
 }
 
 impl TextureData {
-    /// Decode PNG bytes (e.g. from include_bytes!) into RGBA8. Works on all
+    /// Decode PNG bytes (e.g. from `include_bytes`!) into RGBA8. Works on all
     /// targets — wasm games embed their texture bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `bytes` are not a valid PNG image.
     pub fn from_png_bytes(bytes: &[u8]) -> Result<Self, String> {
         let img = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
             .map_err(|e| e.to_string())?
@@ -57,6 +71,7 @@ impl TextureData {
 
 impl MeshData {
     /// Axis-aligned unit box, every face UV-tiled `tiles` times.
+    #[must_use]
     pub fn textured_box(tiles: f32, texture: Option<TextureData>) -> Self {
         let mut vertices = Vec::with_capacity(36);
         let uvs = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
@@ -83,6 +98,7 @@ impl MeshData {
     }
 
     /// Flat unit plane at y = 0 facing +Y, UVs tiled `tiles` times.
+    #[must_use]
     pub fn textured_plane(tiles: f32, texture: Option<TextureData>) -> Self {
         let corners = [
             Vec3::new(-0.5, 0.0, -0.5),
@@ -104,7 +120,7 @@ impl MeshData {
 }
 
 /// (normal, tangent u, tangent v) per cube face — shared by the built-in
-/// cube and MeshData::textured_box.
+/// cube and `MeshData::textured_box`.
 const CUBE_FACES: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
     ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
     ([0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
@@ -128,7 +144,8 @@ pub struct Instance {
 }
 
 impl Instance {
-    pub fn new(position: Vec3, scale: Vec3, color: Vec3) -> Self {
+    #[must_use]
+    pub const fn new(position: Vec3, scale: Vec3, color: Vec3) -> Self {
         Self {
             position,
             scale,
@@ -138,17 +155,20 @@ impl Instance {
         }
     }
 
+    #[must_use]
     pub fn with_yaw(mut self, yaw: f32) -> Self {
         self.rot = Quat::from_rotation_y(yaw);
         self
     }
 
-    pub fn with_rot(mut self, rot: Quat) -> Self {
+    #[must_use]
+    pub const fn with_rot(mut self, rot: Quat) -> Self {
         self.rot = rot;
         self
     }
 
-    pub fn with_mesh(mut self, mesh: u32) -> Self {
+    #[must_use]
+    pub const fn with_mesh(mut self, mesh: u32) -> Self {
         self.mesh = mesh;
         self
     }
@@ -172,6 +192,7 @@ impl Default for Camera {
 }
 
 impl Camera {
+    #[must_use]
     pub fn view_proj(&self, aspect: f32) -> Mat4 {
         // glam's perspective_rh targets wgpu's 0..1 clip depth.
         Mat4::perspective_rh(self.fov_y_deg.to_radians(), aspect.max(0.01), 0.1, 500.0)
@@ -250,8 +271,10 @@ pub struct Renderer {
     surface_view_format: Option<wgpu::TextureFormat>,
     // Pipeline layouts kept so WGSL hot-reload can rebuild pipelines
     // (native-only reader, hence unused on wasm).
+    // Native hot reload reads this layout; wasm intentionally retains it without reading it.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     scene_pipeline_layout: wgpu::PipelineLayout,
+    // Native hot reload reads this layout; wasm intentionally retains it without reading it.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     present_pipeline_layout: wgpu::PipelineLayout,
     #[cfg(not(target_arch = "wasm32"))]
@@ -262,7 +285,7 @@ pub struct Renderer {
     #[cfg(not(target_arch = "wasm32"))]
     last_scene_at: std::time::Instant,
     #[cfg(not(target_arch = "wasm32"))]
-    egui_renderer: Option<egui_wgpu::Renderer>,
+    egui_painter: Option<egui_wgpu::Renderer>,
 }
 
 /// Tracks shader sources on disk for native WGSL hot-reload.
@@ -275,6 +298,14 @@ struct ShaderReload {
 }
 
 impl Renderer {
+    /// Create a renderer for `window` and register the supplied meshes.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the platform cannot create a compatible surface, adapter,
+    /// device, or surface configuration.
+    // GPU initialization is a linear descriptor pipeline whose ordering mirrors resource dependencies.
+    #[allow(clippy::too_many_lines)]
     pub async fn new(window: Arc<Window>, extra_meshes: Vec<MeshData>) -> Self {
         let size = window.inner_size();
 
@@ -325,7 +356,12 @@ impl Renderer {
         // driver/browser-defined and often non-sRGB (always, on the web).
         let mut surface_view_format: Option<wgpu::TextureFormat> = None;
         if !config.format.is_srgb() {
-            if let Some(srgb) = caps.formats.iter().copied().find(|f| f.is_srgb()) {
+            if let Some(srgb) = caps
+                .formats
+                .iter()
+                .copied()
+                .find(wgpu::TextureFormat::is_srgb)
+            {
                 config.format = srgb;
             } else {
                 // WebGPU canvases expose only non-sRGB formats; render the
@@ -347,8 +383,6 @@ impl Renderer {
             label: Some("scene shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
-
-        use wgpu::util::DeviceExt;
 
         // Per-mesh textures: group(1) of the scene pass. Meshes without a
         // texture share a 1x1 white pixel, keeping the instance-color look.
@@ -595,13 +629,13 @@ impl Renderer {
             #[cfg(not(target_arch = "wasm32"))]
             last_scene_at: std::time::Instant::now(),
             #[cfg(not(target_arch = "wasm32"))]
-            egui_renderer: None,
+            egui_painter: None,
         }
     }
 
     /// ATW rig: cap the scene pass rate (0 = uncapped). Presenter unaffected.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn set_scene_hz_cap(&mut self, hz: f32) {
+    pub const fn set_scene_hz_cap(&mut self, hz: f32) {
         self.scene_hz_cap = hz.max(0.0);
     }
 
@@ -612,7 +646,7 @@ impl Renderer {
     }
 
     /// Current surface size in pixels.
-    pub fn surface_size(&self) -> [u32; 2] {
+    pub const fn surface_size(&self) -> [u32; 2] {
         [self.config.width, self.config.height]
     }
 
@@ -648,7 +682,7 @@ impl Renderer {
     }
 
     /// Render plus an optional overlay composited after the present pass
-    /// (presenter-side, never into the SceneFrame — ATW doc §6).
+    /// (presenter-side, never into the `SceneFrame` — ATW doc §6).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn render_with_overlay(
         &mut self,
@@ -658,6 +692,8 @@ impl Renderer {
         self.render_impl(frame, overlay);
     }
 
+    // The render pass remains linear so GPU resource lifetimes and submission order stay visible.
+    #[allow(clippy::too_many_lines)]
     fn render_impl(
         &mut self,
         frame: &Frame,
@@ -817,7 +853,7 @@ impl Renderer {
         // the swapchain — UI never bakes into the reprojectable SceneFrame.
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(draw) = overlay {
-            let egui_renderer = self.egui_renderer.get_or_insert_with(|| {
+            let egui_painter = self.egui_painter.get_or_insert_with(|| {
                 egui_wgpu::Renderer::new(
                     &self.device,
                     self.surface_view_format.unwrap_or(self.config.format),
@@ -827,9 +863,9 @@ impl Renderer {
                 )
             });
             for (id, delta) in &draw.textures_delta.set {
-                egui_renderer.update_texture(&self.device, &self.queue, *id, delta);
+                egui_painter.update_texture(&self.device, &self.queue, *id, delta);
             }
-            egui_renderer.update_buffers(
+            egui_painter.update_buffers(
                 &self.device,
                 &self.queue,
                 &mut present_enc,
@@ -852,10 +888,10 @@ impl Renderer {
                     occlusion_query_set: None,
                 });
                 let mut rpass = rpass.forget_lifetime();
-                egui_renderer.render(&mut rpass, &draw.primitives, &draw.screen);
+                egui_painter.render(&mut rpass, &draw.primitives, &draw.screen);
             }
             for id in &draw.textures_delta.free {
-                egui_renderer.free_texture(id);
+                egui_painter.free_texture(id);
             }
         }
 
@@ -877,24 +913,24 @@ impl Renderer {
             return;
         }
 
-        if check_mtime(SCENE_SRC, &mut self.shader_reload.scene_mtime) {
-            if let Some(module) = self.try_compile(SCENE_SRC, "scene shader (hot-reload)") {
-                self.scene_pipeline =
-                    build_scene_pipeline(&self.device, &self.scene_pipeline_layout, &module);
-                tracing::info!(path = SCENE_SRC, "scene shader hot-reloaded");
-            }
+        if check_mtime(SCENE_SRC, &mut self.shader_reload.scene_mtime)
+            && let Some(module) = self.try_compile(SCENE_SRC, "scene shader (hot-reload)")
+        {
+            self.scene_pipeline =
+                build_scene_pipeline(&self.device, &self.scene_pipeline_layout, &module);
+            tracing::info!(path = SCENE_SRC, "scene shader hot-reloaded");
         }
-        if check_mtime(PRESENT_SRC, &mut self.shader_reload.present_mtime) {
-            if let Some(module) = self.try_compile(PRESENT_SRC, "present shader (hot-reload)") {
-                let format = self.surface_view_format.unwrap_or(self.config.format);
-                self.present_pipeline = build_present_pipeline(
-                    &self.device,
-                    &self.present_pipeline_layout,
-                    &module,
-                    format,
-                );
-                tracing::info!(path = PRESENT_SRC, "present shader hot-reloaded");
-            }
+        if check_mtime(PRESENT_SRC, &mut self.shader_reload.present_mtime)
+            && let Some(module) = self.try_compile(PRESENT_SRC, "present shader (hot-reload)")
+        {
+            let format = self.surface_view_format.unwrap_or(self.config.format);
+            self.present_pipeline = build_present_pipeline(
+                &self.device,
+                &self.present_pipeline_layout,
+                &module,
+                format,
+            );
+            tracing::info!(path = PRESENT_SRC, "present shader hot-reloaded");
         }
     }
 
@@ -998,7 +1034,7 @@ fn build_scene_pipeline(
         vertex: wgpu::VertexState {
             module: shader,
             entry_point: Some("vs_main"),
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
             buffers: &[
                 wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Vertex>() as u64,
@@ -1015,7 +1051,7 @@ fn build_scene_pipeline(
         fragment: Some(wgpu::FragmentState {
             module: shader,
             entry_point: Some("fs_main"),
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: SCENE_FORMAT,
                 blend: Some(wgpu::BlendState::REPLACE),
@@ -1031,10 +1067,10 @@ fn build_scene_pipeline(
             format: DEPTH_FORMAT,
             depth_write_enabled: true,
             depth_compare: wgpu::CompareFunction::Less,
-            stencil: Default::default(),
-            bias: Default::default(),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
         }),
-        multisample: Default::default(),
+        multisample: wgpu::MultisampleState::default(),
         multiview: None,
         cache: None,
     })
@@ -1053,13 +1089,13 @@ fn build_present_pipeline(
         vertex: wgpu::VertexState {
             module: shader,
             entry_point: Some("vs_main"),
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
             buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
             entry_point: Some("fs_main"),
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: target_format,
                 blend: Some(wgpu::BlendState::REPLACE),
@@ -1068,7 +1104,7 @@ fn build_present_pipeline(
         }),
         primitive: wgpu::PrimitiveState::default(),
         depth_stencil: None,
-        multisample: Default::default(),
+        multisample: wgpu::MultisampleState::default(),
         multiview: None,
         cache: None,
     })

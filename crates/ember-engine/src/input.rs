@@ -31,30 +31,40 @@ impl Default for InputState {
 }
 
 impl InputState {
+    #[must_use]
     pub fn down(&self, key: KeyCode) -> bool {
         self.pressed.contains(&key)
     }
 
     /// 2D axis helper: (negative key, positive key) -> -1.0 / 0.0 / 1.0.
+    #[must_use]
     pub fn axis(&self, neg: KeyCode, pos: KeyCode) -> f32 {
-        (self.down(pos) as i32 - self.down(neg) as i32) as f32
+        match (self.down(neg), self.down(pos)) {
+            (true, false) => -1.0,
+            (false, true) => 1.0,
+            _ => 0.0,
+        }
     }
 
+    #[must_use]
     pub fn mouse_down(&self, button: MouseButton) -> bool {
         self.mouse.contains(&button)
     }
 
-    pub fn cursor_ndc(&self) -> Option<[f32; 2]> {
+    #[must_use]
+    pub const fn cursor_ndc(&self) -> Option<[f32; 2]> {
         self.cursor_ndc
     }
 
-    pub fn aspect(&self) -> f32 {
+    #[must_use]
+    pub const fn aspect(&self) -> f32 {
         self.aspect
     }
 
     /// Raw mouse movement (px) accumulated since the previous frame.
     /// Only meaningful while the cursor is captured (mouse-look).
-    pub fn mouse_delta(&self) -> (f32, f32) {
+    #[must_use]
+    pub const fn mouse_delta(&self) -> (f32, f32) {
         self.mouse_delta
     }
 
@@ -64,7 +74,7 @@ impl InputState {
     }
 
     /// Called by the engine after each game update.
-    pub(crate) fn end_frame(&mut self) {
+    pub(crate) const fn end_frame(&mut self) {
         self.mouse_delta = (0.0, 0.0);
     }
 
@@ -84,7 +94,7 @@ impl InputState {
         self.mouse.remove(&button);
     }
 
-    pub(crate) fn set_cursor_ndc(&mut self, ndc: Option<[f32; 2]>) {
+    pub(crate) const fn set_cursor_ndc(&mut self, ndc: Option<[f32; 2]>) {
         self.cursor_ndc = ndc;
     }
 
