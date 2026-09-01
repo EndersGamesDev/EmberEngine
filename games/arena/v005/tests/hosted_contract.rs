@@ -295,7 +295,7 @@ fn timestamped_transcript_produces_authoritative_checkpoints() {
     assert_eq!(
         joined.scheduling,
         [SchedulingRequest::At(MonotonicTimestamp::from_micros(
-            1_016_667
+            16_667
         ))]
     );
 

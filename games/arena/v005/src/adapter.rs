@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use ember_legacy::{
     AdmissionMetadata, AdmissionRefusal, CloseReason, CloseRequest, DecodedInput, EncodedEvent,
     FactoryError, GameFactory, GameKey, GameSession, InnerCodec, InnerCodecError, InnerFrame,
-    LeaveReason, LegacyCapabilities, LobbyStatus, MonotonicDuration, MonotonicTimestamp,
-    OutboundEvent, OutboundTarget, PeerId, SchedulingRequest, SessionCreationData, SessionInput,
+    LeaveReason, LegacyCapabilities, LobbyStatus, MonotonicTimestamp, OutboundEvent,
+    OutboundTarget, PeerId, SchedulingRequest, SessionCreationData, SessionInput,
     SessionInputWithTransport, SessionUpdate,
 };
 
@@ -126,15 +126,18 @@ struct ArenaSession {
 
 impl ArenaSession {
     fn new(seed: u64, created_at: MonotonicTimestamp) -> Self {
+        let tick = created_at.as_micros() / FIXED_STEP_MICROS;
+        let next_tick_at = MonotonicTimestamp::from_micros(
+            tick.saturating_add(1).saturating_mul(FIXED_STEP_MICROS),
+        );
         Self {
             seed,
             sim: Sim::new(seed),
-            tick: 0,
+            tick,
             members: Vec::new(),
             inputs: HashMap::new(),
             pending_inputs: Vec::new(),
-            next_tick_at: created_at
-                .saturating_add(MonotonicDuration::from_micros(FIXED_STEP_MICROS)),
+            next_tick_at,
             schedule_started: false,
         }
     }
@@ -265,7 +268,7 @@ impl ArenaSession {
     }
 
     fn run_tick(&mut self, update: &mut SessionUpdate) {
-        self.tick = self.tick.saturating_add(1);
+        self.tick += 1;
         let inputs = &self.inputs;
         self.sim.step(&|player_id| {
             inputs
