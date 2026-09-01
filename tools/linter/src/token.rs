@@ -862,18 +862,18 @@ mod tests {
     /// ´test:unit:joins-adjacent-comment-lines-into-one-region´
     #[test]
     fn joins_adjacent_comment_lines_into_one_region() {
-        let wrapped = "/// the \u{a7}SPEC\n/// L-16.4.2 formula binds.\n";
+        let wrapped = "/// the \u{a7}SPEC\n/// Q-16.4.2 formula binds.\n";
 
         assert_eq!(
             texts(&rust_regions(wrapped)),
-            ["the \u{a7}SPEC L-16.4.2 formula binds."]
+            ["the \u{a7}SPEC Q-16.4.2 formula binds."]
         );
 
-        let apart = "/// the \u{a7}SPEC\nlet binding = 1;\n/// L-16.4.2 formula binds.\n";
+        let apart = "/// the \u{a7}SPEC\nlet binding = 1;\n/// Q-16.4.2 formula binds.\n";
 
         assert_eq!(
             texts(&rust_regions(apart)),
-            ["the \u{a7}SPEC", "L-16.4.2 formula binds."],
+            ["the \u{a7}SPEC", "Q-16.4.2 formula binds."],
             "program text between two comments ends the region"
         );
 
@@ -894,18 +894,18 @@ mod tests {
     /// ´test:unit:joins-a-region-across-however-many-lines-it-wraps´
     #[test]
     fn joins_a_region_across_however_many_lines_it_wraps() {
-        let thrice = "/// opening the\n/// \u{a7}SPEC\n/// L-16.4.2 formula.\n";
+        let thrice = "/// opening the\n/// \u{a7}SPEC\n/// Q-16.4.2 formula.\n";
 
         assert_eq!(
             texts(&rust_regions(thrice)),
-            ["opening the \u{a7}SPEC L-16.4.2 formula."]
+            ["opening the \u{a7}SPEC Q-16.4.2 formula."]
         );
 
-        let block = "/* opening the\n * \u{a7}SPEC\n * L-16.4.2 formula. */\n";
+        let block = "/* opening the\n * \u{a7}SPEC\n * Q-16.4.2 formula. */\n";
 
         assert_eq!(
             texts(&rust_regions(block)),
-            ["opening the \u{a7}SPEC L-16.4.2 formula. "],
+            ["opening the \u{a7}SPEC Q-16.4.2 formula. "],
             "a block comment's own lines join by the same rule"
         );
     }
@@ -948,7 +948,7 @@ mod tests {
             texts(&markdown_regions(
                 "As the \u{a7}SPEC\nL-16.4.2 formula requires.\n"
             )),
-            ["As the \u{a7}SPEC L-16.4.2 formula requires."]
+            ["As the \u{a7}SPEC Q-16.4.2 formula requires."]
         );
         assert_eq!(
             texts(&markdown_regions("One paragraph.\n\nAnother one.\n")),
@@ -992,11 +992,11 @@ mod tests {
     /// ´test:unit:joins-script-comments-and-leaves-quoted-text-alone´
     #[test]
     fn joins_script_comments_and_leaves_quoted_text_alone() {
-        let script = "#!/bin/sh\n# built under the \u{a7}SPEC\n# L-16.4.2 formula.\necho \"nothing of WP-2 here\"\n";
+        let script = "#!/bin/sh\n# built under the \u{a7}SPEC\n# Q-16.4.2 formula.\necho \"nothing of WP-2 here\"\n";
 
         assert_eq!(
             texts(&script_regions(script)),
-            ["bin/sh built under the \u{a7}SPEC L-16.4.2 formula."],
+            ["bin/sh built under the \u{a7}SPEC Q-16.4.2 formula."],
             "the shebang line is a comment to this reading and joins the run, its own leaders resolved away with the rest"
         );
 

@@ -86,7 +86,7 @@ use crate::token::{Region, markdown_code_spans, markdown_regions};
 ///
 /// ´const:emberlinter:superseded-record-lettering´ (´[EMBER-alg:const:form]´)
 /// ´const:emberlinter:superseded-record-lettering-form-xa7ed5995´
-const RETIRED_RECORD_SERIES: &[char] = &['T', 'M', 'R', 'S'];
+const RETIRED_RECORD_SERIES: &[char] = &['Q', 'M', 'R', 'S'];
 
 /// How many digits a record number written without its series letter carries.
 ///
@@ -755,8 +755,8 @@ mod tests {
     #[test]
     fn reads_a_foreign_corpus_locator_as_one_reference() {
         assert_eq!(
-            texts(&scan("Compare §SPEC L-27.2 for the older statement.\n")),
-            ["§SPEC L-27.2"]
+            texts(&scan("Compare §SPEC Q-27.2 for the older statement.\n")),
+            ["§SPEC Q-27.2"]
         );
     }
 
@@ -822,7 +822,7 @@ mod tests {
     fn leaves_displayed_and_code_font_forms_alone() {
         assert_eq!(
             texts(&scan(
-                "The lint covers `§10.3` and kin, and `ADR-T-550` by number.\n"
+                "The lint covers `§10.3` and kin, and `ADR-Q-550` by number.\n"
             )),
             Vec::<String>::new(),
             "a form in code font is named, not written"
@@ -847,9 +847,9 @@ mod tests {
     fn reports_retired_record_series_only() {
         assert_eq!(
             texts(&scan(
-                "See ADR-T-550 and ADR-M-032 and ADR-S-013 and ADR-R-001.\n"
+                "See ADR-Q-550 and ADR-M-032 and ADR-S-013 and ADR-R-001.\n"
             )),
-            ["ADR-T-550", "ADR-M-032", "ADR-S-013", "ADR-R-001"]
+            ["ADR-Q-550", "ADR-M-032", "ADR-S-013", "ADR-R-001"]
         );
         assert_eq!(
             texts(&scan(
@@ -868,13 +868,13 @@ mod tests {
     /// ´test:unit:reads-a-record-reference-standing-last-in-its-sentence´
     #[test]
     fn reads_a_record_reference_standing_last_in_its_sentence() {
-        assert_eq!(texts(&scan("The decision is ADR-T-550.\n")), ["ADR-T-550"]);
+        assert_eq!(texts(&scan("The decision is ADR-Q-550.\n")), ["ADR-Q-550"]);
         assert_eq!(
             texts(&scan("As recorded (ADR-M-032), it holds.\n")),
             ["ADR-M-032"]
         );
         assert_eq!(
-            texts(&scan("A bare series ADR-T- names nothing.\n")),
+            texts(&scan("A bare series ADR-Q- names nothing.\n")),
             Vec::<String>::new()
         );
     }
@@ -908,7 +908,7 @@ mod tests {
 
         let quiet = [
             "The canonical ADR-L-123 keeps its series.",
-            "So does the retired ADR-T-123 and ADR-M-123 and ADR-S-123 and ADR-R-123.",
+            "So does the retired ADR-Q-123 and ADR-M-123 and ADR-S-123 and ADR-R-123.",
             "A longer number ADR-1234 is a different token.",
             "A shorter one ADR-12 is no record number.",
             "A prefix inside a word XADR-123 belongs to the word.",
@@ -936,11 +936,11 @@ mod tests {
     #[test]
     fn keeps_the_two_record_families_apart() {
         let path = Path::new("doc.md");
-        let source = "Both ADR-T-550 and ADR-008 stand here.\n";
+        let source = "Both ADR-Q-550 and ADR-008 stand here.\n";
 
         assert_eq!(
             texts(&scan_legacy(path, source, &[LegacyRule::RecordNumber])),
-            ["ADR-T-550"]
+            ["ADR-Q-550"]
         );
         assert_eq!(
             texts(&scan_legacy(
@@ -952,7 +952,7 @@ mod tests {
         );
         assert_eq!(
             texts(&scan_legacy(path, source, LegacyRule::ALL)),
-            ["ADR-T-550", "ADR-008"],
+            ["ADR-Q-550", "ADR-008"],
             "the policy carrying both rules reads each shape exactly once, neither rule reaching the other's"
         );
     }
@@ -1038,7 +1038,7 @@ mod tests {
     /// ´test:unit:holds-a-document-to-the-rules-it-is-given´
     #[test]
     fn holds_a_document_to_the_rules_it_is_given() {
-        let source = "Quotes §4.2 of RFC 8949, cites `land:rigid`, and names ADR-T-550.\n";
+        let source = "Quotes §4.2 of RFC 8949, cites `land:rigid`, and names ADR-Q-550.\n";
         let path = Path::new("doc.md");
 
         assert_eq!(texts(&scan_legacy(path, source, &[])), Vec::<String>::new());
@@ -1052,7 +1052,7 @@ mod tests {
                 source,
                 &[LegacyRule::TagForm, LegacyRule::RecordNumber]
             )),
-            ["land:rigid", "ADR-T-550"],
+            ["land:rigid", "ADR-Q-550"],
             "a document quoting a foreign corpus keeps the rules it can meet"
         );
     }
@@ -1078,23 +1078,23 @@ mod tests {
         };
 
         let wrapped = "/// Interior crossovers are not asserted: the \u{a7}SPEC\n\
-                       /// L-16.4.2 formula binds at the outermost pair.\n";
+                       /// Q-16.4.2 formula binds at the outermost pair.\n";
 
-        assert_eq!(read(wrapped), ["\u{a7}SPEC L-16.4.2"]);
+        assert_eq!(read(wrapped), ["\u{a7}SPEC Q-16.4.2"]);
 
         let thrice = "/// the formula named by\n\
                       /// \u{a7}SPEC\n\
-                      /// L-16.4.2 binds here.\n";
+                      /// Q-16.4.2 binds here.\n";
 
         assert_eq!(
             read(thrice),
-            ["\u{a7}SPEC L-16.4.2"],
+            ["\u{a7}SPEC Q-16.4.2"],
             "three lines join as readily as two: the run is the unit, not the pair"
         );
 
         let apart = "/// the \u{a7}SPEC\n\
                      let binding = 1;\n\
-                     /// L-16.4.2 formula binds.\n";
+                     /// Q-16.4.2 formula binds.\n";
 
         assert_eq!(
             read(apart),
@@ -1114,13 +1114,13 @@ mod tests {
             texts(&scan(
                 "Compare \u{a7}SPEC\nL-27.2 for the older statement.\n"
             )),
-            ["\u{a7}SPEC L-27.2"]
+            ["\u{a7}SPEC Q-27.2"]
         );
         assert_eq!(
             texts(&scan(
-                "The decision is recorded in\nADR-T-550 and stands.\n"
+                "The decision is recorded in\nADR-Q-550 and stands.\n"
             )),
-            ["ADR-T-550"],
+            ["ADR-Q-550"],
             "a record reference opening a wrapped line is read where it stands"
         );
     }
@@ -1135,7 +1135,7 @@ mod tests {
     #[test]
     fn leaves_a_form_in_a_string_literal_invisible() {
         let path = Path::new("source.rs");
-        let literal = "/// A comment naming nothing.\nlet shown = \"\u{a7}10.3 and ADR-T-550\";\n";
+        let literal = "/// A comment naming nothing.\nlet shown = \"\u{a7}10.3 and ADR-Q-550\";\n";
 
         assert_eq!(
             texts(&scan_regions(
@@ -1149,7 +1149,7 @@ mod tests {
         );
 
         let split =
-            "/// naming the \u{a7}SPEC\nlet shown = \"L-16.4.2\";\n/// and nothing further.\n";
+            "/// naming the \u{a7}SPEC\nlet shown = \"Q-16.4.2\";\n/// and nothing further.\n";
 
         assert_eq!(
             texts(&scan_regions(
@@ -1219,9 +1219,9 @@ mod tests {
         );
         assert_eq!(
             texts(&scan(
-                "Classification tags (\u{a7}\u{a7}SPEC L-16.6, L-16.8).\n"
+                "Classification tags (\u{a7}\u{a7}SPEC Q-16.6, Q-16.8).\n"
             )),
-            ["\u{a7}\u{a7}SPEC L-16.6"],
+            ["\u{a7}\u{a7}SPEC Q-16.6"],
             "the doubled mark opens one reference, and the pair is not two counts"
         );
         assert_eq!(
@@ -1241,11 +1241,11 @@ mod tests {
         };
 
         let split_pair = "/// Classification tags are set by \u{a7}\u{a7}SPEC\n\
-                          /// L-16.6 and its siblings.\n";
+                          /// Q-16.6 and its siblings.\n";
 
         assert_eq!(
             read(split_pair),
-            ["\u{a7}\u{a7}SPEC L-16.6"],
+            ["\u{a7}\u{a7}SPEC Q-16.6"],
             "a doubled pair broken across a comment boundary is still one reference"
         );
 
@@ -1285,8 +1285,8 @@ mod tests {
             ("a \u{a7} 4.2 spaced number", vec!["section \u{a7}4.2"]),
             ("a \u{a7}VII numeral", vec!["section \u{a7}VII"]),
             (
-                "a \u{a7}SPEC L-16.4.2 locator",
-                vec!["section \u{a7}SPEC L-16.4.2"],
+                "a \u{a7}SPEC Q-16.4.2 locator",
+                vec!["section \u{a7}SPEC Q-16.4.2"],
             ),
             (
                 "a \u{a7}\"Named Division\" heading",

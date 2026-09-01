@@ -236,7 +236,7 @@ mod tests {
     /// The chapter scheme, bounded by the range the old specification numbered.
     fn chapters() -> PrefixNumbers {
         PrefixNumbers::new(
-            "L-",
+            "Q-",
             PrefixBound::LeadingRange {
                 minimum: 1,
                 maximum: 30,
@@ -248,7 +248,7 @@ mod tests {
     /// The record scheme, bounded by the bands the lettered series carried.
     fn records() -> PrefixNumbers {
         PrefixNumbers::new(
-            "L-",
+            "Q-",
             PrefixBound::LeadingSet(vec![
                 110, 120, 130, 140, 150, 160, 170, 210, 220, 230, 240, 250, 260, 270, 310, 320,
                 330, 340, 350, 360, 370, 410, 420, 430, 440, 450, 460, 510, 520, 530, 540, 550,
@@ -313,15 +313,15 @@ mod tests {
     /// ´test:unit:reads-a-bare-locator-within-the-two-enumerations´
     #[test]
     fn reads_a_bare_locator_within_the_two_enumerations() {
-        assert_eq!(reads("The L-16.4.2 formula binds.\n"), ["L-16.4.2"]);
-        assert_eq!(reads("As L-160 requires, and L-6 too.\n"), ["L-160", "L-6"]);
-        assert_eq!(reads("Standing last in the sentence, L-12.\n"), ["L-12"]);
+        assert_eq!(reads("The Q-16.4.2 formula binds.\n"), ["Q-16.4.2"]);
+        assert_eq!(reads("As Q-160 requires, and Q-6 too.\n"), ["Q-160", "Q-6"]);
+        assert_eq!(reads("Standing last in the sentence, Q-12.\n"), ["Q-12"]);
 
         let quiet = [
-            "A chapter L-31 the specification never had.",
-            "A record L-190 no series carried.",
-            "A locator L-1000 of some other corpus.",
-            "An identifier L-6x is one word.",
+            "A chapter Q-31 the specification never had.",
+            "A record Q-190 no series carried.",
+            "A locator Q-1000 of some other corpus.",
+            "An identifier Q-6x is one word.",
             "And CELL-6 continues a word.",
             "A snake_case L_6 is not this form.",
         ];
@@ -342,18 +342,18 @@ mod tests {
     #[test]
     fn leaves_a_locator_the_section_rule_has_already_read_alone() {
         assert_eq!(
-            reads("As \u{a7}L-16.4.2 requires.\n"),
+            reads("As \u{a7}Q-16.4.2 requires.\n"),
             Vec::<String>::new(),
             "a mark before the locator makes the whole one section reference"
         );
         assert_eq!(
-            reads("As \u{a7}SPEC L-16.4.2 requires.\n"),
+            reads("As \u{a7}SPEC Q-16.4.2 requires.\n"),
             Vec::<String>::new(),
             "a mark and a document token do the same across the space"
         );
         assert_eq!(
-            reads("As \u{a7}SPEC L-16.4.2 requires, and L-9 besides.\n"),
-            ["L-9"],
+            reads("As \u{a7}SPEC Q-16.4.2 requires, and Q-9 besides.\n"),
+            ["Q-9"],
             "and the sibling standing outside that reference is still counted"
         );
     }
@@ -367,10 +367,10 @@ mod tests {
     /// ´test:unit:leaves-a-lettered-record-reference-alone´
     #[test]
     fn leaves_a_lettered_record_reference_alone() {
-        assert_eq!(reads("As ADR-T-160 requires.\n"), Vec::<String>::new());
+        assert_eq!(reads("As ADR-Q-160 requires.\n"), Vec::<String>::new());
         assert_eq!(
-            reads("As ADR-T-160 requires, and L-160 alone besides.\n"),
-            ["L-160"],
+            reads("As ADR-Q-160 requires, and Q-160 alone besides.\n"),
+            ["Q-160"],
             "the spelling with the prefix gone is this family's"
         );
     }
@@ -401,7 +401,7 @@ mod tests {
             "As \u{a7}10.3 requires.",
             "As \u{a7} 10.3 requires.",
             "As \u{a7}VII requires.",
-            "As \u{a7}SPEC L-16.4.2 requires.",
+            "As \u{a7}SPEC Q-16.4.2 requires.",
         ];
 
         for source in section {
@@ -423,7 +423,7 @@ mod tests {
     #[test]
     fn joins_a_reference_wrapped_across_two_comment_lines() {
         let wrapped = "/// Interior crossovers are not asserted: the \u{a7}SPEC\n\
-                       /// L-16.4.2 formula binds at the outermost pair.\n";
+                       /// Q-16.4.2 formula binds at the outermost pair.\n";
 
         assert_eq!(
             texts(&scan_residual_comments(wrapped, &declared())),
@@ -433,11 +433,11 @@ mod tests {
 
         let apart = "/// Interior crossovers are not asserted: the \u{a7}SPEC\n\
                      let binding = 1;\n\
-                     /// L-16.4.2 formula binds at the outermost pair.\n";
+                     /// Q-16.4.2 formula binds at the outermost pair.\n";
 
         assert_eq!(
             texts(&scan_residual_comments(apart, &declared())),
-            ["\u{a7}SPEC", "L-16.4.2"],
+            ["\u{a7}SPEC", "Q-16.4.2"],
             "program text between two comments ends the run, so each half stands alone"
         );
     }
@@ -460,10 +460,10 @@ mod tests {
         );
         assert_eq!(
             texts(&scan_residual_markdown(
-                "Built under WP-8, per L-160.\n",
+                "Built under WP-8, per Q-160.\n",
                 &declared()
             )),
-            ["WP-8", "L-160"],
+            ["WP-8", "Q-160"],
             "and running text is read as it always was"
         );
     }
@@ -507,8 +507,8 @@ mod tests {
             "a quoted heading is a named division and belongs to the section register"
         );
         assert_eq!(
-            reads("Classification tags (\u{a7}\u{a7}SPEC L-16.6, L-16.8).\n"),
-            ["L-16.8".to_owned()],
+            reads("Classification tags (\u{a7}\u{a7}SPEC Q-16.6, Q-16.8).\n"),
+            ["Q-16.8".to_owned()],
             "the doubled mark opens one section reference covering its locator, \
              and only the list sibling standing outside it is litter"
         );
