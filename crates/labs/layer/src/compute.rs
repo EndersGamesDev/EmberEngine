@@ -844,7 +844,7 @@ impl ComputeDevice {
             .map(|_| {
                 Some(wgpu::ColorTargetState {
                     format: SLOT_FORMAT,
-                    blend: Some(wgpu::BlendState::REPLACE),
+                    blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })
             })
