@@ -679,14 +679,14 @@ impl Sim {
             // Shared movement code (also used by client prediction);
             // stance speed is server-authoritative — no speed cheats.
             let speed = stance_speed(input.sprint, input.crouch, input.shield);
-            let (old_pos, previous_y, previous_vy) = (
+            let (old_pos, feet_height, vertical_speed) = (
                 self.players[i].pos,
                 self.players[i].y,
                 self.players[i].vy,
             );
-            let pos = move_circle(old_pos, previous_y, input.mv, speed, dt, &self.obstacles);
+            let pos = move_circle(old_pos, feet_height, input.mv, speed, dt, &self.obstacles);
             let (y, vy, _grounded) =
-                step_vertical(pos, previous_y, previous_vy, input.jump, dt, &self.obstacles);
+                step_vertical(pos, feet_height, vertical_speed, input.jump, dt, &self.obstacles);
             let p = &mut self.players[i];
             p.pos = pos;
             p.y = y;
