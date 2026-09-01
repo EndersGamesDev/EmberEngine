@@ -71,7 +71,13 @@ fn main() -> std::process::ExitCode {
                     continue;
                 };
                 match msg {
-                    S2C::Welcome { proto: server } => {
+                    S2C::Welcome {
+                        proto: server,
+                        host,
+                        version,
+                        commit,
+                        ..
+                    } => {
                         if server != proto::PROTO_VERSION {
                             drop(ws.close(None));
                             eprintln!(
@@ -81,9 +87,20 @@ fn main() -> std::process::ExitCode {
                             );
                             return std::process::ExitCode::from(1);
                         }
+                        // Naming the host and build is what makes this
+                        // evidence about WHICH machine answered. A deploy
+                        // that probes a tunnel address and gets the previous
+                        // build's commit back has published a lie into the
+                        // address book, and this line is where that shows.
                         println!(
-                            "probe: healthy — Welcome received, fire protocol v{server}, \
-                             {} ms round trip",
+                            "probe: healthy — Welcome received from {} ({}), \
+                             fire protocol v{server}, {} ms round trip",
+                            if host.is_empty() { "<unnamed>" } else { &host },
+                            if version.is_empty() && commit.is_empty() {
+                                "unstamped build".to_string()
+                            } else {
+                                format!("{version} {commit}")
+                            },
                             t0.elapsed().as_millis()
                         );
                         if !require_empty {

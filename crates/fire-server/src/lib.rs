@@ -51,6 +51,11 @@ const RESULTS_SECS: f32 = 8.0;
 pub struct ServerConfig {
     pub laps: u32,
     pub max_lobbies: usize,
+    /// The host this server runs on, as published in the address book.
+    /// Empty means the server was started without a name, which is legal:
+    /// it then answers `Welcome` with an empty `host` and a page shows it
+    /// as unnamed rather than refusing to race on it.
+    pub host_name: String,
 }
 
 impl Default for ServerConfig {
@@ -58,8 +63,25 @@ impl Default for ServerConfig {
         Self {
             laps: 3,
             max_lobbies: 32,
+            host_name: String::new(),
         }
     }
+}
+
+/// This build's `(version, commit)`, as the deploy stamped it.
+///
+/// `option_env!` resolves at COMPILE time, so this is the build that is
+/// running and not whatever the checkout says now — which is the point: a
+/// host may sit on an old commit for months and must keep reporting that
+/// commit. A plain `cargo build` sets neither variable and both are `""`,
+/// so an unstamped binary says so instead of claiming a version it has no
+/// evidence for. `build.rs` makes cargo rebuild when either changes.
+#[must_use]
+pub fn build_stamp() -> (&'static str, &'static str) {
+    (
+        option_env!("EMBER_BUILD_VERSION").unwrap_or(""),
+        option_env!("EMBER_BUILD_COMMIT").unwrap_or(""),
+    )
 }
 
 enum Ev {
@@ -146,6 +168,23 @@ impl Lobby {
 #[allow(clippy::needless_pass_by_value)]
 pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
     let local = listener.local_addr()?;
+    // Identity first, before anything else this process says: a host that
+    // turns out to be serving the wrong build is diagnosed from the top of
+    // its log, and an unstamped binary has to be recognisable there too.
+    let (version, commit) = build_stamp();
+    let host = if cfg.host_name.is_empty() {
+        "<unnamed>"
+    } else {
+        cfg.host_name.as_str()
+    };
+    if version.is_empty() && commit.is_empty() {
+        tracing::info!(
+            host,
+            "fire-server: UNSTAMPED build (no EMBER_BUILD_VERSION/EMBER_BUILD_COMMIT at compile time)"
+        );
+    } else {
+        tracing::info!(host, version, commit, "fire-server build");
+    }
     tracing::info!(
         addr = %local,
         proto = proto::PROTO_VERSION,
@@ -621,11 +660,26 @@ fn handle_msg(
             }
             // Listing is deliberately ungated so the hub's lobby browser
             // works from a frozen page. Entering a race is not.
+            //
+            // The load a host is ranked on is counted here rather than kept
+            // as a running total: a stale counter is how a host advertises
+            // itself as empty and collects everyone. Lobby membership is
+            // capped far below u32, so the saturating conversion is belt
+            // and braces.
+            let (version, commit) = build_stamp();
+            let players = u32::try_from(lobbies.values().map(|l| l.members.len()).sum::<usize>())
+                .unwrap_or(u32::MAX);
+            let open = u32::try_from(lobbies.len()).unwrap_or(u32::MAX);
             send_to(
                 conns,
                 id,
                 &S2C::Welcome {
                     proto: proto::PROTO_VERSION,
+                    host: cfg.host_name.clone(),
+                    version: version.to_owned(),
+                    commit: commit.to_owned(),
+                    players,
+                    lobbies: open,
                 },
             );
         }
