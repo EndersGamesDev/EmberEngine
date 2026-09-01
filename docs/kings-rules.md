@@ -1,0 +1,3 @@
+# Four Kings: rules
+
+The rules of Four Kings have one home, `docs/kings-design.md`, sections 1 to 3: section 1 is the rules of record (board and seat frames, setup, lobby and seating, the 15-second turn, every piece's move table including the Joker and the Hero, elimination, end of game, and the engine's turn loop step by step), section 2 is the classes and the figure cards with the within-class swap, and section 3 lists every decision made where the spec was silent, each with its reason. This file exists only so that "where are the rules" has a one-word answer; it carries no rule of its own, and nothing here may ever disagree with that document, because the server validator and the client are both written against it.
