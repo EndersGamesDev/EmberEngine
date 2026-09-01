@@ -506,7 +506,7 @@
       const sel = $('host-pick');
       const names = rows.map((h) => h.key).filter(Boolean);
       if (pin && !names.includes(pin)) names.push(pin); // a pin that went away stays visible
-      const wanted = ['', ...names].join(' ');
+      const wanted = ['', ...names].join("|");
       if (sel.dataset.options !== wanted) {
         sel.dataset.options = wanted;
         sel.replaceChildren(...['', ...names].map((n) => {
