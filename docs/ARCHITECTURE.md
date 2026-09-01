@@ -1,65 +1,46 @@
-<!-- Drafted by the AI worker cluster from the code map and repo audit (2026-08-29); reviewed lightly - verify details against the source before relying on them. -->
 # ember architecture
 
 ## Crate responsibilities and boundaries
 
-The workspace is organized around three core layers: the **Platform** (`ember-engine`), the **Game Logic** (`game`, `pong`), and the **Shared Infrastructure** (`ember-net`, `pong-core`).
+The workspace separates current platform plumbing from frozen game contracts: engine, transport, hosting, and client lifecycle may evolve together, while every hosted version preserves its wire protocol and gameplay semantics.
 
-*   **`ember-engine`**: The platform and rendering abstraction. It provides the `EmberGame` trait and the `Renderer`. It handles window creation (`winit`), GPU context (`wgpu`), and the ATW-first rendering flow (SceneFrame -> Presenter -> Swapchain). It is the only layer aware of platform-specific I/O and windowing events.
-*   **`game`**: Client-side logic for the simple multiplayer arena (movement + animated characters; no combat — the shooter lives in the web games). It implements `EmberGame` and manages session state (Online/Offline). It consumes `ember-engine` for rendering and `ember-net` for networking. It handles client-side interpolation and input prediction.
-*   **`pong`**: Client-side logic for the 3D Pong game. It implements `EmberGame` and provides local (hotseat) and online (WebSocket) modes. It consumes `ember-engine` for rendering and `pong-core` for authoritative physics.
-*   **`pong-core`**: Shared deterministic sims for BOTH web games: the pong sim (sim.rs) and the arena-shooter sim (shooter.rs), plus their WebSocket protocol (proto.rs). It isolates the deterministic simulation (`Sim`), state definitions (`PlayerSt`, `Bullet`), and the WebSocket protocol (`proto`). It is designed to be platform-agnostic and testable headlessly.
-*   **`ember-net`**: A shared library for the arena shooter network protocol. It defines the TCP message format (`ClientMsg`, `ServerMsg`), serialization using postcard, and constants for the server architecture. It is intended for use by the `game` crate and the `ember-server`.
-*   **`ember-server`**: A headless dedicated server for the arena shooter. It runs the simulation loop at 60Hz and handles TCP I/O via separate threads. It re-exports constants from `ember-net`.
+* **`ember-engine`** is the platform and renderer layer. It owns windowing, GPU resources, the `EmberGame` application boundary, scene rendering, and presentation.
+* **`ember-legacy`** is the narrow moving capability surface between current plumbing and hosted versions. It defines neutral time, randomness, session, frame, and asset values without exposing sockets, renderer internals, or game rules.
+* **`ember-net`** owns only the canonical game-neutral outer JSON/WebSocket protocol. It defines hello, lobby listing, exact game/version selection, admission responses, outer errors, frame limits, and the pre-join connection state machine.
+* **`ember-server`** is the sole game-neutral host. It owns the listener, connection lifecycle, admission, registry, bounded queues, limits, lobby execution, diagnostics, and dispatch of opaque joined payloads to a selected version.
+* **`ember-client-net`** owns reusable client connection plumbing on native and wasm, including outer handshake state, WebSocket lifecycle, bounded queues, sequence/history bookkeeping, replay orchestration, and connection diagnostics.
+* **`games/<game>/vNNN`** crates own frozen game wire and gameplay contracts. The current registry contains `games/arena/v012` and `games/fire/v001`; each version depends on `ember-legacy` rather than host or renderer implementation types.
+* **`games/hosted.toml`** is the hosted-set authority. It declares each exact game/version key, package, latest flag, limits profile, fixture suite, and any legacy selector; server dependencies and registry entries must match it.
+* **`pong`** and **`fire`** remain the current client shells. They own rendering, controls, and game-specific prediction or replay behavior above shared engine and networking plumbing.
 
-## Parallel Protocols
+Dependency flow is inward toward narrow contracts: client shells use `ember-engine` and shared client plumbing, hosted versions use `ember-legacy`, and `ember-server` composes the outer protocol with the closed hosted registry.
 
-The workspace maintains two parallel, non-overlapping protocols: **TCP Arena Shooter** and **WebSocket Pong/Shooter**. They are separate to maintain strict isolation between distinct gameplay modes and to facilitate independent development and deployment of the two games.
+## One-server protocol and hosting flow
 
-*   **TCP Protocol (`ember-net`)**:
-    *   Used by the `game` crate (client) and `ember-server`.
-    *   Transport: TCP.
-    *   Format: Length-prefixed binary using `postcard`.
-    *   Purpose: Reliable, low-latency transport for the arena shooter's movement and state snapshots.
-    *   Key items: `ClientMsg`, `ServerMsg`, `PlayerState`, `TICK_HZ` (60).
+A canonical connection moves through `AwaitHello`, `Browsing`, `Joined`, and `Closed`. Before admission, `ember-net` decodes only outer messages; after exact `(game_id, game_version, lobby_name)` admission, `ember-server` forwards each text or binary payload unchanged to the selected version codec.
 
-*   **WebSocket Protocol (`pong-core`)**:
-    *   Used by the `pong` crate (client), `pong-server`, and the web lobby.
-    *   Transport: WebSocket (JSON).
-    *   Format: Tagged enums (`C2S`, `S2C`) using `serde`.
-    *   Purpose: Matchmaking, lobby management, and state synchronization for the Pong game and the arena shooter (in `pong`).
-    *   Key items: `LobbyInfo`, `PState`, `BState`, `PROTO_VERSION` (9), `STATE_EVERY_TICKS` (2).
+Listing is independent of game-version compatibility and projects full game/version/lobby tuples. Create and join require an exact hosted key; the server neither substitutes a nearby version nor interprets a joined version's inner messages.
 
-## ATW-first render flow
+At startup, `ember-server` constructs the registry from the two hosted version crates and verifies it against `games/hosted.toml`. Each lobby has one authoritative session owner, while the host retains responsibility for clocks, peer identity, admission order, budgets, outbound routing, and cleanup.
 
-The renderer implements an **Always-Texture-Warp (ATW)** architecture, separating the scene pass from the presentation pass.
+Arena 12 and Fire 1 carry legacy ingress adapters for already deployed clients. These adapters translate only the pre-join legacy lobby surface and then preserve each version's exact inner protocol; new clients use the canonical outer protocol.
 
-1.  **Scene Pass (`Renderer`)**:
-    *   The renderer owns an offscreen `SceneTargets` (color/depth).
-    *   The game provides a `Frame` containing the `Camera`, `Instance` list, and `MeshData`.
-    *   The renderer performs all lighting and geometry rendering into the offscreen target, producing a linear LDR `SceneFrame` texture.
-2.  **Presenter Pass (`present.wgsl`)**:
-    *   The presenter binds the `SceneFrame` and renders a fullscreen triangle.
-    *   The WGSL shader samples the scene texture and applies a viewport transformation, outputting directly to the swapchain.
-3.  **Swapchain Integration**:
-    *   This flow allows for dynamic resolution scaling (`scene_scale`) and platform-agnostic rendering (e.g., resizing logic for WASM vs. Desktop).
+## Honest interim migration state
 
-## Asset pipelines
+The versioned Arena and Fire contracts coexist with `pong-core` and `fire-core`, and the deploy-continuity binaries `pong-server` and `fire-server` still build and run. They remain until the probe, end-to-end, health, drain, and deployment responsibilities move into the sole host and public routing switches during [migration stages 5 and 6](one-server-evergreen.md#10-migration-buildable-steps-visible-behavior).
 
-Assets are managed by `ember-engine` and `game`, focusing on procedural generation and deterministic loading.
+The `pong` crate's Arena client still imports its online protocol and shooter simulation through `pong-core`; it has not yet moved to `ember-client-net` or the versioned Arena crate. Fire has begun using `ember-client-net`, while its existing server path continues through `fire-core` for deployment continuity.
 
-*   **Textures**: Managed by `game`. Supports standard image loading and procedural generation via AI generation (referenced in code map).
-*   **3D Geometry**:
-    *   **GLB**: Loaded via `assets::load_glb()`. This parses glTF files, flattens triangles, and transforms vertices into unindexed `MeshData` for the renderer.
-    *   **Procedural**: Used by `pong` and `game` to generate geometry (paddles, balls, weapons) on the fly. This includes deterministic obstacle rendering for the arena shooter and procedural pistol construction (`push_gun`).
-*   **Shaders**: Defined in `.wgsl` files. `shader.wgsl` handles instanced drawing with uniform-per-axis scaling and Y-rotation. `present.wgsl` handles the ATW fullscreen blit.
+The native raw-TCP cube demo, its Postcard protocol, its verification bot, and its dedicated deploy path are retired. `ember-net` and `ember-server` no longer retain a second cube-specific transport or simulation surface.
 
-## Deterministic-sim rules
+## Frozen behavior and deterministic simulation
 
-The simulation is designed for replayability and synchronization.
+Hosted wire fixtures, deterministic transcripts, lobby/admission fixtures, and frozen-client transcripts form the semantic boundary. Plumbing changes may alter source layout and internal APIs, but a behavior change requires a new version directory and manifest key rather than rewriting an existing contract.
 
-*   **Fixed Timestep**: The simulation runs at a fixed 60Hz (`TICK_HZ`).
-*   **Determinism**: The `pong-core` simulation relies on **deterministic RNG**. Seeding is critical; clients and servers must use identical seeds to ensure physics results match exactly.
-*   **State Definition**: The `shooter` module defines the authoritative state (`PlayerSt`, `Bullet`). The `sim` module provides a pure, headless runner for the Pong game.
-*   **Lag Compensation**: The arena shooter implements a rewind mechanism (`MAX_REWIND_TICKS` = 18) to look back in time to calculate hits. This is handled in `pong-core`.
+Arena 12 and Fire 1 retain their established fixed-step rules inside their version boundaries. The outer protocol carries versions, timestamps, limits, and opaque payloads without imposing a global gameplay tick rate.
 
+## Rendering and assets
+
+`ember-engine` renders scene geometry into offscreen color and depth targets, then presents the scene texture through the fullscreen presenter pass. This keeps surface acquisition and swapchain presentation below game code and permits presentation transforms without changing simulation.
+
+Client shells submit cameras, instances, meshes, and texture data through engine-owned types. GLB loading and procedural geometry remain client-side presentation concerns; hosted server versions receive no renderer, GPU, window, or asset-loader implementation objects.
