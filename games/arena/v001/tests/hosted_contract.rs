@@ -320,7 +320,9 @@ fn factory_constructs_without_consuming_any_capability_surface() {
         assets: None,
     };
     let creation = creation([7; 32], MonotonicTimestamp::from_micros(50));
-    ArenaFactory::new().create(&capabilities, &creation).unwrap();
+    ArenaFactory::new()
+        .create(&capabilities, &creation)
+        .unwrap();
 }
 
 #[test]

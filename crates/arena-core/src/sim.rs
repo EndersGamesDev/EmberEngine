@@ -1,5 +1,6 @@
-//! Arena v0's pong-classic simulation: pure, deterministic, fixed 60 Hz steps. No engine or
-//! platform types in here — the sim is testable headless and is the shape a
+//! Arena v0's deterministic pong-classic simulation.
+//!
+//! Fixed 60 Hz steps, with no engine or platform types — the sim is testable headless and is the shape a
 //! future networked version would replicate.
 
 pub const FIXED_DT: f32 = 1.0 / 60.0;

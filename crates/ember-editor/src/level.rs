@@ -17,8 +17,8 @@
 //!   represented, so exporting one is an error naming the object rather
 //!   than a box that quietly sinks to the floor.
 
-use glam::Vec3;
 use arena_core::shooter::{Level, Obstacle};
+use glam::Vec3;
 
 use crate::Obj;
 use crate::palette::{Class, Kind};

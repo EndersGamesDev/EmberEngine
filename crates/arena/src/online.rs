@@ -6,14 +6,14 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
 
-use ember_engine::glam::{Quat, Vec2, Vec3};
-use ember_engine::{Camera, EmberGame, Frame, InputState, Instance, KeyCode, MouseButton};
 use arena_core::proto::{BState, C2S, PROTO_VERSION, PState, PlayerMeta, S2C, STATE_EVERY_TICKS};
 use arena_core::shooter::{
     EYE_CROUCH, EYE_STAND, FIXED_DT, MAX_HP, MAX_PITCH, Obstacle, RELOAD_SECS, generate_arena,
     generate_pads, move_circle, obstacle_height, stance_speed, step_vertical, weapon_name,
     weapon_stats,
 };
+use ember_engine::glam::{Quat, Vec2, Vec3};
+use ember_engine::{Camera, EmberGame, Frame, InputState, Instance, KeyCode, MouseButton};
 use serde::Deserialize;
 
 use crate::sound::{Audio, Sfx};
