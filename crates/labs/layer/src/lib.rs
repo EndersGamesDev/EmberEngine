@@ -1,6 +1,7 @@
 //! Fragment-compute layer and GPU-resident 120-cell prism demonstration.
 
 #![deny(missing_docs)]
+#![recursion_limit = "256"]
 
 pub mod compute;
 pub mod geometry;

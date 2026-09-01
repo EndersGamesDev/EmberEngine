@@ -1,6 +1,5 @@
 //! Reusable fragment-compute dialect and frozen dispatch plans.
 
-use std::cell::Cell;
 use std::fmt::{self, Write as _};
 use std::future::Future;
 use std::pin::Pin;
@@ -13,6 +12,7 @@ use thiserror::Error;
 use wgpu::util::DeviceExt;
 
 const SLOT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
+#[cfg(target_arch = "wasm32")]
 const COMPLETION_DEADLINE_MS: i32 = 4_000;
 static NEXT_DEVICE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -35,9 +35,15 @@ impl IndexSpace {
         }
     }
 
+    /// Whether this domain has no logical elements.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.len() == 0
+    }
+
     /// Physical RGBA32F texture dimensions.
     #[must_use]
-    pub fn rect(self) -> (u32, u32) {
+    pub const fn rect(self) -> (u32, u32) {
         match self {
             Self::Grid1D(length) => {
                 let mut side = 1_u32;
@@ -161,7 +167,7 @@ struct Slot {
     view: wgpu::TextureView,
 }
 
-/// A vec4-granular SoA allocation backed by RGBA32F textures.
+/// A vec4-granular `SoA` allocation backed by RGBA32F textures.
 pub struct ComputeBuffer {
     owner: u64,
     id: u64,
@@ -177,9 +183,9 @@ impl ComputeBuffer {
         self.index_space
     }
 
-    /// Number of independent vec4 SoA slots.
+    /// Number of independent vec4 `SoA` slots.
     #[must_use]
-    pub fn slot_count(&self) -> usize {
+    pub const fn slot_count(&self) -> usize {
         self.slots.len()
     }
 
@@ -202,7 +208,7 @@ pub struct InputBinding<'a> {
     pub accessor: &'a str,
     /// Allocation containing the slot.
     pub buffer: &'a ComputeBuffer,
-    /// SoA slot index.
+    /// `SoA` slot index.
     pub slot: usize,
 }
 
@@ -212,7 +218,7 @@ pub struct OutputBinding<'a> {
     pub field: &'a str,
     /// Allocation containing the destination slot.
     pub buffer: &'a ComputeBuffer,
-    /// SoA slot index.
+    /// `SoA` slot index.
     pub slot: usize,
 }
 
@@ -265,6 +271,7 @@ pub struct DispatchToken {
 
 enum MapOutcome {
     Complete(Result<(), wgpu::BufferAsyncError>),
+    #[cfg(target_arch = "wasm32")]
     Deadline,
 }
 
@@ -285,12 +292,13 @@ impl Future for CallbackFuture {
         let Ok(mut state) = self.state.lock() else {
             return Poll::Pending;
         };
-        if let Some(value) = state.value.take() {
-            Poll::Ready(value)
-        } else {
-            state.waker = Some(context.waker().clone());
-            Poll::Pending
-        }
+        state.value.take().map_or_else(
+            || {
+                state.waker = Some(context.waker().clone());
+                Poll::Pending
+            },
+            Poll::Ready,
+        )
     }
 }
 
@@ -382,6 +390,7 @@ fn prescan(kernel: &str, body: &str, accessors: &[&str]) -> Result<(), DialectEr
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn assemble(desc: &KernelDesc<'_>) -> Result<String, DialectError> {
     if !identifier(desc.name) || !identifier(desc.uniform_type) {
         return Err(DialectError::InvalidDescriptor {
@@ -396,7 +405,7 @@ fn assemble(desc: &KernelDesc<'_>) -> Result<String, DialectError> {
                 .to_string(),
         });
     }
-    if desc.uniform_size == 0 || desc.uniform_size % 16 != 0 {
+    if desc.uniform_size == 0 || !desc.uniform_size.is_multiple_of(16) {
         return Err(DialectError::InvalidDescriptor {
             kernel: desc.name.to_string(),
             message: "uniform size must be a nonzero multiple of 16 bytes".to_string(),
@@ -506,8 +515,8 @@ fn assemble(desc: &KernelDesc<'_>) -> Result<String, DialectError> {
 /// A WebGL2-compatible fragment-compute device.
 pub struct ComputeDevice {
     owner: u64,
-    next_buffer: Cell<u64>,
-    generation: Cell<u64>,
+    next_buffer: Mutex<u64>,
+    generation: Mutex<u64>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     marker: wgpu::Buffer,
@@ -565,8 +574,8 @@ impl ComputeDevice {
         });
         Ok(Self {
             owner: NEXT_DEVICE_ID.fetch_add(1, Ordering::Relaxed),
-            next_buffer: Cell::new(1),
-            generation: Cell::new(0),
+            next_buffer: Mutex::new(1),
+            generation: Mutex::new(0),
             device,
             queue,
             marker,
@@ -615,7 +624,7 @@ impl ComputeDevice {
         }
     }
 
-    /// Allocates vec4 SoA textures and optionally uploads logical elements.
+    /// Allocates vec4 `SoA` textures and optionally uploads logical elements.
     ///
     /// # Errors
     ///
@@ -634,17 +643,16 @@ impl ComputeDevice {
                 "{label} has invalid space {index_space:?} or slot count {slot_count}"
             )));
         }
-        if let Some(values) = initial {
-            if values.len() != slot_count
+        if let Some(values) = initial
+            && (values.len() != slot_count
                 || values
                     .iter()
-                    .any(|slot| slot.len() != index_space.len() as usize)
-            {
+                    .any(|slot| slot.len() != index_space.len() as usize))
+        {
                 return Err(LayerError::Resource(format!(
                     "{label} initial data does not match {slot_count} slots of {} elements",
                     index_space.len()
                 )));
-            }
         }
         let mut slots = Vec::with_capacity(slot_count);
         for slot_index in 0..slot_count {
@@ -691,8 +699,12 @@ impl ComputeDevice {
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             slots.push(Slot { texture, view });
         }
-        let id = self.next_buffer.get();
-        self.next_buffer.set(id.wrapping_add(1));
+        let mut next_buffer = self
+            .next_buffer
+            .lock()
+            .map_err(|_| LayerError::Resource("buffer id lock was poisoned".to_string()))?;
+        let id = *next_buffer;
+        *next_buffer = id.wrapping_add(1);
         Ok(ComputeBuffer {
             owner: self.owner,
             id,
@@ -707,6 +719,7 @@ impl ComputeDevice {
     /// # Errors
     ///
     /// Returns typed dialect errors or a scoped wgpu pipeline diagnostic at registration time.
+    #[allow(clippy::too_many_lines)]
     pub async fn create_kernel(&self, desc: KernelDesc<'_>) -> Result<Kernel, LayerError> {
         for input in desc.inputs {
             self.check_owner(input.buffer.owner)?;
@@ -750,6 +763,9 @@ impl ComputeDevice {
             output_keys.push(key);
         }
         let source = assemble(&desc)?;
+        let uniform_binding = u32::try_from(desc.inputs.len()).map_err(|_| {
+            LayerError::Resource("kernel has more inputs than binding indices".to_string())
+        })?;
         self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let shader = self
             .device
@@ -759,8 +775,11 @@ impl ComputeDevice {
             });
         let mut layout_entries = Vec::with_capacity(desc.inputs.len() + 1);
         for binding in 0..desc.inputs.len() {
+            let binding = u32::try_from(binding).map_err(|_| {
+                LayerError::Resource("kernel has more inputs than binding indices".to_string())
+            })?;
             layout_entries.push(wgpu::BindGroupLayoutEntry {
-                binding: binding as u32,
+                binding,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: false },
@@ -771,7 +790,7 @@ impl ComputeDevice {
             });
         }
         layout_entries.push(wgpu::BindGroupLayoutEntry {
-            binding: desc.inputs.len() as u32,
+            binding: uniform_binding,
             visibility: wgpu::ShaderStages::FRAGMENT,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
@@ -794,13 +813,16 @@ impl ComputeDevice {
         });
         let mut bind_entries = Vec::with_capacity(desc.inputs.len() + 1);
         for (binding, input) in desc.inputs.iter().enumerate() {
+            let binding = u32::try_from(binding).map_err(|_| {
+                LayerError::Resource("kernel has more inputs than binding indices".to_string())
+            })?;
             bind_entries.push(wgpu::BindGroupEntry {
-                binding: binding as u32,
+                binding,
                 resource: wgpu::BindingResource::TextureView(&input.buffer.slots[input.slot].view),
             });
         }
         bind_entries.push(wgpu::BindGroupEntry {
-            binding: desc.inputs.len() as u32,
+            binding: uniform_binding,
             resource: uniform.as_entire_binding(),
         });
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -858,7 +880,7 @@ impl ComputeDevice {
             .map(|output| {
                 output.buffer.slots[output.slot]
                     .texture
-                    .create_view(&Default::default())
+                    .create_view(&wgpu::TextureViewDescriptor::default())
             })
             .collect();
         let (width, height) = desc.index_space.rect();
@@ -921,19 +943,29 @@ impl ComputeDevice {
             });
             pass.set_pipeline(&kernel.pipeline);
             pass.set_bind_group(0, &kernel.bind_group, &[]);
+            let width = u16::try_from(kernel.width).map_err(|_| {
+                LayerError::Resource("dispatch width exceeds WebGL2 viewport range".to_string())
+            })?;
+            let height = u16::try_from(kernel.height).map_err(|_| {
+                LayerError::Resource("dispatch height exceeds WebGL2 viewport range".to_string())
+            })?;
             pass.set_viewport(
                 0.0,
                 0.0,
-                kernel.width as f32,
-                kernel.height as f32,
+                f32::from(width),
+                f32::from(height),
                 0.0,
                 1.0,
             );
             pass.draw(0..3, 0..1);
         }
         self.queue.submit([encoder.finish()]);
-        let generation = self.generation.get().wrapping_add(1);
-        self.generation.set(generation);
+        let mut current = self
+            .generation
+            .lock()
+            .map_err(|_| LayerError::Resource("generation lock was poisoned".to_string()))?;
+        let generation = current.wrapping_add(1);
+        *current = generation;
         Ok(DispatchToken {
             owner: self.owner,
             generation,
@@ -942,7 +974,10 @@ impl ComputeDevice {
 
     fn check_token(&self, token: DispatchToken) -> Result<(), LayerError> {
         self.check_owner(token.owner)?;
-        let current = self.generation.get();
+        let current = *self
+            .generation
+            .lock()
+            .map_err(|_| LayerError::Resource("generation lock was poisoned".to_string()))?;
         if token.generation == current {
             Ok(())
         } else {
@@ -969,9 +1004,7 @@ impl ComputeDevice {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn arm_deadline(_state: Arc<Mutex<CallbackState>>) -> Result<(), LayerError> {
-        Ok(())
-    }
+    fn arm_deadline(_state: Arc<Mutex<CallbackState>>) {}
 
     async fn map(
         &self,
@@ -985,10 +1018,14 @@ impl ComputeDevice {
         slice.map_async(wgpu::MapMode::Read, move |result| {
             finish_callback(&callback_state, MapOutcome::Complete(result));
         });
+        #[cfg(target_arch = "wasm32")]
         Self::arm_deadline(state)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        Self::arm_deadline(state);
         match future.await {
             MapOutcome::Complete(Ok(())) => {}
             MapOutcome::Complete(Err(error)) => return Err(LayerError::Mapping(error.to_string())),
+            #[cfg(target_arch = "wasm32")]
             MapOutcome::Deadline => return Err(LayerError::Deadline(COMPLETION_DEADLINE_MS)),
         }
         self.check_token(token)?;
@@ -1079,9 +1116,9 @@ impl ComputeDevice {
         for row in 0..height as usize {
             let start = row * aligned_row as usize;
             let row_bytes = &bytes[start..start + packed_row as usize];
-            for texel in row_bytes.chunks_exact(16) {
+            for texel in row_bytes.as_chunks::<16>().0 {
                 let mut value = [0.0_f32; 4];
-                for (component, bytes) in value.iter_mut().zip(texel.chunks_exact(4)) {
+                for (component, bytes) in value.iter_mut().zip(texel.as_chunks::<4>().0) {
                     *component = f32::from_ne_bytes(bytes.try_into().map_err(|_| {
                         LayerError::Mapping("readback component had the wrong size".to_string())
                     })?);
@@ -1153,7 +1190,7 @@ impl fmt::Debug for Kernel {
     }
 }
 
-const GOLDEN_BODY: &str = r#"
+const GOLDEN_BODY: &str = r"
 struct GoldenUniform { bias: vec4<f32>, }
 struct GoldenResult { value: vec4<f32>, }
 fn kernel(index: u32, uniforms: GoldenUniform) -> GoldenResult {
@@ -1161,7 +1198,7 @@ fn kernel(index: u32, uniforms: GoldenUniform) -> GoldenResult {
     result.value = load_golden(index) * 2.0 + uniforms.bias;
     return result;
 }
-"#;
+";
 
 #[cfg(test)]
 mod tests {

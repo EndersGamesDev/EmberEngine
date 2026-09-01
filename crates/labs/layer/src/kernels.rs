@@ -29,7 +29,7 @@ pub struct EdgeUniform {
 }
 
 /// Pure per-vertex 5D rotation and double-projection kernel body.
-pub const VERTEX_KERNEL: &str = r#"
+pub const VERTEX_KERNEL: &str = r"
 struct VertexUniform {
     theta_one: f32,
     theta_two: f32,
@@ -61,10 +61,10 @@ fn kernel(index: u32, uniforms: VertexUniform) -> VertexResult {
     result.fifth_axis = vec4<f32>(fifth, 0.0, 0.0, 0.0);
     return result;
 }
-"#;
+";
 
 /// Pure per-edge gather, instance transform, and fifth-axis hue kernel body.
-pub const EDGE_KERNEL: &str = r#"
+pub const EDGE_KERNEL: &str = r"
 struct EdgeUniform {
     fifth_range: f32,
     half_thickness: f32,
@@ -89,4 +89,4 @@ fn kernel(index: u32, uniforms: EdgeUniform) -> EdgeResult {
     result.orientation_length = vec4<f32>(delta / edge_length, edge_length);
     return result;
 }
-"#;
+";

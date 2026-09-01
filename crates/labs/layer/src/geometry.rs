@@ -82,7 +82,7 @@ fn add_family(vertices: &mut Vec<[f64; 4]>, base: [f64; 4], even_only: bool) {
                     sign_index += 1;
                 }
             }
-            if !vertices.iter().any(|candidate| *candidate == point) {
+            if !vertices.contains(&point) {
                 vertices.push(point);
             }
         }
@@ -93,7 +93,7 @@ fn add_family(vertices: &mut Vec<[f64; 4]>, base: [f64; 4], even_only: bool) {
 #[must_use]
 pub fn cap_vertices() -> Vec<[f64; 4]> {
     let sqrt5 = 5.0_f64.sqrt();
-    let phi = (1.0 + sqrt5) * 0.5;
+    let phi = f64::midpoint(1.0, sqrt5);
     let mut vertices = Vec::with_capacity(600);
     add_family(&mut vertices, [0.0, 0.0, 2.0, 2.0], false);
     add_family(&mut vertices, [1.0, 1.0, 1.0, sqrt5], false);
@@ -125,10 +125,9 @@ fn derive_cap_edges(vertices: &[[f64; 4]]) -> (f64, Vec<Edge>) {
     for (left_index, left) in vertices.iter().enumerate() {
         for (right_index, right) in vertices.iter().enumerate().skip(left_index + 1) {
             if (squared_distance(left, right) - minimum).abs() <= tolerance {
-                edges.push(Edge {
-                    a: left_index as u32,
-                    b: right_index as u32,
-                });
+                if let (Ok(a), Ok(b)) = (u32::try_from(left_index), u32::try_from(right_index)) {
+                    edges.push(Edge { a, b });
+                }
             }
         }
     }
@@ -171,15 +170,15 @@ pub fn prism() -> Prism {
 
 fn rotate(point: [f64; 5], time: f64) -> [f64; 5] {
     let theta_one = 0.4 * time;
-    let theta_two = (1.0 + 5.0_f64.sqrt()) * 0.5 * theta_one;
+    let theta_two = f64::midpoint(1.0, 5.0_f64.sqrt()) * theta_one;
     let (sin_one, cos_one) = theta_one.sin_cos();
     let (sin_two, cos_two) = theta_two.sin_cos();
     [
-        point[0] * cos_one - point[1] * sin_one,
-        point[0] * sin_one + point[1] * cos_one,
-        point[2] * cos_two - point[4] * sin_two,
+        point[1].mul_add(-sin_one, point[0] * cos_one),
+        point[1].mul_add(cos_one, point[0] * sin_one),
+        point[4].mul_add(-sin_two, point[2] * cos_two),
         point[3],
-        point[2] * sin_two + point[4] * cos_two,
+        point[4].mul_add(cos_two, point[2] * sin_two),
     ]
 }
 
@@ -207,10 +206,11 @@ pub fn project_reference(point: [f64; 5], time: f64) -> ([f64; 3], f64) {
 
 /// Mirrors the two WGSL kernels' `f32` arithmetic for native conformance tests.
 #[must_use]
+#[allow(clippy::cast_possible_truncation, clippy::suboptimal_flops)]
 pub fn project_gpu_path(point: [f64; 5], time: f64) -> ([f32; 3], f32) {
     let point = point.map(|value| value as f32);
     let theta_one = 0.4 * time as f32;
-    let theta_two = ((1.0 + 5.0_f32.sqrt()) * 0.5) * theta_one;
+    let theta_two = f32::midpoint(1.0, 5.0_f32.sqrt()) * theta_one;
     let (sin_one, cos_one) = theta_one.sin_cos();
     let (sin_two, cos_two) = theta_two.sin_cos();
     let rotated = [
@@ -249,13 +249,13 @@ pub fn edge_reference(first: ([f64; 3], f64), second: ([f64; 3], f64)) -> EdgePo
     let length = delta.iter().map(|value| value * value).sum::<f64>().sqrt();
     EdgePose {
         midpoint: [
-            (first.0[0] + second.0[0]) * 0.5,
-            (first.0[1] + second.0[1]) * 0.5,
-            (first.0[2] + second.0[2]) * 0.5,
+            f64::midpoint(first.0[0], second.0[0]),
+            f64::midpoint(first.0[1], second.0[1]),
+            f64::midpoint(first.0[2], second.0[2]),
         ],
         direction: delta.map(|value| value / length),
         length,
-        hue: (((first.1 + second.1) * 0.5) / 6.0 + 0.5).clamp(0.0, 1.0),
+        hue: (f64::midpoint(first.1, second.1) / 6.0 + 0.5).clamp(0.0, 1.0),
     }
 }
 
@@ -270,13 +270,13 @@ pub fn edge_gpu_path(first: ([f32; 3], f32), second: ([f32; 3], f32)) -> EdgePos
     let length = delta.iter().map(|value| value * value).sum::<f32>().sqrt();
     EdgePose {
         midpoint: [
-            (first.0[0] + second.0[0]) * 0.5,
-            (first.0[1] + second.0[1]) * 0.5,
-            (first.0[2] + second.0[2]) * 0.5,
+            f32::midpoint(first.0[0], second.0[0]),
+            f32::midpoint(first.0[1], second.0[1]),
+            f32::midpoint(first.0[2], second.0[2]),
         ],
         direction: delta.map(|value| value / length),
         length,
-        hue: (((first.1 + second.1) * 0.5) / 6.0 + 0.5).clamp(0.0, 1.0),
+        hue: (f32::midpoint(first.1, second.1) / 6.0 + 0.5).clamp(0.0, 1.0),
     }
 }
 

@@ -15,7 +15,7 @@ use crate::kernels::{EDGE_KERNEL, EdgeUniform, VERTEX_KERNEL, VertexUniform};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
 
-const RENDER_SHADER: &str = r#"
+const RENDER_SHADER: &str = r"
 struct CameraUniform {
     aspect: f32,
     yaw: f32,
@@ -118,7 +118,7 @@ fn fragment_main(input: VertexOut) -> @location(0) vec4<f32> {
     let color = hue_rgb(input.hue) * (0.28 + 0.72 * diffuse);
     return vec4<f32>(color, 1.0);
 }
-"#;
+";
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
