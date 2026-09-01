@@ -1,6 +1,6 @@
 //! The authoritative Fire Racer server: WebSocket lobbies, one race each.
 //!
-//! Structure mirrors `pong-server`, because that shape is already proven
+//! Structure mirrors `arena-server`, because that shape is already proven
 //! against this deployment path (Cloudflare quick tunnel in front of a plain
 //! TCP listener). One thread per connection *owns* its socket and alternates
 //! a short blocking read with draining a bounded outbound queue; a single hub

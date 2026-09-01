@@ -1,13 +1,13 @@
 //! The Fire Racer wire protocol: JSON over WebSocket.
 //!
-//! **Why this is not in `pong-core`.** That crate is shared between the arena
+//! **Why this is not in `arena-core`.** That crate is shared between the arena
 //! client's prediction and the authoritative arena server, and the arena's
 //! join gate is exact `PROTO_VERSION` equality — bumping it makes every frozen
 //! hub build list-only until the server is redeployed in the same window.
 //! Racing messages have no business being able to trigger that. Fire carries
 //! its own version, and the two games can never break each other.
 //!
-//! Transport and shape follow the house style set by `pong-core::proto`:
+//! Transport and shape follow the house style set by `arena-core::proto`:
 //! `#[serde(tag = "t", rename_all = "snake_case")]`, JSON text frames, and
 //! `#[serde(default)]` on anything added after v1.
 //!
@@ -18,7 +18,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Fire's own protocol version. Independent of `pong_core::proto::PROTO_VERSION`.
+/// Fire's own protocol version. Independent of `arena_core::proto::PROTO_VERSION`.
 pub const PROTO_VERSION: u16 = 1;
 
 pub const MAX_HANDLE_LEN: usize = 20;

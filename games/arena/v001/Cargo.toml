@@ -1,5 +1,5 @@
 [package]
-name = "ember-game-pong-v1"
+name = "ember-game-arena-v1"
 edition.workspace = true
 version.workspace = true
 

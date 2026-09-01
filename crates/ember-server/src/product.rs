@@ -5,15 +5,21 @@
 
 use std::sync::Arc;
 
+use ember_game_arena_v1::hosted::{ArenaCodec, ArenaFactory};
 use ember_game_fire_v1::hosted::{self, FireCodec, FireFactory};
 use ember_game_fire_v1::legacy::LegacyFireIngressFactory;
-use ember_game_pong_v1::hosted::{PongCodec, PongFactory};
 use ember_game_what_is_this_v1::{WhatIsThisCodec, WhatIsThisFactory};
 use ember_legacy::{MonotonicDuration, VersionLimits};
 
 use crate::{RegistryBuilder, RegistryError, RegistryRegistration};
 
 pub(crate) fn register(builder: &mut RegistryBuilder) -> Result<(), RegistryError> {
+    builder.register(RegistryRegistration::new(
+        ember_game_arena_v1::hosted::game_key(),
+        placeholder_limits(),
+        Arc::new(ArenaCodec::new()),
+        Arc::new(ArenaFactory::new()),
+    ))?;
     builder.register(RegistryRegistration::new(
         ember_game_arena_v2::game_key(),
         placeholder_limits(),
@@ -96,12 +102,6 @@ pub(crate) fn register(builder: &mut RegistryBuilder) -> Result<(), RegistryErro
         .with_legacy_ingress(Arc::new(LegacyFireIngressFactory)),
     )?;
     builder.register(RegistryRegistration::new(
-        ember_game_pong_v1::hosted::game_key(),
-        placeholder_limits(),
-        Arc::new(PongCodec::new()),
-        Arc::new(PongFactory::new()),
-    ))?;
-    builder.register(RegistryRegistration::new(
         ember_game_what_is_this_v1::game_key(),
         what_is_this_limits(),
         Arc::new(WhatIsThisCodec),
@@ -151,7 +151,7 @@ mod tests {
             .expect("compiled registrations must match the hosted manifest");
         assert_eq!(
             registry.hosted_games(),
-            ["arena", "fire", "pong", "what-is-this"].map(str::to_string)
+            ["arena", "fire", "what-is-this"].map(str::to_string)
         );
         assert_eq!(
             registry

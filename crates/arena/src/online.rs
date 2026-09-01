@@ -8,8 +8,8 @@ use std::fmt::Write as _;
 
 use ember_engine::glam::{Quat, Vec2, Vec3};
 use ember_engine::{Camera, EmberGame, Frame, InputState, Instance, KeyCode, MouseButton};
-use pong_core::proto::{BState, C2S, PROTO_VERSION, PState, PlayerMeta, S2C, STATE_EVERY_TICKS};
-use pong_core::shooter::{
+use arena_core::proto::{BState, C2S, PROTO_VERSION, PState, PlayerMeta, S2C, STATE_EVERY_TICKS};
+use arena_core::shooter::{
     EYE_CROUCH, EYE_STAND, FIXED_DT, MAX_HP, MAX_PITCH, Obstacle, RELOAD_SECS, generate_arena,
     generate_pads, move_circle, obstacle_height, stance_speed, step_vertical, weapon_name,
     weapon_stats,
@@ -1704,7 +1704,7 @@ mod net {
     use std::sync::mpsc::{self, Receiver, Sender};
     use std::time::Duration;
 
-    use pong_core::proto::{C2S, S2C};
+    use arena_core::proto::{C2S, S2C};
     use tungstenite::Message;
     use tungstenite::stream::MaybeTlsStream;
 
@@ -1820,7 +1820,7 @@ mod net {
     use std::collections::VecDeque;
     use std::rc::Rc;
 
-    use pong_core::proto::{C2S, CLIENT_PING_SECS, S2C};
+    use arena_core::proto::{C2S, CLIENT_PING_SECS, S2C};
     use wasm_bindgen::JsCast;
     use wasm_bindgen::closure::Closure;
 

@@ -5,7 +5,7 @@
 
 //! Headless arena bot (works over `ws://` and `wss://`).
 //!
-//!     cargo run -p pong-server --example wsbot -- <URL> create|join <LOBBY> [PASSWORD|-] [HANDLE] [SECS] [MODES]
+//!     cargo run -p arena-server --example wsbot -- <URL> create|join <LOBBY> [PASSWORD|-] [HANDLE] [SECS] [MODES]
 //!
 //! Creates or joins a game, runs in circles spraying bullets, and reports
 //! how many state updates it saw. Exit 0 = the online loop works.
@@ -22,7 +22,7 @@
 
 use std::time::{Duration, Instant};
 
-use pong_core::proto::{C2S, PROTO_VERSION, S2C};
+use arena_core::proto::{C2S, PROTO_VERSION, S2C};
 use tungstenite::Message;
 use tungstenite::stream::MaybeTlsStream;
 
@@ -198,7 +198,7 @@ fn main() {
                 // This example is now deploy-pong-online.sh's health check and
                 // runs on Windows, where that would be a spurious deploy
                 // failure. (fire_core::proto::is_transient_read is the same
-                // predicate; pong-server does not depend on fire-core.)
+                // predicate; arena-server does not depend on fire-core.)
                 if e.raw_os_error() == Some(997)
                     || e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::TimedOut => {}

@@ -3,6 +3,14 @@
 
 [[games]]
 game_id = "arena"
+game_version = 1
+package = "ember-game-arena-v1"
+latest = false
+limits_profile = "estate-measurement-required-arena-v1"
+fixture_suite = "arena-v1-hosted-contract"
+
+[[games]]
+game_id = "arena"
 game_version = 2
 package = "ember-game-arena-v2"
 latest = false
@@ -98,14 +106,6 @@ latest = true
 limits_profile = "estate-measurement-required-fire-v1"
 fixture_suite = "fire-v1-hosted-contract"
 legacy_game = "fire"
-
-[[games]]
-game_id = "pong"
-game_version = 1
-package = "ember-game-pong-v1"
-latest = true
-limits_profile = "estate-measurement-required-pong-v1"
-fixture_suite = "pong-v1-hosted-contract"
 
 [[games]]
 game_id = "what-is-this"

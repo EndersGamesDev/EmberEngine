@@ -1,7 +1,7 @@
 //! `fire-server [bind-addr]` — defaults to 127.0.0.1:7781.
 //!
 //! TLS terminates at the tunnel in front of this, exactly as it does for
-//! pong-server, so the listener here is plain TCP.
+//! arena-server, so the listener here is plain TCP.
 
 use std::net::TcpListener;
 

@@ -6,7 +6,7 @@
 //! Same architecture as ember-server: ONE hub thread owns all state
 //! (connections, lobbies, running games) and ticks at 60 Hz; a thread per
 //! connection translates WebSocket frames into events. Transport is
-//! WebSocket + JSON (`pong_core::proto`) so browsers can join, with TLS
+//! WebSocket + JSON (`arena_core::proto`) so browsers can join, with TLS
 //! terminated by the tunnel in front.
 //!
 //! A lobby IS a running game: creating one starts the match with the host
@@ -28,11 +28,11 @@ use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use pong_core::proto::{
+use arena_core::proto::{
     BState, C2S, LobbyInfo, MAX_HANDLE_LEN, MAX_LOBBY_LEN, MAX_PASSWORD_LEN, PROTO_VERSION, PState,
     PlayerMeta, S2C, STATE_EVERY_TICKS, color_for, sanitize_text,
 };
-use pong_core::shooter::{ARENA_HALF, FIXED_DT, MAX_PLAYERS, PlayerIn, Sim};
+use arena_core::shooter::{ARENA_HALF, FIXED_DT, MAX_PLAYERS, PlayerIn, Sim};
 use tungstenite::Message;
 use tungstenite::protocol::WebSocketConfig;
 
@@ -169,7 +169,7 @@ fn rtt_ticks(rtt_ms: u32) -> u64 {
 pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
     let local = listener.local_addr()?;
     tracing::info!(
-        "pong-server (arena shooter) listening on {local} (proto v{PROTO_VERSION}, max {} conns, {} lobbies)",
+        "arena-server listening on {local} (proto v{PROTO_VERSION}, max {} conns, {} lobbies)",
         cfg.max_conns,
         cfg.max_lobbies
     );

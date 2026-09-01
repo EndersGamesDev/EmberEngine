@@ -30,9 +30,9 @@ crates/
   ember-legacy/   moving capability boundary for frozen hosted versions
   ember-net/      canonical outer JSON/WebSocket lobby protocol
   ember-server/   sole game-neutral host and version registry
-  pong/           3D pong client — local + online modes; native bin + wasm lib
-  pong-core/      shared pong sim (deterministic, 60 Hz) + online JSON protocol
-  pong-server/    public matchmaking + match server (WebSocket, lobbies with
+  arena/          Arena client — v0 pong classic + online shooter; native bin + wasm lib
+  arena-core/      shared pong sim (deterministic, 60 Hz) + online JSON protocol
+  arena-server/    public matchmaking + match server (WebSocket, lobbies with
                   optional passwords, authoritative sim per match)
 games/            frozen game/version crates plus the hosted-set manifest
 web/              static page: menu, lobby browser, wasm game (GitHub Pages)
@@ -104,37 +104,37 @@ The hub lists lobbies without loading a game bundle: the server lets any
 protocol version Hello + list, and enforces the live protocol only on
 create/join.
 
-## Pong
+## Arena v0: the pong classic
 
 **Play: <https://endersgamesdev.github.io/EmberEngine/>** — local (2 players, one
 keyboard: `A`/`D` vs `←`/`→`, first to 7) or **online matchmaking**: pick a
 handle, create a lobby (password optional) or join an open one from the
 list. The match server is authoritative (the shared deterministic 60 Hz sim
-in `crates/pong-core/src/sim.rs` runs server-side); clients stream inputs
+in `crates/arena-core/src/sim.rs` runs server-side); clients stream inputs
 and interpolate 30 Hz state. Either key set steers your paddle online, and
 player 2 gets a flipped camera so they also play from "their" side.
 
-Online infrastructure: `pong-server` (WebSocket + JSON, `pong-core/proto.rs`)
+Online infrastructure: `arena-server` (WebSocket + JSON, `arena-core/proto.rs`)
 runs on specht bound to loopback, fronted by a **Cloudflare quick tunnel** —
 a free public `https://….trycloudflare.com` domain that CHANGES every time
 the tunnel restarts. `deploy/deploy-pong-online.sh` rebuilds + restarts
 server and tunnel, then publishes the fresh domain to `server.json` on the
 Pages site (fetched cache-busted, so the page always finds the current
 server; its `v` stamp also cache-busts the wasm bundle per deploy). Server
-log: `~/pong-server.log`, tunnel log: `~/cloudflared.log` on specht.
-Headless check: `cargo run -p pong-server --example wsbot -- <URL> create|join <LOBBY> [PW|-] [HANDLE] [SECS] [MODES]`.
+log: `~/arena-server.log`, tunnel log: `~/cloudflared.log` on specht.
+Headless check: `cargo run -p arena-server --example wsbot -- <URL> create|join <LOBBY> [PW|-] [HANDLE] [SECS] [MODES]`.
 `MODES` is a comma-separated list of `shield`, `jump`, `nofire` — without it
 the bot never raises the shield or jumps, so a green run says nothing about
 either. Two bots, one plain and one `shield,nofire`, demonstrate a reflect.
 
-Native: `cargo run -p pong --bin pong-app` (local) or
-`pong-app online wss://… create|join LOBBY [PASSWORD|-] [HANDLE]`
+Native: `cargo run -p arena --bin arena-app` (local) or
+`arena-app online wss://… create|join LOBBY [PASSWORD|-] [HANDLE]`
 
 Web build (needs `wasm32-unknown-unknown` target + `wasm-bindgen-cli`):
 
 ```
-cargo build --target wasm32-unknown-unknown --release -p pong --lib
-wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/pong.wasm
+cargo build --target wasm32-unknown-unknown --release -p arena --lib
+wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/arena.wasm
 ```
 
 then publish `web/` to the `gh-pages` branch — or just run
@@ -144,9 +144,9 @@ then publish `web/` to the `gh-pages` branch — or just run
 
 **Play: <https://endersgamesdev.github.io/EmberEngine/>** — pick Fire Racer, then *Practice alone* against seven AI cars or *Race online*. `W`/`S` drive, `A`/`D` steer, `Space` is the handbrake that breaks traction into a drift, `Shift` spends one of three boost charges. Three laps of a castle bailey.
 
-Track, car physics and lap timing live in `crates/fire-core`, which is shared between the client's prediction and the authoritative server exactly as `pong-core` is for the arena — the client predicts its own car and reconciles against server state thirty times a second. The castle props are generated meshes and every texture is procedural, so none of them costs a download byte.
+Track, car physics and lap timing live in `crates/fire-core`, which is shared between the client's prediction and the authoritative server exactly as `arena-core` is for the arena — the client predicts its own car and reconciles against server state thirty times a second. The castle props are generated meshes and every texture is procedural, so none of them costs a download byte.
 
-Fire carries its **own** `PROTO_VERSION`, independent of `pong-core`'s. That is deliberate: bumping one game's protocol must never gate the other game's join. `server.json` records both, as `proto` and `fire_proto`.
+Fire carries its **own** `PROTO_VERSION`, independent of `arena-core`'s. That is deliberate: bumping one game's protocol must never gate the other game's join. `server.json` records both, as `proto` and `fire_proto`.
 
 Online infrastructure: `fire-server` on its own port behind its own Cloudflare quick tunnel, published to `server.json` under its own `fire_ws` key — a separate script, port, tunnel and key from the arena's, so redeploying one game can never knock the other offline. `bash deploy/deploy-fire-online.sh` rebuilds, restarts, and republishes; it health-checks by speaking the protocol (Hello must be answered with Welcome) before it publishes anything, so a failed deploy leaves the previous address in place rather than pointing players at a server that never came up.
 
@@ -162,5 +162,5 @@ What that does *not* survive is an unattended restart: the servers come back at 
 
 ```
 cargo run -p game                 # multiplayer arena (auto-connects to specht)
-cargo run -p pong --bin pong-app  # 3D pong, 2 players at one keyboard
+cargo run -p arena --bin arena-app  # 3D pong, 2 players at one keyboard
 ```

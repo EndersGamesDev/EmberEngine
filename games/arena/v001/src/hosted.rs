@@ -1,4 +1,4 @@
-//! Evergreen hosting adapter for the frozen Pong protocol 1 contract.
+//! Evergreen hosting adapter for the frozen Arena protocol 1 contract.
 
 use ember_legacy::{
     AdmissionMetadata, AdmissionRefusal, CloseReason, CloseRequest, DecodedInput, EncodedEvent,
@@ -13,12 +13,12 @@ use crate::proto::{
 };
 use crate::sim::{Phase, Sim};
 
-/// Permanent hosted-game identifier for Pong.
-pub const GAME_ID: &str = "pong";
+/// Permanent hosted-game identifier for Arena.
+pub const GAME_ID: &str = "arena";
 /// Frozen gameplay and inner-wire version hosted by this crate.
 pub const GAME_VERSION: u32 = 1;
 /// Immutable behavior-gate suite named by `games/hosted.toml`.
-pub const FIXTURE_SUITE_ID: &str = "pong-v1-hosted-contract";
+pub const FIXTURE_SUITE_ID: &str = "arena-v1-hosted-contract";
 
 const _: () = assert!(PROTO_VERSION == 1);
 
@@ -35,11 +35,11 @@ pub fn game_key() -> GameKey {
     }
 }
 
-/// Exact JSON text-frame codec for Pong protocol 1.
+/// Exact JSON text-frame codec for Arena protocol 1.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct PongCodec;
+pub struct ArenaCodec;
 
-impl PongCodec {
+impl ArenaCodec {
     /// Constructs the stateless protocol-1 codec.
     #[must_use]
     pub const fn new() -> Self {
@@ -47,14 +47,14 @@ impl PongCodec {
     }
 }
 
-impl InnerCodec for PongCodec {
+impl InnerCodec for ArenaCodec {
     fn decode(&self, frame: &InnerFrame) -> Result<DecodedInput, InnerCodecError> {
         let InnerFrame::Text(text) = frame else {
             return Err(InnerCodecError::WrongFrameKind);
         };
         if text.len() > MAX_FRAME_BYTES {
             return Err(InnerCodecError::InvalidFrame(format!(
-                "pong protocol 1 frame is {} bytes; maximum is {MAX_FRAME_BYTES}",
+                "arena protocol 1 frame is {} bytes; maximum is {MAX_FRAME_BYTES}",
                 text.len()
             )));
         }
@@ -68,7 +68,7 @@ impl InnerCodec for PongCodec {
     fn encode(&self, event: &EncodedEvent) -> Result<InnerFrame, InnerCodecError> {
         if event.payload.len() > MAX_FRAME_BYTES {
             return Err(InnerCodecError::InvalidFrame(format!(
-                "pong protocol 1 frame is {} bytes; maximum is {MAX_FRAME_BYTES}",
+                "arena protocol 1 frame is {} bytes; maximum is {MAX_FRAME_BYTES}",
                 event.payload.len()
             )));
         }
@@ -80,11 +80,11 @@ impl InnerCodec for PongCodec {
     }
 }
 
-/// Factory for authoritative Pong protocol-1 sessions.
+/// Factory for authoritative Arena protocol-1 sessions.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct PongFactory;
+pub struct ArenaFactory;
 
-impl PongFactory {
+impl ArenaFactory {
     /// Constructs the stateless protocol-1 session factory.
     #[must_use]
     pub const fn new() -> Self {
@@ -92,7 +92,7 @@ impl PongFactory {
     }
 }
 
-impl GameFactory for PongFactory {
+impl GameFactory for ArenaFactory {
     fn create(
         &self,
         _capabilities: &LegacyCapabilities,
@@ -106,10 +106,10 @@ impl GameFactory for PongFactory {
         }
         if !creation.configured_rules.is_empty() {
             return Err(FactoryError::InvalidConfiguration(
-                "Pong protocol 1 has no configurable rules".to_string(),
+                "Arena protocol 1 has no configurable rules".to_string(),
             ));
         }
-        Ok(Box::new(PongSession::new(
+        Ok(Box::new(ArenaSession::new(
             creation.lobby_name.clone(),
             creation.lobby_seed,
             creation.created_at,
@@ -123,8 +123,8 @@ struct Member {
     handle: String,
 }
 
-/// One authoritative two-player Pong lobby.
-pub struct PongSession {
+/// One authoritative two-player Arena v1 lobby.
+pub struct ArenaSession {
     lobby_name: String,
     members: Vec<Member>,
     sim: Option<Sim>,
@@ -134,7 +134,7 @@ pub struct PongSession {
     schedule_started: bool,
 }
 
-impl PongSession {
+impl ArenaSession {
     /// Constructs a lobby from immutable host data without consuming capabilities.
     #[must_use]
     pub const fn new(
@@ -283,7 +283,7 @@ impl PongSession {
     }
 }
 
-impl GameSession for PongSession {
+impl GameSession for ArenaSession {
     fn step(&mut self, timestamp: MonotonicTimestamp, inputs: Vec<SessionInput>) -> SessionUpdate {
         let mut update = SessionUpdate::default();
         for input in &inputs {
@@ -305,7 +305,7 @@ impl GameSession for PongSession {
         {
             return Err(AdmissionRefusal {
                 code: "already_joined".to_string(),
-                message: "already in this Pong lobby".to_string(),
+                message: "already in this Arena lobby".to_string(),
             });
         }
         if self.members.len() >= 2 {

@@ -15,7 +15,7 @@ fn main() -> std::io::Result<()> {
         match arg.as_str() {
             "--bind" => bind = args.next().expect("--bind needs an address"),
             "--help" | "-h" => {
-                writeln!(std::io::stdout().lock(), "pong-server [--bind ADDR:PORT]")?;
+                writeln!(std::io::stdout().lock(), "arena-server [--bind ADDR:PORT]")?;
                 return Ok(());
             }
             other => {
@@ -28,5 +28,5 @@ fn main() -> std::io::Result<()> {
     }
     let listener = TcpListener::bind(&bind)
         .map_err(|e| std::io::Error::new(e.kind(), format!("failed to bind {bind}: {e}")))?;
-    pong_server::run(listener, pong_server::ServerConfig::default())
+    arena_server::run(listener, arena_server::ServerConfig::default())
 }

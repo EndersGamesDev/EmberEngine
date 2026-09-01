@@ -1,15 +1,15 @@
-//! Native pong.
+//! Native Arena client.
 //!
-//!     pong-app                                              # local 2P
-//!     pong-app online URL create|join LOBBY [PASSWORD|-] [HANDLE]
+//!     arena-app                                              # Arena v0, local 2P
+//!     arena-app online URL create|join LOBBY [PASSWORD|-] [HANDLE]
 
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("online") {
-        let usage = "usage: pong-app online URL create|join LOBBY [PASSWORD|-] [HANDLE]";
-        let cfg = pong::OnlineConfig {
+        let usage = "usage: arena-app online URL create|join LOBBY [PASSWORD|-] [HANDLE]";
+        let cfg = arena::OnlineConfig {
             url: args.get(1).expect(usage).clone(),
             action: args.get(2).expect(usage).clone(),
             lobby: args.get(3).expect(usage).clone(),
@@ -20,12 +20,12 @@ fn main() -> ExitCode {
                 .or_else(|| std::env::var("USERNAME").ok())
                 .unwrap_or_else(|| "player".into()),
         };
-        if let Err(e) = pong::run_online(cfg) {
+        if let Err(e) = arena::run_online(cfg) {
             tracing::error!(error = %e, "online mode failed");
             return ExitCode::FAILURE;
         }
     } else {
-        pong::run_local();
+        arena::run_local();
     }
     ExitCode::SUCCESS
 }

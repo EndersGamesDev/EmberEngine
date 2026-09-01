@@ -11,7 +11,7 @@ The workspace separates current platform plumbing from frozen game contracts: en
 * **`ember-client-net`** owns reusable client connection plumbing on native and wasm, including outer handshake state, WebSocket lifecycle, bounded queues, sequence/history bookkeeping, replay orchestration, and connection diagnostics.
 * **`games/<game>/vNNN`** crates own frozen game wire and gameplay contracts. The current registry contains `games/arena/v012` and `games/fire/v001`; each version depends on `ember-legacy` rather than host or renderer implementation types.
 * **`games/hosted.toml`** is the hosted-set authority. It declares each exact game/version key, package, latest flag, limits profile, fixture suite, and any legacy selector; server dependencies and registry entries must match it.
-* **`pong`** and **`fire`** remain the current client shells. They own rendering, controls, and game-specific prediction or replay behavior above shared engine and networking plumbing.
+* **`arena`** and **`fire`** remain the current client shells. They own rendering, controls, and game-specific prediction or replay behavior above shared engine and networking plumbing.
 
 Dependency flow is inward toward narrow contracts: client shells use `ember-engine` and shared client plumbing, hosted versions use `ember-legacy`, and `ember-server` composes the outer protocol with the closed hosted registry.
 
@@ -27,9 +27,9 @@ Arena 12 and Fire 1 carry legacy ingress adapters for already deployed clients. 
 
 ## Honest interim migration state
 
-The versioned Arena and Fire contracts coexist with `pong-core` and `fire-core`, and the deploy-continuity binaries `pong-server` and `fire-server` still build and run. They remain until the probe, end-to-end, health, drain, and deployment responsibilities move into the sole host and public routing switches during [migration stages 5 and 6](one-server-evergreen.md#10-migration-buildable-steps-visible-behavior).
+The versioned Arena and Fire contracts coexist with `arena-core` and `fire-core`, and the deploy-continuity binaries `arena-server` and `fire-server` still build and run. They remain until the probe, end-to-end, health, drain, and deployment responsibilities move into the sole host and public routing switches during [migration stages 5 and 6](one-server-evergreen.md#10-migration-buildable-steps-visible-behavior).
 
-The `pong` crate's Arena client still imports its online protocol and shooter simulation through `pong-core`; it has not yet moved to `ember-client-net` or the versioned Arena crate. Fire has begun using `ember-client-net`, while its existing server path continues through `fire-core` for deployment continuity.
+The `arena` crate's Arena client still imports its online protocol and shooter simulation through `arena-core`; it has not yet moved to `ember-client-net` or the versioned Arena crate. Fire has begun using `ember-client-net`, while its existing server path continues through `fire-core` for deployment continuity.
 
 The native raw-TCP cube demo, its Postcard protocol, its verification bot, and its dedicated deploy path are retired. `ember-net` and `ember-server` no longer retain a second cube-specific transport or simulation surface.
 

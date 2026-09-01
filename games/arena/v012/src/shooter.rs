@@ -579,7 +579,7 @@ pub struct PlayerIn {
     pub crouch: bool,
     /// Held reload intent (R).
     pub reload: bool,
-    /// A jump PRESS, consumed on the tick it is applied (pong-server clears
+    /// A jump PRESS, consumed on the tick it is applied (arena-server clears
     /// it after each step). Only takes effect while grounded.
     pub jump: bool,
     /// Held off-hand shield intent (Q). HELD, like every other intent here

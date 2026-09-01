@@ -1,7 +1,7 @@
 """Generate the FALLBACK viewmodel (box pistol) as a GLB.
 
 Run headless:
-    blender --background --python tools/make_assets.py -- crates/pong/assets/viewmodel.glb --with-pistol
+    blender --background --python tools/make_assets.py -- crates/arena/assets/viewmodel.glb --with-pistol
 
 Conventions (must match the engine): +X forward, +Z up in Blender; the
 default Y-up glTF export maps this to +X forward / +Y up in the engine.
@@ -21,7 +21,7 @@ THE SPLIT
                   fallback viewmodel's hands can never drift from the
                   real one's.
       * PISTOL -> still here, below, byte-for-byte the geometry it always
-                  was. It is NOT dead code: crates/pong/src/online.rs has
+                  was. It is NOT dead code: crates/arena/src/online.rs has
                   a cube-pistol fallback (push_gun) for a viewmodel GLB
                   that fails to load, and this box pistol is the authored
                   counterpart of that. It is emitted only on request.

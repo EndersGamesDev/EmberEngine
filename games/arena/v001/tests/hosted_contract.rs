@@ -4,10 +4,10 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use ember_game_pong_v1::hosted::{
-    FIXTURE_SUITE_ID, GAME_ID, GAME_VERSION, PongCodec, PongFactory, PongSession, game_key,
+use ember_game_arena_v1::hosted::{
+    ArenaCodec, ArenaFactory, ArenaSession, FIXTURE_SUITE_ID, GAME_ID, GAME_VERSION, game_key,
 };
-use ember_game_pong_v1::proto::{C2S, S2C};
+use ember_game_arena_v1::proto::{C2S, S2C};
 use ember_legacy::{
     AdmissionMetadata, BroadcastHandle, CloseReason, GameFactory, GameSession, InnerCodec,
     InnerFrame, LegacyCapabilities, LegacyClock, LegacyRandom, LegacyTransport, LobbySeed,
@@ -16,13 +16,13 @@ use ember_legacy::{
 };
 use serde::Deserialize;
 
-const SUITE: &str = include_str!("fixtures/pong-v1-hosted-contract/suite.json");
+const SUITE: &str = include_str!("fixtures/arena-v1-hosted-contract/suite.json");
 const CLIENT_TO_SERVER: &str =
-    include_str!("fixtures/pong-v1-hosted-contract/client-to-server.jsonl");
+    include_str!("fixtures/arena-v1-hosted-contract/client-to-server.jsonl");
 const SERVER_TO_CLIENT: &str =
-    include_str!("fixtures/pong-v1-hosted-contract/server-to-client.jsonl");
-const LOBBY: &str = include_str!("fixtures/pong-v1-hosted-contract/lobby.json");
-const TRACE: &str = include_str!("fixtures/pong-v1-hosted-contract/deterministic-trace.json");
+    include_str!("fixtures/arena-v1-hosted-contract/server-to-client.jsonl");
+const LOBBY: &str = include_str!("fixtures/arena-v1-hosted-contract/lobby.json");
+const TRACE: &str = include_str!("fixtures/arena-v1-hosted-contract/deterministic-trace.json");
 
 #[derive(Deserialize)]
 struct SuiteFixture {
@@ -164,7 +164,7 @@ fn every_protocol_1_wire_message_has_an_exact_json_fixture() {
 
 #[test]
 fn codec_preserves_exact_protocol_1_json_text_frames() {
-    let codec = PongCodec::new();
+    let codec = ArenaCodec::new();
     for frame in CLIENT_TO_SERVER.lines() {
         let decoded = codec.decode(&InnerFrame::Text(frame.to_string())).unwrap();
         assert_eq!(decoded.payload, frame.as_bytes());
@@ -208,7 +208,7 @@ fn admission(peer_id: PeerId, handle: &str, at: MonotonicTimestamp) -> Admission
 fn lobby_join_refusal_and_reopen_match_the_era_server() {
     let fixture: LobbyFixture = serde_json::from_str(LOBBY).unwrap();
     let created_at = MonotonicTimestamp::from_micros(1_000_000);
-    let mut session = PongSession::new("duel".to_string(), LobbySeed([0; 32]), created_at);
+    let mut session = ArenaSession::new("duel".to_string(), LobbySeed([0; 32]), created_at);
     let host = PeerId::from_host_value(1);
     let guest = PeerId::from_host_value(2);
     let extra = PeerId::from_host_value(3);
@@ -261,18 +261,18 @@ struct PanicClock;
 
 impl LegacyClock for PanicClock {
     fn now(&self) -> MonotonicTimestamp {
-        panic!("Pong v1 must not consume the clock capability");
+        panic!("Arena v1 must not consume the clock capability");
     }
 
     fn request_schedule(
         &self,
         _request: SchedulingRequest,
     ) -> Result<ScheduleHandle, ScheduleError> {
-        panic!("Pong v1 must not consume the clock capability");
+        panic!("Arena v1 must not consume the clock capability");
     }
 
     fn cancel_schedule(&self, _handle: ScheduleHandle) -> Result<(), ScheduleError> {
-        panic!("Pong v1 must not consume the clock capability");
+        panic!("Arena v1 must not consume the clock capability");
     }
 }
 
@@ -280,11 +280,11 @@ struct PanicRandom;
 
 impl LegacyRandom for PanicRandom {
     fn draw_u64(&self, _key: &RandomDrawKey) -> u64 {
-        panic!("Pong v1 must not consume the random capability");
+        panic!("Arena v1 must not consume the random capability");
     }
 
     fn fill_bytes(&self, _key: &RandomDrawKey, _output: &mut [u8]) {
-        panic!("Pong v1 must not consume the random capability");
+        panic!("Arena v1 must not consume the random capability");
     }
 }
 
@@ -292,22 +292,22 @@ struct PanicTransport;
 
 impl LegacyTransport for PanicTransport {
     fn unicast(&self, _peer_id: PeerId) -> Result<UnicastHandle, TransportError> {
-        panic!("Pong v1 must not consume the transport capability");
+        panic!("Arena v1 must not consume the transport capability");
     }
 
     fn broadcast(
         &self,
         _session_id: ember_legacy::SessionId,
     ) -> Result<BroadcastHandle, TransportError> {
-        panic!("Pong v1 must not consume the transport capability");
+        panic!("Arena v1 must not consume the transport capability");
     }
 
     fn close_peer(&self, _peer_id: PeerId, _reason: CloseReason) -> Result<(), TransportError> {
-        panic!("Pong v1 must not consume the transport capability");
+        panic!("Arena v1 must not consume the transport capability");
     }
 
     fn record_metric(&self, _observation: MetricObservation) {
-        panic!("Pong v1 must not consume the transport capability");
+        panic!("Arena v1 must not consume the transport capability");
     }
 }
 
@@ -320,7 +320,7 @@ fn factory_constructs_without_consuming_any_capability_surface() {
         assets: None,
     };
     let creation = creation([7; 32], MonotonicTimestamp::from_micros(50));
-    PongFactory::new().create(&capabilities, &creation).unwrap();
+    ArenaFactory::new().create(&capabilities, &creation).unwrap();
 }
 
 #[test]
@@ -328,12 +328,12 @@ fn timestamped_inputs_produce_frozen_authoritative_checkpoints() {
     let trace: TraceFixture = serde_json::from_str(TRACE).unwrap();
     assert_eq!(trace.fixture_suite, FIXTURE_SUITE_ID);
     let created_at = MonotonicTimestamp::from_micros(trace.created_at_micros);
-    let mut session = PongSession::new("duel".to_string(), LobbySeed(trace.seed), created_at);
+    let mut session = ArenaSession::new("duel".to_string(), LobbySeed(trace.seed), created_at);
     let host = PeerId::from_host_value(1);
     let guest = PeerId::from_host_value(2);
     session.join(admission(host, "alice", created_at)).unwrap();
     session.join(admission(guest, "bob", created_at)).unwrap();
-    let codec = PongCodec::new();
+    let codec = ArenaCodec::new();
 
     for call in trace.calls {
         let timestamp = MonotonicTimestamp::from_micros(call.timestamp_micros);

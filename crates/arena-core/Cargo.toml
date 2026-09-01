@@ -1,5 +1,5 @@
 [package]
-name = "pong-core"
+name = "arena-core"
 edition.workspace = true
 version.workspace = true
 

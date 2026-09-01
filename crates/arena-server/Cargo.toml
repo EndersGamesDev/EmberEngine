@@ -1,10 +1,10 @@
 [package]
-name = "pong-server"
+name = "arena-server"
 edition.workspace = true
 version.workspace = true
 
 [dependencies]
-pong-core = { path = "../pong-core" }
+arena-core = { path = "../arena-core" }
 serde_json.workspace = true
 # rustls feature is for the wss-capable example/e2e bot, not the server
 # itself (TLS terminates at the tunnel).

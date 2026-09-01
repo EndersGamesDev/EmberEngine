@@ -8,6 +8,7 @@ default = []
 demo = []
 
 [dependencies]
+ember-game-arena-v1 = { path = "../../games/arena/v001" }
 ember-game-arena-v2 = { path = "../../games/arena/v002" }
 ember-game-arena-v3 = { path = "../../games/arena/v003" }
 ember-game-arena-v4 = { path = "../../games/arena/v004" }
@@ -20,7 +21,6 @@ ember-game-arena-v10 = { path = "../../games/arena/v010" }
 ember-game-arena-v11 = { path = "../../games/arena/v011" }
 ember-game-arena-v12 = { path = "../../games/arena/v012" }
 ember-game-fire-v1 = { path = "../../games/fire/v001" }
-ember-game-pong-v1 = { path = "../../games/pong/v001" }
 ember-game-what-is-this-v1 = { path = "../../games/what-is-this/v001" }
 ember-legacy = { path = "../ember-legacy" }
 ember-net = { path = "../ember-net" }

@@ -1,4 +1,4 @@
-//! Pong simulation: pure, deterministic, fixed 60 Hz steps. No engine or
+//! Arena v0's pong-classic simulation: pure, deterministic, fixed 60 Hz steps. No engine or
 //! platform types in here — the sim is testable headless and is the shape a
 //! future networked version would replicate.
 

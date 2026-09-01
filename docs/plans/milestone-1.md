@@ -4,7 +4,7 @@ NOTE 2026-08-29: written against the v6-era tree; superseded in part by upstream
 
 **Three prerequisites were met upstream rather than by a bite**, and are marked at their bites below: per-mesh textures and UVs landed (`README.md:95-97`), retiring bite 8 outright; the egui overlay landed with a scene-Hz throttle and a frame-age readout (`README.md:105-108`), meeting bite 6's observability rationale without its ring; and WGSL hot-reload landed in the same roadmap item, which is new surface area the split has to re-home (`docs/presenter-architecture.md` §8.1).
 
-**Two citations in this plan are stale against v7 and must not be used to size work.** `crates/pong/src/online.rs:114-131`, cited in §2.3 and in bite 1's oracle as the shooter's cursor unprojection, is now lobby-join message construction; no cursor unprojection exists anywhere in the workspace, and the shooter aims with relative mouse deltas (`crates/pong/src/online.rs:644-653`). `crates/pong/src/online.rs:357`, cited in §2.6 as the fire button, is now `crates/pong/src/online.rs:667`. The design conclusions drawn from both still hold; only their evidence moved. Those two are left in place on purpose, as the record of what the argument was built on.
+**Two citations in this plan are stale against v7 and must not be used to size work.** `crates/arena/src/online.rs:114-131`, cited in §2.3 and in bite 1's oracle as the shooter's cursor unprojection, is now lobby-join message construction; no cursor unprojection exists anywhere in the workspace, and the shooter aims with relative mouse deltas (`crates/arena/src/online.rs:644-653`). `crates/arena/src/online.rs:357`, cited in §2.6 as the fire button, is now `crates/arena/src/online.rs:667`. The design conclusions drawn from both still hold; only their evidence moved. Those two are left in place on purpose, as the record of what the argument was built on.
 
 **Every other line citation in this plan was swept and corrected in place on 2026-08-29.** The v7 re-framing verified this plan's cross-references *before* adding twelve header lines to it, so the verification was performed against line numbers that the same commit then shifted — and the sweep also surfaced citations that had been stale since the upstream commits and were never flagged. Corrections landed in §1, §2.3, §2.6, §2.9, and §6. The lesson generalizes and is cheap to apply: re-derive citations after the last edit to the file they point into, never before.
 
@@ -23,9 +23,9 @@ So the milestone is really: **make the presenter split real, then land rotation-
 
 In scope: the presenter extraction, `SceneFrame` as a value type, a rotation-carrying camera, the warp shader and its uniform, the guard band, opt-in mouse capture and the late input latch, the two camera reads, a scene-rate throttle so warp is observable, a fly-camera demo, texturing, and the first engine unit tests.
 
-Out of scope, deliberately: threaded or fence-synchronised scene submission (the document defers real submission slicing to roadmap step 7), depth-aware reprojection (stage C, roadmap step 3), egui (step 5), any asset loading (step 6), and any change to the sim, the wire protocols, or the servers. Nothing in this milestone touches `ember-net`, `ember-server`, `pong-core`, or `pong-server`.
+Out of scope, deliberately: threaded or fence-synchronised scene submission (the document defers real submission slicing to roadmap step 7), depth-aware reprojection (stage C, roadmap step 3), egui (step 5), any asset loading (step 6), and any change to the sim, the wire protocols, or the servers. Nothing in this milestone touches `ember-net`, `ember-server`, `arena-core`, or `arena-server`.
 
-Done means: `cargo run -p flycam` opens a window where mouse-look is glued to the mouse while the scene renders at a throttled 15 Hz, the cube is textured, all three shipped games — local `pong`, the online arena shooter, and `game` — render pixel-identically to today and keep their existing input behaviour, and the engine has unit tests covering camera math, warp derivation, guard-band cropping, and the latch.
+Done means: `cargo run -p flycam` opens a window where mouse-look is glued to the mouse while the scene renders at a throttled 15 Hz, the cube is textured, all three shipped games — local `arena`, the online arena shooter, and `game` — render pixel-identically to today and keep their existing input behaviour, and the engine has unit tests covering camera math, warp derivation, guard-band cropping, and the latch.
 
 ## 2. Design decisions
 
@@ -75,9 +75,9 @@ pub struct Camera { pub eye: Vec3, pub rot: Quat, pub fov_y_deg: f32 }
 impl Camera { pub fn look_at(eye: Vec3, target: Vec3, fov_y_deg: f32) -> Self; }
 ```
 
-This replaces `Camera { eye, target, fov_y_deg }`. There are now three construction sites across three files, not two: struct literals in local pong (`crates/pong/src/lib.rs:34-46`), `Camera::default()` in the arena client (`crates/game/src/main.rs:337`, `:352`), and the shooter's first-person camera (`crates/pong/src/online.rs:777`), which is rebuilt every frame from the smoothed yaw and pitch. All three convert to `Camera::look_at` mechanically; the change is a three-file, roughly fifteen-line update. The `look_at` constructor assumes `Vec3::Y` up, matching the current `Mat4::look_at_rh` call, so the resulting view matrix is bit-comparable to today's — which is the verification oracle for that bite.
+This replaces `Camera { eye, target, fov_y_deg }`. There are now three construction sites across three files, not two: struct literals in local pong (`crates/arena/src/lib.rs:34-46`), `Camera::default()` in the arena client (`crates/game/src/main.rs:337`, `:352`), and the shooter's first-person camera (`crates/arena/src/online.rs:777`), which is rebuilt every frame from the smoothed yaw and pitch. All three convert to `Camera::look_at` mechanically; the change is a three-file, roughly fifteen-line update. The `look_at` constructor assumes `Vec3::Y` up, matching the current `Mat4::look_at_rh` call, so the resulting view matrix is bit-comparable to today's — which is the verification oracle for that bite.
 
-`Camera` also gained a *second kind* of consumer since this plan was written, and it is the one that constrains the change. The shooter unprojects the mouse cursor by inverting the camera's combined matrix (`crates/pong/src/online.rs:114-131`) to intersect a ray with the play plane, and that is how aiming works in a shipped game. So `view_proj(aspect)` must keep returning exactly the same matrix for the same camera — the quaternion is an internal representation change, not a change to the projection — and bite 1's oracle must cover the inverse as well as the forward matrix. If `look_at` normalises differently than `Mat4::look_at_rh` does, aim drifts, and it drifts subtly rather than visibly.
+`Camera` also gained a *second kind* of consumer since this plan was written, and it is the one that constrains the change. The shooter unprojects the mouse cursor by inverting the camera's combined matrix (`crates/arena/src/online.rs:114-131`) to intersect a ray with the play plane, and that is how aiming works in a shipped game. So `view_proj(aspect)` must keep returning exactly the same matrix for the same camera — the quaternion is an internal representation change, not a change to the projection — and bite 1's oracle must cover the inverse as well as the forward matrix. If `look_at` normalises differently than `Mat4::look_at_rh` does, aim drifts, and it drifts subtly rather than visibly.
 
 Alternative considered and rejected: keep `eye`/`target` and derive the quaternion at warp time. Rejected because the derivation is lossy at the poles and because a fly camera is naturally authored as yaw and pitch, so every consumer would immediately convert back.
 
@@ -134,9 +134,9 @@ The sim's determinism is untouched either way: it still consumes input at its ow
 
 Capture: `ApplicationHandler::device_event` handling `DeviceEvent::MouseMotion { delta }` on native, which gives unaccelerated deltas independent of cursor position.
 
-**Design change — the original left-click grab is withdrawn.** This plan originally requested cursor grab on left mouse press. That is no longer available: left mouse press is the shooter's fire button (`crates/pong/src/online.rs:357`), so an engine-level grab on left click would capture the pointer the first time a player shoots, hide the cursor the game aims with, and break a shipped game with no code change on its side. Capture becomes opt-in and game-driven instead: the game asks for it (a `request_capture` on the engine side, called by `flycam` and by nothing else), and `Window::set_cursor_grab(CursorGrabMode::Locked)` with `set_cursor_visible(false)` follows from that request. Release stays automatic on Escape and on focus loss. **The request arms; it does not grab** — a game's only execution point is `update`, called from `RedrawRequested`, which is outside the user activation the web's Pointer Lock API requires, so grabbing at request time works on native and silently fails in a browser. The engine performs the grab in the next `MouseInput` press handler while armed, which is a real user gesture and already where the grab happens today; see `docs/input-latch.md` §7. While captured, `cursor_ndc()` reports `None`, because under pointer lock there is no meaningful absolute position — which is also the signal a cursor-aiming game would need if it ever coexisted with capture.
+**Design change — the original left-click grab is withdrawn.** This plan originally requested cursor grab on left mouse press. That is no longer available: left mouse press is the shooter's fire button (`crates/arena/src/online.rs:357`), so an engine-level grab on left click would capture the pointer the first time a player shoots, hide the cursor the game aims with, and break a shipped game with no code change on its side. Capture becomes opt-in and game-driven instead: the game asks for it (a `request_capture` on the engine side, called by `flycam` and by nothing else), and `Window::set_cursor_grab(CursorGrabMode::Locked)` with `set_cursor_visible(false)` follows from that request. Release stays automatic on Escape and on focus loss. **The request arms; it does not grab** — a game's only execution point is `update`, called from `RedrawRequested`, which is outside the user activation the web's Pointer Lock API requires, so grabbing at request time works on native and silently fails in a browser. The engine performs the grab in the next `MouseInput` press handler while armed, which is a real user gesture and already where the grab happens today; see `docs/input-latch.md` §7. While captured, `cursor_ndc()` reports `None`, because under pointer lock there is no meaningful absolute position — which is also the signal a cursor-aiming game would need if it ever coexisted with capture.
 
-On the web this maps to the Pointer Lock API, which requires a user gesture, so the gesture must come from the game page. The listener the plan expected to reuse has moved: `web/index.html` is now the games hub and hosts no canvas, and the canvas-focusing pointer listener lives in each per-version game page (`web/games/arena/v7/index.html:133-134`, `web/games/pong/v2/index.html:66-67` — arena v7 is the only arena version present at this commit; the v3 directory this plan cited no longer exists). Those directories are frozen once published, so `flycam`'s page gets its own listener when it is published and no existing page needs editing — but no already-frozen page can ever gain one either.
+On the web this maps to the Pointer Lock API, which requires a user gesture, so the gesture must come from the game page. The listener the plan expected to reuse has moved: `web/index.html` is now the games hub and hosts no canvas, and the canvas-focusing pointer listener lives in each per-version game page (`web/games/arena/v7/index.html:133-134`, `web/games/arena/v0/index.html:66-67` — arena v7 is the only arena version present at this commit; the v3 directory this plan cited no longer exists). Those directories are frozen once published, so `flycam`'s page gets its own listener when it is published and no existing page needs editing — but no already-frozen page can ever gain one either.
 
 ### 2.7 Two camera reads, added without breaking existing games
 
@@ -150,7 +150,7 @@ pub trait EmberGame {
 }
 ```
 
-The default returns the scene pose unchanged, which is exactly the identity warp — so local `pong`, the arena shooter, and `game` all compile and behave identically with no edit at all. The fly-camera demo overrides it and returns the corrected pose. The signature gained a fourth parameter in `docs/input-latch.md` §6: the engine hands the game the motion accumulated since *that frame's* `input_mark`, pre-differenced, so the game never touches the marks and the `&self` receiver keeps the view delta from being stored or sent. This is the document's "same source, two read points" (`docs/atw-first-rendering.md:99-101`), and making it a defaulted method is what lets it land without touching either shipped client.
+The default returns the scene pose unchanged, which is exactly the identity warp — so local `arena`, the arena shooter, and `game` all compile and behave identically with no edit at all. The fly-camera demo overrides it and returns the corrected pose. The signature gained a fourth parameter in `docs/input-latch.md` §6: the engine hands the game the motion accumulated since *that frame's* `input_mark`, pre-differenced, so the game never touches the marks and the `&self` receiver keeps the view delta from being stored or sent. This is the document's "same source, two read points" (`docs/atw-first-rendering.md:99-101`), and making it a defaulted method is what lets it land without touching either shipped client.
 
 ### 2.8 Scene-rate throttle instead of threaded decoupling
 
@@ -206,16 +206,16 @@ The pure refactor that makes the split real. Split `renderer.rs` into `gpu.rs`, 
 - Files: `crates/ember-engine/src/lib.rs`, `renderer.rs`, and new `gpu.rs`, `scene_frame.rs`, `presenter.rs`; `crates/ember-engine/src/app.rs`.
 - New: `Gpu`, `ViewPose`, `Projection`, `SceneFrame`, `Presenter`, `PresentTarget`, `Renderer::render_scene`, `Presenter::present`.
 - Diff scale: roughly +410 / −290, almost all of it moved code.
-- Oracle: `cargo build --workspace --all-targets`; `cargo check -p pong --lib --target wasm32-unknown-unknown`. Visual: local `pong`, the arena shooter, and `game` are pixel-identical to the previous commit — this bite must change nothing on screen. `Instance::yaw` must survive the move of the instance-buffer layout into the new scene pass; a dropped attribute shows up as unrotated guns in the shooter, not as a build error.
+- Oracle: `cargo build --workspace --all-targets`; `cargo check -p arena --lib --target wasm32-unknown-unknown`. Visual: local `arena`, the arena shooter, and `game` are pixel-identical to the previous commit — this bite must change nothing on screen. `Instance::yaw` must survive the move of the instance-buffer layout into the new scene pass; a dropped attribute shows up as unrotated guns in the shooter, not as a build error.
 
 ### Bite 1 — rotation-carrying camera
 
 Replace `Camera { eye, target, fov_y_deg }` with `Camera { eye, rot, fov_y_deg }` plus `Camera::look_at`, and derive the view matrix from the quaternion. Update all three clients' construction sites.
 
-- Files: `crates/ember-engine/src/scene_frame.rs`, `crates/pong/src/lib.rs`, `crates/pong/src/online.rs`, `crates/game/src/main.rs`.
+- Files: `crates/ember-engine/src/scene_frame.rs`, `crates/arena/src/lib.rs`, `crates/arena/src/online.rs`, `crates/game/src/main.rs`.
 - New: `Camera::look_at`, `Camera::view_matrix`, `ViewPose::from(&Camera)`.
 - Diff scale: roughly +85 / −45.
-- Oracle: build; unit test asserting `Camera::look_at(e, t, f).view_matrix()` equals `Mat4::look_at_rh(e, t, Vec3::Y)` within tolerance, plus a second test that `view_proj(aspect)` and its inverse round-trip a known point — the shooter's aim depends on that inverse (`crates/pong/src/online.rs:114-131`). Visual: `pong` framing unchanged, and the shooter's cursor aim still lands where the cursor is, checked at a window aspect other than the 16:9 default so an aspect mistake cannot hide.
+- Oracle: build; unit test asserting `Camera::look_at(e, t, f).view_matrix()` equals `Mat4::look_at_rh(e, t, Vec3::Y)` within tolerance, plus a second test that `view_proj(aspect)` and its inverse round-trip a known point — the shooter's aim depends on that inverse (`crates/arena/src/online.rs:114-131`). Visual: `arena` framing unchanged, and the shooter's cursor aim still lands where the cursor is, checked at a window aspect other than the 16:9 default so an aspect mistake cannot hide.
 
 ### Bite 2 — warp uniform and unified warp shader
 
@@ -243,7 +243,7 @@ Add `EmberGame::view_pose` with its identity default; have `app.rs` call it afte
 
 - Files: `crates/ember-engine/src/lib.rs`, `app.rs`, `presenter.rs`.
 - Diff scale: roughly +55 / −12.
-- Oracle: build; local `pong`, the arena shooter, and `game` compile untouched and render identically, proving the default is genuinely non-invasive.
+- Oracle: build; local `arena`, the arena shooter, and `game` compile untouched and render identically, proving the default is genuinely non-invasive.
 
 ### Bite 5 — guard band
 
@@ -262,7 +262,7 @@ Present every redraw, render the scene on a rate cap, publish into a two-slot ri
 - Files: `crates/ember-engine/src/app.rs`, `scene_frame.rs`, `presenter.rs`.
 - New: `SceneFrameRing`, `SceneClock`, `EngineConfig::scene_hz_cap`.
 - Diff scale: roughly +140 / −45.
-- Oracle: build; manual: at a 15 Hz cap the reported present rate stays at display rate while the scene rate drops, and `pong` at an uncapped setting is unchanged.
+- Oracle: build; manual: at a 15 Hz cap the reported present rate stays at display rate while the scene rate drops, and `arena` at an uncapped setting is unchanged.
 
 ### Bite 7 — fly camera demo, stage B lands
 
@@ -282,7 +282,7 @@ Add `uv` to `Vertex` at `@location(6)` (locations 2–5 belong to the instance b
 - Files: `crates/ember-engine/src/renderer.rs`, `shader.wgsl`.
 - New: `create_checker_texture`, a second scene bind group.
 - Diff scale: roughly +150 / −30.
-- Oracle: build; visual: `flycam`, local `pong`, the arena shooter, and `game` all show surface detail with their existing colours preserved, and yawed instances (the shooter's guns) show the texture rotating with the box rather than sliding across it.
+- Oracle: build; visual: `flycam`, local `arena`, the arena shooter, and `game` all show surface detail with their existing colours preserved, and yawed instances (the shooter's guns) show the texture rotating with the box rather than sliding across it.
 
 ### Bite 9 — engine tests and the headless present target
 
@@ -326,10 +326,10 @@ cargo build --workspace --all-targets
 cargo clippy --workspace --all-targets -- -D warnings
 cargo-fmt --all -- --check
 cargo test --workspace
-cargo check -p pong --lib --target wasm32-unknown-unknown
+cargo check -p arena --lib --target wasm32-unknown-unknown
 ```
 
-Every gate reports its wall time. Two existing headless bots should stay in the lane as regression proof that this milestone did not disturb the network paths, since neither is touched by any bite: `cargo run -p ember-net --example netbot` and `cargo run -p pong-server --example wsbot`.
+Every gate reports its wall time. Two existing headless bots should stay in the lane as regression proof that this milestone did not disturb the network paths, since neither is touched by any bite: `cargo run -p ember-net --example netbot` and `cargo run -p arena-server --example wsbot`.
 
 What the lane cannot check, and what therefore stays a manual pass on a machine with a display: the actual appearance of the warp under a throttled scene rate (bite 7's headline check), the WebGL2 fallback path, and pointer lock behaviour in a browser. Everything else in this milestone — the camera algebra, the warp derivation, the guard-band crop, and the latch semantics — was designed to be assertable, which is the main reason the milestone ends with a test bite rather than a screenshot.
 
@@ -343,4 +343,4 @@ Landing this milestone makes three README statements true that are currently not
 
 Roadmap item 5 also went from planned to checked upstream (`README.md:105-108`), which changes what §2.8 and bite 6 are for — see the mark on bite 6. Its second half, hot-reloadable WGSL, is not anticipated anywhere in this plan and is the one piece of new upstream surface area that makes the presenter split harder rather than easier (`docs/presenter-architecture.md` §8.1).
 
-A fourth README problem appeared with the upstream commits and is *not* fixed by this milestone: the "## Pong" section (`README.md:150-158`) still describes online play as two-player paddle pong with a flipped camera and names `crates/pong-core/src/sim.rs` as the server-side sim, when online play is now the arena shooter over `pong-core/src/shooter.rs`. Nothing in this plan touches it, and it should not be folded into a milestone-1 push — it belongs to whoever reconciles the shooter's own documentation. It is recorded here so the next person to edit this README does not assume the section was reviewed and found correct.
+A fourth README problem appeared with the upstream commits and is *not* fixed by this milestone: the "## Arena v0: the pong classic" section (`README.md:150-158`) still describes online play as two-player paddle pong with a flipped camera and names `crates/arena-core/src/sim.rs` as the server-side sim, when online play is now the arena shooter over `arena-core/src/shooter.rs`. Nothing in this plan touches it, and it should not be folded into a milestone-1 push — it belongs to whoever reconciles the shooter's own documentation. It is recorded here so the next person to edit this README does not assume the section was reviewed and found correct.

@@ -1,5 +1,5 @@
 {
-  "fixture_suite": "pong-v1-hosted-contract",
+  "fixture_suite": "arena-v1-hosted-contract",
   "seed": [42, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
   "created_at_micros": 1000000,
   "calls": [

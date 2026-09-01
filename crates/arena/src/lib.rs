@@ -3,8 +3,8 @@
 // Angle normalization intentionally advances through floating-point turn boundaries.
 #![allow(clippy::while_float)]
 
-//! 3D Pong on the ember engine — local (two players, one keyboard) and
-//! online (matchmaking lobbies via pong-server over WebSocket).
+//! Arena on the ember engine — the v0 pong classic locally and the shooter online
+//! (matchmaking lobbies via arena-server over WebSocket).
 //!
 //! Local controls: P1 (blue, near) A/D · P2 (red, far) ←/→ · first to 7.
 //! Online: either key set steers YOUR paddle; the server is authoritative.
@@ -15,7 +15,7 @@ mod sound;
 use ember_engine::glam::Vec3;
 use ember_engine::{Camera, EmberGame, EngineConfig, Frame, InputState, Instance, KeyCode};
 
-use pong_core::sim::{
+use arena_core::sim::{
     BALL_R, COURT_END_Z, COURT_HALF_W, FIXED_DT, PADDLE_HALF_W, PADDLE_Z, Phase, Sim,
 };
 
@@ -215,7 +215,7 @@ impl EmberGame for LocalGame {
 pub fn run_local() {
     ember_engine::run(
         EngineConfig {
-            title: "ember pong — P1: A/D, P2: ←/→".to_string(),
+            title: "ember arena — v0, the pong classic — P1: A/D, P2: ←/→".to_string(),
             ..Default::default()
         },
         LocalGame::new(),
@@ -291,7 +291,7 @@ mod wasm_api {
     /// browser uses it instead of hardcoding a number that can drift.
     #[wasm_bindgen]
     pub fn proto_version() -> u16 {
-        pong_core::proto::PROTO_VERSION
+        arena_core::proto::PROTO_VERSION
     }
 
     #[wasm_bindgen]

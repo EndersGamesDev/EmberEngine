@@ -10,15 +10,15 @@ Run in the `claude-ember` WSL toolbox, `CARGO_TARGET_DIR=$HOME/targets/ember-shi
 |---|---|---|---|
 | `cargo test --workspace` | **145 passed, 0 failed** | 68.9 s | 69 s |
 | `cargo clippy --workspace --all-targets` | no errors, **no warnings** | 12.8 s | 20 s |
-| `cargo check -p pong --target wasm32-unknown-unknown` | clean | 40.8 s | 44 s |
+| `cargo check -p arena --target wasm32-unknown-unknown` | clean | 40.8 s | 44 s |
 
 All three inside budget. The wasm check still emits the one pre-existing `unused_mut` in `ember-engine/src/renderer.rs:390`, which is on main and is not on the native clippy path.
 
-`pong-core` went 34 → 41 tests: six on the sim's shield and one on the codec. `pong-server`'s three e2e stayed three, with `old_proto_may_list_but_not_join` strengthened rather than replaced.
+`arena-core` went 34 → 41 tests: six on the sim's shield and one on the codec. `arena-server`'s three e2e stayed three, with `old_proto_may_list_but_not_join` strengthened rather than replaced.
 
 ## Run @ 9941bfd on main — the shield SEEN, and a reflection watched on the wire
 
-Closed the gap below the same day, by the orchestrator, after the fast-forward merge to main. Harness: wasm release bundle (41.8 s build) + `wasm-bindgen` + a debug `pong-server --bind 127.0.0.1:7778` in `claude-ember`, the arena page served locally with a scratch `server.json`, driven from the sandboxed browser pane; plus a ~90-line scratch websocket bot (scratchpad only, not repo code) that joins a lobby, walks itself into the viewer's fixed sight line, faces the viewer, and holds Q forever.
+Closed the gap below the same day, by the orchestrator, after the fast-forward merge to main. Harness: wasm release bundle (41.8 s build) + `wasm-bindgen` + a debug `arena-server --bind 127.0.0.1:7778` in `claude-ember`, the arena page served locally with a scratch `server.json`, driven from the sandboxed browser pane; plus a ~90-line scratch websocket bot (scratchpad only, not repo code) that joins a lobby, walks itself into the viewer's fixed sight line, faces the viewer, and holds Q forever.
 
 **Seen, both draws.** First person: the plate swings up from below and takes the left third of the view, boss forward, gun untouched in the right hand. Third person: the bot's plate renders at chest height clearly OUTSIDE the torso with its boss visible — the 0.52-reach fix from the reading pass below, now confirmed by looking at it.
 
@@ -38,7 +38,7 @@ What the feature had to fit into, read out of the source rather than assumed.
 
 | Fact | Where | Why it constrained the design |
 |---|---|---|
-| Bullets are stepped only in `Sim::step`'s sweep, server-side | `crates/pong-core/src/shooter.rs` `retain_mut` block | Reflection is a server-only rule. The client never re-derives it; it sees reflected rounds as ordinary `BState` entries whose velocity changed between snapshots. |
+| Bullets are stepped only in `Sim::step`'s sweep, server-side | `crates/arena-core/src/shooter.rs` `retain_mut` block | Reflection is a server-only rule. The client never re-derives it; it sees reflected rounds as ordinary `BState` entries whose velocity changed between snapshots. |
 | Aim is `[f32; 2]` unit horizontal + scalar `pitch` | `PlayerIn.aim` / `PlayerSt.pitch` | The shield normal is the horizontal aim. There is no 3D facing to mirror about, and building one is explicitly forbidden. |
 | The sweep culls in a fixed order: TTL, player hit, integrate, floor, wall, cover | same block | Reflection replaces the *player hit* outcome, so it sits exactly where the hit did. |
 | `remove_player` drops bullets by `owner` | `Sim::remove_player` | Ownership transfer means a reflected round outlives the player who fired it and dies with the reflector instead. |

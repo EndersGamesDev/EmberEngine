@@ -4,7 +4,7 @@
 use std::net::{TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
-use pong_core::proto::{C2S, PROTO_VERSION, S2C};
+use arena_core::proto::{C2S, PROTO_VERSION, S2C};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
@@ -14,9 +14,9 @@ fn start_server() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        drop(pong_server::run(
+        drop(arena_server::run(
             listener,
-            pong_server::ServerConfig::default(),
+            arena_server::ServerConfig::default(),
         ));
     });
     port

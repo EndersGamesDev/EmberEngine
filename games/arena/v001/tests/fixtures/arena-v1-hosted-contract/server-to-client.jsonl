@@ -1,4 +1,4 @@
-{"t":"welcome","proto":1,"motd":"ember pong matchmaking"}
+{"t":"welcome","proto":1,"motd":"ember arena matchmaking"}
 {"t":"error","message":"wrong password"}
 {"t":"lobby_list","lobbies":[{"name":"duel","host":"alice","has_password":true}]}
 {"t":"lobby_created","name":"duel"}

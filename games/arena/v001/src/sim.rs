@@ -1,4 +1,4 @@
-//! Pure deterministic Pong simulation using fixed 60 Hz steps.
+//! Pure deterministic Arena v1 simulation using fixed 60 Hz steps.
 
 /// Fixed simulation delta in seconds.
 pub const FIXED_DT: f32 = 1.0 / 60.0;
@@ -43,7 +43,7 @@ pub enum Phase {
     Playing,
 }
 
-/// Complete authoritative state for one Pong match.
+/// Complete authoritative state for one Arena v1 match.
 pub struct Sim {
     /// Near paddle x coordinate.
     pub p1_x: f32,

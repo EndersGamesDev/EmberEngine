@@ -1,8 +1,8 @@
-//! Pong protocol 1: JSON text frames over WebSocket.
+//! Arena protocol 1: JSON text frames over WebSocket.
 
 use serde::{Deserialize, Serialize};
 
-/// Frozen Pong inner-protocol version.
+/// Frozen Arena inner-protocol version.
 pub const PROTO_VERSION: u16 = 1;
 /// Maximum accepted player-handle length in Unicode scalar values.
 pub const MAX_HANDLE_LEN: usize = 20;
