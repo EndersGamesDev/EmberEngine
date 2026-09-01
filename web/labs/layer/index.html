@@ -38,7 +38,7 @@
     <footer>1,200 vertices and 3,000 equal-length edges. The GPU rotates in SO(5), projects 5D→4D→3D, gathers endpoints, and emits box transforms every frame. Hue is only the post-rotation fifth coordinate, mapped over the fixed range −3…+3.</footer>
   </main>
   <script type="module">
-    import init, { start_layer, render_layer_frame } from './pkg/ember_lab_layer.js?v=1';
+    import init, { start_layer, render_layer_frame } from './pkg/ember_lab_layer.js?v=2';
 
     const status = document.querySelector('#status');
     const facts = document.querySelector('#facts');
@@ -54,7 +54,7 @@
     addEventListener('unhandledrejection', event => failure(event.reason));
 
     try {
-      await init({ module_or_path: './pkg/ember_lab_layer_bg.wasm?v=1' });
+      await init({ module_or_path: './pkg/ember_lab_layer_bg.wasm?v=2' });
       const report = JSON.parse(await start_layer(canvas));
       facts.textContent = JSON.stringify(report, null, 2);
       status.className = 'ready';

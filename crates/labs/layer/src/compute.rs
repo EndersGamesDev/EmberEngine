@@ -429,6 +429,7 @@ fn assemble(desc: &KernelDesc<'_>) -> Result<String, DialectError> {
     let (width, _) = desc.index_space.rect();
     let mut source = String::new();
     for (binding, input) in desc.inputs.iter().enumerate() {
+        let (input_width, _) = input.buffer.index_space.rect();
         writeln!(
             source,
             "@group(0) @binding({binding}) var layer_input_{binding}: texture_2d<f32>;"
@@ -439,7 +440,7 @@ fn assemble(desc: &KernelDesc<'_>) -> Result<String, DialectError> {
         })?;
         writeln!(
             source,
-            "fn {}(index: u32) -> vec4<f32> {{ return textureLoad(layer_input_{binding}, vec2<i32>(i32(index % {width}u), i32(index / {width}u)), 0); }}",
+            "fn {}(index: u32) -> vec4<f32> {{ return textureLoad(layer_input_{binding}, vec2<i32>(i32(index % {input_width}u), i32(index / {input_width}u)), 0); }}",
             input.accessor
         )
         .map_err(|error| DialectError::Validation {

@@ -329,6 +329,49 @@ pub fn assert_invariants() {
 mod tests {
     use super::*;
 
+    fn cross(left: [f32; 3], right: [f32; 3]) -> [f32; 3] {
+        [
+            left[1] * right[2] - left[2] * right[1],
+            left[2] * right[0] - left[0] * right[2],
+            left[0] * right[1] - left[1] * right[0],
+        ]
+    }
+
+    fn dot(left: [f32; 3], right: [f32; 3]) -> f32 {
+        left.into_iter().zip(right).map(|(a, b)| a * b).sum()
+    }
+
+    fn normalize(value: [f32; 3]) -> [f32; 3] {
+        let length = dot(value, value).sqrt();
+        value.map(|component| component / length)
+    }
+
+    fn renderer_box_point(
+        midpoint_hue: [f32; 4],
+        orientation_length: [f32; 4],
+        local: [f32; 3],
+        half_thickness: f32,
+    ) -> [f32; 3] {
+        let axis = [
+            orientation_length[0],
+            orientation_length[1],
+            orientation_length[2],
+        ];
+        let reference = if axis[1].abs() > 0.90 {
+            [1.0, 0.0, 0.0]
+        } else {
+            [0.0, 1.0, 0.0]
+        };
+        let side = normalize(cross(reference, axis));
+        let upward = cross(axis, side);
+        std::array::from_fn(|component| {
+            midpoint_hue[component]
+                + side[component] * local[0] * half_thickness
+                + upward[component] * local[1] * half_thickness
+                + axis[component] * local[2] * orientation_length[3] * 0.5
+        })
+    }
+
     #[test]
     fn derives_600_vertices_1200_cap_edges_3000_prism_edges_length_0p7639320225002102() {
         assert_invariants();
@@ -368,6 +411,64 @@ mod tests {
                 assert!((reference.length - f64::from(gpu.length)).abs() <= 4.0e-5);
                 assert!((reference.hue - f64::from(gpu.hue)).abs() <= 4.0e-5);
             }
+        }
+    }
+
+    #[test]
+    fn packed_edge_pose_decodes_to_a_stable_long_thin_box() {
+        let cases = [
+            (([1.25, -0.75, 0.5], -1.5), ([-0.5, 1.0, 2.25], 2.0)),
+            (([0.25, -2.0, 0.75], -0.5), ([0.30, 2.0, 0.80], 0.5)),
+        ];
+        for (first, second) in cases {
+            let pose = edge_gpu_path(first, second);
+            let midpoint_hue = [
+                pose.midpoint[0],
+                pose.midpoint[1],
+                pose.midpoint[2],
+                pose.hue,
+            ];
+            let orientation_length = [
+                pose.direction[0],
+                pose.direction[1],
+                pose.direction[2],
+                pose.length,
+            ];
+            let start = renderer_box_point(
+                midpoint_hue,
+                orientation_length,
+                [0.0, 0.0, -1.0],
+                0.012,
+            );
+            let end = renderer_box_point(
+                midpoint_hue,
+                orientation_length,
+                [0.0, 0.0, 1.0],
+                0.012,
+            );
+            for component in 0..3 {
+                assert!((start[component] - first.0[component]).abs() <= 1.0e-6);
+                assert!((end[component] - second.0[component]).abs() <= 1.0e-6);
+            }
+            assert!((midpoint_hue[3] - pose.hue).abs() <= f32::EPSILON);
+            assert!((orientation_length[3] - pose.length).abs() <= f32::EPSILON);
+
+            let side_point =
+                renderer_box_point(midpoint_hue, orientation_length, [1.0, 0.0, 0.0], 0.012);
+            let side = std::array::from_fn(|component| {
+                (side_point[component] - pose.midpoint[component]) / 0.012
+            });
+            let upward_point =
+                renderer_box_point(midpoint_hue, orientation_length, [0.0, 1.0, 0.0], 0.012);
+            let upward = std::array::from_fn(|component| {
+                (upward_point[component] - pose.midpoint[component]) / 0.012
+            });
+            assert!(dot(side, pose.direction).abs() <= 1.0e-5);
+            assert!(dot(upward, pose.direction).abs() <= 1.0e-5);
+            assert!(dot(side, upward).abs() <= 1.0e-5);
+            assert!((dot(side, side) - 1.0).abs() <= 1.0e-5);
+            assert!((dot(upward, upward) - 1.0).abs() <= 1.0e-5);
+            assert!(dot(cross(side, upward), pose.direction) >= 1.0 - 1.0e-5);
         }
     }
 }
