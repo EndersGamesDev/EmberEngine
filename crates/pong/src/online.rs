@@ -8,11 +8,11 @@ use std::fmt::Write as _;
 
 use ember_engine::glam::{Quat, Vec2, Vec3};
 use ember_engine::{Camera, EmberGame, Frame, InputState, Instance, KeyCode, MouseButton};
-use pong_core::proto::{BState, PState, PlayerMeta, C2S, PROTO_VERSION, S2C, STATE_EVERY_TICKS};
+use pong_core::proto::{BState, C2S, PROTO_VERSION, PState, PlayerMeta, S2C, STATE_EVERY_TICKS};
 use pong_core::shooter::{
-    generate_arena, generate_pads, move_circle, obstacle_height, stance_speed, step_vertical,
-    weapon_name, weapon_stats, Obstacle, EYE_CROUCH, EYE_STAND, FIXED_DT, MAX_HP, MAX_PITCH,
-    RELOAD_SECS,
+    EYE_CROUCH, EYE_STAND, FIXED_DT, MAX_HP, MAX_PITCH, Obstacle, RELOAD_SECS, generate_arena,
+    generate_pads, move_circle, obstacle_height, stance_speed, step_vertical, weapon_name,
+    weapon_stats,
 };
 use serde::Deserialize;
 
@@ -44,8 +44,7 @@ pub(crate) fn load_assets() -> (Vec<ember_engine::MeshData>, Option<Assets>) {
             let mut assets = Assets::default();
             for p in parts {
                 let part = Part {
-                    mesh: u32::try_from(meshes.len())
-                        .expect("viewmodel mesh count fits in u32")
+                    mesh: u32::try_from(meshes.len()).expect("viewmodel mesh count fits in u32")
                         + 1, // 0 is the built-in cube
                     color: Vec3::from_array(p.color),
                     is_strip: p.name == "strip",
@@ -627,12 +626,8 @@ impl ShooterGame {
             let state = if p.alive { "" } else { " ☠" };
             // Char-truncated so 20-char/unicode handles can't break columns.
             let name: String = self.handle_of(p.id).chars().take(16).collect();
-            writeln!(
-                s,
-                "{me}{name:<16} {:>6} {:>7}{state}",
-                p.score, p.deaths
-            )
-            .expect("writing to a String cannot fail");
+            writeln!(s, "{me}{name:<16} {:>6} {:>7}{state}", p.score, p.deaths)
+                .expect("writing to a String cannot fail");
         }
         s
     }
@@ -1180,8 +1175,14 @@ impl EmberGame for ShooterGame {
                 &self.obstacles,
             );
             self.pred_pos = Vec2::new(p[0], p[1]);
-            let (y, vy, _grounded) =
-                step_vertical(p, self.pred_y, self.pred_vy, self.pred_jump, dt, &self.obstacles);
+            let (y, vy, _grounded) = step_vertical(
+                p,
+                self.pred_y,
+                self.pred_vy,
+                self.pred_jump,
+                dt,
+                &self.obstacles,
+            );
             // A launch is the only thing that can raise vy, so that is the
             // press being spent - exactly the one shot the server gets.
             if vy > self.pred_vy {
@@ -1493,11 +1494,7 @@ impl EmberGame for ShooterGame {
             for h in 0..p.hp {
                 inst(
                     &mut frame,
-                    Vec3::new(
-                        pos.x - 0.3 + f32::from(h) * 0.3,
-                        feet_y + pip_y,
-                        pos.y,
-                    ),
+                    Vec3::new(pos.x - 0.3 + f32::from(h) * 0.3, feet_y + pip_y, pos.y),
                     Vec3::splat(0.16),
                     Vec3::new(0.3, 0.9, 0.4),
                 );
@@ -1600,14 +1597,14 @@ impl EmberGame for ShooterGame {
             // magazine, or during a reload, must not kick.
             let cooldown = weapon_stats(my_weapon).cooldown;
             let recoil = self.shot_started.map_or(0.0, |t0| {
-                    let k = ((self.time - t0) / cooldown).clamp(0.0, 1.0);
-                    if k < 0.16 {
-                        k / 0.16
-                    } else {
-                        let settle = (1.0 - k) / 0.84;
-                        settle * settle
-                    }
-                });
+                let k = ((self.time - t0) / cooldown).clamp(0.0, 1.0);
+                if k < 0.16 {
+                    k / 0.16
+                } else {
+                    let settle = (1.0 - k) / 0.84;
+                    settle * settle
+                }
+            });
             // ADS rides the FULL look vector rather than its horizontal
             // part. That is what puts the sights on the shot line when
             // pitched; the old pose used horizontal forward plus a
@@ -1631,9 +1628,7 @@ impl EmberGame for ShooterGame {
             // What stood here fired on `time % cooldown` while the trigger
             // was held — a free-running clock with no relationship to
             // whether a bullet was ever spawned or ammo remained.
-            let flashing = self
-                .shot_started
-                .is_some_and(|t0| self.time - t0 < 0.045);
+            let flashing = self.shot_started.is_some_and(|t0| self.time - t0 < 0.045);
             if flashing {
                 inst(
                     &mut frame,
@@ -1659,9 +1654,7 @@ impl EmberGame for ShooterGame {
             if self.shield_raise > 0.01 {
                 let k = self.shield_raise;
                 let lerp = |lo: f32, hi: f32| lo + (hi - lo) * k;
-                let center = eye
-                    + look * lerp(0.62, 0.74)
-                    - right3 * lerp(0.36, 0.26)
+                let center = eye + look * lerp(0.62, 0.74) - right3 * lerp(0.36, 0.26)
                     + Vec3::Y * (lerp(-0.66, -0.09) + bob * 0.4);
                 push_shield(
                     &mut frame,
@@ -1681,14 +1674,14 @@ impl EmberGame for ShooterGame {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod net {
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{self, Receiver, Sender};
-    use std::sync::Arc;
     use std::time::Duration;
 
     use pong_core::proto::{C2S, S2C};
-    use tungstenite::stream::MaybeTlsStream;
     use tungstenite::Message;
+    use tungstenite::stream::MaybeTlsStream;
 
     pub struct NetChan {
         out_tx: Sender<C2S>,
@@ -1724,44 +1717,46 @@ mod net {
             let dead = Arc::new(AtomicBool::new(false));
             {
                 let dead = Arc::clone(&dead);
-                std::thread::spawn(move || loop {
+                std::thread::spawn(move || {
                     loop {
-                        match out_rx.try_recv() {
-                            Ok(msg) => {
-                                let Ok(text) = serde_json::to_string(&msg) else {
-                                    continue;
-                                };
-                                if ws.send(Message::text(text)).is_err() {
-                                    dead.store(true, Ordering::Relaxed);
+                        loop {
+                            match out_rx.try_recv() {
+                                Ok(msg) => {
+                                    let Ok(text) = serde_json::to_string(&msg) else {
+                                        continue;
+                                    };
+                                    if ws.send(Message::text(text)).is_err() {
+                                        dead.store(true, Ordering::Relaxed);
+                                        return;
+                                    }
+                                }
+                                Err(mpsc::TryRecvError::Empty) => break,
+                                Err(mpsc::TryRecvError::Disconnected) => {
+                                    let _ = ws.close(None);
                                     return;
                                 }
                             }
-                            Err(mpsc::TryRecvError::Empty) => break,
-                            Err(mpsc::TryRecvError::Disconnected) => {
-                                let _ = ws.close(None);
+                        }
+                        match ws.read() {
+                            Ok(Message::Text(t)) => {
+                                if let Ok(msg) = serde_json::from_str::<S2C>(t.as_str())
+                                    && in_tx.send(msg).is_err()
+                                {
+                                    return;
+                                }
+                            }
+                            Ok(Message::Close(_)) => {
+                                dead.store(true, Ordering::Relaxed);
                                 return;
                             }
-                        }
-                    }
-                    match ws.read() {
-                        Ok(Message::Text(t)) => {
-                            if let Ok(msg) = serde_json::from_str::<S2C>(t.as_str())
-                                && in_tx.send(msg).is_err()
-                            {
+                            Ok(_) => {}
+                            Err(tungstenite::Error::Io(e))
+                                if e.kind() == std::io::ErrorKind::WouldBlock
+                                    || e.kind() == std::io::ErrorKind::TimedOut => {}
+                            Err(_) => {
+                                dead.store(true, Ordering::Relaxed);
                                 return;
                             }
-                        }
-                        Ok(Message::Close(_)) => {
-                            dead.store(true, Ordering::Relaxed);
-                            return;
-                        }
-                        Ok(_) => {}
-                        Err(tungstenite::Error::Io(e))
-                            if e.kind() == std::io::ErrorKind::WouldBlock
-                                || e.kind() == std::io::ErrorKind::TimedOut => {}
-                        Err(_) => {
-                            dead.store(true, Ordering::Relaxed);
-                            return;
                         }
                     }
                 });
@@ -1800,8 +1795,8 @@ mod net {
     use std::rc::Rc;
 
     use pong_core::proto::{C2S, CLIENT_PING_SECS, S2C};
-    use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
 
     pub struct NetChan {
         ws: web_sys::WebSocket,

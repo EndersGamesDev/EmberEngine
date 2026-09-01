@@ -14,24 +14,24 @@
 //! Bounded queues, connection caps, message-size caps, per-tick message
 //! budgets, and string sanitization throughout.
 
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use pong_core::proto::{
-    color_for, sanitize_text, BState, LobbyInfo, PState, PlayerMeta, C2S, MAX_HANDLE_LEN,
-    MAX_LOBBY_LEN, MAX_PASSWORD_LEN, PROTO_VERSION, S2C, STATE_EVERY_TICKS,
+    BState, C2S, LobbyInfo, MAX_HANDLE_LEN, MAX_LOBBY_LEN, MAX_PASSWORD_LEN, PROTO_VERSION, PState,
+    PlayerMeta, S2C, STATE_EVERY_TICKS, color_for, sanitize_text,
 };
-use pong_core::shooter::{PlayerIn, Sim, ARENA_HALF, FIXED_DT, MAX_PLAYERS};
-use tungstenite::protocol::WebSocketConfig;
+use pong_core::shooter::{ARENA_HALF, FIXED_DT, MAX_PLAYERS, PlayerIn, Sim};
 use tungstenite::Message;
+use tungstenite::protocol::WebSocketConfig;
 
 pub struct ServerConfig {
     pub max_conns: usize,
@@ -136,12 +136,8 @@ fn alloc_pid(lobby: &Lobby) -> u8 {
 }
 
 fn bounded_tick_age(current: u64, earlier: u64) -> u16 {
-    u16::try_from(
-        current
-            .saturating_sub(earlier)
-            .min(u64::from(u16::MAX)),
-    )
-    .expect("the tick age is clamped to u16::MAX")
+    u16::try_from(current.saturating_sub(earlier).min(u64::from(u16::MAX)))
+        .expect("the tick age is clamped to u16::MAX")
 }
 
 // RTT values are finite and nonnegative, and the established float formula always fits u64.
@@ -171,7 +167,8 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
     let local = listener.local_addr()?;
     tracing::info!(
         "pong-server (arena shooter) listening on {local} (proto v{PROTO_VERSION}, max {} conns, {} lobbies)",
-        cfg.max_conns, cfg.max_lobbies
+        cfg.max_conns,
+        cfg.max_lobbies
     );
 
     let (events_tx, events_rx) = mpsc::channel::<Ev>();
@@ -408,11 +405,7 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
         if now > next_tick_at + tick_dt * 10 {
             let behind_ms =
                 u64::try_from(now.duration_since(next_tick_at).as_millis()).unwrap_or(u64::MAX);
-            tracing::warn!(
-                tick,
-                behind_ms,
-                "hub stall: resyncing tick clock"
-            );
+            tracing::warn!(tick, behind_ms, "hub stall: resyncing tick clock");
             next_tick_at = now + tick_dt;
         }
         tick += 1;
@@ -692,20 +685,23 @@ fn handle_event(
                             has_password: l.password.is_some(),
                             players: u8::try_from(l.members.len())
                                 .expect("lobby membership is capped below u8::MAX"),
-                            cap: u8::try_from(MAX_PLAYERS)
-                                .expect("MAX_PLAYERS fits in u8"),
+                            cap: u8::try_from(MAX_PLAYERS).expect("MAX_PLAYERS fits in u8"),
                         })
                         .collect();
                     let _ = send_to(conns, id, &S2C::LobbyList { lobbies: list });
                 }
                 (C2S::CreateLobby { name, password }, true) => {
                     if conns.get(&id).unwrap().proto != PROTO_VERSION {
-                        let _ = send_to(conns, id, &S2C::Error {
-                            message: format!(
-                                "this build speaks protocol v{}, the live game is v{PROTO_VERSION} — play the live version",
-                                conns.get(&id).unwrap().proto
-                            ),
-                        });
+                        let _ = send_to(
+                            conns,
+                            id,
+                            &S2C::Error {
+                                message: format!(
+                                    "this build speaks protocol v{}, the live game is v{PROTO_VERSION} — play the live version",
+                                    conns.get(&id).unwrap().proto
+                                ),
+                            },
+                        );
                         return;
                     }
                     let name = sanitize_text(&name, MAX_LOBBY_LEN);
@@ -782,12 +778,16 @@ fn handle_event(
                 }
                 (C2S::JoinLobby { name, password }, true) => {
                     if conns.get(&id).unwrap().proto != PROTO_VERSION {
-                        let _ = send_to(conns, id, &S2C::Error {
-                            message: format!(
-                                "this build speaks protocol v{}, the live game is v{PROTO_VERSION} — play the live version",
-                                conns.get(&id).unwrap().proto
-                            ),
-                        });
+                        let _ = send_to(
+                            conns,
+                            id,
+                            &S2C::Error {
+                                message: format!(
+                                    "this build speaks protocol v{}, the live game is v{PROTO_VERSION} — play the live version",
+                                    conns.get(&id).unwrap().proto
+                                ),
+                            },
+                        );
                         return;
                     }
                     let name = sanitize_text(&name, MAX_LOBBY_LEN);

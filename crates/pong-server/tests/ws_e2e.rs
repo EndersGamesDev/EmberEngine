@@ -247,7 +247,10 @@ fn old_proto_may_list_but_not_join() {
             // player ever sees, so it must still NAME both versions after a
             // bump — "play the live version" alone leaves them guessing
             // which build theirs is and which one is live.
-            assert!(message.contains("v0"), "must name the stale version: {message}");
+            assert!(
+                message.contains("v0"),
+                "must name the stale version: {message}"
+            );
             assert!(
                 message.contains(&format!("v{PROTO_VERSION}")),
                 "must name the live version: {message}"
@@ -450,7 +453,10 @@ fn a_state_reports_how_long_the_acked_command_has_been_applied() {
             ages.push(p.ack_age_ticks);
         }
     }
-    assert!(ages.len() >= 4, "not enough states carrying the ack: {ages:?}");
+    assert!(
+        ages.len() >= 4,
+        "not enough states carrying the ack: {ages:?}"
+    );
     assert!(
         ages.windows(2).all(|w| w[1] > w[0]),
         "ack_age_ticks did not advance: {ages:?}"
@@ -505,5 +511,8 @@ fn a_press_survives_a_second_input_in_the_same_tick() {
             .map(|p| p.y),
         _ => None,
     });
-    assert!(y > 0.5, "the press was overwritten before the sim saw it: {y}");
+    assert!(
+        y > 0.5,
+        "the press was overwritten before the sim saw it: {y}"
+    );
 }

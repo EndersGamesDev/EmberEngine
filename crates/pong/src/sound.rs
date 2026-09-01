@@ -40,9 +40,7 @@ fn synth(sfx: Sfx) -> Vec<f32> {
     let sr = SAMPLE_RATE_F32;
     let mut rng: u32 = 0x1234_5678;
     let mut noise = move || -> f32 {
-        rng = rng
-            .wrapping_mul(1_664_525)
-            .wrapping_add(1_013_904_223);
+        rng = rng.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         let upper = u16::try_from(rng >> 16).expect("the shifted RNG value fits in u16");
         f32::from(upper) / 32768.0 - 1.0
     };
@@ -54,8 +52,8 @@ fn synth(sfx: Sfx) -> Vec<f32> {
             let mut phase = 0.0f32;
             (0..n)
                 .map(|i| {
-                    let sample = u16::try_from(i)
-                        .expect("sound effects contain fewer than 65k samples");
+                    let sample =
+                        u16::try_from(i).expect("sound effects contain fewer than 65k samples");
                     let t = f32::from(sample) / sr;
                     let f = f0 + (f1 - f0) * (t / dur);
                     phase += std::f32::consts::TAU * f / sr;
@@ -93,10 +91,7 @@ fn synth(sfx: Sfx) -> Vec<f32> {
         // Reload: two mechanical clicks with a gap.
         Sfx::Reload => {
             let mut a = sweep(0.035, 1900.0, 1500.0, 0.85, 70.0, 0.2);
-            a.extend(std::iter::repeat_n(
-                0.0,
-                sample_count(0.08),
-            ));
+            a.extend(std::iter::repeat_n(0.0, sample_count(0.08)));
             a.extend(sweep(0.045, 1300.0, 900.0, 0.85, 60.0, 0.2));
             a
         }
@@ -107,7 +102,7 @@ pub use platform::Audio;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod platform {
-    use super::{synth, Sfx, ALL, SAMPLE_RATE};
+    use super::{ALL, SAMPLE_RATE, Sfx, synth};
     use std::collections::HashMap;
 
     pub struct Audio {
@@ -142,13 +137,13 @@ mod platform {
 
 #[cfg(target_arch = "wasm32")]
 mod platform {
-    use super::{synth, Sfx, ALL, SAMPLE_RATE};
+    use super::{ALL, SAMPLE_RATE, Sfx, synth};
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::rc::Rc;
 
-    use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
 
     struct Inner {
         ctx: RefCell<Option<web_sys::AudioContext>>,

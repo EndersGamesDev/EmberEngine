@@ -23,8 +23,8 @@
 use std::time::{Duration, Instant};
 
 use pong_core::proto::{C2S, PROTO_VERSION, S2C};
-use tungstenite::stream::MaybeTlsStream;
 use tungstenite::Message;
+use tungstenite::stream::MaybeTlsStream;
 
 // Keeping the scripted session linear makes its health-check sequence auditable.
 #[allow(clippy::too_many_lines)]

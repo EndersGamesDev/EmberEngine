@@ -11,7 +11,7 @@ use ember_engine::glam::Vec3;
 use ember_engine::{Camera, EmberGame, EngineConfig, Frame, InputState, Instance, KeyCode};
 
 use pong_core::sim::{
-    Phase, Sim, BALL_R, COURT_END_Z, COURT_HALF_W, FIXED_DT, PADDLE_HALF_W, PADDLE_Z,
+    BALL_R, COURT_END_Z, COURT_HALF_W, FIXED_DT, PADDLE_HALF_W, PADDLE_Z, Phase, Sim,
 };
 
 pub use online::OnlineConfig;
@@ -72,8 +72,7 @@ fn build_scene(p: &SceneParams) -> Frame {
     }
     let dashes: u16 = 9;
     for i in 0..dashes {
-        let x = -COURT_HALF_W
-            + (f32::from(i) + 0.5) * (COURT_HALF_W * 2.0 / f32::from(dashes));
+        let x = -COURT_HALF_W + (f32::from(i) + 0.5) * (COURT_HALF_W * 2.0 / f32::from(dashes));
         inst(
             &mut frame,
             Vec3::new(x, 0.02, 0.0),
@@ -248,8 +247,8 @@ pub fn run_online(cfg: OnlineConfig) -> Result<(), String> {
         .map_err(|_| "character mesh count exceeds u32".to_string())?
         + 1;
     let (backdrop, backdrop_base) = online::backdrop_meshes(backdrop_mesh);
-    let backdrop_parts = u32::try_from(backdrop.len())
-        .map_err(|_| "backdrop mesh count exceeds u32".to_string())?;
+    let backdrop_parts =
+        u32::try_from(backdrop.len()).map_err(|_| "backdrop mesh count exceeds u32".to_string())?;
     meshes.extend(backdrop);
     let mut game = online::ShooterGame::connect(&cfg, assets)?;
     game.set_env_base(env_base);
