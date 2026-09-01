@@ -170,11 +170,14 @@ fn callback_pair<T>() -> (CallbackFuture<T>, Arc<Mutex<CallbackState<T>>>) {
 }
 
 fn finish_callback<T>(state: &Arc<Mutex<CallbackState<T>>>, value: T) {
-    if let Ok(mut state) = state.lock() {
+    let waker = if let Ok(mut state) = state.lock() {
         state.value = Some(value);
-        if let Some(waker) = state.waker.take() {
-            waker.wake();
-        }
+        state.waker.take()
+    } else {
+        None
+    };
+    if let Some(waker) = waker {
+        waker.wake();
     }
 }
 
@@ -765,6 +768,10 @@ thread_local! {
 }
 
 pub(crate) fn reset() {
+    cancel();
+}
+
+pub(crate) fn cancel() {
     GENERATION.set(GENERATION.get().wrapping_add(1));
     SUITE.with_borrow_mut(|slot| *slot = None);
 }
@@ -802,9 +809,10 @@ pub(crate) async fn run(kernel_id: &str, repeat_count: u32) -> Result<String, St
         "WebGPU compute suite is busy, unavailable, or not initialized".to_string()
     })?;
     let result = suite.run(kernel_id, repeat_count).await;
-    if GENERATION.get() == generation {
-        SUITE.with_borrow_mut(|slot| *slot = Some(suite));
+    if GENERATION.get() != generation {
+        return Err("WebGPU compute work completed after its stage was cancelled".to_string());
     }
+    SUITE.with_borrow_mut(|slot| *slot = Some(suite));
     let measured = result?;
     serde_json::to_string(&measured)
         .map_err(|error| format!("could not encode WebGPU kernel result: {error}"))

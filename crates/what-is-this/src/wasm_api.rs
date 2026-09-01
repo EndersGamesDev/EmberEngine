@@ -169,6 +169,12 @@ pub fn gpu_compute_status_json() -> String {
     crate::gpu::status_json()
 }
 
+/// Cancels restoration of an in-flight WebGPU compute suite after a page watchdog expires.
+#[wasm_bindgen]
+pub fn cancel_gpu_compute() {
+    crate::gpu::cancel();
+}
+
 /// Runs one preallocated fixed workload and returns its opaque checksum.
 ///
 /// # Errors

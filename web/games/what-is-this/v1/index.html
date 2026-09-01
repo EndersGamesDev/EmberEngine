@@ -293,7 +293,10 @@
       });
       const outcome = await Promise.race([workResult, deadlineResult]);
       clearTimeout(deadlineTimer);
-      if (outcome.timedOut) token.cancelled = true;
+      if (outcome.timedOut) {
+        token.cancelled = true;
+        if (stageId === 'stage.gpu-compute.v1' && wasm) wasm.cancel_gpu_compute();
+      }
       if (activeRun !== run || !run.running) return;
       const duration = performance.now() - started;
       run.stageReports.push({
