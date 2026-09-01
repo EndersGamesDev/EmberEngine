@@ -592,7 +592,7 @@ mod tests {
                     ..
                 },
                 close_after_error: true,
-            } if actual_code == code
+            } if *actual_code == code
         ));
     }
 
