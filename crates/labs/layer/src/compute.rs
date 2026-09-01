@@ -398,7 +398,7 @@ fn assemble(desc: &KernelDesc<'_>) -> Result<String, DialectError> {
             message: "kernel and uniform type must be WGSL identifiers".to_string(),
         });
     }
-    if desc.index_space.len() == 0 || desc.outputs.is_empty() || desc.outputs.len() > 4 {
+    if desc.index_space.is_empty() || desc.outputs.is_empty() || desc.outputs.len() > 4 {
         return Err(DialectError::InvalidDescriptor {
             kernel: desc.name.to_string(),
             message: "index space must be nonempty and output count must be 1 through 4"
@@ -637,7 +637,7 @@ impl ComputeDevice {
         initial: Option<&[&[[f32; 4]]]>,
     ) -> Result<ComputeBuffer, LayerError> {
         let (width, height) = index_space.rect();
-        if index_space.len() == 0 || slot_count == 0 || width > self.facts.max_texture_dimension_2d
+        if index_space.is_empty() || slot_count == 0 || width > self.facts.max_texture_dimension_2d
         {
             return Err(LayerError::Resource(format!(
                 "{label} has invalid space {index_space:?} or slot count {slot_count}"
@@ -705,6 +705,7 @@ impl ComputeDevice {
             .map_err(|_| LayerError::Resource("buffer id lock was poisoned".to_string()))?;
         let id = *next_buffer;
         *next_buffer = id.wrapping_add(1);
+        drop(next_buffer);
         Ok(ComputeBuffer {
             owner: self.owner,
             id,
@@ -959,6 +960,7 @@ impl ComputeDevice {
             .map_err(|_| LayerError::Resource("generation lock was poisoned".to_string()))?;
         let generation = current.wrapping_add(1);
         *current = generation;
+        drop(current);
         Ok(DispatchToken {
             owner: self.owner,
             generation,

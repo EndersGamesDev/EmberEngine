@@ -124,10 +124,10 @@ fn derive_cap_edges(vertices: &[[f64; 4]]) -> (f64, Vec<Edge>) {
     let mut edges = Vec::new();
     for (left_index, left) in vertices.iter().enumerate() {
         for (right_index, right) in vertices.iter().enumerate().skip(left_index + 1) {
-            if (squared_distance(left, right) - minimum).abs() <= tolerance {
-                if let (Ok(a), Ok(b)) = (u32::try_from(left_index), u32::try_from(right_index)) {
-                    edges.push(Edge { a, b });
-                }
+            if (squared_distance(left, right) - minimum).abs() <= tolerance
+                && let (Ok(a), Ok(b)) = (u32::try_from(left_index), u32::try_from(right_index))
+            {
+                edges.push(Edge { a, b });
             }
         }
     }
