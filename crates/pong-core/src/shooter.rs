@@ -223,8 +223,8 @@ pub fn generate_arena(seed: u64) -> Vec<Obstacle> {
     let mut state = seed ^ 0x9e37_79b9_7f4a_7c15;
     let mut rand01 = move || -> f32 {
         state = state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         // Top 32 bits over 2^32: uniform in [0, 1). (Dividing 31 bits by
         // u32::MAX halved the range and put every obstacle in one half of
         // the arena.)
@@ -247,7 +247,7 @@ pub fn generate_arena(seed: u64) -> Vec<Obstacle> {
 }
 
 fn spawn_point(slot: u32) -> [f32; 2] {
-    let angle = slot as f32 * 2.399963; // golden angle: spread out
+    let angle = slot as f32 * 2.399_963; // golden angle: spread out
     [angle.cos() * SPAWN_RING_R, angle.sin() * SPAWN_RING_R]
 }
 
@@ -299,8 +299,8 @@ pub fn generate_pads(seed: u64) -> Vec<[f32; 2]> {
     let mut state = seed ^ 0x5bd1_e995_c0ff_ee00;
     let mut rand01 = move || -> f32 {
         state = state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         ((state >> 32) as u32) as f32 / (u32::MAX as f32 + 1.0)
     };
     (0..4)
