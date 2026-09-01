@@ -182,6 +182,12 @@ impl<I> Reconciler<I> {
         let before = predicted.clone();
         hooks.apply_authoritative(predicted, authoritative);
         let replayed_inputs = self.history.len();
+        let acknowledged_sent_at = self
+            .history
+            .entries
+            .iter()
+            .find(|entry| entry.sequence == acknowledgement)
+            .map(|entry| entry.sent_at);
         for (index, entry) in self.history.entries.iter().enumerate() {
             let next_sent_at = self
                 .history
@@ -197,6 +203,7 @@ impl<I> Reconciler<I> {
                     next_sent_at,
                     replay_until,
                     acknowledgement,
+                    acknowledged_sent_at,
                     server_timestamp,
                 },
                 authoritative,

@@ -79,6 +79,8 @@ pub struct ReplayContext {
     pub replay_until: Duration,
     /// Authoritative acknowledgement that selected the replay cursor.
     pub acknowledgement: u32,
+    /// Emission time of the retained acknowledged command, when present.
+    pub acknowledged_sent_at: Option<Duration>,
     /// Opaque game-owned server timestamp extracted from the state.
     pub server_timestamp: u64,
 }

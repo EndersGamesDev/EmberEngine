@@ -382,7 +382,14 @@ mod tests {
             }),
         );
         join.opened();
-        join.received(&text(&welcome));
+        let update = join.received(&text(&welcome));
+        assert!(matches!(
+            serde_json::from_str::<ClientMessage>(match &update.outbound[0] {
+                WireFrame::Text(frame) => frame,
+                WireFrame::Binary(_) => "",
+            }),
+            Ok(ClientMessage::JoinLobby(_))
+        ));
         join.received(&text(&ServerMessage::Joined(Joined {
             game_id: "fake".to_string(),
             game_version: 1,

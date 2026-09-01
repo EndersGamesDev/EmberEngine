@@ -216,9 +216,9 @@ mod tests {
 
     #[test]
     fn fire_codec_rejects_binary_without_reinterpreting_it() {
-        assert_eq!(
+        assert!(matches!(
             FireCodec.decode_inner(&WireFrame::Binary(vec![1, 2, 3])),
             Err(HookError::WrongFrameKind)
-        );
+        ));
     }
 }
