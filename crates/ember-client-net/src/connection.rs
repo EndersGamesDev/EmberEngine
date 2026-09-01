@@ -37,7 +37,6 @@ pub enum ConnectionProgress {
 pub struct ClientConnection<H> {
     transport: WebSocketTransport,
     handshake: H,
-    opened: bool,
     diagnostics: VecDeque<String>,
 }
 
@@ -55,12 +54,15 @@ impl<H: HandshakeProvider> ClientConnection<H> {
         if config.keepalive.is_none() {
             config.keepalive = handshake.keepalive();
         }
-        WebSocketTransport::connect(url, config).map(|transport| Self {
+        let transport = WebSocketTransport::connect(url, config)?;
+        let mut connection = Self {
             transport,
             handshake,
-            opened: false,
             diagnostics: VecDeque::new(),
-        })
+        };
+        let update = connection.handshake.opened();
+        connection.apply_update(update);
+        Ok(connection)
     }
 
     /// Enqueues an exact post-handshake frame.
@@ -90,17 +92,8 @@ impl<H: HandshakeProvider> ClientConnection<H> {
         }
     }
 
-    fn open_if_ready(&mut self) {
-        if !self.opened && self.transport.status() == TransportStatus::Open {
-            self.opened = true;
-            let update = self.handshake.opened();
-            self.apply_update(update);
-        }
-    }
-
     /// Pumps transport and handshake state, then forwards every raw game frame.
     pub fn drain(&mut self, output: &mut VecDeque<WireFrame>) {
-        self.open_if_ready();
         let mut incoming = VecDeque::new();
         self.transport.drain(&mut incoming);
         while let Some(frame) = incoming.pop_front() {

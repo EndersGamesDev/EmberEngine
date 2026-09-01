@@ -307,6 +307,26 @@ mod tests {
     }
 
     #[test]
+    fn before_mode_retains_the_acknowledged_command_for_partial_replay() {
+        let mut history = InputHistory::new(4);
+        for sequence in 6..=8 {
+            history.push(SequencedInput {
+                sequence,
+                sent_at: Duration::ZERO,
+                input: sequence,
+            });
+        }
+        history.trim_acknowledged(7, AcknowledgementMode::Before);
+        assert_eq!(
+            history
+                .iter()
+                .map(|entry| entry.sequence)
+                .collect::<Vec<_>>(),
+            vec![7, 8]
+        );
+    }
+
+    #[test]
     fn fake_game_rebases_trims_and_replays_in_order() {
         let mut reconciler = Reconciler::new(8);
         reconciler.record(2, Duration::from_millis(10));
@@ -314,7 +334,7 @@ mod tests {
         reconciler.record(5, Duration::from_millis(30));
         let authoritative = FakeAuthoritative {
             value: 100,
-            ack: 1,
+            ack: 2,
             timestamp: 77,
         };
         let mut predicted = 10;

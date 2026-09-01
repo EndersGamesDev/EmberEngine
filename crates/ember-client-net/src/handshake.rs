@@ -28,7 +28,7 @@ pub struct HandshakeUpdate {
 
 /// Pluggable initial exchange driven by the shared connection lifecycle.
 pub trait HandshakeProvider {
-    /// Called exactly once after the WebSocket reports open.
+    /// Called exactly once when the transport starts; queued output is emitted on open.
     fn opened(&mut self) -> HandshakeUpdate;
 
     /// Observes one inbound frame before the same frame reaches the game.
