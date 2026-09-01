@@ -12,7 +12,7 @@ pub enum WireFrame {
 impl WireFrame {
     /// Returns the charged payload byte length.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         match self {
             Self::Text(text) => text.len(),
             Self::Binary(bytes) => bytes.len(),
@@ -21,7 +21,7 @@ impl WireFrame {
 
     /// Returns whether the payload is empty.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }

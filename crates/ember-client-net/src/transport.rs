@@ -396,6 +396,8 @@ mod imp {
             }
         }
 
+        // This signature matches the wasm backend, whose inbox drain mutates browser state.
+        #[allow(clippy::needless_pass_by_ref_mut)]
         pub fn drain(&mut self, output: &mut VecDeque<WireFrame>) {
             while let Ok(frame) = self.incoming.try_recv() {
                 output.push_back(frame);

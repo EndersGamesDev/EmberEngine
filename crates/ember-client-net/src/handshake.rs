@@ -87,7 +87,7 @@ pub struct LegacyHandshake {
 impl LegacyHandshake {
     /// Constructs an automatic legacy exchange that waits for welcome.
     #[must_use]
-    pub fn automatic(
+    pub const fn automatic(
         hello: WireFrame,
         selection: WireFrame,
         tags: LegacyJsonTags,
@@ -104,7 +104,7 @@ impl LegacyHandshake {
 
     /// Constructs a compatibility channel whose caller owns legacy messages.
     #[must_use]
-    pub fn manual(tags: LegacyJsonTags, keepalive: Option<Keepalive>) -> Self {
+    pub const fn manual(tags: LegacyJsonTags, keepalive: Option<Keepalive>) -> Self {
         Self {
             mode: LegacyMode::Manual,
             tags,
@@ -327,18 +327,22 @@ mod tests {
             None,
         );
         assert_eq!(handshake.opened().outbound.len(), 1);
-        assert!(handshake
-            .received(&WireFrame::Text(r#"{"t":"state"}"#.to_string()))
-            .outbound
-            .is_empty());
+        assert_eq!(
+            handshake
+                .received(&WireFrame::Text(r#"{"t":"state"}"#.to_string()))
+                .outbound,
+            Vec::<WireFrame>::new()
+        );
         let selection =
             handshake.received(&WireFrame::Text(r#"{"t":"welcome","proto":1}"#.to_string()));
         assert_eq!(selection.outbound.len(), 1);
         assert_eq!(handshake.progress(), HandshakeProgress::Selecting);
-        assert!(handshake
-            .received(&WireFrame::Text(r#"{"t":"welcome","proto":1}"#.to_string()))
-            .outbound
-            .is_empty());
+        assert_eq!(
+            handshake
+                .received(&WireFrame::Text(r#"{"t":"welcome","proto":1}"#.to_string()))
+                .outbound,
+            Vec::<WireFrame>::new()
+        );
         handshake.received(&WireFrame::Text(r#"{"t":"joined"}"#.to_string()));
         assert_eq!(handshake.progress(), HandshakeProgress::Joined);
     }
