@@ -20,8 +20,12 @@
 //! predicted: their inputs are unknown, and integrating the velocity the
 //! server sent is both cheap and right for the 33 ms between broadcasts.
 
-use std::collections::VecDeque;
+use std::time::Duration;
 
+use ember_client_net::{
+    AcknowledgementMode, CorrectionMode, PredictionHooks, Reconciler, RemoteEntityHooks,
+    RemoteSnapshotBuffer, ReplayContext,
+};
 use ember_engine::glam::Vec2;
 use fire_core::car::{Car, CarInput, DT, OFFROAD_FACTOR};
 use fire_core::castle;
@@ -32,6 +36,127 @@ use fire_core::sim::{Race, RaceState};
 /// than any playable connection, and bounded so a silent server cannot make
 /// the client grow without limit.
 const MAX_HISTORY: usize = 120;
+
+#[derive(Clone)]
+struct FireAuthoritative {
+    tick: u64,
+    car: CarState,
+}
+
+fn apply_car_state(car: &mut Car, state: &CarState) {
+    car.pos = Vec2::new(state.x, state.z);
+    car.vel = Vec2::new(state.vx, state.vz);
+    car.yaw = state.yaw;
+    car.boost_charges = state.boost;
+    car.boost_left = if state.boosting {
+        car.boost_left.max(DT)
+    } else {
+        0.0
+    };
+    car.drift = state.drift;
+}
+
+struct FirePredictionHooks<'a> {
+    track: &'a fire_core::track::Track,
+}
+
+impl PredictionHooks for FirePredictionHooks<'_> {
+    type Input = CarInput;
+    type AuthoritativeState = FireAuthoritative;
+    type PredictedState = Car;
+
+    fn acknowledgement(&self, authoritative: &Self::AuthoritativeState) -> u32 {
+        authoritative.car.ack
+    }
+
+    fn server_timestamp(&self, authoritative: &Self::AuthoritativeState) -> u64 {
+        authoritative.tick
+    }
+
+    fn acknowledgement_mode(&self) -> AcknowledgementMode {
+        AcknowledgementMode::Through
+    }
+
+    fn apply_authoritative(
+        &self,
+        predicted: &mut Self::PredictedState,
+        authoritative: &Self::AuthoritativeState,
+    ) {
+        apply_car_state(predicted, &authoritative.car);
+    }
+
+    fn replay_one_slice(
+        &self,
+        predicted: &mut Self::PredictedState,
+        input: &Self::Input,
+        _context: ReplayContext,
+        _authoritative: &Self::AuthoritativeState,
+    ) {
+        let grip = if self.track.off_track(predicted.pos) {
+            OFFROAD_FACTOR
+        } else {
+            1.0
+        };
+        predicted.step(input, grip, DT);
+    }
+
+    fn snap_or_smooth(
+        &self,
+        _before: &Self::PredictedState,
+        _after: &Self::PredictedState,
+        _authoritative: &Self::AuthoritativeState,
+    ) -> CorrectionMode {
+        CorrectionMode::Snap
+    }
+}
+
+struct FireRemoteHooks;
+
+impl RemoteEntityHooks for FireRemoteHooks {
+    type Snapshot = CarState;
+    type RenderState = CarState;
+
+    fn interpolate_remote(
+        &self,
+        from: &Self::Snapshot,
+        to: &Self::Snapshot,
+        numerator: u64,
+        denominator: u64,
+    ) -> Self::RenderState {
+        let numerator = u16::try_from(numerator).unwrap_or(u16::MAX);
+        let denominator = u16::try_from(denominator).unwrap_or(u16::MAX).max(1);
+        let alpha = f32::from(numerator) / f32::from(denominator);
+        let mut state = *to;
+        state.x = from.x + (to.x - from.x) * alpha;
+        state.z = from.z + (to.z - from.z) * alpha;
+        state.yaw = from.yaw + (to.yaw - from.yaw) * alpha;
+        state.vx = from.vx + (to.vx - from.vx) * alpha;
+        state.vz = from.vz + (to.vz - from.vz) * alpha;
+        state.drift = from.drift + (to.drift - from.drift) * alpha;
+        state.progress = from.progress + (to.progress - from.progress) * alpha;
+        state
+    }
+
+    fn dead_reckon_remote(
+        &self,
+        latest: &Self::Snapshot,
+        elapsed: u64,
+    ) -> Self::RenderState {
+        let elapsed = u16::try_from(elapsed).unwrap_or(u16::MAX);
+        let mut state = *latest;
+        state.x += state.vx * DT * f32::from(elapsed);
+        state.z += state.vz * DT * f32::from(elapsed);
+        state
+    }
+
+    fn snap_or_smooth_remote(
+        &self,
+        _from: &Self::Snapshot,
+        _to: &Self::Snapshot,
+    ) -> CorrectionMode {
+        CorrectionMode::Snap
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Screen {
@@ -62,11 +187,11 @@ pub struct Online {
     /// yet, the connection's protocol is still 0 and the join is refused with
     /// "this build speaks fire protocol v0".
     pub welcomed: bool,
-    seq: u32,
-    history: VecDeque<(u32, CarInput)>,
-    /// Slots the server has actually told us about. A car we have never had a
-    /// snapshot for must not be dead-reckoned from its grid pose.
-    known: [bool; 8],
+    reconciler: Reconciler<CarInput>,
+    /// Per-slot authoritative samples; empty means the server has never
+    /// described that car and its grid pose must not be extrapolated.
+    remote_snapshots: [RemoteSnapshotBuffer<CarState>; 8],
+    remote_time: [u64; 8],
 }
 
 impl Default for Online {
@@ -94,9 +219,9 @@ impl Online {
             notice: None,
             results: None,
             welcomed: false,
-            seq: 0,
-            history: VecDeque::new(),
-            known: [false; 8],
+            reconciler: Reconciler::new(MAX_HISTORY),
+            remote_snapshots: std::array::from_fn(|_| RemoteSnapshotBuffer::new(3)),
+            remote_time: [0; 8],
         }
     }
 
@@ -109,13 +234,9 @@ impl Online {
     /// Stamp an input, remember it for replay, and hand back the message to
     /// send. The caller owns the socket.
     pub fn make_input(&mut self, input: CarInput) -> C2S {
-        self.seq = self.seq.wrapping_add(1);
-        self.history.push_back((self.seq, input));
-        while self.history.len() > MAX_HISTORY {
-            self.history.pop_front();
-        }
+        let sequence = self.reconciler.record(input, Duration::ZERO);
         C2S::Input {
-            seq: self.seq,
+            seq: sequence,
             throttle: input.throttle,
             steer: input.steer,
             handbrake: input.handbrake,
@@ -150,11 +271,15 @@ impl Online {
             if is_me {
                 let grip = self.grip_at(self.race.racers[i].car.pos);
                 self.race.racers[i].car.step(&input, grip, dt);
-            } else if self.known[i] {
+            } else if !self.remote_snapshots[i].is_empty() {
                 // Straight-line extrapolation. Guessing at a remote driver's
                 // steering would look worse than a slightly stale heading.
-                let v = self.race.racers[i].car.vel;
-                self.race.racers[i].car.pos += v * dt;
+                self.remote_time[i] = self.remote_time[i].wrapping_add(1);
+                if let Some(state) = self.remote_snapshots[i]
+                    .sample_at(&FireRemoteHooks, self.remote_time[i])
+                {
+                    apply_car_state(&mut self.race.racers[i].car, &state);
+                }
             }
         }
     }
@@ -189,8 +314,11 @@ impl Online {
                 self.roster = roster;
                 self.results = None;
                 self.notice = None;
-                self.history.clear();
-                self.known = [false; 8];
+                self.reconciler.clear_history();
+                for snapshots in &mut self.remote_snapshots {
+                    snapshots.clear();
+                }
+                self.remote_time = [0; 8];
             }
 
             S2C::PlayerJoined { meta } => {
@@ -210,54 +338,45 @@ impl Online {
                 };
                 if phase == Phase::Waiting {
                     self.results = None;
-                    self.history.clear();
+                    self.reconciler.clear_history();
                 }
             }
 
             S2C::Results { order } => self.results = Some(order),
             S2C::Pong { .. } => {}
 
-            S2C::State { cars, .. } => self.apply_state(&cars),
+            S2C::State { tick, cars } => self.apply_state(tick, &cars),
         }
     }
 
-    fn apply_state(&mut self, cars: &[CarState]) {
+    fn apply_state(&mut self, tick: u64, cars: &[CarState]) {
         for c in cars {
             let i = usize::from(c.id);
             if i >= self.race.racers.len() {
                 continue;
             }
-            if i < self.known.len() {
-                self.known[i] = true;
-            }
-
-            let r = &mut self.race.racers[i];
-            r.car.pos = Vec2::new(c.x, c.z);
-            r.car.vel = Vec2::new(c.vx, c.vz);
-            r.car.yaw = c.yaw;
-            r.car.boost_charges = c.boost;
-            r.car.boost_left = if c.boosting {
-                r.car.boost_left.max(DT)
-            } else {
-                0.0
-            };
-            r.car.drift = c.drift;
-            r.lap.lap = c.lap;
-            r.lap.progress = c.progress;
+            self.race.racers[i].lap.lap = c.lap;
+            self.race.racers[i].lap.progress = c.progress;
 
             // Reconcile the local car: drop everything the server has already
             // consumed, then re-apply the rest on top of its authoritative
             // state. Without this the car snaps back a round trip's worth of
             // steering every time a packet lands.
             if self.my_slot == Some(c.id) {
-                while self.history.front().is_some_and(|(s, _)| *s <= c.ack) {
-                    self.history.pop_front();
-                }
-                let replay: Vec<CarInput> = self.history.iter().map(|(_, i)| *i).collect();
-                for input in replay {
-                    let grip = self.grip_at(self.race.racers[i].car.pos);
-                    self.race.racers[i].car.step(&input, grip, DT);
-                }
+                let authoritative = FireAuthoritative { tick, car: *c };
+                let hooks = FirePredictionHooks {
+                    track: &self.race.track,
+                };
+                self.reconciler.reconcile(
+                    &hooks,
+                    &mut self.race.racers[i].car,
+                    &authoritative,
+                    Duration::ZERO,
+                );
+            } else if i < self.remote_snapshots.len() {
+                self.remote_snapshots[i].push(tick, *c);
+                self.remote_time[i] = tick;
+                apply_car_state(&mut self.race.racers[i].car, c);
             }
         }
     }
@@ -368,10 +487,10 @@ mod tests {
         for _ in 0..10 {
             o.make_input(CarInput::default());
         }
-        assert_eq!(o.history.len(), 10);
+        assert_eq!(o.reconciler.history_len(), 10);
         o.apply(state_for(0, 0.0, 0.0, 7));
         assert_eq!(
-            o.history.len(),
+            o.reconciler.history_len(),
             3,
             "acked inputs were kept and will be replayed forever"
         );
@@ -387,9 +506,9 @@ mod tests {
             o.make_input(CarInput::default());
         }
         assert!(
-            o.history.len() <= MAX_HISTORY,
+            o.reconciler.history_len() <= MAX_HISTORY,
             "history grew to {}",
-            o.history.len()
+            o.reconciler.history_len()
         );
     }
 

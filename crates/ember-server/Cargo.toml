@@ -3,10 +3,21 @@ name = "ember-server"
 edition.workspace = true
 version.workspace = true
 
+[features]
+default = []
+demo = []
+
 [dependencies]
+ember-legacy = { path = "../ember-legacy" }
 ember-net = { path = "../ember-net" }
+sha2.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+tungstenite.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true

@@ -1,0 +1,10 @@
+{"t":"welcome","proto":1}
+{"t":"rejected","reason":"lobby is full"}
+{"t":"lobbies","lobbies":[{"name":"castle","host":"driver","has_password":true,"players":2,"cap":8,"racing":true}]}
+{"t":"joined","lobby":"castle","id":0,"slot":0,"laps":3,"roster":[{"id":0,"handle":"driver","slot":0}]}
+{"t":"player_joined","meta":{"id":1,"handle":"rival","slot":1}}
+{"t":"player_left","id":1}
+{"t":"phase","phase":"countdown","countdown":1.5}
+{"t":"state","tick":900,"cars":[{"id":0,"x":1.5,"z":-2.5,"yaw":0.75,"vx":12.0,"vz":-3.0,"lap":2,"progress":1840.0,"boost":1,"boosting":true,"drift":0.4,"ack":41}]}
+{"t":"results","order":[0,1]}
+{"t":"pong","nonce":7}

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/ember-client-net",
     "crates/ember-editor",
     "crates/ember-engine",
     "crates/ember-legacy",
@@ -13,6 +14,8 @@ members = [
     "crates/pong",
     "crates/pong-core",
     "crates/pong-server",
+    "games/arena/v012",
+    "games/fire/v001",
     "tools/cli-common",
     "tools/linter",
     "tools/pulldown-cmark-to-cmark",

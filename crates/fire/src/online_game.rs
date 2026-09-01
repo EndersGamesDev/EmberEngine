@@ -68,13 +68,6 @@ impl Config {
     }
 }
 
-#[derive(Default)]
-struct SessionProgress {
-    greeted: bool,
-    entered: bool,
-    readied: bool,
-}
-
 pub struct OnlineGame {
     net: Net,
     inbox: Inbox,
@@ -82,9 +75,9 @@ pub struct OnlineGame {
     ids: Meshes,
     chase: Chase,
     boost_was_down: bool,
-    cfg: Config,
-    /// One-shot connection milestones: Hello, lobby entry, and auto-ready.
-    progress: SessionProgress,
+    /// Auto-ready remains a Fire game action after shared lobby admission.
+    readied: bool,
+    connection_notice: bool,
     clock: FixedStep,
 }
 
@@ -95,7 +88,13 @@ impl OnlineGame {
     ///
     /// Returns an error if the networking backend cannot start the connection.
     pub fn connect(cfg: Config, ids: Meshes) -> Result<Self, String> {
-        let net = Net::connect(&cfg.ws)?;
+        let net = Net::connect_session(
+            &cfg.ws,
+            &cfg.handle,
+            &cfg.lobby,
+            cfg.password.clone(),
+            cfg.create,
+        )?;
         let state = Online::new();
         let chase = Chase::new(&state.race.racers[0].car);
         Ok(Self {
@@ -105,8 +104,8 @@ impl OnlineGame {
             ids,
             chase,
             boost_was_down: false,
-            cfg,
-            progress: SessionProgress::default(),
+            readied: false,
+            connection_notice: false,
             clock: FixedStep::default(),
         })
     }
@@ -153,38 +152,18 @@ impl EmberGame for OnlineGame {
     fn update(&mut self, input: &InputState, dt: f32) -> Frame {
         let dt = dt.clamp(0.0, 0.05);
 
-        // Say hello the moment the socket is open. Sending before that
-        // silently drops the frames on the web.
-        if !self.progress.greeted && self.net.status() == Status::Open {
-            self.progress.greeted = true;
-            crate::net::hello(&self.net, &self.cfg.handle);
-        }
-
         self.inbox.pump(&mut self.net);
         while let Some(m) = self.inbox.pop() {
             self.state.apply(m);
         }
 
-        // ...but wait for Welcome before create/join. Both are version-gated,
-        // and the gate reads a protocol number that Hello is what sets.
-        if !self.progress.entered && self.state.welcomed {
-            self.progress.entered = true;
-            let msg = if self.cfg.create {
-                C2S::CreateLobby {
-                    name: self.cfg.lobby.clone(),
-                    password: self.cfg.password.clone(),
-                }
-            } else {
-                C2S::JoinLobby {
-                    name: self.cfg.lobby.clone(),
-                    password: self.cfg.password.clone(),
-                }
-            };
-            self.net.send(&msg);
+        if !self.connection_notice && let Status::Closed(reason) = self.net.status() {
+            self.connection_notice = true;
+            self.state.notice = Some(format!("connection lost: {reason}"));
         }
 
-        if !self.progress.readied && self.state.my_slot.is_some() {
-            self.progress.readied = true;
+        if !self.readied && self.state.my_slot.is_some() {
+            self.readied = true;
             self.net.send(&C2S::Ready { ready: true });
         }
 
