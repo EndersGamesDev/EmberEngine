@@ -83,7 +83,7 @@ use serde::{Deserialize, Serialize};
 /// cannot rescue.
 ///
 /// The headshot is a bump for the same reason even though it adds no field:
-/// the top HEAD_H of the hit volume now kills outright whatever the weapon.
+/// the top `HEAD_H` of the hit volume now kills outright whatever the weapon.
 /// Nothing on the wire changed, but what a round DOES changed, and a client
 /// predicting against the old rule would disagree with the server about who
 /// is alive.
