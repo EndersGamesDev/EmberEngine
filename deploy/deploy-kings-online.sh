@@ -87,10 +87,11 @@ detach() {
     local script="$1"; shift
     local ps1
     ps1="$(cygpath -w "$REPO_DIR/deploy/wsl-detach.ps1")"
+    # PowerShell writes CRLF; the CR must not reach the "pid N" lines.
     if command -v pwsh >/dev/null 2>&1; then
-        MSYS_NO_PATHCONV=1 pwsh -NoProfile -File "$ps1" -Distro "$DISTRO" -Script "$WSL_DIR/$script" "$@"
+        MSYS_NO_PATHCONV=1 pwsh -NoProfile -File "$ps1" -Distro "$DISTRO" -Script "$WSL_DIR/$script" "$@" | tr -d '\r'
     else
-        MSYS_NO_PATHCONV=1 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ps1" -Distro "$DISTRO" -Script "$WSL_DIR/$script" "$@"
+        MSYS_NO_PATHCONV=1 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ps1" -Distro "$DISTRO" -Script "$WSL_DIR/$script" "$@" | tr -d '\r'
     fi
 }
 
