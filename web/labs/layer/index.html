@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ember compute layer</title>
+</head>
+<body>
+  <main>
+    <h1>fragment compute layer</h1>
+    <canvas id="layer-canvas" width="1280" height="720"></canvas>
+    <p id="status">loading…</p>
+  </main>
+  <script type="module">
+    import init from './pkg/ember_lab_layer.js?v=1';
+    init().catch((error) => { document.querySelector('#status').textContent = `failed: ${error}`; });
+  </script>
+</body>
+</html>
