@@ -161,14 +161,14 @@ fn main() {
             last_ping = Instant::now();
             let elapsed_ms = started.elapsed().as_millis();
             let nonce = u32::try_from(elapsed_ms & u128::from(u32::MAX)).unwrap_or_default();
-            let _ = write_msg(&mut stream, &ClientMsg::Ping { nonce });
+            drop(write_msg(&mut stream, &ClientMsg::Ping { nonce }));
         }
         std::thread::sleep(Duration::from_millis(50));
     }
     // Capture liveness BEFORE Bye: the server closing the socket after our
     // Bye is the expected goodbye, not a failure.
     let died_early = dead.load(Ordering::Relaxed);
-    let _ = write_msg(&mut stream, &ClientMsg::Bye);
+    drop(write_msg(&mut stream, &ClientMsg::Bye));
     std::thread::sleep(Duration::from_millis(200));
 
     report(&stats, died_early, secs);
