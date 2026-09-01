@@ -14,6 +14,9 @@ use std::io::{self, Read, Write};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+/// Canonical JSON/WebSocket bootstrap and lobby protocol.
+pub mod outer;
+
 pub const PROTOCOL_VERSION: u16 = 2;
 pub const DEFAULT_PORT: u16 = 7777;
 
