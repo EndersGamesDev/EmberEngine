@@ -1,8 +1,7 @@
 //! Canonical game-neutral JSON protocol before a connection joins one lobby.
 //!
-//! This module is additive beside the retained cube protocol. Once joined, the
-//! host passes exact text or binary payloads to the selected version codec and
-//! does not parse, wrap, default, compress, or translate them here.
+//! Once joined, the host passes exact text or binary payloads to the selected
+//! version codec and does not parse, wrap, default, compress, or translate them.
 
 #![deny(missing_docs)]
 // Protocol-qualified names stay explicit at the host's wire boundary.
@@ -685,7 +684,7 @@ mod tests {
         assert_server_fixture(
             include_str!("../tests/fixtures/outer/server/game_not_hosted.json"),
             &ServerMessage::GameNotHosted(GameNotHosted {
-                requested_game: "cube".to_string(),
+                requested_game: "maze".to_string(),
                 hosted_games: vec!["arena".to_string(), "fire".to_string()],
             }),
         );
