@@ -25,7 +25,7 @@ use std::collections::VecDeque;
 use ember_engine::glam::Vec2;
 use fire_core::car::{Car, CarInput, DT, OFFROAD_FACTOR};
 use fire_core::castle;
-use fire_core::proto::{CarState, LobbyInfo, Phase, PlayerMeta, C2S, S2C};
+use fire_core::proto::{C2S, CarState, LobbyInfo, Phase, PlayerMeta, S2C};
 use fire_core::sim::{Race, RaceState};
 
 /// Inputs kept for replay. At 60 Hz this is two seconds — far more round trip
@@ -76,9 +76,14 @@ impl Default for Online {
 }
 
 impl Online {
+    #[must_use]
     pub fn new() -> Self {
         Self {
-            race: Race::new(castle::track(), fire_core::proto::MAX_PLAYERS as usize, 3),
+            race: Race::new(
+                castle::track(),
+                usize::from(fire_core::proto::MAX_PLAYERS),
+                3,
+            ),
             screen: Screen::Browsing,
             my_slot: None,
             phase: Phase::Waiting,
@@ -95,8 +100,9 @@ impl Online {
         }
     }
 
+    #[must_use]
     pub fn my_car(&self) -> Option<&Car> {
-        let s = self.my_slot? as usize;
+        let s = usize::from(self.my_slot?);
         self.race.racers.get(s).map(|r| &r.car)
     }
 
@@ -140,7 +146,7 @@ impl Online {
             return;
         }
         for i in 0..self.race.racers.len() {
-            let is_me = self.my_slot == Some(i as u8);
+            let is_me = self.my_slot.is_some_and(|slot| usize::from(slot) == i);
             if is_me {
                 let grip = self.grip_at(self.race.racers[i].car.pos);
                 self.race.racers[i].car.step(&input, grip, dt);
@@ -160,8 +166,23 @@ impl Online {
             S2C::Rejected { reason } => self.notice = Some(reason),
             S2C::Lobbies { lobbies } => self.lobbies = lobbies,
 
-            S2C::Joined { lobby, slot, laps, roster, .. } => {
-                self.race = Race::new(castle::track(), fire_core::proto::MAX_PLAYERS as usize, laps);
+            S2C::Joined {
+                lobby,
+                slot,
+                laps,
+                roster,
+                ..
+            } => {
+                let race = Race::new(
+                    castle::track(),
+                    usize::from(fire_core::proto::MAX_PLAYERS),
+                    laps,
+                );
+                if usize::from(slot) >= race.racers.len() {
+                    self.notice = Some(format!("server assigned invalid player slot {slot}"));
+                    return;
+                }
+                self.race = race;
                 self.screen = Screen::InLobby;
                 self.lobby_name = Some(lobby);
                 self.my_slot = Some(slot);
@@ -202,7 +223,7 @@ impl Online {
 
     fn apply_state(&mut self, cars: &[CarState]) {
         for c in cars {
-            let i = c.id as usize;
+            let i = usize::from(c.id);
             if i >= self.race.racers.len() {
                 continue;
             }
@@ -215,7 +236,11 @@ impl Online {
             r.car.vel = Vec2::new(c.vx, c.vz);
             r.car.yaw = c.yaw;
             r.car.boost_charges = c.boost;
-            r.car.boost_left = if c.boosting { r.car.boost_left.max(DT) } else { 0.0 };
+            r.car.boost_left = if c.boosting {
+                r.car.boost_left.max(DT)
+            } else {
+                0.0
+            };
             r.car.drift = c.drift;
             r.lap.lap = c.lap;
             r.lap.progress = c.progress;
@@ -247,8 +272,18 @@ mod tests {
         S2C::State {
             tick: 100,
             cars: vec![CarState {
-                id: slot, x, z, yaw: 0.0, vx: 0.0, vz: 0.0,
-                lap: 0, progress: 0.0, boost: 3, boosting: false, drift: 0.0, ack,
+                id: slot,
+                x,
+                z,
+                yaw: 0.0,
+                vx: 0.0,
+                vz: 0.0,
+                lap: 0,
+                progress: 0.0,
+                boost: 3,
+                boosting: false,
+                drift: 0.0,
+                ack,
             }],
         }
     }
@@ -259,7 +294,11 @@ mod tests {
             id: slot,
             slot,
             laps: 3,
-            roster: vec![PlayerMeta { id: slot, handle: "me".into(), slot }],
+            roster: vec![PlayerMeta {
+                id: slot,
+                handle: "me".into(),
+                slot,
+            }],
         }
     }
 
@@ -269,7 +308,7 @@ mod tests {
         o.apply(joined(2));
         assert_eq!(o.screen, Screen::InLobby);
         assert_eq!(o.my_slot, Some(2));
-        assert_eq!(o.race.racers.len(), MAX_PLAYERS as usize);
+        assert_eq!(o.race.racers.len(), usize::from(MAX_PLAYERS));
         assert_eq!(o.race.laps_to_win, 3);
     }
 
@@ -289,9 +328,17 @@ mod tests {
     fn unacked_inputs_are_replayed_on_top_of_the_server_state() {
         let mut o = Online::new();
         o.apply(joined(0));
-        o.apply(S2C::Phase { phase: Phase::Racing, countdown: 0.0 });
+        o.apply(S2C::Phase {
+            phase: Phase::Racing,
+            countdown: 0.0,
+        });
 
-        let throttle = CarInput { throttle: 1.0, steer: 0.0, handbrake: false, boost: false };
+        let throttle = CarInput {
+            throttle: 1.0,
+            steer: 0.0,
+            handbrake: false,
+            boost: false,
+        };
         // Five inputs sent, none acknowledged yet.
         for _ in 0..5 {
             o.make_input(throttle);
@@ -323,7 +370,11 @@ mod tests {
         }
         assert_eq!(o.history.len(), 10);
         o.apply(state_for(0, 0.0, 0.0, 7));
-        assert_eq!(o.history.len(), 3, "acked inputs were kept and will be replayed forever");
+        assert_eq!(
+            o.history.len(),
+            3,
+            "acked inputs were kept and will be replayed forever"
+        );
     }
 
     /// A server that stops acknowledging must not make the client grow
@@ -335,7 +386,11 @@ mod tests {
         for _ in 0..10_000 {
             o.make_input(CarInput::default());
         }
-        assert!(o.history.len() <= MAX_HISTORY, "history grew to {}", o.history.len());
+        assert!(
+            o.history.len() <= MAX_HISTORY,
+            "history grew to {}",
+            o.history.len()
+        );
     }
 
     /// Remote cars are dead-reckoned, but only once the server has actually
@@ -345,11 +400,17 @@ mod tests {
     fn unknown_remote_cars_are_not_dead_reckoned() {
         let mut o = Online::new();
         o.apply(joined(0));
-        o.apply(S2C::Phase { phase: Phase::Racing, countdown: 0.0 });
+        o.apply(S2C::Phase {
+            phase: Phase::Racing,
+            countdown: 0.0,
+        });
         let before: Vec<Vec2> = o.race.racers.iter().map(|r| r.car.pos).collect();
         o.predict_tick(CarInput::default());
         for i in 1..o.race.racers.len() {
-            assert_eq!(o.race.racers[i].car.pos, before[i], "car {i} moved before we heard about it");
+            assert_eq!(
+                o.race.racers[i].car.pos, before[i],
+                "car {i} moved before we heard about it"
+            );
         }
     }
 
@@ -357,27 +418,51 @@ mod tests {
     fn known_remote_cars_coast_between_snapshots() {
         let mut o = Online::new();
         o.apply(joined(0));
-        o.apply(S2C::Phase { phase: Phase::Racing, countdown: 0.0 });
+        o.apply(S2C::Phase {
+            phase: Phase::Racing,
+            countdown: 0.0,
+        });
         o.apply(S2C::State {
             tick: 1,
             cars: vec![CarState {
-                id: 1, x: 0.0, z: 0.0, yaw: 0.0, vx: 10.0, vz: 0.0,
-                lap: 0, progress: 0.0, boost: 3, boosting: false, drift: 0.0, ack: 0,
+                id: 1,
+                x: 0.0,
+                z: 0.0,
+                yaw: 0.0,
+                vx: 10.0,
+                vz: 0.0,
+                lap: 0,
+                progress: 0.0,
+                boost: 3,
+                boosting: false,
+                drift: 0.0,
+                ack: 0,
             }],
         });
         o.predict_tick(CarInput::default());
         let p = o.race.racers[1].car.pos;
-        assert!((p.x - 10.0 * DT).abs() < 1e-4, "remote car did not coast: {p}");
+        assert!(
+            (p.x - 10.0 * DT).abs() < 1e-4,
+            "remote car did not coast: {p}"
+        );
     }
 
     #[test]
     fn nothing_moves_outside_the_racing_phase() {
         let mut o = Online::new();
         o.apply(joined(0));
-        o.apply(S2C::Phase { phase: Phase::Countdown, countdown: 3.0 });
+        o.apply(S2C::Phase {
+            phase: Phase::Countdown,
+            countdown: 3.0,
+        });
         let before = o.my_car().unwrap().pos;
         for _ in 0..120 {
-            o.predict_tick(CarInput { throttle: 1.0, steer: 0.0, handbrake: false, boost: true });
+            o.predict_tick(CarInput {
+                throttle: 1.0,
+                steer: 0.0,
+                handbrake: false,
+                boost: true,
+            });
         }
         assert_eq!(o.my_car().unwrap().pos, before, "a car jumped the start");
     }
@@ -385,7 +470,9 @@ mod tests {
     #[test]
     fn a_rejection_surfaces_as_a_notice() {
         let mut o = Online::new();
-        o.apply(S2C::Rejected { reason: "wrong password".into() });
+        o.apply(S2C::Rejected {
+            reason: "wrong password".into(),
+        });
         assert_eq!(o.notice.as_deref(), Some("wrong password"));
         // Joining clears it.
         o.apply(joined(1));
@@ -396,10 +483,22 @@ mod tests {
     fn the_roster_tracks_arrivals_and_departures() {
         let mut o = Online::new();
         o.apply(joined(0));
-        o.apply(S2C::PlayerJoined { meta: PlayerMeta { id: 3, handle: "b".into(), slot: 3 } });
+        o.apply(S2C::PlayerJoined {
+            meta: PlayerMeta {
+                id: 3,
+                handle: "b".into(),
+                slot: 3,
+            },
+        });
         assert_eq!(o.roster.len(), 2);
         // A duplicate announcement must not double-list anyone.
-        o.apply(S2C::PlayerJoined { meta: PlayerMeta { id: 3, handle: "b".into(), slot: 3 } });
+        o.apply(S2C::PlayerJoined {
+            meta: PlayerMeta {
+                id: 3,
+                handle: "b".into(),
+                slot: 3,
+            },
+        });
         assert_eq!(o.roster.len(), 2);
         o.apply(S2C::PlayerLeft { id: 3 });
         assert_eq!(o.roster.len(), 1);
@@ -412,5 +511,17 @@ mod tests {
         o.apply(joined(0));
         o.apply(state_for(200, 1.0, 1.0, 0));
         assert_eq!(o.my_car().unwrap().pos, o.race.racers[0].car.pos);
+    }
+
+    #[test]
+    fn an_out_of_range_join_slot_is_refused() {
+        let mut online = Online::new();
+        online.apply(joined(200));
+        assert_eq!(online.screen, Screen::Browsing);
+        assert_eq!(online.my_slot, None);
+        assert_eq!(
+            online.notice.as_deref(),
+            Some("server assigned invalid player slot 200")
+        );
     }
 }

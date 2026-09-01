@@ -8,7 +8,7 @@
 
 use ember_engine::{EmberGame, Frame, InputState};
 use fire_core::car::CarInput;
-use fire_core::proto::{Phase, C2S};
+use fire_core::proto::{C2S, Phase};
 use fire_core::sim::FixedStep;
 
 use crate::game::{self, Chase, Hud, Meshes};
@@ -30,26 +30,49 @@ impl Config {
     /// Parsed by hand rather than with serde: the shape is three strings and
     /// two flags, and this keeps the page's JSON contract visible in one
     /// place instead of spread across derive attributes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the input is not JSON or has no WebSocket URL.
     pub fn from_json(s: &str) -> Result<Self, String> {
         let v: serde_json::Value = serde_json::from_str(s).map_err(|e| e.to_string())?;
-        let get = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
-        let ws = get("ws");
+        let get = |key: &str| v.get(key).and_then(serde_json::Value::as_str).unwrap_or("");
+        let ws = get("ws").to_string();
         if ws.is_empty() {
             return Err("config has no ws url".into());
         }
         let password = v
             .get("password")
-            .and_then(|x| x.as_str())
-            .map(|s| s.to_string())
-            .filter(|s| !s.is_empty());
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .filter(|value| !value.is_empty());
+        let handle = get("handle");
+        let lobby = get("lobby");
         Ok(Self {
             ws,
-            handle: if get("handle").is_empty() { "driver".into() } else { get("handle") },
-            lobby: if get("lobby").is_empty() { "castle".into() } else { get("lobby") },
+            handle: if handle.is_empty() {
+                "driver".into()
+            } else {
+                handle.to_string()
+            },
+            lobby: if lobby.is_empty() {
+                "castle".into()
+            } else {
+                lobby.to_string()
+            },
             password,
-            create: v.get("create").and_then(|x| x.as_bool()).unwrap_or(false),
+            create: v
+                .get("create")
+                .is_some_and(|value| value.as_bool() == Some(true)),
         })
     }
+}
+
+#[derive(Default)]
+struct SessionProgress {
+    greeted: bool,
+    entered: bool,
+    readied: bool,
 }
 
 pub struct OnlineGame {
@@ -60,17 +83,17 @@ pub struct OnlineGame {
     chase: Chase,
     boost_was_down: bool,
     cfg: Config,
-    /// Hello is sent once, on the first frame the socket is open.
-    greeted: bool,
-    /// Create/join is sent once, on the first frame after Welcome.
-    entered: bool,
-    /// Auto-ready once, so a player who picked a lobby is not then asked to
-    /// press another button the page does not have.
-    readied: bool,
+    /// One-shot connection milestones: Hello, lobby entry, and auto-ready.
+    progress: SessionProgress,
     clock: FixedStep,
 }
 
 impl OnlineGame {
+    /// Connect the online game to its configured server.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the networking backend cannot start the connection.
     pub fn connect(cfg: Config, ids: Meshes) -> Result<Self, String> {
         let net = Net::connect(&cfg.ws)?;
         let state = Online::new();
@@ -83,37 +106,43 @@ impl OnlineGame {
             chase,
             boost_was_down: false,
             cfg,
-            greeted: false,
-            entered: false,
-            readied: false,
+            progress: SessionProgress::default(),
             clock: FixedStep::default(),
         })
     }
 
     fn publish_hud(&self) {
-        let me = self.state.my_slot.unwrap_or(0) as usize;
+        let me = usize::from(self.state.my_slot.unwrap_or(0));
         let racer = self.state.race.racers.get(me);
         let place = self
             .state
             .results
             .as_ref()
-            .and_then(|o| o.iter().position(|&i| i as usize == me))
-            .map(|p| p + 1)
-            .unwrap_or_else(|| {
-                self.state.race.standings().iter().position(|&i| i == me).unwrap_or(0) + 1
-            });
+            .and_then(|o| o.iter().position(|&i| usize::from(i) == me))
+            .map_or_else(
+                || {
+                    self.state
+                        .race
+                        .standings()
+                        .iter()
+                        .position(|&i| i == me)
+                        .unwrap_or(0)
+                        + 1
+                },
+                |position| position + 1,
+            );
         game::set_hud(Hud {
-            speed_kmh: racer.map(|r| r.car.speed() * 3.6).unwrap_or(0.0),
-            lap: racer.map(|r| r.lap.lap.min(self.state.race.laps_to_win)).unwrap_or(0),
+            speed_kmh: racer.map_or(0.0, |r| r.car.speed() * 3.6),
+            lap: racer.map_or(0, |r| r.lap.lap.min(self.state.race.laps_to_win)),
             laps_total: self.state.race.laps_to_win,
             place,
             // Cars on the grid, not humans in the roster. The server fills
             // every unclaimed slot with an AI, so a lobby of one still races
             // a field of eight — and "P8 of 1" is not a position.
             racers: self.state.race.racers.len(),
-            boost_charges: racer.map(|r| r.car.boost_charges).unwrap_or(0),
-            boosting: racer.map(|r| r.car.boosting()).unwrap_or(false),
-            drifting: racer.map(|r| r.car.drift > 0.25).unwrap_or(false),
+            boost_charges: racer.map_or(0, |r| r.car.boost_charges),
+            boosting: racer.is_some_and(|r| r.car.boosting()),
+            drifting: racer.is_some_and(|r| r.car.drift > 0.25),
             countdown: self.state.countdown,
             finished: self.state.results.is_some(),
         });
@@ -126,8 +155,8 @@ impl EmberGame for OnlineGame {
 
         // Say hello the moment the socket is open. Sending before that
         // silently drops the frames on the web.
-        if !self.greeted && self.net.status() == Status::Open {
-            self.greeted = true;
+        if !self.progress.greeted && self.net.status() == Status::Open {
+            self.progress.greeted = true;
             crate::net::hello(&self.net, &self.cfg.handle);
         }
 
@@ -138,8 +167,8 @@ impl EmberGame for OnlineGame {
 
         // ...but wait for Welcome before create/join. Both are version-gated,
         // and the gate reads a protocol number that Hello is what sets.
-        if !self.entered && self.state.welcomed {
-            self.entered = true;
+        if !self.progress.entered && self.state.welcomed {
+            self.progress.entered = true;
             let msg = if self.cfg.create {
                 C2S::CreateLobby {
                     name: self.cfg.lobby.clone(),
@@ -154,8 +183,8 @@ impl EmberGame for OnlineGame {
             self.net.send(&msg);
         }
 
-        if !self.readied && self.state.my_slot.is_some() {
-            self.readied = true;
+        if !self.progress.readied && self.state.my_slot.is_some() {
+            self.progress.readied = true;
             self.net.send(&C2S::Ready { ready: true });
         }
 
@@ -178,7 +207,7 @@ impl EmberGame for OnlineGame {
             self.net.send(&msg);
         }
 
-        let me = self.state.my_slot.unwrap_or(0) as usize;
+        let me = usize::from(self.state.my_slot.unwrap_or(0));
         let camera = self.chase.update(&self.state.race.racers[me].car, dt);
         self.publish_hud();
         game::scene(&self.state.race, &self.ids, me, camera)
@@ -207,7 +236,10 @@ mod tests {
         let c = Config::from_json(r#"{"ws":"ws://x:1"}"#).unwrap();
         assert_eq!(c.handle, "driver");
         assert_eq!(c.lobby, "castle");
-        assert!(c.password.is_none(), "an absent password must not become Some(\"\")");
+        assert!(
+            c.password.is_none(),
+            "an absent password must not become Some(\"\")"
+        );
         assert!(!c.create);
     }
 

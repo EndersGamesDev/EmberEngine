@@ -5,9 +5,9 @@
 //! join gate is exact `PROTO_VERSION` equality. Racing types landing there
 //! would put the live arena one careless bump away from list-only.
 
-pub mod track;
-pub mod car;
-pub mod sim;
-pub mod castle;
 pub mod ai;
+pub mod car;
+pub mod castle;
 pub mod proto;
+pub mod sim;
+pub mod track;

@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use fire::net::{Net, Status};
 use fire::online::{Online, Screen};
 use fire_core::car::CarInput;
-use fire_core::proto::{Phase, C2S, S2C};
+use fire_core::proto::{C2S, Phase, S2C};
 
 /// Surface the server's own warnings (dropped sends, rate-limited messages)
 /// in test output. Without this a lost control message is invisible from both
@@ -37,7 +37,13 @@ fn start_server(laps: u32) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     thread::spawn(move || {
-        let _ = fire_server::run(listener, fire_server::ServerConfig { laps, max_lobbies: 8 });
+        let _ = fire_server::run(
+            listener,
+            fire_server::ServerConfig {
+                laps,
+                max_lobbies: 8,
+            },
+        );
     });
     thread::sleep(Duration::from_millis(150));
     port
@@ -58,7 +64,11 @@ impl Peer {
         }
         assert_eq!(net.status(), Status::Open, "socket never opened");
         fire::net::hello(&net, handle);
-        let mut peer = Self { net, game: Online::new(), inbox: Default::default() };
+        let mut peer = Self {
+            net,
+            game: Online::new(),
+            inbox: std::collections::VecDeque::default(),
+        };
         // Wait for Welcome before returning. Hello must be the first message
         // on a connection and Welcome acknowledges it; anything version-gated
         // sent before then races the server's handling of Hello and is refused
@@ -121,16 +131,21 @@ fn a_client_joins_races_and_its_prediction_converges() {
     let port = start_server(2);
     let mut me = Peer::connect(port, "driver");
 
-    me.net.send(&C2S::CreateLobby { name: "castle".into(), password: None });
-    if !me.wait_for(Duration::from_secs(5), |g| g.screen == Screen::InLobby) {
-        panic!("never joined the lobby I created.
-  {}", me.dump("me"));
-    }
+    me.net.send(&C2S::CreateLobby {
+        name: "castle".into(),
+        password: None,
+    });
+    assert!(
+        me.wait_for(Duration::from_secs(5), |g| g.screen == Screen::InLobby),
+        "never joined the lobby I created.\n  {}",
+        me.dump("me")
+    );
     let slot = me.game.my_slot.expect("no grid slot");
 
     me.net.send(&C2S::Ready { ready: true });
     assert!(
-        me.wait_for(Duration::from_secs(4), |g| g.phase == Phase::Countdown || g.phase == Phase::Racing),
+        me.wait_for(Duration::from_secs(4), |g| g.phase == Phase::Countdown
+            || g.phase == Phase::Racing),
         "the countdown never started"
     );
     assert!(
@@ -140,7 +155,12 @@ fn a_client_joins_races_and_its_prediction_converges() {
 
     // Drive for a few seconds, tracking how far the prediction sits from the
     // authoritative state at the moment each snapshot lands.
-    let throttle = CarInput { throttle: 1.0, steer: 0.15, handbrake: false, boost: false };
+    let throttle = CarInput {
+        throttle: 1.0,
+        steer: 0.15,
+        handbrake: false,
+        boost: false,
+    };
     let start = me.game.my_car().unwrap().pos;
     let mut worst_error = 0.0f32;
 
@@ -152,10 +172,10 @@ fn a_client_joins_races_and_its_prediction_converges() {
         me.net.drain(&mut me.inbox);
         let mut authoritative = None;
         while let Some(m) = me.inbox.pop_front() {
-            if let S2C::State { cars, .. } = &m {
-                if let Some(c) = cars.iter().find(|c| c.id == slot) {
-                    authoritative = Some(ember_engine::glam::Vec2::new(c.x, c.z));
-                }
+            if let S2C::State { cars, .. } = &m
+                && let Some(c) = cars.iter().find(|c| c.id == slot)
+            {
+                authoritative = Some(ember_engine::glam::Vec2::new(c.x, c.z));
             }
             me.game.apply(m);
         }
@@ -172,7 +192,10 @@ fn a_client_joins_races_and_its_prediction_converges() {
     }
 
     let travelled = me.game.my_car().unwrap().pos.distance(start);
-    assert!(travelled > 60.0, "the car only covered {travelled:.1} m in six seconds");
+    assert!(
+        travelled > 60.0,
+        "the car only covered {travelled:.1} m in six seconds"
+    );
 
     // Over loopback the round trip is ~0, so the prediction should track the
     // server closely. A large number here means reconciliation is not
@@ -189,17 +212,25 @@ fn two_clients_see_each_other_move() {
     let mut a = Peer::connect(port, "alice");
     let mut b = Peer::connect(port, "bob");
 
-    a.net.send(&C2S::CreateLobby { name: "shared".into(), password: None });
-    if !a.wait_for(Duration::from_secs(5), |g| g.screen == Screen::InLobby) {
-        panic!("alice never got Joined for the lobby she created.
-  {}", a.dump("alice"));
-    }
-    b.net.send(&C2S::JoinLobby { name: "shared".into(), password: None });
-    if !b.wait_for(Duration::from_secs(5), |g| g.screen == Screen::InLobby) {
-        panic!("bob never joined.
-  {}
-  {}", b.dump("bob"), a.dump("alice"));
-    }
+    a.net.send(&C2S::CreateLobby {
+        name: "shared".into(),
+        password: None,
+    });
+    assert!(
+        a.wait_for(Duration::from_secs(5), |g| g.screen == Screen::InLobby),
+        "alice never got Joined for the lobby she created.\n  {}",
+        a.dump("alice")
+    );
+    b.net.send(&C2S::JoinLobby {
+        name: "shared".into(),
+        password: None,
+    });
+    assert!(
+        b.wait_for(Duration::from_secs(5), |g| g.screen == Screen::InLobby),
+        "bob never joined.\n  {}\n  {}",
+        b.dump("bob"),
+        a.dump("alice")
+    );
 
     let a_slot = a.game.my_slot.unwrap();
     let b_slot = b.game.my_slot.unwrap();
@@ -207,16 +238,15 @@ fn two_clients_see_each_other_move() {
     // Report enough to tell the two failure modes apart. "Never learned" can
     // mean the message was lost, or that alice's socket died and `drain` has
     // been returning nothing ever since — which looks identical from here.
-    if !a.wait_for(Duration::from_secs(5), |g| g.roster.len() == 2) {
-        panic!(
-            "alice never learned bob had joined.\n  \
-             alice socket: {:?}\n  bob socket: {:?}\n  \
-             alice roster: {:?}\n  alice slot {a_slot}, bob slot {b_slot}",
-            a.net.status(),
-            b.net.status(),
-            a.game.roster,
-        );
-    }
+    assert!(
+        a.wait_for(Duration::from_secs(5), |g| g.roster.len() == 2),
+        "alice never learned bob had joined.\n  \
+         alice socket: {:?}\n  bob socket: {:?}\n  \
+         alice roster: {:?}\n  alice slot {a_slot}, bob slot {b_slot}",
+        a.net.status(),
+        b.net.status(),
+        a.game.roster,
+    );
 
     a.net.send(&C2S::Ready { ready: true });
     b.net.send(&C2S::Ready { ready: true });
@@ -238,9 +268,14 @@ fn two_clients_see_each_other_move() {
 
     // Only alice drives; bob holds still. Alice must see bob's car where the
     // server puts it, and bob must see alice pull away.
-    let throttle = CarInput { throttle: 1.0, steer: 0.0, handbrake: false, boost: false };
+    let throttle = CarInput {
+        throttle: 1.0,
+        steer: 0.0,
+        handbrake: false,
+        boost: false,
+    };
     let idle = CarInput::default();
-    let a_start_seen_by_b = b.game.race.racers[a_slot as usize].car.pos;
+    let a_start_seen_by_b = b.game.race.racers[usize::from(a_slot)].car.pos;
 
     let deadline = Instant::now() + Duration::from_secs(6);
     while Instant::now() < deadline {
@@ -249,7 +284,10 @@ fn two_clients_see_each_other_move() {
         thread::sleep(Duration::from_millis(16));
     }
 
-    let a_moved_for_b = b.game.race.racers[a_slot as usize].car.pos.distance(a_start_seen_by_b);
+    let a_moved_for_b = b.game.race.racers[usize::from(a_slot)]
+        .car
+        .pos
+        .distance(a_start_seen_by_b);
     assert!(
         a_moved_for_b > 40.0,
         "bob saw alice move only {a_moved_for_b:.1} m — remote cars are not being applied"
@@ -262,24 +300,37 @@ fn two_clients_see_each_other_move() {
 fn a_refused_join_surfaces_a_reason() {
     let port = start_server(3);
     let mut host = Peer::connect(port, "host");
-    host.net.send(&C2S::CreateLobby { name: "locked".into(), password: Some("secret".into()) });
+    host.net.send(&C2S::CreateLobby {
+        name: "locked".into(),
+        password: Some("secret".into()),
+    });
     assert!(host.wait_for(Duration::from_secs(3), |g| g.screen == Screen::InLobby));
 
     let mut guest = Peer::connect(port, "guest");
-    guest.net.send(&C2S::JoinLobby { name: "locked".into(), password: Some("nope".into()) });
+    guest.net.send(&C2S::JoinLobby {
+        name: "locked".into(),
+        password: Some("nope".into()),
+    });
     assert!(
         guest.wait_for(Duration::from_secs(3), |g| g.notice.is_some()),
         "a refused join produced no notice"
     );
     assert!(guest.game.notice.as_deref().unwrap().contains("password"));
-    assert_eq!(guest.game.screen, Screen::Browsing, "a refused client thinks it is in a lobby");
+    assert_eq!(
+        guest.game.screen,
+        Screen::Browsing,
+        "a refused client thinks it is in a lobby"
+    );
 }
 
 #[test]
 fn the_lobby_browser_sees_open_lobbies() {
     let port = start_server(3);
     let mut host = Peer::connect(port, "host");
-    host.net.send(&C2S::CreateLobby { name: "visible".into(), password: None });
+    host.net.send(&C2S::CreateLobby {
+        name: "visible".into(),
+        password: None,
+    });
     assert!(host.wait_for(Duration::from_secs(3), |g| g.screen == Screen::InLobby));
 
     let mut browser = Peer::connect(port, "browser");
@@ -290,7 +341,12 @@ fn the_lobby_browser_sees_open_lobbies() {
         }),
         "the lobby browser saw nothing"
     );
-    let l = browser.game.lobbies.iter().find(|l| l.name == "visible").unwrap();
+    let l = browser
+        .game
+        .lobbies
+        .iter()
+        .find(|l| l.name == "visible")
+        .unwrap();
     assert_eq!(l.players, 1);
     assert!(!l.has_password);
 }

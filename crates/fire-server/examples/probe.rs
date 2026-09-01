@@ -14,6 +14,9 @@
 //!
 //! Exit codes: 0 healthy, 1 unhealthy (reason on stderr).
 
+// This command-line health probe reports success and failure directly to its caller.
+#![allow(clippy::print_stderr, clippy::print_stdout)]
+
 use std::time::{Duration, Instant};
 
 use fire_core::proto::{self, C2S, S2C};

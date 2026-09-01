@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 /// Simulation rate. The step is a constant, not a parameter, because the
 /// server and the client must agree tick for tick.
 pub const TICK_HZ: u32 = 60;
+// Sixty is exactly representable; preserve this shared simulation expression.
+#[allow(clippy::cast_precision_loss)]
 pub const DT: f32 = 1.0 / TICK_HZ as f32;
 
 // ---- tuning ---------------------------------------------------------------
@@ -30,8 +32,8 @@ pub const ENGINE_ACCEL: f32 = 16.0;
 pub const BRAKE_ACCEL: f32 = 26.0;
 /// Reverse is deliberately feeble — this is a racing game, not a parking sim.
 pub const REVERSE_MAX: f32 = 9.0;
-/// Quadratic drag, chosen so engine force balances drag exactly at MAX_SPEED:
-/// ENGINE_ACCEL = DRAG * MAX_SPEED^2.
+/// Quadratic drag, chosen so engine force balances drag exactly at
+/// `MAX_SPEED`: `ENGINE_ACCEL = DRAG * MAX_SPEED^2`.
 pub const DRAG: f32 = ENGINE_ACCEL / (MAX_SPEED * MAX_SPEED);
 /// Rolling resistance when coasting, as an exponential rate (1/s).
 pub const ROLL_RESIST: f32 = 0.55;
@@ -48,18 +50,20 @@ pub const OFFROAD_FACTOR: f32 = 0.45;
 /// Yaw rate at a standstill, rad/s.
 pub const STEER_MAX: f32 = 2.4;
 /// Steering authority falls off with speed: full lock at 45 m/s would be a
-/// spin every corner. rate = STEER_MAX / (1 + speed * STEER_FALLOFF).
+/// spin every corner. `rate = STEER_MAX / (1 + speed * STEER_FALLOFF)`.
 pub const STEER_FALLOFF: f32 = 0.045;
 /// While drifting the driver needs *more* yaw authority, not less — that is
 /// what counter-steering is, and without it a slide cannot be held or exited.
 pub const STEER_DRIFT_BONUS: f32 = 1.7;
 
-/// Hard cap on slip angle, radians. Beyond this the car is spinning rather
-/// than drifting, so yaw is bled back toward the velocity direction. This is
-/// the guard against the classic arcade failure where dropping rear grip
-/// turns every handbrake tap into an unrecoverable pirouette.
+/// Hard cap on slip angle, radians.
+///
+/// Beyond this the car is spinning rather than drifting, so yaw is bled back
+/// toward the velocity direction. This is the guard against the classic
+/// arcade failure where dropping rear grip turns every handbrake tap into an
+/// unrecoverable pirouette.
 pub const MAX_SLIP: f32 = 0.95; // ~54 degrees
-/// How hard yaw is pulled back once past MAX_SLIP (1/s).
+/// How hard yaw is pulled back once past `MAX_SLIP` (1/s).
 pub const SLIP_RECOVER: f32 = 6.0;
 /// Below this speed there is no meaningful slip angle and the maths is noise.
 pub const SLIP_MIN_SPEED: f32 = 2.5;
@@ -88,9 +92,18 @@ pub struct CarInput {
 impl CarInput {
     /// Untrusted input arrives over the wire. Strip NaN/inf and clamp, or a
     /// single malformed packet teleports a car and poisons every later tick.
-    pub fn sanitized(mut self) -> Self {
-        self.throttle = if self.throttle.is_finite() { self.throttle.clamp(-1.0, 1.0) } else { 0.0 };
-        self.steer = if self.steer.is_finite() { self.steer.clamp(-1.0, 1.0) } else { 0.0 };
+    #[must_use]
+    pub const fn sanitized(mut self) -> Self {
+        self.throttle = if self.throttle.is_finite() {
+            self.throttle.clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
+        self.steer = if self.steer.is_finite() {
+            self.steer.clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
         self
     }
 }
@@ -118,17 +131,20 @@ pub struct Car {
 /// Unit forward vector for a heading. Matches `Quat::from_rotation_y(yaw)`
 /// applied to +Z, so sim and renderer cannot disagree about which way a car
 /// faces.
+#[must_use]
 pub fn forward(yaw: f32) -> Vec2 {
     Vec2::new(yaw.sin(), yaw.cos())
 }
 
 /// Unit right vector for a heading.
+#[must_use]
 pub fn right(yaw: f32) -> Vec2 {
     Vec2::new(yaw.cos(), -yaw.sin())
 }
 
 impl Car {
-    pub fn new(pos: Vec2, yaw: f32) -> Self {
+    #[must_use]
+    pub const fn new(pos: Vec2, yaw: f32) -> Self {
         Self {
             pos,
             vel: Vec2::ZERO,
@@ -139,11 +155,13 @@ impl Car {
         }
     }
 
+    #[must_use]
     pub fn speed(&self) -> f32 {
         self.vel.length()
     }
 
-    pub fn boosting(&self) -> bool {
+    #[must_use]
+    pub const fn boosting(&self) -> bool {
         self.boost_left > 0.0
     }
 
@@ -151,6 +169,7 @@ impl Car {
     /// Near zero for grip driving; large during a slide. Returns 0 below
     /// `SLIP_MIN_SPEED`, where the direction of a near-stationary velocity is
     /// numerical noise.
+    #[must_use]
     pub fn slip_angle(&self) -> f32 {
         let speed = self.vel.length();
         if speed < SLIP_MIN_SPEED {
@@ -188,7 +207,11 @@ impl Car {
         //    one would rigidly carry the velocity around with the heading, and
         //    the slip angle could never become non-zero.
         let speed = self.vel.length();
-        let heading_sign = if self.vel.dot(forward(self.yaw)) < 0.0 { -1.0 } else { 1.0 };
+        let heading_sign = if self.vel.dot(forward(self.yaw)) < 0.0 {
+            -1.0
+        } else {
+            1.0
+        };
         let mut rate = STEER_MAX / (1.0 + speed * STEER_FALLOFF);
         if input.handbrake {
             rate *= STEER_DRIFT_BONUS;
@@ -270,6 +293,12 @@ impl Car {
 }
 
 #[cfg(test)]
+// Test durations are bounded constants; casts preserve the production formulas under test.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
 mod tests {
     use super::*;
 
@@ -279,15 +308,22 @@ mod tests {
         }
     }
 
-    const THROTTLE: CarInput =
-        CarInput { throttle: 1.0, steer: 0.0, handbrake: false, boost: false };
+    const THROTTLE: CarInput = CarInput {
+        throttle: 1.0,
+        steer: 0.0,
+        handbrake: false,
+        boost: false,
+    };
 
     #[test]
     fn accelerates_and_settles_at_top_speed() {
         let mut car = Car::new(Vec2::ZERO, 0.0);
         run(&mut car, THROTTLE, 60);
         let after_1s = car.speed();
-        assert!(after_1s > 8.0, "1 s of full throttle only reached {after_1s} m/s");
+        assert!(
+            after_1s > 8.0,
+            "1 s of full throttle only reached {after_1s} m/s"
+        );
         run(&mut car, THROTTLE, 60 * 60);
         let top = car.speed();
         assert!(
@@ -301,7 +337,11 @@ mod tests {
         let mut car = Car::new(Vec2::ZERO, 0.0);
         for _ in 0..60 * 120 {
             car.step(&THROTTLE, 1.0, DT);
-            assert!(car.speed() <= MAX_SPEED * BOOST_SPEED_MULT + 0.5, "speed {} escaped", car.speed());
+            assert!(
+                car.speed() <= MAX_SPEED * BOOST_SPEED_MULT + 0.5,
+                "speed {} escaped",
+                car.speed()
+            );
         }
     }
 
@@ -310,13 +350,21 @@ mod tests {
     fn cornering_without_handbrake_barely_slips() {
         let mut car = Car::new(Vec2::ZERO, 0.0);
         run(&mut car, THROTTLE, 120);
-        let turning = CarInput { throttle: 0.6, steer: 1.0, handbrake: false, boost: false };
+        let turning = CarInput {
+            throttle: 0.6,
+            steer: 1.0,
+            handbrake: false,
+            boost: false,
+        };
         let mut peak: f32 = 0.0;
         for _ in 0..120 {
             car.step(&turning, 1.0, DT);
             peak = peak.max(car.slip_angle().abs());
         }
-        assert!(peak < 0.35, "grip cornering slipped {peak} rad — that is a slide, not a corner");
+        assert!(
+            peak < 0.35,
+            "grip cornering slipped {peak} rad — that is a slide, not a corner"
+        );
     }
 
     /// The headline feature: the handbrake must actually break traction.
@@ -324,14 +372,26 @@ mod tests {
     fn handbrake_produces_a_real_slide() {
         let mut car = Car::new(Vec2::ZERO, 0.0);
         run(&mut car, THROTTLE, 150);
-        let drifting = CarInput { throttle: 0.7, steer: 1.0, handbrake: true, boost: false };
+        let drifting = CarInput {
+            throttle: 0.7,
+            steer: 1.0,
+            handbrake: true,
+            boost: false,
+        };
         let mut peak: f32 = 0.0;
         for _ in 0..90 {
             car.step(&drifting, 1.0, DT);
             peak = peak.max(car.slip_angle().abs());
         }
-        assert!(peak > 0.4, "handbrake only reached {peak} rad of slip — no drift");
-        assert!(car.drift > 0.3, "drift intensity {} never registered", car.drift);
+        assert!(
+            peak > 0.4,
+            "handbrake only reached {peak} rad of slip — no drift"
+        );
+        assert!(
+            car.drift > 0.3,
+            "drift intensity {} never registered",
+            car.drift
+        );
     }
 
     /// ...and it must be recoverable. This is the failure mode the research
@@ -340,9 +400,17 @@ mod tests {
     fn a_drift_can_be_driven_out_of() {
         let mut car = Car::new(Vec2::ZERO, 0.0);
         run(&mut car, THROTTLE, 150);
-        let drifting = CarInput { throttle: 0.7, steer: 1.0, handbrake: true, boost: false };
+        let drifting = CarInput {
+            throttle: 0.7,
+            steer: 1.0,
+            handbrake: true,
+            boost: false,
+        };
         run(&mut car, drifting, 90);
-        assert!(car.slip_angle().abs() > 0.3, "test precondition: should be sliding");
+        assert!(
+            car.slip_angle().abs() > 0.3,
+            "test precondition: should be sliding"
+        );
         // Release the handbrake and straighten up.
         run(&mut car, THROTTLE, 120);
         assert!(
@@ -356,7 +424,12 @@ mod tests {
     fn slip_is_capped_so_the_car_never_spins_freely() {
         let mut car = Car::new(Vec2::ZERO, 0.0);
         run(&mut car, THROTTLE, 150);
-        let hard = CarInput { throttle: 1.0, steer: 1.0, handbrake: true, boost: false };
+        let hard = CarInput {
+            throttle: 1.0,
+            steer: 1.0,
+            handbrake: true,
+            boost: false,
+        };
         for _ in 0..60 * 20 {
             car.step(&hard, 1.0, DT);
             assert!(
@@ -372,19 +445,37 @@ mod tests {
     #[test]
     fn held_boost_consumes_exactly_one_charge() {
         let mut car = Car::new(Vec2::ZERO, 0.0);
-        let held = CarInput { throttle: 1.0, steer: 0.0, handbrake: false, boost: true };
+        let held = CarInput {
+            throttle: 1.0,
+            steer: 0.0,
+            handbrake: false,
+            boost: true,
+        };
         run(&mut car, held, 30);
-        assert_eq!(car.boost_charges, BOOST_CHARGES - 1, "a held key drained multiple charges");
+        assert_eq!(
+            car.boost_charges,
+            BOOST_CHARGES - 1,
+            "a held key drained multiple charges"
+        );
     }
 
     #[test]
     fn boost_is_limited_to_its_charges() {
         let mut car = Car::new(Vec2::ZERO, 0.0);
-        let press = CarInput { throttle: 1.0, steer: 0.0, handbrake: false, boost: true };
+        let press = CarInput {
+            throttle: 1.0,
+            steer: 0.0,
+            handbrake: false,
+            boost: true,
+        };
         for _ in 0..10 {
             car.step(&press, 1.0, DT);
             // Let the boost fully expire before pressing again.
-            run(&mut car, THROTTLE, (BOOST_SECS * TICK_HZ as f32) as u32 + 10);
+            run(
+                &mut car,
+                THROTTLE,
+                (BOOST_SECS * TICK_HZ as f32) as u32 + 10,
+            );
         }
         assert_eq!(car.boost_charges, 0);
         assert!(!car.boosting(), "boost still active with no charges left");
@@ -397,7 +488,12 @@ mod tests {
         run(&mut plain, THROTTLE, 90);
         run(&mut boosted, THROTTLE, 90);
         boosted.step(
-            &CarInput { throttle: 1.0, steer: 0.0, handbrake: false, boost: true },
+            &CarInput {
+                throttle: 1.0,
+                steer: 0.0,
+                handbrake: false,
+                boost: true,
+            },
             1.0,
             DT,
         );
@@ -417,7 +513,12 @@ mod tests {
     fn integration_is_timestep_correct() {
         let mut coarse = Car::new(Vec2::ZERO, 0.0);
         let mut fine = Car::new(Vec2::ZERO, 0.0);
-        let turning = CarInput { throttle: 1.0, steer: 0.5, handbrake: false, boost: false };
+        let turning = CarInput {
+            throttle: 1.0,
+            steer: 0.5,
+            handbrake: false,
+            boost: false,
+        };
         for _ in 0..120 {
             coarse.step(&turning, 1.0, DT);
         }
@@ -438,14 +539,33 @@ mod tests {
     #[test]
     fn stepping_is_deterministic() {
         let seq = [
-            CarInput { throttle: 1.0, steer: 0.3, handbrake: false, boost: true },
-            CarInput { throttle: 0.2, steer: -1.0, handbrake: true, boost: false },
-            CarInput { throttle: -1.0, steer: 0.7, handbrake: false, boost: false },
+            CarInput {
+                throttle: 1.0,
+                steer: 0.3,
+                handbrake: false,
+                boost: true,
+            },
+            CarInput {
+                throttle: 0.2,
+                steer: -1.0,
+                handbrake: true,
+                boost: false,
+            },
+            CarInput {
+                throttle: -1.0,
+                steer: 0.7,
+                handbrake: false,
+                boost: false,
+            },
         ];
         let play = || {
             let mut c = Car::new(Vec2::new(3.0, -7.0), 0.9);
             for i in 0..600 {
-                c.step(&seq[i % seq.len()], if i % 3 == 0 { OFFROAD_FACTOR } else { 1.0 }, DT);
+                c.step(
+                    &seq[i % seq.len()],
+                    if i % 3 == 0 { OFFROAD_FACTOR } else { 1.0 },
+                    DT,
+                );
             }
             c
         };
@@ -480,6 +600,9 @@ mod tests {
             road.step(&THROTTLE, 1.0, DT);
             grass.step(&THROTTLE, OFFROAD_FACTOR, DT);
         }
-        assert!(grass.speed() < road.speed() * 0.85, "offroad was not slower");
+        assert!(
+            grass.speed() < road.speed() * 0.85,
+            "offroad was not slower"
+        );
     }
 }

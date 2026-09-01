@@ -1,8 +1,8 @@
 //! Turning the generated GLB props into meshes this renderer can light.
 //!
-//! `gen3d_mv.py` runs Hunyuan3D's *shape* pipeline, so what lands in
+//! `gen3d_mv.py` runs `Hunyuan3D`'s *shape* pipeline, so what lands in
 //! `assets/models/fire/` is geometry and nothing else: POSITION only, no
-//! NORMAL, no TEXCOORD_0, no material. `ember_engine::assets::load_glb`
+//! `NORMAL`, no `TEXCOORD_0`, no material. `ember_engine::assets::load_glb`
 //! tolerates that by defaulting every normal to +Y and every UV to (0,0) —
 //! which loads, but renders as a flat silhouette with no shading at all and
 //! samples a single texel of any texture you attach.
@@ -20,6 +20,7 @@ use ember_engine::{MeshData, TextureData};
 /// three vertices is one face and gets that face's geometric normal. Faceted
 /// rather than smooth, which suits hard-surface castle stone and reads better
 /// than smoothing across a decimated mesh's creases.
+#[must_use]
 pub fn face_normals(mut mesh: MeshData) -> MeshData {
     for tri in mesh.vertices.chunks_mut(3) {
         if tri.len() < 3 {
@@ -39,14 +40,17 @@ pub fn face_normals(mut mesh: MeshData) -> MeshData {
     mesh
 }
 
-/// Project UVs from world position, per face, on whichever axis the face
-/// most nearly faces. A cheap triplanar: it cannot match an artist's unwrap,
-/// but it turns a tiling stone texture into something that follows the
-/// geometry instead of smearing one texel across the whole prop.
+/// Project UVs from world position, per face, on whichever axis the face most
+/// nearly faces.
+///
+/// A cheap triplanar: it cannot match an artist's unwrap, but it turns a tiling
+/// stone texture into something that follows the geometry instead of smearing
+/// one texel across the whole prop.
 ///
 /// `tiles_per_unit` is in mesh units — the props are normalised to roughly
 /// two units on their longest axis, so ~2.0 gives a few courses of stone
 /// across a wall.
+#[must_use]
 pub fn planar_uvs(mut mesh: MeshData, tiles_per_unit: f32) -> MeshData {
     for tri in mesh.vertices.chunks_mut(3) {
         if tri.len() < 3 {
@@ -77,6 +81,7 @@ pub fn planar_uvs(mut mesh: MeshData, tiles_per_unit: f32) -> MeshData {
 /// Vertical offset needed to stand a prop on the ground, in mesh units.
 /// The generator centres its output on the origin, so half of every castle
 /// tower is below the courtyard until this is applied.
+#[must_use]
 pub fn ground_offset(mesh: &MeshData) -> f32 {
     -mesh
         .vertices
@@ -86,6 +91,7 @@ pub fn ground_offset(mesh: &MeshData) -> f32 {
 }
 
 /// Longest-axis extent, so a prop can be scaled to a real size in metres.
+#[must_use]
 pub fn longest_extent(mesh: &MeshData) -> f32 {
     let mut lo = Vec3::splat(f32::INFINITY);
     let mut hi = Vec3::splat(f32::NEG_INFINITY);
@@ -97,11 +103,21 @@ pub fn longest_extent(mesh: &MeshData) -> f32 {
     (hi - lo).max_element()
 }
 
-/// Load a generated prop: first part of the GLB, faceted normals, and either
-/// planar UVs plus a texture, or no texture at all (the instance colour then
-/// supplies the whole look, which is what the car wants so each player can be
-/// a different colour).
-pub fn prop(bytes: &[u8], texture: Option<TextureData>, tiles_per_unit: f32) -> Result<MeshData, String> {
+/// Load a generated prop.
+///
+/// Selects the largest part of the GLB, builds faceted normals, and applies
+/// either planar UVs plus a texture or no texture at all. The latter lets the
+/// instance colour supply the whole look so each player can have a different
+/// car colour.
+///
+/// # Errors
+///
+/// Returns an error if the GLB cannot be decoded or contains no mesh parts.
+pub fn prop(
+    bytes: &[u8],
+    texture: Option<TextureData>,
+    tiles_per_unit: f32,
+) -> Result<MeshData, String> {
     let parts = ember_engine::assets::load_glb(bytes)?;
     // The generator emits a single part; if that ever changes, the largest
     // one is the prop and the rest is debris.
@@ -111,7 +127,11 @@ pub fn prop(bytes: &[u8], texture: Option<TextureData>, tiles_per_unit: f32) -> 
         .ok_or("glb had no parts")?
         .mesh;
     let mesh = face_normals(mesh);
-    let mut mesh = if texture.is_some() { planar_uvs(mesh, tiles_per_unit) } else { mesh };
+    let mut mesh = if texture.is_some() {
+        planar_uvs(mesh, tiles_per_unit)
+    } else {
+        mesh
+    };
     mesh.texture = texture;
     Ok(mesh)
 }
@@ -135,7 +155,11 @@ mod tests {
         MeshData {
             vertices: p
                 .iter()
-                .map(|&pos| MeshVertex { pos, normal: [0.0, 1.0, 0.0], uv: [0.0, 0.0] })
+                .map(|&pos| MeshVertex {
+                    pos,
+                    normal: [0.0, 1.0, 0.0],
+                    uv: [0.0, 0.0],
+                })
                 .collect(),
             texture: None,
         }
@@ -155,7 +179,11 @@ mod tests {
         MeshData {
             vertices: p
                 .iter()
-                .map(|&pos| MeshVertex { pos, normal: [0.0, 1.0, 0.0], uv: [0.0, 0.0] })
+                .map(|&pos| MeshVertex {
+                    pos,
+                    normal: [0.0, 1.0, 0.0],
+                    uv: [0.0, 0.0],
+                })
                 .collect(),
             texture: None,
         }
@@ -187,16 +215,31 @@ mod tests {
     fn degenerate_triangles_get_a_usable_normal() {
         let m = MeshData {
             vertices: vec![
-                MeshVertex { pos: [0.0, 0.0, 0.0], normal: [0.0, 0.0, 0.0], uv: [0.0, 0.0] },
-                MeshVertex { pos: [1.0, 0.0, 0.0], normal: [0.0, 0.0, 0.0], uv: [0.0, 0.0] },
-                MeshVertex { pos: [2.0, 0.0, 0.0], normal: [0.0, 0.0, 0.0], uv: [0.0, 0.0] },
+                MeshVertex {
+                    pos: [0.0, 0.0, 0.0],
+                    normal: [0.0, 0.0, 0.0],
+                    uv: [0.0, 0.0],
+                },
+                MeshVertex {
+                    pos: [1.0, 0.0, 0.0],
+                    normal: [0.0, 0.0, 0.0],
+                    uv: [0.0, 0.0],
+                },
+                MeshVertex {
+                    pos: [2.0, 0.0, 0.0],
+                    normal: [0.0, 0.0, 0.0],
+                    uv: [0.0, 0.0],
+                },
             ],
             texture: None,
         };
         let m = face_normals(m);
         for v in &m.vertices {
             let n = Vec3::from(v.normal);
-            assert!((n.length() - 1.0).abs() < 1e-4, "collapsed triangle gave {n}");
+            assert!(
+                (n.length() - 1.0).abs() < 1e-4,
+                "collapsed triangle gave {n}"
+            );
         }
     }
 
@@ -208,8 +251,8 @@ mod tests {
         let us: Vec<f32> = m.vertices.iter().map(|v| v.uv[0]).collect();
         let vs: Vec<f32> = m.vertices.iter().map(|v| v.uv[1]).collect();
         let span = |xs: &[f32]| {
-            xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
-                - xs.iter().cloned().fold(f32::INFINITY, f32::min)
+            xs.iter().copied().fold(f32::NEG_INFINITY, f32::max)
+                - xs.iter().copied().fold(f32::INFINITY, f32::min)
         };
         assert!(span(&us) > 1.0, "u never varies: {us:?}");
         assert!(span(&vs) > 1.0, "v never varies: {vs:?}");
@@ -219,9 +262,21 @@ mod tests {
     fn ground_offset_lifts_a_centred_prop_onto_the_floor() {
         let m = MeshData {
             vertices: vec![
-                MeshVertex { pos: [0.0, -1.0, 0.0], normal: [0.0, 1.0, 0.0], uv: [0.0, 0.0] },
-                MeshVertex { pos: [1.0, 1.0, 0.0], normal: [0.0, 1.0, 0.0], uv: [0.0, 0.0] },
-                MeshVertex { pos: [0.0, 0.5, 1.0], normal: [0.0, 1.0, 0.0], uv: [0.0, 0.0] },
+                MeshVertex {
+                    pos: [0.0, -1.0, 0.0],
+                    normal: [0.0, 1.0, 0.0],
+                    uv: [0.0, 0.0],
+                },
+                MeshVertex {
+                    pos: [1.0, 1.0, 0.0],
+                    normal: [0.0, 1.0, 0.0],
+                    uv: [0.0, 0.0],
+                },
+                MeshVertex {
+                    pos: [0.0, 0.5, 1.0],
+                    normal: [0.0, 1.0, 0.0],
+                    uv: [0.0, 0.0],
+                },
             ],
             texture: None,
         };
@@ -235,10 +290,22 @@ mod tests {
     #[test]
     fn generated_props_load_and_light() {
         let props: [(&str, &[u8]); 4] = [
-            ("car", include_bytes!("../../../assets/models/fire/fire-car.glb")),
-            ("gatehouse", include_bytes!("../../../assets/models/fire/fire-gatehouse.glb")),
-            ("tower", include_bytes!("../../../assets/models/fire/fire-tower.glb")),
-            ("fountain", include_bytes!("../../../assets/models/fire/fire-fountain.glb")),
+            (
+                "car",
+                include_bytes!("../../../assets/models/fire/fire-car.glb"),
+            ),
+            (
+                "gatehouse",
+                include_bytes!("../../../assets/models/fire/fire-gatehouse.glb"),
+            ),
+            (
+                "tower",
+                include_bytes!("../../../assets/models/fire/fire-tower.glb"),
+            ),
+            (
+                "fountain",
+                include_bytes!("../../../assets/models/fire/fire-fountain.glb"),
+            ),
         ];
         for (name, bytes) in props {
             let m = prop(bytes, None, 1.0).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -248,12 +315,18 @@ mod tests {
             for v in &m.vertices {
                 let n = Vec3::from(v.normal);
                 assert!(n.is_finite(), "{name}: non-finite normal {n}");
-                assert!((n.length() - 1.0).abs() < 1e-3, "{name}: normal not unit: {n}");
+                assert!(
+                    (n.length() - 1.0).abs() < 1e-3,
+                    "{name}: normal not unit: {n}"
+                );
                 if n.y < 0.999 {
                     up_only = false;
                 }
             }
-            assert!(!up_only, "{name}: every normal still points up — face normals did not apply");
+            assert!(
+                !up_only,
+                "{name}: every normal still points up — face normals did not apply"
+            );
             assert!(longest_extent(&m) > 0.5, "{name}: suspiciously small");
         }
     }
