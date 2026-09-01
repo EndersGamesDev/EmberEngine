@@ -1,4 +1,4 @@
-//! Client-side connection: a reader thread feeds ServerMsgs into a channel
+//! Client-side connection: a reader thread feeds `ServerMsg`s into a channel
 //! the game loop drains once per frame. Writes are mutex-guarded because two
 //! threads produce them: the game loop (inputs) and a keepalive thread that
 //! keeps the server timeout at bay even when the window is minimized and the
@@ -19,6 +19,11 @@ use ember_net::{
 const SERVER_SILENCE_TIMEOUT: Duration = Duration::from_secs(15);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(2);
 
+fn nonce_millis(elapsed: Duration) -> u32 {
+    let low_bits = elapsed.as_millis() & u128::from(u32::MAX);
+    u32::try_from(low_bits).unwrap_or_default()
+}
+
 pub struct Welcome {
     pub id: PlayerId,
     pub tick_hz: u32,
@@ -37,7 +42,7 @@ pub struct NetClient {
 }
 
 impl NetClient {
-    pub fn connect(addr: &str, name: &str) -> io::Result<(NetClient, Welcome)> {
+    pub fn connect(addr: &str, name: &str) -> io::Result<(Self, Welcome)> {
         let mut last_err = None;
         let mut stream = None;
         for sock_addr in addr.to_socket_addrs()? {
@@ -93,7 +98,7 @@ impl NetClient {
         let stop = Arc::new(AtomicBool::new(false));
         {
             let mut reader = stream.try_clone()?;
-            let dead = Arc::clone(&dead);
+            let reader_dead = Arc::clone(&dead);
             std::thread::spawn(move || {
                 // Ends when the server is gone (or silent too long).
                 while let Ok(msg) = read_msg::<_, ServerMsg>(&mut reader) {
@@ -101,7 +106,7 @@ impl NetClient {
                         break; // game gone
                     }
                 }
-                dead.store(true, Ordering::Relaxed);
+                reader_dead.store(true, Ordering::Relaxed);
             });
         }
 
@@ -123,7 +128,7 @@ impl NetClient {
                     if since_ping >= KEEPALIVE_INTERVAL {
                         since_ping = Duration::ZERO;
                         // Timestamped nonce -> the Pong measures RTT.
-                        let nonce = started.elapsed().as_millis() as u32;
+                        let nonce = nonce_millis(started.elapsed());
                         let mut s = stream.lock().unwrap();
                         if write_msg(&mut *s, &ClientMsg::Ping { nonce }).is_err() {
                             break;
@@ -134,7 +139,7 @@ impl NetClient {
         }
 
         Ok((
-            NetClient {
+            Self {
                 stream,
                 rx,
                 dead,
@@ -147,10 +152,10 @@ impl NetClient {
 
     /// Milliseconds since this connection's Ping epoch.
     pub fn elapsed_ms(&self) -> u32 {
-        self.started.elapsed().as_millis() as u32
+        nonce_millis(self.started.elapsed())
     }
 
-    pub fn send(&mut self, msg: &ClientMsg) -> io::Result<()> {
+    pub fn send(&self, msg: &ClientMsg) -> io::Result<()> {
         let mut s = self.stream.lock().unwrap();
         write_msg(&mut *s, msg)
     }

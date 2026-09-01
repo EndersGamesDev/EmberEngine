@@ -9,6 +9,7 @@ mod net;
 mod props;
 mod world;
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -38,7 +39,21 @@ const MESH_WALL: u32 = 2;
 /// First character part mesh (head); torso and limb follow (see character.rs).
 const MESH_CHAR: u32 = 3;
 /// First mesh id after the fixed set; GLB monument parts land here.
-const MESH_MONUMENT: u32 = 6;
+const MESH_MONUMENT: u32 = MESH_CHAR + character::PART_MESHES;
+
+fn mesh_count(count: usize) -> u32 {
+    u32::try_from(count).unwrap_or(u32::MAX)
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+fn directions_differ(left: [f32; 2], right: [f32; 2]) -> bool {
+    left.into_iter()
+        .zip(right)
+        .any(|(a, b)| a.partial_cmp(&b) != Some(Ordering::Equal))
+}
 
 /// Load the articulated part character: five GLBs in assets/models/parts/
 /// (head, torso, arm, leg, boot — arm/leg/boot shared by both sides).
@@ -62,6 +77,7 @@ fn load_part_character(
     let mut infos = Vec::new();
     let mut sources = Vec::new();
     for (i, (stem, target_h)) in PARTS.iter().enumerate() {
+        let mesh_offset = u32::try_from(i).unwrap_or_default();
         let candidates = [
             format!(
                 "{}/../../assets/models/parts/{stem}.glb",
@@ -99,16 +115,16 @@ fn load_part_character(
         }
         let h = (max[1] - min[1]).max(1e-3);
         infos.push(character::MeshPart {
-            mesh: first_mesh + i as u32,
+            mesh: first_mesh + mesh_offset,
             scale: target_h / h,
             center: [
-                (min[0] + max[0]) * 0.5,
-                (min[1] + max[1]) * 0.5,
-                (min[2] + max[2]) * 0.5,
+                min[0].midpoint(max[0]),
+                min[1].midpoint(max[1]),
+                min[2].midpoint(max[2]),
             ],
         });
         sources.push(character::PartSource {
-            mesh: first_mesh + i as u32,
+            mesh: first_mesh + mesh_offset,
             min,
             max,
             flipped: true, // single-view concepts face the camera
@@ -129,7 +145,7 @@ fn load_part_character(
 
 /// Load the artist-made skinned character: swat-parts.glb (one mesh per
 /// rig joint, textured) plus swat-rig.json (bind-pose joint positions).
-/// Both are produced by tools/swat_split.py.
+/// Both are produced by `tools/swat_split.py`.
 fn load_skinned_character(
     first_mesh: u32,
 ) -> (Vec<MeshData>, Option<ember_engine::rig::RigCharacter>) {
@@ -158,7 +174,7 @@ fn load_skinned_character(
     (Vec::new(), None)
 }
 
-/// Fixed camera from EMBER_CAM ("ex,ey,ez,tx,ty,tz"), for reviewing assets
+/// Fixed camera from `EMBER_CAM` ("ex,ey,ez,tx,ty,tz"), for reviewing assets
 /// up close in screenshots. Parsed once; None when unset or malformed.
 fn debug_camera() -> Option<Camera> {
     static CAM: std::sync::OnceLock<Option<Camera>> = std::sync::OnceLock::new();
@@ -234,7 +250,7 @@ fn load_mesh_character(
                     );
                     let mc = character::MeshCharacter {
                         first_mesh,
-                        parts: meshes.len() as u32,
+                        parts: mesh_count(meshes.len()),
                         feet_y: min_y,
                         height: max_y - min_y,
                         // AI concepts face the camera; the Blender-exported
@@ -372,13 +388,13 @@ struct Game {
     last_rtt_ms: Option<u32>,
     /// Set while the snapshot stream is stale (lag spike in progress).
     stale_since: Option<Instant>,
-    /// Per-player (facing_yaw, walk_phase, swing_amplitude) animation state.
+    /// Per-player (`facing_yaw`, `walk_phase`, `swing_amplitude`) animation state.
     anim: HashMap<ember_net::PlayerId, (f32, f32, f32)>,
     /// Animation state for the offline local player.
     offline_anim: (f32, f32, f32),
     /// Static cover props for the current arena layout.
     layouts: Option<props::Layouts>,
-    /// Number of monument GLB part meshes registered after MESH_MONUMENT.
+    /// Number of monument GLB part meshes registered after `MESH_MONUMENT`.
     monument_parts: u32,
     /// Draw the (artist-made) full-body mesh instead of the jointed rig.
     prefer_mesh: bool,
@@ -392,6 +408,15 @@ struct Game {
     rig_character: Option<character::RigCharacter>,
     /// Wall-clock seconds since start, for idle animation.
     time_s: f32,
+}
+
+struct CharacterDraw {
+    pos: Vec2,
+    yaw: f32,
+    color: [f32; 3],
+    is_me: bool,
+    phase: f32,
+    amp: f32,
 }
 
 impl Game {
@@ -468,17 +493,15 @@ impl Game {
     }
 
     /// Best available character: articulated parts > single mesh > boxes.
-    #[allow(clippy::too_many_arguments)]
-    fn push_best_character(
-        &self,
-        frame: &mut Frame,
-        pos: Vec2,
-        yaw: f32,
-        color: [f32; 3],
-        is_me: bool,
-        phase: f32,
-        amp: f32,
-    ) {
+    fn push_best_character(&self, frame: &mut Frame, draw: CharacterDraw) {
+        let CharacterDraw {
+            pos,
+            yaw,
+            color,
+            is_me,
+            phase,
+            amp,
+        } = draw;
         // Artist-made skinned model first: AAA meshes on the jointed rig.
         if let Some(sc) = &self.skinned_character {
             let pose = ember_engine::rig::walk_pose(phase, amp, 0.0, self.time_s, &sc.dims);
@@ -488,11 +511,11 @@ impl Game {
             );
             return;
         }
-        if self.prefer_mesh {
-            if let Some(mc) = &self.mesh_character {
-                character::push_character_mesh(frame, pos, yaw, color, is_me, phase, mc);
-                return;
-            }
+        if self.prefer_mesh
+            && let Some(mc) = &self.mesh_character
+        {
+            character::push_character_mesh(frame, pos, yaw, color, is_me, phase, mc);
+            return;
         }
         if let Some(rc) = &self.rig_character {
             let pose = ember_engine::rig::walk_pose(phase, amp, 0.0, self.time_s, &rc.dims);
@@ -570,27 +593,27 @@ impl EmberGame for Game {
 
                 // Staleness: the server streams snapshots at 60 Hz, so a
                 // long gap means the link or the server is stalling.
-                if !net.is_dead() {
-                    if let Some(age) = self.world.snapshot_age() {
-                        if age > SNAPSHOT_STALE_AFTER {
-                            if self.stale_since.is_none() {
-                                self.stale_since = Some(Instant::now());
-                                tracing::warn!(
-                                    age_ms = age.as_millis() as u64,
-                                    "snapshot stream stale: no server state received"
-                                );
-                            }
-                        } else if let Some(since) = self.stale_since.take() {
-                            tracing::info!(
-                                outage_ms = since.elapsed().as_millis() as u64,
-                                "snapshot stream recovered"
+                if !net.is_dead()
+                    && let Some(age) = self.world.snapshot_age()
+                {
+                    if age > SNAPSHOT_STALE_AFTER {
+                        if self.stale_since.is_none() {
+                            self.stale_since = Some(Instant::now());
+                            tracing::warn!(
+                                age_ms = duration_millis(age),
+                                "snapshot stream stale: no server state received"
                             );
                         }
+                    } else if let Some(since) = self.stale_since.take() {
+                        tracing::info!(
+                            outage_ms = duration_millis(since.elapsed()),
+                            "snapshot stream recovered"
+                        );
                     }
                 }
                 // Re-send on change, plus a periodic keepalive well under the
                 // server's timeout.
-                if dir != self.last_dir
+                if directions_differ(dir, self.last_dir)
                     || self.last_input_sent.elapsed() > Duration::from_millis(300)
                 {
                     self.last_dir = dir;
@@ -616,12 +639,22 @@ impl EmberGame for Game {
                 }
 
                 let mut frame = self.arena_frame(Camera::default());
-                let mut seen: Vec<(ember_net::PlayerId, Vec2, Vec2, [f32; 3], bool)> =
+                let seen: Vec<(ember_net::PlayerId, Vec2, Vec2, [f32; 3], bool)> =
                     self.world.render_players().collect();
-                for (id, pos, vel, color, is_me) in seen.drain(..) {
+                for (id, pos, vel, color, is_me) in seen {
                     let slot = self.anim.entry(id).or_insert((0.0, 0.0, 0.0));
                     let (yaw, phase, amp) = Self::advance_anim(slot, vel, dt);
-                    self.push_best_character(&mut frame, pos, yaw, color, is_me, phase, amp);
+                    self.push_best_character(
+                        &mut frame,
+                        CharacterDraw {
+                            pos,
+                            yaw,
+                            color,
+                            is_me,
+                            phase,
+                            amp,
+                        },
+                    );
                 }
                 frame
             }
@@ -634,10 +667,164 @@ impl EmberGame for Game {
                 let mut slot = self.offline_anim;
                 let (yaw, phase, amp) = Self::advance_anim(&mut slot, vel, dt);
                 self.offline_anim = slot;
-                self.push_best_character(&mut frame, me, yaw, [0.9, 0.9, 0.9], true, phase, amp);
+                self.push_best_character(
+                    &mut frame,
+                    CharacterDraw {
+                        pos: me,
+                        yaw,
+                        color: [0.9, 0.9, 0.9],
+                        is_me: true,
+                        phase,
+                        amp,
+                    },
+                );
                 frame
             }
         }
+    }
+}
+
+struct GameAssets {
+    meshes: Vec<MeshData>,
+    monument_parts: u32,
+    mesh_character: Option<character::MeshCharacter>,
+    part_character: Option<character::PartCharacter>,
+    rig_character: Option<character::RigCharacter>,
+    prefer_mesh: bool,
+    skinned_character: Option<ember_engine::rig::RigCharacter>,
+}
+
+fn load_rig_character(
+    mut next_id: u32,
+    part_sources: &[character::PartSource],
+    monument: &[MeshData],
+    character_preference: &str,
+) -> (Vec<MeshData>, Option<character::RigCharacter>) {
+    let mut extra_meshes = Vec::new();
+    let mut load_v2 = |stem: &str| -> Option<character::PartSource> {
+        let candidates = [
+            format!(
+                "{}/../../assets/models/parts2/vet-{stem}.glb",
+                env!("CARGO_MANIFEST_DIR")
+            ),
+            format!("assets/models/parts2/vet-{stem}.glb"),
+        ];
+        for path in candidates {
+            if let Ok(bytes) = std::fs::read(&path) {
+                match ember_engine::rig::source_from_glb_bytes(&bytes, next_id) {
+                    Ok((mesh, source)) => {
+                        tracing::info!(stem, "v2 part mesh loaded");
+                        extra_meshes.push(mesh);
+                        next_id += 1;
+                        return Some(source);
+                    }
+                    Err(error) => {
+                        tracing::error!(path, %error, "v2 part GLB load failed");
+                    }
+                }
+            }
+        }
+        None
+    };
+    let v1 = |index: usize| part_sources.get(index).copied();
+    let mut sources = ember_engine::rig::VeteranSources {
+        head: load_v2("head").or_else(|| v1(0)),
+        torso: load_v2("torso").or_else(|| v1(1)),
+        upperarm: load_v2("upperarm"),
+        forearm: load_v2("forearm"),
+        hand: load_v2("hand"),
+        thigh: load_v2("thigh"),
+        shin: load_v2("shin"),
+        boot: load_v2("boot").or_else(|| v1(4)),
+        pelvis: load_v2("pelvis"),
+        backpack: load_v2("backpack"),
+        rifle: load_v2("rifle"),
+        helmet: load_v2("helmet"),
+        ..Default::default()
+    };
+    sources.arm = v1(2).or(sources.upperarm);
+    sources.leg = v1(3).or(sources.thigh);
+    if sources.helmet.is_none() {
+        sources.helmet = monument.first().map(|mesh| {
+            let (min, max) = mesh_bounds(mesh);
+            character::PartSource {
+                mesh: MESH_MONUMENT,
+                min,
+                max,
+                flipped: true,
+            }
+        });
+    }
+    let rig_character = if sources.has_base() && character_preference != "puppet" {
+        let rig = character::veteran_rig(&sources);
+        tracing::info!("jointed rig character assembled ({} parts)", rig.parts.len());
+        Some(rig)
+    } else {
+        None
+    };
+    (extra_meshes, rig_character)
+}
+
+fn load_game_assets() -> GameAssets {
+    let monument = load_monument();
+    let monument_parts = mesh_count(monument.len());
+    let (character_meshes, mesh_character, swat_loaded) =
+        load_mesh_character(MESH_MONUMENT + monument_parts);
+    let character_preference = std::env::var("EMBER_CHAR").unwrap_or_default();
+    let (skinned_meshes, skinned_character) =
+        if character_preference == "rig" || character_preference == "mesh" {
+            (Vec::new(), None)
+        } else {
+            load_skinned_character(
+                MESH_MONUMENT + monument_parts + mesh_count(character_meshes.len()),
+            )
+        };
+    let prefer_mesh = swat_loaded && character_preference == "mesh";
+    let (part_meshes, part_character, part_sources) = load_part_character(
+        MESH_MONUMENT
+            + monument_parts
+            + mesh_count(character_meshes.len() + skinned_meshes.len()),
+    );
+    let next_id = MESH_MONUMENT
+        + monument_parts
+        + mesh_count(character_meshes.len() + skinned_meshes.len() + part_meshes.len());
+    let (extra_meshes, rig_character) = load_rig_character(
+        next_id,
+        &part_sources,
+        &monument,
+        &character_preference,
+    );
+
+    let mut meshes = vec![
+        plane_mesh(12.0, load_texture("floor_basalt.png")),
+        box_mesh(4.0, load_texture("wall_basalt.png")),
+        box_mesh(
+            1.0,
+            load_texture("char_head.png").or_else(|| load_texture("player_armor.png")),
+        ),
+        box_mesh(
+            1.0,
+            load_texture("char_torso.png").or_else(|| load_texture("player_armor.png")),
+        ),
+        box_mesh(
+            1.0,
+            load_texture("char_limb.png").or_else(|| load_texture("player_armor.png")),
+        ),
+    ];
+    meshes.extend(monument);
+    meshes.extend(character_meshes);
+    meshes.extend(skinned_meshes);
+    meshes.extend(part_meshes);
+    meshes.extend(extra_meshes);
+
+    GameAssets {
+        meshes,
+        monument_parts,
+        mesh_character,
+        part_character,
+        rig_character,
+        prefer_mesh,
+        skinned_character,
     }
 }
 
@@ -687,112 +874,15 @@ fn main() {
         }
     };
 
-    let monument = load_monument();
-    let monument_parts = monument.len() as u32;
-    let (char_meshes, mesh_character, swat_loaded) =
-        load_mesh_character(MESH_MONUMENT + monument_parts);
-    // The artist-made model split per joint: AAA meshes AND animation.
-    // EMBER_CHAR=rig falls back to the AI-generated rig, =mesh to the
-    // unanimated full-body model.
-    let char_pref = std::env::var("EMBER_CHAR").unwrap_or_default();
-    let (skinned_meshes, skinned_character) = if char_pref == "rig" || char_pref == "mesh" {
-        (Vec::new(), None)
-    } else {
-        load_skinned_character(MESH_MONUMENT + monument_parts + char_meshes.len() as u32)
-    };
-    let prefer_mesh = swat_loaded && char_pref == "mesh";
-    let (part_meshes, part_character, part_sources) = load_part_character(
-        MESH_MONUMENT + monument_parts + (char_meshes.len() + skinned_meshes.len()) as u32,
-    );
-    // Jointed rig: dedicated v2 segment GLBs (assets/models/parts2/vet-*.glb)
-    // upgrade the character part by part; the v1 five + monument helmet fill
-    // whatever is missing. EMBER_CHAR=puppet keeps the old path.
-    let mut extra_meshes: Vec<MeshData> = Vec::new();
-    let mut next_id = MESH_MONUMENT
-        + monument_parts
-        + (char_meshes.len() + skinned_meshes.len() + part_meshes.len()) as u32;
-    let mut load_v2 = |stem: &str| -> Option<character::PartSource> {
-        let candidates = [
-            format!(
-                "{}/../../assets/models/parts2/vet-{stem}.glb",
-                env!("CARGO_MANIFEST_DIR")
-            ),
-            format!("assets/models/parts2/vet-{stem}.glb"),
-        ];
-        for path in candidates {
-            if let Ok(bytes) = std::fs::read(&path) {
-                match ember_engine::rig::source_from_glb_bytes(&bytes, next_id) {
-                    Ok((mesh, src)) => {
-                        tracing::info!(stem, "v2 part mesh loaded");
-                        extra_meshes.push(mesh);
-                        next_id += 1;
-                        return Some(src);
-                    }
-                    Err(e) => tracing::error!(path, error = %e, "v2 part GLB load failed"),
-                }
-            }
-        }
-        None
-    };
-    let v1 = |i: usize| part_sources.get(i).copied();
-    let mut srcs = ember_engine::rig::VeteranSources {
-        head: load_v2("head").or(v1(0)),
-        torso: load_v2("torso").or(v1(1)),
-        upperarm: load_v2("upperarm"),
-        forearm: load_v2("forearm"),
-        hand: load_v2("hand"),
-        thigh: load_v2("thigh"),
-        shin: load_v2("shin"),
-        boot: load_v2("boot").or(v1(4)),
-        pelvis: load_v2("pelvis"),
-        backpack: load_v2("backpack"),
-        rifle: load_v2("rifle"),
-        helmet: load_v2("helmet"),
-        ..Default::default()
-    };
-    srcs.arm = v1(2).or(srcs.upperarm);
-    srcs.leg = v1(3).or(srcs.thigh);
-    if srcs.helmet.is_none() {
-        srcs.helmet = monument.first().map(|m| {
-            let (min, max) = mesh_bounds(m);
-            character::PartSource {
-                mesh: MESH_MONUMENT,
-                min,
-                max,
-                flipped: true,
-            }
-        });
-    }
-    let rig_character =
-        if srcs.has_base() && std::env::var("EMBER_CHAR").as_deref() != Ok("puppet") {
-            let rc = character::veteran_rig(&srcs);
-            tracing::info!("jointed rig character assembled ({} parts)", rc.parts.len());
-            Some(rc)
-        } else {
-            None
-        };
-    let mut meshes = vec![
-        plane_mesh(12.0, load_texture("floor_basalt.png")),
-        box_mesh(4.0, load_texture("wall_basalt.png")),
-        // Character parts (see character.rs): head, torso, limb.
-        box_mesh(
-            1.0,
-            load_texture("char_head.png").or_else(|| load_texture("player_armor.png")),
-        ),
-        box_mesh(
-            1.0,
-            load_texture("char_torso.png").or_else(|| load_texture("player_armor.png")),
-        ),
-        box_mesh(
-            1.0,
-            load_texture("char_limb.png").or_else(|| load_texture("player_armor.png")),
-        ),
-    ];
-    meshes.extend(monument);
-    meshes.extend(char_meshes);
-    meshes.extend(skinned_meshes);
-    meshes.extend(part_meshes);
-    meshes.extend(extra_meshes);
+    let GameAssets {
+        meshes,
+        monument_parts,
+        mesh_character,
+        part_character,
+        rig_character,
+        prefer_mesh,
+        skinned_character,
+    } = load_game_assets();
 
     ember_engine::run(
         EngineConfig {

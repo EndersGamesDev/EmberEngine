@@ -17,7 +17,7 @@ pub struct PropDef {
     pub scale: f32,
 }
 
-fn one() -> f32 {
+const fn one() -> f32 {
     1.0
 }
 
@@ -32,7 +32,7 @@ pub struct Layouts {
     pub layouts: Vec<Layout>,
 }
 
-/// Load layouts from assets/layouts/arena.json (workspace or cwd relative).
+/// Load layouts from `assets/layouts/arena.json` (workspace or cwd relative).
 pub fn load_layouts() -> Option<Layouts> {
     let candidates = [
         format!(

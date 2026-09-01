@@ -6,7 +6,6 @@ use ember_engine::glam::{Vec2, Vec3};
 use ember_engine::{Frame, Instance};
 
 /// Number of meshes the character registers (head, torso, limb).
-#[allow(dead_code)]
 pub const PART_MESHES: u32 = 3;
 
 /// Rotate a local XZ offset by the character's facing yaw, matching the
