@@ -157,30 +157,33 @@ fn legacy_lobby_create_join_and_refusal_match_the_deployed_wire() {
             requested_version: 12
         }
     ));
-    let projected = ArenaLegacyDecoder::project_lobby_list(12, &[
-        LegacyLobbyEntry {
-            game_key: GameKey {
-                game_id: "arena".to_string(),
-                game_version: 12,
+    let projected = ArenaLegacyDecoder::project_lobby_list(
+        12,
+        &[
+            LegacyLobbyEntry {
+                game_key: GameKey {
+                    game_id: "arena".to_string(),
+                    game_version: 12,
+                },
+                name: "alpha".to_string(),
+                host: "ender".to_string(),
+                has_password: true,
+                players: 1,
+                cap: 8,
             },
-            name: "alpha".to_string(),
-            host: "ender".to_string(),
-            has_password: true,
-            players: 1,
-            cap: 8,
-        },
-        LegacyLobbyEntry {
-            game_key: GameKey {
-                game_id: "fire".to_string(),
-                game_version: 1,
+            LegacyLobbyEntry {
+                game_key: GameKey {
+                    game_id: "fire".to_string(),
+                    game_version: 1,
+                },
+                name: "alpha".to_string(),
+                host: "driver".to_string(),
+                has_password: false,
+                players: 2,
+                cap: 8,
             },
-            name: "alpha".to_string(),
-            host: "driver".to_string(),
-            has_password: false,
-            players: 2,
-            cap: 8,
-        },
-    ]);
+        ],
+    );
     assert_eq!(
         serde_json::to_string(&projected).unwrap(),
         fixture.list_response
