@@ -56,22 +56,14 @@ pub const BODY_H_CROUCH: f32 = 1.25;
 
 /// Height a shot leaves from, measured from the shooter's feet.
 pub fn eye_h(crouch: bool) -> f32 {
-    if crouch {
-        EYE_CROUCH
-    } else {
-        EYE_STAND
-    }
+    if crouch { EYE_CROUCH } else { EYE_STAND }
 }
 
 /// Vertical extent of the hit volume, measured from the target's feet.
 /// Together with `hit_radius` this makes the hitbox a finite cylinder; it
 /// used to be one of infinite height, which is why pitch never mattered.
 pub fn body_h(crouch: bool) -> f32 {
-    if crouch {
-        BODY_H_CROUCH
-    } else {
-        BODY_H_STAND
-    }
+    if crouch { BODY_H_CROUCH } else { BODY_H_STAND }
 }
 
 /// Hard clamp on aim pitch, radians (~83°). The client clamps its own look
@@ -266,10 +258,7 @@ pub fn generate_arena(seed: u64) -> Vec<Obstacle> {
         let cz = angle.sin() * radius;
         let hx = 0.8 + rand01() * 1.7;
         let hz = 0.8 + rand01() * 1.7;
-        obstacles.push(Obstacle::seeded(
-            [cx - hx, cz - hz],
-            [cx + hx, cz + hz],
-        ));
+        obstacles.push(Obstacle::seeded([cx - hx, cz - hz], [cx + hx, cz + hz]));
     }
     obstacles
 }
@@ -707,11 +696,8 @@ impl Sim {
             // Shared movement code (also used by client prediction);
             // stance speed is server-authoritative — no speed cheats.
             let speed = stance_speed(input.sprint, input.crouch, input.shield);
-            let (old_pos, old_y, old_vy) = (
-                self.players[i].pos,
-                self.players[i].y,
-                self.players[i].vy,
-            );
+            let (old_pos, old_y, old_vy) =
+                (self.players[i].pos, self.players[i].y, self.players[i].vy);
             let pos = move_circle(old_pos, old_y, input.mv, speed, dt, &self.obstacles);
             let (y, vy, _grounded) =
                 step_vertical(pos, old_y, old_vy, input.jump, dt, &self.obstacles);
@@ -1546,7 +1532,11 @@ mod tests {
             // agrees with the carried list.
             assert_eq!(level.spawns.len(), MAX_PLAYERS);
             for slot in 0..MAX_PLAYERS as u32 {
-                assert_eq!(level.spawn(slot), spawn_point(slot), "seed {seed} slot {slot}");
+                assert_eq!(
+                    level.spawn(slot),
+                    spawn_point(slot),
+                    "seed {seed} slot {slot}"
+                );
             }
         }
     }
@@ -1624,7 +1614,10 @@ mod tests {
         let top = obstacle_height(&obs[0]);
         // Walking into the crate from outside gets stopped.
         let walked = move_circle([-3.0, 0.0], 0.0, [1.0, 0.0], MOVE_SPEED, 0.5, &obs);
-        assert!(walked[0] < -1.5 - PLAYER_R + 0.01, "walked into box: {walked:?}");
+        assert!(
+            walked[0] < -1.5 - PLAYER_R + 0.01,
+            "walked into box: {walked:?}"
+        );
         // The same move with the feet above the crate's top goes through.
         let over = move_circle([-3.0, 0.0], top + 0.1, [1.0, 0.0], MOVE_SPEED, 0.5, &obs);
         assert!(over[0] > -1.0, "could not walk over the box: {over:?}");
@@ -1662,8 +1655,14 @@ mod tests {
         // And the generator must actually produce both classes.
         let obs = generate_arena(20260829);
         let heights: Vec<f32> = obs.iter().map(obstacle_height).collect();
-        assert!(heights.iter().any(|h| *h <= CRATE_MAX_H), "no crates: {heights:?}");
-        assert!(heights.iter().any(|h| *h >= CONTAINER_MIN_H), "no containers");
+        assert!(
+            heights.iter().any(|h| *h <= CRATE_MAX_H),
+            "no crates: {heights:?}"
+        );
+        assert!(
+            heights.iter().any(|h| *h >= CONTAINER_MIN_H),
+            "no containers"
+        );
         for h in heights {
             assert!(
                 (CRATE_MIN_H..=CRATE_MAX_H).contains(&h) || h >= CONTAINER_MIN_H,
@@ -1691,7 +1690,11 @@ mod tests {
         );
         step_with(&mut sim, &inputs);
         step_with(&mut sim, &inputs);
-        assert!(sim.players[0].y > 0.1, "jump did not lift: {}", sim.players[0].y);
+        assert!(
+            sim.players[0].y > 0.1,
+            "jump did not lift: {}",
+            sim.players[0].y
+        );
     }
 
     /// Fires from `shoot_y` at a target on the floor `dist` away, holding
@@ -1908,7 +1911,10 @@ mod tests {
             },
         );
         step_with(&mut sim, &inputs);
-        assert_eq!(sim.players[0].pitch, 0.0, "NaN pitch must fall back to level");
+        assert_eq!(
+            sim.players[0].pitch, 0.0,
+            "NaN pitch must fall back to level"
+        );
 
         inputs.insert(
             0,
@@ -2142,10 +2148,16 @@ mod tests {
     #[test]
     fn a_raised_shield_cancels_sprint() {
         // The rule itself, on the shared function both sides call...
-        assert_eq!(stance_speed(true, false, true), stance_speed(false, false, false));
+        assert_eq!(
+            stance_speed(true, false, true),
+            stance_speed(false, false, false)
+        );
         assert!(stance_speed(true, false, false) > stance_speed(true, false, true));
         // ...and crouch still wins over both.
-        assert_eq!(stance_speed(true, true, true), stance_speed(false, true, false));
+        assert_eq!(
+            stance_speed(true, true, true),
+            stance_speed(false, true, false)
+        );
 
         // ...and through the sim, where the client's prediction reads it.
         let run = |shield: bool| -> f32 {

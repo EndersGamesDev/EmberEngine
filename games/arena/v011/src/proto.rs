@@ -455,7 +455,10 @@ mod tests {
         assert!(s.contains("\"shield\":true"), "{s}");
         let back: PState = serde_json::from_str(&s).unwrap();
         assert!(back.shield);
-        assert_eq!(back.ack_age_ticks, 7, "the ack age has to survive the codec");
+        assert_eq!(
+            back.ack_age_ticks, 7,
+            "the ack age has to survive the codec"
+        );
 
         // And both fields decode from a frame that predates them: this is
         // what `serde(default)` buys, and it is the whole of what it buys —
