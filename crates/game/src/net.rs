@@ -169,7 +169,7 @@ impl Drop for NetClient {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Ok(mut s) = self.stream.lock() {
-            let _ = write_msg(&mut *s, &ClientMsg::Bye);
+            drop(write_msg(&mut *s, &ClientMsg::Bye));
         }
     }
 }

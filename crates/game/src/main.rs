@@ -1,3 +1,8 @@
+// Preserve established client prediction arithmetic and its rounding behavior.
+#![allow(clippy::suboptimal_flops)]
+// Angle normalization intentionally advances through floating-point turn boundaries.
+#![allow(clippy::while_float)]
+
 //! The game client: connects to an ember-server, sends movement intents,
 //! renders every player as a colored cube in the arena. Falls back to a
 //! local offline arena if the server is unreachable.
@@ -626,7 +631,7 @@ impl EmberGame for Game {
                 {
                     self.last_dir = dir;
                     self.last_input_sent = Instant::now();
-                    let _ = net.send(&ClientMsg::Input { move_dir: dir });
+                    drop(net.send(&ClientMsg::Input { move_dir: dir }));
                 }
                 if net.is_dead() && !self.reported_disconnect {
                     self.reported_disconnect = true;
