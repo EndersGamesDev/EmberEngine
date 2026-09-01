@@ -2423,6 +2423,41 @@ mod tests {
     // ---- v12: melee and headshots -------------------------------------
 
     #[test]
+    fn level_fire_at_a_crouched_target_is_a_headshot() {
+        // DELIBERATE, and pinned because it is the surprising one.
+        //
+        // Level fire is forbidden from being a free headshot in three of the
+        // four stance pairings, by assertion. This is the fourth, and it goes
+        // the other way:
+        //
+        //   standing -> standing   1.45 vs [1.56, 1.86]   body
+        //   standing -> CROUCHED   1.45 vs [1.25, 1.55]   HEAD
+        //   crouched -> standing   0.85 vs [1.56, 1.86]   body
+        //   crouched -> crouched   0.85 vs [1.25, 1.55]   body
+        //
+        // A crouched player's head rises into a standing player's eye line -
+        // which is what crouching does in life and in most shooters. And
+        // because a pitch-0 round has vy = 0, it holds 1.45 forever: this is
+        // true at EVERY range, and the shooter aiming at what looks like a
+        // chest does not have to know. Crouch is therefore a hard commitment,
+        // not free value: it still shrinks your radius, and it now also puts
+        // your head where the bullets already are.
+        //
+        // The point of the test is not the direction, it is that the next
+        // person to tune BODY_H_CROUCH finds out they changed this. It moved
+        // once already (1.25 -> 1.55) and this behaviour came with it.
+        assert!(
+            head_lo(true) < EYE_STAND && EYE_STAND < BODY_H_CROUCH,
+            "a standing muzzle {EYE_STAND} must sit inside the crouched head band [{}, {BODY_H_CROUCH}]",
+            head_lo(true)
+        );
+        assert!(
+            one_shot_kills(0.0, 5.0, 0.0, true),
+            "level fire at a crouched target is a headshot, deliberately"
+        );
+    }
+
+    #[test]
     fn the_head_band_matches_the_drawn_model() {
         // The guard for "what you see is what you hit". These numbers are the
         // rig's, not this crate's, and the only way they stay true is if
@@ -2640,9 +2675,9 @@ mod tests {
         }
     }
 
-    /// Fire one shot from `from_y` at `pitch` into a standing target `gap`
-    /// away, and report whether it died on the FIRST round that connected.
-    fn one_shot_kills(from_y: f32, gap: f32, pitch: f32) -> bool {
+    /// Fire one shot from `from_y` at `pitch` into a target `gap` away, and
+    /// report whether it died on the FIRST round that connected.
+    fn one_shot_kills(from_y: f32, gap: f32, pitch: f32, target_crouch: bool) -> bool {
         let mut sim = Sim::new(11);
         sim.obstacles.clear();
         sim.pads.clear();
@@ -2658,7 +2693,13 @@ mod tests {
                 ..Default::default()
             },
         );
-        inputs.insert(1, PlayerIn::default());
+        inputs.insert(
+            1,
+            PlayerIn {
+                crouch: target_crouch,
+                ..Default::default()
+            },
+        );
         for _ in 0..240 {
             sim.players.iter_mut().for_each(|p| match p.id {
                 0 if p.alive => {
@@ -2690,7 +2731,7 @@ mod tests {
         // and climbs tan(pitch) per unit travelled, so over 5 units a pitch of
         // 0.03 arrives at ~1.60 - the middle of the head.
         assert!(
-            one_shot_kills(0.0, 5.0, 0.03),
+            one_shot_kills(0.0, 5.0, 0.03, false),
             "a round arriving in the head band must kill from full health"
         );
     }
@@ -2700,7 +2741,7 @@ mod tests {
         // The same geometry aimed down into the chest must NOT one-shot, or
         // the head zone has swallowed the whole body.
         assert!(
-            !one_shot_kills(0.0, 5.0, -0.05),
+            !one_shot_kills(0.0, 5.0, -0.05, false),
             "a chest hit must not be lethal"
         );
     }
@@ -2718,7 +2759,7 @@ mod tests {
             BODY_H_STAND - EYE_STAND
         );
         assert!(
-            !one_shot_kills(0.0, 5.0, 0.0),
+            !one_shot_kills(0.0, 5.0, 0.0, false),
             "a flat shot between two standing players must be a body hit"
         );
     }
@@ -2753,7 +2794,7 @@ mod tests {
             "and must sit BELOW the old body-band trigger, or it proves nothing"
         );
         assert!(
-            one_shot_kills(from_y, gap, pitch),
+            one_shot_kills(from_y, gap, pitch, false),
             "a steep round through the head must still be a headshot"
         );
     }
