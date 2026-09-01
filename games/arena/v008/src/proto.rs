@@ -9,8 +9,10 @@
 
 use serde::{Deserialize, Serialize};
 
-/// v8: shots carry elevation. The added fields are all `#[serde(default)]`
-/// and so would decode across the boundary — but decoding is not the test.
+/// v8 adds shot elevation.
+///
+/// The added fields are all `#[serde(default)]` and so would decode across
+/// the boundary — but decoding is not the test.
 /// A pre-v8 client sends no pitch and therefore fires permanently level
 /// against a server whose hit volume now has a finite top, and a v8 client
 /// against a pre-v8 server reads every bullet height as a defaulted 0.0 and

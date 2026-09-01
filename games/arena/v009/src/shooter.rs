@@ -589,10 +589,10 @@ pub struct Bullet {
     pub vel: [f32; 2],
     /// Height above the arena floor, and its rate of change. Height is a
     /// scalar RIDING ALONGSIDE the 2D path rather than a third component of
-    /// it: `vel` keeps its full BULLET_SPEED magnitude at any elevation, so
+    /// it: `vel` keeps its full `BULLET_SPEED` magnitude at any elevation, so
     /// horizontal range, flight time and every timing-sensitive test behave
     /// exactly as before. The ray's DIRECTION is still exactly the shooter's
-    /// look direction, because vy/BULLET_SPEED == tan(pitch).
+    /// look direction, because `vy / BULLET_SPEED == tan(pitch)`.
     pub y: f32,
     /// Vertical velocity paired with `y`.
     pub vy: f32,
@@ -708,7 +708,12 @@ impl Sim {
     }
 
     /// Advances the simulation by exactly one frozen 60 Hz tick.
-    #[allow(clippy::too_many_lines)]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss,
+        clippy::too_many_lines
+    )]
     pub fn step(&mut self, inputs: &dyn Fn(u8) -> PlayerIn) {
         self.events.clear();
         self.tick += 1;
@@ -1110,8 +1115,8 @@ mod tests {
         let (mut neg_x, mut neg_z, mut pos_x, mut pos_z) = (false, false, false, false);
         for seed in 0..16u64 {
             for o in generate_arena(seed) {
-                let cx = (o.min[0] + o.max[0]) * 0.5;
-                let cz = (o.min[1] + o.max[1]) * 0.5;
+                let cx = f32::midpoint(o.min[0], o.max[0]);
+                let cz = f32::midpoint(o.min[1], o.max[1]);
                 neg_x |= cx < -3.0;
                 pos_x |= cx > 3.0;
                 neg_z |= cz < -3.0;
@@ -1335,7 +1340,9 @@ mod tests {
         // Hold fire long enough to empty the mag.
         let mut fired = 0u32;
         let mut prev_bullets = 0usize;
-        for _ in 0..((weapon_stats(1).cooldown / FIXED_DT) as u32 + 2) * (mag as u32 + 4) {
+        for _ in 0..((weapon_stats(1).cooldown / FIXED_DT) as u32 + 2)
+            * (u32::from(mag) + 4)
+        {
             step_with(&mut sim, &inputs);
             // Bullets fly off and expire; count spawns via ammo drops.
             let b = sim.bullets.len();
@@ -1345,7 +1352,8 @@ mod tests {
             prev_bullets = b;
         }
         assert_eq!(
-            fired, mag as u32,
+            fired,
+            u32::from(mag),
             "exactly one magazine before auto-reload gates fire"
         );
         // Let the auto-reload finish: ammo must be full again.
@@ -2051,7 +2059,7 @@ mod tests {
             defender.hp, MAX_HP,
             "a reflected round must not also damage the reflector"
         );
-        assert!(sim.events.is_empty());
+        assert_eq!(sim.events, Vec::<(u8, u8)>::new());
     }
 
     #[test]
