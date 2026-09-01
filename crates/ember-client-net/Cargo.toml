@@ -9,17 +9,21 @@ serde.workspace = true
 serde_json.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = [
+    "BinaryType",
     "CloseEvent",
     "ErrorEvent",
     "Event",
     "MessageEvent",
+    "Window",
     "WebSocket",
 ] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tungstenite.workspace = true
+rustls.workspace = true
+tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
 
 [lints]
 workspace = true
