@@ -176,6 +176,8 @@ impl ArenaSession {
         }
     }
 
+    // Keeping the frozen v12 input mapping together makes every wire field auditable.
+    #[allow(clippy::too_many_lines)]
     fn accept_input(
         &mut self,
         session_input: &SessionInputWithTransport,
