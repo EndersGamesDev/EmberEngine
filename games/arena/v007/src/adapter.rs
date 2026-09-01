@@ -209,10 +209,11 @@ impl ArenaSession {
                 reload,
                 jump,
             } => {
-                let transport_rtt_ticks = session_input.transport_rtt.map_or(
-                    INITIAL_RTT_TICKS,
-                    |duration| duration.as_micros().div_ceil(FIXED_STEP_MICROS),
-                );
+                let transport_rtt_ticks = session_input
+                    .transport_rtt
+                    .map_or(INITIAL_RTT_TICKS, |duration| {
+                        duration.as_micros().div_ceil(FIXED_STEP_MICROS)
+                    });
                 let allowed_delay = transport_rtt_ticks / 2 + 6;
                 let floor = self.sim.tick.saturating_sub(allowed_delay);
                 self.inputs.insert(
@@ -282,11 +283,13 @@ impl ArenaSession {
         let apply_tick = self.sim.tick + 1;
         let inputs = &self.inputs;
         self.sim.step(&|player_id| {
-            inputs.get(&player_id).map_or_else(PlayerIn::default, |record| {
-                let mut input = record.input;
-                input.delay_ticks = bounded_tick_age(apply_tick, record.view_tick);
-                input
-            })
+            inputs
+                .get(&player_id)
+                .map_or_else(PlayerIn::default, |record| {
+                    let mut input = record.input;
+                    input.delay_ticks = bounded_tick_age(apply_tick, record.view_tick);
+                    input
+                })
         });
         let peers = self.peer_ids();
         for (killer, victim) in self.sim.events.clone() {
@@ -355,13 +358,12 @@ impl ArenaSession {
         }
 
         let following = due.saturating_add(FIXED_STEP_MICROS);
-        let stall_limit = following
-            .saturating_add(FIXED_STEP_MICROS.saturating_mul(STALL_GRACE_STEPS));
+        let stall_limit =
+            following.saturating_add(FIXED_STEP_MICROS.saturating_mul(STALL_GRACE_STEPS));
         if now > stall_limit {
             self.run_tick(update);
-            self.next_tick_at = MonotonicTimestamp::from_micros(
-                now.saturating_add(FIXED_STEP_MICROS),
-            );
+            self.next_tick_at =
+                MonotonicTimestamp::from_micros(now.saturating_add(FIXED_STEP_MICROS));
             return true;
         }
 
@@ -380,11 +382,7 @@ impl ArenaSession {
 }
 
 impl GameSession for ArenaSession {
-    fn step(
-        &mut self,
-        timestamp: MonotonicTimestamp,
-        inputs: Vec<SessionInput>,
-    ) -> SessionUpdate {
+    fn step(&mut self, timestamp: MonotonicTimestamp, inputs: Vec<SessionInput>) -> SessionUpdate {
         self.step_with_transport(
             timestamp,
             inputs
@@ -517,8 +515,7 @@ impl GameSession for ArenaSession {
 }
 
 fn bounded_tick_age(current: u64, earlier: u64) -> u16 {
-    u16::try_from(current.saturating_sub(earlier).min(u64::from(u16::MAX)))
-        .unwrap_or(u16::MAX)
+    u16::try_from(current.saturating_sub(earlier).min(u64::from(u16::MAX))).unwrap_or(u16::MAX)
 }
 
 /// Canonical lobby data projected into Arena's legacy `LobbyList` message.
@@ -667,9 +664,7 @@ impl ArenaLegacyDecoder {
                 })
             }
             (C2S::LeaveLobby, Some(_)) => Ok(ArenaLegacyAction::LeaveLobby),
-            (C2S::Ping { nonce }, Some(_)) => {
-                Ok(ArenaLegacyAction::Reply(S2C::Pong { nonce }))
-            }
+            (C2S::Ping { nonce }, Some(_)) => Ok(ArenaLegacyAction::Reply(S2C::Pong { nonce })),
             (C2S::Input { .. }, Some(_)) => Ok(ArenaLegacyAction::Ignore),
         }
     }

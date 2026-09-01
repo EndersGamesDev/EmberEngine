@@ -556,19 +556,9 @@ impl Sim {
             // Shared movement code (also used by client prediction);
             // stance speed is server-authoritative — no speed cheats.
             let speed = stance_speed(input.sprint, input.crouch);
-            let (old_pos, feet_height, vertical_speed) = (
-                self.players[i].pos,
-                self.players[i].y,
-                self.players[i].vy,
-            );
-            let pos = move_circle(
-                old_pos,
-                feet_height,
-                input.mv,
-                speed,
-                dt,
-                &self.obstacles,
-            );
+            let (old_pos, feet_height, vertical_speed) =
+                (self.players[i].pos, self.players[i].y, self.players[i].vy);
+            let pos = move_circle(old_pos, feet_height, input.mv, speed, dt, &self.obstacles);
             let (y, vy, _grounded) = step_vertical(
                 pos,
                 feet_height,
@@ -1000,9 +990,7 @@ mod tests {
         // Hold fire long enough to empty the mag.
         let mut fired = 0u32;
         let mut prev_bullets = 0usize;
-        for _ in 0..((weapon_stats(1).cooldown / FIXED_DT) as u32 + 2)
-            * (u32::from(mag) + 4)
-        {
+        for _ in 0..((weapon_stats(1).cooldown / FIXED_DT) as u32 + 2) * (u32::from(mag) + 4) {
             step_with(&mut sim, &inputs);
             // Bullets fly off and expire; count spawns via ammo drops.
             let b = sim.bullets.len();
@@ -1267,7 +1255,10 @@ mod tests {
         let top = obstacle_height(&obs[0]);
         // Walking into the crate from outside gets stopped.
         let walked = move_circle([-3.0, 0.0], 0.0, [1.0, 0.0], MOVE_SPEED, 0.5, &obs);
-        assert!(walked[0] < -1.5 - PLAYER_R + 0.01, "walked into box: {walked:?}");
+        assert!(
+            walked[0] < -1.5 - PLAYER_R + 0.01,
+            "walked into box: {walked:?}"
+        );
         // The same move with the feet above the crate's top goes through.
         let over = move_circle([-3.0, 0.0], top + 0.1, [1.0, 0.0], MOVE_SPEED, 0.5, &obs);
         assert!(over[0] > -1.0, "could not walk over the box: {over:?}");
@@ -1305,8 +1296,14 @@ mod tests {
         // And the generator must actually produce both classes.
         let obs = generate_arena(20_260_829);
         let heights: Vec<f32> = obs.iter().map(obstacle_height).collect();
-        assert!(heights.iter().any(|h| *h <= CRATE_MAX_H), "no crates: {heights:?}");
-        assert!(heights.iter().any(|h| *h >= CONTAINER_MIN_H), "no containers");
+        assert!(
+            heights.iter().any(|h| *h <= CRATE_MAX_H),
+            "no crates: {heights:?}"
+        );
+        assert!(
+            heights.iter().any(|h| *h >= CONTAINER_MIN_H),
+            "no containers"
+        );
         for h in heights {
             assert!(
                 (CRATE_MIN_H..=CRATE_MAX_H).contains(&h) || h >= CONTAINER_MIN_H,
@@ -1334,6 +1331,10 @@ mod tests {
         );
         step_with(&mut sim, &inputs);
         step_with(&mut sim, &inputs);
-        assert!(sim.players[0].y > 0.1, "jump did not lift: {}", sim.players[0].y);
+        assert!(
+            sim.players[0].y > 0.1,
+            "jump did not lift: {}",
+            sim.players[0].y
+        );
     }
 }

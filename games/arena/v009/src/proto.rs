@@ -412,8 +412,7 @@ mod tests {
             "hp":3,"score":0,"alive":true,"crouch":false}"#;
         let decoded: PState = serde_json::from_str(old_state).unwrap();
         assert!(!decoded.shield, "an absent shield reads as lowered");
-        let old_input =
-            r#"{"t":"input","mx":0.0,"my":0.0,"ax":1.0,"az":0.0,"fire":false}"#;
+        let old_input = r#"{"t":"input","mx":0.0,"my":0.0,"ax":1.0,"az":0.0,"fire":false}"#;
         let decoded: C2S = serde_json::from_str(old_input).unwrap();
         assert!(matches!(decoded, C2S::Input { shield: false, .. }));
     }
