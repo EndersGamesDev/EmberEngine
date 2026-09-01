@@ -1112,9 +1112,7 @@ impl ComputeDevice {
             for texel in row_bytes.as_chunks::<16>().0 {
                 let mut value = [0.0_f32; 4];
                 for (component, bytes) in value.iter_mut().zip(texel.as_chunks::<4>().0) {
-                    *component = f32::from_ne_bytes(bytes.try_into().map_err(|_| {
-                        LayerError::Mapping("readback component had the wrong size".to_string())
-                    })?);
+                    *component = f32::from_ne_bytes(*bytes);
                 }
                 values.push(value);
             }
