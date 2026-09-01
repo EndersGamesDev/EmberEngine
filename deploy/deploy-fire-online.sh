@@ -189,6 +189,14 @@ echo "== health check THROUGH the public URL =="
 # on the target host with its listener up and its hub loop dead, handing out 101s and
 # closing immediately — and that check would have printed ONLINE. The probe
 # sends Hello and requires Welcome, which only the hub thread can produce.
+# Do not ask DNS for the hostname before Cloudflare has published it. A query
+# that lands too early gets NXDOMAIN, and a resolver that caches that keeps
+# serving it long after the record appears, so every later attempt fails
+# against a poisoned cache while the tunnel is fine from anywhere else. Ten
+# retries spaced 3 s was enough by luck until 2026-09-01, when it was not.
+echo "== letting the tunnel hostname propagate =="
+sleep 15
+
 ok=""
 for _ in $(seq 1 10); do
     if cargo run --release -q -p fire-server --example probe -- "$WS_URL"; then
