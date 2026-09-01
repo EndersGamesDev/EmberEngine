@@ -290,8 +290,8 @@ fn codec_preserves_exact_json_text_frames() {
 
 #[test]
 fn lobby_join_status_and_refusal_fixtures_are_frozen() {
-    let fixture: LobbyRefusalFixture = serde_json::from_str(LOBBY_REFUSAL_FIXTURE)
-        .expect("lobby and refusal fixture must decode");
+    let fixture: LobbyRefusalFixture =
+        serde_json::from_str(LOBBY_REFUSAL_FIXTURE).expect("lobby and refusal fixture must decode");
     let creation = creation(42, 1_000_000);
     let mut session = ArenaFactory::new()
         .create(&test_capabilities(), &creation)
@@ -368,9 +368,7 @@ fn timestamped_transcript_produces_authoritative_checkpoints() {
             continue;
         };
         let Some(S2C::State {
-            tick,
-            mut players,
-            ..
+            tick, mut players, ..
         }) = state
         else {
             panic!("checkpoint call did not broadcast state");
@@ -383,4 +381,3 @@ fn timestamped_transcript_produces_authoritative_checkpoints() {
         assert_eq!(player.crouch, checkpoint.crouch);
     }
 }
-

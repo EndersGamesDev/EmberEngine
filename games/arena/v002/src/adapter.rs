@@ -246,9 +246,8 @@ impl ArenaSession {
     fn run_tick(&mut self, update: &mut SessionUpdate) {
         self.tick += 1;
         let inputs = &self.inputs;
-        self.sim.step(&|player_id| {
-            inputs.get(&player_id).copied().unwrap_or_default()
-        });
+        self.sim
+            .step(&|player_id| inputs.get(&player_id).copied().unwrap_or_default());
 
         let peers = self.peer_ids();
         for (killer, victim) in self.sim.events.clone() {
@@ -300,8 +299,8 @@ impl ArenaSession {
         }
 
         let following = due.saturating_add(FIXED_STEP_MICROS);
-        let stall_limit = following
-            .saturating_add(FIXED_STEP_MICROS.saturating_mul(STALL_GRACE_STEPS));
+        let stall_limit =
+            following.saturating_add(FIXED_STEP_MICROS.saturating_mul(STALL_GRACE_STEPS));
         if now > stall_limit {
             self.run_tick(update);
             self.next_tick_at =
@@ -324,11 +323,7 @@ impl ArenaSession {
 }
 
 impl GameSession for ArenaSession {
-    fn step(
-        &mut self,
-        timestamp: MonotonicTimestamp,
-        inputs: Vec<SessionInput>,
-    ) -> SessionUpdate {
+    fn step(&mut self, timestamp: MonotonicTimestamp, inputs: Vec<SessionInput>) -> SessionUpdate {
         self.pending_inputs.extend(inputs);
         let mut update = SessionUpdate::default();
         self.accept_ready_inputs(timestamp, &mut update);
@@ -440,4 +435,3 @@ impl GameSession for ArenaSession {
         }
     }
 }
-

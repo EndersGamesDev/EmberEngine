@@ -138,7 +138,7 @@ pub struct Sim {
 
 impl Sim {
     #[must_use]
-/// Executes the frozen Arena v2 new operation.
+    /// Executes the frozen Arena v2 new operation.
     pub fn new(seed: u64) -> Self {
         Self {
             obstacles: generate_arena(seed),
@@ -149,7 +149,7 @@ impl Sim {
     }
 
     #[allow(clippy::cast_possible_truncation)]
-/// Executes the frozen Arena v2 add player operation.
+    /// Executes the frozen Arena v2 add player operation.
     pub fn add_player(&mut self, id: u8) {
         let slot = self.players.len() as u32;
         self.players.push(PlayerSt {
@@ -165,7 +165,7 @@ impl Sim {
         });
     }
 
-/// Executes the frozen Arena v2 remove player operation.
+    /// Executes the frozen Arena v2 remove player operation.
     pub fn remove_player(&mut self, id: u8) {
         self.players.retain(|p| p.id != id);
         self.bullets.retain(|b| b.owner != id);
@@ -188,7 +188,7 @@ impl Sim {
         clippy::cast_precision_loss,
         clippy::too_many_lines
     )]
-/// Executes the frozen Arena v2 step operation.
+    /// Executes the frozen Arena v2 step operation.
     pub fn step(&mut self, inputs: &dyn Fn(u8) -> PlayerIn) {
         self.events.clear();
         let dt = FIXED_DT;
@@ -223,9 +223,17 @@ impl Sim {
             }
             let pos = self.players[i].pos;
             let try_x = [pos[0] + mv[0] * MOVE_SPEED * dt, pos[1]];
-            let pos = if self.blocked(try_x, PLAYER_R) { pos } else { try_x };
+            let pos = if self.blocked(try_x, PLAYER_R) {
+                pos
+            } else {
+                try_x
+            };
             let try_z = [pos[0], pos[1] + mv[1] * MOVE_SPEED * dt];
-            let pos = if self.blocked(try_z, PLAYER_R) { pos } else { try_z };
+            let pos = if self.blocked(try_z, PLAYER_R) {
+                pos
+            } else {
+                try_z
+            };
             let p = &mut self.players[i];
             p.pos = pos;
 
@@ -301,7 +309,9 @@ impl Sim {
 
         // Apply damage after the bullet pass (avoids double-borrow).
         for (owner, victim) in hits {
-            let Some(v) = self.players.iter_mut().find(|p| p.id == victim) else { continue };
+            let Some(v) = self.players.iter_mut().find(|p| p.id == victim) else {
+                continue;
+            };
             if !v.alive {
                 continue;
             }
@@ -346,7 +356,14 @@ mod tests {
         sim.add_player(0);
         sim.players[0].pos = [ARENA_HALF - PLAYER_R - 0.05, 0.0];
         let mut inputs = HashMap::new();
-        inputs.insert(0, PlayerIn { mv: [1.0, 0.0], aim: [1.0, 0.0], fire: false });
+        inputs.insert(
+            0,
+            PlayerIn {
+                mv: [1.0, 0.0],
+                aim: [1.0, 0.0],
+                fire: false,
+            },
+        );
         for _ in 0..30 {
             step_with(&mut sim, &inputs);
         }
@@ -362,7 +379,14 @@ mod tests {
         sim.players[0].pos = [-5.0, 0.0];
         sim.players[1].pos = [5.0, 0.0];
         let mut inputs = HashMap::new();
-        inputs.insert(0, PlayerIn { mv: [0.0, 0.0], aim: [1.0, 0.0], fire: true });
+        inputs.insert(
+            0,
+            PlayerIn {
+                mv: [0.0, 0.0],
+                aim: [1.0, 0.0],
+                fire: true,
+            },
+        );
         let mut killed_at = None;
         for i in 0..600 {
             // Keep the victim parked.
@@ -402,7 +426,14 @@ mod tests {
         sim.players[0].pos = [0.0, 0.0];
         let mut inputs = HashMap::new();
         // Fire along +x forever with no cooldown constraint violations.
-        inputs.insert(0, PlayerIn { mv: [0.0, 0.0], aim: [1.0, 0.0], fire: true });
+        inputs.insert(
+            0,
+            PlayerIn {
+                mv: [0.0, 0.0],
+                aim: [1.0, 0.0],
+                fire: true,
+            },
+        );
         for _ in 0..240 {
             step_with(&mut sim, &inputs);
             // Teleport bullets back so they never expire or leave.
@@ -415,4 +446,3 @@ mod tests {
         }
     }
 }
-

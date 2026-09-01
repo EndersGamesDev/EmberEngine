@@ -254,11 +254,22 @@ mod tests {
             id: 2,
             seed: 987_654_321,
             arena_half: 24.0,
-            players: vec![PlayerMeta { id: 2, handle: "ender".into(), color: color_for(2) }],
+            players: vec![PlayerMeta {
+                id: 2,
+                handle: "ender".into(),
+                color: color_for(2),
+            }],
         })
         .unwrap();
         let back: S2C = serde_json::from_str(&s).unwrap();
-        assert!(matches!(back, S2C::GameJoined { id: 2, seed: 987_654_321, .. }));
+        assert!(matches!(
+            back,
+            S2C::GameJoined {
+                id: 2,
+                seed: 987_654_321,
+                ..
+            }
+        ));
     }
 
     #[test]
