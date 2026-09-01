@@ -48,10 +48,10 @@ fn pump(ws: &mut Client, dur: Duration, mut f: impl FnMut(S2C) -> bool) -> bool 
     while t0.elapsed() < dur {
         match ws.read() {
             Ok(Message::Text(t)) => {
-                if let Ok(m) = serde_json::from_str::<S2C>(&t) {
-                    if f(m) {
-                        return true;
-                    }
+                if let Ok(m) = serde_json::from_str::<S2C>(&t)
+                    && f(m)
+                {
+                    return true;
                 }
             }
             Ok(_) => {}

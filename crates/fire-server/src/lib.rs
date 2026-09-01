@@ -109,7 +109,7 @@ impl Lobby {
         }
     }
 
-    fn phase(&self) -> Phase {
+    const fn phase(&self) -> Phase {
         match self.race.state {
             RaceState::Waiting => Phase::Waiting,
             RaceState::Countdown => Phase::Countdown,
@@ -125,6 +125,13 @@ impl Lobby {
     }
 }
 
+/// Run the lobby server until the listener closes.
+///
+/// # Errors
+///
+/// Returns an error if the listener's local address cannot be queried.
+// The server owns and eventually closes the listener; changing this public signature would break callers.
+#[allow(clippy::needless_pass_by_value)]
 pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
     let local = listener.local_addr()?;
     tracing::info!(
@@ -135,9 +142,8 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
     );
 
     let (events_tx, events_rx) = mpsc::channel::<Ev>();
-    let hub_cfg = cfg.clone();
     let hub = thread::spawn(move || {
-        if let Err(e) = hub_loop(events_rx, hub_cfg) {
+        if let Err(e) = hub_loop(&events_rx, &cfg) {
             tracing::error!("hub loop died: {e}");
         }
     });
@@ -149,7 +155,7 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
                 let id = next_id;
                 next_id += 1;
                 let tx = events_tx.clone();
-                thread::spawn(move || conn_thread(id, s, tx));
+                thread::spawn(move || conn_thread(id, s, &tx));
             }
             Err(e) => tracing::warn!("accept failed: {e}"),
         }
@@ -159,8 +165,10 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
     Ok(())
 }
 
-fn conn_thread(id: u64, stream: TcpStream, events_tx: Sender<Ev>) {
-    let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_else(|_| "?".into());
+fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
+    let peer = stream
+        .peer_addr()
+        .map_or_else(|_| "?".into(), |address| address.to_string());
     let _ = stream.set_nodelay(true);
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(15)));
@@ -315,7 +323,7 @@ fn roster(lobby: &Lobby, conns: &HashMap<u64, Conn>) -> Vec<PlayerMeta> {
         .collect()
 }
 
-fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
+fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
     let mut conns: HashMap<u64, Conn> = HashMap::new();
     let mut lobbies: HashMap<String, Lobby> = HashMap::new();
     // Accumulate real elapsed time and run the whole ticks it owes, rather
@@ -333,21 +341,25 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
         // rather than the next one.
         loop {
             match events_rx.try_recv() {
-                Ok(ev) => handle_event(ev, &mut conns, &mut lobbies, &cfg),
+                Ok(ev) => handle_event(ev, &mut conns, &mut lobbies, cfg),
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
             }
         }
 
-        for c in conns.values_mut() {
-            c.msgs_this_tick = 0;
-        }
-
         let now = Instant::now();
         let elapsed = now.duration_since(last).as_secs_f32();
         last = now;
-        for _ in 0..clock.ticks(elapsed) {
-            tick_lobbies(&mut lobbies, &conns, &cfg);
+        let ticks = clock.ticks(elapsed);
+        for _ in 0..ticks {
+            tick_lobbies(&mut lobbies, &conns, cfg);
+        }
+        if ticks > 0 {
+            // Count all messages between simulation ticks, not merely between
+            // the hub's much faster polling iterations.
+            for conn in conns.values_mut() {
+                conn.msgs_this_tick = 0;
+            }
         }
         drop_silent(&mut conns, &mut lobbies);
 
@@ -377,7 +389,7 @@ fn tick_lobbies(lobbies: &mut HashMap<String, Lobby>, conns: &HashMap<u64, Conn>
         // Build the full grid: humans where they sit, AI everywhere else.
         let inputs: Vec<CarInput> = (0..lobby.race.racers.len())
             .map(|i| {
-                let slot = i as u8;
+                let slot = u8::try_from(i).expect("race grid fits in a wire player id");
                 match lobby.inputs.get(&slot) {
                     Some((input, _)) => *input,
                     None => {
@@ -407,7 +419,12 @@ fn tick_lobbies(lobbies: &mut HashMap<String, Lobby>, conns: &HashMap<u64, Conn>
             lobby.last_phase = phase;
             broadcast(conns, lobby, &S2C::Phase { phase, countdown: lobby.race.countdown_left() });
             if phase == Phase::Finished {
-                let order: Vec<u8> = lobby.race.standings().iter().map(|&i| i as u8).collect();
+                let order: Vec<u8> = lobby
+                    .race
+                    .standings()
+                    .iter()
+                    .map(|&i| u8::try_from(i).expect("race grid fits in a wire player id"))
+                    .collect();
                 broadcast(conns, lobby, &S2C::Results { order });
                 lobby.results_left = RESULTS_SECS;
             }
@@ -428,19 +445,22 @@ fn tick_lobbies(lobbies: &mut HashMap<String, Lobby>, conns: &HashMap<u64, Conn>
                 .racers
                 .iter()
                 .enumerate()
-                .map(|(i, r)| CarState {
-                    id: i as u8,
-                    x: r.car.pos.x,
-                    z: r.car.pos.y,
-                    yaw: r.car.yaw,
-                    vx: r.car.vel.x,
-                    vz: r.car.vel.y,
-                    lap: r.lap.lap,
-                    progress: r.lap.progress,
-                    boost: r.car.boost_charges,
-                    boosting: r.car.boosting(),
-                    drift: r.car.drift,
-                    ack: lobby.inputs.get(&(i as u8)).map(|(_, s)| *s).unwrap_or(0),
+                .map(|(i, racer)| {
+                    let id = u8::try_from(i).expect("race grid fits in a wire player id");
+                    CarState {
+                        id,
+                        x: racer.car.pos.x,
+                        z: racer.car.pos.y,
+                        yaw: racer.car.yaw,
+                        vx: racer.car.vel.x,
+                        vz: racer.car.vel.y,
+                        lap: racer.lap.lap,
+                        progress: racer.lap.progress,
+                        boost: racer.car.boost_charges,
+                        boosting: racer.car.boosting(),
+                        drift: racer.car.drift,
+                        ack: lobby.inputs.get(&id).map_or(0, |(_, sequence)| *sequence),
+                    }
                 })
                 .collect();
             broadcast(conns, lobby, &S2C::State { tick: lobby.race.tick, cars });
@@ -555,7 +575,8 @@ fn handle_msg(
                         .and_then(|c| c.handle.clone())
                         .unwrap_or_else(|| "?".into()),
                     has_password: l.password.is_some(),
-                    players: l.members.len() as u8,
+                    players: u8::try_from(l.members.len())
+                        .expect("lobby membership is bounded by MAX_PLAYERS"),
                     cap: MAX_PLAYERS,
                     racing: l.race.state != RaceState::Waiting,
                 })
@@ -617,7 +638,7 @@ fn handle_msg(
                 Some((held, last_seq)) => {
                     // Out-of-order or replayed packets must not rewind the
                     // car's intent. A stale packet is simply dropped.
-                    if seq < *last_seq {
+                    if seq <= *last_seq {
                         return;
                     }
                     // A boost press latches until a tick consumes it, so a
@@ -641,14 +662,14 @@ fn handle_msg(
 
 /// The join gate: exact version equality, and a reason the player can read.
 fn version_ok(id: u64, conns: &HashMap<u64, Conn>) -> bool {
-    let v = conns.get(&id).map(|c| c.proto).unwrap_or(0);
+    let v = conns.get(&id).map_or(0, |c| c.proto);
     if v == proto::PROTO_VERSION {
         return true;
     }
     // `handle` is set by Hello alongside `proto`, so a None handle here means
     // no Hello was ever processed for this connection — a very different fault
     // from a genuinely stale client, and worth telling apart in the log.
-    let saw_hello = conns.get(&id).map(|c| c.handle.is_some()).unwrap_or(false);
+    let saw_hello = conns.get(&id).is_some_and(|c| c.handle.is_some());
     tracing::warn!(conn = id, proto = v, saw_hello, "refusing on protocol version");
     send_to(
         conns,
@@ -679,13 +700,12 @@ fn join_lobby(
         send_to(conns, id, &S2C::Rejected { reason: "no such lobby".into() });
         return;
     };
-    if !creating {
-        if let Some(want) = &lobby.password {
-            if password.unwrap_or("") != want {
-                send_to(conns, id, &S2C::Rejected { reason: "wrong password".into() });
-                return;
-            }
-        }
+    if !creating
+        && let Some(want) = &lobby.password
+        && password.unwrap_or("") != want
+    {
+        send_to(conns, id, &S2C::Rejected { reason: "wrong password".into() });
+        return;
     }
     let Some(slot) = lobby.alloc_slot() else {
         send_to(conns, id, &S2C::Rejected { reason: "lobby is full".into() });
@@ -753,7 +773,8 @@ mod tests {
         let mut l = Lobby::new(None, 3);
         for (i, m) in members.iter().enumerate() {
             l.members.push(*m);
-            l.slots.insert(*m, i as u8);
+            l.slots
+                .insert(*m, u8::try_from(i).expect("test lobby fits in a wire player id"));
         }
         l
     }
@@ -769,7 +790,7 @@ mod tests {
 
     #[test]
     fn a_full_lobby_has_no_slot_left() {
-        let members: Vec<u64> = (0..MAX_PLAYERS as u64).collect();
+        let members: Vec<u64> = (0..u64::from(MAX_PLAYERS)).collect();
         let l = lobby_with(&members);
         assert_eq!(l.alloc_slot(), None);
     }
@@ -867,6 +888,7 @@ mod tests {
             );
         };
         send(10, 1.0, &mut conns, &mut lobbies);
+        send(10, -1.0, &mut conns, &mut lobbies); // replay, must also be dropped
         send(5, -1.0, &mut conns, &mut lobbies); // stale, must be dropped
         let (held, seq) = lobbies["t"].inputs[&0];
         assert_eq!(seq, 10);
