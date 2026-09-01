@@ -20,7 +20,7 @@ use ember_engine::{
     Camera, EmberGame, EngineConfig, Frame, InputState, Instance, KeyCode, MeshData, MeshVertex,
     TextureData,
 };
-use ember_net::{ClientMsg, ARENA_HALF, MOVE_SPEED};
+use ember_net::{ARENA_HALF, ClientMsg, MOVE_SPEED};
 
 use net::NetClient;
 use world::World;
@@ -231,12 +231,13 @@ fn mesh_bounds(mesh: &MeshData) -> ([f32; 3], [f32; 3]) {
 /// operator (assets/models/swat.glb, textured) over the AI-generated
 /// character.glb. Returns meshes, placement info, and whether the swat
 /// model won (it then outranks the jointed rig visually).
-fn load_mesh_character(
-    first_mesh: u32,
-) -> (Vec<MeshData>, Option<character::MeshCharacter>, bool) {
+fn load_mesh_character(first_mesh: u32) -> (Vec<MeshData>, Option<character::MeshCharacter>, bool) {
     let candidates = [
         (
-            format!("{}/../../assets/models/swat.glb", env!("CARGO_MANIFEST_DIR")),
+            format!(
+                "{}/../../assets/models/swat.glb",
+                env!("CARGO_MANIFEST_DIR")
+            ),
             true,
         ),
         ("assets/models/swat.glb".to_string(), true),
@@ -764,7 +765,10 @@ fn load_rig_character(
     }
     let rig_character = if sources.has_base() && character_preference != "puppet" {
         let rig = character::veteran_rig(&sources);
-        tracing::info!("jointed rig character assembled ({} parts)", rig.parts.len());
+        tracing::info!(
+            "jointed rig character assembled ({} parts)",
+            rig.parts.len()
+        );
         Some(rig)
     } else {
         None
@@ -778,29 +782,22 @@ fn load_game_assets() -> GameAssets {
     let (character_meshes, mesh_character, swat_loaded) =
         load_mesh_character(MESH_MONUMENT + monument_parts);
     let character_preference = std::env::var("EMBER_CHAR").unwrap_or_default();
-    let (skinned_meshes, skinned_character) =
-        if character_preference == "rig" || character_preference == "mesh" {
-            (Vec::new(), None)
-        } else {
-            load_skinned_character(
-                MESH_MONUMENT + monument_parts + mesh_count(character_meshes.len()),
-            )
-        };
+    let (skinned_meshes, skinned_character) = if character_preference == "rig"
+        || character_preference == "mesh"
+    {
+        (Vec::new(), None)
+    } else {
+        load_skinned_character(MESH_MONUMENT + monument_parts + mesh_count(character_meshes.len()))
+    };
     let prefer_mesh = swat_loaded && character_preference == "mesh";
     let (part_meshes, part_character, part_sources) = load_part_character(
-        MESH_MONUMENT
-            + monument_parts
-            + mesh_count(character_meshes.len() + skinned_meshes.len()),
+        MESH_MONUMENT + monument_parts + mesh_count(character_meshes.len() + skinned_meshes.len()),
     );
     let next_id = MESH_MONUMENT
         + monument_parts
         + mesh_count(character_meshes.len() + skinned_meshes.len() + part_meshes.len());
-    let (extra_meshes, rig_character) = load_rig_character(
-        next_id,
-        &part_sources,
-        &monument,
-        &character_preference,
-    );
+    let (extra_meshes, rig_character) =
+        load_rig_character(next_id, &part_sources, &monument, &character_preference);
 
     let mut meshes = vec![
         plane_mesh(12.0, load_texture("floor_basalt.png")),

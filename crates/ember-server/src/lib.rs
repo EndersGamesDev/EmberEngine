@@ -16,8 +16,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use ember_net::{
-    color_for, read_msg, sanitize_dir, sanitize_name, write_msg, ClientMsg, PlayerId, PlayerMeta,
-    PlayerState, ServerMsg, ARENA_HALF, CLIENT_TIMEOUT_SECS, MOVE_SPEED, PROTOCOL_VERSION, TICK_HZ,
+    ARENA_HALF, CLIENT_TIMEOUT_SECS, ClientMsg, MOVE_SPEED, PROTOCOL_VERSION, PlayerId, PlayerMeta,
+    PlayerState, ServerMsg, TICK_HZ, color_for, read_msg, sanitize_dir, sanitize_name, write_msg,
 };
 
 pub struct ServerConfig {
@@ -231,12 +231,7 @@ impl Read for DeadlineReader<'_> {
     }
 }
 
-fn spawn_reader(
-    conn: u64,
-    stream: TcpStream,
-    events_tx: Sender<Event>,
-    frame_deadline: Duration,
-) {
+fn spawn_reader(conn: u64, stream: TcpStream, events_tx: Sender<Event>, frame_deadline: Duration) {
     thread::spawn(move || {
         let mut stream = stream;
         // Makes the deadline below enforceable: without it a read parks in

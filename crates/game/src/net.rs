@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ember_net::{
-    read_msg, write_msg, ClientMsg, PlayerId, PlayerMeta, ServerMsg, PROTOCOL_VERSION,
+    ClientMsg, PROTOCOL_VERSION, PlayerId, PlayerMeta, ServerMsg, read_msg, write_msg,
 };
 
 /// The server snapshots at 60 Hz; this much silence means it is gone.

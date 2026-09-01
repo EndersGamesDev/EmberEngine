@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use ember_net::{read_msg, write_msg, ClientMsg, PlayerId, ServerMsg, PROTOCOL_VERSION};
+use ember_net::{ClientMsg, PROTOCOL_VERSION, PlayerId, ServerMsg, read_msg, write_msg};
 
 #[derive(Default)]
 struct Stats {
@@ -113,28 +113,30 @@ fn main() {
         let stats = Arc::clone(&stats);
         let dead = Arc::clone(&dead);
         let mut reader = stream.try_clone().unwrap();
-        std::thread::spawn(move || loop {
-            match read_msg::<_, ServerMsg>(&mut reader) {
-                Ok(ServerMsg::Snapshot { players, .. }) => {
-                    let mut s = stats.lock().unwrap();
-                    s.snapshots += 1;
-                    s.max_players = s.max_players.max(players.len());
-                    if let Some(me) = players.iter().find(|p| p.id == my_id) {
-                        if s.first_pos.is_none() {
-                            s.first_pos = Some(me.pos);
+        std::thread::spawn(move || {
+            loop {
+                match read_msg::<_, ServerMsg>(&mut reader) {
+                    Ok(ServerMsg::Snapshot { players, .. }) => {
+                        let mut s = stats.lock().unwrap();
+                        s.snapshots += 1;
+                        s.max_players = s.max_players.max(players.len());
+                        if let Some(me) = players.iter().find(|p| p.id == my_id) {
+                            if s.first_pos.is_none() {
+                                s.first_pos = Some(me.pos);
+                            }
+                            s.last_pos = Some(me.pos);
                         }
-                        s.last_pos = Some(me.pos);
                     }
-                }
-                Ok(ServerMsg::Pong { nonce }) => {
-                    let sent_ms = f64::from(nonce);
-                    let now_ms = started.elapsed().as_secs_f64() * 1000.0;
-                    stats.lock().unwrap().rtts_ms.push(now_ms - sent_ms);
-                }
-                Ok(_) => {}
-                Err(_) => {
-                    dead.store(true, Ordering::Relaxed);
-                    break;
+                    Ok(ServerMsg::Pong { nonce }) => {
+                        let sent_ms = f64::from(nonce);
+                        let now_ms = started.elapsed().as_secs_f64() * 1000.0;
+                        stats.lock().unwrap().rtts_ms.push(now_ms - sent_ms);
+                    }
+                    Ok(_) => {}
+                    Err(_) => {
+                        dead.store(true, Ordering::Relaxed);
+                        break;
+                    }
                 }
             }
         });

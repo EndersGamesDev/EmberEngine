@@ -4,7 +4,7 @@ use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
-use ember_net::{read_msg, write_msg, ClientMsg, PlayerId, ServerMsg, PROTOCOL_VERSION};
+use ember_net::{ClientMsg, PROTOCOL_VERSION, PlayerId, ServerMsg, read_msg, write_msg};
 use ember_server::ServerConfig;
 
 fn start_server() -> u16 {
@@ -29,9 +29,7 @@ fn start_server_with(cfg: ServerConfig) -> u16 {
 fn try_join(port: u16, name: &str) -> Option<TcpStream> {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).ok()?;
     stream.set_nodelay(true).ok()?;
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .ok()?;
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
     write_msg(
         &mut stream,
         &ClientMsg::Hello {

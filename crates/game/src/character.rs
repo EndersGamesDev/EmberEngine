@@ -72,7 +72,7 @@ pub use ember_engine::puppet::{MeshPart, PartCharacter};
 
 /// Jointed rig veteran: shared engine implementation (also used by the web
 /// arena build).
-pub use ember_engine::rig::{veteran_rig, PartSource, RigCharacter};
+pub use ember_engine::rig::{PartSource, RigCharacter, veteran_rig};
 
 /// A full-body character mesh (AI-generated GLB), bounds-normalized at
 /// registration so any authoring scale/origin stands feet-on-ground.
