@@ -1,12 +1,11 @@
 [package]
-name = "ember-net"
+name = "ember-legacy"
 edition.workspace = true
 version.workspace = true
 
 [dependencies]
 serde.workspace = true
-serde_json.workspace = true
-postcard.workspace = true
+toml.workspace = true
 
 [lints]
 workspace = true

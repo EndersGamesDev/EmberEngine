@@ -1,0 +1,20 @@
+# Limits profiles are deliberate placeholders until the build estate can
+# measure CPU, memory, outbound-byte, lobby, and step-time budgets.
+
+[[games]]
+game_id = "arena"
+game_version = 12
+package = "ember-game-arena-v12"
+latest = true
+limits_profile = "estate-measurement-required-arena-v12"
+fixture_suite = "arena-v12-hosted-contract"
+legacy_game = "arena"
+
+[[games]]
+game_id = "fire"
+game_version = 1
+package = "ember-game-fire-v1"
+latest = true
+limits_profile = "estate-measurement-required-fire-v1"
+fixture_suite = "fire-v1-hosted-contract"
+legacy_game = "fire"
