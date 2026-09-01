@@ -1,3 +1,6 @@
+// Preserve the server simulation's established floating-point operation ordering.
+#![allow(clippy::suboptimal_flops)]
+
 //! Headless dedicated server.
 //!
 //! Architecture: all game state lives on ONE simulation thread that runs a
@@ -167,11 +170,10 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
                         continue;
                     }
                 };
-                let (peer, ip) = match stream.peer_addr() {
-                    Ok(a) => (a.to_string(), Some(a.ip())),
-                    Err(_) => ("?".to_string(), None),
-                };
-                let _ = stream.set_nodelay(true);
+                let (peer, ip) = stream
+                    .peer_addr()
+                    .map_or_else(|_| ("?".to_string(), None), |a| (a.to_string(), Some(a.ip())));
+                drop(stream.set_nodelay(true));
                 let conn = next_conn;
                 next_conn += 1;
                 if events_tx
@@ -238,7 +240,7 @@ fn spawn_reader(conn: u64, stream: TcpStream, events_tx: Sender<Event>, frame_de
         // the kernel indefinitely and the deadline is never consulted. If
         // it cannot be set, the sim thread's timeout sweep is still the
         // outer bound, so this is a degradation, not a failure.
-        let _ = stream.set_read_timeout(Some(READ_POLL));
+        drop(stream.set_read_timeout(Some(READ_POLL)));
         // Ends on EOF, reset, protocol garbage, or the frame deadline.
         loop {
             let mut reader = DeadlineReader {
@@ -253,14 +255,14 @@ fn spawn_reader(conn: u64, stream: TcpStream, events_tx: Sender<Event>, frame_de
                 break;
             }
         }
-        let _ = events_tx.send(Event::Disconnected { conn });
+        drop(events_tx.send(Event::Disconnected { conn }));
     });
 }
 
 fn spawn_writer(mut stream: TcpStream) -> SyncSender<ServerMsg> {
     let (tx, rx) = mpsc::sync_channel::<ServerMsg>(OUTBOUND_QUEUE);
     thread::spawn(move || {
-        let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
+        drop(stream.set_write_timeout(Some(WRITE_TIMEOUT)));
         // Drains queued messages even after all senders drop, so a final
         // Reject still reaches the peer before the shutdown below.
         for msg in rx {
@@ -270,7 +272,7 @@ fn spawn_writer(mut stream: TcpStream) -> SyncSender<ServerMsg> {
         }
         // Unblocks the reader thread too: shutdown applies to the socket,
         // not just this clone.
-        let _ = stream.shutdown(Shutdown::Both);
+        drop(stream.shutdown(Shutdown::Both));
     });
     tx
 }
@@ -497,7 +499,7 @@ fn handle_connected(
     let conn_cap = cfg.max_players * 2 + 16;
     if conns.len() >= conn_cap {
         tracing::warn!("conn {conn} ({peer}): connection cap {conn_cap} reached, refusing");
-        let _ = stream.shutdown(Shutdown::Both);
+        drop(stream.shutdown(Shutdown::Both));
         return;
     }
     // Per-IP cap, so one host cannot occupy the global cap above. Counted
@@ -511,7 +513,7 @@ fn handle_connected(
                 "conn {conn} ({peer}): per-ip cap {} reached, refusing",
                 cfg.max_conns_per_ip
             );
-            let _ = stream.shutdown(Shutdown::Both);
+            drop(stream.shutdown(Shutdown::Both));
             return;
         }
     }
@@ -621,11 +623,11 @@ fn handle_hello(
 ) {
     if protocol != PROTOCOL_VERSION {
         if let Some(c) = conns.get(&conn) {
-            let _ = c.tx.try_send(ServerMsg::Reject {
+            drop(c.tx.try_send(ServerMsg::Reject {
                 reason: format!(
                     "protocol mismatch: server v{PROTOCOL_VERSION}, client v{protocol}"
                 ),
-            });
+            }));
         }
         remove_conn(conn, conns);
         return;
@@ -633,9 +635,9 @@ fn handle_hello(
     let joined = conns.values().filter(|c| c.player.is_some()).count();
     if joined >= cfg.max_players {
         if let Some(c) = conns.get(&conn) {
-            let _ = c.tx.try_send(ServerMsg::Reject {
+            drop(c.tx.try_send(ServerMsg::Reject {
                 reason: "server full".into(),
-            });
+            }));
         }
         remove_conn(conn, conns);
         return;
@@ -680,18 +682,18 @@ fn handle_hello(
         })
         .collect();
     if let Some(c) = conns.get(&conn) {
-        let _ = c.tx.try_send(ServerMsg::Welcome {
+        drop(c.tx.try_send(ServerMsg::Welcome {
             id,
             tick_hz: TICK_HZ,
             arena_half: ARENA_HALF,
             roster,
-        });
+        }));
     }
     for (&other_id, other) in &*conns {
         if other_id != conn && other.player.is_some() {
-            let _ = other
+            drop(other
                 .tx
-                .try_send(ServerMsg::PlayerJoined { meta: meta.clone() });
+                .try_send(ServerMsg::PlayerJoined { meta: meta.clone() }));
         }
     }
     tracing::info!("conn {conn}: joined as {:?} \"{name}\"", id);
@@ -703,12 +705,12 @@ fn remove_conn(conn: u64, conns: &mut HashMap<u64, Conn>) {
     // writer thread after it drains (any final Reject still goes out), and
     // the writer's own WRITE_TIMEOUT bounds its lifetime even if the peer
     // has stopped reading.
-    let _ = c.sock.shutdown(Shutdown::Read);
+    drop(c.sock.shutdown(Shutdown::Read));
     if let Some(p) = c.player {
         tracing::info!("conn {conn} ({}): {:?} \"{}\" left", c.peer, p.id, p.name);
         for other in conns.values() {
             if other.player.is_some() {
-                let _ = other.tx.try_send(ServerMsg::PlayerLeft { id: p.id });
+                drop(other.tx.try_send(ServerMsg::PlayerLeft { id: p.id }));
             }
         }
     }

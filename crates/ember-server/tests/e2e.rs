@@ -18,7 +18,7 @@ fn start_server_with(cfg: ServerConfig) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        let _ = ember_server::run(listener, cfg);
+        drop(ember_server::run(listener, cfg));
     });
     port
 }
@@ -50,7 +50,7 @@ fn try_join(port: u16, name: &str) -> Option<TcpStream> {
 /// against a server that enforces nothing.
 fn stream_ended(s: &mut TcpStream, within: Duration) -> bool {
     let deadline = Instant::now() + within;
-    let _ = s.set_read_timeout(Some(Duration::from_millis(100)));
+    drop(s.set_read_timeout(Some(Duration::from_millis(100))));
     let mut buf = [0u8; 512];
     while Instant::now() < deadline {
         match s.read(&mut buf) {
