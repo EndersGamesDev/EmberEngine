@@ -3,7 +3,9 @@
 //!     pong-app                                              # local 2P
 //!     pong-app online URL create|join LOBBY [PASSWORD|-] [HANDLE]
 
-fn main() {
+use std::process::ExitCode;
+
+fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("online") {
         let usage = "usage: pong-app online URL create|join LOBBY [PASSWORD|-] [HANDLE]";
@@ -19,10 +21,11 @@ fn main() {
                 .unwrap_or_else(|| "player".into()),
         };
         if let Err(e) = pong::run_online(cfg) {
-            eprintln!("online mode failed: {e}");
-            std::process::exit(1);
+            tracing::error!(error = %e, "online mode failed");
+            return ExitCode::FAILURE;
         }
     } else {
         pong::run_local();
     }
+    ExitCode::SUCCESS
 }

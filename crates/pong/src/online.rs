@@ -4,14 +4,15 @@
 //! shield in the other.
 
 use std::collections::{HashMap, VecDeque};
+use std::fmt::Write as _;
 
 use ember_engine::glam::{Quat, Vec2, Vec3};
 use ember_engine::{Camera, EmberGame, Frame, InputState, Instance, KeyCode, MouseButton};
-use pong_core::proto::{BState, PState, PlayerMeta, C2S, PROTO_VERSION, S2C, STATE_EVERY_TICKS};
+use pong_core::proto::{BState, C2S, PROTO_VERSION, PState, PlayerMeta, S2C, STATE_EVERY_TICKS};
 use pong_core::shooter::{
-    generate_arena, generate_pads, move_circle, obstacle_height, stance_speed, step_vertical,
-    weapon_name, weapon_stats, Obstacle, EYE_CROUCH, EYE_STAND, FIXED_DT, MAX_HP, MAX_PITCH,
-    RELOAD_SECS,
+    EYE_CROUCH, EYE_STAND, FIXED_DT, MAX_HP, MAX_PITCH, Obstacle, RELOAD_SECS, generate_arena,
+    generate_pads, move_circle, obstacle_height, stance_speed, step_vertical, weapon_name,
+    weapon_stats,
 };
 use serde::Deserialize;
 
@@ -43,7 +44,8 @@ pub(crate) fn load_assets() -> (Vec<ember_engine::MeshData>, Option<Assets>) {
             let mut assets = Assets::default();
             for p in parts {
                 let part = Part {
-                    mesh: meshes.len() as u32 + 1, // 0 is the built-in cube
+                    mesh: u32::try_from(meshes.len()).expect("viewmodel mesh count fits in u32")
+                        + 1, // 0 is the built-in cube
                     color: Vec3::from_array(p.color),
                     is_strip: p.name == "strip",
                 };
@@ -84,7 +86,7 @@ fn tex(bytes: &[u8], name: &str) -> Option<ember_engine::TextureData> {
 }
 
 /// Textured environment meshes, registered after the viewmodel GLB parts:
-/// env_base + 0 = floor plane (12x tiles), + 1 = wall/cover box (4x),
+/// `env_base` + 0 = floor plane (12x tiles), + 1 = wall/cover box (4x),
 /// + 2 = armor box (players, pads).
 pub(crate) fn env_meshes() -> Vec<ember_engine::MeshData> {
     use ember_engine::MeshData;
@@ -120,7 +122,7 @@ const PART_GLBS: [(&[u8], f32); 5] = [
     ),
 ];
 
-/// Fixed camera from EMBER_CAM ("ex,ey,ez,tx,ty,tz"): an overview of the
+/// Fixed camera from `EMBER_CAM` ("ex,ey,ez,tx,ty,tz"): an overview of the
 /// arena for reviewing level and character work in screenshots. Parsed
 /// once; None when unset or malformed (and always None on the web).
 fn debug_camera() -> Option<Camera> {
@@ -140,7 +142,7 @@ fn debug_camera() -> Option<Camera> {
 }
 
 /// The factory skyline ringing the arena, built from the Free Fire "Lone
-/// Wolf" street by tools/level_backdrop.py. Scenery only: it stands well
+/// Wolf" street by `tools/level_backdrop.py`. Scenery only: it stands well
 /// outside the play space, so the sim never needs to know about it.
 const BACKDROP_GLB: &[u8] = include_bytes!("../../../assets/models/level-backdrop.glb");
 
@@ -160,7 +162,7 @@ pub(crate) fn backdrop_meshes(first_mesh: u32) -> (Vec<ember_engine::MeshData>, 
 }
 
 /// The artist-made SWAT operator, split one mesh per rig joint by
-/// tools/swat_split.py and embedded so the wasm build ships it too.
+/// `tools/swat_split.py` and embedded so the wasm build ships it too.
 const SWAT_GLB: &[u8] = include_bytes!("../../../assets/models/swat-parts.glb");
 const SWAT_RIG: &str = include_str!("../../../assets/models/swat-rig.json");
 
@@ -182,7 +184,8 @@ pub(crate) fn part_meshes(
     let mut meshes = Vec::new();
     let mut sources = Vec::new();
     for (i, (bytes, _target_h)) in PART_GLBS.iter().enumerate() {
-        match ember_engine::rig::source_from_glb_bytes(bytes, first_mesh + i as u32) {
+        let mesh_offset = u32::try_from(i).expect("character part count fits in u32");
+        match ember_engine::rig::source_from_glb_bytes(bytes, first_mesh + mesh_offset) {
             Ok((mesh, mut src)) => {
                 // The embedded v1 parts are single-view concepts facing the
                 // camera; the rig flips them to its +Z forward.
@@ -408,6 +411,8 @@ struct Cmd {
     sent_at: f32,
 }
 
+// These flags represent independent input, connection, animation, and UI state transitions.
+#[allow(clippy::struct_excessive_bools)]
 pub struct ShooterGame {
     chan: net::NetChan,
     my_id: Option<u8>,
@@ -483,11 +488,11 @@ pub struct ShooterGame {
     /// First backdrop mesh id and how many there are; 0 = no backdrop.
     backdrop_base: u32,
     backdrop_parts: u32,
-    /// First mesh id of env_meshes() (floor, wall, armor); 0 = untextured.
+    /// First mesh id of `env_meshes()` (floor, wall, armor); 0 = untextured.
     env_base: u32,
     /// Jointed player character; None = textured/plain boxes.
     rig_character: Option<ember_engine::rig::RigCharacter>,
-    /// Per-player (yaw, walk_phase, amplitude) + previous render position.
+    /// Per-player (yaw, `walk_phase`, amplitude) + previous render position.
     anim: HashMap<u8, (f32, f32, f32)>,
     prev_pos: HashMap<u8, Vec2>,
     /// Per-player eased crouch amount (0..1) so the pose sinks smoothly.
@@ -505,7 +510,8 @@ pub struct ShooterGame {
 
 impl ShooterGame {
     pub fn connect(cfg: &OnlineConfig, assets: Option<Assets>) -> Result<Self, String> {
-        let chan = net::NetChan::connect(&cfg.url, cfg.opening_msgs()?)?;
+        let opening_messages = cfg.opening_msgs()?;
+        let chan = net::NetChan::connect(&cfg.url, &opening_messages)?;
         set_status("connecting…");
         Ok(Self {
             chan,
@@ -567,7 +573,7 @@ impl ShooterGame {
         })
     }
 
-    /// Where env_meshes() got registered (set by run_online after load).
+    /// Where `env_meshes()` got registered (set by `run_online` after load).
     pub fn set_env_base(&mut self, base: u32) {
         self.env_base = base;
     }
@@ -578,7 +584,7 @@ impl ShooterGame {
         self.backdrop_parts = parts;
     }
 
-    /// Install the jointed character (set by run_online after load).
+    /// Install the jointed character (set by `run_online` after load).
     pub fn set_parts(&mut self, rc: Option<ember_engine::rig::RigCharacter>) {
         self.rig_character = rc;
     }
@@ -601,8 +607,7 @@ impl ShooterGame {
     fn handle_of(&self, id: u8) -> String {
         self.metas
             .get(&id)
-            .map(|m| m.handle.clone())
-            .unwrap_or_else(|| format!("player {id}"))
+            .map_or_else(|| format!("player {id}"), |m| m.handle.clone())
     }
 
     /// Full Tab-overlay scoreboard: frags and deaths, sorted.
@@ -621,10 +626,8 @@ impl ShooterGame {
             let state = if p.alive { "" } else { " ☠" };
             // Char-truncated so 20-char/unicode handles can't break columns.
             let name: String = self.handle_of(p.id).chars().take(16).collect();
-            s.push_str(&format!(
-                "{me}{name:<16} {:>6} {:>7}{state}\n",
-                p.score, p.deaths
-            ));
+            writeln!(s, "{me}{name:<16} {:>6} {:>7}{state}", p.score, p.deaths)
+                .expect("writing to a String cannot fail");
         }
         s
     }
@@ -670,6 +673,13 @@ impl ShooterGame {
 }
 
 impl EmberGame for ShooterGame {
+    // Keeping the event, prediction, and render phases together preserves their state-update order.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss,
+        clippy::too_many_lines
+    )]
     fn update(&mut self, input: &InputState, dt: f32) -> Frame {
         self.time += dt;
         self.since_input += dt;
@@ -801,17 +811,13 @@ impl EmberGame for ShooterGame {
                             // Hitmarker only when plausibly MINE: one of my
                             // bullets vanished AND an enemy lost hp.
                             let my_id = new_me.id;
-                            let my_gone = curr.get(&my_id).map(|e| e.0).unwrap_or(0)
+                            let my_gone = curr.get(&my_id).map_or(0, |e| e.0)
                                 < prev_counts.get(&my_id).copied().unwrap_or(0);
                             let hurt: Vec<(u8, f32, f32)> = players
                                 .iter()
                                 .filter(|p| {
                                     p.id != my_id
-                                        && self
-                                            .latest
-                                            .get(&p.id)
-                                            .map(|old| p.hp < old.hp)
-                                            .unwrap_or(false)
+                                        && self.latest.get(&p.id).is_some_and(|old| p.hp < old.hp)
                                 })
                                 .map(|p| (p.id, p.x, p.z))
                                 .collect();
@@ -822,8 +828,8 @@ impl EmberGame for ShooterGame {
                                 self.hitmarker_t = 0.14;
                                 for &(id, x, z) in &hurt {
                                     self.flash.insert(id, 0.18);
-                                    for k in 0..6 {
-                                        let a = k as f32 * std::f32::consts::TAU / 6.0;
+                                    for k in 0_u8..6 {
+                                        let a = f32::from(k) * std::f32::consts::TAU / 6.0;
                                         self.particles.push((
                                             Vec3::new(x, 1.1, z),
                                             Vec3::new(a.cos() * 2.2, 1.8, a.sin() * 2.2),
@@ -924,7 +930,7 @@ impl EmberGame for ShooterGame {
                                 .history
                                 .front()
                                 .filter(|c| c.seq == my.ack)
-                                .map(|c| c.sent_at + my.ack_age_ticks as f32 * FIXED_DT);
+                                .map(|c| c.sent_at + f32::from(my.ack_age_ticks) * FIXED_DT);
                             let mut p = [server.x, server.y];
                             // BOTH halves of the vertical state come from the
                             // server. Seeding vy from our own prediction pairs
@@ -934,7 +940,7 @@ impl EmberGame for ShooterGame {
                             let (mut y, mut vy) = (my.y, my.vy);
                             let mut it = self.history.iter().peekable();
                             while let Some(c) = it.next() {
-                                let end = it.peek().map(|n| n.sent_at).unwrap_or(self.time);
+                                let end = it.peek().map_or(self.time, |n| n.sent_at);
                                 // Replay only what the server has not seen
                                 // yet: the slice of this command after the
                                 // instant the state describes.
@@ -1030,11 +1036,9 @@ impl EmberGame for ShooterGame {
             set_status("connection lost — reload to play again");
         }
         // Play the queued cues under a per-frame budget.
-        if !suppress_sfx {
-            if let Some(audio) = self.audio.as_ref() {
-                for (s, v) in sfx.into_iter().take(6) {
-                    audio.play(s, v);
-                }
+        if !suppress_sfx && let Some(audio) = self.audio.as_ref() {
+            for (s, v) in sfx.into_iter().take(6) {
+                audio.play(s, v);
             }
         }
 
@@ -1101,8 +1105,7 @@ impl EmberGame for ShooterGame {
         let me_alive = self
             .my_id
             .and_then(|id| self.latest.get(&id))
-            .map(|p| p.alive)
-            .unwrap_or(false);
+            .is_some_and(|p| p.alive);
         // Prediction reads the same rule the server applies, shield included
         // — a raised shield cancels sprint, and predicting otherwise would
         // rubber-band anyone who raised one while running.
@@ -1172,8 +1175,14 @@ impl EmberGame for ShooterGame {
                 &self.obstacles,
             );
             self.pred_pos = Vec2::new(p[0], p[1]);
-            let (y, vy, _grounded) =
-                step_vertical(p, self.pred_y, self.pred_vy, self.pred_jump, dt, &self.obstacles);
+            let (y, vy, _grounded) = step_vertical(
+                p,
+                self.pred_y,
+                self.pred_vy,
+                self.pred_jump,
+                dt,
+                &self.obstacles,
+            );
             // A launch is the only thing that can raise vy, so that is the
             // press being spent - exactly the one shot the server gets.
             if vy > self.pred_vy {
@@ -1341,8 +1350,8 @@ impl EmberGame for ShooterGame {
         // height variation (cover you can crouch behind, blocks you can't
         // see over).
         for o in &self.obstacles {
-            let cx = (o.min[0] + o.max[0]) * 0.5;
-            let cz = (o.min[1] + o.max[1]) * 0.5;
+            let cx = f32::midpoint(o.min[0], o.max[0]);
+            let cz = f32::midpoint(o.min[1], o.max[1]);
             let h = obstacle_height(o);
             let pos = Vec3::new(cx, h * 0.5, cz);
             let size = Vec3::new(o.max[0] - o.min[0], h, o.max[1] - o.min[1]);
@@ -1365,8 +1374,7 @@ impl EmberGame for ShooterGame {
             let color = self
                 .metas
                 .get(&id)
-                .map(|m| Vec3::from_array(m.color))
-                .unwrap_or(Vec3::splat(0.6));
+                .map_or(Vec3::splat(0.6), |m| Vec3::from_array(m.color));
             let aim = Vec2::new(p.ax, p.az);
             let (body_h, head_y, hand_y, pip_y) = if p.crouch {
                 (0.75, 0.95, 0.62, 1.5)
@@ -1486,7 +1494,7 @@ impl EmberGame for ShooterGame {
             for h in 0..p.hp {
                 inst(
                     &mut frame,
-                    Vec3::new(pos.x - 0.3 + h as f32 * 0.3, feet_y + pip_y, pos.y),
+                    Vec3::new(pos.x - 0.3 + f32::from(h) * 0.3, feet_y + pip_y, pos.y),
                     Vec3::splat(0.16),
                     Vec3::new(0.3, 0.9, 0.4),
                 );
@@ -1511,7 +1519,7 @@ impl EmberGame for ShooterGame {
         // direction with a hotter head, which reads as something moving
         // fast rather than as a floating cube.
         let age = self.bullets_age.min(0.12);
-        for b in self.bullets.iter() {
+        for b in &self.bullets {
             let p = Vec3::new(b.x + b.vx * age, b.y + b.vy * age, b.z + b.vz * age);
             let v = Vec3::new(b.vx, b.vy, b.vz);
             let speed = v.length();
@@ -1569,8 +1577,8 @@ impl EmberGame for ShooterGame {
         // ---- viewmodel: the sidearm in hand, plus muzzle flash ----
         if me_alive {
             let me_latest = self.my_id.and_then(|id| self.latest.get(&id));
-            let my_weapon = me_latest.map(|p| p.weapon).unwrap_or(1);
-            let reloading = me_latest.map(|p| p.reloading).unwrap_or(false);
+            let my_weapon = me_latest.map_or(1, |p| p.weapon);
+            let reloading = me_latest.is_some_and(|p| p.reloading);
             let accent = weapon_accent(my_weapon);
             let right3 = Vec3::new(-fz, 0.0, fx);
 
@@ -1588,18 +1596,15 @@ impl EmberGame for ShooterGame {
             // shot rather than the trigger — holding fire on an empty
             // magazine, or during a reload, must not kick.
             let cooldown = weapon_stats(my_weapon).cooldown;
-            let recoil = self
-                .shot_started
-                .map(|t0| {
-                    let k = ((self.time - t0) / cooldown).clamp(0.0, 1.0);
-                    if k < 0.16 {
-                        k / 0.16
-                    } else {
-                        let settle = (1.0 - k) / 0.84;
-                        settle * settle
-                    }
-                })
-                .unwrap_or(0.0);
+            let recoil = self.shot_started.map_or(0.0, |t0| {
+                let k = ((self.time - t0) / cooldown).clamp(0.0, 1.0);
+                if k < 0.16 {
+                    k / 0.16
+                } else {
+                    let settle = (1.0 - k) / 0.84;
+                    settle * settle
+                }
+            });
             // ADS rides the FULL look vector rather than its horizontal
             // part. That is what puts the sights on the shot line when
             // pitched; the old pose used horizontal forward plus a
@@ -1623,10 +1628,7 @@ impl EmberGame for ShooterGame {
             // What stood here fired on `time % cooldown` while the trigger
             // was held — a free-running clock with no relationship to
             // whether a bullet was ever spawned or ammo remained.
-            let flashing = self
-                .shot_started
-                .map(|t0| self.time - t0 < 0.045)
-                .unwrap_or(false);
+            let flashing = self.shot_started.is_some_and(|t0| self.time - t0 < 0.045);
             if flashing {
                 inst(
                     &mut frame,
@@ -1652,9 +1654,7 @@ impl EmberGame for ShooterGame {
             if self.shield_raise > 0.01 {
                 let k = self.shield_raise;
                 let lerp = |lo: f32, hi: f32| lo + (hi - lo) * k;
-                let center = eye
-                    + look * lerp(0.62, 0.74)
-                    - right3 * lerp(0.36, 0.26)
+                let center = eye + look * lerp(0.62, 0.74) - right3 * lerp(0.36, 0.26)
                     + Vec3::Y * (lerp(-0.66, -0.09) + bob * 0.4);
                 push_shield(
                     &mut frame,
@@ -1674,14 +1674,14 @@ impl EmberGame for ShooterGame {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod net {
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc::{self, Receiver, Sender};
-    use std::sync::Arc;
     use std::time::Duration;
 
     use pong_core::proto::{C2S, S2C};
-    use tungstenite::stream::MaybeTlsStream;
     use tungstenite::Message;
+    use tungstenite::stream::MaybeTlsStream;
 
     pub struct NetChan {
         out_tx: Sender<C2S>,
@@ -1690,7 +1690,7 @@ mod net {
     }
 
     impl NetChan {
-        pub fn connect(url: &str, initial: Vec<C2S>) -> Result<NetChan, String> {
+        pub fn connect(url: &str, initial: &[C2S]) -> Result<Self, String> {
             // rustls needs an explicitly installed crypto provider (both
             // backends are compiled into the tree). Err = already installed.
             let _ = rustls::crypto::ring::default_provider().install_default();
@@ -1706,7 +1706,7 @@ mod net {
                 }
                 _ => {}
             }
-            for msg in &initial {
+            for msg in initial {
                 let text = serde_json::to_string(msg).map_err(|e| e.to_string())?;
                 ws.send(Message::text(text))
                     .map_err(|e| format!("send: {e}"))?;
@@ -1717,49 +1717,51 @@ mod net {
             let dead = Arc::new(AtomicBool::new(false));
             {
                 let dead = Arc::clone(&dead);
-                std::thread::spawn(move || loop {
+                std::thread::spawn(move || {
                     loop {
-                        match out_rx.try_recv() {
-                            Ok(msg) => {
-                                let Ok(text) = serde_json::to_string(&msg) else {
-                                    continue;
-                                };
-                                if ws.send(Message::text(text)).is_err() {
-                                    dead.store(true, Ordering::Relaxed);
+                        loop {
+                            match out_rx.try_recv() {
+                                Ok(msg) => {
+                                    let Ok(text) = serde_json::to_string(&msg) else {
+                                        continue;
+                                    };
+                                    if ws.send(Message::text(text)).is_err() {
+                                        dead.store(true, Ordering::Relaxed);
+                                        return;
+                                    }
+                                }
+                                Err(mpsc::TryRecvError::Empty) => break,
+                                Err(mpsc::TryRecvError::Disconnected) => {
+                                    let _ = ws.close(None);
                                     return;
                                 }
                             }
-                            Err(mpsc::TryRecvError::Empty) => break,
-                            Err(mpsc::TryRecvError::Disconnected) => {
-                                let _ = ws.close(None);
+                        }
+                        match ws.read() {
+                            Ok(Message::Text(t)) => {
+                                if let Ok(msg) = serde_json::from_str::<S2C>(t.as_str())
+                                    && in_tx.send(msg).is_err()
+                                {
+                                    return;
+                                }
+                            }
+                            Ok(Message::Close(_)) => {
+                                dead.store(true, Ordering::Relaxed);
+                                return;
+                            }
+                            Ok(_) => {}
+                            Err(tungstenite::Error::Io(e))
+                                if e.kind() == std::io::ErrorKind::WouldBlock
+                                    || e.kind() == std::io::ErrorKind::TimedOut => {}
+                            Err(_) => {
+                                dead.store(true, Ordering::Relaxed);
                                 return;
                             }
                         }
                     }
-                    match ws.read() {
-                        Ok(Message::Text(t)) => {
-                            if let Ok(msg) = serde_json::from_str::<S2C>(t.as_str()) {
-                                if in_tx.send(msg).is_err() {
-                                    return;
-                                }
-                            }
-                        }
-                        Ok(Message::Close(_)) => {
-                            dead.store(true, Ordering::Relaxed);
-                            return;
-                        }
-                        Ok(_) => {}
-                        Err(tungstenite::Error::Io(e))
-                            if e.kind() == std::io::ErrorKind::WouldBlock
-                                || e.kind() == std::io::ErrorKind::TimedOut => {}
-                        Err(_) => {
-                            dead.store(true, Ordering::Relaxed);
-                            return;
-                        }
-                    }
                 });
             }
-            Ok(NetChan {
+            Ok(Self {
                 out_tx,
                 in_rx,
                 dead,
@@ -1793,8 +1795,8 @@ mod net {
     use std::rc::Rc;
 
     use pong_core::proto::{C2S, CLIENT_PING_SECS, S2C};
-    use wasm_bindgen::closure::Closure;
     use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
 
     pub struct NetChan {
         ws: web_sys::WebSocket,
@@ -1811,7 +1813,7 @@ mod net {
     }
 
     impl NetChan {
-        pub fn connect(url: &str, initial: Vec<C2S>) -> Result<NetChan, String> {
+        pub fn connect(url: &str, initial: &[C2S]) -> Result<Self, String> {
             let ws = web_sys::WebSocket::new(url).map_err(|_| format!("bad url: {url}"))?;
             let inbox = Rc::new(RefCell::new(VecDeque::new()));
             let open = Rc::new(Cell::new(false));
@@ -1887,7 +1889,7 @@ mod net {
                 keepalive = Some(cb);
             }
 
-            Ok(NetChan {
+            Ok(Self {
                 ws,
                 inbox,
                 open,

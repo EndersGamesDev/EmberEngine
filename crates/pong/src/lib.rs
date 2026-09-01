@@ -11,7 +11,7 @@ use ember_engine::glam::Vec3;
 use ember_engine::{Camera, EmberGame, EngineConfig, Frame, InputState, Instance, KeyCode};
 
 use pong_core::sim::{
-    Phase, Sim, BALL_R, COURT_END_Z, COURT_HALF_W, FIXED_DT, PADDLE_HALF_W, PADDLE_Z,
+    BALL_R, COURT_END_Z, COURT_HALF_W, FIXED_DT, PADDLE_HALF_W, PADDLE_Z, Phase, Sim,
 };
 
 pub use online::OnlineConfig;
@@ -70,9 +70,9 @@ fn build_scene(p: &SceneParams) -> Frame {
             Vec3::new(0.32, 0.34, 0.40),
         );
     }
-    let dashes = 9;
+    let dashes: u16 = 9;
     for i in 0..dashes {
-        let x = -COURT_HALF_W + (i as f32 + 0.5) * (COURT_HALF_W * 2.0 / dashes as f32);
+        let x = -COURT_HALF_W + (f32::from(i) + 0.5) * (COURT_HALF_W * 2.0 / f32::from(dashes));
         inst(
             &mut frame,
             Vec3::new(x, 0.02, 0.0),
@@ -106,12 +106,13 @@ fn build_scene(p: &SceneParams) -> Frame {
     // Score pips on top of each wall: your points march toward your side.
     for (idx, (color, sign)) in [(P1_COLOR, 1.0f32), (P2_COLOR, -1.0f32)].iter().enumerate() {
         for i in 0..p.scores[idx] {
+            let pip_index = u8::try_from(i).expect("scores are capped below u8::MAX");
             inst(
                 &mut frame,
                 Vec3::new(
                     (COURT_HALF_W + 0.75) * -sign, // P1 pips on the left wall
                     1.25,
-                    (11.0 - i as f32 * 1.7) * sign,
+                    (11.0 - f32::from(pip_index) * 1.7) * sign,
                 ),
                 Vec3::splat(0.55),
                 *color,
@@ -216,20 +217,38 @@ pub fn run_local() {
     );
 }
 
+/// Starts an online arena session.
+///
+/// # Errors
+///
+/// Returns an error when configuration is invalid, a connection cannot be established, an
+/// opening message cannot be encoded or sent, or the loaded mesh count exceeds the engine ID
+/// space.
+// This public entry point retains ownership of its configuration for API compatibility.
+#[allow(clippy::needless_pass_by_value)]
 pub fn run_online(cfg: OnlineConfig) -> Result<(), String> {
     // Tracing first, so asset-loading diagnostics are visible.
     #[cfg(not(target_arch = "wasm32"))]
     ember_engine::init_diagnostics();
     let (mut meshes, assets) = online::load_assets();
     // Textured environment set (arena v8): registered after the GLB parts.
-    let env_base = meshes.len() as u32 + 1; // 0 is the built-in cube
+    let env_base = u32::try_from(meshes.len())
+        .map_err(|_| "viewmodel mesh count exceeds u32".to_string())?
+        + 1; // 0 is the built-in cube
     meshes.extend(online::env_meshes());
     // Articulated character parts (arena v9), after the env set.
-    let (part_meshes, parts) = online::part_meshes(meshes.len() as u32 + 1);
+    let parts_base = u32::try_from(meshes.len())
+        .map_err(|_| "environment mesh count exceeds u32".to_string())?
+        + 1;
+    let (part_meshes, parts) = online::part_meshes(parts_base);
     meshes.extend(part_meshes);
     // Factory skyline (arena v10), after the character.
-    let (backdrop, backdrop_base) = online::backdrop_meshes(meshes.len() as u32 + 1);
-    let backdrop_parts = backdrop.len() as u32;
+    let backdrop_mesh = u32::try_from(meshes.len())
+        .map_err(|_| "character mesh count exceeds u32".to_string())?
+        + 1;
+    let (backdrop, backdrop_base) = online::backdrop_meshes(backdrop_mesh);
+    let backdrop_parts =
+        u32::try_from(backdrop.len()).map_err(|_| "backdrop mesh count exceeds u32".to_string())?;
     meshes.extend(backdrop);
     let mut game = online::ShooterGame::connect(&cfg, assets)?;
     game.set_env_base(env_base);

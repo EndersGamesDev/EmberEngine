@@ -49,6 +49,7 @@ pub struct Sim {
 }
 
 impl Sim {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             p1_x: 0.0,
@@ -154,7 +155,7 @@ impl Sim {
         let new_speed = (speed * SPEEDUP).min(MAX_SPEED);
         let mut vx = self.ball_vel[0] + (offset / PADDLE_HALF_W) * 7.0;
         let vz_sign = -paddle_z.signum(); // away from this paddle
-                                          // Enforce a minimum z fraction so the ball always makes progress.
+        // Enforce a minimum z fraction so the ball always makes progress.
         let max_vx = new_speed * (1.0 - MIN_Z_FRACTION * MIN_Z_FRACTION).sqrt();
         vx = vx.clamp(-max_vx, max_vx);
         let vz = (new_speed * new_speed - vx * vx).sqrt() * vz_sign;
@@ -185,6 +186,9 @@ impl Default for Sim {
 
 #[cfg(test)]
 mod tests {
+    // This fixed positive duration is converted only to bound a test loop.
+    #![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+
     use super::*;
 
     fn run_serve(sim: &mut Sim) {
