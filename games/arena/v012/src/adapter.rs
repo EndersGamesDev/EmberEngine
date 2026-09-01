@@ -702,14 +702,16 @@ impl ArenaLegacyDecoder {
         }
     }
 
-    /// Projects exact Arena-12 entries into the deployed legacy list tag and fields.
+    /// Projects the connection's own Arena version into the deployed legacy list tag and
+    /// fields. The shared "arena" selector serves every frozen page, so the filter follows
+    /// the hello's protocol number rather than pinning this crate's version.
     #[must_use]
-    pub fn project_lobby_list(entries: &[LegacyLobbyEntry]) -> S2C {
+    pub fn project_lobby_list(protocol: u16, entries: &[LegacyLobbyEntry]) -> S2C {
         let lobbies = entries
             .iter()
             .filter(|entry| {
                 entry.game_key.game_id == GAME_ID
-                    && entry.game_key.game_version == u32::from(PROTO_VERSION)
+                    && entry.game_key.game_version == u32::from(protocol)
             })
             .map(|entry| LobbyInfo {
                 name: entry.name.clone(),
@@ -825,7 +827,10 @@ impl LegacyIngress for ArenaLegacyDecoder {
                 cap: u8::try_from(entry.capacity).unwrap_or(u8::MAX),
             })
             .collect::<Vec<_>>();
-        encode_legacy_message(&Self::project_lobby_list(&entries))
+        encode_legacy_message(&Self::project_lobby_list(
+            self.protocol.unwrap_or(PROTO_VERSION),
+            &entries,
+        ))
     }
 
     fn project_refusal(

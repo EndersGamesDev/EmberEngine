@@ -157,7 +157,7 @@ fn legacy_lobby_create_join_and_refusal_match_the_deployed_wire() {
             requested_version: 12
         }
     ));
-    let projected = ArenaLegacyDecoder::project_lobby_list(&[
+    let projected = ArenaLegacyDecoder::project_lobby_list(12, &[
         LegacyLobbyEntry {
             game_key: GameKey {
                 game_id: "arena".to_string(),
@@ -433,4 +433,37 @@ fn timestamped_transcript_produces_authoritative_checkpoints() {
         assert_eq!(player.ack, checkpoint.ack);
         assert_eq!(player.ack_age_ticks, checkpoint.ack_age_ticks);
     }
+}
+
+#[test]
+fn lobby_projection_follows_the_hello_protocol() {
+    let entries = [
+        LegacyLobbyEntry {
+            game_key: GameKey {
+                game_id: "arena".to_string(),
+                game_version: 12,
+            },
+            name: "twelve".to_string(),
+            host: "ender".to_string(),
+            has_password: false,
+            players: 1,
+            cap: 8,
+        },
+        LegacyLobbyEntry {
+            game_key: GameKey {
+                game_id: "arena".to_string(),
+                game_version: 9,
+            },
+            name: "nine".to_string(),
+            host: "bean".to_string(),
+            has_password: false,
+            players: 2,
+            cap: 8,
+        },
+    ];
+    let S2C::LobbyList { lobbies } = ArenaLegacyDecoder::project_lobby_list(9, &entries) else {
+        panic!("projection produced the wrong message variant");
+    };
+    assert_eq!(lobbies.len(), 1);
+    assert_eq!(lobbies[0].name, "nine");
 }

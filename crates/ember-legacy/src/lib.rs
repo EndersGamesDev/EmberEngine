@@ -1222,7 +1222,7 @@ mod tests {
     fn checked_in_manifest_parses_and_validates() {
         let source = include_str!("../../../games/hosted.toml");
         let manifest = parse_hosted_manifest(source).expect("checked-in manifest must parse");
-        assert_eq!(manifest.games.len(), 2);
+        assert_eq!(manifest.games.len(), 13);
         assert_eq!(validate_hosted_manifest(&manifest), Ok(()));
     }
 
