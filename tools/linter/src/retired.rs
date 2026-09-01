@@ -244,7 +244,7 @@ mod tests {
     #[test]
     fn leaves_marks_that_open_no_token_alone() {
         let quiet = [
-            "The repository torrust-index#59 is another corpus.",
+            "The repository ember-index#59 is another corpus.",
             "An attribute #[test] carries no number.",
             "A heading # 59 is spaced apart.",
             "A doubled ##59 opens nothing.",

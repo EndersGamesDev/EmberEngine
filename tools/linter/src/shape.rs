@@ -394,9 +394,9 @@ mod tests {
             &index_adoption(
                 &[],
                 Some(&crate::roster::OwnerNames::new(
-                    "torrust-",
+                    "ember-",
                     [crate::roster::UnbuiltMember::new(
-                        "torrust-notime",
+                        "ember-notime",
                         "packages/notime",
                     )],
                 )),
@@ -593,9 +593,9 @@ mod tests {
             &index_adoption(
                 &[],
                 Some(&crate::roster::OwnerNames::new(
-                    "torrust-",
+                    "ember-",
                     [crate::roster::UnbuiltMember::new(
-                        "torrust-notime",
+                        "ember-notime",
                         "packages/notime",
                     )],
                 )),

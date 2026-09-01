@@ -1999,7 +1999,7 @@ mod tests {
         .expect("write package manifest");
     }
 
-    const FIXTURE_OWNERS: &str = "namespace = \"com.torrust.index.linter.owners\"\n\
+    const FIXTURE_OWNERS: &str = "namespace = \"com.ember.index.linter.owners\"\n\
         version = [1, 0, 0]\n\
         \n\
         owners = [\"INDEX\", \"DEMO\"]\n\
@@ -2010,7 +2010,7 @@ mod tests {
         ]\n\
         may_cite = []\n";
 
-    const FIXTURE_ENVIRONMENTS: &str = "namespace = \"com.torrust.index.linter.environments\"\n\
+    const FIXTURE_ENVIRONMENTS: &str = "namespace = \"com.ember.index.linter.environments\"\n\
         version = [1, 0, 0]\n\
         \n\
         reserved_kinds = [\"test\"]\n\
@@ -2018,13 +2018,13 @@ mod tests {
         environments = [{ environment = \"Section\", kind = \"sec\" }]\n\
         extensions = []\n";
 
-    const FIXTURE_OWNER_NAMES: &str = "namespace = \"com.torrust.index.linter.policy.owner.names\"\n\
+    const FIXTURE_OWNER_NAMES: &str = "namespace = \"com.ember.index.linter.policy.owner.names\"\n\
         version = [1, 0, 0]\n\
         \n\
         [set.name-prefix-ignore]\n\
-        torrust = \"torrust-\"\n";
+        ember = \"ember-\"\n";
 
-    const FIXTURE_POLICIES: &str = "namespace = \"com.torrust.index.linter.policies\"\n\
+    const FIXTURE_POLICIES: &str = "namespace = \"com.ember.index.linter.policies\"\n\
         version = [1, 0, 0]\n\
         \n\
         policies = [\
@@ -2037,7 +2037,7 @@ mod tests {
           { owner = \"DEMO\", policy = \"legacy.section-references\" },\
         ]\n";
 
-    const FIXTURE_LISTS: &str = "namespace = \"com.torrust.index.linter.lists\"\n\
+    const FIXTURE_LISTS: &str = "namespace = \"com.ember.index.linter.lists\"\n\
         version = [1, 0, 0]\n\
         \n\
         [DEMO.\"labels.mints-well-formed\"]\nallowances = []\n\
@@ -2049,13 +2049,13 @@ mod tests {
         [DEMO.\"legacy.section-references\"]\n\
         path_counts = [{ path = \"packages/demo/docs/guide.md\", maximum = 1 }]\n";
 
-    const FIXTURE_SHAPE: &str = "namespace = \"com.torrust.index.linter.shape\"\n\
+    const FIXTURE_SHAPE: &str = "namespace = \"com.ember.index.linter.shape\"\n\
         version = [1, 0, 0]\n\
         \n\
         universe = \"git-tracked\"\n\
         ignore = []\n";
 
-    const FIXTURE_SPDX: &str = "namespace = \"com.torrust.index.linter.policy.spdx\"\n\
+    const FIXTURE_SPDX: &str = "namespace = \"com.ember.index.linter.policy.spdx\"\n\
         version = [1, 0, 0]\n\
         \n\
         [set.identifier]\nfixture = \"AGPL-3.0-only\"\n\
@@ -2067,7 +2067,7 @@ mod tests {
         exclude = []\n\
         partitions = [{ name = \"rust\", copyright = \"fixture\", pattern = '%s\"packages/demo/src\" [ \"/\" *VCHAR ]' }]\n";
 
-    const FIXTURE_INTERCHANGE: &str = "namespace = \"com.torrust.index.linter.policy.interchange\"\n\
+    const FIXTURE_INTERCHANGE: &str = "namespace = \"com.ember.index.linter.policy.interchange\"\n\
         version = [1, 0, 0]\n\
         \n\
         [set.interchange-documents]\ncode = \"the fictional Rust surface\"\n\
@@ -2075,20 +2075,20 @@ mod tests {
         exclude = [{ name = \"guide\", pattern = '%s\"packages/demo/docs/guide.md\"' }]\n\
         include = [{ name = \"rust\", interchange-documents = \"code\", pattern = '%s\"packages/demo/src\" [ \"/\" *VCHAR ]' }]\n";
 
-    const FIXTURE_REFERENCES: &str = "namespace = \"com.torrust.index.linter.policy.references.path-linking\"\n\
+    const FIXTURE_REFERENCES: &str = "namespace = \"com.ember.index.linter.policy.references.path-linking\"\n\
         version = [1, 0, 0]\n\
         \n\
         [owners.DEMO.path-references]\n\
         exclude = [{ name = \"publication\", pattern = '%s\"packages/demo/docs/spec.md\"' }]\n";
 
-    const FIXTURE_LEGACY: &str = "namespace = \"com.torrust.index.linter.policy.legacy.section-references\"\n\
+    const FIXTURE_LEGACY: &str = "namespace = \"com.ember.index.linter.policy.legacy.section-references\"\n\
         version = [1, 0, 0]\n\
         \n\
         [owners.DEMO]\n\
         prose = '%s\"packages/demo/docs\" [ \"/\" *VCHAR ]'\n\
         code = '%s\"packages/demo/src\" [ \"/\" *VCHAR ]'\n";
 
-    const FIXTURE_PUBLICATIONS: &str = "namespace = \"com.torrust.index.linter.policy.assembly-publications\"\n\
+    const FIXTURE_PUBLICATIONS: &str = "namespace = \"com.ember.index.linter.policy.assembly-publications\"\n\
         version = [1, 0, 0]\n\
         \n\
         [owners.DEMO]\n\
@@ -2128,7 +2128,7 @@ mod tests {
             ),
             (
                 "packages/demo/Cargo.toml",
-                "[package]\nname = \"torrust-demo\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+                "[package]\nname = \"ember-demo\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
             ),
             (
                 "packages/demo/docs/guide.md",
@@ -2397,12 +2397,12 @@ mod tests {
         fs::create_dir_all(root.path().join("packages/alpha")).expect("create fixture package");
         fs::write(
             root.path().join("Cargo.toml"),
-            "[workspace]\nmembers = [\".\", \"packages/alpha\", \"packages/absent\"]\n\n[package]\nname = \"torrust-root\"\n",
+            "[workspace]\nmembers = [\".\", \"packages/alpha\", \"packages/absent\"]\n\n[package]\nname = \"ember-root\"\n",
         )
         .expect("write root manifest");
         fs::write(
             root.path().join("packages/alpha/Cargo.toml"),
-            "[package]\nname = \"torrust-alpha\"\n",
+            "[package]\nname = \"ember-alpha\"\n",
         )
         .expect("write member manifest");
 
@@ -2423,13 +2423,13 @@ mod tests {
     fn keeps_literal_workspace_members_unchanged() {
         let root = TempDir::new().expect("temporary root");
         write_workspace(root.path(), "\"packages/one\"");
-        write_package(root.path(), "packages/one", "torrust-one");
+        write_package(root.path(), "packages/one", "ember-one");
 
         let planned = WorkspacePlan::compile(root.path());
 
         assert_eq!(
             planned.packages(),
-            [Package::new("torrust-one", "packages/one")]
+            [Package::new("ember-one", "packages/one")]
         );
         assert!(
             planned.findings().is_empty(),
@@ -2482,14 +2482,14 @@ mod tests {
     fn matches_one_character_in_workspace_member_globs() {
         let root = TempDir::new().expect("temporary root");
         write_workspace(root.path(), "\"packages/tw?\"");
-        write_package(root.path(), "packages/two", "torrust-two");
-        write_package(root.path(), "packages/twelve", "torrust-twelve");
+        write_package(root.path(), "packages/two", "ember-two");
+        write_package(root.path(), "packages/twelve", "ember-twelve");
 
         let planned = WorkspacePlan::compile(root.path());
 
         assert_eq!(
             planned.packages(),
-            [Package::new("torrust-two", "packages/two")]
+            [Package::new("ember-two", "packages/two")]
         );
         assert!(
             planned.findings().is_empty(),
@@ -2531,13 +2531,13 @@ mod tests {
     fn deduplicates_literal_and_glob_workspace_members() {
         let root = TempDir::new().expect("temporary root");
         write_workspace(root.path(), "\"packages/one\", \"packages/*\"");
-        write_package(root.path(), "packages/one", "torrust-one");
+        write_package(root.path(), "packages/one", "ember-one");
 
         let planned = WorkspacePlan::compile(root.path());
 
         assert_eq!(
             planned.packages(),
-            [Package::new("torrust-one", "packages/one")]
+            [Package::new("ember-one", "packages/one")]
         );
         assert!(
             planned.findings().is_empty(),
@@ -2555,14 +2555,14 @@ mod tests {
     fn skips_globbed_directories_without_manifests() {
         let root = TempDir::new().expect("temporary root");
         write_workspace(root.path(), "\"packages/*\"");
-        write_package(root.path(), "packages/real", "torrust-real");
+        write_package(root.path(), "packages/real", "ember-real");
         fs::create_dir_all(root.path().join("packages/empty")).expect("create empty directory");
 
         let planned = WorkspacePlan::compile(root.path());
 
         assert_eq!(
             planned.packages(),
-            [Package::new("torrust-real", "packages/real")]
+            [Package::new("ember-real", "packages/real")]
         );
         assert!(
             planned.findings().is_empty(),

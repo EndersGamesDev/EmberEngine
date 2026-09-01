@@ -32,7 +32,7 @@ fn round_trip(text: &str) -> (String, Vec<Standing>) {
 
 /// Read notices and orphaned labels back from the writer's output.
 fn read_notices_back(text: &str) -> (Vec<CoveredNotice>, Vec<Finding>) {
-    let (_notices, orphans) = scan_todos("torrust-demo", Path::new("src/demo.rs"), text);
+    let (_notices, orphans) = scan_todos("ember-demo", Path::new("src/demo.rs"), text);
 
     (notices_of(text), orphans)
 }

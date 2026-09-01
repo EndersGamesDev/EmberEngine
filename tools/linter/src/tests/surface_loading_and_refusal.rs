@@ -96,7 +96,7 @@ const LISTS: &str = "[INDEX.\"labels.mints-well-formed\"]\nallowances = []\n";
 ///
 /// This is the surface's own idiom for applicable and clean, and it is what a
 /// repository activating no header pair writes.
-const PARAMETERS: &str = "namespace = \"com.torrust.index.linter.policy.spdx\"\n\
+const PARAMETERS: &str = "namespace = \"com.ember.index.linter.policy.spdx\"\n\
         version = [1, 0, 0]\n\
         \n\
         [set.identifier]\n\
@@ -108,14 +108,14 @@ const PARAMETERS: &str = "namespace = \"com.torrust.index.linter.policy.spdx\"\n
 /// The file is required whether or not any owner activates the policy, so
 /// this is what a repository governing nothing writes — the same idiom the
 /// fifth file's default already is.
-const INTERCHANGE: &str = "namespace = \"com.torrust.index.linter.policy.interchange\"\n\
+const INTERCHANGE: &str = "namespace = \"com.ember.index.linter.policy.interchange\"\n\
         version = [1, 0, 0]\n";
 
 /// The seventh file a fixture starts from: its envelope and an empty owner table.
 ///
 /// It is required on the same ground the sixth is, and a repository holding
 /// no exception writes exactly this.
-const REFERENCES: &str = "namespace = \"com.torrust.index.linter.policy.references.path-linking\"\n\
+const REFERENCES: &str = "namespace = \"com.ember.index.linter.policy.references.path-linking\"\n\
         version = [1, 0, 0]\n";
 
 /// The envelope a declared file carries, under the label allocated for its schema.
@@ -125,7 +125,7 @@ const REFERENCES: &str = "namespace = \"com.torrust.index.linter.policy.referenc
 /// configuration the loader reads at all, which is a different test from the
 /// one each of these is.
 fn envelope(schema: &str) -> String {
-    format!("namespace = \"com.torrust.index.linter.{schema}\"\nversion = [1, 0, 0]\n\n")
+    format!("namespace = \"com.ember.index.linter.{schema}\"\nversion = [1, 0, 0]\n\n")
 }
 
 /// Write a declaration directory carrying these four values and the default fifth file.
@@ -188,14 +188,14 @@ const RECORD_LOCATORS: [u32; 35] = [
 ];
 
 /// The scenario document's set, as the corpus declares it.
-const SCENARIOS_DOCUMENT: &str = "namespace = \"com.torrust.index.linter.policy.references.scenarios\"\n\
+const SCENARIOS_DOCUMENT: &str = "namespace = \"com.ember.index.linter.policy.references.scenarios\"\n\
         version = [1, 0, 0]\n\
         \n\
         [set.numbered-marks]\n\
         hash-one-to-91 = { mark = \"#\", minimum = 1, maximum = 91 }\n";
 
 /// The prefix-number document's set, as the corpus declares it.
-const PREFIX_NUMBERS_DOCUMENT: &str = "namespace = \"com.torrust.index.linter.policy.references.prefix-numbers\"\n\
+const PREFIX_NUMBERS_DOCUMENT: &str = "namespace = \"com.ember.index.linter.policy.references.prefix-numbers\"\n\
         version = [1, 0, 0]\n\
         \n\
         [set.prefix-numbers]\n\
@@ -205,7 +205,7 @@ const PREFIX_NUMBERS_DOCUMENT: &str = "namespace = \"com.torrust.index.linter.po
         320, 330, 340, 350, 360, 370, 410, 420, 430, 440, 450, 460, 510, 520, 530, 540, 550, 560, 570, 580] }\n";
 
 /// The division document's set, as the corpus declares it.
-const DIVISIONS_DOCUMENT: &str = "namespace = \"com.torrust.index.linter.policy.references.divisions\"\n\
+const DIVISIONS_DOCUMENT: &str = "namespace = \"com.ember.index.linter.policy.references.divisions\"\n\
         version = [1, 0, 0]\n\
         \n\
         [set.literals]\n\
@@ -223,21 +223,21 @@ const DIVISIONS_DOCUMENT: &str = "namespace = \"com.torrust.index.linter.policy.
         recovery = \"Recovery preserves state and failures stay explicit\"\n";
 
 /// The assembly document's publication row, as the corpus declares it.
-const ASSEMBLY_DOCUMENT: &str = "namespace = \"com.torrust.index.linter.policy.assembly-publications\"\n\
+const ASSEMBLY_DOCUMENT: &str = "namespace = \"com.ember.index.linter.policy.assembly-publications\"\n\
         version = [1, 0, 0]\n\
         \n\
         [owners.ASSAYER]\n\
         spec = { parts = \"packages/assayer/docs/spec\", target = \"packages/assayer/docs/spec.md\" }\n";
 
 /// The owner-name document's prefix set and its unbuilt member's table.
-const OWNER_NAMES_DOCUMENT: &str = "namespace = \"com.torrust.index.linter.policy.owner.names\"\n\
+const OWNER_NAMES_DOCUMENT: &str = "namespace = \"com.ember.index.linter.policy.owner.names\"\n\
         version = [1, 0, 0]\n\
         \n\
         [set.name-prefix-ignore]\n\
-        torrust = \"torrust-\"\n\
+        ember = \"ember-\"\n\
         \n\
         [owners.NOTIME]\n\
-        crate-name = \"torrust-notime\"\n\
+        crate-name = \"ember-notime\"\n\
         package-directory = \"packages/notime\"\n";
 
 /// Write one further instance document into a complete declaration.
@@ -250,14 +250,14 @@ fn write_document(root: &TempDir, file: &str, text: &str) {
 /// Both set tables are required and either may be empty, so the sets and
 /// envelope alone are a complete declaration of a repository that activates
 /// nothing.
-const SETS: &str = "namespace = \"com.torrust.index.linter.policy.spdx\"\n\
+const SETS: &str = "namespace = \"com.ember.index.linter.policy.spdx\"\n\
         version = [1, 0, 0]\n\
         \n\
         [set.identifier]\n\
         agpl3only = \"AGPL-3.0-only\"\n\
         \n\
         [set.copyright]\n\
-        torrust2026 = \"2026 Torrust project contributors\"\n";
+        ember2026 = \"2026 Wild Sky Maker\"\n";
 
 /// One owner's section over the fixture owner's share, shaped as a declared section is.
 const SECTION: &str = "\n[owners.INDEX.identifier]\n\
@@ -266,7 +266,7 @@ const SECTION: &str = "\n[owners.INDEX.identifier]\n\
         \n\
         [owners.INDEX.copyright]\n\
         exclude = [{ name = \"prose\", pattern = '%s\"src/\" *VCHAR %s\".md\"' }]\n\
-        partitions = [{ name = \"code\", copyright = \"torrust2026\", pattern = '%s\"src/\" *VCHAR %s\".rs\"' }]\n";
+        partitions = [{ name = \"code\", copyright = \"ember2026\", pattern = '%s\"src/\" *VCHAR %s\".rs\"' }]\n";
 
 /// A fixture whose owner holds the header pair and whose fifth file is this declaration.
 ///
@@ -441,8 +441,8 @@ fn a_declared_file_carries_the_envelope_it_requires() {
     // the envelope misplaced. Each is one refusal, and each refuses alike.
     for envelope in [
         "namespace = \"policies\"\nversion = [1, 0, 0]\n",
-        "namespace = \"com.torrust.index.linter.policies\"\nversion = [1, 0]\n",
-        "version = [1, 0, 0]\nnamespace = \"com.torrust.index.linter.policies\"\n",
+        "namespace = \"com.ember.index.linter.policies\"\nversion = [1, 0]\n",
+        "version = [1, 0, 0]\nnamespace = \"com.ember.index.linter.policies\"\n",
     ] {
         assert_eq!(
             written(POLICIES_FILE, &format!("{envelope}\npolicies = []\n")),
@@ -467,7 +467,7 @@ fn a_declared_file_carries_the_envelope_it_requires() {
     assert_eq!(
         written(
             LISTS_FILE,
-            "[INDEX.\"labels.mints-well-formed\"]\nallowances = []\n\nnamespace = \"com.torrust.index.linter.lists\"\nversion = [1, 0, 0]\n"
+            "[INDEX.\"labels.mints-well-formed\"]\nallowances = []\n\nnamespace = \"com.ember.index.linter.lists\"\nversion = [1, 0, 0]\n"
         ),
         envelope_refusal(LISTS_FILE)
     );
@@ -621,7 +621,7 @@ fn the_file_path_document_is_required_by_its_activation() {
     // owner's own exception; there is no inclusion list to carry, because a
     // policy assigning no parameter per cell has nothing for one to name.
     let root = referenced(
-        "namespace = \"com.torrust.index.linter.policy.references.path-linking\"\nversion = [1, 0, 0]\n\n\
+        "namespace = \"com.ember.index.linter.policy.references.path-linking\"\nversion = [1, 0, 0]\n\n\
              [owners.INDEX.path-references]\n\
              exclude = [{ name = \"readmes\", pattern = '[ *VCHAR \"/\" ] %s\"README.md\"' }, \
              { name = \"vendored\", pattern = '%s\"src/vendor\" [ \"/\" *VCHAR ]' }]\n",
@@ -638,7 +638,7 @@ fn the_file_path_document_is_required_by_its_activation() {
     // section with an empty list would declare an empty gloss, which is a
     // claim the policy's own pass can find false.
     let root = referenced(
-        "namespace = \"com.torrust.index.linter.policy.references.path-linking\"\nversion = [1, 0, 0]\n\n\
+        "namespace = \"com.ember.index.linter.policy.references.path-linking\"\nversion = [1, 0, 0]\n\n\
              [owners.INDEX.path-references]\nexclude = []\n",
     );
 
@@ -650,7 +650,7 @@ fn the_file_path_document_is_required_by_its_activation() {
     let root = tree(OWNERS, ENVIRONMENTS, POLICIES, LISTS);
     std::fs::write(
         root.path().join(DIRECTORY).join(POLICY_REFERENCES_FILE),
-        "namespace = \"com.torrust.index.linter.policy.references.path-linking\"\nversion = [1, 0, 0]\n\n\
+        "namespace = \"com.ember.index.linter.policy.references.path-linking\"\nversion = [1, 0, 0]\n\n\
              [owners.INDEX.path-references]\nexclude = []\n",
     )
     .expect("the file-path document");
@@ -706,7 +706,7 @@ fn the_header_document_is_required_by_its_activation() {
     // governs nothing, so reading an omission as one would silently retire
     // the requirement for that owner's whole share.
     let root = headed(
-        "namespace = \"com.torrust.index.linter.policy.spdx\"\nversion = [1, 0, 0]\n\n\
+        "namespace = \"com.ember.index.linter.policy.spdx\"\nversion = [1, 0, 0]\n\n\
              [set.identifier]\n\n[set.copyright]\n\n\
              [owners.INDEX.identifier]\nexclude = []\n\n\
              [owners.INDEX.copyright]\nexclude = []\npartitions = []\n",
@@ -743,7 +743,7 @@ fn the_envelope_document_is_required_by_its_activation() {
     // Present with a section, and it is read: the section divides its owner's
     // share, and the pair the relation requires stands beside it.
     let root = enveloped(
-        "namespace = \"com.torrust.index.linter.policy.interchange\"\nversion = [1, 0, 0]\n\n\
+        "namespace = \"com.ember.index.linter.policy.interchange\"\nversion = [1, 0, 0]\n\n\
              [set.interchange-documents]\nlinter-config = \"the declared surface\"\n\n\
              [owners.INDEX.interchange-documents]\n\
              exclude = [{ name = \"cargo-manifest\", pattern = '%s\"Cargo.toml\"' }]\n\
@@ -800,8 +800,8 @@ fn each_section_name_is_read_against_its_own_table() {
         Some("AGPL-3.0-only")
     );
     assert_eq!(
-        snapshot.spdx().text(Half::Copyright, "torrust2026"),
-        Some("2026 Torrust project contributors")
+        snapshot.spdx().text(Half::Copyright, "ember2026"),
+        Some("2026 Wild Sky Maker")
     );
     assert_eq!(section.half(Half::Identifier).partitions().len(), 1);
     assert_eq!(section.half(Half::Copyright).exclude()[0].name, "prose");
@@ -888,7 +888,7 @@ fn a_set_entry_is_held_to_its_halfs_grammar() {
         refusals(&root)
     );
 
-    let broken = "[set.identifier]\n\n[set.copyright]\ntorrust2026 = \" 2026 Torrust\"\n";
+    let broken = "[set.identifier]\n\n[set.copyright]\nember2026 = \" 2026 Wild Sky Maker\"\n";
     let root = parameterized(&format!("{envelope}{broken}"));
 
     assert!(
@@ -986,7 +986,7 @@ fn an_envelope_pair_and_a_section_require_each_other() {
     let root = complete();
     std::fs::write(
         root.path().join(DIRECTORY).join(POLICY_INTERCHANGE_FILE),
-        "namespace = \"com.torrust.index.linter.policy.interchange\"\nversion = [1, 0, 0]\n\n\
+        "namespace = \"com.ember.index.linter.policy.interchange\"\nversion = [1, 0, 0]\n\n\
              [owners.INDEX.interchange-documents]\nexclude = [{ name = \"prose\", pattern = '%s\"src/\" *VCHAR %s\".md\"' }]\n",
     )
     .expect("the envelope document");
@@ -1672,8 +1672,8 @@ fn the_owner_name_document_declares_the_prefix_and_the_unbuilt_member() {
     assert_eq!(
         names,
         OwnerNames::new(
-            "torrust-",
-            [UnbuiltMember::new("torrust-notime", "packages/notime")]
+            "ember-",
+            [UnbuiltMember::new("ember-notime", "packages/notime")]
         ),
         "the declared prefix and unbuilt member are the compiled constants'"
     );

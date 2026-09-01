@@ -1,11 +1,11 @@
-# Index-linter Backlog · `plan:indexlinter:backlog`
+# Index-linter Backlog · `plan:emberlinter:backlog`
 
 This backlog holds open work owned by the linter package. Entries are
 the live worklist; completed work leaves the file and remains in git history.
 
-## Generated projections · `sec:indexlinter:backlog-generated-projections`
+## Generated projections · `sec:emberlinter:backlog-generated-projections`
 
-**Entry (Registers become a generalized projection policy)** · `entry:indexlinter:register-projection-policy`
+**Entry (Registers become a generalized projection policy)** · `entry:emberlinter:register-projection-policy`
 
 **OPEN.** The owner ruled that tracked-register generation is not a
 per-package tool but a proper policy of this linter: a declared register
@@ -40,9 +40,9 @@ generalized projection policy remains open. This entry waits behind the
 refactor ladder's active bites — it lands on the post-ladder architecture, not
 the current module layout.
 
-## Dependency totality · `sec:indexlinter:backlog-dependency-totality`
+## Dependency totality · `sec:emberlinter:backlog-dependency-totality`
 
-**Entry (A dependent policy without its prerequisites refuses loudly)** · `entry:indexlinter:policy-prerequisite-refusal`
+**Entry (A dependent policy without its prerequisites refuses loudly)** · `entry:emberlinter:policy-prerequisite-refusal`
 
 **OPEN.** The owner ruled, on the bite-6 STOP that exposed a package
 participating in the label calculus only by compiled geography: a profile
@@ -60,9 +60,9 @@ behavior on misdeclared corpora, so it cannot ride any byte-identical
 ladder bite, and its fixture must show the refusal naming the missing
 prerequisite for the user.
 
-## Occurrence scanning · `sec:indexlinter:backlog-occurrence-scanning`
+## Occurrence scanning · `sec:emberlinter:backlog-occurrence-scanning`
 
-**Entry (An unclosed acute fails at its opening delimiter)** · `entry:indexlinter:unclosed-acute`
+**Entry (An unclosed acute fails at its opening delimiter)** · `entry:emberlinter:unclosed-acute`
 
 **OPEN.** The code carrier currently returns no span for an acute left open at
 the end of a commentary line. The calculus instead makes an opening acute

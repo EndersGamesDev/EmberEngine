@@ -95,13 +95,13 @@ use linter::{
 ///
 /// The name is the crate's, and the crate is registered under it by the owner
 /// convention, which tables this workspace's crates against the prefixes derived
-/// from their names (´[ORCHESTRATION-conv:profiles:owner-prefixes]´). That is what keeps
+/// from their names (´[EMBER-conv:profiles:owner-prefixes]´). That is what keeps
 /// the string from being a second name for one program: a control-plane record
 /// naming this command names the package a reader can find, and renaming the
 /// crate is what would move it.
 ///
-/// ´const:indexlinter:control-plane-command-name´ (´[ORCHESTRATION-alg:const:text]´)
-/// ´const:indexlinter:control-plane-command-name-text-x989f87b3´
+/// ´const:emberlinter:control-plane-command-name´ (´[EMBER-alg:const:text]´)
+/// ´const:emberlinter:control-plane-command-name-text-x989f87b3´
 const COMMAND: &str = "linter";
 
 /// Exit code for a completed check that found failures.
@@ -123,8 +123,8 @@ const COMMAND: &str = "linter";
 /// The configuration probe's own exit 3 belongs to a different program and is no
 /// relation (´rem:commandcontract:not-the-config-probe´).
 ///
-/// ´const:indexlinter:unclean-check-exit´ (´[ORCHESTRATION-alg:const:count]´)
-/// ´const:indexlinter:unclean-check-exit-count-3´
+/// ´const:emberlinter:unclean-check-exit´ (´[EMBER-alg:const:count]´)
+/// ´const:emberlinter:unclean-check-exit-count-3´
 const FINDINGS: u8 = 3;
 
 #[derive(Parser)]

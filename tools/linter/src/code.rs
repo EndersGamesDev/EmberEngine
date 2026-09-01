@@ -741,13 +741,13 @@ fn read_line(
 /// The class is named in the record rather than invented here: the checker should
 /// warn on near-miss spans, and in scanned code text on label-shaped backtick
 /// spans where an acute was meant, without treating any of them as occurrences
-/// (´[ORCHESTRATION-inv:labels:total-resolution]´) — and the implementation gate repeats
-/// the same duty in the same words (´[ORCHESTRATION-gate:labels:implementation]´). So the
+/// (´[EMBER-inv:labels:total-resolution]´) — and the implementation gate repeats
+/// the same duty in the same words (´[EMBER-gate:labels:implementation]´). So the
 /// value says what the record says the warning is about, and the doubled display
 /// form stays inert because a span shown is not a span offered.
 ///
-/// ´const:indexlinter:prose-delimiter-near-miss´ (´[ORCHESTRATION-alg:const:text]´)
-/// ´const:indexlinter:prose-delimiter-near-miss-text-x1940ae5c´
+/// ´const:emberlinter:prose-delimiter-near-miss´ (´[EMBER-alg:const:text]´)
+/// ´const:emberlinter:prose-delimiter-near-miss-text-x1940ae5c´
 const BACKTICK_REASON: &str = "backtick delimiters where the acute syntax was meant";
 
 /// Warn on the near-miss forms that stand outside acute spans.
@@ -1254,11 +1254,11 @@ mod tests {
     /// make its standard places owned positions.
     fn covered(source: &str) -> Vec<crate::profile::CoveredAsset> {
         let packages = vec![crate::workspace::Package::new(
-            "torrust-demo",
+            "ember-demo",
             "packages/demo",
         )];
         let tests = crate::census::scan_source(
-            "torrust-demo",
+            "ember-demo",
             Path::new("packages/demo/src/engine.rs"),
             source,
         )

@@ -102,10 +102,10 @@ const ANGLE_BETWEEN: &[char] = &['\n', ' ', '\t', '<', '>', '!', '-'];
 /// It is the language's own, not this corpus's, and it stands here because the
 /// script tree is a declared surface of the residual family and a surface is
 /// read for the commentary its language defines
-/// (´[ORCHESTRATION-conv:migration:burn-surface-reading]´).
+/// (´[EMBER-conv:migration:burn-surface-reading]´).
 ///
-/// ´const:indexlinter:script-comment-mark´ (´[ORCHESTRATION-alg:const:codepoint]´)
-/// ´const:indexlinter:script-comment-mark-codepoint-u23´
+/// ´const:emberlinter:script-comment-mark´ (´[EMBER-alg:const:codepoint]´)
+/// ´const:emberlinter:script-comment-mark-codepoint-u23´
 const SCRIPT_COMMENT_MARK: char = '#';
 
 /// The Markdown extensions every reader in this crate parses with.

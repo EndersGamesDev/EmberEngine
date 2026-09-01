@@ -80,13 +80,13 @@ use crate::workspace::Package;
 ///
 /// All three, and the enumeration is the convention's own: reach is declared
 /// "in any dependency table — ordinary, development, or build"
-/// (´[ORCHESTRATION-conv:layers:reach-relation]´). A dependency declared for tests
+/// (´[EMBER-conv:layers:reach-relation]´). A dependency declared for tests
 /// warrants a citation exactly as one declared for the build does, because what
 /// the edge records is that the citing corpus has taken on the cited one, not
 /// when it does so.
 ///
-/// ´const:indexlinter:reach-dependency-tables´ (´[ORCHESTRATION-alg:const:form]´)
-/// ´const:indexlinter:reach-dependency-tables-form-x84d920a9´
+/// ´const:emberlinter:reach-dependency-tables´ (´[EMBER-alg:const:form]´)
+/// ´const:emberlinter:reach-dependency-tables-form-x84d920a9´
 const DEPENDENCY_TABLES: [&str; 3] = ["dependencies", "dev-dependencies", "build-dependencies"];
 
 /// The reach relation over the corpora of a workspace.
@@ -596,19 +596,19 @@ mod tests {
             root,
             "Cargo.toml",
             "[workspace]\nmembers = [\".\", \"packages/alpha\", \"packages/beta\"]\n\n\
-             [package]\nname = \"torrust-index\"\n\n\
-             [dependencies]\ntorrust-alpha = { path = \"packages/alpha\" }\n",
+             [package]\nname = \"ember-index\"\n\n\
+             [dependencies]\nember-alpha = { path = \"packages/alpha\" }\n",
         );
         write(
             root,
             "packages/alpha/Cargo.toml",
-            "[package]\nname = \"torrust-alpha\"\n\n\
-             [dependencies]\ntorrust-beta = { path = \"../beta\" }\n",
+            "[package]\nname = \"ember-alpha\"\n\n\
+             [dependencies]\nember-beta = { path = \"../beta\" }\n",
         );
         write(
             root,
             "packages/beta/Cargo.toml",
-            "[package]\nname = \"torrust-beta\"\n",
+            "[package]\nname = \"ember-beta\"\n",
         );
         write(
             root,
@@ -653,7 +653,7 @@ mod tests {
             .map(|path| (Path::new(path).to_path_buf(), Owner::new("POLICY")));
         let adoption = index_adoption(
             &packages,
-            Some(&OwnerNames::new("torrust-", [])),
+            Some(&OwnerNames::new("ember-", [])),
             &[],
             fixture_kind_registry(),
         )
@@ -671,7 +671,7 @@ mod tests {
         let packages = packages(root);
         let adoption = index_adoption(
             &packages,
-            Some(&OwnerNames::new("torrust-", [])),
+            Some(&OwnerNames::new("ember-", [])),
             &[],
             fixture_kind_registry(),
         );

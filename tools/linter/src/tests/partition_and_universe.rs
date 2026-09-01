@@ -63,29 +63,29 @@ fn snapshot(root: &Path, partitions: &str, ignore: &str) -> Snapshot {
     std::fs::write(
             directory.join("owners.toml"),
             format!(
-                "namespace = \"com.torrust.index.linter.owners\"\nversion = [1, 0, 0]\n\nowners = [\"INDEX\", \"ASSAYER\"]\npartitions = [{partitions}]\nmay_cite = []\n"
+                "namespace = \"com.ember.index.linter.owners\"\nversion = [1, 0, 0]\n\nowners = [\"INDEX\", \"ASSAYER\"]\npartitions = [{partitions}]\nmay_cite = []\n"
             ),
         )
         .expect("the owner file");
     std::fs::write(
         directory.join("environments.toml"),
-        "namespace = \"com.torrust.index.linter.environments\"\nversion = [1, 0, 0]\n\nenvironments = []\n",
+        "namespace = \"com.ember.index.linter.environments\"\nversion = [1, 0, 0]\n\nenvironments = []\n",
     )
     .expect("the environment file");
     std::fs::write(
         directory.join("policies.toml"),
-        "namespace = \"com.torrust.index.linter.policies\"\nversion = [1, 0, 0]\n\npolicies = []\n",
+        "namespace = \"com.ember.index.linter.policies\"\nversion = [1, 0, 0]\n\npolicies = []\n",
     )
     .expect("the activation file");
     std::fs::write(
         directory.join("lists.toml"),
-        "namespace = \"com.torrust.index.linter.lists\"\nversion = [1, 0, 0]\n",
+        "namespace = \"com.ember.index.linter.lists\"\nversion = [1, 0, 0]\n",
     )
     .expect("the list file");
     std::fs::write(
             directory.join("shape.toml"),
             format!(
-                "namespace = \"com.torrust.index.linter.shape\"\nversion = [1, 0, 0]\n\nuniverse = \"git-tracked\"\n\nignore = [{ignore}]\n"
+                "namespace = \"com.ember.index.linter.shape\"\nversion = [1, 0, 0]\n\nuniverse = \"git-tracked\"\n\nignore = [{ignore}]\n"
             ),
         )
         .expect("the shape document");

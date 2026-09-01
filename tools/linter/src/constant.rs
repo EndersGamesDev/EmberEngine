@@ -121,10 +121,10 @@ use crate::workspace::Package;
 /// The token is the record's own local extension row, which catalogues the
 /// Constant environment against this spelling and no other; the registry of
 /// ADR-T-011 offers none, a constant being neither what a deployment chooses nor
-/// what a build chooses (´[ORCHESTRATION-sig:constants:kind-extension]´).
+/// what a build chooses (´[EMBER-sig:constants:kind-extension]´).
 ///
-/// ´const:indexlinter:constant-kind-token´ (´[ORCHESTRATION-alg:const:word]´)
-/// ´const:indexlinter:constant-kind-token-word-const´
+/// ´const:emberlinter:constant-kind-token´ (´[EMBER-alg:const:word]´)
+/// ´const:emberlinter:constant-kind-token-word-const´
 pub const CONST_KIND: &str = "const";
 
 /// The kind a pinning program's own mint carries.
@@ -132,10 +132,10 @@ pub const CONST_KIND: &str = "const";
 /// A program citation resolves to the mint of a pinning program, and the
 /// programs are the environments the catalogue names and no others — each of
 /// them minted there as an Algorithm, which is what fixes this half of the pair
-/// a citation is checked against (´[ORCHESTRATION-sec:constants:programs]´).
+/// a citation is checked against (´[EMBER-sec:constants:programs]´).
 ///
-/// ´const:indexlinter:pinning-program-mint-kind´ (´[ORCHESTRATION-alg:const:word]´)
-/// ´const:indexlinter:pinning-program-mint-kind-word-alg´
+/// ´const:emberlinter:pinning-program-mint-kind´ (´[EMBER-alg:const:word]´)
+/// ´const:emberlinter:pinning-program-mint-kind-word-alg´
 const PROGRAM_KIND: &str = "alg";
 
 /// The area a pinning program's own mint carries.
@@ -143,10 +143,10 @@ const PROGRAM_KIND: &str = "alg";
 /// The other half of the same pair: the catalogued programs are minted in one
 /// area, so a citation naming that kind in any other area reaches no program of
 /// this profile and is refused rather than resolved
-/// (´[ORCHESTRATION-sec:constants:programs]´).
+/// (´[EMBER-sec:constants:programs]´).
 ///
-/// ´const:indexlinter:pinning-program-mint-area´ (´[ORCHESTRATION-alg:const:word]´)
-/// ´const:indexlinter:pinning-program-mint-area-word-const´
+/// ´const:emberlinter:pinning-program-mint-area´ (´[EMBER-alg:const:word]´)
+/// ´const:emberlinter:pinning-program-mint-area-word-const´
 const PROGRAM_AREA: &str = "const";
 
 /// The offset basis of the 64-bit FNV-1a hash the digest word is taken from.
@@ -155,10 +155,10 @@ const PROGRAM_AREA: &str = "const";
 /// and the reason is the property the digest word is defined to have: a reader
 /// recomputes a pin by hand and a future implementation in another language
 /// agrees with this one, neither of which follows from a basis this file merely
-/// picked (´[ORCHESTRATION-def:const:digest-word]´).
+/// picked (´[EMBER-def:const:digest-word]´).
 ///
-/// ´const:indexlinter:digest-offset-basis´ (´[ORCHESTRATION-alg:const:form]´)
-/// ´const:indexlinter:digest-offset-basis-form-x4a4117f8´
+/// ´const:emberlinter:digest-offset-basis´ (´[EMBER-alg:const:form]´)
+/// ´const:emberlinter:digest-offset-basis-form-x4a4117f8´
 const DIGEST_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 
 /// The prime of the 64-bit FNV-1a hash the digest word is taken from.
@@ -166,10 +166,10 @@ const DIGEST_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 /// Stated by the record beside the basis and for the same reason: the digest is
 /// specified as arithmetic a person can carry out, so both operands of the
 /// round belong to the record rather than to whichever implementation ran first
-/// (´[ORCHESTRATION-def:const:digest-word]´).
+/// (´[EMBER-def:const:digest-word]´).
 ///
-/// ´const:indexlinter:digest-multiplier-prime´ (´[ORCHESTRATION-alg:const:form]´)
-/// ´const:indexlinter:digest-multiplier-prime-form-x1994b04b´
+/// ´const:emberlinter:digest-multiplier-prime´ (´[EMBER-alg:const:form]´)
+/// ´const:emberlinter:digest-multiplier-prime-form-x1994b04b´
 const DIGEST_PRIME: u64 = 0x0000_0100_0000_01b3;
 
 /// The half of the hash the digest word is written from.
@@ -177,10 +177,10 @@ const DIGEST_PRIME: u64 = 0x0000_0100_0000_01b3;
 /// The digest word is the low thirty-two bits of the 64-bit value the rounds
 /// leave, written as eight hexadecimal digits; this mask is that width stated as
 /// a value, and widening it would write a word the grammar of pins does not
-/// admit (´[ORCHESTRATION-def:const:digest-word]´).
+/// admit (´[EMBER-def:const:digest-word]´).
 ///
-/// ´const:indexlinter:digest-retained-bits-mask´ (´[ORCHESTRATION-alg:const:form]´)
-/// ´const:indexlinter:digest-retained-bits-mask-form-x043bdbfc´
+/// ´const:emberlinter:digest-retained-bits-mask´ (´[EMBER-alg:const:form]´)
+/// ´const:emberlinter:digest-retained-bits-mask-form-x043bdbfc´
 const LOW_HALF: u64 = 0x0000_0000_ffff_ffff;
 
 /// The to-do markers a notice may be written with, per ADR-T-016.
@@ -190,10 +190,10 @@ const LOW_HALF: u64 = 0x0000_0000_ffff_ffff;
 /// warrant, so the shapes recognised here must be exactly the shapes that
 /// profile censuses. It fixes three conventional spellings — the corpus writes
 /// the first and the other two are censused so no synonym escapes the policy by
-/// being spelled differently (´[ORCHESTRATION-conv:todos:census]´).
+/// being spelled differently (´[EMBER-conv:todos:census]´).
 ///
-/// ´const:indexlinter:interim-warrant-marker-spellings´ (´[ORCHESTRATION-alg:const:form]´)
-/// ´const:indexlinter:interim-warrant-marker-spellings-form-x2efce54a´
+/// ´const:emberlinter:interim-warrant-marker-spellings´ (´[EMBER-alg:const:form]´)
+/// ´const:emberlinter:interim-warrant-marker-spellings-form-x2efce54a´
 const NOTICE_MARKERS: [&str; 3] = ["TODO", "FIXME", "XXX"];
 
 /// The path a macro definition wears where the census expects an invocation.
@@ -202,10 +202,10 @@ const NOTICE_MARKERS: [&str; 3] = ["TODO", "FIXME", "XXX"];
 /// spells a definition with is what separates them here. The separation is the
 /// convention's own: a definition is not an invocation, and what the census
 /// reads is the invocation that reaches a body rather than the body it reaches
-/// (´[ORCHESTRATION-conv:constants:invocation]´).
+/// (´[EMBER-conv:constants:invocation]´).
 ///
-/// ´const:indexlinter:macro-definition-path´ (´[ORCHESTRATION-alg:const:text]´)
-/// ´const:indexlinter:macro-definition-path-text-x7fcea50b´
+/// ´const:emberlinter:macro-definition-path´ (´[EMBER-alg:const:text]´)
+/// ´const:emberlinter:macro-definition-path-text-x7fcea50b´
 const MACRO_RULES: &str = "macro_rules";
 
 /// What every trait member's implementations supply, gathered per owner.
@@ -1238,8 +1238,8 @@ pub fn analyze_constants(
 /// source under the package's own source root, which is the tree named here
 /// (ADR-T-018, The constant label profile).
 ///
-/// ´const:indexlinter:constant-census-production-root´ (ADR-T-018, The constant label profile)
-/// ´const:indexlinter:constant-census-production-root-word-src´
+/// ´const:emberlinter:constant-census-production-root´ (ADR-T-018, The constant label profile)
+/// ´const:emberlinter:constant-census-production-root-word-src´
 #[cfg(test)]
 const CENSUSED_DIRECTORY: &str = "src";
 
@@ -1250,8 +1250,8 @@ const CENSUSED_DIRECTORY: &str = "src";
 /// that and not another — is an argument about code that ships
 /// (ADR-T-018, The constant label profile).
 ///
-/// ´const:indexlinter:constant-census-excluded-tree´ (ADR-T-018, The constant label profile)
-/// ´const:indexlinter:constant-census-excluded-tree-text-x9365b9f3´
+/// ´const:emberlinter:constant-census-excluded-tree´ (ADR-T-018, The constant label profile)
+/// ´const:emberlinter:constant-census-excluded-tree-text-x9365b9f3´
 #[cfg(test)]
 const CRATE_TESTS: &str = "src/tests";
 
@@ -1834,7 +1834,7 @@ mod tests {
 
         for (path, text) in sources {
             declarations.extend(
-                scan_constants("torrust-demo", Path::new(path), text).expect("a Rust source"),
+                scan_constants("ember-demo", Path::new(path), text).expect("a Rust source"),
             );
         }
 
@@ -2457,7 +2457,7 @@ mod tests {
             "impl Widget {\n    const ASSOCIATED: usize = 5;\n}\n",
         );
         let declarations = scan_constants(
-            "torrust-demo",
+            "ember-demo",
             Path::new("packages/demo/src/engine.rs"),
             text,
         )
@@ -2500,7 +2500,7 @@ mod tests {
             identity("definition", "form"),
         );
         let declarations = scan_constants(
-            "torrust-demo",
+            "ember-demo",
             Path::new("packages/demo/src/engine.rs"),
             &text,
         )

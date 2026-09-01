@@ -121,9 +121,9 @@ fn every_covered_asset_of_a_fixture_seeds_one_derived_mint() {
         &index_adoption(
             &packages,
             Some(&linter::OwnerNames::new(
-                "torrust-",
+                "ember-",
                 [linter::UnbuiltMember::new(
-                    "torrust-notime",
+                    "ember-notime",
                     "packages/notime",
                 )],
             )),
@@ -167,9 +167,9 @@ fn a_document_citing_a_live_test_resolves_and_a_dead_one_does_not() {
     let adoption = index_adoption(
         &packages,
         Some(&linter::OwnerNames::new(
-            "torrust-",
+            "ember-",
             [linter::UnbuiltMember::new(
-                "torrust-notime",
+                "ember-notime",
                 "packages/notime",
             )],
         )),
@@ -180,7 +180,7 @@ fn a_document_citing_a_live_test_resolves_and_a_dead_one_does_not() {
 
     let witness = assets
         .iter()
-        .find(|asset| asset.test().package() == "torrust-demo")
+        .find(|asset| asset.test().package() == "ember-demo")
         .expect("the demo member carries a covered test");
     let label = witness.label().to_string();
 
@@ -262,15 +262,15 @@ fn a_document_citing_a_live_test_resolves_and_a_dead_one_does_not() {
 #[test]
 fn a_cross_owner_citation_without_brackets_fails() {
     let packages = [
-        Package::new("torrust-index", ""),
-        Package::new("torrust-assayer", "packages/assayer"),
+        Package::new("ember-index", ""),
+        Package::new("ember-assayer", "packages/assayer"),
     ];
     let adoption = index_adoption(
         &packages,
         Some(&linter::OwnerNames::new(
-            "torrust-",
+            "ember-",
             [linter::UnbuiltMember::new(
-                "torrust-notime",
+                "ember-notime",
                 "packages/notime",
             )],
         )),
@@ -534,12 +534,12 @@ fn a_small_declared_graph_reports_totals_orphans_dangles_and_hubs() {
     write(
         root.path(),
         "Cargo.toml",
-        "[workspace]\nmembers = [\".\", \"packages/demo\"]\n\n[package]\nname = \"torrust-fixture\"\n",
+        "[workspace]\nmembers = [\".\", \"packages/demo\"]\n\n[package]\nname = \"ember-fixture\"\n",
     );
     write(
         root.path(),
         "packages/demo/Cargo.toml",
-        "[package]\nname = \"torrust-demo\"\n",
+        "[package]\nname = \"ember-demo\"\n",
     );
     write(
         root.path(),
@@ -678,7 +678,7 @@ fn declare_spec_publication(root: &Path) {
         root,
         ".linter/policy-assembly-publications.toml",
         &format!(
-            "namespace = \"com.torrust.index.linter.policy.assembly-publications\"\nversion = [1, 0, 0]\n\n\
+            "namespace = \"com.ember.index.linter.policy.assembly-publications\"\nversion = [1, 0, 0]\n\n\
              [owners.INDEX]\nspec = {{ parts = \"{SPEC_PARTS}\", target = \"{SPEC_TARGET}\" }}\n"
         ),
     );
@@ -1078,9 +1078,9 @@ fn every_edge_of_a_fixture_reference_graph_lands_on_a_mint() {
         &index_adoption(
             &[],
             Some(&linter::OwnerNames::new(
-                "torrust-",
+                "ember-",
                 [linter::UnbuiltMember::new(
-                    "torrust-notime",
+                    "ember-notime",
                     "packages/notime",
                 )],
             )),
@@ -1127,9 +1127,9 @@ fn a_fixture_corpus_resolves_across_files() {
         &index_adoption(
             &[],
             Some(&linter::OwnerNames::new(
-                "torrust-",
+                "ember-",
                 [linter::UnbuiltMember::new(
-                    "torrust-notime",
+                    "ember-notime",
                     "packages/notime",
                 )],
             )),
@@ -1142,9 +1142,9 @@ fn a_fixture_corpus_resolves_across_files() {
         &index_adoption(
             &[],
             Some(&linter::OwnerNames::new(
-                "torrust-",
+                "ember-",
                 [linter::UnbuiltMember::new(
-                    "torrust-notime",
+                    "ember-notime",
                     "packages/notime",
                 )],
             )),
@@ -1188,9 +1188,9 @@ fn a_fixture_corpus_reports_every_rule_it_breaks() {
         &index_adoption(
             &[],
             Some(&linter::OwnerNames::new(
-                "torrust-",
+                "ember-",
                 [linter::UnbuiltMember::new(
-                    "torrust-notime",
+                    "ember-notime",
                     "packages/notime",
                 )],
             )),
@@ -1253,9 +1253,9 @@ fn displayed_material_never_participates() {
         &index_adoption(
             &[],
             Some(&linter::OwnerNames::new(
-                "torrust-",
+                "ember-",
                 [linter::UnbuiltMember::new(
-                    "torrust-notime",
+                    "ember-notime",
                     "packages/notime",
                 )],
             )),
@@ -1349,7 +1349,7 @@ fn fixture_workspace(root: &Path) {
     write(
         root,
         "Cargo.toml",
-        "[workspace]\nmembers = [\".\", \"packages/demo\"]\n\n[package]\nname = \"torrust-fixture\"\n",
+        "[workspace]\nmembers = [\".\", \"packages/demo\"]\n\n[package]\nname = \"ember-fixture\"\n",
     );
     write(
         root,
@@ -1364,7 +1364,7 @@ fn fixture_workspace(root: &Path) {
     write(
         root,
         "packages/demo/Cargo.toml",
-        "[package]\nname = \"torrust-demo\"\n",
+        "[package]\nname = \"ember-demo\"\n",
     );
     write(
         root,
@@ -1515,7 +1515,7 @@ fn notice_workspace(root: &Path) {
     write(
         root,
         "Cargo.toml",
-        "[workspace]\nmembers = [\".\", \"packages/demo\"]\n\n[package]\nname = \"torrust-fixture\"\n",
+        "[workspace]\nmembers = [\".\", \"packages/demo\"]\n\n[package]\nname = \"ember-fixture\"\n",
     );
     write(
         root,
@@ -1532,7 +1532,7 @@ fn notice_workspace(root: &Path) {
     write(
         root,
         "packages/demo/Cargo.toml",
-        "[package]\nname = \"torrust-demo\"\n",
+        "[package]\nname = \"ember-demo\"\n",
     );
     write(
         root,
@@ -1809,7 +1809,7 @@ fn the_burn_command_emits_json_and_writes_nothing_by_default() {
 
     for (domain, owner, prose, code) in CENSUS_SURFACES {
         let mut text = format!(
-            "namespace = \"com.torrust.index.linter.policy.{domain}\"\nversion = [1, 0, 0]\n\n[owners.{owner}]\n"
+            "namespace = \"com.ember.index.linter.policy.{domain}\"\nversion = [1, 0, 0]\n\n[owners.{owner}]\n"
         );
 
         for (key, pattern) in [("prose", prose), ("code", code)] {
@@ -2030,7 +2030,7 @@ fn declare(root: &Path, owners: &str, environments: &str, policies: &str, lists:
             root,
             &format!(".linter/{file}.toml"),
             &format!(
-                "namespace = \"com.torrust.index.linter.{schema}\"\nversion = [1, 0, 0]\n\n{text}"
+                "namespace = \"com.ember.index.linter.{schema}\"\nversion = [1, 0, 0]\n\n{text}"
             ),
         );
     }
@@ -2580,7 +2580,7 @@ fn characterization_census_fixture() -> tempfile::TempDir {
 
     for (domain, owner, prose, code) in CENSUS_SURFACES {
         let mut text = format!(
-            "namespace = \"com.torrust.index.linter.policy.{domain}\"\nversion = [1, 0, 0]\n\n[owners.{owner}]\n"
+            "namespace = \"com.ember.index.linter.policy.{domain}\"\nversion = [1, 0, 0]\n\n[owners.{owner}]\n"
         );
 
         for (key, pattern) in [("prose", prose), ("code", code)] {
@@ -2617,7 +2617,7 @@ fn characterization_projection_fixture() -> tempfile::TempDir {
     write(
         root.path(),
         "packages/demo/Cargo.toml",
-        "[package]\nname = \"torrust-demo\"\n",
+        "[package]\nname = \"ember-demo\"\n",
     );
     write(
         root.path(),
@@ -2661,10 +2661,10 @@ fn characterization_projection_fixture() -> tempfile::TempDir {
     write(
         root.path(),
         ".linter/policy-owner-names.toml",
-        "namespace = \"com.torrust.index.linter.policy.owner.names\"\n\
+        "namespace = \"com.ember.index.linter.policy.owner.names\"\n\
          version = [1, 0, 0]\n\n\
          [set.name-prefix-ignore]\n\
-         torrust = \"torrust-\"\n",
+         ember = \"ember-\"\n",
     );
     track(root.path());
     root

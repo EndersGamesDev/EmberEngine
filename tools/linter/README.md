@@ -1,8 +1,8 @@
-# Torrust Index Linter · `guide:indexlinter:overview`
+# Ember Linter · `guide:emberlinter:overview`
 
-Repository-wide label-calculus linter for the Torrust Index.
+Repository-wide label-calculus and Markdown linter for the ember workspace.
 
-## Overview · `sec:indexlinter:readme-overview`
+## Overview · `sec:emberlinter:readme-overview`
 
 This package is the checker the label calculus names as its gate. It reads the
 corpus's authored prose and its Rust sources, harvests every mint into its
@@ -28,7 +28,7 @@ linter coverage --root . | jq .
 linter project --root . --write | jq .
 ```
 
-## The area register · `sec:indexlinter:area-register`
+## The area register · `sec:emberlinter:area-register`
 
 Every claim this package mints names an area, and this register says what each
 area is for. The requirement it answers is
@@ -54,7 +54,7 @@ is the clearest candidate for a split of its own. An unregistered area is a
 report line rather than a finding, so a claim minted in a new one is admitted
 and counted, and this register is what catches up.
 
-**Section (adoption)** · `sec:indexlinter:area-adoption`
+**Section (adoption)** · `sec:emberlinter:area-adoption`
 
 If this fails: the corpus loses its account of who owns what. Every resolution
 judgment runs through the signature, so a prefix mapping to no owner, or to
@@ -64,7 +64,7 @@ source from the calculus rather than failing it. Participation rides here too,
 and it now carries one datum rather than two: a document assembled from parts
 is read past, because its mints stand in the parts it was assembled from.
 
-**Section (assembly)** · `sec:indexlinter:area-assembly`
+**Section (assembly)** · `sec:emberlinter:area-assembly`
 
 If this fails: a document published from parts stops being those parts.
 Membership is checked both ways because the likely accident is writing a new
@@ -76,7 +76,7 @@ indefinitely while the committed document reads plausibly and says something
 its own sources no longer say. The draft marker is the one deliberate
 suspension, and it suspends freshness alone.
 
-**Section (burn)** · `sec:indexlinter:area-burn`
+**Section (burn)** · `sec:emberlinter:area-burn`
 
 If this fails: the migration loses its ratchet. A register kept per file is
 what stops one document paying for another's regression, and it is checked in
@@ -87,7 +87,7 @@ reason: a census counting references its own way would drift from the gate's
 notion of what a reference is, and the tallies would keep falling while the
 debt stayed exactly where it was.
 
-**Section (carrier)** · `sec:indexlinter:area-carrier`
+**Section (carrier)** · `sec:emberlinter:area-carrier`
 
 If this fails: the checker judges a corpus that is not the one on disk.
 Everything downstream — minting, resolution, head validation — is drawn from
@@ -98,7 +98,7 @@ absence against unreadability: a tree that simply is not there costs nothing,
 while a tree that cannot be read must become a finding, because an unreadable
 corpus reported as an empty one passes every check there is.
 
-**Section (census)** · `sec:indexlinter:area-census`
+**Section (census)** · `sec:emberlinter:area-census`
 
 If this fails: the inventory stops being the tests that actually run. The
 census is read from the abstract syntax rather than from the bytes, so a test
@@ -109,7 +109,7 @@ and invents collisions that exist nowhere in the source. It also records the
 positions and indentation a later pass writes against, so an error here
 surfaces as a sweep laying lines in the wrong place rather than as a miscount.
 
-**Section (check)** · `sec:indexlinter:area-check`
+**Section (check)** · `sec:emberlinter:area-check`
 
 If this fails: a citation stops meaning that somebody said the thing. The two
 passes are kept strictly apart so that the order the corpus is traversed in
@@ -120,7 +120,7 @@ of leaving a quiet lie behind. Weaken any of the three and the corpus goes on
 checking clean while accumulating references to statements nobody made, which
 is the exact condition the calculus exists to prevent.
 
-**Section (claim)** · `sec:indexlinter:area-claim`
+**Section (claim)** · `sec:emberlinter:area-claim`
 
 If this fails: what a test establishes stops being written down where the test
 is. The claim is authored rather than derived, so nothing computes it and
@@ -131,7 +131,7 @@ coverage rests on the mint-and-citation distinction, so losing that turns a
 scenario covered many times over back into something a reader must count by
 hand across many files.
 
-**Section (cli)** · `sec:indexlinter:area-cli`
+**Section (cli)** · `sec:emberlinter:area-cli`
 
 If this fails: the gate becomes unusable from anything but a human's eyes. The
 check emits one object on standard output and exits zero when clean and with
@@ -142,7 +142,7 @@ information out of the pass-or-fail decision. The sweep's refusal over a dirty
 tree is the other guarantee: a mechanical edit across thousands of files is
 reviewable only against a clean baseline.
 
-**Section (comment)** · `sec:indexlinter:area-comment`
+**Section (comment)** · `sec:emberlinter:area-comment`
 
 If this fails: the linter reads its own fixtures as the corpus's debt. A string
 literal may carry anything, and these sources carry plenty holding exactly the
@@ -153,7 +153,7 @@ code. The quiet failures are the awkward cases: a leading quote opening a
 lifetime rather than a literal swallows everything up to the next quote in the
 file, and a raw string closing early takes the rest of its line with it.
 
-**Section (constant)** · `sec:indexlinter:area-constant`
+**Section (constant)** · `sec:emberlinter:area-constant`
 
 If this fails: a value stops being answerable to the argument that fixed it.
 The pin is what makes a change loud — every citation of a value dangles in the
@@ -164,7 +164,7 @@ a declaration the census misses is a value nobody can adopt, and a local or a
 test fixture the census wrongly reads is a warrant demanded where no record
 could ever exist.
 
-**Section (coverage)** · `sec:indexlinter:area-coverage`
+**Section (coverage)** · `sec:emberlinter:area-coverage`
 
 If this fails: the corpus loses the instrument the scenario matrix retired
 behind. An intent is a statement written down in prose that no test yet
@@ -175,7 +175,7 @@ the verdict and shows only as a reviewer being told a promise is kept when no
 test establishes it — or being steered by figures computed from some corpus
 other than the one the gate judged.
 
-**Section (fix)** · `sec:indexlinter:area-fix`
+**Section (fix)** · `sec:emberlinter:area-fix`
 
 If this fails: labels go back to being maintained by hand at a scale where
 nobody can maintain them. The sweep's whole licence is that it writes labels
@@ -189,7 +189,7 @@ files at once. Idempotence is what makes the sweep safe to run at all, since
 one whose second pass differed from its first could never be trusted with the
 first.
 
-**Section (graph)** · `sec:indexlinter:area-graph`
+**Section (graph)** · `sec:emberlinter:area-graph`
 
 If this fails: outline review loses its instrument without losing its exit
 status, which is the worst way to lose one. None of these questions is a rule
@@ -200,7 +200,7 @@ than something a run fails on. The derived inventory stays out of every listing
 for arithmetic reasons: admit it and the orphan listing runs to thousands with
 the handful anybody wanted buried somewhere inside.
 
-**Section (head)** · `sec:indexlinter:area-head`
+**Section (head)** · `sec:emberlinter:area-head`
 
 If this fails: an environment stops having an identity. Minting and heading are
 two halves of one act, so a head carrying no label names nothing a citation
@@ -212,7 +212,7 @@ one of those as an environment head would find heads throughout prose that
 heads nothing, while missing the real shape leaves whole documents unlabelled
 and unremarked.
 
-**Section (label)** · `sec:indexlinter:area-label`
+**Section (label)** · `sec:emberlinter:area-label`
 
 If this fails: nothing downstream can trust the shape of what it holds. A value
 of the label type exists only for text matching the grammar exactly, which is
@@ -223,7 +223,7 @@ projection the same string its author wrote. The ordering matters as quietly: a
 sorted registry and a sorted list of rendered labels must agree, or two views
 of one corpus disagree about what comes first.
 
-**Section (legacy)** · `sec:indexlinter:area-legacy`
+**Section (legacy)** · `sec:emberlinter:area-legacy`
 
 If this fails: retiring a notation buys nothing, because the retired forms can
 still be written. The recognizer reads a source for the shapes the campaign
@@ -236,7 +236,7 @@ much of the rule as what it looks like: a form in code font is a token exhibited
 rather than a reference made, which is what lets the campaign's own documents
 name what they ban.
 
-**Section (occurrence)** · `sec:indexlinter:area-occurrence`
+**Section (occurrence)** · `sec:emberlinter:area-occurrence`
 
 If this fails: the difference between establishing a statement and referring to
 one stops being carried by the notation. Parentheses alone separate a mint from
@@ -247,7 +247,7 @@ the calculus safe to adopt: a span matching no form is ordinary text, so prose
 may quote commands, paths and file names in the same delimiters without any of
 them becoming an occurrence a run can fail on.
 
-**Section (outline)** · `sec:indexlinter:area-outline`
+**Section (outline)** · `sec:emberlinter:area-outline`
 
 If this fails: an outline becomes a document nobody can trust, which is worse
 than having no outline at all. The whole point of a document saying entry by
@@ -259,7 +259,7 @@ The relation is declared rather than inferred for the same reason: a checker
 guessing which of a row's citations was the target is the guess an outline
 exists to remove.
 
-**Section (owner)** · `sec:indexlinter:area-owner`
+**Section (owner)** · `sec:emberlinter:area-owner`
 
 If this fails: the signature stops matching the tree it describes. Prefixes are
 computed from crate names by one rule rather than transcribed, so a package
@@ -270,7 +270,7 @@ workspace from drifting apart unremarked. A manifest that cannot be read has to
 be reported rather than passed over, because owners going missing quietly means
 a run over a damaged tree reports a smaller corpus and calls it clean.
 
-**Section (profile)** · `sec:indexlinter:area-profile`
+**Section (profile)** · `sec:emberlinter:area-profile`
 
 If this fails: a test's label stops being a fact about the test. The area comes
 from where the file sits and the name from the identifier with its separators
@@ -282,7 +282,7 @@ function whose label was not updated must fail — otherwise a citation reaches 
 label that describes nothing any more, and the prose that cited it goes on
 reading as though it did.
 
-**Section (projection)** · `sec:indexlinter:area-projection`
+**Section (projection)** · `sec:emberlinter:area-projection`
 
 If this fails: the generated tables stop being owned by the labels and start
 being owned by whoever last typed in them. Both projections are compared byte
@@ -293,7 +293,7 @@ author add a paragraph above a table without the generator losing track of its
 own region, and what leaves the corpus's many hand-written test tables as a
 migration backlog rather than as failures on the day the machinery lands.
 
-**Section (prose)** · `sec:indexlinter:area-prose`
+**Section (prose)** · `sec:emberlinter:area-prose`
 
 If this fails: the checker reads documentation as bytes rather than as prose,
 and the participation rule collapses with it. Delimiter pairing and block
@@ -305,7 +305,7 @@ exhibits a token without meaning it, so a document may show mints and citations
 while making neither, and an unpaired delimiter costs its own block rather than
 the whole file.
 
-**Section (registry)** · `sec:indexlinter:area-registry`
+**Section (registry)** · `sec:emberlinter:area-registry`
 
 If this fails: the vocabulary of environments stops being the recorded one. The
 classification relation is read from the decision record's own tables rather
@@ -317,7 +317,7 @@ must be free to qualify, number and nest a name without stepping outside the
 vocabulary, while a name catalogued in its own right has to beat the reduction
 that would strip it back to something it is not.
 
-**Section (report)** · `sec:indexlinter:area-report`
+**Section (report)** · `sec:emberlinter:area-report`
 
 If this fails: a reader cannot act on what the run found. Locations count lines
 and columns from one and count columns in characters, so a reported position
@@ -328,7 +328,7 @@ the repairs differ — one the sweep writes, one it rewrites, one only renaming
 fixes, one nothing may paper over — and the stable codes beside them are what
 let a consumer select the findings it cares about without parsing sentences.
 
-**Section (retired)** · `sec:indexlinter:area-retired`
+**Section (retired)** · `sec:emberlinter:area-retired`
 
 If this fails: hundreds of references outlive the document that gave them
 meaning. Nothing outside the retired matrix defines what its ninetieth scenario
@@ -340,7 +340,7 @@ every mark and number in the corpus, giving the register a floor it could never
 reach, because reaching zero would mean rewriting prose that was never about
 the matrix.
 
-**Section (shape)** · `sec:indexlinter:area-shape`
+**Section (shape)** · `sec:emberlinter:area-shape`
 
 If this fails: the standard for a well-shaped record goes back to having no
 numbers attached to it. Nothing here is a rule and nothing may become one — a
@@ -351,7 +351,7 @@ documents the corpus already considers well shaped rather than from a constant
 somebody typed, and that divisions are measured apart, since a section heading
 whose next block is a subsection heads little but its own line.
 
-**Section (todo)** · `sec:indexlinter:area-todo`
+**Section (todo)** · `sec:emberlinter:area-todo`
 
 If this fails: the deficiency backlog stops being measurable. A notice has no
 identifier the language gives it, so its author's own opening words are the
@@ -363,9 +363,9 @@ label. The check and the register read through one recogniser for the reason
 the ratchet needs: two counters would eventually disagree about what a notice
 is.
 
-## License · `sec:indexlinter:readme-license`
+## License · `sec:emberlinter:readme-license`
 
-Copyright (c) 2024 The Torrust Developers.
+Copyright (c) 2024 Wild Sky Maker.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU Affero General Public License as published by the Free

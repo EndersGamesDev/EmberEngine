@@ -118,10 +118,10 @@ use crate::workspace::Package;
 /// The record fixes the mint's kind rather than leaving the generator to choose
 /// one: a matrix label is a mint of the Table kind, whose area and name are both
 /// derived, and the spelling is that kind's own token in the displays convention
-/// (´[ORCHESTRATION-conv:testdocs:folder-matrix]´).
+/// (´[EMBER-conv:testdocs:folder-matrix]´).
 ///
-/// ´const:indexlinter:matrix-head-kind-token´ (´[ORCHESTRATION-alg:const:word]´)
-/// ´const:indexlinter:matrix-head-kind-token-word-tab´
+/// ´const:emberlinter:matrix-head-kind-token´ (´[EMBER-alg:const:word]´)
+/// ´const:emberlinter:matrix-head-kind-token-word-tab´
 pub const MATRIX_KIND: &str = "tab";
 
 /// The words closing every matrix title and every matrix label.
@@ -129,34 +129,34 @@ pub const MATRIX_KIND: &str = "tab";
 /// The derivation the record states ends here: the name is the folder's path
 /// within its package with the level standing in for the root, then the level,
 /// then this suffix — so the same words close the label and the title it heads
-/// (´[ORCHESTRATION-conv:testdocs:folder-matrix]´).
+/// (´[EMBER-conv:testdocs:folder-matrix]´).
 ///
-/// ´const:indexlinter:matrix-name-suffix´ (´[ORCHESTRATION-alg:const:text]´)
-/// ´const:indexlinter:matrix-name-suffix-text-xb8df3dc1´
+/// ´const:emberlinter:matrix-name-suffix´ (´[EMBER-alg:const:text]´)
+/// ´const:emberlinter:matrix-name-suffix-text-xb8df3dc1´
 pub const MATRIX_SUFFIX: &str = "test-matrix";
 
 /// The readme every Rust-bearing folder carries.
 ///
 /// Two records fix this one name. Every folder containing a Rust source carries
 /// a readme, and every such readme carries one generated matrix
-/// (´[ORCHESTRATION-conv:testdocs:folder-matrix]´); and the carrier reaches the file by
+/// (´[EMBER-conv:testdocs:folder-matrix]´); and the carrier reaches the file by
 /// this filename at any depth under a package rather than by a path, so a test
 /// tree's readme is carried where the test tree expects it
-/// (´[ORCHESTRATION-req:testdocs:carrier-extension]´).
+/// (´[EMBER-req:testdocs:carrier-extension]´).
 ///
-/// ´const:indexlinter:folder-readme-filename´ (´[ORCHESTRATION-alg:const:text]´)
-/// ´const:indexlinter:folder-readme-filename-text-x633a5d62´
+/// ´const:emberlinter:folder-readme-filename´ (´[EMBER-alg:const:text]´)
+/// ´const:emberlinter:folder-readme-filename-text-x633a5d62´
 pub const README: &str = "README.md";
 
 /// The catalogued environment name the generated naming run writes.
 ///
 /// The naming run is what lets the head validate: the title states the level and
 /// is no catalogued environment name, so head validation reduces this bold run
-/// to the kind the label declares (´[ORCHESTRATION-conv:testdocs:folder-matrix]´). The
+/// to the kind the label declares (´[EMBER-conv:testdocs:folder-matrix]´). The
 /// value is therefore the catalogued name of that kind and cannot be reworded.
 ///
-/// ´const:indexlinter:matrix-naming-run-environment´ (´[ORCHESTRATION-alg:const:text]´)
-/// ´const:indexlinter:matrix-naming-run-environment-text-x22a8d19f´
+/// ´const:emberlinter:matrix-naming-run-environment´ (´[EMBER-alg:const:text]´)
+/// ´const:emberlinter:matrix-naming-run-environment-text-x22a8d19f´
 const ENVIRONMENT: &str = "Table";
 
 /// One folder that carries a Rust source, and so wants a readme.
@@ -805,7 +805,7 @@ mod tests {
 
     /// The reconciliation the owner-name document declares, as these tests read it.
     fn names() -> OwnerNames {
-        OwnerNames::new("torrust-", [])
+        OwnerNames::new("ember-", [])
     }
 
     fn corpus(root: &Path) -> CorpusPlan {
@@ -826,7 +826,7 @@ mod tests {
 
         MatrixFolder::from_parts(
             PathBuf::from(directory),
-            "torrust-demo".to_owned(),
+            "ember-demo".to_owned(),
             level,
             label,
         )
@@ -906,8 +906,8 @@ mod tests {
     }
 
     fn assets_of(path: &str, text: &str) -> Vec<CoveredAsset> {
-        let packages = vec![Package::new("torrust-demo", "packages/demo")];
-        let tests = scan_source("torrust-demo", Path::new(path), text).expect("a Rust source");
+        let packages = vec![Package::new("ember-demo", "packages/demo")];
+        let tests = scan_source("ember-demo", Path::new(path), text).expect("a Rust source");
         let (assets, findings) = cover(&packages, &Census::from_tests(tests, 1));
 
         assert!(
@@ -1037,7 +1037,7 @@ mod tests {
             fs::write(tests.join("README.md"), text).expect("write");
         }
 
-        let packages = vec![Package::new("torrust-demo", "packages/demo")];
+        let packages = vec![Package::new("ember-demo", "packages/demo")];
         let assets = assets_of("packages/demo/src/tests/demo.rs", &minting());
 
         (root, packages, assets)

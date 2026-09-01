@@ -66,8 +66,8 @@ use crate::label::Label;
 /// record fixes where. The figure wants a measurement of what a reviewer
 /// actually reads before scrolling past, which nothing here has taken.
 ///
-/// ´const:indexlinter:uncited-listing-bound´ (´[ORCHESTRATION-alg:const:count]´)
-/// ´const:indexlinter:uncited-listing-bound-count-20´
+/// ´const:emberlinter:uncited-listing-bound´ (´[EMBER-alg:const:count]´)
+/// ´const:emberlinter:uncited-listing-bound-count-20´
 pub const DEFAULT_UNCITED: usize = 20;
 
 /// One claim mint standing in a test, as the report names it.

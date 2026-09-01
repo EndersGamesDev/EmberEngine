@@ -221,15 +221,15 @@ fn near_miss_reason(interior: &str) -> Option<&'static str> {
 ///
 /// Total resolution asks the checker to warn on near-miss spans — label-shaped
 /// interiors wanting only casing, spacing or brackets — without treating any of
-/// them as occurrences (´[ORCHESTRATION-inv:labels:total-resolution]´), and this class is
+/// them as occurrences (´[EMBER-inv:labels:total-resolution]´), and this class is
 /// the one such warning no span reader can raise, because the delimiters that
 /// would start a reading are exactly what the author left out. The reason stands
 /// as a value rather than as a literal at each site because both surfaces that
 /// can meet the class, the prose reader and the code reader, must say the same
 /// thing about it: a warning worded two ways would read as two classes.
 ///
-/// ´const:indexlinter:undelimited-import-near-miss´ (´[ORCHESTRATION-alg:const:text]´)
-/// ´const:indexlinter:undelimited-import-near-miss-text-xd14c8bf2´
+/// ´const:emberlinter:undelimited-import-near-miss´ (´[EMBER-alg:const:text]´)
+/// ´const:emberlinter:undelimited-import-near-miss-text-xd14c8bf2´
 pub const UNDELIMITED_IMPORT_REASON: &str = "a bracketed import without its span delimiters";
 
 /// Every parenthesis of a text run directly wrapping bracketed import-shaped

@@ -1,4 +1,4 @@
-namespace = "com.torrust.index.linter.policies"
+namespace = "com.ember.index.linter.policies"
 version = [1, 0, 0]
 
 policies = [

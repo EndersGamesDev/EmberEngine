@@ -82,7 +82,7 @@ fn reconcile_partition(plan: &ExecutionPlan) -> BTreeMap<PathBuf, String> {
     let derived_owners: BTreeSet<String> = owner_by_directory.values().cloned().collect();
     let declared_owners: BTreeSet<String> = snapshot.owners().iter().cloned().collect();
     let mut expected_owners = derived_owners;
-    expected_owners.insert("ORCHESTRATION".to_owned());
+    expected_owners.insert("EMBER".to_owned());
     assert_eq!(expected_owners, declared_owners);
     assert_eq!(owner_by_directory.len(), 12);
     assert_eq!(plan.workspace().findings().len(), 0);
@@ -93,7 +93,7 @@ fn reconcile_partition(plan: &ExecutionPlan) -> BTreeMap<PathBuf, String> {
         let expected = owner_by_directory
             .iter()
             .find_map(|(directory, owner)| native.starts_with(directory).then_some(owner))
-            .map_or("ORCHESTRATION", String::as_str);
+            .map_or("EMBER", String::as_str);
 
         assert_eq!(owner, expected, "{}", path.display());
         *path_counts.entry(owner.clone()).or_default() += 1;
@@ -204,13 +204,13 @@ fn the_repository_owner_surface_reconciles_in_both_directions() {
     let (crateless_reach, crate_reach): (BTreeSet<_>, BTreeSet<_>) = declared_reach
         .iter()
         .cloned()
-        .partition(|(_owner, target)| target == "ORCHESTRATION");
+        .partition(|(_owner, target)| target == "EMBER");
     let expected_crateless_reach = BTreeSet::from([
-        ("CODEXLANE".to_owned(), "ORCHESTRATION".to_owned()),
-        ("HEARTBEATGUARD".to_owned(), "ORCHESTRATION".to_owned()),
-        ("LANEVERIFY".to_owned(), "ORCHESTRATION".to_owned()),
-        ("LINTER".to_owned(), "ORCHESTRATION".to_owned()),
-        ("ORCHESTRATORHOOK".to_owned(), "ORCHESTRATION".to_owned()),
+        ("CODEXLANE".to_owned(), "EMBER".to_owned()),
+        ("HEARTBEATGUARD".to_owned(), "EMBER".to_owned()),
+        ("LANEVERIFY".to_owned(), "EMBER".to_owned()),
+        ("LINTER".to_owned(), "EMBER".to_owned()),
+        ("EMBERHOOK".to_owned(), "EMBER".to_owned()),
     ]);
 
     assert_eq!(derived_reach, crate_reach);

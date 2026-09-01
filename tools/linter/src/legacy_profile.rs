@@ -445,7 +445,7 @@ mod tests {
              let quiet = \"// LEGACY: string data\";\n"
         );
         let (sites, mut findings) = scan_legacy_sites(
-            "torrust-demo",
+            "ember-demo",
             Path::new("packages/demo/src/lib.rs"),
             &source,
         );

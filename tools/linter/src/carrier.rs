@@ -75,8 +75,8 @@ use crate::plan::CorpusPlan;
 /// deliberately outside, awaiting the scanned-region recognition a later wave
 /// fixes, so this list grows toward the judgment and never away from it.
 ///
-/// ´const:indexlinter:repository-prose-trees´ (ADR-T-018, The constant label profile)
-/// ´const:indexlinter:repository-prose-trees-form-xd53b2adf´
+/// ´const:emberlinter:repository-prose-trees´ (ADR-T-018, The constant label profile)
+/// ´const:emberlinter:repository-prose-trees-form-xd53b2adf´
 #[cfg(test)]
 const CARRIED_DIRECTORIES: &[&str] = &["adr", "docs"];
 
@@ -125,8 +125,8 @@ const CARRIED_DIRECTORIES: &[&str] = &["adr", "docs"];
 /// warrant is the convention, and this constant answers to it until the register
 /// moves out of this file and answers to that declaration instead.
 ///
-/// ´const:indexlinter:repository-root-prose´ (ADR-T-018, The constant label profile)
-/// ´const:indexlinter:repository-root-prose-form-x95281044´
+/// ´const:emberlinter:repository-root-prose´ (ADR-T-018, The constant label profile)
+/// ´const:emberlinter:repository-root-prose-form-x95281044´
 #[cfg(test)]
 const CARRIED_FILES: &[&str] = &[
     "AGENTS.md",
@@ -146,8 +146,8 @@ const CARRIED_FILES: &[&str] = &[
 ///
 /// TODO ´todo:code:record-where-a-workspace-member-s´: record where a workspace member's directory is fixed for the carrier as well as for the owners.
 ///
-/// ´const:indexlinter:member-tree-home´ (ADR-T-018, The constant label profile)
-/// ´const:indexlinter:member-tree-home-word-packages´
+/// ´const:emberlinter:member-tree-home´ (ADR-T-018, The constant label profile)
+/// ´const:emberlinter:member-tree-home-word-packages´
 #[cfg(test)]
 const PACKAGES_DIRECTORY: &str = "packages";
 
@@ -162,8 +162,8 @@ const PACKAGES_DIRECTORY: &str = "packages";
 /// contributes its own — so a package joins the carrier by existing, and one with
 /// neither directory contributes nothing, which is no defect.
 ///
-/// ´const:indexlinter:package-prose-trees´ (ADR-T-018, The constant label profile)
-/// ´const:indexlinter:package-prose-trees-form-xd53b2adf´
+/// ´const:emberlinter:package-prose-trees´ (ADR-T-018, The constant label profile)
+/// ´const:emberlinter:package-prose-trees-form-xd53b2adf´
 #[cfg(test)]
 const CARRIED_PACKAGE_DIRECTORIES: &[&str] = &["adr", "docs"];
 
@@ -176,8 +176,8 @@ const CARRIED_PACKAGE_DIRECTORIES: &[&str] = &["adr", "docs"];
 /// the rule, and admitting a second one would be admitting a second document
 /// class rather than widening this one.
 ///
-/// ´const:indexlinter:self-documenting-filename´ (ADR-T-018, The constant label profile)
-/// ´const:indexlinter:self-documenting-filename-text-x633a5d62´
+/// ´const:emberlinter:self-documenting-filename´ (ADR-T-018, The constant label profile)
+/// ´const:emberlinter:self-documenting-filename-text-x633a5d62´
 #[cfg(test)]
 const CARRIED_FILENAME: &str = "README.md";
 
@@ -209,8 +209,8 @@ const CARRIED_FILENAME: &str = "README.md";
 /// prose trees, so a member's changelog joins the carrier by existing and a
 /// member without one contributes nothing, which is no defect.
 ///
-/// ´const:indexlinter:package-root-prose´ (ADR-T-018, The constant label profile)
-/// ´const:indexlinter:package-root-prose-text-x3d162ee4´
+/// ´const:emberlinter:package-root-prose´ (ADR-T-018, The constant label profile)
+/// ´const:emberlinter:package-root-prose-text-x3d162ee4´
 #[cfg(test)]
 const CARRIED_PACKAGE_FILENAME: &str = "CHANGELOG.md";
 
@@ -224,8 +224,8 @@ const CARRIED_PACKAGE_FILENAME: &str = "CHANGELOG.md";
 /// rather than by relocation is what the requirement buys, so every package gains
 /// the same reach in one adoption datum rather than one relocation at a time.
 ///
-/// ´const:indexlinter:filename-rule-reach´ (ADR-T-018, The constant label profile)
-/// ´const:indexlinter:filename-rule-reach-form-x924fb5f3´
+/// ´const:emberlinter:filename-rule-reach´ (ADR-T-018, The constant label profile)
+/// ´const:emberlinter:filename-rule-reach-form-x924fb5f3´
 #[cfg(test)]
 const README_TREES: &[&str] = &["packages", "src", "tests"];
 

@@ -71,7 +71,7 @@ fn carries_the_profile_counts_beside_the_prose_counts() {
     let root = tempfile::tempdir().expect("temporary directory");
     fs::write(
         root.path().join("Cargo.toml"),
-        "[workspace]\nmembers = [\".\"]\n\n[package]\nname = \"torrust-demo\"\n",
+        "[workspace]\nmembers = [\".\"]\n\n[package]\nname = \"ember-demo\"\n",
     )
     .expect("write");
     fs::create_dir_all(root.path().join("src")).expect("create");
@@ -98,7 +98,7 @@ fn carries_the_profile_counts_beside_the_prose_counts() {
 /// A one-package fixture tree: two claimed tests, and a folder with none.
 /// The reconciliation these projection fixtures are named by.
 fn projection_names() -> crate::roster::OwnerNames {
-    crate::roster::OwnerNames::new("torrust-", [])
+    crate::roster::OwnerNames::new("ember-", [])
 }
 
 fn fixture_tree() -> tempfile::TempDir {
@@ -114,7 +114,7 @@ fn fixture_tree() -> tempfile::TempDir {
     fs::create_dir_all(root.path().join("packages/demo/src/maths")).expect("create");
     fs::write(
         root.path().join("packages/demo/Cargo.toml"),
-        "[package]\nname = \"torrust-demo\"\n",
+        "[package]\nname = \"ember-demo\"\n",
     )
     .expect("write");
     fs::write(
@@ -547,7 +547,7 @@ fn routed_tree() -> tempfile::TempDir {
     fs::create_dir_all(root.path().join("packages/quiet/src/maths")).expect("create");
     fs::write(
         root.path().join("packages/quiet/Cargo.toml"),
-        "[package]\nname = \"torrust-quiet\"\n",
+        "[package]\nname = \"ember-quiet\"\n",
     )
     .expect("write");
     fs::write(
@@ -584,7 +584,7 @@ fn declare_routed_surface(root: &Path) {
     fs::create_dir_all(&directory).expect("create the declaration directory");
 
     let envelope = |schema: &str| {
-        format!("namespace = \"com.torrust.index.linter.{schema}\"\nversion = [1, 0, 0]\n\n")
+        format!("namespace = \"com.ember.index.linter.{schema}\"\nversion = [1, 0, 0]\n\n")
     };
     let owners = "owners = [\"DEMO\", \"QUIET\"]\n\
             partitions = [\n\

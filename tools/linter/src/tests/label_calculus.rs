@@ -73,9 +73,9 @@ fn adoption(packages: &[Package]) -> Adoption {
     index_adoption(
         packages,
         Some(&crate::roster::OwnerNames::new(
-            "torrust-",
+            "ember-",
             [crate::roster::UnbuiltMember::new(
-                "torrust-notime",
+                "ember-notime",
                 "packages/notime",
             )],
         )),
@@ -95,8 +95,8 @@ fn source(path: &str, text: &str) -> Source {
 
 /// The covered notices of one Rust source, taken the way the check takes them.
 fn notices(path: &str, text: &str) -> Vec<CoveredNotice> {
-    let packages = [Package::new("torrust-demo", "packages/demo")];
-    let (found, orphans) = scan_todos("torrust-demo", Path::new(path), text);
+    let packages = [Package::new("ember-demo", "packages/demo")];
+    let (found, orphans) = scan_todos("ember-demo", Path::new(path), text);
 
     assert!(
         orphans.is_empty(),
@@ -141,9 +141,9 @@ fn assets(package: &str, directory: &str, path: &str, text: &str) -> Vec<Covered
 
 /// The demonstration package's one covered test, and the adoption knowing it.
 fn demo() -> (Adoption, Vec<CoveredAsset>) {
-    let adoption = adoption(&[Package::new("torrust-demo", "packages/demo")]);
+    let adoption = adoption(&[Package::new("ember-demo", "packages/demo")]);
     let covered = assets(
-        "torrust-demo",
+        "ember-demo",
         "packages/demo",
         "packages/demo/src/engine.rs",
         "/// Decodes a header.\n/// \u{b4}test:unit:decodes-a-header\u{b4}\n#[test]\nfn decodes_a_header() {}\n",
@@ -154,9 +154,9 @@ fn demo() -> (Adoption, Vec<CoveredAsset>) {
 
 /// The same package, its one test also carrying the claim it establishes.
 fn demo_with_claim() -> (Adoption, Vec<CoveredAsset>) {
-    let adoption = adoption(&[Package::new("torrust-demo", "packages/demo")]);
+    let adoption = adoption(&[Package::new("ember-demo", "packages/demo")]);
     let covered = assets(
-        "torrust-demo",
+        "ember-demo",
         "packages/demo",
         "packages/demo/src/engine.rs",
         "/// Decodes a header.\n\
@@ -590,7 +590,7 @@ fn seeds_the_registries_in_either_traversal_order() {
 /// ´test:crate:resolves-a-prose-citation-of-a-notice´
 #[test]
 fn resolves_a_prose_citation_of_a_notice() {
-    let adoption = adoption(&[Package::new("torrust-demo", "packages/demo")]);
+    let adoption = adoption(&[Package::new("ember-demo", "packages/demo")]);
     let covered = notices("packages/demo/src/engine.rs", "// TODO: read the flag\n");
     let sources = [source(
         "packages/demo/docs/note.md",
@@ -620,7 +620,7 @@ fn resolves_a_prose_citation_of_a_notice() {
 /// ´test:crate:resolves-a-comment-citation-of-a-notice´
 #[test]
 fn resolves_a_comment_citation_of_a_notice() {
-    let adoption = adoption(&[Package::new("torrust-demo", "packages/demo")]);
+    let adoption = adoption(&[Package::new("ember-demo", "packages/demo")]);
     let covered = notices("packages/demo/src/engine.rs", "// TODO: read the flag\n");
     let commentary = format!("// blocked on ({ACUTE}todo:code:read-the-flag{ACUTE}) for now\n");
     let (citations, _findings) =
@@ -647,7 +647,7 @@ fn resolves_a_comment_citation_of_a_notice() {
 /// ´test:crate:fails-a-citation-of-a-notice-no-source-carries´
 #[test]
 fn fails_a_citation_of_a_notice_no_source_carries() {
-    let adoption = adoption(&[Package::new("torrust-demo", "packages/demo")]);
+    let adoption = adoption(&[Package::new("ember-demo", "packages/demo")]);
     let covered = notices("packages/demo/src/engine.rs", "// TODO: read the flag\n");
     let sources = [source(
         "packages/demo/docs/note.md",
@@ -681,7 +681,7 @@ fn fails_a_citation_of_a_notice_no_source_carries() {
 /// ´test:crate:refuses-a-hand-authored-notice-mint-and-mints-nothing-by-citing´
 #[test]
 fn refuses_a_hand_authored_notice_mint_and_mints_nothing_by_citing() {
-    let adoption = adoption(&[Package::new("torrust-demo", "packages/demo")]);
+    let adoption = adoption(&[Package::new("ember-demo", "packages/demo")]);
     let covered = notices("packages/demo/src/engine.rs", "// TODO: read the flag\n");
 
     let authored = [source(
@@ -727,7 +727,7 @@ fn refuses_a_hand_authored_notice_mint_and_mints_nothing_by_citing() {
 /// ´test:crate:leaves-a-displayed-notice-label-inert´
 #[test]
 fn leaves_a_displayed_notice_label_inert() {
-    let adoption = adoption(&[Package::new("torrust-demo", "packages/demo")]);
+    let adoption = adoption(&[Package::new("ember-demo", "packages/demo")]);
     let covered = notices("packages/demo/src/engine.rs", "// TODO: read the flag\n");
     let sources = [source(
         "packages/demo/docs/note.md",
@@ -1011,7 +1011,7 @@ fn resolves_a_same_owner_citation_of_a_document_mint() {
 /// ´test:crate:resolves-an-imported-citation-of-a-document-mint´
 #[test]
 fn resolves_an_imported_citation_of_a_document_mint() {
-    let adoption = adoption(&[Package::new("torrust-demo", "packages/demo")]);
+    let adoption = adoption(&[Package::new("ember-demo", "packages/demo")]);
     let minting = source(
         "packages/demo/docs/note.md",
         "# The Demonstration Note · `doc:demo:note`\n",

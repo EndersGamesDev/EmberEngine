@@ -81,24 +81,24 @@ fn workspace(root: &Path) {
         "Cargo.toml",
         "[workspace]\n\
              members = [\".\", \"packages/alpha\", \"packages/beta\", \"packages/gamma\"]\n\n\
-             [package]\nname = \"torrust-index\"\n\n\
-             [dependencies]\ntorrust-alpha = { path = \"packages/alpha\" }\n",
+             [package]\nname = \"ember-index\"\n\n\
+             [dependencies]\nember-alpha = { path = \"packages/alpha\" }\n",
     );
     write(
         root,
         "packages/alpha/Cargo.toml",
-        "[package]\nname = \"torrust-alpha\"\n\n\
-             [dev-dependencies]\ntorrust-beta = { path = \"../beta\" }\n",
+        "[package]\nname = \"ember-alpha\"\n\n\
+             [dev-dependencies]\nember-beta = { path = \"../beta\" }\n",
     );
     write(
         root,
         "packages/beta/Cargo.toml",
-        "[package]\nname = \"torrust-beta\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+        "[package]\nname = \"ember-beta\"\n\n[lib]\npath = \"src/lib.rs\"\n",
     );
     write(
         root,
         "packages/gamma/Cargo.toml",
-        "[package]\nname = \"torrust-gamma\"\n",
+        "[package]\nname = \"ember-gamma\"\n",
     );
 }
 
@@ -150,9 +150,9 @@ fn judge(root: &Path) -> (Vec<Finding>, crate::LayerAnalysis) {
     let adoption = index_adoption(
         &packages,
         Some(&crate::roster::OwnerNames::new(
-            "torrust-",
+            "ember-",
             [crate::roster::UnbuiltMember::new(
-                "torrust-notime",
+                "ember-notime",
                 "packages/notime",
             )],
         )),
@@ -183,9 +183,9 @@ fn judge_declaring(root: &Path, rows: &[(&str, &str)]) -> (Vec<Finding>, crate::
     let adoption = index_adoption(
         &packages,
         Some(&crate::roster::OwnerNames::new(
-            "torrust-",
+            "ember-",
             [crate::roster::UnbuiltMember::new(
-                "torrust-notime",
+                "ember-notime",
                 "packages/notime",
             )],
         )),
@@ -205,9 +205,9 @@ fn judge_with_code(root: &Path) -> (Vec<Finding>, crate::LayerAnalysis) {
     let adoption = index_adoption(
         &packages,
         Some(&crate::roster::OwnerNames::new(
-            "torrust-",
+            "ember-",
             [crate::roster::UnbuiltMember::new(
-                "torrust-notime",
+                "ember-notime",
                 "packages/notime",
             )],
         )),
@@ -230,9 +230,9 @@ fn engine_codes(root: &Path) -> Vec<&'static str> {
     let adoption = index_adoption(
         &packages,
         Some(&crate::roster::OwnerNames::new(
-            "torrust-",
+            "ember-",
             [crate::roster::UnbuiltMember::new(
-                "torrust-notime",
+                "ember-notime",
                 "packages/notime",
             )],
         )),
@@ -264,9 +264,9 @@ fn fixture_reach(root: &Path) -> crate::layers::Reach {
     let adoption = index_adoption(
         &packages,
         Some(&crate::roster::OwnerNames::new(
-            "torrust-",
+            "ember-",
             [crate::roster::UnbuiltMember::new(
-                "torrust-notime",
+                "ember-notime",
                 "packages/notime",
             )],
         )),
@@ -291,9 +291,9 @@ fn derives_reach_from_every_dependency_table() {
     let adoption = index_adoption(
         &packages,
         Some(&crate::roster::OwnerNames::new(
-            "torrust-",
+            "ember-",
             [crate::roster::UnbuiltMember::new(
-                "torrust-notime",
+                "ember-notime",
                 "packages/notime",
             )],
         )),
@@ -302,15 +302,15 @@ fn derives_reach_from_every_dependency_table() {
     let reach = derive_reach(root.path(), &packages, &adoption);
 
     assert!(
-        reach.reaches(&owner("index"), &owner("torrust-alpha")),
+        reach.reaches(&owner("index"), &owner("ember-alpha")),
         "an ordinary edge"
     );
     assert!(
-        reach.reaches(&owner("torrust-alpha"), &owner("torrust-beta")),
+        reach.reaches(&owner("ember-alpha"), &owner("ember-beta")),
         "a development edge reaches exactly as an ordinary one does"
     );
     assert!(
-        !reach.reaches(&owner("torrust-beta"), &owner("torrust-gamma")),
+        !reach.reaches(&owner("ember-beta"), &owner("ember-gamma")),
         "a library target's path declares no dependency"
     );
     assert_eq!(reach.edge_count(), 2, "two declared edges and no more");
@@ -329,21 +329,21 @@ fn derives_an_inherited_workspace_path_dependency() {
         "Cargo.toml",
         "[workspace]\n\
              members = [\".\", \"packages/alpha\", \"packages/beta\", \"packages/gamma\"]\n\n\
-             [workspace.dependencies]\ntorrust-beta = { path = \"packages/beta\" }\n\n\
-             [package]\nname = \"torrust-index\"\n\n\
-             [dependencies]\ntorrust-alpha = { path = \"packages/alpha\" }\n",
+             [workspace.dependencies]\nember-beta = { path = \"packages/beta\" }\n\n\
+             [package]\nname = \"ember-index\"\n\n\
+             [dependencies]\nember-alpha = { path = \"packages/alpha\" }\n",
     );
     write(
         root.path(),
         "packages/alpha/Cargo.toml",
-        "[package]\nname = \"torrust-alpha\"\n\n\
-             [dev-dependencies]\ntorrust-beta = { workspace = true }\n",
+        "[package]\nname = \"ember-alpha\"\n\n\
+             [dev-dependencies]\nember-beta = { workspace = true }\n",
     );
 
     let reach = fixture_reach(root.path());
 
     assert!(
-        reach.reaches(&owner("torrust-alpha"), &owner("torrust-beta")),
+        reach.reaches(&owner("ember-alpha"), &owner("ember-beta")),
         "the inherited root path declares the member edge"
     );
     assert_eq!(reach.edge_count(), 2, "the two path edges and no more");
@@ -363,20 +363,20 @@ fn derives_no_edge_from_an_inherited_dependency_without_a_path() {
         "[workspace]\n\
              members = [\".\", \"packages/alpha\", \"packages/beta\", \"packages/gamma\"]\n\n\
              [workspace.dependencies]\nserde = \"1\"\n\n\
-             [package]\nname = \"torrust-index\"\n\n\
-             [dependencies]\ntorrust-alpha = { path = \"packages/alpha\" }\n",
+             [package]\nname = \"ember-index\"\n\n\
+             [dependencies]\nember-alpha = { path = \"packages/alpha\" }\n",
     );
     write(
         root.path(),
         "packages/alpha/Cargo.toml",
-        "[package]\nname = \"torrust-alpha\"\n\n\
+        "[package]\nname = \"ember-alpha\"\n\n\
              [dev-dependencies]\nserde = { workspace = true }\n",
     );
 
     let reach = fixture_reach(root.path());
 
     assert!(
-        reach.declared(&owner("torrust-alpha")).is_empty(),
+        reach.declared(&owner("ember-alpha")).is_empty(),
         "an inherited external dependency declares no edge"
     );
     assert_eq!(reach.edge_count(), 1, "only the root's literal path edge");
@@ -393,7 +393,7 @@ fn continues_to_derive_a_literal_member_path_dependency() {
     let reach = fixture_reach(root.path());
 
     assert!(
-        reach.reaches(&owner("torrust-alpha"), &owner("torrust-beta")),
+        reach.reaches(&owner("ember-alpha"), &owner("ember-beta")),
         "the member's literal path still declares its edge"
     );
     assert_eq!(
@@ -416,9 +416,9 @@ fn reach_is_reflexive_and_not_transitive() {
     let adoption = index_adoption(
         &packages,
         Some(&crate::roster::OwnerNames::new(
-            "torrust-",
+            "ember-",
             [crate::roster::UnbuiltMember::new(
-                "torrust-notime",
+                "ember-notime",
                 "packages/notime",
             )],
         )),
@@ -427,11 +427,11 @@ fn reach_is_reflexive_and_not_transitive() {
     let reach = derive_reach(root.path(), &packages, &adoption);
 
     assert!(
-        reach.reaches(&owner("torrust-gamma"), &owner("torrust-gamma")),
+        reach.reaches(&owner("ember-gamma"), &owner("ember-gamma")),
         "reflexive"
     );
     assert!(
-        !reach.reaches(&owner("index"), &owner("torrust-beta")),
+        !reach.reaches(&owner("index"), &owner("ember-beta")),
         "root reaches alpha and alpha reaches beta, and root still does not reach beta"
     );
 }
@@ -499,7 +499,7 @@ fn generated_imports_obey_reach() {
     write(
         root.path(),
         "packages/alpha/Cargo.toml",
-        "[package]\nname = \"torrust-alpha\"\n",
+        "[package]\nname = \"ember-alpha\"\n",
     );
 
     let (findings, counts) = judge(root.path());
@@ -519,8 +519,8 @@ fn generated_imports_obey_reach() {
     write(
         root.path(),
         "packages/alpha/Cargo.toml",
-        "[package]\nname = \"torrust-alpha\"\n\n\
-         [dev-dependencies]\ntorrust-beta = { path = \"../beta\" }\n",
+        "[package]\nname = \"ember-alpha\"\n\n\
+         [dev-dependencies]\nember-beta = { path = \"../beta\" }\n",
     );
 
     let (findings, counts) = judge(root.path());
@@ -547,9 +547,9 @@ fn a_generated_import_instantiates_its_cited_owner_prerequisite() {
     let adoption = index_adoption(
         &packages,
         Some(&crate::roster::OwnerNames::new(
-            "torrust-",
+            "ember-",
             [crate::roster::UnbuiltMember::new(
-                "torrust-notime",
+                "ember-notime",
                 "packages/notime",
             )],
         )),
@@ -563,17 +563,17 @@ fn a_generated_import_instantiates_its_cited_owner_prerequisite() {
         panic!("one generated cited-owner edge: {edges:?}");
     };
 
-    assert_eq!(edge.owner, "torrust-alpha");
-    assert_eq!(edge.target, "torrust-beta");
+    assert_eq!(edge.owner, "ember-alpha");
+    assert_eq!(edge.target, "ember-beta");
     assert_eq!(
         edge.location.path(),
         Path::new("packages/alpha/src/tests/README.md")
     );
 
     let pairs = vec![
-        Pair::singleton("torrust-alpha", "labels.citations-imported-resolve"),
-        Pair::singleton("torrust-alpha", "labels.citations-import-form"),
-        Pair::singleton("torrust-alpha", "labels.mints-well-formed"),
+        Pair::singleton("ember-alpha", "labels.citations-imported-resolve"),
+        Pair::singleton("ember-alpha", "labels.citations-import-form"),
+        Pair::singleton("ember-alpha", "labels.mints-well-formed"),
     ];
     let findings = retiring_verify(&pairs, &edges, Some("index"));
     let [
@@ -590,7 +590,7 @@ fn a_generated_import_instantiates_its_cited_owner_prerequisite() {
     };
 
     assert_eq!(*scope, "cited-owner");
-    assert_eq!(required_owner, "torrust-beta");
+    assert_eq!(required_owner, "ember-beta");
     assert_eq!(required_policy, "labels.mints-unique");
     assert_eq!(
         location.as_ref().map(crate::finding::Location::path),
@@ -628,9 +628,9 @@ fn refuses_a_sideways_import_across_no_edge() {
         panic!("one unreached import: {findings:?}");
     };
 
-    assert_eq!(citing_owner, "torrust-gamma");
+    assert_eq!(citing_owner, "ember-gamma");
     assert_eq!(prefix.as_str(), "BETA");
-    assert_eq!(cited_owner, "torrust-beta");
+    assert_eq!(cited_owner, "ember-beta");
     assert!(
         absent_edge.contains("packages/gamma/Cargo.toml") && absent_edge.contains("packages/beta"),
         "the absent edge names both ends: {absent_edge}"
@@ -675,7 +675,7 @@ fn refuses_a_package_import_in_the_root_corpus_prose() {
     };
 
     assert_eq!(prefix.as_str(), "ALPHA");
-    assert_eq!(cited_owner, "torrust-alpha");
+    assert_eq!(cited_owner, "ember-alpha");
     assert_eq!(counts.downward_imports, 1);
     assert_eq!(counts.violations, 1);
 }
@@ -936,9 +936,9 @@ fn derives_no_edge_for_a_package_the_workspace_does_not_build() {
     let adoption = index_adoption(
         &packages,
         Some(&crate::roster::OwnerNames::new(
-            "torrust-",
+            "ember-",
             [crate::roster::UnbuiltMember::new(
-                "torrust-notime",
+                "ember-notime",
                 "packages/notime",
             )],
         )),
@@ -946,10 +946,10 @@ fn derives_no_edge_for_a_package_the_workspace_does_not_build() {
     );
     let reach = derive_reach(root.path(), &packages, &adoption);
 
-    assert!(reach.crate_name_of(&owner("torrust-notime")).is_none());
-    assert!(!reach.reaches(&owner("torrust-alpha"), &owner("torrust-notime")));
+    assert!(reach.crate_name_of(&owner("ember-notime")).is_none());
+    assert!(!reach.reaches(&owner("ember-alpha"), &owner("ember-notime")));
     assert!(
-        reach.reaches(&owner("torrust-notime"), reach.root()),
+        reach.reaches(&owner("ember-notime"), reach.root()),
         "an absent owner still reaches the root, as every corpus does"
     );
 }
@@ -967,9 +967,9 @@ fn keeps_an_edgeless_corpus_in_the_relation() {
     let adoption = index_adoption(
         &packages,
         Some(&crate::roster::OwnerNames::new(
-            "torrust-",
+            "ember-",
             [crate::roster::UnbuiltMember::new(
-                "torrust-notime",
+                "ember-notime",
                 "packages/notime",
             )],
         )),
@@ -978,6 +978,6 @@ fn keeps_an_edgeless_corpus_in_the_relation() {
     let reach = derive_reach(root.path(), &packages, &adoption);
 
     assert_eq!(reach.corpus_count(), 4, "the root and its three packages");
-    assert!(reach.declared(&owner("torrust-gamma")).is_empty());
-    assert_eq!(reach.crate_name_of(&owner("index")), Some("torrust-index"));
+    assert!(reach.declared(&owner("ember-gamma")).is_empty());
+    assert_eq!(reach.crate_name_of(&owner("index")), Some("ember-index"));
 }

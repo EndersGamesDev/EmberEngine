@@ -85,29 +85,29 @@ use crate::workspace::Package;
 /// The kind token this profile governs.
 ///
 /// The test profile opens by fixing it, before its census, its classification or
-/// its standard place (´[ORCHESTRATION-conv:profiles:test-profile]´), and the calculus
+/// its standard place (´[EMBER-conv:profiles:test-profile]´), and the calculus
 /// makes that the first thing a profile owes: a profile fixes its kind token, and
 /// the kind is what puts a label under the profile's derivation rather than under
-/// authorship (´[ORCHESTRATION-sig:labels:profiles]´). So the value is not this module's
+/// authorship (´[EMBER-sig:labels:profiles]´). So the value is not this module's
 /// to choose — moving it would move every derived label of the corpus at once.
 ///
-/// ´const:indexlinter:test-profile-token´ (´[ORCHESTRATION-alg:const:word]´)
-/// ´const:indexlinter:test-profile-token-word-test´
+/// ´const:emberlinter:test-profile-token´ (´[EMBER-alg:const:word]´)
+/// ´const:emberlinter:test-profile-token-word-test´
 pub const TEST_KIND: &str = "test";
 
 /// The acute accent that delimits an occurrence in the code syntax.
 ///
 /// The label language gives every occurrence two concrete syntaxes, one for prose
 /// and one for code comments, and the code syntax is this character on both sides
-/// of the span (´[ORCHESTRATION-lang:labels:label-language]´). Reading a doc comment's
+/// of the span (´[EMBER-lang:labels:label-language]´). Reading a doc comment's
 /// ordinary code-font spans instead was the alternative, and it was rejected
 /// because participation then wants a fragile label-like heuristic and ordinary
-/// documentation makes false mints (´[ORCHESTRATION-ansatz:labels:code-font-delimiters]´).
+/// documentation makes false mints (´[EMBER-ansatz:labels:code-font-delimiters]´).
 /// The character is therefore load-bearing rather than decorative: it is what
 /// separates a span offered to the calculus from a span merely set in code font.
 ///
-/// ´const:indexlinter:code-syntax-delimiter´ (´[ORCHESTRATION-alg:const:codepoint]´)
-/// ´const:indexlinter:code-syntax-delimiter-codepoint-ub4´
+/// ´const:emberlinter:code-syntax-delimiter´ (´[EMBER-alg:const:codepoint]´)
+/// ´const:emberlinter:code-syntax-delimiter-codepoint-ub4´
 pub const ACUTE: char = '\u{b4}';
 
 /// The area a covered test's structural home assigns it.
@@ -543,12 +543,12 @@ mod tests {
 
     /// Build a one-package census from sources given as path and text.
     fn census_of(sources: &[(&str, &str)]) -> (Vec<Package>, Census) {
-        let packages = vec![Package::new("torrust-demo", "packages/demo")];
+        let packages = vec![Package::new("ember-demo", "packages/demo")];
         let mut tests = Vec::new();
 
         for (path, text) in sources {
             tests
-                .extend(scan_source("torrust-demo", Path::new(path), text).expect("a Rust source"));
+                .extend(scan_source("ember-demo", Path::new(path), text).expect("a Rust source"));
         }
 
         (packages, Census::from_tests(tests, sources.len()))
@@ -918,18 +918,18 @@ mod tests {
     #[test]
     fn leaves_one_identifier_in_two_owners_alone() {
         let packages = vec![
-            Package::new("torrust-one", "packages/one"),
-            Package::new("torrust-two", "packages/two"),
+            Package::new("ember-one", "packages/one"),
+            Package::new("ember-two", "packages/two"),
         ];
         let mut tests = scan_source(
-            "torrust-one",
+            "ember-one",
             Path::new("packages/one/src/a.rs"),
             "/// \u{b4}test:unit:shared\u{b4}\n#[test]\nfn shared() {}\n",
         )
         .expect("a Rust source");
         tests.extend(
             scan_source(
-                "torrust-two",
+                "ember-two",
                 Path::new("packages/two/src/a.rs"),
                 "/// \u{b4}test:unit:shared\u{b4}\n#[test]\nfn shared() {}\n",
             )
@@ -952,9 +952,9 @@ mod tests {
     /// ´test:unit:covers-only-packages-the-workspace-knows´
     #[test]
     fn covers_only_packages_the_workspace_knows() {
-        let packages = vec![Package::new("torrust-other", "packages/other")];
+        let packages = vec![Package::new("ember-other", "packages/other")];
         let tests = scan_source(
-            "torrust-demo",
+            "ember-demo",
             Path::new("packages/demo/src/a.rs"),
             "#[test]\nfn a() {}\n",
         )

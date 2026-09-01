@@ -64,12 +64,12 @@ use crate::workspace::{Package, pending_packages};
 /// The spelling is derived rather than chosen: an owner's prefix is computed
 /// from its crate name by one rule and never transcribed at a mint, and where
 /// that prefix stands as an area it is written lowercased, the label language
-/// admitting no hyphen in an area (´[ORCHESTRATION-conv:profiles:owner-prefixes]´). This
+/// admitting no hyphen in an area (´[EMBER-conv:profiles:owner-prefixes]´). This
 /// is the root package's own prefix read that way, so the value moves only if
 /// the crate is renamed.
 ///
-/// ´const:indexlinter:root-owner-area´ (´[ORCHESTRATION-alg:const:word]´)
-/// ´const:indexlinter:root-owner-area-word-index´
+/// ´const:emberlinter:root-owner-area´ (´[EMBER-alg:const:word]´)
+/// ´const:emberlinter:root-owner-area-word-index´
 const INDEX_OWNER: &str = "index";
 
 /// An owner: one cell of the partition of the corpus.
@@ -369,8 +369,8 @@ mod tests {
 
     fn packages() -> Vec<Package> {
         vec![
-            Package::new("torrust-assayer", "packages/assayer"),
-            Package::new("torrust-index", ""),
+            Package::new("ember-assayer", "packages/assayer"),
+            Package::new("ember-index", ""),
             Package::new("linter", "packages/linter"),
         ]
     }
@@ -378,8 +378,8 @@ mod tests {
     /// The reconciliation the owner-name document declares, as these tests read it.
     fn names() -> OwnerNames {
         OwnerNames::new(
-            "torrust-",
-            [UnbuiltMember::new("torrust-notime", "packages/notime")],
+            "ember-",
+            [UnbuiltMember::new("ember-notime", "packages/notime")],
         )
     }
 
@@ -422,17 +422,17 @@ mod tests {
 
         assert_eq!(
             adoption.owner_of(Path::new("packages/assayer/docs/plans/backlog.md")),
-            &Owner::new("torrust-assayer")
+            &Owner::new("ember-assayer")
         );
         assert_eq!(
             adoption.owner_of(Path::new(
                 "packages/assayer/adr/110-feed-forward-boundary.md"
             )),
-            &Owner::new("torrust-assayer")
+            &Owner::new("ember-assayer")
         );
         assert_eq!(
             adoption.owner_of(Path::new("packages/notime/docs/spec.md")),
-            &Owner::new("torrust-notime"),
+            &Owner::new("ember-notime"),
             "a package the workspace does not build still owns its prose"
         );
         assert_eq!(
@@ -454,7 +454,7 @@ mod tests {
 
         assert_eq!(
             adoption.owner_of_prefix(&prefix("ASSAYER")),
-            Some(&Owner::new("torrust-assayer"))
+            Some(&Owner::new("ember-assayer"))
         );
         assert_eq!(
             adoption.owner_of_prefix(&prefix("LINTER")),
@@ -479,7 +479,7 @@ mod tests {
 
         assert_eq!(
             adoption.owner_of_prefix(&prefix("NOTIME")),
-            Some(&Owner::new("torrust-notime"))
+            Some(&Owner::new("ember-notime"))
         );
     }
 
@@ -513,7 +513,7 @@ mod tests {
             "package prose citing a repository record has a prefix to write"
         );
         assert!(
-            !adoption.owners().contains(&Owner::new("torrust-index")),
+            !adoption.owners().contains(&Owner::new("ember-index")),
             "the root package and the repository's prose are one owner"
         );
     }

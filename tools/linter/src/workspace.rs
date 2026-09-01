@@ -9,7 +9,7 @@
 //! the family's own rule and never written at a mint. ADR-T-015 fixes that rule
 //! for this workspace: the owner of a covered test is its package, and the
 //! registered prefix of a package derives mechanically from the crate name by
-//! stripping a leading `torrust-`, removing hyphens, and uppercasing the rest.
+//! stripping a leading `ember-`, removing hyphens, and uppercasing the rest.
 //!
 //! The prefixes are therefore computed, not transcribed. This module reads the
 //! workspace member list and each member's package name from the manifests on
@@ -238,20 +238,20 @@ mod tests {
 
     /// The crate-to-prefix table of ADR-T-015, transcribed for the assertion.
     const ADR_TABLE: &[(&str, &str)] = &[
-        ("torrust-index", "INDEX"),
-        ("torrust-assayer", "ASSAYER"),
-        ("torrust-mudlark", "MUDLARK"),
-        ("torrust-sentinel", "SENTINEL"),
-        ("torrust-notime", "NOTIME"),
-        ("torrust-index-auth-keypair", "INDEXAUTHKEYPAIR"),
+        ("ember-index", "INDEX"),
+        ("ember-assayer", "ASSAYER"),
+        ("ember-mudlark", "MUDLARK"),
+        ("ember-sentinel", "SENTINEL"),
+        ("ember-notime", "NOTIME"),
+        ("ember-index-auth-keypair", "INDEXAUTHKEYPAIR"),
         ("cli-common", "CLICOMMON"),
-        ("torrust-index-config", "INDEXCONFIG"),
-        ("torrust-index-config-probe", "INDEXCONFIGPROBE"),
-        ("torrust-index-entry-script", "INDEXENTRYSCRIPT"),
-        ("torrust-index-health-check", "INDEXHEALTHCHECK"),
+        ("ember-index-config", "INDEXCONFIG"),
+        ("ember-index-config-probe", "INDEXCONFIGPROBE"),
+        ("ember-index-entry-script", "INDEXENTRYSCRIPT"),
+        ("ember-index-health-check", "INDEXHEALTHCHECK"),
         ("linter", "LINTER"),
         (
-            "torrust-index-render-text-as-image",
+            "ember-index-render-text-as-image",
             "INDEXRENDERTEXTASIMAGE",
         ),
     ];
@@ -266,7 +266,7 @@ mod tests {
     #[test]
     fn derives_prefixes_by_stripping_removing_and_uppercasing() {
         for (name, expected) in ADR_TABLE {
-            let derived = prefix_for_crate("torrust-", name).expect("a well-formed prefix");
+            let derived = prefix_for_crate("ember-", name).expect("a well-formed prefix");
 
             assert_eq!(derived.as_str(), *expected, "prefix of `{name}`");
         }
@@ -285,13 +285,13 @@ mod tests {
         let root = tempfile::tempdir().expect("temporary directory");
         fs::write(
             root.path().join("Cargo.toml"),
-            "[workspace]\nmembers = [\".\", \"packages/alpha\"]\n\n[package]\nname = \"torrust-fixture\"\n",
+            "[workspace]\nmembers = [\".\", \"packages/alpha\"]\n\n[package]\nname = \"ember-fixture\"\n",
         )
         .expect("write");
         fs::create_dir_all(root.path().join("packages/alpha")).expect("create");
         fs::write(
             root.path().join("packages/alpha/Cargo.toml"),
-            "[package]\nname = \"torrust-alpha\"\n",
+            "[package]\nname = \"ember-alpha\"\n",
         )
         .expect("write");
 
@@ -309,7 +309,7 @@ mod tests {
 
         let member = packages
             .iter()
-            .find(|package| package.name() == "torrust-fixture")
+            .find(|package| package.name() == "ember-fixture")
             .expect("the root package");
         assert_eq!(
             member.directory(),
@@ -319,7 +319,7 @@ mod tests {
 
         let alpha = packages
             .iter()
-            .find(|package| package.name() == "torrust-alpha")
+            .find(|package| package.name() == "ember-alpha")
             .expect("the listed member");
         assert_eq!(alpha.directory(), Path::new("packages/alpha"));
     }
@@ -432,8 +432,8 @@ mod tests {
     /// ´test:unit:orders-discovered-packages-by-crate-name´
     #[test]
     fn orders_discovered_packages_by_crate_name() {
-        let first = Package::new("torrust-assayer", "packages/assayer");
-        let second = Package::new("torrust-index", "");
+        let first = Package::new("ember-assayer", "packages/assayer");
+        let second = Package::new("ember-index", "");
 
         assert!(first < second);
     }

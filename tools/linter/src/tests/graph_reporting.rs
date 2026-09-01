@@ -64,9 +64,9 @@ fn corpus() -> Analysis {
         &index_adoption(
             &[],
             Some(&crate::roster::OwnerNames::new(
-                "torrust-",
+                "ember-",
                 [crate::roster::UnbuiltMember::new(
-                    "torrust-notime",
+                    "ember-notime",
                     "packages/notime",
                 )],
             )),
@@ -208,9 +208,9 @@ fn lists_the_citations_that_reach_no_mint() {
         &index_adoption(
             &[],
             Some(&crate::roster::OwnerNames::new(
-                "torrust-",
+                "ember-",
                 [crate::roster::UnbuiltMember::new(
-                    "torrust-notime",
+                    "ember-notime",
                     "packages/notime",
                 )],
             )),
@@ -235,9 +235,9 @@ fn lists_the_citations_that_reach_no_mint() {
 /// ´test:crate:leaves-derived-mints-out-of-every-listing´
 #[test]
 fn leaves_derived_mints_out_of_every_listing() {
-    let packages = [Package::new("torrust-demo", "packages/demo")];
+    let packages = [Package::new("ember-demo", "packages/demo")];
     let tests = scan_source(
-        "torrust-demo",
+        "ember-demo",
         Path::new("packages/demo/src/engine.rs"),
         "/// \u{b4}test:unit:reports-a-header\u{b4}\n#[test]\nfn reports_a_header() {}\n\
              /// \u{b4}test:unit:reports-a-trailer\u{b4}\n#[test]\nfn reports_a_trailer() {}\n",
@@ -253,9 +253,9 @@ fn leaves_derived_mints_out_of_every_listing() {
         &index_adoption(
             &packages,
             Some(&crate::roster::OwnerNames::new(
-                "torrust-",
+                "ember-",
                 [crate::roster::UnbuiltMember::new(
-                    "torrust-notime",
+                    "ember-notime",
                     "packages/notime",
                 )],
             )),
@@ -292,5 +292,5 @@ fn leaves_derived_mints_out_of_every_listing() {
         !summary.by_area.contains_key("unit"),
         "nor an area of the corpus"
     );
-    assert_eq!(summary.by_owner["torrust-demo"].mints, 1);
+    assert_eq!(summary.by_owner["ember-demo"].mints, 1);
 }

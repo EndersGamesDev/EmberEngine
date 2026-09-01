@@ -45,10 +45,10 @@ The policy document holds both the small values that specialize compiled meaning
 
 Good practice: a marked ordinal is navigation within a mutable numbered sequence, not a stable identity; authored prose cites the stable identity of the thing instead. The compiled program is `references.mark-numbered-absent`, uses the path-count codec, and has no policy dependency.
 
-The program bakes in participating-region selection, token opening, reading the entire decimal run, rejecting a longer run rather than accepting a prefix, inclusive-bound comparison, display exclusion, source-offset mapping, deterministic ordering, and diagnostics. `.linter/policy-mark-numbered-references.toml` holds family `scenarios`, the mark, the inclusive numeric bound, that instance's include and exclude scope, and its register destination. Its initial data moves the current mark, range, scope, and destination unchanged. The allocated schema label is ``com.torrust.index.linter.policy-mark-numbered-references``; its allocation is recorded outside configuration under ADR-T-023, Adopting the interchange conventions for first-party structured configuration.
+The program bakes in participating-region selection, token opening, reading the entire decimal run, rejecting a longer run rather than accepting a prefix, inclusive-bound comparison, display exclusion, source-offset mapping, deterministic ordering, and diagnostics. `.linter/policy-mark-numbered-references.toml` holds family `scenarios`, the mark, the inclusive numeric bound, that instance's include and exclude scope, and its register destination. Its initial data moves the current mark, range, scope, and destination unchanged. The allocated schema label is ``com.ember.index.linter.policy-mark-numbered-references``; its allocation is recorded outside configuration under ADR-T-023, Adopting the interchange conventions for first-party structured configuration.
 
 ```toml
-namespace = "com.torrust.index.linter.policy-mark-numbered-references"
+namespace = "com.ember.index.linter.policy-mark-numbered-references"
 version = [1, 0, 0]
 policy = "references.mark-numbered-absent"
 family = "scenarios"
@@ -72,10 +72,10 @@ destination = ""
 
 Good practice: a selected heading sentence used verbatim as a locator is an implicit identity system; references use the stable identity minted by the referenced environment instead. The compiled program is `references.literal-set-absent`, uses path-count debt, and has no policy dependency.
 
-The program owns participating-region selection, exact full-literal matching, finding every match, display exclusion, offsets, ordering, and diagnostics. It rejects an empty literal, duplicate value, or value carrying a line break. `.linter/policy-literal-set-references.toml` holds family `divisions`, the verbatim string set, that instance's include and exclude scope, and its register destination; the data bite transcribes the current values unchanged without repeating them in this design. Its allocated schema label is ``com.torrust.index.linter.policy-literal-set-references``.
+The program owns participating-region selection, exact full-literal matching, finding every match, display exclusion, offsets, ordering, and diagnostics. It rejects an empty literal, duplicate value, or value carrying a line break. `.linter/policy-literal-set-references.toml` holds family `divisions`, the verbatim string set, that instance's include and exclude scope, and its register destination; the data bite transcribes the current values unchanged without repeating them in this design. Its allocated schema label is ``com.ember.index.linter.policy-literal-set-references``.
 
 ```toml
-namespace = "com.torrust.index.linter.policy-literal-set-references"
+namespace = "com.ember.index.linter.policy-literal-set-references"
 version = [1, 0, 0]
 policy = "references.literal-set-absent"
 family = "divisions"
@@ -100,7 +100,7 @@ Good practice: a work item named only by a plan-local prefixed number loses its 
 The shared program bakes in prefix token-opening, consumption of one complete dot-joined decimal token, rejection of alphanumeric tails, display exclusion, offsets, ordering, and diagnostics. For locator-shaped instances it also bakes in shielding for a complete occurrence claimed by the generic section-reference grammar; configuration cannot widen or disable that precedence. The exact-token bound compares the whole normalized token, so dotted work-item numbers remain distinct. `.linter/policy-prefix-numbers-work-packages.toml` holds the current prefix, exact enumeration, instance scope, and register destination, copied unchanged in the data bite.
 
 ```toml
-namespace = "com.torrust.index.linter.policy-prefix-numbers"
+namespace = "com.ember.index.linter.policy-prefix-numbers"
 version = [1, 0, 0]
 policy = "references.prefix-numbers-absent"
 family = "work-packages"
@@ -126,7 +126,7 @@ Good practice: a chapter locator is navigation within one publication, not an id
 For a leading-component range the program still consumes the complete dotted token, then compares its first decimal component with the inclusive bound. Suffixes therefore belong to the one occurrence rather than becoming a second token. `.linter/policy-prefix-numbers-chapters.toml` holds the current prefix, inclusive leading range, instance scope, and register destination.
 
 ```toml
-namespace = "com.torrust.index.linter.policy-prefix-numbers"
+namespace = "com.ember.index.linter.policy-prefix-numbers"
 version = [1, 0, 0]
 policy = "references.prefix-numbers-absent"
 family = "chapters"
@@ -152,10 +152,10 @@ destination = ""
 
 Good practice: a record locator stripped of the record system that qualified it is ambiguous historical shorthand; prose names the record's surviving stable identity. Family `records` is another independent prefix-number run.
 
-The leading-set bound consumes the complete dotted token and admits it only when its first component is in the configured integer set. `.linter/policy-prefix-numbers-records.toml` carries the same current prefix and transcribes the current gapped enumeration without reproducing it here, together with its instance scope and register destination. Resolution over all policy documents rejects overlapping active prefix-number domains over the same source bound, so the ranged chapter family and enumerated record family cannot count one occurrence twice. All three prefix-number files stamp the one allocated schema label ``com.torrust.index.linter.policy-prefix-numbers`` because namespace identifies their common parameter schema, not any of the three policy instances. Their full `PolicyKey` values remain distinct.
+The leading-set bound consumes the complete dotted token and admits it only when its first component is in the configured integer set. `.linter/policy-prefix-numbers-records.toml` carries the same current prefix and transcribes the current gapped enumeration without reproducing it here, together with its instance scope and register destination. Resolution over all policy documents rejects overlapping active prefix-number domains over the same source bound, so the ranged chapter family and enumerated record family cannot count one occurrence twice. All three prefix-number files stamp the one allocated schema label ``com.ember.index.linter.policy-prefix-numbers`` because namespace identifies their common parameter schema, not any of the three policy instances. Their full `PolicyKey` values remain distinct.
 
 ```toml
-namespace = "com.torrust.index.linter.policy-prefix-numbers"
+namespace = "com.ember.index.linter.policy-prefix-numbers"
 version = [1, 0, 0]
 policy = "references.prefix-numbers-absent"
 family = "records"
@@ -182,18 +182,18 @@ Good practice: a participating owner's spelling is the deterministic projection 
 
 The program bakes in the one derivation rule—strip the leading project namespace when present, remove hyphens, and uppercase the remainder—and reconciliation in both directions between discovered workspace members and registered owners participating in at least one policy or profile pair. Every discovered workspace member must derive a participating registered owner, and every participating registered owner must be accounted for by either one discovered member or one declared unbuilt entry; an invalid derivation, a collision, a missing registration or participation, an unexplained participating registration, or disagreement between a declared unbuilt directory and the owner partition is a policy finding. A registered owner with no activated pair makes no crate claim and is outside this verdict. These are structured relationship identities carrying the relevant crate, owner, and directory fields, not occurrences within a path, so the fingerprint codec preserves distinct defects that either path codec would alias.
 
-Following the parameter-file rule established by the SPDX precedent, `.linter/policy-owner-crate-names.toml` holds the project namespace the derivation strips, together with the crate-name and directory rows for participating registered owners whose manifests the workspace does not supply. The namespace is declared rather than compiled for the same reason the rows are: which spelling a corpus's crate names open with is repository data, and a program instantiated from a namespace and an unbuilt set must receive both or half of its value stays behind in code. Built members contribute no row because their names and directories come from manifests. The allocated schema label is ``com.torrust.index.linter.policy-owner-crate-names``.
+Following the parameter-file rule established by the SPDX precedent, `.linter/policy-owner-crate-names.toml` holds the project namespace the derivation strips, together with the crate-name and directory rows for participating registered owners whose manifests the workspace does not supply. The namespace is declared rather than compiled for the same reason the rows are: which spelling a corpus's crate names open with is repository data, and a program instantiated from a namespace and an unbuilt set must receive both or half of its value stays behind in code. Built members contribute no row because their names and directories come from manifests. The allocated schema label is ``com.ember.index.linter.policy-owner-crate-names``.
 
 ```toml
-namespace = "com.torrust.index.linter.policy-owner-crate-names"
+namespace = "com.ember.index.linter.policy-owner-crate-names"
 version = [1, 0, 0]
 policy = "owners.crate-names-conform"
 
 [parameters]
-namespace = "torrust-"
+namespace = "ember-"
 
 [[parameters.unbuilt]]
-crate_name = "torrust-unbuilt"
+crate_name = "ember-unbuilt"
 directory = ""
 ```
 
@@ -209,10 +209,10 @@ The retiring design and namespace censuses mixed declared inputs with historical
 
 Ignore rows reuse the owner surface's established vocabulary: each row carries a unique declared name and a standard regular-expression pattern matched in full against a repository-relative byte path. Row order is immaterial, overlapping matches are legal because removal is their set union, and a duplicate name or malformed pattern refuses during content decoding. The flagged recommendation is that this repository's list is empty: its `git-tracked` answer and owner activations resolve every calculus exclusion class without a residual path to ignore. The relation remains a generic capability for a future corpus whose declared universe and ownership leave such a residue.
 
-The document is enveloped under the allocated schema label ``com.torrust.index.linter.shape``. Its allocation is recorded outside configuration under ADR-T-023, Adopting the interchange conventions for first-party structured configuration.
+The document is enveloped under the allocated schema label ``com.ember.index.linter.shape``. Its allocation is recorded outside configuration under ADR-T-023, Adopting the interchange conventions for first-party structured configuration.
 
 ```toml
-namespace = "com.torrust.index.linter.shape"
+namespace = "com.ember.index.linter.shape"
 version = [1, 0, 0]
 universe = "git-tracked"
 
@@ -234,10 +234,10 @@ This plan recommends, and flags for owner decision, that `.linter/shape.toml` is
 
 *Census scopes.* Each census-versus-register instance carries its include and exclude scope in its own policy parameter document. The scope bounds the occurrences that instance censuses from the post-ignore corpus universe; it neither restores a globally ignored path nor defines the label carrier. The five reference-policy files shown above gain their `[scope]` tables, and every other content policy with repository-specific selection keeps that selection in its own parameter document, as the SPDX and interchange policies already do. Cross-instance overlap remains visible because resolution compares the union of all decoded scopes.
 
-*Assemblies.* The `assembly.publications-current` program consumes publication rows of owner, parts, and target, so `.linter/policy-assembly-publications.toml` owns exactly those rows under the allocated schema label ``com.torrust.index.linter.policy-assembly-publications``. Generated-target nonparticipation and the at-most-one-generator invariant are derived at resolution from the decoded rows rather than declared again.
+*Assemblies.* The `assembly.publications-current` program consumes publication rows of owner, parts, and target, so `.linter/policy-assembly-publications.toml` owns exactly those rows under the allocated schema label ``com.ember.index.linter.policy-assembly-publications``. Generated-target nonparticipation and the at-most-one-generator invariant are derived at resolution from the decoded rows rather than declared again.
 
 ```toml
-namespace = "com.torrust.index.linter.policy-assembly-publications"
+namespace = "com.ember.index.linter.policy-assembly-publications"
 version = [1, 0, 0]
 policy = "assembly.publications-current"
 
@@ -266,7 +266,7 @@ An audit of the declared surface found five schema dialects living side by side,
 *Sets.* A document states its data in `[set.TYPE]` tables — singular `set`, a form the owner accepted explicitly — keyed by the type of entry the consuming program reads. Every entry is named. Its value is a string when the entry is simple and an inline table when the entry is parameterized. The ratified vocabulary of this repository's documents is `[set.numbered-marks]` for a mark with an inclusive numeric bound, `[set.literals]` for verbatim strings, `[set.prefix-numbers]` for a prefix with its enumeration or range, `[set.name-key]` for the manifest key a name is read from, and `[set.name-prefix-ignore]` for a literal prefix stripped before comparison. Program-owned lists leave configuration entirely: the interchange document's `types` list is compiled meaning, not repository data, and does not survive as a set.
 
 ```toml
-namespace = "com.torrust.index.linter.policy.references.scenarios"
+namespace = "com.ember.index.linter.policy.references.scenarios"
 version = [1, 0, 0]
 
 [set.numbered-marks]
@@ -315,17 +315,17 @@ The grammar has no capture semantics, and the designs above are built so that no
 
 **Schema (Crate-name conformance declares a key, a stripped prefix, and each owner's manifest)** · `schema:isolation:owner-names`
 
-The owner ratified this document in full, and it replaces the crate-name parameter document that (`sec:isolation:owner-crate-names`) sketched. Its namespace is ``com.torrust.index.linter.policy.owner.names``. It carries two sets: `[set.name-key]` naming the manifest key that holds a package name, and `[set.name-prefix-ignore]` naming the literal prefix stripped before the owner spelling is compared. Each participating crate owner then takes a naked owner table carrying the path of the manifest that governs it, plus one singular-reference table per set.
+The owner ratified this document in full, and it replaces the crate-name parameter document that (`sec:isolation:owner-crate-names`) sketched. Its namespace is ``com.ember.index.linter.policy.owner.names``. It carries two sets: `[set.name-key]` naming the manifest key that holds a package name, and `[set.name-prefix-ignore]` naming the literal prefix stripped before the owner spelling is compared. Each participating crate owner then takes a naked owner table carrying the path of the manifest that governs it, plus one singular-reference table per set.
 
 ```toml
-namespace = "com.torrust.index.linter.policy.owner.names"
+namespace = "com.ember.index.linter.policy.owner.names"
 version = [1, 0, 0]
 
 [set.name-key]
 cargo-package-name = "name"
 
 [set.name-prefix-ignore]
-torrust = "torrust-"
+ember = "ember-"
 
 [owners.INDEX]
 cargo-toml = "Cargo.toml"
@@ -334,7 +334,7 @@ cargo-toml = "Cargo.toml"
 use = "cargo-package-name"
 
 [owners.INDEX.name-prefix-ignore]
-use = "torrust"
+use = "ember"
 ```
 
 Two owners are absent from the document: the manifestless owner and the vendored owner. Their absence is non-application under the activation rule and not a declared exception. The manifestless owner is re-includable later at no schema cost, because a governing manifest is read from the path its own naked owner table declares; whether the workspace builds that member has stopped being a fact the program needs, so the concept of an unbuilt entry disappears from the schema rather than moving.
@@ -350,7 +350,7 @@ Two more constructs die with them. The `[register]` block and the global `[scope
 A ratchet key in the list document is the policy namespace followed by the exact set entry the ratchet belongs to, so a key names a program and a datum rather than a file and a family. The drafted default leads that key with the owner component, matching how allowance tables are keyed today.
 
 ```toml
-[ASSAYER."com.torrust.index.linter.policy.references.divisions"."information"]
+[ASSAYER."com.ember.index.linter.policy.references.divisions"."information"]
 allowances = []
 ```
 
@@ -491,7 +491,7 @@ Each bite below is one reviewable commit with exactly one thing that can fail it
 | Atomic cut-over | One commit. The live route stops reading five files as one snapshot and reads physical membership, then envelopes, then the ratified decoder, then the join; `.linter-staged/` becomes `.linter/` and its inclusion row goes; the environment document wires into the kind registry; the retired burn registers delete; the pattern surface becomes the augmented Backus–Naur form end to end; and the compiled adoption, carrier, assembly, burn, payload, fixed-owner, owner-exclusion, pending-member, and claim-closure data go, taking the comparison bridge with them | A command that ran before the commit and refuses after it |
 | Shadow retirement | Delete the pre-grammar shadow the cut-over left without callers: the policy-key module entire, the loader's pre-grammar content decoding and the exports that carried it, the refusal variants naming spellings no document can now be written in, the regular-expression matcher, and every remaining wrapper and compatibility constructor | A module named for deletion that a live caller still reaches |
 
-*The eight instance documents.* Ten policy documents stand in `.linter/` today and eight instances succeed them, because two payloads merge into one document exactly when one program acts on both and the three prefix-number payloads are one program's (`gram:isolation:declaration`). Their namespaces are the ones root authority has allocated: ``com.torrust.index.linter.policy.spdx``, ``com.torrust.index.linter.policy.interchange``, ``com.torrust.index.linter.policy.assembly-publications``, ``com.torrust.index.linter.policy.owner.names``, ``com.torrust.index.linter.policy.references.divisions``, ``com.torrust.index.linter.policy.references.scenarios``, ``com.torrust.index.linter.policy.references.prefix-numbers``, and ``com.torrust.index.linter.policy.references.path-linking``. The last of them is the file-path reference policy's, and it is the one allocated name this plan's earlier sections never spelled: those sections generalize the five payload families they are about, and the file-path policy has no payload to generalize. Under the ratified grammar its whole declaration is an exclude-only owner section over a type no set declares, which decodes because an exclude row's name labels the exclusion itself and promises nothing about a set. Its confirmation is recorded in (`reg:isolation:owner-questions`).
+*The eight instance documents.* Ten policy documents stand in `.linter/` today and eight instances succeed them, because two payloads merge into one document exactly when one program acts on both and the three prefix-number payloads are one program's (`gram:isolation:declaration`). Their namespaces are the ones root authority has allocated: ``com.ember.index.linter.policy.spdx``, ``com.ember.index.linter.policy.interchange``, ``com.ember.index.linter.policy.assembly-publications``, ``com.ember.index.linter.policy.owner.names``, ``com.ember.index.linter.policy.references.divisions``, ``com.ember.index.linter.policy.references.scenarios``, ``com.ember.index.linter.policy.references.prefix-numbers``, and ``com.ember.index.linter.policy.references.path-linking``. The last of them is the file-path reference policy's, and it is the one allocated name this plan's earlier sections never spelled: those sections generalize the five payload families they are about, and the file-path policy has no payload to generalize. Under the ratified grammar its whole declaration is an exclude-only owner section over a type no set declares, which decodes because an exclude row's name labels the exclusion itself and promises nothing about a set. Its confirmation is recorded in (`reg:isolation:owner-questions`).
 
 The eight are what the cut-over landed and are no longer the surface. A ninth document stood beside them from the cut-over itself, stamping the owner-areas namespace, and it retired on 2026-08-27 when the owner ruled that a scan surface belongs to the domain of the policy that scans; seven documents were allocated and written on that day, one for each censused family whose policy had no document of its own. Fifteen policy documents stand in `.linter/` now. The paragraph above is left as the bite it specified, and the membership follows ADR-T-023, Adopting the interchange conventions for first-party structured configuration, rather than any count in this plan.
 
@@ -525,7 +525,7 @@ The three retained rows keep their order among themselves and follow the retirem
 
 **Register (Shape refusal and owner dispositions are ratified)** · `reg:isolation:owner-questions`
 
-The allocations of ``com.torrust.index.linter.shape``, ``com.torrust.index.linter.policy-owner-crate-names``, ``com.torrust.index.linter.policy-assembly-publications``, ``com.torrust.index.linter.policy-mark-numbered-references``, ``com.torrust.index.linter.policy-literal-set-references``, and ``com.torrust.index.linter.policy-prefix-numbers`` are now recorded in root authority under ADR-T-023, Adopting the interchange conventions for first-party structured configuration. The global-ignore relation rides in the allocated shape schema and adds no allocation. The three prefix-number documents share the last label because namespace identifies their common schema, while their family keys identify independent policy instances; adding scope and register fields to the census schemas creates no further identity. The calculus-defined label corpus creates neither a parameter document nor an allocation.
+The allocations of ``com.ember.index.linter.shape``, ``com.ember.index.linter.policy-owner-crate-names``, ``com.ember.index.linter.policy-assembly-publications``, ``com.ember.index.linter.policy-mark-numbered-references``, ``com.ember.index.linter.policy-literal-set-references``, and ``com.ember.index.linter.policy-prefix-numbers`` are now recorded in root authority under ADR-T-023, Adopting the interchange conventions for first-party structured configuration. The global-ignore relation rides in the allocated shape schema and adds no allocation. The three prefix-number documents share the last label because namespace identifies their common schema, while their family keys identify independent policy instances; adding scope and register fields to the census schemas creates no further identity. The calculus-defined label corpus creates neither a parameter document nor an allocation.
 
 The flagged refusal choice is ratified: absence of `.linter/shape.toml` refuses, because the universe and global-ignore relation cannot otherwise be resolved without a fallback. The owner dispositions are ratified exactly as they were flagged: `SUEXEC` is registered with the exact disjoint split stated above and no activated pairs, the repository-authored audit stays with the repository owner, the vacuous `vcs-metadata` owner exclusion dies rather than moving into the global-ignore relation, and a new unmatched vendored entry is a partition finding until its ownership is decided. The two shape answers are ratified with them: this repository declares the `git-tracked` universe and an empty ignore list. Family-bearing policy keys are the necessary encoding of the settled requirement that each payload family be an independent generalized policy; the sibling CLI dependency, self-hosting removal, census removal, licence exception, recognizer generalization, physical configuration loading, and physical snapshot membership are not reconsidered here.
 
@@ -535,7 +535,7 @@ The ratified rulings are these. A dotted namespace and a version are the whole e
 
 Two consequences reach rulings already recorded above. Family-bearing policy keys were the earlier encoding of independent payload families; under the ratified grammar that role passes to the namespace and its named set entries, so the encoding described in (`schema:isolation:policy-key`) is superseded while the requirement it served — that each payload family be an independently activated, independently ratcheted instance — stands unchanged. The two questions the data bite had left open are closed by the same grammar: the crate-name derivation's stripped prefix has its home in a named `[set.name-prefix-ignore]` entry rather than a bare `namespace` key, and the three prefix-number register destinations are moot because registers retire outright instead of multiplying.
 
-The last detail of the grammar is ratified too, on 2026-08-26, and owner-first is the ratified answer. The owner stated the shape as owner, then policy namespace, then detail, so a ratchet key in the canonical list document is owner, then policy namespace, then policy-set entry, and it reads ``[ASSAYER."com.torrust.index.linter.policy.references.divisions"."information"]``. The alternative of a bare namespace-and-entry key with ownership derived from the partition is refused, so a key carries its owner rather than recovering one from the partition, and allowance tables and ratchet lists are keyed alike.
+The last detail of the grammar is ratified too, on 2026-08-26, and owner-first is the ratified answer. The owner stated the shape as owner, then policy namespace, then detail, so a ratchet key in the canonical list document is owner, then policy namespace, then policy-set entry, and it reads ``[ASSAYER."com.ember.index.linter.policy.references.divisions"."information"]``. The alternative of a bare namespace-and-entry key with ownership derived from the partition is refused, so a key carries its owner rather than recovering one from the partition, and allowance tables and ratchet lists are keyed alike.
 
 *Amendment: the middle component is relative to the corpus prefix.* The owner refined the key on 2026-08-26, after the shape above was ratified and before the cut-over executed it, and the refinement is recorded here rather than written over the paragraph it amends. The three components stand exactly as ratified — owner, then policy namespace, then policy-set entry — and what changes is how much of the namespace a key spells: the corpus prefix every document of a surface shares is implied by the list document's own envelope and is never written in a key, so the ratified example above stands superseded by ``[ASSAYER."policy.references.scenarios"."hash-one-to-91"]``. The prefix a key is relative to is that document's namespace less its final component, which is why the shorter form is generic rather than a convenience for this repository: a corpus whose documents open with another prefix keys its lists the same way and the reader needs no compiled answer. A key that spelled the prefix would repeat, once per row, the one thing the envelope has already said.
 
@@ -545,7 +545,7 @@ Three further questions are ratified on 2026-08-26, and the first is the one thi
 
 *No citation edge is opened from the root corpus to this package.* The adoption record's flag is answered, and the answer changes nothing: the reach graph stays exactly as it stands, the root record goes on naming the ratified grammar in non-participating display spans, and no may-cite row is added. Reach follows what a corpus imports under ADR-T-019, The layer owner graph; the root corpus does not import this package, and opening a standing licence for root authority to cite a package's plan in order to relieve one document of a display span would pay for a phrasing convenience with a permanent edge. Under ADR-T-014, A calculus of documentation and source labels, a display span exhibits a token rather than referencing it, so the record's present form is the right one rather than a workaround waiting for an edge to arrive.
 
-*The file-path policy's namespace is confirmed.* ``com.torrust.index.linter.policy.references.path-linking`` is the ratified name of the file-path reference policy's declaration schema, and it is now spelled in this plan wherever the policy family is enumerated (`proposal:isolation:staging`). It was the one allocated name this plan's own text had never spelled, and the reason is worth recording rather than repairing silently: the sections above generalize the five payload families they are about, and this policy has no payload to generalize. Its whole declaration under the ratified grammar is an exclude-only owner section — which sources each owner exempts from it and nothing else — so it passed through every payload argument in this plan without ever being the subject of one.
+*The file-path policy's namespace is confirmed.* ``com.ember.index.linter.policy.references.path-linking`` is the ratified name of the file-path reference policy's declaration schema, and it is now spelled in this plan wherever the policy family is enumerated (`proposal:isolation:staging`). It was the one allocated name this plan's own text had never spelled, and the reason is worth recording rather than repairing silently: the sections above generalize the five payload families they are about, and this policy has no payload to generalize. Its whole declaration under the ratified grammar is an exclude-only owner section — which sources each owner exempts from it and nothing else — so it passed through every payload argument in this plan without ever being the subject of one.
 
 *Amendment: the two repository-wide burn families are registered rather than retired.* The owner ruled on 2026-08-26, after the staged surface stood and before the cut-over executed, and the ruling is recorded here rather than written over the paragraphs it amends. The cut-over's burn-register deletion was drawn against ten registers whose ratchets were said to stand already in the canonical list (`proposal:isolation:staging`), and eight of them do. Two do not. The section-sign census over the whole repository and the record-number census over the whole repository are declared over the corpus root, and the compiled route recorded each of them in a generated register and in nothing else: no activation in either dialect, no ratchet in either list, no declaration in any staged document. Deleting those two registers as drawn would have deleted the only declaration of three thousand four hundred and thirty-six pinned occurrences, and every gate would have stayed green while it happened. The ruling is that they are registered: the canonical list gains an activation and a ratchet table for each, and the cut-over's deletion becomes lawful for all ten because all ten then owe nothing.
 
@@ -553,7 +553,7 @@ The registration follows the shape the eight already have. Each family takes an 
 
 The staged equivalence bite had a blind spot here and it is closed rather than noted. Its ratchet comparison related each staged key to the committed pair it re-keys, and these two families have no committed pair, so their absence from both surfaces was invisible to a comparison that only ever looked at keys both surfaces had. The comparison now holds a registered corpus-wide key to the family's own census, row by row, which is the relation the register-equals-census gate held its register to and the relation the list-equals-census gate inherits at the cut-over. The rows themselves were generated through the append mode of the shipped burn command rather than transcribed, so the bytes in the list are the codec's own.
 
-*A fixture may spell the schema namespaces this package implements.* The owner ruled on 2026-08-27 that a policy is referenced by its namespace, so a fixture stamping a name under ``com.torrust.index.linter`` on an invented corpus is naming the program it exercises and nothing else. The distinction the boundary requirement already draws is the whole of the ruling: a namespace of this family is the identity of a schema this package implements, which is self-knowledge and sits on the may-know side of (`req:isolation:boundary`), while a sibling identity, a repository path, an owner roster, and a current count are repository knowledge and sit on the other. The asymmetry is not a concession to convenience: a fictional corpus must declare its policies in some vocabulary, the only vocabulary the shipped decoder accepts is the allocated one, and a fixture that invented a private family in order to look neutral would be a fixture of a decoder this package does not ship — the same defect the widened standard already names in a fixture written in a retired dialect (`reg:isolation:ladder-disposition`).
+*A fixture may spell the schema namespaces this package implements.* The owner ruled on 2026-08-27 that a policy is referenced by its namespace, so a fixture stamping a name under ``com.ember.index.linter`` on an invented corpus is naming the program it exercises and nothing else. The distinction the boundary requirement already draws is the whole of the ruling: a namespace of this family is the identity of a schema this package implements, which is self-knowledge and sits on the may-know side of (`req:isolation:boundary`), while a sibling identity, a repository path, an owner roster, and a current count are repository knowledge and sit on the other. The asymmetry is not a concession to convenience: a fictional corpus must declare its policies in some vocabulary, the only vocabulary the shipped decoder accepts is the allocated one, and a fixture that invented a private family in order to look neutral would be a fixture of a decoder this package does not ship — the same defect the widened standard already names in a fixture written in a retired dialect (`reg:isolation:ladder-disposition`).
 
 The consequence for the fixture-neutralization bite is that this ground is settled and owes it nothing (`proposal:isolation:migration-bites`). The standard treats a fixture's use of the checker's own schema identity as conforming, an isolation scan reads such a spelling as generic rather than as copied reality, and no fixture is rewritten to shed a namespace it needs in order to decode. What the standard still asks of those fixtures is unchanged and is asked elsewhere in each of them: fictional identities, invented topology, and a current dialect.
 

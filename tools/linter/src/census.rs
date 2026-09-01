@@ -90,8 +90,8 @@ use crate::workspace::Package;
 /// principle; this workspace's carry none, and the table has no area for them,
 /// so they stay out of the census until a decision gives them one.
 ///
-/// ´const:indexlinter:test-census-package-roots´ (ADR-T-018, The constant label profile)
-/// ´const:indexlinter:test-census-package-roots-form-xac563a2a´
+/// ´const:emberlinter:test-census-package-roots´ (ADR-T-018, The constant label profile)
+/// ´const:emberlinter:test-census-package-roots-form-xac563a2a´
 #[cfg(test)]
 pub const CENSUSED_DIRECTORIES: &[&str] = &["src", "tests"];
 
@@ -584,7 +584,7 @@ mod tests {
     use crate::workspace::Package;
 
     fn scan(text: &str) -> Vec<super::TestFunction> {
-        scan_source("torrust-demo", Path::new("src/demo.rs"), text).expect("a Rust source")
+        scan_source("ember-demo", Path::new("src/demo.rs"), text).expect("a Rust source")
     }
 
     /// A test is whatever the harness recognises as one, so an attribute whose
@@ -685,7 +685,7 @@ mod tests {
             &[Path::new("package/src/tracked.rs").to_path_buf()],
         );
 
-        let packages = [Package::new("torrust-demo", "package")];
+        let packages = [Package::new("ember-demo", "package")];
         let corpus = CorpusPlan::compile(root.path(), UniverseKind::GitTracked, &[])
             .expect("fixture topology");
         let (census, findings) = take_census(root.path(), &packages, &corpus);
@@ -778,7 +778,7 @@ mod tests {
     /// ´test:unit:reports-a-source-it-cannot-parse´
     #[test]
     fn reports_a_source_it_cannot_parse() {
-        let error = scan_source("torrust-demo", Path::new("src/demo.rs"), "fn broken( {")
+        let error = scan_source("ember-demo", Path::new("src/demo.rs"), "fn broken( {")
             .expect_err("a parse failure");
 
         assert!(!error.is_empty(), "the parser explains itself");
@@ -789,7 +789,7 @@ mod tests {
         std::fs::write(sources.join("present.rs"), "#[test]\nfn present() {}\n")
             .expect("the source");
 
-        let packages = [Package::new("torrust-demo", "package")];
+        let packages = [Package::new("ember-demo", "package")];
         let corpus = CorpusPlan::compile(root.path(), UniverseKind::GitTracked, &[])
             .expect("fixture topology");
         let (census, findings) = take_census(root.path(), &packages, &corpus);

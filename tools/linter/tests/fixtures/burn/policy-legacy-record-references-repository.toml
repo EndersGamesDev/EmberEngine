@@ -1,4 +1,4 @@
-namespace = "com.torrust.index.linter.policy.legacy.record-references-repository"
+namespace = "com.ember.index.linter.policy.legacy.record-references-repository"
 version = [1, 0, 0]
 
 [owners.INDEX]

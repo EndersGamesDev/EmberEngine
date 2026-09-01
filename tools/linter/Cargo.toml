@@ -1,6 +1,6 @@
 [package]
 name = "linter"
-description = "Repository-wide label-calculus linter (vendored from Torrust Index, ADR-T-014)"
+description = "Repository-wide label-calculus and Markdown linter for the ember workspace"
 
 authors.workspace = true
 edition.workspace = true

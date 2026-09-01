@@ -44,7 +44,7 @@ fn index_adoption(
 const ACUTE: char = '\u{b4}';
 
 fn packages() -> Vec<Package> {
-    vec![Package::new("torrust-demo", "packages/demo")]
+    vec![Package::new("ember-demo", "packages/demo")]
 }
 
 /// Cover one package's sources the way the check covers them.
@@ -52,7 +52,7 @@ fn assets_of(sources: &[(&str, &str)]) -> Vec<CoveredAsset> {
     let mut tests = Vec::new();
 
     for (path, text) in sources {
-        tests.extend(scan_source("torrust-demo", Path::new(path), text).expect("a Rust source"));
+        tests.extend(scan_source("ember-demo", Path::new(path), text).expect("a Rust source"));
     }
 
     let (assets, findings) = cover(&packages(), &Census::from_tests(tests, sources.len()));
@@ -71,9 +71,9 @@ fn summarise(rust: &[(&str, &str)], prose: &[Source]) -> crate::CoverageSummary 
     let adoption = index_adoption(
         &packages(),
         Some(&crate::roster::OwnerNames::new(
-            "torrust-",
+            "ember-",
             [crate::roster::UnbuiltMember::new(
-                "torrust-notime",
+                "ember-notime",
                 "packages/notime",
             )],
         )),
@@ -245,7 +245,7 @@ fn counts_claim_coverage_per_owner_and_per_area() {
     let corpus = corpus();
     let summary = summarise(&sources(&corpus), &prose());
 
-    let demo = &summary.by_owner["torrust-demo"];
+    let demo = &summary.by_owner["ember-demo"];
 
     assert_eq!(demo.claims, 2);
     assert_eq!(demo.citations, 1);

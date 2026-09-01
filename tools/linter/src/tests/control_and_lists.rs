@@ -41,7 +41,7 @@ fn pair() -> Pair {
 
 /// The canonical prefix retained while the list tables are rendered.
 const LISTS_ENVELOPE: &str =
-    "namespace = \"com.torrust.index.linter.lists\"\nversion = [1, 0, 0]\n\n";
+    "namespace = \"com.ember.index.linter.lists\"\nversion = [1, 0, 0]\n\n";
 
 /// The typed empty JSON array expected by response assertions.
 const EMPTY_JSON_ARRAY: &[serde_json::Value] = &[];
@@ -60,7 +60,7 @@ fn tree(prose: &str, rows: &str) -> TempDir {
     write(
         root.path(),
         ".linter/owners.toml",
-        "namespace = \"com.torrust.index.linter.owners\"\n\
+        "namespace = \"com.ember.index.linter.owners\"\n\
              version = [1, 0, 0]\n\
              \n\
              owners = [\"INDEX\", \"ASSAYER\"]\n\
@@ -71,7 +71,7 @@ fn tree(prose: &str, rows: &str) -> TempDir {
     write(
         root.path(),
         ".linter/environments.toml",
-        "namespace = \"com.torrust.index.linter.environments\"\n\
+        "namespace = \"com.ember.index.linter.environments\"\n\
              version = [1, 0, 0]\n\
              \n\
              environments = []\n",
@@ -79,7 +79,7 @@ fn tree(prose: &str, rows: &str) -> TempDir {
     write(
         root.path(),
         ".linter/policies.toml",
-        "namespace = \"com.torrust.index.linter.policies\"\n\
+        "namespace = \"com.ember.index.linter.policies\"\n\
              version = [1, 0, 0]\n\
              \n\
              policies = [{ owner = \"ASSAYER\", policy = \"legacy.section-references\" }]\n",
@@ -88,7 +88,7 @@ fn tree(prose: &str, rows: &str) -> TempDir {
         root.path(),
         ".linter/lists.toml",
         &format!(
-            "namespace = \"com.torrust.index.linter.lists\"\n\
+            "namespace = \"com.ember.index.linter.lists\"\n\
                  version = [1, 0, 0]\n\
                  \n\
                  [ASSAYER.\"legacy.section-references\"]\npath_counts = [{rows}]\n"
@@ -97,7 +97,7 @@ fn tree(prose: &str, rows: &str) -> TempDir {
     write(
         root.path(),
         ".linter/shape.toml",
-        "namespace = \"com.torrust.index.linter.shape\"\n\
+        "namespace = \"com.ember.index.linter.shape\"\n\
              version = [1, 0, 0]\n\
              \n\
              universe = \"git-tracked\"\n\
@@ -110,7 +110,7 @@ fn tree(prose: &str, rows: &str) -> TempDir {
     write(
         root.path(),
         ".linter/policy-legacy-section-references.toml",
-        "namespace = \"com.torrust.index.linter.policy.legacy.section-references\"\n\
+        "namespace = \"com.ember.index.linter.policy.legacy.section-references\"\n\
              version = [1, 0, 0]\n\
              \n\
              [owners.ASSAYER]\n\
@@ -136,7 +136,7 @@ fn instanced_tree() -> TempDir {
     write(
         root.path(),
         ".linter/policies.toml",
-        "namespace = \"com.torrust.index.linter.policies\"\n\
+        "namespace = \"com.ember.index.linter.policies\"\n\
              version = [1, 0, 0]\n\
              \n\
              policies = [\n  \
@@ -147,7 +147,7 @@ fn instanced_tree() -> TempDir {
     write(
         root.path(),
         ".linter/lists.toml",
-        "namespace = \"com.torrust.index.linter.lists\"\n\
+        "namespace = \"com.ember.index.linter.lists\"\n\
              version = [1, 0, 0]\n\
              \n\
              [ASSAYER.\"legacy.section-references\"]\npath_counts = []\n\
@@ -160,7 +160,7 @@ fn instanced_tree() -> TempDir {
     write(
         root.path(),
         ".linter/policy-quarry-numbers.toml",
-        "namespace = \"com.torrust.index.linter.policy.references.quarry-numbers\"\n\
+        "namespace = \"com.ember.index.linter.policy.references.quarry-numbers\"\n\
              version = [1, 0, 0]\n\
              \n\
              [set.prefix-numbers]\n\
@@ -194,7 +194,7 @@ fn spanning_tree() -> TempDir {
     write(
         root.path(),
         ".linter/policies.toml",
-        "namespace = \"com.torrust.index.linter.policies\"\n\
+        "namespace = \"com.ember.index.linter.policies\"\n\
              version = [1, 0, 0]\n\
              \n\
              policies = [{ owner = \"INDEX\", policy = \"legacy.section-references-repository\" }]\n",
@@ -202,7 +202,7 @@ fn spanning_tree() -> TempDir {
     write(
         root.path(),
         ".linter/lists.toml",
-        "namespace = \"com.torrust.index.linter.lists\"\n\
+        "namespace = \"com.ember.index.linter.lists\"\n\
              version = [1, 0, 0]\n\
              \n\
              [INDEX.\"legacy.section-references-repository\"]\n\
@@ -219,7 +219,7 @@ fn spanning_tree() -> TempDir {
     write(
         root.path(),
         ".linter/policy-legacy-section-references-repository.toml",
-        "namespace = \"com.torrust.index.linter.policy.legacy.section-references-repository\"\n\
+        "namespace = \"com.ember.index.linter.policy.legacy.section-references-repository\"\n\
              version = [1, 0, 0]\n\
              \n\
              [owners.INDEX]\n\
@@ -274,7 +274,7 @@ fn spdx_tree() -> TempDir {
     write(
         root.path(),
         ".linter/owners.toml",
-        "namespace = \"com.torrust.index.linter.owners\"\n\
+        "namespace = \"com.ember.index.linter.owners\"\n\
              version = [1, 0, 0]\n\
              \n\
              owners = [\"INDEX\"]\n\
@@ -284,7 +284,7 @@ fn spdx_tree() -> TempDir {
     write(
         root.path(),
         ".linter/environments.toml",
-        "namespace = \"com.torrust.index.linter.environments\"\n\
+        "namespace = \"com.ember.index.linter.environments\"\n\
              version = [1, 0, 0]\n\
              \n\
              environments = []\n",
@@ -292,7 +292,7 @@ fn spdx_tree() -> TempDir {
     write(
         root.path(),
         ".linter/policies.toml",
-        "namespace = \"com.torrust.index.linter.policies\"\n\
+        "namespace = \"com.ember.index.linter.policies\"\n\
              version = [1, 0, 0]\n\
              \n\
              policies = [{ owner = \"INDEX\", policy = \"spdx.headers-conform\" }]\n",
@@ -300,7 +300,7 @@ fn spdx_tree() -> TempDir {
     write(
         root.path(),
         ".linter/lists.toml",
-        "namespace = \"com.torrust.index.linter.lists\"\n\
+        "namespace = \"com.ember.index.linter.lists\"\n\
              version = [1, 0, 0]\n\
              \n\
              [INDEX.\"spdx.headers-conform\"]\n\
@@ -309,14 +309,14 @@ fn spdx_tree() -> TempDir {
     write(
         root.path(),
         ".linter/policy-spdx.toml",
-        "namespace = \"com.torrust.index.linter.policy.spdx\"\n\
+        "namespace = \"com.ember.index.linter.policy.spdx\"\n\
              version = [1, 0, 0]\n\
              \n\
              [set.identifier]\n\
              agpl3only = \"AGPL-3.0-only\"\n\
              \n\
              [set.copyright]\n\
-             torrust2026 = \"2026 Torrust project contributors\"\n\
+             ember2026 = \"2026 Wild Sky Maker\"\n\
              \n\
              [owners.INDEX.identifier]\n\
              exclude = [{ name = \"configuration\", pattern = '%s\".linter\" [ \"/\" *VCHAR ]' }]\n\
@@ -325,12 +325,12 @@ fn spdx_tree() -> TempDir {
              [owners.INDEX.copyright]\n\
              exclude = [{ name = \"configuration\", pattern = '%s\".linter\" [ \"/\" *VCHAR ]' }, \
                { name = \"generated\", pattern = '%s\"src/excluded.rs\"' }]\n\
-             partitions = [{ name = \"code\", copyright = \"torrust2026\", pattern = '%s\"src/\" ( %s\"equal\" / %s\"growth\" / %s\"stale\" ) %s\".rs\"' }]\n",
+             partitions = [{ name = \"code\", copyright = \"ember2026\", pattern = '%s\"src/\" ( %s\"equal\" / %s\"growth\" / %s\"stale\" ) %s\".rs\"' }]\n",
     );
     write(
         root.path(),
         ".linter/shape.toml",
-        "namespace = \"com.torrust.index.linter.shape\"\n\
+        "namespace = \"com.ember.index.linter.shape\"\n\
              version = [1, 0, 0]\n\
              \n\
              universe = \"git-tracked\"\n\
@@ -355,7 +355,7 @@ fn envelope_tree() -> TempDir {
     write(
         root.path(),
         "share/conforming.toml",
-        "namespace = \"com.torrust.index.configuration\"\nversion = [2, 0, 0]\n\nport = 7070\n",
+        "namespace = \"com.ember.index.configuration\"\nversion = [2, 0, 0]\n\nport = 7070\n",
     );
 
     for (file, schema, text) in [
@@ -393,7 +393,7 @@ fn envelope_tree() -> TempDir {
             root.path(),
             &format!(".linter/{file}.toml"),
             &format!(
-                "namespace = \"com.torrust.index.linter.{schema}\"\nversion = [1, 0, 0]\n\n{text}"
+                "namespace = \"com.ember.index.linter.{schema}\"\nversion = [1, 0, 0]\n\n{text}"
             ),
         );
     }
@@ -538,7 +538,7 @@ fn a_rendered_list_loads_back_unchanged() {
 
     assert_eq!(
         rendered,
-        "namespace = \"com.torrust.index.linter.lists\"\nversion = [1, 0, 0]\n\n\
+        "namespace = \"com.ember.index.linter.lists\"\nversion = [1, 0, 0]\n\n\
              [ASSAYER.\"legacy.section-references\"]\npath_counts = [\n  \
              { path = \"packages/assayer/docs/note.md\", maximum = 1 },\n]\n"
     );
@@ -578,7 +578,7 @@ fn a_rendered_instanced_list_keeps_its_families_apart() {
 
     assert_eq!(
         rendered,
-        "namespace = \"com.torrust.index.linter.lists\"\nversion = [1, 0, 0]\n\n\
+        "namespace = \"com.ember.index.linter.lists\"\nversion = [1, 0, 0]\n\n\
              [ASSAYER.\"legacy.section-references\"]\npath_counts = []\n\n\
              [ASSAYER.\"policy.references.quarry-numbers\".\"invented-alpha\"]\npath_counts = [\n  \
              { path = \"packages/assayer/docs/note.md\", maximum = 2 },\n]\n\n\
@@ -735,7 +735,7 @@ fn an_append_refuses_a_declaration_a_rewrite_would_truncate() {
     write(
         root.path(),
         ".linter/lists.toml",
-        "namespace = \"com.torrust.index.linter.lists\"\n\
+        "namespace = \"com.ember.index.linter.lists\"\n\
              version = [1, 0, 0]\n\
              \n\
              [INDEX.\"legacy.section-references-repository\"]\n\
@@ -933,7 +933,7 @@ fn an_envelope_defect_is_observation_rather_than_disagreement() {
     write(
         root.path(),
         ".linter/policy-interchange.toml",
-        "namespace = \"com.torrust.index.linter.policy.interchange\"\n\
+        "namespace = \"com.ember.index.linter.policy.interchange\"\n\
              version = [1, 0, 0]\n\
              \n\
              [set.interchange-documents]\n\

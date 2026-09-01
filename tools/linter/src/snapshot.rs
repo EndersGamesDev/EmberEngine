@@ -93,30 +93,30 @@ pub const LISTS_FILE: &str = "lists.toml";
 /// happens to stand under, because a namespace is a document's whole identity
 /// under the ratified grammar and a filename is only where it was put
 /// (´gram:isolation:declaration´).
-pub const SPDX_NAMESPACE: &str = "com.torrust.index.linter.policy.spdx";
+pub const SPDX_NAMESPACE: &str = "com.ember.index.linter.policy.spdx";
 
 /// The allocated namespace of the interchange policy's instance document.
-pub const INTERCHANGE_NAMESPACE: &str = "com.torrust.index.linter.policy.interchange";
+pub const INTERCHANGE_NAMESPACE: &str = "com.ember.index.linter.policy.interchange";
 
 /// The allocated namespace of the file-path policy's instance document.
-pub const PATH_LINKING_NAMESPACE: &str = "com.torrust.index.linter.policy.references.path-linking";
+pub const PATH_LINKING_NAMESPACE: &str = "com.ember.index.linter.policy.references.path-linking";
 
 /// The allocated namespace of the publication policy's instance document.
 pub const ASSEMBLY_PUBLICATIONS_NAMESPACE: &str =
-    "com.torrust.index.linter.policy.assembly-publications";
+    "com.ember.index.linter.policy.assembly-publications";
 
 /// The allocated namespace of the owner-name policy's instance document.
-pub const OWNER_NAMES_NAMESPACE: &str = "com.torrust.index.linter.policy.owner.names";
+pub const OWNER_NAMES_NAMESPACE: &str = "com.ember.index.linter.policy.owner.names";
 
 /// The allocated namespace of the scenario policy's instance document.
-pub const SCENARIOS_NAMESPACE: &str = "com.torrust.index.linter.policy.references.scenarios";
+pub const SCENARIOS_NAMESPACE: &str = "com.ember.index.linter.policy.references.scenarios";
 
 /// The allocated namespace of the division policy's instance document.
-pub const DIVISIONS_NAMESPACE: &str = "com.torrust.index.linter.policy.references.divisions";
+pub const DIVISIONS_NAMESPACE: &str = "com.ember.index.linter.policy.references.divisions";
 
 /// The allocated namespace of the prefix-number policy's instance document.
 pub const PREFIX_NUMBERS_NAMESPACE: &str =
-    "com.torrust.index.linter.policy.references.prefix-numbers";
+    "com.ember.index.linter.policy.references.prefix-numbers";
 
 /// The run every instance document's allocated namespace opens with.
 ///
@@ -125,7 +125,7 @@ pub const PREFIX_NUMBERS_NAMESPACE: &str =
 /// it walks therefore asks for its own policy by name and no compiled table of
 /// filenames stands between the question and the answer
 /// (´gram:isolation:declaration´).
-pub const POLICY_NAMESPACE: &str = "com.torrust.index.linter.policy.";
+pub const POLICY_NAMESPACE: &str = "com.ember.index.linter.policy.";
 
 /// The datum a policy's document writes its prose surface under.
 const PROSE_DATUM: &str = "prose";

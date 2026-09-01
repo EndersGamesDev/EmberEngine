@@ -1,4 +1,4 @@
-# Declared-surface migration closure · `plan:indexlinter:declared-surface-migration`
+# Declared-surface migration closure · `plan:emberlinter:declared-surface-migration`
 
 The declared-surface records now hold the campaign's settled policy. This plan names only the work that remains to close the migration.
 

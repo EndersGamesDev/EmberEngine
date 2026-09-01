@@ -1,4 +1,4 @@
-namespace = "com.torrust.index.linter.policy.references.divisions"
+namespace = "com.ember.index.linter.policy.references.divisions"
 version = [1, 0, 0]
 
 [set.literals]

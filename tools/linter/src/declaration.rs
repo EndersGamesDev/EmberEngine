@@ -2017,14 +2017,14 @@ mod tests {
     fn decodes_the_ratified_owner_name_document() {
         let document = decode(
             r#"
-namespace = "com.torrust.index.linter.policy.owner.names"
+namespace = "com.ember.index.linter.policy.owner.names"
 version = [1, 0, 0]
 
 [set.name-key]
 cargo-package-name = "name"
 
 [set.name-prefix-ignore]
-torrust = "torrust-"
+ember = "ember-"
 
 [owners.INDEX]
 cargo-toml = "Cargo.toml"
@@ -2033,14 +2033,14 @@ cargo-toml = "Cargo.toml"
 use = "cargo-package-name"
 
 [owners.INDEX.name-prefix-ignore]
-use = "torrust"
+use = "ember"
 "#,
         )
         .expect("the ratified document");
 
         assert_eq!(
             document.namespace(),
-            "com.torrust.index.linter.policy.owner.names"
+            "com.ember.index.linter.policy.owner.names"
         );
         assert_eq!(document.version(), [1, 0, 0]);
 
@@ -2056,8 +2056,8 @@ use = "torrust"
             Some(&SetEntry::Text("name".to_owned()))
         );
         assert_eq!(
-            prefixes.entry("torrust"),
-            Some(&SetEntry::Text("torrust-".to_owned()))
+            prefixes.entry("ember"),
+            Some(&SetEntry::Text("ember-".to_owned()))
         );
 
         let index = document.owner("INDEX").expect("the crate owner");
@@ -2074,7 +2074,7 @@ use = "torrust"
         );
         assert_eq!(
             index.selection("name-prefix-ignore"),
-            Some(&Selection::Entry("torrust".to_owned()))
+            Some(&Selection::Entry("ember".to_owned()))
         );
         assert_eq!(
             index.data().len(),
@@ -2096,7 +2096,7 @@ use = "torrust"
     fn merges_one_program_s_payloads_into_one_document_of_named_entries() {
         let document = decode(
             r#"
-namespace = "com.torrust.index.linter.policy.references.prefixed"
+namespace = "com.ember.index.linter.policy.references.prefixed"
 version = [1, 0, 0]
 
 [set.prefix-numbers]
@@ -2188,7 +2188,7 @@ exclude = [
     fn decodes_a_parameterized_entry_into_the_program_s_own_value() {
         let document = decode(
             r##"
-namespace = "com.torrust.index.linter.policy.references.scenarios"
+namespace = "com.ember.index.linter.policy.references.scenarios"
 version = [1, 0, 0]
 
 [set.numbered-marks]
@@ -2212,7 +2212,7 @@ hash-one-to-91 = { mark = "#", minimum = 1, maximum = 91 }
         assert!(
             says(
                 r#"
-namespace = "com.torrust.index.linter.policy.references.scenarios"
+namespace = "com.ember.index.linter.policy.references.scenarios"
 version = [1, 0, 0]
 
 [set.numbered-marks]
@@ -2226,7 +2226,7 @@ doubled = { mark = "@@", minimum = 1, maximum = 4 }
         assert!(
             says(
                 r#"
-namespace = "com.torrust.index.linter.policy.references.prefixed"
+namespace = "com.ember.index.linter.policy.references.prefixed"
 version = [1, 0, 0]
 
 [set.prefix-numbers]
@@ -2240,7 +2240,7 @@ both = { prefix = "L-", leading = [1], leading-minimum = 1, leading-maximum = 3 
         assert!(
             says(
                 r##"
-namespace = "com.torrust.index.linter.policy.references.scenarios"
+namespace = "com.ember.index.linter.policy.references.scenarios"
 version = [1, 0, 0]
 
 [set.numbered-marks]
@@ -2264,7 +2264,7 @@ shielded = { mark = "#", minimum = 1, maximum = 4, shielded = true }
     fn decodes_a_simple_entry_and_the_pattern_rows_that_deploy_it() {
         let document = decode(
             r#"
-namespace = "com.torrust.index.linter.policy.references.divisions"
+namespace = "com.ember.index.linter.policy.references.divisions"
 version = [1, 0, 0]
 
 [set.literals]
@@ -2352,7 +2352,7 @@ exclude = [
     fn decodes_the_two_licence_halves_as_named_entries_of_two_sets() {
         let document = decode(
             r#"
-namespace = "com.torrust.index.linter.policy.licence.headers"
+namespace = "com.ember.index.linter.policy.licence.headers"
 version = [1, 0, 0]
 
 [set.identifier]
@@ -2420,7 +2420,7 @@ partitions = [
     fn decodes_publications_as_named_tables_on_the_naked_owner_table() {
         let document = decode(
             r#"
-namespace = "com.torrust.index.linter.policy.assembly.publications"
+namespace = "com.ember.index.linter.policy.assembly.publications"
 version = [1, 0, 0]
 
 [owners.QUARRY]
@@ -2471,7 +2471,7 @@ manual = { parts = "quarry/docs/manual", target = "quarry/docs/manual.md" }
     #[test]
     fn refuses_every_key_the_ratified_grammar_retired() {
         let document = r##"
-namespace = "com.torrust.index.linter.policy.references.scenarios"
+namespace = "com.ember.index.linter.policy.references.scenarios"
 version = [1, 0, 0]
 
 policy = "references.mark-numbered-absent"
@@ -2546,7 +2546,7 @@ hash = { mark = "#", minimum = 1, maximum = 4 }
     #[test]
     fn refuses_a_reference_to_an_entry_no_set_declares() {
         let dangling = r#"
-namespace = "com.torrust.index.linter.policy.references.divisions"
+namespace = "com.ember.index.linter.policy.references.divisions"
 version = [1, 0, 0]
 
 [set.literals]
@@ -2568,7 +2568,7 @@ include = [
         );
 
         let singular = r#"
-namespace = "com.torrust.index.linter.policy.owner.names"
+namespace = "com.ember.index.linter.policy.owner.names"
 version = [1, 0, 0]
 
 [set.name-key]
@@ -2581,7 +2581,7 @@ use = "package-name"
         assert!(says(singular, "no entry of that set answers to this name"));
 
         let untyped = r#"
-namespace = "com.torrust.index.linter.policy.owner.names"
+namespace = "com.ember.index.linter.policy.owner.names"
 version = [1, 0, 0]
 
 [owners.QUARRY.name-key]
@@ -2597,7 +2597,7 @@ use = "cargo-package-name"
         );
 
         let labels = r#"
-namespace = "com.torrust.index.linter.policy.references.divisions"
+namespace = "com.ember.index.linter.policy.references.divisions"
 version = [1, 0, 0]
 
 [set.literals]
@@ -2630,7 +2630,7 @@ exclude = [
     #[test]
     fn refuses_the_row_spelling_the_ruling_replaced() {
         let ratified = r#"
-namespace = "com.torrust.index.linter.policy.spdx"
+namespace = "com.ember.index.linter.policy.spdx"
 version = [1, 0, 0]
 
 [set.identifier]
@@ -2742,7 +2742,7 @@ exclude = [
     #[test]
     fn refuses_the_admitting_word_a_section_s_entries_do_not_call_for() {
         let deploying_word = r#"
-namespace = "com.torrust.index.linter.policy.spdx"
+namespace = "com.ember.index.linter.policy.spdx"
 version = [1, 0, 0]
 
 [set.identifier]
@@ -2769,7 +2769,7 @@ include = [
         );
 
         let partitioning_word = r#"
-namespace = "com.torrust.index.linter.policy.references.divisions"
+namespace = "com.ember.index.linter.policy.references.divisions"
 version = [1, 0, 0]
 
 [set.literals]
@@ -2799,7 +2799,7 @@ partitions = [
         // because fixing one would decide what its entries do. Both at once is
         // still two answers to one question.
         let unadopted = r#"
-namespace = "com.torrust.index.linter.policy.quarry.seams"
+namespace = "com.ember.index.linter.policy.quarry.seams"
 version = [1, 0, 0]
 
 [set.seams]
@@ -2822,7 +2822,7 @@ partitions = [
         );
 
         let both = r#"
-namespace = "com.torrust.index.linter.policy.quarry.seams"
+namespace = "com.ember.index.linter.policy.quarry.seams"
 version = [1, 0, 0]
 
 [set.seams]
@@ -2858,7 +2858,7 @@ include = [
     #[test]
     fn refuses_a_singular_reference_standing_beside_pattern_rows() {
         let conflicted = r#"
-namespace = "com.torrust.index.linter.policy.owner.names"
+namespace = "com.ember.index.linter.policy.owner.names"
 version = [1, 0, 0]
 
 [set.name-key]
@@ -2884,7 +2884,7 @@ include = [
         ));
 
         let rowless = r#"
-namespace = "com.torrust.index.linter.policy.references.divisions"
+namespace = "com.ember.index.linter.policy.references.divisions"
 version = [1, 0, 0]
 
 [owners.QUARRY]
@@ -2914,7 +2914,7 @@ exclude = [
     #[test]
     fn decodes_a_section_naming_the_one_entry_it_deploys() {
         let singular = r#"
-namespace = "com.torrust.index.linter.policy.owner.names"
+namespace = "com.ember.index.linter.policy.owner.names"
 version = [1, 0, 0]
 
 [set.name-key]
@@ -2968,7 +2968,7 @@ use = "cargo-package-name"
     #[test]
     fn refuses_a_pattern_the_form_does_not_read() {
         let unreadable = r#"
-namespace = "com.torrust.index.linter.policy.references.divisions"
+namespace = "com.ember.index.linter.policy.references.divisions"
 version = [1, 0, 0]
 
 [set.literals]
@@ -2992,7 +2992,7 @@ include = [
         );
 
         let undefined = r#"
-namespace = "com.torrust.index.linter.policy.references.divisions"
+namespace = "com.ember.index.linter.policy.references.divisions"
 version = [1, 0, 0]
 
 [set.literals]
@@ -3010,7 +3010,7 @@ include = [
         );
 
         let regular = r#"
-namespace = "com.torrust.index.linter.policy.references.divisions"
+namespace = "com.ember.index.linter.policy.references.divisions"
 version = [1, 0, 0]
 
 [set.literals]
@@ -3039,7 +3039,7 @@ include = [
     fn keeps_a_set_no_program_claims_and_marks_it_unadopted() {
         let document = decode(
             r#"
-namespace = "com.torrust.index.linter.policy.quarry.seams"
+namespace = "com.ember.index.linter.policy.quarry.seams"
 version = [1, 0, 0]
 
 [set.seam-widths]
@@ -3105,7 +3105,7 @@ use = "narrow"
         );
         assert!(
             says(
-                "namespace = \"com.torrust.index.linter.policy.quarry\"\nversion = \"1.0.0\"\n",
+                "namespace = \"com.ember.index.linter.policy.quarry\"\nversion = \"1.0.0\"\n",
                 "three whole numbers"
             ),
             "a version is three numbers rather than a rendering of them"
@@ -3114,7 +3114,7 @@ use = "narrow"
         assert!(
             says(
                 r#"
-namespace = "com.torrust.index.linter.policy.quarry"
+namespace = "com.ember.index.linter.policy.quarry"
 version = [1, 0, 0]
 universe = "git-tracked"
 "#,
@@ -3124,7 +3124,7 @@ universe = "git-tracked"
         );
 
         assert!(
-            decode("namespace = \"com.torrust.index.linter.policy.quarry\"\nversion = [1, 0, 0]\n")
+            decode("namespace = \"com.ember.index.linter.policy.quarry\"\nversion = [1, 0, 0]\n")
                 .is_ok(),
             "an envelope alone is a document declaring nothing yet"
         );

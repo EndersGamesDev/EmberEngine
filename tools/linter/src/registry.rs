@@ -43,13 +43,13 @@ use crate::label::Label;
 /// data signature: the ordinary rows of the Convention tables together with the
 /// declared hybrid rows, and no heading occurrence, presentation device,
 /// attestation record or generated presentation beside them
-/// (´[ORCHESTRATION-sig:kinds:registry-data]´). These two cells are how those tables are
+/// (´[EMBER-sig:kinds:registry-data]´). These two cells are how those tables are
 /// told from every other table the document prints — the headline counts, the
 /// hybrid triples, the attestation rows — so the pair is the whole admission
 /// rule the signature asks for and not a formatting detail.
 ///
-/// ´const:indexlinter:registry-table-marker´ (´[ORCHESTRATION-alg:const:form]´)
-/// ´const:indexlinter:registry-table-marker-form-x7f03bc6a´
+/// ´const:emberlinter:registry-table-marker´ (´[EMBER-alg:const:form]´)
+/// ´const:emberlinter:registry-table-marker-form-x7f03bc6a´
 const CONVENTION_HEADER: [&str; 2] = ["Environment", "Kind"];
 
 /// The Convention whose kinds this corpus reserves for derivation.
@@ -57,14 +57,14 @@ const CONVENTION_HEADER: [&str; 2] = ["Environment", "Kind"];
 /// The calculus lets a corpus that also adopts a registry of kinds populate its
 /// reserved set from that registry by its own recorded decision, consuming the
 /// set and asking nothing of its provenance
-/// (´[ORCHESTRATION-sig:labels:reserved-kinds]´). This value is that decision's content,
+/// (´[EMBER-sig:labels:reserved-kinds]´). This value is that decision's content,
 /// and it names one Convention rather than a hand-listed set of kinds: the
 /// assets-and-inventory family catalogues the labeled constructs of code, whose
-/// mark is that the name is the code's own (´[ORCHESTRATION-conv:kinds:assets]´), which
+/// mark is that the name is the code's own (´[EMBER-conv:kinds:assets]´), which
 /// is exactly the family a profile derives rather than an author names.
 ///
-/// ´const:indexlinter:derivable-kind-family´ (´[ORCHESTRATION-alg:const:text]´)
-/// ´const:indexlinter:derivable-kind-family-text-x427c3899´
+/// ´const:emberlinter:derivable-kind-family´ (´[EMBER-alg:const:text]´)
+/// ´const:emberlinter:derivable-kind-family-text-x427c3899´
 const RESERVED_CONVENTION: &str = "conv:kinds:assets";
 
 /// The status mark the registry prints at a borderline row.
@@ -72,12 +72,12 @@ const RESERVED_CONVENTION: &str = "conv:kinds:assets";
 /// The attestation judgment fixes both the mark and its reading: the dagger
 /// printed at a row is a status mark on the row and never a character of the
 /// name, and the exact catalogue name is the row's name with the mark removed
-/// (´[ORCHESTRATION-judg:kinds:attestation]´). That is why one character carries two
+/// (´[EMBER-judg:kinds:attestation]´). That is why one character carries two
 /// facts here — stripped from the name, kept as the row's standing — and why a
 /// row spelled with it classifies under its plain name.
 ///
-/// ´const:indexlinter:attestation-status-mark´ (´[ORCHESTRATION-alg:const:codepoint]´)
-/// ´const:indexlinter:attestation-status-mark-codepoint-u2020´
+/// ´const:emberlinter:attestation-status-mark´ (´[EMBER-alg:const:codepoint]´)
+/// ´const:emberlinter:attestation-status-mark-codepoint-u2020´
 const DAGGER: char = '†';
 
 /// The emphasis and status modifiers the registry admits as presentation.
@@ -85,14 +85,14 @@ const DAGGER: char = '†';
 /// The definition of presentation reduction catalogues them by name — Main, Key,
 /// Fundamental, Working, Standing, Blanket, Concrete, Motivating, Numerical,
 /// Toy, Worked, and Running — as the modifiers a head may wear without leaving
-/// the vocabulary (´[ORCHESTRATION-def:kinds:presentation-reduction]´). The value is that
+/// the vocabulary (´[EMBER-def:kinds:presentation-reduction]´). The value is that
 /// list and is closed by it: a thirteenth modifier is a new edition of the
 /// registry rather than an addition here, and an expressly catalogued overriding
 /// row — Working hypothesis, Standing hypothesis — beats the reduction these
 /// words would otherwise licence.
 ///
-/// ´const:indexlinter:emphasis-and-status-devices´ (´[ORCHESTRATION-alg:const:form]´)
-/// ´const:indexlinter:emphasis-and-status-devices-form-x86d08518´
+/// ´const:emberlinter:emphasis-and-status-devices´ (´[EMBER-alg:const:form]´)
+/// ´const:emberlinter:emphasis-and-status-devices-form-x86d08518´
 const MODIFIERS: &[&str] = &[
     "Main",
     "Key",
@@ -112,46 +112,46 @@ const MODIFIERS: &[&str] = &[
 ///
 /// Restatement and continuation stand among the devices presentation reduction
 /// removes before a head is looked up, beside numbering, lettering and the rest
-/// (´[ORCHESTRATION-def:kinds:presentation-reduction]´), and the registry makes the same
+/// (´[EMBER-def:kinds:presentation-reduction]´), and the registry makes the same
 /// point twice over — a restated theorem is its original returned to, and names
 /// nothing new. What the definition fixes is that these two devices reduce away;
 /// the value is the surface this corpus's prose spells them with, both as a
 /// trailing note and as a parenthetical, so that a head wearing either is
 /// looked up under the name it returns to.
 ///
-/// ´const:indexlinter:continuation-devices´ (´[ORCHESTRATION-alg:const:form]´)
-/// ´const:indexlinter:continuation-devices-form-x55ee741d´
+/// ´const:emberlinter:continuation-devices´ (´[EMBER-alg:const:form]´)
+/// ´const:emberlinter:continuation-devices-form-x55ee741d´
 const RESTATEMENT_SUFFIXES: &[&str] = &[", restated", ", continued", " (continued)", " (restated)"];
 
 /// The kind a document format's sectioning rung supplies for a heading.
 ///
 /// Which environment class a document format declares for a head, and how a head
 /// maps to one, are adoption data — the registry states that and leaves the
-/// mapping to the adopting corpus (´[ORCHESTRATION-def:kinds:presentation-reduction]´).
+/// mapping to the adopting corpus (´[EMBER-def:kinds:presentation-reduction]´).
 /// This corpus's format offers one rung and its nestings, and the registry's
 /// sectioning Convention classifies a Section under this kind
-/// (´[ORCHESTRATION-conv:kinds:structure]´), so the datum is that one row: nesting within
+/// (´[EMBER-conv:kinds:structure]´), so the datum is that one row: nesting within
 /// the rung is the sub- prefix and is presentation, never a rank of its own, and
 /// the ladder's other rungs — a Chapter, a Part, a Book — are rungs this format
 /// does not offer and so are never supplied here.
 ///
-/// ´const:indexlinter:format-heading-genre´ (´[ORCHESTRATION-alg:const:word]´)
-/// ´const:indexlinter:format-heading-genre-word-sec´
+/// ´const:emberlinter:format-heading-genre´ (´[EMBER-alg:const:word]´)
+/// ´const:emberlinter:format-heading-genre-word-sec´
 pub const RUNG_KIND: &str = "sec";
 
 /// The environment name a Markdown source's title supplies for its Title head.
 ///
 /// Which environment class a document format declares for a head, and how a head
 /// maps to one, are adoption data exactly as they are for the rung above
-/// (´[ORCHESTRATION-def:kinds:presentation-reduction]´). This corpus's format offers one
+/// (´[EMBER-def:kinds:presentation-reduction]´). This corpus's format offers one
 /// title, and the document-title record maps it to this name
-/// (´[ORCHESTRATION-dec:doctitles:title-kind]´). The name is the format's and never the
+/// (´[EMBER-dec:doctitles:title-kind]´). The name is the format's and never the
 /// author's: a Title head is validated under this word however its title is
 /// spelled, so the checker derives neither the head's class nor its label from
 /// title text.
 ///
-/// ´const:indexlinter:format-title-environment´ (´[ORCHESTRATION-alg:const:text]´)
-/// ´const:indexlinter:format-title-environment-text-x1471a974´
+/// ´const:emberlinter:format-title-environment´ (´[EMBER-alg:const:text]´)
+/// ´const:emberlinter:format-title-environment-text-x1471a974´
 pub const TITLE_ENVIRONMENT: &str = "Document";
 
 /// The attestation status the registry prints at a row.

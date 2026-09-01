@@ -68,15 +68,15 @@ use crate::occurrence::Form;
 /// The invariant of total resolution enumerates the ways a participating
 /// citation fails to be the conclusion of exactly one rule — unknown owners,
 /// unresolved citations, non-parenthesized imports, and bracket-free cross-owner
-/// tokens (´[ORCHESTRATION-inv:labels:total-resolution]´) — and the import rule adds the
+/// tokens (´[EMBER-inv:labels:total-resolution]´) — and the import rule adds the
 /// fifth by a side condition, a self-qualified import being underivable
-/// (´[ORCHESTRATION-inf:labels:imported-citation]´). The value is that enumeration under
+/// (´[EMBER-inf:labels:imported-citation]´). The value is that enumeration under
 /// the codes this checker reports it by, which is why it is a list of the check's
 /// own verdicts rather than a second derivation: the report restates what the
 /// check found, so that one rule keeps one verdict.
 ///
-/// ´const:indexlinter:resolution-failure-codes´ (´[ORCHESTRATION-alg:const:form]´)
-/// ´const:indexlinter:resolution-failure-codes-form-x44e307eb´
+/// ´const:emberlinter:resolution-failure-codes´ (´[EMBER-alg:const:form]´)
+/// ´const:emberlinter:resolution-failure-codes-form-x44e307eb´
 const DANGLING_CODES: &[&str] = &[
     "unresolved_citation",
     "unresolved_citation_wanting_import",
@@ -94,8 +94,8 @@ const DANGLING_CODES: &[&str] = &[
 ///
 /// TODO ´todo:code:record-the-reading-length-the-default´: record the reading length the default hub listing is cut to.
 ///
-/// ´const:indexlinter:hub-listing-bound´ (´[ORCHESTRATION-alg:const:count]´)
-/// ´const:indexlinter:hub-listing-bound-count-10´
+/// ´const:emberlinter:hub-listing-bound´ (´[EMBER-alg:const:count]´)
+/// ´const:emberlinter:hub-listing-bound-count-10´
 pub const DEFAULT_HUBS: usize = 10;
 
 /// One mint, as the report names it.

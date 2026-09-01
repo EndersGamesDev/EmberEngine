@@ -149,8 +149,8 @@ use crate::snapshot::Snapshot;
 /// ordinary table of parts is this module's own recognition contract, and a
 /// contract nothing states cannot be confirmed against anything.
 ///
-/// ´const:indexlinter:manifest-recognition-header´ (´[ORCHESTRATION-alg:const:form]´)
-/// ´const:indexlinter:manifest-recognition-header-form-x7fede830´
+/// ´const:emberlinter:manifest-recognition-header´ (´[EMBER-alg:const:form]´)
+/// ´const:emberlinter:manifest-recognition-header-form-x7fede830´
 const MANIFEST_HEADER: [&str; 1] = ["Part"];
 
 /// The manifest document's name, inside every parts directory.
@@ -159,8 +159,8 @@ const MANIFEST_HEADER: [&str; 1] = ["Part"];
 /// manifest and says the parts stand under it, but leaves what the file is
 /// called to whoever wrote the tool.
 ///
-/// ´const:indexlinter:manifest-filename´ (´[ORCHESTRATION-alg:const:text]´)
-/// ´const:indexlinter:manifest-filename-text-x72298b10´
+/// ´const:emberlinter:manifest-filename´ (´[EMBER-alg:const:text]´)
+/// ´const:emberlinter:manifest-filename-text-x72298b10´
 pub const MANIFEST_FILE: &str = "assembly.md";
 
 /// One assembled document: its parts, their manifest, and its publication.
@@ -471,8 +471,8 @@ pub fn read_manifest(path: &Path, source: &str) -> (Vec<PartRow>, Vec<Finding>) 
 /// fixes the spelling, so the capitalisation and the stop this module insists on
 /// answer to nothing but this line.
 ///
-/// ´const:indexlinter:manifest-draft-marker´ (´[ORCHESTRATION-alg:const:text]´)
-/// ´const:indexlinter:manifest-draft-marker-text-xf10e4686´
+/// ´const:emberlinter:manifest-draft-marker´ (´[EMBER-alg:const:text]´)
+/// ´const:emberlinter:manifest-draft-marker-text-xf10e4686´
 const DRAFT_MARKER: &str = "Draft.";
 
 /// Whether a manifest's rows are still under authorship rather than published.
@@ -1344,7 +1344,7 @@ mod tests {
         )
         .expect("write");
 
-        let findings = part_duplicate_mints(root.path(), &assembly(), "torrust-fixture");
+        let findings = part_duplicate_mints(root.path(), &assembly(), "ember-fixture");
 
         let [
             Finding::DuplicateMint {

@@ -1,4 +1,4 @@
-namespace = "com.torrust.index.linter.policy.legacy.unprefixed-record-references"
+namespace = "com.ember.index.linter.policy.legacy.unprefixed-record-references"
 version = [1, 0, 0]
 
 [owners.QUARRY]

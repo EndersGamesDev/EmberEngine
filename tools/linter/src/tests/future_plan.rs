@@ -150,7 +150,7 @@ fn overlaps(
 fn future_plan_unions_namespaces_before_programmes() {
     let adopted = Declaration::decode(
         r#"
-namespace = "com.torrust.index.linter.policy.references.divisions"
+namespace = "com.ember.index.linter.policy.references.divisions"
 version = [1, 0, 0]
 
 [set.literals]
@@ -181,7 +181,7 @@ kept = "not this binary's adoption decision"
 
     assert_eq!(
         namespaces(&[adopted.clone(), adopted]).expect_err("one identity claimed twice"),
-        "com.torrust.index.linter.policy.references.divisions: two documents stamp this identity"
+        "com.ember.index.linter.policy.references.divisions: two documents stamp this identity"
     );
 }
 

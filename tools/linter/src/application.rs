@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: 2026 Wild Sky Maker
 
-//! Application orchestration behind the stable report protocol.
+//! Application coordination behind the stable report protocol.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;

@@ -88,10 +88,10 @@ use crate::workspace::Package;
 /// The record catalogues the To-do environment against this spelling in its own
 /// local extension row, the registry of ADR-T-011 naming no environment for a
 /// deficiency notice: a notice is neither a remark on the work nor an
-/// annotation decoding displayed material (´[ORCHESTRATION-sig:todos:kind-extension]´).
+/// annotation decoding displayed material (´[EMBER-sig:todos:kind-extension]´).
 ///
-/// ´const:indexlinter:notice-kind-token´ (´[ORCHESTRATION-alg:const:word]´)
-/// ´const:indexlinter:notice-kind-token-word-todo´
+/// ´const:emberlinter:notice-kind-token´ (´[EMBER-alg:const:word]´)
+/// ´const:emberlinter:notice-kind-token-word-todo´
 pub const TODO_KIND: &str = "todo";
 
 /// The marker spellings the census recognizes.
@@ -99,10 +99,10 @@ pub const TODO_KIND: &str = "todo";
 /// ADR-T-016 censuses all three so that no synonym escapes the policy by being
 /// spelled differently, and lets none of them reach the label: the corpus writes
 /// the first, and grading deficiencies by their marker word is a taxonomy nobody
-/// maintains (´[ORCHESTRATION-conv:todos:census]´).
+/// maintains (´[EMBER-conv:todos:census]´).
 ///
-/// ´const:indexlinter:notice-marker-spellings´ (´[ORCHESTRATION-alg:const:form]´)
-/// ´const:indexlinter:notice-marker-spellings-form-xf1db7b8e´
+/// ´const:emberlinter:notice-marker-spellings´ (´[EMBER-alg:const:form]´)
+/// ´const:emberlinter:notice-marker-spellings-form-xf1db7b8e´
 pub const TODO_MARKERS: &[&str] = &["TODO", "FIXME", "XXX"];
 
 /// How many words of a summary the name transformation takes.
@@ -110,12 +110,12 @@ pub const TODO_MARKERS: &[&str] = &["TODO", "FIXME", "XXX"];
 /// The record fixes the figure outright, and what it buys is a name a reader can
 /// confirm against the line it stands on: the transformation reads the words the
 /// author wrote after the marker and takes the first six, lowercased and joined
-/// by hyphens (´[ORCHESTRATION-conv:todos:profile]´). Only the marker's own line feeds
+/// by hyphens (´[EMBER-conv:todos:profile]´). Only the marker's own line feeds
 /// the name, so the span is bounded by a line rather than by a notice, and a
 /// continuation the label never reads cannot re-derive it.
 ///
-/// ´const:indexlinter:notice-name-summary-span´ (´[ORCHESTRATION-alg:const:count]´)
-/// ´const:indexlinter:notice-name-summary-span-count-6´
+/// ´const:emberlinter:notice-name-summary-span´ (´[EMBER-alg:const:count]´)
+/// ´const:emberlinter:notice-name-summary-span-count-6´
 pub const NAME_WORDS: usize = 6;
 
 /// The area a covered notice's structural home assigns it.
@@ -815,12 +815,12 @@ mod tests {
     const ACUTE: char = '\u{b4}';
 
     fn census_of(sources: &[(&str, &str)]) -> (Vec<Package>, TodoCensus, Vec<Finding>) {
-        let packages = vec![Package::new("torrust-demo", "packages/demo")];
+        let packages = vec![Package::new("ember-demo", "packages/demo")];
         let mut notices = Vec::new();
         let mut findings = Vec::new();
 
         for (path, text) in sources {
-            let (found, orphans) = scan_todos("torrust-demo", Path::new(path), text);
+            let (found, orphans) = scan_todos("ember-demo", Path::new(path), text);
 
             notices.extend(found);
             findings.extend(orphans);
@@ -880,7 +880,7 @@ mod tests {
     #[test]
     fn reads_a_marker_only_as_a_whole_word() {
         let (notices, _orphans) = scan_todos(
-            "torrust-demo",
+            "ember-demo",
             Path::new("a.rs"),
             "// TODOS are not notices\n",
         );
@@ -892,7 +892,7 @@ mod tests {
         );
 
         let (found, _orphans) =
-            scan_todos("torrust-demo", Path::new("a.rs"), "// TODO: a notice\n");
+            scan_todos("ember-demo", Path::new("a.rs"), "// TODO: a notice\n");
 
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].summary(), "a notice");
@@ -907,7 +907,7 @@ mod tests {
     #[test]
     fn reads_a_marker_only_at_the_start_of_a_comment_line() {
         let (notices, _orphans) = scan_todos(
-            "torrust-demo",
+            "ember-demo",
             Path::new("a.rs"),
             "// a sentence mentioning TODO in passing\n",
         );
@@ -924,7 +924,7 @@ mod tests {
     #[test]
     fn reads_no_marker_a_string_literal_carries() {
         let (notices, _orphans) = scan_todos(
-            "torrust-demo",
+            "ember-demo",
             Path::new("a.rs"),
             "let reject = \"// TODO: not a notice\";\nlet raw = r#\"// TODO: nor this\"#;\n",
         );
@@ -965,7 +965,7 @@ mod tests {
     #[test]
     fn keeps_the_qualifier_out_of_the_derivation() {
         let (notices, _orphans) = scan_todos(
-            "torrust-demo",
+            "ember-demo",
             Path::new("packages/demo/src/a.rs"),
             "// TODO(RECORD-1 2026-05-17): Accept the policy\n",
         );
@@ -1139,14 +1139,14 @@ mod tests {
     #[test]
     fn leaves_one_summary_in_two_owners_alone() {
         let packages = vec![
-            Package::new("torrust-one", "packages/one"),
-            Package::new("torrust-two", "packages/two"),
+            Package::new("ember-one", "packages/one"),
+            Package::new("ember-two", "packages/two"),
         ];
         let source = format!("// TODO {ACUTE}todo:code:read-the-flag{ACUTE}: read the flag\n");
 
         let (mut notices, _orphans) =
-            scan_todos("torrust-one", Path::new("packages/one/src/a.rs"), &source);
-        let (other, _more) = scan_todos("torrust-two", Path::new("packages/two/src/a.rs"), &source);
+            scan_todos("ember-one", Path::new("packages/one/src/a.rs"), &source);
+        let (other, _more) = scan_todos("ember-two", Path::new("packages/two/src/a.rs"), &source);
 
         notices.extend(other);
 
@@ -1166,7 +1166,7 @@ mod tests {
     #[test]
     fn reads_a_block_comments_continuation_leaders() {
         let (notices, _orphans) = scan_todos(
-            "torrust-demo",
+            "ember-demo",
             Path::new("packages/demo/src/a.rs"),
             "/*\n * TODO: read the flag\n */\n",
         );

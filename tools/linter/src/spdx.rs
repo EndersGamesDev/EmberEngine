@@ -1049,7 +1049,7 @@ mod tests {
     const IDENTIFIER: &str = "AGPL-3.0-only";
 
     /// The copyright text every fixture section requires.
-    const COPYRIGHT: &str = "2026 Torrust project contributors";
+    const COPYRIGHT: &str = "2026 Wild Sky Maker";
 
     /// The owner every fixture section belongs to.
     const OWNER: &str = "INDEX";
@@ -1081,7 +1081,7 @@ mod tests {
 
         Parameters::new(
             sets("agpl3only", IDENTIFIER),
-            sets("torrust2026", COPYRIGHT),
+            sets("ember2026", COPYRIGHT),
             BTreeMap::from([(
                 String::from(OWNER),
                 Section::new(
@@ -1107,7 +1107,7 @@ mod tests {
                     "non-rust",
                     "0*2VCHAR / *VCHAR ( %x21-72 / %x74-7E ) / *VCHAR ( %x21-71 / %x73-7E ) %s\"s\" / *VCHAR ( %x21-2D / %x2F-7E ) %s\"rs\"",
                 )],
-                vec![carries("code", "torrust2026", "*VCHAR")],
+                vec![carries("code", "ember2026", "*VCHAR")],
             ),
         )
     }
@@ -1195,7 +1195,7 @@ mod tests {
                 Vec::new(),
                 vec![carries(
                     "code",
-                    "torrust2026",
+                    "ember2026",
                     "%s\"src/\" *VCHAR %s\".rs\"",
                 )],
             ),
@@ -1215,7 +1215,7 @@ mod tests {
             ),
             (
                 Vec::new(),
-                vec![carries("code", "torrust2026", "%s\"src/one.rs\"")],
+                vec![carries("code", "ember2026", "%s\"src/one.rs\"")],
             ),
         );
         let (governed, findings) = govern(&narrow, &attributed);
@@ -1296,7 +1296,7 @@ mod tests {
                     "non-rust",
                     "0*2VCHAR / *VCHAR ( %x21-72 / %x74-7E ) / *VCHAR ( %x21-71 / %x73-7E ) %s\"s\" / *VCHAR ( %x21-2D / %x2F-7E ) %s\"rs\"",
                 )],
-                vec![carries("code", "torrust2026", "*VCHAR")],
+                vec![carries("code", "ember2026", "*VCHAR")],
             ),
         );
         let paths = [path("src/one.rs"), path("src/notes.md")];
@@ -1370,7 +1370,7 @@ mod tests {
                 )],
                 vec![carries(
                     "code",
-                    "torrust2026",
+                    "ember2026",
                     "%s\"src\" [ \"/\" *VCHAR ] %s\".rs\"",
                 )],
             ),
@@ -1414,7 +1414,7 @@ mod tests {
                 vec![row("elsewhere", "%s\"packages\" [ \"/\" *VCHAR ]")],
                 vec![carries("code", "agpl3only", "*VCHAR")],
             ),
-            (Vec::new(), vec![carries("code", "torrust2026", "*VCHAR")]),
+            (Vec::new(), vec![carries("code", "ember2026", "*VCHAR")]),
         );
 
         let ours = path("src/one.rs");
@@ -1446,7 +1446,7 @@ mod tests {
                 vec![row("nowhere", "%s\"gone\" [ \"/\" *VCHAR ]")],
                 vec![carries(
                     "code",
-                    "torrust2026",
+                    "ember2026",
                     "%s\"src\" [ \"/\" *VCHAR ] %s\".rs\"",
                 )],
             ),
@@ -1621,7 +1621,7 @@ mod tests {
                 Vec::new(),
                 vec![carries(
                     "code",
-                    "torrust2026",
+                    "ember2026",
                     "%s\"src\" [ \"/\" *VCHAR ] %s\".sh\"",
                 )],
             ),
@@ -1865,8 +1865,8 @@ mod tests {
     #[test]
     fn a_copyright_text_is_a_line_and_not_a_form() {
         for text in [
-            "2026 Torrust project contributors",
-            "Torrust project contributors",
+            "2026 Wild Sky Maker",
+            "Wild Sky Maker",
             "2120 Auto Dev Collective",
             "1998-2026 Somebody Else, and others",
         ] {
@@ -1878,10 +1878,10 @@ mod tests {
 
         for text in [
             "",
-            " 2026 Torrust",
-            "2026 Torrust ",
-            "2026\nTorrust",
-            "2026 Torrust\r",
+            " 2026 Wild Sky Maker",
+            "2026 Wild Sky Maker ",
+            "2026\nWild Sky Maker",
+            "2026 Wild Sky Maker\r",
         ] {
             assert!(
                 !is_copyright_text(text),

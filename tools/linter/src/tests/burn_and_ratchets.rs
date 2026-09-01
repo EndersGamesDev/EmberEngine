@@ -410,7 +410,7 @@ const SURFACE_DOCUMENTS: [(&str, &str); 11] = [
 /// The pairs matter to the equivalence rather than decorating it: a
 /// repository-scoped family cuts out the shares whose owners activate its
 /// per-owner sibling, and that is read from these rows at runtime.
-const ACTIVATIONS: &str = "namespace = \"com.torrust.index.linter.policies\"\n\
+const ACTIVATIONS: &str = "namespace = \"com.ember.index.linter.policies\"\n\
          version = [1, 0, 0]\n\
          \n\
          policies = [\
@@ -434,7 +434,7 @@ const ACTIVATIONS: &str = "namespace = \"com.torrust.index.linter.policies\"\n\
 /// found, so every ceiling is empty: the fixture holds no source at all, and a
 /// pair activating a census still has to carry the list its verdict is read
 /// against.
-const RATCHETS: &str = "namespace = \"com.torrust.index.linter.lists\"\n\
+const RATCHETS: &str = "namespace = \"com.ember.index.linter.lists\"\n\
          version = [1, 0, 0]\n\
          \n\
          [QUARRY.\"labels.mints-well-formed\"]\nallowances = []\n\
@@ -456,7 +456,7 @@ fn declared_geography(root: &Path) {
     let core = [
         (
             "owners.toml",
-            "namespace = \"com.torrust.index.linter.owners\"\n\
+            "namespace = \"com.ember.index.linter.owners\"\n\
                  version = [1, 0, 0]\n\
                  \n\
                  owners = [\"INDEX\", \"QUARRY\", \"LINTER\"]\n\
@@ -468,7 +468,7 @@ fn declared_geography(root: &Path) {
         ),
         (
             "environments.toml",
-            "namespace = \"com.torrust.index.linter.environments\"\n\
+            "namespace = \"com.ember.index.linter.environments\"\n\
                  version = [1, 0, 0]\n\
                  \n\
                  environments = []\n",
@@ -477,7 +477,7 @@ fn declared_geography(root: &Path) {
         ("lists.toml", RATCHETS),
         (
             "shape.toml",
-            "namespace = \"com.torrust.index.linter.shape\"\n\
+            "namespace = \"com.ember.index.linter.shape\"\n\
                  version = [1, 0, 0]\n\
                  \n\
                  universe = \"git-tracked\"\n\

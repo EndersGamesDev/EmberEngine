@@ -88,10 +88,10 @@ use crate::workspace::Package;
 ///
 /// The record fixes the form a claim label takes, and this is its kind: the
 /// claim label stands below the gloss, in the code syntax of the calculus, of a
-/// form whose first token is this one (´[ORCHESTRATION-conv:testdocs:two-labels]´).
+/// form whose first token is this one (´[EMBER-conv:testdocs:two-labels]´).
 ///
-/// ´const:indexlinter:claim-kind-token´ (´[ORCHESTRATION-alg:const:word]´)
-/// ´const:indexlinter:claim-kind-token-word-claim´
+/// ´const:emberlinter:claim-kind-token´ (´[EMBER-alg:const:word]´)
+/// ´const:emberlinter:claim-kind-token-word-claim´
 pub const CLAIM_KIND: &str = "claim";
 
 /// The activation an owner's closed wave is stated by.
@@ -306,8 +306,8 @@ fn gloss_above(lines: &[String], claim: usize) -> String {
 /// own class column with an em dash, which is a precedent rather than a rule
 /// reaching this table; promoting it to one is a record edit, not a code edit.
 ///
-/// ´const:indexlinter:unclaimed-cell-placeholder´ (´[ORCHESTRATION-alg:const:text]´)
-/// ´const:indexlinter:unclaimed-cell-placeholder-text-x8850a3f1´
+/// ´const:emberlinter:unclaimed-cell-placeholder´ (´[EMBER-alg:const:text]´)
+/// ´const:emberlinter:unclaimed-cell-placeholder-text-x8850a3f1´
 pub const NO_CLAIM_YET: &str = "\u{2014}";
 
 /// The header row of either generated table, recognised by exact equality.
@@ -315,14 +315,14 @@ pub const NO_CLAIM_YET: &str = "\u{2014}";
 /// The record displays both projections under the same three cells, and it is
 /// one shape rather than two that happen to agree: the Test cell names the test,
 /// and the Area and Claim cells are the ones this module projects for either
-/// surface (´[ORCHESTRATION-conv:testdocs:file-index]´). What differs between the
+/// surface (´[EMBER-conv:testdocs:file-index]´). What differs between the
 /// surfaces is the concrete syntax a Test cell is written in, which the row
 /// heading it does not state. Recognition by exact equality is what lets an
 /// author write a paragraph above the table without the generator losing track
 /// of its own region.
 ///
-/// ´const:indexlinter:test-table-header-row´ (´[ORCHESTRATION-alg:const:text]´)
-/// ´const:indexlinter:test-table-header-row-text-x0c2d3caa´
+/// ´const:emberlinter:test-table-header-row´ (´[EMBER-alg:const:text]´)
+/// ´const:emberlinter:test-table-header-row-text-x0c2d3caa´
 pub const TABLE_HEADER: &str = "| Test | Area | Claim |";
 
 /// The delimiter row the generator writes below the header.
@@ -330,11 +330,11 @@ pub const TABLE_HEADER: &str = "| Test | Area | Claim |";
 /// It stands under the header in the table the record displays, and its dashes
 /// are laid to that display's own widths: the region is compared byte for byte,
 /// so a row laid to other widths reads as staleness rather than as a variation
-/// (´[ORCHESTRATION-conv:testdocs:folder-matrix]´). One header admits one delimiter, so
+/// (´[EMBER-conv:testdocs:folder-matrix]´). One header admits one delimiter, so
 /// the two rows are declared and moved together.
 ///
-/// ´const:indexlinter:test-table-delimiter-row´ (´[ORCHESTRATION-alg:const:text]´)
-/// ´const:indexlinter:test-table-delimiter-row-text-x470227c8´
+/// ´const:emberlinter:test-table-delimiter-row´ (´[EMBER-alg:const:text]´)
+/// ´const:emberlinter:test-table-delimiter-row-text-x470227c8´
 pub const TABLE_DELIMITER: &str = "|------|------|-------|";
 
 /// The Area and Claim cells one covered test projects into either table.
@@ -650,19 +650,19 @@ mod tests {
     const POLICIES_DOCUMENT: &str = include_str!("../tests/fixtures/claims-policies.toml");
 
     /// The project namespace this repository's own crate names carry.
-    const NAMESPACE: &str = "torrust-";
+    const NAMESPACE: &str = "ember-";
 
     /// The fictional members whose claims waves the fixture closes.
-    const FIXTURE_MEMBERS: &[&str] = &["torrust-river", "torrust-valley"];
+    const FIXTURE_MEMBERS: &[&str] = &["ember-river", "ember-valley"];
 
     /// Cover one package's sources the way the check covers them.
     fn assets_of(sources: &[(&str, &str)]) -> Vec<CoveredAsset> {
-        let packages = vec![Package::new("torrust-demo", "packages/demo")];
+        let packages = vec![Package::new("ember-demo", "packages/demo")];
         let mut tests = Vec::new();
 
         for (path, text) in sources {
             tests
-                .extend(scan_source("torrust-demo", Path::new(path), text).expect("a Rust source"));
+                .extend(scan_source("ember-demo", Path::new(path), text).expect("a Rust source"));
         }
 
         let (assets, findings) = cover(&packages, &Census::from_tests(tests, sources.len()));
@@ -786,7 +786,7 @@ mod tests {
         assert_eq!(analysis.covered, 1);
         assert_eq!(analysis.unclaimed, 1);
         assert_eq!(analysis.claimed, 0);
-        assert_eq!(analysis.unclaimed_by_package["torrust-demo"], 1);
+        assert_eq!(analysis.unclaimed_by_package["ember-demo"], 1);
         assert!(
             findings.is_empty(),
             "the staging counts rather than reports: {findings:?}"
@@ -998,8 +998,8 @@ mod tests {
     #[test]
     fn leaves_one_claim_minted_in_two_owners_alone() {
         let packages = vec![
-            Package::new("torrust-one", "packages/one"),
-            Package::new("torrust-two", "packages/two"),
+            Package::new("ember-one", "packages/one"),
+            Package::new("ember-two", "packages/two"),
         ];
         let body = |name: &str| {
             format!(
@@ -1010,14 +1010,14 @@ mod tests {
         };
 
         let mut tests = scan_source(
-            "torrust-one",
+            "ember-one",
             Path::new("packages/one/src/tests/a.rs"),
             &body("first").replace("fn first-", "fn first"),
         )
         .expect("a Rust source");
         tests.extend(
             scan_source(
-                "torrust-two",
+                "ember-two",
                 Path::new("packages/two/src/tests/a.rs"),
                 &body("second").replace("fn second-", "fn second"),
             )
@@ -1083,7 +1083,7 @@ mod tests {
             "an open wave reports nothing: {unreported:?}"
         );
 
-        let (closed, _claims, reported) = analyze_claims(&assets, &["torrust-demo".to_owned()]);
+        let (closed, _claims, reported) = analyze_claims(&assets, &["ember-demo".to_owned()]);
 
         assert_eq!(
             closed.unclaimed, 1,
@@ -1093,7 +1093,7 @@ mod tests {
         assert!(
             matches!(
                 reported.as_slice(),
-                [Finding::MissingClaimLabel { owner, .. }] if owner == "torrust-demo"
+                [Finding::MissingClaimLabel { owner, .. }] if owner == "ember-demo"
             ),
             "a closed wave holds the same test to the requirement: {reported:?}"
         );

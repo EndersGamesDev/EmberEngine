@@ -88,7 +88,7 @@ fn write_surface(root: &Path, partitions: &[OwnerRow], policies: &[Pair]) {
 
     let owners: BTreeSet<&str> = partitions.iter().map(|row| row.owner.as_str()).collect();
     let mut owner_text = String::from(
-        "namespace = \"com.torrust.index.linter.owners\"\nversion = [1, 0, 0]\n\nowners = [",
+        "namespace = \"com.ember.index.linter.owners\"\nversion = [1, 0, 0]\n\nowners = [",
     );
 
     for (index, owner) in owners.iter().enumerate() {
@@ -118,14 +118,14 @@ fn write_surface(root: &Path, partitions: &[OwnerRow], policies: &[Pair]) {
     fs::write(directory.join("owners.toml"), owner_text).expect("owner document");
     fs::write(
         directory.join("environments.toml"),
-        "namespace = \"com.torrust.index.linter.environments\"\nversion = [1, 0, 0]\n\nenvironments = []\n",
+        "namespace = \"com.ember.index.linter.environments\"\nversion = [1, 0, 0]\n\nenvironments = []\n",
     )
     .expect("environment document");
     let mut policy_text = String::from(
-        "namespace = \"com.torrust.index.linter.policies\"\nversion = [1, 0, 0]\n\npolicies = [",
+        "namespace = \"com.ember.index.linter.policies\"\nversion = [1, 0, 0]\n\npolicies = [",
     );
     let mut list_text =
-        String::from("namespace = \"com.torrust.index.linter.lists\"\nversion = [1, 0, 0]\n");
+        String::from("namespace = \"com.ember.index.linter.lists\"\nversion = [1, 0, 0]\n");
 
     for (index, pair) in policies.iter().enumerate() {
         if index > 0 {
@@ -150,7 +150,7 @@ fn write_surface(root: &Path, partitions: &[OwnerRow], policies: &[Pair]) {
     fs::write(directory.join("lists.toml"), list_text).expect("list document");
     fs::write(
         directory.join("shape.toml"),
-        "namespace = \"com.torrust.index.linter.shape\"\nversion = [1, 0, 0]\n\nuniverse = \"git-tracked\"\nignore = []\n",
+        "namespace = \"com.ember.index.linter.shape\"\nversion = [1, 0, 0]\n\nuniverse = \"git-tracked\"\nignore = []\n",
     )
     .expect("shape document");
 }
@@ -206,8 +206,8 @@ pub fn sweep_profile(text: &str, dry_run: bool) -> (String, FixOutcome, Vec<Find
 ///
 /// Panics if the invented Rust source cannot be parsed.
 pub fn test_assets(text: &str) -> Vec<CoveredAsset> {
-    let packages = vec![Package::new("torrust-demo", "")];
-    let tests = scan_source("torrust-demo", Path::new("src/demo.rs"), text).expect("a Rust source");
+    let packages = vec![Package::new("ember-demo", "")];
+    let tests = scan_source("ember-demo", Path::new("src/demo.rs"), text).expect("a Rust source");
     let census = Census::from_tests(tests, 1);
     let (_analysis, assets, _findings) = analyze_profile(&packages, &census);
 
@@ -233,8 +233,8 @@ pub fn sweep_notices(text: &str, dry_run: bool) -> (String, FixOutcome, Vec<Find
 
 /// Cover the to-do notices carried by one invented package source.
 pub fn notices_of(text: &str) -> Vec<CoveredNotice> {
-    let packages = vec![Package::new("torrust-demo", "")];
-    let (notices, _orphans) = scan_todos("torrust-demo", Path::new("src/demo.rs"), text);
+    let packages = vec![Package::new("ember-demo", "")];
+    let (notices, _orphans) = scan_todos("ember-demo", Path::new("src/demo.rs"), text);
     let census = TodoCensus::from_notices(notices, 1);
     let (covered, _findings) = cover_todos(&packages, &census);
 

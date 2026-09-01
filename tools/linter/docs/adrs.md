@@ -1,10 +1,10 @@
-# The Index Linter Record Register · `reg:indexlinter:adrs`
+# The Index Linter Record Register · `reg:emberlinter:adrs`
 
 This is the master register of the Index Linter's decision records. It tracks the records that have landed and holds nothing else: no summaries, type index, or status column maintained by hand. What a record decides is in the record, and this document's whole job is to say which records exist and what each of their environments is called.
 
 The register begins with the package's landed records and grows when another record lands. Every row is checked against the document it names, in both directions, on every run of the linter.
 
-**Convention (What the tracking table asserts)** · `conv:indexlinter:record-register-tracking`
+**Convention (What the tracking table asserts)** · `conv:emberlinter:record-register-tracking`
 
 The table below is a tracking table in the positional register: its Head column names a label, its Document column names the file whose head must mint it, and the rows carry no labels of their own. A row naming a head the document does not mint is a failure, and a head the document mints that no row names is equally a failure.
 

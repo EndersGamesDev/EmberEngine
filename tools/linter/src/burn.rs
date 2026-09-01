@@ -95,8 +95,8 @@ use crate::token::{Region, markdown_regions, rust_regions};
 /// stands is the corpus's to state and is read from the declared partition at
 /// runtime, so nothing here knows a directory (´reg:isolation:owner-questions´).
 ///
-/// ´const:indexlinter:self-owner´ (´[ORCHESTRATION-alg:const:text]´)
-/// ´const:indexlinter:self-owner-text-xc0fc6733´
+/// ´const:emberlinter:self-owner´ (´[EMBER-alg:const:text]´)
+/// ´const:emberlinter:self-owner-text-xc0fc6733´
 const SELF_OWNER: &str = "LINTER";
 
 /// The run a repository-scoped family's policy carries beside its per-owner sibling.
@@ -111,10 +111,10 @@ const SELF_OWNER: &str = "LINTER";
 /// The run is what makes a corpus-wide census tellable from a per-owner one
 /// without asking a declaration which it is, and the ratchet such a census earns
 /// belongs to the root owner for exactly that reason
-/// (´[ORCHESTRATION-conv:layers:verdict-location]´).
+/// (´[EMBER-conv:layers:verdict-location]´).
 ///
-/// ´const:indexlinter:repository-policy-run´ (´[ORCHESTRATION-alg:const:text]´)
-/// ´const:indexlinter:repository-policy-run-text-x8f7cd1cc´
+/// ´const:emberlinter:repository-policy-run´ (´[EMBER-alg:const:text]´)
+/// ´const:emberlinter:repository-policy-run-text-x8f7cd1cc´
 const REPOSITORY_RUN: &str = "-repository";
 
 /// The burn lists this repository adopted.
@@ -122,23 +122,23 @@ const REPOSITORY_RUN: &str = "-repository";
 /// Three open the discipline, one per legacy family the Assayer's campaign
 /// retires — section references, retired record numbers and superseded tag
 /// forms — each enumerated in a register the linter verifies exactly, a ratchet
-/// that may only shrink (´[ORCHESTRATION-req:migration:burn-ratchet]´). A fourth reads
+/// that may only shrink (´[EMBER-req:migration:burn-ratchet]´). A fourth reads
 /// the record shape the other three cannot: a number written with no series at
 /// all, which is ambiguous between the corpus that keeps its numbers and the
 /// local numbering that retired. It is declared beside the lettered family
 /// rather than folded into it, because a family is a bounded shape and
 /// broadening one to admit a second shape leaves neither bounded
-/// (´[ORCHESTRATION-conv:migration:burn-family]´) — and because the two are swept by
+/// (´[EMBER-conv:migration:burn-family]´) — and because the two are swept by
 /// different judgments, the lettered form by rewriting a citation and the bare
 /// one by first finding which record was meant. A fifth counts
 /// an inventory profile's remainder rather than a reference family, under the
 /// policy ADR-T-016 records
-/// (´[ORCHESTRATION-conv:migration:burn-inventory-remainder]´). The remaining two are
+/// (´[EMBER-conv:migration:burn-inventory-remainder]´). The remaining two are
 /// the families the scenario matrix took with it when it retired, each
 /// declaring its own recogniser and surface beside its register — the scenario
 /// numbers bounded by range and the division names by enumeration, which are
 /// the two bounding devices the family convention licenses
-/// (´[ORCHESTRATION-conv:migration:burn-family]´).
+/// (´[EMBER-conv:migration:burn-family]´).
 ///
 /// Each declares what it counts and nothing about where. Where a family's census
 /// walks is the corpus's to state, and the corpus states it in the document of
@@ -146,10 +146,10 @@ const REPOSITORY_RUN: &str = "-repository";
 /// a source is and what a bench is, that knowledge belongs to the domain of that
 /// policy. So a family is joined to its policy through the catalog and asks that
 /// policy's own document for its surface; nothing here knows a directory, a reach
-/// name or an owner's geography (´[ORCHESTRATION-conv:migration:burn-surfaces]´).
+/// name or an owner's geography (´[EMBER-conv:migration:burn-surfaces]´).
 ///
-/// ´const:indexlinter:adopted-burn-lists´ (´[ORCHESTRATION-alg:const:form]´)
-/// ´const:indexlinter:adopted-burn-lists-form-x34de554d´
+/// ´const:emberlinter:adopted-burn-lists´ (´[EMBER-alg:const:form]´)
+/// ´const:emberlinter:adopted-burn-lists-form-x34de554d´
 const BURN_LISTS: &[Declaration] = &[
     Declaration {
         family: "section-sign references",

@@ -123,15 +123,15 @@ enum Opening {
 ///
 /// TODO ´todo:code:record-which-reading-of-the-language´: record which reading of the language's literal syntax this scanner is written against.
 ///
-/// ´const:indexlinter:escape-body-offset´ (´[ORCHESTRATION-alg:const:count]´)
-/// ´const:indexlinter:escape-body-offset-count-2´
+/// ´const:emberlinter:escape-body-offset´ (´[EMBER-alg:const:count]´)
+/// ´const:emberlinter:escape-body-offset-count-2´
 const ESCAPE_BODY: usize = 2;
 
 /// The characters a comment's own leaders may add to the front of a line.
 ///
 /// The set is not a choice any reader of a comment makes. A span is logical
 /// rather than a run of bytes, and a comment's own leaders are resolved away
-/// before spans are determined (´[ORCHESTRATION-gram:labels:well-formed]´); what a Rust
+/// before spans are determined (´[EMBER-gram:labels:well-formed]´); what a Rust
 /// comment can put in front of a line is exactly the solidus of every comment
 /// opener, the bang and the second solidus that mark the two documentation
 /// forms, the asterisk a block comment's continuation carries, and the space and
@@ -141,14 +141,14 @@ const ESCAPE_BODY: usize = 2;
 /// It stands here because it is a fact about the language's comment forms rather
 /// than about any one profile's sweep, and three of them read it: the constant
 /// profile resolves a comment's decoration away before comparing and writing a
-/// pin (´[ORCHESTRATION-req:constants:mechanization]´), the to-do profile resolves it
+/// pin (´[EMBER-req:constants:mechanization]´), the to-do profile resolves it
 /// before a notice's first word can be read, and the code carrier resolves it
 /// before the mints and citations standing in commentary can be found. Declared
 /// once, a character added to it reaches all three at once, which is what a set
 /// declared three times could not promise.
 ///
-/// ´const:indexlinter:comment-leader-set´ (´[ORCHESTRATION-alg:const:form]´)
-/// ´const:indexlinter:comment-leader-set-form-x03112501´
+/// ´const:emberlinter:comment-leader-set´ (´[EMBER-alg:const:form]´)
+/// ´const:emberlinter:comment-leader-set-form-x03112501´
 pub const LEADERS: &[char] = &['/', '!', '*', ' ', '\t'];
 
 /// Read every comment of a Rust source, in the order they stand.

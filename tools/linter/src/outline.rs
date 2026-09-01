@@ -116,21 +116,21 @@ use crate::label::Label;
 ///
 /// The three cells are what makes a table a tracking declaration: this tool
 /// reads a table as one exactly when its header cells are Entry, Head and
-/// Document (´[ORCHESTRATION-conv:migration:tracking-columns]´). The spelling is
+/// Document (´[EMBER-conv:migration:tracking-columns]´). The spelling is
 /// therefore a recognition contract rather than a caption — a table naming its
 /// columns otherwise is not a tracking table with a defect, it is not one.
 ///
-/// ´const:indexlinter:tracking-claimed-head-column´ (´[ORCHESTRATION-alg:const:text]´)
-/// ´const:indexlinter:tracking-claimed-head-column-text-x6108cce3´
+/// ´const:emberlinter:tracking-claimed-head-column´ (´[EMBER-alg:const:text]´)
+/// ´const:emberlinter:tracking-claimed-head-column-text-x6108cce3´
 const HEAD_COLUMN: &str = "Head";
 
 /// The header cell naming the column that carries the tracked document.
 ///
 /// The second of the three cells of the recognition contract
-/// (´[ORCHESTRATION-conv:migration:tracking-columns]´).
+/// (´[EMBER-conv:migration:tracking-columns]´).
 ///
-/// ´const:indexlinter:tracking-document-column´ (´[ORCHESTRATION-alg:const:text]´)
-/// ´const:indexlinter:tracking-document-column-text-x1471a974´
+/// ´const:emberlinter:tracking-document-column´ (´[EMBER-alg:const:text]´)
+/// ´const:emberlinter:tracking-document-column-text-x1471a974´
 const DOCUMENT_COLUMN: &str = "Document";
 
 /// The header cell naming the optional column that carries the outline entry.
@@ -139,10 +139,10 @@ const DOCUMENT_COLUMN: &str = "Document";
 /// avoid: were its per-record tables read as tracking declarations, every row
 /// would verify a declared head against a document that does not yet exist, and
 /// would fail correctly and uselessly
-/// (´[ORCHESTRATION-conv:migration:tracking-columns]´).
+/// (´[EMBER-conv:migration:tracking-columns]´).
 ///
-/// ´const:indexlinter:tracking-entry-column´ (´[ORCHESTRATION-alg:const:text]´)
-/// ´const:indexlinter:tracking-entry-column-text-xbe21fb73´
+/// ´const:emberlinter:tracking-entry-column´ (´[EMBER-alg:const:text]´)
+/// ´const:emberlinter:tracking-entry-column-text-xbe21fb73´
 const ENTRY_COLUMN: &str = "Entry";
 
 /// Where a tracking table's meaningful cells stand in its rows.

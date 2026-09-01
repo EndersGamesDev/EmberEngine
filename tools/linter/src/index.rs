@@ -83,21 +83,21 @@ use crate::subscribe::Subscription;
 /// The record displays the index it fixes, and this heading opens it: the
 /// module documentation of every Rust source carrying a covered test holds one
 /// generated index, and the region is found by this line rather than by a
-/// position (´[ORCHESTRATION-conv:testdocs:file-index]´).
+/// position (´[EMBER-conv:testdocs:file-index]´).
 ///
-/// ´const:indexlinter:test-index-region-heading´ (´[ORCHESTRATION-alg:const:text]´)
-/// ´const:indexlinter:test-index-region-heading-text-x233620ee´
+/// ´const:emberlinter:test-index-region-heading´ (´[EMBER-alg:const:text]´)
+/// ´const:emberlinter:test-index-region-heading-text-x233620ee´
 pub const INDEX_HEADING: &str = "# Test index";
 
 /// The leader a module documentation line carries.
 ///
 /// The index lives in module documentation rather than in an outer comment,
-/// because what it indexes is the file (´[ORCHESTRATION-conv:testdocs:file-index]´), and
+/// because what it indexes is the file (´[EMBER-conv:testdocs:file-index]´), and
 /// the inner form is the one Rust gives a module for documenting itself. The
 /// leader is that form's own spelling.
 ///
-/// ´const:indexlinter:module-documentation-leader´ (´[ORCHESTRATION-alg:const:text]´)
-/// ´const:indexlinter:module-documentation-leader-text-xe7152d66´
+/// ´const:emberlinter:module-documentation-leader´ (´[EMBER-alg:const:text]´)
+/// ´const:emberlinter:module-documentation-leader-text-xe7152d66´
 const MODULE_DOC: &str = "//!";
 
 /// True when a line stands inside a leading licence header region.
@@ -484,9 +484,9 @@ mod tests {
     const ACUTE: char = '\u{b4}';
 
     fn assets_of(text: &str) -> Vec<CoveredAsset> {
-        let packages = vec![Package::new("torrust-demo", "packages/demo")];
+        let packages = vec![Package::new("ember-demo", "packages/demo")];
         let tests = scan_source(
-            "torrust-demo",
+            "ember-demo",
             Path::new("packages/demo/src/tests/demo.rs"),
             text,
         )

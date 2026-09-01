@@ -55,7 +55,7 @@ to the other; that both landed on 3 is what a small integer taken from a short
 free range looks like twice, not a shared taxonomy.
 
 The note is written because the coincidence is a trap for exactly the reader
-this record is for — somebody holding a nonzero status from a Torrust command
+this record is for — somebody holding a nonzero status from an ember command
 and looking for what it means. The answer depends on which command produced it,
 and there is no repository-wide meaning of 3 to look up. What the global output
 contract fixes
@@ -80,7 +80,7 @@ the maintenance modes of the burn command and the artifacts they leave.
 **Specification (The declared configuration)** · `spec:commandcontract:configuration`
 
 This is the package specialization of the whole-key loading specification
-promoted to root policy (`[ORCHESTRATION-spec:lintercli:configuration]`).
+promoted to root policy (`[EMBER-spec:lintercli:configuration]`).
 
 Every corpus subcommand reads one declared configuration snapshot before it does anything else. The accepted surface comprises a fixed core — the owner file, the environment relation, the owner-and-policy activation pairs, and the list carried at each pair — plus one declaration named for each parameterized policy family. They are one snapshot and not separate settings. The command requires every core filename and every declaration required by the running binary, parses them all, cross-validates them against each other, and only then runs a policy; there is no partial load, no per-file default, and no compiled or Markdown fallback behind any of them. The `fmt` command is outside this preflight because it formats only the explicit paths it is given and forms no repository-policy verdict.
 
@@ -302,7 +302,7 @@ whole content of the class above — 3 says the run happened and the news is bad
 **Rule (A configuration defect is a finding when the configuration parsed)** · `rule:commandcontract:configuration-verdicts`
 
 This is the command-specific specialization of the snapshot-boundary rule
-promoted to root policy (`[ORCHESTRATION-rule:lintercli:configuration-verdicts]`).
+promoted to root policy (`[EMBER-rule:lintercli:configuration-verdicts]`).
 
 The two questions of (`spec:commandcontract:configuration`) fall on opposite sides
 of the class above, and the line between them is whether there is a snapshot

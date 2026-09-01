@@ -1,4 +1,4 @@
-namespace = "com.torrust.index.linter.owners"
+namespace = "com.ember.index.linter.owners"
 version = [1, 0, 0]
 
 owners = ["ARCHIVE", "LEAF"]

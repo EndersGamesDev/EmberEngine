@@ -1744,12 +1744,12 @@ mod tests {
     /// ´test:unit:a-label-is-two-or-more-atoms-over-a-closed-alphabet´
     #[test]
     fn a_label_is_two_or_more_atoms_over_a_closed_alphabet() {
-        assert!(is_namespace_label("com.torrust.index.linter.owners"));
+        assert!(is_namespace_label("com.ember.index.linter.owners"));
         assert!(is_namespace_label("a.b"));
         assert!(is_namespace_label("a1.b2c3"));
 
         // Hyphens are interior, and the ABNF admits a run of them there.
-        assert!(is_namespace_label("com.torrust-index.policy-interchange"));
+        assert!(is_namespace_label("com.ember-index.policy-interchange"));
         assert!(is_namespace_label("a--b.c"));
 
         // One atom is no label: every label stands strictly below the root.
@@ -1757,20 +1757,20 @@ mod tests {
         assert!(!is_namespace_label(""));
 
         // The dot separates and is no character of an atom, so an empty atom fails.
-        assert!(!is_namespace_label(".com.torrust"));
-        assert!(!is_namespace_label("com.torrust."));
-        assert!(!is_namespace_label("com..torrust"));
+        assert!(!is_namespace_label(".com.ember"));
+        assert!(!is_namespace_label("com.ember."));
+        assert!(!is_namespace_label("com..ember"));
 
         // A hyphen at either end of an atom is not interior.
-        assert!(!is_namespace_label("-com.torrust"));
-        assert!(!is_namespace_label("com-.torrust"));
-        assert!(!is_namespace_label("com.-torrust"));
+        assert!(!is_namespace_label("-com.ember"));
+        assert!(!is_namespace_label("com-.ember"));
+        assert!(!is_namespace_label("com.-ember"));
 
         // Outside the alphabet: upper case, the underscore, and anything above ASCII.
-        assert!(!is_namespace_label("Com.torrust"));
-        assert!(!is_namespace_label("com_x.torrust"));
+        assert!(!is_namespace_label("Com.ember"));
+        assert!(!is_namespace_label("com_x.ember"));
         assert!(!is_namespace_label("com.tørrust"));
-        assert!(!is_namespace_label("com torrust.x"));
+        assert!(!is_namespace_label("com ember.x"));
     }
 
     /// The byte bound is inclusive at the record's figure, and the character
@@ -1957,15 +1957,15 @@ mod tests {
 
         // The literal string carries identical bytes and is refused all the same.
         assert_eq!(
-            namespaced("'com.torrust.index'"),
-            vec![Defect::NotLabel(String::from("'com.torrust.index'"))]
+            namespaced("'com.ember.index'"),
+            vec![Defect::NotLabel(String::from("'com.ember.index'"))]
         );
 
         // An escape of a character the alphabet writes directly is a second
         // spelling of a label that has exactly one byte form.
         assert_eq!(
-            namespaced("\"\\u0063om.torrust\""),
-            vec![Defect::NotLabel(String::from("\"\\u0063om.torrust\""))]
+            namespaced("\"\\u0063om.ember\""),
+            vec![Defect::NotLabel(String::from("\"\\u0063om.ember\""))]
         );
 
         // A bare top-level word is no label, and neither is a value of another type.
@@ -2152,7 +2152,7 @@ mod tests {
     fn a_json_envelope_may_stand_anywhere_in_the_root_object() {
         assert_eq!(
             json(
-                r#"{"namespace": "com.torrust.index.linter.owners", "version": [1, 0, 0], "owners": ["INDEX"]}"#
+                r#"{"namespace": "com.ember.index.linter.owners", "version": [1, 0, 0], "owners": ["INDEX"]}"#
             ),
             Vec::new()
         );
@@ -2160,7 +2160,7 @@ mod tests {
         // The envelope standing last. This must pass.
         assert_eq!(
             json(
-                r#"{"owners": ["INDEX"], "namespace": "com.torrust.index.linter.owners", "version": [1, 0, 0]}"#
+                r#"{"owners": ["INDEX"], "namespace": "com.ember.index.linter.owners", "version": [1, 0, 0]}"#
             ),
             Vec::new()
         );
@@ -2237,8 +2237,8 @@ mod tests {
             |value: &str| json(&format!(r#"{{"namespace": "a.b", "version": {value}}}"#));
 
         assert_eq!(
-            namespaced(r#""\u0063om.torrust""#),
-            vec![Defect::NotLabel(String::from(r#""\u0063om.torrust""#))]
+            namespaced(r#""\u0063om.ember""#),
+            vec![Defect::NotLabel(String::from(r#""\u0063om.ember""#))]
         );
         assert_eq!(
             namespaced(r#""com""#),
@@ -2287,7 +2287,7 @@ mod tests {
     fn a_yaml_envelope_may_stand_anywhere_in_the_root_mapping() {
         assert_eq!(
             yaml(
-                "namespace: com.torrust.index.linter.owners\nversion: [1, 0, 0]\n\nowners:\n  - INDEX\n"
+                "namespace: com.ember.index.linter.owners\nversion: [1, 0, 0]\n\nowners:\n  - INDEX\n"
             ),
             Vec::new()
         );
@@ -2295,7 +2295,7 @@ mod tests {
         // The envelope standing last, after a block value of its own. This must pass.
         assert_eq!(
             yaml(
-                "owners:\n  - INDEX\nnamespace: com.torrust.index.linter.owners\nversion: [1, 0, 0]\n"
+                "owners:\n  - INDEX\nnamespace: com.ember.index.linter.owners\nversion: [1, 0, 0]\n"
             ),
             Vec::new()
         );

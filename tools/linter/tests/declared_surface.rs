@@ -16,72 +16,72 @@ use std::path::PathBuf;
 use linter::{KindRegistry, Pair, Rows, configuration};
 
 const DOCUMENTS: [(&str, &str); 21] = [
-    ("environments.toml", "com.torrust.index.linter.environments"),
-    ("lists.toml", "com.torrust.index.linter.lists"),
-    ("owners.toml", "com.torrust.index.linter.owners"),
-    ("policies.toml", "com.torrust.index.linter.policies"),
+    ("environments.toml", "com.ember.index.linter.environments"),
+    ("lists.toml", "com.ember.index.linter.lists"),
+    ("owners.toml", "com.ember.index.linter.owners"),
+    ("policies.toml", "com.ember.index.linter.policies"),
     (
         "policy-assembly-publications.toml",
-        "com.torrust.index.linter.policy.assembly-publications",
+        "com.ember.index.linter.policy.assembly-publications",
     ),
     (
         "policy-interchange.toml",
-        "com.torrust.index.linter.policy.interchange",
+        "com.ember.index.linter.policy.interchange",
     ),
     (
         "policy-legacy-implementation.toml",
-        "com.torrust.index.linter.policy.legacy.implementation",
+        "com.ember.index.linter.policy.legacy.implementation",
     ),
     (
         "policy-legacy-record-references-repository.toml",
-        "com.torrust.index.linter.policy.legacy.record-references-repository",
+        "com.ember.index.linter.policy.legacy.record-references-repository",
     ),
     (
         "policy-legacy-record-references.toml",
-        "com.torrust.index.linter.policy.legacy.record-references",
+        "com.ember.index.linter.policy.legacy.record-references",
     ),
     (
         "policy-legacy-section-references-repository.toml",
-        "com.torrust.index.linter.policy.legacy.section-references-repository",
+        "com.ember.index.linter.policy.legacy.section-references-repository",
     ),
     (
         "policy-legacy-section-references.toml",
-        "com.torrust.index.linter.policy.legacy.section-references",
+        "com.ember.index.linter.policy.legacy.section-references",
     ),
     (
         "policy-legacy-tag-references.toml",
-        "com.torrust.index.linter.policy.legacy.tag-references",
+        "com.ember.index.linter.policy.legacy.tag-references",
     ),
     (
         "policy-legacy-todos.toml",
-        "com.torrust.index.linter.policy.legacy.todos",
+        "com.ember.index.linter.policy.legacy.todos",
     ),
     (
         "policy-legacy-unprefixed-record-references.toml",
-        "com.torrust.index.linter.policy.legacy.unprefixed-record-references",
+        "com.ember.index.linter.policy.legacy.unprefixed-record-references",
     ),
     (
         "policy-owner-names.toml",
-        "com.torrust.index.linter.policy.owner.names",
+        "com.ember.index.linter.policy.owner.names",
     ),
     (
         "policy-references-divisions.toml",
-        "com.torrust.index.linter.policy.references.divisions",
+        "com.ember.index.linter.policy.references.divisions",
     ),
     (
         "policy-references-path-linking.toml",
-        "com.torrust.index.linter.policy.references.path-linking",
+        "com.ember.index.linter.policy.references.path-linking",
     ),
     (
         "policy-references-prefix-numbers.toml",
-        "com.torrust.index.linter.policy.references.prefix-numbers",
+        "com.ember.index.linter.policy.references.prefix-numbers",
     ),
     (
         "policy-references-scenarios.toml",
-        "com.torrust.index.linter.policy.references.scenarios",
+        "com.ember.index.linter.policy.references.scenarios",
     ),
-    ("policy-spdx.toml", "com.torrust.index.linter.policy.spdx"),
-    ("shape.toml", "com.torrust.index.linter.shape"),
+    ("policy-spdx.toml", "com.ember.index.linter.policy.spdx"),
+    ("shape.toml", "com.ember.index.linter.shape"),
 ];
 
 fn repository_root() -> PathBuf {
