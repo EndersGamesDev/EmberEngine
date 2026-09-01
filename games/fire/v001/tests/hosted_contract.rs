@@ -4,13 +4,14 @@ use ember_game_fire_v1::hosted::{
     FIXTURE_SUITE_ID, FireCodec, FireRules, FireSession, GAME_ID, GAME_VERSION, game_key,
 };
 use ember_game_fire_v1::legacy::{
-    LegacyFireAction, LegacyFireAdapter, LegacyLobby, project_lobbies,
+    LegacyFireAction, LegacyFireAdapter, LegacyFireIngressFactory, LegacyLobby, project_lobbies,
 };
 use ember_game_fire_v1::proto::{C2S, S2C};
 use ember_game_fire_v1::sim::RaceState;
 use ember_legacy::{
-    AdmissionMetadata, GameSession, InnerCodec, InnerFrame, LobbySeed, MonotonicTimestamp, PeerId,
-    SessionInput,
+    AdmissionMetadata, GameSession, InnerCodec, InnerFrame, LegacyConnectionState,
+    LegacyIngressAction, LegacyIngressFactory, LegacyLobbyProjection, LobbySeed, LobbyStatus,
+    MonotonicTimestamp, PeerId, SessionInput,
 };
 use serde::Deserialize;
 
@@ -180,6 +181,37 @@ fn legacy_lobby_and_refusal_projections_are_frozen() {
         }
         other => panic!("wrong stale-client action: {other:?}"),
     }
+}
+
+#[test]
+fn shared_legacy_ingress_preserves_fire_frames() {
+    let mut ingress = LegacyFireIngressFactory.create();
+    let hello = InnerFrame::Text(r#"{"t":"hello","proto":1,"handle":"driver"}"#.to_string());
+    let action = ingress
+        .decode(LegacyConnectionState::AwaitHello, &hello)
+        .unwrap();
+    let LegacyIngressAction::Hello { response, .. } = action else {
+        panic!("shared Fire hello decoded to the wrong action");
+    };
+    assert_eq!(response, InnerFrame::Text(r#"{"t":"welcome","proto":1}"#.to_string()));
+    let projected = ingress
+        .project_lobbies(&[LegacyLobbyProjection {
+            game_key: game_key(),
+            lobby_name: "castle".to_string(),
+            host_handle: "driver".to_string(),
+            password_protected: true,
+            occupancy: 2,
+            capacity: 8,
+            status: LobbyStatus {
+                code: "racing".to_string(),
+                detail: None,
+            },
+        }])
+        .unwrap();
+    assert_eq!(
+        projected,
+        InnerFrame::Text(LEGACY_LOBBIES.trim_end().to_string())
+    );
 }
 
 #[test]

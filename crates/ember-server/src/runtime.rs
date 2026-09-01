@@ -11,9 +11,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ember_legacy::{
-    AdmissionMetadata, CloseReason, GameKey, GameSession, InnerCodec, InnerFrame, LeaveReason,
-    LobbySeed, MonotonicTimestamp, OutboundEvent, OutboundTarget, PeerId, SessionCreationData,
-    SessionId, SessionInput, SessionUpdate, VersionLimits,
+    AdmissionMetadata, CloseReason, DecodedInput, GameKey, GameSession, InnerCodec, InnerFrame,
+    LeaveReason, LegacyConnectionState, LegacyIngress, LegacyIngressAction, LegacyIngressRefusal,
+    LegacyLobbyProjection, LobbySeed, MonotonicTimestamp, OutboundEvent, OutboundTarget, PeerId,
+    SessionCreationData, SessionId, SessionInputWithTransport, SessionUpdate, VersionLimits,
 };
 use ember_net::outer::{
     self, ConnectionState, CreateLobby, InnerPayload, JoinLobby, Joined, Lobbies, LobbyEntry,
@@ -266,15 +267,17 @@ impl Host {
         if let Ok(manifest_path) = std::env::var("EMBER_HOSTED_MANIFEST") {
             config.manifest_path = PathBuf::from(manifest_path);
         }
-        let builder = RegistryBuilder::new();
+        let mut builder = RegistryBuilder::new();
         #[cfg(feature = "demo")]
         let registry = {
-            let mut builder = builder;
             crate::fixture::register(&mut builder)?;
             builder.build_from_source(crate::fixture::MANIFEST)?
         };
         #[cfg(not(feature = "demo"))]
-        let registry = builder.load(&config.manifest_path)?;
+        let registry = {
+            crate::product::register(&mut builder)?;
+            builder.load(&config.manifest_path)?
+        };
         Self::new(registry, config)
     }
 
@@ -434,6 +437,7 @@ fn constant_time_equal(left: &[u8; 32], right: &[u8; 32]) -> bool {
 
 struct Lobby {
     key: LobbyKey,
+    host_handle: String,
     session_id: SessionId,
     password: Option<PasswordVerifier>,
     session: Box<dyn GameSession>,
@@ -441,7 +445,7 @@ struct Lobby {
     limits: VersionLimits,
     capabilities: SessionCapabilities,
     members: BTreeSet<PeerId>,
-    pending_inputs: Vec<SessionInput>,
+    pending_inputs: Vec<SessionInputWithTransport>,
     pending_updates: Vec<SessionUpdate>,
     next_step: Instant,
 }
@@ -450,6 +454,7 @@ struct Connection {
     id: u64,
     peer: String,
     ingress: Ingress,
+    legacy_ingress: Option<Box<dyn LegacyIngress>>,
     outbound: SyncSender<OutboundCommand>,
     state: StateMachine,
     handle: Option<String>,
@@ -623,12 +628,41 @@ impl Hub {
             } => {
                 let now = Instant::now();
                 tracing::info!(connection = id, %peer, ?ingress, "connection established");
+                let legacy_ingress = match &ingress {
+                    Ingress::Canonical => None,
+                    Ingress::Legacy(key) => {
+                        let Some(factory) = self
+                            .registry
+                            .entry(key)
+                            .and_then(|entry| entry.legacy_ingress())
+                        else {
+                            tracing::error!(?key, "manifest legacy route has no adapter factory");
+                            drop(outbound.try_send(OutboundCommand::Close {
+                                code: CloseCode::Error,
+                                reason: "legacy adapter unavailable".to_string(),
+                            }));
+                            return;
+                        };
+                        match catch_unwind(AssertUnwindSafe(|| factory.create())) {
+                            Ok(adapter) => Some(adapter),
+                            Err(_) => {
+                                tracing::error!(?key, "legacy adapter factory panicked");
+                                drop(outbound.try_send(OutboundCommand::Close {
+                                    code: CloseCode::Error,
+                                    reason: "legacy adapter construction failed".to_string(),
+                                }));
+                                return;
+                            }
+                        }
+                    }
+                };
                 self.connections.insert(
                     id,
                     Connection {
                         id,
                         peer,
                         ingress,
+                        legacy_ingress,
                         outbound,
                         state: StateMachine::new(),
                         handle: None,
@@ -749,19 +783,8 @@ impl Hub {
                 CloseCode::Policy,
                 "inbound message or byte rate exceeded",
             );
-        } else if let Ingress::Legacy(key) = &connection.ingress {
-            tracing::warn!(
-                connection = id,
-                game = %key.game_id,
-                version = key.game_version,
-                "legacy ingress reached missing frozen decoder surface"
-            );
-            self.close_detached(
-                &mut connection,
-                CloseReason::InternalError,
-                CloseCode::Error,
-                "legacy decoder unavailable in frozen host interface",
-            );
+        } else if matches!(&connection.ingress, Ingress::Legacy(_)) {
+            self.handle_legacy_frame(&mut connection, frame, received_at);
         } else {
             self.handle_canonical_frame(&mut connection, frame, received_at);
         }
@@ -818,6 +841,178 @@ impl Hub {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
+    fn handle_legacy_frame(
+        &mut self,
+        connection: &mut Connection,
+        frame: DataFrame,
+        received_at: MonotonicTimestamp,
+    ) {
+        let frame = match frame {
+            DataFrame::Text(text) => InnerFrame::Text(text),
+            DataFrame::Binary(bytes) => InnerFrame::Binary(bytes),
+        };
+        let state = legacy_connection_state(connection.state.state());
+        let decoded = {
+            let Some(adapter) = connection.legacy_ingress.as_mut() else {
+                self.close_detached(
+                    connection,
+                    CloseReason::InternalError,
+                    CloseCode::Error,
+                    "legacy adapter unavailable",
+                );
+                return;
+            };
+            catch_unwind(AssertUnwindSafe(|| adapter.decode(state, &frame)))
+        };
+        let action = match decoded {
+            Ok(Ok(action)) => action,
+            Ok(Err(error)) => {
+                tracing::debug!(connection = connection.id, ?error, "legacy frame rejected");
+                self.close_detached(
+                    connection,
+                    CloseReason::ProtocolViolation,
+                    CloseCode::Protocol,
+                    "selected legacy protocol rejected the frame",
+                );
+                return;
+            }
+            Err(_) => {
+                self.close_detached(
+                    connection,
+                    CloseReason::InternalError,
+                    CloseCode::Error,
+                    "legacy adapter panicked while decoding",
+                );
+                return;
+            }
+        };
+
+        match action {
+            LegacyIngressAction::Hello {
+                selection,
+                handle,
+                response,
+            } => {
+                let route_matches = matches!(
+                    &connection.ingress,
+                    Ingress::Legacy(route) if route.game_id == selection.game_id
+                );
+                if !route_matches || !valid_handle(&handle) {
+                    self.close_detached(
+                        connection,
+                        CloseReason::ProtocolViolation,
+                        CloseCode::Protocol,
+                        "legacy hello does not match its manifest route",
+                    );
+                    return;
+                }
+                let transition = connection.state.transition(StateInput::Outer(
+                    outer::ClientMessage::Hello(outer::Hello {
+                        outer_version: outer::OUTER_VERSION,
+                        handle: handle.clone(),
+                    }),
+                ));
+                if !matches!(transition, StateAction::AcceptHello(_)) {
+                    self.close_detached(
+                        connection,
+                        CloseReason::ProtocolViolation,
+                        CloseCode::Protocol,
+                        "legacy hello is illegal in the current state",
+                    );
+                    return;
+                }
+                connection.handle = Some(handle);
+                self.send_legacy_frame(connection, response);
+            }
+            LegacyIngressAction::ListLobbies => {
+                let entries = self.list_lobby_projections();
+                let projected = {
+                    let Some(adapter) = connection.legacy_ingress.as_ref() else {
+                        self.internal_error(connection, "legacy adapter disappeared");
+                        return;
+                    };
+                    catch_unwind(AssertUnwindSafe(|| adapter.project_lobbies(&entries)))
+                };
+                match projected {
+                    Ok(Ok(response)) => self.send_legacy_frame(connection, response),
+                    Ok(Err(error)) => {
+                        tracing::error!(connection = connection.id, ?error, "legacy list encode failed");
+                        self.internal_error(connection, "legacy lobby projection failed");
+                    }
+                    Err(_) => self.internal_error(connection, "legacy lobby projection panicked"),
+                }
+            }
+            LegacyIngressAction::CreateLobby {
+                selection,
+                lobby_name,
+                password,
+            } => {
+                if !legacy_selection_matches_route(connection, &selection) {
+                    self.internal_error(connection, "legacy create escaped its manifest game");
+                    return;
+                }
+                if !matches!(connection.state.state(), ConnectionState::Browsing { .. }) {
+                    self.send_legacy_refusal(
+                        connection,
+                        LegacyIngressRefusal::InvalidRequest {
+                            message: "already in a game".to_string(),
+                        },
+                    );
+                    return;
+                }
+                self.create_lobby(
+                    connection,
+                    CreateLobby {
+                        game_id: selection.game_id,
+                        game_version: selection.game_version,
+                        lobby_name,
+                        password,
+                    },
+                );
+            }
+            LegacyIngressAction::JoinLobby {
+                selection,
+                lobby_name,
+                password,
+            } => {
+                if !legacy_selection_matches_route(connection, &selection) {
+                    self.internal_error(connection, "legacy join escaped its manifest game");
+                    return;
+                }
+                if !matches!(connection.state.state(), ConnectionState::Browsing { .. }) {
+                    self.send_legacy_refusal(
+                        connection,
+                        LegacyIngressRefusal::InvalidRequest {
+                            message: "already in a game".to_string(),
+                        },
+                    );
+                    return;
+                }
+                self.join_lobby(
+                    connection,
+                    JoinLobby {
+                        game_id: selection.game_id,
+                        game_version: selection.game_version,
+                        lobby_name,
+                        password,
+                    },
+                );
+            }
+            LegacyIngressAction::LeaveLobby => {
+                if matches!(connection.state.state(), ConnectionState::Joined { .. }) {
+                    self.detach_connection(connection, CloseReason::Requested);
+                    reset_legacy_browsing_state(connection);
+                }
+            }
+            LegacyIngressAction::DispatchInner(input) => {
+                self.queue_session_input(connection, input, received_at);
+            }
+            LegacyIngressAction::Reply(response) => self.send_legacy_frame(connection, response),
+            LegacyIngressAction::Ignore => {}
+        }
+    }
+
     fn accept_hello(&mut self, connection: &mut Connection, hello: outer::Hello) {
         if !valid_handle(&hello.handle) {
             self.reject_outer(
@@ -841,6 +1036,24 @@ impl Hub {
     }
 
     fn list_lobbies(&mut self) -> Vec<LobbyEntry> {
+        self.list_lobby_projections()
+            .into_iter()
+            .map(|entry| LobbyEntry {
+                game_id: entry.game_key.game_id,
+                game_version: entry.game_key.game_version,
+                lobby_name: entry.lobby_name,
+                password_protected: entry.password_protected,
+                occupancy: entry.occupancy,
+                capacity: entry.capacity,
+                status: outer::LobbyStatus {
+                    code: entry.status.code,
+                    detail: entry.status.detail,
+                },
+            })
+            .collect()
+    }
+
+    fn list_lobby_projections(&mut self) -> Vec<LegacyLobbyProjection> {
         let keys: Vec<_> = self.lobbies.keys().cloned().collect();
         let mut entries = Vec::with_capacity(keys.len());
         let mut panicked = Vec::new();
@@ -853,14 +1066,14 @@ impl Hub {
                 panicked.push(key);
                 continue;
             };
-            entries.push(LobbyEntry {
-                game_id: lobby.key.game_key.game_id.clone(),
-                game_version: lobby.key.game_key.game_version,
+            entries.push(LegacyLobbyProjection {
+                game_key: lobby.key.game_key.clone(),
                 lobby_name: lobby.key.lobby_name.clone(),
+                host_handle: lobby.host_handle.clone(),
                 password_protected: lobby.password.is_some(),
                 occupancy: u16::try_from(lobby.members.len()).unwrap_or(u16::MAX),
                 capacity: lobby.limits.max_players_per_lobby,
-                status: outer::LobbyStatus {
+                status: ember_legacy::LobbyStatus {
                     code: status.code,
                     detail: status.detail,
                 },
@@ -895,7 +1108,14 @@ impl Hub {
             lobby_name: request.lobby_name,
         };
         if self.lobbies.contains_key(&lobby_key) {
-            self.invalid_request(connection, "lobby already exists for this game and version");
+            self.refuse_admission(
+                connection,
+                LegacyIngressRefusal::LobbyAlreadyExists {
+                    lobby_name: lobby_key.lobby_name.clone(),
+                },
+                OuterErrorCode::LobbyAlreadyExists,
+                "lobby already exists for this game and version",
+            );
             return;
         }
         let Some(entry) = self.registry.entry(&key) else {
@@ -918,7 +1138,12 @@ impl Hub {
                     .max_lobbies
                     .saturating_sub(self.config.reserved_lobbies)
         {
-            self.invalid_request(connection, "lobby capacity is full");
+            self.refuse_admission(
+                connection,
+                LegacyIngressRefusal::ServerAtCapacity,
+                OuterErrorCode::ServerAtCapacity,
+                "lobby capacity is full",
+            );
             return;
         }
         let global_players = self
@@ -932,7 +1157,12 @@ impl Hub {
                 .max_players
                 .saturating_sub(self.config.reserved_players)
         {
-            self.invalid_request(connection, "global player capacity is full");
+            self.refuse_admission(
+                connection,
+                LegacyIngressRefusal::ServerAtCapacity,
+                OuterErrorCode::ServerAtCapacity,
+                "global player capacity is full",
+            );
             return;
         }
 
@@ -974,6 +1204,7 @@ impl Hub {
             .map(|password| PasswordVerifier::new(password, session_id));
         let mut lobby = Lobby {
             key: lobby_key.clone(),
+            host_handle: connection.handle.clone().unwrap_or_default(),
             session_id,
             password,
             session,
@@ -994,7 +1225,13 @@ impl Hub {
             }
             AdmissionOutcome::Refused { code, message } => {
                 drop_lobby_safely(lobby, "creator admission refusal");
-                self.invalid_request(connection, &format!("{code}: {message}"));
+                let detail = format!("{code}: {message}");
+                self.refuse_admission(
+                    connection,
+                    LegacyIngressRefusal::AdmissionRefused { code, message },
+                    OuterErrorCode::AdmissionRefused,
+                    &detail,
+                );
             }
             AdmissionOutcome::Panicked => {
                 drop_lobby_safely(lobby, "creator admission panic");
@@ -1024,12 +1261,24 @@ impl Hub {
             lobby_name: request.lobby_name,
         };
         let Some(mut lobby) = self.lobbies.remove(&lobby_key) else {
-            self.invalid_request(connection, "lobby does not exist for this game and version");
+            self.refuse_admission(
+                connection,
+                LegacyIngressRefusal::LobbyNotFound {
+                    lobby_name: lobby_key.lobby_name,
+                },
+                OuterErrorCode::LobbyNotFound,
+                "lobby does not exist for this game and version",
+            );
             return;
         };
         if !password_matches(&lobby, request.password.as_deref()) {
             self.lobbies.insert(lobby_key, lobby);
-            self.invalid_request(connection, "password does not match");
+            self.refuse_admission(
+                connection,
+                LegacyIngressRefusal::PasswordRejected,
+                OuterErrorCode::PasswordRejected,
+                "password does not match",
+            );
             return;
         }
         let global_players = self
@@ -1046,7 +1295,12 @@ impl Hub {
                     .saturating_sub(self.config.reserved_players)
         {
             self.lobbies.insert(lobby_key, lobby);
-            self.invalid_request(connection, "lobby is full");
+            self.refuse_admission(
+                connection,
+                LegacyIngressRefusal::LobbyFull,
+                OuterErrorCode::LobbyFull,
+                "lobby is full",
+            );
             return;
         }
         match self.admit_to_detached_lobby(connection, &mut lobby) {
@@ -1058,7 +1312,13 @@ impl Hub {
             }
             AdmissionOutcome::Refused { code, message } => {
                 self.lobbies.insert(lobby_key, lobby);
-                self.invalid_request(connection, &format!("{code}: {message}"));
+                let detail = format!("{code}: {message}");
+                self.refuse_admission(
+                    connection,
+                    LegacyIngressRefusal::AdmissionRefused { code, message },
+                    OuterErrorCode::AdmissionRefused,
+                    &detail,
+                );
             }
             AdmissionOutcome::Panicked => {
                 self.terminate_detached_lobby(lobby, "version panicked during join admission");
@@ -1110,7 +1370,9 @@ impl Hub {
             return;
         }
         connection.inbound = InboundWindow::new(Instant::now());
-        self.send_outer(connection, &ServerMessage::Joined(joined));
+        if matches!(&connection.ingress, Ingress::Canonical) {
+            self.send_outer(connection, &ServerMessage::Joined(joined));
+        }
     }
 
     fn dispatch_inner(
@@ -1156,10 +1418,28 @@ impl Hub {
                 return;
             }
         };
-        lobby.pending_inputs.push(SessionInput {
+        self.queue_session_input(connection, decoded, received_at);
+    }
+
+    fn queue_session_input(
+        &mut self,
+        connection: &mut Connection,
+        input: DecodedInput,
+        received_at: MonotonicTimestamp,
+    ) {
+        let Some(lobby_key) = connection.joined_lobby() else {
+            self.internal_error(connection, "legacy input arrived before lobby admission");
+            return;
+        };
+        let Some(lobby) = self.lobbies.get_mut(&lobby_key) else {
+            self.internal_error(connection, "joined lobby no longer exists");
+            return;
+        };
+        lobby.pending_inputs.push(SessionInputWithTransport {
             peer_id: PeerId::from_host_value(connection.id),
             received_at,
-            input: decoded,
+            transport_rtt: None,
+            input,
         });
     }
 
@@ -1183,7 +1463,9 @@ impl Hub {
                 .unwrap_or(now);
             let inputs = std::mem::take(&mut lobby.pending_inputs);
             let started = Instant::now();
-            let update = catch_unwind(AssertUnwindSafe(|| lobby.session.step(timestamp, inputs)));
+            let update = catch_unwind(AssertUnwindSafe(|| {
+                lobby.session.step_with_transport(timestamp, inputs)
+            }));
             let elapsed = started.elapsed();
             let max_step = Duration::from_micros(lobby.limits.max_step_duration.as_micros());
             match update {
@@ -1348,11 +1630,34 @@ impl Hub {
         match self.registry.exact_key(game_id, game_version) {
             Ok(key) => Some(key),
             Err(SelectionError::GameNotHosted(refusal)) => {
-                self.send_outer(connection, &ServerMessage::GameNotHosted(refusal));
+                if matches!(&connection.ingress, Ingress::Canonical) {
+                    self.send_outer(connection, &ServerMessage::GameNotHosted(refusal));
+                } else {
+                    self.send_legacy_refusal(
+                        connection,
+                        LegacyIngressRefusal::GameNotHosted {
+                            requested_game: refusal.requested_game,
+                            hosted_games: refusal.hosted_games,
+                        },
+                    );
+                }
                 None
             }
             Err(SelectionError::VersionNotHosted(refusal)) => {
-                self.send_outer(connection, &ServerMessage::VersionNotHosted(refusal));
+                if matches!(&connection.ingress, Ingress::Canonical) {
+                    self.send_outer(connection, &ServerMessage::VersionNotHosted(refusal));
+                } else {
+                    self.send_legacy_refusal(
+                        connection,
+                        LegacyIngressRefusal::VersionNotHosted {
+                            requested: GameKey {
+                                game_id: refusal.requested_game,
+                                game_version: refusal.requested_version,
+                            },
+                            hosted_versions: refusal.hosted_versions_for_game,
+                        },
+                    );
+                }
                 None
             }
         }
@@ -1362,7 +1667,12 @@ impl Hub {
         if !self.drain.is_draining() {
             return false;
         }
-        self.invalid_request(connection, "server is draining; new admission is stopped");
+        self.refuse_admission(
+            connection,
+            LegacyIngressRefusal::Draining,
+            OuterErrorCode::ServerAtCapacity,
+            "server is draining; new admission is stopped",
+        );
         true
     }
 
@@ -1379,6 +1689,15 @@ impl Hub {
     }
 
     fn invalid_request(&mut self, connection: &mut Connection, message: &str) {
+        if matches!(&connection.ingress, Ingress::Legacy(_)) {
+            self.send_legacy_refusal(
+                connection,
+                LegacyIngressRefusal::InvalidRequest {
+                    message: message.to_string(),
+                },
+            );
+            return;
+        }
         self.send_outer(
             connection,
             &ServerMessage::Error(OuterError {
@@ -1388,20 +1707,144 @@ impl Hub {
         );
     }
 
+    fn refuse_admission(
+        &mut self,
+        connection: &mut Connection,
+        legacy_refusal: LegacyIngressRefusal,
+        outer_code: OuterErrorCode,
+        message: &str,
+    ) {
+        if matches!(&connection.ingress, Ingress::Legacy(_)) {
+            self.send_legacy_refusal(connection, legacy_refusal);
+        } else {
+            self.send_outer(
+                connection,
+                &ServerMessage::Error(OuterError {
+                    code: outer_code,
+                    message: message.to_string(),
+                }),
+            );
+        }
+    }
+
     fn internal_error(&mut self, connection: &mut Connection, message: &str) {
-        self.send_outer(
-            connection,
-            &ServerMessage::Error(OuterError {
-                code: OuterErrorCode::InternalError,
-                message: message.to_string(),
-            }),
-        );
+        if matches!(&connection.ingress, Ingress::Legacy(_)) {
+            self.send_legacy_refusal(connection, LegacyIngressRefusal::InternalError);
+        } else {
+            self.send_outer(
+                connection,
+                &ServerMessage::Error(OuterError {
+                    code: OuterErrorCode::InternalError,
+                    message: message.to_string(),
+                }),
+            );
+        }
         self.close_detached(
             connection,
             CloseReason::InternalError,
             CloseCode::Error,
             "internal session boundary failure",
         );
+    }
+
+    fn send_legacy_refusal(
+        &mut self,
+        connection: &mut Connection,
+        refusal: LegacyIngressRefusal,
+    ) {
+        let projected = {
+            let Some(adapter) = connection.legacy_ingress.as_ref() else {
+                self.close_detached(
+                    connection,
+                    CloseReason::InternalError,
+                    CloseCode::Error,
+                    "legacy adapter unavailable while projecting refusal",
+                );
+                return;
+            };
+            catch_unwind(AssertUnwindSafe(|| adapter.project_refusal(&refusal)))
+        };
+        match projected {
+            Ok(Ok(frame)) => self.send_legacy_frame(connection, frame),
+            Ok(Err(error)) => {
+                tracing::error!(connection = connection.id, ?error, "legacy refusal encode failed");
+                self.close_detached(
+                    connection,
+                    CloseReason::InternalError,
+                    CloseCode::Error,
+                    "legacy refusal projection failed",
+                );
+            }
+            Err(_) => self.close_detached(
+                connection,
+                CloseReason::InternalError,
+                CloseCode::Error,
+                "legacy refusal projection panicked",
+            ),
+        }
+    }
+
+    fn send_legacy_frame(&mut self, connection: &mut Connection, frame: InnerFrame) {
+        let selected_key = connection
+            .joined_lobby()
+            .map(|lobby| lobby.game_key)
+            .or_else(|| match &connection.ingress {
+                Ingress::Legacy(key) => Some(key.clone()),
+                Ingress::Canonical => None,
+            });
+        let Some(selected_key) = selected_key else {
+            self.close_detached(
+                connection,
+                CloseReason::InternalError,
+                CloseCode::Error,
+                "legacy response has no selected version budget",
+            );
+            return;
+        };
+        let Some(entry) = self.registry.entry(&selected_key) else {
+            self.close_detached(
+                connection,
+                CloseReason::InternalError,
+                CloseCode::Error,
+                "legacy response selected an absent registry entry",
+            );
+            return;
+        };
+        let limits = entry.limits();
+        if frame.len() > usize::try_from(limits.max_frame_bytes).unwrap_or(usize::MAX) {
+            self.close_detached(
+                connection,
+                CloseReason::FrameTooLarge,
+                CloseCode::Size,
+                "legacy response exceeds its version frame limit",
+            );
+            return;
+        }
+        let within_version_rate = self
+            .version_outbound
+            .get_mut(&selected_key)
+            .is_some_and(|window| {
+                window.charge(
+                    Instant::now(),
+                    frame.len(),
+                    limits.max_outbound_bytes_per_second,
+                )
+            });
+        if !within_version_rate
+            || !enqueue_inner(
+                connection,
+                &frame,
+                limits,
+                self.config.max_connection_outbound_queue_bytes,
+            )
+        {
+            self.close_detached(
+                connection,
+                CloseReason::SlowConsumer,
+                CloseCode::Policy,
+                "legacy response exceeded a bounded outbound budget",
+            );
+        }
     }
 
     fn send_outer(&mut self, connection: &mut Connection, message: &ServerMessage) {
@@ -1574,6 +2017,39 @@ enum AdmissionOutcome {
     Admitted(SessionUpdate),
     Refused { code: String, message: String },
     Panicked,
+}
+
+const fn legacy_connection_state(state: &ConnectionState) -> LegacyConnectionState {
+    match state {
+        ConnectionState::AwaitHello => LegacyConnectionState::AwaitHello,
+        ConnectionState::Browsing { .. } => LegacyConnectionState::Browsing,
+        ConnectionState::Joined { .. } => LegacyConnectionState::Joined,
+        ConnectionState::Closed => LegacyConnectionState::Closed,
+    }
+}
+
+fn reset_legacy_browsing_state(connection: &mut Connection) {
+    let Some(handle) = connection.handle.clone() else {
+        connection.state.close();
+        return;
+    };
+    connection.state = StateMachine::new();
+    let action = connection.state.transition(StateInput::Outer(
+        outer::ClientMessage::Hello(outer::Hello {
+            outer_version: outer::OUTER_VERSION,
+            handle,
+        }),
+    ));
+    if !matches!(action, StateAction::AcceptHello(_)) {
+        connection.state.close();
+    }
+}
+
+fn legacy_selection_matches_route(connection: &Connection, selection: &GameKey) -> bool {
+    matches!(
+        &connection.ingress,
+        Ingress::Legacy(route) if route.game_id == selection.game_id
+    )
 }
 
 fn to_inner_payload(frame: DataFrame) -> InnerPayload {

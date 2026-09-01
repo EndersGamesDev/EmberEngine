@@ -1,6 +1,10 @@
 //! Legacy-query ingress for the deployed Fire protocol 1 page and bundle.
 
-use ember_legacy::{DecodedInput, EncodedEvent, GameKey, InnerCodecError, InnerFrame};
+use ember_legacy::{
+    DecodedInput, EncodedEvent, GameKey, InnerCodecError, InnerFrame, LegacyConnectionState,
+    LegacyIngress, LegacyIngressAction, LegacyIngressError, LegacyIngressFactory,
+    LegacyIngressRefusal, LegacyLobbyProjection,
+};
 
 use crate::hosted::GAME_ID;
 use crate::proto::{
@@ -69,6 +73,16 @@ pub enum LegacyFireAction {
 pub struct LegacyFireAdapter {
     requested_proto: u16,
     handle: Option<String>,
+}
+
+/// Stateless registry factory for independent Fire legacy connections.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LegacyFireIngressFactory;
+
+impl LegacyIngressFactory for LegacyFireIngressFactory {
+    fn create(&self) -> Box<dyn LegacyIngress> {
+        Box::new(LegacyFireAdapter::default())
+    }
 }
 
 impl LegacyFireAdapter {
@@ -211,4 +225,139 @@ fn encode(message: &S2C) -> Result<EncodedEvent, InnerCodecError> {
     serde_json::to_vec(message)
         .map(|payload| EncodedEvent { payload })
         .map_err(|error| InnerCodecError::EncodeFailed(error.to_string()))
+}
+
+impl LegacyIngress for LegacyFireAdapter {
+    fn decode(
+        &mut self,
+        state: LegacyConnectionState,
+        frame: &InnerFrame,
+    ) -> Result<LegacyIngressAction, LegacyIngressError> {
+        let action = Self::decode(self, frame)?;
+        if state == LegacyConnectionState::AwaitHello
+            && !matches!(&action, LegacyFireAction::Hello { .. })
+        {
+            return Err(LegacyIngressError::InvalidFrame(
+                "legacy message before hello".to_string(),
+            ));
+        }
+        let action = match action {
+            LegacyFireAction::Hello {
+                selection,
+                handle,
+                welcome,
+            } if state == LegacyConnectionState::AwaitHello => LegacyIngressAction::Hello {
+                selection,
+                handle,
+                response: event_to_frame(&welcome)?,
+            },
+            LegacyFireAction::Hello { .. } => {
+                return Err(LegacyIngressError::InvalidFrame(
+                    "duplicate legacy hello".to_string(),
+                ));
+            }
+            LegacyFireAction::ListLobbies => LegacyIngressAction::ListLobbies,
+            LegacyFireAction::CreateLobby(request) => LegacyIngressAction::CreateLobby {
+                selection: request.selection,
+                lobby_name: request.lobby_name,
+                password: request.password,
+            },
+            LegacyFireAction::JoinLobby(request) => LegacyIngressAction::JoinLobby {
+                selection: request.selection,
+                lobby_name: request.lobby_name,
+                password: request.password,
+            },
+            LegacyFireAction::LeaveLobby => LegacyIngressAction::LeaveLobby,
+            LegacyFireAction::SessionInput(input)
+                if state == LegacyConnectionState::Joined => {
+                LegacyIngressAction::DispatchInner(input)
+            }
+            LegacyFireAction::SessionInput(_) => LegacyIngressAction::Reply(event_to_frame(
+                &rejected("join a lobby before sending game input")?,
+            )?),
+            LegacyFireAction::Reply(event) => {
+                LegacyIngressAction::Reply(event_to_frame(&event)?)
+            }
+        };
+        Ok(action)
+    }
+
+    fn project_lobbies(
+        &self,
+        entries: &[LegacyLobbyProjection],
+    ) -> Result<InnerFrame, LegacyIngressError> {
+        let lobbies = entries
+            .iter()
+            .filter(|entry| entry.game_key == crate::hosted::game_key())
+            .map(|entry| LegacyLobby {
+                name: entry.lobby_name.clone(),
+                host: entry.host_handle.clone(),
+                has_password: entry.password_protected,
+                players: u8::try_from(entry.occupancy).unwrap_or(u8::MAX),
+                cap: u8::try_from(entry.capacity).unwrap_or(u8::MAX),
+                racing: entry.status.code != "waiting",
+            })
+            .collect::<Vec<_>>();
+        event_to_frame(&project_lobbies(&lobbies)?)
+    }
+
+    fn project_refusal(
+        &self,
+        refusal: &LegacyIngressRefusal,
+    ) -> Result<InnerFrame, LegacyIngressError> {
+        let message = match refusal {
+            LegacyIngressRefusal::GameNotHosted {
+                requested_game,
+                hosted_games,
+            } => format!(
+                "game {requested_game} is not hosted; hosted games: {}",
+                hosted_games.join(", ")
+            ),
+            LegacyIngressRefusal::VersionNotHosted {
+                requested,
+                hosted_versions,
+            } if hosted_versions.as_slice() == [u32::from(PROTO_VERSION)] => format!(
+                "this build speaks fire protocol v{}, the live game is v{PROTO_VERSION}",
+                requested.game_version
+            ),
+            LegacyIngressRefusal::VersionNotHosted {
+                requested,
+                hosted_versions,
+            } => format!(
+                "this build speaks fire protocol v{}, hosted Fire versions: {}",
+                requested.game_version,
+                hosted_versions
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            LegacyIngressRefusal::InvalidRequest { message } => message.clone(),
+            LegacyIngressRefusal::LobbyNotFound { lobby_name } => {
+                format!("lobby \"{lobby_name}\" does not exist")
+            }
+            LegacyIngressRefusal::LobbyAlreadyExists { lobby_name } => {
+                format!("lobby \"{lobby_name}\" already exists")
+            }
+            LegacyIngressRefusal::PasswordRejected => "password does not match".to_string(),
+            LegacyIngressRefusal::LobbyFull => "lobby is full".to_string(),
+            LegacyIngressRefusal::ServerAtCapacity => "server capacity is full".to_string(),
+            LegacyIngressRefusal::Draining => {
+                "server is draining; new admission is stopped".to_string()
+            }
+            LegacyIngressRefusal::AdmissionRefused { code, message } => {
+                format!("{code}: {message}")
+            }
+            LegacyIngressRefusal::InternalError => {
+                "internal session boundary failure".to_string()
+            }
+        };
+        event_to_frame(&rejected(&message)?)
+    }
+}
+
+fn event_to_frame(event: &EncodedEvent) -> Result<InnerFrame, LegacyIngressError> {
+    std::str::from_utf8(&event.payload)
+        .map(|text| InnerFrame::Text(text.to_owned()))
+        .map_err(|error| LegacyIngressError::EncodeFailed(error.to_string()))
 }

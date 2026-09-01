@@ -5,7 +5,8 @@
 mod adapter;
 
 pub use adapter::{
-    ArenaCodec, ArenaFactory, ArenaLegacyAction, ArenaLegacyDecoder, LegacyLobbyEntry,
+    ArenaCodec, ArenaFactory, ArenaLegacyAction, ArenaLegacyDecoder, ArenaLegacyIngressFactory,
+    LegacyLobbyEntry, game_key,
 };
 pub mod proto;
 pub mod shooter;

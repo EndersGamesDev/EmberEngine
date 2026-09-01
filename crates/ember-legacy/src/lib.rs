@@ -659,6 +659,195 @@ pub trait InnerCodec: Send + Sync {
     fn encode(&self, event: &EncodedEvent) -> Result<InnerFrame, InnerCodecError>;
 }
 
+/// Host-owned connection lifecycle supplied to a selected legacy decoder.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LegacyConnectionState {
+    /// The selected legacy protocol has not accepted its hello.
+    AwaitHello,
+    /// The peer has completed its legacy hello and may browse or request admission.
+    Browsing,
+    /// The peer is admitted to one exact hosted session.
+    Joined,
+    /// The transport has closed and accepts no further legacy frames.
+    Closed,
+}
+
+/// Canonical host state that one version projects into its exact legacy lobby schema.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LegacyLobbyProjection {
+    /// Exact hosted game and version owning the lobby.
+    pub game_key: GameKey,
+    /// Lobby name scoped by the exact game key.
+    pub lobby_name: String,
+    /// Display handle of the lobby's creating peer.
+    pub host_handle: String,
+    /// Whether admission requires a password, without exposing the password.
+    pub password_protected: bool,
+    /// Number of currently admitted peers.
+    pub occupancy: u16,
+    /// Maximum number of admitted peers.
+    pub capacity: u16,
+    /// Small version-owned lobby status projection.
+    pub status: LobbyStatus,
+}
+
+/// One semantic host action decoded from an exact version-owned legacy frame.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LegacyIngressAction {
+    /// Accepts the legacy hello and returns its exact welcome frame.
+    Hello {
+        /// Exact game and version synthesized from the legacy hello.
+        selection: GameKey,
+        /// Version-sanitized display handle used for admission.
+        handle: String,
+        /// Exact version-owned legacy welcome frame.
+        response: InnerFrame,
+    },
+    /// Requests the selected version's legacy lobby projection.
+    ListLobbies,
+    /// Requests creation under an exact synthesized selection.
+    CreateLobby {
+        /// Exact game and version synthesized by the legacy adapter.
+        selection: GameKey,
+        /// Version-sanitized lobby name.
+        lobby_name: String,
+        /// Version-normalized optional password.
+        password: Option<String>,
+    },
+    /// Requests admission under an exact synthesized selection.
+    JoinLobby {
+        /// Exact game and version synthesized by the legacy adapter.
+        selection: GameKey,
+        /// Version-sanitized lobby name.
+        lobby_name: String,
+        /// Version-normalized optional password.
+        password: Option<String>,
+    },
+    /// Leaves the current session while retaining the legacy browsing connection.
+    LeaveLobby,
+    /// Dispatches exact post-join version-private input to the selected session.
+    DispatchInner(DecodedInput),
+    /// Sends an immediate exact version-owned legacy frame.
+    Reply(InnerFrame),
+    /// Intentionally produces no host action for this deployed legacy message.
+    Ignore,
+}
+
+/// A semantic host refusal for version-owned legacy wire projection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LegacyIngressRefusal {
+    /// The requested permanent game slug is not hosted.
+    GameNotHosted {
+        /// Game slug synthesized by the legacy adapter.
+        requested_game: String,
+        /// Live hosted game slugs in deterministic order.
+        hosted_games: Vec<String>,
+    },
+    /// The requested exact version is not hosted.
+    VersionNotHosted {
+        /// Exact game and version synthesized by the legacy adapter.
+        requested: GameKey,
+        /// Live hosted versions for the requested game in deterministic order.
+        hosted_versions: Vec<u32>,
+    },
+    /// A version-neutral admission request was structurally invalid.
+    InvalidRequest {
+        /// Host-owned diagnostic projected through the legacy error variant.
+        message: String,
+    },
+    /// No lobby exists under the requested exact key and name.
+    LobbyNotFound {
+        /// Requested lobby name.
+        lobby_name: String,
+    },
+    /// A lobby already exists under the requested exact key and name.
+    LobbyAlreadyExists {
+        /// Conflicting lobby name.
+        lobby_name: String,
+    },
+    /// The supplied password did not match the stored verifier.
+    PasswordRejected,
+    /// The selected lobby has reached its admitted-player capacity.
+    LobbyFull,
+    /// A host-global or version-specific capacity stopped admission.
+    ServerAtCapacity,
+    /// The host is draining and accepts no new lobby admission.
+    Draining,
+    /// Version-owned session admission refused the peer.
+    AdmissionRefused {
+        /// Stable version-owned refusal code.
+        code: String,
+        /// Human-readable version-owned refusal detail.
+        message: String,
+    },
+    /// An internal boundary failed and the connection will close.
+    InternalError,
+}
+
+/// Stable classification for exact legacy ingress decoding or projection failure.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LegacyIngressError {
+    /// The WebSocket frame kind is not accepted by the selected legacy protocol.
+    WrongFrameKind,
+    /// The frame violates a selected legacy protocol constraint.
+    InvalidFrame(String),
+    /// The frame cannot be decoded as the selected legacy message schema.
+    DecodeFailed(String),
+    /// A legacy response cannot be represented by the selected wire schema.
+    EncodeFailed(String),
+}
+
+impl From<InnerCodecError> for LegacyIngressError {
+    fn from(error: InnerCodecError) -> Self {
+        match error {
+            InnerCodecError::WrongFrameKind => Self::WrongFrameKind,
+            InnerCodecError::InvalidFrame(message) => Self::InvalidFrame(message),
+            InnerCodecError::DecodeFailed(message) => Self::DecodeFailed(message),
+            InnerCodecError::EncodeFailed(message) => Self::EncodeFailed(message),
+        }
+    }
+}
+
+/// Object-safe per-connection adapter for one manifest-selected legacy protocol.
+pub trait LegacyIngress: Send {
+    /// Decodes one exact frame into a semantic host action.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable failure without guessing another game or protocol version.
+    fn decode(
+        &mut self,
+        state: LegacyConnectionState,
+        frame: &InnerFrame,
+    ) -> Result<LegacyIngressAction, LegacyIngressError>;
+
+    /// Projects canonical host lobby state into one exact legacy response frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns an encoding failure without emitting a partial frame.
+    fn project_lobbies(
+        &self,
+        entries: &[LegacyLobbyProjection],
+    ) -> Result<InnerFrame, LegacyIngressError>;
+
+    /// Projects one semantic host refusal into the selected exact legacy wire schema.
+    ///
+    /// # Errors
+    ///
+    /// Returns an encoding failure without emitting a partial frame.
+    fn project_refusal(
+        &self,
+        refusal: &LegacyIngressRefusal,
+    ) -> Result<InnerFrame, LegacyIngressError>;
+}
+
+/// Object-safe registry factory for independent per-connection legacy adapters.
+pub trait LegacyIngressFactory: Send + Sync {
+    /// Constructs a fresh adapter awaiting the selected legacy protocol's hello.
+    fn create(&self) -> Box<dyn LegacyIngress>;
+}
+
 /// One timestamped decoded input charged and ordered by the host.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionInput {
@@ -668,6 +857,29 @@ pub struct SessionInput {
     pub received_at: MonotonicTimestamp,
     /// Version-private canonical payload from the matching codec.
     pub input: DecodedInput,
+}
+
+/// One host-ordered decoded input with optional measured transport latency.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionInputWithTransport {
+    /// Admitted peer that supplied the frame.
+    pub peer_id: PeerId,
+    /// Host monotonic receipt timestamp.
+    pub received_at: MonotonicTimestamp,
+    /// Host-measured round-trip duration, when the transport exposes one.
+    pub transport_rtt: Option<MonotonicDuration>,
+    /// Version-private canonical payload from the matching codec.
+    pub input: DecodedInput,
+}
+
+impl From<SessionInputWithTransport> for SessionInput {
+    fn from(input: SessionInputWithTransport) -> Self {
+        Self {
+            peer_id: input.peer_id,
+            received_at: input.received_at,
+            input: input.input,
+        }
+    }
 }
 
 /// A game-neutral target set for a version-produced inner event.
@@ -745,6 +957,15 @@ pub trait GameSession: Send {
         timestamp: MonotonicTimestamp,
         inputs: Vec<SessionInput>,
     ) -> SessionUpdate;
+
+    /// Applies transport-enriched inputs while preserving the frozen step contract by default.
+    fn step_with_transport(
+        &mut self,
+        timestamp: MonotonicTimestamp,
+        inputs: Vec<SessionInputWithTransport>,
+    ) -> SessionUpdate {
+        self.step(timestamp, inputs.into_iter().map(SessionInput::from).collect())
+    }
 
     /// Admits a peer after outer key, lobby, password, and capacity checks.
     ///

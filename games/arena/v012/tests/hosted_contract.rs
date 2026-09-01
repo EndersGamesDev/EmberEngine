@@ -3,14 +3,16 @@ use std::sync::Arc;
 
 use ember_game_arena_v12::proto::{C2S, S2C};
 use ember_game_arena_v12::{
-    ArenaCodec, ArenaFactory, ArenaLegacyAction, ArenaLegacyDecoder, FIXTURE_SUITE_ID,
-    LegacyLobbyEntry,
+    ArenaCodec, ArenaFactory, ArenaLegacyAction, ArenaLegacyDecoder, ArenaLegacyIngressFactory,
+    FIXTURE_SUITE_ID, LegacyLobbyEntry,
 };
 use ember_legacy::{
     AdmissionMetadata, BroadcastHandle, GameFactory, GameKey, InnerCodec, InnerFrame,
-    LegacyCapabilities, LegacyClock, LegacyRandom, LegacyTransport, LobbySeed, MetricObservation,
-    MonotonicTimestamp, PeerId, RandomDrawKey, ScheduleError, ScheduleHandle, SchedulingRequest,
-    SessionCreationData, SessionInput, TransportError, UnicastHandle,
+    LegacyCapabilities, LegacyClock, LegacyConnectionState, LegacyIngressAction,
+    LegacyIngressFactory, LegacyLobbyProjection, LegacyRandom, LegacyTransport, LobbySeed,
+    LobbyStatus, MetricObservation, MonotonicTimestamp, PeerId, RandomDrawKey, ScheduleError,
+    ScheduleHandle, SchedulingRequest, SessionCreationData, SessionInput, TransportError,
+    UnicastHandle,
 };
 use serde::Deserialize;
 
@@ -212,6 +214,40 @@ fn legacy_lobby_create_join_and_refusal_match_the_deployed_wire() {
 
     let refusal = ArenaLegacyDecoder::version_refusal(11, &[12]);
     assert_eq!(serde_json::to_string(&refusal).unwrap(), fixture.refusal);
+}
+
+#[test]
+fn shared_legacy_ingress_preserves_arena_frames() {
+    let fixture: LegacyFixture = serde_json::from_str(LEGACY_LOBBY_FIXTURE).unwrap();
+    let mut ingress = ArenaLegacyIngressFactory.create();
+    let hello = ingress
+        .decode(
+            LegacyConnectionState::AwaitHello,
+            &InnerFrame::Text(fixture.hello),
+        )
+        .unwrap();
+    let LegacyIngressAction::Hello { response, .. } = hello else {
+        panic!("shared Arena hello decoded to the wrong action");
+    };
+    assert_eq!(response, InnerFrame::Text(fixture.welcome));
+    let projected = ingress
+        .project_lobbies(&[LegacyLobbyProjection {
+            game_key: GameKey {
+                game_id: "arena".to_string(),
+                game_version: 12,
+            },
+            lobby_name: "alpha".to_string(),
+            host_handle: "ender".to_string(),
+            password_protected: true,
+            occupancy: 1,
+            capacity: 8,
+            status: LobbyStatus {
+                code: "running".to_string(),
+                detail: None,
+            },
+        }])
+        .unwrap();
+    assert_eq!(projected, InnerFrame::Text(fixture.list_response));
 }
 
 struct TestClock;
