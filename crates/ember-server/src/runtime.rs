@@ -1672,7 +1672,7 @@ impl Hub {
         true
     }
 
-    fn reject_outer(&mut self, connection: &mut Connection, error: OuterError, close: bool) {
+    fn reject_outer(&self, connection: &mut Connection, error: OuterError, close: bool) {
         self.send_outer(connection, &ServerMessage::Error(error));
         if close {
             Self::close_detached(
