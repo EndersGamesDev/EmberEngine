@@ -408,10 +408,14 @@
         }));
       }));
 
-      // Keep the settings box showing the address actually in use, unless the
-      // player has typed one — then it is theirs and we never touch it.
+      // Keep the settings box showing the address actually in use — the same
+      // condition as before (an emptied box goes back to auto-filling), plus
+      // one guard the single-shot version never needed: this runs every ten
+      // seconds now, and overwriting a box someone is typing into would be a
+      // new bug of our own making.
       const arena = perGame.get('arena');
-      if (!localStorage.getItem('ember-server-url-manual')) {
+      if ((!localStorage.getItem('ember-server-url-manual') || !urlBox.value.trim())
+          && document.activeElement !== urlBox) {
         urlBox.value = (arena && arena.chosen && arena.chosen.url) || book.ws || '';
       }
       renderChip($('host-chip'), arena ? arena.chosen : null);
