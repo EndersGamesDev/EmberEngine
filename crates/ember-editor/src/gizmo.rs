@@ -17,8 +17,8 @@
 //! box's twelve edges, and the gizmo is nudged toward the camera by an
 //! epsilon so it does not z-fight the object it is attached to.
 
-use ember_engine::glam::{Quat, Vec3};
 use ember_engine::Instance;
+use ember_engine::glam::{Quat, Vec3};
 
 use crate::pick;
 use crate::{AXIS_X, AXIS_Y, AXIS_Z};
@@ -42,23 +42,25 @@ pub enum Axis {
 }
 
 impl Axis {
-    pub fn dir(self) -> Vec3 {
+    #[must_use]
+    pub const fn dir(self) -> Vec3 {
         match self {
-            Axis::X => Vec3::X,
-            Axis::Y => Vec3::Y,
-            Axis::Z => Vec3::Z,
+            Self::X => Vec3::X,
+            Self::Y => Vec3::Y,
+            Self::Z => Vec3::Z,
         }
     }
 
-    pub fn color(self) -> Vec3 {
+    #[must_use]
+    pub const fn color(self) -> Vec3 {
         match self {
-            Axis::X => AXIS_X,
-            Axis::Y => AXIS_Y,
-            Axis::Z => AXIS_Z,
+            Self::X => AXIS_X,
+            Self::Y => AXIS_Y,
+            Self::Z => AXIS_Z,
         }
     }
 
-    pub const ALL: [Axis; 3] = [Axis::X, Axis::Y, Axis::Z];
+    pub const ALL: [Self; 3] = [Self::X, Self::Y, Self::Z];
 }
 
 /// Thickness of a gizmo shaft, as a fraction of its length.
@@ -79,6 +81,7 @@ const HANDLE_MIN: f32 = 0.6;
 const HANDLE_MAX: f32 = 12.0;
 
 /// Handle length for a gizmo at `centre` seen from `eye`.
+#[must_use]
 pub fn handle_len(centre: Vec3, eye: Vec3) -> f32 {
     ((centre - eye).length() * HANDLE_SCREEN_FRAC).clamp(HANDLE_MIN, HANDLE_MAX)
 }
@@ -89,6 +92,7 @@ pub fn handle_len(centre: Vec3, eye: Vec3) -> f32 {
 /// `eye` is used only to nudge the gizmo a hair toward the camera. Without
 /// that, a gizmo centred inside its own object z-fights it across the whole
 /// shaft, which reads as flicker rather than as a handle.
+#[must_use]
 pub fn gizmo_instances(centre: Vec3, eye: Vec3, mode: Mode) -> Vec<Instance> {
     let len = handle_len(centre, eye);
     let thick = len * SHAFT_THICK;
@@ -117,7 +121,7 @@ pub fn gizmo_instances(centre: Vec3, eye: Vec3, mode: Mode) -> Vec<Instance> {
         let d = a.dir();
         let head_scale = match mode {
             // A long block reads as an arrow; a cube reads as a grab handle.
-            Mode::Translate => Vec3::ONE * (head * 0.55) + d * (head - head * 0.55),
+            Mode::Translate => Vec3::ONE * (head * 0.55) + d * head.mul_add(-0.55, head),
             Mode::Scale => Vec3::ONE * (head * 0.8),
             // Flattened ACROSS its axis: a disc-ish tab suggesting rotation
             // about that axis, which is the closest a box gets to a ring.
@@ -134,6 +138,7 @@ pub fn gizmo_instances(centre: Vec3, eye: Vec3, mode: Mode) -> Vec<Instance> {
 /// The pick volume is a fattened box along the whole shaft rather than the
 /// drawn geometry: handles are drawn thin because thin looks right, and a
 /// pick test against what is drawn would demand pixel-accurate aiming.
+#[must_use]
 pub fn pick_handle(origin: Vec3, dir: Vec3, centre: Vec3, eye: Vec3) -> Option<Axis> {
     let len = handle_len(centre, eye);
     let thick = len * SHAFT_THICK * PICK_FATTEN;
@@ -145,7 +150,7 @@ pub fn pick_handle(origin: Vec3, dir: Vec3, centre: Vec3, eye: Vec3) -> Option<A
         let d = a.dir();
         // Covers shaft and head together: the head sits at the far end, so
         // extending the box a little past `len` catches it too.
-        let half = (Vec3::ONE * thick + d * (len * 1.25 - thick)) * 0.5;
+        let half = (Vec3::ONE * thick + d * len.mul_add(1.25, -thick)) * 0.5;
         let centre_of = base + d * (len * 0.625);
         let Some(t) = pick::ray_box(origin, dir, centre_of, Quat::IDENTITY, half) else {
             continue;
@@ -160,6 +165,7 @@ pub fn pick_handle(origin: Vec3, dir: Vec3, centre: Vec3, eye: Vec3) -> Option<A
 /// Colour a selected object is drawn with. A boost rather than a fixed
 /// highlight colour, so a selected object still reads as itself — which
 /// matters when several are similar and only one is selected.
+#[must_use]
 pub fn selected_color(base: Vec3) -> Vec3 {
     base * 1.6 + Vec3::splat(0.25)
 }
@@ -169,6 +175,7 @@ pub fn selected_color(base: Vec3) -> Vec3 {
 /// This is the only outline this renderer can express. It is drawn slightly
 /// larger than the object so the cage is not co-planar with the faces it
 /// surrounds, which would z-fight along every edge.
+#[must_use]
 pub fn selection_cage(inst: &Instance) -> Vec<Instance> {
     let half = inst.scale.abs() * 0.5;
     // Thickness scaled off the object, so a cage on a tiny prop is not a
@@ -219,20 +226,21 @@ pub struct Edge {
 
 impl Edge {
     /// True on the frame `now` first becomes true.
-    pub fn pressed(&mut self, now: bool) -> bool {
+    pub const fn pressed(&mut self, now: bool) -> bool {
         let fired = now && !self.prev;
         self.prev = now;
         fired
     }
 
     /// True on the frame `now` first becomes false.
-    pub fn released(&mut self, now: bool) -> bool {
+    pub const fn released(&mut self, now: bool) -> bool {
         let fired = !now && self.prev;
         self.prev = now;
         fired
     }
 
-    pub fn is_down(&self) -> bool {
+    #[must_use]
+    pub const fn is_down(&self) -> bool {
         self.prev
     }
 }
@@ -312,10 +320,7 @@ mod tests {
         let len = handle_len(centre, eye);
         // Aim at a point partway along each shaft, from a long way off along
         // a direction that only meets that one handle.
-        let cases = [
-            (Axis::X, Vec3::X, Vec3::Z),
-            (Axis::Z, Vec3::Z, Vec3::X),
-        ];
+        let cases = [(Axis::X, Vec3::X, Vec3::Z), (Axis::Z, Vec3::Z, Vec3::X)];
         for (want, along, from) in cases {
             let target = centre + along * (len * 0.6);
             let org = target + from * 50.0;
@@ -339,7 +344,11 @@ mod tests {
 
     #[test]
     fn the_cage_has_twelve_edges_and_surrounds_the_box() {
-        let inst = Instance::new(Vec3::new(3.0, 1.0, -2.0), Vec3::new(2.0, 4.0, 6.0), Vec3::ONE);
+        let inst = Instance::new(
+            Vec3::new(3.0, 1.0, -2.0),
+            Vec3::new(2.0, 4.0, 6.0),
+            Vec3::ONE,
+        );
         let cage = selection_cage(&inst);
         assert_eq!(cage.len(), 12, "a box has twelve edges");
         for e in &cage {

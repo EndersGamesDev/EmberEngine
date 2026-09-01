@@ -1,4 +1,7 @@
 //! Print the circuit's measured geometry. `cargo run -p fire-core --example track_stats`
+// Printing measurements is the sole purpose of this command-line example.
+#![allow(clippy::print_stdout)]
+
 fn main() {
     let t = fire_core::castle::track();
     println!("lap length      : {:.1} m", t.length());

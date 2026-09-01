@@ -43,13 +43,21 @@ pub struct FixedStep {
     acc: f32,
 }
 
-/// Ceiling on accumulated time, seconds. Past this we drop the backlog rather
-/// than run a burst of catch-up ticks — a spiral where each frame's catch-up
-/// makes the next frame later is worse than a visible skip.
+/// Ceiling on accumulated time, seconds.
+///
+/// Past this we drop the backlog rather than run a burst of catch-up ticks — a
+/// spiral where each frame's catch-up makes the next frame later is worse than
+/// a visible skip.
 pub const MAX_CATCHUP: f32 = 0.25;
 
 impl FixedStep {
     /// Feed a frame delta; returns how many `DT` ticks to run now.
+    // The capped accumulator makes these casts bounded; preserve the shared simulation arithmetic.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss
+    )]
     pub fn ticks(&mut self, dt: f32) -> u32 {
         if !dt.is_finite() || dt < 0.0 {
             return 0;
@@ -61,7 +69,8 @@ impl FixedStep {
     }
 
     /// Fraction of a tick left over, for interpolating the render pose.
-    pub fn alpha(&self) -> f32 {
+    #[must_use]
+    pub const fn alpha(&self) -> f32 {
         self.acc / crate::car::DT
     }
 }
@@ -87,7 +96,8 @@ pub struct Racer {
 impl Racer {
     /// Ordering key for the live standings: laps and distance combined, which
     /// `LapTracker::progress` already is. Finished racers sort by finish tick.
-    pub fn progress(&self) -> f32 {
+    #[must_use]
+    pub const fn progress(&self) -> f32 {
         self.lap.progress
     }
 }
@@ -104,6 +114,7 @@ pub struct Race {
 impl Race {
     /// Lay `count` cars out on a staggered grid behind the start line and
     /// hold them there until the countdown finishes.
+    #[must_use]
     pub fn new(track: Track, count: usize, laps_to_win: u32) -> Self {
         let racers = (0..count).map(|i| Self::grid_slot(&track, i)).collect();
         Self {
@@ -122,8 +133,10 @@ impl Race {
     fn grid_slot(track: &Track, i: usize) -> Racer {
         let len = track.length();
         let row = i / 2;
-        let side = if i % 2 == 0 { 1.0 } else { -1.0 };
+        let side = if i.is_multiple_of(2) { 1.0 } else { -1.0 };
         // Behind the line, so the first thing anyone crosses is the line.
+        // Race grids are tiny; preserve the shared simulation conversion and operation order.
+        #[allow(clippy::cast_precision_loss)]
         let s = (len - 12.0 - row as f32 * 9.0).rem_euclid(len);
         let (centre, tangent) = track.at(s);
         let left = Vec2::new(-tangent.y, tangent.x);
@@ -144,7 +157,8 @@ impl Race {
         }
     }
 
-    pub fn countdown_left(&self) -> f32 {
+    #[must_use]
+    pub const fn countdown_left(&self) -> f32 {
         self.countdown_left
     }
 
@@ -155,7 +169,7 @@ impl Race {
         self.tick += 1;
 
         match self.state {
-            RaceState::Waiting => return,
+            RaceState::Waiting | RaceState::Finished => return,
             RaceState::Countdown => {
                 self.countdown_left -= dt;
                 if self.countdown_left <= 0.0 {
@@ -165,7 +179,6 @@ impl Race {
                 // Cars are held on the grid: no input, no coasting.
                 return;
             }
-            RaceState::Finished => return,
             RaceState::Racing => {}
         }
 
@@ -217,6 +230,7 @@ impl Race {
 
     /// Racer indices in finishing order: those who have finished first, by
     /// finish tick, then the rest by distance covered.
+    #[must_use]
     pub fn standings(&self) -> Vec<usize> {
         let mut order: Vec<usize> = (0..self.racers.len()).collect();
         order.sort_by(|&a, &b| {
@@ -239,6 +253,12 @@ impl Race {
 }
 
 #[cfg(test)]
+// Test durations are bounded constants; casts preserve the production formulas under test.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
 mod tests {
     use super::*;
     use crate::car::DT;
@@ -268,14 +288,21 @@ mod tests {
         let f = crate::car::forward(car.yaw);
         // Signed angle from the nose to the target.
         let ang = (f.x * to.y - f.y * to.x).atan2(f.dot(to));
-        CarInput { throttle: 1.0, steer: (ang * 2.0).clamp(-1.0, 1.0), handbrake: false, boost: false }
+        CarInput {
+            throttle: 1.0,
+            steer: (ang * 2.0).clamp(-1.0, 1.0),
+            handbrake: false,
+            boost: false,
+        }
     }
 
     fn race_for(ticks: u32, laps: u32) -> Race {
         let mut race = Race::new(test_track(), 2, laps);
         race.start_countdown();
         for _ in 0..ticks {
-            let inputs: Vec<CarInput> = (0..race.racers.len()).map(|i| chase_input(&race, i)).collect();
+            let inputs: Vec<CarInput> = (0..race.racers.len())
+                .map(|i| chase_input(&race, i))
+                .collect();
             race.step(&inputs, DT);
         }
         race
@@ -290,7 +317,10 @@ mod tests {
         for _ in 0..144 {
             total += fs.ticks(1.0 / 144.0);
         }
-        assert!((59..=61).contains(&total), "144 Hz produced {total} ticks in a second");
+        assert!(
+            (59..=61).contains(&total),
+            "144 Hz produced {total} ticks in a second"
+        );
 
         // A 30 Hz frame is longer than a tick: two ticks each.
         let mut fs = FixedStep::default();
@@ -298,7 +328,10 @@ mod tests {
         for _ in 0..30 {
             total += fs.ticks(1.0 / 30.0);
         }
-        assert!((59..=61).contains(&total), "30 Hz produced {total} ticks in a second");
+        assert!(
+            (59..=61).contains(&total),
+            "30 Hz produced {total} ticks in a second"
+        );
     }
 
     /// A long stall must not be repaid as a burst that makes the next frame
@@ -331,7 +364,11 @@ mod tests {
     fn a_long_stall_is_capped_not_dropped() {
         let mut fs = FixedStep::default();
         let n = fs.ticks(10.0);
-        assert_eq!(n, (MAX_CATCHUP / DT) as u32, "a 10 s stall yielded {n} ticks");
+        assert_eq!(
+            n,
+            (MAX_CATCHUP / DT) as u32,
+            "a 10 s stall yielded {n} ticks"
+        );
         assert!(n > 0, "a stall should still advance the sim a little");
     }
 
@@ -339,7 +376,10 @@ mod tests {
     fn cars_start_on_the_grid_and_on_the_track() {
         let race = Race::new(test_track(), 8, 3);
         for (i, r) in race.racers.iter().enumerate() {
-            assert!(!race.track.off_track(r.car.pos), "grid slot {i} is off the track");
+            assert!(
+                !race.track.off_track(r.car.pos),
+                "grid slot {i} is off the track"
+            );
         }
         // No two cars share a slot.
         for i in 0..race.racers.len() {
@@ -356,7 +396,12 @@ mod tests {
         race.start_countdown();
         let before: Vec<Vec2> = race.racers.iter().map(|r| r.car.pos).collect();
         let flat_out = vec![
-            CarInput { throttle: 1.0, steer: 0.0, handbrake: false, boost: true };
+            CarInput {
+                throttle: 1.0,
+                steer: 0.0,
+                handbrake: false,
+                boost: true
+            };
             4
         ];
         for _ in 0..(COUNTDOWN_SECS * 60.0) as u32 - 2 {
@@ -390,7 +435,10 @@ mod tests {
         let order = race.standings();
         assert_eq!(order.len(), 2);
         let (a, b) = (&race.racers[order[0]], &race.racers[order[1]]);
-        assert!(a.finish_tick.unwrap() <= b.finish_tick.unwrap(), "standings out of order");
+        assert!(
+            a.finish_tick.unwrap() <= b.finish_tick.unwrap(),
+            "standings out of order"
+        );
     }
 
     /// The wall must actually contain the car — a racer who holds full lock
@@ -402,7 +450,12 @@ mod tests {
         for _ in 0..200 {
             race.step(&[CarInput::default()], DT);
         }
-        let ram = CarInput { throttle: 1.0, steer: 1.0, handbrake: false, boost: true };
+        let ram = CarInput {
+            throttle: 1.0,
+            steer: 1.0,
+            handbrake: false,
+            boost: true,
+        };
         for _ in 0..60 * 30 {
             race.step(&[ram], DT);
             let lat = race.track.locate(race.racers[0].car.pos).lateral.abs();
@@ -419,10 +472,14 @@ mod tests {
         let a = race.standings();
         let b = race.standings();
         assert_eq!(a, b, "standings are not deterministic");
-        let mut sorted = a.clone();
+        let mut sorted = a;
         sorted.sort_unstable();
         sorted.dedup();
-        assert_eq!(sorted.len(), race.racers.len(), "standings lost or duplicated a racer");
+        assert_eq!(
+            sorted.len(),
+            race.racers.len(),
+            "standings lost or duplicated a racer"
+        );
     }
 
     #[test]
@@ -430,7 +487,10 @@ mod tests {
         let a = race_for(60 * 45, 3);
         let b = race_for(60 * 45, 3);
         for i in 0..a.racers.len() {
-            assert_eq!(a.racers[i].car.pos.to_array(), b.racers[i].car.pos.to_array());
+            assert_eq!(
+                a.racers[i].car.pos.to_array(),
+                b.racers[i].car.pos.to_array()
+            );
             assert_eq!(a.racers[i].lap.lap, b.racers[i].lap.lap);
         }
         assert_eq!(a.tick, b.tick);

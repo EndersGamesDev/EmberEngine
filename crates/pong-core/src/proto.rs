@@ -1,15 +1,16 @@
-//! Online protocol: JSON text frames over WebSocket. JSON (rather than the
-//! arena's binary postcard) because the lobby browser on the web page speaks
-//! it natively from JavaScript, and traffic is small (~30 Hz states).
+//! Online protocol: JSON text frames over WebSocket.
+//!
+//! JSON suits the small traffic volume and lets the web lobby speak it directly.
 //!
 //! v2: the match is the drop-in arena shooter. A lobby IS a running game —
 //! creating one starts it with the host inside; joiners drop straight in.
 
 use serde::{Deserialize, Serialize};
 
-/// v9: the off-hand shield, which reflects. `shield` is `#[serde(default)]`
-/// on both the input and the player state, so both directions decode — and
-/// decoding is not the test. Ask instead what an old peer DOES.
+/// Protocol v9 adds the reflecting off-hand shield.
+///
+/// `shield` is `#[serde(default)]` on input and player state, so both directions
+/// decode. Decoding is not the test; ask instead what an old peer does.
 ///
 /// A pre-v9 client against a v9 server can never raise a shield, and — the
 /// part that decides this — its own perfectly-aimed shot can now come back
@@ -100,7 +101,7 @@ pub const STATE_EVERY_TICKS: u64 = 2;
 /// Clients ping at least this often; the server drops peers silent > 30 s.
 pub const CLIENT_PING_SECS: u64 = 5;
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct LobbyInfo {
     pub name: String,
     pub host: String,
@@ -117,6 +118,8 @@ pub struct PlayerMeta {
 }
 
 /// Per-player state inside a State broadcast.
+// The wire-format booleans are independent protocol fields and cannot be consolidated compatibly.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 pub struct PState {
     pub id: u8,
@@ -306,7 +309,8 @@ pub enum S2C {
 }
 
 /// Stable per-player color, by in-lobby id.
-pub fn color_for(id: u8) -> [f32; 3] {
+#[must_use]
+pub const fn color_for(id: u8) -> [f32; 3] {
     const PALETTE: [[f32; 3]; 8] = [
         [0.25, 0.55, 0.95], // blue
         [0.92, 0.32, 0.28], // red
@@ -320,6 +324,7 @@ pub fn color_for(id: u8) -> [f32; 3] {
     PALETTE[id as usize % PALETTE.len()]
 }
 
+#[must_use]
 pub fn sanitize_text(s: &str, max: usize) -> String {
     // Strip controls, trim, THEN cap — surrounding whitespace must not
     // consume the length budget.
@@ -368,7 +373,7 @@ mod tests {
 
         let s = serde_json::to_string(&S2C::GameJoined {
             id: 2,
-            seed: 987654321,
+            seed: 987_654_321,
             arena_half: 24.0,
             players: vec![PlayerMeta {
                 id: 2,
@@ -382,7 +387,7 @@ mod tests {
             back,
             S2C::GameJoined {
                 id: 2,
-                seed: 987654321,
+                seed: 987_654_321,
                 ..
             }
         ));
@@ -416,7 +421,10 @@ mod tests {
         assert!(s.contains("\"shield\":true"), "{s}");
         let back: PState = serde_json::from_str(&s).unwrap();
         assert!(back.shield);
-        assert_eq!(back.ack_age_ticks, 7, "the ack age has to survive the codec");
+        assert_eq!(
+            back.ack_age_ticks, 7,
+            "the ack age has to survive the codec"
+        );
 
         // And both fields decode from a frame that predates them: this is
         // what `serde(default)` buys, and it is the whole of what it buys —

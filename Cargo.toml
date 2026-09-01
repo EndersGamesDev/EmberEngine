@@ -1,5 +1,5 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = [
     "crates/ember-editor",
     "crates/ember-engine",
@@ -12,13 +12,60 @@ members = [
     "crates/pong",
     "crates/pong-core",
     "crates/pong-server",
+    "tools/cli-common",
+    "tools/linter",
+    "tools/pulldown-cmark-to-cmark",
 ]
 
 [workspace.package]
-edition = "2021"
+authors = ["Ember contributors"]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+# Development runs on the pinned nightly; rust-version records the stable floor.
+rust-version = "1.98"
 version = "0.1.0"
 
+[workspace.lints.rust]
+deprecated_safe = { level = "deny", priority = -1 }
+future_incompatible = { level = "deny", priority = -1 }
+let_underscore = { level = "deny", priority = -1 }
+nonstandard_style = { level = "deny", priority = -1 }
+rust_2018_compatibility = { level = "deny", priority = -1 }
+rust_2018_idioms = { level = "deny", priority = -1 }
+rust_2021_compatibility = { level = "deny", priority = -1 }
+rust_2024_compatibility = { level = "deny", priority = -1 }
+unsafe_code = "deny"
+unused = { level = "deny", priority = -2 }
+warnings = { level = "deny", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+complexity = { level = "deny", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+exit = { level = "deny", priority = 0 }
+nursery = { level = "warn", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+perf = { level = "deny", priority = -1 }
+print_stderr = { level = "deny", priority = 0 }
+print_stdout = { level = "deny", priority = 0 }
+style = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+
 [workspace.dependencies]
+clap = { version = "4", features = ["derive"] }
+cli-common = { path = "tools/cli-common" }
+petgraph = { version = "=0.8.3", features = ["serde-1"] }
+proc-macro2 = "1"
+pulldown-cmark = { version = "0.13.4", default-features = false }
+pulldown-cmark-to-cmark = { path = "tools/pulldown-cmark-to-cmark" }
+regex = "1"
+sha2 = "0.11"
+syn = "3"
+tempfile = "3"
+thiserror = "2"
+toml = "1"
+url = "2"
 winit = "0.30"
 wgpu = "24"
 pollster = "0.4"
@@ -27,7 +74,7 @@ log = "0.4"
 # "log" feature: when no tracing subscriber is installed (wasm), events fall
 # back to `log` records, which console_log prints.
 tracing = { version = "0.1", features = ["log"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-log = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

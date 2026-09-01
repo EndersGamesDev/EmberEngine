@@ -6,7 +6,7 @@
 //! a moving obstacle that behaves plausibly, and to exercise the same
 //! `Car::step` a human drives so the sim is tested by playing it.
 
-use crate::car::{forward, Car, CarInput, MAX_SPEED, STEER_FALLOFF, STEER_MAX};
+use crate::car::{Car, CarInput, MAX_SPEED, STEER_FALLOFF, STEER_MAX, forward};
 use crate::track::Track;
 
 /// How far down the line to aim, metres. Too short and the car saws at the
@@ -20,8 +20,9 @@ const STEER_GAIN: f32 = 1.8;
 pub const DEFAULT_SKILL: f32 = 0.88;
 
 /// The fastest this car could hold a corner of the given radius, from the
-/// same steering model the sim uses: R = v (1 + v k) / STEER_MAX.
-/// Solving for v gives the positive root of k v^2 + v - R*STEER_MAX = 0.
+/// same steering model the sim uses: `R = v (1 + v k) / STEER_MAX`.
+/// Solving for `v` gives the positive root of
+/// `k v^2 + v - R * STEER_MAX = 0`.
 fn corner_speed(radius: f32) -> f32 {
     let k = STEER_FALLOFF;
     let c = radius * STEER_MAX;
@@ -42,6 +43,7 @@ fn radius_ahead(track: &Track, s: f32, span: f32) -> f32 {
 }
 
 /// Drive one car for one tick.
+#[must_use]
 pub fn chase(track: &Track, car: &Car, skill: f32) -> CarInput {
     let speed = car.speed();
     let loc = track.locate(car.pos);
@@ -74,9 +76,15 @@ pub fn chase(track: &Track, car: &Car, skill: f32) -> CarInput {
 
     // Spend a boost on anything that looks like a straight, but only when
     // there is room to use it.
-    let boost = radius > 150.0 && speed > MAX_SPEED * 0.5 && car.boost_charges > 0 && !car.boosting();
+    let boost =
+        radius > 150.0 && speed > MAX_SPEED * 0.5 && car.boost_charges > 0 && !car.boosting();
 
-    CarInput { throttle, steer, handbrake, boost }
+    CarInput {
+        throttle,
+        steer,
+        handbrake,
+        boost,
+    }
 }
 
 #[cfg(test)]
@@ -90,7 +98,10 @@ mod tests {
             let v = corner_speed(r);
             // Feed it back through the forward model.
             let back = v * (1.0 + v * STEER_FALLOFF) / STEER_MAX;
-            assert!((back - r).abs() < 0.5, "radius {r} -> speed {v} -> radius {back}");
+            assert!(
+                (back - r).abs() < 0.5,
+                "radius {r} -> speed {v} -> radius {back}"
+            );
         }
     }
 
@@ -108,8 +119,14 @@ mod tests {
             }
             s += 5.0;
         }
-        assert!(smallest < 60.0, "no real corner found (tightest {smallest:.0} m)");
-        assert!(largest > 200.0, "no real straight found (longest {largest:.0} m)");
+        assert!(
+            smallest < 60.0,
+            "no real corner found (tightest {smallest:.0} m)"
+        );
+        assert!(
+            largest > 200.0,
+            "no real straight found (longest {largest:.0} m)"
+        );
     }
 
     /// The AI must not simply drive off. This is also an end-to-end test of
@@ -129,7 +146,11 @@ mod tests {
             race.step(&inputs, DT);
         }
         for (i, r) in race.racers.iter().enumerate() {
-            assert!(r.lap.lap >= 2, "AI {i} only managed {} laps in 200 s", r.lap.lap);
+            assert!(
+                r.lap.lap >= 2,
+                "AI {i} only managed {} laps in 200 s",
+                r.lap.lap
+            );
             assert!(
                 !race.track.off_track(r.car.pos),
                 "AI {i} finished off the track"
@@ -154,7 +175,9 @@ mod tests {
             race.step(&inputs, DT);
         }
         assert!(
-            race.racers.iter().any(|r| r.car.boost_charges < crate::car::BOOST_CHARGES),
+            race.racers
+                .iter()
+                .any(|r| r.car.boost_charges < crate::car::BOOST_CHARGES),
             "no AI ever spent a boost charge"
         );
     }

@@ -20,6 +20,7 @@ use ember_engine::{Camera, Instance};
 ///
 /// Returns `(origin, direction)` with `direction` normalized. The origin is
 /// the eye, so `t` is distance along the ray in world units.
+#[must_use]
 pub fn ray_from_cursor(camera: &Camera, aspect: f32, ndc: [f32; 2]) -> (Vec3, Vec3) {
     // The same right-handed basis `look_at_rh` builds: forward is the way we
     // look, right = forward x up, and up is re-derived so a camera pitched
@@ -52,6 +53,7 @@ pub fn ray_from_cursor(camera: &Camera, aspect: f32, ndc: [f32; 2]) -> (Vec3, Ve
 /// into the box's own frame and slab-tests an axis-aligned box of half-extent
 /// `scale.abs() * 0.5`. `abs` matters: a negative scale is a legal mirror and
 /// would otherwise produce an inside-out slab that never hits.
+#[must_use]
 pub fn ray_obb(origin: Vec3, dir: Vec3, inst: &Instance) -> Option<f32> {
     ray_box_local(origin, dir, inst.position, inst.rot, inst.scale * 0.5)
 }
@@ -59,6 +61,7 @@ pub fn ray_obb(origin: Vec3, dir: Vec3, inst: &Instance) -> Option<f32> {
 /// `ray_obb` with the box given directly, for pick proxies that are fatter
 /// than the thing they stand for — a gizmo handle needs a grabbable volume
 /// several times its drawn thickness.
+#[must_use]
 pub fn ray_box(origin: Vec3, dir: Vec3, centre: Vec3, rot: Quat, half: Vec3) -> Option<f32> {
     ray_box_local(origin, dir, centre, rot, half)
 }
@@ -103,6 +106,7 @@ fn ray_box_local(origin: Vec3, dir: Vec3, centre: Vec3, rot: Quat, half: Vec3) -
 /// Nearest rather than first: the editor draws its own gizmo and grid into
 /// the same instance list, so "first hit in draw order" would select whatever
 /// happened to be pushed earliest.
+#[must_use]
 pub fn pick_nearest(origin: Vec3, dir: Vec3, candidates: &[Instance]) -> Option<(usize, f32)> {
     let mut best: Option<(usize, f32)> = None;
     for (i, inst) in candidates.iter().enumerate() {
@@ -212,12 +216,12 @@ mod tests {
         // A box rotated 45 degrees about Y presents a corner to an axis-aligned
         // ray. A test that forgot to un-rotate would still "hit" the AABB and
         // report the wrong distance, so this checks the distance, not the hit.
-        let inst = Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE)
-            .with_yaw(std::f32::consts::FRAC_PI_4);
+        let inst =
+            Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE).with_yaw(std::f32::consts::FRAC_PI_4);
         let t = ray_obb(Vec3::new(0.0, 0.0, 10.0), Vec3::NEG_Z, &inst).expect("corner-on hit");
         // Half-diagonal of a unit square is sqrt(2)/2, so the corner is nearer
         // than the face was: 10 - 0.7071.
-        let want = 10.0 - std::f32::consts::SQRT_2 * 0.5;
+        let want = std::f32::consts::SQRT_2.mul_add(-0.5, 10.0);
         assert!((t - want).abs() < 1e-4, "entered at {t}, want {want}");
     }
 

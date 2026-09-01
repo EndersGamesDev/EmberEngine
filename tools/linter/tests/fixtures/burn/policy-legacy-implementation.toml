@@ -1,0 +1,5 @@
+namespace = "com.ember.index.linter.policy.legacy.implementation"
+version = [1, 0, 0]
+
+[owners.QUARRY]
+code = '%s"packages/quarry/src" [ "/" *VCHAR ]'

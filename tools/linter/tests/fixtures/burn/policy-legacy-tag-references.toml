@@ -1,0 +1,5 @@
+namespace = "com.ember.index.linter.policy.legacy.tag-references"
+version = [1, 0, 0]
+
+[owners.QUARRY]
+prose = '%s"packages/quarry/" ( %s"docs" / %s"notes" ) [ "/" *VCHAR ]'

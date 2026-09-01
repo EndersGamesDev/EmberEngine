@@ -1,3 +1,6 @@
+// Winit supplies physical positions as f64/u32, while engine input and camera math use f32.
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use std::sync::Arc;
 
 use web_time::Instant;
@@ -9,15 +12,17 @@ use winit::keyboard::KeyCode;
 use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowId};
 
+use crate::EmberGame;
 use crate::input::InputState;
 use crate::renderer::Renderer;
-use crate::EmberGame;
 
 #[cfg(target_arch = "wasm32")]
 use std::{cell::RefCell, rc::Rc};
 
-/// Install the native tracing pipeline: `RUST_LOG`-style filtering via
-/// EnvFilter, plus a bridge so `log` records from wgpu/winit land in the
+/// Install the native tracing pipeline.
+///
+/// It provides `RUST_LOG`-style filtering via `EnvFilter`, plus a bridge so
+/// `log` records from wgpu/winit land in the
 /// same output. Idempotent — game code may call it before `run()` to get
 /// tracing during its own startup (e.g. connecting), and `run()` calls it
 /// again harmlessly.
@@ -28,11 +33,13 @@ pub fn init_diagnostics() {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,wgpu_core=warn,wgpu_hal=warn,naga=warn"));
     let _ = tracing_log::LogTracer::init();
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        // No color codes when output is redirected to a file.
-        .with_ansi(std::io::stdout().is_terminal())
-        .try_init();
+    drop(
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            // No color codes when output is redirected to a file.
+            .with_ansi(std::io::stdout().is_terminal())
+            .try_init(),
+    );
 }
 
 /// A frame gap above this is reported as a stall.
@@ -103,10 +110,10 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                 .get_element_by_id("ember-root")
                 .unwrap_or_else(|| document.body().expect("no body").into());
             root.append_child(&canvas).expect("append canvas");
-            let _ = canvas.focus(); // keyboard events go to the canvas
-                                    // NOTE: no request_inner_size here — winit would pin an inline
-                                    // CSS size that overrides the page's responsive width rule. CSS
-                                    // owns layout; the per-frame sync below owns the backing store.
+            drop(canvas.focus()); // keyboard events go to the canvas
+            // NOTE: no request_inner_size here — winit would pin an inline
+            // CSS size that overrides the page's responsive width rule. CSS
+            // owns layout; the per-frame sync below owns the backing store.
 
             let pending = Rc::clone(&self.pending_renderer);
             let win = window.clone();
@@ -137,17 +144,18 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
         }
     }
 
+    // Keeping the winit event dispatch linear makes input ordering and early returns explicit.
+    #[allow(clippy::too_many_lines)]
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         // Overlay first: F3 toggles it; a visible overlay may consume input.
         #[cfg(not(target_arch = "wasm32"))]
         if let (Some(overlay), Some(window)) = (self.overlay.as_mut(), self.window.as_ref()) {
-            if let WindowEvent::KeyboardInput { event: key, .. } = &event {
-                if key.state == ElementState::Pressed
-                    && key.physical_key == PhysicalKey::Code(KeyCode::F3)
-                {
-                    overlay.visible = !overlay.visible;
-                    return;
-                }
+            if let WindowEvent::KeyboardInput { event: key, .. } = &event
+                && key.state == ElementState::Pressed
+                && key.physical_key == PhysicalKey::Code(KeyCode::F3)
+            {
+                overlay.visible = !overlay.visible;
+                return;
             }
             if overlay.on_window_event(window, &event) {
                 return;
@@ -178,8 +186,8 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                     let size = window.inner_size();
                     if size.width > 0 && size.height > 0 {
                         self.input.set_cursor_ndc(Some([
-                            (position.x as f32 / size.width as f32) * 2.0 - 1.0,
-                            1.0 - (position.y as f32 / size.height as f32) * 2.0,
+                            (position.x as f32 / size.width as f32).mul_add(2.0, -1.0),
+                            (position.y as f32 / size.height as f32).mul_add(-2.0, 1.0),
                         ]));
                     }
                 }
@@ -192,14 +200,17 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                 }
                 // Clicking (re)captures the mouse for FPS look. Cheap to
                 // re-request; also restores capture after Esc on the web.
-                if self.config.capture_mouse && state == ElementState::Pressed {
-                    if let Some(window) = self.window.as_ref() {
-                        use winit::window::CursorGrabMode;
-                        let _ = window
+                if self.config.capture_mouse
+                    && state == ElementState::Pressed
+                    && let Some(window) = self.window.as_ref()
+                {
+                    use winit::window::CursorGrabMode;
+                    drop(
+                        window
                             .set_cursor_grab(CursorGrabMode::Locked)
-                            .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined));
-                        window.set_cursor_visible(false);
-                    }
+                            .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined)),
+                    );
+                    window.set_cursor_visible(false);
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -285,8 +296,9 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                         .is_none_or(|t| now.duration_since(t).as_secs() >= 1);
                     if ok_to_warn {
                         self.last_stall_warn = Some(now);
+                        let stall_ms = u64::try_from(raw_gap.as_millis()).unwrap_or(u64::MAX);
                         tracing::warn!(
-                            stall_ms = raw_gap.as_millis() as u64,
+                            stall_ms,
                             "frame stall: gap since previous frame exceeded {FRAME_STALL_THRESHOLD_MS} ms"
                         );
                     }
@@ -325,6 +337,12 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
     }
 }
 
+/// Start the engine event loop and hand each frame to `game`.
+///
+/// # Panics
+///
+/// Panics if the platform cannot create the event loop or the native event
+/// loop terminates with an error.
 pub fn run<G: EmberGame + 'static>(config: EngineConfig, game: G) {
     #[cfg(not(target_arch = "wasm32"))]
     init_diagnostics();

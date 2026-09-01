@@ -1,0 +1,32 @@
+[package]
+name = "linter"
+description = "Repository-wide label-calculus and Markdown linter for the ember workspace"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+cli-common = { workspace = true }
+
+clap = { workspace = true }
+petgraph = { workspace = true }
+proc-macro2 = { workspace = true, features = ["span-locations"] }
+pulldown-cmark = { workspace = true }
+pulldown-cmark-to-cmark = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+syn = { workspace = true, features = ["extra-traits", "full", "parsing", "printing", "proc-macro"] }
+toml = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

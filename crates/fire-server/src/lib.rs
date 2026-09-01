@@ -13,20 +13,20 @@
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use tungstenite::protocol::WebSocketConfig;
 use tungstenite::Message;
+use tungstenite::protocol::WebSocketConfig;
 
 use fire_core::ai;
 use fire_core::car::{CarInput, DT};
 use fire_core::castle;
 use fire_core::proto::{
-    self, CarState, LobbyInfo, Phase, PlayerMeta, C2S, MAX_PLAYERS, S2C, STATE_EVERY_TICKS,
+    self, C2S, CarState, LobbyInfo, MAX_PLAYERS, Phase, PlayerMeta, S2C, STATE_EVERY_TICKS,
 };
 use fire_core::sim::{Race, RaceState};
 
@@ -55,14 +55,26 @@ pub struct ServerConfig {
 
 impl Default for ServerConfig {
     fn default() -> Self {
-        Self { laps: 3, max_lobbies: 32 }
+        Self {
+            laps: 3,
+            max_lobbies: 32,
+        }
     }
 }
 
 enum Ev {
-    Connected { id: u64, tx: SyncSender<Message>, peer: String },
-    Msg { id: u64, msg: C2S },
-    Disconnected { id: u64 },
+    Connected {
+        id: u64,
+        tx: SyncSender<Message>,
+        peer: String,
+    },
+    Msg {
+        id: u64,
+        msg: C2S,
+    },
+    Disconnected {
+        id: u64,
+    },
 }
 
 struct Conn {
@@ -109,7 +121,7 @@ impl Lobby {
         }
     }
 
-    fn phase(&self) -> Phase {
+    const fn phase(&self) -> Phase {
         match self.race.state {
             RaceState::Waiting => Phase::Waiting,
             RaceState::Countdown => Phase::Countdown,
@@ -125,6 +137,13 @@ impl Lobby {
     }
 }
 
+/// Run the lobby server until the listener closes.
+///
+/// # Errors
+///
+/// Returns an error if the listener's local address cannot be queried.
+// The server owns and eventually closes the listener; changing this public signature would break callers.
+#[allow(clippy::needless_pass_by_value)]
 pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
     let local = listener.local_addr()?;
     tracing::info!(
@@ -135,9 +154,8 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
     );
 
     let (events_tx, events_rx) = mpsc::channel::<Ev>();
-    let hub_cfg = cfg.clone();
     let hub = thread::spawn(move || {
-        if let Err(e) = hub_loop(events_rx, hub_cfg) {
+        if let Err(e) = hub_loop(&events_rx, &cfg) {
             tracing::error!("hub loop died: {e}");
         }
     });
@@ -149,21 +167,23 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
                 let id = next_id;
                 next_id += 1;
                 let tx = events_tx.clone();
-                thread::spawn(move || conn_thread(id, s, tx));
+                thread::spawn(move || conn_thread(id, s, &tx));
             }
             Err(e) => tracing::warn!("accept failed: {e}"),
         }
     }
     drop(events_tx);
-    let _ = hub.join();
+    drop(hub.join());
     Ok(())
 }
 
-fn conn_thread(id: u64, stream: TcpStream, events_tx: Sender<Ev>) {
-    let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_else(|_| "?".into());
-    let _ = stream.set_nodelay(true);
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(15)));
+fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
+    let peer = stream
+        .peer_addr()
+        .map_or_else(|_| "?".into(), |address| address.to_string());
+    drop(stream.set_nodelay(true));
+    drop(stream.set_read_timeout(Some(Duration::from_secs(10))));
+    drop(stream.set_write_timeout(Some(Duration::from_secs(15))));
 
     // Total handshake deadline. The per-read timeout alone is not enough: a
     // peer can send one byte per window forever and never finish.
@@ -180,7 +200,7 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: Sender<Ev>) {
                     return;
                 }
             }
-            let _ = watch.shutdown(std::net::Shutdown::Both);
+            drop(watch.shutdown(std::net::Shutdown::Both));
         });
     }
 
@@ -200,10 +220,20 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: Sender<Ev>) {
     // This thread owns the socket, so the outbound queue only drains between
     // reads. A short read timeout keeps a broadcast from sitting on the queue
     // for most of a tick before it reaches the wire.
-    let _ = ws.get_ref().set_read_timeout(Some(Duration::from_millis(5)));
+    drop(
+        ws.get_ref()
+            .set_read_timeout(Some(Duration::from_millis(5))),
+    );
 
     let (tx, rx) = mpsc::sync_channel::<Message>(OUTBOUND_QUEUE);
-    if events_tx.send(Ev::Connected { id, tx, peer: peer.clone() }).is_err() {
+    if events_tx
+        .send(Ev::Connected {
+            id,
+            tx,
+            peer: peer.clone(),
+        })
+        .is_err()
+    {
         return;
     }
 
@@ -231,8 +261,8 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: Sender<Ev>) {
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    let _ = ws.close(None);
-                    let _ = ws.flush();
+                    drop(ws.close(None));
+                    drop(ws.flush());
                     break 'outer;
                 }
             }
@@ -265,7 +295,7 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: Sender<Ev>) {
             }
         }
     }
-    let _ = events_tx.send(Ev::Disconnected { id });
+    drop(events_tx.send(Ev::Disconnected { id }));
 }
 
 fn send_to(conns: &HashMap<u64, Conn>, id: u64, msg: &S2C) -> bool {
@@ -315,7 +345,7 @@ fn roster(lobby: &Lobby, conns: &HashMap<u64, Conn>) -> Vec<PlayerMeta> {
         .collect()
 }
 
-fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
+fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
     let mut conns: HashMap<u64, Conn> = HashMap::new();
     let mut lobbies: HashMap<String, Lobby> = HashMap::new();
     // Accumulate real elapsed time and run the whole ticks it owes, rather
@@ -328,26 +358,30 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
     let mut last = Instant::now();
 
     loop {
-        // Drain everything that arrived, then tick once. Draining first means
-        // an input that lands 1 ms before the tick is applied on that tick
-        // rather than the next one.
+        // Drain everything that arrived, then advance every tick now due.
+        // Draining first means an input that lands 1 ms before a tick is
+        // applied on that tick rather than the next one.
         loop {
             match events_rx.try_recv() {
-                Ok(ev) => handle_event(ev, &mut conns, &mut lobbies, &cfg),
+                Ok(ev) => handle_event(ev, &mut conns, &mut lobbies, cfg),
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
             }
         }
 
-        for c in conns.values_mut() {
-            c.msgs_this_tick = 0;
-        }
-
         let now = Instant::now();
         let elapsed = now.duration_since(last).as_secs_f32();
         last = now;
-        for _ in 0..clock.ticks(elapsed) {
-            tick_lobbies(&mut lobbies, &conns, &cfg);
+        let ticks = clock.ticks(elapsed);
+        for _ in 0..ticks {
+            tick_lobbies(&mut lobbies, &conns, cfg);
+        }
+        if ticks > 0 {
+            // Count all messages between simulation ticks, not merely between
+            // the hub's much faster polling iterations.
+            for conn in conns.values_mut() {
+                conn.msgs_this_tick = 0;
+            }
         }
         drop_silent(&mut conns, &mut lobbies);
 
@@ -358,7 +392,11 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
     }
 }
 
-fn tick_lobbies(lobbies: &mut HashMap<String, Lobby>, conns: &HashMap<u64, Conn>, cfg: &ServerConfig) {
+fn tick_lobbies(
+    lobbies: &mut HashMap<String, Lobby>,
+    conns: &HashMap<u64, Conn>,
+    cfg: &ServerConfig,
+) {
     let mut empty: Vec<String> = Vec::new();
     for (name, lobby) in lobbies.iter_mut() {
         if lobby.members.is_empty() {
@@ -374,24 +412,7 @@ fn tick_lobbies(lobbies: &mut HashMap<String, Lobby>, conns: &HashMap<u64, Conn>
             lobby.race.start_countdown();
         }
 
-        // Build the full grid: humans where they sit, AI everywhere else.
-        let inputs: Vec<CarInput> = (0..lobby.race.racers.len())
-            .map(|i| {
-                let slot = i as u8;
-                match lobby.inputs.get(&slot) {
-                    Some((input, _)) => *input,
-                    None => {
-                        if lobby.slots.values().any(|s| *s == slot) {
-                            // A human holds this slot but has sent nothing
-                            // yet — coast, do not hand their car to the AI.
-                            CarInput::default()
-                        } else {
-                            ai::chase(&lobby.race.track, &lobby.race.racers[i].car, ai::DEFAULT_SKILL)
-                        }
-                    }
-                }
-            })
-            .collect();
+        let inputs = lobby_inputs(lobby);
 
         lobby.race.step(&inputs, DT);
 
@@ -405,45 +426,39 @@ fn tick_lobbies(lobbies: &mut HashMap<String, Lobby>, conns: &HashMap<u64, Conn>
         let phase = lobby.phase();
         if phase != lobby.last_phase {
             lobby.last_phase = phase;
-            broadcast(conns, lobby, &S2C::Phase { phase, countdown: lobby.race.countdown_left() });
+            broadcast(
+                conns,
+                lobby,
+                &S2C::Phase {
+                    phase,
+                    countdown: lobby.race.countdown_left(),
+                },
+            );
             if phase == Phase::Finished {
-                let order: Vec<u8> = lobby.race.standings().iter().map(|&i| i as u8).collect();
+                let order: Vec<u8> = lobby
+                    .race
+                    .standings()
+                    .iter()
+                    .map(|&i| u8::try_from(i).expect("race grid fits in a wire player id"))
+                    .collect();
                 broadcast(conns, lobby, &S2C::Results { order });
                 lobby.results_left = RESULTS_SECS;
             }
         } else if phase == Phase::Countdown && lobby.race.tick % STATE_EVERY_TICKS == 0 {
             // 30 Hz, not 60: the page only renders `ceil(countdown)`, and the
             // spare frames were queue pressure on anyone slow to poll.
-            broadcast(conns, lobby, &S2C::Phase { phase, countdown: lobby.race.countdown_left() });
+            broadcast(
+                conns,
+                lobby,
+                &S2C::Phase {
+                    phase,
+                    countdown: lobby.race.countdown_left(),
+                },
+            );
         }
 
-        // Only broadcast state once there is something to say. A Waiting
-        // lobby's cars are parked on a grid the client already computed for
-        // itself, so streaming it 30 times a second is pure queue pressure —
-        // and it was enough to push control messages out of a slow peer's
-        // queue while everyone sat in the lobby.
         if lobby.race.state != RaceState::Waiting && lobby.race.tick % STATE_EVERY_TICKS == 0 {
-            let cars: Vec<CarState> = lobby
-                .race
-                .racers
-                .iter()
-                .enumerate()
-                .map(|(i, r)| CarState {
-                    id: i as u8,
-                    x: r.car.pos.x,
-                    z: r.car.pos.y,
-                    yaw: r.car.yaw,
-                    vx: r.car.vel.x,
-                    vz: r.car.vel.y,
-                    lap: r.lap.lap,
-                    progress: r.lap.progress,
-                    boost: r.car.boost_charges,
-                    boosting: r.car.boosting(),
-                    drift: r.car.drift,
-                    ack: lobby.inputs.get(&(i as u8)).map(|(_, s)| *s).unwrap_or(0),
-                })
-                .collect();
-            broadcast(conns, lobby, &S2C::State { tick: lobby.race.tick, cars });
+            broadcast_race_state(conns, lobby);
         }
 
         // Reset for another race once the results have been shown.
@@ -454,13 +469,79 @@ fn tick_lobbies(lobbies: &mut HashMap<String, Lobby>, conns: &HashMap<u64, Conn>
                 lobby.ready.clear();
                 lobby.inputs.clear();
                 lobby.last_phase = Phase::Waiting;
-                broadcast(conns, lobby, &S2C::Phase { phase: Phase::Waiting, countdown: 0.0 });
+                broadcast(
+                    conns,
+                    lobby,
+                    &S2C::Phase {
+                        phase: Phase::Waiting,
+                        countdown: 0.0,
+                    },
+                );
             }
         }
     }
     for name in empty {
         lobbies.remove(&name);
     }
+}
+
+/// Build the full grid: humans where they sit, AI everywhere else.
+fn lobby_inputs(lobby: &Lobby) -> Vec<CarInput> {
+    (0..lobby.race.racers.len())
+        .map(|i| {
+            let slot = u8::try_from(i).expect("race grid fits in a wire player id");
+            match lobby.inputs.get(&slot) {
+                Some((input, _)) => *input,
+                None if lobby.slots.values().any(|candidate| *candidate == slot) => {
+                    // A human holds this slot but has sent nothing yet —
+                    // coast, do not hand their car to the AI.
+                    CarInput::default()
+                }
+                None => ai::chase(
+                    &lobby.race.track,
+                    &lobby.race.racers[i].car,
+                    ai::DEFAULT_SKILL,
+                ),
+            }
+        })
+        .collect()
+}
+
+fn broadcast_race_state(conns: &HashMap<u64, Conn>, lobby: &Lobby) {
+    // A Waiting lobby's cars are parked on a grid the client already computed
+    // for itself, so streaming it is pure queue pressure. The caller filters
+    // that phase before reaching here.
+    let cars: Vec<CarState> = lobby
+        .race
+        .racers
+        .iter()
+        .enumerate()
+        .map(|(i, racer)| {
+            let id = u8::try_from(i).expect("race grid fits in a wire player id");
+            CarState {
+                id,
+                x: racer.car.pos.x,
+                z: racer.car.pos.y,
+                yaw: racer.car.yaw,
+                vx: racer.car.vel.x,
+                vz: racer.car.vel.y,
+                lap: racer.lap.lap,
+                progress: racer.lap.progress,
+                boost: racer.car.boost_charges,
+                boosting: racer.car.boosting(),
+                drift: racer.car.drift,
+                ack: lobby.inputs.get(&id).map_or(0, |(_, sequence)| *sequence),
+            }
+        })
+        .collect();
+    broadcast(
+        conns,
+        lobby,
+        &S2C::State {
+            tick: lobby.race.tick,
+            cars,
+        },
+    );
 }
 
 fn drop_silent(conns: &mut HashMap<u64, Conn>, lobbies: &mut HashMap<String, Lobby>) {
@@ -511,7 +592,7 @@ fn handle_event(
                 tracing::warn!(
                     conn = id,
                     n = c.msgs_this_tick,
-                    "over the per-drain message allowance, dropping: {msg:?}"
+                    "over the per-tick message allowance, dropping: {msg:?}"
                 );
                 return;
             }
@@ -540,7 +621,13 @@ fn handle_msg(
             }
             // Listing is deliberately ungated so the hub's lobby browser
             // works from a frozen page. Entering a race is not.
-            send_to(conns, id, &S2C::Welcome { proto: proto::PROTO_VERSION });
+            send_to(
+                conns,
+                id,
+                &S2C::Welcome {
+                    proto: proto::PROTO_VERSION,
+                },
+            );
         }
 
         C2S::ListLobbies => {
@@ -555,7 +642,8 @@ fn handle_msg(
                         .and_then(|c| c.handle.clone())
                         .unwrap_or_else(|| "?".into()),
                     has_password: l.password.is_some(),
-                    players: l.members.len() as u8,
+                    players: u8::try_from(l.members.len())
+                        .expect("lobby membership is bounded by MAX_PLAYERS"),
                     cap: MAX_PLAYERS,
                     racing: l.race.state != RaceState::Waiting,
                 })
@@ -564,27 +652,7 @@ fn handle_msg(
         }
 
         C2S::CreateLobby { name, password } => {
-            if !version_ok(id, conns) {
-                return;
-            }
-            let name = proto::sanitize(&name, proto::MAX_LOBBY_LEN);
-            if name.is_empty() {
-                send_to(conns, id, &S2C::Rejected { reason: "lobby needs a name".into() });
-                return;
-            }
-            if lobbies.contains_key(&name) {
-                send_to(conns, id, &S2C::Rejected { reason: "that name is taken".into() });
-                return;
-            }
-            if lobbies.len() >= cfg.max_lobbies {
-                send_to(conns, id, &S2C::Rejected { reason: "server is full".into() });
-                return;
-            }
-            let password = password
-                .map(|p| proto::sanitize(&p, proto::MAX_PASSWORD_LEN))
-                .filter(|p| !p.is_empty());
-            lobbies.insert(name.clone(), Lobby::new(password, cfg.laps));
-            join_lobby(id, &name, None, conns, lobbies, cfg, true);
+            create_lobby(id, &name, password, conns, lobbies, cfg);
         }
 
         C2S::JoinLobby { name, password } => {
@@ -598,7 +666,9 @@ fn handle_msg(
         C2S::LeaveLobby => leave_lobby(id, conns, lobbies),
 
         C2S::Ready { ready } => {
-            let Some(lobby_name) = conns.get(&id).and_then(|c| c.lobby.clone()) else { return };
+            let Some(lobby_name) = conns.get(&id).and_then(|c| c.lobby.clone()) else {
+                return;
+            };
             if let Some(l) = lobbies.get_mut(&lobby_name) {
                 if ready {
                     l.ready.insert(id);
@@ -608,29 +678,21 @@ fn handle_msg(
             }
         }
 
-        C2S::Input { seq, throttle, steer, handbrake, boost } => {
-            let Some(lobby_name) = conns.get(&id).and_then(|c| c.lobby.clone()) else { return };
-            let Some(l) = lobbies.get_mut(&lobby_name) else { return };
-            let Some(&slot) = l.slots.get(&id) else { return };
-            let incoming = CarInput { throttle, steer, handbrake, boost }.sanitized();
-            match l.inputs.get_mut(&slot) {
-                Some((held, last_seq)) => {
-                    // Out-of-order or replayed packets must not rewind the
-                    // car's intent. A stale packet is simply dropped.
-                    if seq < *last_seq {
-                        return;
-                    }
-                    // A boost press latches until a tick consumes it, so a
-                    // press is never lost between two input packets.
-                    let pending = held.boost;
-                    *held = incoming;
-                    held.boost |= pending;
-                    *last_seq = seq;
-                }
-                None => {
-                    l.inputs.insert(slot, (incoming, seq));
-                }
+        C2S::Input {
+            seq,
+            throttle,
+            steer,
+            handbrake,
+            boost,
+        } => {
+            let incoming = CarInput {
+                throttle,
+                steer,
+                handbrake,
+                boost,
             }
+            .sanitized();
+            record_input(id, seq, incoming, conns, lobbies);
         }
 
         C2S::Ping { nonce } => {
@@ -639,17 +701,96 @@ fn handle_msg(
     }
 }
 
+fn create_lobby(
+    id: u64,
+    requested_name: &str,
+    password: Option<String>,
+    conns: &mut HashMap<u64, Conn>,
+    lobbies: &mut HashMap<String, Lobby>,
+    cfg: &ServerConfig,
+) {
+    if !version_ok(id, conns) {
+        return;
+    }
+    let name = proto::sanitize(requested_name, proto::MAX_LOBBY_LEN);
+    let rejection = if name.is_empty() {
+        Some("lobby needs a name")
+    } else if lobbies.contains_key(&name) {
+        Some("that name is taken")
+    } else if lobbies.len() >= cfg.max_lobbies {
+        Some("server is full")
+    } else {
+        None
+    };
+    if let Some(reason) = rejection {
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: reason.into(),
+            },
+        );
+        return;
+    }
+
+    let password = password
+        .map(|value| proto::sanitize(&value, proto::MAX_PASSWORD_LEN))
+        .filter(|value| !value.is_empty());
+    lobbies.insert(name.clone(), Lobby::new(password, cfg.laps));
+    join_lobby(id, &name, None, conns, lobbies, cfg, true);
+}
+
+fn record_input(
+    id: u64,
+    seq: u32,
+    incoming: CarInput,
+    conns: &HashMap<u64, Conn>,
+    lobbies: &mut HashMap<String, Lobby>,
+) {
+    let Some(lobby_name) = conns.get(&id).and_then(|conn| conn.lobby.as_ref()) else {
+        return;
+    };
+    let Some(lobby) = lobbies.get_mut(lobby_name) else {
+        return;
+    };
+    let Some(&slot) = lobby.slots.get(&id) else {
+        return;
+    };
+    match lobby.inputs.get_mut(&slot) {
+        Some((held, last_seq)) => {
+            // Out-of-order or replayed packets must not rewind intent.
+            if seq <= *last_seq {
+                return;
+            }
+            // A boost press latches until a tick consumes it, so a press is
+            // never lost between two input packets.
+            let pending = held.boost;
+            *held = incoming;
+            held.boost |= pending;
+            *last_seq = seq;
+        }
+        None => {
+            lobby.inputs.insert(slot, (incoming, seq));
+        }
+    }
+}
+
 /// The join gate: exact version equality, and a reason the player can read.
 fn version_ok(id: u64, conns: &HashMap<u64, Conn>) -> bool {
-    let v = conns.get(&id).map(|c| c.proto).unwrap_or(0);
+    let v = conns.get(&id).map_or(0, |c| c.proto);
     if v == proto::PROTO_VERSION {
         return true;
     }
     // `handle` is set by Hello alongside `proto`, so a None handle here means
     // no Hello was ever processed for this connection — a very different fault
     // from a genuinely stale client, and worth telling apart in the log.
-    let saw_hello = conns.get(&id).map(|c| c.handle.is_some()).unwrap_or(false);
-    tracing::warn!(conn = id, proto = v, saw_hello, "refusing on protocol version");
+    let saw_hello = conns.get(&id).is_some_and(|c| c.handle.is_some());
+    tracing::warn!(
+        conn = id,
+        proto = v,
+        saw_hello,
+        "refusing on protocol version"
+    );
     send_to(
         conns,
         id,
@@ -676,19 +817,36 @@ fn join_lobby(
     leave_lobby(id, conns, lobbies);
 
     let Some(lobby) = lobbies.get_mut(name) else {
-        send_to(conns, id, &S2C::Rejected { reason: "no such lobby".into() });
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: "no such lobby".into(),
+            },
+        );
         return;
     };
-    if !creating {
-        if let Some(want) = &lobby.password {
-            if password.unwrap_or("") != want {
-                send_to(conns, id, &S2C::Rejected { reason: "wrong password".into() });
-                return;
-            }
-        }
+    if !creating
+        && let Some(want) = &lobby.password
+        && password.unwrap_or("") != want
+    {
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: "wrong password".into(),
+            },
+        );
+        return;
     }
     let Some(slot) = lobby.alloc_slot() else {
-        send_to(conns, id, &S2C::Rejected { reason: "lobby is full".into() });
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: "lobby is full".into(),
+            },
+        );
         return;
     };
 
@@ -700,7 +858,10 @@ fn join_lobby(
 
     let meta = PlayerMeta {
         id: slot,
-        handle: conns.get(&id).and_then(|c| c.handle.clone()).unwrap_or_else(|| "?".into()),
+        handle: conns
+            .get(&id)
+            .and_then(|c| c.handle.clone())
+            .unwrap_or_else(|| "?".into()),
         slot,
     };
     let list = roster(lobby, conns);
@@ -710,7 +871,13 @@ fn join_lobby(
     send_to(
         conns,
         id,
-        &S2C::Joined { lobby: name.to_string(), id: slot, slot, laps: cfg.laps, roster: list },
+        &S2C::Joined {
+            lobby: name.to_string(),
+            id: slot,
+            slot,
+            laps: cfg.laps,
+            roster: list,
+        },
     );
     send_to(conns, id, &S2C::Phase { phase, countdown });
     for m in lobby.members.iter().filter(|m| **m != id) {
@@ -720,8 +887,12 @@ fn join_lobby(
 }
 
 fn leave_lobby(id: u64, conns: &mut HashMap<u64, Conn>, lobbies: &mut HashMap<String, Lobby>) {
-    let Some(name) = conns.get_mut(&id).and_then(|c| c.lobby.take()) else { return };
-    let Some(lobby) = lobbies.get_mut(&name) else { return };
+    let Some(name) = conns.get_mut(&id).and_then(|c| c.lobby.take()) else {
+        return;
+    };
+    let Some(lobby) = lobbies.get_mut(&name) else {
+        return;
+    };
     lobby.members.retain(|m| *m != id);
     lobby.ready.remove(&id);
     if let Some(slot) = lobby.slots.remove(&id) {
@@ -753,7 +924,10 @@ mod tests {
         let mut l = Lobby::new(None, 3);
         for (i, m) in members.iter().enumerate() {
             l.members.push(*m);
-            l.slots.insert(*m, i as u8);
+            l.slots.insert(
+                *m,
+                u8::try_from(i).expect("test lobby fits in a wire player id"),
+            );
         }
         l
     }
@@ -769,7 +943,7 @@ mod tests {
 
     #[test]
     fn a_full_lobby_has_no_slot_left() {
-        let members: Vec<u64> = (0..MAX_PLAYERS as u64).collect();
+        let members: Vec<u64> = (0..u64::from(MAX_PLAYERS)).collect();
         let l = lobby_with(&members);
         assert_eq!(l.alloc_slot(), None);
     }
@@ -790,9 +964,18 @@ mod tests {
         let l = &lobbies["test"];
         assert_eq!(l.race.state, RaceState::Racing);
         // Slot 0 is the human, who sent nothing and should be parked.
-        assert!(l.race.racers[0].car.speed() < 1.0, "the absent human's car drove itself");
+        assert!(
+            l.race.racers[0].car.speed() < 1.0,
+            "the absent human's car drove itself"
+        );
         // Everyone else should be racing.
-        let moving = l.race.racers.iter().skip(1).filter(|r| r.car.speed() > 5.0).count();
+        let moving = l
+            .race
+            .racers
+            .iter()
+            .skip(1)
+            .filter(|r| r.car.speed() > 5.0)
+            .count();
         assert!(moving >= 6, "only {moving} AI cars got going");
     }
 
@@ -826,7 +1009,13 @@ mod tests {
         // One packet with boost set, then many ticks with no further packets.
         handle_msg(
             7,
-            C2S::Input { seq: 1, throttle: 1.0, steer: 0.0, handbrake: false, boost: true },
+            C2S::Input {
+                seq: 1,
+                throttle: 1.0,
+                steer: 0.0,
+                handbrake: false,
+                boost: true,
+            },
             &mut conns,
             &mut lobbies,
             &cfg,
@@ -853,24 +1042,43 @@ mod tests {
         conns.insert(
             7u64,
             Conn {
-                tx, peer: "t".into(), handle: Some("h".into()),
-                proto: proto::PROTO_VERSION, lobby: Some("t".into()),
-                last_seen: Instant::now(), msgs_this_tick: 0,
+                tx,
+                peer: "t".into(),
+                handle: Some("h".into()),
+                proto: proto::PROTO_VERSION,
+                lobby: Some("t".into()),
+                last_seen: Instant::now(),
+                msgs_this_tick: 0,
             },
         );
         let cfg = ServerConfig::default();
-        let send = |seq, throttle, conns: &mut HashMap<u64, Conn>, lobbies: &mut HashMap<String, Lobby>| {
+        let send = |seq,
+                    throttle,
+                    conns: &mut HashMap<u64, Conn>,
+                    lobbies: &mut HashMap<String, Lobby>| {
             handle_msg(
                 7,
-                C2S::Input { seq, throttle, steer: 0.0, handbrake: false, boost: false },
-                conns, lobbies, &cfg,
+                C2S::Input {
+                    seq,
+                    throttle,
+                    steer: 0.0,
+                    handbrake: false,
+                    boost: false,
+                },
+                conns,
+                lobbies,
+                &cfg,
             );
         };
         send(10, 1.0, &mut conns, &mut lobbies);
+        send(10, -1.0, &mut conns, &mut lobbies); // replay, must also be dropped
         send(5, -1.0, &mut conns, &mut lobbies); // stale, must be dropped
         let (held, seq) = lobbies["t"].inputs[&0];
         assert_eq!(seq, 10);
-        assert_eq!(held.throttle, 1.0, "a stale packet overwrote the current intent");
+        assert_eq!(
+            held.throttle, 1.0,
+            "a stale packet overwrote the current intent"
+        );
     }
 
     #[test]
@@ -880,13 +1088,19 @@ mod tests {
         conns.insert(
             1u64,
             Conn {
-                tx, peer: "t".into(), handle: Some("h".into()),
-                proto: proto::PROTO_VERSION + 1, lobby: None,
-                last_seen: Instant::now(), msgs_this_tick: 0,
+                tx,
+                peer: "t".into(),
+                handle: Some("h".into()),
+                proto: proto::PROTO_VERSION + 1,
+                lobby: None,
+                last_seen: Instant::now(),
+                msgs_this_tick: 0,
             },
         );
         assert!(!version_ok(1, &conns), "a mismatched peer was let in");
-        let Ok(Message::Text(t)) = rx.try_recv() else { panic!("no rejection sent") };
+        let Ok(Message::Text(t)) = rx.try_recv() else {
+            panic!("no rejection sent")
+        };
         let msg: S2C = serde_json::from_str(&t).unwrap();
         match msg {
             S2C::Rejected { reason } => assert!(reason.contains("fire protocol"), "{reason}"),
@@ -906,18 +1120,29 @@ mod tests {
             conns.insert(
                 id,
                 Conn {
-                    tx, peer: "t".into(), handle: Some("h".into()),
-                    proto: proto::PROTO_VERSION, lobby: Some("t".into()),
-                    last_seen: Instant::now(), msgs_this_tick: 0,
+                    tx,
+                    peer: "t".into(),
+                    handle: Some("h".into()),
+                    proto: proto::PROTO_VERSION,
+                    lobby: Some("t".into()),
+                    last_seen: Instant::now(),
+                    msgs_this_tick: 0,
                 },
             );
         }
-        lobbies.get_mut("t").unwrap().inputs.insert(0, (CarInput::default(), 3));
+        lobbies
+            .get_mut("t")
+            .unwrap()
+            .inputs
+            .insert(0, (CarInput::default(), 3));
         leave_lobby(7, &mut conns, &mut lobbies);
         let l = &lobbies["t"];
         assert!(!l.members.contains(&7));
         assert!(!l.slots.contains_key(&7));
-        assert!(!l.inputs.contains_key(&0), "the leaver's intent outlived them");
+        assert!(
+            !l.inputs.contains_key(&0),
+            "the leaver's intent outlived them"
+        );
         assert_eq!(l.alloc_slot(), Some(0), "the freed slot was not reusable");
     }
 
@@ -931,9 +1156,13 @@ mod tests {
         conns.insert(
             7u64,
             Conn {
-                tx, peer: "t".into(), handle: Some("h".into()),
-                proto: proto::PROTO_VERSION, lobby: Some("t".into()),
-                last_seen: Instant::now(), msgs_this_tick: 0,
+                tx,
+                peer: "t".into(),
+                handle: Some("h".into()),
+                proto: proto::PROTO_VERSION,
+                lobby: Some("t".into()),
+                last_seen: Instant::now(),
+                msgs_this_tick: 0,
             },
         );
         leave_lobby(7, &mut conns, &mut lobbies);

@@ -81,6 +81,36 @@ echo "== building fire-server (toolbox: ember-build) =="
 ssh -o BatchMode=yes "$REMOTE" \
     "toolbox run -c ember-build bash -lc 'source ~/.cargo/env && cd ~/$REMOTE_DIR && cargo build --release -p fire-server'"
 
+echo "== checking nobody is mid-race =="
+# A redeploy kicks everyone off. That is not hypothetical: a watchdog test on
+# 2026-09-01 restarted the arena 72 seconds after two people had joined a
+# lobby, and they lost the game they were playing. The scripts had no idea
+# anyone was there.
+#
+# Three outcomes, and the distinction matters:
+#   0  healthy and empty        -> go
+#   2  healthy and OCCUPIED     -> refuse, unless forced
+#   1  unreachable/unhealthy    -> GO. A dead server has no players to
+#                                  disturb, and that is exactly when a
+#                                  redeploy is most needed. Refusing here
+#                                  would turn an outage into a deadlock.
+set +e
+ssh -o BatchMode=yes "$REMOTE" \
+    "toolbox run -c ember-build bash -lc 'source ~/.cargo/env && cd ~/$REMOTE_DIR && cargo run --release -q -p fire-server --example probe -- ws://$BIND --require-empty'"
+OCCUPANCY=$?
+set -e
+if [ "$OCCUPANCY" = "2" ]; then
+    if [ -n "${EMBER_FORCE:-}" ]; then
+        echo "   players are in game; EMBER_FORCE is set, continuing anyway"
+    else
+        echo "FAILED: people are playing on the current server right now." >&2
+        echo "        Redeploying would disconnect them mid-race." >&2
+        echo "        Wait for the lobby to empty, or override deliberately:" >&2
+        echo "            EMBER_FORCE=1 bash deploy/deploy-fire-online.sh" >&2
+        exit 1
+    fi
+fi
+
 echo "== restarting fire-server =="
 # Two ways to own the process, and they must never both be used at once. If
 # `install-watchdog.sh` has enabled the systemd unit, IT owns the lifecycle:

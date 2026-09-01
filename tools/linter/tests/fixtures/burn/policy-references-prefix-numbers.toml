@@ -1,0 +1,14 @@
+namespace = "com.ember.index.linter.policy.references.prefix-numbers"
+version = [1, 0, 0]
+
+[set.prefix-numbers]
+lots = { prefix = "LOT-", exact = ["amber", "blue"] }
+
+[owners.QUARRY]
+prose = '%s"packages/quarry/" ( %s"docs" / %s"notes" ) [ "/" *VCHAR ]'
+code = '%s"packages/quarry/" ( %s"src" / %s"tests" / %s"benches" / %s"examples" / %s"ci" ) [ "/" *VCHAR ]'
+
+[owners.QUARRY.prefix-numbers]
+include = [
+  { name = "quarry-tree", prefix-numbers = "lots", pattern = '%s"packages/quarry" [ "/" *VCHAR ]' },
+]

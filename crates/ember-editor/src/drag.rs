@@ -23,7 +23,9 @@ use crate::gizmo::{Axis, Mode};
 /// the closest-point solve is numerically meaningless — the denominator
 /// vanishes and a tiny cursor movement swings the result across the level.
 const PARALLEL_EPS: f32 = 1e-3;
-/// A scale drag may not take an extent below this. Zero would make the box
+/// A scale drag may not take an extent below this.
+///
+/// Zero would make the box
 /// unpickable (a degenerate slab) and negative would mirror it, both of
 /// which are one-way trips for someone dragging past the middle.
 pub const MIN_SCALE: f32 = 0.05;
@@ -41,6 +43,7 @@ pub struct Xform {
 /// Returns the parameter in world units measured from `axis_point` along
 /// `axis_dir`, or `None` when the two lines are too close to parallel to
 /// give an answer worth having.
+#[must_use]
 pub fn closest_param_on_axis(
     ray_org: Vec3,
     ray_dir: Vec3,
@@ -51,13 +54,13 @@ pub fn closest_param_on_axis(
     // so the Gram determinant reduces to 1 - (d1.d2)^2.
     let r = ray_org - axis_point;
     let b = ray_dir.dot(axis_dir);
-    let denom = 1.0 - b * b;
+    let denom = b.mul_add(-b, 1.0);
     if denom.abs() < PARALLEL_EPS {
         return None;
     }
     let d = ray_dir.dot(r);
     let e = axis_dir.dot(r);
-    Some((e - b * d) / denom)
+    Some(b.mul_add(-d, e) / denom)
 }
 
 /// Angle of the cursor ray's hit on the plane through `centre` whose normal
@@ -65,12 +68,8 @@ pub fn closest_param_on_axis(
 ///
 /// `None` when the ray is nearly parallel to the plane, where the
 /// intersection races off to infinity for a pixel of cursor movement.
-pub fn angle_on_plane(
-    ray_org: Vec3,
-    ray_dir: Vec3,
-    centre: Vec3,
-    axis_dir: Vec3,
-) -> Option<f32> {
+#[must_use]
+pub fn angle_on_plane(ray_org: Vec3, ray_dir: Vec3, centre: Vec3, axis_dir: Vec3) -> Option<f32> {
     let denom = ray_dir.dot(axis_dir);
     if denom.abs() < PARALLEL_EPS {
         return None;
@@ -117,6 +116,7 @@ impl Drag {
     /// Begins a drag, or returns `None` if this handle cannot be grabbed
     /// from this angle — a nearly edge-on axis, or a rotation this data
     /// model cannot store.
+    #[must_use]
     pub fn begin(
         axis: Axis,
         mode: Mode,
@@ -180,7 +180,7 @@ impl Drag {
                     self.turns += 1.0;
                 }
                 self.prev_angle = raw;
-                let total = raw + self.turns * std::f32::consts::TAU - self.anchor;
+                let total = self.turns.mul_add(std::f32::consts::TAU, raw) - self.anchor;
                 let mut out = self.start;
                 // Negated: a plane angle increasing counter-clockwise about
                 // +Y corresponds to a decreasing yaw in the client's
@@ -276,7 +276,11 @@ mod tests {
         let mut drag = Drag::begin(Axis::X, Mode::Scale, start, o, d).expect("grab");
         let (o2, d2) = ray_down_at(5.0, 0.0);
         let out = drag.update(o2, d2).unwrap();
-        assert!((out.scale.x - 5.0).abs() < 1e-4, "x scale is {}", out.scale.x);
+        assert!(
+            (out.scale.x - 5.0).abs() < 1e-4,
+            "x scale is {}",
+            out.scale.x
+        );
         assert_eq!(out.scale.y, 2.0, "y must not follow x");
         assert_eq!(out.scale.z, 2.0, "z must not follow x");
     }
@@ -334,8 +338,8 @@ mod tests {
         let mut drag = Drag::begin(Axis::Y, Mode::Rotate, start, o, d).expect("grab");
         let mut prev = 0.0f32;
         let mut total_jump = 0.0f32;
-        for i in 1..=24 {
-            let a = step * i as f32;
+        for i in 1i16..=24 {
+            let a = step * f32::from(i);
             let (oi, di) = ray_down_at(r * a.cos(), r * a.sin());
             let out = drag.update(oi, di).unwrap();
             total_jump = total_jump.max((out.yaw - prev).abs());
@@ -371,7 +375,12 @@ mod tests {
 
     #[test]
     fn the_perpendicular_helper_is_always_unit_and_orthogonal() {
-        for n in [Vec3::X, Vec3::Y, Vec3::Z, Vec3::new(1.0, 1.0, 1.0).normalize()] {
+        for n in [
+            Vec3::X,
+            Vec3::Y,
+            Vec3::Z,
+            Vec3::new(1.0, 1.0, 1.0).normalize(),
+        ] {
             let p = perpendicular(n);
             assert!((p.length() - 1.0).abs() < 1e-5, "not unit for {n:?}");
             assert!(p.dot(n).abs() < 1e-5, "not perpendicular to {n:?}");

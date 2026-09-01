@@ -35,7 +35,7 @@ pub const CLIENT_TIMEOUT_SECS: u64 = 30;
 /// A single frame larger than this is a protocol violation, not a big update.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct LobbyInfo {
     pub name: String,
     pub host: String,
@@ -48,7 +48,7 @@ pub struct LobbyInfo {
     pub racing: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct PlayerMeta {
     pub id: u8,
     pub handle: String,
@@ -57,9 +57,11 @@ pub struct PlayerMeta {
     pub slot: u8,
 }
 
-/// One car in a state broadcast. Flat scalars on purpose: the sim's `Car`
-/// holds `glam::Vec2`, and keeping the wire shape separate means the internal
-/// struct can be refactored without that being a protocol question.
+/// One car in a state broadcast.
+///
+/// Flat scalars on purpose: the sim's `Car` holds `glam::Vec2`, and keeping
+/// the wire shape separate means the internal struct can be refactored without
+/// that being a protocol question.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct CarState {
     pub id: u8,
@@ -102,14 +104,25 @@ pub enum Phase {
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum C2S {
     /// Must be the first message on a connection.
-    Hello { proto: u16, handle: String },
+    Hello {
+        proto: u16,
+        handle: String,
+    },
     ListLobbies,
-    CreateLobby { name: String, password: Option<String> },
-    JoinLobby { name: String, password: Option<String> },
+    CreateLobby {
+        name: String,
+        password: Option<String>,
+    },
+    JoinLobby {
+        name: String,
+        password: Option<String>,
+    },
     LeaveLobby,
     /// Vote to start. The race begins when every player in the lobby is
     /// ready, or when the lobby is full.
-    Ready { ready: bool },
+    Ready {
+        ready: bool,
+    },
     /// Held driver intents. Doubles as the liveness keepalive.
     Input {
         /// Client-assigned, monotonic. Echoed back as `CarState::ack` so the
@@ -127,7 +140,9 @@ pub enum C2S {
         #[serde(default)]
         boost: bool,
     },
-    Ping { nonce: u32 },
+    Ping {
+        nonce: u32,
+    },
 }
 
 /// Server -> client.
@@ -135,21 +150,47 @@ pub enum C2S {
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum S2C {
     /// Reply to a valid Hello.
-    Welcome { proto: u16 },
+    Welcome {
+        proto: u16,
+    },
     /// A refused Hello, join or create. The connection stays open so the
     /// client can show the reason and try something else.
-    Rejected { reason: String },
-    Lobbies { lobbies: Vec<LobbyInfo> },
+    Rejected {
+        reason: String,
+    },
+    Lobbies {
+        lobbies: Vec<LobbyInfo>,
+    },
     /// Reply to a successful create or join. `roster` includes the joiner.
-    Joined { lobby: String, id: u8, slot: u8, laps: u32, roster: Vec<PlayerMeta> },
-    PlayerJoined { meta: PlayerMeta },
-    PlayerLeft { id: u8 },
+    Joined {
+        lobby: String,
+        id: u8,
+        slot: u8,
+        laps: u32,
+        roster: Vec<PlayerMeta>,
+    },
+    PlayerJoined {
+        meta: PlayerMeta,
+    },
+    PlayerLeft {
+        id: u8,
+    },
     /// Race lifecycle. `countdown` is seconds remaining, 0 outside Countdown.
-    Phase { phase: Phase, countdown: f32 },
-    State { tick: u64, cars: Vec<CarState> },
+    Phase {
+        phase: Phase,
+        countdown: f32,
+    },
+    State {
+        tick: u64,
+        cars: Vec<CarState>,
+    },
     /// Finishing order, by player id.
-    Results { order: Vec<u8> },
-    Pong { nonce: u32 },
+    Results {
+        order: Vec<u8>,
+    },
+    Pong {
+        nonce: u32,
+    },
 }
 
 /// Windows `ERROR_IO_PENDING` / `WSA_IO_PENDING`.
@@ -173,16 +214,20 @@ const WINDOWS_IO_PENDING: i32 = 997;
 /// as a joining player never appearing, a race that never went green, and
 /// remote cars frozen at the grid — three unrelated-looking symptoms, one
 /// cause.
+#[must_use]
 pub fn is_transient_read(e: &std::io::Error) -> bool {
     matches!(
         e.kind(),
-        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut | std::io::ErrorKind::Interrupted
+        std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::Interrupted
     ) || e.raw_os_error() == Some(WINDOWS_IO_PENDING)
 }
 
 /// Names and handles arrive from the network. Strip control characters and
 /// cap the length, or a peer can write terminal escapes into the server's log
 /// and the other players' lobby lists.
+#[must_use]
 pub fn sanitize(s: &str, max: usize) -> String {
     let cleaned: String = s.chars().filter(|c| !c.is_control()).take(max).collect();
     if cleaned.trim().is_empty() {
@@ -192,6 +237,7 @@ pub fn sanitize(s: &str, max: usize) -> String {
     }
 }
 
+#[must_use]
 pub fn sanitize_handle(s: &str) -> String {
     let h = sanitize(s, MAX_HANDLE_LEN);
     if h.is_empty() {
@@ -213,14 +259,37 @@ mod tests {
 
     #[test]
     fn messages_round_trip() {
-        let c = C2S::Input { seq: 42, throttle: 1.0, steer: -0.5, handbrake: true, boost: true };
-        assert!(matches!(roundtrip(&c), C2S::Input { seq: 42, handbrake: true, .. }));
+        let c = C2S::Input {
+            seq: 42,
+            throttle: 1.0,
+            steer: -0.5,
+            handbrake: true,
+            boost: true,
+        };
+        assert!(matches!(
+            roundtrip(&c),
+            C2S::Input {
+                seq: 42,
+                handbrake: true,
+                ..
+            }
+        ));
 
         let s = S2C::State {
             tick: 900,
             cars: vec![CarState {
-                id: 3, x: 1.5, z: -2.5, yaw: 0.75, vx: 12.0, vz: -3.0,
-                lap: 2, progress: 1840.0, boost: 1, boosting: true, drift: 0.4, ack: 41,
+                id: 3,
+                x: 1.5,
+                z: -2.5,
+                yaw: 0.75,
+                vx: 12.0,
+                vz: -3.0,
+                lap: 2,
+                progress: 1840.0,
+                boost: 1,
+                boosting: true,
+                drift: 0.4,
+                ack: 41,
             }],
         };
         match roundtrip(&s) {
@@ -242,7 +311,11 @@ mod tests {
         assert_eq!(s, r#"{"t":"list_lobbies"}"#);
         let s = serde_json::to_string(&S2C::Pong { nonce: 7 }).unwrap();
         assert_eq!(s, r#"{"t":"pong","nonce":7}"#);
-        let s = serde_json::to_string(&S2C::Phase { phase: Phase::Countdown, countdown: 1.5 }).unwrap();
+        let s = serde_json::to_string(&S2C::Phase {
+            phase: Phase::Countdown,
+            countdown: 1.5,
+        })
+        .unwrap();
         assert_eq!(s, r#"{"t":"phase","phase":"countdown","countdown":1.5}"#);
     }
 
@@ -277,8 +350,15 @@ mod tests {
     #[test]
     fn a_timed_out_read_is_not_a_dead_connection() {
         use std::io::{Error, ErrorKind};
-        for kind in [ErrorKind::WouldBlock, ErrorKind::TimedOut, ErrorKind::Interrupted] {
-            assert!(is_transient_read(&Error::new(kind, "poll")), "{kind:?} must be transient");
+        for kind in [
+            ErrorKind::WouldBlock,
+            ErrorKind::TimedOut,
+            ErrorKind::Interrupted,
+        ] {
+            assert!(
+                is_transient_read(&Error::new(kind, "poll")),
+                "{kind:?} must be transient"
+            );
         }
         // The one that actually bit: Windows returns 997 for a read that timed
         // out inside an overlapped operation. The whole reason it slipped
@@ -292,7 +372,10 @@ mod tests {
             ),
             "997 now has a sensible ErrorKind; the raw-os-error check can go"
         );
-        assert!(is_transient_read(&pending), "os error 997 must be transient");
+        assert!(
+            is_transient_read(&pending),
+            "os error 997 must be transient"
+        );
     }
 
     #[test]
@@ -304,7 +387,10 @@ mod tests {
             ErrorKind::BrokenPipe,
             ErrorKind::UnexpectedEof,
         ] {
-            assert!(!is_transient_read(&Error::new(kind, "gone")), "{kind:?} must be fatal");
+            assert!(
+                !is_transient_read(&Error::new(kind, "gone")),
+                "{kind:?} must be fatal"
+            );
         }
     }
 
@@ -321,12 +407,17 @@ mod tests {
     /// what it is speaking rather than silently playing a different game.
     #[test]
     fn a_version_mismatch_is_rejectable() {
-        let hello = C2S::Hello { proto: PROTO_VERSION + 1, handle: "x".into() };
+        let hello = C2S::Hello {
+            proto: PROTO_VERSION + 1,
+            handle: "x".into(),
+        };
         match roundtrip(&hello) {
             C2S::Hello { proto, .. } => assert_ne!(proto, PROTO_VERSION),
             other => panic!("wrong variant: {other:?}"),
         }
-        let r = S2C::Rejected { reason: format!("this build speaks fire protocol v{PROTO_VERSION}") };
+        let r = S2C::Rejected {
+            reason: format!("this build speaks fire protocol v{PROTO_VERSION}"),
+        };
         assert!(matches!(roundtrip(&r), S2C::Rejected { .. }));
     }
 }

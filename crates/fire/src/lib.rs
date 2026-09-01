@@ -1,3 +1,6 @@
+// Preserve established client simulation arithmetic and its rounding behavior.
+#![allow(clippy::suboptimal_flops)]
+
 //! Fire Racer — arcade racing through a gothic castle bailey.
 //!
 //! Controls: W/S throttle and brake, A/D steer, Space handbrake to drift,
@@ -42,6 +45,10 @@ pub fn run_local() {
 
 /// Join a race on a server. `cfg` names the lobby; the page has already let
 /// the player pick it from the browser's own listing.
+///
+/// # Errors
+///
+/// Returns an error if the networking backend cannot start the connection.
 pub fn run_online(cfg: online_game::Config) -> Result<(), String> {
     let track = fire_core::castle::track();
     let (meshes, ids) = game::build_meshes(&track);

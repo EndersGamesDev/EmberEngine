@@ -7,3 +7,6 @@ version.workspace = true
 ember-net = { path = "../ember-net" }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

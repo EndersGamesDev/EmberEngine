@@ -14,6 +14,9 @@
 //!
 //! Exit codes: 0 healthy, 1 unhealthy (reason on stderr).
 
+// This command-line health probe reports success and failure directly to its caller.
+#![allow(clippy::print_stderr, clippy::print_stdout)]
+
 use std::time::{Duration, Instant};
 
 use fire_core::proto::{self, C2S, S2C};
@@ -21,14 +24,24 @@ use tungstenite::Message;
 
 const DEADLINE: Duration = Duration::from_secs(12);
 
+/// Occupancy check, for the deploy to consult before it restarts anything.
+/// A separate exit code from "unhealthy" on purpose: a deploy must refuse when
+/// people are mid-race, but must NOT refuse merely because the old server is
+/// unreachable — that is precisely when a redeploy is most needed.
+const EXIT_OCCUPIED: u8 = 2;
+
+// A linear diagnostic script: splitting the probe sequence into helpers would obscure the one path it exists to document.
+#[allow(clippy::too_many_lines)]
 fn main() -> std::process::ExitCode {
-    let Some(url) = std::env::args().nth(1) else {
-        eprintln!("usage: probe <ws-url>");
+    let mut args = std::env::args().skip(1);
+    let Some(url) = args.next() else {
+        eprintln!("usage: probe <ws-url> [--require-empty]");
         return std::process::ExitCode::from(1);
     };
+    let require_empty = args.any(|a| a == "--require-empty");
 
     // Needed for wss:// through the tunnel; harmless for plain ws://.
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    drop(rustls::crypto::ring::default_provider().install_default());
 
     let t0 = Instant::now();
     let (mut ws, _) = match tungstenite::connect(&url) {
@@ -39,10 +52,13 @@ fn main() -> std::process::ExitCode {
         }
     };
     if let tungstenite::stream::MaybeTlsStream::Plain(s) = ws.get_ref() {
-        let _ = s.set_read_timeout(Some(Duration::from_millis(200)));
+        drop(s.set_read_timeout(Some(Duration::from_millis(200))));
     }
 
-    let hello = C2S::Hello { proto: proto::PROTO_VERSION, handle: "probe".into() };
+    let hello = C2S::Hello {
+        proto: proto::PROTO_VERSION,
+        handle: "probe".into(),
+    };
     if let Err(e) = ws.send(Message::text(serde_json::to_string(&hello).unwrap())) {
         eprintln!("probe: handshake succeeded but the send failed: {e}");
         return std::process::ExitCode::from(1);
@@ -51,23 +67,57 @@ fn main() -> std::process::ExitCode {
     while t0.elapsed() < DEADLINE {
         match ws.read() {
             Ok(Message::Text(t)) => {
-                let Ok(msg) = serde_json::from_str::<S2C>(&t) else { continue };
-                if let S2C::Welcome { proto: server } = msg {
-                    let _ = ws.close(None);
-                    if server != proto::PROTO_VERSION {
-                        eprintln!(
-                            "probe: server is ALIVE but speaks fire protocol v{server}, \
-                             this build speaks v{}",
-                            proto::PROTO_VERSION
+                let Ok(msg) = serde_json::from_str::<S2C>(&t) else {
+                    continue;
+                };
+                match msg {
+                    S2C::Welcome { proto: server } => {
+                        if server != proto::PROTO_VERSION {
+                            drop(ws.close(None));
+                            eprintln!(
+                                "probe: server is ALIVE but speaks fire protocol v{server}, \
+                                 this build speaks v{}",
+                                proto::PROTO_VERSION
+                            );
+                            return std::process::ExitCode::from(1);
+                        }
+                        println!(
+                            "probe: healthy — Welcome received, fire protocol v{server}, \
+                             {} ms round trip",
+                            t0.elapsed().as_millis()
                         );
-                        return std::process::ExitCode::from(1);
+                        if !require_empty {
+                            drop(ws.close(None));
+                            return std::process::ExitCode::SUCCESS;
+                        }
+                        // Ask who is on the server before anyone restarts it.
+                        let list = serde_json::to_string(&C2S::ListLobbies).unwrap();
+                        if ws.send(Message::text(list)).is_err() {
+                            eprintln!("probe: could not ask for the lobby list");
+                            return std::process::ExitCode::from(1);
+                        }
                     }
-                    println!(
-                        "probe: healthy — Welcome received, fire protocol v{server}, \
-                         {} ms round trip",
-                        t0.elapsed().as_millis()
-                    );
-                    return std::process::ExitCode::SUCCESS;
+                    S2C::Lobbies { lobbies } => {
+                        drop(ws.close(None));
+                        let busy: Vec<_> = lobbies.iter().filter(|l| l.players > 0).collect();
+                        let total: u32 = busy.iter().map(|l| u32::from(l.players)).sum();
+                        if total == 0 {
+                            println!("probe: nobody in game ({} lobbies)", lobbies.len());
+                            return std::process::ExitCode::SUCCESS;
+                        }
+                        for l in &busy {
+                            println!(
+                                "probe: OCCUPIED — lobby '{}' has {}/{} player(s){}",
+                                l.name,
+                                l.players,
+                                l.cap,
+                                if l.racing { ", racing" } else { "" }
+                            );
+                        }
+                        eprintln!("probe: {total} player(s) in game");
+                        return std::process::ExitCode::from(EXIT_OCCUPIED);
+                    }
+                    _ => {}
                 }
             }
             Ok(Message::Close(_)) => {

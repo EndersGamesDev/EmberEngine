@@ -1,3 +1,6 @@
+// A named mutex guard must keep the entry borrow alive while its count is updated.
+#![allow(clippy::significant_drop_tightening)]
+
 //! Arena-shooter matchmaking + match server.
 //!
 //! Same architecture as ember-server: ONE hub thread owns all state
@@ -14,24 +17,24 @@
 //! Bounded queues, connection caps, message-size caps, per-tick message
 //! budgets, and string sanitization throughout.
 
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io;
 use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use pong_core::proto::{
-    color_for, sanitize_text, BState, LobbyInfo, PState, PlayerMeta, C2S, MAX_HANDLE_LEN,
-    MAX_LOBBY_LEN, MAX_PASSWORD_LEN, PROTO_VERSION, S2C, STATE_EVERY_TICKS,
+    BState, C2S, LobbyInfo, MAX_HANDLE_LEN, MAX_LOBBY_LEN, MAX_PASSWORD_LEN, PROTO_VERSION, PState,
+    PlayerMeta, S2C, STATE_EVERY_TICKS, color_for, sanitize_text,
 };
-use pong_core::shooter::{PlayerIn, Sim, ARENA_HALF, FIXED_DT, MAX_PLAYERS};
-use tungstenite::protocol::WebSocketConfig;
+use pong_core::shooter::{ARENA_HALF, FIXED_DT, MAX_PLAYERS, PlayerIn, Sim};
 use tungstenite::Message;
+use tungstenite::protocol::WebSocketConfig;
 
 pub struct ServerConfig {
     pub max_conns: usize,
@@ -108,7 +111,7 @@ struct Conn {
     last_seen: Instant,
     msgs_this_tick: u32,
     /// Measured transport RTT in sim ticks; floors how far back this
-    /// client's view_tick claim may reach (anti "free 300 ms rewind").
+    /// client's `view_tick` claim may reach (anti "free 300 ms rewind").
     /// Generous until the first measurement arrives.
     rtt_ticks: u64,
 }
@@ -135,11 +138,40 @@ fn alloc_pid(lobby: &Lobby) -> u8 {
         .unwrap_or(0)
 }
 
+fn bounded_tick_age(current: u64, earlier: u64) -> u16 {
+    u16::try_from(current.saturating_sub(earlier).min(u64::from(u16::MAX)))
+        .expect("the tick age is clamped to u16::MAX")
+}
+
+// RTT values are finite and nonnegative, and the established float formula always fits u64.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
+fn rtt_ticks(rtt_ms: u32) -> u64 {
+    ((rtt_ms as f32 / 1000.0) * 60.0).ceil() as u64
+}
+
+/// Runs the arena server until its event channel closes.
+///
+/// # Errors
+///
+/// Returns an error when the listener's local address cannot be read or the internal event
+/// channel disconnects.
+///
+/// # Panics
+///
+/// Panics if an internal connection/lobby bookkeeping invariant is violated or the per-IP
+/// connection-count mutex is poisoned.
+// This public entry point retains ownership of its configuration for API compatibility.
+#[allow(clippy::needless_pass_by_value)]
 pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
     let local = listener.local_addr()?;
     tracing::info!(
         "pong-server (arena shooter) listening on {local} (proto v{PROTO_VERSION}, max {} conns, {} lobbies)",
-        cfg.max_conns, cfg.max_lobbies
+        cfg.max_conns,
+        cfg.max_lobbies
     );
 
     let (events_tx, events_rx) = mpsc::channel::<Ev>();
@@ -148,7 +180,6 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
         Arc::new(std::sync::Mutex::new(HashMap::new()));
 
     {
-        let events_tx = events_tx.clone();
         let live_conns = Arc::clone(&live_conns);
         let per_ip = Arc::clone(&per_ip);
         let max_conns = cfg.max_conns;
@@ -169,16 +200,16 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
                 }
                 // Per-IP cap for direct exposure (loopback = tunnel, exempt).
                 let ip = stream.peer_addr().ok().map(|a| a.ip());
-                if let Some(ip) = ip {
-                    if !ip.is_loopback() {
-                        let mut map = per_ip.lock().unwrap();
-                        let count = map.entry(ip).or_insert(0);
-                        if *count >= MAX_CONNS_PER_IP {
-                            tracing::warn!(%ip, "per-ip cap reached, refusing peer");
-                            continue;
-                        }
-                        *count += 1;
+                if let Some(ip) = ip
+                    && !ip.is_loopback()
+                {
+                    let mut map = per_ip.lock().unwrap();
+                    let count = map.entry(ip).or_insert(0);
+                    if *count >= MAX_CONNS_PER_IP {
+                        tracing::warn!(%ip, "per-ip cap reached, refusing peer");
+                        continue;
                     }
+                    *count += 1;
                 }
                 let id = next_id;
                 next_id += 1;
@@ -187,16 +218,16 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
                 let live_conns = Arc::clone(&live_conns);
                 let per_ip = Arc::clone(&per_ip);
                 thread::spawn(move || {
-                    conn_thread(id, stream, events_tx);
+                    conn_thread(id, stream, &events_tx);
                     live_conns.fetch_sub(1, Ordering::Relaxed);
-                    if let Some(ip) = ip {
-                        if !ip.is_loopback() {
-                            let mut map = per_ip.lock().unwrap();
-                            if let Some(c) = map.get_mut(&ip) {
-                                *c -= 1;
-                                if *c == 0 {
-                                    map.remove(&ip);
-                                }
+                    if let Some(ip) = ip
+                        && !ip.is_loopback()
+                    {
+                        let mut map = per_ip.lock().unwrap();
+                        if let Some(c) = map.get_mut(&ip) {
+                            *c -= 1;
+                            if *c == 0 {
+                                map.remove(&ip);
                             }
                         }
                     }
@@ -205,20 +236,21 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
         });
     }
 
-    hub_loop(events_rx, cfg)
+    hub_loop(&events_rx, &cfg)
 }
 
 /// Per-connection thread: WS handshake, then a single loop that alternates
 /// draining the outbound queue and polling for one inbound frame (short
 /// read timeout). One thread per conn keeps sync tungstenite simple.
-fn conn_thread(id: u64, stream: TcpStream, events_tx: Sender<Ev>) {
+// The handshake and I/O phases stay together so socket ownership and event ordering remain clear.
+#[allow(clippy::too_many_lines)]
+fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
     let peer = stream
         .peer_addr()
-        .map(|a| a.to_string())
-        .unwrap_or_else(|_| "?".into());
-    let _ = stream.set_nodelay(true);
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(15)));
+        .map_or_else(|_| "?".into(), |a| a.to_string());
+    drop(stream.set_nodelay(true));
+    drop(stream.set_read_timeout(Some(Duration::from_secs(10))));
+    drop(stream.set_write_timeout(Some(Duration::from_secs(15))));
 
     // A total handshake deadline: the per-read timeout alone lets a client
     // dribble one byte per window and hold the slot forever. The watchdog
@@ -236,7 +268,7 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: Sender<Ev>) {
                     return;
                 }
             }
-            let _ = watch.shutdown(std::net::Shutdown::Both);
+            drop(watch.shutdown(std::net::Shutdown::Both));
         });
     }
 
@@ -258,19 +290,13 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: Sender<Ev>) {
     // instead of the sim's clean 33.3. 5 ms cuts that smear by four at 200
     // idle wake-ups a second per connection, which is nothing next to the
     // 60 Hz sim it is feeding.
-    let _ = ws
-        .get_ref()
-        .set_read_timeout(Some(Duration::from_millis(5)));
+    drop(
+        ws.get_ref()
+            .set_read_timeout(Some(Duration::from_millis(5))),
+    );
 
     let (tx, rx) = mpsc::sync_channel::<Message>(OUTBOUND_QUEUE);
-    if events_tx
-        .send(Ev::Connected {
-            id,
-            tx,
-            peer: peer.clone(),
-        })
-        .is_err()
-    {
+    if events_tx.send(Ev::Connected { id, tx, peer }).is_err() {
         return;
     }
 
@@ -282,7 +308,10 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: Sender<Ev>) {
         if last_ws_ping.elapsed() >= Duration::from_secs(5) {
             last_ws_ping = Instant::now();
             ping_sent_at = Some(Instant::now());
-            if ws.send(Message::Ping(Default::default())).is_err() {
+            if ws
+                .send(Message::Ping(tungstenite::Bytes::default()))
+                .is_err()
+            {
                 break;
             }
         }
@@ -295,8 +324,8 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: Sender<Ev>) {
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    let _ = ws.close(None);
-                    let _ = ws.flush();
+                    drop(ws.close(None));
+                    drop(ws.flush());
                     break 'outer;
                 }
             }
@@ -317,7 +346,7 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: Sender<Ev>) {
             Ok(Message::Ping(_)) => {}
             Ok(Message::Pong(_)) => {
                 if let Some(t) = ping_sent_at.take() {
-                    let rtt_ms = t.elapsed().as_millis().min(u32::MAX as u128) as u32;
+                    let rtt_ms = u32::try_from(t.elapsed().as_millis()).unwrap_or(u32::MAX);
                     if events_tx.send(Ev::Rtt { id, rtt_ms }).is_err() {
                         break;
                     }
@@ -333,10 +362,12 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: Sender<Ev>) {
             Err(_) => break,
         }
     }
-    let _ = events_tx.send(Ev::Disconnected { id });
+    drop(events_tx.send(Ev::Disconnected { id }));
 }
 
-fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
+// The tick scheduler and broadcasts stay together to preserve their exact ordering.
+#[allow(clippy::too_many_lines)]
+fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
     let tick_dt = Duration::from_secs_f32(FIXED_DT);
     let mut conns: HashMap<u64, Conn> = HashMap::new();
     let mut lobbies: HashMap<String, Lobby> = HashMap::new();
@@ -352,7 +383,7 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
                 break;
             };
             match events_rx.recv_timeout(wait) {
-                Ok(ev) => handle_event(ev, &mut conns, &mut lobbies, &mut lobby_counter, &cfg),
+                Ok(ev) => handle_event(ev, &mut conns, &mut lobbies, &mut lobby_counter, cfg),
                 Err(mpsc::RecvTimeoutError::Timeout) => break,
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     return Err(io::Error::other("accept thread died"));
@@ -361,18 +392,16 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
         }
         for _ in 0..1024 {
             match events_rx.try_recv() {
-                Ok(ev) => handle_event(ev, &mut conns, &mut lobbies, &mut lobby_counter, &cfg),
+                Ok(ev) => handle_event(ev, &mut conns, &mut lobbies, &mut lobby_counter, cfg),
                 Err(_) => break,
             }
         }
         next_tick_at += tick_dt;
         let now = Instant::now();
         if now > next_tick_at + tick_dt * 10 {
-            tracing::warn!(
-                tick,
-                behind_ms = now.duration_since(next_tick_at).as_millis() as u64,
-                "hub stall: resyncing tick clock"
-            );
+            let behind_ms =
+                u64::try_from(now.duration_since(next_tick_at).as_millis()).unwrap_or(u64::MAX);
+            tracing::warn!(tick, behind_ms, "hub stall: resyncing tick clock");
             next_tick_at = now + tick_dt;
         }
         tick += 1;
@@ -391,8 +420,7 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
                     .get(&pid)
                     .map(|(i, _, view_tick, _)| {
                         let mut i = *i;
-                        i.delay_ticks =
-                            apply_tick.saturating_sub(*view_tick).min(u16::MAX as u64) as u16;
+                        i.delay_ticks = bounded_tick_age(apply_tick, *view_tick);
                         i
                     })
                     .unwrap_or_default()
@@ -442,19 +470,13 @@ fn hub_loop(events_rx: Receiver<Ev>, cfg: ServerConfig) -> io::Result<()> {
                             ammo: p.ammo,
                             reloading: p.reload_t > 0.0,
                             deaths: p.death_count,
-                            ack: lobby.inputs.get(&p.id).map(|(_, s, _, _)| *s).unwrap_or(0),
+                            ack: lobby.inputs.get(&p.id).map_or(0, |(_, s, _, _)| *s),
                             ack_age_ticks: lobby
                                 .inputs
                                 .get(&p.id)
-                                .map(|(_, _, _, recv_tick)| {
-                                    lobby
-                                        .sim
-                                        .tick
-                                        .saturating_sub(*recv_tick)
-                                        .min(u16::MAX as u64)
-                                        as u16
-                                })
-                                .unwrap_or(0),
+                                .map_or(0, |(_, _, _, recv_tick)| {
+                                    bounded_tick_age(lobby.sim.tick, *recv_tick)
+                                }),
                         })
                         .collect(),
                     bullets: lobby
@@ -555,6 +577,8 @@ fn roster(lobby: &Lobby, conns: &HashMap<u64, Conn>) -> Vec<PlayerMeta> {
         .collect()
 }
 
+// Keeping protocol validation and state mutation in one dispatch preserves event ordering.
+#[allow(clippy::too_many_lines)]
 fn handle_event(
     ev: Ev,
     conns: &mut HashMap<u64, Conn>,
@@ -584,13 +608,13 @@ fn handle_event(
         }
         Ev::Rtt { id, rtt_ms } => {
             if let Some(c) = conns.get_mut(&id) {
-                let ticks = ((rtt_ms as f32 / 1000.0) * 60.0).ceil() as u64;
+                let ticks = rtt_ticks(rtt_ms);
                 // Smooth toward the newest measurement, biased downward so a
                 // one-off spike doesn't widen the rewind window for long.
                 c.rtt_ticks = if ticks < c.rtt_ticks {
                     ticks
                 } else {
-                    (c.rtt_ticks + ticks) / 2
+                    u64::midpoint(c.rtt_ticks, ticks)
                 };
             }
         }
@@ -660,20 +684,25 @@ fn handle_event(
                                 .and_then(|c| c.handle.clone())
                                 .unwrap_or_else(|| "?".into()),
                             has_password: l.password.is_some(),
-                            players: l.members.len() as u8,
-                            cap: MAX_PLAYERS as u8,
+                            players: u8::try_from(l.members.len())
+                                .expect("lobby membership is capped below u8::MAX"),
+                            cap: u8::try_from(MAX_PLAYERS).expect("MAX_PLAYERS fits in u8"),
                         })
                         .collect();
                     let _ = send_to(conns, id, &S2C::LobbyList { lobbies: list });
                 }
                 (C2S::CreateLobby { name, password }, true) => {
                     if conns.get(&id).unwrap().proto != PROTO_VERSION {
-                        let _ = send_to(conns, id, &S2C::Error {
-                            message: format!(
-                                "this build speaks protocol v{}, the live game is v{PROTO_VERSION} — play the live version",
-                                conns.get(&id).unwrap().proto
-                            ),
-                        });
+                        let _ = send_to(
+                            conns,
+                            id,
+                            &S2C::Error {
+                                message: format!(
+                                    "this build speaks protocol v{}, the live game is v{PROTO_VERSION} — play the live version",
+                                    conns.get(&id).unwrap().proto
+                                ),
+                            },
+                        );
                         return;
                     }
                     let name = sanitize_text(&name, MAX_LOBBY_LEN);
@@ -750,12 +779,16 @@ fn handle_event(
                 }
                 (C2S::JoinLobby { name, password }, true) => {
                     if conns.get(&id).unwrap().proto != PROTO_VERSION {
-                        let _ = send_to(conns, id, &S2C::Error {
-                            message: format!(
-                                "this build speaks protocol v{}, the live game is v{PROTO_VERSION} — play the live version",
-                                conns.get(&id).unwrap().proto
-                            ),
-                        });
+                        let _ = send_to(
+                            conns,
+                            id,
+                            &S2C::Error {
+                                message: format!(
+                                    "this build speaks protocol v{}, the live game is v{PROTO_VERSION} — play the live version",
+                                    conns.get(&id).unwrap().proto
+                                ),
+                            },
+                        );
                         return;
                     }
                     let name = sanitize_text(&name, MAX_LOBBY_LEN);
@@ -911,11 +944,11 @@ fn handle_event(
 /// Remove a connection entirely (disconnect/timeout/violation).
 fn drop_conn(id: u64, conns: &mut HashMap<u64, Conn>, lobbies: &mut HashMap<String, Lobby>) {
     leave_lobby(id, conns, lobbies);
-    if let Some(c) = conns.remove(&id) {
-        if let Some(h) = &c.handle {
-            tracing::info!(conn = id, peer = %c.peer, handle = %h, "disconnected");
-        }
-        // Dropping c.tx makes the conn thread send a Close and exit.
+    // Removing the connection drops its sender and makes the socket thread close.
+    if let Some(c) = conns.remove(&id)
+        && let Some(h) = &c.handle
+    {
+        tracing::info!(conn = id, peer = %c.peer, handle = %h, "disconnected");
     }
 }
 
