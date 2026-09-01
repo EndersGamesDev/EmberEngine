@@ -146,7 +146,7 @@ struct LocalGame {
 }
 
 impl LocalGame {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             sim: Sim::new(),
             accumulator: 0.0,
