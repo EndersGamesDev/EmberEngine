@@ -19,6 +19,12 @@ pub struct GlbPart {
     pub color: [f32; 3],
 }
 
+/// Load the mesh primitives from a binary glTF document.
+///
+/// # Errors
+///
+/// Returns an error when the document is invalid, has no scene or mesh
+/// primitives, or contains more vertices than its 32-bit indices can address.
 pub fn load_glb(bytes: &[u8]) -> Result<Vec<GlbPart>, String> {
     let (doc, buffers, images) =
         gltf::import_slice(bytes).map_err(|e| format!("glb parse: {e}"))?;
@@ -28,7 +34,7 @@ pub fn load_glb(bytes: &[u8]) -> Result<Vec<GlbPart>, String> {
         .or_else(|| doc.scenes().next())
         .ok_or("glb has no scene")?;
     for node in scene.nodes() {
-        collect(&node, Mat4::IDENTITY, &buffers, &images, &mut parts);
+        collect(&node, Mat4::IDENTITY, &buffers, &images, &mut parts)?;
     }
     if parts.is_empty() {
         return Err("glb contains no mesh primitives".into());
@@ -64,7 +70,7 @@ fn collect(
     buffers: &[gltf::buffer::Data],
     images: &[gltf::image::Data],
     out: &mut Vec<GlbPart>,
-) {
+) -> Result<(), String> {
     let local = Mat4::from_cols_array_2d(&node.transform().matrix());
     let world = parent * local;
     if let Some(mesh) = node.mesh() {
@@ -75,19 +81,22 @@ fn collect(
                 continue;
             };
             let positions: Vec<[f32; 3]> = positions.collect();
-            let normals: Vec<[f32; 3]> = reader
-                .read_normals()
-                .map(|n| n.collect())
-                .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
+            let normals: Vec<[f32; 3]> = reader.read_normals().map_or_else(
+                || vec![[0.0, 1.0, 0.0]; positions.len()],
+                std::iter::Iterator::collect,
+            );
             let uvs: Vec<[f32; 2]> = reader
                 .read_tex_coords(0)
                 .map(|t| t.into_f32().collect())
                 .unwrap_or_default();
             // De-index into a flat triangle list (the renderer is unindexed).
-            let indices: Vec<u32> = reader
-                .read_indices()
-                .map(|i| i.into_u32().collect())
-                .unwrap_or_else(|| (0..positions.len() as u32).collect());
+            let indices: Vec<u32> = if let Some(indices) = reader.read_indices() {
+                indices.into_u32().collect()
+            } else {
+                let vertex_count = u32::try_from(positions.len())
+                    .map_err(|_| "glb primitive has more than u32::MAX vertices")?;
+                (0..vertex_count).collect()
+            };
 
             let normal_mat = world.inverse().transpose();
             let vertices: Vec<MeshVertex> = indices
@@ -121,6 +130,7 @@ fn collect(
         }
     }
     for child in node.children() {
-        collect(&child, world, buffers, images, out);
+        collect(&child, world, buffers, images, out)?;
     }
+    Ok(())
 }

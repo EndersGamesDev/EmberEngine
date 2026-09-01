@@ -1,10 +1,13 @@
 //! Debug overlay (native only): the ATW test rig from
 //! docs/atw-first-rendering.md §6. Composited in the PRESENTER pass — never
-//! into the SceneFrame — so the UI stays warp-stable. Provides a scene-Hz
-//! throttle (the presenter keeps re-presenting the last SceneFrame while the
+//! into the `SceneFrame` — so the UI stays warp-stable. Provides a scene-Hz
+//! throttle (the presenter keeps re-presenting the last `SceneFrame` while the
 //! scene pass idles) and frame-timing / scene-staleness readouts.
 //!
-//! Toggle with F3. Starts visible when EMBER_OVERLAY=1.
+//! Toggle with F3. Starts visible when `EMBER_OVERLAY=1`.
+
+// Winit exposes display scale as f64, while egui intentionally consumes f32.
+#![allow(clippy::cast_possible_truncation)]
 
 use std::sync::Arc;
 
@@ -29,6 +32,7 @@ pub struct Overlay {
 }
 
 impl Overlay {
+    #[must_use]
     pub fn new(window: &Arc<Window>) -> Self {
         let ctx = egui::Context::default();
         let state = egui_winit::State::new(
@@ -58,7 +62,7 @@ impl Overlay {
     }
 
     /// Build this frame's UI. `scene_age_ms` = how stale the presented
-    /// SceneFrame is; the core ATW readout.
+    /// `SceneFrame` is; the core ATW readout.
     pub fn run(
         &mut self,
         window: &Window,
@@ -68,7 +72,7 @@ impl Overlay {
     ) -> OverlayDraw {
         if frame_dt > 0.0 {
             let fps = 1.0 / frame_dt;
-            self.fps_smoothed = self.fps_smoothed * 0.95 + fps * 0.05;
+            self.fps_smoothed = fps.mul_add(0.05, self.fps_smoothed * 0.95);
         }
         let raw = self.state.take_egui_input(window);
         let mut throttle_on = self.throttle_on;
