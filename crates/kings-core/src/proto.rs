@@ -580,6 +580,12 @@ mod tests {
             s,
             r#"{"seat":0,"present":true,"alive":true,"garrison":false,"own_turns":3,"timeouts":0,"captured":["pawn","rook"]}"#
         );
+    }
+
+    /// The narration, the formation, the board's own keys and the envelopes
+    /// around them, pinned the same way.
+    #[test]
+    fn the_board_keys_are_pinned() {
         let s = serde_json::to_string(&LastAction {
             seat: 0,
             kind: ActionKind::Move,
@@ -643,7 +649,10 @@ mod tests {
             formation: Formation::DEFAULT,
         })
         .unwrap();
-        assert!(s.starts_with(r#"{"t":"set_formation","formation":{"legend":"#), "{s}");
+        assert!(
+            s.starts_with(r#"{"t":"set_formation","formation":{"legend":"#),
+            "{s}"
+        );
     }
 
     #[test]

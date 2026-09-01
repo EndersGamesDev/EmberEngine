@@ -1654,7 +1654,7 @@ mod tests {
         assert_eq!(st.last.unwrap().seat, 2, "no pass was narrated");
         assert!(has_any_move(&st, 0));
         let ts = targets(&st, Tile::at(8, 8));
-        assert!(!ts.is_empty());
+        assert_eq!(ts.len(), 100 - 13, "every empty tile");
         assert!(ts.iter().all(|t| t.kind == TargetKind::Place));
         for (t, p) in st.pieces_of(0) {
             if p.kind != Kind::Joker {

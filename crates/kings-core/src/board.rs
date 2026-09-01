@@ -1215,7 +1215,9 @@ mod tests {
             let owner = u8::try_from(seat).unwrap();
             for (index, &(u, v)) in SETUP_LOCAL.iter().enumerate() {
                 let t = to_global(owner, u, v);
-                let p = state.piece(t).unwrap_or_else(|| panic!("seat {seat} empty {t:?}"));
+                let p = state
+                    .piece(t)
+                    .unwrap_or_else(|| panic!("seat {seat} empty {t:?}"));
                 assert_eq!(p.owner, owner);
                 assert_eq!(usize::from(p.id), seat * 16 + index, "ids follow the tile");
                 assert_eq!(
@@ -1235,10 +1237,7 @@ mod tests {
         assert_eq!(state.piece(Tile::at(0, 7)).unwrap().kind, N);
         // Commons are pawns whatever the formation.
         for seat in 0..4u8 {
-            let pawns = state
-                .pieces_of(seat)
-                .filter(|(_, p)| p.kind == P)
-                .count();
+            let pawns = state.pieces_of(seat).filter(|(_, p)| p.kind == P).count();
             assert_eq!(pawns, 7, "seat {seat}");
         }
         // A formation swap for one seat leaves the other three untouched.
