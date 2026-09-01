@@ -4,11 +4,11 @@
 //! The code carrier: what a package's Rust commentary contributes to the one
 //! resolution space.
 //!
-//! ADR-T-014 gives the calculus two concrete syntaxes and says nothing about
+//! ADR-L-014 gives the calculus two concrete syntaxes and says nothing about
 //! one of them resolving less than the other: the well-formed environment
-//! (ADR-T-014, A calculus of documentation and source labels) reads a span the same way whichever
+//! (ADR-L-014, A calculus of documentation and source labels) reads a span the same way whichever
 //! delimiters carry it, and the total-resolution invariant
-//! (ADR-T-014, A calculus of documentation and source labels) is a statement about citations
+//! (ADR-L-014, A calculus of documentation and source labels) is a statement about citations
 //! rather than about documents. The owner's ruling of 2026-08-20 makes that
 //! explicit — a label is citable from either surface, whatever kind it is — and
 //! this module is the half of that ruling the prose carrier could not supply.
@@ -29,8 +29,8 @@
 //!
 //! A comment line carries two quite different things, and only one of them is
 //! this carrier's. A profile's standard place is the asset's own attested
-//! field, and the profile that defines it owns it whole: ADR-T-015 owns the
-//! derived label's line and ADR-T-017 owns the claim's, both of which already
+//! field, and the profile that defines it owns it whole: ADR-L-015 owns the
+//! derived label's line and ADR-L-017 owns the claim's, both of which already
 //! resolve what stands there and report what does not. A standard place is a
 //! position, though, never a shape: the derived label's line is the final line
 //! of a covered test's documentation comment and the claim's is the line
@@ -44,7 +44,7 @@
 //! Commentary spans are classified, never dropped: in scanned code text an
 //! opening acute declares intent to mint or cite, and its loss is an error —
 //! the local-classification rule of the participation judgment
-//! (ADR-T-014, A calculus of documentation and source labels). A hugging-parenthesised span is a
+//! (ADR-L-014, A calculus of documentation and source labels). A hugging-parenthesised span is a
 //! citation and resolves. A bare span is a mint nothing warrants — the profiles
 //! census their standard places and nothing else, so no census reaches
 //! commentary — and it is reported rather than passed over; the carrier itself
@@ -61,7 +61,7 @@
 //!
 //! The committed in-file index is a generated region, and a generated
 //! occurrence is an occurrence in full — the generated-compliance invariant
-//! (ADR-T-014, A calculus of documentation and source labels). Its citations resolve against
+//! (ADR-L-014, A calculus of documentation and source labels). Its citations resolve against
 //! the same registries as everything else, marked as generated so a failure
 //! blames the register or its generator rather than an author. A bare span in
 //! the region is the generator minting without warrant, since no adopted
@@ -270,7 +270,7 @@ impl CodeSurface {
     ///
     /// Both stand in code and both are mints, and they differ in what warrants
     /// them: an identity is the author's naming of a concept, while a pin stands
-    /// on the derivation ADR-T-018 fixes. A pin enters only where it is actually
+    /// on the derivation ADR-L-018 fixes. A pin enters only where it is actually
     /// standing at its place and is actually the derivation — a stale one is
     /// reported by the profile and mints nothing, so every citation of the value
     /// it used to state dangles in the commit that moved it, which is the
@@ -633,7 +633,7 @@ enum Context {
     ///
     /// Its citations resolve like any others, and a bare span in it is the
     /// generator minting without warrant — the generated-compliance invariant
-    /// (ADR-T-014, A calculus of documentation and source labels) — since no adopted profile
+    /// (ADR-L-014, A calculus of documentation and source labels) — since no adopted profile
     /// sets a standard place in a generated register.
     Generated,
 }
@@ -753,7 +753,7 @@ const BACKTICK_REASON: &str = "backtick delimiters where the acute syntax was me
 /// Warn on the near-miss forms that stand outside acute spans.
 ///
 /// Two classes, both warnings and neither an occurrence, per the
-/// total-resolution invariant of ADR-T-014, A calculus of documentation and
+/// total-resolution invariant of ADR-L-014, A calculus of documentation and
 /// source labels. A label-shaped span in single
 /// backticks on the code surface used the prose delimiters where the acute was
 /// meant — doubled backticks stay the display form and stay inert. A

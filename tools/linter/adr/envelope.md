@@ -4,7 +4,7 @@
 
 ## Context · `sec:envelope:context`
 
-The repository adopts the base envelope across TOML, JSON, and YAML under ADR-T-023, Adopting the interchange conventions for first-party structured configuration. This record owns the package policy that recognizes that envelope; registry lookup and acceptance remain deferred under the same record.
+The repository adopts the base envelope across TOML, JSON, and YAML under ADR-L-023, Adopting the interchange conventions for first-party structured configuration. This record owns the package policy that recognizes that envelope; registry lookup and acceptance remain deferred under the same record.
 
 ## Decision · `sec:envelope:decision`
 
@@ -14,9 +14,9 @@ TOML, JSON, and YAML are carrier projections of one policy. The compiled carrier
 
 **Decision (Source spelling carries the envelope verdict)** · `dec:envelope:source-shape`
 
-Every declared document opens with `namespace` and then `version` as its first two top-level keys in source order. The namespace value satisfies the adopted label grammar and names the parameter schema, never the document instance: its grammar comes from ADR-T-013, The interchange conventions, and its schema allocation from ADR-T-023, Adopting the interchange conventions for first-party structured configuration.
+Every declared document opens with `namespace` and then `version` as its first two top-level keys in source order. The namespace value satisfies the adopted label grammar and names the parameter schema, never the document instance: its grammar comes from ADR-L-013, The interchange conventions, and its schema allocation from ADR-L-023, Adopting the interchange conventions for first-party structured configuration.
 
-The version value is a triple of non-negative decimal integers in shortest spelling under ADR-T-013, The interchange conventions. Signs, leading zeroes on nonzero values, digit separators, alternate radices, fractions, and exponents fail. Because parser value models erase the ordering and numeric-spelling distinctions the rule draws, conformance is judged by scanning source; parsed values cannot establish it.
+The version value is a triple of non-negative decimal integers in shortest spelling under ADR-L-013, The interchange conventions. Signs, leading zeroes on nonzero values, digit separators, alternate radices, fractions, and exponents fail. Because parser value models erase the ordering and numeric-spelling distinctions the rule draws, conformance is judged by scanning source; parsed values cannot establish it.
 
 **Decision (The type catalog is closed in both directions)** · `dec:envelope:closed-domain`
 

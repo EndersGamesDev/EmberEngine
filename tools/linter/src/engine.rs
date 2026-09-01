@@ -3,16 +3,16 @@
 
 //! The two-pass engine and the reference graph.
 //!
-//! The two-pass invariant of ADR-T-014, A calculus of documentation and source labels, stages
+//! The two-pass invariant of ADR-L-014, A calculus of documentation and source labels, stages
 //! derivation. The adoption data are loaded first; then every carrier source is
 //! harvested and the minting registries of all owners are completed, duplicates
-//! failing by the unique-mint invariant (ADR-T-014, A calculus of documentation and source labels);
+//! failing by the unique-mint invariant (ADR-L-014, A calculus of documentation and source labels);
 //! only then is any resolution judgment derived, against the completed
 //! registries. That staging is what buys the order-independence meta-theorem
-//! (ADR-T-014, A calculus of documentation and source labels), so this module keeps the two
+//! (ADR-L-014, A calculus of documentation and source labels), so this module keeps the two
 //! passes strictly separate rather than resolving as it scans.
 //!
-//! The total-resolution invariant (ADR-T-014, A calculus of documentation and source labels) makes
+//! The total-resolution invariant (ADR-L-014, A calculus of documentation and source labels) makes
 //! resolution total: a parenthesised span whose interior is label-shaped but
 //! resolves nowhere fails and never lapses into text, while a span that parses
 //! as no form was already text before the engine saw it.
@@ -131,18 +131,18 @@ pub struct CitationEdge {
 
 /// One participating imported citation, held for the layer pass.
 ///
-/// The layer law of ADR-T-019 judges admissibility rather than resolution, so
+/// The layer law of ADR-L-019 judges admissibility rather than resolution, so
 /// it needs the imports this engine already recognized rather than a second
-/// recognizer of its own (ADR-T-020, The migration disciplines). What
+/// recognizer of its own (ADR-L-020, The migration disciplines). What
 /// it needs of each is the citing corpus, the cited prefix, the surface, and
 /// the location — never the cited label, whose kind, area and mint site are the
-/// cited corpus's business (ADR-T-019, The layer owner graph).
+/// cited corpus's business (ADR-L-019, The layer owner graph).
 ///
 /// Only participating occurrences are collected, which is what makes the law
-/// blind to a displayed import (ADR-T-019, The layer owner graph).
+/// blind to a displayed import (ADR-L-019, The layer owner graph).
 /// Generated imports participate in full: their derivation exclusion only
 /// keeps a register row from feeding the set it presents
-/// (ADR-T-014, A calculus of documentation and source labels).
+/// (ADR-L-014, A calculus of documentation and source labels).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportSite {
     citing: Owner,
@@ -263,7 +263,7 @@ impl Analysis {
 
     /// Every participating imported citation the harvest met.
     ///
-    /// These are the occurrences the layer law of ADR-T-019 ranges over. They
+    /// These are the occurrences the layer law of ADR-L-019 ranges over. They
     /// are reported here rather than judged here, because whether an import is
     /// admissible is a question about the workspace's manifests and not about
     /// the reference graph.
@@ -352,7 +352,7 @@ struct HeldCitation {
     /// the report may suggest a repair to write. A generated one that dangles
     /// is staleness of the register or a defect of its generator — the
     /// generated-compliance invariant
-    /// (ADR-T-014, A calculus of documentation and source labels) — surfaced beside the
+    /// (ADR-L-014, A calculus of documentation and source labels) — surfaced beside the
     /// exactness check rather than as an author's slip.
     generated: bool,
 }

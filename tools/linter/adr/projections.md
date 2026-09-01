@@ -9,9 +9,9 @@ but summaries assembled by hand inevitably drift from that source. The linter
 therefore owns generated views whose authority is always the current accepted
 profile census.
 
-ADR-T-012, An adjudication procedure for identities, digests, and evidence,
-establishes exact regeneration as the relevant evidence. ADR-T-017, The test
-documentation policy, and ADR-T-018, The constant label profile, establish the
+ADR-L-012, An adjudication procedure for identities, digests, and evidence,
+establishes exact regeneration as the relevant evidence. ADR-L-017, The test
+documentation policy, and ADR-L-018, The constant label profile, establish the
 particular views. This record derives the package policy without reaching any
 outside document at runtime.
 

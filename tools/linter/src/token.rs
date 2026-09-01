@@ -20,7 +20,7 @@
 //! residual recognizer already had is declared here once, and every recognizer
 //! consumes it: a reference wrapped across a comment line boundary is one
 //! reference to every rule that reads its shape
-//! (ADR-T-020, The migration disciplines).
+//! (ADR-L-020, The migration disciplines).
 //!
 //! # Tokenization sees more; participation is unchanged
 //!
@@ -34,7 +34,7 @@
 //! only that two pieces of *the same* referring surface, separated by a line
 //! break and a comment leader, are handed over as one run instead of two. The
 //! participation judgment
-//! (ADR-T-014, A calculus of documentation and source labels) decides what is referring surface; this
+//! (ADR-L-014, A calculus of documentation and source labels) decides what is referring surface; this
 //! module decides only how much of it a rule sees at once.
 //!
 //! # A region is joined text plus a way back to the source

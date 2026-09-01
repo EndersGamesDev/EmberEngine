@@ -10,7 +10,7 @@ data to every corpus they inspect, including a corpus with no decision records
 of its own. Reading a document outside the package would make the executable's
 meaning depend on a file beyond its sealed dependency boundary.
 
-The repository's human account of the shared base registry is ADR-T-011,
+The repository's human account of the shared base registry is ADR-L-011,
 Environment kinds. The linter needs the resulting data and enforcement seam,
 not that record's argument or document structure. Repository-local profiles
 also add rows and reserved kinds that are not part of the shared base.

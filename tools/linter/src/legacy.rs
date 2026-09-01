@@ -5,7 +5,7 @@
 //!
 //! The calculus supersedes a two-level tag system in favour of labels minted at
 //! heads, and retires section-number and record-by-number identities with it
-//! (ADR-T-020, The migration disciplines). No retirement
+//! (ADR-L-020, The migration disciplines). No retirement
 //! is worth anything while the forms can still be written, so this module reads
 //! a document for the four shapes the campaign leaves behind: a section-number
 //! reference, a tag of the superseded system, a decision record named by its
@@ -40,7 +40,7 @@
 //! citation syntax put the tag in a single-backtick span, so that is where a
 //! tag citation stands, while a displayed double-backtick span shows one
 //! without citing it. Both readings follow the participation judgment
-//! (ADR-T-014, A calculus of documentation and source labels) rather than inventing a second notion
+//! (ADR-L-014, A calculus of documentation and source labels) rather than inventing a second notion
 //! of display.
 //!
 //! # Test index
@@ -86,7 +86,7 @@ use crate::token::{Region, markdown_code_spans, markdown_regions};
 ///
 /// ´const:emberlinter:superseded-record-lettering´ (´[EMBER-alg:const:form]´)
 /// ´const:emberlinter:superseded-record-lettering-form-xa7ed5995´
-const RETIRED_RECORD_SERIES: &[char] = &['L', 'M', 'R', 'S'];
+const RETIRED_RECORD_SERIES: &[char] = &['T', 'M', 'R', 'S'];
 
 /// How many digits a record number written without its series letter carries.
 ///
@@ -356,7 +356,7 @@ const TITLE_QUOTE: char = '"';
 /// that a later corpus could falsify. The two families that read the mark read
 /// it through here — the section family takes [`Mark::Section`] and the residual
 /// register takes [`Mark::WordShaped`] — so neither can drift into counting what
-/// the other counts (ADR-T-020, The migration disciplines).
+/// the other counts (ADR-L-020, The migration disciplines).
 ///
 /// The companion arm is the decision the old line-at-a-time reading could not
 /// make. The retired convention introduced a range or a list with a doubled
@@ -606,7 +606,7 @@ fn collect_record_references(raw: &str, found: &mut Vec<Read>) {
 ///
 /// The shape is the record prefix opening a token, then a digit run of exactly
 /// the declared width. Both halves of that are the family's bound rather than
-/// taste (ADR-T-020, The migration disciplines), and both are what keep the
+/// taste (ADR-L-020, The migration disciplines), and both are what keep the
 /// canonical series out of the family by construction rather than by exempting
 /// the files they stand in: a series letter is not a digit, so no lettered form
 /// can be read as a bare one, and a prefix standing inside a longer word
@@ -822,7 +822,7 @@ mod tests {
     fn leaves_displayed_and_code_font_forms_alone() {
         assert_eq!(
             texts(&scan(
-                "The lint covers `§10.3` and kin, and `ADR-L-550` by number.\n"
+                "The lint covers `§10.3` and kin, and `ADR-T-550` by number.\n"
             )),
             Vec::<String>::new(),
             "a form in code font is named, not written"
@@ -847,13 +847,13 @@ mod tests {
     fn reports_retired_record_series_only() {
         assert_eq!(
             texts(&scan(
-                "See ADR-L-550 and ADR-M-032 and ADR-S-013 and ADR-R-001.\n"
+                "See ADR-T-550 and ADR-M-032 and ADR-S-013 and ADR-R-001.\n"
             )),
-            ["ADR-L-550", "ADR-M-032", "ADR-S-013", "ADR-R-001"]
+            ["ADR-T-550", "ADR-M-032", "ADR-S-013", "ADR-R-001"]
         );
         assert_eq!(
             texts(&scan(
-                "But [ADR-T-014](../adr/014-label-calculus.md) keeps its number.\n"
+                "But [ADR-L-014](../adr/014-label-calculus.md) keeps its number.\n"
             )),
             Vec::<String>::new(),
             "the repository's own records are not this campaign's corpus"
@@ -868,13 +868,13 @@ mod tests {
     /// ´test:unit:reads-a-record-reference-standing-last-in-its-sentence´
     #[test]
     fn reads_a_record_reference_standing_last_in_its_sentence() {
-        assert_eq!(texts(&scan("The decision is ADR-L-550.\n")), ["ADR-L-550"]);
+        assert_eq!(texts(&scan("The decision is ADR-T-550.\n")), ["ADR-T-550"]);
         assert_eq!(
             texts(&scan("As recorded (ADR-M-032), it holds.\n")),
             ["ADR-M-032"]
         );
         assert_eq!(
-            texts(&scan("A bare series ADR-L- names nothing.\n")),
+            texts(&scan("A bare series ADR-T- names nothing.\n")),
             Vec::<String>::new()
         );
     }
@@ -907,8 +907,8 @@ mod tests {
         );
 
         let quiet = [
-            "The canonical ADR-T-123 keeps its series.",
-            "So does the retired ADR-L-123 and ADR-M-123 and ADR-S-123 and ADR-R-123.",
+            "The canonical ADR-L-123 keeps its series.",
+            "So does the retired ADR-T-123 and ADR-M-123 and ADR-S-123 and ADR-R-123.",
             "A longer number ADR-1234 is a different token.",
             "A shorter one ADR-12 is no record number.",
             "A prefix inside a word XADR-123 belongs to the word.",
@@ -936,11 +936,11 @@ mod tests {
     #[test]
     fn keeps_the_two_record_families_apart() {
         let path = Path::new("doc.md");
-        let source = "Both ADR-L-550 and ADR-008 stand here.\n";
+        let source = "Both ADR-T-550 and ADR-008 stand here.\n";
 
         assert_eq!(
             texts(&scan_legacy(path, source, &[LegacyRule::RecordNumber])),
-            ["ADR-L-550"]
+            ["ADR-T-550"]
         );
         assert_eq!(
             texts(&scan_legacy(
@@ -952,7 +952,7 @@ mod tests {
         );
         assert_eq!(
             texts(&scan_legacy(path, source, LegacyRule::ALL)),
-            ["ADR-L-550", "ADR-008"],
+            ["ADR-T-550", "ADR-008"],
             "the policy carrying both rules reads each shape exactly once, neither rule reaching the other's"
         );
     }
@@ -1038,7 +1038,7 @@ mod tests {
     /// ´test:unit:holds-a-document-to-the-rules-it-is-given´
     #[test]
     fn holds_a_document_to_the_rules_it_is_given() {
-        let source = "Quotes §4.2 of RFC 8949, cites `land:rigid`, and names ADR-L-550.\n";
+        let source = "Quotes §4.2 of RFC 8949, cites `land:rigid`, and names ADR-T-550.\n";
         let path = Path::new("doc.md");
 
         assert_eq!(texts(&scan_legacy(path, source, &[])), Vec::<String>::new());
@@ -1052,7 +1052,7 @@ mod tests {
                 source,
                 &[LegacyRule::TagForm, LegacyRule::RecordNumber]
             )),
-            ["land:rigid", "ADR-L-550"],
+            ["land:rigid", "ADR-T-550"],
             "a document quoting a foreign corpus keeps the rules it can meet"
         );
     }
@@ -1118,9 +1118,9 @@ mod tests {
         );
         assert_eq!(
             texts(&scan(
-                "The decision is recorded in\nADR-L-550 and stands.\n"
+                "The decision is recorded in\nADR-T-550 and stands.\n"
             )),
-            ["ADR-L-550"],
+            ["ADR-T-550"],
             "a record reference opening a wrapped line is read where it stands"
         );
     }
@@ -1135,7 +1135,7 @@ mod tests {
     #[test]
     fn leaves_a_form_in_a_string_literal_invisible() {
         let path = Path::new("source.rs");
-        let literal = "/// A comment naming nothing.\nlet shown = \"\u{a7}10.3 and ADR-L-550\";\n";
+        let literal = "/// A comment naming nothing.\nlet shown = \"\u{a7}10.3 and ADR-T-550\";\n";
 
         assert_eq!(
             texts(&scan_regions(

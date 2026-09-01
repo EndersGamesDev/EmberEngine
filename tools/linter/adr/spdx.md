@@ -26,7 +26,7 @@ Each half receives only its owner's share (`dec:rows:owner-input`), subtracts it
 
 **Decision (One file-level debt row tolerates every failure)** · `dec:spdx:uniform-toleration`
 
-An activated owner carries one file-level path-set list for the policy. A path is present while the file fails any governing half and leaves only when every governing half is satisfied under ADR-T-020, The migration disciplines.
+An activated owner carries one file-level path-set list for the policy. A path is present while the file fails any governing half and leaves only when every governing half is satisfied under ADR-L-020, The migration disciplines.
 
 The row tolerates failure uniformly. A required line with wrong bytes is absent for toleration exactly as a missing line is absent; neither conforms, and either fails immediately when its path has no row.
 

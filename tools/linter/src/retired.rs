@@ -3,14 +3,14 @@
 
 //! The two identity families the scenario matrix takes with it when it retires.
 //!
-//! ADR-T-017 retires a document that gave ninety-one promises numbers and sorted
+//! ADR-L-017 retires a document that gave ninety-one promises numbers and sorted
 //! them into twelve named divisions. Both identity schemes were the document's
 //! own: nothing outside it defines what the ninetieth scenario is, and nothing
 //! outside it says which promises "None of the above breaks under weird inputs"
 //! covers. When the document goes, a reference to either names nothing at all.
 //!
 //! That is what makes them burn families rather than a style preference. The
-//! burn discipline (ADR-T-020, The migration disciplines) requires that a legacy
+//! burn discipline (ADR-L-020, The migration disciplines) requires that a legacy
 //! reference family is enumerated in a register the linter verifies exactly and
 //! that the enumeration only shrinks, and these two qualify on its
 //! own terms: the corpus carries hundreds of such references, most of them in

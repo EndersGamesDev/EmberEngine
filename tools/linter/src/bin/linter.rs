@@ -5,14 +5,14 @@
 //!
 //! # Output contract
 //!
-//! This command follows the global JSON-only output contract of ADR-T-010.
+//! This command follows the global JSON-only output contract of ADR-L-010.
 //! Stdout carries exactly one JSON result object followed by one newline, stderr
 //! carries JSON control-plane and diagnostic records, and stdout is refused when
 //! it is attached to a terminal.
 //!
 //! # Documented exit-code exception
 //!
-//! ADR-T-010 leaves the exit-code taxonomy beyond the shared `success`,
+//! ADR-L-010 leaves the exit-code taxonomy beyond the shared `success`,
 //! `failure`, and `usage` classes to the owning command's contract. A check that
 //! runs to completion and reports findings has not failed as a command: it has
 //! produced its result. Emitting that result on stdout while still signalling
@@ -41,7 +41,7 @@
 //! command failures, so they exit 1 with empty stdout.
 //!
 //! The assemble command takes the same taxonomy as the check, because it is one:
-//! its default mode is the exact-byte freshness comparison of ADR-T-012 and
+//! its default mode is the exact-byte freshness comparison of ADR-L-012 and
 //! nothing else, so a publication that is not what its parts say it is exits 3
 //! with the report on stdout. With `--write` the publications are regenerated
 //! first, and the staleness it repaired is no longer reported — what remains at
@@ -49,14 +49,14 @@
 //! is not there.
 //!
 //! The project command takes the same taxonomy as the check, because in its
-//! default mode it is one: it regenerates both projections of ADR-T-017 and
+//! default mode it is one: it regenerates both projections of ADR-L-017 and
 //! compares them to the committed bytes, writing nothing, so a projection that is
 //! not what its labels say it is exits 3 with the report on stdout. With `--write`
 //! the projections are rewritten first, and what remains at exit 3 is what writing
 //! could not fix.
 //!
 //! There is no fix mode for the claim profile, and the absence is a consequence of
-//! ADR-T-017's own kind assignment rather than an omission. A claim stands on an
+//! ADR-L-017's own kind assignment rather than an omission. A claim stands on an
 //! authorship warrant: the author of a test chooses what the test establishes and
 //! what to call that statement, and no rule computes it. A sweep that wrote claims
 //! would be inventing the one thing the policy asks a person for. The check runs
@@ -72,7 +72,7 @@
 //! about both. The coverage command measures what the claims come to and decides
 //! nothing about that: a statement nobody cites is the ordinary case, and an
 //! intent nobody has kept is a promise written down rather than a rule broken —
-//! which is the whole reason ADR-T-017 makes uncoveredness a report line instead
+//! which is the whole reason ADR-L-017 makes uncoveredness a report line instead
 //! of a tracker column. Either command exits 0 however long its listings are; 1 and 2
 //! keep their shared meanings, so a caller can still tell "the report is in your
 //! hands" from "the command did not run".
@@ -128,7 +128,7 @@ const COMMAND: &str = "linter";
 const FINDINGS: u8 = 3;
 
 #[derive(Parser)]
-#[command(name = COMMAND, version, about = "Check the corpus against the label calculus of ADR-T-014")]
+#[command(name = COMMAND, version, about = "Check the corpus against the label calculus of ADR-L-014")]
 struct Args {
     #[command(subcommand)]
     command: Command,
@@ -212,8 +212,8 @@ enum Command {
         #[arg(long, value_name = "RESPONSE")]
         output: Option<PathBuf>,
     },
-    /// Verify, or regenerate, three generated surfaces: both projections of ADR-T-017 and
-    /// the constant pins of ADR-T-018.
+    /// Verify, or regenerate, three generated surfaces: both projections of ADR-L-017 and
+    /// the constant pins of ADR-L-018.
     Project {
         /// Repository root whose projections are verified.
         #[arg(long, default_value = ".")]
@@ -277,9 +277,9 @@ impl Command {
 /// The inventory profiles the fix mode can sweep.
 #[derive(Clone, Copy, clap::ValueEnum)]
 enum Profile {
-    /// The test profile of ADR-T-015.
+    /// The test profile of ADR-L-015.
     Test,
-    /// The to-do profile of ADR-T-016.
+    /// The to-do profile of ADR-L-016.
     Todo,
 }
 
@@ -780,8 +780,8 @@ fn run_burn(plan: BurnWritePlan<'_>, write: bool) -> ExitCode {
     }
 }
 
-/// Verify or regenerate three generated surfaces — both projections of ADR-T-017 and
-/// the constant pins of ADR-T-018 — and emit the report.
+/// Verify or regenerate three generated surfaces — both projections of ADR-L-017 and
+/// the constant pins of ADR-L-018 — and emit the report.
 fn run_project(plan: &ProjectionWritePlan<'_>, write: bool) -> ExitCode {
     let report = project_with_write_plan(plan, write);
 

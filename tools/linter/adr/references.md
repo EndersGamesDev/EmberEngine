@@ -4,7 +4,7 @@
 
 ## Context · `sec:references:context`
 
-The label language already gives authored concepts stable, owner-scoped names under ADR-T-014, A calculus of documentation and source labels. This record closes the competing channel for references to tracked files while preserving the structural boundary between authored citation and carried data.
+The label language already gives authored concepts stable, owner-scoped names under ADR-L-014, A calculus of documentation and source labels. This record closes the competing channel for references to tracked files while preserving the structural boundary between authored citation and carried data.
 
 ## Decision · `sec:references:decision`
 
@@ -16,7 +16,7 @@ An authored document or comment cites another tracked file only through its labe
 
 Every tracked document and every comment is in reach. The program owns a total carrier catalogue that classifies each tracked kind with a comment reader or as having no comments; an uncatalogued kind is a finding, never silent nonparticipation.
 
-Structural role alone distinguishes data from citation. Register fields, generated projections, complete patterns and configuration values, schema-marked path columns, and display blocks are data; authored prose around them remains governed. This policy-specific reading changes none of the label calculus's participation judgments of ADR-T-014, A calculus of documentation and source labels.
+Structural role alone distinguishes data from citation. Register fields, generated projections, complete patterns and configuration values, schema-marked path columns, and display blocks are data; authored prose around them remains governed. This policy-specific reading changes none of the label calculus's participation judgments of ADR-L-014, A calculus of documentation and source labels.
 
 **Definition (Recognition joins shape to membership)** · `def:references:recognition`
 
@@ -32,9 +32,9 @@ README documents alone are a carrier exception: they are not scanned, while anot
 
 **Decision (The census declares before it drains)** · `dec:references:declare-then-drain`
 
-The landed recognizer generates the complete per-source census before the verdict is routed (`dec:catalogue:routing-and-codec`); no table is transcribed from a probe. Each owner-policy list then ratchets under ADR-T-020, The migration disciplines: growth fails, and shrinkage lowers or removes its row through the writer.
+The landed recognizer generates the complete per-source census before the verdict is routed (`dec:catalogue:routing-and-codec`); no table is transcribed from a probe. Each owner-policy list then ratchets under ADR-L-020, The migration disciplines: growth fails, and shrinkage lowers or removes its row through the writer.
 
-Burn-down is slow and label-first. Following ADR-T-024, Document-title labels, the target mint lands before the resolving citation, the concrete locator leaves next, and the citing source's allowance lowers last. When no label states the intended claim, the claim is exposed or promoted before replacement; no label is invented from a filename.
+Burn-down is slow and label-first. Following ADR-L-024, Document-title labels, the target mint lands before the resolving citation, the concrete locator leaves next, and the citing source's allowance lowers last. When no label states the intended claim, the claim is exposed or promoted before replacement; no label is invented from a filename.
 
 ## Consequences · `sec:references:consequences`
 

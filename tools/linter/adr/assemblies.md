@@ -9,8 +9,8 @@ publication presents their concatenation. The linter must prove that the
 standing publication is exactly the declared parts without learning which
 publication a repository happens to maintain.
 
-ADR-T-012, An adjudication procedure for identities, digests, and evidence,
-supplies the exact-evidence discipline. ADR-T-020, The migration disciplines,
+ADR-L-012, An adjudication procedure for identities, digests, and evidence,
+supplies the exact-evidence discipline. ADR-L-020, The migration disciplines,
 supplies the declared-parts convention. This record re-derives the executable
 policy around a repository-supplied publication relation.
 

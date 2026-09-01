@@ -7,7 +7,7 @@
 //! a file small enough to hold in the head and lint on its own, and the document
 //! the corpus publishes is the concatenation of them. The concatenation is
 //! generated, so it is a committed generated publication in the sense of
-//! ADR-T-012, and that record decides how it is checked: exact expected-byte
+//! ADR-L-012, and that record decides how it is checked: exact expected-byte
 //! comparison, and no digest anywhere. This module is that comparison, and the
 //! generator beside it.
 //!
@@ -51,12 +51,12 @@
 //!
 //! Both cannot participate. Every head of every part mints, the publication is
 //! those same heads concatenated, and the unique-mint invariant
-//! (ADR-T-014, A calculus of documentation and source labels) would read the second copy of each as a
+//! (ADR-L-014, A calculus of documentation and source labels) would read the second copy of each as a
 //! duplicate of the first. So one of the two is authored and the other is
 //! derived, and the choice is forced by what the rewrite needs: the parts are
 //! the working files and must be independently lintable, so the parts are
 //! authored and the publication participates in nothing — exactly as the
-//! participation judgment (ADR-T-014, A calculus of documentation and source labels) already treats
+//! participation judgment (ADR-L-014, A calculus of documentation and source labels) already treats
 //! a generated region. A citation of the document reaches the mint in the part
 //! that carries it, which is the same label under the same owner, so nothing
 //! outside the parts directory has to know the document was assembled at all.
@@ -810,7 +810,7 @@ fn freshness(root: &Path, assembly: &Assembly, text: &str) -> Vec<Finding> {
 ///
 /// The comparison itself is over the whole byte strings and nothing else; this
 /// only says where, so that a reader has somewhere to look. No digest is taken,
-/// per the artifact case of ADR-T-012.
+/// per the artifact case of ADR-L-012.
 fn first_difference(expected: &str, found: &str) -> String {
     let mut expected_lines = expected.lines();
     let mut found_lines = found.lines();

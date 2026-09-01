@@ -3,7 +3,7 @@
 
 //! The carrier: which sources the checker reads.
 //!
-//! The minting judgment of ADR-T-014, A calculus of documentation and source labels, draws
+//! The minting judgment of ADR-L-014, A calculus of documentation and source labels, draws
 //! minting judgments from the carrier — every authored prose and code source of
 //! the corpus, excluding version-control internals, build and dependency
 //! directories, archived and vendored trees, and generated artifacts.
@@ -14,7 +14,7 @@
 //! every package — because the migration of a package's corpus onto the calculus
 //! cannot be checked by a tool that never reads it. The root's top-level prose
 //! then arrives entire rather than one readme of it: the corpus convention
-//! (ADR-T-019, The layer owner graph) names the root member's carrier
+//! (ADR-L-019, The layer owner graph) names the root member's carrier
 //! as the repository tree outside the packages tree, top-level prose included,
 //! and a register short of that let the repository's own instruction file
 //! prescribe retired forms with nothing reading it. The same register then
@@ -33,9 +33,9 @@
 //! document standing at a package's own root under no carried tree — its
 //! changelog — because the coverage decision admits the title-bearing sources
 //! that stood outside the carrier rather than leaving governed prose out of the
-//! graph (ADR-T-024, Document-title labels).
+//! graph (ADR-L-024, Document-title labels).
 //!
-//! The coexistence caveat (ADR-T-014, A calculus of documentation and source labels) insists that
+//! The coexistence caveat (ADR-L-014, A calculus of documentation and source labels) insists that
 //! traversal failures surface as diagnostics and that an unreadable tree must
 //! never become an empty carrier, so every unreadable directory or file becomes
 //! a finding rather than a silent omission.
@@ -70,12 +70,12 @@ use crate::plan::CorpusPlan;
 /// These are the repository's own authored prose trees — its decision records
 /// and its documentation — and the minting judgment is what puts them in the
 /// carrier: minting is drawn from every committed prose and code source of the
-/// corpus (ADR-T-014, A calculus of documentation and source labels). What the value is short of is that
+/// corpus (ADR-L-014, A calculus of documentation and source labels). What the value is short of is that
 /// judgment's full reach rather than a different rule: Rust sources are still
 /// deliberately outside, awaiting the scanned-region recognition a later wave
 /// fixes, so this list grows toward the judgment and never away from it.
 ///
-/// ´const:emberlinter:repository-prose-trees´ (ADR-T-018, The constant label profile)
+/// ´const:emberlinter:repository-prose-trees´ (ADR-L-018, The constant label profile)
 /// ´const:emberlinter:repository-prose-trees-form-xd53b2adf´
 #[cfg(test)]
 const CARRIED_DIRECTORIES: &[&str] = &["adr", "docs"];
@@ -87,12 +87,12 @@ const CARRIED_DIRECTORIES: &[&str] = &["adr", "docs"];
 /// as the top-level prose, and that phrase is the record's rather than this
 /// module's: the root member's carrier is the repository tree outside the
 /// packages tree — `adr/`, `docs/`, `src/`, `tests/`, and the top-level prose
-/// (ADR-T-019, The layer owner graph). The four trees are carried by
+/// (ADR-L-019, The layer owner graph). The four trees are carried by
 /// the constants around this one; prose with no directory over it, and prose
 /// under a directory no constant carries, is enumerated here, and the filename
 /// rule below reaches it only at depths these entries do not cover. Each is
 /// committed authored prose of the corpus and so is drawn on by the minting
-/// judgment like any other prose source (ADR-T-014, A calculus of documentation and source labels).
+/// judgment like any other prose source (ADR-L-014, A calculus of documentation and source labels).
 ///
 /// The value is an enumeration and not a sweep, because the judgment excludes
 /// generated artifacts and vendored trees and a sweep could tell neither from
@@ -125,7 +125,7 @@ const CARRIED_DIRECTORIES: &[&str] = &["adr", "docs"];
 /// warrant is the convention, and this constant answers to it until the register
 /// moves out of this file and answers to that declaration instead.
 ///
-/// ´const:emberlinter:repository-root-prose´ (ADR-T-018, The constant label profile)
+/// ´const:emberlinter:repository-root-prose´ (ADR-L-018, The constant label profile)
 /// ´const:emberlinter:repository-root-prose-form-x95281044´
 #[cfg(test)]
 const CARRIED_FILES: &[&str] = &[
@@ -146,7 +146,7 @@ const CARRIED_FILES: &[&str] = &[
 ///
 /// TODO ´todo:code:record-where-a-workspace-member-s´: record where a workspace member's directory is fixed for the carrier as well as for the owners.
 ///
-/// ´const:emberlinter:member-tree-home´ (ADR-T-018, The constant label profile)
+/// ´const:emberlinter:member-tree-home´ (ADR-L-018, The constant label profile)
 /// ´const:emberlinter:member-tree-home-word-packages´
 #[cfg(test)]
 const PACKAGES_DIRECTORY: &str = "packages";
@@ -155,14 +155,14 @@ const PACKAGES_DIRECTORY: &str = "packages";
 ///
 /// A package's records and documentation are committed prose of the corpus, so
 /// the minting judgment carries them exactly as it carries the repository's own
-/// (ADR-T-014, A calculus of documentation and source labels). The reason to name them here rather than to
+/// (ADR-L-014, A calculus of documentation and source labels). The reason to name them here rather than to
 /// leave them for a later wave is that the migration of a package's corpus onto
 /// the calculus cannot be checked by a tool that never reads it. The trees are
 /// discovered rather than transcribed — every directory under the packages tree
 /// contributes its own — so a package joins the carrier by existing, and one with
 /// neither directory contributes nothing, which is no defect.
 ///
-/// ´const:emberlinter:package-prose-trees´ (ADR-T-018, The constant label profile)
+/// ´const:emberlinter:package-prose-trees´ (ADR-L-018, The constant label profile)
 /// ´const:emberlinter:package-prose-trees-form-xd53b2adf´
 #[cfg(test)]
 const CARRIED_PACKAGE_DIRECTORIES: &[&str] = &["adr", "docs"];
@@ -172,11 +172,11 @@ const CARRIED_PACKAGE_DIRECTORIES: &[&str] = &["adr", "docs"];
 /// The carrier extension is a filename rule and deliberately not a path rule: the
 /// carrier reaches this name at any depth under a package, so the readme of a
 /// test tree is carried where the test tree expects to find it
-/// (ADR-T-017, The test documentation policy). The name is therefore the whole of
+/// (ADR-L-017, The test documentation policy). The name is therefore the whole of
 /// the rule, and admitting a second one would be admitting a second document
 /// class rather than widening this one.
 ///
-/// ´const:emberlinter:self-documenting-filename´ (ADR-T-018, The constant label profile)
+/// ´const:emberlinter:self-documenting-filename´ (ADR-L-018, The constant label profile)
 /// ´const:emberlinter:self-documenting-filename-text-x633a5d62´
 #[cfg(test)]
 const CARRIED_FILENAME: &str = "README.md";
@@ -188,13 +188,13 @@ const CARRIED_FILENAME: &str = "README.md";
 /// the changelog standing over the repository, and a member's changelog is that
 /// same document written about that member's releases: the two differ in whose
 /// releases they record and in nothing else, so the minting judgment draws on
-/// both alike (ADR-T-014, A calculus of documentation and source labels). What kept one of them out was
+/// both alike (ADR-L-014, A calculus of documentation and source labels). What kept one of them out was
 /// that no carried tree stood over it, which is a fact about where a document
 /// was filed and no argument about whether the repository wrote it. The
 /// coverage decision settles that: every title-bearing tracked source standing
 /// outside the carrier is admitted to it, admission being part of the decision
 /// rather than an expansion somebody might decline
-/// (ADR-T-024, Document-title labels).
+/// (ADR-L-024, Document-title labels).
 ///
 /// The rule is this name at a package's root and deliberately not at any depth,
 /// which is where it parts from the readme rule beside it. A readme documents
@@ -209,7 +209,7 @@ const CARRIED_FILENAME: &str = "README.md";
 /// prose trees, so a member's changelog joins the carrier by existing and a
 /// member without one contributes nothing, which is no defect.
 ///
-/// ´const:emberlinter:package-root-prose´ (ADR-T-018, The constant label profile)
+/// ´const:emberlinter:package-root-prose´ (ADR-L-018, The constant label profile)
 /// ´const:emberlinter:package-root-prose-text-x3d162ee4´
 #[cfg(test)]
 const CARRIED_PACKAGE_FILENAME: &str = "CHANGELOG.md";
@@ -217,14 +217,14 @@ const CARRIED_PACKAGE_FILENAME: &str = "CHANGELOG.md";
 /// The trees the readme rule is applied over, relative to the root.
 ///
 /// The filename rule reaches at any depth under a package
-/// (ADR-T-017, The test documentation policy), and these are this workspace's
+/// (ADR-L-017, The test documentation policy), and these are this workspace's
 /// packages: the packages tree carries every member's readmes at every depth, and
 /// the root package — which sits at the root itself — carries its own through its
 /// source and test trees. Deciding the matrix carrier question by extension
 /// rather than by relocation is what the requirement buys, so every package gains
 /// the same reach in one adoption datum rather than one relocation at a time.
 ///
-/// ´const:emberlinter:filename-rule-reach´ (ADR-T-018, The constant label profile)
+/// ´const:emberlinter:filename-rule-reach´ (ADR-L-018, The constant label profile)
 /// ´const:emberlinter:filename-rule-reach-form-x924fb5f3´
 #[cfg(test)]
 const README_TREES: &[&str] = &["packages", "src", "tests"];

@@ -10,9 +10,9 @@ label required at that item's standard place. Treating those programs as one
 text search would lose the distinct carrier, derivation, and staging rules
 that make each inventory meaningful.
 
-The source doctrines are ADR-T-015, The test label profile; ADR-T-016, The TODO
-label profile; ADR-T-017, The test documentation policy; ADR-T-018, The
-constant label profile; and ADR-T-020, The migration disciplines. This record
+The source doctrines are ADR-L-015, The test label profile; ADR-L-016, The TODO
+label profile; ADR-L-017, The test documentation policy; ADR-L-018, The
+constant label profile; and ADR-L-020, The migration disciplines. This record
 re-derives the common linter contract and the distinctions its policy programs
 must preserve.
 

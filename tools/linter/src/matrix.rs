@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: 2026 Wild Sky Maker
 
-//! The per-folder test matrix of ADR-T-017: one readme per Rust-bearing folder,
+//! The per-folder test matrix of ADR-L-017: one readme per Rust-bearing folder,
 //! each carrying one generated matrix under an authored head.
 //!
 //! # The head is the authored part
 //!
 //! Three things are fixed about the head, and all three are derived rather than
 //! chosen. The title states the level, which the folder's path classifies exactly
-//! as ADR-T-015 classifies a test's: a folder under a package's top-level tests
+//! as ADR-L-015 classifies a test's: a folder under a package's top-level tests
 //! tree is integration, a folder under the crate's tests directory is crate, and
 //! any other folder under the sources is unit. One folder has one level, so one
 //! readme has one matrix, and a title stating the wrong level is a finding rather
@@ -26,7 +26,7 @@
 //! say about the folder stands wherever they want to say it. A readme whose
 //! author adds a paragraph above the matrix keeps its matrix where it was,
 //! which is the property the rejected Ansatz on positional regions
-//! (ADR-T-017, The test documentation policy) was rejected for lacking.
+//! (ADR-L-017, The test documentation policy) was rejected for lacking.
 //!
 //! # The naming run below the head
 //!
@@ -43,10 +43,10 @@
 //!
 //! The Test cell is a real prose citation — the label hugged by parentheses in
 //! a single-backtick span — because the row means its test: the assets caveat
-//! of ADR-T-014, A calculus of documentation and source labels, says a document wanting the
+//! of ADR-L-014, A calculus of documentation and source labels, says a document wanting the
 //! roster wants a generated register, its rows citations like any others, and
 //! the generated-compliance invariant
-//! (ADR-T-014, A calculus of documentation and source labels) makes a generated citation
+//! (ADR-L-014, A calculus of documentation and source labels) makes a generated citation
 //! resolve against the completed registries the generator emitted from. The
 //! checker therefore holds every row to the corpus as it actually is: a row
 //! citing a renamed or deleted test dangles beside the exactness check instead
@@ -113,7 +113,7 @@ use crate::subscribe::Subscription;
 #[cfg(test)]
 use crate::workspace::Package;
 
-/// The kind a matrix head mints, from the displays convention of ADR-T-011.
+/// The kind a matrix head mints, from the displays convention of ADR-L-011.
 ///
 /// The record fixes the mint's kind rather than leaving the generator to choose
 /// one: a matrix label is a mint of the Table kind, whose area and name are both

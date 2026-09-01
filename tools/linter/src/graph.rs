@@ -25,7 +25,7 @@
 //! Citations that resolve nowhere are listed here too, because a reviewer wants
 //! them in the same place as everything else, but they are listed as what the
 //! check already found rather than re-derived. The invariant named
-//! (ADR-T-014, A calculus of documentation and source labels) is a rule of the check, and having
+//! (ADR-L-014, A calculus of documentation and source labels) is a rule of the check, and having
 //! the report restate it as a second gate would give one rule two verdicts.
 //!
 //! # The code surface is not listed

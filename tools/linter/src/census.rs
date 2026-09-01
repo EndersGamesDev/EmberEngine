@@ -3,8 +3,8 @@
 
 //! The census of the test profile: every test function the harness recognizes.
 //!
-//! ADR-T-015 fixes the census of its profile as every test function the cargo
-//! harness recognizes in every workspace member, and the caveat in ADR-T-014,
+//! ADR-L-015 fixes the census of its profile as every test function the cargo
+//! harness recognizes in every workspace member, and the caveat in ADR-L-014,
 //! A calculus of documentation and source labels, insists that a test is whatever
 //! the harness says it is and that the profile only reads the facts the harness
 //! exposes. This module reads exactly those facts, and it reads them from the
@@ -34,7 +34,7 @@
 //! targets; following declarations would make ten covered assets of one
 //! function and report nine collisions that exist nowhere in the source.
 //! Enumerating files gives each function exactly one census entry, which is what
-//! the invariant (ADR-T-014, A calculus of documentation and source labels) is about. Path attributes
+//! the invariant (ADR-L-014, A calculus of documentation and source labels) is about. Path attributes
 //! therefore need no handling: a file reached by one is still enumerated,
 //! exactly once, on its own.
 //!
@@ -80,9 +80,9 @@ use crate::workspace::Package;
 
 /// Directories of a package whose Rust sources the census reads.
 ///
-/// The areas of ADR-T-015 live under exactly these two roots: the crate's own
+/// The areas of ADR-L-015 live under exactly these two roots: the crate's own
 /// sources, and the package's integration test targets
-/// (ADR-T-015, The test label profile). That classification table is what
+/// (ADR-L-015, The test label profile). That classification table is what
 /// fixes the pair — a unit test stands inline in a source, a crate test under
 /// the sources' own test directory, and an integration test in a target under
 /// the package's top-level test root, so the two roots cover all three areas and
@@ -90,7 +90,7 @@ use crate::workspace::Package;
 /// principle; this workspace's carry none, and the table has no area for them,
 /// so they stay out of the census until a decision gives them one.
 ///
-/// ´const:emberlinter:test-census-package-roots´ (ADR-T-018, The constant label profile)
+/// ´const:emberlinter:test-census-package-roots´ (ADR-L-018, The constant label profile)
 /// ´const:emberlinter:test-census-package-roots-form-xac563a2a´
 #[cfg(test)]
 pub const CENSUSED_DIRECTORIES: &[&str] = &["src", "tests"];

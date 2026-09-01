@@ -179,7 +179,7 @@ fn instanced_tree() -> TempDir {
 /// That is the shape a corpus-spanning census earns rather than a defect: the
 /// census reaches every share at once and its ratchet is one repository-wide
 /// artifact filed under the owner that activated it, wherever the counted
-/// files stand (ADR-T-019, The layer owner graph). The fixture holds two
+/// files stand (ADR-L-019, The layer owner graph). The fixture holds two
 /// such rows so that appending to one of them still leaves the other to
 /// survive the rewrite.
 fn spanning_tree() -> TempDir {

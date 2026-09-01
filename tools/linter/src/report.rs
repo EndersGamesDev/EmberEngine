@@ -3,7 +3,7 @@
 
 //! The check report, and the top-level check itself.
 //!
-//! The report is this command's stdout result data under ADR-T-010, so it is one
+//! The report is this command's stdout result data under ADR-L-010, so it is one
 //! JSON object with no human-oriented text outside the `message` fields carried
 //! inside the JSON.
 //!
@@ -102,9 +102,9 @@ pub struct CheckReport {
     pub todo: TodoAnalysis,
     /// What the legacy-implementation profile found over production Rust.
     pub legacy: LegacyAnalysis,
-    /// What the claim profile of ADR-T-017 found, and what it counted rather than reported.
+    /// What the claim profile of ADR-L-017 found, and what it counted rather than reported.
     pub claim: ClaimAnalysis,
-    /// What the constant profile of ADR-T-018 found over the Rust carrier.
+    /// What the constant profile of ADR-L-018 found over the Rust carrier.
     pub constant: ConstantAnalysis,
     /// What the claim coverage came to: statements written, and intents nobody has kept.
     pub coverage: CoverageCounts,
@@ -116,7 +116,7 @@ pub struct CheckReport {
     pub assembly: AssemblyCounts,
     /// What the burn lists were censused at.
     pub burn: BurnCounts,
-    /// What the layer owner graph of ADR-T-019 was found to be, and what it refused.
+    /// What the layer owner graph of ADR-L-019 was found to be, and what it refused.
     pub layers: LayerAnalysis,
     /// What the declared configuration was found to be.
     ///
@@ -159,15 +159,15 @@ pub struct AssemblyCounts {
 /// time a record adds a pass — which is the shape this corpus is in.
 #[derive(Debug, Clone, Default)]
 pub struct Passes {
-    /// What the test profile of ADR-T-015 found.
+    /// What the test profile of ADR-L-015 found.
     pub profile: ProfileAnalysis,
-    /// What the to-do profile of ADR-T-016 found.
+    /// What the to-do profile of ADR-L-016 found.
     pub todo: TodoAnalysis,
     /// What the marked legacy-implementation profile found.
     pub legacy: LegacyAnalysis,
-    /// What the claim profile of ADR-T-017 found.
+    /// What the claim profile of ADR-L-017 found.
     pub claim: ClaimAnalysis,
-    /// What the constant profile of ADR-T-018 found.
+    /// What the constant profile of ADR-L-018 found.
     pub constant: ConstantAnalysis,
     /// What the claim coverage came to, in the figures a check report carries.
     pub coverage: CoverageCounts,
@@ -190,7 +190,7 @@ pub struct Verdicts {
     pub assembly: AssemblyCounts,
     /// What the burn lists were censused at.
     pub burn: BurnCounts,
-    /// What the layer owner graph of ADR-T-019 was found to be.
+    /// What the layer owner graph of ADR-L-019 was found to be.
     pub layers: LayerAnalysis,
     /// What the declared configuration was found to be, when one stands.
     pub configuration: Option<ConfigurationCounts>,
@@ -264,7 +264,7 @@ impl CheckReport {
 /// Run the check over a repository root.
 ///
 /// The passes run in the order the two-pass invariant
-/// (ADR-T-014, A calculus of documentation and source labels) fixes: the adoption data are loaded first —
+/// (ADR-L-014, A calculus of documentation and source labels) fixes: the adoption data are loaded first —
 /// and the signature is part of them, so the workspace is read before anything
 /// is scanned — then the carriers are harvested, and only then is anything
 /// resolved or validated against completed registries.
@@ -526,7 +526,7 @@ pub struct CoverageReport {
 
 /// Report the claim coverage over a repository root.
 ///
-/// The passes run exactly as the check runs them, for the reason ADR-T-017 gives
+/// The passes run exactly as the check runs them, for the reason ADR-L-017 gives
 /// in as many words: the census the coverage report counts is the same code the
 /// check validates against, because a report counting one thing while a gate
 /// judged another is a measurement nobody can act on.
@@ -592,7 +592,7 @@ pub struct AssembleReport {
 /// Assemble every adopted publication, verifying or writing it.
 ///
 /// Without `write` the command forms no side effect at all: it is the exact-byte
-/// freshness comparison of ADR-T-012 and nothing else, which is the mode a gate
+/// freshness comparison of ADR-L-012 and nothing else, which is the mode a gate
 /// runs. With it, every publication is rewritten to what its parts say it is, and
 /// the freshness findings of that same run are the ones the write repaired.
 #[must_use]
@@ -642,7 +642,7 @@ pub struct ProjectReport {
     pub index: ProjectionOutcome,
     /// What the per-folder test matrices came to.
     pub matrix: ProjectionOutcome,
-    /// What the constant pins of ADR-T-018 came to.
+    /// What the constant pins of ADR-L-018 came to.
     pub constant: ProjectionOutcome,
     /// How many findings block the command.
     pub failures: usize,
@@ -650,8 +650,8 @@ pub struct ProjectReport {
     pub findings: Vec<ReportedFinding>,
 }
 
-/// Verify, or regenerate, three generated surfaces: both projections of ADR-T-017 and
-/// the constant pins of ADR-T-018.
+/// Verify, or regenerate, three generated surfaces: both projections of ADR-L-017 and
+/// the constant pins of ADR-L-018.
 ///
 /// The two travel together because the record holds them to one contract: they are
 /// computed from the same labels by the same rules, and a run that refreshed one

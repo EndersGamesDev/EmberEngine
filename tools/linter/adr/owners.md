@@ -9,8 +9,8 @@ corpus owners, workspace members, and direct reach. Compiling the current
 workspace into the package would make that relation stale as soon as a member
 or dependency changed.
 
-ADR-T-019, The layer owner graph, supplies the ownership and reach doctrine.
-ADR-T-015, The test label profile, supplies the mechanical crate-name
+ADR-L-019, The layer owner graph, supplies the ownership and reach doctrine.
+ADR-L-015, The test label profile, supplies the mechanical crate-name
 derivation used by participating package owners. This record re-derives the
 linter's reconciliation policies over declared and discovered data.
 

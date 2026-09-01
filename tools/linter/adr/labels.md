@@ -9,9 +9,9 @@ than one indivisible pass. That separation is useful only if the verdicts
 still describe one graph and run in an order that never guesses around an
 earlier defect.
 
-ADR-T-014, A calculus of documentation and source labels, supplies the human
-language this package implements. ADR-T-019, The layer owner graph, supplies
-the reach distinction, and ADR-T-024, Document-title labels, supplies the
+ADR-L-014, A calculus of documentation and source labels, supplies the human
+language this package implements. ADR-L-019, The layer owner graph, supplies
+the reach distinction, and ADR-L-024, Document-title labels, supplies the
 title-head specialization. This record derives the linter's policy boundary
 from those inputs without depending on any of their files.
 

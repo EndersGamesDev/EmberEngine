@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: 2026 Wild Sky Maker
 
-//! The claim profile of ADR-T-017: the statement a test establishes, said once,
+//! The claim profile of ADR-L-017: the statement a test establishes, said once,
 //! where the test is.
 //!
-//! The kind this module reads is `claim`, and the registry of ADR-T-011
+//! The kind this module reads is `claim`, and the registry of ADR-L-011
 //! catalogues it under the Assertion and Claim rows of the results convention.
 //! The kind is therefore outside the reserved set, so a claim label stands on an
 //! authorship warrant and on nothing else: the author of a test chooses what the
@@ -18,7 +18,7 @@
 //!
 //! A covered test's documentation comment carries the gloss, then the claim, then
 //! the derived test label, and the last of those is the final line exactly as
-//! ADR-T-015 already fixes. The claim goes above it and never after it, so a
+//! ADR-L-015 already fixes. The claim goes above it and never after it, so a
 //! claim written last is a defect of placement reported as one.
 //!
 //! A claim occurrence is one of two forms. A mint stands bare in the code syntax
@@ -252,7 +252,7 @@ fn claim_occurrences(doc: &DocComment) -> Vec<(usize, Label, bool)> {
 /// Whether a documentation line's sole occurrence is claim-kind, either form.
 ///
 /// The one recognizer every consumer of the standard place shares
-/// (ADR-T-020, The migration disciplines): the code lint deciding which
+/// (ADR-L-020, The migration disciplines): the code lint deciding which
 /// lines a profile owns, and the fix mode deciding where the paragraph break
 /// belongs, both ask this rather than each judging a claim line for itself. A
 /// writer carrying a private copy of this judgment is exactly how the fix mode
@@ -302,7 +302,7 @@ fn gloss_above(lines: &[String], claim: usize) -> String {
 /// coverage figure the staging turns on is the same fact counted.
 ///
 /// TODO ´todo:code:the-record-fixes-that-an-unclaimed´: the record fixes that an unclaimed cell carries a placeholder, but no
-/// record fixes which character it is. ADR-T-012 marks an absent entry of its
+/// record fixes which character it is. ADR-L-012 marks an absent entry of its
 /// own class column with an em dash, which is a precedent rather than a rule
 /// reaching this table; promoting it to one is a record edit, not a code edit.
 ///
@@ -358,8 +358,8 @@ pub struct ProjectedCells {
 /// — and the checker holds the reference to the corpus as it actually is. The
 /// generator writes the form it means, in the concrete syntax of the surface
 /// the cell will stand on: the generated-compliance invariant
-/// (ADR-T-014, A calculus of documentation and source labels) makes a generated citation
-/// resolve like any other, and the assets caveat (ADR-T-014, A calculus of documentation and source labels)
+/// (ADR-L-014, A calculus of documentation and source labels) makes a generated citation
+/// resolve like any other, and the assets caveat (ADR-L-014, A calculus of documentation and source labels)
 /// says a register's rows are citations like any others. The word naming the
 /// relation stays outside the citation's parenthesis, which hugs the label
 /// alone. The display form survives only for tokens genuinely shown rather than
@@ -456,7 +456,7 @@ pub struct ClaimAnalysis {
 
 /// The packages whose authoring wave has closed, as the corpus declares it.
 ///
-/// This is the staging instrument of ADR-T-017 and the whole of it. A package in
+/// This is the staging instrument of ADR-L-017 and the whole of it. A package in
 /// the returned set is held to the requirement that every covered test carries a
 /// claim; a package outside it has its claimless tests counted in the coverage
 /// figures and reported nowhere.
@@ -466,7 +466,7 @@ pub struct ClaimAnalysis {
 /// owner holding the claims pair is an owner whose wave has closed, and the crate
 /// names come back through the same derivation the roster reconciles by — so a
 /// package joins in the commit that activates its pair, and the set moves only as
-/// the campaign does (ADR-T-017, The test documentation policy).
+/// the campaign does (ADR-L-017, The test documentation policy).
 ///
 /// The direction matters. A spelling is not uniquely reversible to a crate name,
 /// so the set is taken by asking each discovered member which owner it derives

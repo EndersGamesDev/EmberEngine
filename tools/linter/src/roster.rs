@@ -47,7 +47,7 @@
 //! distinct defects that happen to concern one file — a collision and a missing
 //! registration reported against the same package would become one tolerated row
 //! — so the identity is a digest of the defect's own fields
-//! (ADR-T-020, The migration disciplines).
+//! (ADR-L-020, The migration disciplines).
 //!
 //! # Test index
 //!

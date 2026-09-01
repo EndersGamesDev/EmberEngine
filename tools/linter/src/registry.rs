@@ -299,7 +299,7 @@ impl KindRegistry {
     /// of its own, whose effective relation is the registry's own union theirs, and
     /// is equally express that such a row is not a row of the registry — it becomes
     /// one only if a later edition incorporates it
-    /// (ADR-T-011, Environment kinds). The rows are therefore held apart from
+    /// (ADR-L-011, Environment kinds). The rows are therefore held apart from
     /// the base relation throughout: its own row counts stay stable when a
     /// declared extension is added.
     ///
@@ -423,7 +423,7 @@ impl KindRegistry {
     /// The base name of an authored head, after the admitted devices are removed.
     ///
     /// The presentation-reduction definition
-    /// (ADR-T-011, Environment kinds) lists the devices and gives
+    /// (ADR-L-011, Environment kinds) lists the devices and gives
     /// an expressly catalogued overriding row precedence over reduction, so
     /// this returns a name the moment the relation catalogues it and only then
     /// removes another device.

@@ -26,13 +26,13 @@ region under the policy. Design the
 declaration shape before implementing: the policy needs to say which head
 sets a register tracks, and the existing positional-register convention is
 the semantic starting point. The owner settled the design's leading question
-on 2026-08-29: under ADR-T-014, A calculus of documentation and source labels,
+on 2026-08-29: under ADR-L-014, A calculus of documentation and source labels,
 generated-register occurrences participate in full, while a generated region
 feeds nothing it presents because it never enters that harvest. The design
 therefore makes every row an
 ordinary mint or citation while excluding it from the set or registry the row
 presents, preserving the no-self-support result. The per-owner dagger registers
-of ADR-T-027, The dagger discipline, are further adopter candidates
+of ADR-L-027, The dagger discipline, are further adopter candidates
 under those settled semantics. The existing engine now carries generated
 imported citations through the same import relation as authored citations, so
 the layer-reach law and cited-owner policy dependencies both see them; only the
@@ -67,7 +67,7 @@ prerequisite for the user.
 **OPEN.** The code carrier currently returns no span for an acute left open at
 the end of a commentary line. The calculus instead makes an opening acute
 that remains unclosed when its comment region ends a hard failure under
-ADR-T-014, A calculus of documentation and source labels. Add the carrier
+ADR-L-014, A calculus of documentation and source labels. Add the carrier
 finding at the opening
 delimiter and pin it with code-carrier tests covering ordinary comments,
 documentation comments, adjacent comment lines, and a later valid occurrence

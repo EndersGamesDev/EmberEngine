@@ -35,7 +35,7 @@
 //! A type this binary catalogues no program for still decodes: its entries are
 //! kept by name and the set is marked unadopted. Refusing it here would make this
 //! decoder the adoption authority, and adoption is an owner act recorded
-//! elsewhere (ADR-T-023, Adopting the interchange conventions for first-party structured configuration).
+//! elsewhere (ADR-L-023, Adopting the interchange conventions for first-party structured configuration).
 //!
 //! # Three owner shapes, told apart by the keys they carry
 //!

@@ -2,15 +2,15 @@
 
 **Status:** Decided
 
-The source doctrines are ADR-T-010, The global command-line output contract;
-ADR-T-014, A calculus of documentation and source labels; ADR-T-018, The
-constant label profile; ADR-T-019, The layer owner graph; ADR-T-020, The
-migration disciplines; and ADR-T-021, The linter command contract root policy.
+The source doctrines are ADR-L-010, The global command-line output contract;
+ADR-L-014, A calculus of documentation and source labels; ADR-L-018, The
+constant label profile; ADR-L-019, The layer owner graph; ADR-L-020, The
+migration disciplines; and ADR-L-021, The linter command contract root policy.
 The last of those promotes the three statements root policy needs. This record
 specializes them for the shipped binary and cites those promoted heads where the
 specialization begins.
 
-ADR-T-010, The global command-line output contract, fixed the repository's
+ADR-L-010, The global command-line output contract, fixed the repository's
 command-line output contract and deliberately
 stopped short of one thing. It fixed the shared exit classes — success, failure,
 usage — and left "the exact exit-code taxonomy for root maintenance commands
@@ -29,7 +29,7 @@ would have cited were never written down. Both are discharged here, and
 discharging them is most of why this record exists rather than an incidental
 benefit of it.
 
-Nothing here amends ADR-T-010, The global command-line output contract. The
+Nothing here amends ADR-L-010, The global command-line output contract. The
 shared classes keep the meanings that record gave them, the JSON-only stream
 rules apply unchanged, and the terminal refusal
 applies to every command below. What is added is the command-specific half that
@@ -46,7 +46,7 @@ codes, and the schema of the JSON objects it writes to stdout.
 
 **Note (The other exit 3 belongs to another program)** · `rem:commandcontract:not-the-config-probe`
 
-ADR-T-009, Container Infrastructure Refactor, records an exit code 3 already,
+ADR-L-009, Container Infrastructure Refactor, records an exit code 3 already,
 belonging to the configuration probe, and the global output contract preserves
 that program's codes explicitly where it admits command-specific ones. The two
 threes are unrelated. They are different
@@ -88,11 +88,11 @@ For the corpus subcommands this is a general rule rather than a series of except
 
 The envelope policy is one family rather than one family per carrier. It governs first-party documents in three carriers with one identifier and one parameter file, ignores files outside its declared carrier set like every other policy program ignores out-of-scope inputs, and makes the singular identifier deliberate.
 
-The policy vocabulary is the running binary's and takes two identifiers from these rulings: the licence-header check, ``spdx.headers-conform``, and the envelope check under the single family word the naming ruling fixes. Both are identifiers of the checker's own vocabulary and neither is a namespace label, however alike the two vocabularies look — a rule this corpus states where it can be obeyed rather than left to shape under ADR-T-023, Adopting the interchange conventions for first-party structured configuration. The vocabulary itself is still owed a record of its own; until one exists these two identifiers are recorded here, beside the specification that requires their parameter files, and they move with the rest of the vocabulary when it finds its home. Minting either of them is one of the two acts that rule binds, and nothing in the command surface below checks it: the rule emits no finding, so the discipline is the writer's at the moment of minting and there is no verdict to go looking for in any report this record specifies.
+The policy vocabulary is the running binary's and takes two identifiers from these rulings: the licence-header check, ``spdx.headers-conform``, and the envelope check under the single family word the naming ruling fixes. Both are identifiers of the checker's own vocabulary and neither is a namespace label, however alike the two vocabularies look — a rule this corpus states where it can be obeyed rather than left to shape under ADR-L-023, Adopting the interchange conventions for first-party structured configuration. The vocabulary itself is still owed a record of its own; until one exists these two identifiers are recorded here, beside the specification that requires their parameter files, and they move with the rest of the vocabulary when it finds its home. Minting either of them is one of the two acts that rule binds, and nothing in the command surface below checks it: the rule emits no finding, so the discipline is the writer's at the moment of minting and there is no verdict to go looking for in any report this record specifies.
 
-One further growth of that general rule is settled here rather than left to a lane, because it changes what a declaration is named for. A policy program carrying repository data in its parameters may be deployed more than once under different payloads, and what the surface activates is then a *policy key* — the program identifier together with a declared family key naming the deployment — rather than the identifier alone. The activation pair's policy component is that key, the list is carried at the key, and the parameter declaration is one per activated key rather than one per program identifier or per family word: a program with three activated keys has three declarations against one parameter schema, while a program admitting no family keeps the single declaration described above. The independence of those keys as debt is the independence rule of ADR-T-020, The migration disciplines, and nothing else about the snapshot changes as it grows this way either — each declaration is required, parsed, and cross-validated like every other.
+One further growth of that general rule is settled here rather than left to a lane, because it changes what a declaration is named for. A policy program carrying repository data in its parameters may be deployed more than once under different payloads, and what the surface activates is then a *policy key* — the program identifier together with a declared family key naming the deployment — rather than the identifier alone. The activation pair's policy component is that key, the list is carried at the key, and the parameter declaration is one per activated key rather than one per program identifier or per family word: a program with three activated keys has three declarations against one parameter schema, while a program admitting no family keeps the single declaration described above. The independence of those keys as debt is the independence rule of ADR-L-020, The migration disciplines, and nothing else about the snapshot changes as it grows this way either — each declaration is required, parsed, and cross-validated like every other.
 
-The word *family* now does two jobs in this surface, and a reader who conflates them will look for the wrong file. The family word of a policy identifier is its first atom, the word before the dot, shared by every check of one subject, and it is what a parameter file has always been named for. A declared family key is the second component of a policy key and names one deployment of one program. The first is the checker's own vocabulary and is minted with the identifier; the second is repository data and is declared — which is why one family word may stand over several programs, and one program over several family keys, without either fact constraining the other. They are different kinds sharing a word, exactly as a namespace label and a policy identifier are under ADR-T-023, Adopting the interchange conventions for first-party structured configuration, and the surface keeps them apart by naming the kind rather than by any test of shape.
+The word *family* now does two jobs in this surface, and a reader who conflates them will look for the wrong file. The family word of a policy identifier is its first atom, the word before the dot, shared by every check of one subject, and it is what a parameter file has always been named for. A declared family key is the second component of a policy key and names one deployment of one program. The first is the checker's own vocabulary and is minted with the identifier; the second is repository data and is declared — which is why one family word may stand over several programs, and one program over several family keys, without either fact constraining the other. They are different kinds sharing a word, exactly as a namespace label and a policy identifier are under ADR-L-023, Adopting the interchange conventions for first-party structured configuration, and the surface keeps them apart by naming the kind rather than by any test of shape.
 
 Cross-validation is the part worth stating in a command contract, because it
 decides what a caller's status means. Two questions are asked in order. The
@@ -106,13 +106,13 @@ different answers from this command, under
 (`rule:commandcontract:configuration-verdicts`), and conflating them is what that
 rule exists to prevent.
 
-A third question is asked before either of them, and it is the only ordering constraint inside the load that is visible from outside the command. Every declared file is itself a first-party structured-configuration document, so every one of them carries the interchange envelope the corpus adopted under ADR-T-023, Adopting the interchange conventions for first-party structured configuration. The command reads that envelope first, for each declared file, before it interprets the file's content and before any cross-validation; the priority is envelope, then content, then cross-validation. A declared file whose envelope is absent or malformed refuses the command, and it refuses before its content is read, because a file that has not identified itself is not a snapshot to report against.
+A third question is asked before either of them, and it is the only ordering constraint inside the load that is visible from outside the command. Every declared file is itself a first-party structured-configuration document, so every one of them carries the interchange envelope the corpus adopted under ADR-L-023, Adopting the interchange conventions for first-party structured configuration. The command reads that envelope first, for each declared file, before it interprets the file's content and before any cross-validation; the priority is envelope, then content, then cross-validation. A declared file whose envelope is absent or malformed refuses the command, and it refuses before its content is read, because a file that has not identified itself is not a snapshot to report against.
 
 The command never edits a declared file to make either answer come out
 better. A disagreement between a declaration and the tree is reported, and the
 declaration stands until a human changes it; the one exception is the list
 row array, which the burn command's writing modes maintain under
-ADR-T-020, The migration disciplines, and never beyond it.
+ADR-L-020, The migration disciplines, and never beyond it.
 
 **Specification (The check command)** · `spec:commandcontract:check`
 
@@ -175,7 +175,7 @@ pair without its list, an identity attributed to the wrong owner, a stale view
 lists say before deciding what to do about it, which is why it must survive a
 configuration it would refuse to run policy against.
 
-*Append* is the growth door defined by ADR-T-020, The migration disciplines, and
+*Append* is the growth door defined by ADR-L-020, The migration disciplines, and
 the only writer that may raise a ceiling. It reads from standard input a request
 carrying complete
 proposed rows and an authority, re-reads the tree under a lock, and accepts a
@@ -205,7 +205,7 @@ receipt still refuses to speak into a terminal.
 Writing both is not redundancy. The stdout object is what the caller in the
 loop reads, and the file is what travels with the change as evidence that a
 growth was ruled rather than typed — the pair of artifacts is the whole
-provenance the corpus gets, since ADR-T-020, The migration disciplines, explains that a
+provenance the corpus gets, since ADR-L-020, The migration disciplines, explains that a
 direct edit leaves none. Requiring them to be byte-identical is what stops the
 two from telling different stories: a receipt that could differ from the
 reported outcome would be evidence of nothing in particular.
@@ -318,7 +318,7 @@ corpus.
 
 Instanceable policies add instances to that side too, and likewise no new kind. A family key on a program admitting none, a missing family key on a program requiring one, a repeated key, a declaration whose key is not activated, and an activated key with no declaration are each either a name the running binary cannot resolve or a failure to pair exactly once, and each is refused on the ground the class already gives. A key is well formed or it is not before any of it is a question about this repository, which is why none of these is a finding.
 
-The parameterized policies added instances to that side and no new kind. A pattern the regex engine will not compile is a lexical defect of the declared file and is ranked with the unknown key and the malformed path display under ADR-T-019, The layer owner graph; a set name a section uses without declaring it is a name the binary cannot resolve; and an activated pair whose owner has no section in its policy's parameter file is the pair-to-section defect, which is the parameter file's form of failing to pair. Each is refused for the reason the class already gives.
+The parameterized policies added instances to that side and no new kind. A pattern the regex engine will not compile is a lexical defect of the declared file and is ranked with the unknown key and the malformed path display under ADR-L-019, The layer owner graph; a set name a section uses without declaring it is a name the binary cannot resolve; and an activated pair whose owner has no section in its policy's parameter file is the pair-to-section defect, which is the parameter file's form of failing to pair. Each is refused for the reason the class already gives.
 
 A snapshot that parses and is internally shaped correctly, but disagrees with
 the repository, is judged rather than refused. A path no inclusion row
@@ -444,7 +444,7 @@ and no check depends on it.
 
 The corpus check reconciles this register against the stamp in the source and
 reports every divergence as a finding, so that this record is checked rather
-than trusted, exactly as the reach register of ADR-T-019, The layer owner graph,
+than trusted, exactly as the reach register of ADR-L-019, The layer owner graph,
 already is. What the
 implementation owes:
 
@@ -453,7 +453,7 @@ implementation owes:
   which is the shape a bump without a row takes, and the shape a row without a
   bump takes too;
 - it recognizes the register by its header cells alone, following the
-  recognition contract in ADR-T-020, The migration disciplines, so that the other
+  recognition contract in ADR-L-020, The migration disciplines, so that the other
   tables this record prints are passed over and a table naming its columns
   otherwise is not a register with a defect but not one;
 - it reads the editions for the ratchet above and fails on a gap, a repeat, or a
@@ -463,11 +463,11 @@ implementation owes:
   checker without this record report nothing rather than diverging forever;
 - it reuses the table reader the reach register already uses rather than writing
   a second recognizer for the same shape, for the reason
-  given by ADR-T-020, The migration disciplines, about censuses and gates.
+  given by ADR-L-020, The migration disciplines, about censuses and gates.
 
 The reconciliation is the reason this record registers itself with the migration
-lint on arrival rather than deferring, as ADR-T-019, The layer owner graph, and
-ADR-T-020, The migration disciplines, each did. Those
+lint on arrival rather than deferring, as ADR-L-019, The layer owner graph, and
+ADR-L-020, The migration disciplines, each did. Those
 records deferred because the lane that would enforce them was still to come.
 This record's enforcement lands with it.
 

@@ -12,8 +12,8 @@ tables, and reports what does not hold. Beside the gate it runs the inventory
 profiles for tests, to-do notices and declared constants, the claim census of
 the test documentation policy, the burn registers that ratchet a migration down
 to zero,
-and three generated surfaces — ADR-T-017's two projections, the in-file test
-index and per-folder test matrix, plus ADR-T-018's constant pins — which it
+and three generated surfaces — ADR-L-017's two projections, the in-file test
+index and per-folder test matrix, plus ADR-L-018's constant pins — which it
 verifies by exact byte comparison and rewrites on request.
 
 The commands divide by whether they judge. The check, the assembly, the burn
@@ -32,7 +32,7 @@ linter project --root . --write | jq .
 
 Every claim this package mints names an area, and this register says what each
 area is for. The requirement it answers is
-ADR-T-017, The test documentation policy: an owner minting claims carries one
+ADR-L-017, The test documentation policy: an owner minting claims carries one
 register in its own prose, an entry per area, whose head prose states the stake —
 what is lost if claims of this area fail.
 

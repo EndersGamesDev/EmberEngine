@@ -3,11 +3,11 @@
 
 //! Environment heads: what heads an environment, and which mint is its own.
 //!
-//! ADR-T-014 says of its own corpus that the label at each heading or
+//! ADR-L-014 says of its own corpus that the label at each heading or
 //! environment head is that environment's mint. That sentence names two head
 //! shapes, and this module recognises both. A heading is the shape the document
 //! format supplies: its rung is a division, and the presentation-reduction
-//! presentation-reduction definition in ADR-T-011, Environment kinds, makes
+//! presentation-reduction definition in ADR-L-011, Environment kinds, makes
 //! the rung the base a named division reduces to. A bold run opening a
 //! paragraph — the environment's name, then the name attached to this instance
 //! of it — is the shape the corpus writes where the format offers no
@@ -30,21 +30,21 @@
 //! # The Title head
 //!
 //! A third head class stands beside those two, and the format supplies it as
-//! surely as it supplies the rung. ADR-T-024 adds Title to the head classes
+//! surely as it supplies the rung. ADR-L-024 adds Title to the head classes
 //! declared for Markdown and maps it to one environment name, Document, whose
 //! kind the acceptee's extension set records
-//! (ADR-T-024, Document-title labels). The first structural level-one heading
+//! (ADR-L-024, Document-title labels). The first structural level-one heading
 //! of a source is that head and the only one, even where front matter precedes
 //! it; a later level-one heading is an ordinary division and mints a label of
 //! its own, judged against the name it writes
-//! (ADR-T-024, Document-title labels).
+//! (ADR-L-024, Document-title labels).
 //!
 //! Two asymmetries with the heads above are deliberate and both come from the
 //! same place. A Title head that mints nothing is passed over rather than
 //! reported, because this stage makes a title mint possible and valid while the
 //! stage after it is what makes one required — reporting the corpus's titles
 //! here would report the migration's backlog as today's defects
-//! (ADR-T-024, Document-title labels). And a Title head is asked about
+//! (ADR-L-024, Document-title labels). And a Title head is asked about
 //! under the name the format supplies rather than the words it is titled with,
 //! so no identity is derived from title text.
 //!
@@ -116,7 +116,7 @@ impl HeadName {
     ///
     /// A Title head is named by the format and never by its own spelling: the
     /// document-title record maps the class to one environment name
-    /// (ADR-T-024, Document-title labels), and validating under that name is
+    /// (ADR-L-024, Document-title labels), and validating under that name is
     /// what sends the head through the acceptee's extension set rather than
     /// through the words an author happened to title the source with. Every
     /// other head is asked about under the name it writes.
@@ -206,7 +206,7 @@ pub fn read_heads(
             // makes a title mint possible and valid; requiring one of every
             // titled source is the mint sweep's stage, and reporting the whole
             // corpus's titles here would report that migration's backlog as
-            // today's defects (ADR-T-024, Document-title labels).
+            // today's defects (ADR-L-024, Document-title labels).
             if matches!(shape, Shape::Title(_)) {
                 continue;
             }
@@ -273,7 +273,7 @@ pub fn validate_heads(registry: &KindRegistry, heads: &[Head]) -> Vec<Finding> {
 /// Nothing here reads which kind a head's mint carries except to settle one
 /// case the relation cannot be asked about. A division's base is the rung the
 /// format supplies rather than the word the heading is written with
-/// (ADR-T-011, Environment kinds), so a division minting the rung
+/// (ADR-L-011, Environment kinds), so a division minting the rung
 /// kind is the format's own pair and is decided here; every other head, the
 /// source's Title among them, goes to the relation under its catalogue name and
 /// is decided by the pair it makes there.
@@ -318,7 +318,7 @@ enum Shape {
 ///
 /// The rule is structural order and nothing else: the first structural level-one
 /// heading is the sole title head, even when front matter precedes it
-/// (ADR-T-024, Document-title labels). The blocks handed here are already
+/// (ADR-L-024, Document-title labels). The blocks handed here are already
 /// the structural ones — a level-one heading drawn inside a fenced block is text
 /// the scan never raised to a block — so the first of them at that rung is the
 /// answer, and a source with no such heading has no Title head at all.

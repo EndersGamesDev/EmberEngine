@@ -4,9 +4,9 @@
 //! Workspace discovery: the packages that own covered assets, and their
 //! prefixes.
 //!
-//! The owners environment of ADR-T-014, A calculus of documentation and source labels, lets a
+//! The owners environment of ADR-L-014, A calculus of documentation and source labels, lets a
 //! family of sources register one owner per member, with the prefix derived by
-//! the family's own rule and never written at a mint. ADR-T-015 fixes that rule
+//! the family's own rule and never written at a mint. ADR-L-015 fixes that rule
 //! for this workspace: the owner of a covered test is its package, and the
 //! registered prefix of a package derives mechanically from the crate name by
 //! stripping a leading `ember-`, removing hyphens, and uppercasing the rest.
@@ -14,14 +14,14 @@
 //! The prefixes are therefore computed, not transcribed. This module reads the
 //! workspace member list and each member's package name from the manifests on
 //! disk, so a new package joins the signature by joining the workspace. The
-//! table in ADR-T-015 is checked against the computed set by a test rather than
+//! table in ADR-L-015 is checked against the computed set by a test rather than
 //! being the source of the set.
 //!
 //! Two facts about this workspace are worth recording where the reader will
 //! meet them. The member list uses plain relative paths rather than globs, so
 //! path expansion is deliberately not implemented and an unreadable member
 //! surfaces as a traversal diagnostic under the coexistence caveat
-//! (ADR-T-014, A calculus of documentation and source labels). A declared owner row may also name a
+//! (ADR-L-014, A calculus of documentation and source labels). A declared owner row may also name a
 //! crate whose manifest is intentionally absent, so that datum is carried as a
 //! pending registration rather than reconstructed from this workspace.
 //!
@@ -236,7 +236,7 @@ mod tests {
 
     use super::{Package, prefix_for_crate, retiring_read_workspace};
 
-    /// The crate-to-prefix table of ADR-T-015, transcribed for the assertion.
+    /// The crate-to-prefix table of ADR-L-015, transcribed for the assertion.
     const ADR_TABLE: &[(&str, &str)] = &[
         ("ember-index", "INDEX"),
         ("ember-assayer", "ASSAYER"),

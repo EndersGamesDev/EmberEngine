@@ -3,7 +3,7 @@
 
 //! The fix mode: writing the derived label at every standard place.
 //!
-//! The mechanization requirement of ADR-T-015, The test label profile, is
+//! The mechanization requirement of ADR-L-015, The test label profile, is
 //! explicit that labels are never
 //! maintained by hand at scale — the fix mode performs the sweep and the check
 //! enforces it thereafter. This module is that sweep.
@@ -13,7 +13,7 @@
 //! The fix mode writes labels; it never rewrites prose. Every edit is a whole
 //! line inserted, or a whole line replaced when that line was itself nothing
 //! but an attestation — an acute-delimited span and nothing else, which the
-//! derivation-warrant inference rule (ADR-T-014, A calculus of documentation and source labels)
+//! derivation-warrant inference rule (ADR-L-014, A calculus of documentation and source labels)
 //! says warrants nothing when its text differs from the derivation. Every other
 //! line of every file is left byte for byte as it was, line endings included.
 //! Where the standard place cannot be reached that way — a block documentation
@@ -36,7 +36,7 @@
 //!
 //! # The second profile's sweep
 //!
-//! ADR-T-016's to-do profile puts its standard place inside a line rather than
+//! ADR-L-016's to-do profile puts its standard place inside a line rather than
 //! above one, so its sweep rewrites the marker's own line where the test
 //! profile's inserts a line above an attribute. Everything else is shared: the
 //! same whole-line editor applies the edits bottom-up, the same outcome counts
@@ -379,13 +379,13 @@ fn plan(asset: &CoveredAsset) -> Result<Option<(Repair, LineEdit)>, String> {
     // A claim line above is not authored prose and takes no separator. The
     // record fixes the order as gloss, claim, derived label, with the claim
     // standing directly above the label and nothing between them
-    // (ADR-T-017, The test documentation policy), which is the placement the claim
+    // (ADR-L-017, The test documentation policy), which is the placement the claim
     // reader enforces. The paragraph break belongs above the claim, where the
     // gloss ends, and the labels stand together as the one paragraph they are;
     // a break driven between them writes a comment the check refuses. The
     // judgment of what a claim line is comes from the claim profile's own
     // recognizer rather than a copy made here
-    // (ADR-T-020, The migration disciplines).
+    // (ADR-L-020, The migration disciplines).
     let separator_needed = |above: &str| !above.trim().is_empty() && !line_holds_claim(above);
     let separator_above_last = |lines: &[String]| {
         lines

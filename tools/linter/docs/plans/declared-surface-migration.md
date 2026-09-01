@@ -34,7 +34,7 @@ Bridge retirement is complete only when the ordinary command constructs one snap
 
 **Proposal (Three root amendments precede final closure)** · `proposal:surfmig:owed-root-amendments`
 
-The tracked-universe amendment is discharged. The root partition convention now narrows the accounting universe to the git-tracked corpus and states totality and exclusivity at the row under ADR-T-019, The layer owner graph, so the universe used by declaration validation and review generation is settled before the closure verdict is taken.
+The tracked-universe amendment is discharged. The root partition convention now narrows the accounting universe to the git-tracked corpus and states totality and exclusivity at the row under ADR-L-019, The layer owner graph, so the universe used by declaration validation and review generation is settled before the closure verdict is taken.
 
 The command-contract count restatement is discharged. The configuration specification now states the declared snapshot as a fixed core plus one declaration per parameterized policy family, and says explicitly that nothing else about the snapshot changes as it grows (`spec:commandcontract:configuration`), so no earlier file count survives as normative text.
 

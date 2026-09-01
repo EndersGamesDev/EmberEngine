@@ -6,17 +6,17 @@
 //! Every rule the calculus can break becomes one variant of [`Finding`], and
 //! every variant carries the locations a reader needs to act on it. The
 //! duplicate-mint variant carries both locations because the unique-mint
-//! invariant (ADR-T-014, A calculus of documentation and source labels) requires a second occurrence to
+//! invariant (ADR-L-014, A calculus of documentation and source labels) requires a second occurrence to
 //! be reported together with the first, never as a harmless repeat.
 //!
-//! The inventory variants come from ADR-T-015 and the inventory invariant
-//! (ADR-T-014, A calculus of documentation and source labels). They are kept apart on purpose rather than
+//! The inventory variants come from ADR-L-015 and the inventory invariant
+//! (ADR-L-014, A calculus of documentation and source labels). They are kept apart on purpose rather than
 //! collapsed into one "bad label" report, because the repairs differ: a missing
 //! label is written by the fix mode, a label whose text differs from the
 //! derivation is rewritten by it, a colliding derivation is a naming defect of
 //! the assets that only renaming repairs, and a label of an inventory kind
 //! standing away from its standard place is the hard failure of the
-//! warrant-totality invariant (ADR-T-014, A calculus of documentation and source labels), which no
+//! warrant-totality invariant (ADR-L-014, A calculus of documentation and source labels), which no
 //! fix mode may paper over.
 //!
 //! # Test index
@@ -317,7 +317,7 @@ pub enum Finding {
     /// A covered test carries a label at the standard place that is not its own.
     ///
     /// Writing the label is attestation, not naming: the derivation-warrant
-    /// inference rule (ADR-T-014, A calculus of documentation and source labels) makes an
+    /// inference rule (ADR-L-014, A calculus of documentation and source labels) makes an
     /// occurrence at the standard place whose text differs from the derivation
     /// warrant nothing at all.
     WrongInventoryLabel {
@@ -335,8 +335,8 @@ pub enum Finding {
     /// Two covered assets of one owner share a bare identifier.
     ///
     /// A collision is a naming defect of the assets under the inventory
-    /// invariant (ADR-T-014, A calculus of documentation and source labels), repaired by renaming them
-    /// and never by exempting them. ADR-T-015 states the requirement of the
+    /// invariant (ADR-L-014, A calculus of documentation and source labels), repaired by renaming them
+    /// and never by exempting them. ADR-L-015 states the requirement of the
     /// test profile in terms of the identifier rather than the label, which is
     /// the stricter reading: two assets of one owner sharing an identifier in
     /// two areas derive two labels and still collide, because the reader of
@@ -383,10 +383,10 @@ pub enum Finding {
     },
     /// A label of the todo kind stands on a line no marker heads.
     ///
-    /// The standard place of ADR-T-016's profile is the marker's own line, so a
+    /// The standard place of ADR-L-016's profile is the marker's own line, so a
     /// label of that kind standing anywhere else warrants nothing: there is no
     /// covered notice for it to attest, and the warrant-totality invariant
-    /// (ADR-T-014, A calculus of documentation and source labels) makes it a hard failure rather
+    /// (ADR-L-014, A calculus of documentation and source labels) makes it a hard failure rather
     /// than a mint.
     OrphanTodoLabel {
         /// The label standing where no notice does.
@@ -604,7 +604,7 @@ pub enum Finding {
     /// A file holds more occurrences of a burned family than its register allows.
     ///
     /// The ratchet of the burn discipline
-    /// (ADR-T-020, The migration disciplines) only turns one way, so this is the
+    /// (ADR-L-020, The migration disciplines) only turns one way, so this is the
     /// failure that forbids growth: the corpus wrote a form the campaign is
     /// retiring, and no commit may add one.
     BurnListGrowth {
@@ -656,7 +656,7 @@ pub enum Finding {
     },
     /// A covered test of a package whose authoring wave has closed carries no claim.
     ///
-    /// Staged until that commit, by the staging requirement of ADR-T-017, The test
+    /// Staged until that commit, by the staging requirement of ADR-L-017, The test
     /// documentation policy: a claimless test is a coverage figure
     /// while its package's wave is open, and this failure the moment the wave
     /// closes.
@@ -709,7 +709,7 @@ pub enum Finding {
     ///
     /// A hand-edit inside a generated region is indistinguishable from
     /// staleness and is treated as staleness, per the enforcement requirement
-    /// (ADR-T-017, The test documentation policy): the check reports it and the fix
+    /// (ADR-L-017, The test documentation policy): the check reports it and the fix
     /// overwrites it.
     StaleTestIndex {
         /// The Rust source carrying the index.
@@ -765,7 +765,7 @@ pub enum Finding {
     ///
     /// In scanned code text an opening acute declares intent to mint or cite —
     /// the local-classification rule of the participation judgment
-    /// (ADR-T-014, A calculus of documentation and source labels) — and commentary can warrant
+    /// (ADR-L-014, A calculus of documentation and source labels) — and commentary can warrant
     /// neither: the profiles census their standard places and nothing else, and
     /// the carrier never mints. The repair is the author's choice of intent:
     /// wrap the span in hugging parentheses to cite, or drop the acutes to
@@ -790,7 +790,7 @@ pub enum Finding {
     },
     /// A citation in a generated region resolves nowhere.
     ///
-    /// The generated-compliance invariant of ADR-T-014, A calculus of documentation
+    /// The generated-compliance invariant of ADR-L-014, A calculus of documentation
     /// and source labels, makes a generated citation
     /// resolve as every citation must, against the completed registries the
     /// generator emitted from. One that dangles is therefore never the author's
@@ -832,7 +832,7 @@ pub enum Finding {
     },
     /// A constant's identity stands in a shape its standard place does not own.
     ///
-    /// ADR-T-018 gives the identity's place one shape — the mint, a space, and
+    /// ADR-L-018 gives the identity's place one shape — the mint, a space, and
     /// the program citation hugged by its parentheses, alone on the line — so
     /// that a reader can confirm it by eye. A line minting this kind in any
     /// other shape is reported rather than passed over, because a shape the
@@ -844,7 +844,7 @@ pub enum Finding {
     /// A constant's program citation names no catalogued pinning program.
     ///
     /// The class of a constant is a citation rather than a word, so adding a
-    /// class means minting a program's environment in ADR-T-018 and
+    /// class means minting a program's environment in ADR-L-018 and
     /// implementing its derivation. A citation of anything else is reported at
     /// the constant, where the repair is, rather than left to dangle.
     UncataloguedPinningProgram {
@@ -900,7 +900,7 @@ pub enum Finding {
     /// A constant carries an identity and cites no warrant for its value.
     ///
     /// The warrant is the occurrence that answers the question a reader of a
-    /// magic number actually has, and ADR-T-018 accepts a to-do standard place
+    /// magic number actually has, and ADR-L-018 accepts a to-do standard place
     /// in its stead during the bootstrap. What is refused is the third state:
     /// an identity over documentation that neither cites a warrant nor admits
     /// owing one.
@@ -914,7 +914,7 @@ pub enum Finding {
     ///
     /// The fallback that once answered for an unaccounted path is gone with
     /// nothing put in its place, so the corpus asks whose the file is instead of
-    /// assuming (ADR-T-019, The layer owner graph). The path is rendered
+    /// assuming (ADR-L-019, The layer owner graph). The path is rendered
     /// in the reversible display, because a file whose name is not text is
     /// exactly the file a lossy report would lose.
     UnaccountedPath {

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: 2026 Wild Sky Maker
 
-//! The constant profile of ADR-T-018: the census, the nine pinning programs,
+//! The constant profile of ADR-L-018: the census, the nine pinning programs,
 //! and the two standard places.
 //!
-//! The profiles signature of ADR-T-014, A calculus of documentation and source labels, says
+//! The profiles signature of ADR-L-014, A calculus of documentation and source labels, says
 //! what a profile must fix: its kind token, its census, its classification
 //! rule, its name transformation, and its standard place. This profile fixes
 //! them differently from the two before it, and the difference is the record's
@@ -23,7 +23,7 @@
 //!
 //! A macro invocation binds the same way and is adopted the same way, its value
 //! being the argument tokens standing between its delimiters rather than an
-//! expression after an equals sign (ADR-T-018, The constant label profile). Two
+//! expression after an equals sign (ADR-L-018, The constant label profile). Two
 //! asymmetries with the constants beside it are deliberate. An invocation
 //! carrying no mint of this kind is not censused at all, so the population here
 //! depends on adoption where the constants' does not; and a `macro_rules!`
@@ -39,7 +39,7 @@
 //!
 //! # The programs
 //!
-//! Each pinning program is a documented algorithm minting in ADR-T-018 and
+//! Each pinning program is a documented algorithm minting in ADR-L-018 and
 //! implemented here beside its mint. A program decides two things at once: what
 //! it accepts, so that a float cited as a count is reported rather than pinned,
 //! and how what it accepts derives the slug the pin carries. Every derivation but
@@ -51,7 +51,7 @@
 //! The two digest programs hash their input rather than spelling it, which is
 //! what lets a table or a format string be pinned at all. No derivation emits the
 //! source text of a type: the value alone is read, save for the implementing
-//! type's lowercased final path segment, which is the hazard ADR-T-018 records at
+//! type's lowercased final path segment, which is the hazard ADR-L-018 records at
 //! its caveat.
 //!
 //! # Test index
@@ -120,7 +120,7 @@ use crate::workspace::Package;
 ///
 /// The token is the record's own local extension row, which catalogues the
 /// Constant environment against this spelling and no other; the registry of
-/// ADR-T-011 offers none, a constant being neither what a deployment chooses nor
+/// ADR-L-011 offers none, a constant being neither what a deployment chooses nor
 /// what a build chooses (´[EMBER-sig:constants:kind-extension]´).
 ///
 /// ´const:emberlinter:constant-kind-token´ (´[EMBER-alg:const:word]´)
@@ -183,7 +183,7 @@ const DIGEST_PRIME: u64 = 0x0000_0100_0000_01b3;
 /// ´const:emberlinter:digest-retained-bits-mask-form-x043bdbfc´
 const LOW_HALF: u64 = 0x0000_0000_ffff_ffff;
 
-/// The to-do markers a notice may be written with, per ADR-T-016.
+/// The to-do markers a notice may be written with, per ADR-L-016.
 ///
 /// This module reads them to recognise the interim warrant: a to-do standard
 /// place standing in a constant's documentation is the bootstrap's accepted
@@ -238,7 +238,7 @@ pub enum Program {
 }
 
 impl Program {
-    /// Every catalogued program, in the order ADR-T-018 tables them.
+    /// Every catalogued program, in the order ADR-L-018 tables them.
     #[must_use]
     pub const fn all() -> [Self; 9] {
         [
@@ -491,7 +491,7 @@ fn literal_of(expression: &Expr) -> Option<Lit> {
     }
 }
 
-/// The digest word of a byte sequence, as ADR-T-018 defines it.
+/// The digest word of a byte sequence, as ADR-L-018 defines it.
 ///
 /// The 64-bit FNV-1a hash, of which the low half is written in eight lowercase
 /// hexadecimal digits behind the letter that keeps the word from beginning like a
@@ -867,7 +867,7 @@ fn identity_place_text(identity: &Label, cited: &str) -> String {
     format!("{ACUTE}{identity}{ACUTE} ({ACUTE}{cited}{ACUTE})")
 }
 
-/// Whether a documentation line heads a to-do notice, per ADR-T-016's census.
+/// Whether a documentation line heads a to-do notice, per ADR-L-016's census.
 fn is_notice(line: &str) -> bool {
     NOTICE_MARKERS.iter().any(|marker| {
         line.strip_prefix(marker)
@@ -886,7 +886,7 @@ pub struct ConstantAnalysis {
     /// declares and the macro invocations its documentation adopts. The second
     /// class depends on adoption where the first does not, so this figure is a
     /// fact about the source tree only up to the invocations somebody has
-    /// adopted in it (ADR-T-018, The constant label profile).
+    /// adopted in it (ADR-L-018, The constant label profile).
     pub declarations: usize,
     /// How many of them carry an identity, and are therefore held to the record.
     pub covered: usize,
@@ -1236,9 +1236,9 @@ pub fn analyze_constants(
 /// One root, not two: what a test fixes is fixed for the test, and the record's
 /// census admits production sources alone — a covered constant stands in a Rust
 /// source under the package's own source root, which is the tree named here
-/// (ADR-T-018, The constant label profile).
+/// (ADR-L-018, The constant label profile).
 ///
-/// ´const:emberlinter:constant-census-production-root´ (ADR-T-018, The constant label profile)
+/// ´const:emberlinter:constant-census-production-root´ (ADR-L-018, The constant label profile)
 /// ´const:emberlinter:constant-census-production-root-word-src´
 #[cfg(test)]
 const CENSUSED_DIRECTORY: &str = "src";
@@ -1248,9 +1248,9 @@ const CENSUSED_DIRECTORY: &str = "src";
 /// The same census carves this tree back out of the root above, because the
 /// argument for warranting a value — that a reader meeting it will ask why it is
 /// that and not another — is an argument about code that ships
-/// (ADR-T-018, The constant label profile).
+/// (ADR-L-018, The constant label profile).
 ///
-/// ´const:emberlinter:constant-census-excluded-tree´ (ADR-T-018, The constant label profile)
+/// ´const:emberlinter:constant-census-excluded-tree´ (ADR-L-018, The constant label profile)
 /// ´const:emberlinter:constant-census-excluded-tree-text-x9365b9f3´
 #[cfg(test)]
 const CRATE_TESTS: &str = "src/tests";
@@ -1571,7 +1571,7 @@ fn push_declaration(
 /// this census, which is the staged adoption held exactly as it is held for
 /// constants: presence is not enforced, so a source full of invocations acquires
 /// no coverage burden from the convention that admits them
-/// (ADR-T-018, The constant label profile).
+/// (ADR-L-018, The constant label profile).
 ///
 /// A `macro_rules!` definition is passed over whatever its documentation says. A
 /// definition is not an invocation, it declares no arguments of its own, and the

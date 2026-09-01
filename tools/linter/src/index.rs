@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: 2026 Wild Sky Maker
 
-//! The in-file test index of ADR-T-017: one generated table per test-carrying
+//! The in-file test index of ADR-L-017: one generated table per test-carrying
 //! Rust source, in that source's module documentation.
 //!
 //! The index is a projection of the two labels and of nothing else, so it is
@@ -15,7 +15,7 @@
 //! The Test cell is a rustdoc intra-doc link to the test function, which does two
 //! jobs at once. It is clickable in the generated documentation, so the index is
 //! a navigation surface rather than a list of strings; and it keeps the derived
-//! test label out of the cells, so ADR-T-015's misplaced-label rule never engages
+//! test label out of the cells, so ADR-L-015's misplaced-label rule never engages
 //! against a table that is not a standard place. The Area and Claim cells are the
 //! claim's area and the test's gloss, computed once beside the claim profile so
 //! that a file's index and its folder's matrix can never say different things
@@ -29,7 +29,7 @@
 //! nearly right is not a projection with a defect, it is not the projection. A
 //! position is not an identity either, so a module doc gaining a paragraph
 //! above the index keeps its index where it was — which is what the rejected
-//! Ansatz named (ADR-T-017, The test documentation policy) settles.
+//! Ansatz named (ADR-L-017, The test documentation policy) settles.
 //!
 //! The corpus's eight hundred hand-written test tables are exactly the near-miss
 //! case: they head the same section and rule different columns. They read as no

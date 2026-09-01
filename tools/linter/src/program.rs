@@ -481,7 +481,7 @@ impl PrefixNumbers {
 ///
 /// The rule is called rather than restated, so a shielded instance and the
 /// section family cannot come to disagree about what a reference is
-/// (ADR-T-020, The migration disciplines).
+/// (ADR-L-020, The migration disciplines).
 fn section_spans(text: &str) -> Vec<(usize, usize)> {
     let mut spans = Vec::new();
 

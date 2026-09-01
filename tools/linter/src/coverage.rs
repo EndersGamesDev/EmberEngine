@@ -4,7 +4,7 @@
 //! The claim-coverage report: what is claimed, what witnesses it, and what does
 //! not.
 //!
-//! ADR-T-017 names the coverage report twice and gives it two jobs. It is the
+//! ADR-L-017 names the coverage report twice and gives it two jobs. It is the
 //! staging instrument — a covered test with no claim is counted here and reported
 //! nowhere until its package's authoring wave closes — and it is the instrument
 //! the scenario matrix retires behind, the thing that proves nothing was dropped

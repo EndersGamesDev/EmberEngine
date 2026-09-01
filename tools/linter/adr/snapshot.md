@@ -30,4 +30,4 @@ Only after every declaration passes does a snapshot exist. A disagreement knowab
 
 Staging and committing a declaration do not change the bytes the loader reads; writing or removing it does. Policy declarations can therefore extend the surface without extending a compiled filename list, while the required core keeps the snapshot's shape grounded.
 
-Envelope version claims retain the repository's adopted meaning under ADR-T-023, Adopting the interchange conventions for first-party structured configuration. This record fixes when their byte-level defects refuse; it does not redefine version acceptance or policy semantics.
+Envelope version claims retain the repository's adopted meaning under ADR-L-023, Adopting the interchange conventions for first-party structured configuration. This record fixes when their byte-level defects refuse; it does not redefine version acceptance or policy semantics.

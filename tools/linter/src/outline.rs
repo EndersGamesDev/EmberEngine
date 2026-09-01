@@ -18,7 +18,7 @@
 //! The relation is declared, never inferred. Inferring it would mean guessing
 //! which of an entry's citations is the head it tracks, and a guess is exactly
 //! what an outline exists to remove. An outline therefore carries a table, in the
-//! idiom this corpus already reads adoption data in — the registry of ADR-T-011
+//! idiom this corpus already reads adoption data in — the registry of ADR-L-011
 //! is read from that document's own tables in the same way — under a heading of
 //! its own:
 //!
@@ -63,7 +63,7 @@
 //! way, the Entry cell would mint a second time and the Head cell would mint a
 //! label belonging to another document. Those cells display labels as data
 //! rather than using them, so the display syntax of the participation judgment
-//! (ADR-T-014, A calculus of documentation and source labels) is the correct one, and one of them
+//! (ADR-L-014, A calculus of documentation and source labels) is the correct one, and one of them
 //! written to participate is reported rather than read past — the duplicate
 //! mint it would otherwise cause says nothing about tracking.
 //!

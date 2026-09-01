@@ -9,7 +9,7 @@ than a search result. The linter needs a stable definition of each family, a
 finite source selection, and a debt identity that can fall without permitting
 an occurrence to move elsewhere unnoticed.
 
-ADR-T-020, The migration disciplines, is the human doctrine from which these
+ADR-L-020, The migration disciplines, is the human doctrine from which these
 programs descend. This record re-derives the linter's common policy semantics;
 the argument for the division-name family remains in this package's Division
 names record.

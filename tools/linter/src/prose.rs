@@ -3,7 +3,7 @@
 
 //! Markdown prose scanning: which spans participate, and what they read as.
 //!
-//! The participation judgment of ADR-T-014, A calculus of documentation and
+//! The participation judgment of ADR-L-014, A calculus of documentation and
 //! source labels, settles what this module may look at.
 //! In prose, occurrences in authored text participate, while fenced blocks and
 //! double-backtick spans do not — a token shown but not meant is placed in one
@@ -16,7 +16,7 @@
 //! than matching bytes. The tokenizer settles block structure, delimiter
 //! pairing, and code-span content normalisation, which together are exactly the
 //! "span is logical, never a run of bytes" clause of the well-formed
-//! environment (ADR-T-014, A calculus of documentation and source labels): quotation markers, list
+//! environment (ADR-L-014, A calculus of documentation and source labels): quotation markers, list
 //! continuation indentation, and soft line breaks are resolved away before this
 //! module sees a span's interior.
 //!
@@ -418,7 +418,7 @@ impl<'a> Scanner<'a> {
     ///
     /// The bytes here are still text: no span reader would ever start inside
     /// them — verified inert by probe — and the near-miss clause of the
-    /// total-resolution invariant (ADR-T-014, A calculus of documentation and source labels) is
+    /// total-resolution invariant (ADR-L-014, A calculus of documentation and source labels) is
     /// exactly for spans like these. The warning changes nothing about their
     /// status as text.
     fn flush_import_run(&mut self) {

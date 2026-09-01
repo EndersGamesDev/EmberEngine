@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: 2026 Wild Sky Maker
 
-//! The todo profile of ADR-T-016: the census of deficiency notices, their
+//! The todo profile of ADR-L-016: the census of deficiency notices, their
 //! classification, their derivation, and the standard place.
 //!
-//! The profiles signature of ADR-T-014, A calculus of documentation and source labels, says
+//! The profiles signature of ADR-L-014, A calculus of documentation and source labels, says
 //! what a profile must fix, and the test profile next door fixes those five
 //! things for tests. This module fixes them for the notices a source carries in
 //! its comments, and the two profiles differ in one way worth stating before
@@ -17,7 +17,7 @@
 //! slug the author invents beside the label — would put the name in the notice
 //! only so that the label could copy it, which is authorship wearing a
 //! derivation's clothes and is refused by the rejected Ansatz on authored asset
-//! labels (ADR-T-014, A calculus of documentation and source labels). Reading the words
+//! labels (ADR-L-014, A calculus of documentation and source labels). Reading the words
 //! that are already there keeps the label evidence of the source rather than a
 //! second opinion about it, and it is what lets a sweep write every label in
 //! the corpus mechanically.
@@ -86,7 +86,7 @@ use crate::workspace::Package;
 /// The kind token this profile governs.
 ///
 /// The record catalogues the To-do environment against this spelling in its own
-/// local extension row, the registry of ADR-T-011 naming no environment for a
+/// local extension row, the registry of ADR-L-011 naming no environment for a
 /// deficiency notice: a notice is neither a remark on the work nor an
 /// annotation decoding displayed material (´[EMBER-sig:todos:kind-extension]´).
 ///
@@ -96,7 +96,7 @@ pub const TODO_KIND: &str = "todo";
 
 /// The marker spellings the census recognizes.
 ///
-/// ADR-T-016 censuses all three so that no synonym escapes the policy by being
+/// ADR-L-016 censuses all three so that no synonym escapes the policy by being
 /// spelled differently, and lets none of them reach the label: the corpus writes
 /// the first, and grading deficiencies by their marker word is a taxonomy nobody
 /// maintains (´[EMBER-conv:todos:census]´).
@@ -272,7 +272,7 @@ fn marker_of(line: &str) -> Option<(&'static str, &str)> {
 /// The line is read as the marker, then an optional parenthesized qualifier,
 /// then the standard place, then an optional colon, then the summary. The
 /// qualifier is the shape this corpus already writes where a notice names the
-/// record whose work it awaits; ADR-T-016 lets it stand and keeps it out of
+/// record whose work it awaits; ADR-L-016 lets it stand and keeps it out of
 /// every derivation. It is handed back here — without its parentheses — only so
 /// that a sweep rewriting the line can put it back where it stood, which is the
 /// whole of what "neither requires it nor retires it" costs in code.
@@ -393,7 +393,7 @@ pub enum Placement {
 /// The line is rebuilt rather than patched: everything before the marker is kept
 /// byte for byte — a comment's leaders, its indentation, and any code standing
 /// before a trailing comment — and everything after it is re-emitted in the
-/// order (ADR-T-016, The TODO label profile) fixes, which is marker, qualifier, label, colon,
+/// order (ADR-L-016, The TODO label profile) fixes, which is marker, qualifier, label, colon,
 /// summary. Rebuilding is what makes the sweep idempotent by construction: the
 /// line it writes is the line its own reader parses back to the same three
 /// parts, so a second sweep reaches [`Placement::Kept`] and stops.
@@ -412,7 +412,7 @@ pub enum Placement {
 /// reported unchanged by every sweep and converges on nothing. Rendering first
 /// leaves one definition of the standard place in the code, the writer's own, and
 /// the sweep repairs everything that differs from it — the order
-/// (ADR-T-016, The TODO label profile) fixes, and nothing beside it. The test profile
+/// (ADR-L-016, The TODO label profile) fixes, and nothing beside it. The test profile
 /// repairs its same class, a right label pressed against the prose above it, and
 /// the profiles agree.
 ///
@@ -671,7 +671,7 @@ pub struct TodoAnalysis {
     /// How many carry no label at the standard place.
     ///
     /// These are the register's family rather than the check's findings, under
-    /// the staged adoption ADR-T-016 records: the debt standing at adoption is
+    /// the staged adoption ADR-L-016 records: the debt standing at adoption is
     /// counted and ratcheted, and growth fails through the burn list.
     pub unlabelled: usize,
     /// How many carry a label at the standard place that is not their own.
@@ -757,7 +757,7 @@ pub fn analyze_todos(packages: &[Package], census: &TodoCensus) -> (TodoAnalysis
 
 /// Report every group of labelled notices of one owner deriving one label.
 ///
-/// The inventory invariant (ADR-T-014, A calculus of documentation and source labels) makes a collision a
+/// The inventory invariant (ADR-L-014, A calculus of documentation and source labels) makes a collision a
 /// naming defect of the assets, repaired by rewording one of them. Only
 /// labelled notices are grouped: an unlabelled one has attested nothing yet,
 /// and reporting it here would report the marking wave's backlog as a defect of

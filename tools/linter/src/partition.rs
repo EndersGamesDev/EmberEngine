@@ -12,7 +12,7 @@
 //! thought about acquired an owner by default rather than by a decision. What
 //! replaces them is a declared relation that must partition the tree, with no
 //! priority, no longest-match selection and no order dependence
-//! (ADR-T-019, The layer owner graph).
+//! (ADR-L-019, The layer owner graph).
 //!
 //! The accounting universe is the repository's tracked corpus: every path
 //! `git ls-files` reports beneath the root, in the bytes git recorded for it.
@@ -35,7 +35,7 @@
 //! reason it always did. Nothing else leaves the universe implicitly: no ignore
 //! file, generated-artifact or hidden-path convention removes a *tracked* path,
 //! because an implicit exclusion is an ownership decision nobody ratified
-//! (ADR-T-019, The layer owner graph). An entry leaves because a human wrote
+//! (ADR-L-019, The layer owner graph). An entry leaves because a human wrote
 //! a named rule saying so, and the excluded set is removed as a union — a union
 //! has no order, so no exclusion rule can shadow another and overlapping distinct
 //! rules are legal.

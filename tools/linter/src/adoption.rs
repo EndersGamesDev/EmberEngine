@@ -4,23 +4,23 @@
 //! Adoption data as code: the signature, the owner partition, and the reserved
 //! kinds.
 //!
-//! ADR-T-014 is parametric in seven data, and a corpus adopts it by fixing
-//! them. The owners environment (ADR-T-014, A calculus of documentation and source labels) fixes the
+//! ADR-L-014 is parametric in seven data, and a corpus adopts it by fixing
+//! them. The owners environment (ADR-L-014, A calculus of documentation and source labels) fixes the
 //! signature — a partial map from registered prefixes to owners — together with
 //! the owner partition, a map from carrier sources and covered assets to owners
 //! that is total on the carrier. The reserved-kinds environment
-//! (ADR-T-014, A calculus of documentation and source labels) fixes the set of kinds intended for
+//! (ADR-L-014, A calculus of documentation and source labels) fixes the set of kinds intended for
 //! derivation only.
 //!
 //! Wave L1 gave the repository's prose one owner. Wave T1 partitions prose the
-//! way ADR-T-015 already partitions code: a package's documentation and decision
+//! way ADR-L-015 already partitions code: a package's documentation and decision
 //! records belong to that package, so a package's prose and its code share one
 //! owner and one registered prefix, while prose above the packages — the
 //! repository's own records, its documentation tree, and its readme — belongs to
 //! the repository.
 //!
 //! One consequence is worth stating where the reader will meet it. The prefix
-//! ADR-T-015 derives for the root crate is the prefix the repository's prose
+//! ADR-L-015 derives for the root crate is the prefix the repository's prose
 //! wants, and the signature is a map: one prefix names one owner. The root
 //! package and the repository's prose are therefore one owner, carrying the name
 //! wave L1 gave it, so package prose citing a repository record writes that
@@ -29,9 +29,9 @@
 //!
 //! The reserved kinds arrive with the kind registry compiled from the declared
 //! configuration snapshot (´dec:kindregistry:runtime-authority´). One profile
-//! now governs one of them — the test profile of ADR-T-015 governs
+//! now governs one of them — the test profile of ADR-L-015 governs
 //! `test` — and for every other the warrant-totality invariant
-//! (ADR-T-014, A calculus of documentation and source labels) still makes a bare occurrence a hard
+//! (ADR-L-014, A calculus of documentation and source labels) still makes a bare occurrence a hard
 //! failure awaiting its derivation, never an authored mint.
 //!
 //! # Test index
@@ -213,7 +213,7 @@ impl Adoption {
     ///
     /// The partition is total on the carrier: prose under a package directory
     /// belongs to that package, and prose above the packages belongs to the
-    /// repository. This is the prose half of the partition ADR-T-015 fixes for
+    /// repository. This is the prose half of the partition ADR-L-015 fixes for
     /// code, and it agrees with that half by construction — the owners are the
     /// same owners, named the same way.
     #[must_use]

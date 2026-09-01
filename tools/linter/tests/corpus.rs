@@ -1520,7 +1520,7 @@ fn notice_workspace(root: &Path) {
     write(
         root,
         "src/lib.rs",
-        "// TODO(ADR-T-016 2026-08-19): read the policy flag before deciding\n\
+        "// TODO(ADR-L-016 2026-08-19): read the policy flag before deciding\n\
          // and then act on what it says.\n\
          pub const LIMIT: usize = 0; // FIXME: raise the limit once measured\n",
     );
@@ -1601,7 +1601,7 @@ fn a_fixture_notice_tree_checks_and_then_fixes_clean() {
     assert_eq!(
         swept_source,
         concat!(
-            "// TODO(ADR-T-016 2026-08-19) \u{b4}todo:code:read-the-policy-flag-before-deciding\u{b4}: ",
+            "// TODO(ADR-L-016 2026-08-19) \u{b4}todo:code:read-the-policy-flag-before-deciding\u{b4}: ",
             "read the policy flag before deciding\n",
             "// and then act on what it says.\n",
             "pub const LIMIT: usize = 0; // FIXME \u{b4}todo:code:raise-the-limit-once-measured\u{b4}: ",

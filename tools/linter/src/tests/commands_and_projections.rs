@@ -339,7 +339,7 @@ fn snapshot(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
 /// The fixture tree, with one adopted constant standing in its maths folder.
 ///
 /// The tree the other projection tests use carries no constant at all, so the
-/// third sweep of ADR-T-018 ran over nothing in every one of them and its
+/// third sweep of ADR-L-018 ran over nothing in every one of them and its
 /// outcome was never asserted. This tree gives it something to pin.
 fn constant_tree() -> tempfile::TempDir {
     let acute = '\u{b4}';

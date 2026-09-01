@@ -1,28 +1,28 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: 2026 Wild Sky Maker
 
-//! The test profile of ADR-T-015: classification, derivation, and the standard
+//! The test profile of ADR-L-015: classification, derivation, and the standard
 //! place.
 //!
-//! The profiles signature of ADR-T-014, A calculus of documentation and source labels, says
+//! The profiles signature of ADR-L-014, A calculus of documentation and source labels, says
 //! what a profile must fix: its kind token, its census, its classification
 //! rule, its name transformation, and its standard place. The census lives next
 //! door; this module is the other four, and the derivation judgment
-//! (ADR-T-014, A calculus of documentation and source labels) binds them together — the kind is the
+//! (ADR-L-014, A calculus of documentation and source labels) binds them together — the kind is the
 //! profile's, the area is the profile's classification of the asset, and the
 //! name is the profile's transformation of the asset's bare identifier. The
 //! derivation reads those facts and no others.
 //!
 //! # Classification
 //!
-//! ADR-T-015 assigns the area from the asset's structural home, and its table
+//! ADR-L-015 assigns the area from the asset's structural home, and its table
 //! is read here as a rule about the file, not about the module nesting inside
 //! it: a test in a file under the crate's `src/tests/` directory is of the
 //! crate area however deeply nested its module is, and only a file outside that
 //! directory yields the unit area. Reading it the other way — letting an inline
 //! module inside a `src/tests/` file yield the unit area — would make the area
 //! depend on module structure, which the rejected Ansatz on path derivation
-//! (ADR-T-014, A calculus of documentation and source labels) warns against and which the
+//! (ADR-L-014, A calculus of documentation and source labels) warns against and which the
 //! table's own wording does not ask for.
 //!
 //! Two consequences are worth stating where a reader will meet them. A `tests`
@@ -36,10 +36,10 @@
 //! The standard place is the final line of the test function's documentation
 //! comment, written in the code syntax of the calculus — the label between two
 //! acute accents. The derivation-warrant inference rule
-//! (ADR-T-014, A calculus of documentation and source labels) makes writing the label
+//! (ADR-L-014, A calculus of documentation and source labels) makes writing the label
 //! attestation rather than naming, so a final line whose text differs from the
 //! derivation warrants nothing and fails; and the warrant-totality invariant
-//! (ADR-T-014, A calculus of documentation and source labels) makes a label of this kind standing
+//! (ADR-L-014, A calculus of documentation and source labels) makes a label of this kind standing
 //! anywhere but a standard place a hard failure rather than a mint.
 //!
 //! This module scans the documentation of covered tests and nothing else. A
@@ -276,9 +276,9 @@ pub struct ProfileAnalysis {
     pub colliding_assets: usize,
     /// How many of those groups also derive one label.
     ///
-    /// Recorded beside the identifier collisions because ADR-T-015 states the
+    /// Recorded beside the identifier collisions because ADR-L-015 states the
     /// injectivity requirement of this profile in terms of the identifier,
-    /// while the inventory invariant (ADR-T-014, A calculus of documentation and source labels) states
+    /// while the inventory invariant (ADR-L-014, A calculus of documentation and source labels) states
     /// the general one in terms of the label. A group whose assets fall in two
     /// areas breaks the profile's requirement without breaking the general
     /// invariant, so both counts are worth having.

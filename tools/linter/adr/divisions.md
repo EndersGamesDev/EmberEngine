@@ -18,7 +18,7 @@ The prose is the Assayer's subject and the enforcement is this package's, which 
 
 A member of the family is one of twelve sentences, matched entire and verbatim, not a pattern over them. The names were written as indicative sentences about the system rather than as nouns, and no rule shorter than the sentence separates such a name from ordinary prose on the same subject: a corpus about a risk engine says that stale state decays and that the fast path is fast for reasons that have nothing to do with a retired heading.
 
-Matching the sentence entire is also what makes the family safe to count. Each of the twelve is a thing somebody wrote about one particular document, so a literal occurrence is a reference to a division and never a coincidence — which a two-word token drawn out of the same sentence would not have been. This is the local specialization of ADR-T-020, The migration disciplines, bounded by enumeration under that convention's second device; what is local is the twelve sentences, which are the retired document's own.
+Matching the sentence entire is also what makes the family safe to count. Each of the twelve is a thing somebody wrote about one particular document, so a literal occurrence is a reference to a division and never a coincidence — which a two-word token drawn out of the same sentence would not have been. This is the local specialization of ADR-L-020, The migration disciplines, bounded by enumeration under that convention's second device; what is local is the twelve sentences, which are the retired document's own.
 
 **Inventory (The twelve divisions and what each name claimed)** · `reg:divisions:twelve-names`
 
@@ -52,7 +52,7 @@ The ratchet the census used to carry lives in the canonical list document, keyed
 allowances = []
 ```
 
-No configuration key points at a register file. The destination block that made a generated document part of the policy's declaration has no successor, and neither does the per-instance scope enumeration: an owner's declared bounds already say which paths the instance reaches. Growth in an allowance still fails and shrinkage still lowers a row, exactly as ADR-T-020, The migration disciplines, requires; what changes is where the row lives, not what it promises.
+No configuration key points at a register file. The destination block that made a generated document part of the policy's declaration has no successor, and neither does the per-instance scope enumeration: an owner's declared bounds already say which paths the instance reaches. Growth in an allowance still fails and shrinkage still lowers a row, exactly as ADR-L-020, The migration disciplines, requires; what changes is where the row lives, not what it promises.
 
 **Decision (The numerals beside the names belong to another family)** · `dec:divisions:numerals-elsewhere`
 
@@ -62,9 +62,9 @@ For the same reason the family keeps a recognizer of its own rather than being f
 
 **Decision (A division retires into the areas its claims wanted)** · `dec:divisions:areas-replace`
 
-Retiring a division name is not a renaming. A claim's area names what a statement is about, the census counts the areas actually in use, and the owner's area register states what each area is for and what is lost when its claims fail, per ADR-T-017, The test documentation policy. Six of the twelve divisions were mixtures by the campaign's own study — two announcing it with "and" in the name, and one defined as the residue of the others — so a division is replaced by the areas its claims turn out to want, which is usually more than one.
+Retiring a division name is not a renaming. A claim's area names what a statement is about, the census counts the areas actually in use, and the owner's area register states what each area is for and what is lost when its claims fail, per ADR-L-017, The test documentation policy. Six of the twelve divisions were mixtures by the campaign's own study — two announcing it with "and" in the name, and one defined as the residue of the others — so a division is replaced by the areas its claims turn out to want, which is usually more than one.
 
-The order matters and is the order fixed by ADR-T-017, The test documentation policy: the vocabulary was censused after the statements were written rather than chosen before them. An area set fixed in advance would have been a taxonomy that had met no sentence, which is what the twelve divisions were.
+The order matters and is the order fixed by ADR-L-017, The test documentation policy: the vocabulary was censused after the statements were written rather than chosen before them. An area set fixed in advance would have been a taxonomy that had met no sentence, which is what the twelve divisions were.
 
 **Gate (What zero means)** · `gate:divisions:zero`
 

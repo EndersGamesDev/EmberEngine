@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: 2026 Wild Sky Maker
 
-//! Repository-wide label linter for the label calculus of ADR-T-014.
+//! Repository-wide label linter for the label calculus of ADR-L-014.
 //!
 //! The calculus governs a reference graph over the corpus: heads mint labels,
 //! running text cites them, and a checker decides whether every mint is unique
@@ -16,12 +16,12 @@
 //!
 //! The prose side covers the label language, Markdown scanning, the two-pass
 //! engine, and the reference graph, over a carrier that reaches the repository's
-//! own prose and every package's beside it, partitioned into the owners ADR-T-015
+//! own prose and every package's beside it, partitioned into the owners ADR-L-015
 //! already gives the code. Above the spans stand the environment heads: a reader
 //! that pairs each head with the mint naming its environment, and the kind
-//! registry of ADR-T-011, read from that document's own tables, against which
+//! registry of ADR-L-011, read from that document's own tables, against which
 //! every head is validated. Beside all of it stands the first inventory profile,
-//! ADR-T-015's test profile: a census taken from the abstract syntax of every
+//! ADR-L-015's test profile: a census taken from the abstract syntax of every
 //! workspace member, a classification, a derivation, validation of the standard
 //! place, and a fix mode that writes the labels the check then enforces.
 //!
@@ -39,12 +39,12 @@
 //! document too large to rewrite in one pass be written in parts, each
 //! independently lintable, and concatenated into one committed publication in an
 //! order its authors declare — with the publication held to the exact-byte
-//! freshness of ADR-T-012 rather than to anybody's memory. And the shape report
+//! freshness of ADR-L-012 rather than to anybody's memory. And the shape report
 //! measures what "short and super sharp" has never had numbers for: heads per
 //! document, words and citations per environment, against a band measured from
 //! the records the campaign is content with rather than against a constant.
 //!
-//! Wave TP1 adds the second inventory profile, ADR-T-016's to-do profile, whose
+//! Wave TP1 adds the second inventory profile, ADR-L-016's to-do profile, whose
 //! assets are the deficiency notices a source carries in its comments. It brings
 //! the local extension of the kind registry that its kind needed, and a fourth
 //! burn list: the notices that carry no label yet are counted and ratcheted
@@ -67,7 +67,7 @@
 //! citations a package's commentary stands, so code may cite as prose does. A
 //! profile's standard place stays that profile's own.
 //!
-//! Wave C1 adds the third inventory profile, ADR-T-018's constant profile, and
+//! Wave C1 adds the third inventory profile, ADR-L-018's constant profile, and
 //! with it the calculus's first adopted standard place for a generated mint. Its
 //! assets are the screaming constants a package's production sources declare, and
 //! what it adds to the corpus is a value that answers for itself: a warrant citing

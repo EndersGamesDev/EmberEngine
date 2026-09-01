@@ -235,7 +235,7 @@ const FINGERPRINT_DIGITS: usize = 64;
 /// family; a program a corpus deploys several times is named by its identifier
 /// and the family naming one deployment, and the two deployments are two pairs
 /// that can neither satisfy nor pay for one another
-/// (ADR-T-020, The migration disciplines). What grows is the pair's
+/// (ADR-L-020, The migration disciplines). What grows is the pair's
 /// second component and never its arity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct Pair {
@@ -1256,7 +1256,7 @@ impl Snapshot {
     /// artifact belongs to, and which owner that is, is a fact about the
     /// partition rather than about this binary: the graph reconciliation is one
     /// artifact for the whole tree, so the pair carrying it is the root owner's
-    /// wherever it is required from (ADR-T-019, The layer owner graph).
+    /// wherever it is required from (ADR-L-019, The layer owner graph).
     ///
     /// The root owner is the one whose partition rows share no opening, so its share
     /// begins at the corpus root and every other share stands somewhere inside
@@ -2963,7 +2963,7 @@ fn allowance_rows(
 /// share at once, so its ratchet is one repository-wide artifact filed under the
 /// owner who activated it, and holding each of its rows to that owner's
 /// attribution would refuse the very table the census earned
-/// (ADR-T-019, The layer owner graph).
+/// (ADR-L-019, The layer owner graph).
 fn path_count_rows(
     pair: &Pair,
     program: &str,

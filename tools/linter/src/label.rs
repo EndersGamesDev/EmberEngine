@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // SPDX-FileCopyrightText: 2026 Wild Sky Maker
 
-//! The label language of ADR-T-014: the typed triple and the prefix token.
+//! The label language of ADR-L-014: the typed triple and the prefix token.
 //!
 //! This module implements the character grammar of the environment labelled
-//! (ADR-T-014, A calculus of documentation and source labels) in that document, quoted here in
+//! (ADR-L-014, A calculus of documentation and source labels) in that document, quoted here in
 //! ordinary prose so that this comment mints and cites nothing:
 //!
 //! ```text

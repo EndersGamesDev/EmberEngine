@@ -3,19 +3,19 @@
 
 //! Occurrence forms and the reader that turns one delimited span into one.
 //!
-//! ADR-T-014 admits three occurrence forms in two concrete syntaxes. Writing
+//! ADR-L-014 admits three occurrence forms in two concrete syntaxes. Writing
 //! them in ordinary prose rather than in code font, so that this comment neither
 //! mints nor cites: a bare span is a mint, a span wrapped in parentheses is a
 //! same-owner citation, and a parenthesised span whose interior is a bracketed
 //! prefix-label pair is an imported citation. The prose syntax delimits spans
 //! with single backticks and the code syntax with acute accents.
 //!
-//! The well-formed environment (ADR-T-014, A calculus of documentation and source labels) makes the
+//! The well-formed environment (ADR-L-014, A calculus of documentation and source labels) makes the
 //! reading total: a span either parses completely as one of the three forms or
 //! is ordinary text, and there is no partially well-formed occurrence. Two
 //! carve-outs sharpen that. An import-shaped span standing without its
 //! parentheses is a hard failure rather than text, because the total-resolution
-//! invariant (ADR-T-014, A calculus of documentation and source labels) fails non-parenthesised
+//! invariant (ADR-L-014, A calculus of documentation and source labels) fails non-parenthesised
 //! imports explicitly. And a span that misses a form only by casing, spacing,
 //! or stray brackets is reported as a near miss — a warning that changes
 //! nothing about the span's status as text.
