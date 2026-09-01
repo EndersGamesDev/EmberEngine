@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Frozen Arena wire protocol version.
 pub const PROTO_VERSION: u16 = 7;
 /// Maximum sanitized player-handle length.
 pub const MAX_HANDLE_LEN: usize = 20;
