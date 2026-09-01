@@ -6,8 +6,8 @@ use std::time::Duration;
 use ember_legacy::{
     AdmissionMetadata, AdmissionRefusal, DecodedInput, EncodedEvent, FactoryError, GameFactory,
     GameKey, GameSession, InnerCodec, InnerCodecError, InnerFrame, LeaveReason,
-    LegacyCapabilities, LobbyStatus, MonotonicTimestamp, OutboundEvent, OutboundTarget, PeerId,
-    SessionCreationData, SessionInput, SessionUpdate,
+    LegacyCapabilities, LobbySeed, LobbyStatus, MonotonicTimestamp, OutboundEvent, OutboundTarget,
+    PeerId, SessionCreationData, SessionInput, SessionUpdate,
 };
 use serde::{Deserialize, Serialize};
 
@@ -117,6 +117,7 @@ impl GameFactory for FireFactory {
         Ok(Box::new(FireSession::new(
             rules,
             creation.lobby_name.clone(),
+            creation.lobby_seed,
             creation.created_at,
         )))
     }
@@ -139,11 +140,14 @@ pub struct FireSession {
 }
 
 impl FireSession {
-    /// Constructs a session at the host's creation timestamp.
+    /// Constructs a session from immutable host creation data.
+    ///
+    /// Fire protocol 1 performs no random draws, so the lobby seed is intentionally inert.
     #[must_use]
     pub fn new(
         rules: FireRules,
         lobby_name: String,
+        _lobby_seed: LobbySeed,
         created_at: MonotonicTimestamp,
     ) -> Self {
         Self {
