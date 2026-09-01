@@ -63,3 +63,7 @@ The simulation is designed for replayability and synchronization.
 *   **State Definition**: The `shooter` module defines the authoritative state (`PlayerSt`, `Bullet`). The `sim` module provides a pure, headless runner for the Pong game.
 *   **Lag Compensation**: The arena shooter implements a rewind mechanism (`MAX_REWIND_TICKS` = 18) to look back in time to calculate hits. This is handled in `pong-core`.
 
+## Hosts
+
+The game servers run on many independent machines at once. They share no state and never talk to each other; what they share is one published address book, `server.json` on the Pages site, which lists every host with its addresses, its build and the protocol each of its servers speaks. The client does the choosing — `web/hosts.js` loads the book, probes every host, and picks the newest build that speaks its own protocol. The model, the file format, the `Welcome` fields that carry a server's identity, and how to run a host are all in **`docs/hosts.md`**.
+
