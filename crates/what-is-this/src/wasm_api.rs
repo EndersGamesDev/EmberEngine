@@ -16,7 +16,9 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use wasm_bindgen::prelude::*;
 
-use crate::{FloatProbeResult, KernelSuite, derive_verdict, jank_chunk, kernel_specs};
+use crate::{
+    FloatProbeResult, KernelSuite, bar_progress, derive_verdict, jank_chunk, kernel_specs,
+};
 
 thread_local! {
     static KERNELS: RefCell<KernelSuite> = RefCell::new(KernelSuite::new());
@@ -175,6 +177,59 @@ pub fn cancel_gpu_compute() {
     crate::gpu::cancel();
 }
 
+/// Initializes the surface-backed WebGPU progress bar and returns adapter and surface facts as
+/// JSON. The progress renderer owns a device separate from the compute suite.
+///
+/// # Errors
+///
+/// Returns a JavaScript error when WebGPU is absent, no canvas-compatible adapter is available, or
+/// surface or pipeline initialization fails.
+#[wasm_bindgen]
+pub async fn initialize_render_bar_json(
+    canvas: web_sys::HtmlCanvasElement,
+) -> Result<String, JsValue> {
+    crate::render_bar::initialize(canvas)
+        .await
+        .map_err(|error| JsValue::from_str(&error))
+}
+
+/// Presents one progress frame and returns the renderer's cumulative presented-frame count.
+///
+/// # Errors
+///
+/// Returns a JavaScript error when the renderer is unavailable, its device was lost, or surface
+/// acquisition or presentation fails.
+#[wasm_bindgen]
+pub fn render_bar_frame(progress: f64) -> Result<u32, JsValue> {
+    crate::render_bar::frame(progress).map_err(|error| JsValue::from_str(&error))
+}
+
+/// Drops the current progress surface and invalidates any pending renderer initialization.
+#[wasm_bindgen]
+pub fn reset_render_bar() {
+    crate::render_bar::reset();
+}
+
+/// Returns the normalized 3D bar target derived from real suite, kernel, and sample progress.
+#[wasm_bindgen]
+pub fn bar_progress_fraction(
+    stage_index: u32,
+    stage_count: u32,
+    kernel_index: u32,
+    kernel_count: u32,
+    sample_count: u32,
+    sample_total: u32,
+) -> f64 {
+    bar_progress(
+        stage_index,
+        stage_count,
+        kernel_index,
+        kernel_count,
+        sample_count,
+        sample_total,
+    )
+}
+
 /// Runs one preallocated fixed workload and returns its opaque checksum.
 ///
 /// # Errors
@@ -237,6 +292,7 @@ pub fn reset_run_state() {
     KERNELS.with_borrow_mut(|kernels| *kernels = KernelSuite::new());
     SUBMISSION.with_borrow_mut(|slot| *slot = None);
     crate::gpu::reset();
+    crate::render_bar::reset();
 }
 
 /// Returns the deterministic, measurement-derived verdict presentation as JSON.

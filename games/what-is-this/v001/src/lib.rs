@@ -272,8 +272,9 @@ pub struct KernelMeasurement {
     /// Summary over the complete uncapped observation set.
     pub summary: Option<SummaryStats>,
     /// Kernel-specific caveats, adaptive repeat counts, and non-numeric facts; open-list GPU
-    /// adapter facts record identity, browser-exposed limits, optional features, and timing mode
-    /// here without changing report schema 1.
+    /// adapter facts record identity, browser-exposed limits, optional features, and timing mode;
+    /// surface render records add adapter identity, surface format, device-isolation policy,
+    /// visibility, and successful present count here without changing report schema 1.
     pub notes: Vec<String>,
 }
 

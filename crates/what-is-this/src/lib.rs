@@ -98,6 +98,62 @@ fn gpu_adapter_identity(report: &DiagnosticReport) -> Option<&str> {
         })
 }
 
+fn render_present_frames(kernel: &KernelMeasurement) -> Option<u32> {
+    kernel.notes.iter().find_map(|note| {
+        note.strip_prefix("frames presented during kernel: ")
+            .and_then(|value| value.parse().ok())
+    })
+}
+
+fn complete_render_present(report: &DiagnosticReport) -> Option<(&KernelMeasurement, u32)> {
+    report
+        .kernels
+        .iter()
+        .find(|kernel| {
+            kernel.kernel_id == "gpu.render-present.v1"
+                && kernel.status == KernelStatus::Complete
+                && kernel
+                    .summary
+                    .is_some_and(|summary| summary.median.is_finite() && summary.median > 0.0)
+        })
+        .and_then(|kernel| render_present_frames(kernel).map(|frames| (kernel, frames)))
+        .filter(|(_, frames)| *frames > 0)
+}
+
+/// Maps real suite work to the render bar's normalized target position.
+///
+/// `stage_index` and `kernel_index` are zero-based completed-work offsets; the current sample
+/// fraction advances only the current kernel. Empty stage or kernel totals produce conservative
+/// progress instead of invented work. Inputs beyond their totals are clamped.
+#[must_use]
+pub fn bar_progress(
+    stage_index: u32,
+    stage_count: u32,
+    kernel_index: u32,
+    kernel_count: u32,
+    sample_count: u32,
+    sample_total: u32,
+) -> f64 {
+    if stage_count == 0 {
+        return 0.0;
+    }
+    if stage_index >= stage_count {
+        return 1.0;
+    }
+    let kernel_fraction = if kernel_count == 0 {
+        0.0
+    } else {
+        let completed = kernel_index.min(kernel_count);
+        let current = if completed < kernel_count && sample_total > 0 {
+            f64::from(sample_count.min(sample_total)) / f64::from(sample_total)
+        } else {
+            0.0
+        };
+        (f64::from(completed) + current) / f64::from(kernel_count)
+    };
+    (f64::from(stage_index) + kernel_fraction) / f64::from(stage_count)
+}
+
 /// Derives verdict sentences and badges from a completed schema-1 report.
 ///
 /// Badge rules are frozen presentation logic: `simd-ready` requires the SIMD128 feature probe;
@@ -105,10 +161,11 @@ fn gpu_adapter_identity(report: &DiagnosticReport) -> Option<&str> {
 /// `fma-contractor` and `strict-multiplier` mirror the contraction bit; `timer-truthful` requires
 /// a measured timer quantum no larger than 0.1 ms while `timer-coy` covers coarser or unobserved
 /// clocks; `thread-rich` requires at least eight exposed logical processors; and `memory-mover`
-/// requires a complete memcpy kernel with a finite positive median; and `gpu-compute` requires at
-/// least one complete timed WebGPU compute kernel and cites the adapter identity recorded by
-/// `gpu.adapter-facts.v1`. Observations use the same report facts and never invent a score or
-/// substitute measurement.
+/// requires a complete memcpy kernel with a finite positive median; `gpu-compute` requires at least
+/// one complete timed WebGPU compute kernel and cites the adapter identity recorded by
+/// `gpu.adapter-facts.v1`; and `gpu-render` requires a complete `gpu.render-present.v1` record with
+/// a positive measured cadence and a positive frame count in its notes. Observations use the same
+/// report facts and never invent a score or substitute measurement.
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn derive_verdict(report: &DiagnosticReport) -> VerdictPersonality {
@@ -251,6 +308,32 @@ pub fn derive_verdict(report: &DiagnosticReport) -> VerdictPersonality {
         });
     }
 
+    if let Some((kernel, frames)) = complete_render_present(report) {
+        let median = kernel
+            .summary
+            .map(|summary| summary.median)
+            .unwrap_or_default();
+        observations.push(VerdictObservation {
+            text: format!(
+                "The 3D progress bar presented {frames} measured frames at a {median:.3} ms median cadence — compositor pacing included, shader speed not claimed."
+            ),
+        });
+    } else if let Some(kernel) = report
+        .kernels
+        .iter()
+        .find(|kernel| kernel.kernel_id == "gpu.render-present.v1")
+    {
+        observations.push(VerdictObservation {
+            text: format!(
+                "The 3D progress bar never entered the measurement book: {}.",
+                kernel
+                    .unavailable_reason
+                    .as_deref()
+                    .unwrap_or("no presented frame produced a valid cadence sample")
+            ),
+        });
+    }
+
     if report.environment.hidden_during_run {
         observations.push(VerdictObservation {
             text: "The page was hidden during this run; the report kept the visibility change instead of pretending the scheduler behaved normally."
@@ -388,6 +471,20 @@ pub fn derive_verdict(report: &DiagnosticReport) -> VerdictPersonality {
                 "{} timed WebGPU compute kernel{} completed on {identity}",
                 complete_gpu.len(),
                 if complete_gpu.len() == 1 { "" } else { "s" }
+            ),
+        });
+    }
+    if let Some((kernel, frames)) = complete_render_present(report) {
+        let median = kernel
+            .summary
+            .map(|summary| summary.median)
+            .unwrap_or_default();
+        badges.push(VerdictBadge {
+            id: "gpu-render",
+            name: "Window Dressed",
+            glyph: "3D",
+            measurement: format!(
+                "{frames} frames presented; median canvas cadence {median:.3} ms"
             ),
         });
     }
@@ -606,5 +703,47 @@ mod tests {
             .join(" ");
         assert!(text.contains("Test Adapter"));
         assert!(text.contains("2.000 GiB/s"));
+    }
+
+    #[test]
+    fn bar_progress_uses_only_completed_real_work() {
+        assert_eq!(bar_progress(0, 0, 0, 0, 0, 0), 0.0);
+        assert_eq!(bar_progress(8, 8, 0, 0, 0, 0), 1.0);
+        assert_eq!(bar_progress(2, 8, 1, 4, 7, 14), 0.296_875);
+        assert_eq!(bar_progress(2, 8, 9, 4, 20, 14), 0.375);
+    }
+
+    #[test]
+    fn render_badge_and_observation_cite_presented_frames() {
+        let mut report = sample_report();
+        report.kernels.push(KernelMeasurement {
+            kernel_id: "gpu.render-present.v1".to_string(),
+            workload: "15 visible canvas presents".to_string(),
+            unit: "ms".to_string(),
+            warmup_runs: 3,
+            status: KernelStatus::Complete,
+            unavailable_reason: None,
+            raw_samples: vec![16.667],
+            summary: Some(SummaryStats {
+                sample_count: 1,
+                median: 16.667,
+                p95: 16.667,
+                min: 16.667,
+                max: 16.667,
+            }),
+            notes: vec!["frames presented during kernel: 19".to_string()],
+        });
+        let verdict = derive_verdict(&report);
+        let badge = verdict
+            .badges
+            .iter()
+            .find(|badge| badge.id == "gpu-render")
+            .expect("a complete measured surface kernel earns the render badge");
+        assert_eq!(badge.glyph, "3D");
+        assert!(badge.measurement.contains("19 frames"));
+        assert!(verdict.observations.iter().any(|observation| {
+            observation.text.contains("19 measured frames")
+                && observation.text.contains("16.667 ms")
+        }));
     }
 }

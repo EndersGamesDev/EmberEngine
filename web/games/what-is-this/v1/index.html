@@ -37,6 +37,14 @@
     input { min-height: 50px; width: 100%; border: 1px solid var(--line); border-radius: 10px; background: #07100c; color: var(--ink); padding: 0 14px; font: inherit; }
     input:focus { outline: 2px solid var(--green); outline-offset: 2px; }
     #guess-reveal { min-height: 1.5em; color: var(--blue); }
+    #gpu-window { position: relative; margin: 22px 0 10px; overflow: hidden; border: 1px solid #355943; border-radius: 15px; background: linear-gradient(145deg, #0d2017, #07100c); box-shadow: inset 0 0 45px #122f2055, 0 18px 60px #0005; }
+    .gpu-window-head { display: flex; justify-content: space-between; gap: 16px; align-items: baseline; padding: 12px 15px; border-bottom: 1px solid #294535; }
+    #gpu-window-status { color: var(--muted); font-size: 0.72rem; text-align: right; }
+    .gpu-viewport { position: relative; aspect-ratio: 24 / 7; min-height: 160px; background: repeating-linear-gradient(90deg, transparent 0 39px, #71e7a507 40px), repeating-linear-gradient(0deg, transparent 0 39px, #71e7a507 40px), radial-gradient(ellipse at center, #143523 0, #07100c 70%); }
+    #gpu-bar { display: block; width: 100%; height: 100%; }
+    #gpu-bar[hidden] { display: none; }
+    #gpu-placeholder { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; color: var(--muted); text-align: center; line-height: 1.5; }
+    #gpu-placeholder.bad { color: var(--amber); }
     .progress-shell { height: 10px; margin: 30px 0 10px; overflow: hidden; border: 1px solid var(--line); border-radius: 999px; background: #07100c; }
     #progress { width: 0; height: 100%; background: linear-gradient(90deg, #3ba36d, var(--green)); transition: width 280ms ease; }
     #progress-label { min-height: 1.4em; color: var(--green); font-size: 0.82rem; }
@@ -95,7 +103,7 @@
   <main>
     <div class="eyebrow">ember diagnostic game · report schema 1</div>
     <h1>what is this?</h1>
-    <p class="lede">Let’s find out what this browser is running on. Seven stages reveal only what the page can measure directly; a missing feature becomes an honest “unavailable,” never a dead end.</p>
+    <p class="lede">Let’s find out what this browser is running on. Eight stages reveal only what the page can measure directly; a missing feature becomes an honest “unavailable,” never a dead end.</p>
     <section id="guess-card" class="card">
       <div class="eyebrow">optional opening wager</div>
       <h2>How many logical threads does this machine claim?</h2>
@@ -106,6 +114,13 @@
         <button id="skip-and-run" type="button">Skip &amp; Run</button>
       </div>
       <p id="guess-note">The laboratory waits for either choice.</p>
+    </section>
+    <section id="gpu-window" aria-label="WebGPU 3D suite progress">
+      <div class="gpu-window-head"><span class="eyebrow">machine interrogation viewport</span><span id="gpu-window-status">waiting for a real progress value</span></div>
+      <div class="gpu-viewport">
+        <canvas id="gpu-bar" width="960" height="280" hidden aria-label="3D bar showing measured suite progress"></canvas>
+        <div id="gpu-placeholder">The 3D bar is waiting to find out whether this browser believes in windows.</div>
+      </div>
     </section>
     <div class="progress-shell" aria-hidden="true"><div id="progress"></div></div>
     <div id="progress-label" role="status">waiting for your guess, or your dignified refusal…</div>
@@ -118,6 +133,7 @@
       <li class="stage" data-stage="stage.gpu-compute.v1"><span class="mark">○</span><span>GPU compute</span><span class="detail">waiting</span></li>
       <li class="stage" data-stage="stage.float-behavior.v1"><span class="mark">○</span><span>float behavior</span><span class="detail">waiting</span></li>
       <li class="stage" data-stage="stage.timing.v1"><span class="mark">○</span><span>display + jank timing</span><span class="detail">waiting</span></li>
+      <li class="stage" data-stage="stage.gpu-render-bar.v1"><span class="mark">○</span><span>GPU render window</span><span class="detail">waiting</span></li>
       <li class="stage" data-stage="stage.gpu.v1"><span class="mark">○</span><span>engine GPU calibration</span><span class="detail">waiting</span></li>
     </ol>
     <noscript>This diagnostic needs JavaScript and WebAssembly. No report has been created.</noscript>
@@ -155,6 +171,9 @@
     const GPU_MAX_BATCH_TARGET_MS = 640;
     const GPU_KERNEL_TOTAL_BUDGET_MS = 15_000;
     const GPU_STORAGE_MIB_PER_BASE_INVOCATION = 16;
+    const RENDER_INIT_DEADLINE_MS = 8_000;
+    const RENDER_PRESENT_WARMUPS = 3;
+    const RENDER_PRESENT_SAMPLES = 15;
     const WASM_LOAD_DEADLINE_MS = 8_000;
     const SERVER_LOOKUP_DEADLINE_MS = 8_000;
     const SUBMISSION_DEADLINE_MS = 15_000;
@@ -167,6 +186,7 @@
       ['stage.gpu-compute.v1', 'GPU compute', 120_000],
       ['stage.float-behavior.v1', 'float behavior', 5_000],
       ['stage.timing.v1', 'display + jank timing', 15_000],
+      ['stage.gpu-render-bar.v1', 'GPU render window', 12_000],
       ['stage.gpu.v1', 'engine GPU calibration', 3_000],
     ];
     const GPU_KERNEL_FALLBACK = [
@@ -188,6 +208,8 @@
     let report = null;
     let compactReport = '';
     let submissionGeneration = 0;
+    let renderGeneration = 0;
+    let renderState = null;
 
     const progress = document.querySelector('#progress');
     const progressLabel = document.querySelector('#progress-label');
@@ -201,6 +223,9 @@
     const telemetryKernel = document.querySelector('#telemetry-kernel');
     const telemetryCount = document.querySelector('#telemetry-count');
     const telemetryMedian = document.querySelector('#telemetry-median');
+    const gpuCanvas = document.querySelector('#gpu-bar');
+    const gpuPlaceholder = document.querySelector('#gpu-placeholder');
+    const gpuWindowStatus = document.querySelector('#gpu-window-status');
     const verdict = document.querySelector('#verdict');
     const downloadButton = document.querySelector('#download');
     const submitButton = document.querySelector('#submit');
@@ -238,7 +263,152 @@
       if (run.visibilityObservations.length > RAW_SAMPLE_CAP) run.visibilityObservations.shift();
     }
 
-    document.addEventListener('visibilitychange', () => recordVisibility(activeRun));
+    function showRenderPlaceholder(message, bad = false) {
+      gpuCanvas.hidden = true;
+      gpuPlaceholder.hidden = false;
+      gpuPlaceholder.classList.toggle('bad', bad);
+      gpuPlaceholder.textContent = message;
+      gpuWindowStatus.textContent = bad ? '3D unavailable; DOM progress remains authoritative' : message;
+    }
+
+    function stopRenderLoop() {
+      if (renderState?.rafId) cancelAnimationFrame(renderState.rafId);
+      if (renderState) renderState.rafId = 0;
+    }
+
+    function resetRenderWindow(message = 'The 3D bar is waiting for a real progress value.') {
+      renderGeneration += 1;
+      stopRenderLoop();
+      renderState = null;
+      if (wasm) wasm.reset_render_bar();
+      showRenderPlaceholder(message);
+    }
+
+    function failRenderWindow(run, detail) {
+      if (run) run.renderUnavailable = detail;
+      renderGeneration += 1;
+      stopRenderLoop();
+      renderState = null;
+      if (wasm) wasm.reset_render_bar();
+      showRenderPlaceholder(`The 3D bar sat this one out: ${detail}`, true);
+    }
+
+    function scheduleRenderFrame(run) {
+      const state = renderState;
+      if (!state || state.rafId || state.paused || document.hidden || activeRun !== run || !run.running) return;
+      state.rafId = requestAnimationFrame(() => {
+        state.rafId = 0;
+        if (renderState !== state || state.paused || activeRun !== run || !run.running) return;
+        const distance = state.target - state.displayed;
+        state.displayed = Math.abs(distance) < 0.0005 ? state.target : state.displayed + distance * 0.18;
+        try {
+          state.frames = wasm.render_bar_frame(state.displayed);
+          gpuWindowStatus.textContent = `${(state.target * 100).toFixed(1)}% measured target · ${state.frames} frames presented`;
+          scheduleRenderFrame(run);
+        } catch (error) {
+          failRenderWindow(run, reason(error));
+        }
+      });
+    }
+
+    function pauseRenderBar(note) {
+      if (!renderState) return;
+      stopRenderLoop();
+      renderState.paused = true;
+      gpuWindowStatus.textContent = `frozen — ${note}`;
+    }
+
+    function resumeRenderBar(run) {
+      if (!renderState || renderState.runId !== run.id) return;
+      if (run.gpuComputeTimedOut) {
+        gpuWindowStatus.textContent = 'frozen — timed-out GPU compute may still be settling';
+        return;
+      }
+      renderState.paused = false;
+      if (document.hidden) {
+        gpuWindowStatus.textContent = 'hidden — suite continues without waiting for frames';
+        return;
+      }
+      scheduleRenderFrame(run);
+    }
+
+    function setRealProgress(run, stageIndex, kernelIndex = 0, kernelCount = 1, sampleCount = 0, sampleTotal = 1) {
+      if (!renderState || renderState.runId !== run.id || !wasm) return;
+      const target = wasm.bar_progress_fraction(stageIndex, STAGES.length, kernelIndex, kernelCount, sampleCount, sampleTotal);
+      renderState.target = Math.max(0, Math.min(1, target));
+      if (!renderState.paused) scheduleRenderFrame(run);
+    }
+
+    function finishRenderBar(run) {
+      if (!renderState || renderState.runId !== run.id || run.gpuComputeTimedOut) return;
+      stopRenderLoop();
+      renderState.paused = false;
+      renderState.target = 1;
+      renderState.displayed = 1;
+      try {
+        renderState.frames = wasm.render_bar_frame(1);
+        gpuWindowStatus.textContent = `100.0% measured target · ${renderState.frames} frames presented`;
+      } catch (error) {
+        failRenderWindow(run, reason(error));
+      }
+    }
+
+    async function initializeRenderWindow(run) {
+      if (!wasm) {
+        failRenderWindow(run, run.wasmFailure || 'the diagnostic wasm client is unavailable');
+        return;
+      }
+      const generation = ++renderGeneration;
+      const pixelRatio = Number.isFinite(devicePixelRatio) ? Math.min(devicePixelRatio, 2) : 1;
+      const cssWidth = Math.max(480, gpuCanvas.parentElement.clientWidth || 960);
+      gpuCanvas.width = Math.min(1_440, Math.round(cssWidth * pixelRatio));
+      gpuCanvas.height = Math.max(160, Math.round(gpuCanvas.width * 7 / 24));
+      gpuPlaceholder.classList.remove('bad');
+      gpuPlaceholder.textContent = 'Asking WebGPU for a canvas-compatible adapter…';
+      gpuWindowStatus.textContent = 'named renderer warmup; not timed';
+      let deadlineTimer = 0;
+      const initialization = wasm.initialize_render_bar_json(gpuCanvas);
+      initialization.catch(() => {});
+      try {
+        const deadline = new Promise((_, reject) => {
+          deadlineTimer = setTimeout(() => reject(new Error(`3D progress initialization exceeded ${RENDER_INIT_DEADLINE_MS} ms`)), RENDER_INIT_DEADLINE_MS);
+        });
+        const facts = JSON.parse(await Promise.race([initialization, deadline]));
+        if (generation !== renderGeneration || activeRun !== run || !run.running) {
+          wasm.reset_render_bar();
+          return;
+        }
+        renderState = {
+          runId: run.id,
+          generation,
+          facts,
+          target: 0,
+          displayed: 0,
+          frames: 0,
+          rafId: 0,
+          paused: false,
+        };
+        run.renderFacts = facts;
+        gpuCanvas.hidden = false;
+        gpuPlaceholder.hidden = true;
+        scheduleRenderFrame(run);
+      } catch (error) {
+        if (generation === renderGeneration && activeRun === run && run.running) failRenderWindow(run, reason(error));
+      } finally {
+        clearTimeout(deadlineTimer);
+      }
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      recordVisibility(activeRun);
+      if (!renderState || !activeRun || !activeRun.running || renderState.paused) return;
+      if (document.hidden) {
+        stopRenderLoop();
+        gpuWindowStatus.textContent = 'hidden — suite continues without waiting for frames';
+      } else {
+        scheduleRenderFrame(activeRun);
+      }
+    });
 
     function stageElement(stageId) {
       return document.querySelector(`[data-stage="${stageId}"]`);
@@ -276,7 +446,10 @@
       const started = performance.now();
       const visibilityAtStart = document.visibilityState;
       const token = { cancelled: false };
+      const stageIndex = STAGES.findIndex(stage => stage[0] === stageId);
+      run.currentStageIndex = Math.max(0, stageIndex);
       recordVisibility(run);
+      setRealProgress(run, run.currentStageIndex);
       showStage(stageId, 'active', 'measuring…');
       progressLabel.textContent = `${name}: let’s see…`;
       const workResult = Promise.resolve()
@@ -295,7 +468,11 @@
       clearTimeout(deadlineTimer);
       if (outcome.timedOut) {
         token.cancelled = true;
-        if (stageId === 'stage.gpu-compute.v1' && wasm) wasm.cancel_gpu_compute();
+        if (stageId === 'stage.gpu-compute.v1' && wasm) {
+          run.gpuComputeTimedOut = true;
+          wasm.cancel_gpu_compute();
+        }
+        if (stageId === 'stage.gpu-render-bar.v1') resumeRenderBar(run);
       }
       if (activeRun !== run || !run.running) return;
       const duration = performance.now() - started;
@@ -309,6 +486,7 @@
       const visibilityDetail = visibilityAtStart === document.visibilityState ? document.visibilityState : `${visibilityAtStart}→${document.visibilityState}`;
       showStage(stageId, outcome.state, outcome.state === 'complete' ? `${duration.toFixed(1)} ms · ${visibilityDetail}` : `unavailable · ${outcome.unavailableReason}`);
       progress.style.width = `${run.stageReports.length / STAGES.length * 100}%`;
+      setRealProgress(run, run.stageReports.length);
       recordVisibility(run);
       await timerDelay(24);
     }
@@ -435,12 +613,13 @@
       };
     }
 
-    function updateTelemetry(kernelId, samples) {
+    function updateTelemetry(kernelId, samples, run = null, kernelIndex = 0, kernelCount = 1, sampleTotal = 1) {
       telemetry.classList.add('visible');
       telemetryKernel.textContent = kernelId;
       telemetryCount.textContent = `${samples.length} sample${samples.length === 1 ? '' : 's'}`;
       const summary = summarize(samples);
       telemetryMedian.textContent = summary ? `median ${summary.median.toFixed(4)}` : 'median —';
+      if (run) setRealProgress(run, run.currentStageIndex, kernelIndex, kernelCount, samples.length, sampleTotal);
     }
 
     async function measureCpu(run, token) {
@@ -470,12 +649,12 @@
         for (const spec of inventory) unavailableKernel(run, token, spec.kernel_id, spec.workload, spec.unit, unavailableReason, [TIMER_CAVEAT]);
         throw new Error(unavailableReason);
       }
-      for (const spec of inventory) {
+      for (const [kernelIndex, spec] of inventory.entries()) {
         requireActive(run, token);
         const workload = `${spec.workload}; every reported sample normalizes one adaptive repeated batch to one base invocation`;
         let recorded = false;
         try {
-          updateTelemetry(spec.kernel_id, []);
+          updateTelemetry(spec.kernel_id, [], run, kernelIndex, inventory.length, spec.sample_runs);
           for (let index = 0; index < spec.warmup_runs; index += 1) {
             requireActive(run, token);
             const warmupChecksum = wasm.run_kernel(spec.kernel_id);
@@ -504,7 +683,7 @@
                 samples.push(normalized);
                 repeatCounts.push(repeatCount);
                 batchElapsedMs.push(elapsed);
-                updateTelemetry(spec.kernel_id, samples);
+                updateTelemetry(spec.kernel_id, samples, run, kernelIndex, inventory.length, spec.sample_runs);
                 break;
               }
               if (repeatCount >= KERNEL_MAX_REPEAT_COUNT) {
@@ -516,7 +695,7 @@
             await cooperativeYield(run, token);
           }
           const normalizationNote = spec.unit === 'MiB/s' ? `${MEMCPY_MIB_PER_BASE_INVOCATION} MiB per base invocation × repeat count ÷ batch seconds; reported samples are bandwidth, not elapsed milliseconds` : 'batch elapsed milliseconds ÷ repeat count';
-          completeKernel(run, token, spec.kernel_id, workload, spec.unit, spec.warmup_runs, samples, [TIMER_CAVEAT, `measured timer quantum ${quantum} ms; batch target ${KERNEL_TARGET_TIMER_QUANTA} quanta (${targetElapsedMs} ms)`, `adaptive repeat counts per recorded sample: ${repeatCounts.join(', ')}`, `batch elapsed milliseconds per recorded sample: ${batchElapsedMs.join(', ')}`, `normalization: ${normalizationNote}`, `opaque checksum ${checksum}`]);
+          completeKernel(run, token, spec.kernel_id, workload, spec.unit, spec.warmup_runs, samples, [TIMER_CAVEAT, `measured timer quantum ${quantum} ms; batch target ${KERNEL_TARGET_TIMER_QUANTA} quanta (${targetElapsedMs} ms)`, `adaptive repeat counts per recorded sample: ${repeatCounts.join(', ')}`, `batch elapsed milliseconds per recorded sample: ${batchElapsedMs.join(', ')}`, `normalization: ${normalizationNote}`, `opaque checksum ${checksum}`, 'the dedicated WebGPU progress renderer was frozen before the CPU stage and no progress frame was scheduled between warmups or timed samples']);
           recorded = true;
         } catch (error) {
           if (tokenActive(run, token)) {
@@ -589,7 +768,7 @@
       let completeCount = 0;
       let deviceFailure = null;
       let firstFailure = null;
-      for (const spec of inventory) {
+      for (const [kernelIndex, spec] of inventory.entries()) {
         requireActive(run, token);
         const isDispatchRoundTrip = spec.kernel_id === 'gpu.dispatch-roundtrip.tiny.v1';
         const usesTimestamp = facts.timestamp_query && !isDispatchRoundTrip;
@@ -614,7 +793,7 @@
         }
         let recorded = false;
         try {
-          updateTelemetry(spec.kernel_id, []);
+          updateTelemetry(spec.kernel_id, [], run, kernelIndex, inventory.length, spec.sample_runs);
           for (let index = 0; index < spec.warmup_runs; index += 1) {
             requireActive(run, token);
             const warmup = JSON.parse(await wasm.run_gpu_compute_json(spec.kernel_id, 1));
@@ -647,7 +826,7 @@
                 dispatchesPerBase = measured.dispatch_count / repeatCount;
                 timingMethod = measured.timing_method;
                 if (isDispatchRoundTrip && Number.isFinite(measured.gpu_elapsed_ms)) dispatchTimestampProbes.push(measured.gpu_elapsed_ms);
-                updateTelemetry(spec.kernel_id, samples);
+                updateTelemetry(spec.kernel_id, samples, run, kernelIndex, inventory.length, spec.sample_runs);
                 break;
               }
               if (repeatCount >= GPU_MAX_REPEAT_COUNT) {
@@ -669,7 +848,7 @@
             : isDispatchRoundTrip ? 'primary batch milliseconds ÷ actual sequential dispatch count' : 'primary batch milliseconds ÷ repeat count';
           const timestampProbeSummary = summarize(dispatchTimestampProbes);
           const timestampProbeNote = timestampProbeSummary ? `timestamp-query probe of the first tiny shader dispatch in each batch: median ${timestampProbeSummary.median} ms, p95 ${timestampProbeSummary.p95} ms over ${timestampProbeSummary.sample_count} probes` : 'timestamp-query probe: unavailable';
-          completeKernel(run, token, spec.kernel_id, workload, spec.unit, spec.warmup_runs, samples, [TIMER_CAVEAT, '3 named untimed warmups precede the 15 timed samples; the first dispatch absorbs lazy pipeline compilation outside timed regions', timingNote, `timing method: ${timingMethod}`, `adaptive repeat counts per recorded sample: ${repeatCounts.join(', ')}`, `dispatches per base invocation: ${dispatchesPerBase}`, ...(isDispatchRoundTrip ? [timestampProbeNote] : []), `normalization: ${normalizationNote}`, `last validated checksum ${checksum}`, '15 observations report median and p95; thermal state and downclocking can move them, so the report claims no stability beyond this run']);
+          completeKernel(run, token, spec.kernel_id, workload, spec.unit, spec.warmup_runs, samples, [TIMER_CAVEAT, '3 named untimed warmups precede the 15 timed samples; the first dispatch absorbs lazy pipeline compilation outside timed regions', timingNote, `timing method: ${timingMethod}`, `adaptive repeat counts per recorded sample: ${repeatCounts.join(', ')}`, `dispatches per base invocation: ${dispatchesPerBase}`, ...(isDispatchRoundTrip ? [timestampProbeNote] : []), `normalization: ${normalizationNote}`, `last validated checksum ${checksum}`, '15 observations report median and p95; thermal state and downclocking can move them, so the report claims no stability beyond this run', 'the progress surface uses a separate logical wgpu device that may map to the same physical adapter; its rAF loop was frozen before compute initialization, warmups, and every timed dispatch']);
           completeCount += 1;
           recorded = true;
         } catch (error) {
@@ -779,7 +958,7 @@
         'ms',
         0,
         deltas,
-        [`estimated refresh ${Number.isFinite(1000 / baseline) ? (1000 / baseline).toFixed(2) : 'unavailable'} Hz`, `${missedFrames} estimated missed frames`, `document visibility at completion: ${document.visibilityState}`, timerQuantumNote(run, 'requestAnimationFrame cadence'), 'rAF timestamps remain scheduler observations; coarse timer precision can quantize intervals and the refresh estimate'],
+        [`estimated refresh ${Number.isFinite(1000 / baseline) ? (1000 / baseline).toFixed(2) : 'unavailable'} Hz`, `${missedFrames} estimated missed frames`, `document visibility at completion: ${document.visibilityState}`, timerQuantumNote(run, 'requestAnimationFrame cadence'), 'rAF timestamps remain scheduler observations; coarse timer precision can quantize intervals and the refresh estimate', 'the WebGPU progress renderer remained frozen for this timing stage, so its own rAF loop did not compete for callbacks'],
       );
       return { refreshHz: 1000 / baseline, missedFrames };
     }
@@ -815,7 +994,7 @@
         'ms',
         0,
         [burstDuration],
-        [`opaque checksum ${checksum}`, TIMER_CAVEAT, timerQuantumNote(run, 'the 50 ms burst deadline and duration'), 'the actual compute burst may overshoot the displayed 50 ms by roughly one timer quantum plus one arithmetic chunk; quantized values such as 50 ms are bounds, not exact sub-quantum timings'],
+        [`opaque checksum ${checksum}`, TIMER_CAVEAT, timerQuantumNote(run, 'the 50 ms burst deadline and duration'), 'the actual compute burst may overshoot the displayed 50 ms by roughly one timer quantum plus one arithmetic chunk; quantized values such as 50 ms are bounds, not exact sub-quantum timings', 'the WebGPU progress renderer remained frozen for the controlled burst and its surrounding frame observations'],
       );
       if (beforeFrame == null || document.hidden) {
         unavailableKernel(run, token, 'timing.post-burst-frame-gap.v1', 'requestAnimationFrame interval spanning the controlled 50 ms compute burst', 'ms', frameUnavailableReason || 'requestAnimationFrame timing became unavailable because the document was hidden', [TIMER_CAVEAT, timerQuantumNote(run, 'the frame gap spanning the compute burst')]);
@@ -831,7 +1010,7 @@
           'ms',
           0,
           [afterFrame - beforeFrame],
-          [TIMER_CAVEAT, timerQuantumNote(run, 'the frame gap spanning the compute burst'), 'a coarse timer can quantize the observed frame gap; the report does not claim precision below its measured quantum'],
+          [TIMER_CAVEAT, timerQuantumNote(run, 'the frame gap spanning the compute burst'), 'a coarse timer can quantize the observed frame gap; the report does not claim precision below its measured quantum', 'the WebGPU progress renderer remained frozen across this frame gap'],
         );
       } catch (error) {
         unavailableKernel(run, token, 'timing.post-burst-frame-gap.v1', 'requestAnimationFrame interval spanning the controlled 50 ms compute burst', 'ms', reason(error), [TIMER_CAVEAT, timerQuantumNote(run, 'the frame gap spanning the compute burst')]);
@@ -850,6 +1029,75 @@
       await measureJank(run, token);
       if (!rafComplete && !run.kernels.some(kernel => kernel.kernel_id === 'timing.main-thread-burst-50ms.v1' && kernel.status === 'complete')) {
         throw new Error('both display cadence and the controlled main-thread burst were unavailable');
+      }
+    }
+
+    async function presentedFrameTimestamp(run, token) {
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        const timestamp = await animationFrame(run, token);
+        requireActive(run, token);
+        if (!renderState || renderState.runId !== run.id) throw new Error(run.renderUnavailable || 'the 3D progress renderer stopped before presentation');
+        const before = renderState.frames;
+        renderState.displayed = renderState.target;
+        renderState.frames = wasm.render_bar_frame(renderState.displayed);
+        if (renderState.frames > before) return timestamp;
+      }
+      throw new Error('the progress surface skipped eight consecutive acquisition attempts, so visible frame cadence was not measurable');
+    }
+
+    async function measureRenderPresent(run, token) {
+      const workload = '3 untimed visible canvas warmups, then 15 consecutive requestAnimationFrame timestamp intervals whose callbacks each submit and present the fixed 3D progress scene';
+      if (run.gpuComputeTimedOut) {
+        const unavailableReason = 'render cadence was skipped because the earlier WebGPU compute watchdog expired and its device work could still contend for the physical adapter';
+        unavailableKernel(run, token, 'gpu.render-present.v1', workload, 'ms', unavailableReason);
+        throw new Error(unavailableReason);
+      }
+      if (document.hidden) {
+        const unavailableReason = 'render cadence is unavailable because the document is hidden and requestAnimationFrame is suspended or throttled';
+        unavailableKernel(run, token, 'gpu.render-present.v1', workload, 'ms', unavailableReason);
+        throw new Error(unavailableReason);
+      }
+      if (!renderState || renderState.runId !== run.id) {
+        const unavailableReason = run.renderUnavailable || 'the browser did not initialize the surface-backed WebGPU progress renderer';
+        unavailableKernel(run, token, 'gpu.render-present.v1', workload, 'ms', unavailableReason);
+        throw new Error(unavailableReason);
+      }
+      pauseRenderBar('measuring its own visible present cadence');
+      const framesBefore = renderState.frames;
+      try {
+        updateTelemetry('gpu.render-present.v1', [], run, 0, 1, RENDER_PRESENT_SAMPLES);
+        for (let index = 0; index < RENDER_PRESENT_WARMUPS; index += 1) await presentedFrameTimestamp(run, token);
+        let previous = await presentedFrameTimestamp(run, token);
+        const samples = [];
+        for (let index = 0; index < RENDER_PRESENT_SAMPLES; index += 1) {
+          const timestamp = await presentedFrameTimestamp(run, token);
+          const delta = timestamp - previous;
+          if (!Number.isFinite(delta) || delta <= 0) {
+            throw new Error(`canvas cadence was unresolvable under the measured performance.now() quantum of ${run.environment?.timer?.resolution_ms ?? 'unknown'} ms`);
+          }
+          samples.push(delta);
+          previous = timestamp;
+          updateTelemetry('gpu.render-present.v1', samples, run, 0, 1, RENDER_PRESENT_SAMPLES);
+        }
+        const presented = renderState.frames - framesBefore;
+        completeKernel(run, token, 'gpu.render-present.v1', workload, 'ms', RENDER_PRESENT_WARMUPS, samples, [
+          TIMER_CAVEAT,
+          timerQuantumNote(run, 'canvas presentation cadence'),
+          `frames presented during kernel: ${presented}`,
+          `render adapter identity: ${renderState.facts.adapter_identity}`,
+          `surface format: ${renderState.facts.surface_format}; drawing buffer ${renderState.facts.width}x${renderState.facts.height}`,
+          `device policy: ${renderState.facts.device_policy}`,
+          'present cadence includes requestAnimationFrame scheduling, compositor/vsync pacing, surface acquisition, queue submission, and the browser presentation path; it is a display-path fact, not shader execution time',
+          'the surface renderer owns a separate logical wgpu device from compute; the compute stage had completed before this visible-only measurement began',
+          `document visibility at completion: ${document.visibilityState}`,
+        ]);
+      } catch (error) {
+        if (tokenActive(run, token) && !run.kernels.some(kernel => kernel.kernel_id === 'gpu.render-present.v1')) {
+          unavailableKernel(run, token, 'gpu.render-present.v1', workload, 'ms', reason(error), [TIMER_CAVEAT, timerQuantumNote(run, 'canvas presentation cadence')]);
+        }
+        throw error;
+      } finally {
+        if (tokenActive(run, token)) resumeRenderBar(run);
       }
     }
 
@@ -1010,8 +1258,8 @@
     async function loadWasm(run) {
       if (!wasmLoadPromise) {
         wasmLoadPromise = (async () => {
-          const module = await import('./pkg/what_is_this.js?v=4');
-          await module.default({ module_or_path: './pkg/what_is_this_bg.wasm?v=4' });
+          const module = await import('./pkg/what_is_this.js?v=5');
+          await module.default({ module_or_path: './pkg/what_is_this_bg.wasm?v=5' });
           return module;
         })();
       }
@@ -1127,6 +1375,7 @@
           actionStatus.textContent = `The tested verdict mapper declined this report: ${reason(error)}. The measurement-only fallback is shown.`;
         }
       }
+      finishRenderBar(run);
       run.running = false;
       telemetry.classList.remove('visible');
       progress.style.width = '100%';
@@ -1153,6 +1402,7 @@
       try {
         await loadWasm(run);
         if (activeRun !== run || !run.running) return;
+        await initializeRenderWindow(run);
         await runStage(run, ...STAGES[0], async (currentRun, token) => {
           const timer = timerFacts(currentRun, token);
           const rawMemory = navigator.deviceMemory;
@@ -1178,11 +1428,22 @@
           requireActive(currentRun, token);
           currentRun.capabilities = wasmCapabilities();
         });
-        await runStage(run, ...STAGES[2], measureCpu);
-        await runStage(run, ...STAGES[3], measureGpuCompute);
+        pauseRenderBar('CPU and GPU compute measurements have the laboratory');
+        try {
+          await runStage(run, ...STAGES[2], measureCpu);
+          await runStage(run, ...STAGES[3], measureGpuCompute);
+        } finally {
+          resumeRenderBar(run);
+        }
         await runStage(run, ...STAGES[4], async (currentRun, token) => measureFloats(currentRun, token));
-        await runStage(run, ...STAGES[5], measureTiming);
-        await runStage(run, ...STAGES[6], async (currentRun, token) => {
+        pauseRenderBar('display and main-thread timing measurements have the laboratory');
+        try {
+          await runStage(run, ...STAGES[5], measureTiming);
+        } finally {
+          resumeRenderBar(run);
+        }
+        await runStage(run, ...STAGES[6], measureRenderPresent);
+        await runStage(run, ...STAGES[7], async (currentRun, token) => {
           unavailableKernel(currentRun, token, 'gpu.ember-fixed-scene.v1', 'fixed instanced ember-engine scene rendered offscreen for a multi-second frame-time distribution', 'ms', GPU_UNAVAILABLE);
           throw new Error(GPU_UNAVAILABLE);
         });
@@ -1227,6 +1488,8 @@
         kernels: run.kernels,
       };
       compactReport = JSON.stringify(report);
+      stopRenderLoop();
+      gpuWindowStatus.textContent = `frozen — suite recovery path: ${failure}`;
       run.running = false;
       const reportBytes = new TextEncoder().encode(compactReport).byteLength;
       progress.style.width = '100%';
@@ -1241,6 +1504,7 @@
 
     function beginRun(guess) {
       submissionGeneration += 1;
+      resetRenderWindow('The 3D bar is clearing the previous machine from its notes.');
       if (wasm) wasm.reset_run_state();
       report = null;
       compactReport = '';
@@ -1258,6 +1522,10 @@
         floatBehavior: null,
         faerWasm: { ...DEFAULT_FAER_VERDICT },
         wasmFailure: null,
+        renderUnavailable: null,
+        renderFacts: null,
+        gpuComputeTimedOut: false,
+        currentStageIndex: 0,
         guess,
       };
       activeRun = run;
@@ -1276,6 +1544,7 @@
     function prepareForGuess() {
       submissionGeneration += 1;
       if (activeRun) activeRun.running = false;
+      resetRenderWindow('The 3D bar is waiting to find out whether this browser believes in windows.');
       if (wasm) wasm.reset_run_state();
       activeRun = null;
       report = null;
