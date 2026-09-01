@@ -17,7 +17,7 @@ const LOBBY_REFUSAL_FIXTURE: &str = include_str!("fixtures/lobby_refusal.json");
 const TRACE_FIXTURE: &str = include_str!("fixtures/deterministic_trace.json");
 const SUITE_FIXTURE: &str = include_str!("fixtures/suite.json");
 
-fn c2s_kind(message: &C2S) -> &'static str {
+const fn c2s_kind(message: &C2S) -> &'static str {
     match message {
         C2S::Hello { .. } => "hello",
         C2S::ListLobbies => "list_lobbies",
@@ -29,7 +29,7 @@ fn c2s_kind(message: &C2S) -> &'static str {
     }
 }
 
-fn s2c_kind(message: &S2C) -> &'static str {
+const fn s2c_kind(message: &S2C) -> &'static str {
     match message {
         S2C::Welcome { .. } => "welcome",
         S2C::Error { .. } => "error",
@@ -263,7 +263,7 @@ struct TraceCheckpoint {
     ack: u32,
 }
 
-fn state_from_update(codec: &ArenaCodec, update: &ember_legacy::SessionUpdate) -> Option<S2C> {
+fn state_from_update(codec: ArenaCodec, update: &ember_legacy::SessionUpdate) -> Option<S2C> {
     update.outbound.iter().find_map(|outbound| {
         let frame = codec.encode(&outbound.event).ok()?;
         let InnerFrame::Text(text) = frame else {
@@ -311,7 +311,7 @@ fn timestamped_transcript_produces_authoritative_checkpoints() {
             })
             .collect();
         let update = session.step(timestamp, inputs);
-        let state = state_from_update(&codec, &update);
+        let state = state_from_update(codec, &update);
         let Some(checkpoint) = call.checkpoint else {
             assert!(state.is_none());
             continue;
