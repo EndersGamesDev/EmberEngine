@@ -1,5 +1,8 @@
 //! Closed product registrations joined to the authoritative hosted manifest.
 
+// Crate visibility documents the sibling-module host boundary behind this private module.
+#![allow(clippy::redundant_pub_crate)]
+
 use std::sync::Arc;
 
 use ember_game_arena_v12::{ArenaCodec, ArenaFactory, ArenaLegacyIngressFactory, game_key};

@@ -1,5 +1,8 @@
 //! Host implementations of the narrow `ember-legacy` capability traits.
 
+// Crate visibility documents the sibling-module host boundary behind this private module.
+#![allow(clippy::redundant_pub_crate)]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -42,7 +45,7 @@ pub(crate) struct HostClock {
 }
 
 impl HostClock {
-    pub(crate) fn new(epoch: HostEpoch, shutting_down: Arc<AtomicBool>) -> Self {
+    pub(crate) const fn new(epoch: HostEpoch, shutting_down: Arc<AtomicBool>) -> Self {
         Self {
             epoch,
             shutting_down,
@@ -93,6 +96,7 @@ impl LegacyClock for HostClock {
         }
         let handle = self.next_handle.fetch_add(1, Ordering::Relaxed);
         schedules.insert(handle, timestamp);
+        drop(schedules);
         Ok(ScheduleHandle::from_host_value(handle))
     }
 
@@ -152,7 +156,7 @@ pub(crate) struct HostTransport {
 }
 
 impl HostTransport {
-    pub(crate) fn new(
+    pub(crate) const fn new(
         game_key: GameKey,
         session_id: SessionId,
         shutting_down: Arc<AtomicBool>,
@@ -198,6 +202,7 @@ impl LegacyTransport for HostTransport {
         if !peers.contains(&peer_id) {
             return Err(TransportError::UnknownPeer);
         }
+        drop(peers);
         Ok(UnicastHandle::from_peer_id(peer_id))
     }
 

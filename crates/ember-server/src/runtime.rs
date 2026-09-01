@@ -28,7 +28,7 @@ use crate::capabilities::{HostEpoch, SessionCapabilities};
 use crate::connection::{
     ConnectionConfig, ConnectionEvent, DataFrame, Ingress, OutboundCommand, spawn_acceptor,
 };
-use crate::registry::{Registry, RegistryBuilder, RegistryError, SelectionError};
+use crate::registry::{Registry, RegistryBuilder, RegistryEntry, RegistryError, SelectionError};
 
 const DEFAULT_MANIFEST_PATH: &str = "games/hosted.toml";
 const DEFAULT_BIND_ADDRESS: &str = "127.0.0.1:24816";
@@ -608,8 +608,7 @@ impl Hub {
             for _ in 0..1_024 {
                 match events.try_recv() {
                     Ok(event) => self.handle_event(event),
-                    Err(mpsc::TryRecvError::Empty) => break,
-                    Err(mpsc::TryRecvError::Disconnected) => break,
+                    Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected) => break,
                 }
             }
             self.process_pending_updates();
@@ -634,7 +633,7 @@ impl Hub {
                         let Some(factory) = self
                             .registry
                             .entry(key)
-                            .and_then(|entry| entry.legacy_ingress())
+                            .and_then(RegistryEntry::legacy_ingress)
                         else {
                             tracing::error!(?key, "manifest legacy route has no adapter factory");
                             drop(outbound.try_send(OutboundCommand::Close {
@@ -643,17 +642,17 @@ impl Hub {
                             }));
                             return;
                         };
-                        match catch_unwind(AssertUnwindSafe(|| factory.create())) {
-                            Ok(adapter) => Some(adapter),
-                            Err(_) => {
-                                tracing::error!(?key, "legacy adapter factory panicked");
-                                drop(outbound.try_send(OutboundCommand::Close {
-                                    code: CloseCode::Error,
-                                    reason: "legacy adapter construction failed".to_string(),
-                                }));
-                                return;
-                            }
-                        }
+                        let Ok(adapter) =
+                            catch_unwind(AssertUnwindSafe(|| factory.create()))
+                        else {
+                            tracing::error!(?key, "legacy adapter factory panicked");
+                            drop(outbound.try_send(OutboundCommand::Close {
+                                code: CloseCode::Error,
+                                reason: "legacy adapter construction failed".to_string(),
+                            }));
+                            return;
+                        };
+                        Some(adapter)
                     }
                 };
                 self.connections.insert(
@@ -761,7 +760,7 @@ impl Hub {
                     }),
                 );
             }
-            self.close_detached(
+            Self::close_detached(
                 &mut connection,
                 CloseReason::FrameTooLarge,
                 CloseCode::Size,
@@ -777,7 +776,7 @@ impl Hub {
                     }),
                 );
             }
-            self.close_detached(
+            Self::close_detached(
                 &mut connection,
                 CloseReason::ProtocolViolation,
                 CloseCode::Policy,
@@ -855,7 +854,7 @@ impl Hub {
         let state = legacy_connection_state(connection.state.state());
         let decoded = {
             let Some(adapter) = connection.legacy_ingress.as_mut() else {
-                self.close_detached(
+                Self::close_detached(
                     connection,
                     CloseReason::InternalError,
                     CloseCode::Error,
@@ -869,7 +868,7 @@ impl Hub {
             Ok(Ok(action)) => action,
             Ok(Err(error)) => {
                 tracing::debug!(connection = connection.id, ?error, "legacy frame rejected");
-                self.close_detached(
+                Self::close_detached(
                     connection,
                     CloseReason::ProtocolViolation,
                     CloseCode::Protocol,
@@ -878,7 +877,7 @@ impl Hub {
                 return;
             }
             Err(_) => {
-                self.close_detached(
+                Self::close_detached(
                     connection,
                     CloseReason::InternalError,
                     CloseCode::Error,
@@ -899,7 +898,7 @@ impl Hub {
                     Ingress::Legacy(route) if route.game_id == selection.game_id
                 );
                 if !route_matches || !valid_handle(&handle) {
-                    self.close_detached(
+                    Self::close_detached(
                         connection,
                         CloseReason::ProtocolViolation,
                         CloseCode::Protocol,
@@ -914,7 +913,7 @@ impl Hub {
                     }),
                 ));
                 if !matches!(transition, StateAction::AcceptHello(_)) {
-                    self.close_detached(
+                    Self::close_detached(
                         connection,
                         CloseReason::ProtocolViolation,
                         CloseCode::Protocol,
@@ -1073,10 +1072,7 @@ impl Hub {
                 password_protected: lobby.password.is_some(),
                 occupancy: u16::try_from(lobby.members.len()).unwrap_or(u16::MAX),
                 capacity: lobby.limits.max_players_per_lobby,
-                status: ember_legacy::LobbyStatus {
-                    code: status.code,
-                    detail: status.detail,
-                },
+                status,
             });
         }
         for key in panicked {
@@ -1398,7 +1394,7 @@ impl Hub {
             Ok(Ok(decoded)) => decoded,
             Ok(Err(error)) => {
                 tracing::debug!(connection = connection.id, ?error, "inner codec rejected frame");
-                self.close_detached(
+                Self::close_detached(
                     connection,
                     CloseReason::ProtocolViolation,
                     CloseCode::Protocol,
@@ -1409,7 +1405,7 @@ impl Hub {
             Err(_) => {
                 let key = lobby_key.clone();
                 self.terminate_lobby(&key, "version codec panicked during decode");
-                self.close_detached(
+                Self::close_detached(
                     connection,
                     CloseReason::InternalError,
                     CloseCode::Error,
@@ -1679,7 +1675,7 @@ impl Hub {
     fn reject_outer(&mut self, connection: &mut Connection, error: OuterError, close: bool) {
         self.send_outer(connection, &ServerMessage::Error(error));
         if close {
-            self.close_detached(
+            Self::close_detached(
                 connection,
                 CloseReason::ProtocolViolation,
                 CloseCode::Protocol,
@@ -1739,7 +1735,7 @@ impl Hub {
                 }),
             );
         }
-        self.close_detached(
+        Self::close_detached(
             connection,
             CloseReason::InternalError,
             CloseCode::Error,
@@ -1747,6 +1743,8 @@ impl Hub {
         );
     }
 
+    // The outbound boundary owns a refusal so callers cannot reuse a projected response.
+    #[allow(clippy::needless_pass_by_value)]
     fn send_legacy_refusal(
         &mut self,
         connection: &mut Connection,
@@ -1754,7 +1752,7 @@ impl Hub {
     ) {
         let projected = {
             let Some(adapter) = connection.legacy_ingress.as_ref() else {
-                self.close_detached(
+                Self::close_detached(
                     connection,
                     CloseReason::InternalError,
                     CloseCode::Error,
@@ -1768,14 +1766,14 @@ impl Hub {
             Ok(Ok(frame)) => self.send_legacy_frame(connection, frame),
             Ok(Err(error)) => {
                 tracing::error!(connection = connection.id, ?error, "legacy refusal encode failed");
-                self.close_detached(
+                Self::close_detached(
                     connection,
                     CloseReason::InternalError,
                     CloseCode::Error,
                     "legacy refusal projection failed",
                 );
             }
-            Err(_) => self.close_detached(
+            Err(_) => Self::close_detached(
                 connection,
                 CloseReason::InternalError,
                 CloseCode::Error,
@@ -1784,6 +1782,8 @@ impl Hub {
         }
     }
 
+    // The outbound boundary owns each version frame so callers cannot reuse it after sending.
+    #[allow(clippy::needless_pass_by_value)]
     fn send_legacy_frame(&mut self, connection: &mut Connection, frame: InnerFrame) {
         let selected_key = connection
             .joined_lobby()
@@ -1793,7 +1793,7 @@ impl Hub {
                 Ingress::Canonical => None,
             });
         let Some(selected_key) = selected_key else {
-            self.close_detached(
+            Self::close_detached(
                 connection,
                 CloseReason::InternalError,
                 CloseCode::Error,
@@ -1802,7 +1802,7 @@ impl Hub {
             return;
         };
         let Some(entry) = self.registry.entry(&selected_key) else {
-            self.close_detached(
+            Self::close_detached(
                 connection,
                 CloseReason::InternalError,
                 CloseCode::Error,
@@ -1812,7 +1812,7 @@ impl Hub {
         };
         let limits = entry.limits();
         if frame.len() > usize::try_from(limits.max_frame_bytes).unwrap_or(usize::MAX) {
-            self.close_detached(
+            Self::close_detached(
                 connection,
                 CloseReason::FrameTooLarge,
                 CloseCode::Size,
@@ -1838,7 +1838,7 @@ impl Hub {
                 self.config.max_connection_outbound_queue_bytes,
             )
         {
-            self.close_detached(
+            Self::close_detached(
                 connection,
                 CloseReason::SlowConsumer,
                 CloseCode::Policy,
@@ -1847,7 +1847,7 @@ impl Hub {
         }
     }
 
-    fn send_outer(&mut self, connection: &mut Connection, message: &ServerMessage) {
+    fn send_outer(&self, connection: &mut Connection, message: &ServerMessage) {
         let encoded = match outer::encode_server_frame(message) {
             Ok(encoded) => encoded,
             Err(error) => {
@@ -1896,7 +1896,7 @@ impl Hub {
         let Some(mut connection) = self.connections.remove(&id) else {
             return;
         };
-        self.close_detached(&mut connection, reason.clone(), code, detail);
+        Self::close_detached(&mut connection, reason.clone(), code, detail);
         self.detach_connection(&connection, reason);
     }
 
@@ -1911,7 +1911,6 @@ impl Hub {
     }
 
     fn close_detached(
-        &mut self,
         connection: &mut Connection,
         reason: CloseReason,
         code: CloseCode,
@@ -2296,6 +2295,6 @@ mod tests {
         let decoded = DecodedInput {
             payload: Vec::new(),
         };
-        assert!(decoded.payload.is_empty());
+        assert_eq!(decoded.payload, Vec::<u8>::new());
     }
 }

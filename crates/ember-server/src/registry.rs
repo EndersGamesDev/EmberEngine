@@ -1,5 +1,8 @@
 //! Immutable hosted-version registry construction and exact selection.
 
+// Crate visibility documents the sibling-module host boundary behind this private module.
+#![allow(clippy::redundant_pub_crate)]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;

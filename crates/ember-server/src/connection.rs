@@ -1,5 +1,8 @@
 //! WebSocket handshake and per-connection I/O ownership.
 
+// Crate visibility documents the sibling-module host boundary behind this private module.
+#![allow(clippy::redundant_pub_crate)]
+
 use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::net::{IpAddr, Shutdown, TcpListener, TcpStream};
@@ -167,10 +170,9 @@ fn connection_ip_is_full(
     if ip.is_loopback() && !config.cap_loopback {
         return false;
     }
-    match per_ip.lock() {
-        Ok(counts) => counts.get(&ip).copied().unwrap_or(0) >= config.max_connections_per_ip,
-        Err(_) => true,
-    }
+    per_ip.lock().map_or(true, |counts| {
+        counts.get(&ip).copied().unwrap_or(0) >= config.max_connections_per_ip
+    })
 }
 
 fn increment_ip(
@@ -213,6 +215,8 @@ fn decrement_ip(
 
 // Keeping handshake, reads, and bounded writes together makes socket ownership auditable.
 #[allow(clippy::too_many_lines)]
+// Tungstenite fixes the callback's large error type even though this callback returns only `Ok`.
+#[allow(clippy::result_large_err)]
 fn run_connection(
     id: u64,
     stream: TcpStream,

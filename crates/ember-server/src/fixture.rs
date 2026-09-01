@@ -1,5 +1,8 @@
 //! Minimal compiled fixture version for host tests and feature-gated demonstrations.
 
+// Crate visibility documents the sibling-module host boundary behind this private module.
+#![allow(clippy::redundant_pub_crate)]
+
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
