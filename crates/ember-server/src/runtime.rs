@@ -2234,6 +2234,7 @@ mod tests {
             outer_version: outer::OUTER_VERSION,
             handle: "player".to_string(),
         };
+        let mut state = StateMachine::new();
         assert!(matches!(
             state.transition(StateInput::Outer(outer::ClientMessage::Hello(
                 hello.clone()
@@ -2241,11 +2242,18 @@ mod tests {
             StateAction::AcceptHello(_)
         ));
         assert!(matches!(
-            state.transition(StateInput::Outer(outer::ClientMessage::Hello(hello))),
+            state.transition(StateInput::Outer(outer::ClientMessage::Hello(
+                hello.clone()
+            ))),
             StateAction::Reject {
                 close_after_error: true,
                 ..
             }
+        ));
+        let mut state = StateMachine::new();
+        assert!(matches!(
+            state.transition(StateInput::Outer(outer::ClientMessage::Hello(hello))),
+            StateAction::AcceptHello(_)
         ));
         state
             .mark_joined(Joined {
