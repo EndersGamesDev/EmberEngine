@@ -21,11 +21,19 @@ use tungstenite::Message;
 
 const DEADLINE: Duration = Duration::from_secs(12);
 
+/// Occupancy check, for the deploy to consult before it restarts anything.
+/// A separate exit code from "unhealthy" on purpose: a deploy must refuse when
+/// people are mid-race, but must NOT refuse merely because the old server is
+/// unreachable — that is precisely when a redeploy is most needed.
+const EXIT_OCCUPIED: u8 = 2;
+
 fn main() -> std::process::ExitCode {
-    let Some(url) = std::env::args().nth(1) else {
-        eprintln!("usage: probe <ws-url>");
+    let mut args = std::env::args().skip(1);
+    let Some(url) = args.next() else {
+        eprintln!("usage: probe <ws-url> [--require-empty]");
         return std::process::ExitCode::from(1);
     };
+    let require_empty = args.any(|a| a == "--require-empty");
 
     // Needed for wss:// through the tunnel; harmless for plain ws://.
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -52,22 +60,54 @@ fn main() -> std::process::ExitCode {
         match ws.read() {
             Ok(Message::Text(t)) => {
                 let Ok(msg) = serde_json::from_str::<S2C>(&t) else { continue };
-                if let S2C::Welcome { proto: server } = msg {
-                    let _ = ws.close(None);
-                    if server != proto::PROTO_VERSION {
-                        eprintln!(
-                            "probe: server is ALIVE but speaks fire protocol v{server}, \
-                             this build speaks v{}",
-                            proto::PROTO_VERSION
+                match msg {
+                    S2C::Welcome { proto: server } => {
+                        if server != proto::PROTO_VERSION {
+                            let _ = ws.close(None);
+                            eprintln!(
+                                "probe: server is ALIVE but speaks fire protocol v{server}, \
+                                 this build speaks v{}",
+                                proto::PROTO_VERSION
+                            );
+                            return std::process::ExitCode::from(1);
+                        }
+                        println!(
+                            "probe: healthy — Welcome received, fire protocol v{server}, \
+                             {} ms round trip",
+                            t0.elapsed().as_millis()
                         );
-                        return std::process::ExitCode::from(1);
+                        if !require_empty {
+                            let _ = ws.close(None);
+                            return std::process::ExitCode::SUCCESS;
+                        }
+                        // Ask who is on the server before anyone restarts it.
+                        let list = serde_json::to_string(&C2S::ListLobbies).unwrap();
+                        if ws.send(Message::text(list)).is_err() {
+                            eprintln!("probe: could not ask for the lobby list");
+                            return std::process::ExitCode::from(1);
+                        }
                     }
-                    println!(
-                        "probe: healthy — Welcome received, fire protocol v{server}, \
-                         {} ms round trip",
-                        t0.elapsed().as_millis()
-                    );
-                    return std::process::ExitCode::SUCCESS;
+                    S2C::Lobbies { lobbies } => {
+                        let _ = ws.close(None);
+                        let busy: Vec<_> = lobbies.iter().filter(|l| l.players > 0).collect();
+                        let total: u32 = busy.iter().map(|l| l.players as u32).sum();
+                        if total == 0 {
+                            println!("probe: nobody in game ({} lobbies)", lobbies.len());
+                            return std::process::ExitCode::SUCCESS;
+                        }
+                        for l in &busy {
+                            println!(
+                                "probe: OCCUPIED — lobby '{}' has {}/{} player(s){}",
+                                l.name,
+                                l.players,
+                                l.cap,
+                                if l.racing { ", racing" } else { "" }
+                            );
+                        }
+                        eprintln!("probe: {total} player(s) in game");
+                        return std::process::ExitCode::from(EXIT_OCCUPIED);
+                    }
+                    _ => {}
                 }
             }
             Ok(Message::Close(_)) => {
