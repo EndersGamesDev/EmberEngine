@@ -110,10 +110,7 @@ pub fn cap_vertices() -> Vec<[f64; 4]> {
 }
 
 fn squared_distance(left: &[f64], right: &[f64]) -> f64 {
-    left.iter()
-        .zip(right)
-        .map(|(a, b)| (a - b) * (a - b))
-        .sum()
+    left.iter().zip(right).map(|(a, b)| (a - b) * (a - b)).sum()
 }
 
 fn derive_cap_edges(vertices: &[[f64; 4]]) -> (f64, Vec<Edge>) {
@@ -145,12 +142,14 @@ pub fn prism() -> Prism {
     let (edge_length, cap_edges) = derive_cap_edges(&cap);
     let half_strut = edge_length * 0.5;
     let mut vertices = Vec::with_capacity(1_200);
-    vertices.extend(cap.iter().map(|point| {
-        [point[0], point[1], point[2], point[3], -half_strut]
-    }));
-    vertices.extend(cap.iter().map(|point| {
-        [point[0], point[1], point[2], point[3], half_strut]
-    }));
+    vertices.extend(
+        cap.iter()
+            .map(|point| [point[0], point[1], point[2], point[3], -half_strut]),
+    );
+    vertices.extend(
+        cap.iter()
+            .map(|point| [point[0], point[1], point[2], point[3], half_strut]),
+    );
     let mut edges = Vec::with_capacity(3_000);
     edges.extend(cap_edges.iter().copied());
     edges.extend(cap_edges.iter().map(|edge| Edge {
@@ -241,10 +240,7 @@ pub fn project_gpu_path(point: [f64; 5], time: f64) -> ([f32; 3], f32) {
 
 /// Computes the `f64` reference edge transform and fixed-range fifth-axis hue.
 #[must_use]
-pub fn edge_reference(
-    first: ([f64; 3], f64),
-    second: ([f64; 3], f64),
-) -> EdgePose<f64> {
+pub fn edge_reference(first: ([f64; 3], f64), second: ([f64; 3], f64)) -> EdgePose<f64> {
     let delta = [
         second.0[0] - first.0[0],
         second.0[1] - first.0[1],
@@ -319,8 +315,14 @@ pub fn assert_invariants() {
         .iter()
         .map(|point| point[3].abs() * 8.0 / (8.0 - maximum_fifth_reach))
         .fold(0.0_f64, f64::max);
-    assert!(maximum_fifth_reach < 8.0, "5D projection pole intersects object reach");
-    assert!(maximum_fourth_projection < 8.0, "4D projection pole intersects object reach");
+    assert!(
+        maximum_fifth_reach < 8.0,
+        "5D projection pole intersects object reach"
+    );
+    assert!(
+        maximum_fourth_projection < 8.0,
+        "4D projection pole intersects object reach"
+    );
 }
 
 #[cfg(test)]
@@ -355,8 +357,13 @@ mod tests {
                 let reference = edge_reference(first, second);
                 let gpu = edge_gpu_path(gpu_first, gpu_second);
                 for axis in 0..3 {
-                    assert!((reference.midpoint[axis] - f64::from(gpu.midpoint[axis])).abs() <= 4.0e-5);
-                    assert!((reference.direction[axis] - f64::from(gpu.direction[axis])).abs() <= 4.0e-5);
+                    assert!(
+                        (reference.midpoint[axis] - f64::from(gpu.midpoint[axis])).abs() <= 4.0e-5
+                    );
+                    assert!(
+                        (reference.direction[axis] - f64::from(gpu.direction[axis])).abs()
+                            <= 4.0e-5
+                    );
                 }
                 assert!((reference.length - f64::from(gpu.length)).abs() <= 4.0e-5);
                 assert!((reference.hue - f64::from(gpu.hue)).abs() <= 4.0e-5);

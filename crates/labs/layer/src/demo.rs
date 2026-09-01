@@ -177,7 +177,9 @@ impl Demo {
         });
         let surface = instance
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
-            .map_err(|error| LayerError::Capability(format!("could not bind WebGL2 canvas: {error}")))?;
+            .map_err(|error| {
+                LayerError::Capability(format!("could not bind WebGL2 canvas: {error}"))
+            })?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::LowPower,
@@ -189,7 +191,8 @@ impl Demo {
         let info = adapter.get_info();
         if info.backend != wgpu::Backend::Gl {
             return Err(LayerError::Capability(format!(
-                "requested GL/WebGL2 but wgpu selected {:?}", info.backend
+                "requested GL/WebGL2 but wgpu selected {:?}",
+                info.backend
             )));
         }
         let required_limits =
@@ -228,11 +231,10 @@ impl Demo {
             .find(|mode| *mode == wgpu::PresentMode::AutoVsync)
             .or_else(|| capabilities.present_modes.first().copied())
             .ok_or_else(|| LayerError::Capability("surface exposes no present mode".to_string()))?;
-        let alpha_mode = capabilities
-            .alpha_modes
-            .first()
-            .copied()
-            .ok_or_else(|| LayerError::Capability("surface exposes no alpha mode".to_string()))?;
+        let alpha_mode =
+            capabilities.alpha_modes.first().copied().ok_or_else(|| {
+                LayerError::Capability("surface exposes no alpha mode".to_string())
+            })?;
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
@@ -251,7 +253,14 @@ impl Demo {
         let first_slot: Vec<_> = object
             .vertices
             .iter()
-            .map(|point| [point[0] as f32, point[1] as f32, point[2] as f32, point[3] as f32])
+            .map(|point| {
+                [
+                    point[0] as f32,
+                    point[1] as f32,
+                    point[2] as f32,
+                    point[3] as f32,
+                ]
+            })
             .collect();
         let second_slot: Vec<_> = object
             .vertices
@@ -283,12 +292,8 @@ impl Demo {
             2,
             None,
         )?;
-        let poses = compute.create_buffer(
-            "pillar edge transforms",
-            IndexSpace::Grid1D(3_000),
-            2,
-            None,
-        )?;
+        let poses =
+            compute.create_buffer("pillar edge transforms", IndexSpace::Grid1D(3_000), 2, None)?;
         let vertex_inputs = [
             InputBinding {
                 accessor: "load_base_four",
@@ -365,96 +370,113 @@ impl Demo {
             })
             .await?;
 
-        compute.device().push_error_scope(wgpu::ErrorFilter::Validation);
-        let shader = compute.device().create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("pillar thin box renderer"),
-            source: wgpu::ShaderSource::Wgsl(RENDER_SHADER.into()),
-        });
-        let render_layout = compute.device().create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("pillar render texture layout"),
-            entries: &[
-                texture_layout_entry(0),
-                texture_layout_entry(1),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(16),
+        compute
+            .device()
+            .push_error_scope(wgpu::ErrorFilter::Validation);
+        let shader = compute
+            .device()
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("pillar thin box renderer"),
+                source: wgpu::ShaderSource::Wgsl(RENDER_SHADER.into()),
+            });
+        let render_layout =
+            compute
+                .device()
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("pillar render texture layout"),
+                    entries: &[
+                        texture_layout_entry(0),
+                        texture_layout_entry(1),
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 2,
+                            visibility: wgpu::ShaderStages::VERTEX,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: wgpu::BufferSize::new(16),
+                            },
+                            count: None,
+                        },
+                    ],
+                });
+        let camera = compute
+            .device()
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("pillar camera uniform"),
+                contents: bytemuck::bytes_of(&CameraUniform {
+                    aspect: width as f32 / height as f32,
+                    yaw: 0.42,
+                    pitch: -0.28,
+                    distance: 10.5,
+                }),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+        let render_bind_group = compute
+            .device()
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("pillar render textures"),
+                layout: &render_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(poses.as_vertex_texture(0)?),
                     },
-                    count: None,
-                },
-            ],
-        });
-        let camera = compute.device().create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("pillar camera uniform"),
-            contents: bytemuck::bytes_of(&CameraUniform {
-                aspect: width as f32 / height as f32,
-                yaw: 0.42,
-                pitch: -0.28,
-                distance: 10.5,
-            }),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-        let render_bind_group = compute.device().create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("pillar render textures"),
-            layout: &render_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(poses.as_vertex_texture(0)?),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(poses.as_vertex_texture(1)?),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: camera.as_entire_binding(),
-                },
-            ],
-        });
-        let pipeline_layout = compute.device().create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("pillar render pipeline layout"),
-            bind_group_layouts: &[&render_layout],
-            push_constant_ranges: &[],
-        });
-        let render_pipeline = compute.device().create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("pillar thin box renderer"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vertex_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fragment_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: Some(wgpu::Face::Back),
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(poses.as_vertex_texture(1)?),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: camera.as_entire_binding(),
+                    },
+                ],
+            });
+        let pipeline_layout =
+            compute
+                .device()
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("pillar render pipeline layout"),
+                    bind_group_layouts: &[&render_layout],
+                    push_constant_ranges: &[],
+                });
+        let render_pipeline =
+            compute
+                .device()
+                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("pillar thin box renderer"),
+                    layout: Some(&pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some("vertex_main"),
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        buffers: &[],
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some("fragment_main"),
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format,
+                            blend: Some(wgpu::BlendState::REPLACE),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        cull_mode: Some(wgpu::Face::Back),
+                        ..Default::default()
+                    },
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: DEPTH_FORMAT,
+                        depth_write_enabled: true,
+                        depth_compare: wgpu::CompareFunction::Less,
+                        stencil: wgpu::StencilState::default(),
+                        bias: wgpu::DepthBiasState::default(),
+                    }),
+                    multisample: wgpu::MultisampleState::default(),
+                    multiview: None,
+                    cache: None,
+                });
         if let Some(error) = compute.device().pop_error_scope().await {
             return Err(LayerError::Pipeline(format!(
                 "vertex-texture consumer pipeline failed: {error}"
@@ -546,13 +568,15 @@ impl Demo {
         self.compute
             .queue()
             .write_buffer(&self.camera, 0, bytemuck::bytes_of(&camera));
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self
-            .compute
-            .device()
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("pillar render frame"),
-            });
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder =
+            self.compute
+                .device()
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("pillar render frame"),
+                });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("pillar thin boxes"),

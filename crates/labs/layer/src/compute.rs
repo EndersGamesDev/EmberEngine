@@ -310,7 +310,12 @@ fn callback_pair() -> (CallbackFuture, Arc<Mutex<CallbackState>>) {
         waker: None,
         closed: false,
     }));
-    (CallbackFuture { state: Arc::clone(&state) }, state)
+    (
+        CallbackFuture {
+            state: Arc::clone(&state),
+        },
+        state,
+    )
 }
 
 fn finish_callback(state: &Arc<Mutex<CallbackState>>, value: MapOutcome) {
@@ -441,16 +446,22 @@ fn assemble(desc: &KernelDesc<'_>) -> Result<String, DialectError> {
         message: format!("could not assemble uniform binding: {error}"),
     })?;
     source.push_str("struct LayerVertexOut { @builtin(position) position: vec4<f32>, }\n");
-    source.push_str("@vertex fn layer_vertex(@builtin(vertex_index) vertex: u32) -> LayerVertexOut {\n");
+    source.push_str(
+        "@vertex fn layer_vertex(@builtin(vertex_index) vertex: u32) -> LayerVertexOut {\n",
+    );
     source.push_str("  var positions = array<vec2<f32>, 3>(vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));\n");
     source.push_str("  var output: LayerVertexOut; output.position = vec4(positions[vertex], 0.0, 1.0); return output;\n}\n");
     source.push_str("struct LayerFragmentOut {\n");
     for (location, output) in desc.outputs.iter().enumerate() {
-        writeln!(source, "  @location({location}) output_{location}: vec4<f32>, // {}", output.field)
-            .map_err(|error| DialectError::Validation {
-                kernel: desc.name.to_string(),
-                message: format!("could not assemble output declaration: {error}"),
-            })?;
+        writeln!(
+            source,
+            "  @location({location}) output_{location}: vec4<f32>, // {}",
+            output.field
+        )
+        .map_err(|error| DialectError::Validation {
+            kernel: desc.name.to_string(),
+            message: format!("could not assemble output declaration: {error}"),
+        })?;
     }
     source.push_str("}\n@fragment fn layer_fragment(@builtin(position) position: vec4<f32>) -> LayerFragmentOut {\n");
     writeln!(
@@ -464,17 +475,22 @@ fn assemble(desc: &KernelDesc<'_>) -> Result<String, DialectError> {
     })?;
     source.push_str("  let result = kernel(index, layer_uniform); var output: LayerFragmentOut;\n");
     for (location, output) in desc.outputs.iter().enumerate() {
-        writeln!(source, "  output.output_{location} = result.{};", output.field)
-            .map_err(|error| DialectError::Validation {
-                kernel: desc.name.to_string(),
-                message: format!("could not assemble output assignment: {error}"),
-            })?;
+        writeln!(
+            source,
+            "  output.output_{location} = result.{};",
+            output.field
+        )
+        .map_err(|error| DialectError::Validation {
+            kernel: desc.name.to_string(),
+            message: format!("could not assemble output assignment: {error}"),
+        })?;
     }
     source.push_str("  return output;\n}\n");
-    let module = naga::front::wgsl::parse_str(&source).map_err(|error| DialectError::Validation {
-        kernel: desc.name.to_string(),
-        message: error.emit_to_string(&source),
-    })?;
+    let module =
+        naga::front::wgsl::parse_str(&source).map_err(|error| DialectError::Validation {
+            kernel: desc.name.to_string(),
+            message: error.emit_to_string(&source),
+        })?;
     naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::all(),
@@ -590,9 +606,12 @@ impl ComputeDevice {
 
     fn check_owner(&self, owner: u64) -> Result<(), LayerError> {
         if owner == self.owner {
-            self.lost_reason().map_or(Ok(()), |reason| Err(LayerError::DeviceLost(reason)))
+            self.lost_reason()
+                .map_or(Ok(()), |reason| Err(LayerError::DeviceLost(reason)))
         } else {
-            Err(LayerError::Resource("resource belongs to another compute device".to_string()))
+            Err(LayerError::Resource(
+                "resource belongs to another compute device".to_string(),
+            ))
         }
     }
 
@@ -609,14 +628,17 @@ impl ComputeDevice {
         initial: Option<&[&[[f32; 4]]]>,
     ) -> Result<ComputeBuffer, LayerError> {
         let (width, height) = index_space.rect();
-        if index_space.len() == 0 || slot_count == 0 || width > self.facts.max_texture_dimension_2d {
+        if index_space.len() == 0 || slot_count == 0 || width > self.facts.max_texture_dimension_2d
+        {
             return Err(LayerError::Resource(format!(
                 "{label} has invalid space {index_space:?} or slot count {slot_count}"
             )));
         }
         if let Some(values) = initial {
             if values.len() != slot_count
-                || values.iter().any(|slot| slot.len() != index_space.len() as usize)
+                || values
+                    .iter()
+                    .any(|slot| slot.len() != index_space.len() as usize)
             {
                 return Err(LayerError::Resource(format!(
                     "{label} initial data does not match {slot_count} slots of {} elements",
@@ -712,23 +734,29 @@ impl ComputeDevice {
             }
             let key = (output.buffer.id, output.slot);
             if output_keys.contains(&key) {
-                return Err(LayerError::Resource("MRT outputs alias the same slot".to_string()));
+                return Err(LayerError::Resource(
+                    "MRT outputs alias the same slot".to_string(),
+                ));
             }
             if desc
                 .inputs
                 .iter()
                 .any(|input| (input.buffer.id, input.slot) == key)
             {
-                return Err(LayerError::Resource("a dispatch cannot sample and render the same slot".to_string()));
+                return Err(LayerError::Resource(
+                    "a dispatch cannot sample and render the same slot".to_string(),
+                ));
             }
             output_keys.push(key);
         }
         let source = assemble(&desc)?;
         self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let shader = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some(desc.name),
-            source: wgpu::ShaderSource::Wgsl(source.clone().into()),
-        });
+        let shader = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(desc.name),
+                source: wgpu::ShaderSource::Wgsl(source.clone().into()),
+            });
         let mut layout_entries = Vec::with_capacity(desc.inputs.len() + 1);
         for binding in 0..desc.inputs.len() {
             layout_entries.push(wgpu::BindGroupLayoutEntry {
@@ -752,10 +780,12 @@ impl ComputeDevice {
             },
             count: None,
         });
-        let bind_layout = self.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some(desc.name),
-            entries: &layout_entries,
-        });
+        let bind_layout = self
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some(desc.name),
+                entries: &layout_entries,
+            });
         let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(desc.name),
             size: desc.uniform_size,
@@ -778,11 +808,13 @@ impl ComputeDevice {
             layout: &bind_layout,
             entries: &bind_entries,
         });
-        let pipeline_layout = self.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some(desc.name),
-            bind_group_layouts: &[&bind_layout],
-            push_constant_ranges: &[],
-        });
+        let pipeline_layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some(desc.name),
+                bind_group_layouts: &[&bind_layout],
+                push_constant_ranges: &[],
+            });
         let targets: Vec<_> = desc
             .outputs
             .iter()
@@ -794,34 +826,40 @@ impl ComputeDevice {
                 })
             })
             .collect();
-        let pipeline = self.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(desc.name),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("layer_vertex"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("layer_fragment"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &targets,
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+        let pipeline = self
+            .device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(desc.name),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("layer_vertex"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("layer_fragment"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    targets: &targets,
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            });
         if let Some(error) = self.device.pop_error_scope().await {
             return Err(LayerError::Pipeline(error.to_string()));
         }
         let outputs = desc
             .outputs
             .iter()
-            .map(|output| output.buffer.slots[output.slot].texture.create_view(&Default::default()))
+            .map(|output| {
+                output.buffer.slots[output.slot]
+                    .texture
+                    .create_view(&Default::default())
+            })
             .collect();
         let (width, height) = desc.index_space.rect();
         Ok(Kernel {
@@ -854,9 +892,11 @@ impl ComputeDevice {
             )));
         }
         self.queue.write_buffer(&kernel.uniform, 0, uniform);
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some(&kernel.name),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some(&kernel.name),
+            });
         let attachments: Vec<_> = kernel
             .outputs
             .iter()
@@ -881,7 +921,14 @@ impl ComputeDevice {
             });
             pass.set_pipeline(&kernel.pipeline);
             pass.set_bind_group(0, &kernel.bind_group, &[]);
-            pass.set_viewport(0.0, 0.0, kernel.width as f32, kernel.height as f32, 0.0, 1.0);
+            pass.set_viewport(
+                0.0,
+                0.0,
+                kernel.width as f32,
+                kernel.height as f32,
+                0.0,
+                1.0,
+            );
             pass.draw(0..3, 0..1);
         }
         self.queue.submit([encoder.finish()]);
@@ -926,7 +973,11 @@ impl ComputeDevice {
         Ok(())
     }
 
-    async fn map(&self, buffer: &wgpu::Buffer, token: DispatchToken) -> Result<Vec<u8>, LayerError> {
+    async fn map(
+        &self,
+        buffer: &wgpu::Buffer,
+        token: DispatchToken,
+    ) -> Result<Vec<u8>, LayerError> {
         self.check_token(token)?;
         let slice = buffer.slice(..);
         let (future, state) = callback_pair();
@@ -959,9 +1010,11 @@ impl ComputeDevice {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("fragment compute explicit completion fence"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("fragment compute explicit completion fence"),
+            });
         encoder.copy_buffer_to_buffer(&self.marker, 0, &fence, 0, 4);
         self.queue.submit([encoder.finish()]);
         self.map(&fence, token).await.map(|_| ())
@@ -994,9 +1047,11 @@ impl ComputeDevice {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("fragment compute texture readback"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("fragment compute texture readback"),
+            });
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture: &source.texture,
@@ -1076,7 +1131,8 @@ impl ComputeDevice {
         for (actual, expected) in values[0].iter().zip(expected) {
             if (*actual - expected).abs() > 1.0e-6 {
                 return Err(LayerError::Capability(format!(
-                    "golden RGBA32F result {:?} differs from {:?}", values[0], expected
+                    "golden RGBA32F result {:?} differs from {:?}",
+                    values[0], expected
                 )));
             }
         }
