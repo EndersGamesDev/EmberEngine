@@ -105,3 +105,4 @@ Presenter and input work is planned in `docs/presenter-architecture.md` and `doc
 - Arena v12: reconcile `level_fire_is_not_a_free_headshot`'s stale `0.22` rationale with the shipped `HEAD_H = 0.30` without changing the frozen balance rule.
 - what-is-this: add a durable report-sink capability only when a second hosted consumer needs it; v1 deliberately emits accepted reports through the host's structured log stream.
 - what-is-this: expose a fallible offscreen calibration seam from `ember-engine`; its current winit-owned surface loop and panicking renderer initialization cannot satisfy an optional stage's continue-on-failure contract.
+- what-is-this: a real GPU-complete report serialized to 53,088 B against the page's 53,248 B report cap — 160 B of headroom; devices that expose richer adapter identity strings may overflow and lose Submit, so trim GPU notes or renegotiate the cap against the frame budget.
