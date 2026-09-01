@@ -2,7 +2,7 @@
 
 #![deny(missing_docs)]
 // Preserve the era simulation's exact f32 operation order.
-#![allow(clippy::suboptimal_flops)]
+#![allow(clippy::imprecise_flops, clippy::suboptimal_flops)]
 
 pub mod hosted;
 pub mod proto;

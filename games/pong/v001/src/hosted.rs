@@ -137,7 +137,11 @@ pub struct PongSession {
 impl PongSession {
     /// Constructs a lobby from immutable host data without consuming capabilities.
     #[must_use]
-    pub fn new(lobby_name: String, _lobby_seed: LobbySeed, created_at: MonotonicTimestamp) -> Self {
+    pub const fn new(
+        lobby_name: String,
+        _lobby_seed: LobbySeed,
+        created_at: MonotonicTimestamp,
+    ) -> Self {
         Self {
             lobby_name,
             members: Vec::new(),
@@ -152,7 +156,7 @@ impl PongSession {
 
     /// Returns the current simulation when an opponent has joined.
     #[must_use]
-    pub fn sim(&self) -> Option<&Sim> {
+    pub const fn sim(&self) -> Option<&Sim> {
         self.sim.as_ref()
     }
 
@@ -166,7 +170,7 @@ impl PongSession {
         self.members.iter().map(|member| member.peer_id).collect()
     }
 
-    fn accept_input(&mut self, input: SessionInput, update: &mut SessionUpdate) {
+    fn accept_input(&mut self, input: &SessionInput, update: &mut SessionUpdate) {
         let Ok(message) = serde_json::from_slice::<C2S>(&input.input.payload) else {
             update.closes.push(CloseRequest {
                 peer_id: input.peer_id,
@@ -222,7 +226,7 @@ impl PongSession {
         };
         sim.step(self.axes[0], self.axes[1]);
         if let Some((scorer, won)) = sim.event {
-            let scorer = if scorer == 0 { 0 } else { 1 };
+            let scorer = u8::from(scorer != 0);
             push_message(
                 update,
                 OutboundTarget::Peers(peers.clone()),
@@ -282,7 +286,7 @@ impl PongSession {
 impl GameSession for PongSession {
     fn step(&mut self, timestamp: MonotonicTimestamp, inputs: Vec<SessionInput>) -> SessionUpdate {
         let mut update = SessionUpdate::default();
-        for input in inputs {
+        for input in &inputs {
             self.accept_input(input, &mut update);
         }
         if self.advance(timestamp, &mut update) && !self.members.is_empty() {

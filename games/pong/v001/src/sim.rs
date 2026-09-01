@@ -190,7 +190,7 @@ impl Default for Sim {
 }
 
 #[cfg(test)]
-#[allow(clippy::float_cmp)] // The era determinism checks require bit-identical state.
+#[allow(clippy::float_cmp, clippy::while_float)] // Frozen tests require exact f32 behavior.
 mod tests {
     use super::{
         COURT_END_Z, COURT_HALF_W, FIXED_DT, MIN_Z_FRACTION, PADDLE_HALF_T, PADDLE_Z, Phase,

@@ -16,7 +16,7 @@ pub const STATE_EVERY_TICKS: u64 = 2;
 pub const CLIENT_PING_SECS: u64 = 5;
 
 /// One protocol-1 lobby-list entry.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LobbyInfo {
     /// Lobby name.
     pub name: String,
@@ -145,7 +145,7 @@ pub fn sanitize_text(text: &str, max: usize) -> String {
 
 /// Clamps a finite movement intent to the trusted range and maps non-finite values to zero.
 #[must_use]
-pub fn sanitize_axis(axis: f32) -> f32 {
+pub const fn sanitize_axis(axis: f32) -> f32 {
     if axis.is_finite() {
         axis.clamp(-1.0, 1.0)
     } else {
