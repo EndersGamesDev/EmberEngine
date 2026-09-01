@@ -1,0 +1,11 @@
+[package]
+name = "kings-core"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[lints]
+workspace = true
