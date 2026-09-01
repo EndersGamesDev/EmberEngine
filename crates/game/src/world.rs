@@ -8,6 +8,10 @@ use std::time::{Duration, Instant};
 use ember_net::{PlayerId, PlayerMeta, PlayerState, ServerMsg, TICK_HZ};
 use glam::Vec2;
 
+fn tick_hz_f32() -> f32 {
+    f32::from(u16::try_from(TICK_HZ).unwrap_or(u16::MAX))
+}
+
 struct Entry {
     meta: PlayerMeta,
     from: Vec2,
@@ -90,43 +94,40 @@ impl World {
 
     fn apply_state(&mut self, ps: PlayerState) {
         let target = Vec2::from_array(ps.pos);
-        match self.players.get_mut(&ps.id) {
-            Some(e) => {
-                e.from = e.render_pos();
-                e.to = target;
-                e.t = 0.0;
-            }
-            None => {
-                // Snapshot mentioned someone we have no meta for (shouldn't
-                // happen, but stay resilient): show a gray placeholder.
-                tracing::debug!("snapshot for unknown {:?}", ps.id);
-                self.players.insert(
-                    ps.id,
-                    Entry {
-                        meta: PlayerMeta {
-                            id: ps.id,
-                            name: "?".into(),
-                            color: [0.6, 0.6, 0.6],
-                            pos: ps.pos,
-                        },
-                        from: target,
-                        to: target,
-                        t: 1.0,
+        if let Some(entry) = self.players.get_mut(&ps.id) {
+            entry.from = entry.render_pos();
+            entry.to = target;
+            entry.t = 0.0;
+        } else {
+            // Snapshot mentioned someone we have no meta for (shouldn't
+            // happen, but stay resilient): show a gray placeholder.
+            tracing::debug!("snapshot for unknown {:?}", ps.id);
+            self.players.insert(
+                ps.id,
+                Entry {
+                    meta: PlayerMeta {
+                        id: ps.id,
+                        name: "?".into(),
+                        color: [0.6, 0.6, 0.6],
+                        pos: ps.pos,
                     },
-                );
-            }
+                    from: target,
+                    to: target,
+                    t: 1.0,
+                },
+            );
         }
     }
 
     /// Advance interpolation. One snapshot interval = full from->to blend.
     pub fn advance(&mut self, dt: f32) {
-        let step = dt * TICK_HZ as f32;
+        let step = dt * tick_hz_f32();
         for e in self.players.values_mut() {
             e.t = (e.t + step).min(1.0);
         }
     }
 
-    /// (id, position, velocity, color, is_me) for every player. Velocity is
+    /// (id, position, velocity, color, `is_me`) for every player. Velocity is
     /// derived from the snapshot interpolation (world units / second) and
     /// zero once the entry has caught up to its target.
     pub fn render_players(
@@ -134,7 +135,7 @@ impl World {
     ) -> impl Iterator<Item = (PlayerId, Vec2, Vec2, [f32; 3], bool)> + '_ {
         self.players.values().map(move |e| {
             let vel = if e.t < 1.0 {
-                (e.to - e.from) * TICK_HZ as f32
+                (e.to - e.from) * tick_hz_f32()
             } else {
                 Vec2::ZERO
             };

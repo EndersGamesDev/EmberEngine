@@ -6,7 +6,6 @@ use ember_engine::glam::{Vec2, Vec3};
 use ember_engine::{Frame, Instance};
 
 /// Number of meshes the character registers (head, torso, limb).
-#[allow(dead_code)]
 pub const PART_MESHES: u32 = 3;
 
 /// Rotate a local XZ offset by the character's facing yaw, matching the
@@ -73,7 +72,7 @@ pub use ember_engine::puppet::{MeshPart, PartCharacter};
 
 /// Jointed rig veteran: shared engine implementation (also used by the web
 /// arena build).
-pub use ember_engine::rig::{veteran_rig, PartSource, RigCharacter};
+pub use ember_engine::rig::{PartSource, RigCharacter, veteran_rig};
 
 /// A full-body character mesh (AI-generated GLB), bounds-normalized at
 /// registration so any authoring scale/origin stands feet-on-ground.

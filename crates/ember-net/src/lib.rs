@@ -3,7 +3,7 @@
 //!
 //! Transport is a plain TCP stream carrying length-prefixed frames
 //! (u32 LE length, then a postcard-encoded message). TCP was chosen because
-//! the deployment path runs through WireGuard userspace tunnels whose port
+//! the deployment path runs through `WireGuard` userspace tunnels whose port
 //! forwarding is TCP-only; the framing layer keeps the transport swappable.
 
 use std::io::{self, Read, Write};
@@ -16,7 +16,7 @@ pub const DEFAULT_PORT: u16 = 7777;
 
 /// Simulation and snapshot tick rate of the server.
 pub const TICK_HZ: u32 = 60;
-/// Players move on the XZ plane inside [-ARENA_HALF, ARENA_HALF]^2.
+/// Players move on the XZ plane inside [-`ARENA_HALF`, `ARENA_HALF`]^2.
 pub const ARENA_HALF: f32 = 20.0;
 pub const MOVE_SPEED: f32 = 10.0;
 
@@ -92,6 +92,12 @@ pub enum ServerMsg {
     },
 }
 
+/// Writes one length-prefixed postcard message to `w`.
+///
+/// # Errors
+///
+/// Returns an error if serialization fails, the encoded message exceeds the
+/// protocol frame limit, or the writer cannot accept or flush the frame.
 pub fn write_msg<W: Write, T: Serialize>(w: &mut W, msg: &T) -> io::Result<()> {
     let bytes =
         postcard::to_stdvec(msg).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -101,11 +107,19 @@ pub fn write_msg<W: Write, T: Serialize>(w: &mut W, msg: &T) -> io::Result<()> {
             "frame too large",
         ));
     }
-    w.write_all(&(bytes.len() as u32).to_le_bytes())?;
+    let frame_len = u32::try_from(bytes.len())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "frame too large"))?;
+    w.write_all(&frame_len.to_le_bytes())?;
     w.write_all(&bytes)?;
     w.flush()
 }
 
+/// Reads one length-prefixed postcard message from `r`.
+///
+/// # Errors
+///
+/// Returns an error if the frame header or body cannot be read, the declared
+/// frame exceeds the protocol limit, or the message cannot be deserialized.
 pub fn read_msg<R: Read, T: DeserializeOwned>(r: &mut R) -> io::Result<T> {
     let mut len_bytes = [0u8; 4];
     r.read_exact(&mut len_bytes)?;
@@ -122,7 +136,8 @@ pub fn read_msg<R: Read, T: DeserializeOwned>(r: &mut R) -> io::Result<T> {
 }
 
 /// Stable per-player color so every client renders the same world.
-pub fn color_for(id: PlayerId) -> [f32; 3] {
+#[must_use]
+pub const fn color_for(id: PlayerId) -> [f32; 3] {
     const PALETTE: [[f32; 3]; 8] = [
         [0.90, 0.30, 0.25], // red
         [0.25, 0.55, 0.95], // blue
@@ -138,8 +153,9 @@ pub fn color_for(id: PlayerId) -> [f32; 3] {
 
 /// Movement intents from the network are untrusted: strip NaN/inf and cap
 /// the magnitude so no client can move faster than anyone else.
+#[must_use]
 pub fn sanitize_dir(dir: [f32; 2]) -> [f32; 2] {
-    let (x, y) = (dir[0], dir[1]);
+    let [x, y] = dir;
     if !x.is_finite() || !y.is_finite() {
         return [0.0, 0.0];
     }
@@ -152,6 +168,7 @@ pub fn sanitize_dir(dir: [f32; 2]) -> [f32; 2] {
     }
 }
 
+#[must_use]
 pub fn sanitize_name(name: &str) -> String {
     let cleaned: String = name
         .chars()

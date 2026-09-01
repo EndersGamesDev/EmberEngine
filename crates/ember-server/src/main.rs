@@ -1,3 +1,6 @@
+// CLI help, diagnostics, and exit status are part of the deployed binary contract.
+#![allow(clippy::exit, clippy::print_stderr, clippy::print_stdout)]
+
 use std::net::TcpListener;
 
 fn main() -> std::io::Result<()> {
@@ -23,7 +26,7 @@ fn main() -> std::io::Result<()> {
                 max_players = args
                     .next()
                     .and_then(|v| v.parse().ok())
-                    .expect("--max-players needs a number")
+                    .expect("--max-players needs a number");
             }
             // Escape hatch for the one predictable false positive: several
             // clients driven from a single dev box all reach the server
@@ -32,7 +35,7 @@ fn main() -> std::io::Result<()> {
                 max_conns_per_ip = args
                     .next()
                     .and_then(|v| v.parse().ok())
-                    .expect("--max-conns-per-ip needs a number")
+                    .expect("--max-conns-per-ip needs a number");
             }
             "--help" | "-h" => {
                 println!(

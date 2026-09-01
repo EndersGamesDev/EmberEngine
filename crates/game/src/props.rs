@@ -17,7 +17,7 @@ pub struct PropDef {
     pub scale: f32,
 }
 
-fn one() -> f32 {
+const fn one() -> f32 {
     1.0
 }
 
@@ -32,7 +32,7 @@ pub struct Layouts {
     pub layouts: Vec<Layout>,
 }
 
-/// Load layouts from assets/layouts/arena.json (workspace or cwd relative).
+/// Load layouts from `assets/layouts/arena.json` (workspace or cwd relative).
 pub fn load_layouts() -> Option<Layouts> {
     let candidates = [
         format!(
@@ -59,7 +59,7 @@ pub fn load_layouts() -> Option<Layouts> {
     None
 }
 
-/// Pick a layout: EMBER_LAYOUT=<name> (case-insensitive) or the first one.
+/// Pick a layout: `EMBER_LAYOUT=<name>` (case-insensitive) or the first one.
 pub fn pick(layouts: &Layouts) -> &Layout {
     if let Ok(want) = std::env::var("EMBER_LAYOUT") {
         if let Some(l) = layouts
