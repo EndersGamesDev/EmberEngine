@@ -292,14 +292,7 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
         .set_read_timeout(Some(Duration::from_millis(5)));
 
     let (tx, rx) = mpsc::sync_channel::<Message>(OUTBOUND_QUEUE);
-    if events_tx
-        .send(Ev::Connected {
-            id,
-            tx,
-            peer,
-        })
-        .is_err()
-    {
+    if events_tx.send(Ev::Connected { id, tx, peer }).is_err() {
         return;
     }
 
