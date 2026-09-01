@@ -1,4 +1,6 @@
-//! Asset loading: GLB (binary glTF) → engine meshes. This is the start of
+//! Asset loading: GLB (binary glTF) → engine meshes.
+//!
+//! This is the start of
 //! the roadmap's "Blender becomes the level editor" step: models are
 //! authored (or script-generated) in Blender, exported as .glb, and loaded
 //! here into flat triangle lists for the instanced renderer.

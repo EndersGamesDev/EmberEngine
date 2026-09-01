@@ -1,5 +1,6 @@
-//! Shared articulated "puppet" character: five AI-generated mesh parts
-//! (head, torso, arm, leg, boot — arm/leg/boot reused for both sides)
+//! Shared articulated "puppet" character built from five AI-generated mesh parts.
+//!
+//! The head, torso, arm, leg, and boot meshes (with limbs reused on both sides) are
 //! animated with opposing limb swings, step lift, walk bob, an eased swing
 //! amplitude, and pivot-correct placement. Used by the native arena client
 //! and the web arena build.

@@ -1,5 +1,7 @@
 //! Debug overlay (native only): the ATW test rig from
-//! docs/atw-first-rendering.md §6. Composited in the PRESENTER pass — never
+//! docs/atw-first-rendering.md §6.
+//!
+//! Composited in the PRESENTER pass — never
 //! into the `SceneFrame` — so the UI stays warp-stable. Provides a scene-Hz
 //! throttle (the presenter keeps re-presenting the last `SceneFrame` while the
 //! scene pass idles) and frame-timing / scene-staleness readouts.

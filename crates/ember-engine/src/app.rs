@@ -19,8 +19,10 @@ use crate::renderer::Renderer;
 #[cfg(target_arch = "wasm32")]
 use std::{cell::RefCell, rc::Rc};
 
-/// Install the native tracing pipeline: `RUST_LOG`-style filtering via
-/// `EnvFilter`, plus a bridge so `log` records from wgpu/winit land in the
+/// Install the native tracing pipeline.
+///
+/// It provides `RUST_LOG`-style filtering via `EnvFilter`, plus a bridge so
+/// `log` records from wgpu/winit land in the
 /// same output. Idempotent — game code may call it before `run()` to get
 /// tracing during its own startup (e.g. connecting), and `run()` calls it
 /// again harmlessly.

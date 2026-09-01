@@ -23,7 +23,9 @@ use crate::gizmo::{Axis, Mode};
 /// the closest-point solve is numerically meaningless — the denominator
 /// vanishes and a tiny cursor movement swings the result across the level.
 const PARALLEL_EPS: f32 = 1e-3;
-/// A scale drag may not take an extent below this. Zero would make the box
+/// A scale drag may not take an extent below this.
+///
+/// Zero would make the box
 /// unpickable (a degenerate slab) and negative would mirror it, both of
 /// which are one-way trips for someone dragging past the middle.
 pub const MIN_SCALE: f32 = 0.05;

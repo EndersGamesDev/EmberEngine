@@ -285,8 +285,10 @@ fn parse_joint(json: &str, name: &str) -> Option<Vec3> {
     None
 }
 
-/// Load a split skinned model: a GLB whose nodes are named `rig_<joint>`
-/// plus the JSON of bind-pose joint positions that `tools/swat_split.py`
+/// Load a split skinned model.
+///
+/// The input is a GLB whose nodes are named `rig_<joint>` plus the JSON of
+/// bind-pose joint positions that `tools/swat_split.py`
 /// writes beside it. Returns the meshes to register (starting at
 /// `first_mesh`) and the rig that drives them.
 ///
@@ -327,8 +329,9 @@ pub fn skinned_from_glb(
     Ok((meshes, skinned_rig(&bind, &bound)))
 }
 
-/// Assemble a rig from an imported skinned model: every part is already in
-/// bind space, so its anchor is its joint's bind position, at model scale
+/// Assemble a rig from an imported skinned model.
+///
+/// Every part is already in bind space, so its anchor is its joint's bind position, at model scale
 /// and unrotated. `parts` pairs a registered mesh id with its joint.
 #[must_use]
 pub fn skinned_rig(bind: &[Vec3; joint::COUNT], parts: &[(u32, usize)]) -> RigCharacter {
@@ -575,7 +578,9 @@ pub struct RigCharacter {
     pub parts: Vec<RigPart>,
 }
 
-/// Everything the veteran can be assembled from. The five base meshes are
+/// Everything the veteran can be assembled from.
+///
+/// The five base meshes are
 /// required (the v1 set); each optional v2 segment upgrades detail when its
 /// GLB exists — `arm` doubles as upper arm + forearm and `leg` as thigh +
 /// shin until the dedicated segments land.

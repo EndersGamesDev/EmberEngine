@@ -1,4 +1,6 @@
-//! GPU layer. ATW-first architecture (docs/atw-first-rendering.md, stage A):
+//! GPU layer for the ATW-first architecture.
+//!
+//! In docs/atw-first-rendering.md stage A,
 //! the SCENE pass renders the world into an offscreen `SceneFrame`
 //! (color + depth) and never touches the swapchain; the PRESENTER pass owns
 //! presentation and warps the newest `SceneFrame` onto the surface — today an

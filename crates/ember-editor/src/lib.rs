@@ -59,8 +59,10 @@ const FLY_BOOST: f32 = 3.5;
 /// parallel to world up and the camera basis degenerates.
 const PITCH_LIMIT: f32 = 1.5533;
 
-/// Instance colours are an unclamped multiplier into a shader that lights,
-/// ACES-tonemaps and fogs every fragment, so a gizmo coloured (1,0,0) comes
+/// Instance colours are an unclamped shader multiplier.
+///
+/// The shader lights, ACES-tonemaps and fogs every fragment, so a gizmo
+/// coloured (1,0,0) comes
 /// out dark red on unlit faces and washes toward the fog colour with
 /// distance. Over-driving past 1.0 pushes every face to saturation whatever
 /// its normal, which is the whole point of "different colours to know where
@@ -103,7 +105,9 @@ const PALETTE_KEYS: [KeyCode; 9] = [
     KeyCode::Digit9,
 ];
 
-/// A flying camera. Yaw/pitch match the arena client's convention exactly, so
+/// A flying camera.
+///
+/// Yaw/pitch match the arena client's convention exactly, so
 /// "yaw" means the same thing in the editor and in the game — an editor whose
 /// forward disagreed with the game's would place everything rotated.
 pub struct FlyCam {
