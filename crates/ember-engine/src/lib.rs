@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 //! Ember — a from-scratch 3D engine.
 //!
 //! Layering (strict one-way dependencies, top depends on bottom):
