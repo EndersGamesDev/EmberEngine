@@ -271,7 +271,9 @@ pub struct KernelMeasurement {
     pub raw_samples: Vec<f64>,
     /// Summary over the complete uncapped observation set.
     pub summary: Option<SummaryStats>,
-    /// Kernel-specific caveats, adaptive repeat counts, and non-numeric facts.
+    /// Kernel-specific caveats, adaptive repeat counts, and non-numeric facts; open-list GPU
+    /// adapter facts record identity, browser-exposed limits, optional features, and timing mode
+    /// here without changing report schema 1.
     pub notes: Vec<String>,
 }
 

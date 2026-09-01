@@ -4511,14 +4511,18 @@ dependencies = [
 name = "what-is-this"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "ember-client-net",
  "ember-game-what-is-this-v1",
  "ember-net",
  "faer",
+ "js-sys",
  "serde",
  "serde_json",
  "sha2",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wgpu",
 ]
 
 [[package]]

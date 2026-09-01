@@ -128,6 +128,48 @@ pub fn kernel_inventory_json() -> String {
     serde_json::to_string(kernel_specs()).unwrap_or_else(|_| "[]".to_string())
 }
 
+/// Returns the stable compute-only WebGPU kernel inventory as JSON.
+#[wasm_bindgen]
+pub fn gpu_compute_inventory_json() -> String {
+    serde_json::to_string(crate::gpu::kernel_specs()).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Requests a compute-only WebGPU adapter and device, compiles the fixed pipelines, and returns
+/// adapter facts as JSON.
+///
+/// # Errors
+///
+/// Returns a JavaScript error when WebGPU is absent, the browser refuses an adapter or device, or
+/// the fixed shader and pipeline warmup fails validation.
+#[wasm_bindgen]
+pub async fn initialize_gpu_compute_json() -> Result<String, JsValue> {
+    crate::gpu::initialize().await.map_err(|error| JsValue::from_str(&error))
+}
+
+/// Runs one adaptively repeated compute-only WebGPU workload and returns timing and validation
+/// facts as JSON.
+///
+/// # Errors
+///
+/// Returns a JavaScript error for an unknown kernel, invalid repeat count, device loss, mapping
+/// failure, non-finite output, or output that differs from the fixed expected values.
+#[wasm_bindgen]
+pub async fn run_gpu_compute_json(
+    kernel_id: &str,
+    repeat_count: u32,
+) -> Result<String, JsValue> {
+    crate::gpu::run(kernel_id, repeat_count)
+        .await
+        .map_err(|error| JsValue::from_str(&error))
+}
+
+/// Returns whether the initialized WebGPU compute device is still usable, including its device
+/// loss reason when it is not.
+#[wasm_bindgen]
+pub fn gpu_compute_status_json() -> String {
+    crate::gpu::status_json()
+}
+
 /// Runs one preallocated fixed workload and returns its opaque checksum.
 ///
 /// # Errors
@@ -189,6 +231,7 @@ pub fn faer_wasm_verdict_json() -> String {
 pub fn reset_run_state() {
     KERNELS.with_borrow_mut(|kernels| *kernels = KernelSuite::new());
     SUBMISSION.with_borrow_mut(|slot| *slot = None);
+    crate::gpu::reset();
 }
 
 /// Returns the deterministic, measurement-derived verdict presentation as JSON.

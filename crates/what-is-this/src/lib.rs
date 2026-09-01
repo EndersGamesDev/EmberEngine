@@ -66,6 +66,35 @@ fn best_memcpy(report: &DiagnosticReport) -> Option<&KernelMeasurement> {
         })
 }
 
+fn complete_gpu_compute(report: &DiagnosticReport) -> Vec<&KernelMeasurement> {
+    report
+        .kernels
+        .iter()
+        .filter(|kernel| {
+            matches!(
+                kernel.kernel_id.as_str(),
+                "gpu.compute-rank4-soa.n256.v1"
+                    | "gpu.compute-rank4-soa.n1024.v1"
+                    | "gpu.storage-copy.4m.v1"
+                    | "gpu.dispatch-roundtrip.tiny.v1"
+            ) && kernel.status == KernelStatus::Complete
+        })
+        .collect()
+}
+
+fn gpu_adapter_identity(report: &DiagnosticReport) -> Option<&str> {
+    report
+        .kernels
+        .iter()
+        .find(|kernel| kernel.kernel_id == "gpu.adapter-facts.v1")
+        .and_then(|kernel| {
+            kernel
+                .notes
+                .iter()
+                .find_map(|note| note.strip_prefix("adapter identity: "))
+        })
+}
+
 /// Derives verdict sentences and badges from a completed schema-1 report.
 ///
 /// Badge rules are frozen presentation logic: `simd-ready` requires the SIMD128 feature probe;
@@ -73,8 +102,10 @@ fn best_memcpy(report: &DiagnosticReport) -> Option<&KernelMeasurement> {
 /// `fma-contractor` and `strict-multiplier` mirror the contraction bit; `timer-truthful` requires
 /// a measured timer quantum no larger than 0.1 ms while `timer-coy` covers coarser or unobserved
 /// clocks; `thread-rich` requires at least eight exposed logical processors; and `memory-mover`
-/// requires a complete memcpy kernel with a finite positive median. Observations use the same
-/// report facts and never invent a score or substitute measurement.
+/// requires a complete memcpy kernel with a finite positive median; and `gpu-compute` requires at
+/// least one complete timed WebGPU compute kernel and cites the adapter identity recorded by
+/// `gpu.adapter-facts.v1`. Observations use the same report facts and never invent a score or
+/// substitute measurement.
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn derive_verdict(report: &DiagnosticReport) -> VerdictPersonality {
@@ -169,6 +200,50 @@ pub fn derive_verdict(report: &DiagnosticReport) -> VerdictPersonality {
             text: format!(
                 "Your best memcpy median was {:.2} MiB/s in {} — the bytes did not merely pose for the camera.",
                 median, kernel.kernel_id
+            ),
+        });
+    }
+
+    let complete_gpu = complete_gpu_compute(report);
+    if !complete_gpu.is_empty() {
+        let identity = gpu_adapter_identity(report).unwrap_or("adapter identity not exposed");
+        observations.push(VerdictObservation {
+            text: format!(
+                "WebGPU compute woke up on {identity} and completed {} timed kernel{} — no surface or window required.",
+                complete_gpu.len(),
+                if complete_gpu.len() == 1 { "" } else { "s" }
+            ),
+        });
+        if let Some(storage) = complete_gpu.iter().find(|kernel| {
+            kernel.kernel_id == "gpu.storage-copy.4m.v1"
+                && kernel
+                    .summary
+                    .is_some_and(|summary| summary.median.is_finite() && summary.median > 0.0)
+        }) {
+            let median_mib = storage
+                .summary
+                .map(|summary| summary.median)
+                .unwrap_or_default();
+            observations.push(VerdictObservation {
+                text: format!(
+                    "Your GPU moved {:.3} GiB/s through its storage buffers in {} — queue overhead is counted when timestamp queries are absent.",
+                    median_mib / 1_024.0,
+                    storage.kernel_id
+                ),
+            });
+        }
+    } else if let Some(stage) = report
+        .stages
+        .iter()
+        .find(|stage| stage.stage_id == "stage.gpu-compute.v1")
+    {
+        observations.push(VerdictObservation {
+            text: format!(
+                "WebGPU compute declined with a shrug: {}",
+                stage
+                    .unavailable_reason
+                    .as_deref()
+                    .unwrap_or("no timed compute kernel completed")
             ),
         });
     }
@@ -298,6 +373,19 @@ pub fn derive_verdict(report: &DiagnosticReport) -> VerdictPersonality {
             name: "Memory Mover",
             glyph: ">>",
             measurement: format!("{} median: {median:.2} MiB/s", kernel.kernel_id),
+        });
+    }
+    if !complete_gpu.is_empty() {
+        let identity = gpu_adapter_identity(report).unwrap_or("adapter identity not exposed");
+        badges.push(VerdictBadge {
+            id: "gpu-compute",
+            name: "Compute Awake",
+            glyph: "GC",
+            measurement: format!(
+                "{} timed WebGPU compute kernel{} completed on {identity}",
+                complete_gpu.len(),
+                if complete_gpu.len() == 1 { "" } else { "s" }
+            ),
         });
     }
 
@@ -467,5 +555,53 @@ mod tests {
         assert!(text.contains("2 sine and cosine checks"));
         assert!(text.contains("4096.00 MiB/s"));
         assert!(text.contains("no safe offscreen seam"));
+    }
+
+    #[test]
+    fn gpu_compute_personality_cites_adapter_and_measured_bandwidth() {
+        let mut report = sample_report();
+        report.kernels.push(KernelMeasurement {
+            kernel_id: "gpu.adapter-facts.v1".to_string(),
+            workload: "compute-only adapter facts".to_string(),
+            unit: "facts".to_string(),
+            warmup_runs: 0,
+            status: KernelStatus::Complete,
+            unavailable_reason: None,
+            raw_samples: Vec::new(),
+            summary: None,
+            notes: vec!["adapter identity: Test Adapter (DiscreteGpu)".to_string()],
+        });
+        report.kernels.push(KernelMeasurement {
+            kernel_id: "gpu.storage-copy.4m.v1".to_string(),
+            workload: "16 MiB storage-buffer copy".to_string(),
+            unit: "MiB/s".to_string(),
+            warmup_runs: 3,
+            status: KernelStatus::Complete,
+            unavailable_reason: None,
+            raw_samples: vec![2_048.0],
+            summary: Some(SummaryStats {
+                sample_count: 1,
+                median: 2_048.0,
+                p95: 2_048.0,
+                min: 2_048.0,
+                max: 2_048.0,
+            }),
+            notes: Vec::new(),
+        });
+        let verdict = derive_verdict(&report);
+        let badge = verdict
+            .badges
+            .iter()
+            .find(|badge| badge.id == "gpu-compute")
+            .expect("the complete GPU kernel earns the compute badge");
+        assert!(badge.measurement.contains("Test Adapter"));
+        let text = verdict
+            .observations
+            .iter()
+            .map(|observation| observation.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(text.contains("Test Adapter"));
+        assert!(text.contains("2.000 GiB/s"));
     }
 }

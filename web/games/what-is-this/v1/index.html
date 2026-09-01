@@ -95,7 +95,7 @@
   <main>
     <div class="eyebrow">ember diagnostic game · report schema 1</div>
     <h1>what is this?</h1>
-    <p class="lede">Let’s find out what this browser is running on. Six stages reveal only what the page can measure directly; a missing feature becomes an honest “unavailable,” never a dead end.</p>
+    <p class="lede">Let’s find out what this browser is running on. Seven stages reveal only what the page can measure directly; a missing feature becomes an honest “unavailable,” never a dead end.</p>
     <section id="guess-card" class="card">
       <div class="eyebrow">optional opening wager</div>
       <h2>How many logical threads does this machine claim?</h2>
@@ -115,6 +115,7 @@
       <li class="stage" data-stage="stage.environment.v1"><span class="mark">○</span><span>environment facts</span><span class="detail">waiting</span></li>
       <li class="stage" data-stage="stage.wasm-capabilities.v1"><span class="mark">○</span><span>wasm capability probes</span><span class="detail">waiting</span></li>
       <li class="stage" data-stage="stage.cpu.v1"><span class="mark">○</span><span>CPU kernels</span><span class="detail">waiting</span></li>
+      <li class="stage" data-stage="stage.gpu-compute.v1"><span class="mark">○</span><span>GPU compute</span><span class="detail">waiting</span></li>
       <li class="stage" data-stage="stage.float-behavior.v1"><span class="mark">○</span><span>float behavior</span><span class="detail">waiting</span></li>
       <li class="stage" data-stage="stage.timing.v1"><span class="mark">○</span><span>display + jank timing</span><span class="detail">waiting</span></li>
       <li class="stage" data-stage="stage.gpu.v1"><span class="mark">○</span><span>engine GPU calibration</span><span class="detail">waiting</span></li>
@@ -148,6 +149,12 @@
     const KERNEL_MAX_BATCH_TARGET_MS = 320;
     const KERNEL_TOTAL_BUDGET_MS = 5_000;
     const MEMCPY_MIB_PER_BASE_INVOCATION = 16;
+    const GPU_TARGET_TIMER_QUANTA = 32;
+    const GPU_TIMESTAMP_TARGET_MS = 0.25;
+    const GPU_MAX_REPEAT_COUNT = 4_096;
+    const GPU_MAX_BATCH_TARGET_MS = 640;
+    const GPU_KERNEL_TOTAL_BUDGET_MS = 15_000;
+    const GPU_STORAGE_MIB_PER_BASE_INVOCATION = 16;
     const WASM_LOAD_DEADLINE_MS = 8_000;
     const SERVER_LOOKUP_DEADLINE_MS = 8_000;
     const SUBMISSION_DEADLINE_MS = 15_000;
@@ -157,9 +164,16 @@
       ['stage.environment.v1', 'environment facts', 2_000],
       ['stage.wasm-capabilities.v1', 'wasm capability probes', 2_000],
       ['stage.cpu.v1', 'CPU kernels', 100_000],
+      ['stage.gpu-compute.v1', 'GPU compute', 120_000],
       ['stage.float-behavior.v1', 'float behavior', 5_000],
       ['stage.timing.v1', 'display + jank timing', 15_000],
       ['stage.gpu.v1', 'engine GPU calibration', 3_000],
+    ];
+    const GPU_KERNEL_FALLBACK = [
+      { kernel_id: 'gpu.compute-rank4-soa.n256.v1', workload: 'WebGPU f32 SoA 4xN projection; N=256; 64 dispatches per base invocation; same shape and batch count as cpu.rank4-soa.n256.v2 but different precision and execution substrate', unit: 'ms' },
+      { kernel_id: 'gpu.compute-rank4-soa.n1024.v1', workload: 'WebGPU f32 SoA 4xN projection; N=1024; 64 dispatches per base invocation; same shape and batch count as cpu.rank4-soa.n1024.v2 but different precision and execution substrate', unit: 'ms' },
+      { kernel_id: 'gpu.storage-copy.4m.v1', workload: 'WebGPU storage-buffer copy at 4194304 bytes; 4 dispatches and 16 MiB copied per base invocation', unit: 'MiB/s' },
+      { kernel_id: 'gpu.dispatch-roundtrip.tiny.v1', workload: '8 sequential one-workgroup submit-to-completion round trips per base invocation; reported samples normalize to one round trip; a timestamp query, when available, separates the first shader dispatch without replacing the wall-clock measurement', unit: 'ms' },
     ];
     const DEFAULT_FAER_VERDICT = {
       version: '0.24.4',
@@ -513,6 +527,165 @@
       telemetry.classList.remove('visible');
     }
 
+    function gpuAdapterNotes(facts) {
+      return [
+        `adapter identity: ${facts.adapter_identity}`,
+        `adapter name: ${facts.name}`,
+        `vendor: ${facts.vendor}`,
+        `architecture: ${facts.architecture}`,
+        `device class: ${facts.device_class}`,
+        `backend: ${facts.backend}`,
+        `timestamp-query: ${facts.timestamp_query}`,
+        `optional features: ${facts.optional_features.length ? facts.optional_features.join(', ') : 'none of timestamp-query, shader-f16, or subgroups exposed'}`,
+        `limits: max_buffer_size=${facts.max_buffer_size}, max_storage_buffer_binding_size=${facts.max_storage_buffer_binding_size}, max_storage_buffers_per_shader_stage=${facts.max_storage_buffers_per_shader_stage}, max_compute_invocations_per_workgroup=${facts.max_compute_invocations_per_workgroup}, max_compute_workgroup_size_x=${facts.max_compute_workgroup_size_x}, max_compute_workgroups_per_dimension=${facts.max_compute_workgroups_per_dimension}`,
+        'wgpu 24 AdapterInfo does not expose a separate architecture field on the browser WebGPU backend; the report says so instead of guessing from the user agent',
+      ];
+    }
+
+    function gpuUnavailableInventory(run, token, inventory, unavailableReason) {
+      unavailableKernel(run, token, 'gpu.adapter-facts.v1', 'compute-only WebGPU Instance → Adapter → Device facts; no surface, window, or renderer', 'facts', unavailableReason);
+      for (const spec of inventory.length ? inventory : GPU_KERNEL_FALLBACK) unavailableKernel(run, token, spec.kernel_id, spec.workload, spec.unit, unavailableReason, [TIMER_CAVEAT]);
+    }
+
+    function normalizedGpuSample(spec, elapsedMs, repeatCount, dispatchCount) {
+      if (spec.kernel_id === 'gpu.storage-copy.4m.v1') return GPU_STORAGE_MIB_PER_BASE_INVOCATION * repeatCount * 1000 / elapsedMs;
+      if (spec.kernel_id === 'gpu.dispatch-roundtrip.tiny.v1') return elapsedMs / dispatchCount;
+      return elapsedMs / repeatCount;
+    }
+
+    async function measureGpuCompute(run, token) {
+      if (!wasm) {
+        const unavailableReason = run.wasmFailure || 'diagnostic wasm client is unavailable';
+        gpuUnavailableInventory(run, token, [], unavailableReason);
+        throw new Error(unavailableReason);
+      }
+      const inventory = JSON.parse(wasm.gpu_compute_inventory_json());
+      if (!Array.isArray(inventory) || inventory.length !== 4) throw new Error('diagnostic wasm returned an invalid WebGPU compute inventory');
+      let facts;
+      try {
+        progressLabel.textContent = 'GPU compute: requesting an adapter and compiling the named warmup…';
+        facts = JSON.parse(await wasm.initialize_gpu_compute_json());
+        requireActive(run, token);
+      } catch (error) {
+        const unavailableReason = `WebGPU compute initialization unavailable: ${reason(error)}`;
+        if (tokenActive(run, token)) gpuUnavailableInventory(run, token, inventory, unavailableReason);
+        throw new Error(unavailableReason);
+      }
+      completeKernel(
+        run,
+        token,
+        'gpu.adapter-facts.v1',
+        'compute-only wgpu 24 Instance → Adapter → Device; high-performance preference, no compatible surface, fixed shader and pipeline creation before timed dispatches',
+        'facts',
+        0,
+        [],
+        gpuAdapterNotes(facts),
+      );
+      const quantum = run.environment?.timer?.resolution_ms;
+      let completeCount = 0;
+      let deviceFailure = null;
+      for (const spec of inventory) {
+        requireActive(run, token);
+        const isDispatchRoundTrip = spec.kernel_id === 'gpu.dispatch-roundtrip.tiny.v1';
+        const usesTimestamp = facts.timestamp_query && !isDispatchRoundTrip;
+        const needsWallClock = !usesTimestamp;
+        const targetElapsedMs = usesTimestamp ? GPU_TIMESTAMP_TARGET_MS : quantum * GPU_TARGET_TIMER_QUANTA;
+        const workload = `${spec.workload}; every reported sample normalizes one adaptive repeated batch to ${isDispatchRoundTrip ? 'one submit-to-completion round trip' : 'one base invocation'}`;
+        if (deviceFailure) {
+          unavailableKernel(run, token, spec.kernel_id, workload, spec.unit, deviceFailure, [TIMER_CAVEAT]);
+          continue;
+        }
+        if (needsWallClock && (!Number.isFinite(quantum) || quantum <= 0)) {
+          unavailableKernel(run, token, spec.kernel_id, workload, spec.unit, 'GPU queue completion is unresolvable because the bounded timer probe measured no positive performance.now() transition', [TIMER_CAVEAT]);
+          continue;
+        }
+        if (needsWallClock && targetElapsedMs > GPU_MAX_BATCH_TARGET_MS) {
+          unavailableKernel(run, token, spec.kernel_id, workload, spec.unit, unresolvableKernelReason(quantum, `the GPU ${GPU_TARGET_TIMER_QUANTA}-quantum target is ${targetElapsedMs} ms, above the ${GPU_MAX_BATCH_TARGET_MS} ms batch-target cap`), [TIMER_CAVEAT]);
+          continue;
+        }
+        let recorded = false;
+        try {
+          updateTelemetry(spec.kernel_id, []);
+          for (let index = 0; index < spec.warmup_runs; index += 1) {
+            requireActive(run, token);
+            const warmup = JSON.parse(await wasm.run_gpu_compute_json(spec.kernel_id, 1));
+            requireActive(run, token);
+            if (!Number.isFinite(warmup.checksum)) throw new Error(`GPU checksum was non-finite during named warmup ${index + 1}`);
+          }
+          const samples = [];
+          const repeatCounts = [];
+          const queueElapsedMs = [];
+          const gpuElapsedMs = [];
+          const dispatchCounts = [];
+          const timingMethods = [];
+          const kernelStarted = Date.now();
+          let repeatCount = 1;
+          let checksum = 0;
+          for (let index = 0; index < spec.sample_runs; index += 1) {
+            requireActive(run, token);
+            while (true) {
+              requireActive(run, token);
+              if (Date.now() - kernelStarted >= GPU_KERNEL_TOTAL_BUDGET_MS) throw new Error(`GPU kernel could not collect ${spec.sample_runs} resolved samples within its ${GPU_KERNEL_TOTAL_BUDGET_MS} ms budget`);
+              const measured = JSON.parse(await wasm.run_gpu_compute_json(spec.kernel_id, repeatCount));
+              requireActive(run, token);
+              checksum = measured.checksum;
+              if (!Number.isFinite(checksum)) throw new Error(`GPU checksum was non-finite after ${repeatCount} adaptive repeats`);
+              const elapsed = usesTimestamp ? measured.gpu_elapsed_ms : measured.queue_elapsed_ms;
+              if (Number.isFinite(elapsed) && elapsed > 0 && elapsed >= targetElapsedMs) {
+                const normalized = normalizedGpuSample(spec, elapsed, repeatCount, measured.dispatch_count);
+                if (!Number.isFinite(normalized) || normalized <= 0) throw new Error(`GPU timing normalization was non-finite or non-positive after ${repeatCount} repeats`);
+                samples.push(normalized);
+                repeatCounts.push(repeatCount);
+                queueElapsedMs.push(measured.queue_elapsed_ms);
+                gpuElapsedMs.push(measured.gpu_elapsed_ms);
+                dispatchCounts.push(measured.dispatch_count);
+                timingMethods.push(measured.timing_method);
+                updateTelemetry(spec.kernel_id, samples);
+                break;
+              }
+              if (repeatCount >= GPU_MAX_REPEAT_COUNT) {
+                const clock = usesTimestamp ? 'GPU timestamp query' : `measured performance.now() quantum of ${quantum} ms`;
+                throw new Error(`GPU kernel remained unresolvable under the ${clock}: ${GPU_MAX_REPEAT_COUNT} repeats spanned ${elapsed} ms, below the ${targetElapsedMs} ms target`);
+              }
+              const scaled = Number.isFinite(elapsed) && elapsed > 0 ? Math.ceil(repeatCount * targetElapsedMs / elapsed * 1.125) : repeatCount * 8;
+              repeatCount = Math.min(GPU_MAX_REPEAT_COUNT, Math.max(repeatCount + 1, scaled));
+            }
+            await cooperativeYield(run, token);
+          }
+          const timingNote = usesTimestamp
+            ? 'primary samples use WebGPU timestamp-query around the compute pass and exclude submit, queue scheduling, completion callback, and validation readback time'
+            : isDispatchRoundTrip && facts.timestamp_query
+              ? 'primary samples are submit → onSubmittedWorkDone wall-clock per round trip because dispatch overhead includes queue and scheduling; a timestamp query on the first tiny shader dispatch is recorded separately'
+              : 'primary samples are submit → onSubmittedWorkDone wall-clock and include queue/scheduling overhead plus GPU execution, but exclude validation mapping after completion';
+          const normalizationNote = spec.kernel_id === 'gpu.storage-copy.4m.v1'
+            ? `${GPU_STORAGE_MIB_PER_BASE_INVOCATION} MiB copied per base invocation × repeat count ÷ primary batch seconds`
+            : isDispatchRoundTrip ? 'primary batch milliseconds ÷ actual sequential dispatch count' : 'primary batch milliseconds ÷ repeat count';
+          completeKernel(run, token, spec.kernel_id, workload, spec.unit, spec.warmup_runs, samples, [TIMER_CAVEAT, '3 named untimed warmups precede the 15 timed samples; the first dispatch absorbs lazy pipeline compilation outside timed regions', timingNote, `adaptive repeat counts per recorded sample: ${repeatCounts.join(', ')}`, `queue-completion wall milliseconds per recorded sample: ${queueElapsedMs.join(', ')}`, `GPU timestamp milliseconds per recorded sample (null means unavailable): ${gpuElapsedMs.join(', ')}`, `actual dispatch counts per recorded sample: ${dispatchCounts.join(', ')}`, `wgpu timing methods per recorded sample: ${timingMethods.join(', ')}`, `normalization: ${normalizationNote}`, `last validated checksum ${checksum}`, '15 observations report median and p95; thermal state and downclocking can move them, so the report claims no stability beyond this run']);
+          completeCount += 1;
+          recorded = true;
+        } catch (error) {
+          if (tokenActive(run, token)) {
+            let unavailableReason = reason(error);
+            try {
+              const status = JSON.parse(wasm.gpu_compute_status_json());
+              if (!status.available && status.reason) {
+                unavailableReason = `WebGPU device stopped during the run: ${status.reason}`;
+                deviceFailure = unavailableReason;
+              }
+            } catch (_) {
+              unavailableReason = `${unavailableReason}; WebGPU device status could not be decoded`;
+            }
+            unavailableKernel(run, token, spec.kernel_id, workload, spec.unit, unavailableReason, [TIMER_CAVEAT]);
+            recorded = true;
+          }
+        }
+        if (!recorded) requireActive(run, token);
+        await cooperativeYield(run, token, true);
+      }
+      telemetry.classList.remove('visible');
+      if (completeCount === 0) throw new Error('WebGPU adapter facts were recorded, but no timed compute kernel completed');
+    }
+
     function measureFloats(run, token) {
       if (!wasm) {
         run.floatBehavior = {
@@ -826,8 +999,8 @@
     async function loadWasm(run) {
       if (!wasmLoadPromise) {
         wasmLoadPromise = (async () => {
-          const module = await import('./pkg/what_is_this.js?v=3');
-          await module.default({ module_or_path: './pkg/what_is_this_bg.wasm?v=3' });
+          const module = await import('./pkg/what_is_this.js?v=4');
+          await module.default({ module_or_path: './pkg/what_is_this_bg.wasm?v=4' });
           return module;
         })();
       }
@@ -995,9 +1168,10 @@
           currentRun.capabilities = wasmCapabilities();
         });
         await runStage(run, ...STAGES[2], measureCpu);
-        await runStage(run, ...STAGES[3], async (currentRun, token) => measureFloats(currentRun, token));
-        await runStage(run, ...STAGES[4], measureTiming);
-        await runStage(run, ...STAGES[5], async (currentRun, token) => {
+        await runStage(run, ...STAGES[3], measureGpuCompute);
+        await runStage(run, ...STAGES[4], async (currentRun, token) => measureFloats(currentRun, token));
+        await runStage(run, ...STAGES[5], measureTiming);
+        await runStage(run, ...STAGES[6], async (currentRun, token) => {
           unavailableKernel(currentRun, token, 'gpu.ember-fixed-scene.v1', 'fixed instanced ember-engine scene rendered offscreen for a multi-second frame-time distribution', 'ms', GPU_UNAVAILABLE);
           throw new Error(GPU_UNAVAILABLE);
         });

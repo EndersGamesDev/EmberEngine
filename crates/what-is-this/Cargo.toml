@@ -16,7 +16,11 @@ serde_json.workspace = true
 sha2.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+bytemuck.workspace = true
+js-sys = "0.3"
 wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+wgpu = { workspace = true, features = ["wgsl"] }
 
 [lints]
 workspace = true
