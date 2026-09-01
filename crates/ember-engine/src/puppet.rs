@@ -80,7 +80,10 @@ pub fn part_from_glb_bytes(
 #[must_use]
 pub fn rotate(local: Vec2, yaw: f32) -> Vec2 {
     let (s, c) = yaw.sin_cos();
-    Vec2::new(local.y.mul_add(s, local.x * c), local.y.mul_add(c, -local.x * s))
+    Vec2::new(
+        local.y.mul_add(s, local.x * c),
+        local.y.mul_add(c, -local.x * s),
+    )
 }
 
 fn push_part(
@@ -138,7 +141,11 @@ pub fn push_character_parts(
     ];
     for (part, lx, lz, cy, extra_y) in placements {
         let w = rotate(Vec2::new(lx * body, lz * body), facing_yaw);
-        let target = Vec3::new(pos.x + w.x, bob.mul_add(0.3, f32::mul_add(cy, body, extra_y)), pos.y + w.y);
+        let target = Vec3::new(
+            pos.x + w.x,
+            bob.mul_add(0.3, f32::mul_add(cy, body, extra_y)),
+            pos.y + w.y,
+        );
         push_part(frame, part, body, target, facing_yaw, col);
     }
 }

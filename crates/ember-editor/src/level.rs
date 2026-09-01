@@ -20,8 +20,8 @@
 use glam::Vec3;
 use pong_core::shooter::{Level, Obstacle};
 
-use crate::palette::{Class, Kind};
 use crate::Obj;
+use crate::palette::{Class, Kind};
 
 /// A quarter turn; the only rotation an AABB can carry.
 pub const YAW_STEP: f32 = std::f32::consts::FRAC_PI_2;
@@ -50,10 +50,7 @@ fn footprint(o: &Obj) -> ([f32; 2], [f32; 2]) {
     if extents_swapped(o.yaw) {
         std::mem::swap(&mut hx, &mut hz);
     }
-    (
-        [o.pos.x - hx, o.pos.z - hz],
-        [o.pos.x + hx, o.pos.z + hz],
-    )
+    ([o.pos.x - hx, o.pos.z - hz], [o.pos.x + hx, o.pos.z + hz])
 }
 
 /// Why an export was refused, with enough detail to fix it.
@@ -175,11 +172,7 @@ fn colour_for_height(h: f32) -> Vec3 {
     crate::palette::PALETTE
         .iter()
         .filter(|k| k.class == Class::Object)
-        .min_by(|a, b| {
-            (a.scale.y - h)
-                .abs()
-                .total_cmp(&(b.scale.y - h).abs())
-        })
+        .min_by(|a, b| (a.scale.y - h).abs().total_cmp(&(b.scale.y - h).abs()))
         .map_or(Vec3::new(0.42, 0.45, 0.50), |k| k.color)
 }
 
@@ -217,7 +210,12 @@ mod tests {
                     assert!((a.min[i] - b.min[i]).abs() < 1e-4, "seed {seed}: min");
                     assert!((a.max[i] - b.max[i]).abs() < 1e-4, "seed {seed}: max");
                 }
-                assert!((a.h - b.h).abs() < 1e-6, "seed {seed}: height {} vs {}", a.h, b.h);
+                assert!(
+                    (a.h - b.h).abs() < 1e-6,
+                    "seed {seed}: height {} vs {}",
+                    a.h,
+                    b.h
+                );
             }
             assert_eq!(back.spawns.len(), level.spawns.len(), "seed {seed}: spawns");
             for (a, b) in back.spawns.iter().zip(&level.spawns) {
@@ -252,10 +250,18 @@ mod tests {
         assert_eq!(square(&none.obstacles[0]), (8.0, 2.0));
 
         let quarter = to_level(&[obj(at, long, YAW_STEP, Class::Object)], ARENA_HALF).unwrap();
-        assert_eq!(square(&quarter.obstacles[0]), (2.0, 8.0), "a quarter turn swaps extents");
+        assert_eq!(
+            square(&quarter.obstacles[0]),
+            (2.0, 8.0),
+            "a quarter turn swaps extents"
+        );
 
         let half = to_level(&[obj(at, long, 2.0 * YAW_STEP, Class::Object)], ARENA_HALF).unwrap();
-        assert_eq!(square(&half.obstacles[0]), (8.0, 2.0), "a half turn is a no-op on an AABB");
+        assert_eq!(
+            square(&half.obstacles[0]),
+            (8.0, 2.0),
+            "a half turn is a no-op on an AABB"
+        );
 
         let three = to_level(&[obj(at, long, 3.0 * YAW_STEP, Class::Object)], ARENA_HALF).unwrap();
         assert_eq!(square(&three.obstacles[0]), (2.0, 8.0));
@@ -264,9 +270,15 @@ mod tests {
     #[test]
     fn yaw_snaps_to_quarter_turns_including_negatives() {
         assert_eq!(snap_yaw(0.0), 0.0);
-        assert!((snap_yaw(0.2) - 0.0).abs() < 1e-6, "small turns round back to square");
+        assert!(
+            (snap_yaw(0.2) - 0.0).abs() < 1e-6,
+            "small turns round back to square"
+        );
         assert!((snap_yaw(1.4) - YAW_STEP).abs() < 1e-6);
-        assert!((snap_yaw(-1.4) + YAW_STEP).abs() < 1e-6, "negatives snap symmetrically");
+        assert!(
+            (snap_yaw(-1.4) + YAW_STEP).abs() < 1e-6,
+            "negatives snap symmetrically"
+        );
         assert!(2.0f32.mul_add(-YAW_STEP, snap_yaw(3.0)).abs() < 1e-6);
     }
 
@@ -276,8 +288,18 @@ mod tests {
         // is reachable by ordinary use. Silently flattening it would ship a
         // level that is not the one on screen.
         let objects = vec![
-            obj(Vec3::new(0.0, 0.6, 0.0), Vec3::splat(1.2), 0.0, Class::Object),
-            obj(Vec3::new(4.0, 5.0, 0.0), Vec3::splat(1.2), 0.0, Class::Object),
+            obj(
+                Vec3::new(0.0, 0.6, 0.0),
+                Vec3::splat(1.2),
+                0.0,
+                Class::Object,
+            ),
+            obj(
+                Vec3::new(4.0, 5.0, 0.0),
+                Vec3::splat(1.2),
+                0.0,
+                Class::Object,
+            ),
         ];
         match to_level(&objects, ARENA_HALF) {
             Err(ExportError::FloatingObject { index, base_y }) => {

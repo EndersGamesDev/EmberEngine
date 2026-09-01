@@ -25,8 +25,8 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 
-use ember_engine::glam::Vec3;
 use ember_engine::Instance;
+use ember_engine::glam::Vec3;
 
 use crate::gizmo::Mode;
 
@@ -164,7 +164,11 @@ pub fn snap_to(p: Vec3, snap: f32) -> Vec3 {
     if snap <= 0.0 {
         return p;
     }
-    Vec3::new((p.x / snap).round() * snap, p.y, (p.z / snap).round() * snap)
+    Vec3::new(
+        (p.x / snap).round() * snap,
+        p.y,
+        (p.z / snap).round() * snap,
+    )
 }
 
 /// Extra, NON-PICKABLE geometry marking a spawn point: a flat pad under the

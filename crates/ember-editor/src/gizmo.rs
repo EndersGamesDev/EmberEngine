@@ -17,8 +17,8 @@
 //! box's twelve edges, and the gizmo is nudged toward the camera by an
 //! epsilon so it does not z-fight the object it is attached to.
 
-use ember_engine::glam::{Quat, Vec3};
 use ember_engine::Instance;
+use ember_engine::glam::{Quat, Vec3};
 
 use crate::pick;
 use crate::{AXIS_X, AXIS_Y, AXIS_Z};
@@ -320,10 +320,7 @@ mod tests {
         let len = handle_len(centre, eye);
         // Aim at a point partway along each shaft, from a long way off along
         // a direction that only meets that one handle.
-        let cases = [
-            (Axis::X, Vec3::X, Vec3::Z),
-            (Axis::Z, Vec3::Z, Vec3::X),
-        ];
+        let cases = [(Axis::X, Vec3::X, Vec3::Z), (Axis::Z, Vec3::Z, Vec3::X)];
         for (want, along, from) in cases {
             let target = centre + along * (len * 0.6);
             let org = target + from * 50.0;
@@ -347,7 +344,11 @@ mod tests {
 
     #[test]
     fn the_cage_has_twelve_edges_and_surrounds_the_box() {
-        let inst = Instance::new(Vec3::new(3.0, 1.0, -2.0), Vec3::new(2.0, 4.0, 6.0), Vec3::ONE);
+        let inst = Instance::new(
+            Vec3::new(3.0, 1.0, -2.0),
+            Vec3::new(2.0, 4.0, 6.0),
+            Vec3::ONE,
+        );
         let cage = selection_cage(&inst);
         assert_eq!(cage.len(), 12, "a box has twelve edges");
         for e in &cage {

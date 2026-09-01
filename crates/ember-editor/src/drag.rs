@@ -67,12 +67,7 @@ pub fn closest_param_on_axis(
 /// `None` when the ray is nearly parallel to the plane, where the
 /// intersection races off to infinity for a pixel of cursor movement.
 #[must_use]
-pub fn angle_on_plane(
-    ray_org: Vec3,
-    ray_dir: Vec3,
-    centre: Vec3,
-    axis_dir: Vec3,
-) -> Option<f32> {
+pub fn angle_on_plane(ray_org: Vec3, ray_dir: Vec3, centre: Vec3, axis_dir: Vec3) -> Option<f32> {
     let denom = ray_dir.dot(axis_dir);
     if denom.abs() < PARALLEL_EPS {
         return None;
@@ -279,7 +274,11 @@ mod tests {
         let mut drag = Drag::begin(Axis::X, Mode::Scale, start, o, d).expect("grab");
         let (o2, d2) = ray_down_at(5.0, 0.0);
         let out = drag.update(o2, d2).unwrap();
-        assert!((out.scale.x - 5.0).abs() < 1e-4, "x scale is {}", out.scale.x);
+        assert!(
+            (out.scale.x - 5.0).abs() < 1e-4,
+            "x scale is {}",
+            out.scale.x
+        );
         assert_eq!(out.scale.y, 2.0, "y must not follow x");
         assert_eq!(out.scale.z, 2.0, "z must not follow x");
     }
@@ -374,7 +373,12 @@ mod tests {
 
     #[test]
     fn the_perpendicular_helper_is_always_unit_and_orthogonal() {
-        for n in [Vec3::X, Vec3::Y, Vec3::Z, Vec3::new(1.0, 1.0, 1.0).normalize()] {
+        for n in [
+            Vec3::X,
+            Vec3::Y,
+            Vec3::Z,
+            Vec3::new(1.0, 1.0, 1.0).normalize(),
+        ] {
             let p = perpendicular(n);
             assert!((p.length() - 1.0).abs() < 1e-5, "not unit for {n:?}");
             assert!(p.dot(n).abs() < 1e-5, "not perpendicular to {n:?}");

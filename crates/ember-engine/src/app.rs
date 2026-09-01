@@ -12,9 +12,9 @@ use winit::keyboard::KeyCode;
 use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowId};
 
+use crate::EmberGame;
 use crate::input::InputState;
 use crate::renderer::Renderer;
-use crate::EmberGame;
 
 #[cfg(target_arch = "wasm32")]
 use std::{cell::RefCell, rc::Rc};
@@ -107,9 +107,9 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                 .unwrap_or_else(|| document.body().expect("no body").into());
             root.append_child(&canvas).expect("append canvas");
             let _ = canvas.focus(); // keyboard events go to the canvas
-                                    // NOTE: no request_inner_size here — winit would pin an inline
-                                    // CSS size that overrides the page's responsive width rule. CSS
-                                    // owns layout; the per-frame sync below owns the backing store.
+            // NOTE: no request_inner_size here — winit would pin an inline
+            // CSS size that overrides the page's responsive width rule. CSS
+            // owns layout; the per-frame sync below owns the backing store.
 
             let pending = Rc::clone(&self.pending_renderer);
             let win = window.clone();
@@ -148,11 +148,11 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
         if let (Some(overlay), Some(window)) = (self.overlay.as_mut(), self.window.as_ref()) {
             if let WindowEvent::KeyboardInput { event: key, .. } = &event
                 && key.state == ElementState::Pressed
-                    && key.physical_key == PhysicalKey::Code(KeyCode::F3)
-                {
-                    overlay.visible = !overlay.visible;
-                    return;
-                }
+                && key.physical_key == PhysicalKey::Code(KeyCode::F3)
+            {
+                overlay.visible = !overlay.visible;
+                return;
+            }
             if overlay.on_window_event(window, &event) {
                 return;
             }
@@ -196,14 +196,16 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                 }
                 // Clicking (re)captures the mouse for FPS look. Cheap to
                 // re-request; also restores capture after Esc on the web.
-                if self.config.capture_mouse && state == ElementState::Pressed
-                    && let Some(window) = self.window.as_ref() {
-                        use winit::window::CursorGrabMode;
-                        let _ = window
-                            .set_cursor_grab(CursorGrabMode::Locked)
-                            .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined));
-                        window.set_cursor_visible(false);
-                    }
+                if self.config.capture_mouse
+                    && state == ElementState::Pressed
+                    && let Some(window) = self.window.as_ref()
+                {
+                    use winit::window::CursorGrabMode;
+                    let _ = window
+                        .set_cursor_grab(CursorGrabMode::Locked)
+                        .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined));
+                    window.set_cursor_visible(false);
+                }
             }
             WindowEvent::RedrawRequested => {
                 #[cfg(target_arch = "wasm32")]

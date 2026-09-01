@@ -24,7 +24,9 @@ pub mod palette;
 pub mod pick;
 
 use ember_engine::glam::{Quat, Vec3};
-use ember_engine::{Camera, EmberGame, EngineConfig, Frame, InputState, Instance, KeyCode, MouseButton};
+use ember_engine::{
+    Camera, EmberGame, EngineConfig, Frame, InputState, Instance, KeyCode, MouseButton,
+};
 
 /// Half-extent of the authored area, and of the reference grid.
 pub const GRID_HALF: f32 = 24.0;
@@ -169,7 +171,8 @@ impl FlyCam {
                 let (dx, dy) = (ndc[0] - prev[0], ndc[1] - prev[1]);
                 self.yaw = f32::mul_add(dx, LOOK_SENS, self.yaw);
                 // NDC y is up-positive and so is pitch, so this needs no flip.
-                self.pitch = f32::mul_add(dy, LOOK_SENS, self.pitch).clamp(-PITCH_LIMIT, PITCH_LIMIT);
+                self.pitch =
+                    f32::mul_add(dy, LOOK_SENS, self.pitch).clamp(-PITCH_LIMIT, PITCH_LIMIT);
             }
             self.last_ndc = Some(ndc);
         }
@@ -187,7 +190,9 @@ impl FlyCam {
             self.eye += step.normalize() * speed * dt;
         }
         // Bounded well inside the far plane; see EYE_LIMIT.
-        self.eye = self.eye.clamp(Vec3::splat(-EYE_LIMIT), Vec3::splat(EYE_LIMIT));
+        self.eye = self
+            .eye
+            .clamp(Vec3::splat(-EYE_LIMIT), Vec3::splat(EYE_LIMIT));
         true
     }
 }
@@ -504,9 +509,10 @@ fn starter_seed() -> u64 {
     #[cfg(not(target_arch = "wasm32"))]
     {
         if let Ok(s) = std::env::var("EMBER_EDITOR_SEED")
-            && let Ok(v) = s.parse() {
-                return v;
-            }
+            && let Ok(v) = s.parse()
+        {
+            return v;
+        }
     }
     7
 }
@@ -527,9 +533,7 @@ impl EmberGame for Editor {
         // exactly what a click would take.
         let ray = self.cursor_ray(input);
         self.hovered = match (ray, self.selection_centre()) {
-            (Some((org, dir)), Some(centre)) => {
-                gizmo::pick_handle(org, dir, centre, self.cam.eye)
-            }
+            (Some((org, dir)), Some(centre)) => gizmo::pick_handle(org, dir, centre, self.cam.eye),
             _ => None,
         };
 
@@ -661,9 +665,18 @@ mod tests {
             cam.pitch = pitch;
             let f = cam.forward();
             let r = cam.right();
-            assert!((f.length() - 1.0).abs() < 1e-5, "forward not unit at {yaw},{pitch}");
-            assert!((r.length() - 1.0).abs() < 1e-5, "right not unit at {yaw},{pitch}");
-            assert!(f.dot(r).abs() < 1e-5, "basis not orthogonal at {yaw},{pitch}");
+            assert!(
+                (f.length() - 1.0).abs() < 1e-5,
+                "forward not unit at {yaw},{pitch}"
+            );
+            assert!(
+                (r.length() - 1.0).abs() < 1e-5,
+                "right not unit at {yaw},{pitch}"
+            );
+            assert!(
+                f.dot(r).abs() < 1e-5,
+                "basis not orthogonal at {yaw},{pitch}"
+            );
         }
     }
 
@@ -718,7 +731,10 @@ mod tests {
     #[test]
     fn axes_run_from_the_origin_outward_so_sign_is_readable() {
         let a = axis_instances(6.0, 0.12);
-        assert!(a[0].position.x > 0.0, "the X bar must show +X, not straddle 0");
+        assert!(
+            a[0].position.x > 0.0,
+            "the X bar must show +X, not straddle 0"
+        );
         assert!(a[1].position.y > 0.0);
         assert!(a[2].position.z > 0.0);
     }

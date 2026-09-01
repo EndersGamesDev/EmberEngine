@@ -354,7 +354,12 @@ impl Renderer {
         // driver/browser-defined and often non-sRGB (always, on the web).
         let mut surface_view_format: Option<wgpu::TextureFormat> = None;
         if !config.format.is_srgb() {
-            if let Some(srgb) = caps.formats.iter().copied().find(wgpu::TextureFormat::is_srgb) {
+            if let Some(srgb) = caps
+                .formats
+                .iter()
+                .copied()
+                .find(wgpu::TextureFormat::is_srgb)
+            {
                 config.format = srgb;
             } else {
                 // WebGPU canvases expose only non-sRGB formats; render the
@@ -907,22 +912,24 @@ impl Renderer {
         }
 
         if check_mtime(SCENE_SRC, &mut self.shader_reload.scene_mtime)
-            && let Some(module) = self.try_compile(SCENE_SRC, "scene shader (hot-reload)") {
-                self.scene_pipeline =
-                    build_scene_pipeline(&self.device, &self.scene_pipeline_layout, &module);
-                tracing::info!(path = SCENE_SRC, "scene shader hot-reloaded");
-            }
+            && let Some(module) = self.try_compile(SCENE_SRC, "scene shader (hot-reload)")
+        {
+            self.scene_pipeline =
+                build_scene_pipeline(&self.device, &self.scene_pipeline_layout, &module);
+            tracing::info!(path = SCENE_SRC, "scene shader hot-reloaded");
+        }
         if check_mtime(PRESENT_SRC, &mut self.shader_reload.present_mtime)
-            && let Some(module) = self.try_compile(PRESENT_SRC, "present shader (hot-reload)") {
-                let format = self.surface_view_format.unwrap_or(self.config.format);
-                self.present_pipeline = build_present_pipeline(
-                    &self.device,
-                    &self.present_pipeline_layout,
-                    &module,
-                    format,
-                );
-                tracing::info!(path = PRESENT_SRC, "present shader hot-reloaded");
-            }
+            && let Some(module) = self.try_compile(PRESENT_SRC, "present shader (hot-reload)")
+        {
+            let format = self.surface_view_format.unwrap_or(self.config.format);
+            self.present_pipeline = build_present_pipeline(
+                &self.device,
+                &self.present_pipeline_layout,
+                &module,
+                format,
+            );
+            tracing::info!(path = PRESENT_SRC, "present shader hot-reloaded");
+        }
     }
 
     /// Compile WGSL from `path` under a validation error scope. None (plus an

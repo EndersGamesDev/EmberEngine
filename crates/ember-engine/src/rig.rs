@@ -52,7 +52,10 @@ pub struct Skeleton {
 
 /// Parent of each joint, shared by every skeleton builder.
 const PARENTS: [Option<usize>; joint::COUNT] = {
-    use joint::{COUNT, SPINE, ROOT, NECK, SHOULDER_L, ELBOW_L, WRIST_L, SHOULDER_R, ELBOW_R, WRIST_R, HIP_L, KNEE_L, ANKLE_L, HIP_R, KNEE_R, ANKLE_R};
+    use joint::{
+        ANKLE_L, ANKLE_R, COUNT, ELBOW_L, ELBOW_R, HIP_L, HIP_R, KNEE_L, KNEE_R, NECK, ROOT,
+        SHOULDER_L, SHOULDER_R, SPINE, WRIST_L, WRIST_R,
+    };
     let mut p = [None; COUNT];
     p[SPINE] = Some(ROOT);
     p[NECK] = Some(SPINE);
@@ -111,7 +114,10 @@ impl Default for HumanoidDims {
 /// Build the standard humanoid joint tree from segment dimensions.
 #[must_use]
 pub fn humanoid(d: &HumanoidDims) -> Skeleton {
-    use joint::{COUNT, ROOT, SPINE, NECK, SHOULDER_L, ELBOW_L, WRIST_L, HIP_L, KNEE_L, ANKLE_L, SHOULDER_R, ELBOW_R, WRIST_R, HIP_R, KNEE_R, ANKLE_R};
+    use joint::{
+        ANKLE_L, ANKLE_R, COUNT, ELBOW_L, ELBOW_R, HIP_L, HIP_R, KNEE_L, KNEE_R, NECK, ROOT,
+        SHOULDER_L, SHOULDER_R, SPINE, WRIST_L, WRIST_R,
+    };
     let mut joints = [JointDef {
         parent: None,
         offset: Vec3::ZERO,
@@ -154,7 +160,10 @@ pub fn humanoid(d: &HumanoidDims) -> Skeleton {
 /// A-pose becomes a figure with its arms down, without touching the mesh.
 #[must_use]
 pub fn skeleton_from_bind(pos: &[Vec3; joint::COUNT]) -> (Skeleton, HumanoidDims) {
-    use joint::{COUNT, SHOULDER_L, ELBOW_L, WRIST_L, SHOULDER_R, ELBOW_R, WRIST_R, HIP_L, KNEE_L, ANKLE_L, HIP_R, KNEE_R, ANKLE_R, SPINE, NECK};
+    use joint::{
+        ANKLE_L, ANKLE_R, COUNT, ELBOW_L, ELBOW_R, HIP_L, HIP_R, KNEE_L, KNEE_R, NECK, SHOULDER_L,
+        SHOULDER_R, SPINE, WRIST_L, WRIST_R,
+    };
     let mut joints = [JointDef {
         parent: None,
         offset: Vec3::ZERO,
@@ -226,8 +235,21 @@ pub fn skeleton_from_bind(pos: &[Vec3; joint::COUNT]) -> (Skeleton, HumanoidDims
 /// Engine joint names, in `joint` index order — the node-name suffixes
 /// `tools/swat_split.py` writes ("`rig_head`", "`rig_shoulder_l`", ...).
 pub const JOINT_NAMES: [&str; joint::COUNT] = [
-    "root", "spine", "neck", "shoulder_l", "elbow_l", "wrist_l", "shoulder_r", "elbow_r",
-    "wrist_r", "hip_l", "knee_l", "ankle_l", "hip_r", "knee_r", "ankle_r",
+    "root",
+    "spine",
+    "neck",
+    "shoulder_l",
+    "elbow_l",
+    "wrist_l",
+    "shoulder_r",
+    "elbow_r",
+    "wrist_r",
+    "hip_l",
+    "knee_l",
+    "ankle_l",
+    "hip_r",
+    "knee_r",
+    "ankle_r",
 ];
 
 /// Pull one `"name": [x, y, z]` triple out of the rig JSON. The file is
@@ -370,7 +392,10 @@ pub fn world_joints(skel: &Skeleton, pose: &Pose) -> [(Vec3, Quat); joint::COUNT
 /// and `idle_t` is wall-clock time driving the idle breathing sway.
 #[must_use]
 pub fn walk_pose(phase: f32, amp: f32, crouch: f32, idle_t: f32, d: &HumanoidDims) -> Pose {
-    use joint::{HIP_L, KNEE_L, ANKLE_L, HIP_R, KNEE_R, ANKLE_R, SPINE, NECK, SHOULDER_L, ELBOW_L, SHOULDER_R, ELBOW_R};
+    use joint::{
+        ANKLE_L, ANKLE_R, ELBOW_L, ELBOW_R, HIP_L, HIP_R, KNEE_L, KNEE_R, NECK, SHOULDER_L,
+        SHOULDER_R, SPINE,
+    };
     let pitch = Quat::from_rotation_x;
     let swing = phase.sin() * amp;
     let mut p = Pose::default();
@@ -823,7 +848,11 @@ mod tests {
         let yaw = 0.7f32;
         let (s, c) = yaw.sin_cos();
         for v in [Vec3::X, Vec3::Z, Vec3::new(0.3, -0.2, 0.9)] {
-            let legacy = Vec3::new(f32::mul_add(v.z, s, v.x * c), v.y, f32::mul_add(v.z, c, -v.x * s));
+            let legacy = Vec3::new(
+                f32::mul_add(v.z, s, v.x * c),
+                v.y,
+                f32::mul_add(v.z, c, -v.x * s),
+            );
             let q = Quat::from_rotation_y(yaw);
             assert!(
                 (q * v - legacy).length() < 1e-5,
@@ -936,19 +965,29 @@ mod tests {
         let bind = bind_a_pose();
         let (skel, dims) = skeleton_from_bind(&bind);
         // Segment lengths survive the retarget.
-        assert!((dims.upperarm_len - (bind[joint::ELBOW_L] - bind[joint::SHOULDER_L]).length()).abs() < 1e-5);
+        assert!(
+            (dims.upperarm_len - (bind[joint::ELBOW_L] - bind[joint::SHOULDER_L]).length()).abs()
+                < 1e-5
+        );
         assert!((dims.pelvis_h - (dims.thigh_len + dims.shin_len + dims.ankle_h)).abs() < 1e-5);
 
         let j = world_joints(&skel, &walk_pose(0.0, 0.0, 0.0, 0.0, &dims));
         // Arms hang: each wrist sits well below its shoulder and much
         // closer to the body than the arms-out bind pose.
-        for (sh, wr) in [(joint::SHOULDER_L, joint::WRIST_L), (joint::SHOULDER_R, joint::WRIST_R)] {
+        for (sh, wr) in [
+            (joint::SHOULDER_L, joint::WRIST_L),
+            (joint::SHOULDER_R, joint::WRIST_R),
+        ] {
             let (s, w) = (j[sh].0, j[wr].0);
             assert!(w.y < s.y - 0.4, "wrist y {} vs shoulder {}", w.y, s.y);
             assert!((w.x - s.x).abs() < 0.2, "wrist x drift {}", w.x - s.x);
         }
         // Soles land on the ground and the head stays on top.
-        assert!(j[joint::ANKLE_L].0.y < 0.20, "ankle {}", j[joint::ANKLE_L].0.y);
+        assert!(
+            j[joint::ANKLE_L].0.y < 0.20,
+            "ankle {}",
+            j[joint::ANKLE_L].0.y
+        );
         assert!(j[joint::NECK].0.y > 1.4, "neck {}", j[joint::NECK].0.y);
     }
 
@@ -956,8 +995,14 @@ mod tests {
     fn retargeted_arms_still_swing_when_walking() {
         let bind = bind_a_pose();
         let (skel, dims) = skeleton_from_bind(&bind);
-        let front = world_joints(&skel, &walk_pose(std::f32::consts::FRAC_PI_2, 1.0, 0.0, 0.0, &dims));
-        let back = world_joints(&skel, &walk_pose(-std::f32::consts::FRAC_PI_2, 1.0, 0.0, 0.0, &dims));
+        let front = world_joints(
+            &skel,
+            &walk_pose(std::f32::consts::FRAC_PI_2, 1.0, 0.0, 0.0, &dims),
+        );
+        let back = world_joints(
+            &skel,
+            &walk_pose(-std::f32::consts::FRAC_PI_2, 1.0, 0.0, 0.0, &dims),
+        );
         // The same wrist travels fore/aft between opposite phases.
         let travel = (front[joint::WRIST_L].0.z - back[joint::WRIST_L].0.z).abs();
         assert!(travel > 0.15, "wrist z travel {travel}");

@@ -216,8 +216,8 @@ mod tests {
         // A box rotated 45 degrees about Y presents a corner to an axis-aligned
         // ray. A test that forgot to un-rotate would still "hit" the AABB and
         // report the wrong distance, so this checks the distance, not the hit.
-        let inst = Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE)
-            .with_yaw(std::f32::consts::FRAC_PI_4);
+        let inst =
+            Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::ONE).with_yaw(std::f32::consts::FRAC_PI_4);
         let t = ray_obb(Vec3::new(0.0, 0.0, 10.0), Vec3::NEG_Z, &inst).expect("corner-on hit");
         // Half-diagonal of a unit square is sqrt(2)/2, so the corner is nearer
         // than the face was: 10 - 0.7071.
