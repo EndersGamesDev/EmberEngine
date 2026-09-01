@@ -1,4 +1,9 @@
-//! Headless arena bot (works over ws:// and wss://).
+// This health-check CLI intentionally reports status through standard streams and exit codes.
+#![allow(clippy::exit, clippy::print_stderr, clippy::print_stdout)]
+// Elapsed-time casts intentionally produce bounded protocol sequence and animation counters.
+#![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+
+//! Headless arena bot (works over `ws://` and `wss://`).
 //!
 //!     cargo run -p pong-server --example wsbot -- <URL> create|join <LOBBY> [PASSWORD|-] [HANDLE] [SECS] [MODES]
 //!
@@ -21,6 +26,8 @@ use pong_core::proto::{C2S, PROTO_VERSION, S2C};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::Message;
 
+// Keeping the scripted session linear makes its health-check sequence auditable.
+#[allow(clippy::too_many_lines)]
 fn main() {
     let mut args = std::env::args().skip(1);
     let url = args
@@ -79,14 +86,14 @@ fn main() {
         "create" => send(
             &mut ws,
             &C2S::CreateLobby {
-                name: lobby.clone(),
+                name: lobby,
                 password,
             },
         ),
         "join" => send(
             &mut ws,
             &C2S::JoinLobby {
-                name: lobby.clone(),
+                name: lobby,
                 password,
             },
         ),
@@ -103,7 +110,8 @@ fn main() {
     let mut kills_seen: u64 = 0;
     let mut max_players = 0usize;
     let mut bullets_seen: u64 = 0;
-    let mut last_input = Instant::now() - Duration::from_secs(1);
+    let now = Instant::now();
+    let mut last_input = now.checked_sub(Duration::from_secs(1)).unwrap_or(now);
     let mut last_ping = Instant::now();
 
     while started.elapsed() < Duration::from_secs(secs) {
@@ -148,7 +156,7 @@ fn main() {
                     in_game = true;
                 }
                 Ok(S2C::PlayerJoined { meta }) => {
-                    println!("wsbot {handle}: {} joined", meta.handle)
+                    println!("wsbot {handle}: {} joined", meta.handle);
                 }
                 Ok(S2C::PlayerLeft { id }) => println!("wsbot {handle}: #{id} left"),
                 Ok(S2C::State {

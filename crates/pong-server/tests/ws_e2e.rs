@@ -1,4 +1,4 @@
-//! End-to-end over real WebSockets: create a passworded game, reject a bad
+//! End-to-end over a real `WebSocket`: create a passworded game, reject a bad
 //! password, drop a second player in, shoot, and drop out.
 
 use std::net::{TcpListener, TcpStream};
@@ -63,6 +63,8 @@ fn recv_until<T>(ws: &mut Ws, secs: u64, mut pred: impl FnMut(S2C) -> Option<T>)
 }
 
 #[test]
+// The scenario stays linear so each protocol transition is asserted in wire order.
+#[allow(clippy::too_many_lines)]
 fn drop_in_arena_flow_with_password() {
     let port = start_server();
 
@@ -171,7 +173,7 @@ fn drop_in_arena_flow_with_password() {
         S2C::State {
             bullets, players, ..
         } => {
-            assert!(players.len() == 2);
+            assert_eq!(players.len(), 2);
             (!bullets.is_empty()).then_some(())
         }
         _ => None,
@@ -442,10 +444,10 @@ fn a_state_reports_how_long_the_acked_command_has_been_applied() {
     let mut ages = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(3);
     while ages.len() < 4 && Instant::now() < deadline {
-        if let S2C::State { players, .. } = recv(&mut host) {
-            if let Some(p) = players.iter().find(|p| p.id == me && p.ack == 9) {
-                ages.push(p.ack_age_ticks);
-            }
+        if let S2C::State { players, .. } = recv(&mut host)
+            && let Some(p) = players.iter().find(|p| p.id == me && p.ack == 9)
+        {
+            ages.push(p.ack_age_ticks);
         }
     }
     assert!(ages.len() >= 4, "not enough states carrying the ack: {ages:?}");
