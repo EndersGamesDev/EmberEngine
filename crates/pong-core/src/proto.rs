@@ -7,10 +7,10 @@
 
 use serde::{Deserialize, Serialize};
 
-/// v9: the off-hand shield, which reflects. `shield` is `#[serde(default)]`
-/// on both the input and the player state, so both directions decode — and
-/// decoding is not the test. Ask instead what an old peer DOES.
+/// Protocol v9 adds the reflecting off-hand shield.
 ///
+/// `shield` is `#[serde(default)]` on input and player state, so both directions
+/// decode. Decoding is not the test; ask instead what an old peer does.
 ///
 /// A pre-v9 client against a v9 server can never raise a shield, and — the
 /// part that decides this — its own perfectly-aimed shot can now come back
