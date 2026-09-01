@@ -3,6 +3,9 @@
 //!
 //!     cargo run -p ember-net --example netbot -- [ADDR] [NAME] [SECONDS]
 
+// Netbot's status output and exit codes are its user-facing verification contract.
+#![allow(clippy::exit, clippy::print_stderr, clippy::print_stdout)]
+
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -17,6 +20,42 @@ struct Stats {
     last_pos: Option<[f32; 2]>,
     max_players: usize,
     rtts_ms: Vec<f64>,
+}
+
+fn report(stats: &Mutex<Stats>, died_early: bool, secs: u64) {
+    let (snapshots, moved, max_players, avg_rtt) = {
+        let stats = stats.lock().unwrap();
+        let moved = match (stats.first_pos, stats.last_pos) {
+            (Some(a), Some(b)) => {
+                let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                dx.hypot(dy)
+            }
+            _ => 0.0,
+        };
+        let avg_rtt = if stats.rtts_ms.is_empty() {
+            f64::NAN
+        } else {
+            let samples = stats.rtts_ms.iter().fold(0.0, |count, _| count + 1.0);
+            stats.rtts_ms.iter().sum::<f64>() / samples
+        };
+        (stats.snapshots, moved, stats.max_players, avg_rtt)
+    };
+
+    // Expect roughly TICK_HZ snapshots/sec; accept half to tolerate slow links.
+    let min_snapshots = u64::from(ember_net::TICK_HZ) * secs / 2;
+    if died_early {
+        eprintln!("NETBOT FAIL: connection died early");
+        std::process::exit(1);
+    }
+    if snapshots < min_snapshots || moved < 2.0 {
+        eprintln!(
+            "NETBOT FAIL: snapshots={snapshots} (need {min_snapshots}), moved={moved:.2} (need 2.0)"
+        );
+        std::process::exit(1);
+    }
+    println!(
+        "NETBOT OK: snapshots={snapshots} moved={moved:.1} max_players_seen={max_players} avg_rtt={avg_rtt:.1}ms"
+    );
 }
 
 fn main() {
@@ -88,7 +127,7 @@ fn main() {
                     }
                 }
                 Ok(ServerMsg::Pong { nonce }) => {
-                    let sent_ms = nonce as f64;
+                    let sent_ms = f64::from(nonce);
                     let now_ms = started.elapsed().as_secs_f64() * 1000.0;
                     stats.lock().unwrap().rtts_ms.push(now_ms - sent_ms);
                 }
@@ -101,7 +140,9 @@ fn main() {
         });
     }
 
-    let mut last_ping = Instant::now() - Duration::from_secs(1);
+    let mut last_ping = Instant::now()
+        .checked_sub(Duration::from_secs(1))
+        .unwrap_or_else(Instant::now);
     while started.elapsed() < Duration::from_secs(secs) && !dead.load(Ordering::Relaxed) {
         let t = started.elapsed().as_secs_f32();
         let dir = [(t * 1.5).cos(), (t * 1.5).sin()];
@@ -111,7 +152,8 @@ fn main() {
         });
         if last_ping.elapsed() >= Duration::from_secs(1) {
             last_ping = Instant::now();
-            let nonce = started.elapsed().as_millis() as u32;
+            let elapsed_ms = started.elapsed().as_millis();
+            let nonce = u32::try_from(elapsed_ms & u128::from(u32::MAX)).unwrap_or_default();
             let _ = write_msg(&mut stream, &ClientMsg::Ping { nonce });
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -122,34 +164,5 @@ fn main() {
     let _ = write_msg(&mut stream, &ClientMsg::Bye);
     std::thread::sleep(Duration::from_millis(200));
 
-    let s = stats.lock().unwrap();
-    let moved = match (s.first_pos, s.last_pos) {
-        (Some(a), Some(b)) => {
-            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-            (dx * dx + dy * dy).sqrt()
-        }
-        _ => 0.0,
-    };
-    let avg_rtt = if s.rtts_ms.is_empty() {
-        f64::NAN
-    } else {
-        s.rtts_ms.iter().sum::<f64>() / s.rtts_ms.len() as f64
-    };
-    // Expect roughly TICK_HZ snapshots/sec; accept half to tolerate slow links.
-    let min_snapshots = ember_net::TICK_HZ as u64 * secs / 2;
-    if died_early {
-        eprintln!("NETBOT FAIL: connection died early");
-        std::process::exit(1);
-    }
-    if s.snapshots < min_snapshots || moved < 2.0 {
-        eprintln!(
-            "NETBOT FAIL: snapshots={} (need {min_snapshots}), moved={moved:.2} (need 2.0)",
-            s.snapshots
-        );
-        std::process::exit(1);
-    }
-    println!(
-        "NETBOT OK: snapshots={} moved={moved:.1} max_players_seen={} avg_rtt={avg_rtt:.1}ms",
-        s.snapshots, s.max_players
-    );
+    report(&stats, died_early, secs);
 }
