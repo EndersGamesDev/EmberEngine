@@ -153,6 +153,18 @@ pub enum OuterErrorCode {
     UnsupportedOuterVersion,
     /// A selector or handle violates stable outer syntax constraints.
     InvalidRequest,
+    /// The exact selected lobby does not exist.
+    LobbyNotFound,
+    /// Creation selected a lobby name already used under the exact game key.
+    LobbyAlreadyExists,
+    /// The supplied password did not satisfy host admission.
+    PasswordRejected,
+    /// The selected lobby has reached its player capacity.
+    LobbyFull,
+    /// Version-owned admission logic refused the peer after outer checks.
+    AdmissionRefused,
+    /// A global or per-version host capacity prevents new admission.
+    ServerAtCapacity,
     /// The outer host cannot safely continue the request.
     InternalError,
 }

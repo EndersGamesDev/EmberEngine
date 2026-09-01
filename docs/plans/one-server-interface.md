@@ -518,6 +518,12 @@ pub enum OuterErrorCode {
     PayloadBeforeJoin,
     UnsupportedOuterVersion,
     InvalidRequest,
+    LobbyNotFound,
+    LobbyAlreadyExists,
+    PasswordRejected,
+    LobbyFull,
+    AdmissionRefused,
+    ServerAtCapacity,
     InternalError,
 }
 
@@ -635,6 +641,8 @@ The host decodes `StateInput::Outer` only in `AwaitHello` or `Browsing`; after `
 
 Malformed JSON, oversize input, unsupported outer versions, wrong-state messages, repeated hello, and pre-join inner payloads produce their stable outer error when safe and close because continued interpretation is ambiguous; password failure, full lobbies, version selection refusals, and version-owned admission refusals leave the connection in `Browsing`.
 
+`LobbyNotFound`, `LobbyAlreadyExists`, `PasswordRejected`, `LobbyFull`, `AdmissionRefused`, and `ServerAtCapacity` are browsing-state refusals and do not require clients to parse human-readable error text; exact game/version misses continue to use the richer `GameNotHosted` and `VersionNotHosted` messages.
+
 ## Hosted manifest freeze
 
 `games/hosted.toml` initially hosts latest `arena/12` from package `ember-game-arena-v12` with fixture suite `arena-v12-hosted-contract` and legacy selector `arena`, and latest `fire/1` from package `ember-game-fire-v1` with fixture suite `fire-v1-hosted-contract` and legacy selector `fire`.
@@ -653,3 +661,4 @@ The committed known vector for `arena/12`, a seed of 32 bytes each equal to hexa
 
 - Added `pub struct FrozenKeyedRandom;` as the reference `LegacyRandom` implementation; no frozen signature changed.
 - Added `pub const fn UnicastHandle::from_peer_id(peer_id: PeerId) -> Self;` and `pub const fn BroadcastHandle::from_session_id(session_id: SessionId) -> Self;` so current host adapters can construct opaque bounded target handles; no frozen signature changed.
+- Added the `LobbyNotFound`, `LobbyAlreadyExists`, `PasswordRejected`, `LobbyFull`, `AdmissionRefused`, and `ServerAtCapacity` variants to `OuterErrorCode` so ordinary admission failures remain machine-readable in `Browsing`; no frozen variant changed or was removed.
