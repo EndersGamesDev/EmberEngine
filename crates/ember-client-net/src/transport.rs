@@ -2,7 +2,6 @@ use std::collections::VecDeque;
 
 use crate::{Keepalive, WireFrame};
 
-const MAX_DATA_FRAME_BYTES: usize = ember_net::outer::MAX_OUTER_FRAME_BYTES;
 const MAX_BROWSER_BUFFERED_BYTES: u32 = 4 * 1024 * 1024;
 
 /// Stable category for a transport closure.
@@ -60,6 +59,8 @@ pub struct ConnectionDiagnostics {
 /// Capacity and keepalive policy for one platform transport.
 #[derive(Clone, Debug)]
 pub struct TransportConfig {
+    /// Maximum bytes in one incoming or outgoing data frame.
+    pub max_frame_bytes: usize,
     /// Maximum received frames waiting for the game loop.
     pub inbox_capacity: usize,
     /// Maximum outgoing frames waiting for the socket owner.
@@ -71,6 +72,7 @@ pub struct TransportConfig {
 impl Default for TransportConfig {
     fn default() -> Self {
         Self {
+            max_frame_bytes: ember_net::outer::MAX_OUTER_FRAME_BYTES,
             inbox_capacity: 256,
             outbox_capacity: 256,
             keepalive: None,
@@ -104,7 +106,7 @@ impl WebSocketTransport {
         if config
             .keepalive
             .as_ref()
-            .is_some_and(|keepalive| keepalive.frame.len() > MAX_DATA_FRAME_BYTES)
+            .is_some_and(|keepalive| keepalive.frame.len() > config.max_frame_bytes.max(1))
         {
             return Err("keepalive frame exceeds the shared byte ceiling".to_string());
         }
@@ -150,8 +152,8 @@ mod imp {
     use tungstenite::stream::MaybeTlsStream;
 
     use super::{
-        CloseKind, ConnectionClose, ConnectionDiagnostics, MAX_DATA_FRAME_BYTES, SendError,
-        TransportConfig, TransportStatus, WireFrame,
+        CloseKind, ConnectionClose, ConnectionDiagnostics, SendError, TransportConfig,
+        TransportStatus, WireFrame,
     };
 
     fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -187,6 +189,7 @@ mod imp {
         outgoing: SyncSender<WireFrame>,
         status: Arc<Mutex<TransportStatus>>,
         diagnostics: Arc<Mutex<ConnectionDiagnostics>>,
+        max_frame_bytes: usize,
     }
 
     impl Transport {
@@ -196,6 +199,7 @@ mod imp {
             drop(rustls::crypto::ring::default_provider().install_default());
             let inbox_capacity = config.inbox_capacity.max(1);
             let outbox_capacity = config.outbox_capacity.max(1);
+            let max_frame_bytes = config.max_frame_bytes.max(1);
             let (incoming_tx, incoming) = mpsc::sync_channel::<WireFrame>(inbox_capacity);
             let (outgoing, outgoing_rx) = mpsc::sync_channel::<WireFrame>(outbox_capacity);
             let status = Arc::new(Mutex::new(TransportStatus::Connecting));
@@ -278,14 +282,14 @@ mod imp {
                             Ok(Message::Text(text)) => {
                                 lock(&thread_diagnostics).frames_received += 1;
                                 let frame = WireFrame::Text(text.to_string());
-                                if frame.len() > MAX_DATA_FRAME_BYTES {
+                                if frame.len() > max_frame_bytes {
                                     lock(&thread_diagnostics).oversized_frames += 1;
                                     close(
                                         &thread_status,
                                         &thread_diagnostics,
                                         CloseKind::Protocol,
                                         "incoming WebSocket text frame is too large".to_string(),
-                                        true,
+                                        false,
                                     );
                                     return;
                                 }
@@ -300,14 +304,14 @@ mod imp {
                             Ok(Message::Binary(bytes)) => {
                                 lock(&thread_diagnostics).frames_received += 1;
                                 let frame = WireFrame::Binary(bytes.to_vec());
-                                if frame.len() > MAX_DATA_FRAME_BYTES {
+                                if frame.len() > max_frame_bytes {
                                     lock(&thread_diagnostics).oversized_frames += 1;
                                     close(
                                         &thread_status,
                                         &thread_diagnostics,
                                         CloseKind::Protocol,
                                         "incoming WebSocket binary frame is too large".to_string(),
-                                        true,
+                                        false,
                                     );
                                     return;
                                 }
@@ -371,11 +375,12 @@ mod imp {
                 outgoing,
                 status,
                 diagnostics,
+                max_frame_bytes,
             })
         }
 
         pub fn send(&self, frame: WireFrame) -> Result<(), SendError> {
-            if frame.len() > MAX_DATA_FRAME_BYTES {
+            if frame.len() > self.max_frame_bytes {
                 lock(&self.diagnostics).oversized_frames += 1;
                 return Err(SendError::FrameTooLarge);
             }
@@ -416,7 +421,7 @@ mod imp {
 
     use super::{
         CloseKind, ConnectionClose, ConnectionDiagnostics, MAX_BROWSER_BUFFERED_BYTES,
-        MAX_DATA_FRAME_BYTES, SendError, TransportConfig, TransportStatus, WireFrame,
+        SendError, TransportConfig, TransportStatus, WireFrame,
     };
 
     struct Shared {
@@ -424,6 +429,7 @@ mod imp {
         status: TransportStatus,
         diagnostics: ConnectionDiagnostics,
         inbox_capacity: usize,
+        max_frame_bytes: usize,
     }
 
     fn close(shared: &RefCell<Shared>, kind: CloseKind, detail: String, reconnectable: bool) {
@@ -474,6 +480,7 @@ mod imp {
                 status: TransportStatus::Connecting,
                 diagnostics: ConnectionDiagnostics::default(),
                 inbox_capacity: config.inbox_capacity.max(1),
+                max_frame_bytes: config.max_frame_bytes.max(1),
             }));
             let pending = Rc::new(RefCell::new(VecDeque::new()));
             let last_outbound_ms = Rc::new(Cell::new(js_sys::Date::now()));
@@ -489,19 +496,22 @@ mod imp {
                     None
                 };
                 let mut shared = message_shared.borrow_mut();
+                if matches!(&shared.status, TransportStatus::Closed(_)) {
+                    return;
+                }
                 let Some(frame) = frame else {
                     shared.diagnostics.unsupported_frames += 1;
                     return;
                 };
                 shared.diagnostics.frames_received += 1;
-                if frame.len() > MAX_DATA_FRAME_BYTES {
+                if frame.len() > shared.max_frame_bytes {
                     shared.diagnostics.oversized_frames += 1;
                     shared.diagnostics.last_error =
                         Some("incoming WebSocket data frame is too large".to_string());
                     shared.status = TransportStatus::Closed(ConnectionClose {
                         kind: CloseKind::Protocol,
                         detail: "incoming WebSocket data frame is too large".to_string(),
-                        reconnectable: true,
+                        reconnectable: false,
                     });
                 } else if shared.inbox.len() >= shared.inbox_capacity {
                     shared.diagnostics.inbox_overflows += 1;
@@ -615,7 +625,7 @@ mod imp {
         }
 
         pub fn send(&self, frame: WireFrame) -> Result<(), SendError> {
-            if frame.len() > MAX_DATA_FRAME_BYTES {
+            if frame.len() > self.shared.borrow().max_frame_bytes {
                 self.shared.borrow_mut().diagnostics.oversized_frames += 1;
                 return Err(SendError::FrameTooLarge);
             }

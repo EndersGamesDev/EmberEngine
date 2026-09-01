@@ -54,6 +54,7 @@ fn keepalive(codec: FireCodec) -> Result<Keepalive, String> {
 
 fn config() -> TransportConfig {
     TransportConfig {
+        max_frame_bytes: fire_core::proto::MAX_FRAME_BYTES,
         inbox_capacity: 256,
         outbox_capacity: 256,
         keepalive: None,
@@ -71,13 +72,11 @@ impl Net {
     ///
     /// # Errors
     ///
-    /// Returns an immediate transport or keepalive encoding failure.
+    /// Returns an immediate transport startup failure.
     pub fn connect(url: &str) -> Result<Self, String> {
         let codec = FireCodec;
-        let handshake = LegacyHandshake::manual(
-            LegacyJsonTags::fire_v1(),
-            Some(keepalive(codec)?),
-        );
+        // A manual caller has not guaranteed Hello yet, so no keepalive may race it.
+        let handshake = LegacyHandshake::manual(LegacyJsonTags::fire_v1(), None);
         let connection = ClientConnection::connect(url, config(), handshake)?;
         Ok(Self { connection, codec })
     }
