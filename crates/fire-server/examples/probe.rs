@@ -30,6 +30,8 @@ const DEADLINE: Duration = Duration::from_secs(12);
 /// unreachable — that is precisely when a redeploy is most needed.
 const EXIT_OCCUPIED: u8 = 2;
 
+// A linear diagnostic script: splitting the probe sequence into helpers would obscure the one path it exists to document.
+#[allow(clippy::too_many_lines)]
 fn main() -> std::process::ExitCode {
     let mut args = std::env::args().skip(1);
     let Some(url) = args.next() else {
@@ -98,7 +100,7 @@ fn main() -> std::process::ExitCode {
                     S2C::Lobbies { lobbies } => {
                         drop(ws.close(None));
                         let busy: Vec<_> = lobbies.iter().filter(|l| l.players > 0).collect();
-                        let total: u32 = busy.iter().map(|l| l.players as u32).sum();
+                        let total: u32 = busy.iter().map(|l| u32::from(l.players)).sum();
                         if total == 0 {
                             println!("probe: nobody in game ({} lobbies)", lobbies.len());
                             return std::process::ExitCode::SUCCESS;
