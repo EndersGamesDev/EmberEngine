@@ -7,9 +7,11 @@
 
 use glam::Vec2;
 
-/// Centreline samples per control-point span. The arc-length table and every
-/// closest-point query walk this polyline, so it fixes both accuracy and the
-/// cost of `Track::locate`. Shared by both peers: do not make it a parameter.
+/// Centreline samples per control-point span.
+///
+/// The arc-length table and every closest-point query walk this polyline, so
+/// it fixes both accuracy and the cost of `Track::locate`. Shared by both
+/// peers: do not make it a parameter.
 pub const SAMPLES_PER_SPAN: usize = 24;
 
 /// Where a car is relative to the racing line.
@@ -56,6 +58,11 @@ impl Track {
     /// Build from closed-loop control points. The caller supplies each point
     /// exactly once; the wrap-around is handled here, so passing a duplicated
     /// first/last point would put a zero-length span in the loop.
+    ///
+    /// # Panics
+    ///
+    /// Panics if fewer than four control points are supplied.
+    #[must_use]
     pub fn new(control: Vec<Vec2>, half_width: f32) -> Self {
         assert!(control.len() >= 4, "a closed Catmull-Rom loop needs >= 4 control points");
         let n = control.len();
@@ -68,6 +75,8 @@ impl Track {
             let p2 = control[(i + 1) % n];
             let p3 = control[(i + 2) % n];
             for k in 0..SAMPLES_PER_SPAN {
+                // Both operands are tiny exact integers; preserve the shared simulation expression.
+                #[allow(clippy::cast_precision_loss)]
                 let t = k as f32 / SAMPLES_PER_SPAN as f32;
                 points.push(catmull_rom(p0, p1, p2, p3, t));
             }
@@ -84,38 +93,55 @@ impl Track {
         Self { control, points, cumulative, half_width }
     }
 
+    #[must_use]
     pub fn control_points(&self) -> &[Vec2] {
         &self.control
     }
 
+    #[must_use]
     pub fn centreline(&self) -> &[Vec2] {
         &self.points
     }
 
-    pub fn half_width(&self) -> f32 {
+    #[must_use]
+    pub const fn half_width(&self) -> f32 {
         self.half_width
     }
 
     /// Total lap distance in metres.
+    #[must_use]
     pub fn length(&self) -> f32 {
         self.cumulative[self.points.len()]
     }
 
     /// Centreline point and unit tangent at arc length `s` (wrapped).
-    pub fn at(&self, s: f32) -> (Vec2, Vec2) {
+    ///
+    /// # Panics
+    ///
+    /// Panics if the requested distance is non-finite, or if the track has
+    /// zero or non-finite length due to degenerate or non-finite points.
+    #[must_use]
+    pub fn at(&self, distance: f32) -> (Vec2, Vec2) {
         let len = self.length();
-        let s = s.rem_euclid(len);
+        let distance = distance.rem_euclid(len);
         // The table is monotonic, so a binary search lands in the right span.
-        let i = match self.cumulative.binary_search_by(|c| c.partial_cmp(&s).unwrap()) {
-            Ok(i) => i.min(self.points.len() - 1),
-            Err(i) => i.saturating_sub(1).min(self.points.len() - 1),
+        let index = match self
+            .cumulative
+            .binary_search_by(|candidate| candidate.partial_cmp(&distance).unwrap())
+        {
+            Ok(index) => index.min(self.points.len() - 1),
+            Err(index) => index.saturating_sub(1).min(self.points.len() - 1),
         };
-        let a = self.points[i];
-        let b = self.points[(i + 1) % self.points.len()];
-        let seg = self.cumulative[i + 1] - self.cumulative[i];
-        let t = if seg > 1e-6 { (s - self.cumulative[i]) / seg } else { 0.0 };
-        let tangent = (b - a).normalize_or_zero();
-        (a + (b - a) * t, tangent)
+        let start = self.points[index];
+        let end = self.points[(index + 1) % self.points.len()];
+        let segment_length = self.cumulative[index + 1] - self.cumulative[index];
+        let fraction = if segment_length > 1e-6 {
+            (distance - self.cumulative[index]) / segment_length
+        } else {
+            0.0
+        };
+        let tangent = (end - start).normalize_or_zero();
+        (start + (end - start) * fraction, tangent)
     }
 
     /// Project a world position onto the centreline.
@@ -123,34 +149,42 @@ impl Track {
     /// Brute force over the polyline: with a few hundred samples this is far
     /// cheaper than the spatial index it would take to beat it, and — more to
     /// the point — it is exactly reproducible on both peers.
-    pub fn locate(&self, p: Vec2) -> Locate {
-        let n = self.points.len();
-        let (mut best_d2, mut best_i, mut best_t) = (f32::INFINITY, 0usize, 0.0f32);
-        for i in 0..n {
-            let a = self.points[i];
-            let b = self.points[(i + 1) % n];
-            let ab = b - a;
-            let len2 = ab.length_squared();
-            let t = if len2 > 1e-9 { ((p - a).dot(ab) / len2).clamp(0.0, 1.0) } else { 0.0 };
-            let d2 = (p - (a + ab * t)).length_squared();
-            if d2 < best_d2 {
-                best_d2 = d2;
-                best_i = i;
-                best_t = t;
+    #[must_use]
+    pub fn locate(&self, position: Vec2) -> Locate {
+        let point_count = self.points.len();
+        let (mut best_distance_squared, mut best_index, mut best_fraction) =
+            (f32::INFINITY, 0usize, 0.0f32);
+        for index in 0..point_count {
+            let start = self.points[index];
+            let end = self.points[(index + 1) % point_count];
+            let segment = end - start;
+            let length_squared = segment.length_squared();
+            let fraction = if length_squared > 1e-9 {
+                ((position - start).dot(segment) / length_squared).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let distance_squared =
+                (position - (start + segment * fraction)).length_squared();
+            if distance_squared < best_distance_squared {
+                best_distance_squared = distance_squared;
+                best_index = index;
+                best_fraction = fraction;
             }
         }
-        let a = self.points[best_i];
-        let b = self.points[(best_i + 1) % n];
-        let tangent = (b - a).normalize_or_zero();
-        let seg = self.cumulative[best_i + 1] - self.cumulative[best_i];
-        let s = self.cumulative[best_i] + seg * best_t;
-        // 2D cross product: positive when p lies left of the tangent.
-        let rel = p - (a + (b - a) * best_t);
+        let start = self.points[best_index];
+        let end = self.points[(best_index + 1) % point_count];
+        let tangent = (end - start).normalize_or_zero();
+        let segment_length = self.cumulative[best_index + 1] - self.cumulative[best_index];
+        let s = self.cumulative[best_index] + segment_length * best_fraction;
+        // 2D cross product: positive when position lies left of the tangent.
+        let rel = position - (start + (end - start) * best_fraction);
         let lateral = tangent.x * rel.y - tangent.y * rel.x;
-        Locate { s, lateral, tangent, segment: best_i }
+        Locate { s, lateral, tangent, segment: best_index }
     }
 
     /// True when the car is off the racing surface.
+    #[must_use]
     pub fn off_track(&self, p: Vec2) -> bool {
         self.locate(p).lateral.abs() > self.half_width
     }
@@ -161,6 +195,7 @@ impl Track {
     /// tighter than the car's minimum turning radius is not a hard corner, it
     /// is an impossible one — the car cannot follow it at any speed, and the
     /// track becomes a wall.
+    #[must_use]
     pub fn min_curvature_radius(&self) -> f32 {
         let n = self.points.len();
         let mut best = f32::INFINITY;
@@ -186,6 +221,7 @@ impl Track {
     /// A self-intersecting centreline makes `locate` ambiguous — a car at the
     /// crossing projects onto whichever branch happens to be nearer, so lap
     /// progress can jump backwards by half a lap.
+    #[must_use]
     pub fn self_intersection(&self) -> Option<(usize, usize)> {
         let n = self.points.len();
         let seg = |i: usize| (self.points[i], self.points[(i + 1) % n]);
@@ -210,6 +246,7 @@ impl Track {
     /// Smallest signed difference `a - b` on the loop, in metres, in
     /// (-len/2, len/2]. Used to ask "did progress move forward or backward"
     /// without the start line making every lap look like a huge jump back.
+    #[must_use]
     pub fn delta_s(&self, a: f32, b: f32) -> f32 {
         let len = self.length();
         let mut d = (a - b).rem_euclid(len);
@@ -241,6 +278,10 @@ pub struct LapTracker {
 }
 
 impl LapTracker {
+    /// # Panics
+    ///
+    /// Panics if fewer than two checkpoint sectors are requested.
+    #[must_use]
     pub fn new(sectors: u16, start_s: f32) -> Self {
         assert!(sectors >= 2, "need at least two sectors or a lap cannot be gated");
         Self { next_sector: 1, sectors, lap: 0, last_s: start_s, progress: 0.0 }
@@ -253,6 +294,12 @@ impl LapTracker {
         self.progress += track.delta_s(s, self.last_s);
         self.last_s = s;
 
+        // `Track::locate` bounds the value to one lap; preserve the shared simulation casts.
+        #[allow(
+            clippy::cast_lossless,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
         let sector = ((s / len) * self.sectors as f32).floor() as u16 % self.sectors;
         let mut completed = false;
         if sector == self.next_sector {
@@ -270,6 +317,8 @@ impl LapTracker {
 }
 
 #[cfg(test)]
+// Test loop counters are small exact integers; casts keep the formulas legible.
+#[allow(clippy::cast_precision_loss)]
 mod tests {
     use super::*;
 

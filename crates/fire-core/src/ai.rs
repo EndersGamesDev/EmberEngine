@@ -20,8 +20,9 @@ const STEER_GAIN: f32 = 1.8;
 pub const DEFAULT_SKILL: f32 = 0.88;
 
 /// The fastest this car could hold a corner of the given radius, from the
-/// same steering model the sim uses: R = v (1 + v k) / STEER_MAX.
-/// Solving for v gives the positive root of k v^2 + v - R*STEER_MAX = 0.
+/// same steering model the sim uses: `R = v (1 + v k) / STEER_MAX`.
+/// Solving for `v` gives the positive root of
+/// `k v^2 + v - R * STEER_MAX = 0`.
 fn corner_speed(radius: f32) -> f32 {
     let k = STEER_FALLOFF;
     let c = radius * STEER_MAX;
@@ -42,6 +43,7 @@ fn radius_ahead(track: &Track, s: f32, span: f32) -> f32 {
 }
 
 /// Drive one car for one tick.
+#[must_use]
 pub fn chase(track: &Track, car: &Car, skill: f32) -> CarInput {
     let speed = car.speed();
     let loc = track.locate(car.pos);

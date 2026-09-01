@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 /// Simulation rate. The step is a constant, not a parameter, because the
 /// server and the client must agree tick for tick.
 pub const TICK_HZ: u32 = 60;
+// Sixty is exactly representable; preserve this shared simulation expression.
+#[allow(clippy::cast_precision_loss)]
 pub const DT: f32 = 1.0 / TICK_HZ as f32;
 
 // ---- tuning ---------------------------------------------------------------
@@ -30,8 +32,8 @@ pub const ENGINE_ACCEL: f32 = 16.0;
 pub const BRAKE_ACCEL: f32 = 26.0;
 /// Reverse is deliberately feeble — this is a racing game, not a parking sim.
 pub const REVERSE_MAX: f32 = 9.0;
-/// Quadratic drag, chosen so engine force balances drag exactly at MAX_SPEED:
-/// ENGINE_ACCEL = DRAG * MAX_SPEED^2.
+/// Quadratic drag, chosen so engine force balances drag exactly at
+/// `MAX_SPEED`: `ENGINE_ACCEL = DRAG * MAX_SPEED^2`.
 pub const DRAG: f32 = ENGINE_ACCEL / (MAX_SPEED * MAX_SPEED);
 /// Rolling resistance when coasting, as an exponential rate (1/s).
 pub const ROLL_RESIST: f32 = 0.55;
@@ -48,18 +50,20 @@ pub const OFFROAD_FACTOR: f32 = 0.45;
 /// Yaw rate at a standstill, rad/s.
 pub const STEER_MAX: f32 = 2.4;
 /// Steering authority falls off with speed: full lock at 45 m/s would be a
-/// spin every corner. rate = STEER_MAX / (1 + speed * STEER_FALLOFF).
+/// spin every corner. `rate = STEER_MAX / (1 + speed * STEER_FALLOFF)`.
 pub const STEER_FALLOFF: f32 = 0.045;
 /// While drifting the driver needs *more* yaw authority, not less — that is
 /// what counter-steering is, and without it a slide cannot be held or exited.
 pub const STEER_DRIFT_BONUS: f32 = 1.7;
 
-/// Hard cap on slip angle, radians. Beyond this the car is spinning rather
-/// than drifting, so yaw is bled back toward the velocity direction. This is
-/// the guard against the classic arcade failure where dropping rear grip
-/// turns every handbrake tap into an unrecoverable pirouette.
+/// Hard cap on slip angle, radians.
+///
+/// Beyond this the car is spinning rather than drifting, so yaw is bled back
+/// toward the velocity direction. This is the guard against the classic
+/// arcade failure where dropping rear grip turns every handbrake tap into an
+/// unrecoverable pirouette.
 pub const MAX_SLIP: f32 = 0.95; // ~54 degrees
-/// How hard yaw is pulled back once past MAX_SLIP (1/s).
+/// How hard yaw is pulled back once past `MAX_SLIP` (1/s).
 pub const SLIP_RECOVER: f32 = 6.0;
 /// Below this speed there is no meaningful slip angle and the maths is noise.
 pub const SLIP_MIN_SPEED: f32 = 2.5;
@@ -88,7 +92,8 @@ pub struct CarInput {
 impl CarInput {
     /// Untrusted input arrives over the wire. Strip NaN/inf and clamp, or a
     /// single malformed packet teleports a car and poisons every later tick.
-    pub fn sanitized(mut self) -> Self {
+    #[must_use]
+    pub const fn sanitized(mut self) -> Self {
         self.throttle = if self.throttle.is_finite() { self.throttle.clamp(-1.0, 1.0) } else { 0.0 };
         self.steer = if self.steer.is_finite() { self.steer.clamp(-1.0, 1.0) } else { 0.0 };
         self
@@ -118,17 +123,20 @@ pub struct Car {
 /// Unit forward vector for a heading. Matches `Quat::from_rotation_y(yaw)`
 /// applied to +Z, so sim and renderer cannot disagree about which way a car
 /// faces.
+#[must_use]
 pub fn forward(yaw: f32) -> Vec2 {
     Vec2::new(yaw.sin(), yaw.cos())
 }
 
 /// Unit right vector for a heading.
+#[must_use]
 pub fn right(yaw: f32) -> Vec2 {
     Vec2::new(yaw.cos(), -yaw.sin())
 }
 
 impl Car {
-    pub fn new(pos: Vec2, yaw: f32) -> Self {
+    #[must_use]
+    pub const fn new(pos: Vec2, yaw: f32) -> Self {
         Self {
             pos,
             vel: Vec2::ZERO,
@@ -139,11 +147,13 @@ impl Car {
         }
     }
 
+    #[must_use]
     pub fn speed(&self) -> f32 {
         self.vel.length()
     }
 
-    pub fn boosting(&self) -> bool {
+    #[must_use]
+    pub const fn boosting(&self) -> bool {
         self.boost_left > 0.0
     }
 
@@ -151,6 +161,7 @@ impl Car {
     /// Near zero for grip driving; large during a slide. Returns 0 below
     /// `SLIP_MIN_SPEED`, where the direction of a near-stationary velocity is
     /// numerical noise.
+    #[must_use]
     pub fn slip_angle(&self) -> f32 {
         let speed = self.vel.length();
         if speed < SLIP_MIN_SPEED {
@@ -270,6 +281,12 @@ impl Car {
 }
 
 #[cfg(test)]
+// Test durations are bounded constants; casts preserve the production formulas under test.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
 mod tests {
     use super::*;
 

@@ -35,7 +35,7 @@ pub const CLIENT_TIMEOUT_SECS: u64 = 30;
 /// A single frame larger than this is a protocol violation, not a big update.
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct LobbyInfo {
     pub name: String,
     pub host: String,
@@ -48,7 +48,7 @@ pub struct LobbyInfo {
     pub racing: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct PlayerMeta {
     pub id: u8,
     pub handle: String,
@@ -57,9 +57,11 @@ pub struct PlayerMeta {
     pub slot: u8,
 }
 
-/// One car in a state broadcast. Flat scalars on purpose: the sim's `Car`
-/// holds `glam::Vec2`, and keeping the wire shape separate means the internal
-/// struct can be refactored without that being a protocol question.
+/// One car in a state broadcast.
+///
+/// Flat scalars on purpose: the sim's `Car` holds `glam::Vec2`, and keeping
+/// the wire shape separate means the internal struct can be refactored without
+/// that being a protocol question.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct CarState {
     pub id: u8,
@@ -184,6 +186,7 @@ pub fn is_transient_read(e: &std::io::Error) -> bool {
 /// Names and handles arrive from the network. Strip control characters and
 /// cap the length, or a peer can write terminal escapes into the server's log
 /// and the other players' lobby lists.
+#[must_use]
 pub fn sanitize(s: &str, max: usize) -> String {
     let cleaned: String = s.chars().filter(|c| !c.is_control()).take(max).collect();
     if cleaned.trim().is_empty() {
@@ -193,6 +196,7 @@ pub fn sanitize(s: &str, max: usize) -> String {
     }
 }
 
+#[must_use]
 pub fn sanitize_handle(s: &str) -> String {
     let h = sanitize(s, MAX_HANDLE_LEN);
     if h.is_empty() {

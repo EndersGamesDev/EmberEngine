@@ -24,9 +24,11 @@ use glam::Vec2;
 
 use crate::track::Track;
 
-/// Half the racing surface's width, metres. The car is ~2.5 m wide, so this
-/// is a little over seven cars abreast: room for eight on the grid, room to
-/// take two lines through a corner, and room to get a drift wrong.
+/// Half the racing surface's width, metres.
+///
+/// The car is ~2.5 m wide, so this is a little over seven cars abreast: room
+/// for eight on the grid, room to take two lines through a corner, and room to
+/// get a drift wrong.
 pub const HALF_WIDTH: f32 = 9.0;
 
 /// Control points of the centreline, metres on the XZ plane. Order is the
@@ -48,10 +50,12 @@ pub const CENTRELINE: [[f32; 2]; 13] = [
     [-140.0, -52.0], // hairpin exit, back onto the straight
 ];
 
-/// What sits around the yard. Positions are metres; `yaw` is radians about
-/// +Y, matching `Instance::with_yaw`. `scale` is the metre length of the
-/// prop's longest axis — the renderer divides by the mesh's own extent, so
-/// these read as real sizes rather than as mesh-space multipliers.
+/// What sits around the yard.
+///
+/// Positions are metres; `yaw` is radians about +Y, matching
+/// `Instance::with_yaw`. `scale` is the metre length of the prop's longest
+/// axis — the renderer divides by the mesh's own extent, so these read as real
+/// sizes rather than as mesh-space multipliers.
 #[derive(Clone, Copy, Debug)]
 pub struct Prop {
     pub kind: PropKind,
@@ -67,11 +71,13 @@ pub enum PropKind {
     Fountain,
 }
 
-/// Landmarks around the bailey. Deliberately sparse: each one is a separate
-/// mesh in the wasm bundle, and a landmark you pass once a lap does more for
-/// orientation than a hedge of clutter that costs the same bytes.
+/// Landmarks around the bailey.
+///
+/// Deliberately sparse: each one is a separate mesh in the wasm bundle, and a
+/// landmark you pass once a lap does more for orientation than a hedge of
+/// clutter that costs the same bytes.
+#[must_use]
 pub fn props() -> Vec<Prop> {
-    use PropKind::*;
     vec![
         // Beside the start line, not across it.
         //
@@ -81,21 +87,27 @@ pub fn props() -> Vec<Prop> {
         // spanning an 18 m road needs a 55 m building, and at any size that
         // fits the yard the arch is narrower than the cars. Landmark beside
         // the line, chequered band on it.
-        Prop { kind: Gatehouse, pos: Vec2::new(-104.0, -50.0), yaw: -1.45, scale: 26.0 },
+        Prop {
+            kind: PropKind::Gatehouse,
+            pos: Vec2::new(-104.0, -50.0),
+            yaw: -1.45,
+            scale: 26.0,
+        },
         // Corner towers: the four points you navigate by.
-        Prop { kind: Tower, pos: Vec2::new(200.0, -60.0), yaw: 0.0, scale: 30.0 },
-        Prop { kind: Tower, pos: Vec2::new(205.0, 75.0), yaw: 0.0, scale: 30.0 },
-        Prop { kind: Tower, pos: Vec2::new(105.0, 140.0), yaw: 0.0, scale: 26.0 },
-        Prop { kind: Tower, pos: Vec2::new(-145.0, 128.0), yaw: 0.0, scale: 30.0 },
-        Prop { kind: Tower, pos: Vec2::new(-205.0, 20.0), yaw: 0.0, scale: 34.0 },
-        Prop { kind: Tower, pos: Vec2::new(-175.0, -95.0), yaw: 0.0, scale: 26.0 },
+        Prop { kind: PropKind::Tower, pos: Vec2::new(200.0, -60.0), yaw: 0.0, scale: 30.0 },
+        Prop { kind: PropKind::Tower, pos: Vec2::new(205.0, 75.0), yaw: 0.0, scale: 30.0 },
+        Prop { kind: PropKind::Tower, pos: Vec2::new(105.0, 140.0), yaw: 0.0, scale: 26.0 },
+        Prop { kind: PropKind::Tower, pos: Vec2::new(-145.0, 128.0), yaw: 0.0, scale: 30.0 },
+        Prop { kind: PropKind::Tower, pos: Vec2::new(-205.0, 20.0), yaw: 0.0, scale: 34.0 },
+        Prop { kind: PropKind::Tower, pos: Vec2::new(-175.0, -95.0), yaw: 0.0, scale: 26.0 },
         // The fountain the chicane is named for, in the notch between the two
         // apexes where it is a landmark rather than an obstacle.
-        Prop { kind: Fountain, pos: Vec2::new(-20.0, 138.0), yaw: 0.0, scale: 12.0 },
+        Prop { kind: PropKind::Fountain, pos: Vec2::new(-20.0, 138.0), yaw: 0.0, scale: 12.0 },
     ]
 }
 
 /// Build the circuit.
+#[must_use]
 pub fn track() -> Track {
     Track::new(
         CENTRELINE.iter().map(|&[x, z]| Vec2::new(x, z)).collect(),
@@ -109,7 +121,8 @@ mod tests {
     use crate::car::{STEER_FALLOFF, STEER_MAX};
 
     /// The car's tightest possible turn at a given speed, metres.
-    /// yaw_rate = STEER_MAX / (1 + v * STEER_FALLOFF), and R = v / yaw_rate.
+    /// `yaw_rate = STEER_MAX / (1 + v * STEER_FALLOFF)`, and
+    /// `R = v / yaw_rate`.
     fn turning_radius(v: f32) -> f32 {
         v * (1.0 + v * STEER_FALLOFF) / STEER_MAX
     }
@@ -203,6 +216,6 @@ mod tests {
     #[test]
     fn the_track_is_wide_enough_for_the_grid() {
         // Eight cars, two abreast, each ~2.5 m wide plus clearance.
-        assert!(HALF_WIDTH * 2.0 > 2.5 * 4.0, "grid rows will not fit");
+        const { assert!(HALF_WIDTH * 2.0 > 2.5 * 4.0, "grid rows will not fit") };
     }
 }
