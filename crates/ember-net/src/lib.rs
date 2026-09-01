@@ -3,7 +3,7 @@
 //!
 //! Transport is a plain TCP stream carrying length-prefixed frames
 //! (u32 LE length, then a postcard-encoded message). TCP was chosen because
-//! the deployment path runs through WireGuard userspace tunnels whose port
+//! the deployment path runs through `WireGuard` userspace tunnels whose port
 //! forwarding is TCP-only; the framing layer keeps the transport swappable.
 
 use std::io::{self, Read, Write};
@@ -16,7 +16,7 @@ pub const DEFAULT_PORT: u16 = 7777;
 
 /// Simulation and snapshot tick rate of the server.
 pub const TICK_HZ: u32 = 60;
-/// Players move on the XZ plane inside [-ARENA_HALF, ARENA_HALF]^2.
+/// Players move on the XZ plane inside [-`ARENA_HALF`, `ARENA_HALF`]^2.
 pub const ARENA_HALF: f32 = 20.0;
 pub const MOVE_SPEED: f32 = 10.0;
 
