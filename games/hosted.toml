@@ -60,6 +60,30 @@ fixture_suite = "fire-v1-hosted-contract"
 legacy_game = "fire"
 
 [[games]]
+game_id = "arena"
+game_version = 7
+package = "ember-game-arena-v7"
+latest = false
+limits_profile = "estate-measurement-required-arena-v7"
+fixture_suite = "arena-v7-hosted-contract"
+
+[[games]]
+game_id = "arena"
+game_version = 8
+package = "ember-game-arena-v8"
+latest = false
+limits_profile = "estate-measurement-required-arena-v8"
+fixture_suite = "arena-v8-hosted-contract"
+
+[[games]]
+game_id = "arena"
+game_version = 9
+package = "ember-game-arena-v9"
+latest = false
+limits_profile = "estate-measurement-required-arena-v9"
+fixture_suite = "arena-v9-hosted-contract"
+
+[[games]]
 game_id = "pong"
 game_version = 1
 package = "ember-game-pong-v1"
