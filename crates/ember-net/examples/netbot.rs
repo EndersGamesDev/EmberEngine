@@ -22,6 +22,16 @@ struct Stats {
     rtts_ms: Vec<f64>,
 }
 
+fn arguments() -> (String, String, u64) {
+    let mut args = std::env::args().skip(1);
+    let addr = args
+        .next()
+        .unwrap_or_else(|| format!("127.0.0.1:{}", ember_net::DEFAULT_PORT));
+    let name = args.next().unwrap_or_else(|| "netbot".into());
+    let secs = args.next().and_then(|s| s.parse().ok()).unwrap_or(5);
+    (addr, name, secs)
+}
+
 fn report(stats: &Mutex<Stats>, died_early: bool, secs: u64) {
     let (snapshots, moved, max_players, avg_rtt) = {
         let stats = stats.lock().unwrap();
@@ -59,12 +69,7 @@ fn report(stats: &Mutex<Stats>, died_early: bool, secs: u64) {
 }
 
 fn main() {
-    let mut args = std::env::args().skip(1);
-    let addr = args
-        .next()
-        .unwrap_or_else(|| format!("127.0.0.1:{}", ember_net::DEFAULT_PORT));
-    let name = args.next().unwrap_or_else(|| "netbot".into());
-    let secs: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(5);
+    let (addr, name, secs) = arguments();
 
     let mut stream = TcpStream::connect(&addr).unwrap_or_else(|e| {
         eprintln!("NETBOT FAIL: connect {addr}: {e}");
