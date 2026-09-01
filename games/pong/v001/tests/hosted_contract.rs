@@ -77,7 +77,7 @@ struct TraceCheckpoint {
     serving: bool,
 }
 
-fn c2s_kind(message: &C2S) -> &'static str {
+const fn c2s_kind(message: &C2S) -> &'static str {
     match message {
         C2S::Hello { .. } => "hello",
         C2S::ListLobbies => "list_lobbies",
@@ -89,7 +89,7 @@ fn c2s_kind(message: &C2S) -> &'static str {
     }
 }
 
-fn s2c_kind(message: &S2C) -> &'static str {
+const fn s2c_kind(message: &S2C) -> &'static str {
     match message {
         S2C::Welcome { .. } => "welcome",
         S2C::Error { .. } => "error",
