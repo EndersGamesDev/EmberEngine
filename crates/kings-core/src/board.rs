@@ -24,6 +24,11 @@ pub const HOME_MAX: u8 = 3;
 
 /// A board tile. `x` is east, `y` is north, both `0..=9`; `(0,0)` is the
 /// south-west corner.
+///
+/// The fields are public so callers can read and match on them; a tile
+/// built by hand with a coordinate above 9 is a bug, and `index` panics on
+/// it rather than aliasing another tile (`(12, 0)` would otherwise read as
+/// `(2, 1)`). Wire coordinates come in through `new`, which refuses them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Tile {
     /// Column, 0 at the west edge.
@@ -34,7 +39,8 @@ pub struct Tile {
 
 impl Tile {
     /// A tile from board coordinates, or `None` off the board. This is the
-    /// only way in from wire coordinates.
+    /// way in from wire coordinates: it is the only constructor that can
+    /// say no.
     #[must_use]
     pub const fn new(x: u8, y: u8) -> Option<Self> {
         if x < SIDE && y < SIDE {
@@ -56,8 +62,13 @@ impl Tile {
     }
 
     /// Storage index `y * 10 + x`.
+    ///
+    /// # Panics
+    /// Off the board: a tile built by hand with a coordinate above 9. The
+    /// index would otherwise alias another tile, silently.
     #[must_use]
     pub const fn index(self) -> usize {
+        assert!(self.x < SIDE && self.y < SIDE, "tile off the board");
         self.y as usize * SIDE as usize + self.x as usize
     }
 
@@ -1176,6 +1187,75 @@ mod tests {
         assert_eq!(Formation::DEFAULT.kind_at(15), P);
     }
 
+    /// `setup` places each seat's OWN formation, not the default: this is
+    /// the contract the server's `SetFormation` then `Start` path rests on.
+    #[test]
+    fn setup_places_each_seats_own_formation() {
+        let formations = [
+            Formation {
+                legend: [J, Q, H, K],
+                epic: [B, R, R, B, N],
+            },
+            Formation {
+                legend: [Q, K, J, H],
+                epic: [R, B, N, R, B],
+            },
+            Formation::DEFAULT,
+            Formation {
+                legend: [H, J, K, Q],
+                epic: [N, B, R, R, B],
+            },
+        ];
+        for f in &formations {
+            assert_eq!(f.validate(), Ok(()));
+        }
+        let state = setup([true; 4], formations);
+        assert_eq!(state.board.iter().flatten().count(), 64);
+        for (seat, formation) in formations.iter().enumerate() {
+            let owner = u8::try_from(seat).unwrap();
+            for (index, &(u, v)) in SETUP_LOCAL.iter().enumerate() {
+                let t = to_global(owner, u, v);
+                let p = state.piece(t).unwrap_or_else(|| panic!("seat {seat} empty {t:?}"));
+                assert_eq!(p.owner, owner);
+                assert_eq!(usize::from(p.id), seat * 16 + index, "ids follow the tile");
+                assert_eq!(
+                    p.kind,
+                    formation.kind_at(index),
+                    "seat {seat} index {index} at {t:?}"
+                );
+            }
+        }
+        // The literal corners: a joker on seat 0's, a queen on seat 1's,
+        // the default king on seat 2's, a hero on seat 3's.
+        assert_eq!(state.piece(Tile::at(0, 0)).unwrap().kind, J);
+        assert_eq!(state.piece(Tile::at(9, 0)).unwrap().kind, Q);
+        assert_eq!(state.piece(Tile::at(9, 9)).unwrap().kind, K);
+        assert_eq!(state.piece(Tile::at(0, 9)).unwrap().kind, H);
+        // Seat 3's knight on its (2,0), which is global (0,7).
+        assert_eq!(state.piece(Tile::at(0, 7)).unwrap().kind, N);
+        // Commons are pawns whatever the formation.
+        for seat in 0..4u8 {
+            let pawns = state
+                .pieces_of(seat)
+                .filter(|(_, p)| p.kind == P)
+                .count();
+            assert_eq!(pawns, 7, "seat {seat}");
+        }
+        // A formation swap for one seat leaves the other three untouched.
+        let mut one = [Formation::DEFAULT; 4];
+        one[2] = formations[0];
+        let state = setup([true; 4], one);
+        assert_eq!(state.piece(Tile::at(9, 9)).unwrap().kind, J);
+        assert_eq!(state.piece(Tile::at(0, 0)).unwrap().kind, K);
+        assert_eq!(state.piece(Tile::at(9, 0)).unwrap().kind, K);
+        assert_eq!(state.piece(Tile::at(0, 9)).unwrap().kind, K);
+        // Garrisons take their formation as given too (the server passes
+        // the default for them).
+        let state = setup([true, false, true, false], formations);
+        assert_eq!(state.piece(Tile::at(9, 0)).unwrap().kind, Q);
+        assert!(state.seats[1].garrison);
+    }
+
     #[test]
     fn seat_by_join() {
         assert_eq!(SEAT_BY_JOIN, [0, 2, 1, 3]);
@@ -1270,6 +1350,23 @@ mod tests {
             InvalidBoard::TwoPiecesOnOneTile.to_string(),
             "two pieces share a tile"
         );
+    }
+
+    /// A hand-built off-board tile panics at its first use instead of
+    /// aliasing another tile: `(12, 0)` would otherwise be index 12, which
+    /// is `(2, 1)`.
+    #[test]
+    #[should_panic(expected = "tile off the board")]
+    fn an_off_board_tile_panics_on_index() {
+        let t = Tile { x: 12, y: 0 };
+        assert_ne!(t.index(), Tile::at(2, 1).index());
+    }
+
+    #[test]
+    #[should_panic(expected = "tile off the board")]
+    fn an_off_board_tile_panics_on_piece_lookup() {
+        let state = full();
+        let _ = state.piece(Tile { x: 0, y: 10 });
     }
 
     #[test]
