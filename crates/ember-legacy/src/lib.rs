@@ -610,7 +610,7 @@ impl InnerFrame {
 
     /// Returns whether the exact payload is empty.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }
