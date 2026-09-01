@@ -51,7 +51,7 @@ fn main() {
     let (shield, jump, nofire) = (has("shield"), has("jump"), has("nofire"));
 
     // rustls needs an explicitly installed crypto provider for wss.
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    drop(rustls::crypto::ring::default_provider().install_default());
     let (mut ws, _) = tungstenite::connect(&url).unwrap_or_else(|e| {
         eprintln!("WSBOT FAIL: connect {url}: {e}");
         std::process::exit(1);

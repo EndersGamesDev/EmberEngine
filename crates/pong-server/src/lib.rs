@@ -1,3 +1,6 @@
+// A named mutex guard must keep the entry borrow alive while its count is updated.
+#![allow(clippy::significant_drop_tightening)]
+
 //! Arena-shooter matchmaking + match server.
 //!
 //! Same architecture as ember-server: ONE hub thread owns all state
@@ -245,9 +248,9 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
     let peer = stream
         .peer_addr()
         .map_or_else(|_| "?".into(), |a| a.to_string());
-    let _ = stream.set_nodelay(true);
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(15)));
+    drop(stream.set_nodelay(true));
+    drop(stream.set_read_timeout(Some(Duration::from_secs(10))));
+    drop(stream.set_write_timeout(Some(Duration::from_secs(15))));
 
     // A total handshake deadline: the per-read timeout alone lets a client
     // dribble one byte per window and hold the slot forever. The watchdog
@@ -265,7 +268,7 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
                     return;
                 }
             }
-            let _ = watch.shutdown(std::net::Shutdown::Both);
+            drop(watch.shutdown(std::net::Shutdown::Both));
         });
     }
 
@@ -287,9 +290,9 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
     // instead of the sim's clean 33.3. 5 ms cuts that smear by four at 200
     // idle wake-ups a second per connection, which is nothing next to the
     // 60 Hz sim it is feeding.
-    let _ = ws
+    drop(ws
         .get_ref()
-        .set_read_timeout(Some(Duration::from_millis(5)));
+        .set_read_timeout(Some(Duration::from_millis(5))));
 
     let (tx, rx) = mpsc::sync_channel::<Message>(OUTBOUND_QUEUE);
     if events_tx.send(Ev::Connected { id, tx, peer }).is_err() {
@@ -320,8 +323,8 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    let _ = ws.close(None);
-                    let _ = ws.flush();
+                    drop(ws.close(None));
+                    drop(ws.flush());
                     break 'outer;
                 }
             }
@@ -358,7 +361,7 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
             Err(_) => break,
         }
     }
-    let _ = events_tx.send(Ev::Disconnected { id });
+    drop(events_tx.send(Ev::Disconnected { id }));
 }
 
 // The tick scheduler and broadcasts stay together to preserve their exact ordering.
