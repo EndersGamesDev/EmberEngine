@@ -1713,7 +1713,7 @@ mod net {
                 }
                 _ => {}
             }
-            for msg in &initial {
+            for msg in initial {
                 let text = serde_json::to_string(msg).map_err(|e| e.to_string())?;
                 ws.send(Message::text(text))
                     .map_err(|e| format!("send: {e}"))?;
