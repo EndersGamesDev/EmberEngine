@@ -31,6 +31,8 @@ pub const GRID_HALF: f32 = 24.0;
 /// Grid spacing. 2.0 keeps a 24-unit half-extent at 25 lines per axis, which
 /// is legible without turning the floor into a solid sheet.
 const GRID_STEP: f32 = 2.0;
+/// Number of grid steps from the origin to `GRID_HALF` at `GRID_STEP` spacing.
+const GRID_STEPS: i16 = 12;
 /// Thickness of a grid line drawn as a box. Below ~0.02 it aliases into
 /// dashes at grazing angles; there are no mipmaps and no MSAA to hide it.
 const GRID_THICK: f32 = 0.03;
@@ -126,6 +128,7 @@ impl Default for FlyCam {
 
 impl FlyCam {
     /// Unit vector the camera is looking along.
+    #[must_use]
     pub fn forward(&self) -> Vec3 {
         let (sz, cx) = self.yaw.sin_cos();
         let (sp, cp) = self.pitch.sin_cos();
@@ -134,11 +137,13 @@ impl FlyCam {
 
     /// Horizontal right, for strafing. Deliberately flat: a fly camera that
     /// rolls its strafe with pitch is disorienting when placing objects.
+    #[must_use]
     pub fn right(&self) -> Vec3 {
         let (sz, cx) = self.yaw.sin_cos();
         Vec3::new(-sz, 0.0, cx)
     }
 
+    #[must_use]
     pub fn camera(&self) -> Camera {
         Camera {
             eye: self.eye,
@@ -162,9 +167,9 @@ impl FlyCam {
         if let Some(ndc) = input.cursor_ndc() {
             if let Some(prev) = self.last_ndc {
                 let (dx, dy) = (ndc[0] - prev[0], ndc[1] - prev[1]);
-                self.yaw += dx * LOOK_SENS;
+                self.yaw = f32::mul_add(dx, LOOK_SENS, self.yaw);
                 // NDC y is up-positive and so is pitch, so this needs no flip.
-                self.pitch = (self.pitch + dy * LOOK_SENS).clamp(-PITCH_LIMIT, PITCH_LIMIT);
+                self.pitch = f32::mul_add(dy, LOOK_SENS, self.pitch).clamp(-PITCH_LIMIT, PITCH_LIMIT);
             }
             self.last_ndc = Some(ndc);
         }
@@ -204,11 +209,11 @@ fn grid_line(along_x: bool, offset: f32, half: f32, thick: f32, color: Vec3) -> 
 }
 
 /// The ground grid: the thing that makes "where am I" answerable at all.
+#[must_use]
 pub fn grid_instances() -> Vec<Instance> {
     let mut out = Vec::new();
-    let steps = (GRID_HALF / GRID_STEP) as i32;
-    for i in -steps..=steps {
-        let offset = i as f32 * GRID_STEP;
+    for i in -GRID_STEPS..=GRID_STEPS {
+        let offset = f32::from(i) * GRID_STEP;
         // Every fifth line brighter, so distance is countable rather than
         // merely visible.
         let (color, thick) = if i % 5 == 0 {
@@ -230,6 +235,7 @@ pub fn grid_instances() -> Vec<Instance> {
 /// Drawn as half-length bars from the origin outward rather than centred
 /// bars, so +X and -X are distinguishable — a centred bar tells you the axis
 /// but not its sign, which is exactly what you need when placing something.
+#[must_use]
 pub fn axis_instances(len: f32, thick: f32) -> Vec<Instance> {
     let half = len * 0.5;
     vec![
@@ -265,6 +271,7 @@ pub struct Obj {
 }
 
 impl Obj {
+    #[must_use]
     pub fn instance(&self) -> Instance {
         Instance::new(self.pos, self.scale, self.color).with_rot(Quat::from_rotation_y(self.yaw))
     }
@@ -273,6 +280,7 @@ impl Obj {
     /// than centred in it — every extent in the palette is a height above
     /// the floor, and a box half-buried at the origin is not what "place a
     /// crate here" means.
+    #[must_use]
     pub fn from_kind(kind: &palette::Kind, at: Vec3) -> Self {
         Self {
             pos: Vec3::new(at.x, kind.scale.y * 0.5, at.z),
@@ -340,6 +348,7 @@ impl Default for Editor {
 }
 
 impl Editor {
+    #[must_use]
     pub fn new() -> Self {
         let objects = starter_scene();
         // Out-of-range is dropped rather than clamped: silently selecting a
@@ -423,6 +432,7 @@ impl Editor {
     }
 
     /// The ray under the cursor this frame, if the cursor is over the window.
+    #[must_use]
     pub fn cursor_ray(&self, input: &InputState) -> Option<(Vec3, Vec3)> {
         let ndc = input.cursor_ndc()?;
         Some(pick::ray_from_cursor(
@@ -433,14 +443,47 @@ impl Editor {
     }
 
     /// Centre of the current selection, which is where the gizmo sits.
+    #[must_use]
     pub fn selection_centre(&self) -> Option<Vec3> {
         self.selected.map(|i| self.objects[i].pos)
     }
 
     /// The instances that are actually pickable, in the same order as
     /// `objects`, so an index from `pick_nearest` indexes `objects` directly.
+    #[must_use]
     pub fn object_instances(&self) -> Vec<Instance> {
-        self.objects.iter().map(|o| o.instance()).collect()
+        self.objects.iter().map(Obj::instance).collect()
+    }
+
+    fn handle_shortcuts(&mut self, input: &InputState, flying: bool) {
+        // Native shell shortcuts feed the same queue as the web sidebar.
+        for (i, (key, edge)) in self.keys.iter_mut().enumerate() {
+            if edge.pressed(input.down(*key)) && !flying {
+                palette::push(palette::Cmd::Arm(i));
+            }
+        }
+        if self.key_place.pressed(input.down(KeyCode::Enter)) && !flying {
+            palette::push(palette::Cmd::Place);
+        }
+        if self.key_delete.pressed(input.down(KeyCode::KeyX)) && !flying {
+            palette::push(palette::Cmd::Delete);
+        }
+
+        // Poll edges while flying so releasing RMB cannot trigger a stale mode change.
+        let w = self.key_w.pressed(input.down(KeyCode::KeyW));
+        let e = self.key_e.pressed(input.down(KeyCode::KeyE));
+        let r = self.key_r.pressed(input.down(KeyCode::KeyR));
+        if !flying {
+            if w {
+                self.mode = gizmo::Mode::Translate;
+            }
+            if e {
+                self.mode = gizmo::Mode::Rotate;
+            }
+            if r {
+                self.mode = gizmo::Mode::Scale;
+            }
+        }
     }
 }
 
@@ -460,11 +503,10 @@ fn starter_scene() -> Vec<Obj> {
 fn starter_seed() -> u64 {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        if let Ok(s) = std::env::var("EMBER_EDITOR_SEED") {
-            if let Ok(v) = s.parse() {
+        if let Ok(s) = std::env::var("EMBER_EDITOR_SEED")
+            && let Ok(v) = s.parse() {
                 return v;
             }
-        }
     }
     7
 }
@@ -479,41 +521,7 @@ impl EmberGame for Editor {
 
         let flying = self.cam.update(input, dt);
 
-        // Native shell: digit keys arm, Enter places, X deletes. These push
-        // into the SAME queue the web sidebar will, so there is one code path
-        // and no chance of the two shells drifting apart.
-        for (i, (key, edge)) in self.keys.iter_mut().enumerate() {
-            if edge.pressed(input.down(*key)) && !flying {
-                palette::push(palette::Cmd::Arm(i));
-            }
-        }
-        if self.key_place.pressed(input.down(KeyCode::Enter)) && !flying {
-            palette::push(palette::Cmd::Place);
-        }
-        // X rather than Delete: Delete is missing from a lot of compact
-        // keyboards, and X sits under the same hand as the mode keys.
-        if self.key_delete.pressed(input.down(KeyCode::KeyX)) && !flying {
-            palette::push(palette::Cmd::Delete);
-        }
-
-        // Modality: while the fly drag is held, W/E/R are movement and the
-        // gizmo is not listening. Released, they are the modes the user
-        // asked for. The edges are polled either way so a key pressed during
-        // a fly drag does not fire a mode change the moment RMB is let go.
-        let w = self.key_w.pressed(input.down(KeyCode::KeyW));
-        let e = self.key_e.pressed(input.down(KeyCode::KeyE));
-        let r = self.key_r.pressed(input.down(KeyCode::KeyR));
-        if !flying {
-            if w {
-                self.mode = gizmo::Mode::Translate;
-            }
-            if e {
-                self.mode = gizmo::Mode::Rotate;
-            }
-            if r {
-                self.mode = gizmo::Mode::Scale;
-            }
-        }
+        self.handle_shortcuts(input, flying);
 
         // Hover and selection both come off one ray, so what highlights is
         // exactly what a click would take.
@@ -599,7 +607,7 @@ impl EmberGame for Editor {
         // Decoration comes AFTER, and is deliberately not pickable: it would
         // otherwise break the one-to-one index correspondence above, and
         // clicking a spawn's pad would select an object nobody owns.
-        for obj in self.objects.iter() {
+        for obj in &self.objects {
             if obj.class == palette::Class::Spawn {
                 instances.push(palette::spawn_decoration(obj.pos));
             }
@@ -630,6 +638,7 @@ impl EmberGame for Editor {
 /// mouse press with no button filter, `cursor_ndc` goes stale rather than
 /// `None` under pointer lock — which would break both look and picking — and
 /// on the web a locked pointer makes the DOM sidebar unclickable.
+#[must_use]
 pub fn engine_config() -> EngineConfig {
     EngineConfig {
         title: "ember — editor".to_string(),
@@ -746,7 +755,7 @@ mod tests {
         assert_eq!(hit.map(|(i, _)| i), Some(4), "centre-screen pick missed");
     }
 
-    /// Drives `update` with a scripted input, since InputState has no public
+    /// Drives `update` with a scripted input, since `InputState` has no public
     /// constructor for tests to build directly.
     fn frame_of(ed: &mut Editor) -> Frame {
         ed.update(&InputState::default(), 1.0 / 60.0)
@@ -921,7 +930,7 @@ mod tests {
         ed.apply(palette::Cmd::Place);
         let o = ed.objects.last().unwrap();
         assert!(
-            (o.pos.y - o.scale.y * 0.5).abs() < 1e-5,
+            o.scale.y.mul_add(-0.5, o.pos.y).abs() < 1e-5,
             "a box at y={} with height {} is buried",
             o.pos.y,
             o.scale.y

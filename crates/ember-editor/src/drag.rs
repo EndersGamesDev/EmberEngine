@@ -41,6 +41,7 @@ pub struct Xform {
 /// Returns the parameter in world units measured from `axis_point` along
 /// `axis_dir`, or `None` when the two lines are too close to parallel to
 /// give an answer worth having.
+#[must_use]
 pub fn closest_param_on_axis(
     ray_org: Vec3,
     ray_dir: Vec3,
@@ -51,13 +52,13 @@ pub fn closest_param_on_axis(
     // so the Gram determinant reduces to 1 - (d1.d2)^2.
     let r = ray_org - axis_point;
     let b = ray_dir.dot(axis_dir);
-    let denom = 1.0 - b * b;
+    let denom = b.mul_add(-b, 1.0);
     if denom.abs() < PARALLEL_EPS {
         return None;
     }
     let d = ray_dir.dot(r);
     let e = axis_dir.dot(r);
-    Some((e - b * d) / denom)
+    Some(b.mul_add(-d, e) / denom)
 }
 
 /// Angle of the cursor ray's hit on the plane through `centre` whose normal
@@ -65,6 +66,7 @@ pub fn closest_param_on_axis(
 ///
 /// `None` when the ray is nearly parallel to the plane, where the
 /// intersection races off to infinity for a pixel of cursor movement.
+#[must_use]
 pub fn angle_on_plane(
     ray_org: Vec3,
     ray_dir: Vec3,
@@ -117,6 +119,7 @@ impl Drag {
     /// Begins a drag, or returns `None` if this handle cannot be grabbed
     /// from this angle — a nearly edge-on axis, or a rotation this data
     /// model cannot store.
+    #[must_use]
     pub fn begin(
         axis: Axis,
         mode: Mode,
@@ -180,7 +183,7 @@ impl Drag {
                     self.turns += 1.0;
                 }
                 self.prev_angle = raw;
-                let total = raw + self.turns * std::f32::consts::TAU - self.anchor;
+                let total = self.turns.mul_add(std::f32::consts::TAU, raw) - self.anchor;
                 let mut out = self.start;
                 // Negated: a plane angle increasing counter-clockwise about
                 // +Y corresponds to a decreasing yaw in the client's
@@ -334,8 +337,8 @@ mod tests {
         let mut drag = Drag::begin(Axis::Y, Mode::Rotate, start, o, d).expect("grab");
         let mut prev = 0.0f32;
         let mut total_jump = 0.0f32;
-        for i in 1..=24 {
-            let a = step * i as f32;
+        for i in 1i16..=24 {
+            let a = step * f32::from(i);
             let (oi, di) = ray_down_at(r * a.cos(), r * a.sin());
             let out = drag.update(oi, di).unwrap();
             total_jump = total_jump.max((out.yaw - prev).abs());

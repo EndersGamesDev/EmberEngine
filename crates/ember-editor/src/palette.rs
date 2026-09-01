@@ -99,7 +99,7 @@ pub const PALETTE: &[Kind] = &[
 
 /// Everything a shell can ask the editor to do. Deliberately small and
 /// serialisable in shape: the web side will send these as JSON.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Cmd {
     /// Arm a palette entry, by index.
     Arm(usize),
@@ -124,6 +124,7 @@ pub fn push(cmd: Cmd) {
 /// Take everything queued so far. Called once at the top of `update()`, so a
 /// command pushed DURING a frame lands on the next one — which keeps a
 /// frame's behaviour a function of the state it started with.
+#[must_use]
 pub fn drain() -> Vec<Cmd> {
     MAILBOX.with(|m| m.borrow_mut().drain(..).collect())
 }
@@ -141,6 +142,7 @@ pub fn clear_queue() {
 /// looking up, where the ray meets `y = 0` behind the viewer or not at all.
 /// Placing something behind you because you happened to look at the horizon
 /// is worse than placing it a fixed distance ahead.
+#[must_use]
 pub fn ground_point(eye: Vec3, forward: Vec3, snap: f32) -> Vec3 {
     const FALLBACK_DIST: f32 = 14.0;
     let p = if forward.y < -1e-3 {
@@ -157,6 +159,7 @@ pub fn ground_point(eye: Vec3, forward: Vec3, snap: f32) -> Vec3 {
 }
 
 /// Snaps x and z to a grid, leaving y alone.
+#[must_use]
 pub fn snap_to(p: Vec3, snap: f32) -> Vec3 {
     if snap <= 0.0 {
         return p;
@@ -170,6 +173,7 @@ pub fn snap_to(p: Vec3, snap: f32) -> Vec3 {
 /// Kept out of the pickable list on purpose. Picking indexes objects one to
 /// one, and decoration that could be clicked would break that correspondence
 /// — you would select a pad and move a spawn, or worse, an index nobody owns.
+#[must_use]
 pub fn spawn_decoration(pos: Vec3) -> Instance {
     Instance::new(
         Vec3::new(pos.x, 0.02, pos.z),
