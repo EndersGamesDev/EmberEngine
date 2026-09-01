@@ -436,18 +436,9 @@ mod tests {
                 pose.direction[2],
                 pose.length,
             ];
-            let start = renderer_box_point(
-                midpoint_hue,
-                orientation_length,
-                [0.0, 0.0, -1.0],
-                0.012,
-            );
-            let end = renderer_box_point(
-                midpoint_hue,
-                orientation_length,
-                [0.0, 0.0, 1.0],
-                0.012,
-            );
+            let start =
+                renderer_box_point(midpoint_hue, orientation_length, [0.0, 0.0, -1.0], 0.012);
+            let end = renderer_box_point(midpoint_hue, orientation_length, [0.0, 0.0, 1.0], 0.012);
             for component in 0..3 {
                 assert!((start[component] - first.0[component]).abs() <= 1.0e-6);
                 assert!((end[component] - second.0[component]).abs() <= 1.0e-6);
