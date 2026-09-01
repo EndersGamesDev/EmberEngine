@@ -52,7 +52,7 @@ fn keepalive(codec: FireCodec) -> Result<Keepalive, String> {
         .map_err(|error| error.to_string())
 }
 
-fn config() -> TransportConfig {
+const fn config() -> TransportConfig {
     TransportConfig {
         max_frame_bytes: fire_core::proto::MAX_FRAME_BYTES,
         inbox_capacity: 256,

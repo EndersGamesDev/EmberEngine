@@ -87,7 +87,7 @@ impl OnlineGame {
     /// # Errors
     ///
     /// Returns an error if the networking backend cannot start the connection.
-    pub fn connect(cfg: Config, ids: Meshes) -> Result<Self, String> {
+    pub fn connect(cfg: &Config, ids: Meshes) -> Result<Self, String> {
         let net = Net::connect_session(
             &cfg.ws,
             &cfg.handle,

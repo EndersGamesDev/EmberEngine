@@ -52,7 +52,7 @@ pub fn run_local() {
 pub fn run_online(cfg: online_game::Config) -> Result<(), String> {
     let track = fire_core::castle::track();
     let (meshes, ids) = game::build_meshes(&track);
-    let game = online_game::OnlineGame::connect(cfg, ids)?;
+    let game = online_game::OnlineGame::connect(&cfg, ids)?;
     ember_engine::run(
         EngineConfig {
             title: "ember — fire racer (online)".to_string(),

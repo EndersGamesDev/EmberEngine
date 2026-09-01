@@ -43,7 +43,7 @@ struct FireAuthoritative {
     car: CarState,
 }
 
-fn apply_car_state(car: &mut Car, state: &CarState) {
+const fn apply_car_state(car: &mut Car, state: &CarState) {
     car.pos = Vec2::new(state.x, state.z);
     car.vel = Vec2::new(state.vx, state.vz);
     car.yaw = state.yaw;

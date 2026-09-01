@@ -172,7 +172,7 @@ impl FireSession {
         &self.race
     }
 
-    fn phase(&self) -> Phase {
+    const fn phase(&self) -> Phase {
         match self.race.state {
             RaceState::Waiting => Phase::Waiting,
             RaceState::Countdown => Phase::Countdown,
@@ -203,7 +203,7 @@ impl FireSession {
             .collect()
     }
 
-    fn accept_input(&mut self, session_input: SessionInput, update: &mut SessionUpdate) {
+    fn accept_input(&mut self, session_input: &SessionInput, update: &mut SessionUpdate) {
         let Ok(message) = serde_json::from_slice::<C2S>(&session_input.input.payload) else {
             return;
         };
@@ -271,7 +271,7 @@ impl FireSession {
         }
     }
 
-    fn elapsed_seconds(&mut self, timestamp: MonotonicTimestamp) -> f32 {
+    const fn elapsed_seconds(&mut self, timestamp: MonotonicTimestamp) -> f32 {
         let previous = self.last_step.as_micros();
         let current = timestamp.as_micros();
         if current < previous {
@@ -316,7 +316,7 @@ impl FireSession {
                 self.broadcast(update, &S2C::Results { order });
                 self.results_left = RESULTS_SECS;
             }
-        } else if phase == Phase::Countdown && self.race.tick % STATE_EVERY_TICKS == 0 {
+        } else if phase == Phase::Countdown && self.race.tick.is_multiple_of(STATE_EVERY_TICKS) {
             self.broadcast(
                 update,
                 &S2C::Phase {
@@ -327,7 +327,7 @@ impl FireSession {
         }
 
         if self.race.state != RaceState::Waiting
-            && self.race.tick % STATE_EVERY_TICKS == 0
+            && self.race.tick.is_multiple_of(STATE_EVERY_TICKS)
         {
             let cars = self.race_state();
             self.broadcast(
@@ -425,7 +425,7 @@ impl GameSession for FireSession {
     ) -> SessionUpdate {
         let mut update = SessionUpdate::default();
         for input in inputs {
-            self.accept_input(input, &mut update);
+            self.accept_input(&input, &mut update);
         }
         let elapsed = self.elapsed_seconds(timestamp);
         let ticks = self.fixed_step.ticks(elapsed);
