@@ -1,0 +1,13 @@
+[package]
+name = "ember-game-fire-v1"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+ember-legacy = { path = "../../../crates/ember-legacy" }
+glam.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[lints]
+workspace = true
