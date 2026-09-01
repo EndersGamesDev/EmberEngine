@@ -85,10 +85,24 @@ pass() {
     fi
     git merge --ff-only origin/main -q 2>/dev/null || { log "cannot fast-forward; refusing"; return; }
 
-    [ -n "$want_pong" ]  && { log "redeploying arena";  bash deploy/deploy-pong-online.sh || log "arena deploy FAILED"; }
-    [ -n "$want_fire" ]  && { log "redeploying fire";   bash deploy/deploy-fire-online.sh || log "fire deploy FAILED"; }
-    [ -n "$want_pages" ] && { log "redeploying pages";  bash deploy/deploy-pages.sh       || log "pages deploy FAILED"; }
+    failed=""
+    [ -n "$want_pong" ]  && { log "redeploying arena"; bash deploy/deploy-pong-online.sh || { log "arena deploy FAILED"; failed=1; }; }
+    [ -n "$want_fire" ]  && { log "redeploying fire";  bash deploy/deploy-fire-online.sh || { log "fire deploy FAILED";  failed=1; }; }
+    [ -n "$want_pages" ] && { log "redeploying pages"; bash deploy/deploy-pages.sh       || { log "pages deploy FAILED"; failed=1; }; }
 
+    # Only record the commit as deployed if EVERY deploy that ran succeeded.
+    # Recording it regardless is how a failure becomes permanent: an online
+    # deploy that mints a tunnel but fails to publish leaves server.json naming
+    # a DEAD domain, and a watchdog that has already written the sha sees
+    # "nothing to do" on the next pass and never retries. That happened on
+    # 2026-09-01 — fire's publish failed, the state file was written anyway,
+    # and the published fire_ws answered 530 while the live tunnel was fine
+    # under a different name. Leaving the sha unwritten makes the next pass
+    # retry, and the health probe below is what stops it looping silently.
+    if [ -n "$failed" ]; then
+        log "one or more deploys FAILED; not recording ${head:0:7} — next pass retries"
+        return
+    fi
     echo "$head" > "$STATE"
     log "pass complete at ${head:0:7}"
 }
