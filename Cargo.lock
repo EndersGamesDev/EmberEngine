@@ -935,7 +935,97 @@ dependencies = [
 ]
 
 [[package]]
+name = "ember-game-arena-v10"
+version = "0.1.0"
+dependencies = [
+ "ember-legacy",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ember-game-arena-v11"
+version = "0.1.0"
+dependencies = [
+ "ember-legacy",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ember-game-arena-v12"
+version = "0.1.0"
+dependencies = [
+ "ember-legacy",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ember-game-arena-v2"
+version = "0.1.0"
+dependencies = [
+ "ember-legacy",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ember-game-arena-v3"
+version = "0.1.0"
+dependencies = [
+ "ember-legacy",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ember-game-arena-v4"
+version = "0.1.0"
+dependencies = [
+ "ember-legacy",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ember-game-arena-v5"
+version = "0.1.0"
+dependencies = [
+ "ember-legacy",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ember-game-arena-v6"
+version = "0.1.0"
+dependencies = [
+ "ember-legacy",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ember-game-arena-v7"
+version = "0.1.0"
+dependencies = [
+ "ember-legacy",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ember-game-arena-v8"
+version = "0.1.0"
+dependencies = [
+ "ember-legacy",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ember-game-arena-v9"
 version = "0.1.0"
 dependencies = [
  "ember-legacy",
@@ -949,6 +1039,15 @@ version = "0.1.0"
 dependencies = [
  "ember-legacy",
  "glam",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ember-game-pong-v1"
+version = "0.1.0"
+dependencies = [
+ "ember-legacy",
  "serde",
  "serde_json",
 ]
@@ -974,8 +1073,19 @@ dependencies = [
 name = "ember-server"
 version = "0.1.0"
 dependencies = [
+ "ember-game-arena-v10",
+ "ember-game-arena-v11",
  "ember-game-arena-v12",
+ "ember-game-arena-v2",
+ "ember-game-arena-v3",
+ "ember-game-arena-v4",
+ "ember-game-arena-v5",
+ "ember-game-arena-v6",
+ "ember-game-arena-v7",
+ "ember-game-arena-v8",
+ "ember-game-arena-v9",
  "ember-game-fire-v1",
+ "ember-game-pong-v1",
  "ember-legacy",
  "ember-net",
  "serde_json",
