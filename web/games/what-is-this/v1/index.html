@@ -553,6 +553,35 @@
 
       recordVisibility();
       document.removeEventListener('visibilitychange', recordVisibility);
+      if (!environment) {
+        environment = {
+          kernel_id: 'environment.browser-facts.v1',
+          user_agent: 'unavailable: environment stage did not complete',
+          hardware_concurrency: null,
+          device_memory_gib: null,
+          screen: { width: 0, height: 0, device_pixel_ratio: 1 },
+          timer: {
+            resolution_ms: null,
+            zero_delta_count: 0,
+            monotonicity_violations: 0,
+            positive_delta_samples_ms: [],
+            positive_delta_summary: null,
+            caveat: TIMER_CAVEAT,
+          },
+          initial_visibility: initialVisibility,
+          final_visibility: document.visibilityState,
+          hidden_during_run: hiddenDuringRun,
+          visibility_observations: [],
+        };
+      }
+      if (!capabilities) {
+        const unavailableReason = 'wasm capability stage did not complete';
+        capabilities = {
+          simd128: featureProbe('capability.wasm-simd128.v1', false, unavailableReason),
+          threads: featureProbe('capability.wasm-threads.v1', false, unavailableReason),
+          bulk_memory: featureProbe('capability.wasm-bulk-memory.v1', false, unavailableReason),
+        };
+      }
       environment.final_visibility = document.visibilityState;
       environment.hidden_during_run = hiddenDuringRun;
       environment.visibility_observations = visibilityObservations;
