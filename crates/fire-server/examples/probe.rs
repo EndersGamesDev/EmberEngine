@@ -53,7 +53,10 @@ fn main() -> std::process::ExitCode {
         drop(s.set_read_timeout(Some(Duration::from_millis(200))));
     }
 
-    let hello = C2S::Hello { proto: proto::PROTO_VERSION, handle: "probe".into() };
+    let hello = C2S::Hello {
+        proto: proto::PROTO_VERSION,
+        handle: "probe".into(),
+    };
     if let Err(e) = ws.send(Message::text(serde_json::to_string(&hello).unwrap())) {
         eprintln!("probe: handshake succeeded but the send failed: {e}");
         return std::process::ExitCode::from(1);
@@ -62,7 +65,9 @@ fn main() -> std::process::ExitCode {
     while t0.elapsed() < DEADLINE {
         match ws.read() {
             Ok(Message::Text(t)) => {
-                let Ok(msg) = serde_json::from_str::<S2C>(&t) else { continue };
+                let Ok(msg) = serde_json::from_str::<S2C>(&t) else {
+                    continue;
+                };
                 match msg {
                     S2C::Welcome { proto: server } => {
                         if server != proto::PROTO_VERSION {
