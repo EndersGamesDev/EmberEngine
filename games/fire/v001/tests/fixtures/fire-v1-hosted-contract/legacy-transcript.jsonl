@@ -1,0 +1,9 @@
+{"connection":"browser","direction":"client","frame":"{\"t\":\"hello\",\"proto\":1,\"handle\":\"browser\"}"}
+{"connection":"browser","direction":"server","frame":"{\"t\":\"welcome\",\"proto\":1}"}
+{"connection":"browser","direction":"client","frame":"{\"t\":\"list_lobbies\"}"}
+{"connection":"browser","direction":"server","frame":"{\"t\":\"lobbies\",\"lobbies\":[{\"name\":\"castle\",\"host\":\"driver\",\"has_password\":true,\"players\":2,\"cap\":8,\"racing\":true}]}"}
+{"connection":"game","direction":"client","frame":"{\"t\":\"hello\",\"proto\":1,\"handle\":\"driver\"}"}
+{"connection":"game","direction":"server","frame":"{\"t\":\"welcome\",\"proto\":1}"}
+{"connection":"game","direction":"client","frame":"{\"t\":\"join_lobby\",\"name\":\"castle\",\"password\":\"ember\"}"}
+{"connection":"game","direction":"server","frame":"{\"t\":\"joined\",\"lobby\":\"castle\",\"id\":0,\"slot\":0,\"laps\":3,\"roster\":[{\"id\":0,\"handle\":\"driver\",\"slot\":0}]}"}
+{"connection":"game","direction":"server","frame":"{\"t\":\"phase\",\"phase\":\"waiting\",\"countdown\":3.0}"}

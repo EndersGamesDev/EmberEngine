@@ -1,0 +1,8 @@
+{"t":"hello","proto":1,"handle":"driver"}
+{"t":"list_lobbies"}
+{"t":"create_lobby","name":"castle","password":null}
+{"t":"join_lobby","name":"castle","password":"ember"}
+{"t":"leave_lobby"}
+{"t":"ready","ready":true}
+{"t":"input","seq":42,"throttle":1.0,"steer":-0.5,"handbrake":true,"boost":true}
+{"t":"ping","nonce":7}

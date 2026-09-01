@@ -1,0 +1,19 @@
+{
+  "fixture_suite": "fire-v1-hosted-contract",
+  "seed": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31],
+  "created_at_micros": 1000000,
+  "tick_interval_micros": 16667,
+  "end_at_micros": 7000120,
+  "messages": [
+    {"at_micros": 1016667, "message": {"t":"ready","ready":true}},
+    {"at_micros": 5016747, "message": {"t":"input","seq":10,"throttle":1.0,"steer":0.0,"handbrake":false,"boost":true}},
+    {"at_micros": 5016747, "message": {"t":"input","seq":9,"throttle":-1.0,"steer":0.0,"handbrake":false,"boost":true}}
+  ],
+  "checkpoints": [
+    {"at_micros":1016667,"tick":1,"phase":"countdown","boost_charges":3,"boosting":false,"last_state_ack":null},
+    {"at_micros":5000080,"tick":240,"phase":"racing","boost_charges":3,"boosting":false,"last_state_ack":0},
+    {"at_micros":5016747,"tick":241,"phase":"racing","boost_charges":2,"boosting":true,"last_state_ack":0},
+    {"at_micros":5033414,"tick":242,"phase":"racing","boost_charges":2,"boosting":true,"last_state_ack":10},
+    {"at_micros":7000120,"tick":360,"phase":"racing","boost_charges":2,"boosting":false,"last_state_ack":10}
+  ]
+}
