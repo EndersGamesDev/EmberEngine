@@ -3,6 +3,30 @@
 
 [[games]]
 game_id = "arena"
+game_version = 2
+package = "ember-game-arena-v2"
+latest = false
+limits_profile = "estate-measurement-required-arena-v2"
+fixture_suite = "arena-v2-hosted-contract"
+
+[[games]]
+game_id = "arena"
+game_version = 3
+package = "ember-game-arena-v3"
+latest = false
+limits_profile = "estate-measurement-required-arena-v3"
+fixture_suite = "arena-v3-hosted-contract"
+
+[[games]]
+game_id = "arena"
+game_version = 4
+package = "ember-game-arena-v4"
+latest = false
+limits_profile = "estate-measurement-required-arena-v4"
+fixture_suite = "arena-v4-hosted-contract"
+
+[[games]]
+game_id = "arena"
 game_version = 12
 package = "ember-game-arena-v12"
 latest = true
