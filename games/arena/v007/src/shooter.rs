@@ -2,6 +2,9 @@
 //! authoritatively on the server; clients render its broadcast state and
 //! generate the identical arena from the lobby's seed.
 
+// These frozen expression trees must not be replaced with fused operations that change rounding.
+#![allow(clippy::imprecise_flops, clippy::suboptimal_flops)]
+
 /// Fixed simulation time step in seconds.
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 /// Arena boundary half-extent.
@@ -139,9 +142,10 @@ pub fn obstacle_height(o: &Obstacle) -> f32 {
     }
 }
 
-/// The surface a player at `pos` stands on: the tallest box top they
-/// overlap, or the arena floor. Uses the same overlap test as `blocked`,
-/// so a player can only ever be supported by a box they are actually on.
+/// Returns the tallest support surface under a player, or the arena floor.
+///
+/// This uses the same overlap test as `blocked`, so support always comes from
+/// a box the player is actually on.
 #[must_use]
 pub fn support_height(pos: [f32; 2], r: f32, obstacles: &[Obstacle]) -> f32 {
     let mut h = 0.0f32;
@@ -325,18 +329,22 @@ pub fn step_vertical(
     // Landing check runs against where the feet were, so walking off a box
     // starts a fall instead of snapping to the floor.
     let grounded = y <= ground + 1e-3;
-    let mut vy = if grounded && vy <= 0.0 { 0.0 } else { vy };
-    if grounded && jump {
-        vy = JUMP_VEL;
-    }
+    let mut vy = if grounded && jump {
+        JUMP_VEL
+    } else if grounded && vy <= 0.0 {
+        0.0
+    } else {
+        vy
+    };
     vy += GRAVITY * dt;
     let mut y = y + vy * dt;
-    let mut landed = false;
-    if vy <= 0.0 && y <= ground {
+    let landed = if vy <= 0.0 && y <= ground {
         y = ground;
         vy = 0.0;
-        landed = true;
-    }
+        true
+    } else {
+        false
+    };
     (y, vy, landed || (grounded && vy <= 0.0))
 }
 
@@ -515,6 +523,7 @@ impl Sim {
     }
 
     /// Advances the simulation by exactly one frozen 60 Hz tick.
+    #[allow(clippy::too_many_lines)]
     pub fn step(&mut self, inputs: &dyn Fn(u8) -> PlayerIn) {
         self.events.clear();
         self.tick += 1;
@@ -547,14 +556,27 @@ impl Sim {
             // Shared movement code (also used by client prediction);
             // stance speed is server-authoritative — no speed cheats.
             let speed = stance_speed(input.sprint, input.crouch);
-            let (old_pos, old_y, old_vy) = (
+            let (old_pos, feet_height, vertical_speed) = (
                 self.players[i].pos,
                 self.players[i].y,
                 self.players[i].vy,
             );
-            let pos = move_circle(old_pos, old_y, input.mv, speed, dt, &self.obstacles);
-            let (y, vy, _grounded) =
-                step_vertical(pos, old_y, old_vy, input.jump, dt, &self.obstacles);
+            let pos = move_circle(
+                old_pos,
+                feet_height,
+                input.mv,
+                speed,
+                dt,
+                &self.obstacles,
+            );
+            let (y, vy, _grounded) = step_vertical(
+                pos,
+                feet_height,
+                vertical_speed,
+                input.jump,
+                dt,
+                &self.obstacles,
+            );
             let p = &mut self.players[i];
             p.pos = pos;
             p.y = y;
@@ -753,8 +775,8 @@ mod tests {
         let (mut neg_x, mut neg_z, mut pos_x, mut pos_z) = (false, false, false, false);
         for seed in 0..16u64 {
             for o in generate_arena(seed) {
-                let cx = (o.min[0] + o.max[0]) * 0.5;
-                let cz = (o.min[1] + o.max[1]) * 0.5;
+                let cx = f32::midpoint(o.min[0], o.max[0]);
+                let cz = f32::midpoint(o.min[1], o.max[1]);
                 neg_x |= cx < -3.0;
                 pos_x |= cx > 3.0;
                 neg_z |= cz < -3.0;
@@ -978,7 +1000,9 @@ mod tests {
         // Hold fire long enough to empty the mag.
         let mut fired = 0u32;
         let mut prev_bullets = 0usize;
-        for _ in 0..((weapon_stats(1).cooldown / FIXED_DT) as u32 + 2) * (mag as u32 + 4) {
+        for _ in 0..((weapon_stats(1).cooldown / FIXED_DT) as u32 + 2)
+            * (u32::from(mag) + 4)
+        {
             step_with(&mut sim, &inputs);
             // Bullets fly off and expire; count spawns via ammo drops.
             let b = sim.bullets.len();
@@ -988,7 +1012,8 @@ mod tests {
             prev_bullets = b;
         }
         assert_eq!(
-            fired, mag as u32,
+            fired,
+            u32::from(mag),
             "exactly one magazine before auto-reload gates fire"
         );
         // Let the auto-reload finish: ammo must be full again.
@@ -1278,7 +1303,7 @@ mod tests {
         assert!(apex > CRATE_MAX_H, "apex {apex} cannot clear a crate");
         assert!(apex < CONTAINER_MIN_H, "apex {apex} clears containers too");
         // And the generator must actually produce both classes.
-        let obs = generate_arena(20260829);
+        let obs = generate_arena(20_260_829);
         let heights: Vec<f32> = obs.iter().map(obstacle_height).collect();
         assert!(heights.iter().any(|h| *h <= CRATE_MAX_H), "no crates: {heights:?}");
         assert!(heights.iter().any(|h| *h >= CONTAINER_MIN_H), "no containers");

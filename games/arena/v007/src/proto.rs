@@ -1,4 +1,6 @@
-//! Online protocol: JSON text frames over WebSocket. JSON (rather than the
+//! Online protocol: JSON text frames over WebSocket.
+//!
+//! JSON (rather than the
 //! arena's binary postcard) because the lobby browser on the web page speaks
 //! it natively from JavaScript, and traffic is small (~30 Hz states).
 //!
@@ -303,7 +305,7 @@ mod tests {
 
         let s = serde_json::to_string(&S2C::GameJoined {
             id: 2,
-            seed: 987654321,
+            seed: 987_654_321,
             arena_half: 24.0,
             players: vec![PlayerMeta {
                 id: 2,
@@ -317,7 +319,7 @@ mod tests {
             back,
             S2C::GameJoined {
                 id: 2,
-                seed: 987654321,
+                seed: 987_654_321,
                 ..
             }
         ));

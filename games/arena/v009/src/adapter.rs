@@ -177,7 +177,7 @@ impl ArenaSession {
 
     fn accept_input(
         &mut self,
-        session_input: SessionInputWithTransport,
+        session_input: &SessionInputWithTransport,
         update: &mut SessionUpdate,
     ) {
         let Some(player_id) = self
@@ -274,7 +274,7 @@ impl ArenaSession {
         let pending = std::mem::take(&mut self.pending_inputs);
         for input in pending {
             if input.received_at <= timestamp {
-                self.accept_input(input, update);
+                self.accept_input(&input, update);
             } else {
                 future.push(input);
             }
@@ -753,7 +753,10 @@ impl LegacyIngress for ArenaLegacyDecoder {
             },
             ArenaLegacyAction::ListLobbies { .. } => LegacyIngressAction::ListLobbies,
             ArenaLegacyAction::CreateLobby { .. }
-                if state == LegacyConnectionState::Joined => {
+            | ArenaLegacyAction::JoinLobby { .. }
+            | ArenaLegacyAction::Ignore
+                if state == LegacyConnectionState::Joined =>
+            {
                 LegacyIngressAction::DispatchInner(ArenaCodec.decode(frame)?)
             }
             ArenaLegacyAction::CreateLobby {
@@ -765,10 +768,6 @@ impl LegacyIngress for ArenaLegacyDecoder {
                 lobby_name: name,
                 password,
             },
-            ArenaLegacyAction::JoinLobby { .. }
-                if state == LegacyConnectionState::Joined => {
-                LegacyIngressAction::DispatchInner(ArenaCodec.decode(frame)?)
-            }
             ArenaLegacyAction::JoinLobby {
                 game_key,
                 name,
@@ -781,9 +780,6 @@ impl LegacyIngress for ArenaLegacyDecoder {
             ArenaLegacyAction::LeaveLobby => LegacyIngressAction::LeaveLobby,
             ArenaLegacyAction::Reply(response) => {
                 LegacyIngressAction::Reply(encode_legacy_message(&response)?)
-            }
-            ArenaLegacyAction::Ignore if state == LegacyConnectionState::Joined => {
-                LegacyIngressAction::DispatchInner(ArenaCodec.decode(frame)?)
             }
             ArenaLegacyAction::Ignore => LegacyIngressAction::Ignore,
         };

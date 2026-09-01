@@ -1,4 +1,6 @@
-//! Online protocol: JSON text frames over WebSocket. JSON (rather than the
+//! Online protocol: JSON text frames over WebSocket.
+//!
+//! JSON (rather than the
 //! arena's binary postcard) because the lobby browser on the web page speaks
 //! it natively from JavaScript, and traffic is small (~30 Hz states).
 //!
@@ -7,9 +9,11 @@
 
 use serde::{Deserialize, Serialize};
 
-/// v9: the off-hand shield, which reflects. `shield` is `#[serde(default)]`
-/// on both the input and the player state, so both directions decode — and
-/// decoding is not the test. Ask instead what an old peer DOES.
+/// v9 adds the reflecting off-hand shield.
+///
+/// `shield` is `#[serde(default)]` on both the input and the player state, so
+/// both directions decode — and decoding is not the test. Ask instead what an
+/// old peer does.
 ///
 /// A pre-v9 client against a v9 server can never raise a shield, and — the
 /// part that decides this — its own perfectly-aimed shot can now come back
@@ -358,7 +362,7 @@ mod tests {
 
         let s = serde_json::to_string(&S2C::GameJoined {
             id: 2,
-            seed: 987654321,
+            seed: 987_654_321,
             arena_half: 24.0,
             players: vec![PlayerMeta {
                 id: 2,
@@ -372,7 +376,7 @@ mod tests {
             back,
             S2C::GameJoined {
                 id: 2,
-                seed: 987654321,
+                seed: 987_654_321,
                 ..
             }
         ));
