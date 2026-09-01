@@ -59,7 +59,7 @@ pub fn load_layouts() -> Option<Layouts> {
     None
 }
 
-/// Pick a layout: EMBER_LAYOUT=<name> (case-insensitive) or the first one.
+/// Pick a layout: `EMBER_LAYOUT=<name>` (case-insensitive) or the first one.
 pub fn pick(layouts: &Layouts) -> &Layout {
     if let Ok(want) = std::env::var("EMBER_LAYOUT") {
         if let Some(l) = layouts

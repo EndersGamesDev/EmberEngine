@@ -55,6 +55,29 @@ fn directions_differ(left: [f32; 2], right: [f32; 2]) -> bool {
         .any(|(a, b)| a.partial_cmp(&b) != Some(Ordering::Equal))
 }
 
+fn update_snapshot_health(dead: bool, world: &World, stale_since: &mut Option<Instant>) {
+    if dead {
+        return;
+    }
+    let Some(age) = world.snapshot_age() else {
+        return;
+    };
+    if age > SNAPSHOT_STALE_AFTER {
+        if stale_since.is_none() {
+            *stale_since = Some(Instant::now());
+            tracing::warn!(
+                age_ms = duration_millis(age),
+                "snapshot stream stale: no server state received"
+            );
+        }
+    } else if let Some(since) = stale_since.take() {
+        tracing::info!(
+            outage_ms = duration_millis(since.elapsed()),
+            "snapshot stream recovered"
+        );
+    }
+}
+
 /// Load the articulated part character: five GLBs in assets/models/parts/
 /// (head, torso, arm, leg, boot — arm/leg/boot shared by both sides).
 /// All five must load; otherwise the caller falls back.
@@ -410,6 +433,7 @@ struct Game {
     time_s: f32,
 }
 
+#[derive(Clone, Copy)]
 struct CharacterDraw {
     pos: Vec2,
     yaw: f32,
@@ -593,24 +617,7 @@ impl EmberGame for Game {
 
                 // Staleness: the server streams snapshots at 60 Hz, so a
                 // long gap means the link or the server is stalling.
-                if !net.is_dead()
-                    && let Some(age) = self.world.snapshot_age()
-                {
-                    if age > SNAPSHOT_STALE_AFTER {
-                        if self.stale_since.is_none() {
-                            self.stale_since = Some(Instant::now());
-                            tracing::warn!(
-                                age_ms = duration_millis(age),
-                                "snapshot stream stale: no server state received"
-                            );
-                        }
-                    } else if let Some(since) = self.stale_since.take() {
-                        tracing::info!(
-                            outage_ms = duration_millis(since.elapsed()),
-                            "snapshot stream recovered"
-                        );
-                    }
-                }
+                update_snapshot_health(net.is_dead(), &self.world, &mut self.stale_since);
                 // Re-send on change, plus a periodic keepalive well under the
                 // server's timeout.
                 if directions_differ(dir, self.last_dir)

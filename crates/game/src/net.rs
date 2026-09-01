@@ -117,14 +117,14 @@ impl NetClient {
             let stop = Arc::clone(&stop);
             let dead = Arc::clone(&dead);
             std::thread::spawn(move || {
-                let step = Duration::from_millis(250);
+                let poll_interval = Duration::from_millis(250);
                 let mut since_ping = Duration::ZERO;
                 loop {
-                    std::thread::sleep(step);
+                    std::thread::sleep(poll_interval);
                     if stop.load(Ordering::Relaxed) || dead.load(Ordering::Relaxed) {
                         break;
                     }
-                    since_ping += step;
+                    since_ping += poll_interval;
                     if since_ping >= KEEPALIVE_INTERVAL {
                         since_ping = Duration::ZERO;
                         // Timestamped nonce -> the Pong measures RTT.
