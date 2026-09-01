@@ -1,0 +1,8 @@
+namespace = "com.torrust.index.linter.policies"
+version = [1, 0, 0]
+
+policies = [
+  { owner = "RIVER", policy = "profile.claims-conform" },
+  { owner = "VALLEY", policy = "profile.claims-conform" },
+  { owner = "RIVER", policy = "labels.mints-well-formed" },
+]

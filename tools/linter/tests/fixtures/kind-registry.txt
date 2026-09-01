@@ -1,0 +1,50 @@
+# Fictional kind registry
+
+## Results · `conv:kinds:results`
+
+| Environment | Kind |
+| --- | --- |
+| Assertion | claim |
+| Theorem | thm |
+| Lemma | lem |
+| Definition | def |
+| Convention | conv |
+| Entry | entry |
+| Desideratum | goal |
+| Meta-question† | metaq |
+| Schema† | dataschema |
+| Yoga† | yoga |
+| Definition–Proposition | defprop |
+| Definition–Theorem | defthm |
+| Lemma–Definition | lemdef |
+| Structure | class |
+| Structure | constr |
+| Structure | schema |
+| Model | constr |
+| Model | model |
+| Working hypothesis | assum |
+| Standing hypothesis | assum |
+| Note | rem |
+| Example | ex |
+| Section | sec |
+| Appendix | app |
+| Part | part |
+| Table | tab |
+| Lettered main theorems (Theorem A, Theorem B, …) | — |
+| Numbered theorems (Theorem 1.1, Theorem 2.3, …) | — |
+| Starred/unnumbered variants (theorem*, etc.) | — |
+| Parenthetical names (Theorem (Riemann–Roch)) | — |
+
+## Assets · `conv:kinds:assets`
+
+| Environment | Kind |
+| --- | --- |
+| Test | test |
+| Benchmark | bench |
+| Module | mod |
+| Package | pkg |
+| Function | func |
+| Endpoint | endpoint |
+| Environment variable | envvar |
+| Type | type |
+| Lint rule | lint |

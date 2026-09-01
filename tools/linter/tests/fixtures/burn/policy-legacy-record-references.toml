@@ -1,0 +1,6 @@
+namespace = "com.torrust.index.linter.policy.legacy.record-references"
+version = [1, 0, 0]
+
+[owners.QUARRY]
+prose = '%s"packages/quarry/" ( %s"docs" / %s"notes" ) [ "/" *VCHAR ]'
+code = '%s"packages/quarry/" ( %s"src" / %s"tests" / %s"benches" / %s"examples" ) [ "/" *VCHAR ]'

@@ -1,0 +1,24 @@
+# Vendored from https://github.com/Byron/pulldown-cmark-to-cmark
+# tag v22.0.1, commit 66f7c5d4a99bd312eacc876b81dad1c91f623e4f
+# (Apache-2.0, LICENSE-APACHE alongside). ADOPTED into the workspace:
+# edition, rust-version, and the workspace clippy/check lints apply,
+# so src/ may diverge from the upstream tag where those demand it —
+# keep divergences minimal and let this comment stay the provenance
+# record. Upstream tests are not vendored: the formatter is proven
+# against this repository's own corpus instead.
+
+[package]
+name = "pulldown-cmark-to-cmark"
+description = "Convert pulldown-cmark Events back to the string they were parsed from (vendored)"
+version = "22.0.1"
+license = "Apache-2.0"
+
+edition.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+pulldown-cmark = { workspace = true }
+
+[lints]
+workspace = true
