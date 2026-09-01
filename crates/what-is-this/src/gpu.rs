@@ -379,7 +379,9 @@ struct GpuSuite {
 impl GpuSuite {
     async fn new() -> Result<(Self, AdapterFacts), String> {
         if !navigator_has_gpu() {
-            return Err("navigator.gpu is not exposed by this browser or browsing context".to_string());
+            return Err(
+                "navigator.gpu is not exposed by this browser or browsing context".to_string(),
+            );
         }
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         let adapter = instance
@@ -509,8 +511,8 @@ impl GpuSuite {
             } else {
                 format!("{:#06x}", info.vendor)
             },
-            architecture:
-                "not exposed by wgpu 24 AdapterInfo on the browser WebGPU backend".to_string(),
+            architecture: "not exposed by wgpu 24 AdapterInfo on the browser WebGPU backend"
+                .to_string(),
             device_class: format!("{:?}", info.device_type),
             backend: format!("{:?}", info.backend),
             timestamp_query,
@@ -584,10 +586,8 @@ impl GpuSuite {
             ));
         }
         let mut checksum = 0.0_f64;
-        for (index, (&actual, &expected)) in observed
-            .iter()
-            .zip(workload.expected.iter())
-            .enumerate()
+        for (index, (&actual, &expected)) in
+            observed.iter().zip(workload.expected.iter()).enumerate()
         {
             if !actual.is_finite() {
                 return Err(format!(
@@ -614,8 +614,9 @@ impl GpuSuite {
             return Ok(None);
         };
         let bytes = Self::map_buffer(&timestamp.readback).await?;
-        let values: &[u64] = bytemuck::try_cast_slice(&bytes)
-            .map_err(|error| format!("WebGPU timestamp readback had invalid u64 layout: {error}"))?;
+        let values: &[u64] = bytemuck::try_cast_slice(&bytes).map_err(|error| {
+            format!("WebGPU timestamp readback had invalid u64 layout: {error}")
+        })?;
         let [start, end] = values else {
             return Err("WebGPU timestamp readback did not contain exactly two values".to_string());
         };
@@ -641,13 +642,15 @@ impl GpuSuite {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("what-is-this gpu compute batch"),
             });
-        let timestamp_writes = self.timestamp.as_ref().filter(|_| include_timestamp).map(|timestamp| {
-            wgpu::ComputePassTimestampWrites {
-                query_set: &timestamp.query_set,
-                beginning_of_pass_write_index: Some(0),
-                end_of_pass_write_index: Some(1),
-            }
-        });
+        let timestamp_writes =
+            self.timestamp
+                .as_ref()
+                .filter(|_| include_timestamp)
+                .map(|timestamp| wgpu::ComputePassTimestampWrites {
+                    query_set: &timestamp.query_set,
+                    beginning_of_pass_write_index: Some(0),
+                    end_of_pass_write_index: Some(1),
+                });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("what-is-this gpu timed compute pass"),
@@ -768,7 +771,9 @@ pub(crate) async fn initialize() -> Result<String, String> {
     let generation = GENERATION.get();
     let (suite, facts) = GpuSuite::new().await?;
     if GENERATION.get() != generation {
-        return Err("WebGPU initialization finished after its diagnostic run was replaced".to_string());
+        return Err(
+            "WebGPU initialization finished after its diagnostic run was replaced".to_string(),
+        );
     }
     let json = serde_json::to_string(&facts)
         .map_err(|error| format!("could not encode WebGPU adapter facts: {error}"))?;
@@ -784,18 +789,16 @@ pub(crate) fn status_json() -> String {
         };
         suite.lost_reason().map_or_else(
             || r#"{"available":true,"reason":null}"#.to_string(),
-            |reason| {
-                serde_json::json!({ "available": false, "reason": reason }).to_string()
-            },
+            |reason| serde_json::json!({ "available": false, "reason": reason }).to_string(),
         )
     })
 }
 
 pub(crate) async fn run(kernel_id: &str, repeat_count: u32) -> Result<String, String> {
     let generation = GENERATION.get();
-    let suite = SUITE
-        .with_borrow_mut(Option::take)
-        .ok_or_else(|| "WebGPU compute suite is busy, unavailable, or not initialized".to_string())?;
+    let suite = SUITE.with_borrow_mut(Option::take).ok_or_else(|| {
+        "WebGPU compute suite is busy, unavailable, or not initialized".to_string()
+    })?;
     let result = suite.run(kernel_id, repeat_count).await;
     if GENERATION.get() == generation {
         SUITE.with_borrow_mut(|slot| *slot = Some(suite));

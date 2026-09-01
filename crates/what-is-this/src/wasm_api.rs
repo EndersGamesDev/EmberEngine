@@ -143,7 +143,9 @@ pub fn gpu_compute_inventory_json() -> String {
 /// the fixed shader and pipeline warmup fails validation.
 #[wasm_bindgen]
 pub async fn initialize_gpu_compute_json() -> Result<String, JsValue> {
-    crate::gpu::initialize().await.map_err(|error| JsValue::from_str(&error))
+    crate::gpu::initialize()
+        .await
+        .map_err(|error| JsValue::from_str(&error))
 }
 
 /// Runs one adaptively repeated compute-only WebGPU workload and returns timing and validation
@@ -154,10 +156,7 @@ pub async fn initialize_gpu_compute_json() -> Result<String, JsValue> {
 /// Returns a JavaScript error for an unknown kernel, invalid repeat count, device loss, mapping
 /// failure, non-finite output, or output that differs from the fixed expected values.
 #[wasm_bindgen]
-pub async fn run_gpu_compute_json(
-    kernel_id: &str,
-    repeat_count: u32,
-) -> Result<String, JsValue> {
+pub async fn run_gpu_compute_json(kernel_id: &str, repeat_count: u32) -> Result<String, JsValue> {
     crate::gpu::run(kernel_id, repeat_count)
         .await
         .map_err(|error| JsValue::from_str(&error))
