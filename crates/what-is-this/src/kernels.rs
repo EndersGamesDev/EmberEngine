@@ -168,12 +168,12 @@ pub const fn kernel_specs() -> &'static [KernelSpec] {
 pub fn jank_chunk() -> f64 {
     let mut value = 0.375_f64;
     for index in 0..2_048 {
-        value = (value * 1.000_000_119 + index as f64 * 0.000_000_031).sqrt();
+        value = (value * 1.000_000_119 + f64::from(index) * 0.000_000_031).sqrt();
     }
     black_box(value)
 }
 
-fn splitmix64(mut value: u64) -> u64 {
+const fn splitmix64(mut value: u64) -> u64 {
     value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
     value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
@@ -617,7 +617,7 @@ const fn ordered_float_bits(bits: u32) -> u32 {
     }
 }
 
-fn ulp_distance(lhs: u32, rhs: u32) -> u32 {
+const fn ulp_distance(lhs: u32, rhs: u32) -> u32 {
     ordered_float_bits(lhs).abs_diff(ordered_float_bits(rhs))
 }
 
@@ -631,7 +631,11 @@ mod tests {
     fn kernel_ids_are_unique_and_versioned() {
         let ids: BTreeSet<_> = kernel_specs().iter().map(|spec| spec.kernel_id).collect();
         assert_eq!(ids.len(), kernel_specs().len());
-        assert!(ids.iter().all(|kernel_id| kernel_id.ends_with(".v1")));
+        assert!(ids.iter().all(|kernel_id| {
+            kernel_id
+                .rsplit_once('.')
+                .is_some_and(|(_, version)| version == "v1")
+        }));
     }
 
     #[test]
