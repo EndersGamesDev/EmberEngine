@@ -328,7 +328,7 @@ fn callback_pair() -> (CallbackFuture, Arc<Mutex<CallbackState>>) {
 
 fn finish_callback(state: &Arc<Mutex<CallbackState>>, value: MapOutcome) {
     let waker = if let Ok(mut state) = state.lock() {
-        if state.closed {
+        if state.closed || state.value.is_some() {
             return;
         }
         state.value = Some(value);
@@ -339,6 +339,10 @@ fn finish_callback(state: &Arc<Mutex<CallbackState>>, value: MapOutcome) {
     if let Some(waker) = waker {
         waker.wake();
     }
+}
+
+fn take_callback(state: &Arc<Mutex<CallbackState>>) -> Option<MapOutcome> {
+    state.lock().ok()?.value.take()
 }
 
 fn identifier(value: &str) -> bool {
@@ -1001,6 +1005,46 @@ impl ComputeDevice {
     #[cfg(not(target_arch = "wasm32"))]
     fn arm_deadline(_state: Arc<Mutex<CallbackState>>) {}
 
+    #[cfg(target_arch = "wasm32")]
+    async fn yield_after_poll() -> Result<(), LayerError> {
+        use wasm_bindgen::{JsCast, closure::Closure};
+        let (future, state) = callback_pair();
+        let callback = Closure::once(move || {
+            finish_callback(&state, MapOutcome::Complete(Ok(())));
+        });
+        web_sys::window()
+            .ok_or_else(|| LayerError::Mapping("window is unavailable".to_string()))?
+            .set_timeout_with_callback_and_timeout_and_arguments_0(
+                callback.as_ref().unchecked_ref(),
+                0,
+            )
+            .map_err(|error| {
+                LayerError::Mapping(format!("could not schedule device poll: {error:?}"))
+            })?;
+        callback.forget();
+        match future.await {
+            MapOutcome::Complete(Ok(())) => Ok(()),
+            MapOutcome::Complete(Err(error)) => Err(LayerError::Mapping(error.to_string())),
+            MapOutcome::Deadline => Err(LayerError::Deadline(COMPLETION_DEADLINE_MS)),
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    async fn wait_for_map(
+        &self,
+        future: CallbackFuture,
+        state: Arc<Mutex<CallbackState>>,
+    ) -> Result<MapOutcome, LayerError> {
+        let _pending = future;
+        loop {
+            self.device.poll(wgpu::Maintain::Poll);
+            if let Some(outcome) = take_callback(&state) {
+                return Ok(outcome);
+            }
+            Self::yield_after_poll().await?;
+        }
+    }
+
     async fn map(
         &self,
         buffer: &wgpu::Buffer,
@@ -1014,10 +1058,17 @@ impl ComputeDevice {
             finish_callback(&callback_state, MapOutcome::Complete(result));
         });
         #[cfg(target_arch = "wasm32")]
-        Self::arm_deadline(state)?;
+        let outcome = {
+            Self::arm_deadline(Arc::clone(&state))?;
+            self.wait_for_map(future, state).await?
+        };
         #[cfg(not(target_arch = "wasm32"))]
-        Self::arm_deadline(state);
-        match future.await {
+        let outcome = {
+            Self::arm_deadline(state);
+            self.device.poll(wgpu::Maintain::Wait);
+            future.await
+        };
+        match outcome {
             MapOutcome::Complete(Ok(())) => {}
             MapOutcome::Complete(Err(error)) => return Err(LayerError::Mapping(error.to_string())),
             #[cfg(target_arch = "wasm32")]
