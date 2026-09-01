@@ -26,7 +26,7 @@ pub struct ServerConfig {
     /// single host can occupy the whole global admission cap.
     pub max_conns_per_ip: usize,
     /// Whether the per-IP cap also applies to loopback peers. Off by
-    /// default: the deployment binds to the WireGuard address, so a
+    /// default: the deployment binds to the `WireGuard` address, so a
     /// loopback peer is local tooling (netbot, a second dev client) rather
     /// than a stranger. Tests turn it on to exercise the cap, which is
     /// otherwise unreachable in-process.
@@ -83,7 +83,7 @@ const OUTBOUND_QUEUE: usize = 256;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A joined client silent this long is flagged as lagging (well before the
-/// hard CLIENT_TIMEOUT_SECS kick — clients keepalive every ~2 s or less).
+/// hard `CLIENT_TIMEOUT_SECS` kick — clients keepalive every ~2 s or less).
 const LAG_THRESHOLD: Duration = Duration::from_secs(3);
 
 /// Sustained ceiling on client messages processed per connection per tick.
@@ -109,7 +109,7 @@ const READ_POLL: Duration = Duration::from_millis(250);
 /// starts waiting for it. A plain socket read timeout does not bound this:
 /// `read_exact` restarts it on every byte that arrives, so a peer dribbling
 /// one byte per window holds its reader and writer threads indefinitely.
-/// Sits just above CLIENT_TIMEOUT_SECS so the sim thread's own sweep
+/// Sits just above `CLIENT_TIMEOUT_SECS` so the sim thread's own sweep
 /// normally wins the race and logs the kick — this is the backstop for when
 /// the sim thread cannot act.
 const FRAME_DEADLINE: Duration = Duration::from_secs(CLIENT_TIMEOUT_SECS + 2);
@@ -136,6 +136,11 @@ struct Conn {
 
 /// Runs the server on an already-bound listener. Blocks forever.
 /// Taking a listener (instead of an address) lets tests bind port 0.
+///
+/// # Errors
+///
+/// Returns an error if the listener's local address is unavailable or the
+/// accept thread disconnects from the simulation loop.
 pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
     let local = listener.local_addr()?;
     tracing::info!(
@@ -182,7 +187,7 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
         });
     }
 
-    sim_loop(events_tx, events_rx, cfg)
+    sim_loop(&events_tx, &events_rx, &cfg)
 }
 
 /// A `Read` adapter that fails the whole read once `deadline` passes, no
@@ -274,11 +279,11 @@ fn spawn_writer(mut stream: TcpStream) -> SyncSender<ServerMsg> {
 }
 
 fn sim_loop(
-    events_tx: Sender<Event>,
-    events_rx: Receiver<Event>,
-    cfg: ServerConfig,
+    events_tx: &Sender<Event>,
+    events_rx: &Receiver<Event>,
+    cfg: &ServerConfig,
 ) -> io::Result<()> {
-    let tick_dt = Duration::from_nanos(1_000_000_000 / TICK_HZ as u64);
+    let tick_dt = Duration::from_nanos(1_000_000_000 / u64::from(TICK_HZ));
     let dt = tick_dt.as_secs_f32();
 
     let mut conns: HashMap<u64, Conn> = HashMap::new();
@@ -291,29 +296,14 @@ fn sim_loop(
     let mut overruns: u32 = 0;
 
     loop {
-        // Drain events until the next tick deadline.
-        loop {
-            let now = Instant::now();
-            let Some(wait) = next_tick_at.checked_duration_since(now) else {
-                break;
-            };
-            match events_rx.recv_timeout(wait) {
-                Ok(ev) => handle_event(ev, &mut conns, &mut next_player_id, &cfg, &events_tx),
-                Err(mpsc::RecvTimeoutError::Timeout) => break,
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err(io::Error::other("accept thread died"));
-                }
-            }
-        }
-        // After a stall the deadline is long past and the loop above drained
-        // nothing; process what is already queued (bounded so a flood can't
-        // starve the tick) so keepalives count before the timeout sweep.
-        for _ in 0..1024 {
-            match events_rx.try_recv() {
-                Ok(ev) => handle_event(ev, &mut conns, &mut next_player_id, &cfg, &events_tx),
-                Err(_) => break,
-            }
-        }
+        drain_events(
+            events_tx,
+            events_rx,
+            &mut conns,
+            &mut next_player_id,
+            cfg,
+            next_tick_at,
+        )?;
         next_tick_at += tick_dt;
         // If we fell far behind (debugger pause, host stall), resync instead
         // of running a burst of catch-up ticks.
@@ -322,7 +312,7 @@ fn sim_loop(
             let behind = now.duration_since(next_tick_at);
             tracing::warn!(
                 tick,
-                behind_ms = behind.as_millis() as u64,
+                behind_ms = duration_millis(behind),
                 "sim stall: fell behind the tick clock; resyncing"
             );
             next_tick_at = now + tick_dt;
@@ -343,7 +333,7 @@ fn sim_loop(
         // Lag detection: flag joined clients that have gone silent well
         // before the hard timeout kicks them (clients keepalive every ~2 s).
         let now = Instant::now();
-        for (&conn_id, c) in conns.iter_mut() {
+        for (&conn_id, c) in &mut conns {
             // Refill the message-rate budget: one tick's worth per tick, so
             // the sustained rate is MSGS_PER_TICK_LIMIT however bursty the
             // drain windows are.
@@ -355,7 +345,7 @@ fn sim_loop(
                     tracing::warn!(
                         conn = conn_id,
                         peer = %c.peer,
-                        silent_ms = silent.as_millis() as u64,
+                        silent_ms = duration_millis(silent),
                         "client lagging: no input or keepalive received"
                     );
                 }
@@ -423,7 +413,7 @@ fn sim_loop(
                 players = joined,
                 connections = conns.len(),
                 lagging,
-                max_tick_busy_us = max_busy.as_micros() as u64,
+                max_tick_busy_us = duration_micros(max_busy),
                 tick_overruns = overruns,
                 "server health"
             );
@@ -431,6 +421,49 @@ fn sim_loop(
             overruns = 0;
         }
     }
+}
+
+fn drain_events(
+    events_tx: &Sender<Event>,
+    events_rx: &Receiver<Event>,
+    conns: &mut HashMap<u64, Conn>,
+    next_player_id: &mut u32,
+    cfg: &ServerConfig,
+    next_tick_at: Instant,
+) -> io::Result<()> {
+    // Drain events until the next tick deadline.
+    loop {
+        let now = Instant::now();
+        let Some(wait) = next_tick_at.checked_duration_since(now) else {
+            break;
+        };
+        match events_rx.recv_timeout(wait) {
+            Ok(ev) => handle_event(ev, conns, next_player_id, cfg, events_tx),
+            Err(mpsc::RecvTimeoutError::Timeout) => break,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(io::Error::other("accept thread died"));
+            }
+        }
+    }
+
+    // After a stall the deadline is long past and the loop above drained
+    // nothing; process what is already queued (bounded so a flood can't
+    // starve the tick) so keepalives count before the timeout sweep.
+    for _ in 0..1024 {
+        match events_rx.try_recv() {
+            Ok(ev) => handle_event(ev, conns, next_player_id, cfg, events_tx),
+            Err(_) => break,
+        }
+    }
+    Ok(())
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+fn duration_micros(duration: Duration) -> u64 {
+    u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
 }
 
 fn handle_event(
@@ -446,193 +479,225 @@ fn handle_event(
             stream,
             peer,
             ip,
-        } => {
-            // Admission cap BEFORE any thread is spawned for this socket.
-            let conn_cap = cfg.max_players * 2 + 16;
-            if conns.len() >= conn_cap {
-                tracing::warn!("conn {conn} ({peer}): connection cap {conn_cap} reached, refusing");
-                let _ = stream.shutdown(Shutdown::Both);
-                return;
-            }
-            // Per-IP cap, so one host cannot occupy the global cap above.
-            // Counted from the live map rather than a side table: the count
-            // is then correct by construction, including after a crash-drop
-            // that never ran a release path.
-            if let Some(ip) = ip {
-                if cfg.cap_loopback || !ip.is_loopback() {
-                    let from_ip = conns.values().filter(|c| c.ip == Some(ip)).count();
-                    if from_ip >= cfg.max_conns_per_ip {
-                        tracing::warn!(
-                            "conn {conn} ({peer}): per-ip cap {} reached, refusing",
-                            cfg.max_conns_per_ip
-                        );
-                        let _ = stream.shutdown(Shutdown::Both);
-                        return;
-                    }
-                }
-            }
-            let (reader_stream, sock) = match (stream.try_clone(), stream.try_clone()) {
-                (Ok(r), Ok(s)) => (r, s),
-                _ => {
-                    tracing::warn!("conn {conn} ({peer}): socket clone failed");
-                    return;
-                }
-            };
-            let tx = spawn_writer(stream);
-            conns.insert(
-                conn,
-                Conn {
-                    tx,
-                    sock,
-                    peer: peer.clone(),
-                    ip,
-                    player: None,
-                    last_seen: Instant::now(),
-                    lag_flagged: false,
-                    // One tick's worth to start: the burst ceiling exists to
-                    // absorb a sim stall for an established client, not to
-                    // hand a fresh connection a free blast.
-                    msg_budget: MSGS_PER_TICK_LIMIT,
-                },
-            );
-            spawn_reader(conn, reader_stream, events_tx.clone(), cfg.frame_deadline);
-            tracing::info!("conn {conn}: accepted from {peer}");
-        }
-        Event::Msg { conn, msg } => {
-            let Some(c) = conns.get_mut(&conn) else {
-                return;
-            };
-            // Message-rate cap, spent before anything else this message
-            // could buy: a flooder must not get lag-recovery bookkeeping,
-            // a liveness refresh, or a sim update out of the attempt.
-            if c.msg_budget == 0 {
-                tracing::warn!(
-                    "conn {conn}: message flood (over {}/tick sustained), dropping",
-                    MSGS_PER_TICK_LIMIT
-                );
-                remove_conn(conn, conns);
-                return;
-            }
-            c.msg_budget -= 1;
-            if c.lag_flagged {
-                c.lag_flagged = false;
-                tracing::info!(
-                    conn,
-                    silent_ms = c.last_seen.elapsed().as_millis() as u64,
-                    "client recovered from lag"
-                );
-            }
-            // Only a connection that has completed Hello may refresh its
-            // liveness: pre-Hello traffic is rejected below, and refreshing
-            // first would let it park an admission slot for as long as it
-            // kept sending.
-            if c.player.is_some() {
-                c.last_seen = Instant::now();
-            }
-            match (msg, c.player.is_some()) {
-                (ClientMsg::Hello { protocol, name }, false) => {
-                    if protocol != PROTOCOL_VERSION {
-                        let _ = c.tx.try_send(ServerMsg::Reject {
-                            reason: format!(
-                                "protocol mismatch: server v{PROTOCOL_VERSION}, client v{protocol}"
-                            ),
-                        });
-                        remove_conn(conn, conns);
-                        return;
-                    }
-                    let joined = conns.values().filter(|c| c.player.is_some()).count();
-                    if joined >= cfg.max_players {
-                        let c = conns.get_mut(&conn).unwrap();
-                        let _ = c.tx.try_send(ServerMsg::Reject {
-                            reason: "server full".into(),
-                        });
-                        remove_conn(conn, conns);
-                        return;
-                    }
-                    let id = PlayerId(*next_player_id);
-                    *next_player_id += 1;
-                    let name = sanitize_name(&name);
-                    let color = color_for(id);
-                    // Deterministic, spread-out spawn ring.
-                    let angle = id.0 as f32 * 2.399963;
-                    let radius = 6.0 + (id.0 % 4) as f32 * 2.0;
-                    let spawn = [angle.cos() * radius, angle.sin() * radius];
-                    let player = Player {
-                        id,
-                        name: name.clone(),
-                        color,
-                        pos: spawn,
-                        vel: [0.0, 0.0],
-                        dir: [0.0, 0.0],
-                    };
-                    let meta = PlayerMeta {
-                        id,
-                        name: name.clone(),
-                        color,
-                        pos: spawn,
-                    };
-
-                    let c = conns.get_mut(&conn).unwrap();
-                    c.player = Some(player);
-                    let roster: Vec<PlayerMeta> = conns
-                        .values()
-                        .filter_map(|c| c.player.as_ref())
-                        .map(|p| PlayerMeta {
-                            id: p.id,
-                            name: p.name.clone(),
-                            color: p.color,
-                            pos: p.pos,
-                        })
-                        .collect();
-                    let c = conns.get_mut(&conn).unwrap();
-                    let _ = c.tx.try_send(ServerMsg::Welcome {
-                        id,
-                        tick_hz: TICK_HZ,
-                        arena_half: ARENA_HALF,
-                        roster,
-                    });
-                    for (&other_id, other) in conns.iter() {
-                        if other_id != conn && other.player.is_some() {
-                            let _ = other
-                                .tx
-                                .try_send(ServerMsg::PlayerJoined { meta: meta.clone() });
-                        }
-                    }
-                    tracing::info!("conn {conn}: joined as {:?} \"{name}\"", id);
-                }
-                (ClientMsg::Hello { .. }, true) => {
-                    tracing::warn!("conn {conn}: duplicate Hello, dropping");
-                    remove_conn(conn, conns);
-                }
-                // Anything else before Hello — Ping included — is a protocol
-                // violation: an unauthenticated peer must not be served, and
-                // a pre-Hello ping loop could otherwise park an admission
-                // slot indefinitely by refreshing `last_seen` forever.
-                (_, false) => {
-                    tracing::warn!("conn {conn}: message before Hello, dropping");
-                    remove_conn(conn, conns);
-                }
-                (ClientMsg::Input { move_dir }, true) => {
-                    if let Some(p) = c.player.as_mut() {
-                        p.dir = sanitize_dir(move_dir);
-                    }
-                }
-                (ClientMsg::Ping { nonce }, true) => {
-                    // A peer that pings but never drains its socket fills the
-                    // queue; treat a full queue as a dead connection.
-                    if c.tx.try_send(ServerMsg::Pong { nonce }).is_err() {
-                        remove_conn(conn, conns);
-                    }
-                }
-                (ClientMsg::Bye, true) => {
-                    remove_conn(conn, conns);
-                }
-            }
-        }
+        } => handle_connected(conn, stream, peer, ip, conns, cfg, events_tx),
+        Event::Msg { conn, msg } => handle_message(conn, msg, conns, next_player_id, cfg),
         Event::Disconnected { conn } => {
             remove_conn(conn, conns);
         }
     }
+}
+
+fn handle_connected(
+    conn: u64,
+    stream: TcpStream,
+    peer: String,
+    ip: Option<IpAddr>,
+    conns: &mut HashMap<u64, Conn>,
+    cfg: &ServerConfig,
+    events_tx: &Sender<Event>,
+) {
+    // Admission cap BEFORE any thread is spawned for this socket.
+    let conn_cap = cfg.max_players * 2 + 16;
+    if conns.len() >= conn_cap {
+        tracing::warn!("conn {conn} ({peer}): connection cap {conn_cap} reached, refusing");
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+    // Per-IP cap, so one host cannot occupy the global cap above. Counted
+    // from the live map so crash-drop cleanup cannot leave a stale side table.
+    if let Some(ip) = ip
+        && (cfg.cap_loopback || !ip.is_loopback())
+    {
+        let from_ip = conns.values().filter(|c| c.ip == Some(ip)).count();
+        if from_ip >= cfg.max_conns_per_ip {
+            tracing::warn!(
+                "conn {conn} ({peer}): per-ip cap {} reached, refusing",
+                cfg.max_conns_per_ip
+            );
+            let _ = stream.shutdown(Shutdown::Both);
+            return;
+        }
+    }
+    let (Ok(reader_stream), Ok(sock)) = (stream.try_clone(), stream.try_clone()) else {
+        tracing::warn!("conn {conn} ({peer}): socket clone failed");
+        return;
+    };
+    let tx = spawn_writer(stream);
+    conns.insert(
+        conn,
+        Conn {
+            tx,
+            sock,
+            peer: peer.clone(),
+            ip,
+            player: None,
+            last_seen: Instant::now(),
+            lag_flagged: false,
+            // One tick's worth to start: burst slack is earned over time.
+            msg_budget: MSGS_PER_TICK_LIMIT,
+        },
+    );
+    spawn_reader(conn, reader_stream, events_tx.clone(), cfg.frame_deadline);
+    tracing::info!("conn {conn}: accepted from {peer}");
+}
+
+fn handle_message(
+    conn: u64,
+    msg: ClientMsg,
+    conns: &mut HashMap<u64, Conn>,
+    next_player_id: &mut u32,
+    cfg: &ServerConfig,
+) {
+    let joined = {
+        let Some(c) = conns.get_mut(&conn) else {
+            return;
+        };
+        // Spend the rate budget before granting lag recovery, liveness, or a
+        // simulation update, so a flooder gets no benefit from the attempt.
+        if c.msg_budget == 0 {
+            tracing::warn!(
+                "conn {conn}: message flood (over {}/tick sustained), dropping",
+                MSGS_PER_TICK_LIMIT
+            );
+            remove_conn(conn, conns);
+            return;
+        }
+        c.msg_budget -= 1;
+        if c.lag_flagged {
+            c.lag_flagged = false;
+            tracing::info!(
+                conn,
+                silent_ms = duration_millis(c.last_seen.elapsed()),
+                "client recovered from lag"
+            );
+        }
+        let joined = c.player.is_some();
+        // Pre-Hello traffic must not refresh an unauthenticated admission slot.
+        if joined {
+            c.last_seen = Instant::now();
+        }
+        joined
+    };
+
+    match (msg, joined) {
+        (ClientMsg::Hello { protocol, name }, false) => {
+            handle_hello(conn, protocol, name, conns, next_player_id, cfg);
+        }
+        (ClientMsg::Hello { .. }, true) => {
+            tracing::warn!("conn {conn}: duplicate Hello, dropping");
+            remove_conn(conn, conns);
+        }
+        // Anything else before Hello — Ping included — is a protocol
+        // violation and must not retain an admission slot.
+        (_, false) => {
+            tracing::warn!("conn {conn}: message before Hello, dropping");
+            remove_conn(conn, conns);
+        }
+        (ClientMsg::Input { move_dir }, true) => {
+            if let Some(player) = conns.get_mut(&conn).and_then(|c| c.player.as_mut()) {
+                player.dir = sanitize_dir(move_dir);
+            }
+        }
+        (ClientMsg::Ping { nonce }, true) => {
+            // A peer that pings but never drains its socket fills the queue;
+            // treat a full queue as a dead connection.
+            let send_failed = conns
+                .get(&conn)
+                .is_some_and(|c| c.tx.try_send(ServerMsg::Pong { nonce }).is_err());
+            if send_failed {
+                remove_conn(conn, conns);
+            }
+        }
+        (ClientMsg::Bye, true) => {
+            remove_conn(conn, conns);
+        }
+    }
+}
+
+fn handle_hello(
+    conn: u64,
+    protocol: u16,
+    name: String,
+    conns: &mut HashMap<u64, Conn>,
+    next_player_id: &mut u32,
+    cfg: &ServerConfig,
+) {
+    if protocol != PROTOCOL_VERSION {
+        if let Some(c) = conns.get(&conn) {
+            let _ = c.tx.try_send(ServerMsg::Reject {
+                reason: format!(
+                    "protocol mismatch: server v{PROTOCOL_VERSION}, client v{protocol}"
+                ),
+            });
+        }
+        remove_conn(conn, conns);
+        return;
+    }
+    let joined = conns.values().filter(|c| c.player.is_some()).count();
+    if joined >= cfg.max_players {
+        if let Some(c) = conns.get(&conn) {
+            let _ = c.tx.try_send(ServerMsg::Reject {
+                reason: "server full".into(),
+            });
+        }
+        remove_conn(conn, conns);
+        return;
+    }
+
+    let id = PlayerId(*next_player_id);
+    *next_player_id += 1;
+    let name = sanitize_name(&name);
+    let color = color_for(id);
+    // Player IDs intentionally seed the frozen f32 wire position format.
+    #[allow(clippy::cast_precision_loss)]
+    let angle = id.0 as f32 * 2.399_963;
+    let ring = f32::from(u8::try_from(id.0 % 4).unwrap_or_default());
+    let radius = 6.0 + ring * 2.0;
+    let spawn = [angle.cos() * radius, angle.sin() * radius];
+    let player = Player {
+        id,
+        name: name.clone(),
+        color,
+        pos: spawn,
+        vel: [0.0, 0.0],
+        dir: [0.0, 0.0],
+    };
+    let meta = PlayerMeta {
+        id,
+        name: name.clone(),
+        color,
+        pos: spawn,
+    };
+
+    if let Some(c) = conns.get_mut(&conn) {
+        c.player = Some(player);
+    }
+    let roster: Vec<PlayerMeta> = conns
+        .values()
+        .filter_map(|c| c.player.as_ref())
+        .map(|p| PlayerMeta {
+            id: p.id,
+            name: p.name.clone(),
+            color: p.color,
+            pos: p.pos,
+        })
+        .collect();
+    if let Some(c) = conns.get(&conn) {
+        let _ = c.tx.try_send(ServerMsg::Welcome {
+            id,
+            tick_hz: TICK_HZ,
+            arena_half: ARENA_HALF,
+            roster,
+        });
+    }
+    for (&other_id, other) in &*conns {
+        if other_id != conn && other.player.is_some() {
+            let _ = other
+                .tx
+                .try_send(ServerMsg::PlayerJoined { meta: meta.clone() });
+        }
+    }
+    tracing::info!("conn {conn}: joined as {:?} \"{name}\"", id);
 }
 
 fn remove_conn(conn: u64, conns: &mut HashMap<u64, Conn>) {

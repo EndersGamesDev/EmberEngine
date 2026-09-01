@@ -194,8 +194,9 @@ fn ping_before_hello_parks_no_slot() {
     // A pre-Hello Ping must not be answered, and the connection must not
     // survive it: were the slot held, this many attempts would exhaust the
     // admission cap (max_players * 2 + 16) and lock out every later client.
+    const ATTEMPTS: usize = 8 * 2 + 16 + 1;
     let mut attempts = Vec::new();
-    for _ in 0..(8 * 2 + 16 + 1) {
+    for _ in 0..ATTEMPTS {
         let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         write_msg(&mut s, &ClientMsg::Ping { nonce: 7 }).unwrap();
@@ -206,6 +207,7 @@ fn ping_before_hello_parks_no_slot() {
         // Held open: a parked slot would still be parked at the check below.
         attempts.push(s);
     }
+    assert_eq!(attempts.len(), ATTEMPTS);
 
     // Every slot came back, so a real client still gets in — and none of the
     // pingers was ever admitted as a player.
@@ -299,11 +301,12 @@ fn the_per_ip_cap_exempts_loopback_by_default() {
         ..Default::default()
     });
 
-    let held: Vec<TcpStream> = (0..4)
-        .map(|i| {
-            try_join(port, &format!("p{i}")).expect("loopback was capped despite the exemption")
-        })
-        .collect();
+    let mut held = Vec::new();
+    for i in 0..4 {
+        held.push(
+            try_join(port, &format!("p{i}")).expect("loopback was capped despite the exemption"),
+        );
+    }
     assert_eq!(held.len(), 4);
 }
 
