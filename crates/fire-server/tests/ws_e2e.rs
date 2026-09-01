@@ -228,8 +228,7 @@ fn two_players_join_a_lobby_and_race() {
     );
 
     // Drive. Both hold throttle; the server is authoritative.
-    let (saw_racing, moved_a, moved_b) =
-        drive_until_progress(&mut a, &mut b, a_slot, b_slot);
+    let (saw_racing, moved_a, moved_b) = drive_until_progress(&mut a, &mut b, a_slot, b_slot);
 
     assert!(saw_racing, "the race never reached the Racing phase");
     assert!(
