@@ -449,7 +449,7 @@ fn assemble(desc: &KernelDesc<'_>, limits: DialectLimits) -> Result<String, Dial
     for (slot, accessor) in desc.accessors.iter().enumerate() {
         writeln!(
             source,
-            "fn load_{accessor}(index: u32) -> vec4<f32> {{ let selected = heap_resources.inputs[{slot}]; if (index >= selected.y) {{ return vec4<f32>(0.0); }} let span = heap_directory.spans[selected.x]; let page = index / span.x; let local = index % span.x; let handle = heap_handle(span.z + page); let descriptor = heap_descriptors.entries[handle & {HANDLE_INDEX_MASK}u]; let width = descriptor.y >> 16u; let origin = vec2<u32>(descriptor.x >> 16u, descriptor.y & 65535u); let coordinate = origin + vec2<u32>(local % width, local / width); return textureLoad(heap_data, vec2<i32>(coordinate), i32(descriptor.x & 65535u), 0); }}"
+            "fn load_{accessor}(index: u32) -> vec4<f32> {{ let selected = heap_resources.inputs[{slot}]; if (index >= selected.y) {{ return vec4<f32>(0.0); }} let span = heap_directory.spans[selected.x]; let page = index / span.x; let local = index % span.x; let heap_id = heap_handle(span.z + page); let descriptor = heap_descriptors.entries[heap_id & {HANDLE_INDEX_MASK}u]; let width = descriptor.y >> 16u; let origin = vec2<u32>(descriptor.x >> 16u, descriptor.y & 65535u); let coordinate = origin + vec2<u32>(local % width, local / width); return textureLoad(heap_data, vec2<i32>(coordinate), i32(descriptor.x & 65535u), 0); }}"
         )
         .map_err(|error| DialectError::Validation {
             kernel: desc.name.to_string(),
