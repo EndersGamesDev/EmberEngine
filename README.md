@@ -175,11 +175,12 @@ Every page carries a small chip in its header naming the host it is on, its buil
 
    ```
    bash deploy/deploy-arena-local.sh          # build, start, prove on loopback and through the tunnel, publish
+   bash deploy/deploy-arena-local.sh install   # register a logon task that runs `up`, and run it now
    bash deploy/deploy-arena-local.sh status
    bash deploy/deploy-arena-local.sh down
    ```
 
-   The arena only. It reuses `host-name.sh` and `publish-host.sh` and stamps the build the way `host.sh` does, so its entry in the book is indistinguishable from a Linux host's; what it lacks is anything that restarts it after a sleep or a reboot. It exists because the day v13 was ready, specht's sshd had stopped answering and no other host carried a toolchain.
+   The arena only. It reuses `host-name.sh` and `publish-host.sh` and stamps the build the way `host.sh` does, so its entry in the book is indistinguishable from a Linux host's; `install` registers a Task Scheduler job that runs `up` at every logon, which is what brings it back after a reboot; a sleep still needs a logon or a manual `up`. A server started from an interactive shell dies with that shell's owner, so the task, not a shell, must own the processes. It exists because the day v13 was ready, specht's sshd had stopped answering and no other host carried a toolchain.
 
 **Picking or keeping a version.** `EMBER_REF` says which commit a host runs. The ssh deploys default to `HEAD`; `host.sh` defaults to `origin/main`. Pin one deliberately with `EMBER_REF=v12 bash deploy/host.sh up`. This is the point of the whole scheme: a host that stays on an older commit keeps the frozen pages of that era playable, because those pages find the hosts on their own protocol while the live page keeps landing on the newest build. Everything a deploy publishes — version, commit, protocol number — is read from that ref and never from the working tree, so a host can never advertise a build it is not running.
 
@@ -197,7 +198,9 @@ Every page carries a small chip in its header naming the host it is on, its buil
 
 The full model — the file format, the exact picking rule, what a server reports and how a mirror works — is `docs/hosts.md`. What was deliberately *not* built, and what is still owed, is in `docs/plans/backlog.md`.
 
-## Arena Shooter (v13: Trench City)
+## Arena Shooter (v13: Trench City, v14: fullscreen)
+
+**v14 adds a fullscreen mode.** On the native client F11 toggles borderless fullscreen; the engine owns the window, so every ember game gets the key. On the web page, F or the ⛶ button fullscreens the stage (canvas plus crosshair and scoreboard) and the canvas fills the screen at the screen's own aspect; Esc leaves it. No protocol change: v14 pages play on the same protocol-13 hosts as v13, and the v13 page stays playable.
 
 **Play: <https://endersgamesdev.github.io/EmberEngine/>** — pick Arena Shooter. First-person drop-in deathmatch for up to 8 players: WASD + mouse look, Space jump, Shift sprint, C crouch, RMB zoom, R reload, Q raises a shield that reflects the round back at the shooter, E is a melee that goes through a raised shield, and headshots kill outright.
 

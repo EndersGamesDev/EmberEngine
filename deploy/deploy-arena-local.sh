@@ -58,6 +58,39 @@ case "$CMD" in
         stop_all
         echo "stopped arena-server and cloudflared (the book still names this host; publish-host.sh --remove retires it)"
         exit 0 ;;
+    install)
+        # Register a Task Scheduler job that runs `up` at every logon of this
+        # user, and run it once now. Two reasons, both learned the hard way on
+        # 2026-09-02. Survival: a server started from an interactive shell
+        # belongs to that shell's process tree, and when the tool that owned
+        # the shell exited, Windows took the server and the tunnel with it -
+        # while the address book still named this host, so every v13 page
+        # found nothing on its protocol. A task's children are its own.
+        # Recovery: a reboot or a logout kills them too, and the tunnel comes
+        # back under a NEW name that the book does not know until `up`
+        # republishes it; a logon trigger is the cheapest watchdog there is.
+        # The task runs the checked-in script from this checkout, so
+        # `git pull` plus a logon is a redeploy.
+        # The action is a one-line .cmd wrapper rather than an inline command:
+        # three layers of quoting (bash -> PowerShell -> Task Scheduler) is
+        # where a deploy goes to die silently. git-bash's MSYS path mangling
+        # is why this goes through PowerShell and not schtasks.exe directly.
+        WRAPPER="$RUN/ember-arena-host.cmd"
+        printf '@echo off\r\n"%s" -lc "cd %s && EMBER_PUBLISH=%s bash deploy/deploy-arena-local.sh up >> %s/deploy.log 2>&1"\r\n' \
+            "$(cygpath -w "$(command -v bash)")" "$(cygpath -u "$REPO_DIR")" "$EMBER_PUBLISH" "$(cygpath -u "$RUN")" > "$WRAPPER"
+        powershell -NoProfile -Command "
+          \$a = New-ScheduledTaskAction -Execute '$(cygpath -w "$WRAPPER")'
+          \$t = New-ScheduledTaskTrigger -AtLogOn -User '$(id -un)'
+          \$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Hours 1)
+          Register-ScheduledTask -TaskName 'ember-arena-host' -Action \$a -Trigger \$t -Settings \$s -Force | Out-Null
+          Start-ScheduledTask -TaskName 'ember-arena-host'
+        " || die "could not register or start the ember-arena-host task"
+        echo "registered task ember-arena-host (runs $WRAPPER at every logon) and started it; follow $RUN/deploy.log"
+        exit 0 ;;
+    uninstall)
+        powershell -NoProfile -Command "Unregister-ScheduledTask -TaskName 'ember-arena-host' -Confirm:\$false -ErrorAction SilentlyContinue"
+        echo "task ember-arena-host removed (the running server, if any, keeps running; use down)"
+        exit 0 ;;
     status)
         tasklist | grep -i "arena-server.exe\|cloudflared.exe" || echo "nothing running"
         [ -f "$RUN/arena.url" ] && echo "last published: $(cat "$RUN/arena.url") as $(cat "$RUN/stamp" 2>/dev/null)"
