@@ -42,7 +42,8 @@ fn perturb_norm(value: vec2<f32>) -> f32 {
 }
 
 fn perturb_finite(value: vec2<f32>) -> bool {
-    return all(isFinite(value));
+    let maximum = vec2<f32>(3.402823466e38);
+    return all(value == value) && all(abs(value) <= maximum);
 }
 
 fn perturb_reference(record: vec4<f32>) -> vec2<f32> {
