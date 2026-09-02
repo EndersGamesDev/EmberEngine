@@ -1,7 +1,5 @@
-use crate::{
-    EscapeParams, MathError, PerturbSample, PerturbationEnvelope, ReferenceOrbitRecord,
-    smooth_iteration_f64,
-};
+use crate::orbit::smooth_iteration_f64;
+use crate::{EscapeParams, MathError, PerturbSample, PerturbationEnvelope, ReferenceOrbitRecord};
 
 const RESCALE_HIGH: f64 = 18_446_744_073_709_551_616.0;
 const RESCALE_LOW: f64 = 1.0 / RESCALE_HIGH;
