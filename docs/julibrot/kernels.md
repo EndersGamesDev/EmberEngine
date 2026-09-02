@@ -230,6 +230,10 @@ The inherited input resource entry is exactly 16 bytes `{ directory_index: u32, 
 
 `perturb_scaled_offset(uniforms: &PerturbUniform, orbit: &[ReferenceOrbitRecord], offset_prime: [f32;4]) -> Result<KernelSample, KernelError>` and `perturb_scaled_pixel(uniforms: &PerturbUniform, orbit: &[ReferenceOrbitRecord], index: u32) -> Result<KernelSample, KernelError>` expose the source-ordered scaled CPU mirror and return arithmetic failure as the honest per-pixel glitch record while refusing invalid host inputs.
 
+`evaluate_shallow_conformance(observed: KernelSample, expected: math::EscapeSample) -> ConformanceResult` applies the exact classification/index and `1×10⁻⁴` smooth criteria, while `evaluate_perturbation_conformance(observed: KernelSample, expected: math::PerturbSample, envelope: math::PerturbationEnvelope) -> ConformanceResult` returns the closed `ConformanceVerdict::{Pass,Boundary,Fail}`, never promoting a predeclared boundary sample to an exact pass, and applies the `2×10⁻³` tolerance plus exact rebase and glitch criteria.
+
+`record_is_well_formed(sample: KernelSample, mode: KernelMode) -> bool` checks finite sentinels, exact binary flags, escape-index presence, integer-valued rebases through `2²⁴`, and zero shallow rebase/glitch fields; `VISIBLE_REPLAY_CARDS` is the seven-entry kernels-to-app list whose requirement strings all begin `requires visible replay:` and covers both readbacks, SCRATCH landing, present consumption, binding identity, the zoom-14 switch, and the four-byte scene-fence handoff.
+
 `DispatchFacts` is `{ owner_epoch: u64, mode: KernelMode, level: RefinementLevel, requested_extent: GridExtent, delivered_extent: GridExtent, requested_max_iter: u32, delivered_max_iter: u32, active_pixels: u32, worst_case_pixel_iterations: u64, page_passes: u32, copy_commands: u32, gpu_copy_bytes: u64, logical_heap_bytes: u64, reserved_heap_bytes: u64, scratch_bytes: u64, orbit_generation: Option<u32>, orbit_length: u32 }`.
 
 Every `DispatchFacts` byte and count is arithmetic from the accepted plan or a copied owner fact; GPU duration and poll count are deliberately absent because app measures submissions with its four-byte fence.
@@ -304,7 +308,7 @@ The shallow CPU conformance fixture uses deterministic pixels in both presets an
 
 The perturbation CPU fixture uses math's scaled `f64` mirror and deterministic pixels that include normalized `δz₀′ = 0`, `δc′ = 0`, both nonzero, exponents on both sides of the normal f32 range, upward and downward 64-bit renormalization, zero and repeated rebases, reference exhaustion, and nonzero `Z₀`; the corrected nonzero-`Z₀` rebase is a PASS criterion.
 
-The `math-oracles` Cargo feature is default-off at this checkpoint because math Phase 0 publishes records but not yet `escape_f32` or `perturb_scaled_f64`; ordinary package gates exercise all hand-authored mirror fixtures, and enabling the feature activates the cross-package comparisons after those documented functions merge.
+Math's merged `escape_f32`, `perturb_scaled_f64`, and propagated-envelope functions are unconditional test dependencies with no placeholder feature; every ordinary package and workspace test run executes their cross-package comparisons.
 
 Perturbation conformance requires exact classification and integer escape index outside math's propagated error envelope, exact rebase count and glitch flag, and `|smooth_gpu−smooth_cpu| ≤ 2×10⁻³`; samples inside the envelope remain explicit boundary fixtures and are never silently removed from reported counts.
 
@@ -370,7 +374,7 @@ The total implementation estimate is 2,140 net new Rust, WGSL, JavaScript fixtur
 
 - Exact shallow classification across CPU and browser shader still depends on math's predeclared boundary fixtures and contracted operation order; fused-operation behavior must not be accommodated by selecting samples after GPU results are seen.
 
-- The default-off `math-oracles` fixtures name `escape_f32` and `perturb_scaled_f64`, which math Phase 0 has not published; they become a required green gate when math's later phases merge, and no kernels-local oracle substitute is permitted.
+- Math's shallow and scaled perturbation oracles are live unconditional fixtures; browser shader results remain the missing half of those comparisons until visible replay.
 
 - The zoom-14 mode switch is mathematically safe but browser pipeline-switch cost, first-frame warm-up, and visual continuity across one shallow and one scaled perturbation frame remain `requires visible replay`.
 

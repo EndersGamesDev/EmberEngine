@@ -116,6 +116,13 @@ fn kernel(index: u32, uniforms: PerturbUniform) -> PerturbResult {
     var iteration = 0u;
     var rebases = 0u;
     let z_zero = perturb_reference(load_reference(0u));
+    let initial = perturb_normalize(delta_prime, delta_c_prime, exponent);
+    if (initial.glitch) {
+        return perturb_glitch(rebases);
+    }
+    delta_prime = initial.delta;
+    delta_c_prime = initial.delta_c;
+    exponent = initial.exponent;
     loop {
         if (iteration >= uniforms.max_iter) {
             break;
@@ -139,7 +146,7 @@ fn kernel(index: u32, uniforms: PerturbUniform) -> PerturbResult {
         }
         var advance_reference = reference;
         if (perturb_norm(z) < perturb_norm(represented_delta)) {
-            if (rebases >= 16777215u) {
+            if (rebases >= 16777216u) {
                 return perturb_glitch(rebases);
             }
             let minimum_exponent = -2147483647i - 1i;

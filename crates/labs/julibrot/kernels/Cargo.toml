@@ -3,10 +3,6 @@ name = "ember-julibrot-kernels"
 edition.workspace = true
 version.workspace = true
 
-[features]
-default = []
-math-oracles = []
-
 [dependencies]
 bytemuck.workspace = true
 ember-julibrot-math = { path = "../math" }

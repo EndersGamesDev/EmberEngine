@@ -242,7 +242,6 @@ mod tests {
         assert_eq!(result, Err(KernelError::InvalidEscapeParams));
     }
 
-    #[cfg(feature = "math-oracles")]
     #[test]
     fn deterministic_points_match_the_math_oracle() {
         for point in [

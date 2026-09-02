@@ -319,44 +319,55 @@ impl JulibrotKernels {
         reference: ReferenceOrbitInput<'_>,
         requested_max_iter: u32,
     ) -> Result<(), KernelError> {
-        if reference.length == 0
-            || reference.length != reference.span.logical_len
-            || reference.length > requested_max_iter
+        accept_reference_transition(
+            &mut self.latest_reference.borrow_mut(),
+            reference,
+            requested_max_iter,
+        )
+    }
+}
+
+fn accept_reference_transition(
+    latest: &mut Option<AcceptedReference>,
+    reference: ReferenceOrbitInput<'_>,
+    requested_max_iter: u32,
+) -> Result<(), KernelError> {
+    if reference.length == 0
+        || reference.length != reference.span.logical_len
+        || reference.length > requested_max_iter
+    {
+        return Err(KernelError::ReferenceLengthMismatch);
+    }
+    if reference.precision_bits == 0 {
+        return Err(KernelError::ReferencePrecisionMismatch);
+    }
+    if let Some(accepted) = latest.as_ref() {
+        if reference.generation < accepted.generation
+            || (reference.generation == accepted.generation && reference.span != &accepted.span)
         {
+            return Err(KernelError::StaleReference);
+        }
+        if reference.generation == accepted.generation && reference.length != accepted.length {
             return Err(KernelError::ReferenceLengthMismatch);
         }
-        if reference.precision_bits == 0 {
+        if reference.generation == accepted.generation
+            && reference.precision_bits != accepted.precision_bits
+        {
             return Err(KernelError::ReferencePrecisionMismatch);
         }
-        let mut latest = self.latest_reference.borrow_mut();
-        if let Some(accepted) = latest.as_ref() {
-            if reference.generation < accepted.generation
-                || (reference.generation == accepted.generation && reference.span != &accepted.span)
-            {
-                return Err(KernelError::StaleReference);
-            }
-            if reference.generation == accepted.generation && reference.length != accepted.length {
-                return Err(KernelError::ReferenceLengthMismatch);
-            }
-            if reference.generation == accepted.generation
-                && reference.precision_bits != accepted.precision_bits
-            {
-                return Err(KernelError::ReferencePrecisionMismatch);
-            }
-        }
-        if latest
-            .as_ref()
-            .is_none_or(|accepted| reference.generation > accepted.generation)
-        {
-            *latest = Some(AcceptedReference {
-                span: reference.span.clone(),
-                generation: reference.generation,
-                length: reference.length,
-                precision_bits: reference.precision_bits,
-            });
-        }
-        Ok(())
     }
+    if latest
+        .as_ref()
+        .is_none_or(|accepted| reference.generation > accepted.generation)
+    {
+        *latest = Some(AcceptedReference {
+            span: reference.span.clone(),
+            generation: reference.generation,
+            length: reference.length,
+            precision_bits: reference.precision_bits,
+        });
+    }
+    Ok(())
 }
 
 fn ensure_requested_params(plan: &RefinementPlan, params: EscapeParams) -> Result<(), KernelError> {
@@ -451,4 +462,42 @@ const fn publish_level(grid: &mut EscapeGrid, extent: GridExtent, level: Refinem
     grid.width = extent.width;
     grid.height = extent.height;
     grid.level = level;
+}
+
+#[cfg(test)]
+mod tests {
+    use ember_lab_heap::SpanArena;
+
+    use super::{accept_reference_transition, AcceptedReference};
+    use crate::{KernelError, ReferenceOrbitInput};
+
+    #[test]
+    fn newer_reference_cancels_every_older_or_conflicting_identity() {
+        let mut arena = SpanArena::new(8, 2, 8, 256, 8).expect("fixture arena");
+        let older = arena.allocate_span(4, 2).expect("older orbit span");
+        let newer = arena.allocate_span(4, 2).expect("newer orbit span");
+        let input = |span, generation, precision_bits| ReferenceOrbitInput {
+            span,
+            generation,
+            length: 4,
+            precision_bits,
+        };
+        let mut accepted: Option<AcceptedReference> = None;
+        accept_reference_transition(&mut accepted, input(&older, 7, 192), 8)
+            .expect("first generation is accepted");
+        accept_reference_transition(&mut accepted, input(&newer, 8, 224), 8)
+            .expect("newer generation replaces it");
+        assert_eq!(
+            accept_reference_transition(&mut accepted, input(&older, 7, 192), 8),
+            Err(KernelError::StaleReference)
+        );
+        assert_eq!(
+            accept_reference_transition(&mut accepted, input(&older, 8, 224), 8),
+            Err(KernelError::StaleReference)
+        );
+        assert_eq!(
+            accept_reference_transition(&mut accepted, input(&newer, 8, 192), 8),
+            Err(KernelError::ReferencePrecisionMismatch)
+        );
+    }
 }
