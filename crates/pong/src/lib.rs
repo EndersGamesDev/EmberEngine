@@ -53,6 +53,7 @@ fn build_scene(p: &SceneParams) -> Frame {
     let mut frame = Frame {
         camera,
         instances: Vec::with_capacity(32),
+        fog: ember_engine::Fog::default(),
     };
     let inst = |frame: &mut Frame, pos: Vec3, scale: Vec3, color: Vec3| {
         frame.instances.push(Instance::new(pos, scale, color));

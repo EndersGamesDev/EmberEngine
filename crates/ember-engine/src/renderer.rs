@@ -200,11 +200,58 @@ impl Camera {
     }
 }
 
+/// Distance fog of the scene pass: the lit colour is mixed toward `color`
+/// by `1 - exp(-view_depth * density)`.
+///
+/// The default is the tuning the shader carried as constants before fog
+/// became per-frame, so a game that never sets it renders exactly as it
+/// did. The mix happens after the ACES tonemap, so `color` is post-tonemap
+/// linear light: the horizon the picture actually shows, not a scene
+/// radiance that the curve would then compress.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Fog {
+    pub color: [f32; 3],
+    pub density: f32,
+}
+
+impl Default for Fog {
+    fn default() -> Self {
+        Self {
+            color: [0.012, 0.020, 0.045],
+            density: 0.005,
+        }
+    }
+}
+
 /// Everything the game wants drawn this frame.
 #[derive(Default)]
 pub struct Frame {
     pub camera: Camera,
     pub instances: Vec<Instance>,
+    /// Per-frame fog; `Fog::default()` is the pre-v13 look.
+    pub fog: Fog,
+}
+
+/// Scene-pass uniform (group 0, binding 0). Mirrors `SceneUniform` in
+/// `shader.wgsl`: WGSL uniform layout wants a 16-byte-multiple struct and
+/// a 16-byte-aligned `vec3`, so fog colour and density share one `vec4`.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct SceneUniform {
+    view_proj: [[f32; 4]; 4],
+    /// `Fog::color` in xyz, `Fog::density` in w.
+    fog: [f32; 4],
+}
+
+impl SceneUniform {
+    const SIZE: u64 = std::mem::size_of::<Self>() as u64;
+
+    const fn new(view_proj: Mat4, fog: Fog) -> Self {
+        Self {
+            view_proj: view_proj.to_cols_array_2d(),
+            fog: [fog.color[0], fog.color[1], fog.color[2], fog.density],
+        }
+    }
 }
 
 #[repr(C)]
@@ -255,8 +302,8 @@ pub struct Renderer {
     scene: SceneTargets,
     scene_scale: f32,
     scene_pipeline: wgpu::RenderPipeline,
-    camera_buf: wgpu::Buffer,
-    camera_bind: wgpu::BindGroup,
+    scene_uniform_buf: wgpu::Buffer,
+    scene_uniform_bind: wgpu::BindGroup,
     /// Per mesh id (0 = built-in cube): buffer, count, texture bind group.
     meshes: Vec<MeshEntry>,
     instance_buf: wgpu::Buffer,
@@ -407,12 +454,16 @@ impl Renderer {
                 },
             ],
         });
+        // Trilinear: every mesh texture is uploaded with its full mip chain
+        // (see `mip_chain`), so minification blends between levels instead
+        // of skipping texels and shimmering at distance.
         let mesh_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("mesh sampler"),
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::Repeat,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
         let white = TextureData {
@@ -440,6 +491,10 @@ impl Renderer {
         }
 
         let make_bind = |data: &TextureData, label: &str| -> wgpu::BindGroup {
+            // The whole chain is uploaded, not just level 0: wgpu's GL
+            // backend (the WebGL2 fallback) allocates storage for every
+            // declared level and samples garbage from any it never received.
+            let (mip_level_count, levels) = mip_chain(data);
             let tex = device.create_texture_with_data(
                 &queue,
                 &wgpu::TextureDescriptor {
@@ -449,7 +504,7 @@ impl Renderer {
                         height: data.height,
                         depth_or_array_layers: 1,
                     },
-                    mip_level_count: 1,
+                    mip_level_count,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
                     format: wgpu::TextureFormat::Rgba8UnormSrgb,
@@ -457,7 +512,7 @@ impl Renderer {
                     view_formats: &[],
                 },
                 wgpu::util::TextureDataOrder::LayerMajor,
-                &data.rgba8,
+                &levels,
             );
             let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
             device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -514,38 +569,41 @@ impl Renderer {
             });
         }
 
-        let camera_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("camera uniform"),
-            size: 64,
+        let scene_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("scene uniform"),
+            size: SceneUniform::SIZE,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("camera layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let camera_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("camera bind"),
-            layout: &camera_layout,
+        let scene_uniform_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("scene uniform layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    // The vertex stage reads the camera, the fragment stage
+                    // reads the fog.
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+        let scene_uniform_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("scene uniform bind"),
+            layout: &scene_uniform_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: camera_buf.as_entire_binding(),
+                resource: scene_uniform_buf.as_entire_binding(),
             }],
         });
 
         let scene_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("scene pipeline layout"),
-                bind_group_layouts: &[&camera_layout, &mesh_tex_layout],
+                bind_group_layouts: &[&scene_uniform_layout, &mesh_tex_layout],
                 push_constant_ranges: &[],
             });
         let scene_pipeline = build_scene_pipeline(&device, &scene_pipeline_layout, &shader);
@@ -612,8 +670,8 @@ impl Renderer {
             scene,
             scene_scale,
             scene_pipeline,
-            camera_buf,
-            camera_bind,
+            scene_uniform_buf,
+            scene_uniform_bind,
             meshes,
             instance_buf,
             instance_cap,
@@ -737,9 +795,9 @@ impl Renderer {
                 self.last_scene_at = std::time::Instant::now();
             }
             let aspect = self.scene.width as f32 / self.scene.height.max(1) as f32;
-            let vp = frame.camera.view_proj(aspect);
+            let uniform = SceneUniform::new(frame.camera.view_proj(aspect), frame.fog);
             self.queue
-                .write_buffer(&self.camera_buf, 0, bytemuck::cast_slice(vp.as_ref()));
+                .write_buffer(&self.scene_uniform_buf, 0, bytemuck::bytes_of(&uniform));
 
             // Bucket instances by mesh so each mesh draws with one instanced
             // call over a contiguous range of the shared instance buffer.
@@ -811,7 +869,7 @@ impl Renderer {
                 });
                 if !raws.is_empty() {
                     pass.set_pipeline(&self.scene_pipeline);
-                    pass.set_bind_group(0, &self.camera_bind, &[]);
+                    pass.set_bind_group(0, &self.scene_uniform_bind, &[]);
                     pass.set_vertex_buffer(1, self.instance_buf.slice(..));
                     for (mi, range) in &ranges {
                         let mesh = &self.meshes[*mi];
@@ -1146,6 +1204,69 @@ fn load_png_rgba8(path: &str) -> Result<TextureData, String> {
     })
 }
 
+/// The full mip chain of an RGBA8 texture, tightly packed level after
+/// level, plus its length: exactly what `create_texture_with_data` consumes
+/// for a single-layer 2D texture.
+///
+/// Level sizes follow WebGPU's rule (`max(1, dim >> level)`, chain length
+/// `32 - leading_zeros(max(w, h))`), so a 1x1 texture stays one level and
+/// an odd dimension drops its last row or column rather than clamping the
+/// size up. Each level is the 2x2 box average of the one above, computed in
+/// 8-bit space without an sRGB round trip: for the albedo pictures this
+/// engine draws the error is well under a code and not worth the decode.
+///
+/// # Panics
+///
+/// Panics when `tex.rgba8` is not `width * height * 4` bytes; the upload
+/// would have rejected it anyway, this just names the mesh's problem.
+fn mip_chain(tex: &TextureData) -> (u32, Vec<u8>) {
+    let expected = (tex.width * tex.height * 4) as usize;
+    assert_eq!(
+        tex.rgba8.len(),
+        expected,
+        "texture {}x{} needs {} RGBA8 bytes, got {}",
+        tex.width,
+        tex.height,
+        expected,
+        tex.rgba8.len()
+    );
+    let levels = 32 - tex.width.max(tex.height).leading_zeros();
+    // The chain is bounded by 4/3 of level 0 (geometric series of quarters).
+    let mut bytes = Vec::with_capacity(tex.rgba8.len() / 3 * 4 + 64);
+    bytes.extend_from_slice(&tex.rgba8);
+    let (mut w, mut h) = (tex.width, tex.height);
+    let mut cur: std::borrow::Cow<'_, [u8]> = std::borrow::Cow::Borrowed(&tex.rgba8);
+    for _ in 1..levels {
+        let (nw, nh, next) = downsample_rgba8(&cur, w, h);
+        bytes.extend_from_slice(&next);
+        (w, h) = (nw, nh);
+        cur = std::borrow::Cow::Owned(next);
+    }
+    (levels, bytes)
+}
+
+/// One mip step: the 2x2 box average of `src` (`sw` x `sh` RGBA8), rounded
+/// to nearest. A dimension already at 1 samples the same texel twice so the
+/// average stays exact; the last row or column of an odd dimension is
+/// dropped, matching the `>> 1` size rule the GPU applies.
+fn downsample_rgba8(src: &[u8], sw: u32, sh: u32) -> (u32, u32, Vec<u8>) {
+    let dw = (sw >> 1).max(1);
+    let dh = (sh >> 1).max(1);
+    let texel = |x: u32, y: u32, c: u32| u32::from(src[((y * sw + x) * 4 + c) as usize]);
+    let mut out = Vec::with_capacity((dw * dh * 4) as usize);
+    for y in 0..dh {
+        let (y0, y1) = (2 * y, (2 * y + 1).min(sh - 1));
+        for x in 0..dw {
+            let (x0, x1) = (2 * x, (2 * x + 1).min(sw - 1));
+            for c in 0..4 {
+                let sum = texel(x0, y0, c) + texel(x1, y0, c) + texel(x0, y1, c) + texel(x1, y1, c);
+                out.push(((sum + 2) / 4) as u8);
+            }
+        }
+    }
+    (dw, dh, out)
+}
+
 fn create_instance_buf(device: &wgpu::Device, cap: usize) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("instances"),
@@ -1188,4 +1309,112 @@ fn cube_vertices() -> Vec<Vertex> {
         }
     }
     verts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tex(width: u32, height: u32, rgba8: Vec<u8>) -> TextureData {
+        TextureData {
+            width,
+            height,
+            rgba8,
+        }
+    }
+
+    /// Byte count `create_texture_with_data` will read for a single-layer
+    /// RGBA8 texture with `levels` mips, computed independently of
+    /// `mip_chain`'s own loop.
+    fn upload_bytes(w: u32, h: u32, levels: u32) -> usize {
+        (0..levels)
+            .map(|l| ((w >> l).max(1) * (h >> l).max(1) * 4) as usize)
+            .sum()
+    }
+
+    #[test]
+    fn shared_white_pixel_stays_one_level() {
+        let (levels, bytes) = mip_chain(&tex(1, 1, vec![255; 4]));
+        assert_eq!(levels, 1);
+        assert_eq!(bytes, vec![255; 4]);
+    }
+
+    #[test]
+    fn chain_length_and_size_follow_the_webgpu_rule() {
+        for (w, h, want_levels) in [
+            (2, 2, 2),
+            (5, 3, 3),
+            (300, 7, 9),
+            (1024, 1024, 11),
+            (1, 8, 4),
+        ] {
+            let (levels, bytes) = mip_chain(&tex(w, h, vec![7; (w * h * 4) as usize]));
+            assert_eq!(levels, want_levels, "{w}x{h}");
+            assert_eq!(bytes.len(), upload_bytes(w, h, levels), "{w}x{h}");
+            assert!(
+                bytes.ends_with(&[7, 7, 7, 7]),
+                "last level is 1x1 of the flat colour"
+            );
+        }
+    }
+
+    #[test]
+    fn level_one_is_the_rounded_box_average() {
+        #[rustfmt::skip]
+        let px = vec![
+            0, 10, 20, 255,   255, 30, 40, 255,
+            100, 50, 60, 255, 200, 70, 80, 255,
+        ];
+        let (levels, bytes) = mip_chain(&tex(2, 2, px.clone()));
+        assert_eq!(levels, 2);
+        assert_eq!(&bytes[..16], &px[..], "level 0 is untouched");
+        // (0 + 255 + 100 + 200 + 2) / 4 = 139; (10+30+50+70+2)/4 = 40; (20+40+60+80+2)/4 = 50.
+        assert_eq!(&bytes[16..], &[139, 40, 50, 255]);
+    }
+
+    #[test]
+    fn a_dimension_already_at_one_samples_its_texel_twice() {
+        // 1 wide, 2 tall: the second column clamps onto the first, so the
+        // result is the exact mean of the two rows.
+        let (levels, bytes) = mip_chain(&tex(1, 2, vec![10, 20, 30, 255, 30, 40, 50, 255]));
+        assert_eq!(levels, 2);
+        assert_eq!(&bytes[8..], &[20, 30, 40, 255]);
+    }
+
+    #[test]
+    fn odd_dimensions_drop_the_last_row_and_column() {
+        // 3x1 with a bright third texel: level 1 is 1x1 and must ignore it.
+        let (levels, bytes) = mip_chain(&tex(
+            3,
+            1,
+            vec![0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255, 255],
+        ));
+        assert_eq!(levels, 2);
+        assert_eq!(&bytes[12..], &[0, 0, 0, 255]);
+    }
+
+    #[test]
+    fn fog_default_is_the_old_shader_constants() {
+        let f = Fog::default();
+        assert_eq!(f.color, [0.012, 0.020, 0.045]);
+        assert_eq!(f.density, 0.005);
+        assert_eq!(Frame::default().fog, f);
+    }
+
+    #[test]
+    fn scene_uniform_packs_fog_into_the_trailing_vec4() {
+        assert_eq!(SceneUniform::SIZE, 80, "mat4 + vec4, a multiple of 16");
+        let u = SceneUniform::new(
+            Mat4::IDENTITY,
+            Fog {
+                color: [0.1, 0.2, 0.3],
+                density: 0.4,
+            },
+        );
+        assert_eq!(u.fog, [0.1, 0.2, 0.3, 0.4]);
+        let bytes = bytemuck::bytes_of(&u);
+        assert_eq!(bytes.len(), 80);
+        assert_eq!(&bytes[64..68], &0.1f32.to_le_bytes());
+        assert_eq!(&bytes[76..80], &0.4f32.to_le_bytes());
+    }
 }

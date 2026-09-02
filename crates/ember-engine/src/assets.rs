@@ -66,6 +66,77 @@ fn image_to_rgba8(img: &gltf::image::Data) -> Option<TextureData> {
     })
 }
 
+/// Recompute per-face normals from the triangles themselves.
+///
+/// The renderer's meshes are de-indexed flat triangle lists, so each run of
+/// three vertices is one face and gets that face's geometric normal. Faceted
+/// rather than smooth, which suits hard-surface stone and reads better than
+/// smoothing across a decimated mesh's creases.
+///
+/// Opt-in, not applied by `load_glb`: its +Y default is shared with the
+/// arena's character parts, which are POSITION-only too, and "improving" it
+/// there would silently restyle a live game. A generated prop (`Hunyuan3D`
+/// shape output: no `NORMAL`, no `TEXCOORD_0`) asks for this and for
+/// `planar_uvs` explicitly.
+#[must_use]
+pub fn face_normals(mut mesh: MeshData) -> MeshData {
+    for tri in mesh.vertices.chunks_mut(3) {
+        if tri.len() < 3 {
+            break;
+        }
+        let a = Vec3::from(tri[0].pos);
+        let b = Vec3::from(tri[1].pos);
+        let c = Vec3::from(tri[2].pos);
+        // Degenerate triangles survive decimation; normalize_or_zero would
+        // leave them black, so fall back to +Y for those.
+        let n = (b - a).cross(c - a).normalize_or_zero();
+        let n = if n == Vec3::ZERO { Vec3::Y } else { n };
+        for v in tri {
+            v.normal = n.to_array();
+        }
+    }
+    mesh
+}
+
+/// Project UVs from position, per face, on whichever axis the face most
+/// nearly faces.
+///
+/// A cheap triplanar: it cannot match an artist's unwrap, but it turns a
+/// tiling material picture into something that follows the geometry instead
+/// of smearing one texel across the whole prop. Reads the normals, so run
+/// `face_normals` first on a mesh whose loader defaulted them.
+///
+/// `tiles_per_unit` is in mesh units — generated props are normalised to
+/// roughly two units on their longest axis, so ~2.0 gives a few courses of
+/// stone across a wall.
+#[must_use]
+pub fn planar_uvs(mut mesh: MeshData, tiles_per_unit: f32) -> MeshData {
+    for tri in mesh.vertices.chunks_mut(3) {
+        if tri.len() < 3 {
+            break;
+        }
+        let n = Vec3::from(tri[0].normal).abs();
+        // Dominant axis picks the projection plane.
+        let axis = if n.x >= n.y && n.x >= n.z {
+            0
+        } else if n.y >= n.z {
+            1
+        } else {
+            2
+        };
+        for v in tri {
+            let p = Vec3::from(v.pos);
+            let (u, w) = match axis {
+                0 => (p.z, p.y),
+                1 => (p.x, p.z),
+                _ => (p.x, p.y),
+            };
+            v.uv = [u * tiles_per_unit, w * tiles_per_unit];
+        }
+    }
+    mesh
+}
+
 fn collect(
     node: &gltf::Node<'_>,
     parent: Mat4,

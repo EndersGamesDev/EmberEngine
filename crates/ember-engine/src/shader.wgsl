@@ -1,7 +1,10 @@
-struct CameraUniform {
+// Mirrors `SceneUniform` in renderer.rs: fog colour in xyz, density in w,
+// packed into one vec4 so the struct is a 16-byte multiple.
+struct SceneUniform {
     view_proj: mat4x4<f32>,
+    fog: vec4<f32>,
 };
-@group(0) @binding(0) var<uniform> camera: CameraUniform;
+@group(0) @binding(0) var<uniform> scene: SceneUniform;
 
 @group(1) @binding(0) var mesh_tex: texture_2d<f32>;
 @group(1) @binding(1) var mesh_samp: sampler;
@@ -36,7 +39,7 @@ fn vs_main(in: VsIn) -> VsOut {
     let scaled = in.pos * in.i_scale;
     let world = quat_rotate(in.i_rot, scaled) + in.i_pos;
     var out: VsOut;
-    out.clip = camera.view_proj * vec4<f32>(world, 1.0);
+    out.clip = scene.view_proj * vec4<f32>(world, 1.0);
     // Rotate the normal like the position; sign() undoes mirroring from
     // negative scale axes (magnitude of a nonuniform scale stays ignored,
     // as before).
@@ -68,10 +71,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let fill_intensity = 0.55;
     let sheen_strength = 0.18;   // stylized top sheen (Blinn half-vector vs up)
     let sheen_power = 8.0;
-    // Fog tuning: view-depth based, fades to a dark horizon. Light enough
-    // that the skyline beyond the arena wall still reads.
-    let fog_density = 0.005;
-    let fog_color = vec3<f32>(0.012, 0.020, 0.045);
+    // Fog: view-depth based, per frame (`Frame::fog`). The default is a
+    // dark horizon light enough that the skyline beyond the arena wall
+    // still reads; a game sets its own haze by filling in `Fog`.
+    let fog_density = scene.fog.w;
+    let fog_color = scene.fog.xyz;
 
     // Untextured meshes sample the shared 1x1 white pixel, so albedo
     // reduces to the instance color exactly as before.

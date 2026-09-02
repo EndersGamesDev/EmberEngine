@@ -456,6 +456,7 @@ impl Game {
         let mut frame = Frame {
             camera,
             instances: Vec::new(),
+            fog: ember_engine::Fog::default(),
         };
         let half = self.world.arena_half;
         let span = half * 2.0 + 2.0;

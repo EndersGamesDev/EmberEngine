@@ -636,6 +636,7 @@ impl EmberGame for Editor {
         Frame {
             camera: self.cam.camera(),
             instances,
+            fog: ember_engine::Fog::default(),
         }
     }
 }

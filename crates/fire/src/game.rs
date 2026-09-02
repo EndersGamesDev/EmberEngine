@@ -441,6 +441,7 @@ pub fn scene(race: &Race, ids: &Meshes, me: usize, camera: Camera) -> Frame {
     let mut frame = Frame {
         camera,
         instances: Vec::with_capacity(64),
+        fog: ember_engine::Fog::default(),
     };
 
     // The track meshes are already in world space, so each is one

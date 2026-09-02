@@ -7,76 +7,18 @@
 //! which loads, but renders as a flat silhouette with no shading at all and
 //! samples a single texel of any texture you attach.
 //!
-//! Both gaps are filled here rather than in the engine. `load_glb`'s defaults
-//! are shared with the arena's character parts, which are POSITION-only too;
-//! "improving" them there would silently restyle a live game.
+//! Both gaps are filled by opt-in passes rather than inside `load_glb`: its
+//! defaults are shared with the arena's character parts, which are
+//! POSITION-only too, and "improving" them there would silently restyle a
+//! live game. The two passes started life in this file; when the arena's
+//! generated props (v13) became their second consumer they moved to
+//! `ember_engine::assets`, and this module re-exports them so nothing here
+//! changed in behaviour.
 
 use ember_engine::glam::Vec3;
 use ember_engine::{MeshData, TextureData};
 
-/// Recompute per-face normals from the triangles themselves.
-///
-/// The renderer's meshes are de-indexed flat triangle lists, so each run of
-/// three vertices is one face and gets that face's geometric normal. Faceted
-/// rather than smooth, which suits hard-surface castle stone and reads better
-/// than smoothing across a decimated mesh's creases.
-#[must_use]
-pub fn face_normals(mut mesh: MeshData) -> MeshData {
-    for tri in mesh.vertices.chunks_mut(3) {
-        if tri.len() < 3 {
-            break;
-        }
-        let a = Vec3::from(tri[0].pos);
-        let b = Vec3::from(tri[1].pos);
-        let c = Vec3::from(tri[2].pos);
-        // Degenerate triangles survive decimation; normalize_or_zero would
-        // leave them black, so fall back to +Y for those.
-        let n = (b - a).cross(c - a).normalize_or_zero();
-        let n = if n == Vec3::ZERO { Vec3::Y } else { n };
-        for v in tri {
-            v.normal = n.to_array();
-        }
-    }
-    mesh
-}
-
-/// Project UVs from world position, per face, on whichever axis the face most
-/// nearly faces.
-///
-/// A cheap triplanar: it cannot match an artist's unwrap, but it turns a tiling
-/// stone texture into something that follows the geometry instead of smearing
-/// one texel across the whole prop.
-///
-/// `tiles_per_unit` is in mesh units — the props are normalised to roughly
-/// two units on their longest axis, so ~2.0 gives a few courses of stone
-/// across a wall.
-#[must_use]
-pub fn planar_uvs(mut mesh: MeshData, tiles_per_unit: f32) -> MeshData {
-    for tri in mesh.vertices.chunks_mut(3) {
-        if tri.len() < 3 {
-            break;
-        }
-        let n = Vec3::from(tri[0].normal).abs();
-        // Dominant axis picks the projection plane.
-        let axis = if n.x >= n.y && n.x >= n.z {
-            0
-        } else if n.y >= n.z {
-            1
-        } else {
-            2
-        };
-        for v in tri {
-            let p = Vec3::from(v.pos);
-            let (u, w) = match axis {
-                0 => (p.z, p.y),
-                1 => (p.x, p.z),
-                _ => (p.x, p.y),
-            };
-            v.uv = [u * tiles_per_unit, w * tiles_per_unit];
-        }
-    }
-    mesh
-}
+pub use ember_engine::assets::{face_normals, planar_uvs};
 
 /// Vertical offset needed to stand a prop on the ground, in mesh units.
 /// The generator centres its output on the origin, so half of every castle

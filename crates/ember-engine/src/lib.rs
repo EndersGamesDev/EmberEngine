@@ -24,7 +24,7 @@ mod input;
 pub use app::init_diagnostics;
 pub use app::{EngineConfig, run};
 pub use input::InputState;
-pub use renderer::{Camera, Frame, Instance, MeshData, MeshVertex, TextureData};
+pub use renderer::{Camera, Fog, Frame, Instance, MeshData, MeshVertex, TextureData};
 
 // Re-exported so game code doesn't need its own winit/glam dependency for
 // the common cases.

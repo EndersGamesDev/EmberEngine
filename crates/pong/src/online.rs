@@ -1286,6 +1286,7 @@ impl EmberGame for ShooterGame {
         let mut frame = Frame {
             camera,
             instances: Vec::with_capacity(96),
+            fog: ember_engine::Fog::default(),
         };
         let half = self.arena_half;
         let inst = |frame: &mut Frame, p: Vec3, s: Vec3, c: Vec3| {
