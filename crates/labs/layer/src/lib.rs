@@ -80,11 +80,11 @@ pub fn render_layer_frame(time_seconds: f32) -> Result<u64, JsValue> {
 /// Returns a JavaScript error when initialization is absent or the step is not offered.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-pub async fn set_layer_step(m: u32) -> Result<String, JsValue> {
+pub async fn set_layer_step(step: u32) -> Result<String, JsValue> {
     let mut demo = DEMO
         .with_borrow_mut(Option::take)
         .ok_or_else(|| JsValue::from_str("layer is not initialized"))?;
-    let result = demo.set_step(m).await;
+    let result = demo.set_step(step).await;
     DEMO.with_borrow_mut(|slot| *slot = Some(demo));
     let report = result.map_err(|error| JsValue::from_str(&error.to_string()))?;
     serde_json::to_string(&report)

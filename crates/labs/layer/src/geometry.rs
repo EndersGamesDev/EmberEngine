@@ -1,7 +1,7 @@
 //! Exact construction and reference math for the dodecahedral prism.
 
-/// Required odd lattice steps, including the honest empty scene.
-pub const LATTICE_STEPS: [u32; 12] = [0, 1, 3, 5, 7, 9, 13, 17, 21, 27, 35, 45];
+/// Former uniform-axis ladder ceiling that the mixed-radix ladder crosses.
+pub const LATTICE_AXIS_TOP: u32 = 45;
 
 /// Fixed center-to-center spacing of the five-dimensional lattice.
 pub const LATTICE_SPACING: f64 = 8.0;
@@ -44,32 +44,55 @@ pub struct EdgePose<T> {
     pub hue: T,
 }
 
-/// Number of copies at one centered five-dimensional lattice step.
+/// Builds the empty rung, the unit lattice, then grows one axis by two round-robin.
+///
+/// The final rung is the first one beyond the former `(45,45,45,45,45)` ceiling.
 #[must_use]
-pub fn lattice_copy_count(m: u32) -> u64 {
-    if m == 0 {
+pub fn lattice_steps() -> Vec<[u32; 5]> {
+    let mut steps = Vec::with_capacity(113);
+    steps.push([0; 5]);
+    let mut axes = [1_u32; 5];
+    steps.push(axes);
+    let mut axis = 0;
+    while axes != [LATTICE_AXIS_TOP; 5] {
+        axes[axis] = axes[axis].saturating_add(2);
+        steps.push(axes);
+        axis = (axis + 1) % axes.len();
+    }
+    axes[0] = axes[0].saturating_add(2);
+    steps.push(axes);
+    steps
+}
+
+/// Number of copies at one centered mixed-radix five-dimensional lattice step.
+#[must_use]
+pub fn lattice_copy_count(axes: [u32; 5]) -> u64 {
+    if axes.contains(&0) {
         0
     } else {
-        u64::from(m).saturating_pow(5)
+        axes
+            .into_iter()
+            .map(u64::from)
+            .fold(1_u64, u64::saturating_mul)
     }
 }
 
 /// Total submitted edges requested by one lattice step.
 #[must_use]
-pub fn lattice_edge_count(m: u32) -> u64 {
-    lattice_copy_count(m).saturating_mul(EDGES_PER_COPY)
+pub fn lattice_edge_count(axes: [u32; 5]) -> u64 {
+    lattice_copy_count(axes).saturating_mul(EDGES_PER_COPY)
 }
 
-/// Decodes a linear copy index into centered five-dimensional lattice coordinates.
+/// Decodes a linear copy index into centered mixed-radix lattice coordinates.
 #[must_use]
-pub fn lattice_coordinate(mut copy: u64, m: u32) -> Option<[i32; 5]> {
-    if m == 0 || copy >= lattice_copy_count(m) {
+pub fn lattice_coordinate(mut copy: u64, axes: [u32; 5]) -> Option<[i32; 5]> {
+    if copy >= lattice_copy_count(axes) {
         return None;
     }
-    let radix = u64::from(m);
-    let half = i32::try_from(m / 2).ok()?;
     let mut coordinate = [0_i32; 5];
-    for component in &mut coordinate {
+    for (component, count) in coordinate.iter_mut().zip(axes) {
+        let radix = u64::from(count);
+        let half = i32::try_from(count / 2).ok()?;
         *component = i32::try_from(copy % radix).ok()? - half;
         copy /= radix;
     }
@@ -78,12 +101,13 @@ pub fn lattice_coordinate(mut copy: u64, m: u32) -> Option<[i32; 5]> {
 
 /// Symmetric post-rotation fifth-axis hue range enclosing a lattice step.
 #[must_use]
-pub fn lattice_fifth_range(object: &Prism, m: u32) -> f64 {
-    let center_extent = f64::from(m.saturating_sub(1) / 2) * LATTICE_SPACING;
+pub fn lattice_fifth_range(object: &Prism, axes: [u32; 5]) -> f64 {
+    let third_extent = f64::from(axes[2].saturating_sub(1) / 2) * LATTICE_SPACING;
+    let fifth_extent = f64::from(axes[4].saturating_sub(1) / 2) * LATTICE_SPACING;
     object
         .vertices
         .iter()
-        .map(|point| (point[2].abs() + center_extent).hypot(point[4].abs() + center_extent))
+        .map(|point| (point[2].abs() + third_extent).hypot(point[4].abs() + fifth_extent))
         .fold(1.0_f64, f64::max)
 }
 
@@ -518,38 +542,52 @@ mod tests {
     }
 
     #[test]
-    fn lattice_steps_derive_0_3000_729000_9375000_and_1113879000_edges() {
+    fn mixed_radix_ladder_derives_0_3000_9000_27000_through_first_past_45_fifth() {
+        let steps = lattice_steps();
         let expected = [
             0_u64,
             3_000,
+            9_000,
+            27_000,
+            81_000,
+            243_000,
             729_000,
+            1_215_000,
+            2_025_000,
+            3_375_000,
+            5_625_000,
             9_375_000,
-            50_421_000,
-            177_147_000,
-            1_113_879_000,
-            4_259_571_000,
-            12_252_303_000,
-            43_046_721_000,
-            157_565_625_000,
-            553_584_375_000,
         ];
-        assert_eq!(LATTICE_STEPS.map(lattice_edge_count), expected);
-        assert_eq!(lattice_coordinate(0, 3), Some([-1; 5]));
-        assert_eq!(lattice_coordinate(121, 3), Some([0; 5]));
-        assert_eq!(lattice_coordinate(242, 3), Some([1; 5]));
-        assert_eq!(lattice_coordinate(243, 3), None);
-        assert_eq!(lattice_coordinate(0, 0), None);
+        let actual: Vec<_> = steps
+            .iter()
+            .take(expected.len())
+            .copied()
+            .map(lattice_edge_count)
+            .collect();
+        assert_eq!(actual, expected);
+        assert_eq!(steps.len(), 113);
+        assert_eq!(steps[111], [45; 5]);
+        assert_eq!(steps[112], [47, 45, 45, 45, 45]);
+        assert_eq!(lattice_coordinate(0, [3; 5]), Some([-1; 5]));
+        assert_eq!(lattice_coordinate(121, [3; 5]), Some([0; 5]));
+        assert_eq!(lattice_coordinate(242, [3; 5]), Some([1; 5]));
+        assert_eq!(lattice_coordinate(243, [3; 5]), None);
+        assert_eq!(lattice_coordinate(0, [0; 5]), None);
+        assert_eq!(lattice_coordinate(0, [3, 1, 1, 1, 1]), Some([-1, 0, 0, 0, 0]));
+        assert_eq!(lattice_coordinate(1, [3, 1, 1, 1, 1]), Some([0; 5]));
+        assert_eq!(lattice_coordinate(2, [3, 1, 1, 1, 1]), Some([1, 0, 0, 0, 0]));
+        assert_eq!(lattice_coordinate(4, [3, 3, 1, 1, 1]), Some([0; 5]));
     }
 
     #[test]
     fn procedural_lattice_projection_matches_direct_base_plus_center_reference() {
         let object = prism();
-        for m in [1, 3, 5] {
-            let range = lattice_fifth_range(&object, m);
+        for axes in [[1; 5], [3; 5], [5; 5]] {
+            let range = lattice_fifth_range(&object, axes);
             assert!(range.is_finite() && range > 0.0);
-            let copies = lattice_copy_count(m);
+            let copies = lattice_copy_count(axes);
             for copy in [0, copies / 2, copies - 1] {
-                let coordinate = lattice_coordinate(copy, m).expect("copy is in range");
+                let coordinate = lattice_coordinate(copy, axes).expect("copy is in range");
                 let center = coordinate.map(|value| f64::from(value) * LATTICE_SPACING);
                 for vertex in [0, 599, 600, 1_199] {
                     let translated =

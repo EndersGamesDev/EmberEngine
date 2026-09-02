@@ -158,7 +158,8 @@ struct DemoFacts {
 
 #[derive(Clone, Serialize)]
 struct StepCapacity {
-    m: u32,
+    step: u32,
+    axes: [u32; 5],
     copies: u64,
     requested_edges: u64,
     output_side: u64,
@@ -170,9 +171,13 @@ struct StepCapacity {
 
 #[derive(Serialize)]
 pub(crate) struct StepReport {
-    requested_m: u32,
+    requested_step: u32,
+    requested_axes: [u32; 5],
     requested_edges: u64,
     delivered_edges: u64,
+    shown_step: u32,
+    shown_axes: [u32; 5],
+    shown_edges: u64,
     instances: u64,
     draw_calls: u32,
     compute_passes: u32,
@@ -184,7 +189,8 @@ pub(crate) struct StepReport {
 }
 
 struct StepResources {
-    m: u32,
+    step: u32,
+    axes: [u32; 5],
     edges: u32,
     fifth_range: f32,
     kernel: Kernel,
@@ -442,9 +448,9 @@ impl Demo {
             base_edge_grid: IndexSpace::Grid1D(3_000).rect(),
             pose_limit: pose_limit.clone(),
             steps: steps.clone(),
-            per_frame_cpu_to_gpu_bytes_when_delivered: 48,
+            per_frame_cpu_to_gpu_bytes_when_delivered: 64,
             hue_mapping: "clamp(midpoint post-rotation x5 / (2 * runtime symmetric lattice range) + 0.5, 0, 1)",
-            projection_validity: "per vertex: d5-x5 > 0.05 and d4-projected_x4 > 0.05; an edge with either invalid endpoint remains submitted/delivered but its box is clipped",
+            projection_validity: "per vertex: d5-x5 > 0.05 and d4-projected_x4 > 0.05; an edge with either invalid endpoint remains shown/submitted but its box is clipped",
             completion: "ordered submissions for rendering; 4-byte mapped-copy fence only for explicit complete(), texture mapping for read()",
             capabilities: compute.facts().clone(),
         };
@@ -470,15 +476,18 @@ impl Demo {
         ))
     }
 
-    pub(crate) async fn set_step(&mut self, m: u32) -> Result<StepReport, LayerError> {
+    pub(crate) async fn set_step(&mut self, step: u32) -> Result<StepReport, LayerError> {
         let capacity = self
             .steps
             .iter()
-            .find(|capacity| capacity.m == m)
+            .find(|capacity| capacity.step == step)
             .cloned()
-            .ok_or_else(|| LayerError::Resource(format!("lattice step m={m} is not offered")))?;
-        self.active = None;
-        if m == 0 || !capacity.arithmetically_deliverable {
+            .ok_or_else(|| LayerError::Resource(format!("lattice step {step} is not offered")))?;
+        if step == 0 {
+            self.active = None;
+            return Ok(self.step_report(&capacity, None));
+        }
+        if !capacity.arithmetically_deliverable {
             return Ok(self.step_report(&capacity, capacity.refusal.clone()));
         }
         match self.build_step(&capacity).await {
@@ -544,7 +553,7 @@ impl Demo {
                 inputs: &inputs,
                 outputs: &outputs,
                 uniform_type: "LatticeUniform",
-                uniform_size: 32,
+                uniform_size: 48,
             })
             .await?;
         let render_bind_group = create_render_bind_group(
@@ -554,7 +563,8 @@ impl Demo {
             &self.camera,
         )?;
         Ok(StepResources {
-            m: capacity.m,
+            step: capacity.step,
+            axes: capacity.axes,
             edges,
             fifth_range: capacity.fifth_range as f32,
             kernel,
@@ -564,21 +574,34 @@ impl Demo {
     }
 
     fn step_report(&self, capacity: &StepCapacity, refusal: Option<String>) -> StepReport {
-        let active = self
-            .active
-            .as_ref()
-            .filter(|resources| resources.m == capacity.m);
+        let delivered = refusal.is_none()
+            && (capacity.step == 0
+                || self
+                    .active
+                    .as_ref()
+                    .is_some_and(|resources| resources.step == capacity.step));
+        let shown = self.active.as_ref();
+        let requested_delivered = if delivered {
+            capacity.requested_edges
+        } else {
+            0
+        };
+        let shown_edges = shown.map_or(0, |resources| u64::from(resources.edges));
         StepReport {
-            requested_m: capacity.m,
+            requested_step: capacity.step,
+            requested_axes: capacity.axes,
             requested_edges: capacity.requested_edges,
-            delivered_edges: active.map_or(0, |resources| u64::from(resources.edges)),
-            instances: active.map_or(0, |resources| u64::from(resources.edges)),
-            draw_calls: u32::from(active.is_some()),
-            compute_passes: u32::from(active.is_some()),
-            per_frame_cpu_to_gpu_bytes: if active.is_some() { 48 } else { 0 },
-            output_grid: active.map(|resources| IndexSpace::Grid1D(resources.edges).rect()),
+            delivered_edges: requested_delivered,
+            shown_step: shown.map_or(0, |resources| resources.step),
+            shown_axes: shown.map_or([0; 5], |resources| resources.axes),
+            shown_edges,
+            instances: shown_edges,
+            draw_calls: u32::from(shown.is_some()),
+            compute_passes: u32::from(shown.is_some()),
+            per_frame_cpu_to_gpu_bytes: if shown.is_some() { 64 } else { 0 },
+            output_grid: shown.map(|resources| IndexSpace::Grid1D(resources.edges).rect()),
             output_bytes: capacity.output_bytes,
-            visible: "not counted without readback: projection-valid subset only; submitted/delivered includes every pole-discarded edge",
+            visible: "not counted without readback: projection-valid subset only; shown/submitted includes every pole-discarded edge",
             refusal,
         }
     }
@@ -613,7 +636,13 @@ impl Demo {
                     theta_two,
                     pole_five: 8.0,
                     pole_four: 8.0,
-                    lattice_m: active.m as f32,
+                    axis_counts: [
+                        active.axes[0] as f32,
+                        active.axes[1] as f32,
+                        active.axes[2] as f32,
+                        active.axes[3] as f32,
+                    ],
+                    axis_five: active.axes[4] as f32,
                     spacing: geometry::LATTICE_SPACING as f32,
                     fifth_range: active.fifth_range,
                     pole_epsilon: 0.05,
@@ -696,10 +725,11 @@ impl Demo {
 }
 
 fn step_capacities(object: &geometry::Prism, limit: &Grid1DLimit) -> Vec<StepCapacity> {
-    geometry::LATTICE_STEPS
+    geometry::lattice_steps()
         .into_iter()
-        .map(|m| {
-            let requested_edges = geometry::lattice_edge_count(m);
+        .enumerate()
+        .map(|(step, axes)| {
+            let requested_edges = geometry::lattice_edge_count(axes);
             let output_side = if requested_edges == 0 {
                 0
             } else {
@@ -727,13 +757,14 @@ fn step_capacities(object: &geometry::Prism, limit: &Grid1DLimit) -> Vec<StepCap
             }
             let refusal = (!reasons.is_empty()).then(|| reasons.join("; "));
             StepCapacity {
-                m,
-                copies: geometry::lattice_copy_count(m),
+                step: u32::try_from(step).expect("the finite lattice ladder fits u32"),
+                axes,
+                copies: geometry::lattice_copy_count(axes),
                 requested_edges,
                 output_side,
                 output_bytes,
-                fifth_range: geometry::lattice_fifth_range(object, m),
-                arithmetically_deliverable: m == 0 || refusal.is_none(),
+                fifth_range: geometry::lattice_fifth_range(object, axes),
+                arithmetically_deliverable: step == 0 || refusal.is_none(),
                 refusal,
             }
         })

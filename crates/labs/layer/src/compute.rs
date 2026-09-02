@@ -1370,12 +1370,26 @@ mod tests {
 
     #[test]
     fn lattice_kernel_parses_inside_the_accessor_only_dialect() {
+        assert_eq!(std::mem::size_of::<crate::kernels::LatticeUniform>(), 48);
+        let accessors = ["load_edge", "load_base_four", "load_base_fifth"];
         prescan(
             "lattice_edges",
             crate::kernels::LATTICE_EDGE_KERNEL,
-            &["load_edge", "load_base_four", "load_base_fifth"],
+            &accessors,
         )
         .expect("the procedural lattice body should satisfy the dialect pre-scan");
+        let module = parse_body(
+            "lattice_edges",
+            crate::kernels::LATTICE_EDGE_KERNEL,
+            &accessors,
+        )
+        .expect("the mixed-radix kernel should parse with generated accessor stubs");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("the mixed-radix kernel body should validate");
     }
 
     #[test]

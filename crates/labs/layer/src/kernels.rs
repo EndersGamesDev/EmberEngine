@@ -28,7 +28,7 @@ pub struct EdgeUniform {
     pub padding: [f32; 2],
 }
 
-/// Per-frame procedural lattice parameters; exactly 32 CPU-to-GPU bytes.
+/// Per-frame mixed-radix lattice parameters; exactly 48 CPU-to-GPU bytes.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct LatticeUniform {
@@ -40,8 +40,10 @@ pub struct LatticeUniform {
     pub pole_five: f32,
     /// Fourth-axis projection pole.
     pub pole_four: f32,
-    /// Odd lattice radix as an exactly representable float.
-    pub lattice_m: f32,
+    /// Odd copy counts for the first through fourth axes.
+    pub axis_counts: [f32; 4],
+    /// Odd copy count for the fifth axis.
+    pub axis_five: f32,
     /// Center-to-center lattice spacing.
     pub spacing: f32,
     /// Symmetric post-rotation fifth-axis hue range.
@@ -120,7 +122,8 @@ struct LatticeUniform {
     theta_two: f32,
     pole_five: f32,
     pole_four: f32,
-    lattice_m: f32,
+    axis_counts: vec4<f32>,
+    axis_five: f32,
     spacing: f32,
     fifth_range: f32,
     pole_epsilon: f32,
@@ -138,18 +141,22 @@ struct EdgeResult {
     midpoint_hue: vec4<f32>,
     orientation_length: vec4<f32>,
 }
-fn decode_center(copy_index: u32, m: u32, spacing: f32) -> LatticeCenter {
+fn decode_center(copy_index: u32, axis_counts: vec4<f32>, axis_five: f32, spacing: f32) -> LatticeCenter {
     var remaining = copy_index;
-    let half = i32(m / 2u);
-    let first = i32(remaining % m) - half;
-    remaining = remaining / m;
-    let second = i32(remaining % m) - half;
-    remaining = remaining / m;
-    let third = i32(remaining % m) - half;
-    remaining = remaining / m;
-    let fourth = i32(remaining % m) - half;
-    remaining = remaining / m;
-    let fifth = i32(remaining % m) - half;
+    let first_count = u32(axis_counts.x);
+    let second_count = u32(axis_counts.y);
+    let third_count = u32(axis_counts.z);
+    let fourth_count = u32(axis_counts.w);
+    let fifth_count = u32(axis_five);
+    let first = i32(remaining % first_count) - i32(first_count / 2u);
+    remaining = remaining / first_count;
+    let second = i32(remaining % second_count) - i32(second_count / 2u);
+    remaining = remaining / second_count;
+    let third = i32(remaining % third_count) - i32(third_count / 2u);
+    remaining = remaining / third_count;
+    let fourth = i32(remaining % fourth_count) - i32(fourth_count / 2u);
+    remaining = remaining / fourth_count;
+    let fifth = i32(remaining % fifth_count) - i32(fifth_count / 2u);
     var center: LatticeCenter;
     center.first_four = vec4<f32>(f32(first), f32(second), f32(third), f32(fourth)) * spacing;
     center.fifth = f32(fifth) * spacing;
@@ -183,7 +190,7 @@ fn project_vertex(first: vec4<f32>, tail: vec4<f32>, center: LatticeCenter, unif
 fn kernel(index: u32, uniforms: LatticeUniform) -> EdgeResult {
     let copy_index = index / 3000u;
     let base_edge = index % 3000u;
-    let center = decode_center(copy_index, u32(uniforms.lattice_m), uniforms.spacing);
+    let center = decode_center(copy_index, uniforms.axis_counts, uniforms.axis_five, uniforms.spacing);
     let endpoints = load_edge(base_edge);
     let first_index = u32(endpoints.x);
     let second_index = u32(endpoints.y);
