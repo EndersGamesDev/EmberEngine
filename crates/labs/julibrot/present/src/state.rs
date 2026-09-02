@@ -146,12 +146,6 @@ impl SceneLedger {
         }
     }
 
-    pub(crate) fn mark_replaced(&mut self) {
-        if let Some(pending) = &mut self.pending {
-            pending.drop_reason = Some(DropReason::ReplacedMain);
-        }
-    }
-
     pub(crate) const fn retained(&self) -> Option<&SceneFrame> {
         self.retained.as_ref()
     }
@@ -187,7 +181,7 @@ mod tests {
     use ember_julibrot_math::{Plane, ViewMode};
 
     use super::*;
-    use crate::{SubmissionKind, SubmissionMeasurement};
+    use crate::{SampleClass, SubmissionKind, SubmissionMeasurement};
 
     const ORIGIN: [f64; 4] = [0.0; 4];
 

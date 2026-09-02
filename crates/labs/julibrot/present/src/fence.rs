@@ -56,10 +56,6 @@ impl FenceLedger {
         self.id
     }
 
-    pub(crate) const fn polls(self) -> u32 {
-        self.polls
-    }
-
     pub(crate) fn observe(
         &mut self,
         now_ms: f64,
