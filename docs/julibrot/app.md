@@ -466,7 +466,7 @@ Phase 0 extracts and re-exports only the §3.8 heap seams, runs the standing hea
 
 Phase 1 creates the app crate, ABI/error types, GL-only device, hook and handler ordering, scoped initialization, single surface owner, pending-surface event bridge, and clear-first-frame path, estimated at 390 Rust and test lines.
 
-Phase 2 integrates the exact worker channel, four-buffer leases, owner records, orbit registry, current-before-accept upload, centre/reference shifts, controls, and latest-wins cancellation, estimated at 390 Rust and test lines.
+Phase 2 integrates the published `ViewerOwner`, owner records, centre/reference displacement fields, stable requested controls, corrected pose construction, and latest-wins HOT/MAIN staging; exact worker channel leases, orbit registry, and current-before-accept upload join Phase 3 when the worker endpoint and kernels upload API are published, estimated at 390 Rust and test lines.
 
 Phase 3 integrates corrected math poses, scaled shallow/deep selection, exact kernels plan and dispatch records, Preview/Interactive/Final scheduling, dense-prefix facts, power-of-two delivery, present’s 128-byte ring, two-texture state machine, CPU warp planner, asynchronous events, and post-fence surface presentation, estimated at 820 Rust and test lines.
 
