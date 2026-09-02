@@ -7,6 +7,7 @@ mod mesh;
 mod palette;
 mod shader;
 mod uniform;
+mod warp_shader;
 
 pub use homography::{
     apply_homography, inverse_identity_error, pack_homography_rows, solve_homography,
@@ -24,3 +25,4 @@ pub use uniform::{
     HOT_PAYLOAD_BYTES, HOT_RING_SLOTS, HotSlot, HotUniform, PresentDataError, SceneUniform,
     hot_ring_bytes, hot_stride,
 };
+pub use warp_shader::warp_shader;
