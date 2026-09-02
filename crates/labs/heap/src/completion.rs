@@ -1,22 +1,22 @@
 //! Bounded completion-poll accounting shared by the wasm runtime and native tests.
 
-pub(crate) const MAX_COMPLETION_POLLS: u32 = 4_096;
+pub const MAX_COMPLETION_POLLS: u32 = 4_096;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PollCounter {
+pub struct PollCounter {
     polls: u32,
 }
 
 impl PollCounter {
-    pub(crate) const fn new() -> Self {
+    pub const fn new() -> Self {
         Self { polls: 0 }
     }
 
-    pub(crate) const fn polls(self) -> u32 {
+    pub const fn polls(self) -> u32 {
         self.polls
     }
 
-    pub(crate) fn record(&mut self) -> Result<u32, u32> {
+    pub const fn record(&mut self) -> Result<u32, u32> {
         if self.polls >= MAX_COMPLETION_POLLS {
             return Err(self.polls);
         }
