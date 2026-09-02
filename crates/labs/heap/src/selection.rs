@@ -16,12 +16,11 @@ pub struct SurfaceOwnership {
 impl SurfaceOwnership {
     /// Claims the surface for `generation`, or returns the current owner.
     pub const fn try_acquire(&mut self, generation: u64) -> Result<(), u64> {
-        match self.owner {
-            Some(owner) => Err(owner),
-            None => {
-                self.owner = Some(generation);
-                Ok(())
-            }
+        if let Some(owner) = self.owner {
+            Err(owner)
+        } else {
+            self.owner = Some(generation);
+            Ok(())
         }
     }
 
