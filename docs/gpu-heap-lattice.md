@@ -223,7 +223,7 @@ Both initial fenced frames remain visible in the overlay even when they are cold
 
 Primary time begins before CPU uniform writes and command encoding and ends when the mapped completion fence reports the final presentation draw complete; the surface texture remains alive across that wait, the end timestamp is captured, and only then does `present()` hand the completed image to the compositor, so compositor scheduling is outside the measured region while raster work remains inside.
 
-The gles backend requires `map_async` progress through `device.poll` in a zero-timeout browser-yield loop; the first poll precedes the first yield, every poll is counted, every result prints poll count and fence-wait wall, and every wait has both a 4,096-poll bound and 30,000 ms deadline plus a generation guard; `Queue::on_submitted_work_done` is not used because the four-byte MAP_READ fence is the single contracted completion path.
+The gles backend requires `map_async` progress through `device.poll` in a zero-timeout browser-yield loop; the first poll precedes the first yield, every poll is counted, every result prints poll count and fence-wait wall, and every wait has both a 4,096-poll bound and 30,000 ms deadline plus a generation guard; after any yield the deadline is checked before another poll or completed callback can be accepted, while browser suspension can still delay when JavaScript resumes to observe that refusal; `Queue::on_submitted_work_done` is not used because the four-byte MAP_READ fence is the single contracted completion path.
 
 ## 13. Questions, claims, and oracles
 

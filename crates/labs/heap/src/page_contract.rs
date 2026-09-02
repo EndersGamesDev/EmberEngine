@@ -91,6 +91,7 @@ fn every_measurement_reports_bounded_poll_evidence() {
         "MAX_COMPLETION_POLLS",
         "PollCounter::new()",
         "completion_poll_limit",
+        "counter.polls() > 0 && performance_now() - started >= COMPLETION_DEADLINE_MS",
         "recordFenceObservation(label, measured)",
     ] {
         assert!(

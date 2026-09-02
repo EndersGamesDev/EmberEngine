@@ -2109,6 +2109,10 @@ async fn wait_for_fence(
                 current,
             });
         }
+        if counter.polls() > 0 && performance_now() - started >= COMPLETION_DEADLINE_MS {
+            pending.buffer.unmap();
+            return Err(LatticeError::Deadline);
+        }
         if let Err(limit) = counter.record() {
             pending.buffer.unmap();
             return Err(LatticeError::PollLimit(limit));
@@ -2139,10 +2143,6 @@ async fn wait_for_fence(
                 waited_ms: performance_now() - started,
             });
         }
-        if performance_now() - started >= COMPLETION_DEADLINE_MS {
-            pending.buffer.unmap();
-            return Err(LatticeError::Deadline);
-        }
         yield_to_browser().await?;
     }
 }
@@ -2170,6 +2170,10 @@ async fn wait_for_readback(
                 observed: generation,
                 current,
             });
+        }
+        if counter.polls() > 0 && performance_now() - started >= COMPLETION_DEADLINE_MS {
+            pending.buffer.unmap();
+            return Err(LatticeError::Deadline);
         }
         if let Err(limit) = counter.record() {
             pending.buffer.unmap();
@@ -2199,10 +2203,6 @@ async fn wait_for_readback(
             drop(mapped);
             pending.buffer.unmap();
             return Ok(bytes);
-        }
-        if performance_now() - started >= COMPLETION_DEADLINE_MS {
-            pending.buffer.unmap();
-            return Err(LatticeError::Deadline);
         }
         yield_to_browser().await?;
     }
