@@ -240,7 +240,9 @@ pub struct WorkerFacts {
 }
 
 impl WorkerFacts {
-    pub(crate) const fn initial(mode: WorkerMode) -> Self {
+    /// Creates the startup snapshot after the four transport buffers are allocated.
+    #[must_use]
+    pub const fn new(mode: WorkerMode) -> Self {
         Self {
             epoch: 0,
             last_applied_generation: 0,
@@ -287,7 +289,7 @@ mod tests {
         assert_eq!(align_of::<WorkerFacts>(), 8);
         assert_eq!(std::mem::offset_of!(WorkerFacts, epoch), 0);
         assert_eq!(std::mem::offset_of!(WorkerFacts, mode), 60);
-        assert_eq!(WorkerFacts::initial(WorkerMode::SameThread).mode, 1);
+        assert_eq!(WorkerFacts::new(WorkerMode::SameThread).mode, 1);
     }
 
     #[test]

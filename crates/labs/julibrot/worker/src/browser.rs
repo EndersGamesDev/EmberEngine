@@ -453,8 +453,11 @@ pub fn transfer_record_bytes(array: &ArrayBuffer) -> Result<Uint8Array, ChannelE
             u32::try_from(HEADER_BYTES).unwrap_or(32),
         ));
     }
-    if kind != MessageKind::OrbitResponse || header.length == 0 {
+    if kind != MessageKind::OrbitResponse {
         return Err(ChannelError::new(ErrorCode::BadKind, header.kind, 0, 0));
+    }
+    if header.length == 0 {
+        return Err(ChannelError::new(ErrorCode::BadLength, 0, 1, 0));
     }
     let end = u32::try_from(HEADER_BYTES)
         .unwrap_or(32)

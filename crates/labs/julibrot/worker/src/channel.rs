@@ -100,7 +100,7 @@ impl WorkerChannel {
             credit: CreditAccount::new(),
             shaper: ProducerShaper::new(),
             pending_producer_credits: BoundedQueue::new(),
-            facts: WorkerFacts::initial(mode),
+            facts: WorkerFacts::new(mode),
             orbit_leases: 0,
         }));
         Ok((

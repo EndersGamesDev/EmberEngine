@@ -311,7 +311,7 @@ The wasm main-side bridge is `encode_transfer_request(&ArrayBuffer,&OrbitRequest
 
 `WorkerFacts` is a 64-byte `#[repr(C)]` record: `epoch: u64` at byte 0, then `last_applied_generation`, `last_ack_generation`, `orbit_queue_depth`, `shutdown_queue_depth`, `credit_us`, `last_compute_us`, `last_overfeed_us`, `applied_count`, `stale_count`, `cancelled_count`, `allocation_events`, `request_buffers_owned_main`, `orbit_buffers_owned_main`, and `mode` as consecutive `u32` fields at bytes 8 through 60.
 
-`allocation_events` starts at one for the four-buffer startup allocation and increments once only after a reconciled max-iteration resize; `OwnerEndpoint::facts()` and `ProducerEndpoint::facts()` return the same coherent snapshot without inventing unavailable browser observations.
+`WorkerFacts::new(mode)` creates the startup snapshot with `allocation_events = 1` for the four-buffer allocation, and that count increments once only after a reconciled max-iteration resize; `OwnerEndpoint::facts()` and `ProducerEndpoint::facts()` return the same coherent snapshot without inventing unavailable browser observations.
 
 App displays queue depth, credits in microseconds, `compute_ms = last_compute_us/1,000`, owner epochs acknowledged, applied and acknowledged generations, stale/cancel counts, overfeed, buffer ownership, allocation events, worker mode, `centre_from_reference_px`, and `reference_shift_px`; zero and unavailable are distinct labels.
 
