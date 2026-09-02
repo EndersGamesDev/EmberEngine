@@ -449,7 +449,9 @@ Before the semantic commit, local non-toolchain checks found only `docs/julibrot
 
 Implementation head `d178e27bf29dcd39390c38fda5f32986c4b4dd52` was checked out exactly on barza and passed the required nine gates: workspace build `1.4 s`, workspace clippy with warnings denied `0.7 s`, cargo-fmt check `1.4 s`, workspace tests excluding linter `33.2 s`, linter tests with the two repository checks skipped `0.9 s`, wasm checks for arena `0.2 s`, what-is-this `0.2 s`, fire `0.2 s`, and heap plus present `0.3 s`; each value is the corresponding `RUN-REPORT` wall and every exit was zero.
 
-The present package contributes 32 unit tests and two integration tests covering exact layouts, palette honesty, heap-specialized WGSL validation, mesh order and heap algebra, two-slot state transitions, exactly-once reference rebasing, bounded fence outcomes, all six required deep-zoom warp rows, the corrected display-chart conversion, the 9-by-9-by-5 tumbled corpus, app-facing signatures, and warp-completion identity.
+The present package contributes 33 unit tests and two integration tests covering exact layouts, palette honesty, heap-specialized WGSL validation, mesh order and heap algebra, two-slot state transitions, non-mutating target selection, replacement disposition, exactly-once reference rebasing, bounded fence outcomes, all six required deep-zoom warp rows, the corrected display-chart conversion, the 9-by-9-by-5 tumbled corpus, app-facing signatures, and warp-completion identity.
+
+The final handoff audit additionally proves that synchronous `submit_scene` and `frame` refusals enter `PresentFacts.status`, all fallible scene preparation completes before the ledger reserves the in-flight slot, and palette, view, or grid replacement marks a pending scene `ReplacedMain` while retaining the last completed texture.
 
 The native oracle rejected the pre-implementation tumbled envelope at `6.394` pixels for `Δθ_view=0.01` and `Δzoom_log2=0.1`; the implementation contract therefore narrows the accepted tested fixture to `0.002` and `0.025` at no more than `2.0` pixels instead of converting a failed risk oracle into a claim.
 
