@@ -152,7 +152,7 @@ impl HeaderReservations {
             .occupied
             .windows(headers.len())
             .position(|window| window.iter().all(|occupied| !*occupied))
-            .ok_or(DispatchError::HeaderSetCapacity {
+            .ok_or_else(|| DispatchError::HeaderSetCapacity {
                 requested_sets: requested,
                 available_sets: self.free_sets(),
             })? as u32;
@@ -450,7 +450,7 @@ impl GpuKernelExecutor {
         let header_buffer_bytes = u64::from(header_stride)
             .checked_mul(u64::from(config.max_header_pages))
             .and_then(|bytes| bytes.checked_mul(u64::from(config.max_header_sets)))
-            .filter(|bytes| *bytes <= u64::from(u32::MAX))
+            .filter(|bytes| u32::try_from(*bytes).is_ok())
             .ok_or(ExecutorError::Contract(
                 "header buffer byte capacity overflow",
             ))?;
@@ -1003,15 +1003,16 @@ impl GpuKernelExecutor {
             .validate_header_owner(first.owner())
             .map_err(|error| DispatchError::InvalidHandle(error.to_string()))?;
         for headers in sets {
-            if headers.owner() != first.owner()
-                || headers.stride != self.header_stride
-                || headers.bytes.len() != headers.offsets.len() * self.header_stride as usize
-                || headers
-                    .offsets
-                    .iter()
-                    .enumerate()
-                    .any(|(page, offset)| *offset != page as u32 * self.header_stride)
-            {
+            let owner_mismatch = headers.owner() != first.owner();
+            let stride_mismatch = headers.stride != self.header_stride;
+            let byte_length_mismatch =
+                headers.bytes.len() != headers.offsets.len() * self.header_stride as usize;
+            let offset_mismatch = headers
+                .offsets
+                .iter()
+                .enumerate()
+                .any(|(page, offset)| *offset != page as u32 * self.header_stride);
+            if owner_mismatch || stride_mismatch || byte_length_mismatch || offset_mismatch {
                 return Err(DispatchError::HeaderMismatch);
             }
             if headers.offsets.len() > self.config.max_header_pages as usize {

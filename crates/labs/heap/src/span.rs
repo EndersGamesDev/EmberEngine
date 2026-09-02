@@ -48,7 +48,7 @@ pub struct DataSpan {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SpanIdentity {
+pub struct SpanIdentity {
     logical_len: u32,
     page_records: u32,
     page_count: u32,
