@@ -21,6 +21,7 @@ use serde::Serialize;
 use wasm_bindgen::prelude::*;
 use wgpu::util::DeviceExt as _;
 
+use crate::browser_error::publish_browser_error;
 use crate::completion::{MAX_COMPLETION_POLLS, PollCounter};
 use crate::conformance::{
     IMAGE_BYTES, IMAGE_BYTES_PER_ROW, IMAGE_HEIGHT, IMAGE_WIDTH, ImageComparison,
@@ -28,7 +29,6 @@ use crate::conformance::{
     deterministic_indices,
 };
 use crate::selection::{SelectionEpoch, SurfaceOwnership};
-use crate::browser_error::publish_browser_error;
 use crate::{
     BOX_INDICES, ComparatorWork, DataSpan, DialectLimits, DispatchPlan, EqualWorkSignature,
     FrameUniform, KernelDesc, ModeCFrameUniform, RegisteredKernel, SpanArena, StaticHeaders,
@@ -61,7 +61,9 @@ enum LatticeError {
     Resource(String),
     #[error("surface failure: {0}")]
     Surface(String),
-    #[error("surface frame for generation {owner} is still owned while generation {requested} waits")]
+    #[error(
+        "surface frame for generation {owner} is still owned while generation {requested} waits"
+    )]
     SurfaceBusy { owner: u64, requested: u64 },
     #[error("surface frame skipped: {0}")]
     SurfaceSkipped(String),
@@ -2021,11 +2023,7 @@ impl LatticeLab {
         let frame = self.acquire_frame(generation)?;
         let view = frame.view()?;
         for repeat in 0..repeats {
-            self.submit_frame_to_view(
-                time + repeat as f32 * 0.000_001,
-                &view,
-                generation,
-            )?;
+            self.submit_frame_to_view(time + repeat as f32 * 0.000_001, &view, generation)?;
         }
         let fence = self.pending_fence(generation)?;
         Ok((fence, frame))
@@ -2325,7 +2323,8 @@ fn record_uncaptured_gpu_error(message: String) {
 }
 
 fn check_gpu_failure(generation: u64) -> Result<(), LatticeError> {
-    let failure = GPU_FAILURE.with(|failure| failure.try_borrow().ok().and_then(|value| value.clone()));
+    let failure =
+        GPU_FAILURE.with(|failure| failure.try_borrow().ok().and_then(|value| value.clone()));
     match failure {
         Some(failure) if failure.generation == generation => {
             Err(LatticeError::CapturedGpu(failure.message))
@@ -2420,11 +2419,7 @@ fn try_apply_selection(
     };
     let outcome = borrowed
         .select(intent.mode, intent.step, intent.policy, generation)
-        .and_then(|report| {
-            borrowed
-                .render_frame(0.0, generation)
-                .map(|()| report)
-        });
+        .and_then(|report| borrowed.render_frame(0.0, generation).map(|()| report));
     Ok(Some(ScopedSelectionAttempt { scope, outcome }))
 }
 
@@ -2908,10 +2903,8 @@ pub async fn measure_heap_lattice_batch_json(
     let started = performance_now();
     let submission = (|| {
         let mut borrowed =
-            borrow_mut_for_generation(&lab, generation, "submitting a measured batch")
-                ?;
-        let (pending, frame) = borrowed
-            .submit_measured_batch(time_seconds, repeats, generation)?;
+            borrow_mut_for_generation(&lab, generation, "submitting a measured batch")?;
+        let (pending, frame) = borrowed.submit_measured_batch(time_seconds, repeats, generation)?;
         Ok::<_, LatticeError>((
             pending,
             frame,
