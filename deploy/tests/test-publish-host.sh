@@ -32,6 +32,21 @@ EOF
 }
 set_top() { set_top_in "$BOOK" "$1" "$2"; }
 
+# force_updated <book> <host name> <stamp>: pin one entry's `updated` so a
+# tie-break can be tested on its own rather than hoping two publishes land in
+# the same second.
+force_updated() {
+    "$PY" - "$1" "$2" "$3" <<'EOF'
+import json, sys
+p, name, stamp = sys.argv[1], sys.argv[2], sys.argv[3]
+d = json.load(open(p, encoding="utf-8"))
+for h in d.get("hosts", []):
+    if h.get("name") == name:
+        h["updated"] = stamp
+json.dump(d, open(p, "w", encoding="utf-8"), indent=2)
+EOF
+}
+
 echo "== upsert into an empty book =="
 $PUB --book "$BOOK" --name amber-otter \
     --game arena --url wss://a.example --proto 12 \
@@ -97,14 +112,22 @@ is "$(jget "$BOOK" 'd["ws"]')" "wss://b.example" "a newer host on ANOTHER protoc
 is "$(jget "$BOOK" 'len(d["hosts"])')" "3" "but it is still listed"
 
 echo "== equal versions resolve deterministically =="
+# Each component of the sort key is pinned on its own. The old form accepted
+# either answer, so it passed unchanged if the name tie-break were reversed, if
+# `updated` were dropped from the key, or if `max` became `min` on the last two
+# components — every regression its name claims to catch.
 $PUB --book "$BOOK" --name quiet-raven \
     --game arena --url wss://d.example --proto 12 --version r300 >/dev/null
-WS="$(jget "$BOOK" 'd["ws"]')"
-case "$WS" in
-    wss://b.example|wss://d.example) ok "tie broken by updated then name ($WS)" ;;
-    *) bad "tie resolved to an unrelated host: $WS" ;;
-esac
-WS_KEPT="$WS"
+is "$(jget "$BOOK" 'd["ws"]')" "wss://d.example" "the later updated (then name) wins the version tie"
+force_updated "$BOOK" flint-heron "2030-01-01T00:00:00Z"
+force_updated "$BOOK" quiet-raven "2020-01-01T00:00:00Z"
+$PUB --book "$BOOK" --recompute >/dev/null
+is "$(jget "$BOOK" 'd["ws"]')" "wss://b.example" "on equal versions the later updated wins"
+force_updated "$BOOK" flint-heron "2025-01-01T00:00:00Z"
+force_updated "$BOOK" quiet-raven "2025-01-01T00:00:00Z"
+$PUB --book "$BOOK" --recompute >/dev/null
+is "$(jget "$BOOK" 'd["ws"]')" "wss://d.example" "and an exact updated tie is broken by name"
+WS_KEPT="wss://d.example"
 
 echo "== a one-game deploy does not steal another game's legacy key =="
 # The defect this pins: host-a runs an r300 arena, host-b a newer r305 one, so
@@ -231,12 +254,20 @@ echo "== mirrors and unknown keys are left alone =="
 import json, sys
 p = sys.argv[1]
 d = json.load(open(p, encoding="utf-8"))
-d["mirrors"] = ["https://someone.example/host.json"]
+d["mirrors"] = [
+    {"url": "https://someone.example/host.json", "name": "lunar-ibex"},
+    "https://legacy.example/host.json",
+]
 d["something_else"] = "keep me"
 json.dump(d, open(p, "w", encoding="utf-8"), indent=2)
 EOF
 $PUB --book "$BOOK" --name amber-otter --game arena --url wss://a3.example --proto 12 >/dev/null
-is "$(jget "$BOOK" 'd["mirrors"][0]')" "https://someone.example/host.json" "mirrors survive a publish"
+# A mirror is bound to the one name it may publish, so the entry carries both
+# the url and that name. The writer passes the whole list through untouched,
+# which is what lets the pages tighten the rule without a book migration.
+is "$(jget "$BOOK" 'd["mirrors"][0]["url"]')" "https://someone.example/host.json" "mirrors survive a publish"
+is "$(jget "$BOOK" 'd["mirrors"][0]["name"]')" "lunar-ibex" "with the name they are bound to"
+is "$(jget "$BOOK" 'd["mirrors"][1]')" "https://legacy.example/host.json" "and a bare string survives too"
 is "$(jget "$BOOK" 'd["something_else"]')" "keep me" "unknown top-level keys survive"
 
 echo "== a malformed book is refused, not reset =="
