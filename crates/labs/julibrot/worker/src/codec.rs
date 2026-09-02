@@ -50,7 +50,8 @@ impl EncodedCentre {
         let mut limbs = Vec::new();
         let mut coordinates = [CoordinateDescriptor::default(); COORDINATE_COUNT];
         for (coordinate, value) in coordinates.iter_mut().zip(&centre.coords) {
-            let encoded = ember_julibrot_math::encode_big_scalar(value).map_err(math_error)?;
+            let encoded = ember_julibrot_math::encode_big_scalar(value)
+                .map_err(|error| math_error(&error))?;
             let limb_start = u32::try_from(limbs.len())
                 .map_err(|_| ChannelError::new(ErrorCode::BadLength, 0, u32::MAX, 0))?;
             let limb_count = u32::try_from(encoded.limbs.len())
@@ -98,7 +99,7 @@ impl EncodedCentre {
                     &self.limbs[start..end],
                     precision_bits,
                 )
-                .map_err(math_error)?,
+                .map_err(|error| math_error(&error))?,
             );
         }
         let delivered_precision = values[0].precision_bits();
@@ -107,7 +108,7 @@ impl EncodedCentre {
             .any(|value| value.precision_bits() != delivered_precision)
         {
             return Err(math_error(
-                ember_julibrot_math::MathError::PrecisionMismatch,
+                &ember_julibrot_math::MathError::PrecisionMismatch,
             ));
         }
         let [a, b, c, d] = values

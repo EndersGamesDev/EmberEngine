@@ -117,7 +117,7 @@ impl ReferenceOrbitTask {
         let plan = precision_plan(request)?;
         let builder =
             ReferenceOrbitBuilder::new(&centre, plan, EscapeParams::new(request.max_iter()))
-                .map_err(math_error)?;
+                .map_err(|error| math_error(&error))?;
         let compute_us = elapsed(started, clock.now_us())?;
         checked_compute_us(compute_us)?;
         Ok(Self {
@@ -150,7 +150,10 @@ impl ReferenceOrbitTask {
         let one = NonZeroU32::MIN;
         let mut last_stored = 0;
         for chunk_iterations in 1..=ORBIT_CHUNK_MAX_ITERATIONS {
-            let step = self.builder.step(one).map_err(math_error)?;
+            let step = self
+                .builder
+                .step(one)
+                .map_err(|error| math_error(&error))?;
             let chunk_us = elapsed(started, clock.now_us())?;
             match step {
                 OrbitStep::Complete(orbit) => {
@@ -196,11 +199,11 @@ impl ReferenceOrbitTask {
 }
 
 fn precision_plan(request: &OrbitRequest) -> Result<PrecisionPlan, ChannelError> {
-    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let working_digits = (f64::from(request.precision_bits()) * LOG10_2).floor() as u32;
     let minimum_floor = request.depth_digits().saturating_add(8).max(1);
     if working_digits < minimum_floor || working_digits == 0 {
-        return Err(math_error(MathError::InvalidPrecisionPlan));
+        return Err(math_error(&MathError::InvalidPrecisionPlan));
     }
     Ok(PrecisionPlan {
         floor_digits: minimum_floor,
@@ -222,7 +225,7 @@ const fn timing_overflow() -> ChannelError {
     ChannelError::new(ErrorCode::TimingOverflow, 0, u32::MAX, 0)
 }
 
-pub(crate) fn math_error(error: MathError) -> ChannelError {
+pub(super) const fn math_error(error: &MathError) -> ChannelError {
     let detail = match error {
         MathError::NonFinite => MathFailureCode::NonFinite,
         MathError::InvalidExtent => MathFailureCode::InvalidExtent,
