@@ -22,9 +22,14 @@ fn shallow_square(value: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(real, imaginary);
 }
 
+fn shallow_log2_norm(value: vec2<f32>) -> f32 {
+    let scale = max(abs(value.x), abs(value.y));
+    let normalized = value / scale;
+    return log2(scale) + 0.5 * log2(dot(normalized, normalized));
+}
+
 fn shallow_smooth(iteration: u32, value: vec2<f32>) -> f32 {
-    let magnitude = sqrt(dot(value, value));
-    return f32(iteration) + 1.0 - log2(log2(magnitude));
+    return f32(iteration) + 1.0 - log2(shallow_log2_norm(value));
 }
 
 fn kernel(index: u32, uniforms: ShallowUniform) -> ShallowResult {
