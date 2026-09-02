@@ -321,7 +321,7 @@ mod tests {
         assert_eq!(shaper.estimate_us(), 100_000);
         assert_eq!(shaper.admit(200).unwrap(), Admission::Delay { wait_us: 360_000 });
         assert_eq!(
-            shaper.admit(560_000).unwrap(),
+            shaper.admit(360_200).unwrap(),
             Admission::Ready {
                 credit_us: 100_000,
                 warm_up: false

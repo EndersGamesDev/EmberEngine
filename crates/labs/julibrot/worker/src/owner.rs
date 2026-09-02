@@ -329,7 +329,7 @@ mod tests {
                 250_000,
             )
             .unwrap();
-        let response = endpoint.next_arrival().unwrap();
+        let mut response = endpoint.next_arrival().unwrap();
         let owner = ViewerOwner::new(ViewerState {
             hot: HotState {
                 centre_from_reference_px: [10.0, -3.0],
@@ -367,5 +367,9 @@ mod tests {
             ),
             OrbitDisposition::Stale
         );
+        response
+            .records
+            .return_credit(OrbitDisposition::Applied, 0)
+            .unwrap();
     }
 }

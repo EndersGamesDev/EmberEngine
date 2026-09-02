@@ -752,8 +752,8 @@ mod tests {
                 limbs: Vec::new(),
             },
             0,
-            max_iter,
             64,
+            max_iter,
             OrbitReason::INITIAL,
         )
         .unwrap()
