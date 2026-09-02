@@ -17,8 +17,8 @@
 //!   represented, so exporting one is an error naming the object rather
 //!   than a box that quietly sinks to the floor.
 
+use arena_core::shooter::{Level, Obstacle};
 use glam::Vec3;
-use pong_core::shooter::{Level, Obstacle};
 
 use crate::Obj;
 use crate::palette::{Class, Kind};
@@ -179,7 +179,7 @@ fn colour_for_height(h: f32) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pong_core::shooter::ARENA_HALF;
+    use arena_core::shooter::ARENA_HALF;
 
     fn obj(pos: Vec3, scale: Vec3, yaw: f32, class: Class) -> Obj {
         Obj {

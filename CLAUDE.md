@@ -10,11 +10,11 @@ Depth lives in linked docs, loaded only when the task needs them. This file stay
 
 ## Simulation rules
 
-- **`crates/pong-core/` is shared between the client's prediction and the authoritative server.** A change there is a change to both. Assume every edit is a protocol question until you have proved it is not.
+- **`crates/arena-core/` is shared between the client's prediction and the authoritative server.** A change there is a change to both. Assume every edit is a protocol question until you have proved it is not.
 - Fixed 60 Hz, seeded RNG, fixed update order. Do not add a per-tick RNG: the only randomness today is two world-generation LCGs, and the first per-tick one has to be seeded and tick-indexed or replays and rollback die.
 - **Bullets are stepped server-side only.** Clients never simulate their own. That is the sole reason `f32` transcendentals (`sin` in `obstacle_height`, `tan` for aim elevation) are safe in hit registration. Add client-side shot prediction and they become a desync source.
 - Aim is a 2D unit vector **plus a scalar elevation**, never a 3D direction. Folding them collapses bullet range by `cos(pitch)` and freezes a player's facing on a near-vertical aim. See `docs/state-model.md`.
-- Body geometry (`eye_h`, `body_h`, `hit_radius`) lives in `pong-core`, not the renderer. Client and server must agree where a body *is*.
+- Body geometry (`eye_h`, `body_h`, `hit_radius`) lives in `arena-core`, not the renderer. Client and server must agree where a body *is*.
 
 ## Protocol rules
 
@@ -38,7 +38,7 @@ The scene pass is deliberately small. Work with it, not against it.
 
 `include_bytes!` bakes assets into the wasm bundle and the deploy ships one bundle with no runtime fetch — every byte you add to an asset is a byte every web player downloads.
 
-Mesh ids are allocated in a fixed order in `crates/pong/src/lib.rs`. Adding parts shifts every later base; the `set_*` setters exist to absorb that.
+Mesh ids are allocated in a fixed order in `crates/arena/src/lib.rs`. Adding parts shifts every later base; the `set_*` setters exist to absorb that.
 
 ## Assets
 

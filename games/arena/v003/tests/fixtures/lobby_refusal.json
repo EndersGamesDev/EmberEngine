@@ -1,0 +1,15 @@
+{
+  "joined": "{\"t\":\"game_joined\",\"id\":0,\"seed\":42,\"arena_half\":24.0,\"players\":[{\"id\":0,\"handle\":\"ender\",\"color\":[0.25,0.55,0.95]}]}",
+  "duplicate": {
+    "code": "already_joined",
+    "message": "already in a game"
+  },
+  "full": {
+    "code": "game_full",
+    "message": "game is full"
+  },
+  "status": {
+    "code": "running",
+    "detail": null
+  }
+}

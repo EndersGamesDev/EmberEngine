@@ -26,18 +26,17 @@ crates/
   ember-engine/   the engine library
     app.rs        platform layer: window, event loop, input (winit)
     renderer.rs   GPU layer: owns wgpu; nothing above it touches the GPU
-  ember-net/      shared protocol: messages, framing, sanitization
-                  (+ examples/netbot.rs — headless verification client)
-  ember-server/   headless dedicated server: single 60 Hz sim thread,
-                  thread-per-connection IO feeding it events over channels
-  game/           the arena client: net session, world interpolation, scene
-  pong/           3D pong client — local + online modes; native bin + wasm lib
-  pong-core/      shared pong sim (deterministic, 60 Hz) + online JSON protocol
-  pong-server/    public matchmaking + match server (WebSocket, lobbies with
+  ember-client-net/ shared native/wasm connection lifecycle and replay plumbing
+  ember-legacy/   moving capability boundary for frozen hosted versions
+  ember-net/      canonical outer JSON/WebSocket lobby protocol
+  ember-server/   sole game-neutral host and version registry
+  arena/          Arena client — v0 pong classic + online shooter; native bin + wasm lib
+  arena-core/      shared pong sim (deterministic, 60 Hz) + online JSON protocol
+  arena-server/    public matchmaking + match server (WebSocket, lobbies with
                   optional passwords, authoritative sim per match)
+games/            frozen game/version crates plus the hosted-set manifest
 web/              static page: menu, lobby browser, wasm game (GitHub Pages)
-deploy/           deploy-specht.sh (arena server) · deploy-pages.sh (web) ·
-                  deploy-pong-online.sh (pong server + tunnel + server.json)
+deploy/           page, Arena, Fire, and watchdog deployment scripts
 docs/             design documents (atw-first-rendering.md is adopted policy)
 ```
 
@@ -45,48 +44,12 @@ Strict one-way layering: game → scene/simulation → renderer → platform.
 
 ## Multiplayer
 
-Server-authoritative over TCP (length-prefixed [postcard] frames — TCP because
-the WireGuard userspace tunnels forward TCP only; the framing keeps the
-transport swappable). Clients send held movement intents; the server
-integrates at a fixed 60 Hz and broadcasts snapshots; clients interpolate
-between snapshots. All client input is sanitized (NaN/magnitude/name/frame
-size). Protocol changes bump `PROTOCOL_VERSION` in `ember-net`.
-
-```
-cargo run -p game                              # connect to 127.0.0.1:7777 (tunnel → specht)
-cargo run -p game -- 127.0.0.1:7799 alice      # explicit server + name
-cargo run -p ember-server -- --bind 127.0.0.1:7799        # local server
-cargo run -p ember-net --example netbot -- 127.0.0.1:7777 bot 6   # headless check
-```
-
-If the server is unreachable the client runs offline (local-only cube).
-
-### Diagnostics (tracing)
-
-All crates emit structured [tracing](https://docs.rs/tracing) events
-(`RUST_LOG` filtering still works; wgpu/winit `log` records are bridged in;
-on wasm, events land in the browser console). Built-in stall/lag detection:
-
-| Where  | Signal | Meaning |
-|--------|--------|---------|
-| server | `sim stall: fell behind the tick clock` | sim thread starved >10 ticks; clock resynced |
-| server | `tick_overruns` / `max_tick_busy_us` in `server health` | tick body exceeded its 16.7 ms budget |
-| server | `client lagging` / `client recovered from lag` | joined client silent >3 s (kick at 10 s) |
-| client | `frame stall` | >100 ms gap between frames (GC, OS hitch, hidden tab) |
-| client | `snapshot stream stale` / `recovered` | no server snapshot for >300 ms (lag spike) |
-| client | `network lag: high round-trip time` | keepalive RTT >250 ms (RTT shown in the periodic `online` status) |
-
-Known limitations (accepted for now): snapshot interpolation degenerates to
-snap-to-latest at frame rates ≤ 60 fps (a proper ~100 ms interpolation delay
-buffer is future work), and the client connects before the window opens, so an
-unreachable server makes launch pause ~4 s before the offline fallback.
+The native TCP cube demo has been retired. Multiplayer is migrating to one host, one outer protocol, and versioned frozen game contracts as described in [`docs/one-server-evergreen.md`](docs/one-server-evergreen.md).
 
 ## Roadmap
 
 - [x] **0. Base**: workspace, window, wgpu surface, clear color
-- [x] **0.5 Multiplayer online**: shared protocol (`ember-net`), authoritative
-      60 Hz dedicated server (`ember-server`) deployed on specht, client with
-      snapshot interpolation, players rendered as lit cubes
+- [x] **0.5 Multiplayer online**: the retired cube prototype established an authoritative server, client snapshot interpolation, and shared protocol
 - [x] **0.6 ATW-first presenter (stage A)**: scene renders offscreen
       (SceneFrame, color+depth); a presenter pass owns the swapchain
       (identity warp today — see `docs/atw-first-rendering.md`, adopted)
@@ -123,15 +86,9 @@ unreachable server makes launch pause ~4 s before the offline fallback.
 
 ## Infrastructure
 
-- **Local (Windows)**: primary dev machine; `cargo run -p game` opens the dev window.
+- **Local (Windows)**: primary dev machine.
 - **Remote servers** (via wireproxy tunnels + SSH, see `~/.ssh/config`):
-  - `specht` — hosts the live dedicated server: `~/ember-src/target/release/ember-server`
-    bound to `10.72.0.1:7777` (WireGuard-only, not public), log `~/ember-server.log`,
-    built in toolbox `ember-build` (rustup + gcc). Redeploy: `bash deploy/deploy-specht.sh`.
-    Local tunnel `127.0.0.1:7777 → 10.72.0.1:7777` in `~/.config/wireproxy-specht.conf`;
-    other WG peers connect to `10.72.0.1:7777` directly.
-    Caveats: started via nohup — does NOT survive a specht reboot; pkill patterns
-    must not match their own ssh command line (see deploy script).
+  - `specht` — hosts the live Arena and Fire deployment-continuity servers.
   - `adler` — RTX 4090: reserved for asset baking, Linux/Vulkan testing, CI-style builds.
 
 ## Games hub
@@ -147,37 +104,37 @@ The hub lists lobbies without loading a game bundle: the server lets any
 protocol version Hello + list, and enforces the live protocol only on
 create/join.
 
-## Pong
+## Arena v0: the pong classic
 
 **Play: <https://endersgamesdev.github.io/EmberEngine/>** — local (2 players, one
 keyboard: `A`/`D` vs `←`/`→`, first to 7) or **online matchmaking**: pick a
 handle, create a lobby (password optional) or join an open one from the
 list. The match server is authoritative (the shared deterministic 60 Hz sim
-in `crates/pong-core/src/sim.rs` runs server-side); clients stream inputs
+in `crates/arena-core/src/sim.rs` runs server-side); clients stream inputs
 and interpolate 30 Hz state. Either key set steers your paddle online, and
 player 2 gets a flipped camera so they also play from "their" side.
 
-Online infrastructure: `pong-server` (WebSocket + JSON, `pong-core/proto.rs`)
+Online infrastructure: `arena-server` (WebSocket + JSON, `arena-core/proto.rs`)
 runs on specht bound to loopback, fronted by a **Cloudflare quick tunnel** —
 a free public `https://….trycloudflare.com` domain that CHANGES every time
 the tunnel restarts. `deploy/deploy-pong-online.sh` rebuilds + restarts
 server and tunnel, then publishes the fresh domain to `server.json` on the
 Pages site (fetched cache-busted, so the page always finds the current
 server; its `v` stamp also cache-busts the wasm bundle per deploy). Server
-log: `~/pong-server.log`, tunnel log: `~/cloudflared.log` on specht.
-Headless check: `cargo run -p pong-server --example wsbot -- <URL> create|join <LOBBY> [PW|-] [HANDLE] [SECS] [MODES]`.
+log: `~/arena-server.log`, tunnel log: `~/cloudflared.log` on specht.
+Headless check: `cargo run -p arena-server --example wsbot -- <URL> create|join <LOBBY> [PW|-] [HANDLE] [SECS] [MODES]`.
 `MODES` is a comma-separated list of `shield`, `jump`, `nofire` — without it
 the bot never raises the shield or jumps, so a green run says nothing about
 either. Two bots, one plain and one `shield,nofire`, demonstrate a reflect.
 
-Native: `cargo run -p pong --bin pong-app` (local) or
-`pong-app online wss://… create|join LOBBY [PASSWORD|-] [HANDLE]`
+Native: `cargo run -p arena --bin arena-app` (local) or
+`arena-app online wss://… create|join LOBBY [PASSWORD|-] [HANDLE]`
 
 Web build (needs `wasm32-unknown-unknown` target + `wasm-bindgen-cli`):
 
 ```
-cargo build --target wasm32-unknown-unknown --release -p pong --lib
-wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/pong.wasm
+cargo build --target wasm32-unknown-unknown --release -p arena --lib
+wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/arena.wasm
 ```
 
 then publish `web/` to the `gh-pages` branch — or just run
@@ -187,9 +144,9 @@ then publish `web/` to the `gh-pages` branch — or just run
 
 **Play: <https://endersgamesdev.github.io/EmberEngine/>** — pick Fire Racer, then *Practice alone* against seven AI cars or *Race online*. `W`/`S` drive, `A`/`D` steer, `Space` is the handbrake that breaks traction into a drift, `Shift` spends one of three boost charges. Three laps of a castle bailey.
 
-Track, car physics and lap timing live in `crates/fire-core`, which is shared between the client's prediction and the authoritative server exactly as `pong-core` is for the arena — the client predicts its own car and reconciles against server state thirty times a second. The castle props are generated meshes and every texture is procedural, so none of them costs a download byte.
+Track, car physics and lap timing live in `crates/fire-core`, which is shared between the client's prediction and the authoritative server exactly as `arena-core` is for the arena — the client predicts its own car and reconciles against server state thirty times a second. The castle props are generated meshes and every texture is procedural, so none of them costs a download byte.
 
-Fire carries its **own** `PROTO_VERSION`, independent of `pong-core`'s. That is deliberate: bumping one game's protocol must never gate the other game's join. `server.json` records both, as `proto` and `fire_proto`.
+Fire carries its **own** `PROTO_VERSION`, independent of `arena-core`'s. That is deliberate: bumping one game's protocol must never gate the other game's join. `server.json` records both, as `proto` and `fire_proto`.
 
 Online infrastructure: `fire-server` on its own port behind its own Cloudflare quick tunnel, published to `server.json` under its own `fire_ws` key — a separate script, port, tunnel and key from the arena's, so redeploying one game can never knock the other offline. `bash deploy/deploy-fire-online.sh` rebuilds, restarts, and republishes; it health-checks by speaking the protocol (Hello must be answered with Welcome) before it publishes anything, so a failed deploy leaves the previous address in place rather than pointing players at a server that never came up.
 
@@ -217,6 +174,6 @@ Online infrastructure: `kings-server` on port 7782 (7780 is the arena, 7781 fire
 
 ```
 cargo run -p game                 # multiplayer arena (auto-connects to specht)
-cargo run -p pong --bin pong-app  # 3D pong, 2 players at one keyboard
+cargo run -p arena --bin arena-app  # 3D pong, 2 players at one keyboard
 cargo run -p kings --bin kings-app  # Four Kings hotseat, 4 seats at one keyboard
 ```

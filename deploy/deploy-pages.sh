@@ -7,7 +7,7 @@
 #   games.json            catalog — the newest version of each game is "live"
 #   server.json           {ws, v} — current tunnel domain + deploy stamp
 #   games/arena/v12/      live arena build (page + its own frozen pkg)
-#   games/pong/v2/        live pong build (page + its own frozen pkg)
+#   games/arena/v0/       live arena v0 pong classic (page + frozen pkg)
 #   games/fire/v2/        live fire racer build (castle circuit, online)
 #   games/kings/v1/       live four kings build (2D page board + 3D wasm view, online)
 #   games/pong/v1/        archived first web build (materialized from history)
@@ -27,12 +27,12 @@ bash deploy/stamp-version.sh
 
 echo "== building wasm =="
 cargo build --target wasm32-unknown-unknown --release -p fire --lib
-cargo build --target wasm32-unknown-unknown --release -p pong --lib
+cargo build --target wasm32-unknown-unknown --release -p arena --lib
 cargo build --target wasm32-unknown-unknown --release -p kings --lib
 wasm-bindgen --target web --no-typescript --out-dir web/pkg \
     target/wasm32-unknown-unknown/release/fire.wasm
 wasm-bindgen --target web --no-typescript --out-dir web/pkg \
-    target/wasm32-unknown-unknown/release/pong.wasm
+    target/wasm32-unknown-unknown/release/arena.wasm
 wasm-bindgen --target web --no-typescript --out-dir web/pkg \
     target/wasm32-unknown-unknown/release/kings.wasm
 
@@ -42,21 +42,21 @@ git worktree add "$PAGES_DIR" gh-pages
 
 # Live version dirs (older versions stay frozen on the branch untouched).
 ARENA_LIVE="games/arena/v12"
-PONG_LIVE="games/pong/v2"
+ARENA_V0_LIVE="games/arena/v0"
 FIRE_LIVE="games/fire/v2"
 KINGS_LIVE="games/kings/v1"
 
 rm -rf "$PAGES_DIR"/index.html "$PAGES_DIR"/pkg \
-    "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$PONG_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR/$KINGS_LIVE" \
+    "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$ARENA_V0_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR/$KINGS_LIVE" \
     "$PAGES_DIR"/games.json
-mkdir -p "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$PONG_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR/$KINGS_LIVE"
+mkdir -p "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$ARENA_V0_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR/$KINGS_LIVE"
 cp web/index.html web/games.json web/version.json "$PAGES_DIR"/
 cp "web/$ARENA_LIVE/index.html" "$PAGES_DIR/$ARENA_LIVE/"
-cp "web/$PONG_LIVE/index.html" "$PAGES_DIR/$PONG_LIVE/"
+cp "web/$ARENA_V0_LIVE/index.html" "$PAGES_DIR/$ARENA_V0_LIVE/"
 cp "web/$FIRE_LIVE/index.html" "$PAGES_DIR/$FIRE_LIVE/"
 cp "web/$KINGS_LIVE/index.html" "$PAGES_DIR/$KINGS_LIVE/"
 # Each game gets ONLY its own bundle. Copying the whole of web/pkg into every
-# game directory shipped pong's 18 MB wasm to fire players and fire's to pong
+# game directory shipped arena's 18 MB wasm to fire players and fire's to arena
 # players — a fire player was downloading ~23 MB to run a ~6 MB game. The
 # root pkg/ still carries everything, because old cached pages resolve their
 # imports against it.
@@ -68,11 +68,14 @@ copy_pkg() {
         cp "web/pkg/$crate.js" "web/pkg/${crate}_bg.wasm" "$dest/"
     done
 }
-copy_pkg "$PAGES_DIR/$ARENA_LIVE/pkg" pong
-copy_pkg "$PAGES_DIR/$PONG_LIVE/pkg" pong
+copy_pkg "$PAGES_DIR/$ARENA_LIVE/pkg" arena
+copy_pkg "$PAGES_DIR/$ARENA_V0_LIVE/pkg" arena
 copy_pkg "$PAGES_DIR/$FIRE_LIVE/pkg" fire
 copy_pkg "$PAGES_DIR/$KINGS_LIVE/pkg" kings
 cp -r web/pkg "$PAGES_DIR"/pkg
+# Compatibility shim for cached pre-rename pages that import from root pkg/.
+cp "$PAGES_DIR/pkg/arena.js" "$PAGES_DIR/pkg/pong.js"
+cp "$PAGES_DIR/pkg/arena_bg.wasm" "$PAGES_DIR/pkg/pong_bg.wasm"
 touch "$PAGES_DIR"/.nojekyll
 
 # Archived first web build: materialize once from gh-pages history.
@@ -88,7 +91,7 @@ fi
 # use it to cache-bust the wasm bundles once per deploy. The stamp also
 # records the protocol version this bundle speaks, so a bump is caught
 # HERE — the moment it ships — rather than at the first failed join.
-PROTO="$(grep -oE 'PROTO_VERSION: u16 = [0-9]+' crates/pong-core/src/proto.rs | grep -oE '[0-9]+$')"
+PROTO="$(grep -oE 'PROTO_VERSION: u16 = [0-9]+' crates/arena-core/src/proto.rs | grep -oE '[0-9]+$')"
 # Fire carries its own version in its own crate, on purpose: bumping one game's
 # protocol must never gate the other's join.
 FIRE_PROTO="$(grep -oE 'PROTO_VERSION: u16 = [0-9]+' crates/fire-core/src/proto.rs | grep -oE '[0-9]+$')"
@@ -136,7 +139,7 @@ if was is None:
     print(f"""
 !! NO PREVIOUS PROTOCOL RECORDED on this Pages branch, so this deploy
 !! cannot be compared against the last one. It ships v{proto}. If the
-!! running pong-server was built before v{proto}, players will be told
+!! running arena-server was built before v{proto}, players will be told
 !! "this build speaks protocol v{proto}, the live game is v<older>" and
 !! cannot create or join. Check the server's build before announcing.
 !! (A freshly seeded or relocated gh-pages branch lands here once; the
@@ -147,10 +150,10 @@ elif was != proto:
 !! PROTOCOL BUMP: v{was} -> v{proto}
 !! The game server speaks the OLD version until it is redeployed, and the
 !! server only lets a client create or join a lobby on an exact match. So
-!! from the moment this page is live until pong-server is rebuilt from the
+!! from the moment this page is live until arena-server is rebuilt from the
 !! same commit, players get:
 !!     "this build speaks protocol v{proto}, the live game is v{was}"
-!! Redeploy pong-server in the SAME window. Archived pages stay frozen on
+!! Redeploy arena-server in the SAME window. Archived pages stay frozen on
 !! v{was} and will refuse to join once the server moves - expected, and
 !! they already say "archived" in the hub.
 """)

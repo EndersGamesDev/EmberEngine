@@ -1,0 +1,116 @@
+# Limits profiles are deliberate placeholders until the build estate can
+# measure CPU, memory, outbound-byte, lobby, and step-time budgets.
+
+[[games]]
+game_id = "arena"
+game_version = 1
+package = "ember-game-arena-v1"
+latest = false
+limits_profile = "estate-measurement-required-arena-v1"
+fixture_suite = "arena-v1-hosted-contract"
+
+[[games]]
+game_id = "arena"
+game_version = 2
+package = "ember-game-arena-v2"
+latest = false
+limits_profile = "estate-measurement-required-arena-v2"
+fixture_suite = "arena-v2-hosted-contract"
+
+[[games]]
+game_id = "arena"
+game_version = 3
+package = "ember-game-arena-v3"
+latest = false
+limits_profile = "estate-measurement-required-arena-v3"
+fixture_suite = "arena-v3-hosted-contract"
+
+[[games]]
+game_id = "arena"
+game_version = 4
+package = "ember-game-arena-v4"
+latest = false
+limits_profile = "estate-measurement-required-arena-v4"
+fixture_suite = "arena-v4-hosted-contract"
+
+[[games]]
+game_id = "arena"
+game_version = 5
+package = "ember-game-arena-v5"
+latest = false
+limits_profile = "estate-measurement-required-arena-v5"
+fixture_suite = "arena-v5-hosted-contract"
+
+[[games]]
+game_id = "arena"
+game_version = 6
+package = "ember-game-arena-v6"
+latest = false
+limits_profile = "estate-measurement-required-arena-v6"
+fixture_suite = "arena-v6-hosted-contract"
+
+[[games]]
+game_id = "arena"
+game_version = 7
+package = "ember-game-arena-v7"
+latest = false
+limits_profile = "estate-measurement-required-arena-v7"
+fixture_suite = "arena-v7-hosted-contract"
+
+[[games]]
+game_id = "arena"
+game_version = 8
+package = "ember-game-arena-v8"
+latest = false
+limits_profile = "estate-measurement-required-arena-v8"
+fixture_suite = "arena-v8-hosted-contract"
+
+[[games]]
+game_id = "arena"
+game_version = 9
+package = "ember-game-arena-v9"
+latest = false
+limits_profile = "estate-measurement-required-arena-v9"
+fixture_suite = "arena-v9-hosted-contract"
+
+[[games]]
+game_id = "arena"
+game_version = 10
+package = "ember-game-arena-v10"
+latest = false
+limits_profile = "estate-measurement-required-arena-v10"
+fixture_suite = "arena-v10-hosted-contract"
+
+[[games]]
+game_id = "arena"
+game_version = 11
+package = "ember-game-arena-v11"
+latest = false
+limits_profile = "estate-measurement-required-arena-v11"
+fixture_suite = "arena-v11-hosted-contract"
+
+[[games]]
+game_id = "arena"
+game_version = 12
+package = "ember-game-arena-v12"
+latest = true
+limits_profile = "estate-measurement-required-arena-v12"
+fixture_suite = "arena-v12-hosted-contract"
+legacy_game = "arena"
+
+[[games]]
+game_id = "fire"
+game_version = 1
+package = "ember-game-fire-v1"
+latest = true
+limits_profile = "estate-measurement-required-fire-v1"
+fixture_suite = "fire-v1-hosted-contract"
+legacy_game = "fire"
+
+[[games]]
+game_id = "what-is-this"
+game_version = 1
+package = "ember-game-what-is-this-v1"
+latest = true
+limits_profile = "bounded-solo-report-v1"
+fixture_suite = "what-is-this-v1-hosted-contract"

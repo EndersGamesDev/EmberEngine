@@ -1,0 +1,1586 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>what is this?</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #eef6ef;
+      --muted: #9cb0a2;
+      --line: #2d4939;
+      --panel: #101d17;
+      --green: #71e7a5;
+      --amber: #ffc971;
+      --red: #ff8c86;
+      --blue: #8fc7ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 18% 4%, #193f2d 0, transparent 34rem),
+        linear-gradient(145deg, #07100c, #0b1510 55%, #07100c);
+      color: var(--ink);
+      font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+    }
+    main { width: min(900px, 92vw); margin: 0 auto; padding: 48px 0 72px; }
+    .eyebrow { color: var(--green); letter-spacing: 0.18em; text-transform: uppercase; font-size: 0.72rem; }
+    h1 { margin: 8px 0 10px; font-size: clamp(2.4rem, 9vw, 5.8rem); line-height: 0.92; letter-spacing: -0.075em; }
+    .lede { max-width: 650px; color: var(--muted); line-height: 1.65; }
+    #guess-card { margin: 28px 0 22px; }
+    #guess-card h2 { margin: 5px 0 9px; font-size: 1.25rem; }
+    #guess-card p { color: var(--muted); line-height: 1.55; }
+    .guess-row { display: grid; grid-template-columns: minmax(110px, 0.5fr) 1fr 1fr; gap: 10px; margin-top: 16px; }
+    input { min-height: 50px; width: 100%; border: 1px solid var(--line); border-radius: 10px; background: #07100c; color: var(--ink); padding: 0 14px; font: inherit; }
+    input:focus { outline: 2px solid var(--green); outline-offset: 2px; }
+    #guess-reveal { min-height: 1.5em; color: var(--blue); }
+    #gpu-window { position: relative; margin: 22px 0 10px; overflow: hidden; border: 1px solid #355943; border-radius: 15px; background: linear-gradient(145deg, #0d2017, #07100c); box-shadow: inset 0 0 45px #122f2055, 0 18px 60px #0005; }
+    .gpu-window-head { display: flex; justify-content: space-between; gap: 16px; align-items: baseline; padding: 12px 15px; border-bottom: 1px solid #294535; }
+    #gpu-window-status { color: var(--muted); font-size: 0.72rem; text-align: right; }
+    .gpu-viewport { position: relative; aspect-ratio: 24 / 7; min-height: 160px; background: repeating-linear-gradient(90deg, transparent 0 39px, #71e7a507 40px), repeating-linear-gradient(0deg, transparent 0 39px, #71e7a507 40px), radial-gradient(ellipse at center, #143523 0, #07100c 70%); }
+    #gpu-bar { display: block; width: 100%; height: 100%; }
+    #gpu-bar[hidden] { display: none; }
+    #gpu-placeholder { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; color: var(--muted); text-align: center; line-height: 1.5; }
+    #gpu-placeholder.bad { color: var(--amber); }
+    .progress-shell { height: 10px; margin: 30px 0 10px; overflow: hidden; border: 1px solid var(--line); border-radius: 999px; background: #07100c; }
+    #progress { width: 0; height: 100%; background: linear-gradient(90deg, #3ba36d, var(--green)); transition: width 280ms ease; }
+    #progress-label { min-height: 1.4em; color: var(--green); font-size: 0.82rem; }
+    #telemetry { display: none; grid-template-columns: minmax(0, 1fr) auto auto; gap: 14px; align-items: baseline; margin-top: 12px; padding: 10px 13px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); font-size: 0.76rem; }
+    #telemetry.visible { display: grid; }
+    #telemetry-kernel { overflow: hidden; color: var(--blue); text-overflow: ellipsis; white-space: nowrap; }
+    #stages { display: grid; gap: 9px; margin: 24px 0; padding: 0; list-style: none; }
+    .stage { display: grid; grid-template-columns: 2rem 1fr auto; gap: 10px; align-items: baseline; padding: 13px 15px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--panel) 88%, transparent); }
+    .stage .mark { color: #587765; }
+    .stage .detail { color: var(--muted); font-size: 0.76rem; text-align: right; }
+    .stage.active { border-color: var(--green); }
+    .stage.active .mark, .stage.complete .mark { color: var(--green); }
+    .stage.unavailable { border-color: #665333; }
+    .stage.unavailable .mark { color: var(--amber); }
+    .card { border: 1px solid var(--line); border-radius: 15px; background: #0e1a14e8; padding: clamp(20px, 4vw, 32px); box-shadow: 0 24px 80px #0008; }
+    #verdict { display: none; margin-top: 26px; }
+    #verdict.visible { display: block; animation: reveal 400ms ease both; }
+    @keyframes reveal { from { opacity: 0; transform: translateY(8px); } }
+    #verdict h2 { margin: 0 0 10px; font-size: 1.6rem; }
+    #verdict-copy { color: var(--muted); line-height: 1.6; }
+    #observations { display: grid; gap: 9px; margin: 18px 0; padding: 0; list-style: none; }
+    #observations li { border-left: 2px solid var(--green); padding: 6px 0 6px 13px; color: #d5e4da; line-height: 1.5; }
+    #badges { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 9px; margin: 20px 0; }
+    .badge { display: grid; grid-template-columns: 2.7rem 1fr; gap: 9px; align-items: center; padding: 11px; border: 1px solid #3c644b; border-radius: 10px; background: #0a1710; }
+    .badge-mark { display: grid; place-items: center; width: 2.7rem; height: 2.7rem; border: 1px solid var(--green); border-radius: 50%; color: var(--green); font-size: 0.72rem; font-weight: 800; }
+    .badge strong, .badge small { display: block; }
+    .badge small { margin-top: 3px; color: var(--muted); font-size: 0.66rem; line-height: 1.35; }
+    .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 20px 0; }
+    .fact { padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #08110d; }
+    .fact strong { display: block; color: var(--green); font-size: 1.05rem; margin-bottom: 4px; }
+    .fact span { color: var(--muted); font-size: 0.72rem; }
+    .disclosure { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); color: #c3d2c7; line-height: 1.6; font-family: system-ui, sans-serif; font-size: 0.9rem; }
+    .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 20px; }
+    button { min-height: 50px; border: 1px solid #47765b; border-radius: 10px; background: #173624; color: var(--ink); font-family: inherit; font-size: 0.9rem; font-weight: 600; cursor: pointer; }
+    button:hover:not(:disabled) { border-color: var(--green); background: #1e4930; }
+    button:disabled { opacity: 0.45; cursor: default; }
+    #submit { background: #342b18; border-color: #725d31; }
+    #submit:hover:not(:disabled) { border-color: var(--amber); background: #493a1d; }
+    #action-status { min-height: 2.6em; margin: 12px 0 0; color: var(--muted); font-size: 0.78rem; line-height: 1.5; }
+    #action-status.good { color: var(--green); }
+    #action-status.bad { color: var(--red); }
+    #run-again { width: 100%; margin-top: 8px; background: transparent; border-color: var(--line); }
+    [hidden] { display: none !important; }
+    noscript { color: var(--red); }
+    @media (max-width: 620px) {
+      main { padding-top: 28px; }
+      .stage { grid-template-columns: 1.5rem 1fr; }
+      .stage .detail { grid-column: 2; text-align: left; }
+      .guess-row { grid-template-columns: 1fr; }
+      #telemetry { grid-template-columns: 1fr 1fr; }
+      #telemetry-kernel { grid-column: 1 / -1; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">ember diagnostic game · report schema 1</div>
+    <h1>what is this?</h1>
+    <p class="lede">Let’s find out what this browser is running on. Eight stages reveal only what the page can measure directly; a missing feature becomes an honest “unavailable,” never a dead end.</p>
+    <section id="guess-card" class="card">
+      <div class="eyebrow">optional opening wager</div>
+      <h2>How many logical threads does this machine claim?</h2>
+      <p>One number, no stakes. The answer comes from <code>navigator.hardwareConcurrency</code>; your guess stays in this page, is never stored, and is never added to the report.</p>
+      <div class="guess-row">
+        <input id="thread-guess" type="number" min="1" max="1024" step="1" inputmode="numeric" placeholder="threads" aria-label="Logical thread guess">
+        <button id="guess-and-run" type="button">Guess &amp; Run</button>
+        <button id="skip-and-run" type="button">Skip &amp; Run</button>
+      </div>
+      <p id="guess-note">The laboratory waits for either choice.</p>
+    </section>
+    <section id="gpu-window" aria-label="WebGPU 3D suite progress">
+      <div class="gpu-window-head"><span class="eyebrow">machine interrogation viewport</span><span id="gpu-window-status">waiting for a real progress value</span></div>
+      <div class="gpu-viewport">
+        <canvas id="gpu-bar" width="960" height="280" hidden aria-label="3D bar showing measured suite progress"></canvas>
+        <div id="gpu-placeholder">The 3D bar is waiting to find out whether this browser believes in windows.</div>
+      </div>
+    </section>
+    <div class="progress-shell" aria-hidden="true"><div id="progress"></div></div>
+    <div id="progress-label" role="status">waiting for your guess, or your dignified refusal…</div>
+    <p id="guess-reveal" aria-live="polite"></p>
+    <div id="telemetry" aria-live="polite"><span id="telemetry-kernel">kernel waiting</span><span id="telemetry-count">0 samples</span><span id="telemetry-median">median —</span></div>
+    <ol id="stages">
+      <li class="stage" data-stage="stage.environment.v1"><span class="mark">○</span><span>environment facts</span><span class="detail">waiting</span></li>
+      <li class="stage" data-stage="stage.wasm-capabilities.v1"><span class="mark">○</span><span>wasm capability probes</span><span class="detail">waiting</span></li>
+      <li class="stage" data-stage="stage.cpu.v1"><span class="mark">○</span><span>CPU kernels</span><span class="detail">waiting</span></li>
+      <li class="stage" data-stage="stage.gpu-compute.v1"><span class="mark">○</span><span>GPU compute</span><span class="detail">waiting</span></li>
+      <li class="stage" data-stage="stage.float-behavior.v1"><span class="mark">○</span><span>float behavior</span><span class="detail">waiting</span></li>
+      <li class="stage" data-stage="stage.timing.v1"><span class="mark">○</span><span>display + jank timing</span><span class="detail">waiting</span></li>
+      <li class="stage" data-stage="stage.gpu-render-bar.v1"><span class="mark">○</span><span>GPU render window</span><span class="detail">waiting</span></li>
+      <li class="stage" data-stage="stage.gpu.v1"><span class="mark">○</span><span>engine GPU calibration</span><span class="detail">waiting</span></li>
+    </ol>
+    <noscript>This diagnostic needs JavaScript and WebAssembly. No report has been created.</noscript>
+    <section id="verdict" class="card" aria-live="polite">
+      <div class="eyebrow">verdict</div>
+      <h2 id="verdict-title">this is…</h2>
+      <p id="verdict-copy"></p>
+      <ul id="observations"></ul>
+      <div id="badges" aria-label="Earned measurement badges"></div>
+      <div id="facts" class="facts"></div>
+      <p id="disclosure" class="disclosure">This report contains your browser user agent, logical processor count, device memory when exposed, screen size and pixel ratio, timer and visibility conditions, wasm feature results, capped benchmark samples and summaries, floating-point fingerprints, and GPU facts or unavailable reasons. It contains no cookies, local storage, account identifier, or data read from your files. Download stays on this device. Submit sends this JSON once to the Ember server, which writes the accepted report to its structured logs and returns a content-derived receipt.</p>
+      <div class="actions">
+        <button id="download" type="button" disabled>Download Report</button>
+        <button id="submit" type="button" disabled>Submit to Server</button>
+      </div>
+      <p id="action-status"></p>
+      <button id="run-again" type="button">Run It Again</button>
+    </section>
+  </main>
+  <script type="module">
+    const ROOT = new URL('../../../', location);
+    const RAW_SAMPLE_CAP = 120;
+    const REPORT_BYTE_CAP = 52 * 1024;
+    const TIMER_TRANSITION_TARGET = 32;
+    const TIMER_PROBE_MAX_READS = 4_000_000;
+    const TIMER_PROBE_MAX_WALL_MS = 500;
+    const KERNEL_TARGET_TIMER_QUANTA = 32;
+    const KERNEL_MAX_REPEAT_COUNT = 1_048_576;
+    const KERNEL_MAX_BATCH_TARGET_MS = 320;
+    const KERNEL_TOTAL_BUDGET_MS = 5_000;
+    const MEMCPY_MIB_PER_BASE_INVOCATION = 16;
+    const GPU_TARGET_TIMER_QUANTA = 32;
+    const GPU_TIMESTAMP_TARGET_MS = 0.25;
+    const GPU_MAX_REPEAT_COUNT = 4_096;
+    const GPU_MAX_BATCH_TARGET_MS = 640;
+    const GPU_KERNEL_TOTAL_BUDGET_MS = 15_000;
+    const GPU_STORAGE_MIB_PER_BASE_INVOCATION = 16;
+    const RENDER_INIT_DEADLINE_MS = 8_000;
+    const RENDER_PRESENT_WARMUPS = 3;
+    const RENDER_PRESENT_SAMPLES = 15;
+    const WASM_LOAD_DEADLINE_MS = 8_000;
+    const SERVER_LOOKUP_DEADLINE_MS = 8_000;
+    const SUBMISSION_DEADLINE_MS = 15_000;
+    const TIMER_CAVEAT = 'Browser timer precision, privacy rounding, page visibility, thermal state, background work, and scheduler decisions bound the meaning of every duration; values below the observed performance.now() resolution are not distinguishable, and exact multiples of that quantum are bucketed observations rather than exact durations.';
+    const GPU_UNAVAILABLE = 'ember-engine v1 exposes Renderer only through a winit-owned surface event loop; Renderer::new panics on adapter or device failure and exposes no fallible offscreen timing or adapter-info seam, so this optional stage cannot run without risking the rest of the suite.';
+    const STAGES = [
+      ['stage.environment.v1', 'environment facts', 2_000],
+      ['stage.wasm-capabilities.v1', 'wasm capability probes', 2_000],
+      ['stage.cpu.v1', 'CPU kernels', 100_000],
+      ['stage.gpu-compute.v1', 'GPU compute', 120_000],
+      ['stage.float-behavior.v1', 'float behavior', 5_000],
+      ['stage.timing.v1', 'display + jank timing', 15_000],
+      ['stage.gpu-render-bar.v1', 'GPU render window', 12_000],
+      ['stage.gpu.v1', 'engine GPU calibration', 3_000],
+    ];
+    const GPU_KERNEL_FALLBACK = [
+      { kernel_id: 'gpu.compute-rank4-soa.n256.v1', workload: 'WebGPU f32 SoA 4xN projection; N=256; 64 dispatches per base invocation; same shape and batch count as cpu.rank4-soa.n256.v2 but different precision and execution substrate', unit: 'ms' },
+      { kernel_id: 'gpu.compute-rank4-soa.n1024.v1', workload: 'WebGPU f32 SoA 4xN projection; N=1024; 64 dispatches per base invocation; same shape and batch count as cpu.rank4-soa.n1024.v2 but different precision and execution substrate', unit: 'ms' },
+      { kernel_id: 'gpu.storage-copy.4m.v1', workload: 'WebGPU storage-buffer copy at 4194304 bytes; 4 dispatches and 16 MiB copied per base invocation', unit: 'MiB/s' },
+      { kernel_id: 'gpu.dispatch-roundtrip.tiny.v1', workload: '8 sequential one-workgroup submit-to-completion round trips per base invocation; reported samples normalize to one round trip; a timestamp query, when available, separates the first shader dispatch without replacing the wall-clock measurement', unit: 'ms' },
+    ];
+    const DEFAULT_FAER_VERDICT = {
+      version: '0.24.4',
+      compiled: true,
+      configuration: 'default features disabled; std,linalg enabled; Par::Seq; no Rayon',
+      consequence: 'the built client includes manual SoA plus matching faer rank-4, 6x6 LLT, and Spin(4) kernels',
+    };
+    let runSerial = 0;
+    let activeRun = null;
+    let wasm = null;
+    let wasmLoadPromise = null;
+    let report = null;
+    let compactReport = '';
+    let submissionGeneration = 0;
+    let renderGeneration = 0;
+    let renderState = null;
+
+    const progress = document.querySelector('#progress');
+    const progressLabel = document.querySelector('#progress-label');
+    const guessCard = document.querySelector('#guess-card');
+    const guessInput = document.querySelector('#thread-guess');
+    const guessButton = document.querySelector('#guess-and-run');
+    const skipButton = document.querySelector('#skip-and-run');
+    const guessNote = document.querySelector('#guess-note');
+    const guessReveal = document.querySelector('#guess-reveal');
+    const telemetry = document.querySelector('#telemetry');
+    const telemetryKernel = document.querySelector('#telemetry-kernel');
+    const telemetryCount = document.querySelector('#telemetry-count');
+    const telemetryMedian = document.querySelector('#telemetry-median');
+    const gpuCanvas = document.querySelector('#gpu-bar');
+    const gpuPlaceholder = document.querySelector('#gpu-placeholder');
+    const gpuWindowStatus = document.querySelector('#gpu-window-status');
+    const verdict = document.querySelector('#verdict');
+    const downloadButton = document.querySelector('#download');
+    const submitButton = document.querySelector('#submit');
+    const runAgainButton = document.querySelector('#run-again');
+    const actionStatus = document.querySelector('#action-status');
+
+    function reason(error) {
+      if (error instanceof Error && error.message) return error.message;
+      return String(error || 'unknown browser failure');
+    }
+
+    function capSamples(values, cap = RAW_SAMPLE_CAP) {
+      if (values.length <= cap) return values.slice();
+      return Array.from({ length: cap }, (_, index) => values[Math.floor(index * (values.length - 1) / (cap - 1))]);
+    }
+
+    function summarize(values) {
+      if (!values.length) return null;
+      const sorted = values.slice().sort((left, right) => left - right);
+      const middle = Math.floor(sorted.length / 2);
+      const median = sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+      return {
+        sample_count: sorted.length,
+        median,
+        p95: sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)],
+        min: sorted[0],
+        max: sorted[sorted.length - 1],
+      };
+    }
+
+    function recordVisibility(run) {
+      if (!run || activeRun !== run || !run.running) return;
+      run.hiddenDuringRun ||= document.hidden;
+      run.visibilityObservations.push({ elapsed_ms: performance.now() - run.suiteStarted, state: document.visibilityState });
+      if (run.visibilityObservations.length > RAW_SAMPLE_CAP) run.visibilityObservations.shift();
+    }
+
+    function showRenderPlaceholder(message, bad = false) {
+      gpuCanvas.hidden = true;
+      gpuPlaceholder.hidden = false;
+      gpuPlaceholder.classList.toggle('bad', bad);
+      gpuPlaceholder.textContent = message;
+      gpuWindowStatus.textContent = bad ? '3D unavailable; DOM progress remains authoritative' : message;
+    }
+
+    function stopRenderLoop() {
+      if (renderState?.rafId) cancelAnimationFrame(renderState.rafId);
+      if (renderState) renderState.rafId = 0;
+    }
+
+    function resetRenderWindow(message = 'The 3D bar is waiting for a real progress value.') {
+      renderGeneration += 1;
+      stopRenderLoop();
+      renderState = null;
+      if (wasm) wasm.reset_render_bar();
+      showRenderPlaceholder(message);
+    }
+
+    function failRenderWindow(run, detail) {
+      if (run) run.renderUnavailable = detail;
+      renderGeneration += 1;
+      stopRenderLoop();
+      renderState = null;
+      if (wasm) wasm.reset_render_bar();
+      showRenderPlaceholder(`The 3D bar sat this one out: ${detail}`, true);
+    }
+
+    function scheduleRenderFrame(run) {
+      const state = renderState;
+      if (!state || state.rafId || state.paused || document.hidden || activeRun !== run || !run.running) return;
+      state.rafId = requestAnimationFrame(() => {
+        state.rafId = 0;
+        if (renderState !== state || state.paused || activeRun !== run || !run.running) return;
+        const distance = state.target - state.displayed;
+        state.displayed = Math.abs(distance) < 0.0005 ? state.target : state.displayed + distance * 0.18;
+        try {
+          state.frames = wasm.render_bar_frame(state.displayed);
+          gpuWindowStatus.textContent = `${(state.target * 100).toFixed(1)}% measured target · ${state.frames} frames presented`;
+          scheduleRenderFrame(run);
+        } catch (error) {
+          failRenderWindow(run, reason(error));
+        }
+      });
+    }
+
+    function pauseRenderBar(note) {
+      if (!renderState) return;
+      stopRenderLoop();
+      renderState.paused = true;
+      gpuWindowStatus.textContent = `frozen — ${note}`;
+    }
+
+    function resumeRenderBar(run) {
+      if (!renderState || renderState.runId !== run.id) return;
+      if (run.gpuComputeTimedOut) {
+        gpuWindowStatus.textContent = 'frozen — timed-out GPU compute may still be settling';
+        return;
+      }
+      renderState.paused = false;
+      if (document.hidden) {
+        gpuWindowStatus.textContent = 'hidden — suite continues without waiting for frames';
+        return;
+      }
+      scheduleRenderFrame(run);
+    }
+
+    function setRealProgress(run, stageIndex, kernelIndex = 0, kernelCount = 1, sampleCount = 0, sampleTotal = 1) {
+      if (!renderState || renderState.runId !== run.id || !wasm) return;
+      const target = wasm.bar_progress_fraction(stageIndex, STAGES.length, kernelIndex, kernelCount, sampleCount, sampleTotal);
+      renderState.target = Math.max(0, Math.min(1, target));
+      if (!renderState.paused) scheduleRenderFrame(run);
+    }
+
+    function finishRenderBar(run) {
+      if (!renderState || renderState.runId !== run.id || run.gpuComputeTimedOut) return;
+      stopRenderLoop();
+      renderState.paused = false;
+      renderState.target = 1;
+      renderState.displayed = 1;
+      try {
+        renderState.frames = wasm.render_bar_frame(1);
+        gpuWindowStatus.textContent = `100.0% measured target · ${renderState.frames} frames presented`;
+      } catch (error) {
+        failRenderWindow(run, reason(error));
+      }
+    }
+
+    async function initializeRenderWindow(run) {
+      if (!wasm) {
+        failRenderWindow(run, run.wasmFailure || 'the diagnostic wasm client is unavailable');
+        return;
+      }
+      const generation = ++renderGeneration;
+      const pixelRatio = Number.isFinite(devicePixelRatio) ? Math.min(devicePixelRatio, 2) : 1;
+      const cssWidth = Math.max(480, gpuCanvas.parentElement.clientWidth || 960);
+      gpuCanvas.width = Math.min(1_440, Math.round(cssWidth * pixelRatio));
+      gpuCanvas.height = Math.max(160, Math.round(gpuCanvas.width * 7 / 24));
+      gpuPlaceholder.classList.remove('bad');
+      gpuPlaceholder.textContent = 'Asking WebGPU for a canvas-compatible adapter…';
+      gpuWindowStatus.textContent = 'named renderer warmup; not timed';
+      let deadlineTimer = 0;
+      const initialization = wasm.initialize_render_bar_json(gpuCanvas);
+      initialization.catch(() => {});
+      try {
+        const deadline = new Promise((_, reject) => {
+          deadlineTimer = setTimeout(() => reject(new Error(`3D progress initialization exceeded ${RENDER_INIT_DEADLINE_MS} ms`)), RENDER_INIT_DEADLINE_MS);
+        });
+        const facts = JSON.parse(await Promise.race([initialization, deadline]));
+        if (generation !== renderGeneration || activeRun !== run || !run.running) {
+          wasm.reset_render_bar();
+          return;
+        }
+        renderState = {
+          runId: run.id,
+          generation,
+          facts,
+          target: 0,
+          displayed: 0,
+          frames: 0,
+          rafId: 0,
+          paused: false,
+        };
+        run.renderFacts = facts;
+        gpuCanvas.hidden = false;
+        gpuPlaceholder.hidden = true;
+        scheduleRenderFrame(run);
+      } catch (error) {
+        if (generation === renderGeneration && activeRun === run && run.running) failRenderWindow(run, reason(error));
+      } finally {
+        clearTimeout(deadlineTimer);
+      }
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      recordVisibility(activeRun);
+      if (!renderState || !activeRun || !activeRun.running || renderState.paused) return;
+      if (document.hidden) {
+        stopRenderLoop();
+        gpuWindowStatus.textContent = 'hidden — suite continues without waiting for frames';
+      } else {
+        scheduleRenderFrame(activeRun);
+      }
+    });
+
+    function stageElement(stageId) {
+      return document.querySelector(`[data-stage="${stageId}"]`);
+    }
+
+    function showStage(stageId, state, detail) {
+      const element = stageElement(stageId);
+      element.classList.remove('active', 'complete', 'unavailable');
+      if (state !== 'waiting') element.classList.add(state);
+      element.querySelector('.mark').textContent = state === 'waiting' ? '○' : state === 'active' ? '◉' : state === 'complete' ? '✓' : '–';
+      element.querySelector('.detail').textContent = detail;
+    }
+
+    function tokenActive(run, token) {
+      return activeRun === run && run.running && !token.cancelled;
+    }
+
+    function requireActive(run, token) {
+      if (!tokenActive(run, token)) throw new Error('stage work cancelled after its deadline or run replacement');
+    }
+
+    function timerDelay(milliseconds) {
+      return new Promise(resolve => setTimeout(resolve, milliseconds));
+    }
+
+    async function cooperativeYield(run, token, force = false) {
+      requireActive(run, token);
+      if (document.hidden && !force) return;
+      await timerDelay(0);
+      requireActive(run, token);
+    }
+
+    async function runStage(run, stageId, name, deadlineMs, work) {
+      if (activeRun !== run || !run.running) return;
+      const started = performance.now();
+      const visibilityAtStart = document.visibilityState;
+      const token = { cancelled: false };
+      const stageIndex = STAGES.findIndex(stage => stage[0] === stageId);
+      run.currentStageIndex = Math.max(0, stageIndex);
+      recordVisibility(run);
+      setRealProgress(run, run.currentStageIndex);
+      showStage(stageId, 'active', 'measuring…');
+      progressLabel.textContent = `${name}: let’s see…`;
+      const workResult = Promise.resolve()
+        .then(() => work(run, token))
+        .then(() => ({ state: 'complete', unavailableReason: null }))
+        .catch(error => ({ state: 'unavailable', unavailableReason: reason(error) }));
+      let deadlineTimer = 0;
+      const deadlineResult = new Promise(resolve => {
+        deadlineTimer = setTimeout(() => resolve({
+          state: 'unavailable',
+          unavailableReason: `${name} exceeded its ${deadlineMs} ms stage deadline while the page was ${document.visibilityState}`,
+          timedOut: true,
+        }), deadlineMs);
+      });
+      const outcome = await Promise.race([workResult, deadlineResult]);
+      clearTimeout(deadlineTimer);
+      if (outcome.timedOut) {
+        token.cancelled = true;
+        if (stageId === 'stage.gpu-compute.v1' && wasm) {
+          run.gpuComputeTimedOut = true;
+          wasm.cancel_gpu_compute();
+        }
+        if (stageId === 'stage.gpu-render-bar.v1') resumeRenderBar(run);
+      }
+      if (activeRun !== run || !run.running) return;
+      const duration = performance.now() - started;
+      run.stageReports.push({
+        stage_id: stageId,
+        name,
+        status: outcome.state,
+        unavailable_reason: outcome.unavailableReason,
+        duration_ms: duration,
+      });
+      const visibilityDetail = visibilityAtStart === document.visibilityState ? document.visibilityState : `${visibilityAtStart}→${document.visibilityState}`;
+      showStage(stageId, outcome.state, outcome.state === 'complete' ? `${duration.toFixed(1)} ms · ${visibilityDetail}` : `unavailable · ${outcome.unavailableReason}`);
+      progress.style.width = `${run.stageReports.length / STAGES.length * 100}%`;
+      setRealProgress(run, run.stageReports.length);
+      recordVisibility(run);
+      await timerDelay(24);
+    }
+
+    function completeKernel(run, token, kernelId, workload, unit, warmupRuns, samples, notes = []) {
+      requireActive(run, token);
+      run.kernels.push({
+        kernel_id: kernelId,
+        workload,
+        unit,
+        warmup_runs: warmupRuns,
+        status: 'complete',
+        unavailable_reason: null,
+        raw_samples: capSamples(samples),
+        summary: summarize(samples),
+        notes,
+      });
+    }
+
+    function unavailableKernel(run, token, kernelId, workload, unit, unavailableReason, notes = []) {
+      requireActive(run, token);
+      run.kernels.push({
+        kernel_id: kernelId,
+        workload,
+        unit,
+        warmup_runs: 0,
+        status: 'unavailable',
+        unavailable_reason: unavailableReason,
+        raw_samples: [],
+        summary: null,
+        notes,
+      });
+    }
+
+    function timerFacts(run, token) {
+      const positives = [];
+      let zeroDeltaCount = 0;
+      let monotonicityViolations = 0;
+      let previous = performance.now();
+      let readCount = 0;
+      const wallStarted = Date.now();
+      while (readCount < TIMER_PROBE_MAX_READS && positives.length < TIMER_TRANSITION_TARGET) {
+        const current = performance.now();
+        const delta = current - previous;
+        if (delta > 0) positives.push(delta);
+        else if (delta === 0) zeroDeltaCount += 1;
+        else monotonicityViolations += 1;
+        previous = current;
+        readCount += 1;
+        if (readCount % 4096 === 0 && Date.now() - wallStarted >= TIMER_PROBE_MAX_WALL_MS) break;
+      }
+      const resolution = positives.length ? Math.min(...positives) : null;
+      completeKernel(
+        run,
+        token,
+        'environment.performance-now.v2',
+        'up to 4000000 consecutive performance.now() reads, stopping after 32 positive transitions or 500 ms; positive deltas summarized before raw-sample capping',
+        'ms',
+        0,
+        positives,
+        [TIMER_CAVEAT, `${readCount} reads; ${zeroDeltaCount} equal readings; ${monotonicityViolations} backwards readings`, resolution == null ? 'effective timer quantum was not observed within the bounded probe' : `measured effective timer quantum ${resolution} ms`],
+      );
+      return {
+        resolution_ms: resolution,
+        zero_delta_count: zeroDeltaCount,
+        monotonicity_violations: monotonicityViolations,
+        positive_delta_samples_ms: capSamples(positives),
+        positive_delta_summary: summarize(positives),
+        caveat: TIMER_CAVEAT,
+      };
+    }
+
+    function timerQuantumNote(run, subject) {
+      const quantum = run.environment?.timer?.resolution_ms;
+      if (!Number.isFinite(quantum) || quantum <= 0) return `${subject} has no measured effective timer quantum; sub-millisecond interpretation is unavailable.`;
+      return `${subject} uses timestamps quantized to the measured effective performance.now() quantum of ${quantum} ms; equal-looking values and differences below that quantum are not distinguishable.`;
+    }
+
+    function unresolvableKernelReason(quantum, detail) {
+      return `kernel is unresolvable under the measured performance.now() quantum of ${quantum} ms: ${detail}`;
+    }
+
+    function normalizedKernelSample(spec, elapsedMs, repeatCount) {
+      const perInvocationMs = elapsedMs / repeatCount;
+      if (spec.unit === 'MiB/s') return MEMCPY_MIB_PER_BASE_INVOCATION * 1000 / perInvocationMs;
+      return perInvocationMs;
+    }
+
+    function featureProbe(kernelId, available, unavailableReason = null) {
+      return { kernel_id: kernelId, available, unavailable_reason: available ? null : unavailableReason };
+    }
+
+    function validateModule(bytes) {
+      try {
+        return WebAssembly.validate(new Uint8Array(bytes));
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function wasmCapabilities() {
+      const simd = [0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 22, 1, 20, 0, 253, 12, ...new Array(16).fill(0), 11];
+      const bulk = [0, 97, 115, 109, 1, 0, 0, 0, 1, 4, 1, 96, 0, 0, 3, 2, 1, 0, 5, 3, 1, 0, 1, 12, 1, 1, 10, 14, 1, 12, 0, 65, 0, 65, 0, 65, 0, 252, 8, 0, 0, 11, 11, 3, 1, 1, 0];
+      const simdAvailable = validateModule(simd);
+      const bulkAvailable = validateModule(bulk);
+      let threadsAvailable = false;
+      let threadsReason = null;
+      if (typeof SharedArrayBuffer === 'undefined') {
+        threadsReason = 'SharedArrayBuffer is not exposed by this browsing context';
+      } else if (!globalThis.crossOriginIsolated) {
+        threadsReason = 'the page is not cross-origin isolated, so shared wasm memory is unavailable';
+      } else {
+        try {
+          new WebAssembly.Memory({ initial: 1, maximum: 1, shared: true });
+          threadsAvailable = true;
+        } catch (error) {
+          threadsReason = `shared WebAssembly.Memory construction failed: ${reason(error)}`;
+        }
+      }
+      return {
+        simd128: featureProbe('capability.wasm-simd128.v1', simdAvailable, 'a module containing v128.const did not validate'),
+        threads: featureProbe('capability.wasm-threads.v1', threadsAvailable, threadsReason),
+        bulk_memory: featureProbe('capability.wasm-bulk-memory.v1', bulkAvailable, 'a module containing memory.init did not validate'),
+      };
+    }
+
+    function updateTelemetry(kernelId, samples, run = null, kernelIndex = 0, kernelCount = 1, sampleTotal = 1) {
+      telemetry.classList.add('visible');
+      telemetryKernel.textContent = kernelId;
+      telemetryCount.textContent = `${samples.length} sample${samples.length === 1 ? '' : 's'}`;
+      const summary = summarize(samples);
+      telemetryMedian.textContent = summary ? `median ${summary.median.toFixed(4)}` : 'median —';
+      if (run) setRealProgress(run, run.currentStageIndex, kernelIndex, kernelCount, samples.length, sampleTotal);
+    }
+
+    async function measureCpu(run, token) {
+      if (!wasm) {
+        unavailableKernel(run, token, 'cpu.wasm-client.v1', 'load the diagnostic wasm client and its fixed kernel inventory', 'ms', run.wasmFailure);
+        throw new Error(run.wasmFailure);
+      }
+      const inventory = JSON.parse(wasm.kernel_inventory_json());
+      if (!Array.isArray(inventory) || inventory.length === 0) {
+        throw new Error('diagnostic wasm returned an empty timed-kernel inventory');
+      }
+      const quantum = run.environment?.timer?.resolution_ms;
+      if (!Number.isFinite(quantum) || quantum <= 0) {
+        const unavailableReason = 'kernel is unresolvable because the bounded timer probe measured no positive performance.now() transition';
+        for (const spec of inventory) unavailableKernel(run, token, spec.kernel_id, spec.workload, spec.unit, unavailableReason, [TIMER_CAVEAT]);
+        throw new Error(unavailableReason);
+      }
+      const targetElapsedMs = quantum * KERNEL_TARGET_TIMER_QUANTA;
+      const minimumSamplingWallMs = targetElapsedMs * inventory[0].sample_runs;
+      if (targetElapsedMs > KERNEL_MAX_BATCH_TARGET_MS) {
+        const unavailableReason = unresolvableKernelReason(quantum, `the ${KERNEL_TARGET_TIMER_QUANTA}-quantum target is ${targetElapsedMs} ms, above the ${KERNEL_MAX_BATCH_TARGET_MS} ms batch-target cap`);
+        for (const spec of inventory) unavailableKernel(run, token, spec.kernel_id, spec.workload, spec.unit, unavailableReason, [TIMER_CAVEAT]);
+        throw new Error(unavailableReason);
+      }
+      if (minimumSamplingWallMs > KERNEL_TOTAL_BUDGET_MS) {
+        const unavailableReason = unresolvableKernelReason(quantum, `the ${KERNEL_TARGET_TIMER_QUANTA}-quantum target is ${targetElapsedMs} ms and cannot fit the ${KERNEL_TOTAL_BUDGET_MS} ms per-kernel budget`);
+        for (const spec of inventory) unavailableKernel(run, token, spec.kernel_id, spec.workload, spec.unit, unavailableReason, [TIMER_CAVEAT]);
+        throw new Error(unavailableReason);
+      }
+      for (const [kernelIndex, spec] of inventory.entries()) {
+        requireActive(run, token);
+        const workload = `${spec.workload}; every reported sample normalizes one adaptive repeated batch to one base invocation`;
+        let recorded = false;
+        try {
+          updateTelemetry(spec.kernel_id, [], run, kernelIndex, inventory.length, spec.sample_runs);
+          for (let index = 0; index < spec.warmup_runs; index += 1) {
+            requireActive(run, token);
+            const warmupChecksum = wasm.run_kernel(spec.kernel_id);
+            if (!Number.isFinite(warmupChecksum)) throw new Error(`kernel checksum was non-finite during warmup ${index + 1}`);
+          }
+          const samples = [];
+          const repeatCounts = [];
+          const batchElapsedMs = [];
+          const kernelStarted = performance.now();
+          let repeatCount = 1;
+          let checksum = 0;
+          for (let index = 0; index < spec.sample_runs; index += 1) {
+            requireActive(run, token);
+            while (true) {
+              requireActive(run, token);
+              if (performance.now() - kernelStarted >= KERNEL_TOTAL_BUDGET_MS) {
+                throw new Error(unresolvableKernelReason(quantum, `fewer than ${spec.sample_runs} samples reached ${KERNEL_TARGET_TIMER_QUANTA} quanta within the ${KERNEL_TOTAL_BUDGET_MS} ms per-kernel budget`));
+              }
+              const started = performance.now();
+              checksum = wasm.run_kernel_repeated(spec.kernel_id, repeatCount);
+              const elapsed = performance.now() - started;
+              if (!Number.isFinite(checksum)) throw new Error(`kernel checksum was non-finite after ${repeatCount} adaptive repeats`);
+              if (elapsed >= targetElapsedMs) {
+                const normalized = normalizedKernelSample(spec, elapsed, repeatCount);
+                if (!Number.isFinite(normalized)) throw new Error(unresolvableKernelReason(quantum, `normalization of ${elapsed} ms over ${repeatCount} repeats was non-finite`));
+                samples.push(normalized);
+                repeatCounts.push(repeatCount);
+                batchElapsedMs.push(elapsed);
+                updateTelemetry(spec.kernel_id, samples, run, kernelIndex, inventory.length, spec.sample_runs);
+                break;
+              }
+              if (repeatCount >= KERNEL_MAX_REPEAT_COUNT) {
+                throw new Error(unresolvableKernelReason(quantum, `${KERNEL_MAX_REPEAT_COUNT} repeats spanned only ${elapsed} ms, below the ${targetElapsedMs} ms target`));
+              }
+              const scaled = elapsed > 0 ? Math.ceil(repeatCount * targetElapsedMs / elapsed * 1.125) : repeatCount * 8;
+              repeatCount = Math.min(KERNEL_MAX_REPEAT_COUNT, Math.max(repeatCount + 1, scaled));
+            }
+            await cooperativeYield(run, token);
+          }
+          const normalizationNote = spec.unit === 'MiB/s' ? `${MEMCPY_MIB_PER_BASE_INVOCATION} MiB per base invocation × repeat count ÷ batch seconds; reported samples are bandwidth, not elapsed milliseconds` : 'batch elapsed milliseconds ÷ repeat count';
+          completeKernel(run, token, spec.kernel_id, workload, spec.unit, spec.warmup_runs, samples, [TIMER_CAVEAT, `measured timer quantum ${quantum} ms; batch target ${KERNEL_TARGET_TIMER_QUANTA} quanta (${targetElapsedMs} ms)`, `adaptive repeat counts per recorded sample: ${repeatCounts.join(', ')}`, `batch elapsed milliseconds per recorded sample: ${batchElapsedMs.join(', ')}`, `normalization: ${normalizationNote}`, `opaque checksum ${checksum}`, 'the dedicated WebGPU progress renderer was frozen before the CPU stage and no progress frame was scheduled between warmups or timed samples']);
+          recorded = true;
+        } catch (error) {
+          if (tokenActive(run, token)) {
+            unavailableKernel(run, token, spec.kernel_id, workload, spec.unit, reason(error), [TIMER_CAVEAT]);
+            recorded = true;
+          }
+        }
+        if (!recorded) requireActive(run, token);
+        await cooperativeYield(run, token, true);
+      }
+      telemetry.classList.remove('visible');
+    }
+
+    function gpuAdapterNotes(facts) {
+      return [
+        `adapter identity: ${facts.adapter_identity}`,
+        `adapter name: ${facts.name}`,
+        `vendor: ${facts.vendor}`,
+        `architecture: ${facts.architecture}`,
+        `device class: ${facts.device_class}`,
+        `backend: ${facts.backend}`,
+        `timestamp-query: ${facts.timestamp_query}`,
+        `optional features: ${facts.optional_features.length ? facts.optional_features.join(', ') : 'none of timestamp-query, shader-f16, or subgroups exposed'}`,
+        `all wgpu feature flags exposed by the adapter: ${facts.all_exposed_features}`,
+        `limits: max_buffer_size=${facts.max_buffer_size}, max_storage_buffer_binding_size=${facts.max_storage_buffer_binding_size}, max_storage_buffers_per_shader_stage=${facts.max_storage_buffers_per_shader_stage}, max_compute_invocations_per_workgroup=${facts.max_compute_invocations_per_workgroup}, max_compute_workgroup_size_x=${facts.max_compute_workgroup_size_x}, max_compute_workgroups_per_dimension=${facts.max_compute_workgroups_per_dimension}`,
+        'wgpu 24 AdapterInfo does not expose a separate architecture field on the browser WebGPU backend; the report says so instead of guessing from the user agent',
+      ];
+    }
+
+    function gpuUnavailableInventory(run, token, inventory, unavailableReason) {
+      unavailableKernel(run, token, 'gpu.adapter-facts.v1', 'compute-only WebGPU Instance → Adapter → Device facts; no surface, window, or renderer', 'facts', unavailableReason);
+      for (const spec of inventory.length ? inventory : GPU_KERNEL_FALLBACK) unavailableKernel(run, token, spec.kernel_id, spec.workload, spec.unit, unavailableReason, [TIMER_CAVEAT]);
+    }
+
+    function normalizedGpuSample(spec, elapsedMs, repeatCount, dispatchCount) {
+      if (spec.kernel_id === 'gpu.storage-copy.4m.v1') return GPU_STORAGE_MIB_PER_BASE_INVOCATION * repeatCount * 1000 / elapsedMs;
+      if (spec.kernel_id === 'gpu.dispatch-roundtrip.tiny.v1') return elapsedMs / dispatchCount;
+      return elapsedMs / repeatCount;
+    }
+
+    async function measureGpuCompute(run, token) {
+      if (!wasm) {
+        const unavailableReason = run.wasmFailure || 'diagnostic wasm client is unavailable';
+        gpuUnavailableInventory(run, token, [], unavailableReason);
+        throw new Error(unavailableReason);
+      }
+      const inventory = JSON.parse(wasm.gpu_compute_inventory_json());
+      if (!Array.isArray(inventory) || inventory.length !== 4) throw new Error('diagnostic wasm returned an invalid WebGPU compute inventory');
+      let facts;
+      try {
+        progressLabel.textContent = 'GPU compute: requesting an adapter and compiling the named warmup…';
+        facts = JSON.parse(await wasm.initialize_gpu_compute_json());
+        requireActive(run, token);
+      } catch (error) {
+        const unavailableReason = `WebGPU compute initialization unavailable: ${reason(error)}`;
+        if (tokenActive(run, token)) gpuUnavailableInventory(run, token, inventory, unavailableReason);
+        throw new Error(unavailableReason);
+      }
+      completeKernel(
+        run,
+        token,
+        'gpu.adapter-facts.v1',
+        'compute-only wgpu 24 Instance → Adapter → Device; high-performance preference, no compatible surface, fixed shader and pipeline creation before timed dispatches',
+        'facts',
+        0,
+        [],
+        gpuAdapterNotes(facts),
+      );
+      const quantum = run.environment?.timer?.resolution_ms;
+      let completeCount = 0;
+      let deviceFailure = null;
+      let firstFailure = null;
+      for (const [kernelIndex, spec] of inventory.entries()) {
+        requireActive(run, token);
+        const isDispatchRoundTrip = spec.kernel_id === 'gpu.dispatch-roundtrip.tiny.v1';
+        const usesTimestamp = facts.timestamp_query && !isDispatchRoundTrip;
+        const needsWallClock = !usesTimestamp;
+        const targetElapsedMs = usesTimestamp ? GPU_TIMESTAMP_TARGET_MS : quantum * GPU_TARGET_TIMER_QUANTA;
+        const workload = `${spec.workload}; every reported sample normalizes one adaptive repeated batch to ${isDispatchRoundTrip ? 'one submit-to-completion round trip' : 'one base invocation'}`;
+        if (deviceFailure) {
+          unavailableKernel(run, token, spec.kernel_id, workload, spec.unit, deviceFailure, [TIMER_CAVEAT]);
+          continue;
+        }
+        if (needsWallClock && (!Number.isFinite(quantum) || quantum <= 0)) {
+          const unavailableReason = 'GPU queue completion is unresolvable because the bounded timer probe measured no positive performance.now() transition';
+          firstFailure ||= unavailableReason;
+          unavailableKernel(run, token, spec.kernel_id, workload, spec.unit, unavailableReason, [TIMER_CAVEAT]);
+          continue;
+        }
+        if (needsWallClock && targetElapsedMs > GPU_MAX_BATCH_TARGET_MS) {
+          const unavailableReason = unresolvableKernelReason(quantum, `the GPU ${GPU_TARGET_TIMER_QUANTA}-quantum target is ${targetElapsedMs} ms, above the ${GPU_MAX_BATCH_TARGET_MS} ms batch-target cap`);
+          firstFailure ||= unavailableReason;
+          unavailableKernel(run, token, spec.kernel_id, workload, spec.unit, unavailableReason, [TIMER_CAVEAT]);
+          continue;
+        }
+        let recorded = false;
+        try {
+          updateTelemetry(spec.kernel_id, [], run, kernelIndex, inventory.length, spec.sample_runs);
+          for (let index = 0; index < spec.warmup_runs; index += 1) {
+            requireActive(run, token);
+            const warmup = JSON.parse(await wasm.run_gpu_compute_json(spec.kernel_id, 1));
+            requireActive(run, token);
+            if (!Number.isFinite(warmup.checksum)) throw new Error(`GPU checksum was non-finite during named warmup ${index + 1}`);
+          }
+          const samples = [];
+          const repeatCounts = [];
+          const dispatchTimestampProbes = [];
+          const kernelStarted = Date.now();
+          let repeatCount = 1;
+          let checksum = 0;
+          let dispatchesPerBase = 0;
+          let timingMethod = '';
+          for (let index = 0; index < spec.sample_runs; index += 1) {
+            requireActive(run, token);
+            while (true) {
+              requireActive(run, token);
+              if (Date.now() - kernelStarted >= GPU_KERNEL_TOTAL_BUDGET_MS) throw new Error(`GPU kernel could not collect ${spec.sample_runs} resolved samples within its ${GPU_KERNEL_TOTAL_BUDGET_MS} ms budget`);
+              const measured = JSON.parse(await wasm.run_gpu_compute_json(spec.kernel_id, repeatCount));
+              requireActive(run, token);
+              checksum = measured.checksum;
+              if (!Number.isFinite(checksum)) throw new Error(`GPU checksum was non-finite after ${repeatCount} adaptive repeats`);
+              const elapsed = usesTimestamp ? measured.gpu_elapsed_ms : measured.queue_elapsed_ms;
+              if (Number.isFinite(elapsed) && elapsed > 0 && elapsed >= targetElapsedMs) {
+                const normalized = normalizedGpuSample(spec, elapsed, repeatCount, measured.dispatch_count);
+                if (!Number.isFinite(normalized) || normalized <= 0) throw new Error(`GPU timing normalization was non-finite or non-positive after ${repeatCount} repeats`);
+                samples.push(normalized);
+                repeatCounts.push(repeatCount);
+                dispatchesPerBase = measured.dispatch_count / repeatCount;
+                timingMethod = measured.timing_method;
+                if (isDispatchRoundTrip && Number.isFinite(measured.gpu_elapsed_ms)) dispatchTimestampProbes.push(measured.gpu_elapsed_ms);
+                updateTelemetry(spec.kernel_id, samples, run, kernelIndex, inventory.length, spec.sample_runs);
+                break;
+              }
+              if (repeatCount >= GPU_MAX_REPEAT_COUNT) {
+                const clock = usesTimestamp ? 'GPU timestamp query' : `measured performance.now() quantum of ${quantum} ms`;
+                throw new Error(`GPU kernel remained unresolvable under the ${clock}: ${GPU_MAX_REPEAT_COUNT} repeats spanned ${elapsed} ms, below the ${targetElapsedMs} ms target`);
+              }
+              const scaled = Number.isFinite(elapsed) && elapsed > 0 ? Math.ceil(repeatCount * targetElapsedMs / elapsed * 1.125) : repeatCount * 8;
+              repeatCount = Math.min(GPU_MAX_REPEAT_COUNT, Math.max(repeatCount + 1, scaled));
+            }
+            await cooperativeYield(run, token);
+          }
+          const timingNote = usesTimestamp
+            ? 'primary samples use WebGPU timestamp-query around the compute pass and exclude submit, queue scheduling, completion-fence mapping, and validation readback time'
+            : isDispatchRoundTrip && facts.timestamp_query
+              ? 'primary samples are submit → 4-byte validation-buffer mapAsync completion-fence wall-clock per round trip because dispatch overhead includes queue and scheduling; a timestamp query on the first tiny shader dispatch is recorded separately'
+              : 'primary samples are submit → 4-byte validation-buffer mapAsync completion-fence wall-clock and include queue/scheduling overhead, GPU execution, the fence copy, and promise/mapping scheduling, but exclude the full validation-buffer mapping after completion';
+          const normalizationNote = spec.kernel_id === 'gpu.storage-copy.4m.v1'
+            ? `${GPU_STORAGE_MIB_PER_BASE_INVOCATION} MiB copied per base invocation × repeat count ÷ primary batch seconds`
+            : isDispatchRoundTrip ? 'primary batch milliseconds ÷ actual sequential dispatch count' : 'primary batch milliseconds ÷ repeat count';
+          const timestampProbeSummary = summarize(dispatchTimestampProbes);
+          const timestampProbeNote = timestampProbeSummary ? `timestamp-query probe of the first tiny shader dispatch in each batch: median ${timestampProbeSummary.median} ms, p95 ${timestampProbeSummary.p95} ms over ${timestampProbeSummary.sample_count} probes` : 'timestamp-query probe: unavailable';
+          completeKernel(run, token, spec.kernel_id, workload, spec.unit, spec.warmup_runs, samples, [TIMER_CAVEAT, '3 named untimed warmups precede the 15 timed samples; the first dispatch absorbs lazy pipeline compilation outside timed regions', timingNote, `timing method: ${timingMethod}`, `adaptive repeat counts per recorded sample: ${repeatCounts.join(', ')}`, `dispatches per base invocation: ${dispatchesPerBase}`, ...(isDispatchRoundTrip ? [timestampProbeNote] : []), `normalization: ${normalizationNote}`, `last validated checksum ${checksum}`, '15 observations report median and p95; thermal state and downclocking can move them, so the report claims no stability beyond this run', 'the progress surface uses a separate logical wgpu device that may map to the same physical adapter; its rAF loop was frozen before compute initialization, warmups, and every timed dispatch']);
+          completeCount += 1;
+          recorded = true;
+        } catch (error) {
+          if (tokenActive(run, token)) {
+            let unavailableReason = reason(error);
+            try {
+              const status = JSON.parse(wasm.gpu_compute_status_json());
+              if (!status.available && status.reason) {
+                unavailableReason = `WebGPU device stopped during the run: ${status.reason}`;
+                deviceFailure = unavailableReason;
+              }
+            } catch (_) {
+              unavailableReason = `${unavailableReason}; WebGPU device status could not be decoded`;
+            }
+            firstFailure ||= unavailableReason;
+            unavailableKernel(run, token, spec.kernel_id, workload, spec.unit, unavailableReason, [TIMER_CAVEAT]);
+            recorded = true;
+          }
+        }
+        if (!recorded) requireActive(run, token);
+        await cooperativeYield(run, token, true);
+      }
+      telemetry.classList.remove('visible');
+      if (deviceFailure) throw new Error(`${deviceFailure}; ${completeCount} earlier timed kernel${completeCount === 1 ? '' : 's'} remain in the report`);
+      if (completeCount === 0) throw new Error(`WebGPU adapter facts were recorded, but no timed compute kernel completed: ${firstFailure || 'no kernel supplied a reason'}`);
+    }
+
+    function measureFloats(run, token) {
+      if (!wasm) {
+        run.floatBehavior = {
+          available: false,
+          unavailable_reason: run.wasmFailure,
+          fma_kernel_id: 'float.fma-contraction.v1',
+          fma: null,
+          transcendental_kernel_id: 'float.f32-sin-cos-ulp.v1',
+          transcendentals: [],
+        };
+        unavailableKernel(run, token, 'float.fma-contraction.v1', 'classic f32 a*b+c fused-versus-separated rounding case', 'bits', run.wasmFailure);
+        unavailableKernel(run, token, 'float.f32-sin-cos-ulp.v1', '11 exact f32 inputs against baked double-precision sine and cosine references', 'ULP', run.wasmFailure);
+        throw new Error(run.wasmFailure);
+      }
+      const measured = JSON.parse(wasm.float_probe_json());
+      run.floatBehavior = {
+        available: true,
+        unavailable_reason: null,
+        fma_kernel_id: 'float.fma-contraction.v1',
+        fma: measured.fma,
+        transcendental_kernel_id: 'float.f32-sin-cos-ulp.v1',
+        transcendentals: measured.transcendentals,
+      };
+      completeKernel(
+        run,
+        token,
+        'float.fma-contraction.v1',
+        'f32 inputs 0x3f800001 × 0x3f800001 + 0xbf800002; compare plain, separated, and explicit fused results',
+        'bits',
+        0,
+        [],
+        [`plain 0x${measured.fma.plain_result_bits.toString(16)}`, `separated 0x${measured.fma.separated_result_bits.toString(16)}`, `fused 0x${measured.fma.fused_result_bits.toString(16)}`, `plain contracts to fused: ${measured.fma.contracts_to_fma}`],
+      );
+      const ulps = measured.transcendentals.flatMap(value => [value.sin_ulp, value.cos_ulp]);
+      completeKernel(
+        run,
+        token,
+        'float.f32-sin-cos-ulp.v1',
+        '11 exact f32 inputs from minimum-normal through ±1000; wasm f32 sin/cos versus baked f64 references rounded to f32',
+        'ULP',
+        0,
+        ulps,
+        ['raw observations alternate sine ULP then cosine ULP in frozen input order'],
+      );
+    }
+
+    function animationFrame(run, token, timeoutMs = 2500) {
+      if (document.hidden) return Promise.reject(new Error('requestAnimationFrame timing is unavailable while the document is hidden'));
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`requestAnimationFrame produced no frame within ${timeoutMs} ms`)), timeoutMs);
+        requestAnimationFrame(timestamp => {
+          clearTimeout(timer);
+          if (tokenActive(run, token)) resolve(timestamp);
+          else reject(new Error('requestAnimationFrame arrived after its stage was cancelled'));
+        });
+      });
+    }
+
+    async function measureRafCadence(run, token) {
+      const deltas = [];
+      const first = await animationFrame(run, token);
+      let previous = first;
+      let timestamp = first;
+      while (timestamp - first < 5000) {
+        requireActive(run, token);
+        if (document.hidden) throw new Error('requestAnimationFrame cadence became unavailable when the document was hidden during its five-second window');
+        timestamp = await animationFrame(run, token);
+        deltas.push(timestamp - previous);
+        previous = timestamp;
+      }
+      if (deltas.length < 2) throw new Error('fewer than two rAF intervals arrived during the five-second window');
+      const stats = summarize(deltas);
+      const baseline = stats.median;
+      const missedFrames = deltas.reduce((total, delta) => total + Math.max(0, Math.round(delta / baseline) - 1), 0);
+      completeKernel(
+        run,
+        token,
+        'timing.raf-cadence-5s.v1',
+        'consecutive requestAnimationFrame timestamps over approximately 5 seconds',
+        'ms',
+        0,
+        deltas,
+        [`estimated refresh ${Number.isFinite(1000 / baseline) ? (1000 / baseline).toFixed(2) : 'unavailable'} Hz`, `${missedFrames} estimated missed frames`, `document visibility at completion: ${document.visibilityState}`, timerQuantumNote(run, 'requestAnimationFrame cadence'), 'rAF timestamps remain scheduler observations; coarse timer precision can quantize intervals and the refresh estimate', 'the WebGPU progress renderer remained frozen for this timing stage, so its own rAF loop did not compete for callbacks'],
+      );
+      return { refreshHz: 1000 / baseline, missedFrames };
+    }
+
+    async function measureJank(run, token) {
+      if (!wasm) {
+        unavailableKernel(run, token, 'timing.main-thread-burst-50ms.v1', 'wasm arithmetic chunks repeated until 50 ms of monotonic wall time elapse', 'ms', run.wasmFailure);
+        unavailableKernel(run, token, 'timing.post-burst-frame-gap.v1', 'requestAnimationFrame interval spanning the controlled 50 ms compute burst', 'ms', run.wasmFailure);
+        return;
+      }
+      let beforeFrame = null;
+      let frameUnavailableReason = null;
+      try {
+        beforeFrame = await animationFrame(run, token);
+      } catch (error) {
+        frameUnavailableReason = reason(error);
+      }
+      requireActive(run, token);
+      const burstStarted = performance.now();
+      const burstWallStarted = Date.now();
+      let checksum = 0;
+      while (performance.now() - burstStarted < 50 && Date.now() - burstWallStarted < 1_000) checksum += wasm.run_jank_chunk();
+      const burstDuration = performance.now() - burstStarted;
+      if (!Number.isFinite(checksum)) throw new Error('controlled-burst checksum was non-finite');
+      if (!Number.isFinite(burstDuration) || burstDuration <= 0) {
+        throw new Error(`controlled burst was unresolvable under the measured performance.now() quantum of ${run.environment?.timer?.resolution_ms ?? 'unknown'} ms`);
+      }
+      completeKernel(
+        run,
+        token,
+        'timing.main-thread-burst-50ms.v1',
+        'repeated fixed wasm arithmetic chunks until performance.now() reaches a 50 ms deadline',
+        'ms',
+        0,
+        [burstDuration],
+        [`opaque checksum ${checksum}`, TIMER_CAVEAT, timerQuantumNote(run, 'the 50 ms burst deadline and duration'), 'the actual compute burst may overshoot the displayed 50 ms by roughly one timer quantum plus one arithmetic chunk; quantized values such as 50 ms are bounds, not exact sub-quantum timings', 'the WebGPU progress renderer remained frozen for the controlled burst and its surrounding frame observations'],
+      );
+      if (beforeFrame == null || document.hidden) {
+        unavailableKernel(run, token, 'timing.post-burst-frame-gap.v1', 'requestAnimationFrame interval spanning the controlled 50 ms compute burst', 'ms', frameUnavailableReason || 'requestAnimationFrame timing became unavailable because the document was hidden', [TIMER_CAVEAT, timerQuantumNote(run, 'the frame gap spanning the compute burst')]);
+        return;
+      }
+      try {
+        const afterFrame = await animationFrame(run, token);
+        completeKernel(
+          run,
+          token,
+          'timing.post-burst-frame-gap.v1',
+          'requestAnimationFrame timestamp gap spanning the controlled 50 ms compute burst',
+          'ms',
+          0,
+          [afterFrame - beforeFrame],
+          [TIMER_CAVEAT, timerQuantumNote(run, 'the frame gap spanning the compute burst'), 'a coarse timer can quantize the observed frame gap; the report does not claim precision below its measured quantum', 'the WebGPU progress renderer remained frozen across this frame gap'],
+        );
+      } catch (error) {
+        unavailableKernel(run, token, 'timing.post-burst-frame-gap.v1', 'requestAnimationFrame interval spanning the controlled 50 ms compute burst', 'ms', reason(error), [TIMER_CAVEAT, timerQuantumNote(run, 'the frame gap spanning the compute burst')]);
+      }
+    }
+
+    async function measureTiming(run, token) {
+      let rafComplete = false;
+      try {
+        await measureRafCadence(run, token);
+        rafComplete = true;
+      } catch (error) {
+        if (tokenActive(run, token)) unavailableKernel(run, token, 'timing.raf-cadence-5s.v1', 'consecutive requestAnimationFrame timestamps over approximately 5 seconds', 'ms', reason(error), [TIMER_CAVEAT, timerQuantumNote(run, 'requestAnimationFrame cadence')]);
+      }
+      requireActive(run, token);
+      await measureJank(run, token);
+      if (!rafComplete && !run.kernels.some(kernel => kernel.kernel_id === 'timing.main-thread-burst-50ms.v1' && kernel.status === 'complete')) {
+        throw new Error('both display cadence and the controlled main-thread burst were unavailable');
+      }
+    }
+
+    async function presentedFrameTimestamp(run, token) {
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        const timestamp = await animationFrame(run, token);
+        requireActive(run, token);
+        if (!renderState || renderState.runId !== run.id) throw new Error(run.renderUnavailable || 'the 3D progress renderer stopped before presentation');
+        const before = renderState.frames;
+        renderState.displayed = renderState.target;
+        renderState.frames = wasm.render_bar_frame(renderState.displayed);
+        if (renderState.frames > before) return timestamp;
+      }
+      throw new Error('the progress surface skipped eight consecutive acquisition attempts, so visible frame cadence was not measurable');
+    }
+
+    async function measureRenderPresent(run, token) {
+      const workload = '3 untimed visible canvas warmups, then 15 consecutive requestAnimationFrame timestamp intervals whose callbacks each submit and present the fixed 3D progress scene';
+      if (run.gpuComputeTimedOut) {
+        const unavailableReason = 'render cadence was skipped because the earlier WebGPU compute watchdog expired and its device work could still contend for the physical adapter';
+        unavailableKernel(run, token, 'gpu.render-present.v1', workload, 'ms', unavailableReason);
+        throw new Error(unavailableReason);
+      }
+      if (document.hidden) {
+        const unavailableReason = 'render cadence is unavailable because the document is hidden and requestAnimationFrame is suspended or throttled';
+        unavailableKernel(run, token, 'gpu.render-present.v1', workload, 'ms', unavailableReason);
+        throw new Error(unavailableReason);
+      }
+      if (!renderState || renderState.runId !== run.id) {
+        const unavailableReason = run.renderUnavailable || 'the browser did not initialize the surface-backed WebGPU progress renderer';
+        unavailableKernel(run, token, 'gpu.render-present.v1', workload, 'ms', unavailableReason);
+        throw new Error(unavailableReason);
+      }
+      pauseRenderBar('measuring its own visible present cadence');
+      const framesBefore = renderState.frames;
+      try {
+        updateTelemetry('gpu.render-present.v1', [], run, 0, 1, RENDER_PRESENT_SAMPLES);
+        for (let index = 0; index < RENDER_PRESENT_WARMUPS; index += 1) await presentedFrameTimestamp(run, token);
+        let previous = await presentedFrameTimestamp(run, token);
+        const samples = [];
+        for (let index = 0; index < RENDER_PRESENT_SAMPLES; index += 1) {
+          const timestamp = await presentedFrameTimestamp(run, token);
+          const delta = timestamp - previous;
+          if (!Number.isFinite(delta) || delta <= 0) {
+            throw new Error(`canvas cadence was unresolvable under the measured performance.now() quantum of ${run.environment?.timer?.resolution_ms ?? 'unknown'} ms`);
+          }
+          samples.push(delta);
+          previous = timestamp;
+          updateTelemetry('gpu.render-present.v1', samples, run, 0, 1, RENDER_PRESENT_SAMPLES);
+        }
+        const presented = renderState.frames - framesBefore;
+        completeKernel(run, token, 'gpu.render-present.v1', workload, 'ms', RENDER_PRESENT_WARMUPS, samples, [
+          TIMER_CAVEAT,
+          timerQuantumNote(run, 'canvas presentation cadence'),
+          `frames presented during kernel: ${presented}`,
+          `render adapter identity: ${renderState.facts.adapter_identity}`,
+          `surface format: ${renderState.facts.surface_format}; drawing buffer ${renderState.facts.width}x${renderState.facts.height}`,
+          `device policy: ${renderState.facts.device_policy}`,
+          'present cadence includes requestAnimationFrame scheduling, compositor/vsync pacing, surface acquisition, queue submission, and the browser presentation path; it is a display-path fact, not shader execution time',
+          'the surface renderer owns a separate logical wgpu device from compute; the compute stage had completed before this visible-only measurement began',
+          `document visibility at completion: ${document.visibilityState}`,
+        ]);
+      } catch (error) {
+        if (tokenActive(run, token) && !run.kernels.some(kernel => kernel.kernel_id === 'gpu.render-present.v1')) {
+          unavailableKernel(run, token, 'gpu.render-present.v1', workload, 'ms', reason(error), [TIMER_CAVEAT, timerQuantumNote(run, 'canvas presentation cadence')]);
+        }
+        throw error;
+      } finally {
+        if (tokenActive(run, token)) resumeRenderBar(run);
+      }
+    }
+
+    async function canonicalServerUrl() {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), SERVER_LOOKUP_DEADLINE_MS);
+      try {
+        const response = await fetch(new URL(`server.json?ts=${Date.now()}`, ROOT), { cache: 'no-store', signal: controller.signal });
+        if (!response.ok) throw new Error(`server configuration returned HTTP ${response.status}`);
+        const configuration = await response.json();
+        const configured = String(configuration.canonical_ws || configuration.ws || '').trim();
+        if (!configured) throw new Error('no canonical Ember WebSocket URL is published');
+        const url = new URL(configured, location.href);
+        url.searchParams.delete('legacy_game');
+        return url.toString();
+      } catch (error) {
+        if (error?.name === 'AbortError') throw new Error(`server configuration lookup exceeded ${SERVER_LOOKUP_DEADLINE_MS} ms`);
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    function fallbackPersonality(currentReport) {
+      const timer = currentReport.environment.timer;
+      const quantum = timer.resolution_ms;
+      const observations = [{
+        text: Number.isFinite(quantum)
+          ? `The smallest observed clock step was ${quantum.toFixed(4)} ms after ${timer.zero_delta_count} equal reads.`
+          : `The bounded clock probe saw ${timer.zero_delta_count} equal reads and no positive timer step.`,
+      }];
+      const threads = currentReport.environment.hardware_concurrency;
+      observations.push({ text: threads == null ? 'The browser did not expose a logical thread count.' : `The browser exposed ${threads} logical threads.` });
+      const complete = currentReport.kernels.filter(kernel => kernel.status === 'complete').length;
+      observations.push({ text: `${complete} kernels completed and ${currentReport.kernels.length - complete} reported unavailable.` });
+      return {
+        observations,
+        badges: [{
+          id: Number.isFinite(quantum) && quantum <= 0.1 ? 'timer-truthful' : 'timer-coy',
+          name: Number.isFinite(quantum) && quantum <= 0.1 ? 'Timer Truthful' : 'Timer Coy',
+          glyph: Number.isFinite(quantum) && quantum <= 0.1 ? 'dt' : 'dt?',
+          measurement: Number.isFinite(quantum) ? `smallest observed performance.now() step: ${quantum.toFixed(4)} ms` : `no positive timer step observed; ${timer.zero_delta_count} equal reads`,
+        }],
+      };
+    }
+
+    function renderVerdict(reportBytes, personality) {
+      const completeCount = report.kernels.filter(kernel => kernel.status === 'complete').length;
+      const unavailableCount = report.kernels.length - completeCount;
+      document.querySelector('#verdict-title').textContent = 'this is a real browser, with receipts.';
+      document.querySelector('#verdict-copy').textContent = `No synthetic compatibility score: ${completeCount} completed measurement kernels, ${unavailableCount} honest unavailable result${unavailableCount === 1 ? '' : 's'}, and the machine’s own readings below.`;
+      const observationList = document.querySelector('#observations');
+      observationList.replaceChildren(...personality.observations.map(observation => {
+        const item = document.createElement('li');
+        item.textContent = observation.text;
+        return item;
+      }));
+      const badgeList = document.querySelector('#badges');
+      badgeList.replaceChildren(...personality.badges.map(badge => {
+        const card = document.createElement('div');
+        card.className = 'badge';
+        card.dataset.badge = badge.id;
+        const mark = document.createElement('span');
+        mark.className = 'badge-mark';
+        mark.textContent = badge.glyph;
+        const words = document.createElement('span');
+        const name = document.createElement('strong');
+        name.textContent = badge.name;
+        const measurement = document.createElement('small');
+        measurement.textContent = badge.measurement;
+        words.append(name, measurement);
+        card.append(mark, words);
+        return card;
+      }));
+      const facts = [
+        [report.capabilities.simd128.available ? 'yes' : 'no', 'wasm SIMD128'],
+        [report.capabilities.threads.available ? 'yes' : 'no', 'shared wasm memory'],
+        [`${(report.total_run_wall_ms / 1000).toFixed(1)} s`, 'suite wall time'],
+        [`${reportBytes.toLocaleString()} B`, 'compact JSON'],
+      ];
+      document.querySelector('#facts').replaceChildren(...facts.map(([value, label]) => {
+        const fact = document.createElement('div');
+        fact.className = 'fact';
+        const strong = document.createElement('strong');
+        strong.textContent = value;
+        const span = document.createElement('span');
+        span.textContent = label;
+        fact.append(strong, span);
+        return fact;
+      }));
+      verdict.classList.add('visible');
+    }
+
+    downloadButton.addEventListener('click', () => {
+      if (!compactReport) return;
+      const blob = new Blob([compactReport], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const stamp = report.generated_at.replaceAll(':', '-');
+      link.href = url;
+      link.download = `what-is-this-report-v1-${stamp}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      actionStatus.className = 'good';
+      actionStatus.textContent = 'Downloaded locally. Nothing was submitted.';
+    });
+
+    submitButton.addEventListener('click', async () => {
+      if (!compactReport || !wasm || !activeRun || activeRun.running) return;
+      const runId = activeRun.id;
+      const generation = ++submissionGeneration;
+      submitButton.disabled = true;
+      actionStatus.className = '';
+      actionStatus.textContent = 'Looking up the canonical server only after your click…';
+      try {
+        const serverUrl = await canonicalServerUrl();
+        if (!activeRun || activeRun.id !== runId || submissionGeneration !== generation) return;
+        wasm.start_submission(serverUrl, compactReport);
+        const deadline = Date.now() + SUBMISSION_DEADLINE_MS;
+        const poll = () => {
+          if (!activeRun || activeRun.id !== runId || submissionGeneration !== generation) return;
+          if (Date.now() >= deadline) {
+            actionStatus.className = 'bad';
+            actionStatus.textContent = `Submission outcome unknown: no server acknowledgment arrived within ${SUBMISSION_DEADLINE_MS / 1000} seconds. The report may have been sent; Download Report still works.`;
+            submitButton.disabled = false;
+            return;
+          }
+          try {
+            const status = JSON.parse(wasm.poll_submission_json());
+            actionStatus.textContent = status.receipt_id ? `${status.detail} Receipt: ${status.receipt_id}` : status.detail;
+            if (status.state === 'accepted') {
+              actionStatus.className = 'good';
+              return;
+            }
+            if (status.state === 'failed') {
+              actionStatus.className = 'bad';
+              actionStatus.textContent = `${status.detail} Download Report still works.`;
+              submitButton.disabled = false;
+              return;
+            }
+          } catch (error) {
+            actionStatus.className = 'bad';
+            actionStatus.textContent = `Submission status failed: ${reason(error)}. Download Report still works.`;
+            submitButton.disabled = false;
+            return;
+          }
+          setTimeout(poll, 100);
+        };
+        poll();
+      } catch (error) {
+        if (!activeRun || activeRun.id !== runId || submissionGeneration !== generation) return;
+        actionStatus.className = 'bad';
+        actionStatus.textContent = `Nothing was submitted: ${reason(error)}. Download Report still works.`;
+        submitButton.disabled = false;
+      }
+    });
+
+    async function loadWasm(run) {
+      if (!wasmLoadPromise) {
+        wasmLoadPromise = (async () => {
+          const module = await import('./pkg/what_is_this.js?v=6');
+          await module.default({ module_or_path: './pkg/what_is_this_bg.wasm?v=6' });
+          return module;
+        })();
+      }
+      let timer = 0;
+      try {
+        const timedOut = new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`diagnostic wasm load exceeded ${WASM_LOAD_DEADLINE_MS} ms`)), WASM_LOAD_DEADLINE_MS);
+        });
+        const loaded = await Promise.race([wasmLoadPromise, timedOut]);
+        if (activeRun !== run || !run.running) return;
+        wasm = loaded;
+        wasm.reset_run_state();
+        run.faerWasm = JSON.parse(wasm.faer_wasm_verdict_json());
+      } catch (error) {
+        run.wasmFailure = `diagnostic wasm module unavailable: ${reason(error)}`;
+        wasmLoadPromise = null;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    function revealGuess(run) {
+      const actual = run.environment?.hardware_concurrency;
+      if (actual == null) {
+        guessReveal.textContent = run.guess == null
+          ? 'Guess skipped; the browser also declined to reveal its logical thread count.'
+          : `You guessed ${run.guess}; the browser declined to reveal the answer.`;
+      } else if (run.guess == null) {
+        guessReveal.textContent = `No guess entered. Reveal: the browser reports ${actual} logical threads.`;
+      } else if (run.guess === actual) {
+        guessReveal.textContent = `Exact: you guessed ${run.guess}, and the browser reports ${actual} logical threads.`;
+      } else {
+        guessReveal.textContent = `You guessed ${run.guess}; the browser reports ${actual} logical threads, a miss by ${Math.abs(run.guess - actual)}.`;
+      }
+    }
+
+    function fallbackEnvironment(run) {
+      return {
+        kernel_id: 'environment.browser-facts.v1',
+        user_agent: 'unavailable: environment stage did not complete',
+        hardware_concurrency: null,
+        device_memory_gib: null,
+        screen: { width: 0, height: 0, device_pixel_ratio: 1 },
+        timer: {
+          resolution_ms: null,
+          zero_delta_count: 0,
+          monotonicity_violations: 0,
+          positive_delta_samples_ms: [],
+          positive_delta_summary: null,
+          caveat: TIMER_CAVEAT,
+        },
+        initial_visibility: run.initialVisibility,
+        final_visibility: document.visibilityState,
+        hidden_during_run: run.hiddenDuringRun,
+        visibility_observations: [],
+      };
+    }
+
+    function finalizeRun(run, fatalReason = null) {
+      if (activeRun !== run || !run.running) return;
+      recordVisibility(run);
+      if (fatalReason) {
+        for (const [stageId, name] of STAGES) {
+          if (run.stageReports.some(stage => stage.stage_id === stageId)) continue;
+          run.stageReports.push({
+            stage_id: stageId,
+            name,
+            status: 'unavailable',
+            unavailable_reason: `stage did not start because suite orchestration failed: ${fatalReason}`,
+            duration_ms: 0,
+          });
+          showStage(stageId, 'unavailable', `unavailable · orchestration failure: ${fatalReason}`);
+        }
+      }
+      run.environment ||= fallbackEnvironment(run);
+      if (!run.capabilities) {
+        const unavailableReason = 'wasm capability stage did not complete';
+        run.capabilities = {
+          simd128: featureProbe('capability.wasm-simd128.v1', false, unavailableReason),
+          threads: featureProbe('capability.wasm-threads.v1', false, unavailableReason),
+          bulk_memory: featureProbe('capability.wasm-bulk-memory.v1', false, unavailableReason),
+        };
+      }
+      run.environment.final_visibility = document.visibilityState;
+      run.environment.hidden_during_run = run.hiddenDuringRun;
+      run.environment.visibility_observations = run.visibilityObservations;
+      run.floatBehavior ||= {
+        available: false,
+        unavailable_reason: run.wasmFailure || 'float probe did not complete',
+        fma_kernel_id: 'float.fma-contraction.v1',
+        fma: null,
+        transcendental_kernel_id: 'float.f32-sin-cos-ulp.v1',
+        transcendentals: [],
+      };
+      report = {
+        report_schema_version: 1,
+        generated_at: new Date().toISOString(),
+        total_run_wall_ms: performance.now() - run.suiteStarted,
+        environment: run.environment,
+        capabilities: run.capabilities,
+        float_behavior: run.floatBehavior,
+        faer_wasm: run.faerWasm,
+        stages: run.stageReports,
+        kernels: run.kernels,
+      };
+      compactReport = JSON.stringify(report);
+      const reportBytes = new TextEncoder().encode(compactReport).byteLength;
+      let personality = fallbackPersonality(report);
+      if (wasm) {
+        try {
+          personality = JSON.parse(wasm.verdict_json(compactReport));
+        } catch (error) {
+          actionStatus.textContent = `The tested verdict mapper declined this report: ${reason(error)}. The measurement-only fallback is shown.`;
+        }
+      }
+      finishRenderBar(run);
+      run.running = false;
+      telemetry.classList.remove('visible');
+      progress.style.width = '100%';
+      progressLabel.style.color = '';
+      progressLabel.textContent = reportBytes <= REPORT_BYTE_CAP ? 'complete — the machine has spoken.' : `complete, but the report is ${reportBytes - REPORT_BYTE_CAP} bytes over the submission cap.`;
+      renderVerdict(reportBytes, personality);
+      downloadButton.disabled = false;
+      submitButton.disabled = !wasm || reportBytes > REPORT_BYTE_CAP;
+      if (!wasm) {
+        actionStatus.className = 'bad';
+        actionStatus.textContent = 'Download works, but submission needs the diagnostic wasm client that this browser could not load.';
+      } else if (reportBytes > REPORT_BYTE_CAP) {
+        actionStatus.className = 'bad';
+        actionStatus.textContent = 'Download works, but submission is disabled because the compact report exceeds the 52 KiB protocol limit.';
+      } else {
+        actionStatus.className = '';
+        actionStatus.textContent = 'Both actions are optional. No server request is made unless you click Submit to Server.';
+      }
+      revealGuess(run);
+    }
+
+    async function runSuite(run) {
+      let fatalReason = null;
+      try {
+        await loadWasm(run);
+        if (activeRun !== run || !run.running) return;
+        await initializeRenderWindow(run);
+        await runStage(run, ...STAGES[0], async (currentRun, token) => {
+          const timer = timerFacts(currentRun, token);
+          const rawMemory = navigator.deviceMemory;
+          currentRun.environment = {
+            kernel_id: 'environment.browser-facts.v1',
+            user_agent: navigator.userAgent,
+            hardware_concurrency: Number.isInteger(navigator.hardwareConcurrency) ? navigator.hardwareConcurrency : null,
+            device_memory_gib: Number.isFinite(rawMemory) ? rawMemory : null,
+            screen: {
+              width: Math.max(0, Math.round(screen.width)),
+              height: Math.max(0, Math.round(screen.height)),
+              device_pixel_ratio: Number.isFinite(devicePixelRatio) ? devicePixelRatio : 1,
+            },
+            timer,
+            initial_visibility: currentRun.initialVisibility,
+            final_visibility: document.visibilityState,
+            hidden_during_run: currentRun.hiddenDuringRun,
+            visibility_observations: [],
+          };
+          revealGuess(currentRun);
+        });
+        await runStage(run, ...STAGES[1], async (currentRun, token) => {
+          requireActive(currentRun, token);
+          currentRun.capabilities = wasmCapabilities();
+        });
+        pauseRenderBar('CPU and GPU compute measurements have the laboratory');
+        try {
+          await runStage(run, ...STAGES[2], measureCpu);
+          await runStage(run, ...STAGES[3], measureGpuCompute);
+        } finally {
+          resumeRenderBar(run);
+        }
+        await runStage(run, ...STAGES[4], async (currentRun, token) => measureFloats(currentRun, token));
+        pauseRenderBar('display and main-thread timing measurements have the laboratory');
+        try {
+          await runStage(run, ...STAGES[5], measureTiming);
+        } finally {
+          resumeRenderBar(run);
+        }
+        await runStage(run, ...STAGES[6], measureRenderPresent);
+        await runStage(run, ...STAGES[7], async (currentRun, token) => {
+          unavailableKernel(currentRun, token, 'gpu.ember-fixed-scene.v1', 'fixed instanced ember-engine scene rendered offscreen for a multi-second frame-time distribution', 'ms', GPU_UNAVAILABLE);
+          throw new Error(GPU_UNAVAILABLE);
+        });
+      } catch (error) {
+        fatalReason = reason(error);
+      } finally {
+        finalizeRun(run, fatalReason);
+      }
+    }
+
+    function emergencyVerdict(run, error) {
+      if (activeRun !== run) return;
+      const failure = reason(error);
+      run.environment ||= fallbackEnvironment(run);
+      run.capabilities ||= {
+        simd128: featureProbe('capability.wasm-simd128.v1', false, failure),
+        threads: featureProbe('capability.wasm-threads.v1', false, failure),
+        bulk_memory: featureProbe('capability.wasm-bulk-memory.v1', false, failure),
+      };
+      run.floatBehavior ||= {
+        available: false,
+        unavailable_reason: failure,
+        fma_kernel_id: 'float.fma-contraction.v1',
+        fma: null,
+        transcendental_kernel_id: 'float.f32-sin-cos-ulp.v1',
+        transcendentals: [],
+      };
+      for (const [stageId, name] of STAGES) {
+        if (run.stageReports.some(stage => stage.stage_id === stageId)) continue;
+        run.stageReports.push({ stage_id: stageId, name, status: 'unavailable', unavailable_reason: `suite recovery path: ${failure}`, duration_ms: 0 });
+        showStage(stageId, 'unavailable', `unavailable · suite recovery path: ${failure}`);
+      }
+      report = {
+        report_schema_version: 1,
+        generated_at: new Date().toISOString(),
+        total_run_wall_ms: performance.now() - run.suiteStarted,
+        environment: run.environment,
+        capabilities: run.capabilities,
+        float_behavior: run.floatBehavior,
+        faer_wasm: run.faerWasm,
+        stages: run.stageReports,
+        kernels: run.kernels,
+      };
+      compactReport = JSON.stringify(report);
+      stopRenderLoop();
+      gpuWindowStatus.textContent = `frozen — suite recovery path: ${failure}`;
+      run.running = false;
+      const reportBytes = new TextEncoder().encode(compactReport).byteLength;
+      progress.style.width = '100%';
+      progressLabel.style.color = 'var(--red)';
+      progressLabel.textContent = `complete through the recovery path: ${failure}`;
+      renderVerdict(reportBytes, fallbackPersonality(report));
+      downloadButton.disabled = false;
+      submitButton.disabled = true;
+      actionStatus.className = 'bad';
+      actionStatus.textContent = 'Download works. Submission is disabled because the suite needed its final recovery path.';
+    }
+
+    function beginRun(guess) {
+      submissionGeneration += 1;
+      resetRenderWindow('The 3D bar is clearing the previous machine from its notes.');
+      if (wasm) wasm.reset_run_state();
+      report = null;
+      compactReport = '';
+      const run = {
+        id: ++runSerial,
+        running: true,
+        suiteStarted: performance.now(),
+        initialVisibility: document.visibilityState,
+        hiddenDuringRun: document.hidden,
+        visibilityObservations: [],
+        stageReports: [],
+        kernels: [],
+        environment: null,
+        capabilities: null,
+        floatBehavior: null,
+        faerWasm: { ...DEFAULT_FAER_VERDICT },
+        wasmFailure: null,
+        renderUnavailable: null,
+        renderFacts: null,
+        gpuComputeTimedOut: false,
+        currentStageIndex: 0,
+        guess,
+      };
+      activeRun = run;
+      recordVisibility(run);
+      guessCard.hidden = true;
+      verdict.classList.remove('visible');
+      downloadButton.disabled = true;
+      submitButton.disabled = true;
+      actionStatus.className = '';
+      actionStatus.textContent = '';
+      progressLabel.style.color = '';
+      progressLabel.textContent = 'loading the wasm laboratory…';
+      runSuite(run).catch(error => emergencyVerdict(run, error));
+    }
+
+    function prepareForGuess() {
+      submissionGeneration += 1;
+      if (activeRun) activeRun.running = false;
+      resetRenderWindow('The 3D bar is waiting to find out whether this browser believes in windows.');
+      if (wasm) wasm.reset_run_state();
+      activeRun = null;
+      report = null;
+      compactReport = '';
+      guessCard.hidden = false;
+      verdict.classList.remove('visible');
+      telemetry.classList.remove('visible');
+      guessReveal.textContent = '';
+      guessInput.value = '';
+      guessNote.textContent = 'The laboratory waits for either choice.';
+      progress.style.width = '0';
+      progressLabel.style.color = '';
+      progressLabel.textContent = 'waiting for your guess, or your dignified refusal…';
+      downloadButton.disabled = true;
+      submitButton.disabled = true;
+      actionStatus.className = '';
+      actionStatus.textContent = '';
+      for (const [stageId] of STAGES) showStage(stageId, 'waiting', 'waiting');
+    }
+
+    guessButton.addEventListener('click', () => {
+      const guess = Number(guessInput.value);
+      if (!Number.isInteger(guess) || guess < 1 || guess > 1024) {
+        guessNote.textContent = 'Enter one whole number from 1 through 1024, or skip with your dignity intact.';
+        guessInput.focus();
+        return;
+      }
+      beginRun(guess);
+    });
+    skipButton.addEventListener('click', () => beginRun(null));
+    guessInput.addEventListener('keydown', event => {
+      if (event.key === 'Enter') guessButton.click();
+    });
+    runAgainButton.addEventListener('click', prepareForGuess);
+
+    prepareForGuess();
+  </script>
+</body>
+</html>

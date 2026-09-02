@@ -1,0 +1,6 @@
+{
+  "joined": "{\"t\":\"game_joined\",\"id\":0,\"seed\":42,\"arena_half\":24.0,\"players\":[{\"id\":0,\"handle\":\"ender\",\"color\":[0.25,0.55,0.95]}]}",
+  "duplicate_code": "already_joined",
+  "duplicate_message": "already in a game",
+  "status_code": "running"
+}

@@ -1,0 +1,12 @@
+[package]
+name = "ember-game-arena-v10"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+ember-legacy = { path = "../../../crates/ember-legacy" }
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

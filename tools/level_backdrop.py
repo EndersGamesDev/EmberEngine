@@ -19,7 +19,7 @@ import bpy
 SRC = r"C:\Users\end\dev\ember\assets\level\source\scene.gltf"
 OUT = r"C:\Users\end\dev\ember\assets\models\level-backdrop.glb"
 
-# Must match pong_core::shooter::ARENA_HALF.
+# Must match arena_core::shooter::ARENA_HALF.
 ARENA_HALF = 24.0
 # Source units -> game units (a cargo container measures 4.0 units and a
 # real one is 2.6 m tall).
