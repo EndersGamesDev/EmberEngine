@@ -1,0 +1,14 @@
+[package]
+name = "ember-julibrot-present"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+bytemuck.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+naga = { version = "24", features = ["wgsl-in"] }
+
+[lints]
+workspace = true
