@@ -50,6 +50,75 @@ impl Default for RequestedControls {
     }
 }
 
+/// Returns the per-axis factor that converts one CSS pixel of the canvas box into render-grid
+/// pixels.
+///
+/// The canvas backing store is the render grid named by its `width`/`height` attributes, while CSS
+/// lays the element out at an unrelated size; the device pixel ratio is not a term in either, so it
+/// never appears here.
+///
+/// # Errors
+///
+/// Returns a math failure for a non-finite or non-positive client rectangle or a zero grid extent.
+fn css_to_grid_scale(rect_css: [f64; 2], grid: [u32; 2]) -> Result<[f64; 2], AppError> {
+    if !rect_css
+        .iter()
+        .all(|extent| extent.is_finite() && *extent > 0.0)
+    {
+        return Err(AppError::Math(
+            "canvas client rectangle is not a positive finite size".to_string(),
+        ));
+    }
+    if grid.contains(&0) {
+        return Err(AppError::Math("render grid extent is zero".to_string()));
+    }
+    Ok([
+        f64::from(grid[0]) / rect_css[0],
+        f64::from(grid[1]) / rect_css[1],
+    ])
+}
+
+/// Converts a canvas-relative DOM pointer position in CSS pixels into the canvas-centred
+/// render-grid pixels with positive y upward that `NavigationDelta` requires.
+///
+/// # Errors
+///
+/// Returns a math failure for non-finite input, a degenerate client rectangle, or a zero grid.
+pub fn anchor_px_up(
+    pointer_css: [f64; 2],
+    rect_css: [f64; 2],
+    grid: [u32; 2],
+) -> Result<[f64; 2], AppError> {
+    if !pointer_css.iter().all(|value| value.is_finite()) {
+        return Err(AppError::Math("pointer position is not finite".to_string()));
+    }
+    let scale = css_to_grid_scale(rect_css, grid)?;
+    Ok([
+        (pointer_css[0] - rect_css[0] / 2.0) * scale[0],
+        (rect_css[1] / 2.0 - pointer_css[1]) * scale[1],
+    ])
+}
+
+/// Converts a DOM drag displacement in CSS pixels into render-grid pixels, keeping DOM-down y for
+/// the control boundary that flips it.
+///
+/// # Errors
+///
+/// Returns a math failure for non-finite input, a degenerate client rectangle, or a zero grid.
+pub fn drag_delta_px_down(
+    delta_css: [f64; 2],
+    rect_css: [f64; 2],
+    grid: [u32; 2],
+) -> Result<[f64; 2], AppError> {
+    if !delta_css.iter().all(|value| value.is_finite()) {
+        return Err(AppError::Math(
+            "drag displacement is not finite".to_string(),
+        ));
+    }
+    let scale = css_to_grid_scale(rect_css, grid)?;
+    Ok([delta_css[0] * scale[0], delta_css[1] * scale[1]])
+}
+
 /// Worker navigation instruction paired with immediately staged visual HOT state.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum NavigationEdit {
@@ -506,7 +575,85 @@ mod tests {
     use ember_julibrot_math::{PlaneAngles, PlanePreset, ViewMode};
     use ember_julibrot_present::PaletteId;
 
-    use super::{NavigationEdit, ViewerController};
+    use super::{NavigationEdit, ViewerController, anchor_px_up, drag_delta_px_down};
+
+    /// The reference browser geometry: a 960x540 render grid laid out at this client rectangle.
+    const REFERENCE_RECT: [f64; 2] = [1_022.793_762_207_031_2, 575.315_673_828_125];
+    const REFERENCE_GRID: [u32; 2] = [960, 540];
+
+    #[test]
+    fn the_anchor_is_canvas_centred_render_grid_pixels_with_y_up() {
+        let centre = anchor_px_up(
+            [REFERENCE_RECT[0] / 2.0, REFERENCE_RECT[1] / 2.0],
+            REFERENCE_RECT,
+            REFERENCE_GRID,
+        )
+        .expect("the canvas centre maps");
+        assert!(centre[0].abs() < 1.0e-9 && centre[1].abs() < 1.0e-9);
+
+        let right_edge = anchor_px_up(
+            [REFERENCE_RECT[0], REFERENCE_RECT[1] / 2.0],
+            REFERENCE_RECT,
+            REFERENCE_GRID,
+        )
+        .expect("the right edge maps");
+        assert!((right_edge[0] - 480.0).abs() < 1.0e-9 && right_edge[1].abs() < 1.0e-9);
+
+        let top_edge = anchor_px_up(
+            [REFERENCE_RECT[0] / 2.0, 0.0],
+            REFERENCE_RECT,
+            REFERENCE_GRID,
+        )
+        .expect("the top edge maps");
+        assert!(top_edge[0].abs() < 1.0e-9 && (top_edge[1] - 270.0).abs() < 1.0e-9);
+
+        let bottom_edge = anchor_px_up(
+            [REFERENCE_RECT[0] / 2.0, REFERENCE_RECT[1]],
+            REFERENCE_RECT,
+            REFERENCE_GRID,
+        )
+        .expect("the bottom edge maps");
+        assert!((bottom_edge[1] + 270.0).abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn a_non_unit_css_scale_is_applied_in_both_directions() {
+        // CSS pixels are larger than grid pixels here, so the anchor shrinks; the device pixel
+        // ratio of the page (1.667 when this geometry was measured) is not a term.
+        let shrunk = anchor_px_up([800.0, 150.0], REFERENCE_RECT, REFERENCE_GRID)
+            .expect("an interior point maps");
+        let expected = [
+            (800.0 - REFERENCE_RECT[0] / 2.0) * 960.0 / REFERENCE_RECT[0],
+            (REFERENCE_RECT[1] / 2.0 - 150.0) * 540.0 / REFERENCE_RECT[1],
+        ];
+        assert!((shrunk[0] - expected[0]).abs() < 1.0e-9);
+        assert!((shrunk[1] - expected[1]).abs() < 1.0e-9);
+        assert!((shrunk[0] - 270.884_516_877_356).abs() < 1.0e-9);
+        assert!((shrunk[1] - 129.207_729_452_198).abs() < 1.0e-9);
+
+        // A canvas laid out smaller than its grid grows the anchor by the same rule.
+        let grown = anchor_px_up([480.0, 135.0], [480.0, 270.0], REFERENCE_GRID)
+            .expect("a half-size layout maps");
+        assert!((grown[0] - 480.0).abs() < 1.0e-9 && grown[1].abs() < 1.0e-9);
+    }
+
+    #[test]
+    fn drag_scales_to_the_grid_and_leaves_the_dom_y_flip_to_the_controller() {
+        let delta = drag_delta_px_down([100.0, 50.0], REFERENCE_RECT, REFERENCE_GRID)
+            .expect("a finite drag maps");
+        assert!((delta[0] - 100.0 * 960.0 / REFERENCE_RECT[0]).abs() < 1.0e-9);
+        assert!((delta[1] - 50.0 * 540.0 / REFERENCE_RECT[1]).abs() < 1.0e-9);
+        assert!(delta[1] > 0.0, "DOM-down y survives the scale unflipped");
+    }
+
+    #[test]
+    fn a_degenerate_rectangle_or_grid_is_refused_rather_than_dividing() {
+        assert!(anchor_px_up([1.0, 1.0], [0.0, 575.0], REFERENCE_GRID).is_err());
+        assert!(anchor_px_up([1.0, 1.0], [1_022.8, f64::NAN], REFERENCE_GRID).is_err());
+        assert!(anchor_px_up([f64::INFINITY, 1.0], REFERENCE_RECT, REFERENCE_GRID).is_err());
+        assert!(anchor_px_up([1.0, 1.0], REFERENCE_RECT, [960, 0]).is_err());
+        assert!(drag_delta_px_down([1.0, 1.0], [-4.0, 4.0], REFERENCE_GRID).is_err());
+    }
 
     #[test]
     fn pointer_zoom_and_dom_drag_stage_smooth_hot_state() {

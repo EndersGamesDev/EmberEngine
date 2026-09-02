@@ -28,6 +28,7 @@ pub use measurement::{
 pub use runtime::{BrowserRuntime, DeviceFacts, install_julibrot_panic_hook, take_julibrot_panic};
 pub use state::{
     HotFrame, INITIAL_ITERATION_CAP, NavigationEdit, RequestedControls, ViewerController,
+    anchor_px_up, drag_delta_px_down,
 };
 pub use surface::{PendingSurface, SurfaceAction, SurfaceState};
 
@@ -72,6 +73,13 @@ impl App {
     #[must_use]
     pub const fn runtime(&self) -> &BrowserRuntime {
         &self.runtime
+    }
+
+    /// Returns the render-grid extent that pointer input must be expressed in.
+    #[must_use]
+    pub const fn grid_extent(&self) -> [u32; 2] {
+        let facts = self.runtime.facts();
+        [facts.width, facts.height]
     }
 
     /// Returns requested controls and worker owner integration.
@@ -181,7 +189,7 @@ mod wasm_entry {
     use ember_julibrot_math::{PlaneAngles, PlanePreset, ViewMode};
     use ember_julibrot_present::PaletteId;
 
-    use crate::{App, JULIBROT_ABI_VERSION, PageFacts};
+    use crate::{App, JULIBROT_ABI_VERSION, PageFacts, anchor_px_up, drag_delta_px_down};
 
     thread_local! {
         static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -221,22 +229,52 @@ mod wasm_entry {
     }
 
     /// Stages pointer-anchored zoom and preserves the requested control on delayed work.
+    ///
+    /// The pointer arrives as canvas-relative DOM CSS pixels together with the canvas client
+    /// rectangle; centring, the CSS-to-grid scale, and the y flip all happen inside this boundary
+    /// so the anchor reaches the worker in the render-grid pixels its scale is expressed in.
     #[wasm_bindgen]
-    pub fn app_wheel_zoom(delta_log2: f64, anchor_x: f64, anchor_y_up: f64) -> Result<(), JsValue> {
+    pub fn app_wheel_zoom(
+        delta_log2: f64,
+        pointer_css_x: f64,
+        pointer_css_y_down: f64,
+        rect_css_width: f64,
+        rect_css_height: f64,
+    ) -> Result<(), JsValue> {
         with_app_mut(|app| {
+            let grid = app.grid_extent();
+            let anchor = anchor_px_up(
+                [pointer_css_x, pointer_css_y_down],
+                [rect_css_width, rect_css_height],
+                grid,
+            )
+            .map_err(app_js_error)?;
             app.viewer_mut()
-                .wheel_zoom(delta_log2, [anchor_x, anchor_y_up])
+                .wheel_zoom(delta_log2, anchor)
                 .map(|_| ())
                 .map_err(app_js_error)
         })
     }
 
-    /// Stages drag pan after converting DOM-down y inside the Rust control boundary.
+    /// Stages drag pan after scaling CSS pixels to the grid and converting DOM-down y inside the
+    /// Rust control boundary.
     #[wasm_bindgen]
-    pub fn app_drag_pan(delta_x: f64, delta_y_down: f64) -> Result<(), JsValue> {
+    pub fn app_drag_pan(
+        delta_css_x: f64,
+        delta_css_y_down: f64,
+        rect_css_width: f64,
+        rect_css_height: f64,
+    ) -> Result<(), JsValue> {
         with_app_mut(|app| {
+            let grid = app.grid_extent();
+            let delta = drag_delta_px_down(
+                [delta_css_x, delta_css_y_down],
+                [rect_css_width, rect_css_height],
+                grid,
+            )
+            .map_err(app_js_error)?;
             app.viewer_mut()
-                .drag_pan([delta_x, delta_y_down])
+                .drag_pan(delta)
                 .map(|_| ())
                 .map_err(app_js_error)
         })

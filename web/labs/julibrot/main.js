@@ -107,9 +107,8 @@ function bindControls(api) {
   CANVAS.addEventListener("wheel", event => {
     event.preventDefault();
     const bounds = CANVAS.getBoundingClientRect();
-    const x = event.clientX - bounds.left - bounds.width / 2;
-    const yUp = bounds.height / 2 - (event.clientY - bounds.top);
-    guarded(() => api.app_wheel_zoom(-event.deltaY * 0.002, x, yUp));
+    if (!(bounds.width > 0 && bounds.height > 0)) return;
+    guarded(() => api.app_wheel_zoom(-event.deltaY * 0.002, event.clientX - bounds.left, event.clientY - bounds.top, bounds.width, bounds.height));
   }, { passive: false });
   let pointer = null;
   CANVAS.addEventListener("pointerdown", event => {
@@ -118,9 +117,11 @@ function bindControls(api) {
   });
   CANVAS.addEventListener("pointermove", event => {
     if (!pointer || pointer[0] !== event.pointerId) return;
+    const bounds = CANVAS.getBoundingClientRect();
+    if (!(bounds.width > 0 && bounds.height > 0)) return;
     const [id, x, y] = pointer;
     pointer = [id, event.clientX, event.clientY];
-    guarded(() => api.app_drag_pan(event.clientX - x, event.clientY - y));
+    guarded(() => api.app_drag_pan(event.clientX - x, event.clientY - y, bounds.width, bounds.height));
   });
   CANVAS.addEventListener("pointerup", () => { pointer = null; });
   document.getElementById("one-frame").addEventListener("click", () => guarded(() => {

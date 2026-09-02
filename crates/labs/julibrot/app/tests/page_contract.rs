@@ -6,6 +6,7 @@ const WORKER: &str = include_str!("../../../../../web/labs/julibrot/worker.js");
 const MANIFEST: &str = include_str!("../Cargo.toml");
 const LIB: &str = include_str!("../src/lib.rs");
 const RUNTIME: &str = include_str!("../src/runtime.rs");
+const STATE: &str = include_str!("../src/state.rs");
 const FACTS: &str = include_str!("../src/facts.rs");
 const MEASUREMENT: &str = include_str!("../src/measurement.rs");
 const FRAME: &str = include_str!("../src/frame.rs");
@@ -130,8 +131,27 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
         assert!(MAIN.contains(&format!("\"{id}\"")), "unbound control {id}");
     }
     assert!(MAIN.contains("event.preventDefault()"));
-    assert!(MAIN.contains("bounds.height / 2 -"));
+    assert!(MAIN.contains("bounds.width, bounds.height"));
     assert!(!MAIN.contains("SharedArrayBuffer"));
+}
+
+#[test]
+fn pointer_input_reaches_the_worker_in_render_grid_pixels() {
+    // The loader hands over raw canvas-relative CSS pixels plus the client rectangle; centring, the
+    // CSS-to-grid scale, and the y flip are the Rust boundary's work, so they stay testable.
+    assert!(MAIN.contains(
+        "event.clientX - bounds.left, event.clientY - bounds.top, bounds.width, bounds.height"
+    ));
+    assert!(MAIN.contains("event.clientX - x, event.clientY - y, bounds.width, bounds.height"));
+    assert!(!MAIN.contains("bounds.height / 2"));
+    assert!(!MAIN.contains("bounds.width / 2"));
+    assert!(STATE.contains("pub fn anchor_px_up("));
+    assert!(STATE.contains("pub fn drag_delta_px_down("));
+    assert!(STATE.contains("fn css_to_grid_scale("));
+    assert_eq!(LIB.matches("let grid = app.grid_extent();").count(), 2);
+    assert!(LIB.contains("pointer_css_x: f64"));
+    assert!(LIB.contains("rect_css_height: f64"));
+    assert!(LIB.contains("delta_css_y_down: f64"));
 }
 
 #[test]
