@@ -438,7 +438,10 @@ mod tests {
             ZERO,
             ReferenceOrbitRecord { re_hi: 2.0, ..ZERO },
             ReferenceOrbitRecord { re_hi: 6.0, ..ZERO },
-            ReferenceOrbitRecord { re_hi: 38.0, ..ZERO },
+            ReferenceOrbitRecord {
+                re_hi: 38.0,
+                ..ZERO
+            },
         ];
         let zero_orbit = [ZERO, ZERO];
         let cases: &[(&[ReferenceOrbitRecord], [f32; 4], i32, u32)] = &[

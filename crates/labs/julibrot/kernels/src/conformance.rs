@@ -92,8 +92,7 @@ pub fn record_is_well_formed(sample: KernelSample, mode: KernelMode) -> bool {
     } else {
         record.smooth_iter == -1.0
     };
-    let mode_matches = mode != KernelMode::Shallow
-        || (record.rebase_count == 0.0 && !glitch);
+    let mode_matches = mode != KernelMode::Shallow || (record.rebase_count == 0.0 && !glitch);
     rebase_count.is_some() && index_matches && terminal_matches && mode_matches
 }
 
@@ -138,8 +137,8 @@ pub fn evaluate_perturbation_conformance(
     let boundary = envelope.minimum_escape_margin <= envelope.escape_norm2_error;
     let classification_exact = binary_flag(observed.record.escaped) == Some(expected.escaped);
     let escape_index_exact = observed.escape_index == expected.escape_index;
-    let rebase_count_exact = exact_rebase_count(observed.record.rebase_count)
-        == Some(expected.rebase_count);
+    let rebase_count_exact =
+        exact_rebase_count(observed.record.rebase_count) == Some(expected.rebase_count);
     let glitch_exact = binary_flag(observed.record.glitch) == Some(expected.glitch);
     let smooth_abs_error = smooth_error(observed.record.smooth_iter, expected.smooth_iter);
     let record_well_formed = record_is_well_formed(observed, KernelMode::Perturbation);
@@ -181,10 +180,7 @@ fn binary_flag(value: f32) -> Option<bool> {
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn exact_rebase_count(value: f32) -> Option<u32> {
-    (value.is_finite()
-        && value >= 0.0
-        && value <= MAX_EXACT_REBASE_COUNT
-        && value.trunc() == value)
+    (value.is_finite() && value >= 0.0 && value <= MAX_EXACT_REBASE_COUNT && value.trunc() == value)
         .then_some(value as u32)
 }
 
@@ -200,9 +196,7 @@ fn smooth_error(observed: f32, expected: f32) -> f32 {
 mod tests {
     use std::collections::BTreeSet;
 
-    use ember_julibrot_math::{
-        EscapeGridRecord, EscapeParams, PerturbationEnvelope, escape_f32,
-    };
+    use ember_julibrot_math::{EscapeGridRecord, EscapeParams, PerturbationEnvelope, escape_f32};
 
     use super::{
         ConformanceVerdict, VISIBLE_REPLAY_CARDS, evaluate_perturbation_conformance,

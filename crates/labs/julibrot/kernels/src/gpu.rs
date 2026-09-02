@@ -468,7 +468,7 @@ const fn publish_level(grid: &mut EscapeGrid, extent: GridExtent, level: Refinem
 mod tests {
     use ember_lab_heap::SpanArena;
 
-    use super::{accept_reference_transition, AcceptedReference};
+    use super::{AcceptedReference, accept_reference_transition};
     use crate::{KernelError, ReferenceOrbitInput};
 
     #[test]
