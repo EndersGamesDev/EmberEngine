@@ -18,6 +18,7 @@ members = [
     "crates/labs/julibrot/worker",
     "crates/labs/julibrot/present",
     "crates/labs/julibrot/kernels",
+    "crates/labs/julibrot/app",
     "crates/arena",
     "crates/arena-core",
     "crates/arena-server",
