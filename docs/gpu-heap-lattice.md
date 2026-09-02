@@ -1,6 +1,6 @@
 # GPU heap lattice architecture
 
-Status: shipped WebGL2-only heap-lattice contract through Phase 7; paid browser evidence selects SCRATCH-to-DATA copy, while optional Mode B is deferred and its design remains recorded.
+Status: shipped WebGL2-only heap-lattice contract through the v6 fence-order repair; paid browser evidence selects SCRATCH-to-DATA copy, while optional Mode B is deferred and its design remains recorded.
 
 ## 1. Decision and evidence boundary
 
@@ -217,13 +217,13 @@ Mode C and layer are the primary equal-work pair: they use the exact same kernel
 
 The live equality gate reports Mode C and layer delivered counts and static signatures, maps both GPU-produced edge-pose records for eight deterministic indices spanning the selected range, and renders both paths into a 64 by 36 offscreen target at step 1; PASS requires equal counts and signatures, every sampled component exact or within `4 × 10⁻⁵`, and byte-identical 2,304-pixel images with displayed checksums, otherwise both timing cards remain visibly disqualified.
 
-Fair timing labels the first fenced frame after every path or rung switch as cold/pipeline warm-up and excludes it, uses the second fenced frame for the 100 ms animation decision, then uses three additional warmups, 15 samples, and repeat-until-32-observed-quanta batching from `crates/what-is-this/src/kernels.rs`, with the same ordered four-byte mapped fence after final presentation work.
+Fair timing labels the first fenced frame after every path or rung switch as cold/pipeline warm-up and excludes it, uses the second fenced frame for the 100 ms animation decision, then uses three additional warmups, 15 samples, and repeat-until-32-observed-quanta batching from `crates/what-is-this/src/kernels.rs`, with the same ordered four-byte mapped fence submitted immediately after the final presentation draw submission.
 
 Both initial fenced frames remain visible in the overlay even when they are cold-start outliers; if the second exceeds 100 ms the rung uses explicit single-frame-on-demand observations, while a second frame at or below 100 ms admits animation and the adaptive series.
 
-Primary time begins before CPU uniform writes and command encoding and ends after the mapped completion fence; GPU timestamp values appear only if the GL path actually exposes and uses them, labeled separately and never substituted for primary wall time.
+Primary time begins before CPU uniform writes and command encoding and ends when the mapped completion fence reports the final presentation draw complete; the surface texture remains alive across that wait, the end timestamp is captured, and only then does `present()` hand the completed image to the compositor, so compositor scheduling is outside the measured region while raster work remains inside.
 
-The gles backend requires `map_async` progress through `device.poll` in a zero-timeout browser-yield loop; every wait has a finite deadline and generation guard, and `Queue::on_submitted_work_done` is not used because the four-byte MAP_READ fence is the single contracted completion path.
+The gles backend requires `map_async` progress through `device.poll` in a zero-timeout browser-yield loop; the first poll precedes the first yield, every poll is counted, every result prints poll count and fence-wait wall, and every wait has both a 4,096-poll bound and 30,000 ms deadline plus a generation guard; `Queue::on_submitted_work_done` is not used because the four-byte MAP_READ fence is the single contracted completion path.
 
 ## 13. Questions, claims, and oracles
 
@@ -253,6 +253,8 @@ The timer probe performs at most 4,000,000 consecutive `performance.now()` reads
 
 Adaptive samples increase whole-workload repeats until a batch spans 32 observed quanta, cap the batch target at 250 ms and repeats at 4,096, normalize by repeats, and stop a mode after a finite 30-second suite budget; medians use the middle sorted sample and p95 uses nearest-rank rank `ceil(0.95n)`.
 
+Every fenced warm-up, one-frame request, adaptive warm-up, and adaptive candidate is listed beside the result with its batch repeat count, completion-poll count, and fence-wait wall; a large poll count or quantized wait is therefore evidence rather than silently folded into frame time.
+
 Counts are literal: requested is the tuple-derived count, delivered and submitted are the runtime-WALL-and-policy draw instance count, measured is the work enclosed by the fence, and shown is unavailable rather than guessed because pole clipping occurs in the vertex stage; none is substituted for another.
 
 The page labels 2,000,000 instances as its initial tab-safety POLICY, accepts an explicit policy through 8,000,000, labels 2,147,483,647 from WebGL2's positive signed `GLsizei` draw-count range and the `u32` index limit as arithmetic WALLS, and never presents policy as detected hardware capacity.
@@ -273,7 +275,7 @@ Kernel conformance compares Mode A rotation and endpoint reconstruction, Mode B 
 
 Geometry tests pin 600 cap vertices, 1,200 cap edges, 1,200 prism vertices, 3,000 prism edges, edge length `3−√5`, circumradius `2√2`, the eight-vertex and 36-index box, step count 113, step 111 `(45,45,45,45,45)`, step 112 `(47,45,45,45,45)`, and top edge arithmetic 578,188,125,000.
 
-Page-contract tests pin explicit GL backend selection, versioned loader paths, immediate rendering without admission, stable requested controls, generation cancellation, sample resets, bounded waits, single-frame fallback, and exact median, p95, and byte formulas.
+Page-contract tests pin explicit GL backend selection, versioned loader paths, immediate rendering without admission, stable requested controls, generation cancellation, sample resets, bounded waits, submit-then-fence-then-end-timestamp-then-present ordering, displayed poll evidence, single-frame fallback, and exact median, p95, and byte formulas.
 
 Comparator tests and the live page run identical work through Mode C and layer's exact kernel, compare two edge-pose records at eight deterministic selected-rung indices within `4 × 10⁻⁵`, compare exact 64 by 36 presentation-image bytes and checksums at the 3,000-edge rung, and disqualify timing when delivery counts, signatures, sampled values, or image bytes disagree.
 
@@ -318,6 +320,10 @@ Multi-page Modes B and C require one fragment pass per page pair plus GPU output
 The same hidden-pane walk used `ANGLE (Intel, Mesa Intel(R) Graphics (MTL), OpenGL ES 3.2)`, backend Gl, heap 512 by 512 by 16, 0.1 ms timer quantum, and 0.1 ms zero-timeout latency; the console was clean, all paths rendered, controls held the request, and the page showed wall arithmetic, 192 bytes per frame, and paid SCRATCH copy.
 
 Cold observations are evidence for the warm-up rule rather than timing claims: step 6 first frames included Mode C at 54.0 ms, layer at 140.1 ms, and Mode A at 99.0 ms before lower later frames, while step 1 Mode A immediately after load recorded 412.2, 102.0, and 993.1 ms before later 33.5, 8.9, and 9.0 ms observations; all were hidden-pane single-frame observations and require visible replay.
+
+The 2026-09-02 hidden Firefox replay of v5 exposed a fence-order regression after the equality oracle passed with identical `367996de3f159a9f` image checksums and zero mismatches: step-1 fenced walls landed on one-second boundaries, including 1,996.0 and 1,000.1 ms for Mode A, 1,999.2 and 2,000.0 ms for Mode C, and one 65,998.9 ms Mode A request, while a page-context zero-timeout probe remained 0.1 ms and v4 in the same pane had produced 8.9 and 9.0 ms warmed step-1 observations.
+
+The v5 cause was presentation ordering, not an initial-yield delay or leaked conformance mapping: source inspection showed that polling preceded every yield and every conformance readback was awaited and unmapped, but each timed draw called `present()` before submitting its separate fence, placing hidden-document compositor work ahead of completion; v6 submits the fence immediately after the draw batch, waits and captures the end timestamp, then presents, and prints the poll count and wait wall so the diagnosis requires visible replay rather than being assumed fixed.
 
 The span-directory UBO introduces a second finite metadata WALL and uniform dynamic-indexing cost; Mode C versus layer prices the resulting handle and allocation path, while runtime facts expose directory consumption and padding waste.
 

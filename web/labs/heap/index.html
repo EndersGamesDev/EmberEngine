@@ -71,6 +71,7 @@
         <div class="card"><strong>Mode C</strong><div id="metric-mode-c" class="metric">median — · p95 — · requires visible replay</div></div>
         <div class="card"><strong>Layer comparator</strong><div id="metric-layer" class="metric">median — · p95 — · requires visible replay</div></div>
       </div>
+      <div id="fence-observations" class="metric">fence poll observations pending</div>
     </section>
     <section>
       <h2>Mode C versus layer equality gate</h2>
@@ -82,7 +83,7 @@
       <p>The earlier descriptor-fetch and many-small-draw benchmarks remain available in the <a href="bench.html">benchmark archive</a>; they are not mixed into this equal-rung lattice comparison.</p>
     </section>
   </main>
-  <footer>Every selection renders immediately before timing. The first fenced frame is a labelled cold/pipeline warm-up and excluded; the second fenced frame makes the 100 ms animation decision, and both remain visible. Qualified faster selections use repeat-until-32-timer-quanta batches, 15 samples, median and nearest-rank p95. CPU-to-GPU frame traffic is exactly 192 bytes in every path. Counts are submitted counts; pole-discarded edges remain submitted.</footer>
+  <footer>Every selection renders immediately before timing. The first fenced frame is a labelled cold/pipeline warm-up and excluded; the second fenced frame makes the 100 ms animation decision, and both remain visible. Every measured batch reports its completion-poll count and fence-wait wall. The presentation draw is inside the measured region; surface presentation occurs after its fence timestamp. Qualified faster selections use repeat-until-32-timer-quanta batches, 15 samples, median and nearest-rank p95. CPU-to-GPU frame traffic is exactly 192 bytes in every path. Counts are submitted counts; pole-discarded edges remain submitted.</footer>
   <script type="module">
     import init, {
       cancel_heap_lattice,
@@ -91,9 +92,9 @@
       render_heap_lattice_frame_json,
       select_heap_lattice_json,
       start_heap_lattice,
-    } from "./pkg/ember_lab_heap.js?v=5";
+    } from "./pkg/ember_lab_heap.js?v=6";
 
-    const VERSION = "heap-lattice-v5";
+    const VERSION = "heap-lattice-v6";
     const SAMPLE_COUNT = 15;
     const WARMUPS = 3;
     const TARGET_QUANTA = 32;
@@ -109,6 +110,7 @@
     const conformance = document.querySelector("#conformance");
     const facts = document.querySelector("#facts");
     const walls = document.querySelector("#walls");
+    const fenceObservationsElement = document.querySelector("#fence-observations");
     const rung = document.querySelector("#rung");
     const stepControl = document.querySelector("#step");
     const policyControl = document.querySelector("#policy");
@@ -123,6 +125,7 @@
     let animationHandle = 0;
     let selectionWarmup = null;
     let conformanceResult = null;
+    let fenceObservations = [];
 
     const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
     const integer = value => Number(value).toLocaleString("en-US");
@@ -167,12 +170,25 @@
 
     function warmupMarkup() {
       if (!selectionWarmup) return "warm-up pending<br>";
-      return `first fenced warm-up <strong>${selectionWarmup.first.normalized_ms.toFixed(4)} ms</strong> · excluded<br>second fenced decision <strong>${selectionWarmup.second.normalized_ms.toFixed(4)} ms</strong> · ${selectionWarmup.animates ? "animation enabled" : "single-frame-on-demand"}<br>`;
+      return `first fenced warm-up <strong>${selectionWarmup.first.normalized_ms.toFixed(4)} ms</strong> · polls ${integer(selectionWarmup.first.fence_polls)} · waited ${selectionWarmup.first.fence_wait_ms.toFixed(4)} ms · excluded<br>second fenced decision <strong>${selectionWarmup.second.normalized_ms.toFixed(4)} ms</strong> · polls ${integer(selectionWarmup.second.fence_polls)} · waited ${selectionWarmup.second.fence_wait_ms.toFixed(4)} ms · ${selectionWarmup.animates ? "animation enabled" : "single-frame-on-demand"}<br>`;
+    }
+
+    function showFenceObservations() {
+      fenceObservationsElement.innerHTML = fenceObservations.length
+        ? fenceObservations.map(observed => `<strong>${observed.label}</strong> · repeats ${integer(observed.repeats)} · polls ${integer(observed.fence_polls)} · waited ${observed.fence_wait_ms.toFixed(4)} ms`).join("<br>")
+        : "fence poll observations pending";
+    }
+
+    function recordFenceObservation(label, measured) {
+      fenceObservations.push({ label, ...measured });
+      showFenceObservations();
     }
 
     function clearMetrics() {
       selectionWarmup = null;
       conformanceResult = null;
+      fenceObservations = [];
+      showFenceObservations();
       conformance.className = "metric";
       conformance.textContent = "PENDING · timing is disqualified until the selected-rung record samples and small-rung image checksum pass";
       for (const mode of ["mode-a", "mode-c", "layer"]) metricElement(mode).innerHTML = `warm-up pending<br>frame median — · p95 — · µs/edge median — · p95 —<br>${qualification(mode)} · requires visible replay`;
@@ -227,16 +243,19 @@
       if (animate) animationHandle = requestAnimationFrame(animationFrame);
     }
 
-    async function measuredFrame(token) {
-      const measured = JSON.parse(await measure_heap_lattice_batch_json(performance.now() / 1000, 1));
+    async function measuredBatch(token, repeats, label) {
+      const measured = JSON.parse(await measure_heap_lattice_batch_json(performance.now() / 1000, repeats));
       if (token !== pageGeneration) throw new Error("cancelled by a newer selection");
+      recordFenceObservation(label, measured);
       return measured;
     }
 
+    const measuredFrame = (token, label) => measuredBatch(token, 1, label);
+
     async function measureOne(token, label = "one frame") {
-      const measured = await measuredFrame(token);
+      const measured = await measuredFrame(token, label);
       showMetrics([measured.normalized_ms], [1], true);
-      status.textContent = `${label}: ${measured.normalized_ms.toFixed(4)} ms · ${measured.microseconds_per_edge?.toFixed(6) ?? "—"} µs/submitted edge · ${qualification()}`;
+      status.textContent = `${label}: ${measured.normalized_ms.toFixed(4)} ms · ${measured.microseconds_per_edge?.toFixed(6) ?? "—"} µs/submitted edge · polls ${integer(measured.fence_polls)} · waited ${measured.fence_wait_ms.toFixed(4)} ms · ${qualification()}`;
       return measured;
     }
 
@@ -259,15 +278,15 @@
 
     async function warmupAndDecide(token) {
       status.textContent = `${selection.mode} · measuring first fenced warm-up (excluded)…`;
-      const first = await measuredFrame(token);
+      const first = await measuredFrame(token, "first fenced warm-up");
       await delay(0);
       status.textContent = `${selection.mode} · first warm-up ${first.normalized_ms.toFixed(4)} ms excluded · measuring second decision frame…`;
-      const second = await measuredFrame(token);
+      const second = await measuredFrame(token, "second fenced decision");
       const animates = second.normalized_ms <= ANIMATE_THRESHOLD_MS;
       selectionWarmup = { first, second, animates };
       showWarmup();
       setAnimation(animates);
-      status.textContent = `first fenced warm-up ${first.normalized_ms.toFixed(4)} ms excluded · second decision ${second.normalized_ms.toFixed(4)} ms · ${animates ? "animation enabled" : "single-frame-on-demand"}`;
+      status.textContent = `first fenced warm-up ${first.normalized_ms.toFixed(4)} ms · polls ${integer(first.fence_polls)} · waited ${first.fence_wait_ms.toFixed(4)} ms · excluded; second decision ${second.normalized_ms.toFixed(4)} ms · polls ${integer(second.fence_polls)} · waited ${second.fence_wait_ms.toFixed(4)} ms · ${animates ? "animation enabled" : "single-frame-on-demand"}`;
     }
 
     async function selectAndRender() {
@@ -320,8 +339,7 @@
           return;
         }
         for (let warmup = 0; warmup < WARMUPS; warmup += 1) {
-          await measure_heap_lattice_batch_json(performance.now() / 1000, 1);
-          if (token !== pageGeneration) throw new Error("cancelled by a newer selection");
+          await measuredBatch(token, 1, `adaptive warm-up ${warmup + 1}/${WARMUPS}`);
         }
         const samples = [];
         const repeatCounts = [];
@@ -330,7 +348,7 @@
         while (samples.length < SAMPLE_COUNT) {
           if (token !== pageGeneration) throw new Error("cancelled by a newer selection");
           if (Date.now() - started >= SUITE_BUDGET_MS) throw new Error(`suite exceeded ${SUITE_BUDGET_MS} ms with ${samples.length}/${SAMPLE_COUNT} samples`);
-          const measured = JSON.parse(await measure_heap_lattice_batch_json(performance.now() / 1000, repeats));
+          const measured = await measuredBatch(token, repeats, `adaptive candidate ${samples.length + 1} · repeats ${repeats}`);
           if (measured.elapsed_ms >= target) {
             samples.push(measured.normalized_ms);
             repeatCounts.push(repeats);
@@ -378,7 +396,7 @@
     });
 
     try {
-      await init({ module_or_path: "./pkg/ember_lab_heap_bg.wasm?v=5" });
+      await init({ module_or_path: "./pkg/ember_lab_heap_bg.wasm?v=6" });
       const timer = timerProbe();
       timerQuantum = timer.quantum;
       const initialized = JSON.parse(await start_heap_lattice(canvas));

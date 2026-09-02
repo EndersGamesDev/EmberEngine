@@ -26,6 +26,7 @@ use crate::conformance::{
     NumericComparison, RECORD_BYTES, RECORD_STRIDE, compare_images, compare_records,
     deterministic_indices,
 };
+use crate::completion::{MAX_COMPLETION_POLLS, PollCounter};
 use crate::{
     BOX_INDICES, ComparatorWork, DataSpan, DialectLimits, DispatchPlan, EqualWorkSignature,
     FrameUniform, KernelDesc, ModeCFrameUniform, RegisteredKernel, SpanArena, StaticHeaders,
@@ -62,6 +63,8 @@ enum LatticeError {
     Mapping(String),
     #[error("completion exceeded 30000 ms")]
     Deadline,
+    #[error("completion exceeded the fixed {0}-poll limit")]
+    PollLimit(u32),
     #[error("lattice generation {observed} is stale; current is {current}")]
     StaleGeneration { observed: u64, current: u64 },
     #[error("device lost: {0}")]
@@ -167,6 +170,7 @@ struct InitReport {
     configured_layer_byte_budget: u64,
     timestamp_query_exposed: bool,
     timestamp_query_used: bool,
+    completion_poll_limit: u32,
     output_path: &'static str,
     completion: &'static str,
     initial: SelectionReport,
@@ -190,6 +194,8 @@ struct BatchReport {
     repeats: u32,
     elapsed_ms: f64,
     normalized_ms: f64,
+    fence_polls: u32,
+    fence_wait_ms: f64,
     microseconds_per_edge: Option<f64>,
     delivered_edges: u32,
     per_frame_cpu_to_gpu_bytes: u32,
@@ -217,6 +223,12 @@ struct ConformanceReport {
 
 struct PendingFence {
     buffer: wgpu::Buffer,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+struct FenceWait {
+    polls: u32,
+    waited_ms: f64,
 }
 
 struct PendingReadback {
@@ -1779,12 +1791,10 @@ impl LatticeLab {
         }
     }
 
-    fn render_frame(&mut self, time: f32) -> Result<(), LatticeError> {
+    fn acquire_frame(&mut self) -> Result<wgpu::SurfaceTexture, LatticeError> {
         if let Some(reason) = self.lost.lock().ok().and_then(|slot| slot.clone()) {
             return Err(LatticeError::DeviceLost(reason));
         }
-        let uniform = self.frame_uniform(time);
-        self.queue.write_buffer(&self.frame_buffer, 0, &uniform);
         let frame = match self.surface.get_current_texture() {
             Ok(frame) => frame,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
@@ -1795,9 +1805,16 @@ impl LatticeLab {
             }
             Err(error) => return Err(LatticeError::Surface(error.to_string())),
         };
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        Ok(frame)
+    }
+
+    fn submit_frame_to_view(
+        &mut self,
+        time: f32,
+        view: &wgpu::TextureView,
+    ) -> Result<(), LatticeError> {
+        let uniform = self.frame_uniform(time);
+        self.queue.write_buffer(&self.frame_buffer, 0, &uniform);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1815,8 +1832,33 @@ impl LatticeLab {
             "heap lattice one presentation pass",
         );
         self.queue.submit([encoder.finish()]);
+        Ok(())
+    }
+
+    fn render_frame(&mut self, time: f32) -> Result<(), LatticeError> {
+        let frame = self.acquire_frame()?;
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.submit_frame_to_view(time, &view)?;
         frame.present();
         Ok(())
+    }
+
+    fn submit_measured_batch(
+        &mut self,
+        time: f32,
+        repeats: u32,
+    ) -> Result<(PendingFence, wgpu::SurfaceTexture), LatticeError> {
+        let frame = self.acquire_frame()?;
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        for repeat in 0..repeats {
+            self.submit_frame_to_view(time + repeat as f32 * 0.000_001, &view)?;
+        }
+        let fence = self.pending_fence();
+        Ok((fence, frame))
     }
 
     fn record_readback_buffer(&self) -> wgpu::Buffer {
@@ -2047,7 +2089,7 @@ async fn wait_for_fence(
     lab: &Rc<RefCell<LatticeLab>>,
     pending: PendingFence,
     generation: u64,
-) -> Result<(), LatticeError> {
+) -> Result<FenceWait, LatticeError> {
     let state = Arc::new(Mutex::new(None));
     let callback = Arc::clone(&state);
     let slice = pending.buffer.slice(..);
@@ -2057,6 +2099,7 @@ async fn wait_for_fence(
         }
     });
     let started = performance_now();
+    let mut counter = PollCounter::new();
     loop {
         let current = GENERATION.get();
         if current != generation {
@@ -2065,6 +2108,10 @@ async fn wait_for_fence(
                 observed: generation,
                 current,
             });
+        }
+        if let Err(limit) = counter.record() {
+            pending.buffer.unmap();
+            return Err(LatticeError::PollLimit(limit));
         }
         {
             let borrowed = lab.borrow();
@@ -2087,7 +2134,10 @@ async fn wait_for_fence(
             }
             drop(bytes);
             pending.buffer.unmap();
-            return Ok(());
+            return Ok(FenceWait {
+                polls: counter.polls(),
+                waited_ms: performance_now() - started,
+            });
         }
         if performance_now() - started >= COMPLETION_DEADLINE_MS {
             pending.buffer.unmap();
@@ -2111,6 +2161,7 @@ async fn wait_for_readback(
         }
     });
     let started = performance_now();
+    let mut counter = PollCounter::new();
     loop {
         let current = GENERATION.get();
         if current != generation {
@@ -2119,6 +2170,10 @@ async fn wait_for_readback(
                 observed: generation,
                 current,
             });
+        }
+        if let Err(limit) = counter.record() {
+            pending.buffer.unmap();
+            return Err(LatticeError::PollLimit(limit));
         }
         {
             let borrowed = lab.borrow();
@@ -2308,8 +2363,9 @@ pub async fn start_heap_lattice(canvas: web_sys::HtmlCanvasElement) -> Result<St
             .features()
             .contains(wgpu::Features::TIMESTAMP_QUERY),
         timestamp_query_used: false,
+        completion_poll_limit: MAX_COMPLETION_POLLS,
         output_path: "paid SCRATCH render plus exact-region copy_texture_to_texture into DATA; ping-pong remains spike-only fallback",
-        completion: "four-byte MAP_READ fence; device.poll(Poll) in zero-timeout browser-yield loop; 30000 ms deadline; generation guard",
+        completion: "draw submit then four-byte MAP_READ fence; counted device.poll(Poll) before each zero-timeout browser yield; 4096-poll and 30000 ms bounds; surface present after the measured fence timestamp; generation guard",
         initial,
     };
     LAB.with_borrow_mut(|slot| *slot = Some(Rc::new(RefCell::new(lab))));
@@ -2410,23 +2466,23 @@ pub async fn measure_heap_lattice_batch_json(
     let generation = GENERATION.get();
     let lab = current_lab().map_err(JsValue::from)?;
     let started = performance_now();
-    let (pending, mode, delivered_edges) = {
+    let (pending, frame, mode, delivered_edges) = {
         let mut borrowed = lab.borrow_mut();
-        for repeat in 0..repeats {
-            borrowed
-                .render_frame(time_seconds + repeat as f32 * 0.000_001)
-                .map_err(JsValue::from)?;
-        }
+        let (pending, frame) = borrowed
+            .submit_measured_batch(time_seconds, repeats)
+            .map_err(JsValue::from)?;
         (
-            borrowed.pending_fence(),
+            pending,
+            frame,
             borrowed.active.mode,
             borrowed.active.delivered_edges,
         )
     };
-    wait_for_fence(&lab, pending, generation)
+    let fence_wait = wait_for_fence(&lab, pending, generation)
         .await
         .map_err(JsValue::from)?;
     let elapsed_ms = performance_now() - started;
+    frame.present();
     let normalized_ms = elapsed_ms / f64::from(repeats);
     serialize(&BatchReport {
         generation,
@@ -2434,11 +2490,13 @@ pub async fn measure_heap_lattice_batch_json(
         repeats,
         elapsed_ms,
         normalized_ms,
+        fence_polls: fence_wait.polls,
+        fence_wait_ms: fence_wait.waited_ms,
         microseconds_per_edge: (delivered_edges > 0)
             .then(|| normalized_ms * 1_000.0 / f64::from(delivered_edges)),
         delivered_edges,
         per_frame_cpu_to_gpu_bytes: 192,
-        timing_method: "CPU encode plus queue submit through ordered four-byte MAP_READ fence wall clock",
+        timing_method: "CPU encode plus presentation-draw submit through ordered four-byte MAP_READ fence wall clock; surface present occurs after the recorded end timestamp",
         gpu_timestamp_ms: None,
     })
     .map_err(JsValue::from)

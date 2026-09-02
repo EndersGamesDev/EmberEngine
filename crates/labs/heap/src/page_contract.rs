@@ -4,11 +4,11 @@ const PAGE: &str = include_str!("../../../../web/labs/heap/index.html");
 const RUNTIME: &str = include_str!("lattice_gpu.rs");
 
 #[test]
-fn loader_is_v5_and_runtime_is_explicitly_gl_only() {
-    assert!(PAGE.contains("ember_lab_heap.js?v=5"));
-    assert!(PAGE.contains("ember_lab_heap_bg.wasm?v=5"));
-    assert!(PAGE.contains("heap-lattice-v5"));
-    assert!(!PAGE.contains("heap-lattice-v4"));
+fn loader_is_v6_and_runtime_is_explicitly_gl_only() {
+    assert!(PAGE.contains("ember_lab_heap.js?v=6"));
+    assert!(PAGE.contains("ember_lab_heap_bg.wasm?v=6"));
+    assert!(PAGE.contains("heap-lattice-v6"));
+    assert!(!PAGE.contains("heap-lattice-v5"));
     assert!(RUNTIME.contains("backends: wgpu::Backends::GL"));
     assert!(RUNTIME.contains("info.backend != wgpu::Backend::Gl"));
 }
@@ -53,10 +53,47 @@ fn honesty_measurement_and_byte_laws_remain_visible() {
         "Math.ceil(ordered.length * 0.95) - 1",
         "per_frame_cpu_to_gpu_bytes",
         "requires visible replay",
+        "polls ${integer(observed.fence_polls)}",
+        "waited ${observed.fence_wait_ms.toFixed(4)} ms",
     ] {
         assert!(PAGE.contains(required), "missing page contract: {required}");
     }
     assert!(RUNTIME.contains("per_frame_cpu_to_gpu_bytes: 192"));
     assert!(RUNTIME.contains("borrowed.device.poll(wgpu::Maintain::Poll)"));
     assert!(RUNTIME.contains("COMPLETION_DEADLINE_MS"));
+}
+
+#[test]
+fn measured_order_fences_the_draw_before_presenting() {
+    let function = RUNTIME
+        .split_once("pub async fn measure_heap_lattice_batch_json")
+        .expect("measurement export exists")
+        .1;
+    let submit = function
+        .find("submit_measured_batch")
+        .expect("draw batch is submitted");
+    let wait = function.find("wait_for_fence").expect("fence is awaited");
+    let end = function
+        .find("let elapsed_ms = performance_now() - started")
+        .expect("measured end is captured");
+    let present = function.find("frame.present()").expect("frame is presented");
+    assert!(submit < wait && wait < end && end < present);
+    assert!(RUNTIME.contains("let fence = self.pending_fence();"));
+}
+
+#[test]
+fn every_measurement_reports_bounded_poll_evidence() {
+    for required in [
+        "fence_polls: u32",
+        "fence_wait_ms: f64",
+        "MAX_COMPLETION_POLLS",
+        "PollCounter::new()",
+        "completion_poll_limit",
+        "recordFenceObservation(label, measured)",
+    ] {
+        assert!(
+            PAGE.contains(required) || RUNTIME.contains(required),
+            "missing poll evidence contract: {required}"
+        );
+    }
 }

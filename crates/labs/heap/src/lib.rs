@@ -2,6 +2,8 @@
 
 #[cfg(any(test, target_arch = "wasm32"))]
 pub(crate) mod conformance;
+#[cfg(any(test, target_arch = "wasm32"))]
+mod completion;
 mod dialect;
 mod heap;
 #[cfg(any(test, target_arch = "wasm32"))]
