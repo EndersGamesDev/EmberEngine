@@ -1,10 +1,7 @@
 //! Fixed benchmark workloads and their CPU address/color oracle.
 
 // The shader oracle intentionally mirrors fixed-width integer and f32 substrate conversions.
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss
-)]
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::Descriptor;
 
@@ -40,7 +37,10 @@ fn fetch_coordinate(pixel_x: u32, pixel_y: u32, fetch: u32) -> (u32, u32) {
         .wrapping_mul(1_664_525)
         .wrapping_add(pixel_y.wrapping_mul(1_013_904_223))
         .wrapping_add(fetch.wrapping_mul(747_796_405));
-    ((seed ^ (seed >> 16)) & 63, ((seed >> 6) ^ (seed >> 19)) & 63)
+    (
+        (seed ^ (seed >> 16)) & 63,
+        ((seed >> 6) ^ (seed >> 19)) & 63,
+    )
 }
 
 pub(crate) fn direct_reference(pixel_x: u32, pixel_y: u32) -> [f32; 4] {
@@ -55,11 +55,7 @@ pub(crate) fn direct_reference(pixel_x: u32, pixel_y: u32) -> [f32; 4] {
     sum.map(|value| (value * 0.031_25).fract().abs())
 }
 
-pub(crate) fn heap_reference(
-    pixel_x: u32,
-    pixel_y: u32,
-    descriptor: Descriptor,
-) -> [f32; 4] {
+pub(crate) fn heap_reference(pixel_x: u32, pixel_y: u32, descriptor: Descriptor) -> [f32; 4] {
     let mut sum = [0.0_f32; 4];
     for fetch in 0..FETCHES_PER_FRAGMENT {
         let (logical_x, logical_y) = fetch_coordinate(pixel_x, pixel_y, fetch);
@@ -86,7 +82,7 @@ pub(crate) fn material_color(index: u32) -> [u8; 4] {
 #[cfg(test)]
 mod tests {
     use super::{
-        DIRECT_FETCH_SHADER, DRAW_STEPS, FETCHES_PER_FRAGMENT, FETCH_HEIGHT, FETCH_WIDTH,
+        DIRECT_FETCH_SHADER, DRAW_STEPS, FETCH_HEIGHT, FETCH_WIDTH, FETCHES_PER_FRAGMENT,
         HEAP_DRAW_SHADER_TEMPLATE, HEAP_FETCH_SHADER_TEMPLATE, PAYLOAD_SIDE,
         TRADITIONAL_DRAW_SHADER, direct_reference, heap_reference, heap_shader, material_color,
     };

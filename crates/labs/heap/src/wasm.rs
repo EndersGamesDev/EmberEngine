@@ -20,7 +20,7 @@ use wgpu::util::DeviceExt;
 
 use crate::heap::{Descriptor, Handle, HeapAllocator, HeapError, HeapKind};
 use crate::kernels::{
-    DIRECT_FETCH_SHADER, DRAW_STEPS, FETCHES_PER_FRAGMENT, FETCH_HEIGHT, FETCH_WIDTH,
+    DIRECT_FETCH_SHADER, DRAW_STEPS, FETCH_HEIGHT, FETCH_WIDTH, FETCHES_PER_FRAGMENT,
     HEAP_DRAW_SHADER_TEMPLATE, HEAP_FETCH_SHADER_TEMPLATE, PAYLOAD_SIDE, TRADITIONAL_DRAW_SHADER,
     heap_shader, material_color, payload_texel,
 };
@@ -271,10 +271,14 @@ fn performance_now() -> f64 {
 async fn yield_to_browser() -> Result<(), LabError> {
     let promise = js_sys::Promise::new(&mut |resolve, reject| {
         let Some(window) = web_sys::window() else {
-            let _ = reject.call1(&JsValue::UNDEFINED, &JsValue::from_str("window is unavailable"));
+            let _ = reject.call1(
+                &JsValue::UNDEFINED,
+                &JsValue::from_str("window is unavailable"),
+            );
             return;
         };
-        if let Err(error) = window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 0)
+        if let Err(error) =
+            window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 0)
         {
             let _ = reject.call1(&JsValue::UNDEFINED, &error);
         }
@@ -294,7 +298,9 @@ impl Lab {
         });
         let surface = instance
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
-            .map_err(|error| LabError::Capability(format!("could not create canvas surface: {error}")))?;
+            .map_err(|error| {
+                LabError::Capability(format!("could not create canvas surface: {error}"))
+            })?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::LowPower,
@@ -324,7 +330,9 @@ impl Lab {
         )
         .map_err(|_| LabError::Capability("array layer limit did not fit u16".to_string()))?;
         if layers == 0 {
-            return Err(LabError::Capability("texture arrays expose zero layers".to_string()));
+            return Err(LabError::Capability(
+                "texture arrays expose zero layers".to_string(),
+            ));
         }
         let descriptor_bytes = adapter_limits
             .max_uniform_buffer_binding_size
@@ -402,11 +410,8 @@ impl Lab {
         surface.configure(&device, &config);
 
         let mut allocator = HeapAllocator::new(HEAP_SIDE, layers, descriptor_capacity)?;
-        let data_handle = allocator.allocate(
-            HeapKind::Data,
-            PAYLOAD_SIDE as u16,
-            PAYLOAD_SIDE as u16,
-        )?;
+        let data_handle =
+            allocator.allocate(HeapKind::Data, PAYLOAD_SIDE as u16, PAYLOAD_SIDE as u16)?;
         if data_handle.index() != 1 {
             return Err(LabError::Capability(format!(
                 "Benchmark A requires descriptor 1 but allocator returned {}",
@@ -514,17 +519,16 @@ impl Lab {
             },
         );
 
-        let image_texel_count = usize::from(HEAP_SIDE)
-            * usize::from(HEAP_SIDE)
-            * usize::from(layers);
+        let image_texel_count =
+            usize::from(HEAP_SIDE) * usize::from(HEAP_SIDE) * usize::from(layers);
         let mut image_bytes = vec![0_u8; image_texel_count * 4];
         for (material, handle) in material_handles.iter().copied().enumerate() {
             let descriptor = allocator.resolve(handle)?;
-            let texel = (usize::from(descriptor.layer) * usize::from(HEAP_SIDE)
-                * usize::from(HEAP_SIDE)
-                + usize::from(descriptor.y) * usize::from(HEAP_SIDE)
-                + usize::from(descriptor.x))
-                * 4;
+            let texel =
+                (usize::from(descriptor.layer) * usize::from(HEAP_SIDE) * usize::from(HEAP_SIDE)
+                    + usize::from(descriptor.y) * usize::from(HEAP_SIDE)
+                    + usize::from(descriptor.x))
+                    * 4;
             image_bytes[texel..texel + 4].copy_from_slice(&material_color(material as u32));
         }
         queue.write_texture(
@@ -777,7 +781,8 @@ impl Lab {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
-        let fetch_target = fetch_target_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let fetch_target =
+            fetch_target_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let fence_source = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("heap lab four-byte fence source"),
             contents: &[0x68, 0x65, 0x61, 0x70],
@@ -1102,7 +1107,10 @@ const fn sampler_layout(
     }
 }
 
-const fn uniform_layout(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+const fn uniform_layout(
+    binding: u32,
+    visibility: wgpu::ShaderStages,
+) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility,

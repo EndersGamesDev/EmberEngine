@@ -269,15 +269,13 @@ impl BuddyLayer {
         let mut block_size = 1_u16 << source_order;
         while block_size > size {
             block_size /= 2;
-            self.free_by_order[block_size.trailing_zeros() as usize]
-                .extend([(x + block_size, y), (x, y + block_size), (x + block_size, y + block_size)]);
+            self.free_by_order[block_size.trailing_zeros() as usize].extend([
+                (x + block_size, y),
+                (x, y + block_size),
+                (x + block_size, y + block_size),
+            ]);
         }
-        Some(Block {
-            layer,
-            x,
-            y,
-            size,
-        })
+        Some(Block { layer, x, y, size })
     }
 
     fn free(&mut self, block: Block) {
@@ -543,7 +541,10 @@ mod tests {
         let packed = PackedDescriptor::pack(descriptor).expect("descriptor is live");
         assert_eq!(packed.words(), [0x5678_1234, 0xdef0_9abc, 0x0000_1357, 1]);
         assert_eq!(packed.unpack(), Ok(descriptor));
-        assert_eq!(PackedDescriptor::MISSING.unpack(), Err(HeapError::MissingDescriptor));
+        assert_eq!(
+            PackedDescriptor::MISSING.unpack(),
+            Err(HeapError::MissingDescriptor)
+        );
     }
 
     #[test]
@@ -560,14 +561,19 @@ mod tests {
         let rollover = allocator
             .allocate(HeapKind::Data, 4, 4)
             .expect("fifth class rolls to layer one");
-        assert_eq!(allocator.resolve(rollover).expect("handle is live").layer, 1);
+        assert_eq!(
+            allocator.resolve(rollover).expect("handle is live").layer,
+            1
+        );
         for handle in first_layer {
             allocator.free(handle).expect("handle frees exactly once");
         }
         let reclaimed = allocator
             .allocate(HeapKind::Data, 8, 8)
             .expect("four siblings coalesce to the whole first layer");
-        let descriptor = allocator.resolve(reclaimed).expect("reclaimed handle is live");
+        let descriptor = allocator
+            .resolve(reclaimed)
+            .expect("reclaimed handle is live");
         assert_eq!((descriptor.layer, descriptor.x, descriptor.y), (0, 0, 0));
         assert!(
             writeln!(
