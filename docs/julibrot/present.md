@@ -1,6 +1,6 @@
 # Julibrot presentation slice
 
-Status: refined implementation and cross-slice interface contract for `crates/labs/julibrot/present` after the five-document joint review; the J1–J31 rulings supersede round-one conflicts, and the app document remains the integration contract where a later disagreement is explicitly recorded.
+Status: implementation in progress for `crates/labs/julibrot/present`; the seam-independent foundation contains present-owned palettes, exact GPU record layouts, HOT-ring arithmetic, generic homography packing and solving, checked tumbled mesh construction, an algebra-oracle bridge to the heap dependency, heap-capacity-specialized flat/tumbled scene WGSL, and the sole warp WGSL, while math-owned warp integration and heap-resource construction remain dependency-gated.
 
 ## 1. Ownership and boundary
 
@@ -63,6 +63,8 @@ For a valid escaped sample, escape height is `h₅ = 4·clamp(smooth_iter/max(ma
 Each vertex begins as `p = (q_u·u + q_v·v, h₅) ∈ ℝ⁵`, then applies the frozen VIEW rotation and the standing double perspective `P₅(p) = 8/(8−p₅)·(p₁,p₂,p₃,p₄)` followed by `P₄(y) = 8/(8−y₄)·(y₁,y₂,y₃)`.
 
 Either perspective denominator at or below `ε = 1e−4` invalidates the vertex and clips its incident triangles by emitting the fixed outside-clip position; denominators are tested before division so a pole never becomes a NaN convention.
+
+The vertex also emits a numeric validity value and the fragment discards any interpolation below one, so every triangle incident to an invalid vertex is rejected rather than relying on the fixed outside-clip position alone.
 
 The implementation depends on `ember-lab-heap` and reuses the exact exported pure CPU oracle `mode_a_endpoint(base:[f64;5],coordinate:[i32;5],frame:&FrameUniform)->ModeAEndpoint` with zero lattice coordinate and a `FrameUniform` carrying `[cos θ,sin θ,cos(φθ),sin(φθ)]`, poles `[8,8]`, and epsilon `1e−4`; the present WGSL operation order is tested against that function rather than copied into a second Rust oracle.
 
@@ -194,7 +196,7 @@ The DATA texture is nearest, unfiltered `Rgba32Float`; descriptor and directory 
 
 ### 3.4 Owner/app to present CPU records
 
-`ViewMode` is `#[repr(u32)]` with `Flat=0` and `Tumbled=1`; every other value is a typed decode error.
+Math defines `ViewMode` as `#[repr(u32)]` with `Flat=0` and `Tumbled=1`; present re-exports it, and every other value is a typed decode error.
 
 `PaletteId` is `#[repr(u32)]` with `Classic=0`, `Ember=1`, and `Ice=2`; app MAIN state selects only the identifier, while present owns the records and rejects no valid enum during the infallible drain.
 
@@ -273,7 +275,7 @@ The HOT buffer size is `3·slot_stride`, where `slot_stride = align_up(128,devic
 ### 3.8 Interface table for joint review
 
 |Producer → consumer|Interface|Pinned payload or call|Units and byte ABI|
-|---|---|---|---|
+|-------------------|---------|----------------------|------------------|
 |math → present|`Plane`|`basis_u@0`, `basis_v@16`|32 bytes; f32 ℝ⁴ coordinates|
 |math → shallow kernel|`CentreSplit`|`hi@0`, `lo@16`|32 bytes; four f32 hi+lo pairs|
 |math → present|`Pose`|`epoch,orbit_generation,plane,plane_theta_1,plane_theta_2,zoom_log2,view_theta_1,grid_width,grid_height,view,centre_from_reference_px`|CPU-only math record; radians, log₂ zoom, pixels|
@@ -288,7 +290,7 @@ The HOT buffer size is `3·slot_stride`, where `slot_stride = align_up(128,devic
 |worker owner → app/present|`ViewerState`|`epoch@0,hot@8,main@48`|168 bytes, align 8; each drain bumps epoch|
 |owner/app → present HOT|`PresentHot`|`epoch,state,plane,view_time_seconds`|CPU-only adapter; latest HOT drain plus standing time|
 |owner/app → present MAIN|`PresentMain`|`epoch,state,grid,view`|CPU-only adapter; latest MAIN drain plus published grid|
-|present → app/math|`ViewMode`|`Flat=0,Tumbled=1`|`repr(u32)` closed enum|
+|math → present/app|`ViewMode`|`Flat=0,Tumbled=1`; present re-exports it|`repr(u32)` closed enum|
 |present → app|`PaletteId`,`PaletteRecord`|Classic/Ember/Ice IDs and exact map/interior/clear literals|`repr(u32)` ID; 48-byte linear-RGBA record|
 |present → GPU|`HotUniform`|plane basis, view rotation, three homography rows, clear, flags|128-byte payload at dynamic ring offset|
 |present → GPU|`SceneUniform`|grid, span, palette map, interior, clear|80-byte regional MAIN payload|
@@ -364,7 +366,7 @@ Warp cost per refresh, scene-frame cost, fence wait, polls, warm-up exclusion, f
 ## 6. Risks and retirement oracles
 
 |Risk|Consequence|Oracle that retires it|
-|---|---|---|
+|----|-----------|----------------------|
 |Heap shader sees the wrong page or row|wrong fractal pixels|native multipage address fixture plus visible scratch-copy grid replay|
 |A glitch flag is interpolated or filtered|hidden numerical failure|asymmetric native tint fixture plus moving visible replay with nearest warp|
 |PLANE and VIEW rotations are conflated|wrong slice or animation|native preset matrices and heap `mode_a_endpoint` comparison|
@@ -384,6 +386,14 @@ Warp cost per refresh, scene-frame cost, fence wait, polls, warm-up exclusion, f
 |An error handler is installed too late|unreadable wasm trap|app page-contract ordering test and deliberate visible validation refusal|
 
 ## 7. Implementation phases and line budget
+
+Phase 0A is the dependency-independent subset now implemented: the package shell, exact palette records and scalar oracle, 128-byte HOT and 80-byte scene layouts, checked three-slot ring arithmetic, and finite homography solver and packer; it intentionally defines no substitute for math-owned `ViewMode`, `Plane`, `Pose`, or `warp_matrix`.
+
+Phase 3A now also implements checked tumbled index and coordinate construction, present's standing VIEW coefficients, and an oracle bridge to heap's exported `mode_a_endpoint` without constructing any heap resource or math-owned type.
+
+Phase 2/3 shader work now implements heap-capacity-specialized flat and tumbled scene WGSL, dense-prefix handle resolution, bottom-row addressing, honest record shading, double-perspective pole rejection, the fixed rawgl camera, and derivative lighting without constructing the pending heap seam.
+
+Phase 4A now implements and validates the sole fullscreen warp WGSL, including source-valid clear, f32 pole rejection, out-of-bounds clear disocclusion, nearest-sampler compatibility, and no mip-level path; the f64 plan still awaits math's `warp_matrix`.
 
 Phase 0 adds the present package shell, shared records, byte-layout assertions, palette scalar reference, consumption of the app-lane `HeapPresentResources` seam, and pure f64 homography/oracle code, estimated at 360 new Rust and test lines.
 

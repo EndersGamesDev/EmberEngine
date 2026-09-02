@@ -16,6 +16,7 @@ members = [
     "crates/labs/heap",
     "crates/labs/julibrot/math",
     "crates/labs/julibrot/worker",
+    "crates/labs/julibrot/present",
     "crates/arena",
     "crates/arena-core",
     "crates/arena-server",

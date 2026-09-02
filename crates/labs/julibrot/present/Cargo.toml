@@ -1,0 +1,15 @@
+[package]
+name = "ember-julibrot-present"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+bytemuck.workspace = true
+ember-lab-heap = { path = "../../heap" }
+thiserror.workspace = true
+
+[dev-dependencies]
+naga = { version = "24", features = ["wgsl-in"] }
+
+[lints]
+workspace = true

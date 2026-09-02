@@ -1,0 +1,177 @@
+use bytemuck::{Pod, Zeroable};
+
+/// Opaque debug tint used for glitches and malformed escape records.
+pub const DEBUG_TINT: [f32; 4] = [1.0, 0.0, 1.0, 1.0];
+
+/// A stable identifier for one present-owned palette.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum PaletteId {
+    /// The balanced default palette.
+    Classic = 0,
+    /// The warm red-orange palette.
+    Ember = 1,
+    /// The cool blue palette.
+    Ice = 2,
+}
+
+/// The exact palette data uploaded in the scene uniform.
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
+#[repr(C, align(16))]
+pub struct PaletteRecord {
+    /// Iterations per cycle, phase in turns, colour mix, and value.
+    pub map: [f32; 4],
+    /// Exact colour for a point that did not escape.
+    pub interior_rgba: [f32; 4],
+    /// Exact clear and disocclusion colour.
+    pub clear_rgba: [f32; 4],
+}
+
+/// The version-one Classic palette.
+pub const CLASSIC_PALETTE: PaletteRecord = PaletteRecord {
+    map: [64.0, 0.0, 0.78, 1.0],
+    interior_rgba: [0.005, 0.005, 0.008, 1.0],
+    clear_rgba: [0.015, 0.018, 0.025, 1.0],
+};
+
+/// The version-one Ember palette.
+pub const EMBER_PALETTE: PaletteRecord = PaletteRecord {
+    map: [48.0, 0.02, 0.88, 1.0],
+    interior_rgba: [0.01, 0.0, 0.0, 1.0],
+    clear_rgba: [0.015, 0.008, 0.005, 1.0],
+};
+
+/// The version-one Ice palette.
+pub const ICE_PALETTE: PaletteRecord = PaletteRecord {
+    map: [80.0, 0.55, 0.72, 1.0],
+    interior_rgba: [0.0, 0.005, 0.01, 1.0],
+    clear_rgba: [0.005, 0.01, 0.015, 1.0],
+};
+
+/// Returns the exact record selected by an application MAIN state.
+#[must_use]
+pub const fn palette(id: PaletteId) -> PaletteRecord {
+    match id {
+        PaletteId::Classic => CLASSIC_PALETTE,
+        PaletteId::Ember => EMBER_PALETTE,
+        PaletteId::Ice => ICE_PALETTE,
+    }
+}
+
+/// Scalar palette result used as the native shader oracle.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PaletteOutcome {
+    /// Opaque linear colour selected for the record.
+    pub rgba: [f32; 4],
+    /// Whether malformed input forced the honest debug tint.
+    pub contract_violation: bool,
+}
+
+#[allow(clippy::float_cmp)]
+fn is_binary(value: f32) -> bool {
+    value == 0.0 || value == 1.0
+}
+
+fn hue_component(hue: f32, offset: f32) -> f32 {
+    ((hue + offset).rem_euclid(1.0).mul_add(6.0, -3.0).abs() - 1.0).clamp(0.0, 1.0)
+}
+
+/// Applies the present palette to `[smooth_iter, escaped, rebase_count, glitch]`.
+#[must_use]
+#[allow(clippy::float_cmp)]
+pub fn shade_escape_record(record: [f32; 4], selected: PaletteRecord) -> PaletteOutcome {
+    let [smooth_iter, escaped, rebase_count, glitch] = record;
+    let malformed = !is_binary(escaped)
+        || !is_binary(glitch)
+        || !rebase_count.is_finite()
+        || rebase_count < 0.0
+        || rebase_count.fract() != 0.0;
+    if malformed || glitch == 1.0 {
+        return PaletteOutcome {
+            rgba: DEBUG_TINT,
+            contract_violation: malformed,
+        };
+    }
+    if escaped == 0.0 {
+        return if smooth_iter == -1.0 {
+            PaletteOutcome {
+                rgba: selected.interior_rgba,
+                contract_violation: false,
+            }
+        } else {
+            PaletteOutcome {
+                rgba: DEBUG_TINT,
+                contract_violation: true,
+            }
+        };
+    }
+    let [period, phase, colour_mix, value] = selected.map;
+    if !smooth_iter.is_finite()
+        || smooth_iter < 0.0
+        || !period.is_finite()
+        || period <= 0.0
+        || !phase.is_finite()
+        || !(0.0..=1.0).contains(&colour_mix)
+        || !(0.0..=1.0).contains(&value)
+    {
+        return PaletteOutcome {
+            rgba: DEBUG_TINT,
+            contract_violation: true,
+        };
+    }
+    let hue = (smooth_iter / period + phase).rem_euclid(1.0);
+    let phase_rgb = [
+        hue_component(hue, 0.0),
+        hue_component(hue, 2.0 / 3.0),
+        hue_component(hue, 1.0 / 3.0),
+    ];
+    let rgb = phase_rgb.map(|component| value * (component - 1.0).mul_add(colour_mix, 1.0));
+    PaletteOutcome {
+        rgba: [rgb[0], rgb[1], rgb[2], 1.0],
+        contract_violation: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::mem::{align_of, size_of};
+
+    use super::*;
+
+    #[test]
+    fn records_are_exact_and_palette_ids_are_stable() {
+        assert_eq!(size_of::<PaletteRecord>(), 48);
+        assert_eq!(align_of::<PaletteRecord>(), 16);
+        assert_eq!(PaletteId::Classic as u32, 0);
+        assert_eq!(PaletteId::Ember as u32, 1);
+        assert_eq!(PaletteId::Ice as u32, 2);
+        assert_eq!(palette(PaletteId::Classic), CLASSIC_PALETTE);
+        assert_eq!(palette(PaletteId::Ember), EMBER_PALETTE);
+        assert_eq!(palette(PaletteId::Ice), ICE_PALETTE);
+    }
+
+    #[test]
+    fn interior_glitch_and_malformed_records_stay_distinct() {
+        let interior = shade_escape_record([-1.0, 0.0, 7.0, 0.0], CLASSIC_PALETTE);
+        assert_eq!(interior.rgba, CLASSIC_PALETTE.interior_rgba);
+        assert!(!interior.contract_violation);
+        let glitch = shade_escape_record([4.0, 0.0, 2.0, 1.0], CLASSIC_PALETTE);
+        assert_eq!(glitch.rgba, DEBUG_TINT);
+        assert!(!glitch.contract_violation);
+        let malformed = shade_escape_record([-1.0, 0.5, 0.0, 0.0], CLASSIC_PALETTE);
+        assert_eq!(malformed.rgba, DEBUG_TINT);
+        assert!(malformed.contract_violation);
+    }
+
+    #[test]
+    fn escaped_records_follow_the_pinned_hue_formula() {
+        let outcome = shade_escape_record([16.0, 1.0, 0.0, 0.0], CLASSIC_PALETTE);
+        assert!(!outcome.contract_violation);
+        assert_eq!(outcome.rgba[3], 1.0);
+        assert!(
+            outcome.rgba[..3]
+                .iter()
+                .all(|channel| (0.0..=1.0).contains(channel))
+        );
+    }
+}
