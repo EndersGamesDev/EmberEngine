@@ -93,9 +93,7 @@ impl JulibrotKernels {
         crate::plan_refinement(requested_extent, params, |records| {
             records <= header_record_capacity
                 && capacity.free_header_bytes >= required_header_bytes
-                && executor
-                    .plan_span(records, crate::OUTPUT_PAGE_SIDE)
-                    .is_ok()
+                && executor.plan_span(records, crate::OUTPUT_PAGE_SIDE).is_ok()
         })
     }
 
@@ -134,25 +132,19 @@ impl JulibrotKernels {
         let headers = match headers {
             Ok(headers) => headers,
             Err(error) => {
-                executor
-                    .free_span(span)
-                    .map_err(|_| KernelError::Heap)?;
+                executor.free_span(span).map_err(|_| KernelError::Heap)?;
                 return Err(error);
             }
         };
         let header_sets = match executor.reserve_header_sets(&headers) {
             Ok(header_sets) => header_sets,
             Err(_) => {
-                executor
-                    .free_span(span)
-                    .map_err(|_| KernelError::Heap)?;
+                executor.free_span(span).map_err(|_| KernelError::Heap)?;
                 return Err(KernelError::Dispatch);
             }
         };
         if header_sets.set_count() != LEVEL_COUNT {
-            executor
-                .free_span(span)
-                .map_err(|_| KernelError::Heap)?;
+            executor.free_span(span).map_err(|_| KernelError::Heap)?;
             return Err(KernelError::Dispatch);
         }
         let first = plan.level(RefinementLevel::Preview);
@@ -342,14 +334,11 @@ impl JulibrotKernels {
         let mut latest = self.latest_reference.borrow_mut();
         if let Some(accepted) = latest.as_ref() {
             if reference.generation < accepted.generation
-                || (reference.generation == accepted.generation
-                    && reference.span != &accepted.span)
+                || (reference.generation == accepted.generation && reference.span != &accepted.span)
             {
                 return Err(KernelError::StaleReference);
             }
-            if reference.generation == accepted.generation
-                && reference.length != accepted.length
-            {
+            if reference.generation == accepted.generation && reference.length != accepted.length {
                 return Err(KernelError::ReferenceLengthMismatch);
             }
             if reference.generation == accepted.generation
@@ -373,10 +362,7 @@ impl JulibrotKernels {
     }
 }
 
-fn ensure_requested_params(
-    plan: &RefinementPlan,
-    params: EscapeParams,
-) -> Result<(), KernelError> {
+fn ensure_requested_params(plan: &RefinementPlan, params: EscapeParams) -> Result<(), KernelError> {
     crate::shallow::validate_params(params)?;
     if params.max_iter != plan.requested_max_iter {
         return Err(KernelError::Dispatch);
@@ -420,8 +406,8 @@ fn checked_facts(
         executor.capacity_report().scratch_bytes,
         orbit,
     )?;
-    let page_passes = u32::try_from(dispatch.plan().passes.len())
-        .map_err(|_| KernelError::ArithmeticOverflow)?;
+    let page_passes =
+        u32::try_from(dispatch.plan().passes.len()).map_err(|_| KernelError::ArithmeticOverflow)?;
     if facts.page_passes != page_passes
         || facts.copy_commands != dispatch.copy_commands()
         || facts.gpu_copy_bytes != dispatch.plan().gpu_copy_bytes
