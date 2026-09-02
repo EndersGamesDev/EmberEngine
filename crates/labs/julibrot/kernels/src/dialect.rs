@@ -85,6 +85,11 @@ mod tests {
         assert!(PERTURB_BODY.contains("0x7f800000u"));
         assert!(PERTURB_BODY.contains("if (steps > 67108863u)"));
         assert!(!PERTURB_BODY.contains("step < 4u"));
-        assert_eq!(PERTURB_BODY.matches("return ldexp(value, exponent);").count(), 1);
+        assert_eq!(
+            PERTURB_BODY
+                .matches("return ldexp(value, exponent);")
+                .count(),
+            1
+        );
     }
 }
