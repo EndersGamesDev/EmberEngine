@@ -326,11 +326,8 @@ impl ProducerEndpoint {
     pub fn admit(&self, producer_now_us: u64) -> Result<Admission, ChannelError> {
         let mut core = self.core.borrow_mut();
         while let Some(returned) = core.pending_producer_credits.pop() {
-            core.shaper.observe_return(
-                producer_now_us,
-                returned.credit_us,
-                returned.compute_us,
-            )?;
+            core.shaper
+                .observe_return(producer_now_us, returned.credit_us, returned.compute_us)?;
         }
         core.shaper.admit(producer_now_us)
     }
