@@ -1,0 +1,197 @@
+//! Honest requested, delivered, measured, unavailable, and replay-only page facts.
+
+use ember_julibrot_math::{precision_for, scaled_pixel_scale};
+use serde::Serialize;
+
+use crate::{App, JULIBROT_ABI_VERSION};
+
+/// Complete version-one overlay snapshot; absent delivered values serialize as `null`.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct PageFacts {
+    pub abi_version: u32,
+    pub adapter_name: String,
+    pub backend: String,
+    pub rgba32f_renderable: bool,
+    pub requested_width: u32,
+    pub requested_height: u32,
+    pub delivered_width: Option<u32>,
+    pub delivered_height: Option<u32>,
+    pub requested_iteration_cap: u32,
+    pub delivered_iteration_cap: Option<u32>,
+    pub requested_zoom_log2: f64,
+    pub presented_zoom_log2: Option<f64>,
+    pub reference_zoom_log2: Option<f64>,
+    pub zoom_digits_f64: f64,
+    pub depth_digits: u32,
+    pub precision_floor_digits: Option<u32>,
+    pub precision_working_digits: Option<u32>,
+    pub requested_precision_bits: Option<u32>,
+    pub delivered_precision_bits: Option<u32>,
+    pub orbit_length: Option<u32>,
+    pub orbit_generation: Option<u32>,
+    pub owner_epoch: u64,
+    pub centre_revision: u32,
+    pub centre_from_reference_px: [f64; 2],
+    pub reference_shift_px: [f64; 2],
+    pub scale_mantissa: Option<f32>,
+    pub scale_exponent: Option<i32>,
+    pub kernel_mode: Option<String>,
+    pub refinement_level: Option<String>,
+    pub refinement_pending: bool,
+    pub extent_divisor: Option<u32>,
+    pub active_pixels: Option<u32>,
+    pub worst_case_pixel_iterations: Option<u64>,
+    pub kernel_page_passes: Option<u32>,
+    pub scratch_copy_commands: Option<u32>,
+    pub scratch_copy_bytes: Option<u64>,
+    pub logical_heap_bytes: Option<u64>,
+    pub reserved_heap_bytes: Option<u64>,
+    pub scratch_bytes: Option<u64>,
+    pub hot_write_bytes: Option<u32>,
+    pub scene_uniform_write_bytes: Option<u32>,
+    pub texture_reallocations: Option<u32>,
+    pub rebase_count_sum: &'static str,
+    pub rebase_count_max: &'static str,
+    pub glitch_pixel_count: &'static str,
+    pub worker_facts: Option<serde_json::Value>,
+    pub worker_compute_us: Option<u32>,
+    pub worker_credit_us: Option<u32>,
+    pub worker_overfeed_us: Option<u32>,
+    pub worker_allocation_events: Option<u32>,
+    pub request_buffers_owned_main: Option<u32>,
+    pub orbit_buffers_owned_main: Option<u32>,
+    pub palette_id: u32,
+    pub view_mode: u32,
+    pub completed_scene_id: Option<u64>,
+    pub in_flight_scene_id: Option<u64>,
+    pub warp_source_scene_id: Option<u64>,
+    pub reprojected_per_scene: Option<u32>,
+    pub refreshes_without_scene: u64,
+    pub chart_residual: Option<f64>,
+    pub tumbled_max_error_px: Option<f64>,
+    pub tumbled_p95_error_px: Option<f64>,
+    pub scene_wall_ms: Option<f64>,
+    pub scene_fence_wait_ms: Option<f64>,
+    pub scene_polls: Option<u32>,
+    pub warp_wall_ms: Option<f64>,
+    pub warp_fence_wait_ms: Option<f64>,
+    pub warp_polls: Option<u32>,
+    pub warmup_label: Option<String>,
+    pub second_frame_policy: Option<String>,
+    pub timer_quantum_ms: Option<f64>,
+    pub device_walls: Vec<String>,
+    pub app_policies: Vec<String>,
+    pub limiting_term: Option<String>,
+    pub wasm_bundle_bytes: Option<u64>,
+    pub javascript_bundle_bytes: Option<u64>,
+    pub wasm_instance_count: u32,
+    pub timing_status: &'static str,
+}
+
+impl PageFacts {
+    /// Builds a snapshot without inventing any delivered or browser measurement.
+    #[must_use]
+    pub fn snapshot(app: &App) -> Self {
+        let requested = app.viewer().requested();
+        let viewer = app.viewer().owner().snapshot();
+        let device = app.runtime().facts();
+        let precision = precision_for(
+            requested.zoom_log2,
+            device.width,
+            requested.iteration_cap,
+        )
+        .ok();
+        let scale = scaled_pixel_scale(requested.zoom_log2, device.width).ok();
+        let zoom_digits_f64 = requested.zoom_log2 * core::f64::consts::LOG10_2;
+        let depth_digits = ceil_nonnegative_to_u32(zoom_digits_f64);
+        Self {
+            abi_version: JULIBROT_ABI_VERSION,
+            adapter_name: device.adapter_name.clone(),
+            backend: device.backend.clone(),
+            rgba32f_renderable: device.rgba32f_renderable,
+            requested_width: device.width,
+            requested_height: device.height,
+            delivered_width: None,
+            delivered_height: None,
+            requested_iteration_cap: requested.iteration_cap,
+            delivered_iteration_cap: nonzero(viewer.main.delivered_iter_cap),
+            requested_zoom_log2: requested.zoom_log2,
+            presented_zoom_log2: None,
+            reference_zoom_log2: None,
+            zoom_digits_f64,
+            depth_digits,
+            precision_floor_digits: precision.map(|plan| plan.floor_digits),
+            precision_working_digits: precision.map(|plan| plan.working_digits),
+            requested_precision_bits: precision.map(|plan| plan.requested_bits),
+            delivered_precision_bits: nonzero(viewer.main.precision_bits),
+            orbit_length: nonzero(viewer.main.orbit_length),
+            orbit_generation: nonzero(viewer.main.generation_applied),
+            owner_epoch: viewer.epoch,
+            centre_revision: viewer.main.centre_revision,
+            centre_from_reference_px: viewer.hot.centre_from_reference_px,
+            reference_shift_px: viewer.main.reference_shift_px,
+            scale_mantissa: scale.map(|value| value.mantissa),
+            scale_exponent: scale.map(|value| value.exponent),
+            kernel_mode: None,
+            refinement_level: None,
+            refinement_pending: app.requests().frame,
+            extent_divisor: None,
+            active_pixels: None,
+            worst_case_pixel_iterations: None,
+            kernel_page_passes: None,
+            scratch_copy_commands: None,
+            scratch_copy_bytes: None,
+            logical_heap_bytes: None,
+            reserved_heap_bytes: None,
+            scratch_bytes: None,
+            hot_write_bytes: None,
+            scene_uniform_write_bytes: None,
+            texture_reallocations: None,
+            rebase_count_sum: "unavailable",
+            rebase_count_max: "unavailable",
+            glitch_pixel_count: "unavailable",
+            worker_facts: None,
+            worker_compute_us: None,
+            worker_credit_us: None,
+            worker_overfeed_us: None,
+            worker_allocation_events: None,
+            request_buffers_owned_main: None,
+            orbit_buffers_owned_main: None,
+            palette_id: requested.palette as u32,
+            view_mode: requested.view as u32,
+            completed_scene_id: None,
+            in_flight_scene_id: None,
+            warp_source_scene_id: None,
+            reprojected_per_scene: None,
+            refreshes_without_scene: 0,
+            chart_residual: None,
+            tumbled_max_error_px: None,
+            tumbled_p95_error_px: None,
+            scene_wall_ms: None,
+            scene_fence_wait_ms: None,
+            scene_polls: None,
+            warp_wall_ms: None,
+            warp_fence_wait_ms: None,
+            warp_polls: None,
+            warmup_label: None,
+            second_frame_policy: None,
+            timer_quantum_ms: None,
+            device_walls: vec!["WebGL2", "EXT_color_buffer_float", "RGBA32F usages"].into_iter().map(str::to_string).collect(),
+            app_policies: vec!["shallow/deep switch zoom_log2=14", "iteration cap=4096", "worker credit=250000us/s"].into_iter().map(str::to_string).collect(),
+            limiting_term: None,
+            wasm_bundle_bytes: None,
+            javascript_bundle_bytes: None,
+            wasm_instance_count: 2,
+            timing_status: "requires visible replay",
+        }
+    }
+}
+
+fn nonzero(value: u32) -> Option<u32> {
+    (value != 0).then_some(value)
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn ceil_nonnegative_to_u32(value: f64) -> u32 {
+    value.max(0.0).ceil().min(f64::from(u32::MAX)) as u32
+}

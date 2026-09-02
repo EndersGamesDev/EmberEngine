@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ember Julibrot lab</title>
+  <link rel="stylesheet" href="./style.css?v=1">
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">Ember laboratory · WebGL2</p>
+      <h1>Julibrot</h1>
+      <p>Deep four-dimensional slices, with every delivered limit and measurement left visible.</p>
+    </header>
+    <section class="viewer" aria-label="Julibrot viewer">
+      <canvas id="julibrot" width="960" height="540"></canvas>
+      <p id="status" class="status" role="status">waiting for first completed scene</p>
+    </section>
+    <section class="controls" aria-label="Viewer controls">
+      <label>View<select id="view"><option value="0">Flat</option><option value="1">Tumbled</option></select></label>
+      <label>Preset<select id="preset"><option value="0">Mandelbrot</option><option value="1">Julia(c)</option></select></label>
+      <label>Julia c real<input id="julia-re" type="number" value="-0.8" step="0.001"></label>
+      <label>Julia c imaginary<input id="julia-im" type="number" value="0.156" step="0.001"></label>
+      <label>Plane θ₁<input id="theta-1" type="range" min="-3.141593" max="3.141593" value="0" step="0.001"></label>
+      <label>Plane θ₂<input id="theta-2" type="range" min="-3.141593" max="3.141593" value="0" step="0.001"></label>
+      <label>Iteration cap<select id="iteration-cap"><option>64</option><option>256</option><option selected>512</option><option>1024</option><option>2048</option><option>4096</option></select></label>
+      <label>Palette<select id="palette"><option value="0">Classic</option><option value="1">Ember</option><option value="2">Ice</option></select></label>
+      <button id="one-frame" type="button">Render one frame</button>
+      <button id="measure" type="button">Measure</button>
+    </section>
+    <section class="facts" aria-labelledby="facts-title">
+      <h2 id="facts-title">Facts</h2>
+      <p>Null delivered values mean unavailable; browser observations retain the label “requires visible replay”. Existing wgpu lab bundles are approximately 4.5 MB, never a substitute for the exact bytes below.</p>
+      <dl id="facts-grid"></dl>
+    </section>
+  </main>
+  <script type="module" src="./main.js?v=1"></script>
+</body>
+</html>

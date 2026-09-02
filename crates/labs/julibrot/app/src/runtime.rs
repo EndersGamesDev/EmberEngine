@@ -10,8 +10,6 @@ use wasm_bindgen::{JsCast, JsValue};
 use crate::{AppError, SurfaceState};
 
 const STATUS_ID: &str = "status";
-const INITIAL_WIDTH: u32 = 960;
-const INITIAL_HEIGHT: u32 = 540;
 
 thread_local! {
     static PANIC_HOOK_INSTALLED: Cell<bool> = const { Cell::new(false) };
@@ -474,6 +472,3 @@ pub fn publish_start_error(error: &AppError) -> JsValue {
     publish_browser_error(&message);
     JsValue::from_str(&message)
 }
-
-#[allow(dead_code, reason = "documents the fixed initial fallback dimensions")]
-const _: [u32; 2] = [INITIAL_WIDTH, INITIAL_HEIGHT];
