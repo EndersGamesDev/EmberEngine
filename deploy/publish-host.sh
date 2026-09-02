@@ -165,6 +165,20 @@ def die(msg):
     raise SystemExit(1)
 
 
+def write_json(path, doc):
+    """Write the book through a temp file and a rename.
+
+    Nothing here may leave a half-written book behind: this script's own first
+    rule is that a book which will not parse is never overwritten, and a
+    truncated write is exactly how such a book gets made.
+    """
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(doc, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp, path)
+
+
 # --- the game-id -> key derivation, the one rule a new game must not need code for.
 # The arena was first and owns the bare names; everyone else is prefixed.
 def addr_key(game_id):
@@ -270,9 +284,7 @@ if mirror:
     if after == before:
         print("UNCHANGED")
         raise SystemExit(0)
-    with open(path, "w") as fh:
-        json.dump(doc, fh, indent=2)
-        fh.write("\n")
+    write_json(path, doc)
     print("wrote mirror entry %s to %s" % (name, path))
     print("CHANGED")
     raise SystemExit(0)
@@ -372,9 +384,7 @@ if after == before:
 # on every invocation, or every no-op publish would make every player
 # re-download the wasm bundles.
 doc["v"] = str(int(time.time()))
-with open(path, "w") as fh:
-    json.dump(doc, fh, indent=2)
-    fh.write("\n")
+write_json(path, doc)
 print("CHANGED")
 PY
 

@@ -144,6 +144,50 @@ else
     ok "a malformed book is refused"
 fi
 is "$(cat "$TMP/broken.json")" "not json at all" "and left byte-for-byte alone"
+is "$(ls "$TMP"/*.tmp 2>/dev/null | wc -l | tr -d ' ')" "0" "and no half-written temp file is left behind"
+
+echo "== deploy-pages.sh is the book's OTHER writer, and refuses one too =="
+# It writes the top-level protocol keys into the same file. It used to catch a
+# parse error, start from `{}`, and push the result — one bad byte on gh-pages
+# became the silent loss of every host entry and every mirror. The block is
+# lifted out of the script as it ships rather than copied here, so the test
+# cannot drift from what actually runs.
+STAMP="$TMP/pages-stamp.py"
+awk '/^python - /{f=1;next} f && /^EOF$/{exit} f' "$DEPLOY/deploy-pages.sh" > "$STAMP"
+if [ -s "$STAMP" ] && grep -q 'fire_proto' "$STAMP"; then
+    ok "the deploy-pages.sh book writer was extracted"
+else
+    bad "could not extract the book writer from deploy-pages.sh"
+fi
+echo 'not json at all' > "$TMP/pages-broken.json"
+if "$PY" "$STAMP" "$TMP/pages-broken.json" 12 1 >/dev/null 2>"$TMP/pages-err"; then
+    bad "deploy-pages.sh overwrote a malformed book"
+else
+    ok "deploy-pages.sh refuses a malformed book"
+fi
+contains "$(cat "$TMP/pages-err")" "refusing to overwrite" "and says so"
+is "$(cat "$TMP/pages-broken.json")" "not json at all" "leaving it byte-for-byte alone"
+echo '[1, 2, 3]' > "$TMP/pages-list.json"
+if "$PY" "$STAMP" "$TMP/pages-list.json" 12 1 >/dev/null 2>&1; then
+    bad "deploy-pages.sh overwrote a book that is not an object"
+else
+    ok "deploy-pages.sh refuses a book that is not an object"
+fi
+# The book it must NOT refuse: a real one, whose entries and mirrors survive.
+"$PY" - "$TMP/pages-good.json" <<'EOF'
+import json, sys
+json.dump({"hosts": [{"name": "amber-otter", "ws": "wss://a.example", "proto": 12}],
+           "mirrors": [{"url": "https://m.example/host.json", "name": "flint-heron"}]},
+          open(sys.argv[1], "w", encoding="utf-8"), indent=2)
+EOF
+"$PY" "$STAMP" "$TMP/pages-good.json" 12 1 >/dev/null
+is "$(jget "$TMP/pages-good.json" 'len(d["hosts"])')" "1" "a good book keeps its hosts"
+is "$(jget "$TMP/pages-good.json" 'd["mirrors"][0]["name"]')" "flint-heron" "and its mirrors"
+is "$(jget "$TMP/pages-good.json" 'd["fire_proto"]')" "1" "and gains the protocol keys"
+is "$(ls "$TMP"/*.tmp 2>/dev/null | wc -l | tr -d ' ')" "0" "written through a temp file that is renamed away"
+: > "$TMP/pages-empty.json"
+"$PY" "$STAMP" "$TMP/pages-empty.json" 12 1 >/dev/null
+is "$(jget "$TMP/pages-empty.json" 'd["proto"]')" "12" "an empty file is still a legitimate fresh start"
 
 echo "== host.json is a single entry, no book scaffolding =="
 MIRROR="$TMP/host.json"

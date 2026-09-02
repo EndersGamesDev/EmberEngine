@@ -102,18 +102,41 @@ echo "== shipping arena protocol v$PROTO, fire protocol v$FIRE_PROTO =="
 python - "$PAGES_DIR/server.json" "$PROTO" "$FIRE_PROTO" <<'EOF'
 import json, os, sys, time
 p, proto, fire_proto = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+
+
+def die(msg):
+    sys.stderr.write("deploy-pages: %s\n" % msg)
+    raise SystemExit(1)
+
+
+# FAIL CLOSED, the same rule publish-host.sh states: a book that will not parse
+# is never overwritten. This used to start from `{}` on a parse error and push
+# the result, which turns one bad byte on gh-pages — a hand edit, a badly
+# resolved conflict now that several machines write the branch — into the
+# silent loss of every host entry and every mirror. An empty file is the one
+# legitimate `{}` start.
 d = {}
 if os.path.exists(p):
-    try:
-        d = json.load(open(p))
-    except Exception:
-        d = {}
+    with open(p, encoding="utf-8") as fh:
+        text = fh.read().strip()
+    if text:
+        try:
+            d = json.loads(text)
+        except ValueError as e:
+            die("%s exists but is not JSON (%s); refusing to overwrite it" % (p, e))
+        if not isinstance(d, dict):
+            die("%s is not a JSON object; refusing to overwrite it" % p)
 was = d.get("proto")
 was_fire = d.get("fire_proto")
 d["v"] = str(int(time.time()))
 d["proto"] = proto
 d["fire_proto"] = fire_proto
-json.dump(d, open(p, "w"))
+# Temp file plus rename, so an interrupted write cannot leave a truncated book
+# behind — which is one of the ways the unparseable book above gets made.
+tmp = p + ".tmp"
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(d, fh)
+os.replace(tmp, p)
 if was_fire is not None and was_fire != fire_proto:
     print(f"""
 !! FIRE PROTOCOL BUMP: v{was_fire} -> v{fire_proto}
