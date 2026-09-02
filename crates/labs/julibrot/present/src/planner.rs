@@ -166,6 +166,27 @@ fn chart_residual(from: &Pose, to: &Pose) -> f64 {
         .fold(0.0, f64::max)
 }
 
+/// Builds the five-dimensional VIEW-rotated point in the chart's own display frame.
+///
+/// The chart is an isometric two-plane, so its two spanning directions are display axes one and
+/// two and escape height is display axis five; the plane's ambient orientation names which fractal
+/// axes are sampled and never places the geometry. Embedding the ambient components directly would
+/// make the picture depend on which axes a preset happens to name and would annihilate world `x`
+/// and `y` for every plane missing `span(e1,e2)` — the Mandelbrot seed `(e3,e4)` among them. The
+/// display frame has no such plane.
+///
+/// `rotation` is `[cos θ, sin θ, cos φθ, sin φθ]` for the standing VIEW rotation `R12(θ)R35(φθ)`.
+fn display_point(coordinate: [f64; 2], height: f64, rotation: [f64; 4]) -> [f64; 5] {
+    let [cosine_one, sine_one, cosine_two, sine_two] = rotation;
+    [
+        coordinate[0].mul_add(cosine_one, -coordinate[1] * sine_one),
+        coordinate[0].mul_add(sine_one, coordinate[1] * cosine_one),
+        -height * sine_two,
+        0.0,
+        height * cosine_two,
+    ]
+}
+
 fn plane_point(plane: Plane, coordinate: [f64; 2]) -> [f64; 4] {
     std::array::from_fn(|axis| {
         f64::from(plane.basis_u[axis]).mul_add(
@@ -200,17 +221,11 @@ fn project_presented(pose: &Pose, chart: [f64; 2], height: f64) -> Option<[f64; 
         2.0 * chart[0],
         2.0 * f64::from(pose.grid_height) / f64::from(pose.grid_width) * chart[1],
     ];
-    let plane = plane_point(pose.plane, display_coordinate);
     let theta_two = f64::midpoint(1.0, 5.0_f64.sqrt()) * pose.view_theta_1;
     let (sine_one, cosine_one) = pose.view_theta_1.sin_cos();
     let (sine_two, cosine_two) = theta_two.sin_cos();
-    let rotated = [
-        plane[0].mul_add(cosine_one, -plane[1] * sine_one),
-        plane[0].mul_add(sine_one, plane[1] * cosine_one),
-        plane[2].mul_add(cosine_two, -height * sine_two),
-        plane[3],
-        plane[2].mul_add(sine_two, height * cosine_two),
-    ];
+    let rotation = [cosine_one, sine_one, cosine_two, sine_two];
+    let rotated = display_point(display_coordinate, height, rotation);
     let denominator_five = PERSPECTIVE_POLE - rotated[4];
     if denominator_five <= POLE_EPSILON {
         return None;
@@ -254,10 +269,15 @@ fn project_presented(pose: &Pose, chart: [f64; 2], height: f64) -> Option<[f64; 
 #[cfg(test)]
 mod tests {
     use ember_julibrot_kernels::RefinementLevel;
-    use ember_julibrot_math::{Plane, ViewMode};
+    use ember_julibrot_math::{
+        MathError, Plane, PlaneAngles, PlanePreset, ViewMode, construct_plane,
+    };
 
     use super::*;
     use crate::{PaletteId, SampleClass, SubmissionKind, SubmissionMeasurement};
+
+    const SWEEP_ANGLES: u32 = 256;
+    const JULIA_SEED: [f64; 2] = [-0.8, 0.156];
 
     fn pose(view: ViewMode, theta: f64, displacement: [f64; 2]) -> Pose {
         Pose {
@@ -386,5 +406,150 @@ mod tests {
             .expect("the complete corpus reports a maximum");
         assert!(maximum <= 2.0, "maximum error was {maximum} pixels");
         assert!(plan.approx_p95_error_px.is_some_and(f64::is_finite));
+    }
+
+    fn tumbled_pose(plane: Plane, theta: f64, displacement: [f64; 2]) -> Pose {
+        let mut posed = pose(ViewMode::Tumbled, theta, displacement);
+        posed.plane = plane;
+        posed
+    }
+
+    /// One retained-to-current motion, expressed in the section 2.6 acceptance envelope.
+    #[derive(Clone, Copy)]
+    struct Motion {
+        view_radians: f64,
+        zoom_log2: f64,
+        pan_px: [f64; 2],
+    }
+
+    const ENVELOPE: Motion = Motion {
+        view_radians: 0.002,
+        zoom_log2: 0.025,
+        pan_px: [2.0, 1.0],
+    };
+
+    const ROTATION_ONLY: Motion = Motion {
+        view_radians: 0.002,
+        zoom_log2: 0.0,
+        pan_px: [2.0, 1.0],
+    };
+
+    fn sweep_plan(plane: Plane, step: u32, motion: Motion) -> WarpPlan {
+        let theta = core::f64::consts::TAU * f64::from(step) / f64::from(SWEEP_ANGLES);
+        let displacement = [3.5, -2.25];
+        let from = tumbled_pose(plane, theta, displacement);
+        let panned = [
+            displacement[0] + motion.pan_px[0],
+            displacement[1] + motion.pan_px[1],
+        ];
+        let mut to = tumbled_pose(plane, theta + motion.view_radians, panned);
+        to.zoom_log2 += motion.zoom_log2;
+        Warp::reproject(&frame(from), &from, &to)
+    }
+
+    /// Returns the clear-only count and the worst sampled error over one full turn of VIEW angle.
+    fn sweep(plane: Plane, motion: Motion) -> (u32, f64) {
+        let mut clear_only = 0_u32;
+        let mut maximum = 0.0_f64;
+        for step in 0..SWEEP_ANGLES {
+            let plan = sweep_plan(plane, step, motion);
+            if plan.kind == WarpKind::ClearOnly {
+                clear_only += 1;
+                continue;
+            }
+            assert_eq!(plan.kind, WarpKind::TumbledHomography);
+            assert!(plan.source_valid);
+            let error = plan
+                .approx_max_error_px
+                .expect("a tumbled plan reports its sampled maximum");
+            let percentile = plan
+                .approx_p95_error_px
+                .expect("a tumbled plan reports its sampled percentile");
+            assert!(percentile <= error);
+            maximum = maximum.max(error);
+        }
+        (clear_only, maximum)
+    }
+
+    fn named_planes() -> Result<[(&'static str, Plane); 3], MathError> {
+        let identity = PlaneAngles {
+            theta_1: 0.0,
+            theta_2: 0.0,
+        };
+        let hybrid = PlaneAngles {
+            theta_1: core::f64::consts::FRAC_PI_4,
+            theta_2: core::f64::consts::FRAC_PI_4,
+        };
+        Ok([
+            (
+                "mandelbrot",
+                construct_plane(PlanePreset::Mandelbrot, identity)?,
+            ),
+            (
+                "julia",
+                construct_plane(PlanePreset::Julia { c0: JULIA_SEED }, identity)?,
+            ),
+            ("hybrid", construct_plane(PlanePreset::Mandelbrot, hybrid)?),
+        ])
+    }
+
+    #[test]
+    fn the_ambient_embedding_annihilates_mandelbrot_display_axes() -> Result<(), MathError> {
+        let [(_, mandelbrot), ..] = named_planes()?;
+        let ambient = plane_point(mandelbrot, [1.5, -0.75]);
+        assert_eq!([ambient[0], ambient[1]], [0.0, 0.0]);
+        assert_ne!([ambient[2], ambient[3]], [0.0, 0.0]);
+        for step in 0..SWEEP_ANGLES {
+            let theta = core::f64::consts::TAU * f64::from(step) / f64::from(SWEEP_ANGLES);
+            let (sine, cosine) = theta.sin_cos();
+            let old_first = ambient[0].mul_add(cosine, -ambient[1] * sine);
+            let old_second = ambient[0].mul_add(sine, ambient[1] * cosine);
+            assert_eq!([old_first, old_second], [0.0, 0.0]);
+        }
+        let display = display_point([1.5, -0.75], 0.0, [1.0, 0.0, 1.0, 0.0]);
+        assert_eq!([display[0], display[1]], [1.5, -0.75]);
+        Ok(())
+    }
+
+    #[test]
+    fn every_named_plane_warps_at_every_swept_view_angle() -> Result<(), MathError> {
+        for (name, plane) in named_planes()? {
+            let (clear_only, maximum) = sweep(plane, ENVELOPE);
+            assert_eq!(
+                clear_only, 0,
+                "{name} plane fell back to clear-only at {clear_only} of {SWEEP_ANGLES} angles"
+            );
+            assert!(
+                maximum <= 3.5,
+                "{name} plane sampled {maximum} pixels over the full acceptance envelope"
+            );
+            let (clear_only, maximum) = sweep(plane, ROTATION_ONLY);
+            assert_eq!(clear_only, 0, "{name} plane cleared without a zoom step");
+            assert!(
+                maximum <= 1.0,
+                "{name} plane sampled {maximum} pixels for rotation and pan alone"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn the_tumbled_plan_ignores_which_ambient_axes_a_preset_names() -> Result<(), MathError> {
+        let [(_, mandelbrot), (_, julia), (_, hybrid)] = named_planes()?;
+        for step in 0..SWEEP_ANGLES {
+            let reference = sweep_plan(mandelbrot, step, ENVELOPE);
+            assert_eq!(sweep_plan(julia, step, ENVELOPE), reference);
+            let tilted = sweep_plan(hybrid, step, ENVELOPE);
+            assert_eq!(tilted.kind, reference.kind);
+            for (row, expected) in tilted.rows.into_iter().zip(reference.rows) {
+                for (value, wanted) in row.into_iter().zip(expected) {
+                    assert!(
+                        (value - wanted).abs() <= 1.0e-6,
+                        "hybrid row entry {value} left the binary32 basis tolerance of {wanted}"
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 }

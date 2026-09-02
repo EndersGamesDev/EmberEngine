@@ -300,8 +300,26 @@ pub struct PresentFacts {
     pub chart_residual: Option<f64>,
     /// Latest tumbled maximum approximation error.
     pub tumbled_max_error_px: Option<f64>,
+    /// Latest tumbled ninety-fifth-percentile approximation error.
+    pub tumbled_p95_error_px: Option<f64>,
     /// Honest current status.
     pub status: PresentStatus,
+}
+
+impl PresentFacts {
+    /// Records the three planner-owned approximation facts from one warp plan.
+    ///
+    /// A clear-only or exact-flat plan has no sampled tumbled corpus, so both error facts stay
+    /// absent rather than reporting a stale or invented number.
+    pub const fn record_warp_plan(&mut self, plan: &WarpPlan) {
+        self.chart_residual = if plan.source_valid {
+            Some(plan.chart_residual)
+        } else {
+            None
+        };
+        self.tumbled_max_error_px = plan.approx_max_error_px;
+        self.tumbled_p95_error_px = plan.approx_p95_error_px;
+    }
 }
 
 impl Default for PresentFacts {
@@ -325,6 +343,7 @@ impl Default for PresentFacts {
             texture_reallocations: 0,
             chart_residual: None,
             tumbled_max_error_px: None,
+            tumbled_p95_error_px: None,
             status: PresentStatus::WaitingForFirstScene,
         }
     }
@@ -425,6 +444,35 @@ mod tests {
         assert_eq!(facts.delivered_level, None);
         assert_eq!(facts.last_scene, None);
         assert_eq!(facts.status, PresentStatus::WaitingForFirstScene);
+    }
+
+    #[test]
+    fn recorded_warp_facts_publish_both_sampled_tumbled_errors() {
+        let mut facts = PresentFacts::default();
+        assert_eq!(facts.tumbled_p95_error_px, None);
+        let tumbled = WarpPlan {
+            rows: [[0.0; 4]; 3],
+            source_valid: true,
+            kind: WarpKind::TumbledHomography,
+            chart_residual: 0.25,
+            approx_max_error_px: Some(1.75),
+            approx_p95_error_px: Some(0.5),
+        };
+        facts.record_warp_plan(&tumbled);
+        assert_eq!(facts.chart_residual, Some(0.25));
+        assert_eq!(facts.tumbled_max_error_px, Some(1.75));
+        assert_eq!(facts.tumbled_p95_error_px, Some(0.5));
+        let cleared = WarpPlan {
+            source_valid: false,
+            kind: WarpKind::ClearOnly,
+            approx_max_error_px: None,
+            approx_p95_error_px: None,
+            ..tumbled
+        };
+        facts.record_warp_plan(&cleared);
+        assert_eq!(facts.chart_residual, None);
+        assert_eq!(facts.tumbled_max_error_px, None);
+        assert_eq!(facts.tumbled_p95_error_px, None);
     }
 
     fn test_span() -> ember_lab_heap::DataSpan {
