@@ -200,6 +200,11 @@
     const { default: init, start_online, proto_version } = await import(`./pkg/arena.js?v=${V}`);
     let ready = init({ module_or_path: `./pkg/arena_bg.wasm?v=${V}` })
       .catch((e) => { fail(e); console.error(e); });
+    // The bundle's exports call into the wasm module, which does not exist
+    // until init has resolved: asking for the protocol before that threw
+    // "Cannot read properties of undefined (reading 'proto_version')" on the
+    // live page (2026-09-02) and left it at "server …" for good. So wait.
+    await ready;
     const PROTO = proto_version();
 
     // ---- host discovery
