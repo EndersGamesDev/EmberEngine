@@ -362,9 +362,19 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
                 tracing::debug!(conn = id, "binary frame from client; dropping");
                 break;
             }
+            // os error 997 is Windows ERROR_IO_PENDING: the 5 ms read timeout
+            // firing inside an overlapped read. Rust maps it to neither
+            // WouldBlock nor TimedOut, so without the raw check the arm below
+            // ended the loop and the peer was silently dropped on its next
+            // quiet 5 ms - harmless on a Linux host, fatal the moment the
+            // server is hosted on Windows (v13 is; see deploy-pong-local.sh).
+            // The same predicate lives in examples/wsbot.rs and
+            // fire_core::proto::is_transient_read; this crate depends on
+            // neither, so it is inlined here.
             Err(tungstenite::Error::Io(e))
-                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut => {
-            }
+                if e.raw_os_error() == Some(997)
+                    || e.kind() == io::ErrorKind::WouldBlock
+                    || e.kind() == io::ErrorKind::TimedOut => {}
             Err(_) => break,
         }
     }
