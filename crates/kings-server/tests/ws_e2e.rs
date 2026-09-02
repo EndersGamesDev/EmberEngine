@@ -94,7 +94,11 @@ fn pump(ws: &mut Client, dur: Duration, mut f: impl FnMut(S2C) -> bool) -> bool 
 }
 
 /// Wait for a `State` that `f` accepts and return it.
-fn next_board(ws: &mut Client, dur: Duration, mut f: impl FnMut(&BoardState) -> bool) -> Option<BoardState> {
+fn next_board(
+    ws: &mut Client,
+    dur: Duration,
+    mut f: impl FnMut(&BoardState) -> bool,
+) -> Option<BoardState> {
     let mut found = None;
     pump(ws, dur, |m| {
         if let S2C::State { board } = m
@@ -166,13 +170,10 @@ fn join(ws: &mut Client, name: &str) -> u8 {
     id.unwrap()
 }
 
-/// The list of section 4.9, in one sitting: create, list, join, the guest's
-/// Start refused, the creator's Start, the first move seen by the other
-/// side, an out-of-turn move and a stale one refused, the listing marking
-/// the lobby as playing, and a third player refused.
-#[test]
-fn two_players_create_join_start_and_move() {
-    let port = start_server(proto::TURN_MS);
+/// The first half of the 4.9 list: alice creates `court` and sees her own
+/// empty table, bob finds it in the listing and joins diagonally, alice is
+/// told the table can start. Returns both clients and their lobby ids.
+fn seat_two(port: u16) -> (Client, Client, u8, u8) {
     let mut a = client(port, "alice");
     let mut b = client(port, "bob");
 
@@ -233,6 +234,17 @@ fn two_players_create_join_start_and_move() {
         )),
         "the creator was not told the table can start"
     );
+    (a, b, a_id, b_id)
+}
+
+/// The list of section 4.9, in one sitting: create, list, join, the guest's
+/// Start refused, the creator's Start, the first move seen by the other
+/// side, an out-of-turn move and a stale one refused, the listing marking
+/// the lobby as playing, and a third player refused.
+#[test]
+fn two_players_create_join_start_and_move() {
+    let port = start_server(proto::TURN_MS);
+    let (mut a, mut b, _a_id, _b_id) = seat_two(port);
 
     // The guest may not start.
     send(&mut b, &C2S::Start);
@@ -304,9 +316,17 @@ fn two_players_create_join_start_and_move() {
         .expect("bob never saw the move");
     let last = board.last.expect("the board narrates the move");
     assert_eq!(last.kind, ActionKind::Move);
-    assert_eq!((last.seat, last.fx, last.fy, last.tx, last.ty), (0, 3, 0, 4, 0));
+    assert_eq!(
+        (last.seat, last.fx, last.fy, last.tx, last.ty),
+        (0, 3, 0, 4, 0)
+    );
     assert_eq!(board.seat, 2, "seat 2 is next");
-    assert!(board.pieces.iter().any(|p| p.x == 4 && p.y == 0 && p.owner == 0));
+    assert!(
+        board
+            .pieces
+            .iter()
+            .any(|p| p.x == 4 && p.y == 0 && p.owner == 0)
+    );
     assert!(!board.pieces.iter().any(|p| p.x == 3 && p.y == 0));
 
     // The listing now says playing, and a third player is refused.
@@ -354,7 +374,11 @@ fn a_silent_turn_passes_with_a_timeout() {
     assert!(
         pump(&mut b, Duration::from_secs(3), |m| matches!(
             m,
-            S2C::Clock { turn: 1, seat: 0, .. }
+            S2C::Clock {
+                turn: 1,
+                seat: 0,
+                ..
+            }
         )),
         "no Clock during the turn"
     );
@@ -392,7 +416,10 @@ fn a_message_before_hello_closes_the_connection() {
             }
         }
     }
-    assert!(closed, "the connection stayed open after a pre-Hello message");
+    assert!(
+        closed,
+        "the connection stayed open after a pre-Hello message"
+    );
 }
 
 /// The gate is exact equality, and the refusal has to say what each side
@@ -479,7 +506,8 @@ fn a_wrong_password_is_refused_and_the_right_one_is_not() {
             password: Some("wrong".into()),
         },
     );
-    let reason = next_rejection(&mut guest, Duration::from_secs(2)).expect("wrong password refused");
+    let reason =
+        next_rejection(&mut guest, Duration::from_secs(2)).expect("wrong password refused");
     assert!(reason.contains("password"), "{reason}");
     send(
         &mut guest,
@@ -499,7 +527,7 @@ fn a_wrong_password_is_refused_and_the_right_one_is_not() {
 
 /// The probe's deep step (`examples/probe.rs`, design 4.8), replayed over
 /// the wire against the test server: Hello, a Welcome that carries this
-/// build's stamp, CreateLobby, Joined, LeaveLobby, and the lobby gone from
+/// build's stamp, `CreateLobby`, `Joined`, `LeaveLobby`, and the lobby gone from
 /// the listing at once so a probe never leaves a table behind.
 #[test]
 fn the_probes_deep_step_passes_against_the_test_server() {

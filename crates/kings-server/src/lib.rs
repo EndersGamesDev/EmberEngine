@@ -35,11 +35,11 @@ use std::time::{Duration, Instant};
 use tungstenite::Message;
 use tungstenite::protocol::WebSocketConfig;
 
-use kings_core::board::{SEAT_BY_JOIN, SEATS, setup, to_state};
+use kings_core::board::{FormationError, SEAT_BY_JOIN, SEATS, setup, to_state};
 use kings_core::proto::{
     self, C2S, Formation, LobbyInfo, MAX_PLAYERS, MIN_PLAYERS, Phase, PlayerMeta, S2C,
 };
-use kings_core::{State, apply_move, disconnect, timeout};
+use kings_core::{Illegal, State, apply_move, disconnect, timeout};
 
 /// `r<N>` of this build from the deploy's `EMBER_BUILD_VERSION`, or `""`
 /// for an unstamped dev build (`docs/hosts.md`, section 4).
@@ -395,7 +395,7 @@ impl Lobby {
         if self.member(conn).is_none() {
             return Err("you are not at this table");
         }
-        formation.validate().map_err(|e| e.reason())?;
+        formation.validate().map_err(FormationError::reason)?;
         self.formations.insert(conn, formation);
         self.rebuild();
         Ok(vec![(Recipient::Members, self.board_msg())])
@@ -449,7 +449,7 @@ impl Lobby {
             return Err("the turn has ended");
         }
         let before = self.state.turn;
-        apply_move(&mut self.state, seat, turn, from, to).map_err(|e| e.reason())?;
+        apply_move(&mut self.state, seat, turn, from, to).map_err(Illegal::reason)?;
         if self.state.turn != before {
             self.elapsed_ms = 0;
             self.clock_acc_ms = 0;
@@ -568,17 +568,16 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
             continue; // stream drops -> RST/FIN
         }
         // Per-IP cap for direct exposure (loopback = tunnel, exempt).
-        let ip = stream.peer_addr().ok().map(|a| a.ip());
+        let ip = stream
+            .peer_addr()
+            .ok()
+            .map(|a| a.ip())
+            .filter(|ip| !ip.is_loopback());
         if let Some(ip) = ip
-            && !ip.is_loopback()
+            && !admit_ip(&per_ip, ip)
         {
-            let mut map = per_ip.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            let count = map.entry(ip).or_insert(0);
-            if *count >= MAX_CONNS_PER_IP {
-                tracing::warn!(%ip, "per-ip cap reached, refusing peer");
-                continue;
-            }
-            *count += 1;
+            tracing::warn!(%ip, "per-ip cap reached, refusing peer");
+            continue;
         }
         let id = next_id;
         next_id += 1;
@@ -589,16 +588,8 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
         thread::spawn(move || {
             conn_thread(id, stream, &tx);
             live_conns.fetch_sub(1, Ordering::Relaxed);
-            if let Some(ip) = ip
-                && !ip.is_loopback()
-            {
-                let mut map = per_ip.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                if let Some(c) = map.get_mut(&ip) {
-                    *c -= 1;
-                    if *c == 0 {
-                        map.remove(&ip);
-                    }
-                }
+            if let Some(ip) = ip {
+                release_ip(&per_ip, ip);
             }
         });
     }
@@ -607,16 +598,59 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
     Ok(())
 }
 
-fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
-    let peer = stream
-        .peer_addr()
-        .map_or_else(|_| "?".into(), |address| address.to_string());
+type PerIp = Mutex<HashMap<IpAddr, u32>>;
+
+/// Count one more connection from `ip`, or refuse it at the cap.
+fn admit_ip(per_ip: &PerIp, ip: IpAddr) -> bool {
+    admit(
+        &mut per_ip
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        ip,
+    )
+}
+
+/// A connection from `ip` ended; forget the address once it has none left.
+fn release_ip(per_ip: &PerIp, ip: IpAddr) {
+    release(
+        &mut per_ip
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        ip,
+    );
+}
+
+/// `admit_ip` on the bare map.
+fn admit(map: &mut HashMap<IpAddr, u32>, ip: IpAddr) -> bool {
+    let count = map.entry(ip).or_insert(0);
+    if *count >= MAX_CONNS_PER_IP {
+        false
+    } else {
+        *count += 1;
+        true
+    }
+}
+
+/// `release_ip` on the bare map.
+fn release(map: &mut HashMap<IpAddr, u32>, ip: IpAddr) {
+    if let Some(c) = map.get_mut(&ip) {
+        *c = c.saturating_sub(1);
+        if *c == 0 {
+            map.remove(&ip);
+        }
+    }
+}
+
+type Ws = tungstenite::WebSocket<TcpStream>;
+
+/// The WebSocket handshake under a total deadline: the per-read timeout
+/// alone is not enough, because a peer can send one byte per window for
+/// ever and never finish. `None` means the peer never became a client.
+fn accept_ws(id: u64, stream: TcpStream, peer: &str) -> Option<Ws> {
     drop(stream.set_nodelay(true));
     drop(stream.set_read_timeout(Some(Duration::from_secs(10))));
     drop(stream.set_write_timeout(Some(Duration::from_secs(15))));
 
-    // Total handshake deadline. The per-read timeout alone is not enough: a
-    // peer can send one byte per window forever and never finish.
     let done = Arc::new(AtomicBool::new(false));
     if let Ok(watch) = stream.try_clone() {
         let flag = Arc::clone(&done);
@@ -637,15 +671,24 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
     let ws_cfg = WebSocketConfig::default()
         .max_message_size(Some(MAX_WS_MESSAGE))
         .max_frame_size(Some(MAX_WS_MESSAGE));
-    let mut ws = match tungstenite::accept_with_config(stream, Some(ws_cfg)) {
-        Ok(ws) => ws,
-        Err(e) => {
-            done.store(true, Ordering::Relaxed);
-            tracing::debug!(conn = id, peer = %peer, "handshake failed: {e}");
-            return;
-        }
-    };
+    let ws = tungstenite::accept_with_config(stream, Some(ws_cfg));
     done.store(true, Ordering::Relaxed);
+    match ws {
+        Ok(ws) => Some(ws),
+        Err(e) => {
+            tracing::debug!(conn = id, peer, "handshake failed: {e}");
+            None
+        }
+    }
+}
+
+fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
+    let peer = stream
+        .peer_addr()
+        .map_or_else(|_| "?".into(), |address| address.to_string());
+    let Some(mut ws) = accept_ws(id, stream, &peer) else {
+        return;
+    };
 
     // This thread owns the socket, so the outbound queue only drains between
     // reads. A short read timeout keeps a broadcast from sitting on the queue
@@ -1008,7 +1051,9 @@ fn handle_msg(
             if !version_ok(id, conns) {
                 return;
             }
-            with_lobby(id, conns, lobbies, |lobby| lobby.set_formation(id, formation));
+            with_lobby(id, conns, lobbies, |lobby| {
+                lobby.set_formation(id, formation)
+            });
         }
 
         (C2S::Start, true) => {
@@ -1113,7 +1158,10 @@ fn create_lobby(
     let password = password
         .map(|value| proto::sanitize(&value, proto::MAX_PASSWORD_LEN))
         .filter(|value| !value.is_empty());
-    lobbies.insert(name.clone(), Lobby::new(name.clone(), password, cfg.turn_ms));
+    lobbies.insert(
+        name.clone(),
+        Lobby::new(name.clone(), password, cfg.turn_ms),
+    );
     join_lobby(id, &name, None, conns, lobbies, true);
 }
 
@@ -1286,7 +1334,10 @@ mod tests {
             .collect()
     }
 
-    fn rosters(out: &Outbox) -> Vec<(u8, Vec<(u8, String, u8)>)> {
+    /// `(creator id, [(id, handle, seat)])` of one `Roster` message.
+    type RosterRow = (u8, Vec<(u8, String, u8)>);
+
+    fn rosters(out: &Outbox) -> Vec<RosterRow> {
         out.iter()
             .filter_map(|(_, m)| match m {
                 S2C::Roster { creator, roster } => Some((
@@ -1361,7 +1412,7 @@ mod tests {
     fn can_start_at_two_and_on_every_roster_change() {
         let mut l = Lobby::new("court".into(), None, TURN_MS);
         let out = l.join(ADA, "ada".into()).unwrap();
-        assert!(can_starts(&out).is_empty());
+        assert_eq!(can_starts(&out), Vec::new());
         let out = l.join(BOB, "bob".into()).unwrap();
         assert_eq!(can_starts(&out), vec![(Recipient::One(ADA), 2)]);
         let out = l.join(CY, "cy".into()).unwrap();
@@ -1511,7 +1562,10 @@ mod tests {
         let last = (*boards(&all).last().unwrap()).clone();
         assert_eq!(last.last.map(|a| a.eliminated), Some(Some(0)));
         assert!(!last.seats[0].alive);
-        assert_eq!(l.do_move(BOB, last.turn, (6, 9), (5, 9)), Err("the game is over"));
+        assert_eq!(
+            l.do_move(BOB, last.turn, (6, 9), (5, 9)),
+            Err("the game is over")
+        );
     }
 
     #[test]
@@ -1522,7 +1576,7 @@ mod tests {
         }
         assert_eq!(l.phase, Phase::Finished);
         let out = tick_by(&mut l, RESULTS_MS - 1);
-        assert!(out.is_empty());
+        assert_eq!(out, Vec::new());
         assert_eq!(l.phase, Phase::Finished);
         let out = tick_by(&mut l, 1);
         assert_eq!(l.phase, Phase::Waiting);
@@ -1604,7 +1658,10 @@ mod tests {
         assert_eq!(l.phase, Phase::Playing);
         assert_eq!(l.creator, BOB, "the creator's departure hands over");
         let b = boards(&out)[0];
-        assert_eq!(b.last.map(|a| (a.kind, a.eliminated)), Some((ActionKind::Pass, Some(0))));
+        assert_eq!(
+            b.last.map(|a| (a.kind, a.eliminated)),
+            Some((ActionKind::Pass, Some(0)))
+        );
         assert_eq!(b.seat, 1, "seat 1 (cy) is next after seat 0");
         assert_eq!(b.left_ms, TURN_MS, "the next turn's clock is fresh");
         assert_eq!(l.elapsed_ms, 0);
@@ -1658,6 +1715,30 @@ mod tests {
             }
             other => panic!("wrong message: {other:?}"),
         }
+    }
+
+    /// Direct exposure: one address gets `MAX_CONNS_PER_IP` sockets, the
+    /// next is refused, and closing one reopens the cap; an address with
+    /// no sockets left is forgotten rather than kept at zero for ever.
+    #[test]
+    fn the_per_ip_cap_admits_releases_and_forgets() {
+        let ip: IpAddr = "203.0.113.7".parse().unwrap();
+        let other: IpAddr = "203.0.113.8".parse().unwrap();
+        let mut map = HashMap::new();
+        for _ in 0..MAX_CONNS_PER_IP {
+            assert!(admit(&mut map, ip));
+        }
+        assert!(!admit(&mut map, ip), "one over the cap was admitted");
+        assert!(admit(&mut map, other), "the cap is per address");
+        release(&mut map, ip);
+        assert!(admit(&mut map, ip), "a released slot was not reusable");
+        for _ in 0..MAX_CONNS_PER_IP {
+            release(&mut map, ip);
+        }
+        assert!(!map.contains_key(&ip), "an idle address was kept at zero");
+        release(&mut map, ip);
+        assert!(!map.contains_key(&ip), "a stray release must not underflow");
+        assert_eq!(map.get(&other), Some(&1));
     }
 
     /// An empty lobby must not linger and keep its name reserved, and a
