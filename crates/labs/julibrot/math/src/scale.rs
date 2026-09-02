@@ -182,6 +182,26 @@ pub fn centre_displacement_px(
     }
 }
 
+pub fn centre_from_reference_px(
+    centre: &BigCentre,
+    reference: &BigCentre,
+    plane: &Plane,
+    zoom_log2: f64,
+    grid_width: u32,
+) -> Result<[f64; 2], MathError> {
+    centre_displacement_px(centre, reference, *plane, zoom_log2, grid_width)
+}
+
+pub fn reference_shift_px(
+    old: &BigCentre,
+    new: &BigCentre,
+    plane: &Plane,
+    zoom_log2: f64,
+    grid_width: u32,
+) -> Result<[f64; 2], MathError> {
+    centre_displacement_px(new, old, *plane, zoom_log2, grid_width)
+}
+
 fn saturating_f64_to_u32(value: f64) -> u32 {
     if value >= f64::from(u32::MAX) {
         u32::MAX
