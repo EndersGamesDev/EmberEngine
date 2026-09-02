@@ -24,7 +24,7 @@ use wgpu::util::DeviceExt as _;
 
 use crate::{
     BOX_INDICES, ComparatorWork, DataSpan, DialectLimits, DispatchPlan, EqualWorkSignature,
-    FrameUniform, HeapKind, KernelDesc, ModeCFrameUniform, RegisteredKernel, SpanArena,
+    FrameUniform, KernelDesc, ModeCFrameUniform, RegisteredKernel, SpanArena,
     StaticHeaders, box_vertices, frame_for, mode_a_records, mode_a_shader, mode_c_register,
     mode_c_shader,
 };
