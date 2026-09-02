@@ -27,8 +27,8 @@ use crate::conformance::{
     NumericComparison, RECORD_BYTES, RECORD_STRIDE, compare_images, compare_records,
     deterministic_indices,
 };
-use crate::selection::{SelectionEpoch, SurfaceOwnership};
 use crate::executor::texture;
+use crate::selection::{SelectionEpoch, SurfaceOwnership};
 use crate::{
     BOX_INDICES, ComparatorWork, DataSpan, EqualWorkSignature, ExecutorDispatch, FrameUniform,
     GpuKernel, GpuKernelExecutor, GpuKernelExecutorConfig, KernelDesc, ModeCFrameUniform,
@@ -1024,10 +1024,7 @@ impl LatticeLab {
                 );
                 let headers = self
                     .executor
-                    .prefix_headers(
-                        &self.mode_a_outputs[0],
-                        self.mode_a_outputs[0].logical_len,
-                    )
+                    .prefix_headers(&self.mode_a_outputs[0], self.mode_a_outputs[0].logical_len)
                     .map_err(|error| LatticeError::Resource(error.to_string()))?;
                 let mut dispatch = self
                     .executor

@@ -105,7 +105,8 @@ impl DataSpan {
             });
         }
         let page_count = active_len.div_ceil(self.page_records);
-        let handle_count = usize::try_from(page_count).map_err(|_| SpanError::ArithmeticOverflow)?;
+        let handle_count =
+            usize::try_from(page_count).map_err(|_| SpanError::ArithmeticOverflow)?;
         let handles = self
             .handles
             .get(..handle_count)
@@ -460,11 +461,7 @@ impl StaticHeaders {
     /// # Errors
     ///
     /// Returns an error when the prefix is empty, exceeds the span, or its byte layout overflows.
-    pub fn for_prefix(
-        span: &DataSpan,
-        active_len: u32,
-        alignment: u32,
-    ) -> Result<Self, SpanError> {
+    pub fn for_prefix(span: &DataSpan, active_len: u32, alignment: u32) -> Result<Self, SpanError> {
         Self::for_span(&span.prefix(active_len)?, alignment)
     }
 }

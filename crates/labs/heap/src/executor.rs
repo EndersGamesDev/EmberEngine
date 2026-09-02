@@ -118,7 +118,11 @@ impl ExecutorDispatch {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(super) fn set_resource(&mut self, slot: usize, span: &DataSpan) -> Result<(), ExecutorError> {
+    pub(super) fn set_resource(
+        &mut self,
+        slot: usize,
+        span: &DataSpan,
+    ) -> Result<(), ExecutorError> {
         let words = self
             .plan
             .resource_words
@@ -518,13 +522,10 @@ impl GpuKernelExecutor {
         uniform: &[u8],
         headers: StaticHeaders,
     ) -> Result<ExecutorDispatch, DispatchError> {
-        let plan = kernel.registered.plan_dispatch(
-            &self.arena,
-            inputs,
-            outputs,
-            uniform,
-            &headers,
-        )?;
+        let plan =
+            kernel
+                .registered
+                .plan_dispatch(&self.arena, inputs, outputs, uniform, &headers)?;
         Ok(make_dispatch(kernel, plan, headers))
     }
 
@@ -541,9 +542,7 @@ impl GpuKernelExecutor {
         active_len: u32,
         uniform: &[u8],
     ) -> Result<ExecutorDispatch, DispatchError> {
-        let first = outputs
-            .first()
-            .ok_or(DispatchError::OutputShapeMismatch)?;
+        let first = outputs.first().ok_or(DispatchError::OutputShapeMismatch)?;
         let headers = self.prefix_headers(first, active_len)?;
         let prefixes = outputs
             .iter()
@@ -780,8 +779,8 @@ fn copy_command_count(plan: &DispatchPlan, side: u32) -> u32 {
     plan.passes
         .iter()
         .map(|pass| {
-            let regions = u32::from(pass.valid_length / side > 0)
-                + u32::from(pass.valid_length % side > 0);
+            let regions =
+                u32::from(pass.valid_length / side > 0) + u32::from(pass.valid_length % side > 0);
             regions * pass.destinations.len() as u32
         })
         .sum()
@@ -811,10 +810,7 @@ pub(super) fn texture(
     })
 }
 
-fn heap_layout(
-    device: &wgpu::Device,
-    config: GpuKernelExecutorConfig,
-) -> wgpu::BindGroupLayout {
+fn heap_layout(device: &wgpu::Device, config: GpuKernelExecutorConfig) -> wgpu::BindGroupLayout {
     let uniform = |binding, dynamic, size| wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
