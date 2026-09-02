@@ -215,9 +215,22 @@ Nothing needs one. The hub and each game page fetch `server.json` cache-busted a
 
 What that does *not* survive is an unattended restart: the servers come back at an address the book does not yet name. Many hosts already blunt this — the other machines keep answering while one is lost — and `deploy/watchdog.sh` closes the rest of the gap by probing each host's published addresses and redeploying just that host when one stops answering. See `deploy/README-watchdog.md`.
 
+## Four Kings
+
+**Play: <https://endersgamesdev.github.io/EmberEngine/>** and pick Four Kings: a four-corner chess variant, 2 to 4 players on a 10x10 board, one action per 15-second turn, last king standing wins. Chess plus two new legend pieces, the Joker (a teleporting sniper with a single capture tile) and the Hero (dormant until it trades places with one of your pawns and wakes as a rook-plus-knight), with pawns that march forward or left so a corner formation is never a wall. Click a piece, click a highlighted target; `Esc` clears. Before the game starts, swap your legend and epic cards within their class.
+
+The rules of record are `docs/kings-design.md`, sections 1 to 3 (`docs/kings-rules.md` is the pointer); the server validator and the client are both written against that document, and no rule lives anywhere else. Rules and wire protocol are `crates/kings-core`, shared between the client (for move highlights only, never prediction) and the authoritative `kings-server`; the game has no simulation to step, so the server's hub only validates moves and runs the turn clock.
+
+Native: `cargo run -p kings --bin kings-app` for hotseat at one keyboard, or `kings-app online wss://… create|join LOBBY [PASSWORD|-] [HANDLE]` against a server.
+
+Kings carries its **own** `PROTO_VERSION`, independent of `pong-core`'s and `fire-core`'s. That is deliberate: bumping one game's protocol must never gate another game's join. `server.json` records it as `kings_proto` next to the address in `kings_ws`, the `<id>_ws` / `<id>_proto` convention.
+
+Online infrastructure: `kings-server` on port 7782 (7780 is the arena, 7781 fire) behind its own Cloudflare quick tunnel, published under its own keys, so redeploying one game can never knock another offline. Unlike the other two it is hosted on the developer's Windows PC, inside the `claude-sdk` WSL distro, because that is where the toolchain, `cloudflared` and `python3` already live: `bash deploy/deploy-kings-online.sh` (from Git Bash) builds, restarts, and republishes, probing the protocol on loopback and then through the public URL before it publishes anything, exactly as fire's deploy does; `down` stops the pair and `status` reports what is running. There is no systemd in that distro, so nothing restarts the server after a reboot, a sleep or a `wsl --shutdown`; run the script again. The reason no link in this README carries a tunnel domain is explained in the Fire Racer section above, and it applies unchanged here.
+
 ## Run
 
 ```
 cargo run -p game                 # multiplayer arena (auto-connects to specht)
 cargo run -p arena --bin arena-app  # 3D pong, 2 players at one keyboard
+cargo run -p kings --bin kings-app  # Four Kings hotseat, 4 seats at one keyboard
 ```
