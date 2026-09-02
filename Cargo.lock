@@ -1181,6 +1181,7 @@ dependencies = [
  "bytemuck",
  "ember-julibrot-math",
  "ember-lab-heap",
+ "naga",
  "thiserror 2.0.20",
  "wgpu",
 ]

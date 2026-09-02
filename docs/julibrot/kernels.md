@@ -66,11 +66,11 @@ Let the exact pixel scale be `m·2^s` with `m ∈ [0.5,1)` carried as `f32` and 
 
 The represented initial components are `δz₀ = 2^s·δz₀′` and `δc = 2^s·δc′`; Mandelbrot has `δz₀′ = 0` when its rotated basis remains in `span(e₃,e₄)`, Julia has `δc′ = 0` when its rotated basis remains in `span(e₁,e₂)`, and a hybrid plane retains both components.
 
-Reference record `r` reconstructs `Zᵣ = (re_hi+re_lo, im_hi+im_lo)` in `f32`, the represented delta is `δₙ = S·δ′ₙ` for `S = 2^e`, full pixel state is `zₙ = Zᵣ+S·δ′ₙ = Zᵣ+ldexp(δ′ₙ,e)`, and the scaled update is `δ′ₙ₊₁ = 2·Zᵣ·δ′ₙ+S·δ′ₙ²+δc′ = 2·Zᵣ·δ′ₙ+ldexp(δ′ₙ²,e)+δc′` with the same pinned complex multiplication order.
+Reference record `r` reconstructs `Zᵣ = (re_hi+re_lo, im_hi+im_lo)` in `f32`, the represented delta is `δₙ = S·δ′ₙ` for `S = 2^e`, full pixel state is `zₙ = Zᵣ+S·δ′ₙ`, and the scaled update is `δ′ₙ₊₁ = 2·Zᵣ·δ′ₙ+S·δ′ₙ²+δc′` with the same pinned complex multiplication order and the shared bit-constructed scaling below.
 
 For each outer iteration `n < max_iter`, the kernel first refuses an unavailable reference index as a glitch, then loads `Zᵣ`, constructs `zₙ`, and tests escape; if the pixel does not escape and `n+1 = max_iter`, it records a capped pixel without loading or advancing to another reference, otherwise it applies any rebase and performs exactly one ordinary advance, so escape wins over rebase at the same state.
 
-The corrected rebasing rule is repeatable: when `|zₙ| < |ldexp(δ′ₙ,e)|`, set represented `δ ← zₙ−Z₀`, reset reference index `r ← 0`, increment `rebase_count`, normalize that delta as `(δ′,e)`, then perform exactly one ordinary scaled advance against `Z₀` and advance `r` to one; the invariant `zₙ = Zᵣ+δₙ` holds by construction.
+The corrected rebasing rule is repeatable: when `|zₙ| < |2^e·δ′ₙ|`, set represented `δ ← zₙ−Z₀`, reset reference index `r ← 0`, increment `rebase_count`, normalize that delta as `(δ′,e)`, then perform exactly one ordinary scaled advance against `Z₀` and advance `r` to one; the invariant `zₙ = Zᵣ+δₙ` holds by construction.
 
 A rebase attempt when the current `rebase_count = 2²⁴` glitches before incrementing because the next count is not exactly representable in `f32`; the prior accepted increment may produce the exactly representable value `2²⁴`, so the CPU mirror, WGSL, and record validator share the same boundary.
 
@@ -78,7 +78,7 @@ Before the first state is tested and after each ordinary advance, a nonzero `|δ
 
 The mirrors retain a defensive limit of `floor((i32::MAX−i32::MIN)/64) = 67,108,863` successful renormalization steps; every step moves the exponent monotonically by 64 toward one `i32` bound and checked arithmetic refuses the next step, so exceeding that limit is provably unreachable and never replaces repeat-until-restored behavior.
 
-Every represented-value operation uses the shared clamped `ldexp` policy: finite nonzero inputs with exponent above `512` produce signed infinity, those below `−512` produce signed zero, and only exponents in the closed interval `[-512,512]` reach WGSL `ldexp`; infinity is caught by the following finite check as a glitch, while an underflowed rebase comparison is false because a negligible delta must not trigger rebasing.
+Every represented-value operation uses one shared bit construction in the WGSL kernel and CPU mirror: finite nonzero inputs with exponent above `512` produce signed infinity, those below `−512` produce signed zero, and an exponent in `[-512,512]` is consumed in steps clamped to `[-126,127]`, each multiplying by the exact normal power of two whose f32 bits are `(step+127)<<23`; at most five steps are required. The repeated f32 multiplication preserves IEEE-754 overflow and gradual-underflow behavior bit for bit across the mirror and kernel, infinity is caught by the following exponent-bit finiteness check as a glitch, and an underflowed rebase comparison remains false because a negligible delta must not trigger rebasing.
 
 When `r` reaches reference `length` before escape or the outer iteration cap, iteration stops with `smooth_iter = −1.0`, `escaped = 0`, the accumulated integer-valued `rebase_count`, and `glitch = 1`; re-rendering those pixels with a second reference is explicitly out of scope and present uses the honest debug tint.
 
@@ -107,6 +107,8 @@ The allocation report keeps requested extent, delivered extent, divisor, logical
 RGBA32F is not blendable on the device floor, every fragment-compute target uses no blend state and `ColorWrites::ALL`, and both production kernels are gather-only with no scatter, atomics, barriers, workgroup variables, raw storage resources, author bindings, or author entry points.
 
 The heap DATA array remains bound only as a sampled resource during a kernel pass; output first renders into one layer of the inherited four-layer RGBA32F SCRATCH array and is copied by `copy_texture_to_texture` into the destination DATA page before presentation reads it.
+
+Dialect v2 forbids `ldexp`, `frexp`, the `packHalf2x16` family, `bitfieldExtract`, `bitfieldInsert`, `countOneBits`, `firstLeadingBit`, `firstTrailingBit`, `dpdx` or `dpdy` outside fragment stage, `textureNumLevels`, every `atomic*` builtin, and any other builtin absent from GLSL ES 3.00. WebGL2 is GLSL ES 3.00.
 
 For a page with side `q` and `V` valid records, landing copies `floor(V/q)` complete rows and, when `V mod q` is nonzero, one exact-width tail row; there is no CPU readback or CPU copy between production and presentation.
 
@@ -312,7 +314,7 @@ Native heap-path tests register both bodies through dialect v2, prove shallow ha
 
 The shallow CPU conformance fixture uses deterministic pixels in both presets and one rotated hybrid plane; pass requires GPU and CPU escape classification and integer escape index to match exactly and `|smooth_gpu−smooth_cpu| ≤ 10⁻⁴`, with a conformance-only auxiliary target carrying the integer index because the production grid does not.
 
-The perturbation CPU fixture uses math's scaled `f64` mirror and deterministic pixels that include normalized `δz₀′ = 0`, `δc′ = 0`, both nonzero, exponents on both sides of the normal f32 range, exact `ldexp` clamp boundaries and signed saturation, upward and downward repeat-until-restored renormalization from the smallest subnormal, zero and repeated rebases, reference exhaustion, and nonzero `Z₀`; the corrected nonzero-`Z₀` rebase is a PASS criterion.
+The perturbation CPU fixture uses math's scaled `f64` mirror and deterministic pixels that include normalized `δz₀′ = 0`, `δc′ = 0`, both nonzero, exponents on both sides of the normal f32 range, exact bit-constructed scaling boundaries, gradual underflow and signed saturation, upward and downward repeat-until-restored renormalization from the smallest subnormal, zero and repeated rebases, reference exhaustion, and nonzero `Z₀`; the corrected nonzero-`Z₀` rebase is a PASS criterion.
 
 Math's merged `escape_f32`, `perturb_scaled_f64`, and propagated-envelope functions are unconditional test dependencies with no placeholder feature; every ordinary package and workspace test run executes their cross-package comparisons.
 
@@ -322,7 +324,7 @@ The reference adequacy oracle recomputes at working precision `D` and `D+16`, re
 
 The production-output oracle checks every sampled record for finite channels, exact binary encodings of booleans and `−1.0`, integer-valued rebase count, zero shallow rebase count, and no read or presentation access beyond the active prefix.
 
-The dialect source oracle parses and validates the generated WGSL, rejects every forbidden construct, proves input addressing uses the reference page descriptor rather than output width, and proves changing the reference span changes resource words without pipeline or bind-group replacement.
+The dialect source oracle parses and validates the generated WGSL, rejects every forbidden construct, lowers both the shallow and perturbation modules through naga 24.0.0 to WebGL GLSL ES 3.00 for their vertex and fragment entry points, proves input addressing uses the reference page descriptor rather than output width, and proves changing the reference span changes resource words without pipeline or bind-group replacement.
 
 The shallow GPU readback, conformance-only integer target, perturbation GPU readback, vertex-stage consumption, SCRATCH copy at nonzero DATA origin and layer, row orientation, and a clean browser console all require visible replay.
 
@@ -370,7 +372,7 @@ The completed package is 2,685 lines, 545 lines or 25.5% above the 2,140-line es
 
 - The two-f32 reference record carries about 48 relative bits rather than the worker's full 100–300 decimal-digit precision; the accepted D-versus-D+16 validation and deep scaled corpus decide adequacy, and a failure requires a reviewed record change.
 
-- WGSL `ldexp` behavior and the generated GL lowering at very negative `i32` exponents require visible replay; underflow is semantically accepted for the rebase predicate and quadratic term, but exponent wrap, NaN, or backend validation failure is not.
+- Bit-constructed power-of-two scaling now avoids GLSL ES 3.10-only builtins and has native GLSL ES 3.00 translation coverage for both stages; a clean visible WebGL2 replay must still confirm the device compiler and underflow mode, while exponent wrap, NaN, or backend validation failure remains unacceptable.
 
 - The executor seams are now public and kernels retains resident headers privately under the adopted mutable allocation/free receiver ruling; browser evidence must still prove all three set selections preserve heap bind-group identity.
 

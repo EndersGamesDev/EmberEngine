@@ -29,17 +29,29 @@ fn perturb_mul(left: vec2<f32>, right: vec2<f32>) -> vec2<f32> {
 }
 
 fn perturb_ldexp(value: f32, exponent: i32) -> f32 {
-    if (value == 0.0 || value != value || abs(value) > 3.402823466e38) {
+    let value_bits = bitcast<u32>(value);
+    if (value == 0.0 || (value_bits & 0x7f800000u) == 0x7f800000u) {
         return value;
     }
-    let sign_bit = bitcast<u32>(value) & 0x80000000u;
+    let sign_bit = value_bits & 0x80000000u;
     if (exponent > 512i) {
         return bitcast<f32>(sign_bit | 0x7f800000u);
     }
     if (exponent < -512i) {
         return bitcast<f32>(sign_bit);
     }
-    return ldexp(value, exponent);
+    var result = value;
+    var remaining = exponent;
+    loop {
+        if (remaining == 0i) {
+            break;
+        }
+        let step = clamp(remaining, -126i, 127i);
+        let factor = bitcast<f32>(u32(step + 127i) << 23u);
+        result *= factor;
+        remaining -= step;
+    }
+    return result;
 }
 
 fn perturb_scale(value: vec2<f32>, exponent: i32) -> vec2<f32> {
@@ -56,8 +68,8 @@ fn perturb_norm(value: vec2<f32>) -> f32 {
 }
 
 fn perturb_finite(value: vec2<f32>) -> bool {
-    let maximum = vec2<f32>(3.402823466e38);
-    return all(value == value) && all(abs(value) <= maximum);
+    return (bitcast<u32>(value.x) & 0x7f800000u) != 0x7f800000u
+        && (bitcast<u32>(value.y) & 0x7f800000u) != 0x7f800000u;
 }
 
 fn perturb_reference(record: vec4<f32>) -> vec2<f32> {

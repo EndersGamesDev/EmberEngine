@@ -18,6 +18,8 @@ use crate::{
 
 const REBASE_EXACT_LIMIT: u32 = 1 << 24;
 const LDEXP_EXPONENT_LIMIT: i32 = 512;
+const F32_EXPONENT_MASK: u32 = 0x7f80_0000;
+const F32_SIGN_MASK: u32 = 0x8000_0000;
 const MAX_RESCALE_STEPS: u32 = u32::MAX / 64;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -45,7 +47,7 @@ impl PerturbUniform {
     ) -> Result<Self, KernelError> {
         validate_extent(extent)?;
         validate_params(params)?;
-        if !scale.mantissa.is_finite() || !(0.5..1.0).contains(&scale.mantissa) {
+        if !finite_scalar(scale.mantissa) || !(0.5..1.0).contains(&scale.mantissa) {
             return Err(KernelError::InvalidEscapeParams);
         }
         if orbit_length == 0 || orbit_length > params.max_iter {
@@ -81,20 +83,35 @@ fn multiply(value: [f32; 2], factor: f32) -> [f32; 2] {
 }
 
 fn finite(value: [f32; 2]) -> bool {
-    value.into_iter().all(f32::is_finite)
+    value.into_iter().all(finite_scalar)
+}
+
+fn finite_scalar(value: f32) -> bool {
+    value.to_bits() & F32_EXPONENT_MASK != F32_EXPONENT_MASK
 }
 
 fn ldexp(value: f32, exponent: i32) -> f32 {
-    if value == 0.0 || !value.is_finite() {
+    let value_bits = value.to_bits();
+    if value == 0.0 || value_bits & F32_EXPONENT_MASK == F32_EXPONENT_MASK {
         return value;
     }
+    let sign_bit = value_bits & F32_SIGN_MASK;
     if exponent > LDEXP_EXPONENT_LIMIT {
-        return f32::INFINITY.copysign(value);
+        return f32::from_bits(sign_bit | F32_EXPONENT_MASK);
     }
     if exponent < -LDEXP_EXPONENT_LIMIT {
-        return 0.0_f32.copysign(value);
+        return f32::from_bits(sign_bit);
     }
-    (f64::from(value) * 2.0_f64.powi(exponent)) as f32
+    let mut result = value;
+    let mut remaining = exponent;
+    while remaining != 0 {
+        let step = remaining.clamp(-126, 127);
+        let biased_exponent = (step + 127).unsigned_abs();
+        let factor = f32::from_bits(biased_exponent << 23);
+        result *= factor;
+        remaining -= step;
+    }
+    result
 }
 
 fn scale(value: [f32; 2], exponent: i32) -> [f32; 2] {
@@ -317,8 +334,8 @@ pub fn perturb_scaled_pixel(
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_RESCALE_STEPS, ScaledState, ldexp, normalize_scaled, perturb_scaled_offset,
-        perturb_scaled_pixel, scale,
+        MAX_RESCALE_STEPS, ScaledState, finite_scalar, ldexp, normalize_scaled,
+        perturb_scaled_offset, perturb_scaled_pixel, scale,
     };
     use crate::{GridExtent, KernelError, PerturbUniform, RefinementLevel};
     use ember_julibrot_math::{EscapeParams, Plane, ReferenceOrbitRecord, ScaleSplit};
@@ -425,6 +442,26 @@ mod tests {
             assert_eq!(ldexp(1.0, exponent).to_bits(), 0.0_f32.to_bits());
             assert_eq!(ldexp(-1.0, exponent).to_bits(), (-0.0_f32).to_bits());
         }
+    }
+
+    #[test]
+    fn ldexp_bit_construction_preserves_guards_and_gradual_underflow() {
+        assert_eq!(ldexp(1.0, 127).to_bits(), 254_u32 << 23);
+        assert_eq!(ldexp(1.0, -126).to_bits(), 1_u32 << 23);
+        assert_eq!(ldexp(1.5, -127).to_bits(), 0x0060_0000);
+        assert_eq!(ldexp(f32::from_bits(1), 127), 2.0_f32.powi(-22));
+        for value in [
+            0.0,
+            -0.0,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::from_bits(0x7fc0_1234),
+        ] {
+            assert_eq!(ldexp(value, 17).to_bits(), value.to_bits());
+        }
+        assert!(finite_scalar(f32::MAX));
+        assert!(!finite_scalar(f32::INFINITY));
+        assert!(!finite_scalar(f32::from_bits(0x7fc0_1234)));
     }
 
     #[test]

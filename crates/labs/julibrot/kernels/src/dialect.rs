@@ -59,6 +59,60 @@ mod tests {
         assert!(perturb.source().contains("load_reference"));
     }
 
+    fn assert_translates_to_webgl2(
+        kernel: &RegisteredKernel,
+        shader_stage: naga::ShaderStage,
+        entry_point: &str,
+    ) {
+        let source = kernel.source();
+        let module = naga::front::wgsl::parse_str(source).expect("generated WGSL parses");
+        let module_info = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("generated WGSL validates");
+        let options = naga::back::glsl::Options {
+            version: naga::back::glsl::Version::Embedded {
+                version: 300,
+                is_webgl: true,
+            },
+            ..Default::default()
+        };
+        let pipeline_options = naga::back::glsl::PipelineOptions {
+            shader_stage,
+            entry_point: entry_point.to_string(),
+            multiview: None,
+        };
+        let mut glsl = String::new();
+        naga::back::glsl::Writer::new(
+            &mut glsl,
+            &module,
+            &module_info,
+            &options,
+            &pipeline_options,
+            naga::proc::BoundsCheckPolicies::default(),
+        )
+        .expect("generated WGSL lowers to WebGL2 GLSL")
+        .write()
+        .expect("WebGL2 GLSL writes");
+        assert!(glsl.starts_with("#version 300 es"));
+    }
+
+    #[test]
+    fn both_generated_kernels_translate_for_both_webgl2_stages() {
+        for descriptor in [shallow_kernel(), perturbation_kernel()] {
+            let kernel = RegisteredKernel::register(&descriptor, LIMITS)
+                .expect("kernel body satisfies dialect v2");
+            for (shader_stage, entry_point) in [
+                (naga::ShaderStage::Vertex, "heap_kernel_vertex"),
+                (naga::ShaderStage::Fragment, "heap_kernel_fragment"),
+            ] {
+                assert_translates_to_webgl2(&kernel, shader_stage, entry_point);
+            }
+        }
+    }
+
     #[test]
     fn author_sources_are_entry_point_and_binding_free() {
         for source in [SHALLOW_BODY, PERTURB_BODY] {
@@ -75,6 +129,16 @@ mod tests {
             ] {
                 assert!(!source.contains(forbidden), "found {forbidden}");
             }
+            for forbidden in ["ldexp", "frexp"] {
+                assert!(
+                    source
+                        .split(|character: char| {
+                            !(character.is_ascii_alphanumeric() || character == '_')
+                        })
+                        .all(|token| token != forbidden),
+                    "found forbidden builtin token {forbidden}"
+                );
+            }
         }
     }
 
@@ -83,13 +147,12 @@ mod tests {
         assert!(PERTURB_BODY.contains("if (exponent > 512i)"));
         assert!(PERTURB_BODY.contains("if (exponent < -512i)"));
         assert!(PERTURB_BODY.contains("0x7f800000u"));
+        assert!(PERTURB_BODY.contains("let step = clamp(remaining, -126i, 127i);"));
+        assert!(
+            PERTURB_BODY.contains("let factor = bitcast<f32>(u32(step + 127i) << 23u);")
+        );
         assert!(PERTURB_BODY.contains("if (steps > 67108863u)"));
         assert!(!PERTURB_BODY.contains("step < 4u"));
-        assert_eq!(
-            PERTURB_BODY
-                .matches("return ldexp(value, exponent);")
-                .count(),
-            1
-        );
+        assert!(!PERTURB_BODY.contains("3.402823466e38"));
     }
 }
