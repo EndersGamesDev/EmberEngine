@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ember fragment-compute lattice</title>
+  <style>
+    :root { color-scheme: dark; font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #03050d; color: #dbe7ff; display: grid; place-items: center; }
+    main { width: min(1380px, 96vw); padding: 18px 0 28px; }
+    header { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+    h1 { margin: 0 0 12px; font: 500 1.05rem/1.3 system-ui, sans-serif; letter-spacing: .16em; text-transform: uppercase; }
+    h1 span { color: #62ddff; }
+    #telemetry { display: flex; gap: 14px; flex-wrap: wrap; font-size: .76rem; font-variant-numeric: tabular-nums; color: #9cb8dd; }
+    #telemetry strong { color: #f3c86b; font-weight: 600; }
+    .stage { position: relative; border: 1px solid #26385b; border-radius: 12px; overflow: hidden; box-shadow: 0 24px 80px #000b; }
+    canvas { width: 100%; aspect-ratio: 16 / 9; height: auto; display: block; background: #02040b; }
+    #status { position: absolute; inset: 14px auto auto 14px; margin: 0; padding: 8px 10px; border: 1px solid #38527a; border-radius: 7px; background: #071020e8; font-size: .72rem; max-width: min(760px, 88%); }
+    #status.ready { color: #83f1bf; border-color: #225f4b; }
+    #status.failed { color: #ff9c9c; border-color: #7a3030; }
+    .controls { margin-top: 12px; padding: 12px; border: 1px solid #26385b; border-radius: 9px; background: #070b15; }
+    .control-line { display: grid; grid-template-columns: minmax(210px, 1fr) auto; gap: 12px; align-items: center; }
+    input[type="range"] { width: 100%; accent-color: #62ddff; }
+    button { border: 1px solid #38658a; border-radius: 6px; padding: 7px 10px; background: #10243a; color: #dbe7ff; font: inherit; cursor: pointer; }
+    button:disabled { opacity: .45; cursor: default; }
+    #selection, #wall, #validity { margin: 8px 0 0; color: #9bb0cf; font-size: .72rem; line-height: 1.45; }
+    #selection strong { color: #f3c86b; }
+    .table-wrap { margin-top: 12px; max-height: 310px; overflow: auto; border: 1px solid #1e2b46; }
+    table { width: 100%; border-collapse: collapse; font-size: .68rem; font-variant-numeric: tabular-nums; }
+    th, td { padding: 6px 8px; text-align: right; border-bottom: 1px solid #18243b; white-space: nowrap; }
+    th { position: sticky; top: 0; background: #0b1220; color: #8eabd1; }
+    td:last-child, th:last-child { text-align: left; white-space: normal; min-width: 220px; }
+    tr.active { background: #102139; }
+    tr.refused td { color: #c69292; }
+    details { margin-top: 12px; color: #9bb0cf; font-size: .72rem; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; border: 1px solid #1e2b46; background: #070b15; }
+    footer { margin-top: 12px; color: #7385a3; font: .75rem/1.5 system-ui, sans-serif; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>ember <span>fragment-compute lattice</span></h1>
+      <div id="telemetry">
+        <span>requested <strong id="requested">0</strong></span>
+        <span>delivered <strong id="delivered">0</strong></span>
+        <span>shown/submitted <strong id="shown">0</strong></span>
+        <span>mode <strong id="mode">init</strong></span>
+        <span>frames <strong id="frames">0</strong></span>
+        <span>median <strong id="median">requires visible replay</strong></span>
+        <span>p95 <strong id="p95">requires visible replay</strong></span>
+      </div>
+    </header>
+    <div class="stage">
+      <canvas id="layer-canvas" width="1280" height="720"></canvas>
+      <p id="status">requesting WebGL2 through wgpu…</p>
+    </div>
+    <section class="controls" aria-label="5D lattice scale">
+      <div class="control-line">
+        <input id="step" type="range" min="0" max="112" step="1" value="0" aria-label="5D lattice step">
+        <button id="probe" type="button" disabled>render one measured frame</button>
+      </div>
+      <p id="selection">step 0 · (0,0,0,0,0) · empty baseline</p>
+      <p id="wall">runtime wall pending capability probe</p>
+      <p id="validity">Visible geometry is the projection-valid subset; shown/submitted includes edges discarded at either projection pole.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>step</th><th>axes</th><th>copies</th><th>requested</th><th>delivered</th><th>shown/submitted</th><th>instances</th><th>draws</th><th>CPU→GPU/frame</th><th>median / p95</th><th>result</th></tr></thead>
+          <tbody id="scaling"></tbody>
+        </table>
+      </div>
+    </section>
+    <details><summary>live capability, wall, and invariant evidence</summary><pre id="facts">waiting</pre></details>
+    <footer>The fixed 1,200-vertex/3,000-edge prism and edge topology stay GPU-resident. A layer-generated fragment wrapper mixed-radix decodes each copy's centered 5D lattice coordinate, rotates base+center in SO(5), projects 5D→4D→3D with d₅=d₄=8, and emits two texture slots. Hue is only post-rotation x₅ over the displayed symmetric lattice range. Per shown frame uploads 48 kernel-uniform bytes plus 16 camera bytes.</footer>
+  </main>
+  <script type="module">
+    import init, { probe_layer_frame, render_layer_frame, set_layer_step, start_layer } from './pkg/ember_lab_layer.js?v=4';
+
+    const status = document.querySelector('#status');
+    const facts = document.querySelector('#facts');
+    const requested = document.querySelector('#requested');
+    const delivered = document.querySelector('#delivered');
+    const shown = document.querySelector('#shown');
+    const mode = document.querySelector('#mode');
+    const frameCount = document.querySelector('#frames');
+    const median = document.querySelector('#median');
+    const p95 = document.querySelector('#p95');
+    const slider = document.querySelector('#step');
+    const selection = document.querySelector('#selection');
+    const wall = document.querySelector('#wall');
+    const probe = document.querySelector('#probe');
+    const scaling = document.querySelector('#scaling');
+    const canvas = document.querySelector('#layer-canvas');
+    const integer = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+    const measurements = new Map();
+    const attempts = new Map();
+    let deviceFacts;
+    let currentReport;
+    let started = performance.now();
+    let animationEpoch = 0;
+    let baselineThreshold;
+    let samples = [];
+    let frames = 0;
+    let previous;
+    let currentMode = 'init';
+
+    const formatInteger = value => integer.format(value);
+    const formatAxes = axes => `(${axes.join(',')})`;
+    const formatBytes = value => {
+      if (!value) return '0 B';
+      const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+      let amount = Number(value);
+      let unit = 0;
+      while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit += 1; }
+      return `${amount.toFixed(amount >= 100 ? 0 : amount >= 10 ? 1 : 2)} ${units[unit]}`;
+    };
+    const statistics = values => {
+      const sorted = values.slice().sort((left, right) => left - right);
+      const middle = Math.floor(sorted.length / 2);
+      return {
+        median: sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) * 0.5,
+        p95: sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)],
+      };
+    };
+    const failureText = error => error instanceof Error ? error.message : String(error);
+    const failure = error => {
+      animationEpoch += 1;
+      status.className = 'failed';
+      status.textContent = `refused: ${failureText(error)}`;
+      currentMode = 'refused';
+      mode.textContent = currentMode;
+      probe.disabled = true;
+    };
+    addEventListener('error', event => failure(event.error || event.message));
+    addEventListener('unhandledrejection', event => failure(event.reason));
+
+    const timingText = step => {
+      const value = measurements.get(step);
+      return value ? `${value.median.toFixed(2)} / ${value.p95.toFixed(2)} ms (${value.kind})` : 'requires visible replay';
+    };
+    const drawTable = () => {
+      scaling.replaceChildren(...deviceFacts.steps.map(step => {
+        const row = document.createElement('tr');
+        if (currentReport?.shown_step === step.step) row.classList.add('active');
+        if (!step.arithmetically_deliverable) row.classList.add('refused');
+        const attempted = attempts.get(step.step);
+        const cells = [
+          step.step,
+          formatAxes(step.axes),
+          formatInteger(step.copies),
+          formatInteger(step.requested_edges),
+          attempted ? formatInteger(attempted.delivered_edges) : 'not attempted',
+          currentReport?.shown_step === step.step ? formatInteger(currentReport.shown_edges) : '—',
+          attempted ? formatInteger(attempted.delivered_edges) : '—',
+          attempted ? String(Number(attempted.delivered_edges > 0)) : '—',
+          attempted ? formatBytes(attempted.delivered_edges > 0 ? 64 : 0) : '—',
+          timingText(step.step),
+          attempted?.refusal || step.refusal || (attempted ? 'delivered exactly' : 'within arithmetic wall'),
+        ];
+        for (const value of cells) {
+          const cell = document.createElement('td');
+          cell.textContent = String(value);
+          row.append(cell);
+        }
+        return row;
+      }));
+    };
+    const refreshTelemetry = () => {
+      frameCount.textContent = String(frames);
+      if (!samples.length) {
+        median.textContent = 'requires visible replay';
+        p95.textContent = 'requires visible replay';
+        return;
+      }
+      const value = statistics(samples);
+      median.textContent = `${value.median.toFixed(2)} ms`;
+      p95.textContent = `${value.p95.toFixed(2)} ms`;
+    };
+    const recordMeasurement = (kind, step = currentReport?.shown_step, edges = currentReport?.shown_edges) => {
+      if (!samples.length || !currentReport) return;
+      const value = { ...statistics(samples), kind, edges };
+      measurements.set(step, value);
+      drawTable();
+      refreshTelemetry();
+    };
+    const resetWindow = () => {
+      samples = [];
+      frames = 0;
+      previous = undefined;
+      refreshTelemetry();
+    };
+    const setMode = value => {
+      currentMode = value;
+      mode.textContent = value;
+    };
+
+    const beginAnimation = (autoAdvanceBaseline, retained = false) => {
+      const epoch = ++animationEpoch;
+      const animationStep = currentReport.shown_step;
+      const animationEdges = currentReport.shown_edges;
+      probe.disabled = true;
+      setMode(retained ? 'retaining previous step' : animationStep === 0 ? 'measuring zero baseline' : 'animated');
+      const frame = timestamp => {
+        if (epoch !== animationEpoch) return;
+        if (document.hidden) {
+          previous = undefined;
+          requestAnimationFrame(frame);
+          return;
+        }
+        if (previous !== undefined) {
+          samples.push(timestamp - previous);
+          if (samples.length > 180) samples.shift();
+        }
+        previous = timestamp;
+        render_layer_frame((timestamp - started) / 1000);
+        frames += 1;
+        if (samples.length && frames % 15 === 0) recordMeasurement(animationStep === 0 ? 'zero rAF' : 'animated rAF', animationStep, animationEdges);
+        if (!retained && animationStep === 0 && samples.length >= 30) {
+          recordMeasurement('zero rAF', animationStep, animationEdges);
+          baselineThreshold = statistics(samples).p95 * 1.5;
+          wall.textContent = `${wall.dataset.hard} Animate budget = 1.5 × visible zero-work p95 = ${baselineThreshold.toFixed(2)} ms; higher-step mode is derived progressively from measured lower steps.`;
+          if (autoAdvanceBaseline) {
+            animationEpoch += 1;
+            void selectIndex(1, false).catch(failure);
+            return;
+          }
+        }
+        requestAnimationFrame(frame);
+      };
+      requestAnimationFrame(frame);
+    };
+
+    const lowerPrediction = report => {
+      const candidates = [...measurements.entries()]
+        .filter(([step, value]) => step < report.requested_step && value.edges > 0)
+        .sort((left, right) => right[0] - left[0]);
+      if (!candidates.length || baselineThreshold === undefined) return undefined;
+      const [lowerStep, value] = candidates[0];
+      const zeroMedian = measurements.get(0)?.median;
+      if (zeroMedian === undefined) return undefined;
+      return {
+        lowerStep,
+        milliseconds: zeroMedian + Math.max(0, value.median - zeroMedian) * report.delivered_edges / value.edges,
+      };
+    };
+
+    const selectIndex = async (index, autoAdvanceBaseline) => {
+      animationEpoch += 1;
+      probe.disabled = true;
+      slider.disabled = true;
+      slider.value = String(index);
+      resetWindow();
+      const step = deviceFacts.steps[index];
+      status.className = '';
+      status.textContent = `registering step ${step.step} ${formatAxes(step.axes)} through the layer dialect…`;
+      currentReport = JSON.parse(await set_layer_step(step.step));
+      attempts.set(step.step, currentReport);
+      requested.textContent = formatInteger(currentReport.requested_edges);
+      delivered.textContent = formatInteger(currentReport.delivered_edges);
+      shown.textContent = formatInteger(currentReport.shown_edges);
+      selection.innerHTML = `step <strong>${step.step}</strong> ${formatAxes(step.axes)} · ${formatInteger(step.copies)} copies · requested <strong>${formatInteger(currentReport.requested_edges)}</strong> · delivered <strong>${formatInteger(currentReport.delivered_edges)}</strong> · shown/submitted <strong>${formatInteger(currentReport.shown_edges)}</strong> at ${formatAxes(currentReport.shown_axes)} · output request ${formatBytes(currentReport.output_bytes)} · requested hue range ±${step.fifth_range.toFixed(3)}`;
+      drawTable();
+      slider.disabled = false;
+      if (currentReport.refusal) {
+        slider.value = String(currentReport.shown_step);
+        status.className = 'failed';
+        status.textContent = `requested step ${step.step} ${formatAxes(step.axes)}: ${formatInteger(currentReport.requested_edges)} edges · delivered 0 · retaining shown step ${currentReport.shown_step} ${formatAxes(currentReport.shown_axes)}: ${formatInteger(currentReport.shown_edges)} submitted edges · ${currentReport.refusal}`;
+        if (currentReport.shown_edges > 0) {
+          beginAnimation(false, true);
+        } else {
+          render_layer_frame((performance.now() - started) / 1000);
+          setMode('retaining empty step');
+        }
+        return;
+      }
+      status.className = 'ready';
+      status.textContent = `delivered/shown/submitted ${formatInteger(currentReport.shown_edges)} edges at ${formatAxes(step.axes)} · ${currentReport.compute_passes} compute pass · ${currentReport.draw_calls} draw · projection-valid visible subset is not read back`;
+      if (step.step === 0) {
+        beginAnimation(autoAdvanceBaseline);
+        return;
+      }
+      if (step.step === 1) {
+        beginAnimation(false);
+        return;
+      }
+      const prediction = lowerPrediction(currentReport);
+      if (prediction && prediction.milliseconds <= baselineThreshold) {
+        status.textContent += ` · animated from step ${prediction.lowerStep} measured incremental-work prediction ${prediction.milliseconds.toFixed(2)} ms ≤ ${baselineThreshold.toFixed(2)} ms budget`;
+        beginAnimation(false);
+      } else {
+        const reason = prediction
+          ? `step ${prediction.lowerStep} measured incremental-work scaling predicts ${prediction.milliseconds.toFixed(2)} ms > ${baselineThreshold.toFixed(2)} ms budget`
+          : 'lower-step visible measurement is incomplete';
+        setMode('single-frame-on-demand');
+        probe.disabled = false;
+        status.textContent += ` · ${reason}; press “render one measured frame”`;
+      }
+    };
+
+    probe.addEventListener('click', async () => {
+      if (!currentReport || currentReport.refusal) return;
+      animationEpoch += 1;
+      probe.disabled = true;
+      slider.disabled = true;
+      setMode('measuring one fenced frame');
+      const before = performance.now();
+      try {
+        await probe_layer_frame((before - started) / 1000);
+        const elapsed = performance.now() - before;
+        samples = [elapsed];
+        frames = 1;
+        recordMeasurement('fenced probe');
+        setMode('single-frame-on-demand');
+        status.className = 'ready';
+        const budgetResult = baselineThreshold === undefined
+          ? 'animate budget still awaits the visible zero-work baseline'
+          : `${elapsed <= baselineThreshold ? 'within' : 'above'} measured animate budget ${baselineThreshold.toFixed(2)} ms`;
+        status.textContent = `one true submit→mapped-fence frame: ${elapsed.toFixed(2)} ms · shown/submitted ${formatInteger(currentReport.shown_edges)} at ${formatAxes(currentReport.shown_axes)} · ${budgetResult}`;
+      } catch (error) {
+        setMode('probe refused');
+        status.className = 'failed';
+        status.textContent = `single-frame probe refused: ${failureText(error)}`;
+      } finally {
+        probe.disabled = false;
+        slider.disabled = false;
+      }
+    });
+    slider.addEventListener('change', () => {
+      void selectIndex(Number(slider.value), false).catch(failure);
+    });
+
+    try {
+      await init({ module_or_path: './pkg/ember_lab_layer_bg.wasm?v=4' });
+      deviceFacts = JSON.parse(await start_layer(canvas));
+      facts.textContent = JSON.stringify(deviceFacts, null, 2);
+      const lastDeliverable = deviceFacts.steps.filter(step => step.arithmetically_deliverable).at(-1);
+      const firstRefused = deviceFacts.steps.find(step => !step.arithmetically_deliverable);
+      const hard = firstRefused
+        ? `Runtime arithmetic wall: step ${lastDeliverable.step} ${formatAxes(lastDeliverable.axes)} is the last admitted rung; step ${firstRefused.step} ${formatAxes(firstRefused.axes)} requests ${formatInteger(firstRefused.requested_edges)} edges and is refused because ${firstRefused.refusal}.`
+        : 'Every offered step is within this device/layer arithmetic wall.';
+      wall.dataset.hard = hard;
+      wall.textContent = `${hard} Animate budget awaits 30 visible zero-work rAF samples.`;
+      slider.max = String(deviceFacts.steps.length - 1);
+      drawTable();
+      started = performance.now();
+      await selectIndex(0, true);
+    } catch (error) {
+      failure(error);
+    }
+  </script>
+</body>
+</html>
