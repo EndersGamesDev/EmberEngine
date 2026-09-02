@@ -642,7 +642,7 @@ impl ChannelCore {
         Ok(())
     }
 
-    fn record_credit(
+    const fn record_credit(
         &mut self,
         header: MessageHeader,
         disposition: OrbitDisposition,
