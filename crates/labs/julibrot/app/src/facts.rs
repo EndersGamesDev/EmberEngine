@@ -171,7 +171,7 @@ impl PageFacts {
             refreshes_without_scene: present.refreshes_without_scene,
             chart_residual: present.chart_residual,
             tumbled_max_error_px: present.tumbled_max_error_px,
-            tumbled_p95_error_px: None,
+            tumbled_p95_error_px: present.tumbled_p95_error_px,
             scene_wall_ms: present.last_scene.map(|sample| sample.wall_ms),
             scene_fence_wait_ms: present.last_scene.map(|sample| sample.fence_wait_ms),
             scene_polls: present.last_scene.map(|sample| sample.polls),
