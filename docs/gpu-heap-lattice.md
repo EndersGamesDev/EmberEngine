@@ -1,6 +1,6 @@
 # GPU heap lattice architecture
 
-Status: proposed implementation contract for a WebGL2-only heap-lattice lab; this document defines the architecture, evidence plan, and implementation order, but reports no new browser measurement.
+Status: active implementation contract for a WebGL2-only heap-lattice lab; the paid Phase 0 browser evidence selects SCRATCH-to-DATA copy as the default output path.
 
 ## 1. Decision and evidence boundary
 
@@ -167,11 +167,11 @@ SCRATCH is transient workspace rather than heap capacity, so its physical bytes 
 
 The default transfer moves zero CPU bytes and copies 38,400 GPU bytes per Mode A frame, `38,400C` per Mode B frame, and `96,000C` per Mode C frame by arithmetic; command cost and measured wall remain reported facts rather than inferred to be free.
 
-The copy path is itself unpaid on the gles backend because wgpu-hal cannot use `glCopyImageSubData` on WebGL2 and must lower texture copies to framebuffer blits, so support, validation behavior, command cost, and bytes belong to the first spike rather than to an assumption.
+The copy path was paid on the target gles backend by the 2026-09-02 Phase 0 visible replay: SCRATCH layer 1 copied through wgpu into DATA origin `[4,5]` on layer 2 and vertex-stage consumption read back `[0.25,-0.5,1.5,7.0]`; command cost remains a per-frame measurement rather than an architectural assumption.
 
-If SCRATCH-to-DATA copy fails, the designed fallback is two DATA arrays and two immutable bind groups, never rebuilt, alternated by frame: all static inputs are duplicated, compute samples the previous array while attaching destination layers of the other array, and the indexed draw samples the newly written destination array after the pass.
+The independently tested fallback is two DATA arrays and two immutable bind groups, never rebuilt, alternated by frame: all static inputs are duplicated, compute samples the previous array while attaching destination layers of the other array, and the indexed draw samples the newly written destination array after the pass.
 
-The ping-pong fallback has zero transfer bytes but doubles resident DATA storage, uses one bind-group selection per pass rather than rebuilding state, and computes capacity against one destination array rather than pretending the two arrays extend one logical heap; if both copy and ping-pong validation fail, initialization returns typed `OutputTransferUnsupported` and the lab does not run.
+The ping-pong fallback has zero transfer bytes but doubles resident DATA storage, uses one bind-group selection per pass rather than rebuilding state, and computes capacity against one destination array rather than pretending the two arrays extend one logical heap; its Phase 0 replay passed but SCRATCH-copy is selected, so ping-pong remains proven contingency and is not developed further in this implementation round.
 
 RGBA32Float is not blendable, so every compute color target uses no blend state and `ColorWrites::ALL`; blending is neither requested nor used as an accidental capability test.
 
@@ -181,7 +181,11 @@ The golden's default-path case binds the real heap group, reads the known input 
 
 Consumption in the golden is a point or indexed draw whose vertex stage performs `textureLoad` on the destination `texture_2d_array<f32>`, forwards the loaded value flat to an RGBA32Float fragment target, copies that target to a padded mapped buffer, drives `map_async` through `device.poll` in a browser-yield loop, and requires all four exact binary-representable f32 values.
 
-If the default-path case fails, the spike runs the same known-pattern production and vertex-stage-consumption oracle through ping-pong DATA arrays; its recorded result selects default copy or fallback ping-pong for every later phase, and no lattice kernel is committed before one path passes.
+The 2026-09-02 visible replay ran in Firefox on `ANGLE (Intel, Mesa Intel(R) Graphics (MTL), OpenGL ES 3.2)` with backend Gl and dynamic-uniform stride 256: direct-overlap refusal, SCRATCH-copy, and ping-pong cards all printed PASS, both transfer paths returned exact `[0.25,-0.5,1.5,7.0]`, and the console was clean.
+
+The paid direct-overlap diagnostic was: "Validation Error / Caused by: In RenderPass::end / In a pass parameter / Attempted to use Texture with 'spike DATA A' label (mips 0..1 layers 2..3) with conflicting usages. Current usage TextureUses(RESOURCE) and new usage TextureUses(COLOR_TARGET). TextureUses(COLOR_TARGET) is an exclusive usage and cannot be used with any other usages within the usage scope (renderpass or compute dispatch)."
+
+The diagnostic localizes the conflict to attached DATA layers 2 through 3 against the full-array resource view, the SCRATCH case used producer offset 256 and vertex offset 512, and the ping-pong case used two immutable groups A-to-B then B-to-A with offsets 256 and 512; these observed facts select SCRATCH-copy as the sole shipping path while preserving the spike as the fallback oracle.
 
 ## 10. Render path
 
@@ -279,13 +283,13 @@ Phase 2 implements dialect v2 registration, generated accessors, dispatch valida
 
 Phase 3 implements invariant geometry data, the indexed box, the 113-step ladder, the 192-byte frame uniform, Mode A rotation and rendering, and CPU oracles, estimated at 450 lines.
 
-Phase 4 implements mandatory Mode C, comparator integration, and equal-work checksum gates, estimated at 420 lines when `ember-lab-layer` is available as a workspace dependency, or 2,820 lines when the approximately 2,400-line private comparator copy is required.
+Phase 4 implements mandatory Mode C over the merged `ember-lab-layer` workspace dependency, comparator integration, and equal-work checksum gates without a private copy, estimated at 420 lines.
 
-Phase 5 implements optional Mode B materialization if budget remains, estimated at 300 lines.
+Phase 5 implements the self-contained WebGL2 page, versioned loader, measurement state machine, overlays, requested-versus-delivered presentation, cancellation, and a link to the preserved historical heap benchmark, estimated at 480 lines.
 
-Phase 6 implements the self-contained WebGL2 page, versioned loader, measurement state machine, overlays, requested-versus-delivered presentation, and cancellation, estimated at 480 lines.
+Phase 6 implements optional Mode B materialization if budget remains after the Phase 5 browser checkpoint, estimated at 300 lines.
 
-Phase 7 is test completion, lint repair, bundle evidence, and contract reconciliation, estimated at 300 lines; totals are 3,290 lines with the workspace dependency or 5,690 lines with the private copy, and any phase exceeding its estimate by more than 25 percent requires a reported reason rather than hidden compression.
+Phase 7 is test completion, lint repair, bundle evidence, and contract reconciliation, estimated at 300 lines; the budget of record remains 3,290 lines, and any phase exceeding its estimate by more than 25 percent requires a reported reason rather than hidden compression.
 
 ## 17. What does not change
 
@@ -301,7 +305,7 @@ Browser numbers remain `requires visible replay` until a visible replay supplies
 
 ## 18. Unresolved risks
 
-The SCRATCH-to-DATA texture copy is unproved on the target gles backend because WebGL2 lacks `glCopyImageSubData`; the first spike must establish wgpu's framebuffer-blit lowering or select the designed ping-pong fallback.
+The SCRATCH-to-DATA texture copy and ping-pong fallback are paid on the dated target replay, while their costs under multi-page lattice loads remain unresolved measurements; SCRATCH-copy is the selected default and direct overlap is a paid validation refusal.
 
 The effective maximum safe DATA allocation is not exposed as free VRAM, so configured byte budget, successful texture creation, allocator capacity, and driver allocation failure cannot be collapsed into one predictive number.
 
@@ -315,10 +319,10 @@ Mode B's two-record validity layout deliberately spends 12 padding bytes per ver
 
 The top ladder requests far more records and draw instances than the dialect and gles draw ranges can deliver, so it primarily tests honest wall arithmetic and control stability rather than rendering 578 billion edges.
 
-Comparator provenance remains unresolved until implementation begins: a merged `ember-lab-layer` package avoids duplication, while the private-copy branch costs about 2,400 lines and requires generated-source snapshots, square-slot arithmetic, golden checksum, and small-rung image agreement to contain drift.
+Comparator provenance is resolved by the merged `ember-lab-layer` workspace dependency; any minimal public seam it requires is an explicit sibling-lab change, and no private comparator copy is permitted.
 
 CPU-computed rotated basis values and GPU-computed rotated base vertices can differ by operation order or transcendental implementation, so the f32 algebra tolerance and hue range must be fixed before timing.
 
-Dynamic uniform offsets, full-array texture sampling alongside separate SCRATCH attachments, framebuffer-copy lowering, and alternating immutable ping-pong groups are all target-backend risks whose typed outcomes must be captured by the Phase 0 spike.
+Dynamic uniform offsets at stride 256, full-array DATA sampling alongside separate SCRATCH attachments, framebuffer-copy lowering, and alternating immutable ping-pong groups all passed the dated Phase 0 target replay; performance, larger page counts, and allocation scale remain later browser facts.
 
 No visible browser result yet identifies the crossover among Modes A, B, C, pure, and layer, and the raster-bound evidence makes a clean crossover uncertain rather than guaranteed.

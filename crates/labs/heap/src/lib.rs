@@ -3,6 +3,7 @@
 mod heap;
 #[cfg(any(test, target_arch = "wasm32"))]
 mod kernels;
+mod span;
 #[cfg(any(test, target_arch = "wasm32"))]
 mod spike;
 
@@ -10,5 +11,9 @@ mod spike;
 mod wasm;
 
 pub use heap::{Descriptor, Handle, HeapAllocator, HeapError, HeapKind, PackedDescriptor};
+pub use span::{
+    DataSpan, DeliveryPlan, DispatchHeader, PackedSpan, SpanArena, SpanDirectory, SpanError,
+    StaticHeaders, WallTerm,
+};
 #[cfg(target_arch = "wasm32")]
 pub use spike::{cancel_heap_spike, run_heap_spike_json};

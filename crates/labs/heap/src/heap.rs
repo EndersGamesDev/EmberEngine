@@ -245,6 +245,7 @@ struct Block {
     size: u16,
 }
 
+#[derive(Clone)]
 struct BuddyLayer {
     side: u16,
     free_by_order: Vec<BTreeSet<(u16, u16)>>,
@@ -326,6 +327,7 @@ struct Slot {
 }
 
 /// Shared descriptor free list with independent DATA and IMAGE buddy layers.
+#[derive(Clone)]
 pub struct HeapAllocator {
     side: u16,
     layers: u16,
