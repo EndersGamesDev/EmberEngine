@@ -1,6 +1,6 @@
 {
-  "version": "r383",
-  "commit": "2268ba1",
-  "built": "2026-09-02T06:08:02Z",
-  "subject": "deploy: a publish subcommand, and two minutes for the tunnel name to resolve"
+  "version": "r437",
+  "commit": "f9c40d6",
+  "built": "2026-09-02T09:21:11Z",
+  "subject": "host.sh: let a fresh tunnel name propagate, and retry the public probe"
 }
