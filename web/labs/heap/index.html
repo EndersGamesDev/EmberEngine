@@ -93,9 +93,9 @@
       select_heap_lattice_json,
       start_heap_lattice,
       take_heap_lattice_panic,
-    } from "./pkg/ember_lab_heap.js?v=8";
+    } from "./pkg/ember_lab_heap.js?v=9";
 
-    const VERSION = "heap-lattice-v8";
+    const VERSION = "heap-lattice-v9";
     const SAMPLE_COUNT = 15;
     const WARMUPS = 3;
     const TARGET_QUANTA = 32;
@@ -273,9 +273,14 @@
         refreshQualificationCards();
       } catch (error) {
         if (token !== pageGeneration) throw error;
+        const reason = failure(error);
+        if (reason.includes("captured wgpu error") || reason.includes("surface frame")) {
+          cancel_heap_lattice();
+          throw new Error(reason);
+        }
         conformanceResult = { timing_qualified: false };
         conformance.className = "metric failed";
-        conformance.textContent = `FAIL · live equality oracle unavailable: ${failure(error)} · Mode C/layer timing disqualified`;
+        conformance.textContent = `FAIL · live equality oracle unavailable: ${reason} · Mode C/layer timing disqualified`;
         refreshQualificationCards();
       }
     }
@@ -319,11 +324,15 @@
       } catch (error) {
         if (token === pageGeneration) {
           const reason = failure(error);
+          cancel_heap_lattice();
+          setAnimation(false);
           status.className = "status failed";
           status.textContent = reason.startsWith("heap lattice panic at ")
             ? reason
-            : `selection wall prevented delivery without snapping controls: ${reason}`;
-          walls.textContent = `requested step ${selectedStep} and mode ${selectedMode} remain selected; the runtime wall above prevented delivery`;
+            : reason.includes("wgpu error") || reason.includes("surface")
+              ? `recoverable render failure: ${reason}; choose any selection to retry`
+              : `selection wall prevented delivery without snapping controls: ${reason}`;
+          walls.textContent = `requested step ${selectedStep} and mode ${selectedMode} remain selected; no stale frame will be presented`;
         }
       }
     }
@@ -403,7 +412,7 @@
     });
 
     try {
-      await init({ module_or_path: "./pkg/ember_lab_heap_bg.wasm?v=8" });
+      await init({ module_or_path: "./pkg/ember_lab_heap_bg.wasm?v=9" });
       const timer = timerProbe();
       timerQuantum = timer.quantum;
       const initialized = JSON.parse(await start_heap_lattice(canvas));

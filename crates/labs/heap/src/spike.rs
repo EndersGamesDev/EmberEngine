@@ -332,6 +332,7 @@ mod browser {
                     *slot = Some(format!("{reason:?}: {message}"));
                 }
             });
+            crate::browser_error::install_logging_handler(&device, "heap spike");
             let header_stride = device.limits().min_uniform_buffer_offset_alignment.max(16);
             let (header_stride, header_bytes) = aligned_header_upload(header_stride);
             let headers = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

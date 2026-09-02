@@ -1,5 +1,7 @@
 //! Descriptor-heap-effect WebGL2 lab and native allocator evidence.
 
+#[cfg(target_arch = "wasm32")]
+mod browser_error;
 #[cfg(any(test, target_arch = "wasm32"))]
 mod completion;
 #[cfg(any(test, target_arch = "wasm32"))]

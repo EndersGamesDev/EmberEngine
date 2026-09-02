@@ -7,6 +7,40 @@ pub struct SelectionEpoch<T> {
     latest: T,
 }
 
+/// Single-owner state for one acquired presentation image.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SurfaceOwnership {
+    owner: Option<u64>,
+}
+
+impl SurfaceOwnership {
+    /// Claims the surface for `generation`, or returns the current owner.
+    pub const fn try_acquire(&mut self, generation: u64) -> Result<(), u64> {
+        match self.owner {
+            Some(owner) => Err(owner),
+            None => {
+                self.owner = Some(generation);
+                Ok(())
+            }
+        }
+    }
+
+    /// Releases only the generation that owns the surface.
+    pub const fn release(&mut self, generation: u64) -> bool {
+        if self.owner == Some(generation) {
+            self.owner = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Returns the current owner, if a frame is acquired.
+    pub const fn owner(self) -> Option<u64> {
+        self.owner
+    }
+}
+
 impl<T: Copy> SelectionEpoch<T> {
     /// Starts at generation zero with the supplied initial value.
     pub const fn new(latest: T) -> Self {
@@ -30,7 +64,6 @@ impl<T: Copy> SelectionEpoch<T> {
     }
 
     /// Returns the current generation.
-    #[cfg(target_arch = "wasm32")]
     pub const fn generation(self) -> u64 {
         self.generation
     }
@@ -84,5 +117,33 @@ mod tests {
         assert!(!state.is_current(selected));
         assert!(state.is_current(invalidated));
         assert_eq!(state.latest(), 7);
+    }
+
+    #[test]
+    fn stale_frame_drops_at_its_next_yield_before_the_new_frame_acquires() {
+        const YIELD_POINTS: usize = 8;
+        for arrival in 0..YIELD_POINTS {
+            let mut selections = SelectionEpoch::new("initial");
+            let old = selections.select("in flight");
+            let mut surface = SurfaceOwnership::default();
+            assert_eq!(surface.try_acquire(old), Ok(()));
+            assert_eq!(surface.try_acquire(old), Err(old));
+
+            for point in 0..YIELD_POINTS {
+                if point == arrival {
+                    let latest = selections.select("latest");
+                    assert_eq!(surface.try_acquire(latest), Err(old));
+                }
+                if !selections.is_current(old) {
+                    assert!(surface.release(old));
+                    break;
+                }
+            }
+
+            let latest = selections.generation();
+            assert_eq!(surface.try_acquire(latest), Ok(()));
+            assert_eq!(surface.owner(), Some(latest));
+            assert_eq!(selections.latest(), "latest");
+        }
     }
 }

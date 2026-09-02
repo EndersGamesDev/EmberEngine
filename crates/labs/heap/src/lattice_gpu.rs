@@ -27,7 +27,8 @@ use crate::conformance::{
     NumericComparison, RECORD_BYTES, RECORD_STRIDE, compare_images, compare_records,
     deterministic_indices,
 };
-use crate::selection::SelectionEpoch;
+use crate::selection::{SelectionEpoch, SurfaceOwnership};
+use crate::browser_error::publish_browser_error;
 use crate::{
     BOX_INDICES, ComparatorWork, DataSpan, DialectLimits, DispatchPlan, EqualWorkSignature,
     FrameUniform, KernelDesc, ModeCFrameUniform, RegisteredKernel, SpanArena, StaticHeaders,
@@ -60,6 +61,10 @@ enum LatticeError {
     Resource(String),
     #[error("surface failure: {0}")]
     Surface(String),
+    #[error("surface frame for generation {owner} is still owned while generation {requested} waits")]
+    SurfaceBusy { owner: u64, requested: u64 },
+    #[error("surface frame skipped: {0}")]
+    SurfaceSkipped(String),
     #[error("completion mapping failed: {0}")]
     Mapping(String),
     #[error("completion exceeded 30000 ms")]
@@ -72,6 +77,8 @@ enum LatticeError {
     DeviceLost(String),
     #[error("internal lattice state was already borrowed during {0}")]
     BorrowConflict(&'static str),
+    #[error("captured wgpu error: {0}")]
+    CapturedGpu(String),
     #[error("unknown lattice mode {0}")]
     UnknownMode(String),
     #[error("lattice step {0} is outside 0..113")]
@@ -246,10 +253,85 @@ struct PendingReadback {
     expected_bytes: usize,
 }
 
+#[derive(Clone, Debug)]
+struct CapturedGpuFailure {
+    generation: u64,
+    message: String,
+}
+
+struct OwnedSurfaceFrame {
+    frame: Option<wgpu::SurfaceTexture>,
+    ownership: Rc<Cell<SurfaceOwnership>>,
+    generation: u64,
+}
+
+struct GpuErrorScope {
+    device: wgpu::Device,
+    ownership: Rc<Cell<SurfaceOwnership>>,
+    generation: u64,
+    operation: &'static str,
+}
+
+impl GpuErrorScope {
+    async fn finish(self) -> Result<(), LatticeError> {
+        let device = self.device.clone();
+        let pending = device.pop_error_scope();
+        let mut ownership = self.ownership.get();
+        ownership.release(self.generation);
+        self.ownership.set(ownership);
+        match pending.await {
+            Some(error) => {
+                let message = format!("{}: {error}", self.operation);
+                record_gpu_error_for_generation(self.generation, message.clone());
+                Err(LatticeError::CapturedGpu(message))
+            }
+            None => check_gpu_failure(self.generation),
+        }
+    }
+}
+
+impl OwnedSurfaceFrame {
+    fn view(&self) -> Result<wgpu::TextureView, LatticeError> {
+        self.frame
+            .as_ref()
+            .map(|frame| {
+                frame
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default())
+            })
+            .ok_or_else(|| LatticeError::Surface("owned frame has no texture".to_string()))
+    }
+
+    fn present(mut self) {
+        if let Some(frame) = self.frame.take() {
+            frame.present();
+        }
+        self.release();
+    }
+
+    fn release(&self) {
+        let mut ownership = self.ownership.get();
+        ownership.release(self.generation);
+        self.ownership.set(ownership);
+    }
+}
+
+impl Drop for OwnedSurfaceFrame {
+    fn drop(&mut self) {
+        drop(self.frame.take());
+        self.release();
+    }
+}
+
 struct HeapDispatch {
     plan: DispatchPlan,
     page_side: u16,
     mode: Mode,
+}
+
+struct ScopedSelectionAttempt {
+    scope: GpuErrorScope,
+    outcome: Result<SelectionReport, LatticeError>,
 }
 
 struct LayerStep {
@@ -267,6 +349,8 @@ struct LatticeLab {
     device: wgpu::Device,
     queue: wgpu::Queue,
     lost: Arc<Mutex<Option<String>>>,
+    surface_ownership: Rc<Cell<SurfaceOwnership>>,
+    error_scope_ownership: Rc<Cell<SurfaceOwnership>>,
     object: Prism,
     arena: SpanArena,
     data: wgpu::Texture,
@@ -842,6 +926,9 @@ impl LatticeLab {
                 *slot = Some(format!("{reason:?}: {message}"));
             }
         });
+        device.on_uncaptured_error(Box::new(|error| {
+            record_uncaptured_gpu_error(error.to_string());
+        }));
         let capabilities = surface.get_capabilities(&adapter);
         let surface_format = capabilities
             .formats
@@ -1111,6 +1198,8 @@ impl LatticeLab {
                 device,
                 queue,
                 lost,
+                surface_ownership: Rc::new(Cell::new(SurfaceOwnership::default())),
+                error_scope_ownership: Rc::new(Cell::new(SurfaceOwnership::default())),
                 object,
                 arena,
                 data,
@@ -1801,27 +1890,97 @@ impl LatticeLab {
         }
     }
 
-    fn acquire_frame(&mut self) -> Result<wgpu::SurfaceTexture, LatticeError> {
+    fn surface_is_available(&self) -> bool {
+        self.surface_ownership.get().owner().is_none()
+    }
+
+    fn try_begin_error_scope(
+        &self,
+        generation: u64,
+        operation: &'static str,
+    ) -> Result<Option<GpuErrorScope>, LatticeError> {
+        check_gpu_failure(generation)?;
+        let mut ownership = self.error_scope_ownership.get();
+        if ownership.try_acquire(generation).is_err() {
+            return Ok(None);
+        }
+        self.error_scope_ownership.set(ownership);
+        self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        Ok(Some(GpuErrorScope {
+            device: self.device.clone(),
+            ownership: Rc::clone(&self.error_scope_ownership),
+            generation,
+            operation,
+        }))
+    }
+
+    fn release_surface(&self, generation: u64) {
+        let mut ownership = self.surface_ownership.get();
+        ownership.release(generation);
+        self.surface_ownership.set(ownership);
+    }
+
+    fn acquire_frame(&mut self, generation: u64) -> Result<OwnedSurfaceFrame, LatticeError> {
         if let Some(reason) = self.lost.lock().ok().and_then(|slot| slot.clone()) {
             return Err(LatticeError::DeviceLost(reason));
         }
-        let frame = match self.surface.get_current_texture() {
+        check_gpu_failure(generation)?;
+        let mut ownership = self.surface_ownership.get();
+        ownership
+            .try_acquire(generation)
+            .map_err(|owner| LatticeError::SurfaceBusy {
+                owner,
+                requested: generation,
+            })?;
+        self.surface_ownership.set(ownership);
+        let acquired = match self.surface.get_current_texture() {
             Ok(frame) => frame,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
                 self.surface.configure(&self.device, &self.config);
-                self.surface
-                    .get_current_texture()
-                    .map_err(|error| LatticeError::Surface(error.to_string()))?
+                match self.surface.get_current_texture() {
+                    Ok(frame) => frame,
+                    Err(wgpu::SurfaceError::Timeout) => {
+                        self.release_surface(generation);
+                        return Err(LatticeError::SurfaceSkipped(
+                            "timed out after reconfiguration".to_string(),
+                        ));
+                    }
+                    Err(error) => {
+                        self.release_surface(generation);
+                        return Err(LatticeError::Surface(format!(
+                            "acquisition after reconfiguration failed: {error}"
+                        )));
+                    }
+                }
             }
-            Err(error) => return Err(LatticeError::Surface(error.to_string())),
+            Err(wgpu::SurfaceError::Timeout) => {
+                self.release_surface(generation);
+                return Err(LatticeError::SurfaceSkipped(
+                    "acquisition timed out; frame was not submitted".to_string(),
+                ));
+            }
+            Err(error) => {
+                self.release_surface(generation);
+                return Err(LatticeError::Surface(error.to_string()));
+            }
         };
-        Ok(frame)
+        if let Err(error) = check_gpu_failure(generation) {
+            drop(acquired);
+            self.release_surface(generation);
+            return Err(error);
+        }
+        Ok(OwnedSurfaceFrame {
+            frame: Some(acquired),
+            ownership: Rc::clone(&self.surface_ownership),
+            generation,
+        })
     }
 
     fn submit_frame_to_view(
         &mut self,
         time: f32,
         view: &wgpu::TextureView,
+        generation: u64,
     ) -> Result<(), LatticeError> {
         let uniform = self.frame_uniform(time);
         self.queue.write_buffer(&self.frame_buffer, 0, &uniform);
@@ -1842,15 +2001,13 @@ impl LatticeLab {
             "heap lattice one presentation pass",
         );
         self.queue.submit([encoder.finish()]);
-        Ok(())
+        check_gpu_failure(generation)
     }
 
-    fn render_frame(&mut self, time: f32) -> Result<(), LatticeError> {
-        let frame = self.acquire_frame()?;
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        self.submit_frame_to_view(time, &view)?;
+    fn render_frame(&mut self, time: f32, generation: u64) -> Result<(), LatticeError> {
+        let frame = self.acquire_frame(generation)?;
+        let view = frame.view()?;
+        self.submit_frame_to_view(time, &view, generation)?;
         frame.present();
         Ok(())
     }
@@ -1859,15 +2016,18 @@ impl LatticeLab {
         &mut self,
         time: f32,
         repeats: u32,
-    ) -> Result<(PendingFence, wgpu::SurfaceTexture), LatticeError> {
-        let frame = self.acquire_frame()?;
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        generation: u64,
+    ) -> Result<(PendingFence, OwnedSurfaceFrame), LatticeError> {
+        let frame = self.acquire_frame(generation)?;
+        let view = frame.view()?;
         for repeat in 0..repeats {
-            self.submit_frame_to_view(time + repeat as f32 * 0.000_001, &view)?;
+            self.submit_frame_to_view(
+                time + repeat as f32 * 0.000_001,
+                &view,
+                generation,
+            )?;
         }
-        let fence = self.pending_fence();
+        let fence = self.pending_fence(generation)?;
         Ok((fence, frame))
     }
 
@@ -2052,7 +2212,7 @@ impl LatticeLab {
         })
     }
 
-    fn pending_fence(&self) -> PendingFence {
+    fn pending_fence(&self, generation: u64) -> Result<PendingFence, LatticeError> {
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("heap lattice ordered four-byte MAP_READ fence"),
             size: 4,
@@ -2066,7 +2226,8 @@ impl LatticeLab {
             });
         encoder.copy_buffer_to_buffer(&self.fence_source, 0, &buffer, 0, 4);
         self.queue.submit([encoder.finish()]);
-        PendingFence { buffer }
+        check_gpu_failure(generation)?;
+        Ok(PendingFence { buffer })
     }
 
     fn frame_report(&self, generation: u64) -> FrameReport {
@@ -2088,6 +2249,7 @@ thread_local! {
         Cell::new(SelectionEpoch::new(None))
     };
     static LAST_PANIC: RefCell<Option<String>> = const { RefCell::new(None) };
+    static GPU_FAILURE: RefCell<Option<CapturedGpuFailure>> = const { RefCell::new(None) };
     static PANIC_HOOK_INSTALLED: Cell<bool> = const { Cell::new(false) };
 }
 
@@ -2106,6 +2268,11 @@ fn begin_selection(intent: SelectionIntent) -> u64 {
         let mut epoch = slot.get();
         let generation = epoch.select(Some(intent));
         slot.set(epoch);
+        GPU_FAILURE.with(|failure| {
+            if let Ok(mut failure) = failure.try_borrow_mut() {
+                *failure = None;
+            }
+        });
         generation
     })
 }
@@ -2131,6 +2298,39 @@ fn stale_generation(generation: u64) -> LatticeError {
     LatticeError::StaleGeneration {
         observed: generation,
         current: current_generation(),
+    }
+}
+
+fn publish_page_error(message: &str) {
+    publish_browser_error(message);
+}
+
+fn record_gpu_error_for_generation(generation: u64, message: String) {
+    let report = format!("heap lattice wgpu error at generation {generation}: {message}");
+    if generation_is_current(generation) {
+        GPU_FAILURE.with(|failure| {
+            if let Ok(mut failure) = failure.try_borrow_mut() {
+                *failure = Some(CapturedGpuFailure {
+                    generation,
+                    message: report.clone(),
+                });
+            }
+        });
+    }
+    publish_page_error(&report);
+}
+
+fn record_uncaptured_gpu_error(message: String) {
+    record_gpu_error_for_generation(current_generation(), format!("uncaptured: {message}"));
+}
+
+fn check_gpu_failure(generation: u64) -> Result<(), LatticeError> {
+    let failure = GPU_FAILURE.with(|failure| failure.try_borrow().ok().and_then(|value| value.clone()));
+    match failure {
+        Some(failure) if failure.generation == generation => {
+            Err(LatticeError::CapturedGpu(failure.message))
+        }
+        _ => Ok(()),
     }
 }
 
@@ -2161,30 +2361,71 @@ fn borrow_mut_for_generation<'a>(
 fn poll_lab_once(
     lab: &Rc<RefCell<LatticeLab>>,
     counter: &mut PollCounter,
+    generation: u64,
 ) -> Result<Option<String>, LatticeError> {
     let borrowed = lab
         .try_borrow()
         .map_err(|_| LatticeError::BorrowConflict("one completion poll"))?;
     counter.record().map_err(LatticeError::PollLimit)?;
     borrowed.device.poll(wgpu::Maintain::Poll);
+    check_gpu_failure(generation)?;
     let reason = borrowed.lost.lock().ok().and_then(|slot| slot.clone());
     Ok(reason)
+}
+
+fn try_begin_lab_error_scope(
+    lab: &Rc<RefCell<LatticeLab>>,
+    generation: u64,
+    operation: &'static str,
+) -> Result<Option<GpuErrorScope>, LatticeError> {
+    if !generation_is_current(generation) {
+        return Err(stale_generation(generation));
+    }
+    let Ok(borrowed) = lab.try_borrow() else {
+        return Ok(None);
+    };
+    borrowed.try_begin_error_scope(generation, operation)
+}
+
+async fn wait_for_error_scope(
+    lab: &Rc<RefCell<LatticeLab>>,
+    generation: u64,
+    operation: &'static str,
+) -> Result<GpuErrorScope, LatticeError> {
+    loop {
+        if let Some(scope) = try_begin_lab_error_scope(lab, generation, operation)? {
+            return Ok(scope);
+        }
+        yield_to_browser().await?;
+    }
 }
 
 fn try_apply_selection(
     lab: &Rc<RefCell<LatticeLab>>,
     intent: SelectionIntent,
     generation: u64,
-) -> Result<Option<SelectionReport>, LatticeError> {
+) -> Result<Option<ScopedSelectionAttempt>, LatticeError> {
     if !generation_is_current(generation) {
         return Err(stale_generation(generation));
     }
     let Ok(mut borrowed) = lab.try_borrow_mut() else {
         return Ok(None);
     };
-    let report = borrowed.select(intent.mode, intent.step, intent.policy, generation)?;
-    borrowed.render_frame(0.0)?;
-    Ok(Some(report))
+    if !borrowed.surface_is_available() {
+        return Ok(None);
+    }
+    let Some(scope) = borrowed.try_begin_error_scope(generation, "selection acquire and render")?
+    else {
+        return Ok(None);
+    };
+    let outcome = borrowed
+        .select(intent.mode, intent.step, intent.policy, generation)
+        .and_then(|report| {
+            borrowed
+                .render_frame(0.0, generation)
+                .map(|()| report)
+        });
+    Ok(Some(ScopedSelectionAttempt { scope, outcome }))
 }
 
 /// Installs the wasm panic reporter during module initialization.
@@ -2217,14 +2458,7 @@ pub fn install_heap_lattice_panic_hook() {
                 *slot = Some(message.clone());
             }
         });
-        web_sys::console::error_1(&JsValue::from_str(&message));
-        if let Some(status) = web_sys::window()
-            .and_then(|window| window.document())
-            .and_then(|document| document.get_element_by_id("status"))
-        {
-            status.set_class_name("status failed");
-            status.set_text_content(Some(&message));
-        }
+        publish_page_error(&message);
     }));
 }
 
@@ -2266,7 +2500,7 @@ async fn wait_for_fence(
             pending.buffer.unmap();
             return Err(LatticeError::Deadline);
         }
-        match poll_lab_once(lab, &mut counter) {
+        match poll_lab_once(lab, &mut counter, generation) {
             Ok(Some(reason)) => {
                 pending.buffer.unmap();
                 return Err(LatticeError::DeviceLost(reason));
@@ -2331,7 +2565,7 @@ async fn wait_for_readback(
             pending.buffer.unmap();
             return Err(LatticeError::Deadline);
         }
-        match poll_lab_once(lab, &mut counter) {
+        match poll_lab_once(lab, &mut counter, generation) {
             Ok(Some(reason)) => {
                 pending.buffer.unmap();
                 return Err(LatticeError::DeviceLost(reason));
@@ -2377,7 +2611,7 @@ async fn run_conformance(
         let mut borrowed =
             borrow_mut_for_generation(lab, generation, "starting Mode C conformance")?;
         let report = borrowed.select(Mode::C, step, policy, generation)?;
-        borrowed.render_frame(CONFORMANCE_TIME)?;
+        borrowed.render_frame(CONFORMANCE_TIME, generation)?;
         let indices = deterministic_indices(report.delivered_edges);
         let pending = (!indices.is_empty())
             .then(|| borrowed.capture_records(Mode::C, &indices))
@@ -2392,7 +2626,7 @@ async fn run_conformance(
         let mut borrowed =
             borrow_mut_for_generation(lab, generation, "starting layer conformance")?;
         let report = borrowed.select(Mode::Layer, step, policy, generation)?;
-        borrowed.render_frame(CONFORMANCE_TIME)?;
+        borrowed.render_frame(CONFORMANCE_TIME, generation)?;
         let pending = (report.delivered_edges == mode_c_report.delivered_edges
             && !indices.is_empty())
         .then(|| borrowed.capture_records(Mode::Layer, &indices))
@@ -2437,7 +2671,7 @@ async fn run_conformance(
                     report.delivered_edges, CONFORMANCE_IMAGE_POLICY
                 )));
             }
-            borrowed.render_frame(CONFORMANCE_TIME)?;
+            borrowed.render_frame(CONFORMANCE_TIME, generation)?;
             borrowed.capture_image()?
         };
         wait_for_readback(lab, pending, generation).await?
@@ -2458,7 +2692,7 @@ async fn run_conformance(
                     report.delivered_edges, CONFORMANCE_IMAGE_POLICY
                 )));
             }
-            borrowed.render_frame(CONFORMANCE_TIME)?;
+            borrowed.render_frame(CONFORMANCE_TIME, generation)?;
             borrowed.capture_image()?
         };
         wait_for_readback(lab, pending, generation).await?
@@ -2508,10 +2742,18 @@ pub async fn start_heap_lattice(canvas: web_sys::HtmlCanvasElement) -> Result<St
     if !generation_is_current(generation) {
         return Err(JsValue::from(stale_generation(generation)));
     }
+    let scope = lab
+        .try_begin_error_scope(generation, "initial selection acquire and render")
+        .map_err(JsValue::from)?
+        .ok_or_else(|| JsValue::from_str("initial GPU error scope is already owned"))?;
     let initial = lab
         .select(Mode::A, 1, DEFAULT_POLICY, generation)
-        .map_err(JsValue::from)?;
-    lab.render_frame(0.0).map_err(JsValue::from)?;
+        .and_then(|report| lab.render_frame(0.0, generation).map(|()| report));
+    scope.finish().await.map_err(JsValue::from)?;
+    if !generation_is_current(generation) {
+        return Err(JsValue::from(stale_generation(generation)));
+    }
+    let initial = initial.map_err(JsValue::from)?;
     let report = InitReport {
         adapter,
         backend,
@@ -2536,7 +2778,7 @@ pub async fn start_heap_lattice(canvas: web_sys::HtmlCanvasElement) -> Result<St
         timestamp_query_used: false,
         completion_poll_limit: MAX_COMPLETION_POLLS,
         output_path: "paid SCRATCH render plus exact-region copy_texture_to_texture into DATA; ping-pong remains spike-only fallback",
-        completion: "draw submit then four-byte MAP_READ fence; counted device.poll(Poll) before each zero-timeout browser yield; 4096-poll and 30000 ms bounds; surface present after the measured fence timestamp; generation guard",
+        completion: "single generation-tagged SurfaceTexture owner; draw submit then four-byte MAP_READ fence; counted device.poll(Poll) before each zero-timeout browser yield; 4096-poll and 30000 ms bounds; stale frames drop unpresented; surface present after the measured fence timestamp; validation scopes and non-panicking uncaptured-error handler",
         initial,
     };
     LAB.with(|slot| {
@@ -2572,9 +2814,11 @@ pub async fn select_heap_lattice_json(
     let generation = begin_selection(intent);
     let lab = current_lab().map_err(JsValue::from)?;
     loop {
-        if let Some(report) =
+        if let Some(attempt) =
             try_apply_selection(&lab, intent, generation).map_err(JsValue::from)?
         {
+            attempt.scope.finish().await.map_err(JsValue::from)?;
+            let report = attempt.outcome.map_err(JsValue::from)?;
             return serialize(&report).map_err(JsValue::from);
         }
         yield_to_browser().await.map_err(JsValue::from)?;
@@ -2600,20 +2844,26 @@ pub async fn conform_heap_lattice_json() -> Result<String, JsValue> {
             borrowed.active.policy,
         )
     };
+    let scope = wait_for_error_scope(&lab, generation, "conformance render and readback")
+        .await
+        .map_err(JsValue::from)?;
     let outcome = run_conformance(&lab, generation, step, policy).await;
     let restore = if generation_is_current(generation) {
-        let mut borrowed = borrow_mut_for_generation(
+        borrow_mut_for_generation(
             &lab,
             generation,
             "restoring the selection after conformance",
         )
-        .map_err(JsValue::from)?;
-        borrowed
-            .select(saved_mode, step, policy, generation)
-            .and_then(|_| borrowed.render_frame(0.0))
+        .and_then(|mut borrowed| {
+            borrowed
+                .select(saved_mode, step, policy, generation)
+                .and_then(|_| borrowed.render_frame(0.0, generation))
+        })
     } else {
         Err(stale_generation(generation))
     };
+    let scoped = scope.finish().await;
+    scoped.map_err(JsValue::from)?;
     restore.map_err(JsValue::from)?;
     serialize(&outcome.map_err(JsValue::from)?).map_err(JsValue::from)
 }
@@ -2630,7 +2880,8 @@ pub fn render_heap_lattice_frame_json(time_seconds: f32) -> Result<String, JsVal
     let report = {
         let mut lab = borrow_mut_for_generation(&lab, generation, "rendering an animation frame")
             .map_err(JsValue::from)?;
-        lab.render_frame(time_seconds).map_err(JsValue::from)?;
+        lab.render_frame(time_seconds, generation)
+            .map_err(JsValue::from)?;
         lab.frame_report(generation)
     };
     serialize(&report).map_err(JsValue::from)
@@ -2651,25 +2902,48 @@ pub async fn measure_heap_lattice_batch_json(
     }
     let generation = current_generation();
     let lab = current_lab().map_err(JsValue::from)?;
+    let scope = wait_for_error_scope(&lab, generation, "measured acquire, render, and fence")
+        .await
+        .map_err(JsValue::from)?;
     let started = performance_now();
-    let (pending, frame, mode, delivered_edges) = {
+    let submission = (|| {
         let mut borrowed =
             borrow_mut_for_generation(&lab, generation, "submitting a measured batch")
-                .map_err(JsValue::from)?;
+                ?;
         let (pending, frame) = borrowed
-            .submit_measured_batch(time_seconds, repeats)
-            .map_err(JsValue::from)?;
-        (
+            .submit_measured_batch(time_seconds, repeats, generation)?;
+        Ok::<_, LatticeError>((
             pending,
             frame,
             borrowed.active.mode,
             borrowed.active.delivered_edges,
-        )
+        ))
+    })();
+    let (pending, frame, mode, delivered_edges) = match submission {
+        Ok(submission) => submission,
+        Err(error) => {
+            scope.finish().await.map_err(JsValue::from)?;
+            return Err(JsValue::from(error));
+        }
     };
-    let fence_wait = wait_for_fence(&lab, pending, generation)
-        .await
-        .map_err(JsValue::from)?;
+    let fence_wait = match wait_for_fence(&lab, pending, generation).await {
+        Ok(wait) => wait,
+        Err(error) => {
+            drop(frame);
+            scope.finish().await.map_err(JsValue::from)?;
+            return Err(JsValue::from(error));
+        }
+    };
     let elapsed_ms = performance_now() - started;
+    let scoped = scope.finish().await;
+    if !generation_is_current(generation) {
+        drop(frame);
+        return Err(JsValue::from(stale_generation(generation)));
+    }
+    if let Err(error) = scoped {
+        drop(frame);
+        return Err(JsValue::from(error));
+    }
     frame.present();
     let normalized_ms = elapsed_ms / f64::from(repeats);
     serialize(&BatchReport {

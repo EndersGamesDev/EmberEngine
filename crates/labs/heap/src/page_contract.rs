@@ -2,13 +2,14 @@
 
 const PAGE: &str = include_str!("../../../../web/labs/heap/index.html");
 const RUNTIME: &str = include_str!("lattice_gpu.rs");
+const CONTRACT: &str = include_str!("../../../../docs/gpu-heap-lattice.md");
 
 #[test]
-fn loader_is_v8_and_runtime_is_explicitly_gl_only() {
-    assert!(PAGE.contains("ember_lab_heap.js?v=8"));
-    assert!(PAGE.contains("ember_lab_heap_bg.wasm?v=8"));
-    assert!(PAGE.contains("heap-lattice-v8"));
-    assert!(!PAGE.contains("heap-lattice-v7"));
+fn loader_is_v9_and_runtime_is_explicitly_gl_only() {
+    assert!(PAGE.contains("ember_lab_heap.js?v=9"));
+    assert!(PAGE.contains("ember_lab_heap_bg.wasm?v=9"));
+    assert!(PAGE.contains("heap-lattice-v9"));
+    assert!(!PAGE.contains("heap-lattice-v8"));
     assert!(RUNTIME.contains("backends: wgpu::Backends::GL"));
     assert!(RUNTIME.contains("info.backend != wgpu::Backend::Gl"));
 }
@@ -84,6 +85,45 @@ fn panic_hook_and_latest_selection_contract_are_visible() {
     }
     assert!(!RUNTIME.contains("lab.borrow_mut()"));
     assert!(!RUNTIME.contains("lab.borrow()"));
+}
+
+#[test]
+fn surface_ownership_errors_and_recovery_are_pinned() {
+    for required in [
+        "surface_ownership: Rc<Cell<SurfaceOwnership>>",
+        "on_uncaptured_error",
+        "push_error_scope(wgpu::ErrorFilter::Validation)",
+        "pop_error_scope()",
+        "SurfaceError::Lost | wgpu::SurfaceError::Outdated",
+        "SurfaceError::Timeout",
+        "recoverable render failure",
+        "choose any selection to retry",
+    ] {
+        assert!(
+            PAGE.contains(required) || RUNTIME.contains(required),
+            "missing surface recovery contract: {required}"
+        );
+    }
+    let acquire = RUNTIME
+        .split_once("fn acquire_frame")
+        .expect("acquire path exists")
+        .1
+        .split_once("fn submit_frame_to_view")
+        .expect("acquire path has a boundary")
+        .0;
+    assert!(!acquire.contains(".unwrap()"));
+    assert!(!acquire.contains(".expect("));
+    for required in [
+        "Next six times 30 ms apart",
+        "Previous four times 20 ms apart",
+        "step 3 `(3,3,1,1,1)`",
+        "Mode C request",
+    ] {
+        assert!(
+            CONTRACT.contains(required),
+            "missing manual surface oracle: {required}"
+        );
+    }
 }
 
 #[test]

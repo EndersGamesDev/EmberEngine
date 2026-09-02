@@ -384,6 +384,7 @@ impl Lab {
                 *slot = Some(format!("{reason:?}: {message}"));
             }
         });
+        crate::browser_error::install_logging_handler(&device, "heap benchmark");
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps
             .formats
