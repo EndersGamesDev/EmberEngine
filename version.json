@@ -1,6 +1,6 @@
 {
-  "version": "r556",
-  "commit": "bb09f79",
-  "built": "2026-09-02T16:02:23Z",
-  "subject": "deploy: the workstation host restarts at logon, and survives its shell"
+  "version": "r559",
+  "commit": "4efe957",
+  "built": "2026-09-02T16:55:13Z",
+  "subject": "arena v15: stage the revolver page and record it in the docs"
 }
