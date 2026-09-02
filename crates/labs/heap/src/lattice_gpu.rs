@@ -23,9 +23,9 @@ use wgpu::util::DeviceExt as _;
 
 use crate::{
     BOX_INDICES, ComparatorWork, DataSpan, DialectLimits, DispatchPlan, EqualWorkSignature,
-    FrameUniform, KernelDesc, ModeCFrameUniform, RegisteredKernel, SpanArena,
-    StaticHeaders, box_vertices, frame_for, layer_comparator_draw_shader,
-    layer_comparator_kernel, mode_a_records, mode_a_shader, mode_c_register, mode_c_shader,
+    FrameUniform, KernelDesc, ModeCFrameUniform, RegisteredKernel, SpanArena, StaticHeaders,
+    box_vertices, frame_for, layer_comparator_draw_shader, layer_comparator_kernel, mode_a_records,
+    mode_a_shader, mode_c_register, mode_c_shader,
 };
 
 const HEAP_SIDE: u16 = 512;
