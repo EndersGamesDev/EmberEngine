@@ -182,6 +182,18 @@ else
 fi
 if [ -e "$TMP/never.json" ]; then bad "a refused call still created the book"; else ok "a refused call creates nothing"; fi
 
+echo "== no interpreter: it says so, rather than exiting silently =="
+# The guard used to be dead code. `PY="$(command -v python3 || command -v
+# python)"` under `set -e` is itself a failing command when neither exists, so
+# the script exited 1 with no output and the operator saw a deploy stop
+# mid-sentence. Run it with an empty PATH — `bash` is invoked by absolute path
+# so the shell still starts, and `command -v` is a builtin.
+EMPTY="$TMP/no-path"
+mkdir -p "$EMPTY"
+NOPY="$(PATH="$EMPTY" "$BASH" "$DEPLOY/publish-host.sh" --book "$TMP/never.json" \
+    --name good-name --game arena --url wss://x --proto 1 2>&1 || true)"
+contains "$NOPY" "need a working python3" "a host with no python is told why"
+
 echo "== push to a real repository =="
 BARE="$TMP/pages.git"
 git init -q --bare "$BARE"

@@ -38,11 +38,20 @@ STATE_DIR="${WATCHDOG_STATE_DIR:-$REPO_DIR}"
 PAGES_URL="${EMBER_PAGES_URL:-https://endersgamesdev.github.io/EmberEngine}"
 # One name, several names, or the old single EMBER_HOST — all three work.
 HOSTS="${EMBER_HOSTS:-${EMBER_HOST:-specht}}"
-PY="$(command -v python3 || command -v python)"
 ONCE=""
 [ "${1:-}" = "--once" ] && ONCE=1
 
 log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"; }
+
+# Resolved AFTER log(), and guarded, because both halves of that matter. Under
+# `set -e` an assignment whose command substitution fails is itself a failing
+# command, so the old form exited here with no output at all; and `|| true`
+# alone would be worse than the silence — an empty $PY makes `entry_addr`
+# return "" for every host and every game, which reads as "nothing is
+# published" and redeploys the whole fleet on every pass.
+PY="$(command -v python3 || command -v python || true)"
+[ -n "$PY" ] && "$PY" -c '' >/dev/null 2>&1 \
+    || { log "watchdog: need a working python3 (or python) on PATH"; exit 1; }
 
 # The games, and the address key each one uses in the book. Derived from the
 # game id exactly as docs/hosts.md §3 says: the arena owns the bare `ws`,

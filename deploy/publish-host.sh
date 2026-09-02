@@ -43,8 +43,15 @@
 # published.
 set -euo pipefail
 
-PY="$(command -v python3 || command -v python)"
-[ -n "$PY" ] || { echo "publish-host: need python3 (or python) on PATH" >&2; exit 1; }
+# `|| true`, or the guard below is dead code: under `set -e` an assignment
+# whose command substitution fails IS a failing command, so a box with neither
+# interpreter exited here with status 1 and not one byte of output — a deploy
+# that stopped mid-sentence with nothing naming the cause. The interpreter is
+# also RUN once rather than merely found: on Windows `python` is usually an App
+# Execution Alias that resolves on PATH and is not an interpreter.
+PY="$(command -v python3 || command -v python || true)"
+[ -n "$PY" ] && "$PY" -c '' >/dev/null 2>&1 \
+    || { echo "publish-host: need a working python3 (or python) on PATH" >&2; exit 1; }
 
 NAME=""
 VERSION=""

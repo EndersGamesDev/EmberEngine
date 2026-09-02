@@ -87,6 +87,11 @@ LOGS="$EMBER_HOME/log"
 mkdir -p "$RUN" "$LOGS"
 
 PY="$(command -v python3 || command -v python || true)"
+# Found is not the same as working: on Windows `python` is usually an App
+# Execution Alias that resolves on PATH and is not an interpreter. `status`
+# degrades gracefully on an empty $PY; `up` refuses up front rather than after
+# a multi-minute build it could never publish.
+[ -n "$PY" ] && "$PY" -c '' >/dev/null 2>&1 || PY=""
 
 say() { echo "== $* =="; }
 die() { echo "host.sh: $*" >&2; exit 1; }
@@ -275,6 +280,9 @@ resolve_ref() {
 cmd_up() {
     local t0; t0="$(date +%s)"
     [ -x "$EMBER_TUNNEL_BIN" ] || die "no tunnel binary at $EMBER_TUNNEL_BIN (set EMBER_TUNNEL_BIN)"
+    # Every path out of `up` ends in publish-host.sh, including EMBER_PUBLISH=none.
+    # Refuse now rather than after the build, the start and both health checks.
+    [ -n "$PY" ] || die "need a working python3 (or python) on PATH to publish the entry"
 
     local name; name="$(bash "$(helper host-name.sh)")"
     say "host $name"

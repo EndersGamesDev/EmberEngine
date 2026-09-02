@@ -5,8 +5,12 @@
 # a test harness with its own bugs would prove nothing. No framework, no
 # discovery, four helpers.
 
-PY="$(command -v python3 || command -v python)"
-[ -n "$PY" ] || { echo "tests: no python3/python on PATH" >&2; exit 1; }
+# `|| true` so the guard below is reachable: under `set -e` an assignment whose
+# command substitution fails is itself a failing command, and the suite would
+# exit here with no message at all.
+PY="$(command -v python3 || command -v python || true)"
+[ -n "$PY" ] && "$PY" -c '' >/dev/null 2>&1 \
+    || { echo "tests: no working python3/python on PATH" >&2; exit 1; }
 
 TESTS_RUN=0
 TESTS_FAILED=0
