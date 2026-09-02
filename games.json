@@ -4,12 +4,18 @@
       "id": "arena",
       "title": "Arena Shooter",
       "tag": "online multiplayer · first person · up to 8",
-      "desc": "First-person drop-in deathmatch in a generated arena. WASD + mouse look, Space jump, RMB zoom, R reload, Shift sprint, C crouch — crouching also shrinks your hitbox. Q raises an off-hand shield that doesn't just block a bullet, it reflects it back at the shooter. Jump onto the low crates and fight from up there; the tall containers stay hard cover. Grab glowing pads to upgrade your pistol. Textured basalt arena, an animated SWAT operator, Blender-built viewmodel with hands.",
+      "desc": "First-person drop-in deathmatch in a generated arena. WASD + mouse look, Space jump, RMB zoom, R reload, Shift sprint, C crouch — crouching also shrinks your hitbox. Q raises an off-hand shield that doesn't just block a bullet, it reflects it back at the shooter. Jump onto the low crates and fight from up there; the tall containers stay hard cover. Grab glowing pads to upgrade your pistol. Textured basalt arena, an animated SWAT operator, Blender-built viewmodel with hands. E is a melee strike that kills outright and goes straight through a raised shield — the counter to someone turtling behind Q. Headshots kill outright too, so aim high.",
       "versions": [
+        {
+          "v": "v12",
+          "path": "games/arena/v12/",
+          "live": true,
+          "note": "E melee through shields + headshots"
+        },
         {
           "v": "v11",
           "path": "games/arena/v11/",
-          "live": true,
+          "live": false,
           "note": "Q shield — blocks and reflects"
         },
         {
@@ -59,6 +65,18 @@
           "path": "games/arena/v3/",
           "live": false,
           "note": "top-down (archived)"
+        },
+        {
+          "v": "v1",
+          "path": "games/pong/v1/",
+          "live": false,
+          "note": "first web build, archived under its original path"
+        },
+        {
+          "v": "v0",
+          "path": "games/arena/v0/",
+          "live": true,
+          "note": "the original local game — the pong classic"
         }
       ]
     },
@@ -83,22 +101,31 @@
       ]
     },
     {
-      "id": "pong",
-      "title": "Pong Classic",
-      "tag": "local · 2 players, one keyboard",
-      "desc": "The first ember game. A/D vs arrow keys, first to 7.",
+      "id": "kings",
+      "title": "Four Kings",
+      "tag": "online, turn based, 2-4 players, 15 s turns",
+      "desc": "Four-corner chess on a 10x10 board: king, queen, two rooks, two bishops, a knight and seven pawns per corner, plus two new legends. The Joker teleports between mirror tiles, is placed anywhere every fifth turn, and captures on exactly one tile, its front-left. The Hero sleeps in the corner until it trades places with one of your pawns and wakes as a rook-plus-knight. Pawns march forward or left and capture on three diagonals, so a corner formation is never a wall. One action per 15-second turn, three timeouts and you are out, last king standing wins. Click a piece, click a highlighted target; Esc clears. Swap your legend and epic cards within their class before the game starts.",
       "versions": [
         {
-          "v": "v2",
-          "path": "games/pong/v2/",
+          "v": "v1",
+          "path": "games/kings/v1/",
           "live": true,
-          "note": "current build"
-        },
+          "proto": 1,
+          "note": "first build: within-class card swap, 15 s turns"
+        }
+      ]
+    },
+    {
+      "id": "what-is-this",
+      "title": "what is this?",
+      "tag": "local diagnostic · browser + hardware · optional upload",
+      "desc": "A playful, staged answer to a practical question: what kind of machine and browser is this? Runs fixed wasm CPU and timing kernels, records floating-point and feature fingerprints, and keeps going when a probe is unavailable. The complete JSON report can stay on your device; sending it to the Ember server is a separate, explicit choice.",
+      "versions": [
         {
           "v": "v1",
-          "path": "games/pong/v1/",
-          "live": false,
-          "note": "first web build (archived)"
+          "path": "games/what-is-this/v1/",
+          "live": true,
+          "note": "diagnostic suite + optional report submission"
         }
       ]
     }

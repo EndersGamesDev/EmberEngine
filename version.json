@@ -1,6 +1,6 @@
 {
-  "version": "r128",
-  "commit": "3f04b99",
-  "built": "2026-09-01T11:24:15Z",
-  "subject": "deploy: attempt the systemd restart rather than predicting it from is-enabled"
+  "version": "r383",
+  "commit": "2268ba1",
+  "built": "2026-09-02T06:08:02Z",
+  "subject": "deploy: a publish subcommand, and two minutes for the tunnel name to resolve"
 }
