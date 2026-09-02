@@ -50,9 +50,7 @@ enum LabError {
     DeviceLost(String),
     #[error("unknown benchmark mode {0}")]
     UnknownMode(String),
-    #[error(
-        "draw step {0} is not one of 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576"
-    )]
+    #[error("draw step {0} is not one of 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576")]
     UnknownStep(u32),
     #[error("repeat count must be in 1..=4096, got {0}")]
     InvalidRepeat(u32),
@@ -724,10 +722,9 @@ impl Lab {
                 yield_to_browser().await?;
             }
         }
-        let max_draws_per_instance_buffer = u32::try_from(
-            device.limits().max_buffer_size / size_of::<InstanceData>() as u64,
-        )
-        .unwrap_or(u32::MAX);
+        let max_draws_per_instance_buffer =
+            u32::try_from(device.limits().max_buffer_size / size_of::<InstanceData>() as u64)
+                .unwrap_or(u32::MAX);
         let mut scenes = Vec::new();
         let mut scene_upload_bytes = 0_u64;
         for requested_draws in DRAW_STEPS {
@@ -888,11 +885,7 @@ impl Lab {
         self.lost.lock().ok().and_then(|reason| reason.clone())
     }
 
-    fn pending_fence(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        deadline_ms: i32,
-    ) -> PendingFence {
+    fn pending_fence(&self, encoder: &mut wgpu::CommandEncoder, deadline_ms: i32) -> PendingFence {
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("heap lab ordered four-byte completion fence"),
             size: 4,
@@ -1050,8 +1043,8 @@ impl Lab {
                 }
             }
         }
-        let pending = include_fence
-            .then(|| self.pending_fence(&mut encoder, DRAW_COMPLETION_DEADLINE_MS));
+        let pending =
+            include_fence.then(|| self.pending_fence(&mut encoder, DRAW_COMPLETION_DEADLINE_MS));
         self.queue.submit([encoder.finish()]);
         output.present();
         Ok(pending)
@@ -1263,10 +1256,7 @@ fn finish_map(state: &Arc<Mutex<Option<MapOutcome>>>, outcome: MapOutcome) {
     }
 }
 
-fn arm_deadline(
-    state: Arc<Mutex<Option<MapOutcome>>>,
-    deadline_ms: i32,
-) -> Result<(), LabError> {
+fn arm_deadline(state: Arc<Mutex<Option<MapOutcome>>>, deadline_ms: i32) -> Result<(), LabError> {
     let callback = Closure::once(move || finish_map(&state, MapOutcome::Deadline));
     web_sys::window()
         .ok_or_else(|| LabError::Mapping("window is unavailable".to_string()))?
