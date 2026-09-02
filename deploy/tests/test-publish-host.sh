@@ -148,6 +148,54 @@ $PUB --book "$OLDFMT" --recompute >/dev/null
 is "$(jget "$OLDFMT" 'd["fire_ws"]')" "wss://old.example" \
     "the bare version is the fallback when a game has no key of its own"
 
+echo "== --drop-game retires one game and leaves the rest of the entry =="
+# A merge can never take a key away, so a game shut down for good kept its
+# address in the entry and kept winning the legacy recompute every time the
+# host redeployed the OTHER game — a dead address pinned on a live machine,
+# with `--remove` (which drops the still-running games too) as the only cure.
+DROPB="$TMP/drop.json"
+$PUB --book "$DROPB" --name amber-otter \
+    --game arena --url wss://da.example --proto 12 \
+    --game fire --url wss://df.example --proto 1 \
+    --version r500 --commit ddd0000 >/dev/null
+$PUB --book "$DROPB" --name flint-heron \
+    --game fire --url wss://df2.example --proto 1 --version r400 >/dev/null
+set_top_in "$DROPB" proto 12
+set_top_in "$DROPB" fire_proto 1
+$PUB --book "$DROPB" --recompute >/dev/null
+is "$(jget "$DROPB" 'd["fire_ws"]')" "wss://df.example" "the newest fire host owns the legacy key"
+DROPPED="$($PUB --book "$DROPB" --name amber-otter --drop-game fire)"
+contains "$DROPPED" "dropped fire from amber-otter" "the retirement says what it did"
+AO='[h for h in d["hosts"] if h["name"]=="amber-otter"][0]'
+is "$(jget "$DROPB" "'fire_ws' in $AO")" "False" "fire's address is gone"
+is "$(jget "$DROPB" "'fire_proto' in $AO")" "False" "and its protocol"
+is "$(jget "$DROPB" "'fire_version' in $AO")" "False" "and its build stamp"
+is "$(jget "$DROPB" "$AO[\"ws\"]")" "wss://da.example" "the arena still running there is untouched"
+is "$(jget "$DROPB" "$AO[\"version\"]")" "r500" "and so is its stamp"
+is "$(jget "$DROPB" 'd["fire_ws"]')" "wss://df2.example" \
+    "and the legacy fire address moved to the host that still runs it"
+
+echo "== --drop-game refuses the calls that would mean two things at once =="
+if $PUB --book "$DROPB" --name amber-otter --drop-game arena \
+        --game arena --url wss://x.example --proto 12 >/dev/null 2>&1; then
+    bad "a call both published and retired the same game"
+else
+    ok "publishing and retiring the same game is refused"
+fi
+if $PUB --book "$DROPB" --name amber-otter --drop-game arena --remove >/dev/null 2>&1; then
+    bad "--remove and --drop-game were accepted together"
+else
+    ok "--remove and --drop-game are alternatives"
+fi
+if $PUB --book "$DROPB" --recompute --drop-game arena >/dev/null 2>&1; then
+    bad "--recompute accepted a --drop-game it cannot apply"
+else
+    ok "--recompute refuses --drop-game"
+fi
+GONE="$($PUB --book "$DROPB" --name never-published --drop-game fire)"
+contains "$GONE" "no entry named never-published" "retiring a game on an unlisted host adds nothing"
+is "$(jget "$DROPB" '[h["name"] for h in d["hosts"]].count("never-published")')" "0" "and really nothing"
+
 echo "== no host matches: the key is left exactly as it was =="
 set_top proto 99
 $PUB --book "$BOOK" --recompute >/dev/null

@@ -20,6 +20,8 @@
 #                      --game in the call it is the arena's
 #   --commit <sha>     its short sha, same rule
 #   --by <text>        free text: who deployed it from where (optional)
+#   --drop-game <id>   retire one game on this host: delete its four keys from
+#                      the entry and leave the rest of it alone; repeatable
 #   --remove           delete the entry instead of writing it
 #   --recompute        touch nothing but the legacy address keys
 #   --book <path>      rewrite this file in place (no git)
@@ -66,9 +68,12 @@ BRANCH=""
 FILE="server.json"
 # Flattened triples: id url proto, id url proto, …
 GAMES=()
+# Flattened `drop=<id>`, appended after the triples; the python tells them
+# apart by their key, so both arrive in one argv tail.
+DROPS=()
 
 usage() {
-    sed -n '2,30p' "$0" >&2
+    sed -n '2,33p' "$0" >&2
     exit 2
 }
 
@@ -88,6 +93,7 @@ while [ $# -gt 0 ]; do
         # arguments from variables, and requiring a fixed order there would
         # have been one more thing to get subtly wrong.
         --game)      GAMES+=("game=${2:-}"); shift 2 ;;
+        --drop-game) DROPS+=("drop=${2:-}"); shift 2 ;;
         --url)       GAMES+=("url=${2:-}"); shift 2 ;;
         --proto)     GAMES+=("proto=${2:-}"); shift 2 ;;
         -h|--help)   usage ;;
@@ -149,11 +155,14 @@ fi
 # One python for the whole of the JSON, because every rule here is about the
 # relationship between entries and no part of it is expressible in `sed`.
 "$PY" - "$TARGET" "$FILE" "$NAME" "$VERSION" "$COMMIT" "$BY" \
-    "${REMOVE:-}" "${RECOMPUTE:-}" "${GAMES[@]+"${GAMES[@]}"}" <<'PY'
+    "${REMOVE:-}" "${RECOMPUTE:-}" \
+    "${GAMES[@]+"${GAMES[@]}"}" "${DROPS[@]+"${DROPS[@]}"}" <<'PY'
 import json, os, re, sys, time
 
 path, filename, name, version, commit, by, remove, recompute = sys.argv[1:9]
-raw_games = sys.argv[9:]
+raw_tail = sys.argv[9:]
+raw_games = [i for i in raw_tail if not i.startswith("drop=")]
+drops = [i[len("drop="):] for i in raw_tail if i.startswith("drop=")]
 mirror = os.path.basename(filename) != "server.json"
 
 NAME_RE = re.compile(r"^[a-z0-9-]{3,32}$")
@@ -234,6 +243,22 @@ for g in games:
     except ValueError:
         die("--proto for '%s' is '%s'; expected an integer" % (gid, proto))
 
+# --drop-game retires ONE game on a host that keeps running the others. It
+# exists because a merge can never take a key away, so the address of a game
+# that was shut down for good stayed in the entry and kept winning the legacy
+# recompute every time the host redeployed anything else — a dead address
+# pinned on a live machine, with `--remove` (which drops the still-running
+# games too) as the only cure.
+for gid in drops:
+    if not ID_RE.match(gid):
+        die("--drop-game id '%s' is not [a-z][a-z0-9-]*" % gid)
+    if any(g["game"] == gid for g in games):
+        die("--game and --drop-game both name '%s'; decide which" % gid)
+if drops and remove:
+    die("--remove deletes the whole entry; --drop-game is the alternative")
+if drops and recompute:
+    die("--recompute touches nothing but the legacy keys; --drop-game needs --name")
+
 # --- load ------------------------------------------------------------------
 # A book that will not parse is NOT overwritten. The old inline publishers
 # started from `{}` on a parse error, which turns one bad byte on gh-pages
@@ -276,6 +301,9 @@ def apply_entry(entry):
             entry[version_key(gid)] = version
         if commit:
             entry[commit_key(gid)] = commit
+    for gid in drops:
+        for k in (addr_key(gid), proto_key(gid), version_key(gid), commit_key(gid)):
+            entry.pop(k, None)
     if by:
         entry["by"] = by
     entry["updated"] = now
@@ -330,7 +358,12 @@ elif not recompute:
         if isinstance(h, dict) and h.get("name") == name:
             existing = h
             break
-    if existing is None:
+    if existing is None and drops and not games:
+        # A retirement for a host the book does not carry. Creating the entry
+        # here would publish a machine that had just been told to stop
+        # advertising one.
+        print("no entry named %s" % name)
+    elif existing is None:
         # Built by the same merge, onto nothing. It used to be a second,
         # hand-written key order that had to be kept in step with apply_entry
         # by memory — and was not, the moment the stamp became per game.
@@ -339,6 +372,10 @@ elif not recompute:
     else:
         # MERGE. This host may be running games this call says nothing about.
         apply_entry(existing)
+        if drops:
+            print("dropped %s from %s" % (", ".join(drops), name))
+            if not any(k == "ws" or k.endswith("_ws") for k in existing):
+                print("   %s now advertises no game at all; --remove deletes the entry" % name)
         print("updated %s" % name)
 
 # Do not INTRODUCE an empty list into a book that never had one: on a
