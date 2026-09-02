@@ -445,7 +445,7 @@ mod tests {
             im: offset_prime[1] * factor,
         };
         let c = Complex64 {
-            re: 2.0 + offset_prime[2] * factor,
+            re: offset_prime[2].mul_add(factor, 2.0),
             im: offset_prime[3] * factor,
         };
         for iteration in 0..max_iter {
