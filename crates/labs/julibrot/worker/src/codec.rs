@@ -1,7 +1,7 @@
 //! Canonical dyadic centre validation and request encoding.
 
 use crate::wire::{HEADER_BYTES, POOL_TRAILER_BYTES, read_u32, write_words};
-use crate::wire::{MessageHeader, MessageKind, Pool, WireBuffer};
+use crate::wire::{MessageHeader, MessageKind, POOL_TRAILER_BYTES, Pool, WireBuffer, buffer_capacity};
 use crate::{ChannelError, ErrorCode};
 
 const REQUEST_FIXED_END: usize = 112;
@@ -126,20 +126,93 @@ impl OrbitReason {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OrbitRequest {
     /// Checked request generation.
-    pub generation: u32,
+    generation: u32,
     /// Canonical authoritative centre.
-    pub centre: EncodedCentre,
+    centre: EncodedCentre,
     /// Integral decimal depth label.
-    pub depth_digits: u32,
+    depth_digits: u32,
     /// Requested bignum precision.
-    pub precision_bits: u32,
+    precision_bits: u32,
     /// Requested orbit-entry cap.
-    pub max_iter: u32,
+    max_iter: u32,
     /// Triggering policy reason or reasons.
-    pub reason: OrbitReason,
+    reason: OrbitReason,
 }
 
 impl OrbitRequest {
+    /// Builds a canonical request that fits its orbit-sized transport buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BadLength` for zero scalar fields or `CentreEncodingWall` when the canonical
+    /// centre does not fit the buffer capacity implied by `max_iter`.
+    pub fn new(
+        generation: u32,
+        centre: EncodedCentre,
+        depth_digits: u32,
+        precision_bits: u32,
+        max_iter: u32,
+        reason: OrbitReason,
+    ) -> Result<Self, ChannelError> {
+        if generation == 0 || precision_bits == 0 || max_iter == 0 {
+            return Err(ChannelError::new(ErrorCode::BadLength, 0, 0, 0));
+        }
+        let requested = centre.request_bytes()?;
+        let available = buffer_capacity(max_iter)? - POOL_TRAILER_BYTES;
+        if requested > available {
+            return Err(ChannelError::new(
+                ErrorCode::CentreEncodingWall,
+                u32::try_from(centre.limbs.len()).unwrap_or(u32::MAX),
+                u32::try_from(requested).unwrap_or(u32::MAX),
+                u32::try_from(available).unwrap_or(u32::MAX),
+            ));
+        }
+        Ok(Self {
+            generation,
+            centre,
+            depth_digits,
+            precision_bits,
+            max_iter,
+            reason,
+        })
+    }
+
+    /// Returns the checked request generation.
+    #[must_use]
+    pub const fn generation(&self) -> u32 {
+        self.generation
+    }
+
+    /// Borrows the canonical encoded centre.
+    #[must_use]
+    pub const fn centre(&self) -> &EncodedCentre {
+        &self.centre
+    }
+
+    /// Returns the integral decimal-depth label.
+    #[must_use]
+    pub const fn depth_digits(&self) -> u32 {
+        self.depth_digits
+    }
+
+    /// Returns requested bignum precision in bits.
+    #[must_use]
+    pub const fn precision_bits(&self) -> u32 {
+        self.precision_bits
+    }
+
+    /// Returns requested orbit length.
+    #[must_use]
+    pub const fn max_iter(&self) -> u32 {
+        self.max_iter
+    }
+
+    /// Returns the policy reasons that triggered this request.
+    #[must_use]
+    pub const fn reason(&self) -> OrbitReason {
+        self.reason
+    }
+
     /// Encodes this request into one request-pool buffer without resizing it.
     pub(crate) fn encode_into(&self, buffer: &mut WireBuffer) -> Result<(), ChannelError> {
         let (pool, _) = buffer.identity()?;
@@ -338,14 +411,15 @@ mod tests {
 
     #[test]
     fn canonical_request_round_trips_little_endian() {
-        let request = OrbitRequest {
-            generation: 23,
-            centre: centre(),
-            depth_digits: 101,
-            precision_bits: 384,
-            max_iter: 64,
-            reason: OrbitReason::INITIAL.union(OrbitReason::ZOOM_THRESHOLD),
-        };
+        let request = OrbitRequest::new(
+            23,
+            centre(),
+            101,
+            384,
+            64,
+            OrbitReason::INITIAL.union(OrbitReason::ZOOM_THRESHOLD),
+        )
+        .unwrap();
         let mut buffer = WireBuffer::new(Pool::Request, 1, 64).unwrap();
         let trailer_before = buffer.trailer().unwrap();
         request.encode_into(&mut buffer).unwrap();
@@ -390,18 +464,19 @@ mod tests {
             start += 32;
             descriptor
         });
-        let request = OrbitRequest {
-            generation: 1,
-            centre: EncodedCentre {
+        let request = OrbitRequest::new(
+            1,
+            EncodedCentre {
                 revision: 1,
                 coordinates,
                 limbs: vec![u32::MAX; 128],
             },
-            depth_digits: 300,
-            precision_bits: 1_024,
-            max_iter: 64,
-            reason: OrbitReason::INITIAL,
-        };
+            300,
+            1_024,
+            64,
+            OrbitReason::INITIAL,
+        )
+        .unwrap();
         let mut buffer = WireBuffer::new(Pool::Request, 0, 64).unwrap();
         request.encode_into(&mut buffer).unwrap();
         assert_eq!(request.centre.request_bytes().unwrap(), 624);

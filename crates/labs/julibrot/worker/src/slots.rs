@@ -68,7 +68,7 @@ impl FourSlotModel {
     }
 
     /// Reports the unique current owner or transit direction.
-    pub(crate) const fn owner(&self, id: SlotId) -> SlotOwner {
+    pub(crate) const fn owner(self, id: SlotId) -> SlotOwner {
         self.owners[id.index()]
     }
 
@@ -96,7 +96,7 @@ impl FourSlotModel {
     }
 
     /// Returns whether all slots are attached to their startup owners.
-    pub(crate) fn is_reconciled(self) -> bool {
+    pub(crate) const fn is_reconciled(self) -> bool {
         self == Self::new()
     }
 }
