@@ -497,6 +497,46 @@ fn a_wrong_password_is_refused_and_the_right_one_is_not() {
     );
 }
 
+/// The probe's deep step (`examples/probe.rs`, design 4.8), replayed over
+/// the wire against the test server: Hello, a Welcome that carries this
+/// build's stamp, CreateLobby, Joined, LeaveLobby, and the lobby gone from
+/// the listing at once so a probe never leaves a table behind.
+#[test]
+fn the_probes_deep_step_passes_against_the_test_server() {
+    let port = start_server(proto::TURN_MS);
+    let mut ws = raw_client(port);
+    send(
+        &mut ws,
+        &C2S::Hello {
+            proto: proto::PROTO_VERSION,
+            handle: "probe".into(),
+        },
+    );
+    assert!(
+        pump(&mut ws, Duration::from_secs(2), |m| {
+            matches!(m, S2C::Welcome { proto, host, version, commit, players, lobbies }
+                if proto == proto::PROTO_VERSION
+                    && host == "test"
+                    && version == kings_server::BUILD_VERSION
+                    && commit == kings_server::BUILD_COMMIT
+                    && players == 0
+                    && lobbies == 0)
+        }),
+        "no Welcome with this build's stamp"
+    );
+    let lobby = format!("probe-{}", std::process::id());
+    let id = create(&mut ws, &lobby);
+    assert_eq!(id, 0, "the probe is the creator of its own lobby");
+    send(&mut ws, &C2S::LeaveLobby);
+    send(&mut ws, &C2S::ListLobbies);
+    assert!(
+        pump(&mut ws, Duration::from_secs(2), |m| {
+            matches!(m, S2C::Lobbies { lobbies } if lobbies.is_empty())
+        }),
+        "the probe's lobby outlived the probe"
+    );
+}
+
 /// A dropped socket mid-game eliminates the seat and, with two players,
 /// ends the game for the one who stayed.
 #[test]

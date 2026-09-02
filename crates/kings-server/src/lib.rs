@@ -77,6 +77,12 @@ const MAX_CONNS: usize = 512;
 const MAX_CONNS_PER_IP: u32 = 6;
 /// How long Finished stays on screen before the lobby returns to Waiting.
 const RESULTS_MS: u32 = proto::RESULTS_SECS * 1000;
+/// Frames the connection thread cannot hand to the hub (undecodable text,
+/// binary) before it closes the socket; the hub's flood guard never sees
+/// them, so this is their only cap.
+const MAX_JUNK_FRAMES: u32 = 8;
+/// Longest excerpt of an undecodable frame that reaches the log.
+const MAX_LOG_EXCERPT: usize = 200;
 
 /// Tunables. Production is the default; the e2e tests shorten the turn.
 #[derive(Clone, Debug)]
@@ -303,8 +309,12 @@ impl Lobby {
 
     /// Seat a new member. The password is the caller's business.
     fn join(&mut self, conn: u64, handle: String) -> Result<Outbox, &'static str> {
-        if self.phase != Phase::Waiting {
-            return Err("that game has already started");
+        match self.phase {
+            Phase::Waiting => {}
+            Phase::Playing => return Err("that game has already started"),
+            Phase::Finished => {
+                return Err("that game has just finished; the table reopens in a moment");
+            }
         }
         let Some(id) = self.alloc_id() else {
             return Err("lobby is full");
@@ -657,6 +667,10 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
         return;
     }
 
+    // Frames the hub never sees (undecodable text, binary) are not counted
+    // by its flood guard, so the socket's own thread counts them: a peer
+    // that keeps sending what this build cannot read is not a client.
+    let mut junk_frames: u32 = 0;
     'outer: loop {
         loop {
             match rx.try_recv() {
@@ -699,15 +713,33 @@ fn conn_thread(id: u64, stream: TcpStream, events_tx: &Sender<Ev>) {
                             break;
                         }
                     }
-                    // An unparseable frame is the peer's problem, not grounds
-                    // to drop them: a newer client may send a variant this
-                    // build has never heard of. But it is NOT debug-level: a
-                    // frame we cannot read is indistinguishable, from the
-                    // other end, from one that was never delivered.
-                    Err(e) => tracing::warn!(conn = id, "undecodable frame: {e}: {t}"),
+                    // An unparseable frame is the peer's problem, not on its
+                    // own grounds to drop them: a newer client may send a
+                    // variant this build has never heard of. But it is NOT
+                    // debug-level: a frame we cannot read is
+                    // indistinguishable, from the other end, from one that
+                    // was never delivered. The logged excerpt is capped so a
+                    // 64 KB frame cannot become a 64 KB log line.
+                    Err(e) => {
+                        let excerpt: String = t.chars().take(MAX_LOG_EXCERPT).collect();
+                        tracing::warn!(conn = id, "undecodable frame: {e}: {excerpt}");
+                        junk_frames += 1;
+                        if junk_frames > MAX_JUNK_FRAMES {
+                            tracing::warn!(conn = id, "too many undecodable frames, closing");
+                            break;
+                        }
+                    }
                 }
             }
             Ok(Message::Close(_)) => break,
+            Ok(Message::Binary(_)) => {
+                // The protocol is JSON text; binary is never ours.
+                junk_frames += 1;
+                if junk_frames > MAX_JUNK_FRAMES {
+                    tracing::warn!(conn = id, "too many binary frames, closing");
+                    break;
+                }
+            }
             Ok(_) => {}
             Err(tungstenite::Error::Io(e)) if proto::is_transient_read(&e) => {}
             Err(e) => {
@@ -801,15 +833,14 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) {
 
 fn tick_lobbies(lobbies: &mut HashMap<String, Lobby>, conns: &HashMap<u64, Conn>, ms: u32) {
     let mut empty: Vec<String> = Vec::new();
-    let mut out = Outbox::new();
     for (name, lobby) in lobbies.iter_mut() {
         if lobby.members.is_empty() {
             empty.push(name.clone());
             continue;
         }
-        out.clear();
+        let mut out = Outbox::new();
         tick_lobby(lobby, ms, &mut out);
-        deliver(conns, lobby, std::mem::take(&mut out));
+        deliver(conns, lobby, out);
     }
     for name in empty {
         lobbies.remove(&name);
@@ -1023,12 +1054,18 @@ fn with_lobby(
         .get(&id)
         .and_then(|c| c.lobby.as_ref())
         .and_then(|name| lobbies.get_mut(name));
-    let result = match lobby {
-        Some(lobby) => f(lobby).map(|out| (out, &*lobby)),
-        None => Err("you are not in a lobby"),
+    let Some(lobby) = lobby else {
+        send_to(
+            conns,
+            id,
+            &S2C::Rejected {
+                reason: "you are not in a lobby".into(),
+            },
+        );
+        return;
     };
-    match result {
-        Ok((out, lobby)) => deliver(conns, lobby, out),
+    match f(lobby) {
+        Ok(out) => deliver(conns, lobby, out),
         Err(reason) => {
             send_to(
                 conns,
