@@ -445,7 +445,9 @@ impl ProducerEndpoint {
             admission_credit_us,
             records,
         )?;
-        core.send_to_main(orbit, MessageKind::OrbitResponse)
+        core.send_to_main(orbit, MessageKind::OrbitResponse)?;
+        core.pump_pending();
+        Ok(())
     }
 
     /// Returns the request slot and reports measured stale work without an orbit payload.
@@ -473,7 +475,9 @@ impl ProducerEndpoint {
         header.compute_us = compute_us;
         header.credit_us = admission_credit_us;
         orbit.write_header(header)?;
-        core.send_to_main(orbit, MessageKind::OrbitCancelled)
+        core.send_to_main(orbit, MessageKind::OrbitCancelled)?;
+        core.pump_pending();
+        Ok(())
     }
 
     /// Applies producer-side admission shaping at a monotonic producer timestamp.
@@ -867,6 +871,8 @@ impl ChannelCore {
         Ok(None)
     }
 
+    /// Returns one request slot without dispatching: the caller still owes main its orbit, and a
+    /// coalesced cap change must not replace the orbit pool underneath that write.
     fn return_request(
         &mut self,
         mut buffer: WireBuffer,
@@ -880,7 +886,6 @@ impl ChannelCore {
         self.request_main
             .push(buffer)
             .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, id.slot, 0, 0))?;
-        self.pump_pending();
         self.bump_facts();
         self.refresh_facts();
         Ok(())
