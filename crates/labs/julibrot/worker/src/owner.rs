@@ -328,7 +328,7 @@ impl ViewerOwner {
 
     /// Returns and clears the latest typed navigation refusal.
     #[must_use]
-    pub fn take_navigation_error(&mut self) -> Option<OwnerError> {
+    pub const fn take_navigation_error(&mut self) -> Option<OwnerError> {
         self.navigation_error.take()
     }
 
@@ -564,11 +564,7 @@ mod tests {
         let mut previous_generation = 0;
         for index in 0..10_000 {
             let direction = if index % 2 == 0 { 1.0 } else { -1.0 };
-            let zoom_delta_log2 = match index % 3 {
-                0 => 0.002,
-                1 => -0.001,
-                _ => -0.001,
-            };
+            let zoom_delta_log2 = if index % 3 == 0 { 0.002 } else { -0.001 };
             let generation = owner.navigate(NavigationDelta {
                 pan_canvas_px: [direction * 0.25, -direction * 0.125],
                 zoom_delta_log2,
