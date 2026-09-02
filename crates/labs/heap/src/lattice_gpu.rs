@@ -625,7 +625,12 @@ fn square_side(records: usize) -> u32 {
     }
 }
 
-fn upload_square(device: &wgpu::Device, queue: &wgpu::Queue, label: &'static str, records: &[[f32; 4]]) -> wgpu::Texture {
+fn upload_square(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &'static str,
+    records: &[[f32; 4]],
+) -> wgpu::Texture {
     let side = square_side(records.len());
     let texture = texture(
         device,
@@ -704,14 +709,18 @@ fn upload_span(
 }
 
 impl LatticeLab {
-    async fn new(canvas: web_sys::HtmlCanvasElement) -> Result<(Self, String, String), LatticeError> {
+    async fn new(
+        canvas: web_sys::HtmlCanvasElement,
+    ) -> Result<(Self, String, String), LatticeError> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::GL,
             ..Default::default()
         });
         let surface = instance
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
-            .map_err(|error| LatticeError::Capability(format!("surface creation failed: {error}")))?;
+            .map_err(|error| {
+                LatticeError::Capability(format!("surface creation failed: {error}"))
+            })?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::LowPower,
@@ -756,8 +765,9 @@ impl LatticeLab {
         let mut required_limits =
             wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter_limits.clone());
         required_limits.max_texture_array_layers = u32::from(HEAP_LAYERS);
-        required_limits.max_uniform_buffer_binding_size =
-            required_limits.max_uniform_buffer_binding_size.max(DIRECTORY_BYTES);
+        required_limits.max_uniform_buffer_binding_size = required_limits
+            .max_uniform_buffer_binding_size
+            .max(DIRECTORY_BYTES);
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
@@ -791,12 +801,13 @@ impl LatticeLab {
             .copied()
             .find(|mode| *mode == wgpu::PresentMode::AutoVsync)
             .or_else(|| capabilities.present_modes.first().copied())
-            .ok_or_else(|| LatticeError::Capability("surface exposes no present mode".to_string()))?;
-        let alpha_mode = capabilities
-            .alpha_modes
-            .first()
-            .copied()
-            .ok_or_else(|| LatticeError::Capability("surface exposes no alpha mode".to_string()))?;
+            .ok_or_else(|| {
+                LatticeError::Capability("surface exposes no present mode".to_string())
+            })?;
+        let alpha_mode =
+            capabilities.alpha_modes.first().copied().ok_or_else(|| {
+                LatticeError::Capability("surface exposes no alpha mode".to_string())
+            })?;
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
@@ -1106,7 +1117,8 @@ impl LatticeLab {
             0,
             bytemuck::cast_slice(&plan.resource_words),
         );
-        self.queue.write_buffer(&self.header_buffer, 0, &headers.bytes);
+        self.queue
+            .write_buffer(&self.header_buffer, 0, &headers.bytes);
     }
 
     fn copy_command_count(plan: &DispatchPlan, page_side: u16) -> u32 {
@@ -1121,7 +1133,13 @@ impl LatticeLab {
             .sum()
     }
 
-    fn select(&mut self, mode: Mode, step: u32, policy: u32, generation: u64) -> Result<SelectionReport, LatticeError> {
+    fn select(
+        &mut self,
+        mode: Mode,
+        step: u32,
+        policy: u32,
+        generation: u64,
+    ) -> Result<SelectionReport, LatticeError> {
         let steps = lattice_steps();
         let axes = *steps
             .get(step as usize)
@@ -1145,7 +1163,12 @@ impl LatticeLab {
                     .min(u64::from(u32::MAX))
                     .min(u64::from(policy));
                 let delivered_edges = delivered_edges_u64 as u32;
-                let frame = frame_for(&self.object, axes, 0.0, self.config.width as f32 / self.config.height as f32);
+                let frame = frame_for(
+                    &self.object,
+                    axes,
+                    0.0,
+                    self.config.width as f32 / self.config.height as f32,
+                );
                 let headers = StaticHeaders::for_span(&self.mode_a_outputs[0], self.header_stride)
                     .map_err(|error| LatticeError::Resource(error.to_string()))?;
                 let plan = self
@@ -1191,7 +1214,11 @@ impl LatticeLab {
                     gpu_copy_bytes: 38_400,
                     per_frame_cpu_to_gpu_bytes: 192,
                     logical_output_bytes: 38_400,
-                    reserved_output_bytes: self.mode_a_outputs.iter().map(|span| span.reserved_records() * 16).sum(),
+                    reserved_output_bytes: self
+                        .mode_a_outputs
+                        .iter()
+                        .map(|span| span.reserved_records() * 16)
+                        .sum(),
                     scratch_bytes,
                     layer_slot_bytes: 0,
                     layer_allocation_bytes: 0,
@@ -1250,7 +1277,10 @@ impl LatticeLab {
                     compute_passes = plan.passes.len() as u32;
                     copy_commands = Self::copy_command_count(&plan, MODE_C_PAGE);
                     gpu_copy_bytes = plan.gpu_copy_bytes;
-                    reserved_output_bytes = outputs.iter().map(|span| span.reserved_records() * 16).sum();
+                    reserved_output_bytes = outputs
+                        .iter()
+                        .map(|span| span.reserved_records() * 16)
+                        .sum();
                     self.sync_heap_metadata();
                     self.sync_dispatch(&plan, &headers);
                     self.heap_dispatch = Some(HeapDispatch {
@@ -1404,7 +1434,9 @@ impl LatticeLab {
             wgpu::TextureFormat::Rgba32Float,
             usage,
         );
-        let edge_view = self.layer_edge.create_view(&wgpu::TextureViewDescriptor::default());
+        let edge_view = self
+            .layer_edge
+            .create_view(&wgpu::TextureViewDescriptor::default());
         let base_four_view = self
             .layer_base_four
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -1825,9 +1857,7 @@ async fn wait_for_fence(
 ///
 /// Returns a JavaScript error for a missing WebGL2 capability, allocation, or initial frame.
 #[wasm_bindgen]
-pub async fn start_heap_lattice(
-    canvas: web_sys::HtmlCanvasElement,
-) -> Result<String, JsValue> {
+pub async fn start_heap_lattice(canvas: web_sys::HtmlCanvasElement) -> Result<String, JsValue> {
     let generation = GENERATION.get().wrapping_add(1);
     GENERATION.set(generation);
     LAB.with_borrow_mut(|slot| *slot = None);
@@ -1884,11 +1914,7 @@ pub fn cancel_heap_lattice() {
 ///
 /// Returns a JavaScript error for an unknown selection, allocation refusal, or frame failure.
 #[wasm_bindgen]
-pub fn select_heap_lattice_json(
-    mode: &str,
-    step: u32,
-    policy: u32,
-) -> Result<String, JsValue> {
+pub fn select_heap_lattice_json(mode: &str, step: u32, policy: u32) -> Result<String, JsValue> {
     let mode = Mode::parse(mode).map_err(JsValue::from)?;
     let generation = GENERATION.get().wrapping_add(1);
     GENERATION.set(generation);
