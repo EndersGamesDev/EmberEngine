@@ -3,8 +3,7 @@
 use core::num::NonZeroU32;
 
 use ember_julibrot_math::{
-    BigCentre, ComputedOrbit, EscapeParams, MathError, OrbitStep, PrecisionPlan,
-    ReferenceOrbitBuilder,
+    ComputedOrbit, EscapeParams, MathError, OrbitStep, PrecisionPlan, ReferenceOrbitBuilder,
 };
 
 use crate::{ChannelError, ErrorCode, OrbitRequest};

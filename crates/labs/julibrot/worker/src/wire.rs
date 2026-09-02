@@ -671,7 +671,12 @@ mod tests {
                 re_lo: 0.25,
                 im_lo: -0.125,
             },
-            ReferenceOrbitRecord::default(),
+            ReferenceOrbitRecord {
+                re_hi: 0.0,
+                im_hi: 0.0,
+                re_lo: 0.0,
+                im_lo: 0.0,
+            },
         ];
         let mut orbit = WireBuffer::new(Pool::Orbit, 0, 64).unwrap();
         orbit.write_orbit(7, 320, 901, 249_099, &records).unwrap();
