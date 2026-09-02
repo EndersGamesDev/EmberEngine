@@ -48,6 +48,8 @@ enum LabError {
     StaleGeneration { observed: u64, current: u64 },
     #[error("device lost: {0}")]
     DeviceLost(String),
+    #[error("internal benchmark state was already borrowed during {0}")]
+    BorrowConflict(&'static str),
     #[error("unknown benchmark mode {0}")]
     UnknownMode(String),
     #[error("draw step {0} is not one of 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576")]
@@ -1290,12 +1292,19 @@ async fn wait_for_fence(
                 current,
             });
         }
-        {
-            let lab = lab.borrow();
+        let polled = lab.try_borrow().map(|lab| {
             lab.device.poll(wgpu::Maintain::Poll);
-            if let Some(reason) = lab.lost_reason() {
+            lab.lost_reason()
+        });
+        match polled {
+            Ok(Some(reason)) => {
                 pending.buffer.unmap();
                 return Err(LabError::DeviceLost(reason));
+            }
+            Ok(None) => {}
+            Err(_) => {
+                yield_to_browser().await?;
+                continue;
             }
         }
         let outcome = state.lock().ok().and_then(|mut slot| slot.take());
@@ -1333,8 +1342,10 @@ thread_local! {
 }
 
 fn current_lab() -> Result<Rc<RefCell<Lab>>, LabError> {
-    LAB.with_borrow(|slot| {
-        slot.as_ref()
+    LAB.with(|slot| {
+        slot.try_borrow()
+            .map_err(|_| LabError::BorrowConflict("reading the benchmark lab slot"))?
+            .as_ref()
             .cloned()
             .ok_or_else(|| LabError::Capability("heap lab is not initialized".to_string()))
     })
@@ -1364,7 +1375,14 @@ pub async fn start_heap(canvas: web_sys::HtmlCanvasElement) -> Result<String, Js
     }
     lab.render_draws(DrawMode::Heap, DRAW_STEPS[0], 1, false)
         .map_err(JsValue::from)?;
-    LAB.with_borrow_mut(|slot| *slot = Some(Rc::new(RefCell::new(lab))));
+    LAB.with(|slot| {
+        let mut slot = slot
+            .try_borrow_mut()
+            .map_err(|_| LabError::BorrowConflict("publishing the benchmark lab"))?;
+        *slot = Some(Rc::new(RefCell::new(lab)));
+        Ok::<_, LabError>(())
+    })
+    .map_err(JsValue::from)?;
     serialize(&facts).map_err(JsValue::from)
 }
 
@@ -1389,7 +1407,10 @@ pub fn render_heap_step_json(mode: &str, draws: u32) -> Result<String, JsValue> 
     GENERATION.set(generation);
     let lab = current_lab().map_err(JsValue::from)?;
     let report = {
-        let mut lab = lab.borrow_mut();
+        let mut lab = lab
+            .try_borrow_mut()
+            .map_err(|_| LabError::BorrowConflict("rendering a benchmark selection"))
+            .map_err(JsValue::from)?;
         lab.render_draws(mode, draws, 1, false)
             .map_err(JsValue::from)?;
         lab.draw_report(generation, mode, draws)
@@ -1412,10 +1433,13 @@ pub async fn measure_heap_fetch_json(mode: &str, repeats: u32) -> Result<String,
     let generation = GENERATION.get();
     let lab = current_lab().map_err(JsValue::from)?;
     let started = performance_now();
-    let pending = lab
-        .borrow_mut()
-        .render_fetch(mode, repeats)
-        .map_err(JsValue::from)?;
+    let pending = {
+        let mut borrowed = lab
+            .try_borrow_mut()
+            .map_err(|_| LabError::BorrowConflict("submitting a fetch benchmark"))
+            .map_err(JsValue::from)?;
+        borrowed.render_fetch(mode, repeats).map_err(JsValue::from)?
+    };
     wait_for_fence(&lab, pending, generation)
         .await
         .map_err(JsValue::from)?;
@@ -1459,16 +1483,24 @@ pub async fn measure_many_draws_json(
     let generation = GENERATION.get();
     let lab = current_lab().map_err(JsValue::from)?;
     let started = performance_now();
-    let pending = lab
-        .borrow_mut()
-        .render_draws(mode, draws, repeats, true)
-        .map_err(JsValue::from)?
-        .ok_or_else(|| JsValue::from_str("Benchmark B did not create a completion fence"))?;
+    let pending = {
+        let mut borrowed = lab
+            .try_borrow_mut()
+            .map_err(|_| LabError::BorrowConflict("submitting a draw benchmark"))
+            .map_err(JsValue::from)?;
+        borrowed
+            .render_draws(mode, draws, repeats, true)
+            .map_err(JsValue::from)?
+            .ok_or_else(|| JsValue::from_str("Benchmark B did not create a completion fence"))?
+    };
     wait_for_fence(&lab, pending, generation)
         .await
         .map_err(JsValue::from)?;
     let elapsed_ms = performance_now() - started;
-    let borrowed = lab.borrow();
+    let borrowed = lab
+        .try_borrow()
+        .map_err(|_| LabError::BorrowConflict("reporting a draw benchmark"))
+        .map_err(JsValue::from)?;
     let report = borrowed.draw_report(generation, mode, draws);
     let normalized_ms = elapsed_ms / f64::from(repeats);
     let per_draw_microseconds = (report.delivered_draws > 0)

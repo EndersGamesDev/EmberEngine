@@ -8,7 +8,7 @@
     clippy::too_many_lines
 )]
 
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -27,6 +27,7 @@ use crate::conformance::{
     NumericComparison, RECORD_BYTES, RECORD_STRIDE, compare_images, compare_records,
     deterministic_indices,
 };
+use crate::selection::SelectionEpoch;
 use crate::{
     BOX_INDICES, ComparatorWork, DataSpan, DialectLimits, DispatchPlan, EqualWorkSignature,
     FrameUniform, KernelDesc, ModeCFrameUniform, RegisteredKernel, SpanArena, StaticHeaders,
@@ -69,6 +70,8 @@ enum LatticeError {
     StaleGeneration { observed: u64, current: u64 },
     #[error("device lost: {0}")]
     DeviceLost(String),
+    #[error("internal lattice state was already borrowed during {0}")]
+    BorrowConflict(&'static str),
     #[error("unknown lattice mode {0}")]
     UnknownMode(String),
     #[error("lattice step {0} is outside 0..113")]
@@ -92,6 +95,13 @@ enum Mode {
     A,
     C,
     Layer,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SelectionIntent {
+    mode: Mode,
+    step: u32,
+    policy: u32,
 }
 
 impl Mode {
@@ -2074,14 +2084,157 @@ impl LatticeLab {
 
 thread_local! {
     static LAB: RefCell<Option<Rc<RefCell<LatticeLab>>>> = const { RefCell::new(None) };
-    static GENERATION: Cell<u64> = const { Cell::new(0) };
+    static SELECTION: Cell<SelectionEpoch<Option<SelectionIntent>>> = const {
+        Cell::new(SelectionEpoch::new(None))
+    };
+    static LAST_PANIC: RefCell<Option<String>> = const { RefCell::new(None) };
+    static PANIC_HOOK_INSTALLED: Cell<bool> = const { Cell::new(false) };
 }
 
 fn current_lab() -> Result<Rc<RefCell<LatticeLab>>, LatticeError> {
-    LAB.with_borrow(|slot| {
-        slot.as_ref()
+    LAB.with(|slot| {
+        slot.try_borrow()
+            .map_err(|_| LatticeError::BorrowConflict("reading the lab slot"))?
+            .as_ref()
             .cloned()
             .ok_or_else(|| LatticeError::Capability("heap lattice is not initialized".to_string()))
+    })
+}
+
+fn begin_selection(intent: SelectionIntent) -> u64 {
+    SELECTION.with(|slot| {
+        let mut epoch = slot.get();
+        let generation = epoch.select(Some(intent));
+        slot.set(epoch);
+        generation
+    })
+}
+
+fn invalidate_selection() -> u64 {
+    SELECTION.with(|slot| {
+        let mut epoch = slot.get();
+        let generation = epoch.invalidate();
+        slot.set(epoch);
+        generation
+    })
+}
+
+fn current_generation() -> u64 {
+    SELECTION.with(|slot| slot.get().generation())
+}
+
+fn generation_is_current(generation: u64) -> bool {
+    SELECTION.with(|slot| slot.get().is_current(generation))
+}
+
+fn stale_generation(generation: u64) -> LatticeError {
+    LatticeError::StaleGeneration {
+        observed: generation,
+        current: current_generation(),
+    }
+}
+
+fn borrow_for_generation<'a>(
+    lab: &'a Rc<RefCell<LatticeLab>>,
+    generation: u64,
+    operation: &'static str,
+) -> Result<Ref<'a, LatticeLab>, LatticeError> {
+    if !generation_is_current(generation) {
+        return Err(stale_generation(generation));
+    }
+    lab.try_borrow()
+        .map_err(|_| LatticeError::BorrowConflict(operation))
+}
+
+fn borrow_mut_for_generation<'a>(
+    lab: &'a Rc<RefCell<LatticeLab>>,
+    generation: u64,
+    operation: &'static str,
+) -> Result<RefMut<'a, LatticeLab>, LatticeError> {
+    if !generation_is_current(generation) {
+        return Err(stale_generation(generation));
+    }
+    lab.try_borrow_mut()
+        .map_err(|_| LatticeError::BorrowConflict(operation))
+}
+
+fn poll_lab_once(
+    lab: &Rc<RefCell<LatticeLab>>,
+    counter: &mut PollCounter,
+) -> Result<Option<String>, LatticeError> {
+    let borrowed = lab
+        .try_borrow()
+        .map_err(|_| LatticeError::BorrowConflict("one completion poll"))?;
+    counter.record().map_err(LatticeError::PollLimit)?;
+    borrowed.device.poll(wgpu::Maintain::Poll);
+    let reason = borrowed.lost.lock().ok().and_then(|slot| slot.clone());
+    Ok(reason)
+}
+
+fn try_apply_selection(
+    lab: &Rc<RefCell<LatticeLab>>,
+    intent: SelectionIntent,
+    generation: u64,
+) -> Result<Option<SelectionReport>, LatticeError> {
+    if !generation_is_current(generation) {
+        return Err(stale_generation(generation));
+    }
+    let Ok(mut borrowed) = lab.try_borrow_mut() else {
+        return Ok(None);
+    };
+    let report = borrowed.select(intent.mode, intent.step, intent.policy, generation)?;
+    borrowed.render_frame(0.0)?;
+    Ok(Some(report))
+}
+
+/// Installs the wasm panic reporter during module initialization.
+#[wasm_bindgen(start)]
+pub fn install_heap_lattice_panic_hook() {
+    if PANIC_HOOK_INSTALLED.replace(true) {
+        return;
+    }
+    std::panic::set_hook(Box::new(|info| {
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("non-string panic payload");
+        let location = info.location().map_or_else(
+            || "unknown location".to_string(),
+            |location| {
+                format!(
+                    "{}:{}:{}",
+                    location.file(),
+                    location.line(),
+                    location.column()
+                )
+            },
+        );
+        let message = format!("heap lattice panic at {location}: {payload}");
+        LAST_PANIC.with(|slot| {
+            if let Ok(mut slot) = slot.try_borrow_mut() {
+                *slot = Some(message.clone());
+            }
+        });
+        web_sys::console::error_1(&JsValue::from_str(&message));
+        if let Some(status) = web_sys::window()
+            .and_then(|window| window.document())
+            .and_then(|document| document.get_element_by_id("status"))
+        {
+            status.set_class_name("status failed");
+            status.set_text_content(Some(&message));
+        }
+    }));
+}
+
+/// Returns and clears the most recent panic report captured by the initialization hook.
+#[wasm_bindgen]
+pub fn take_heap_lattice_panic() -> Option<String> {
+    LAST_PANIC.with(|slot| {
+        slot.try_borrow_mut()
+            .ok()
+            .and_then(|mut message| message.take())
     })
 }
 
@@ -2101,7 +2254,7 @@ async fn wait_for_fence(
     let started = performance_now();
     let mut counter = PollCounter::new();
     loop {
-        let current = GENERATION.get();
+        let current = current_generation();
         if current != generation {
             pending.buffer.unmap();
             return Err(LatticeError::StaleGeneration {
@@ -2113,16 +2266,19 @@ async fn wait_for_fence(
             pending.buffer.unmap();
             return Err(LatticeError::Deadline);
         }
-        if let Err(limit) = counter.record() {
-            pending.buffer.unmap();
-            return Err(LatticeError::PollLimit(limit));
-        }
-        {
-            let borrowed = lab.borrow();
-            borrowed.device.poll(wgpu::Maintain::Poll);
-            if let Some(reason) = borrowed.lost.lock().ok().and_then(|slot| slot.clone()) {
+        match poll_lab_once(lab, &mut counter) {
+            Ok(Some(reason)) => {
                 pending.buffer.unmap();
                 return Err(LatticeError::DeviceLost(reason));
+            }
+            Ok(None) => {}
+            Err(LatticeError::BorrowConflict(_)) => {
+                yield_to_browser().await?;
+                continue;
+            }
+            Err(error) => {
+                pending.buffer.unmap();
+                return Err(error);
             }
         }
         if let Some(result) = state.lock().ok().and_then(|mut slot| slot.take()) {
@@ -2163,7 +2319,7 @@ async fn wait_for_readback(
     let started = performance_now();
     let mut counter = PollCounter::new();
     loop {
-        let current = GENERATION.get();
+        let current = current_generation();
         if current != generation {
             pending.buffer.unmap();
             return Err(LatticeError::StaleGeneration {
@@ -2175,16 +2331,19 @@ async fn wait_for_readback(
             pending.buffer.unmap();
             return Err(LatticeError::Deadline);
         }
-        if let Err(limit) = counter.record() {
-            pending.buffer.unmap();
-            return Err(LatticeError::PollLimit(limit));
-        }
-        {
-            let borrowed = lab.borrow();
-            borrowed.device.poll(wgpu::Maintain::Poll);
-            if let Some(reason) = borrowed.lost.lock().ok().and_then(|slot| slot.clone()) {
+        match poll_lab_once(lab, &mut counter) {
+            Ok(Some(reason)) => {
                 pending.buffer.unmap();
                 return Err(LatticeError::DeviceLost(reason));
+            }
+            Ok(None) => {}
+            Err(LatticeError::BorrowConflict(_)) => {
+                yield_to_browser().await?;
+                continue;
+            }
+            Err(error) => {
+                pending.buffer.unmap();
+                return Err(error);
             }
         }
         if let Some(result) = state.lock().ok().and_then(|mut slot| slot.take()) {
@@ -2215,7 +2374,8 @@ async fn run_conformance(
     policy: u32,
 ) -> Result<ConformanceReport, LatticeError> {
     let (mode_c_report, mode_c_pending, indices) = {
-        let mut borrowed = lab.borrow_mut();
+        let mut borrowed =
+            borrow_mut_for_generation(lab, generation, "starting Mode C conformance")?;
         let report = borrowed.select(Mode::C, step, policy, generation)?;
         borrowed.render_frame(CONFORMANCE_TIME)?;
         let indices = deterministic_indices(report.delivered_edges);
@@ -2229,7 +2389,8 @@ async fn run_conformance(
         None => None,
     };
     let (layer_report, layer_pending) = {
-        let mut borrowed = lab.borrow_mut();
+        let mut borrowed =
+            borrow_mut_for_generation(lab, generation, "starting layer conformance")?;
         let report = borrowed.select(Mode::Layer, step, policy, generation)?;
         borrowed.render_frame(CONFORMANCE_TIME)?;
         let pending = (report.delivered_edges == mode_c_report.delivered_edges
@@ -2262,7 +2423,11 @@ async fn run_conformance(
 
     let mode_c_image = {
         let pending = {
-            let mut borrowed = lab.borrow_mut();
+            let mut borrowed = borrow_mut_for_generation(
+                lab,
+                generation,
+                "starting Mode C image conformance",
+            )?;
             let report = borrowed.select(
                 Mode::C,
                 CONFORMANCE_IMAGE_STEP,
@@ -2282,7 +2447,11 @@ async fn run_conformance(
     };
     let layer_image = {
         let pending = {
-            let mut borrowed = lab.borrow_mut();
+            let mut borrowed = borrow_mut_for_generation(
+                lab,
+                generation,
+                "starting layer image conformance",
+            )?;
             let report = borrowed.select(
                 Mode::Layer,
                 CONFORMANCE_IMAGE_STEP,
@@ -2327,15 +2496,23 @@ async fn run_conformance(
 /// Returns a JavaScript error for a missing WebGL2 capability, allocation, or initial frame.
 #[wasm_bindgen]
 pub async fn start_heap_lattice(canvas: web_sys::HtmlCanvasElement) -> Result<String, JsValue> {
-    let generation = GENERATION.get().wrapping_add(1);
-    GENERATION.set(generation);
-    LAB.with_borrow_mut(|slot| *slot = None);
+    let initial_intent = SelectionIntent {
+        mode: Mode::A,
+        step: 1,
+        policy: DEFAULT_POLICY,
+    };
+    let generation = begin_selection(initial_intent);
+    LAB.with(|slot| {
+        let mut slot = slot
+            .try_borrow_mut()
+            .map_err(|_| LatticeError::BorrowConflict("clearing the lab slot"))?;
+        *slot = None;
+        Ok::<_, LatticeError>(())
+    })
+    .map_err(JsValue::from)?;
     let (mut lab, adapter, backend) = LatticeLab::new(canvas).await.map_err(JsValue::from)?;
-    if GENERATION.get() != generation {
-        return Err(JsValue::from(LatticeError::StaleGeneration {
-            observed: generation,
-            current: GENERATION.get(),
-        }));
+    if !generation_is_current(generation) {
+        return Err(JsValue::from(stale_generation(generation)));
     }
     let initial = lab
         .select(Mode::A, 1, DEFAULT_POLICY, generation)
@@ -2368,14 +2545,21 @@ pub async fn start_heap_lattice(canvas: web_sys::HtmlCanvasElement) -> Result<St
         completion: "draw submit then four-byte MAP_READ fence; counted device.poll(Poll) before each zero-timeout browser yield; 4096-poll and 30000 ms bounds; surface present after the measured fence timestamp; generation guard",
         initial,
     };
-    LAB.with_borrow_mut(|slot| *slot = Some(Rc::new(RefCell::new(lab))));
+    LAB.with(|slot| {
+        let mut slot = slot
+            .try_borrow_mut()
+            .map_err(|_| LatticeError::BorrowConflict("publishing the initialized lab"))?;
+        *slot = Some(Rc::new(RefCell::new(lab)));
+        Ok::<_, LatticeError>(())
+    })
+    .map_err(JsValue::from)?;
     serialize(&report).map_err(JsValue::from)
 }
 
 /// Invalidates every in-flight page measurement.
 #[wasm_bindgen]
 pub fn cancel_heap_lattice() {
-    GENERATION.set(GENERATION.get().wrapping_add(1));
+    invalidate_selection();
 }
 
 /// Selects a mode and rung, computes live walls, and renders without measurement admission.
@@ -2384,20 +2568,21 @@ pub fn cancel_heap_lattice() {
 ///
 /// Returns a JavaScript error for an unknown selection, allocation refusal, or frame failure.
 #[wasm_bindgen]
-pub fn select_heap_lattice_json(mode: &str, step: u32, policy: u32) -> Result<String, JsValue> {
+pub async fn select_heap_lattice_json(
+    mode: &str,
+    step: u32,
+    policy: u32,
+) -> Result<String, JsValue> {
     let mode = Mode::parse(mode).map_err(JsValue::from)?;
-    let generation = GENERATION.get().wrapping_add(1);
-    GENERATION.set(generation);
+    let intent = SelectionIntent { mode, step, policy };
+    let generation = begin_selection(intent);
     let lab = current_lab().map_err(JsValue::from)?;
-    let report = {
-        let mut lab = lab.borrow_mut();
-        let report = lab
-            .select(mode, step, policy, generation)
-            .map_err(JsValue::from)?;
-        lab.render_frame(0.0).map_err(JsValue::from)?;
-        report
-    };
-    serialize(&report).map_err(JsValue::from)
+    loop {
+        if let Some(report) = try_apply_selection(&lab, intent, generation).map_err(JsValue::from)? {
+            return serialize(&report).map_err(JsValue::from);
+        }
+        yield_to_browser().await.map_err(JsValue::from)?;
+    }
 }
 
 /// Runs the live Mode C versus layer record and small-image equality gate, then restores the page selection.
@@ -2407,10 +2592,15 @@ pub fn select_heap_lattice_json(mode: &str, step: u32, policy: u32) -> Result<St
 /// Returns a JavaScript error for cancellation, allocation, rendering, mapping, comparison, restoration, or serialization failure.
 #[wasm_bindgen]
 pub async fn conform_heap_lattice_json() -> Result<String, JsValue> {
-    let generation = GENERATION.get();
+    let generation = current_generation();
     let lab = current_lab().map_err(JsValue::from)?;
     let (saved_mode, step, policy) = {
-        let borrowed = lab.borrow();
+        let borrowed = borrow_for_generation(
+            &lab,
+            generation,
+            "reading the selection before conformance",
+        )
+        .map_err(JsValue::from)?;
         (
             Mode::from_label(borrowed.active.mode).map_err(JsValue::from)?,
             borrowed.active.requested_step,
@@ -2418,16 +2608,18 @@ pub async fn conform_heap_lattice_json() -> Result<String, JsValue> {
         )
     };
     let outcome = run_conformance(&lab, generation, step, policy).await;
-    let restore = if GENERATION.get() == generation {
-        let mut borrowed = lab.borrow_mut();
+    let restore = if generation_is_current(generation) {
+        let mut borrowed = borrow_mut_for_generation(
+            &lab,
+            generation,
+            "restoring the selection after conformance",
+        )
+        .map_err(JsValue::from)?;
         borrowed
             .select(saved_mode, step, policy, generation)
             .and_then(|_| borrowed.render_frame(0.0))
     } else {
-        Err(LatticeError::StaleGeneration {
-            observed: generation,
-            current: GENERATION.get(),
-        })
+        Err(stale_generation(generation))
     };
     restore.map_err(JsValue::from)?;
     serialize(&outcome.map_err(JsValue::from)?).map_err(JsValue::from)
@@ -2440,10 +2632,15 @@ pub async fn conform_heap_lattice_json() -> Result<String, JsValue> {
 /// Returns a JavaScript error for absent initialization, device loss, or surface failure.
 #[wasm_bindgen]
 pub fn render_heap_lattice_frame_json(time_seconds: f32) -> Result<String, JsValue> {
-    let generation = GENERATION.get();
+    let generation = current_generation();
     let lab = current_lab().map_err(JsValue::from)?;
     let report = {
-        let mut lab = lab.borrow_mut();
+        let mut lab = borrow_mut_for_generation(
+            &lab,
+            generation,
+            "rendering an animation frame",
+        )
+        .map_err(JsValue::from)?;
         lab.render_frame(time_seconds).map_err(JsValue::from)?;
         lab.frame_report(generation)
     };
@@ -2463,11 +2660,16 @@ pub async fn measure_heap_lattice_batch_json(
     if !(1..=4_096).contains(&repeats) {
         return Err(JsValue::from(LatticeError::InvalidRepeat(repeats)));
     }
-    let generation = GENERATION.get();
+    let generation = current_generation();
     let lab = current_lab().map_err(JsValue::from)?;
     let started = performance_now();
     let (pending, frame, mode, delivered_edges) = {
-        let mut borrowed = lab.borrow_mut();
+        let mut borrowed = borrow_mut_for_generation(
+            &lab,
+            generation,
+            "submitting a measured batch",
+        )
+        .map_err(JsValue::from)?;
         let (pending, frame) = borrowed
             .submit_measured_batch(time_seconds, repeats)
             .map_err(JsValue::from)?;

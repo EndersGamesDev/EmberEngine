@@ -12,6 +12,8 @@ mod lattice;
 mod mode_c;
 #[cfg(test)]
 mod page_contract;
+#[cfg(any(test, target_arch = "wasm32"))]
+mod selection;
 mod span;
 #[cfg(any(test, target_arch = "wasm32"))]
 mod spike;
@@ -34,6 +36,7 @@ pub use lattice::{
 pub use lattice_gpu::{
     cancel_heap_lattice, conform_heap_lattice_json, measure_heap_lattice_batch_json,
     render_heap_lattice_frame_json, select_heap_lattice_json, start_heap_lattice,
+    take_heap_lattice_panic,
 };
 pub use mode_c::{
     ComparatorWork, EqualWorkSignature, ModeCFrameUniform, layer_comparator_draw_shader,

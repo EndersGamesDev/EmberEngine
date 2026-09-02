@@ -4,11 +4,11 @@ const PAGE: &str = include_str!("../../../../web/labs/heap/index.html");
 const RUNTIME: &str = include_str!("lattice_gpu.rs");
 
 #[test]
-fn loader_is_v7_and_runtime_is_explicitly_gl_only() {
-    assert!(PAGE.contains("ember_lab_heap.js?v=7"));
-    assert!(PAGE.contains("ember_lab_heap_bg.wasm?v=7"));
-    assert!(PAGE.contains("heap-lattice-v7"));
-    assert!(!PAGE.contains("heap-lattice-v6"));
+fn loader_is_v8_and_runtime_is_explicitly_gl_only() {
+    assert!(PAGE.contains("ember_lab_heap.js?v=8"));
+    assert!(PAGE.contains("ember_lab_heap_bg.wasm?v=8"));
+    assert!(PAGE.contains("heap-lattice-v8"));
+    assert!(!PAGE.contains("heap-lattice-v7"));
     assert!(RUNTIME.contains("backends: wgpu::Backends::GL"));
     assert!(RUNTIME.contains("info.backend != wgpu::Backend::Gl"));
 }
@@ -45,7 +45,7 @@ fn equality_gate_precedes_timing_and_reports_both_oracles() {
 #[test]
 fn honesty_measurement_and_byte_laws_remain_visible() {
     for required in [
-        "select_heap_lattice_json(selectedMode, selectedStep, policy)",
+        "await select_heap_lattice_json(selectedMode, selectedStep, policy)",
         "rendered immediately",
         "cancelled by a newer selection",
         "TARGET_QUANTA = 32",
@@ -64,6 +64,26 @@ fn honesty_measurement_and_byte_laws_remain_visible() {
     assert!(RUNTIME.contains("depth_compare: wgpu::CompareFunction::LessEqual"));
     assert!(RUNTIME.contains("blend: None"));
     assert!(RUNTIME.contains("multisample: wgpu::MultisampleState::default()"));
+}
+
+#[test]
+fn panic_hook_and_latest_selection_contract_are_visible() {
+    for required in [
+        "#[wasm_bindgen(start)]",
+        "install_heap_lattice_panic_hook",
+        "web_sys::console::error_1",
+        "document.get_element_by_id(\"status\")",
+        "take_heap_lattice_panic",
+        "try_apply_selection",
+        "yield_to_browser().await",
+    ] {
+        assert!(
+            PAGE.contains(required) || RUNTIME.contains(required),
+            "missing panic or selection contract: {required}"
+        );
+    }
+    assert!(!RUNTIME.contains("lab.borrow_mut()"));
+    assert!(!RUNTIME.contains("lab.borrow()"));
 }
 
 #[test]

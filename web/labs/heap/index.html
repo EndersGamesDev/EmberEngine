@@ -92,9 +92,10 @@
       render_heap_lattice_frame_json,
       select_heap_lattice_json,
       start_heap_lattice,
-    } from "./pkg/ember_lab_heap.js?v=7";
+      take_heap_lattice_panic,
+    } from "./pkg/ember_lab_heap.js?v=8";
 
-    const VERSION = "heap-lattice-v7";
+    const VERSION = "heap-lattice-v8";
     const SAMPLE_COUNT = 15;
     const WARMUPS = 3;
     const TARGET_QUANTA = 32;
@@ -130,7 +131,10 @@
     const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
     const integer = value => Number(value).toLocaleString("en-US");
     const bytes = value => `${integer(value)} B`;
-    const failure = error => error instanceof Error ? error.message : String(error);
+    function failure(error) {
+      const panic = take_heap_lattice_panic();
+      return panic ?? (error instanceof Error ? error.message : String(error));
+    }
 
     function timerProbe() {
       const deltas = [];
@@ -304,7 +308,7 @@
         return;
       }
       try {
-        selection = JSON.parse(select_heap_lattice_json(selectedMode, selectedStep, policy));
+        selection = JSON.parse(await select_heap_lattice_json(selectedMode, selectedStep, policy));
         if (token !== pageGeneration) return;
         displaySelection();
         status.textContent = `${selection.mode} rendered immediately · running equal-work gate before warm-up timing…`;
@@ -314,9 +318,12 @@
         await warmupAndDecide(token);
       } catch (error) {
         if (token === pageGeneration) {
+          const reason = failure(error);
           status.className = "status failed";
-          status.textContent = `selection refused without snapping controls: ${failure(error)}`;
-          walls.textContent = `requested step ${selectedStep} and mode ${selectedMode} remain selected; delivered work is unavailable`;
+          status.textContent = reason.startsWith("heap lattice panic at ")
+            ? reason
+            : `selection wall prevented delivery without snapping controls: ${reason}`;
+          walls.textContent = `requested step ${selectedStep} and mode ${selectedMode} remain selected; the runtime wall above prevented delivery`;
         }
       }
     }
@@ -396,7 +403,7 @@
     });
 
     try {
-      await init({ module_or_path: "./pkg/ember_lab_heap_bg.wasm?v=7" });
+      await init({ module_or_path: "./pkg/ember_lab_heap_bg.wasm?v=8" });
       const timer = timerProbe();
       timerQuantum = timer.quantum;
       const initialized = JSON.parse(await start_heap_lattice(canvas));

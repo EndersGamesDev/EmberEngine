@@ -1,6 +1,6 @@
 # GPU heap lattice architecture
 
-Status: shipped WebGL2-only heap-lattice contract through the v7 rawgl-presentation repair; paid browser evidence selects SCRATCH-to-DATA copy, while optional Mode B is deferred and its design remains recorded.
+Status: shipped WebGL2-only heap-lattice contract through the v8 latest-selection repair; paid browser evidence selects SCRATCH-to-DATA copy, while optional Mode B is deferred and its design remains recorded.
 
 ## 1. Decision and evidence boundary
 
@@ -251,6 +251,8 @@ Selecting any rung or mode immediately attempts its runtime plan and renders the
 
 Every selection resets samples, p95 state, timer batches, frame counters, shown counts, and generation tokens; an older allocation, map callback, or measurement can neither publish into nor restore a newer selection.
 
+A new selection is infallible state: it first advances the generation, any in-flight work observes staleness at its next browser yield and exits without publication, and the newest selection waits cooperatively for exclusive lab access before applying, so a transient internal borrow is never reported as a selection refusal and a genuine refusal names its runtime wall.
+
 The equality gate runs before warm-up timing, uses bounded `map_async` readbacks solely as an oracle, restores the requested path and rung before measuring, and is generation-guarded so an older comparison cannot publish or restore resources after a newer selection.
 
 Animation begins only when the second fenced post-switch frame is at or below 100 ms; above that threshold the page becomes single-frame-on-demand, measures exactly one requested frame at a time, yields around asynchronous completion, and displays its true wall time even when it takes seconds.
@@ -282,6 +284,8 @@ Kernel conformance compares Mode A rotation and endpoint reconstruction, Mode B 
 Geometry tests pin 600 cap vertices, 1,200 cap edges, 1,200 prism vertices, 3,000 prism edges, edge length `3−√5`, circumradius `2√2`, the eight-vertex and 36-index box, step count 113, step 111 `(45,45,45,45,45)`, step 112 `(47,45,45,45,45)`, and top edge arithmetic 578,188,125,000.
 
 Page-contract tests pin explicit GL backend selection, versioned loader paths, immediate rendering without admission, stable requested controls, generation cancellation, sample resets, bounded waits, submit-then-fence-then-end-timestamp-then-present ordering, displayed poll evidence, single-frame fallback, and exact median, p95, and byte formulas.
+
+The manual browser oracle for selection interleaving clicks Next six times 30 ms apart, then Mode C, Layer, and Mode A 30 ms apart, then Previous four times 20 ms apart, then Mode C; PASS leaves the controls and delivered report on the final Mode C request at step 2 `(3,1,1,1,1)`, quietly discards every stale measurement, prints no panic, and never reports a selection refusal.
 
 Comparator tests and the live page run identical work through Mode C and layer's exact kernel, compare two edge-pose records at eight deterministic selected-rung indices within `4 × 10⁻⁵`, compare exact 64 by 36 presentation-image bytes and checksums at the 3,000-edge rung, and disqualify timing when delivery counts, signatures, sampled values, or image bytes disagree.
 
@@ -332,6 +336,8 @@ The 2026-09-02 hidden Firefox replay of v5 exposed a fence-order regression afte
 The v5 cause was presentation ordering, not an initial-yield delay or leaked conformance mapping: source inspection showed that polling preceded every yield and every conformance readback was awaited and unmapped, but each timed draw called `present()` before submitting its separate fence, placing hidden-document compositor work ahead of completion; v6 submits the fence immediately after the draw batch, waits and captures the end timestamp, then presents, and prints the poll count and wait wall so the diagnosis requires visible replay rather than being assumed fixed.
 
 The visible side-by-side presentation review found a separate corrected defect: the heap page used an orthographic `w = 1` clip with depth compressed by `0.002`, scale `0.075`, flat unlit colour, and camera yaw and pitch driven by time, producing an object about half rawgl's width with a flat blue-green disc appearance; v7 replaces all three in-page presentation paths with the rawgl values in §10, while the lesson is that an in-page equality oracle cannot detect shared drift from its external visual reference and the pinned-literal test must carry that role.
+
+The v7 rapid-selection reproduction reached step 2 `(3,1,1,1,1)` and reported bare wasm `unreachable executed` with an empty console after overlapping readback polling and selection; v8 installs an initialization panic hook that publishes payload and source location to both `console.error` and page status, replaces every panicking lab borrow in the lattice asynchronous surface with scoped non-panicking acquisition, and makes the newest selection wait while older generations exit at their next yield, while the first exact panic-hook message remains a required browser-replay fact rather than an invented diagnosis.
 
 The span-directory UBO introduces a second finite metadata WALL and uniform dynamic-indexing cost; Mode C versus layer prices the resulting handle and allocation path, while runtime facts expose directory consumption and padding waste.
 
