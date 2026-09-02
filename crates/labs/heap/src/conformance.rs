@@ -10,7 +10,6 @@ pub(crate) const IMAGE_HEIGHT: u32 = 36;
 pub(crate) const IMAGE_BYTES_PER_ROW: u32 = 256;
 pub(crate) const IMAGE_BYTES: usize = IMAGE_BYTES_PER_ROW as usize * IMAGE_HEIGHT as usize;
 pub(crate) const RECORD_BYTES: usize = SAMPLE_COUNT * RECORDS_PER_SAMPLE * RECORD_STRIDE;
-pub(crate) const READBACK_BYTES: usize = RECORD_BYTES + IMAGE_BYTES;
 pub(crate) const F32_TOLERANCE: f32 = 4.0e-5;
 
 /// Numeric comparison of two GPU-produced edge-pose sample sets.
@@ -150,7 +149,7 @@ pub(crate) fn compare_images(mode_c: &[u8], layer: &[u8]) -> Result<ImageCompari
 #[cfg(test)]
 mod tests {
     use super::{
-        F32_TOLERANCE, IMAGE_BYTES, RECORD_STRIDE, compare_images, compare_records,
+        F32_TOLERANCE, IMAGE_BYTES, RECORD_BYTES, RECORD_STRIDE, compare_images, compare_records,
         deterministic_indices,
     };
 
@@ -167,6 +166,7 @@ mod tests {
 
     #[test]
     fn deterministic_samples_cover_both_ends_and_interior() {
+        assert_eq!(RECORD_BYTES, 8 * 2 * RECORD_STRIDE);
         assert_eq!(
             deterministic_indices(3_000),
             [0, 1, 17, 599, 1_000, 1_500, 2_998, 2_999]
