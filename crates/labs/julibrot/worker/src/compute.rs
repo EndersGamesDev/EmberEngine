@@ -150,10 +150,7 @@ impl ReferenceOrbitTask {
         let one = NonZeroU32::MIN;
         let mut last_stored = 0;
         for chunk_iterations in 1..=ORBIT_CHUNK_MAX_ITERATIONS {
-            let step = self
-                .builder
-                .step(one)
-                .map_err(|error| math_error(&error))?;
+            let step = self.builder.step(one).map_err(|error| math_error(&error))?;
             let chunk_us = elapsed(started, clock.now_us())?;
             match step {
                 OrbitStep::Complete(orbit) => {
@@ -225,7 +222,9 @@ const fn timing_overflow() -> ChannelError {
     ChannelError::new(ErrorCode::TimingOverflow, 0, u32::MAX, 0)
 }
 
-pub(super) const fn math_error(error: &MathError) -> ChannelError {
+/// Maps every math refusal to a stable worker wire detail.
+#[doc(hidden)]
+pub const fn math_error(error: &MathError) -> ChannelError {
     let detail = match error {
         MathError::NonFinite => MathFailureCode::NonFinite,
         MathError::InvalidExtent => MathFailureCode::InvalidExtent,
