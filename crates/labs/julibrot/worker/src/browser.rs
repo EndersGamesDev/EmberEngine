@@ -3,16 +3,16 @@
 use std::cell::RefCell;
 
 use js_sys::{Array, ArrayBuffer, Promise, Uint8Array};
-use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent, WorkerGlobalScope};
 
-use crate::wire::{BUFFER_OVERHEAD_BYTES, WireBuffer, read_u32};
+use crate::wire::{BUFFER_OVERHEAD_BYTES, WireBuffer};
 use crate::{
-    ChannelError, ErrorCode, HEADER_BYTES, JULIBROT_ABI_VERSION, MAGIC, MessageHeader, MessageKind,
-    ORBIT_RECORD_BYTES, OrbitRequest, OrbitTaskPoll, POOL_TRAILER_BYTES, Pool, ReferenceOrbitRecord,
-    TRAILER_MAGIC,
+    ChannelError, ErrorCode, HEADER_BYTES, JULIBROT_ABI_VERSION, MessageHeader, MessageKind,
+    ORBIT_RECORD_BYTES, OrbitRequest, OrbitTaskPoll, POOL_TRAILER_BYTES, Pool,
+    ReferenceOrbitRecord, TRAILER_MAGIC,
 };
 
 thread_local! {
@@ -226,8 +226,7 @@ impl TransferBuffer {
                     .and_then(|bytes| header.checked_add(bytes))
             })
             .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, record_count, u32::MAX, 0))?;
-        let available = self.bytes.length()
-            - u32::try_from(POOL_TRAILER_BYTES).unwrap_or(16);
+        let available = self.bytes.length() - u32::try_from(POOL_TRAILER_BYTES).unwrap_or(16);
         if records.is_empty() || used > available || self.pool()? != Pool::Orbit {
             return Err(ChannelError::new(
                 ErrorCode::BadLength,
@@ -263,8 +262,7 @@ impl TransferBuffer {
 
     fn write_header(&mut self, header: MessageHeader) -> Result<(), ChannelError> {
         self.validate_trailer()?;
-        let message_end = self.bytes.length()
-            - u32::try_from(POOL_TRAILER_BYTES).unwrap_or(16);
+        let message_end = self.bytes.length() - u32::try_from(POOL_TRAILER_BYTES).unwrap_or(16);
         drop(self.bytes.fill(0, 0, message_end));
         write_words_at(
             &self.bytes,
@@ -284,14 +282,12 @@ impl TransferBuffer {
     }
 
     fn word(&self, offset: u32) -> u32 {
-        let offset = usize::try_from(offset).unwrap_or(0);
-        let bytes = [
-            self.bytes.get_index(u32::try_from(offset).unwrap_or(0)),
-            self.bytes.get_index(u32::try_from(offset + 1).unwrap_or(0)),
-            self.bytes.get_index(u32::try_from(offset + 2).unwrap_or(0)),
-            self.bytes.get_index(u32::try_from(offset + 3).unwrap_or(0)),
-        ];
-        read_u32(&bytes, 0)
+        u32::from_le_bytes([
+            self.bytes.get_index(offset),
+            self.bytes.get_index(offset + 1),
+            self.bytes.get_index(offset + 2),
+            self.bytes.get_index(offset + 3),
+        ])
     }
 }
 
@@ -302,8 +298,9 @@ struct BrowserClock {
 impl crate::MonotonicClock for BrowserClock {
     fn now_us(&self) -> u64 {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let value = (self.performance.now() * 1_000.0).ceil() as u64;
-        value
+        {
+            (self.performance.now() * 1_000.0).ceil() as u64
+        }
     }
 }
 
@@ -340,8 +337,7 @@ pub fn worker_main(expected_abi: u32) -> Result<u32, JsValue> {
     let scope = js_sys::global()
         .dyn_into::<DedicatedWorkerGlobalScope>()
         .map_err(|_| JsValue::from_str("worker_main requires DedicatedWorkerGlobalScope"))?;
-    let worker_scope: WorkerGlobalScope = scope.clone().unchecked_into();
-    if worker_scope.performance().is_none() {
+    if scope.performance().is_none() {
         return Err(JsValue::from_str("worker performance clock is unavailable"));
     }
     PRODUCER.with(|slot| {
@@ -412,16 +408,16 @@ async fn run_producer_inner() -> Result<(), ChannelError> {
             if producer.closed || producer.pending.is_none() || producer.orbit_buffers.is_empty() {
                 return None;
             }
-            Some((
-                producer.pending.take()?,
-                producer.orbit_buffers.pop()?,
-            ))
+            Some((producer.pending.take()?, producer.orbit_buffers.pop()?))
         });
         let Some((request, mut transfer)) = work else {
             let done = PRODUCER.with(|slot| {
                 slot.try_borrow()
                     .ok()
-                    .and_then(|slot| slot.as_ref().map(|producer| producer.closed || producer.pending.is_none()))
+                    .and_then(|slot| {
+                        slot.as_ref()
+                            .map(|producer| producer.closed || producer.pending.is_none())
+                    })
                     .unwrap_or(true)
             });
             if done {
@@ -454,10 +450,7 @@ async fn run_producer_inner() -> Result<(), ChannelError> {
                     post_from_producer(transfer)?;
                     break;
                 }
-                OrbitTaskPoll::Complete {
-                    orbit,
-                    compute_us,
-                } => {
+                OrbitTaskPoll::Complete { orbit, compute_us } => {
                     let copy_started = clock.now_us();
                     transfer.write_orbit(
                         request.generation(),
@@ -466,9 +459,10 @@ async fn run_producer_inner() -> Result<(), ChannelError> {
                         admission_credit,
                         &orbit.records,
                     )?;
-                    let copy_us = clock.now_us().checked_sub(copy_started).ok_or_else(|| {
-                        ChannelError::new(ErrorCode::TimingOverflow, 0, 0, 0)
-                    })?;
+                    let copy_us = clock
+                        .now_us()
+                        .checked_sub(copy_started)
+                        .ok_or_else(|| ChannelError::new(ErrorCode::TimingOverflow, 0, 0, 0))?;
                     let compute_us = u64::from(compute_us)
                         .checked_add(copy_us)
                         .and_then(|value| u32::try_from(value).ok())
@@ -484,8 +478,7 @@ async fn run_producer_inner() -> Result<(), ChannelError> {
 
 impl TransferBuffer {
     fn set_compute_us(&mut self, compute_us: u32) -> Result<(), ChannelError> {
-        let mut header = self.header()?;
-        header.compute_us = compute_us;
+        self.header()?;
         write_words_at(&self.bytes, 24, &[compute_us]);
         Ok(())
     }
@@ -513,8 +506,7 @@ fn browser_clock() -> Result<BrowserClock, ChannelError> {
 async fn yield_worker_task() -> Result<(), ChannelError> {
     let scope: WorkerGlobalScope = js_sys::global().unchecked_into();
     let promise = Promise::new(&mut |resolve, reject| {
-        if let Err(error) =
-            scope.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 0)
+        if let Err(error) = scope.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 0)
         {
             drop(reject.call1(&JsValue::UNDEFINED, &error));
         }
@@ -529,10 +521,7 @@ fn write_words_at(bytes: &Uint8Array, offset: u32, words: &[u32]) {
     for (word_index, word) in words.iter().enumerate() {
         let word_offset = offset + u32::try_from(word_index).unwrap_or(0) * 4;
         for (byte_index, byte) in word.to_le_bytes().into_iter().enumerate() {
-            bytes.set_index(
-                word_offset + u32::try_from(byte_index).unwrap_or(0),
-                byte,
-            );
+            bytes.set_index(word_offset + u32::try_from(byte_index).unwrap_or(0), byte);
         }
     }
 }
@@ -540,4 +529,3 @@ fn write_words_at(bytes: &Uint8Array, offset: u32, words: &[u32]) {
 fn channel_js(error: ChannelError) -> JsValue {
     JsValue::from_str(&error.to_string())
 }
-

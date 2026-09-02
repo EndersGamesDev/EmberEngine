@@ -111,10 +111,7 @@ impl WorkerChannel {
 #[must_use]
 pub fn worker_mode_from_search(search: &str) -> WorkerMode {
     let query = search.strip_prefix('?').unwrap_or(search);
-    if query
-        .split('&')
-        .any(|field| field == "worker=same-thread")
-    {
+    if query.split('&').any(|field| field == "worker=same-thread") {
         WorkerMode::SameThread
     } else {
         WorkerMode::WebWorker
@@ -664,8 +661,14 @@ mod tests {
         let (owner, producer) =
             WorkerChannel::new(WorkerConfig { max_iter: 64 }, WorkerMode::WebWorker).unwrap();
         assert_eq!(producer.mode(), WorkerMode::WebWorker);
-        assert_eq!(worker_mode_from_search("?worker=same-thread"), WorkerMode::SameThread);
-        assert_eq!(worker_mode_from_search("?worker=web"), WorkerMode::WebWorker);
+        assert_eq!(
+            worker_mode_from_search("?worker=same-thread"),
+            WorkerMode::SameThread
+        );
+        assert_eq!(
+            worker_mode_from_search("?worker=web"),
+            WorkerMode::WebWorker
+        );
         assert_eq!(owner.shutdown(), Ok(()));
     }
 
