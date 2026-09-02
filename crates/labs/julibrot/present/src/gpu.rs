@@ -9,8 +9,8 @@ use crate::state::{SceneCompletion, SceneLedger};
 use crate::{
     FrameReceipt, FrameState, HotSlot, HotUniform, PaletteId, Pose, PresentConfig, PresentError,
     PresentEvent, PresentFacts, PresentHot, PresentMain, PresentStatus, SampleClass, SceneUniform,
-    SubmissionKind, ViewMode, Warp, WarpKind, hot_ring_bytes,
-    hot_stride, palette, scene_shaders, tumbled_indices, view_rotation, warp_shader,
+    SubmissionKind, ViewMode, Warp, WarpKind, hot_ring_bytes, hot_stride, palette, scene_shaders,
+    tumbled_indices, view_rotation, warp_shader,
 };
 
 const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;

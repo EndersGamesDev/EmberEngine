@@ -151,10 +151,8 @@ fn chart_residual(from: &Pose, to: &Pose) -> f64 {
         .into_iter()
         .map(|chart| {
             let coordinate = [
-                (0.5 * f64::from(to.grid_width))
-                    .mul_add(chart[0], to.centre_from_reference_px[0]),
-                (0.5 * f64::from(to.grid_height))
-                    .mul_add(chart[1], to.centre_from_reference_px[1]),
+                (0.5 * f64::from(to.grid_width)).mul_add(chart[0], to.centre_from_reference_px[0]),
+                (0.5 * f64::from(to.grid_height)).mul_add(chart[1], to.centre_from_reference_px[1]),
             ];
             let vector = plane_point(to.plane, coordinate).map(|value| ratio * value);
             let projection = plane_projection(from.plane, vector);
