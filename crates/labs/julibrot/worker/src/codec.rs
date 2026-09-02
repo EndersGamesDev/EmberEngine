@@ -283,7 +283,7 @@ impl OrbitRequest {
 
 /// Allocation-free borrowed view of a validated request body.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct RequestBodyView {
+pub struct RequestBodyView {
     /// Request generation.
     pub(crate) generation: u32,
     /// Decimal-depth label.

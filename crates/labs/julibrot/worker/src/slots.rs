@@ -4,7 +4,7 @@ use crate::{ChannelError, ErrorCode, MessageKind, Pool};
 
 /// Pool and pool-local slot identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SlotId {
+pub struct SlotId {
     /// Request or orbit pool.
     pub(crate) pool: Pool,
     /// Pool-local index, zero or one.
@@ -31,7 +31,7 @@ impl SlotId {
 
 /// Exactly one current owner or directed transit state for a slot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum SlotOwner {
+pub enum SlotOwner {
     /// Main can read or write the attached buffer.
     Main,
     /// A main-to-producer transfer detached main.
@@ -44,7 +44,7 @@ pub(crate) enum SlotOwner {
 
 /// Transport-independent ownership of two request and two orbit slots.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct FourSlotModel {
+pub struct FourSlotModel {
     owners: [SlotOwner; 4],
 }
 

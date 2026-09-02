@@ -98,7 +98,7 @@ pub struct ViewerOwner {
 impl ViewerOwner {
     /// Creates an epoch-zero owner from the supplied initial records.
     #[must_use]
-    pub fn new(initial: ViewerState) -> Self {
+    pub const fn new(initial: ViewerState) -> Self {
         let initial = ViewerState {
             epoch: 0,
             ..initial
@@ -170,13 +170,13 @@ impl ViewerOwner {
 
     /// Returns the latest publication without advancing its epoch.
     #[must_use]
-    pub fn snapshot(&self) -> ViewerState {
+    pub const fn snapshot(&self) -> ViewerState {
         self.published.get()
     }
 
     /// Reports whether checked epoch advancement has frozen publication.
     #[must_use]
-    pub fn epoch_exhausted(&self) -> bool {
+    pub const fn epoch_exhausted(&self) -> bool {
         self.epoch_exhausted.get()
     }
 

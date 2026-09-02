@@ -56,6 +56,7 @@ impl WorkerChannel {
     ///
     /// Returns `BadLength` for a cap below 64 or unrepresentable capacity, or a typed allocation
     /// identity refusal if one of the four initial trailers cannot be made.
+    #[allow(clippy::new_ret_no_self, reason = "the reviewed API returns its paired endpoints")]
     pub fn new(
         config: WorkerConfig,
         mode: WorkerMode,
@@ -109,6 +110,7 @@ pub struct OwnerEndpoint {
 
 impl OwnerEndpoint {
     /// Accepts every newer edit immediately and keeps at most one untransferred request.
+    #[must_use]
     pub fn submit(&self, request: OrbitRequest) -> SubmitOutcome {
         let mut core = self.core.borrow_mut();
         if core.closed || core.latest_generation == u32::MAX {

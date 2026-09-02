@@ -336,7 +336,7 @@ pub struct ReferenceOrbitRecord {
 
 /// One preallocated pool buffer with immutable trailer identity.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WireBuffer {
+pub struct WireBuffer {
     bytes: Box<[u8]>,
 }
 
@@ -557,7 +557,7 @@ impl WireBuffer {
     }
 }
 
-pub fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+pub const fn read_u32(bytes: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes([
         bytes[offset],
         bytes[offset + 1],
