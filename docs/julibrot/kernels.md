@@ -360,6 +360,8 @@ Phase 6, estimated 180 new lines, reconciles all five documents, resolves or rec
 
 The total implementation estimate is 2,140 net new Rust, WGSL, JavaScript fixture, and test lines; documentation and the app-owned visibility-only heap seams are reported separately rather than hidden inside that estimate.
 
+The completed package is 2,685 lines, 545 lines or 25.5% above the 2,140-line estimate: the adopted lifetime ruling required the 538-line executor adapter with rollback, live header walls, span-keyed handles and stale-reference state, while the now-explicit conformance result and seven replay cards account for 283 lines; no heap implementation was copied to pay that overrun.
+
 ## 8. Unresolved joint-review findings
 
 - The two-f32 reference record carries about 48 relative bits rather than the worker's full 100–300 decimal-digit precision; the accepted D-versus-D+16 validation and deep scaled corpus decide adequacy, and a failure requires a reviewed record change.
