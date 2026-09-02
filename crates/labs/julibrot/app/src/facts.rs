@@ -95,12 +95,8 @@ impl PageFacts {
         let requested = app.viewer().requested();
         let viewer = app.viewer().owner().snapshot();
         let device = app.runtime().facts();
-        let precision = precision_for(
-            requested.zoom_log2,
-            device.width,
-            requested.iteration_cap,
-        )
-        .ok();
+        let precision =
+            precision_for(requested.zoom_log2, device.width, requested.iteration_cap).ok();
         let scale = scaled_pixel_scale(requested.zoom_log2, device.width).ok();
         let zoom_digits_f64 = requested.zoom_log2 * core::f64::consts::LOG10_2;
         let depth_digits = ceil_nonnegative_to_u32(zoom_digits_f64);
@@ -176,8 +172,18 @@ impl PageFacts {
             warmup_label: None,
             second_frame_policy: None,
             timer_quantum_ms: None,
-            device_walls: vec!["WebGL2", "EXT_color_buffer_float", "RGBA32F usages"].into_iter().map(str::to_string).collect(),
-            app_policies: vec!["shallow/deep switch zoom_log2=14", "iteration cap=4096", "worker credit=250000us/s"].into_iter().map(str::to_string).collect(),
+            device_walls: vec!["WebGL2", "EXT_color_buffer_float", "RGBA32F usages"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            app_policies: vec![
+                "shallow/deep switch zoom_log2=14",
+                "iteration cap=4096",
+                "worker credit=250000us/s",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
             limiting_term: None,
             wasm_bundle_bytes: None,
             javascript_bundle_bytes: None,

@@ -301,8 +301,7 @@ mod tests {
     #[test]
     fn summary_uses_middle_and_nearest_rank_p95() {
         let samples = [
-            14.0, 0.0, 7.0, 1.0, 8.0, 2.0, 9.0, 3.0, 10.0, 4.0, 11.0, 5.0, 12.0,
-            6.0, 13.0,
+            14.0, 0.0, 7.0, 1.0, 8.0, 2.0, 9.0, 3.0, 10.0, 4.0, 11.0, 5.0, 12.0, 6.0, 13.0,
         ];
         assert_eq!(
             SampleSummary::new(&samples),
@@ -320,9 +319,7 @@ mod tests {
         assert_eq!(tracker.policy(), FramePolicy::Undecided);
         assert_eq!(
             tracker.record(100.01),
-            Ok(FrameObservation::Decision(
-                FramePolicy::SingleFrameOnDemand
-            ))
+            Ok(FrameObservation::Decision(FramePolicy::SingleFrameOnDemand))
         );
         tracker.reset();
         assert_eq!(tracker.record(400.0), Ok(FrameObservation::WarmUp));

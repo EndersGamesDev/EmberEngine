@@ -16,14 +16,15 @@ pub use facts::PageFacts;
 pub use measurement::{
     ADAPTIVE_SAMPLES, ADAPTIVE_WARM_UPS, AdaptivePlan, CONTINUOUS_FRAME_THRESHOLD_MS,
     FrameObservation, FramePolicy, FramePolicyTracker, MAX_ADAPTIVE_REPEATS, MAX_BATCH_MS,
-    MeasurementError, SUITE_DEADLINE_MS, SampleSummary, TARGET_TIMER_QUANTA, TIMER_PROBE_DEADLINE_MS,
-    TIMER_READ_LIMIT, TIMER_TRANSITION_TARGET, TimerProbeFacts, probe_timer,
-};
-pub use state::{
-    HotFrame, INITIAL_ITERATION_CAP, NavigationEdit, RequestedControls, ViewerController,
+    MeasurementError, SUITE_DEADLINE_MS, SampleSummary, TARGET_TIMER_QUANTA,
+    TIMER_PROBE_DEADLINE_MS, TIMER_READ_LIMIT, TIMER_TRANSITION_TARGET, TimerProbeFacts,
+    probe_timer,
 };
 #[cfg(target_arch = "wasm32")]
 pub use runtime::{BrowserRuntime, DeviceFacts, install_julibrot_panic_hook, take_julibrot_panic};
+pub use state::{
+    HotFrame, INITIAL_ITERATION_CAP, NavigationEdit, RequestedControls, ViewerController,
+};
 pub use surface::{PendingSurface, SurfaceAction, SurfaceState};
 
 /// Main integration object combining browser ownership and worker-published controls.

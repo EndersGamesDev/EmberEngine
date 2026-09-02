@@ -5,7 +5,7 @@ use ember_julibrot_math::{
     preset_spec,
 };
 use ember_julibrot_present::PaletteId;
-use ember_julibrot_worker::{HotState, MainState, MIN_MAX_ITER, ViewerOwner, ViewerState};
+use ember_julibrot_worker::{HotState, MIN_MAX_ITER, MainState, ViewerOwner, ViewerState};
 
 use crate::AppError;
 
@@ -139,15 +139,15 @@ impl ViewerController {
         delta_log2: f64,
         anchor_px_up: [f64; 2],
     ) -> Result<NavigationEdit, AppError> {
-        if !delta_log2.is_finite()
-            || !anchor_px_up.iter().all(|component| component.is_finite())
-        {
+        if !delta_log2.is_finite() || !anchor_px_up.iter().all(|component| component.is_finite()) {
             return Err(AppError::Math("wheel input is not finite".to_string()));
         }
         let ratio = delta_log2.exp2();
         let zoom_log2 = self.requested.zoom_log2 + delta_log2;
         if !ratio.is_finite() || !zoom_log2.is_finite() {
-            return Err(AppError::Math("wheel zoom exceeded finite range".to_string()));
+            return Err(AppError::Math(
+                "wheel zoom exceeded finite range".to_string(),
+            ));
         }
         let mut hot = self.staged_hot;
         hot.centre_from_reference_px = core::array::from_fn(|axis| {
@@ -389,9 +389,7 @@ mod tests {
     fn pointer_zoom_and_dom_drag_stage_smooth_hot_state() {
         let mut viewer = ViewerController::new().expect("canonical viewer");
         assert_eq!(
-            viewer
-                .wheel_zoom(1.0, [20.0, -10.0])
-                .expect("finite wheel"),
+            viewer.wheel_zoom(1.0, [20.0, -10.0]).expect("finite wheel"),
             NavigationEdit::Zoom {
                 delta_log2: 1.0,
                 anchor_px_up: [20.0, -10.0]
@@ -438,7 +436,10 @@ mod tests {
         assert_eq!(frame.state.main.plane_axis_a, 0);
         assert_eq!(frame.state.main.plane_axis_b, 1);
         assert_eq!(frame.state.main.plane_origin_f64, [0.0, 0.0, -0.8, 0.156]);
-        assert_eq!(frame.state.main.centre_f64, frame.state.main.plane_origin_f64);
+        assert_eq!(
+            frame.state.main.centre_f64,
+            frame.state.main.plane_origin_f64
+        );
         assert_eq!(frame.state.main.requested_iter_cap, 1_024);
         assert_eq!(frame.state.main.palette_id, PaletteId::Ember as u32);
         assert_eq!(frame.plane.basis_u, [1.0, 0.0, 0.0, 0.0]);

@@ -26,11 +26,16 @@ fn loader_worker_and_wasm_share_version_one_before_device_start() {
     }
     assert!(LIB.contains("pub fn worker_main(expected_abi: u32)"));
     assert_eq!(WORKER.matches("ember_lab_julibrot.js?v=1").count(), 1);
-    let boot = MAIN.split_once("async function boot()")
-        .expect("main boot exists").1;
+    let boot = MAIN
+        .split_once("async function boot()")
+        .expect("main boot exists")
+        .1;
     let handshake = boot.find("workerHandshake()").expect("worker handshake");
     let start = boot.find("start_julibrot").expect("device startup");
-    assert!(handshake < start, "worker skew must refuse before device work");
+    assert!(
+        handshake < start,
+        "worker skew must refuse before device work"
+    );
 }
 
 #[test]
@@ -49,25 +54,42 @@ fn runtime_is_gl_only_and_handlers_precede_the_first_post_device_work() {
         assert!(RUNTIME.contains(required), "missing GL floor: {required}");
     }
     assert!(!RUNTIME.contains("Backends::BROWSER_WEBGPU"));
-    let startup = RUNTIME.split_once("pub async fn start")
-        .expect("runtime startup exists").1;
-    let hook = startup.find("install_julibrot_panic_hook").expect("panic hook");
-    let instance = startup.find("wgpu::Instance::new").expect("first wgpu call");
+    let startup = RUNTIME
+        .split_once("pub async fn start")
+        .expect("runtime startup exists")
+        .1;
+    let hook = startup
+        .find("install_julibrot_panic_hook")
+        .expect("panic hook");
+    let instance = startup
+        .find("wgpu::Instance::new")
+        .expect("first wgpu call");
     assert!(hook < instance);
-    let after_request = startup.split_once(".request_device(")
-        .expect("device request exists").1;
-    let lost = after_request.find("set_device_lost_callback").expect("lost handler");
-    let uncaptured = after_request.find("install_logging_handler").expect("error handler");
-    let scope = after_request.find("ValidationScope::begin").expect("init scope");
+    let after_request = startup
+        .split_once(".request_device(")
+        .expect("device request exists")
+        .1;
+    let lost = after_request
+        .find("set_device_lost_callback")
+        .expect("lost handler");
+    let uncaptured = after_request
+        .find("install_logging_handler")
+        .expect("error handler");
+    let scope = after_request
+        .find("ValidationScope::begin")
+        .expect("init scope");
     assert!(lost < scope && uncaptured < scope);
 }
 
 #[test]
 fn acquire_path_is_non_panicking_and_initial_frame_is_only_clear_plus_text() {
-    let acquire = RUNTIME.split_once("fn acquire_surface_texture")
-        .expect("acquire helper exists").1
+    let acquire = RUNTIME
+        .split_once("fn acquire_surface_texture")
+        .expect("acquire helper exists")
+        .1
         .split_once("fn canvas_by_id")
-        .expect("acquire helper boundary exists").0;
+        .expect("acquire helper boundary exists")
+        .0;
     assert!(!acquire.contains(".unwrap()"));
     assert!(!acquire.contains(".expect("));
     for required in [
@@ -88,10 +110,21 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
     assert_eq!(INDEX.matches("id=\"status\"").count(), 1);
     assert_eq!(INDEX.matches("id=\"facts-grid\"").count(), 1);
     for id in [
-        "view", "preset", "julia-re", "julia-im", "theta-1", "theta-2",
-        "iteration-cap", "palette", "one-frame", "measure",
+        "view",
+        "preset",
+        "julia-re",
+        "julia-im",
+        "theta-1",
+        "theta-2",
+        "iteration-cap",
+        "palette",
+        "one-frame",
+        "measure",
     ] {
-        assert!(INDEX.contains(&format!("id=\"{id}\"")), "missing control {id}");
+        assert!(
+            INDEX.contains(&format!("id=\"{id}\"")),
+            "missing control {id}"
+        );
         assert!(MAIN.contains(&format!("\"{id}\"")), "unbound control {id}");
     }
     assert!(MAIN.contains("event.preventDefault()"));
@@ -102,30 +135,90 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
 #[test]
 fn page_facts_carry_every_contract_field_without_fake_aggregate_counts() {
     let fields = [
-        "abi_version", "adapter_name", "backend", "rgba32f_renderable",
-        "requested_width", "requested_height", "delivered_width", "delivered_height",
-        "requested_iteration_cap", "delivered_iteration_cap", "requested_zoom_log2",
-        "presented_zoom_log2", "reference_zoom_log2", "zoom_digits_f64", "depth_digits",
-        "precision_floor_digits", "precision_working_digits", "requested_precision_bits",
-        "delivered_precision_bits", "orbit_length", "orbit_generation", "owner_epoch",
-        "centre_revision", "centre_from_reference_px", "reference_shift_px", "scale_mantissa",
-        "scale_exponent", "kernel_mode", "refinement_level", "refinement_pending",
-        "extent_divisor", "active_pixels", "worst_case_pixel_iterations", "kernel_page_passes",
-        "scratch_copy_commands", "scratch_copy_bytes", "logical_heap_bytes",
-        "reserved_heap_bytes", "scratch_bytes", "hot_write_bytes", "scene_uniform_write_bytes",
-        "texture_reallocations", "rebase_count_sum", "rebase_count_max", "glitch_pixel_count",
-        "worker_facts", "worker_compute_us", "worker_credit_us", "worker_overfeed_us",
-        "worker_allocation_events", "request_buffers_owned_main", "orbit_buffers_owned_main",
-        "palette_id", "view_mode", "completed_scene_id", "in_flight_scene_id",
-        "warp_source_scene_id", "reprojected_per_scene", "refreshes_without_scene",
-        "chart_residual", "tumbled_max_error_px", "tumbled_p95_error_px", "scene_wall_ms",
-        "scene_fence_wait_ms", "scene_polls", "warp_wall_ms", "warp_fence_wait_ms",
-        "warp_polls", "warmup_label", "second_frame_policy", "timer_quantum_ms",
-        "device_walls", "app_policies", "limiting_term", "wasm_bundle_bytes",
-        "javascript_bundle_bytes", "wasm_instance_count", "timing_status",
+        "abi_version",
+        "adapter_name",
+        "backend",
+        "rgba32f_renderable",
+        "requested_width",
+        "requested_height",
+        "delivered_width",
+        "delivered_height",
+        "requested_iteration_cap",
+        "delivered_iteration_cap",
+        "requested_zoom_log2",
+        "presented_zoom_log2",
+        "reference_zoom_log2",
+        "zoom_digits_f64",
+        "depth_digits",
+        "precision_floor_digits",
+        "precision_working_digits",
+        "requested_precision_bits",
+        "delivered_precision_bits",
+        "orbit_length",
+        "orbit_generation",
+        "owner_epoch",
+        "centre_revision",
+        "centre_from_reference_px",
+        "reference_shift_px",
+        "scale_mantissa",
+        "scale_exponent",
+        "kernel_mode",
+        "refinement_level",
+        "refinement_pending",
+        "extent_divisor",
+        "active_pixels",
+        "worst_case_pixel_iterations",
+        "kernel_page_passes",
+        "scratch_copy_commands",
+        "scratch_copy_bytes",
+        "logical_heap_bytes",
+        "reserved_heap_bytes",
+        "scratch_bytes",
+        "hot_write_bytes",
+        "scene_uniform_write_bytes",
+        "texture_reallocations",
+        "rebase_count_sum",
+        "rebase_count_max",
+        "glitch_pixel_count",
+        "worker_facts",
+        "worker_compute_us",
+        "worker_credit_us",
+        "worker_overfeed_us",
+        "worker_allocation_events",
+        "request_buffers_owned_main",
+        "orbit_buffers_owned_main",
+        "palette_id",
+        "view_mode",
+        "completed_scene_id",
+        "in_flight_scene_id",
+        "warp_source_scene_id",
+        "reprojected_per_scene",
+        "refreshes_without_scene",
+        "chart_residual",
+        "tumbled_max_error_px",
+        "tumbled_p95_error_px",
+        "scene_wall_ms",
+        "scene_fence_wait_ms",
+        "scene_polls",
+        "warp_wall_ms",
+        "warp_fence_wait_ms",
+        "warp_polls",
+        "warmup_label",
+        "second_frame_policy",
+        "timer_quantum_ms",
+        "device_walls",
+        "app_policies",
+        "limiting_term",
+        "wasm_bundle_bytes",
+        "javascript_bundle_bytes",
+        "wasm_instance_count",
+        "timing_status",
     ];
     for field in fields {
-        assert!(FACTS.contains(&format!("pub {field}:")), "missing PageFacts.{field}");
+        assert!(
+            FACTS.contains(&format!("pub {field}:")),
+            "missing PageFacts.{field}"
+        );
     }
     assert_eq!(FACTS.matches("\"unavailable\"").count(), 3);
     assert!(FACTS.contains("\"requires visible replay\""));
@@ -151,7 +244,10 @@ fn timing_contract_keeps_all_bounds_and_labels_visible() {
         "FrameObservation::WarmUp",
         "FrameObservation::Decision",
     ] {
-        assert!(MEASUREMENT.contains(required), "missing measurement bound: {required}");
+        assert!(
+            MEASUREMENT.contains(required),
+            "missing measurement bound: {required}"
+        );
     }
     assert!(MAIN.contains("performance.now()"));
     assert!(MAIN.contains("requires visible replay"));
@@ -167,7 +263,10 @@ fn surface_images_are_keyed_by_warp_and_never_presented_by_the_state_model() {
         "SurfaceAction::Drop",
         "self.pending_warp_id() != Some(warp_id)",
     ] {
-        assert!(surface.contains(required), "missing pending-surface law: {required}");
+        assert!(
+            surface.contains(required),
+            "missing pending-surface law: {required}"
+        );
     }
     assert!(!surface.contains(".present()"));
 }
