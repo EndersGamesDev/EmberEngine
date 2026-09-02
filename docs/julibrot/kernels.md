@@ -135,6 +135,8 @@ Every interface in this section is this slice's side of the shared contract and 
 
 `EscapeParams` is the CPU-facing `#[repr(C)]` record `{ max_iter: u32, bailout: f32 }`, size eight and alignment four; `max_iter` is requested iterations, `bailout` is the squared-radius value and must be exactly `256.0f32`, and uniform packing supplies explicit padding rather than transmuting this record.
 
+`ScaleSplit` is the math-owned CPU record `{ mantissa: f32, exponent: i32 }` with no byte ABI; it represents `pixel_scale = mantissa·2^exponent`, requires `mantissa ∈ [0.5,1)`, and app may re-export or alias the name without changing the kernels type.
+
 `GridExtent` is the CPU-facing `#[repr(C)]` record `{ width: u32, height: u32 }`, size eight and alignment four, measured in pixels; both fields must be nonzero and their checked product must fit `u32` before any allocation or dispatch.
 
 ### 3.2 Worker and owner to kernels: reference orbit
@@ -220,11 +222,21 @@ The inherited input resource entry is exactly 16 bytes `{ directory_index: u32, 
 
 `KernelMode::for_zoom(zoom_log2: f64) -> KernelMode` returns `Shallow` below 14 and `Perturbation` at or above 14; 14 is a displayed POLICY, and app keeps a reference orbit maintained at every depth so crossing the boundary does not create a reference gap.
 
+`ShallowUniform::pack(plane: Plane, centre: CentreSplit, pixel_scale: f32, extent: GridExtent, params: EscapeParams, level: RefinementLevel) -> Result<ShallowUniform, KernelError>` validates the nonempty checked extent, fixed bailout, nonzero cap, and positive finite scale before producing the exact 96-byte payload.
+
+`PerturbUniform::pack(plane: Plane, scale: ScaleSplit, extent: GridExtent, params: EscapeParams, orbit_length: u32, level: RefinementLevel) -> Result<PerturbUniform, KernelError>` additionally validates `mantissa ∈ [0.5,1)` and `1 ≤ orbit_length ≤ max_iter` before producing the exact 64-byte payload.
+
+`escape_shallow_point(point: [f32;4], params: EscapeParams) -> Result<KernelSample, KernelError>` and `escape_shallow_pixel(uniforms: &ShallowUniform, index: u32) -> Result<KernelSample, KernelError>` expose the source-ordered CPU mirror, where `KernelSample` is `{ record: EscapeGridRecord, escape_index: Option<u32> }` and the integer index is conformance evidence rather than a production-grid lane.
+
+`perturb_scaled_offset(uniforms: &PerturbUniform, orbit: &[ReferenceOrbitRecord], offset_prime: [f32;4]) -> Result<KernelSample, KernelError>` and `perturb_scaled_pixel(uniforms: &PerturbUniform, orbit: &[ReferenceOrbitRecord], index: u32) -> Result<KernelSample, KernelError>` expose the source-ordered scaled CPU mirror and return arithmetic failure as the honest per-pixel glitch record while refusing invalid host inputs.
+
 `DispatchFacts` is `{ owner_epoch: u64, mode: KernelMode, level: RefinementLevel, requested_extent: GridExtent, delivered_extent: GridExtent, requested_max_iter: u32, delivered_max_iter: u32, active_pixels: u32, worst_case_pixel_iterations: u64, page_passes: u32, copy_commands: u32, gpu_copy_bytes: u64, logical_heap_bytes: u64, reserved_heap_bytes: u64, scratch_bytes: u64, orbit_generation: Option<u32>, orbit_length: u32 }`.
 
 Every `DispatchFacts` byte and count is arithmetic from the accepted plan or a copied owner fact; GPU duration and poll count are deliberately absent because app measures submissions with its four-byte fence.
 
 ### 3.6 Public function surface
+
+`plan_refinement(requested_extent: GridExtent, params: EscapeParams, accepts_records: impl FnMut(u32) -> bool) -> Result<RefinementPlan, KernelError>` is the seam-independent Phase-3 planner: it tests power-of-two degraded Final record counts in order and accepts the first count approved by the exact caller predicate; Phase 4 supplies the executor's cloned-arena predicate rather than replacing this arithmetic.
 
 `JulibrotKernels::new(executor: &mut ember_lab_heap::GpuKernelExecutor) -> Result<JulibrotKernels, KernelError>` registers exactly two production dialect-v2 kernels and their immutable pipelines against the executor's immutable heap layout.
 
@@ -232,9 +244,9 @@ Every `DispatchFacts` byte and count is arithmetic from the accepted plan or a c
 
 `JulibrotKernels::allocate_grid(executor: &mut ember_lab_heap::GpuKernelExecutor, plan: &RefinementPlan) -> Result<EscapeGrid, KernelError>` allocates one Final-capacity `DataSpan`, asks `prefix_headers` for all three static header sets, uploads them once, and returns no partially allocated value on failure.
 
-`JulibrotKernels::encode_shallow(&self, executor: &ember_lab_heap::GpuKernelExecutor, encoder: &mut wgpu::CommandEncoder, grid: &mut EscapeGrid, owner_epoch: u64, level: RefinementLevel, plane: &Plane, centre: &CentreSplit, zoom_log2: f64, params: EscapeParams) -> Result<DispatchFacts, KernelError>` packs the 96-byte uniform, encodes page passes and exact-region copies, and tags the arithmetic receipt with the supplied epoch without using epoch equality as a compatibility test.
+`JulibrotKernels::encode_shallow(&self, executor: &ember_lab_heap::GpuKernelExecutor, encoder: &mut wgpu::CommandEncoder, grid: &mut EscapeGrid, owner_epoch: u64, level: RefinementLevel, plane: &Plane, centre: &CentreSplit, pixel_scale: f32, params: EscapeParams) -> Result<DispatchFacts, KernelError>` packs the 96-byte uniform, encodes page passes and exact-region copies, and tags the arithmetic receipt with the supplied epoch without using epoch equality as a compatibility test.
 
-`JulibrotKernels::encode_perturbation(&self, executor: &ember_lab_heap::GpuKernelExecutor, encoder: &mut wgpu::CommandEncoder, grid: &mut EscapeGrid, owner_epoch: u64, level: RefinementLevel, plane: &Plane, zoom_log2: f64, params: EscapeParams, reference: ReferenceOrbitInput<'_>) -> Result<DispatchFacts, KernelError>` decomposes scale into the 64-byte mantissa/exponent uniform and performs the one-span gather dispatch against the accepted reference generation.
+`JulibrotKernels::encode_perturbation(&self, executor: &ember_lab_heap::GpuKernelExecutor, encoder: &mut wgpu::CommandEncoder, grid: &mut EscapeGrid, owner_epoch: u64, level: RefinementLevel, plane: &Plane, scale: ScaleSplit, params: EscapeParams, reference: ReferenceOrbitInput<'_>) -> Result<DispatchFacts, KernelError>` packs the math-owned scale split into the 64-byte mantissa/exponent uniform and performs the one-span gather dispatch against the accepted reference generation.
 
 `JulibrotKernels::free_grid(executor: &mut ember_lab_heap::GpuKernelExecutor, grid: EscapeGrid) -> Result<(), KernelError>` returns the span and directory entries transactionally after app and present have relinquished all borrows.
 
@@ -290,6 +302,8 @@ The shallow CPU conformance fixture uses deterministic pixels in both presets an
 
 The perturbation CPU fixture uses math's scaled `f64` mirror and deterministic pixels that include normalized `δz₀′ = 0`, `δc′ = 0`, both nonzero, exponents on both sides of the normal f32 range, upward and downward 64-bit renormalization, zero and repeated rebases, reference exhaustion, and nonzero `Z₀`; the corrected nonzero-`Z₀` rebase is a PASS criterion.
 
+The `math-oracles` Cargo feature is default-off at this checkpoint because math Phase 0 publishes records but not yet `escape_f32` or `perturb_scaled_f64`; ordinary package gates exercise all hand-authored mirror fixtures, and enabling the feature activates the cross-package comparisons after those documented functions merge.
+
 Perturbation conformance requires exact classification and integer escape index outside math's propagated error envelope, exact rebase count and glitch flag, and `|smooth_gpu−smooth_cpu| ≤ 2×10⁻³`; samples inside the envelope remain explicit boundary fixtures and are never silently removed from reported counts.
 
 The reference adequacy oracle recomputes at working precision `D` and `D+16`, requires identical escape index and emitted hi/lo records within two f32 ulps componentwise, then runs the deep scaled-classification corpus; failure grows the reference record only through a reviewed interface change.
@@ -319,6 +333,8 @@ Dispatch walls, scene walls, and poll counts are browser facts measured by app a
 |Aggregate rebase and glitch totals are unavailable without readback or another reduction kernel.|The normal overlay labels totals unavailable and presents per-pixel debug tint; an explicitly requested measurement readback may count them and must report its fence and polls.|
 
 ## 7. Implementation phases and line budget
+
+Checkpoint after the seam-independent implementation round: Phase 0, the shallow Phase 1 body and mirror, the scaled recurrence and local Phase 2 fixtures, and the pure Phase 3 plan and receipt arithmetic are implemented; Phase 2's math-oracle comparisons await math's later functions, Phase 3's executor-backed reference validation, cloned-arena trials, prefix-header upload and span reuse await the app-owned heap seams, and Phase 4 remains wholly blocked on those seams as planned.
 
 Phase 0, estimated 230 new lines, creates the kernels package, pins `Plane`, `CentreSplit`, all GPU records and uniforms, exposes the two dialect descriptors, and adds source, packing, switch, and hybrid-coordinate tests.
 
@@ -351,6 +367,8 @@ The total implementation estimate is 2,140 net new Rust, WGSL, JavaScript fixtur
 - A reference can legitimately end before a nearby pixel escapes, but no policy requests another reference from a high glitch fraction; second-reference repair is out of scope, so v1 exposes only the debug tint and measured limit.
 
 - Exact shallow classification across CPU and browser shader still depends on math's predeclared boundary fixtures and contracted operation order; fused-operation behavior must not be accommodated by selecting samples after GPU results are seen.
+
+- The default-off `math-oracles` fixtures name `escape_f32` and `perturb_scaled_f64`, which math Phase 0 has not published; they become a required green gate when math's later phases merge, and no kernels-local oracle substitute is permitted.
 
 - The zoom-14 mode switch is mathematically safe but browser pipeline-switch cost, first-frame warm-up, and visual continuity across one shallow and one scaled perturbation frame remain `requires visible replay`.
 
