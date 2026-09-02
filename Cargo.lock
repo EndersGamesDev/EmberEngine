@@ -237,6 +237,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "astro-float"
+version = "0.9.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2cf6a2cd8f38f023e63cde09f847ea702ec993334d053b0d31070ec837f34c89"
+dependencies = [
+ "astro-float-macro",
+ "astro-float-num",
+]
+
+[[package]]
+name = "astro-float-macro"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c00d1f19c0ed247db5f952c57dfad632ff94394bb13c9ba63c7e90084978922"
+dependencies = [
+ "astro-float-num",
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
+name = "astro-float-num"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc7d5fd016582c1a1c11e2623a68ed41cd7d5e33ce0c14d99562f32d813b61dd"
+dependencies = [
+ "itertools 0.10.5",
+ "lazy_static",
+]
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1120,6 +1152,14 @@ dependencies = [
  "serde_json",
  "sha2",
  "tracing",
+]
+
+[[package]]
+name = "ember-julibrot-math"
+version = "0.1.0"
+dependencies = [
+ "astro-float",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -2011,6 +2051,15 @@ name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
+
+[[package]]
+name = "itertools"
+version = "0.10.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0fd2260e829bddf4cb8a0a825d13c30766a8387741560d632191b66af1d8bf6"
+dependencies = [
+ "either",
+]
 
 [[package]]
 name = "itertools"
