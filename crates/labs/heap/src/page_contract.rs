@@ -2,6 +2,8 @@
 
 const PAGE: &str = include_str!("../../../../web/labs/heap/index.html");
 const BROWSER_ERROR: &str = include_str!("browser_error.rs");
+const EXECUTOR: &str = include_str!("executor.rs");
+const LIB: &str = include_str!("lib.rs");
 const RUNTIME: &str = include_str!("lattice_gpu.rs");
 const CONTRACT: &str = include_str!("../../../../docs/gpu-heap-lattice.md");
 
@@ -163,6 +165,58 @@ fn every_measurement_reports_bounded_poll_evidence() {
         assert!(
             PAGE.contains(required) || RUNTIME.contains(required),
             "missing poll evidence contract: {required}"
+        );
+    }
+}
+
+#[test]
+fn public_executor_is_the_lattice_path_and_reexports_the_generic_seams() {
+    for required in [
+        "executor: GpuKernelExecutor",
+        ".register_kernel(mode_a_registered)",
+        ".register_kernel(mode_c_registered)",
+        ".plan_dispatch(",
+        ".sync_dispatch(&dispatch)",
+        ".write_kernel_uniform(kernel, &uniform)",
+        ".encode_dispatch(encoder, kernel, &dispatch.dispatch)",
+    ] {
+        assert!(
+            RUNTIME.contains(required),
+            "lattice bypasses public executor seam: {required}"
+        );
+    }
+    assert!(!RUNTIME.contains("copy_texture_to_texture("));
+    assert_eq!(EXECUTOR.matches("copy_texture_to_texture(").count(), 2);
+    for required in [
+        "GpuKernelExecutor",
+        "HeapPresentResources",
+        "publish_browser_error",
+        "install_logging_handler",
+        "SelectionEpoch",
+        "SurfaceOwnership",
+        "PollCounter",
+        "MAX_COMPLETION_POLLS",
+    ] {
+        assert!(
+            LIB.contains(required),
+            "missing public heap seam: {required}"
+        );
+    }
+}
+
+#[test]
+fn present_resource_clones_preserve_the_three_arc_identities() {
+    for required in [
+        "data_view: Arc<wgpu::TextureView>",
+        "descriptor_buffer: Arc<wgpu::Buffer>",
+        "span_directory_buffer: Arc<wgpu::Buffer>",
+        "data_view: Arc::clone(&self.data_view)",
+        "descriptor_buffer: Arc::clone(&self.descriptor_buffer)",
+        "span_directory_buffer: Arc::clone(&self.directory_buffer)",
+    ] {
+        assert!(
+            EXECUTOR.contains(required),
+            "present identity contract is absent: {required}"
         );
     }
 }

@@ -93,6 +93,33 @@ impl DataSpan {
     pub const fn padding_records(&self) -> u64 {
         self.reserved_records() - self.logical_len as u64
     }
+
+    pub(crate) fn prefix(&self, active_len: u32) -> Result<Self, SpanError> {
+        if active_len == 0 {
+            return Err(SpanError::ZeroLength);
+        }
+        if active_len > self.logical_len {
+            return Err(SpanError::IndexOutOfBounds {
+                index: active_len - 1,
+                logical_len: self.logical_len,
+            });
+        }
+        let page_count = active_len.div_ceil(self.page_records);
+        let handle_count = usize::try_from(page_count).map_err(|_| SpanError::ArithmeticOverflow)?;
+        let handles = self
+            .handles
+            .get(..handle_count)
+            .ok_or(SpanError::DirectoryCorrupt)?
+            .to_vec();
+        Ok(Self {
+            logical_len: active_len,
+            page_records: self.page_records,
+            page_count,
+            first_directory_slot: self.first_directory_slot,
+            directory_index: self.directory_index,
+            handles,
+        })
+    }
 }
 
 /// Fixed-capacity UBO directory with 16-byte span records followed by packed handles.
@@ -427,6 +454,19 @@ impl StaticHeaders {
             stride,
         })
     }
+
+    /// Builds immutable headers for a dense prefix of a larger allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the prefix is empty, exceeds the span, or its byte layout overflows.
+    pub fn for_prefix(
+        span: &DataSpan,
+        active_len: u32,
+        alignment: u32,
+    ) -> Result<Self, SpanError> {
+        Self::for_span(&span.prefix(active_len)?, alignment)
+    }
 }
 
 /// One independently computed capacity or policy term.
@@ -579,6 +619,35 @@ mod tests {
         );
         arena.free(span).expect("first frees");
         arena.free(other).expect("second frees");
+    }
+
+    #[test]
+    fn dense_prefix_headers_are_immutable_and_stop_at_the_active_tail() {
+        let mut arena =
+            SpanArena::new(16, 4, 16, 16 * 4 + 4 * 8, 4).expect("arena configuration fits");
+        let span = arena
+            .allocate_span(700, 16)
+            .expect("three pages fit in the arena");
+        let before = span.clone();
+        let headers = StaticHeaders::for_prefix(&span, 300, 256).expect("prefix is valid");
+        assert_eq!(headers.offsets, [0, 256]);
+        assert_eq!(headers.bytes.len(), 512);
+        assert_eq!(
+            bytemuck::from_bytes::<[u32; 4]>(&headers.bytes[256..272]),
+            &[256, 44, 0, 0]
+        );
+        assert_eq!(span, before);
+        assert_eq!(
+            StaticHeaders::for_prefix(&span, 0, 256),
+            Err(SpanError::ZeroLength)
+        );
+        assert_eq!(
+            StaticHeaders::for_prefix(&span, 701, 256),
+            Err(SpanError::IndexOutOfBounds {
+                index: 700,
+                logical_len: 700,
+            })
+        );
     }
 
     #[test]

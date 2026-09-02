@@ -2,11 +2,11 @@
 
 #[cfg(target_arch = "wasm32")]
 mod browser_error;
-#[cfg(any(test, target_arch = "wasm32"))]
 mod completion;
 #[cfg(any(test, target_arch = "wasm32"))]
 pub(crate) mod conformance;
 mod dialect;
+mod executor;
 mod heap;
 #[cfg(any(test, target_arch = "wasm32"))]
 mod kernels;
@@ -14,7 +14,6 @@ mod lattice;
 mod mode_c;
 #[cfg(test)]
 mod page_contract;
-#[cfg(any(test, target_arch = "wasm32"))]
 mod selection;
 mod span;
 #[cfg(any(test, target_arch = "wasm32"))]
@@ -28,6 +27,10 @@ mod wasm;
 pub use dialect::{
     DialectError, DialectLimits, DispatchError, DispatchPlan, ForbiddenConstruct, KernelDesc,
     PagePass, RegisteredKernel,
+};
+pub use executor::{
+    ExecutorCapacity, ExecutorDispatch, ExecutorError, GpuKernel, GpuKernelExecutor,
+    GpuKernelExecutorConfig, HeapPresentResources,
 };
 pub use heap::{Descriptor, Handle, HeapAllocator, HeapError, HeapKind, PackedDescriptor};
 pub use lattice::{
@@ -44,9 +47,13 @@ pub use mode_c::{
     ComparatorWork, EqualWorkSignature, ModeCFrameUniform, layer_comparator_draw_shader,
     layer_comparator_kernel, mode_c_pose, mode_c_register, mode_c_shader,
 };
+pub use completion::{MAX_COMPLETION_POLLS, PollCounter};
+pub use selection::{SelectionEpoch, SurfaceOwnership};
 pub use span::{
     DataSpan, DeliveryPlan, DispatchHeader, PackedSpan, SpanArena, SpanDirectory, SpanError,
     StaticHeaders, WallTerm,
 };
 #[cfg(target_arch = "wasm32")]
 pub use spike::{cancel_heap_spike, run_heap_spike_json};
+#[cfg(target_arch = "wasm32")]
+pub use browser_error::{install_logging_handler, publish_browser_error};
