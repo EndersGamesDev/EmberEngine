@@ -349,13 +349,20 @@
       const row = document.createElement('div');
       row.className = 'playrow';
       const sel = document.createElement('select');
+      // Selected AFTER the loop, by value. Setting `opt.selected` per option
+      // is what let a stray second `live: true` win: appending an option with
+      // selectedness set clears the earlier one, so the LAST live entry was
+      // preselected while `versions.find((v) => v.live)` above answered the
+      // first. Assigning `select.value` once cannot disagree with `find()`.
+      let livePath = null;
       for (const v of g.versions) {
         const opt = document.createElement('option');
         opt.value = v.path;
         opt.textContent = v.live ? `${v.v} — live` : `${v.v} — ${v.note || 'archived'}`;
-        if (v.live) opt.selected = true;
+        if (v.live && !livePath) livePath = v.path;
         sel.append(opt);
       }
+      if (livePath) sel.value = livePath;
       const btn = document.createElement('button');
       btn.textContent = 'Play';
       btn.addEventListener('click', () => launch(sel.value));
@@ -373,13 +380,22 @@
     const perGame = new Map(); // game id -> { chosen, candidates }
     let busy = false;
 
-    // The published page that speaks a given protocol for a given game. The
-    // pairing lives in games.json, not here: a host may sit on any commit, so
-    // "which build can join this lobby" is a lookup, never an assumption.
+    // The published page that speaks a given protocol for a given game AND
+    // can honour a handover. The pairing lives in games.json, not here: a
+    // host may sit on any commit, so "which build can join this lobby" is a
+    // lookup, never an assumption.
+    //
+    // `handover` is the second half of that lookup and is default-deny. A
+    // frozen page declares a `proto` but reads only the legacy top-level
+    // address, so routing a join to it silently connects the player to a
+    // DIFFERENT machine, where the lobby they clicked does not exist. Only a
+    // page that reads `pending.ws` (today arena v12 and fire v2) is a routing
+    // target; every other version falls into the honest "needs a proto N
+    // build" badge below, and a page added later is safe by omission.
     const pageFor = (gameId, proto) => {
       const g = catalog.games.find((x) => x.id === gameId);
       if (!g || typeof proto !== 'number') return null;
-      return g.versions.find((v) => v.proto === proto) || null;
+      return g.versions.find((v) => v.proto === proto && v.handover) || null;
     };
     const titleOf = (gameId) =>
       (catalog.games.find((x) => x.id === gameId) || {}).title || gameId;

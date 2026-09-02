@@ -11,6 +11,7 @@
           "path": "games/arena/v12/",
           "live": true,
           "proto": 12,
+          "handover": true,
           "note": "E melee through shields + headshots"
         },
         {
@@ -77,7 +78,7 @@
         {
           "v": "v0",
           "path": "games/arena/v0/",
-          "live": true,
+          "live": false,
           "note": "the original local game — the pong classic"
         }
       ]
@@ -93,6 +94,7 @@
           "path": "games/fire/v2/",
           "live": true,
           "proto": 1,
+          "handover": true,
           "note": "castle circuit, drift + boost, online lobbies"
         },
         {
