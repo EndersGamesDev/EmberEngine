@@ -27,6 +27,7 @@ use std::collections::VecDeque;
 
 use ember_engine::Instance;
 use ember_engine::glam::Vec3;
+use pong_core::shooter::Cover;
 
 use crate::gizmo::Mode;
 
@@ -43,11 +44,18 @@ pub enum Class {
 pub struct Kind {
     pub name: &'static str,
     pub class: Class,
-    /// Extents in world units. Heights match the sim's two cover classes so
+    /// Extents in world units. Heights match the sim's cover classes so
     /// the editor authors for the game that exists: crates are jumpable,
-    /// containers are hard cover.
+    /// containers are hard cover, a roof is walked under.
     pub scale: Vec3,
     pub color: Vec3,
+    /// What the box exports as. An `Obj` does not carry its palette entry,
+    /// only the entry's colour, so `level::to_level` finds this by colour.
+    /// Meaningless for a spawn, which exports as a point.
+    pub cover: Cover,
+    /// Bottom of the box above the floor: the height the entry is meant to
+    /// be placed at. Zero for everything that stands on the ground.
+    pub base: f32,
 }
 
 /// Over-driven so a spawn marker reads as an annotation rather than as
@@ -61,6 +69,8 @@ pub const PALETTE: &[Kind] = &[
         // Under the sim's CRATE_MAX_H, so it is jumpable cover.
         scale: Vec3::new(2.2, 1.2, 2.2),
         color: Vec3::new(0.55, 0.42, 0.30),
+        cover: Cover::Crate,
+        base: 0.0,
     },
     Kind {
         name: "container",
@@ -68,12 +78,16 @@ pub const PALETTE: &[Kind] = &[
         // Above CONTAINER_MIN_H: hard cover you cannot climb.
         scale: Vec3::new(3.0, 2.6, 6.0),
         color: Vec3::new(0.42, 0.45, 0.50),
+        cover: Cover::Container,
+        base: 0.0,
     },
     Kind {
         name: "pillar",
         class: Class::Object,
         scale: Vec3::new(1.0, 5.0, 1.0),
         color: Vec3::new(0.38, 0.38, 0.42),
+        cover: Cover::Wall,
+        base: 0.0,
     },
     Kind {
         name: "plate",
@@ -81,12 +95,28 @@ pub const PALETTE: &[Kind] = &[
         // Low enough to shoot over from a standing muzzle at 1.45.
         scale: Vec3::new(5.0, 0.4, 5.0),
         color: Vec3::new(0.30, 0.34, 0.38),
+        cover: Cover::Wall,
+        base: 0.0,
     },
     Kind {
         name: "wall",
         class: Class::Object,
         scale: Vec3::new(8.0, 3.0, 0.6),
         color: Vec3::new(0.34, 0.36, 0.40),
+        cover: Cover::Wall,
+        base: 0.0,
+    },
+    Kind {
+        name: "roof",
+        class: Class::Object,
+        // The tunnel roof of Trench City: underside at 2.5 (a standing body
+        // is 1.86, and a roof is never lower than a container), 0.4 thick,
+        // so its top is at 2.9. The extent here is the slab's THICKNESS;
+        // `base` is where the slab hangs.
+        scale: Vec3::new(6.0, 0.4, 3.0),
+        color: Vec3::new(0.46, 0.40, 0.34),
+        cover: Cover::Roof,
+        base: 2.5,
     },
     Kind {
         name: "spawn",
@@ -94,6 +124,8 @@ pub const PALETTE: &[Kind] = &[
         // Roughly a standing player, so a spawn shows the space it needs.
         scale: Vec3::new(0.8, 1.8, 0.8),
         color: SPAWN_COLOR,
+        cover: Cover::Container,
+        base: 0.0,
     },
 ];
 
@@ -234,6 +266,36 @@ mod tests {
             container.scale.y >= 2.4,
             "a container must be tall enough to be hard cover"
         );
+    }
+
+    #[test]
+    fn the_roof_hangs_at_container_height_and_the_rest_stand_on_the_floor() {
+        // A roof lower than a container would be a ceiling nobody can walk
+        // under; a base on anything else would export boxes floating for
+        // no reason the palette states.
+        for k in PALETTE {
+            if k.cover == Cover::Roof {
+                assert!(
+                    k.base >= pong_core::shooter::CONTAINER_MIN_H,
+                    "{} hangs at {}, too low to walk under",
+                    k.name,
+                    k.base
+                );
+                assert!(
+                    (k.base + k.scale.y - 2.9).abs() < 1e-6,
+                    "the roof's top must be Trench City's 2.9"
+                );
+            } else {
+                assert_eq!(k.base, 0.0, "{} does not stand on the floor", k.name);
+            }
+        }
+        // Every palette colour is unique, or export could not tell entries
+        // apart by the one thing an Obj carries from its entry.
+        for (i, a) in PALETTE.iter().enumerate() {
+            for b in &PALETTE[i + 1..] {
+                assert_ne!(a.color, b.color, "{} and {} share a colour", a.name, b.name);
+            }
+        }
     }
 
     #[test]

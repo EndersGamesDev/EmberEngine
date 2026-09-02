@@ -5,6 +5,7 @@ use std::net::{TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
 use pong_core::proto::{C2S, PROTO_VERSION, S2C};
+use pong_core::shooter::MAP_TRENCH_CITY;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
@@ -82,9 +83,17 @@ fn drop_in_arena_flow_with_password() {
     );
     let (host_pid, seed) = recv_until(&mut host, 5, |m| match m {
         S2C::GameJoined {
-            id, seed, players, ..
+            id,
+            seed,
+            players,
+            map,
+            ..
         } => {
             assert_eq!(players.len(), 1);
+            // The lobby names its level: a client that built the seeded
+            // arena from `seed` alone would be predicting against boxes
+            // the server does not have.
+            assert_eq!(map, MAP_TRENCH_CITY);
             Some((id, seed))
         }
         _ => None,
@@ -117,7 +126,8 @@ fn drop_in_arena_flow_with_password() {
         other => panic!("expected Error, got {other:?}"),
     }
 
-    // Correct password drops the guest into the SAME arena (same seed).
+    // Correct password drops the guest into the SAME arena (same map, same
+    // seed).
     send(
         &mut guest,
         &C2S::JoinLobby {
@@ -127,9 +137,14 @@ fn drop_in_arena_flow_with_password() {
     );
     let (guest_pid, guest_seed) = recv_until(&mut guest, 5, |m| match m {
         S2C::GameJoined {
-            id, seed, players, ..
+            id,
+            seed,
+            players,
+            map,
+            ..
         } => {
             assert_eq!(players.len(), 2, "joiner sees the full roster");
+            assert_eq!(map, MAP_TRENCH_CITY, "the joiner is told the same level");
             Some((id, seed))
         }
         _ => None,

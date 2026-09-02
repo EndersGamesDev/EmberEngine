@@ -147,10 +147,14 @@ fn main() {
             Ok(Message::Text(t)) => match serde_json::from_str::<S2C>(t.as_str()) {
                 Ok(S2C::Welcome { .. }) => println!("wsbot {handle}: welcomed"),
                 Ok(S2C::GameJoined {
-                    id, seed, players, ..
+                    id,
+                    seed,
+                    players,
+                    map,
+                    ..
                 }) => {
                     println!(
-                        "wsbot {handle}: in the arena as #{id} (seed {seed}, {} players)",
+                        "wsbot {handle}: in the arena as #{id} (map \"{map}\", seed {seed}, {} players)",
                         players.len()
                     );
                     my_id = Some(id);

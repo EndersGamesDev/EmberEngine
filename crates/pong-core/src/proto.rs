@@ -83,7 +83,7 @@ use serde::{Deserialize, Serialize};
 /// cannot rescue.
 ///
 /// The headshot is a bump for the same reason even though it adds no field:
-/// the top HEAD_H of the hit volume now kills outright whatever the weapon.
+/// the top `HEAD_H` of the hit volume now kills outright whatever the weapon.
 /// Nothing on the wire changed, but what a round DOES changed, and a client
 /// predicting against the old rule would disagree with the server about who
 /// is alive.
@@ -92,7 +92,33 @@ use serde::{Deserialize, Serialize};
 /// inside the bullet sweep, so a strike that never becomes a bullet is never
 /// offered to it - the "goes through the shield" behaviour is structural, not
 /// a flag, and a later change to the shield cannot silently start blocking it.
-pub const PROTO_VERSION: u16 = 12;
+/// v13: `GameJoined.map`, an authored arena, and an obstacle with a bottom.
+///
+/// `Level` existed since bite 6 but nothing consumed it: `Sim::new` took a
+/// seed and every peer regenerated the same random boxes. The server now
+/// builds each lobby from `Level::trench_city()` and names it in `map`; the
+/// client rebuilds the same level from that name (`Level::named`) and
+/// predicts its own movement against it. `Obstacle` also grows `base`, the
+/// bottom of a box, so a roofed trench section is walkable underneath and
+/// standable on top, and the shared `blocked`, `support_height`,
+/// `step_vertical` and the bullet sweep all read it.
+///
+/// `map` is `#[serde(default)]`, so the frame decodes everywhere - and that
+/// is precisely not the test. What does an OLD peer DO when the field is
+/// absent? A v12 client joining a v13 server predicts its movement against
+/// the seeded boxes while the server resolves it against the trench city:
+/// every wall is either invisible or imaginary, it walks through cover the
+/// server stops it at and is stopped by cover it cannot see, and its own
+/// rounds vanish into roofs it does not draw. A v13 client on a v12 server
+/// reads an empty `map`, builds the seeded arena, and would be fine - but
+/// the gate is exact equality, so that direction is moot. "Plays a different
+/// game" in the direction that matters is the bump.
+///
+/// The name is a string rather than a bump-per-map so the NEXT map is an
+/// additive value: a peer that knows the name plays it, and one that does
+/// not falls back to the seeded arena, which is where the gate steps in
+/// again rather than here.
+pub const PROTO_VERSION: u16 = 13;
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
 pub const MAX_PASSWORD_LEN: usize = 40;
@@ -277,12 +303,20 @@ pub enum S2C {
         lobbies: Vec<LobbyInfo>,
     },
     /// You are in a game (created or joined). `players` includes yourself;
-    /// generate the arena locally from `seed`.
+    /// build the arena locally from `Level::named(&map, seed)`.
     GameJoined {
         id: u8,
+        /// Still sent: it is what `map` falls back to, and the seeded arena
+        /// is still a level a lobby can name by naming nothing.
         seed: u64,
         arena_half: f32,
         players: Vec<PlayerMeta>,
+        /// Which `Level` this lobby runs - `MAP_TRENCH_CITY`, or anything
+        /// else for the seeded arena. Defaulted so the frame decodes from a
+        /// pre-v13 server; the version gate is what stops that being
+        /// played, for the reasons at `PROTO_VERSION`.
+        #[serde(default)]
+        map: String,
     },
     PlayerJoined {
         meta: PlayerMeta,
@@ -380,17 +414,37 @@ mod tests {
                 handle: "ender".into(),
                 color: color_for(2),
             }],
+            map: crate::shooter::MAP_TRENCH_CITY.to_string(),
         })
         .unwrap();
+        assert!(s.contains("\"map\":\"trench-city\""), "{s}");
         let back: S2C = serde_json::from_str(&s).unwrap();
         assert!(matches!(
             back,
             S2C::GameJoined {
                 id: 2,
                 seed: 987_654_321,
+                ref map,
                 ..
-            }
+            } if map == crate::shooter::MAP_TRENCH_CITY
         ));
+    }
+
+    #[test]
+    fn a_game_joined_without_a_map_names_the_seeded_arena() {
+        // What `serde(default)` buys, and all it buys: a v12 frame decodes,
+        // and the empty name resolves to the arena a v12 server is running.
+        // The gate is what keeps a v12 server from being played at all.
+        let old = r#"{"t":"game_joined","id":1,"seed":42,"arena_half":24.0,"players":[]}"#;
+        let back: S2C = serde_json::from_str(old).unwrap();
+        let S2C::GameJoined { seed, map, .. } = back else {
+            panic!("expected GameJoined");
+        };
+        assert_eq!(map, "");
+        assert_eq!(
+            crate::shooter::Level::named(&map, seed),
+            crate::shooter::Level::from_seed(seed)
+        );
     }
 
     #[test]

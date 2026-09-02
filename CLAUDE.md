@@ -12,7 +12,8 @@ Depth lives in linked docs, loaded only when the task needs them. This file stay
 
 - **`crates/pong-core/` is shared between the client's prediction and the authoritative server.** A change there is a change to both. Assume every edit is a protocol question until you have proved it is not.
 - Fixed 60 Hz, seeded RNG, fixed update order. Do not add a per-tick RNG: the only randomness today is two world-generation LCGs, and the first per-tick one has to be seeded and tick-indexed or replays and rollback die.
-- **Bullets are stepped server-side only.** Clients never simulate their own. That is the sole reason `f32` transcendentals (`sin` in `obstacle_height`, `tan` for aim elevation) are safe in hit registration. Add client-side shot prediction and they become a desync source.
+- **Bullets are stepped server-side only.** Clients never simulate their own. That is the sole reason the `f32` transcendental in the launch (`tan` for aim elevation) is safe in hit registration. Add client-side shot prediction and it becomes a desync source. (Obstacle heights used to be a `sin` hash too; since `fcc4c68` every box carries its own `h`.)
+- **An obstacle has a bottom.** `Obstacle.base` (0 = on the floor) makes a roof a walkable slab with a tunnel under it. Four rules read it and they must agree: horizontal blocking, support, the ceiling clamp, and the bullet span test. Change one, change all four, and re-run the trench-city invariants in `pong-core`.
 - Aim is a 2D unit vector **plus a scalar elevation**, never a 3D direction. Folding them collapses bullet range by `cos(pitch)` and freezes a player's facing on a near-vertical aim. See `docs/state-model.md`.
 - Body geometry (`eye_h`, `body_h`, `hit_radius`) lives in `pong-core`, not the renderer. Client and server must agree where a body *is*.
 
@@ -29,7 +30,7 @@ The scene pass is deliberately small. Work with it, not against it.
 |---|---|
 | **One base-colour texture per mesh**, multiplied by the per-instance colour | No normal/roughness/metallic/AO/emissive. A PBR set arrives 6/7 useless. Push a textured part with `Vec3::ONE` or you double-tint it. |
 | **8-bit `R8G8B8A8`/`R8G8B8`/`R8` only** | Anything else decodes to `None` **silently, with no log**. A 16-bit export ships an untextured model. |
-| **No mipmaps** (`mip_level_count: 1`) | Detailed textures shimmer at distance. Downscale at bake time. |
+| **Mipmaps are built at upload** (full CPU box-filtered chain, trilinear sampler) | Distant textures no longer shimmer, and texture memory is 4/3 of the picture's own size. Bake at the size the picture needs up close; the chain handles distance. |
 | **One GPU texture per mesh id, cloned per primitive, never shared** | VRAM = parts x w x h x 4. Seven 2048² parts is ~112 MB for one prop. |
 | **`cull_mode: None`** | No backface culling. Interiors of open shapes render solid. |
 | **`BlendState::REPLACE`** | No additive or transparent anything. A muzzle flash can only be an opaque box. |

@@ -10,12 +10,12 @@ use ember_engine::glam::{Quat, Vec2, Vec3};
 use ember_engine::{Camera, EmberGame, Frame, InputState, Instance, KeyCode, MouseButton};
 use pong_core::proto::{BState, C2S, PROTO_VERSION, PState, PlayerMeta, S2C, STATE_EVERY_TICKS};
 use pong_core::shooter::{
-    EYE_CROUCH, EYE_STAND, FIXED_DT, MAX_HP, MAX_PITCH, Obstacle, RELOAD_SECS, generate_arena,
-    generate_pads, move_circle, obstacle_height, stance_speed, step_vertical, weapon_name,
-    weapon_stats,
+    Decor, EYE_CROUCH, EYE_STAND, FIXED_DT, Level, MAX_HP, MAX_PITCH, Obstacle, RELOAD_SECS,
+    move_circle, stance_speed, step_vertical, weapon_name, weapon_stats,
 };
 use serde::Deserialize;
 
+use crate::props::{Prop, Props, tex};
 use crate::sound::{Audio, Sfx};
 
 /// One colored piece of a loaded GLB model.
@@ -70,31 +70,19 @@ pub fn load_assets() -> (Vec<ember_engine::MeshData>, Option<Assets>) {
     }
 }
 
-/// Environment textures, embedded so the wasm build ships them (arena v8).
-const TEX_FLOOR: &[u8] = include_bytes!("../../../assets/textures/floor_basalt.png");
-const TEX_WALL: &[u8] = include_bytes!("../../../assets/textures/wall_basalt.png");
+/// The box-body player's armour picture, embedded so the wasm build ships it
+/// (arena v8). The basalt floor and wall that shipped beside it went with
+/// arena v13: the floor is cobble and the boundary the city wall, both in
+/// `props`, and two unused 2 MB pictures in the bundle were the whole cost.
 const TEX_ARMOR: &[u8] = include_bytes!("../../../assets/textures/player_armor.png");
 
-fn tex(bytes: &[u8], name: &str) -> Option<ember_engine::TextureData> {
-    match ember_engine::TextureData::from_png_bytes(bytes) {
-        Ok(t) => Some(t),
-        Err(e) => {
-            tracing::warn!(name, "texture decode failed ({e}); untextured");
-            None
-        }
-    }
-}
-
 /// Textured environment meshes, registered after the viewmodel GLB parts:
-/// `env_base` + 0 = floor plane (12x tiles), + 1 = wall/cover box (4x),
-/// + 2 = armor box (players, pads).
+/// `env_base` + 0 = armor box (the box-body player fallback).
 pub fn env_meshes() -> Vec<ember_engine::MeshData> {
-    use ember_engine::MeshData;
-    vec![
-        MeshData::textured_plane(12.0, tex(TEX_FLOOR, "floor_basalt")),
-        MeshData::textured_box(4.0, tex(TEX_WALL, "wall_basalt")),
-        MeshData::textured_box(1.0, tex(TEX_ARMOR, "player_armor")),
-    ]
+    vec![ember_engine::MeshData::textured_box(
+        1.0,
+        tex(TEX_ARMOR, "player_armor"),
+    )]
 }
 
 /// Articulated character part meshes (decimated GLBs, ~0.1MB each) — the
@@ -139,26 +127,6 @@ fn debug_camera() -> Option<Camera> {
             fov_y_deg: 65.0,
         })
     })
-}
-
-/// The factory skyline ringing the arena, built from the Free Fire "Lone
-/// Wolf" street by `tools/level_backdrop.py`. Scenery only: it stands well
-/// outside the play space, so the sim never needs to know about it.
-const BACKDROP_GLB: &[u8] = include_bytes!("../../../assets/models/level-backdrop.glb");
-
-/// Backdrop meshes, registered starting at `first_mesh`.
-pub fn backdrop_meshes(first_mesh: u32) -> (Vec<ember_engine::MeshData>, u32) {
-    match ember_engine::assets::load_glb(BACKDROP_GLB) {
-        Ok(parts) => {
-            let meshes: Vec<ember_engine::MeshData> = parts.into_iter().map(|p| p.mesh).collect();
-            tracing::info!("backdrop loaded ({} parts)", meshes.len());
-            (meshes, first_mesh)
-        }
-        Err(e) => {
-            tracing::warn!("backdrop unusable ({e}); plain horizon");
-            (Vec::new(), 0)
-        }
-    }
 }
 
 /// The artist-made SWAT operator, split one mesh per rig joint by
@@ -490,10 +458,13 @@ pub struct ShooterGame {
     since_ping: f32,
     since_status: f32,
     lost: bool,
-    /// First backdrop mesh id and how many there are; 0 = no backdrop.
-    backdrop_base: u32,
-    backdrop_parts: u32,
-    /// First mesh id of `env_meshes()` (floor, wall, armor); 0 = untextured.
+    /// The v13 prop set (cover by kind, city, sky, ground) and where it got
+    /// registered; None = plain coloured boxes and no city.
+    props: Option<Props>,
+    /// The level's decor list, from `GameJoined`: client-only, but listed
+    /// by the level so every client draws the same city.
+    decor: Vec<Decor>,
+    /// First mesh id of `env_meshes()` (armor); 0 = untextured.
     env_base: u32,
     /// Jointed player character; None = textured/plain boxes.
     rig_character: Option<ember_engine::rig::RigCharacter>,
@@ -566,9 +537,9 @@ impl ShooterGame {
             since_ping: 0.0,
             since_status: 0.0,
             lost: false,
+            props: None,
+            decor: Vec::new(),
             env_base: 0,
-            backdrop_base: 0,
-            backdrop_parts: 0,
             rig_character: None,
             anim: HashMap::new(),
             prev_pos: HashMap::new(),
@@ -585,10 +556,10 @@ impl ShooterGame {
         self.env_base = base;
     }
 
-    /// Where the backdrop meshes got registered.
-    pub const fn set_backdrop(&mut self, base: u32, parts: u32) {
-        self.backdrop_base = base;
-        self.backdrop_parts = parts;
+    /// Where `props::prop_meshes()` got registered, with their measured
+    /// sizes (set by `run_online` after load).
+    pub const fn set_props(&mut self, base: u32, fits: &crate::props::PropFits) {
+        self.props = Some(Props { base, fits: *fits });
     }
 
     /// Install the jointed character (set by `run_online` after load).
@@ -715,11 +686,18 @@ impl EmberGame for ShooterGame {
                     seed,
                     arena_half,
                     players,
+                    map,
                 } => {
                     self.my_id = Some(id);
                     self.arena_half = arena_half;
-                    self.obstacles = generate_arena(seed);
-                    self.pads_pos = generate_pads(seed);
+                    // The same level the server built its lobby from, so
+                    // prediction and authority resolve against identical
+                    // cover; the seed is only what an unknown name falls
+                    // back to.
+                    let level = Level::named(&map, seed);
+                    self.obstacles = level.obstacles;
+                    self.pads_pos = level.pads;
+                    self.decor = level.decor;
                     self.pads_active = vec![true; self.pads_pos.len()];
                     self.history.clear();
                     self.reload_started = None;
@@ -1285,40 +1263,44 @@ impl EmberGame for ShooterGame {
         // ---- build the scene ----
         let mut frame = Frame {
             camera,
-            instances: Vec::with_capacity(96),
-            fog: ember_engine::Fog::default(),
+            instances: Vec::with_capacity(160),
+            // Golden hour over the city: a warm haze the sky cylinder reads
+            // bright through, instead of the pre-v13 navy that turned the
+            // panorama into night at 60 m. Post-tonemap light, per `Fog`.
+            fog: ember_engine::Fog {
+                color: [0.62, 0.50, 0.40],
+                density: 0.006,
+            },
         };
         let half = self.arena_half;
         let inst = |frame: &mut Frame, p: Vec3, s: Vec3, c: Vec3| {
             frame.instances.push(Instance::new(p, s, c));
         };
 
-        // Floor + enclosing walls (tall enough to feel like a room).
-        // env_base > 0: textured basalt set (arena v8); else the classic flats.
+        // The city: sky cylinder and the far ground first, then the arena
+        // floor and its boundary wall. env_base > 0: the armour picture for
+        // box-body players; the props carry every other picture.
         let env = self.env_base;
-        // Factory skyline: the ring is already positioned in model space.
-        for part in 0..self.backdrop_parts {
-            frame.instances.push(
-                // Lifted above its texture's own value: the skyline is far
-                // enough out that fog washes most of its contrast away.
-                Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::splat(1.45))
-                    .with_mesh(self.backdrop_base + part),
-            );
+        let props = self.props;
+        if let Some(pr) = &props {
+            pr.push_sky_and_ground(&mut frame);
         }
+        // The floor slab: what the arena stands on, and what closes the gap
+        // between the cobble plane and the far ground.
         inst(
             &mut frame,
             Vec3::new(0.0, -0.5, 0.0),
             Vec3::new(half * 2.0 + 2.0, 1.0, half * 2.0 + 2.0),
             Vec3::new(0.12, 0.13, 0.17),
         );
-        if env > 0 {
+        if let Some(pr) = &props {
             frame.instances.push(
                 Instance::new(
                     Vec3::new(0.0, 0.004, 0.0),
                     Vec3::new(half * 2.0 + 2.0, 1.0, half * 2.0 + 2.0),
                     Vec3::ONE,
                 )
-                .with_mesh(env),
+                .with_mesh(pr.mesh(Prop::Floor)),
             );
         }
         for (px, pz, sx, sz) in [
@@ -1327,14 +1309,16 @@ impl EmberGame for ShooterGame {
             (0.0, half + 0.45, half * 2.0 + 2.7, 0.9),
             (0.0, -half - 0.45, half * 2.0 + 2.7, 0.9),
         ] {
-            if env > 0 {
-                frame.instances.push(
-                    Instance::new(
-                        Vec3::new(px, 1.75, pz),
-                        Vec3::new(sx, 3.5, sz),
-                        Vec3::splat(0.95),
-                    )
-                    .with_mesh(env + 1),
+            if let Some(pr) = &props {
+                // The balustrade picture, one tile per wall height; the
+                // fit turns the east and west walls so the long faces
+                // carry it whichever way the wall runs.
+                pr.push_fitted(
+                    &mut frame,
+                    Prop::CityWall,
+                    Vec3::new(px, 1.75, pz),
+                    Vec3::new(sx, 3.5, sz),
+                    Vec3::ONE,
                 );
             } else {
                 inst(
@@ -1343,6 +1327,13 @@ impl EmberGame for ShooterGame {
                     Vec3::new(sx, 3.5, sz),
                     Vec3::new(0.26, 0.28, 0.34),
                 );
+            }
+        }
+        // The listed decor: statue, cathedral, the façade ring, lamps and
+        // wrecks, each scaled to the height the level gives it.
+        if let Some(pr) = &props {
+            for d in &self.decor {
+                pr.push_decor(&mut frame, d);
             }
         }
         // Weapon-upgrade pads: base slab always, a spinning pickup while
@@ -1372,20 +1363,20 @@ impl EmberGame for ShooterGame {
             }
         }
 
-        // Obstacles from the shared seed, with deterministic cosmetic
-        // height variation (cover you can crouch behind, blocks you can't
-        // see over).
+        // Cover, drawn by kind: the same boxes prediction resolves against,
+        // so what you see is what stops you. A raised box (a tunnel roof)
+        // is drawn from its base, not from the floor.
         for o in &self.obstacles {
-            let cx = f32::midpoint(o.min[0], o.max[0]);
-            let cz = f32::midpoint(o.min[1], o.max[1]);
-            let h = obstacle_height(o);
-            let pos = Vec3::new(cx, h * 0.5, cz);
-            let size = Vec3::new(o.max[0] - o.min[0], h, o.max[1] - o.min[1]);
-            if env > 0 {
-                frame
-                    .instances
-                    .push(Instance::new(pos, size, Vec3::splat(0.85)).with_mesh(env + 1));
+            if let Some(pr) = &props {
+                pr.push_obstacle(&mut frame, o);
             } else {
+                let height = o.h - o.base;
+                let pos = Vec3::new(
+                    f32::midpoint(o.min[0], o.max[0]),
+                    o.base + height * 0.5,
+                    f32::midpoint(o.min[1], o.max[1]),
+                );
+                let size = Vec3::new(o.max[0] - o.min[0], height, o.max[1] - o.min[1]);
                 inst(&mut frame, pos, size, Vec3::new(0.30, 0.33, 0.40));
             }
         }
@@ -1456,7 +1447,7 @@ impl EmberGame for ShooterGame {
                         Vec3::new(1.0, body_h, 1.0),
                         color,
                     )
-                    .with_mesh(env + 2),
+                    .with_mesh(env),
                 );
                 frame.instances.push(
                     Instance::new(
@@ -1464,7 +1455,7 @@ impl EmberGame for ShooterGame {
                         Vec3::splat(0.55),
                         color * 0.7,
                     )
-                    .with_mesh(env + 2),
+                    .with_mesh(env),
                 );
             } else {
                 inst(

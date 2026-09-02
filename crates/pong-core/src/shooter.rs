@@ -1,6 +1,8 @@
-//! The arena shooter sim: pure, deterministic, fixed 60 Hz. Runs
-//! authoritatively on the server; clients render its broadcast state and
-//! generate the identical arena from the lobby's seed.
+//! The arena shooter sim: pure, deterministic, fixed 60 Hz.
+//!
+//! Runs authoritatively on the server; clients render its broadcast state
+//! and build the identical arena from the `Level` the lobby names (and, for
+//! the seeded arena, from the lobby's seed).
 
 pub const FIXED_DT: f32 = 1.0 / 60.0;
 pub const ARENA_HALF: f32 = 24.0;
@@ -33,20 +35,23 @@ pub const SHIELD_ARC: f32 = std::f32::consts::FRAC_PI_3 * 2.0;
 /// It must also stay under `BODY_H_STAND - EYE_STAND` = 0.41. Rounds leave the
 /// muzzle at `EYE_STAND` 1.45 and fly level at pitch 0, so a band reaching down
 /// to 1.45 would make every level shot between two standing players a headshot
-/// - and with headshots lethal the pistol would one-shot the whole game with
+/// — and with headshots lethal the pistol would one-shot the whole game with
 /// nobody aiming at a head. At 0.30 the band starts at 1.56, so level fire
 /// lands in the chest and a standing kill needs deliberate upward aim.
 /// `level_fire_is_not_a_free_headshot` pins that margin.
 pub const HEAD_H: f32 = 0.30;
 
 /// Melee reach from the attacker's centre, before the target's own radius is
-/// added. 2.0 + PLAYER_R 0.6 strikes a standing target at 2.6 centre to
-/// centre, about one and a half body widths - a lunge, not a spear.
+/// added.
+///
+/// 2.0 + `PLAYER_R` 0.6 strikes a standing target at 2.6 centre to centre,
+/// about one and a half body widths - a lunge, not a spear.
 pub const MELEE_RANGE: f32 = 2.0;
-/// Full width of the melee cone, radians (~115 deg). Wider than SHIELD_ARC on
-/// purpose: the shield answers "am I covered from that round", which wants to
-/// be demanding, while a swing at contact range wants to land when it
-/// visually should.
+/// Full width of the melee cone, radians (~115 deg).
+///
+/// Wider than `SHIELD_ARC` on purpose: the shield answers "am I covered from
+/// that round", which wants to be demanding, while a swing at contact range
+/// wants to land when it visually should.
 pub const MELEE_ARC: f32 = 2.0;
 /// Seconds between swings. Every connect is a kill, so this is the only thing
 /// stopping melee from out-killing the pistol at range zero by spamming.
@@ -140,6 +145,13 @@ pub const RELOAD_SECS: f32 = 1.1;
 pub const MAX_WEAPON: u8 = 3;
 pub const PAD_RESPAWN_SECS: f32 = 15.0;
 pub const PAD_RADIUS: f32 = 1.3;
+/// A pad is taken only with the feet below this.
+///
+/// The contact test is a horizontal circle, so without it a player standing
+/// on a tunnel roof collected the pad 2.9 m under their boots through the
+/// slab. Under every roof base (2.5); and a hop over a pad takes off and
+/// lands below it, so a pad on open floor is still grabbed in passing.
+pub const PAD_PICK_H: f32 = 1.0;
 
 /// Weapon levels: 1 = pistol, 2 = rapid, 3 = heavy. Picked up on pads,
 /// reset on death.
@@ -211,29 +223,93 @@ pub const CONTAINER_MIN_H: f32 = 2.4;
 /// their feet; anything taller is a wall to them.
 pub const STEP_UP: f32 = 0.35;
 
-/// Axis-aligned obstacle on the XZ plane, with a top.
+/// What a cover box IS.
+///
+/// Cosmetic to the sim - every kind blocks, supports and stops rounds by the
+/// same three numbers - and load-bearing to the client, which draws a
+/// container, a crate and a sandbag as three different things. Carried on
+/// the obstacle rather than derived from its height because the authored
+/// arena has 1.1-tall sandbags and 0.7-tall rubble that no height rule could
+/// tell apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum Cover {
+    /// A closed shipping container: hard cover you cannot climb from the
+    /// floor. The default, so a pre-kind level decodes to the safe reading
+    /// (nothing is jumpable that was not meant to be).
+    #[default]
+    Container,
+    /// A wooden crate: jumpable, fought from.
+    Crate,
+    /// An ammunition box: the lowest step of a climbing chain.
+    Ammo,
+    /// A sandbag line: waist-high spawn cover.
+    Sandbag,
+    /// A trench wall: hard cover from the floor, seen over - and mounted,
+    /// one hop - from a fire step.
+    Wall,
+    /// A tunnel roof: the one kind that is expected to have a `base` above
+    /// the floor, so you walk under it and stand on it.
+    Roof,
+    /// Low rubble.
+    Rubble,
+    /// The statue's plinth.
+    Plinth,
+}
+
+/// Axis-aligned obstacle on the XZ plane, with a top and a bottom.
 ///
 /// `h` used to be derived on demand by hashing `min` — which meant a box
 /// could not *state* how tall it was, and an authored one had no way into
 /// the sim. It is now carried. Seeded arenas fill it with exactly the old
 /// hash, so nothing observable changed when it moved.
+///
+/// `base` arrived with the authored arena (v13): a roofed trench section is
+/// a box that starts above the floor, walkable underneath and standable on
+/// top. Every box that existed before has `base == 0`, and every rule below
+/// is written so that a zero base changes nothing about it. Both new fields
+/// default on decode, so a level written before they existed still loads.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Obstacle {
     pub min: [f32; 2],
     pub max: [f32; 2],
-    /// Top of the box; the floor is 0.
+    /// Top of the box, measured from the floor at 0 (NOT from `base`).
     pub h: f32,
+    /// Bottom of the box; 0 is on the floor. Must stay below `h`.
+    #[serde(default)]
+    pub base: f32,
+    #[serde(default)]
+    pub kind: Cover,
 }
 
 impl Obstacle {
     /// A box at seeded-arena proportions: the height the generator would
-    /// have derived for this footprint.
+    /// have derived for this footprint, on the floor, classed by that
+    /// height exactly as the client has always drawn it.
     #[must_use]
     pub fn seeded(min: [f32; 2], max: [f32; 2]) -> Self {
+        let h = seeded_height(min);
         Self {
             min,
             max,
-            h: seeded_height(min),
+            h,
+            base: 0.0,
+            kind: if h < CONTAINER_MIN_H {
+                Cover::Crate
+            } else {
+                Cover::Container
+            },
+        }
+    }
+
+    /// An authored box: bottom at `base`, top at `h`.
+    #[must_use]
+    pub const fn boxed(kind: Cover, min: [f32; 2], max: [f32; 2], base: f32, h: f32) -> Self {
+        Self {
+            min,
+            max,
+            h,
+            base,
+            kind,
         }
     }
 }
@@ -263,15 +339,21 @@ pub const fn obstacle_height(o: &Obstacle) -> f32 {
     o.h
 }
 
-/// The surface a player at `pos` stands on: its tallest overlapping box or the floor.
+/// The surface a player at `pos` with feet at `y` stands on: the tallest
+/// overlapping box whose bottom is at or below their feet, or the floor.
 ///
 /// This uses the same overlap test as `blocked`, so support always comes from
-/// a box the player is actually on.
+/// a box the player is actually on. The feet height is what makes a roof a
+/// roof: a player walking through a tunnel at `y = 0` is on the floor, not
+/// on the box 2.5 m above their head, and a player dropped onto that box
+/// from above is on it. `base <= y + 1e-3` - the same slack the landing
+/// check uses - so a player resting exactly on a box they cannot see under
+/// is still counted as on it. For `base == 0` the clause is always true.
 #[must_use]
-pub fn support_height(pos: [f32; 2], r: f32, obstacles: &[Obstacle]) -> f32 {
+pub fn support_height(pos: [f32; 2], r: f32, y: f32, obstacles: &[Obstacle]) -> f32 {
     let mut h = 0.0f32;
     for o in obstacles {
-        if overlaps(pos, r, o) {
+        if o.base <= y + 1e-3 && overlaps(pos, r, o) {
             h = h.max(obstacle_height(o));
         }
     }
@@ -322,28 +404,164 @@ fn spawn_point(slot: u32) -> [f32; 2] {
     [angle.cos() * SPAWN_RING_R, angle.sin() * SPAWN_RING_R]
 }
 
-/// A whole arena as data: what the editor authors, and what the sim will
-/// eventually be handed instead of a seed.
+/// Where player `slot` starts given a level's spawn list: wrapping if an
+/// authored level supplies fewer spawns than players, and the seeded ring
+/// when it carries none, so a half-authored level still runs. Shared by
+/// `Level::spawn` and by the sim's own placement so the two cannot drift.
+fn spawn_from(spawns: &[[f32; 2]], slot: u32) -> [f32; 2] {
+    if spawns.is_empty() {
+        return spawn_point(slot);
+    }
+    spawns[slot as usize % spawns.len()]
+}
+
+/// A client-only prop the level lists so every client draws the same city.
 ///
-/// Today every peer regenerates the world from the lobby seed and this
-/// type is only ever *produced* — `Sim` still takes a seed and nothing
-/// reads a `Level` off the wire. That is deliberate: the format lands, is
-/// proved identical to the generator, and the protocol change that
-/// delivers it is a separate step behind a server redeploy.
+/// Nothing in the sim reads these; they are here because the level is the
+/// one document both peers agree on, and a statue that only some clients
+/// draw is a landmark that only some players can navigate by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum DecorKind {
+    Statue,
+    Cathedral,
+    FacadeA,
+    FacadeB,
+    Lamp,
+    Wreck,
+}
+
+/// One placed decor prop.
+///
+/// `pos` is the prop's feet (its base point) in world units, `(x, y, z)`.
+/// `yaw` is radians about +Y, with 0 facing +Z and the facing direction
+/// `(sin yaw, 0, cos yaw)` - which is what `Quat::from_rotation_y(yaw)`
+/// does to +Z - so a prop on the ring at angle `phi` faces the centre at
+/// `yaw = phi + PI`. `scale` is the prop's target HEIGHT in world units,
+/// never a multiplier: the meshes are generated at arbitrary size and the
+/// client fits each one to this.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Decor {
+    pub kind: DecorKind,
+    pub pos: [f32; 3],
+    pub yaw: f32,
+    pub scale: f32,
+}
+
+/// The name `GameJoined.map` carries for the authored v13 arena.
+///
+/// Any other value - including the empty string an older frame decodes to -
+/// names the seeded arena, so a future map is an additive string rather than
+/// a bump.
+pub const MAP_TRENCH_CITY: &str = "trench-city";
+
+/// A whole arena as data: what the editor authors and what the sim is
+/// handed.
+///
+/// The server builds each lobby from one, and the client rebuilds the same
+/// one from the map name in `GameJoined`, so both resolve movement against
+/// identical cover.
 ///
 /// Spawns are carried rather than derived because an authored arena
 /// decides where players start; a seeded one reproduces the golden-angle
-/// ring the sim has always used.
+/// ring the sim has always used. Pads are carried for the same reason.
+/// `pads` and `decor` default on decode so a level written before they
+/// existed still loads (and plays without pads, as its author left it).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Level {
     pub arena_half: f32,
     pub obstacles: Vec<Obstacle>,
     pub spawns: Vec<[f32; 2]>,
+    #[serde(default)]
+    pub pads: Vec<[f32; 2]>,
+    #[serde(default)]
+    pub decor: Vec<Decor>,
+}
+
+/// One authored box before rotation: kind, the two XZ corners, base, top.
+type AuthoredBox = (Cover, [f32; 2], [f32; 2], f32, f32);
+
+/// Trench City, the part that is not rotated: the statue's granite base.
+/// Not reachable from the floor (jump apex 1.69, top 2.2), reachable from
+/// the sandbags around it (1.1 + 1.69). King-of-the-hill.
+const TRENCH_CENTRE: &[AuthoredBox] = &[(Cover::Plinth, [-1.6, -1.6], [1.6, 1.6], 0.0, 2.2)];
+
+/// Trench City, the north side; the level rotates it by 90 degrees three
+/// times. Transcribed from `docs/plans/arena-v13-trench-city.md` section
+/// 4.2, in its order: inner square, trench ring, outer flank.
+///
+/// The trench corridor is z 11.0..14.0 between the walls; the roof over its
+/// middle 12 m is the one box with a bottom above the floor, and the pad
+/// sits under it so the tunnels are contested. The three 2.6-tall containers
+/// each have a crate within 0.5 of a face and an ammo box within 0.5 of the
+/// crate: a climbing chain, floor -> 0.55 -> 1.2 -> 2.6, each step under the
+/// jump apex. The 5.2-tall stacked pair is a landmark nobody can climb.
+const TRENCH_NORTH: &[AuthoredBox] = &[
+    // Inner square dressing.
+    (Cover::Sandbag, [-2.0, 4.6], [2.0, 5.4], 0.0, 1.1),
+    (Cover::Rubble, [-8.0, 7.6], [-6.0, 9.6], 0.0, 0.7),
+    // Trench ring: inner wall, west and east, with the tunnel mouth between.
+    (Cover::Wall, [-11.0, 10.6], [-1.2, 11.0], 0.0, 2.5),
+    (Cover::Wall, [1.2, 10.6], [11.0, 11.0], 0.0, 2.5),
+    // Outer wall in three segments; the gaps at |x| 4.8..7.2 are the entrances.
+    (Cover::Wall, [-14.4, 14.0], [-7.2, 14.4], 0.0, 2.5),
+    (Cover::Wall, [-4.8, 14.0], [4.8, 14.4], 0.0, 2.5),
+    (Cover::Wall, [7.2, 14.0], [14.4, 14.4], 0.0, 2.5),
+    // The tunnel: 12 m long, clearance 2.5 over a 1.86 standing body.
+    (Cover::Roof, [-6.0, 11.0], [6.0, 14.0], 2.5, 2.9),
+    // Fire steps against the outer wall.
+    (Cover::Crate, [-9.6, 12.8], [-8.4, 14.0], 0.0, 1.2),
+    (Cover::Crate, [8.4, 12.8], [9.6, 14.0], 0.0, 1.2),
+    // Low cover inside the tunnel, staggered inner/outer.
+    (Cover::Ammo, [-3.4, 11.0], [-2.4, 11.7], 0.0, 0.55),
+    (Cover::Ammo, [2.4, 13.3], [3.4, 14.0], 0.0, 0.55),
+    // Outer flank: the container that blocks the spawn-to-tunnel sightline
+    // and its chain.
+    (Cover::Container, [-3.0, 19.2], [3.0, 21.6], 0.0, 2.6),
+    (Cover::Crate, [3.4, 19.6], [4.8, 21.0], 0.0, 1.2),
+    (Cover::Ammo, [5.2, 19.8], [6.2, 20.6], 0.0, 0.55),
+    // The corner container along x, and its chain. Its near corner sits on
+    // the diagonal between this side's east spawn and the next side's
+    // north spawn (x + z = 30), which is what stops those two seeing each
+    // other past the wall corner; the flank still connects around its
+    // east end.
+    (Cover::Container, [14.8, 15.0], [20.8, 17.4], 0.0, 2.6),
+    (Cover::Crate, [13.2, 15.4], [14.6, 16.8], 0.0, 1.2),
+    (Cover::Ammo, [11.8, 15.6], [12.8, 16.4], 0.0, 0.55),
+    // The stacked pair: corner landmark, unreachable.
+    (Cover::Container, [17.0, 20.4], [23.0, 22.8], 0.0, 5.2),
+    // Spawn cover.
+    (Cover::Sandbag, [-11.0, 17.6], [-7.0, 18.4], 0.0, 1.1),
+    (Cover::Sandbag, [7.0, 17.6], [11.0, 18.4], 0.0, 1.1),
+];
+/// North-side spawns; rotated they make eight, two per side, each 2.6 from
+/// the nearest box edge and at least 16 from each other.
+const TRENCH_NORTH_SPAWNS: [[f32; 2]; 2] = [[-9.0, 21.0], [9.0, 21.0]];
+/// The north pad, inside the tunnel.
+const TRENCH_NORTH_PAD: [f32; 2] = [0.0, 12.5];
+
+/// A quarter turn about the origin, `(x, z) -> (-z, x)`.
+const fn rot90_point(p: [f32; 2]) -> [f32; 2] {
+    [-p[1], p[0]]
+}
+
+/// A quarter turn of a box. Both corners are mapped and min/max re-derived:
+/// the rotation negates an axis, which swaps min and max on it, so mapping
+/// the corners componentwise emits a box with `min > max` (the mistake
+/// `docs/asset-pipeline.md` warns about).
+const fn rot90_box(o: &Obstacle) -> Obstacle {
+    let a = rot90_point(o.min);
+    let b = rot90_point(o.max);
+    Obstacle {
+        min: [a[0].min(b[0]), a[1].min(b[1])],
+        max: [a[0].max(b[0]), a[1].max(b[1])],
+        ..*o
+    }
 }
 
 impl Level {
     /// The arena a seed has always produced — same obstacles, same
-    /// heights, same spawn ring.
+    /// heights, same pads, same spawn ring - bit for bit, so every test
+    /// written against the seeded arena keeps its world.
     #[must_use]
     // `MAX_PLAYERS` is eight, so this conversion cannot truncate in supported builds.
     #[allow(clippy::cast_possible_truncation)]
@@ -352,6 +570,64 @@ impl Level {
             arena_half: ARENA_HALF,
             obstacles: generate_arena(seed),
             spawns: (0..MAX_PLAYERS as u32).map(spawn_point).collect(),
+            pads: generate_pads(seed),
+            decor: Vec::new(),
+        }
+    }
+
+    /// The authored v13 arena: `docs/plans/arena-v13-trench-city.md`
+    /// section 4, tables transcribed above, four-fold symmetric about the
+    /// origin. Spawns are listed one per side first (slots 0..4 land on
+    /// four different sides) and then the second of each side.
+    #[must_use]
+    pub fn trench_city() -> Self {
+        let mut obstacles: Vec<Obstacle> = TRENCH_CENTRE
+            .iter()
+            .map(|&(kind, min, max, base, h)| Obstacle::boxed(kind, min, max, base, h))
+            .collect();
+        let mut pads = Vec::with_capacity(4);
+        for turns in 0..4 {
+            for &(kind, min, max, base, h) in TRENCH_NORTH {
+                let mut o = Obstacle::boxed(kind, min, max, base, h);
+                for _ in 0..turns {
+                    o = rot90_box(&o);
+                }
+                obstacles.push(o);
+            }
+            let mut pad = TRENCH_NORTH_PAD;
+            for _ in 0..turns {
+                pad = rot90_point(pad);
+            }
+            pads.push(pad);
+        }
+        let mut spawns = Vec::with_capacity(8);
+        for spawn in TRENCH_NORTH_SPAWNS {
+            for turns in 0..4 {
+                let mut s = spawn;
+                for _ in 0..turns {
+                    s = rot90_point(s);
+                }
+                spawns.push(s);
+            }
+        }
+        Self {
+            arena_half: ARENA_HALF,
+            obstacles,
+            spawns,
+            pads,
+            decor: trench_city_decor(),
+        }
+    }
+
+    /// The level a `GameJoined` names: `MAP_TRENCH_CITY` is the authored
+    /// arena, anything else (including the empty string an older frame
+    /// decodes to) is the seeded one.
+    #[must_use]
+    pub fn named(map: &str, seed: u64) -> Self {
+        if map == MAP_TRENCH_CITY {
+            Self::trench_city()
+        } else {
+            Self::from_seed(seed)
         }
     }
 
@@ -360,11 +636,75 @@ impl Level {
     /// level carries none, so a half-authored level still runs.
     #[must_use]
     pub fn spawn(&self, slot: u32) -> [f32; 2] {
-        if self.spawns.is_empty() {
-            return spawn_point(slot);
-        }
-        self.spawns[slot as usize % self.spawns.len()]
+        spawn_from(&self.spawns, slot)
     }
+}
+
+/// Trench City's decor, `docs/plans/arena-v13-trench-city.md` section 4.3.
+///
+/// The façade ring has twelve 30-degree slots and the cathedral's slot
+/// (180 degrees, behind the south wall) is left empty, so eleven façades
+/// ship, alternating A and B; the spec's "6 and 6" does not fit twelve
+/// slots minus one and this is the reading that keeps the spacing.
+///
+/// The wreck's `scale` is a height: the spec gives its LENGTH as ~4.4, and
+/// a car that long is about 1.5 tall, which is what the client is asked to
+/// fit it to. `sin_cos` here is fine for determinism: decor is client-only
+/// and never reaches the sim.
+fn trench_city_decor() -> Vec<Decor> {
+    use std::f32::consts::{FRAC_PI_4, PI, TAU};
+    const RING_R: f32 = 44.0;
+    const CATHEDRAL_SLOT: u8 = 6;
+    let mut decor = vec![
+        Decor {
+            kind: DecorKind::Statue,
+            pos: [0.0, 2.2, 0.0],
+            yaw: 0.0,
+            scale: 4.0,
+        },
+        Decor {
+            kind: DecorKind::Cathedral,
+            pos: [0.0, 0.0, -46.0],
+            yaw: 0.0,
+            scale: 34.0,
+        },
+    ];
+    for slot in 0..12u8 {
+        if slot == CATHEDRAL_SLOT {
+            continue;
+        }
+        let phi = f32::from(slot) * (TAU / 12.0);
+        let (s, c) = phi.sin_cos();
+        decor.push(Decor {
+            kind: if slot.is_multiple_of(2) {
+                DecorKind::FacadeA
+            } else {
+                DecorKind::FacadeB
+            },
+            pos: [RING_R * s, 0.0, RING_R * c],
+            yaw: (phi + PI) % TAU,
+            scale: 18.0,
+        });
+    }
+    for &(x, z) in &[(26.0, 12.0), (12.0, 26.0)] {
+        for &(sx, sz) in &[(1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)] {
+            decor.push(Decor {
+                kind: DecorKind::Lamp,
+                pos: [x * sx, 0.0, z * sz],
+                yaw: 0.0,
+                scale: 5.0,
+            });
+        }
+    }
+    for &(sx, sz) in &[(1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)] {
+        decor.push(Decor {
+            kind: DecorKind::Wreck,
+            pos: [27.0 * sx, 0.0, 27.0 * sz],
+            yaw: FRAC_PI_4,
+            scale: 1.5,
+        });
+    }
+    decor
 }
 
 /// Weapon-upgrade pad positions: seeded and shared, like the arena itself.
@@ -414,14 +754,19 @@ pub struct Pad {
 
 /// Is this spot blocked for a player whose feet are at `y`? The arena wall
 /// always blocks; a box only blocks while the player's feet are below its
-/// top, so you can walk across boxes you have jumped onto.
+/// top (by more than a step), so you can walk across boxes you have jumped
+/// onto - AND while their head is above its bottom, so you can walk under a
+/// box that starts above you. The head is always the standing one: crouch
+/// is cosmetic to movement here as everywhere, and a rule that let a
+/// crouched player under a lower roof would need `move_circle` to know the
+/// stance on both peers. For `base == 0` the head clause is always true.
 fn blocked(pos: [f32; 2], y: f32, r: f32, obstacles: &[Obstacle]) -> bool {
     if pos[0].abs() > ARENA_HALF - r || pos[1].abs() > ARENA_HALF - r {
         return true;
     }
-    obstacles
-        .iter()
-        .any(|o| overlaps(pos, r, o) && y < obstacle_height(o) - STEP_UP)
+    obstacles.iter().any(|o| {
+        overlaps(pos, r, o) && y < obstacle_height(o) - STEP_UP && y + BODY_H_STAND > o.base
+    })
 }
 
 /// Stance-adjusted movement speed. Crouch wins if both are held, and a
@@ -494,7 +839,7 @@ pub fn step_vertical(
     dt: f32,
     obstacles: &[Obstacle],
 ) -> (f32, f32, bool) {
-    let ground = support_height(pos, PLAYER_R, obstacles);
+    let ground = support_height(pos, PLAYER_R, y, obstacles);
     // Landing check runs against where the feet were, so walking off a box
     // starts a fall instead of snapping to the floor.
     let grounded = y <= ground + 1e-3;
@@ -506,13 +851,30 @@ pub fn step_vertical(
         vy
     };
     vy += GRAVITY * dt;
-    let y = y + vy * dt;
-    let (y, vy, landed) = if vy <= 0.0 && y <= ground {
+    let next = y + vy * dt;
+    let (mut next, mut vy, landed) = if vy <= 0.0 && next <= ground {
         (ground, 0.0, true)
     } else {
-        (y, vy, false)
+        (next, vy, false)
     };
-    (y, vy, landed || (grounded && vy <= 0.0))
+    // Ceiling: a box whose bottom is above the feet stops the head. Judged
+    // on where the feet WERE (below the bottom) and where the head would END
+    // (above it), so a player standing on a roof is never clamped by the
+    // roof they stand on. A jump inside a tunnel bonks; a player on a
+    // container cannot jump up into the underside of anything. The clamp
+    // never goes below the surface underfoot: a box hung lower than a
+    // standing body over a player (which `blocked` never lets them walk
+    // into) leaves them standing where they are rather than pushed into the
+    // floor and oscillating.
+    let mut bonked = false;
+    for o in obstacles {
+        if y < o.base && next + BODY_H_STAND > o.base && overlaps(pos, PLAYER_R, o) {
+            next = (o.base - BODY_H_STAND).max(ground);
+            vy = 0.0;
+            bonked = true;
+        }
+    }
+    (next, vy, !bonked && (landed || (grounded && vy <= 0.0)))
 }
 
 // These independent input flags are shared public simulation API and cannot be consolidated.
@@ -618,6 +980,10 @@ type HistoryFrame = Vec<(u8, [f32; 2], f32, bool, bool)>;
 pub struct Sim {
     pub obstacles: Vec<Obstacle>,
     pub pads: Vec<Pad>,
+    /// The level's spawn points; empty means the seeded golden-angle ring.
+    /// Placement goes through `Level::spawn` semantics for both the first
+    /// spawn and every respawn.
+    pub spawns: Vec<[f32; 2]>,
     pub players: Vec<PlayerSt>,
     pub bullets: Vec<Bullet>,
     /// (killer, victim) pairs from the last step.
@@ -629,17 +995,30 @@ pub struct Sim {
 }
 
 impl Sim {
+    /// The seeded arena: exactly `from_level(&Level::from_seed(seed))`,
+    /// kept as the short spelling every existing test uses.
     #[must_use]
     pub fn new(seed: u64) -> Self {
+        Self::from_level(&Level::from_seed(seed))
+    }
+
+    /// A sim on an authored level: its obstacles, its pads (all active), its
+    /// spawns. `arena_half` is NOT read - the wall is `ARENA_HALF` in the
+    /// shared `blocked`, and making it per-level is a `move_circle`
+    /// signature change on both peers that eight players did not need.
+    #[must_use]
+    pub fn from_level(level: &Level) -> Self {
         Self {
-            obstacles: generate_arena(seed),
-            pads: generate_pads(seed)
-                .into_iter()
-                .map(|pos| Pad {
+            obstacles: level.obstacles.clone(),
+            pads: level
+                .pads
+                .iter()
+                .map(|&pos| Pad {
                     pos,
                     respawn_t: 0.0,
                 })
                 .collect(),
+            spawns: level.spawns.clone(),
             players: Vec::new(),
             bullets: Vec::new(),
             events: Vec::new(),
@@ -654,7 +1033,7 @@ impl Sim {
         let slot = self.players.len() as u32;
         self.players.push(PlayerSt {
             id,
-            pos: spawn_point(slot),
+            pos: spawn_from(&self.spawns, slot),
             y: 0.0,
             vy: 0.0,
             aim: [1.0, 0.0],
@@ -727,8 +1106,10 @@ impl Sim {
                 p.respawn_in -= dt;
                 if p.respawn_in <= 0.0 {
                     p.deaths = p.deaths.wrapping_add(1);
-                    let point = spawn_point(p.deaths.wrapping_mul(3).wrapping_add(u32::from(p.id)));
-                    p.pos = point;
+                    p.pos = spawn_from(
+                        &self.spawns,
+                        p.deaths.wrapping_mul(3).wrapping_add(u32::from(p.id)),
+                    );
                     p.y = 0.0;
                     p.vy = 0.0;
                     p.hp = MAX_HP;
@@ -841,7 +1222,7 @@ impl Sim {
                     continue;
                 }
                 let (dx, dz) = (p.pos[0] - pad.pos[0], p.pos[1] - pad.pos[1]);
-                if dx * dx + dz * dz < PAD_RADIUS * PAD_RADIUS {
+                if p.y < PAD_PICK_H && dx * dx + dz * dz < PAD_RADIUS * PAD_RADIUS {
                     p.weapon += 1;
                     p.ammo = weapon_stats(p.weapon).mag;
                     p.reload_t = 0.0;
@@ -992,6 +1373,11 @@ impl Sim {
                 let by = b.y + (y1 - b.y) * t;
                 let mut connected = by >= lo && by <= hi;
                 let mut head = connected && by >= head_lo;
+                // Where along the tick the round met the body: the closest
+                // approach, or the first walked sample that connected when
+                // the closest approach did not. The cover test below runs
+                // there.
+                let mut contact = t;
                 // Walk the segment when one tick's vertical travel could
                 // straddle the SMALLEST zone under test. This used to key on
                 // the body band, and for the body that is right - a tick
@@ -1015,6 +1401,9 @@ impl Sim {
                         }
                         let (gx, gz) = (tpos[0] - (p0[0] + sx * u), tpos[1] - (p0[1] + sz * u));
                         if gx * gx + gz * gz < rr * rr {
+                            if !connected {
+                                contact = u;
+                            }
                             connected = true;
                             // Keep walking only to upgrade a body hit to a head
                             // hit: a round that passed through the head IS a
@@ -1028,6 +1417,35 @@ impl Sim {
                     }
                 }
                 if connected {
+                    // Cover between the muzzle and the body stops the round
+                    // before the body does. This is the world test below
+                    // (which judges the tick's END point) run at the point
+                    // of CONTACT, with the tick's vertical span up to it. A
+                    // round that meets a body from INSIDE a tunnel roof -
+                    // climbing at 30 degrees from the tunnel floor at a
+                    // player on the roof, whose hit column starts BULLET_R
+                    // below their feet, or dropping at MAX_PITCH from the
+                    // roof at the player underneath - was passing through
+                    // the slab when it connected, and the slab wins. Judged
+                    // at the contact and not the end point so a point-blank
+                    // hit on a body backed against a wall is still a hit:
+                    // the end point is inside the wall, the contact is not.
+                    // Conservative like the world test (span, not segment),
+                    // for the same reason. Ahead of the shield: cover in
+                    // front of a raised plate stops the round before the
+                    // plate could send it back.
+                    let cy = b.y + (y1 - b.y) * contact;
+                    let (cx, cz) = (p0[0] + sx * contact, p0[1] + sz * contact);
+                    if obstacles.iter().any(|o| {
+                        y0.min(cy) < obstacle_height(o)
+                            && y0.max(cy) > o.base
+                            && cx > o.min[0] - BULLET_R
+                            && cx < o.max[0] + BULLET_R
+                            && cz > o.min[1] - BULLET_R
+                            && cz < o.max[1] + BULLET_R
+                    }) {
+                        return false;
+                    }
                     // ---- the off-hand shield ----
                     //
                     // Placed exactly where the damage decision was, so a
@@ -1062,8 +1480,8 @@ impl Sim {
                         // anyway: a round that connects with a 0.82-radius
                         // body from 5 units out arrives within ~9° of
                         // straight-on. cos() is a transcendental in hit
-                        // registration, sound for exactly the reason
-                        // obstacle_height's sin() is — bullets are stepped
+                        // registration, sound for exactly the reason the
+                        // tan() at launch is — bullets are stepped
                         // server-side only.
                         if speed_h > 1e-6 && -dot >= (SHIELD_ARC * 0.5).cos() * speed_h {
                             // Mirror about the plate: v' = v - 2(v·n)n. The
@@ -1116,19 +1534,26 @@ impl Sim {
                 return false;
             }
             // Cover now stops only what actually passes THROUGH it, so a
-            // shot arcing over a crate from a container top clears it.
-            // This pulls obstacle_height's sin() into hit registration;
-            // that is sound only because bullets are simulated server-side
-            // exclusively — clients never step their own. If client-side
-            // shot prediction is ever added, this becomes a desync source.
-            // Gated on the tick's vertical SPAN, not its end point: a
-            // climbing bullet that enters a crate's footprint below the top
-            // and ends the tick above it would otherwise pass straight
-            // through the crate's side wall. Conservative — this can only
-            // over-block — and a shot arcing down from a container top over
-            // a crate still has both endpoints above it.
+            // shot arcing over a crate from a container top clears it, and
+            // a level round travels the length of a tunnel under its roof.
+            // Heights used to be hashed with a sin() right here; they are
+            // carried on the box now, but the rule that made that sound
+            // still holds and still matters: bullets are simulated
+            // server-side exclusively — clients never step their own. If
+            // client-side shot prediction is ever added, every f32
+            // transcendental on the shot's path (the tan() at launch)
+            // becomes a desync source.
+            // Gated on the tick's vertical SPAN against the box's [base, h],
+            // not on its end point: a climbing bullet that enters a crate's
+            // footprint below the top and ends the tick above it would
+            // otherwise pass straight through the crate's side wall.
+            // Conservative — this can only over-block — and a shot arcing
+            // down from a container top over a crate still has both
+            // endpoints above it. For `base == 0` the lower clause is always
+            // true, because a round below the floor was already culled.
             if obstacles.iter().any(|o| {
                 y0.min(b.y) < obstacle_height(o)
+                    && y0.max(b.y) > o.base
                     && b.pos[0] > o.min[0] - BULLET_R
                     && b.pos[0] < o.max[0] + BULLET_R
                     && b.pos[1] > o.min[1] - BULLET_R
@@ -1708,16 +2133,12 @@ mod tests {
     fn an_authored_box_keeps_the_height_it_was_given() {
         // The reason `h` moved at all: a box must be able to state its own
         // height instead of having one hashed out of its position.
-        let authored = Obstacle {
-            min: [3.0, 3.0],
-            max: [5.0, 5.0],
-            h: 7.25,
-        };
+        let authored = Obstacle::boxed(Cover::Container, [3.0, 3.0], [5.0, 5.0], 0.0, 7.25);
         assert_eq!(obstacle_height(&authored), 7.25);
         // And it is honoured by the physics, not just stored: a player at
         // floor level is blocked by it, and its top supports them.
         let obs = vec![authored];
-        assert_eq!(support_height([4.0, 4.0], PLAYER_R, &obs), 7.25);
+        assert_eq!(support_height([4.0, 4.0], PLAYER_R, 0.0, &obs), 7.25);
         let walked = move_circle([1.0, 4.0], 0.0, [1.0, 0.0], MOVE_SPEED, 0.5, &obs);
         assert!(walked[0] < 3.0, "authored height did not block: {walked:?}");
     }
@@ -1728,6 +2149,8 @@ mod tests {
             arena_half: ARENA_HALF,
             obstacles: Vec::new(),
             spawns: Vec::new(),
+            pads: Vec::new(),
+            decor: Vec::new(),
         };
         assert_eq!(level.spawn(3), spawn_point(3));
         // A short authored list wraps rather than panicking.
@@ -1735,9 +2158,27 @@ mod tests {
             arena_half: ARENA_HALF,
             obstacles: Vec::new(),
             spawns: vec![[1.0, 2.0], [3.0, 4.0]],
+            pads: Vec::new(),
+            decor: Vec::new(),
         };
         assert_eq!(two.spawn(0), [1.0, 2.0]);
         assert_eq!(two.spawn(5), [3.0, 4.0]);
+        // And the sim places players by the same rule, first spawn and
+        // respawn alike.
+        let mut sim = Sim::from_level(&two);
+        sim.add_player(0);
+        sim.add_player(1);
+        sim.add_player(2);
+        assert_eq!(sim.players[0].pos, [1.0, 2.0]);
+        assert_eq!(sim.players[1].pos, [3.0, 4.0]);
+        assert_eq!(sim.players[2].pos, [1.0, 2.0], "wraps");
+        let mut none = Sim::from_level(&level);
+        none.add_player(3);
+        assert_eq!(
+            none.players[0].pos,
+            spawn_point(0),
+            "golden ring when empty"
+        );
     }
 
     /// One waist-high crate at the origin, and nothing else.
@@ -2747,6 +3188,9 @@ mod tests {
     }
 
     #[test]
+    // The first assertion IS on constants, deliberately: it exists to name the
+    // two numbers in its failure message when someone retunes one of them.
+    #[allow(clippy::assertions_on_constants)]
     fn level_fire_is_not_a_free_headshot() {
         // This is the balance guard for HEAD_H, and it is the whole reason
         // that constant is 0.22 rather than something rounder. A round leaves
@@ -2797,5 +3241,898 @@ mod tests {
             one_shot_kills(from_y, gap, pitch, false),
             "a steep round through the head must still be a headshot"
         );
+    }
+
+    // ---- v13: an obstacle with a bottom --------------------------------
+
+    /// A tunnel roof and nothing else: a 4 x 4 box hung 2.5 above the
+    /// floor, 0.4 thick, so a standing body (1.86) walks under it.
+    fn roof() -> Vec<Obstacle> {
+        vec![Obstacle::boxed(
+            Cover::Roof,
+            [-2.0, -2.0],
+            [2.0, 2.0],
+            2.5,
+            2.9,
+        )]
+    }
+
+    /// Walks +x for `ticks` at `y`, one sim tick at a time, so a box in the
+    /// way is met at its face rather than jumped over by a long dt.
+    fn walk(mut pos: [f32; 2], y: f32, ticks: u32, obs: &[Obstacle]) -> [f32; 2] {
+        for _ in 0..ticks {
+            pos = move_circle(pos, y, [1.0, 0.0], MOVE_SPEED, FIXED_DT, obs);
+        }
+        pos
+    }
+
+    #[test]
+    fn a_raised_box_blocks_only_a_body_that_reaches_it() {
+        let obs = roof();
+        // On the floor the head (1.86) is under the bottom (2.5): walk
+        // straight through, 60 ticks = 9 units, from -4 to 5.
+        let under = walk([-4.0, 0.0], 0.0, 60, &obs);
+        assert!(
+            under[0] > 4.0,
+            "blocked by a roof from the floor: {under:?}"
+        );
+        // Feet at 1.0: head 2.86 is inside the box and the feet are more
+        // than a step below its top, so its side is a wall.
+        let mid = walk([-4.0, 0.0], 1.0, 60, &obs);
+        assert!(
+            mid[0] <= -2.0 - PLAYER_R + 1e-3,
+            "walked through the roof's side: {mid:?}"
+        );
+        // Standing on it: walk across.
+        let over = walk([-4.0, 0.0], 2.9, 60, &obs);
+        assert!(over[0] > 4.0, "could not walk across the roof: {over:?}");
+        // And a floor box is exactly what it was: a wall from the floor.
+        let floor_box = one_box();
+        let walked = walk([-3.0, 0.0], 0.0, 60, &floor_box);
+        assert!(
+            walked[0] <= -1.5 - PLAYER_R + 1e-3,
+            "a floor box stopped blocking: {walked:?}"
+        );
+    }
+
+    #[test]
+    fn a_raised_box_supports_only_feet_at_or_above_its_bottom() {
+        let obs = roof();
+        let at = [0.0, 0.0];
+        assert_eq!(
+            support_height(at, PLAYER_R, 0.0, &obs),
+            0.0,
+            "under it you are on the floor"
+        );
+        assert_eq!(
+            support_height(at, PLAYER_R, 2.4, &obs),
+            0.0,
+            "just under its bottom you are still not on it"
+        );
+        assert_eq!(
+            support_height(at, PLAYER_R, 2.5, &obs),
+            2.9,
+            "at its bottom you are on it"
+        );
+        assert_eq!(
+            support_height(at, PLAYER_R, 4.0, &obs),
+            2.9,
+            "above it you are on it"
+        );
+        // Driven: dropped from above, the player lands ON the roof.
+        let (mut y, mut vy) = (5.0f32, 0.0f32);
+        for _ in 0..240 {
+            let (ny, nvy, _) = step_vertical(at, y, vy, false, FIXED_DT, &obs);
+            y = ny;
+            vy = nvy;
+        }
+        assert!((y - 2.9).abs() < 1e-3, "settled at {y}, roof top 2.9");
+        // And a floor box supports from the floor exactly as before.
+        let floor_box = one_box();
+        assert_eq!(
+            support_height(at, PLAYER_R, 0.0, &floor_box),
+            obstacle_height(&floor_box[0])
+        );
+    }
+
+    #[test]
+    fn a_jump_under_a_raised_box_bonks_at_its_bottom() {
+        let obs = roof();
+        let cap = 2.5 - BODY_H_STAND;
+        let (mut y, mut vy) = (0.0f32, 0.0f32);
+        let mut peak = 0.0f32;
+        for tick in 0..180 {
+            let (ny, nvy, grounded) = step_vertical([0.0, 0.0], y, vy, tick == 0, FIXED_DT, &obs);
+            y = ny;
+            vy = nvy;
+            peak = peak.max(y);
+            assert!(
+                y <= cap + 1e-4,
+                "the head went into the roof: feet {y}, cap {cap}"
+            );
+            assert!(
+                y < 1e-3 || !grounded,
+                "reported grounded in mid-air at {y} (the bonk tick must not re-arm a jump)"
+            );
+        }
+        // Pinned, not bracketed: the open-air apex is 1.6867, so anything
+        // near the cap proves the clamp and not a short jump.
+        assert!(
+            (peak - cap).abs() < 1e-3,
+            "jump peaked at {peak}, expected the ceiling clamp {cap}"
+        );
+        assert!(y.abs() < 1e-3, "did not fall back to the floor: {y}");
+    }
+
+    #[test]
+    fn a_round_passes_under_a_raised_box_and_is_stopped_inside_it() {
+        // The same 3-wide box between a shooter and a target 9 apart, hung
+        // at different heights. Level fire leaves at EYE_STAND 1.45.
+        let run = |base: f32, h: f32| -> bool {
+            let mut sim = Sim::new(22);
+            sim.obstacles.clear();
+            sim.pads.clear();
+            sim.obstacles.push(Obstacle::boxed(
+                Cover::Roof,
+                [3.0, -2.0],
+                [6.0, 2.0],
+                base,
+                h,
+            ));
+            sim.add_player(0);
+            sim.add_player(1);
+            let mut inputs = HashMap::new();
+            inputs.insert(
+                0,
+                PlayerIn {
+                    aim: [1.0, 0.0],
+                    fire: true,
+                    ..Default::default()
+                },
+            );
+            inputs.insert(1, PlayerIn::default());
+            for _ in 0..120 {
+                sim.players.iter_mut().for_each(|p| match p.id {
+                    0 if p.alive => {
+                        p.pos = [0.0, 0.0];
+                        p.y = 0.0;
+                        p.vy = 0.0;
+                    }
+                    1 if p.alive => {
+                        p.pos = [9.0, 0.0];
+                        p.y = 0.0;
+                        p.vy = 0.0;
+                    }
+                    _ => {}
+                });
+                step_with(&mut sim, &inputs);
+                if sim.players.iter().find(|p| p.id == 1).unwrap().hp < MAX_HP {
+                    return true;
+                }
+            }
+            false
+        };
+        assert!(
+            run(2.5, 2.9),
+            "level fire at 1.45 must pass under a box hung at 2.5"
+        );
+        assert!(
+            !run(1.0, 3.0),
+            "the same box hung at 1.0 spans 1.45 and must stop it"
+        );
+        assert!(!run(0.0, 3.0), "a floor box stops it exactly as before");
+    }
+
+    // ---- v13: Trench City ----------------------------------------------
+
+    fn centre(o: &Obstacle) -> [f32; 2] {
+        [
+            f32::midpoint(o.min[0], o.max[0]),
+            f32::midpoint(o.min[1], o.max[1]),
+        ]
+    }
+
+    fn contains(o: &Obstacle, p: [f32; 2]) -> bool {
+        p[0] >= o.min[0] && p[0] <= o.max[0] && p[1] >= o.min[1] && p[1] <= o.max[1]
+    }
+
+    /// Axis-separated distance between two footprints; 0 when they touch
+    /// or overlap.
+    fn gap(a: &Obstacle, b: &Obstacle) -> f32 {
+        let gx = (a.min[0] - b.max[0]).max(b.min[0] - a.max[0]);
+        let gz = (a.min[1] - b.max[1]).max(b.min[1] - a.max[1]);
+        gx.max(gz).max(0.0)
+    }
+
+    fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
+        let (dx, dz) = (a[0] - b[0], a[1] - b[1]);
+        (dx * dx + dz * dz).sqrt()
+    }
+
+    #[test]
+    fn trench_city_has_eight_clear_spawns_far_apart() {
+        let level = Level::trench_city();
+        assert_eq!(level.spawns.len(), 8);
+        let inside = ARENA_HALF - PLAYER_R;
+        for (i, s) in level.spawns.iter().enumerate() {
+            assert!(
+                s[0].abs() < inside && s[1].abs() < inside,
+                "spawn {i} {s:?} is outside the arena"
+            );
+            for o in &level.obstacles {
+                assert!(!overlaps(*s, PLAYER_R, o), "spawn {i} {s:?} overlaps {o:?}");
+            }
+            for (j, t) in level.spawns.iter().enumerate().skip(i + 1) {
+                let d = dist(*s, *t);
+                // Section 4.2 promises 16 and the map delivers 17.0; the
+                // invariant list used to say 12, which a relayout could
+                // have met while breaking the layout's own promise.
+                assert!(d >= 16.0, "spawns {i} and {j} are only {d} apart");
+            }
+        }
+        // The sim places players there in slot order, and the first four
+        // slots land on four different sides.
+        let mut sim = Sim::from_level(&level);
+        for id in 0..8u8 {
+            sim.add_player(id);
+        }
+        for (p, s) in sim.players.iter().zip(&level.spawns) {
+            assert_eq!(p.pos, *s);
+        }
+        let mut sides: Vec<i32> = level.spawns[..4]
+            .iter()
+            .map(|s| {
+                if s[1].abs() > s[0].abs() {
+                    s[1].signum() as i32
+                } else {
+                    2 * s[0].signum() as i32
+                }
+            })
+            .collect();
+        sides.sort_unstable();
+        sides.dedup();
+        assert_eq!(sides.len(), 4, "slots 0..4 must be one per side");
+    }
+
+    #[test]
+    fn trench_city_boxes_are_inside_the_arena_and_well_formed() {
+        let level = Level::trench_city();
+        assert_eq!(level.obstacles.len(), 1 + 4 * TRENCH_NORTH.len());
+        assert_eq!(level.arena_half, ARENA_HALF);
+        for o in &level.obstacles {
+            assert!(
+                o.min[0] < o.max[0] && o.min[1] < o.max[1],
+                "inverted or degenerate box {o:?}"
+            );
+            assert!(
+                o.min[0] >= -ARENA_HALF
+                    && o.min[1] >= -ARENA_HALF
+                    && o.max[0] <= ARENA_HALF
+                    && o.max[1] <= ARENA_HALF,
+                "{o:?} leaves the arena"
+            );
+            assert!(o.base < o.h, "{o:?} has its bottom above its top");
+            assert!(o.base >= 0.0, "{o:?} starts below the floor");
+            if o.kind == Cover::Roof {
+                assert!(
+                    o.base >= CONTAINER_MIN_H,
+                    "roof {o:?} is too low to walk under"
+                );
+            } else {
+                assert_eq!(o.base, 0.0, "{o:?}: only roofs leave the floor");
+            }
+        }
+    }
+
+    #[test]
+    fn trench_city_is_four_fold_symmetric() {
+        let level = Level::trench_city();
+        // The quarter turn is written out here rather than borrowed from
+        // the builder, so a builder that rotates wrongly cannot agree with
+        // itself. Both corners are mapped and min/max re-derived.
+        let turn = |o: &Obstacle| {
+            let (ax, az) = (-o.min[1], o.min[0]);
+            let (bx, bz) = (-o.max[1], o.max[0]);
+            Obstacle {
+                min: [ax.min(bx), az.min(bz)],
+                max: [ax.max(bx), az.max(bz)],
+                ..*o
+            }
+        };
+        let key = |o: &Obstacle| -> [f32; 7] {
+            [
+                f32::from(o.kind as u8),
+                o.min[0],
+                o.min[1],
+                o.max[0],
+                o.max[1],
+                o.base,
+                o.h,
+            ]
+        };
+        let order = |x: &[f32; 7], y: &[f32; 7]| {
+            x.iter()
+                .zip(y)
+                .map(|(p, q)| p.total_cmp(q))
+                .find(|c| c.is_ne())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        };
+        let mut a: Vec<[f32; 7]> = level.obstacles.iter().map(key).collect();
+        let mut b: Vec<[f32; 7]> = level.obstacles.iter().map(|o| key(&turn(o))).collect();
+        a.sort_by(order);
+        b.sort_by(order);
+        for (x, y) in a.iter().zip(&b) {
+            for k in 0..7 {
+                assert!(
+                    (x[k] - y[k]).abs() < 1e-4,
+                    "obstacle multiset is not closed under a quarter turn: {x:?} vs {y:?}"
+                );
+            }
+        }
+        let turn_pt = |p: [f32; 2]| [-p[1], p[0]];
+        for p in &level.pads {
+            let q = turn_pt(*p);
+            assert!(
+                level.pads.iter().any(|r| dist(*r, q) < 1e-4),
+                "pad {p:?} turned to {q:?} is not a pad"
+            );
+        }
+        for s in &level.spawns {
+            let q = turn_pt(*s);
+            assert!(
+                level.spawns.iter().any(|r| dist(*r, q) < 1e-4),
+                "spawn {s:?} turned to {q:?} is not a spawn"
+            );
+        }
+    }
+
+    /// Drives the sim's own `move_circle` / `step_vertical` toward `target`
+    /// at `target_h`, hopping whenever grounded below that height, exactly
+    /// as a player would. Returns the resting (pos, y) once standing at the
+    /// target height within reach of the point, or `None` after `ticks`.
+    fn climb(
+        mut pos: [f32; 2],
+        mut y: f32,
+        target: [f32; 2],
+        target_h: f32,
+        ticks: u32,
+        obs: &[Obstacle],
+    ) -> Option<([f32; 2], f32)> {
+        let (mut vy, mut grounded) = (0.0f32, true);
+        let per_tick = MOVE_SPEED * FIXED_DT;
+        for _ in 0..ticks {
+            // Intent scaled so the last step lands on the point instead of
+            // overshooting it; move_circle clamps anything longer to unit.
+            let mv = [
+                (target[0] - pos[0]) / per_tick,
+                (target[1] - pos[1]) / per_tick,
+            ];
+            let jump = grounded && y < target_h - 1e-3;
+            pos = move_circle(pos, y, mv, MOVE_SPEED, FIXED_DT, obs);
+            let (ny, nvy, g) = step_vertical(pos, y, vy, jump, FIXED_DT, obs);
+            y = ny;
+            vy = nvy;
+            grounded = g;
+            if dist(pos, target) < 0.05 && grounded && (y - target_h).abs() < 1e-3 {
+                return Some((pos, y));
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn every_container_roof_is_reached_by_a_climbing_chain() {
+        let level = Level::trench_city();
+        let obs = &level.obstacles;
+        let containers: Vec<&Obstacle> = obs
+            .iter()
+            .filter(|o| o.kind == Cover::Container && (o.h - 2.6).abs() < 1e-6 && o.base == 0.0)
+            .collect();
+        assert_eq!(containers.len(), 8, "two climbable containers per side");
+        for c in containers {
+            let chain = obs
+                .iter()
+                .filter(|k| k.kind == Cover::Crate && gap(k, c) <= 0.5)
+                .find_map(|k| {
+                    obs.iter()
+                        .find(|a| a.kind == Cover::Ammo && gap(a, k) <= 0.5)
+                        .map(|a| (k, a))
+                });
+            let Some((step, ammo)) = chain else {
+                panic!("container {c:?} has no crate within 0.5 with an ammo box within 0.5 of it");
+            };
+            let (ac, kc, cc) = (centre(ammo), centre(step), centre(c));
+            // Start on the floor 1.4 beyond the ammo box, on the side away
+            // from the crate, and prove that is open floor.
+            let away = [
+                (ac[0] - kc[0]) / dist(ac, kc),
+                (ac[1] - kc[1]) / dist(ac, kc),
+            ];
+            let start = [ac[0] + away[0] * 1.4, ac[1] + away[1] * 1.4];
+            assert!(
+                !obs.iter().any(|o| overlaps(start, PLAYER_R, o)),
+                "chain start {start:?} for {c:?} is inside cover"
+            );
+            let (pos, y) = climb(start, 0.0, ac, ammo.h, 600, obs)
+                .unwrap_or_else(|| panic!("floor -> ammo failed for {c:?}"));
+            let (pos, y) = climb(pos, y, kc, step.h, 600, obs)
+                .unwrap_or_else(|| panic!("ammo -> crate failed for {c:?}"));
+            let (_, y) = climb(pos, y, cc, c.h, 600, obs)
+                .unwrap_or_else(|| panic!("crate -> container failed for {c:?}"));
+            assert!((y - 2.6).abs() < 1e-3, "ended with feet at {y}");
+
+            // And the floor alone is not enough: from the floor on the far
+            // side of the container, the same driver never gets on top.
+            // That is what the container class promises - not that the
+            // chain is the only way onto anything raised: from a fire step
+            // the wall tops and the tunnel roof are one hop away, pinned in
+            // wall_tops_and_the_roof_are_one_hop_from_a_fire_step.
+            let toward = [-away[0], -away[1]];
+            let half = if toward[0].abs() > toward[1].abs() {
+                (c.max[0] - c.min[0]) * 0.5
+            } else {
+                (c.max[1] - c.min[1]) * 0.5
+            };
+            let far = [
+                cc[0] + toward[0] * (half + 1.4),
+                cc[1] + toward[1] * (half + 1.4),
+            ];
+            assert!(
+                !obs.iter().any(|o| overlaps(far, PLAYER_R, o)),
+                "far start {far:?} for {c:?} is inside cover"
+            );
+            assert!(
+                climb(far, 0.0, cc, c.h, 600, obs).is_none(),
+                "container {c:?} was climbed from the floor without its chain"
+            );
+        }
+    }
+
+    /// One shot from `from` at `from_y`, elevation `pitch`, at a target
+    /// standing on the floor at `to`; both pinned every tick. Whether it
+    /// connected within two seconds.
+    fn shot_over(obs: &[Obstacle], from: [f32; 2], from_y: f32, pitch: f32, to: [f32; 2]) -> bool {
+        shot_over_at(obs, from, from_y, pitch, to, 0.0)
+    }
+
+    /// `shot_over` with the target's feet pinned at `to_y` - on a roof, say.
+    fn shot_over_at(
+        obs: &[Obstacle],
+        from: [f32; 2],
+        from_y: f32,
+        pitch: f32,
+        to: [f32; 2],
+        to_y: f32,
+    ) -> bool {
+        let mut sim = Sim::new(0);
+        sim.obstacles = obs.to_vec();
+        sim.pads.clear();
+        sim.add_player(0);
+        sim.add_player(1);
+        let aim = [(to[0] - from[0]), (to[1] - from[1])];
+        let mut inputs = HashMap::new();
+        inputs.insert(
+            0,
+            PlayerIn {
+                aim,
+                pitch,
+                fire: true,
+                ..Default::default()
+            },
+        );
+        inputs.insert(1, PlayerIn::default());
+        for _ in 0..120 {
+            sim.players.iter_mut().for_each(|p| match p.id {
+                0 if p.alive => {
+                    p.pos = from;
+                    p.y = from_y;
+                    p.vy = 0.0;
+                }
+                1 if p.alive => {
+                    p.pos = to;
+                    p.y = to_y;
+                    p.vy = 0.0;
+                }
+                _ => {}
+            });
+            step_with(&mut sim, &inputs);
+            if sim.players.iter().find(|p| p.id == 1).unwrap().hp < MAX_HP {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn a_tunnel_is_walked_under_shot_along_shielded_through_and_stood_on() {
+        let level = Level::trench_city();
+        let obs = &level.obstacles;
+        // The north tunnel: the roof that straddles x = 0 on the +z side.
+        let roof = obs
+            .iter()
+            .find(|o| o.kind == Cover::Roof && o.min[0] < 0.0 && o.max[0] > 0.0 && o.min[1] > 0.0)
+            .expect("a roof on the north side");
+        let mid_z = f32::midpoint(roof.min[1], roof.max[1]);
+
+        // Walked the full length at y = 0, driven by the sim's own step.
+        // Starts on open floor one metre before the roof, where the shot
+        // below also starts: two metres out is inside the fire step crate's
+        // collision circle, and the strict floor assertion then held only
+        // because move_circle happens to run before step_vertical.
+        let mut pos = [roof.min[0] - 1.0, mid_z];
+        assert!(
+            !obs.iter().any(|o| overlaps(pos, PLAYER_R, o)),
+            "tunnel walk start {pos:?} is inside cover"
+        );
+        let (mut y, mut vy) = (0.0f32, 0.0f32);
+        let mut reached = false;
+        for _ in 0..200 {
+            pos = move_circle(pos, y, [1.0, 0.0], MOVE_SPEED, FIXED_DT, obs);
+            let (ny, nvy, _) = step_vertical(pos, y, vy, false, FIXED_DT, obs);
+            y = ny;
+            vy = nvy;
+            assert_eq!(y, 0.0, "lifted off the floor inside the tunnel at {pos:?}");
+            if pos[0] > roof.max[0] + 1.0 {
+                reached = true;
+                break;
+            }
+        }
+        assert!(reached, "blocked inside the tunnel at {pos:?}");
+
+        // A jump inside it caps at base - BODY_H_STAND.
+        let cap = roof.base - BODY_H_STAND;
+        let (mut y, mut vy, mut peak) = (0.0f32, 0.0f32, 0.0f32);
+        for tick in 0..180 {
+            let (ny, nvy, _) = step_vertical([0.0, mid_z], y, vy, tick == 0, FIXED_DT, obs);
+            y = ny;
+            vy = nvy;
+            peak = peak.max(y);
+        }
+        assert!(
+            (peak - cap).abs() < 1e-3,
+            "jump in the tunnel peaked at {peak}, expected {cap}"
+        );
+        assert!(y.abs() < 1e-3, "did not land back on the tunnel floor: {y}");
+
+        // A level shot at chest height passes along it, end to end.
+        let (west, east) = ([roof.min[0] - 1.0, mid_z], [roof.max[0] + 1.0, mid_z]);
+        assert!(
+            shot_over(obs, west, 0.0, 0.0, east),
+            "level fire must travel the length of the tunnel"
+        );
+
+        // A shot from the roof top, down through the roof, is stopped - and
+        // the same shot with the roof gone lands, so it is the roof that
+        // stopped it and not the geometry.
+        let (on_roof, below) = ([-3.0, mid_z], [3.0, mid_z]);
+        let drop = roof.h + EYE_STAND - 1.0;
+        let pitch = -(drop / dist(on_roof, below)).atan();
+        assert!(
+            !shot_over(obs, on_roof, roof.h, pitch, below),
+            "a round fired down through the roof must be stopped by it"
+        );
+        let unroofed: Vec<Obstacle> = obs.iter().filter(|o| *o != roof).copied().collect();
+        assert!(
+            shot_over(&unroofed, on_roof, roof.h, pitch, below),
+            "control: with the roof removed the same shot must connect"
+        );
+
+        // The slab also stops what passes through it on the way to a body.
+        // A round climbing at 30 degrees from the tunnel floor at a player
+        // standing on the roof meets that body from INSIDE the slab (the
+        // hit column starts BULLET_R below the feet), and one dropped at
+        // MAX_PITCH from the roof at the player underneath likewise. Both
+        // were hits while the body test ran before the cover test; both
+        // connect with the roof removed, so it is the roof that stops them.
+        let (below_w, roof_mid) = ([-3.0, mid_z], [0.0, mid_z]);
+        assert!(
+            !shot_over_at(obs, below_w, 0.0, 0.52, roof_mid, roof.h),
+            "a round through the roof must not reach the player standing on it"
+        );
+        assert!(
+            shot_over_at(&unroofed, below_w, 0.0, 0.52, roof_mid, roof.h),
+            "control: with the roof removed the 30-degree shot connects"
+        );
+        let under = [0.5, mid_z];
+        assert!(
+            !shot_over_at(obs, roof_mid, roof.h, -MAX_PITCH, under, 0.0),
+            "a round dropped through the roof must not reach the player under it"
+        );
+        assert!(
+            shot_over_at(&unroofed, roof_mid, roof.h, -MAX_PITCH, under, 0.0),
+            "control: with the roof removed the drop connects"
+        );
+
+        // Dropped from above, a player lands ON the roof at h.
+        let (mut y, mut vy) = (roof.h + 3.0, 0.0f32);
+        for _ in 0..240 {
+            let (ny, nvy, _) = step_vertical([0.0, mid_z], y, vy, false, FIXED_DT, obs);
+            y = ny;
+            vy = nvy;
+        }
+        assert!(
+            (y - roof.h).abs() < 1e-3,
+            "settled at {y}, the roof's top is {}",
+            roof.h
+        );
+    }
+
+    #[test]
+    fn a_fire_step_lifts_the_eye_over_the_outer_wall() {
+        let level = Level::trench_city();
+        let outer: Vec<&Obstacle> = level
+            .obstacles
+            .iter()
+            .filter(|o| o.kind == Cover::Wall && (o.min[1] - 14.0).abs() < 1e-6)
+            .collect();
+        assert_eq!(outer.len(), 3, "the north outer wall has three segments");
+        let wall_h = outer[0].h;
+        let steps: Vec<&Obstacle> = level
+            .obstacles
+            .iter()
+            .filter(|k| k.kind == Cover::Crate && outer.iter().any(|w| gap(k, w) < 1e-6))
+            .collect();
+        assert_eq!(
+            steps.len(),
+            2,
+            "two fire steps against the north outer wall"
+        );
+        assert!(
+            EYE_STAND < wall_h,
+            "from the floor the eye {EYE_STAND} must be under the wall {wall_h}"
+        );
+        for k in steps {
+            let stood = support_height(centre(k), PLAYER_R, 0.0, &level.obstacles);
+            assert_eq!(stood, k.h, "standing on the step puts the feet at its top");
+            assert!(
+                stood + EYE_STAND > wall_h,
+                "from the step the eye {} must clear the wall {wall_h}",
+                stood + EYE_STAND
+            );
+        }
+    }
+
+    #[test]
+    fn all_four_pads_are_in_the_open_under_a_roof() {
+        let level = Level::trench_city();
+        assert_eq!(level.pads.len(), 4);
+        for pad in &level.pads {
+            assert!(
+                !level
+                    .obstacles
+                    .iter()
+                    .any(|o| o.base == 0.0 && overlaps(*pad, PLAYER_R, o)),
+                "pad {pad:?} is inside cover"
+            );
+            assert!(
+                level
+                    .obstacles
+                    .iter()
+                    .any(|o| o.kind == Cover::Roof && contains(o, *pad)),
+                "pad {pad:?} is not under a roof"
+            );
+        }
+        let sim = Sim::from_level(&level);
+        assert_eq!(sim.pads.len(), 4);
+        assert!(
+            sim.pads.iter().all(|p| p.respawn_t == 0.0),
+            "pads start active"
+        );
+        for (p, want) in sim.pads.iter().zip(&level.pads) {
+            assert_eq!(p.pos, *want);
+        }
+
+        // Taken from the tunnel floor, not from the roof over it: the
+        // pickup is gated on the feet being under PAD_PICK_H, or a roof
+        // camper collected the pad 2.9 m below their boots through the slab
+        // without ever entering a tunnel.
+        let mut inputs = HashMap::new();
+        inputs.insert(0, PlayerIn::default());
+        for pad in &level.pads {
+            let roof = level
+                .obstacles
+                .iter()
+                .find(|o| o.kind == Cover::Roof && contains(o, *pad))
+                .unwrap();
+            assert!(
+                roof.base >= PAD_PICK_H,
+                "roof {roof:?} hangs below the pickup height"
+            );
+            let mut sim = Sim::from_level(&level);
+            sim.add_player(0);
+            let pin = |sim: &mut Sim, y: f32| {
+                let p = &mut sim.players[0];
+                p.pos = *pad;
+                p.y = y;
+                p.vy = 0.0;
+            };
+            pin(&mut sim, roof.h);
+            step_with(&mut sim, &inputs);
+            assert_eq!(
+                sim.players[0].weapon, 1,
+                "pad {pad:?} taken from the roof top"
+            );
+            assert_eq!(sim.players[0].y, roof.h, "did not stay on the roof");
+            pin(&mut sim, 0.0);
+            step_with(&mut sim, &inputs);
+            assert_eq!(
+                sim.players[0].weapon, 2,
+                "pad {pad:?} not taken from the tunnel floor"
+            );
+        }
+    }
+
+    /// One jump from a standing start: take off on tick 0 with the stick
+    /// held toward `target`, let go once past it, and report where the body
+    /// comes to rest. Unlike `climb` it never jumps again, so whatever it
+    /// reaches, one hop reaches.
+    fn hop(mut pos: [f32; 2], mut y: f32, target: [f32; 2], obs: &[Obstacle]) -> ([f32; 2], f32) {
+        let d = dist(pos, target);
+        let dir = [(target[0] - pos[0]) / d, (target[1] - pos[1]) / d];
+        let mut vy = 0.0f32;
+        for tick in 0..300 {
+            let ahead = (target[0] - pos[0]) * dir[0] + (target[1] - pos[1]) * dir[1];
+            let mv = if ahead > 0.0 { dir } else { [0.0, 0.0] };
+            pos = move_circle(pos, y, mv, MOVE_SPEED, FIXED_DT, obs);
+            let (ny, nvy, grounded) = step_vertical(pos, y, vy, tick == 0, FIXED_DT, obs);
+            y = ny;
+            vy = nvy;
+            if tick > 0 && grounded {
+                break;
+            }
+        }
+        (pos, y)
+    }
+
+    /// A fire step is a step onto the walls, not only a place to see over
+    /// them.
+    ///
+    /// It must be tall enough to lift the eye over the wall (1.2 +
+    /// `EYE_STAND` 1.45 > 2.5) and would have to be short enough that a jump
+    /// from it stays under the wall's step-up line (1.2 + apex 1.69 < 2.5 -
+    /// `STEP_UP`) to keep the wall unmountable; no wall height does both,
+    /// because `EYE_STAND < apex + STEP_UP`. So the wall tops and the tunnel
+    /// roof are standing surfaces one hop from any fire step. Accepted in
+    /// plan section 9 and pinned here, so the next constant change is
+    /// caught rather than discovered in play.
+    #[test]
+    fn wall_tops_and_the_roof_are_one_hop_from_a_fire_step() {
+        let level = Level::trench_city();
+        let obs = &level.obstacles;
+        let find = |kind: Cover, min: [f32; 2]| {
+            obs.iter()
+                .find(|o| o.kind == kind && dist(o.min, min) < 1e-4)
+                .unwrap_or_else(|| panic!("no {kind:?} at {min:?}"))
+        };
+        let step = find(Cover::Crate, [-9.6, 12.8]);
+        let outer = find(Cover::Wall, [-14.4, 14.0]);
+        let inner = find(Cover::Wall, [-11.0, 10.6]);
+        let roof = find(Cover::Roof, [-6.0, 11.0]);
+        // On the fire step, against the outer wall.
+        let start = [centre(step)[0], step.max[1] - PLAYER_R];
+        assert_eq!(support_height(start, PLAYER_R, 0.0, obs), step.h);
+
+        // Fire step -> outer wall top.
+        let (on_outer, y) = hop(start, step.h, [start[0], centre(outer)[1]], obs);
+        assert_eq!(
+            y, outer.h,
+            "rested at {y} at {on_outer:?}, not on the outer wall"
+        );
+        assert!(
+            contains(outer, on_outer),
+            "{on_outer:?} is not over the outer wall"
+        );
+        // Outer wall top -> inner wall top, across the corridor.
+        let (on_inner, y) = hop(on_outer, y, [on_outer[0], centre(inner)[1]], obs);
+        assert_eq!(
+            y, inner.h,
+            "rested at {y} at {on_inner:?}, not on the inner wall"
+        );
+        assert!(
+            contains(inner, on_inner),
+            "{on_inner:?} is not over the inner wall"
+        );
+        // Fire step -> tunnel roof, no chain involved.
+        let onto = [roof.min[0] + 1.0, f32::midpoint(roof.min[1], roof.max[1])];
+        let (on_roof, y) = hop(start, step.h, onto, obs);
+        assert_eq!(y, roof.h, "rested at {y} at {on_roof:?}, not on the roof");
+        assert!(contains(roof, on_roof), "{on_roof:?} is not over the roof");
+    }
+
+    /// No spawn sees another spawn. Cover between every pair is what the
+    /// three bands are for; the four adjacent-corner pairs, 17 m apart,
+    /// looked straight at each other past the wall corner until the corner
+    /// container was moved onto that diagonal. Proven with the sim's own
+    /// shot - level fire from the floor - both ways round, because where a
+    /// round's per-tick samples fall depends on which end it leaves from.
+    #[test]
+    fn no_spawn_sees_another_spawn() {
+        let level = Level::trench_city();
+        for (i, a) in level.spawns.iter().enumerate() {
+            for (j, b) in level.spawns.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+                assert!(
+                    !shot_over(&level.obstacles, *a, 0.0, 0.0, *b),
+                    "spawn {i} {a:?} shoots spawn {j} {b:?} on level fire"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn trench_city_survives_serde_and_a_v12_level_decodes_with_defaults() {
+        let level = Level::trench_city();
+        let json = serde_json::to_string(&level).unwrap();
+        let back: Level = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, level);
+
+        // What a v12 editor wrote: no base, no kind, no pads, no decor.
+        let v12 = r#"{"arena_half":24.0,
+            "obstacles":[{"min":[1.0,2.0],"max":[3.0,4.0],"h":1.2}],
+            "spawns":[[5.0,6.0]]}"#;
+        let old: Level = serde_json::from_str(v12).unwrap();
+        assert_eq!(old.arena_half, 24.0);
+        assert_eq!(old.obstacles.len(), 1);
+        assert_eq!(old.obstacles[0].base, 0.0, "an absent base is the floor");
+        assert_eq!(
+            old.obstacles[0].kind,
+            Cover::Container,
+            "an absent kind is the safe default"
+        );
+        assert_eq!(old.obstacles[0].h, 1.2);
+        assert_eq!(old.pads, Vec::<[f32; 2]>::new());
+        assert_eq!(old.decor, Vec::<Decor>::new());
+        assert_eq!(old.spawns, vec![[5.0, 6.0]]);
+        // And it still plays.
+        let mut sim = Sim::from_level(&old);
+        sim.add_player(0);
+        assert_eq!(sim.players[0].pos, [5.0, 6.0]);
+        assert_eq!(sim.pads.len(), 0, "a level without pads plays without pads");
+    }
+
+    #[test]
+    fn a_seeded_level_still_plays_exactly_the_v12_arena() {
+        // Every seed the tests above use, plus a spread. The expectations
+        // are v12's own: obstacles from generate_arena, pads from
+        // generate_pads, the golden-angle spawn ring, all on the floor,
+        // classed by height, nothing decorative.
+        let seeds = [
+            0u64, 1, 2, 3, 4, 5, 7, 8, 9, 11, 12, 21, 22, 23, 24, 25, 31, 32, 33, 34, 42, 43,
+            20_260_829,
+        ];
+        for seed in seeds.into_iter().chain(0..64) {
+            let level = Level::from_seed(seed);
+            assert_eq!(level.obstacles, generate_arena(seed), "seed {seed}");
+            assert_eq!(level.pads, generate_pads(seed), "seed {seed}");
+            assert_eq!(level.decor, Vec::<Decor>::new(), "seed {seed}");
+            for o in &level.obstacles {
+                assert_eq!(o.base, 0.0, "seed {seed}: {o:?}");
+                let want = if o.h < CONTAINER_MIN_H {
+                    Cover::Crate
+                } else {
+                    Cover::Container
+                };
+                assert_eq!(o.kind, want, "seed {seed}: {o:?}");
+            }
+            for slot in 0..MAX_PLAYERS as u32 {
+                assert_eq!(level.spawn(slot), spawn_point(slot), "seed {seed}");
+            }
+            // Sim::new IS from_level of this: identical world either way.
+            let a = Sim::new(seed);
+            let b = Sim::from_level(&level);
+            assert_eq!(a.obstacles, b.obstacles);
+            assert_eq!(a.spawns, b.spawns);
+            assert_eq!(a.spawns, level.spawns);
+            assert_eq!(
+                a.pads.iter().map(|p| p.pos).collect::<Vec<_>>(),
+                generate_pads(seed)
+            );
+            // Any name but the authored one resolves to it.
+            assert_eq!(Level::named("", seed), level);
+            assert_eq!(Level::named("moon-base", seed), level);
+        }
+        assert_eq!(Level::named(MAP_TRENCH_CITY, 7), Level::trench_city());
     }
 }

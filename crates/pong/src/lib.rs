@@ -10,6 +10,7 @@
 //! Online: either key set steers YOUR paddle; the server is authoritative.
 
 mod online;
+mod props;
 mod sound;
 
 use ember_engine::glam::Vec3;
@@ -248,18 +249,19 @@ pub fn run_online(cfg: OnlineConfig) -> Result<(), String> {
         + 1;
     let (part_meshes, parts) = online::part_meshes(parts_base);
     meshes.extend(part_meshes);
-    // Factory skyline (arena v10), after the character.
-    let backdrop_mesh = u32::try_from(meshes.len())
+    // Trench City props (arena v13), after the character: cover by kind,
+    // the city, sky and ground. This slot held the factory skyline (arena
+    // v10), which the arena no longer draws.
+    let props_base = u32::try_from(meshes.len())
         .map_err(|_| "character mesh count exceeds u32".to_string())?
         + 1;
-    let (backdrop, backdrop_base) = online::backdrop_meshes(backdrop_mesh);
-    let backdrop_parts =
-        u32::try_from(backdrop.len()).map_err(|_| "backdrop mesh count exceeds u32".to_string())?;
-    meshes.extend(backdrop);
+    let prop_meshes = props::prop_meshes();
+    let prop_fits = props::measure(&prop_meshes);
+    meshes.extend(prop_meshes);
     let mut game = online::ShooterGame::connect(&cfg, assets)?;
     game.set_env_base(env_base);
     game.set_parts(parts);
-    game.set_backdrop(backdrop_base, backdrop_parts);
+    game.set_props(props_base, &prop_fits);
     ember_engine::run(
         EngineConfig {
             title: format!("ember arena — {}", cfg.lobby),

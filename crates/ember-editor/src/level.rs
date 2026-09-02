@@ -1,34 +1,42 @@
 //! The editor's document IS the sim's `Level`.
 //!
-//! Loading turns a seeded arena into editable objects; exporting turns
-//! those objects back into a `Level` the sim could be handed. The round
-//! trip is the point: a level that survives load-then-export unchanged is
-//! a level the game would play exactly as the editor drew it.
+//! Loading turns a level into editable objects; exporting turns those
+//! objects back into a `Level` the sim can be handed. The round trip is the
+//! point: a level that survives load-then-export unchanged is a level the
+//! game would play exactly as the editor drew it.
 //!
-//! Two conversions are lossy on purpose, and both refuse rather than
-//! silently discard:
+//! One conversion is lossy on purpose, and it refuses to be by snapping
+//! rather than by silently discarding:
 //!
 //! * **Yaw.** `Obstacle` is an AABB on XZ, so only a quarter turn is
 //!   representable (by swapping extents). The editor snaps object yaw live
 //!   — see [`snap_yaw`] — so by the time anything is exported the rotation
 //!   on screen is already the rotation that can be stored.
-//! * **Height off the floor.** `Obstacle` has a top but no bottom; every
-//!   box stands on the ground. An object dragged up the Y axis cannot be
-//!   represented, so exporting one is an error naming the object rather
-//!   than a box that quietly sinks to the floor.
+//!
+//! Height off the floor used to be the other one: `Obstacle` had a top but
+//! no bottom, and an object dragged up the Y axis was refused by name.
+//! Since v13 a box carries `base`, so a lift is simply exported — a tunnel
+//! roof IS a box dragged up the Y axis — and `from_level` puts it back at
+//! that height.
+//!
+//! What a box IS (`Cover`) comes from the palette entry that placed it. An
+//! `Obj` remembers its entry only by colour, so export maps the colour back
+//! to the palette, and a loaded box is coloured by its kind so the round
+//! trip holds for every kind the palette has. Kinds the palette lacks
+//! (ammo, sandbag, rubble, plinth) load with the colour of the entry nearest
+//! in height and export as that entry's kind; their geometry survives, their
+//! kind does not, and that is recorded here rather than fixed because the
+//! palette is what the user places from and a hidden ninth entry helps
+//! nobody.
 
 use glam::Vec3;
 use pong_core::shooter::{Level, Obstacle};
 
 use crate::Obj;
-use crate::palette::{Class, Kind};
+use crate::palette::{Class, Kind, PALETTE};
 
 /// A quarter turn; the only rotation an AABB can carry.
 pub const YAW_STEP: f32 = std::f32::consts::FRAC_PI_2;
-/// How far off the floor a box may sit before export refuses it. Generous
-/// enough to absorb float drift from a scale drag, far below a deliberate
-/// lift.
-pub const FLOOR_TOLERANCE: f32 = 1e-3;
 
 /// Snap a yaw to the nearest quarter turn. Applied live while rotating an
 /// object, so the editor never shows a rotation it cannot store.
@@ -53,88 +61,95 @@ fn footprint(o: &Obj) -> ([f32; 2], [f32; 2]) {
     ([o.pos.x - hx, o.pos.z - hz], [o.pos.x + hx, o.pos.z + hz])
 }
 
-/// Why an export was refused, with enough detail to fix it.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ExportError {
-    /// A box was dragged off the floor. `Obstacle` cannot express it.
-    FloatingObject { index: usize, base_y: f32 },
+/// The palette entry an object was placed from: the one whose colour it
+/// carries, or — for an object whose colour matches nothing, which no
+/// placement produces — the cover entry nearest its height.
+fn kind_of(o: &Obj) -> &'static Kind {
+    PALETTE
+        .iter()
+        .find(|k| k.class == Class::Object && k.color == o.color)
+        .unwrap_or_else(|| kind_for_height(o.scale.y))
 }
 
-impl std::fmt::Display for ExportError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::FloatingObject { index, base_y } => write!(
-                f,
-                "object {index} floats {base_y:.2} above the floor; the sim's \
-                 obstacles have a top but no bottom, so drop it to the ground \
-                 or delete it"
-            ),
-        }
-    }
+/// The palette entry a box of this kind loads as, or the entry nearest in
+/// height when the palette has no entry for the kind.
+fn kind_for_obstacle(o: &Obstacle) -> &'static Kind {
+    PALETTE
+        .iter()
+        .find(|k| k.class == Class::Object && k.cover == o.kind)
+        .unwrap_or_else(|| kind_for_height(o.h - o.base))
+}
+
+/// The cover entry whose height is closest to `h`.
+fn kind_for_height(h: f32) -> &'static Kind {
+    PALETTE
+        .iter()
+        .filter(|k| k.class == Class::Object)
+        .min_by(|a, b| (a.scale.y - h).abs().total_cmp(&(b.scale.y - h).abs()))
+        .expect("the palette has at least one cover entry")
 }
 
 /// Turn the edited objects into a level the sim could run.
 ///
-/// Objects become obstacles whose height is simply their `scale.y` — the
-/// palette put a sensible number there and a resize changes it, so what
-/// was dragged is what ships. Spawns become points; their yaw is dropped,
-/// because `Sim::add_player` hardcodes the initial aim and a facing the
-/// game ignores would be a promise the format cannot keep.
+/// Objects become obstacles: the box's bottom and top are simply where its
+/// `scale.y` extent sits around `pos.y` — the palette put a sensible number
+/// there, a resize changes it, a lift raises both, and what was dragged is
+/// what ships. Spawns become points; their yaw is dropped, because
+/// `Sim::add_player` hardcodes the initial aim and a facing the game
+/// ignores would be a promise the format cannot keep.
 ///
-/// # Errors
-///
-/// Returns [`ExportError::FloatingObject`] when an object does not rest on
-/// the floor and therefore cannot be represented by an `Obstacle`.
-pub fn to_level(objects: &[Obj], arena_half: f32) -> Result<Level, ExportError> {
+/// Pads and decor are not authored here yet, so an exported level carries
+/// none; the sim plays it without pads, exactly as its author left it.
+#[must_use]
+pub fn to_level(objects: &[Obj], arena_half: f32) -> Level {
     let mut obstacles = Vec::new();
     let mut spawns = Vec::new();
-    for (index, o) in objects.iter().enumerate() {
+    for o in objects {
         match o.class {
             Class::Object => {
-                let base_y = f32::mul_add(o.scale.y, -0.5, o.pos.y);
-                if base_y.abs() > FLOOR_TOLERANCE {
-                    return Err(ExportError::FloatingObject { index, base_y });
-                }
                 let (min, max) = footprint(o);
-                obstacles.push(Obstacle {
+                let half = o.scale.y * 0.5;
+                obstacles.push(Obstacle::boxed(
+                    kind_of(o).cover,
                     min,
                     max,
-                    h: o.scale.y,
-                });
+                    o.pos.y - half,
+                    o.pos.y + half,
+                ));
             }
             Class::Spawn => spawns.push([o.pos.x, o.pos.z]),
         }
     }
-    Ok(Level {
+    Level {
         arena_half,
         obstacles,
         spawns,
-    })
+        pads: Vec::new(),
+        decor: Vec::new(),
+    }
 }
 
 /// Serialize a level for a human to commit. Pretty-printed because the
 /// round trip today is "export, commit the JSON, redeploy" and a diff
 /// nobody can read is a bad artifact.
 ///
-/// # Errors
-///
-/// Returns [`ExportError::FloatingObject`] when an object does not rest on
-/// the floor and therefore cannot be represented by an `Obstacle`.
-///
 /// # Panics
 ///
 /// Panics only if `serde_json` unexpectedly fails to serialize `Level`'s
 /// plain data representation.
-pub fn to_json(objects: &[Obj], arena_half: f32) -> Result<String, ExportError> {
-    let level = to_level(objects, arena_half)?;
-    Ok(serde_json::to_string_pretty(&level).expect("Level is plain data"))
+#[must_use]
+pub fn to_json(objects: &[Obj], arena_half: f32) -> String {
+    serde_json::to_string_pretty(&to_level(objects, arena_half)).expect("Level is plain data")
 }
 
 /// Build editable objects from a level, so the editor opens on a real
 /// arena rather than an empty grid.
 ///
-/// Colours come from the palette entry a box's height would have placed,
-/// which keeps a loaded arena looking like an authored one.
+/// A raised box is placed with its centre halfway between its bottom and
+/// its top and its extent the distance between them, so a roof loads
+/// hanging where the sim has it. Colours come from the palette entry of the
+/// box's kind, which keeps a loaded arena looking like an authored one and
+/// is what lets the kind survive the round trip.
 #[must_use]
 pub fn from_level(level: &Level) -> Vec<Obj> {
     let mut out = Vec::with_capacity(level.obstacles.len() + level.spawns.len());
@@ -144,18 +159,16 @@ pub fn from_level(level: &Level) -> Vec<Obj> {
         out.push(Obj {
             pos: Vec3::new(
                 f32::midpoint(o.min[0], o.max[0]),
-                o.h * 0.5,
+                f32::midpoint(o.base, o.h),
                 f32::midpoint(o.min[1], o.max[1]),
             ),
-            scale: Vec3::new(sx, o.h, sz),
+            scale: Vec3::new(sx, o.h - o.base, sz),
             yaw: 0.0,
-            color: colour_for_height(o.h),
+            color: kind_for_obstacle(o).color,
             class: Class::Object,
         });
     }
-    let spawn_kind = crate::palette::PALETTE
-        .iter()
-        .find(|k| k.class == Class::Spawn);
+    let spawn_kind = PALETTE.iter().find(|k| k.class == Class::Spawn);
     for s in &level.spawns {
         let kind: &Kind = match spawn_kind {
             Some(k) => k,
@@ -166,20 +179,10 @@ pub fn from_level(level: &Level) -> Vec<Obj> {
     out
 }
 
-/// The palette colour of whichever cover class this height belongs to, so
-/// a loaded crate looks like a placed crate.
-fn colour_for_height(h: f32) -> Vec3 {
-    crate::palette::PALETTE
-        .iter()
-        .filter(|k| k.class == Class::Object)
-        .min_by(|a, b| (a.scale.y - h).abs().total_cmp(&(b.scale.y - h).abs()))
-        .map_or(Vec3::new(0.42, 0.45, 0.50), |k| k.color)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pong_core::shooter::ARENA_HALF;
+    use pong_core::shooter::{ARENA_HALF, Cover};
 
     fn obj(pos: Vec3, scale: Vec3, yaw: f32, class: Class) -> Obj {
         Obj {
@@ -191,6 +194,29 @@ mod tests {
         }
     }
 
+    /// Geometry and kind of two obstacle lists agree, in order.
+    fn assert_same_boxes(back: &[Obstacle], want: &[Obstacle], what: &str) {
+        assert_eq!(back.len(), want.len(), "{what}: obstacle count");
+        for (a, b) in back.iter().zip(want) {
+            for i in 0..2 {
+                assert!((a.min[i] - b.min[i]).abs() < 1e-4, "{what}: min");
+                assert!((a.max[i] - b.max[i]).abs() < 1e-4, "{what}: max");
+            }
+            assert!(
+                (a.h - b.h).abs() < 1e-6,
+                "{what}: height {} vs {}",
+                a.h,
+                b.h
+            );
+            assert!(
+                (a.base - b.base).abs() < 1e-6,
+                "{what}: base {} vs {}",
+                a.base,
+                b.base
+            );
+        }
+    }
+
     #[test]
     fn a_seeded_arena_survives_load_then_export() {
         // The round trip that matters: what the editor opens on must be
@@ -198,23 +224,13 @@ mod tests {
         for seed in [0u64, 1, 7, 20_260_830] {
             let level = Level::from_seed(seed);
             let objects = from_level(&level);
-            let back = to_level(&objects, level.arena_half).expect("seeded arena exports");
+            let back = to_level(&objects, level.arena_half);
             assert_eq!(back.arena_half, level.arena_half, "seed {seed}");
-            assert_eq!(
-                back.obstacles.len(),
-                level.obstacles.len(),
-                "seed {seed}: obstacle count"
-            );
+            assert_same_boxes(&back.obstacles, &level.obstacles, &format!("seed {seed}"));
             for (a, b) in back.obstacles.iter().zip(&level.obstacles) {
-                for i in 0..2 {
-                    assert!((a.min[i] - b.min[i]).abs() < 1e-4, "seed {seed}: min");
-                    assert!((a.max[i] - b.max[i]).abs() < 1e-4, "seed {seed}: max");
-                }
-                assert!(
-                    (a.h - b.h).abs() < 1e-6,
-                    "seed {seed}: height {} vs {}",
-                    a.h,
-                    b.h
+                assert_eq!(
+                    a.kind, b.kind,
+                    "seed {seed}: a crate must come back a crate"
                 );
             }
             assert_eq!(back.spawns.len(), level.spawns.len(), "seed {seed}: spawns");
@@ -222,6 +238,30 @@ mod tests {
                 assert!((a[0] - b[0]).abs() < 1e-4 && (a[1] - b[1]).abs() < 1e-4);
             }
         }
+    }
+
+    #[test]
+    fn trench_city_survives_load_then_export_where_the_palette_can_name_it() {
+        // The authored arena has raised boxes and eight kinds. Geometry -
+        // footprint, bottom, top - must survive for every box; the kind
+        // survives for every kind the palette has an entry for, and the
+        // module docs say which do not.
+        let level = Level::trench_city();
+        let back = to_level(&from_level(&level), level.arena_half);
+        assert_same_boxes(&back.obstacles, &level.obstacles, "trench city");
+        for (a, b) in back.obstacles.iter().zip(&level.obstacles) {
+            if PALETTE.iter().any(|k| k.cover == b.kind) {
+                assert_eq!(a.kind, b.kind, "{b:?} changed kind through the editor");
+            }
+        }
+        assert!(
+            level
+                .obstacles
+                .iter()
+                .any(|o| o.kind == Cover::Roof && o.base > 0.0),
+            "the level under test has a raised roof, or this proves nothing"
+        );
+        assert_eq!(back.spawns, level.spawns);
     }
 
     #[test]
@@ -234,8 +274,9 @@ mod tests {
             0.0,
             Class::Object,
         )];
-        let level = to_level(&objects, ARENA_HALF).unwrap();
+        let level = to_level(&objects, ARENA_HALF);
         assert_eq!(level.obstacles[0].h, 3.5);
+        assert_eq!(level.obstacles[0].base, 0.0);
         assert_eq!(level.obstacles[0].min, [0.0, -4.0]);
         assert_eq!(level.obstacles[0].max, [4.0, -2.0]);
     }
@@ -246,24 +287,24 @@ mod tests {
         let at = Vec3::new(0.0, 1.5, 0.0);
         let square = |o: &Obstacle| (o.max[0] - o.min[0], o.max[1] - o.min[1]);
 
-        let none = to_level(&[obj(at, long, 0.0, Class::Object)], ARENA_HALF).unwrap();
+        let none = to_level(&[obj(at, long, 0.0, Class::Object)], ARENA_HALF);
         assert_eq!(square(&none.obstacles[0]), (8.0, 2.0));
 
-        let quarter = to_level(&[obj(at, long, YAW_STEP, Class::Object)], ARENA_HALF).unwrap();
+        let quarter = to_level(&[obj(at, long, YAW_STEP, Class::Object)], ARENA_HALF);
         assert_eq!(
             square(&quarter.obstacles[0]),
             (2.0, 8.0),
             "a quarter turn swaps extents"
         );
 
-        let half = to_level(&[obj(at, long, 2.0 * YAW_STEP, Class::Object)], ARENA_HALF).unwrap();
+        let half = to_level(&[obj(at, long, 2.0 * YAW_STEP, Class::Object)], ARENA_HALF);
         assert_eq!(
             square(&half.obstacles[0]),
             (8.0, 2.0),
             "a half turn is a no-op on an AABB"
         );
 
-        let three = to_level(&[obj(at, long, 3.0 * YAW_STEP, Class::Object)], ARENA_HALF).unwrap();
+        let three = to_level(&[obj(at, long, 3.0 * YAW_STEP, Class::Object)], ARENA_HALF);
         assert_eq!(square(&three.obstacles[0]), (2.0, 8.0));
     }
 
@@ -283,10 +324,12 @@ mod tests {
     }
 
     #[test]
-    fn a_floating_box_is_refused_by_name_rather_than_dropped() {
-        // The translate gizmo has a Y handle and nothing stops it, so this
-        // is reachable by ordinary use. Silently flattening it would ship a
-        // level that is not the one on screen.
+    fn a_lifted_box_exports_its_base_and_loads_back_at_the_same_height() {
+        // The translate gizmo has a Y handle and nothing stops it. This
+        // used to be refused by name because a box had no bottom; it is now
+        // exactly how a roof is authored, so the lift must ship and must
+        // come back.
+        let roof = PALETTE.iter().find(|k| k.name == "roof").unwrap();
         let objects = vec![
             obj(
                 Vec3::new(0.0, 0.6, 0.0),
@@ -294,21 +337,81 @@ mod tests {
                 0.0,
                 Class::Object,
             ),
-            obj(
-                Vec3::new(4.0, 5.0, 0.0),
-                Vec3::splat(1.2),
-                0.0,
-                Class::Object,
-            ),
+            Obj {
+                pos: Vec3::new(4.0, 2.7, 0.0),
+                scale: Vec3::new(6.0, 0.4, 3.0),
+                yaw: 0.0,
+                color: roof.color,
+                class: Class::Object,
+            },
         ];
-        match to_level(&objects, ARENA_HALF) {
-            Err(ExportError::FloatingObject { index, base_y }) => {
-                assert_eq!(index, 1, "names the offending object");
-                assert!((base_y - 4.4).abs() < 1e-4, "reports how far up: {base_y}");
-                let msg = ExportError::FloatingObject { index, base_y }.to_string();
-                assert!(msg.contains("object 1") && msg.contains("floor"), "{msg}");
-            }
-            other => panic!("expected a refusal, got {other:?}"),
+        let level = to_level(&objects, ARENA_HALF);
+        assert_eq!(
+            level.obstacles[0].base, 0.0,
+            "the floor box stays on the floor"
+        );
+        let lifted = level.obstacles[1];
+        assert!((lifted.base - 2.5).abs() < 1e-5, "base {}", lifted.base);
+        assert!((lifted.h - 2.9).abs() < 1e-5, "top {}", lifted.h);
+        assert_eq!(lifted.kind, Cover::Roof, "the roof entry exports as a roof");
+        assert_eq!(lifted.min, [1.0, -1.5]);
+        assert_eq!(lifted.max, [7.0, 1.5]);
+
+        // And it plays as a roof: the sim walks under it and stands on it.
+        let obs = &level.obstacles;
+        assert_eq!(
+            pong_core::shooter::support_height([4.0, 0.0], 0.6, 0.0, obs),
+            0.0,
+            "on the floor under the roof you are on the floor"
+        );
+        assert!(
+            (pong_core::shooter::support_height([4.0, 0.0], 0.6, 2.9, obs) - 2.9).abs() < 1e-5,
+            "on top of it you are on it"
+        );
+
+        // Loaded back, the object hangs where it was dragged.
+        let back = from_level(&level);
+        assert!(
+            (back[1].pos.y - 2.7).abs() < 1e-5,
+            "loaded at y {}",
+            back[1].pos.y
+        );
+        assert!((back[1].scale.y - 0.4).abs() < 1e-5);
+        assert_eq!(back[1].color, roof.color, "loaded with the roof's colour");
+        let again = to_level(&back, ARENA_HALF);
+        assert!((again.obstacles[1].base - 2.5).abs() < 1e-5);
+        assert!((again.obstacles[1].h - 2.9).abs() < 1e-5);
+        assert_eq!(again.obstacles[1].kind, Cover::Roof);
+    }
+
+    #[test]
+    fn every_palette_entry_exports_as_the_cover_it_names() {
+        // Placed from the palette (its colour, its extents, hung at its
+        // base), each cover entry must come out as its own kind - and the
+        // roof at its base, which Obj::from_kind does not yet apply.
+        for k in PALETTE.iter().filter(|k| k.class == Class::Object) {
+            let o = Obj {
+                pos: Vec3::new(0.0, f32::mul_add(k.scale.y, 0.5, k.base), 0.0),
+                scale: k.scale,
+                yaw: 0.0,
+                color: k.color,
+                class: k.class,
+            };
+            let level = to_level(&[o], ARENA_HALF);
+            let b = level.obstacles[0];
+            assert_eq!(b.kind, k.cover, "{} exported as {:?}", k.name, b.kind);
+            assert!(
+                (b.base - k.base).abs() < 1e-5,
+                "{}: base {}",
+                k.name,
+                b.base
+            );
+            assert!(
+                (b.h - (k.base + k.scale.y)).abs() < 1e-5,
+                "{}: top {}",
+                k.name,
+                b.h
+            );
         }
     }
 
@@ -322,28 +425,34 @@ mod tests {
             1.1,
             Class::Spawn,
         )];
-        let level = to_level(&objects, ARENA_HALF).unwrap();
-        assert!(level.obstacles.is_empty(), "a spawn is not cover");
+        let level = to_level(&objects, ARENA_HALF);
+        assert_eq!(
+            level.obstacles,
+            Vec::<Obstacle>::new(),
+            "a spawn is not cover"
+        );
         assert_eq!(level.spawns, vec![[3.0, -4.0]]);
     }
 
     #[test]
-    fn a_spawn_high_off_the_floor_is_allowed() {
-        // Only obstacles are floor-bound; a spawn is a point, and its own
-        // Y is not part of what gets exported.
+    fn a_spawn_high_off_the_floor_is_still_a_point() {
+        // A spawn is a point, and its own Y is not part of what gets
+        // exported.
         let objects = vec![obj(
             Vec3::new(0.0, 12.0, 0.0),
             Vec3::new(0.8, 1.8, 0.8),
             0.0,
             Class::Spawn,
         )];
-        assert!(to_level(&objects, ARENA_HALF).is_ok());
+        let level = to_level(&objects, ARENA_HALF);
+        assert_eq!(level.spawns, vec![[0.0, 0.0]]);
+        assert_eq!(level.obstacles, Vec::<Obstacle>::new());
     }
 
     #[test]
     fn the_json_is_readable_and_parses_back() {
         let objects = from_level(&Level::from_seed(3));
-        let json = to_json(&objects, ARENA_HALF).unwrap();
+        let json = to_json(&objects, ARENA_HALF);
         assert!(json.contains('\n'), "pretty-printed for a human diff");
         let parsed: Level = serde_json::from_str(&json).expect("round-trips through serde");
         assert_eq!(parsed.obstacles.len(), Level::from_seed(3).obstacles.len());

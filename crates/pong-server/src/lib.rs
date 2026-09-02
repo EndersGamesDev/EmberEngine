@@ -32,7 +32,9 @@ use pong_core::proto::{
     BState, C2S, LobbyInfo, MAX_HANDLE_LEN, MAX_LOBBY_LEN, MAX_PASSWORD_LEN, PROTO_VERSION, PState,
     PlayerMeta, S2C, STATE_EVERY_TICKS, color_for, sanitize_text,
 };
-use pong_core::shooter::{ARENA_HALF, FIXED_DT, MAX_PLAYERS, PlayerIn, Sim};
+use pong_core::shooter::{
+    ARENA_HALF, FIXED_DT, Level, MAP_TRENCH_CITY, MAX_PLAYERS, PlayerIn, Sim,
+};
 use tungstenite::Message;
 use tungstenite::protocol::WebSocketConfig;
 
@@ -116,10 +118,14 @@ struct Conn {
     rtt_ticks: u64,
 }
 
-/// A lobby IS a running shooter game.
+/// A lobby IS a running shooter game, on the authored arena.
 struct Lobby {
     password: Option<String>,
     sim: Sim,
+    /// Still minted and still sent: `GameJoined.map` names the level and the
+    /// seed is what a peer falls back to for a name it does not know. Every
+    /// lobby today runs `Level::trench_city()`, so the seed decides nothing
+    /// a v13 client can see.
     seed: u64,
     /// Conn ids; [0] is the listed "host" (purely cosmetic after creation).
     members: Vec<u64>,
@@ -757,7 +763,7 @@ fn handle_event(
 
                     let mut lobby = Lobby {
                         password,
-                        sim: Sim::new(seed),
+                        sim: Sim::from_level(&Level::trench_city()),
                         seed,
                         members: vec![id],
                         pids: HashMap::new(),
@@ -772,6 +778,7 @@ fn handle_event(
                         seed,
                         arena_half: ARENA_HALF,
                         players: roster(&lobby, conns),
+                        map: MAP_TRENCH_CITY.to_string(),
                     };
                     lobbies.insert(name.clone(), lobby);
                     tracing::info!(conn = id, lobby = %name, "game created");
@@ -857,6 +864,7 @@ fn handle_event(
                         seed: lobby.seed,
                         arena_half: ARENA_HALF,
                         players: roster(lobby, conns),
+                        map: MAP_TRENCH_CITY.to_string(),
                     };
                     let others: Vec<u64> =
                         lobby.members.iter().copied().filter(|&m| m != id).collect();
