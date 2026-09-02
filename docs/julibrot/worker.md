@@ -84,7 +84,7 @@ The request pair permits one message to be in browser delivery while main overwr
 
 Each message kind has capacity one in its pending queue and a later message of the same kind replaces the earlier unstarted message; request-buffer returns and credit returns are ownership traffic and are never coalesced.
 
-For current `max_iter = M`, every buffer has `capacity_bytes = 48+16M`: 32 header bytes, room for `M` orbit records or the request body, and a 16-byte immutable pool trailer; app's minimum requestable `M` is 64, changing `M` stale-credits queued arrivals, replaces all four buffers only after all four return to the allocator, restarts the producer from the cached module artifact, increments `allocation_events`, and is the only steady-session resize event.
+For current `max_iter = M`, every buffer has `capacity_bytes = 48+16M`: 32 header bytes, room for `M` orbit records or the request body, and a 16-byte immutable pool trailer; app's minimum requestable `M` is 64, changing `M` arms one drain of all four buffers, delivers a queued arrival to app for its own stale disposition rather than swallowing it behind app's one-in-flight coalescing, replaces all four buffers only after all four return to the allocator or the four-second return deadline expires, restarts the producer from the cached module artifact, increments `allocation_events`, re-encodes the coalesced request at the new capacity, and is the only steady-session resize event.
 
 The request body must fit before the trailer, so `112+4·limb_word_count ≤ 32+16M`; at the 300-digit POLICY four coordinates need at most `4·ceil(300·log₂(10)/32) = 128` limbs, hence request bytes are at most `112+4·128 = 624 ≤ 32+16·64 = 1,056`, while any failure remains a displayed `CentreEncodingWall` with requested bytes and capacity, never truncation or a hidden allocation.
 
@@ -301,9 +301,13 @@ Consumers never use owner-epoch equality as a compatibility test: each HOT or MA
 
 `OwnerEndpoint::shutdown()` closes an already reconciled same-thread channel or immediately returns `BufferStarved`; the browser owner sends `Shutdown`, stops accepting requests, and drives event-based reconciliation for at most the app-enforced four-second buffer-return deadline, `shutdown_acknowledged()` reports completion without blocking, and timeout reports the missing pool/slot rather than hanging.
 
+Reconciliation is recomputed on every owner interaction rather than only when `ShutdownAck` lands, because the browser endpoint owns no timer and an acknowledgement can arrive while a slot is still out; an armed resize drain is bounded by `BUFFER_RETURN_DEADLINE_US`, after which the producer is terminated and the pool replaced regardless, publishing a typed `BufferStarved` that names the pool and slot that never came home. No request is measured against a pool that is being replaced, so a cap LOWER than the current one is never refused for `BadLength` against the old capacity, and each pool carries an epoch so a lease returned from a superseded pool is charged and dropped instead of transferred into the restarted producer.
+
 `ProducerEndpoint::admit(producer_now_us) -> Result<Admission,ChannelError>` applies the same producer shaper used by the browser backend; `next_request`, `complete`, and `cancel` expose one deterministic step for native traces, while the browser-private run loop repeats those steps until `ShutdownAck` or a typed channel failure.
 
 On wasm32 `BrowserOwnerEndpoint::new(config: WorkerConfig) -> Result<BrowserOwnerEndpoint, ChannelError>` constructs the pinned module Worker and `BrowserOwnerEndpoint::from_worker(config, worker)` attaches an app-created port; its `submit`, `next_arrival`, `return_credit`, `take_error`, `latest_generation`, `pending_request_depth`, `facts`, `shutdown`, and `shutdown_acknowledged` methods are the browser implementation behind `OwnerEndpoint`, so app call sites do not branch by mode.
+
+That endpoint is one lowering of a transport-agnostic owner: the private `OwnerCore` holds the pool, arrivals, credit, facts, and the drain, and an `OwnerPort` supplies allocation, ownership transfer, producer restart, and the owner clock. `BrowserPort` is that seam over one module Worker and its transferable buffers, and the native tests supply an in-process port and clock over the same wire buffers, so the resize handshake, its deadline, and four-slot reconciliation are proved without a browser.
 
 `EncodedCentre::encode_math(centre:&BigCentre,revision:u32)->Result<EncodedCentre,ChannelError>` and `decode_math(precision_bits:u32)->Result<BigCentre,ChannelError>` are worker's canonical adapter over math's `encode_big_scalar` and `decode_big_scalar`; `ReferenceOrbitTask::start(request:&OrbitRequest,clock:&impl MonotonicClock)->Result<ReferenceOrbitTask,ChannelError>` constructs math's published `ReferenceOrbitBuilder`, and `poll(latest_generation:u32,clock:&impl MonotonicClock)->Result<OrbitTaskPoll,ChannelError>` returns `Pending`, `Complete`, or `Cancelled` after at most 64 builder steps or 2,000 measured microseconds.
 
@@ -373,7 +377,9 @@ The wire-layout golden constructs every message kind byte-for-byte, checks all o
 
 The orbit-record golden checks index zero, escaping and non-escaping lengths, high/low reconstruction, squared bailout `256.0`, exact `[re_hi,im_hi,re_lo,im_lo]` bytes, Astro-float word-rounded delivered precision, and the `D_work` versus `D_work+16` validation supplied by deterministic math fixtures.
 
-The ownership model enumerates every legal transfer of request slots zero and one and orbit slots zero and one, proving exactly one owner per slot, no send by a detached owner, exactly-once credit return, resize only after all four return, and bounded shutdown diagnostics for each missing slot.
+The ownership model enumerates every legal transfer of request slots zero and one and orbit slots zero and one, proving exactly one owner per slot, no send by a detached owner, exactly-once credit return, resize only after all four return or the bounded deadline expires, and bounded shutdown diagnostics for each missing slot.
+
+The resize test drives 512 to 64 to 4,096 to 512 through the in-process port with a request in flight at every change, proving no length refusal against the pool being replaced, one allocation event per change, the coalesced request re-encoded at the new capacity and submitted, `pending_request_depth` back to zero, the next orbit delivered in a buffer of exactly the new capacity, an unreturned lease unable to hold the drain past the return deadline, and one cap change compared field by field against the same-thread lowering.
 
 Following heap `selection.rs`, the state-machine test places each newer edit at every yield point before and after request transfer, compute start, each cooperative yield, response transfer, app upload, orbit acceptance, HOT drain, and MAIN drain; every schedule ends on the newest generation, stale work never publishes, and both drains return without failure.
 
@@ -408,7 +414,7 @@ The shared navigation-drift, warp-accuracy, shallow-kernel, and perturbation-con
 |Risk|Consequence|Oracle that retires it|
 |----|-----------|----------------------|
 |Transfer accidentally clones or a detached buffer is reused|Payload-scaled main-thread cost or exception|Visible transfer replay checks sender detachment, trailers, and copy counter|
-|A buffer is lost during cancellation, resize, error, or shutdown|Producer starvation or hang|Four-slot ownership model plus visible bounded-shutdown replay|
+|A buffer is lost during cancellation, resize, error, or shutdown|Producer starvation or hang|Four-slot ownership model, the deadline-bounded resize drain over the in-process port, plus visible bounded-shutdown replay|
 |Credit rounds or underflows differently between owner and producer|Bursting, permanent delay, or invented budget|Exact integer token-bucket and shaping model tests|
 |Owner throttles instead of producer shaping|Input latency is hidden as application policy|Trace proves every edit is accepted/coalesced immediately and attributes delay to producer|
 |A stale orbit becomes MAIN state|Wrong centre or reference reaches kernels|Every-yield interleaving test and visible cancellation replay|
@@ -440,7 +446,7 @@ Phase 4 adds fixed-policy credit/token-bucket shaping, facts snapshots, app/kern
 
 The worker slice is therefore budgeted at about 2,060 implementation and test lines; generated wasm glue and downstream app, kernel, heap, and presentation code are excluded.
 
-Implementation progress through Phase 4: the Phase 2 core, transferable `worker_main`, field-paid heap panic-hook installation, standalone buffer pool, checked browser owner endpoint, one-pass orbit copy, cooperative cancellation, ABI refusal, page-flag lowering, four-slot shutdown reconciliation, exact owner token bucket, producer shaper, cancelled-work accounting, and pinned facts snapshot are implemented; browser detachment, engine allocation, and timing claims remain visible-replay evidence.
+Implementation progress through Phase 4: the Phase 2 core, transferable `worker_main`, field-paid heap panic-hook installation, standalone buffer pool, checked browser owner endpoint, one-pass orbit copy, cooperative cancellation, ABI refusal, page-flag lowering, four-slot shutdown reconciliation, exact owner token bucket, producer shaper, cancelled-work accounting, deadline-bounded max-iteration resize over the owner port seam, and pinned facts snapshot are implemented; browser detachment, engine allocation, and timing claims remain visible-replay evidence.
 
 ## 8. Unresolved joint-review findings
 
