@@ -3,7 +3,7 @@
 use bytemuck::{Pod, Zeroable};
 use ember_lab_layer::geometry::{
     EDGES_PER_COPY, EdgePose, LATTICE_SPACING, Prism, lattice_coordinate, lattice_copy_count,
-    lattice_edge_count, lattice_fifth_range,
+    lattice_edge_count,
 };
 use ember_lab_layer::kernels::{LATTICE_EDGE_KERNEL, LatticeUniform};
 use serde::Serialize;
