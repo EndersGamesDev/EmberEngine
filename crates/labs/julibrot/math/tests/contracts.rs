@@ -2,11 +2,15 @@ use core::mem::{align_of, offset_of, size_of};
 use core::num::NonZeroU32;
 
 use ember_julibrot_math::{
-    BigCentre, CentreSplit, EscapeGridRecord, EscapeParams, MathError, OrbitStep, Plane,
-    PlaneAngles, PlanePreset, Pose, ReferenceOrbitBuilder, ReferenceOrbitRecord, ViewMode,
-    centre_from_reference_px, construct_plane, precision_for, reference_shift_px,
+    BigCentre, CentreSplit, EscapeGridRecord, EscapeParams, MathError, NavigationDelta, OrbitStep,
+    Plane, PlaneAngles, PlanePreset, Pose, ReferenceOrbitBuilder, ReferenceOrbitRecord, ViewMode,
+    centre_from_reference_px, construct_plane, pixel_scale, precision_for, reference_shift_px,
     scaled_pixel_scale,
 };
+
+type ApplyNavigationFn =
+    fn(&mut BigCentre, &NavigationDelta, &Plane, f64, f64, u32) -> Result<(), MathError>;
+type DisplacementFn = fn(&BigCentre, &BigCentre, &Plane, f64) -> Result<[f64; 2], MathError>;
 
 #[test]
 fn shared_gpu_and_owner_discriminants_are_exact() {
@@ -44,6 +48,10 @@ fn app_facing_function_signatures_stay_stable() {
         precision_for;
     let _: fn(&Pose, &Pose) -> Result<ember_julibrot_math::WarpMatrix, MathError> =
         ember_julibrot_math::warp_matrix;
+    let _: fn(f64, u32) -> Result<f64, MathError> = pixel_scale;
+    let _: ApplyNavigationFn = BigCentre::apply_navigation;
+    let _: DisplacementFn = BigCentre::displacement_px;
+    let _: fn(&BigCentre) -> [f64; 4] = BigCentre::to_f64_mirror;
 }
 
 #[test]

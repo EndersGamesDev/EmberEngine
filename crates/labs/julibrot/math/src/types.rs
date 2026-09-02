@@ -34,6 +34,17 @@ pub struct PlaneAngles {
     pub theta_2: f64,
 }
 
+/// One combined drag and pointer-anchored zoom edit in canvas-centred pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NavigationDelta {
+    /// Drag displacement with positive y upward.
+    pub pan_canvas_px: [f64; 2],
+    /// Change in the base-two zoom exponent.
+    pub zoom_delta_log2: f64,
+    /// Zoom anchor relative to the canvas centre, with positive y upward.
+    pub anchor_canvas_px: [f64; 2],
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(C)]
 pub struct CentreF64 {

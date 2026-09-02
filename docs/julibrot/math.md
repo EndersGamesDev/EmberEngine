@@ -4,7 +4,7 @@ Status: refined slice document for `crates/labs/julibrot/math` after the five-do
 
 ## 1. Ownership and exclusions
 
-The math slice owns the Julibrot definition, coordinate conventions, PLANE construction and presets, `f32` escape reference, Astro-float centre and reference-orbit arithmetic, the owner's `f64` centre mirror, exact hi/lo splitting, scaled perturbation and rebasing semantics, precision selection, pose and flat warp matrices, and the navigation-drift and warp-accuracy oracles.
+The math slice owns the Julibrot definition, coordinate conventions, PLANE construction and presets, `f32` escape reference, Astro-float centre, authoritative drag and anchored-zoom algebra, reference-orbit arithmetic, the owner's `f64` centre mirror, exact hi/lo splitting, scaled perturbation and rebasing semantics, precision selection, pose and flat warp matrices, and the navigation-drift and warp-accuracy oracles.
 
 The slice is CPU-only: it supplies records, pure functions, arithmetic contracts, and native tests, while kernels own dialect-v2 registration, GPU dispatch, the three refinement levels, iteration caps per level, span reuse, conformance readback, and scratch-copy landing; worker owns scheduling, transfer, validation, credit, and owner publication; present owns rendering, palettes, scene textures, the hot-ring allocation, view-specific warp planning and submission; app owns the runtime and refinement schedule.
 
@@ -94,6 +94,10 @@ The count is incremented only when a rebase is performed; a next `rebase_count` 
 
 ### 2.5 Centre displacement and warp math
 
+One `NavigationDelta` combines canvas-centred drag `(dx,dy)`, zoom change `Δq`, and canvas-centred anchor `(a,b)`, all with positive y upward; the caller supplies `q_after` as the exact binary64 sum `q_before+Δq`, and for `s₀=p(q_before)` and `s₁=p(q_after)` math updates the authoritative centre by `ΔC=(s₀−s₁)(a u+b v)−s₁(dx u+dy v)` using Astro-float at the centre's delivered precision, so a combined edit establishes the after-zoom view before interpreting its drag pixels.
+
+The anchored term keeps `C_before+s₀(a u+b v)=C_after+s₁(a u+b v)`, the drag term is exactly `−s₁(dx u+dy v)`, and conversion of `s₀`, `s₁`, canvas coordinates, and rounded f32 basis coefficients into Astro-float precedes every multiply, add, and centre mutation; invalid input or a finite-mirror overflow rejects the whole edit without partial mutation.
+
 For a plane basis `B=[u v]`, scale `p`, desired centre `C`, and accepted reference centre `C_ref`, worker-side bignum arithmetic publishes `centre_from_reference_px=d=[u·(C−C_ref)/p,v·(C−C_ref)/p]`; subtraction and division occur before rounding the two results to nearest finite `f64`, which remains safe because the recompute policy bounds the ratio rather than the absolute depth.
 
 On an accepted replacement, `reference_shift_px` is the new reference centre minus the old reference centre projected onto the current `(u,v)` basis and divided by current `p`; an initial reference publishes zero because no retained scene exists, while later values are measured bignum differences rather than mirror subtraction.
@@ -122,6 +126,7 @@ All transferred and GPU words are little-endian, `f32` and `f64` are IEEE-754 bi
 |`PlanePreset`|`Mandelbrot` or `Julia { c0:[f64;2] }`; `c0` is finite and lives in MAIN's plane origin|worker, app|
 |`PlaneSpec`|`{ axis_a:Axis4, axis_b:Axis4, plane_origin:[f64;4] }`; CPU-only, distinct seed axes|worker, app|
 |`PlaneAngles`|`{ theta_1:f64, theta_2:f64 }`; finite independent radians|worker, app|
+|`NavigationDelta`|`{ pan_canvas_px:[f64;2], zoom_delta_log2:f64, anchor_canvas_px:[f64;2] }`; CPU-only, canvas-centred pixels with positive y upward|worker, app|
 |`CentreF64`|`{ coords:[f64;4] }`; 32 native bytes, finite owner mirror without deep authority|worker, owner, present|
 |`CentreSplit`|`#[repr(C,align(16))] { hi:[f32;4], lo:[f32;4] }`; 32 bytes at offsets 0 and 16|kernels|
 |`Plane`|`#[repr(C,align(16))] { basis_u:[f32;4], basis_v:[f32;4] }`; 32 bytes at offsets 0 and 16, dimensionless|kernels, present, app|
@@ -142,11 +147,13 @@ All transferred and GPU words are little-endian, `f32` and `f64` are IEEE-754 bi
 
 `Pose` is `pub struct Pose { pub epoch:u64, pub orbit_generation:u32, pub plane:Plane, pub plane_theta_1:f64, pub plane_theta_2:f64, pub zoom_log2:f64, pub view_theta_1:f64, pub grid_width:u32, pub grid_height:u32, pub view:ViewMode, pub centre_from_reference_px:[f64;2] }`; VIEW angle two is derived as `φ·view_theta_1` and is not stored.
 
-The implementation signatures are `construct_plane(preset:PlanePreset,angles:PlaneAngles)->Result<Plane,MathError>`, `construct_plane_from_spec(spec:PlaneSpec,angles:PlaneAngles)->Result<Plane,MathError>`, `preset_spec(preset:PlanePreset)->Result<PlaneSpec,MathError>`, `mirror_centre(centre:&BigCentre)->Result<CentreF64,MathError>`, `split_scalar(value:&BigScalar)->Result<[f32;2],MathError>`, `split_centre(centre:&BigCentre)->Result<CentreSplit,MathError>`, `scaled_pixel_scale(zoom_log2:f64,grid_width:u32)->Result<ScaledPixelScale,MathError>`, `scale_split(zoom_log2:f64,grid_width:u32)->Result<ScaleSplit,MathError>`, `shallow_pixel_scale(zoom_log2:f64,grid_width:u32)->Result<f32,MathError>`, `scaled_pixel_offset(plane:Plane,scale:ScaledPixelScale,extent:[u32;2],pixel:[u32;2])->Result<[f32;4],MathError>`, `centre_displacement_px(centre:&BigCentre,reference:&BigCentre,plane:Plane,zoom_log2:f64,grid_width:u32)->Result<[f64;2],MathError>`, `centre_from_reference_px` with the same arguments except `plane:&Plane`, `reference_shift_px(old:&BigCentre,new:&BigCentre,plane:&Plane,zoom_log2:f64,grid_width:u32)->Result<[f64;2],MathError>`, `precision_for(zoom_log2:f64,grid_width:u32,max_iter:u32)->Result<PrecisionPlan,MathError>`, and `escape_f32(point:[f32;4],params:EscapeParams)->Result<EscapeSample,MathError>`.
+The implementation signatures are `construct_plane(preset:PlanePreset,angles:PlaneAngles)->Result<Plane,MathError>`, `construct_plane_from_spec(spec:PlaneSpec,angles:PlaneAngles)->Result<Plane,MathError>`, `preset_spec(preset:PlanePreset)->Result<PlaneSpec,MathError>`, `mirror_centre(centre:&BigCentre)->Result<CentreF64,MathError>`, `split_scalar(value:&BigScalar)->Result<[f32;2],MathError>`, `split_centre(centre:&BigCentre)->Result<CentreSplit,MathError>`, `pixel_scale(zoom_log2:f64,grid_width:u32)->Result<f64,MathError>`, `scaled_pixel_scale(zoom_log2:f64,grid_width:u32)->Result<ScaledPixelScale,MathError>`, `scale_split(zoom_log2:f64,grid_width:u32)->Result<ScaleSplit,MathError>`, `shallow_pixel_scale(zoom_log2:f64,grid_width:u32)->Result<f32,MathError>`, `scaled_pixel_offset(plane:Plane,scale:ScaledPixelScale,extent:[u32;2],pixel:[u32;2])->Result<[f32;4],MathError>`, `centre_displacement_px(centre:&BigCentre,reference:&BigCentre,plane:Plane,zoom_log2:f64,grid_width:u32)->Result<[f64;2],MathError>`, `centre_from_reference_px` with the same arguments except `plane:&Plane`, `reference_shift_px(old:&BigCentre,new:&BigCentre,plane:&Plane,zoom_log2:f64,grid_width:u32)->Result<[f64;2],MathError>`, `precision_for(zoom_log2:f64,grid_width:u32,max_iter:u32)->Result<PrecisionPlan,MathError>`, and `escape_f32(point:[f32;4],params:EscapeParams)->Result<EscapeSample,MathError>`.
 
 Orbit and perturbation signatures are `ReferenceOrbitBuilder::new(centre:&BigCentre,plan:PrecisionPlan,params:EscapeParams)->Result<ReferenceOrbitBuilder,MathError>`, `ReferenceOrbitBuilder::step(&mut self,max_entries:NonZeroU32)->Result<OrbitStep,MathError>`, `perturb_scaled_f64(orbit:&[ReferenceOrbitRecord],offset_prime:[f64;4],scale_exponent:i32,params:EscapeParams)->Result<PerturbSample,MathError>`, and `perturb_scaled_f64_with_envelope` with the same inputs returning `Result<(PerturbSample,PerturbationEnvelope),MathError>`.
 
-Navigation and warp signatures are `centre_from_reference_px(centre:&BigCentre,reference:&BigCentre,plane:&Plane,zoom_log2:f64,grid_width:u32)->Result<[f64;2],MathError>`, `reference_shift_px(old:&BigCentre,new:&BigCentre,plane:&Plane,zoom_log2:f64,grid_width:u32)->Result<[f64;2],MathError>`, `warp_matrix(from:&Pose,to:&Pose)->Result<WarpMatrix,MathError>`, `warp_identity_error(matrix:WarpMatrix)->f64`, `navigation_drift_f64(steps:u32)->f64`, and `navigation_drift_f32(steps:u32)->f64`; `WarpMatrix.forward` is inverse-sampling `to→from` and `.inverse` is `from→to`.
+Navigation and warp signatures are `BigCentre::apply_navigation(&mut self,delta:&NavigationDelta,plane:&Plane,zoom_log2_before:f64,zoom_log2_after:f64,grid_width:u32)->Result<(),MathError>`, `BigCentre::displacement_px(&self,reference:&BigCentre,plane:&Plane,pixel_scale:f64)->Result<[f64;2],MathError>`, `BigCentre::to_f64_mirror(&self)->[f64;4]`, `centre_from_reference_px(centre:&BigCentre,reference:&BigCentre,plane:&Plane,zoom_log2:f64,grid_width:u32)->Result<[f64;2],MathError>`, `reference_shift_px(old:&BigCentre,new:&BigCentre,plane:&Plane,zoom_log2:f64,grid_width:u32)->Result<[f64;2],MathError>`, `warp_matrix(from:&Pose,to:&Pose)->Result<WarpMatrix,MathError>`, `warp_identity_error(matrix:WarpMatrix)->f64`, `navigation_drift_f64(steps:u32)->f64`, and `navigation_drift_f32(steps:u32)->f64`; `WarpMatrix.forward` is inverse-sampling `to→from` and `.inverse` is `from→to`.
+
+The worker document's unresolved authoritative-navigation API is resolved by adopting `NavigationDelta` and these three `BigCentre` methods by reference; worker retains the centre and sequencing, while math exclusively owns the mutation and projection algebra.
 
 `ReferenceOrbitBuilder` owns partial Astro-float state and emits at most `max_entries` records per call; worker chooses the chunk, checks generation, credit, and deadline, and yields, so high-precision arithmetic cannot turn latest-wins into an unbounded wait.
 
@@ -316,6 +323,8 @@ If and only if an f64 case of either matrix oracle fails, implementation may add
 
 Native scale tests cover integral and fractional zoom, widths 1, 64, 1,920, 2,048, and 4,096, the rounded-mantissa carry, exponents through the 300-digit policy range, exact pixel centres, and reconstruction against high-precision `p` without ever requiring a tiny `f32` scalar.
 
+Native navigation tests require anchored zoom to preserve the anchor's fractal point within one binary64 ulp at `zoom_log2∈{0,40,100}`, require drag to equal exactly `−s(dx u+dy v)`, and round-trip centre/reference displacement through plane pixels.
+
 The scaled f64 perturbation oracle compares direct f64 iteration with the scaled recurrence at zoom values `{14,40,80,100,256,512,900}`, forces upward and downward 64-bit renormalizations, pins inclusive thresholds, adjusts `δc′` with every exponent change, and proves the represented actual delta is invariant across each rescale.
 
 Native rebase tests cover zero, repeated, and nonzero-`Z₀` rebases; the nonzero fixture must pass direct-orbit equality after `δ′←(z−Z₀)/2^e`, index reset, and one ordinary advance, so the reviewed correction is a pass criterion rather than a known failure.
@@ -359,6 +368,7 @@ A hand-rolled fixed-point scalar would make scaling explicit but would also make
 |Scaled recurrence may lose invariance at renormalization or nonzero-reference rebase.|The f64 mirror corpus forces both exponent directions and nonzero `Z₀`, comparing every step with direct iteration.|
 |The f32 mantissa and double-single reference may move a bailout-boundary classification.|The propagated envelope identifies boundary fixtures; all samples outside it require exact class and index.|
 |A reference shift expressed in current pixels may be misapplied to an older pose.|The native pose-rebase test transforms the shift through both bases and scales, then compares reconstructed ℝ⁴ centres.|
+|Authoritative navigation may use a rounded mirror, the wrong drag scale, or the wrong sign.|The Astro-float navigation fixtures pin the anchor invariant through depth, exact negative after-scale drag, displacement round-trip, and atomic failure on invalid arithmetic.|
 |A single native bignum probe does not predict wasm worker speed or memory.|A labelled visible replay reports `compute_us`, credit, wasm size, and both instance memories at all four probe points.|
 |The 300-digit precision ceiling rejects valid deeper requests.|Overlay distinguishes requested depth, working precision, and policy refusal; a later increase requires measured worker memory/time evidence.|
 |Tumbled homography cannot reconstruct internal disocclusion or escape height.|Present's 9×9×5 visible error corpus reports max and p95 pixels and labels stale regions; evidence `requires visible replay`.|
@@ -379,6 +389,8 @@ Phase 4 adds `Pose`, reference-shift re-expression, flat warp matrices and expli
 
 Phase 5 reconciles compile-time interfaces with worker, kernels, present, and app, adds cross-package fixtures without editing sibling packages, and closes documentation, estimated at 250 lines.
 
+Integration-audit addendum publishes the math-owned `NavigationDelta`, atomic Astro-float centre mutation, displacement projection, and direct f64 mirror needed by worker and app, estimated at 300 Rust, test, and contract lines.
+
 The implementation estimate is about 2,410 new Rust and test lines; Cargo metadata and generated lockfile movement are reported separately, and implementation starts only after this refined document is accepted.
 
 ## 8. Unresolved joint-review list
@@ -386,7 +398,7 @@ The implementation estimate is about 2,410 new Rust and test lines; Cargo metada
 - The two-f32 reference record remains an oracle-backed bet rather than a proof at every accepted 100–300 digit centre; failure requires a reviewed record expansion.
 - The 300-digit ceiling and 4,096 iteration cap are product policies, not mathematical completeness claims, and some accepted navigation requests will honestly refuse.
 - `reference_shift_px` is zero for the first accepted reference by convention because no old reference exists; worker and present tests must agree on that first-arrival sentinel without treating it as a measured zero shift.
-- Cross-slice source fixtures pin math's records, discriminants, callable signatures, cooperative orbit boundary, and displacement directions, but compilation against unfinished downstream packages remains integration evidence for the orchestrator's merged branch.
+- Cross-slice source fixtures pin math's records, discriminants, callable signatures, cooperative orbit boundary, displacement directions, and authoritative navigation API; worker's formerly unresolved navigation item is closed by this math-owned interface, while downstream adoption remains orchestrator integration work.
 - The scaled GPU operation sequence, especially exponent-aware products near subnormal range, still needs browser conformance evidence against the f64 mirror.
 - Astro-float won the native probe, but browser worker throughput, wasm size, and duplicated instance-memory cost remain unmeasured.
 - The exact visible acceptance envelope for tumbled warp remains present policy and cannot be retired by math's inverse-times-forward oracle alone.
