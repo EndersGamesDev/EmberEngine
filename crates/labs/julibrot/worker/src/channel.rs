@@ -677,7 +677,7 @@ impl ChannelCore {
             .saturating_add(self.orbit_leases);
     }
 
-    fn bump_facts(&mut self) {
+    const fn bump_facts(&mut self) {
         if let Some(epoch) = self.facts.epoch.checked_add(1) {
             self.facts.epoch = epoch;
         } else {

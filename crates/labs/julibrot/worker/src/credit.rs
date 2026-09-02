@@ -118,7 +118,7 @@ impl ProducerShaper {
     }
 
     /// Resets the pricing epoch after the four buffers are resized.
-    pub fn reset_for_resize(&mut self) {
+    pub const fn reset_for_resize(&mut self) {
         *self = Self::new();
     }
 
