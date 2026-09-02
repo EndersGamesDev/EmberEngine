@@ -36,7 +36,7 @@ pub struct SceneLedger {
 }
 
 impl SceneLedger {
-    pub const fn available_texture_index(&self) -> Result<u32, PresentError> {
+    pub fn available_texture_index(&self) -> Result<u32, PresentError> {
         if let Some(pending) = &self.pending {
             return Err(PresentError::SceneBusy {
                 scene_id: pending.scene_id,
