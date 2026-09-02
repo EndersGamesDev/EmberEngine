@@ -198,11 +198,13 @@ Every page carries a small chip in its header naming the host it is on, its buil
 
 The full model — the file format, the exact picking rule, what a server reports and how a mirror works — is `docs/hosts.md`. What was deliberately *not* built, and what is still owed, is in `docs/plans/backlog.md`.
 
-## Arena Shooter (v13: Trench City, v14: fullscreen, v15: the revolver)
+## Arena Shooter (v13: Trench City, v14: fullscreen, v15: the revolver, v16: one operator)
 
 **v14 adds a fullscreen mode.** On the native client F11 toggles borderless fullscreen; the engine owns the window, so every ember game gets the key. On the web page, F or the ⛶ button fullscreens the stage (canvas plus crosshair and scoreboard) and the canvas fills the screen at the screen's own aspect; Esc leaves it. No protocol change: v14 pages play on the same protocol-13 hosts as v13, and the v13 page stays playable.
 
 **v15 replaces the box pistol with a heavy revolver in real hands.** The weapon is an artist's Collada model (`assets/heavy-revolver-concept.zip`, twenty parts, 4096² pictures) converted by `tools/v15/` into five textured parts; the hands are a rigged, textured game hand (`assets/rigged-hand-game-model.zip`) whose finger chains are posed around the grip in Blender and baked, then mirrored for the other side. The cylinder advances one chamber per confirmed round, the hammer cocks and falls, the trigger pulls, and the muzzle flash sits on the real muzzle, all driven from the sidecar `crates/arena/assets/viewmodel-rig.json`. Remote players carry the same revolver. No protocol change.
+
+**v16 makes the player and the character one operator.** The v15 revolver in bare hands did not match the character, who visibly carries a rifle and wears gloves, and every remote player showed both weapons: the rifle welded to the spine by `tools/swat_split.py` and the gun the client drew at the hand. `tools/v16/build_operator_viewmodel.py` now builds the viewmodel from the operator's own FBX: its armature carries the artist's grip pose, so the rifle (31 parts joined into one) and the gloved fists (cut from the posed body) come out already holding each other, aligned to the pipeline's frame from the weapon's measured axis. The forearms are tapered tubes in the sleeve's own colour, because the operator's sleeves are a dozen big polygons. The split leaves the rifle out of the body parts, and remote players hold this rifle at the hand. The melee key (E) now plays a butt-strike with the rifle, first person only: the protocol carries no melee state for remote players. No protocol change.
 
 **Play: <https://endersgamesdev.github.io/EmberEngine/>** — pick Arena Shooter. First-person drop-in deathmatch for up to 8 players: WASD + mouse look, Space jump, Shift sprint, C crouch, RMB zoom, R reload, Q raises a shield that reflects the round back at the shooter, E is a melee that goes through a raised shield, and headshots kill outright.
 
