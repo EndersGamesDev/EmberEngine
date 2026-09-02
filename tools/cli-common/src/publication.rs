@@ -70,6 +70,9 @@ impl PublicationMode {
 /// # Errors
 ///
 /// Propagates the underlying `fchmod` failure.
+// The non-Unix body is a no-op that clippy would make `const`; the Unix body
+// calls `fchmod` and cannot be, and one signature serves both hosts.
+#[cfg_attr(not(unix), allow(clippy::missing_const_for_fn))]
 pub fn set_publication_mode(file: &std::fs::File, mode: PublicationMode) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -127,7 +130,7 @@ fn destination_mode_matches(path: &Path, mode: PublicationMode) -> bool {
 
 /// Non-Unix hosts carry no equivalent bits, so mode never differs.
 #[cfg(not(unix))]
-fn destination_mode_matches(_path: &Path, _mode: PublicationMode) -> bool {
+const fn destination_mode_matches(_path: &Path, _mode: PublicationMode) -> bool {
     true
 }
 
@@ -150,9 +153,11 @@ pub fn repair_publication_mode(path: &Path, mode: PublicationMode) -> io::Result
 ///
 /// # Errors
 ///
-/// Never fails on these hosts.
+/// Never fails on these hosts; the `Result` keeps the Unix signature so
+/// callers are written once.
 #[cfg(not(unix))]
-pub fn repair_publication_mode(_path: &Path, _mode: PublicationMode) -> io::Result<()> {
+#[allow(clippy::unnecessary_wraps)]
+pub const fn repair_publication_mode(_path: &Path, _mode: PublicationMode) -> io::Result<()> {
     Ok(())
 }
 

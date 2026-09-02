@@ -108,7 +108,7 @@ mod imp {
 
         pub fn send(&self, msg: &C2S) {
             if let Ok(t) = serde_json::to_string(msg) {
-                let _ = self.ws.send_with_str(&t);
+                drop(self.ws.send_with_str(&t));
             }
         }
 
