@@ -4,6 +4,7 @@ use crate::wire::{
     HEADER_BYTES, MessageHeader, MessageKind, POOL_TRAILER_BYTES, Pool, WireBuffer,
     buffer_capacity, read_u32, write_words,
 };
+use crate::compute::math_error;
 use crate::{ChannelError, ErrorCode};
 
 const REQUEST_FIXED_END: usize = 112;
@@ -36,6 +37,86 @@ pub struct EncodedCentre {
 }
 
 impl EncodedCentre {
+    /// Encodes math's authoritative bignum centre into canonical transport limbs.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MathFailure` if a coordinate cannot be encoded, or `BadLength` if the shared limb
+    /// partition cannot be represented.
+    pub fn encode_math(
+        centre: &ember_julibrot_math::BigCentre,
+        revision: u32,
+    ) -> Result<Self, ChannelError> {
+        let mut limbs = Vec::new();
+        let mut coordinates = [CoordinateDescriptor::default(); COORDINATE_COUNT];
+        for (coordinate, value) in coordinates.iter_mut().zip(&centre.coords) {
+            let encoded = ember_julibrot_math::encode_big_scalar(value).map_err(math_error)?;
+            let limb_start = u32::try_from(limbs.len())
+                .map_err(|_| ChannelError::new(ErrorCode::BadLength, 0, u32::MAX, 0))?;
+            let limb_count = u32::try_from(encoded.limbs.len())
+                .map_err(|_| ChannelError::new(ErrorCode::BadLength, 0, u32::MAX, 0))?;
+            *coordinate = CoordinateDescriptor {
+                sign: encoded.sign,
+                exponent_twos_complement: encoded.exponent.cast_unsigned(),
+                limb_start,
+                limb_count,
+            };
+            limbs.extend_from_slice(&encoded.limbs);
+        }
+        let encoded = Self {
+            revision,
+            coordinates,
+            limbs,
+        };
+        encoded.validate()?;
+        Ok(encoded)
+    }
+
+    /// Decodes canonical transport limbs into math's authoritative bignum centre.
+    ///
+    /// # Errors
+    ///
+    /// Returns a canonical-validation refusal or `MathFailure` for invalid bignum input.
+    pub fn decode_math(
+        &self,
+        precision_bits: u32,
+    ) -> Result<ember_julibrot_math::BigCentre, ChannelError> {
+        self.validate()?;
+        let mut values = Vec::with_capacity(COORDINATE_COUNT);
+        for descriptor in self.coordinates {
+            let start = usize::try_from(descriptor.limb_start)
+                .map_err(|_| bad_descriptor(descriptor.limb_start))?;
+            let count = usize::try_from(descriptor.limb_count)
+                .map_err(|_| bad_descriptor(descriptor.limb_count))?;
+            let end = start
+                .checked_add(count)
+                .ok_or_else(|| bad_descriptor(descriptor.limb_count))?;
+            values.push(
+                ember_julibrot_math::decode_big_scalar(
+                    descriptor.sign,
+                    descriptor.exponent_twos_complement.cast_signed(),
+                    &self.limbs[start..end],
+                    precision_bits,
+                )
+                .map_err(math_error)?,
+            );
+        }
+        let delivered_precision = values[0].precision_bits();
+        if values
+            .iter()
+            .any(|value| value.precision_bits() != delivered_precision)
+        {
+            return Err(math_error(ember_julibrot_math::MathError::PrecisionMismatch));
+        }
+        let [a, b, c, d] = values
+            .try_into()
+            .map_err(|_| ChannelError::new(ErrorCode::BadLength, 0, 4, 0))?;
+        Ok(ember_julibrot_math::BigCentre {
+            coords: [a, b, c, d],
+            precision_bits: delivered_precision,
+        })
+    }
+
     /// Validates canonical zeroes and a contiguous exhaustive limb partition.
     ///
     /// # Errors
