@@ -1,7 +1,7 @@
 //! Algebraic lattice records, frame layout, indexed box, and Mode A shaders.
 
 use bytemuck::{Pod, Zeroable};
-use ember_lab_layer::geometry::{LATTICE_SPACING, Prism, lattice_coordinate, lattice_fifth_range};
+use ember_lab_layer::geometry::{LATTICE_SPACING, Prism, lattice_fifth_range};
 
 use crate::DialectLimits;
 
@@ -166,7 +166,7 @@ pub fn frame_for(object: &Prism, axes: [u32; 5], time: f32, aspect: f32) -> Fram
         rotation,
         projection_spacing: [8.0, 8.0, LATTICE_SPACING as f32, 1.0e-4],
         render: [0.012, aspect, 0.075, time],
-        axes_four: axes[..4].map(|value| value as f32),
+        axes_four: std::array::from_fn(|axis| axes[axis] as f32),
         axis_fifth_range: [
             axes[4] as f32,
             lattice_fifth_range(object, axes) as f32,
@@ -228,7 +228,7 @@ pub fn mode_a_endpoint(
         denominator_five
     };
     let scale_five = frame.projection_spacing[0] / safe_five;
-    let projected_four = rotated[..4].map(|value| value * scale_five);
+    let projected_four = std::array::from_fn(|axis| rotated[axis] * scale_five);
     let denominator_four = frame.projection_spacing[1] - projected_four[3];
     let safe_four = if denominator_four.abs() < frame.projection_spacing[3] {
         frame.projection_spacing[3]
@@ -259,8 +259,8 @@ pub fn mode_a_shader(limits: DialectLimits) -> String {
 #[cfg(test)]
 mod tests {
     use ember_lab_layer::geometry::{
-        EDGES_PER_COPY, LATTICE_SPACING, assert_invariants, lattice_edge_count, lattice_steps,
-        prism, project_gpu_path,
+        EDGES_PER_COPY, LATTICE_SPACING, assert_invariants, lattice_coordinate,
+        lattice_edge_count, lattice_steps, prism, project_gpu_path,
     };
 
     use super::{
