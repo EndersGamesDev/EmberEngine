@@ -7,7 +7,7 @@ use ember_julibrot_present::CLASSIC_PALETTE;
 use ember_lab_heap::{install_logging_handler, publish_browser_error};
 use wasm_bindgen::{JsCast, JsValue};
 
-use crate::{AppError, SurfaceState};
+use crate::{AppError, PendingSurface, SurfaceAction, SurfaceState};
 
 const STATUS_ID: &str = "status";
 
@@ -201,6 +201,72 @@ impl BrowserRuntime {
     #[must_use]
     pub const fn surface_format(&self) -> wgpu::TextureFormat {
         self.config.format
+    }
+
+    /// Acquires the sole surface image after claiming its generation-tagged owner token.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed busy, timeout, reconfiguration, or acquisition failure and releases a
+    /// claim that did not become a pending warp.
+    pub(crate) fn acquire_for_warp(
+        &mut self,
+        generation: u32,
+    ) -> Result<wgpu::SurfaceTexture, AppError> {
+        self.check_device("surface acquisition")?;
+        self.surfaces.claim(generation)?;
+        self.acquire_surface_texture().inspect_err(|_| {
+            let released = self.surfaces.release_unsubmitted(generation);
+            debug_assert!(released, "failed acquisition must release its owner");
+        })
+    }
+
+    /// Retains an acquired image until present reports the matching warp terminal event.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed ownership mismatch without replacing an existing pending image.
+    pub(crate) fn retain_for_warp(
+        &mut self,
+        warp_id: u64,
+        generation: u32,
+        frame: wgpu::SurfaceTexture,
+    ) -> Result<(), AppError> {
+        self.surfaces.retain(PendingSurface {
+            warp_id,
+            generation,
+            frame,
+        })
+    }
+
+    /// Releases a surface claim when present refused before returning a warp identifier.
+    #[must_use]
+    pub(crate) fn release_unsubmitted_warp(&mut self, generation: u32) -> bool {
+        self.surfaces.release_unsubmitted(generation)
+    }
+
+    /// Presents a matching completed warp after its measured fence region has ended.
+    #[must_use]
+    pub(crate) fn complete_warp(&mut self, warp_id: u64) -> bool {
+        match self.surfaces.complete(warp_id) {
+            SurfaceAction::Present(frame) => {
+                frame.present();
+                true
+            }
+            SurfaceAction::Drop(_) | SurfaceAction::Ignore => false,
+        }
+    }
+
+    /// Drops a matching refused warp without presenting it.
+    #[must_use]
+    pub(crate) fn refuse_warp(&mut self, warp_id: u64) -> bool {
+        matches!(self.surfaces.refuse(warp_id), SurfaceAction::Drop(_))
+    }
+
+    /// Returns whether one acquired image remains keyed to a pending warp fence.
+    #[must_use]
+    pub(crate) fn has_pending_surface(&self) -> bool {
+        self.surfaces.pending_warp_id().is_some()
     }
 
     /// Returns a device-lost failure if the callback has supplied one.

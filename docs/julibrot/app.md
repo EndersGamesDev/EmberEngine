@@ -152,7 +152,7 @@ The page exposes flat and tumbled modes, pointer-anchored wheel zoom, drag pan, 
 
 One wasm module is instantiated on the main thread and in the module worker, whose entry is `worker_main`; fetch caching avoids a second network payload, but two wasm instances and separate linear memories remain displayed costs.
 
-Loader, JavaScript glue, wasm export, worker bootstrap, and wire protocol use `JULIBROT_ABI_VERSION=1` and URLs `./pkg/ember_lab_julibrot.js?v=1`, `./pkg/ember_lab_julibrot_bg.wasm?v=1`, and `./worker.js?v=1`; any disagreement refuses startup as typed `VersionSkew` before device or orbit work.
+Loader, JavaScript glue, wasm export, worker bootstrap, and wire protocol use `JULIBROT_ABI_VERSION=1` and URLs `./pkg/ember_lab_julibrot.js?v=1`, `./pkg/ember_lab_julibrot_bg.wasm?v=1`, and `./worker.js?v=1`; the browser owner creates that worker and withholds every orbit-pool transfer until the object handshake accepts the ABI, while any disagreement becomes typed `VersionSkew` before orbit work.
 
 Every semantic change to page, glue, wasm, worker, or protocol increments the query version and deploys all four atomically; a cached old page either obtains matching artifacts or receives the typed skew refusal.
 
@@ -408,7 +408,7 @@ The executor is extraction, not a fork or new backend abstraction; if implementa
 |Arbitrary zoom|Scaled perturbation carries mantissa and signed exponent and never uploads a tiny absolute f32 scale.|
 |Math evidence|Astro-float remains selected; hand-written f64 stays for navigation and warp unless its binding oracle fails.|
 |Austere authority|One world, one scene pass plus warp, one heap class, no tick, DAG, shared-memory path, second reference, WebGPU, or gameplay truth.|
-|Versioned deployment|One ABI value pins page, glue, wasm, worker and JBL1; mismatch refuses before work and deploy is atomic.|
+|Versioned deployment|One ABI value pins page, glue, wasm, worker and JBL1; mismatch refuses before orbit transfer and deploy is atomic.|
 
 ## 5. Oracles and tests
 
@@ -428,7 +428,7 @@ Native present integration tests pin the three palette records, corrected pose f
 
 Native app state tests model §§2.5–2.6 at every asynchronous boundary and require poll before HOT drain, HOT write before frame, current orbit upload before acceptance, scene submission only when due and available, app-held surface keyed by warp id, fence event before present, stale drop, latest-wins schedule, and no re-entrant borrow.
 
-Native page-contract tests pin ABI and URLs, one wasm artifact plus `worker_main`, typed skew refusal before device work, explicit GL-only descriptor, hook and handler ordering, clear-first overlay text, no panic accessor in acquisition, all facts fields, DOM overlay, and approximately 4.5 MB disclosure beside exact release bytes.
+Native page-contract tests pin ABI and URLs, one wasm artifact plus `worker_main`, browser-owner construction and typed skew refusal before orbit transfer, explicit GL-only descriptor, hook and handler ordering, clear-first overlay text, no panic accessor in acquisition, all facts fields, DOM overlay, and approximately 4.5 MB disclosure beside exact release bytes.
 
 Native measurement tests pin separate present-owned scene and warp fences, poll-before-yield, 4,096 polls, 30,000 ms, post-fence present, first-frame labels, second-frame 100 ms decision, timer-probe bounds, three adaptive warm-ups, 15 samples, 32 quanta, 250 ms batch, 4,096 repeats, 30-second suite, median and nearest-rank p95.
 

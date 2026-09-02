@@ -7,10 +7,12 @@ const LIB: &str = include_str!("../src/lib.rs");
 const RUNTIME: &str = include_str!("../src/runtime.rs");
 const FACTS: &str = include_str!("../src/facts.rs");
 const MEASUREMENT: &str = include_str!("../src/measurement.rs");
+const FRAME: &str = include_str!("../src/frame.rs");
 const WORKER_BROWSER: &str = include_str!("../../worker/src/browser.rs");
+const WORKER_OWNER: &str = include_str!("../../worker/src/browser_owner.rs");
 
 #[test]
-fn loader_worker_and_wasm_share_version_one_before_device_start() {
+fn loader_worker_and_wasm_share_version_one_before_orbit_transfer() {
     for required in [
         "./main.js?v=1",
         "./style.css?v=1",
@@ -21,23 +23,19 @@ fn loader_worker_and_wasm_share_version_one_before_device_start() {
         "VersionSkew",
     ] {
         assert!(
-            INDEX.contains(required) || MAIN.contains(required) || WORKER.contains(required),
+            INDEX.contains(required)
+                || MAIN.contains(required)
+                || WORKER.contains(required)
+                || WORKER_OWNER.contains(required),
             "missing version contract: {required}"
         );
     }
     assert!(!LIB.contains("pub fn worker_main(expected_abi: u32)"));
     assert!(WORKER_BROWSER.contains("pub fn worker_main(expected_abi: u32)"));
     assert_eq!(WORKER.matches("ember_lab_julibrot.js?v=1").count(), 1);
-    let boot = MAIN
-        .split_once("async function boot()")
-        .expect("main boot exists")
-        .1;
-    let handshake = boot.find("workerHandshake()").expect("worker handshake");
-    let start = boot.find("start_julibrot").expect("device startup");
-    assert!(
-        handshake < start,
-        "worker skew must refuse before device work"
-    );
+    assert!(FRAME.contains("WorkerChannel::new("));
+    assert!(FRAME.contains("WorkerMode::WebWorker"));
+    assert!(WORKER_OWNER.contains("const WORKER_URL: &str = \"./worker.js?v=1\""));
 }
 
 #[test]
@@ -271,4 +269,30 @@ fn surface_images_are_keyed_by_warp_and_never_presented_by_the_state_model() {
         );
     }
     assert!(!surface.contains(".present()"));
+}
+
+#[test]
+fn frame_loop_preserves_cross_slice_order_and_cooperative_polling() {
+    let refresh = FRAME
+        .split_once("pub fn refresh(")
+        .expect("frame refresh exists")
+        .1
+        .split_once("fn outcome(")
+        .expect("refresh boundary exists")
+        .0;
+    let poll = refresh
+        .find("presenter.poll(now_ms)")
+        .expect("opening poll");
+    let drain = refresh.find("viewer.drain_hot").expect("HOT drain");
+    let write = refresh.find("presenter.write_hot").expect("HOT write");
+    let arrivals = refresh.find("service_arrivals").expect("worker arrivals");
+    let kernels = refresh.find("submit_due_scene").expect("kernel scene");
+    let surface = refresh.find("acquire_for_warp").expect("surface acquire");
+    let warp = refresh.find("presenter.frame").expect("warp submit");
+    assert!(poll < drain && drain < write && write < arrivals);
+    assert!(arrivals < kernels && kernels < surface && surface < warp);
+    assert!(FRAME.contains("KernelMode::for_zoom"));
+    assert!(FRAME.contains("self.presenter.poll(now_ms)"));
+    assert!(MAIN.contains("requestAnimationFrame"));
+    assert!(FRAME.contains("runtime.complete_warp"));
 }

@@ -3,6 +3,7 @@
 mod error;
 #[cfg(target_arch = "wasm32")]
 mod facts;
+mod frame;
 mod measurement;
 mod state;
 mod surface;
@@ -13,6 +14,9 @@ mod runtime;
 pub use error::AppError;
 #[cfg(target_arch = "wasm32")]
 pub use facts::PageFacts;
+#[cfg(target_arch = "wasm32")]
+pub use frame::BrowserFrameLoop;
+pub use frame::RefinementSchedule;
 pub use measurement::{
     ADAPTIVE_SAMPLES, ADAPTIVE_WARM_UPS, AdaptivePlan, CONTINUOUS_FRAME_THRESHOLD_MS,
     FrameObservation, FramePolicy, FramePolicyTracker, MAX_ADAPTIVE_REPEATS, MAX_BATCH_MS,
@@ -32,6 +36,7 @@ pub use surface::{PendingSurface, SurfaceAction, SurfaceState};
 pub struct App {
     runtime: BrowserRuntime,
     viewer: ViewerController,
+    frame_loop: BrowserFrameLoop,
     requests: RunRequests,
 }
 
@@ -53,10 +58,12 @@ impl App {
     /// Returns a typed device, surface, or canonical-viewer failure.
     pub async fn start(canvas_id: &str, status_id: &str) -> Result<Self, AppError> {
         let runtime = BrowserRuntime::start(canvas_id, status_id).await?;
-        let viewer = ViewerController::new()?;
+        let mut viewer = ViewerController::new(runtime.facts().width)?;
+        let frame_loop = BrowserFrameLoop::new(&runtime, &mut viewer)?;
         Ok(Self {
             runtime,
             viewer,
+            frame_loop,
             requests: RunRequests::default(),
         })
     }
@@ -85,7 +92,35 @@ impl App {
         self.requests
     }
 
-    /// Queues one explicit frame request for the future present integration turn.
+    /// Returns frame-loop facts without polling or submitting work.
+    #[must_use]
+    pub const fn frame_loop(&self) -> &BrowserFrameLoop {
+        &self.frame_loop
+    }
+
+    /// Executes one bounded refresh turn and its immediate completion observation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed sibling, surface, device, deadline, or poll-limit refusal.
+    pub fn refresh(&mut self, now_ms: f64) -> Result<RefreshOutcome, AppError> {
+        self.frame_loop.refresh(
+            &mut self.runtime,
+            &mut self.viewer,
+            &mut self.requests,
+            now_ms,
+        )
+    }
+
+    /// Reports whether a yielded completion or refinement turn remains pending.
+    #[must_use]
+    pub fn needs_refresh(&self) -> bool {
+        self.requests.frame
+            || self.frame_loop.pending(&self.runtime)
+            || self.viewer.requested().view == ember_julibrot_math::ViewMode::Tumbled
+    }
+
+    /// Queues one explicit frame request for the next cooperative refresh turn.
     pub const fn request_frame(&mut self) {
         self.requests.frame = true;
     }
@@ -246,10 +281,7 @@ mod wasm_entry {
             2 => PaletteId::Ice,
             _ => return Err(JsValue::from_str("palette discriminant is outside 0..2")),
         };
-        with_app_mut(|app| {
-            app.viewer_mut().set_palette(palette);
-            Ok(())
-        })
+        with_app_mut(|app| app.viewer_mut().set_palette(palette).map_err(app_js_error))
     }
 
     /// Stages the math-owned flat or tumbled view discriminant.
@@ -282,6 +314,27 @@ mod wasm_entry {
             app.request_measurement();
             Ok(())
         })
+    }
+
+    /// Runs one zero-timeout refresh turn at the supplied monotonic browser timestamp.
+    #[wasm_bindgen]
+    pub fn app_refresh(now_ms: f64) -> Result<String, JsValue> {
+        with_app_mut(|app| {
+            let outcome = app.refresh(now_ms).map_err(app_js_error)?;
+            serde_json::to_string(&(
+                outcome.refresh_id,
+                outcome.warp_id,
+                outcome.scene_id,
+                outcome.presented,
+            ))
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+        })
+    }
+
+    /// Reports whether JavaScript should schedule another cooperative animation turn.
+    #[wasm_bindgen]
+    pub fn app_needs_refresh() -> Result<bool, JsValue> {
+        with_app(|app| Ok(app.needs_refresh()))
     }
 
     fn with_app<T>(operation: impl FnOnce(&App) -> Result<T, JsValue>) -> Result<T, JsValue> {
@@ -317,7 +370,7 @@ mod wasm_entry {
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm_entry::{
-    app_drag_pan, app_facts_json, app_request_frame, app_request_measurement,
-    app_set_iteration_cap, app_set_palette, app_set_plane_angles, app_set_preset, app_set_view,
-    app_wheel_zoom, julibrot_abi_version, start_julibrot,
+    app_drag_pan, app_facts_json, app_needs_refresh, app_refresh, app_request_frame,
+    app_request_measurement, app_set_iteration_cap, app_set_palette, app_set_plane_angles,
+    app_set_preset, app_set_view, app_wheel_zoom, julibrot_abi_version, start_julibrot,
 };

@@ -2,7 +2,7 @@ const ABI = 1;
 const STATUS = document.getElementById("status");
 const CANVAS = document.getElementById("julibrot");
 const FACTS = document.getElementById("facts-grid");
-let ORBIT_WORKER = null;
+let RAF_PENDING = false;
 
 function timerProbe() {
   const readLimit = 4000000;
@@ -52,40 +52,27 @@ function renderFacts(facts) {
   }
 }
 
-function workerHandshake() {
-  return new Promise((resolve, reject) => {
-    const worker = new Worker("./worker.js?v=1", { type: "module", name: "julibrot-orbit" });
-    const deadline = setTimeout(() => {
-      worker.terminate();
-      reject(new Error("VersionSkew: worker handshake exceeded 4000 ms"));
-    }, 4000);
-    worker.onmessage = event => {
-      const message = event.data;
-      if (message?.kind === "WorkerReady" && message.version === ABI) {
-        worker.postMessage({ kind: "AbiProbe", version: ABI });
-      } else if (message?.kind === "AbiAccepted" && message.version === ABI) {
-        clearTimeout(deadline);
-        resolve(worker);
-      } else if (message?.kind === "VersionSkew" || message?.kind === "ChannelError") {
-        clearTimeout(deadline);
-        worker.terminate();
-        reject(new Error(`VersionSkew: ${JSON.stringify(message)}`));
-      }
-    };
-    worker.onerror = event => {
-      clearTimeout(deadline);
-      worker.terminate();
-      reject(new Error(`VersionSkew: worker load failed: ${event.message}`));
-    };
-  });
-}
-
 function bindControls(api) {
   const refreshFacts = () => renderFacts(JSON.parse(api.app_facts_json()));
+  const scheduleFrame = () => {
+    if (RAF_PENDING) return;
+    RAF_PENDING = true;
+    requestAnimationFrame(nowMs => {
+      RAF_PENDING = false;
+      try {
+        api.app_refresh(nowMs);
+        refreshFacts();
+        if (api.app_needs_refresh()) scheduleFrame();
+      } catch (error) {
+        fail(error);
+      }
+    });
+  };
   const guarded = operation => {
     try {
       operation();
       refreshFacts();
+      scheduleFrame();
     } catch (error) {
       fail(error);
     }
@@ -125,13 +112,15 @@ function bindControls(api) {
   CANVAS.addEventListener("pointerup", () => { pointer = null; });
   document.getElementById("one-frame").addEventListener("click", () => guarded(() => {
     api.app_request_frame();
-    showStatus("frame request queued; not yet submitted");
+    showStatus("frame request queued");
   }));
   document.getElementById("measure").addEventListener("click", () => guarded(() => {
     api.app_request_measurement();
     showStatus("measurement request queued; no result claimed");
   }));
   refreshFacts();
+  api.app_request_frame();
+  scheduleFrame();
 }
 
 async function artifactBytes(path) {
@@ -146,8 +135,6 @@ async function boot() {
     await api.default("./pkg/ember_lab_julibrot_bg.wasm?v=1");
     const mainVersion = api.julibrot_abi_version();
     if (mainVersion !== ABI) throw new Error(`VersionSkew: main wasm ${mainVersion}, loader ${ABI}`);
-    ORBIT_WORKER = await workerHandshake();
-    if (!ORBIT_WORKER) throw new Error("VersionSkew: worker did not publish ownership");
     await api.start_julibrot("julibrot", "status");
     const facts = JSON.parse(api.app_facts_json());
     const timer = timerProbe();

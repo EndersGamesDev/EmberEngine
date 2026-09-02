@@ -1,6 +1,8 @@
 //! Honest requested, delivered, measured, unavailable, and replay-only page facts.
 
+use ember_julibrot_kernels::{KernelMode, RefinementLevel};
 use ember_julibrot_math::{precision_for, scaled_pixel_scale};
+use ember_julibrot_present::{SampleClass, SubmissionMeasurement};
 use serde::Serialize;
 
 use crate::{App, JULIBROT_ABI_VERSION};
@@ -100,6 +102,11 @@ impl PageFacts {
         let scale = scaled_pixel_scale(requested.zoom_log2, device.width).ok();
         let zoom_digits_f64 = requested.zoom_log2 * core::f64::consts::LOG10_2;
         let depth_digits = ceil_nonnegative_to_u32(zoom_digits_f64);
+        let loop_facts = app.frame_loop();
+        let present = loop_facts.present_facts();
+        let dispatch = loop_facts.dispatch_facts();
+        let worker = loop_facts.worker_facts();
+        let plan = loop_facts.plan();
         Self {
             abi_version: JULIBROT_ABI_VERSION,
             adapter_name: device.adapter_name.clone(),
@@ -107,13 +114,13 @@ impl PageFacts {
             rgba32f_renderable: device.rgba32f_renderable,
             requested_width: device.width,
             requested_height: device.height,
-            delivered_width: None,
-            delivered_height: None,
+            delivered_width: nonzero(present.delivered_width),
+            delivered_height: nonzero(present.delivered_height),
             requested_iteration_cap: requested.iteration_cap,
             delivered_iteration_cap: nonzero(viewer.main.delivered_iter_cap),
             requested_zoom_log2: requested.zoom_log2,
-            presented_zoom_log2: None,
-            reference_zoom_log2: None,
+            presented_zoom_log2: loop_facts.last_presented_zoom_log2(),
+            reference_zoom_log2: loop_facts.accepted_reference_zoom_log2(),
             zoom_digits_f64,
             depth_digits,
             precision_floor_digits: precision.map(|plan| plan.floor_digits),
@@ -128,48 +135,51 @@ impl PageFacts {
             reference_shift_px: viewer.main.reference_shift_px,
             scale_mantissa: scale.map(|value| value.mantissa),
             scale_exponent: scale.map(|value| value.exponent),
-            kernel_mode: None,
-            refinement_level: None,
-            refinement_pending: app.requests().frame,
-            extent_divisor: None,
-            active_pixels: None,
-            worst_case_pixel_iterations: None,
-            kernel_page_passes: None,
-            scratch_copy_commands: None,
-            scratch_copy_bytes: None,
-            logical_heap_bytes: None,
-            reserved_heap_bytes: None,
-            scratch_bytes: None,
-            hot_write_bytes: None,
-            scene_uniform_write_bytes: None,
-            texture_reallocations: None,
+            kernel_mode: dispatch.map(|facts| kernel_mode(facts.mode).to_string()),
+            refinement_level: present
+                .delivered_level
+                .map(|level| refinement_level(level).to_string()),
+            refinement_pending: loop_facts.refinement_pending(),
+            extent_divisor: Some(plan.extent_divisor),
+            active_pixels: dispatch.map(|facts| facts.active_pixels),
+            worst_case_pixel_iterations: dispatch.map(|facts| facts.worst_case_pixel_iterations),
+            kernel_page_passes: dispatch.map(|facts| facts.page_passes),
+            scratch_copy_commands: dispatch.map(|facts| facts.copy_commands),
+            scratch_copy_bytes: dispatch.map(|facts| facts.gpu_copy_bytes),
+            logical_heap_bytes: dispatch.map(|facts| facts.logical_heap_bytes),
+            reserved_heap_bytes: dispatch.map(|facts| facts.reserved_heap_bytes),
+            scratch_bytes: dispatch.map(|facts| facts.scratch_bytes),
+            hot_write_bytes: Some(ember_julibrot_present::HOT_PAYLOAD_BYTES),
+            scene_uniform_write_bytes: Some(80),
+            texture_reallocations: Some(present.texture_reallocations),
             rebase_count_sum: "unavailable",
             rebase_count_max: "unavailable",
             glitch_pixel_count: "unavailable",
-            worker_facts: None,
-            worker_compute_us: None,
-            worker_credit_us: None,
-            worker_overfeed_us: None,
-            worker_allocation_events: None,
-            request_buffers_owned_main: None,
-            orbit_buffers_owned_main: None,
+            worker_facts: Some(worker_json(worker)),
+            worker_compute_us: nonzero(worker.last_compute_us),
+            worker_credit_us: Some(worker.credit_us),
+            worker_overfeed_us: Some(worker.last_overfeed_us),
+            worker_allocation_events: Some(worker.allocation_events),
+            request_buffers_owned_main: Some(worker.request_buffers_owned_main),
+            orbit_buffers_owned_main: Some(worker.orbit_buffers_owned_main),
             palette_id: requested.palette as u32,
             view_mode: requested.view as u32,
-            completed_scene_id: None,
-            in_flight_scene_id: None,
-            warp_source_scene_id: None,
-            reprojected_per_scene: None,
-            refreshes_without_scene: 0,
-            chart_residual: None,
-            tumbled_max_error_px: None,
+            completed_scene_id: present.completed_scene_id,
+            in_flight_scene_id: present.in_flight_scene_id,
+            warp_source_scene_id: loop_facts.last_warp_source(),
+            reprojected_per_scene: present.reprojected_per_scene,
+            refreshes_without_scene: present.refreshes_without_scene,
+            chart_residual: present.chart_residual,
+            tumbled_max_error_px: present.tumbled_max_error_px,
             tumbled_p95_error_px: None,
-            scene_wall_ms: None,
-            scene_fence_wait_ms: None,
-            scene_polls: None,
-            warp_wall_ms: None,
-            warp_fence_wait_ms: None,
-            warp_polls: None,
-            warmup_label: None,
+            scene_wall_ms: present.last_scene.map(|sample| sample.wall_ms),
+            scene_fence_wait_ms: present.last_scene.map(|sample| sample.fence_wait_ms),
+            scene_polls: present.last_scene.map(|sample| sample.polls),
+            warp_wall_ms: present.last_warp.map(|sample| sample.wall_ms),
+            warp_fence_wait_ms: present.last_warp.map(|sample| sample.fence_wait_ms),
+            warp_polls: present.last_warp.map(|sample| sample.polls),
+            warmup_label: newest_measurement(present.last_scene, present.last_warp)
+                .map(|sample| sample_class(sample.sample_class).to_string()),
             second_frame_policy: None,
             timer_quantum_ms: None,
             device_walls: vec!["WebGL2", "EXT_color_buffer_float", "RGBA32F usages"]
@@ -184,13 +194,73 @@ impl PageFacts {
             .into_iter()
             .map(str::to_string)
             .collect(),
-            limiting_term: None,
+            limiting_term: (plan.extent_divisor > 1)
+                .then(|| format!("live heap/header capacity divisor {}", plan.extent_divisor)),
             wasm_bundle_bytes: None,
             javascript_bundle_bytes: None,
             wasm_instance_count: 2,
             timing_status: "requires visible replay",
         }
     }
+}
+
+const fn kernel_mode(mode: KernelMode) -> &'static str {
+    match mode {
+        KernelMode::Shallow => "Shallow",
+        KernelMode::Perturbation => "Perturbation",
+    }
+}
+
+const fn refinement_level(level: RefinementLevel) -> &'static str {
+    match level {
+        RefinementLevel::Preview => "Preview",
+        RefinementLevel::Interactive => "Interactive",
+        RefinementLevel::Final => "Final",
+    }
+}
+
+const fn sample_class(class: SampleClass) -> &'static str {
+    match class {
+        SampleClass::ColdWarmUp => "ColdWarmUp",
+        SampleClass::PolicyProbe => "PolicyProbe",
+        SampleClass::Measured => "Measured",
+    }
+}
+
+fn newest_measurement(
+    scene: Option<SubmissionMeasurement>,
+    warp: Option<SubmissionMeasurement>,
+) -> Option<SubmissionMeasurement> {
+    match (scene, warp) {
+        (Some(scene), Some(warp)) => Some(if scene.wall_ms >= warp.wall_ms {
+            scene
+        } else {
+            warp
+        }),
+        (Some(scene), None) => Some(scene),
+        (None, Some(warp)) => Some(warp),
+        (None, None) => None,
+    }
+}
+
+fn worker_json(facts: ember_julibrot_worker::WorkerFacts) -> serde_json::Value {
+    serde_json::json!({
+        "epoch": facts.epoch,
+        "last_applied_generation": facts.last_applied_generation,
+        "last_ack_generation": facts.last_ack_generation,
+        "orbit_queue_depth": facts.orbit_queue_depth,
+        "shutdown_queue_depth": facts.shutdown_queue_depth,
+        "credit_us": facts.credit_us,
+        "last_compute_us": facts.last_compute_us,
+        "last_overfeed_us": facts.last_overfeed_us,
+        "applied_count": facts.applied_count,
+        "stale_count": facts.stale_count,
+        "cancelled_count": facts.cancelled_count,
+        "allocation_events": facts.allocation_events,
+        "request_buffers_owned_main": facts.request_buffers_owned_main,
+        "orbit_buffers_owned_main": facts.orbit_buffers_owned_main,
+        "mode": facts.mode,
+    })
 }
 
 fn nonzero(value: u32) -> Option<u32> {
