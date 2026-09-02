@@ -121,20 +121,13 @@ pub fn perturb_scaled_f64_with_envelope(
         minimum_escape_margin = minimum_escape_margin.min(escape_margin);
         let norm_error = norm_squared_error(z, absolute_error);
         if magnitude_squared > f64::from(params.bailout) {
-            return Ok((
-                PerturbSample {
-                    smooth_iter: smooth_iteration_f64(iteration, z.re, z.im),
-                    escaped: true,
-                    escape_index: Some(iteration),
-                    rebase_count,
-                    glitch: false,
-                },
-                PerturbationEnvelope {
-                    delta_abs_error: absolute_error,
-                    escape_norm2_error: norm_error,
-                    smooth_error: smooth_error_bound(z.hypot(), absolute_error),
-                    minimum_escape_margin,
-                },
+            return Ok(escaped_result(
+                iteration,
+                z,
+                rebase_count,
+                absolute_error,
+                norm_error,
+                minimum_escape_margin,
             ));
         }
         if iteration + 1 == params.max_iter {
@@ -181,7 +174,46 @@ pub fn perturb_scaled_f64_with_envelope(
             ));
         }
     }
-    Ok((
+    Ok(bounded_result(
+        last_value,
+        rebase_count,
+        absolute_error,
+        minimum_escape_margin,
+    ))
+}
+
+fn escaped_result(
+    iteration: u32,
+    z: Complex64,
+    rebase_count: u32,
+    absolute_error: f64,
+    norm_error: f64,
+    minimum_escape_margin: f64,
+) -> (PerturbSample, PerturbationEnvelope) {
+    (
+        PerturbSample {
+            smooth_iter: smooth_iteration_f64(iteration, z.re, z.im),
+            escaped: true,
+            escape_index: Some(iteration),
+            rebase_count,
+            glitch: false,
+        },
+        PerturbationEnvelope {
+            delta_abs_error: absolute_error,
+            escape_norm2_error: norm_error,
+            smooth_error: smooth_error_bound(z.hypot(), absolute_error),
+            minimum_escape_margin,
+        },
+    )
+}
+
+fn bounded_result(
+    last_value: Complex64,
+    rebase_count: u32,
+    absolute_error: f64,
+    minimum_escape_margin: f64,
+) -> (PerturbSample, PerturbationEnvelope) {
+    (
         PerturbSample {
             smooth_iter: -1.0,
             escaped: false,
@@ -195,7 +227,7 @@ pub fn perturb_scaled_f64_with_envelope(
             smooth_error: 0.0,
             minimum_escape_margin,
         },
-    ))
+    )
 }
 
 fn ordinary_advance(
