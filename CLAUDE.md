@@ -36,6 +36,8 @@ The scene pass is deliberately small. Work with it, not against it.
 | **One scene pass, one depth buffer, one camera, near/far `0.1`/`500`** | There is no separate viewmodel pass, so the gun clips into walls and anything within 0.1 of the eye is clipped. Expect it; it is not a regression you introduced. |
 | **`Instance`**: position, `Vec3` scale, colour, `rot: Quat`, mesh id | Scale applies **before** rotation. Normals use the same matrix, so non-uniform scale skews lighting. |
 
+The device floor is WebGL2 plus `EXT_color_buffer_float`, nothing else: **`docs/minimum-requirements.md`**. A feature that needs more is a project decision recorded there first.
+
 `include_bytes!` bakes assets into the wasm bundle and the deploy ships one bundle with no runtime fetch — every byte you add to an asset is a byte every web player downloads.
 
 Mesh ids are allocated in a fixed order in `crates/arena/src/lib.rs`. Adding parts shifts every later base; the `set_*` setters exist to absorb that.
