@@ -42,11 +42,19 @@ Projection is deliberately not moved across the equality because perspective is 
 
 For one Mode A endpoint, the vertex-stage algorithm loads the rotated first four coordinates and rotated fifth coordinate through two handle-resolved accessors, evaluates `R(t)v + s × Σᵢ kᵢ(R(t)eᵢ)` as five integer-weighted vector contributions, performs the fifth- and fourth-axis perspective divisions, and tests both denominators against the declared positive epsilon.
 
-One box-vertex invocation additionally loads the edge endpoint-index pair once, so its exact Mode A data path is five accessor calls: one edge record and two rotated records for each of two endpoints; each accessor performs one descriptor-table lookup and one DATA-array `textureLoad` when its span has one page.
+One box-vertex invocation additionally loads the edge endpoint-index pair once, so its exact Mode A data path is five accessor calls: one edge record and two rotated records for each of two endpoints; each accessor performs one span-directory lookup, one descriptor-table lookup, and one DATA-array `textureLoad` when its span has one page.
 
-The logical edge algorithm evaluates 6,000 endpoints per copy because 3,000 edges name two endpoints and each of 1,200 vertices is shared by five edges; a literal 36-vertex box draw invokes the endpoint code again for every box vertex, so the implementation must report vertex invocations separately and must not present 6,000 as the physical shader-invocation count.
+The logical edge algorithm names 6,000 endpoints per copy because 3,000 edges name two endpoints and each of 1,200 vertices is shared by five edges, but the rendered box is obligatorily indexed with eight unique box vertices and 36 indices in every mode and comparator, preserving identical triangles while allowing the post-transform cache to reduce endpoint work.
 
-Mode B is the reuse control: its compute stage rotates and projects each of the 1,200 vertices once per copy, after which the vertex stage fetches the materialized endpoint records and builds the same boxes without the five-term add or either perspective divide.
+The arithmetic ideal is `8E` unique box-vertex invocations and `36E` submitted indices per frame; eight invocations per edge is a post-transform-cache expectation rather than a guaranteed counter value, so the page labels `8E` as ideal arithmetic, reports `36E` as submitted index arithmetic, and treats measured frame wall as fact.
+
+Mode B is the projected-vertex reuse control: its compute stage rotates and projects each of the 1,200 vertices once per copy, after which the vertex stage fetches the materialized endpoint records and builds the same indexed boxes without the five-term add or either perspective divide.
+
+Mode C is the allocation-and-indirection control: it runs layer's exact edge-pose kernel and stores two records per submitted edge, `[midpoint_x,midpoint_y,midpoint_z,hue]` and `[direction_x,direction_y,direction_z,length]`, in heap spans, after which its vertex stage performs only indexed box construction.
+
+The declared experimental axis is heap bytes versus vertex-stage work: Mode A stores 1,200 rotated vertices and pays endpoint algebra, Mode B stores `1,200C` projected vertices and pays endpoint lookup, Mode C stores `3,000C` edge poses and pays box construction, and layer stores the same `3,000C` edge poses and runs the same box construction as Mode C through standalone square slots.
+
+Mode C versus layer is the clean allocation-and-indirection comparison because kernel, logical records, indexed mesh, and vertex work are equal; Mode A and Mode C are mandatory implementation modes, while Mode B is third priority if the implementation budget holds.
 
 ## 4. DATA records, spans, and walls
 
@@ -60,13 +68,17 @@ Mode A output uses `rotated_four[j] = [r₁,r₂,r₃,r₄]` and `rotated_fifth[
 
 Mode B output uses `projected[j] = [p₁,p₂,p₃,r₅]` and `projected_meta[j] = [valid,0,0,0]`, exactly 32 bytes per projected vertex; the separate validity record wastes 12 bytes per vertex but keeps finite coordinates, fifth-axis hue, and rejection state independently testable without NaN or sign-bit conventions.
 
-A physical heap descriptor still describes one region in one DATA array layer, while a `DataSpan` is the typed logical allocation `{logical_len, pages}` whose ordered page handles may occupy non-contiguous regions and layers; this preserves the existing 20-bit descriptor-index and 12-bit generation handle ABI while lifting a logical slot beyond one two-dimensional texture.
+Packing one validity record per four vertices would reduce Mode B to 20 bytes per vertex, but it is rejected for this experiment because four projected MRT records plus one validity MRT exceed the guaranteed four color attachments and otherwise require a second packing or recomputation pass; Mode C now supplies the like-for-like capacity oracle, so preserving a one-pass two-output Mode B is the less confounded control and its padding remains explicit.
 
-The one immutable bind group adds a fixed-capacity span-directory UBO beside the descriptor UBO and frame/dispatch uniforms; page handles enter that directory only at allocation or step setup, never per frame, and its runtime capacity is derived from `max_uniform_buffer_binding_size` after fixed metadata is charged.
+Mode C output uses exactly layer's two edge-pose records per submitted edge and therefore consumes 32 mutable logical bytes per edge with no additional validity record.
 
-An input accessor maps its logical index to a page through its `DataSpan`, resolves that page handle through the descriptor table, and computes local x and y from that selected page descriptor's width and height; no output-grid dimension participates in input decoding.
+A physical heap descriptor still describes one square region in one DATA array layer, while a `DataSpan` is the typed logical allocation `{logical_len, page_records, page_count, first_directory_slot}` whose ordered page handles may occupy non-contiguous regions and layers; this preserves the existing 20-bit descriptor-index and 12-bit generation handle ABI while lifting a logical slot beyond one two-dimensional texture.
 
-Bulk spans use full free buddy blocks when possible and may finish with a smaller block, but physical reservation is always reported as `Σ page_class² × 16`, not as logical bytes; allocator planning, descriptor availability, span-directory capacity, fragmentation, configured heap side, created layer count, and driver allocation success all remain visible walls.
+The fixed-capacity span-directory UBO stores each span header `{page_records, page_count, first_directory_slot}` followed by its ordered page handles beside the descriptor UBO and frame/dispatch uniforms; directory data changes only at allocation or step setup, and its runtime capacity is derived from `max_uniform_buffer_binding_size` after fixed metadata is charged.
+
+Every page of one span uses one buddy class with side `q` and `page_records = q²`; an accessor computes `page = index / page_records` and `local = index % page_records`, resolves the handle at `first_directory_slot + page`, and computes x and y from that selected descriptor's own width, with no search and no output-grid dimension in input decoding.
+
+The last page may be partially used but is never assigned a smaller class, so span reservation is `page_count × q² × 16`, padding waste is less than one page per span, and logical bytes, reserved bytes, and last-page waste are all reported; allocator planning, descriptor availability, directory capacity, fragmentation, configured heap side, created layer count, and driver allocation success remain visible walls.
 
 For two equal-length MRT output spans, the planner performs an atomic dry run for both spans and returns the greatest whole-copy count it can place without mutating the heap; delivery is then `min(requested copies, planned heap copies, address copies, draw copies)`, and a later driver refusal is displayed as a runtime refusal rather than converted into a smaller unreported workload.
 
@@ -76,46 +88,50 @@ WebGL2 exposes no trustworthy total free-VRAM query, so a configured DATA byte b
 
 ## 5. Mode arithmetic
 
-Let `L_A = 86,400 + 38,400 = 124,800` be Mode A logical heap bytes and let `L_B(k) = 86,400 + 1,200 × C(k) × 32 = 86,400 + 38,400C(k)` be Mode B logical heap bytes; these formulas exclude buddy padding and page-directory metadata, which are runtime physical facts.
+Let `L_A = 86,400 + 38,400 = 124,800` be Mode A logical heap bytes, let `L_B(k) = 86,400 + 1,200 × C(k) × 32 = 86,400 + 38,400C(k)` be Mode B logical heap bytes, and let `L_C(k) = 86,400 + 3,000 × C(k) × 32 = 86,400 + 96,000C(k)` be Mode C logical heap bytes; these formulas exclude buddy padding and page-directory metadata, which are runtime physical facts.
 
-The old layer comparator materializes two RGBA32F edge-pose slots, `[midpoint_x,midpoint_y,midpoint_z,hue]` and `[direction_x,direction_y,direction_z,length]`, so its logical payload is `L_layer = E × 32`, while its actual one-texture-per-slot allocation is `P_layer = ceil(√E)² × 32`; one slot alone is `ceil(√E)² × 16`, which is the ceiling the multi-layer heap is intended to remove.
+The layer comparator materializes the same two RGBA32F edge-pose slots as Mode C, so its logical payload is `L_layer = E × 32`, while its actual one-texture-per-slot allocation is `P_layer = ceil(√E)² × 32`; one slot alone is `ceil(√E)² × 16`, which is the ceiling the multi-layer heap is intended to remove without changing Mode C's workload.
 
-|Rung|Copies `C`|Submitted edges `E`|Mode A logical DATA|Mode B mutable output|Mode B total logical DATA|Layer one square slot|Layer two-slot allocation|
-|----|---------:|------------------:|------------------:|--------------------:|------------------------:|--------------------:|------------------------:|
-|`(1,1,1,1,1)`|1|3,000|124,800 B|38,400 B|124,800 B|48,400 B|96,800 B|
-|`(3,3,3,3,3)`|243|729,000|124,800 B|9,331,200 B|9,417,600 B|11,669,056 B|23,338,112 B|
-|`(7,7,5,5,5)`|6,125|18,375,000|124,800 B|235,200,000 B|235,286,400 B|294,053,904 B|588,107,808 B|
-|`(47,45,45,45,45)`|192,729,375|578,188,125,000|124,800 B|7,400,808,000,000 B|7,400,808,086,400 B|9,251,014,236,304 B|18,502,028,472,608 B|
+|Rung|Copies `C`|Edges `E`|Mode A total|Mode B output|Mode B total|Mode C output|Mode C total|Layer one slot|Layer two-slot allocation|
+|----|---------:|--------:|-----------:|------------:|-----------:|------------:|-----------:|-------------:|------------------------:|
+|`(1,1,1,1,1)`|1|3,000|124,800 B|38,400 B|124,800 B|96,000 B|182,400 B|48,400 B|96,800 B|
+|`(3,3,3,3,3)`|243|729,000|124,800 B|9,331,200 B|9,417,600 B|23,328,000 B|23,414,400 B|11,669,056 B|23,338,112 B|
+|`(7,7,5,5,5)`|6,125|18,375,000|124,800 B|235,200,000 B|235,286,400 B|588,000,000 B|588,086,400 B|294,053,904 B|588,107,808 B|
+|`(47,45,45,45,45)`|192,729,375|578,188,125,000|124,800 B|7,400,808,000,000 B|7,400,808,086,400 B|18,502,020,000,000 B|18,502,020,086,400 B|9,251,014,236,304 B|18,502,028,472,608 B|
 
-Every number in this table is arithmetic: for example, `(7,7,5,5,5)` gives `C = 7 × 7 × 5³ = 6,125`, Mode B mutable bytes `= 6,125 × 1,200 × 32 = 235,200,000`, and layer side `= ceil(√18,375,000) = 4,287`.
+Every number in this table is arithmetic: for example, `(7,7,5,5,5)` gives `C = 7 × 7 × 5³ = 6,125`, Mode B mutable bytes `= 6,125 × 1,200 × 32 = 235,200,000`, Mode C mutable bytes `= 18,375,000 × 32 = 588,000,000`, and layer side `= ceil(√18,375,000) = 4,287`, where `4,286² < 18,375,000 ≤ 4,287²`.
 
-The table is not a promise that any row is allocatable or drawable; the page computes delivered copies and edges from the live heap plan, `u32` kernel index space, the gles draw-instance policy wall, and any validation refusal while leaving the requested tuple selected.
+The table is not a promise that any row is allocatable or drawable; the page computes delivered copies and edges from the live heap plan, `u32` kernel and instance index spaces, the overridable gles draw policy, and any validation refusal while leaving the requested tuple selected.
 
 ## 6. Mode A: algebraic heap path
 
-At scene setup, Mode A uploads the two base-coordinate spans and the edge span once, allocates the two 1,200-record rotated-output spans once, registers one rotation kernel, and creates the immutable heap bind group.
+At scene setup, Mode A uploads the two base-coordinate spans and the edge span once, allocates the two 1,200-record rotated-output spans once, registers one rotation kernel, and creates the immutable heap resources selected by the output-path spike.
 
-Each frame writes the 192-byte frame uniform, dispatches the 1,200-element rotation kernel through one two-attachment fragment pass, and renders one instanced box draw with `instance_index / 3,000` as copy and `instance_index % 3,000` as base edge.
+Each frame writes the 192-byte frame uniform, dispatches the 1,200-element rotation kernel through one two-attachment fragment pass, completes the selected GPU-side output transfer, and renders one indexed instanced box draw with `instance_index / 3,000` as copy and `instance_index % 3,000` as base edge.
 
-The compute output is GPU-resident and no readback gates rendering; queue order makes the fragment-compute write visible to the following vertex texture loads, while an explicit mapped fence exists only around requested measurements.
+The compute output is GPU-resident and no readback gates rendering; encoder and queue order make the fragment-compute write, transfer, and following vertex texture loads visible in order, while an explicit mapped fence exists only around requested measurements.
 
 The lattice center is decoded from the odd tuple in mixed-radix order, converted to centered integer digits, and combined with the five CPU-rotated basis vectors; changing the rung changes only uniforms and the requested instance count, never heap allocation.
 
-The Mode A delivery wall is `min(E_requested, E_draw)`, where `E_draw` is computed from the wgpu `u32` instance range and the configured conservative gles instance ceiling exposed in page facts; the implementation must not attempt the 578-billion-edge top in one draw merely because the control can request it.
+The only type WALL on Mode A's draw count is the wgpu `u32` instance range; the page also starts with an overridable POLICY value of 2,147,483,647 instances, derived from WebGL2's positive signed `GLsizei` draw-count range and labeled with that origin rather than presented as detected capacity.
 
-## 7. Mode B: materialized projected vertices
+Mode A delivery is `min(E_requested, E_u32_wall, E_policy)` with every term displayed, and changing the policy never changes the selected tuple; allocation or validation refusal remains a separate runtime fact rather than a guessed wall.
+
+## 7. Materialized modes and dispatch
 
 Mode B keeps the same static base and edge spans but allocates paired projected and metadata spans for `1,200 × delivered copies` records, then dispatches a kernel whose output index decodes copy and base vertex, rotates, translates, double-projects, and writes the two MRT fields.
 
-For each output page pair, one ordered submission writes a 16-byte dispatch header containing global base and valid length and runs one fragment pass into one-layer D2 views of the DATA array; separate submissions keep each header write ordered before its pass without dynamic offsets or per-page bind groups, and page handles and page geometry were uploaded at step setup.
+Mode C allocates paired edge-pose spans for `3,000 × delivered copies` records and runs layer's exact kernel body, input data, output field order, index decoding, and numeric operation order through dialect v2, so only heap paging, handle indirection, and output transfer differ from layer.
 
-Mode B per-frame CPU-to-GPU bytes are therefore `192 + 16P` for `P` output page pairs, while Mode A uses `192 + 16 = 208`; the page reports those actual bytes and pass count rather than describing multi-layer capacity as free.
+All `P` per-page dispatch headers `{global_base, valid_length}` are static for a step plan and are uploaded once at step setup into one uniform buffer at strides aligned to the runtime `min_uniform_buffer_offset_alignment`; each pass selects its header with `set_bind_group` and a dynamic offset on the unchanged immutable bind group, which creates no bind group and performs no per-frame upload.
 
-The Mode B vertex stage loads one edge record and two materialized records per endpoint, five accessor calls per box-vertex invocation, then builds the same box and hue without lattice addition or perspective division.
+Per-frame CPU-to-GPU bytes are therefore exactly 192 in Modes A, B, C, and layer; the page separately reports step-setup header bytes, `P` fragment-compute passes, transfer command count and bytes, encoder count, and queue submission count.
 
-The Mode B copy wall is `min(C_requested, floor(H_pair / 1,200), floor(I_kernel / 1,200), floor(E_draw / 3,000))`, where `H_pair` is the exact paired-span allocator plan in records, `I_kernel` is the dialect's `u32` index ceiling, and `E_draw` is the displayed effective instanced-draw ceiling.
+The Mode B vertex stage loads one edge record and two materialized records per endpoint, five accessor calls per ideal unique indexed box vertex, then builds the same box and hue without lattice addition or perspective division; Mode C loads two edge-pose records and performs only the common indexed box construction.
 
-Step changes may free and replace Mode B spans, but allocation never occurs per frame; a failed larger request leaves the requested control at that rung, renders the greatest planned whole-copy delivery immediately when nonzero, and prints requested and delivered tuples, copies, vertices, edges, bytes, pages, and the limiting term.
+The Mode B delivery is `min(C_requested, floor(H_pair / 1,200), floor(I_kernel / 1,200), floor(E_u32_wall / 3,000), floor(E_policy / 3,000))`, and Mode C substitutes paired edge-pose capacity divided by 3,000; `H_pair` is the exact atomic paired-span plan, `I_kernel` is the dialect's `u32` index ceiling, and policy is displayed independently from each WALL.
+
+Step changes may free and replace Mode B or Mode C spans, but allocation never occurs per frame; a failed larger request leaves the requested control at that rung, renders the greatest planned whole-copy delivery immediately when nonzero, and prints requested and delivered tuples, copies, vertices, edges, bytes, pages, and the limiting term.
 
 ## 8. Kernel dialect v2 over heap handles
 
@@ -127,9 +143,9 @@ Registration receives names and shapes but no resource handles, builds accessor 
 
 The forbidden constructs remain module-scope workgroup variables, atomic types or operations, barriers including workgroup-uniform loads, and raw storage resource declarations; kernel bodies also cannot declare bindings or entry points because all resources and entry points belong to the generated lowering.
 
-Dispatch supplies ordered input `DataSpan` references, ordered output `DataSpan` references, and exact uniform bytes; it binds no new bind group, validates handles and spans on the CPU, writes only uniform metadata, selects output layer views as render attachments, and sets the one immutable heap bind group.
+Dispatch supplies ordered input `DataSpan` references, ordered output `DataSpan` references, and exact uniform bytes; it creates no bind group, validates handles and constant-class spans on the CPU, selects a pre-uploaded header by dynamic uniform offset, attaches output views selected by the output-path contract, and sets the applicable immutable heap bind group.
 
-The logical index space comes from the first output span's `logical_len`; every other output must have the same length and matching page geometry for each MRT pass, the generated fragment entry computes `index = page_base + local_y × output_page_width + local_x`, and the last page discards indices at or beyond logical length.
+The logical index space comes from the first output span's `logical_len`; every other output must have the same length and the same `page_records` and `page_count` for each MRT pass, the generated fragment entry computes `index = global_base + local_y × output_page_width + local_x`, and the last page discards indices at or beyond valid length.
 
 Each generated input accessor independently selects its input page and derives coordinates from that page descriptor's own width and height, which removes v1's addressing-bug class structurally: changing the output grid can no longer change how an input index is decoded.
 
@@ -137,31 +153,45 @@ Version 1 froze texture views and accessor bindings into a bind group at registr
 
 Registration errors are the typed set `InvalidDescriptor`, `Parse`, `Forbidden(WorkgroupVariable|Atomic|Barrier|RawStorageAccess)`, and `Validation`; each carries the stable kernel name and exact diagnostic.
 
-Dispatch and resource errors are typed as `WrongDevice`, `InvalidHandle`, `StaleHandle`, `WrongHeapKind`, `EmptySpan`, `SpanDirectoryFull`, `SpanPageMissing`, `SpanGeometryMismatch`, `OutputLengthMismatch`, `OutputAlias`, `ReadWriteAlias`, `UniformSizeMismatch`, `IndexSpaceOverflow`, `ViewportLimit`, `HeapCapacity`, `Pipeline`, `DeviceLost`, `StaleGeneration`, `Deadline`, and `Mapping`.
+Dispatch and resource errors are typed as `WrongDevice`, `InvalidHandle`, `StaleHandle`, `WrongHeapKind`, `EmptySpan`, `SpanDirectoryFull`, `SpanPageMissing`, `SpanGeometryMismatch`, `OutputLengthMismatch`, `OutputAlias`, `ReadWriteAlias`, `UniformSizeMismatch`, `DynamicOffsetAlignment`, `IndexSpaceOverflow`, `ViewportLimit`, `HeapCapacity`, `ScratchCapacity`, `OutputTransferUnsupported`, `Pipeline`, `DeviceLost`, `StaleGeneration`, `Deadline`, and `Mapping`.
 
-`OutputAlias` rejects two MRT fields targeting the same page, `ReadWriteAlias` rejects sampling any page rendered by the same pass, and generation checks occur on every CPU-side resolve in debug builds before views or directory entries are used.
+`OutputAlias` rejects two MRT fields targeting the same logical output page, `ReadWriteAlias` rejects sampling a page that is the physical attachment of the same pass, and generation checks occur on every CPU-side resolve in debug builds before views, offsets, or directory entries are used.
 
 ## 9. Outputs land in heap layers
 
-The first implementation risk is unpaid: wgpu 24 on the gles backend must permit an RGBA32Float `TEXTURE_2D_ARRAY` created for sampling, copying, and render attachment use to expose a one-layer D2 view as a fragment output and later sample that layer through the array view.
+The shipping design never renders into a DATA layer while a full-array sampled view of that same texture is bound: wgpu-core merges attachment and bind-group texture usage by overlapping subresource and rejects that configuration before a GL call, while WebGL2 independently forbids the resulting feedback loop.
+
+The default output path creates a separate RGBA32Float SCRATCH array with the live DATA side and four layers, omits SCRATCH from the immutable heap bind group, renders each kernel page into one-layer SCRATCH views, and then issues `copy_texture_to_texture` operations from the written SCRATCH regions to their destination DATA pages before the indexed draw.
+
+SCRATCH is transient workspace rather than heap capacity, so its physical bytes are runtime arithmetic `DATA_side² × 4 × 16`; the implementation copies full valid rows plus one exact-width tail row when needed for each output page, reports one or two copy commands and exact copied texels, and never counts SCRATCH bytes as logical heap bytes.
+
+The default transfer moves zero CPU bytes and copies 38,400 GPU bytes per Mode A frame, `38,400C` per Mode B frame, and `96,000C` per Mode C frame by arithmetic; command cost and measured wall remain reported facts rather than inferred to be free.
+
+The copy path is itself unpaid on the gles backend because wgpu-hal cannot use `glCopyImageSubData` on WebGL2 and must lower texture copies to framebuffer blits, so support, validation behavior, command cost, and bytes belong to the first spike rather than to an assumption.
+
+If SCRATCH-to-DATA copy fails, the designed fallback is two DATA arrays and two immutable bind groups, never rebuilt, alternated by frame: all static inputs are duplicated, compute samples the previous array while attaching destination layers of the other array, and the indexed draw samples the newly written destination array after the pass.
+
+The ping-pong fallback has zero transfer bytes but doubles resident DATA storage, uses one bind-group selection per pass rather than rebuilding state, and computes capacity against one destination array rather than pretending the two arrays extend one logical heap; if both copy and ping-pong validation fail, initialization returns typed `OutputTransferUnsupported` and the lab does not run.
 
 RGBA32Float is not blendable, so every compute color target uses no blend state and `ColorWrites::ALL`; blending is neither requested nor used as an accidental capability test.
 
-The implementation round's first commit is a standalone golden spike before any lattice kernel: create a small DATA array, reserve a known descriptor at a known layer and origin, render one invocation that writes `[0.25,-0.5,1.5,7.0]`, copy the target layer region to a mapped buffer with padded rows, drive mapping through `device.poll` in a browser-yield loop, and require the four exact binary-representable f32 values.
+The implementation round's first commit is a standalone golden spike before any lattice kernel, and its first case deliberately reproduces the invalid shipping-shaped conflict by binding the full DATA-array heap view, sampling a known record from one DATA layer, attaching another DATA layer from the same array, and recording the exact scoped wgpu diagnostic and backend facts when validation refuses it.
 
-The golden also samples the written record through the immutable array view into a second readback target, so it proves both render-to-layer and later array-layer lookup rather than proving only a copy path.
+The golden's default-path case binds the real heap group, reads the known input from DATA in the fragment kernel, writes `[0.25,-0.5,1.5,7.0]` into SCRATCH at a known layer and origin, exercises the framebuffer-copy lowering into a known DATA destination, and uses the real dynamic dispatch-header offset.
 
-Failure is a typed `RenderToArrayLayerUnsupported` capability refusal containing selected adapter, backend, format usages, view dimensions, layer, origin, and scoped wgpu validation text; implementation stops there instead of silently allocating standalone textures.
+Consumption in the golden is a point or indexed draw whose vertex stage performs `textureLoad` on the destination `texture_2d_array<f32>`, forwards the loaded value flat to an RGBA32Float fragment target, copies that target to a padded mapped buffer, drives `map_async` through `device.poll` in a browser-yield loop, and requires all four exact binary-representable f32 values.
+
+If the default-path case fails, the spike runs the same known-pattern production and vertex-stage-consumption oracle through ping-pong DATA arrays; its recorded result selects default copy or fallback ping-pong for every later phase, and no lattice kernel is committed before one path passes.
 
 ## 10. Render path
 
-Both heap modes use one instanced draw and the same static 36-vertex long-box mesh, surface format, depth target, camera, thickness, lighting, no mipmaps, and `cull_mode: None`; only endpoint production changes.
+All heap modes and layer use one indexed instanced draw and the same static long-box mesh with eight unique vertices and 36 indices, surface format, depth target, camera, thickness, lighting, no mipmaps, and `cull_mode: None`; only endpoint production and storage change.
 
-The vertex stage derives copy and edge exclusively from `instance_index`, loads the fixed endpoint pair, resolves the selected mode's endpoint spans by handle, rejects the box when either endpoint is invalid, and otherwise constructs the same midpoint, direction, length, side, up, clip position, and normal.
+The vertex stage derives copy and edge exclusively from `instance_index`, resolves the selected mode's endpoint or edge-pose spans, rejects the box when either endpoint is invalid, and otherwise constructs the same midpoint, direction, length, side, up, clip position, and normal for the eight indexed vertices.
 
-Hue uses the midpoint post-rotation fifth coordinate normalized by a symmetric lattice-extended fifth range computed from the current tuple, rotated basis, base extent, and spacing; the CPU reference and both modes must agree before timing is reportable.
+Hue uses the midpoint post-rotation fifth coordinate normalized by a symmetric lattice-extended fifth range computed from the current tuple, rotated basis, base extent, and spacing; the CPU reference and every mode must agree before timing is reportable.
 
-Static heap contents and span-directory records change only at initialization or step setup; dynamic uploads are the frame uniform and compute dispatch headers, and their exact bytes are included in every result.
+Static heap contents, span-directory records, and dispatch headers change only at initialization or step setup; the sole per-frame CPU upload is the 192-byte frame uniform in every mode, while GPU transfer bytes and commands are reported separately.
 
 ## 11. Substrate posture
 
@@ -173,11 +203,13 @@ A leaked-differences ledger is opened only when another physical lowering exists
 
 ## 12. Layer comparator
 
-The future lab carries a private faithful copy of the old layer path from `lane/comp-layer` rather than changing the engine or importing a mutable sibling lab; its v1 generated source, square-slot arithmetic, golden checksum, and CPU kernel oracle pin comparator fidelity.
+Comparator provenance has two explicit branches: if `ember-lab-layer` from `lane/comp-layer` is present in main before implementation begins, the heap lab takes it as a workspace package dependency and makes no shared-crate edit or copy; otherwise the heap lab carries a private faithful copy budgeted at about 2,400 lines, with v1 generated source, square-slot arithmetic, golden checksum, and CPU kernel oracle pinning fidelity.
 
-At each selected ladder step, Mode A, Mode B, and layer receive the identical tuple, geometry, 3,000-edge-per-copy submitted count, pole epsilon, animation time, camera, render target, box mesh, and overlay fields; clipped edges remain included in submitted counts in all paths.
+At each selected ladder step, Modes A, B, C, and layer receive the identical tuple, geometry, 3,000-edge-per-copy submitted count, pole epsilon, animation time, camera, render target, indexed box mesh, and overlay fields; clipped edges remain included in submitted counts in all paths.
 
-The comparator reports requested and delivered tuple, copies, vertices, submitted edges, shown edges, compute passes, render draws, frame median and p95, microseconds per submitted edge, CPU-to-GPU bytes per frame, logical heap bytes, physical heap bytes, layer one-slot and two-slot bytes, limiting wall, and the full wall arithmetic.
+The comparator reports requested and delivered tuple, copies, projected or edge-pose records, submitted edges, submitted indices `36E`, ideal unique vertex invocations `8E`, shown edges, compute passes, copy commands and GPU bytes, encoders, submissions, render draws, frame median and p95, microseconds per submitted edge, CPU-to-GPU bytes per frame, logical heap bytes, physical heap and SCRATCH bytes, layer one-slot and two-slot bytes, policy value, limiting WALL, and full arithmetic.
+
+Mode C and layer are the primary equal-work pair: they use the exact same kernel body and numeric operation order, two-record edge-pose model, 192-byte frame uniform, indexed vertex work, delivered copies, pixels, fence, adaptive timing, and tuple; any mismatch disqualifies the rung before allocation or timing differences are interpreted.
 
 Fair timing uses the same timer-quantum probe, three warmups, 15 samples, and repeat-until-32-observed-quanta batching scheme of record from `crates/what-is-this/src/kernels.rs`, with the same ordered four-byte mapped fence after the final presentation work.
 
@@ -189,19 +221,19 @@ The gles backend requires `map_async` progress through `device.poll` in a zero-t
 
 ## 13. Questions, claims, and oracles
 
-Claim A is that compute output can remain GPU-resident from fragment-compute production through geometry consumption on WebGL2; its oracle is the render-to-array-layer golden plus an end-to-end frame whose sampled endpoints and image checksum match the CPU reference without a readback between passes.
+Claim A is that compute output can remain GPU-resident from fragment-compute production through geometry consumption on WebGL2; its oracle is the selected spike path plus an end-to-end frame whose vertex-loaded values and image checksum match the CPU reference without a CPU readback between production and consumption.
 
-Claim B is that handle indirection has a measurable price in a real vertex-fetch path; its oracle is a diagnostic Mode A direct-descriptor control that supplies the same physical layer/origin/extent in uniforms, uses the same DATA array, projections, draw, fence, and pixels, and differs only by omitting descriptor-table lookup, with delta reported in frame time and microseconds per edge.
+Claim B is that heap allocation and handle indirection have a measurable price in a real vertex-fetch path; its clean oracle is Mode C versus layer at an equal delivered rung, where kernel, edge-pose records, indexed box work, pixels, fence, and adaptive timing are identical and the delta is reported in frame time and microseconds per submitted edge.
 
-Claim C is that heap spans lift layer's one-texture-slot capacity wall for Mode B; its oracle is the greatest whole-copy rung admitted by each runtime arithmetic plan and then successfully allocated, with heap aggregate bytes and layer square-slot bytes printed beside any refusal.
+Claim C is that heap spans lift layer's one-texture-slot capacity wall without changing the workload; its oracle is the greatest whole-copy rung admitted and successfully allocated by Mode C and layer, with identical logical edge-pose bytes, heap aggregate and reserved bytes, layer square-slot bytes, and every refusal term printed together.
 
-Claim D is that Ember's fixed mesh-ID convention can migrate to handles without changing simulation authority; its oracle is a lab-only synthetic registry mapping stable IDs to generation-checked handles, proving lookup, stale rejection, fallback, and static instance transport, and its result is an implication for later engine design rather than authorization for engine edits.
+A later engine-design round may use Claims A through C to reason about mesh-ID-to-handle migration, but this lab makes no Claim D, registry design, engine edit, or engine-migration promise.
 
 No claim is established by a faster picture alone: conformance, submitted counts, byte accounting, completion ordering, and pixel or numeric oracles must pass before a timing series is eligible for comparison.
 
 ## 14. Page and measurement plan
 
-One self-contained page exposes the 113-rung control, Mode A, Mode B, layer, and the Mode A direct-descriptor diagnostic, with one common canvas and one common facts/results overlay; the deployed JavaScript and wasm URLs use a versioned `module_or_path` on every redeploy.
+One self-contained page exposes the 113-rung control and Modes A, B, C, and layer with one common canvas and one common facts/results overlay; the deployed JavaScript and wasm URLs use a versioned `module_or_path` on every redeploy.
 
 Selecting any rung or mode immediately attempts its runtime plan and renders the delivered work without measurement admission; controls never snap to the delivered rung, and zero delivery is a visible refusal rather than the previous frame mislabeled as current.
 
@@ -213,7 +245,9 @@ The timer probe performs at most 4,000,000 consecutive `performance.now()` reads
 
 Adaptive samples increase whole-workload repeats until a batch spans 32 observed quanta, cap the batch target at 250 ms and repeats at 4,096, normalize by repeats, and stop a mode after a finite 30-second suite budget; medians use the middle sorted sample and p95 uses nearest-rank rank `ceil(0.95n)`.
 
-Counts are literal: requested is the tuple-derived count, delivered is the runtime-wall count, submitted is the draw instance count, shown excludes pole-discarded boxes, and measured is the work enclosed by the fence; none is substituted for another.
+Counts are literal: requested is the tuple-derived count, delivered is the runtime-WALL-and-policy count, submitted is the draw instance count, shown excludes pole-discarded boxes, and measured is the work enclosed by the fence; none is substituted for another.
+
+The page labels 2,147,483,647 instances as an overridable POLICY originating in WebGL2's positive signed `GLsizei` draw-count range, labels `u32` index limits and live allocation limits as WALLS, and never presents the policy as detected hardware capacity.
 
 ## 15. Test plan
 
@@ -221,43 +255,45 @@ Algebra tests generate deterministic base vertices, centered digits, times, and 
 
 Projection tests prove the two denominators, epsilon validity, fifth-coordinate hue input, and an explicit counterexample to projection linearity against a CPU reference.
 
-Heap tests cover paired-span planning across layers, page-directory capacity, descriptor generation reuse, input indices crossing page boundaries, last-page padding returning zero, atomic two-output rollback, buddy fragmentation arithmetic, alias rejection, and requested-versus-delivered wall strings.
+Heap tests cover constant-class paired-span planning across layers, `{page_records,page_count,first_directory_slot}` packing, directory capacity, descriptor generation reuse, quotient/remainder page crossings, last-page padding and waste, atomic two-output rollback, buddy fragmentation arithmetic, alias rejection, and requested-versus-delivered WALL strings.
 
-The render-to-layer golden is the mandatory first implementation test and proves exact write, copy readback, and array sampling at a nonzero layer and nonzero origin.
+The output-path golden is the mandatory first implementation test and proves the exact direct-overlap diagnostic, dynamic uniform offset, SCRATCH render and framebuffer-copy lowering or ping-pong fallback, vertex-stage array load at nonzero layer and origin, and exact readback value.
 
 Dialect tests parse and validate author bodies with generated accessor stubs, exercise every forbidden construct and typed descriptor failure, prove dispatch-time handle replacement changes data without pipeline replacement, and reproduce v1's unequal input/output-width case to show each accessor follows its own descriptor.
 
-Kernel conformance compares Mode A rotation, Mode A endpoint reconstruction, Mode B materialization, validity, hue, and box pose against CPU reference values at deterministic indices and tuples.
+Kernel conformance compares Mode A rotation and endpoint reconstruction, Mode B materialization and validity, Mode C's exact layer edge-pose kernel, hue, and box pose against CPU reference values at deterministic indices and tuples.
 
-Geometry tests pin 600 cap vertices, 1,200 cap edges, 1,200 prism vertices, 3,000 prism edges, edge length `3−√5`, circumradius `2√2`, step count 113, step 111 `(45,45,45,45,45)`, step 112 `(47,45,45,45,45)`, and top edge arithmetic 578,188,125,000.
+Geometry tests pin 600 cap vertices, 1,200 cap edges, 1,200 prism vertices, 3,000 prism edges, edge length `3−√5`, circumradius `2√2`, the eight-vertex and 36-index box, step count 113, step 111 `(45,45,45,45,45)`, step 112 `(47,45,45,45,45)`, and top edge arithmetic 578,188,125,000.
 
 Page-contract tests pin explicit GL backend selection, versioned loader paths, immediate rendering without admission, stable requested controls, generation cancellation, sample resets, bounded waits, single-frame fallback, and exact median, p95, and byte formulas.
 
-Comparator tests run identical small rungs through heap and layer kernels, require matching numeric and image checksums within a declared f32 tolerance, and reject timing publication when tuples, delivered edges, or fence placement differ.
+Comparator tests run identical small rungs through Mode C and layer's exact kernel, require matching edge-pose, indexed-vertex, and image checksums within a declared f32 tolerance, and reject timing publication when tuples, delivered edges, submitted indices, kernel source identity, or fence placement differ.
 
 ## 16. Implementation phases and line budget
 
-Phase 0, required first commit, is the render-to-array-layer golden spike and capability report, estimated at 220 new Rust, WGSL, and test lines.
+Phase 0, required first commit, is the direct-conflict diagnostic plus SCRATCH-copy and ping-pong output-path golden, vertex-stage consumption, dynamic-offset test, and capability report, estimated at 360 new Rust, WGSL, and test lines.
 
-Phase 1 adds `DataSpan`, paired allocator planning, page-directory metadata, runtime wall arithmetic, and generation checks without engine changes, estimated at 420 lines.
+Phase 1 adds constant-class `DataSpan`, paired allocator planning, quotient/remainder access, page-directory metadata, static dispatch headers, runtime WALL arithmetic, and generation checks without engine changes, estimated at 480 lines.
 
 Phase 2 implements dialect v2 registration, generated accessors, dispatch validation, page passes, typed errors, and conformance fixtures, estimated at 500 lines.
 
-Phase 3 implements invariant geometry data, the 113-step ladder, the 192-byte frame uniform, Mode A rotation and rendering, and CPU oracles, estimated at 420 lines.
+Phase 3 implements invariant geometry data, the indexed box, the 113-step ladder, the 192-byte frame uniform, Mode A rotation and rendering, and CPU oracles, estimated at 450 lines.
 
-Phase 4 implements Mode B materialization, the private layer comparator, the direct-descriptor diagnostic, and equal-work checksum gates, estimated at 480 lines.
+Phase 4 implements mandatory Mode C, comparator integration, and equal-work checksum gates, estimated at 420 lines when `ember-lab-layer` is available as a workspace dependency, or 2,820 lines when the approximately 2,400-line private comparator copy is required.
 
-Phase 5 implements the self-contained WebGL2 page, versioned loader, measurement state machine, overlays, requested-versus-delivered presentation, and cancellation, estimated at 420 lines.
+Phase 5 implements optional Mode B materialization if budget remains, estimated at 300 lines.
 
-Phase 6 is test completion, lint repair, bundle evidence, and contract reconciliation, estimated at 260 lines; the total planning estimate is 2,720 new lines, and any phase exceeding its estimate by more than 25 percent requires a reported reason rather than hidden compression.
+Phase 6 implements the self-contained WebGL2 page, versioned loader, measurement state machine, overlays, requested-versus-delivered presentation, and cancellation, estimated at 480 lines.
+
+Phase 7 is test completion, lint repair, bundle evidence, and contract reconciliation, estimated at 300 lines; totals are 3,290 lines with the workspace dependency or 5,690 lines with the private copy, and any phase exceeding its estimate by more than 25 percent requires a reported reason rather than hidden compression.
 
 ## 17. What does not change
 
-Renderer austerity remains no mipmaps, `cull_mode: None`, one presentation pass, and no decorative pass; fragment-compute passes exist only to produce the contracted GPU-resident data.
+Renderer austerity remains no mipmaps, `cull_mode: None`, one indexed presentation pass, and no decorative pass; fragment-compute passes exist only to produce the contracted GPU-resident data.
 
 Heap and compute contents feed presentation and prediction only and cannot author simulation, collision, protocol state, reconciliation, or other gameplay truth; missing or stale data produces fallback pixels or a typed error.
 
-The one heap bind group is created at initialization and its resource identities remain immutable; heap contents, descriptors, span directory, and uniforms may change only through the contracted regional writes and dispatch sequence.
+The default SCRATCH-copy path creates one heap bind group at initialization and keeps its resource identities immutable; the fallback has two immutable bind groups, never rebuilt, while heap contents, descriptors, span directory, step headers, and frame uniform may change only through the contracted setup and dispatch sequence.
 
 The page reports requested, delivered, submitted, shown, and measured quantities separately, computes walls from live facts and fixed type ceilings, performs no measure-first admission, preserves controls across refusal, guards every asynchronous publication by generation, and never waits without a deadline and browser yield.
 
@@ -265,22 +301,24 @@ Browser numbers remain `requires visible replay` until a visible replay supplies
 
 ## 18. Unresolved risks
 
-Render-to-array-layer plus later sampling is unproved on the target gles backend and is intentionally the first implementation spike rather than an assumption buried under lattice code.
+The SCRATCH-to-DATA texture copy is unproved on the target gles backend because WebGL2 lacks `glCopyImageSubData`; the first spike must establish wgpu's framebuffer-blit lowering or select the designed ping-pong fallback.
 
 The effective maximum safe DATA allocation is not exposed as free VRAM, so configured byte budget, successful texture creation, allocator capacity, and driver allocation failure cannot be collapsed into one predictive number.
 
-Multi-page Mode B requires one fragment pass and dispatch-header write per page pair; pass count and state-diff cost may erase any capacity benefit as a throughput benefit, and capacity rather than speed is the claim until measured.
+Multi-page Modes B and C require one fragment pass per page pair plus GPU output movement on the default path; pass, copy, and state-diff costs may erase a capacity benefit as a throughput benefit, and capacity rather than speed is the claim until measured.
 
-The span-directory UBO introduces a second finite metadata wall and uniform dynamic-indexing cost; both require runtime facts and a handle-versus-direct measurement.
+The span-directory UBO introduces a second finite metadata WALL and uniform dynamic-indexing cost; Mode C versus layer prices the resulting handle and allocation path, while runtime facts expose directory consumption and padding waste.
 
-Mode A removes repeated rotation but not projection or the literal 36-box-vertex repetition of endpoint fetches and projection, so its algebraic reduction may be invisible under raster cost or vertex invocation count.
+The indexed box relies on the driver's post-transform cache to approach the `8E` ideal; the submitted work is always `36E` indices, and absent pipeline statistics the measured wall cannot prove an exact physical vertex-invocation count.
 
-Mode B's two-record validity layout deliberately spends 12 padding bytes per vertex; a later packed validity scheme could move its capacity wall but would require new numeric and performance evidence.
+Mode B's two-record validity layout deliberately spends 12 padding bytes per vertex; packing four flags would require an extra output or pass and is deferred because Mode C supplies the uncontaminated capacity comparison.
 
 The top ladder requests far more records and draw instances than the dialect and gles draw ranges can deliver, so it primarily tests honest wall arithmetic and control stability rather than rendering 578 billion edges.
 
-The old layer comparator is copied into an isolated lab rather than shared, which risks drift; generated-source snapshots, square-slot arithmetic, golden checksum, and small-rung image agreement are required to keep it faithful.
+Comparator provenance remains unresolved until implementation begins: a merged `ember-lab-layer` package avoids duplication, while the private-copy branch costs about 2,400 lines and requires generated-source snapshots, square-slot arithmetic, golden checksum, and small-rung image agreement to contain drift.
 
 CPU-computed rotated basis values and GPU-computed rotated base vertices can differ by operation order or transcendental implementation, so the f32 algebra tolerance and hue range must be fixed before timing.
 
-No visible browser result yet identifies the crossover between Mode A, Mode B, pure, and layer, and the raster-bound evidence makes a clean crossover uncertain rather than guaranteed.
+Dynamic uniform offsets, full-array texture sampling alongside separate SCRATCH attachments, framebuffer-copy lowering, and alternating immutable ping-pong groups are all target-backend risks whose typed outcomes must be captured by the Phase 0 spike.
+
+No visible browser result yet identifies the crossover among Modes A, B, C, pure, and layer, and the raster-bound evidence makes a clean crossover uncertain rather than guaranteed.
