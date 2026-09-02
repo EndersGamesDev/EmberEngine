@@ -36,7 +36,7 @@ fn equality_gate_precedes_timing_and_reports_both_oracles() {
         "image ${image.pass ? \"PASS\" : \"FAIL\"}",
         "Mode C/layer timing is disqualified until the live equality gate passes",
         "${numeric.sampled_indices.length} deterministic indices",
-        "${image.compared_pixels} pixels",
+        "${integer(image.compared_pixels)} pixels",
     ] {
         assert!(PAGE.contains(required), "missing page contract: {required}");
     }
