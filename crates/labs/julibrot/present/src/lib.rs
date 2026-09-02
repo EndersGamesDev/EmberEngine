@@ -10,8 +10,8 @@ pub use homography::{
     apply_homography, inverse_identity_error, pack_homography_rows, solve_homography,
 };
 pub use palette::{
-    CLASSIC_PALETTE, EMBER_PALETTE, ICE_PALETTE, PaletteId, PaletteOutcome, PaletteRecord,
-    palette, shade_escape_record,
+    CLASSIC_PALETTE, EMBER_PALETTE, ICE_PALETTE, PaletteId, PaletteOutcome, PaletteRecord, palette,
+    shade_escape_record,
 };
 pub use uniform::{
     HOT_PAYLOAD_BYTES, HOT_RING_SLOTS, HotSlot, HotUniform, PresentDataError, SceneUniform,

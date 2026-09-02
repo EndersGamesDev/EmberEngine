@@ -73,12 +73,7 @@ fn is_binary(value: f32) -> bool {
 }
 
 fn hue_component(hue: f32, offset: f32) -> f32 {
-    ((hue + offset)
-        .rem_euclid(1.0)
-        .mul_add(6.0, -3.0)
-        .abs()
-        - 1.0)
-        .clamp(0.0, 1.0)
+    ((hue + offset).rem_euclid(1.0).mul_add(6.0, -3.0).abs() - 1.0).clamp(0.0, 1.0)
 }
 
 /// Applies the present palette to `[smooth_iter, escaped, rebase_count, glitch]`.
@@ -130,9 +125,7 @@ pub fn shade_escape_record(record: [f32; 4], selected: PaletteRecord) -> Palette
         hue_component(hue, 2.0 / 3.0),
         hue_component(hue, 1.0 / 3.0),
     ];
-    let rgb = phase_rgb.map(|component| {
-        value * (component - 1.0).mul_add(colour_mix, 1.0)
-    });
+    let rgb = phase_rgb.map(|component| value * (component - 1.0).mul_add(colour_mix, 1.0));
     PaletteOutcome {
         rgba: [rgb[0], rgb[1], rgb[2], 1.0],
         contract_violation: false,
@@ -175,6 +168,10 @@ mod tests {
         let outcome = shade_escape_record([16.0, 1.0, 0.0, 0.0], CLASSIC_PALETTE);
         assert!(!outcome.contract_violation);
         assert_eq!(outcome.rgba[3], 1.0);
-        assert!(outcome.rgba[..3].iter().all(|channel| (0.0..=1.0).contains(channel)));
+        assert!(
+            outcome.rgba[..3]
+                .iter()
+                .all(|channel| (0.0..=1.0).contains(channel))
+        );
     }
 }

@@ -2,10 +2,7 @@ const PIVOT_EPSILON: f64 = 1.0e-12;
 
 /// Solves the projective map from four destination anchors to four source anchors.
 #[must_use]
-pub fn solve_homography(
-    destination: [[f64; 2]; 4],
-    source: [[f64; 2]; 4],
-) -> Option<[f64; 9]> {
+pub fn solve_homography(destination: [[f64; 2]; 4], source: [[f64; 2]; 4]) -> Option<[f64; 9]> {
     if destination
         .iter()
         .chain(source.iter())
@@ -55,7 +52,10 @@ pub fn solve_homography(
         *value = row[8];
     }
     result[8] = 1.0;
-    result.iter().all(|value| value.is_finite()).then_some(result)
+    result
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(result)
 }
 
 /// Applies a row-major homography and rejects a pole or non-finite result.
@@ -70,7 +70,10 @@ pub fn apply_homography(matrix: [f64; 9], point: [f64; 2]) -> Option<[f64; 2]> {
         matrix[0].mul_add(x, matrix[1].mul_add(y, matrix[2])) / denominator,
         matrix[3].mul_add(x, matrix[4].mul_add(y, matrix[5])) / denominator,
     ];
-    mapped.iter().all(|value| value.is_finite()).then_some(mapped)
+    mapped
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(mapped)
 }
 
 /// Returns `max(abs(inverse * forward - identity))` for the f64 warp oracle.
@@ -84,8 +87,7 @@ pub fn inverse_identity_error(forward: [f64; 9], inverse: [f64; 9]) -> f64 {
             let mut value = 0.0;
             let mut inner = 0;
             while inner < 3 {
-                value = inverse[row * 3 + inner]
-                    .mul_add(forward[inner * 3 + column], value);
+                value = inverse[row * 3 + inner].mul_add(forward[inner * 3 + column], value);
                 inner += 1;
             }
             let expected = if row == column { 1.0 } else { 0.0 };
@@ -123,19 +125,17 @@ mod tests {
 
     #[test]
     fn solver_recovers_an_affine_pan_and_zoom() {
-        let source = CORNERS.map(|[x, y]| {
-            [
-                0.5_f64.mul_add(x, 0.25),
-                2.0_f64.mul_add(y, -0.125),
-            ]
-        });
+        let source = CORNERS.map(|[x, y]| [0.5_f64.mul_add(x, 0.25), 2.0_f64.mul_add(y, -0.125)]);
         let matrix = solve_homography(CORNERS, source).expect("independent corners");
         for (destination, expected) in CORNERS.into_iter().zip(source) {
             let actual = apply_homography(matrix, destination).expect("finite affine result");
             assert!((actual[0] - expected[0]).abs() < 1.0e-12);
             assert!((actual[1] - expected[1]).abs() < 1.0e-12);
         }
-        assert_eq!(pack_homography_rows(matrix).map(|rows| rows[2][3]), Some(0.0));
+        assert_eq!(
+            pack_homography_rows(matrix).map(|rows| rows[2][3]),
+            Some(0.0)
+        );
     }
 
     #[test]

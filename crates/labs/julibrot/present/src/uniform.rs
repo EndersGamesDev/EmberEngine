@@ -218,7 +218,10 @@ mod tests {
         assert_eq!(hot_stride(48), Ok(144));
         assert_eq!(hot_stride(0), Err(PresentDataError::ZeroAlignment));
         let slot = HotSlot::for_refresh(8, 256, 19).expect("valid slot");
-        assert_eq!((slot.index(), slot.dynamic_offset(), slot.epoch()), (2, 512, 19));
+        assert_eq!(
+            (slot.index(), slot.dynamic_offset(), slot.epoch()),
+            (2, 512, 19)
+        );
         assert_eq!(
             HotSlot::for_refresh(0, 112, 0),
             Err(PresentDataError::InvalidStride(112))
