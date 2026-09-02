@@ -130,11 +130,16 @@ pub(crate) fn compare_images(mode_c: &[u8], layer: &[u8]) -> Result<ImageCompari
             layer.len()
         ));
     }
-    let mismatched_pixels = mode_c
-        .chunks_exact(4)
-        .zip(layer.chunks_exact(4))
-        .filter(|(left, right)| left != right)
-        .count() as u32;
+    let mismatched_pixels = u32::try_from(
+        mode_c
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(layer.as_chunks::<4>().0)
+            .filter(|(left, right)| left != right)
+            .count(),
+    )
+    .map_err(|_| "image mismatch count exceeds u32".to_string())?;
     Ok(ImageComparison {
         width: IMAGE_WIDTH,
         height: IMAGE_HEIGHT,
@@ -183,7 +188,7 @@ mod tests {
             .expect("complete aligned records compare");
         assert!(comparison.pass);
         assert_eq!(comparison.exact_components, 7);
-        near[0][6] += F32_TOLERANCE * 2.0;
+        near[0][6] = F32_TOLERANCE.mul_add(2.0, near[0][6]);
         assert!(
             !compare_records(&records(&base), &records(&near), vec![17])
                 .expect("complete aligned records compare")
