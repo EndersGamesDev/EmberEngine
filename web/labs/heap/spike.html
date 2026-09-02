@@ -46,6 +46,14 @@
     const names = ["direct-overlap-refusal", "scratch-copy-dynamic-offset-vertex-load", "ping-pong-dynamic-offset-vertex-load"];
     let generation = 0;
 
+    function withDeadline(promise, milliseconds) {
+      let timeout;
+      const deadline = new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(`whole spike exceeded ${milliseconds} ms`)), milliseconds);
+      });
+      return Promise.race([promise, deadline]).finally(() => clearTimeout(timeout));
+    }
+
     function resetCards(text) {
       for (const name of names) {
         const card = document.querySelector(`#${name}`);
@@ -71,7 +79,7 @@
       run.disabled = true;
       resetCards("running with a 4,000 ms poll deadline…");
       try {
-        const report = JSON.parse(await run_heap_spike_json(canvas));
+        const report = JSON.parse(await withDeadline(run_heap_spike_json(canvas), 20000));
         if (token !== generation) return;
         facts.textContent = JSON.stringify({ ...report, cases: undefined }, null, 2);
         for (const result of report.cases) {

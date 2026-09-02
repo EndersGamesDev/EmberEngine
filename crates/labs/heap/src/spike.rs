@@ -83,6 +83,7 @@ fn exact_case(name: &'static str, observed: Result<[f32; 4], String>, proof: &st
 }
 
 #[cfg(target_arch = "wasm32")]
+#[allow(clippy::cast_precision_loss, clippy::future_not_send)]
 mod browser {
     use std::cell::Cell;
     use std::future::Future as _;
@@ -266,6 +267,7 @@ mod browser {
     }
 
     impl Spike {
+        #[allow(clippy::too_many_lines)]
         async fn new(
             canvas: web_sys::HtmlCanvasElement,
             token: u64,
@@ -499,6 +501,7 @@ mod browser {
             wait_scope(&self.device, &self.lost, token).await
         }
 
+        #[allow(clippy::too_many_lines)]
         async fn output_path(&self, ping_pong: bool, token: u64) -> Result<[f32; 4], String> {
             self.device.push_error_scope(wgpu::ErrorFilter::Validation);
             let output = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -673,6 +676,11 @@ mod browser {
     }
 
     /// Runs all three GL output-path cases and returns their literal observations.
+    ///
+    /// # Errors
+    ///
+    /// Returns a JavaScript error when GL initialization, generation validation, or report
+    /// serialization fails; per-case GPU failures remain literal `FAIL` results in the report.
     #[wasm_bindgen]
     pub async fn run_heap_spike_json(
         canvas: web_sys::HtmlCanvasElement,
