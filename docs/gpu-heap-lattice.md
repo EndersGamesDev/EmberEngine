@@ -74,7 +74,7 @@ Mode C output uses exactly layer's two edge-pose records per submitted edge and 
 
 A physical heap descriptor still describes one square region in one DATA array layer, while a `DataSpan` is the typed logical allocation `{logical_len, page_records, page_count, first_directory_slot}` whose ordered page handles may occupy non-contiguous regions and layers; this preserves the existing 20-bit descriptor-index and 12-bit generation handle ABI while lifting a logical slot beyond one two-dimensional texture.
 
-The fixed-capacity span-directory UBO stores each span header `{page_records, page_count, first_directory_slot}` followed by its ordered page handles beside the descriptor UBO and frame/dispatch uniforms; directory data changes only at allocation or step setup, and its runtime capacity is derived from `max_uniform_buffer_binding_size` after fixed metadata is charged.
+The fixed-capacity span-directory UBO stores each span header `{page_records, page_count, first_directory_slot}` followed by its ordered page handles beside the descriptor UBO and frame/dispatch uniforms; this lab configures 16 span headers and 128 page handles in 768 bytes, validates that allocation against `max_uniform_buffer_binding_size`, reports both the configured and exposed values, and changes directory data only at allocation or step setup.
 
 Every page of one span uses one buddy class with side `q` and `page_records = q²`; an accessor computes `page = index / page_records` and `local = index % page_records`, resolves the handle at `first_directory_slot + page`, and computes x and y from that selected descriptor's own width, with no search and no output-grid dimension in input decoding.
 
@@ -84,7 +84,7 @@ For two equal-length MRT output spans, the planner performs an atomic dry run fo
 
 The implementation queries texture dimension, array-layer count, UBO size, attachment count, sampled-texture count, buffer limits, and RGBA32F render/sample usage, then displays the actual created DATA side, layers, bytes, free buddy classes, descriptors, directory entries, and every term of the delivery minimum.
 
-WebGL2 exposes no trustworthy total free-VRAM query, so a configured DATA byte budget is clamped by exposed dimensions and layers before creation; that configured cap, the successfully created allocation, and later allocation failures are distinct reported facts.
+WebGL2 exposes no trustworthy total free-VRAM query, so this lab requests the configured 512 by 512 by 16 DATA array, exactly 67,108,864 physical bytes, after validating its side and layer count against the exposed limits; an insufficient exposed limit is a displayed initialization refusal, while the configured request, successful creation, allocator delivery, and later driver allocation failures remain distinct facts.
 
 ## 5. Mode arithmetic
 
