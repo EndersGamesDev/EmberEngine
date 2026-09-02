@@ -113,8 +113,12 @@ mod imp {
         }
 
         pub fn send(&self, msg: &C2S) {
-            if let Ok(t) = serde_json::to_string(msg) {
-                let _ = self.ws.send_with_str(&t);
+            if let Ok(t) = serde_json::to_string(msg)
+                && self.ws.send_with_str(&t).is_err()
+            {
+                // The socket is closing or closed; `status()` reports that
+                // on the next frame, so a warning is all this needs to be.
+                tracing::warn!("kings net: send failed, the socket is not open");
             }
         }
 
