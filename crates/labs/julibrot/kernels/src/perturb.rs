@@ -1,5 +1,10 @@
-// CPU mirrors intentionally reproduce WGSL's fixed-width conversions and f32 narrowing.
-#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+// CPU mirrors intentionally reproduce WGSL's fixed-width conversions and written operation order.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::imprecise_flops,
+    clippy::suboptimal_flops
+)]
 
 use ember_julibrot_math::{
     EscapeGridRecord, EscapeParams, Plane, ReferenceOrbitRecord, ScaleSplit,
@@ -239,8 +244,7 @@ pub fn perturb_scaled_offset(
         if iteration + 1 >= uniforms.max_iter {
             break;
         }
-        let mut advance_reference = reference;
-        if robust_norm(z) < robust_norm(represented_delta) {
+        let advance_reference = if robust_norm(z) < robust_norm(represented_delta) {
             if rebases >= REBASE_EXACT_LIMIT - 1 {
                 return Ok(record(rebases, true));
             }
@@ -254,8 +258,10 @@ pub fn perturb_scaled_offset(
             if state.glitch {
                 return Ok(record(rebases, true));
             }
-            advance_reference = z_zero;
-        }
+            z_zero
+        } else {
+            reference
+        };
         state.delta = advance(
             advance_reference,
             state.delta,

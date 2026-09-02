@@ -1,5 +1,5 @@
-// CPU mirrors intentionally reproduce WGSL's fixed-width integer-to-f32 conversion.
-#![allow(clippy::cast_precision_loss)]
+// CPU mirrors intentionally reproduce WGSL's fixed-width conversions and written operation order.
+#![allow(clippy::cast_precision_loss, clippy::suboptimal_flops)]
 
 use ember_julibrot_math::{CentreSplit, EscapeGridRecord, EscapeParams, Plane};
 
@@ -43,7 +43,7 @@ impl ShallowUniform {
     }
 }
 
-pub(crate) fn validate_extent(extent: GridExtent) -> Result<u32, KernelError> {
+pub(super) fn validate_extent(extent: GridExtent) -> Result<u32, KernelError> {
     if extent.width == 0 || extent.height == 0 {
         return Err(KernelError::InvalidExtent);
     }
@@ -53,7 +53,7 @@ pub(crate) fn validate_extent(extent: GridExtent) -> Result<u32, KernelError> {
         .ok_or(KernelError::ArithmeticOverflow)
 }
 
-pub(crate) fn validate_params(params: EscapeParams) -> Result<(), KernelError> {
+pub(super) const fn validate_params(params: EscapeParams) -> Result<(), KernelError> {
     if params.max_iter == 0 || params.bailout.to_bits() != EscapeParams::BAILOUT.to_bits() {
         return Err(KernelError::InvalidEscapeParams);
     }

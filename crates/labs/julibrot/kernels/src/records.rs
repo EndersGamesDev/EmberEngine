@@ -1,5 +1,5 @@
-// CPU mirrors intentionally reproduce WGSL's fixed-width integer-to-f32 conversion.
-#![allow(clippy::cast_precision_loss)]
+// CPU mirrors intentionally reproduce WGSL's fixed-width conversions and written operation order.
+#![allow(clippy::cast_precision_loss, clippy::suboptimal_flops)]
 
 use bytemuck::{Pod, Zeroable};
 use ember_julibrot_math::{CentreSplit, Plane, ScaleSplit};
@@ -42,7 +42,7 @@ impl KernelMode {
     }
 }
 
-pub(crate) fn pixel_offset(
+pub(super) fn pixel_offset(
     index: u32,
     extent: GridExtent,
     plane: Plane,

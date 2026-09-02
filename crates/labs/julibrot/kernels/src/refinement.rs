@@ -72,7 +72,7 @@ struct PrefixPage {
     pub valid_length: u32,
 }
 
-fn divided_extent(extent: GridExtent, divisor: u32) -> GridExtent {
+const fn divided_extent(extent: GridExtent, divisor: u32) -> GridExtent {
     GridExtent {
         width: extent.width.div_ceil(divisor),
         height: extent.height.div_ceil(divisor),
