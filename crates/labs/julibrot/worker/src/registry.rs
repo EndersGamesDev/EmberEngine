@@ -111,15 +111,30 @@ mod tests {
     fn registry_rejects_generation_mismatch_and_reuses_compact_ids() {
         let mut registry = OrbitRegistry::new();
         let first = registry.insert(7, "first").unwrap();
-        assert_eq!(first, OrbitHandle { id: 1, generation: 7 });
+        assert_eq!(
+            first,
+            OrbitHandle {
+                id: 1,
+                generation: 7
+            }
+        );
         assert_eq!(registry.get(first), Ok(&"first"));
         assert_eq!(
-            registry.get(OrbitHandle { generation: 8, ..first }),
+            registry.get(OrbitHandle {
+                generation: 8,
+                ..first
+            }),
             Err(RegistryError::StaleGeneration)
         );
         assert_eq!(registry.remove(first), Ok("first"));
         let reused = registry.insert(9, "second").unwrap();
-        assert_eq!(reused, OrbitHandle { id: 1, generation: 9 });
+        assert_eq!(
+            reused,
+            OrbitHandle {
+                id: 1,
+                generation: 9
+            }
+        );
         assert_eq!(registry.get(first), Err(RegistryError::StaleGeneration));
     }
 }

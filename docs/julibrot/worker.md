@@ -418,6 +418,8 @@ Phase 4 adds fixed-policy credit/token-bucket shaping, facts snapshots, app/kern
 
 The worker slice is therefore budgeted at about 2,060 implementation and test lines; generated wasm glue and downstream app, kernel, heap, and presentation code are excluded.
 
+Implementation stop after Phase 1: the pinned wire codec, four-slot ownership model, same-thread channel, Copy-cell owner, two drains, generation checks, accepted-reference shift publication, and compact registry are implemented; `WorkerMode::WebWorker` returns a typed startup refusal until Phase 3, and Phase 2 cannot begin on this branch because `ember-julibrot-math`, its exact centre-codec adapter, and `ReferenceOrbitBuilder` are not present.
+
 ## 8. Unresolved joint-review findings
 
 - The owner-to-worker navigation edit API must preserve one authoritative decoded Astro-float centre while returning updated canonical bytes and an `f64` mirror; the wire codec is fixed, but the callback shape is still an implementation choice.

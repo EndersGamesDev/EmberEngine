@@ -57,8 +57,8 @@ impl EncodedCentre {
                 .limb_start
                 .checked_add(descriptor.limb_count)
                 .ok_or_else(|| bad_descriptor(descriptor.limb_count))?;
-            let high_index = usize::try_from(end - 1)
-                .map_err(|_| bad_descriptor(descriptor.limb_count))?;
+            let high_index =
+                usize::try_from(end - 1).map_err(|_| bad_descriptor(descriptor.limb_count))?;
             if self.limbs.get(high_index).copied().unwrap_or(0) == 0 {
                 return Err(bad_descriptor(end));
             }
@@ -242,9 +242,8 @@ impl OrbitRequest {
                 self.depth_digits,
                 self.reason.bits(),
                 self.centre.revision,
-                u32::try_from(self.centre.limbs.len()).map_err(|_| {
-                    ChannelError::new(ErrorCode::BadLength, 0, u32::MAX, 0)
-                })?,
+                u32::try_from(self.centre.limbs.len())
+                    .map_err(|_| ChannelError::new(ErrorCode::BadLength, 0, u32::MAX, 0))?,
             ],
         );
         for (index, descriptor) in self.centre.coordinates.iter().enumerate() {
@@ -259,7 +258,10 @@ impl OrbitRequest {
                 ],
             );
         }
-        write_words(&mut message[REQUEST_FIXED_END..requested], &self.centre.limbs);
+        write_words(
+            &mut message[REQUEST_FIXED_END..requested],
+            &self.centre.limbs,
+        );
         Ok(())
     }
 
@@ -372,7 +374,6 @@ const fn bad_descriptor(detail: u32) -> ChannelError {
     ChannelError::new(ErrorCode::BadLength, detail, 0, 0)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::{CoordinateDescriptor, EncodedCentre, OrbitReason, OrbitRequest};
@@ -428,7 +429,10 @@ mod tests {
         request.encode_into(&mut buffer).unwrap();
         assert_eq!(OrbitRequest::decode(&buffer).unwrap(), request);
         assert_eq!(buffer.trailer().unwrap(), trailer_before);
-        assert_eq!(&buffer.as_bytes()[32..48], &[101, 0, 0, 0, 5, 0, 0, 0, 17, 0, 0, 0, 4, 0, 0, 0]);
+        assert_eq!(
+            &buffer.as_bytes()[32..48],
+            &[101, 0, 0, 0, 5, 0, 0, 0, 17, 0, 0, 0, 4, 0, 0, 0]
+        );
         assert_eq!(&buffer.as_bytes()[112..116], &0x0123_4567_u32.to_le_bytes());
     }
 
@@ -439,7 +443,10 @@ mod tests {
 
         let mut negative_zero = valid.clone();
         negative_zero.coordinates[2].sign = 1;
-        assert_eq!(negative_zero.validate().unwrap_err().code, ErrorCode::BadLength);
+        assert_eq!(
+            negative_zero.validate().unwrap_err().code,
+            ErrorCode::BadLength
+        );
 
         let mut gap = valid.clone();
         gap.coordinates[1].limb_start = 3;
@@ -447,7 +454,10 @@ mod tests {
 
         let mut leading_zero = valid.clone();
         leading_zero.limbs[1] = 0;
-        assert_eq!(leading_zero.validate().unwrap_err().code, ErrorCode::BadLength);
+        assert_eq!(
+            leading_zero.validate().unwrap_err().code,
+            ErrorCode::BadLength
+        );
 
         let mut unused = valid;
         unused.limbs.push(1);

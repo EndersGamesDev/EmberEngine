@@ -56,11 +56,22 @@ impl WorkerChannel {
     ///
     /// Returns `BadLength` for a cap below 64 or unrepresentable capacity, or a typed allocation
     /// identity refusal if one of the four initial trailers cannot be made.
-    #[allow(clippy::new_ret_no_self, reason = "the reviewed API returns its paired endpoints")]
+    #[allow(
+        clippy::new_ret_no_self,
+        reason = "the reviewed API returns its paired endpoints"
+    )]
     pub fn new(
         config: WorkerConfig,
         mode: WorkerMode,
     ) -> Result<(OwnerEndpoint, ProducerEndpoint), ChannelError> {
+        if mode == WorkerMode::WebWorker {
+            return Err(ChannelError::new(
+                ErrorCode::BadVersion,
+                mode as u32,
+                JULIBROT_PHASE_IMPLEMENTED,
+                WorkerMode::SameThread as u32,
+            ));
+        }
         if config.max_iter < MIN_MAX_ITER {
             return Err(ChannelError::new(
                 ErrorCode::BadLength,
@@ -102,6 +113,8 @@ impl WorkerChannel {
     }
 }
 
+const JULIBROT_PHASE_IMPLEMENTED: u32 = 1;
+
 /// Main-thread side of the channel.
 #[derive(Debug)]
 pub struct OwnerEndpoint {
@@ -142,12 +155,7 @@ impl OwnerEndpoint {
         let header = match buffer.header() {
             Ok(header) if header.validate() == Ok(MessageKind::OrbitResponse) => header,
             Ok(header) => {
-                core.last_error = Some(ChannelError::new(
-                    ErrorCode::BadKind,
-                    header.kind,
-                    0,
-                    0,
-                ));
+                core.last_error = Some(ChannelError::new(ErrorCode::BadKind, header.kind, 0, 0));
                 return None;
             }
             Err(error) => {
@@ -440,11 +448,7 @@ impl ChannelCore {
         Ok(())
     }
 
-    fn send_to_main(
-        &mut self,
-        buffer: WireBuffer,
-        kind: MessageKind,
-    ) -> Result<(), ChannelError> {
+    fn send_to_main(&mut self, buffer: WireBuffer, kind: MessageKind) -> Result<(), ChannelError> {
         let id = id_for(&buffer)?;
         self.slots.begin(id, kind)?;
         self.slots.deliver(id)?;
@@ -585,11 +589,8 @@ mod tests {
 
     #[test]
     fn two_transfers_then_one_latest_pending_request() {
-        let (owner, producer) = WorkerChannel::new(
-            WorkerConfig { max_iter: 64 },
-            WorkerMode::SameThread,
-        )
-        .unwrap();
+        let (owner, producer) =
+            WorkerChannel::new(WorkerConfig { max_iter: 64 }, WorkerMode::SameThread).unwrap();
         assert_eq!(owner.submit(request(1, 1)), SubmitOutcome::Transferred);
         assert_eq!(owner.submit(request(2, 2)), SubmitOutcome::Transferred);
         assert_eq!(owner.submit(request(3, 3)), SubmitOutcome::Coalesced);
@@ -599,13 +600,7 @@ mod tests {
         let lease = producer.next_request().unwrap().unwrap();
         assert_eq!(lease.request().generation(), 1);
         producer
-            .complete(
-                lease,
-                &[ReferenceOrbitRecord::default()],
-                64,
-                10,
-                250_000,
-            )
+            .complete(lease, &[ReferenceOrbitRecord::default()], 64, 10, 250_000)
             .unwrap();
         let response = owner.next_arrival().unwrap();
         assert_eq!(response.generation(), 1);
@@ -618,24 +613,23 @@ mod tests {
         let second = producer.next_request().unwrap().unwrap();
         assert_eq!(second.request().generation(), 2);
         producer
-            .complete(
-                second,
-                &[ReferenceOrbitRecord::default()],
-                64,
-                10,
-                249_990,
-            )
+            .complete(second, &[ReferenceOrbitRecord::default()], 64, 10, 249_990)
             .unwrap();
-        assert_eq!(producer.next_request().unwrap().unwrap().request().generation(), 4);
+        assert_eq!(
+            producer
+                .next_request()
+                .unwrap()
+                .unwrap()
+                .request()
+                .generation(),
+            4
+        );
     }
 
     #[test]
     fn stale_generation_never_replaces_latest_generation() {
-        let (owner, producer) = WorkerChannel::new(
-            WorkerConfig { max_iter: 64 },
-            WorkerMode::SameThread,
-        )
-        .unwrap();
+        let (owner, producer) =
+            WorkerChannel::new(WorkerConfig { max_iter: 64 }, WorkerMode::SameThread).unwrap();
         assert_eq!(owner.submit(request(9, 1)), SubmitOutcome::Transferred);
         assert_eq!(owner.submit(request(8, 2)), SubmitOutcome::Coalesced);
         assert_eq!(owner.latest_generation(), 9);

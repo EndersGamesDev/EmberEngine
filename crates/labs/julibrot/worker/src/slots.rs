@@ -106,32 +106,19 @@ impl FourSlotModel {
 
 const fn transfer_rule(kind: MessageKind) -> Result<(Pool, SlotOwner, SlotOwner), ChannelError> {
     match kind {
-        MessageKind::OrbitRequest | MessageKind::Shutdown => Ok((
-            Pool::Request,
-            SlotOwner::Main,
-            SlotOwner::ToProducer,
-        )),
-        MessageKind::RequestReturn | MessageKind::ShutdownAck => Ok((
-            Pool::Request,
-            SlotOwner::Producer,
-            SlotOwner::ToMain,
-        )),
-        MessageKind::OrbitResponse | MessageKind::OrbitCancelled => Ok((
-            Pool::Orbit,
-            SlotOwner::Producer,
-            SlotOwner::ToMain,
-        )),
-        MessageKind::CreditApplied | MessageKind::CreditStale => Ok((
-            Pool::Orbit,
-            SlotOwner::Main,
-            SlotOwner::ToProducer,
-        )),
-        MessageKind::ChannelError => Err(ChannelError::new(
-            ErrorCode::BadKind,
-            kind as u32,
-            0,
-            0,
-        )),
+        MessageKind::OrbitRequest | MessageKind::Shutdown => {
+            Ok((Pool::Request, SlotOwner::Main, SlotOwner::ToProducer))
+        }
+        MessageKind::RequestReturn | MessageKind::ShutdownAck => {
+            Ok((Pool::Request, SlotOwner::Producer, SlotOwner::ToMain))
+        }
+        MessageKind::OrbitResponse | MessageKind::OrbitCancelled => {
+            Ok((Pool::Orbit, SlotOwner::Producer, SlotOwner::ToMain))
+        }
+        MessageKind::CreditApplied | MessageKind::CreditStale => {
+            Ok((Pool::Orbit, SlotOwner::Main, SlotOwner::ToProducer))
+        }
+        MessageKind::ChannelError => Err(ChannelError::new(ErrorCode::BadKind, kind as u32, 0, 0)),
     }
 }
 

@@ -124,12 +124,7 @@ impl MessageHeader {
             return Err(ChannelError::new(ErrorCode::BadMagic, self.magic, 0, 0));
         }
         if self.version != JULIBROT_ABI_VERSION {
-            return Err(ChannelError::new(
-                ErrorCode::BadVersion,
-                self.version,
-                0,
-                0,
-            ));
+            return Err(ChannelError::new(ErrorCode::BadVersion, self.version, 0, 0));
         }
         MessageKind::try_from(self.kind)
     }
@@ -285,11 +280,7 @@ pub struct PoolTrailer {
 
 impl PoolTrailer {
     /// Builds one immutable allocation identity.
-    pub(crate) fn new(
-        pool: Pool,
-        slot: u32,
-        capacity_bytes: usize,
-    ) -> Result<Self, ChannelError> {
+    pub(crate) fn new(pool: Pool, slot: u32, capacity_bytes: usize) -> Result<Self, ChannelError> {
         if slot > 1 {
             return Err(ChannelError::new(ErrorCode::BadTrailer, slot, 0, 0));
         }
@@ -424,8 +415,8 @@ impl WireBuffer {
                 return Ok(kind);
             }
             MessageKind::OrbitResponse => {
-                let length = usize::try_from(header.length)
-                    .map_err(|_| bad_kind_or_length(header))?;
+                let length =
+                    usize::try_from(header.length).map_err(|_| bad_kind_or_length(header))?;
                 if pool != Pool::Orbit || length == 0 || length > max_records {
                     return Err(bad_kind_or_length(header));
                 }
@@ -437,17 +428,13 @@ impl WireBuffer {
                 }
                 HEADER_BYTES + ERROR_RECORD_BYTES
             }
-            MessageKind::RequestReturn
-            | MessageKind::Shutdown
-            | MessageKind::ShutdownAck => {
+            MessageKind::RequestReturn | MessageKind::Shutdown | MessageKind::ShutdownAck => {
                 if pool != Pool::Request || header.length != 0 {
                     return Err(bad_kind_or_length(header));
                 }
                 HEADER_BYTES
             }
-            MessageKind::CreditApplied
-            | MessageKind::CreditStale
-            | MessageKind::OrbitCancelled => {
+            MessageKind::CreditApplied | MessageKind::CreditStale | MessageKind::OrbitCancelled => {
                 if pool != Pool::Orbit || header.length != 0 {
                     return Err(bad_kind_or_length(header));
                 }
@@ -483,7 +470,12 @@ impl WireBuffer {
     #[cfg(test)]
     pub(crate) fn error(&self) -> Result<ChannelError, ChannelError> {
         if self.validate_message()? != MessageKind::ChannelError {
-            return Err(ChannelError::new(ErrorCode::BadKind, self.header()?.kind, 0, 0));
+            return Err(ChannelError::new(
+                ErrorCode::BadKind,
+                self.header()?.kind,
+                0,
+                0,
+            ));
         }
         ErrorRecord::read_from(&self.bytes[HEADER_BYTES..])?.try_into()
     }
@@ -539,7 +531,12 @@ impl WireBuffer {
     #[cfg(test)]
     pub(crate) fn orbit_records(&self) -> Result<Vec<ReferenceOrbitRecord>, ChannelError> {
         if self.validate_message()? != MessageKind::OrbitResponse {
-            return Err(ChannelError::new(ErrorCode::BadKind, self.header()?.kind, 0, 0));
+            return Err(ChannelError::new(
+                ErrorCode::BadKind,
+                self.header()?.kind,
+                0,
+                0,
+            ));
         }
         let count = usize::try_from(self.header()?.length)
             .map_err(|_| ChannelError::new(ErrorCode::BadLength, 0, 0, 0))?;
@@ -608,7 +605,10 @@ mod tests {
         assert_eq!(align_of::<PoolTrailer>(), 4);
         assert_eq!(size_of::<super::ErrorRecord>(), ERROR_RECORD_BYTES);
         assert_eq!(size_of::<ReferenceOrbitRecord>(), ORBIT_RECORD_BYTES);
-        assert_eq!(buffer_capacity(64).unwrap(), BUFFER_OVERHEAD_BYTES + 64 * 16);
+        assert_eq!(
+            buffer_capacity(64).unwrap(),
+            BUFFER_OVERHEAD_BYTES + 64 * 16
+        );
     }
 
     #[test]
@@ -669,7 +669,11 @@ mod tests {
             .write_header(MessageHeader::new(MessageKind::OrbitRequest, 1))
             .unwrap();
         buffer.clear_message();
-        assert!(buffer.as_bytes()[..trailer_offset].iter().all(|byte| *byte == 0));
+        assert!(
+            buffer.as_bytes()[..trailer_offset]
+                .iter()
+                .all(|byte| *byte == 0)
+        );
         assert_eq!(&buffer.as_bytes()[trailer_offset..], trailer);
     }
 
@@ -689,9 +693,11 @@ mod tests {
         assert_eq!(orbit.validate_message(), Ok(MessageKind::OrbitResponse));
         assert_eq!(orbit.orbit_records().unwrap(), records);
         assert_eq!(&orbit.as_bytes()[32..36], &1.0_f32.to_le_bytes());
-        assert!(orbit.as_bytes()[64..orbit.capacity() - 16]
-            .iter()
-            .all(|byte| *byte == 0));
+        assert!(
+            orbit.as_bytes()[64..orbit.capacity() - 16]
+                .iter()
+                .all(|byte| *byte == 0)
+        );
 
         let expected = crate::ChannelError::new(ErrorCode::CentreEncodingWall, 128, 624, 512);
         let mut error = WireBuffer::new(Pool::Request, 1, 64).unwrap();

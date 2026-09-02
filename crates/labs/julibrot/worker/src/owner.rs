@@ -198,9 +198,7 @@ impl ViewerOwner {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        HotState, MainState, OrbitDisposition, OrbitHandle, ViewerOwner, ViewerState,
-    };
+    use super::{HotState, MainState, OrbitDisposition, OrbitHandle, ViewerOwner, ViewerState};
     use crate::{
         CoordinateDescriptor, EncodedCentre, OrbitReason, OrbitRequest, ReferenceOrbitRecord,
         WorkerChannel, WorkerConfig, WorkerMode,
@@ -233,7 +231,12 @@ mod tests {
 
     #[test]
     fn every_hot_main_interleaving_is_coherent_and_latest_wins() {
-        let edits = [Edit::Hot(1.0), Edit::Main(1), Edit::DrainHot, Edit::DrainMain];
+        let edits = [
+            Edit::Hot(1.0),
+            Edit::Main(1),
+            Edit::DrainHot,
+            Edit::DrainMain,
+        ];
         for (a, first) in edits.iter().copied().enumerate() {
             for (b, second) in edits.iter().copied().enumerate() {
                 for (c, third) in edits.iter().copied().enumerate() {
@@ -249,33 +252,33 @@ mod tests {
     }
 
     fn assert_schedule(schedule: [Edit; 4]) {
-            let owner = ViewerOwner::new(ViewerState::default());
-            let mut last_epoch = 0;
-            for edit in schedule {
-                match edit {
-                    Edit::Hot(zoom_log2) => owner.stage_hot(HotState {
-                        zoom_log2,
-                        ..HotState::default()
-                    }),
-                    Edit::Main(palette_id) => owner.stage_main(MainState {
-                        palette_id,
-                        ..MainState::default()
-                    }),
-                    Edit::DrainHot => {
-                        let drained = owner.drain_hot();
-                        assert!(drained.epoch > last_epoch);
-                        last_epoch = drained.epoch;
-                    }
-                    Edit::DrainMain => {
-                        let drained = owner.drain_main();
-                        assert!(drained.epoch > last_epoch);
-                        last_epoch = drained.epoch;
-                    }
+        let owner = ViewerOwner::new(ViewerState::default());
+        let mut last_epoch = 0;
+        for edit in schedule {
+            match edit {
+                Edit::Hot(zoom_log2) => owner.stage_hot(HotState {
+                    zoom_log2,
+                    ..HotState::default()
+                }),
+                Edit::Main(palette_id) => owner.stage_main(MainState {
+                    palette_id,
+                    ..MainState::default()
+                }),
+                Edit::DrainHot => {
+                    let drained = owner.drain_hot();
+                    assert!(drained.epoch > last_epoch);
+                    last_epoch = drained.epoch;
+                }
+                Edit::DrainMain => {
+                    let drained = owner.drain_main();
+                    assert!(drained.epoch > last_epoch);
+                    last_epoch = drained.epoch;
                 }
             }
-            let final_state = owner.drain_hot();
-            assert_eq!(final_state.hot.zoom_log2, 1.0);
-            assert_eq!(final_state.main.palette_id, 1);
+        }
+        let final_state = owner.drain_hot();
+        assert_eq!(final_state.hot.zoom_log2, 1.0);
+        assert_eq!(final_state.main.palette_id, 1);
     }
 
     #[test]
@@ -295,11 +298,8 @@ mod tests {
 
     #[test]
     fn acceptance_checks_both_generations_and_rebases_hot_displacement() {
-        let (endpoint, producer) = WorkerChannel::new(
-            WorkerConfig { max_iter: 64 },
-            WorkerMode::SameThread,
-        )
-        .unwrap();
+        let (endpoint, producer) =
+            WorkerChannel::new(WorkerConfig { max_iter: 64 }, WorkerMode::SameThread).unwrap();
         let request = OrbitRequest::new(
             7,
             EncodedCentre {
@@ -313,10 +313,7 @@ mod tests {
             OrbitReason::INITIAL,
         )
         .unwrap();
-        assert_eq!(
-            endpoint.submit(request),
-            crate::SubmitOutcome::Transferred
-        );
+        assert_eq!(endpoint.submit(request), crate::SubmitOutcome::Transferred);
         let request = producer.next_request().unwrap().unwrap();
         producer
             .complete(
