@@ -413,8 +413,6 @@ The implementation estimate is 2,500 net new lines across Rust, WGSL, tests, man
 
 - `HeapPresentResources` is now published and sufficient for immutable presentation bindings, but the GL backend's validation of the independently reconstructed three-binding layout remains `requires visible replay` because the seam deliberately exposes resources rather than the private heap bind-group layout object.
 
-- Existing `ember_lab_heap::mode_a_endpoint` is reusable as the CPU algebra oracle but requires a manually constructed `FrameUniform`; the contract accepts that public function without requesting another heap seam, while implementation still has to prove its operation order covers every tumbled vertex case.
-
 - The present `EscapeGrid` contract embeds a cloneable `DataSpan`; kernels must confirm the exact lifetime handoff that prevents freeing a span still named by a retained or in-flight scene.
 
 - The exact browser behavior of sampling an `Rgba8Unorm` scene texture whose extent differs from the surface is unmeasured on the GL backend, including whether nearest warp is visually acceptable at coarse refinement levels.
@@ -447,7 +445,7 @@ Before the semantic commit, local non-toolchain checks found only `docs/julibrot
 
 ## 10. Implementation evidence
 
-Implementation head `d178e27bf29dcd39390c38fda5f32986c4b4dd52` was checked out exactly on barza and passed the required nine gates: workspace build `1.4 s`, workspace clippy with warnings denied `0.7 s`, cargo-fmt check `1.4 s`, workspace tests excluding linter `33.2 s`, linter tests with the two repository checks skipped `0.9 s`, wasm checks for arena `0.2 s`, what-is-this `0.2 s`, fire `0.2 s`, and heap plus present `0.3 s`; each value is the corresponding `RUN-REPORT` wall and every exit was zero.
+Implementation head `66fb25e093d73982f9cab2d92b5395a828e97974` was checked out exactly on barza and passed the required nine gates: workspace build `2.9 s`, workspace clippy with warnings denied `1.8 s`, cargo-fmt check `9.5 s`, workspace tests excluding linter `56.6 s`, linter tests with the two repository checks skipped `4.7 s`, wasm library checks for arena `1.8 s`, what-is-this `0.5 s`, fire `1.3 s`, and heap plus present `2.3 s`; each value is the corresponding `RUN-REPORT` wall and every exit was zero.
 
 The present package contributes 33 unit tests and two integration tests covering exact layouts, palette honesty, heap-specialized WGSL validation, mesh order and heap algebra, two-slot state transitions, non-mutating target selection, replacement disposition, exactly-once reference rebasing, bounded fence outcomes, all six required deep-zoom warp rows, the corrected display-chart conversion, the 9-by-9-by-5 tumbled corpus, app-facing signatures, and warp-completion identity.
 
