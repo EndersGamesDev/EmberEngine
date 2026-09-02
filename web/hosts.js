@@ -157,6 +157,7 @@ export function mergeBook(book, mirrors = []) {
     const bound = str(m.name);
     if (!NAME_RE.test(bound)) continue;
     if (byKey.has(bound)) continue; // the book's own entry wins
+    if (m.entry === null || m.entry === undefined) continue; // it did not answer
     const v = sanitiseEntry(m.entry);
     if (!v || v.name !== bound) {
       warn(`mirror ${bound} served an entry it is not bound to; ignored`);
