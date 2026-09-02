@@ -11,7 +11,7 @@ use web_sys::{DedicatedWorkerGlobalScope, MessageEvent, WorkerGlobalScope};
 use crate::wire::{BUFFER_OVERHEAD_BYTES, WireBuffer};
 use crate::{
     ChannelError, ErrorCode, HEADER_BYTES, JULIBROT_ABI_VERSION, MessageHeader, MessageKind,
-    ORBIT_RECORD_BYTES, OrbitRequest, OrbitTaskPoll, POOL_TRAILER_BYTES, Pool,
+    MonotonicClock, ORBIT_RECORD_BYTES, OrbitRequest, OrbitTaskPoll, POOL_TRAILER_BYTES, Pool,
     ReferenceOrbitRecord, TRAILER_MAGIC,
 };
 
