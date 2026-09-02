@@ -525,7 +525,7 @@ mod tests {
         let handle = Handle::encode(0x0a_bcde, 0x0fed).expect("fields fit their contract");
         assert_eq!(handle.index(), 0x0a_bcde);
         assert_eq!(handle.generation(), 0x0fed);
-        assert_eq!(handle.raw(), 0xfedabcde);
+        assert_eq!(handle.raw(), 0xfeda_bcde);
         assert!(Handle::encode(1 << 20, 1).is_err());
         assert!(Handle::encode(1, 0).is_err());
         assert!(Handle::encode(1, 1 << 12).is_err());

@@ -6,22 +6,22 @@
 #[cfg(test)]
 use crate::Descriptor;
 
-pub(crate) const FETCH_WIDTH: u32 = 512;
-pub(crate) const FETCH_HEIGHT: u32 = 512;
-pub(crate) const PAYLOAD_SIDE: u32 = 64;
-pub(crate) const FETCHES_PER_FRAGMENT: u32 = 16;
-pub(crate) const DRAW_STEPS: [u32; 5] = [16, 64, 256, 1_024, 4_096];
+pub(super) const FETCH_WIDTH: u32 = 512;
+pub(super) const FETCH_HEIGHT: u32 = 512;
+pub(super) const PAYLOAD_SIDE: u32 = 64;
+pub(super) const FETCHES_PER_FRAGMENT: u32 = 16;
+pub(super) const DRAW_STEPS: [u32; 5] = [16, 64, 256, 1_024, 4_096];
 
-pub(crate) const DIRECT_FETCH_SHADER: &str = include_str!("fetch-direct.wgsl");
-pub(crate) const HEAP_FETCH_SHADER_TEMPLATE: &str = include_str!("fetch-heap.wgsl");
-pub(crate) const HEAP_DRAW_SHADER_TEMPLATE: &str = include_str!("draw-heap.wgsl");
-pub(crate) const TRADITIONAL_DRAW_SHADER: &str = include_str!("draw-traditional.wgsl");
+pub(super) const DIRECT_FETCH_SHADER: &str = include_str!("fetch-direct.wgsl");
+pub(super) const HEAP_FETCH_SHADER_TEMPLATE: &str = include_str!("fetch-heap.wgsl");
+pub(super) const HEAP_DRAW_SHADER_TEMPLATE: &str = include_str!("draw-heap.wgsl");
+pub(super) const TRADITIONAL_DRAW_SHADER: &str = include_str!("draw-traditional.wgsl");
 
-pub(crate) fn heap_shader(template: &str, capacity: u32) -> String {
+pub(super) fn heap_shader(template: &str, capacity: u32) -> String {
     template.replace("__DESCRIPTOR_CAPACITY__", &capacity.to_string())
 }
 
-pub(crate) fn payload_texel(x: u32, y: u32) -> [f32; 4] {
+pub(super) fn payload_texel(x: u32, y: u32) -> [f32; 4] {
     let seed = x
         .wrapping_mul(0x9e37_79b9)
         .wrapping_add(y.wrapping_mul(0x85eb_ca6b));
@@ -34,7 +34,7 @@ pub(crate) fn payload_texel(x: u32, y: u32) -> [f32; 4] {
 }
 
 #[cfg(test)]
-fn fetch_coordinate(pixel_x: u32, pixel_y: u32, fetch: u32) -> (u32, u32) {
+const fn fetch_coordinate(pixel_x: u32, pixel_y: u32, fetch: u32) -> (u32, u32) {
     let seed = pixel_x
         .wrapping_mul(1_664_525)
         .wrapping_add(pixel_y.wrapping_mul(1_013_904_223))
@@ -46,7 +46,7 @@ fn fetch_coordinate(pixel_x: u32, pixel_y: u32, fetch: u32) -> (u32, u32) {
 }
 
 #[cfg(test)]
-pub(crate) fn direct_reference(pixel_x: u32, pixel_y: u32) -> [f32; 4] {
+fn direct_reference(pixel_x: u32, pixel_y: u32) -> [f32; 4] {
     let mut sum = [0.0_f32; 4];
     for fetch in 0..FETCHES_PER_FRAGMENT {
         let (x, y) = fetch_coordinate(pixel_x, pixel_y, fetch);
@@ -59,7 +59,7 @@ pub(crate) fn direct_reference(pixel_x: u32, pixel_y: u32) -> [f32; 4] {
 }
 
 #[cfg(test)]
-pub(crate) fn heap_reference(pixel_x: u32, pixel_y: u32, descriptor: Descriptor) -> [f32; 4] {
+fn heap_reference(pixel_x: u32, pixel_y: u32, descriptor: Descriptor) -> [f32; 4] {
     let mut sum = [0.0_f32; 4];
     for fetch in 0..FETCHES_PER_FRAGMENT {
         let (logical_x, logical_y) = fetch_coordinate(pixel_x, pixel_y, fetch);
@@ -73,12 +73,12 @@ pub(crate) fn heap_reference(pixel_x: u32, pixel_y: u32, descriptor: Descriptor)
     sum.map(|value| (value * 0.031_25).fract().abs())
 }
 
-pub(crate) fn material_color(index: u32) -> [u8; 4] {
+pub(super) const fn material_color(index: u32) -> [u8; 4] {
     let value = index.wrapping_mul(0x9e37_79b9).rotate_left(11);
     [
-        48 + (value & 191) as u8,
-        48 + ((value >> 8) & 191) as u8,
-        48 + ((value >> 16) & 191) as u8,
+        48 + (value & 0xbf) as u8,
+        48 + ((value >> 8) & 0xbf) as u8,
+        48 + ((value >> 16) & 0xbf) as u8,
         255,
     ]
 }
