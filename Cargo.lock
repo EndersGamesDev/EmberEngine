@@ -264,7 +264,7 @@ version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc7f6a0312e8f5845f84241b21bd2394d49940b6bc333c6a84f992e6dc9ebb85"
 dependencies = [
- "itertools 0.10.5",
+ "itertools",
  "lazy_static",
 ]
 
@@ -1163,6 +1163,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ember-julibrot-present"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "ember-lab-heap",
+ "naga",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "ember-julibrot-worker"
+version = "0.1.0"
+
+[[package]]
 name = "ember-lab-heap"
 version = "0.1.0"
 dependencies = [
@@ -2057,15 +2071,6 @@ name = "itertools"
 version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
 dependencies = [
  "either",
 ]
