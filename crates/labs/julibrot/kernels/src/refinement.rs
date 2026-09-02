@@ -99,7 +99,7 @@ fn levels(extent: GridExtent, requested_max_iter: u32) -> [LevelSpec; 3] {
     ]
 }
 
-pub(super) fn validate_plan(plan: &RefinementPlan) -> Result<(), KernelError> {
+pub fn validate_plan(plan: &RefinementPlan) -> Result<(), KernelError> {
     validate_extent(plan.requested_extent)?;
     validate_extent(plan.delivered_extent)?;
     if plan.extent_divisor == 0
