@@ -1,14 +1,14 @@
 # Julibrot math slice contract
 
-Status: round-one slice document for `crates/labs/julibrot/math`; joint review may refine this contract before implementation, and the app document is the integration contract where slice documents disagree.
+Status: refined slice document for `crates/labs/julibrot/math` after the five-document written review; this is the implementation contract for math and the interface contract its four peer slices code against.
 
 ## 1. Ownership and exclusions
 
-The math slice owns the Julibrot definition, coordinate conventions, plane construction, presets, `f32` escape reference, high-precision centre and reference-orbit arithmetic, centre `f64` mirror, `f64`-to-`f32` hi/lo split, perturbation and rebasing semantics, precision selection, warp matrices, and the navigation-drift and warp-accuracy oracles.
+The math slice owns the Julibrot definition, coordinate conventions, PLANE construction and presets, `f32` escape reference, Astro-float centre and reference-orbit arithmetic, the owner's `f64` centre mirror, exact hi/lo splitting, scaled perturbation and rebasing semantics, precision selection, pose and flat warp matrices, and the navigation-drift and warp-accuracy oracles.
 
-The slice is CPU-only: it supplies records, functions, exact arithmetic contracts, and native tests, while kernels own dialect-v2 registration, dispatch, refinement levels, iteration caps per level, span reuse, GPU conformance, and scratch-copy landing; worker owns scheduling and transfer; present owns rendering, palettes, the hot-ring allocation, and warp submission; app owns the runtime and refinement schedule.
+The slice is CPU-only: it supplies records, pure functions, arithmetic contracts, and native tests, while kernels own dialect-v2 registration, GPU dispatch, the three refinement levels, iteration caps per level, span reuse, conformance readback, and scratch-copy landing; worker owns scheduling, transfer, validation, credit, and owner publication; present owns rendering, palettes, scene textures, the hot-ring allocation, view-specific warp planning and submission; app owns the runtime and refinement schedule.
 
-The slice depends on the paid `crates/labs/heap` API for `DataSpan`, handles, dialect v2, presentation conventions, fences, surface ownership, the panic hook, and non-panicking error reporting; it neither copies those mechanisms nor edits the heap in this round.
+The slice uses `crates/labs/heap` by dependency and does not copy or edit its dialect-v2, span, scratch-copy, presentation, fence, surface-ownership, panic-hook, or error-handler mechanisms in this document round.
 
 The slice does not own WebGPU, a general DAG or petgraph, more than one world, a simulation tick, more than one heap class, shared-memory threads, GPU shaders, gameplay truth, or a second-reference repair for glitched pixels.
 
@@ -16,293 +16,376 @@ The slice does not own WebGPU, a general DAG or petgraph, more than one world, a
 
 ### 2.1 Julibrot and escape reference
 
-The Julibrot is `J = {(z₀,c) ∈ ℂ² : the sequence zₙ₊₁ = zₙ² + c is bounded}`; the real coordinate order is `(z.re,z.im,c.re,c.im) = (e₁,e₂,e₃,e₄)`, so Mandelbrot is the plane `z₀ = 0`, Julia at `c₀` is the plane `c = c₀`, and a finite iteration cap proves only “not escaped by this cap,” never mathematical membership.
+The Julibrot is `J = {(z₀,c) ∈ ℂ² : zₙ₊₁ = zₙ²+c is bounded}`; real axes are ordered `(z.re,z.im,c.re,c.im) = (e₁,e₂,e₃,e₄)`, so Mandelbrot is the plane `z₀=0`, Julia at `c₀` is the plane `c=c₀`, and reaching a finite iteration cap means only “not escaped by this cap.”
 
-The CPU escape reference examines states in increasing index `n = 0..max_iter-1`, declares escape at the first `n` for which `|zₙ|² > bailout`, and otherwise advances `zₙ₊₁ = zₙ² + c`; `bailout` is a squared radius and its standing value is exactly `256.0`, so equality does not escape.
+The CPU `f32` escape reference examines states at indices `n=0..max_iter−1`, declares escape at the first `n` for which `|zₙ|² > bailout`, and otherwise advances `zₙ₊₁=zₙ²+c`; `bailout` is the squared radius and is exactly `256.0`, so equality does not escape.
 
-At escape index `n`, `smooth_iter = n + 1 - log₂(log₂|zₙ|)`; both logarithms are base two, and in natural logarithms this is `n + 1 - ln(ln(|zₙ|)/ln(2))/ln(2)`; a sample not escaped by the cap stores `-1.0`.
+At escape index `n`, `smooth_iter = n+1−log₂(log₂|zₙ|)`; using natural logarithms this is `n+1−ln(ln(|zₙ|)/ln 2)/ln 2`, while a sample not escaped by the cap stores exactly `−1.0`.
 
-`max_iter = 0` is a typed `InvalidMaxIter` error rather than an empty successful orbit, non-finite inputs are typed errors, and all complex products use `(a+bi)(c+di) = (ac-bd)+(ad+bc)i` in the stated operation order.
+`max_iter=0`, a non-finite input, or a non-finite intermediate is a typed error, and complex multiplication follows `(a+bi)(c+di)=(ac−bd)+(ad+bc)i` in the operation order pinned by the oracle.
 
-### 2.2 Plane and view rotations
+### 2.2 PLANE and VIEW rotations
 
-Real five-space uses the ordered basis `(e₁,e₂,e₃,e₄,e₅)`, but `e₅` carries escape height only in the tumbled VIEW and is never an input coordinate of the fractal plane.
+The fractal plane lives only in ℝ⁴; `e₅` carries escape height only in present's tumbled VIEW and never enters a plane, centre, worker message, or perturbation offset.
 
-For column vectors, `Rᵢⱼ(θ)` has the standard two-by-two block `[[cos θ,-sin θ],[sin θ,cos θ]]` in axes `(i,j)` and identity elsewhere, angles are radians, multiplication is `R₁₂(θ₁)·R₃₅(θ₂)`, and application is explicitly `v′ = R₁₂(R₃₅(v))`.
+For column vectors, `Rᵢⱼ(θ)` has the standard block `[[cos θ,−sin θ],[sin θ,cos θ]]` on axes `(i,j)` and identity elsewhere, every angle is in radians, and matrix application order is written explicitly rather than inferred from typography.
 
-The user-controlled PLANE rotation is `Rₚ(θ₁,θ₂) = R₁₂(θ₁)·R₃₅(θ₂)` with independent hot-state angles frozen per frame.
+The user-controlled PLANE rotation is `Rₚ(θ₁,θ₂)=R₁₃(θ₁)·R₂₄(θ₂)` applied as `v′=R₁₃(R₂₄(v))`; the two angles are independent HOT state and one accepted pair is frozen for a frame.
 
-The standing time-driven VIEW rotation belongs to present and is `R(t) = R₁₂(0.4t)·R₃₅(φ·0.4t)`, where `t` is seconds and `φ = (1+√5)/2`; math supplies the coefficients and oracle, while present alone applies this rotation to the tumbled view.
+Writing `cₖ=cos θₖ` and `sₖ=sin θₖ`, the transformed Mandelbrot seed is `u=−s₁e₁+c₁e₃`, `v=−s₂e₂+c₂e₄`, and the transformed Julia seed is `u=c₁e₁+s₁e₃`, `v=c₂e₂+s₂e₄`.
 
-The Mandelbrot preset has seed basis `(e₃,e₄)`, origin `(0,0,0,0)`, and identity `Rₚ`; the Julia preset at finite `c₀` has seed basis `(e₁,e₂)`, origin `(0,0,c₀.re,c₀.im)`, and identity `Rₚ`, with `c₀` in MAIN state.
+Because `Rₚ` is orthogonal, an orthonormal seed remains orthonormal in exact arithmetic; construction evaluates its coefficients in `f64`, applies the matrix, rounds each published component exactly once to nearest `f32` with ties to even, performs no projection or Gram–Schmidt stage, and requires `|u·u−1|`, `|v·v−1|`, and `|u·v|` each at most `8·f32::EPSILON` after rounding.
 
-For seed axes `(e_a,e_b)`, form `a = P₄(Rₚe_a)` and `b = P₄(Rₚe_b)` with `P₄(x₁,x₂,x₃,x₄,x₅) = (x₁,x₂,x₃,x₄)`, then compute `u = a/|a|`, `q = b-u(u·b)`, and `v = q/|q|` in `f64` before one rounding of each component to `f32`.
+The Mandelbrot preset has seed `(e₃,e₄)`, plane origin `(0,0,0,0)`, and `θ₁=θ₂=0`; Julia at finite `c₀` has seed `(e₁,e₂)`, plane origin `(0,0,c₀.re,c₀.im)`, and `θ₁=θ₂=0`, with `c₀` in MAIN state and preset selection setting the absolute centre to that origin.
 
-Plane construction returns `DegeneratePlane { stage: FirstAxis }` when `|a| ≤ 2⁻²⁰`, returns `DegeneratePlane { stage: SecondAxis }` when `|q| ≤ 2⁻²⁰`, and publishes no replacement plane; controls reject that candidate before state publication, so HOT and MAIN drains remain infallible and the previous valid state stays current.
+At `θ₁=θ₂=π/2` the Mandelbrot seed spans the Julia plane at the centre, with both basis directions reversed; for every `0<θ₁,θ₂<π/2`, each transformed seed vector has a nonzero component in both `span(e₁,e₂)` and `span(e₃,e₄)`, which is the required hybrid-plane oracle.
 
-After component rounding, the implementation repeats modified Gram–Schmidt in `f32` once and rejects the same two degenerate stages if either divisor is at or below `2⁻²⁰`; the native plane oracle requires `|u·u-1|`, `|v·v-1|`, and `|u·v|` each at most `8×f32::EPSILON`.
+The standing time-driven VIEW rotation is present-only and unchanged: `R(t)=R₁₂(0.4t)·R₃₅(φ·0.4t)` applied as `v′=R₁₂(R₃₅(v))`, where `t` is seconds, `φ=(1+√5)/2`, `view_theta_1=0.4t`, and `view_theta_2=φ·view_theta_1`.
 
-The shared rotation family has a known geometric limit: after `P₄` and Gram–Schmidt it rotates Julia’s basis only inside `span(e₁,e₂)` and restores Mandelbrot’s nondegenerate basis inside `span(e₃,e₄)`, so it does not generate the charter’s promised hybrid z/c planes; this is an unresolved joint-review finding, not hidden by inventing another rotation.
+### 2.3 Pixels, centre, zoom, precision, and splitting
 
-### 2.3 Pixels, centre, zoom, and splitting
+For a `W×H` grid, pixel `(i,j)` has centred coordinates `x=i+0.5−W/2` and `y=j+0.5−H/2`; row zero is at the bottom, `+v` points up, pixels are square, and `H` follows the canvas aspect without changing horizontal pixel scale.
 
-For a `width × height` grid, integer pixel `(i,j)` has centred coordinates `x = i+0.5-width/2` and `y = j+0.5-height/2`, row zero is at the bottom, `+v` points up, pixels are square, and height is selected from the canvas aspect without changing `pixel_scale`.
+HOT state carries finite `zoom_log2:f64`; the mathematical pixel scale is `p=4/(2^zoom_log2·W)`, displayed decimal depth is `zoom_digits=zoom_log2·log10 2`, and request label `depth_digits=ceil(max(0,zoom_log2·log10 2))`.
 
-HOT state carries finite `zoom_log2: f64`; the CPU computes `pixel_scale = 4.0/(2^zoom_log2·grid_width)` in `f64`, and kernels receive its one-time round-to-nearest-ties-to-even `f32` value.
+The precision floor is `D_floor=ceil(zoom_log2·log10 2+log10 W)+8` decimal digits; the eight guard digits protect coordinate formation but cannot bound accumulated chaotic orbit roundoff, so it is explicitly a floor rather than a sufficiency claim.
 
-Displayed zoom depth is `zoom_digits = zoom_log2·log10(2)` decimal digits, while the R6 precision floor is `D_floor = ceil(zoom_log2·log10(2)+log10(grid_width))+8` decimal digits.
+The first working request is `D_work=D_floor+ceil(log10(max(max_iter,1)))`, requested bits are `ceil(D_work·log₂10)`, Astro-float rounds upward to its 64-bit word boundary, and the overlay reports floor digits, working digits, requested bits, and delivered bits separately.
 
-The floor alone does not cover roundoff accumulated across a long reference orbit, so the first working request is `D_work = D_floor + ceil(log10(max(max_iter,1)))`; the worker converts this to `precision_bits = ceil(D_work·log₂(10))`, Astro-float rounds that upward to its 64-bit word boundary, and the overlay reports requested floor digits, working digits, and delivered bits separately.
+The worker recomputes at `D_work+16` decimal digits and requires the same escape index plus every emitted hi/lo component within two `f32` ulps; failure raises `D_work` by 16 and repeats through the displayed 300-digit POLICY, then returns `PrecisionExhausted` instead of publishing an unverified orbit.
 
-The worker validates the orbit by recomputing at `D_work+16` digits and requiring identical escape index plus every emitted hi/lo record within two `f32` ulps componentwise; on failure it raises `D_work` by 16 and repeats up to the explicitly configured 300-digit POLICY, after which it returns `PrecisionExhausted` rather than publishing an unverified orbit.
+The authoritative centre `C∈ℝ⁴` is four Astro-float-backed `BigScalar` values in the worker; the owner mirror rounds each coordinate directly to nearest `f64` with ties to even, rejects a non-finite result, and is only navigation, display, pose, and shallow-path evidence, never deep arithmetic authority.
 
-The high-precision centre `C ∈ ℝ⁴` lives in the worker, the owner holds an `f64` mirror plus an opaque canonical centre encoding, and the full Julia `c₀` or Mandelbrot origin is included in `C`; an `f64` mirror is display, warp, and shallow-navigation state, not deep arithmetic authority.
+For a finite exact scalar `x`, `split_scalar(x)` computes `hi=round_f32_ties_even(x)` and then `lo=round_f32_ties_even(x−exact(hi))` at the source precision; `CentreSplit` applies this independently in axis order and never narrows through the `f64` mirror.
 
-For each finite `x: f64`, `split_f64(x)` computes `hi = round_f32_ties_even(x)` and `lo = round_f32_ties_even(x-f64(hi))`; reconstruction is `f64(hi)+f64(lo)`, and the four-coordinate split applies this independently in axis order.
+Below the deep switch, the shallow kernel receives that split and `round_f32_ties_even(p)`; at `zoom_log2=14`, `p=2⁻²³` for `W=2048` and `p=2⁻²⁴` for `W=4096`, equal to or below one `f32` step near unit-magnitude coordinates, so direct absolute iteration can alias adjacent samples.
 
-`Plane.origin_lo` is exactly the low array from the current centre split; the shallow uniform supplies its matching high array, while the perturbation uniform supplies no absolute origin.
+The perturbation kernel is therefore selected when `zoom_log2≥14`, a displayed POLICY rather than a device wall; below 14 the shallow kernel runs, and a reference orbit is maintained at every depth so crossing the switch does not change centre, generation, or navigation semantics.
 
-The current reference is replaced when the worker-measured centre displacement exceeds one quarter of the width extent `4/2^zoom_log2`, equivalently `|C-C_ref|₂ > 2^-zoom_log2`, or when `|zoom_log2-zoom_log2_ref| > 2`; one request per pending generation and reset to zero displacement on accepted arrival supply hysteresis, and threshold tuning is a displayed POLICY rather than a hardware wall.
+The reference recompute trigger is a worker POLICY with hysteresis: it trips when the centre moves more than one quarter of the view extent or `|zoom_log2−reference_zoom_log2|>2`, remains disarmed while work is in flight, and rearms only inside the worker's accepted inner thresholds.
 
-Because the smallest positive `f32` subnormal is `2⁻¹⁴⁹`, the mandated upload becomes zero when `zoom_log2 > 151-log₂(grid_width)`; for width 1,920 this is about 42.17 displayed digits, so the present `f32 pixel_scale` interface is not arbitrary zoom and must be repaired in joint review with a mantissa/exponent scale before the charter claim can be met.
+For the outer centre threshold, view extent is `4/2^zoom_log2`, so the norm condition is `|C−C_ref|₂>2⁻zoom_log2`; math evaluates the bignum difference before any mirror conversion.
 
-### 2.4 Reference orbit, perturbation, rebasing, and glitch
+### 2.4 Scaled perturbation, rebasing, and glitch
 
-For reference centre `C = (C_z,C_c)`, the worker evaluates `Z₀ = C_z` and `Zₙ₊₁ = Zₙ²+C_c` at the delivered precision, stores record zero for `Z₀`, and stores at most `max_iter` entries; `length = min(max_iter,escape_index+1)` when the reference escapes and `length = max_iter` otherwise.
+For reference centre `C=(C_z,C_c)`, the worker evaluates `Z₀=C_z` and `Zₙ₊₁=Zₙ²+C_c` at delivered precision, stores record zero for `Z₀`, and stores `length=min(max_iter,escape_index+1)` on escape or exactly `max_iter` otherwise, with valid indices `0..max_iter−1`.
 
-The deep pixel offset is `o = pixel_scale·(x·u+y·v)` in `f32`, `δz₀ = (o₁,o₂)`, `δc = (o₃,o₄)`, and no absolute centre enters the perturbation kernel; therefore Mandelbrot has `δz₀=0` exactly when `u,v ⊂ span(e₃,e₄)`, and Julia has `δc=0` exactly when `u,v ⊂ span(e₁,e₂)`.
+The deep path never receives an absolute origin; its per-pixel offset is `o=p(xu+yv)`, with `δz₀=(o₁,o₂)` and `δc=(o₃,o₄)`, so Mandelbrot has `δz₀=0` and Julia has `δc=0` while a hybrid uses both.
 
-At global iteration `n` and reference index `r`, reconstruct `Zᵣ = (re_hi+re_lo)+i(im_hi+im_lo)`, set the full value `zₙ = Zᵣ+δₙ`, test escape first, and if work remains advance `δₙ₊₁ = 2Zᵣδₙ+δₙ²+δc` and `r ← r+1` in the contracted `f32` operation order.
+To avoid ever forming tiny `p` in `f32`, let `q=2−zoom_log2−log₂W`, choose checked integer `s=floor(q)+1`, and choose `m=2^(q−s)`, so `m∈[0.5,1)` and `p=m·2^s`; round `m` once to ties-even `f32`, and if that rounding produces `1.0`, publish `m=0.5` and increment `s`.
 
-REBASING is repeatable and occurs after the current escape test but before advancing whenever `|zₙ| < |δₙ|`: set `δ ← zₙ`, reset `r ← 0`, increment `rebase_count`, then perform exactly one advance against `Z₀` to global iteration `n+1` and reference index 1; the predicate is not re-evaluated at the same `n`, equality does not rebase, and a next count at or above `2²⁴` produces a typed glitch instead of an inexact RGBA32F count.
+The perturbation uniform carries `pixel_scale=m` and `scale_exponent=s`; each pixel forms `o′=(xu+yv)m`, begins with exponent `e=s`, `δ′₀=δz₀′=(o′₁,o′₂)`, and `δc′=(o′₃,o′₄)=δc/2^e`, so the represented actual delta is `δ=2^eδ′` without an absolute small `f32` scale.
 
-GLITCH occurs when `r = length` before the pixel has escaped or reached `max_iter`: set `glitch = 1`, stop that pixel, preserve `escaped = 0`, preserve `smooth_iter = -1.0`, and show the honest debug tint; a second reference for glitched pixels is out of scope.
+At global iteration `n` and reference index `r`, reconstruct `Zᵣ=(re_hi+re_lo)+i(im_hi+im_lo)`, form the actual delta with exponent-aware `ldexp`, set `zₙ=Zᵣ+2^eδ′ₙ`, and test escape before any rebase or advance.
 
-The stipulated rebase assignment is algebraically exact only when `Z₀ = 0`; for a general Julibrot or Julia reference with nonzero `Z₀`, restarting against orbit index zero would require `δ ← zₙ-Z₀`, so the shared rule `δ ← zₙ` is an unresolved correctness defect that the nonzero-`Z₀` rebase oracle must expose before implementation.
+An ordinary advance is `δ′ₙ₊₁=2Zᵣδ′ₙ+2^e(δ′ₙ)²+δc′`, followed by `r←r+1`; the f64 mirror uses the same operation sequence, `ldexp` points, exponent changes, escape order, and reference-index order.
 
-### 2.5 Warp math
+REBASING is repeatable and occurs after the current escape test but before advancing when `|zₙ|<|2^eδ′ₙ|`; if the scaled delta underflows to zero the predicate is false, equality is false, and the comparison uses a robust norm that does not square into overflow or underflow.
 
-For a pose, lift its plane columns to five-space with zero escape height, apply `R₁₂(view_theta_1)·R₃₅(view_theta_2)`, drop e₅, and Gram–Schmidt the result by the same rule as plane construction to obtain view-linearized columns `B=[u_view v_view]`; flat view uses identity VIEW angles.
+On rebase, set the actual delta to `zₙ−Z₀`, represent it at the current exponent as `δ′←(zₙ−Z₀)/2^e`, set `r←0`, increment `rebase_count`, and perform exactly one ordinary advance against `Z₀` to global iteration `n+1` and reference index one; thus `zₙ=Zᵣ+2^eδ′ₙ` holds before and after a nonzero-`Z₀` restart.
 
-Let a pose contain centre `C`, view-linearized columns `B`, scale `s`, zoom, and view angles; the least-squares screen warp from pose `f` to pose `t` is the homogeneous row-major matrix `H(f,t) = [[A₀₀,A₀₁,b₀],[A₁₀,A₁₁,b₁],[0,0,1]]`, where `A = (s_f/s_t)B_tᵀB_f` and `b = B_tᵀ(C_f-C_t)/s_t`.
+After an advance or rebase conversion, if nonzero `|δ′|>2⁶⁴`, multiply both `δ′` and the stored `δc′` by `2⁻⁶⁴` and set `e←e+64`; if `0<|δ′|<2⁻⁶⁴`, multiply both by `2⁶⁴` and set `e←e−64`; repeat until the inclusive interval is restored, leaving exact boundary values unchanged.
 
-The ratio is evaluated as `2^(zoom_log2_t-zoom_log2_f)` rather than by dividing independently rounded scales, translation uses the owner’s `f64` centre mirrors, and inversion uses the explicit two-by-two determinant; `|det A| ≤ 2⁻⁴⁰` returns `DegenerateWarp` and requests a scene frame instead of manufacturing a warp.
+Rescaling `δc′` with `δ′` is required by `δc′=δc/2^e`; each power-of-two adjustment preserves the actual values `2^eδ′` and `2^eδc′`, and exponent overflow is a typed glitch rather than wraparound.
 
-When planes or VIEW angles differ, this warp is a zero-height least-squares visual prediction: it cannot reconstruct components orthogonal to the target plane, escape-height displacement, or the nonlinear standing double perspective; it never authors fractal truth and is replaced by the next completed scene.
+GLITCH occurs when `r=length` before the sample has escaped or reached `max_iter`: set `glitch=1`, stop, preserve `escaped=0` and `smooth_iter=−1.0`, and use the honest debug tint; re-rendering with a second reference is an explicitly displayed v1 limit.
+
+The count is incremented only when a rebase is performed; a next `rebase_count` at or above `2²⁴` glitches rather than writing an inexact integer to RGBA32F.
+
+### 2.5 Centre displacement and warp math
+
+For a plane basis `B=[u v]`, scale `p`, desired centre `C`, and accepted reference centre `C_ref`, worker-side bignum arithmetic publishes `centre_from_reference_px=d=[u·(C−C_ref)/p,v·(C−C_ref)/p]`; subtraction and division occur before rounding the two results to nearest finite `f64`, which remains safe because the recompute policy bounds the ratio rather than the absolute depth.
+
+On an accepted replacement, `reference_shift_px` is the new reference centre minus the old reference centre projected onto the current `(u,v)` basis and divided by current `p`; an initial reference publishes zero because no retained scene exists, while later values are measured bignum differences rather than mirror subtraction.
+
+If a retained pose `f` must be expressed against the new reference using a shift `s_t` measured in current-pose pixels, convert it as `s_f=p_f⁻¹B_fᵀB_t p_t s_t` and set `d_f←d_f−s_f`; current displacement similarly becomes `d_t←d_t−s_t`, so a generation change with a valid shift does not clear the retained image.
+
+For pose `p`, let `N_p=diag(W_p/2,H_p/2)` map NDC to centred physical pixels, let `p_p=4/(2^zoom_p W_p)`, and let `d_p` be its `centre_from_reference_px`; a chart point is `X_p(q)=C_ref+B_p p_p(N_pq+d_p)`.
+
+The inverse-sampling flat homography from current target pose `t` to retained source pose `f` is `H(t→f)=[[A₀₀,A₀₁,b₀],[A₁₀,A₁₁,b₁],[0,0,1]]`, where `M=(p_t/p_f)B_fᵀB_t`, `A=N_f⁻¹MN_t`, and `b=N_f⁻¹(Md_t−d_f)`.
+
+The scale ratio is evaluated directly in `f64` as `p_t/p_f=2^(zoom_f−zoom_t)·W_f/W_t`, never by materializing either deep scale; when basis, scale, and extent match, translation reduces to the displacement difference `d_t−d_f` in pixels followed by the NDC conversion.
+
+`warp_matrix(from,to)` returns row-major inverse-sampling `to→from` and its explicit `from→to` inverse, rejects a zero extent, non-finite coefficient, or `|det A|≤2⁻⁴⁰`, and never uses an absolute centre mirror; present separately checks plane-origin and max-iteration compatibility before calling it.
+
+Present computes the view-specific `WarpPlan` in hand-written `f64`, rounds only its three padded homography rows to `f32`, re-expresses a retained pose on `reference_shift_px`, and clears only when `max_iter` or the MAIN plane origin including `c₀` changes; tumbled reprojection remains present's labelled homography approximation with clear colour at newly exposed samples and candid internal-disocclusion limits.
 
 ## 3. INTERFACES
 
-All wire and GPU records below are little-endian, all RGBA32F channels are IEEE-754 binary32, arrays preserve the coordinate order `(z.re,z.im,c.re,c.im)`, byte offsets are from the containing record, and padding bytes must be zero.
+All transferred and GPU words are little-endian, `f32` and `f64` are IEEE-754 binary32 and binary64, byte offsets start at the named record, coordinate arrays use `(z.re,z.im,c.re,c.im)`, reserved words are zero, and CPU-only records marked “no byte ABI” are not serialized by native layout.
 
-### 3.1 Math-owned CPU types and functions
+### 3.1 Math-owned types and functions
 
 |Interface|Exact contract|Consumer|
 |---------|--------------|--------|
-|`CentreF64`|`{ coords: [f64;4] }`; native 32 bytes, finite only, owner mirror with no deep-authority claim|worker, owner, present|
-|`CentreSplit`|`{ hi: [f32;4], lo: [f32;4] }`; 32 bytes, offsets 0 and 16, ties-to-even split|kernels|
-|`Plane`|`{ basis_u: [f32;4], basis_v: [f32;4], origin_lo: [f32;4] }`; 48 bytes, offsets 0, 16, 32; basis vectors are dimensionless and origin is plane-coordinate units|kernels, present, app|
-|`PlaneAngles`|`{ theta_1: f64, theta_2: f64 }`; radians, finite, PLANE angles independent|owner, app|
-|`PlanePreset`|`Mandelbrot` or `Julia { c0: [f64;2] }`; `c0` finite and MAIN state|owner, app|
-|`EscapeParams`|`{ max_iter: u32, bailout: f32 }`; 8 CPU bytes, `max_iter > 0`, `bailout` is a squared radius with standing value `256.0`|kernels, worker, app|
-|`EscapeSample`|`{ smooth_iter: f32, escaped: bool, escape_index: Option<u32> }`; CPU-only oracle result, no stable byte representation|kernels tests|
-|`PerturbSample`|`{ smooth_iter: f32, escaped: bool, escape_index: Option<u32>, rebase_count: u32, glitch: bool }`; CPU-only oracle result|kernels tests, overlay arithmetic|
-|`OrbitRecord`|`{ re_hi: f32, im_hi: f32, re_lo: f32, im_lo: f32 }`; `repr(C)`, 16 bytes with the RGBA layout below|worker, kernels tests|
-|`ReferenceOrbitBytes`|`{ records: Vec<OrbitRecord>, length: u32, precision_bits: u32, escape_index: Option<u32> }`; CPU-owned result whose records become the response payload|worker|
-|`OrbitStep`|`Pending { stored: u32 }` or `Complete(ReferenceOrbitBytes)`; CPU-only progress result|worker|
-|`DegenerateStage`|`FirstAxis` or `SecondAxis`; CPU-only typed diagnostic|app, tests|
-|`WarpMatrix`|`{ forward: [f64;9], inverse: [f64;9] }`; row-major homogeneous matrices, native 144 bytes|present|
-|`MathError`|`NonFinite`, `InvalidExtent`, `InvalidMaxIter`, `DegeneratePlane { stage: DegenerateStage }`, `DegenerateWarp`, `InvalidCentreEncoding`, `OrbitTooLong`, `CounterOverflow`, `DurationOverflow`, or `PrecisionExhausted { requested_digits, policy_digits }`|all slices|
+|`Axis4`|`#[repr(u32)] { E1=0,E2=1,E3=2,E4=3 }`|worker, app|
+|`PlanePreset`|`Mandelbrot` or `Julia { c0:[f64;2] }`; `c0` is finite and lives in MAIN's plane origin|worker, app|
+|`PlaneSpec`|`{ axis_a:Axis4, axis_b:Axis4, plane_origin:[f64;4] }`; CPU-only, distinct seed axes|worker, app|
+|`PlaneAngles`|`{ theta_1:f64, theta_2:f64 }`; finite independent radians|worker, app|
+|`CentreF64`|`{ coords:[f64;4] }`; 32 native bytes, finite owner mirror without deep authority|worker, owner, present|
+|`CentreSplit`|`#[repr(C,align(16))] { hi:[f32;4], lo:[f32;4] }`; 32 bytes at offsets 0 and 16|kernels|
+|`Plane`|`#[repr(C,align(16))] { basis_u:[f32;4], basis_v:[f32;4] }`; 32 bytes at offsets 0 and 16, dimensionless|kernels, present, app|
+|`EscapeParams`|`#[repr(C)] { max_iter:u32, bailout:f32 }`; 8 bytes at offsets 0 and 4, `max_iter>0`, squared `bailout=256.0`|kernels, worker, app|
+|`ScaleSplit`|`{ mantissa:f32, exponent:i32 }`; CPU-only, `p=mantissa·2^exponent`, mantissa in `[0.5,1)`|kernels, overlay|
+|`PrecisionPlan`|`{ floor_digits:u32, working_digits:u32, requested_bits:u32, policy_digits:u32 }`; decimal digits except bits|worker, overlay|
+|`BigCentre`|`{ coords:[BigScalar;4], precision_bits:u32 }`; Astro-float-backed, finite, no byte ABI|worker|
+|`EscapeSample`|`{ smooth_iter:f32, escaped:bool, escape_index:Option<u32> }`; CPU-only oracle output|kernels tests|
+|`PerturbSample`|`{ smooth_iter:f32, escaped:bool, escape_index:Option<u32>, rebase_count:u32, glitch:bool }`; CPU-only oracle output|kernels tests|
+|`ReferenceOrbitRecord`|`#[repr(C)] { re_hi:f32, im_hi:f32, re_lo:f32, im_lo:f32 }`; 16 bytes|worker, kernels|
+|`ComputedOrbit`|`{ records:Vec<ReferenceOrbitRecord>, length:u32, precision_bits:u32, escape_index:Option<u32> }`; reusable linear-memory records|worker|
+|`OrbitStep`|`Pending { stored:u32 }` or `Complete(ComputedOrbit)`; CPU-only cooperative result|worker|
+|`Pose`|CPU-only exact field list below, no byte ABI|present, app|
+|`WarpMatrix`|`{ forward:[f64;9], inverse:[f64;9] }`; row-major, 144 native bytes|present|
+|`MathError`|`NonFinite`, `InvalidExtent`, `InvalidMaxIter`, `InvalidPlaneSeed`, `InvalidCentreEncoding`, `ScaleExponentOverflow`, `DegenerateWarp`, `OrbitTooLong`, `CounterOverflow`, `DurationOverflow`, or `PrecisionExhausted { requested_digits,policy_digits }`|all slices|
 
-The implementation signatures are `construct_plane(preset: PlanePreset, angles: PlaneAngles, centre: CentreF64) -> Result<(Plane,CentreSplit),MathError>`, `split_centre(centre: CentreF64) -> Result<CentreSplit,MathError>`, `pixel_scale(zoom_log2: f64, grid_width: u32) -> Result<f64,MathError>`, `precision_for(zoom_log2: f64, grid_width: u32, max_iter: u32) -> Result<PrecisionPlan,MathError>`, `escape_f32(point: [f32;4], params: EscapeParams) -> Result<EscapeSample,MathError>`, `ReferenceOrbitBuilder::new(centre: &BigCentre, plan: PrecisionPlan, params: EscapeParams) -> Result<ReferenceOrbitBuilder,MathError>`, `ReferenceOrbitBuilder::step(&mut self, max_entries: NonZeroU32) -> Result<OrbitStep,MathError>`, `perturb_f64(orbit: &[OrbitRecord], delta_z0: [f64;2], delta_c: [f64;2], params: EscapeParams) -> Result<PerturbSample,MathError>`, and `warp_matrix(from: &Pose, to: &Pose) -> Result<WarpMatrix,MathError>`.
+`Pose` is `pub struct Pose { pub epoch:u64, pub orbit_generation:u32, pub plane:Plane, pub plane_theta_1:f64, pub plane_theta_2:f64, pub zoom_log2:f64, pub view_theta_1:f64, pub grid_width:u32, pub grid_height:u32, pub view:ViewMode, pub centre_from_reference_px:[f64;2] }`; VIEW angle two is derived as `φ·view_theta_1` and is not stored.
 
-`ReferenceOrbitBuilder` owns the partial Astro-float state and emits at most `max_entries` new records per call; worker chooses the chunk, checks generation, credit, and deadline and yields between calls, so high-precision arithmetic cannot turn latest-wins into an unbounded wait.
+The implementation signatures are `construct_plane(spec:PlaneSpec,angles:PlaneAngles)->Result<Plane,MathError>`, `preset_spec(preset:PlanePreset)->Result<PlaneSpec,MathError>`, `mirror_centre(centre:&BigCentre)->Result<CentreF64,MathError>`, `split_centre(centre:&BigCentre)->Result<CentreSplit,MathError>`, `scale_split(zoom_log2:f64,grid_width:u32)->Result<ScaleSplit,MathError>`, `precision_for(zoom_log2:f64,grid_width:u32,max_iter:u32)->Result<PrecisionPlan,MathError>`, and `escape_f32(point:[f32;4],params:EscapeParams)->Result<EscapeSample,MathError>`.
 
-`PrecisionPlan` is `{ floor_digits: u32, working_digits: u32, requested_bits: u32, policy_digits: u32 }` in those units; conversion arithmetic is checked and never saturates silently.
+Orbit and perturbation signatures are `ReferenceOrbitBuilder::new(centre:&BigCentre,plan:PrecisionPlan,params:EscapeParams)->Result<ReferenceOrbitBuilder,MathError>`, `ReferenceOrbitBuilder::step(&mut self,max_entries:NonZeroU32)->Result<OrbitStep,MathError>`, and `perturb_scaled_f64(orbit:&[ReferenceOrbitRecord],offset_prime:[f64;4],scale_exponent:i32,params:EscapeParams)->Result<PerturbSample,MathError>`.
 
-`BigCentre` is `{ coords: [BigScalar;4], precision_bits: u32 }`, where `BigScalar` is the selected Astro-float-backed finite binary value; neither type has a stable native byte layout, and only the canonical encoding in §3.3 crosses a message boundary.
+Navigation and warp signatures are `centre_from_reference_px(centre:&BigCentre,reference:&BigCentre,plane:&Plane,zoom_log2:f64,grid_width:u32)->Result<[f64;2],MathError>`, `reference_shift_px(old:&BigCentre,new:&BigCentre,plane:&Plane,zoom_log2:f64,grid_width:u32)->Result<[f64;2],MathError>`, and `warp_matrix(from:&Pose,to:&Pose)->Result<WarpMatrix,MathError>`.
 
-Except for explicitly marked GPU, wire, or `repr(C)` records, CPU types in this section are semantic interfaces with the exact field lists shown and no cross-crate native-layout ABI promise.
+`ReferenceOrbitBuilder` owns partial Astro-float state and emits at most `max_entries` records per call; worker chooses the chunk, checks generation, credit, and deadline, and yields, so high-precision arithmetic cannot turn latest-wins into an unbounded wait.
 
 ### 3.2 GPU records and uniform blocks
 
-|Record|Bytes and offsets|Producer → consumer|
-|------|-----------------|-------------------|
-|Reference-orbit RGBA32F|16 bytes: 0 `re_hi:f32`, 4 `im_hi:f32`, 8 `re_lo:f32`, 12 `im_lo:f32`; index 0 is `Z₀`; `length` counts stored entries|worker → kernels|
-|Escape-grid RGBA32F|16 bytes: 0 `smooth_iter:f32`, 4 `escaped:f32`, 8 `rebase_count:f32`, 12 `glitch:f32`; flags are exactly 0 or 1, count is integer-valued and exactly representable or the pixel glitches before `2²⁴`|kernels → present|
-|`ShallowUniform`|96 bytes: 0 `origin_hi:[f32;4]`, 16 `origin_lo:[f32;4]`, 32 `basis_u:[f32;4]`, 48 `basis_v:[f32;4]`, 64 `pixel_scale:f32`, 68 `grid_width:u32`, 72 `grid_height:u32`, 76 `max_iter:u32`, 80 `bailout:f32`, 84 `level:u32`, 88 `reserved:[u32;2]`|math/app → kernels|
-|`PerturbUniform`|64 bytes: 0 `basis_u:[f32;4]`, 16 `basis_v:[f32;4]`, 32 `pixel_scale:f32`, 36 `grid_width:u32`, 40 `grid_height:u32`, 44 `max_iter:u32`, 48 `bailout:f32`, 52 `orbit_length:u32`, 56 `level:u32`, 60 `reserved:u32`; no origin field exists|math/app → kernels|
-|`HotUniform` payload|64 bytes: 0 `basis_u:[f32;4]`, 16 `basis_v:[f32;4]`, 32 `origin_lo:[f32;4]`, 48 `pixel_scale:f32`, 52 `view_theta_1:f32`, 56 `view_theta_2:f32`, 60 `reserved:u32`; `view_theta_1=0.4t`, `view_theta_2=φ·view_theta_1`|math/app → present|
+|Record|Bytes and exact fields|Producer → consumer|
+|------|----------------------|-------------------|
+|Reference orbit RGBA32F|16 bytes: 0 `re_hi:f32`, 4 `im_hi:f32`, 8 `re_lo:f32`, 12 `im_lo:f32`; texel zero is `Z₀`|worker → kernels|
+|Escape grid RGBA32F|16 bytes: 0 `smooth_iter:f32`, 4 `escaped:f32`, 8 `rebase_count:f32`, 12 `glitch:f32`; flags are 0 or 1 and count is integer-valued|kernels → present|
+|`ShallowUniform`|96 bytes: 0 `basis_u:[f32;4]`, 16 `basis_v:[f32;4]`, 32 `centre_hi:[f32;4]`, 48 `centre_lo:[f32;4]`, 64 `pixel_scale:f32`, 68 `width:u32`, 72 `height:u32`, 76 `max_iter:u32`, 80 `bailout:f32`, 84 `level:u32`, 88 `padding:[u32;2]`|app/math → kernels|
+|`PerturbUniform`|64 bytes: 0 `basis_u:[f32;4]`, 16 `basis_v:[f32;4]`, 32 `pixel_scale:f32` mantissa, 36 `width:u32`, 40 `height:u32`, 44 `max_iter:u32`, 48 `bailout:f32`, 52 `orbit_length:u32`, 56 `level:u32`, 60 `scale_exponent:i32`|app/math → kernels|
+|`HotUniform`|128 bytes: 0 `plane_u:[f32;4]`, 16 `plane_v:[f32;4]`, 32 `view_rotation:[f32;4]`, 48/64/80 `homography_row_0/1/2:[f32;4]`, 96 `clear_rgba:[f32;4]`, 112 `flags:[u32;4]`|present → GPU|
+|`SceneUniform`|80 bytes: 0 `grid:[u32;4]`, 16 `span:[u32;4]`, 32 `palette_map:[f32;4]`, 48 `interior_rgba:[f32;4]`, 64 `clear_rgba:[f32;4]`|present → GPU|
 
-The hot ring has exactly three `HotUniform` payloads; present owns the buffer, each slot starts at `slot·align_up(64,min_uniform_buffer_offset_alignment)`, selection is by dynamic offset, and the bind-group identity never changes.
+`HotUniform.view_rotation=[cos θ,sin θ,cos(φθ),sin(φθ)]`, each homography row has three coefficients plus zero padding, and `flags=[epoch_low,epoch_high,source_valid,view_mode]`; the shader never receives two poses.
 
-Within that payload, `pixel_scale` is the GPU lowering of zoom, `basis_u` and `basis_v` are the GPU lowering of PLANE rotation, and the two view angles are the GPU lowering of VIEW rotation; the owner retains the authoritative f64 zoom and angles for state, overlay, and warp math.
+The hot ring has exactly three slots, `hot_stride=align_up(128,min_uniform_buffer_offset_alignment)`, total bytes are `3·hot_stride`, present owns its buffer and bind group, one refresh writes exactly 128 bytes to one slot, and selection is by dynamic offset.
 
-Kernels expose `EscapeGrid { span: DataSpan, width: u32, height: u32, level: u32 }`; `width·height` must equal `span.logical_len`, the span contains the escape-grid record above, kernels own LEVEL definitions and span reuse, present consumes the wrapper, and app alone owns the refinement SCHEDULE.
+`SceneUniform.grid=[width,height,level,max_iter]`, `span=[directory_index,logical_len,0,0]`, and present updates it only on changed MAIN, palette, view, refinement level, extent, span, or cap.
 
-Kernels expose `ReferenceOrbitSpan { span: DataSpan, generation: u32, length: u32, precision_bits: u32 }`; `length = span.logical_len`, the records have the reference-orbit layout above, and upload is a regional write only when an accepted latest generation arrives.
+`RefinementLevel` is `#[repr(u32)] { Preview=0,Interactive=1,Final=2 }`; an unknown discriminant is a typed error.
 
-Every kernel output reaches DATA through the paid scratch-copy path, every heap bind-group identity is stable, and neither escape-grid nor reference-orbit data crosses back to the CPU except for bounded conformance measurement.
+`EscapeGrid` is the kernels-owned CPU wrapper `{ span:DataSpan, width:u32, height:u32, level:RefinementLevel }`; its initialized dense prefix has `width·height` records, `span.logical_len` is Final capacity for reuse, present never samples the inactive suffix, and only kernels free the span.
 
-### 3.3 Centre encoding and worker messages
+Preview is `ceil(W/4)×ceil(H/4)` at `min(requested_cap,64)`, Interactive is `ceil(W/2)×ceil(H/2)` at `min(requested_cap,256)`, and Final is `W×H` at `min(requested_cap,4096)`; 4,096 and the shallow/deep switch are displayed policies, power-of-two extent degradation is a delivered fact, kernels define levels, and app schedules them in order with permission to skip.
 
-`BigCentre` uses four canonical signed dyadics in coordinate order; a coordinate represents `sign·mantissa·2^exponent`, where sign word 0 means canonical zero, 1 positive, 2 negative, exponent is a little-endian two’s-complement `i32`, and mantissa is an unsigned base-`2³²` integer.
+All kernel output lands in DATA only through the paid SCRATCH-copy path, reference arrival is a regional DATA write, heap bind-group identities never change, and normal rendering cannot aggregate rebase or glitch totals without a separately requested and labelled measurement readback.
 
-Each coordinate encoding begins with four u32 words `{sign, exponent_bits, limb_count, reserved}`, followed by `limb_count` least-significant-first u32 limbs; reserved is zero, a nonzero mantissa’s highest limb is nonzero and bit zero is one after all powers of two move into the exponent, zero has exponent zero and no limbs, and the value is rounded to `precision_bits` ties-to-even before encoding.
+### 3.3 Worker wire protocol and centre adapter
 
-Every message buffer begins with the 32-byte, eight-word u32 header `{magic, version, generation, kind, length, precision_bits, compute_us, credit_us}` at byte offsets `{0,4,8,12,16,20,24,28}`; `magic = 0x3152424a` whose bytes spell `JBR1`, `version = 1`, request kind is 1, response kind is 2, and unknown values are typed refusals.
+Every standalone message buffer begins with `MessageHeader`, eight little-endian `u32` words and 32 bytes: 0 `magic`, 4 `version`, 8 `generation`, 12 `kind`, 16 `length`, 20 `precision_bits`, 24 `compute_us`, and 28 `credit_us`.
 
-For request kind 1, `length` is the centre-encoding byte count, `precision_bits` is the requested working precision, `compute_us = 0`, and bytes 32 through 47 are `{depth_digits:u32,max_iter:u32,centre_bytes:u32,reserved:u32}` followed at byte 48 by exactly `centre_bytes = length` bytes of canonical `BigCentre`; `depth_digits = ceil(zoom_log2·log10(2))` and reserved is zero.
+`magic=0x314c424a` is byte string `JBL1`, wire `version=1`, `JULIBROT_ABI_VERSION=1`, and loader URLs carry `?v=1`; any module/wire version skew is a typed refusal.
 
-For response kind 2, `length` is the number of 16-byte orbit records, `precision_bits` is delivered precision, `compute_us` is measured worker compute time in microseconds, and the orbit starts at byte 32 with no gap; conversion of a measured duration beyond `u32::MAX` microseconds is a reported `DurationOverflow`, not truncation.
+|Kind|Name|Direction and `length`|
+|---:|----|----------------------|
+|1|`OrbitRequest`|main → worker; requested `max_iter`|
+|2|`RequestReturn`|worker → main; zero|
+|3|`OrbitResponse`|worker → main; stored orbit records|
+|4|`CreditApplied`|main → worker; zero, installed generation|
+|5|`CreditStale`|main → worker; zero, discarded generation|
+|6|`OrbitCancelled`|worker → main; zero, measured stale work is charged|
+|7|`ChannelError`|either direction; four-word `ErrorRecord`|
+|8|`Shutdown`|main → worker; zero|
+|9|`ShutdownAck`|worker → main; zero|
 
-`credit_us` is the owner’s remaining orbit-compute budget for the next second in u32 microseconds; the owner writes it before returning a transferred buffer, the producer never fabricates credit, and exhausted credit delays work without changing the latest requested generation.
+The last 16 bytes are `PoolTrailer { pool:u32,slot:u32,capacity_bytes:u32,trailer_magic:u32 }`, `trailer_magic=0x544c424a`, request pool is 1, orbit pool is 2, and `slot∈{0,1}`; it is initialized once and round-trips bit-exactly.
 
-The semantic messages are `OrbitRequest { generation: u32, centre: BigCentreEncoding, depth_digits: u32, max_iter: u32 }` and `OrbitResponse { header: { generation: u32, length: u32, compute_us: u32, precision_bits: u32, credit_us: u32 }, orbit: transferred buffer }` with the exact header and payload layouts above.
+For current `max_iter=M`, each of the four buffers has capacity `48+16M`; two circulate independently in each direction, resizing all four occurs only when `max_iter` changes after ownership reconciliation, and each resize is a reported allocation event.
 
-There is one wasm module loaded once on the main thread and once in the worker with `worker_main`; browser fetch caching avoids a second download but the two wasm instances have distinct memories, and that duplicated memory is a reported cost.
+`OrbitRequest` is `{ generation:u32, centre:EncodedCentre, depth_digits:u32, precision_bits:u32, max_iter:u32, reason:OrbitReason }`; header fields carry generation, precision, and cap, while the body at byte 32 is `{ depth_digits:u32,reason_bits:u32,centre_revision:u32,limb_word_count:u32,coordinates:[CoordinateDescriptor;4],limbs:[u32;limb_word_count] }`.
 
-Transfer uses two independently exchanged buffers in each direction, four total; every buffer is sized for the maximum orbit length of current `max_iter`, resizing occurs only when `max_iter` changes, and every resize is a reported allocation event.
+The fixed request body occupies bytes 32–111, coordinate descriptors start at bytes 48, 64, 80, and 96, and limbs start at byte 112; request fit requires `112+4·limb_word_count≤32+16M`, otherwise worker returns the displayed `CentreEncodingWall` without truncation or hidden allocation.
 
-The same-thread lowering invokes the identical request/response abstraction and returns the same buffers synchronously; it is the cheapest lowering, not a separate protocol.
+`CoordinateDescriptor` is exactly 16 bytes `{ sign:u32,exponent_twos_complement:u32,limb_start:u32,limb_count:u32 }`; a nonzero value is `(−1)^sign·(Σ limbs[limb_start+k]·2^(32k))·2^exponent`, limbs are least-significant first, `sign∈{0,1}`, and the high stored limb is nonzero.
 
-### 3.4 Owner, presentation, and app interfaces
+Descriptor ranges are ordered, contiguous, non-overlapping, and cover `limb_word_count`; canonical zero is `{sign:0,exponent:0,limb_start:previous_end,limb_count:0}`, with no negative zero, leading high zero, unused limb, or out-of-range descriptor.
 
-`OrbitHandle(u32)` is an owner-local opaque handle with zero invalid; it is neither a heap handle nor serialized, and it resolves to the latest accepted `ReferenceOrbitSpan`.
+`reason_bits` assigns bit 0 to initial reference, bit 1 to centre-threshold crossing, bit 2 to zoom-threshold crossing, and bit 3 to max-iteration change; any unknown bit is a version-one `BadLength` refusal.
 
-`PaletteId(u32)` is an opaque selector into present-owned immutable palette records; app may select it through MAIN state but math, worker, and kernels do not interpret palette contents.
+Math's `encode_big_scalar` and `decode_big_scalar` adapters map Astro-float values to exactly that dyadic representation, use the `u32` bit pattern of the two's-complement `i32` exponent, preserve exact value at delivered precision, and impose no extra odd-low-limb rule; worker alone validates and transports bytes.
 
-`HotState` is `{ centre_f64: CentreF64, zoom_log2: f64, plane_angles: PlaneAngles, view_time_s: f64 }`; all values are finite, centre and zoom are in fractal plane units and binary-log units respectively, and this is drained every refresh.
+`ErrorRecord` begins at byte 32 and is `{ code:u32,detail:u32,requested_bytes:u32,available_bytes:u32 }`; stable codes are `1 BadMagic`, `2 BadVersion`, `3 BadKind`, `4 BadLength`, `5 BadTrailer`, `6 CentreEncodingWall`, `7 GenerationExhausted`, `8 EpochExhausted`, `9 TimingOverflow`, `10 BufferStarved`, and `11 MathFailure`.
 
-`MainState` is `{ orbit: OrbitHandle, orbit_generation: u32, orbit_length: u32, precision_bits: u32, max_iter: u32, palette: PaletteId, preset: PlanePreset }`; `c₀` therefore moves only through MAIN state.
+`OrbitResponse` is the header followed at byte 32 by `length` reference records; used bytes are `32+16·length`, `1≤length≤max_iter`, unused capacity before the trailer is zero, and `compute_ms=f64(compute_us)/1000` is only a display conversion.
 
-`ViewerState` is `{ epoch: u64, hot: HotState, main: MainState }`; HOT and MAIN share the one epoch, each successful `drain_hot()` or `drain_main()` performs checked `epoch += 1` and returns the corresponding `{epoch,state}` snapshot, both drains are infallible, publication is latest-wins, and u64 wrap is impossible within one session because reaching it at one drain per nanosecond exceeds 584 years.
+The owner's credit POLICY is `250,000` microseconds per second and is displayed; the returned `CreditApplied` or `CreditStale` header preserves generation, precision, and compute time, sets length zero, and carries the measured remaining `credit_us` without fabrication.
 
-Orbit `generation` is a monotonically increasing u32 with checked increment; wrap is documented as impossible within a session, stale requests and responses are discarded without publication, and a generation is never inferred from the u64 owner epoch.
+One wasm module is instantiated on main and in the worker with exported `worker_main`; browser fetch caching avoids a second download, separate instance memory remains a reported cost, and the same-thread lowering uses the identical four ownership states, headers, generation checks, credit events, and buffer moves.
 
-`Pose` is `{ plane: Plane, centre_f64: CentreF64, zoom_log2: f64, view_angles: [f64;2] }`; it is CPU-only, angles are radians, and `view_angles` are the evaluated standing VIEW angles for that frame.
+### 3.4 Worker owner state
 
-Present exposes `Presenter::accept_grid(grid: EscapeGrid) -> Result<(),PresentError>`, `Presenter::write_hot(slot: u32, hot: &HotState) -> Result<(),PresentError>` where slot is 0, 1, or 2, and `Presenter::frame(state: &ViewerState, hot_slot: u32) -> Result<FrameReport,PresentError>` for both flat and tumbled views; `accept_grid` retains the latest typed wrapper without changing heap bind-group identity.
+`VIEWER_STATE_VERSION=1`; owner records below are `Copy` and `#[repr(C)]`, both drains are infallible, each drain bumps one shared checked `u64` epoch, later staged values replace undrained values, and consumers never use epoch equality as an orbit or warp compatibility test.
 
-Present exposes `Warp::reproject(last_frame: &CompletedFrame, from_pose: &Pose, to_pose: &Pose) -> Result<FrameReport,PresentError>` and uses math’s `warp_matrix`; a degenerate or absent prior frame requests an ordinary scene frame.
+`HotState` is 40 bytes, alignment 8: byte 0 `zoom_log2:f64`, byte 8 `plane_theta_1:f64`, byte 16 `plane_theta_2:f64`, and byte 24 `centre_from_reference_px:[f64;2]`.
 
-App’s HOT drain calls `Presenter::write_hot`, MAIN arrival publishes the accepted orbit handle, iteration cap, preset, and palette, app schedules one kernel dispatch per selected refinement LEVEL without redefining the levels, and each completed level passes its `EscapeGrid` to `Presenter::accept_grid`.
+`MainState` is 120 bytes, alignment 8: byte 0 `generation_applied:u32`, 4 `centre_revision:u32`, 8 `requested_iter_cap:u32`, 12 `delivered_iter_cap:u32`, 16 `precision_bits:u32`, 20 `orbit_length:u32`, 24 `palette_id:u32`, 28 `orbit_id:u32`, 32 `centre_f64:[f64;4]`, 64 `plane_axis_a:u32`, 68 `plane_axis_b:u32`, 72 `plane_origin_f64:[f64;4]`, and 104 `reference_shift_px:[f64;2]`.
 
-The facts overlay fields consumed from this slice are `{requested_generation,accepted_generation,owner_epoch,zoom_log2,zoom_digits,precision_floor_digits,precision_working_digits,precision_bits,orbit_length,max_iter,bailout,rebase_count,glitch_count,grid_width,grid_height,level,pixel_scale,centre_recompute_policy,worker_compute_us,credit_us,allocation_events}`; app adds requested/delivered resolution, warm-up labels, four-byte-fence walls, poll counts, scene wall, warp wall, backend facts, and typed refusals.
+`ViewerState` is 168 bytes, alignment 8: byte 0 `epoch:u64`, byte 8 `hot:HotState`, and byte 48 `main:MainState`; `HotDrain` and `MainDrain` each return the full record.
 
-Before the first frame, app displays clear colour plus honest overlay text and no diagnostic pattern.
+`OrbitHandle` is `{ id:u32,generation:u32 }`, zero ID means no orbit, and app rejects a registry lookup whose generation differs; orbit generation is checked monotonic `u32` and wrap is impossible within a session because exhaustion ends new work.
+
+`ViewerOwner::drain_hot()->HotDrain` runs each refresh and `ViewerOwner::drain_main()->MainDrain` runs on accepted orbit, cap, palette, or plane-origin arrival; both increment epoch even when the corresponding staged value is unchanged, as intentionally accepted in the review.
+
+`ViewerOwner::accept_orbit` publishes the latest matching generation and `reference_shift_px`, while stale responses return credit without publication; a new accepted reference re-expresses retained poses, and only cap or plane-origin changes force present to clear.
+
+### 3.5 Presentation-owned records and calls on math's boundary
+
+`ViewMode` is `#[repr(u32)] { Flat=0,Tumbled=1 }`; `PaletteId` is `#[repr(u32)] { Classic=0,Ember=1,Ice=2 }`.
+
+`PaletteRecord` is `#[repr(C,align(16))] { map:[f32;4],interior_rgba:[f32;4],clear_rgba:[f32;4] }`, 48 bytes; Classic is `{map:[64,0,0.78,1],interior:[0.005,0.005,0.008,1],clear:[0.015,0.018,0.025,1]}`, Ember is `{map:[48,0.02,0.88,1],interior:[0.01,0,0,1],clear:[0.015,0.008,0.005,1]}`, and Ice is `{map:[80,0.55,0.72,1],interior:[0,0.005,0.01,1],clear:[0.005,0.01,0.015,1]}`.
+
+`PresentHot` is the CPU-only record `{ epoch:u64,plane:Plane,plane_theta_1:f64,plane_theta_2:f64,zoom_log2:f64,view_time_seconds:f64,centre_from_reference_px:[f64;2] }`, and `PresentMain` carries `{ epoch:u64,orbit_generation:u32,grid:EscapeGrid,max_iter:u32,palette:PaletteId,view:ViewMode,plane_origin_f64:[f64;4],reference_shift_px:[f64;2] }`.
+
+`HotSlot` is `{index:u32,dynamic_offset:u32,epoch:u64}`, where `index=refresh_id mod 3` and `dynamic_offset=index·hot_stride`; its checked constructor makes `Presenter::write_hot(slot,hot)` infallible.
+
+`PresentConfig` is `{ surface_format:wgpu::TextureFormat,min_uniform_buffer_offset_alignment:u32,fence_deadline_ms:f64,max_fence_polls:u32 }`; v1 passes the live alignment, `30_000.0`, and `4_096`, and the scene texture format is `Rgba8Unorm`.
+
+`Presenter::new(device:Arc<wgpu::Device>,queue:Arc<wgpu::Queue>,heap:HeapPresentResources,config:PresentConfig)->Result<Presenter,PresentError>` allocates the three-slot ring, two empty texture slots, fixed pipelines, and immutable heap group only after both error handlers exist.
+
+`Presenter::set_main(&mut self,main:PresentMain)` and `Presenter::write_hot(&mut self,slot:HotSlot,hot:PresentHot)` are the infallible MAIN and HOT endpoints; the latter computes the f64 plan, writes exactly 128 bytes, and lowers invalid arithmetic to `source_valid=0`.
+
+`Presenter::submit_scene(&mut self,hot_slot:HotSlot,now_ms:f64)->Result<u64,PresentError>` submits one scene plus its four-byte fence, while `Presenter::frame(&mut self,state:FrameState<'_>,hot_slot:HotSlot)->Result<FrameReceipt,PresentError>` submits the sole warp pass to the borrowed surface view and returns before app presents.
+
+`FrameState<'a>` is `{ surface_view:&'a wgpu::TextureView,canvas_width:u32,canvas_height:u32,refresh_id:u64,now_ms:f64 }`; `FrameReceipt` is `{ refresh_id:u64,warp_id:u64,source_scene_id:Option<u64>,status:PresentStatus }`, both are CPU-only, and receipt contains no wall before fence completion.
+
+`Presenter::poll(&mut self,now_ms:f64)->Vec<PresentEvent>` observes each pending fence at most once per call and never waits, while `Presenter::facts(&self)->PresentFacts` is an immutable, non-polling snapshot.
+
+`SceneFrame` is `{ scene_id:u64,pose:Pose,palette:PaletteId,iteration_cap:u32,level:RefinementLevel,extent:[u32;2],texture_index:u32,measurement:SubmissionMeasurement }`; `WarpPlan` is `{ rows:[[f32;4];3],source_valid:bool,kind:WarpKind,chart_residual:f64,approx_max_error_px:Option<f64>,approx_p95_error_px:Option<f64> }`, both CPU-only.
+
+`Warp::reproject(last_frame:&SceneFrame,from_pose:&Pose,to_pose:&Pose)->WarpPlan` is a pure CPU planner and uses math's `Pose` and `warp_matrix` without touching the GPU; `last_frame.pose` must equal `from_pose` or the result is `ClearOnly`.
+
+The refresh order is `poll → drain HOT → write_hot(refresh_id mod 3) → frame → app present`, with `submit_scene` only when app's schedule says a scene is due; present owns both scene textures and both four-byte fences, refuses `SceneBusy` rather than allocating a third texture, and app presents the surface outside all measured regions.
+
+Scene targets use delivered grid extent and each per-level reallocation increments `texture_reallocations`; scene and warp walls are separate four-byte-fence measurements, every poll is counted, warm-up is labelled, timestamp queries are absent, and the second completed frame decides the displayed 100 ms policy.
+
+The page facts contributed or constrained here are `{ requested_generation,accepted_generation,owner_epoch,zoom_log2,zoom_digits,depth_digits,precision_floor_digits,precision_working_digits,precision_requested_bits,precision_delivered_bits,orbit_length,max_iter_requested,max_iter_delivered,bailout,scale_mantissa,scale_exponent,centre_from_reference_px,reference_shift_px,refinement_level,grid_width,grid_height,rebase_total,glitch_total,centre_recompute_policy,worker_compute_us,credit_us,allocation_events,texture_reallocations }`; gather-only totals are `unavailable` unless a labelled measurement readback populated them.
+
+### 3.6 Joint-review interface table
+
+|Producer → consumer|Pinned interface|Exact payload or rule|
+|-------------------|----------------|---------------------|
+|math → worker/app|`PlaneSpec`, `PlaneAngles`, `PlanePreset`, `CentreF64`, centre adapter|ℝ⁴ axes, independent radians, worker-owned bignum, f64 mirror|
+|math → kernels/present|`Plane`|32 bytes, two rounded f32 ℝ⁴ basis vectors|
+|math → kernels|`CentreSplit`, `ScaleSplit`, `EscapeParams`|32 bytes; f32 mantissa plus i32 exponent; 8 bytes|
+|worker → kernels|reference record|RGBA32F `[re_hi,im_hi,re_lo,im_lo]`, 16 bytes per index|
+|kernels → present|escape record|RGBA32F `[smooth_iter,escaped,rebase_count,glitch]`, 16 bytes per pixel|
+|kernels → present|`EscapeGrid`|typed `DataSpan`, active `width,height`, `RefinementLevel`|
+|owner → app/present|`ViewerState`|168-byte repr(C), shared epoch, latest-wins HOT and MAIN|
+|owner ↔ worker|wire protocol|32-byte `JBL1` header, nine kinds, 16-byte trailer, four buffers|
+|math → present/app|`Pose`|CPU-only exact field list including centre displacement in pixels|
+|present → GPU|`HotUniform`|128-byte payload, three dynamic-offset slots|
+|present → GPU|`SceneUniform`, palette|80-byte scene block, selected present-owned 48-byte palette|
+|present → app|present API and facts|two textures, separate scene/warp fences, delivered facts only|
 
 ## 4. Inherited laws and satisfaction
 
-WebGL2 via wgpu 24 `Backends::GL` is the sole substrate and the `EXT_color_buffer_float` floor is mandatory; this CPU slice adds no feature, format, WebGPU, timestamp-query, or shared-memory requirement.
+WebGL2 through wgpu 24 `Backends::GL` is the sole substrate and the minimum-requirements format floor is mandatory; this CPU slice adds no feature, format, WebGPU, timestamp-query, or shared-memory requirement.
 
-Per-frame CPU-to-GPU traffic is uniforms only, plus regional writes for changed data: reference-orbit upload happens only on accepted arrival, escape-grid storage stays GPU-resident, centre bignum bytes stay in transferred worker buffers, and heap descriptors change only at allocation.
+Per-frame CPU-to-GPU traffic is uniforms only plus regional writes for changed data: accepted orbit bytes update their DATA region, plane and scale enter dispatch uniforms, hot pose enters one ring slot, and unchanged bignum, orbit, grid, palette, descriptors, and bind groups do not move.
 
-Kernel outputs use the heap’s paid SCRATCH-to-DATA copy path, heap bind-group identities never change, and the three-slot hot ring uses dynamic offsets into a present-owned buffer.
+Kernel outputs use the heap's paid SCRATCH-to-DATA copy path, the executor's descriptor, directory, header, resource, uniform, and texture identities remain stable, and the hot ring uses a live dynamic offset.
 
-No shared memory exists: worker buffers transfer ownership with credit in the header, four ping-pong buffers exchange independently, and same-thread execution preserves the same abstraction.
+No shared memory exists: four buffers transfer exclusive ownership with measured credit headers, and same-thread execution is the same protocol abstraction with direct moves.
 
-Honesty is structural: requested and delivered precision, resolution, iterations, digits, orbit length, rebase and glitch counts, compute and credit time, allocation events, warm-up, polls, policies, runtime walls, and measurement walls are distinct fields; no number is invented, no control silently snaps, and no wait lacks generation cancellation and a deadline.
+Honesty is structural: requested and delivered resolution, iterations, precision, zoom digits, scale exponent, orbit length, reference generation, centre displacement, reference shift, rebase/glitch availability, allocation events, policies, hardware walls, warm-up, polls, and measured walls remain distinct; unavailable is never zero, and no wait lacks cancellation plus a deadline.
 
-Browser-only conformance or performance observations are labelled `requires visible replay`; native arithmetic and Barza probe values are labelled by machine, fixture, command, and measured wall instead.
+Before the first frame, app shows clear colour and honest overlay text with no diagnostic pattern; browser-only conformance and performance facts are labelled `requires visible replay`.
 
-App installs the heap-provided panic hook and a non-panicking uncaptured-error handler before the first device call, owns the single surface token, and retains the paid four-byte MAP_READ fence discipline with counted polls and no timestamp query.
+App installs the heap-provided panic hook and non-panicking uncaptured-error handler before the first device call, owns the single surface token, and presents outside the measured scene and warp regions.
 
-Scene cost is wall time around a four-byte fence submitted after the scene submission, warp cost is wall time around a separate four-byte fence submitted after the warp submission, every poll is counted, warm-up is labelled and excluded, and neither series uses timestamp queries.
+Hand-written `f64` remains the CPU matrix implementation; `faer` enters only if the required f64 navigation-drift or warp-accuracy oracle fails, never because its API is convenient or because an f32 case fails.
 
-Hand-written `f64` remains the navigation and warp implementation; `faer` enters only if the specified `f64` navigation-drift or warp-accuracy case fails, and prior fixed-size evidence predicts it will not.
-
-Renderer austerity, one-way authority, one world, one heap class, no sim tick, and no gameplay truth in math, heap, kernels, or presentation remain unchanged.
+One world, one heap class, no simulation tick, no general graph, no shared-memory worker, no WebGPU path, and no second-reference repair remain deliberate prototype boundaries.
 
 ## 5. Oracles and tests
 
-The native Julibrot tests pin bounded fixed points, escaping points including exact bailout equality, `max_iter` edge cases, the state-index convention, smooth values from the natural-log expansion, non-finite rejection, and `-1.0` for every capped non-escape.
+Native escape tests pin fixed points, escaping points, exact bailout equality, `max_iter` edges, state-index order, natural-log expansion of smooth iteration, non-finite rejection, and exact `−1.0` for capped non-escape.
 
-The native plane tests pin coordinate order, exact Mandelbrot and Julia presets, the stated matrix multiplication order and signs, `φ`, VIEW angles at deterministic times, independent PLANE angles, `P₄`, f64 then f32 Gram–Schmidt, both degenerate stages, and the `8×f32::EPSILON` postcondition.
+Native plane tests pin axis order, the exact Mandelbrot and Julia presets, `R₁₃(R₂₄(v))` order and signs, independent angles, absence of `e₅`, one f32 rounding pass, the `8·f32::EPSILON` postcondition, the π/2 preset-plane equivalence, and nonzero z and c components for `0<θ₁,θ₂<π/2`.
 
-Navigation drift composes the five-by-five golden rotation step `R₁₂(Δθ)·R₃₅(φΔθ)` for both `10⁴` and `10⁵` steps with `Δθ = 10⁻³` radians, measures `‖MᵀM-I‖_F = sqrt(Σᵢⱼ(MᵀM-I)ᵢⱼ²)`, and passes at no more than `10⁻⁵` in hand-written f64 with no re-orthonormalization and in f32 with modified Gram–Schmidt on all columns every 64 steps.
+Navigation drift composes the five-by-five VIEW step `R₁₂(Δθ)·R₃₅(φΔθ)` for `10⁴` and `10⁵` steps with `Δθ=10⁻³` radians, measures `‖MᵀM−I‖_F=sqrt(Σᵢⱼ(MᵀM−I)ᵢⱼ²)`, and passes at `≤10⁻⁵` in hand-written f64 without re-orthonormalization and in f32 with modified Gram–Schmidt every 64 steps.
 
-Warp accuracy constructs `H` and its explicit inverse for both presets, PLANE- and VIEW-angle fixtures `(0,0)`, `(0.3,-0.2)`, and `(1.1,0.7)`, nonzero finite centre deltas, and `zoom_log2 ∈ {0,10,20,40,80,100}`; it requires `max|H⁻¹H-I| ≤ 10⁻⁹` in hand-written f64 and separately proves the degenerate determinant refusal.
+Warp accuracy constructs `H` and its explicit inverse for both presets, hybrid PLANE angles, nonzero centre displacements and reference shifts, both view modes' compatible chart cases, and `zoom_log2∈{0,10,20,40,80,100}`; it requires `max|H⁻¹H−I|≤10⁻⁹` in hand-written f64 and separately pins every typed incompatibility and determinant refusal.
 
-If and only if the f64 case of either CPU-math oracle fails, implementation may add `faer`, rerun the identical corpus and metric, and record the failing hand-written value plus the faer value; an f32 failure alone does not admit faer.
+If and only if an f64 case of either matrix oracle fails, implementation may add `faer`, rerun the identical corpus and metric, and record both values; the prior 3–13× tiny-matrix evidence otherwise keeps faer out.
 
-The native split tests cover signed zero, exact f32 values, halfway cases, largest finite values whose `f32` high remains finite, reconstruction error, coordinate order, and typed rejection when a finite f64 cannot produce finite split components.
+Native scale tests cover integral and fractional zoom, widths 1, 64, 1,920, 2,048, and 4,096, the rounded-mantissa carry, exponents through the 300-digit policy range, exact pixel centres, and reconstruction against high-precision `p` without ever requiring a tiny `f32` scalar.
 
-The native precision tests pin every formula and rounding boundary, distinguish floor, working, and delivered precision, verify checked u32 conversion, exercise the `D+16` convergence loop, and expose the f32 scale-underflow wall instead of calling it arbitrary.
+The scaled f64 perturbation oracle compares direct f64 iteration with the scaled recurrence at zoom values `{14,40,80,100,256,512,900}`, forces upward and downward 64-bit renormalizations, pins inclusive thresholds, adjusts `δc′` with every exponent change, and proves the represented actual delta is invariant across each rescale.
 
-The native orbit tests compare Astro-float results with the same recurrence at `D+16`, pin record zero and length, exact hi/lo channel order, escape truncation, canonical centre-encoding round trips, malformed encodings, generation independence, and the 300-digit policy refusal.
+Native rebase tests cover zero, repeated, and nonzero-`Z₀` rebases; the nonzero fixture must pass direct-orbit equality after `δ′←(z−Z₀)/2^e`, index reset, and one ordinary advance, so the reviewed correction is a pass criterion rather than a known failure.
 
-The native perturbation tests use f64 deltas against direct f64 orbit iteration, exercise Mandelbrot, Julia, mixed four-axis fixtures, zero and repeated rebases, reference exhaustion, counter limits, and nonzero `Z₀`; the last fixture is expected to fail under the current shared rebase assignment and blocks implementation until joint review resolves it.
+Native split tests cover signed zero, exact and halfway values, finite range edges, direct big-to-f32 residual rounding, reconstruction error, coordinate order, and typed refusal when either the f64 mirror or split component would be non-finite.
 
-Shallow-kernel conformance requires escape classification and integer escape index exactly equal to `escape_f32` at every sampled pixel and smooth value within `10⁻⁴`; GPU readback and image evidence `requires visible replay`.
+Native precision tests pin every rounding boundary, distinguish floor, working, requested, and delivered precision, exercise checked conversion and the `D+16` loop, and prove exhaustion reports the 300-digit policy rather than silently lowering a request.
 
-Perturbation-kernel conformance uses the CPU f64-delta oracle, requires exact classification and integer escape index on a deterministic corpus whose squared-radius distance from the bailout exceeds the propagated f32 error envelope, and requires smooth value within `2×10⁻³`; samples inside that uncertainty envelope are explicit boundary fixtures, not silently removed from counts, and GPU evidence `requires visible replay`.
+Native orbit tests compare Astro-float with the same recurrence at `D+16`, pin record zero, escape truncation and `0..max_iter−1`, hi/lo channel order, codec round trips, malformed codec refusal, generation independence, and the request-pool `CentreEncodingWall`; app's minimum requestable cap of 64 must fit every canonical centre through 300 digits.
 
-The perturbation error envelope starts at the actual f32 rounding error of `δz₀`, propagates `eₙ₊₁ ≤ 2(|Zᵣ|+|δₙ|)eₙ+eₙ²+ρₙ` with `ρₙ` the measured one-ulp bound for the contracted f32 operation sequence, and converts it to squared-radius uncertainty `2|zₙ|eₙ+eₙ²`; this makes the classification tolerance arithmetic rather than a guessed pixel exclusion.
+Shallow GPU conformance requires escape classification and integer escape index exactly equal to `escape_f32` at sampled pixels and smooth value within `10⁻⁴`; its readback and image evidence `requires visible replay`.
 
-The latest-wins native state tests interleave HOT drain, MAIN arrival, stale generations, and same-thread responses, require monotonic shared u64 epochs and infallible drains, and prove no stale orbit handle can replace the newest accepted generation.
+Perturbation GPU conformance uses the scaled f64 oracle, requires exact classification and integer index outside the propagated uncertainty envelope and smooth error at most `2×10⁻³`, retains explicit boundary fixtures inside the envelope, and `requires visible replay`.
 
-Worker buffer tests pin all header constants and offsets, canonical centre bytes, both kind-specific meanings of `length`, four independent transfer buffers, credit echo, resize-only-on-`max_iter` change, u32 duration overflow, and byte-identical same-thread lowering; browser ownership-transfer behavior `requires visible replay`.
+The propagated envelope begins at actual rounded `δz₀′`, applies the contracted f32 operation sequence including reference reconstruction, `ldexp`, rebases, and exact power-of-two rescaling, and converts complex error `eₙ` to squared-radius uncertainty `2|zₙ|eₙ+eₙ²`; classification tolerance is arithmetic rather than a guessed pixel exclusion.
 
-The Barza selection probe used one warmed release run of the exact complex recurrence at bounded fixture `z₀=0`, `c=-0.5+0.5i`: Astro-float 0.9.6 measured 7.530 ms and 73.125 ms at 100 digits for `10⁴` and `10⁵` iterations and 19.516 ms and 229.887 ms at 300 digits, while Dashu 0.6.0 measured 19.852 ms, 204.679 ms, 26.034 ms, and 275.267 ms respectively; these are selection evidence on one machine, not browser predictions.
+Native state tests interleave HOT and MAIN drains, accepted and stale generations, centre displacement, reference shifts, and same-thread responses; they require the 40/120/168-byte layouts, monotonic shared epochs, infallible drains, re-expressed retained poses, and no stale orbit publication.
 
-The same Barza probe built both candidates for `wasm32-unknown-unknown` after Astro-float disabled default features; the initial default-feature build failed because its optional random dependency required a JavaScript getrandom feature, so the pinned dependency is `astro-float = { version = "=0.9.6", default-features = false }`.
+Native wire tests pin all header, kind, trailer, request, descriptor, response, capacity, credit, and version bytes; browser ownership transfer, worker timing, fetch caching, and duplicated instance memory `requires visible replay`.
+
+The Barza selection probe used one warmed release run of the bounded fixture `z₀=0`, `c=−0.5+0.5i`: Astro-float 0.9.6 measured 7.530 ms and 73.125 ms at 100 digits for `10⁴` and `10⁵` iterations and 19.516 ms and 229.887 ms at 300 digits, while Dashu 0.6.0 measured 19.852 ms, 204.679 ms, 26.034 ms, and 275.267 ms respectively.
+
+Both candidates built for `wasm32-unknown-unknown` after Astro-float disabled default features; the initial default-feature build failed because its optional random dependency required a JavaScript getrandom feature, so the implementation pin is `astro-float = { version="=0.9.6", default-features=false }`.
 
 ## 6. Bignum decision and risks
 
-|Candidate|wasm32 build|Slice-shaped Barza speed|License and maintenance|Decision|
+|Candidate|wasm32 build|Barza slice-shaped speed|License and maintenance|Decision|
 |---------|------------|------------------------|-----------------------|--------|
-|[Astro-float 0.9.6](https://docs.rs/astro-float/0.9.6/astro_float/)|PASS with `default-features = false`|Faster at all four final points|MIT; current published release and [active upstream repository](https://github.com/stencillogic/astro-float)|Selected|
-|[Dashu-float 0.6.0](https://docs.rs/dashu-float/0.6.0/dashu_float/)|PASS|Slower at all four final points|MIT OR Apache-2.0; current published release and [active upstream repository](https://github.com/cmpute/dashu)|Measured fallback|
-|Hand-rolled fixed point|Expected portable but not built|Not measured|Local maintenance and proof burden|Rejected for this prototype|
+|Astro-float 0.9.6|PASS with default features off|Fastest at all four final points|MIT; current published release and active upstream|Selected|
+|Dashu-float 0.6.0|PASS|Slower at all four final points|MIT OR Apache-2.0; current published release and active upstream|Measured fallback|
+|Hand-rolled fixed point|Expected portable, not built|Not measured|Local proof and maintenance burden|Rejected for v1|
 
-Astro-float 0.9.6 is selected: it is pure Rust, MIT-licensed, actively maintained, exposes explicit bit precision and ties-to-even rounding, builds for the required wasm target with default features disabled, and won all four final `10⁴`/`10⁵` points in the slice-shaped Barza probe.
+Astro-float is selected because it is pure Rust, exposes explicit precision and ties-to-even rounding, builds for wasm without default features, and won all four bounded final probe points; the measurements select a library and do not predict browser throughput.
 
-Dashu 0.6.0 is also pure Rust, `no_std`, maintained, and MIT-or-Apache-2.0; its operator syntax is simpler and it won the discarded earlier trivial/converging fixture plus no point in the final 100-digit pair and one pre-final 300-digit short point, but its final long-orbit walls were 2.80 times and 1.20 times Astro-float at 100 and 300 digits.
-
-A hand-rolled fixed-point scalar would build on wasm and might remove general-float overhead, but every square requires a specified rescale and rounding, exponent range becomes a local design burden, and there is no independent maintenance or correctness corpus; it is rejected unless the selected crate later fails its bounded orbit budget.
+A hand-rolled fixed-point scalar would make scaling explicit but would also make every product's rescale, rounding, exponent range, and correctness corpus local obligations, so it is not justified while a measured pure-Rust library satisfies the build and speed criteria.
 
 |Risk|Oracle that retires it|
 |----|----------------------|
-|The shared PLANE rotation cannot create hybrid z/c slices.|Joint review either adds a cross-subspace rotation and updates all five docs, or an algebra test proves a replacement spans both z and c axes; implementation does not begin on the false claim.|
-|The mandated rebase assignment is wrong for nonzero `Z₀`.|The direct-orbit versus perturbation test forces a rebase with nonzero `Z₀`; joint review must select an algebraically equal restart before implementation.|
-|`f32 pixel_scale` underflows after a width-dependent finite depth.|The precision test reports the exact first zero scale for widths 1, 64, 1,920, and 4,096; joint review must pin a mantissa/exponent uniform to retire arbitrary-zoom risk.|
-|Two-f32 reference records carry far fewer bits than a 100–300 digit worker orbit.|The D-versus-D+16 orbit test plus direct deep-pixel classification corpus must show record rounding is adequate, otherwise the orbit record grows or uses scaled residuals before timing.|
-|The single native probe does not predict wasm worker throughput.|A worker benchmark at all four selected points, labelled `requires visible replay`, reports compute_us, credit_us, and allocation events before performance claims.|
-|The `D_floor+log10(max_iter)` rule cannot bound chaotic amplification by itself.|The mandatory D-versus-D+16 convergence loop either accepts with measured agreement or raises precision to the 300-digit policy/refuses.|
-|The `2×10⁻³` perturbation smooth tolerance may be too tight or too loose.|The propagated-error corpus records the worst eligible smooth error; any reviewed change names that observation and does not relax classification.|
-|Least-squares warp loses information when planes diverge.|The determinant/refusal test and visible scene-versus-warp error overlay bound the allowed pose delta; visible error evidence `requires visible replay`.|
-|Opaque centre bytes in the owner may not be sufficient for deep recentering workflow.|Worker/owner joint review traces initial centre, relative navigation, replacement encoding, and latest-wins transfer byte for byte; a protocol test must complete two deep recenterings without owner-side bignum arithmetic.|
-|Astro-float’s default-feature set is incompatible with bare wasm.|The manifest pins default features off and the wasm check remains a gate.|
-|Generation and epoch wrap claims could mask unchecked arithmetic.|Native tests start one below each maximum and require a typed session refusal rather than wrap.|
-|The smooth formula’s two base-two logarithms may disagree with another slice’s shader.|The shallow conformance test pins source literals and deterministic values before any timing result is eligible.|
+|Two-f32 orbit records carry much less precision than a 100–300 digit worker orbit.|The `D` versus `D+16` comparison and deep scaled-classification corpus must pass; otherwise the record grows in a reviewed interface change.|
+|The working-precision heuristic cannot bound every chaotic orbit.|The mandatory convergence loop either accepts measured agreement, raises precision, or returns `PrecisionExhausted` at the displayed policy.|
+|Scaled recurrence may lose invariance at renormalization or nonzero-reference rebase.|The f64 mirror corpus forces both exponent directions and nonzero `Z₀`, comparing every step with direct iteration.|
+|The f32 mantissa and double-single reference may move a bailout-boundary classification.|The propagated envelope identifies boundary fixtures; all samples outside it require exact class and index.|
+|A reference shift expressed in current pixels may be misapplied to an older pose.|The native pose-rebase test transforms the shift through both bases and scales, then compares reconstructed ℝ⁴ centres.|
+|A single native bignum probe does not predict wasm worker speed or memory.|A labelled visible replay reports `compute_us`, credit, wasm size, and both instance memories at all four probe points.|
+|The 300-digit precision ceiling rejects valid deeper requests.|Overlay distinguishes requested depth, working precision, and policy refusal; a later increase requires measured worker memory/time evidence.|
+|Tumbled homography cannot reconstruct internal disocclusion or escape height.|Present's 9×9×5 visible error corpus reports max and p95 pixels and labels stale regions; evidence `requires visible replay`.|
+|Generation and epoch exhaustion could become silent wrap.|Native tests begin one below each maximum and require typed session refusal.|
+|Normal rendering cannot cheaply total rebase and glitch channels.|Overlay says `unavailable`; an explicit labelled measurement readback is the sole counting oracle.|
 
 ## 7. Implementation phases and line budget
 
-Phase 0 adds the package skeleton, Astro-float pin, core errors, coordinate/record layout assertions, centre codec, wasm build check, and native bignum probe fixture, estimated at 330 Rust and test lines.
+Phase 0 adds the package skeleton, Astro-float pin, core errors, exact record and layout assertions, worker codec adapter, wasm build check, and retained native probe fixture, estimated at 360 Rust and test lines.
 
-Phase 1 adds five-dimensional rotation coefficients, presets, plane construction, both Gram–Schmidt passes, centre splitting, pixel mapping, zoom and precision plans, estimated at 380 lines.
+Phase 1 adds ℝ⁴ PLANE coefficients, presets, one-pass f32 plane construction, centre mirror and split, centre displacement/reference shift, scale mantissa/exponent, zoom and precision plans, estimated at 420 lines.
 
-Phase 2 adds the contracted `f32` escape reference, smooth count, high-precision reference orbit, D-versus-D+16 validation, record conversion, and native fixtures, estimated at 430 lines.
+Phase 2 adds the contracted `f32` escape reference, high-precision orbit builder, `D` versus `D+16` validation, record conversion, cooperative stepping, and native fixtures, estimated at 450 lines.
 
-Phase 3 adds f64 perturbation, rebasing and glitch state machines, propagated error envelopes, mixed-plane conformance fixtures, and counter limits after joint review resolves the rebase defect, estimated at 440 lines.
+Phase 3 adds the scaled f64 perturbation mirror, exponent renormalization, corrected rebasing, glitch state machine, propagated error envelope, mixed-plane corpus, and counter limits, estimated at 540 lines.
 
-Phase 4 adds pose and warp matrices, explicit inversion, navigation-drift and warp-accuracy oracles, and the conditional faer decision point, estimated at 330 lines.
+Phase 4 adds `Pose`, reference-shift re-expression, flat warp matrices and explicit inversion, navigation drift, warp accuracy, hybrid geometry oracles, and the conditional faer decision point, estimated at 390 lines.
 
-Phase 5 reconciles all shared layouts with worker, kernels, present, and app, adds compile-time layout assertions and integration fixtures without editing sibling packages, and closes documentation, estimated at 220 lines.
+Phase 5 reconciles compile-time interfaces with worker, kernels, present, and app, adds cross-package fixtures without editing sibling packages, and closes documentation, estimated at 250 lines.
 
-The implementation budget is therefore about 2,130 new Rust and test lines; Cargo metadata and generated lockfile movement are reported separately, and no phase begins until the five-document written review and refined document are complete.
+The implementation estimate is about 2,410 new Rust and test lines; Cargo metadata and generated lockfile movement are reported separately, and implementation starts only after this refined document is accepted.
 
 ## 8. Unresolved joint-review list
 
-- R1’s PLANE rotation preserves the Julia and Mandelbrot subspaces after projection and Gram–Schmidt, so it cannot deliver hybrid Julibrot planes.
-- R5’s `δ ← zₙ` rebase restart does not preserve `zₙ = Z₀+δ` when the reference starts at nonzero `Z₀`; `δ ← zₙ-Z₀` is the algebraic alternative but is not silently substituted here.
-- R6’s scalar `f32 pixel_scale` becomes zero at finite zoom and contradicts arbitrary zoom; the five docs need one mantissa/exponent replacement layout.
-- The two-f32 reference record has roughly double-single rather than 100–300 decimal-digit precision, and its adequacy for deep perturbation remains an oracle result rather than a premise.
-- The worker-held bignum plus owner-held opaque bytes needs a complete two-recentering ownership trace; the seeded absolute-centre request does not state who updates those bytes after deep relative navigation.
-- The request header’s kind-specific `length` meaning and this document’s proposed magic/kind constants need exact agreement with worker and app.
-- The 300-digit precision ceiling is a POLICY chosen for this lab, not proof that every requested reference orbit converges before it.
-- The exact allowed pose delta and visible-error bound for least-squares warp remain presentation policy and require visible replay.
-- Perturbation smooth tolerance `2×10⁻³` is reasoned from an error envelope but lacks GPU evidence until implementation.
-- Astro-float won the native slice-shaped probe, but browser worker speed, wasm size, and duplicated instance-memory cost remain unmeasured.
-- `Plane.origin_lo` now means the centre split’s low half; the other four documents must confirm that name rather than treating it as an independent affine plane origin.
-- The shared wording says each drain bumps the epoch, which makes observation mutate version state; joint review should confirm this is intentional rather than bump-on-publication semantics.
+- The two-f32 reference record remains an oracle-backed bet rather than a proof at every accepted 100–300 digit centre; failure requires a reviewed record expansion.
+- The 300-digit ceiling and 4,096 iteration cap are product policies, not mathematical completeness claims, and some accepted navigation requests will honestly refuse.
+- `reference_shift_px` is zero for the first accepted reference by convention because no old reference exists; worker and present tests must agree on that first-arrival sentinel without treating it as a measured zero shift.
+- The owner-owned refined `MainState` append and the math-defined `PresentMain` projection must be checked byte-for-byte against the worker and present refined documents before implementation.
+- The scaled GPU operation sequence, especially exponent-aware products near subnormal range, still needs browser conformance evidence against the f64 mirror.
+- Astro-float won the native probe, but browser worker throughput, wasm size, and duplicated instance-memory cost remain unmeasured.
+- The exact visible acceptance envelope for tumbled warp remains present policy and cannot be retired by math's inverse-times-forward oracle alone.
+- Aggregate rebase and glitch totals remain unavailable during normal rendering; whether explicit measurement mode is worth its readback cost is an app decision.
