@@ -10,9 +10,10 @@ use web_sys::{DedicatedWorkerGlobalScope, MessageEvent, WorkerGlobalScope};
 
 use crate::wire::{BUFFER_OVERHEAD_BYTES, WireBuffer};
 use crate::{
-    Admission, ChannelError, ErrorCode, HEADER_BYTES, JULIBROT_ABI_VERSION, MessageHeader,
-    MessageKind, MonotonicClock, ORBIT_RECORD_BYTES, OrbitRequest, OrbitTaskPoll,
-    POOL_TRAILER_BYTES, Pool, ProducerShaper, ReferenceOrbitRecord, TRAILER_MAGIC,
+    Admission, ChannelError, CreditAccount, CreditCharge, ErrorCode, HEADER_BYTES,
+    JULIBROT_ABI_VERSION, MessageHeader, MessageKind, MonotonicClock, ORBIT_RECORD_BYTES,
+    OrbitDisposition, OrbitRequest, OrbitTaskPoll, POOL_TRAILER_BYTES, Pool, ProducerShaper,
+    ReferenceOrbitRecord, TRAILER_MAGIC,
 };
 
 thread_local! {
@@ -351,6 +352,168 @@ pub fn allocate_transfer_buffer(
     TransferBuffer::allocate(pool, slot, max_iter)
         .map(TransferBuffer::into_array)
         .map_err(channel_js)
+}
+
+/// Writes one canonical request directly into a request-pool standalone buffer.
+///
+/// This function creates only a JavaScript view over the supplied allocation and does not copy the
+/// buffer or allocate another transport buffer.
+///
+/// # Errors
+///
+/// Returns a typed trailer, pool, canonical-centre, or capacity refusal.
+pub fn encode_transfer_request(
+    array: &ArrayBuffer,
+    request: &OrbitRequest,
+) -> Result<(), ChannelError> {
+    let mut buffer = TransferBuffer::from_array(array.clone())?;
+    if buffer.pool()? != Pool::Request {
+        return Err(ChannelError::new(ErrorCode::BadKind, Pool::Orbit as u32, 0, 0));
+    }
+    let requested = request.centre().request_bytes()?;
+    let available = usize::try_from(buffer.bytes.length())
+        .unwrap_or(0)
+        .saturating_sub(POOL_TRAILER_BYTES);
+    if requested > available {
+        return Err(ChannelError::new(
+            ErrorCode::CentreEncodingWall,
+            u32::try_from(request.centre().limbs.len()).unwrap_or(u32::MAX),
+            u32::try_from(requested).unwrap_or(u32::MAX),
+            u32::try_from(available).unwrap_or(u32::MAX),
+        ));
+    }
+    let mut header = MessageHeader::new(MessageKind::OrbitRequest, request.generation());
+    header.length = request.max_iter();
+    header.precision_bits = request.precision_bits();
+    buffer.write_header(header)?;
+    write_words_at(
+        &buffer.bytes,
+        u32::try_from(HEADER_BYTES).unwrap_or(32),
+        &[
+            request.depth_digits(),
+            request.reason().bits(),
+            request.centre().revision,
+            u32::try_from(request.centre().limbs.len())
+                .map_err(|_| ChannelError::new(ErrorCode::BadLength, 0, u32::MAX, 0))?,
+        ],
+    );
+    for (index, descriptor) in request.centre().coordinates.iter().enumerate() {
+        let offset = 48 + u32::try_from(index).unwrap_or(0) * 16;
+        write_words_at(
+            &buffer.bytes,
+            offset,
+            &[
+                descriptor.sign,
+                descriptor.exponent_twos_complement,
+                descriptor.limb_start,
+                descriptor.limb_count,
+            ],
+        );
+    }
+    write_words_at(&buffer.bytes, 112, &request.centre().limbs);
+    Ok(())
+}
+
+/// Reads and validates one standalone transfer header and immutable trailer.
+///
+/// # Errors
+///
+/// Returns the stable wire refusal for a detached, short, corrupt, or version-skewed buffer.
+pub fn read_transfer_header(array: &ArrayBuffer) -> Result<MessageHeader, ChannelError> {
+    TransferBuffer::from_array(array.clone())?.header()
+}
+
+/// Returns a zero-copy JavaScript view over initialized orbit record bytes.
+///
+/// A cancelled response returns an empty view; all other non-response kinds are refused.
+///
+/// # Errors
+///
+/// Returns a typed pool, kind, count, or capacity refusal.
+pub fn transfer_record_bytes(array: &ArrayBuffer) -> Result<Uint8Array, ChannelError> {
+    let buffer = TransferBuffer::from_array(array.clone())?;
+    if buffer.pool()? != Pool::Orbit {
+        return Err(ChannelError::new(ErrorCode::BadKind, Pool::Request as u32, 0, 0));
+    }
+    let header = buffer.header()?;
+    let kind = header.validate()?;
+    if kind == MessageKind::OrbitCancelled {
+        return Ok(buffer.bytes.subarray(
+            u32::try_from(HEADER_BYTES).unwrap_or(32),
+            u32::try_from(HEADER_BYTES).unwrap_or(32),
+        ));
+    }
+    if kind != MessageKind::OrbitResponse || header.length == 0 {
+        return Err(ChannelError::new(ErrorCode::BadKind, header.kind, 0, 0));
+    }
+    let end = u32::try_from(HEADER_BYTES)
+        .unwrap_or(32)
+        .checked_add(
+            header
+                .length
+                .checked_mul(u32::try_from(ORBIT_RECORD_BYTES).unwrap_or(16))
+                .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, header.length, 0, 0))?,
+        )
+        .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, header.length, 0, 0))?;
+    let available = buffer.bytes.length() - u32::try_from(POOL_TRAILER_BYTES).unwrap_or(16);
+    if end > available {
+        return Err(ChannelError::new(ErrorCode::BadLength, header.length, end, available));
+    }
+    Ok(buffer
+        .bytes
+        .subarray(u32::try_from(HEADER_BYTES).unwrap_or(32), end))
+}
+
+/// Charges an orbit or cancellation and rewrites it as a returned CREDIT message in place.
+///
+/// # Errors
+///
+/// Returns a typed wire refusal or `TimingOverflow` for a regressing owner clock.
+pub fn write_transfer_credit(
+    array: &ArrayBuffer,
+    disposition: OrbitDisposition,
+    account: &mut CreditAccount,
+    owner_now_us: u64,
+) -> Result<CreditCharge, ChannelError> {
+    let mut buffer = TransferBuffer::from_array(array.clone())?;
+    if buffer.pool()? != Pool::Orbit {
+        return Err(ChannelError::new(ErrorCode::BadKind, Pool::Request as u32, 0, 0));
+    }
+    let old = buffer.header()?;
+    let old_kind = old.validate()?;
+    if !matches!(
+        old_kind,
+        MessageKind::OrbitResponse | MessageKind::OrbitCancelled | MessageKind::ChannelError
+    ) {
+        return Err(ChannelError::new(ErrorCode::BadKind, old.kind, 0, 0));
+    }
+    let charge = account.charge(owner_now_us, old.compute_us)?;
+    let kind = match disposition {
+        OrbitDisposition::Applied => MessageKind::CreditApplied,
+        OrbitDisposition::Stale => MessageKind::CreditStale,
+    };
+    let mut header = MessageHeader::new(kind, old.generation);
+    header.precision_bits = old.precision_bits;
+    header.compute_us = old.compute_us;
+    header.credit_us = charge.credit_us;
+    buffer.write_header(header)?;
+    Ok(charge)
+}
+
+/// Rewrites one owned request buffer as a shutdown request without allocation.
+///
+/// # Errors
+///
+/// Returns a typed trailer or wrong-pool refusal.
+pub fn write_transfer_shutdown(
+    array: &ArrayBuffer,
+    generation: u32,
+) -> Result<(), ChannelError> {
+    let mut buffer = TransferBuffer::from_array(array.clone())?;
+    if buffer.pool()? != Pool::Request {
+        return Err(ChannelError::new(ErrorCode::BadKind, Pool::Orbit as u32, 0, 0));
+    }
+    buffer.write_empty(MessageKind::Shutdown, generation, 0, 0)
 }
 
 /// Installs the transferable producer endpoint in a dedicated worker instance.

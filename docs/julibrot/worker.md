@@ -303,6 +303,8 @@ The Web Worker lowering backs endpoints with the four transferable `ArrayBuffer`
 
 `JULIBROT_PHASE_IMPLEMENTED = 4`; on wasm32, `allocate_transfer_buffer(pool:u32,slot:u32,max_iter:u32)->Result<ArrayBuffer,JsValue>` creates the exact trailer-bearing standalone buffers and `worker_main(expected_abi:u32)->Result<u32,JsValue>` installs the heap panic hook, refuses ABI skew or a non-worker global, receives only transferred buffers, cooperatively runs the latest request, and acknowledges shutdown only after both orbit slots return.
 
+The wasm main-side bridge is `encode_transfer_request(&ArrayBuffer,&OrbitRequest)->Result<(),ChannelError>`, `read_transfer_header(&ArrayBuffer)->Result<MessageHeader,ChannelError>`, `transfer_record_bytes(&ArrayBuffer)->Result<Uint8Array,ChannelError>`, `write_transfer_credit(&ArrayBuffer,OrbitDisposition,&mut CreditAccount,owner_now_us:u64)->Result<CreditCharge,ChannelError>`, and `write_transfer_shutdown(&ArrayBuffer,generation:u32)->Result<(),ChannelError>`; each validates the immutable trailer and mutates or views the same standalone allocation, `transfer_record_bytes` is a zero-copy initialized-range view, and none creates a replacement transport buffer.
+
 `CreditAccount::charge(owner_now_us,compute_us) -> Result<CreditCharge,ChannelError>` implements the owner formula exactly; `ProducerShaper::observe_return(producer_now_us,returned_credit_us,compute_us)` reconciles a CREDIT header, `admit(producer_now_us)` returns `Ready { credit_us, warm_up }`, `Delay { wait_us }`, or `TimingUnavailable`, and `reset_for_resize` creates exactly one new warm-up epoch.
 
 ### 3.8 Facts supplied to app

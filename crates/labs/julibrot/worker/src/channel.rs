@@ -916,6 +916,42 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn logical_trace_is_mode_equivalent_except_for_mode_fact() {
+        fn trace(mode: WorkerMode) -> ((u32, u32, u32, bool), crate::WorkerFacts) {
+            let (owner, producer) =
+                WorkerChannel::new(WorkerConfig { max_iter: 64 }, mode).unwrap();
+            assert!(matches!(
+                producer.admit(100).unwrap(),
+                Admission::Ready { warm_up: true, .. }
+            ));
+            assert_eq!(owner.submit(request(11, 12)), SubmitOutcome::Transferred);
+            let lease = producer.next_request().unwrap().unwrap();
+            producer
+                .complete(lease, &[zero_record()], 96, 1_000, 250_000)
+                .unwrap();
+            let mut response = owner.next_arrival().unwrap();
+            let observed = (
+                response.generation(),
+                response.length(),
+                response.precision_bits(),
+                response.cancelled(),
+            );
+            response
+                .records
+                .return_credit(OrbitDisposition::Applied, 200)
+                .unwrap();
+            (observed, owner.facts())
+        }
+
+        let (same_observed, mut same_facts) = trace(WorkerMode::SameThread);
+        let (web_observed, mut web_facts) = trace(WorkerMode::WebWorker);
+        assert_eq!(same_observed, web_observed);
+        same_facts.mode = 0;
+        web_facts.mode = 0;
+        assert_eq!(same_facts, web_facts);
+    }
+
     const fn zero_record() -> ReferenceOrbitRecord {
         ReferenceOrbitRecord {
             re_hi: 0.0,
