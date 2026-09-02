@@ -70,8 +70,7 @@ pub fn lattice_copy_count(axes: [u32; 5]) -> u64 {
     if axes.contains(&0) {
         0
     } else {
-        axes
-            .into_iter()
+        axes.into_iter()
             .map(u64::from)
             .fold(1_u64, u64::saturating_mul)
     }
@@ -545,18 +544,8 @@ mod tests {
     fn mixed_radix_ladder_derives_0_3000_9000_27000_through_first_past_45_fifth() {
         let steps = lattice_steps();
         let expected = [
-            0_u64,
-            3_000,
-            9_000,
-            27_000,
-            81_000,
-            243_000,
-            729_000,
-            1_215_000,
-            2_025_000,
-            3_375_000,
-            5_625_000,
-            9_375_000,
+            0_u64, 3_000, 9_000, 27_000, 81_000, 243_000, 729_000, 1_215_000, 2_025_000, 3_375_000,
+            5_625_000, 9_375_000,
         ];
         let actual: Vec<_> = steps
             .iter()
@@ -573,9 +562,15 @@ mod tests {
         assert_eq!(lattice_coordinate(242, [3; 5]), Some([1; 5]));
         assert_eq!(lattice_coordinate(243, [3; 5]), None);
         assert_eq!(lattice_coordinate(0, [0; 5]), None);
-        assert_eq!(lattice_coordinate(0, [3, 1, 1, 1, 1]), Some([-1, 0, 0, 0, 0]));
+        assert_eq!(
+            lattice_coordinate(0, [3, 1, 1, 1, 1]),
+            Some([-1, 0, 0, 0, 0])
+        );
         assert_eq!(lattice_coordinate(1, [3, 1, 1, 1, 1]), Some([0; 5]));
-        assert_eq!(lattice_coordinate(2, [3, 1, 1, 1, 1]), Some([1, 0, 0, 0, 0]));
+        assert_eq!(
+            lattice_coordinate(2, [3, 1, 1, 1, 1]),
+            Some([1, 0, 0, 0, 0])
+        );
         assert_eq!(lattice_coordinate(4, [3, 3, 1, 1, 1]), Some([0; 5]));
     }
 
