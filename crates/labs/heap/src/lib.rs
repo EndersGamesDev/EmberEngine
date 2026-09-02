@@ -12,6 +12,8 @@ mod spike;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm;
+#[cfg(target_arch = "wasm32")]
+mod lattice_gpu;
 
 pub use dialect::{
     DialectError, DialectLimits, DispatchError, DispatchPlan, ForbiddenConstruct, KernelDesc,
@@ -32,3 +34,8 @@ pub use span::{
 };
 #[cfg(target_arch = "wasm32")]
 pub use spike::{cancel_heap_spike, run_heap_spike_json};
+#[cfg(target_arch = "wasm32")]
+pub use lattice_gpu::{
+    cancel_heap_lattice, measure_heap_lattice_batch_json, render_heap_lattice_frame_json,
+    select_heap_lattice_json, start_heap_lattice,
+};

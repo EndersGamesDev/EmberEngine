@@ -44,8 +44,8 @@ fn heap_load(binding_slot: u32, index: u32) -> vec4<f32> {
 struct VertexOut { @builtin(position) position: vec4<f32>, @location(0) hue: f32, }
 
 @vertex fn mode_c_vertex(@location(0) local: vec3<f32>, @builtin(instance_index) instance: u32) -> VertexOut {
-    let midpoint_hue = heap_load(0u, instance);
-    let orientation_length = heap_load(1u, instance);
+    let midpoint_hue = heap_load(3u, instance);
+    let orientation_length = heap_load(4u, instance);
     let axis = orientation_length.xyz;
     let reference = select(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), abs(axis.y) > 0.9);
     let side = normalize(cross(reference, axis));

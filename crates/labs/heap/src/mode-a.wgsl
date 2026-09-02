@@ -61,8 +61,8 @@ fn fifth_digit(copy_index: u32) -> i32 {
 struct Projected { point: vec3<f32>, fifth: f32, valid: bool, }
 
 fn endpoint(index: u32, digits: vec4<i32>, digit_five: i32) -> Projected {
-    var first = heap_load(1u, index);
-    var fifth = heap_load(2u, index).x;
+    var first = heap_load(3u, index);
+    var fifth = heap_load(4u, index).x;
     let weights = vec4<f32>(digits) * frame.projection_spacing.z;
     for (var axis = 0u; axis < 4u; axis++) {
         first += weights[axis] * frame.basis_four[axis];
@@ -88,7 +88,7 @@ struct VertexOut { @builtin(position) position: vec4<f32>, @location(0) hue: f32
 @vertex fn mode_a_vertex(@location(0) local: vec3<f32>, @builtin(instance_index) instance: u32) -> VertexOut {
     let edge_index = instance % 3000u;
     let copy_index = instance / 3000u;
-    let edge = heap_load(0u, edge_index);
+    let edge = heap_load(2u, edge_index);
     let digits = centered_digits(copy_index);
     let digit_five = fifth_digit(copy_index);
     let first = endpoint(u32(edge.x), digits, digit_five);
