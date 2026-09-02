@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>GPU resource heap lab</title>
+</head>
+<body>
+  <main id="app">GPU resource heap lab skeleton</main>
+  <script type="module">
+    import init from "./pkg/ember_lab_heap.js?v=1";
+    await init({ module_or_path: new URL("./pkg/ember_lab_heap_bg.wasm?v=1", import.meta.url) });
+  </script>
+</body>
+</html>
