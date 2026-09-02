@@ -427,10 +427,8 @@ mod browser {
             let events = self.loop_state.refresh(&mut self.presenter, now_ms);
             let presented = self.handle_events(runtime, events)?;
             if requests.frame {
-                self.loop_state.accept_request(
-                    self.main.generation_applied,
-                    self.current_orbit.is_some(),
-                );
+                self.loop_state
+                    .accept_request(self.main.generation_applied, self.current_orbit.is_some());
                 requests.frame = false;
             }
             if let Some(error) = self.owner_endpoint.take_error() {
@@ -1258,7 +1256,10 @@ mod tests {
         let mut presenter = FakePresenter::default();
         let mut clock = FakeClock::default();
         frame_loop.accept_request(7, true);
-        assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), Some(1));
+        assert_eq!(
+            drive_refresh(&mut frame_loop, &mut presenter, clock),
+            Some(1)
+        );
 
         for _ in 0..3 {
             clock.advance(4.0);
@@ -1270,7 +1271,10 @@ mod tests {
         presenter.fire_completed_callback();
         assert_eq!(presenter.submissions, [RefinementLevel::Preview]);
         clock.advance(4.0);
-        assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), Some(2));
+        assert_eq!(
+            drive_refresh(&mut frame_loop, &mut presenter, clock),
+            Some(2)
+        );
         assert_eq!(presenter.fence_observations, 4);
         assert_eq!(
             presenter.submissions,
@@ -1284,7 +1288,10 @@ mod tests {
         let mut presenter = FakePresenter::default();
         let mut clock = FakeClock::default();
         frame_loop.accept_request(11, true);
-        assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), Some(1));
+        assert_eq!(
+            drive_refresh(&mut frame_loop, &mut presenter, clock),
+            Some(1)
+        );
 
         presenter.fire_deadline();
         clock.advance(30_000.0);
@@ -1293,7 +1300,10 @@ mod tests {
         assert_eq!(frame_loop.due(), Some(RefinementLevel::Preview));
 
         clock.advance(1.0);
-        assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), Some(2));
+        assert_eq!(
+            drive_refresh(&mut frame_loop, &mut presenter, clock),
+            Some(2)
+        );
         assert_eq!(
             presenter.submissions,
             [RefinementLevel::Preview, RefinementLevel::Preview]
@@ -1314,12 +1324,18 @@ mod tests {
         let mut presenter = FakePresenter::default();
         let mut clock = FakeClock::default();
         frame_loop.accept_request(13, true);
-        assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), Some(1));
+        assert_eq!(
+            drive_refresh(&mut frame_loop, &mut presenter, clock),
+            Some(1)
+        );
 
         for expected in [Some(2), Some(3), None] {
             presenter.fire_completed_callback();
             clock.advance(1.0);
-            assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), expected);
+            assert_eq!(
+                drive_refresh(&mut frame_loop, &mut presenter, clock),
+                expected
+            );
         }
         frame_loop.warp_submitted();
         assert!(!frame_loop.needs_refresh(false, false, false));
@@ -1329,7 +1345,13 @@ mod tests {
         assert!(frame_loop.needs_refresh(false, false, false));
         assert!(frame_loop.warp_requested(FramePolicy::SingleFrameOnDemand));
         clock.advance(1_000.0);
-        assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), Some(4));
-        assert_eq!(presenter.submissions.last(), Some(&RefinementLevel::Preview));
+        assert_eq!(
+            drive_refresh(&mut frame_loop, &mut presenter, clock),
+            Some(4)
+        );
+        assert_eq!(
+            presenter.submissions.last(),
+            Some(&RefinementLevel::Preview)
+        );
     }
 }
