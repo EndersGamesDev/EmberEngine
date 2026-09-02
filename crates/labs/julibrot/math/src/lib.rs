@@ -11,7 +11,7 @@ mod warp;
 
 pub use big::{BigCentre, BigScalar, EncodedBigScalar, decode_big_scalar, encode_big_scalar};
 pub use drift::{navigation_drift_f32, navigation_drift_f64};
-pub use orbit::{ReferenceOrbitBuilder, escape_f32, smooth_iteration_f64};
+pub use orbit::{ReferenceOrbitBuilder, escape_f32};
 pub use perturb::{perturb_scaled_f64, perturb_scaled_f64_with_envelope};
 pub use plane::{construct_plane, construct_plane_from_spec, preset_spec};
 pub use scale::{

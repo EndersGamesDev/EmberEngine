@@ -7,6 +7,11 @@ const LOG10_2: f64 = core::f64::consts::LOG10_2;
 const LOG2_10: f64 = core::f64::consts::LOG2_10;
 const PRECISION_POLICY_DIGITS: u32 = 300;
 
+/// Rounds the authoritative centre directly to the owner's binary64 mirror.
+///
+/// # Errors
+///
+/// Returns an error if a coordinate cannot be represented as finite binary64.
 pub fn mirror_centre(centre: &BigCentre) -> Result<CentreF64, MathError> {
     let [a, b, c, d] = &centre.coords;
     let coords = [a.to_f64()?, b.to_f64()?, c.to_f64()?, d.to_f64()?];
@@ -17,14 +22,24 @@ pub fn mirror_centre(centre: &BigCentre) -> Result<CentreF64, MathError> {
     }
 }
 
+/// Produces a direct binary32 high word and a rounded residual low word.
+///
+/// # Errors
+///
+/// Returns an error if either rounded word is not finite.
 pub fn split_scalar(value: &BigScalar) -> Result<[f32; 2], MathError> {
-    let precision_bits = value.precision_bits()?;
+    let precision_bits = value.precision_bits();
     let high = value.to_f32()?;
     let exact_high = BigScalar::from_f32(high, precision_bits)?;
     let residual = value.sub(&exact_high, precision_bits)?;
     Ok([high, residual.to_f32()?])
 }
 
+/// Splits all four authoritative centre coordinates in axis order.
+///
+/// # Errors
+///
+/// Returns an error if any coordinate cannot produce two finite words.
 pub fn split_centre(centre: &BigCentre) -> Result<CentreSplit, MathError> {
     let [a, b, c, d] = &centre.coords;
     let a = split_scalar(a)?;
@@ -37,6 +52,12 @@ pub fn split_centre(centre: &BigCentre) -> Result<CentreSplit, MathError> {
     })
 }
 
+/// Decomposes pixel scale into a binary32 mantissa and checked power-of-two exponent.
+///
+/// # Errors
+///
+/// Returns an error for non-finite zoom, zero width, or exponent overflow.
+#[allow(clippy::cast_possible_truncation)]
 pub fn scaled_pixel_scale(
     zoom_log2: f64,
     grid_width: u32,
@@ -53,8 +74,8 @@ pub fn scaled_pixel_scale(
         return Err(MathError::ScaleExponentOverflow);
     }
     let mut exponent = exponent_f64 as i32;
-    let mut mantissa = 2.0_f64.powf(logarithm - exponent_f64) as f32;
-    if mantissa == 1.0 {
+    let mut mantissa = (logarithm - exponent_f64).exp2() as f32;
+    if mantissa.to_bits() == 1.0_f32.to_bits() {
         exponent = exponent
             .checked_add(1)
             .ok_or(MathError::ScaleExponentOverflow)?;
@@ -69,14 +90,24 @@ pub fn scaled_pixel_scale(
     })
 }
 
+/// Compatibility spelling for [`scaled_pixel_scale`].
+///
+/// # Errors
+///
+/// Returns the same validation errors as [`scaled_pixel_scale`].
 pub fn scale_split(zoom_log2: f64, grid_width: u32) -> Result<ScaledPixelScale, MathError> {
     scaled_pixel_scale(zoom_log2, grid_width)
 }
 
+/// Rounds the absolute pixel scale once for the shallow kernel.
+///
+/// # Errors
+///
+/// Returns an error for invalid input or a non-positive binary32 result.
+#[allow(clippy::cast_possible_truncation)]
 pub fn shallow_pixel_scale(zoom_log2: f64, grid_width: u32) -> Result<f32, MathError> {
-    let scale = scaled_pixel_scale(zoom_log2, grid_width)?;
-    let value = f64::from(scale.mantissa) * 2.0_f64.powi(scale.exponent);
-    let value = value as f32;
+    let _scale = scaled_pixel_scale(zoom_log2, grid_width)?;
+    let value = (2.0 - zoom_log2 - f64::from(grid_width).log2()).exp2() as f32;
     if value.is_finite() && value > 0.0 {
         Ok(value)
     } else {
@@ -84,6 +115,12 @@ pub fn shallow_pixel_scale(zoom_log2: f64, grid_width: u32) -> Result<f32, MathE
     }
 }
 
+/// Computes precision floor, working digits, and requested bits.
+///
+/// # Errors
+///
+/// Returns an error for invalid inputs or work beyond the 300-digit policy.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub fn precision_for(
     zoom_log2: f64,
     grid_width: u32,
@@ -119,6 +156,12 @@ pub fn precision_for(
     })
 }
 
+/// Forms a pixel-centred offset without materializing the scale exponent.
+///
+/// # Errors
+///
+/// Returns an error for zero extent or an out-of-range pixel coordinate.
+#[allow(clippy::cast_possible_truncation)]
 pub fn scaled_pixel_offset(
     plane: Plane,
     scale: ScaledPixelScale,
@@ -130,8 +173,8 @@ pub fn scaled_pixel_offset(
     if width == 0 || height == 0 || column >= width || row >= height {
         return Err(MathError::InvalidExtent);
     }
-    let x = (f64::from(column) + 0.5) - f64::from(width) * 0.5;
-    let y = (f64::from(row) + 0.5) - f64::from(height) * 0.5;
+    let x = f64::from(width).mul_add(-0.5, f64::from(column) + 0.5);
+    let y = f64::from(height).mul_add(-0.5, f64::from(row) + 0.5);
     let mantissa = f64::from(scale.mantissa);
     Ok(core::array::from_fn(|axis| {
         (mantissa
@@ -142,6 +185,11 @@ pub fn scaled_pixel_offset(
     }))
 }
 
+/// Projects a bignum centre difference into current-zoom plane pixels.
+///
+/// # Errors
+///
+/// Returns an error for precision mismatch, invalid scale, or arithmetic failure.
 pub fn centre_displacement_px(
     centre: &BigCentre,
     reference: &BigCentre,
@@ -182,6 +230,11 @@ pub fn centre_displacement_px(
     }
 }
 
+/// Projects desired centre minus accepted reference centre into current pixels.
+///
+/// # Errors
+///
+/// Returns the same errors as [`centre_displacement_px`].
 pub fn centre_from_reference_px(
     centre: &BigCentre,
     reference: &BigCentre,
@@ -192,6 +245,11 @@ pub fn centre_from_reference_px(
     centre_displacement_px(centre, reference, *plane, zoom_log2, grid_width)
 }
 
+/// Projects new accepted reference minus old accepted reference into current pixels.
+///
+/// # Errors
+///
+/// Returns the same errors as [`centre_displacement_px`].
 pub fn reference_shift_px(
     old: &BigCentre,
     new: &BigCentre,
@@ -202,6 +260,7 @@ pub fn reference_shift_px(
     centre_displacement_px(new, old, *plane, zoom_log2, grid_width)
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn saturating_f64_to_u32(value: f64) -> u32 {
     if value >= f64::from(u32::MAX) {
         u32::MAX

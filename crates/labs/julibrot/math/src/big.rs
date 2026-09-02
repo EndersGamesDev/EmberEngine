@@ -2,13 +2,18 @@ use astro_float::{BigFloat, Consts, Radix, RoundingMode, Sign};
 
 use crate::MathError;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BigScalar {
     pub(crate) value: BigFloat,
     precision_bits: u32,
 }
 
 impl BigScalar {
+    /// Creates the exact finite binary64 value at the requested precision.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-finite value, zero precision, or bignum failure.
     pub fn from_f64(value: f64, precision_bits: u32) -> Result<Self, MathError> {
         if !value.is_finite() || precision_bits == 0 {
             return Err(MathError::NonFinite);
@@ -16,6 +21,11 @@ impl BigScalar {
         Self::checked(BigFloat::from_f64(value, precision_bits as usize), precision_bits)
     }
 
+    /// Creates the exact finite binary32 value at the requested precision.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-finite value, zero precision, or bignum failure.
     pub fn from_f32(value: f32, precision_bits: u32) -> Result<Self, MathError> {
         if !value.is_finite() || precision_bits == 0 {
             return Err(MathError::NonFinite);
@@ -23,6 +33,11 @@ impl BigScalar {
         Self::checked(BigFloat::from_f32(value, precision_bits as usize), precision_bits)
     }
 
+    /// Creates zero at the requested precision.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for zero or unrepresentable precision.
     pub fn zero(precision_bits: u32) -> Result<Self, MathError> {
         if precision_bits == 0 {
             return Err(MathError::InvalidCentreEncoding);
@@ -46,10 +61,16 @@ impl BigScalar {
         self.value.is_zero()
     }
 
-    pub fn precision_bits(&self) -> Result<u32, MathError> {
-        Ok(self.precision_bits)
+    #[must_use]
+    pub const fn precision_bits(&self) -> u32 {
+        self.precision_bits
     }
 
+    /// Rounds the value directly to nearest binary64 with ties to even.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the finite bignum is outside binary64 range.
     pub fn to_f64(&self) -> Result<f64, MathError> {
         let encoded = encode_big_scalar(self)?;
         Ok(f64::from_bits(round_dyadic(
@@ -66,6 +87,11 @@ impl BigScalar {
         )?))
     }
 
+    /// Rounds the value directly to nearest binary32 with ties to even.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the finite bignum is outside binary32 range.
     pub fn to_f32(&self) -> Result<f32, MathError> {
         let encoded = encode_big_scalar(self)?;
         let bits = u32::try_from(round_dyadic(
@@ -167,13 +193,18 @@ fn rounded_astro_precision(precision_bits: u32) -> Result<u32, MathError> {
         .ok_or(MathError::CounterOverflow)
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BigCentre {
     pub coords: [BigScalar; 4],
     pub precision_bits: u32,
 }
 
 impl BigCentre {
+    /// Creates an exact four-coordinate centre from finite binary64 values.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for non-finite input, zero precision, or bignum failure.
     pub fn from_f64(coords: [f64; 4], precision_bits: u32) -> Result<Self, MathError> {
         let [a, b, c, d] = coords;
         let precision_bits = rounded_astro_precision(precision_bits)?;
@@ -313,6 +344,11 @@ fn bit_at(limbs: &[u32], bit: i64) -> Result<u32, MathError> {
     Ok((limb >> (bit % 32)) & 1)
 }
 
+/// Encodes a scalar into the worker protocol's canonical dyadic limbs.
+///
+/// # Errors
+///
+/// Returns an error if Astro-float cannot produce an exact binary expansion.
 pub fn encode_big_scalar(value: &BigScalar) -> Result<EncodedBigScalar, MathError> {
     if value.is_zero() {
         return Ok(EncodedBigScalar {
@@ -357,6 +393,11 @@ pub fn encode_big_scalar(value: &BigScalar) -> Result<EncodedBigScalar, MathErro
     })
 }
 
+/// Decodes the worker protocol's canonical dyadic limbs.
+///
+/// # Errors
+///
+/// Returns an error for a noncanonical record, invalid precision, or bignum failure.
 pub fn decode_big_scalar(
     sign: u32,
     exponent: i32,
@@ -428,7 +469,7 @@ mod tests {
                 encoded.sign,
                 encoded.exponent,
                 &encoded.limbs,
-                value.precision_bits()?,
+                value.precision_bits(),
             );
             assert!(
                 decoded_result.is_ok(),
@@ -455,5 +496,20 @@ mod tests {
             decode_big_scalar(2, 0, &[1], 64),
             Err(MathError::InvalidCentreEncoding)
         );
+    }
+
+    #[test]
+    fn zero_retains_delivered_precision_and_canonical_sign() -> Result<(), MathError> {
+        let value = BigScalar::from_f64(-0.0, 65)?;
+        assert_eq!(value.precision_bits(), 128);
+        assert_eq!(
+            encode_big_scalar(&value)?,
+            super::EncodedBigScalar {
+                sign: 0,
+                exponent: 0,
+                limbs: Vec::new(),
+            }
+        );
+        Ok(())
     }
 }

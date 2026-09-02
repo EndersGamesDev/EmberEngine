@@ -1,5 +1,6 @@
 const DELTA_THETA: f64 = 1.0e-3;
-const GOLDEN_RATIO: f64 = 1.618_033_988_749_895;
+const DELTA_THETA_F32: f32 = 1.0e-3;
+const GOLDEN_RATIO: f64 = core::f64::consts::GOLDEN_RATIO;
 const MATRIX_SIDE: usize = 5;
 
 #[must_use]
@@ -14,7 +15,7 @@ pub fn navigation_drift_f64(steps: u32) -> f64 {
 
 #[must_use]
 pub fn navigation_drift_f32(steps: u32) -> f64 {
-    let increment = rotation_f32(DELTA_THETA as f32);
+    let increment = rotation_f32(DELTA_THETA_F32);
     let mut accumulated = identity_f32();
     for step in 1..=steps {
         accumulated = multiply_f32(accumulated, increment);
@@ -43,7 +44,7 @@ fn rotation_f64(theta: f64) -> [[f64; MATRIX_SIDE]; MATRIX_SIDE] {
 fn rotation_f32(theta: f32) -> [[f32; MATRIX_SIDE]; MATRIX_SIDE] {
     let mut matrix = identity_f32();
     let (sin_1, cos_1) = theta.sin_cos();
-    let (sin_2, cos_2) = ((GOLDEN_RATIO as f32) * theta).sin_cos();
+    let (sin_2, cos_2) = (core::f32::consts::GOLDEN_RATIO * theta).sin_cos();
     matrix[0][0] = cos_1;
     matrix[0][1] = -sin_1;
     matrix[1][0] = sin_1;
@@ -100,7 +101,7 @@ fn gram_schmidt_f32(mut matrix: [[f32; MATRIX_SIDE]; MATRIX_SIDE]) -> [[f32; 5];
                 matrix[row][column].mul_add(matrix[row][previous], sum)
             });
             for row in &mut matrix {
-                row[column] -= projection * row[previous];
+                row[column] = projection.mul_add(-row[previous], row[column]);
             }
         }
         let norm = (0..MATRIX_SIDE)

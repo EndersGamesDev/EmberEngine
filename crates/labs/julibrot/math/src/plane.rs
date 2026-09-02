@@ -1,5 +1,10 @@
 use crate::{Axis4, MathError, Plane, PlaneAngles, PlanePreset, PlaneSpec};
 
+/// Resolves a named preset into its seed axes and absolute plane origin.
+///
+/// # Errors
+///
+/// Returns an error when a Julia constant is non-finite.
 pub fn preset_spec(preset: PlanePreset) -> Result<PlaneSpec, MathError> {
     let spec = match preset {
         PlanePreset::Mandelbrot => PlaneSpec {
@@ -20,10 +25,21 @@ pub fn preset_spec(preset: PlanePreset) -> Result<PlaneSpec, MathError> {
     }
 }
 
+/// Constructs a named plane with one final binary32 rounding pass.
+///
+/// # Errors
+///
+/// Returns an error for non-finite input or a failed rounding postcondition.
 pub fn construct_plane(preset: PlanePreset, angles: PlaneAngles) -> Result<Plane, MathError> {
     construct_plane_from_spec(preset_spec(preset)?, angles)
 }
 
+/// Constructs a plane from distinct seed axes and independent rotation angles.
+///
+/// # Errors
+///
+/// Returns an error for duplicate axes, non-finite input, or a failed postcondition.
+#[allow(clippy::cast_possible_truncation)]
 pub fn construct_plane_from_spec(
     spec: PlaneSpec,
     angles: PlaneAngles,

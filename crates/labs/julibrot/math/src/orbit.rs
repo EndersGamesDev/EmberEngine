@@ -7,6 +7,11 @@ use crate::{
 
 const LOG2_10: f64 = core::f64::consts::LOG2_10;
 
+/// Evaluates the four-dimensional point with the kernel's binary32 operation order.
+///
+/// # Errors
+///
+/// Returns an error for non-finite coordinates or invalid escape parameters.
 pub fn escape_f32(point: [f32; 4], params: EscapeParams) -> Result<EscapeSample, MathError> {
     validate_escape_inputs(point, params)?;
     let [mut z_re, mut z_im, c_re, c_im] = point;
@@ -46,6 +51,11 @@ pub struct ReferenceOrbitBuilder {
 }
 
 impl ReferenceOrbitBuilder {
+    /// Creates a cooperative D-versus-D+16 reference-orbit computation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid parameters, precision policy, or bignum state.
     pub fn new(
         centre: &BigCentre,
         plan: PrecisionPlan,
@@ -67,6 +77,11 @@ impl ReferenceOrbitBuilder {
         })
     }
 
+    /// Computes at most `max_entries` paired candidate records.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on arithmetic failure, policy exhaustion, or invalid state.
     pub fn step(&mut self, max_entries: NonZeroU32) -> Result<OrbitStep, MathError> {
         let mut work = 0_u32;
         while work < max_entries.get() {
@@ -237,6 +252,7 @@ fn make_attempt(
     ))
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn bits_for_digits(digits: u32) -> Result<u32, MathError> {
     let bits = (f64::from(digits) * LOG2_10).ceil();
     if !(1.0..=f64::from(u32::MAX)).contains(&bits) {
@@ -301,11 +317,13 @@ fn validate_params(params: EscapeParams) -> Result<(), MathError> {
     Ok(())
 }
 
-pub fn smooth_iteration_f64(iteration: u32, z_re: f64, z_im: f64) -> f32 {
+#[allow(clippy::cast_possible_truncation)]
+pub(crate) fn smooth_iteration_f64(iteration: u32, z_re: f64, z_im: f64) -> f32 {
     let magnitude = z_re.hypot(z_im);
     (f64::from(iteration) + 1.0 - magnitude.log2().log2()) as f32
 }
 
+#[allow(clippy::cast_precision_loss)]
 fn smooth_iteration_f32(iteration: u32, z_re: f32, z_im: f32) -> f32 {
     let magnitude = z_re.hypot(z_im);
     iteration as f32 + 1.0 - magnitude.log2().log2()
@@ -327,6 +345,23 @@ mod tests {
         assert_eq!(
             escape_f32([0.0, 0.0, 0.0, 0.0], EscapeParams::new(16))?.smooth_iter,
             -1.0
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn bailout_equality_is_not_escape_and_nonfinite_is_rejected() -> Result<(), MathError> {
+        let on_boundary = escape_f32([16.0, 0.0, 0.0, 0.0], EscapeParams::new(1))?;
+        assert!(!on_boundary.escaped);
+        assert_eq!(on_boundary.escape_index, None);
+        assert_eq!(on_boundary.smooth_iter, -1.0);
+        assert_eq!(
+            escape_f32([f32::NAN, 0.0, 0.0, 0.0], EscapeParams::new(1)),
+            Err(MathError::NonFinite)
+        );
+        assert_eq!(
+            escape_f32([0.0; 4], EscapeParams::new(0)),
+            Err(MathError::InvalidMaxIter)
         );
         Ok(())
     }

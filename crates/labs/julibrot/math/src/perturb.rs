@@ -53,11 +53,16 @@ impl Complex64 {
         self.re.hypot(self.im)
     }
 
-    fn finite(self) -> bool {
+    const fn finite(self) -> bool {
         self.re.is_finite() && self.im.is_finite()
     }
 }
 
+/// Runs the scaled binary64 perturbation mirror used by kernel conformance tests.
+///
+/// # Errors
+///
+/// Returns an error for an empty orbit, non-finite data, or invalid parameters.
 pub fn perturb_scaled_f64(
     orbit: &[ReferenceOrbitRecord],
     offset_prime: [f64; 4],
@@ -73,6 +78,11 @@ pub fn perturb_scaled_f64(
     .0)
 }
 
+/// Runs scaled perturbation and returns its propagated arithmetic envelope.
+///
+/// # Errors
+///
+/// Returns an error for an empty orbit, non-finite data, or invalid parameters.
 pub fn perturb_scaled_f64_with_envelope(
     orbit: &[ReferenceOrbitRecord],
     offset_prime: [f64; 4],
@@ -95,6 +105,9 @@ pub fn perturb_scaled_f64_with_envelope(
     let mut absolute_error = 0.0_f64;
     let mut minimum_escape_margin = f64::INFINITY;
     let mut last_value = z_zero;
+    if !renormalize(&mut delta_prime, &mut delta_c_prime, &mut exponent) {
+        return Ok(glitch_result(rebase_count, absolute_error, minimum_escape_margin));
+    }
     for iteration in 0..params.max_iter {
         let Some(record) = orbit.get(reference_index) else {
             return Ok(glitch_result(rebase_count, absolute_error, minimum_escape_margin));
@@ -138,6 +151,9 @@ pub fn perturb_scaled_f64_with_envelope(
             delta_prime = ldexp_complex(z.sub(z_zero), inverse_exponent);
             reference_index = 0;
             rebase_count += 1;
+            if !renormalize(&mut delta_prime, &mut delta_c_prime, &mut exponent) {
+                return Ok(glitch_result(rebase_count, absolute_error, minimum_escape_margin));
+            }
         }
         let reference = if should_rebase { z_zero } else { reference };
         let reference_norm = reference.hypot();
@@ -244,19 +260,24 @@ fn propagated_error(reference_norm: f64, delta_norm: f64, previous: f64) -> f64 
 }
 
 fn norm_squared_error(value: Complex64, absolute_error: f64) -> f64 {
-    (2.0 * value.hypot() + absolute_error) * absolute_error + 8.0 * f64::EPSILON
+    8.0_f64.mul_add(
+        f64::EPSILON,
+        2.0_f64.mul_add(value.hypot(), absolute_error) * absolute_error,
+    )
 }
 
 fn smooth_error_bound(magnitude: f64, absolute_error: f64) -> f64 {
     if magnitude <= 1.0 || absolute_error == 0.0 {
         0.0
     } else {
-        absolute_error / (magnitude * magnitude.ln() * core::f64::consts::LN_2)
-            + 16.0 * f64::EPSILON
+        16.0_f64.mul_add(
+            f64::EPSILON,
+            absolute_error / (magnitude * magnitude.ln() * core::f64::consts::LN_2),
+        )
     }
 }
 
-fn glitch_result(
+const fn glitch_result(
     rebase_count: u32,
     absolute_error: f64,
     minimum_escape_margin: f64,
@@ -306,7 +327,10 @@ fn validate_inputs(
 
 #[cfg(test)]
 mod tests {
-    use super::{perturb_scaled_f64, perturb_scaled_f64_with_envelope};
+    use super::{
+        Complex64, ldexp_complex, ordinary_advance, perturb_scaled_f64,
+        perturb_scaled_f64_with_envelope,
+    };
     use crate::{EscapeParams, MathError, ReferenceOrbitRecord};
 
     fn record(re: f32, im: f32) -> ReferenceOrbitRecord {
@@ -329,6 +353,11 @@ mod tests {
         assert!(!sample.glitch);
         assert!(!sample.escaped);
         assert_eq!(sample.rebase_count, 1);
+        let z_zero = Complex64 { re: 1.0, im: 0.0 };
+        let z = Complex64 { re: 0.25, im: 0.0 };
+        let rebased = ldexp_complex(z.sub(z_zero), 0);
+        let advanced = ordinary_advance(rebased, Complex64 { re: 0.0, im: 0.0 }, 0, z_zero);
+        assert_eq!(z_zero.add(advanced).re, 0.0625);
         Ok(())
     }
 
@@ -378,6 +407,55 @@ mod tests {
         )?;
         assert!(!sample.escaped);
         assert!(!sample.glitch);
+        let downward = perturb_scaled_f64(
+            &orbit,
+            [2.0_f64.powi(-80), 0.0, 0.0, 0.0],
+            80,
+            EscapeParams::new(2),
+        )?;
+        assert_eq!(downward.escaped, sample.escaped);
+        assert_eq!(downward.glitch, sample.glitch);
         Ok(())
+    }
+
+    #[test]
+    fn mixed_offsets_match_direct_f64_classification() -> Result<(), MathError> {
+        let orbit = [
+            record(0.0, 0.0),
+            record(2.0, 0.0),
+            record(6.0, 0.0),
+            record(38.0, 0.0),
+        ];
+        for offset_prime in [
+            [0.25, -0.125, 0.5, 0.0],
+            [-0.5, 0.25, -0.5, 0.125],
+            [0.0; 4],
+        ] {
+            let sample = perturb_scaled_f64(&orbit, offset_prime, -8, EscapeParams::new(16))?;
+            let direct = direct_escape(offset_prime, -8, 16);
+            assert_eq!(sample.escaped, direct.0);
+            assert_eq!(sample.escape_index, direct.1);
+            assert!(!sample.glitch);
+        }
+        Ok(())
+    }
+
+    fn direct_escape(offset_prime: [f64; 4], exponent: i32, max_iter: u32) -> (bool, Option<u32>) {
+        let factor = 2.0_f64.powi(exponent);
+        let mut z = Complex64 {
+            re: offset_prime[0] * factor,
+            im: offset_prime[1] * factor,
+        };
+        let c = Complex64 {
+            re: 2.0 + offset_prime[2] * factor,
+            im: offset_prime[3] * factor,
+        };
+        for iteration in 0..max_iter {
+            if z.re.mul_add(z.re, z.im * z.im) > f64::from(EscapeParams::BAILOUT) {
+                return (true, Some(iteration));
+            }
+            z = z.square().add(c);
+        }
+        (false, None)
     }
 }

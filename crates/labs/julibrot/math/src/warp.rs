@@ -2,10 +2,15 @@ use crate::{MathError, Plane, Pose, WarpMatrix};
 
 const MINIMUM_DETERMINANT: f64 = 1.0 / 1_099_511_627_776.0;
 
+/// Builds inverse-sampling `to`-to-`from` and its explicit affine inverse.
+///
+/// # Errors
+///
+/// Returns an error for invalid poses, non-finite coefficients, or a small determinant.
 pub fn warp_matrix(from: &Pose, to: &Pose) -> Result<WarpMatrix, MathError> {
     validate_pose(from)?;
     validate_pose(to)?;
-    let scale_ratio = 2.0_f64.powf(from.zoom_log2 - to.zoom_log2)
+    let scale_ratio = (from.zoom_log2 - to.zoom_log2).exp2()
         * f64::from(from.grid_width)
         / f64::from(to.grid_width);
     if !scale_ratio.is_finite() || scale_ratio == 0.0 {
@@ -67,6 +72,7 @@ pub fn warp_matrix(from: &Pose, to: &Pose) -> Result<WarpMatrix, MathError> {
     Ok(WarpMatrix { forward, inverse })
 }
 
+#[must_use]
 pub fn warp_identity_error(matrix: WarpMatrix) -> f64 {
     let product = multiply_3x3(matrix.inverse, matrix.forward);
     product

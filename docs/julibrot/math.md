@@ -48,7 +48,7 @@ For a `W×H` grid, pixel `(i,j)` has centred coordinates `x=i+0.5−W/2` and `y=
 
 HOT state carries finite `zoom_log2:f64`; the mathematical pixel scale is `p=4/(2^zoom_log2·W)`, displayed decimal depth is `zoom_digits=zoom_log2·log10 2`, and request label `depth_digits=ceil(max(0,zoom_log2·log10 2))`.
 
-The precision floor is `D_floor=ceil(zoom_log2·log10 2+log10 W)+8` decimal digits; the eight guard digits protect coordinate formation but cannot bound accumulated chaotic orbit roundoff, so it is explicitly a floor rather than a sufficiency claim.
+The precision floor is `D_floor=max(1,ceil(zoom_log2·log10 2+log10 W)+8)` decimal digits, where the lower clamp only gives extreme zoom-out a valid bignum precision; the eight guard digits protect coordinate formation but cannot bound accumulated chaotic orbit roundoff, so it is explicitly a floor rather than a sufficiency claim.
 
 The first working request is `D_work=D_floor+ceil(log10(max(max_iter,1)))`, requested bits are `ceil(D_work·log₂10)`, Astro-float rounds upward to its 64-bit word boundary, and the overlay reports floor digits, working digits, requested bits, and delivered bits separately.
 
@@ -146,7 +146,7 @@ The implementation signatures are `construct_plane(preset:PlanePreset,angles:Pla
 
 Orbit and perturbation signatures are `ReferenceOrbitBuilder::new(centre:&BigCentre,plan:PrecisionPlan,params:EscapeParams)->Result<ReferenceOrbitBuilder,MathError>`, `ReferenceOrbitBuilder::step(&mut self,max_entries:NonZeroU32)->Result<OrbitStep,MathError>`, `perturb_scaled_f64(orbit:&[ReferenceOrbitRecord],offset_prime:[f64;4],scale_exponent:i32,params:EscapeParams)->Result<PerturbSample,MathError>`, and `perturb_scaled_f64_with_envelope` with the same inputs returning `Result<(PerturbSample,PerturbationEnvelope),MathError>`.
 
-Navigation and warp signatures are `centre_from_reference_px(centre:&BigCentre,reference:&BigCentre,plane:&Plane,zoom_log2:f64,grid_width:u32)->Result<[f64;2],MathError>`, `reference_shift_px(old:&BigCentre,new:&BigCentre,plane:&Plane,zoom_log2:f64,grid_width:u32)->Result<[f64;2],MathError>`, and `warp_matrix(from:&Pose,to:&Pose)->Result<WarpMatrix,MathError>`.
+Navigation and warp signatures are `centre_from_reference_px(centre:&BigCentre,reference:&BigCentre,plane:&Plane,zoom_log2:f64,grid_width:u32)->Result<[f64;2],MathError>`, `reference_shift_px(old:&BigCentre,new:&BigCentre,plane:&Plane,zoom_log2:f64,grid_width:u32)->Result<[f64;2],MathError>`, `warp_matrix(from:&Pose,to:&Pose)->Result<WarpMatrix,MathError>`, `warp_identity_error(matrix:WarpMatrix)->f64`, `navigation_drift_f64(steps:u32)->f64`, and `navigation_drift_f32(steps:u32)->f64`; `WarpMatrix.forward` is inverse-sampling `to→from` and `.inverse` is `from→to`.
 
 `ReferenceOrbitBuilder` owns partial Astro-float state and emits at most `max_entries` records per call; worker chooses the chunk, checks generation, credit, and deadline, and yields, so high-precision arithmetic cannot turn latest-wins into an unbounded wait.
 
@@ -298,7 +298,7 @@ Before the first frame, app shows clear colour and honest overlay text with no d
 
 App installs the heap-provided panic hook and non-panicking uncaptured-error handler before the first device call, owns the single surface token, and presents outside the measured scene and warp regions.
 
-Hand-written `f64` remains the CPU matrix implementation; `faer` enters only if the required f64 navigation-drift or warp-accuracy oracle fails, never because its API is convenient or because an f32 case fails.
+Hand-written `f64` remains the CPU matrix implementation; both required native matrix oracles pass on Sokol in the Phase 4 package run, so the decision rule keeps `faer` absent, and it may enter later only if the identical f64 oracle fails, never because its API is convenient or because an f32 case fails.
 
 One world, one heap class, no simulation tick, no general graph, no shared-memory worker, no WebGPU path, and no second-reference repair remain deliberate prototype boundaries.
 
@@ -386,7 +386,7 @@ The implementation estimate is about 2,410 new Rust and test lines; Cargo metada
 - The two-f32 reference record remains an oracle-backed bet rather than a proof at every accepted 100–300 digit centre; failure requires a reviewed record expansion.
 - The 300-digit ceiling and 4,096 iteration cap are product policies, not mathematical completeness claims, and some accepted navigation requests will honestly refuse.
 - `reference_shift_px` is zero for the first accepted reference by convention because no old reference exists; worker and present tests must agree on that first-arrival sentinel without treating it as a measured zero shift.
-- The owner-owned refined `MainState` append and the math-defined `PresentMain` projection must be checked byte-for-byte against the worker and present refined documents before implementation.
+- Cross-slice source fixtures pin math's records, discriminants, callable signatures, cooperative orbit boundary, and displacement directions, but compilation against unfinished downstream packages remains integration evidence for the orchestrator's merged branch.
 - The scaled GPU operation sequence, especially exponent-aware products near subnormal range, still needs browser conformance evidence against the f64 mirror.
 - Astro-float won the native probe, but browser worker throughput, wasm size, and duplicated instance-memory cost remain unmeasured.
 - The exact visible acceptance envelope for tumbled warp remains present policy and cannot be retired by math's inverse-times-forward oracle alone.
