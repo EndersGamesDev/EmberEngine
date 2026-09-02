@@ -107,7 +107,7 @@ Walls meet at the corners under rotation (the outer walls of adjacent sides both
 
 Plus, drawn by kind rather than listed: every `Sandbag` obstacle is drawn as the generated sandbag mesh scaled to its box; the sky cylinder (radius 60, y −5..70, normals forced to +Y so it lights evenly, colour over-driven 1.6); a far ground plane (200 × 200, cobble tiled 40×, dimmed 0.55) closing the void beyond the wall; the arena boundary as the `city-wall` balustrade picture instead of basalt.
 
-### 4.4 Invariants (tests in `pong-core`)
+### 4.4 Invariants (tests in `arena-core`)
 
 1. Exactly eight spawns, all inside `ARENA_HALF − PLAYER_R`, none overlapping any box (circle test, `PLAYER_R`), pairwise ≥ 16 apart (the map delivers 17.0).
 2. Every box inside the arena; every `base < h`; every `Roof` has `base ≥ CONTAINER_MIN_H` (a roof you can walk under is at least container height off the floor).
@@ -124,9 +124,9 @@ Plus, drawn by kind rather than listed: every `Sandbag` obstacle is drawn as the
 
 ## 5. The client
 
-New module `crates/pong/src/props.rs` owns everything v13 draws that is not a player or a bullet:
+New module `crates/arena/src/props.rs` owns everything v13 draws that is not a player or a bullet:
 
-- `Prop` — an enum, one variant per registered mesh, in a fixed order; `prop_meshes()` returns them in that order and `ShooterGame::set_props(base)` records where they landed, following the `set_env_base`/`set_backdrop` pattern in `crates/pong/src/lib.rs`.
+- `Prop` — an enum, one variant per registered mesh, in a fixed order; `prop_meshes()` returns them in that order and `ShooterGame::set_props(base)` records where they landed, following the `set_env_base`/`set_backdrop` pattern in `crates/arena/src/lib.rs`.
 - **Atlas boxes.** `atlas_box(faces: [Rect; 6], texture)` builds a unit box whose six faces each map to a rectangle of one texture, using the same `CUBE_FACES` order as `MeshData::textured_box`. The container atlas is a 2×2 grid of 1024² pictures baked to one 2048² (side, doors, roof, floor); crate and ammo use a 2×1 (side, top). Because atlases are non-tiling, the box is scaled to the obstacle's real size and the picture stretches with it — which is right for a container (one picture per face) and why containers are drawn at their authored proportions.
 - **Tiled boxes** for `Wall`, `Roof` (underside picture), `Rubble`, `Plinth`, using `textured_box` with tiles chosen so ~1 tile ≈ 1.5 m.
 - **Generated props.** Each GLB in `assets/models/v13/` is POSITION-only (Hunyuan shape output); load through the same `face_normals` + `planar_uvs` treatment `crates/fire/src/meshes.rs` applies, with the prop's own material picture as the texture. Lift those two functions into `ember_engine::assets` (they are engine-shaped and now have two consumers) rather than copy them.
@@ -158,8 +158,8 @@ Two generators share adler's 4090 and cannot run at once: the ComfyUI Qwen-Image
 
 1. `cargo test --workspace --exclude linter --no-fail-fast` — 36 suites, ≥ 320 passing, plus every new test in §4.4.
 2. `cargo clippy --workspace --all-targets` under the workspace's deny-warnings lints.
-3. `cargo build --target wasm32-unknown-unknown --release -p pong --lib` + `wasm-bindgen`; bundle size reported against the budget.
-4. Native run against a local `pong-server`: `EMBER_CAM` overview screenshot and three eye-height screenshots (tunnel mouth, container chain, spawn) reviewed by eye and attached to the commit message by path.
+3. `cargo build --target wasm32-unknown-unknown --release -p arena --lib` + `wasm-bindgen`; bundle size reported against the budget.
+4. Native run against a local `arena-server`: `EMBER_CAM` overview screenshot and three eye-height screenshots (tunnel mouth, container chain, spawn) reviewed by eye and attached to the commit message by path.
 5. `wsbot` two-bot run against the local server: join, move, shoot; no panics, states flowing.
 6. Deploy: `deploy/deploy-pong-online.sh` then `deploy/deploy-pages.sh`, in that order (server first so the staged v13 page is joinable the moment it lands).
 

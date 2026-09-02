@@ -1,7 +1,7 @@
 """Generate the viewmodel HANDS + forearms as a standalone GLB.
 
 Run headless:
-    blender --background --python tools/make_hands.py -- crates/pong/assets/hands.glb
+    blender --background --python tools/make_hands.py -- crates/arena/assets/hands.glb
 
 Conventions (must match the engine): +X forward, +Z up in Blender; the
 default Y-up glTF export maps this to +X forward / +Y up in the engine.
@@ -30,7 +30,7 @@ SHAPE
     one texture upload per primitive.
 
 CONSUMER NOTE (as of writing)
-    crates/pong/src/online.rs embeds ONLY `../assets/viewmodel.glb`.
+    crates/arena/src/online.rs embeds ONLY `../assets/viewmodel.glb`.
     Nothing loads hands.glb yet, so writing this file changes nothing at
     runtime until the Rust side embeds it (or until the 9mm pipeline
     merges gun + hands into viewmodel.glb). Until then the shipped
@@ -387,7 +387,7 @@ def report(objs, expect_all_arms=True):
             "materials": [m.name for m in obj.data.materials],
         }
 
-        # The runtime classifier (crates/pong/src/online.rs) sorts parts by
+        # The runtime classifier (crates/arena/src/online.rs) sorts parts by
         # name prefix; anything else lands in the GUN list and gets drawn on
         # remote players' bodies.
         if expect_all_arms and not (

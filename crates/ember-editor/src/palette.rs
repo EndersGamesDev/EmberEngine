@@ -25,9 +25,9 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 
+use arena_core::shooter::Cover;
 use ember_engine::Instance;
 use ember_engine::glam::Vec3;
-use pong_core::shooter::Cover;
 
 use crate::gizmo::Mode;
 
@@ -276,7 +276,7 @@ mod tests {
         for k in PALETTE {
             if k.cover == Cover::Roof {
                 assert!(
-                    k.base >= pong_core::shooter::CONTAINER_MIN_H,
+                    k.base >= arena_core::shooter::CONTAINER_MIN_H,
                     "{} hangs at {}, too low to walk under",
                     k.name,
                     k.base

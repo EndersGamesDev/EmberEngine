@@ -94,7 +94,7 @@ TARGET_LENGTH = 0.9
 TEX_SIZE = 512
 
 # FBX node name -> engine node name. The runtime contract in
-# crates/pong/src/online.rs: parts named arm*/hand* are viewmodel-only,
+# crates/arena/src/online.rs: parts named arm*/hand* are viewmodel-only,
 # everything else is also drawn on remote players, and a part named exactly
 # "strip" is recoloured per weapon level. None of these names collide with
 # arm*/hand*, which is asserted below - a stray "hand..." name would

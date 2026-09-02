@@ -38,16 +38,32 @@ BIN="$REMOTE_DIR/target/release/fire-server"
 
 cd "$REPO_DIR"
 
+# Which commit this host runs (docs/hosts.md §7). A host may stay on an older
+# one on purpose; the entry it publishes carries the version, so the pages can
+# still prefer the newest host that speaks their protocol.
+#
+#     EMBER_REF=v2 bash deploy/deploy-fire-online.sh
+REF="${EMBER_REF:-HEAD}"
+
 # The tarball below is built with `git archive`, so ONLY COMMITTED WORK
 # DEPLOYS. Refuse to run against a dirty tree rather than quietly shipping
-# something other than what is in front of you.
-if ! git diff --quiet || ! git diff --cached --quiet; then
-    echo "FAILED: working tree is dirty. This deploys the committed tree" >&2
-    echo "        (git archive HEAD), so commit or stash first:" >&2
-    git status --short >&2
-    exit 1
+# something other than what is in front of you — but only when the ref IS this
+# tree's HEAD. Pinning a host to an older commit has nothing to do with what
+# is being edited here.
+if [ "$REF" = "HEAD" ]; then
+    if ! git diff --quiet || ! git diff --cached --quiet; then
+        echo "FAILED: working tree is dirty. This deploys the committed tree" >&2
+        echo "        (git archive HEAD), so commit or stash first:" >&2
+        git status --short >&2
+        exit 1
+    fi
 fi
-echo "== deploying $(git rev-parse --short HEAD) =="
+git rev-parse --verify -q "$REF^{commit}" >/dev/null \
+    || { echo "FAILED: EMBER_REF='$REF' names no commit here." >&2; exit 1; }
+
+VERSION="r$(git rev-list --count "$REF")"
+COMMIT="$(git rev-parse --short "$REF")"
+echo "== deploying $VERSION · $COMMIT (ref $REF) =="
 
 echo "== checking $REMOTE is reachable =="
 # Fail here with a sentence, rather than twenty lines further down with a raw
@@ -69,7 +85,9 @@ echo "== syncing source =="
 # assets/models/fire is included so the `fire` client crate would also build
 # there; it is 431 KB and saves a confusing failure later.
 TARBALL="$(mktemp -t ember-fire-src-XXXX.tar.gz)"
-git archive --format=tar.gz -o "$TARBALL" HEAD \
+# Reaped on every path: a failed scp used to leave the source tarball behind.
+trap 'st=$?; rm -f "$TARBALL"; exit $st' EXIT
+git archive --format=tar.gz -o "$TARBALL" "$REF" \
     Cargo.toml Cargo.lock crates/ assets/models/fire/
 echo "   $(du -h "$TARBALL" | cut -f1) of committed source"
 scp -o BatchMode=yes "$TARBALL" "$REMOTE":ember-fire-src.tar.gz
@@ -77,9 +95,25 @@ rm -f "$TARBALL"
 ssh -o BatchMode=yes "$REMOTE" \
     "rm -rf ~/$REMOTE_DIR && mkdir ~/$REMOTE_DIR && tar xzf ~/ember-fire-src.tar.gz -C ~/$REMOTE_DIR"
 
+echo "== resolving this host's name =="
+# Generated on the MACHINE and kept there (docs/hosts.md §6), so both games
+# deployed to the same box land on the same entry rather than two. host-name.sh
+# is piped in because the host has no checkout; a local EMBER_HOST_NAME still
+# wins, through this one call's environment.
+HOST_NAME="$(ssh -o BatchMode=yes "$REMOTE" \
+    "EMBER_HOST_NAME='${EMBER_HOST_NAME:-}' bash -s" < "$REPO_DIR/deploy/host-name.sh")"
+HOST_NAME="$(printf '%s' "$HOST_NAME" | tr -d '[:space:]')"
+if ! printf '%s' "$HOST_NAME" | grep -qE '^[a-z0-9-]{3,32}$'; then
+    echo "FAILED: '$REMOTE' produced no usable host name ('$HOST_NAME')." >&2
+    exit 1
+fi
+echo "   $REMOTE publishes as '$HOST_NAME'"
+
 echo "== building fire-server (toolbox: ember-build) =="
+# Stamped at BUILD time: the server crate's build.rs reads these through
+# option_env! so the binary can report its own build in its Welcome.
 ssh -o BatchMode=yes "$REMOTE" \
-    "toolbox run -c ember-build bash -lc 'source ~/.cargo/env && cd ~/$REMOTE_DIR && cargo build --release -p fire-server'"
+    "toolbox run -c ember-build bash -lc 'source ~/.cargo/env && cd ~/$REMOTE_DIR && EMBER_BUILD_VERSION=$VERSION EMBER_BUILD_COMMIT=$COMMIT cargo build --release -p fire-server'"
 
 echo "== checking nobody is mid-race =="
 # A redeploy kicks everyone off. That is not hypothetical: a watchdog test on
@@ -168,8 +202,11 @@ if [ -z "$MANAGED" ]; then
         exit 1
     fi
 
+    # EMBER_HOST_NAME, never a `--name` flag: a host pinned to an older commit
+    # runs a binary that has never heard of the flag, and an unknown flag is a
+    # crash loop where an unknown environment variable is ignored.
     ssh -o BatchMode=yes -f "$REMOTE" \
-        "RUST_LOG=info nohup ~/$REMOTE_DIR/target/release/fire-server $BIND >> ~/fire-server.log 2>&1 &"
+        "EMBER_HOST_NAME=$HOST_NAME RUST_LOG=info nohup ~/$REMOTE_DIR/target/release/fire-server $BIND >> ~/fire-server.log 2>&1 &"
     sleep 2
     if ! ssh -o BatchMode=yes "$REMOTE" 'pgrep -u "$(id -un)" -f "fire-serve[r]" >/dev/null'; then
         echo "FAILED: fire-server is not running. Last log lines:" >&2
@@ -224,7 +261,7 @@ echo "tunnel domain: $TUNNEL  ->  $WS_URL"
 
 echo "== health check THROUGH the public URL =="
 # The old shared form accepted an HTTP 101 as proof of life. A 101 only says a
-# connection thread completed the WebSocket handshake; pong-server was observed
+# connection thread completed the WebSocket handshake; arena-server was observed
 # on the target host with its listener up and its hub loop dead, handing out 101s and
 # closing immediately — and that check would have printed ONLINE. The probe
 # sends Hello and requires Welcome, which only the hub thread can produce.
@@ -250,40 +287,33 @@ if [ -z "$ok" ]; then
     exit 1
 fi
 
-echo "== publishing server.json to GitHub Pages =="
+echo "== publishing this host's entry to the address book =="
 # Only after the probe passed: publishing first would point every player at a
 # server we had not yet proved was alive.
 #
-# Merge, never overwrite: server.json carries the arena's "ws" and "proto"
-# alongside fire's keys. Clobbering it would take the arena offline.
-PAGES_DIR="$(mktemp -d -t ember-pages-XXXX)"
-git -C "$REPO_DIR" worktree add -q "$PAGES_DIR" gh-pages
-python - "$PAGES_DIR/server.json" "$WS_URL" <<'EOF'
-import json, os, sys, time
-p, ws = sys.argv[1], sys.argv[2]
-d = {}
-if os.path.exists(p):
-    try:
-        d = json.load(open(p))
-    except Exception:
-        d = {}
-d["fire_ws"] = ws
-d["v"] = str(int(time.time()))
-json.dump(d, open(p, "w"))
-EOF
-(
-    cd "$PAGES_DIR"
-    git add server.json
-    if git diff --cached --quiet; then
-        echo "server.json unchanged"
-    else
-        git commit -q -m "Point fire_ws at $WS_URL
+# Fire's protocol number comes from the REF being deployed. Fire carries its
+# own version in its own crate on purpose, so bumping one game's protocol
+# never gates the other's join.
+FIRE_PROTO="$(git show "$REF:crates/fire-core/src/proto.rs" \
+    | grep -oE 'PROTO_VERSION: u16 = [0-9]+' | grep -oE '[0-9]+$')"
+[ -n "$FIRE_PROTO" ] || { echo "FAILED: no PROTO_VERSION in $REF:crates/fire-core/src/proto.rs" >&2; exit 1; }
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
-        git push -q origin gh-pages
-    fi
-)
-git -C "$REPO_DIR" worktree remove --force "$PAGES_DIR"
+# Merge, never overwrite. publish-host.sh writes only this host's entry and
+# only fire's two keys on it, so the arena running on the SAME box keeps its
+# address — the inline python this replaced could not express that, and a
+# second host deploying fire took the first one's entry out of the book.
+#
+# `--repo`, not a gh-pages worktree of this checkout: see the long note in
+# deploy-pong-online.sh. The short version is that the worktree checked out a
+# local gh-pages nothing ever fetches, so another writer's publish made the
+# push fail; and the failure left the worktree registered, which wedged every
+# later deploy of either game and the pages deploy too.
+bash "$REPO_DIR/deploy/publish-host.sh" \
+    --repo "$(git -C "$REPO_DIR" remote get-url origin)" --branch gh-pages \
+    --name "$HOST_NAME" \
+    --game fire --url "$WS_URL" --proto "$FIRE_PROTO" \
+    --version "$VERSION" --commit "$COMMIT" \
+    --by "$(id -un)@$REMOTE"
 
-echo "== ONLINE: $WS_URL =="
+echo "== ONLINE: $HOST_NAME -> $WS_URL =="
 echo "   the fire page picks it up from server.json on its next load"

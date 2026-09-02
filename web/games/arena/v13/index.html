@@ -27,12 +27,18 @@
     h1 { margin: 0; font-size: 1.3rem; letter-spacing: 0.16em; font-weight: 600; }
     h1 span { color: #f0b429; }
     h1 a { color: #6ea8fe; text-decoration: none; font-size: 0.85rem; letter-spacing: 0; }
+    .headright { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
     #account {
       font-size: 0.85rem; color: #9fb4d8; cursor: pointer;
       background: #0b1830; border: 1px solid #1d3050; border-radius: 999px;
       padding: 5px 12px;
     }
     #account b { color: #6ea8fe; }
+    #host-chip {
+      font-size: 0.72rem; color: #7f93b5; font-family: ui-monospace, monospace;
+      background: #0b1830; border: 1px solid #1d3050; border-radius: 999px;
+      padding: 5px 10px; white-space: nowrap;
+    }
     .card {
       background: #0b1830; border: 1px solid #1d3050; border-radius: 12px;
       padding: 18px 20px; width: min(560px, 94vw); box-sizing: border-box;
@@ -58,7 +64,16 @@
       display: flex; align-items: center; justify-content: space-between; gap: 8px;
       background: #08122a; border-radius: 7px; padding: 7px 10px; font-size: 0.9rem;
     }
+    .lobby-row .right { display: flex; align-items: center; gap: 7px; margin-left: auto; }
+    .pill {
+      font-size: 0.72rem; background: #0b1830; border: 1px solid #1d3050;
+      border-radius: 999px; padding: 2px 8px; opacity: 0.9;
+      font-family: ui-monospace, monospace; white-space: nowrap;
+    }
     #list-note { font-size: 0.8rem; opacity: 0.65; }
+    /* The menu's own status line. `#status` lives inside #game, so anything
+       written there is invisible while the menu is up. */
+    #menu-note { font-size: 0.85rem; color: #f0b429; min-height: 1.2em; }
     #game[hidden], #menu[hidden] { display: none; }
     #status { font-size: 0.95rem; color: #f0b429; min-height: 1.3em; }
     #ember-root canvas {
@@ -78,7 +93,10 @@
 <body>
   <header>
     <h1><a href="../../../">⬅ games</a> &nbsp; ember <span>arena</span> <small style="opacity:.5">v13</small></h1>
-    <div id="account" title="click to rename">…</div>
+    <div class="headright">
+      <div id="host-chip" title="the host this page will play on">server …</div>
+      <div id="account" title="click to rename">…</div>
+    </div>
   </header>
 
   <div id="menu" class="card">
@@ -121,6 +139,7 @@
       <label>open games <button id="btn-refresh" class="small">refresh</button></label>
       <div id="lobby-rows"><span id="list-note">loading…</span></div>
     </div>
+    <div id="menu-note"></div>
   </div>
 
   <div id="game" hidden>
@@ -139,6 +158,9 @@
   </div>
 
   <script type="module">
+    import { chooseHost, listLobbies, loadBook, probeHost, rankHosts, renderChip }
+      from '../../../hosts.js';
+
     const $ = (id) => document.getElementById(id);
     const ROOT = new URL('../../../', location);
 
@@ -185,49 +207,148 @@
     });
     renderAccount();
 
-    // ---- server discovery
-    let serverCfg = {};
-    try {
-      const r = await fetch(new URL(`server.json?ts=${Date.now()}`, ROOT), { cache: 'no-store' });
-      if (r.ok) serverCfg = await r.json();
-    } catch {}
-    const overridden = localStorage.getItem('ember-server-url-manual')
-      ? localStorage.getItem('ember-server-url') : null;
-    const serverUrl = () => (overridden || serverCfg.ws || '').trim();
-
-    const V = serverCfg.v || '0';
-    const { default: init, start_online, proto_version } = await import(`./pkg/pong.js?v=${V}`);
-    let ready = init({ module_or_path: `./pkg/pong_bg.wasm?v=${V}` })
+    // ---- the bundle. `v` is the deploy stamp and still comes from the book's
+    // legacy top-level key, which every publish keeps writing.
+    const { book } = await loadBook(ROOT.href);
+    const V = book.v || '0';
+    const { default: init, start_online, proto_version } = await import(`./pkg/arena.js?v=${V}`);
+    let ready = init({ module_or_path: `./pkg/arena_bg.wasm?v=${V}` })
       .catch((e) => { fail(e); console.error(e); });
+    // The bundle's exports call into the wasm module, which does not exist
+    // until init has resolved: asking for the protocol before that threw
+    // "Cannot read properties of undefined (reading 'proto_version')" on the
+    // live page (2026-09-02) and left it at "server …" for good. So wait.
+    await ready;
+    const PROTO = proto_version();
+
+    // ---- host discovery
+    // The manual override short-circuits everything, exactly as before: one
+    // address, no book, no ranking, no protocol filter. Someone typing a URL
+    // has overruled the address book on purpose.
+    const overridden = localStorage.getItem('ember-server-url-manual')
+      ? (localStorage.getItem('ember-server-url') || '').trim() : '';
+
+    let chosen = null;      // the host we will play on
+    let candidates = [];    // it, then the fallbacks, in order
+    let wrongProto = [];    // answered, but speaking another protocol
+
+    // Bumped the moment a launch commits to a host. A menu tick that started
+    // before that must not land: it would repaint the chip with a host the
+    // player is not on, and open a listing socket to every other candidate
+    // from inside a running game.
+    let gen = 0;
+
+    // One address, probed once, dressed as a ranked candidate so that
+    // everything downstream has exactly one shape to deal with.
+    async function onlyHost(url) {
+      const entry = { name: '', ws: url, version: '', commit: '', updated: '' };
+      const probes = new Map([['', await probeHost(url, { proto: PROTO })]]);
+      return rankHosts([entry], { game: 'arena', probes });
+    }
+
+    async function discover() {
+      const g = gen;
+      const r = overridden
+        ? await onlyHost(overridden)
+        : await chooseHost(ROOT.href, { game: 'arena', proto: PROTO });
+      if (g !== gen) return; // a launch committed while we were probing
+      chosen = r.chosen;
+      candidates = r.candidates;
+      wrongProto = r.wrongProto || [];
+      renderChip($('host-chip'), chosen, { wrongProto, proto: PROTO });
+    }
+
+    // "Nothing answered" and "everything answered on another protocol" are
+    // different news. The second one still has a playable build behind it —
+    // it is what a protocol bump looks like from the page that shipped first
+    // — and saying "offline" there tells the player to leave.
+    const offlineText = () => (wrongProto.length
+      ? `${wrongProto[0].name || 'the server'} is on protocol ${wrongProto[0].proto} and this build speaks ${PROTO}`
+        + ' — open the games page and pick the build that matches'
+      : 'no server answered — is the arena offline?');
 
     // Handle of the lobby-list poll, cleared the moment we go online.
     let lobbyPoll = null;
+    const pollOn = () => { if (lobbyPoll === null) lobbyPoll = setInterval(tick, 10000); };
+    const pollOff = () => { if (lobbyPoll !== null) { clearInterval(lobbyPoll); lobbyPoll = null; } };
 
     const showGame = () => { $('menu').hidden = true; $('game').hidden = false; };
+    // Back to a live menu, not a dead screen: the poll is re-armed and a
+    // re-rank kicked, so a host that comes back is picked up without a reload.
+    const showMenu = (msg) => {
+      $('game').hidden = true;
+      $('menu').hidden = false;
+      $('menu-note').textContent = msg || '';
+      pollOn();
+      tick();
+    };
 
-    const goOnline = async (action, lobby, password) => {
-      const url = serverUrl();
-      if (!url) { alert('No server URL — the server may be offline right now.'); return; }
+    const goOnline = async (action, lobby, password, target) => {
       if (!lobby) { alert('Enter a lobby name.'); return; }
-      if (lobbyPoll !== null) { clearInterval(lobbyPoll); lobbyPoll = null; }
+      const wanted = target || chosen;
+      // Includes a handover whose host is already gone: the menu comes back
+      // with the poll running, so this is a message and not a dead end.
+      if (!wanted) { showMenu(offlineText()); return; }
+      pollOff();
+      $('menu-note').textContent = '';
       await ready;
       showGame();
       $('status').textContent = 'connecting…';
+
+      // Probe again RIGHT before handing the socket to the engine. The list
+      // can be ten seconds old and a quick tunnel dies without warning; once
+      // the wasm client owns the socket there is no failover left, so this is
+      // the last moment a dead host can still be turned into a live one.
+      //
+      // A Create walks the fallbacks — one arena is as good as another. A
+      // JOIN does not: that lobby lives on that machine and nowhere else, so
+      // walking on would drop the player into a stranger's lobby of the same
+      // name, or into a host that has none and tell them it "moved". The
+      // `wanted === chosen` arm keeps the failover for the address-less
+      // handover below, where the target came from the ranking, not a row.
+      const order = (action === 'create' || wanted === chosen)
+        ? [wanted, ...candidates.filter((c) => c.url !== wanted.url)]
+        : [wanted];
+      let live = null;
+      for (const c of order) {
+        // Serial on purpose: the second host is only interesting once the
+        // first has actually failed to answer.
+        const p = await probeHost(c.url, { proto: PROTO, timeoutMs: 3000 });
+        if (p.ok) { live = c; break; }
+      }
+      if (!live) {
+        showMenu(order.length === 1
+          ? `${wanted.name || 'that lobby’s host'} stopped answering — the lobby may be gone`
+          : 'no server answered — try again in a moment');
+        return;
+      }
+      if (live.url !== wanted.url) {
+        $('status').textContent =
+          `${wanted.name || 'that server'} stopped answering — moved to ${live.name || 'another server'}`;
+      }
+      chosen = live;
+      gen += 1; // the launch owns the chip from here
+      renderChip($('host-chip'), live, { proto: PROTO });
       try {
         start_online(JSON.stringify({
-          url, action, lobby,
+          url: live.url, action, lobby,
           password: password || null,
           handle: getAccount().handle,
         }));
-      } catch (e) { fail(e); console.error(e); }
+      } catch (e) {
+        console.error(e);
+        showMenu('could not start: ' + ((e && e.message) || e));
+      }
     };
 
     $('btn-create').addEventListener('click', () =>
-      goOnline('create', $('lobby-name').value.trim(), $('lobby-pw').value));
+      goOnline('create', $('lobby-name').value.trim(), $('lobby-pw').value, chosen));
 
     // ---- lobby browser
-    function refreshLobbies() {
-      const url = serverUrl();
+    // The chosen host's lobbies first, then every other host on this protocol
+    // below, each row tagged — two people who landed on different hosts have
+    // to be able to find each other, or the fleet splits the player base.
+    async function refreshLobbies() {
       const rows = $('lobby-rows');
       const setNote = (msg) => {
         const note = document.createElement('span');
@@ -235,59 +356,96 @@
         note.textContent = msg;
         rows.replaceChildren(note);
       };
-      if (!url) { setNote('server offline?'); return; }
-      let done = false;
-      const ws = new WebSocket(url);
-      const finish = (msg) => { if (!done) { done = true; if (msg) setNote(msg); ws.close(); } };
-      setTimeout(() => finish('server not reachable'), 6000);
-      ws.onerror = () => finish('server not reachable');
-      ws.onopen = () => {
-        ws.send(JSON.stringify({ t: 'hello', proto: proto_version(), handle: 'browser' }));
-        ws.send(JSON.stringify({ t: 'list_lobbies' }));
-      };
-      ws.onmessage = (e) => {
-        let m; try { m = JSON.parse(e.data); } catch { return; }
-        if (m.t !== 'lobby_list') return;
-        done = true; ws.close();
-        if (!m.lobbies.length) { setNote('no open games — create one!'); return; }
-        rows.replaceChildren(...m.lobbies.map((l) => {
-          const row = document.createElement('div');
-          row.className = 'lobby-row';
-          const label = document.createElement('span');
-          label.textContent = `${l.name} — ${l.host} · ${l.players}/${l.cap} `;
-          if (l.has_password) {
-            const lock = document.createElement('span');
-            lock.textContent = '🔒';
-            label.append(lock);
-          }
-          const btn = document.createElement('button');
-          btn.className = 'small';
-          btn.textContent = 'Join';
-          btn.addEventListener('click', () => {
-            const pw = l.has_password ? prompt(`Password for "${l.name}":`) : null;
-            if (l.has_password && pw === null) return;
-            goOnline('join', l.name, pw);
-          });
-          row.append(label, btn);
-          return row;
-        }));
-      };
+      if (!candidates.length) { setNote(offlineText()); return; }
+
+      const lists = await Promise.all(
+        candidates.map((c) => listLobbies(c.url, { proto: PROTO })),
+      );
+      const all = [];
+      candidates.forEach((host, i) => {
+        for (const l of lists[i]) all.push({ host, lobby: l });
+      });
+      if (!all.length) { setNote('no open games — create one!'); return; }
+
+      rows.replaceChildren(...all.map(({ host, lobby: l }) => {
+        const row = document.createElement('div');
+        row.className = 'lobby-row';
+        const label = document.createElement('span');
+        label.textContent = `${l.name} — ${l.host} · ${l.players}/${l.cap} `;
+        if (l.has_password) {
+          const lock = document.createElement('span');
+          lock.textContent = '🔒';
+          label.append(lock);
+        }
+        const right = document.createElement('span');
+        right.className = 'right';
+        const tag = document.createElement('span');
+        tag.className = 'pill';
+        tag.textContent = host.name || 'server';
+        tag.title = host.url;
+        const btn = document.createElement('button');
+        btn.className = 'small';
+        btn.textContent = 'Join';
+        btn.addEventListener('click', () => {
+          const pw = l.has_password ? prompt(`Password for "${l.name}":`) : null;
+          if (l.has_password && pw === null) return;
+          goOnline('join', l.name, pw, host); // this row's host, not the chosen one
+        });
+        right.append(tag, btn);
+        row.append(label, right);
+        return row;
+      }));
     }
+    // A menu tick re-ranks as well as re-lists: a host that dies while the
+    // player reads the hint text must leave the chip and the fallback list,
+    // not sit there looking playable.
+    let ticking = false;
+    async function tick() {
+      if (ticking) return;
+      ticking = true;
+      try {
+        const g = gen;
+        await discover();
+        // A launch committed while the probes were out: stop here rather
+        // than opening a listing socket to every host from inside a game.
+        if (g !== gen) return;
+        await refreshLobbies();
+      } finally { ticking = false; }
+    }
+    $('btn-refresh').addEventListener('click', tick);
 
     // ---- pending join handed over from the hub's live-lobby showcase
     let pending = null;
     try { pending = JSON.parse(sessionStorage.getItem('ember-pending')); } catch {}
     sessionStorage.removeItem('ember-pending');
-    if (pending && pending.lobby) {
+
+    if (pending && pending.lobby && pending.ws) {
+      // The hub already picked the machine: this lobby lives on THAT host and
+      // nowhere else, so the address is used verbatim with no re-ranking. It
+      // is still probed once, so a dead handover says so instead of hanging.
+      const r = await onlyHost(pending.ws);
+      chosen = r.chosen;
+      candidates = r.candidates;
+      wrongProto = r.wrongProto || [];
+      if (chosen && pending.host) chosen.name = chosen.name || pending.host;
+      renderChip($('host-chip'), chosen, { wrongProto, proto: PROTO });
       await ready;
-      goOnline(pending.action || 'join', pending.lobby, pending.password);
+      goOnline(pending.action || 'join', pending.lobby, pending.password, chosen);
     } else {
-      await ready;
-      refreshLobbies();
-      // Lobbies live for seconds and this list used to load exactly once, so
-      // two people waiting here for each other would never see each other's
-      // game appear. Poll like the hub does; goOnline() stops it.
-      lobbyPoll = setInterval(refreshLobbies, 10000);
+      await discover();
+      if (pending && pending.lobby) {
+        // A handover from a page that predates the host list: no address, so
+        // the normal pick applies.
+        await ready;
+        goOnline(pending.action || 'join', pending.lobby, pending.password, chosen);
+      } else {
+        await ready;
+        refreshLobbies();
+        // Lobbies live for seconds and this list used to load exactly once, so
+        // two people waiting here for each other would never see each other's
+        // game appear. Poll like the hub does; goOnline() stops it.
+        pollOn();
+      }
     }
   </script>
 </body>

@@ -1,0 +1,812 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ember four kings</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      /* The four seat colours, the same four the wasm scene paints. */
+      --seat0: #e6b93f; /* gold, SW */
+      --seat1: #e2495c; /* crimson, SE */
+      --seat2: #4ea6f2; /* azure, NE */
+      --seat3: #3fd08c; /* emerald, NW */
+      --tgt-move: #4fd66a;
+      --tgt-capture: #ff5c5c;
+      --tgt-teleport: #b184ff;
+      --tgt-place: #ffb648;
+      --tgt-swap: #4fe3e3;
+    }
+    body {
+      margin: 0; min-height: 100vh;
+      display: flex; flex-direction: column; align-items: center; gap: 14px;
+      background: #0b0a12; color: #cfc9dc;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      padding-bottom: 24px;
+    }
+    header {
+      width: min(1280px, 96vw);
+      display: flex; align-items: baseline; justify-content: space-between;
+      margin-top: 16px; flex-wrap: wrap; gap: 8px;
+    }
+    h1 { margin: 0; font-size: 1.3rem; letter-spacing: 0.16em; font-weight: 600; }
+    h1 span { color: #d4a13a; }
+    h1 a { color: #8f7fd4; text-decoration: none; font-size: 0.85rem; letter-spacing: 0; }
+    #proto { font-size: 0.78rem; opacity: 0.55; font-family: ui-monospace, monospace; }
+    .controls {
+      width: min(1280px, 96vw);
+      display: flex; gap: 22px; font-size: 0.9rem; flex-wrap: wrap; opacity: 0.85;
+    }
+    .controls b { color: #8f7fd4; }
+    kbd {
+      background: #1c1830; border: 1px solid #362f52; border-bottom-width: 3px;
+      border-radius: 5px; padding: 1px 7px; font-family: inherit; font-size: 0.85em;
+    }
+
+    /* ---- start screen ---- */
+    #start { width: min(1280px, 96vw); }
+    .panel-box {
+      background: #14112180; border: 1px solid #2e2748; border-radius: 12px; padding: 18px 20px;
+    }
+    .modes { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+    button {
+      font: inherit; color: #ece6ff; background: #241d3d; border: 1px solid #3d3363;
+      border-radius: 8px; padding: 8px 16px; cursor: pointer;
+    }
+    button:hover:not(:disabled) { background: #2f2650; border-color: #574a86; }
+    button:disabled { opacity: 0.45; cursor: default; }
+    button.primary { background: #4a3a1c; border-color: #7d6327; color: #ffdf9e; }
+    button.primary:hover:not(:disabled) { background: #5c4823; }
+    input {
+      font: inherit; color: #ece6ff; background: #100d1c; border: 1px solid #332c53;
+      border-radius: 7px; padding: 7px 10px; min-width: 0;
+    }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+    .row label { font-size: 0.8rem; letter-spacing: 0.14em; opacity: 0.6; min-width: 66px; }
+    #lobby-rows { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+    .lobby {
+      display: flex; align-items: center; gap: 12px;
+      background: #191430; border: 1px solid #2c2549; border-radius: 8px; padding: 8px 12px;
+    }
+    .lobby .nm { font-weight: 600; color: #f0e6ff; }
+    .lobby .meta { font-size: 0.8rem; opacity: 0.6; margin-left: auto; }
+    .note { font-size: 0.85rem; opacity: 0.7; }
+    .note.bad { color: #ff9c8f; opacity: 1; }
+    .hidden { display: none !important; }
+
+    /* ---- stage: 3D view left, clickable board right, HUD around ---- */
+    #stage { width: min(1280px, 96vw); display: flex; flex-direction: column; gap: 12px; }
+    #top { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+    #view { flex: 1 1 520px; min-width: 0; position: relative; }
+    #ember-root canvas {
+      width: 100% !important; aspect-ratio: 16 / 9; height: auto !important;
+      border-radius: 10px; display: block; background: #05040a; outline: none;
+    }
+    #loading { font-size: 0.9rem; opacity: 0.8; padding: 40px; display: block; }
+    #side { flex: 0 1 460px; min-width: 300px; display: flex; flex-direction: column; gap: 8px; }
+    #banner {
+      font-size: 1.05rem; font-weight: 700; letter-spacing: 0.08em; color: #f5ead4;
+      min-height: 1.4em;
+    }
+    #banner.win { color: #ffd87a; font-size: 1.3rem; }
+    #whose { font-size: 0.95rem; min-height: 1.3em; }
+    #whose.mine { color: #ffdf9e; font-weight: 600; }
+    #timer { display: flex; align-items: center; gap: 10px; font-variant-numeric: tabular-nums; }
+    #timer .n { font-size: 1.5rem; font-weight: 700; color: #f0e6ff; min-width: 3.2em; text-align: right; }
+    #bar { flex: 1; height: 8px; background: #1c1830; border-radius: 4px; overflow: hidden; }
+    #bar div { height: 100%; width: 100%; background: linear-gradient(90deg, #e08a1e, #ffd06a); }
+    #bar.low div { background: #ff5c5c; }
+    #notice {
+      font-size: 0.9rem; color: #ff9c8f; min-height: 1.3em;
+      opacity: 0; transition: opacity 0.6s ease;
+    }
+    #notice.show { opacity: 1; transition: none; }
+    #lastact { font-size: 0.88rem; opacity: 0.85; min-height: 1.3em; }
+    #quiet { font-size: 0.78rem; opacity: 0.55; }
+    #waiting { display: flex; flex-direction: column; gap: 6px; font-size: 0.88rem; }
+    #seating { display: flex; flex-direction: column; gap: 2px; font-size: 0.85rem; opacity: 0.85; }
+    #seating .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: middle; }
+
+    /* the board */
+    #board-wrap { display: flex; flex-direction: column; gap: 6px; align-items: center; }
+    #board {
+      display: grid;
+      grid-template-columns: repeat(10, 1fr);
+      grid-template-rows: repeat(10, 1fr);
+      gap: 2px; width: min(460px, 96vw, 60vh); aspect-ratio: 1;
+      background: #1a1628; padding: 4px; border-radius: 8px; box-sizing: border-box;
+      user-select: none;
+    }
+    #board button.cell {
+      position: relative; padding: 0; margin: 0; border-radius: 3px;
+      border: 2px solid transparent; background: #2a2540; color: #cfc9dc;
+      font-size: clamp(12px, 2.6vw, 24px); line-height: 1; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.12s ease;
+    }
+    .cell.dark { background: #221d35; }
+    .cell.block0 { background: color-mix(in srgb, #2a2540 82%, var(--seat0)); }
+    .cell.block0.dark { background: color-mix(in srgb, #221d35 82%, var(--seat0)); }
+    .cell.block1 { background: color-mix(in srgb, #2a2540 82%, var(--seat1)); }
+    .cell.block1.dark { background: color-mix(in srgb, #221d35 82%, var(--seat1)); }
+    .cell.block2 { background: color-mix(in srgb, #2a2540 82%, var(--seat2)); }
+    .cell.block2.dark { background: color-mix(in srgb, #221d35 82%, var(--seat2)); }
+    .cell.block3 { background: color-mix(in srgb, #2a2540 82%, var(--seat3)); }
+    .cell.block3.dark { background: color-mix(in srgb, #221d35 82%, var(--seat3)); }
+    .cell .g { font-weight: 700; text-shadow: 0 1px 3px rgba(0,0,0,0.8); pointer-events: none; }
+    .cell.own0 .g { color: var(--seat0); }
+    .cell.own1 .g { color: var(--seat1); }
+    .cell.own2 .g { color: var(--seat2); }
+    .cell.own3 .g { color: var(--seat3); }
+    .cell.garrison .g { color: #8d889c; opacity: 0.8; }
+    .cell.awake .g {
+      border: 2px solid currentColor; border-radius: 50%; padding: 0 0.18em; font-size: 0.82em;
+    }
+    .cell .d {
+      position: absolute; right: 2px; top: 2px; width: 22%; height: 22%; max-width: 8px; max-height: 8px;
+      border-radius: 50%; display: none; pointer-events: none;
+    }
+    .cell.jfl0 .d { display: block; background: var(--seat0); }
+    .cell.jfl1 .d { display: block; background: var(--seat1); }
+    .cell.jfl2 .d { display: block; background: var(--seat2); }
+    .cell.jfl3 .d { display: block; background: var(--seat3); }
+    .cell.cursor { box-shadow: inset 0 0 0 2px rgba(207, 201, 220, 0.28); }
+    .cell.last-from { box-shadow: inset 0 0 0 100px rgba(255, 255, 255, 0.07); }
+    .cell.last-to { box-shadow: inset 0 0 0 100px rgba(255, 255, 255, 0.14); }
+    .cell.sel { border-color: #f5ead4; }
+    .cell.t-move { border-color: var(--tgt-move); }
+    .cell.t-capture { border-color: var(--tgt-capture); }
+    .cell.t-teleport { border-color: var(--tgt-teleport); }
+    .cell.t-place { border-color: var(--tgt-place); }
+    .cell.t-swap, .cell.t-wake { border-color: var(--tgt-swap); }
+    .cell.t-move:not(.has)::after, .cell.t-teleport:not(.has)::after, .cell.t-place:not(.has)::after,
+    .cell.t-wake:not(.has)::after {
+      content: ""; width: 28%; height: 28%; border-radius: 50%; background: currentColor; opacity: 0.55;
+      position: absolute; pointer-events: none;
+    }
+    .cell.t-move::after { color: var(--tgt-move); }
+    .cell.t-teleport::after { color: var(--tgt-teleport); }
+    .cell.t-place::after { color: var(--tgt-place); }
+    .cell.t-wake::after { color: var(--tgt-swap); }
+    #board-cap { font-size: 0.75rem; opacity: 0.5; letter-spacing: 0.1em; }
+    #legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 0.75rem; opacity: 0.7; justify-content: center; }
+    #legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: middle; border: 2px solid; }
+
+    /* seat panels */
+    #seats { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+    .seat {
+      background: #14112180; border: 1px solid #2e2748; border-radius: 10px; padding: 10px 12px;
+      font-size: 0.85rem; display: flex; flex-direction: column; gap: 3px;
+      border-left-width: 4px;
+    }
+    .seat.s0 { border-left-color: var(--seat0); }
+    .seat.s1 { border-left-color: var(--seat1); }
+    .seat.s2 { border-left-color: var(--seat2); }
+    .seat.s3 { border-left-color: var(--seat3); }
+    .seat.tomove { background: #221c3c; box-shadow: 0 0 0 1px #574a86; }
+    .seat.dead { opacity: 0.5; }
+    .seat .nm { font-weight: 700; color: #f0e6ff; }
+    .seat.s0 .nm { color: var(--seat0); }
+    .seat.s1 .nm { color: var(--seat1); }
+    .seat.s2 .nm { color: var(--seat2); }
+    .seat.s3 .nm { color: var(--seat3); }
+    .seat .st { opacity: 0.7; font-size: 0.78rem; }
+    .seat .cap { font-size: 1rem; letter-spacing: 0.05em; min-height: 1.2em; }
+
+    details { width: min(1280px, 96vw); font-size: 0.88rem; }
+    summary { cursor: pointer; opacity: 0.75; }
+    details ul { margin: 8px 0 0; padding-left: 20px; line-height: 1.5; }
+    details li b { color: #d4a13a; }
+    footer { font-size: 0.78rem; opacity: 0.45; width: min(1280px, 96vw); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><a href="../../../">⬅ games</a> &nbsp; ember <span>four kings</span> <small style="opacity:.5">v1</small></h1>
+    <div id="proto">protocol …</div>
+  </header>
+  <div class="controls">
+    <div><b>Select</b> click a piece, then a highlighted tile</div>
+    <div><b>Cursor</b> <kbd>←</kbd><kbd>→</kbd><kbd>↑</kbd><kbd>↓</kbd> in the 3D view, <kbd>Enter</kbd> clicks</div>
+    <div><b>Clear</b> <kbd>Esc</kbd></div>
+    <div>2 to 4 players, 15 s per turn, last king standing wins</div>
+  </div>
+
+  <div id="start">
+    <div class="panel-box">
+      <div class="modes">
+        <button id="btn-practice" class="primary">Hotseat (4 seats, one keyboard)</button>
+        <button id="btn-online">Play online</button>
+      </div>
+      <div class="note" id="engine-note"></div>
+
+      <div id="online-panel" class="hidden">
+        <div class="row">
+          <label for="handle">NAME</label>
+          <input id="handle" maxlength="20" placeholder="player" style="flex:1 1 180px">
+          <button id="btn-refresh">Refresh</button>
+        </div>
+        <div id="lobby-rows"><span class="note" id="list-note">looking for a server…</span></div>
+        <div class="row">
+          <label for="newlobby">NEW</label>
+          <input id="newlobby" maxlength="24" placeholder="lobby name" style="flex:1 1 180px">
+          <input id="newpass" maxlength="40" placeholder="password (optional)" type="password" style="flex:1 1 140px">
+          <button id="btn-create">Create</button>
+        </div>
+        <div class="note" id="online-note"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="stage" class="hidden">
+    <div id="top">
+      <div id="view">
+        <div id="ember-root"><span id="loading">loading engine…</span></div>
+      </div>
+      <div id="side">
+        <div id="banner"></div>
+        <div id="whose"></div>
+        <div id="timer"><span class="n">15.0</span><div id="bar"><div></div></div></div>
+        <div id="notice"></div>
+        <div id="lastact"></div>
+        <div id="quiet"></div>
+        <div id="waiting" class="hidden">
+          <div id="creator-line"></div>
+          <button id="btn-start" class="primary hidden" disabled>Start the game</button>
+          <div class="note">Before the start you may swap cards within a class: click one of your legends (king, queen, hero, joker) or epics (rooks, bishops, knight), then another of the same class. The two bishops must end on opposite colours.</div>
+          <div id="seating"></div>
+        </div>
+        <div id="board-wrap">
+          <div id="board" aria-label="board"></div>
+          <div id="board-cap">your corner is bottom-left · forward is right, left is up</div>
+          <div id="legend">
+            <span><i style="border-color:var(--tgt-move)"></i>move</span>
+            <span><i style="border-color:var(--tgt-capture)"></i>capture</span>
+            <span><i style="border-color:var(--tgt-teleport)"></i>teleport</span>
+            <span><i style="border-color:var(--tgt-place)"></i>place</span>
+            <span><i style="border-color:var(--tgt-swap)"></i>swap / wake</span>
+            <span>· dot = a joker's capture tile</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="seats"></div>
+  </div>
+
+  <details>
+    <summary>rules in short</summary>
+    <ul>
+      <li><b>The board.</b> 10x10, four corners, one 4x4 block each: the corner 2x2 holds the legends (king, queen, hero, joker), the next ring the epics (two rooks, two bishops, a knight), the outer ring seven pawns. Seats move counter-clockwise; one action per 15 s turn; every action is a move of one piece.</li>
+      <li><b>King.</b> One step in any direction. There is no check: a king may step into danger, and losing it eliminates you and removes all your pieces.</li>
+      <li><b>Queen, rook, bishop, knight.</b> As in chess. Sliders stop at the first piece and capture it if it is not yours.</li>
+      <li><b>Pawn.</b> Moves one tile forward or one tile left (the two outward directions from your corner: right and up on this board). Captures one tile diagonally on the three diagonals that are not backward. No double step, no en passant. A pawn reaching either far edge becomes a queen at once.</li>
+      <li><b>Joker.</b> Steps one tile onto an empty tile, or teleports to any of its three mirror tiles (across the row, across the column, across the centre) if that tile is empty. On your own turns 5, 10, 15, ... it may instead be placed on any empty tile. It captures only the tile front-left of it in your seat's frame, wherever it stands and whichever way the board is turned; the small dot marks that tile. A joker on a far edge has no capture until it moves.</li>
+      <li><b>Hero.</b> Starts dormant: it cannot move or capture, only be captured. Its one move is to swap with any of your pawns anywhere on the board: the pawn leaves the game, the hero takes its tile, and that is your whole turn. From then on it moves and captures like a rook and a knight combined. With no pawns left it may awaken where it stands instead.</li>
+      <li><b>Clock and elimination.</b> A turn that runs out is a pass; three in a row eliminates you. A seat with no legal move passes instantly at no cost. Leaving the game eliminates you. Corners nobody sits in are garrisons: full formations that never move and that anyone may capture.</li>
+      <li><b>End.</b> The last seated player with a king wins. 100 turns without a capture, a pawn move, a promotion or a hero swap, a full round of forced passes, or turn 600 end the game on material (queen 9, awake hero 8, rook 5, joker 4, knight 3, bishop 3, dormant hero 3, pawn 1); a shared maximum is a draw.</li>
+    </ul>
+  </details>
+
+  <footer>
+    Rules, seat frames and the turn clock live in <code>kings-core</code>, the crate the server validates
+    with and the client highlights with; the server is the only clock, and this page never counts past
+    what it was told. The 3D view is a view only: the grid beside it is where you click.
+  </footer>
+
+  <script type="module">
+    const $ = (id) => document.getElementById(id);
+    const fail = (msg) => {
+      const el = $('loading');
+      if (el) el.textContent = 'failed to start: ' + (msg || 'see browser console');
+    };
+    window.addEventListener('error', (e) => fail(e.message));
+    window.addEventListener('unhandledrejection', (e) => fail(e.reason));
+
+    // ---- keyboard hygiene ----------------------------------------------
+    // Arrows and space drive the cursor in the wasm; keep them off the page.
+    // Esc clears the selection. Typing in the lobby inputs is left alone.
+    let wasm = null;
+    let launched = false;
+    const typing = (e) => e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA');
+    addEventListener('keydown', (e) => {
+      if (typing(e)) return;
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
+      if (e.key === 'Escape' && launched && wasm) { try { wasm.clear_selection(); } catch {} }
+    }, { passive: false });
+    document.addEventListener('pointerdown', (e) => {
+      if (typing(e)) return;
+      document.querySelector('#ember-root canvas')?.focus();
+    });
+
+    // ---- constants shared with the rules of record ---------------------
+    const SEAT_NAME = ['gold', 'crimson', 'azure', 'emerald'];
+    const SEAT_CORNER = ['SW', 'SE', 'NE', 'NW'];
+    const GLYPH = {
+      king: '♔', queen: '♕', rook: '♖', bishop: '♗', knight: '♘', pawn: '♙',
+      joker: 'J', hero: 'H', hero_awake: 'H',
+    };
+    const TURN_MS = 15000;
+    const NO_PROGRESS_TURNS = 100;
+    const TIMEOUTS_TO_ELIMINATE = 3;
+    const JOKER_PLACE_EVERY = 5;
+    const END_TEXT = {
+      last_king: 'last king standing',
+      no_progress: `${NO_PROGRESS_TURNS} turns without progress, decided on material`,
+      stalemate: 'every seat was stuck in a row, decided on material',
+      turn_cap: 'the turn cap was reached, decided on material',
+      abandoned: 'everyone left',
+    };
+
+    // Global (x, y) to the local frame of a seat: u forward, v left. The
+    // table of docs/kings-design.md section 1.2. On screen u is the column
+    // and v the row from the bottom, so the local corner sits bottom-left.
+    const toLocal = (seat, x, y) => {
+      switch (seat) {
+        case 1: return [y, 9 - x];
+        case 2: return [9 - x, 9 - y];
+        case 3: return [9 - y, x];
+        default: return [x, y];
+      }
+    };
+    const blockOf = (x, y) => {
+      if (x <= 3 && y <= 3) return 0;
+      if (x >= 6 && y <= 3) return 1;
+      if (x >= 6 && y >= 6) return 2;
+      if (x <= 3 && y >= 6) return 3;
+      return -1;
+    };
+
+    // ---- the board: 100 buttons, created once, restyled in place --------
+    const boardEl = $('board');
+    const cells = []; // index y * 10 + x
+    for (let y = 0; y < 10; y++) {
+      for (let x = 0; x < 10; x++) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'cell' + (((x + y) & 1) ? '' : ' dark');
+        const blk = blockOf(x, y);
+        if (blk >= 0) b.classList.add('block' + blk);
+        b.dataset.x = x; b.dataset.y = y;
+        const g = document.createElement('span'); g.className = 'g';
+        const d = document.createElement('span'); d.className = 'd';
+        b.append(g, d);
+        b.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (launched && wasm) { try { wasm.click_tile(x, y); } catch (err) { console.error(err); } }
+        });
+        cells[y * 10 + x] = b;
+        boardEl.append(b);
+      }
+    }
+    // A click on the board's gaps (not a tile) clears the selection.
+    boardEl.addEventListener('click', () => { if (launched && wasm) { try { wasm.clear_selection(); } catch {} } });
+
+    let placedFor = -1;
+    const placeCells = (seat) => {
+      if (placedFor === seat) return;
+      placedFor = seat;
+      for (let y = 0; y < 10; y++) {
+        for (let x = 0; x < 10; x++) {
+          const [u, v] = toLocal(seat, x, y);
+          const b = cells[y * 10 + x];
+          b.style.gridColumn = String(u + 1);
+          b.style.gridRow = String(10 - v);
+        }
+      }
+    };
+    placeCells(0);
+
+    // ---- seat panels, created once -----------------------------------
+    const seatsEl = $('seats');
+    const seatPanels = [0, 1, 2, 3].map((s) => {
+      const p = document.createElement('div');
+      p.className = 'seat s' + s;
+      const nm = document.createElement('div'); nm.className = 'nm';
+      const st = document.createElement('div'); st.className = 'st';
+      const tu = document.createElement('div'); tu.className = 'tu';
+      const to = document.createElement('div'); to.className = 'to';
+      const cap = document.createElement('div'); cap.className = 'cap';
+      p.append(nm, st, tu, to, cap);
+      seatsEl.append(p);
+      return { p, nm, st, tu, to, cap };
+    });
+
+    // ---- render: state_json object -> DOM, nothing else -----------------
+    const bannerEl = $('banner'), whoseEl = $('whose'), timerN = document.querySelector('#timer .n');
+    const barEl = $('bar'), barFill = barEl.firstElementChild, noticeEl = $('notice');
+    const lastEl = $('lastact'), quietEl = $('quiet'), waitingEl = $('waiting');
+    const creatorLine = $('creator-line'), startBtn = $('btn-start'), seatingEl = $('seating');
+    const timerEl = $('timer');
+    const CELL_DYN = ['own0', 'own1', 'own2', 'own3', 'garrison', 'awake', 'has', 'sel', 'cursor',
+      'last-from', 'last-to', 't-move', 't-capture', 't-teleport', 't-place', 't-swap', 't-wake',
+      'jfl0', 'jfl1', 'jfl2', 'jfl3'];
+    let noticeText = null, noticeAt = 0;
+
+    const tile = (x, y) => `(${x},${y})`;
+    const seatLabel = (h, s) => {
+      const r = (h.roster || []).find((p) => p.seat === s);
+      const st = (h.seats || [])[s];
+      if (r) return `${r.handle} (${SEAT_NAME[s]})`;
+      if (st && st.garrison) return `${SEAT_NAME[s]} garrison`;
+      return SEAT_NAME[s] || `seat ${s}`;
+    };
+    const kindName = (k) => (k === 'hero_awake' ? 'awake hero' : String(k || 'piece')).replace('_', ' ');
+    const lastSentence = (h, byTile) => {
+      const l = h.last;
+      if (!l) return '';
+      const who = seatLabel(h, l.seat);
+      const elim = l.eliminated != null ? `; ${seatLabel(h, l.eliminated)} is eliminated` : '';
+      const from = tile(l.fx, l.fy), to = tile(l.tx, l.ty);
+      const moverNow = byTile[l.ty * 10 + l.tx];
+      const mover = l.promoted ? 'pawn' : (moverNow && moverNow.owner === l.seat ? kindName(moverNow.kind) : 'piece');
+      const took = l.captured ? ` took a ${kindName(l.captured)}` : '';
+      switch (l.kind) {
+        case 'joker_teleport': return `${who} joker teleported ${from} to ${to}${elim}`;
+        case 'joker_place': return `${who} joker placed from ${from} onto ${to}${elim}`;
+        case 'hero_swap': return `${who} hero swapped with its pawn at ${to} and awoke`;
+        case 'hero_wake': return `${who} hero awoke in place at ${to}`;
+        case 'pass': return `${who} had no legal move and passed${elim}`;
+        case 'timeout': return `${who} ran out of time${elim}`;
+        default: {
+          const promo = l.promoted ? ', promoted to queen' : '';
+          return `${who} ${mover} ${from} to ${to}${took}${promo}${elim}`;
+        }
+      }
+    };
+    const nextPlacement = (h, s, st, hasJoker) => {
+      if (!hasJoker) return 'joker lost';
+      const own = st.own_turns | 0;
+      if (h.phase === 'playing' && h.seat === s && own > 0 && own % JOKER_PLACE_EVERY === 0) {
+        return 'joker placement now';
+      }
+      const next = (Math.floor(own / JOKER_PLACE_EVERY) + 1) * JOKER_PLACE_EVERY;
+      return `joker placement on own turn ${next}`;
+    };
+
+    function render(h) {
+      const me = (h.me == null) ? 0 : h.me;
+      placeCells(me);
+
+      // pieces by tile
+      const byTile = new Array(100).fill(null);
+      const jokerOf = [false, false, false, false];
+      for (const p of h.pieces || []) {
+        byTile[p.y * 10 + p.x] = p;
+        if (p.kind === 'joker') jokerOf[p.owner] = true;
+      }
+      const seats = h.seats || [];
+      const tgt = new Map();
+      for (const t of h.targets || []) tgt.set(t.y * 10 + t.x, t.k);
+      const selI = h.sel ? h.sel[1] * 10 + h.sel[0] : -1;
+      const curI = h.cursor ? h.cursor[1] * 10 + h.cursor[0] : -1;
+      const l = h.last;
+      const lastMoves = l && !['pass', 'timeout'].includes(l.kind);
+      const fromI = lastMoves ? l.fy * 10 + l.fx : -1;
+      const toI = lastMoves ? l.ty * 10 + l.tx : -1;
+      const jfl = new Map();
+      (h.joker_fl || []).forEach((t, s) => { if (t) jfl.set(t[1] * 10 + t[0], s); });
+
+      for (let i = 0; i < 100; i++) {
+        const b = cells[i];
+        const p = byTile[i];
+        b.classList.remove(...CELL_DYN);
+        const g = b.firstElementChild;
+        if (p) {
+          g.textContent = GLYPH[p.kind] || '?';
+          b.classList.add('has', 'own' + p.owner);
+          if (p.kind === 'hero_awake') b.classList.add('awake');
+          if (seats[p.owner] && seats[p.owner].garrison) b.classList.add('garrison');
+          b.title = `${SEAT_NAME[p.owner]} ${kindName(p.kind)} ${tile(i % 10, (i / 10) | 0)}`;
+        } else {
+          g.textContent = '';
+          b.title = tile(i % 10, (i / 10) | 0);
+        }
+        const k = tgt.get(i);
+        if (k) b.classList.add('t-' + k);
+        if (i === selI) b.classList.add('sel');
+        if (i === curI) b.classList.add('cursor');
+        if (i === fromI) b.classList.add('last-from');
+        if (i === toI) b.classList.add('last-to');
+        const js = jfl.get(i);
+        if (js != null) b.classList.add('jfl' + js);
+      }
+
+      // banner and whose turn
+      bannerEl.classList.remove('win');
+      if (h.phase === 'finished') {
+        bannerEl.classList.add('win');
+        const why = END_TEXT[h.end] || (h.end ? String(h.end).replace('_', ' ') : '');
+        bannerEl.textContent = h.winner != null
+          ? `${seatLabel(h, h.winner)} wins: ${why}`
+          : `draw${why ? ': ' + why : ''}`;
+        whoseEl.textContent = '';
+        whoseEl.classList.remove('mine');
+      } else if (h.phase === 'playing') {
+        bannerEl.textContent = `turn ${h.turn}`;
+        if (h.my_turn) { whoseEl.textContent = 'your turn'; whoseEl.classList.add('mine'); }
+        else { whoseEl.textContent = `${seatLabel(h, h.seat)} (seat ${h.seat}) to move`; whoseEl.classList.remove('mine'); }
+      } else {
+        bannerEl.textContent = h.mode === 'online' && !h.connected ? 'connecting…'
+          : h.screen === 'browsing' ? 'joining the lobby…' : 'waiting for players';
+        whoseEl.textContent = '';
+        whoseEl.classList.remove('mine');
+      }
+      if (h.mode === 'online' && h.connected === false && h.phase !== 'waiting') {
+        whoseEl.textContent = 'connection lost';
+      }
+
+      // timer: what the wasm reports, never a page-side extrapolation
+      const playing = h.phase === 'playing';
+      timerEl.classList.toggle('hidden', !playing);
+      if (playing) {
+        const ms = Math.max(0, Math.min(TURN_MS, h.left_ms | 0));
+        timerN.textContent = (ms / 1000).toFixed(1) + ' s';
+        barFill.style.width = (100 * ms / TURN_MS).toFixed(1) + '%';
+        barEl.classList.toggle('low', ms < 3000);
+      }
+
+      // notice: shown while it stays the same text, then fades
+      if (h.notice !== noticeText) {
+        noticeText = h.notice;
+        noticeAt = performance.now();
+        noticeEl.textContent = h.notice || '';
+      }
+      noticeEl.classList.toggle('show', !!h.notice && performance.now() - noticeAt < 4000);
+
+      lastEl.textContent = lastSentence(h, byTile);
+      quietEl.textContent = playing ? `no progress ${h.quiet | 0} of ${NO_PROGRESS_TURNS}` +
+        (h.stalls ? ` · forced passes in a row ${h.stalls}` : '') + (h.pending ? ' · sending…' : '') : '';
+
+      // waiting: the start button, the creator, the seating
+      const waiting = h.phase === 'waiting' && h.mode === 'online';
+      waitingEl.classList.toggle('hidden', !waiting);
+      if (waiting) {
+        const creatorName = seatLabel(h, (h.roster || []).find((p) => p.id === h.creator)?.seat ?? 0);
+        startBtn.classList.toggle('hidden', !h.is_creator);
+        startBtn.disabled = !h.can_start;
+        creatorLine.textContent = h.is_creator
+          ? (h.can_start ? 'you may start: the empty corners become garrisons' : 'you are the creator; the game can start with two players')
+          : `waiting for ${creatorName} to start`;
+        seatingEl.replaceChildren(...[0, 1, 2, 3].map((s) => {
+          const d = document.createElement('div');
+          const sw = document.createElement('span');
+          sw.className = 'sw';
+          sw.style.background = `var(--seat${s})`;
+          const r = (h.roster || []).find((p) => p.seat === s);
+          const who = r
+            ? `${r.handle}${r.id === h.creator ? ' (creator)' : ''}${s === h.me ? ' (you)' : ''}`
+            : 'empty, a garrison if the game starts';
+          d.append(sw, `seat ${s} ${SEAT_NAME[s]} ${SEAT_CORNER[s]}: ${who}`);
+          return d;
+        }));
+      }
+
+      // seat panels
+      for (let s = 0; s < 4; s++) {
+        const st = seats[s] || {};
+        const P = seatPanels[s];
+        P.p.classList.toggle('tomove', playing && h.seat === s);
+        P.p.classList.toggle('dead', !!(st.garrison || (st.present === false && !st.garrison) || (st.alive === false && !st.garrison)));
+        P.nm.textContent = `${seatLabel(h, s)}${h.me === s ? ' (you)' : ''}`;
+        P.st.textContent = st.garrison ? `garrison, ${SEAT_CORNER[s]} corner`
+          : st.alive === false ? 'eliminated'
+          : st.present === false ? 'absent'
+          : `seated, ${SEAT_CORNER[s]} corner`;
+        if (playing && st.alive && !st.garrison) {
+          P.tu.textContent = `own turns ${st.own_turns | 0} · ${nextPlacement(h, s, st, jokerOf[s])}`;
+          P.to.textContent = `timeouts ${st.timeouts | 0} of ${TIMEOUTS_TO_ELIMINATE}`;
+        } else {
+          P.tu.textContent = ''; P.to.textContent = '';
+        }
+        P.cap.textContent = (st.captured || []).map((k) => GLYPH[k] || '?').join(' ');
+        P.cap.title = (st.captured || []).length ? 'captured: ' + st.captured.map(kindName).join(', ') : '';
+      }
+    }
+    window.__kingsRender = render;
+
+    // ---- server discovery ----------------------------------------------
+    const ROOT = new URL('../../../', location);
+    let cfg = {};
+    try {
+      const r = await fetch(new URL(`server.json?ts=${Date.now()}`, ROOT), { cache: 'no-store' });
+      if (r.ok) cfg = await r.json();
+    } catch {}
+    const V = cfg.v || '0';
+
+    // The bundle may be missing on a page that was published ahead of it;
+    // the page then still shows the lobby list and the rules and says why
+    // nothing can start, instead of dying on an uncaught rejection.
+    let engineError = null;
+    try {
+      wasm = await import(`./pkg/kings.js?v=${V}`);
+      await wasm.default({ module_or_path: `./pkg/kings_bg.wasm?v=${V}` });
+    } catch (e) {
+      wasm = null;
+      engineError = e;
+      console.error(e);
+    }
+    const proto = () => { try { return wasm ? wasm.proto_version() : 0; } catch { return 0; } };
+
+    // Prefer a hosts[] entry that speaks this build's protocol, newest first;
+    // fall back to the top-level key.
+    const rNum = (v) => { const m = /(\d+)/.exec(String(v || '')); return m ? Number(m[1]) : -1; };
+    // Pure: (server.json object, this build's proto or null when unknown) -> url.
+    const pickWs = (c, p) => {
+      if (Array.isArray(c.hosts)) {
+        const ok = c.hosts
+          .filter((h) => h && typeof h.kings_ws === 'string' && h.kings_ws.trim() && (p == null || h.kings_proto === p))
+          .sort((a, b) => rNum(b.version) - rNum(a.version));
+        if (ok.length) return ok[0].kings_ws.trim();
+      }
+      return (c.kings_ws || '').trim();
+    };
+    window.__kingsPickWs = pickWs;
+    const kingsWs = () => pickWs(cfg, wasm ? proto() : null);
+    {
+      const p = proto();
+      const sp = cfg.kings_proto;
+      $('proto').textContent = (wasm ? `protocol v${p}` : 'engine bundle missing') +
+        (sp != null ? ` · server publishes v${sp}` : '');
+      if (wasm && sp != null && sp !== p) $('proto').style.color = '#ff9c8f';
+    }
+    if (!wasm) {
+      const n = $('engine-note');
+      n.className = 'note bad';
+      n.textContent = 'the engine bundle (pkg/kings.js) is not published for this page yet, so no game can start here; the lobby list and the rules still work';
+      $('btn-practice').disabled = true;
+      $('btn-create').disabled = true;
+    }
+
+    // ---- account handle (shared with the hub and the arena) ------------
+    const ACCT_KEY = 'ember-account';
+    const readAccount = () => {
+      try { const a = JSON.parse(localStorage.getItem(ACCT_KEY)); if (a && a.handle) return a; } catch {}
+      return null;
+    };
+    const acct = readAccount();
+    if (acct) $('handle').value = acct.handle;
+    const handleValue = () => {
+      const h = ($('handle').value || '').trim().slice(0, 20) || 'player';
+      try {
+        const a = readAccount() || { id: crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2), created: new Date().toISOString() };
+        a.handle = h;
+        localStorage.setItem(ACCT_KEY, JSON.stringify(a));
+      } catch {}
+      return h;
+    };
+
+    // ---- lobby browser -------------------------------------------------
+    // Its own short-lived socket, as in fire: listing is ungated on the
+    // server, so it works even without the bundle (proto 0, like the hub).
+    const listLobbies = () => {
+      const rows = $('lobby-rows');
+      const note = (text, bad) => {
+        const s = document.createElement('span');
+        s.className = 'note' + (bad ? ' bad' : '');
+        s.textContent = text;
+        rows.replaceChildren(s);
+      };
+      const url = kingsWs();
+      if (!url) { note('no online server is published right now, hotseat still works'); return; }
+      note('looking for lobbies…');
+
+      let done = false;
+      let ws;
+      try { ws = new WebSocket(url); } catch (e) { note('bad server url: ' + e.message, true); return; }
+      const finish = (msg, bad) => { if (!done) { done = true; if (msg) note(msg, bad); ws.close(); } };
+      setTimeout(() => finish('server did not answer', true), 6000);
+      ws.onerror = () => finish('server not reachable', true);
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ t: 'hello', proto: proto(), handle: 'browser' }));
+        ws.send(JSON.stringify({ t: 'list_lobbies' }));
+      };
+      ws.onmessage = (e) => {
+        let m; try { m = JSON.parse(e.data); } catch { return; }
+        if (m.t === 'rejected') { finish('server refused: ' + m.reason, true); return; }
+        if (m.t !== 'lobbies') return;
+        done = true; ws.close();
+        if (!m.lobbies.length) { note('no lobbies yet, create one below'); return; }
+        rows.replaceChildren(...m.lobbies.map((l) => {
+          const row = document.createElement('div');
+          row.className = 'lobby';
+          const nm = document.createElement('span');
+          nm.className = 'nm';
+          nm.textContent = l.name + (l.has_password ? ' 🔒' : '');
+          const meta = document.createElement('span');
+          meta.className = 'meta';
+          meta.textContent = `${l.players}/${l.cap} · host ${l.host}${l.playing ? ' · playing' : ''}`;
+          const go = document.createElement('button');
+          go.textContent = l.playing ? 'In play' : 'Join';
+          go.disabled = !!l.playing || !wasm;
+          go.title = l.playing ? 'no joining once the game has started' : '';
+          go.onclick = () => {
+            const pass = l.has_password ? prompt(`Password for "${l.name}"`) : null;
+            if (l.has_password && pass === null) return;
+            launchOnline(l.name, pass, false);
+          };
+          row.append(nm, meta, go);
+          return row;
+        }));
+      };
+    };
+
+    // ---- launching -----------------------------------------------------
+    const showStage = () => {
+      $('start').classList.add('hidden');
+      $('stage').classList.remove('hidden');
+    };
+
+    const launchLocal = () => {
+      if (launched || !wasm) return;
+      launched = true;
+      showStage();
+      wasm.start_local();
+      pollHud();
+    };
+
+    const launchOnline = (lobby, password, create) => {
+      if (launched || !wasm) return;
+      const url = kingsWs();
+      if (!url) { $('online-note').className = 'note bad'; $('online-note').textContent = 'no server published'; return; }
+      launched = true;
+      showStage();
+      try {
+        wasm.start_online(JSON.stringify({
+          ws: url,
+          handle: handleValue(),
+          lobby, password: password || '', create: !!create,
+        }));
+        pollHud();
+      } catch (e) {
+        launched = false;
+        $('stage').classList.add('hidden');
+        $('start').classList.remove('hidden');
+        $('online-note').className = 'note bad';
+        $('online-note').textContent = String(e);
+      }
+    };
+
+    $('btn-practice').onclick = launchLocal;
+    $('btn-online').onclick = () => {
+      $('online-panel').classList.toggle('hidden');
+      $('btn-online').classList.add('primary');
+      $('btn-practice').classList.remove('primary');
+      if (!$('online-panel').classList.contains('hidden')) listLobbies();
+    };
+    $('btn-refresh').onclick = listLobbies;
+    $('btn-create').onclick = () => {
+      const name = ($('newlobby').value || '').trim();
+      if (!name) { $('online-note').className = 'note bad'; $('online-note').textContent = 'give the lobby a name'; return; }
+      launchOnline(name, ($('newpass').value || '').trim(), true);
+    };
+    startBtn.onclick = () => { if (launched && wasm) { try { wasm.start_game(); } catch (e) { console.error(e); } } };
+
+    // ---- HUD poll ------------------------------------------------------
+    // One snapshot per animation frame; render() is the only writer.
+    const pollHud = () => {
+      const tick = () => {
+        try {
+          render(JSON.parse(wasm.state_json()));
+        } catch (e) {
+          if (!pollHud.warned) { pollHud.warned = true; console.error(e); }
+        }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    };
+
+    // ---- pending join handed over from the hub -------------------------
+    let pending = null;
+    try { pending = JSON.parse(sessionStorage.getItem('ember-pending')); } catch {}
+    sessionStorage.removeItem('ember-pending');
+    if (pending && pending.lobby) {
+      $('online-panel').classList.remove('hidden');
+      $('btn-online').classList.add('primary');
+      $('btn-practice').classList.remove('primary');
+      if (wasm) launchOnline(pending.lobby, pending.password, pending.action === 'create');
+      else listLobbies();
+    }
+  </script>
+</body>
+</html>

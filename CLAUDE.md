@@ -10,12 +10,12 @@ Depth lives in linked docs, loaded only when the task needs them. This file stay
 
 ## Simulation rules
 
-- **`crates/pong-core/` is shared between the client's prediction and the authoritative server.** A change there is a change to both. Assume every edit is a protocol question until you have proved it is not.
+- **`crates/arena-core/` is shared between the client's prediction and the authoritative server.** A change there is a change to both. Assume every edit is a protocol question until you have proved it is not.
 - Fixed 60 Hz, seeded RNG, fixed update order. Do not add a per-tick RNG: the only randomness today is two world-generation LCGs, and the first per-tick one has to be seeded and tick-indexed or replays and rollback die.
 - **Bullets are stepped server-side only.** Clients never simulate their own. That is the sole reason the `f32` transcendental in the launch (`tan` for aim elevation) is safe in hit registration. Add client-side shot prediction and it becomes a desync source. (Obstacle heights used to be a `sin` hash too; since `fcc4c68` every box carries its own `h`.)
-- **An obstacle has a bottom.** `Obstacle.base` (0 = on the floor) makes a roof a walkable slab with a tunnel under it. Four rules read it and they must agree: horizontal blocking, support, the ceiling clamp, and the bullet span test. Change one, change all four, and re-run the trench-city invariants in `pong-core`.
+- **An obstacle has a bottom.** `Obstacle.base` (0 = on the floor) makes a roof a walkable slab with a tunnel under it. Four rules read it and they must agree: horizontal blocking, support, the ceiling clamp, and the bullet span test. Change one, change all four, and re-run the trench-city invariants in `arena-core`.
 - Aim is a 2D unit vector **plus a scalar elevation**, never a 3D direction. Folding them collapses bullet range by `cos(pitch)` and freezes a player's facing on a near-vertical aim. See `docs/state-model.md`.
-- Body geometry (`eye_h`, `body_h`, `hit_radius`) lives in `pong-core`, not the renderer. Client and server must agree where a body *is*.
+- Body geometry (`eye_h`, `body_h`, `hit_radius`) lives in `arena-core`, not the renderer. Client and server must agree where a body *is*.
 
 ## Protocol rules
 
@@ -37,9 +37,11 @@ The scene pass is deliberately small. Work with it, not against it.
 | **One scene pass, one depth buffer, one camera, near/far `0.1`/`500`** | There is no separate viewmodel pass, so the gun clips into walls and anything within 0.1 of the eye is clipped. Expect it; it is not a regression you introduced. |
 | **`Instance`**: position, `Vec3` scale, colour, `rot: Quat`, mesh id | Scale applies **before** rotation. Normals use the same matrix, so non-uniform scale skews lighting. |
 
+The device floor is WebGL2 plus `EXT_color_buffer_float`, nothing else: **`docs/minimum-requirements.md`**. A feature that needs more is a project decision recorded there first.
+
 `include_bytes!` bakes assets into the wasm bundle and the deploy ships one bundle with no runtime fetch — every byte you add to an asset is a byte every web player downloads.
 
-Mesh ids are allocated in a fixed order in `crates/pong/src/lib.rs`. Adding parts shifts every later base; the `set_*` setters exist to absorb that.
+Mesh ids are allocated in a fixed order in `crates/arena/src/lib.rs`. Adding parts shifts every later base; the `set_*` setters exist to absorb that.
 
 ## Assets
 

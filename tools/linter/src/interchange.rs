@@ -2796,6 +2796,7 @@ mod tests {
     ///
     /// ´claim:interchange:a-link-carries-no-document-and-an-unknown-type-is-ignored´
     /// ´test:unit:a-link-carries-no-document-and-an-unknown-type-is-ignored´
+    #[cfg(unix)]
     #[test]
     fn a_link_carries_no_document_and_an_unknown_type_is_ignored() {
         let root = tree(&[

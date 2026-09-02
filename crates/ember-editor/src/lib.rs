@@ -266,7 +266,7 @@ pub fn axis_instances(len: f32, thick: f32) -> Vec<Instance> {
     ]
 }
 
-/// A placed object. Bite 7 turns this into `pong_core::level::Level`; until
+/// A placed object. Bite 7 turns this into `arena_core::level::Level`; until
 /// then it is deliberately the smallest thing that can be drawn and picked.
 #[derive(Clone, Copy, Debug)]
 pub struct Obj {
@@ -506,7 +506,7 @@ impl Editor {
 /// the blank page is already a level you can fly through, export, and get
 /// back byte-identical.
 fn starter_scene() -> Vec<Obj> {
-    level::from_level(&pong_core::shooter::Level::from_seed(starter_seed()))
+    level::from_level(&arena_core::shooter::Level::from_seed(starter_seed()))
 }
 
 fn starter_seed() -> u64 {

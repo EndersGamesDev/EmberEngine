@@ -1,0 +1,41 @@
+[package]
+name = "kings"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Distinct name so the bin's debug artifacts don't collide with the cdylib's.
+[[bin]]
+name = "kings-app"
+path = "src/main.rs"
+
+[dependencies]
+ember-engine = { path = "../ember-engine" }
+kings-core = { path = "../kings-core" }
+glam.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = [
+    "WebSocket", "MessageEvent", "Event", "CloseEvent", "ErrorEvent",
+    "Document", "Window", "Element",
+] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# rustls so `kings-app online wss://...` works natively, as pong does.
+tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
+rustls.workspace = true
+
+[dev-dependencies]
+# The online tests drive a real server over a real socket.
+kings-server = { path = "../kings-server" }
+# So the server's dropped-message warnings surface in test output.
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

@@ -26,28 +26,32 @@ crates/
   ember-engine/   the engine library
     app.rs        platform layer: window, event loop, input (winit)
     renderer.rs   GPU layer: owns wgpu; nothing above it touches the GPU
-  ember-net/      shared protocol: messages, framing, sanitization
-                  (+ examples/netbot.rs — headless verification client)
-  ember-server/   headless dedicated server: single 60 Hz sim thread,
-                  thread-per-connection IO feeding it events over channels
-  game/           the TCP arena client (ember-net stack): net session, world
-                  interpolation, scene — separate from the WebSocket shooter
-  pong/           the web client crate: BOTH the arena shooter and 3D pong,
-                  local + online; native bin + wasm lib
-  pong-core/      the shared deterministic 60 Hz sims — the arena shooter
-                  (shooter.rs) and pong (sim.rs) — plus their JSON protocol
-  pong-server/    public matchmaking + match server (WebSocket, lobbies with
+  ember-client-net/ shared native/wasm connection lifecycle and replay plumbing
+  ember-legacy/   moving capability boundary for frozen hosted versions
+  ember-net/      canonical outer JSON/WebSocket lobby protocol
+  ember-server/   sole game-neutral host and version registry
+  arena/          Arena client — the v0 pong classic + the online shooter;
+                  native bin (arena-app) + wasm lib; props.rs draws the v13 map
+  arena-core/     the shared deterministic 60 Hz sims — the arena shooter
+                  (shooter.rs, with the authored Level) and the v0 pong classic
+                  (sim.rs) — plus their JSON protocol (proto.rs)
+  arena-server/   public matchmaking + match server (WebSocket, lobbies with
                   optional passwords, authoritative sim per match)
   fire/           Fire Racer client: local + online; native bin + wasm lib
   fire-core/      shared deterministic racing sim (track, car, laps) + its own
-                  protocol, versioned independently of pong-core's
+                  protocol, versioned independently of arena-core's
   fire-server/    Fire Racer matchmaking + race server (WebSocket)
+  kings/ kings-core/ kings-server/   Four Kings: client, rules + protocol, server
+  what-is-this/   the browser + hardware diagnostic (local, optional upload)
   ember-editor/   the native level builder: fly, place, move/rotate/scale,
-                  spawn points; its document is pong-core's Level
+                  spawn points; its document is arena-core's Level
+games/            frozen game/version crates plus the hosted-set manifest
 web/              static page: menu, lobby browser, wasm game (GitHub Pages)
-deploy/           deploy-specht.sh (arena server) · deploy-pages.sh (web) ·
-                  deploy-pong-online.sh (pong server + tunnel + server.json) ·
-                  deploy-fire-online.sh (fire server + its own tunnel)
+deploy/           host.sh (run a host on any Linux box) · host-name.sh ·
+                  publish-host.sh (the ONLY writer of the server.json
+                  address book: one entry per host, merged never clobbered)
+                  deploy-pong-online.sh / deploy-fire-online.sh (ssh deploys)
+                  deploy-pages.sh (web) · watchdog.sh · deploy-specht.sh
 docs/             design documents (atw-first-rendering.md is adopted policy)
 ```
 
@@ -55,48 +59,12 @@ Strict one-way layering: game → scene/simulation → renderer → platform.
 
 ## Multiplayer
 
-Server-authoritative over TCP (length-prefixed [postcard] frames — TCP because
-the WireGuard userspace tunnels forward TCP only; the framing keeps the
-transport swappable). Clients send held movement intents; the server
-integrates at a fixed 60 Hz and broadcasts snapshots; clients interpolate
-between snapshots. All client input is sanitized (NaN/magnitude/name/frame
-size). Protocol changes bump `PROTOCOL_VERSION` in `ember-net`.
-
-```
-cargo run -p game                              # connect to 127.0.0.1:7777 (tunnel → specht)
-cargo run -p game -- 127.0.0.1:7799 alice      # explicit server + name
-cargo run -p ember-server -- --bind 127.0.0.1:7799        # local server
-cargo run -p ember-net --example netbot -- 127.0.0.1:7777 bot 6   # headless check
-```
-
-If the server is unreachable the client runs offline (local-only cube).
-
-### Diagnostics (tracing)
-
-All crates emit structured [tracing](https://docs.rs/tracing) events
-(`RUST_LOG` filtering still works; wgpu/winit `log` records are bridged in;
-on wasm, events land in the browser console). Built-in stall/lag detection:
-
-| Where  | Signal | Meaning |
-|--------|--------|---------|
-| server | `sim stall: fell behind the tick clock` | sim thread starved >10 ticks; clock resynced |
-| server | `tick_overruns` / `max_tick_busy_us` in `server health` | tick body exceeded its 16.7 ms budget |
-| server | `client lagging` / `client recovered from lag` | joined client silent >3 s (kick at 10 s) |
-| client | `frame stall` | >100 ms gap between frames (GC, OS hitch, hidden tab) |
-| client | `snapshot stream stale` / `recovered` | no server snapshot for >300 ms (lag spike) |
-| client | `network lag: high round-trip time` | keepalive RTT >250 ms (RTT shown in the periodic `online` status) |
-
-Known limitations (accepted for now): snapshot interpolation degenerates to
-snap-to-latest at frame rates ≤ 60 fps (a proper ~100 ms interpolation delay
-buffer is future work), and the client connects before the window opens, so an
-unreachable server makes launch pause ~4 s before the offline fallback.
+The native TCP cube demo has been retired. Multiplayer is migrating to one host, one outer protocol, and versioned frozen game contracts as described in [`docs/one-server-evergreen.md`](docs/one-server-evergreen.md).
 
 ## Roadmap
 
 - [x] **0. Base**: workspace, window, wgpu surface, clear color
-- [x] **0.5 Multiplayer online**: shared protocol (`ember-net`), authoritative
-      60 Hz dedicated server (`ember-server`) deployed on specht, client with
-      snapshot interpolation, players rendered as lit cubes
+- [x] **0.5 Multiplayer online**: the retired cube prototype established an authoritative server, client snapshot interpolation, and shared protocol
 - [x] **0.6 ATW-first presenter (stage A)**: scene renders offscreen
       (SceneFrame, color+depth); a presenter pass owns the swapchain
       (identity warp today — see `docs/atw-first-rendering.md`, adopted)
@@ -141,15 +109,9 @@ unreachable server makes launch pause ~4 s before the offline fallback.
 
 ## Infrastructure
 
-- **Local (Windows)**: primary dev machine; `cargo run -p game` opens the dev window.
+- **Local (Windows)**: primary dev machine.
 - **Remote servers** (via wireproxy tunnels + SSH, see `~/.ssh/config`):
-  - `specht` — hosts the live dedicated server: `~/ember-src/target/release/ember-server`
-    bound to `10.72.0.1:7777` (WireGuard-only, not public), log `~/ember-server.log`,
-    built in toolbox `ember-build` (rustup + gcc). Redeploy: `bash deploy/deploy-specht.sh`.
-    Local tunnel `127.0.0.1:7777 → 10.72.0.1:7777` in `~/.config/wireproxy-specht.conf`;
-    other WG peers connect to `10.72.0.1:7777` directly.
-    Caveats: started via nohup — does NOT survive a specht reboot; pkill patterns
-    must not match their own ssh command line (see deploy script).
+  - `specht` — hosts the live Arena and Fire deployment-continuity servers.
   - `adler` — RTX 4090: reserved for asset baking, Linux/Vulkan testing, CI-style builds.
 
 ## Games hub
@@ -165,11 +127,71 @@ The hub lists lobbies without loading a game bundle: the server lets any
 protocol version Hello + list, and enforces the live protocol only on
 create/join.
 
-## Arena Shooter
+## Many hosts, one address book
+
+**Why.** One machine ran the games. When it went down, or when it came back at a new address, nobody could play — and there were idle machines around that could have carried the game the whole time. The games now run on as many machines as we like, at the same time, and a page finds a working one by itself.
+
+**What runs where now.** A **host** is one machine running the game servers behind its own public address. Hosts are independent: they share nothing, they never talk to each other, and a lobby lives on exactly one of them. What they share is the **address book** — a single file, `server.json`, published on the Pages site — which lists every host with its addresses, the commit it was built from, and which protocol each of its servers speaks. ("Protocol" here is the wire format a build speaks. A page and a server have to agree on it exactly before anyone can create or join; that is why the book records it per host.)
+
+- **Names are automatic.** Each machine works out its own name once — two words, like `amber-otter` — from a hash of its hostname and user, and keeps it in `~/.ember/host-name`. Same box, same name, every deploy, so a publish replaces that host's line in the book instead of adding a new one. Every other host's line is left untouched.
+- **Every host records its build**, as `r<N>` plus a short commit — `N` is the number of commits, so a bigger number is a newer build. It is stamped into the binary at compile time, so a machine sitting on an old commit keeps honestly reporting that commit.
+- **Every server introduces itself in one round trip.** A page says hello; the reply now carries the host's name, its build, its commit, how many people are playing and how many lobbies are open. That is all a page needs to rank the hosts, and it costs no extra request.
+
+**How a page chooses.** It loads the book, asks every listed host at once, and keeps the ones that answer. Then it picks the **newest build that speaks this page's protocol**, and among those, the **emptiest**, and among those, the **nearest** (whoever answered fastest). Everything else that answered becomes the fallback list, in that same order. If the chosen host goes quiet in the seconds before the game starts, the page walks down the list and tells the player it moved. Once the game is actually running there is no failover: a host that dies mid-game ends that game, exactly as before. Falling back is about never being unable to *start*.
+
+Every page carries a small chip in its header naming the host it is on, its build and the round trip, with the commit and the raw address in the tooltip. The hub does more: it lists every host that answered, and every open lobby across all of them, each row tagged with the machine it lives on — so two people who happened to land on different machines can still find each other's game. A dropdown lets a player pin one host and always play there; "automatic" clears it again. A URL typed into the hub's server settings still overrides all of this for the arena, as it always did.
+
+**How to run a host.** Three ways, in increasing order of independence.
+
+1. **From this workstation, over ssh** — the existing path, for a machine we already have a key for:
+
+   ```
+   EMBER_HOST=<ssh name> bash deploy/deploy-pong-online.sh
+   EMBER_HOST=<ssh name> bash deploy/deploy-fire-online.sh
+   ```
+
+   The target machine needs a Rust toolchain reachable the way those scripts expect, `~/bin/cloudflared`, and ssh that works without a prompt.
+
+2. **On any Linux box, by itself** — no ssh from here, nothing to configure on this side:
+
+   ```
+   bash deploy/host.sh up        # clone or update, build, start, prove, publish
+   bash deploy/host.sh status    # what is running, from what, at what address
+   bash deploy/host.sh update    # rebuild only if the commit moved or something died
+   bash deploy/host.sh down      # stop it
+   ```
+
+   It needs `git`, a Rust toolchain, `cloudflared` and `python3`. The first build takes minutes; every later one takes seconds. Settings live in `~/.ember/host.env`, which the script writes on first run with everything commented out at its default, so a one-off change needs no edit — just put it in front of the command. `up` proves both servers answer on loopback, then brings up the tunnels, then proves they answer again through the public address, and only publishes after that. A failed deploy leaves the previous address in the book rather than sending players at a server nobody proved was alive.
+
+3. **As a mirror**, if you cannot write our address book — you publish your own one-host file and we link to it once:
+
+   ```
+   EMBER_PUBLISH='git@github.com:you/EmberEngine.git#gh-pages' bash deploy/host.sh up
+   ```
+
+   Send the resulting `host.json` URL over once; after that every update is yours alone and needs nobody's permission. `EMBER_PUBLISH=upstream` publishes straight into our book instead (needs push rights), and the default, `none`, prints the entry it *would* publish and changes nothing — useful for a dry run.
+
+**Picking or keeping a version.** `EMBER_REF` says which commit a host runs. The ssh deploys default to `HEAD`; `host.sh` defaults to `origin/main`. Pin one deliberately with `EMBER_REF=v12 bash deploy/host.sh up`. This is the point of the whole scheme: a host that stays on an older commit keeps the frozen pages of that era playable, because those pages find the hosts on their own protocol while the live page keeps landing on the newest build. Everything a deploy publishes — version, commit, protocol number — is read from that ref and never from the working tree, so a host can never advertise a build it is not running.
+
+**How updates flow.** Three routes, and they do not fight:
+
+- The workstation deploys **push**: they build, restart, and republish the new address.
+- `bash deploy/host.sh update` **pulls**: a host checks whether its ref moved and rebuilds only if it did, or if a server stopped running.
+- `deploy/watchdog.sh` runs here, where the git credentials already are, and watches the hosts named in `EMBER_HOSTS`. It redeploys a host when `origin/main` moves or when a published address stops answering — which is what covers the Cloudflare quick tunnel taking a new random name after every restart. It refuses to redeploy on top of people who are playing, and it keeps state per host, so one machine that keeps failing cannot hold the others back.
+
+**Where this honestly stands.** The pieces are built and the test suites pass; nothing has touched a real server yet.
+
+- **Verified by running it**, on the final tree `5d8e94e` inside the build distro: `cargo clippy` clean and `cargo test` green on every crate this touches and their dependents (19 suites, 168 tests, 24 s), `cargo fmt` clean, the wasm check of both game bundles ok, the deploy suites green (syntax 55/55, publish-host 101/101, ssh-deploys 52/52, watchdog 16/16, host-pids 16/16, 5 s), the host-picking rule's 53 node tests green, and the loopback suite green (38/38, 26 s) — that one is the real thing on one machine: it builds both servers from a bare clone, starts them under the machine's generated name, answers the repo's own probes on loopback *and* through the address it published, publishes into a local repository with per-game build stamps, then updates, reports status and shuts down clean. An adversarial review (four lenses, two independent refuters per finding) then confirmed 32 defects, and all but the few named in the backlog are fixed on this branch.
+- **Not verified**: the ssh deploys (`deploy-pong-online.sh`, `deploy-fire-online.sh`, `install-watchdog.sh`, `watchdog.sh`) have still not been run against a remote host since these changes — their ssh paths are exercised only through stand-in `ssh`/`scp` commands. What HAS run for real: `deploy/host.sh up` on the developer PC (inside its build distro) on 2026-09-02, which built r437, brought the arena and Fire Racer servers up behind quick tunnels, proved both through their public addresses (after learning to wait for DNS), and published the host `brass-heron` into the book; `deploy-pages.sh` then shipped this hub from the same clone, and the live hub picked that host with a 115 ms round trip. The old server on specht keeps running its previous arena build but is no longer in the book, because the book's legacy keys now follow the live protocol.
+- **The protocol did not move.** Both games keep the version they had, because every new field is informational and no shot, join or race resolves differently without it. Every build that worked before still works, and old servers and new pages understand each other in both directions.
+
+The full model — the file format, the exact picking rule, what a server reports and how a mirror works — is `docs/hosts.md`. What was deliberately *not* built, and what is still owed, is in `docs/plans/backlog.md`.
+
+## Arena Shooter (v13: Trench City)
 
 **Play: <https://endersgamesdev.github.io/EmberEngine/>** — pick Arena Shooter. First-person drop-in deathmatch for up to 8 players: WASD + mouse look, Space jump, Shift sprint, C crouch, RMB zoom, R reload, Q raises a shield that reflects the round back at the shooter, E is a melee that goes through a raised shield, and headshots kill outright.
 
-This is what "online" means in this repo. It runs on the WebSocket stack, not the TCP one: the shared deterministic 60 Hz sim is `crates/pong-core/src/shooter.rs` (the paddle sim in `sim.rs` is local pong only) and the authoritative server is `pong-server`. Clients predict their own movement against the same sim and reconcile against 30 Hz server state; **bullets are stepped server-side only**, which is why hit registration may use `f32` transcendentals at all.
+This is what "online" means in this repo. The shared deterministic 60 Hz sim is `crates/arena-core/src/shooter.rs` (the paddle sim in `sim.rs` is the v0 pong classic, local only) and the authoritative server is `arena-server`. Clients predict their own movement against the same sim and reconcile against 30 Hz server state; **bullets are stepped server-side only**, which is why hit registration may use `f32` transcendentals at all.
 
 ### v13 — Trench City
 
@@ -190,56 +212,84 @@ Around the square the client draws the city — a cathedral, a ring of Haussmann
 
 ### What the protocol bump means for old builds
 
-The authored level is a protocol change, so `PROTO_VERSION` in `crates/pong-core/src/proto.rs` goes to **13**. It has to: a v12 client would predict its movement against the seeded boxes while the server resolved it against the trench city, so every wall would be either invisible or imaginary. That is the `CLAUDE.md` test — an old peer that "plays a different game" is a bump, not a `#[serde(default)]`.
+The authored level is a protocol change, so `PROTO_VERSION` in `crates/arena-core/src/proto.rs` goes to **13**. It has to: a v12 client would predict its movement against the seeded boxes while the server resolved it against the trench city, so every wall would be either invisible or imaginary. That is the `CLAUDE.md` test — an old peer that "plays a different game" is a bump, not a `#[serde(default)]`.
 
-**The join gate is exact equality**, so the moment the server moves to 13 the frozen hub pages v7–v12 go **list-only**: they still see the lobby list (listing is ungated on purpose) but can no longer create or join, and they already say "archived" in the version picker. The lobby browser on the hub is unaffected — it sends `proto: 0` against `ListLobbies` and never loads a game bundle.
+**The join gate is exact equality**, so a page and a host must agree on 13 before anyone can create or join. With the address book (above) that is a per-host fact rather than a cliff: the live v13 page picks only hosts whose `arena-server` speaks 13, and until one is published its host chip says so ("*host* is on protocol 12 and this build speaks 13") rather than "offline". The frozen v12 page keeps finding hosts still on 12 for as long as any are in the book; the older frozen pages v7–v11 read only the legacy `ws` key, which follows the live protocol, so they go **list-only** — they still see the lobby list (listing is ungated on purpose) but cannot create or join, and they already say "archived" in the version picker. The hub's lobby browser is unaffected: it sends `proto: 0` against `ListLobbies` and routes a Join only to the page whose `games.json` entry declares that lobby's `proto` with `handover` set.
 
-The two sides deploy in this order, in one window: `deploy/deploy-pong-online.sh` (server first, so it speaks 13) and then `deploy/deploy-pages.sh` (which ships the staged v13 page and prints the bump warning it detects from `server.json`).
+Deploy a host first, then the pages, in one window: `EMBER_HOST=<ssh name> bash deploy/deploy-pong-online.sh` (or `bash deploy/host.sh up` on the box itself) puts an entry that speaks 13 in the book; `bash deploy/deploy-pages.sh` then ships the staged v13 page, writes `proto: 13` into the book, prints the bump warning it detects there, and re-points the legacy `ws` at a host on 13 — leaving it alone if none is published yet.
 
 ### Running it
 
-Online infrastructure: `pong-server` (WebSocket + JSON, `pong-core/proto.rs`) runs on the game host bound to loopback, fronted by a **Cloudflare quick tunnel** — a free public `https://….trycloudflare.com` domain that CHANGES every time the tunnel restarts. `deploy/deploy-pong-online.sh` rebuilds + restarts server and tunnel, then publishes the fresh domain to `server.json` on the Pages site (fetched cache-busted, so the page always finds the current server; its `v` stamp also cache-busts the wasm bundle per deploy). Server log: `~/pong-server.log`, tunnel log: `~/cloudflared.log`.
+Online infrastructure: `arena-server` (WebSocket + JSON, `arena-core/proto.rs`) runs on each host bound to loopback, fronted by a **Cloudflare quick tunnel** — a free public `https://….trycloudflare.com` domain that CHANGES every time the tunnel restarts. `EMBER_HOST=<ssh name> bash deploy/deploy-pong-online.sh` rebuilds + restarts server and tunnel, then publishes that host's fresh domain into its own entry in `server.json` on the Pages site, leaving every other host's entry alone; `bash deploy/host.sh up` does the same from the host itself. The server takes its name from `EMBER_HOST_NAME` (or `--name`) and answers every `Hello` with that name, its build stamp and its load. Server log: `~/pong-server.log` under the ssh deploy, `$EMBER_HOME/log/arena-server.log` under `host.sh`; tunnel log: `~/cloudflared.log`. See **Many hosts, one address book** above and `docs/hosts.md`.
 
-Headless check: `cargo run -p pong-server --example wsbot -- <URL> create|join <LOBBY> [PW|-] [HANDLE] [SECS] [MODES]`. `MODES` is a comma-separated list of `shield`, `jump`, `nofire` — without it the bot never raises the shield or jumps, so a green run says nothing about either. Two bots, one plain and one `shield,nofire`, demonstrate a reflect.
+Headless check: `cargo run -p arena-server --example wsbot -- <URL> create|join <LOBBY> [PW|-] [HANDLE] [SECS] [MODES]`. `MODES` is a comma-separated list of `shield`, `jump`, `nofire` — without it the bot never raises the shield or jumps, so a green run says nothing about either. Two bots, one plain and one `shield,nofire`, demonstrate a reflect. The bot names the host that welcomed it and the map it was dropped into (`map "trench-city"`), so a green run against a tunnel address also says which machine and which level answered.
 
-Native: `cargo run -p pong --bin pong-app online wss://… create|join LOBBY [PASSWORD|-] [HANDLE]`
+Native: `cargo run -p arena --bin arena-app online wss://… create|join LOBBY [PASSWORD|-] [HANDLE]`
+
+Web build: the same commands as the v0 section below (`-p arena --lib`, `arena.wasm`); the shooter and the v0 classic ship in one bundle, and `bash deploy/deploy-pages.sh` builds it.
+
+## Arena v0: the pong classic
+
+**Play: <https://endersgamesdev.github.io/EmberEngine/>** — local (2 players, one
+keyboard: `A`/`D` vs `←`/`→`, first to 7) or **online matchmaking**: pick a
+handle, create a lobby (password optional) or join an open one from the
+list. The match server is authoritative (the shared deterministic 60 Hz sim
+in `crates/arena-core/src/sim.rs` runs server-side); clients stream inputs
+and interpolate 30 Hz state. Either key set steers your paddle online, and
+player 2 gets a flipped camera so they also play from "their" side.
+
+Online infrastructure: `arena-server` (WebSocket + JSON, `arena-core/proto.rs`) runs on each host bound to loopback, fronted by a **Cloudflare quick tunnel** — a free public `https://….trycloudflare.com` domain that CHANGES every time the tunnel restarts. `EMBER_HOST=<ssh name> bash deploy/deploy-pong-online.sh` rebuilds + restarts server and tunnel, then publishes that host's fresh domain into its own entry in `server.json` on the Pages site, leaving every other host's entry alone. The book is fetched cache-busted, so a page always sees the current addresses; its `v` stamp also cache-busts the wasm bundle per deploy. Server log: `~/pong-server.log`, tunnel log: `~/cloudflared.log` on the host. See **Many hosts, one address book** above and `docs/hosts.md`.
+Headless check: `cargo run -p arena-server --example wsbot -- <URL> create|join <LOBBY> [PW|-] [HANDLE] [SECS] [MODES]`.
+`MODES` is a comma-separated list of `shield`, `jump`, `nofire` — without it
+the bot never raises the shield or jumps, so a green run says nothing about
+either. Two bots, one plain and one `shield,nofire`, demonstrate a reflect.
+
+Native: `cargo run -p arena --bin arena-app` (local) or
+`arena-app online wss://… create|join LOBBY [PASSWORD|-] [HANDLE]`
 
 Web build (needs `wasm32-unknown-unknown` target + `wasm-bindgen-cli`):
 
 ```
-cargo build --target wasm32-unknown-unknown --release -p pong --lib
-wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/pong.wasm
+cargo build --target wasm32-unknown-unknown --release -p arena --lib
+wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/arena.wasm
 ```
 
 then publish `web/` to the `gh-pages` branch — or just run `bash deploy/deploy-pages.sh`, which does all of the above.
-
-## Pong
-
-**Play: <https://endersgamesdev.github.io/EmberEngine/>** — pick Pong Classic. The first ember game, and today a **local two-player game only**: one keyboard, `A`/`D` against `←`/`→`, first to 7. There is no online pong; the paddle sim in `crates/pong-core/src/sim.rs` runs entirely in the client.
-
-Native: `cargo run -p pong --bin pong-app`. It ships in the same wasm bundle as the arena shooter, built by the commands above.
 
 ## Fire Racer
 
 **Play: <https://endersgamesdev.github.io/EmberEngine/>** — pick Fire Racer, then *Practice alone* against seven AI cars or *Race online*. `W`/`S` drive, `A`/`D` steer, `Space` is the handbrake that breaks traction into a drift, `Shift` spends one of three boost charges. Three laps of a castle bailey.
 
-Track, car physics and lap timing live in `crates/fire-core`, which is shared between the client's prediction and the authoritative server exactly as `pong-core` is for the arena — the client predicts its own car and reconciles against server state thirty times a second. The castle props are generated meshes and every texture is procedural, so none of them costs a download byte.
+Track, car physics and lap timing live in `crates/fire-core`, which is shared between the client's prediction and the authoritative server exactly as `arena-core` is for the arena — the client predicts its own car and reconciles against server state thirty times a second. The castle props are generated meshes and every texture is procedural, so none of them costs a download byte.
 
-Fire carries its **own** `PROTO_VERSION`, independent of `pong-core`'s. That is deliberate: bumping one game's protocol must never gate the other game's join. `server.json` records both, as `proto` and `fire_proto`.
+Fire carries its **own** `PROTO_VERSION`, independent of `arena-core`'s. That is deliberate: bumping one game's protocol must never gate the other game's join. `server.json` records both per host, as `proto` and `fire_proto`.
 
-Online infrastructure: `fire-server` on its own port behind its own Cloudflare quick tunnel, published to `server.json` under its own `fire_ws` key — a separate script, port, tunnel and key from the arena's, so redeploying one game can never knock the other offline. `bash deploy/deploy-fire-online.sh` rebuilds, restarts, and republishes; it health-checks by speaking the protocol (Hello must be answered with Welcome) before it publishes anything, so a failed deploy leaves the previous address in place rather than pointing players at a server that never came up.
+Online infrastructure: `fire-server` on its own port behind its own Cloudflare quick tunnel, published under its own `fire_ws` key — a separate script, port, tunnel and key from the arena's, so redeploying one game can never knock the other offline. `EMBER_HOST=<ssh name> bash deploy/deploy-fire-online.sh` rebuilds, restarts, and republishes fire's two keys onto that host's entry, leaving the arena's keys on the same machine untouched. It health-checks by speaking the protocol (Hello must be answered with Welcome) before it publishes anything, so a failed deploy leaves the previous address in place rather than pointing players at a server that never came up — and it refuses to restart over people who are mid-race unless `EMBER_FORCE` is set.
 
 ### Why no link here ever carries a tunnel domain
 
 A quick tunnel mints a **new** random `*.trycloudflare.com` hostname every time it restarts, so any such URL written into this README, or into a page, would be wrong by the next restart.
 
-Nothing needs one. The hub and each game page fetch `server.json` cache-busted at load and take the current address from it, so the only link anyone needs is the stable Pages URL above — the game selector already hooks itself to whichever server is live. `server.json` is the single source of truth and the deploy scripts are the only things that write it, each merging its own key so they cannot clobber each other.
+Nothing needs one. The hub and each game page fetch `server.json` cache-busted at load and pick a live host out of it, so the only link anyone needs is the stable Pages URL above. `server.json` is the single source of truth, and `deploy/publish-host.sh` is the only thing that writes its host list — each deploy upserts its own host's entry and merges only the keys for the game it deployed, so two machines, or two games on one machine, cannot clobber each other. It refuses to overwrite a book it could not parse, so one bad byte can never take every other host's address with it.
 
-What that does *not* survive is an unattended restart: the servers come back at an address `server.json` does not yet name. `deploy/watchdog.sh` closes that gap by probing the published address and redeploying when it stops answering. See `deploy/README-watchdog.md`.
+What that does *not* survive is an unattended restart: the servers come back at an address the book does not yet name. Many hosts already blunt this — the other machines keep answering while one is lost — and `deploy/watchdog.sh` closes the rest of the gap by probing each host's published addresses and redeploying just that host when one stops answering. See `deploy/README-watchdog.md`.
+
+## Four Kings
+
+**Play: <https://endersgamesdev.github.io/EmberEngine/>** and pick Four Kings: a four-corner chess variant, 2 to 4 players on a 10x10 board, one action per 15-second turn, last king standing wins. Chess plus two new legend pieces, the Joker (a teleporting sniper with a single capture tile) and the Hero (dormant until it trades places with one of your pawns and wakes as a rook-plus-knight), with pawns that march forward or left so a corner formation is never a wall. Click a piece, click a highlighted target; `Esc` clears. Before the game starts, swap your legend and epic cards within their class.
+
+The rules of record are `docs/kings-design.md`, sections 1 to 3 (`docs/kings-rules.md` is the pointer); the server validator and the client are both written against that document, and no rule lives anywhere else. Rules and wire protocol are `crates/kings-core`, shared between the client (for move highlights only, never prediction) and the authoritative `kings-server`; the game has no simulation to step, so the server's hub only validates moves and runs the turn clock.
+
+Native: `cargo run -p kings --bin kings-app` for hotseat at one keyboard, or `kings-app online wss://… create|join LOBBY [PASSWORD|-] [HANDLE]` against a server.
+
+Kings carries its **own** `PROTO_VERSION`, independent of `arena-core`'s and `fire-core`'s. That is deliberate: bumping one game's protocol must never gate another game's join. `server.json` records it as `kings_proto` next to the address in `kings_ws`, the `<id>_ws` / `<id>_proto` convention.
+
+Online infrastructure: `kings-server` on port 7782 (7780 is the arena, 7781 fire) behind its own Cloudflare quick tunnel, published under its own keys, so redeploying one game can never knock another offline. Unlike the other two it is hosted on the developer's Windows PC, inside the `claude-sdk` WSL distro, because that is where the toolchain, `cloudflared` and `python3` already live: `bash deploy/deploy-kings-online.sh` (from Git Bash) builds, restarts, and republishes, probing the protocol on loopback and then through the public URL before it publishes anything, exactly as fire's deploy does; `down` stops the pair and `status` reports what is running. There is no systemd in that distro, so nothing restarts the server after a reboot, a sleep or a `wsl --shutdown`; run the script again. The reason no link in this README carries a tunnel domain is explained in the Fire Racer section above, and it applies unchanged here.
 
 ## Run
 
 ```
 cargo run -p game                 # multiplayer arena (auto-connects to specht)
-cargo run -p pong --bin pong-app  # 3D pong, 2 players at one keyboard
+cargo run -p arena --bin arena-app  # 3D pong, 2 players at one keyboard
+cargo run -p kings --bin kings-app  # Four Kings hotseat, 4 seats at one keyboard
 ```

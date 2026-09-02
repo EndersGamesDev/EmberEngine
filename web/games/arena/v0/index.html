@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ember arena — v0, the pong classic</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 14px;
+      background: #06101f;
+      color: #c7d2e4;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      padding-bottom: 20px;
+    }
+    header {
+      width: min(1280px, 96vw);
+      display: flex; align-items: baseline; justify-content: space-between;
+      margin-top: 16px;
+    }
+    h1 { margin: 0; font-size: 1.3rem; letter-spacing: 0.16em; font-weight: 600; }
+    h1 span { color: #f0b429; }
+    h1 a { color: #6ea8fe; text-decoration: none; font-size: 0.85rem; letter-spacing: 0; }
+    .controls { display: flex; gap: 28px; font-size: 0.95rem; }
+    .controls b { color: #6ea8fe; }
+    .controls b.p2 { color: #f2705f; }
+    kbd {
+      background: #14243c; border: 1px solid #2a3f60; border-bottom-width: 3px;
+      border-radius: 5px; padding: 1px 7px; font-family: inherit;
+    }
+    #ember-root canvas {
+      width: min(1280px, 96vw) !important;
+      aspect-ratio: 16 / 9;
+      height: auto !important;
+      border-radius: 10px;
+      outline: none;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.55);
+      background: #000;
+    }
+    #loading { font-size: 0.9rem; opacity: 0.8; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><a href="../../../">⬅ games</a> &nbsp; ember <span>arena</span> <small style="opacity:.5">v0 · the pong classic</small></h1>
+  </header>
+  <div class="controls">
+    <div><b>Player 1</b> (blue, near): <kbd>A</kbd> <kbd>D</kbd></div>
+    <div><b class="p2">Player 2</b> (red, far): <kbd>←</kbd> <kbd>→</kbd></div>
+    <div>First to 7</div>
+  </div>
+  <div id="ember-root"><span id="loading">loading engine…</span></div>
+  <script type="module">
+    const fail = (msg) => {
+      const el = document.getElementById('loading');
+      if (el) el.textContent = 'failed to start: ' + (msg || 'see browser console');
+    };
+    window.addEventListener('error', (e) => fail(e.message));
+    window.addEventListener('unhandledrejection', (e) => fail(e.reason));
+    document.addEventListener('pointerdown', () => {
+      document.querySelector('#ember-root canvas')?.focus();
+    });
+    let v = '0';
+    try {
+      const r = await fetch(new URL(`server.json?ts=${Date.now()}`, new URL('../../../', location)), { cache: 'no-store' });
+      if (r.ok) v = (await r.json()).v || '0';
+    } catch {}
+    const { default: init, start_local } = await import(`./pkg/arena.js?v=${v}`);
+    await init({ module_or_path: `./pkg/arena_bg.wasm?v=${v}` });
+    // The engine removes #loading itself once the GPU is actually up.
+    start_local();
+  </script>
+</body>
+</html>

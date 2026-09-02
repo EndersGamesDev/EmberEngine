@@ -19,7 +19,7 @@ A level builder and a character inspector, reachable from the hub beside the gam
 | Question | Decision | Why |
 |---|---|---|
 | Fly-look input | Difference `cursor_ndc()` | It is *required* for picking, so it is already on the critical path. `mouse_delta()` comes from `DeviceEvent::MouseMotion`, and whether winit's web backend emits that without pointer lock is unverified. One pointer source cannot disagree with itself. |
-| Level format | New `Level` in `pong-core`; leave `assets/layouts/arena.json` alone | That file belongs to `crates/game`, a different net stack whose `ARENA_HALF` is 20.0 against the shooter's 24.0, loaded via `std::fs` in a crate with no wasm deps — it has never reached a web player. `h` and `spawns` are **sim truth** and must live where the server and the wasm client both see them. |
+| Level format | New `Level` in `arena-core`; leave `assets/layouts/arena.json` alone | That file belongs to `crates/game`, a different net stack whose `ARENA_HALF` is 20.0 against the shooter's 24.0, loaded via `std::fs` in a crate with no wasm deps — it has never reached a web player. `h` and `spawns` are **sim truth** and must live where the server and the wasm client both see them. |
 | Editor crate | Separate `crates/ember-editor` | The live bundle is 18,438,122 bytes, 12,714,206 of it `include_bytes!` assets that gzip poorly because PNGs are incompressible. Someone who came to *look at the engine* should not download ~11 MB gz plus tungstenite, rustls and audio. A separate crate also gets its own mesh-id space, so it cannot shift the arena's `set_env_base`/`set_parts`/`set_backdrop` bases. |
 | Axis colours | Over-drive the instance colour past 1.0 | The shader lights, ACES-tonemaps and fogs every fragment. A gizmo coloured `(1,0,0)` comes out dark red on unlit faces and washes toward fog with distance — defeating the entire point of "different colors to know where you place things". Instance colour is an unclamped multiplier; clamping happens inside `aces()`. |
 | E = rotate, on a box with no rotation | Free yaw on decor; **90° snap** on anything that becomes an `Obstacle` | `Obstacle` is an AABB on XZ. A freely rotated collidable is unrepresentable without OBB collision in `overlaps`, `blocked`, `support_height` and the bullet test. A 90° yaw *is* representable, by swapping extents. The UI must show the snap happening rather than silently discard the rotation at save. |
@@ -39,7 +39,7 @@ A level builder and a character inspector, reachable from the hub beside the gam
 | 3 | Select, and the three-axis gizmo drawn | **peer** |
 | 4 | Drag: translate, rotate, scale on the locked axis | **peer** |
 | 5 | The command queue, the palette, and spawn markers | **peer** |
-| 6 | `Level` in `pong-core`; `Obstacle` gains `h`. No proto, no wire, nothing observable changes | **peer** (disjoint from 1–5 — run in parallel) |
+| 6 | `Level` in `arena-core`; `Obstacle` gains `h`. No proto, no wire, nothing observable changes | **peer** (disjoint from 1–5 — run in parallel) |
 | 7 | The editor authors and exports a `Level` | **peer** |
 | 8 | The one engine change: measure, then fix, the wasm aspect/cursor divergence | browser |
 | 9 | The web shell: wasm entries, the DOM sidebar, the editor bundle | browser |

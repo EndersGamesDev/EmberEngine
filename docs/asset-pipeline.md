@@ -222,7 +222,7 @@ Anything beyond those two — per-face detail maps, normal or roughness maps —
 
 ## The node-name contract
 
-Names are load-bearing. `load_assets` in `crates/pong/src/online.rs` classifies on them:
+Names are load-bearing. `load_assets` in `crates/arena/src/online.rs` classifies on them:
 
 | Name | Meaning |
 |---|---|

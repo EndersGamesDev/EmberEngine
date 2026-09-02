@@ -1,0 +1,9 @@
+{"t":"welcome","proto":4,"motd":"ember arena — cubes with guns"}
+{"t":"error","message":"already in a game"}
+{"t":"lobby_list","lobbies":[{"name":"alpha","host":"ender","has_password":true,"players":1,"cap":8}]}
+{"t":"game_joined","id":0,"seed":42,"arena_half":24.0,"players":[{"id":0,"handle":"ender","color":[0.25,0.55,0.95]}]}
+{"t":"player_joined","meta":{"id":1,"handle":"guest","color":[0.92,0.32,0.28]}}
+{"t":"player_left","id":1}
+{"t":"state","tick":2,"players":[{"id":0,"x":1.0,"z":2.0,"ax":0.0,"az":1.0,"hp":3,"score":4,"alive":true,"crouch":true}],"bullets":[{"x":3.0,"z":4.0,"vx":5.0,"vz":6.0}]}
+{"t":"kill","killer":0,"victim":1}
+{"t":"pong","nonce":7}

@@ -29,8 +29,8 @@
 //! palette is what the user places from and a hidden ninth entry helps
 //! nobody.
 
+use arena_core::shooter::{Level, Obstacle};
 use glam::Vec3;
-use pong_core::shooter::{Level, Obstacle};
 
 use crate::Obj;
 use crate::palette::{Class, Kind, PALETTE};
@@ -182,7 +182,7 @@ pub fn from_level(level: &Level) -> Vec<Obj> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pong_core::shooter::{ARENA_HALF, Cover};
+    use arena_core::shooter::{ARENA_HALF, Cover};
 
     fn obj(pos: Vec3, scale: Vec3, yaw: f32, class: Class) -> Obj {
         Obj {
@@ -360,12 +360,12 @@ mod tests {
         // And it plays as a roof: the sim walks under it and stands on it.
         let obs = &level.obstacles;
         assert_eq!(
-            pong_core::shooter::support_height([4.0, 0.0], 0.6, 0.0, obs),
+            arena_core::shooter::support_height([4.0, 0.0], 0.6, 0.0, obs),
             0.0,
             "on the floor under the roof you are on the floor"
         );
         assert!(
-            (pong_core::shooter::support_height([4.0, 0.0], 0.6, 2.9, obs) - 2.9).abs() < 1e-5,
+            (arena_core::shooter::support_height([4.0, 0.0], 0.6, 2.9, obs) - 2.9).abs() < 1e-5,
             "on top of it you are on it"
         );
 
