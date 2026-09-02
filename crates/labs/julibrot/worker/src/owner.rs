@@ -198,11 +198,10 @@ impl ViewerOwner {
     pub fn configure_navigation(&mut self, config: NavigationConfig) -> Result<(), OwnerError> {
         let zoom_log2 = self.staged_hot.get().zoom_log2;
         let scale = pixel_scale(zoom_log2, config.grid_width)?;
-        let displacement = config.centre.displacement_px(
-            &config.reference_centre,
-            &config.plane,
-            scale,
-        )?;
+        let displacement =
+            config
+                .centre
+                .displacement_px(&config.reference_centre, &config.plane, scale)?;
         let centre_f64 = mirror_centre(&config.centre)?.coords;
         let mut hot = self.staged_hot.get();
         hot.centre_from_reference_px = displacement;
@@ -269,11 +268,8 @@ impl ViewerOwner {
             navigation.grid_width,
         )?;
         let scale = pixel_scale(zoom_log2_after, navigation.grid_width)?;
-        let displacement = centre.displacement_px(
-            &navigation.reference_centre,
-            &navigation.plane,
-            scale,
-        )?;
+        let displacement =
+            centre.displacement_px(&navigation.reference_centre, &navigation.plane, scale)?;
         let centre_f64 = mirror_centre(&centre)?.coords;
 
         navigation.centre = centre;
@@ -321,9 +317,9 @@ impl ViewerOwner {
     /// Reports whether one coalesced navigation submission is waiting.
     #[must_use]
     pub fn navigation_pending_depth(&self) -> u32 {
-        self.navigation
-            .as_ref()
-            .map_or(0, |navigation| u32::from(navigation.pending_generation.is_some()))
+        self.navigation.as_ref().map_or(0, |navigation| {
+            u32::from(navigation.pending_generation.is_some())
+        })
     }
 
     /// Returns and clears the latest typed navigation refusal.
