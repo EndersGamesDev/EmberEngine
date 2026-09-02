@@ -3,319 +3,309 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>GPU resource heap lab</title>
+  <title>GPU heap lattice · WebGL2</title>
   <style>
-    :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #070910; color: #edf4ff; }
+    :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #060810; color: #eef4ff; }
     * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 18% -15%, #243553, #070910 55%); }
-    header { padding: 1rem clamp(1rem, 3vw, 2.4rem); border-bottom: 1px solid #ffffff1a; }
+    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 12% -10%, #25375b, #060810 54%); }
+    header, main, footer { width: min(1180px, 100%); margin-inline: auto; padding-inline: clamp(1rem, 3vw, 2rem); }
+    header { padding-top: 1.2rem; padding-bottom: .8rem; }
     h1, h2 { margin: 0; font-family: system-ui, sans-serif; }
-    h1 { font-size: clamp(1.2rem, 3vw, 2rem); }
+    h1 { font-size: clamp(1.4rem, 4vw, 2.4rem); }
     h2 { font-size: 1.05rem; }
-    p { max-width: 84rem; color: #aebbd0; line-height: 1.55; }
-    main { display: grid; gap: 1rem; padding: 1rem clamp(1rem, 3vw, 2.4rem) 2rem; }
-    section { padding: 1rem; border: 1px solid #ffffff1c; border-radius: .55rem; background: #0b101bd9; }
-    .controls { display: flex; flex-wrap: wrap; gap: .55rem; margin: .8rem 0; }
-    button { padding: .5rem .7rem; color: #edf4ff; background: #151f30; border: 1px solid #48617f; border-radius: .35rem; font: inherit; cursor: pointer; }
-    button.selected { color: #06100b; background: #8be0b1; border-color: #8be0b1; }
-    button:disabled { opacity: .45; cursor: default; }
-    canvas { display: block; width: min(100%, 960px); aspect-ratio: 16 / 9; border: 1px solid #ffffff1d; background: #03050a; image-rendering: auto; }
-    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: .65rem; margin-top: .75rem; }
-    .card { padding: .7rem; border: 1px solid #ffffff16; border-radius: .4rem; background: #070b13; min-height: 7.6rem; }
+    p { color: #acb9cd; line-height: 1.55; }
+    main { display: grid; gap: .8rem; padding-bottom: 1.5rem; }
+    section { border: 1px solid #ffffff1c; border-radius: .55rem; background: #0b101bdd; padding: .9rem; }
+    .controls { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: .65rem 0; }
+    button, input { color: #edf4ff; background: #151f30; border: 1px solid #48617f; border-radius: .35rem; font: inherit; }
+    button { padding: .48rem .7rem; cursor: pointer; }
+    button.selected { color: #05110b; background: #8be0b1; border-color: #8be0b1; }
+    button:disabled { opacity: .48; cursor: default; }
+    input[type="range"] { width: min(32rem, 100%); accent-color: #8be0b1; }
+    input[type="number"] { width: 12rem; padding: .45rem; }
+    canvas { display: block; width: 100%; aspect-ratio: 16 / 9; background: #02040a; border: 1px solid #ffffff18; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); gap: .65rem; }
+    .card { border: 1px solid #ffffff15; border-radius: .4rem; padding: .7rem; background: #070b13; min-height: 9rem; }
     .card strong { color: #8be0b1; }
-    .metric { color: #c8d5e8; line-height: 1.55; overflow-wrap: anywhere; }
-    .status { min-height: 2.4rem; color: #9edbb9; line-height: 1.5; }
+    .metric, .status { line-height: 1.55; overflow-wrap: anywhere; }
+    .status { color: #9edbb9; min-height: 2rem; }
     .failed { color: #ff9d9d; }
-    pre { max-height: 25rem; overflow: auto; padding: .75rem; background: #050810; border: 1px solid #ffffff12; color: #9fb0c7; white-space: pre-wrap; }
-    code { color: #dce9fb; }
-    footer { padding: 0 clamp(1rem, 3vw, 2.4rem) 2rem; color: #8796aa; line-height: 1.55; }
+    pre { max-height: 27rem; overflow: auto; white-space: pre-wrap; color: #9fb0c7; background: #050810; border: 1px solid #ffffff12; padding: .7rem; }
+    a { color: #94caff; }
+    footer { color: #8796aa; line-height: 1.55; padding-bottom: 2rem; }
   </style>
 </head>
 <body>
   <header>
-    <h1>Descriptor-heap effect on WebGL2</h1>
-    <p>One immutable heap bind group, integer handles, two finite texture arrays, and no bindless claim. Every step renders immediately; mapped-fence measurement is opportunistic, cancellable, and reported separately from capacity arithmetic.</p>
+    <h1>Heap lattice · algebra against materialization</h1>
+    <p>Explicit wgpu 24 GL backend over WebGL2. This is a capacity and vertex-work experiment, not an edges-per-millisecond contest: the reference workload is raster-bound, so a large speedup is the first result to distrust.</p>
   </header>
   <main>
     <section>
-      <h2>Benchmark A · heap-fetch overhead</h2>
-      <p>Each base invocation shades a 512×512 RGBA8 target and performs 16 dependent nearest RGBA32F loads per fragment: 4,194,304 payload loads. Direct binds one 64×64 texture; heap reads descriptor 1, maps the same coordinates, and loads a DATA array layer.</p>
-      <div class="controls"><button id="run-a" type="button">Measure direct + heap</button></div>
-      <div id="status-a" class="status">requires visible replay · timer probe pending</div>
-      <div class="cards">
-        <div class="card"><strong>Direct-bound texture</strong><div id="a-direct" class="metric">median — · p95 — · requires visible replay</div></div>
-        <div class="card"><strong>Descriptor-indirect heap</strong><div id="a-heap" class="metric">median — · p95 — · requires visible replay</div></div>
-      </div>
-    </section>
-    <section>
-      <h2>Benchmark B · many small draws</h2>
-      <p>Both arms issue exactly N three-vertex draw calls. Traditional performs a 16-byte uniform write and bind-group/one-texel-texture switch per draw. Heap binds once, writes one 16-byte frame uniform, and transports handles through a static instance buffer.</p>
-      <div class="controls" id="steps">
-        <button type="button" data-draws="16" class="selected">16 draws</button>
-        <button type="button" data-draws="64">64 draws</button>
-        <button type="button" data-draws="256">256 draws</button>
-        <button type="button" data-draws="1024">1,024 draws</button>
-        <button type="button" data-draws="4096">4,096 draws</button>
-        <button type="button" data-draws="16384">16,384 draws</button>
-        <button type="button" data-draws="65536">65,536 draws</button>
-        <button type="button" data-draws="262144">262,144 draws</button>
-        <button type="button" data-draws="1048576">1,048,576 draws</button>
-      </div>
+      <h2>One object, one rung, three paths</h2>
       <div class="controls" id="modes">
-        <button type="button" data-mode="traditional">Traditional</button>
-        <button type="button" data-mode="heap" class="selected">Heap</button>
-        <button id="measure-b" type="button">Measure selected arm</button>
+        <button type="button" data-mode="mode-a" class="selected">Mode A · algebraic heap</button>
+        <button type="button" data-mode="mode-c">Mode C · edge poses in heap</button>
+        <button type="button" data-mode="layer">Layer · square slots</button>
       </div>
-      <div id="wall" class="metric">requested/delivered wall pending initialization</div>
-      <div id="status-b" class="status">requires visible replay</div>
+      <div class="controls">
+        <button id="previous" type="button">Previous rung</button>
+        <input id="step" type="range" min="0" max="112" value="1" step="1" aria-label="Lattice rung">
+        <button id="next" type="button">Next rung</button>
+      </div>
+      <div id="rung" class="metric">step 1 · tuple pending</div>
+      <div class="controls">
+        <label>Overridable GLsizei policy <input id="policy" type="number" min="1" max="2147483647" value="2147483647"></label>
+        <button id="apply-policy" type="button">Apply policy</button>
+        <button id="measure" type="button">Measure selected path</button>
+        <button id="one-frame" type="button">Render / measure one frame</button>
+      </div>
+      <div id="status" class="status">initializing versioned wasm…</div>
       <canvas id="canvas" width="960" height="540"></canvas>
-      <div class="cards">
-        <div class="card"><strong>Traditional</strong><div id="b-traditional" class="metric">median — · p95 — · requires visible replay</div></div>
-        <div class="card"><strong>Heap</strong><div id="b-heap" class="metric">median — · p95 — · requires visible replay</div></div>
+    </section>
+    <section>
+      <h2>Live requested-versus-delivered facts</h2>
+      <div id="walls" class="metric">runtime wall arithmetic pending</div>
+      <div class="grid">
+        <div class="card"><strong>Mode A</strong><div id="metric-mode-a" class="metric">median — · p95 — · requires visible replay</div></div>
+        <div class="card"><strong>Mode C</strong><div id="metric-mode-c" class="metric">median — · p95 — · requires visible replay</div></div>
+        <div class="card"><strong>Layer comparator</strong><div id="metric-layer" class="metric">median — · p95 — · requires visible replay</div></div>
       </div>
     </section>
     <section>
-      <h2>Runtime walls and lowering facts</h2>
-      <pre id="facts">loading versioned wasm…</pre>
+      <h2>Runtime capabilities and lowering</h2>
+      <pre id="facts">loading…</pre>
+      <p>The earlier descriptor-fetch and many-small-draw benchmarks remain available in the <a href="bench.html">benchmark archive</a>; they are not mixed into this equal-rung lattice comparison.</p>
     </section>
   </main>
-  <footer>Primary timing is CPU encode/write plus queue submit through an ordered four-byte MAP_READ fence. The WebGL2 backend explicitly calls <code>device.poll(Poll)</code> in a zero-timeout yield loop; Benchmark A waits expire after 4,000 ms and Benchmark B waits after 30,000 ms. Benchmark A uses three warmups and 15 adaptive samples. Benchmark B first measures exactly one frame: above the 100 ms animation threshold it keeps that one single-frame-on-demand observation, while faster steps continue through three warmups and 15 samples that each span at least 32 measured <code>performance.now()</code> quanta. Median, p95, and per-draw microseconds are visible-run observations, not admission gates. GPU timestamp results remain absent unless the selected backend path actually uses an exposed query feature.</footer>
+  <footer>Every selection renders immediately before timing. Measurement is opportunistic: a first fenced frame above 100 ms switches that selection to single-frame-on-demand, while faster selections use repeat-until-32-timer-quanta batches, 15 samples, median and nearest-rank p95. CPU-to-GPU frame traffic is exactly 192 bytes in every path. Counts are submitted counts; pole-discarded edges remain submitted.</footer>
   <script type="module">
     import init, {
-      cancel_heap_measurement,
-      measure_heap_fetch_json,
-      measure_many_draws_json,
-      render_heap_step_json,
-      start_heap,
-    } from "./pkg/ember_lab_heap.js?v=3";
+      cancel_heap_lattice,
+      measure_heap_lattice_batch_json,
+      render_heap_lattice_frame_json,
+      select_heap_lattice_json,
+      start_heap_lattice,
+    } from "./pkg/ember_lab_heap.js?v=4";
 
+    const VERSION = "heap-lattice-v4";
     const SAMPLE_COUNT = 15;
     const WARMUPS = 3;
     const TARGET_QUANTA = 32;
     const MAX_REPEATS = 4096;
-    const MAX_BATCH_TARGET_MS = 250;
+    const MAX_BATCH_MS = 250;
     const SUITE_BUDGET_MS = 30000;
     const ANIMATE_THRESHOLD_MS = 100;
-    const TIMER_MAX_READS = 4000000;
+    const TIMER_READ_LIMIT = 4000000;
     const TIMER_TRANSITIONS = 32;
-    const TIMER_MAX_WALL_MS = 500;
+    const TIMER_WALL_MS = 500;
     const canvas = document.querySelector("#canvas");
+    const status = document.querySelector("#status");
     const facts = document.querySelector("#facts");
-    const wall = document.querySelector("#wall");
-    const statusA = document.querySelector("#status-a");
-    const statusB = document.querySelector("#status-b");
-    const runA = document.querySelector("#run-a");
-    const measureB = document.querySelector("#measure-b");
-    let requestedDraws = 16;
-    let selectedMode = "heap";
+    const walls = document.querySelector("#walls");
+    const rung = document.querySelector("#rung");
+    const stepControl = document.querySelector("#step");
+    const policyControl = document.querySelector("#policy");
+    const measureButton = document.querySelector("#measure");
+    const oneFrameButton = document.querySelector("#one-frame");
+    let selectedMode = "mode-a";
+    let selectedStep = 1;
+    let selection = null;
     let pageGeneration = 0;
     let timerQuantum = null;
-    let currentReport = null;
+    let animate = false;
+    let animationHandle = 0;
 
     const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
-    const failureText = error => error instanceof Error ? error.message : String(error);
-    const formatInteger = value => Number(value).toLocaleString("en-US");
-    const formatBytes = value => `${formatInteger(value)} B`;
+    const integer = value => Number(value).toLocaleString("en-US");
+    const bytes = value => `${integer(value)} B`;
+    const failure = error => error instanceof Error ? error.message : String(error);
 
-    function probeTimer() {
-      const positive = [];
+    function timerProbe() {
+      const deltas = [];
       let previous = performance.now();
       let reads = 0;
       let equal = 0;
       let backwards = 0;
-      const wallStarted = Date.now();
-      while (reads < TIMER_MAX_READS && positive.length < TIMER_TRANSITIONS) {
+      const started = Date.now();
+      while (reads < TIMER_READ_LIMIT && deltas.length < TIMER_TRANSITIONS) {
         const current = performance.now();
-        const delta = current - previous;
-        if (delta > 0) positive.push(delta);
-        else if (delta === 0) equal += 1;
+        const deltaValue = current - previous;
+        if (deltaValue > 0) deltas.push(deltaValue);
+        else if (deltaValue === 0) equal += 1;
         else backwards += 1;
         previous = current;
         reads += 1;
-        if (reads % 4096 === 0 && Date.now() - wallStarted >= TIMER_MAX_WALL_MS) break;
+        if (reads % 4096 === 0 && Date.now() - started >= TIMER_WALL_MS) break;
       }
-      return { quantum: positive.length ? Math.min(...positive) : null, reads, equal, backwards };
+      return { quantum: deltas.length ? Math.min(...deltas) : null, reads, equal, backwards };
     }
 
-    function summarize(samples) {
-      if (!samples.length) return null;
-      const sorted = [...samples].sort((left, right) => left - right);
-      return {
-        median: sorted[Math.floor(sorted.length / 2)],
-        p95: sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)],
-      };
+    function summarize(values) {
+      if (!values.length) return null;
+      const ordered = [...values].sort((left, right) => left - right);
+      return { median: ordered[Math.floor(ordered.length / 2)], p95: ordered[Math.max(0, Math.ceil(ordered.length * 0.95) - 1)] };
     }
 
-    function showSamples(element, samples, repeats, detail) {
-      const summary = summarize(samples);
-      element.innerHTML = summary
-        ? `median <strong>${summary.median.toFixed(4)} ms</strong> · p95 <strong>${summary.p95.toFixed(4)} ms</strong><br>${samples.length}/${SAMPLE_COUNT} samples · repeats ${repeats.join(", ")}<br>${detail}`
-        : `median — · p95 — · requires visible replay<br>${detail}`;
+    const metricElement = (mode = selectedMode) => document.querySelector(`#metric-${mode}`);
+
+    function clearMetrics() {
+      for (const mode of ["mode-a", "mode-c", "layer"]) metricElement(mode).textContent = "frame median — · p95 — · µs/edge median — · p95 — · requires visible replay";
     }
 
-    function showDrawSamples(element, samples, repeats, deliveredDraws, detail, singleFrame) {
+    function showMetrics(samples, repeats, singleFrame) {
       const frame = summarize(samples);
-      const perDraw = summarize(samples.map(sample => sample * 1000 / deliveredDraws));
-      const targetSamples = singleFrame ? 1 : SAMPLE_COUNT;
-      element.innerHTML = frame && perDraw
-        ? `frame median <strong>${frame.median.toFixed(4)} ms</strong> · p95 <strong>${frame.p95.toFixed(4)} ms</strong><br>per draw median <strong>${perDraw.median.toFixed(6)} µs</strong> · p95 <strong>${perDraw.p95.toFixed(6)} µs</strong><br>${samples.length}/${targetSamples} samples · repeats ${repeats.join(", ")}<br>${detail}`
-        : `frame median — · p95 —<br>per draw median — · p95 — · requires visible replay<br>${detail}`;
+      const perEdge = summarize(samples.map(value => value * 1000 / selection.delivered_edges));
+      const target = singleFrame ? 1 : SAMPLE_COUNT;
+      metricElement().innerHTML = frame && perEdge
+        ? `frame median <strong>${frame.median.toFixed(4)} ms</strong> · p95 <strong>${frame.p95.toFixed(4)} ms</strong><br>per submitted edge median <strong>${perEdge.median.toFixed(6)} µs</strong> · p95 <strong>${perEdge.p95.toFixed(6)} µs</strong><br>${samples.length}/${target} samples · repeats ${repeats.join(", ")}<br>requires visible replay · timestamp query not used`
+        : "frame median — · p95 — · µs/edge median — · p95 — · requires visible replay";
     }
 
-    async function adaptiveMeasure(label, invoke, token, onProgress) {
-      if (!Number.isFinite(timerQuantum) || timerQuantum <= 0) throw new Error("bounded timer probe observed no positive performance.now() transition");
-      const targetMs = timerQuantum * TARGET_QUANTA;
-      if (targetMs > MAX_BATCH_TARGET_MS) throw new Error(`${TARGET_QUANTA}-quantum target ${targetMs} ms exceeds ${MAX_BATCH_TARGET_MS} ms cap`);
-      for (let warmup = 0; warmup < WARMUPS; warmup += 1) {
-        if (token !== pageGeneration) throw new Error("cancelled by a newer visible request");
-        await invoke(1);
+    function displaySelection() {
+      rung.textContent = `step ${selection.requested_step} · tuple (${selection.requested_axes.join(",")}) · ${integer(selection.requested_copies)} requested copies`;
+      walls.innerHTML = `requested <strong>${integer(selection.requested_edges)}</strong> edges · delivered/submitted <strong>${integer(selection.delivered_edges)}</strong> · ${selection.wall_arithmetic}<br>limiter: ${selection.limiting_term} · indices ${integer(selection.submitted_indices)} · ideal cached vertex invocations ${integer(selection.ideal_vertex_invocations)}<br>frame CPU→GPU ${bytes(selection.per_frame_cpu_to_gpu_bytes)} · compute passes ${integer(selection.compute_passes)} · copy commands ${integer(selection.copy_commands)} · GPU copy ${bytes(selection.gpu_copy_bytes)}<br>logical output ${bytes(selection.logical_output_bytes)} · reserved output ${bytes(selection.reserved_output_bytes)} · SCRATCH ${bytes(selection.scratch_bytes)} · layer two-slot ${bytes(selection.layer_allocation_bytes)}`;
+    }
+
+    function animationFrame(timestamp) {
+      if (!animate) return;
+      try {
+        render_heap_lattice_frame_json(timestamp / 1000);
+        animationHandle = requestAnimationFrame(animationFrame);
+      } catch (error) {
+        animate = false;
+        status.className = "status failed";
+        status.textContent = `animation stopped: ${failure(error)}`;
       }
-      const samples = [];
-      const repeatCounts = [];
-      const started = Date.now();
-      let repeats = 1;
-      while (samples.length < SAMPLE_COUNT) {
-        if (token !== pageGeneration) throw new Error("cancelled by a newer visible request");
-        if (Date.now() - started >= SUITE_BUDGET_MS) throw new Error(`${label} did not collect ${SAMPLE_COUNT} resolved samples within ${SUITE_BUDGET_MS} ms`);
-        const measured = JSON.parse(await invoke(repeats));
-        if (token !== pageGeneration) throw new Error("cancelled by a newer visible request");
-        if (measured.elapsed_ms >= targetMs) {
-          samples.push(measured.normalized_ms);
-          repeatCounts.push(repeats);
-          onProgress(samples, repeatCounts, measured);
-          await delay(0);
-          continue;
-        }
-        if (repeats >= MAX_REPEATS) throw new Error(`${MAX_REPEATS} repeats span only ${measured.elapsed_ms} ms, below ${targetMs} ms`);
-        const scaled = measured.elapsed_ms > 0 ? Math.ceil(repeats * targetMs / measured.elapsed_ms * 1.125) : repeats * 8;
-        repeats = Math.min(MAX_REPEATS, Math.max(repeats + 1, scaled));
+    }
+
+    function setAnimation(enabled) {
+      animate = enabled;
+      cancelAnimationFrame(animationHandle);
+      if (animate) animationHandle = requestAnimationFrame(animationFrame);
+    }
+
+    async function measureOne(token, label = "one frame") {
+      const measured = JSON.parse(await measure_heap_lattice_batch_json(performance.now() / 1000, 1));
+      if (token !== pageGeneration) throw new Error("cancelled by a newer selection");
+      showMetrics([measured.normalized_ms], [1], true);
+      setAnimation(measured.normalized_ms <= ANIMATE_THRESHOLD_MS);
+      status.textContent = `${label}: ${measured.normalized_ms.toFixed(4)} ms · ${measured.microseconds_per_edge?.toFixed(6) ?? "—"} µs/submitted edge · ${animate ? "animation enabled" : "single-frame-on-demand"}`;
+      return measured;
+    }
+
+    async function selectAndRender() {
+      pageGeneration += 1;
+      const token = pageGeneration;
+      cancel_heap_lattice();
+      setAnimation(false);
+      clearMetrics();
+      status.className = "status";
+      status.textContent = "planning runtime walls and rendering immediately…";
+      const policy = Math.max(1, Math.min(2147483647, Number(policyControl.value) || 1));
+      policyControl.value = String(policy);
+      try {
+        selection = JSON.parse(select_heap_lattice_json(selectedMode, selectedStep, policy));
+        if (token !== pageGeneration) return;
+        displaySelection();
+        status.textContent = `${selection.mode} rendered immediately · probing one fenced frame opportunistically…`;
         await delay(0);
-      }
-      return { samples, repeatCounts };
-    }
-
-    function selectButtons(selector, attribute, value) {
-      for (const button of document.querySelectorAll(selector)) button.classList.toggle("selected", button.dataset[attribute] === String(value));
-    }
-
-    function renderRequested() {
-      pageGeneration += 1;
-      cancel_heap_measurement();
-      currentReport = JSON.parse(render_heap_step_json(selectedMode, requestedDraws));
-      wall.textContent = `requested ${formatInteger(currentReport.requested_draws)} draws / ${formatInteger(currentReport.requested_distinct_resources)} distinct · delivered ${formatInteger(currentReport.delivered_draws)} draws / ${formatInteger(currentReport.delivered_distinct_resources)} distinct · ${formatInteger(currentReport.repeated_resource_draws)} cyclic repeats · ${currentReport.wall_arithmetic}`;
-      statusB.className = "status";
-      statusB.textContent = `${selectedMode} rendered immediately · per-frame CPU→GPU ${formatBytes(currentReport.per_frame_cpu_to_gpu_bytes)} · measurement requires visible replay`;
-      return pageGeneration;
-    }
-
-    async function runBenchmarkB() {
-      const token = pageGeneration;
-      const mode = selectedMode;
-      const draws = requestedDraws;
-      const output = document.querySelector(`#b-${mode}`);
-      const report = currentReport;
-      measureB.disabled = true;
-      statusB.textContent = `timing one ${mode} frame at ${formatInteger(draws)} requested draws…`;
-      try {
-        const detail = () => `requested/delivered ${formatInteger(draws)}/${formatInteger(report.delivered_draws)} draws · ${formatBytes(report.per_frame_cpu_to_gpu_bytes)} per frame · mapped-fence wall timing`;
-        const first = JSON.parse(await measure_many_draws_json(mode, draws, 1));
-        if (token !== pageGeneration) throw new Error("cancelled by a newer visible request");
-        showDrawSamples(output, [first.normalized_ms], [1], report.delivered_draws, detail(), first.normalized_ms > ANIMATE_THRESHOLD_MS);
-        if (first.normalized_ms > ANIMATE_THRESHOLD_MS) {
-          statusB.textContent = `${mode} single-frame-on-demand at ${formatInteger(report.delivered_draws)} delivered draws · ${first.normalized_ms.toFixed(4)} ms · ${first.per_draw_microseconds.toFixed(6)} µs/draw · above ${ANIMATE_THRESHOLD_MS} ms animation threshold`;
-          return;
-        }
-        statusB.textContent = `${mode} first frame ${first.normalized_ms.toFixed(4)} ms; collecting adaptive series…`;
-        const result = await adaptiveMeasure(
-          `Benchmark B ${mode} ${draws}`,
-          repeats => measure_many_draws_json(mode, draws, repeats),
-          token,
-          (samples, repeats) => {
-            showDrawSamples(output, samples, repeats, report.delivered_draws, detail(), false);
-            statusB.textContent = `${mode} ${samples.length}/${SAMPLE_COUNT} visible samples at ${formatInteger(report.delivered_draws)} delivered draws`;
-          },
-        );
-        showDrawSamples(output, result.samples, result.repeatCounts, report.delivered_draws, detail(), false);
-        statusB.textContent = `${mode} complete at ${formatInteger(report.delivered_draws)} delivered draws · frame and per-draw median/p95 require visible replay`;
+        await measureOne(token, "automatic first fenced frame");
       } catch (error) {
         if (token === pageGeneration) {
-          statusB.className = "status failed";
-          statusB.textContent = `Benchmark B unavailable: ${failureText(error)}`;
-          showDrawSamples(output, [], [], report.delivered_draws, failureText(error), false);
+          status.className = "status failed";
+          status.textContent = `selection refused without snapping controls: ${failure(error)}`;
+          walls.textContent = `requested step ${selectedStep} and mode ${selectedMode} remain selected; delivered work is unavailable`;
         }
-      } finally {
-        measureB.disabled = false;
       }
     }
 
-    async function runBenchmarkA() {
+    async function adaptiveMeasure() {
       pageGeneration += 1;
-      cancel_heap_measurement();
       const token = pageGeneration;
-      runA.disabled = true;
-      statusA.className = "status";
+      cancel_heap_lattice();
+      setAnimation(false);
+      measureButton.disabled = true;
+      oneFrameButton.disabled = true;
       try {
-        for (const mode of ["direct", "heap"]) {
-          const output = document.querySelector(`#a-${mode}`);
-          statusA.textContent = `warming Benchmark A ${mode}…`;
-          const result = await adaptiveMeasure(
-            `Benchmark A ${mode}`,
-            repeats => measure_heap_fetch_json(mode, repeats),
-            token,
-            (samples, repeats, measured) => {
-              showSamples(output, samples, repeats, `${measured.timing_method} · GPU timestamp not used`);
-              statusA.textContent = `${mode} ${samples.length}/${SAMPLE_COUNT} visible samples`;
-            },
-          );
-          showSamples(output, result.samples, result.repeatCounts, "4,194,304 loads/base invocation · submit-to-map wall time · GPU timestamp not used");
+        if (!(timerQuantum > 0)) throw new Error("bounded timer probe observed no positive performance.now() transition");
+        const target = timerQuantum * TARGET_QUANTA;
+        if (target > MAX_BATCH_MS) throw new Error(`${TARGET_QUANTA}-quantum target ${target} ms exceeds ${MAX_BATCH_MS} ms cap`);
+        const first = await measureOne(token, "first fenced frame");
+        if (first.normalized_ms > ANIMATE_THRESHOLD_MS) return;
+        for (let warmup = 0; warmup < WARMUPS; warmup += 1) {
+          await measure_heap_lattice_batch_json(performance.now() / 1000, 1);
+          if (token !== pageGeneration) throw new Error("cancelled by a newer selection");
         }
-        statusA.textContent = "direct and descriptor-indirect series complete · values require visible replay";
+        const samples = [];
+        const repeatCounts = [];
+        const started = Date.now();
+        let repeats = 1;
+        while (samples.length < SAMPLE_COUNT) {
+          if (token !== pageGeneration) throw new Error("cancelled by a newer selection");
+          if (Date.now() - started >= SUITE_BUDGET_MS) throw new Error(`suite exceeded ${SUITE_BUDGET_MS} ms with ${samples.length}/${SAMPLE_COUNT} samples`);
+          const measured = JSON.parse(await measure_heap_lattice_batch_json(performance.now() / 1000, repeats));
+          if (measured.elapsed_ms >= target) {
+            samples.push(measured.normalized_ms);
+            repeatCounts.push(repeats);
+            showMetrics(samples, repeatCounts, false);
+            status.textContent = `${selection.mode} · ${samples.length}/${SAMPLE_COUNT} adaptive samples`;
+          } else {
+            if (repeats >= MAX_REPEATS) throw new Error(`${MAX_REPEATS} repeats span ${measured.elapsed_ms} ms, below ${target} ms`);
+            const scaled = measured.elapsed_ms > 0 ? Math.ceil(repeats * target / measured.elapsed_ms * 1.125) : repeats * 8;
+            repeats = Math.min(MAX_REPEATS, Math.max(repeats + 1, scaled));
+          }
+          await delay(0);
+        }
+        setAnimation(true);
+        status.textContent = `${selection.mode} complete · median/p95 are this visible replay`;
       } catch (error) {
         if (token === pageGeneration) {
-          statusA.className = "status failed";
-          statusA.textContent = `Benchmark A unavailable: ${failureText(error)}`;
+          status.className = "status failed";
+          status.textContent = `measurement unavailable: ${failure(error)}`;
         }
       } finally {
-        runA.disabled = false;
+        measureButton.disabled = false;
+        oneFrameButton.disabled = false;
       }
     }
 
-    for (const button of document.querySelectorAll("#steps [data-draws]")) {
-      button.addEventListener("click", () => {
-        requestedDraws = Number(button.dataset.draws);
-        selectButtons("#steps [data-draws]", "draws", requestedDraws);
-        renderRequested();
-      });
-    }
-    for (const button of document.querySelectorAll("#modes [data-mode]")) {
+    for (const button of document.querySelectorAll("#modes button")) {
       button.addEventListener("click", () => {
         selectedMode = button.dataset.mode;
-        selectButtons("#modes [data-mode]", "mode", selectedMode);
-        renderRequested();
+        for (const candidate of document.querySelectorAll("#modes button")) candidate.classList.toggle("selected", candidate === button);
+        selectAndRender();
       });
     }
-    runA.addEventListener("click", () => { void runBenchmarkA(); });
-    measureB.addEventListener("click", () => { void runBenchmarkB(); });
+    stepControl.addEventListener("input", () => { selectedStep = Number(stepControl.value); selectAndRender(); });
+    document.querySelector("#previous").addEventListener("click", () => { selectedStep = Math.max(0, selectedStep - 1); stepControl.value = String(selectedStep); selectAndRender(); });
+    document.querySelector("#next").addEventListener("click", () => { selectedStep = Math.min(112, selectedStep + 1); stepControl.value = String(selectedStep); selectAndRender(); });
+    document.querySelector("#apply-policy").addEventListener("click", selectAndRender);
+    measureButton.addEventListener("click", adaptiveMeasure);
+    oneFrameButton.addEventListener("click", async () => {
+      pageGeneration += 1;
+      cancel_heap_lattice();
+      setAnimation(false);
+      const token = pageGeneration;
+      try { await measureOne(token); }
+      catch (error) { status.className = "status failed"; status.textContent = failure(error); }
+    });
 
     try {
-      await init({ module_or_path: new URL("./pkg/ember_lab_heap_bg.wasm?v=3", import.meta.url) });
-      const runtimeFacts = JSON.parse(await start_heap(canvas));
-      const timer = probeTimer();
+      await init({ module_or_path: "./pkg/ember_lab_heap_bg.wasm?v=4" });
+      const timer = timerProbe();
       timerQuantum = timer.quantum;
-      runtimeFacts.timer_probe = timer;
-      facts.textContent = JSON.stringify(runtimeFacts, null, 2);
-      statusA.textContent = Number.isFinite(timerQuantum)
-        ? `requires visible replay · measured timer quantum ${timerQuantum} ms · batch target ${timerQuantum * TARGET_QUANTA} ms`
-        : "requires visible replay · timer quantum unavailable";
-      renderRequested();
+      const initialized = JSON.parse(await start_heap_lattice(canvas));
+      selection = initialized.initial;
+      facts.textContent = JSON.stringify({ version: VERSION, timer, ...initialized }, null, 2);
+      displaySelection();
+      status.textContent = "Mode A step 1 rendered immediately · probing one fenced frame opportunistically…";
+      await measureOne(pageGeneration, "automatic first fenced frame");
     } catch (error) {
-      facts.textContent = `initialization failed: ${failureText(error)}`;
-      statusA.className = "status failed";
-      statusB.className = "status failed";
-      statusA.textContent = failureText(error);
-      statusB.textContent = failureText(error);
-      runA.disabled = true;
-      measureB.disabled = true;
+      setAnimation(false);
+      status.className = "status failed";
+      status.textContent = `initialization failed: ${failure(error)}`;
+      facts.textContent = failure(error);
     }
   </script>
 </body>

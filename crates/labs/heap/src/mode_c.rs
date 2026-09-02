@@ -11,6 +11,7 @@ use serde::Serialize;
 use crate::{DialectError, DialectLimits, FrameUniform, KernelDesc, RegisteredKernel};
 
 const MODE_C_DRAW_TEMPLATE: &str = include_str!("mode-c.wgsl");
+const LAYER_DRAW_SHADER: &str = include_str!("layer-draw.wgsl");
 
 /// Mode C's exact 48-byte layer uniform followed by draw values and explicit padding to 192 bytes.
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -263,14 +264,41 @@ pub fn mode_c_shader(limits: DialectLimits) -> String {
         )
 }
 
+/// Assembles the exact shared kernel for layer's frozen square output slot.
+#[must_use]
+pub fn layer_comparator_kernel(output_side: u32, logical_len: u32) -> String {
+    format!(
+        r"
+@group(0) @binding(0) var layer_edge: texture_2d<f32>;
+@group(0) @binding(1) var layer_base_four: texture_2d<f32>;
+@group(0) @binding(2) var layer_base_fifth: texture_2d<f32>;
+fn load_edge(index: u32) -> vec4<f32> {{ let width = textureDimensions(layer_edge).x; return textureLoad(layer_edge, vec2<i32>(i32(index % width), i32(index / width)), 0); }}
+fn load_base_four(index: u32) -> vec4<f32> {{ let width = textureDimensions(layer_base_four).x; return textureLoad(layer_base_four, vec2<i32>(i32(index % width), i32(index / width)), 0); }}
+fn load_base_fifth(index: u32) -> vec4<f32> {{ let width = textureDimensions(layer_base_fifth).x; return textureLoad(layer_base_fifth, vec2<i32>(i32(index % width), i32(index / width)), 0); }}
+{LATTICE_EDGE_KERNEL}
+@group(0) @binding(3) var<uniform> layer_uniforms: LatticeUniform;
+struct FullscreenOut {{ @builtin(position) position: vec4<f32>, }}
+@vertex fn layer_compute_vertex(@builtin(vertex_index) vertex: u32) -> FullscreenOut {{ var points = array<vec2<f32>, 3>(vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0)); var output: FullscreenOut; output.position = vec4(points[vertex], 0.0, 1.0); return output; }}
+struct LayerOutput {{ @location(0) midpoint_hue: vec4<f32>, @location(1) orientation_length: vec4<f32>, }}
+@fragment fn layer_compute_fragment(@builtin(position) position: vec4<f32>) -> LayerOutput {{ let index = u32(position.y) * {output_side}u + u32(position.x); if (index >= {logical_len}u) {{ discard; }} let result = kernel(index, layer_uniforms); var output: LayerOutput; output.midpoint_hue = result.midpoint_hue; output.orientation_length = result.orientation_length; return output; }}
+"
+    )
+}
+
+/// Indexed comparator presentation shader shared with the page runtime and native oracle.
+#[must_use]
+pub const fn layer_comparator_draw_shader() -> &'static str {
+    LAYER_DRAW_SHADER
+}
+
 #[cfg(test)]
 mod tests {
     use ember_lab_layer::geometry::{lattice_steps, prism};
     use ember_lab_layer::kernels::LATTICE_EDGE_KERNEL;
 
     use super::{
-        ComparatorWork, EqualWorkSignature, ModeCFrameUniform, mode_c_pose, mode_c_register,
-        mode_c_shader,
+        ComparatorWork, EqualWorkSignature, ModeCFrameUniform, layer_comparator_draw_shader,
+        layer_comparator_kernel, mode_c_pose, mode_c_register, mode_c_shader,
     };
     use crate::DialectLimits;
 
@@ -295,6 +323,18 @@ mod tests {
         )
         .validate(&module)
         .expect("Mode C draw validates");
+        for source in [
+            layer_comparator_kernel(55, 3_000),
+            layer_comparator_draw_shader().to_string(),
+        ] {
+            let module = naga::front::wgsl::parse_str(&source).expect("layer shader parses");
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .expect("layer shader validates");
+        }
     }
 
     #[test]

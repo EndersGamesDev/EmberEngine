@@ -30,8 +30,8 @@ pub use lattice_gpu::{
     select_heap_lattice_json, start_heap_lattice,
 };
 pub use mode_c::{
-    ComparatorWork, EqualWorkSignature, ModeCFrameUniform, mode_c_pose, mode_c_register,
-    mode_c_shader,
+    ComparatorWork, EqualWorkSignature, ModeCFrameUniform, layer_comparator_draw_shader,
+    layer_comparator_kernel, mode_c_pose, mode_c_register, mode_c_shader,
 };
 pub use span::{
     DataSpan, DeliveryPlan, DispatchHeader, PackedSpan, SpanArena, SpanDirectory, SpanError,

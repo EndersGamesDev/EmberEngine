@@ -17,7 +17,6 @@ use bytemuck::Zeroable as _;
 use ember_lab_layer::geometry::{
     Prism, lattice_copy_count, lattice_edge_count, lattice_steps, prism,
 };
-use ember_lab_layer::kernels::LATTICE_EDGE_KERNEL;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 use wgpu::util::DeviceExt as _;
@@ -25,8 +24,8 @@ use wgpu::util::DeviceExt as _;
 use crate::{
     BOX_INDICES, ComparatorWork, DataSpan, DialectLimits, DispatchPlan, EqualWorkSignature,
     FrameUniform, KernelDesc, ModeCFrameUniform, RegisteredKernel, SpanArena,
-    StaticHeaders, box_vertices, frame_for, mode_a_records, mode_a_shader, mode_c_register,
-    mode_c_shader,
+    StaticHeaders, box_vertices, frame_for, layer_comparator_draw_shader,
+    layer_comparator_kernel, mode_a_records, mode_a_shader, mode_c_register, mode_c_shader,
 };
 
 const HEAP_SIDE: u16 = 512;
@@ -42,7 +41,6 @@ const LAYER_BYTE_BUDGET: u64 = 64 * 1024 * 1024;
 const DEFAULT_POLICY: u32 = 2_147_483_647;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
 const COMPLETION_DEADLINE_MS: f64 = 30_000.0;
-const LAYER_DRAW_SHADER: &str = include_str!("layer-draw.wgsl");
 
 #[derive(Debug, thiserror::Error)]
 enum LatticeError {
@@ -535,37 +533,6 @@ fn layer_draw_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     })
 }
 
-fn layer_compute_source(output_side: u32, logical_len: u32) -> String {
-    format!(
-        r"
-@group(0) @binding(0) var layer_edge: texture_2d<f32>;
-@group(0) @binding(1) var layer_base_four: texture_2d<f32>;
-@group(0) @binding(2) var layer_base_fifth: texture_2d<f32>;
-fn load_layer(texture: texture_2d<f32>, index: u32) -> vec4<f32> {{
-    let width = textureDimensions(texture).x;
-    return textureLoad(texture, vec2<i32>(i32(index % width), i32(index / width)), 0);
-}}
-fn load_edge(index: u32) -> vec4<f32> {{ return load_layer(layer_edge, index); }}
-fn load_base_four(index: u32) -> vec4<f32> {{ return load_layer(layer_base_four, index); }}
-fn load_base_fifth(index: u32) -> vec4<f32> {{ return load_layer(layer_base_fifth, index); }}
-{LATTICE_EDGE_KERNEL}
-@group(0) @binding(3) var<uniform> layer_uniforms: LatticeUniform;
-struct FullscreenOut {{ @builtin(position) position: vec4<f32>, }}
-@vertex fn layer_compute_vertex(@builtin(vertex_index) vertex: u32) -> FullscreenOut {{
-    var points = array<vec2<f32>, 3>(vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
-    var output: FullscreenOut; output.position = vec4(points[vertex], 0.0, 1.0); return output;
-}}
-struct LayerOutput {{ @location(0) midpoint_hue: vec4<f32>, @location(1) orientation_length: vec4<f32>, }}
-@fragment fn layer_compute_fragment(@builtin(position) position: vec4<f32>) -> LayerOutput {{
-    let index = u32(position.y) * {output_side}u + u32(position.x);
-    if (index >= {logical_len}u) {{ discard; }}
-    let result = kernel(index, layer_uniforms);
-    var output: LayerOutput; output.midpoint_hue = result.midpoint_hue; output.orientation_length = result.orientation_length; return output;
-}}
-"
-    )
-}
-
 fn layer_compute_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -985,7 +952,7 @@ impl LatticeLab {
             &device,
             &layer_draw_layout,
             "layer comparator indexed draw",
-            LAYER_DRAW_SHADER,
+            layer_comparator_draw_shader(),
             "layer_vertex",
             "layer_fragment",
             surface_format,
@@ -1485,7 +1452,7 @@ impl LatticeLab {
                 },
             ],
         });
-        let source = layer_compute_source(side, edges);
+        let source = layer_comparator_kernel(side, edges);
         let compute_pipeline =
             layer_compute_pipeline(&self.device, &self.layer_compute_layout, &source);
         Ok(LayerStep {
