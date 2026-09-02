@@ -196,7 +196,11 @@ fn project_presented(pose: &Pose, chart: [f64; 2], height: f64) -> Option<[f64; 
     if pose.grid_width == 0 || pose.grid_height == 0 {
         return None;
     }
-    let plane = plane_point(pose.plane, chart);
+    let display_coordinate = [
+        2.0 * chart[0],
+        2.0 * f64::from(pose.grid_height) / f64::from(pose.grid_width) * chart[1],
+    ];
+    let plane = plane_point(pose.plane, display_coordinate);
     let theta_two = f64::midpoint(1.0, 5.0_f64.sqrt()) * pose.view_theta_1;
     let (sine_one, cosine_one) = pose.view_theta_1.sin_cos();
     let (sine_two, cosine_two) = theta_two.sin_cos();
@@ -379,7 +383,10 @@ mod tests {
         to.zoom_log2 += 0.1;
         let plan = Warp::reproject(&frame(from), &from, &to);
         assert_eq!(plan.kind, WarpKind::TumbledHomography);
-        assert!(plan.approx_max_error_px.is_some_and(|error| error <= 2.0));
+        let maximum = plan
+            .approx_max_error_px
+            .expect("the complete corpus reports a maximum");
+        assert!(maximum <= 2.0, "maximum error was {maximum} pixels");
         assert!(plan.approx_p95_error_px.is_some_and(f64::is_finite));
     }
 }
