@@ -1,12 +1,12 @@
 # Julibrot kernels slice contract
 
-Status: first-round slice document for `crates/labs/julibrot/kernels`; the five slice documents must receive written joint review before implementation, and the app document is authoritative where an interface disagreement remains.
+Status: refined slice document for `crates/labs/julibrot/kernels` after the five-document joint review; the review rulings in J1–J31 supersede round-one differences, and the app document remains the integration contract.
 
 ## 1. Ownership and boundary
 
 The kernels slice owns GPU data-to-data work: the production shallow `f32` escape kernel, the production perturbation-and-rebasing kernel, their dialect-v2 registration and dispatch plans, one reusable escape-grid DATA span, SCRATCH-to-DATA landing, deterministic conformance fixtures, capacity arithmetic, and the definitions of the three refinement levels.
 
-The kernels slice owns level definitions but not their schedule: app decides when or whether Preview, Interactive, and Final run, cancels stale work by the current owner epoch, and never relabels an unfinished level as delivered.
+The kernels slice owns level definitions but not their schedule: app runs the levels in order and may skip, cancels stale work by orbit generation rather than owner-epoch equality, and never relabels an unfinished level as delivered.
 
 The kernels slice consumes the math slice's plane, centre split, CPU escape and perturbation oracles, and reference-orbit semantics; it neither constructs `Rₚ`, performs bignum navigation, nor chooses the bignum implementation.
 
@@ -16,7 +16,7 @@ The kernels slice exposes an `EscapeGrid` typed wrapper to present; it does not 
 
 The kernels slice does not create the GL device, install the panic hook or uncaptured-error handler, define the facts overlay, or own the application runtime; those are app duties and are preconditions of any kernels construction.
 
-The heap dependency remains the shipped `ember-lab-heap` implementation: `DataSpan`, the span directory, descriptor handles, dialect v2, static dispatch headers, the immutable heap bind group, and the paid SCRATCH copy path are reused by dependency and are not copied into this package.
+The heap dependency remains the shipped `ember-lab-heap` implementation: `DataSpan`, the span directory, descriptor handles, dialect v2, static dispatch headers, the immutable heap bind group, and the paid SCRATCH copy path are reused through the review-approved `GpuKernelExecutor` and are not copied into this package.
 
 No kernel result authors simulation, collision, protocol, reconciliation, or gameplay truth; a result is presentation data and a stale or failed dispatch produces a typed refusal or stale visual, never a truth-state change.
 
@@ -26,17 +26,19 @@ No kernel result authors simulation, collision, protocol, reconciliation, or gam
 
 The fractal coordinates are ordered `(z.re, z.im, c.re, c.im) = (e₁,e₂,e₃,e₄)`; `e₅` carries escape height only in present's tumbled VIEW and never enters either fractal kernel.
 
-The user-controlled PLANE rotation is `Rₚ(θ₁,θ₂) = R₁₂(θ₁)·R₃₅(θ₂)`, applied to column vectors as `R₁₂(R₃₅(v))` with the standard `[cos,−sin; sin,cos]` blocks and independent radian angles, then `u = P₄(Rₚe_a)` and `v = P₄(Rₚe_b)` are Gram–Schmidt re-orthonormalized by math after `P₄` drops `e₅`.
+The user-controlled PLANE rotation acts in ℝ⁴ as `Rₚ(θ₁,θ₂) = R₁₃(θ₁)·R₂₄(θ₂)`, applied to column vectors as `v′ = R₁₃(R₂₄(v))` with the standard `[cos,−sin; sin,cos]` blocks and independent radian angles; `e₅`, `P₄`, Gram–Schmidt, and degenerate-plane stages play no part because this orthogonal map preserves an orthonormal seed pair.
 
-The standing VIEW rotation uses the same family only in present: `R(t) = R₁₂(t)·R₃₅(φt)`, `φ = (1+√5)/2`; kernels never apply it and therefore cannot accidentally rotate the fractal plane at presentation rate.
+The standing VIEW rotation remains distinct and present-only: `R(t) = R₁₂(0.4t)·R₃₅(φ·0.4t)`, `φ = (1+√5)/2`; kernels never apply it and therefore cannot accidentally rotate the fractal plane at presentation rate.
 
 The Mandelbrot preset is basis `(e₃,e₄)`, origin `(0,0,0,0)`, and identity `Rₚ`; the Julia preset at `c₀` is basis `(e₁,e₂)`, origin `(0,0,c₀.re,c₀.im)`, and identity `Rₚ`, with `c₀` retained in MAIN state as part of the plane origin.
 
-For an active grid of width `W` and height `H`, pixel `(i,j)` samples its centre with `x = f32(i)+0.5−0.5·f32(W)` and `y = f32(j)+0.5−0.5·f32(H)`, and its four-dimensional offset is `o = (x·u+y·v)·pixel_scale`; row zero is the bottom row, `+v` is up, and linear record index is `j·W+i`.
+At `θ₁ = θ₂ = π/2` the Mandelbrot seed becomes the Julia plane at the centre, and for `0 < θ₁,θ₂ < π/2` the math-owned hybrid oracle requires a rotated basis to have nonzero components in both the z and c subspaces; math performs one rounding to `f32` and requires the basis norm and dot-product errors to remain at most `8·f32::EPSILON`.
 
-Square pixels use `pixel_scale = f32(4.0/(2^zoom_log2·W))`, where the division and exponentiation occur in `f64` on the CPU before the one `f32` conversion; the horizontal view extent is four scaled units and the vertical extent follows `H/W`.
+For an active grid of width `W` and height `H`, pixel `(i,j)` samples its centre with `x = f32(i)+0.5−0.5·f32(W)` and `y = f32(j)+0.5−0.5·f32(H)`; row zero is the bottom row, `+v` is up, and linear record index is `j·W+i`.
 
-Zoom depth is `zoom_log2·log10(2)` decimal digits, and the worker precision request is `ceil(zoom_log2·log10(2)+log10(W))+8` decimal digits converted by worker to its bignum precision bits; kernels report the supplied bits but do not recompute or reinterpret them.
+Below the displayed switch POLICY `zoom_log2 < 14`, the shallow path uses `pixel_scale = f32(4.0/(2^zoom_log2·W))`, evaluated in `f64` before one `f32` conversion, and forms `o = (x·u+y·v)·pixel_scale`; at `zoom_log2 ≥ 14` the perturbation path uses the scaled representation in §2.3 and never forms the tiny absolute scale in `f32`.
+
+Zoom depth is `zoom_log2·log10(2)` decimal digits, integral `depth_digits = ceil(max(0,zoom_log2·log10(2)))`, and the precision floor is `D_floor = ceil(zoom_log2·log10(2)+log10(W))+8`; worker adds its working margin and reports floor, working, and delivered precision separately, while kernels retain only the supplied orbit bits.
 
 The owner requests a new reference when the centre moves more than one quarter of the view extent or `zoom_log2` differs by more than two from the reference zoom, with worker-owned hysteresis; kernels only reject a reference whose published generation or logical length disagrees with the dispatch input.
 
@@ -44,9 +46,9 @@ The owner requests a new reference when the centre moves more than one quarter o
 
 The shallow kernel receives no heap input, receives only its 96-byte uniform, and writes one RGBA32F escape record per active pixel into the escape-grid span.
 
-For coordinate component `k`, the absolute shallow sample is evaluated in the pinned `f32` order `p[k] = origin_hi[k] + (origin_lo[k] + o[k])`; `z₀ = (p[0],p[1])` and `c = (p[2],p[3])`.
+For coordinate component `k`, the absolute shallow sample is evaluated in the pinned `f32` order `p[k] = centre.hi[k] + (centre.lo[k] + o[k])`; `z₀ = (p[0],p[1])` and `c = (p[2],p[3])`.
 
-Math supplies the split from the owner's `f64` mirror of the current centre, including preset origin: `origin_hi[k] = f32(C[k])` and `origin_lo[k] = f32(C[k]−f64(origin_hi[k]))`; the worker retains the authoritative bignum centre and the shallow GPU pair is not a deep-zoom absolute coordinate.
+Math supplies the separate `CentreSplit` from the exact current centre, including the preset origin: `hi[k] = f32(C[k])` and `lo[k] = f32(C[k]−f64(hi[k]))`; the worker retains the authoritative bignum centre and the shallow GPU pair is not a deep-zoom absolute coordinate.
 
 Complex multiplication is pinned as `mul(a,b) = (a.re·b.re−a.im·b.im, a.re·b.im+a.im·b.re)`, and the shallow recurrence uses `zₙ₊₁ = (zₙ.re²−zₙ.im²+c.re, 2·zₙ.re·zₙ.im+c.im)` in that source order.
 
@@ -58,17 +60,23 @@ At the iteration cap the shallow record is `[-1.0,0.0,0.0,0.0]`; `max_iter = 0` 
 
 ### 2.3 Perturbation and rebasing kernel
 
-The perturbation kernel receives one reference-orbit DATA span through the descriptor table, receives no absolute origin, receives its 64-byte uniform, and writes the same escape-grid record as the shallow kernel.
+The perturbation kernel receives one reference-orbit DATA span through the descriptor table, receives no absolute centre, receives its 64-byte uniform containing a scale mantissa and exponent, and writes the same escape-grid record as the shallow kernel.
 
-The offset split is `δz₀ = (o[0],o[1])` and `δc = (o[2],o[3])`; Mandelbrot therefore has `δz₀ = 0` exactly when `u,v` lie in `span(e₃,e₄)`, while Julia has `δc = 0`.
+Let the exact pixel scale be `m·2^s` with `m ∈ [0.5,1)` carried as `f32` and `s` carried as `i32`; the normalized offset is `o′ = (x·u+y·v)·m`, `δz₀′ = (o′[0],o′[1])`, `δc′ = (o′[2],o′[3])`, and the per-pixel exponent begins at `e₀ = s`, so no absolute tiny scale is formed in `f32`.
 
-Reference record `k` reconstructs `Zₖ = (re_hi+re_lo, im_hi+im_lo)` in `f32`, full pixel state is `zₙ = Zₖ+δₙ`, and the update is `δₙ₊₁ = 2·Zₖ·δₙ+δₙ²+δc` with complex products evaluated by the same pinned `mul` operation.
+The represented initial components are `δz₀ = 2^s·δz₀′` and `δc = 2^s·δc′`; Mandelbrot has `δz₀′ = 0` when its rotated basis remains in `span(e₃,e₄)`, Julia has `δc′ = 0` when its rotated basis remains in `span(e₁,e₂)`, and a hybrid plane retains both components.
 
-Each outer iteration first refuses an unavailable reference index as a glitch, then loads `Zₖ`, constructs `zₙ`, tests escape, tests rebase, and finally updates the delta and increments the reference index; escape therefore wins over rebase at the same state.
+Reference record `r` reconstructs `Zᵣ = (re_hi+re_lo, im_hi+im_lo)` in `f32`, the represented delta is `δₙ = S·δ′ₙ` for `S = 2^e`, full pixel state is `zₙ = Zᵣ+S·δ′ₙ = Zᵣ+ldexp(δ′ₙ,e)`, and the scaled update is `δ′ₙ₊₁ = 2·Zᵣ·δ′ₙ+S·δ′ₙ²+δc′ = 2·Zᵣ·δ′ₙ+ldexp(δ′ₙ²,e)+δc′` with the same pinned complex multiplication order.
 
-The binding rebasing rule is repeatable: when `|zₙ| < |δₙ|`, set `δ ← zₙ`, reset reference index `k ← 0`, and increment `rebase_count`, then evaluate the ordinary perturbation update against `Z₀` and advance `k` to one.
+For each outer iteration `n < max_iter`, the kernel first refuses an unavailable reference index as a glitch, then loads `Zᵣ`, constructs `zₙ`, and tests escape; if the pixel does not escape and `n+1 = max_iter`, it records a capped pixel without loading or advancing to another reference, otherwise it applies any rebase and performs exactly one ordinary advance, so escape wins over rebase at the same state.
 
-When `k` reaches reference `length` before escape or the outer iteration cap, iteration stops with `smooth_iter = −1.0`, `escaped = 0`, the accumulated integer-valued `rebase_count`, and `glitch = 1`; re-rendering those pixels with a second reference is explicitly out of scope and present uses the honest debug tint.
+The corrected rebasing rule is repeatable: when `|zₙ| < |ldexp(δ′ₙ,e)|`, set represented `δ ← zₙ−Z₀`, reset reference index `r ← 0`, increment `rebase_count`, normalize that delta as `(δ′,e)`, then perform exactly one ordinary scaled advance against `Z₀` and advance `r` to one; the invariant `zₙ = Zᵣ+δₙ` holds by construction.
+
+After an ordinary advance, a nonzero `|δ′|` outside `[2⁻⁶⁴,2⁶⁴]` is renormalized in 64-bit exponent steps until it is inside: `δ′ ← δ′·2⁻⁶⁴, e ← e+64` above the range or `δ′ ← δ′·2⁶⁴, e ← e−64` below it; `δc′` is rescaled by the same factor on every step so `δc = 2^e·δc′` remains invariant, and checked `i32` exponent overflow is a typed pixel glitch rather than wraparound.
+
+The rebase comparison forms the represented delta with `ldexp`; when it underflows the comparison is false, which is correct because a negligible delta must not trigger rebasing, while the scaled recurrence continues through the normalized values.
+
+When `r` reaches reference `length` before escape or the outer iteration cap, iteration stops with `smooth_iter = −1.0`, `escaped = 0`, the accumulated integer-valued `rebase_count`, and `glitch = 1`; re-rendering those pixels with a second reference is explicitly out of scope and present uses the honest debug tint.
 
 A non-escaping perturbation pixel that reaches `max_iter` records `[-1.0,0.0,rebase_count,0.0]`; all branch outputs are finite, so NaN and infinity are neither sentinel values nor accepted records.
 
@@ -78,13 +86,13 @@ There are exactly three kernel-defined levels: Preview is `ceil(W/4) × ceil(H/4
 
 The value 4,096 is a tab-safety POLICY rather than a hardware wall; `RefinementPlan` retains both requested and delivered caps, and app may request a different future policy only after review rather than presenting 4,096 as detected capacity.
 
-App owns scheduling and latest-wins cancellation: it may skip a level, but each level it does run is one logical dialect dispatch, and publication is accepted only when the dispatch's `owner_epoch` still equals the owner's current `u64` epoch.
+App owns scheduling and latest-wins cancellation: it runs levels in order and may skip, each level it does run is one logical dialect dispatch, and publication compatibility uses the current orbit generation and app plan token rather than owner-epoch equality; `owner_epoch` remains a versioned fact because each HOT or MAIN drain bumps it.
 
 The grid allocation reserves one span for the delivered Final extent and never reallocates between levels; each level densely overwrites the prefix of `width·height` records, `EscapeGrid.width`, `height`, and `level` are changed only after submission is accepted, and present never indexes beyond that active prefix.
 
 The dialect lowering may require several page render passes for one logical level dispatch: for page side `q = 256`, active record count `N`, and `Q = q² = 65,536`, the dispatch uses `P = ceil(N/Q)` prefix pages, with the final dispatch header's `valid_length = N−(P−1)Q`.
 
-Three sets of 16-byte `{global_base,valid_length,0,0}` page headers are generated and uploaded at grid allocation, each header begins at a stride aligned to live `min_uniform_buffer_offset_alignment`, and each page pass selects its header by dynamic offset without replacing the heap bind group.
+Three sets of 16-byte `{global_base,valid_length,0,0}` page headers are generated by the executor's `prefix_headers(span,active_len)` seam and uploaded at grid allocation, each header begins at a stride aligned to live `min_uniform_buffer_offset_alignment`, and each page pass selects its header by dynamic offset without replacing the heap bind group.
 
 If the requested Final extent does not fit after current live allocations, delivery chooses the smallest power-of-two divisor `d` for which an exact cloned-arena allocation of `ceil(W_requested/d)·ceil(H_requested/d)` records succeeds; those dimensions are delivered, and failure even at `1×1` is a typed zero-delivery refusal.
 
@@ -108,7 +116,7 @@ The per-level worst-case work is `C = width·height·iteration_cap` pixel-iterat
 
 Perturbation performs at most one reference `textureLoad` per executed pixel-iteration, while shallow performs none; rebase does not add an outer iteration, so `rebase_count ≤ executed_iterations ≤ iteration_cap`.
 
-The exact copy-command arithmetic is one command per complete page, plus one extra command only when the last partial page contains at least one complete row and a nonempty tail; command count, page-pass count, copied bytes, and encoder submissions remain separate facts.
+For `R = N mod q²`, exact copy-command arithmetic is `floor(N/q²) + 1[floor(R/q) > 0] + 1[R mod q > 0]`: one command per complete page, one for any complete rows in the partial page, and one for any tail row; command count, page-pass count, copied bytes, and encoder submissions remain separate facts.
 
 ## 3. INTERFACES
 
@@ -116,14 +124,14 @@ Every interface in this section is this slice's side of the shared contract and 
 
 ### 3.1 Math to kernels: coordinate records
 
-`Plane` is a 64-byte, 16-byte-aligned, little-endian `#[repr(C, align(16))]` value; adding `origin_hi` to the seed is required by the shared shallow hi-plus-lo ruling, while the worker's bignum centre remains outside this record.
+`Plane` is the math-owned 32-byte little-endian `#[repr(C)]` value `{ basis_u: [f32;4], basis_v: [f32;4] }`; the centre is not a plane property, the deep path has no absolute centre, and shallow receives the separate `CentreSplit` below.
 
 |Byte range|Field|Type|Unit and meaning|
 |---------:|-----|----|----------------|
-|0–15|`basis_u`|`[f32; 4]`|Unit four-vector in `(z.re,z.im,c.re,c.im)` after projection and Gram–Schmidt|
+|0–15|`basis_u`|`[f32; 4]`|Unit four-vector in `(z.re,z.im,c.re,c.im)` after the single `f32` rounding pass|
 |16–31|`basis_v`|`[f32; 4]`|Unit four-vector orthogonal to `basis_u` in the same axis order|
-|32–47|`origin_hi`|`[f32; 4]`|High `f32` words of the shallow absolute centre, including preset origin|
-|48–63|`origin_lo`|`[f32; 4]`|Residual `f32` words from the owner's `f64` centre mirror|
+
+`CentreSplit` is the math-owned 32-byte little-endian `#[repr(C)]` value `{ hi: [f32;4], lo: [f32;4] }`, with `hi` at bytes 0–15 and `lo` at bytes 16–31; it is supplied only to shallow dispatch and includes the preset's absolute centre.
 
 `EscapeParams` is the CPU-facing `#[repr(C)]` record `{ max_iter: u32, bailout: f32 }`, size eight and alignment four; `max_iter` is requested iterations, `bailout` is the squared-radius value and must be exactly `256.0f32`, and uniform packing supplies explicit padding rather than transmuting this record.
 
@@ -131,9 +139,11 @@ Every interface in this section is this slice's side of the shared contract and 
 
 ### 3.2 Worker and owner to kernels: reference orbit
 
-`ReferenceOrbitInput<'a>` is the borrowed record `{ span: &'a DataSpan, generation: u32, length: u32, precision_bits: u32 }`; `length` must equal `span.logical_len`, generation zero is valid only if worker defines it as the first session generation, and the caller must prove this is the latest accepted orbit before dispatch.
+`ReferenceOrbitInput<'a>` is the kernels-owned borrowed record `{ span: &'a DataSpan, generation: u32, length: u32, precision_bits: u32 }`; `length` must equal `span.logical_len`, and app's registry proves the generation is the latest accepted orbit before perturbation dispatch without transferring or cloning span ownership.
 
-The underlying worker message has its independent eight-word little-endian `u32` header `{magic,version,generation,kind,length,precision_bits,compute_us,credit_us}` at bytes 0–31, followed at byte 32 by `length` reference records; kernels do not parse or retain this transport header, and `compute_us` and `credit_us` remain worker-owner facts in microseconds.
+The underlying worker message has the independent eight-word little-endian `u32` header `{magic,version,generation,kind,length,precision_bits,compute_us,credit_us}` at bytes 0–31, `magic = 0x314c424a` (`JBL1`), and `version = 1`; its nine kinds are `OrbitRequest = 1`, `RequestReturn = 2`, `OrbitResponse = 3`, `CreditApplied = 4`, `CreditStale = 5`, `OrbitCancelled = 6`, `ChannelError = 7`, `Shutdown = 8`, and `ShutdownAck = 9`.
+
+Each pool buffer has capacity `48+16·M` for current maximum orbit length `M` and ends in the 16-byte worker-owned trailer `{pool:u32,slot:u32,capacity_bytes:u32,trailer_magic:u32}`; an `OrbitResponse` begins its `length` records at byte 32, and kernels do not parse, retain, credit, or return this transport buffer.
 
 Reference-orbit texel `n` is one 16-byte RGBA32F record with index zero equal to `Z₀`, the centre's complex `z` part, with `length = min(max_iter,escape_index+1)` when the reference escapes and `length = max_iter` when it does not.
 
@@ -167,14 +177,14 @@ Present consumes `&EscapeGrid`, resolves its DATA span through the unchanged hea
 
 All scalar words below are little-endian, every block is `#[repr(C, align(16))]`, `Pod`, and 16-byte aligned, every padding word is written as zero, and native layout tests assert size, alignment, and each byte offset rather than trusting source declaration order.
 
-The shallow block is exactly 96 bytes and is the only CPU-to-GPU payload of one shallow logical dispatch.
+The shallow block is exactly 96 bytes and is the only CPU-to-GPU payload of one shallow logical dispatch; its centre words are copied from one `CentreSplit` and do not belong to `Plane`.
 
 |Byte range|Field|Type|Meaning|
 |---------:|-----|----|-------|
 |0–15|`basis_u`|`[f32; 4]`|Plane basis `u`|
 |16–31|`basis_v`|`[f32; 4]`|Plane basis `v`|
-|32–47|`origin_hi`|`[f32; 4]`|Shallow centre high words|
-|48–63|`origin_lo`|`[f32; 4]`|Shallow centre residual words|
+|32–47|`centre_hi`|`[f32; 4]`|`CentreSplit.hi`|
+|48–63|`centre_lo`|`[f32; 4]`|`CentreSplit.lo`|
 |64–67|`pixel_scale`|`f32`|Four-dimensional units per pixel|
 |68–71|`width`|`u32`|Active grid width in pixels|
 |72–75|`height`|`u32`|Active grid height in pixels|
@@ -189,14 +199,14 @@ The perturbation block is exactly 64 bytes and is the only CPU-to-GPU payload of
 |---------:|-----|----|-------|
 |0–15|`basis_u`|`[f32; 4]`|Plane basis `u`|
 |16–31|`basis_v`|`[f32; 4]`|Plane basis `v`|
-|32–35|`pixel_scale`|`f32`|Four-dimensional units per pixel|
+|32–35|`pixel_scale`|`f32`|Scale mantissa `m ∈ [0.5,1)`|
 |36–39|`width`|`u32`|Active grid width in pixels|
 |40–43|`height`|`u32`|Active grid height in pixels|
 |44–47|`max_iter`|`u32`|Delivered level iteration cap|
 |48–51|`bailout`|`f32`|Squared escape radius, exactly 256.0|
 |52–55|`orbit_length`|`u32`|Number of valid reference records|
 |56–59|`level`|`u32`|`RefinementLevel` discriminant|
-|60–63|`padding`|`u32`|Zero|
+|60–63|`scale_exponent`|`i32`|Initial per-pixel exponent `s` in `pixel_scale = m·2^s`|
 
 The inherited per-page `DispatchHeader` is exactly 16 bytes `{ global_base: u32, valid_length: u32, padding: [u32;2] }`; the header buffer uses live dynamic-uniform stride and the heap bind-group identity never changes.
 
@@ -208,6 +218,8 @@ The inherited input resource entry is exactly 16 bytes `{ directory_index: u32, 
 
 `KernelMode` has `#[repr(u32)]` discriminants `Shallow = 0` and `Perturbation = 1`.
 
+`KernelMode::for_zoom(zoom_log2: f64) -> KernelMode` returns `Shallow` below 14 and `Perturbation` at or above 14; 14 is a displayed POLICY, and app keeps a reference orbit maintained at every depth so crossing the boundary does not create a reference gap.
+
 `DispatchFacts` is `{ owner_epoch: u64, mode: KernelMode, level: RefinementLevel, requested_extent: GridExtent, delivered_extent: GridExtent, requested_max_iter: u32, delivered_max_iter: u32, active_pixels: u32, worst_case_pixel_iterations: u64, page_passes: u32, copy_commands: u32, gpu_copy_bytes: u64, logical_heap_bytes: u64, reserved_heap_bytes: u64, scratch_bytes: u64, orbit_generation: Option<u32>, orbit_length: u32 }`.
 
 Every `DispatchFacts` byte and count is arithmetic from the accepted plan or a copied owner fact; GPU duration and poll count are deliberately absent because app measures submissions with its four-byte fence.
@@ -218,27 +230,29 @@ Every `DispatchFacts` byte and count is arithmetic from the accepted plan or a c
 
 `JulibrotKernels::plan(executor: &ember_lab_heap::GpuKernelExecutor, requested_extent: GridExtent, params: EscapeParams) -> Result<RefinementPlan, KernelError>` performs checked extent arithmetic, applies the 4,096 policy, and uses exact cloned-arena allocation trials without mutation.
 
-`JulibrotKernels::allocate_grid(executor: &mut ember_lab_heap::GpuKernelExecutor, plan: &RefinementPlan) -> Result<EscapeGrid, KernelError>` allocates one Final-capacity `DataSpan`, pre-uploads all three static prefix-header sets, and returns no partially allocated value on failure.
+`JulibrotKernels::allocate_grid(executor: &mut ember_lab_heap::GpuKernelExecutor, plan: &RefinementPlan) -> Result<EscapeGrid, KernelError>` allocates one Final-capacity `DataSpan`, asks `prefix_headers` for all three static header sets, uploads them once, and returns no partially allocated value on failure.
 
-`JulibrotKernels::encode_shallow(&self, executor: &ember_lab_heap::GpuKernelExecutor, encoder: &mut wgpu::CommandEncoder, grid: &mut EscapeGrid, owner_epoch: u64, level: RefinementLevel, plane: &Plane, zoom_log2: f64, params: EscapeParams) -> Result<DispatchFacts, KernelError>` packs the 96-byte uniform, encodes page passes and exact-region copies, and publishes the active grid fields only for the accepted epoch.
+`JulibrotKernels::encode_shallow(&self, executor: &ember_lab_heap::GpuKernelExecutor, encoder: &mut wgpu::CommandEncoder, grid: &mut EscapeGrid, owner_epoch: u64, level: RefinementLevel, plane: &Plane, centre: &CentreSplit, zoom_log2: f64, params: EscapeParams) -> Result<DispatchFacts, KernelError>` packs the 96-byte uniform, encodes page passes and exact-region copies, and tags the arithmetic receipt with the supplied epoch without using epoch equality as a compatibility test.
 
-`JulibrotKernels::encode_perturbation(&self, executor: &ember_lab_heap::GpuKernelExecutor, encoder: &mut wgpu::CommandEncoder, grid: &mut EscapeGrid, owner_epoch: u64, level: RefinementLevel, plane: &Plane, zoom_log2: f64, params: EscapeParams, reference: ReferenceOrbitInput<'_>) -> Result<DispatchFacts, KernelError>` performs the corresponding 64-byte uniform and one-span gather dispatch.
+`JulibrotKernels::encode_perturbation(&self, executor: &ember_lab_heap::GpuKernelExecutor, encoder: &mut wgpu::CommandEncoder, grid: &mut EscapeGrid, owner_epoch: u64, level: RefinementLevel, plane: &Plane, zoom_log2: f64, params: EscapeParams, reference: ReferenceOrbitInput<'_>) -> Result<DispatchFacts, KernelError>` decomposes scale into the 64-byte mantissa/exponent uniform and performs the one-span gather dispatch against the accepted reference generation.
 
 `JulibrotKernels::free_grid(executor: &mut ember_lab_heap::GpuKernelExecutor, grid: EscapeGrid) -> Result<(), KernelError>` returns the span and directory entries transactionally after app and present have relinquished all borrows.
 
-The public error set is `KernelError::{InvalidExtent,ArithmeticOverflow,InvalidEscapeParams,UnknownLevel,StaleOwnerEpoch,MissingReference,StaleReference,ReferenceLengthMismatch,ReferencePrecisionMismatch,Heap,Register,Dispatch,OutputTransferUnsupported,DeviceLost}`; wrapped heap, registration, and dispatch diagnostics retain their original typed source and stable kernel name.
+The public error set is `KernelError::{InvalidExtent,ArithmeticOverflow,ScaleExponentOverflow,InvalidEscapeParams,UnknownLevel,MissingReference,StaleReference,ReferenceLengthMismatch,ReferencePrecisionMismatch,Heap,Register,Dispatch,OutputTransferUnsupported,DeviceLost}`; wrapped heap, registration, and dispatch diagnostics retain their original typed source and stable kernel name.
 
-`GpuKernelExecutor` is a required minimal public seam extracted from the already-paid heap lattice runtime: it owns DATA and four-layer SCRATCH textures, `SpanArena`, immutable bind group, descriptor/directory/header/resource/uniform buffers, exact-row copy encoding, and live capacity reports; its extraction may expose existing behavior but must not fork or generalize the algorithm in this round.
+`GpuKernelExecutor` is the review-approved minimal public seam extracted by the app lane from the already-paid heap lattice runtime: it owns DATA and four-layer SCRATCH textures, `SpanArena`, immutable bind group, descriptor/directory/header/resource/uniform buffers, exact-row copy encoding, and live capacity reports; if extraction requires more than moving existing code behind a public boundary, the app lane stops and reports rather than forking behavior.
+
+The executor method is `GpuKernelExecutor::prefix_headers(&self, span: &DataSpan, active_len: u32) -> Result<StaticHeaders, SpanError>`; it requires `1 ≤ active_len ≤ span.logical_len`, emits only the prefix page headers with the exact final valid length, uses the live dynamic-uniform alignment, and performs no upload or allocation.
 
 ### 3.7 App and present coordination
 
-HOT state carries `zoom_log2: f64` and the two independent PLANE rotation angles in radians; app drains HOT every refresh, freezes one snapshot per frame, calls present-owned `Presenter::write_hot(slot,hot)` for one of three dynamic-offset slots, and passes the same snapshot values to a kernel dispatch selected by its schedule.
+Worker-owned `HotState` is the 40-byte record `{ zoom_log2:f64 @0, plane_theta_1:f64 @8, plane_theta_2:f64 @16, centre_from_reference_px:[f64;2] @24 }`; app drains it every refresh, freezes one snapshot per frame, and calls present-owned `Presenter::write_hot` for one of three dynamic-offset slots, while kernels use only zoom and the math-produced plane for a due scene.
 
-MAIN state carries the reference-orbit handle, requested iteration cap, plane origin including Julia `c₀`, and palette selection under the shared `u64` owner epoch; a MAIN arrival never rebuilds heap bind groups and changes only the orbit DATA region, resource words, uniforms, or palette record that actually changed.
+MAIN state carries the reference-orbit handle, requested and delivered iteration caps, plane seed axes and origin including Julia `c₀`, palette selection, precision and orbit facts, and the accepted `reference_shift_px`; a MAIN arrival never rebuilds heap bind groups and changes only the orbit DATA region, resource words, uniforms, or present-owned records that actually changed.
 
-Both HOT and MAIN drains are infallible and each bumps the shared epoch; an encoded dispatch with an older epoch may complete physically but cannot replace the published `EscapeGrid` level or facts.
+Both HOT and MAIN drains are infallible and each bumps the shared `u64` epoch, but consumers never use epoch equality for compatibility; app uses orbit generation and its refinement plan token to prevent an older encoded dispatch from replacing the published `EscapeGrid` level or facts.
 
-Present's entry remains `Presenter::frame(state,hot_slot)` for flat and tumbled views, and warp remains `Warp::reproject(last_frame,from_pose,to_pose)` where pose contains plane, zoom, and rotation; neither call changes escape-grid records.
+Present owns `new`, `set_main`, infallible `write_hot`, `submit_scene`, `frame`, `poll`, and `facts`; `Warp::reproject(last_frame,from_pose,to_pose)` is a pure CPU planner over math's `Pose`, scene and warp own separate four-byte fences, and none of those calls changes escape-grid records.
 
 ## 4. Inherited laws and satisfaction
 
@@ -255,7 +269,7 @@ Present's entry remains `Presenter::frame(state,hot_slot)` for flat and tumbled 
 |Honest facts|Requests, delivered extent and cap, policies, live walls, logical and reserved heap bytes, separate SCRATCH bytes, passes, copies, worst-case work, orbit metadata, and browser measurements are named separately.|
 |Never hang|Every loop is bounded by the delivered cap of at most 4,096; app owns deadline-bounded four-byte fences, counted polls, cancellation, and visible failure publication.|
 |Panic and GPU errors|App installs the panic hook and non-panicking uncaptured-error handler before constructing the executor; kernels return typed errors and contain no bare unreachable path.|
-|Math evidence|Kernel tests consume hand-written CPU references; `faer` is absent unless the binding drift or warp oracle fails its `f64` threshold.|
+|Math evidence|Kernel tests consume hand-written CPU references for shallow escape and scaled perturbation; `faer` is absent unless the navigation-drift or warp oracle fails its `f64` threshold.|
 |Scope austerity|There is one world, one heap class, no DAG or petgraph, no simulation tick, no shared-memory threads, no WebGPU, and no second-reference glitch repair.|
 
 The external navigation oracle composes `10⁴` and `10⁵` steps of `R(Δθ)` with `Δθ = 10⁻³` radians and measures `‖MᵀM−I‖_F`; pass is at most `10⁻⁵` for `f64` without re-orthonormalization and for `f32` with Gram–Schmidt every 64 steps.
@@ -264,17 +278,21 @@ The external warp oracle requires `max|H⁻¹H−I| ≤ 10⁻⁹` in `f64` at `z
 
 ## 5. Oracles and tests
 
-Native layout tests assert `Plane = 64`, shallow uniform `= 96`, perturbation uniform `= 64`, reference and escape records `= 16`, every byte offset in §3, little-endian pack/unpack fixtures, zero padding, and exact enum discriminants.
+Native layout tests assert `Plane = 32`, `CentreSplit = 32`, shallow uniform `= 96`, perturbation uniform `= 64`, reference and escape records `= 16`, every byte offset in §3, little-endian pack/unpack fixtures, zero padding, exact signed exponent bytes, and exact enum discriminants.
 
-Native coordinate tests cover both presets, rotated hybrid bases supplied by math, odd and even extents, bottom-left and top-right pixel centres, row-zero-at-bottom indexing, square pixels, the fixed `f64` pixel-scale calculation, and checked overflow.
+Native coordinate tests cover both presets, the `R₁₃·R₂₄` multiplication order, the `π/2` plane exchange, hybrid bases with nonzero z and c components, the `8·f32::EPSILON` postcondition, odd and even extents, bottom-left and top-right pixel centres, row-zero-at-bottom indexing, square pixels, and checked scale-exponent overflow.
 
 Native refinement tests pin the three dimensions and caps, exact power-of-two extent degradation, one Final-capacity allocation, prefix page counts and last valid lengths, immutable span handles across all levels, requested-versus-delivered facts, and zero-delivery behavior.
 
-Native heap-path tests register both bodies through dialect v2, prove shallow has zero accessors and perturbation has exactly `load_reference`, exercise alias and stale-generation refusals, pin dynamic header offsets, and verify copy rows, tail width, copied bytes, command counts, and separate SCRATCH accounting.
+Native heap-path tests register both bodies through dialect v2, prove shallow has zero accessors and perturbation has exactly `load_reference`, exercise alias and stale-generation refusals, require `prefix_headers` for every dense level, pin dynamic header offsets, and verify copy rows, tail width, copied bytes, command counts, and separate SCRATCH accounting.
 
 The shallow CPU conformance fixture uses deterministic pixels in both presets and one rotated hybrid plane; pass requires GPU and CPU escape classification and integer escape index to match exactly and `|smooth_gpu−smooth_cpu| ≤ 10⁻⁴`, with a conformance-only auxiliary target carrying the integer index because the production grid does not.
 
-The perturbation CPU fixture uses `f64` deltas and deterministic pixels that include `δz₀ = 0`, `δc = 0`, both nonzero, zero rebases, repeated rebases, reference exhaustion, and nonzero `Z₀`; classification, rebase count, glitch, and integer escape index must match exactly, while the provisional smooth tolerance is `2×10⁻³` pending math's written error-bound review.
+The perturbation CPU fixture uses math's scaled `f64` mirror and deterministic pixels that include normalized `δz₀′ = 0`, `δc′ = 0`, both nonzero, exponents on both sides of the normal f32 range, upward and downward 64-bit renormalization, zero and repeated rebases, reference exhaustion, and nonzero `Z₀`; the corrected nonzero-`Z₀` rebase is a PASS criterion.
+
+Perturbation conformance requires exact classification and integer escape index outside math's propagated error envelope, exact rebase count and glitch flag, and `|smooth_gpu−smooth_cpu| ≤ 2×10⁻³`; samples inside the envelope remain explicit boundary fixtures and are never silently removed from reported counts.
+
+The reference adequacy oracle recomputes at working precision `D` and `D+16`, requires identical escape index and emitted hi/lo records within two f32 ulps componentwise, then runs the deep scaled-classification corpus; failure grows the reference record only through a reviewed interface change.
 
 The production-output oracle checks every sampled record for finite channels, exact binary encodings of booleans and `−1.0`, integer-valued rebase count, zero shallow rebase count, and no read or presentation access beyond the active prefix.
 
@@ -290,56 +308,50 @@ Dispatch walls, scene walls, and poll counts are browser facts measured by app a
 
 |Risk|Oracle that retires it|
 |----|----------------------|
-|The mandated rebase assignment may not preserve the perturbation invariant when `Z₀ ≠ 0`.|The nonzero-`Z₀` Julia fixture compares every pre- and post-rebase full value and recurrence against the `f64` CPU oracle; implementation cannot claim general-plane conformance until it passes or joint review changes the rule.|
-|A provisional perturbation smooth tolerance could hide unstable deltas near the boundary.|Math supplies a written bound and adversarial deterministic pixels; exact classification, index, count, and glitch still cannot be waived, and any widened tolerance is a reviewed contract change.|
+|Mantissa/exponent arithmetic may lose scale during renormalization or rebasing.|The scaled f64 mirror forces both ±64 exponent transitions and nonzero-`Z₀` rebases, checks `δ = 2^e·δ′` and `δc = 2^e·δc′` before and after each transition, and requires exact control-flow facts.|
+|The accepted smooth tolerance could mask boundary classification drift.|Math's propagated envelope classifies every fixture as eligible or boundary before GPU execution; eligible classification and index remain exact, boundary fixtures remain counted, and smooth error stays at most `2×10⁻³`.|
 |Dense-prefix reuse could expose stale coarse or padding records.|Native index bounds plus visible replay of Preview→Interactive→Final and Final→Preview require checksums for only each declared active extent and poison padding in the test build.|
 |Buddy fragmentation or directory exhaustion can defeat byte-only capacity estimates.|Every delivery uses an exact cloned-arena allocation, and fragmentation fixtures compare reported first wall with the typed allocator refusal.|
 |Runtime-sized fragment loops can trigger a slow-driver watchdog despite the 4,096 policy.|Visible replay fences each level, counts polls, enforces app's deadline, and retains requested versus delivered caps; a timeout is failure evidence, never admission data.|
 |Reference replacement could pair new metadata with old DATA records.|Generation-tagged upload fixtures delay publication until data and resource words are queued, then deliberately dispatch stale generations and require `StaleReference`.|
-|Extracting the paid GPU executor could accidentally fork heap semantics.|An integration oracle runs the heap golden and Julibrot dispatch through the same executor type and compares bind-group identity, header bytes, copy regions, and typed failures.|
+|Extracting the paid GPU executor or prefix helper could accidentally fork heap semantics.|An integration oracle runs the heap golden and Julibrot dispatch through the same executor type and compares bind-group identity, full and prefix header bytes, copy regions, capacity facts, and typed failures; a non-visibility extraction stops the app lane.|
 |RGBA32F or copy usage may be absent despite nominal WebGL2.|Initialization checks live format usages and the standing output-path golden; refusal names the adapter, backend, and failed usage.|
 |Aggregate rebase and glitch totals are unavailable without readback or another reduction kernel.|The normal overlay labels totals unavailable and presents per-pixel debug tint; an explicitly requested measurement readback may count them and must report its fence and polls.|
 
 ## 7. Implementation phases and line budget
 
-Phase 0, estimated 220 new lines, creates the kernels package, pins all shared records and layouts, exposes the two dialect descriptors, and adds source, packing, and coordinate tests.
+Phase 0, estimated 230 new lines, creates the kernels package, pins `Plane`, `CentreSplit`, all GPU records and uniforms, exposes the two dialect descriptors, and adds source, packing, switch, and hybrid-coordinate tests.
 
-Phase 1, estimated 300 new lines, implements the shallow CPU mirror and WGSL body, exact escape-index conformance instrumentation, shallow uniform packing, and deterministic native fixtures.
+Phase 1, estimated 310 new lines, implements the shallow CPU mirror and WGSL body, exact escape-index conformance instrumentation, `CentreSplit` uniform packing, and deterministic native fixtures below the zoom-14 switch.
 
-Phase 2, estimated 380 new lines, implements reference upload validation, perturbation and rebasing CPU mirror and WGSL body, glitch behavior, provisional tolerance fixtures, and the nonzero-`Z₀` blocking oracle.
+Phase 2, estimated 480 new lines, implements reference upload validation, scaled perturbation, per-pixel exponent and ±64 renormalization, corrected rebasing, glitch behavior, accepted error-envelope fixtures, and the nonzero-`Z₀` pass oracle.
 
-Phase 3, estimated 340 new lines, implements the three-level plan, power-of-two delivered extent, full-span dense-prefix reuse, static header sets, capacity reports, and typed allocation errors.
+Phase 3, estimated 340 new lines, implements the three-level plan, power-of-two delivered extent, full-span dense-prefix reuse through `prefix_headers`, static header sets, capacity reports, and typed allocation errors.
 
-Phase 4, estimated 320 new lines, integrates the public heap GPU executor seam, one logical dispatch over page passes, exact SCRATCH copies, bind-group identity evidence, and kernels-to-present publication.
+Phase 4, estimated 340 new lines, integrates the app-owned public heap GPU executor seam, one logical dispatch over page passes, exact SCRATCH copies, bind-group identity evidence, and kernels-to-present publication.
 
 Phase 5, estimated 260 new lines, adds browser conformance entry points, four-byte-fence handoff facts, visible replay cards, cancellation interleavings, and page-contract fixtures owned jointly with app.
 
 Phase 6, estimated 180 new lines, reconciles all five documents, resolves or records interface differences, runs package and workspace gates, and accounts for actual net lines against the 2,000-line estimate.
 
-The total implementation estimate is 2,000 net new Rust, WGSL, JavaScript fixture, and test lines; documentation and any minimal visibility-only heap seam are reported separately rather than hidden inside that estimate.
+The total implementation estimate is 2,140 net new Rust, WGSL, JavaScript fixture, and test lines; documentation and the app-owned visibility-only heap seams are reported separately rather than hidden inside that estimate.
 
 ## 8. Unresolved joint-review findings
 
-- The binding rule `δ ← z` followed by `k ← 0` makes the reconstructed value `Z₀+z`, not `z`, whenever `Z₀ ≠ 0`; the algebra-preserving assignment appears to be `δ ← z−Z₀`, so math and app must resolve this conflict before general-plane implementation can pass.
+- The two-f32 reference record carries about 48 relative bits rather than the worker's full 100–300 decimal-digit precision; the accepted D-versus-D+16 validation and deep scaled corpus decide adequacy, and a failure requires a reviewed record change.
 
-- `Plane` was seeded as 48 bytes with only `origin_lo`, while the shared ruling requires eight shallow-origin floats; this document pins a 64-byte `Plane` with both `origin_hi` and `origin_lo`, and joint review must confirm the same representation in math, present, and app.
+- WGSL `ldexp` behavior and the generated GL lowering at very negative `i32` exponents require visible replay; underflow is semantically accepted for the rebase predicate and quadratic term, but exponent wrap, NaN, or backend validation failure is not.
 
-- The `GpuKernelExecutor` behavior is paid inside heap's private lattice runtime but is not currently a public crate type; app must list the same minimal extraction seam before the implementation round, or the public signatures in §3.6 cannot compile without copying code.
+- The review approves `GpuKernelExecutor` and `prefix_headers`, but both remain private implementation today; the app-owned extraction must stop if it requires algorithmic generalization rather than moving paid code behind public visibility.
 
-- The `2×10⁻³` perturbation smooth tolerance is provisional because the math document owns the error argument; the written joint review must accept it, tighten it, or replace it with a condition-based bound before timing can be qualified.
+- `EscapeGrid` owns a cloneable `DataSpan`, while present may retain or submit a scene that names it; app and present must prove the lifetime handoff that prevents `free_grid` from reclaiming a span still in flight.
 
-- The 4,096 iteration ceiling is a kernels policy chosen to bound browser work, not a shared ruling; worker buffer sizing and app's displayed requested-versus-delivered cap must agree or record a cross-document difference.
+- Aggregate rebase and glitch totals remain unavailable during normal gather-only rendering; an explicitly requested measurement readback may count them, but its fence, polls, generation, and effect on timing qualification still need implementation evidence.
 
-- The inherited heap API builds headers for an entire `DataSpan`, while dense-prefix refinement needs a reviewed prefix-plan seam or a kernel-owned transformation of public `DispatchPlan` and `StaticHeaders`; mutation of header bytes by convention alone is too fragile.
+- A reference can legitimately end before a nearby pixel escapes, but no policy requests another reference from a high glitch fraction; second-reference repair is out of scope, so v1 exposes only the debug tint and measured limit.
 
-- The worker header fixes field order but not numeric `magic`, `version`, or `kind` constants; kernels do not parse them, but app and worker must pin the values before the implementation round.
+- Exact shallow classification across CPU and browser shader still depends on math's predeclared boundary fixtures and contracted operation order; fused-operation behavior must not be accommodated by selecting samples after GPU results are seen.
 
-- `length = min(max_iter,escape_index+1)` needs one shared definition of `escape_index` at the cap boundary; this document defines current-state indices `0..max_iter−1`, and math and worker must match it byte-for-byte.
+- The zoom-14 mode switch is mathematically safe but browser pipeline-switch cost, first-frame warm-up, and visual continuity across one shallow and one scaled perturbation frame remain `requires visible replay`.
 
-- Aggregate rebase and glitch totals cannot be produced by either gather-only production kernel without readback or a third reduction kernel; the app overlay must accept “unavailable” during normal rendering or explicitly schedule and label a measurement readback.
-
-- A reference can legitimately end before a nearby pixel escapes, but no policy yet states whether a high glitch fraction requests a new centre reference; second-reference repair is out of scope, so the first lab may only expose the debug tint and measured limit.
-
-- Exact shallow classification across CPU and browser shader depends on deterministic fixtures avoiding boundary-sensitive fused-operation differences; the fixture-selection margin must be written by math rather than selected after seeing GPU results.
-
-- The power-of-two resolution degradation is deterministic but not yet shared with app or present; if app pins a different delivered-resolution policy, its integration contract supersedes this one and the difference must remain visible in joint review.
+- The four-layer SCRATCH allocation is inherited even though these kernels write one output; its paid compatibility is known, but the memory cost versus a one-layer extracted executor remains an implementation measurement and is not reopened in this lab.
