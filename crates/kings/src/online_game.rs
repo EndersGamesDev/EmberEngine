@@ -149,11 +149,14 @@ impl OnlineGame {
 
     fn click(&mut self, tile: Tile) {
         let out = {
-            let Some(state) = self.online.state.as_ref() else {
+            // No seat yet (the roster has not arrived) means no click: the
+            // machine's `None` is the hotseat convention, acting for the
+            // seat to move, which is somebody else's piece here.
+            let (Some(state), Some(me)) = (self.online.state.as_ref(), self.online.my_seat)
+            else {
                 return;
             };
-            self.ui
-                .click(state, self.online.my_seat, self.online.phase, tile)
+            self.ui.click(state, Some(me), self.online.phase, tile)
         };
         if let Some(out) = out {
             self.send_ui(out);
