@@ -41,6 +41,13 @@ function showStatus(message) {
   STATUS.textContent = message;
 }
 
+function liveStatus(facts) {
+  if (facts.completed_scene_id === null || facts.completed_scene_id === undefined) {
+    return "waiting for first completed scene";
+  }
+  return `showing scene ${facts.completed_scene_id}: ${facts.refinement_level} ${facts.delivered_width}x${facts.delivered_height} at cap ${facts.delivered_iteration_cap}`;
+}
+
 function renderFacts(facts) {
   FACTS.replaceChildren();
   for (const [name, value] of Object.entries(facts)) {
@@ -53,7 +60,11 @@ function renderFacts(facts) {
 }
 
 function bindControls(api) {
-  const refreshFacts = () => renderFacts(JSON.parse(api.app_facts_json()));
+  const refreshFacts = () => {
+    const facts = JSON.parse(api.app_facts_json());
+    renderFacts(facts);
+    return facts;
+  };
   const scheduleFrame = () => {
     if (RAF_PENDING) return;
     RAF_PENDING = true;
@@ -61,7 +72,7 @@ function bindControls(api) {
       RAF_PENDING = false;
       try {
         api.app_refresh(nowMs);
-        refreshFacts();
+        showStatus(liveStatus(refreshFacts()));
         if (api.app_needs_refresh()) scheduleFrame();
       } catch (error) {
         fail(error);
@@ -147,8 +158,8 @@ async function boot() {
     facts.javascript_bundle_bytes = await artifactBytes("./pkg/ember_lab_julibrot.js?v=1");
     facts.wasm_instance_count = 2;
     renderFacts(facts);
-    bindControls(api);
     showStatus("waiting for first completed scene");
+    bindControls(api);
   } catch (error) {
     fail(error);
   }

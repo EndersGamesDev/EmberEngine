@@ -1,6 +1,8 @@
 //! Cross-slice progressive frame scheduling and browser GPU integration.
 
 use ember_julibrot_kernels::RefinementLevel;
+#[cfg(any(target_arch = "wasm32", test))]
+use ember_julibrot_kernels::RefinementPlan;
 
 const LEVELS: [RefinementLevel; 3] = [
     RefinementLevel::Preview,
@@ -16,6 +18,17 @@ const fn arrival_is_current(
     navigation_pending_depth: u32,
 ) -> bool {
     !cancelled && response_generation == endpoint_generation && navigation_pending_depth == 0
+}
+
+/// Returns the iteration cap MAIN publishes to present for the current selection.
+///
+/// Present reads MAIN's delivered cap as the selection identity and drops its retained scene
+/// whenever that cap changes, so a per-level cap would annihilate every promotion on the very
+/// refresh that advances the ladder. The plan's delivered cap is the one value that holds for
+/// the whole Preview, Interactive, Final sequence and changes only when the request does.
+#[cfg(any(target_arch = "wasm32", test))]
+const fn published_iteration_cap(plan: &RefinementPlan) -> u32 {
+    plan.delivered_max_iter
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -352,7 +365,7 @@ mod browser {
             )
             .map_err(present_error)?;
             let mut main = viewer.owner().snapshot().main;
-            main.delivered_iter_cap = plan.delivered_max_iter;
+            main.delivered_iter_cap = super::published_iteration_cap(&plan);
             presenter.set_main(PresentMain {
                 epoch: 0,
                 state: main,
@@ -634,7 +647,7 @@ mod browser {
                 grid.height = spec.extent.height;
                 grid.level = level;
             }
-            self.main.delivered_iter_cap = self.plan.delivered_max_iter;
+            self.main.delivered_iter_cap = super::published_iteration_cap(&self.plan);
             self.presenter.set_main(PresentMain {
                 epoch: self.owner_epoch,
                 state: self.main,
@@ -942,7 +955,7 @@ mod browser {
                 }
             };
             self.queue.submit([encoder.finish()]);
-            self.main.delivered_iter_cap = self.plan.delivered_max_iter;
+            self.main.delivered_iter_cap = super::published_iteration_cap(&self.plan);
             self.presenter.set_main(PresentMain {
                 epoch: owner_epoch,
                 state: self.main,
@@ -1112,8 +1125,12 @@ pub use browser::BrowserFrameLoop;
 
 #[cfg(test)]
 mod tests {
+    use ember_julibrot_kernels::{GridExtent, plan_refinement};
+    use ember_julibrot_math::EscapeParams;
+
     use super::{
-        FrameLoop, PresenterPoll, RefinementLevel, RefinementSchedule, arrival_is_current,
+        FrameLoop, LEVELS, PresenterPoll, RefinementLevel, RefinementSchedule, arrival_is_current,
+        published_iteration_cap,
     };
     use crate::FramePolicy;
 
@@ -1212,6 +1229,43 @@ mod tests {
         let id = presenter.submit(frame_loop.generation(), level);
         frame_loop.submitted(id, level);
         Some(id)
+    }
+
+    #[test]
+    fn published_main_cap_holds_for_the_whole_ladder() {
+        for requested in [64_u32, 512, 4_096, 8_192] {
+            let plan = plan_refinement(
+                GridExtent {
+                    width: 960,
+                    height: 540,
+                },
+                EscapeParams::new(requested),
+                |_| true,
+            )
+            .expect("a 960 by 540 plan with unlimited capacity is representable");
+            assert_eq!(published_iteration_cap(&plan), requested.min(4_096));
+        }
+    }
+
+    #[test]
+    fn the_per_level_cap_the_app_must_not_publish_changes_between_levels() {
+        let plan = plan_refinement(
+            GridExtent {
+                width: 960,
+                height: 540,
+            },
+            EscapeParams::new(512),
+            |_| true,
+        )
+        .expect("a 960 by 540 plan with unlimited capacity is representable");
+        let level_caps = LEVELS.map(|level| plan.level(level).iteration_cap);
+        assert_eq!(level_caps, [64, 256, 512]);
+        assert!(
+            level_caps
+                .iter()
+                .any(|cap| *cap != published_iteration_cap(&plan)),
+            "a per-level cap would look like a new selection to present"
+        );
     }
 
     #[test]
