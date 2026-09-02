@@ -206,6 +206,10 @@
     // is the only source here.
     let chosen = null;    // the host we will race on
     let candidates = [];  // it, then the fallbacks, in order
+    let wrongProto = [];  // answered, but speaking another protocol
+    // Declared here rather than beside the launchers: `discover()` reads it to
+    // drop a probe that finished after a launch had already committed.
+    let launched = false;
 
     // One address, probed once, dressed as a ranked candidate so everything
     // downstream deals with exactly one shape.
@@ -217,17 +221,28 @@
 
     async function discover() {
       const r = await chooseHost(ROOT.href, { game: 'fire', proto: PROTO });
+      if (launched) return; // a race started while the probes were out
       chosen = r.chosen;
       candidates = r.candidates;
-      renderChip($('host-chip'), chosen);
+      wrongProto = r.wrongProto || [];
+      renderChip($('host-chip'), chosen, { wrongProto, proto: PROTO });
     }
+
+    // "Nothing answered" and "everything answered on another protocol" are
+    // different news: the second still has a playable build behind it, and it
+    // is exactly what a protocol bump looks like from the page that shipped
+    // first.
+    const offlineText = () => (wrongProto.length
+      ? `${wrongProto[0].name || 'the server'} is on protocol ${wrongProto[0].proto} and this build speaks ${PROTO}`
+        + ' — open the games page and pick the build that matches'
+      : 'no online server is published right now — practice mode still works');
 
     // ---- lobby browser -----------------------------------------------------
     // Its own short-lived socket, exactly like the arena's. The engine loop
     // never sees a menu. The chosen host's lobbies come first and every other
     // host on this protocol below, each row tagged: two people who landed on
     // different machines still have to be able to find each other.
-    const showLobbies = async () => {
+    const showLobbies = async ({ quiet = false } = {}) => {
       const rows = $('lobby-rows');
       const note = (text, bad) => {
         const s = document.createElement('span');
@@ -235,10 +250,14 @@
         s.textContent = text;
         rows.replaceChildren(s);
       };
-      note('looking for lobbies…');
+      // The placeholder belongs to the first look only. This function empties
+      // the list BEFORE it awaits the probes, so a polled call that showed it
+      // would blank a populated list every ten seconds — and take the Join
+      // button out from under the cursor with it.
+      if (!quiet) note('looking for lobbies…');
       await discover();
       if (!candidates.length) {
-        note('no online server is published right now — practice mode still works');
+        note(offlineText());
         return;
       }
 
@@ -274,8 +293,24 @@
       }));
     };
 
+    // ---- the menu poll -----------------------------------------------------
+    // The arena's cadence, and the contract in docs/hosts.md §5: the menu
+    // re-ranks as it re-lists, so a host that dies while the player reads the
+    // panel leaves the chip and the fallback list instead of sitting there
+    // looking playable — and a lobby someone else opens ten seconds from now
+    // appears without anyone pressing Refresh. It stops the moment the page
+    // goes online.
+    let lobbyPoll = null;
+    let ticking = false;
+    async function tick() {
+      if (ticking) return;
+      ticking = true;
+      try { await showLobbies({ quiet: true }); } finally { ticking = false; }
+    }
+    const pollOn = () => { if (lobbyPoll === null) lobbyPoll = setInterval(tick, 10000); };
+    const pollOff = () => { if (lobbyPoll !== null) { clearInterval(lobbyPoll); lobbyPoll = null; } };
+
     // ---- launching ---------------------------------------------------------
-    let launched = false;
     const showStage = () => {
       $('start').classList.add('hidden');
       $('stage').classList.remove('hidden');
@@ -284,6 +319,7 @@
     const launchLocal = () => {
       if (launched) return;
       launched = true;
+      pollOff(); // practice hides the panel; it must not keep opening sockets
       showStage();
       wasm.start_local();
       pollHud();
@@ -293,8 +329,14 @@
       if (launched) return;
       const wanted = target || chosen;
       const note = $('online-note');
-      if (!wanted) { note.className = 'note bad'; note.textContent = 'no server answered'; return; }
+      if (!wanted) {
+        note.className = 'note bad';
+        note.textContent = offlineText();
+        pollOn(); // includes a handover whose host is already gone: keep looking
+        return;
+      }
       launched = true;
+      pollOff();
 
       // Probe again RIGHT before the engine takes the socket. The list can be
       // seconds old and a quick tunnel dies without warning; once the wasm
@@ -302,7 +344,16 @@
       // last moment a dead host can still be turned into a live one.
       note.className = 'note';
       note.textContent = 'connecting…';
-      const order = [wanted, ...candidates.filter((c) => c.url !== wanted.url)];
+
+      // A Create walks the fallbacks — one server is as good as another for a
+      // new lobby. A JOIN does not: that lobby lives on that machine and
+      // nowhere else, so walking on would put the player in a stranger's
+      // lobby of the same name, or in none, and tell them it "moved". The
+      // `wanted === chosen` arm keeps the failover for the address-less
+      // handover below, where the target came from the ranking, not a row.
+      const order = (create || wanted === chosen)
+        ? [wanted, ...candidates.filter((c) => c.url !== wanted.url)]
+        : [wanted];
       let live = null;
       for (const c of order) {
         // Serial on purpose: the next host only matters once this one failed.
@@ -312,7 +363,11 @@
       if (!live) {
         launched = false;
         note.className = 'note bad';
-        note.textContent = 'no server answered — try again in a moment';
+        note.textContent = order.length === 1
+          ? `${wanted.name || 'that lobby’s host'} stopped answering — the lobby may be gone`
+          : 'no server answered — try again in a moment';
+        pollOn();
+        tick();
         return;
       }
       if (live.url !== wanted.url) {
@@ -320,7 +375,7 @@
           `${wanted.name || 'that server'} stopped answering — moved to ${live.name || 'another server'}`;
       }
       chosen = live;
-      renderChip($('host-chip'), live);
+      renderChip($('host-chip'), live, { proto: PROTO });
 
       showStage();
       try {
@@ -336,6 +391,7 @@
         $('start').classList.remove('hidden');
         note.className = 'note bad';
         note.textContent = String(e);
+        pollOn();
       }
     };
 
@@ -344,9 +400,12 @@
       $('online-panel').classList.toggle('hidden');
       $('btn-online').classList.add('primary');
       $('btn-practice').classList.remove('primary');
-      if (!$('online-panel').classList.contains('hidden')) showLobbies();
+      if (!$('online-panel').classList.contains('hidden')) { showLobbies(); pollOn(); }
+      else pollOff(); // a closed panel polls nothing
     };
-    $('btn-refresh').onclick = showLobbies;
+    // Not `= showLobbies`: the handler would hand the click event in as the
+    // options object.
+    $('btn-refresh').onclick = () => showLobbies();
     $('btn-create').onclick = () => {
       const name = ($('newlobby').value || '').trim();
       if (!name) { $('online-note').className = 'note bad'; $('online-note').textContent = 'give the lobby a name'; return; }
@@ -368,13 +427,16 @@
         const r = await onlyHost(pending.ws);
         chosen = r.chosen;
         candidates = r.candidates;
+        wrongProto = r.wrongProto || [];
       } else {
         // A handover from a page that predates the host list: no address came
         // with it, so the normal pick applies.
         await discover();
       }
       if (chosen && pending.host) chosen.name = chosen.name || pending.host;
-      renderChip($('host-chip'), chosen);
+      renderChip($('host-chip'), chosen, { wrongProto, proto: PROTO });
+      // No poll here: this branch opens the panel only to race straight into
+      // the handed-over lobby. `launchOnline` starts one if that fails.
       launchOnline(pending.lobby, pending.password, pending.action === 'create', chosen);
     } else {
       // Rank once on load so the chip is honest before anyone opens the

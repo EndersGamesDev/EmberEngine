@@ -349,13 +349,20 @@
       const row = document.createElement('div');
       row.className = 'playrow';
       const sel = document.createElement('select');
+      // Selected AFTER the loop, by value. Setting `opt.selected` per option
+      // is what let a stray second `live: true` win: appending an option with
+      // selectedness set clears the earlier one, so the LAST live entry was
+      // preselected while `versions.find((v) => v.live)` above answered the
+      // first. Assigning `select.value` once cannot disagree with `find()`.
+      let livePath = null;
       for (const v of g.versions) {
         const opt = document.createElement('option');
         opt.value = v.path;
         opt.textContent = v.live ? `${v.v} — live` : `${v.v} — ${v.note || 'archived'}`;
-        if (v.live) opt.selected = true;
+        if (v.live && !livePath) livePath = v.path;
         sel.append(opt);
       }
+      if (livePath) sel.value = livePath;
       const btn = document.createElement('button');
       btn.textContent = 'Play';
       btn.addEventListener('click', () => launch(sel.value));
@@ -373,13 +380,22 @@
     const perGame = new Map(); // game id -> { chosen, candidates }
     let busy = false;
 
-    // The published page that speaks a given protocol for a given game. The
-    // pairing lives in games.json, not here: a host may sit on any commit, so
-    // "which build can join this lobby" is a lookup, never an assumption.
+    // The published page that speaks a given protocol for a given game AND
+    // can honour a handover. The pairing lives in games.json, not here: a
+    // host may sit on any commit, so "which build can join this lobby" is a
+    // lookup, never an assumption.
+    //
+    // `handover` is the second half of that lookup and is default-deny. A
+    // frozen page declares a `proto` but reads only the legacy top-level
+    // address, so routing a join to it silently connects the player to a
+    // DIFFERENT machine, where the lobby they clicked does not exist. Only a
+    // page that reads `pending.ws` (today arena v12 and fire v2) is a routing
+    // target; every other version falls into the honest "needs a proto N
+    // build" badge below, and a page added later is safe by omission.
     const pageFor = (gameId, proto) => {
       const g = catalog.games.find((x) => x.id === gameId);
       if (!g || typeof proto !== 'number') return null;
-      return g.versions.find((v) => v.proto === proto) || null;
+      return g.versions.find((v) => v.proto === proto && v.handover) || null;
     };
     const titleOf = (gameId) =>
       (catalog.games.find((x) => x.id === gameId) || {}).title || gameId;
@@ -426,13 +442,22 @@
     // twice, and the player cares about the box. Players add up across its
     // servers, the round trip is the best of them, and the build is the newest
     // one it reported — a host mid-redeploy can briefly disagree with itself.
+    //
+    // Nameless hosts merge on the candidate's ENTRY OBJECT, not on its empty
+    // name. Both games of the legacy machine read the one entry `loadBook`
+    // built, so they still fold into one row; the manual override builds its
+    // own object and gets its own row, instead of the two being welded into a
+    // machine that appears to run both games and has neither address.
+    // `row.key` stays a string — the picker uses it as an option value.
+    const rowKey = (c) => (c ? c.bookName || c.entry : null);
     function stripRows() {
       const byHost = new Map();
       for (const [id, r] of perGame) {
+        const chosenKey = rowKey(r.chosen);
         for (const c of r.candidates) {
-          const key = c.bookName;
+          const key = rowKey(c);
           const row = byHost.get(key) || {
-            key, name: c.name, version: c.version, versionNum: -1,
+            key: c.bookName, name: c.name, version: c.version, versionNum: -1,
             commit: c.commit, players: 0, rtt: null, games: [], preferredFor: [],
           };
           if (c.name) row.name = c.name;
@@ -446,7 +471,7 @@
             row.rtt = row.rtt === null ? c.rttMs : Math.min(row.rtt, c.rttMs);
           }
           row.games.push(id);
-          if (r.chosen && r.chosen.bookName === key) row.preferredFor.push(id);
+          if (chosenKey === key) row.preferredFor.push(id);
           byHost.set(key, row);
         }
       }
@@ -608,6 +633,11 @@
       }));
     }
 
+    // The catch is defence in depth and is load-bearing: this runs every ten
+    // seconds against bytes a third party serves, and one throw anywhere in
+    // here would leave the strip and the lobby list frozen on whatever they
+    // last rendered, permanently — `busy` is cleared by the `finally`, but a
+    // failure that reproduces reproduces on every tick. Say so instead.
     async function refresh() {
       if (busy) return;
       busy = true;
@@ -615,6 +645,13 @@
         const { pin, ov } = await discoverHosts();
         renderHosts(stripRows(), pin, ov);
         await renderLobbies();
+      } catch (e) {
+        console.error(e);
+        renderHosts([], readPin(), override());
+        const note = document.createElement('span');
+        note.id = 'list-note';
+        note.textContent = 'could not read the address book — retrying';
+        $('lobby-rows').replaceChildren(note);
       } finally {
         busy = false;
       }
