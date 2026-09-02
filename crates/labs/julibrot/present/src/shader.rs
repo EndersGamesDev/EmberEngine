@@ -80,11 +80,11 @@ struct TumbledVertex { @builtin(position) position: vec4<f32>, @location(0) worl
     let record = load_escape(index);
     let q_u = 4.0 * ((f32(column) + 0.5) / f32(scene.grid.x) - 0.5);
     let q_v = 4.0 * (f32(row) + 0.5 - f32(scene.grid.y) * 0.5) / f32(scene.grid.x);
-    let plane = q_u * hot.plane_u + q_v * hot.plane_v;
-    let p_3 = plane.z * hot.view_rotation.z - record_height(record) * hot.view_rotation.w;
-    let p_5 = plane.z * hot.view_rotation.w + record_height(record) * hot.view_rotation.z;
-    let p_1 = plane.x * hot.view_rotation.x - plane.y * hot.view_rotation.y;
-    let p_2 = plane.x * hot.view_rotation.y + plane.y * hot.view_rotation.x;
+    let display = vec4<f32>(q_u, q_v, 0.0, 0.0);
+    let p_3 = display.z * hot.view_rotation.z - record_height(record) * hot.view_rotation.w;
+    let p_5 = display.z * hot.view_rotation.w + record_height(record) * hot.view_rotation.z;
+    let p_1 = display.x * hot.view_rotation.x - display.y * hot.view_rotation.y;
+    let p_2 = display.x * hot.view_rotation.y + display.y * hot.view_rotation.x;
     var output: TumbledVertex;
     output.world = vec3<f32>(0.0);
     output.grid_coordinate = vec2<f32>(f32(column), f32(row));
@@ -93,7 +93,7 @@ struct TumbledVertex { @builtin(position) position: vec4<f32>, @location(0) worl
     let denominator_five = 8.0 - p_5;
     if (denominator_five <= 1.0e-4) { return output; }
     let scale_five = 8.0 / denominator_five;
-    let projected_four = vec4<f32>(p_1, p_2, p_3, plane.w) * scale_five;
+    let projected_four = vec4<f32>(p_1, p_2, p_3, display.w) * scale_five;
     let denominator_four = 8.0 - projected_four.w;
     if (denominator_four <= 1.0e-4) { return output; }
     let scale_four = 8.0 / denominator_four;
@@ -201,8 +201,9 @@ mod tests {
     fn tumbled_shader_pins_heap_rotation_poles_camera_depth_and_light() {
         let source = scene_shaders(limits()).tumbled;
         for required in [
-            "plane.z * hot.view_rotation.z - record_height(record) * hot.view_rotation.w",
-            "plane.x * hot.view_rotation.x - plane.y * hot.view_rotation.y",
+            "let display = vec4<f32>(q_u, q_v, 0.0, 0.0);",
+            "display.z * hot.view_rotation.z - record_height(record) * hot.view_rotation.w",
+            "display.x * hot.view_rotation.x - display.y * hot.view_rotation.y",
             "let denominator_five = 8.0 - p_5;",
             "let denominator_four = 8.0 - projected_four.w;",
             "if (denominator_five <= 1.0e-4) { return output; }",
@@ -223,5 +224,11 @@ mod tests {
             );
         }
         assert!(!source.contains("0.013"));
+        for forbidden in ["hot.plane_u", "hot.plane_v"] {
+            assert!(
+                !source.contains(forbidden),
+                "the tumbled vertex must not read {forbidden}"
+            );
+        }
     }
 }

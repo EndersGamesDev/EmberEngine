@@ -264,8 +264,7 @@ impl Presenter {
         self.hot[slot.index() as usize] = pose;
         self.hot_source_valid[slot.index() as usize] = plan.source_valid;
         self.facts.centre_from_reference_px = hot.state.centre_from_reference_px;
-        self.facts.chart_residual = plan.source_valid.then_some(plan.chart_residual);
-        self.facts.tumbled_max_error_px = plan.approx_max_error_px;
+        self.facts.record_warp_plan(&plan);
         if plan.kind == WarpKind::ClearOnly && self.ledger.retained().is_none() {
             self.facts.status = PresentStatus::WaitingForFirstScene;
         } else if plan.kind == WarpKind::FlatExact
