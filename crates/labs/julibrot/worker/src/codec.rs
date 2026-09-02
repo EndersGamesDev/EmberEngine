@@ -1,7 +1,8 @@
 //! Canonical dyadic centre validation and request encoding.
 
 use crate::wire::{HEADER_BYTES, POOL_TRAILER_BYTES, read_u32, write_words};
-use crate::{ChannelError, ErrorCode, MessageHeader, MessageKind, Pool, WireBuffer};
+use crate::wire::{MessageHeader, MessageKind, Pool, WireBuffer};
+use crate::{ChannelError, ErrorCode};
 
 const REQUEST_FIXED_END: usize = 112;
 const COORDINATE_COUNT: usize = 4;
@@ -34,6 +35,10 @@ pub struct EncodedCentre {
 
 impl EncodedCentre {
     /// Validates canonical zeroes and a contiguous exhaustive limb partition.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BadLength` for any non-canonical descriptor or limb partition.
     pub fn validate(&self) -> Result<(), ChannelError> {
         let mut previous_end = 0_u32;
         for descriptor in self.coordinates {
@@ -64,6 +69,10 @@ impl EncodedCentre {
     }
 
     /// Returns exact bytes used through the final limb.
+    ///
+    /// # Errors
+    ///
+    /// Returns the canonical-validation refusal or `BadLength` on overflow.
     pub fn request_bytes(&self) -> Result<usize, ChannelError> {
         self.validate()?;
         self.limbs
@@ -89,7 +98,11 @@ impl OrbitReason {
     pub const MAX_ITER_CHANGE: Self = Self(1 << 3);
 
     /// Validates and constructs version-one reason bits.
-    pub fn from_bits(bits: u32) -> Result<Self, ChannelError> {
+    ///
+    /// # Errors
+    ///
+    /// Returns `BadLength` for zero or unknown bits.
+    pub const fn from_bits(bits: u32) -> Result<Self, ChannelError> {
         if bits == 0 || bits & !KNOWN_REASON_BITS != 0 {
             return Err(ChannelError::new(ErrorCode::BadLength, bits, 0, 0));
         }
@@ -97,6 +110,7 @@ impl OrbitReason {
     }
 
     /// Returns the canonical bit set.
+    #[must_use]
     pub const fn bits(self) -> u32 {
         self.0
     }
@@ -127,7 +141,7 @@ pub struct OrbitRequest {
 
 impl OrbitRequest {
     /// Encodes this request into one request-pool buffer without resizing it.
-    pub fn encode_into(&self, buffer: &mut WireBuffer) -> Result<(), ChannelError> {
+    pub(crate) fn encode_into(&self, buffer: &mut WireBuffer) -> Result<(), ChannelError> {
         let (pool, _) = buffer.identity()?;
         if pool != Pool::Request {
             return Err(ChannelError::new(ErrorCode::BadKind, pool as u32, 0, 0));
@@ -175,7 +189,7 @@ impl OrbitRequest {
     }
 
     /// Decodes and validates an owned semantic request.
-    pub fn decode(buffer: &WireBuffer) -> Result<Self, ChannelError> {
+    pub(crate) fn decode(buffer: &WireBuffer) -> Result<Self, ChannelError> {
         let view = RequestBodyView::decode(buffer)?;
         Ok(Self {
             generation: view.generation,
@@ -194,28 +208,28 @@ impl OrbitRequest {
 
 /// Allocation-free borrowed view of a validated request body.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RequestBodyView {
+pub(crate) struct RequestBodyView {
     /// Request generation.
-    pub generation: u32,
+    pub(crate) generation: u32,
     /// Decimal-depth label.
-    pub depth_digits: u32,
+    pub(crate) depth_digits: u32,
     /// Requested precision.
-    pub precision_bits: u32,
+    pub(crate) precision_bits: u32,
     /// Requested orbit cap.
-    pub max_iter: u32,
+    pub(crate) max_iter: u32,
     /// Triggering reasons.
-    pub reason: OrbitReason,
+    pub(crate) reason: OrbitReason,
     /// Authoritative-centre revision.
-    pub centre_revision: u32,
+    pub(crate) centre_revision: u32,
     /// Four canonical coordinate descriptors.
-    pub coordinates: [CoordinateDescriptor; COORDINATE_COUNT],
+    pub(crate) coordinates: [CoordinateDescriptor; COORDINATE_COUNT],
     /// Shared canonical limbs.
-    pub limbs: Vec<u32>,
+    pub(crate) limbs: Vec<u32>,
 }
 
 impl RequestBodyView {
     /// Decodes and validates a request body.
-    pub fn decode(buffer: &WireBuffer) -> Result<Self, ChannelError> {
+    pub(crate) fn decode(buffer: &WireBuffer) -> Result<Self, ChannelError> {
         let (pool, _) = buffer.identity()?;
         let header = buffer.header()?;
         let kind = header.validate()?;
@@ -227,7 +241,7 @@ impl RequestBodyView {
             return Err(ChannelError::new(
                 ErrorCode::BadLength,
                 0,
-                REQUEST_FIXED_END as u32,
+                112,
                 u32::try_from(bytes.len()).unwrap_or(u32::MAX),
             ));
         }
@@ -256,9 +270,9 @@ impl RequestBodyView {
                 limb_count: read_u32(bytes, offset + 12),
             };
         }
-        let limbs = bytes[REQUEST_FIXED_END..used]
-            .chunks_exact(4)
-            .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("four-byte limb")))
+        let limbs = (REQUEST_FIXED_END..used)
+            .step_by(4)
+            .map(|offset| read_u32(bytes, offset))
             .collect::<Vec<_>>();
         let centre = EncodedCentre {
             revision: read_u32(bytes, 40),
@@ -266,7 +280,7 @@ impl RequestBodyView {
             limbs,
         };
         centre.validate()?;
-        Ok(RequestBodyView {
+        Ok(Self {
             generation: header.generation,
             depth_digits: read_u32(bytes, 32),
             precision_bits: header.precision_bits,
@@ -279,7 +293,7 @@ impl RequestBodyView {
     }
 }
 
-fn bad_descriptor(detail: u32) -> ChannelError {
+const fn bad_descriptor(detail: u32) -> ChannelError {
     ChannelError::new(ErrorCode::BadLength, detail, 0, 0)
 }
 
@@ -295,7 +309,7 @@ mod tests {
             coordinates: [
                 CoordinateDescriptor {
                     sign: 0,
-                    exponent_twos_complement: (-7_i32) as u32,
+                    exponent_twos_complement: (-7_i32).cast_unsigned(),
                     limb_start: 0,
                     limb_count: 2,
                 },
@@ -313,7 +327,7 @@ mod tests {
                 },
                 CoordinateDescriptor {
                     sign: 0,
-                    exponent_twos_complement: (-2_i32) as u32,
+                    exponent_twos_complement: (-2_i32).cast_unsigned(),
                     limb_start: 3,
                     limb_count: 1,
                 },
@@ -369,7 +383,7 @@ mod tests {
         let coordinates = std::array::from_fn(|_| {
             let descriptor = CoordinateDescriptor {
                 sign: 0,
-                exponent_twos_complement: (-997_i32) as u32,
+                exponent_twos_complement: (-997_i32).cast_unsigned(),
                 limb_start: start,
                 limb_count: 32,
             };

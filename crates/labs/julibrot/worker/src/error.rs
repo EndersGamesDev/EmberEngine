@@ -66,6 +66,7 @@ pub struct ChannelError {
 
 impl ChannelError {
     /// Builds a fully specified refusal.
+    #[must_use]
     pub const fn new(
         code: ErrorCode,
         detail: u32,

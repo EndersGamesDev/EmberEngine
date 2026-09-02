@@ -4,16 +4,16 @@ use crate::{ChannelError, ErrorCode, MessageKind, Pool};
 
 /// Pool and pool-local slot identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SlotId {
+pub(crate) struct SlotId {
     /// Request or orbit pool.
-    pub pool: Pool,
+    pub(crate) pool: Pool,
     /// Pool-local index, zero or one.
-    pub slot: u32,
+    pub(crate) slot: u32,
 }
 
 impl SlotId {
     /// Validates a pool-local slot.
-    pub fn new(pool: Pool, slot: u32) -> Result<Self, ChannelError> {
+    pub(crate) const fn new(pool: Pool, slot: u32) -> Result<Self, ChannelError> {
         if slot > 1 {
             return Err(ChannelError::new(ErrorCode::BadTrailer, slot, 0, 0));
         }
@@ -31,7 +31,7 @@ impl SlotId {
 
 /// Exactly one current owner or directed transit state for a slot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SlotOwner {
+pub(crate) enum SlotOwner {
     /// Main can read or write the attached buffer.
     Main,
     /// A main-to-producer transfer detached main.
@@ -44,7 +44,7 @@ pub enum SlotOwner {
 
 /// Transport-independent ownership of two request and two orbit slots.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FourSlotModel {
+pub(crate) struct FourSlotModel {
     owners: [SlotOwner; 4],
 }
 
@@ -56,7 +56,7 @@ impl Default for FourSlotModel {
 
 impl FourSlotModel {
     /// Starts with request slots on main and orbit slots on producer.
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             owners: [
                 SlotOwner::Main,
@@ -68,12 +68,12 @@ impl FourSlotModel {
     }
 
     /// Reports the unique current owner or transit direction.
-    pub const fn owner(&self, id: SlotId) -> SlotOwner {
+    pub(crate) const fn owner(&self, id: SlotId) -> SlotOwner {
         self.owners[id.index()]
     }
 
     /// Starts the transfer permitted by `kind`, detaching its sender.
-    pub fn begin(&mut self, id: SlotId, kind: MessageKind) -> Result<(), ChannelError> {
+    pub(crate) fn begin(&mut self, id: SlotId, kind: MessageKind) -> Result<(), ChannelError> {
         let (expected_pool, from, to) = transfer_rule(kind)?;
         if id.pool != expected_pool || self.owner(id) != from {
             return Err(ChannelError::new(ErrorCode::BufferStarved, id.slot, 0, 0));
@@ -83,7 +83,7 @@ impl FourSlotModel {
     }
 
     /// Completes one browser delivery and attaches the receiver.
-    pub fn deliver(&mut self, id: SlotId) -> Result<(), ChannelError> {
+    pub(crate) const fn deliver(&mut self, id: SlotId) -> Result<(), ChannelError> {
         let delivered = match self.owner(id) {
             SlotOwner::ToProducer => SlotOwner::Producer,
             SlotOwner::ToMain => SlotOwner::Main,
@@ -96,12 +96,12 @@ impl FourSlotModel {
     }
 
     /// Returns whether all slots are attached to their startup owners.
-    pub fn is_reconciled(self) -> bool {
+    pub(crate) fn is_reconciled(self) -> bool {
         self == Self::new()
     }
 }
 
-fn transfer_rule(kind: MessageKind) -> Result<(Pool, SlotOwner, SlotOwner), ChannelError> {
+const fn transfer_rule(kind: MessageKind) -> Result<(Pool, SlotOwner, SlotOwner), ChannelError> {
     match kind {
         MessageKind::OrbitRequest | MessageKind::Shutdown => Ok((
             Pool::Request,

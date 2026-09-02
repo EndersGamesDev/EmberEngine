@@ -20,6 +20,10 @@ pub const ORBIT_RECORD_BYTES: usize = 16;
 pub const ERROR_RECORD_BYTES: usize = 16;
 
 /// Returns the exact capacity `48 + 16 * max_iter` with checked arithmetic.
+///
+/// # Errors
+///
+/// Returns `BadLength` if the capacity cannot be represented by the target.
 pub fn buffer_capacity(max_iter: u32) -> Result<usize, ChannelError> {
     let records = usize::try_from(max_iter)
         .ok()
@@ -96,6 +100,7 @@ pub struct MessageHeader {
 
 impl MessageHeader {
     /// Builds a canonical version-one header.
+    #[must_use]
     pub const fn new(kind: MessageKind, generation: u32) -> Self {
         Self {
             magic: MAGIC,
@@ -110,6 +115,10 @@ impl MessageHeader {
     }
 
     /// Validates fixed words and returns the decoded kind.
+    ///
+    /// # Errors
+    ///
+    /// Returns the stable refusal for bad magic, version, or kind.
     pub fn validate(self) -> Result<MessageKind, ChannelError> {
         if self.magic != MAGIC {
             return Err(ChannelError::new(ErrorCode::BadMagic, self.magic, 0, 0));
@@ -126,7 +135,7 @@ impl MessageHeader {
     }
 
     /// Writes all eight words in little-endian order.
-    pub fn write_to(self, destination: &mut [u8]) -> Result<(), ChannelError> {
+    pub(crate) fn write_to(self, destination: &mut [u8]) -> Result<(), ChannelError> {
         if destination.len() < HEADER_BYTES {
             return Err(short_buffer(HEADER_BYTES, destination.len()));
         }
@@ -145,7 +154,7 @@ impl MessageHeader {
     }
 
     /// Decodes and validates all eight words.
-    pub fn read_from(source: &[u8]) -> Result<Self, ChannelError> {
+    pub(crate) fn read_from(source: &[u8]) -> Result<Self, ChannelError> {
         if source.len() < HEADER_BYTES {
             return Err(short_buffer(HEADER_BYTES, source.len()));
         }
@@ -180,7 +189,7 @@ pub struct ErrorRecord {
 
 impl ErrorRecord {
     /// Writes the four words at the start of a message body.
-    pub fn write_to(self, destination: &mut [u8]) -> Result<(), ChannelError> {
+    fn write_to(self, destination: &mut [u8]) -> Result<(), ChannelError> {
         if destination.len() < ERROR_RECORD_BYTES {
             return Err(short_buffer(ERROR_RECORD_BYTES, destination.len()));
         }
@@ -197,7 +206,7 @@ impl ErrorRecord {
     }
 
     /// Reads and validates the stable error-code word.
-    pub fn read_from(source: &[u8]) -> Result<Self, ChannelError> {
+    fn read_from(source: &[u8]) -> Result<Self, ChannelError> {
         if source.len() < ERROR_RECORD_BYTES {
             return Err(short_buffer(ERROR_RECORD_BYTES, source.len()));
         }
@@ -224,7 +233,7 @@ impl From<ChannelError> for ErrorRecord {
 }
 
 impl TryFrom<ErrorRecord> for ChannelError {
-    type Error = ChannelError;
+    type Error = Self;
 
     fn try_from(value: ErrorRecord) -> Result<Self, Self::Error> {
         Ok(Self::new(
@@ -274,7 +283,11 @@ pub struct PoolTrailer {
 
 impl PoolTrailer {
     /// Builds one immutable allocation identity.
-    pub fn new(pool: Pool, slot: u32, capacity_bytes: usize) -> Result<Self, ChannelError> {
+    pub(crate) fn new(
+        pool: Pool,
+        slot: u32,
+        capacity_bytes: usize,
+    ) -> Result<Self, ChannelError> {
         if slot > 1 {
             return Err(ChannelError::new(ErrorCode::BadTrailer, slot, 0, 0));
         }
@@ -289,7 +302,7 @@ impl PoolTrailer {
     }
 
     /// Validates the pool, slot, capacity, and magic.
-    pub fn validate(self, actual_capacity: usize) -> Result<Pool, ChannelError> {
+    pub(crate) fn validate(self, actual_capacity: usize) -> Result<Pool, ChannelError> {
         if self.trailer_magic != TRAILER_MAGIC
             || self.slot > 1
             || usize::try_from(self.capacity_bytes).ok() != Some(actual_capacity)
@@ -321,13 +334,13 @@ pub struct ReferenceOrbitRecord {
 
 /// One preallocated pool buffer with immutable trailer identity.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WireBuffer {
+pub(crate) struct WireBuffer {
     bytes: Box<[u8]>,
 }
 
 impl WireBuffer {
     /// Allocates and initializes one zero-filled pool slot.
-    pub fn new(pool: Pool, slot: u32, max_iter: u32) -> Result<Self, ChannelError> {
+    pub(crate) fn new(pool: Pool, slot: u32, max_iter: u32) -> Result<Self, ChannelError> {
         let capacity = buffer_capacity(max_iter)?;
         let mut bytes = vec![0; capacity].into_boxed_slice();
         let trailer = PoolTrailer::new(pool, slot, capacity)?;
@@ -344,23 +357,23 @@ impl WireBuffer {
     }
 
     /// Returns the full allocated byte count.
-    pub const fn capacity(&self) -> usize {
+    pub(crate) const fn capacity(&self) -> usize {
         self.bytes.len()
     }
 
     /// Returns immutable bytes including the trailer.
-    pub fn as_bytes(&self) -> &[u8] {
+    pub(crate) fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
 
     /// Returns mutable message bytes while withholding the immutable trailer.
-    pub fn message_bytes_mut(&mut self) -> &mut [u8] {
+    pub(crate) fn message_bytes_mut(&mut self) -> &mut [u8] {
         let end = self.bytes.len() - POOL_TRAILER_BYTES;
         &mut self.bytes[..end]
     }
 
     /// Reads and validates this allocation's trailer.
-    pub fn trailer(&self) -> Result<PoolTrailer, ChannelError> {
+    pub(crate) fn trailer(&self) -> Result<PoolTrailer, ChannelError> {
         let offset = self.bytes.len() - POOL_TRAILER_BYTES;
         let trailer = PoolTrailer {
             pool: read_u32(&self.bytes, offset),
@@ -373,30 +386,30 @@ impl WireBuffer {
     }
 
     /// Returns this buffer's pool and slot after trailer validation.
-    pub fn identity(&self) -> Result<(Pool, u32), ChannelError> {
+    pub(crate) fn identity(&self) -> Result<(Pool, u32), ChannelError> {
         let trailer = self.trailer()?;
         Ok((Pool::try_from(trailer.pool)?, trailer.slot))
     }
 
     /// Clears all mutable bytes while preserving the trailer exactly.
-    pub fn clear_message(&mut self) {
+    pub(crate) fn clear_message(&mut self) {
         self.message_bytes_mut().fill(0);
     }
 
     /// Writes one canonical header after clearing stale payload bytes.
-    pub fn write_header(&mut self, header: MessageHeader) -> Result<(), ChannelError> {
+    pub(crate) fn write_header(&mut self, header: MessageHeader) -> Result<(), ChannelError> {
         self.clear_message();
         header.write_to(self.message_bytes_mut())
     }
 
     /// Reads and validates this buffer's header and trailer.
-    pub fn header(&self) -> Result<MessageHeader, ChannelError> {
+    pub(crate) fn header(&self) -> Result<MessageHeader, ChannelError> {
         self.trailer()?;
         MessageHeader::read_from(&self.bytes)
     }
 
     /// Validates pool, kind, count, and zero-filled unused capacity.
-    pub fn validate_message(&self) -> Result<MessageKind, ChannelError> {
+    pub(crate) fn validate_message(&self) -> Result<MessageKind, ChannelError> {
         let (pool, _) = self.identity()?;
         let header = self.header()?;
         let kind = header.validate()?;
@@ -452,7 +465,7 @@ impl WireBuffer {
     }
 
     /// Writes a typed channel-error message and its four-word body.
-    pub fn write_error(
+    pub(crate) fn write_error(
         &mut self,
         generation: u32,
         error: ChannelError,
@@ -464,7 +477,7 @@ impl WireBuffer {
     }
 
     /// Reads the typed body of a validated channel-error message.
-    pub fn error(&self) -> Result<ChannelError, ChannelError> {
+    pub(crate) fn error(&self) -> Result<ChannelError, ChannelError> {
         if self.validate_message()? != MessageKind::ChannelError {
             return Err(ChannelError::new(ErrorCode::BadKind, self.header()?.kind, 0, 0));
         }
@@ -472,7 +485,7 @@ impl WireBuffer {
     }
 
     /// Copies reusable orbit scratch into this standalone orbit buffer once.
-    pub fn write_orbit(
+    pub(crate) fn write_orbit(
         &mut self,
         generation: u32,
         precision_bits: u32,
@@ -519,7 +532,7 @@ impl WireBuffer {
     }
 
     /// Decodes a validated orbit payload into CPU records.
-    pub fn orbit_records(&self) -> Result<Vec<ReferenceOrbitRecord>, ChannelError> {
+    pub(crate) fn orbit_records(&self) -> Result<Vec<ReferenceOrbitRecord>, ChannelError> {
         if self.validate_message()? != MessageKind::OrbitResponse {
             return Err(ChannelError::new(ErrorCode::BadKind, self.header()?.kind, 0, 0));
         }
@@ -539,13 +552,19 @@ impl WireBuffer {
     }
 }
 
-pub(crate) fn read_u32(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("four-byte slice"))
+pub fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes([
+        bytes[offset],
+        bytes[offset + 1],
+        bytes[offset + 2],
+        bytes[offset + 3],
+    ])
 }
 
-pub(crate) fn write_words(destination: &mut [u8], words: &[u32]) {
-    for (chunk, word) in destination.chunks_exact_mut(4).zip(words) {
-        chunk.copy_from_slice(&word.to_le_bytes());
+pub fn write_words(destination: &mut [u8], words: &[u32]) {
+    for (index, word) in words.iter().enumerate() {
+        let offset = index * 4;
+        destination[offset..offset + 4].copy_from_slice(&word.to_le_bytes());
     }
 }
 
