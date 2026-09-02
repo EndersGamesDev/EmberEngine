@@ -8,7 +8,7 @@ struct MaterialUniform {
 
 struct VertexIn {
     @location(0) placement: vec4<f32>,
-    @location(1) handle: u32,
+    @location(1) resource_handle: u32,
     @location(2) shape: u32,
 }
 

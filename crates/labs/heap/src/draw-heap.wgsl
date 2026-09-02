@@ -15,13 +15,13 @@ struct FrameUniform {
 
 struct VertexIn {
     @location(0) placement: vec4<f32>,
-    @location(1) handle: u32,
+    @location(1) resource_handle: u32,
     @location(2) shape: u32,
 }
 
 struct VertexOut {
     @builtin(position) clip: vec4<f32>,
-    @interpolate(flat) @location(0) handle: u32,
+    @interpolate(flat) @location(0) resource_handle: u32,
 }
 
 fn local_vertex(vertex: u32, shape: u32) -> vec2<f32> {
@@ -40,13 +40,13 @@ fn vertex_main(input: VertexIn, @builtin(vertex_index) vertex: u32) -> VertexOut
     let local = local_vertex(vertex, input.shape);
     var output: VertexOut;
     output.clip = vec4<f32>(input.placement.xy + local * input.placement.zw, 0.0, 1.0);
-    output.handle = input.handle;
+    output.resource_handle = input.resource_handle;
     return output;
 }
 
 @fragment
 fn fragment_main(input: VertexOut) -> @location(0) vec4<f32> {
-    let index = input.handle & 1048575u;
+    let index = input.resource_handle & 1048575u;
     let record = descriptors.records[index];
     let layer = record.x & 65535u;
     let origin = vec2<u32>(record.x >> 16u, record.y & 65535u);
