@@ -176,6 +176,7 @@ impl OwnerEndpoint {
             }
         };
         core.orbit_leases += 1;
+        core.bump_facts();
         core.refresh_facts();
         let centre_revision = if header.generation == core.latest_generation {
             core.latest_centre_revision
@@ -855,7 +856,10 @@ mod tests {
         assert_eq!(owner.submit(request(5, 8)), SubmitOutcome::Transferred);
         let lease = producer.next_request().unwrap().unwrap();
         producer.cancel(lease, 300_000, 250_000).unwrap();
+        let queued = owner.facts();
+        assert_eq!(queued.orbit_queue_depth, 1);
         let mut arrival = owner.next_arrival().unwrap();
+        assert!(owner.facts().epoch > queued.epoch);
         assert!(arrival.cancelled());
         assert_eq!(arrival.length(), 0);
         assert_eq!(arrival.records.record_bytes().unwrap(), []);
