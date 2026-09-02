@@ -1,6 +1,6 @@
 {
-  "ws": "wss://paper-sur-ham-essential.trycloudflare.com",
-  "v": "1788363426",
+  "ws": "wss://fig-neither-repository-dakota.trycloudflare.com",
+  "v": "1788364925",
   "proto": 13,
   "fire_ws": "wss://msg-crest-remembered-literally.trycloudflare.com",
   "fire_proto": 1,
@@ -26,12 +26,12 @@
     },
     {
       "name": "dusky-osprey",
-      "ws": "wss://paper-sur-ham-essential.trycloudflare.com",
+      "ws": "wss://fig-neither-repository-dakota.trycloudflare.com",
       "proto": 13,
-      "version": "r450",
-      "commit": "a39481f",
+      "version": "r556",
+      "commit": "bb09f79",
       "by": "end@DESKTOP-E9PKJUK",
-      "updated": "2026-09-02T15:27:31Z"
+      "updated": "2026-09-02T16:02:05Z"
     }
   ]
 }
