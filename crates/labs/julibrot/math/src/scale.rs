@@ -92,6 +92,21 @@ pub fn scale_split(zoom_log2: f64, grid_width: u32) -> Result<ScaledPixelScale, 
     scaled_pixel_scale(zoom_log2, grid_width)
 }
 
+/// Computes the absolute binary64 pixel scale `4 / (2^zoom_log2 * grid_width)`.
+///
+/// # Errors
+///
+/// Returns an error for invalid input or a result outside positive finite binary64 range.
+pub fn pixel_scale(zoom_log2: f64, grid_width: u32) -> Result<f64, MathError> {
+    let _scale = scaled_pixel_scale(zoom_log2, grid_width)?;
+    let value = (2.0 - zoom_log2 - f64::from(grid_width).log2()).exp2();
+    if value.is_finite() && value > 0.0 {
+        Ok(value)
+    } else {
+        Err(MathError::ScaleExponentOverflow)
+    }
+}
+
 /// Rounds the absolute pixel scale once for the shallow kernel.
 ///
 /// # Errors
@@ -99,8 +114,7 @@ pub fn scale_split(zoom_log2: f64, grid_width: u32) -> Result<ScaledPixelScale, 
 /// Returns an error for invalid input or a non-positive binary32 result.
 #[allow(clippy::cast_possible_truncation)]
 pub fn shallow_pixel_scale(zoom_log2: f64, grid_width: u32) -> Result<f32, MathError> {
-    let _scale = scaled_pixel_scale(zoom_log2, grid_width)?;
-    let value = (2.0 - zoom_log2 - f64::from(grid_width).log2()).exp2() as f32;
+    let value = pixel_scale(zoom_log2, grid_width)? as f32;
     if value.is_finite() && value > 0.0 {
         Ok(value)
     } else {
@@ -190,37 +204,7 @@ pub fn centre_displacement_px(
     zoom_log2: f64,
     grid_width: u32,
 ) -> Result<[f64; 2], MathError> {
-    if centre.precision_bits != reference.precision_bits {
-        return Err(MathError::PrecisionMismatch);
-    }
-    let precision_bits = centre.precision_bits;
-    let scale = scaled_pixel_scale(zoom_log2, grid_width)?;
-    let scale_mantissa = BigScalar::from_f32(scale.mantissa, precision_bits)?;
-    let inverse_exponent = scale
-        .exponent
-        .checked_neg()
-        .ok_or(MathError::ScaleExponentOverflow)?;
-    let mut delta = Vec::with_capacity(4);
-    for (value, reference_value) in centre.coords.iter().zip(&reference.coords) {
-        delta.push(value.sub(reference_value, precision_bits)?);
-    }
-    let project = |basis: [f32; 4]| -> Result<f64, MathError> {
-        let mut sum = BigScalar::zero(precision_bits)?;
-        for (component, weight) in delta.iter().zip(basis) {
-            let weight = BigScalar::from_f32(weight, precision_bits)?;
-            let term = component.mul(&weight, precision_bits)?;
-            sum = sum.add(&term, precision_bits)?;
-        }
-        sum.div(&scale_mantissa, precision_bits)?
-            .scale_pow2(inverse_exponent)?
-            .to_f64()
-    };
-    let displacement = [project(plane.basis_u)?, project(plane.basis_v)?];
-    if displacement.iter().all(|component| component.is_finite()) {
-        Ok(displacement)
-    } else {
-        Err(MathError::NonFinite)
-    }
+    centre.displacement_px(reference, &plane, pixel_scale(zoom_log2, grid_width)?)
 }
 
 /// Projects desired centre minus accepted reference centre into current pixels.
