@@ -1,386 +1,530 @@
-# Julibrot app slice — integration contract
+# Julibrot app slice — refined integration contract
 
-Status: round-one slice document for joint review; where another slice document disagrees with this file, the disagreement is a joint-review finding and this app document is the integration contract until that review changes it.
+Status: refined after the five-document written review; this file adopts the joint rulings, records the two remaining integration arguments explicitly, and remains the contract the math, kernels, worker, and present implementations meet where a later disagreement is discovered.
 
 ## 1. Ownership and boundary
 
-The app slice owns `crates/labs/julibrot/app`, `web/labs/julibrot/`, assembly of the four sibling slices, the GL-only wgpu device and surface, the single surface owner, startup diagnostics, frame and refinement scheduling, controls, measurement, facts overlay, page-contract tests, the versioned loader, and the release-bundle report.
+The app slice owns `crates/labs/julibrot/app`, `web/labs/julibrot/`, construction and integration of the four sibling slices, the wgpu 24 GL device and surface, the single surface token, startup diagnostics, cross-slice call order, refinement scheduling, controls, measurement policy, facts overlay, page-contract tests, the versioned loader, and release-bundle evidence.
 
-The app slice does not own plane algebra, arbitrary-precision orbit arithmetic, the bignum implementation, kernel bodies or refinement-level definitions, heap allocation and scratch-copy lowering, transferred-buffer channel internals, owner-drain internals, palettes, flat or tumbled presentation, warp math, or the hot-ring allocation; math, kernels, worker, present, and `crates/labs/heap` respectively own those concerns.
+The app slice owns the implementation-round heap extraction seams approved in §3.8; those seams expose paid heap behavior to kernels and present, and the app lane stops and reports if extraction needs more than moving existing code behind public visibility.
 
-The app consumes the math, kernels, worker, present, and heap crates as dependencies and never copies their source; the implementation round may make only the explicit minimal heap visibility seams in §3.8, after joint review accepts them.
+Math owns Julibrot algebra, corrected plane construction, `CentreSplit`, scaled perturbation theory, reference precision, the bignum adapter, `Pose`, warp matrices, and CPU oracles; kernels owns both GPU kernels, the exact three refinement levels, `DispatchFacts`, grid spans, dense-prefix headers, and SCRATCH-to-DATA landing.
 
-This lab has one world-shaped object but no gameplay authority, no simulation tick, no general resource DAG, no petgraph, no second heap class, no shared-memory thread path, and no WebGPU path.
+Worker owns the bignum centre, transfer protocol, credit, cancellation, owner records and drains; present owns `ViewMode`, palettes, `HotUniform`, `SceneUniform`, its two scene textures, the hot ring, scene and warp fences, warp planning, and present facts.
+
+The app does not copy sibling or heap code, reinterpret an owner’s byte layout, author fractal or gameplay truth, add a general DAG or petgraph, add another world or simulation tick, add another heap class, use shared-memory threads, repair glitches with a second reference, or add WebGPU.
+
+Every interface owned elsewhere is duplicated below intentionally so the joint documents can be mechanically compared; an implementation-discovered disagreement is reported rather than papered over locally.
 
 ## 2. Design
 
-### 2.1 Coordinate, plane, and precision model
+### 2.1 Coordinates, corrected rotations, and poses
 
-The ordered fractal axes are `(z.re, z.im, c.re, c.im) = (e₁,e₂,e₃,e₄)` in ℝ⁴; `e₅` carries escape height only in the tumbled view and is never an axis of the sampled fractal plane.
+The fractal axes are ordered `(z.re,z.im,c.re,c.im) = (e₁,e₂,e₃,e₄)` in ℝ⁴; `e₅` carries escape height only in present’s tumbled VIEW and never enters the fractal plane, centre, worker message, or fractal kernel.
 
-The user-controlled plane rotation is `Rₚ(θ₁,θ₂) = R₁₂(θ₁)·R₃₅(θ₂)`, applied to column vectors as `v′ = R₁₂(R₃₅(v))`, with independent angles in radians and the standard two-axis block `[[cos θ,−sin θ],[sin θ,cos θ]]`; math projects with `P₄`, drops `e₅`, and Gram–Schmidt re-orthonormalizes the resulting basis.
+The user-controlled PLANE rotation is `Rₚ(θ₁,θ₂) = R₁₃(θ₁)·R₂₄(θ₂)`, applied to column vectors as `v′ = R₁₃(R₂₄(v))` with the standard `[[cos θ,−sin θ],[sin θ,cos θ]]` block, independent angles in radians, and one final f32 rounding pass.
 
-The standing view rotation is separate: present uses `R(t) = R₁₂(t)·R₃₅(φt)` only for the tumbled view, where `t` is elapsed visible animation time in seconds, `φ = (1+√5)/2`, and the two fixed perspective distances are `d₅ = d₄ = 8`; a plane-slider change never changes view time, and view animation never changes the fractal plane.
+Because this is an orthogonal ℝ⁴ map of an orthonormal seed pair, no `P₄`, Gram–Schmidt, or degenerate-plane stage exists; math’s postcondition is `|u·u−1|`, `|v·v−1|`, and `|u·v|` each at most `8·f32::EPSILON` after the single rounding pass.
 
-The Mandelbrot preset uses basis axes `(e₃,e₄)`, plane origin `(0,0,0,0)`, and identity `Rₚ`; the Julia preset uses `(e₁,e₂)`, plane origin `(0,0,c₀.re,c₀.im)`, and identity `Rₚ`, so `c₀` is MAIN state rather than a shader-only decoration.
+Mandelbrot is the seed pair `(e₃,e₄)` with plane origin `(0,0,0,0)` and `θ₁=θ₂=0`; Julia at `c₀` is `(e₁,e₂)` with plane origin `(0,0,c₀.re,c₀.im)` and zero angles, and preset selection sets the absolute centre to that origin.
 
-Pixel `(i,j)` samples its centre, with `x = i+0.5−width/2`, `y = j+0.5−height/2`, `+v` upward, row zero at the bottom, square pixels, and `height` chosen from canvas aspect rather than by stretching the plane.
+At `θ₁=θ₂=π/2` the Mandelbrot seed becomes the Julia plane at the centre; for `0<θ₁,θ₂<π/2`, math’s hybrid oracle requires the rotated basis to contain nonzero components in both `(e₁,e₂)` and `(e₃,e₄)` subspaces.
 
-The worker slice owns the exact centre `C ∈ ℝ⁴` in its pure-Rust bignum representation and the owner mirrors `C` as four `f64` values for display, local warp deltas, and shallow setup; app code never reconstructs a deep absolute centre from that mirror.
+The standing VIEW rotation is present-only and unchanged: `R(t) = R₁₂(0.4t)·R₃₅(φ·0.4t)`, `φ=(1+√5)/2`, and `t` is monotonic seconds; the two view angles are frozen into each HOT slot and never modify the sampled plane or reference orbit.
 
-For `zoom_log2 = q`, grid width `W`, and square pixels, the CPU computes `pixel_scale = 4.0/(2^q·W)` in `f64`, uploads the result as `f32`, displays decimal zoom depth `q·log10(2)`, and requests `D = ceil(q·log10(2)+log10(W))+8` decimal digits and `P = ceil(D·log2(10))` precision bits.
+Math defines the immutable semantic `Pose` consumed by app and present; it records owner epoch, orbit generation, corrected plane and plane angles, `zoom_log2`, the first VIEW angle, grid extent, view discriminant, and centre displacement from the accepted reference in current-zoom pixels.
 
-The shallow kernel receives the absolute centre split per coordinate as `hi = f32(C)` and `lo = f32(C−f64(hi))`; the perturbation kernel receives no absolute origin and starts from the relative offset `δ = (x·u+y·v)·pixel_scale`, with `δz₀` from axes `(e₁,e₂)` and `δc` from axes `(e₃,e₄)`.
+### 2.2 Pixels, arbitrary zoom, perturbation, and rebasing
 
-The active reference is renewed when the exact centre moves more than one quarter of the current view extent or `|zoom_log2−reference_zoom_log2| > 2`; the worker owns hysteresis around those boundaries, while the app reports the trigger and never labels a policy as a device wall.
+For an active grid `W×H`, pixel `(i,j)` samples its centre at `x=i+0.5−W/2`, `y=j+0.5−H/2`; row zero is bottom, `+v` is up, pixels are square, and the grid aspect follows the physical canvas without stretching.
 
-### 2.2 Device, surface, and error lifetime
+For `q=zoom_log2`, the mathematical pixel scale is `p=4/(2^q·W)`; shallow work at `q<14` computes `p` in f64 and rounds it once to f32, while perturbation at `q≥14` never forms an absolute tiny f32 scale.
 
-The wasm start function installs the panic hook before adapter or device work; after `request_device` returns, the app installs the non-panicking device-lost and uncaptured-error handlers before invoking the first method on that device or queue, then begins capability selection and resource initialization inside a validation error scope.
+For perturbation, math returns `p=m·2^s` with f32 mantissa `m∈[0.5,1)` and signed integer exponent `s`; equivalently `a=2−q−log₂W`, `s=floor(a)+1`, and `m=2^(a−s)`, with non-finite or i32-exponent overflow becoming typed refusal.
 
-The instance descriptor contains only `wgpu::Backends::GL`, the accepted adapter must report `wgpu::Backend::Gl`, the limits begin at `wgpu::Limits::downlevel_webgl2_defaults()`, and initialization refuses a missing WebGL2 or `EXT_color_buffer_float` floor with a typed page message rather than choosing another backend or format.
+The GPU starts with `o′=(x·u+y·v)·m`, `e₀=s`, `δz₀′=(o′₁,o′₂)`, and `δc′=(o′₃,o′₄)` so the true offset is `S·o′` for `S=2^e`; Mandelbrot still has `δz₀′=0`, Julia still has `δc′=0`, and the perturbation uniform contains no absolute centre.
 
-One generation-tagged `SurfaceOwnership` token is the only route to `get_current_texture`; an owned frame retains its `SurfaceTexture` across any fence yield, presents once after timing ends, and releases on present, typed failure, cancellation, or drop.
+The scaled recurrence is `δ′ₙ₊₁=2Zᵣδ′ₙ+S·δ′ₙ²+δc′`, the full value is `zₙ=Zᵣ+S·δ′ₙ` through `ldexp`, and the rebase predicate is `|zₙ|<|S·δ′ₙ|`; underflow of `S·δ′` makes the predicate false because a negligible delta must not rebase.
 
-Surface acquisition matches every result without panic: `Lost` and `Outdated` reconfigure and retry once, `Timeout` skips that frame with a typed status, other errors fail only the current epoch, and a newer selection waits cooperatively until an older owned frame drops rather than acquiring a second image.
+When `|δ′|` leaves `[2⁻⁶⁴,2⁶⁴]`, the pixel renormalizes by `δ′←δ′·2^∓64` and `e←e±64` under math’s scaled-state invariant; the f64 CPU mirror performs the identical exponent changes and is the kernel oracle.
 
-Initialization, selection, and measurement each use a generation-tagged validation error scope; a captured error drops an unpresented surface image, publishes both page and console diagnostics, preserves requested controls, and cannot poison a later generation.
+On rebase, the implementation reconstructs `Z₀` from reference record zero, sets the unscaled delta to `zₙ−Z₀`, represents that difference at the current scale, resets `r←0`, increments `rebase_count`, and performs exactly one ordinary advance against `Z₀`; therefore `zₙ=Zᵣ+δₙ` remains true for nonzero `Z₀`.
 
-Before the first successful scene frame the canvas contains only the configured clear colour and honest overlay text describing initialization or refusal; no diagnostic pattern is rendered.
+When the reference index reaches `length` before escape or `max_iter`, the pixel sets `glitch=1` and stops; present shows the honest debug tint, and re-rendering glitched pixels with another reference remains out of scope.
 
-### 2.3 State, controls, and latest-wins publication
+Reference texels remain double-single `[re_hi,im_hi,re_lo,im_lo]`; math’s `D_work` versus `D_work+16` comparison and scaled deep-classification corpus decide whether that roughly 48-bit relative record is sufficient, and a failing oracle requires a reviewed record change.
 
-HOT state contains desired `zoom_log2`, the two independent plane angles, and the local centre displacement from the accepted reference; it is drained and written through `Presenter::write_hot` on every refresh even when no scene frame is due.
+The shallow kernel is selected below `zoom_log2=14` and perturbation at or above it; 14 is a displayed POLICY justified by math’s f32 error argument, and the reference orbit is maintained at every depth so crossing the switch does not wait for a newly invented path.
 
-MAIN state contains the accepted reference-orbit handle and generation, requested and delivered iteration caps, precision, orbit length, plane origin including Julia `c₀`, palette, reference centre mirror, and worker credit facts; it is drained after the warp submission so a late orbit cannot delay immediate motion.
+Displayed integral depth is `depth_digits=ceil(max(0,zoom_log2·log10(2)))`; the overlay separately reports `D_floor=ceil(zoom_log2·log10(2)+log10(W))+8`, `D_work=D_floor+ceil(log10(max(max_iter,1)))`, requested bits, and delivered bits after Astro-float’s word rounding and `D_work+16` validation.
 
-Both drains are infallible, share one `u64` epoch, and increment that epoch on every drain call; `changed` reports whether payload changed, while an epoch wrap is documented as impossible in a browser session and is a typed refusal if nevertheless observed.
+### 2.3 Device, surface, and error lifetime
 
-Orbit-affecting controls increment a monotonic `u32` generation, coalesce while work is in flight, and accept publication only from the current generation; wraparound would require more than four billion orbit-affecting actions in one page session and is therefore refused before wrap rather than compared with modular arithmetic.
+The main wasm start function installs the panic hook before adapter work; immediately after `request_device` returns, app installs non-panicking device-lost and uncaptured-error handlers before any other device or queue call, then performs capability selection and resource initialization inside a validation error scope.
 
-Wheel zoom is anchored at the pointer, primary drag pans, DOM-down is converted to plane-up before crossing the worker boundary, and the exact centre adjustment is performed by the worker-owned bignum path; rotation sliders set `θ₁` and `θ₂` independently, and preset, Julia `c₀`, iteration cap, and palette controls retain their requested values across degradation, stale work, or refusal.
+The instance requests only `wgpu::Backends::GL`, the accepted adapter must report `wgpu::Backend::Gl`, limits begin at `wgpu::Limits::downlevel_webgl2_defaults()`, and missing WebGL2 or `EXT_color_buffer_float` produces a typed refusal rather than another backend, format, or blank canvas.
 
-The owner never copies an arriving MAIN value into a newer desired HOT field; accepted MAIN publication changes only fields owned by MAIN, which structurally prevents a delayed orbit from snapping zoom, rotation, or the requested control widgets backward.
+Initialization, selection, and requested measurement each own a generation-tagged validation error scope; captured and uncaptured failures publish page and console text without panic, drop any unpresented surface image, preserve requested controls, and cannot publish into a later generation.
 
-### 2.4 Progressive refinement and scene admission
+One generation-tagged `SurfaceOwnership` token is the only path to `get_current_texture`; app retains an acquired `SurfaceTexture` after `Presenter::frame` returns, keyed by its `warp_id`, and calls `present()` only after `Presenter::poll` returns the matching completed warp event and its timing endpoint has been captured.
 
-Kernels defines an ordered `RefinementPlan` of grid sizes, iteration caps, and legal span reuse from requested canvas extent and live walls; app owns only the schedule, preserves the requested extent and cap, and displays every delivered level and limiting term.
+While a warp fence is pending, later refresh callbacks may poll and drain HOT but cannot acquire another image; `Lost` and `Outdated` reconfigure and retry once, `Timeout` skips with a typed status, every other acquisition error releases ownership, and the acquisition path contains neither panic accessor.
 
-A scene frame is DUE exactly when the MAIN drain changed anything since the last completed scene frame or at least one refinement level remains pending; a HOT-only change produces a warp frame but does not independently dispatch a fractal kernel.
+Before the first completed scene the surface receives only present’s configured clear colour and the DOM overlay says `waiting for first completed scene` or names the current typed refusal; no diagnostic pattern or incompatible retained image is substituted.
 
-The scheduler takes exactly the next pending level, makes one logical kernel dispatch for that level, lets dialect v2 lower it to the required page passes, lands every output page through the paid SCRATCH-to-DATA copy path, draws that level, and marks it complete only after the scene fence succeeds for the same generation.
+### 2.4 State, controls, and refinement schedule
 
-A newer orbit generation cancels every older pending level at the next cooperative yield, never publishes its grid or last-frame handle, and begins the newest plan at its first level; a failure leaves the latest requested controls selected and names the failed wall or policy.
+The worker-owned HOT and MAIN records are `Copy`, `repr(C)`, independently staged, and published through infallible drains sharing one checked u64 epoch; each drain increments the epoch even when unchanged, and compatibility never relies on epoch equality.
 
-The first fenced scene frame after initialization, orbit acceptance, view switch, extent change, or pipeline selection is labelled cold/pipeline warm-up and excluded; the second fenced scene frame decides the policy, with `scene_ms > 100` selecting single-frame-on-demand and `scene_ms ≤ 100` admitting continuous refinement and animation.
+HOT contains desired zoom, independent plane angles, and `centre_from_reference_px`, the desired centre’s displacement from the accepted reference expressed in current-zoom pixels along `(u,v)`; worker computes this from bignum subtraction divided by scale, so pan and pointer-anchored zoom remain smooth at arbitrary depth.
 
-Single-frame-on-demand still renders one explicitly requested refresh and each pending refinement level, but does not schedule an otherwise idle animation frame; it is a page POLICY derived from the second measured frame, never an admission test for requested work.
+MAIN contains requested and delivered cap, delivered precision and orbit length, palette identifier, orbit registry identifier, f64 centre and plane-origin mirrors, seed axes, and `reference_shift_px`, the new minus old accepted reference centre in current pixels.
 
-### 2.5 One refresh frame, in cross-slice call order
+When a reference is accepted, present re-expresses its retained pose by subtracting the delivered `reference_shift_px` from the previous reference-relative displacement; generation change alone no longer clears, while a changed `max_iter` or plane origin including Julia `c₀` clears the retained frame.
 
-The app request-animation callback first calls worker `ViewerOwner::drain_hot`, derives math `Plane::from_spec` and the current present `Pose`, and chooses `HotSlot(frame_serial mod 3)`; it does not inspect MAIN or dispatch a scene before completing the warp stage.
+Wheel zoom is pointer anchored, drag pans, DOM-down is converted to plane-up before worker navigation, rotation sliders stage `θ₁` and `θ₂` independently, and Mandelbrot, Julia `c₀`, cap and palette widgets retain requested values across stale work, degradation, `SceneBusy`, or typed refusal.
 
-The app then starts the warp wall, calls present `Presenter::write_hot(slot, hot)` as the only refresh-rate CPU-to-GPU write, acquires the one surface token, calls present `Warp::reproject(encoder, target, last_frame, from_pose, to_pose, slot)` when a completed frame exists or present `Warp::clear(encoder, target, clear_colour, slot)` otherwise, submits, appends and maps the four-byte completion fence, counts `device.poll(Poll)` calls through cooperative zero-timeout yields, and records the warp wall when the fence resolves.
+Worker recomputes a reference when centre displacement exceeds one quarter of the view extent or `|zoom_log2−reference_zoom_log2|>2`, with worker-owned re-arm hysteresis; app reports trigger and policy separately from device walls.
 
-After the warp fence, app calls worker `ViewerOwner::drain_main`; if `changed` is true it calls worker `ViewerOwner::orbit_bytes(main.orbit_handle)`, kernels `Kernels::upload_reference` for a regional write into the stable reference span, kernels `Kernels::plan_refinement`, and present `Presenter::select_palette`, then invalidates any older pending plan without moving controls.
+Kernels defines exactly three ordered levels: Preview `ceil(W/4)×ceil(H/4)` at `min(requested_cap,64)`, Interactive `ceil(W/2)×ceil(H/2)` at `min(requested_cap,256)`, and Final `W×H` at `min(requested_cap,4096)`.
 
-If no scene frame is due, app ends timing and presents the warped surface image; if a scene frame is due, app takes one `RefinementLevel`, calls kernels `Kernels::dispatch_level` exactly once, receives typed `EscapeGrid`, calls present `Presenter::frame(encoder, target, state, slot)`, submits, appends and maps a separate four-byte scene fence, counts polls, calls present `Presenter::commit_frame` only for a successful current-generation fence or `Presenter::discard_frame` otherwise, and then presents.
+The 4,096 cap is a labelled POLICY; if Final allocation fails, kernels selects the smallest power-of-two extent divisor whose cloned-arena trial succeeds, preserves requested extent and cap, and reports the limiting live wall.
 
-Both paths call `SurfaceTexture::present` only after the last applicable mapped fence has resolved and the ending timestamp has been captured, so compositor scheduling is outside both measured regions and the surface image remains singly owned throughout.
+App’s schedule begins at Preview after compatible MAIN or extent change, advances in enum order, may skip a level when newer work makes it irrelevant, and requests at most one scene submission while present’s sole target is in flight; `SceneBusy` leaves the same next level pending.
 
-### 2.6 One zoom step, in cross-slice call order
+A scene is due when MAIN changed since the last accepted submission or a refinement level remains pending; a level becomes delivered only after present’s scene fence promotes it, and an older orbit generation may be measured but is dropped rather than relabelled current.
 
-For a wheel event, app computes the pointer coordinates about canvas centre in pixels with `+y` up and calls worker `ViewerOwner::navigate(NavigationDelta)`; the worker-owned endpoint updates exact `C`, desired `zoom_log2`, its `f64` mirror and local reference displacement, advances generation, coalesces any older request, and immediately makes those desired values available to the next HOT drain.
+Scene-target extent equals that level’s delivered grid extent, so Preview, Interactive, and Final may reallocate only the available member of present’s two-texture pair; every such event increments `texture_reallocations`, while the retained source remains valid until promotion.
 
-The next refresh drains HOT, calls math `Plane::from_spec`, writes the selected present hot-ring slot, and calls present `Warp::reproject` from the last completed pose to the desired pose, so input motion is visible without waiting for an orbit.
+Aggregate rebase and glitch totals are `unavailable` during normal gather-only rendering; only an explicit labelled measurement readback may populate them, with its own fence, poll count, bytes, and wall.
 
-When the one-quarter-extent or two-`zoom_log2` hysteresis rule fires, the worker endpoint serializes the exact centre into `OrbitRequest`, transfers one owner-to-worker buffer, and the Web Worker computes the reference in bounded chunks under the returned credit and latest-generation checks.
+### 2.5 One refresh, in exact cross-slice call order
 
-The Web Worker transfers `OrbitResponse`; the owner rejects and returns a stale buffer without publication, or for the current generation publishes MAIN with a new opaque orbit handle, measured precision, orbit length, `compute_us`, and credit facts while leaving desired HOT fields untouched.
+At the start of a refresh or cooperative completion turn, app calls present `Presenter::poll(now_ms)`; it handles `SceneCompleted`, `SceneDropped`, `WarpCompleted`, and `FenceRefused`, updates schedule and facts, and presents or drops an app-held surface image only for the matching `warp_id`.
 
-After the next warp submission, app drains MAIN, borrows the transferred orbit bytes, calls kernels `Kernels::upload_reference` and `Kernels::plan_refinement`, returns the no-longer-needed worker buffer with updated credit, dispatches the first level when due, calls present `Presenter::frame`, fences it, promotes its pose and frame handle, and continues later pending levels one per due scene frame.
+App then calls worker `ViewerOwner::drain_hot()`, takes the returned full `ViewerState`, calls math’s corrected plane constructor, builds `PresentHot` and math-owned `Pose`, constructs `HotSlot::for_refresh(refresh_id,hot_stride,epoch)`, and calls infallible present `Presenter::write_hot(slot,hot)`.
 
-### 2.7 Measurement and bounded progress
+App services worker `OwnerEndpoint::next_arrival()` without blocking; for a current orbit it synchronously gives the leased records to kernels’ executor for regional reference upload, registers the resulting `ReferenceOrbit`, calls owner `accept_orbit`, drains MAIN, calls present `Presenter::set_main`, and returns `CreditApplied`, while a stale response returns `CreditStale` without publication.
 
-Warp cost is wall time from immediately before its hot regional write and command encoding through resolution of the four-byte fence submitted after the warp commands; scene cost is wall time from immediately before kernel uniform writes and encoding through resolution of the separate four-byte fence submitted after the scene draw, and neither interval includes `present()`.
+If MAIN changed, app asks kernels `JulibrotKernels::plan` and `allocate_grid` as needed, installs the exact three-level schedule, and passes the resulting grid plus `reference_shift_px`, plane origin, cap, palette and view through `PresentMain`; no heap or present bind-group identity is replaced by ordinary MAIN publication.
 
-No timestamp query is requested; every fence maps exactly four bytes, calls `device.poll(wgpu::Maintain::Poll)` once before the first yield and once per retry, reports poll count and fence-wait wall, checks cancellation and a `30,000 ms` deadline before accepting completion after any yield, and refuses at `4,096` polls.
+If a scene is due and none is in flight, app calls kernels `encode_shallow` for `zoom_log2<14` or `encode_perturbation` otherwise for exactly the pending `RefinementLevel`, then calls present `Presenter::set_main` with that active grid and `Presenter::submit_scene(slot,now_ms)`; `SceneBusy` leaves the level pending and allocates no third texture.
 
-The timer probe makes at most `4,000,000` consecutive `performance.now()` reads, stops after `32` positive transitions or `500 ms`, and adopts the smallest positive transition `Q` as the visible clock quantum; no positive transition makes timing unavailable without preventing rendering.
+App next acquires the sole surface image, builds `FrameState`, calls present `Presenter::frame(state,slot)`, retains the image and surface token under the returned `warp_id`, and starts or continues a zero-timeout cooperative loop that calls `Presenter::poll` once before the first yield and once after each yield.
 
-For a path admitted by its second frame, adaptive measurement performs three named untimed warm-ups and 15 recorded samples; each sample repeats the exact whole submission until elapsed time is at least `32Q`, caps its target at `250 ms`, caps repeats at `4,096`, ends the suite after `30,000 ms`, normalizes by repeats, and reports the middle sorted median and nearest-rank p95 at rank `ceil(0.95n)`.
+On matching `WarpCompleted`, present has completed its four-byte fence and recorded the ending timestamp, so app calls `SurfaceTexture::present`, releases the token, publishes facts, and schedules another refresh only when animation, input, pending refinement, pending scene completion, or pending worker work requires one.
 
-The first and second fenced frames, adaptive warm-ups, candidates, repeats, poll counts, fence waits, cancellations, and single-frame observations remain listed; warm-ups are visibly labelled and excluded, and browser values say `requires visible replay` until a visible replay supplies them.
+On matching warp `FenceRefused`, cancellation, device loss, or generation-tagged error, app drops the unpresented image, releases the token, preserves controls, and prints the typed event; it never calls `present()` inside either scene or warp measurement.
 
-### 2.8 Page and bundle
+### 2.6 One zoom step, in exact cross-slice call order
 
-The page exposes flat and tumbled views, wheel zoom, drag pan, two plane-rotation sliders, Mandelbrot and Julia-with-editable-`c₀` presets, requested iteration cap, present-owned palette selection, explicit one-frame and measure controls, one canvas, one status element, and one facts overlay.
+For wheel input, app converts pointer position to canvas-centred pixels with `+y` up and stages a worker navigation edit; worker updates the bignum centre, `zoom_log2`, f64 mirror, and `centre_from_reference_px`, checked-increments generation when reference work is required, coalesces older pending work, and exposes desired HOT immediately.
 
-The browser loads one wasm module in both the main thread and module worker through the same versioned URL; browser fetch caching avoids a second network payload, but two wasm instances and their independent linear memories remain an explicit cost.
+The next refresh performs `poll → drain_hot → construct_plane/Pose → write_hot`; present’s CPU-only `Warp::reproject` computes the f64 homography from retained pose to desired pose, including the difference of their reference-relative pixel displacements, and `HotUniform` receives only the final f32 rows and zoom ratios, never two poses or a tiny absolute scale.
 
-Loader, JavaScript glue, wasm export, and worker handshake all use `JULIBROT_ABI_VERSION = 1` and URLs `./pkg/ember_lab_julibrot.js?v=1`, `./pkg/ember_lab_julibrot_bg.wasm?v=1`, and `./worker.js?v=1`; any version disagreement refuses startup as `VersionSkew { component, expected, observed }` before device initialization or orbit work.
+If no compatible retained frame exists, or `max_iter` or plane origin changed, `source_valid=0` clears; an orbit-generation change with `reference_shift_px` instead rebases the retained pose and keeps translation smooth.
 
-Every redeploy increments the query version whenever JavaScript, wasm, worker protocol, or page-contract semantics change and publishes the page, glue, wasm, and worker bootstrap atomically; an old cached page therefore either loads its matching artifacts or receives a typed skew refusal, never a partially compatible session.
+When worker hysteresis triggers, the owner endpoint writes the nine-kind JBL1 `OrbitRequest` into a request-pool buffer, transfers it, and the producer admits it under the 250,000-microsecond-per-second credit policy, computes in bounded chunks, validates at `D_work+16`, and returns an orbit or typed cancellation/error.
 
-The wgpu lab bundle is expected to be approximately `4.5 MB`; the release build records exact wasm and JavaScript byte counts as build facts, the overlay reports those counts without hiding the duplicated-instance memory cost, and the approximation is not presented as a measurement of this not-yet-built slice.
+App handles the response after the next present poll and HOT write, uploads and registers a current orbit before accepting MAIN, returns its lease credit exactly once, installs Preview/Interactive/Final, and submits Preview when present has an available scene target.
+
+The next completed scene atomically promotes its texture, pose, grid, palette, generation, measured fence and level; later due turns submit Interactive then Final, while every intervening surface frame warps the newest compatible completed scene.
+
+### 2.7 Measurement and never-hang policy
+
+Present owns both four-byte fences: scene cost begins immediately before scene uniform writes and encoding, warp cost begins immediately before the 128-byte HOT write and warp encoding, and each ends only when its mapped fence completion is observed; app calls `present()` afterward.
+
+No timestamp query is requested; present’s `poll` performs at most one `device.poll(wgpu::Maintain::Poll)` per pending fence per call, counts every poll, checks generation and device loss, refuses at 4,096 polls or 30,000 ms, and relies on app’s zero-timeout yield between calls.
+
+The timer probe performs at most 4,000,000 consecutive `performance.now()` reads, stops after 32 positive transitions or 500 ms, and uses the smallest positive transition `Q`; no positive transition makes timing unavailable without preventing requested rendering.
+
+After initialization, texture reallocation, pipeline creation, or view change, the first completed warp and first completed scene are labelled warm-up and excluded; the second fenced frame decides the 100 ms policy, with `>100 ms` selecting single-frame-on-demand and `≤100 ms` permitting continuous animation/refinement.
+
+An admitted measurement performs three named untimed warm-ups and 15 samples, repeats the exact submission until a batch spans at least `32Q`, caps target at 250 ms, repeats at 4,096, and suite wall at 30,000 ms, then reports the middle sorted median and nearest-rank p95 at `ceil(0.95n)`.
+
+Every warm-up, decision frame, adaptive candidate, repeat count, fence wall, fence-wait subset, poll count, cancellation and single-frame observation remains visible; browser values remain `requires visible replay` until a visible replay supplies them.
+
+Worker `compute_us` is separately measured from centre decode through the standalone-buffer copy, includes cancelled work, and is never substituted for scene wall, warp wall, end-to-end latency, credit, or browser transit.
+
+### 2.8 Page, worker module, and deployment
+
+The page exposes flat and tumbled modes, pointer-anchored wheel zoom, drag pan, two plane-angle sliders, Mandelbrot and Julia-with-editable-`c₀` presets, iteration-cap and Classic/Ember/Ice palette controls, explicit one-frame and measurement controls, one canvas, one status element, and one DOM facts overlay.
+
+One wasm module is instantiated on the main thread and in the module worker, whose entry is `worker_main`; fetch caching avoids a second network payload, but two wasm instances and separate linear memories remain displayed costs.
+
+Loader, JavaScript glue, wasm export, worker bootstrap, and wire protocol use `JULIBROT_ABI_VERSION=1` and URLs `./pkg/ember_lab_julibrot.js?v=1`, `./pkg/ember_lab_julibrot_bg.wasm?v=1`, and `./worker.js?v=1`; any disagreement refuses startup as typed `VersionSkew` before device or orbit work.
+
+Every semantic change to page, glue, wasm, worker, or protocol increments the query version and deploys all four atomically; a cached old page either obtains matching artifacts or receives the typed skew refusal.
+
+Existing wgpu lab bundles are approximately 4.5 MB; release gates record exact wasm and JavaScript byte counts, the overlay reports them beside two-instance memory, and the approximation is never substituted for this lab’s unbuilt artifact.
 
 ## 3. INTERFACES
 
-All wire and GPU records below are little-endian, all byte offsets are from the start of the named record, all reserved fields are written as zero and rejected when nonzero on decode, `f32` and `f64` mean IEEE 754 binary32 and binary64, and every GPU uniform size is a multiple of 16 bytes.
+All wire and GPU records are little-endian, every listed reserved word is written as zero, all RGBA32F lanes are IEEE-754 binary32, byte offsets are from record start, and CPU-only semantic records explicitly have no serialization-by-layout promise unless marked `repr(C)`.
 
-|Provider → consumer|Pinned interface|Units and ownership|
-|---|---|---|
-|math → app/kernels/present|`Plane`, `PlaneSpec`, `EscapeParams`, centre splitting, pixel mapping, drift and warp oracles|Radians, fractal-plane units, squared bailout radius; values copied, no GPU ownership|
-|worker owner → app|`ViewerOwner`, `HotDrain`, `MainDrain`, `ViewerState`, `OrbitHandle`, `WorkerCreditStats`|Shared epoch, latest-wins generation; transferred orbit remains worker-slice storage|
-|app → worker owner|`NavigationDelta`, preset, Julia constant, iteration-cap and palette selections|Canvas pixels, `zoom_log2`, radians; calls enqueue/coalesce infallibly|
-|owner ↔ Web Worker|`MessageHeader`, `OrbitRequest`, `OrbitResponse`, `BigCentre4`, four transferred buffers|Microseconds, bits, decimal digits, 16-byte orbit records; exclusive buffer ownership|
-|app → kernels|`KernelSceneInput`, `RefinementPlan`, `Kernels::upload_reference`, `Kernels::dispatch_level`|One logical dispatch per level; app owns schedule|
-|kernels → app/present|`EscapeGrid { span, width, height, level }`|Texels and typed heap span; kernels owns allocation/reuse|
-|app → present|`Pose`, `HotFrame`, `SceneState`, `PaletteRecord`, `Presenter::write_hot`, `Presenter::frame`, `Presenter::commit_frame`, `Warp::reproject`|Radians, pixels, seconds; present owns pipelines, hot ring and last-frame images|
-|present → app|`HotSlot`, `LastFrameHandle`, `WarpStats`, `PresentStats`|Opaque generation-tagged handles and measured submission facts|
-|heap → all GPU slices|`DataSpan`, immutable heap group, dialect v2 dispatch, SCRATCH copy, `PollCounter`, `SurfaceOwnership`|16-byte DATA records, dynamic offsets, counted polls; reuse by dependency|
+### 3.1 Math-owned records and functions
 
-### 3.1 Math records and formulas
+`CentreF64` is `{ coords:[f64;4] }`, finite, 32 native bytes, and display/pose state without deep arithmetic authority; `CentreSplit` is `repr(C) { hi:[f32;4], lo:[f32;4] }`, exactly 32 bytes at offsets 0 and 16.
 
-`PlaneSpec` is the logical record `{ axis_u: Axis4, axis_v: Axis4, plane_origin: [f64;4], theta_1: f64, theta_2: f64 }`, where `Axis4` is the closed `u32` enum `E1=0, E2=1, E3=2, E4=3`; `plane_origin` is ℝ⁴ in fractal-plane units and the angles are independent radians.
+`Plane` is `repr(C,align(16)) { basis_u:[f32;4], basis_v:[f32;4] }`, exactly 32 bytes at offsets 0 and 16; it has no origin field, and the retired origin field name does not appear in this contract.
 
-`Plane` is a 48-byte, 16-byte-aligned record with `basis_u: [f32;4]` at bytes `0..16`, `basis_v: [f32;4]` at `16..32`, and `origin_lo: [f32;4]` at `32..48`; `origin_lo[k] = f32(C[k]−f64(origin_hi[k]))` for shallow work and is the local residual relative to the active reference for deep presentation.
+`PlaneAngles` is `{ theta_1:f64, theta_2:f64 }` in independent radians; `PlanePreset` is `Mandelbrot` or `Julia { c0:[f64;2] }`, with finite `c₀` carried in MAIN’s plane origin.
 
-`Plane::from_spec(spec, centre_f64) -> Result<Plane, PlaneError>` applies `Rₚ`, projects with `P₄`, Gram–Schmidt re-orthonormalizes, and returns math's typed degenerate case rather than a substitute basis; presets are exactly the records in §2.1.
+`EscapeParams` is `repr(C) { max_iter:u32, bailout:f32 }`, exactly 8 bytes at offsets 0 and 4; `max_iter>0` and `bailout` is the squared radius fixed to `256.0`.
 
-`EscapeParams` is an 8-byte, 4-byte-aligned logical record with `max_iter: u32` at bytes `0..4` and `bailout_squared: f32` at `4..8`; `bailout_squared` is fixed at `256.0`, comparisons use `|z|² > bailout_squared`, and UI input changes only `max_iter`.
+`Pose` is defined in math with semantic fields `{ epoch:u64, orbit_generation:u32, plane:Plane, plane_theta_1:f64, plane_theta_2:f64, zoom_log2:f64, view_theta_1:f64, grid_width:u32, grid_height:u32, view, centre_from_reference_px:[f64;2] }`; `view` carries the present-owned `ViewMode` discriminant and the record has no byte ABI.
 
-`ReferenceOrbitRecord` is one 16-byte RGBA32F texel `[re_hi, im_hi, re_lo, im_lo]` for `Zₙ`, with index zero equal to `Z₀` from the centre's `(e₁,e₂)` coordinates and stored length `min(max_iter, escape_index+1)`.
+Math exposes `construct_plane(preset,angles)->Result<Plane,MathError>`, `split_centre(centre)->Result<CentreSplit,MathError>`, `scaled_pixel_scale(zoom_log2,grid_width)->Result<ScaledPixelScale,MathError>`, `precision_for(zoom_log2,grid_width,max_iter)->Result<PrecisionPlan,MathError>`, the shallow and scaled-perturbation CPU oracles, and `warp_matrix(from:&Pose,to:&Pose)->Result<WarpMatrix,MathError>`.
 
-`EscapeGridRecord` is one 16-byte RGBA32F texel `[smooth_iter, escaped, rebase_count, glitch]`; `escaped` and `glitch` are exactly `0.0` or `1.0`, `rebase_count` is an exactly integer-valued `f32`, and `smooth_iter` is `n+1−log₂(log₂|zₙ|)` at escape and `−1.0` otherwise.
+`ScaledPixelScale` is `{ mantissa:f32, exponent:i32 }` with `mantissa∈[0.5,1)`; `PrecisionPlan` is `{ floor_digits:u32, working_digits:u32, requested_bits:u32, policy_digits:u32 }`, and the policy ceiling is 300 decimal digits.
 
-Perturbation is `δₙ₊₁ = 2Zₙδₙ+δₙ²+δc`, `δ₀=δz₀`, and `zₙ=Zₙ+δₙ`; when `|zₙ| < |δₙ|`, the kernel sets `δ←zₙ`, resets the reference index to zero, increments `rebase_count`, and may repeat, while reaching reference length before escape or `max_iter` sets `glitch=1` and stops.
+`ReferenceOrbitRecord` is one 16-byte RGBA32F texel: byte 0 `re_hi`, 4 `im_hi`, 8 `re_lo`, and 12 `im_lo`; index zero is `Z₀`, stored indices are `0..max_iter−1`, and `length=min(max_iter,escape_index+1)`.
 
-The honest debug tint is selected solely by `glitch=1`; a second reference and re-render of glitched pixels are out of scope, and the overlay reports glitch pixels and the sum and maximum of rebase counts only when those values were actually obtained by a contracted measurement/readback.
+`EscapeGridRecord` is one 16-byte RGBA32F texel: byte 0 `smooth_iter`, 4 `escaped`, 8 `rebase_count`, and 12 `glitch`; flags are exactly 0 or 1, the count is integer-valued, escape stores `n+1−log₂(log₂|zₙ|)`, and non-escape stores `−1.0`.
 
-The navigation-drift oracle composes `10⁴` and `10⁵` steps of `R(Δθ)` at `Δθ=10⁻³ rad`, measures `‖MᵀM−I‖F`, and passes at `≤10⁻⁵` for hand-written `f64` without re-orthonormalization and for `f32` with Gram–Schmidt every 64 steps.
+### 3.2 Kernels-owned uniform tables
 
-The warp oracle evaluates `max|H⁻¹H−I|` in hand-written `f64` and passes at `≤10⁻⁹` for `zoom_log2 ∈ {0,10,20,40,80,100}`; faer may enter only if this `f64` case or the `f64` navigation case fails.
+`ShallowUniform` is exactly 96 bytes and 16-byte aligned, with the following owner-defined layout.
 
-### 3.2 Kernel uniform blocks and grid contract
+|Byte range|Field|Type|Meaning|
+|---:|---|---|---|
+|0–15|`basis_u`|`[f32;4]`|Corrected PLANE basis u|
+|16–31|`basis_v`|`[f32;4]`|Corrected PLANE basis v|
+|32–47|`centre_hi`|`[f32;4]`|`CentreSplit.hi`|
+|48–63|`centre_lo`|`[f32;4]`|`CentreSplit.lo`|
+|64–67|`pixel_scale`|`f32`|Shallow units per pixel|
+|68–71|`width`|`u32`|Active width in pixels|
+|72–75|`height`|`u32`|Active height in pixels|
+|76–79|`max_iter`|`u32`|Delivered level cap|
+|80–83|`bailout`|`f32`|Squared radius, exactly 256.0|
+|84–87|`level`|`u32`|`RefinementLevel` discriminant|
+|88–95|`padding`|`[u32;2]`|Zero|
 
-`ShallowUniform` is 96 bytes aligned to 16: `basis_u: [f32;4]` at `0`, `basis_v: [f32;4]` at `16`, `origin_hi: [f32;4]` at `32`, `origin_lo: [f32;4]` at `48`, `scalars: [f32;4] = [pixel_scale,bailout_squared,0,0]` at `64`, and `counts: [u32;4] = [width,height,max_iter,0]` at `80`.
+`PerturbUniform` is exactly 64 bytes and 16-byte aligned, with the following owner-defined layout and no centre field.
 
-`PerturbUniform` is 64 bytes aligned to 16: `basis_u: [f32;4]` at `0`, `basis_v: [f32;4]` at `16`, `scalars: [f32;4] = [pixel_scale,bailout_squared,0,0]` at `32`, and `counts: [u32;4] = [width,height,max_iter,orbit_length]` at `48`; it has no origin field.
+|Byte range|Field|Type|Meaning|
+|---:|---|---|---|
+|0–15|`basis_u`|`[f32;4]`|Corrected PLANE basis u|
+|16–31|`basis_v`|`[f32;4]`|Corrected PLANE basis v|
+|32–35|`pixel_scale`|`f32`|Normalized mantissa `m∈[0.5,1)`|
+|36–39|`width`|`u32`|Active width in pixels|
+|40–43|`height`|`u32`|Active height in pixels|
+|44–47|`max_iter`|`u32`|Delivered level cap|
+|48–51|`bailout`|`f32`|Squared radius, exactly 256.0|
+|52–55|`orbit_length`|`u32`|Valid reference records|
+|56–59|`level`|`u32`|`RefinementLevel` discriminant|
+|60–63|`scale_exponent`|`i32`|Initial per-pixel exponent s|
 
-`Extent2d` is `{ width: u32, height: u32 }` in texels; both values are nonzero, row zero is bottom, and delivered height is the greatest positive integer no larger than the canvas-derived square-pixel height that fits the same live walls as width.
+The inherited `DispatchHeader` is 16 bytes `{global_base:u32,valid_length:u32,padding:[u32;2]}` and the input resource record is 16 bytes `{directory_index:u32,logical_len:u32,0,0}`; dynamic offsets select immutable prefix headers without mutating their bytes.
 
-`RefinementLevel` is `{ level: u32, width: u32, height: u32, iteration_cap: u32 }`, and `RefinementPlan` is `{ generation: u32, requested: Extent2d, delivered: Extent2d, limiting_term: WallTerm, levels: Vec<RefinementLevel> }`; kernels owns the ordered level values and legal span-reuse rules, and app does not synthesize missing levels.
+### 3.3 Kernels-owned refinement, grids, and callable API
 
-`KernelSceneInput` is `{ generation: u32, plane: Plane, origin_hi: [f32;4], params: EscapeParams, pixel_scale: f32, reference: Option<ReferenceSpan> }`; `reference=None` selects shallow and `Some` selects perturbation, while kernels rejects any perturbation input whose orbit length disagrees with `PerturbUniform.counts[3]`.
+`GridExtent` is `repr(C) { width:u32,height:u32 }`, exactly 8 bytes; both values are nonzero and their product must fit u32.
 
-`ReferenceSpan` is `{ span: DataSpan, length: u32, generation: u32 }`; kernels allocates it once for the current `max_iter`, updates only the changed regional records through `Queue::write_texture`, and never changes the heap bind-group identity.
+`RefinementLevel` is `repr(u32)` with `Preview=0`, `Interactive=1`, and `Final=2`; `EscapeGrid` is `{ span:DataSpan,width:u32,height:u32,level:RefinementLevel }`, where `width·height` is the initialized dense prefix of the Final-capacity span.
 
-`EscapeGrid` is `{ span: DataSpan, width: u32, height: u32, level: u32 }`; its logical length is exactly `width·height`, overflow is a typed refusal, every record has the §3.1 layout, and present borrows the typed wrapper without learning scratch textures or page handles.
+`LevelSpec` is `{ level:RefinementLevel,extent:GridExtent,iteration_cap:u32 }`; `RefinementPlan` is `{ requested_extent:GridExtent,delivered_extent:GridExtent,extent_divisor:u32,requested_max_iter:u32,delivered_max_iter:u32,page_side:u16,levels:[LevelSpec;3] }`.
 
-`Kernels::upload_reference(queue, bytes, current) -> Result<ReferenceSpan, KernelError>` validates header generation, length, 16-byte records, and finite split components before a regional write; `Kernels::plan_refinement(requested, requested_iter_cap, walls) -> Result<RefinementPlan, KernelError>` preserves requested values and returns delivered facts; `Kernels::dispatch_level(encoder, input, level) -> Result<EscapeGrid, KernelError>` is exactly one logical dispatch for the named level.
+`KernelMode` is `repr(u32)` with `Shallow=0` and `Perturbation=1`.
 
-Every `dispatch_level` writes into heap DATA only through dialect v2's paid SCRATCH render and texture-copy path; page splitting may produce multiple physical passes and copy commands, all are reported, and neither app nor present may attach DATA while its full sampled view is bound.
+`DispatchFacts` is `{ owner_epoch:u64,mode:KernelMode,level:RefinementLevel,requested_extent:GridExtent,delivered_extent:GridExtent,requested_max_iter:u32,delivered_max_iter:u32,active_pixels:u32,worst_case_pixel_iterations:u64,page_passes:u32,copy_commands:u32,gpu_copy_bytes:u64,logical_heap_bytes:u64,reserved_heap_bytes:u64,scratch_bytes:u64,orbit_generation:Option<u32>,orbit_length:u32 }`; `owner_epoch` is observation attribution and never a compatibility key.
 
-### 3.3 Worker message header, bignum, and transfer ownership
+`ReferenceOrbitInput` is the borrowed semantic record `{ span:&DataSpan,generation:u32,length:u32,precision_bits:u32 }`; `length=span.logical_len`, and current-generation validation precedes dispatch.
 
-`MessageHeader` is exactly 32 bytes and eight little-endian `u32` words: byte `0 magic`, `4 version`, `8 generation`, `12 kind`, `16 length`, `20 precision_bits`, `24 compute_us`, and `28 credit_us`.
+`JulibrotKernels::new(executor:&mut GpuKernelExecutor)->Result<JulibrotKernels,KernelError>` registers exactly the shallow and perturbation dialect-v2 pipelines; `JulibrotKernels::plan(executor:&GpuKernelExecutor,requested_extent:GridExtent,params:EscapeParams)->Result<RefinementPlan,KernelError>` applies the exact levels, policy and cloned-arena delivery arithmetic.
 
-`magic` has bytes `JBRT` and numeric value `0x5452_424a`, `version` is `1`, and `kind` is the closed set `ORBIT_REQUEST=1`, `ORBIT_RESPONSE=2`, `REQUEST_RETURN=3`, and `RESPONSE_RETURN=4`; an unknown value, bad magic, version, reserved word, size, or kind-specific length is a typed decode refusal.
+`JulibrotKernels::allocate_grid(executor:&mut GpuKernelExecutor,plan:&RefinementPlan)->Result<EscapeGrid,KernelError>` allocates one Final-capacity span and immutable prefix headers for all three levels without partial publication.
 
-For `ORBIT_REQUEST`, `length` is the count of payload `u32` words; for `ORBIT_RESPONSE`, `length` is the number of 16-byte orbit records; return messages have `length=0`; `compute_us` is zero on requests/returns and the measured worker computation wall on responses, while `credit_us` is the owner's remaining worker-compute budget for the next one-second window.
+`JulibrotKernels::encode_shallow(&self,executor:&GpuKernelExecutor,encoder:&mut wgpu::CommandEncoder,grid:&mut EscapeGrid,owner_epoch:u64,level:RefinementLevel,plane:&Plane,centre:&CentreSplit,pixel_scale:f32,params:EscapeParams)->Result<DispatchFacts,KernelError>` packs the owner table and encodes one logical level.
 
-`BigCentre4` uses a library-neutral canonical binary encoding with `L = ceil(precision_bits/32)` limbs per coordinate; its request payload begins with `depth_digits: u32`, `max_iter: u32`, `limb_count: u32 = L`, and reserved zero, followed in axis order by four records `{ exponent: i32 encoded in one word, sign: u32, limbs: [u32;L] }`.
+`JulibrotKernels::encode_perturbation(&self,executor:&GpuKernelExecutor,encoder:&mut wgpu::CommandEncoder,grid:&mut EscapeGrid,owner_epoch:u64,level:RefinementLevel,plane:&Plane,scale:ScaledPixelScale,params:EscapeParams,reference:ReferenceOrbitInput)->Result<DispatchFacts,KernelError>` packs mantissa and signed exponent and encodes one scaled logical level.
 
-For a nonzero coordinate, `sign` is zero for positive and one for negative, `M = Σ limbs[k]·2^(32k)`, the highest stored limb has its high bit set, and the value is `(−1)^sign·M·2^(exponent−32L)`; canonical zero has sign, exponent, and all limbs zero, unused low precision bits are zero, and no NaN or infinity encoding exists.
+`JulibrotKernels::free_grid(executor:&mut GpuKernelExecutor,grid:EscapeGrid)->Result<(),KernelError>` transactionally returns the span after present relinquishes it; the error set is `InvalidExtent`, `ArithmeticOverflow`, `InvalidEscapeParams`, `UnknownLevel`, `MissingReference`, `StaleReference`, `ReferenceLengthMismatch`, `ReferencePrecisionMismatch`, `Heap`, `Register`, `Dispatch`, `OutputTransferUnsupported`, and `DeviceLost`, with generation and span identity rather than epoch equality deciding staleness.
 
-The request payload therefore has `12+4L` words and `48+16L` bytes; the whole request buffer has `80+16L` used bytes, and decode requires header `length=12+4L`, header `precision_bits=P`, and payload `limb_count=L`.
+### 3.4 Worker-owned wire header, trailer, and messages
 
-`OrbitRequest` is the logical record `{ generation: u32, centre: BigCentre4, depth_digits: u32, max_iter: u32 }`; its wire header repeats generation and precision, `depth_digits` is the §2.1 result, and `max_iter` is the requested cap rather than the later delivered orbit length.
+Every transferred buffer starts with `MessageHeader`, eight little-endian u32 words and exactly 32 bytes: offsets 0 `magic`, 4 `version`, 8 `generation`, 12 `kind`, 16 `length`, 20 `precision_bits`, 24 `compute_us`, and 28 `credit_us`.
 
-`OrbitResponse` is `{ header: { generation: u32, length: u32, compute_us: u32, precision_bits: u32, credit_us: u32 }, orbit: TransferredBuffer }`; bytes `32..32+16·length` are consecutive `ReferenceOrbitRecord` values, and `length ≤ max_iter` even when the used orbit stops earlier at escape.
+`magic=0x314c424a` is byte string `JBL1`, `version=1`, and message kinds and `length` meanings are exactly these worker-owned values.
 
-The channel owns two owner-to-worker buffers and two worker-to-owner buffers, four total, exchanged independently; every buffer capacity is exactly `32+16·max_iter` bytes, transfer detaches the sender's view, each receiver validates before use, and buffers resize only when `max_iter` changes, with old/new capacity and allocation count reported.
+|Discriminant|Name|Direction and pool|`length` meaning|
+|---:|---|---|---|
+|1|`OrbitRequest`|main → worker, request|requested `max_iter`|
+|2|`RequestReturn`|worker → main, request|zero|
+|3|`OrbitResponse`|worker → main, orbit|stored orbit-entry count|
+|4|`CreditApplied`|main → worker, orbit|zero; generation installed|
+|5|`CreditStale`|main → worker, orbit|zero; generation discarded|
+|6|`OrbitCancelled`|worker → main, orbit|zero; measured stale work charged|
+|7|`ChannelError`|either direction in owned buffer|four words in `ErrorRecord`|
+|8|`Shutdown`|main → worker, request|zero|
+|9|`ShutdownAck`|worker → main, request|zero|
 
-Because request capacity is also fixed by `max_iter`, encoding requires `80+16L ≤ 32+16·max_iter`; failure is an honest `PrecisionCapacity` WALL that leaves the requested zoom selected rather than resizing for precision and violating the allocation rule.
+The last 16 bytes are immutable `PoolTrailer {pool:u32,slot:u32,capacity_bytes:u32,trailer_magic:u32}`, with `trailer_magic=0x544c424a`, request pool 1, orbit pool 2, and slot 0 or 1; all four buffers preserve it bit-exactly.
 
-The worker returns a consumed request buffer as `REQUEST_RETURN`; the owner returns a stale, superseded, uploaded, or otherwise released response buffer as `RESPONSE_RETURN` after writing current `credit_us`; neither direction borrows a transferred buffer or waits for a specific slot when the other slot is available.
+`ErrorRecord` at byte 32 is `{code:u32,detail:u32,requested_bytes:u32,available_bytes:u32}`; codes are 1 `BadMagic`, 2 `BadVersion`, 3 `BadKind`, 4 `BadLength`, 5 `BadTrailer`, 6 `CentreEncodingWall`, 7 `GenerationExhausted`, 8 `EpochExhausted`, 9 `TimingOverflow`, 10 `BufferStarved`, and 11 `MathFailure`.
 
-The worker computes in bounded chunks, checks newest generation and returned credit at least every 64 orbit iterations and before every transfer, yields cooperatively when credit is exhausted, and refuses one orbit after `30,000 ms` measured worker wall; the initial per-second credit policy is `250,000 us`, labelled POLICY and configurable only in implementation constants, not presented as a device wall.
+`OrbitRequest` is `{ generation:u32,centre:EncodedCentre,depth_digits:u32,precision_bits:u32,max_iter:u32,reason:OrbitReason }`; its body at byte 32 is `{depth_digits:u32,reason_bits:u32,centre_revision:u32,limb_word_count:u32,coordinates:[CoordinateDescriptor;4],limbs:[u32;limb_word_count]}`, with descriptors at bytes 48, 64, 80 and 96 and limbs beginning at 112.
 
-The same-thread lowering uses these same four ownership states, headers, generation checks, credit debits, chunk boundaries, and return events but replaces `postMessage` with direct moves; it is the cheapest lowering of one abstraction and not an uncredited special mode.
+`reason_bits` assigns bit 0 initial reference, bit 1 centre threshold, bit 2 zoom threshold, and bit 3 max-iteration change; unknown bits are `BadLength` in version one.
 
-### 3.4 Owner state and app control API
+Each 16-byte `CoordinateDescriptor` is `{sign:u32,exponent_twos_complement:u32,limb_start:u32,limb_count:u32}`; for nonzero coordinates, value is `(−1)^sign·Σ(limb[k]·2^(32k))·2^exponent`, `sign∈{0,1}`, limbs are least-significant first, the top limb is nonzero, and descriptor ranges are ordered, contiguous, non-overlapping, and exhaustive.
 
-`VIEWER_STATE_VERSION` is `1`; `ViewerState` is the logical record `{ schema_version: u32, epoch: u64, hot: HotState, main: MainState }`, owned by the worker slice's main-thread endpoint and observed by app only through drains.
+Canonical zero has sign zero, exponent zero, `limb_count=0`, and `limb_start=previous_end`; negative zero, leading zero limbs, unused limbs, range overlap, and out-of-range descriptors are typed refusals.
 
-`HotState` is `{ generation: u32, zoom_log2: f64, plane_theta_1: f64, plane_theta_2: f64, centre_from_reference_uv: [f64;2] }`, where the local centre displacement is in fractal-plane units along the current orthonormal `u,v` basis and remains relative rather than an absolute deep coordinate.
+For current `max_iter=M`, two request-pool and two orbit-pool buffers each have capacity `48+16M`; request fit is `112+4·limb_word_count≤32+16M`, resize occurs only when M changes after all four buffers return, and each replacement increments `allocation_events`.
 
-`OrbitHandle` is the opaque logical record `{ response_slot: u32, generation: u32 }`; only values returned by the current `MainDrain` are valid, and worker `orbit_bytes` returns a checked borrowed byte view until app calls `release_orbit` after upload.
+App pins minimum requestable `max_iter=64`, which admits the 300-digit centre under that request-pool inequality; exceeding capacity remains honest `CentreEncodingWall` rather than a precision-driven resize.
 
-`WorkerCreditStats` is `{ policy_us_per_second: u32, remaining_us: u32, last_compute_us: u32, completed_orbits: u32, stale_orbits: u32, credit_stalls: u32, request_buffer_allocations: u32, response_buffer_allocations: u32 }`; every field is a count or measured microseconds, and counter overflow is a typed refusal rather than saturation.
+`OrbitResponseView` is `{generation:u32,length:u32,compute_us:u32,precision_bits:u32,admission_credit_us:u32,records:OrbitLease}`; records begin at byte 32, `1≤length≤max_iter`, and returning the lease preserves generation, precision and compute time while setting `CreditApplied` or `CreditStale`, zero length, and updated `credit_us`.
 
-`MainState` is `{ generation: u32, orbit: Option<OrbitHandle>, orbit_length: u32, precision_bits: u32, depth_digits: u32, max_iter_requested: u32, max_iter_delivered: u32, centre_f64: [f64;4], reference_centre_f64: [f64;4], plane_origin: [f64;4], palette: PaletteRecord, credit: WorkerCreditStats }`.
+Worker credit is the displayed POLICY `budget_us_per_second=250_000`; admission, refill, overfeed, first unpriced warm-up, cancellation charge, and mode equivalence use worker §§2.5 and 3.3 without app-side reinterpretation.
 
-`HotDrain` is `{ epoch: u64, changed: bool, state: HotState }` and `MainDrain` is `{ epoch: u64, changed: bool, state: MainState }`; `ViewerOwner::drain_hot() -> HotDrain` and `ViewerOwner::drain_main() -> MainDrain` never return an error, each advances the shared epoch exactly once, and payload publication never partially mutates a snapshot.
+### 3.5 Worker-owned owner records and APIs
 
-`NavigationDelta` is `{ pan_canvas_px: [f64;2], zoom_delta_log2: f64, anchor_canvas_px: [f64;2] }`, with both pixel vectors measured from canvas centre, `+x` right and `+y` up; worker `ViewerOwner::navigate(delta) -> u32` applies the anchored centre formula at bignum precision, coalesces pending work, and returns the new generation without blocking.
+`HotState` is `repr(C)`, 40 bytes and alignment 8: byte 0 `zoom_log2:f64`, 8 `plane_theta_1:f64`, 16 `plane_theta_2:f64`, and 24 `centre_from_reference_px:[f64;2]` in current-zoom pixels along `(u,v)`.
 
-For old and new scales `s₀,s₁` and pointer anchor `(a,b)`, anchored zoom changes the exact centre by `ΔC = (s₀−s₁)(a·u+b·v)`; drag by `(dx,dy)` changes it by `ΔC = −s·(dx·u+dy·v)`, so content remains under the pointer and no f64 absolute-centre round trip occurs.
+`MainState` is `repr(C)`, 120 bytes and alignment 8, with this exact reconciled layout.
 
-`ViewerOwner::select_plane(spec) -> u32`, `ViewerOwner::set_julia_c([f64;2]) -> u32`, and `ViewerOwner::set_max_iter(u32) -> u32` are infallible latest-wins enqueue operations that return a new orbit generation; `ViewerOwner::set_palette(PaletteRecord)` is an infallible MAIN update that does not invalidate the orbit.
+|Byte|Field|Type|Meaning|
+|---:|---|---|---|
+|0|`generation_applied`|`u32`|Latest installed orbit; zero means none|
+|4|`centre_revision`|`u32`|Authoritative encoded-centre revision|
+|8|`requested_iter_cap`|`u32`|Application request|
+|12|`delivered_iter_cap`|`u32`|Installed level cap|
+|16|`precision_bits`|`u32`|Delivered reference precision|
+|20|`orbit_length`|`u32`|Delivered reference records|
+|24|`palette_id`|`u32`|Present-owned `PaletteId` discriminant|
+|28|`orbit_id`|`u32`|App registry ID; zero means none|
+|32|`centre_f64`|`[f64;4]`|Display/pose mirror in fractal axis order|
+|64|`plane_axis_a`|`u32`|Zero-based seed axis in e₁ through e₄|
+|68|`plane_axis_b`|`u32`|Zero-based seed axis in e₁ through e₄|
+|72|`plane_origin_f64`|`[f64;4]`|Defining origin including Julia `c₀`|
+|104|`reference_shift_px`|`[f64;2]`|New minus old reference centre in current pixels|
 
-`ViewerOwner::orbit_bytes(handle) -> Result<OrbitBytes, WorkerError>` checks slot, generation, header, and exclusive ownership; `ViewerOwner::release_orbit(handle, credit_us) -> Result<(), WorkerError>` returns the response buffer exactly once, and app calls it on success, stale cancellation, and upload failure.
+`OrbitHandle` is `{id:u32,generation:u32}`; MAIN stores its two words separately, app’s registry validates both, and handle zero is invalid.
 
-### 3.5 Presentation, pose, palette, and hot ring
+`ViewerState` is `repr(C)`, 168 bytes and alignment 8: byte 0 `epoch:u64`, byte 8 `hot:HotState`, and byte 48 `main:MainState`; `HotDrain` and `MainDrain` each return the entire record.
 
-`ViewKind` is the closed `u32` enum `Flat=0, Tumbled=1`; `Pose` is `{ plane: Plane, zoom_log2: f64, plane_theta_1: f64, plane_theta_2: f64, centre_from_reference_uv: [f64;2], view_theta_1: f64, view_theta_2: f64 }`, with `view_theta_2=φ·view_theta_1` and `view_theta_1=t` for the tumbled view.
+`ViewerOwner::new(initial:ViewerState)->ViewerOwner`, `stage_hot(hot:HotState)`, and `stage_main(main:MainState)` allocate nothing; `accept_orbit(response:&OrbitResponseView,handle:OrbitHandle)->OrbitDisposition` returns `Applied` only for matching latest generation and otherwise `Stale`, with both outcomes infallible.
 
-`PaletteStop` is a 16-byte record with `at: f32` at byte `0`, packed `rgba8: u32` at `4`, and reserved zero words at `8` and `12`; `rgba8` stores R in bits `0..8`, G in `8..16`, B in `16..24`, and A in `24..32`.
+`ViewerOwner::drain_hot()->HotDrain` and `drain_main()->MainDrain` each return the full coherent viewer record and increment the shared epoch exactly once; `snapshot()->ViewerState` is diagnostic and does not increment.
 
-`PaletteRecord` is 144 bytes aligned to 16: header `{ palette_id: u32, stop_count: u32, interior_rgba8: u32, glitch_rgba8: u32 }` at bytes `0..16`, followed by exactly eight `PaletteStop` records at `16+16k`; `stop_count` is `1..8`, unused stops are zero, stop positions are finite and nondecreasing in `[0,1]`, and `glitch_rgba8` is the required honest debug tint.
+`WorkerChannel::new(config:WorkerConfig,mode:WorkerMode)->Result<(OwnerEndpoint,ProducerEndpoint),ChannelError>` allocates the four buffers; `WorkerConfig` is `{max_iter:u32,budget_us_per_second:u32}`, and app passes minimum max iteration 64, budget 250,000, and the worker-owned four-second return deadline.
 
-`HotFrame` is `{ epoch: u64, extent: Extent2d, view: ViewKind, from_pose: Pose, to_pose: Pose }`; app constructs it from the last completed pose and current HOT snapshot, and present alone packs it into `HotUniform`.
+`OwnerEndpoint::submit(request:OrbitRequest)->SubmitOutcome` returns `Transferred`, `Coalesced`, or `GenerationExhausted`; `next_arrival()->Option<OrbitResponseView>` is nonblocking/event-driven, and `shutdown()` reconciles all four slots within the fixed return deadline or names the missing pool and slot.
 
-`HotUniform` is 192 bytes aligned to 16: from-plane `basis_u`, `basis_v`, `origin_lo` at bytes `0`, `16`, `32`; to-plane equivalents at `48`, `64`, `80`; `[from_pixel_scale,to_pixel_scale,2^from_zoom_log2,2^to_zoom_log2]` at `96`; `[from_plane_theta_1,from_plane_theta_2,to_plane_theta_1,to_plane_theta_2]` as `f32` at `112`; `[from_view_theta_1,from_view_theta_2,to_view_theta_1,to_view_theta_2]` as `f32` at `128`; `[width,height,view_kind,epoch_low_u32]` at `144`; centre offsets divided by their respective pixel scales as `[from_u_px,from_v_px,to_u_px,to_v_px]` at `160`; and four reserved zero `f32` values at `176`.
+`ProducerEndpoint::run(math:impl ReferenceOrbitComputer)` preserves credit, cancellation and shutdown semantics; `ReferenceOrbitComputer::compute(centre,precision_bits,max_iter,bailout,cancellation)->Result<ComputedOrbit,MathFailure>` supplies reusable orbit records, delivered precision and optional escape index without a transport allocation.
 
-Present allocates exactly three hot slots; `hot_stride = align_up(192, device.limits().min_uniform_buffer_offset_alignment)`, the buffer size is `3·hot_stride`, `HotSlot` is a checked `u32` in `0..3`, and every pipeline selects byte offset `slot·hot_stride` through a dynamic uniform offset without replacing a bind group.
+`WorkerFacts` is 64-byte `repr(C)`: `epoch:u64` at 0, followed by `last_applied_generation`, `last_ack_generation`, `orbit_queue_depth`, `shutdown_queue_depth`, `credit_us`, `last_compute_us`, `last_overfeed_us`, `applied_count`, `stale_count`, `cancelled_count`, `allocation_events`, `request_buffers_owned_main`, `orbit_buffers_owned_main`, and `mode` as u32 fields at bytes 8 through 60.
 
-`SceneState` is `{ generation: u32, grid: EscapeGrid, pose: Pose, palette: PaletteRecord, max_iter_delivered: u32, view: ViewKind }`; `PendingFrameHandle` and `LastFrameHandle` are opaque `{ frame_id: u64, generation: u32, level: u32 }` values usable only by the present instance that returned them, and a pending value is not a warp source.
+### 3.6 Present-owned records, uniforms, and API
 
-`Presenter::new(device, queue, heap_group, surface_format, extent) -> Result<Presenter, PresentError>` owns pipelines, depth and last-frame targets and the hot ring but never the surface; `Presenter::write_hot(slot, hot) -> Result<u64, PresentError>` performs one 192-byte regional write and returns the actual uploaded byte count.
+`ViewMode` is `repr(u32)` with `Flat=0` and `Tumbled=1`; `PaletteId` is `repr(u32)` with `Classic=0`, `Ember=1`, and `Ice=2`.
 
-`Presenter::select_palette(palette) -> Result<(), PresentError>` performs a regional update only when the MAIN palette changes; `Presenter::frame(encoder, target, state, hot_slot) -> Result<PendingFrameHandle, PresentError>` encodes flat or tumbled drawing from `EscapeGrid` into the surface and present-owned last-frame targets without CPU readback.
+`PaletteRecord` is `repr(C,align(16)) {map:[f32;4],interior_rgba:[f32;4],clear_rgba:[f32;4]}`, exactly 48 bytes; Classic is `{map:[64,0,0.78,1],interior:[0.005,0.005,0.008,1],clear:[0.015,0.018,0.025,1]}`, Ember is `{map:[48,0.02,0.88,1],interior:[0.01,0,0,1],clear:[0.015,0.008,0.005,1]}`, and Ice is `{map:[80,0.55,0.72,1],interior:[0,0.005,0.01,1],clear:[0.005,0.01,0.015,1]}`.
 
-`Presenter::commit_frame(pending) -> Result<LastFrameHandle, PresentError>` promotes exactly one current-generation pending image after its successful fence, while `Presenter::discard_frame(pending)` releases a failed, cancelled, or stale image infallibly; only the committed handle and pose become inputs to a later warp.
+`PresentHot` is the CPU-only record `{epoch:u64,plane:Plane,plane_theta_1:f64,plane_theta_2:f64,zoom_log2:f64,view_time_seconds:f64,centre_from_reference_px:[f64;2]}`.
 
-`Warp::reproject(encoder, target, last_frame, from_pose, to_pose, hot_slot) -> Result<WarpStats, PresentError>` reprojects the last completed colour/depth frame, and `Warp::clear(encoder, target, clear_colour, hot_slot) -> Result<WarpStats, PresentError>` supplies the pre-scene clear; neither function submits, presents, maps, or writes the hot ring.
+`PresentMain` is the CPU-only record `{epoch:u64,orbit_generation:u32,grid:EscapeGrid,max_iter:u32,palette:PaletteId,view:ViewMode,plane_origin_f64:[f64;4],centre_revision:u32,reference_shift_px:[f64;2]}`; present applies a given shift once when `centre_revision` advances.
 
-`WarpStats` is `{ source_frame_id: Option<u64>, submitted_pixels: u64, rejected_pixels: u64, disoccluded_pixels: u64 }` and `PresentStats` is `{ view: ViewKind, width: u32, height: u32, level: u32, submitted_pixels: u64 }`; only GPU readback or shader-visible counters can populate rejected/disoccluded counts, otherwise those overlay fields are `unavailable`, never CPU guesses.
+`HotSlot` is opaque `{index:u32,dynamic_offset:u32,epoch:u64}`, created only by `HotSlot::for_refresh(refresh_id,slot_stride,epoch)` with index `refresh_id mod 3` and dynamic offset `index·slot_stride`.
 
-### 3.6 App runtime and page facts
+`FrameState` is `{surface_view:&wgpu::TextureView,canvas_width:u32,canvas_height:u32,refresh_id:u64,now_ms:f64}` with no byte ABI; app keeps the corresponding surface image alive until the matching warp completion event.
 
-`App::start(canvas_id: &str, status_id: &str) -> Result<App, AppError>` performs the ordered startup in §2.2, constructs one `ViewerOwner`, `Kernels`, `Presenter`, and `Warp`, and returns only after loader and worker ABI handshakes agree.
+`HotUniform` is exactly 128 bytes and eight 16-byte lanes: byte 0 `plane_u:[f32;4]`, 16 `plane_v:[f32;4]`, 32 `view_rotation:[f32;4]=[cos θ,sin θ,cos(φθ),sin(φθ)]`, 48/64/80 the three `homography_row_n:[f32;4]`, 96 `clear_rgba:[f32;4]`, and 112 `flags:[u32;4]=[epoch_low,epoch_high,source_valid,view_mode]`.
 
-`App::refresh(now_seconds: f64) -> Result<FrameOutcome, AppError>` executes §2.5, `App::request_one_frame()`, `App::measure_warp()`, and `App::measure_scene()` enqueue finite latest-wins work, and every page callback catches and publishes `AppError` rather than allowing a rejected promise to become the diagnostic.
+Each homography row stores three coefficients and one zero; present computes it CPU-side in f64 from math’s `warp_matrix`, centre displacement is baked into the translation, zoom uses f64 ratios, and the shader never sees two poses or an absolute tiny pixel scale.
 
-`FrameOutcome` is `{ epoch: u64, generation: u32, warped: bool, scene_level: Option<u32>, presented: bool, status: FrameStatus }`, where `FrameStatus` is the closed set `ClearOnly`, `Presented`, `SkippedTimeout`, `Cancelled`, and `FailedTyped`.
+The ring has three slots, `hot_stride=align_up(128,min_uniform_buffer_offset_alignment)`, total size `3·hot_stride`, one immutable bind group, and exactly one 128-byte regional write per rendered surface refresh.
 
-`PageFacts` contains exactly `{ abi_version, adapter_name, backend, rgba32f_renderable, requested_width, requested_height, delivered_width, delivered_height, requested_iteration_cap, delivered_iteration_cap, requested_zoom_log2, presented_zoom_log2, reference_zoom_log2, zoom_digits, requested_precision_bits, delivered_precision_bits, orbit_length, orbit_generation, owner_epoch, rebase_count_sum, rebase_count_max, glitch_pixel_count, worker_credit, worker_compute_us, worker_buffer_allocations, refinement_level, refinement_pending, kernel_page_passes, scratch_copy_commands, scratch_copy_bytes, hot_write_bytes, event_upload_bytes, palette_id, view_kind, warp_source_frame, warp_submitted_pixels, warp_rejected_pixels, warp_disoccluded_pixels, warp_ms, scene_ms, warp_completion_polls, scene_completion_polls, warp_fence_wait_ms, scene_fence_wait_ms, warmup_label, animation_policy, device_walls, app_policies, limiting_term, wasm_bundle_bytes, javascript_bundle_bytes, wasm_instance_count, timing_status }`.
+`SceneUniform` is exactly 80 bytes: byte 0 `grid:[u32;4]=[width,height,level,max_iter]`, 16 `span:[u32;4]=[directory_index,logical_len,0,0]`, 32 `palette_map:[f32;4]`, 48 `interior_rgba:[f32;4]`, and 64 `clear_rgba:[f32;4]`.
 
-Requested and delivered fields are never substituted; `device_walls` and `app_policies` are separately labelled formula strings; zoom, precision, orbit, refinement, byte, credit, timing, poll, rebase, glitch, and warp fields retain their stated units or say `unavailable`/`requires visible replay`.
+`SceneFrame` is `{scene_id:u64,pose:Pose,palette:PaletteId,iteration_cap:u32,level:RefinementLevel,extent:[u32;2],texture_index:u32,measurement:SubmissionMeasurement}`; `SubmissionMeasurement` is `{kind:SubmissionKind,id:u64,source_scene_id:Option<u64>,warm_up:bool,wall_ms:f64,fence_wait_ms:f64,polls:u32}`, with kind `Scene` or `Warp`.
 
-### 3.7 Error set
+`WarpPlan` is `{rows:[[f32;4];3],source_valid:bool,kind:WarpKind,chart_residual:f64,approx_max_error_px:Option<f64>,approx_p95_error_px:Option<f64>}`; `WarpKind` is `FlatExact`, `TumbledHomography`, or `ClearOnly`.
 
-`AppError` is the typed union `VersionSkew`, `Capability`, `DeviceLost`, `UncapturedGpu`, `CapturedGpu`, `SurfaceBusy`, `SurfaceSkipped`, `Surface`, `StaleGeneration`, `EpochOverflow`, `GenerationOverflow`, `Deadline`, `CompletionPollLimit`, `Mapping`, `Worker`, `Math`, `Kernel`, `Present`, and `Serialization`; each case carries operation, generation or epoch where relevant, and the original typed source text.
+`PresentEvent` is `SceneCompleted {frame:SceneFrame}`, `SceneDropped {scene_id:u64,orbit_generation:u32,reason:DropReason,measurement:SubmissionMeasurement}`, `WarpCompleted {measurement:SubmissionMeasurement}`, or `FenceRefused {kind:SubmissionKind,id:u64,reason:FenceRefusal,polls:u32,wall_ms:f64}`.
 
-No error handler panics, no async borrow waits while held, no callback publishes without checking generation, and no surface-acquire path uses `.unwrap()` or `.expect()`.
+`DropReason` is `StaleGeneration`, `ReplacedMain`, or `InvalidExtent`; `FenceRefusal` is `PollLimit`, `Deadline`, `Device`, or `Cancelled`; `PresentStatus` is `WaitingForFirstScene`, `ShowingCompletedScene`, `ShowingStaleApproximation`, `ClearForIncompatibleGeneration`, or `Refused(PresentError)`.
 
-### 3.8 Heap dependency seams
+`PresentFacts` is `{completed_scene_id:Option<u64>,in_flight_scene_id:Option<u64>,source_generation:Option<u32>,delivered_width:u32,delivered_height:u32,delivered_level:Option<RefinementLevel>,iteration_cap:Option<u32>,palette:PaletteId,view:ViewMode,last_scene:Option<SubmissionMeasurement>,last_warp:Option<SubmissionMeasurement>,reprojected_per_scene:Option<u32>,refreshes_without_scene:u64,texture_reallocations:u32,chart_residual:Option<f64>,tumbled_max_error_px:Option<f64>,status:PresentStatus}`.
 
-The implementation round generalizes `crates/labs/heap/src/browser_error.rs`, `selection.rs`, and `completion.rs` only by publicly re-exporting the already generic `publish_browser_error`, `install_logging_handler`, `SelectionEpoch`, `SurfaceOwnership`, `PollCounter`, and `MAX_COMPLETION_POLLS`; the app page retains status element id `status`, so no behavior or hard-coded DOM selector needs changing.
+`PresentConfig` is `{surface_format:wgpu::TextureFormat,min_uniform_buffer_offset_alignment:u32,fence_deadline_ms:f64,max_fence_polls:u32}`; `Presenter::new(device:Arc<wgpu::Device>,queue:Arc<wgpu::Queue>,heap:HeapPresentResources,config:PresentConfig)->Result<Presenter,PresentError>` receives deadline 30,000 ms and poll limit 4,096 after app installs error handlers.
 
-The app keeps its own generation-tagged error-scope guard because heap's `GpuErrorScope`, owned surface wrapper, and deadline loop are lattice-runtime-specific; it follows their ownership and completion patterns while depending on the generic counters and owners, and no source is copied.
+`Presenter::set_main(&mut self,main:PresentMain)` and `Presenter::write_hot(&mut self,slot:HotSlot,hot:PresentHot)` are infallible; `submit_scene(&mut self,hot_slot:HotSlot,now_ms:f64)->Result<u64,PresentError>`, `frame(&mut self,state:FrameState,hot_slot:HotSlot)->Result<FrameReceipt,PresentError>`, `poll(&mut self,now_ms:f64)->Vec<PresentEvent>`, and `facts(&self)->PresentFacts` preserve present §3.7 semantics.
 
-No heap allocator, descriptor, span, dialect, scratch-copy, presentation, or fence behavior is generalized for this slice; any need beyond the visibility-only exports above returns to joint review before implementation.
+`FrameReceipt` is `{refresh_id:u64,warp_id:u64,source_scene_id:Option<u64>,status:PresentStatus}` and carries submission identity but no timing before the fence-completion event.
+
+`Warp::reproject(last_frame:&SceneFrame,from_pose:&Pose,to_pose:&Pose)->WarpPlan` is a pure CPU f64 planner; it rebases a retained pose with `reference_shift_px`, includes centre-displacement translation, clears only for absent source, invalid arithmetic, changed `max_iter`, or changed plane origin, and never submits or presents.
+
+### 3.7 App-owned runtime, surface, and facts
+
+`App::start(canvas_id:&str,status_id:&str)->Result<App,AppError>` performs version handshake, hook/error ordering, GL-only capability selection, heap executor construction, sibling construction, worker start, clear-first-frame setup, and finite initial scheduling.
+
+`PendingSurface` is the app-only record `{warp_id:u64,generation:u32,frame:SurfaceTexture}`; exactly zero or one exists, app presents it only for matching `WarpCompleted`, and every other terminal event drops it unpresented.
+
+`App::refresh(now_ms:f64)->Result<RefreshOutcome,AppError>` executes §2.5, while input callbacks stage worker/palette/view controls and schedule rather than re-entering GPU state; every Promise rejection is caught and published.
+
+`RefreshOutcome` is `{epoch:u64,generation:u32,refresh_id:u64,warp_id:Option<u64>,scene_id:Option<u64>,presented:bool,status:RefreshStatus}`, where status is `Waiting`, `Submitted`, `Presented`, `SkippedTimeout`, `Cancelled`, or `FailedTyped`.
+
+`PageFacts` contains exactly `{ abi_version, adapter_name, backend, rgba32f_renderable, requested_width, requested_height, delivered_width, delivered_height, requested_iteration_cap, delivered_iteration_cap, requested_zoom_log2, presented_zoom_log2, reference_zoom_log2, zoom_digits_f64, depth_digits, precision_floor_digits, precision_working_digits, requested_precision_bits, delivered_precision_bits, orbit_length, orbit_generation, owner_epoch, centre_revision, centre_from_reference_px, reference_shift_px, scale_mantissa, scale_exponent, kernel_mode, refinement_level, refinement_pending, extent_divisor, active_pixels, worst_case_pixel_iterations, kernel_page_passes, scratch_copy_commands, scratch_copy_bytes, logical_heap_bytes, reserved_heap_bytes, scratch_bytes, hot_write_bytes, scene_uniform_write_bytes, texture_reallocations, rebase_count_sum, rebase_count_max, glitch_pixel_count, worker_facts, worker_compute_us, worker_credit_us, worker_overfeed_us, worker_allocation_events, request_buffers_owned_main, orbit_buffers_owned_main, palette_id, view_mode, completed_scene_id, in_flight_scene_id, warp_source_scene_id, reprojected_per_scene, refreshes_without_scene, chart_residual, tumbled_max_error_px, tumbled_p95_error_px, scene_wall_ms, scene_fence_wait_ms, scene_polls, warp_wall_ms, warp_fence_wait_ms, warp_polls, warmup_label, second_frame_policy, timer_quantum_ms, device_walls, app_policies, limiting_term, wasm_bundle_bytes, javascript_bundle_bytes, wasm_instance_count, timing_status }`.
+
+Normal rendering sets the three aggregate rebase/glitch fields to `unavailable`; explicit labelled measurement may set measured values, and all absent browser facts render `requires visible replay` rather than zero.
+
+`AppError` is the typed union `VersionSkew`, `Capability`, `DeviceLost`, `UncapturedGpu`, `CapturedGpu`, `SurfaceBusy`, `SurfaceSkipped`, `Surface`, `StaleGeneration`, `EpochExhausted`, `GenerationExhausted`, `Deadline`, `CompletionPollLimit`, `Mapping`, `Worker`, `Math`, `Kernel`, `Present`, and `Serialization`; each carries operation and generation or epoch where meaningful.
+
+### 3.8 Heap extraction seams owned by app
+
+The implementation round publicly re-exports the already generic `publish_browser_error` and `install_logging_handler` from `browser_error.rs`, `SelectionEpoch` and `SurfaceOwnership` from `selection.rs`, and `PollCounter` plus `MAX_COMPLETION_POLLS` from `completion.rs`; this is visibility-only and preserves the page status id `status`.
+
+`GpuKernelExecutor` is a public opaque wrapper extracted from the heap lattice runtime; it owns the DATA and four-layer SCRATCH textures, `SpanArena`, immutable heap bind group, descriptor, span-directory, dispatch-header, resource and kernel-uniform buffers, exact-row copy encoding, and live capacity report without changing their algorithms.
+
+The executor surface required by kernels is `GpuKernelExecutor::new(device:Arc<wgpu::Device>,queue:Arc<wgpu::Queue>,config:GpuKernelExecutorConfig)->Result<Self,ExecutorError>`, `capacity_report(&self)->ExecutorCapacity`, `present_resources(&self)->HeapPresentResources`, and `prefix_headers(&self,span:&DataSpan,active_len:u32)->Result<StaticHeaders,DispatchError>` in addition to the allocation, registration and encoding methods already exercised privately by the lattice runtime.
+
+`prefix_headers(span,active_len)` validates `0<active_len≤span.logical_len`, returns immutable `StaticHeaders` for exactly the dense prefix, computes every `{global_base,valid_length,0,0}` record from span geometry, and never relies on conventionally mutating header bytes.
+
+`HeapPresentResources` is `pub struct HeapPresentResources { pub data_view:Arc<wgpu::TextureView>, pub descriptor_buffer:Arc<wgpu::Buffer>, pub span_directory_buffer:Arc<wgpu::Buffer>, pub descriptor_capacity:u32, pub span_capacity:u32, pub handle_capacity:u32 }`; the three Arc identities and capacities remain stable for present’s bind group lifetime.
+
+The executor is extraction, not a fork or new backend abstraction; if implementation requires algorithm changes, duplicate state, new output lowering, or more than moving the paid code behind `pub`, the app lane stops and reports before editing heap further.
 
 ## 4. Inherited laws and satisfaction
 
-|Law|How this slice satisfies it|
+|Law|App-side satisfaction|
 |---|---|
-|WebGL2 floor only|Requests only `Backends::GL`, verifies backend Gl, starts from downlevel WebGL2 limits, requires renderable/sampleable RGBA32F, and refuses rather than falls back.|
-|Uniforms-only per frame|The refresh-rate write is exactly one 192-byte regional hot-slot write; a due scene additionally writes only its kernel uniforms, while orbit, palette, descriptors, and refinement headers change only on their named events.|
-|Regional writes for change|Reference records, palette, and changed metadata update only their occupied regions; scene output stays GPU resident.|
-|Paid kernel landing|Every escape output uses heap dialect v2 SCRATCH-to-DATA copy; app never creates a direct-overlap path.|
-|Stable heap identities|Heap and present bind groups are created once; handles, directory contents, dynamic offsets, and regions change behind them.|
-|Three-slot hot ring|Present owns exactly three slots and app selects `frame_serial mod 3` through the runtime-aligned dynamic offset.|
-|No shared memory|Four transferable buffers enforce exclusive ownership and credit return; same-thread uses identical ownership states.|
-|Single surface ownership|One generation-tagged token covers acquisition through fence and present/drop; selectors wait cooperatively.|
-|Panic and GPU diagnostics|Panic hook precedes adapter work; uncaptured and device-lost handlers precede the first device/queue method after creation; scopes cover init, selection, and measurement.|
-|Honest work|Overlay separates requested, delivered, submitted, measured, unavailable, walls, policies, warm-up, browser replay, and derived arithmetic.|
-|Never hang|Generation checks, zero-timeout yields, 4,096 polls, 30-second fences/suites/orbits, finite timer probes, bounded repeats, and typed refusal bound every wait.|
-|Math evidence before faer|The exact drift and warp oracles gate any faer dependency; hand-written `f64` is the default.|
-|Renderer austerity and authority|One world, flat/tumbled presentation and warp only; no gameplay truth, DAG, tick, extra heap class, shared-memory worker, or WebGPU.|
-|Versioned deployment|One version value pins page, glue, wasm, worker and protocol; skew refuses before runtime start and deploy is atomic.|
+|WebGL2 only|Requests only `Backends::GL`, verifies backend Gl and the minimum floor, and has no WebGPU fallback or promise.|
+|Uniform and regional traffic|Each surface frame writes one 128-byte HOT slot; a scene writes only its 96- or 64-byte kernel uniform and changed 80-byte scene uniform, while orbit, metadata and textures update regionally on named events.|
+|GPU-resident data|Kernels land through paid SCRATCH-to-DATA copy and present samples the typed span; normal rendering reads no grid back.|
+|Immutable identities|Heap resources and ordinary bind groups stay stable; texture-pair reallocation is an extent event counted separately.|
+|Three-slot dynamic ring|Present owns three slots at runtime-aligned stride and app selects `refresh_id mod 3`.|
+|No shared memory|Four transferable buffers and returned credit enforce ownership; same-thread preserves the same state machine.|
+|Single surface owner|App holds one token from acquisition until matching warp completion and post-timing present or drop.|
+|Readable failure|Panic and error handlers precede GPU use, scopes wrap init/selection/measurement, and every async terminal path publishes typed text.|
+|Honesty|Requested, delivered, arithmetic, measured, unavailable, policy, wall, warm-up, poll, worker, warp and bundle facts remain distinct.|
+|Never hang|Worker yields, four-second buffer return, 4,096 GPU polls, 30-second fences/suites, finite timer probes, cancellation and checked generations bound progress.|
+|Arbitrary zoom|Scaled perturbation carries mantissa and signed exponent and never uploads a tiny absolute f32 scale.|
+|Math evidence|Astro-float remains selected; hand-written f64 stays for navigation and warp unless its binding oracle fails.|
+|Austere authority|One world, one scene pass plus warp, one heap class, no tick, DAG, shared-memory path, second reference, WebGPU, or gameplay truth.|
+|Versioned deployment|One ABI value pins page, glue, wasm, worker and JBL1; mismatch refuses before work and deploy is atomic.|
 
 ## 5. Oracles and tests
 
-Native math-contract tests pin axis order, both rotations and their separation, preset origins, Gram–Schmidt behavior, pixel centres and row direction, centre split reconstruction, pixel-scale/digit/bit formulas, reference renewal boundaries, perturbation/rebase transitions, record sentinels, and the R13 drift and warp thresholds.
+Native math integration tests pin R₁₃/R₂₄ order and signs, presets, the π/2 endpoint, hybrid components, one f32 rounding pass, the `8·f32::EPSILON` postcondition, view angles `0.4t` and `φ·0.4t`, centre split, scaled pixel decomposition, renormalization, nonzero-`Z₀` rebase, and shallow/deep switch at 14.
 
-Native layout tests assert exact sizes, alignments, offsets, little-endian pack/decode round trips, reserved-zero rejection, header kind and length rules, bignum canonicality, orbit index zero, escape-grid channel independence, `HotUniform` packing, three-slot stride arithmetic, palette ordering, and overflow refusal.
+Native precision tests pin `depth_digits`, `D_floor`, `D_work`, bit conversion, Astro-float word rounding, the 300-digit policy, D-versus-D+16 convergence, the deep classification corpus, and minimum request cap 64 fitting the centre payload.
 
-Native worker-state tests enumerate both ping-pong slots in both directions, transfer/detach/return ownership, buffer resize only on `max_iter`, credit exhaustion/refill, 64-iteration cancellation points, same-thread trace equality, stale response return, generation refusal before wrap, shared epoch increments, and infallible HOT and MAIN drains.
+Native layout tests assert `Plane=32`, `CentreSplit=32`, `EscapeParams=8`, shallow uniform 96, perturbation uniform 64 with signed exponent at byte 60, both RGBA records 16, HOT 128, scene 80, palette 48, HOT state 40, MAIN 120, ViewerState 168, header 32, trailer 16, all offsets, enum discriminants, little-endian round trips, and zero reserved words.
 
-Native integration-state tests model one refresh and one zoom step and require the exact cross-slice call order in §§2.5–2.6, including HOT before warp, MAIN after warp, one level per due scene frame, fence before promotion, presentation after the ending timestamp, cancellation at every yield, and no HOT snap-back from MAIN.
+Native wire tests construct all nine message kinds, trailers and `ErrorRecord` values, validate canonical coordinate descriptors, capacity `48+16M`, request inequality, exact lease disposition, four-buffer ownership, resize-only-on-cap change, credit 250,000, cancellation charge, same-thread trace equality, and shutdown bounds.
 
-Native progressive tests require a due scene exactly for changed MAIN or pending refinement, preserve requested values under every wall, accept only current-generation grids, exclude the first fenced frame, let only the second choose the 100 ms policy, and keep single-frame-on-demand finite.
+Native owner tests enumerate HOT/MAIN staging and drains, require one shared incrementing epoch without using equality for compatibility, prove the new centre and reference-shift fields across two deep recentres, reject registry generation mismatch, and prove no accepted MAIN state snaps newer controls backward.
 
-Native conformance consumes sibling fixtures: shallow escape classification and integer iteration count must exactly equal the CPU reference at sampled pixels and smooth values differ by at most `10⁻⁴`; perturbation must match classification and the math slice's argued f64-delta tolerance, including repeat rebases and the reference-length glitch stop.
+Native kernels integration tests pin all three levels and caps, power-of-two degradation, immutable Final span, dense-prefix headers, `RefinementLevel` propagation, one logical dispatch per submitted level, exact SCRATCH rows/bytes, shallow classification and index exact with smooth `≤10⁻⁴`, and scaled perturbation smooth `≤2·10⁻³` with exact classification outside math’s error envelope.
 
-Native page-contract tests pin `JULIBROT_ABI_VERSION=1` in loader, glue, wasm and worker, the three versioned URLs, one wasm module rather than a second worker wasm, explicit GL-only selection, hook/handler ordering before device use, clear-plus-overlay before the first frame, every facts field, and no `.unwrap()` or `.expect()` within the acquisition function.
+Native present integration tests pin the three palette records, corrected pose fields, reference-shift rebase, centre translation, clear only on cap/origin incompatibility, 128-byte HOT rows, three dynamic slots, two textures, no third target on `SceneBusy`, per-level reallocation count, and `RefinementLevel` rather than bare integers.
 
-Native measurement tests pin the four-byte fence, poll-before-yield order, 4,096-poll and 30,000 ms bounds, cancellation before resumed completion, two separate warp/scene fences, present outside measured intervals, timer-probe bounds, three warm-ups, 15 samples, 32-quanta target, 250 ms batch cap, 4,096 repeats, 30-second suite, median, and nearest-rank p95.
+Native app state tests model §§2.5–2.6 at every asynchronous boundary and require poll before HOT drain, HOT write before frame, current orbit upload before acceptance, scene submission only when due and available, app-held surface keyed by warp id, fence event before present, stale drop, latest-wins schedule, and no re-entrant borrow.
 
-`requires visible replay`: a supported browser must show backend Gl and the live RGBA32F usages, render flat and tumbled views, keep content under wheel/drag input, show no diagnostic pattern, survive rapid controls and surface loss, and retain the last requested controls after stale work or typed refusal.
+Native page-contract tests pin ABI and URLs, one wasm artifact plus `worker_main`, typed skew refusal before device work, explicit GL-only descriptor, hook and handler ordering, clear-first overlay text, no panic accessor in acquisition, all facts fields, DOM overlay, and approximately 4.5 MB disclosure beside exact release bytes.
 
-`requires visible replay`: network inspection must show one versioned wasm payload fetched or cache-hit for two module instances, four buffers alternating ownership without shared memory, allocation events only after `max_iter` changes, and a typed startup refusal when worker and main versions are deliberately mismatched.
+Native measurement tests pin separate present-owned scene and warp fences, poll-before-yield, 4,096 polls, 30,000 ms, post-fence present, first-frame labels, second-frame 100 ms decision, timer-probe bounds, three adaptive warm-ups, 15 samples, 32 quanta, 250 ms batch, 4,096 repeats, 30-second suite, median and nearest-rank p95.
 
-`requires visible replay`: each warp and scene observation must display its wall, fence wait and nonzero poll count when polling occurs; warm-ups, second-frame decision, adaptive repeats, visibility, timer quantum, single-frame fallback, cancellation, and deadline refusal must remain readable.
+`requires visible replay`: GL identity, RGBA32F usages, scratch-copy visibility, flat and tumbled orientation, corrected hybrid planes, scaled deep zoom beyond the former f32-underflow boundary, debug glitch tint, clear disocclusion, and a clean console.
 
-`requires visible replay`: the release build must report exact uncompressed wasm and JavaScript bytes beside the approximately `4.5 MB` wgpu-lab expectation and must not hide that the main and worker wasm instances each allocate linear memory.
+`requires visible replay`: rapid pan, zoom, angle, preset, cap and palette changes while worker, scene and warp work overlap must end at the newest controls, translate smoothly at depth, rebase retained frames across accepted references, and clear only on cap or plane-origin changes.
+
+`requires visible replay`: worker transfer must detach senders, preserve all four trailers, report one explicit wasm copy, charge credit and cancelled work, allocate only on cap change, and return every buffer within the bounded shutdown window.
+
+`requires visible replay`: every scene and warp observation must display wall, fence subset and polls; warm-ups, second-frame choice, texture reallocations, frames per scene, timer quantum, adaptive repeats, visibility, cancellation and refusal remain readable.
+
+`requires visible replay`: network and memory facts must show one versioned wasm payload fetched or cache-hit for two distinct instances and report exact release bytes plus duplicated live memory.
 
 ## 6. Risks and retirement oracles
 
 |Risk|Oracle that retires it|
 |---|---|
-|Plane and view rotations are conflated|Preset/rotation native fixtures plus a visible tumbled replay where time moves only the view and sliders move only the sampled plane.|
-|Deep input loses the centre through f64|Bignum anchored-zoom and drag fixtures at `zoom_log2=100`, proving the exact encoded centre while the owner mirror is display-only.|
-|Perturbation hides a short reference failure|Reference-end fixture requires `glitch=1`, stopped iteration, debug tint, and visible glitch count; no second-reference repair exists.|
-|A stale orbit snaps controls or publishes pixels|Cancellation-at-every-yield model plus rapid visible wheel, slider, preset, cap, and palette replay.|
-|Two async frames acquire one surface image|Exhaustive `SurfaceOwnership` model plus rapid visible selection during a deliberately delayed fence.|
-|A backend validation error becomes an unreadable panic|Ordering source test and injected scoped/uncaptured errors that publish typed page and console messages.|
-|Warp or scene timing includes compositor delay|Source-order test requires submit, four-byte fence, end timestamp, then present; visible poll/wait facts expose stalls.|
-|Adaptive timing fabricates precision|Coarse-clock fixture and visible timer probe require 32 measured quanta or mark timing unavailable.|
-|Refinement silently changes work|Plan fixtures and overlay arithmetic compare requested/delivered extent, cap, level, passes, copy commands, and bytes.|
-|Hot-ring reuse races queued GPU work|Three-slot dynamic-offset trace plus delayed-fence visible replay; a slot is not rewritten while its generation is still owned.|
-|Transferred buffers allocate or alias unexpectedly|Four-slot ownership model and browser allocation counters before and after `max_iter` changes.|
-|Loader combines incompatible cached artifacts|Native URL/version pins and deliberate visible worker skew producing `VersionSkew` before device work.|
-|The bundle cost is obscured|Release artifact byte-count gate and overlay snapshot including both artifact sizes and two instances.|
-|Hand-written matrix math is inadequate|R13 navigation and warp oracles; only a failing f64 result opens the faer decision.|
+|Plane rotation still fails to make hybrids|π/2 endpoint and intermediate nonzero-both-subspaces math fixtures.|
+|Scaled recurrence loses exponent state|f64 scaled mirror over renormalization, rebase, deep corpus and exact outside-envelope classification.|
+|Nonzero-Z₀ rebase shifts the reconstructed pixel|Fixture checks invariant before rebase, after assignment and after the mandatory ordinary advance.|
+|Double-single orbit is inadequate at deep zoom|D-versus-D+16 records plus deep classification corpus; failure forces reviewed record growth.|
+|Reference acceptance causes a visual snap|Two-deep-recentre owner trace plus visible retained-pose rebase using `reference_shift_px`.|
+|A stale orbit or scene publishes|Every-yield transport and app/present event model with delayed old generations.|
+|Surface is presented inside its measured interval|Source-order test and event model require matching warp completion before app present.|
+|Present API’s asynchronous fence strands the surface|Pending-surface model plus timeout, cancellation, device-loss and mismatched-event tests.|
+|Dense-prefix headers expose stale records|`prefix_headers` byte fixtures, poison padding, and Preview→Interactive→Final replay.|
+|Heap extraction forks paid behavior|One executor type runs the standing heap golden and Julibrot dispatch with equal identities, rows and errors.|
+|Extent churn overwrites retained texture|Two-texture interleaving tests and visible level walk with `texture_reallocations`.|
+|Transfer clones, leaks, or starves buffers|Four-slot model, sender-detachment replay, trailer identity and bounded shutdown.|
+|Credit becomes invented throttling|Exact worker token-bucket model with 250,000 policy, warm-up, cancellation and overfeed facts.|
+|Normal overlay invents rebase/glitch totals|Snapshot test requires `unavailable`; explicit readback is separately labelled and fenced.|
+|Loader combines cached incompatible artifacts|Pinned URL/ABI tests and deliberate main/worker skew refusal.|
+|Bundle cost is hidden|Release artifact byte gate and visible two-instance memory report.|
+|Math/present type ownership creates a dependency cycle|Compile-time dependency test plus resolution of the `Pose.view` representation before implementation imports.|
 
-## 7. Implementation phases and line budgets
+## 7. Implementation phases and line budget
 
-Phase 0 generalizes only the six heap visibility exports in §3.8 and adds app-side source-contract fixtures, estimated at 40 heap Rust lines and 120 app test lines.
+Phase 0 extracts and re-exports only the §3.8 heap seams, runs the standing heap golden through `GpuKernelExecutor`, pins `HeapPresentResources` Arc identities, and proves immutable dense-prefix headers, estimated at 300 heap Rust and integration-test lines; the lane stops if the change exceeds visibility/extraction.
 
-Phase 1 creates the app crate, ABI/version types, GL-only instance/device selection, capability refusal, panic and error publication, scoped initialization, surface owner, acquisition recovery, and clear-first-frame path, estimated at 360 Rust lines.
+Phase 1 creates the app crate, ABI/error types, GL-only device, hook and handler ordering, scoped initialization, single surface owner, pending-surface event bridge, and clear-first-frame path, estimated at 390 Rust and test lines.
 
-Phase 2 integrates `ViewerOwner`, exact HOT/MAIN drain ordering, controls, bignum-preserving navigation calls, transferred-orbit release guards, generation/epoch cancellation, and worker facts, estimated at 320 Rust and test lines.
+Phase 2 integrates the exact worker channel, four-buffer leases, owner records, orbit registry, current-before-accept upload, centre/reference shifts, controls, and latest-wins cancellation, estimated at 390 Rust and test lines.
 
-Phase 3 integrates math planes, kernel reference upload/refinement planning, one-level scene scheduling, scratch-copy facts, present hot slots, warp, flat/tumbled scene draw, and last-frame promotion, estimated at 420 Rust and test lines.
+Phase 3 integrates corrected math poses, scaled shallow/deep selection, exact kernels plan and dispatch records, Preview/Interactive/Final scheduling, dense-prefix facts, and power-of-two delivery, estimated at 390 Rust and test lines.
 
-Phase 4 builds the self-contained page, one-module worker bootstrap, version-skew handshake, persistent controls, clear/status/facts UI, requested-versus-delivered arithmetic, and approximately 4.5 MB bundle disclosure, estimated at 480 HTML, CSS, JavaScript, and Rust lines.
+Phase 4 integrates present’s 128-byte ring, three palettes, two-texture state machine, per-level reallocations, CPU warp planner, async scene/warp events, and post-fence surface presentation, estimated at 430 Rust and test lines.
 
-Phase 5 adds separate warp and scene fences, counted cooperative polling, two-frame policy, single-frame-on-demand, adaptive measurement, typed cancellation/deadlines, and full evidence serialization, estimated at 390 Rust, JavaScript, and test lines.
+Phase 5 builds the page, one-module worker bootstrap, version handshake, stable controls, requested/delivered facts, unavailable gather totals, DOM overlay, bundle disclosure, and typed status rendering, estimated at 470 HTML, CSS, JavaScript, Rust and test lines.
 
-Phase 6 completes native conformance and page-contract coverage, release-bundle byte gates, browser replay scripts/checklists, doc reconciliation fixes, and lint repair, estimated at 300 test and documentation lines.
+Phase 6 adds adaptive timing, single-frame policy, replay instrumentation, complete page-contract coverage, release bytes, rapid-interleaving scripts, doc reconciliation, and lint repair, estimated at 340 lines.
 
-The app-slice estimate is therefore approximately 2,430 new lines plus the sibling crates consumed by dependency; implementation reports actual net lines per phase and treats an overrun as evidence rather than deleting oracles to meet the estimate.
+The refined app estimate is approximately 2,710 net new lines including the Phase 0 heap extraction; implementation reports actual lines per phase and stops rather than broadening the approved seam.
 
-## 8. Unresolved for joint review
+## 8. Unresolved for implementation review
 
-- The math slice must choose dashu-float, astro-float, or an argued hand-rolled fixed-point backend; this document pins a library-neutral wire encoding but has no comparative native probe result.
-- Kernels owns the concrete refinement level sizes, caps, and span-reuse transitions, so this app schedule cannot pin their numeric ladder until the kernels document is compared.
-- Math must state the exact perturbation f64-delta tolerance required by R15; this document pins classification and lifecycle but cannot invent that tolerance.
-- Present must pin escape-height normalization and disocclusion treatment for the tumbled view; the grid channels and double perspective are fixed, but visual height scale is not yet jointly ruled.
-- The palette catalogue, default `palette_id`, and exact honest glitch colour remain present-owned choices even though the record layout is fixed here.
-- It remains to prove that `Plane.origin_lo` and `centre_from_reference_uv` have identical rebase semantics in the math, worker, and present documents, especially on the frame that accepts a new reference.
-- The `250,000 us` per-second worker credit is an app POLICY without field evidence; visible responsiveness and orbit throughput may justify changing it during refined documentation, but the unit and accounting cannot change silently.
-- Transferred `ArrayBuffer` bytes may require one unavoidable copy into wasm linear memory before the regional GPU upload; the worker and kernels documents must agree on who owns and reports that copy.
-- Browser module caching avoids a second fetch but does not avoid a second wasm instance or memory; exact duplicated memory and startup walls remain visible-replay facts.
-- Hidden-page suspension can delay JavaScript beyond a deadline before code resumes to observe it; the first resumed check is bounded, but browser suspension itself cannot be bounded by wasm.
-- Warp statistics needing GPU counters or readback may cost more than they are worth; until present supplies a measured path, rejected and disoccluded counts must remain `unavailable`.
-- Hot-ring safety across unusually long queued work needs reconciliation with present's slot-retirement rule; three slots are fixed, but whether app skips or waits when all three are live remains open.
-- The deploy mechanism that atomically publishes page, glue, wasm, and worker bootstrap is not yet selected for this lab, although skew refusal and version increment law are fixed.
-- The approximately `4.5 MB` expectation comes from existing wgpu labs, not this release artifact; the exact app bundle and any size regression threshold remain implementation-round evidence.
-- The four-buffer protocol has no recovery path for a worker terminated while owning buffers; restart allocation, counters, and user-visible refusal need worker/app reconciliation.
-- `u32` compute and credit microseconds cover about 4,294 seconds, far beyond the 30-second orbit deadline, but decoder behavior for malicious overflowed headers still needs a shared error spelling.
+- J7 places `Pose` in math while J30 leaves `ViewMode` owned by present; to preserve one-way dependencies, the implementation must either store the discriminant as u32 in math’s semantic pose or move and re-export the enum in a reviewed change before package imports are written.
+- Present §3.7 returns `FrameReceipt` before its warp fence completes, while J31 requires app `present()` after that fence; this contract resolves runtime order with `PendingSurface`, but present’s refined event wording must confirm `WarpCompleted` is emitted only after the timing endpoint.
+- `PresentMain` needs plane origin, centre revision and `reference_shift_px` to implement J10’s rebase/clear rule; these additions are pinned here but require byte-for-byte agreement in present’s refined CPU-only record.
+- The exact f64 formula that converts a retained pose’s old reference-relative displacement through `reference_shift_px` is math/present-owned and must be the same in their refined documents; app only transports the values.
+- Math’s scaled recurrence must state how `δc′` is adjusted on each ±64 renormalization so the scale invariant remains explicit rather than inferred by kernels.
+- The double-single reference record remains conditional on D-versus-D+16 and deep-classification evidence; its adequacy is not assumed by app.
+- The 250,000-microsecond credit and zoom-14 switch are accepted policies without browser field evidence; implementation may not silently tune them.
+- The concrete release script for atomic page/glue/wasm/worker publication remains to be selected, although ABI and refusal semantics are fixed.
+- Hidden-page suspension can delay JavaScript before it observes a 30-second or four-second deadline; the first resumed poll refuses, but wasm cannot bound unscheduled browser time.
+- Browser internals may copy a transferred buffer even though sender detachment and the one explicit wasm copy are observable; the contract claims ownership transfer, not physical browser zero-copy.
+- The 2.0-pixel tumbled-warp envelope and three palette choices lack visible target-display evidence.
+- The existing approximately 4.5 MB bundle expectation is not this lab’s exact release size, and no reviewed regression threshold exists yet.
+
+## 9. Joint-review ACCEPTED/ARGUED ledger
+
+|Item|Disposition|App-slice action|
+|---|---|---|
+|J1|ACCEPTED|Uses ℝ⁴ `R₁₃·R₂₄`, removes projection/Gram–Schmidt/degenerate stages, pins one f32 rounding, hybrid oracle and unchanged presets.|
+|J2|ACCEPTED|Uses `δ←zₙ−Z₀`, reset, count and exactly one advance; nonzero-Z₀ is a pass fixture.|
+|J3|ACCEPTED|Adopts scaled perturbation, mantissa/exponent upload, renormalization, f64 mirror and double-single sufficiency oracle.|
+|J4|ACCEPTED|Pins 32-byte origin-free `Plane` and separate 32-byte `CentreSplit`; retires the former origin field.|
+|J5|ACCEPTED|Duplicates kernels’ 96-byte shallow and 64-byte perturbation tables with mantissa at 32 and signed exponent at 60.|
+|J6|ACCEPTED|Withdraws the 192-byte dual-pose payload and adopts present’s 128-byte CPU-planned homography block and stride.|
+|J7|ARGUED|Adopts math-owned `Pose` and the added centre displacement, but records the present-owned `ViewMode` dependency-cycle spelling for implementation review.|
+|J8|ACCEPTED|Withdraws JBRT/four kinds and adopts JBL1, nine kinds, 16-byte trailer and `48+16M` capacity.|
+|J9|ACCEPTED|Withdraws app’s scalar codec and adopts worker’s four descriptors, 0/1 sign and canonical zero with no limbs.|
+|J10|ACCEPTED|Pins 40-byte HOT, 120-byte MAIN, 168-byte viewer, centre displacement, reference shift, retained-pose rebase and cap/origin-only clear.|
+|J11|ACCEPTED|Pins eight-byte `EscapeParams {max_iter,bailout}` with squared radius 256.0.|
+|J12|ACCEPTED|Withdraws Vec/WallTerm levels and adopts the exact Preview, Interactive, Final array, caps, 4,096 policy and power-of-two degradation.|
+|J13|ACCEPTED|Uses `RefinementLevel` enum in grids, schedule, scene frames and facts.|
+|J14|ARGUED|Adopts present’s API and fence ownership; adds an app-held surface keyed by `warp_id` because asynchronous `frame` cannot satisfy post-fence present otherwise.|
+|J15|ACCEPTED|Scene texture extent equals delivered level extent and every reallocation is counted.|
+|J16|ACCEPTED|Expands Phase 0 to the six re-exports, `GpuKernelExecutor`, and exact `HeapPresentResources`, with the mandated stop condition.|
+|J17|ACCEPTED|Pins `prefix_headers(span,active_len)` and forbids convention-only header mutation.|
+|J18|ACCEPTED|Each drain bumps shared u64 epoch and app never uses equality as compatibility.|
+|J19|ACCEPTED|Passes and displays 250,000 microseconds per second as implementation-constant POLICY.|
+|J20|ACCEPTED|Keeps `c₀` in MAIN plane origin and sets absolute centre to preset origin.|
+|J21|ACCEPTED|Normal rebase/glitch aggregates are unavailable; explicit measurement readback is labelled and fenced.|
+|J22|ACCEPTED|Displays integral depth, floor, working, requested and delivered precision separately.|
+|J23|ACCEPTED|Pins reference indices and `length=min(max_iter,escape_index+1)`.|
+|J24|ACCEPTED|Pins `2·10⁻³` smooth tolerance, propagated envelope, exact outside-envelope classification and boundary fixtures.|
+|J25|ACCEPTED|Withdraws `view_theta_1=t` and uses `0.4t` with golden-ratio second angle.|
+|J26|ACCEPTED|Uses shallow below 14, perturbation at or above 14, displays policy, and maintains the orbit at all depths.|
+|J27|ACCEPTED|Keeps orbit-sized request buffers and `CentreEncodingWall`; minimum request cap is 64 for 300-digit fit.|
+|J28|ACCEPTED|Keeps one wasm plus `worker_main`, version-one URLs and typed skew refusal.|
+|J29|ACCEPTED|Withdraws 144-byte palette and adopts present’s three exact 48-byte records.|
+|J30|ARGUED|Renames app’s enum to present-owned `ViewMode`; its use inside math-owned `Pose` still needs a cycle-free implementation spelling.|
+|J31|ARGUED|Accepts separate present-owned fences, counted polls, warm-up and second-frame policy; pins delayed app presentation via completion event to satisfy the outside-timing law.|
