@@ -12,7 +12,7 @@ There are five paths. Pick by what you are starting from:
 | Nothing but an idea | **A** — generated: images → mesh | the veteran (`assets/models/parts2/vet-*.glb`) |
 | An artist's rigged model (FBX/glTF) | **B** — imported: split by bone | the SWAT operator (`assets/models/swat-parts.glb`) |
 | An artist's scene/level | **C** — imported: split by island | the factory skyline (`assets/models/level-backdrop.glb`) |
-| An artist's static prop, already in named parts | **D** — imported: keep the parts, add pivots | the 9mm (`tools/9mm_convert.py`) |
+| An artist's static prop, already in named parts | **D** — imported: keep the parts, add pivots | the revolver viewmodel (`tools/v15/build_viewmodel.py`; `tools/9mm_convert.py` is the never-run predecessor) |
 | A whole map's worth of surfaces and props, from nothing | **E** — generated pictures onto boxes and generated meshes | arena v13 "Trench City" — runbook `tools/v13/`, meshes `assets/models/v13/`, textures `assets/textures/v13/` |
 
 Everything the engine consumes is a **GLB with base-color textures
@@ -166,6 +166,8 @@ Assets themselves stay out of git when they are large source archives
 committed, because the wasm build embeds them at compile time.
 
 ## Path D — imported: a static multi-part prop
+
+**Worked example, shipped — the v15 revolver + hands.** `tools/v15/dae_to_obj.py` (pycollada, because Blender 5 dropped its Collada importer) bakes the twenty-part Collada revolver to a per-part OBJ; `tools/v15/prep_pictures.py` downscales the albedos with PIL, because Blender's `Image.scale()` silently left the 4096² JPEGs untouched and the exporter then shipped the originals; `tools/v15/build_viewmodel.py` merges the twenty parts into five by what moves (frame, receiver, cylinder, hammer, trigger — the loose display cartridge is dropped), fits +X muzzle / 0.75 long / origin on the grip, imports the rigged game hand, curls its four finger chains and thumb by posing the rig (the bend sign is measured against which way the relaxed fingers lean, not assumed), bakes the pose into the mesh because the engine has no skinning for the viewmodel, dresses it with its own base-colour picture, mirrors it for the other hand, places both from the grip's box, adds forearm stubs, and writes `viewmodel-rig.json` with the pivots and the muzzle in engine space. The client reads that sidecar with serde and animates by node name: `cylinder*` spins, `hammer` cocks, `trigger` pulls. Hand placement is derived from the grip's box and the hand's size, with a nudge constant per hand for the last centimetre.
 
 An artist's prop with **no bones and no animation curves**, split into named parts — a weapon, a door, a machine. `tools/9mm_convert.py` is the worked example (a seven-part pistol: frame, slide, trigger, hammer, mag, ejector, slide stop).
 

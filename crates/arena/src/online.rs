@@ -18,12 +18,30 @@ use serde::Deserialize;
 use crate::props::{Prop, Props, tex};
 use crate::sound::{Audio, Sfx};
 
+/// What a part does when the weapon fires (v15). Decided by the part's
+/// node name, which is the asset's contract with this file: `cylinder*`
+/// spins one chamber per shot, `hammer` cocks and falls, `trigger` pulls,
+/// everything else rides rigidly with the frame.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PartAnim {
+    Fixed,
+    Cylinder,
+    Hammer,
+    Trigger,
+}
+
 /// One colored piece of a loaded GLB model.
 #[derive(Clone)]
 pub struct Part {
     pub mesh: u32,
     pub color: Vec3,
     pub is_strip: bool,
+    pub anim: PartAnim,
+    /// Model-space point the part rotates about, from the sidecar.
+    /// `load_glb` bakes every node's transform into its vertices and
+    /// discards the hierarchy, so a pivot cannot be recovered from the GLB
+    /// (docs/asset-pipeline.md, "Pivots do not survive import").
+    pub pivot: Vec3,
 }
 
 /// The Blender-authored viewmodel: pistol parts + hands/arms parts.
@@ -31,23 +49,59 @@ pub struct Part {
 pub struct Assets {
     pub gun: Vec<Part>,
     pub arms: Vec<Part>,
+    /// Model-space muzzle tip, from the sidecar; where the flash sits.
+    pub muzzle: Vec3,
+}
+
+/// The sidecar `tools/v15/build_viewmodel.py` writes beside the GLB:
+/// per-part pivots and the muzzle tip, in engine space.
+#[derive(Deserialize, Default)]
+struct ViewmodelRig {
+    #[serde(default)]
+    pivots: HashMap<String, [f32; 3]>,
+    #[serde(default)]
+    muzzle: Option<[f32; 3]>,
 }
 
 const VIEWMODEL_GLB: &[u8] = include_bytes!("../assets/viewmodel.glb");
+const VIEWMODEL_RIG: &str = include_str!("../assets/viewmodel-rig.json");
+
+/// How far along the muzzle axis the flash sat on the old box pistol; the
+/// fallback when the sidecar names no muzzle.
+const LEGACY_MUZZLE: Vec3 = Vec3::new(0.95, 0.0, 0.0);
 
 /// Load the GLB into engine meshes + part lists. Falls back to the classic
 /// cube pistol when the asset is missing/broken.
 pub fn load_assets() -> (Vec<ember_engine::MeshData>, Option<Assets>) {
     match ember_engine::assets::load_glb(VIEWMODEL_GLB) {
         Ok(parts) => {
+            let rig: ViewmodelRig = serde_json::from_str(VIEWMODEL_RIG).unwrap_or_else(|e| {
+                tracing::warn!("viewmodel sidecar unusable ({e}); parts ride rigidly");
+                ViewmodelRig::default()
+            });
             let mut meshes = Vec::new();
-            let mut assets = Assets::default();
+            let mut assets = Assets {
+                muzzle: rig.muzzle.map_or(LEGACY_MUZZLE, Vec3::from_array),
+                ..Assets::default()
+            };
             for p in parts {
+                let pivot = rig.pivots.get(&p.name).copied().map(Vec3::from_array);
+                // A moving part without a pivot would spin about the model
+                // origin, which is the hold point on the grip: worse than
+                // not moving. So no pivot, no animation.
+                let anim = match (p.name.as_str(), pivot) {
+                    (n, Some(_)) if n.starts_with("cylinder") => PartAnim::Cylinder,
+                    ("hammer", Some(_)) => PartAnim::Hammer,
+                    ("trigger", Some(_)) => PartAnim::Trigger,
+                    _ => PartAnim::Fixed,
+                };
                 let part = Part {
                     mesh: u32::try_from(meshes.len()).expect("viewmodel mesh count fits in u32")
                         + 1, // 0 is the built-in cube
                     color: Vec3::from_array(p.color),
                     is_strip: p.name == "strip",
+                    anim,
+                    pivot: pivot.unwrap_or(Vec3::ZERO),
                 };
                 meshes.push(p.mesh);
                 if p.name.starts_with("arm") || p.name.starts_with("hand") {
@@ -190,12 +244,81 @@ const fn weapon_accent(level: u8) -> Vec3 {
 
 /// Draws a part list at one transform. `rot` is a full rotation rather than
 /// a yaw so a weapon can tilt with its owner's aim elevation.
-fn push_parts(frame: &mut Frame, parts: &[Part], pos: Vec3, rot: Quat, accent: Vec3) {
+/// The mechanical state of the weapon, for the parts that move.
+///
+/// `cycle` is progress through the current shot's cooldown, 0 at the
+/// server-confirmed shot and 1 once settled; `shots` counts confirmed shots
+/// so the cylinder's index accumulates instead of snapping back. A remote
+/// player, whose shots this client does not time, is drawn at rest.
+#[derive(Clone, Copy)]
+struct Action {
+    cycle: f32,
+    shots: u32,
+}
+
+impl Action {
+    const REST: Self = Self {
+        cycle: 1.0,
+        shots: 0,
+    };
+
+    /// Rotation of a part about its pivot, in model space.
+    ///
+    /// Model axes: +X forward, +Y up, +Z right. The cylinder turns about the
+    /// barrel; the hammer and trigger swing about the side-to-side axis, the
+    /// same one `weapon_rot` pitches the whole gun about.
+    fn local_rot(self, anim: PartAnim) -> Quat {
+        const CHAMBER: f32 = std::f32::consts::TAU / 6.0;
+        let c = self.cycle.clamp(0.0, 1.0);
+        match anim {
+            PartAnim::Fixed => Quat::IDENTITY,
+            // One chamber per shot, advanced over the first 60% of the
+            // cooldown with an ease-out, indexed by shots so it never runs
+            // backwards between rounds.
+            PartAnim::Cylinder => {
+                let k = (c / 0.6).min(1.0);
+                let ease = 1.0 - (1.0 - k) * (1.0 - k);
+                let chamber = u8::try_from(self.shots % 6).expect("a value mod 6 fits in a u8");
+                let turns = f32::from(chamber) + ease - 1.0;
+                Quat::from_rotation_x(-CHAMBER * turns)
+            }
+            // Double action: the spur travels back through the first 55%
+            // of the cooldown and drops for the round that follows.
+            PartAnim::Hammer => {
+                let cocked = if c < 0.55 { c / 0.55 } else { (1.0 - c) / 0.45 };
+                Quat::from_rotation_z(0.6 * cocked)
+            }
+            // Pulled at the shot, released over the first quarter.
+            PartAnim::Trigger => {
+                let pulled = 1.0 - (c / 0.25).min(1.0);
+                Quat::from_rotation_z(-0.45 * pulled)
+            }
+        }
+    }
+}
+
+fn push_parts(
+    frame: &mut Frame,
+    parts: &[Part],
+    pos: Vec3,
+    rot: Quat,
+    accent: Vec3,
+    action: Action,
+) {
     for p in parts {
         let color = if p.is_strip { accent } else { p.color };
+        let local = action.local_rot(p.anim);
+        // Rotating a part about its pivot: v' = local * (v - pivot) + pivot,
+        // so the instance rotates by local and shifts by (pivot - local *
+        // pivot), all before the weapon's own placement.
+        let shift = if p.anim == PartAnim::Fixed {
+            Vec3::ZERO
+        } else {
+            p.pivot - local * p.pivot
+        };
         frame.instances.push(
-            Instance::new(pos, Vec3::ONE, color)
-                .with_rot(rot)
+            Instance::new(pos + rot * shift, Vec3::ONE, color)
+                .with_rot(rot * local)
                 .with_mesh(p.mesh),
         );
     }
@@ -446,6 +569,9 @@ pub struct ShooterGame {
     /// ammo decrement, not the trigger being held. Drives recoil, the
     /// slide cycle and the muzzle flash.
     shot_started: Option<f32>,
+    /// Confirmed shots this session; indexes the revolver's cylinder so it
+    /// advances one chamber per round instead of snapping back.
+    shots: u32,
     since_score_ui: f32,
     score_shown: bool,
     aim: Vec2,
@@ -525,6 +651,7 @@ impl ShooterGame {
             shield_raise: 0.0,
             reload_started: None,
             shot_started: None,
+            shots: 0,
             since_score_ui: 1.0,
             score_shown: false,
             aim: Vec2::new(1.0, 0.0),
@@ -776,6 +903,7 @@ impl EmberGame for ShooterGame {
                                 // authoritative signal as the audio: a round
                                 // that the SERVER agrees left the weapon.
                                 self.shot_started = Some(self.time);
+                                self.shots = self.shots.wrapping_add(1);
                             }
                             if new_me.hp < me.hp && new_me.alive {
                                 sfx.push((Sfx::Hurt, 0.6));
@@ -1504,7 +1632,14 @@ impl EmberGame for ShooterGame {
                 let yaw = -aim.y.atan2(aim.x);
                 // Remote weapons tilt with the owner's real aim elevation,
                 // so a player shooting down off a container looks like it.
-                push_parts(&mut frame, &a.gun, hand, weapon_rot(yaw, p.pitch), accent);
+                push_parts(
+                    &mut frame,
+                    &a.gun,
+                    hand,
+                    weapon_rot(yaw, p.pitch),
+                    accent,
+                    Action::REST,
+                );
             } else {
                 push_gun(&mut frame, hand, aim, accent);
             }
@@ -1626,21 +1761,34 @@ impl EmberGame for ShooterGame {
             // part. That is what puts the sights on the shot line when
             // pitched; the old pose used horizontal forward plus a
             // `pitch * 0.10` nudge, so the gun and the bullet disagreed.
+            // Offsets re-tuned for the v15 revolver, whose hold point is the
+            // top of a grip that hangs 0.2 below it: higher than the box
+            // pistol sat, so the hands are in the frame and not under it.
             let base = eye
                 + look * (0.5 + 0.10 * self.zoom - 0.06 * recoil)
-                + right3 * (0.24 * (1.0 - self.zoom) + 0.015)
+                + right3 * (0.22 * (1.0 - self.zoom) + 0.015)
                 + Vec3::Y
-                    * (-0.30 + 0.075 * self.zoom + bob * 0.4 * (1.0 - self.zoom) - reload_dip
+                    * (-0.22 + 0.06 * self.zoom + bob * 0.4 * (1.0 - self.zoom) - reload_dip
                         + 0.03 * recoil);
             let yaw = -forward2.y.atan2(forward2.x);
             // Tilts with aim elevation, plus a muzzle-up kick per shot.
             let rot = weapon_rot(yaw, self.pitch + 0.16 * recoil);
-            if let Some(a) = &self.assets {
-                push_parts(&mut frame, &a.gun, base, rot, accent);
-                push_parts(&mut frame, &a.arms, base, rot, accent);
+            // The moving parts read the same confirmed shot the recoil
+            // does, so a dry trigger moves nothing.
+            let action = Action {
+                cycle: self
+                    .shot_started
+                    .map_or(1.0, |t0| ((self.time - t0) / cooldown).clamp(0.0, 1.0)),
+                shots: self.shots,
+            };
+            let muzzle = if let Some(a) = &self.assets {
+                push_parts(&mut frame, &a.gun, base, rot, accent, action);
+                push_parts(&mut frame, &a.arms, base, rot, accent, action);
+                base + rot * a.muzzle
             } else {
                 push_gun(&mut frame, base, forward2, accent);
-            }
+                base + look * 0.95
+            };
             // Muzzle flash on a round the server agrees left the weapon.
             // What stood here fired on `time % cooldown` while the trigger
             // was held — a free-running clock with no relationship to
@@ -1649,7 +1797,7 @@ impl EmberGame for ShooterGame {
             if flashing {
                 inst(
                     &mut frame,
-                    base + look * 0.95,
+                    muzzle,
                     Vec3::splat(0.14),
                     Vec3::new(1.0, 0.9, 0.5),
                 );
@@ -1948,5 +2096,118 @@ mod net {
                 win.clear_interval_with_handle(id);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod viewmodel_tests {
+    use super::*;
+
+    fn deg(q: Quat, axis: Vec3) -> f32 {
+        let (a, angle) = q.to_axis_angle();
+        if a.dot(axis) < 0.0 { -angle } else { angle }.to_degrees()
+    }
+
+    #[test]
+    fn a_fixed_part_never_moves() {
+        for c in [0.0, 0.3, 1.0] {
+            let a = Action { cycle: c, shots: 4 };
+            assert_eq!(a.local_rot(PartAnim::Fixed), Quat::IDENTITY);
+        }
+    }
+
+    #[test]
+    fn the_cylinder_advances_one_chamber_per_shot_and_never_runs_back() {
+        // Settled after shot n it sits n chambers on; the next shot starts
+        // exactly where the previous one settled and adds one more. Compared
+        // as rotations, not as angles: past 180 degrees an axis-angle reading
+        // flips and would call a full turn a reversal.
+        let settled = |n: u32| {
+            Action {
+                cycle: 1.0,
+                shots: n,
+            }
+            .local_rot(PartAnim::Cylinder)
+        };
+        let start = |n: u32| {
+            Action {
+                cycle: 0.0,
+                shots: n,
+            }
+            .local_rot(PartAnim::Cylinder)
+        };
+        for n in 1..12 {
+            assert!(
+                start(n + 1).angle_between(settled(n)) < 1e-3,
+                "shot {n}: the next round starts where the last settled"
+            );
+            let step = settled(n + 1).angle_between(settled(n)).to_degrees();
+            assert!(
+                (step - 60.0).abs() < 1e-2,
+                "shot {n}: one chamber is 60 degrees, got {step}"
+            );
+        }
+        // Monotonic through the cooldown: every step turns the same way.
+        let mut prev = start(2);
+        for i in 1..=20u8 {
+            let now = Action {
+                cycle: f32::from(i) / 20.0,
+                shots: 2,
+            }
+            .local_rot(PartAnim::Cylinder);
+            let rel = prev.inverse() * now;
+            let (axis, angle) = rel.to_axis_angle();
+            if angle > 1e-5 {
+                assert!(axis.x < 0.0, "cylinder ran backwards at sample {i}");
+                assert!(angle.to_degrees() < 15.0, "cylinder jumped at sample {i}");
+            }
+            prev = now;
+        }
+    }
+
+    #[test]
+    fn the_hammer_cocks_then_falls_and_rests_forward() {
+        let at = |c: f32| {
+            deg(
+                Action { cycle: c, shots: 1 }.local_rot(PartAnim::Hammer),
+                Vec3::Z,
+            )
+        };
+        assert!(at(0.0).abs() < 1e-4, "forward at the shot");
+        assert!(at(0.55) > at(0.2) && at(0.2) > 0.0, "travels back");
+        assert!(at(1.0).abs() < 1e-4, "rests forward");
+    }
+
+    #[test]
+    fn the_trigger_is_pulled_at_the_shot_and_released_after() {
+        let at = |c: f32| {
+            deg(
+                Action { cycle: c, shots: 1 }.local_rot(PartAnim::Trigger),
+                Vec3::Z,
+            )
+        };
+        assert!(at(0.0) < -20.0, "pulled back at the shot: {}", at(0.0));
+        assert!(at(0.5).abs() < 1e-4 && at(1.0).abs() < 1e-4, "released");
+    }
+
+    #[test]
+    fn rotating_about_a_pivot_leaves_the_pivot_where_it_was() {
+        // The instance maths in push_parts: pos + rot * (pivot - local * pivot),
+        // rotated by rot * local, must map the pivot point onto itself.
+        let pivot = Vec3::new(0.29, 0.02, 0.0);
+        let local = Action {
+            cycle: 0.2,
+            shots: 3,
+        }
+        .local_rot(PartAnim::Cylinder);
+        let rot = weapon_rot(0.7, -0.2);
+        let pos = Vec3::new(3.0, 1.4, -2.0);
+        let shift = pivot - local * pivot;
+        let placed = pos + rot * shift + (rot * local) * pivot;
+        let expected = pos + rot * pivot;
+        assert!(
+            (placed - expected).length() < 1e-5,
+            "{placed} vs {expected}"
+        );
     }
 }

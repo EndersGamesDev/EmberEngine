@@ -29,3 +29,10 @@ assets/9-mm.zip
 /tools/v13/__pycache__/
 /tools/v13/placeholder.py
 /tools/v13/nightcoder-audit.md
+# Artist sources for the v15 viewmodel (large; converted GLBs are committed)
+assets/revolver/
+assets/hands/
+assets/*.zip
+# v15 viewmodel runbook: previews, captures and bytecode stay local
+/tools/v15/*.png
+/tools/v15/__pycache__/
