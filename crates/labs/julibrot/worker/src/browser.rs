@@ -368,7 +368,12 @@ pub fn encode_transfer_request(
 ) -> Result<(), ChannelError> {
     let mut buffer = TransferBuffer::from_array(array.clone())?;
     if buffer.pool()? != Pool::Request {
-        return Err(ChannelError::new(ErrorCode::BadKind, Pool::Orbit as u32, 0, 0));
+        return Err(ChannelError::new(
+            ErrorCode::BadKind,
+            Pool::Orbit as u32,
+            0,
+            0,
+        ));
     }
     let requested = request.centre().request_bytes()?;
     let available = usize::try_from(buffer.bytes.length())
@@ -433,7 +438,12 @@ pub fn read_transfer_header(array: &ArrayBuffer) -> Result<MessageHeader, Channe
 pub fn transfer_record_bytes(array: &ArrayBuffer) -> Result<Uint8Array, ChannelError> {
     let buffer = TransferBuffer::from_array(array.clone())?;
     if buffer.pool()? != Pool::Orbit {
-        return Err(ChannelError::new(ErrorCode::BadKind, Pool::Request as u32, 0, 0));
+        return Err(ChannelError::new(
+            ErrorCode::BadKind,
+            Pool::Request as u32,
+            0,
+            0,
+        ));
     }
     let header = buffer.header()?;
     let kind = header.validate()?;
@@ -457,7 +467,12 @@ pub fn transfer_record_bytes(array: &ArrayBuffer) -> Result<Uint8Array, ChannelE
         .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, header.length, 0, 0))?;
     let available = buffer.bytes.length() - u32::try_from(POOL_TRAILER_BYTES).unwrap_or(16);
     if end > available {
-        return Err(ChannelError::new(ErrorCode::BadLength, header.length, end, available));
+        return Err(ChannelError::new(
+            ErrorCode::BadLength,
+            header.length,
+            end,
+            available,
+        ));
     }
     Ok(buffer
         .bytes
@@ -477,7 +492,12 @@ pub fn write_transfer_credit(
 ) -> Result<CreditCharge, ChannelError> {
     let mut buffer = TransferBuffer::from_array(array.clone())?;
     if buffer.pool()? != Pool::Orbit {
-        return Err(ChannelError::new(ErrorCode::BadKind, Pool::Request as u32, 0, 0));
+        return Err(ChannelError::new(
+            ErrorCode::BadKind,
+            Pool::Request as u32,
+            0,
+            0,
+        ));
     }
     let old = buffer.header()?;
     let old_kind = old.validate()?;
@@ -505,13 +525,15 @@ pub fn write_transfer_credit(
 /// # Errors
 ///
 /// Returns a typed trailer or wrong-pool refusal.
-pub fn write_transfer_shutdown(
-    array: &ArrayBuffer,
-    generation: u32,
-) -> Result<(), ChannelError> {
+pub fn write_transfer_shutdown(array: &ArrayBuffer, generation: u32) -> Result<(), ChannelError> {
     let mut buffer = TransferBuffer::from_array(array.clone())?;
     if buffer.pool()? != Pool::Request {
-        return Err(ChannelError::new(ErrorCode::BadKind, Pool::Orbit as u32, 0, 0));
+        return Err(ChannelError::new(
+            ErrorCode::BadKind,
+            Pool::Orbit as u32,
+            0,
+            0,
+        ));
     }
     buffer.write_empty(MessageKind::Shutdown, generation, 0, 0)
 }

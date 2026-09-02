@@ -16,8 +16,8 @@ pub(crate) mod wire;
 
 #[cfg(target_arch = "wasm32")]
 pub use browser::{
-    allocate_transfer_buffer, encode_transfer_request, read_transfer_header,
-    transfer_record_bytes, worker_main, write_transfer_credit, write_transfer_shutdown,
+    allocate_transfer_buffer, encode_transfer_request, read_transfer_header, transfer_record_bytes,
+    worker_main, write_transfer_credit, write_transfer_shutdown,
 };
 pub use channel::{
     BUFFER_RETURN_DEADLINE_US, JULIBROT_PHASE_IMPLEMENTED, MIN_MAX_ITER,
