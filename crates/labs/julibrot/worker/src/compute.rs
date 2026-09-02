@@ -116,12 +116,9 @@ impl ReferenceOrbitTask {
         let started = clock.now_us();
         let centre = request.centre().decode_math(request.precision_bits())?;
         let plan = precision_plan(request)?;
-        let builder = ReferenceOrbitBuilder::new(
-            &centre,
-            plan,
-            EscapeParams::new(request.max_iter()),
-        )
-        .map_err(math_error)?;
+        let builder =
+            ReferenceOrbitBuilder::new(&centre, plan, EscapeParams::new(request.max_iter()))
+                .map_err(math_error)?;
         let compute_us = elapsed(started, clock.now_us())?;
         checked_compute_us(compute_us)?;
         Ok(Self {
@@ -318,13 +315,8 @@ mod tests {
         assert_eq!(orbit.escape_index, Some(3));
         assert_eq!(orbit.records[0].re_hi, 0.0);
         assert!(compute_us > 0);
-        let sample = perturb_scaled_f64(
-            &orbit.records,
-            [0.0; 4],
-            -900,
-            EscapeParams::new(64),
-        )
-        .unwrap();
+        let sample =
+            perturb_scaled_f64(&orbit.records, [0.0; 4], -900, EscapeParams::new(64)).unwrap();
         assert!(sample.escaped);
         assert_eq!(sample.escape_index, Some(3));
     }

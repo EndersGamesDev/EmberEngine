@@ -1,10 +1,10 @@
 //! Canonical dyadic centre validation and request encoding.
 
+use crate::compute::math_error;
 use crate::wire::{
     HEADER_BYTES, MessageHeader, MessageKind, POOL_TRAILER_BYTES, Pool, WireBuffer,
     buffer_capacity, read_u32, write_words,
 };
-use crate::compute::math_error;
 use crate::{ChannelError, ErrorCode};
 
 const REQUEST_FIXED_END: usize = 112;
@@ -106,7 +106,9 @@ impl EncodedCentre {
             .iter()
             .any(|value| value.precision_bits() != delivered_precision)
         {
-            return Err(math_error(ember_julibrot_math::MathError::PrecisionMismatch));
+            return Err(math_error(
+                ember_julibrot_math::MathError::PrecisionMismatch,
+            ));
         }
         let [a, b, c, d] = values
             .try_into()

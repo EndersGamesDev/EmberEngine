@@ -18,8 +18,8 @@ pub use channel::{
 };
 pub use codec::{CoordinateDescriptor, EncodedCentre, OrbitReason, OrbitRequest};
 pub use compute::{
-    MathFailureCode, MonotonicClock, OrbitTaskPoll, ReferenceOrbitTask,
-    ORBIT_CHUNK_MAX_ITERATIONS, ORBIT_CHUNK_MAX_US,
+    MathFailureCode, MonotonicClock, ORBIT_CHUNK_MAX_ITERATIONS, ORBIT_CHUNK_MAX_US, OrbitTaskPoll,
+    ReferenceOrbitTask,
 };
 pub use ember_julibrot_math::{ComputedOrbit, ReferenceOrbitRecord};
 pub use error::{ChannelError, ErrorCode};
