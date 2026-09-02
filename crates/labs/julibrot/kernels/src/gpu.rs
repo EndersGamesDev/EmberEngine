@@ -216,7 +216,6 @@ impl JulibrotKernels {
             &allocation.headers,
             level,
             uniform.bytes(),
-            false,
         )?;
         publish_level(grid, selected.extent, level);
         Ok(facts)
@@ -274,6 +273,9 @@ impl JulibrotKernels {
         )?;
         let resources_changed =
             self.accept_reference(reference, allocation.plan.requested_max_iter)?;
+        if resources_changed {
+            executor.sync_dispatch_resources(&dispatch);
+        }
         encode_pages(
             executor,
             encoder,
@@ -282,7 +284,6 @@ impl JulibrotKernels {
             &allocation.headers,
             level,
             uniform.bytes(),
-            resources_changed,
         )?;
         publish_level(grid, selected.extent, level);
         Ok(facts)
@@ -461,14 +462,10 @@ fn encode_pages(
     headers: &HeaderSetHandle,
     level: RefinementLevel,
     uniform: &[u8],
-    resources_changed: bool,
 ) -> Result<(), KernelError> {
     executor
         .write_kernel_uniform(kernel, uniform)
         .map_err(|_| KernelError::Dispatch)?;
-    if resources_changed {
-        executor.sync_dispatch_resources(dispatch);
-    }
     let page_count =
         u32::try_from(dispatch.plan().passes.len()).map_err(|_| KernelError::ArithmeticOverflow)?;
     for page in 0..page_count {
