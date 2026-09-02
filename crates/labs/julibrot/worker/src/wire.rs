@@ -189,6 +189,7 @@ pub struct ErrorRecord {
 
 impl ErrorRecord {
     /// Writes the four words at the start of a message body.
+    #[cfg(test)]
     fn write_to(self, destination: &mut [u8]) -> Result<(), ChannelError> {
         if destination.len() < ERROR_RECORD_BYTES {
             return Err(short_buffer(ERROR_RECORD_BYTES, destination.len()));
@@ -206,6 +207,7 @@ impl ErrorRecord {
     }
 
     /// Reads and validates the stable error-code word.
+    #[cfg(test)]
     fn read_from(source: &[u8]) -> Result<Self, ChannelError> {
         if source.len() < ERROR_RECORD_BYTES {
             return Err(short_buffer(ERROR_RECORD_BYTES, source.len()));
@@ -465,6 +467,7 @@ impl WireBuffer {
     }
 
     /// Writes a typed channel-error message and its four-word body.
+    #[cfg(test)]
     pub(crate) fn write_error(
         &mut self,
         generation: u32,
@@ -477,6 +480,7 @@ impl WireBuffer {
     }
 
     /// Reads the typed body of a validated channel-error message.
+    #[cfg(test)]
     pub(crate) fn error(&self) -> Result<ChannelError, ChannelError> {
         if self.validate_message()? != MessageKind::ChannelError {
             return Err(ChannelError::new(ErrorCode::BadKind, self.header()?.kind, 0, 0));
@@ -532,6 +536,7 @@ impl WireBuffer {
     }
 
     /// Decodes a validated orbit payload into CPU records.
+    #[cfg(test)]
     pub(crate) fn orbit_records(&self) -> Result<Vec<ReferenceOrbitRecord>, ChannelError> {
         if self.validate_message()? != MessageKind::OrbitResponse {
             return Err(ChannelError::new(ErrorCode::BadKind, self.header()?.kind, 0, 0));

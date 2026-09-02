@@ -12,8 +12,9 @@ pub(crate) mod wire;
 
 pub use codec::{CoordinateDescriptor, EncodedCentre, OrbitReason, OrbitRequest};
 pub use channel::{
-    OrbitLease, OrbitResponseView, OwnerEndpoint, ProducerEndpoint, RequestLease, SubmitOutcome,
-    WorkerChannel, WorkerConfig, WorkerMode,
+    BUFFER_RETURN_DEADLINE_US, MIN_MAX_ITER, ORBIT_BUDGET_US_PER_SECOND, OrbitLease,
+    OrbitResponseView, OwnerEndpoint, ProducerEndpoint, RequestLease, SubmitOutcome, WorkerChannel,
+    WorkerConfig, WorkerMode,
 };
 pub use error::{ChannelError, ErrorCode};
 pub use owner::{
