@@ -5,6 +5,7 @@ use crate::MathError;
 #[derive(Clone, Debug, PartialEq)]
 pub struct BigScalar {
     pub(crate) value: BigFloat,
+    precision_bits: u32,
 }
 
 impl BigScalar {
@@ -12,28 +13,31 @@ impl BigScalar {
         if !value.is_finite() || precision_bits == 0 {
             return Err(MathError::NonFinite);
         }
-        Self::checked(BigFloat::from_f64(value, precision_bits as usize))
+        Self::checked(BigFloat::from_f64(value, precision_bits as usize), precision_bits)
     }
 
     pub fn from_f32(value: f32, precision_bits: u32) -> Result<Self, MathError> {
         if !value.is_finite() || precision_bits == 0 {
             return Err(MathError::NonFinite);
         }
-        Self::checked(BigFloat::from_f32(value, precision_bits as usize))
+        Self::checked(BigFloat::from_f32(value, precision_bits as usize), precision_bits)
     }
 
     pub fn zero(precision_bits: u32) -> Result<Self, MathError> {
         if precision_bits == 0 {
             return Err(MathError::InvalidCentreEncoding);
         }
-        Self::checked(BigFloat::new(precision_bits as usize))
+        Self::checked(BigFloat::new(precision_bits as usize), precision_bits)
     }
 
-    pub(crate) fn checked(value: BigFloat) -> Result<Self, MathError> {
+    pub(crate) fn checked(value: BigFloat, precision_bits: u32) -> Result<Self, MathError> {
         if value.is_nan() || value.is_inf() {
             Err(MathError::BigFloat)
         } else {
-            Ok(Self { value })
+            Ok(Self {
+                value,
+                precision_bits: rounded_astro_precision(precision_bits)?,
+            })
         }
     }
 
@@ -43,8 +47,7 @@ impl BigScalar {
     }
 
     pub fn precision_bits(&self) -> Result<u32, MathError> {
-        let precision = self.value.precision().ok_or(MathError::BigFloat)?;
-        u32::try_from(precision).map_err(|_| MathError::CounterOverflow)
+        Ok(self.precision_bits)
     }
 
     pub fn to_f64(&self) -> Result<f64, MathError> {
@@ -89,39 +92,51 @@ impl BigScalar {
         value
             .set_precision(precision_bits as usize, RoundingMode::ToEven)
             .map_err(|_| MathError::BigFloat)?;
-        Self::checked(value)
+        Self::checked(value, precision_bits)
     }
 
     pub(crate) fn add(&self, other: &Self, precision_bits: u32) -> Result<Self, MathError> {
-        Self::checked(self.value.add(
-            &other.value,
-            precision_bits as usize,
-            RoundingMode::ToEven,
-        ))
+        Self::checked(
+            self.value.add(
+                &other.value,
+                precision_bits as usize,
+                RoundingMode::ToEven,
+            ),
+            precision_bits,
+        )
     }
 
     pub(crate) fn sub(&self, other: &Self, precision_bits: u32) -> Result<Self, MathError> {
-        Self::checked(self.value.sub(
-            &other.value,
-            precision_bits as usize,
-            RoundingMode::ToEven,
-        ))
+        Self::checked(
+            self.value.sub(
+                &other.value,
+                precision_bits as usize,
+                RoundingMode::ToEven,
+            ),
+            precision_bits,
+        )
     }
 
     pub(crate) fn mul(&self, other: &Self, precision_bits: u32) -> Result<Self, MathError> {
-        Self::checked(self.value.mul(
-            &other.value,
-            precision_bits as usize,
-            RoundingMode::ToEven,
-        ))
+        Self::checked(
+            self.value.mul(
+                &other.value,
+                precision_bits as usize,
+                RoundingMode::ToEven,
+            ),
+            precision_bits,
+        )
     }
 
     pub(crate) fn div(&self, other: &Self, precision_bits: u32) -> Result<Self, MathError> {
-        Self::checked(self.value.div(
-            &other.value,
-            precision_bits as usize,
-            RoundingMode::ToEven,
-        ))
+        Self::checked(
+            self.value.div(
+                &other.value,
+                precision_bits as usize,
+                RoundingMode::ToEven,
+            ),
+            precision_bits,
+        )
     }
 
     pub(crate) fn scale_pow2(&self, shift: i32) -> Result<Self, MathError> {
@@ -135,13 +150,21 @@ impl BigScalar {
                 .checked_add(shift)
                 .ok_or(MathError::ScaleExponentOverflow)?,
         );
-        Self::checked(value)
+        Self::checked(value, self.precision_bits)
     }
 
     pub(crate) fn compare(&self, other: &Self) -> Result<i8, MathError> {
         let ordering = self.value.cmp(&other.value).ok_or(MathError::BigFloat)?;
         Ok(ordering.signum() as i8)
     }
+}
+
+fn rounded_astro_precision(precision_bits: u32) -> Result<u32, MathError> {
+    precision_bits
+        .checked_add(63)
+        .map(|bits| bits & !63)
+        .filter(|bits| *bits != 0)
+        .ok_or(MathError::CounterOverflow)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -153,6 +176,7 @@ pub struct BigCentre {
 impl BigCentre {
     pub fn from_f64(coords: [f64; 4], precision_bits: u32) -> Result<Self, MathError> {
         let [a, b, c, d] = coords;
+        let precision_bits = rounded_astro_precision(precision_bits)?;
         Ok(Self {
             coords: [
                 BigScalar::from_f64(a, precision_bits)?,
@@ -377,7 +401,10 @@ pub fn decode_big_scalar(
         RoundingMode::None,
         &mut constants,
     );
-    BigScalar::checked(value)
+    BigScalar::checked(
+        value,
+        u32::try_from(requested_precision).map_err(|_| MathError::CounterOverflow)?,
+    )
 }
 
 #[cfg(test)]
