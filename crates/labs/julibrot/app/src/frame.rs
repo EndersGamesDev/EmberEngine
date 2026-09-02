@@ -50,11 +50,11 @@ struct FrameLoop {
 
 #[cfg(any(target_arch = "wasm32", test))]
 impl FrameLoop {
-    fn refresh<P: PresenterPoll>(&mut self, presenter: &mut P, now_ms: f64) -> Vec<P::Event> {
+    fn refresh<P: PresenterPoll>(presenter: &mut P, now_ms: f64) -> Vec<P::Event> {
         presenter.poll_once(now_ms)
     }
 
-    fn accept_request(&mut self, generation: u32, scene_ready: bool) {
+    const fn accept_request(&mut self, generation: u32, scene_ready: bool) {
         self.requested_run = true;
         self.completed_run = false;
         if scene_ready && !self.schedule.pending() {
@@ -62,7 +62,7 @@ impl FrameLoop {
         }
     }
 
-    fn restart(&mut self, generation: u32) {
+    const fn restart(&mut self, generation: u32) {
         self.schedule.restart(generation);
         if self.requested_run {
             self.completed_run = false;
@@ -424,7 +424,7 @@ mod browser {
                 .refresh_id
                 .checked_add(1)
                 .ok_or(AppError::GenerationExhausted)?;
-            let events = self.loop_state.refresh(&mut self.presenter, now_ms);
+            let events = FrameLoop::refresh(&mut self.presenter, now_ms);
             let presented = self.handle_events(runtime, events)?;
             if requests.frame {
                 self.loop_state
@@ -1184,7 +1184,7 @@ mod tests {
         clock: FakeClock,
     ) -> Option<u64> {
         let mut refused = false;
-        for event in frame_loop.refresh(presenter, clock.now_ms) {
+        for event in FrameLoop::refresh(presenter, clock.now_ms) {
             match event {
                 FakeEvent::Completed(scene) => {
                     frame_loop.completed(scene.id, scene.generation, scene.level);
