@@ -493,10 +493,10 @@ mod tests {
     #[test]
     fn constant_class_span_crosses_layers_by_quotient_and_remainder() {
         let mut arena =
-            SpanArena::new(8, 2, 32, 16 * 16 + 4 * 16, 16).expect("arena configuration fits");
+            SpanArena::new(8, 3, 32, 16 * 16 + 4 * 16, 16).expect("arena configuration fits");
         let [first, second] = arena
             .allocate_pair(70, 4)
-            .expect("ten class-four pages fit across two heaps");
+            .expect("ten class-four pages fit across three layers");
         assert_eq!((first.page_records, first.page_count), (16, 5));
         assert_eq!(first.padding_records(), 10);
         let (handle, local) = first
@@ -535,7 +535,7 @@ mod tests {
     #[test]
     fn directory_packing_and_static_headers_match_the_ubo_contract() {
         let mut arena =
-            SpanArena::new(16, 1, 16, 16 * 4 + 4 * 8, 4).expect("arena configuration fits");
+            SpanArena::new(16, 4, 16, 16 * 4 + 4 * 8, 4).expect("arena configuration fits");
         let [span, other] = arena
             .allocate_pair(300, 16)
             .expect("two pages per span fit");
