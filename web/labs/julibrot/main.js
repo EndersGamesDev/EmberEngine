@@ -4,6 +4,32 @@ const CANVAS = document.getElementById("julibrot");
 const FACTS = document.getElementById("facts-grid");
 let ORBIT_WORKER = null;
 
+function timerProbe() {
+  const readLimit = 4000000;
+  const transitionTarget = 32;
+  const deadlineMs = 500;
+  const started = performance.now();
+  let previous = started;
+  let reads = 0;
+  let transitions = 0;
+  let zeroTransitions = 0;
+  let quantum = null;
+  while (reads < readLimit && transitions < transitionTarget) {
+    const current = performance.now();
+    reads += 1;
+    const delta = current - previous;
+    if (delta > 0) {
+      transitions += 1;
+      quantum = quantum === null ? delta : Math.min(quantum, delta);
+    } else if (delta === 0) {
+      zeroTransitions += 1;
+    }
+    previous = current;
+    if (current - started >= deadlineMs) break;
+  }
+  return { quantum_ms: quantum, reads, positive_transitions: transitions, zero_transitions: zeroTransitions, wall_ms: Math.max(0, previous - started) };
+}
+
 function fail(error) {
   STATUS.className = "status failed";
   STATUS.textContent = String(error);
@@ -124,6 +150,10 @@ async function boot() {
     if (!ORBIT_WORKER) throw new Error("VersionSkew: worker did not publish ownership");
     await api.start_julibrot("julibrot", "status");
     const facts = JSON.parse(api.app_facts_json());
+    const timer = timerProbe();
+    facts.timer_quantum_ms = timer.quantum_ms;
+    facts.timing_status = timer.quantum_ms === null ? "unavailable: timer exposed no positive transition" : "requires visible replay";
+    facts.timer_probe = timer;
     facts.wasm_bundle_bytes = await artifactBytes("./pkg/ember_lab_julibrot_bg.wasm?v=1");
     facts.javascript_bundle_bytes = await artifactBytes("./pkg/ember_lab_julibrot.js?v=1");
     facts.wasm_instance_count = 2;

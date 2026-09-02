@@ -3,6 +3,7 @@
 mod error;
 #[cfg(target_arch = "wasm32")]
 mod facts;
+mod measurement;
 mod state;
 mod surface;
 
@@ -12,6 +13,12 @@ mod runtime;
 pub use error::AppError;
 #[cfg(target_arch = "wasm32")]
 pub use facts::PageFacts;
+pub use measurement::{
+    ADAPTIVE_SAMPLES, ADAPTIVE_WARM_UPS, AdaptivePlan, CONTINUOUS_FRAME_THRESHOLD_MS,
+    FrameObservation, FramePolicy, FramePolicyTracker, MAX_ADAPTIVE_REPEATS, MAX_BATCH_MS,
+    MeasurementError, SUITE_DEADLINE_MS, SampleSummary, TARGET_TIMER_QUANTA, TIMER_PROBE_DEADLINE_MS,
+    TIMER_READ_LIMIT, TIMER_TRANSITION_TARGET, TimerProbeFacts, probe_timer,
+};
 pub use state::{
     HotFrame, INITIAL_ITERATION_CAP, NavigationEdit, RequestedControls, ViewerController,
 };
