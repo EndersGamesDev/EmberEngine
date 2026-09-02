@@ -198,7 +198,21 @@ impl ViewerOwner {
 
 #[cfg(test)]
 mod tests {
-    use super::{HotState, MainState, ViewerOwner, ViewerState};
+    use super::{
+        HotState, MainState, OrbitDisposition, OrbitHandle, ViewerOwner, ViewerState,
+    };
+    use crate::{
+        CoordinateDescriptor, EncodedCentre, OrbitReason, OrbitRequest, ReferenceOrbitRecord,
+        WorkerChannel, WorkerConfig, WorkerMode,
+    };
+
+    #[derive(Clone, Copy)]
+    enum Edit {
+        Hot(f64),
+        Main(u32),
+        DrainHot,
+        DrainMain,
+    }
 
     #[test]
     fn exact_owner_layouts_are_pinned() {
@@ -219,20 +233,22 @@ mod tests {
 
     #[test]
     fn every_hot_main_interleaving_is_coherent_and_latest_wins() {
-        #[derive(Clone, Copy)]
-        enum Edit {
-            Hot(f64),
-            Main(u32),
-            DrainHot,
-            DrainMain,
+        let edits = [Edit::Hot(1.0), Edit::Main(1), Edit::DrainHot, Edit::DrainMain];
+        for (a, first) in edits.iter().copied().enumerate() {
+            for (b, second) in edits.iter().copied().enumerate() {
+                for (c, third) in edits.iter().copied().enumerate() {
+                    for (d, fourth) in edits.iter().copied().enumerate() {
+                        if a == b || a == c || a == d || b == c || b == d || c == d {
+                            continue;
+                        }
+                        assert_schedule([first, second, third, fourth]);
+                    }
+                }
+            }
         }
-        let schedules = [
-            [Edit::Hot(1.0), Edit::Main(1), Edit::DrainHot, Edit::DrainMain],
-            [Edit::Main(1), Edit::Hot(1.0), Edit::DrainMain, Edit::DrainHot],
-            [Edit::Hot(1.0), Edit::DrainHot, Edit::Main(1), Edit::DrainMain],
-            [Edit::Main(1), Edit::DrainMain, Edit::Hot(1.0), Edit::DrainHot],
-        ];
-        for schedule in schedules {
+    }
+
+    fn assert_schedule(schedule: [Edit; 4]) {
             let owner = ViewerOwner::new(ViewerState::default());
             let mut last_epoch = 0;
             for edit in schedule {
@@ -260,7 +276,6 @@ mod tests {
             let final_state = owner.drain_hot();
             assert_eq!(final_state.hot.zoom_log2, 1.0);
             assert_eq!(final_state.main.palette_id, 1);
-        }
     }
 
     #[test]
@@ -276,5 +291,79 @@ mod tests {
         assert_eq!(drained.hot.zoom_log2, 3.0);
         assert_eq!(drained.epoch, 1);
         assert_eq!(owner.snapshot(), drained);
+    }
+
+    #[test]
+    fn acceptance_checks_both_generations_and_rebases_hot_displacement() {
+        let (endpoint, producer) = WorkerChannel::new(
+            WorkerConfig { max_iter: 64 },
+            WorkerMode::SameThread,
+        )
+        .unwrap();
+        let request = OrbitRequest::new(
+            7,
+            EncodedCentre {
+                revision: 19,
+                coordinates: [CoordinateDescriptor::default(); 4],
+                limbs: Vec::new(),
+            },
+            0,
+            64,
+            64,
+            OrbitReason::INITIAL,
+        )
+        .unwrap();
+        assert_eq!(
+            endpoint.submit(request),
+            crate::SubmitOutcome::Transferred
+        );
+        let request = producer.next_request().unwrap().unwrap();
+        producer
+            .complete(
+                request,
+                &[ReferenceOrbitRecord::default()],
+                128,
+                40,
+                250_000,
+            )
+            .unwrap();
+        let response = endpoint.next_arrival().unwrap();
+        let owner = ViewerOwner::new(ViewerState {
+            hot: HotState {
+                centre_from_reference_px: [10.0, -3.0],
+                ..HotState::default()
+            },
+            ..ViewerState::default()
+        });
+        owner.note_requested_generation(7);
+        assert_eq!(
+            owner.accept_orbit(
+                &response,
+                OrbitHandle {
+                    id: 3,
+                    generation: 7,
+                },
+                [4.0, -1.0],
+            ),
+            OrbitDisposition::Applied
+        );
+        let published = owner.drain_main();
+        assert_eq!(published.main.generation_applied, 7);
+        assert_eq!(published.main.centre_revision, 19);
+        assert_eq!(published.main.precision_bits, 128);
+        assert_eq!(published.main.orbit_length, 1);
+        assert_eq!(published.main.reference_shift_px, [4.0, -1.0]);
+        assert_eq!(published.hot.centre_from_reference_px, [6.0, -2.0]);
+        assert_eq!(
+            owner.accept_orbit(
+                &response,
+                OrbitHandle {
+                    id: 3,
+                    generation: 6,
+                },
+                [0.0, 0.0],
+            ),
+            OrbitDisposition::Stale
+        );
     }
 }
