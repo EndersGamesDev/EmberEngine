@@ -97,7 +97,10 @@ impl FourSlotModel {
 
     /// Returns whether all slots are attached to their startup owners.
     pub(crate) const fn is_reconciled(self) -> bool {
-        self == Self::new()
+        matches!(self.owners[0], SlotOwner::Main)
+            && matches!(self.owners[1], SlotOwner::Main)
+            && matches!(self.owners[2], SlotOwner::Producer)
+            && matches!(self.owners[3], SlotOwner::Producer)
     }
 }
 

@@ -1,7 +1,9 @@
 //! Canonical dyadic centre validation and request encoding.
 
-use crate::wire::{HEADER_BYTES, POOL_TRAILER_BYTES, read_u32, write_words};
-use crate::wire::{MessageHeader, MessageKind, POOL_TRAILER_BYTES, Pool, WireBuffer, buffer_capacity};
+use crate::wire::{
+    HEADER_BYTES, MessageHeader, MessageKind, POOL_TRAILER_BYTES, Pool, WireBuffer,
+    buffer_capacity, read_u32, write_words,
+};
 use crate::{ChannelError, ErrorCode};
 
 const REQUEST_FIXED_END: usize = 112;
@@ -374,7 +376,8 @@ const fn bad_descriptor(detail: u32) -> ChannelError {
 #[cfg(test)]
 mod tests {
     use super::{CoordinateDescriptor, EncodedCentre, OrbitReason, OrbitRequest};
-    use crate::{ErrorCode, Pool, WireBuffer};
+    use crate::wire::WireBuffer;
+    use crate::{ErrorCode, Pool};
 
     fn centre() -> EncodedCentre {
         EncodedCentre {
