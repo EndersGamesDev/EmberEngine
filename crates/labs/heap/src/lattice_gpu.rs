@@ -27,6 +27,11 @@ use crate::{
     box_vertices, frame_for, layer_comparator_draw_shader, layer_comparator_kernel, mode_a_records,
     mode_a_shader, mode_c_register, mode_c_shader,
 };
+use crate::conformance::{
+    IMAGE_BYTES, IMAGE_BYTES_PER_ROW, IMAGE_HEIGHT, IMAGE_WIDTH, ImageComparison,
+    NumericComparison, RECORD_BYTES, RECORD_STRIDE, compare_images, compare_records,
+    deterministic_indices,
+};
 
 const HEAP_SIDE: u16 = 512;
 const HEAP_LAYERS: u16 = 16;
@@ -41,6 +46,9 @@ const LAYER_BYTE_BUDGET: u64 = 64 * 1024 * 1024;
 const DEFAULT_POLICY: u32 = 2_000_000;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
 const COMPLETION_DEADLINE_MS: f64 = 30_000.0;
+const CONFORMANCE_TIME: f32 = 0.625;
+const CONFORMANCE_IMAGE_STEP: u32 = 1;
+const CONFORMANCE_IMAGE_POLICY: u32 = 3_000;
 
 #[derive(Debug, thiserror::Error)]
 enum LatticeError {
@@ -66,6 +74,8 @@ enum LatticeError {
     InvalidRepeat(u32),
     #[error("could not serialize page facts: {0}")]
     Serialization(String),
+    #[error("conformance failed: {0}")]
+    Conformance(String),
 }
 
 impl From<LatticeError> for JsValue {
@@ -96,6 +106,15 @@ impl Mode {
             Self::A => "Mode A · algebraic heap",
             Self::C => "Mode C · layer kernel over heap spans",
             Self::Layer => "layer · square slots",
+        }
+    }
+
+    fn from_label(value: &str) -> Result<Self, LatticeError> {
+        match value {
+            "Mode A · algebraic heap" => Ok(Self::A),
+            "Mode C · layer kernel over heap spans" => Ok(Self::C),
+            "layer · square slots" => Ok(Self::Layer),
+            _ => Err(LatticeError::UnknownMode(value.to_string())),
         }
     }
 }
@@ -178,8 +197,31 @@ struct BatchReport {
     gpu_timestamp_ms: Option<f64>,
 }
 
+#[derive(Serialize)]
+struct ConformanceReport {
+    generation: u64,
+    requested_step: u32,
+    requested_axes: [u32; 5],
+    policy: u32,
+    mode_c_delivered_edges: u32,
+    layer_delivered_edges: u32,
+    counts_match: bool,
+    signatures_match: bool,
+    numeric: NumericComparison,
+    image_step: u32,
+    image_edges: u32,
+    image: ImageComparison,
+    status: &'static str,
+    timing_qualified: bool,
+}
+
 struct PendingFence {
     buffer: wgpu::Buffer,
+}
+
+struct PendingReadback {
+    buffer: wgpu::Buffer,
+    expected_bytes: usize,
 }
 
 struct HeapDispatch {
@@ -286,6 +328,30 @@ fn texture(
             width: side,
             height: side,
             depth_or_array_layers: layers,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage,
+        view_formats: &[],
+    })
+}
+
+fn rectangular_texture(
+    device: &wgpu::Device,
+    label: &'static str,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+    usage: wgpu::TextureUsages,
+) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
         },
         mip_level_count: 1,
         sample_count: 1,
@@ -1401,7 +1467,9 @@ impl LatticeLab {
                 self.layer_max_side
             )));
         }
-        let usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
+        let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC;
         let midpoint = texture(
             &self.device,
             "layer midpoint-hue output slot",
@@ -1655,6 +1723,62 @@ impl LatticeLab {
         }
     }
 
+    fn encode_presentation(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        label: &'static str,
+    ) {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(label),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.008,
+                        g: 0.012,
+                        b: 0.025,
+                        a: 1.0,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Discard,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_vertex_buffer(0, self.box_vertices.slice(..));
+        pass.set_index_buffer(self.box_indices.slice(..), wgpu::IndexFormat::Uint16);
+        match self.heap_dispatch.as_ref().map(|dispatch| dispatch.mode) {
+            Some(Mode::A) => {
+                pass.set_pipeline(&self.mode_a_draw);
+                pass.set_bind_group(0, &self.heap_group, &[0]);
+            }
+            Some(Mode::C) => {
+                pass.set_pipeline(&self.mode_c_draw);
+                pass.set_bind_group(0, &self.heap_group, &[0]);
+            }
+            _ if self.layer_step.is_some() => {
+                let step = self.layer_step.as_ref().expect("checked layer step");
+                pass.set_pipeline(&self.layer_draw_pipeline);
+                pass.set_bind_group(0, &step.render_group, &[]);
+            }
+            _ => {}
+        }
+        if self.heap_dispatch.is_some() || self.layer_step.is_some() {
+            pass.draw_indexed(0..36, 0, 0..self.active.delivered_edges);
+        }
+    }
+
     fn render_frame(&mut self, time: f32) -> Result<(), LatticeError> {
         if let Some(reason) = self.lost.lock().ok().and_then(|slot| slot.clone()) {
             return Err(LatticeError::DeviceLost(reason));
@@ -1684,58 +1808,202 @@ impl LatticeLab {
         } else if let Some(step) = &self.layer_step {
             self.encode_layer_compute(&mut encoder, step);
         }
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("heap lattice one presentation pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.008,
-                            g: 0.012,
-                            b: 0.025,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Discard,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            pass.set_vertex_buffer(0, self.box_vertices.slice(..));
-            pass.set_index_buffer(self.box_indices.slice(..), wgpu::IndexFormat::Uint16);
-            match self.heap_dispatch.as_ref().map(|dispatch| dispatch.mode) {
-                Some(Mode::A) => {
-                    pass.set_pipeline(&self.mode_a_draw);
-                    pass.set_bind_group(0, &self.heap_group, &[0]);
-                }
-                Some(Mode::C) => {
-                    pass.set_pipeline(&self.mode_c_draw);
-                    pass.set_bind_group(0, &self.heap_group, &[0]);
-                }
-                _ if self.layer_step.is_some() => {
-                    let step = self.layer_step.as_ref().expect("checked layer step");
-                    pass.set_pipeline(&self.layer_draw_pipeline);
-                    pass.set_bind_group(0, &step.render_group, &[]);
-                }
-                _ => {}
-            }
-            if self.heap_dispatch.is_some() || self.layer_step.is_some() {
-                pass.draw_indexed(0..36, 0, 0..self.active.delivered_edges);
-            }
-        }
+        self.encode_presentation(
+            &mut encoder,
+            &view,
+            &self.depth,
+            "heap lattice one presentation pass",
+        );
         self.queue.submit([encoder.finish()]);
         frame.present();
         Ok(())
+    }
+
+    fn record_readback_buffer(&self) -> wgpu::Buffer {
+        self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("heap lattice conformance record readback"),
+            size: RECORD_BYTES as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
+    }
+
+    fn copy_record(
+        encoder: &mut wgpu::CommandEncoder,
+        texture: &wgpu::Texture,
+        origin: wgpu::Origin3d,
+        buffer: &wgpu::Buffer,
+        slot: usize,
+    ) {
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: (slot * RECORD_STRIDE) as u64,
+                    bytes_per_row: Some(RECORD_STRIDE as u32),
+                    rows_per_image: Some(1),
+                },
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    fn capture_records(
+        &self,
+        mode: Mode,
+        indices: &[u32],
+    ) -> Result<PendingReadback, LatticeError> {
+        let buffer = self.record_readback_buffer();
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("heap lattice conformance record copies"),
+            });
+        match mode {
+            Mode::C => {
+                let outputs = self.mode_c_outputs.as_ref().ok_or_else(|| {
+                    LatticeError::Conformance("Mode C has no live output spans".to_string())
+                })?;
+                for (sample, index) in indices.iter().copied().enumerate() {
+                    for (field, span) in outputs.iter().enumerate() {
+                        let (handle, local) = span
+                            .resolve_record(self.arena.heap(), index)
+                            .map_err(|error| LatticeError::Conformance(error.to_string()))?;
+                        let descriptor = self
+                            .arena
+                            .heap()
+                            .resolve(handle)
+                            .map_err(|error| LatticeError::Conformance(error.to_string()))?;
+                        let width = u32::from(descriptor.width);
+                        Self::copy_record(
+                            &mut encoder,
+                            &self.data,
+                            wgpu::Origin3d {
+                                x: u32::from(descriptor.x) + local % width,
+                                y: u32::from(descriptor.y) + local / width,
+                                z: u32::from(descriptor.layer),
+                            },
+                            &buffer,
+                            sample * 2 + field,
+                        );
+                    }
+                }
+            }
+            Mode::Layer => {
+                let step = self.layer_step.as_ref().ok_or_else(|| {
+                    LatticeError::Conformance("layer has no live output slots".to_string())
+                })?;
+                for (sample, index) in indices.iter().copied().enumerate() {
+                    let origin = wgpu::Origin3d {
+                        x: index % step.side,
+                        y: index / step.side,
+                        z: 0,
+                    };
+                    Self::copy_record(
+                        &mut encoder,
+                        &step.midpoint,
+                        origin,
+                        &buffer,
+                        sample * 2,
+                    );
+                    Self::copy_record(
+                        &mut encoder,
+                        &step.orientation,
+                        origin,
+                        &buffer,
+                        sample * 2 + 1,
+                    );
+                }
+            }
+            Mode::A => {
+                return Err(LatticeError::Conformance(
+                    "Mode A does not produce edge-pose records".to_string(),
+                ));
+            }
+        }
+        self.queue.submit([encoder.finish()]);
+        Ok(PendingReadback {
+            buffer,
+            expected_bytes: RECORD_BYTES,
+        })
+    }
+
+    fn capture_image(&self) -> Result<PendingReadback, LatticeError> {
+        if !matches!(
+            self.config.format,
+            wgpu::TextureFormat::Rgba8Unorm
+                | wgpu::TextureFormat::Rgba8UnormSrgb
+                | wgpu::TextureFormat::Bgra8Unorm
+                | wgpu::TextureFormat::Bgra8UnormSrgb
+        ) {
+            return Err(LatticeError::Conformance(format!(
+                "surface format {:?} is not a four-byte checksum format",
+                self.config.format
+            )));
+        }
+        let target = rectangular_texture(
+            &self.device,
+            "heap lattice 64x36 conformance image",
+            IMAGE_WIDTH,
+            IMAGE_HEIGHT,
+            self.config.format,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        );
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let depth = depth_view(&self.device, IMAGE_WIDTH, IMAGE_HEIGHT);
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("heap lattice conformance image readback"),
+            size: IMAGE_BYTES as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("heap lattice conformance image draw and copy"),
+            });
+        self.encode_presentation(
+            &mut encoder,
+            &view,
+            &depth,
+            "heap lattice 64x36 conformance presentation",
+        );
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(IMAGE_BYTES_PER_ROW),
+                    rows_per_image: Some(IMAGE_HEIGHT),
+                },
+            },
+            wgpu::Extent3d {
+                width: IMAGE_WIDTH,
+                height: IMAGE_HEIGHT,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit([encoder.finish()]);
+        Ok(PendingReadback {
+            buffer,
+            expected_bytes: IMAGE_BYTES,
+        })
     }
 
     fn pending_fence(&self) -> PendingFence {
@@ -1835,6 +2103,173 @@ async fn wait_for_fence(
     }
 }
 
+async fn wait_for_readback(
+    lab: &Rc<RefCell<LatticeLab>>,
+    pending: PendingReadback,
+    generation: u64,
+) -> Result<Vec<u8>, LatticeError> {
+    let state = Arc::new(Mutex::new(None));
+    let callback = Arc::clone(&state);
+    let slice = pending.buffer.slice(..);
+    slice.map_async(wgpu::MapMode::Read, move |result| {
+        if let Ok(mut slot) = callback.lock() {
+            *slot = Some(result.map_err(|error| error.to_string()));
+        }
+    });
+    let started = performance_now();
+    loop {
+        let current = GENERATION.get();
+        if current != generation {
+            pending.buffer.unmap();
+            return Err(LatticeError::StaleGeneration {
+                observed: generation,
+                current,
+            });
+        }
+        {
+            let borrowed = lab.borrow();
+            borrowed.device.poll(wgpu::Maintain::Poll);
+            if let Some(reason) = borrowed.lost.lock().ok().and_then(|slot| slot.clone()) {
+                pending.buffer.unmap();
+                return Err(LatticeError::DeviceLost(reason));
+            }
+        }
+        if let Some(result) = state.lock().ok().and_then(|mut slot| slot.take()) {
+            result.map_err(LatticeError::Mapping)?;
+            let mapped = slice.get_mapped_range();
+            if mapped.len() != pending.expected_bytes {
+                let length = mapped.len();
+                drop(mapped);
+                pending.buffer.unmap();
+                return Err(LatticeError::Mapping(format!(
+                    "conformance readback mapped {length} bytes instead of {}",
+                    pending.expected_bytes
+                )));
+            }
+            let bytes = mapped.to_vec();
+            drop(mapped);
+            pending.buffer.unmap();
+            return Ok(bytes);
+        }
+        if performance_now() - started >= COMPLETION_DEADLINE_MS {
+            pending.buffer.unmap();
+            return Err(LatticeError::Deadline);
+        }
+        yield_to_browser().await?;
+    }
+}
+
+async fn run_conformance(
+    lab: &Rc<RefCell<LatticeLab>>,
+    generation: u64,
+    step: u32,
+    policy: u32,
+) -> Result<ConformanceReport, LatticeError> {
+    let (mode_c_report, mode_c_pending, indices) = {
+        let mut borrowed = lab.borrow_mut();
+        let report = borrowed.select(Mode::C, step, policy, generation)?;
+        borrowed.render_frame(CONFORMANCE_TIME)?;
+        let indices = deterministic_indices(report.delivered_edges);
+        let pending = (!indices.is_empty())
+            .then(|| borrowed.capture_records(Mode::C, &indices))
+            .transpose()?;
+        (report, pending, indices)
+    };
+    let mode_c_records = match mode_c_pending {
+        Some(pending) => Some(wait_for_readback(lab, pending, generation).await?),
+        None => None,
+    };
+    let (layer_report, layer_pending) = {
+        let mut borrowed = lab.borrow_mut();
+        let report = borrowed.select(Mode::Layer, step, policy, generation)?;
+        borrowed.render_frame(CONFORMANCE_TIME)?;
+        let pending = (report.delivered_edges == mode_c_report.delivered_edges
+            && !indices.is_empty())
+        .then(|| borrowed.capture_records(Mode::Layer, &indices))
+        .transpose()?;
+        (report, pending)
+    };
+    let layer_records = match layer_pending {
+        Some(pending) => Some(wait_for_readback(lab, pending, generation).await?),
+        None => None,
+    };
+    let counts_match = mode_c_report.delivered_edges == layer_report.delivered_edges;
+    let signatures_match = mode_c_report.equal_work_signature == layer_report.equal_work_signature;
+    let numeric = match (mode_c_records, layer_records) {
+        (Some(mode_c), Some(layer)) => compare_records(&mode_c, &layer, indices)
+            .map_err(LatticeError::Conformance)?,
+        _ => NumericComparison {
+            sampled_indices: indices,
+            compared_records: 0,
+            compared_components: 0,
+            exact_components: 0,
+            mismatched_components: 0,
+            tolerance: crate::conformance::F32_TOLERANCE,
+            max_abs_error: 0.0,
+            pass: false,
+        },
+    };
+
+    let mode_c_image = {
+        let pending = {
+            let mut borrowed = lab.borrow_mut();
+            let report = borrowed.select(
+                Mode::C,
+                CONFORMANCE_IMAGE_STEP,
+                CONFORMANCE_IMAGE_POLICY,
+                generation,
+            )?;
+            if report.delivered_edges != CONFORMANCE_IMAGE_POLICY {
+                return Err(LatticeError::Conformance(format!(
+                    "Mode C small-rung image delivered {} edges instead of {}",
+                    report.delivered_edges, CONFORMANCE_IMAGE_POLICY
+                )));
+            }
+            borrowed.render_frame(CONFORMANCE_TIME)?;
+            borrowed.capture_image()?
+        };
+        wait_for_readback(lab, pending, generation).await?
+    };
+    let layer_image = {
+        let pending = {
+            let mut borrowed = lab.borrow_mut();
+            let report = borrowed.select(
+                Mode::Layer,
+                CONFORMANCE_IMAGE_STEP,
+                CONFORMANCE_IMAGE_POLICY,
+                generation,
+            )?;
+            if report.delivered_edges != CONFORMANCE_IMAGE_POLICY {
+                return Err(LatticeError::Conformance(format!(
+                    "layer small-rung image delivered {} edges instead of {}",
+                    report.delivered_edges, CONFORMANCE_IMAGE_POLICY
+                )));
+            }
+            borrowed.render_frame(CONFORMANCE_TIME)?;
+            borrowed.capture_image()?
+        };
+        wait_for_readback(lab, pending, generation).await?
+    };
+    let image = compare_images(&mode_c_image, &layer_image).map_err(LatticeError::Conformance)?;
+    let timing_qualified = counts_match && signatures_match && numeric.pass && image.pass;
+    Ok(ConformanceReport {
+        generation,
+        requested_step: step,
+        requested_axes: mode_c_report.requested_axes,
+        policy,
+        mode_c_delivered_edges: mode_c_report.delivered_edges,
+        layer_delivered_edges: layer_report.delivered_edges,
+        counts_match,
+        signatures_match,
+        numeric,
+        image_step: CONFORMANCE_IMAGE_STEP,
+        image_edges: CONFORMANCE_IMAGE_POLICY,
+        image,
+        status: if timing_qualified { "PASS" } else { "FAIL" },
+        timing_qualified,
+    })
+}
+
 /// Initializes the explicit GL backend and renders Mode A step one immediately.
 ///
 /// # Errors
@@ -1912,6 +2347,39 @@ pub fn select_heap_lattice_json(mode: &str, step: u32, policy: u32) -> Result<St
         report
     };
     serialize(&report).map_err(JsValue::from)
+}
+
+/// Runs the live Mode C versus layer record and small-image equality gate, then restores the page selection.
+///
+/// # Errors
+///
+/// Returns a JavaScript error for cancellation, allocation, rendering, mapping, comparison, restoration, or serialization failure.
+#[wasm_bindgen]
+pub async fn conform_heap_lattice_json() -> Result<String, JsValue> {
+    let generation = GENERATION.get();
+    let lab = current_lab().map_err(JsValue::from)?;
+    let (saved_mode, step, policy) = {
+        let borrowed = lab.borrow();
+        (
+            Mode::from_label(borrowed.active.mode).map_err(JsValue::from)?,
+            borrowed.active.requested_step,
+            borrowed.active.policy,
+        )
+    };
+    let outcome = run_conformance(&lab, generation, step, policy).await;
+    let restore = if GENERATION.get() == generation {
+        let mut borrowed = lab.borrow_mut();
+        borrowed
+            .select(saved_mode, step, policy, generation)
+            .and_then(|_| borrowed.render_frame(0.0))
+    } else {
+        Err(LatticeError::StaleGeneration {
+            observed: generation,
+            current: GENERATION.get(),
+        })
+    };
+    restore.map_err(JsValue::from)?;
+    serialize(&outcome.map_err(JsValue::from)?).map_err(JsValue::from)
 }
 
 /// Renders one current selection at the supplied animation time.

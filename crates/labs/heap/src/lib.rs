@@ -1,11 +1,14 @@
 //! Descriptor-heap-effect WebGL2 lab and native allocator evidence.
 
+mod conformance;
 mod dialect;
 mod heap;
 #[cfg(any(test, target_arch = "wasm32"))]
 mod kernels;
 mod lattice;
 mod mode_c;
+#[cfg(test)]
+mod page_contract;
 mod span;
 #[cfg(any(test, target_arch = "wasm32"))]
 mod spike;
@@ -26,8 +29,8 @@ pub use lattice::{
 };
 #[cfg(target_arch = "wasm32")]
 pub use lattice_gpu::{
-    cancel_heap_lattice, measure_heap_lattice_batch_json, render_heap_lattice_frame_json,
-    select_heap_lattice_json, start_heap_lattice,
+    cancel_heap_lattice, conform_heap_lattice_json, measure_heap_lattice_batch_json,
+    render_heap_lattice_frame_json, select_heap_lattice_json, start_heap_lattice,
 };
 pub use mode_c::{
     ComparatorWork, EqualWorkSignature, ModeCFrameUniform, layer_comparator_draw_shader,

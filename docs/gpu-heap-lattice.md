@@ -1,6 +1,6 @@
 # GPU heap lattice architecture
 
-Status: active implementation contract for a WebGL2-only heap-lattice lab; the paid Phase 0 browser evidence selects SCRATCH-to-DATA copy as the default output path.
+Status: shipped WebGL2-only heap-lattice contract through Phase 7; paid browser evidence selects SCRATCH-to-DATA copy, while optional Mode B is deferred and its design remains recorded.
 
 ## 1. Decision and evidence boundary
 
@@ -54,7 +54,7 @@ Mode C is the allocation-and-indirection control: it runs layer's exact edge-pos
 
 The declared experimental axis is heap bytes versus vertex-stage work: Mode A stores 1,200 rotated vertices and pays endpoint algebra, Mode B stores `1,200C` projected vertices and pays endpoint lookup, Mode C stores `3,000C` edge poses and pays box construction, and layer stores the same `3,000C` edge poses and runs the same box construction as Mode C through standalone square slots.
 
-Mode C versus layer is the clean allocation-and-indirection comparison because kernel, logical records, indexed mesh, and vertex work are equal; Mode A and Mode C are mandatory implementation modes, while Mode B is third priority if the implementation budget holds.
+Mode C versus layer is the clean allocation-and-indirection comparison because kernel, logical records, indexed mesh, and vertex work are equal; Mode A and Mode C are shipped, while Mode B was third priority and is deferred because the Phase 5 checkpoint reached 5,106 net new lines against the 3,290-line implementation estimate.
 
 ## 4. DATA records, spans, and walls
 
@@ -209,15 +209,17 @@ A leaked-differences ledger is opened only when another physical lowering exists
 
 Comparator provenance has two explicit branches: if `ember-lab-layer` from `lane/comp-layer` is present in main before implementation begins, the heap lab takes it as a workspace package dependency and makes no shared-crate edit or copy; otherwise the heap lab carries a private faithful copy budgeted at about 2,400 lines, with v1 generated source, square-slot arithmetic, golden checksum, and CPU kernel oracle pinning fidelity.
 
-At each selected ladder step, Modes A, B, C, and layer receive the identical tuple, geometry, 3,000-edge-per-copy submitted count, pole epsilon, animation time, camera, render target, indexed box mesh, and overlay fields; clipped edges remain included in submitted counts in all paths.
+At each selected ladder step, shipped Modes A and C and layer receive the identical tuple, geometry, 3,000-edge-per-copy submitted count, pole epsilon, animation time, camera, render target, indexed box mesh, and overlay fields; clipped edges remain included in submitted counts in all paths, and the retained Mode B design must obey the same rule if implemented later.
 
-The comparator reports requested and delivered tuple, copies, projected or edge-pose records, submitted edges, submitted indices `36E`, ideal unique vertex invocations `8E`, shown edges, compute passes, copy commands and GPU bytes, encoders, submissions, render draws, frame median and p95, microseconds per submitted edge, CPU-to-GPU bytes per frame, logical heap bytes, physical heap and SCRATCH bytes, layer one-slot and two-slot bytes, policy value, limiting WALL, and full arithmetic.
+The comparator reports requested and delivered tuple, copies, projected or edge-pose records, submitted edges, submitted indices `36E`, ideal unique vertex invocations `8E`, compute passes, copy commands and GPU bytes, frame median and p95, microseconds per submitted edge, CPU-to-GPU bytes per frame, logical heap bytes, physical heap and SCRATCH bytes, layer one-slot and two-slot bytes, policy value, limiting WALL, and full arithmetic; shown-edge count is explicitly unavailable because this GL path has no pipeline-statistics query and never substitutes a CPU guess.
 
 Mode C and layer are the primary equal-work pair: they use the exact same kernel body and numeric operation order, two-record edge-pose model, 192-byte frame uniform, indexed vertex work, delivered copies, pixels, fence, adaptive timing, and tuple; any mismatch disqualifies the rung before allocation or timing differences are interpreted.
 
-Fair timing uses the same timer-quantum probe, three warmups, 15 samples, and repeat-until-32-observed-quanta batching scheme of record from `crates/what-is-this/src/kernels.rs`, with the same ordered four-byte mapped fence after the final presentation work.
+The live equality gate reports Mode C and layer delivered counts and static signatures, maps both GPU-produced edge-pose records for eight deterministic indices spanning the selected range, and renders both paths into a 64 by 36 offscreen target at step 1; PASS requires equal counts and signatures, every sampled component exact or within `4 × 10⁻⁵`, and byte-identical 2,304-pixel images with displayed checksums, otherwise both timing cards remain visibly disqualified.
 
-The first timed frame is measured alone; if it exceeds the 100 ms animation threshold it is retained as the single on-demand observation and is not repeated, while faster rungs enter the adaptive series and all modes share the same rule.
+Fair timing labels the first fenced frame after every path or rung switch as cold/pipeline warm-up and excludes it, uses the second fenced frame for the 100 ms animation decision, then uses three additional warmups, 15 samples, and repeat-until-32-observed-quanta batching from `crates/what-is-this/src/kernels.rs`, with the same ordered four-byte mapped fence after final presentation work.
+
+Both initial fenced frames remain visible in the overlay even when they are cold-start outliers; if the second exceeds 100 ms the rung uses explicit single-frame-on-demand observations, while a second frame at or below 100 ms admits animation and the adaptive series.
 
 Primary time begins before CPU uniform writes and command encoding and ends after the mapped completion fence; GPU timestamp values appear only if the GL path actually exposes and uses them, labeled separately and never substituted for primary wall time.
 
@@ -237,19 +239,21 @@ No claim is established by a faster picture alone: conformance, submitted counts
 
 ## 14. Page and measurement plan
 
-One self-contained page exposes the 113-rung control and Modes A, B, C, and layer with one common canvas and one common facts/results overlay; the deployed JavaScript and wasm URLs use a versioned `module_or_path` on every redeploy.
+One self-contained page exposes the 113-rung control and shipped Modes A and C and layer with one common canvas and one common facts/results overlay; Mode B remains a documented deferred design, and the deployed JavaScript and wasm URLs use a versioned `module_or_path` on every redeploy.
 
 Selecting any rung or mode immediately attempts its runtime plan and renders the delivered work without measurement admission; controls never snap to the delivered rung, and zero delivery is a visible refusal rather than the previous frame mislabeled as current.
 
 Every selection resets samples, p95 state, timer batches, frame counters, shown counts, and generation tokens; an older allocation, map callback, or measurement can neither publish into nor restore a newer selection.
 
-Animation continues only while the latest measured frame remains at or below 100 ms; above that threshold the page becomes single-frame-on-demand, measures exactly one requested frame at a time, yields before and after it, and displays its true wall time even when it takes seconds.
+The equality gate runs before warm-up timing, uses bounded `map_async` readbacks solely as an oracle, restores the requested path and rung before measuring, and is generation-guarded so an older comparison cannot publish or restore resources after a newer selection.
+
+Animation begins only when the second fenced post-switch frame is at or below 100 ms; above that threshold the page becomes single-frame-on-demand, measures exactly one requested frame at a time, yields around asynchronous completion, and displays its true wall time even when it takes seconds.
 
 The timer probe performs at most 4,000,000 consecutive `performance.now()` reads, stops after 32 positive transitions or 500 ms, and uses the smallest positive transition as the observed quantum; unresolved timers make timing unavailable without preventing rendering.
 
 Adaptive samples increase whole-workload repeats until a batch spans 32 observed quanta, cap the batch target at 250 ms and repeats at 4,096, normalize by repeats, and stop a mode after a finite 30-second suite budget; medians use the middle sorted sample and p95 uses nearest-rank rank `ceil(0.95n)`.
 
-Counts are literal: requested is the tuple-derived count, delivered is the runtime-WALL-and-policy count, submitted is the draw instance count, shown excludes pole-discarded boxes, and measured is the work enclosed by the fence; none is substituted for another.
+Counts are literal: requested is the tuple-derived count, delivered and submitted are the runtime-WALL-and-policy draw instance count, measured is the work enclosed by the fence, and shown is unavailable rather than guessed because pole clipping occurs in the vertex stage; none is substituted for another.
 
 The page labels 2,000,000 instances as its initial tab-safety POLICY, accepts an explicit policy through 8,000,000, labels 2,147,483,647 from WebGL2's positive signed `GLsizei` draw-count range and the `u32` index limit as arithmetic WALLS, and never presents policy as detected hardware capacity.
 
@@ -271,7 +275,7 @@ Geometry tests pin 600 cap vertices, 1,200 cap edges, 1,200 prism vertices, 3,00
 
 Page-contract tests pin explicit GL backend selection, versioned loader paths, immediate rendering without admission, stable requested controls, generation cancellation, sample resets, bounded waits, single-frame fallback, and exact median, p95, and byte formulas.
 
-Comparator tests run identical small rungs through Mode C and layer's exact kernel, require matching edge-pose, indexed-vertex, and image checksums within a declared f32 tolerance, and reject timing publication when tuples, delivered edges, submitted indices, kernel source identity, or fence placement differ.
+Comparator tests and the live page run identical work through Mode C and layer's exact kernel, compare two edge-pose records at eight deterministic selected-rung indices within `4 × 10⁻⁵`, compare exact 64 by 36 presentation-image bytes and checksums at the 3,000-edge rung, and disqualify timing when delivery counts, signatures, sampled values, or image bytes disagree.
 
 ## 16. Implementation phases and line budget
 
@@ -287,9 +291,9 @@ Phase 4 implements mandatory Mode C over the merged `ember-lab-layer` workspace 
 
 Phase 5 implements the self-contained WebGL2 page, versioned loader, measurement state machine, overlays, requested-versus-delivered presentation, cancellation, and a link to the preserved historical heap benchmark, estimated at 480 lines.
 
-Phase 6 implements optional Mode B materialization if budget remains after the Phase 5 browser checkpoint, estimated at 300 lines.
+Phase 6 is skipped: Mode B was optional only if budget remained, while the Phase 5 checkpoint was already 5,106 net new lines against the 3,290-line estimate; §7 remains its future implementation contract rather than pretending it shipped.
 
-Phase 7 is test completion, lint repair, bundle evidence, and contract reconciliation, estimated at 300 lines; the budget of record remains 3,290 lines, and any phase exceeding its estimate by more than 25 percent requires a reported reason rather than hidden compression.
+Phase 7 completes the two-frame warm-up rule, live numeric and image equality gate, page-contract tests, lint repair, bundle evidence, and contract reconciliation; the budget of record remains 3,290 lines, and the final report accounts for the overrun rather than compressing the oracles.
 
 ## 17. What does not change
 
@@ -299,7 +303,7 @@ Heap and compute contents feed presentation and prediction only and cannot autho
 
 The default SCRATCH-copy path creates one heap bind group at initialization and keeps its resource identities immutable; the fallback has two immutable bind groups, never rebuilt, while heap contents, descriptors, span directory, step headers, and frame uniform may change only through the contracted setup and dispatch sequence.
 
-The page reports requested, delivered, submitted, shown, and measured quantities separately, computes walls from live facts and fixed type ceilings, performs no measure-first admission, preserves controls across refusal, guards every asynchronous publication by generation, and never waits without a deadline and browser yield.
+The page reports requested, delivered, submitted, and measured quantities separately, labels shown unavailable, computes walls from live facts and fixed type ceilings, performs no measure-first admission, preserves controls across refusal, guards every asynchronous publication by generation, and never waits without a deadline and browser yield.
 
 Browser numbers remain `requires visible replay` until a visible replay supplies them, and arithmetic is labeled arithmetic with its formula.
 
@@ -309,7 +313,11 @@ The SCRATCH-to-DATA texture copy and ping-pong fallback are paid on the dated ta
 
 The effective maximum safe DATA allocation is not exposed as free VRAM, so configured byte budget, successful texture creation, allocator capacity, and driver allocation failure cannot be collapsed into one predictive number.
 
-Multi-page Modes B and C require one fragment pass per page pair plus GPU output movement on the default path; pass, copy, and state-diff costs may erase a capacity benefit as a throughput benefit, and capacity rather than speed is the claim until measured.
+Multi-page Modes B and C require one fragment pass per page pair plus GPU output movement on the default path; a 2026-09-02 hidden Firefox-pane observation at step 6 recorded Mode C producing 729,000 edges in 12 compute passes with 26 copy commands and 23,328,000 GPU-copy bytes, yet its 17.1 ms warmed single frame was faster than layer's 25.7 and 30.3 ms observations and Mode A's 33.4 and 45.8 ms observations, so copy did not erase throughput at that rung, while scaling and causal isolation remain unresolved and every number requires visible replay.
+
+The same hidden-pane walk used `ANGLE (Intel, Mesa Intel(R) Graphics (MTL), OpenGL ES 3.2)`, backend Gl, heap 512 by 512 by 16, 0.1 ms timer quantum, and 0.1 ms zero-timeout latency; the console was clean, all paths rendered, controls held the request, and the page showed wall arithmetic, 192 bytes per frame, and paid SCRATCH copy.
+
+Cold observations are evidence for the warm-up rule rather than timing claims: step 6 first frames included Mode C at 54.0 ms, layer at 140.1 ms, and Mode A at 99.0 ms before lower later frames, while step 1 Mode A immediately after load recorded 412.2, 102.0, and 993.1 ms before later 33.5, 8.9, and 9.0 ms observations; all were hidden-pane single-frame observations and require visible replay.
 
 The span-directory UBO introduces a second finite metadata WALL and uniform dynamic-indexing cost; Mode C versus layer prices the resulting handle and allocation path, while runtime facts expose directory consumption and padding waste.
 
