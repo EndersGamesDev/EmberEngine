@@ -21,16 +21,16 @@ use serde::Serialize;
 use wasm_bindgen::prelude::*;
 use wgpu::util::DeviceExt as _;
 
+use crate::conformance::{
+    IMAGE_BYTES, IMAGE_BYTES_PER_ROW, IMAGE_HEIGHT, IMAGE_WIDTH, ImageComparison,
+    NumericComparison, RECORD_BYTES, RECORD_STRIDE, compare_images, compare_records,
+    deterministic_indices,
+};
 use crate::{
     BOX_INDICES, ComparatorWork, DataSpan, DialectLimits, DispatchPlan, EqualWorkSignature,
     FrameUniform, KernelDesc, ModeCFrameUniform, RegisteredKernel, SpanArena, StaticHeaders,
     box_vertices, frame_for, layer_comparator_draw_shader, layer_comparator_kernel, mode_a_records,
     mode_a_shader, mode_c_register, mode_c_shader,
-};
-use crate::conformance::{
-    IMAGE_BYTES, IMAGE_BYTES_PER_ROW, IMAGE_HEIGHT, IMAGE_WIDTH, ImageComparison,
-    NumericComparison, RECORD_BYTES, RECORD_STRIDE, compare_images, compare_records,
-    deterministic_indices,
 };
 
 const HEAP_SIDE: u16 = 512;
@@ -1909,13 +1909,7 @@ impl LatticeLab {
                         y: index / step.side,
                         z: 0,
                     };
-                    Self::copy_record(
-                        &mut encoder,
-                        &step.midpoint,
-                        origin,
-                        &buffer,
-                        sample * 2,
-                    );
+                    Self::copy_record(&mut encoder, &step.midpoint, origin, &buffer, sample * 2);
                     Self::copy_record(
                         &mut encoder,
                         &step.orientation,
@@ -2196,8 +2190,9 @@ async fn run_conformance(
     let counts_match = mode_c_report.delivered_edges == layer_report.delivered_edges;
     let signatures_match = mode_c_report.equal_work_signature == layer_report.equal_work_signature;
     let numeric = match (mode_c_records, layer_records) {
-        (Some(mode_c), Some(layer)) => compare_records(&mode_c, &layer, indices)
-            .map_err(LatticeError::Conformance)?,
+        (Some(mode_c), Some(layer)) => {
+            compare_records(&mode_c, &layer, indices).map_err(LatticeError::Conformance)?
+        }
         _ => NumericComparison {
             sampled_indices: indices,
             compared_records: 0,
