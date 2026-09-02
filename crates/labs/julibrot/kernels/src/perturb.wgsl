@@ -138,7 +138,7 @@ fn kernel(index: u32, uniforms: PerturbUniform) -> PerturbResult {
         }
         var advance_reference = reference;
         if (perturb_norm(z) < perturb_norm(represented_delta)) {
-            if (rebases >= 16777216u) {
+            if (rebases >= 16777215u) {
                 return perturb_glitch(rebases);
             }
             let minimum_exponent = -2147483647i - 1i;

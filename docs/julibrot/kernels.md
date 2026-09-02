@@ -135,6 +135,8 @@ Every interface in this section is this slice's side of the shared contract and 
 
 `EscapeParams` is the CPU-facing `#[repr(C)]` record `{ max_iter: u32, bailout: f32 }`, size eight and alignment four; `max_iter` is requested iterations, `bailout` is the squared-radius value and must be exactly `256.0f32`, and uniform packing supplies explicit padding rather than transmuting this record.
 
+`ScaleSplit` is the math-owned CPU record `{ mantissa: f32, exponent: i32 }` with no byte ABI; it represents `pixel_scale = mantissa·2^exponent`, requires `mantissa ∈ [0.5,1)`, and app may re-export or alias the name without changing the kernels type.
+
 `GridExtent` is the CPU-facing `#[repr(C)]` record `{ width: u32, height: u32 }`, size eight and alignment four, measured in pixels; both fields must be nonzero and their checked product must fit `u32` before any allocation or dispatch.
 
 ### 3.2 Worker and owner to kernels: reference orbit
@@ -232,9 +234,9 @@ Every `DispatchFacts` byte and count is arithmetic from the accepted plan or a c
 
 `JulibrotKernels::allocate_grid(executor: &mut ember_lab_heap::GpuKernelExecutor, plan: &RefinementPlan) -> Result<EscapeGrid, KernelError>` allocates one Final-capacity `DataSpan`, asks `prefix_headers` for all three static header sets, uploads them once, and returns no partially allocated value on failure.
 
-`JulibrotKernels::encode_shallow(&self, executor: &ember_lab_heap::GpuKernelExecutor, encoder: &mut wgpu::CommandEncoder, grid: &mut EscapeGrid, owner_epoch: u64, level: RefinementLevel, plane: &Plane, centre: &CentreSplit, zoom_log2: f64, params: EscapeParams) -> Result<DispatchFacts, KernelError>` packs the 96-byte uniform, encodes page passes and exact-region copies, and tags the arithmetic receipt with the supplied epoch without using epoch equality as a compatibility test.
+`JulibrotKernels::encode_shallow(&self, executor: &ember_lab_heap::GpuKernelExecutor, encoder: &mut wgpu::CommandEncoder, grid: &mut EscapeGrid, owner_epoch: u64, level: RefinementLevel, plane: &Plane, centre: &CentreSplit, pixel_scale: f32, params: EscapeParams) -> Result<DispatchFacts, KernelError>` packs the 96-byte uniform, encodes page passes and exact-region copies, and tags the arithmetic receipt with the supplied epoch without using epoch equality as a compatibility test.
 
-`JulibrotKernels::encode_perturbation(&self, executor: &ember_lab_heap::GpuKernelExecutor, encoder: &mut wgpu::CommandEncoder, grid: &mut EscapeGrid, owner_epoch: u64, level: RefinementLevel, plane: &Plane, zoom_log2: f64, params: EscapeParams, reference: ReferenceOrbitInput<'_>) -> Result<DispatchFacts, KernelError>` decomposes scale into the 64-byte mantissa/exponent uniform and performs the one-span gather dispatch against the accepted reference generation.
+`JulibrotKernels::encode_perturbation(&self, executor: &ember_lab_heap::GpuKernelExecutor, encoder: &mut wgpu::CommandEncoder, grid: &mut EscapeGrid, owner_epoch: u64, level: RefinementLevel, plane: &Plane, scale: ScaleSplit, params: EscapeParams, reference: ReferenceOrbitInput<'_>) -> Result<DispatchFacts, KernelError>` packs the math-owned scale split into the 64-byte mantissa/exponent uniform and performs the one-span gather dispatch against the accepted reference generation.
 
 `JulibrotKernels::free_grid(executor: &mut ember_lab_heap::GpuKernelExecutor, grid: EscapeGrid) -> Result<(), KernelError>` returns the span and directory entries transactionally after app and present have relinquished all borrows.
 
