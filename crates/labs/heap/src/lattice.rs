@@ -175,12 +175,7 @@ pub fn frame_for(_object: &Prism, axes: [u32; 5], time: f32, aspect: f32) -> Fra
         projection_spacing: [8.0, 8.0, LATTICE_SPACING as f32, 1.0e-4],
         render: [0.0, aspect, 0.0, time],
         axes_four: std::array::from_fn(|axis| axes[axis] as f32),
-        axis_fifth_range: [
-            axes[4] as f32,
-            rawgl_hue_extent(axes),
-            0.0,
-            0.0,
-        ],
+        axis_fifth_range: [axes[4] as f32, rawgl_hue_extent(axes), 0.0, 0.0],
         basis_four,
         basis_fifth,
     }

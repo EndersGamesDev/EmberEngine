@@ -384,7 +384,10 @@ mod tests {
             .validate(&module)
             .expect("presentation WGSL validates");
             for literal in &required {
-                assert!(source.contains(*literal), "missing rawgl literal: {literal}");
+                assert!(
+                    source.contains(*literal),
+                    "missing rawgl literal: {literal}"
+                );
             }
         }
 
