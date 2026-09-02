@@ -128,7 +128,7 @@ impl SceneLedger {
         }
     }
 
-    pub fn mark_replaced(&mut self) {
+    pub const fn mark_replaced(&mut self) {
         if let Some(pending) = &mut self.pending {
             pending.drop_reason = Some(DropReason::ReplacedMain);
         }
@@ -138,6 +138,7 @@ impl SceneLedger {
         self.retained.as_ref()
     }
 
+    #[cfg(test)]
     pub const fn pending(&self) -> Option<&PendingScene> {
         self.pending.as_ref()
     }
