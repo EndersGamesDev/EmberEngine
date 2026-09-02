@@ -16,6 +16,8 @@ pub const MIN_MAX_ITER: u32 = 64;
 pub const BUFFER_RETURN_DEADLINE_US: u32 = 4_000_000;
 /// Fixed displayed orbit budget in microseconds per second.
 pub const ORBIT_BUDGET_US_PER_SECOND: u32 = 250_000;
+/// Highest fully implemented worker phase exposed to app integration.
+pub const JULIBROT_PHASE_IMPLEMENTED: u32 = 3;
 
 /// Startup transport lowering.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,14 +66,6 @@ impl WorkerChannel {
         config: WorkerConfig,
         mode: WorkerMode,
     ) -> Result<(OwnerEndpoint, ProducerEndpoint), ChannelError> {
-        if mode == WorkerMode::WebWorker {
-            return Err(ChannelError::new(
-                ErrorCode::BadVersion,
-                mode as u32,
-                JULIBROT_PHASE_IMPLEMENTED,
-                WorkerMode::SameThread as u32,
-            ));
-        }
         if config.max_iter < MIN_MAX_ITER {
             return Err(ChannelError::new(
                 ErrorCode::BadLength,
@@ -113,7 +107,19 @@ impl WorkerChannel {
     }
 }
 
-const JULIBROT_PHASE_IMPLEMENTED: u32 = 1;
+/// Selects the same-thread test lowering only for the exact page flag.
+#[must_use]
+pub fn worker_mode_from_search(search: &str) -> WorkerMode {
+    let query = search.strip_prefix('?').unwrap_or(search);
+    if query
+        .split('&')
+        .any(|field| field == "worker=same-thread")
+    {
+        WorkerMode::SameThread
+    } else {
+        WorkerMode::WebWorker
+    }
+}
 
 /// Main-thread side of the channel.
 #[derive(Debug)]
@@ -198,6 +204,23 @@ impl OwnerEndpoint {
     #[must_use]
     pub fn pending_request_depth(&self) -> u32 {
         u32::from(self.core.borrow().pending_request.is_some())
+    }
+
+    /// Closes a reconciled logical channel without waiting or spinning.
+    ///
+    /// Browser ownership waits are driven by `worker_main` and bounded by the app's four-second
+    /// deadline; this same-thread lowering reports the first outstanding pool immediately.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BufferStarved` while any request or orbit slot remains away from its startup owner.
+    pub fn shutdown(&self) -> Result<(), ChannelError> {
+        let mut core = self.core.borrow_mut();
+        if !core.is_reconciled() {
+            return Err(ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0));
+        }
+        core.closed = true;
+        Ok(())
     }
 }
 
@@ -565,7 +588,7 @@ impl<T> BoundedQueue<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SubmitOutcome, WorkerChannel, WorkerConfig, WorkerMode};
+    use super::{SubmitOutcome, WorkerChannel, WorkerConfig, WorkerMode, worker_mode_from_search};
     use crate::{
         CoordinateDescriptor, EncodedCentre, OrbitDisposition, OrbitReason, OrbitRequest,
         ReferenceOrbitRecord,
@@ -634,6 +657,16 @@ mod tests {
         assert_eq!(owner.submit(request(8, 2)), SubmitOutcome::Coalesced);
         assert_eq!(owner.latest_generation(), 9);
         assert_eq!(producer.mode(), WorkerMode::SameThread);
+    }
+
+    #[test]
+    fn web_mode_and_exact_same_thread_page_flag_are_accepted() {
+        let (owner, producer) =
+            WorkerChannel::new(WorkerConfig { max_iter: 64 }, WorkerMode::WebWorker).unwrap();
+        assert_eq!(producer.mode(), WorkerMode::WebWorker);
+        assert_eq!(worker_mode_from_search("?worker=same-thread"), WorkerMode::SameThread);
+        assert_eq!(worker_mode_from_search("?worker=web"), WorkerMode::WebWorker);
+        assert_eq!(owner.shutdown(), Ok(()));
     }
 
     const fn zero_record() -> ReferenceOrbitRecord {

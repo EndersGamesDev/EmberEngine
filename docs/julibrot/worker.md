@@ -289,7 +289,7 @@ Consumers never use owner-epoch equality as a compatibility test: each HOT or MA
 
 `OwnerEndpoint::next_arrival() -> Option<OrbitResponseView>` is non-blocking on same-thread and event-driven on web; a response owns its `OrbitLease` until explicitly credited.
 
-`OwnerEndpoint::shutdown()` sends `Shutdown`, stops accepting requests, waits at most the configured buffer-return deadline for four-buffer reconciliation, and reports any missing pool/slot instead of hanging.
+`OwnerEndpoint::shutdown()` closes an already reconciled same-thread channel or immediately returns `BufferStarved`; the browser owner sends `Shutdown`, stops accepting requests, and drives event-based reconciliation for at most the app-enforced four-second buffer-return deadline, after which it reports the missing pool/slot rather than hanging.
 
 `ProducerEndpoint::run()` dispatches one request at a time through `ReferenceOrbitTask`, applies credit admission and cooperative cancellation, and stops only after returning `ShutdownAck` or a typed channel failure.
 
@@ -298,6 +298,8 @@ Consumers never use owner-epoch equality as a compatibility test: each HOT or MA
 `ComputedOrbit` and `ReferenceOrbitRecord` are re-exported from math rather than copied; the completed `Vec` is reusable linear-memory storage for the one transport copy, and transport itself performs no per-message allocation.
 
 The Web Worker lowering backs endpoints with the four transferable `ArrayBuffer` objects; `SameThread` backs the identical ownership states with four preallocated byte buffers moved through bounded queues, bypasses the wasm-boundary memcpy only because producer and consumer share linear memory, and changes no ordering, generation, credit, or drain result.
+
+`JULIBROT_PHASE_IMPLEMENTED = 3`; on wasm32, `allocate_transfer_buffer(pool:u32,slot:u32,max_iter:u32)->Result<ArrayBuffer,JsValue>` creates the exact trailer-bearing standalone buffers and `worker_main(expected_abi:u32)->Result<u32,JsValue>` installs the heap panic hook, refuses ABI skew or a non-worker global, receives only transferred buffers, cooperatively runs the latest request, and acknowledges shutdown only after both orbit slots return.
 
 ### 3.8 Facts supplied to app
 
@@ -420,7 +422,7 @@ Phase 4 adds fixed-policy credit/token-bucket shaping, facts snapshots, app/kern
 
 The worker slice is therefore budgeted at about 2,060 implementation and test lines; generated wasm glue and downstream app, kernel, heap, and presentation code are excluded.
 
-Implementation stop after Phase 2: the pinned wire codec, four-slot ownership model, same-thread channel, Copy-cell owner, two drains, generation checks, accepted-reference shift publication, compact registry, canonical Astro-float adapter, and cooperatively cancellable validated reference task are implemented; Phase 3 cannot install the field-paid heap panic reporter because `lattice_gpu::install_heap_lattice_panic_hook` is inside a private module and is not re-exported by `ember-lab-heap`, while copying or independently replacing it is forbidden.
+Implementation progress through Phase 3: the Phase 2 core plus `worker_main`, field-paid heap panic-hook installation, standalone transferable allocation, one-pass orbit copy, cooperative browser-task cancellation, exact slot detachment, ABI refusal, page-flag lowering, and shutdown reconciliation are implemented; browser detachment and timing claims remain visible-replay evidence.
 
 ## 8. Unresolved joint-review findings
 
@@ -429,4 +431,3 @@ Implementation stop after Phase 2: the pinned wire codec, four-slot ownership mo
 - Successive accepted references may arrive before present promotes a retained scene; app and present must prove that composing queued `reference_shift_px` values re-bases that scene exactly once.
 - Browser transfer proves detachment and trailer continuity but cannot reveal an engine-internal physical copy; evidence must keep the claim at ownership transfer plus one explicit wasm memcpy.
 - Coarse `performance.now` resolution can yield a measured zero for short shallow references; implementation must choose and label a timer-unavailable shaping state without inventing elapsed time.
-- Phase 3 requires `ember_lab_heap::install_heap_lattice_panic_hook` as a public wasm32 re-export before `worker_main` can satisfy the inherited panic-hook law without copying heap behavior.

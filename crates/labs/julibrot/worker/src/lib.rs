@@ -3,6 +3,8 @@
 #![deny(missing_docs)]
 
 mod channel;
+#[cfg(target_arch = "wasm32")]
+mod browser;
 pub(crate) mod codec;
 mod compute;
 mod error;
@@ -12,10 +14,12 @@ pub(crate) mod slots;
 pub(crate) mod wire;
 
 pub use channel::{
-    BUFFER_RETURN_DEADLINE_US, MIN_MAX_ITER, ORBIT_BUDGET_US_PER_SECOND, OrbitLease,
-    OrbitResponseView, OwnerEndpoint, ProducerEndpoint, RequestLease, SubmitOutcome, WorkerChannel,
-    WorkerConfig, WorkerMode,
+    BUFFER_RETURN_DEADLINE_US, JULIBROT_PHASE_IMPLEMENTED, MIN_MAX_ITER,
+    ORBIT_BUDGET_US_PER_SECOND, OrbitLease, OrbitResponseView, OwnerEndpoint, ProducerEndpoint,
+    RequestLease, SubmitOutcome, WorkerChannel, WorkerConfig, WorkerMode, worker_mode_from_search,
 };
+#[cfg(target_arch = "wasm32")]
+pub use browser::{allocate_transfer_buffer, worker_main};
 pub use codec::{CoordinateDescriptor, EncodedCentre, OrbitReason, OrbitRequest};
 pub use compute::{
     MathFailureCode, MonotonicClock, ORBIT_CHUNK_MAX_ITERATIONS, ORBIT_CHUNK_MAX_US, OrbitTaskPoll,

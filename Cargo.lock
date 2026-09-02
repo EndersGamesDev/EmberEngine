@@ -1211,6 +1211,11 @@ name = "ember-julibrot-worker"
 version = "0.1.0"
 dependencies = [
  "ember-julibrot-math",
+ "ember-lab-heap",
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

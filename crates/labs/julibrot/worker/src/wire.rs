@@ -335,6 +335,17 @@ impl WireBuffer {
         Ok(Self { bytes })
     }
 
+    /// Adopts one copied standalone buffer after validating its immutable trailer.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn from_transferred(bytes: Box<[u8]>) -> Result<Self, ChannelError> {
+        if bytes.len() < BUFFER_OVERHEAD_BYTES {
+            return Err(short_buffer(BUFFER_OVERHEAD_BYTES, bytes.len()));
+        }
+        let buffer = Self { bytes };
+        buffer.trailer()?;
+        Ok(buffer)
+    }
+
     /// Returns the full allocated byte count.
     pub(crate) const fn capacity(&self) -> usize {
         self.bytes.len()
