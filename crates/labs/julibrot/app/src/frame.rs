@@ -318,7 +318,10 @@ mod browser {
                     deadline_ms: PresentConfig::V1_FENCE_DEADLINE_MS,
                 });
             }
-            runtime.check_device("Julibrot refresh")?;
+            if let Err(error) = runtime.check_device("Julibrot refresh") {
+                let _dropped = runtime.drop_pending_surface();
+                return Err(error);
+            }
             self.refresh_id = self
                 .refresh_id
                 .checked_add(1)
@@ -445,6 +448,7 @@ mod browser {
             events: Vec<PresentEvent>,
         ) -> Result<bool, AppError> {
             let mut presented = false;
+            let mut refusal = None;
             for event in events {
                 match event {
                     PresentEvent::SceneCompleted { frame } => {
@@ -502,11 +506,13 @@ mod browser {
                                 }
                             }
                         }
-                        return Err(fence_error(kind, reason, polls, wall_ms));
+                        if refusal.is_none() {
+                            refusal = Some(fence_error(kind, reason, polls, wall_ms));
+                        }
                     }
                 }
             }
-            Ok(presented)
+            refusal.map_or(Ok(presented), Err)
         }
 
         fn prepare_due_level(&mut self) {

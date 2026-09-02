@@ -263,6 +263,15 @@ impl BrowserRuntime {
         matches!(self.surfaces.refuse(warp_id), SurfaceAction::Drop(_))
     }
 
+    /// Drops whichever surface image is pending after a device-level terminal failure.
+    #[must_use]
+    pub(crate) fn drop_pending_surface(&mut self) -> bool {
+        let Some(warp_id) = self.surfaces.pending_warp_id() else {
+            return false;
+        };
+        self.refuse_warp(warp_id)
+    }
+
     /// Returns whether one acquired image remains keyed to a pending warp fence.
     #[must_use]
     pub(crate) fn has_pending_surface(&self) -> bool {
