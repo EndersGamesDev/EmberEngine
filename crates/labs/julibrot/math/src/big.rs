@@ -541,12 +541,8 @@ mod tests {
         let encoded = encode_big_scalar(&wide)?;
         // The three shallow-through-deep plans seen in a browser replay, plus the navigator's own.
         for (requested, delivered) in [(47, 64), (67, 128), (107, 128), (1_024, 1_024)] {
-            let value = decode_big_scalar(
-                encoded.sign,
-                encoded.exponent,
-                &encoded.limbs,
-                requested,
-            )?;
+            let value =
+                decode_big_scalar(encoded.sign, encoded.exponent, &encoded.limbs, requested)?;
             assert_eq!(value.precision_bits(), delivered, "requested {requested}");
             let zero = decode_big_scalar(0, 0, &[], requested)?;
             assert_eq!(zero.precision_bits(), delivered, "zero at {requested}");

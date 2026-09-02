@@ -210,6 +210,46 @@ mod tests {
     }
 
     #[test]
+    fn navigation_holds_every_coordinate_at_the_declared_precision() -> Result<(), MathError> {
+        let plane = julia_plane()?;
+        // Canvas-relative CSS pixels scaled by 960/1022.794: full 53-bit mantissas.
+        let pixel_ratio = 960.0_f64 / 1_022.794_f64;
+        for requested in [47_u32, 64, 90, 128, 384, 1_024] {
+            let mut centre = BigCentre::from_f64([0.0; 4], requested)?;
+            let declared = centre.precision_bits;
+            assert_eq!(declared, (requested + 63) & !63, "requested {requested}");
+            let mut zoom_log2 = 0.0_f64;
+            for tick in 1..=6_i32 {
+                let after = zoom_log2 + 0.2;
+                centre.apply_navigation(
+                    &NavigationDelta {
+                        pan_canvas_px: [f64::from(tick) * pixel_ratio, -3.5 * pixel_ratio],
+                        zoom_delta_log2: 0.2,
+                        anchor_canvas_px: [
+                            173.0 * pixel_ratio,
+                            f64::from(-91 * tick) * pixel_ratio,
+                        ],
+                    },
+                    &plane,
+                    zoom_log2,
+                    after,
+                    960,
+                )?;
+                zoom_log2 = after;
+                assert_eq!(centre.precision_bits, declared, "requested {requested}");
+                for (axis, coordinate) in centre.coords.iter().enumerate() {
+                    assert_eq!(
+                        coordinate.precision_bits(),
+                        declared,
+                        "requested {requested}, tick {tick}, axis {axis}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn drag_is_exactly_negative_current_scale_times_plane_motion() -> Result<(), MathError> {
         let plane = julia_plane()?;
         let zoom = 40.0;
