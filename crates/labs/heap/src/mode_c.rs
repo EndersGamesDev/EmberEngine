@@ -241,9 +241,12 @@ pub fn mode_c_pose(object: &Prism, axes: [u32; 5], time: f32, index: u64) -> Edg
     EdgePose {
         midpoint: std::array::from_fn(|axis| f32::midpoint(first.0[axis], second.0[axis])),
         direction: delta.map(|value| value / safe_length),
-        length: if first.2 && second.2 { edge_length } else { -1.0 },
-        hue: (f32::midpoint(first.1, second.1) / (2.0 * uniform.fifth_range) + 0.5)
-            .clamp(0.0, 1.0),
+        length: if first.2 && second.2 {
+            edge_length
+        } else {
+            -1.0
+        },
+        hue: (f32::midpoint(first.1, second.1) / (2.0 * uniform.fifth_range) + 0.5).clamp(0.0, 1.0),
     }
 }
 
@@ -300,7 +303,10 @@ mod tests {
         let heap = EqualWorkSignature::for_work(&object, axes, 1.25);
         let layer = EqualWorkSignature::for_work(&object, axes, 1.25);
         assert_eq!(heap, layer);
-        assert_ne!(heap.pose_hash, EqualWorkSignature::for_work(&object, axes, 1.5).pose_hash);
+        assert_ne!(
+            heap.pose_hash,
+            EqualWorkSignature::for_work(&object, axes, 1.5).pose_hash
+        );
         let pose = mode_c_pose(&object, axes, 1.25, 728_999);
         assert!(pose.length.is_finite());
         assert!((0.0..=1.0).contains(&pose.hue));
