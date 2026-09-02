@@ -197,7 +197,11 @@ impl SpanDirectory {
         for record in &self.records {
             words.extend(record.unwrap_or_else(PackedSpan::zeroed).words());
         }
-        words.extend(self.handles.iter().map(|handle| handle.map_or(0, Handle::raw)));
+        words.extend(
+            self.handles
+                .iter()
+                .map(|handle| handle.map_or(0, Handle::raw)),
+        );
         words
     }
 }
@@ -224,10 +228,7 @@ impl SpanArena {
     ) -> Result<Self, SpanError> {
         Ok(Self {
             heap: HeapAllocator::new(side, layers, descriptor_capacity)?,
-            directory: SpanDirectory::from_binding_limit(
-                directory_binding_bytes,
-                span_capacity,
-            )?,
+            directory: SpanDirectory::from_binding_limit(directory_binding_bytes, span_capacity)?,
         })
     }
 
@@ -491,8 +492,8 @@ mod tests {
 
     #[test]
     fn constant_class_span_crosses_layers_by_quotient_and_remainder() {
-        let mut arena = SpanArena::new(8, 2, 32, 16 * 16 + 4 * 16, 16)
-            .expect("arena configuration fits");
+        let mut arena =
+            SpanArena::new(8, 2, 32, 16 * 16 + 4 * 16, 16).expect("arena configuration fits");
         let [first, second] = arena
             .allocate_pair(70, 4)
             .expect("ten class-four pages fit across two heaps");
@@ -516,13 +517,15 @@ mod tests {
 
     #[test]
     fn paired_dry_run_is_atomic_and_directory_reclaims_runs() {
-        let mut arena = SpanArena::new(8, 1, 16, 16 * 4 + 4 * 8, 4)
-            .expect("arena configuration fits");
+        let mut arena =
+            SpanArena::new(8, 1, 16, 16 * 4 + 4 * 8, 4).expect("arena configuration fits");
         assert_eq!(arena.plan_paired_copies(99, 8, 4), 4);
         let before = arena.directory().packed_words();
         assert!(arena.allocate_pair(40, 4).is_err());
         assert_eq!(arena.directory().packed_words(), before);
-        let pair = arena.allocate_pair(32, 4).expect("four pages fit atomically");
+        let pair = arena
+            .allocate_pair(32, 4)
+            .expect("four pages fit atomically");
         for span in pair {
             arena.free(span).expect("directory run is reclaimed");
         }
@@ -531,9 +534,11 @@ mod tests {
 
     #[test]
     fn directory_packing_and_static_headers_match_the_ubo_contract() {
-        let mut arena = SpanArena::new(16, 1, 16, 16 * 4 + 4 * 8, 4)
-            .expect("arena configuration fits");
-        let [span, other] = arena.allocate_pair(300, 16).expect("two pages per span fit");
+        let mut arena =
+            SpanArena::new(16, 1, 16, 16 * 4 + 4 * 8, 4).expect("arena configuration fits");
+        let [span, other] = arena
+            .allocate_pair(300, 16)
+            .expect("two pages per span fit");
         let words = arena.directory().packed_words();
         let record = span.directory_index as usize * 4;
         assert_eq!(
