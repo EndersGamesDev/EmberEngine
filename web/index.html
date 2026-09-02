@@ -442,13 +442,22 @@
     // twice, and the player cares about the box. Players add up across its
     // servers, the round trip is the best of them, and the build is the newest
     // one it reported — a host mid-redeploy can briefly disagree with itself.
+    //
+    // Nameless hosts merge on the candidate's ENTRY OBJECT, not on its empty
+    // name. Both games of the legacy machine read the one entry `loadBook`
+    // built, so they still fold into one row; the manual override builds its
+    // own object and gets its own row, instead of the two being welded into a
+    // machine that appears to run both games and has neither address.
+    // `row.key` stays a string — the picker uses it as an option value.
+    const rowKey = (c) => (c ? c.bookName || c.entry : null);
     function stripRows() {
       const byHost = new Map();
       for (const [id, r] of perGame) {
+        const chosenKey = rowKey(r.chosen);
         for (const c of r.candidates) {
-          const key = c.bookName;
+          const key = rowKey(c);
           const row = byHost.get(key) || {
-            key, name: c.name, version: c.version, versionNum: -1,
+            key: c.bookName, name: c.name, version: c.version, versionNum: -1,
             commit: c.commit, players: 0, rtt: null, games: [], preferredFor: [],
           };
           if (c.name) row.name = c.name;
@@ -462,7 +471,7 @@
             row.rtt = row.rtt === null ? c.rttMs : Math.min(row.rtt, c.rttMs);
           }
           row.games.push(id);
-          if (r.chosen && r.chosen.bookName === key) row.preferredFor.push(id);
+          if (chosenKey === key) row.preferredFor.push(id);
           byHost.set(key, row);
         }
       }
@@ -624,6 +633,11 @@
       }));
     }
 
+    // The catch is defence in depth and is load-bearing: this runs every ten
+    // seconds against bytes a third party serves, and one throw anywhere in
+    // here would leave the strip and the lobby list frozen on whatever they
+    // last rendered, permanently — `busy` is cleared by the `finally`, but a
+    // failure that reproduces reproduces on every tick. Say so instead.
     async function refresh() {
       if (busy) return;
       busy = true;
@@ -631,6 +645,13 @@
         const { pin, ov } = await discoverHosts();
         renderHosts(stripRows(), pin, ov);
         await renderLobbies();
+      } catch (e) {
+        console.error(e);
+        renderHosts([], readPin(), override());
+        const note = document.createElement('span');
+        note.id = 'list-note';
+        note.textContent = 'could not read the address book — retrying';
+        $('lobby-rows').replaceChildren(note);
       } finally {
         busy = false;
       }

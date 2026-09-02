@@ -7,6 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
   PIN_KEY,
@@ -692,4 +693,31 @@ test('renderChip: names the host, or says there is none', () => {
   // The legacy entry has no name; the chip still says something true.
   renderChip(el, { name: '', version: '', rttMs: null, commit: '', url: 'ws://localhost:7780' });
   assert.equal(el.textContent, 'server: server');
+});
+
+// ---- the catalogue the hub routes on -------------------------------------
+// Not hosts.js, but the two invariants the hub's routing assumes and cannot
+// check at runtime: a wrong answer here is a player launched into the wrong
+// build or into a stranger's lobby, and the browser is a poor place to find
+// that out.
+
+test('games.json: exactly one live version per game', () => {
+  const catalog = JSON.parse(readFileSync(new URL('./games.json', import.meta.url), 'utf8'));
+  for (const g of catalog.games) {
+    const live = g.versions.filter((v) => v.live).map((v) => v.v);
+    assert.equal(live.length, 1, `${g.id} has ${live.length} live versions: ${live.join(', ')}`);
+  }
+});
+
+test('games.json: a handover target declares the protocol it is a target for', () => {
+  const catalog = JSON.parse(readFileSync(new URL('./games.json', import.meta.url), 'utf8'));
+  for (const g of catalog.games) {
+    for (const v of g.versions) {
+      if (!v.handover) continue;
+      // A frozen page may keep the flag — it still reads `pending.ws` — but
+      // without a proto the hub can never match a lobby to it, so the flag
+      // would be a lie by omission.
+      assert.equal(typeof v.proto, 'number', `${g.id} ${v.v} is a handover target with no proto`);
+    }
+  }
 });
