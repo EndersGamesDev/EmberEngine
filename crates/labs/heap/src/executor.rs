@@ -134,6 +134,28 @@ impl HeaderReservations {
         self.occupied.iter().filter(|occupied| !**occupied).count() as u32
     }
 
+    fn longest_free_run(&self) -> u32 {
+        let mut current = 0_u32;
+        let mut longest = 0_u32;
+        for occupied in &self.occupied {
+            if *occupied {
+                current = 0;
+            } else {
+                current += 1;
+                longest = longest.max(current);
+            }
+        }
+        longest
+    }
+
+    fn capacity_error(&self, requested_sets: u32) -> DispatchError {
+        DispatchError::HeaderSetCapacity {
+            requested_sets,
+            total_free_sets: self.free_sets(),
+            longest_free_run: self.longest_free_run(),
+        }
+    }
+
     fn find(&self, executor: &Arc<()>, headers: &[StaticHeaders]) -> Option<HeaderSetHandle> {
         self.slots.iter().enumerate().find_map(|(slot, entry)| {
             let reservation = entry.reservation.as_ref()?;
@@ -151,11 +173,11 @@ impl HeaderReservations {
         let run = self
             .occupied
             .windows(headers.len())
-            .position(|window| window.iter().all(|occupied| !*occupied))
-            .ok_or_else(|| DispatchError::HeaderSetCapacity {
-                requested_sets: requested,
-                available_sets: self.free_sets(),
-            })? as u32;
+            .position(|window| window.iter().all(|occupied| !*occupied));
+        let Some(run) = run else {
+            return Err(self.capacity_error(requested));
+        };
+        let run = run as u32;
         let slot = self
             .slots
             .iter()
@@ -1023,10 +1045,10 @@ impl GpuKernelExecutor {
             }
         }
         if sets.len() > self.config.max_header_sets as usize {
-            return Err(DispatchError::HeaderSetCapacity {
-                requested_sets: sets.len() as u32,
-                available_sets: self.header_reservations.free_sets(),
-            });
+            return Err(
+                self.header_reservations
+                    .capacity_error(sets.len() as u32),
+            );
         }
         Ok(())
     }
@@ -1337,7 +1359,39 @@ mod tests {
             reservations.reserve(&executor, &sets[..1]),
             Err(DispatchError::HeaderSetCapacity {
                 requested_sets: 1,
-                available_sets: 0,
+                total_free_sets: 0,
+                longest_free_run: 0,
+            })
+        ));
+    }
+
+    #[test]
+    fn fragmented_header_capacity_reports_total_free_and_longest_run() {
+        let mut arena = SpanArena::new(8, 1, 16, 512, 8).expect("arena");
+        let spans = (0..6)
+            .map(|_| arena.allocate_span(1, 1).expect("one record span"))
+            .collect::<Vec<_>>();
+        let headers = spans
+            .iter()
+            .map(|span| StaticHeaders::for_span(span, 256).expect("one page header"))
+            .collect::<Vec<_>>();
+        let executor = Arc::new(());
+        let mut reservations = HeaderReservations::new(5, 1, 256);
+        for header in &headers[..5] {
+            reservations
+                .reserve(&executor, std::slice::from_ref(header))
+                .expect("one set region fits");
+        }
+        reservations.release_span(headers[1].owner());
+        reservations.release_span(headers[3].owner());
+        assert_eq!(reservations.free_sets(), 2);
+        assert_eq!(reservations.longest_free_run(), 1);
+        assert!(matches!(
+            reservations.reserve(&executor, &[headers[5].clone(), headers[5].clone()]),
+            Err(DispatchError::HeaderSetCapacity {
+                requested_sets: 2,
+                total_free_sets: 2,
+                longest_free_run: 1,
             })
         ));
     }

@@ -159,13 +159,15 @@ pub enum DispatchError {
     },
     /// The fixed header-set regions cannot admit the requested reservation.
     #[error(
-        "header buffer cannot reserve {requested_sets} sets; {available_sets} set regions are free"
+        "header buffer cannot reserve contiguous run of {requested_sets} sets; {total_free_sets} total set regions are free and the longest free run is {longest_free_run}"
     )]
     HeaderSetCapacity {
         /// Contiguous set regions requested.
         requested_sets: u32,
         /// Total currently free set regions.
-        available_sets: u32,
+        total_free_sets: u32,
+        /// Largest currently free contiguous run of set regions.
+        longest_free_run: u32,
     },
     /// A handle came from another executor.
     #[error("header-set handle belongs to another executor")]
