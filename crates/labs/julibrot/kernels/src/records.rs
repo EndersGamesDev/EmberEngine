@@ -1,3 +1,6 @@
+// CPU mirrors intentionally reproduce WGSL's fixed-width integer-to-f32 conversion.
+#![allow(clippy::cast_precision_loss)]
+
 use bytemuck::{Pod, Zeroable};
 use ember_julibrot_math::{CentreSplit, Plane, ScaleSplit};
 use ember_lab_heap::DataSpan;
@@ -270,5 +273,3 @@ mod tests {
         assert!(bottom_left[2..].iter().any(|value| *value != 0.0));
     }
 }
-// CPU mirrors intentionally reproduce WGSL's fixed-width integer-to-f32 conversion.
-#![allow(clippy::cast_precision_loss)]
