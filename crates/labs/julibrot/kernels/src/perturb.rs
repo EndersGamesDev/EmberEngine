@@ -127,7 +127,7 @@ fn normalize_scaled(mut state: ScaledState) -> ScaledState {
     loop {
         let magnitude = robust_norm(state.delta);
         if magnitude == 0.0 || (magnitude >= low && magnitude <= high) {
-            return state;
+            break;
         }
         let (factor, exponent) = if magnitude > high {
             let Some(exponent) = state.exponent.checked_add(64) else {
@@ -158,6 +158,7 @@ fn normalize_scaled(mut state: ScaledState) -> ScaledState {
             return state;
         }
     }
+    state
 }
 
 fn reconstruct(record: ReferenceOrbitRecord) -> [f32; 2] {

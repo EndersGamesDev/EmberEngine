@@ -84,7 +84,7 @@ fn perturb_normalize(
     loop {
         let magnitude = perturb_norm(state.delta);
         if (magnitude == 0.0 || (magnitude >= low && magnitude <= high)) {
-            return state;
+            break;
         }
         if (magnitude > high) {
             if (state.exponent > 2147483583i) {
@@ -114,6 +114,7 @@ fn perturb_normalize(
             return state;
         }
     }
+    return state;
 }
 
 fn perturb_glitch(rebases: u32) -> PerturbResult {
