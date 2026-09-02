@@ -317,17 +317,34 @@ do_up() {
     # anywhere else (fire's deploy hit exactly this on 2026-09-01).
     sleep 15
 
+    probe_and_publish "$WS_URL" "$COMMIT" "$KINGS_PROTO"
+}
+
+# Steps 9 and 10: prove the running server answers through its public URL,
+# then publish that URL. Shared by `up` and `publish`, because the one way a
+# healthy deploy still ends unpublished is DNS: the probe asks for a hostname
+# Cloudflare minted seconds ago, and a resolver that answers NXDOMAIN once
+# keeps answering it for the negative TTL. `publish` retries exactly this
+# half against the pair that is already running, instead of restarting it
+# and minting yet another name.
+probe_and_publish() {
+    local WS_URL="$1" COMMIT="$2" KINGS_PROTO="$3" ok i PAGES_DIR
+
     step "probe THROUGH the public URL"
+    # Two minutes of retries, five seconds apart: long enough for the name to
+    # propagate to a resolver that was not asked too early. If the distro's
+    # resolver has cached a negative answer, point it at a public one
+    # (deploy/wsl/kings-ctl.sh dns) rather than waiting out the TTL.
     ok=""
-    for i in $(seq 1 10); do
+    for i in $(seq 1 24); do
         if sdk kings-probe.sh "$WS_URL" --expect-commit "$COMMIT"; then
             ok=1
             break
         fi
-        sleep 3
+        sleep 5
     done
     if [ -z "$ok" ]; then
-        fail "the tunnel is up but the server never passed the probe through it. Not publishing server.json; the page keeps its previous value."
+        fail "the tunnel is up but the server never passed the probe through it. Not publishing server.json; the page keeps its previous value. Once the name resolves, 'bash deploy/deploy-kings-online.sh publish' finishes this without restarting the pair."
     fi
 
     step "publishing server.json to GitHub Pages"
@@ -361,9 +378,29 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
     echo "   steps: $(printf '%s; ' "${TIMINGS[@]}")total ${SECONDS}s"
 }
 
+# Publish the pair that is ALREADY running: the tunnel's current domain, the
+# server's commit checked by the probe. For the case where `up` built,
+# launched and probed a healthy pair but the public probe lost to DNS.
+do_publish() {
+    local COMMIT KINGS_PROTO TUNNEL WS_URL
+    step "reading the running pair"
+    require_distro
+    ctl server-pid >/dev/null || fail "kings-server is not running; run 'up'"
+    ctl tunnel-pid "$BIND" >/dev/null || fail "the tunnel is not running; run 'up'"
+    TUNNEL="$(ctl tunnel-domain)"
+    [ -n "$TUNNEL" ] || fail "the tunnel log names no trycloudflare domain yet"
+    WS_URL="wss://${TUNNEL#https://}"
+    COMMIT="$(git rev-parse --short HEAD)"
+    KINGS_PROTO="$(read_proto_version "$PROTO_FILE")" || exit 1
+    echo "   $WS_URL, expecting build $COMMIT, kings protocol v$KINGS_PROTO"
+    step_done
+    probe_and_publish "$WS_URL" "$COMMIT" "$KINGS_PROTO"
+}
+
 case "${1:-up}" in
-    up)     do_up ;;
-    down)   do_down ;;
-    status) do_status ;;
-    *)      echo "usage: bash deploy/deploy-kings-online.sh [up|down|status]" >&2; exit 2 ;;
+    up)      do_up ;;
+    down)    do_down ;;
+    status)  do_status ;;
+    publish) do_publish ;;
+    *)       echo "usage: bash deploy/deploy-kings-online.sh [up|down|status|publish]" >&2; exit 2 ;;
 esac
