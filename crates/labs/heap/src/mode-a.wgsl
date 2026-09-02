@@ -83,7 +83,7 @@ fn endpoint(index: u32, digits: vec4<i32>, digit_five: i32) -> Projected {
     return result;
 }
 
-struct VertexOut { @builtin(position) position: vec4<f32>, @location(0) hue: f32, }
+struct VertexOut { @builtin(position) position: vec4<f32>, @location(0) hue: f32, @location(1) light: f32, }
 
 @vertex fn mode_a_vertex(@location(0) local: vec3<f32>, @builtin(instance_index) instance: u32) -> VertexOut {
     let edge_index = instance % 3000u;
@@ -93,32 +93,41 @@ struct VertexOut { @builtin(position) position: vec4<f32>, @location(0) hue: f32
     let digit_five = fifth_digit(copy_index);
     let first = endpoint(u32(edge.x), digits, digit_five);
     let second = endpoint(u32(edge.y), digits, digit_five);
-    let delta = second.point - first.point;
-    let edge_length = max(length(delta), 1.0e-20);
-    let axis = delta / edge_length;
-    let reference = select(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), abs(axis.y) > 0.9);
-    let side = normalize(cross(reference, axis));
-    let upward = cross(axis, side);
-    let midpoint = 0.5 * (first.point + second.point);
-    let point = midpoint + side * local.x * frame.render.x + upward * local.y * frame.render.x + axis * local.z * edge_length * 0.5;
-    let cosine_yaw = cos(frame.axis_fifth_range.z);
-    let sine_yaw = sin(frame.axis_fifth_range.z);
-    let cosine_pitch = cos(frame.axis_fifth_range.w);
-    let sine_pitch = sin(frame.axis_fifth_range.w);
-    let yawed = vec3(point.x * cosine_yaw - point.z * sine_yaw, point.y, point.x * sine_yaw + point.z * cosine_yaw);
-    let viewed = vec3(yawed.x, yawed.y * cosine_pitch - yawed.z * sine_pitch, yawed.y * sine_pitch + yawed.z * cosine_pitch);
+    if (!(first.valid && second.valid)) {
+        var invalid: VertexOut;
+        invalid.position = vec4(2.0, 2.0, 2.0, 1.0);
+        invalid.hue = 0.0;
+        invalid.light = 0.0;
+        return invalid;
+    }
+    let axis = second.point - first.point;
+    let direction = normalize(axis);
+    let helper = select(vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0), abs(direction.z) < 0.9);
+    let side = normalize(cross(direction, helper));
+    let upward = normalize(cross(side, direction));
+    let thickness = 0.013;
+    let world = 0.5 * (first.point + second.point) + 0.5 * local.z * axis + thickness * local.x * side + thickness * local.y * upward;
+    const camera_yaw_cosine = 0.9396926208;
+    const camera_yaw_sine = 0.3420201433;
+    const camera_pitch_cosine = 0.9659258263;
+    const camera_pitch_sine = 0.2588190451;
+    let yawed = vec3(camera_yaw_cosine * world.x + camera_yaw_sine * world.z, world.y, -camera_yaw_sine * world.x + camera_yaw_cosine * world.z);
+    let view = vec3(yawed.x, camera_pitch_cosine * yawed.y - camera_pitch_sine * yawed.z, camera_pitch_sine * yawed.y + camera_pitch_cosine * yawed.z - 9.0);
+    const camera_near = 0.1;
+    const camera_far = 30.0;
     var output: VertexOut;
-    let scale = frame.render.z;
-    output.position = vec4(viewed.x * scale / frame.render.y, viewed.y * scale, 0.5 + viewed.z * 0.002, 1.0);
-    if (!(first.valid && second.valid)) { output.position = vec4(2.0, 2.0, 2.0, 1.0); }
+    output.position = vec4(1.72 * view.x / frame.render.y, 1.72 * view.y, (camera_far / (camera_near - camera_far)) * view.z + camera_far * camera_near / (camera_near - camera_far), -view.z);
     output.hue = clamp((0.5 * (first.fifth + second.fifth)) / (2.0 * frame.axis_fifth_range.y) + 0.5, 0.0, 1.0);
+    output.light = 0.58 + 0.24 * abs(dot(normalize(side + upward), normalize(vec3(0.4, 0.7, 0.6))));
     return output;
 }
 
 fn hue_rgb(hue: f32) -> vec3<f32> {
-    return clamp(abs(fract(hue + vec3(0.0, 0.6666667, 0.3333333)) * 6.0 - 3.0) - 1.0, vec3(0.0), vec3(1.0));
+    let phase = abs(fract(hue + vec3(0.0, 0.6666667, 0.3333333)) * 6.0 - 3.0);
+    return clamp(phase - 1.0, vec3(0.0), vec3(1.0));
 }
 
 @fragment fn mode_a_fragment(input: VertexOut) -> @location(0) vec4<f32> {
-    return vec4(hue_rgb(input.hue), 0.82);
+    let rgb = mix(vec3(1.0), hue_rgb(input.hue), 0.78) * input.light;
+    return vec4(rgb, 1.0);
 }

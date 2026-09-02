@@ -19,7 +19,7 @@ const LAYER_DRAW_SHADER: &str = include_str!("layer-draw.wgsl");
 pub struct ModeCFrameUniform {
     /// Prefix consumed unchanged by layer's exact kernel body.
     pub lattice: LatticeUniform,
-    /// Half thickness, viewport aspect, scene scale, and view time.
+    /// Presentation padding, viewport aspect, presentation padding, and rotation time.
     pub render: [f32; 4],
     /// Bytes not read by the kernel or renderer.
     pub padding: [[f32; 4]; 8],
@@ -300,7 +300,7 @@ mod tests {
         ComparatorWork, EqualWorkSignature, ModeCFrameUniform, layer_comparator_draw_shader,
         layer_comparator_kernel, mode_c_pose, mode_c_register, mode_c_shader,
     };
-    use crate::DialectLimits;
+    use crate::{DialectLimits, mode_a_shader};
 
     fn limits() -> DialectLimits {
         DialectLimits {
@@ -351,6 +351,51 @@ mod tests {
         let pose = mode_c_pose(&object, axes, 1.25, 728_999);
         assert!(pose.length.is_finite());
         assert!((0.0..=1.0).contains(&pose.hue));
+    }
+
+    #[test]
+    fn rawgl_presentation_literals_and_wgpu_depth_conversion_are_pinned() {
+        let depth_row = "(camera_far / (camera_near - camera_far)) * view.z + camera_far * camera_near / (camera_near - camera_far)";
+        let required = [
+            "let thickness = 0.013;",
+            "const camera_yaw_cosine = 0.9396926208;",
+            "const camera_yaw_sine = 0.3420201433;",
+            "const camera_pitch_cosine = 0.9659258263;",
+            "const camera_pitch_sine = 0.2588190451;",
+            "camera_pitch_cosine * yawed.y + camera_pitch_sine * yawed.z - 9.0",
+            "const camera_near = 0.1;",
+            "const camera_far = 30.0;",
+            "1.72 * view.x",
+            depth_row,
+            "0.58 + 0.24",
+            "normalize(vec3(0.4, 0.7, 0.6))",
+            "mix(vec3(1.0), hue_rgb(input.hue), 0.78)",
+        ];
+        for source in [
+            mode_a_shader(limits()),
+            mode_c_shader(limits()),
+            layer_comparator_draw_shader().to_string(),
+        ] {
+            let module = naga::front::wgsl::parse_str(&source).expect("presentation WGSL parses");
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .expect("presentation WGSL validates");
+            for literal in &required {
+                assert!(source.contains(*literal), "missing rawgl literal: {literal}");
+            }
+        }
+
+        let ndc_depth = |view_z: f32| {
+            let near = 0.1;
+            let far = 30.0;
+            let clip = (far / (near - far)) * view_z + far * near / (near - far);
+            clip / -view_z
+        };
+        assert!(ndc_depth(-0.1).abs() <= f32::EPSILON);
+        assert!((ndc_depth(-30.0) - 1.0).abs() <= f32::EPSILON);
     }
 
     #[test]

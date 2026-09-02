@@ -1,7 +1,7 @@
 //! Algebraic lattice records, frame layout, indexed box, and Mode A shaders.
 
 use bytemuck::{Pod, Zeroable};
-use ember_lab_layer::geometry::{LATTICE_SPACING, Prism, lattice_fifth_range};
+use ember_lab_layer::geometry::{LATTICE_SPACING, Prism};
 
 use crate::DialectLimits;
 
@@ -50,11 +50,11 @@ pub struct FrameUniform {
     pub rotation: [f32; 4],
     /// Fifth pole, fourth pole, lattice spacing, and validity epsilon.
     pub projection_spacing: [f32; 4],
-    /// Half thickness, viewport aspect, scene scale, and time.
+    /// Presentation padding, viewport aspect, presentation padding, and rotation time.
     pub render: [f32; 4],
     /// Copy counts for axes one through four.
     pub axes_four: [f32; 4],
-    /// Fifth count, fifth hue range, view yaw, and view pitch.
+    /// Fifth count, rawgl hue extent, and two former-camera padding values.
     pub axis_fifth_range: [f32; 4],
     /// First four coordinates of the five rotated basis vectors.
     pub basis_four: [[f32; 4]; 5],
@@ -153,10 +153,17 @@ fn basis_records(coefficients: [f32; 4]) -> ([[f32; 4]; 5], [[f32; 4]; 2]) {
     (first, fifth)
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn rawgl_hue_extent(axes: [u32; 5]) -> f32 {
+    let half_three = f64::from(axes[2].saturating_sub(1)) / 2.0;
+    let half_five = f64::from(axes[4].saturating_sub(1)) / 2.0;
+    LATTICE_SPACING.mul_add(half_three.hypot(half_five), 3.0) as f32
+}
+
 /// Builds the 192-byte frame layout and CPU-rotated lattice bases.
 #[must_use]
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-pub fn frame_for(object: &Prism, axes: [u32; 5], time: f32, aspect: f32) -> FrameUniform {
+pub fn frame_for(_object: &Prism, axes: [u32; 5], time: f32, aspect: f32) -> FrameUniform {
     let theta_one = 0.4 * time;
     let theta_two = f32::midpoint(1.0, 5.0_f32.sqrt()) * theta_one;
     let (sine_one, cosine_one) = theta_one.sin_cos();
@@ -166,13 +173,13 @@ pub fn frame_for(object: &Prism, axes: [u32; 5], time: f32, aspect: f32) -> Fram
     FrameUniform {
         rotation,
         projection_spacing: [8.0, 8.0, LATTICE_SPACING as f32, 1.0e-4],
-        render: [0.012, aspect, 0.075, time],
+        render: [0.0, aspect, 0.0, time],
         axes_four: std::array::from_fn(|axis| axes[axis] as f32),
         axis_fifth_range: [
             axes[4] as f32,
-            lattice_fifth_range(object, axes) as f32,
-            0.21 * time,
-            0.13 * time,
+            rawgl_hue_extent(axes),
+            0.0,
+            0.0,
         ],
         basis_four,
         basis_fifth,
@@ -270,7 +277,7 @@ mod tests {
 
     use super::{
         BOX_INDICES, FrameUniform, MODE_A_ROTATION_KERNEL, box_vertices, frame_for,
-        mode_a_endpoint, mode_a_records, mode_a_shader,
+        mode_a_endpoint, mode_a_records, mode_a_shader, rawgl_hue_extent,
     };
     use crate::{DialectLimits, KernelDesc, RegisteredKernel};
 
@@ -292,6 +299,15 @@ mod tests {
         assert_eq!(steps[112], [47, 45, 45, 45, 45]);
         assert_eq!(lattice_edge_count(steps[112]), 578_188_125_000);
         assert_eq!(EDGES_PER_COPY, 3_000);
+        let frame = frame_for(&object, [7, 7, 5, 5, 5], 2.375, 16.0 / 9.0);
+        assert_eq!(frame.render, [0.0, 16.0 / 9.0, 0.0, 2.375]);
+        assert_eq!(frame.axis_fifth_range[2..], [0.0, 0.0]);
+        assert_eq!(frame.axis_fifth_range[1], rawgl_hue_extent([7, 7, 5, 5, 5]));
+        assert_eq!(rawgl_hue_extent([1; 5]), 3.0);
+        assert_eq!(
+            rawgl_hue_extent([7, 7, 5, 5, 5]),
+            8.0_f64.mul_add(2.0_f64.hypot(2.0), 3.0) as f32
+        );
     }
 
     #[test]

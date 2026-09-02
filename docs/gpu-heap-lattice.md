@@ -1,6 +1,6 @@
 # GPU heap lattice architecture
 
-Status: shipped WebGL2-only heap-lattice contract through the v6 fence-order repair; paid browser evidence selects SCRATCH-to-DATA copy, while optional Mode B is deferred and its design remains recorded.
+Status: shipped WebGL2-only heap-lattice contract through the v7 rawgl-presentation repair; paid browser evidence selects SCRATCH-to-DATA copy, while optional Mode B is deferred and its design remains recorded.
 
 ## 1. Decision and evidence boundary
 
@@ -36,7 +36,7 @@ The compute stage therefore rotates only the 1,200 base vertices per frame and w
 
 The 25 basis floats occupy seven `vec4` uniform lanes: five lanes hold coordinates one through four of `R(t)eᵢ`, and two lanes hold the five fifth coordinates plus three explicit padding floats, for 112 bytes with 12 bytes of padding.
 
-The complete `FrameUniform` is 192 bytes: 16 bytes of rotation coefficients, 16 of projection and spacing values, 16 of render values, 16 of the first four lattice counts, 16 of fifth-count, fifth-range, yaw, and pitch values, followed by the 112-byte rotated-basis block; this is one CPU write per rendered frame in every heap mode.
+The complete `FrameUniform` is 192 bytes: 16 bytes of rotation coefficients, 16 of projection and spacing values, 16 of presentation padding, aspect, presentation padding, and rotation time, 16 of the first four lattice counts, 16 of fifth-count, rawgl hue extent, and two former-camera padding values, followed by the 112-byte rotated-basis block; this is one CPU write per rendered frame in every heap mode.
 
 Projection is deliberately not moved across the equality because perspective is not linear: `P₅(x) = (d₅ / (d₅ − x₅)) × (x₁,x₂,x₃,x₄)` and `P₄(y) = (d₄ / (d₄ − y₄)) × (y₁,y₂,y₃)`, and their coordinate-dependent denominators make `P(a+b)` unequal to `P(a)+P(b)` in general.
 
@@ -189,11 +189,15 @@ The diagnostic localizes the conflict to attached DATA layers 2 through 3 agains
 
 ## 10. Render path
 
-All heap modes and layer use one indexed instanced draw and the same static long-box mesh with eight unique vertices and 36 indices, surface format, depth target, camera, thickness, lighting, no mipmaps, and `cull_mode: None`; only endpoint production and storage change.
+All heap modes and the in-page layer comparator use one indexed instanced draw and the same static long-box mesh with eight unique vertices and 36 indices, surface format, depth target, rawgl presentation values, no mipmaps, `cull_mode: None`, no blending, and one-sample rasterization; only endpoint production and storage change.
 
-The vertex stage derives copy and edge exclusively from `instance_index`, resolves the selected mode's endpoint or edge-pose spans, rejects the box when either endpoint is invalid, and otherwise constructs the same midpoint, direction, length, side, up, clip position, and normal for the eight indexed vertices.
+The vertex stage derives copy and edge exclusively from `instance_index`, resolves the selected mode's endpoint or edge-pose spans, rejects the box when either endpoint is invalid, and otherwise follows rawgl's BOX construction by value: direction is normalized endpoint delta, helper is `(0,0,1)` when `|direction.z| < 0.9` and `(0,1,0)` otherwise, side is normalized `direction × helper`, up is normalized `side × direction`, and thickness is `0.013`.
 
-Hue uses the midpoint post-rotation fifth coordinate normalized by a symmetric lattice-extended fifth range computed from the current tuple, rotated basis, base extent, and spacing; the CPU reference and every mode must agree before timing is reportable.
+The fixed rawgl camera is yaw 20 degrees with cosine `0.9396926208` and sine `0.3420201433`, pitch 15 degrees with cosine `0.9659258263` and sine `0.2588190451`, distance `9.0`, and perspective scale `1.72`; only the object rotates in five dimensions, so no camera term depends on time.
+
+Rawgl's OpenGL clip row uses near `0.1`, far `30.0`, and depth range minus one through one; wgpu uses zero through one, so the shader applies `z_wgpu = (z_gl + w) / 2`, which reduces to `far / (near − far) × view_z + far × near / (near − far)` with `w = −view_z`, maps view z `−0.1` to normalized depth zero and `−30` to one, and uses `LessEqual` depth comparison.
+
+Hue uses `3 + 8 × hypot((k₃−1)/2,(k₅−1)/2)` as rawgl's lattice extent and maps the post-rotation fifth midpoint as `clamp(0.5 + 0.5 × midpoint_x5 / extent,0,1)`; colour uses the exact phase-offset hue function, light `0.58 + 0.24 × |normalize(side+up)·normalize(0.4,0.7,0.6)|`, and `mix(white,hue_rgb,0.78) × light` with alpha one.
 
 Static heap contents, span-directory records, and dispatch headers change only at initialization or step setup; the sole per-frame CPU upload is the 192-byte frame uniform in every mode, while GPU transfer bytes and commands are reported separately.
 
@@ -216,6 +220,8 @@ The comparator reports requested and delivered tuple, copies, projected or edge-
 Mode C and layer are the primary equal-work pair: they use the exact same kernel body and numeric operation order, two-record edge-pose model, 192-byte frame uniform, indexed vertex work, delivered copies, pixels, fence, adaptive timing, and tuple; any mismatch disqualifies the rung before allocation or timing differences are interpreted.
 
 The live equality gate reports Mode C and layer delivered counts and static signatures, maps both GPU-produced edge-pose records for eight deterministic indices spanning the selected range, and renders both paths into a 64 by 36 offscreen target at step 1; PASS requires equal counts and signatures, every sampled component exact or within `4 × 10⁻⁵`, and byte-identical 2,304-pixel images with displayed checksums, otherwise both timing cards remain visibly disqualified.
+
+That equality gate proves two in-page paths share one presentation but cannot detect both drifting together from rawgl; the native presentation oracle therefore parses all three shipped WGSL modules and pins rawgl's camera, projection, thickness, hue, lighting, colour, depth conversion, `LessEqual`, no-blend, and no-MSAA values.
 
 Fair timing labels the first fenced frame after every path or rung switch as cold/pipeline warm-up and excludes it, uses the second fenced frame for the 100 ms animation decision, then uses three additional warmups, 15 samples, and repeat-until-32-observed-quanta batching from `crates/what-is-this/src/kernels.rs`, with the same ordered four-byte mapped fence submitted immediately after the final presentation draw submission.
 
@@ -324,6 +330,8 @@ Cold observations are evidence for the warm-up rule rather than timing claims: s
 The 2026-09-02 hidden Firefox replay of v5 exposed a fence-order regression after the equality oracle passed with identical `367996de3f159a9f` image checksums and zero mismatches: step-1 fenced walls landed on one-second boundaries, including 1,996.0 and 1,000.1 ms for Mode A, 1,999.2 and 2,000.0 ms for Mode C, and one 65,998.9 ms Mode A request, while a page-context zero-timeout probe remained 0.1 ms and v4 in the same pane had produced 8.9 and 9.0 ms warmed step-1 observations.
 
 The v5 cause was presentation ordering, not an initial-yield delay or leaked conformance mapping: source inspection showed that polling preceded every yield and every conformance readback was awaited and unmapped, but each timed draw called `present()` before submitting its separate fence, placing hidden-document compositor work ahead of completion; v6 submits the fence immediately after the draw batch, waits and captures the end timestamp, then presents, and prints the poll count and wait wall so the diagnosis requires visible replay rather than being assumed fixed.
+
+The visible side-by-side presentation review found a separate corrected defect: the heap page used an orthographic `w = 1` clip with depth compressed by `0.002`, scale `0.075`, flat unlit colour, and camera yaw and pitch driven by time, producing an object about half rawgl's width with a flat blue-green disc appearance; v7 replaces all three in-page presentation paths with the rawgl values in §10, while the lesson is that an in-page equality oracle cannot detect shared drift from its external visual reference and the pinned-literal test must carry that role.
 
 The span-directory UBO introduces a second finite metadata WALL and uniform dynamic-indexing cost; Mode C versus layer prices the resulting handle and allocation path, while runtime facts expose directory consumption and padding waste.
 

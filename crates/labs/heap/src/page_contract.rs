@@ -4,11 +4,11 @@ const PAGE: &str = include_str!("../../../../web/labs/heap/index.html");
 const RUNTIME: &str = include_str!("lattice_gpu.rs");
 
 #[test]
-fn loader_is_v6_and_runtime_is_explicitly_gl_only() {
-    assert!(PAGE.contains("ember_lab_heap.js?v=6"));
-    assert!(PAGE.contains("ember_lab_heap_bg.wasm?v=6"));
-    assert!(PAGE.contains("heap-lattice-v6"));
-    assert!(!PAGE.contains("heap-lattice-v5"));
+fn loader_is_v7_and_runtime_is_explicitly_gl_only() {
+    assert!(PAGE.contains("ember_lab_heap.js?v=7"));
+    assert!(PAGE.contains("ember_lab_heap_bg.wasm?v=7"));
+    assert!(PAGE.contains("heap-lattice-v7"));
+    assert!(!PAGE.contains("heap-lattice-v6"));
     assert!(RUNTIME.contains("backends: wgpu::Backends::GL"));
     assert!(RUNTIME.contains("info.backend != wgpu::Backend::Gl"));
 }
@@ -61,6 +61,9 @@ fn honesty_measurement_and_byte_laws_remain_visible() {
     assert!(RUNTIME.contains("per_frame_cpu_to_gpu_bytes: 192"));
     assert!(RUNTIME.contains("borrowed.device.poll(wgpu::Maintain::Poll)"));
     assert!(RUNTIME.contains("COMPLETION_DEADLINE_MS"));
+    assert!(RUNTIME.contains("depth_compare: wgpu::CompareFunction::LessEqual"));
+    assert!(RUNTIME.contains("blend: None"));
+    assert!(RUNTIME.contains("multisample: wgpu::MultisampleState::default()"));
 }
 
 #[test]

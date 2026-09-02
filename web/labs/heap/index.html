@@ -38,7 +38,7 @@
 <body>
   <header>
     <h1>Heap lattice · algebra against materialization</h1>
-    <p>Explicit wgpu 24 GL backend over WebGL2. This is a capacity and vertex-work experiment, not an edges-per-millisecond contest: the reference workload is raster-bound, so a large speedup is the first result to distrust.</p>
+    <p>Explicit wgpu 24 GL backend over WebGL2 with rawgl's fixed perspective, hue and lighting values. This is a capacity and vertex-work experiment, not an edges-per-millisecond contest: the reference workload is raster-bound, so a large speedup is the first result to distrust.</p>
   </header>
   <main>
     <section>
@@ -92,9 +92,9 @@
       render_heap_lattice_frame_json,
       select_heap_lattice_json,
       start_heap_lattice,
-    } from "./pkg/ember_lab_heap.js?v=6";
+    } from "./pkg/ember_lab_heap.js?v=7";
 
-    const VERSION = "heap-lattice-v6";
+    const VERSION = "heap-lattice-v7";
     const SAMPLE_COUNT = 15;
     const WARMUPS = 3;
     const TARGET_QUANTA = 32;
@@ -396,7 +396,7 @@
     });
 
     try {
-      await init({ module_or_path: "./pkg/ember_lab_heap_bg.wasm?v=6" });
+      await init({ module_or_path: "./pkg/ember_lab_heap_bg.wasm?v=7" });
       const timer = timerProbe();
       timerQuantum = timer.quantum;
       const initialized = JSON.parse(await start_heap_lattice(canvas));
