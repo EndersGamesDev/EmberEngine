@@ -42,7 +42,7 @@ impl Handle {
     ///
     /// Returns [`HeapError::InvalidHandleFields`] when the index does not fit 20 bits or the
     /// generation is zero or does not fit 12 bits.
-    pub const fn encode(index: u32, generation: u16) -> Result<Self, HeapError> {
+    pub fn encode(index: u32, generation: u16) -> Result<Self, HeapError> {
         if index > INDEX_MASK || generation == 0 || generation > GENERATION_MASK {
             return Err(HeapError::InvalidHandleFields { index, generation });
         }
@@ -101,7 +101,7 @@ impl PackedDescriptor {
     /// # Errors
     ///
     /// Returns [`HeapError::ZeroExtent`] when either logical extent is zero.
-    pub const fn pack(descriptor: Descriptor) -> Result<Self, HeapError> {
+    pub fn pack(descriptor: Descriptor) -> Result<Self, HeapError> {
         if descriptor.width == 0 || descriptor.height == 0 {
             return Err(HeapError::ZeroExtent);
         }
@@ -121,7 +121,7 @@ impl PackedDescriptor {
     ///
     /// Returns a typed error for the missing record, nonzero reserved bits, an unknown heap kind,
     /// or a zero extent.
-    pub const fn unpack(self) -> Result<Descriptor, HeapError> {
+    pub fn unpack(self) -> Result<Descriptor, HeapError> {
         if self.words[0] == 0 && self.words[1] == 0 && self.words[2] == 0 && self.words[3] == 0 {
             return Err(HeapError::MissingDescriptor);
         }

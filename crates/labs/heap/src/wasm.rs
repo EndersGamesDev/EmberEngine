@@ -18,7 +18,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::{JsCast, closure::Closure};
 use wgpu::util::DeviceExt;
 
-use crate::heap::{Descriptor, Handle, HeapAllocator, HeapError, HeapKind};
+use crate::heap::{Handle, HeapAllocator, HeapError, HeapKind};
 use crate::kernels::{
     DIRECT_FETCH_SHADER, DRAW_STEPS, FETCH_HEIGHT, FETCH_WIDTH, FETCHES_PER_FRAGMENT,
     HEAP_DRAW_SHADER_TEMPLATE, HEAP_FETCH_SHADER_TEMPLATE, PAYLOAD_SIDE, TRADITIONAL_DRAW_SHADER,
