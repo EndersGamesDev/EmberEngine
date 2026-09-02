@@ -1182,6 +1182,7 @@ dependencies = [
  "ember-julibrot-math",
  "ember-lab-heap",
  "thiserror 2.0.20",
+ "wgpu",
 ]
 
 [[package]]

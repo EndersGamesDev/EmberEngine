@@ -1,6 +1,6 @@
 # Julibrot kernels slice contract
 
-Status: refined slice document for `crates/labs/julibrot/kernels` after the five-document joint review; the review rulings in J1–J31 supersede round-one differences, and the app document remains the integration contract.
+Status: implemented slice contract for `crates/labs/julibrot/kernels`; the review rulings in J1–J31 and the adopted mutable allocation/free receiver ruling supersede round-one differences, and the app document remains the integration contract.
 
 ## 1. Ownership and boundary
 
@@ -72,7 +72,7 @@ For each outer iteration `n < max_iter`, the kernel first refuses an unavailable
 
 The corrected rebasing rule is repeatable: when `|zₙ| < |ldexp(δ′ₙ,e)|`, set represented `δ ← zₙ−Z₀`, reset reference index `r ← 0`, increment `rebase_count`, normalize that delta as `(δ′,e)`, then perform exactly one ordinary scaled advance against `Z₀` and advance `r` to one; the invariant `zₙ = Zᵣ+δₙ` holds by construction.
 
-After an ordinary advance, a nonzero `|δ′|` outside `[2⁻⁶⁴,2⁶⁴]` is renormalized in 64-bit exponent steps until it is inside: `δ′ ← δ′·2⁻⁶⁴, e ← e+64` above the range or `δ′ ← δ′·2⁶⁴, e ← e−64` below it; `δc′` is rescaled by the same factor on every step so `δc = 2^e·δc′` remains invariant, and checked `i32` exponent overflow is a typed pixel glitch rather than wraparound.
+Before the first state is tested and after each ordinary advance, a nonzero `|δ′|` outside `[2⁻⁶⁴,2⁶⁴]` is renormalized in 64-bit exponent steps until it is inside: `δ′ ← δ′·2⁻⁶⁴, e ← e+64` above the range or `δ′ ← δ′·2⁶⁴, e ← e−64` below it; `δc′` is rescaled by the same factor on every step so `δc = 2^e·δc′` remains invariant, and checked `i32` exponent overflow is a typed pixel glitch rather than wraparound.
 
 The rebase comparison forms the represented delta with `ldexp`; when it underflows the comparison is false, which is correct because a negligible delta must not trigger rebasing, while the scaled recurrence continues through the normalized values.
 
@@ -88,7 +88,7 @@ The value 4,096 is a tab-safety POLICY rather than a hardware wall; `RefinementP
 
 App owns scheduling and latest-wins cancellation: it runs levels in order and may skip, each level it does run is one logical dialect dispatch, and publication compatibility uses the current orbit generation and app plan token rather than owner-epoch equality; `owner_epoch` remains a versioned fact because each HOT or MAIN drain bumps it.
 
-The grid allocation reserves one span for the delivered Final extent and never reallocates between levels; each level densely overwrites the prefix of `width·height` records, `EscapeGrid.width`, `height`, and `level` are changed only after submission is accepted, and present never indexes beyond that active prefix.
+The grid allocation reserves one span for the delivered Final extent and never reallocates between levels; each level densely overwrites the prefix of `width·height` records, `EscapeGrid.width`, `height`, and `level` change only after the command encoder accepts every page pass and exact copy, app applies its current-token publication gate, and present never indexes beyond that active prefix.
 
 The dialect lowering may require several page render passes for one logical level dispatch: for page side `q = 256`, active record count `N`, and `Q = q² = 65,536`, the dispatch uses `P = ceil(N/Q)` prefix pages, with the final dispatch header's `valid_length = N−(P−1)Q`.
 
@@ -232,7 +232,9 @@ The inherited input resource entry is exactly 16 bytes `{ directory_index: u32, 
 
 `evaluate_shallow_conformance(observed: KernelSample, expected: math::EscapeSample) -> ConformanceResult` applies the exact classification/index and `1×10⁻⁴` smooth criteria, while `evaluate_perturbation_conformance(observed: KernelSample, expected: math::PerturbSample, envelope: math::PerturbationEnvelope) -> ConformanceResult` returns the closed `ConformanceVerdict::{Pass,Boundary,Fail}`, never promoting a predeclared boundary sample to an exact pass, and applies the `2×10⁻³` tolerance plus exact rebase and glitch criteria.
 
-`record_is_well_formed(sample: KernelSample, mode: KernelMode) -> bool` checks finite sentinels, exact binary flags, escape-index presence, integer-valued rebases through `2²⁴`, and zero shallow rebase/glitch fields; `VISIBLE_REPLAY_CARDS` is the seven-entry kernels-to-app list whose requirement strings all begin `requires visible replay:` and covers both readbacks, SCRATCH landing, present consumption, binding identity, the zoom-14 switch, and the four-byte scene-fence handoff.
+`ConformanceVerdict` is `repr(u32)` with `Pass=0`, `Boundary=1`, and `Fail=2`; `ConformanceResult` is the CPU-only record `{ verdict:ConformanceVerdict,boundary:bool,record_well_formed:bool,classification_exact:bool,escape_index_exact:bool,rebase_count_exact:bool,glitch_exact:bool,smooth_abs_error:f32,smooth_tolerance:f32 }` with no stable byte ABI.
+
+`record_is_well_formed(sample: KernelSample, mode: KernelMode) -> bool` checks finite sentinels, exact binary flags, escape-index presence, integer-valued rebases through `2²⁴`, and zero shallow rebase/glitch fields; `VisibleReplayCard` is the CPU-only record `{ id:&'static str,requirement:&'static str }`, and `VISIBLE_REPLAY_CARDS` is the seven-entry kernels-to-app list whose requirement strings all begin `requires visible replay:` and cover both readbacks, SCRATCH landing, present consumption, binding identity, the zoom-14 switch, and the four-byte scene-fence handoff.
 
 `DispatchFacts` is `{ owner_epoch: u64, mode: KernelMode, level: RefinementLevel, requested_extent: GridExtent, delivered_extent: GridExtent, requested_max_iter: u32, delivered_max_iter: u32, active_pixels: u32, worst_case_pixel_iterations: u64, page_passes: u32, copy_commands: u32, gpu_copy_bytes: u64, logical_heap_bytes: u64, reserved_heap_bytes: u64, scratch_bytes: u64, orbit_generation: Option<u32>, orbit_length: u32 }`.
 
@@ -250,11 +252,11 @@ Every `DispatchFacts` byte and count is arithmetic from the accepted plan or a c
 
 `JulibrotKernels::encode_shallow(&self, executor: &ember_lab_heap::GpuKernelExecutor, encoder: &mut wgpu::CommandEncoder, grid: &mut EscapeGrid, owner_epoch: u64, level: RefinementLevel, plane: &Plane, centre: &CentreSplit, pixel_scale: f32, params: EscapeParams) -> Result<DispatchFacts, KernelError>` packs the 96-byte uniform, encodes page passes and exact-region copies, and tags the arithmetic receipt with the supplied epoch without using epoch equality as a compatibility test.
 
-`JulibrotKernels::encode_perturbation(&self, executor: &ember_lab_heap::GpuKernelExecutor, encoder: &mut wgpu::CommandEncoder, grid: &mut EscapeGrid, owner_epoch: u64, level: RefinementLevel, plane: &Plane, scale: ScaleSplit, params: EscapeParams, reference: ReferenceOrbitInput<'_>) -> Result<DispatchFacts, KernelError>` packs the math-owned scale split into the 64-byte mantissa/exponent uniform and performs the one-span gather dispatch against the accepted reference generation.
+`JulibrotKernels::encode_perturbation(&self, executor: &ember_lab_heap::GpuKernelExecutor, encoder: &mut wgpu::CommandEncoder, grid: &mut EscapeGrid, owner_epoch: u64, level: RefinementLevel, plane: &Plane, scale: ScaleSplit, params: EscapeParams, reference: ReferenceOrbitInput<'_>) -> Result<DispatchFacts, KernelError>` packs the math-owned scale split into the 64-byte mantissa/exponent uniform, rejects older or same-generation conflicting orbit identities, refreshes resource words only when the accepted orbit span identity changes, and performs the one-span gather dispatch.
 
 `JulibrotKernels::free_grid(&mut self, executor: &mut ember_lab_heap::GpuKernelExecutor, grid: EscapeGrid) -> Result<(), KernelError>` looks up the private resident-header lifetime record, returns the span, header reservation and directory entries transactionally after app and present have relinquished all borrows, and removes private state only after executor release succeeds; app.md §3.2 adopts this receiver.
 
-The public error set is `KernelError::{InvalidExtent,ArithmeticOverflow,ScaleExponentOverflow,InvalidEscapeParams,UnknownLevel,MissingReference,StaleReference,ReferenceLengthMismatch,ReferencePrecisionMismatch,Heap,Register,Dispatch,OutputTransferUnsupported,DeviceLost}`; wrapped heap, registration, and dispatch diagnostics retain their original typed source and stable kernel name.
+The public category-only error set is `KernelError::{InvalidExtent,ArithmeticOverflow,ScaleExponentOverflow,InvalidEscapeParams,UnknownLevel,MissingReference,StaleReference,ReferenceLengthMismatch,ReferencePrecisionMismatch,Heap,Register,Dispatch,OutputTransferUnsupported,DeviceLost}`; kernels collapses heap implementation detail at this boundary, while the direct executor diagnostics retain their typed source and registered kernel name for app initialization scopes.
 
 `GpuKernelExecutor` is the review-approved minimal public seam extracted by the app lane from the already-paid heap lattice runtime: it owns DATA and four-layer SCRATCH textures, `SpanArena`, immutable bind group, descriptor/directory/header/resource/uniform buffers, exact-row copy encoding, and live capacity reports; if extraction requires more than moving existing code behind a public boundary, the app lane stops and reports rather than forking behavior.
 
@@ -276,8 +278,8 @@ Present owns `new`, `set_main`, infallible `write_hot`, `submit_scene`, `frame`,
 
 |Law|Kernels-side satisfaction|
 |---|-------------------------|
-|WebGL2 floor|Pipelines are created only under wgpu 24 `Backends::GL`; RGBA32F render, copy, and nearest-sample support is a typed initialization requirement, and no WebGPU path exists.|
-|Uniforms-only per frame|A logical dispatch uploads only its 96-byte or 64-byte uniform; orbit payload and heap metadata are regional writes only when generation, allocation, or extent changes, and static level headers are pre-uploaded.|
+|WebGL2 floor|App supplies an executor built from its wgpu 24 `Backends::GL` device after checking RGBA32F render, copy, and nearest-sample support; kernels creates no instance, adapter, device, or WebGPU path.|
+|Uniforms-only per frame|A logical dispatch uploads only its 96-byte or 64-byte uniform; accepted orbit identity changes refresh resource words, orbit payload and heap metadata change only on MAIN arrival or allocation, and static level headers are pre-uploaded.|
 |GPU-resident output|Escape records render to SCRATCH, copy directly into DATA, and reach present by `DataSpan`; production performs no CPU readback.|
 |Immutable binding identities|DATA, SCRATCH executor state, descriptor UBO, directory UBO, dispatch header buffer, resource buffer, and kernel uniform buffer are created before frames; dynamic header offsets and regional writes change contents only.|
 |Hot ring|Present owns exactly three slots selected by dynamic offset; kernels consume the same frozen HOT snapshot through their own dispatch uniform and do not allocate a second hot ring.|
@@ -298,7 +300,7 @@ The external warp oracle requires `max|H⁻¹H−I| ≤ 10⁻⁹` in `f64` at `z
 
 Native layout tests assert `Plane = 32`, `CentreSplit = 32`, shallow uniform `= 96`, perturbation uniform `= 64`, reference and escape records `= 16`, every byte offset in §3, little-endian pack/unpack fixtures, zero padding, exact signed exponent bytes, and exact enum discriminants.
 
-Native coordinate tests cover both presets, the `R₁₃·R₂₄` multiplication order, the `π/2` plane exchange, hybrid bases with nonzero z and c components, the `8·f32::EPSILON` postcondition, odd and even extents, bottom-left and top-right pixel centres, row-zero-at-bottom indexing, square pixels, and checked scale-exponent overflow.
+Native math-and-kernels coordinate tests cover both presets, the `R₁₃·R₂₄` multiplication order, the `π/2` plane exchange, hybrid bases with nonzero z and c components, the `8·f32::EPSILON` postcondition, odd and even extents, bottom-left and top-row pixel centres, row-zero-at-bottom indexing, square pixels, and checked scale-exponent overflow.
 
 Native refinement tests pin the three dimensions and caps, exact power-of-two extent degradation, one Final-capacity allocation, prefix page counts and last valid lengths, immutable span handles across all levels, requested-versus-delivered facts, and zero-delivery behavior.
 
@@ -340,7 +342,7 @@ Dispatch walls, scene walls, and poll counts are browser facts measured by app a
 
 ## 7. Implementation phases and line budget
 
-Checkpoint after the receiver ruling: Phases 0–4 are implemented, `JulibrotKernels` privately owns each span's resident header-set handle, exact cloned-arena trials select delivery, allocation reserves all three immutable prefix sets, and each encode call lowers one logical level into page passes plus paid exact-row copies; Phase 5 activates the merged math oracles and adds the remaining conformance surface, then Phase 6 reconciles evidence and gates.
+Implementation checkpoint: Phases 0–6 are complete in this slice, `JulibrotKernels` privately owns each span's resident header-set handle, exact cloned-arena trials select delivery, allocation reserves all three immutable prefix sets, every encode call lowers one logical level into page passes plus paid exact-row copies, math-oracle comparisons are unconditional, and the remaining browser observations stay explicitly replay-only.
 
 Phase 0, estimated 230 new lines, creates the kernels package, pins `Plane`, `CentreSplit`, all GPU records and uniforms, exposes the two dialect descriptors, and adds source, packing, switch, and hybrid-coordinate tests.
 

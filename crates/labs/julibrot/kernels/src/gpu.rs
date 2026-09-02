@@ -216,6 +216,7 @@ impl JulibrotKernels {
             &allocation.headers,
             level,
             uniform.bytes(),
+            false,
         )?;
         publish_level(grid, selected.extent, level);
         Ok(facts)
@@ -242,7 +243,7 @@ impl JulibrotKernels {
     ) -> Result<DispatchFacts, KernelError> {
         let allocation = self.allocation(grid)?;
         ensure_requested_params(&allocation.plan, params)?;
-        self.accept_reference(reference, allocation.plan.requested_max_iter)?;
+        self.validate_reference(reference, allocation.plan.requested_max_iter)?;
         let selected = allocation.plan.level(level);
         let used_orbit_length = reference.length.min(selected.iteration_cap);
         let uniform = PerturbUniform::pack(
@@ -271,6 +272,8 @@ impl JulibrotKernels {
             owner_epoch,
             Some((reference.generation, reference.length)),
         )?;
+        let resources_changed =
+            self.accept_reference(reference, allocation.plan.requested_max_iter)?;
         encode_pages(
             executor,
             encoder,
@@ -279,6 +282,7 @@ impl JulibrotKernels {
             &allocation.headers,
             level,
             uniform.bytes(),
+            resources_changed,
         )?;
         publish_level(grid, selected.extent, level);
         Ok(facts)
@@ -318,12 +322,25 @@ impl JulibrotKernels {
         &self,
         reference: ReferenceOrbitInput<'_>,
         requested_max_iter: u32,
-    ) -> Result<(), KernelError> {
+    ) -> Result<bool, KernelError> {
         accept_reference_transition(
             &mut self.latest_reference.borrow_mut(),
             reference,
             requested_max_iter,
         )
+    }
+
+    fn validate_reference(
+        &self,
+        reference: ReferenceOrbitInput<'_>,
+        requested_max_iter: u32,
+    ) -> Result<(), KernelError> {
+        validate_reference_transition(
+            self.latest_reference.borrow().as_ref(),
+            reference,
+            requested_max_iter,
+        )
+        .map(|_| ())
     }
 }
 
@@ -331,7 +348,28 @@ fn accept_reference_transition(
     latest: &mut Option<AcceptedReference>,
     reference: ReferenceOrbitInput<'_>,
     requested_max_iter: u32,
-) -> Result<(), KernelError> {
+) -> Result<bool, KernelError> {
+    let resources_changed =
+        validate_reference_transition(latest.as_ref(), reference, requested_max_iter)?;
+    if latest
+        .as_ref()
+        .is_none_or(|accepted| reference.generation > accepted.generation)
+    {
+        *latest = Some(AcceptedReference {
+            span: reference.span.clone(),
+            generation: reference.generation,
+            length: reference.length,
+            precision_bits: reference.precision_bits,
+        });
+    }
+    Ok(resources_changed)
+}
+
+fn validate_reference_transition(
+    latest: Option<&AcceptedReference>,
+    reference: ReferenceOrbitInput<'_>,
+    requested_max_iter: u32,
+) -> Result<bool, KernelError> {
     if reference.length == 0
         || reference.length != reference.span.logical_len
         || reference.length > requested_max_iter
@@ -341,7 +379,7 @@ fn accept_reference_transition(
     if reference.precision_bits == 0 {
         return Err(KernelError::ReferencePrecisionMismatch);
     }
-    if let Some(accepted) = latest.as_ref() {
+    if let Some(accepted) = latest {
         if reference.generation < accepted.generation
             || (reference.generation == accepted.generation && reference.span != &accepted.span)
         {
@@ -356,18 +394,7 @@ fn accept_reference_transition(
             return Err(KernelError::ReferencePrecisionMismatch);
         }
     }
-    if latest
-        .as_ref()
-        .is_none_or(|accepted| reference.generation > accepted.generation)
-    {
-        *latest = Some(AcceptedReference {
-            span: reference.span.clone(),
-            generation: reference.generation,
-            length: reference.length,
-            precision_bits: reference.precision_bits,
-        });
-    }
-    Ok(())
+    Ok(latest.is_none_or(|accepted| reference.span != &accepted.span))
 }
 
 fn ensure_requested_params(plan: &RefinementPlan, params: EscapeParams) -> Result<(), KernelError> {
@@ -434,11 +461,14 @@ fn encode_pages(
     headers: &HeaderSetHandle,
     level: RefinementLevel,
     uniform: &[u8],
+    resources_changed: bool,
 ) -> Result<(), KernelError> {
     executor
         .write_kernel_uniform(kernel, uniform)
         .map_err(|_| KernelError::Dispatch)?;
-    executor.sync_dispatch_resources(dispatch);
+    if resources_changed {
+        executor.sync_dispatch_resources(dispatch);
+    }
     let page_count =
         u32::try_from(dispatch.plan().passes.len()).map_err(|_| KernelError::ArithmeticOverflow)?;
     for page in 0..page_count {
@@ -483,10 +513,18 @@ mod tests {
             precision_bits,
         };
         let mut accepted: Option<AcceptedReference> = None;
-        accept_reference_transition(&mut accepted, input(&older, 7, 192), 8)
-            .expect("first generation is accepted");
-        accept_reference_transition(&mut accepted, input(&newer, 8, 224), 8)
-            .expect("newer generation replaces it");
+        assert!(
+            accept_reference_transition(&mut accepted, input(&older, 7, 192), 8)
+                .expect("first generation is accepted")
+        );
+        assert!(
+            accept_reference_transition(&mut accepted, input(&newer, 8, 224), 8)
+                .expect("newer span replaces it")
+        );
+        assert!(
+            !accept_reference_transition(&mut accepted, input(&newer, 8, 224), 8)
+                .expect("same generation and span remain current")
+        );
         assert_eq!(
             accept_reference_transition(&mut accepted, input(&older, 7, 192), 8),
             Err(KernelError::StaleReference)
