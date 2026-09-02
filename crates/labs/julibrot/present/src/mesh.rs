@@ -119,7 +119,9 @@ pub fn height_for_record(
     } else if record[1] == 0.0 {
         -2.0
     } else {
-        (record[0] / max_iter as f32).clamp(0.0, 1.0).mul_add(4.0, -2.0)
+        (record[0] / max_iter as f32)
+            .clamp(0.0, 1.0)
+            .mul_add(4.0, -2.0)
     };
     Ok(HeightSample {
         height,

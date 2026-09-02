@@ -212,7 +212,10 @@ mod tests {
             "0.58 + 0.24",
             "normalize(vec3<f32>(0.4, 0.7, 0.6))",
         ] {
-            assert!(source.contains(required), "missing tumbled literal {required}");
+            assert!(
+                source.contains(required),
+                "missing tumbled literal {required}"
+            );
         }
         assert!(!source.contains("0.013"));
     }
