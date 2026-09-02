@@ -549,6 +549,52 @@ mod tests {
     }
 
     #[test]
+    fn full_mantissa_anchor_navigation_decodes_at_one_precision() {
+        let plane = ember_julibrot_math::construct_plane(
+            ember_julibrot_math::PlanePreset::Mandelbrot,
+            ember_julibrot_math::PlaneAngles {
+                theta_1: 0.0,
+                theta_2: 0.0,
+            },
+        )
+        .unwrap();
+        // The navigator holds 1,024 bits while a shallow request declares the plan's 47.
+        let mut centre = ember_julibrot_math::BigCentre::from_f64([0.0; 4], 1_024).unwrap();
+        // Canvas-relative CSS pixels scaled by 960/1022.794: full 53-bit mantissas, not the short
+        // dyadics an integer-pixel anchor produced.
+        let pixel_ratio = 960.0_f64 / 1_022.794_f64;
+        let anchor = [173.0_f64 * pixel_ratio, -91.0_f64 * pixel_ratio];
+        let mut zoom_log2 = 0.0_f64;
+        for tick in 1..=4_u32 {
+            let after = zoom_log2 + 0.2;
+            centre
+                .apply_navigation(
+                    &ember_julibrot_math::NavigationDelta {
+                        pan_canvas_px: [0.0; 2],
+                        zoom_delta_log2: 0.2,
+                        anchor_canvas_px: anchor,
+                    },
+                    &plane,
+                    zoom_log2,
+                    after,
+                    960,
+                )
+                .unwrap();
+            zoom_log2 = after;
+            let encoded = EncodedCentre::encode_math(&centre, tick).unwrap();
+            let decoded = encoded.decode_math(47).unwrap();
+            assert_eq!(decoded.precision_bits, 64, "tick {tick}");
+            assert!(
+                decoded
+                    .coords
+                    .iter()
+                    .all(|coordinate| coordinate.precision_bits() == 64),
+                "tick {tick} delivered mixed coordinate precisions"
+            );
+        }
+    }
+
+    #[test]
     fn max_iter_sixty_four_holds_the_policy_limit_fixture() {
         let mut start = 0_u32;
         let coordinates = std::array::from_fn(|_| {

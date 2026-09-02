@@ -18,6 +18,7 @@ impl BigScalar {
         if !value.is_finite() || precision_bits == 0 {
             return Err(MathError::NonFinite);
         }
+        let precision_bits = rounded_astro_precision(precision_bits)?;
         Self::checked(
             BigFloat::from_f64(value, precision_bits as usize),
             precision_bits,
@@ -33,6 +34,7 @@ impl BigScalar {
         if !value.is_finite() || precision_bits == 0 {
             return Err(MathError::NonFinite);
         }
+        let precision_bits = rounded_astro_precision(precision_bits)?;
         Self::checked(
             BigFloat::from_f32(value, precision_bits as usize),
             precision_bits,
@@ -48,6 +50,7 @@ impl BigScalar {
         if precision_bits == 0 {
             return Err(MathError::InvalidCentreEncoding);
         }
+        let precision_bits = rounded_astro_precision(precision_bits)?;
         Self::checked(BigFloat::new(precision_bits as usize), precision_bits)
     }
 
@@ -120,6 +123,7 @@ impl BigScalar {
         if precision_bits == 0 {
             return Err(MathError::InvalidCentreEncoding);
         }
+        let precision_bits = rounded_astro_precision(precision_bits)?;
         let mut value = self.value.clone();
         value
             .set_precision(precision_bits as usize, RoundingMode::ToEven)
@@ -128,6 +132,7 @@ impl BigScalar {
     }
 
     pub(crate) fn add(&self, other: &Self, precision_bits: u32) -> Result<Self, MathError> {
+        let precision_bits = rounded_astro_precision(precision_bits)?;
         Self::checked(
             self.value
                 .add(&other.value, precision_bits as usize, RoundingMode::ToEven),
@@ -136,6 +141,7 @@ impl BigScalar {
     }
 
     pub(crate) fn sub(&self, other: &Self, precision_bits: u32) -> Result<Self, MathError> {
+        let precision_bits = rounded_astro_precision(precision_bits)?;
         Self::checked(
             self.value
                 .sub(&other.value, precision_bits as usize, RoundingMode::ToEven),
@@ -144,6 +150,7 @@ impl BigScalar {
     }
 
     pub(crate) fn mul(&self, other: &Self, precision_bits: u32) -> Result<Self, MathError> {
+        let precision_bits = rounded_astro_precision(precision_bits)?;
         Self::checked(
             self.value
                 .mul(&other.value, precision_bits as usize, RoundingMode::ToEven),
@@ -152,6 +159,7 @@ impl BigScalar {
     }
 
     pub(crate) fn div(&self, other: &Self, precision_bits: u32) -> Result<Self, MathError> {
+        let precision_bits = rounded_astro_precision(precision_bits)?;
         Self::checked(
             self.value
                 .div(&other.value, precision_bits as usize, RoundingMode::ToEven),
@@ -179,6 +187,13 @@ impl BigScalar {
     }
 }
 
+/// Rounds a requested precision up to 64 bits, the declared width of every `BigScalar`.
+///
+/// Astro-float rounds an operation's precision up to its own machine word, which is 64 bits on a
+/// 64-bit target and 32 bits on wasm32. Sixty-four is a multiple of both, so rounding here before
+/// the value ever reaches Astro-float makes the precision this type reports equal to the precision
+/// Astro-float actually allocated on every target: a request of 90 bits is 128 bits in both builds
+/// rather than 128 natively and 96 in the browser.
 fn rounded_astro_precision(precision_bits: u32) -> Result<u32, MathError> {
     precision_bits
         .checked_add(63)
@@ -387,7 +402,14 @@ pub fn encode_big_scalar(value: &BigScalar) -> Result<EncodedBigScalar, MathErro
     })
 }
 
-/// Decodes the worker protocol's canonical dyadic limbs.
+/// Decodes the worker protocol's canonical dyadic limbs at exactly the declared precision.
+///
+/// The delivered precision is `precision_bits` rounded up to 64, never the record's own mantissa
+/// width. A record whose significant width fits the declared precision decodes exactly; a wider one
+/// is rounded to nearest with ties to even, the same narrowing `ReferenceOrbitBuilder` applies one
+/// call later when it restates the centre at the plan's working precision. Widening to the record
+/// instead would let two coordinates of one centre report different precisions, because a centre
+/// carried at the navigator's precision holds mantissas of unequal significant width.
 ///
 /// # Errors
 ///
@@ -401,9 +423,10 @@ pub fn decode_big_scalar(
     if precision_bits == 0 || sign > 1 {
         return Err(MathError::InvalidCentreEncoding);
     }
+    let delivered_precision = rounded_astro_precision(precision_bits)?;
     if limbs.is_empty() {
         return (sign == 0 && exponent == 0)
-            .then(|| BigScalar::zero(precision_bits))
+            .then(|| BigScalar::zero(delivered_precision))
             .ok_or(MathError::InvalidCentreEncoding)?;
     }
     let high = *limbs.last().ok_or(MathError::InvalidCentreEncoding)?;
@@ -418,28 +441,39 @@ pub fn decode_big_scalar(
     let bit_count = lower_bits
         .checked_add(high_bits)
         .ok_or(MathError::CounterOverflow)?;
-    let mut digits = Vec::with_capacity(bit_count as usize);
-    for bit_from_high in (0..bit_count).rev() {
+    let trailing_zero_bits = trailing_zero_bits(limbs)?;
+    let mut digits = Vec::with_capacity((bit_count - trailing_zero_bits) as usize);
+    for bit_from_high in (trailing_zero_bits..bit_count).rev() {
         digits.push(((limbs[(bit_from_high / 32) as usize] >> (bit_from_high % 32)) & 1) as u8);
     }
     let radix_exponent = exponent
         .checked_add(i32::try_from(bit_count).map_err(|_| MathError::CounterOverflow)?)
         .ok_or(MathError::InvalidCentreEncoding)?;
-    let requested_precision = precision_bits.max(bit_count) as usize;
     let mut constants = Consts::new().map_err(|_| MathError::BigFloat)?;
     let value = BigFloat::convert_from_radix(
         if sign == 0 { Sign::Pos } else { Sign::Neg },
         &digits,
         radix_exponent,
         Radix::Bin,
-        requested_precision,
-        RoundingMode::None,
+        delivered_precision as usize,
+        RoundingMode::ToEven,
         &mut constants,
     );
-    BigScalar::checked(
-        value,
-        u32::try_from(requested_precision).map_err(|_| MathError::CounterOverflow)?,
-    )
+    BigScalar::checked(value, delivered_precision)
+}
+
+/// Counts the low zero bits of a nonzero little-endian limb array.
+fn trailing_zero_bits(limbs: &[u32]) -> Result<u32, MathError> {
+    for (index, limb) in limbs.iter().enumerate() {
+        if *limb != 0 {
+            return u32::try_from(index)
+                .map_err(|_| MathError::CounterOverflow)?
+                .checked_mul(32)
+                .and_then(|bits| bits.checked_add(limb.trailing_zeros()))
+                .ok_or(MathError::CounterOverflow);
+        }
+    }
+    Err(MathError::InvalidCentreEncoding)
 }
 
 #[cfg(test)]
@@ -490,6 +524,63 @@ mod tests {
             decode_big_scalar(2, 0, &[1], 64),
             Err(MathError::InvalidCentreEncoding)
         );
+    }
+
+    /// A product of two full 53-bit mantissas: 106 significant bits, wider than a shallow plan.
+    fn wide_mantissa() -> Result<BigScalar, MathError> {
+        let left = BigScalar::from_f64(core::f64::consts::PI, 1_024)?;
+        let right = BigScalar::from_f64(core::f64::consts::E, 1_024)?;
+        let product = left.mul(&right, 1_024)?;
+        assert!(encode_big_scalar(&product)?.limbs.len() > 2);
+        Ok(product)
+    }
+
+    #[test]
+    fn decode_delivers_the_declared_precision_at_every_mantissa_width() -> Result<(), MathError> {
+        let wide = wide_mantissa()?;
+        let encoded = encode_big_scalar(&wide)?;
+        // The three shallow-through-deep plans seen in a browser replay, plus the navigator's own.
+        for (requested, delivered) in [(47, 64), (67, 128), (107, 128), (1_024, 1_024)] {
+            let value = decode_big_scalar(
+                encoded.sign,
+                encoded.exponent,
+                &encoded.limbs,
+                requested,
+            )?;
+            assert_eq!(value.precision_bits(), delivered, "requested {requested}");
+            let zero = decode_big_scalar(0, 0, &[], requested)?;
+            assert_eq!(zero.precision_bits(), delivered, "zero at {requested}");
+            let narrow = decode_big_scalar(0, 0, &[1], requested)?;
+            assert_eq!(narrow.precision_bits(), delivered, "one at {requested}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn decode_is_exact_within_precision_and_rounds_beyond_it() -> Result<(), MathError> {
+        let wide = wide_mantissa()?;
+        let encoded = encode_big_scalar(&wide)?;
+        let exact = decode_big_scalar(encoded.sign, encoded.exponent, &encoded.limbs, 1_024)?;
+        assert_eq!(exact, wide);
+        assert_eq!(encode_big_scalar(&exact)?, encoded);
+        for precision in [47_u32, 67, 107] {
+            let decoded =
+                decode_big_scalar(encoded.sign, encoded.exponent, &encoded.limbs, precision)?;
+            assert_eq!(decoded, wide.with_precision(precision)?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn decode_ignores_trailing_record_zeroes() -> Result<(), MathError> {
+        // A record padded with low zero bits denotes the same value and must deliver the same
+        // precision as its minimal form; only the high limb is required to be nonzero.
+        let minimal = decode_big_scalar(0, -3, &[0b1011], 64)?;
+        let padded = decode_big_scalar(0, -3 - 32, &[0, 0b1011], 64)?;
+        assert_eq!(padded, minimal);
+        assert_eq!(padded.precision_bits(), 64);
+        assert_eq!(minimal.to_f64()?, 1.375);
+        Ok(())
     }
 
     #[test]
