@@ -34,7 +34,7 @@ The authoritative centre `C ∈ ℝ⁴` is decoded and held as a pure-Rust bignu
 
 For a grid of width `W`, the conceptual `pixel_scale = 4/(2^zoom_log2·W)` stays in CPU bignum or `f64` arithmetic and is factored as `pixel_scale = m·2^s`, with one round-to-nearest `m: f32` in `[0.5,1)` and `s: i32`; no absolute tiny scale is formed in `f32`.
 
-Displayed zoom depth is `zoom_digits = zoom_log2·log10(2)` and `depth_digits = ceil(max(0,zoom_digits))`; precision uses `D_floor = ceil(zoom_log2·log10(2)+log10(W))+8`, `D_work = D_floor+ceil(log10(max(max_iter,1)))`, and `precision_bits = ceil(D_work·log₂(10))`, rounded upward by Astro-float to its 64-bit word boundary.
+Displayed zoom depth is `zoom_digits = zoom_log2·log10(2)` and `depth_digits = ceil(max(0,zoom_digits))`; precision uses `D_floor = ceil(zoom_log2·log10(2)+log10(W))+8`, `D_work = D_floor+ceil(log10(max(max_iter,1)))`, and `precision_bits = ceil(D_work·log₂(10))`, rounded upward by math to a 64-bit boundary before it reaches Astro-float, so the delivered precision is the same number in the native gate and in the browser, where Astro-float's own word is 32 bits.
 
 The worker validates each reference by recomputing at `D_work+16` decimal digits and requiring the same escape index plus every emitted high/low component within two `f32` ulps; failure raises `D_work` in 16-digit steps through the displayed 300-digit POLICY, and exhaustion returns `PrecisionExhausted` rather than publishing an unverified orbit.
 
@@ -202,6 +202,8 @@ A nonzero coordinate is exactly `(−1)^sign · (Σ limbs[limb_start+k]·2^(32k)
 Canonical zero is `{ sign: 0, exponent: 0, limb_start: previous_end, limb_count: 0 }`; negative zero, leading zero limbs, unused limbs, and out-of-range descriptors are rejected.
 
 The library-independent dyadic encoding lets math's selected Astro-float `BigScalar` round-trip the same mathematical centre; math provides the exact `BigScalar ↔ (sign, exponent, limbs)` adapter and precision semantics, while worker owns canonical validation and transport.
+
+`decode_math` decodes all four coordinates at the request's declared `precision_bits`, which math delivers rounded up to 64 regardless of any coordinate's record width, so the four delivered precisions are equal by construction and the equality check states that invariant instead of gating on it. The transported record is the navigator's full-precision centre, not a centre already narrowed to the request, so a coordinate is routinely wider than the declaration; refusing on that width refuses every navigation whose anchor is a full-mantissa double, which is every navigation once the anchor is a canvas-relative CSS pixel rather than an integer.
 
 ### 3.3 Orbit response and credit return
 
