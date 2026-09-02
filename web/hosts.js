@@ -28,6 +28,34 @@ export function keysFor(id) {
   return g === 'arena' ? { ws: 'ws', proto: 'proto' } : { ws: `${g}_ws`, proto: `${g}_proto` };
 }
 
+/// The build stamp is per game for the same reason the address is: one host
+/// may run the arena from one commit and Fire Racer from another, and a
+/// one-game deploy must not restamp the other. Same derivation as `keysFor`
+/// — the arena owns the bare `version`/`commit`, everyone else is prefixed —
+/// and a reader falls back to the bare pair, because entries written by an
+/// older writer carry only that (docs/hosts.md §3).
+export function verKeysFor(id) {
+  const g = String(id || '').trim();
+  return g === 'arena'
+    ? { version: 'version', commit: 'commit' }
+    : { version: `${g}_version`, commit: `${g}_commit` };
+}
+
+/// The documented host-name shape (docs/hosts.md §6). It is checked here too,
+/// because the client is the one path where a third party's bytes arrive: a
+/// name with a slash or a space in it is not a host anyone published.
+const NAME_RE = /^[a-z0-9-]{3,32}$/;
+
+/// Bounds on untrusted input. The book is one file a writer pushes, but the
+/// mirrors it links to are third-party bytes served by anyone, and neither
+/// list has a natural end. Every one of these is a ceiling nobody legitimate
+/// reaches: the fleet is a handful of machines, not a hundred.
+const MAX_HOSTS = 128;
+const MAX_MIRRORS = 32;
+const MAX_BYTES = 512 * 1024;
+
+const warn = (msg) => { try { globalThis.console?.warn?.(`hosts.js: ${msg}`); } catch { /* no console */ } };
+
 /// `r211` -> 211. Higher is newer. Anything unparseable counts as zero, so
 /// an unstamped dev build sorts below every real one instead of throwing.
 export function parseVersion(v) {
@@ -39,43 +67,105 @@ const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const str = (v) => (typeof v === 'string' ? v.trim() : '');
 const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
-/// A book in the OLD single-host shape carries no `hosts`, only the legacy
-/// top-level keys. Rather than special-casing that everywhere downstream,
-/// synthesise one nameless entry out of them: from here on the rest of the
-/// module only ever sees a list of host entries. Returns null when the book
-/// names no address at all.
-function legacyEntry(book) {
+/// The key the synthesised legacy entry is merged under. A Symbol on purpose:
+/// the legacy entry is nameless, and a string key of `''` is exactly what a
+/// mirror entry with no name would produce, so a sentinel no payload can
+/// spell is the only way "a mirror can never erase the legacy address" holds.
+const LEGACY_KEY = Symbol('legacy');
+
+/// One entry, normalised, or null when it is not an entry at all. Every value
+/// that leaves this module is the shape the rest of the code assumes: address
+/// keys are non-empty strings or absent, protocol keys are numbers or absent,
+/// the name is the documented shape. Doing it here rather than at each call
+/// site is what makes `entry[k.ws].trim()` safe in a page that never heard of
+/// mirrors — a hostile `"ws": 123` is an absence, not a TypeError.
+function sanitiseEntry(e) {
+  if (!e || typeof e !== 'object' || Array.isArray(e)) return null;
+  const name = str(e.name);
+  if (name && !NAME_RE.test(name)) return null;
+  const out = { ...e, name };
+  delete out.legacy; // only this module may claim to be the legacy entry
+  for (const k of Object.keys(out)) {
+    if (k === 'ws' || k.endsWith('_ws')) {
+      const v = str(out[k]);
+      if (v) out[k] = v; else delete out[k];
+    } else if (k === 'proto' || k.endsWith('_proto')) {
+      if (!isNum(out[k])) delete out[k];
+    }
+  }
+  return out;
+}
+
+/// The legacy top-level keys, as one nameless entry — but only for the games
+/// no merged entry carries. A book in the OLD single-host shape has no
+/// `hosts` at all and yields its whole self here, which is the case the
+/// promotion was written for; a HALF-migrated book (the first per-game
+/// publish has written `hosts[]` for the arena, and `fire_ws` at the top
+/// level is still the only fire address there is) yields just the missing
+/// game's keys. Returns null when every address is already represented.
+function legacyEntry(book, merged) {
+  const covered = new Set();
+  for (const e of merged) {
+    for (const k of Object.keys(e)) if (k === 'ws' || k.endsWith('_ws')) covered.add(k);
+  }
   const e = { name: '', version: '', commit: '', updated: '', legacy: true };
   let any = false;
   for (const [k, v] of Object.entries(book)) {
-    if (k === 'ws' || k.endsWith('_ws')) {
-      if (str(v)) { e[k] = str(v); any = true; }
-    } else if (k === 'proto' || k.endsWith('_proto')) {
-      if (isNum(v)) e[k] = v;
+    if ((k === 'ws' || k.endsWith('_ws')) && !covered.has(k) && str(v)) {
+      e[k] = str(v);
+      any = true;
+      const p = k === 'ws' ? 'proto' : `${k.slice(0, -3)}_proto`;
+      if (isNum(book[p])) e[p] = book[p];
     }
   }
   return any ? e : null;
 }
 
-/// Merge a book's own `hosts` with the entries pulled from its mirrors.
-/// `name` is the merge key and the later entry wins outright (a publish
-/// REPLACES the entry of that name — it does not patch it), which is what
-/// lets a mirror keep its own entry fresh without a writer.
-export function mergeBook(book, mirrorEntries = []) {
-  const b = book && typeof book === 'object' ? book : {};
+/// Merge a book's own `hosts` with the entries its mirrors served.
+///
+/// `name` is the merge key. Inside the book's own list the later entry wins
+/// outright (a publish REPLACES the entry of that name — it does not patch
+/// it). Mirrors are the untrusted half and play by a stricter rule: each is
+/// BOUND to the one name the writer authorised it for, may serve exactly one
+/// entry, and may only fill a name the book does not already carry. A mirror
+/// that serves someone else's name — or a whole book — is dropped, because
+/// "add my box to the list" is the whole privilege a writer meant to grant,
+/// and the alternative is one linked URL silently redirecting every player.
+///
+/// `mirrors` is `[{ name, entry }]`: the bound name from the book's
+/// `mirrors[]`, and whatever that URL answered with.
+export function mergeBook(book, mirrors = []) {
+  const b = book && typeof book === 'object' && !Array.isArray(book) ? book : {};
   const byKey = new Map();
   const listed = Array.isArray(b.hosts) ? b.hosts : [];
-  for (const e of [...listed, ...(Array.isArray(mirrorEntries) ? mirrorEntries : [])]) {
-    if (!e || typeof e !== 'object' || Array.isArray(e)) continue;
-    const name = str(e.name);
+  for (const e of listed) {
+    const v = sanitiseEntry(e);
+    if (!v) continue;
     // Map.set on an existing key keeps the insertion position and replaces
     // the value: later wins, order stable.
-    byKey.set(name, { ...e, name });
+    if (!byKey.has(v.name) && byKey.size >= MAX_HOSTS) break;
+    byKey.set(v.name, v);
   }
-  const out = [...byKey.values()];
-  if (out.length) return out;
-  const legacy = legacyEntry(b);
-  return legacy ? [legacy] : [];
+
+  // Seeded BEFORE the mirrors, so a mirror can add itself next to the legacy
+  // address but can never take its place.
+  const legacy = legacyEntry(b, byKey.values());
+  if (legacy && byKey.size < MAX_HOSTS) byKey.set(LEGACY_KEY, legacy);
+
+  for (const m of Array.isArray(mirrors) ? mirrors : []) {
+    if (!m || typeof m !== 'object') continue;
+    const bound = str(m.name);
+    if (!NAME_RE.test(bound)) continue;
+    if (byKey.has(bound)) continue; // the book's own entry wins
+    const v = sanitiseEntry(m.entry);
+    if (!v || v.name !== bound) {
+      warn(`mirror ${bound} served an entry it is not bound to; ignored`);
+      continue;
+    }
+    if (byKey.size >= MAX_HOSTS) break;
+    byKey.set(bound, v);
+  }
+  return [...byKey.values()];
 }
 
 async function fetchJson(url, timeoutMs) {
@@ -84,7 +174,14 @@ async function fetchJson(url, timeoutMs) {
   try {
     const r = await fetch(String(url), { cache: 'no-store', signal: ctl ? ctl.signal : undefined });
     if (!r.ok) return null;
-    return await r.json();
+    // Bounded before it is parsed. The timeout alone does not bound a mirror:
+    // half a megabyte of nonsense arrives well inside four seconds, and
+    // JSON.parse on it is time every visitor pays.
+    const len = Number(r.headers?.get?.('content-length'));
+    if (Number.isFinite(len) && len > MAX_BYTES) return null;
+    const text = await r.text();
+    if (text.length > MAX_BYTES) return null;
+    return JSON.parse(text);
   } catch {
     return null; // a mirror that does not answer is absent, not an error
   } finally {
@@ -102,25 +199,50 @@ function bust(url, base) {
   }
 }
 
+/// One entry of the book's `mirrors[]`, as a bound reference, or null.
+///
+/// The object form `{ url, name }` is the only trusted one: the name is what
+/// the writer authorised that URL to publish. A bare string is the old shape
+/// and is UNBOUND — it names no host, so nothing it serves can be attributed,
+/// and it is logged and skipped rather than trusted or thrown over.
+function mirrorRef(m) {
+  if (typeof m === 'string') {
+    warn(`mirror ${m} is a bare URL with no host name; ignored — see docs/hosts.md §3`);
+    return null;
+  }
+  if (!m || typeof m !== 'object' || Array.isArray(m)) return null;
+  const url = str(m.url);
+  const name = str(m.name);
+  if (!url || !NAME_RE.test(name)) {
+    if (url) warn(`mirror ${url} is bound to no valid host name; ignored`);
+    return null;
+  }
+  return { url, name };
+}
+
 /// Fetch the address book cache-busted, then every mirror in parallel with
 /// its own timeout, and merge. Mirrors are third-party URLs: one that hangs
-/// must not hold the page, and one that returns nonsense must not break it,
-/// so each result is validated on its own and a failure is simply dropped.
-/// A mirror may serve one entry, a bare array, or a whole book.
+/// must not hold the page, one that returns nonsense must not break it, and
+/// one that returns a megabyte must not cost the visitor anything, so each
+/// result is bounded and validated on its own and a failure is dropped.
+/// A mirror serves exactly one entry, under the name it is bound to.
 export async function loadBook(rootUrl = './', { timeoutMs = 4000 } = {}) {
   const base = typeof location !== 'undefined' ? location.href : 'http://localhost/';
   const root = new URL(String(rootUrl), base);
   const book = (await fetchJson(bust(new URL('server.json', root), base), timeoutMs)) || {};
-  const mirrors = Array.isArray(book.mirrors) ? book.mirrors : [];
-  const fetched = await Promise.all(mirrors.map((m) => fetchJson(bust(m, base), timeoutMs)));
-  const entries = [];
-  for (const r of fetched) {
-    if (!r || typeof r !== 'object') continue;
-    if (Array.isArray(r)) entries.push(...r);
-    else if (Array.isArray(r.hosts)) entries.push(...r.hosts);
-    else entries.push(r);
+  try {
+    const listed = (Array.isArray(book.mirrors) ? book.mirrors : []).slice(0, MAX_MIRRORS);
+    const refs = listed.map(mirrorRef).filter(Boolean);
+    const fetched = await Promise.all(refs.map((m) => fetchJson(bust(m.url, base), timeoutMs)));
+    return { book, hosts: mergeBook(book, refs.map((m, i) => ({ name: m.name, entry: fetched[i] }))) };
+  } catch (e) {
+    // The contract is that a mirror is an absence, never an error that
+    // reaches the player. A throw anywhere in the merge would otherwise
+    // reject this promise — and both game pages await it at module top
+    // level, so the page would not start at all.
+    warn(`the mirror merge failed (${e}); continuing with the book alone`);
+    return { book, hosts: mergeBook(book, []) };
   }
-  return { book, hosts: mergeBook(book, entries) };
 }
 
 /// Open a socket, say Hello, and wait for the Welcome. Resolves
@@ -174,12 +296,16 @@ function probeOf(probes, name) {
 /// values stand — which is the whole reason the book carries them at all.
 function viewOf(entry, game, probe) {
   const k = keysFor(game);
+  const vk = verKeysFor(game);
   const ok = !!(probe && probe.ok);
   const w = (ok && probe.welcome) || {};
   const liveHost = str(w.host);
   const liveVer = str(w.version);
   const liveCommit = str(w.commit);
-  const version = liveVer || str(entry.version);
+  // This game's own stamp, falling back to the bare pair: an entry written
+  // by an older writer carries only that, and reading 0 there would rank
+  // every such host below every new-format one (docs/hosts.md §3).
+  const version = liveVer || str(entry[vk.version]) || str(entry.version);
   return {
     entry,
     game,
@@ -191,7 +317,7 @@ function viewOf(entry, game, probe) {
     url: str(entry[k.ws]),
     version,
     versionNum: parseVersion(version),
-    commit: liveCommit || str(entry.commit),
+    commit: liveCommit || str(entry[vk.commit]) || str(entry.commit),
     updated: str(entry.updated),
     proto: isNum(w.proto) ? w.proto : (isNum(entry[k.proto]) ? entry[k.proto] : null),
     players: isNum(w.players) ? w.players : (isNum(entry.players) ? entry.players : 0),
@@ -233,6 +359,12 @@ export function rankHosts(entries, { game, proto = null, pinned = null, probes =
     .filter((e) => e && typeof e === 'object' && str(e[k.ws]))
     .map((e) => viewOf(e, game, probeOf(probes, str(e.name))));
   if (probes) list = list.filter((v) => v.ok);
+  // The hosts the protocol filter is about to drop are kept as data. A page
+  // that reports "the games are offline" when a host answered on protocol 11
+  // is telling the player to leave during exactly the deploy window where the
+  // truthful answer — "play the build that speaks 11" — still has a game in
+  // it (docs/hosts.md §5).
+  const wrongProto = wanted === null ? [] : list.filter((v) => v.proto !== wanted);
   if (wanted !== null) list = list.filter((v) => v.proto === wanted);
 
   list.sort((a, b) => (b.versionNum - a.versionNum)
@@ -249,10 +381,14 @@ export function rankHosts(entries, { game, proto = null, pinned = null, probes =
   const candidates = [...head, ...tail];
   const pin = str(pinned);
   if (pin) {
-    const i = candidates.findIndex((v) => v.bookName === pin || v.name === pin);
+    // The BOOK name only. The pin is written from the hosts strip, which is
+    // keyed on `bookName`, so nothing ever pins a live Welcome name — and
+    // matching one would let a host reporting someone else's name absorb the
+    // pin, leaving the host the player actually chose unpromoted.
+    const i = candidates.findIndex((v) => v.bookName === pin);
     if (i > 0) candidates.unshift(...candidates.splice(i, 1));
   }
-  return { chosen: candidates[0] || null, candidates };
+  return { chosen: candidates[0] || null, candidates, wrongProto };
 }
 
 /// Read the pinned host name. Guarded: a browser with storage disabled
@@ -293,8 +429,8 @@ export async function chooseHost(rootUrl = './', {
     probes.set(str(e.name), r);
   }));
   const pin = pinned === undefined ? readPin() : str(pinned);
-  const { chosen, candidates } = rankHosts(running, { game, proto, pinned: pin, probes });
-  return { book, hosts, probes, chosen, candidates, pinned: pin };
+  const { chosen, candidates, wrongProto } = rankHosts(running, { game, proto, pinned: pin, probes });
+  return { book, hosts, probes, chosen, candidates, wrongProto, pinned: pin };
 }
 
 /// Ask one host for its open lobbies. The arena tags the reply `lobby_list`
@@ -340,9 +476,23 @@ export function listLobbies(url, { proto = 0, timeoutMs = 6000, handle = 'browse
 /// trip on the face; commit and address in the tooltip, because the address
 /// is a tunnel URL nobody wants to read but everybody needs when reporting a
 /// problem.
-export function renderChip(el, choice) {
+/// `wrongProto` (and the page's own `proto`) turn the empty case into two
+/// different sentences. "Offline" and "everyone answered on another protocol"
+/// are not the same news: the second one still has a playable build behind
+/// it, and saying the first tells the player to give up.
+export function renderChip(el, choice, { wrongProto = [], proto = null } = {}) {
   if (!el) return;
   if (!choice) {
+    const other = (Array.isArray(wrongProto) ? wrongProto : []).filter((v) => v && isNum(v.proto));
+    if (other.length) {
+      el.textContent = 'wrong protocol';
+      el.title = [
+        isNum(proto) ? `this build speaks protocol ${proto}` : 'this build speaks another protocol',
+        ...other.slice(0, 4).map((v) => `${v.name || 'a host'} speaks ${v.proto}`),
+        'play the build that matches, from the games page',
+      ].join('\n');
+      return;
+    }
     el.textContent = 'no server';
     el.title = 'no host answered — the games are offline right now';
     return;

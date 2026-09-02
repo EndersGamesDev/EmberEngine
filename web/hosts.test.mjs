@@ -13,11 +13,13 @@ import {
   chooseHost,
   keysFor,
   listLobbies,
+  loadBook,
   mergeBook,
   parseVersion,
   probeHost,
   rankHosts,
   renderChip,
+  verKeysFor,
 } from './hosts.js';
 
 // ---- key derivation ------------------------------------------------------
@@ -26,6 +28,12 @@ test('keysFor: the arena owns the bare names, everyone else is prefixed', () => 
   assert.deepEqual(keysFor('arena'), { ws: 'ws', proto: 'proto' });
   assert.deepEqual(keysFor('fire'), { ws: 'fire_ws', proto: 'fire_proto' });
   assert.deepEqual(keysFor('kings'), { ws: 'kings_ws', proto: 'kings_proto' });
+});
+
+test('verKeysFor: the build stamp is derived the same way as the address', () => {
+  assert.deepEqual(verKeysFor('arena'), { version: 'version', commit: 'commit' });
+  assert.deepEqual(verKeysFor('fire'), { version: 'fire_version', commit: 'fire_commit' });
+  assert.deepEqual(verKeysFor('kings'), { version: 'kings_version', commit: 'kings_commit' });
 });
 
 test('PIN_KEY is the documented localStorage key', () => {
@@ -47,19 +55,95 @@ test('parseVersion: r<N> is an integer, anything else is zero', () => {
 
 // ---- merging -------------------------------------------------------------
 
+const mirror = (name, entry) => ({ name, entry });
+
 test('mergeBook: entries merge by name and the later one wins', () => {
   const book = {
     hosts: [
       { name: 'amber-otter', ws: 'wss://a', version: 'r200' },
       { name: 'flint-heron', ws: 'wss://b', version: 'r100' },
+      { name: 'amber-otter', ws: 'wss://a2', version: 'r211' },
     ],
   };
-  const merged = mergeBook(book, [{ name: 'amber-otter', ws: 'wss://a2', version: 'r211' }]);
+  const merged = mergeBook(book);
   assert.equal(merged.length, 2);
   assert.equal(merged[0].name, 'amber-otter');
   assert.equal(merged[0].ws, 'wss://a2');
   assert.equal(merged[0].version, 'r211');
   assert.equal(merged[1].name, 'flint-heron');
+});
+
+test('mergeBook: a mirror adds the one entry it is bound to', () => {
+  const book = { hosts: [{ name: 'flint-heron', ws: 'wss://b', version: 'r100' }] };
+  const merged = mergeBook(book, [
+    mirror('amber-otter', { name: 'amber-otter', ws: 'wss://a', version: 'r211' }),
+  ]);
+  assert.deepEqual(merged.map((h) => h.name), ['flint-heron', 'amber-otter']);
+  assert.equal(merged[1].ws, 'wss://a');
+});
+
+test('mergeBook: a mirror cannot publish another host’s entry', () => {
+  const book = { hosts: [{ name: 'flint-heron', ws: 'wss://real', version: 'r100' }] };
+  // The classic hijack: the mirror is bound to `amber-otter` and serves
+  // `flint-heron` pointing at its own socket.
+  const merged = mergeBook(book, [
+    mirror('amber-otter', { name: 'flint-heron', ws: 'wss://evil', version: 'r999999' }),
+  ]);
+  assert.deepEqual(merged.map((h) => h.name), ['flint-heron']);
+  assert.equal(merged[0].ws, 'wss://real');
+});
+
+test('mergeBook: the book’s own entry wins over a mirror of the same name', () => {
+  const book = { hosts: [{ name: 'amber-otter', ws: 'wss://real', version: 'r100' }] };
+  const merged = mergeBook(book, [
+    mirror('amber-otter', { name: 'amber-otter', ws: 'wss://evil', version: 'r999999' }),
+  ]);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].ws, 'wss://real');
+});
+
+test('mergeBook: a mirror may not serve an array or a whole book', () => {
+  const book = { hosts: [] };
+  const asArray = mergeBook(book, [mirror('amber-otter', [{ name: 'amber-otter', ws: 'wss://a' }])]);
+  const asBook = mergeBook(book, [mirror('amber-otter', { hosts: [{ name: 'amber-otter', ws: 'wss://a' }] })]);
+  assert.deepEqual(asArray, []);
+  assert.deepEqual(asBook, []);
+});
+
+test('mergeBook: a name outside [a-z0-9-]{3,32} is not a host', () => {
+  const merged = mergeBook({
+    hosts: [
+      { name: 'Amber Otter', ws: 'wss://a' },
+      { name: 'ok', ws: 'wss://b' },
+      { name: 'amber-otter', ws: 'wss://c' },
+    ],
+  });
+  assert.deepEqual(merged.map((h) => h.name), ['amber-otter']);
+  // And a mirror bound to a malformed name is not bound at all.
+  assert.deepEqual(mergeBook({}, [mirror('a/b', { name: 'a/b', ws: 'wss://x' })]), []);
+});
+
+test('mergeBook: address keys leave the module as strings or not at all', () => {
+  const merged = mergeBook({
+    hosts: [{ name: 'amber-otter', ws: 123, fire_ws: 'wss://f', proto: 'twelve', fire_proto: 1 }],
+  });
+  assert.equal(merged.length, 1);
+  assert.equal('ws' in merged[0], false);
+  assert.equal('proto' in merged[0], false);
+  assert.equal(merged[0].fire_ws, 'wss://f');
+  assert.equal(merged[0].fire_proto, 1);
+});
+
+test('mergeBook: neither the book nor its mirrors can grow the list without end', () => {
+  const hosts = Array.from({ length: 500 }, (_, i) => ({
+    name: `host-${String(i).padStart(4, '0')}`,
+    ws: `wss://${i}`,
+  }));
+  const mirrors = Array.from({ length: 500 }, (_, i) => {
+    const name = `mirror-${String(i).padStart(4, '0')}`;
+    return mirror(name, { name, ws: `wss://m${i}` });
+  });
+  assert.equal(mergeBook({ hosts }, mirrors).length, 128);
 });
 
 test('mergeBook: a legacy book with no hosts list still yields one entry', () => {
@@ -90,6 +174,54 @@ test('mergeBook: a book with neither hosts nor addresses yields nothing', () => 
   assert.deepEqual(mergeBook(null), []);
 });
 
+test('mergeBook: a mirror cannot erase the legacy address', () => {
+  const merged = mergeBook(
+    { ws: 'wss://old', proto: 12 },
+    [mirror('stranger-heron', { name: 'stranger-heron', ws: 'wss://x' })],
+  );
+  assert.equal(merged.length, 2);
+  const legacy = merged.find((h) => h.legacy);
+  assert.equal(legacy.ws, 'wss://old');
+  assert.equal(legacy.proto, 12);
+  assert.equal(legacy.name, '');
+  // Seeded first, so the legacy address is also the first fallback.
+  assert.equal(merged[0], legacy);
+});
+
+test('mergeBook: a half-migrated book keeps the other game’s legacy address', () => {
+  // The first per-game publish has written hosts[] for the arena only; the
+  // still-live fire address is only at the top level.
+  const merged = mergeBook({
+    proto: 12,
+    fire_proto: 1,
+    ws: 'wss://old-arena',
+    fire_ws: 'wss://live-fire',
+    hosts: [{ name: 'amber-otter', ws: 'wss://new-arena', proto: 12, version: 'r211' }],
+  });
+  assert.equal(merged.length, 2);
+  assert.equal(merged[0].name, 'amber-otter');
+  const legacy = merged[1];
+  assert.equal(legacy.legacy, true);
+  assert.equal(legacy.fire_ws, 'wss://live-fire');
+  assert.equal(legacy.fire_proto, 1);
+  // The arena is carried by a real entry, so the stale top-level `ws` is not
+  // resurrected as a second arena host.
+  assert.equal('ws' in legacy, false);
+  assert.deepEqual(
+    rankHosts(merged, { game: 'fire', proto: 1 }).candidates.map((c) => c.url),
+    ['wss://live-fire'],
+  );
+});
+
+test('mergeBook: a book whose hosts cover every game synthesises nothing', () => {
+  const merged = mergeBook({
+    ws: 'wss://old-arena',
+    proto: 12,
+    hosts: [{ name: 'amber-otter', ws: 'wss://new-arena', proto: 12 }],
+  });
+  assert.deepEqual(merged.map((h) => h.name), ['amber-otter']);
+});
+
 // ---- ranking -------------------------------------------------------------
 
 const ok = (extra = {}) => ({ ok: true, rttMs: 50, welcome: { t: 'welcome', ...extra } });
@@ -105,21 +237,56 @@ const entry = (name, over = {}) => ({
   ...over,
 });
 
-test('rankHosts: the newest version wins, then updated, then name', () => {
+test('rankHosts: the newest version wins, then name inside it', () => {
   const hosts = [
     entry('old', { version: 'r100' }),
     entry('newer', { version: 'r211' }),
-    entry('newest-b', { version: 'r300', updated: '2026-09-01T09:00:00Z' }),
-    entry('newest-a', { version: 'r300', updated: '2026-09-01T11:00:00Z' }),
+    entry('newest-b', { version: 'r300', updated: '2026-09-01T11:00:00Z' }),
+    entry('newest-a', { version: 'r300', updated: '2026-09-01T09:00:00Z' }),
   ];
   const { chosen, candidates } = rankHosts(hosts, { game: 'arena' });
-  // No probes at all: the load/rtt tie-break has nothing to work with, so
-  // `updated` decides inside the newest build.
+  // No probes at all: players and rtt tie, so NAME decides inside the newest
+  // build (§5 step 5) — asserted AGAINST the `updated` order, which is a
+  // property of the head sort and not of this one.
   assert.equal(chosen.name, 'newest-a');
   assert.deepEqual(
     candidates.map((c) => c.name),
     ['newest-a', 'newest-b', 'newer', 'old'],
   );
+});
+
+test('rankHosts: below the newest build, the newer `updated` ranks first', () => {
+  // §5 step 3's `updated` clause survives only in the tail: the head is
+  // re-sorted by load and rtt, so this is the one place it decides anything.
+  const hosts = [
+    entry('newest', { version: 'r300' }),
+    entry('a-stale', { version: 'r100', updated: '2026-09-01T09:00:00Z' }),
+    entry('b-fresh', { version: 'r100', updated: '2026-09-01T11:00:00Z' }),
+  ];
+  assert.deepEqual(
+    rankHosts(hosts, { game: 'arena' }).candidates.map((c) => c.name),
+    ['newest', 'b-fresh', 'a-stale'],
+  );
+});
+
+test('rankHosts: a game’s own build stamp wins, and falls back to the bare one', () => {
+  const hosts = [
+    // Written by the current writer: the arena is old here, fire is new.
+    { name: 'split-stamp', ws: 'wss://a', fire_ws: 'wss://f', version: 'r100', fire_version: 'r300' },
+    // Written by an older writer that knew only the bare pair.
+    { name: 'old-writer', ws: 'wss://b', fire_ws: 'wss://g', version: 'r200', commit: 'aaa1111' },
+  ];
+  assert.deepEqual(
+    rankHosts(hosts, { game: 'arena' }).candidates.map((c) => c.name),
+    ['old-writer', 'split-stamp'],
+  );
+  assert.deepEqual(
+    rankHosts(hosts, { game: 'fire' }).candidates.map((c) => c.name),
+    ['split-stamp', 'old-writer'],
+  );
+  // The fallback is what keeps an older entry from ranking as an unstamped 0.
+  assert.equal(rankHosts(hosts, { game: 'fire' }).candidates[1].versionNum, 200);
+  assert.equal(rankHosts(hosts, { game: 'fire' }).candidates[1].commit, 'aaa1111');
 });
 
 test('rankHosts: unparseable versions sort last', () => {
@@ -145,7 +312,37 @@ test('rankHosts: the protocol filter drops hosts on another build', () => {
 
 test('rankHosts: the hub mode (no proto) keeps every protocol', () => {
   const hosts = [entry('twelve', { proto: 12 }), entry('eleven', { proto: 11 })];
-  assert.equal(rankHosts(hosts, { game: 'arena' }).candidates.length, 2);
+  const r = rankHosts(hosts, { game: 'arena' });
+  assert.equal(r.candidates.length, 2);
+  assert.deepEqual(r.wrongProto, []);
+});
+
+test('rankHosts: a host that answered on another protocol is reported, not lost', () => {
+  // The protocol-bump window: the page is on 12, the only host still on 11.
+  const hosts = [entry('amber-otter', { proto: 11 })];
+  const probes = new Map([['amber-otter', ok({ proto: 11 })]]);
+  const r = rankHosts(hosts, { game: 'arena', proto: 12, probes });
+  assert.equal(r.chosen, null);
+  assert.deepEqual(r.candidates, []);
+  assert.deepEqual(r.wrongProto.map((v) => [v.name, v.proto, v.url]), [['amber-otter', 11, 'wss://amber-otter']]);
+});
+
+test('rankHosts: a host that never answered is not reported as a mismatch', () => {
+  const hosts = [entry('down', { proto: 11 })];
+  const r = rankHosts(hosts, { game: 'arena', proto: 12, probes: new Map([['down', dead]]) });
+  assert.deepEqual(r.wrongProto, []);
+});
+
+test('renderChip: a protocol mismatch is not "offline"', () => {
+  const el = { textContent: '', title: '' };
+  renderChip(el, null, { wrongProto: [{ name: 'amber-otter', proto: 11 }], proto: 12 });
+  assert.equal(el.textContent, 'wrong protocol');
+  assert.match(el.title, /this build speaks protocol 12/);
+  assert.match(el.title, /amber-otter speaks 11/);
+
+  renderChip(el, null, { wrongProto: [], proto: 12 });
+  assert.equal(el.textContent, 'no server');
+  assert.match(el.title, /offline/);
 });
 
 test('rankHosts: the live Welcome proto beats a stale book key', () => {
@@ -218,6 +415,19 @@ test('rankHosts: a pinned host that answered goes first, and stays in the list o
     candidates.map((c) => c.name),
     ['pinned', 'best'],
   );
+});
+
+test('rankHosts: the pin matches the book name, never a live Welcome name', () => {
+  // A host reporting someone else's name in its Welcome must not absorb the
+  // pin: the pin is written from the hosts strip, which is keyed on the book
+  // name, so the real `pinned` entry is the one that has to be promoted.
+  const hosts = [entry('impostor'), entry('pinned', { version: 'r100' })];
+  const probes = new Map([
+    ['impostor', ok({ host: 'pinned' })],
+    ['pinned', ok()],
+  ]);
+  const { chosen } = rankHosts(hosts, { game: 'arena', pinned: 'pinned', probes });
+  assert.equal(chosen.bookName, 'pinned');
 });
 
 test('rankHosts: a pin that did not answer is ignored, not fatal', () => {
@@ -383,52 +593,88 @@ test('probeHost: a timeout resolves and closes the socket', async () => {
 
 // ---- the whole pipeline, with fetch and sockets both faked ---------------
 
-test('chooseHost: loads, probes and ranks, mirrors merged in', async () => {
+// The smallest thing that behaves like the half of `Response` fetchJson uses.
+const fakeResponse = (body) => ({
+  ok: true,
+  headers: { get: () => null },
+  text: async () => (typeof body === 'string' ? body : JSON.stringify(body)),
+});
+
+async function withFetch(routes, fn) {
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
     const path = String(url);
-    if (path.includes('server.json')) {
-      return {
-        ok: true,
-        json: async () => ({
-          v: '1',
-          hosts: [
-            { name: 'stale-mirror', ws: 'ws://mirror', proto: 12, version: 'r100' },
-            { name: 'down', ws: 'ws://down', proto: 12, version: 'r999' },
-          ],
-          mirrors: ['http://mirror.example/host.json', 'http://gone.example/host.json'],
-        }),
-      };
-    }
-    if (path.includes('mirror.example')) {
-      return {
-        ok: true,
-        json: async () => ({ name: 'stale-mirror', ws: 'ws://mirror', proto: 12, version: 'r211' }),
-      };
+    for (const [needle, body] of routes) {
+      if (path.includes(needle)) return fakeResponse(body);
     }
     throw new Error('offline');
   };
-  try {
-    const { chosen, candidates, hosts } = await chooseHost('http://localhost/', {
-      game: 'arena',
-      proto: 12,
-      pinned: '',
-      socketFactory: (url) =>
-        url === 'ws://mirror'
-          ? fakeSocket({ messages: [{ t: 'welcome', proto: 12, players: 0 }] })(url)
-          : fakeSocket({ open: false })(url),
-    });
-    // The mirror's fresher copy of its own entry replaced the book's.
-    assert.equal(hosts.find((h) => h.name === 'stale-mirror').version, 'r211');
-    assert.equal(chosen.name, 'stale-mirror');
-    // `down` had the newest version in the book and still loses: it is gone.
-    assert.deepEqual(
-      candidates.map((c) => c.name),
-      ['stale-mirror'],
-    );
-  } finally {
-    globalThis.fetch = realFetch;
-  }
+  try { return await fn(); } finally { globalThis.fetch = realFetch; }
+}
+
+test('chooseHost: loads, probes and ranks, a bound mirror merged in', async () => {
+  const r = await withFetch([
+    ['server.json', {
+      v: '1',
+      hosts: [{ name: 'down', ws: 'ws://down', proto: 12, version: 'r999' }],
+      mirrors: [
+        { url: 'http://mirror.example/host.json', name: 'quiet-raven' },
+        { url: 'http://gone.example/host.json', name: 'flint-heron' },
+      ],
+    }],
+    ['mirror.example', { name: 'quiet-raven', ws: 'ws://mirror', proto: 12, version: 'r211' }],
+  ], () => chooseHost('http://localhost/', {
+    game: 'arena',
+    proto: 12,
+    pinned: '',
+    socketFactory: (url) =>
+      url === 'ws://mirror'
+        ? fakeSocket({ messages: [{ t: 'welcome', proto: 12, players: 0 }] })(url)
+        : fakeSocket({ open: false })(url),
+  }));
+  // The mirror published its own entry, under the name it is bound to.
+  assert.equal(r.hosts.find((h) => h.name === 'quiet-raven').version, 'r211');
+  assert.equal(r.chosen.name, 'quiet-raven');
+  // `down` had the newest version in the book and still loses: it is gone.
+  assert.deepEqual(r.candidates.map((c) => c.name), ['quiet-raven']);
+});
+
+test('loadBook: a mirror serving another host’s address cannot redirect anyone', async () => {
+  const { hosts } = await withFetch([
+    ['server.json', {
+      hosts: [{ name: 'amber-otter', ws: 'wss://real', proto: 12, version: 'r211' }],
+      mirrors: [{ url: 'http://evil.example/host.json', name: 'quiet-raven' }],
+    }],
+    ['evil.example', { name: 'amber-otter', ws: 'wss://evil', proto: 12, version: 'r999999' }],
+  ], () => loadBook('http://localhost/'));
+  assert.deepEqual(hosts.map((h) => h.ws), ['wss://real']);
+});
+
+test('loadBook: a bare mirror URL is unbound, so nothing it serves is trusted', async () => {
+  const { hosts } = await withFetch([
+    ['server.json', {
+      hosts: [{ name: 'amber-otter', ws: 'wss://real', proto: 12 }],
+      mirrors: ['http://legacy.example/host.json'],
+    }],
+    ['legacy.example', { name: 'quiet-raven', ws: 'wss://x', proto: 12 }],
+  ], () => loadBook('http://localhost/'));
+  // The old shape names no host, so nothing it serves can be attributed.
+  assert.deepEqual(hosts.map((h) => h.name), ['amber-otter']);
+});
+
+test('loadBook: a huge mirror payload is an absence, never a rejection', async () => {
+  // Both halves of the old spread: 200k entries in one payload, and a body
+  // far past the size guard. Neither may reject the promise both game pages
+  // await at module top level.
+  const flood = JSON.stringify({ hosts: Array.from({ length: 200000 }, (_, i) => ({ name: `h-${i}`, ws: `wss://${i}` })) });
+  const { hosts } = await withFetch([
+    ['server.json', {
+      hosts: [{ name: 'amber-otter', ws: 'wss://real', proto: 12 }],
+      mirrors: [{ url: 'http://flood.example/host.json', name: 'quiet-raven' }],
+    }],
+    ['flood.example', flood],
+  ], () => loadBook('http://localhost/'));
+  assert.deepEqual(hosts.map((h) => h.name), ['amber-otter']);
 });
 
 // ---- the chip ------------------------------------------------------------
