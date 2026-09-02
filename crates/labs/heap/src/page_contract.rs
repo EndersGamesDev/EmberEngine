@@ -1,6 +1,7 @@
 //! Native source-level guards for the self-contained browser page contract.
 
 const PAGE: &str = include_str!("../../../../web/labs/heap/index.html");
+const BROWSER_ERROR: &str = include_str!("browser_error.rs");
 const RUNTIME: &str = include_str!("lattice_gpu.rs");
 const CONTRACT: &str = include_str!("../../../../docs/gpu-heap-lattice.md");
 
@@ -79,7 +80,9 @@ fn panic_hook_and_latest_selection_contract_are_visible() {
         "yield_to_browser().await",
     ] {
         assert!(
-            PAGE.contains(required) || RUNTIME.contains(required),
+            PAGE.contains(required)
+                || RUNTIME.contains(required)
+                || BROWSER_ERROR.contains(required),
             "missing panic or selection contract: {required}"
         );
     }
@@ -143,7 +146,7 @@ fn measured_order_fences_the_draw_before_presenting() {
         .find("frame.present()")
         .expect("frame is presented");
     assert!(submit < wait && wait < end && end < present);
-    assert!(RUNTIME.contains("let fence = self.pending_fence();"));
+    assert!(RUNTIME.contains("let fence = self.pending_fence(generation)?;"));
 }
 
 #[test]
