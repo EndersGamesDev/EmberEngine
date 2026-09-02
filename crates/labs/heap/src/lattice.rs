@@ -228,8 +228,7 @@ pub fn mode_a_endpoint(
         denominator_five
     };
     let scale_five = frame.projection_spacing[0] / safe_five;
-    let projected_four: [f32; 4] =
-        std::array::from_fn(|axis| rotated[axis] * scale_five);
+    let projected_four: [f32; 4] = std::array::from_fn(|axis| rotated[axis] * scale_five);
     let denominator_four = frame.projection_spacing[1] - projected_four[3];
     let safe_four = if denominator_four.abs() < frame.projection_spacing[3] {
         frame.projection_spacing[3]
@@ -260,8 +259,8 @@ pub fn mode_a_shader(limits: DialectLimits) -> String {
 #[cfg(test)]
 mod tests {
     use ember_lab_layer::geometry::{
-        EDGES_PER_COPY, LATTICE_SPACING, assert_invariants, lattice_coordinate,
-        lattice_edge_count, lattice_steps, prism, project_gpu_path,
+        EDGES_PER_COPY, LATTICE_SPACING, assert_invariants, lattice_coordinate, lattice_edge_count,
+        lattice_steps, prism, project_gpu_path,
     };
 
     use super::{
