@@ -333,8 +333,7 @@ impl Presenter {
         let scene_samples = &mut self.scene_samples;
         let warp_samples = &mut self.warp_samples;
         let texture_index = self.ledger.begin(|texture_index| {
-            let reallocated =
-                ensure_scene_texture(device, gpu, texture_index as usize, extent)?;
+            let reallocated = ensure_scene_texture(device, gpu, texture_index as usize, extent)?;
             if reallocated {
                 facts.texture_reallocations = facts.texture_reallocations.saturating_add(1);
                 scene_samples.reset();
@@ -465,11 +464,7 @@ impl Presenter {
             });
             pass.set_pipeline(&self.gpu.warp_pipeline);
             pass.set_bind_group(0, &self.gpu.scene_textures[texture_index].warp_group, &[]);
-            pass.set_bind_group(
-                1,
-                &self.gpu.warp_hot_group,
-                &[hot_slot.dynamic_offset()],
-            );
+            pass.set_bind_group(1, &self.gpu.warp_hot_group, &[hot_slot.dynamic_offset()]);
             pass.draw(0..3, 0..1);
         }
         encoder.clear_buffer(&self.gpu.warp_fence, 0, Some(FENCE_BYTES));

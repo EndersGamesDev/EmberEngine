@@ -275,13 +275,19 @@ mod tests {
     fn ledger_builds_pending_scene_from_its_returned_texture_index() {
         let mut ledger = SceneLedger::default();
         assert_eq!(begin(&mut ledger, 1, 1), 0);
-        assert_eq!(ledger.pending().map(|pending| pending.texture_index), Some(0));
+        assert_eq!(
+            ledger.pending().map(|pending| pending.texture_index),
+            Some(0)
+        );
         assert!(matches!(
             ledger.complete(measurement(1)),
             Some(SceneCompletion::Promoted(_))
         ));
         assert_eq!(begin(&mut ledger, 2, 1), 1);
-        assert_eq!(ledger.pending().map(|pending| pending.texture_index), Some(1));
+        assert_eq!(
+            ledger.pending().map(|pending| pending.texture_index),
+            Some(1)
+        );
     }
 
     #[test]
