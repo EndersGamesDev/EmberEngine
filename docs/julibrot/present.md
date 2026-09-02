@@ -1,6 +1,6 @@
 # Julibrot presentation slice
 
-Status: implementation in progress for `crates/labs/julibrot/present`; the seam-independent foundation contains present-owned palettes, exact GPU record layouts, HOT-ring arithmetic, generic homography packing and solving, checked tumbled mesh construction, and an algebra-oracle bridge to the heap dependency, while math-owned warp integration and heap-resource construction remain dependency-gated.
+Status: implementation in progress for `crates/labs/julibrot/present`; the seam-independent foundation contains present-owned palettes, exact GPU record layouts, HOT-ring arithmetic, generic homography packing and solving, checked tumbled mesh construction, an algebra-oracle bridge to the heap dependency, and heap-capacity-specialized flat/tumbled scene WGSL, while math-owned warp integration and heap-resource construction remain dependency-gated.
 
 ## 1. Ownership and boundary
 
@@ -390,6 +390,8 @@ Warp cost per refresh, scene-frame cost, fence wait, polls, warm-up exclusion, f
 Phase 0A is the dependency-independent subset now implemented: the package shell, exact palette records and scalar oracle, 128-byte HOT and 80-byte scene layouts, checked three-slot ring arithmetic, and finite homography solver and packer; it intentionally defines no substitute for math-owned `ViewMode`, `Plane`, `Pose`, or `warp_matrix`.
 
 Phase 3A now also implements checked tumbled index and coordinate construction, present's standing VIEW coefficients, and an oracle bridge to heap's exported `mode_a_endpoint` without constructing any heap resource or math-owned type.
+
+Phase 2/3 shader work now implements heap-capacity-specialized flat and tumbled scene WGSL, dense-prefix handle resolution, bottom-row addressing, honest record shading, double-perspective pole rejection, the fixed rawgl camera, and derivative lighting without constructing the pending heap seam.
 
 Phase 0 adds the present package shell, shared records, byte-layout assertions, palette scalar reference, consumption of the app-lane `HeapPresentResources` seam, and pure f64 homography/oracle code, estimated at 360 new Rust and test lines.
 

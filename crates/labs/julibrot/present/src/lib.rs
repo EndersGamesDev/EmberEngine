@@ -5,6 +5,7 @@
 mod homography;
 mod mesh;
 mod palette;
+mod shader;
 mod uniform;
 
 pub use homography::{
@@ -18,6 +19,7 @@ pub use palette::{
     CLASSIC_PALETTE, EMBER_PALETTE, ICE_PALETTE, PaletteId, PaletteOutcome, PaletteRecord, palette,
     shade_escape_record,
 };
+pub use shader::{ShaderSources, scene_shaders};
 pub use uniform::{
     HOT_PAYLOAD_BYTES, HOT_RING_SLOTS, HotSlot, HotUniform, PresentDataError, SceneUniform,
     hot_ring_bytes, hot_stride,
