@@ -1,9 +1,9 @@
 //! Descriptor-heap-effect WebGL2 lab and native allocator evidence.
 
 #[cfg(any(test, target_arch = "wasm32"))]
-pub(crate) mod conformance;
-#[cfg(any(test, target_arch = "wasm32"))]
 mod completion;
+#[cfg(any(test, target_arch = "wasm32"))]
+pub(crate) mod conformance;
 mod dialect;
 mod heap;
 #[cfg(any(test, target_arch = "wasm32"))]

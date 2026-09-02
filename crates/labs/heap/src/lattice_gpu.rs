@@ -21,12 +21,12 @@ use serde::Serialize;
 use wasm_bindgen::prelude::*;
 use wgpu::util::DeviceExt as _;
 
+use crate::completion::{MAX_COMPLETION_POLLS, PollCounter};
 use crate::conformance::{
     IMAGE_BYTES, IMAGE_BYTES_PER_ROW, IMAGE_HEIGHT, IMAGE_WIDTH, ImageComparison,
     NumericComparison, RECORD_BYTES, RECORD_STRIDE, compare_images, compare_records,
     deterministic_indices,
 };
-use crate::completion::{MAX_COMPLETION_POLLS, PollCounter};
 use crate::{
     BOX_INDICES, ComparatorWork, DataSpan, DialectLimits, DispatchPlan, EqualWorkSignature,
     FrameUniform, KernelDesc, ModeCFrameUniform, RegisteredKernel, SpanArena, StaticHeaders,

@@ -76,7 +76,9 @@ fn measured_order_fences_the_draw_before_presenting() {
     let end = function
         .find("let elapsed_ms = performance_now() - started")
         .expect("measured end is captured");
-    let present = function.find("frame.present()").expect("frame is presented");
+    let present = function
+        .find("frame.present()")
+        .expect("frame is presented");
     assert!(submit < wait && wait < end && end < present);
     assert!(RUNTIME.contains("let fence = self.pending_fence();"));
 }
