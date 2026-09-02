@@ -55,7 +55,7 @@
       </div>
       <div id="rung" class="metric">step 1 · tuple pending</div>
       <div class="controls">
-        <label>Overridable GLsizei policy <input id="policy" type="number" min="1" max="2147483647" value="2147483647"></label>
+        <label>Tab-safety policy, overridable to 8M <input id="policy" type="number" min="1" max="8000000" value="2000000"></label>
         <button id="apply-policy" type="button">Apply policy</button>
         <button id="measure" type="button">Measure selected path</button>
         <button id="one-frame" type="button">Render / measure one frame</button>
@@ -155,7 +155,7 @@
 
     function showMetrics(samples, repeats, singleFrame) {
       const frame = summarize(samples);
-      const perEdge = summarize(samples.map(value => value * 1000 / selection.delivered_edges));
+      const perEdge = selection.delivered_edges > 0 ? summarize(samples.map(value => value * 1000 / selection.delivered_edges)) : null;
       const target = singleFrame ? 1 : SAMPLE_COUNT;
       metricElement().innerHTML = frame && perEdge
         ? `frame median <strong>${frame.median.toFixed(4)} ms</strong> · p95 <strong>${frame.p95.toFixed(4)} ms</strong><br>per submitted edge median <strong>${perEdge.median.toFixed(6)} µs</strong> · p95 <strong>${perEdge.p95.toFixed(6)} µs</strong><br>${samples.length}/${target} samples · repeats ${repeats.join(", ")}<br>requires visible replay · timestamp query not used`
@@ -202,8 +202,12 @@
       clearMetrics();
       status.className = "status";
       status.textContent = "planning runtime walls and rendering immediately…";
-      const policy = Math.max(1, Math.min(2147483647, Number(policyControl.value) || 1));
-      policyControl.value = String(policy);
+      const policy = Number(policyControl.value);
+      if (!Number.isInteger(policy) || policy < 1 || policy > 8000000) {
+        status.className = "status failed";
+        status.textContent = "policy must remain an integer from 1 through 8,000,000; the requested control was not changed";
+        return;
+      }
       try {
         selection = JSON.parse(select_heap_lattice_json(selectedMode, selectedStep, policy));
         if (token !== pageGeneration) return;
@@ -277,7 +281,7 @@
         selectAndRender();
       });
     }
-    stepControl.addEventListener("input", () => { selectedStep = Number(stepControl.value); selectAndRender(); });
+    stepControl.addEventListener("change", () => { selectedStep = Number(stepControl.value); selectAndRender(); });
     document.querySelector("#previous").addEventListener("click", () => { selectedStep = Math.max(0, selectedStep - 1); stepControl.value = String(selectedStep); selectAndRender(); });
     document.querySelector("#next").addEventListener("click", () => { selectedStep = Math.min(112, selectedStep + 1); stepControl.value = String(selectedStep); selectAndRender(); });
     document.querySelector("#apply-policy").addEventListener("click", selectAndRender);

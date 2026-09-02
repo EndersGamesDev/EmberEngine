@@ -38,7 +38,7 @@ const MODE_A_PAGE: u16 = 64;
 const MODE_C_PAGE: u16 = 256;
 const MAX_HEADER_PAGES: u32 = 64;
 const LAYER_BYTE_BUDGET: u64 = 64 * 1024 * 1024;
-const DEFAULT_POLICY: u32 = 2_147_483_647;
+const DEFAULT_POLICY: u32 = 2_000_000;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
 const COMPLETION_DEADLINE_MS: f64 = 30_000.0;
 
@@ -1138,7 +1138,7 @@ impl LatticeLab {
                 );
                 let headers = StaticHeaders::for_span(&self.mode_a_outputs[0], self.header_stride)
                     .map_err(|error| LatticeError::Resource(error.to_string()))?;
-                let plan = self
+                let mut plan = self
                     .mode_a_kernel
                     .plan_dispatch(
                         &self.arena,
@@ -1148,6 +1148,19 @@ impl LatticeLab {
                         &headers,
                     )
                     .map_err(|error| LatticeError::Resource(error.to_string()))?;
+                plan.resource_words[2] = [self.edge.directory_index, self.edge.logical_len, 0, 0];
+                plan.resource_words[3] = [
+                    self.mode_a_outputs[0].directory_index,
+                    self.mode_a_outputs[0].logical_len,
+                    0,
+                    0,
+                ];
+                plan.resource_words[4] = [
+                    self.mode_a_outputs[1].directory_index,
+                    self.mode_a_outputs[1].logical_len,
+                    0,
+                    0,
+                ];
                 self.sync_heap_metadata();
                 self.sync_dispatch(&plan, &headers);
                 let copy_commands = Self::copy_command_count(&plan, MODE_A_PAGE);
@@ -1231,7 +1244,7 @@ impl LatticeLab {
                     let uniform = ModeCFrameUniform::from_frame(&frame);
                     let headers = StaticHeaders::for_span(&outputs[0], self.header_stride)
                         .map_err(|error| LatticeError::Resource(error.to_string()))?;
-                    let plan = self
+                    let mut plan = self
                         .mode_c_kernel
                         .plan_dispatch(
                             &self.arena,
@@ -1241,6 +1254,10 @@ impl LatticeLab {
                             &headers,
                         )
                         .map_err(|error| LatticeError::Resource(error.to_string()))?;
+                    plan.resource_words[3] =
+                        [outputs[0].directory_index, outputs[0].logical_len, 0, 0];
+                    plan.resource_words[4] =
+                        [outputs[1].directory_index, outputs[1].logical_len, 0, 0];
                     compute_passes = plan.passes.len() as u32;
                     copy_commands = Self::copy_command_count(&plan, MODE_C_PAGE);
                     gpu_copy_bytes = plan.gpu_copy_bytes;

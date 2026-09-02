@@ -113,7 +113,7 @@ The compute output is GPU-resident and no readback gates rendering; encoder and 
 
 The lattice center is decoded from the odd tuple in mixed-radix order, converted to centered integer digits, and combined with the five CPU-rotated basis vectors; changing the rung changes only uniforms and the requested instance count, never heap allocation.
 
-The only type WALL on Mode A's draw count is the wgpu `u32` instance range; the page also starts with an overridable POLICY value of 2,147,483,647 instances, derived from WebGL2's positive signed `GLsizei` draw-count range and labeled with that origin rather than presented as detected capacity.
+The only type WALL on Mode A's draw count is the wgpu `u32` instance range; the implementation page starts with a 2,000,000-instance tab-safety POLICY, permits an explicit override through 8,000,000, and separately displays WebGL2's positive signed `GLsizei` range of 2,147,483,647 as an arithmetic wall rather than a detected safe workload.
 
 Mode A delivery is `min(E_requested, E_u32_wall, E_policy)` with every term displayed, and changing the policy never changes the selected tuple; allocation or validation refusal remains a separate runtime fact rather than a guessed wall.
 
@@ -251,7 +251,7 @@ Adaptive samples increase whole-workload repeats until a batch spans 32 observed
 
 Counts are literal: requested is the tuple-derived count, delivered is the runtime-WALL-and-policy count, submitted is the draw instance count, shown excludes pole-discarded boxes, and measured is the work enclosed by the fence; none is substituted for another.
 
-The page labels 2,147,483,647 instances as an overridable POLICY originating in WebGL2's positive signed `GLsizei` draw-count range, labels `u32` index limits and live allocation limits as WALLS, and never presents the policy as detected hardware capacity.
+The page labels 2,000,000 instances as its initial tab-safety POLICY, accepts an explicit policy through 8,000,000, labels 2,147,483,647 from WebGL2's positive signed `GLsizei` draw-count range and the `u32` index limit as arithmetic WALLS, and never presents policy as detected hardware capacity.
 
 ## 15. Test plan
 
