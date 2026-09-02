@@ -15,6 +15,7 @@ members = [
     "crates/kings-server",
     "crates/labs/heap",
     "crates/labs/julibrot/math",
+    "crates/labs/julibrot/kernels",
     "crates/arena",
     "crates/arena-core",
     "crates/arena-server",
