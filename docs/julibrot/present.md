@@ -256,15 +256,15 @@ The HOT buffer size is `3·slot_stride`, where `slot_stride = align_up(128,devic
 
 `Presenter::set_main(&mut self,main:PresentMain)` is the infallible MAIN-drain endpoint: it records latest-wins state, applies a not-yet-consumed `reference_shift_px` to retained and in-flight poses for the accepted revision, and invalidates them only when delivered `max_iter` or `plane_origin_f64` changed, without allocating, submitting, waiting, or returning an error.
 
-`Presenter::write_hot(&mut self,slot:HotSlot,hot:PresentHot)` is the infallible HOT-drain endpoint: it stores math's CPU `Pose`, calls `math::warp_matrix` for the flat f64 plan or the tumbled planner for the approximation, writes exactly one 128-byte ring payload, and falls back to `source_valid=0` on invalid arithmetic.
+`Presenter::write_hot(&mut self,slot:HotSlot,hot:PresentHot)` is the infallible HOT-drain endpoint: it stores math's CPU `Pose` and the plan's source validity for that same slot, calls `math::warp_matrix` for the flat f64 plan or the tumbled planner for the approximation, writes exactly one 128-byte ring payload, and falls back to `source_valid=0` on invalid arithmetic.
 
-`Presenter::submit_scene(&mut self,hot_slot:HotSlot,now_ms:f64)->Result<u64,PresentError>` captures current MAIN and the exact HOT pose, prepares changed regional data, encodes one scene pass to the available texture, submits a four-byte fence, and returns its monotonically increasing `scene_id` without waiting.
+`Presenter::submit_scene(&mut self,hot_slot:HotSlot,now_ms:f64)->Result<u64,PresentError>` captures current MAIN and the exact HOT pose, asks the scene ledger to construct the pending record and return its single authoritative texture index, prepares and encodes against that same index, submits a four-byte fence, and returns its monotonically increasing `scene_id` without waiting.
 
 `Presenter::frame(&mut self,state:FrameState<'_>,hot_slot:HotSlot)->Result<FrameReceipt,PresentError>` is called once per surface refresh, encodes the sole warp pass to `state.surface_view`, samples the newest compatible completed scene or writes clear colour, submits its four-byte fence, and returns before completion; app retains the surface token, polls cooperatively for that `warp_id`, then presents outside the measurement.
 
-`FrameReceipt` is `{refresh_id:u64,warp_id:u64,source_scene_id:Option<u64>,status:PresentStatus}` with no byte ABI and contains no fabricated wall because its fence has not completed.
+`FrameReceipt` is `{refresh_id:u64,warp_id:u64,source_scene_id:Option<u64>,status:PresentStatus}` with no byte ABI, reports `source_scene_id=None` when that slot's warp plan paints only clear even if a retained scene exists, and contains no fabricated wall because its fence has not completed.
 
-`Presenter::poll(&mut self,now_ms:f64)->Vec<PresentEvent>` performs at most one `device.poll` observation per pending fence, counts it, promotes only a current completed scene, retires bounded failures, and never waits or yields internally; app's refresh loop supplies the browser yield between polls.
+`Presenter::poll(&mut self,now_ms:f64)->Vec<PresentEvent>` performs at most one shared `device.poll` per call to service both pending fences, increments each pending fence's own observation count once for that shared poll, promotes only a current completed scene, retires bounded failures, and never waits or yields internally; app's refresh loop supplies the browser yield between polls.
 
 `Presenter::facts(&self)->PresentFacts` returns the latest immutable snapshot without polling, allocating, submitting, or draining owner state.
 
@@ -319,7 +319,7 @@ The HOT ring has exactly three slots and is selected by dynamic offset; queue or
 
 There is no shared memory or worker special path in present; ownership crosses this boundary only through immutable CPU records and heap handles, and same-thread worker lowering remains invisible here.
 
-Honesty is structural: requested values remain app facts, delivered extent and iteration cap come from the current grid, `depth_digits=ceil(max(0,zoom_log2·log10(2)))`, `D_floor=ceil(zoom_log2·log10(2)+log10(grid_width))+8`, `D_work=D_floor+ceil(log10(max(max_iter,1)))`, and the overlay keeps floor, working, and delivered precision separate.
+Honesty is structural: requested values remain app facts, delivered extent and iteration cap come from the current grid, `depth_digits=ceil(max(0,zoom_log2·log10(2)))`, `D_floor=max(1,ceil(zoom_log2·log10(2)+log10(grid_width))+8)`, `D_work=D_floor+ceil(log10(max(max_iter,1)))`, and the overlay keeps floor, working, and delivered precision separate.
 
 Aggregate `rebase_count` and `glitch` totals are `unavailable` in normal rendering because present only gathers texels for rasterization; only an explicitly requested and labelled measurement readback may count them, every other unavailable measurement uses `Option`, warm-ups stay labelled, polls are counted, and no timeout path loops forever.
 
@@ -447,7 +447,7 @@ Before the semantic commit, local non-toolchain checks found only `docs/julibrot
 
 Implementation head `66fb25e093d73982f9cab2d92b5395a828e97974` was checked out exactly on barza and passed the required nine gates: workspace build `2.9 s`, workspace clippy with warnings denied `1.8 s`, cargo-fmt check `9.5 s`, workspace tests excluding linter `56.6 s`, linter tests with the two repository checks skipped `4.7 s`, wasm library checks for arena `1.8 s`, what-is-this `0.5 s`, fire `1.3 s`, and heap plus present `2.3 s`; each value is the corresponding `RUN-REPORT` wall and every exit was zero.
 
-The present package contributes 33 unit tests and two integration tests covering exact layouts, palette honesty, heap-specialized WGSL validation, mesh order and heap algebra, two-slot state transitions, non-mutating target selection, replacement disposition, exactly-once reference rebasing, bounded fence outcomes, all six required deep-zoom warp rows, the corrected display-chart conversion, the 9-by-9-by-5 tumbled corpus, app-facing signatures, and warp-completion identity.
+The present package contributes 36 unit tests and two integration tests covering exact layouts, palette honesty, heap-specialized WGSL validation, mesh order and heap algebra, two-slot state transitions, ledger-authored target identity, clear-only source attribution, opaque HOT offsets, replacement disposition, exactly-once reference rebasing, bounded fence outcomes, all six required deep-zoom warp rows, the corrected display-chart conversion, the 9-by-9-by-5 tumbled corpus, app-facing signatures, and warp-completion identity.
 
 The final handoff audit additionally proves that synchronous `submit_scene` and `frame` refusals enter `PresentFacts.status`, all fallible scene preparation completes before the ledger reserves the in-flight slot, and palette, view, or grid replacement marks a pending scene `ReplacedMain` while retaining the last completed texture.
 

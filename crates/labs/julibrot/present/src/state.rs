@@ -48,9 +48,17 @@ impl SceneLedger {
             .map_or(0, |frame| 1 - frame.texture_index))
     }
 
-    pub fn begin(&mut self, mut incoming: PendingScene) -> Result<u32, PresentError> {
+    pub fn begin(
+        &mut self,
+        build: impl FnOnce(u32) -> Result<PendingScene, PresentError>,
+    ) -> Result<u32, PresentError> {
         let texture_index = self.available_texture_index()?;
-        incoming.texture_index = texture_index;
+        let incoming = build(texture_index)?;
+        if incoming.texture_index != texture_index {
+            return Err(PresentError::Device {
+                operation: "construct pending scene texture index",
+            });
+        }
         self.pending = Some(incoming);
         Ok(texture_index)
     }
@@ -211,17 +219,19 @@ mod tests {
 
     fn begin(ledger: &mut SceneLedger, scene_id: u64, generation: u32) -> u32 {
         ledger
-            .begin(PendingScene {
-                scene_id,
-                pose: pose(generation),
-                palette: PaletteId::Classic,
-                iteration_cap: 64,
-                level: RefinementLevel::Preview,
-                extent: [800, 600],
-                texture_index: 0,
-                centre_revision: generation,
-                plane_origin_f64: ORIGIN,
-                drop_reason: None,
+            .begin(|texture_index| {
+                Ok(PendingScene {
+                    scene_id,
+                    pose: pose(generation),
+                    palette: PaletteId::Classic,
+                    iteration_cap: 64,
+                    level: RefinementLevel::Preview,
+                    extent: [800, 600],
+                    texture_index,
+                    centre_revision: generation,
+                    plane_origin_f64: ORIGIN,
+                    drop_reason: None,
+                })
             })
             .expect("test scene is valid")
     }
@@ -233,17 +243,19 @@ mod tests {
         assert!(ledger.pending().is_none());
         assert_eq!(begin(&mut ledger, 1, 1), 0);
         assert_eq!(
-            ledger.begin(PendingScene {
-                scene_id: 2,
-                pose: pose(1),
-                palette: PaletteId::Classic,
-                iteration_cap: 64,
-                level: RefinementLevel::Preview,
-                extent: [800, 600],
-                texture_index: 0,
-                centre_revision: 1,
-                plane_origin_f64: ORIGIN,
-                drop_reason: None,
+            ledger.begin(|texture_index| {
+                Ok(PendingScene {
+                    scene_id: 2,
+                    pose: pose(1),
+                    palette: PaletteId::Classic,
+                    iteration_cap: 64,
+                    level: RefinementLevel::Preview,
+                    extent: [800, 600],
+                    texture_index,
+                    centre_revision: 1,
+                    plane_origin_f64: ORIGIN,
+                    drop_reason: None,
+                })
             }),
             Err(PresentError::SceneBusy { scene_id: 1 })
         );
@@ -257,6 +269,19 @@ mod tests {
             Some(SceneCompletion::Promoted(_))
         ));
         assert_eq!(begin(&mut ledger, 3, 1), 0);
+    }
+
+    #[test]
+    fn ledger_builds_pending_scene_from_its_returned_texture_index() {
+        let mut ledger = SceneLedger::default();
+        assert_eq!(begin(&mut ledger, 1, 1), 0);
+        assert_eq!(ledger.pending().map(|pending| pending.texture_index), Some(0));
+        assert!(matches!(
+            ledger.complete(measurement(1)),
+            Some(SceneCompletion::Promoted(_))
+        ));
+        assert_eq!(begin(&mut ledger, 2, 1), 1);
+        assert_eq!(ledger.pending().map(|pending| pending.texture_index), Some(1));
     }
 
     #[test]

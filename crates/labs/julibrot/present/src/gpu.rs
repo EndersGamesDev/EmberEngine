@@ -94,6 +94,7 @@ pub struct Presenter {
     config: PresentConfig,
     main: Option<PresentMain>,
     hot: [Option<Pose>; 3],
+    hot_source_valid: [bool; 3],
     ledger: SceneLedger,
     scene_fence: Option<PendingFence>,
     warp_fence: Option<PendingFence>,
@@ -129,6 +130,7 @@ impl Presenter {
             config,
             main: None,
             hot: [None; 3],
+            hot_source_valid: [false; 3],
             ledger: SceneLedger::default(),
             scene_fence: None,
             warp_fence: None,
@@ -257,10 +259,11 @@ impl Presenter {
                     .map_or(ViewMode::Flat as u32, |main| main.view as u32),
             ],
         };
-        let offset = u64::from(slot.index() * self.gpu.hot_stride);
+        let offset = u64::from(slot.dynamic_offset());
         self.queue
             .write_buffer(&self.gpu.hot_buffer, offset, bytemuck::bytes_of(&uniform));
         self.hot[slot.index() as usize] = pose;
+        self.hot_source_valid[slot.index() as usize] = plan.source_valid;
         self.facts.centre_from_reference_px = hot.state.centre_from_reference_px;
         self.facts.chart_residual = plan.source_valid.then_some(plan.chart_residual);
         self.facts.tumbled_max_error_px = plan.approx_max_error_px;
@@ -293,7 +296,6 @@ impl Presenter {
     }
 
     fn try_submit_scene(&mut self, hot_slot: HotSlot, now_ms: f64) -> Result<u64, PresentError> {
-        let texture_index = self.ledger.available_texture_index()?;
         let main = self.main.as_ref().ok_or(PresentError::InvalidGrid {
             width: 0,
             height: 0,
@@ -308,17 +310,6 @@ impl Presenter {
         })?;
         let extent = [main.grid.width, main.grid.height];
         validate_extent(&self.device, extent)?;
-        let reallocated =
-            ensure_scene_texture(&self.device, &mut self.gpu, texture_index as usize, extent)?;
-        if reallocated {
-            self.facts.texture_reallocations = self.facts.texture_reallocations.saturating_add(1);
-            self.scene_samples.reset();
-            self.warp_samples.reset();
-        }
-        if main.view == ViewMode::Tumbled {
-            ensure_indices(&self.device, &mut self.gpu, extent)?;
-            ensure_depth(&self.device, &mut self.gpu, extent)?;
-        }
         let uniform = SceneUniform::new(
             extent,
             main.grid.level as u32,
@@ -333,21 +324,40 @@ impl Presenter {
             logical_len: main.grid.span.logical_len,
         })?;
         let scene_id = self.next_scene_id;
-        self.next_scene_id = scene_id.checked_add(1).ok_or(PresentError::Device {
+        let next_scene_id = scene_id.checked_add(1).ok_or(PresentError::Device {
             operation: "advance scene identity",
         })?;
-        self.ledger.begin(crate::state::PendingScene {
-            scene_id,
-            pose,
-            palette: palette_id,
-            iteration_cap: main.state.delivered_iter_cap,
-            level: main.grid.level,
-            extent: [main.grid.width, main.grid.height],
-            texture_index: 0,
-            centre_revision: main.state.centre_revision,
-            plane_origin_f64: main.state.plane_origin_f64,
-            drop_reason: None,
+        let device = &self.device;
+        let gpu = &mut self.gpu;
+        let facts = &mut self.facts;
+        let scene_samples = &mut self.scene_samples;
+        let warp_samples = &mut self.warp_samples;
+        let texture_index = self.ledger.begin(|texture_index| {
+            let reallocated =
+                ensure_scene_texture(device, gpu, texture_index as usize, extent)?;
+            if reallocated {
+                facts.texture_reallocations = facts.texture_reallocations.saturating_add(1);
+                scene_samples.reset();
+                warp_samples.reset();
+            }
+            if main.view == ViewMode::Tumbled {
+                ensure_indices(device, gpu, extent)?;
+                ensure_depth(device, gpu, extent)?;
+            }
+            Ok(crate::state::PendingScene {
+                scene_id,
+                pose,
+                palette: palette_id,
+                iteration_cap: main.state.delivered_iter_cap,
+                level: main.grid.level,
+                extent,
+                texture_index,
+                centre_revision: main.state.centre_revision,
+                plane_origin_f64: main.state.plane_origin_f64,
+                drop_reason: None,
+            })
         })?;
+        self.next_scene_id = next_scene_id;
         self.queue
             .write_buffer(&self.gpu.scene_buffer, 0, bytemuck::bytes_of(&uniform));
         let mut encoder = self
@@ -360,7 +370,7 @@ impl Presenter {
             &self.gpu,
             texture_index as usize,
             main.view,
-            hot_slot.index() * self.gpu.hot_stride,
+            hot_slot.dynamic_offset(),
             palette_record.clear_rgba,
         );
         encoder.clear_buffer(&self.gpu.scene_fence, 0, Some(FENCE_BYTES));
@@ -420,7 +430,10 @@ impl Presenter {
         self.next_warp_id = warp_id.checked_add(1).ok_or(PresentError::Device {
             operation: "advance warp identity",
         })?;
-        let source = self.ledger.retained();
+        let source = select_warp_source(
+            self.hot_source_valid[hot_slot.index() as usize],
+            self.ledger.retained(),
+        );
         let source_scene_id = source.map(|frame| frame.scene_id);
         let texture_index = source.map_or(0, |frame| frame.texture_index as usize);
         let mut encoder = self
@@ -455,7 +468,7 @@ impl Presenter {
             pass.set_bind_group(
                 1,
                 &self.gpu.warp_hot_group,
-                &[hot_slot.index() * self.gpu.hot_stride],
+                &[hot_slot.dynamic_offset()],
             );
             pass.draw(0..3, 0..1);
         }
@@ -1275,6 +1288,10 @@ fn pose_is_finite(pose: &Pose) -> bool {
             .all(f32::is_finite)
 }
 
+fn select_warp_source<T>(source_valid: bool, retained: Option<T>) -> Option<T> {
+    if source_valid { retained } else { None }
+}
+
 const fn clear_warp_plan() -> crate::WarpPlan {
     crate::WarpPlan {
         rows: [
@@ -1312,5 +1329,20 @@ mod tests {
         assert_eq!(plan.kind, WarpKind::ClearOnly);
         assert!(!plan.source_valid);
         assert_eq!(plan.rows[2], [0.0, 0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn clear_only_warp_never_attributes_a_retained_scene() {
+        assert_eq!(select_warp_source(false, Some(41_u64)), None);
+        assert_eq!(select_warp_source(true, Some(41_u64)), Some(41));
+    }
+
+    #[test]
+    fn every_gpu_dynamic_offset_comes_from_the_opaque_slot() {
+        let source = include_str!("gpu.rs");
+        let accessor = [".dynamic_", "offset()"].concat();
+        let bypass = ["index()", " * self.gpu.hot_stride"].concat();
+        assert_eq!(source.matches(&accessor).count(), 3);
+        assert!(!source.contains(&bypass));
     }
 }
