@@ -318,7 +318,8 @@ fn validate_params(params: EscapeParams) -> Result<(), MathError> {
 }
 
 #[allow(clippy::cast_possible_truncation)]
-pub(super) fn smooth_iteration_f64(iteration: u32, z_re: f64, z_im: f64) -> f32 {
+#[must_use]
+pub fn smooth_iteration_f64(iteration: u32, z_re: f64, z_im: f64) -> f32 {
     let magnitude = z_re.hypot(z_im);
     (f64::from(iteration) + 1.0 - magnitude.log2().log2()) as f32
 }
