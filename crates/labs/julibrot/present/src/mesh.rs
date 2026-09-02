@@ -3,8 +3,6 @@ use thiserror::Error;
 use crate::palette::DEBUG_TINT;
 use crate::{PaletteRecord, shade_escape_record};
 
-const GOLDEN_RATIO: f64 = 1.618_033_988_749_895;
-
 /// Refusal from checked tumbled-grid construction.
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 pub enum MeshError {
@@ -95,7 +93,7 @@ pub fn display_coordinate(extent: [u32; 2], pixel: [u32; 2]) -> Result<[f32; 2],
     let height = f64::from(height);
     Ok([
         (4.0 * ((f64::from(column) + 0.5) / width - 0.5)) as f32,
-        (4.0 * (f64::from(row) + 0.5 - height * 0.5) / width) as f32,
+        (4.0 * height.mul_add(-0.5, f64::from(row) + 0.5) / width) as f32,
     ])
 }
 
@@ -141,7 +139,7 @@ pub fn view_rotation(time_seconds: f64) -> Result<[f32; 4], MeshError> {
         return Err(MeshError::NonFiniteRotation);
     }
     let theta_one = 0.4 * time_seconds;
-    let theta_two = GOLDEN_RATIO * theta_one;
+    let theta_two = f64::midpoint(1.0, 5.0_f64.sqrt()) * theta_one;
     let (sine_one, cosine_one) = theta_one.sin_cos();
     let (sine_two, cosine_two) = theta_two.sin_cos();
     let coefficients = [
