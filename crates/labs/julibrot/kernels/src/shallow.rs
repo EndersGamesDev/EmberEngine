@@ -242,7 +242,6 @@ mod tests {
         assert_eq!(result, Err(KernelError::InvalidEscapeParams));
     }
 
-    #[cfg(feature = "math-oracles")]
     #[test]
     fn deterministic_points_match_the_math_oracle() {
         for point in [
@@ -254,9 +253,73 @@ mod tests {
             let actual = escape_shallow_point(point, params).expect("kernel mirror accepts point");
             let expected =
                 ember_julibrot_math::escape_f32(point, params).expect("math oracle accepts point");
-            assert_eq!(actual.escape_index, expected.escape_index);
-            assert_eq!(actual.record.escaped == 1.0, expected.escaped);
-            assert!((actual.record.smooth_iter - expected.smooth_iter).abs() <= 1.0e-4);
+            assert_eq!(
+                crate::evaluate_shallow_conformance(actual, expected).verdict,
+                crate::ConformanceVerdict::Pass
+            );
+        }
+    }
+
+    #[test]
+    #[allow(clippy::cast_possible_truncation)]
+    fn preset_and_hybrid_pixels_match_the_math_oracle() {
+        use ember_julibrot_math::{
+            PlaneAngles, PlanePreset, construct_plane, escape_f32, preset_spec,
+        };
+
+        let fixtures = [
+            (
+                PlanePreset::Mandelbrot,
+                PlaneAngles {
+                    theta_1: 0.0,
+                    theta_2: 0.0,
+                },
+            ),
+            (
+                PlanePreset::Julia { c0: [-0.8, 0.156] },
+                PlaneAngles {
+                    theta_1: 0.0,
+                    theta_2: 0.0,
+                },
+            ),
+            (
+                PlanePreset::Mandelbrot,
+                PlaneAngles {
+                    theta_1: 0.4,
+                    theta_2: 0.7,
+                },
+            ),
+        ];
+        let extent = GridExtent {
+            width: 3,
+            height: 3,
+        };
+        let params = EscapeParams::new(64);
+        for (preset, angles) in fixtures {
+            let plane = construct_plane(preset, angles).expect("math plane");
+            let origin = preset_spec(preset).expect("preset origin").plane_origin;
+            let uniform = ShallowUniform::pack(
+                plane,
+                CentreSplit {
+                    hi: origin.map(|component| component as f32),
+                    lo: [0.0; 4],
+                },
+                0.25,
+                extent,
+                params,
+                RefinementLevel::Final,
+            )
+            .expect("fixture uniform");
+            for index in 0..9 {
+                let offset = crate::records::pixel_offset(index, extent, plane, 0.25);
+                let point = std::array::from_fn(|axis| uniform.centre_hi[axis] + offset[axis]);
+                let observed = escape_shallow_pixel(&uniform, index).expect("kernel mirror");
+                let expected = escape_f32(point, params).expect("math oracle");
+                assert_eq!(
+                    crate::evaluate_shallow_conformance(observed, expected).verdict,
+                    crate::ConformanceVerdict::Pass
+                );
+            }
         }
     }
 }

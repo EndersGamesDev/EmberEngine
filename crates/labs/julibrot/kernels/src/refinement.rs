@@ -99,6 +99,22 @@ fn levels(extent: GridExtent, requested_max_iter: u32) -> [LevelSpec; 3] {
     ]
 }
 
+pub fn validate_plan(plan: &RefinementPlan) -> Result<(), KernelError> {
+    validate_extent(plan.requested_extent)?;
+    validate_extent(plan.delivered_extent)?;
+    if plan.extent_divisor == 0
+        || !plan.extent_divisor.is_power_of_two()
+        || divided_extent(plan.requested_extent, plan.extent_divisor) != plan.delivered_extent
+        || plan.requested_max_iter == 0
+        || plan.delivered_max_iter != plan.requested_max_iter.min(FINAL_CAP)
+        || plan.page_side != OUTPUT_PAGE_SIDE
+        || plan.levels != levels(plan.delivered_extent, plan.requested_max_iter)
+    {
+        return Err(KernelError::Dispatch);
+    }
+    Ok(())
+}
+
 /// Builds the deterministic levels using an exact caller-supplied capacity predicate.
 ///
 /// # Errors

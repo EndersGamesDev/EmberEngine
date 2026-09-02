@@ -207,12 +207,15 @@ pub fn perturb_scaled_offset(
         return Err(KernelError::ReferenceLengthMismatch);
     }
     let z_zero = reconstruct(orbit[0]);
-    let mut state = ScaledState {
+    let mut state = normalize_scaled(ScaledState {
         delta: [offset_prime[0], offset_prime[1]],
         delta_c: [offset_prime[2], offset_prime[3]],
         exponent: uniforms.scale_exponent,
         glitch: false,
-    };
+    });
+    if state.glitch {
+        return Ok(record(0, true));
+    }
     let mut reference_index = 0_u32;
     let mut rebases = 0_u32;
     for iteration in 0..uniforms.max_iter {
@@ -240,7 +243,7 @@ pub fn perturb_scaled_offset(
             break;
         }
         let advance_reference = if robust_norm(z) < robust_norm(represented_delta) {
-            if rebases >= REBASE_EXACT_LIMIT - 1 {
+            if rebases >= REBASE_EXACT_LIMIT {
                 return Ok(record(rebases, true));
             }
             let Some(reverse_exponent) = state.exponent.checked_neg() else {
@@ -408,7 +411,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "math-oracles")]
     #[test]
     fn scaled_control_flow_matches_the_math_oracle() {
         let orbit = [ZERO; 8];
@@ -416,17 +418,66 @@ mod tests {
         let offset = [0.0_f32; 4];
         let actual = perturb_scaled_offset(&uniforms, &orbit, offset)
             .expect("kernel mirror accepts fixture");
-        let expected = ember_julibrot_math::perturb_scaled_f64(
+        let (expected, envelope) = ember_julibrot_math::perturb_scaled_f64_with_envelope(
             &orbit,
             offset.map(f64::from),
             uniforms.scale_exponent,
             EscapeParams::new(8),
         )
         .expect("math oracle accepts fixture");
-        assert_eq!(actual.escape_index, expected.escape_index);
-        assert_eq!(actual.record.escaped == 1.0, expected.escaped);
-        assert_eq!(actual.record.rebase_count, expected.rebase_count as f32);
-        assert_eq!(actual.record.glitch == 1.0, expected.glitch);
-        assert!((actual.record.smooth_iter - expected.smooth_iter).abs() <= 2.0e-3);
+        assert_eq!(
+            crate::evaluate_perturbation_conformance(actual, expected, envelope).verdict,
+            crate::ConformanceVerdict::Pass
+        );
+    }
+
+    #[test]
+    fn deep_corpus_matches_math_across_rescales_rebase_and_mixed_offsets() {
+        let escaped_orbit = [
+            ZERO,
+            ReferenceOrbitRecord { re_hi: 2.0, ..ZERO },
+            ReferenceOrbitRecord { re_hi: 6.0, ..ZERO },
+            ReferenceOrbitRecord {
+                re_hi: 38.0,
+                ..ZERO
+            },
+        ];
+        let zero_orbit = [ZERO, ZERO];
+        let cases: &[(&[ReferenceOrbitRecord], [f32; 4], i32, u32)] = &[
+            (&escaped_orbit, [0.0; 4], -900, 4),
+            (&escaped_orbit, [0.25, -0.125, 0.5, 0.0], -8, 4),
+            (&zero_orbit, [2.0_f32.powi(80), 0.0, 0.0, 0.0], -80, 2),
+            (&zero_orbit, [2.0_f32.powi(-80), 0.0, 0.0, 0.0], 80, 2),
+        ];
+        for &(orbit, offset, exponent, max_iter) in cases {
+            let uniforms = PerturbUniform::pack(
+                Plane {
+                    basis_u: [1.0, 0.0, 0.0, 0.0],
+                    basis_v: [0.0, 1.0, 0.0, 0.0],
+                },
+                ScaleSplit {
+                    mantissa: 0.5,
+                    exponent,
+                },
+                GridExtent {
+                    width: 1,
+                    height: 1,
+                },
+                EscapeParams::new(max_iter),
+                u32::try_from(orbit.len()).expect("fixture orbit length fits"),
+                RefinementLevel::Final,
+            )
+            .expect("deep fixture uniform");
+            let actual = perturb_scaled_offset(&uniforms, orbit, offset).expect("kernel mirror");
+            let (expected, envelope) = ember_julibrot_math::perturb_scaled_f64_with_envelope(
+                orbit,
+                offset.map(f64::from),
+                exponent,
+                EscapeParams::new(max_iter),
+            )
+            .expect("math mirror");
+            let result = crate::evaluate_perturbation_conformance(actual, expected, envelope);
+            assert_ne!(result.verdict, crate::ConformanceVerdict::Fail);
+        }
     }
 }

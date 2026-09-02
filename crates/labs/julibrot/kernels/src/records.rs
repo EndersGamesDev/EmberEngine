@@ -166,7 +166,9 @@ impl PerturbUniform {
 #[cfg(test)]
 mod tests {
     use super::{GridExtent, KernelMode, PerturbUniform, RefinementLevel, ShallowUniform};
-    use ember_julibrot_math::{CentreSplit, Plane, ScaleSplit};
+    use ember_julibrot_math::{
+        CentreSplit, EscapeGridRecord, EscapeParams, Plane, ReferenceOrbitRecord, ScaleSplit,
+    };
     use std::mem::{align_of, offset_of, size_of};
 
     const PLANE: Plane = Plane {
@@ -176,6 +178,13 @@ mod tests {
 
     #[test]
     fn gpu_uniform_layouts_are_exact() {
+        assert_eq!(size_of::<Plane>(), 32);
+        assert_eq!(align_of::<Plane>(), 16);
+        assert_eq!(size_of::<CentreSplit>(), 32);
+        assert_eq!(align_of::<CentreSplit>(), 16);
+        assert_eq!(size_of::<EscapeParams>(), 8);
+        assert_eq!(size_of::<ReferenceOrbitRecord>(), 16);
+        assert_eq!(size_of::<EscapeGridRecord>(), 16);
         assert_eq!(size_of::<ShallowUniform>(), 96);
         assert_eq!(align_of::<ShallowUniform>(), 16);
         assert_eq!(offset_of!(ShallowUniform, basis_u), 0);
@@ -256,5 +265,15 @@ mod tests {
         assert_eq!(vertical, PLANE.basis_v);
         assert!(bottom_left[..2].iter().any(|value| *value != 0.0));
         assert!(bottom_left[2..].iter().any(|value| *value != 0.0));
+        let odd_centre = super::pixel_offset(
+            4,
+            GridExtent {
+                width: 3,
+                height: 3,
+            },
+            PLANE,
+            1.0,
+        );
+        assert_eq!(odd_centre, [0.0; 4]);
     }
 }
