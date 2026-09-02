@@ -157,17 +157,6 @@ mod wasm_entry {
         JULIBROT_ABI_VERSION
     }
 
-    /// Checks the worker bootstrap against the same module and wire ABI.
-    #[wasm_bindgen]
-    pub fn worker_main(expected_abi: u32) -> Result<u32, JsValue> {
-        if expected_abi != JULIBROT_ABI_VERSION {
-            return Err(JsValue::from_str(&format!(
-                "VersionSkew: worker expected {expected_abi}, wasm provides {JULIBROT_ABI_VERSION}"
-            )));
-        }
-        Ok(JULIBROT_ABI_VERSION)
-    }
-
     /// Starts the GL-only main-thread runtime and stores its single surface owner.
     #[wasm_bindgen]
     pub async fn start_julibrot(canvas_id: String, status_id: String) -> Result<(), JsValue> {
@@ -330,5 +319,5 @@ mod wasm_entry {
 pub use wasm_entry::{
     app_drag_pan, app_facts_json, app_request_frame, app_request_measurement,
     app_set_iteration_cap, app_set_palette, app_set_plane_angles, app_set_preset, app_set_view,
-    app_wheel_zoom, julibrot_abi_version, start_julibrot, worker_main,
+    app_wheel_zoom, julibrot_abi_version, start_julibrot,
 };

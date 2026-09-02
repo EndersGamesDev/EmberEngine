@@ -7,6 +7,7 @@ const LIB: &str = include_str!("../src/lib.rs");
 const RUNTIME: &str = include_str!("../src/runtime.rs");
 const FACTS: &str = include_str!("../src/facts.rs");
 const MEASUREMENT: &str = include_str!("../src/measurement.rs");
+const WORKER_BROWSER: &str = include_str!("../../worker/src/browser.rs");
 
 #[test]
 fn loader_worker_and_wasm_share_version_one_before_device_start() {
@@ -24,7 +25,8 @@ fn loader_worker_and_wasm_share_version_one_before_device_start() {
             "missing version contract: {required}"
         );
     }
-    assert!(LIB.contains("pub fn worker_main(expected_abi: u32)"));
+    assert!(!LIB.contains("pub fn worker_main(expected_abi: u32)"));
+    assert!(WORKER_BROWSER.contains("pub fn worker_main(expected_abi: u32)"));
     assert_eq!(WORKER.matches("ember_lab_julibrot.js?v=1").count(), 1);
     let boot = MAIN
         .split_once("async function boot()")
