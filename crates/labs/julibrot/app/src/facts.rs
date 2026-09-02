@@ -5,7 +5,7 @@ use ember_julibrot_math::{precision_for, scaled_pixel_scale};
 use ember_julibrot_present::{SampleClass, SubmissionMeasurement};
 use serde::Serialize;
 
-use crate::{App, JULIBROT_ABI_VERSION};
+use crate::{App, FramePolicy, JULIBROT_ABI_VERSION};
 
 /// Complete version-one overlay snapshot; absent delivered values serialize as `null`.
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -180,7 +180,7 @@ impl PageFacts {
             warp_polls: present.last_warp.map(|sample| sample.polls),
             warmup_label: newest_measurement(present.last_scene, present.last_warp)
                 .map(|sample| sample_class(sample.sample_class).to_string()),
-            second_frame_policy: None,
+            second_frame_policy: frame_policy(loop_facts.frame_policy()).map(str::to_string),
             timer_quantum_ms: None,
             device_walls: vec!["WebGL2", "EXT_color_buffer_float", "RGBA32F usages"]
                 .into_iter()
@@ -261,6 +261,14 @@ fn worker_json(facts: ember_julibrot_worker::WorkerFacts) -> serde_json::Value {
         "orbit_buffers_owned_main": facts.orbit_buffers_owned_main,
         "mode": facts.mode,
     })
+}
+
+const fn frame_policy(policy: FramePolicy) -> Option<&'static str> {
+    match policy {
+        FramePolicy::Undecided => None,
+        FramePolicy::SingleFrameOnDemand => Some("SingleFrameOnDemand"),
+        FramePolicy::Continuous => Some("Continuous"),
+    }
 }
 
 fn nonzero(value: u32) -> Option<u32> {

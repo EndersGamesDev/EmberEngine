@@ -128,7 +128,8 @@ mod browser {
 
     use super::RefinementSchedule;
     use crate::{
-        AppError, BrowserRuntime, RefreshOutcome, RefreshStatus, RunRequests, ViewerController,
+        AppError, BrowserRuntime, FramePolicy, FramePolicyTracker, RefreshOutcome, RefreshStatus,
+        RunRequests, ViewerController,
     };
 
     const HEAP_SIDE: u16 = 512;
@@ -188,6 +189,7 @@ mod browser {
         hot_stride: u32,
         refresh_id: u64,
         owner_epoch: u64,
+        frame_policy: FramePolicyTracker,
         last_dispatch: Option<DispatchFacts>,
         last_warp_source: Option<u64>,
         pending_warp_zoom: Option<(u64, f64)>,
@@ -288,6 +290,7 @@ mod browser {
                 hot_stride,
                 refresh_id: 0,
                 owner_epoch: 0,
+                frame_policy: FramePolicyTracker::new(),
                 last_dispatch: None,
                 last_warp_source: None,
                 pending_warp_zoom: None,
@@ -354,7 +357,9 @@ mod browser {
             };
 
             let mut warp_id = None;
-            if !runtime.has_pending_surface() {
+            let warp_requested =
+                requests.frame || self.frame_policy.policy() != FramePolicy::SingleFrameOnDemand;
+            if warp_requested && !runtime.has_pending_surface() {
                 match runtime.acquire_for_warp(self.schedule.generation()) {
                     Ok(frame) => {
                         let view = frame
@@ -457,6 +462,14 @@ mod browser {
                         }
                     }
                     PresentEvent::WarpCompleted { measurement } => {
+                        if measurement.sample_class
+                            == ember_julibrot_present::SampleClass::ColdWarmUp
+                        {
+                            self.frame_policy.reset();
+                        }
+                        self.frame_policy
+                            .record(measurement.wall_ms)
+                            .map_err(|error| AppError::Present(error.to_string()))?;
                         if runtime.complete_warp(measurement.id) {
                             presented = true;
                             if let Some((warp_id, zoom_log2)) = self.pending_warp_zoom.take()
@@ -868,17 +881,25 @@ mod browser {
         /// Returns whether cooperative refresh work remains.
         #[must_use]
         pub fn pending(&self, runtime: &BrowserRuntime) -> bool {
-            runtime.has_pending_surface()
-                || self.schedule.pending()
+            let completion_required = runtime.has_pending_surface()
                 || self.presenter.facts().in_flight_scene_id.is_some()
                 || self.owner_endpoint.pending_request_depth() != 0
-                || !self.submitted_references.is_empty()
+                || !self.submitted_references.is_empty();
+            completion_required
+                || (self.frame_policy.policy() != FramePolicy::SingleFrameOnDemand
+                    && self.schedule.pending())
         }
 
         /// Reports whether a progressive level is due or has a scene fence pending.
         #[must_use]
         pub const fn refinement_pending(&self) -> bool {
             self.schedule.pending()
+        }
+
+        /// Returns the second-warp policy selected after its labelled warm-up.
+        #[must_use]
+        pub const fn frame_policy(&self) -> FramePolicy {
+            self.frame_policy.policy()
         }
 
         /// Returns the latest warp source identity.

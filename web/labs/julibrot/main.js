@@ -71,6 +71,7 @@ function bindControls(api) {
   const guarded = operation => {
     try {
       operation();
+      api.app_request_frame();
       refreshFacts();
       scheduleFrame();
     } catch (error) {

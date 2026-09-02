@@ -117,7 +117,8 @@ impl App {
     pub fn needs_refresh(&self) -> bool {
         self.requests.frame
             || self.frame_loop.pending(&self.runtime)
-            || self.viewer.requested().view == ember_julibrot_math::ViewMode::Tumbled
+            || (self.frame_loop.frame_policy() != FramePolicy::SingleFrameOnDemand
+                && self.viewer.requested().view == ember_julibrot_math::ViewMode::Tumbled)
     }
 
     /// Queues one explicit frame request for the next cooperative refresh turn.
