@@ -170,13 +170,15 @@ All wire and GPU records are little-endian, every listed reserved word is writte
 
 `PlaneAngles` is `{ theta_1:f64, theta_2:f64 }` in independent radians; `PlanePreset` is `Mandelbrot` or `Julia { c0:[f64;2] }`, with finite `c₀` carried in MAIN’s plane origin.
 
+`NavigationDelta` is math’s CPU-only `{ pan_canvas_px:[f64;2], zoom_delta_log2:f64, anchor_canvas_px:[f64;2] }`; both pixel vectors are canvas-centred with positive y upward.
+
 `EscapeParams` is `repr(C) { max_iter:u32, bailout:f32 }`, exactly 8 bytes at offsets 0 and 4; `max_iter>0` and `bailout` is the squared radius fixed to `256.0`.
 
 `Pose` and `ViewMode` are defined in math with semantic fields `{ epoch:u64, orbit_generation:u32, plane:Plane, plane_theta_1:f64, plane_theta_2:f64, zoom_log2:f64, view_theta_1:f64, grid_width:u32, grid_height:u32, view, centre_from_reference_px:[f64;2] }`; present re-exports `ViewMode`, and the record has no byte ABI.
 
-Math exposes `construct_plane(preset,angles)->Result<Plane,MathError>`, `split_centre(centre)->Result<CentreSplit,MathError>`, `scaled_pixel_scale(zoom_log2,grid_width)->Result<ScaledPixelScale,MathError>`, `precision_for(zoom_log2,grid_width,max_iter)->Result<PrecisionPlan,MathError>`, the shallow and scaled-perturbation CPU oracles, and `warp_matrix(from:&Pose,to:&Pose)->Result<WarpMatrix,MathError>`.
+Math exposes `construct_plane(preset,angles)->Result<Plane,MathError>`, `split_centre(centre)->Result<CentreSplit,MathError>`, `scale_split(zoom_log2,grid_width)->Result<ScaleSplit,MathError>`, `precision_for(zoom_log2,grid_width,max_iter)->Result<PrecisionPlan,MathError>`, the shallow and scaled-perturbation CPU oracles, and `warp_matrix(from:&Pose,to:&Pose)->Result<WarpMatrix,MathError>`.
 
-`ScaledPixelScale` is `{ mantissa:f32, exponent:i32 }` with `mantissa∈[0.5,1)`; `PrecisionPlan` is `{ floor_digits:u32, working_digits:u32, requested_bits:u32, policy_digits:u32 }`, and the policy ceiling is 300 decimal digits.
+`ScaleSplit` is math’s `{ mantissa:f32, exponent:i32 }` with `mantissa∈[0.5,1)`; `PrecisionPlan` is `{ floor_digits:u32, working_digits:u32, requested_bits:u32, policy_digits:u32 }`, and the policy ceiling is 300 decimal digits.
 
 `ReferenceOrbitRecord` is one 16-byte RGBA32F texel: byte 0 `re_hi`, 4 `im_hi`, 8 `re_lo`, and 12 `im_lo`; index zero is `Z₀`, stored indices are `0..max_iter−1`, and `length=min(max_iter,escape_index+1)`.
 
@@ -233,13 +235,13 @@ The inherited `DispatchHeader` is 16 bytes `{global_base:u32,valid_length:u32,pa
 
 `JulibrotKernels::new(executor:&mut GpuKernelExecutor)->Result<JulibrotKernels,KernelError>` registers exactly the shallow and perturbation dialect-v2 pipelines; `JulibrotKernels::plan(executor:&GpuKernelExecutor,requested_extent:GridExtent,params:EscapeParams)->Result<RefinementPlan,KernelError>` applies the exact levels, policy and cloned-arena delivery arithmetic.
 
-`JulibrotKernels::allocate_grid(executor:&mut GpuKernelExecutor,plan:&RefinementPlan)->Result<EscapeGrid,KernelError>` allocates one Final-capacity span and immutable prefix headers for all three levels without partial publication.
+`JulibrotKernels::allocate_grid(&mut self,executor:&mut GpuKernelExecutor,plan:&RefinementPlan)->Result<EscapeGrid,KernelError>` allocates one Final-capacity span and immutable prefix headers for all three levels without partial publication.
 
 `JulibrotKernels::encode_shallow(&self,executor:&GpuKernelExecutor,encoder:&mut wgpu::CommandEncoder,grid:&mut EscapeGrid,owner_epoch:u64,level:RefinementLevel,plane:&Plane,centre:&CentreSplit,pixel_scale:f32,params:EscapeParams)->Result<DispatchFacts,KernelError>` packs the owner table and encodes one logical level.
 
-`JulibrotKernels::encode_perturbation(&self,executor:&GpuKernelExecutor,encoder:&mut wgpu::CommandEncoder,grid:&mut EscapeGrid,owner_epoch:u64,level:RefinementLevel,plane:&Plane,scale:ScaledPixelScale,params:EscapeParams,reference:ReferenceOrbitInput)->Result<DispatchFacts,KernelError>` packs mantissa and signed exponent and encodes one scaled logical level.
+`JulibrotKernels::encode_perturbation(&self,executor:&GpuKernelExecutor,encoder:&mut wgpu::CommandEncoder,grid:&mut EscapeGrid,owner_epoch:u64,level:RefinementLevel,plane:&Plane,scale:ScaleSplit,params:EscapeParams,reference:ReferenceOrbitInput)->Result<DispatchFacts,KernelError>` packs mantissa and signed exponent and encodes one scaled logical level.
 
-`JulibrotKernels::free_grid(executor:&mut GpuKernelExecutor,grid:EscapeGrid)->Result<(),KernelError>` transactionally returns the span after present relinquishes it; the error set is `InvalidExtent`, `ArithmeticOverflow`, `InvalidEscapeParams`, `UnknownLevel`, `MissingReference`, `StaleReference`, `ReferenceLengthMismatch`, `ReferencePrecisionMismatch`, `Heap`, `Register`, `Dispatch`, `OutputTransferUnsupported`, and `DeviceLost`, with generation and span identity rather than epoch equality deciding staleness.
+`JulibrotKernels::free_grid(&mut self,executor:&mut GpuKernelExecutor,grid:EscapeGrid)->Result<(),KernelError>` transactionally returns the span after present relinquishes it; the error set is `InvalidExtent`, `ArithmeticOverflow`, `InvalidEscapeParams`, `UnknownLevel`, `MissingReference`, `StaleReference`, `ReferenceLengthMismatch`, `ReferencePrecisionMismatch`, `Heap`, `Register`, `Dispatch`, `OutputTransferUnsupported`, and `DeviceLost`, with generation and span identity rather than epoch equality deciding staleness.
 
 ### 3.4 Worker-owned wire header, trailer, and messages
 
@@ -306,6 +308,8 @@ Worker credit is the displayed POLICY `budget_us_per_second=250_000`; admission,
 `ViewerState` is `repr(C)`, 168 bytes and alignment 8: byte 0 `epoch:u64`, byte 8 `hot:HotState`, and byte 48 `main:MainState`; `HotDrain` and `MainDrain` each return the entire record.
 
 `ViewerOwner::new(initial:ViewerState)->ViewerOwner`, `stage_hot(hot:HotState)`, and `stage_main(main:MainState)` allocate nothing; `accept_orbit(response:&OrbitResponseView,handle:OrbitHandle,reference_shift_px:[f64;2])->OrbitDisposition` returns `Applied` only for matching latest generation and otherwise `Stale`, with both outcomes infallible.
+
+`ViewerOwner::configure_navigation(config:NavigationConfig)->Result<(),OwnerError>` installs math’s `BigCentre`, accepted reference centre, `Plane`, and grid width; `ViewerOwner::navigate(&mut self,delta:NavigationDelta)->u32` delegates mutation and displacement arithmetic to math, stages the updated HOT and MAIN mirrors, and exposes any refusal through `take_navigation_error` without publishing partial state.
 
 `ViewerOwner::drain_hot()->HotDrain` and `drain_main()->MainDrain` each return the full coherent viewer record and increment the shared epoch exactly once; `snapshot()->ViewerState` is diagnostic and does not increment.
 
@@ -480,10 +484,6 @@ The refined app estimate is approximately 2,710 net new lines including the Phas
 
 ## 8. Unresolved for implementation review
 
-- `PresentMain` needs plane origin, centre revision and `reference_shift_px` to implement J10’s rebase/clear rule; these additions are pinned here but require byte-for-byte agreement in present’s refined CPU-only record.
-- The exact f64 formula that converts a retained pose’s old reference-relative displacement through `reference_shift_px` is math/present-owned and must be the same in their refined documents; app only transports the values.
-- Math’s scaled recurrence must state how `δc′` is adjusted on each ±64 renormalization so the scale invariant remains explicit rather than inferred by kernels.
-- The double-single reference record remains conditional on D-versus-D+16 and deep-classification evidence; its adequacy is not assumed by app.
 - The 250,000-microsecond credit and zoom-14 switch are accepted policies without browser field evidence; implementation may not silently tune them.
 - The concrete release script for atomic page/glue/wasm/worker publication remains to be selected, although ABI and refusal semantics are fixed.
 - Hidden-page suspension can delay JavaScript before it observes a 30-second or four-second deadline; the first resumed poll refuses, but wasm cannot bound unscheduled browser time.
