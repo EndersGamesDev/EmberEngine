@@ -1,5 +1,7 @@
 //! Descriptor-heap-effect WebGL2 lab and native allocator evidence.
 
+#![recursion_limit = "256"]
+
 #[cfg(target_arch = "wasm32")]
 mod browser_error;
 mod completion;

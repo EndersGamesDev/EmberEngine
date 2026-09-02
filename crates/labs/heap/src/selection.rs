@@ -15,6 +15,10 @@ pub struct SurfaceOwnership {
 
 impl SurfaceOwnership {
     /// Claims the surface for `generation`, or returns the current owner.
+    ///
+    /// # Errors
+    ///
+    /// Returns the existing owner's generation while a surface image remains live.
     pub const fn try_acquire(&mut self, generation: u64) -> Result<(), u64> {
         if let Some(owner) = self.owner {
             Err(owner)
@@ -35,6 +39,7 @@ impl SurfaceOwnership {
     }
 
     /// Returns the current owner, if a frame is acquired.
+    #[must_use]
     pub const fn owner(self) -> Option<u64> {
         self.owner
     }

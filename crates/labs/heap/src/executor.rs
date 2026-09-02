@@ -4,7 +4,8 @@
     clippy::cast_lossless,
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
-    clippy::too_many_arguments
+    clippy::too_many_arguments,
+    clippy::too_many_lines
 )]
 
 use std::num::NonZeroU64;
@@ -116,7 +117,7 @@ impl ExecutorDispatch {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) fn set_resource(&mut self, slot: usize, span: &DataSpan) -> Result<(), ExecutorError> {
+    pub(super) fn set_resource(&mut self, slot: usize, span: &DataSpan) -> Result<(), ExecutorError> {
         let words = self
             .plan
             .resource_words
@@ -334,7 +335,7 @@ impl GpuKernelExecutor {
     }
 
     #[must_use]
-    pub fn dialect_limits(&self) -> DialectLimits {
+    pub const fn dialect_limits(&self) -> DialectLimits {
         DialectLimits {
             descriptor_capacity: self.config.descriptor_capacity,
             span_capacity: self.config.span_capacity,
@@ -710,31 +711,31 @@ impl GpuKernelExecutor {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) const fn arena(&self) -> &SpanArena {
+    pub(super) const fn arena(&self) -> &SpanArena {
         &self.arena
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) const fn data_texture(&self) -> &wgpu::Texture {
+    pub(super) const fn data_texture(&self) -> &wgpu::Texture {
         &self.data
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) const fn bind_group(&self) -> &wgpu::BindGroup {
+    pub(super) const fn bind_group(&self) -> &wgpu::BindGroup {
         &self.heap_group
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) const fn bind_group_layout(&self) -> &wgpu::BindGroupLayout {
+    pub(super) const fn bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.heap_layout
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub(crate) const fn kernel_uniform_buffer(&self) -> &wgpu::Buffer {
+    pub(super) const fn kernel_uniform_buffer(&self) -> &wgpu::Buffer {
         &self.kernel_uniform_buffer
     }
 
-    pub(crate) fn sync_heap_metadata(&self) {
+    pub(super) fn sync_heap_metadata(&self) {
         self.queue.write_buffer(
             &self.descriptor_buffer,
             0,
@@ -785,7 +786,7 @@ fn copy_command_count(plan: &DispatchPlan, side: u32) -> u32 {
         .sum()
 }
 
-pub(crate) fn texture(
+pub(super) fn texture(
     device: &wgpu::Device,
     label: &'static str,
     side: u32,
