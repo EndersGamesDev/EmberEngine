@@ -15,6 +15,13 @@ impl BigScalar {
         Self::checked(BigFloat::from_f64(value, precision_bits as usize))
     }
 
+    pub fn from_f32(value: f32, precision_bits: u32) -> Result<Self, MathError> {
+        if !value.is_finite() || precision_bits == 0 {
+            return Err(MathError::NonFinite);
+        }
+        Self::checked(BigFloat::from_f32(value, precision_bits as usize))
+    }
+
     pub fn zero(precision_bits: u32) -> Result<Self, MathError> {
         if precision_bits == 0 {
             return Err(MathError::InvalidCentreEncoding);
@@ -38,6 +45,102 @@ impl BigScalar {
     pub fn precision_bits(&self) -> Result<u32, MathError> {
         let precision = self.value.precision().ok_or(MathError::BigFloat)?;
         u32::try_from(precision).map_err(|_| MathError::CounterOverflow)
+    }
+
+    pub fn to_f64(&self) -> Result<f64, MathError> {
+        let encoded = encode_big_scalar(self)?;
+        Ok(f64::from_bits(round_dyadic(
+            &encoded,
+            FloatFormat {
+                precision: 53,
+                fraction_bits: 52,
+                minimum_normal_exponent: -1022,
+                minimum_subnormal_exponent: -1074,
+                maximum_exponent: 1023,
+                exponent_bias: 1023,
+                sign_shift: 63,
+            },
+        )?))
+    }
+
+    pub fn to_f32(&self) -> Result<f32, MathError> {
+        let encoded = encode_big_scalar(self)?;
+        let bits = u32::try_from(round_dyadic(
+            &encoded,
+            FloatFormat {
+                precision: 24,
+                fraction_bits: 23,
+                minimum_normal_exponent: -126,
+                minimum_subnormal_exponent: -149,
+                maximum_exponent: 127,
+                exponent_bias: 127,
+                sign_shift: 31,
+            },
+        )?)
+        .map_err(|_| MathError::CounterOverflow)?;
+        Ok(f32::from_bits(bits))
+    }
+
+    pub(crate) fn with_precision(&self, precision_bits: u32) -> Result<Self, MathError> {
+        if precision_bits == 0 {
+            return Err(MathError::InvalidCentreEncoding);
+        }
+        let mut value = self.value.clone();
+        value
+            .set_precision(precision_bits as usize, RoundingMode::ToEven)
+            .map_err(|_| MathError::BigFloat)?;
+        Self::checked(value)
+    }
+
+    pub(crate) fn add(&self, other: &Self, precision_bits: u32) -> Result<Self, MathError> {
+        Self::checked(self.value.add(
+            &other.value,
+            precision_bits as usize,
+            RoundingMode::ToEven,
+        ))
+    }
+
+    pub(crate) fn sub(&self, other: &Self, precision_bits: u32) -> Result<Self, MathError> {
+        Self::checked(self.value.sub(
+            &other.value,
+            precision_bits as usize,
+            RoundingMode::ToEven,
+        ))
+    }
+
+    pub(crate) fn mul(&self, other: &Self, precision_bits: u32) -> Result<Self, MathError> {
+        Self::checked(self.value.mul(
+            &other.value,
+            precision_bits as usize,
+            RoundingMode::ToEven,
+        ))
+    }
+
+    pub(crate) fn div(&self, other: &Self, precision_bits: u32) -> Result<Self, MathError> {
+        Self::checked(self.value.div(
+            &other.value,
+            precision_bits as usize,
+            RoundingMode::ToEven,
+        ))
+    }
+
+    pub(crate) fn scale_pow2(&self, shift: i32) -> Result<Self, MathError> {
+        if self.is_zero() {
+            return Ok(self.clone());
+        }
+        let mut value = self.value.clone();
+        let exponent = value.exponent().ok_or(MathError::BigFloat)?;
+        value.set_exponent(
+            exponent
+                .checked_add(shift)
+                .ok_or(MathError::ScaleExponentOverflow)?,
+        );
+        Self::checked(value)
+    }
+
+    pub(crate) fn compare(&self, other: &Self) -> Result<i8, MathError> {
+        let ordering = self.value.cmp(&other.value).ok_or(MathError::BigFloat)?;
+        Ok(ordering.signum() as i8)
     }
 }
 
@@ -67,6 +170,123 @@ pub struct EncodedBigScalar {
     pub sign: u32,
     pub exponent: i32,
     pub limbs: Vec<u32>,
+}
+
+#[derive(Clone, Copy)]
+struct FloatFormat {
+    precision: u32,
+    fraction_bits: u32,
+    minimum_normal_exponent: i64,
+    minimum_subnormal_exponent: i64,
+    maximum_exponent: i64,
+    exponent_bias: i64,
+    sign_shift: u32,
+}
+
+fn round_dyadic(encoded: &EncodedBigScalar, format: FloatFormat) -> Result<u64, MathError> {
+    if encoded.limbs.is_empty() {
+        return Ok(0);
+    }
+    let high = *encoded
+        .limbs
+        .last()
+        .ok_or(MathError::InvalidCentreEncoding)?;
+    let word_count = i64::try_from(encoded.limbs.len() - 1)
+        .map_err(|_| MathError::CounterOverflow)?;
+    let bit_length = word_count
+        .checked_mul(32)
+        .and_then(|bits| bits.checked_add(i64::from(32 - high.leading_zeros())))
+        .ok_or(MathError::CounterOverflow)?;
+    let mut high_exponent = i64::from(encoded.exponent)
+        .checked_add(bit_length - 1)
+        .ok_or(MathError::ScaleExponentOverflow)?;
+    if high_exponent > format.maximum_exponent {
+        return Err(MathError::NonFinite);
+    }
+    let normal = high_exponent >= format.minimum_normal_exponent;
+    let unit_exponent = if normal {
+        high_exponent - i64::from(format.precision - 1)
+    } else {
+        format.minimum_subnormal_exponent
+    };
+    let right_shift = unit_exponent
+        .checked_sub(i64::from(encoded.exponent))
+        .ok_or(MathError::ScaleExponentOverflow)?;
+    let mut significand = round_shift(&encoded.limbs, bit_length, right_shift)?;
+    if normal && significand == 1_u64 << format.precision {
+        significand >>= 1;
+        high_exponent += 1;
+        if high_exponent > format.maximum_exponent {
+            return Err(MathError::NonFinite);
+        }
+    }
+    let magnitude_bits = if normal {
+        let exponent_field = u64::try_from(high_exponent + format.exponent_bias)
+            .map_err(|_| MathError::CounterOverflow)?;
+        let implicit = 1_u64 << (format.precision - 1);
+        (exponent_field << format.fraction_bits) | (significand - implicit)
+    } else {
+        significand
+    };
+    Ok(magnitude_bits | (u64::from(encoded.sign) << format.sign_shift))
+}
+
+fn round_shift(limbs: &[u32], bit_length: i64, right_shift: i64) -> Result<u64, MathError> {
+    if right_shift <= 0 {
+        let left_shift = u32::try_from(-right_shift).map_err(|_| MathError::CounterOverflow)?;
+        let mut value = 0_u64;
+        for bit in (0..bit_length).rev() {
+            let next = u64::from(bit_at(limbs, bit)?);
+            value = value
+                .checked_mul(2)
+                .and_then(|v| v.checked_add(next))
+                .ok_or(MathError::CounterOverflow)?;
+        }
+        return value
+            .checked_shl(left_shift)
+            .ok_or(MathError::CounterOverflow);
+    }
+    let mut value = 0_u64;
+    for bit in (right_shift..bit_length).rev() {
+        let next = u64::from(bit_at(limbs, bit)?);
+        value = value
+            .checked_mul(2)
+            .and_then(|v| v.checked_add(next))
+            .ok_or(MathError::CounterOverflow)?;
+    }
+    let round_bit = bit_at(limbs, right_shift - 1)?;
+    let sticky = any_bits_below(limbs, right_shift - 1)?;
+    if round_bit != 0 && (sticky || value & 1 != 0) {
+        value = value.checked_add(1).ok_or(MathError::CounterOverflow)?;
+    }
+    Ok(value)
+}
+
+fn any_bits_below(limbs: &[u32], exclusive_bit: i64) -> Result<bool, MathError> {
+    if exclusive_bit <= 0 {
+        return Ok(false);
+    }
+    let exclusive_bit = usize::try_from(exclusive_bit).map_err(|_| MathError::CounterOverflow)?;
+    let full_limbs = (exclusive_bit / 32).min(limbs.len());
+    if limbs[..full_limbs].iter().any(|limb| *limb != 0) {
+        return Ok(true);
+    }
+    let partial_bits = exclusive_bit % 32;
+    Ok(partial_bits != 0
+        && limbs
+            .get(full_limbs)
+            .is_some_and(|limb| limb & ((1_u32 << partial_bits) - 1) != 0))
+}
+
+fn bit_at(limbs: &[u32], bit: i64) -> Result<u32, MathError> {
+    if bit < 0 {
+        return Ok(0);
+    }
+    let bit = usize::try_from(bit).map_err(|_| MathError::CounterOverflow)?;
+    let Some(limb) = limbs.get(bit / 32) else {
+        return Ok(0);
+    };
+    Ok((limb >> (bit % 32)) & 1)
 }
 
 pub fn encode_big_scalar(value: &BigScalar) -> Result<EncodedBigScalar, MathError> {

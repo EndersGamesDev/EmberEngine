@@ -126,7 +126,7 @@ All transferred and GPU words are little-endian, `f32` and `f64` are IEEE-754 bi
 |`CentreSplit`|`#[repr(C,align(16))] { hi:[f32;4], lo:[f32;4] }`; 32 bytes at offsets 0 and 16|kernels|
 |`Plane`|`#[repr(C,align(16))] { basis_u:[f32;4], basis_v:[f32;4] }`; 32 bytes at offsets 0 and 16, dimensionless|kernels, present, app|
 |`EscapeParams`|`#[repr(C)] { max_iter:u32, bailout:f32 }`; 8 bytes at offsets 0 and 4, `max_iter>0`, squared `bailout=256.0`|kernels, worker, app|
-|`ScaleSplit`|`{ mantissa:f32, exponent:i32 }`; CPU-only, `p=mantissa·2^exponent`, mantissa in `[0.5,1)`|kernels, overlay|
+|`ScaledPixelScale`|`{ mantissa:f32, exponent:i32 }`; CPU-only, `p=mantissa·2^exponent`, mantissa in `[0.5,1)`; `ScaleSplit` is a compatibility alias|kernels, overlay|
 |`PrecisionPlan`|`{ floor_digits:u32, working_digits:u32, requested_bits:u32, policy_digits:u32 }`; decimal digits except bits|worker, overlay|
 |`BigCentre`|`{ coords:[BigScalar;4], precision_bits:u32 }`; Astro-float-backed, finite, no byte ABI|worker|
 |`EscapeSample`|`{ smooth_iter:f32, escaped:bool, escape_index:Option<u32> }`; CPU-only oracle output|kernels tests|
@@ -136,11 +136,11 @@ All transferred and GPU words are little-endian, `f32` and `f64` are IEEE-754 bi
 |`OrbitStep`|`Pending { stored:u32 }` or `Complete(ComputedOrbit)`; CPU-only cooperative result|worker|
 |`Pose`|CPU-only exact field list below, no byte ABI|present, app|
 |`WarpMatrix`|`{ forward:[f64;9], inverse:[f64;9] }`; row-major, 144 native bytes|present|
-|`MathError`|`NonFinite`, `InvalidExtent`, `InvalidMaxIter`, `InvalidPlaneSeed`, `InvalidCentreEncoding`, `ScaleExponentOverflow`, `DegenerateWarp`, `OrbitTooLong`, `CounterOverflow`, `DurationOverflow`, or `PrecisionExhausted { requested_digits,policy_digits }`|all slices|
+|`MathError`|`NonFinite`, `InvalidExtent`, `InvalidMaxIter`, `InvalidPlaneSeed`, `PlaneRoundingBound`, `InvalidCentreEncoding`, `PrecisionMismatch`, `ScaleExponentOverflow`, `DegenerateWarp`, `OrbitTooLong`, `CounterOverflow`, `DurationOverflow`, `BigFloat`, or `PrecisionExhausted { requested_digits,policy_digits }`|all slices|
 
 `Pose` is `pub struct Pose { pub epoch:u64, pub orbit_generation:u32, pub plane:Plane, pub plane_theta_1:f64, pub plane_theta_2:f64, pub zoom_log2:f64, pub view_theta_1:f64, pub grid_width:u32, pub grid_height:u32, pub view:ViewMode, pub centre_from_reference_px:[f64;2] }`; VIEW angle two is derived as `φ·view_theta_1` and is not stored.
 
-The implementation signatures are `construct_plane(spec:PlaneSpec,angles:PlaneAngles)->Result<Plane,MathError>`, `preset_spec(preset:PlanePreset)->Result<PlaneSpec,MathError>`, `mirror_centre(centre:&BigCentre)->Result<CentreF64,MathError>`, `split_centre(centre:&BigCentre)->Result<CentreSplit,MathError>`, `scale_split(zoom_log2:f64,grid_width:u32)->Result<ScaleSplit,MathError>`, `precision_for(zoom_log2:f64,grid_width:u32,max_iter:u32)->Result<PrecisionPlan,MathError>`, and `escape_f32(point:[f32;4],params:EscapeParams)->Result<EscapeSample,MathError>`.
+The implementation signatures are `construct_plane(preset:PlanePreset,angles:PlaneAngles)->Result<Plane,MathError>`, `construct_plane_from_spec(spec:PlaneSpec,angles:PlaneAngles)->Result<Plane,MathError>`, `preset_spec(preset:PlanePreset)->Result<PlaneSpec,MathError>`, `mirror_centre(centre:&BigCentre)->Result<CentreF64,MathError>`, `split_scalar(value:&BigScalar)->Result<[f32;2],MathError>`, `split_centre(centre:&BigCentre)->Result<CentreSplit,MathError>`, `scaled_pixel_scale(zoom_log2:f64,grid_width:u32)->Result<ScaledPixelScale,MathError>`, `scale_split(zoom_log2:f64,grid_width:u32)->Result<ScaleSplit,MathError>`, `shallow_pixel_scale(zoom_log2:f64,grid_width:u32)->Result<f32,MathError>`, `scaled_pixel_offset(plane:Plane,scale:ScaledPixelScale,extent:[u32;2],pixel:[u32;2])->Result<[f32;4],MathError>`, `centre_displacement_px(centre:&BigCentre,reference:&BigCentre,plane:Plane,zoom_log2:f64,grid_width:u32)->Result<[f64;2],MathError>`, `precision_for(zoom_log2:f64,grid_width:u32,max_iter:u32)->Result<PrecisionPlan,MathError>`, and `escape_f32(point:[f32;4],params:EscapeParams)->Result<EscapeSample,MathError>`.
 
 Orbit and perturbation signatures are `ReferenceOrbitBuilder::new(centre:&BigCentre,plan:PrecisionPlan,params:EscapeParams)->Result<ReferenceOrbitBuilder,MathError>`, `ReferenceOrbitBuilder::step(&mut self,max_entries:NonZeroU32)->Result<OrbitStep,MathError>`, and `perturb_scaled_f64(orbit:&[ReferenceOrbitRecord],offset_prime:[f64;4],scale_exponent:i32,params:EscapeParams)->Result<PerturbSample,MathError>`.
 

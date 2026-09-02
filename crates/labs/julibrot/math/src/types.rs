@@ -175,8 +175,12 @@ pub enum MathError {
     InvalidMaxIter,
     #[error("the plane seed axes must be distinct")]
     InvalidPlaneSeed,
+    #[error("f32 plane rounding exceeded the proved postcondition")]
+    PlaneRoundingBound,
     #[error("the centre encoding is not canonical")]
     InvalidCentreEncoding,
+    #[error("bignum centres use different delivered precisions")]
+    PrecisionMismatch,
     #[error("the scale exponent is outside i32 range")]
     ScaleExponentOverflow,
     #[error("the warp matrix is degenerate")]
