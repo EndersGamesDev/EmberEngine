@@ -219,7 +219,11 @@ fn reject_forbidden(desc: &KernelDesc<'_>, module: &naga::Module) -> Result<(), 
             construct: ForbiddenConstruct::EntryPoint,
         });
     }
-    if module.global_variables.iter().any(|(_, variable)| variable.binding.is_some()) {
+    if module
+        .global_variables
+        .iter()
+        .any(|(_, variable)| variable.binding.is_some())
+    {
         return Err(DialectError::Forbidden {
             kernel: desc.name.to_string(),
             construct: ForbiddenConstruct::ResourceBinding,
@@ -259,42 +263,59 @@ impl RegisteredKernel {
     /// Returns a typed descriptor, parse, forbidden-construct, or generated-validation failure.
     pub fn register(desc: &KernelDesc<'_>, limits: DialectLimits) -> Result<Self, DialectError> {
         if !identifier(desc.name) || !identifier(desc.uniform_type) {
-            return Err(invalid(desc, "kernel and uniform type must be WGSL identifiers"));
+            return Err(invalid(
+                desc,
+                "kernel and uniform type must be WGSL identifiers",
+            ));
         }
         if desc.accessors.len() > MAX_INPUTS
             || desc.accessors.iter().any(|name| !identifier(name))
             || desc.output_fields.iter().any(|name| !identifier(name))
         {
-            return Err(invalid(desc, "accessor and result names must be unique WGSL identifiers"));
+            return Err(invalid(
+                desc,
+                "accessor and result names must be unique WGSL identifiers",
+            ));
         }
         let names: BTreeSet<_> = desc.accessors.iter().chain(desc.output_fields).collect();
         if names.len() != desc.accessors.len() + desc.output_fields.len() {
-            return Err(invalid(desc, "accessor and result names must be unique WGSL identifiers"));
+            return Err(invalid(
+                desc,
+                "accessor and result names must be unique WGSL identifiers",
+            ));
         }
         if desc.output_fields.is_empty() || desc.output_fields.len() > 4 {
             return Err(invalid(desc, "output count must be one through four"));
         }
         if desc.uniform_size == 0 || !desc.uniform_size.is_multiple_of(16) {
-            return Err(invalid(desc, "uniform size must be a nonzero multiple of 16 bytes"));
+            return Err(invalid(
+                desc,
+                "uniform size must be a nonzero multiple of 16 bytes",
+            ));
         }
         if desc.output_page_side == 0 || !desc.output_page_side.is_power_of_two() {
-            return Err(invalid(desc, "output page side must be a nonzero power of two"));
+            return Err(invalid(
+                desc,
+                "output page side must be a nonzero power of two",
+            ));
         }
         if limits.descriptor_capacity < 2
             || limits.span_capacity == 0
             || limits.handle_capacity == 0
         {
-            return Err(invalid(desc, "shader capacities must be nonzero and include a live descriptor"));
+            return Err(invalid(
+                desc,
+                "shader capacities must be nonzero and include a live descriptor",
+            ));
         }
         let author = parse_author(desc)?;
         reject_forbidden(desc, &author)?;
         let source = assemble(desc, limits)?;
-        let module = naga::front::wgsl::parse_str(&source).map_err(|error| {
-            DialectError::Validation {
+        let module =
+            naga::front::wgsl::parse_str(&source).map_err(|error| DialectError::Validation {
                 kernel: desc.name.to_string(),
                 message: error.emit_to_string(&source),
-            }
-        })?;
+            })?;
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
@@ -448,11 +469,14 @@ fn assemble(desc: &KernelDesc<'_>, limits: DialectLimits) -> Result<String, Dial
     })?;
     source.push_str("struct HeapVertexOut { @builtin(position) position: vec4<f32>, }\n@vertex fn heap_kernel_vertex(@builtin(vertex_index) vertex: u32) -> HeapVertexOut { var points = array<vec2<f32>, 3>(vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0)); var output: HeapVertexOut; output.position = vec4(points[vertex], 0.0, 1.0); return output; }\nstruct HeapFragmentOut {\n");
     for (location, field) in desc.output_fields.iter().enumerate() {
-        writeln!(source, "@location({location}) output_{location}: vec4<f32>, // {field}")
-            .map_err(|error| DialectError::Validation {
-                kernel: desc.name.to_string(),
-                message: error.to_string(),
-            })?;
+        writeln!(
+            source,
+            "@location({location}) output_{location}: vec4<f32>, // {field}"
+        )
+        .map_err(|error| DialectError::Validation {
+            kernel: desc.name.to_string(),
+            message: error.to_string(),
+        })?;
     }
     source.push_str("}\n@fragment fn heap_kernel_fragment(@builtin(position) position: vec4<f32>) -> HeapFragmentOut {\n");
     writeln!(
@@ -517,7 +541,11 @@ fn kernel(index: u32, uniforms: Parameters) -> ResultValue {
     #[test]
     fn generated_accessor_uses_its_dispatch_span_and_own_descriptor_width() {
         let kernel = register(8);
-        assert!(kernel.source().contains("selected = heap_resources.inputs[0]"));
+        assert!(
+            kernel
+                .source()
+                .contains("selected = heap_resources.inputs[0]")
+        );
         assert!(kernel.source().contains("let width = descriptor.y >> 16u"));
         assert!(!kernel.source().contains("output_page_width"));
         let module = naga::front::wgsl::parse_str(kernel.source()).expect("generated WGSL parses");
@@ -567,10 +595,12 @@ fn kernel(index: u32, uniforms: Parameters) -> ResultValue {
 
     #[test]
     fn dispatch_replaces_handles_without_replacing_registered_source() {
-        let mut arena = SpanArena::new(16, 4, 64, 16 * 16 + 4 * 32, 16)
-            .expect("arena configuration fits");
+        let mut arena =
+            SpanArena::new(16, 4, 64, 16 * 16 + 4 * 32, 16).expect("arena configuration fits");
         let input_small = arena.allocate_span(17, 4).expect("input spans pages");
-        let input_wide = arena.allocate_span(17, 8).expect("replacement spans differently");
+        let input_wide = arena
+            .allocate_span(17, 8)
+            .expect("replacement spans differently");
         let output = arena.allocate_span(130, 8).expect("output has three pages");
         let headers = StaticHeaders::for_span(&output, 256).expect("headers align");
         let kernel = register(8);
@@ -590,8 +620,8 @@ fn kernel(index: u32, uniforms: Parameters) -> ResultValue {
 
     #[test]
     fn dispatch_rejects_output_alias_and_shape_drift() {
-        let mut arena = SpanArena::new(8, 4, 32, 16 * 8 + 4 * 16, 8)
-            .expect("arena configuration fits");
+        let mut arena =
+            SpanArena::new(8, 4, 32, 16 * 8 + 4 * 16, 8).expect("arena configuration fits");
         let aliased = arena.allocate_span(20, 4).expect("span fits");
         let headers = StaticHeaders::for_span(&aliased, 256).expect("headers align");
         let kernel = register(4);
