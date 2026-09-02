@@ -115,9 +115,7 @@ pub fn plan_refinement(
     let mut divisor = 1_u32;
     loop {
         let delivered_extent = divided_extent(requested_extent, divisor);
-        if let Some(records) = delivered_extent
-            .width
-            .checked_mul(delivered_extent.height)
+        if let Some(records) = delivered_extent.width.checked_mul(delivered_extent.height)
             && accepts_records(records)
         {
             return Ok(RefinementPlan {
@@ -139,10 +137,7 @@ pub fn plan_refinement(
     }
 }
 
-fn prefix_pages(
-    active_len: u32,
-    page_records: u32,
-) -> Result<Vec<PrefixPage>, KernelError> {
+fn prefix_pages(active_len: u32, page_records: u32) -> Result<Vec<PrefixPage>, KernelError> {
     if active_len == 0 || page_records == 0 {
         return Err(KernelError::InvalidExtent);
     }
@@ -266,10 +261,7 @@ mod tests {
                 height: 540
             }
         );
-        assert_eq!(
-            plan.level(RefinementLevel::Interactive).iteration_cap,
-            256
-        );
+        assert_eq!(plan.level(RefinementLevel::Interactive).iteration_cap, 256);
         assert_eq!(plan.level(RefinementLevel::Final).iteration_cap, 4_096);
     }
 

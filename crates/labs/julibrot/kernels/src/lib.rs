@@ -3,8 +3,8 @@
 mod dialect;
 mod error;
 mod perturb;
-mod refinement;
 mod records;
+mod refinement;
 mod shallow;
 
 pub use dialect::{OUTPUT_PAGE_SIDE, perturbation_kernel, shallow_kernel};
@@ -13,11 +13,9 @@ pub use ember_julibrot_math::{
 };
 pub use error::KernelError;
 pub use perturb::{perturb_scaled_offset, perturb_scaled_pixel};
-pub use refinement::{
-    DispatchFacts, LevelSpec, RefinementPlan, dispatch_facts, plan_refinement,
-};
 pub use records::{
     EscapeGrid, GridExtent, KernelMode, PerturbUniform, ReferenceOrbitInput, RefinementLevel,
     ShallowUniform,
 };
+pub use refinement::{DispatchFacts, LevelSpec, RefinementPlan, dispatch_facts, plan_refinement};
 pub use shallow::{KernelSample, escape_shallow_pixel, escape_shallow_point};

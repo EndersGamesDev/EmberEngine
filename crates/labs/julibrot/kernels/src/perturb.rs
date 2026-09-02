@@ -11,7 +11,8 @@ use ember_julibrot_math::{
 };
 
 use crate::{
-    GridExtent, KernelError, KernelSample, PerturbUniform, RefinementLevel, records::pixel_offset,
+    GridExtent, KernelError, KernelSample, PerturbUniform, RefinementLevel,
+    records::pixel_offset,
     shallow::{validate_extent, validate_params},
 };
 
@@ -111,8 +112,7 @@ fn robust_norm(value: [f32; 2]) -> f32 {
 fn log2_norm(value: [f32; 2]) -> f32 {
     let magnitude = value[0].abs().max(value[1].abs());
     let normalized = [value[0] / magnitude, value[1] / magnitude];
-    magnitude.log2()
-        + 0.5 * (normalized[0] * normalized[0] + normalized[1] * normalized[1]).log2()
+    magnitude.log2() + 0.5 * (normalized[0] * normalized[0] + normalized[1] * normalized[1]).log2()
 }
 
 fn normalize_scaled(mut state: ScaledState) -> ScaledState {
@@ -176,12 +176,7 @@ fn record(rebases: u32, glitch: bool) -> KernelSample {
     }
 }
 
-fn advance(
-    reference: [f32; 2],
-    delta: [f32; 2],
-    delta_c: [f32; 2],
-    exponent: i32,
-) -> [f32; 2] {
+fn advance(reference: [f32; 2], delta: [f32; 2], delta_c: [f32; 2], exponent: i32) -> [f32; 2] {
     let linear = multiply(complex_mul(reference, delta), 2.0);
     let quadratic = scale(complex_mul(delta, delta), exponent);
     add(add(linear, quadratic), delta_c)
@@ -357,10 +352,7 @@ mod tests {
 
     #[test]
     fn nonzero_z_zero_rebase_uses_the_correct_delta() {
-        let one = ReferenceOrbitRecord {
-            re_hi: 1.0,
-            ..ZERO
-        };
+        let one = ReferenceOrbitRecord { re_hi: 1.0, ..ZERO };
         let sample = perturb_scaled_offset(&uniform(2, 2), &[one, one], [-0.75, 0.0, 0.0, 0.0])
             .expect("reference length matches");
         assert_eq!(sample.record.rebase_count, 1.0);

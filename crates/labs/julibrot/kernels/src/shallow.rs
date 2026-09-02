@@ -85,8 +85,7 @@ fn radius_squared(value: [f32; 2]) -> f32 {
 fn log2_norm(value: [f32; 2]) -> f32 {
     let scale = value[0].abs().max(value[1].abs());
     let normalized = [value[0] / scale, value[1] / scale];
-    scale.log2()
-        + 0.5 * (normalized[0] * normalized[0] + normalized[1] * normalized[1]).log2()
+    scale.log2() + 0.5 * (normalized[0] * normalized[0] + normalized[1] * normalized[1]).log2()
 }
 
 fn smooth_iteration(iteration: u32, value: [f32; 2]) -> f32 {
@@ -187,8 +186,7 @@ mod tests {
         let immediate =
             escape_shallow_point([20.0, 0.0, 0.0, 0.0], params).expect("point is valid");
         assert_eq!(immediate.escape_index, Some(0));
-        let c_two =
-            escape_shallow_point([0.0, 0.0, 2.0, 0.0], params).expect("point is valid");
+        let c_two = escape_shallow_point([0.0, 0.0, 2.0, 0.0], params).expect("point is valid");
         assert_eq!(c_two.escape_index, Some(3));
         assert_eq!(c_two.record.escaped, 1.0);
     }
@@ -254,8 +252,8 @@ mod tests {
         ] {
             let params = EscapeParams::new(64);
             let actual = escape_shallow_point(point, params).expect("kernel mirror accepts point");
-            let expected = ember_julibrot_math::escape_f32(point, params)
-                .expect("math oracle accepts point");
+            let expected =
+                ember_julibrot_math::escape_f32(point, params).expect("math oracle accepts point");
             assert_eq!(actual.escape_index, expected.escape_index);
             assert_eq!(actual.record.escaped == 1.0, expected.escaped);
             assert!((actual.record.smooth_iter - expected.smooth_iter).abs() <= 1.0e-4);

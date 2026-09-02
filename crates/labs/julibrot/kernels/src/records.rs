@@ -43,19 +43,12 @@ impl KernelMode {
 }
 
 /// Returns the plane-relative sample offset for one row-major pixel index.
-pub fn pixel_offset(
-    index: u32,
-    extent: GridExtent,
-    plane: Plane,
-    pixel_scale: f32,
-) -> [f32; 4] {
+pub fn pixel_offset(index: u32, extent: GridExtent, plane: Plane, pixel_scale: f32) -> [f32; 4] {
     let column = index % extent.width;
     let row = index / extent.width;
     let x = column as f32 + 0.5 - 0.5 * extent.width as f32;
     let y = row as f32 + 0.5 - 0.5 * extent.height as f32;
-    std::array::from_fn(|axis| {
-        (x * plane.basis_u[axis] + y * plane.basis_v[axis]) * pixel_scale
-    })
+    std::array::from_fn(|axis| (x * plane.basis_u[axis] + y * plane.basis_v[axis]) * pixel_scale)
 }
 
 /// One kernels-owned allocation whose initialized prefix is presented.
@@ -172,9 +165,7 @@ impl PerturbUniform {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        GridExtent, KernelMode, PerturbUniform, RefinementLevel, ShallowUniform,
-    };
+    use super::{GridExtent, KernelMode, PerturbUniform, RefinementLevel, ShallowUniform};
     use ember_julibrot_math::{CentreSplit, Plane, ScaleSplit};
     use std::mem::{align_of, offset_of, size_of};
 
@@ -222,14 +213,8 @@ mod tests {
             width: 960,
             height: 540,
         };
-        let shallow = ShallowUniform::from_parts(
-            PLANE,
-            centre,
-            0.125,
-            extent,
-            64,
-            RefinementLevel::Preview,
-        );
+        let shallow =
+            ShallowUniform::from_parts(PLANE, centre, 0.125, extent, 64, RefinementLevel::Preview);
         assert_eq!(&shallow.bytes()[32..48], bytemuck::cast_slice(&centre.hi));
         assert_eq!(&shallow.bytes()[48..64], bytemuck::cast_slice(&centre.lo));
         assert_eq!(&shallow.bytes()[88..96], &[0; 8]);
@@ -266,8 +251,7 @@ mod tests {
         };
         let bottom_left = super::pixel_offset(0, extent, PLANE, 1.0);
         let top_left = super::pixel_offset(2, extent, PLANE, 1.0);
-        let vertical: [f32; 4] =
-            std::array::from_fn(|axis| top_left[axis] - bottom_left[axis]);
+        let vertical: [f32; 4] = std::array::from_fn(|axis| top_left[axis] - bottom_left[axis]);
         assert_eq!(bottom_left, [-0.3, -0.4, -0.4, -0.3]);
         assert_eq!(vertical, PLANE.basis_v);
         assert!(bottom_left[..2].iter().any(|value| *value != 0.0));
