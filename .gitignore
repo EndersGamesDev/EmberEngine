@@ -18,3 +18,14 @@ assets/9-mm.zip
 # Minted on gh-pages by deploy-pages.sh; a local copy is only test scaffolding.
 /web/server.json
 .watchdog-state
+# Arena v13 asset runbook (tools/v13): generated pictures are regenerable from
+# the prompt tables in gen_textures.py / gen_views.py, so the 65 MB raw set is
+# NOT committed; only the baked assets/textures/v13 and assets/models/v13 are.
+# Run logs, screenshots, bytecode and the placeholder generator stay local.
+/assets/concepts/v13/
+/tools/v13/*.log
+/tools/v13/*.err
+/tools/v13/*.png
+/tools/v13/__pycache__/
+/tools/v13/placeholder.py
+/tools/v13/nightcoder-audit.md
