@@ -1205,6 +1205,9 @@ dependencies = [
 [[package]]
 name = "ember-julibrot-worker"
 version = "0.1.0"
+dependencies = [
+ "ember-julibrot-math",
+]
 
 [[package]]
 name = "ember-lab-heap"

@@ -600,7 +600,7 @@ mod tests {
         let lease = producer.next_request().unwrap().unwrap();
         assert_eq!(lease.request().generation(), 1);
         producer
-            .complete(lease, &[ReferenceOrbitRecord::default()], 64, 10, 250_000)
+            .complete(lease, &[zero_record()], 64, 10, 250_000)
             .unwrap();
         let response = owner.next_arrival().unwrap();
         assert_eq!(response.generation(), 1);
@@ -613,7 +613,7 @@ mod tests {
         let second = producer.next_request().unwrap().unwrap();
         assert_eq!(second.request().generation(), 2);
         producer
-            .complete(second, &[ReferenceOrbitRecord::default()], 64, 10, 249_990)
+            .complete(second, &[zero_record()], 64, 10, 249_990)
             .unwrap();
         assert_eq!(
             producer
@@ -634,5 +634,14 @@ mod tests {
         assert_eq!(owner.submit(request(8, 2)), SubmitOutcome::Coalesced);
         assert_eq!(owner.latest_generation(), 9);
         assert_eq!(producer.mode(), WorkerMode::SameThread);
+    }
+
+    const fn zero_record() -> ReferenceOrbitRecord {
+        ReferenceOrbitRecord {
+            re_hi: 0.0,
+            im_hi: 0.0,
+            re_lo: 0.0,
+            im_lo: 0.0,
+        }
     }
 }

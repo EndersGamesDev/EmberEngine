@@ -4,6 +4,7 @@
 
 mod channel;
 pub(crate) mod codec;
+mod compute;
 mod error;
 mod owner;
 mod registry;
@@ -16,6 +17,11 @@ pub use channel::{
     WorkerConfig, WorkerMode,
 };
 pub use codec::{CoordinateDescriptor, EncodedCentre, OrbitReason, OrbitRequest};
+pub use compute::{
+    MathFailureCode, MonotonicClock, ORBIT_CHUNK_MAX_ITERATIONS, ORBIT_CHUNK_MAX_US, OrbitTaskPoll,
+    ReferenceOrbitTask,
+};
+pub use ember_julibrot_math::{ComputedOrbit, ReferenceOrbitRecord};
 pub use error::{ChannelError, ErrorCode};
 pub use owner::{
     HotDrain, HotState, MainDrain, MainState, OrbitDisposition, OrbitHandle, ViewerOwner,
@@ -25,5 +31,5 @@ pub use registry::{OrbitRegistry, RegistryError};
 pub use wire::{
     BUFFER_OVERHEAD_BYTES, ERROR_RECORD_BYTES, ErrorRecord, HEADER_BYTES, JULIBROT_ABI_VERSION,
     MAGIC, MessageHeader, MessageKind, ORBIT_RECORD_BYTES, POOL_TRAILER_BYTES, Pool, PoolTrailer,
-    ReferenceOrbitRecord, TRAILER_MAGIC, buffer_capacity,
+    TRAILER_MAGIC, buffer_capacity,
 };

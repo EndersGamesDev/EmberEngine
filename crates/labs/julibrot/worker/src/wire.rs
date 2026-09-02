@@ -1,6 +1,6 @@
 //! Fixed-layout little-endian wire records and owned pool buffers.
 
-use crate::{ChannelError, ErrorCode};
+use crate::{ChannelError, ErrorCode, ReferenceOrbitRecord};
 
 /// Exported module and wire ABI version.
 pub const JULIBROT_ABI_VERSION: u32 = 1;
@@ -311,20 +311,6 @@ impl PoolTrailer {
     }
 }
 
-/// One worker-to-kernels RGBA32F reference entry.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-#[repr(C)]
-pub struct ReferenceOrbitRecord {
-    /// High real component.
-    pub re_hi: f32,
-    /// High imaginary component.
-    pub im_hi: f32,
-    /// Low real residual.
-    pub re_lo: f32,
-    /// Low imaginary residual.
-    pub im_lo: f32,
-}
-
 /// One preallocated pool buffer with immutable trailer identity.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WireBuffer {
@@ -592,10 +578,9 @@ fn bad_kind_or_length(header: MessageHeader) -> ChannelError {
 mod tests {
     use super::{
         BUFFER_OVERHEAD_BYTES, ERROR_RECORD_BYTES, HEADER_BYTES, MessageHeader, MessageKind,
-        ORBIT_RECORD_BYTES, POOL_TRAILER_BYTES, Pool, PoolTrailer, ReferenceOrbitRecord,
-        WireBuffer, buffer_capacity,
+        ORBIT_RECORD_BYTES, POOL_TRAILER_BYTES, Pool, PoolTrailer, WireBuffer, buffer_capacity,
     };
-    use crate::ErrorCode;
+    use crate::{ErrorCode, ReferenceOrbitRecord};
 
     #[test]
     fn native_layouts_match_the_wire_words() {
@@ -686,7 +671,12 @@ mod tests {
                 re_lo: 0.25,
                 im_lo: -0.125,
             },
-            ReferenceOrbitRecord::default(),
+            ReferenceOrbitRecord {
+                re_hi: 0.0,
+                im_hi: 0.0,
+                re_lo: 0.0,
+                im_lo: 0.0,
+            },
         ];
         let mut orbit = WireBuffer::new(Pool::Orbit, 0, 64).unwrap();
         orbit.write_orbit(7, 320, 901, 249_099, &records).unwrap();
