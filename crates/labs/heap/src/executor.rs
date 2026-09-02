@@ -1045,10 +1045,7 @@ impl GpuKernelExecutor {
             }
         }
         if sets.len() > self.config.max_header_sets as usize {
-            return Err(
-                self.header_reservations
-                    .capacity_error(sets.len() as u32),
-            );
+            return Err(self.header_reservations.capacity_error(sets.len() as u32));
         }
         Ok(())
     }
