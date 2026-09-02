@@ -4,12 +4,20 @@
       "id": "arena",
       "title": "Arena Shooter",
       "tag": "online multiplayer · first person · up to 8",
-      "desc": "First-person drop-in deathmatch in a generated arena. WASD + mouse look, Space jump, RMB zoom, R reload, Shift sprint, C crouch — crouching also shrinks your hitbox. Q raises an off-hand shield that doesn't just block a bullet, it reflects it back at the shooter. Jump onto the low crates and fight from up there; the tall containers stay hard cover. Grab glowing pads to upgrade your pistol. Textured basalt arena, an animated SWAT operator, the operator's own rifle and gloved hands, first person and third, and a rifle-butt strike on E. E is a melee strike that kills outright and goes straight through a raised shield — the counter to someone turtling behind Q. Headshots kill outright too, so aim high. v13 replaces the generated boxes with one authored map, Trench City: closed shipping containers as hard cover, crates and ammo boxes as the steps up onto their roofs, a ring of trenches with fire steps and covered tunnels holding all four weapon pads, and a bronze statue at the centre of a fought-over European city square. Fullscreen: F11 on the native client, F or the button on the page.",
+      "desc": "First-person drop-in deathmatch in a generated arena. WASD + mouse look, Space jump, RMB zoom, R reload, Shift sprint, C crouch — crouching also shrinks your hitbox. Q raises an off-hand shield that doesn't just block a bullet, it reflects it back at the shooter. Jump onto the low crates and fight from up there; the tall containers stay hard cover. Grab glowing pads to upgrade your pistol. Textured basalt arena, an animated SWAT operator, the operator's own rifle and gloved hands, first person and third, a Roman scutum on Q and the Murasama on E. E is a melee strike that kills outright and goes straight through a raised shield — the counter to someone turtling behind Q. Headshots kill outright too, so aim high. v13 replaces the generated boxes with one authored map, Trench City: closed shipping containers as hard cover, crates and ammo boxes as the steps up onto their roofs, a ring of trenches with fire steps and covered tunnels holding all four weapon pads, and a bronze statue at the centre of a fought-over European city square. Fullscreen: F11 on the native client, F or the button on the page.",
       "versions": [
+        {
+          "v": "v17",
+          "path": "games/arena/v17/",
+          "live": true,
+          "proto": 13,
+          "handover": true,
+          "note": "the scutum on Q, first person and on every player who raises one; the Murasama on E, a real cut"
+        },
         {
           "v": "v16",
           "path": "games/arena/v16/",
-          "live": true,
+          "live": false,
           "proto": 13,
           "handover": true,
           "note": "one operator: the rifle the character carries, in its own gloved hands; E strikes with the butt"
