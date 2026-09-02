@@ -479,7 +479,9 @@ fn a_bare_net_greets_and_pings_without_update() {
     let mut listed = false;
     while t1.elapsed() < Duration::from_secs(3) && !listed {
         net.drain(&mut inbox);
-        listed = inbox.drain(..).any(|m| matches!(m, S2C::Lobbies { .. }));
+        while let Some(m) = inbox.pop_front() {
+            listed |= matches!(m, S2C::Lobbies { .. });
+        }
         thread::sleep(Duration::from_millis(10));
     }
     assert!(
@@ -487,9 +489,10 @@ fn a_bare_net_greets_and_pings_without_update() {
         "a Hello handed to send() reached the server and closed the connection (status {:?})",
         net.status()
     );
-    eprintln!(
+    tracing::info!(
         "bare net: Welcome at {welcomed_at:?}, Pongs at {:?} and {:?}",
-        pongs[0].1, pongs[1].1
+        pongs[0].1,
+        pongs[1].1
     );
 }
 

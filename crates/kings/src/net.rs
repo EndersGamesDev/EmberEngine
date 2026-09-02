@@ -34,7 +34,7 @@ pub enum Status {
 
 /// How often the socket pings, from the protocol.
 #[must_use]
-pub fn ping_period() -> Duration {
+pub const fn ping_period() -> Duration {
     Duration::from_secs(CLIENT_PING_SECS)
 }
 
@@ -184,7 +184,9 @@ mod imp {
                     period_ms,
                 ) {
                     Ok(id) => keepalive_id = Some(id),
-                    Err(_) => tracing::warn!("kings net: no keepalive timer; the seat will time out"),
+                    Err(_) => {
+                        tracing::warn!("kings net: no keepalive timer; the seat will time out")
+                    }
                 }
                 keepalive = Some(cb);
             } else {
