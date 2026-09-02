@@ -136,12 +136,9 @@ impl JulibrotKernels {
                 return Err(error);
             }
         };
-        let header_sets = match executor.reserve_header_sets(&headers) {
-            Ok(header_sets) => header_sets,
-            Err(_) => {
-                executor.free_span(span).map_err(|_| KernelError::Heap)?;
-                return Err(KernelError::Dispatch);
-            }
+        let Ok(header_sets) = executor.reserve_header_sets(&headers) else {
+            executor.free_span(span).map_err(|_| KernelError::Heap)?;
+            return Err(KernelError::Dispatch);
         };
         if header_sets.set_count() != LEVEL_COUNT {
             executor.free_span(span).map_err(|_| KernelError::Heap)?;
@@ -381,7 +378,7 @@ fn pixel_count(extent: GridExtent) -> Result<u32, KernelError> {
     crate::shallow::validate_extent(extent)
 }
 
-fn level_set(level: RefinementLevel) -> u32 {
+const fn level_set(level: RefinementLevel) -> u32 {
     match level {
         RefinementLevel::Preview => 0,
         RefinementLevel::Interactive => 1,
@@ -431,7 +428,9 @@ fn encode_pages(
         .write_kernel_uniform(kernel, uniform)
         .map_err(|_| KernelError::Dispatch)?;
     executor.sync_dispatch_resources(dispatch);
-    for page in 0..dispatch.plan().passes.len() as u32 {
+    let page_count = u32::try_from(dispatch.plan().passes.len())
+        .map_err(|_| KernelError::ArithmeticOverflow)?;
+    for page in 0..page_count {
         executor
             .encode_dispatch_selected(
                 encoder,
