@@ -165,7 +165,7 @@ impl SceneUniform {
         selected: PaletteRecord,
     ) -> Result<Self, PresentDataError> {
         let [width, height] = extent;
-        width
+        let active_len = width
             .checked_mul(height)
             .filter(|length| *length > 0 && *length <= logical_len)
             .ok_or(PresentDataError::InvalidGrid {
@@ -175,7 +175,7 @@ impl SceneUniform {
             })?;
         Ok(Self {
             grid: [width, height, level, max_iter],
-            span: [directory_index, logical_len, 0, 0],
+            span: [directory_index, active_len, 0, 0],
             palette_map: selected.map,
             interior_rgba: selected.interior_rgba,
             clear_rgba: selected.clear_rgba,
@@ -233,7 +233,7 @@ mod tests {
         let uniform = SceneUniform::new([3, 2], 1, 64, 7, 12, CLASSIC_PALETTE)
             .expect("six active records fit twelve-record capacity");
         assert_eq!(uniform.grid, [3, 2, 1, 64]);
-        assert_eq!(uniform.span, [7, 12, 0, 0]);
+        assert_eq!(uniform.span, [7, 6, 0, 0]);
         assert_eq!(
             SceneUniform::new([4, 4], 0, 64, 7, 12, CLASSIC_PALETTE),
             Err(PresentDataError::InvalidGrid {

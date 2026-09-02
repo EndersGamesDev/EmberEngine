@@ -47,7 +47,11 @@ fn shade(record: vec4<f32>) -> vec4<f32> {
 }
 fn record_height(record: vec4<f32>) -> f32 {
     if (malformed(record) || record.w == 1.0) { return 0.0; }
-    if (record.y == 0.0) { return -2.0; }
+    if (record.y == 0.0) {
+        if (record.x == -1.0) { return -2.0; }
+        return 0.0;
+    }
+    if (!finite(record.x) || record.x < 0.0) { return 0.0; }
     return 4.0 * clamp(record.x / max(f32(scene.grid.w), 1.0), 0.0, 1.0) - 2.0;
 }
 ";
@@ -188,6 +192,7 @@ mod tests {
         let source = scene_shaders(limits()).flat;
         assert!(source.contains("let row = scene.grid.y - 1u - top_row;"));
         assert!(source.contains("malformed(record) || record.w == 1.0"));
+        assert!(source.contains("!finite(record.x) || record.x < 0.0"));
         assert!(source.contains("vec4<f32>(1.0, 0.0, 1.0, 1.0)"));
         assert!(source.contains("textureLoad(heap_data"));
     }
