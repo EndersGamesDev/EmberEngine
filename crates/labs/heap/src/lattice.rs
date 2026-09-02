@@ -277,6 +277,7 @@ mod tests {
     use crate::{DialectLimits, KernelDesc, RegisteredKernel};
 
     #[test]
+    #[allow(clippy::cast_possible_truncation)]
     fn geometry_ladder_frame_and_indexed_box_pin_the_contract() {
         assert_invariants();
         let object = prism();

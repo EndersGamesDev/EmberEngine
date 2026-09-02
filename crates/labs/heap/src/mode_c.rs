@@ -354,6 +354,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::suboptimal_flops)]
     fn rawgl_presentation_literals_and_wgpu_depth_conversion_are_pinned() {
         let depth_row = "(camera_far / (camera_near - camera_far)) * view.z + camera_far * camera_near / (camera_near - camera_far)";
         let required = [
