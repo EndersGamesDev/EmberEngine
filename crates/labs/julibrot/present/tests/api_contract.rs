@@ -6,30 +6,41 @@ use ember_julibrot_present::{
 };
 use ember_lab_heap::HeapPresentResources;
 
+#[allow(clippy::type_complexity)]
+type NewPresenter = fn(
+    Arc<wgpu::Device>,
+    Arc<wgpu::Queue>,
+    HeapPresentResources,
+    PresentConfig,
+) -> Result<Presenter, PresentError>;
+
 #[test]
 fn app_facing_callable_surface_has_the_pinned_signatures() {
-    let _new: fn(
-        Arc<wgpu::Device>,
-        Arc<wgpu::Queue>,
-        HeapPresentResources,
-        PresentConfig,
-    ) -> Result<Presenter, PresentError> = Presenter::new;
-    let _set_main: fn(&mut Presenter, PresentMain) = Presenter::set_main;
-    let _write_hot: fn(&mut Presenter, HotSlot, PresentHot) = Presenter::write_hot;
-    let _submit_scene: fn(&mut Presenter, HotSlot, f64) -> Result<u64, PresentError> =
+    let new: NewPresenter = Presenter::new;
+    let set_main: fn(&mut Presenter, PresentMain) = Presenter::set_main;
+    let write_hot: fn(&mut Presenter, HotSlot, PresentHot) = Presenter::write_hot;
+    let submit_scene: fn(&mut Presenter, HotSlot, f64) -> Result<u64, PresentError> =
         Presenter::submit_scene;
-    let _frame: for<'a> fn(
+    let frame: for<'a> fn(
         &mut Presenter,
         FrameState<'a>,
         HotSlot,
     ) -> Result<FrameReceipt, PresentError> = Presenter::frame;
-    let _poll: fn(&mut Presenter, f64) -> Vec<PresentEvent> = Presenter::poll;
-    let _facts: fn(&Presenter) -> PresentFacts = Presenter::facts;
-    let _warp: fn(
+    let poll: fn(&mut Presenter, f64) -> Vec<PresentEvent> = Presenter::poll;
+    let facts: fn(&Presenter) -> PresentFacts = Presenter::facts;
+    let warp: fn(
         &ember_julibrot_present::SceneFrame,
         &ember_julibrot_present::Pose,
         &ember_julibrot_present::Pose,
     ) -> WarpPlan = Warp::reproject;
+    std::hint::black_box(new);
+    std::hint::black_box(set_main);
+    std::hint::black_box(write_hot);
+    std::hint::black_box(submit_scene);
+    std::hint::black_box(frame);
+    std::hint::black_box(poll);
+    std::hint::black_box(facts);
+    std::hint::black_box(warp);
 }
 
 #[test]
@@ -48,5 +59,8 @@ fn pending_surface_contract_has_one_warp_completion_identity() {
         panic!("constructed event changed kind");
     };
     assert_eq!(measurement.id, 41);
-    assert_eq!(measurement.kind, ember_julibrot_present::SubmissionKind::Warp);
+    assert_eq!(
+        measurement.kind,
+        ember_julibrot_present::SubmissionKind::Warp
+    );
 }

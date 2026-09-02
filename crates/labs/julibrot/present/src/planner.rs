@@ -337,10 +337,8 @@ mod tests {
                     .expect("exact fixture has no projective pole");
                 let actual = apply_homography(rounded, chart)
                     .expect("rounded fixture has no projective pole");
-                let error_px = ((actual[0] - expected[0])
-                    * 0.5
-                    * f64::from(from.grid_width))
-                .hypot((actual[1] - expected[1]) * 0.5 * f64::from(from.grid_height));
+                let error_px = ((actual[0] - expected[0]) * 0.5 * f64::from(from.grid_width))
+                    .hypot((actual[1] - expected[1]) * 0.5 * f64::from(from.grid_height));
                 assert!(
                     error_px <= 0.25,
                     "zoom {zoom_log2} rounded warp error was {error_px} px"

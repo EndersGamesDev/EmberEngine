@@ -51,10 +51,7 @@ impl SceneLedger {
         Ok(texture_index)
     }
 
-    pub fn complete(
-        &mut self,
-        measurement: SubmissionMeasurement,
-    ) -> Option<SceneCompletion> {
+    pub fn complete(&mut self, measurement: SubmissionMeasurement) -> Option<SceneCompletion> {
         let pending = self.pending.take()?;
         if let Some(reason) = pending.drop_reason {
             return Some(SceneCompletion::Dropped {
