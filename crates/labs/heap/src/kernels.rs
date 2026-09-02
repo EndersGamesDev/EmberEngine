@@ -14,7 +14,9 @@ pub(super) const FETCH_WIDTH: u32 = 512;
 pub(super) const FETCH_HEIGHT: u32 = 512;
 pub(super) const PAYLOAD_SIDE: u32 = 64;
 pub(super) const FETCHES_PER_FRAGMENT: u32 = 16;
-pub(super) const DRAW_STEPS: [u32; 5] = [16, 64, 256, 1_024, 4_096];
+pub(super) const DRAW_STEPS: [u32; 9] = [
+    16, 64, 256, 1_024, 4_096, 16_384, 65_536, 262_144, 1_048_576,
+];
 
 pub(super) const DIRECT_FETCH_SHADER: &str = include_str!("fetch-direct.wgsl");
 pub(super) const HEAP_FETCH_SHADER_TEMPLATE: &str = include_str!("fetch-heap.wgsl");
@@ -132,7 +134,12 @@ mod tests {
             4_194_304
         );
         assert_eq!(PAYLOAD_SIDE, 64);
-        assert_eq!(DRAW_STEPS, [16, 64, 256, 1_024, 4_096]);
+        assert_eq!(
+            DRAW_STEPS,
+            [
+                16, 64, 256, 1_024, 4_096, 16_384, 65_536, 262_144, 1_048_576,
+            ]
+        );
         assert_ne!(material_color(1), material_color(2));
     }
 }

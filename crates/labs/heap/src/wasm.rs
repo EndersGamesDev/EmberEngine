@@ -28,7 +28,8 @@ use crate::kernels::{
 const HEAP_SIDE: u16 = 256;
 const REQUESTED_LAYERS: u16 = 8;
 const MAX_DESCRIPTORS: u32 = 4_096;
-const COMPLETION_DEADLINE_MS: i32 = 4_000;
+const FETCH_COMPLETION_DEADLINE_MS: i32 = 4_000;
+const DRAW_COMPLETION_DEADLINE_MS: i32 = 30_000;
 const MATERIAL_UNIFORM_STRIDE: u64 = 256;
 
 #[derive(Debug, thiserror::Error)]
@@ -41,15 +42,17 @@ enum LabError {
     Surface(String),
     #[error("completion mapping failed: {0}")]
     Mapping(String),
-    #[error("completion exceeded {COMPLETION_DEADLINE_MS} ms")]
-    Deadline,
+    #[error("completion exceeded {0} ms")]
+    Deadline(i32),
     #[error("benchmark generation {observed} is stale; current is {current}")]
     StaleGeneration { observed: u64, current: u64 },
     #[error("device lost: {0}")]
     DeviceLost(String),
     #[error("unknown benchmark mode {0}")]
     UnknownMode(String),
-    #[error("draw step {0} is not one of 16, 64, 256, 1024, 4096")]
+    #[error(
+        "draw step {0} is not one of 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576"
+    )]
     UnknownStep(u32),
     #[error("repeat count must be in 1..=4096, got {0}")]
     InvalidRepeat(u32),
@@ -125,7 +128,8 @@ struct Uniform16 {
 }
 
 struct Scene {
-    draws: u32,
+    requested_draws: u32,
+    delivered_draws: u32,
     instances: wgpu::Buffer,
 }
 
@@ -164,6 +168,7 @@ struct LabFacts {
     permanently_missing_descriptors: u32,
     benchmark_a_data_descriptors: u32,
     delivered_material_capacity: u32,
+    max_draws_per_instance_buffer: u32,
     free_descriptor_count: usize,
     data_free_buddy_blocks: usize,
     image_free_buddy_blocks: usize,
@@ -198,6 +203,7 @@ struct Measurement {
     repeats: u32,
     elapsed_ms: f64,
     normalized_ms: f64,
+    per_draw_microseconds: Option<f64>,
     requested_draws: Option<u32>,
     delivered_draws: Option<u32>,
     per_frame_cpu_to_gpu_bytes: u64,
@@ -207,6 +213,7 @@ struct Measurement {
 
 struct PendingFence {
     buffer: wgpu::Buffer,
+    deadline_ms: i32,
 }
 
 struct Lab {
@@ -419,7 +426,7 @@ impl Lab {
             )));
         }
         let mut material_handles = Vec::new();
-        for _ in 0..DRAW_STEPS[DRAW_STEPS.len() - 1] {
+        for _ in 0..descriptor_capacity {
             match allocator.allocate(HeapKind::Image, 1, 1) {
                 Ok(handle) => material_handles.push(handle),
                 Err(HeapError::DescriptorTableFull | HeapError::PhysicalHeapFull { .. }) => break,
@@ -717,14 +724,20 @@ impl Lab {
                 yield_to_browser().await?;
             }
         }
+        let max_draws_per_instance_buffer = u32::try_from(
+            device.limits().max_buffer_size / size_of::<InstanceData>() as u64,
+        )
+        .unwrap_or(u32::MAX);
         let mut scenes = Vec::new();
         let mut scene_upload_bytes = 0_u64;
-        for draws in DRAW_STEPS {
-            let instances = make_instances(draws, &material_handles);
+        for requested_draws in DRAW_STEPS {
+            let delivered_draws = requested_draws.min(max_draws_per_instance_buffer);
+            let instances = make_instances(delivered_draws, &material_handles);
             let upload_bytes = (instances.len() * size_of::<InstanceData>()) as u64;
             scene_upload_bytes += upload_bytes;
             scenes.push(Scene {
-                draws,
+                requested_draws,
+                delivered_draws,
                 instances: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("static scene instance handles"),
                     contents: bytemuck::cast_slice(&instances),
@@ -795,7 +808,13 @@ impl Lab {
             + scene_upload_bytes;
         let steps = DRAW_STEPS
             .into_iter()
-            .map(|draws| step_fact(draws, delivered_materials))
+            .map(|draws| {
+                step_fact(
+                    draws,
+                    draws.min(max_draws_per_instance_buffer),
+                    delivered_materials,
+                )
+            })
             .collect();
         let facts = LabFacts {
             adapter_name: info.name,
@@ -820,6 +839,7 @@ impl Lab {
             permanently_missing_descriptors: 1,
             benchmark_a_data_descriptors: 1,
             delivered_material_capacity: delivered_materials,
+            max_draws_per_instance_buffer,
             free_descriptor_count: allocator.free_descriptor_count(),
             data_free_buddy_blocks: allocator.free_block_count(HeapKind::Data),
             image_free_buddy_blocks: allocator.free_block_count(HeapKind::Image),
@@ -828,8 +848,8 @@ impl Lab {
                 "{FETCH_WIDTH}x{FETCH_HEIGHT} fragments x {FETCHES_PER_FRAGMENT} nearest RGBA32F loads = {} loads per base invocation",
                 u64::from(FETCH_WIDTH) * u64::from(FETCH_HEIGHT) * u64::from(FETCHES_PER_FRAGMENT)
             ),
-            benchmark_b_workload: "same N three-vertex draw calls in both arms; traditional switches bind group and writes 16 bytes per draw; heap binds once and reads static instance handles".to_string(),
-            completion: "submit to ordered four-byte MAP_READ fence; WebGL device.poll(Poll) in zero-timeout yield loop; 4000 ms deadline",
+            benchmark_b_workload: "same delivered N three-vertex draw calls in both arms; requested ladder 16 through 1048576; traditional switches bind group and writes 16 bytes per draw; heap binds once and reads static instance handles".to_string(),
+            completion: "submit to ordered four-byte MAP_READ fence; WebGL device.poll(Poll) in zero-timeout yield loop; 4000 ms Benchmark A deadline; 30000 ms Benchmark B deadline",
             generation_validation: "CPU-side on every debug resolve/free; shader generation fetch omitted to keep Benchmark A's measured indirection to one descriptor record",
             steps,
         };
@@ -868,7 +888,11 @@ impl Lab {
         self.lost.lock().ok().and_then(|reason| reason.clone())
     }
 
-    fn pending_fence(&self, encoder: &mut wgpu::CommandEncoder) -> PendingFence {
+    fn pending_fence(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        deadline_ms: i32,
+    ) -> PendingFence {
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("heap lab ordered four-byte completion fence"),
             size: 4,
@@ -876,7 +900,10 @@ impl Lab {
             mapped_at_creation: false,
         });
         encoder.copy_buffer_to_buffer(&self.fence_source, 0, &buffer, 0, 4);
-        PendingFence { buffer }
+        PendingFence {
+            buffer,
+            deadline_ms,
+        }
     }
 
     fn render_fetch(&mut self, mode: FetchMode, repeats: u32) -> Result<PendingFence, LabError> {
@@ -912,7 +939,7 @@ impl Lab {
             }
             pass.draw(0..3, 0..1);
         }
-        let pending = self.pending_fence(&mut encoder);
+        let pending = self.pending_fence(&mut encoder, FETCH_COMPLETION_DEADLINE_MS);
         self.queue.submit([encoder.finish()]);
         Ok(pending)
     }
@@ -927,8 +954,9 @@ impl Lab {
         let scene_index = self
             .scenes
             .iter()
-            .position(|scene| scene.draws == draws)
+            .position(|scene| scene.requested_draws == draws)
             .ok_or(LabError::UnknownStep(draws))?;
+        let delivered_draws = self.scenes[scene_index].delivered_draws;
         let output = match self.surface.get_current_texture() {
             Ok(output) => output,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
@@ -950,7 +978,7 @@ impl Lab {
         for repeat in 0..repeats {
             match mode {
                 DrawMode::Traditional => {
-                    for draw in 0..draws {
+                    for draw in 0..delivered_draws {
                         let material = draw % self.delivered_materials;
                         let uniform = Uniform16 {
                             values: [
@@ -1003,7 +1031,7 @@ impl Lab {
             match mode {
                 DrawMode::Traditional => {
                     pass.set_pipeline(&self.traditional_draw_pipeline);
-                    for draw in 0..draws {
+                    for draw in 0..delivered_draws {
                         let material = (draw % self.delivered_materials) as usize;
                         pass.set_bind_group(
                             0,
@@ -1016,40 +1044,52 @@ impl Lab {
                 DrawMode::Heap => {
                     pass.set_pipeline(&self.heap_draw_pipeline);
                     pass.set_bind_group(0, &self.heap_bind_group, &[]);
-                    for draw in 0..draws {
+                    for draw in 0..delivered_draws {
                         pass.draw(0..3, draw..draw + 1);
                     }
                 }
             }
         }
-        let pending = include_fence.then(|| self.pending_fence(&mut encoder));
+        let pending = include_fence
+            .then(|| self.pending_fence(&mut encoder, DRAW_COMPLETION_DEADLINE_MS));
         self.queue.submit([encoder.finish()]);
         output.present();
         Ok(pending)
     }
 
     fn draw_report(&self, generation: u64, mode: DrawMode, draws: u32) -> DrawReport {
-        let delivered_distinct = draws.min(self.delivered_materials);
+        let delivered_draws = self
+            .scenes
+            .iter()
+            .find(|scene| scene.requested_draws == draws)
+            .map_or(0, |scene| scene.delivered_draws);
+        let delivered_distinct = delivered_draws.min(self.delivered_materials);
         DrawReport {
             generation,
             mode: mode.label(),
             requested_draws: draws,
-            delivered_draws: draws,
+            delivered_draws,
             requested_distinct_resources: draws,
             delivered_distinct_resources: delivered_distinct,
-            repeated_resource_draws: draws - delivered_distinct,
+            repeated_resource_draws: delivered_draws - delivered_distinct,
             per_frame_cpu_to_gpu_bytes: match mode {
-                DrawMode::Traditional => u64::from(draws) * 16,
+                DrawMode::Traditional => u64::from(delivered_draws) * 16,
                 DrawMode::Heap => 16,
             },
             scene_setup_cpu_to_gpu_bytes: self.scene_setup_bytes,
             wall_arithmetic: format!(
-                "min(requested distinct {draws}, descriptor-backed material wall {}) = {delivered_distinct}; delivered draws remain {draws}; repeated draws = {}",
+                "min(requested draws {draws}, instance-buffer wall {}) = {delivered_draws}; min(delivered draws {delivered_draws}, descriptor-backed material wall {}) = {delivered_distinct}; repeated draws = {}",
+                self.max_draws_per_instance_buffer(),
                 self.delivered_materials,
-                draws - delivered_distinct
+                delivered_draws - delivered_distinct
             ),
             timing_status: "requires visible replay",
         }
+    }
+
+    fn max_draws_per_instance_buffer(&self) -> u32 {
+        u32::try_from(self.device.limits().max_buffer_size / size_of::<InstanceData>() as u64)
+            .unwrap_or(u32::MAX)
     }
 }
 
@@ -1194,18 +1234,18 @@ fn make_instances(draws: u32, handles: &[Handle]) -> Vec<InstanceData> {
         .collect()
 }
 
-fn step_fact(draws: u32, material_wall: u32) -> StepFact {
-    let delivered = draws.min(material_wall);
+fn step_fact(draws: u32, delivered_draws: u32, material_wall: u32) -> StepFact {
+    let delivered = delivered_draws.min(material_wall);
     StepFact {
         requested_draws: draws,
-        delivered_draws: draws,
+        delivered_draws,
         requested_distinct_resources: draws,
         delivered_distinct_resources: delivered,
-        repeated_resource_draws: draws - delivered,
-        traditional_frame_bytes: u64::from(draws) * 16,
+        repeated_resource_draws: delivered_draws - delivered,
+        traditional_frame_bytes: u64::from(delivered_draws) * 16,
         heap_frame_bytes: 16,
         arithmetic: format!(
-            "min({draws} requested distinct, {material_wall} material descriptors) = {delivered}; {draws} draws delivered"
+            "min({draws} requested draws, instance-buffer wall) = {delivered_draws}; min({delivered_draws} delivered draws, {material_wall} material descriptors) = {delivered}"
         ),
     }
 }
@@ -1223,13 +1263,16 @@ fn finish_map(state: &Arc<Mutex<Option<MapOutcome>>>, outcome: MapOutcome) {
     }
 }
 
-fn arm_deadline(state: Arc<Mutex<Option<MapOutcome>>>) -> Result<(), LabError> {
+fn arm_deadline(
+    state: Arc<Mutex<Option<MapOutcome>>>,
+    deadline_ms: i32,
+) -> Result<(), LabError> {
     let callback = Closure::once(move || finish_map(&state, MapOutcome::Deadline));
     web_sys::window()
         .ok_or_else(|| LabError::Mapping("window is unavailable".to_string()))?
         .set_timeout_with_callback_and_timeout_and_arguments_0(
             callback.as_ref().unchecked_ref(),
-            COMPLETION_DEADLINE_MS,
+            deadline_ms,
         )
         .map_err(|error| LabError::Mapping(format!("could not arm deadline: {error:?}")))?;
     callback.forget();
@@ -1247,7 +1290,7 @@ async fn wait_for_fence(
     slice.map_async(wgpu::MapMode::Read, move |result| {
         finish_map(&callback_state, MapOutcome::Complete(result));
     });
-    arm_deadline(Arc::clone(&state))?;
+    arm_deadline(Arc::clone(&state), pending.deadline_ms)?;
     loop {
         let current = GENERATION.get();
         if current != generation {
@@ -1287,7 +1330,7 @@ async fn wait_for_fence(
             }
             Some(MapOutcome::Deadline) => {
                 pending.buffer.unmap();
-                return Err(LabError::Deadline);
+                return Err(LabError::Deadline(pending.deadline_ms));
             }
             None => yield_to_browser().await?,
         }
@@ -1394,6 +1437,7 @@ pub async fn measure_heap_fetch_json(mode: &str, repeats: u32) -> Result<String,
         repeats,
         elapsed_ms,
         normalized_ms: elapsed_ms / f64::from(repeats),
+        per_draw_microseconds: None,
         requested_draws: None,
         delivered_draws: None,
         per_frame_cpu_to_gpu_bytes: 0,
@@ -1436,15 +1480,19 @@ pub async fn measure_many_draws_json(
     let elapsed_ms = performance_now() - started;
     let borrowed = lab.borrow();
     let report = borrowed.draw_report(generation, mode, draws);
+    let normalized_ms = elapsed_ms / f64::from(repeats);
+    let per_draw_microseconds = (report.delivered_draws > 0)
+        .then(|| normalized_ms * 1_000.0 / f64::from(report.delivered_draws));
     serialize(&Measurement {
         generation,
         benchmark: "B.many-small-draws",
         mode: mode.label(),
         repeats,
         elapsed_ms,
-        normalized_ms: elapsed_ms / f64::from(repeats),
+        normalized_ms,
+        per_draw_microseconds,
         requested_draws: Some(draws),
-        delivered_draws: Some(draws),
+        delivered_draws: Some(report.delivered_draws),
         per_frame_cpu_to_gpu_bytes: report.per_frame_cpu_to_gpu_bytes,
         timing_method: "CPU encode-and-write plus submit-to-4-byte-map-read-fence wall clock",
         gpu_timestamp_ms: None,

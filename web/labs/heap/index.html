@@ -56,6 +56,10 @@
         <button type="button" data-draws="256">256 draws</button>
         <button type="button" data-draws="1024">1,024 draws</button>
         <button type="button" data-draws="4096">4,096 draws</button>
+        <button type="button" data-draws="16384">16,384 draws</button>
+        <button type="button" data-draws="65536">65,536 draws</button>
+        <button type="button" data-draws="262144">262,144 draws</button>
+        <button type="button" data-draws="1048576">1,048,576 draws</button>
       </div>
       <div class="controls" id="modes">
         <button type="button" data-mode="traditional">Traditional</button>
@@ -75,7 +79,7 @@
       <pre id="facts">loading versioned wasm…</pre>
     </section>
   </main>
-  <footer>Primary timing is CPU encode/write plus queue submit through an ordered four-byte MAP_READ fence. The WebGL2 backend explicitly calls <code>device.poll(Poll)</code> in a zero-timeout yield loop; every wait expires after 4,000 ms. Three warmups precede 15 samples, and each recorded sample adaptively repeats until its batch spans at least 32 measured <code>performance.now()</code> quanta. Median and p95 are visible-run observations, not admission gates. GPU timestamp results remain absent unless the selected backend path actually uses an exposed query feature.</footer>
+  <footer>Primary timing is CPU encode/write plus queue submit through an ordered four-byte MAP_READ fence. The WebGL2 backend explicitly calls <code>device.poll(Poll)</code> in a zero-timeout yield loop; Benchmark A waits expire after 4,000 ms and Benchmark B waits after 30,000 ms. Benchmark A uses three warmups and 15 adaptive samples. Benchmark B first measures exactly one frame: above the 100 ms animation threshold it keeps that one single-frame-on-demand observation, while faster steps continue through three warmups and 15 samples that each span at least 32 measured <code>performance.now()</code> quanta. Median, p95, and per-draw microseconds are visible-run observations, not admission gates. GPU timestamp results remain absent unless the selected backend path actually uses an exposed query feature.</footer>
   <script type="module">
     import init, {
       cancel_heap_measurement,
@@ -83,7 +87,7 @@
       measure_many_draws_json,
       render_heap_step_json,
       start_heap,
-    } from "./pkg/ember_lab_heap.js?v=2";
+    } from "./pkg/ember_lab_heap.js?v=3";
 
     const SAMPLE_COUNT = 15;
     const WARMUPS = 3;
@@ -91,6 +95,7 @@
     const MAX_REPEATS = 4096;
     const MAX_BATCH_TARGET_MS = 250;
     const SUITE_BUDGET_MS = 30000;
+    const ANIMATE_THRESHOLD_MS = 100;
     const TIMER_MAX_READS = 4000000;
     const TIMER_TRANSITIONS = 32;
     const TIMER_MAX_WALL_MS = 500;
@@ -148,6 +153,15 @@
         : `median — · p95 — · requires visible replay<br>${detail}`;
     }
 
+    function showDrawSamples(element, samples, repeats, deliveredDraws, detail, singleFrame) {
+      const frame = summarize(samples);
+      const perDraw = summarize(samples.map(sample => sample * 1000 / deliveredDraws));
+      const targetSamples = singleFrame ? 1 : SAMPLE_COUNT;
+      element.innerHTML = frame && perDraw
+        ? `frame median <strong>${frame.median.toFixed(4)} ms</strong> · p95 <strong>${frame.p95.toFixed(4)} ms</strong><br>per draw median <strong>${perDraw.median.toFixed(6)} µs</strong> · p95 <strong>${perDraw.p95.toFixed(6)} µs</strong><br>${samples.length}/${targetSamples} samples · repeats ${repeats.join(", ")}<br>${detail}`
+        : `frame median — · p95 —<br>per draw median — · p95 — · requires visible replay<br>${detail}`;
+    }
+
     async function adaptiveMeasure(label, invoke, token, onProgress) {
       if (!Number.isFinite(timerQuantum) || timerQuantum <= 0) throw new Error("bounded timer probe observed no positive performance.now() transition");
       const targetMs = timerQuantum * TARGET_QUANTA;
@@ -195,31 +209,39 @@
     }
 
     async function runBenchmarkB() {
-      const token = renderRequested();
+      const token = pageGeneration;
       const mode = selectedMode;
       const draws = requestedDraws;
       const output = document.querySelector(`#b-${mode}`);
       const report = currentReport;
       measureB.disabled = true;
-      statusB.textContent = `warming ${mode} at ${formatInteger(draws)} draws…`;
+      statusB.textContent = `timing one ${mode} frame at ${formatInteger(draws)} requested draws…`;
       try {
-        const detail = () => `requested/delivered ${formatInteger(draws)}/${formatInteger(draws)} draws · ${formatBytes(report.per_frame_cpu_to_gpu_bytes)} per frame · 32-quantum mapped-fence wall timing`;
+        const detail = () => `requested/delivered ${formatInteger(draws)}/${formatInteger(report.delivered_draws)} draws · ${formatBytes(report.per_frame_cpu_to_gpu_bytes)} per frame · mapped-fence wall timing`;
+        const first = JSON.parse(await measure_many_draws_json(mode, draws, 1));
+        if (token !== pageGeneration) throw new Error("cancelled by a newer visible request");
+        showDrawSamples(output, [first.normalized_ms], [1], report.delivered_draws, detail(), first.normalized_ms > ANIMATE_THRESHOLD_MS);
+        if (first.normalized_ms > ANIMATE_THRESHOLD_MS) {
+          statusB.textContent = `${mode} single-frame-on-demand at ${formatInteger(report.delivered_draws)} delivered draws · ${first.normalized_ms.toFixed(4)} ms · ${first.per_draw_microseconds.toFixed(6)} µs/draw · above ${ANIMATE_THRESHOLD_MS} ms animation threshold`;
+          return;
+        }
+        statusB.textContent = `${mode} first frame ${first.normalized_ms.toFixed(4)} ms; collecting adaptive series…`;
         const result = await adaptiveMeasure(
           `Benchmark B ${mode} ${draws}`,
           repeats => measure_many_draws_json(mode, draws, repeats),
           token,
           (samples, repeats) => {
-            showSamples(output, samples, repeats, detail());
-            statusB.textContent = `${mode} ${samples.length}/${SAMPLE_COUNT} visible samples at ${formatInteger(draws)} draws`;
+            showDrawSamples(output, samples, repeats, report.delivered_draws, detail(), false);
+            statusB.textContent = `${mode} ${samples.length}/${SAMPLE_COUNT} visible samples at ${formatInteger(report.delivered_draws)} delivered draws`;
           },
         );
-        showSamples(output, result.samples, result.repeatCounts, detail());
-        statusB.textContent = `${mode} complete at ${formatInteger(draws)} draws · median/p95 are visible replay only`;
+        showDrawSamples(output, result.samples, result.repeatCounts, report.delivered_draws, detail(), false);
+        statusB.textContent = `${mode} complete at ${formatInteger(report.delivered_draws)} delivered draws · frame and per-draw median/p95 require visible replay`;
       } catch (error) {
         if (token === pageGeneration) {
           statusB.className = "status failed";
           statusB.textContent = `Benchmark B unavailable: ${failureText(error)}`;
-          showSamples(output, [], [], failureText(error));
+          showDrawSamples(output, [], [], report.delivered_draws, failureText(error), false);
         }
       } finally {
         measureB.disabled = false;
@@ -276,7 +298,7 @@
     measureB.addEventListener("click", () => { void runBenchmarkB(); });
 
     try {
-      await init({ module_or_path: new URL("./pkg/ember_lab_heap_bg.wasm?v=2", import.meta.url) });
+      await init({ module_or_path: new URL("./pkg/ember_lab_heap_bg.wasm?v=3", import.meta.url) });
       const runtimeFacts = JSON.parse(await start_heap(canvas));
       const timer = probeTimer();
       timerQuantum = timer.quantum;

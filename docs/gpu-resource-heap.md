@@ -92,7 +92,7 @@ The uniforms-only-per-frame law forbids rebuilding dynamic descriptor or handle 
 
 The traditional benchmark arm violates that austerity on purpose by writing 16 bytes per draw and reports `16×N` CPU-to-GPU bytes, while the heap arm reports its single 16-byte frame write; scene-setup texture, descriptor, and instance uploads are displayed separately and never amortized into zero.
 
-All measured GPU completion uses a four-byte MAP_READ fence; the GL backend drives `map_async` with `device.poll` inside a cooperative browser yield loop, every wait has a four-second deadline and generation guard, and browser-WebGPU must not use `Queue::on_submitted_work_done` because that path is known to panic.
+All measured GPU completion uses a four-byte MAP_READ fence; the GL backend drives `map_async` with `device.poll` inside a cooperative browser yield loop, Benchmark A waits have a four-second deadline, Benchmark B waits have a thirty-second deadline for intentionally extreme single frames, every wait has a generation guard, and browser-WebGPU must not use `Queue::on_submitted_work_done` because that path is known to panic.
 
 ## 8. Benchmarks and evidence contract
 
@@ -100,9 +100,11 @@ Benchmark A renders a 512×512 RGBA8 target with one fullscreen triangle and 16 
 
 Benchmark A uses three untimed warmups and 15 timed samples per arm, primary submit-to-four-byte-mapped-fence wall time, and adaptive batches that increase repeat count until each recorded batch spans at least 32 measured `performance.now()` quanta; results normalize batch milliseconds by repeat count and report median and p95, while timestamp-query results appear only as a separately labeled secondary series if the selected GL path actually exposes the feature.
 
-Benchmark B uses one three-vertex triangle per draw, static per-instance position, scale, pseudo-mesh shape, and handle data, and the requested N values 16, 64, 256, 1,024, and 4,096; both arms issue exactly N `draw` calls into a 960×540 target, the traditional arm switches among N delivered one-texel IMAGE textures and bind groups with one 16-byte write per draw, and the heap arm keeps one bind group while each instance handle resolves a one-texel IMAGE descriptor.
+Benchmark B uses one three-vertex triangle per draw, static per-instance position, scale, pseudo-mesh shape, and handle data, and the requested N values 16, 64, 256, 1,024, 4,096, 16,384, 65,536, 262,144, and 1,048,576; both arms issue exactly the delivered N `draw` calls into a 960×540 target, the traditional arm switches among delivered one-texel IMAGE textures and bind groups with one 16-byte write per draw, and the heap arm keeps one bind group while each instance handle resolves a one-texel IMAGE descriptor.
 
-Benchmark B also uses three warmups, 15 adaptive 32-quantum wall/fence samples per arm, median and p95, and four-second bounded waits; its live panel shows requested draws, delivered draws, requested distinct resources, delivered distinct resources, cyclic reuse count, frame bytes (`16×N` traditional versus 16 heap), scene-setup bytes, repeat counts, timing method, and any cancellation or device loss.
+Benchmark B first fences exactly one frame; when that frame exceeds the 100 ms animation threshold it becomes the sole single-frame-on-demand observation, while a faster step continues through three warmups and 15 adaptive 32-quantum wall/fence samples per arm, with median, p95, and the design-decision metric `frame_ms × 1000 / delivered_N` microseconds per draw displayed live.
+
+Benchmark B computes its draw delivery wall at runtime as `min(requested N, max_buffer_size / 32-byte instance record)`, separately computes delivered material variety as `min(delivered N, descriptor-backed material capacity)`, reports cyclic reuse and both arithmetic chains without moving controls, and reports frame bytes as `16 × delivered N` traditional versus 16 heap plus separately labeled scene-setup bytes.
 
 The page changes step and mode immediately, renders the newly requested workload before opportunistic sampling, never uses a measurement as admission, never moves a control back to a delivered value, invalidates older async work with a generation counter, and leaves visible replay as the only source of browser numbers.
 
