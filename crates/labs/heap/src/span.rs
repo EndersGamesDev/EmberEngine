@@ -98,6 +98,8 @@ impl DataSpan {
 /// Fixed-capacity UBO directory with 16-byte span records followed by packed handles.
 #[derive(Clone, Debug)]
 pub struct SpanDirectory {
+    span_capacity: u32,
+    handle_capacity: u32,
     records: Vec<Option<PackedSpan>>,
     handles: Vec<Option<Handle>>,
 }
@@ -120,6 +122,8 @@ impl SpanDirectory {
             return Err(SpanError::DirectoryTooSmall);
         }
         Ok(Self {
+            span_capacity,
+            handle_capacity,
             records: vec![None; span_capacity as usize],
             handles: vec![None; handle_capacity as usize],
         })
@@ -127,14 +131,14 @@ impl SpanDirectory {
 
     /// Maximum number of logical spans.
     #[must_use]
-    pub fn span_capacity(&self) -> u32 {
-        self.records.len() as u32
+    pub const fn span_capacity(&self) -> u32 {
+        self.span_capacity
     }
 
     /// Maximum number of physical-page handles.
     #[must_use]
-    pub fn handle_capacity(&self) -> u32 {
-        self.handles.len() as u32
+    pub const fn handle_capacity(&self) -> u32 {
+        self.handle_capacity
     }
 
     fn first_record(&self) -> Result<usize, SpanError> {
@@ -154,6 +158,10 @@ impl SpanDirectory {
     fn insert(&mut self, page_records: u32, pages: &[Handle]) -> Result<(u32, u32), SpanError> {
         let record = self.first_record()?;
         let first = self.first_handle_run(pages.len())?;
+        let page_count = u32::try_from(pages.len()).map_err(|_| SpanError::ArithmeticOverflow)?;
+        let record_index = u32::try_from(record).map_err(|_| SpanError::ArithmeticOverflow)?;
+        let first_directory_slot =
+            u32::try_from(first).map_err(|_| SpanError::ArithmeticOverflow)?;
         for (slot, handle) in self.handles[first..first + pages.len()]
             .iter_mut()
             .zip(pages)
@@ -162,10 +170,10 @@ impl SpanDirectory {
         }
         self.records[record] = Some(PackedSpan::new(
             page_records,
-            pages.len() as u32,
-            first as u32,
+            page_count,
+            first_directory_slot,
         ));
-        Ok((record as u32, first as u32))
+        Ok((record_index, first_directory_slot))
     }
 
     fn remove(&mut self, span: &DataSpan) -> Result<(), SpanError> {
@@ -319,7 +327,7 @@ impl SpanArena {
         while low < high {
             let middle = low + (high - low).div_ceil(2);
             let logical = middle * u64::from(records_per_copy);
-            let fits = u32::try_from(logical).ok().is_some_and(|length| {
+            let fits = u32::try_from(logical).is_ok_and(|length| {
                 let mut trial = self.clone();
                 trial.allocate_pair(length, page_side).is_ok()
             });
