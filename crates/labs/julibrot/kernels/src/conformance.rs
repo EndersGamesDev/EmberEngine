@@ -170,7 +170,7 @@ pub fn evaluate_perturbation_conformance(
     }
 }
 
-fn binary_flag(value: f32) -> Option<bool> {
+const fn binary_flag(value: f32) -> Option<bool> {
     match value.to_bits() {
         0 => Some(false),
         bits if bits == 1.0_f32.to_bits() => Some(true),
