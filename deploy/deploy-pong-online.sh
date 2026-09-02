@@ -282,32 +282,32 @@ PROTO="$(git show "$REF:crates/arena-core/src/proto.rs" \
     | grep -oE 'PROTO_VERSION: u16 = [0-9]+' | grep -oE '[0-9]+$')"
 [ -n "$PROTO" ] || { echo "FAILED: no PROTO_VERSION in $REF:crates/arena-core/src/proto.rs" >&2; exit 1; }
 
-PAGES_DIR="$(mktemp -d -t ember-pages-XXXX)"
-git -C "$REPO_DIR" worktree add "$PAGES_DIR" gh-pages
 # publish-host.sh upserts THIS host's entry and recomputes the legacy `ws`
 # from the whole list. The inline python this replaced assigned `ws` directly,
 # which is only correct while there is exactly one host: the second machine to
 # deploy took the first one's address out of the book, and a host deployed
 # from an older commit pointed every frozen page at a protocol they could not
 # join.
+#
+# `--repo`, not a gh-pages worktree of this checkout. Two failures came out of
+# that worktree and both were permanent. It checked out the workstation's LOCAL
+# gh-pages, which nothing ever fetches — `git fetch` moves origin/gh-pages and
+# not the branch — so as soon as any other writer published (a second
+# workstation, a host running `host.sh` with EMBER_PUBLISH=upstream) the push
+# was rejected as a non-fast-forward. And the removal at the end of the block
+# was not a trap, so that rejection also left the worktree registered with
+# gh-pages checked out in a temp directory, which made EVERY later deploy of
+# either game and the pages deploy itself die at their own `worktree add` until
+# a human ran `git worktree remove`. Both times the tunnel had already been
+# restarted, so the book was left naming a domain that no longer existed.
+# publish-host.sh fetches the branch one commit deep into its own temp
+# repository under its own EXIT trap, and retries by refetching if the branch
+# moves under it; nothing it does can touch this checkout's worktree registry.
 bash "$REPO_DIR/deploy/publish-host.sh" \
-    --book "$PAGES_DIR/server.json" \
+    --repo "$(git -C "$REPO_DIR" remote get-url origin)" --branch gh-pages \
     --name "$HOST_NAME" \
     --game arena --url "$WS_URL" --proto "$PROTO" \
     --version "$VERSION" --commit "$COMMIT" \
     --by "$(id -un)@$REMOTE"
-(
-    cd "$PAGES_DIR"
-    git add server.json
-    if git diff --cached --quiet; then
-        echo "server.json unchanged"
-    else
-        git commit -q -m "Publish host $HOST_NAME: arena at $WS_URL
-
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
-        git push -q origin gh-pages
-    fi
-)
-git -C "$REPO_DIR" worktree remove --force "$PAGES_DIR"
 
 echo "== ONLINE: $HOST_NAME -> $WS_URL (the page picks it from server.json) =="

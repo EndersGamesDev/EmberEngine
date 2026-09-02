@@ -296,31 +296,22 @@ FIRE_PROTO="$(git show "$REF:crates/fire-core/src/proto.rs" \
     | grep -oE 'PROTO_VERSION: u16 = [0-9]+' | grep -oE '[0-9]+$')"
 [ -n "$FIRE_PROTO" ] || { echo "FAILED: no PROTO_VERSION in $REF:crates/fire-core/src/proto.rs" >&2; exit 1; }
 
-PAGES_DIR="$(mktemp -d -t ember-pages-XXXX)"
-git -C "$REPO_DIR" worktree add -q "$PAGES_DIR" gh-pages
 # Merge, never overwrite. publish-host.sh writes only this host's entry and
 # only fire's two keys on it, so the arena running on the SAME box keeps its
 # address — the inline python this replaced could not express that, and a
 # second host deploying fire took the first one's entry out of the book.
+#
+# `--repo`, not a gh-pages worktree of this checkout: see the long note in
+# deploy-pong-online.sh. The short version is that the worktree checked out a
+# local gh-pages nothing ever fetches, so another writer's publish made the
+# push fail; and the failure left the worktree registered, which wedged every
+# later deploy of either game and the pages deploy too.
 bash "$REPO_DIR/deploy/publish-host.sh" \
-    --book "$PAGES_DIR/server.json" \
+    --repo "$(git -C "$REPO_DIR" remote get-url origin)" --branch gh-pages \
     --name "$HOST_NAME" \
     --game fire --url "$WS_URL" --proto "$FIRE_PROTO" \
     --version "$VERSION" --commit "$COMMIT" \
     --by "$(id -un)@$REMOTE"
-(
-    cd "$PAGES_DIR"
-    git add server.json
-    if git diff --cached --quiet; then
-        echo "server.json unchanged"
-    else
-        git commit -q -m "Publish host $HOST_NAME: fire at $WS_URL
-
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
-        git push -q origin gh-pages
-    fi
-)
-git -C "$REPO_DIR" worktree remove --force "$PAGES_DIR"
 
 echo "== ONLINE: $HOST_NAME -> $WS_URL =="
 echo "   the fire page picks it up from server.json on its next load"

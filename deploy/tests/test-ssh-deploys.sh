@@ -194,4 +194,58 @@ is "$(jget "$BOOK" '[h for h in d["hosts"] if h["name"]=="misty-egret"][0]["ws"]
 is "$(jget "$BOOK" 'd["ws"]')" "wss://test-arena.trycloudflare.com" \
     "but the legacy ws still names a host the live pages can join"
 
+echo "== another writer moved gh-pages, and a worktree still holds the local branch =="
+# The two states that used to make a deploy fail permanently, together, because
+# one caused the other. Nothing here fetches the LOCAL gh-pages, so a second
+# writer's publish left it behind and the push was rejected as a
+# non-fast-forward; and the rejection aborted the script before its
+# `worktree remove`, so gh-pages stayed checked out in a temp directory and
+# every later deploy — of either game, and the pages deploy — died at its own
+# `worktree add`. Both times the tunnel had already been restarted, so the book
+# was left naming a dead domain.
+OTHER="$TMP/other"
+git clone -q --branch gh-pages "$ORIGIN" "$OTHER"
+git -C "$OTHER" config user.name "another writer"
+git -C "$OTHER" config user.email "other@ember.local"
+bash "$REPO/deploy/publish-host.sh" --book "$OTHER/server.json" --name distant-plover \
+    --game arena --url wss://distant.example --proto 12 --version r1 >/dev/null
+git -C "$OTHER" commit -qam "another writer publishes"
+git -C "$OTHER" push -q origin gh-pages
+: > "$SHIM_LOG"
+if SHIM_HOST_NAME=coral-shrike SHIM_TUNNEL=coral EMBER_HOST=coralbox \
+        bash "$REPO/deploy/deploy-pong-online.sh" > "$TMP/arena5.log" 2>&1; then
+    ok "a deploy publishes over a local gh-pages that is behind origin"
+else
+    bad "the deploy FAILED with the local gh-pages behind origin"
+    tail -30 "$TMP/arena5.log" >&2
+fi
+BOOK="$(BOOK_OF)"
+is "$(jget "$BOOK" '[h["name"] for h in d["hosts"]].count("coral-shrike")')" "1" \
+    "its entry reached the branch origin actually has"
+is "$(jget "$BOOK" '[h["name"] for h in d["hosts"]].count("distant-plover")')" "1" \
+    "and the other writer's entry was merged, not overwritten"
+case "$(git -C "$REPO" worktree list)" in
+    *ember-pages*) bad "the deploy left a gh-pages worktree registered" ;;
+    *)             ok "and no gh-pages worktree of this checkout was created at all" ;;
+esac
+
+echo "== a worktree already holding gh-pages does not wedge a deploy =="
+# The leaked state itself: an earlier failure left gh-pages checked out in a
+# temp directory, and from then on every deploy of either game — and the pages
+# deploy — died at its own `worktree add` with "already used by worktree",
+# after restarting the server and minting a fresh tunnel.
+git -C "$REPO" worktree add -q "$TMP/stale-pages" gh-pages
+: > "$SHIM_LOG"
+if SHIM_HOST_NAME=coral-shrike SHIM_TUNNEL=coral EMBER_HOST=coralbox \
+        bash "$REPO/deploy/deploy-fire-online.sh" > "$TMP/fire2.log" 2>&1; then
+    ok "the fire deploy runs with gh-pages checked out elsewhere"
+else
+    bad "the fire deploy FAILED with gh-pages checked out elsewhere"
+    tail -30 "$TMP/fire2.log" >&2
+fi
+BOOK="$(BOOK_OF)"
+is "$(jget "$BOOK" '[h for h in d["hosts"] if h["name"]=="coral-shrike"][0]["fire_ws"]')" \
+    "wss://coral-fire.trycloudflare.com" "and published fire's address anyway"
+git -C "$REPO" worktree remove --force "$TMP/stale-pages"
+
 summary ssh-deploys
