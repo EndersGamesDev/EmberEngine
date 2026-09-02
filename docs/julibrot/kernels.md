@@ -242,19 +242,21 @@ Every `DispatchFacts` byte and count is arithmetic from the accepted plan or a c
 
 `JulibrotKernels::plan(executor: &ember_lab_heap::GpuKernelExecutor, requested_extent: GridExtent, params: EscapeParams) -> Result<RefinementPlan, KernelError>` performs checked extent arithmetic, applies the 4,096 policy, and uses exact cloned-arena allocation trials without mutation.
 
-`JulibrotKernels::allocate_grid(executor: &mut ember_lab_heap::GpuKernelExecutor, plan: &RefinementPlan) -> Result<EscapeGrid, KernelError>` allocates one Final-capacity `DataSpan`, asks `prefix_headers` for all three static header sets, uploads them once, and returns no partially allocated value on failure.
+`JulibrotKernels::allocate_grid(&mut self, executor: &mut ember_lab_heap::GpuKernelExecutor, plan: &RefinementPlan) -> Result<EscapeGrid, KernelError>` allocates one Final-capacity `DataSpan`, asks `prefix_headers` for all three static header sets, uploads them once, privately retains the `(DataSpan,HeaderSetHandle)` lifetime pair keyed by exact span identity, and returns no partially allocated value on failure; app.md §3.2 adopts this receiver.
 
 `JulibrotKernels::encode_shallow(&self, executor: &ember_lab_heap::GpuKernelExecutor, encoder: &mut wgpu::CommandEncoder, grid: &mut EscapeGrid, owner_epoch: u64, level: RefinementLevel, plane: &Plane, centre: &CentreSplit, pixel_scale: f32, params: EscapeParams) -> Result<DispatchFacts, KernelError>` packs the 96-byte uniform, encodes page passes and exact-region copies, and tags the arithmetic receipt with the supplied epoch without using epoch equality as a compatibility test.
 
 `JulibrotKernels::encode_perturbation(&self, executor: &ember_lab_heap::GpuKernelExecutor, encoder: &mut wgpu::CommandEncoder, grid: &mut EscapeGrid, owner_epoch: u64, level: RefinementLevel, plane: &Plane, scale: ScaleSplit, params: EscapeParams, reference: ReferenceOrbitInput<'_>) -> Result<DispatchFacts, KernelError>` packs the math-owned scale split into the 64-byte mantissa/exponent uniform and performs the one-span gather dispatch against the accepted reference generation.
 
-`JulibrotKernels::free_grid(executor: &mut ember_lab_heap::GpuKernelExecutor, grid: EscapeGrid) -> Result<(), KernelError>` returns the span and directory entries transactionally after app and present have relinquished all borrows.
+`JulibrotKernels::free_grid(&mut self, executor: &mut ember_lab_heap::GpuKernelExecutor, grid: EscapeGrid) -> Result<(), KernelError>` looks up the private resident-header lifetime record, returns the span, header reservation and directory entries transactionally after app and present have relinquished all borrows, and removes private state only after executor release succeeds; app.md §3.2 adopts this receiver.
 
 The public error set is `KernelError::{InvalidExtent,ArithmeticOverflow,ScaleExponentOverflow,InvalidEscapeParams,UnknownLevel,MissingReference,StaleReference,ReferenceLengthMismatch,ReferencePrecisionMismatch,Heap,Register,Dispatch,OutputTransferUnsupported,DeviceLost}`; wrapped heap, registration, and dispatch diagnostics retain their original typed source and stable kernel name.
 
 `GpuKernelExecutor` is the review-approved minimal public seam extracted by the app lane from the already-paid heap lattice runtime: it owns DATA and four-layer SCRATCH textures, `SpanArena`, immutable bind group, descriptor/directory/header/resource/uniform buffers, exact-row copy encoding, and live capacity reports; if extraction requires more than moving existing code behind a public boundary, the app lane stops and reports rather than forking behavior.
 
 The executor method is `GpuKernelExecutor::prefix_headers(&self, span: &DataSpan, active_len: u32) -> Result<StaticHeaders, DispatchError>`; it requires `1 ≤ active_len ≤ span.logical_len`, emits only the prefix page headers with the exact final valid length, uses the live dynamic-uniform alignment, and performs no upload or allocation.
+
+`GpuKernelExecutor::reserve_header_sets(&mut self, sets: &[StaticHeaders]) -> Result<HeaderSetHandle, DispatchError>` uploads the three immutable level sets once and ties their reclamation to the owning span; each page is then encoded with `encode_dispatch_selected` and `DispatchSelector { set: level as u32, page }`, so changing level changes only the dynamic header offset.
 
 ### 3.7 App and present coordination
 
@@ -334,7 +336,7 @@ Dispatch walls, scene walls, and poll counts are browser facts measured by app a
 
 ## 7. Implementation phases and line budget
 
-Checkpoint after the seam-independent implementation round: Phase 0, the shallow Phase 1 body and mirror, the scaled recurrence and local Phase 2 fixtures, and the pure Phase 3 plan and receipt arithmetic are implemented; Phase 2's math-oracle comparisons await math's later functions, Phase 3's executor-backed reference validation, cloned-arena trials, prefix-header upload and span reuse await the app-owned heap seams, and Phase 4 remains wholly blocked on those seams as planned.
+Checkpoint after the receiver ruling: Phases 0–4 are implemented, `JulibrotKernels` privately owns each span's resident header-set handle, exact cloned-arena trials select delivery, allocation reserves all three immutable prefix sets, and each encode call lowers one logical level into page passes plus paid exact-row copies; Phase 5 activates the merged math oracles and adds the remaining conformance surface, then Phase 6 reconciles evidence and gates.
 
 Phase 0, estimated 230 new lines, creates the kernels package, pins `Plane`, `CentreSplit`, all GPU records and uniforms, exposes the two dialect descriptors, and adds source, packing, switch, and hybrid-coordinate tests.
 
@@ -358,7 +360,7 @@ The total implementation estimate is 2,140 net new Rust, WGSL, JavaScript fixtur
 
 - WGSL `ldexp` behavior and the generated GL lowering at very negative `i32` exponents require visible replay; underflow is semantically accepted for the rebase predicate and quadratic term, but exponent wrap, NaN, or backend validation failure is not.
 
-- The review approves `GpuKernelExecutor` and `prefix_headers`, but both remain private implementation today; the app-owned extraction must stop if it requires algorithmic generalization rather than moving paid code behind public visibility.
+- The executor seams are now public and kernels retains resident headers privately under the adopted mutable allocation/free receiver ruling; browser evidence must still prove all three set selections preserve heap bind-group identity.
 
 - `EscapeGrid` owns a cloneable `DataSpan`, while present may retain or submit a scene that names it; app and present must prove the lifetime handoff that prevents `free_grid` from reclaiming a span still in flight.
 

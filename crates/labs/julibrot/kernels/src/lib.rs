@@ -2,6 +2,7 @@
 
 mod dialect;
 mod error;
+mod gpu;
 mod perturb;
 mod records;
 mod refinement;
@@ -12,6 +13,7 @@ pub use ember_julibrot_math::{
     CentreSplit, EscapeGridRecord, EscapeParams, Plane, ReferenceOrbitRecord, ScaleSplit,
 };
 pub use error::KernelError;
+pub use gpu::JulibrotKernels;
 pub use perturb::{perturb_scaled_offset, perturb_scaled_pixel};
 pub use records::{
     EscapeGrid, GridExtent, KernelMode, PerturbUniform, ReferenceOrbitInput, RefinementLevel,
