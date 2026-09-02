@@ -402,52 +402,9 @@ impl WireBuffer {
     pub(crate) fn validate_message(&self) -> Result<MessageKind, ChannelError> {
         let (pool, _) = self.identity()?;
         let header = self.header()?;
-        let kind = header.validate()?;
-        let max_records = (self.capacity() - BUFFER_OVERHEAD_BYTES) / ORBIT_RECORD_BYTES;
-        let used = match kind {
-            MessageKind::OrbitRequest => {
-                if pool != Pool::Request || header.length == 0 {
-                    return Err(bad_kind_or_length(header));
-                }
-                return Ok(kind);
-            }
-            MessageKind::OrbitResponse => {
-                let length =
-                    usize::try_from(header.length).map_err(|_| bad_kind_or_length(header))?;
-                if pool != Pool::Orbit || length == 0 || length > max_records {
-                    return Err(bad_kind_or_length(header));
-                }
-                HEADER_BYTES + length * ORBIT_RECORD_BYTES
-            }
-            MessageKind::ChannelError => {
-                if header.length != 4 {
-                    return Err(bad_kind_or_length(header));
-                }
-                HEADER_BYTES + ERROR_RECORD_BYTES
-            }
-            MessageKind::RequestReturn | MessageKind::Shutdown | MessageKind::ShutdownAck => {
-                if pool != Pool::Request || header.length != 0 {
-                    return Err(bad_kind_or_length(header));
-                }
-                HEADER_BYTES
-            }
-            MessageKind::CreditApplied | MessageKind::CreditStale | MessageKind::OrbitCancelled => {
-                if pool != Pool::Orbit || header.length != 0 {
-                    return Err(bad_kind_or_length(header));
-                }
-                HEADER_BYTES
-            }
-        };
-        let message_end = self.capacity() - POOL_TRAILER_BYTES;
-        if self.bytes[used..message_end].iter().any(|byte| *byte != 0) {
-            return Err(ChannelError::new(
-                ErrorCode::BadLength,
-                header.length,
-                u32::try_from(used).unwrap_or(u32::MAX),
-                u32::try_from(message_end).unwrap_or(u32::MAX),
-            ));
-        }
-        Ok(kind)
+        validate_message_layout(pool, self.capacity(), header, |used, message_end| {
+            self.bytes[used..message_end].iter().all(|byte| *byte == 0)
+        })
     }
 
     /// Writes a typed channel-error message and its four-word body.
@@ -583,6 +540,60 @@ fn bad_kind_or_length(header: MessageHeader) -> ChannelError {
         ErrorCode::BadKind
     };
     ChannelError::new(code, header.kind, header.length, 0)
+}
+
+/// Validates one message using the shared byte layout and caller-supplied zero-tail check.
+pub fn validate_message_layout(
+    pool: Pool,
+    capacity: usize,
+    header: MessageHeader,
+    unused_is_zero: impl FnOnce(usize, usize) -> bool,
+) -> Result<MessageKind, ChannelError> {
+    let kind = header.validate()?;
+    let max_records = (capacity - BUFFER_OVERHEAD_BYTES) / ORBIT_RECORD_BYTES;
+    let used = match kind {
+        MessageKind::OrbitRequest => {
+            if pool != Pool::Request || header.length == 0 {
+                return Err(bad_kind_or_length(header));
+            }
+            return Ok(kind);
+        }
+        MessageKind::OrbitResponse => {
+            let length = usize::try_from(header.length).map_err(|_| bad_kind_or_length(header))?;
+            if pool != Pool::Orbit || length == 0 || length > max_records {
+                return Err(bad_kind_or_length(header));
+            }
+            HEADER_BYTES + length * ORBIT_RECORD_BYTES
+        }
+        MessageKind::ChannelError => {
+            if header.length != 4 {
+                return Err(bad_kind_or_length(header));
+            }
+            HEADER_BYTES + ERROR_RECORD_BYTES
+        }
+        MessageKind::RequestReturn | MessageKind::Shutdown | MessageKind::ShutdownAck => {
+            if pool != Pool::Request || header.length != 0 {
+                return Err(bad_kind_or_length(header));
+            }
+            HEADER_BYTES
+        }
+        MessageKind::CreditApplied | MessageKind::CreditStale | MessageKind::OrbitCancelled => {
+            if pool != Pool::Orbit || header.length != 0 {
+                return Err(bad_kind_or_length(header));
+            }
+            HEADER_BYTES
+        }
+    };
+    let message_end = capacity - POOL_TRAILER_BYTES;
+    if !unused_is_zero(used, message_end) {
+        return Err(ChannelError::new(
+            ErrorCode::BadLength,
+            header.length,
+            u32::try_from(used).unwrap_or(u32::MAX),
+            u32::try_from(message_end).unwrap_or(u32::MAX),
+        ));
+    }
+    Ok(kind)
 }
 
 #[cfg(test)]

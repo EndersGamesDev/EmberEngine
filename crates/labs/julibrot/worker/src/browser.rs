@@ -1,14 +1,19 @@
 //! Browser Web Worker lowering over transferable standalone array buffers.
 
+#![allow(
+    clippy::redundant_pub_crate,
+    reason = "the private wasm module exposes transfer storage to its sibling owner module"
+)]
+
 use std::cell::RefCell;
 
-use js_sys::{Array, ArrayBuffer, Promise, Uint8Array};
+use js_sys::{Array, ArrayBuffer, Object, Promise, Reflect, Uint8Array};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent, WorkerGlobalScope};
 
-use crate::wire::{BUFFER_OVERHEAD_BYTES, WireBuffer};
+use crate::wire::{BUFFER_OVERHEAD_BYTES, WireBuffer, validate_message_layout};
 use crate::{
     Admission, ChannelError, CreditAccount, CreditCharge, ErrorCode, HEADER_BYTES,
     JULIBROT_ABI_VERSION, MessageHeader, MessageKind, MonotonicClock, ORBIT_RECORD_BYTES,
@@ -45,7 +50,7 @@ impl BrowserProducer {
         }
     }
 
-    fn receive(&mut self, mut buffer: TransferBuffer) -> Result<bool, ChannelError> {
+    fn receive(&mut self, buffer: TransferBuffer) -> Result<bool, ChannelError> {
         let header = buffer.header()?;
         let kind = header.validate()?;
         match (buffer.pool()?, kind) {
@@ -106,7 +111,11 @@ impl BrowserProducer {
         if !self.closed || self.running || self.orbit_buffers.len() != 2 {
             return Ok(());
         }
-        let Some(mut buffer) = self.shutdown_buffer.take() else {
+        while let Some(orbit) = self.orbit_buffers.pop() {
+            orbit.write_empty(MessageKind::CreditStale, 0, 0, 0)?;
+            self.post(orbit)?;
+        }
+        let Some(buffer) = self.shutdown_buffer.take() else {
             return Ok(());
         };
         buffer.write_empty(MessageKind::ShutdownAck, 0, 0, 0)?;
@@ -114,13 +123,13 @@ impl BrowserProducer {
     }
 }
 
-struct TransferBuffer {
+pub(crate) struct TransferBuffer {
     array: ArrayBuffer,
     bytes: Uint8Array,
 }
 
 impl TransferBuffer {
-    fn allocate(pool: Pool, slot: u32, max_iter: u32) -> Result<Self, ChannelError> {
+    pub(crate) fn allocate(pool: Pool, slot: u32, max_iter: u32) -> Result<Self, ChannelError> {
         if slot > 1 {
             return Err(ChannelError::new(ErrorCode::BadTrailer, slot, 0, 0));
         }
@@ -128,7 +137,7 @@ impl TransferBuffer {
         let capacity_u32 = u32::try_from(capacity)
             .map_err(|_| ChannelError::new(ErrorCode::BadLength, max_iter, u32::MAX, 0))?;
         let array = ArrayBuffer::new(capacity_u32);
-        let mut buffer = Self::from_array(array)?;
+        let buffer = Self::from_array(array)?;
         write_words_at(
             &buffer.bytes,
             capacity_u32 - u32::try_from(POOL_TRAILER_BYTES).unwrap_or(16),
@@ -142,7 +151,7 @@ impl TransferBuffer {
         Ok(buffer)
     }
 
-    fn from_array(array: ArrayBuffer) -> Result<Self, ChannelError> {
+    pub(crate) fn from_array(array: ArrayBuffer) -> Result<Self, ChannelError> {
         let capacity = usize::try_from(array.byte_length())
             .map_err(|_| ChannelError::new(ErrorCode::BadLength, 0, u32::MAX, 0))?;
         if capacity < BUFFER_OVERHEAD_BYTES {
@@ -157,11 +166,15 @@ impl TransferBuffer {
         Ok(Self { array, bytes })
     }
 
-    fn into_array(self) -> ArrayBuffer {
+    pub(crate) fn into_array(self) -> ArrayBuffer {
         self.array
     }
 
-    fn header(&self) -> Result<MessageHeader, ChannelError> {
+    pub(crate) const fn array(&self) -> &ArrayBuffer {
+        &self.array
+    }
+
+    pub(crate) fn header(&self) -> Result<MessageHeader, ChannelError> {
         self.validate_trailer()?;
         let header = MessageHeader {
             magic: self.word(0),
@@ -177,8 +190,15 @@ impl TransferBuffer {
         Ok(header)
     }
 
-    fn pool(&self) -> Result<Pool, ChannelError> {
+    pub(crate) fn pool(&self) -> Result<Pool, ChannelError> {
         self.validate_trailer()
+    }
+
+    pub(crate) fn identity(&self) -> Result<(Pool, u32), ChannelError> {
+        let pool = self.validate_trailer()?;
+        let capacity = self.bytes.length();
+        let offset = capacity - u32::try_from(POOL_TRAILER_BYTES).unwrap_or(16);
+        Ok((pool, self.word(offset + 4)))
     }
 
     fn validate_trailer(&self) -> Result<Pool, ChannelError> {
@@ -199,14 +219,74 @@ impl TransferBuffer {
         Pool::try_from(pool)
     }
 
+    pub(crate) fn validate_message(&self) -> Result<MessageKind, ChannelError> {
+        let pool = self.validate_trailer()?;
+        let header = self.header()?;
+        let capacity = usize::try_from(self.bytes.length())
+            .map_err(|_| ChannelError::new(ErrorCode::BadLength, 0, u32::MAX, 0))?;
+        validate_message_layout(pool, capacity, header, |used, message_end| {
+            let Ok(used) = u32::try_from(used) else {
+                return false;
+            };
+            let Ok(message_end) = u32::try_from(message_end) else {
+                return false;
+            };
+            (used..message_end).all(|offset| self.bytes.get_index(offset) == 0)
+        })
+    }
+
+    pub(crate) fn record_bytes(&self) -> Result<Uint8Array, ChannelError> {
+        let kind = self.validate_message()?;
+        let header = self.header()?;
+        if kind == MessageKind::OrbitCancelled {
+            return Ok(self.bytes.subarray(
+                u32::try_from(HEADER_BYTES).unwrap_or(32),
+                u32::try_from(HEADER_BYTES).unwrap_or(32),
+            ));
+        }
+        if kind != MessageKind::OrbitResponse {
+            return Err(ChannelError::new(ErrorCode::BadKind, header.kind, 0, 0));
+        }
+        let end = u32::try_from(HEADER_BYTES)
+            .unwrap_or(32)
+            .checked_add(
+                header
+                    .length
+                    .checked_mul(u32::try_from(ORBIT_RECORD_BYTES).unwrap_or(16))
+                    .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, header.length, 0, 0))?,
+            )
+            .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, header.length, 0, 0))?;
+        Ok(self
+            .bytes
+            .subarray(u32::try_from(HEADER_BYTES).unwrap_or(32), end))
+    }
+
+    pub(crate) fn channel_error(&self) -> Result<ChannelError, ChannelError> {
+        if self.validate_message()? != MessageKind::ChannelError {
+            return Err(ChannelError::new(
+                ErrorCode::BadKind,
+                self.header()?.kind,
+                0,
+                0,
+            ));
+        }
+        let offset = u32::try_from(HEADER_BYTES).unwrap_or(32);
+        Ok(ChannelError::new(
+            ErrorCode::try_from(self.word(offset))?,
+            self.word(offset + 4),
+            self.word(offset + 8),
+            self.word(offset + 12),
+        ))
+    }
+
     fn decode_request(&self) -> Result<OrbitRequest, ChannelError> {
         let copied = self.bytes.to_vec().into_boxed_slice();
         let buffer = WireBuffer::from_transferred(copied)?;
         OrbitRequest::decode(&buffer)
     }
 
-    fn write_empty(
-        &mut self,
+    pub(crate) fn write_empty(
+        &self,
         kind: MessageKind,
         generation: u32,
         compute_us: u32,
@@ -219,7 +299,7 @@ impl TransferBuffer {
     }
 
     fn write_orbit(
-        &mut self,
+        &self,
         generation: u32,
         precision_bits: u32,
         compute_us: u32,
@@ -270,7 +350,7 @@ impl TransferBuffer {
         Ok(())
     }
 
-    fn write_header(&mut self, header: MessageHeader) -> Result<(), ChannelError> {
+    pub(crate) fn write_header(&self, header: MessageHeader) -> Result<(), ChannelError> {
         self.validate_trailer()?;
         let message_end = self.bytes.length() - u32::try_from(POOL_TRAILER_BYTES).unwrap_or(16);
         drop(self.bytes.fill(0, 0, message_end));
@@ -292,7 +372,7 @@ impl TransferBuffer {
     }
 
     fn write_error(
-        &mut self,
+        &self,
         generation: u32,
         error: ChannelError,
         credit_us: u32,
@@ -366,7 +446,7 @@ pub fn encode_transfer_request(
     array: &ArrayBuffer,
     request: &OrbitRequest,
 ) -> Result<(), ChannelError> {
-    let mut buffer = TransferBuffer::from_array(array.clone())?;
+    let buffer = TransferBuffer::from_array(array.clone())?;
     if buffer.pool()? != Pool::Request {
         return Err(ChannelError::new(
             ErrorCode::BadKind,
@@ -437,49 +517,7 @@ pub fn read_transfer_header(array: &ArrayBuffer) -> Result<MessageHeader, Channe
 /// Returns a typed pool, kind, count, or capacity refusal.
 pub fn transfer_record_bytes(array: &ArrayBuffer) -> Result<Uint8Array, ChannelError> {
     let buffer = TransferBuffer::from_array(array.clone())?;
-    if buffer.pool()? != Pool::Orbit {
-        return Err(ChannelError::new(
-            ErrorCode::BadKind,
-            Pool::Request as u32,
-            0,
-            0,
-        ));
-    }
-    let header = buffer.header()?;
-    let kind = header.validate()?;
-    if kind == MessageKind::OrbitCancelled {
-        return Ok(buffer.bytes.subarray(
-            u32::try_from(HEADER_BYTES).unwrap_or(32),
-            u32::try_from(HEADER_BYTES).unwrap_or(32),
-        ));
-    }
-    if kind != MessageKind::OrbitResponse {
-        return Err(ChannelError::new(ErrorCode::BadKind, header.kind, 0, 0));
-    }
-    if header.length == 0 {
-        return Err(ChannelError::new(ErrorCode::BadLength, 0, 1, 0));
-    }
-    let end = u32::try_from(HEADER_BYTES)
-        .unwrap_or(32)
-        .checked_add(
-            header
-                .length
-                .checked_mul(u32::try_from(ORBIT_RECORD_BYTES).unwrap_or(16))
-                .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, header.length, 0, 0))?,
-        )
-        .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, header.length, 0, 0))?;
-    let available = buffer.bytes.length() - u32::try_from(POOL_TRAILER_BYTES).unwrap_or(16);
-    if end > available {
-        return Err(ChannelError::new(
-            ErrorCode::BadLength,
-            header.length,
-            end,
-            available,
-        ));
-    }
-    Ok(buffer
-        .bytes
-        .subarray(u32::try_from(HEADER_BYTES).unwrap_or(32), end))
+    buffer.record_bytes()
 }
 
 /// Charges an orbit or cancellation and rewrites it as a returned CREDIT message in place.
@@ -493,7 +531,7 @@ pub fn write_transfer_credit(
     account: &mut CreditAccount,
     owner_now_us: u64,
 ) -> Result<CreditCharge, ChannelError> {
-    let mut buffer = TransferBuffer::from_array(array.clone())?;
+    let buffer = TransferBuffer::from_array(array.clone())?;
     if buffer.pool()? != Pool::Orbit {
         return Err(ChannelError::new(
             ErrorCode::BadKind,
@@ -529,7 +567,7 @@ pub fn write_transfer_credit(
 ///
 /// Returns a typed trailer or wrong-pool refusal.
 pub fn write_transfer_shutdown(array: &ArrayBuffer, generation: u32) -> Result<(), ChannelError> {
-    let mut buffer = TransferBuffer::from_array(array.clone())?;
+    let buffer = TransferBuffer::from_array(array.clone())?;
     if buffer.pool()? != Pool::Request {
         return Err(ChannelError::new(
             ErrorCode::BadKind,
@@ -571,20 +609,22 @@ pub fn worker_main(expected_abi: u32) -> Result<u32, JsValue> {
         Ok(())
     })?;
     let onmessage = Closure::<dyn FnMut(MessageEvent)>::new(move |event| {
-        if let Err(error) = receive_message(event) {
+        if let Err(error) = receive_message(&event) {
             ember_lab_heap::publish_browser_error(&format!("Julibrot worker: {error}"));
         }
     });
-    scope.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
+    scope
+        .add_event_listener_with_callback("message", onmessage.as_ref().unchecked_ref())
+        .map_err(|_| JsValue::from_str("worker message listener could not be installed"))?;
     onmessage.forget();
     Ok(JULIBROT_ABI_VERSION)
 }
 
-fn receive_message(event: MessageEvent) -> Result<(), ChannelError> {
-    let array = event
-        .data()
-        .dyn_into::<ArrayBuffer>()
-        .map_err(|_| ChannelError::new(ErrorCode::BadLength, 0, 0, 0))?;
+fn receive_message(event: &MessageEvent) -> Result<(), ChannelError> {
+    let data = event.data();
+    let Ok(array) = data.clone().dyn_into::<ArrayBuffer>() else {
+        return receive_handshake(&data);
+    };
     let buffer = TransferBuffer::from_array(array)?;
     let should_start = PRODUCER.with(|slot| {
         let mut slot = slot
@@ -600,6 +640,43 @@ fn receive_message(event: MessageEvent) -> Result<(), ChannelError> {
     Ok(())
 }
 
+fn receive_handshake(data: &JsValue) -> Result<(), ChannelError> {
+    let kind = Reflect::get(data, &JsValue::from_str("kind"))
+        .ok()
+        .and_then(|field| field.as_string());
+    if kind.as_deref() != Some("AbiProbe") {
+        return Ok(());
+    }
+    let version = Reflect::get(data, &JsValue::from_str("version"))
+        .ok()
+        .and_then(|field| field.as_f64());
+    if version != Some(f64::from(JULIBROT_ABI_VERSION)) {
+        return Err(ChannelError::new(ErrorCode::BadVersion, 0, 0, 0));
+    }
+    let scope: DedicatedWorkerGlobalScope = js_sys::global().unchecked_into();
+    scope.set_onmessage(None);
+    let accepted = Object::new();
+    Reflect::set(
+        accepted.as_ref(),
+        &JsValue::from_str("kind"),
+        &JsValue::from_str("AbiAccepted"),
+    )
+    .map_err(|_| ChannelError::new(ErrorCode::BadVersion, 0, 0, 0))?;
+    Reflect::set(
+        accepted.as_ref(),
+        &JsValue::from_str("version"),
+        &JsValue::from_f64(f64::from(JULIBROT_ABI_VERSION)),
+    )
+    .map_err(|_| ChannelError::new(ErrorCode::BadVersion, 0, 0, 0))?;
+    scope
+        .post_message(accepted.as_ref())
+        .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0))
+}
+
+#[allow(
+    clippy::future_not_send,
+    reason = "wasm worker tasks are intentionally local to one browser event loop"
+)]
 async fn run_producer() {
     if let Err(error) = run_producer_inner().await {
         ember_lab_heap::publish_browser_error(&format!("Julibrot worker: {error}"));
@@ -619,6 +696,11 @@ async fn run_producer() {
     }
 }
 
+#[allow(
+    clippy::future_not_send,
+    clippy::too_many_lines,
+    reason = "the local browser task owns one explicit protocol loop"
+)]
 async fn run_producer_inner() -> Result<(), ChannelError> {
     let clock = browser_clock()?;
     loop {
@@ -683,11 +765,7 @@ async fn run_producer_inner() -> Result<(), ChannelError> {
             yield_worker_task_after(wait_us).await?;
             continue;
         }
-        if let BrowserWork::TimingUnavailable {
-            request,
-            mut transfer,
-        } = work
-        {
+        if let BrowserWork::TimingUnavailable { request, transfer } = work {
             transfer.write_error(
                 request.generation(),
                 ChannelError::new(ErrorCode::TimingOverflow, 0, 0, 0),
@@ -698,7 +776,7 @@ async fn run_producer_inner() -> Result<(), ChannelError> {
         }
         let BrowserWork::Run {
             request,
-            mut transfer,
+            transfer,
             credit_us: admission_credit,
         } = work
         else {
@@ -782,7 +860,7 @@ enum BrowserWork {
 }
 
 impl TransferBuffer {
-    fn set_compute_us(&mut self, compute_us: u32) -> Result<(), ChannelError> {
+    fn set_compute_us(&self, compute_us: u32) -> Result<(), ChannelError> {
         self.header()?;
         write_words_at(&self.bytes, 24, &[compute_us]);
         Ok(())
@@ -808,16 +886,25 @@ fn browser_clock() -> Result<BrowserClock, ChannelError> {
     Ok(BrowserClock { performance })
 }
 
+#[allow(
+    clippy::future_not_send,
+    reason = "wasm timer futures are intentionally local to the worker event loop"
+)]
 async fn yield_worker_task() -> Result<(), ChannelError> {
     yield_worker_task_after(0).await
 }
 
+#[allow(
+    clippy::future_not_send,
+    reason = "wasm timer futures are intentionally local to the worker event loop"
+)]
 async fn yield_worker_task_after(wait_us: u64) -> Result<(), ChannelError> {
     let scope: WorkerGlobalScope = js_sys::global().unchecked_into();
-    let wait_ms = i32::try_from(wait_us.div_ceil(1_000).min(2_147_483_647)).unwrap_or(i32::MAX);
+    let delay_millis =
+        i32::try_from(wait_us.div_ceil(1_000).min(2_147_483_647)).unwrap_or(i32::MAX);
     let promise = Promise::new(&mut |resolve, reject| {
         if let Err(error) =
-            scope.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, wait_ms)
+            scope.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, delay_millis)
         {
             drop(reject.call1(&JsValue::UNDEFINED, &error));
         }

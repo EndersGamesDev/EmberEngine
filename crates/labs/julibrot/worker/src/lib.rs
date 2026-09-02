@@ -4,6 +4,8 @@
 
 #[cfg(target_arch = "wasm32")]
 mod browser;
+#[cfg(target_arch = "wasm32")]
+mod browser_owner;
 mod channel;
 pub(crate) mod codec;
 mod compute;
@@ -12,13 +14,15 @@ mod error;
 mod owner;
 mod registry;
 pub(crate) mod slots;
-pub(crate) mod wire;
+mod wire;
 
 #[cfg(target_arch = "wasm32")]
 pub use browser::{
     allocate_transfer_buffer, encode_transfer_request, read_transfer_header, transfer_record_bytes,
     worker_main, write_transfer_credit, write_transfer_shutdown,
 };
+#[cfg(target_arch = "wasm32")]
+pub use browser_owner::BrowserOwnerEndpoint;
 pub use channel::{
     BUFFER_RETURN_DEADLINE_US, JULIBROT_PHASE_IMPLEMENTED, MIN_MAX_ITER,
     ORBIT_BUDGET_US_PER_SECOND, OrbitLease, OrbitResponseView, OwnerEndpoint, ProducerEndpoint,
