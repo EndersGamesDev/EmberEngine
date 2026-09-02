@@ -194,6 +194,37 @@ is "$(jget "$BOOK" '[h for h in d["hosts"] if h["name"]=="misty-egret"][0]["ws"]
 is "$(jget "$BOOK" 'd["ws"]')" "wss://test-arena.trycloudflare.com" \
     "but the legacy ws still names a host the live pages can join"
 
+echo "== a ref from before the arena rename still deploys =="
+# docs/hosts.md §7 exists so a host can be pinned to an older commit, and every
+# published arena build up to v11 is older than the rename of pong-* to
+# arena-*. The deploy hardcoded the new names, so those refs could not be built
+# at all — the remote cargo died with "package ID specification `arena-server`
+# did not match any packages", and the protocol read came back empty from a
+# path that tree does not have.
+cd "$REPO"
+git checkout -q -b prerename main
+git mv crates/arena-core crates/pong-core
+printf 'pub const PROTO_VERSION: u16 = 11;\n' > crates/pong-core/src/proto.rs
+git commit -qam "the arena is still called pong here"
+PRE_SHA="$(git rev-parse --short HEAD)"
+git checkout -q main
+: > "$SHIM_LOG"
+if SHIM_HOST_NAME=dusky-lynx SHIM_TUNNEL=old EMBER_HOST=oldbox EMBER_REF="$PRE_SHA" \
+        bash "$REPO/deploy/deploy-pong-online.sh" > "$TMP/prerename.log" 2>&1; then
+    ok "a pre-rename ref deploys"
+else
+    bad "the pre-rename deploy FAILED"
+    tail -30 "$TMP/prerename.log" >&2
+fi
+ARGV="$(cat "$SHIM_LOG")"
+contains "$ARGV" "cargo build --release -p pong-server" "it builds the package that ref actually carries"
+contains "$ARGV" "release/pong-server --bind" "and launches the binary that build produces"
+contains "$ARGV" "pgrep -u \"\$(id -un)\" -f \"pong-serve[r]\"" "and looks for it under that name"
+contains "$ARGV" "-p pong-server --example wsbot" "and probes it with that package's wsbot"
+BOOK="$(BOOK_OF)"
+is "$(jget "$BOOK" '[h for h in d["hosts"] if h["name"]=="dusky-lynx"][0]["proto"]')" "11" \
+    "and publishes the protocol read from crates/pong-core"
+
 echo "== another writer moved gh-pages, and a worktree still holds the local branch =="
 # The two states that used to make a deploy fail permanently, together, because
 # one caused the other. Nothing here fetches the LOCAL gh-pages, so a second

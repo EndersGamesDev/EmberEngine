@@ -107,11 +107,30 @@ helper() {
 # id, crate the protocol number lives in, binary, and how that binary wants
 # its bind address. The two servers disagree about the flag, which is exactly
 # the kind of thing that must be stated once rather than remembered twice.
+#
+# The arena's names are read from the CHECKOUT rather than fixed here. It was
+# called pong until it was renamed, and EMBER_REF is allowed to name a commit
+# older than that (§7) — every published arena build up to v11 is on the far
+# side of it. A fixed table meant such a ref could not be built at all:
+# `cargo build -p arena-server` in a tree whose package is `pong-server` dies
+# with "package ID specification did not match any packages". Fire was never
+# renamed, so its names stay literal.
 game_ids() { echo "arena fire"; }
 game_port()  { case "$1" in arena) echo "$EMBER_ARENA_PORT" ;; fire) echo "$EMBER_FIRE_PORT" ;; esac; }
-game_crate() { case "$1" in arena) echo arena-core ;; fire) echo fire-core ;; esac; }
-game_pkg()   { case "$1" in arena) echo arena-server ;; fire) echo fire-server ;; esac; }
-game_bin()   { case "$1" in arena) echo arena-server ;; fire) echo fire-server ;; esac; }
+arena_is_renamed() { [ -d "$SRC/crates/arena-core" ]; }
+game_crate() {
+    case "$1" in
+        arena) if arena_is_renamed; then echo arena-core; else echo pong-core; fi ;;
+        fire)  echo fire-core ;;
+    esac
+}
+game_pkg() {
+    case "$1" in
+        arena) if arena_is_renamed; then echo arena-server; else echo pong-server; fi ;;
+        fire)  echo fire-server ;;
+    esac
+}
+game_bin() { game_pkg "$1"; }
 game_bind()  {
     case "$1" in
         arena) echo "--bind 127.0.0.1:$(game_port arena)" ;;
@@ -138,9 +157,9 @@ proto_of() {
 probe_game() {
     local id="$1" url="$2" label="${3:-check}"
     case "$id" in
-        arena) ( cd "$SRC" && cargo run --release -q -p arena-server --example wsbot -- \
+        arena) ( cd "$SRC" && cargo run --release -q -p "$(game_pkg arena)" --example wsbot -- \
                     "$url" create "health-$label" - "health-$label" 6 >/dev/null ) ;;
-        fire)  ( cd "$SRC" && cargo run --release -q -p fire-server --example probe -- \
+        fire)  ( cd "$SRC" && cargo run --release -q -p "$(game_pkg fire)" --example probe -- \
                     "$url" >/dev/null ) ;;
     esac
 }
@@ -306,7 +325,7 @@ cmd_up() {
         cd "$SRC"
         export EMBER_BUILD_VERSION="$version" EMBER_BUILD_COMMIT="$commit"
         # shellcheck disable=SC2086
-        $nice cargo build --release -p arena-server -p fire-server
+        $nice cargo build --release -p "$(game_pkg arena)" -p "$(game_pkg fire)"
     ) || die "build failed"
     echo "   built in $(( $(date +%s) - tb ))s"
 
