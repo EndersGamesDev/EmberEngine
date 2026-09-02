@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Heap output-path spike</title>
+  <style>
+    :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #070a10; color: #edf4ff; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 20% 0, #20344d, #070a10 52%); }
+    main { width: min(72rem, 100%); margin: auto; padding: 2rem 1rem; }
+    h1 { font-family: system-ui, sans-serif; margin: 0; }
+    p { color: #afbdd0; line-height: 1.55; }
+    button { padding: .55rem .8rem; color: inherit; background: #172338; border: 1px solid #527093; border-radius: .35rem; font: inherit; cursor: pointer; }
+    button:disabled { opacity: .5; }
+    .cases { display: grid; gap: .75rem; margin: 1rem 0; }
+    article { padding: .8rem; border: 1px solid #ffffff1c; border-radius: .45rem; background: #0a101bd9; }
+    article.pass { border-color: #63c98e; }
+    article.fail { border-color: #f17777; }
+    strong { color: #a9bad1; }
+    .pass strong { color: #75dda0; }
+    .fail strong { color: #ff9292; }
+    pre { margin-bottom: 0; padding: .7rem; background: #050810; white-space: pre-wrap; overflow-wrap: anywhere; color: #bdcbe0; }
+    canvas { width: 8px; height: 8px; opacity: .02; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Heap output-path golden spike</h1>
+    <p>WebGL2 through wgpu 24 GL only. Every card reports only an observed browser result; direct overlap passes only when the expected scoped refusal is captured, while SCRATCH-copy and ping-pong require an exact vertex-loaded readback.</p>
+    <button id="run" type="button">Run all cases</button>
+    <canvas id="adapter-canvas" width="8" height="8"></canvas>
+    <div class="cases">
+      <article id="direct-overlap-refusal"><strong>WAIT · direct overlap refusal</strong><pre>not run</pre></article>
+      <article id="scratch-copy-dynamic-offset-vertex-load"><strong>WAIT · SCRATCH copy</strong><pre>not run</pre></article>
+      <article id="ping-pong-dynamic-offset-vertex-load"><strong>WAIT · ping-pong</strong><pre>not run</pre></article>
+    </div>
+    <article><strong>Runtime facts</strong><pre id="facts">versioned wasm not loaded</pre></article>
+  </main>
+  <script type="module">
+    import init, { cancel_heap_spike, run_heap_spike_json } from "./pkg/ember_lab_heap.js?v=spike-1";
+
+    const run = document.querySelector("#run");
+    const canvas = document.querySelector("#adapter-canvas");
+    const facts = document.querySelector("#facts");
+    const names = ["direct-overlap-refusal", "scratch-copy-dynamic-offset-vertex-load", "ping-pong-dynamic-offset-vertex-load"];
+    let generation = 0;
+
+    function resetCards(text) {
+      for (const name of names) {
+        const card = document.querySelector(`#${name}`);
+        card.className = "";
+        card.querySelector("strong").textContent = `WAIT · ${name}`;
+        card.querySelector("pre").textContent = text;
+      }
+    }
+
+    function failCards(text) {
+      for (const name of names) {
+        const card = document.querySelector(`#${name}`);
+        card.className = "fail";
+        card.querySelector("strong").textContent = `FAIL · ${name}`;
+        card.querySelector("pre").textContent = text;
+      }
+    }
+
+    async function runSpike() {
+      generation += 1;
+      const token = generation;
+      cancel_heap_spike();
+      run.disabled = true;
+      resetCards("running with a 4,000 ms poll deadline…");
+      try {
+        const report = JSON.parse(await run_heap_spike_json(canvas));
+        if (token !== generation) return;
+        facts.textContent = JSON.stringify({ ...report, cases: undefined }, null, 2);
+        for (const result of report.cases) {
+          const card = document.querySelector(`#${result.name}`);
+          card.className = result.status.toLowerCase();
+          card.querySelector("strong").textContent = `${result.status} · ${result.name}`;
+          card.querySelector("pre").textContent = result.detail;
+        }
+      } catch (error) {
+        if (token !== generation) return;
+        const detail = error instanceof Error ? error.message : String(error);
+        facts.textContent = `INITIALIZATION FAIL · ${detail}`;
+        failCards(`FAIL before cases could run · ${detail}`);
+      } finally {
+        if (token === generation) run.disabled = false;
+      }
+    }
+
+    run.addEventListener("click", () => { void runSpike(); });
+    try {
+      await init({ module_or_path: new URL("./pkg/ember_lab_heap_bg.wasm?v=spike-1", import.meta.url) });
+      facts.textContent = "wasm loaded · browser observations pending";
+      void runSpike();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      facts.textContent = `WASM LOAD FAIL · ${detail}`;
+      failCards(`FAIL before cases could run · ${detail}`);
+      run.disabled = true;
+    }
+  </script>
+</body>
+</html>
