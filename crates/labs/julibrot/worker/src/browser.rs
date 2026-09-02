@@ -10,9 +10,9 @@ use web_sys::{DedicatedWorkerGlobalScope, MessageEvent, WorkerGlobalScope};
 
 use crate::wire::{BUFFER_OVERHEAD_BYTES, WireBuffer};
 use crate::{
-    ChannelError, ErrorCode, HEADER_BYTES, JULIBROT_ABI_VERSION, MessageHeader, MessageKind,
-    MonotonicClock, ORBIT_RECORD_BYTES, OrbitRequest, OrbitTaskPoll, POOL_TRAILER_BYTES, Pool,
-    ReferenceOrbitRecord, TRAILER_MAGIC,
+    Admission, ChannelError, ErrorCode, HEADER_BYTES, JULIBROT_ABI_VERSION, MessageHeader,
+    MessageKind, MonotonicClock, ORBIT_RECORD_BYTES, OrbitRequest, OrbitTaskPoll,
+    POOL_TRAILER_BYTES, Pool, ProducerShaper, ReferenceOrbitRecord, TRAILER_MAGIC,
 };
 
 thread_local! {
@@ -27,6 +27,7 @@ struct BrowserProducer {
     shutdown_buffer: Option<TransferBuffer>,
     running: bool,
     closed: bool,
+    shaper: ProducerShaper,
 }
 
 impl BrowserProducer {
@@ -39,6 +40,7 @@ impl BrowserProducer {
             shutdown_buffer: None,
             running: false,
             closed: false,
+            shaper: ProducerShaper::new(),
         }
     }
 
@@ -59,6 +61,13 @@ impl BrowserProducer {
             (Pool::Orbit, MessageKind::CreditApplied | MessageKind::CreditStale) => {
                 if self.orbit_buffers.len() == 2 {
                     return Err(ChannelError::new(ErrorCode::BufferStarved, 2, 0, 0));
+                }
+                if header.generation != 0 {
+                    self.shaper.observe_return(
+                        browser_clock()?.now_us(),
+                        header.credit_us,
+                        header.compute_us,
+                    )?;
                 }
                 self.orbit_buffers.push(buffer);
             }
@@ -281,6 +290,29 @@ impl TransferBuffer {
         Ok(())
     }
 
+    fn write_error(
+        &mut self,
+        generation: u32,
+        error: ChannelError,
+        credit_us: u32,
+    ) -> Result<(), ChannelError> {
+        let mut header = MessageHeader::new(MessageKind::ChannelError, generation);
+        header.length = 4;
+        header.credit_us = credit_us;
+        self.write_header(header)?;
+        write_words_at(
+            &self.bytes,
+            u32::try_from(HEADER_BYTES).unwrap_or(32),
+            &[
+                error.code as u32,
+                error.detail,
+                error.requested_bytes,
+                error.available_bytes,
+            ],
+        );
+        Ok(())
+    }
+
     fn word(&self, offset: u32) -> u32 {
         u32::from_le_bytes([
             self.bytes.get_index(offset),
@@ -402,15 +434,44 @@ async fn run_producer() {
 async fn run_producer_inner() -> Result<(), ChannelError> {
     let clock = browser_clock()?;
     loop {
-        let work = PRODUCER.with(|slot| {
-            let mut slot = slot.try_borrow_mut().ok()?;
-            let producer = slot.as_mut()?;
+        let work = PRODUCER.with(|slot| -> Result<Option<BrowserWork>, ChannelError> {
+            let mut slot = slot
+                .try_borrow_mut()
+                .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0))?;
+            let Some(producer) = slot.as_mut() else {
+                return Ok(None);
+            };
             if producer.closed || producer.pending.is_none() || producer.orbit_buffers.is_empty() {
-                return None;
+                return Ok(None);
             }
-            Some((producer.pending.take()?, producer.orbit_buffers.pop()?))
-        });
-        let Some((request, mut transfer)) = work else {
+            let admission = producer.shaper.admit(clock.now_us())?;
+            match admission {
+                Admission::Ready { credit_us, .. } => {
+                    let request = producer.pending.take().ok_or_else(|| {
+                        ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0)
+                    })?;
+                    let transfer = producer.orbit_buffers.pop().ok_or_else(|| {
+                        ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0)
+                    })?;
+                    Ok(Some(BrowserWork::Run {
+                        request,
+                        transfer,
+                        credit_us,
+                    }))
+                }
+                Admission::Delay { wait_us } => Ok(Some(BrowserWork::Delay(wait_us))),
+                Admission::TimingUnavailable => {
+                    let request = producer.pending.take().ok_or_else(|| {
+                        ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0)
+                    })?;
+                    let transfer = producer.orbit_buffers.pop().ok_or_else(|| {
+                        ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0)
+                    })?;
+                    Ok(Some(BrowserWork::TimingUnavailable { request, transfer }))
+                }
+            }
+        })?;
+        let Some(work) = work else {
             let done = PRODUCER.with(|slot| {
                 slot.try_borrow()
                     .ok()
@@ -426,8 +487,39 @@ async fn run_producer_inner() -> Result<(), ChannelError> {
             yield_worker_task().await?;
             continue;
         };
-        let admission_credit = transfer.header()?.credit_us;
-        let mut task = crate::ReferenceOrbitTask::start(&request, &clock)?;
+        if let BrowserWork::Delay(wait_us) = work {
+            yield_worker_task_after(wait_us).await?;
+            continue;
+        }
+        if let BrowserWork::TimingUnavailable {
+            request,
+            mut transfer,
+        } = work
+        {
+            transfer.write_error(
+                request.generation(),
+                ChannelError::new(ErrorCode::TimingOverflow, 0, 0, 0),
+                0,
+            )?;
+            post_from_producer(transfer)?;
+            continue;
+        }
+        let BrowserWork::Run {
+            request,
+            mut transfer,
+            credit_us: admission_credit,
+        } = work
+        else {
+            unreachable!("delay and unavailable work handled above");
+        };
+        let mut task = match crate::ReferenceOrbitTask::start(&request, &clock) {
+            Ok(task) => task,
+            Err(error) => {
+                transfer.write_error(request.generation(), error, admission_credit)?;
+                post_from_producer(transfer)?;
+                continue;
+            }
+        };
         loop {
             let latest = PRODUCER.with(|slot| {
                 slot.try_borrow()
@@ -435,7 +527,15 @@ async fn run_producer_inner() -> Result<(), ChannelError> {
                     .and_then(|slot| slot.as_ref().map(|producer| producer.latest_generation))
                     .unwrap_or(0)
             });
-            match task.poll(latest, &clock)? {
+            let poll = match task.poll(latest, &clock) {
+                Ok(poll) => poll,
+                Err(error) => {
+                    transfer.write_error(request.generation(), error, admission_credit)?;
+                    post_from_producer(transfer)?;
+                    break;
+                }
+            };
+            match poll {
                 OrbitTaskPoll::Pending { .. } => yield_worker_task().await?,
                 OrbitTaskPoll::Cancelled {
                     generation,
@@ -476,6 +576,19 @@ async fn run_producer_inner() -> Result<(), ChannelError> {
     }
 }
 
+enum BrowserWork {
+    Run {
+        request: OrbitRequest,
+        transfer: TransferBuffer,
+        credit_us: u32,
+    },
+    Delay(u64),
+    TimingUnavailable {
+        request: OrbitRequest,
+        transfer: TransferBuffer,
+    },
+}
+
 impl TransferBuffer {
     fn set_compute_us(&mut self, compute_us: u32) -> Result<(), ChannelError> {
         self.header()?;
@@ -504,9 +617,15 @@ fn browser_clock() -> Result<BrowserClock, ChannelError> {
 }
 
 async fn yield_worker_task() -> Result<(), ChannelError> {
+    yield_worker_task_after(0).await
+}
+
+async fn yield_worker_task_after(wait_us: u64) -> Result<(), ChannelError> {
     let scope: WorkerGlobalScope = js_sys::global().unchecked_into();
+    let wait_ms = i32::try_from(wait_us.div_ceil(1_000).min(2_147_483_647)).unwrap_or(i32::MAX);
     let promise = Promise::new(&mut |resolve, reject| {
-        if let Err(error) = scope.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 0)
+        if let Err(error) =
+            scope.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, wait_ms)
         {
             drop(reject.call1(&JsValue::UNDEFINED, &error));
         }

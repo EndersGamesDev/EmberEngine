@@ -92,7 +92,7 @@ The main-to-worker boundary copies no orbit payload, and the worker-to-main boun
 
 The standalone buffer is returned only after app has synchronously handed its orbit bytes to kernels for a regional heap write and installed the resulting `OrbitHandle`; holding a transferred buffer across a frame is a channel bug visible as an outstanding-buffer count.
 
-No Rust-managed buffer allocation occurs per message after startup; browser-internal task and transfer bookkeeping is outside that claim and is measured rather than inferred.
+No standalone transport-buffer allocation occurs per message after startup; canonical-centre and Astro-float semantic storage remains ordinary wasm linear-memory work storage, browser-internal task and transfer bookkeeping is outside the transport claim, and both are measured rather than inferred.
 
 ### 2.4 Generation, cancellation, and recompute hysteresis
 
@@ -124,13 +124,15 @@ Every completed or cancelled computation is charged, including stale work, becau
 
 The producer projects a returned credit after local elapsed time `Δt` as `projected = min(B,returned_credit + floor(Δt·B/1,000,000))`.
 
-For a fixed `max_iter`, the admission estimate `E` is the greatest nonzero `compute_us` observed since the last resize; exactly one first request after startup or resize is admitted as a labelled unpriced warm-up, and later work starts only when `projected ≥ E`.
+For a fixed `max_iter`, the admission estimate `E` is the greatest nonzero `compute_us` observed since the last resize; exactly one first request after startup or resize is admitted as a labelled unpriced warm-up, no second request starts until that warm-up buffer returns, and later work starts only when `projected ≥ E`.
 
 When `projected < E`, producer delay is `ceil((E−projected)·1,000,000/B)` microseconds followed by one browser-task yield and recomputation; pending edits continue to coalesce during the delay.
 
 At admission the producer subtracts `E` from its projected local balance, and the next owner return reconciles the estimate with measured cost; any actual excess is `overfeed_us`, displayed as a producer defect rather than repaired by owner throttling.
 
 Worker `compute_us` begins immediately before decoding the centre into bignum scratch and ends after the one standalone-buffer copy, uses `ceil(1,000·performance.now elapsed milliseconds)`, and returns a typed `TimingOverflow` rather than saturating beyond `u32::MAX`.
+
+If the returned warm-up measurement is zero, `Admission::TimingUnavailable` emits a typed `TimingOverflow` channel event instead of inventing a price or admitting an unbounded stream; the overlay distinguishes this unavailable state from a measured zero credit balance.
 
 ### 2.6 Versioned owner and two drains
 
@@ -205,11 +207,11 @@ The library-independent dyadic encoding lets math's selected Astro-float `BigSca
 
 `OrbitResponse` is the 32-byte header followed immediately by `length` reference records; used bytes are `32+16·length`, unused capacity before the pool trailer is zero, and `1 ≤ length ≤ max_iter`.
 
-The high-level response view is `OrbitResponseView { generation: u32, length: u32, compute_us: u32, precision_bits: u32, admission_credit_us: u32, records: OrbitLease }`; `compute_ms()` is exactly `f64::from(compute_us)/1,000` and is a display conversion, not another measurement.
+The high-level response view is `OrbitResponseView { generation: u32, length: u32, compute_us: u32, precision_bits: u32, admission_credit_us: u32, cancelled: bool, records: OrbitLease }`; a cancelled response has `length = 0` and no record bytes, while `compute_ms()` is exactly `f64::from(compute_us)/1,000` and is a display conversion, not another measurement.
 
 On return, main preserves `generation`, `precision_bits`, and `compute_us`, changes kind to `CreditApplied` or `CreditStale`, sets length to zero, and writes its newly computed `credit_us`; that header is the CREDIT record and states whether the named generation was applied.
 
-`OrbitLease::return_credit(disposition, owner_now_us)` performs the owner accounting, updates facts, rewrites the header, and transfers the orbit buffer back exactly once; dropping a live lease is a debug failure and becomes `BufferStarved` plus a visible outstanding-buffer fact in release behavior.
+`OrbitLease::return_credit(&mut self, disposition, owner_now_us)` performs the owner accounting, updates facts, rewrites the header, and transfers the orbit buffer back exactly once; a clock refusal retains the lease for retry, while dropping a live lease is a debug failure and becomes `BufferStarved` plus a visible outstanding-buffer fact in release behavior.
 
 ### 3.4 Shared GPU records recorded on the worker side
 
@@ -291,7 +293,7 @@ Consumers never use owner-epoch equality as a compatibility test: each HOT or MA
 
 `OwnerEndpoint::shutdown()` closes an already reconciled same-thread channel or immediately returns `BufferStarved`; the browser owner sends `Shutdown`, stops accepting requests, and drives event-based reconciliation for at most the app-enforced four-second buffer-return deadline, after which it reports the missing pool/slot rather than hanging.
 
-`ProducerEndpoint::run()` dispatches one request at a time through `ReferenceOrbitTask`, applies credit admission and cooperative cancellation, and stops only after returning `ShutdownAck` or a typed channel failure.
+`ProducerEndpoint::admit(producer_now_us) -> Result<Admission,ChannelError>` applies the same producer shaper used by the browser backend; `next_request`, `complete`, and `cancel` expose one deterministic step for native traces, while the browser-private run loop repeats those steps until `ShutdownAck` or a typed channel failure.
 
 `EncodedCentre::encode_math(centre:&BigCentre,revision:u32)->Result<EncodedCentre,ChannelError>` and `decode_math(precision_bits:u32)->Result<BigCentre,ChannelError>` are worker's canonical adapter over math's `encode_big_scalar` and `decode_big_scalar`; `ReferenceOrbitTask::start(request:&OrbitRequest,clock:&impl MonotonicClock)->Result<ReferenceOrbitTask,ChannelError>` constructs math's published `ReferenceOrbitBuilder`, and `poll(latest_generation:u32,clock:&impl MonotonicClock)->Result<OrbitTaskPoll,ChannelError>` returns `Pending`, `Complete`, or `Cancelled` after at most 64 builder steps or 2,000 measured microseconds.
 
@@ -299,11 +301,15 @@ Consumers never use owner-epoch equality as a compatibility test: each HOT or MA
 
 The Web Worker lowering backs endpoints with the four transferable `ArrayBuffer` objects; `SameThread` backs the identical ownership states with four preallocated byte buffers moved through bounded queues, bypasses the wasm-boundary memcpy only because producer and consumer share linear memory, and changes no ordering, generation, credit, or drain result.
 
-`JULIBROT_PHASE_IMPLEMENTED = 3`; on wasm32, `allocate_transfer_buffer(pool:u32,slot:u32,max_iter:u32)->Result<ArrayBuffer,JsValue>` creates the exact trailer-bearing standalone buffers and `worker_main(expected_abi:u32)->Result<u32,JsValue>` installs the heap panic hook, refuses ABI skew or a non-worker global, receives only transferred buffers, cooperatively runs the latest request, and acknowledges shutdown only after both orbit slots return.
+`JULIBROT_PHASE_IMPLEMENTED = 4`; on wasm32, `allocate_transfer_buffer(pool:u32,slot:u32,max_iter:u32)->Result<ArrayBuffer,JsValue>` creates the exact trailer-bearing standalone buffers and `worker_main(expected_abi:u32)->Result<u32,JsValue>` installs the heap panic hook, refuses ABI skew or a non-worker global, receives only transferred buffers, cooperatively runs the latest request, and acknowledges shutdown only after both orbit slots return.
+
+`CreditAccount::charge(owner_now_us,compute_us) -> Result<CreditCharge,ChannelError>` implements the owner formula exactly; `ProducerShaper::observe_return(producer_now_us,returned_credit_us,compute_us)` reconciles a CREDIT header, `admit(producer_now_us)` returns `Ready { credit_us, warm_up }`, `Delay { wait_us }`, or `TimingUnavailable`, and `reset_for_resize` creates exactly one new warm-up epoch.
 
 ### 3.8 Facts supplied to app
 
 `WorkerFacts` is a 64-byte `#[repr(C)]` record: `epoch: u64` at byte 0, then `last_applied_generation`, `last_ack_generation`, `orbit_queue_depth`, `shutdown_queue_depth`, `credit_us`, `last_compute_us`, `last_overfeed_us`, `applied_count`, `stale_count`, `cancelled_count`, `allocation_events`, `request_buffers_owned_main`, `orbit_buffers_owned_main`, and `mode` as consecutive `u32` fields at bytes 8 through 60.
+
+`allocation_events` starts at one for the four-buffer startup allocation and increments once only after a reconciled max-iteration resize; `OwnerEndpoint::facts()` and `ProducerEndpoint::facts()` return the same coherent snapshot without inventing unavailable browser observations.
 
 App displays queue depth, credits in microseconds, `compute_ms = last_compute_us/1,000`, owner epochs acknowledged, applied and acknowledged generations, stale/cancel counts, overfeed, buffer ownership, allocation events, worker mode, `centre_from_reference_px`, and `reference_shift_px`; zero and unavailable are distinct labels.
 
@@ -422,7 +428,7 @@ Phase 4 adds fixed-policy credit/token-bucket shaping, facts snapshots, app/kern
 
 The worker slice is therefore budgeted at about 2,060 implementation and test lines; generated wasm glue and downstream app, kernel, heap, and presentation code are excluded.
 
-Implementation progress through Phase 3: the Phase 2 core plus `worker_main`, field-paid heap panic-hook installation, standalone transferable allocation, one-pass orbit copy, cooperative browser-task cancellation, exact slot detachment, ABI refusal, page-flag lowering, and shutdown reconciliation are implemented; browser detachment and timing claims remain visible-replay evidence.
+Implementation progress through Phase 4: the Phase 2 core, transferable `worker_main`, field-paid heap panic-hook installation, standalone buffer pool, one-pass orbit copy, cooperative cancellation, ABI refusal, page-flag lowering, shutdown reconciliation, exact owner token bucket, producer shaper, cancelled-work accounting, and pinned facts snapshot are implemented; browser detachment, engine allocation, and timing claims remain visible-replay evidence.
 
 ## 8. Unresolved joint-review findings
 
@@ -430,4 +436,4 @@ Implementation progress through Phase 3: the Phase 2 core plus `worker_main`, fi
 - A single Astro-float iteration cannot be pre-empted by the 64-iteration or 2,000-microsecond cooperative check; visible replay must decide whether math needs finer internal cancellation points.
 - Successive accepted references may arrive before present promotes a retained scene; app and present must prove that composing queued `reference_shift_px` values re-bases that scene exactly once.
 - Browser transfer proves detachment and trailer continuity but cannot reveal an engine-internal physical copy; evidence must keep the claim at ownership transfer plus one explicit wasm memcpy.
-- Coarse `performance.now` resolution can yield a measured zero for short shallow references; implementation must choose and label a timer-unavailable shaping state without inventing elapsed time.
+- Coarse `performance.now` resolution can yield a measured zero for short shallow references; the implemented `TimingUnavailable` admission and typed `TimingOverflow` event are honest, but visible replay must determine whether common browsers hit that state often enough to require a coarser clock accumulation policy in joint review.

@@ -7,6 +7,7 @@ mod browser;
 mod channel;
 pub(crate) mod codec;
 mod compute;
+mod credit;
 mod error;
 mod owner;
 mod registry;
@@ -25,6 +26,7 @@ pub use compute::{
     MathFailureCode, MonotonicClock, ORBIT_CHUNK_MAX_ITERATIONS, ORBIT_CHUNK_MAX_US, OrbitTaskPoll,
     ReferenceOrbitTask,
 };
+pub use credit::{Admission, CreditAccount, CreditCharge, ProducerShaper, WorkerFacts};
 pub use ember_julibrot_math::{ComputedOrbit, ReferenceOrbitRecord};
 pub use error::{ChannelError, ErrorCode};
 pub use owner::{
