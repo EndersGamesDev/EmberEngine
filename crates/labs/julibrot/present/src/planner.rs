@@ -309,6 +309,43 @@ mod tests {
     }
 
     #[test]
+    fn uploaded_flat_rows_stay_within_quarter_pixel_at_all_required_depths() {
+        for zoom_log2 in [0.0, 10.0, 20.0, 40.0, 80.0, 100.0] {
+            let mut from = pose(ViewMode::Flat, 0.0, [1_003.25, -507.5]);
+            from.zoom_log2 = zoom_log2;
+            let mut to = pose(ViewMode::Flat, 0.0, [-811.125, 401.75]);
+            to.zoom_log2 = zoom_log2 + 0.2;
+            let exact = warp_matrix(&from, &to).expect("required warp fixture is finite");
+            let plan = Warp::reproject(&frame(from), &from, &to);
+            let rounded = [
+                f64::from(plan.rows[0][0]),
+                f64::from(plan.rows[0][1]),
+                f64::from(plan.rows[0][2]),
+                f64::from(plan.rows[1][0]),
+                f64::from(plan.rows[1][1]),
+                f64::from(plan.rows[1][2]),
+                f64::from(plan.rows[2][0]),
+                f64::from(plan.rows[2][1]),
+                f64::from(plan.rows[2][2]),
+            ];
+            for chart in CHART_CORNERS.into_iter().chain([[0.0, 0.0]]) {
+                let expected = apply_homography(exact.forward, chart)
+                    .expect("exact fixture has no projective pole");
+                let actual = apply_homography(rounded, chart)
+                    .expect("rounded fixture has no projective pole");
+                let error_px = ((actual[0] - expected[0])
+                    * 0.5
+                    * f64::from(from.grid_width))
+                .hypot((actual[1] - expected[1]) * 0.5 * f64::from(from.grid_height));
+                assert!(
+                    error_px <= 0.25,
+                    "zoom {zoom_log2} rounded warp error was {error_px} px"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn pose_mismatch_or_invalid_extent_is_clear_only() {
         let from = pose(ViewMode::Flat, 0.0, [0.0; 2]);
         let mut mismatched = from;
@@ -342,7 +379,7 @@ mod tests {
         to.zoom_log2 += 0.1;
         let plan = Warp::reproject(&frame(from), &from, &to);
         assert_eq!(plan.kind, WarpKind::TumbledHomography);
-        assert!(plan.approx_max_error_px.is_some_and(f64::is_finite));
+        assert!(plan.approx_max_error_px.is_some_and(|error| error <= 2.0));
         assert!(plan.approx_p95_error_px.is_some_and(f64::is_finite));
     }
 }

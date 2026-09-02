@@ -1,6 +1,6 @@
 # Julibrot presentation slice
 
-Status: implementation in progress for `crates/labs/julibrot/present`; the merged math and heap seams now drive the f64 flat/tumbled planner, exact app records, two-texture runtime, HOT ring, selected scene pass, sole warp pass, and bounded four-byte fences, while server gates and final implementation evidence remain pending.
+Status: implementation complete for `crates/labs/julibrot/present`; the merged math and heap seams drive the f64 flat/tumbled planner, exact app records, two-texture runtime, HOT ring, selected scene pass, sole warp pass, bounded four-byte fences, and app-facing facts, while target-browser facts remain labelled `requires visible replay`.
 
 ## 1. Ownership and boundary
 
@@ -405,7 +405,7 @@ Phase 3 is implemented by tumbled grid/index generation, five-dimensional vertex
 
 Phase 4 is implemented by math's flat matrix, the f64 four-anchor tumbled planner and 9-by-9-by-5 error corpus, the one fullscreen warp pipeline, clear disocclusions, and the no-frame path, estimated at 440 lines.
 
-Phase 5 adds the exact app-facing API, facts snapshots, warm-up and reproject counting, page-contract tests, visible-replay hooks, release reconciliation, and documentation updates, estimated at 360 lines.
+Phase 5 is implemented by the exact app-facing API, facts snapshots, warm-up and reproject counting, callable-surface tests, visible-replay labels, release reconciliation, and documentation updates, estimated at 360 lines.
 
 The implementation estimate is 2,500 net new lines across Rust, WGSL, tests, manifests, and present-owned documentation; only the app lane may make the J16 heap seam edits, so no heap edit is hidden inside this present estimate.
 
@@ -434,6 +434,8 @@ The implementation estimate is 2,500 net new lines across Rust, WGSL, tests, man
 - The page overlay must remain outside the measured render regions and cannot consume another pass; this document assumes DOM text, while the integration implementation still has to confirm that the app's chosen page mechanism preserves that ordering.
 
 - A reference shift is expressed in the newly accepted current basis; when the retained basis differs, projection into the retained basis has the same chart residual already reported for PLANE motion, and visible replay must establish whether that warning remains usable during simultaneous deep pan and rotation.
+
+- App §3.6 still restates an older flattened `PresentHot`/`PresentMain`, `warm_up:bool`, and generation-named clear status, while J14 assigns this API to present and present §3.4/§3.6 pins worker-owned state wrappers, `SampleClass`, and `ClearForIncompatibleMain`; implementation follows the owning present contract and app must reconcile its duplicate before consuming the package.
 
 ## 9. Refinement evidence
 
