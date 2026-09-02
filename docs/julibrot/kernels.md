@@ -72,9 +72,13 @@ For each outer iteration `n < max_iter`, the kernel first refuses an unavailable
 
 The corrected rebasing rule is repeatable: when `|zₙ| < |ldexp(δ′ₙ,e)|`, set represented `δ ← zₙ−Z₀`, reset reference index `r ← 0`, increment `rebase_count`, normalize that delta as `(δ′,e)`, then perform exactly one ordinary scaled advance against `Z₀` and advance `r` to one; the invariant `zₙ = Zᵣ+δₙ` holds by construction.
 
-Before the first state is tested and after each ordinary advance, a nonzero `|δ′|` outside `[2⁻⁶⁴,2⁶⁴]` is renormalized in 64-bit exponent steps until it is inside: `δ′ ← δ′·2⁻⁶⁴, e ← e+64` above the range or `δ′ ← δ′·2⁶⁴, e ← e−64` below it; `δc′` is rescaled by the same factor on every step so `δc = 2^e·δc′` remains invariant, and checked `i32` exponent overflow is a typed pixel glitch rather than wraparound.
+A rebase attempt when the current `rebase_count = 2²⁴` glitches before incrementing because the next count is not exactly representable in `f32`; the prior accepted increment may produce the exactly representable value `2²⁴`, so the CPU mirror, WGSL, and record validator share the same boundary.
 
-The rebase comparison forms the represented delta with `ldexp`; when it underflows the comparison is false, which is correct because a negligible delta must not trigger rebasing, while the scaled recurrence continues through the normalized values.
+Before the first state is tested and after each ordinary advance, a nonzero `|δ′|` outside `[2⁻⁶⁴,2⁶⁴]` is renormalized in 64-bit exponent steps repeatedly until it is inside: `δ′ ← δ′·2⁻⁶⁴, e ← e+64` above the range or `δ′ ← δ′·2⁶⁴, e ← e−64` below it; `δc′` is rescaled by the same factor on every step so `δc = 2^e·δc′` remains invariant, and checked `i32` exponent overflow is a typed pixel glitch rather than wraparound.
+
+The mirrors retain a defensive limit of `floor((i32::MAX−i32::MIN)/64) = 67,108,863` successful renormalization steps; every step moves the exponent monotonically by 64 toward one `i32` bound and checked arithmetic refuses the next step, so exceeding that limit is provably unreachable and never replaces repeat-until-restored behavior.
+
+Every represented-value operation uses the shared clamped `ldexp` policy: finite nonzero inputs with exponent above `512` produce signed infinity, those below `−512` produce signed zero, and only exponents in the closed interval `[-512,512]` reach WGSL `ldexp`; infinity is caught by the following finite check as a glitch, while an underflowed rebase comparison is false because a negligible delta must not trigger rebasing.
 
 When `r` reaches reference `length` before escape or the outer iteration cap, iteration stops with `smooth_iter = −1.0`, `escaped = 0`, the accumulated integer-valued `rebase_count`, and `glitch = 1`; re-rendering those pixels with a second reference is explicitly out of scope and present uses the honest debug tint.
 
@@ -206,7 +210,7 @@ The perturbation block is exactly 64 bytes and is the only CPU-to-GPU payload of
 |40–43|`height`|`u32`|Active grid height in pixels|
 |44–47|`max_iter`|`u32`|Delivered level iteration cap|
 |48–51|`bailout`|`f32`|Squared escape radius, exactly 256.0|
-|52–55|`orbit_length`|`u32`|Number of valid reference records|
+|52–55|`orbit_length`|`u32`|Valid reference records usable at this level, `min(reference.length,iteration_cap)`|
 |56–59|`level`|`u32`|`RefinementLevel` discriminant|
 |60–63|`scale_exponent`|`i32`|Initial per-pixel exponent `s` in `pixel_scale = m·2^s`|
 
@@ -308,7 +312,7 @@ Native heap-path tests register both bodies through dialect v2, prove shallow ha
 
 The shallow CPU conformance fixture uses deterministic pixels in both presets and one rotated hybrid plane; pass requires GPU and CPU escape classification and integer escape index to match exactly and `|smooth_gpu−smooth_cpu| ≤ 10⁻⁴`, with a conformance-only auxiliary target carrying the integer index because the production grid does not.
 
-The perturbation CPU fixture uses math's scaled `f64` mirror and deterministic pixels that include normalized `δz₀′ = 0`, `δc′ = 0`, both nonzero, exponents on both sides of the normal f32 range, upward and downward 64-bit renormalization, zero and repeated rebases, reference exhaustion, and nonzero `Z₀`; the corrected nonzero-`Z₀` rebase is a PASS criterion.
+The perturbation CPU fixture uses math's scaled `f64` mirror and deterministic pixels that include normalized `δz₀′ = 0`, `δc′ = 0`, both nonzero, exponents on both sides of the normal f32 range, exact `ldexp` clamp boundaries and signed saturation, upward and downward repeat-until-restored renormalization from the smallest subnormal, zero and repeated rebases, reference exhaustion, and nonzero `Z₀`; the corrected nonzero-`Z₀` rebase is a PASS criterion.
 
 Math's merged `escape_f32`, `perturb_scaled_f64`, and propagated-envelope functions are unconditional test dependencies with no placeholder feature; every ordinary package and workspace test run executes their cross-package comparisons.
 

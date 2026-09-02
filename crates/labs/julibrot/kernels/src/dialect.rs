@@ -77,4 +77,14 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn perturb_source_pins_the_clamp_boundary_and_repeats_normalization() {
+        assert!(PERTURB_BODY.contains("if (exponent > 512i)"));
+        assert!(PERTURB_BODY.contains("if (exponent < -512i)"));
+        assert!(PERTURB_BODY.contains("0x7f800000u"));
+        assert!(PERTURB_BODY.contains("if (steps > 67108863u)"));
+        assert!(!PERTURB_BODY.contains("step < 4u"));
+        assert_eq!(PERTURB_BODY.matches("return ldexp(value, exponent);").count(), 1);
+    }
 }

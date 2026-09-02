@@ -17,7 +17,8 @@ use crate::{
 };
 
 const REBASE_EXACT_LIMIT: u32 = 1 << 24;
-const RESCALE_STEPS: usize = 4;
+const LDEXP_EXPONENT_LIMIT: i32 = 512;
+const MAX_RESCALE_STEPS: u32 = u32::MAX / 64;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ScaledState {
@@ -87,10 +88,10 @@ fn ldexp(value: f32, exponent: i32) -> f32 {
     if value == 0.0 || !value.is_finite() {
         return value;
     }
-    if exponent > 512 {
+    if exponent > LDEXP_EXPONENT_LIMIT {
         return f32::INFINITY.copysign(value);
     }
-    if exponent < -512 {
+    if exponent < -LDEXP_EXPONENT_LIMIT {
         return 0.0_f32.copysign(value);
     }
     (f64::from(value) * 2.0_f64.powi(exponent)) as f32
@@ -122,7 +123,8 @@ fn normalize_scaled(mut state: ScaledState) -> ScaledState {
     }
     let low = ldexp(1.0, -64);
     let high = ldexp(1.0, 64);
-    for _ in 0..RESCALE_STEPS {
+    let mut steps = 0_u32;
+    loop {
         let magnitude = robust_norm(state.delta);
         if magnitude == 0.0 || (magnitude >= low && magnitude <= high) {
             return state;
@@ -143,13 +145,19 @@ fn normalize_scaled(mut state: ScaledState) -> ScaledState {
         state.delta = multiply(state.delta, factor);
         state.delta_c = multiply(state.delta_c, factor);
         state.exponent = exponent;
+        steps += 1;
+        // Each successful step moves an i32 exponent 64 toward one bound.  At most
+        // floor((i32::MAX - i32::MIN) / 64) steps fit; checked arithmetic refuses the next
+        // step, so this defensive branch is unreachable.
+        if steps > MAX_RESCALE_STEPS {
+            state.glitch = true;
+            return state;
+        }
         if !finite(state.delta) || !finite(state.delta_c) {
             state.glitch = true;
             return state;
         }
     }
-    state.glitch = true;
-    state
 }
 
 fn reconstruct(record: ReferenceOrbitRecord) -> [f32; 2] {
@@ -308,7 +316,8 @@ pub fn perturb_scaled_pixel(
 #[cfg(test)]
 mod tests {
     use super::{
-        ScaledState, ldexp, normalize_scaled, perturb_scaled_offset, perturb_scaled_pixel, scale,
+        MAX_RESCALE_STEPS, ScaledState, ldexp, normalize_scaled, perturb_scaled_offset,
+        perturb_scaled_pixel, scale,
     };
     use crate::{GridExtent, KernelError, PerturbUniform, RefinementLevel};
     use ember_julibrot_math::{EscapeParams, Plane, ReferenceOrbitRecord, ScaleSplit};
@@ -388,6 +397,32 @@ mod tests {
                 scale(normalized.delta_c, normalized.exponent),
                 delta_c_before
             );
+        }
+    }
+
+    #[test]
+    fn renormalization_repeats_until_the_smallest_subnormal_is_restored() {
+        let normalized = normalize_scaled(ScaledState {
+            delta: [f32::from_bits(1), 0.0],
+            delta_c: [0.0; 2],
+            exponent: 128,
+            glitch: false,
+        });
+        assert!(!normalized.glitch);
+        assert_eq!(normalized.exponent, 0);
+        assert_eq!(normalized.delta, [2.0_f32.powi(-21), 0.0]);
+        assert_eq!(MAX_RESCALE_STEPS, 67_108_863);
+    }
+
+    #[test]
+    fn ldexp_clamp_boundary_preserves_signed_saturation() {
+        for exponent in [512, 513] {
+            assert_eq!(ldexp(1.0, exponent), f32::INFINITY);
+            assert_eq!(ldexp(-1.0, exponent), f32::NEG_INFINITY);
+        }
+        for exponent in [-512, -513] {
+            assert_eq!(ldexp(1.0, exponent).to_bits(), 0.0_f32.to_bits());
+            assert_eq!(ldexp(-1.0, exponent).to_bits(), (-0.0_f32).to_bits());
         }
     }
 

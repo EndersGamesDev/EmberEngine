@@ -28,8 +28,22 @@ fn perturb_mul(left: vec2<f32>, right: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(real, imaginary);
 }
 
+fn perturb_ldexp(value: f32, exponent: i32) -> f32 {
+    if (value == 0.0 || value != value || abs(value) > 3.402823466e38) {
+        return value;
+    }
+    let sign_bit = bitcast<u32>(value) & 0x80000000u;
+    if (exponent > 512i) {
+        return bitcast<f32>(sign_bit | 0x7f800000u);
+    }
+    if (exponent < -512i) {
+        return bitcast<f32>(sign_bit);
+    }
+    return ldexp(value, exponent);
+}
+
 fn perturb_scale(value: vec2<f32>, exponent: i32) -> vec2<f32> {
-    return ldexp(value, vec2<i32>(exponent));
+    return vec2<f32>(perturb_ldexp(value.x, exponent), perturb_ldexp(value.y, exponent));
 }
 
 fn perturb_norm(value: vec2<f32>) -> f32 {
@@ -64,9 +78,10 @@ fn perturb_normalize(
     state.delta_c = delta_c;
     state.exponent = exponent;
     state.glitch = false;
-    let low = ldexp(1.0, -64i);
-    let high = ldexp(1.0, 64i);
-    for (var step = 0u; step < 4u; step += 1u) {
+    let low = perturb_ldexp(1.0, -64i);
+    let high = perturb_ldexp(1.0, 64i);
+    var steps = 0u;
+    loop {
         let magnitude = perturb_norm(state.delta);
         if (magnitude == 0.0 || (magnitude >= low && magnitude <= high)) {
             return state;
@@ -88,13 +103,17 @@ fn perturb_normalize(
             state.delta_c *= high;
             state.exponent -= 64i;
         }
+        steps += 1u;
+        // Checked exponent arithmetic refuses a further step before this finite-range bound.
+        if (steps > 67108863u) {
+            state.glitch = true;
+            return state;
+        }
         if (!perturb_finite(state.delta) || !perturb_finite(state.delta_c)) {
             state.glitch = true;
             return state;
         }
     }
-    state.glitch = true;
-    return state;
 }
 
 fn perturb_glitch(rebases: u32) -> PerturbResult {
