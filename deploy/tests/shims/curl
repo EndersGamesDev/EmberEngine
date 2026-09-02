@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# A fake `curl` for deploy/tests/test-watchdog.sh.
+#
+# It answers the two requests the watchdog makes — the address book, and the
+# WebSocket-handshake probe of a published address — and it models the FAILURE
+# modes rather than only the happy path, because the finding this suite exists
+# for is entirely about what happens when the book cannot be read:
+#
+#   SHIM_BOOK=ok       serve $SHIM_BOOK_FILE
+#   SHIM_BOOK=missing  a GitHub Pages 404: `curl -f` fails with 22, while a
+#                      plain `curl -s` exits 0 and hands back the HTML error
+#                      page — which is exactly why the caller must pass -f,
+#                      and why a shim that always failed would let a caller
+#                      without -f pass this suite
+#   SHIM_BOOK=timeout  no answer at all, exit 28, like --max-time expiring
+#
+#   SHIM_PROBE_CODE    the http_code the probe reports (default 101)
+set -uo pipefail
+
+LOG="${SHIM_LOG:-/dev/null}"
+{ printf 'curl'; for a in "$@"; do printf ' [%s]' "$a"; done; printf '\n'; } >> "$LOG"
+
+fails_hard=""
+for a in "$@"; do
+    case "$a" in -f|-fs|-sf|-fsS|--fail) fails_hard=1 ;; esac
+done
+
+case "$*" in
+    *server.json*)
+        case "${SHIM_BOOK:-ok}" in
+            ok)
+                cat "${SHIM_BOOK_FILE:-/dev/null}"
+                ;;
+            missing)
+                if [ -n "$fails_hard" ]; then
+                    exit 22
+                fi
+                echo '<!DOCTYPE html><html><title>Site not found</title></html>'
+                ;;
+            timeout)
+                exit 28
+                ;;
+        esac
+        ;;
+    *Sec-WebSocket-Key*)
+        printf '%s' "${SHIM_PROBE_CODE:-101}"
+        ;;
+esac
+exit 0

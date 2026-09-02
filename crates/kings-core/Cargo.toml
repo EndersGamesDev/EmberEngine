@@ -1,0 +1,14 @@
+[package]
+name = "kings-core"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+# Only the tests encode JSON here; the server and the client do their own.
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -10,12 +10,15 @@
           "v": "v12",
           "path": "games/arena/v12/",
           "live": true,
+          "proto": 12,
+          "handover": true,
           "note": "E melee through shields + headshots"
         },
         {
           "v": "v11",
           "path": "games/arena/v11/",
           "live": false,
+          "proto": 11,
           "note": "Q shield — blocks and reflects"
         },
         {
@@ -75,7 +78,7 @@
         {
           "v": "v0",
           "path": "games/arena/v0/",
-          "live": true,
+          "live": false,
           "note": "the original local game — the pong classic"
         }
       ]
@@ -90,6 +93,8 @@
           "v": "v2",
           "path": "games/fire/v2/",
           "live": true,
+          "proto": 1,
+          "handover": true,
           "note": "castle circuit, drift + boost, online lobbies"
         },
         {
@@ -97,6 +102,21 @@
           "path": "games/fire/v1/",
           "live": false,
           "note": "archived — the first build, before the castle circuit"
+        }
+      ]
+    },
+    {
+      "id": "kings",
+      "title": "Four Kings",
+      "tag": "online, turn based, 2-4 players, 15 s turns",
+      "desc": "Four-corner chess on a 10x10 board: king, queen, two rooks, two bishops, a knight and seven pawns per corner, plus two new legends. The Joker teleports between mirror tiles, is placed anywhere every fifth turn, and captures on exactly one tile, its front-left. The Hero sleeps in the corner until it trades places with one of your pawns and wakes as a rook-plus-knight. Pawns march forward or left and capture on three diagonals, so a corner formation is never a wall. One action per 15-second turn, three timeouts and you are out, last king standing wins. Click a piece, click a highlighted target; Esc clears. Swap your legend and epic cards within their class before the game starts.",
+      "versions": [
+        {
+          "v": "v1",
+          "path": "games/kings/v1/",
+          "live": true,
+          "proto": 1,
+          "note": "first build: within-class card swap, 15 s turns"
         }
       ]
     },

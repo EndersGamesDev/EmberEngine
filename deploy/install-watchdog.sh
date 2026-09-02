@@ -19,9 +19,26 @@ set -euo pipefail
 
 REMOTE="${EMBER_HOST:-specht}"
 SSH=(ssh -o BatchMode=yes "$REMOTE")
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+echo "== resolving this host's name =="
+# The units must start the servers with the SAME name the deploys publish
+# under, or a reboot would bring the games back under a second entry and the
+# book would carry a host that no longer exists. Resolved on the machine
+# itself (docs/hosts.md §6), which is where the name is kept.
+HOST_NAME="$("${SSH[@]}" "EMBER_HOST_NAME='${EMBER_HOST_NAME:-}' bash -s" \
+    < "$REPO_DIR/deploy/host-name.sh" | tr -d '[:space:]')"
+if ! printf '%s' "$HOST_NAME" | grep -qE '^[a-z0-9-]{3,32}$'; then
+    echo "FAILED: '$REMOTE' produced no usable host name ('$HOST_NAME')." >&2
+    exit 1
+fi
+echo "   $REMOTE runs as '$HOST_NAME'"
 
 echo "== installing user units on $REMOTE =="
-"${SSH[@]}" 'bash -s' <<'REMOTE_SCRIPT'
+# The name is passed in rather than resolved on the far side, so the units and
+# the deploys cannot disagree about it even if ~/.ember/host-name is lost
+# later. Everything else in the heredoc is quoted and expands on the host.
+"${SSH[@]}" "EMBER_HOST_NAME='$HOST_NAME' bash -s" <<'REMOTE_SCRIPT'
 set -euo pipefail
 mkdir -p ~/.config/systemd/user
 
@@ -36,6 +53,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 Environment=RUST_LOG=info
+Environment=EMBER_HOST_NAME=$EMBER_HOST_NAME
 ExecStart=%h/$2/target/release/$3 $4
 Restart=always
 RestartSec=3

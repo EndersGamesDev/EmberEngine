@@ -149,9 +149,36 @@ pub enum C2S {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum S2C {
-    /// Reply to a valid Hello.
+    /// Reply to a valid Hello, and the one round trip a page uses to rank
+    /// the hosts in the address book (`docs/hosts.md`): who this server is,
+    /// what it was built from, and how busy it is right now.
+    ///
+    /// The five identity fields are additive and do NOT bump
+    /// `PROTO_VERSION`. Per the rule at the top of this file, the question
+    /// is what an old peer DOES when they are absent, and the answer is
+    /// nothing: an old client never reads them and races exactly as before,
+    /// a new client against an old server reads `""` and `0` and shows an
+    /// unnamed host. No join, lap or result resolves differently either
+    /// way, so the gate stays where it is.
     Welcome {
         proto: u16,
+        /// Host name this server was started with (`--name`, else
+        /// `EMBER_HOST_NAME`), `""` when it was started without one.
+        #[serde(default)]
+        host: String,
+        /// `r<N>` of the build, `""` for an unstamped dev build.
+        #[serde(default)]
+        version: String,
+        /// Short sha of the build, `""` when unstamped.
+        #[serde(default)]
+        commit: String,
+        /// Humans currently in races on this server, counted when the
+        /// `Welcome` is written — the load figure the host ranking uses.
+        #[serde(default)]
+        players: u32,
+        /// Open lobbies on this server.
+        #[serde(default)]
+        lobbies: u32,
     },
     /// A refused Hello, join or create. The connection stays open so the
     /// client can show the reason and try something else.
@@ -340,6 +367,48 @@ mod tests {
                 assert_eq!(cars[0].ack, 0);
                 assert_eq!(cars[0].drift, 0.0);
                 assert!(!cars[0].boosting);
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    /// The host identity rides on `Welcome` and must survive a peer that
+    /// predates it in BOTH directions — that is the whole claim behind not
+    /// bumping `PROTO_VERSION` for it.
+    #[test]
+    fn the_host_identity_survives_a_peer_that_predates_it() {
+        let w = S2C::Welcome {
+            proto: PROTO_VERSION,
+            host: "amber-otter".into(),
+            version: "r211".into(),
+            commit: "502414c".into(),
+            players: 3,
+            lobbies: 2,
+        };
+        let s = serde_json::to_string(&w).unwrap();
+        // The book and `hosts.js` read these key names; renaming one is a
+        // wire break that no type checks.
+        for key in ["host", "version", "commit", "players", "lobbies"] {
+            assert!(s.contains(&format!("\"{key}\"")), "{key} missing from {s}");
+        }
+
+        // An old server: the protocol version and nothing else. A new client
+        // must read an unnamed host with no load rather than fail to decode.
+        let old = r#"{"t":"welcome","proto":1}"#;
+        match serde_json::from_str::<S2C>(old).expect("an old Welcome must decode") {
+            S2C::Welcome {
+                host,
+                version,
+                commit,
+                players,
+                lobbies,
+                ..
+            } => {
+                assert_eq!(host, "");
+                assert_eq!(version, "");
+                assert_eq!(commit, "");
+                assert_eq!(players, 0);
+                assert_eq!(lobbies, 0);
             }
             other => panic!("wrong variant: {other:?}"),
         }

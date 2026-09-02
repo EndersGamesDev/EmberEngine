@@ -9,6 +9,7 @@
 #   games/arena/v12/      live arena build (page + its own frozen pkg)
 #   games/arena/v0/       live arena v0 pong classic (page + frozen pkg)
 #   games/fire/v2/        live fire racer build (castle circuit, online)
+#   games/kings/v1/       live four kings build (2D page board + 3D wasm view, online)
 #   games/pong/v1/        archived first web build (materialized from history)
 #   games/fire/v1/        archived first fire build; already on the branch and
 #                         deliberately never touched again — only $FIRE_LIVE is
@@ -27,27 +28,60 @@ bash deploy/stamp-version.sh
 echo "== building wasm =="
 cargo build --target wasm32-unknown-unknown --release -p fire --lib
 cargo build --target wasm32-unknown-unknown --release -p arena --lib
+cargo build --target wasm32-unknown-unknown --release -p kings --lib
 wasm-bindgen --target web --no-typescript --out-dir web/pkg \
     target/wasm32-unknown-unknown/release/fire.wasm
 wasm-bindgen --target web --no-typescript --out-dir web/pkg \
     target/wasm32-unknown-unknown/release/arena.wasm
+wasm-bindgen --target web --no-typescript --out-dir web/pkg \
+    target/wasm32-unknown-unknown/release/kings.wasm
 
 echo "== publishing gh-pages =="
+# Detached at what ORIGIN has, never at the local branch. `git worktree add
+# <dir> gh-pages` checked out this checkout's own gh-pages, which nothing here
+# fetches — `git fetch` moves origin/gh-pages and not the branch — so once a
+# second writer published (another workstation, a host running host.sh with
+# EMBER_PUBLISH=upstream) the push below was rejected as a non-fast-forward.
+# `--detach` also means a leftover worktree still holding the local branch
+# cannot block this one, which `-B gh-pages origin/gh-pages` would not survive.
+git fetch -q origin gh-pages \
+    || { echo "FAILED: cannot fetch origin gh-pages; is the branch there?" >&2; exit 1; }
 PAGES_DIR="$(mktemp -d -t ember-pages-XXXX)"
-git worktree add "$PAGES_DIR" gh-pages
+# Armed BEFORE the add, so neither a failing add nor anything after it can
+# leave the directory registered as a worktree. Without this, one failed push
+# left gh-pages checked out under /tmp and every later deploy — of the pages
+# and of either game — died at its own `worktree add` until a human ran
+# `git worktree remove`. The status is preserved: the trap reports the failure
+# that caused it, not the cleanup's own.
+trap 'st=$?; git worktree remove --force "$PAGES_DIR" >/dev/null 2>&1 || true; rm -rf "$PAGES_DIR"; exit $st' EXIT
+git worktree add -q --detach "$PAGES_DIR" FETCH_HEAD
 
 # Live version dirs (older versions stay frozen on the branch untouched).
 ARENA_LIVE="games/arena/v12"
 ARENA_V0_LIVE="games/arena/v0"
 FIRE_LIVE="games/fire/v2"
+KINGS_LIVE="games/kings/v1"
 
 rm -rf "$PAGES_DIR"/index.html "$PAGES_DIR"/pkg \
-    "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$ARENA_V0_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR"/games.json
-mkdir -p "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$ARENA_V0_LIVE" "$PAGES_DIR/$FIRE_LIVE"
+    "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$ARENA_V0_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR/$KINGS_LIVE" \
+    "$PAGES_DIR"/games.json
+mkdir -p "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$ARENA_V0_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR/$KINGS_LIVE"
 cp web/index.html web/games.json web/version.json "$PAGES_DIR"/
+# The shared host-picking logic (docs/hosts.md §5). It lives at the pages root
+# and every live page imports it from there, so there is one copy of the rule
+# rather than one per game. Guarded because a checkout that predates it still
+# has to be deployable: the frozen pages carry their own inline discovery and
+# read the legacy keys, so a hub without hosts.js degrades to what it did
+# before rather than breaking.
+if [ -f web/hosts.js ]; then
+    cp web/hosts.js "$PAGES_DIR"/
+else
+    echo "   note: web/hosts.js does not exist in this checkout; not copying it"
+fi
 cp "web/$ARENA_LIVE/index.html" "$PAGES_DIR/$ARENA_LIVE/"
 cp "web/$ARENA_V0_LIVE/index.html" "$PAGES_DIR/$ARENA_V0_LIVE/"
 cp "web/$FIRE_LIVE/index.html" "$PAGES_DIR/$FIRE_LIVE/"
+cp "web/$KINGS_LIVE/index.html" "$PAGES_DIR/$KINGS_LIVE/"
 # Each game gets ONLY its own bundle. Copying the whole of web/pkg into every
 # game directory shipped arena's 18 MB wasm to fire players and fire's to arena
 # players — a fire player was downloading ~23 MB to run a ~6 MB game. The
@@ -64,6 +98,7 @@ copy_pkg() {
 copy_pkg "$PAGES_DIR/$ARENA_LIVE/pkg" arena
 copy_pkg "$PAGES_DIR/$ARENA_V0_LIVE/pkg" arena
 copy_pkg "$PAGES_DIR/$FIRE_LIVE/pkg" fire
+copy_pkg "$PAGES_DIR/$KINGS_LIVE/pkg" kings
 cp -r web/pkg "$PAGES_DIR"/pkg
 # Compatibility shim for cached pre-rename pages that import from root pkg/.
 cp "$PAGES_DIR/pkg/arena.js" "$PAGES_DIR/pkg/pong.js"
@@ -87,22 +122,59 @@ PROTO="$(grep -oE 'PROTO_VERSION: u16 = [0-9]+' crates/arena-core/src/proto.rs |
 # Fire carries its own version in its own crate, on purpose: bumping one game's
 # protocol must never gate the other's join.
 FIRE_PROTO="$(grep -oE 'PROTO_VERSION: u16 = [0-9]+' crates/fire-core/src/proto.rs | grep -oE '[0-9]+$')"
-echo "== shipping arena protocol v$PROTO, fire protocol v$FIRE_PROTO =="
-python - "$PAGES_DIR/server.json" "$PROTO" "$FIRE_PROTO" <<'EOF'
+# Four Kings likewise: its own crate, its own number, its own server.json key.
+KINGS_PROTO="$(grep -oE 'PROTO_VERSION: u16 = [0-9]+' crates/kings-core/src/proto.rs | grep -oE '[0-9]+$')"
+echo "== shipping arena protocol v$PROTO, fire protocol v$FIRE_PROTO, kings protocol v$KINGS_PROTO =="
+python - "$PAGES_DIR/server.json" "$PROTO" "$FIRE_PROTO" "$KINGS_PROTO" <<'EOF'
 import json, os, sys, time
-p, proto, fire_proto = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+p, proto, fire_proto, kings_proto = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+
+
+def die(msg):
+    sys.stderr.write("deploy-pages: %s\n" % msg)
+    raise SystemExit(1)
+
+
+# FAIL CLOSED, the same rule publish-host.sh states: a book that will not parse
+# is never overwritten. This used to start from `{}` on a parse error and push
+# the result, which turns one bad byte on gh-pages — a hand edit, a badly
+# resolved conflict now that several machines write the branch — into the
+# silent loss of every host entry and every mirror. An empty file is the one
+# legitimate `{}` start.
 d = {}
 if os.path.exists(p):
-    try:
-        d = json.load(open(p))
-    except Exception:
-        d = {}
+    with open(p, encoding="utf-8") as fh:
+        text = fh.read().strip()
+    if text:
+        try:
+            d = json.loads(text)
+        except ValueError as e:
+            die("%s exists but is not JSON (%s); refusing to overwrite it" % (p, e))
+        if not isinstance(d, dict):
+            die("%s is not a JSON object; refusing to overwrite it" % p)
 was = d.get("proto")
 was_fire = d.get("fire_proto")
+was_kings = d.get("kings_proto")
 d["v"] = str(int(time.time()))
 d["proto"] = proto
 d["fire_proto"] = fire_proto
-json.dump(d, open(p, "w"))
+d["kings_proto"] = kings_proto
+# Temp file plus rename, so an interrupted write cannot leave a truncated book
+# behind — which is one of the ways the unparseable book above gets made.
+tmp = p + ".tmp"
+with open(tmp, "w", encoding="utf-8") as fh:
+    json.dump(d, fh)
+os.replace(tmp, p)
+if was_kings is not None and was_kings != kings_proto:
+    print(f"""
+!! KINGS PROTOCOL BUMP: v{was_kings} -> v{kings_proto}
+!! kings-server speaks the OLD version until it is redeployed, and the join
+!! gate is exact equality, so from now until `bash deploy/deploy-kings-online.sh`
+!! runs (on the developer's PC, inside the claude-sdk WSL distro), players get:
+!!     "this build speaks kings protocol v{kings_proto}, the live game is v{was_kings}"
+!! The lobby LISTING keeps working at any version by design, so the browser
+!! will show lobbies nobody can enter until the server catches up.
+""")
 if was_fire is not None and was_fire != fire_proto:
     print(f"""
 !! FIRE PROTOCOL BUMP: v{was_fire} -> v{fire_proto}
@@ -137,6 +209,14 @@ elif was != proto:
 """)
 EOF
 
+# The top-level protocol keys just moved, and the legacy top-level ADDRESS
+# keys are defined against them: `ws` must name a host that speaks the
+# protocol the pages now ship. Recompute them from the host list immediately,
+# so a bump re-points `ws` at a host that already speaks the new version
+# instead of leaving every frozen and live page on a host they can no longer
+# join until somebody redeploys a server.
+bash "$REPO_DIR/deploy/publish-host.sh" --book "$PAGES_DIR/server.json" --recompute
+
 (
     cd "$PAGES_DIR"
     git add -A
@@ -146,8 +226,10 @@ EOF
         git commit -m "Deploy games hub
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
-        git push origin gh-pages
+        # The worktree is detached, so name both ends of the refspec.
+        git push origin HEAD:refs/heads/gh-pages
     fi
 )
-git worktree remove --force "$PAGES_DIR"
+# No explicit `worktree remove` here: the EXIT trap above does it on every
+# path, and a cleanup that only runs when nothing went wrong is the bug.
 echo "== live at https://endersgamesdev.github.io/EmberEngine/ =="

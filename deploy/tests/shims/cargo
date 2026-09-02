@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# A fake `cargo` for deploy/tests/test-ssh-deploys.sh.
+#
+# The only cargo the deploy scripts run LOCALLY is the health check through
+# the public URL (wsbot / the fire probe), and there is no public URL in a
+# test. Log the argv and pass: what is under test here is that the scripts
+# reach the publish step with the right arguments, not that the probes work —
+# the probes are exercised for real by test-host-loopback.sh.
+set -uo pipefail
+LOG="${SHIM_LOG:-/dev/null}"
+{ printf 'cargo'; for a in "$@"; do printf ' [%s]' "$a"; done; printf '\n'; } >> "$LOG"
+exit 0

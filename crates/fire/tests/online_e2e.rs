@@ -44,6 +44,7 @@ fn start_server(laps: u32) -> u16 {
             fire_server::ServerConfig {
                 laps,
                 max_lobbies: 8,
+                ..Default::default()
             },
         ));
     });

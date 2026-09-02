@@ -11,12 +11,19 @@ use tungstenite::{Message, WebSocket};
 type Ws = WebSocket<MaybeTlsStream<TcpStream>>;
 
 fn start_server() -> u16 {
+    start_named_server(String::new())
+}
+
+fn start_named_server(host_name: String) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
         drop(arena_server::run(
             listener,
-            arena_server::ServerConfig::default(),
+            arena_server::ServerConfig {
+                host_name,
+                ..Default::default()
+            },
         ));
     });
     port
@@ -523,4 +530,119 @@ fn a_press_survives_a_second_input_in_the_same_tick() {
         y > 0.5,
         "the press was overwritten before the sim saw it: {y}"
     );
+}
+
+/// Hello, then the RAW `Welcome` frame. The text and not just the decoded
+/// message, because the wire key names are the contract `web/hosts.js` and
+/// the address book read, and no Rust type checks those.
+fn connect_raw_welcome(port: u16, handle: &str) -> (Ws, String) {
+    let (mut ws, _) = tungstenite::connect(format!("ws://127.0.0.1:{port}")).unwrap();
+    if let MaybeTlsStream::Plain(s) = ws.get_ref() {
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    }
+    send(
+        &mut ws,
+        &C2S::Hello {
+            proto: PROTO_VERSION,
+            handle: handle.into(),
+        },
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        match ws.read().unwrap() {
+            Message::Text(t) => return (ws, t.as_str().to_owned()),
+            Message::Ping(_) | Message::Pong(_) => {}
+            other => panic!("unexpected frame: {other:?}"),
+        }
+    }
+    panic!("no Welcome within 5s");
+}
+
+/// A host answers with its own name and its live load, in one round trip —
+/// which is the whole reason a page can rank hosts without a second request.
+#[test]
+fn welcome_names_the_host_and_reports_its_live_load() {
+    let port = start_named_server("test-otter".to_string());
+
+    // Nothing running yet: named host, no load.
+    let (mut alice, raw) = connect_raw_welcome(port, "alice");
+    match serde_json::from_str::<S2C>(&raw).unwrap() {
+        S2C::Welcome {
+            host,
+            players,
+            lobbies,
+            ..
+        } => {
+            assert_eq!(host, "test-otter");
+            assert_eq!(players, 0, "an idle server has nobody in a game: {raw}");
+            assert_eq!(lobbies, 0);
+        }
+        other => panic!("expected Welcome, got {other:?}"),
+    }
+
+    send(
+        &mut alice,
+        &C2S::CreateLobby {
+            name: "arena".into(),
+            password: None,
+        },
+    );
+    recv_until(&mut alice, 5, |m| {
+        matches!(m, S2C::GameJoined { .. }).then_some(())
+    });
+
+    // The next arrival is told what alice is doing. The counts are what
+    // "emptiest host wins" is decided on, so a Welcome that kept reporting
+    // zero would quietly send every player to the busiest machine.
+    let (_bob, raw) = connect_raw_welcome(port, "bob");
+    match serde_json::from_str::<S2C>(&raw).unwrap() {
+        S2C::Welcome {
+            host,
+            players,
+            lobbies,
+            ..
+        } => {
+            assert_eq!(host, "test-otter");
+            assert_eq!(players, 1, "alice is in a game: {raw}");
+            assert_eq!(lobbies, 1, "alice's lobby is open: {raw}");
+        }
+        other => panic!("expected Welcome, got {other:?}"),
+    }
+}
+
+/// The default configuration is a legal one: an unnamed host whose Welcome a
+/// client still decodes, carrying every key by its contract name.
+#[test]
+fn a_default_server_is_unnamed_and_its_welcome_still_decodes() {
+    let port = start_server();
+    let (_ws, raw) = connect_raw_welcome(port, "ghost");
+
+    for key in ["host", "version", "commit", "players", "lobbies"] {
+        assert!(raw.contains(&format!("\"{key}\"")), "{key} missing: {raw}");
+    }
+    match serde_json::from_str::<S2C>(&raw).expect("the client must decode this") {
+        S2C::Welcome {
+            proto,
+            host,
+            players,
+            lobbies,
+            ..
+        } => {
+            assert_eq!(proto, PROTO_VERSION);
+            assert_eq!(host, "", "a server started without a name has none");
+            assert_eq!((players, lobbies), (0, 0));
+        }
+        other => panic!("expected Welcome, got {other:?}"),
+    }
+
+    // And the other direction: a client of this build against a server that
+    // predates the identity fields. Same decode, empty identity.
+    let old = format!(r#"{{"t":"welcome","proto":{PROTO_VERSION},"motd":"ember arena"}}"#);
+    match serde_json::from_str::<S2C>(&old).expect("an old Welcome must decode") {
+        S2C::Welcome { host, players, .. } => {
+            assert_eq!(host, "");
+            assert_eq!(players, 0);
+        }
+        other => panic!("expected Welcome, got {other:?}"),
+    }
 }

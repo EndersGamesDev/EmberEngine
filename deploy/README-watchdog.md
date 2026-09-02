@@ -25,6 +25,14 @@ bash deploy/watchdog.sh            # loop, WATCHDOG_INTERVAL=300 by default
 bash deploy/watchdog.sh --once     # one pass, for Task Scheduler or cron
 ```
 
+## Watching more than one host
+
+`EMBER_HOSTS` is a space-separated list of ssh names; it defaults to `EMBER_HOST`, which defaults to `specht`, so a single-host setup needs no change. Each host is handled on its own: its name is resolved on the machine with `host-name.sh`, its entry is found by that name in `hosts[]`, and only the addresses that entry actually carries are probed — the top-level `ws` and `fire_ws` are never used here, because they name whichever host is preferred and probing them would test one machine once per host in the list.
+
+A host that needs work is redeployed with `EMBER_HOST=<its ssh name>`, and only the games whose address stopped answering. State is one file per host (`.watchdog-state-<ssh name>`), which is what stops one machine that keeps failing from holding every other machine at an old commit. The never-over-players rule is asked of the host being redeployed, so a full lobby on one box no longer defers a repair on another.
+
+The rest of the model — what an entry contains, how a page picks between hosts, and how someone runs their own — is `docs/hosts.md`.
+
 ## How the deploys and the units coexist
 
 There is no conflict to avoid: as of `c71118a` both deploy scripts **detect** which world they are in.

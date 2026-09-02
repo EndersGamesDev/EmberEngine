@@ -145,7 +145,23 @@ fn main() {
         }
         match ws.read() {
             Ok(Message::Text(t)) => match serde_json::from_str::<S2C>(t.as_str()) {
-                Ok(S2C::Welcome { .. }) => println!("wsbot {handle}: welcomed"),
+                // Naming the host and build here is what makes a bot run
+                // against a tunnel address evidence about WHICH machine
+                // answered, not just that something did.
+                Ok(S2C::Welcome {
+                    host,
+                    version,
+                    commit,
+                    ..
+                }) => println!(
+                    "wsbot {handle}: welcomed by {} ({})",
+                    if host.is_empty() { "<unnamed>" } else { &host },
+                    if version.is_empty() && commit.is_empty() {
+                        "unstamped build".to_string()
+                    } else {
+                        format!("{version} {commit}")
+                    }
+                ),
                 Ok(S2C::GameJoined {
                     id, seed, players, ..
                 }) => {

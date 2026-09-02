@@ -39,6 +39,10 @@ Hosted wire fixtures, deterministic transcripts, lobby/admission fixtures, and f
 
 Arena 12 and Fire 1 retain their established fixed-step rules inside their version boundaries. The outer protocol carries versions, timestamps, limits, and opaque payloads without imposing a global gameplay tick rate.
 
+## Hosts
+
+The game servers run on many independent machines at once. They share no state and never talk to each other; what they share is one published address book, `server.json` on the Pages site, which lists every host with its addresses, its build and the protocol each of its servers speaks. The client does the choosing — `web/hosts.js` loads the book, probes every host, and picks the newest build that speaks its own protocol. The model, the file format, the `Welcome` fields that carry a server's identity, and how to run a host are all in **`docs/hosts.md`**.
+
 ## Rendering and assets
 
 `ember-engine` renders scene geometry into offscreen color and depth targets, then presents the scene texture through the fullscreen presenter pass. This keeps surface acquisition and swapchain presentation below game code and permits presentation transforms without changing simulation.

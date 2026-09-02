@@ -264,9 +264,40 @@ pub enum C2S {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum S2C {
+    /// Reply to a valid `Hello`, and the one round trip a page uses to rank
+    /// the hosts in the address book (`docs/hosts.md`): who this server is,
+    /// what it was built from, and how busy it is right now.
+    ///
+    /// The five identity fields are additive and do NOT bump
+    /// `PROTO_VERSION`. The test this repo applies is not "does it decode"
+    /// — `serde(default)` guarantees that much for free — but "what does an
+    /// old peer DO when the field is absent". Here: nothing. An old client
+    /// never reads them and plays exactly the game it played before; a new
+    /// client against an old server reads `""` and `0` and shows an unnamed
+    /// host with no load figure. No shot, join, hit or lobby listing
+    /// resolves differently in either direction, which is precisely the
+    /// case the shield, the pitch and the melee were NOT — those changed
+    /// what a round does, so they moved the gate. This does not.
     Welcome {
         proto: u16,
         motd: String,
+        /// Host name this server was started with (`--name`, else
+        /// `EMBER_HOST_NAME`), `""` when it was started without one.
+        #[serde(default)]
+        host: String,
+        /// `r<N>` of the build, `""` for an unstamped dev build.
+        #[serde(default)]
+        version: String,
+        /// Short sha of the build, `""` when unstamped.
+        #[serde(default)]
+        commit: String,
+        /// Humans currently in games on this server, counted when the
+        /// `Welcome` is written — the load figure the host ranking uses.
+        #[serde(default)]
+        players: u32,
+        /// Open lobbies on this server.
+        #[serde(default)]
+        lobbies: u32,
     },
     /// Recoverable failures (wrong password, name taken, ...). The
     /// connection stays open.
@@ -437,6 +468,49 @@ mod tests {
         let old_input = r#"{"t":"input","mx":0.0,"my":0.0,"ax":1.0,"az":0.0,"fire":false}"#;
         let back: C2S = serde_json::from_str(old_input).unwrap();
         assert!(matches!(back, C2S::Input { shield: false, .. }));
+    }
+
+    /// The host identity rides on `Welcome` and must survive a peer that
+    /// predates it in BOTH directions — that is the whole claim behind not
+    /// bumping `PROTO_VERSION` for it.
+    #[test]
+    fn the_host_identity_survives_a_peer_that_predates_it() {
+        let w = S2C::Welcome {
+            proto: PROTO_VERSION,
+            motd: "hi".into(),
+            host: "amber-otter".into(),
+            version: "r211".into(),
+            commit: "502414c".into(),
+            players: 3,
+            lobbies: 2,
+        };
+        let s = serde_json::to_string(&w).unwrap();
+        // The book and `hosts.js` read these key names; renaming one is a
+        // wire break that no type checks.
+        for key in ["host", "version", "commit", "players", "lobbies"] {
+            assert!(s.contains(&format!("\"{key}\"")), "{key} missing from {s}");
+        }
+
+        // An old server: proto and motd, nothing else. A new client must
+        // read an unnamed host with no load rather than fail to decode.
+        let old = r#"{"t":"welcome","proto":12,"motd":"ember arena"}"#;
+        match serde_json::from_str::<S2C>(old).expect("an old Welcome must decode") {
+            S2C::Welcome {
+                host,
+                version,
+                commit,
+                players,
+                lobbies,
+                ..
+            } => {
+                assert_eq!(host, "");
+                assert_eq!(version, "");
+                assert_eq!(commit, "");
+                assert_eq!(players, 0);
+                assert_eq!(lobbies, 0);
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
     }
 
     #[test]
