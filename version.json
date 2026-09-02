@@ -1,6 +1,6 @@
 {
-  "version": "r450",
-  "commit": "a39481f",
-  "built": "2026-09-02T15:36:58Z",
-  "subject": "deploy: host the arena from this Windows workstation"
+  "version": "r556",
+  "commit": "bb09f79",
+  "built": "2026-09-02T16:02:23Z",
+  "subject": "deploy: the workstation host restarts at logon, and survives its shell"
 }
