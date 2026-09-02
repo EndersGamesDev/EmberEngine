@@ -1,25 +1,8 @@
 {
- "comment": "arena viewmodel pivots in ENGINE space (+X forward, +Y up, +Z right); written by tools/v15/build_viewmodel.py",
- "pivots": {
-  "cylinder": [
-   0.24379,
-   0.02332,
-   0.0
-  ],
-  "hammer": [
-   0.09679,
-   0.00358,
-   0.0
-  ],
-  "trigger": [
-   0.13482,
-   -0.05587,
-   0.0
-  ]
- },
+ "pivots": {},
  "muzzle": [
-  0.64982,
-  0.0133,
-  0.0
+  0.34077,
+  -0.06336,
+  -0.0
  ]
 }

@@ -36,3 +36,6 @@ assets/*.zip
 # v15 viewmodel runbook: previews, captures and bytecode stay local
 /tools/v15/*.png
 /tools/v15/__pycache__/
+# v16 viewmodel runbook: previews, captures and bytecode stay local
+/tools/v16/*.png
+/tools/v16/__pycache__/

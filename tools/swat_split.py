@@ -2,7 +2,9 @@
 per engine rig joint, so the jointed FK rig can animate an artist-made,
 textured character.
 
-Every vertex goes to the joint of its dominant bone weight (walking up the
+The rigid rifle objects are left out (v16: the viewmodel carries the
+rifle and the client holds it at the hand). Every vertex goes to the joint
+of its dominant bone weight (walking up the
 bone chain until a mapped bone is found); faces follow their majority
 vertex. Parts keep their UVs and share the model's textures, so the whole
 set exports as ONE GLB with one copy of each image. The bind-pose joint
@@ -104,6 +106,14 @@ def main():
         node.image = img
         mat.node_tree.links.new(bsdf.inputs["Base Color"], node.outputs["Color"])
 
+    # v16: the rifle is not part of the body any more. It ships as the
+    # viewmodel's `rifle` part (tools/v16/build_operator_viewmodel.py) and
+    # the client holds it at the hand; welded to the spine here it was a
+    # second gun floating on the chest beside the one in the hand.
+    for o in [o for o in bpy.data.objects if o.type == "MESH" and not o.vertex_groups]:
+        print(f"[split] rifle object {o.name!r} left out")
+        bpy.data.objects.remove(o, do_unlink=True)
+
     # One mesh, so vertex groups and materials unify.
     meshes = [o for o in bpy.data.objects if o.type == "MESH"]
     # Join merges UV layers BY NAME: parts whose layer is named differently
@@ -150,9 +160,9 @@ def main():
                 best, best_w = j, g.weight
         if best is not None:
             vert_joint[v.index] = best
-    # Unweighted geometry (the rifle is rigid, not skinned) has no vote:
-    # place it by material so nothing is silently dropped.
-    mat_fallback = {"ksvr": "spine"}
+    # Unweighted geometry has no vote. Nothing is expected here since the
+    # rifle left; anything that turns up is reported, not placed.
+    mat_fallback = {}
     mat_names = [m.name.lower() if m else "" for m in src.data.materials]
     face_joint = {}
     orphans = Counter()

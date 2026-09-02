@@ -8,8 +8,8 @@ use std::fmt::Write as _;
 
 use arena_core::proto::{BState, C2S, PROTO_VERSION, PState, PlayerMeta, S2C, STATE_EVERY_TICKS};
 use arena_core::shooter::{
-    Decor, EYE_CROUCH, EYE_STAND, FIXED_DT, Level, MAX_HP, MAX_PITCH, Obstacle, RELOAD_SECS,
-    move_circle, stance_speed, step_vertical, weapon_name, weapon_stats,
+    Decor, EYE_CROUCH, EYE_STAND, FIXED_DT, Level, MAX_HP, MAX_PITCH, MELEE_COOLDOWN, Obstacle,
+    RELOAD_SECS, move_circle, stance_speed, step_vertical, weapon_name, weapon_stats,
 };
 use ember_engine::glam::{Quat, Vec2, Vec3};
 use ember_engine::{Camera, EmberGame, Frame, InputState, Instance, KeyCode, MouseButton};
@@ -332,6 +332,46 @@ fn weapon_rot(yaw: f32, pitch: f32) -> Quat {
     Quat::from_rotation_y(yaw) * Quat::from_rotation_z(pitch)
 }
 
+/// The first-person melee: a butt-strike with the rifle. Keyframes of
+/// (seconds since the press, forward, left, up, yaw, pitch) in the weapon's
+/// own frame - metres and radians - linear between keys, nothing before the
+/// first or after the last. The last key sits on `MELEE_COOLDOWN`, so the
+/// weapon is back in the hold by the time the next swing can start. Local
+/// only: the protocol carries no melee state for remote players.
+const STRIKE: [(f32, f32, f32, f32, f32, f32); 5] = [
+    (0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+    // Wind up: back and up, the muzzle swung across to the left.
+    (0.14, -0.10, 0.06, 0.06, 0.85, 0.20),
+    // The strike: forward and across, the muzzle dropping.
+    (0.30, 0.24, 0.18, -0.05, 0.30, -0.25),
+    (0.48, 0.08, 0.10, -0.02, 0.15, -0.08),
+    (MELEE_COOLDOWN, 0.0, 0.0, 0.0, 0.0, 0.0),
+];
+
+/// Where the strike has the weapon `t` seconds after the press: an offset
+/// (forward, left, up) and a (yaw, pitch) added to the hold. `None` when no
+/// strike is in progress.
+fn strike_pose(since: f32) -> Option<(Vec3, f32, f32)> {
+    if !(0.0..MELEE_COOLDOWN).contains(&since) {
+        return None;
+    }
+    let idx = STRIKE.iter().rposition(|key| key.0 <= since)?;
+    let from = STRIKE[idx];
+    let to = STRIKE[(idx + 1).min(STRIKE.len() - 1)];
+    let span = to.0 - from.0;
+    let blend = if span > 0.0 {
+        ((since - from.0) / span).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let lerp = |x: f32, y: f32| x + (y - x) * blend;
+    Some((
+        Vec3::new(lerp(from.1, to.1), lerp(from.2, to.2), lerp(from.3, to.3)),
+        lerp(from.4, to.4),
+        lerp(from.5, to.5),
+    ))
+}
+
 /// Mouse-look sensitivity, radians per pixel.
 const LOOK_SENS: f32 = 0.0026;
 
@@ -569,6 +609,10 @@ pub struct ShooterGame {
     /// ammo decrement, not the trigger being held. Drives recoil, the
     /// slide cycle and the muzzle flash.
     shot_started: Option<f32>,
+    /// When the melee key went down; drives the first-person strike. The
+    /// press is what starts it, not a server verdict: the swing is the
+    /// player's own motion, the kill is the server's.
+    melee_started: Option<f32>,
     /// Confirmed shots this session; indexes the revolver's cylinder so it
     /// advances one chamber per round instead of snapping back.
     shots: u32,
@@ -651,6 +695,7 @@ impl ShooterGame {
             shield_raise: 0.0,
             reload_started: None,
             shot_started: None,
+            melee_started: None,
             shots: 0,
             since_score_ui: 1.0,
             score_shown: false,
@@ -1207,6 +1252,13 @@ impl EmberGame for ShooterGame {
         let melee = e_down && !self.prev_e;
         self.prev_e = e_down;
         self.melee_pending |= melee;
+        if melee
+            && self
+                .melee_started
+                .is_none_or(|t0| self.time - t0 >= MELEE_COOLDOWN)
+        {
+            self.melee_started = Some(self.time);
+        }
 
         // Walk bob (cosmetic, client-side only).
         if moving {
@@ -1761,18 +1813,31 @@ impl EmberGame for ShooterGame {
             // part. That is what puts the sights on the shot line when
             // pitched; the old pose used horizontal forward plus a
             // `pitch * 0.10` nudge, so the gun and the bullet disagreed.
-            // Offsets re-tuned for the v15 revolver, whose hold point is the
-            // top of a grip that hangs 0.2 below it: higher than the box
-            // pistol sat, so the hands are in the frame and not under it.
+            // Offsets tuned for the v16 rifle, whose hold point is the top of
+            // the pistol grip at the trigger: a bullpup, so the stock runs
+            // 0.45 back from there toward the shoulder and the hold sits
+            // further out than the revolver's did, or the receiver fills
+            // the corner of the screen.
             let base = eye
-                + look * (0.5 + 0.10 * self.zoom - 0.06 * recoil)
-                + right3 * (0.22 * (1.0 - self.zoom) + 0.015)
+                + look * (0.60 + 0.08 * self.zoom - 0.06 * recoil)
+                + right3 * (0.20 * (1.0 - self.zoom) + 0.012)
                 + Vec3::Y
-                    * (-0.22 + 0.06 * self.zoom + bob * 0.4 * (1.0 - self.zoom) - reload_dip
+                    * (-0.24 + 0.07 * self.zoom + bob * 0.4 * (1.0 - self.zoom) - reload_dip
                         + 0.03 * recoil);
             let yaw = -forward2.y.atan2(forward2.x);
             // Tilts with aim elevation, plus a muzzle-up kick per shot.
             let rot = weapon_rot(yaw, self.pitch + 0.16 * recoil);
+            // The melee strike moves the whole hold, in the weapon's frame.
+            let (base, rot) = match self
+                .melee_started
+                .and_then(|t0| strike_pose(self.time - t0))
+            {
+                Some((offset, yaw_add, pitch_add)) => (
+                    base + look * offset.x - right3 * offset.y + Vec3::Y * offset.z,
+                    weapon_rot(yaw + yaw_add, self.pitch + 0.16 * recoil + pitch_add),
+                ),
+                None => (base, rot),
+            };
             // The moving parts read the same confirmed shot the recoil
             // does, so a dry trigger moves nothing.
             let action = Action {
@@ -2096,6 +2161,59 @@ mod net {
                 win.clear_interval_with_handle(id);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod strike_tests {
+    use super::*;
+
+    #[test]
+    fn the_strike_starts_and_ends_at_the_hold() {
+        assert!(strike_pose(-0.01).is_none(), "nothing before the press");
+        assert!(
+            strike_pose(MELEE_COOLDOWN).is_none(),
+            "nothing once the cooldown is over"
+        );
+        let (o, yaw, pitch) = strike_pose(0.0).unwrap();
+        assert!(
+            o.length() < 1e-6 && yaw.abs() < 1e-6 && pitch.abs() < 1e-6,
+            "starts at the hold"
+        );
+        let (o, yaw, pitch) = strike_pose(MELEE_COOLDOWN - 1e-4).unwrap();
+        assert!(
+            o.length() < 1e-2 && yaw.abs() < 1e-2 && pitch.abs() < 1e-2,
+            "back at the hold: {o} {yaw} {pitch}"
+        );
+    }
+
+    #[test]
+    fn the_strike_winds_up_back_then_thrusts_forward() {
+        let (wind, ..) = strike_pose(0.14).unwrap();
+        let (hit, ..) = strike_pose(0.30).unwrap();
+        assert!(wind.x < 0.0, "winds up backward: {wind}");
+        assert!(hit.x > 0.2, "strikes forward: {hit}");
+        // Continuous at 60 Hz: no frame jumps more than a few centimetres.
+        let mut prev = strike_pose(0.0).unwrap().0;
+        let mut t = 1.0 / 60.0;
+        while t < MELEE_COOLDOWN {
+            let cur = strike_pose(t).unwrap().0;
+            assert!(
+                (cur - prev).length() < 0.05,
+                "jump of {} at {t}",
+                (cur - prev).length()
+            );
+            prev = cur;
+            t += 1.0 / 60.0;
+        }
+    }
+
+    #[test]
+    fn the_strike_keys_are_in_order_and_end_on_the_cooldown() {
+        for w in STRIKE.windows(2) {
+            assert!(w[1].0 > w[0].0, "keys in time order");
+        }
+        assert!((STRIKE[STRIKE.len() - 1].0 - MELEE_COOLDOWN).abs() < 1e-6);
     }
 }
 
