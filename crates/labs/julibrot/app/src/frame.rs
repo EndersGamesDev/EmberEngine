@@ -8,6 +8,16 @@ const LEVELS: [RefinementLevel; 3] = [
     RefinementLevel::Final,
 ];
 
+#[cfg(any(target_arch = "wasm32", test))]
+const fn arrival_is_current(
+    cancelled: bool,
+    response_generation: u32,
+    endpoint_generation: u32,
+    navigation_pending_depth: u32,
+) -> bool {
+    !cancelled && response_generation == endpoint_generation && navigation_pending_depth == 0
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SceneTicket {
     id: u64,
@@ -581,8 +591,12 @@ mod browser {
             submitted: Option<SubmittedReference>,
         ) -> Result<(OrbitDisposition, bool), AppError> {
             let Some(submitted) = submitted.filter(|_| {
-                !response.cancelled()
-                    && response.generation() == self.owner_endpoint.latest_generation()
+                super::arrival_is_current(
+                    response.cancelled(),
+                    response.generation(),
+                    self.owner_endpoint.latest_generation(),
+                    viewer.owner().navigation_pending_depth(),
+                )
             }) else {
                 return Ok((OrbitDisposition::Stale, false));
             };
@@ -962,7 +976,15 @@ pub use browser::BrowserFrameLoop;
 
 #[cfg(test)]
 mod tests {
-    use super::{RefinementLevel, RefinementSchedule};
+    use super::{RefinementLevel, RefinementSchedule, arrival_is_current};
+
+    #[test]
+    fn coalesced_navigation_makes_an_endpoint_current_arrival_stale() {
+        assert!(arrival_is_current(false, 7, 7, 0));
+        assert!(!arrival_is_current(false, 7, 7, 1));
+        assert!(!arrival_is_current(false, 7, 8, 0));
+        assert!(!arrival_is_current(true, 7, 7, 0));
+    }
 
     #[test]
     fn refinement_advances_only_after_matching_completed_scenes() {
