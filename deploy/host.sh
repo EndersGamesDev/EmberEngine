@@ -442,11 +442,34 @@ cmd_up() {
         urls="$urls $id=$url"
     done
 
+    # Let the hostnames exist before anything asks for them. The first DNS
+    # query for a brand-new *.trycloudflare.com name can land before
+    # Cloudflare has published the record, and a resolver that caches that
+    # NXDOMAIN keeps returning it long after the record appears — so the
+    # first attempt waits, and the rest retry for up to two minutes. The
+    # ssh deploys learned this the hard way on 2026-09-01; this script
+    # learned it on its first real run on 2026-09-02, when it probed the
+    # arena's fresh name within a second of minting it and gave up.
+    # Only a real cloudflared mints names that need this; the test stub's
+    # loopback addresses resolve at once. EMBER_TUNNEL_SETTLE overrides.
+    local settle="${EMBER_TUNNEL_SETTLE:-}"
+    if [ -z "$settle" ]; then
+        case "$(basename "$EMBER_TUNNEL_BIN")" in cloudflared) settle=15 ;; *) settle=0 ;; esac
+    fi
+    if [ "$settle" != "0" ]; then
+        say "letting the tunnel hostnames propagate (${settle}s)"
+        sleep "$settle"
+    fi
     for id in $(game_ids); do
         local url; url="$(cat "$RUN/$id.url")"
         say "health check for $id through $url"
-        probe_game "$id" "$url" public \
-            || die "the $id tunnel is up but the server did not answer through it"
+        local ok="" attempt
+        for attempt in $(seq 1 24); do
+            if probe_game "$id" "$url" public; then ok=1; break; fi
+            [ "$attempt" -lt 24 ] && sleep 5
+        done
+        [ -n "$ok" ] || die "the $id tunnel is up but the server did not answer through it within two minutes"
+        echo "   $id answered through its public address (attempt $attempt)"
     done
 
     # WHAT IS RUNNING is recorded as soon as it is proven running — both
