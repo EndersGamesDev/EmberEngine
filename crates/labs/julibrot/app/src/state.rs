@@ -78,6 +78,8 @@ pub struct HotFrame {
 pub struct ViewerController {
     owner: ViewerOwner,
     requested: RequestedControls,
+    staged_hot: HotState,
+    staged_main: MainState,
 }
 
 impl ViewerController {
@@ -110,6 +112,8 @@ impl ViewerController {
         Ok(Self {
             owner: ViewerOwner::new(initial),
             requested,
+            staged_hot: initial.hot,
+            staged_main: initial.main,
         })
     }
 
@@ -145,7 +149,7 @@ impl ViewerController {
         if !ratio.is_finite() || !zoom_log2.is_finite() {
             return Err(AppError::Math("wheel zoom exceeded finite range".to_string()));
         }
-        let mut hot = self.owner.snapshot().hot;
+        let mut hot = self.staged_hot;
         hot.centre_from_reference_px = core::array::from_fn(|axis| {
             ratio.mul_add(
                 hot.centre_from_reference_px[axis],
@@ -163,6 +167,7 @@ impl ViewerController {
             ));
         }
         self.requested.zoom_log2 = zoom_log2;
+        self.staged_hot = hot;
         self.owner.stage_hot(hot);
         Ok(NavigationEdit::Zoom {
             delta_log2,
@@ -180,7 +185,7 @@ impl ViewerController {
             return Err(AppError::Math("drag input is not finite".to_string()));
         }
         let centre_delta_px = [-delta_dom[0], delta_dom[1]];
-        let mut hot = self.owner.snapshot().hot;
+        let mut hot = self.staged_hot;
         for axis in 0..2 {
             hot.centre_from_reference_px[axis] += centre_delta_px[axis];
         }
@@ -191,6 +196,7 @@ impl ViewerController {
         {
             return Err(AppError::Math("pan exceeded finite range".to_string()));
         }
+        self.staged_hot = hot;
         self.owner.stage_hot(hot);
         Ok(NavigationEdit::Pan { centre_delta_px })
     }
@@ -205,9 +211,10 @@ impl ViewerController {
             return Err(AppError::Math("plane angles are not finite".to_string()));
         }
         self.requested.plane_angles = angles;
-        let mut hot = self.owner.snapshot().hot;
+        let mut hot = self.staged_hot;
         hot.plane_theta_1 = angles.theta_1;
         hot.plane_theta_2 = angles.theta_2;
+        self.staged_hot = hot;
         self.owner.stage_hot(hot);
         Ok(())
     }
@@ -226,19 +233,18 @@ impl ViewerController {
             theta_1: 0.0,
             theta_2: 0.0,
         };
-        let current = self.owner.snapshot();
-        let centre_revision = current
-            .main
+        let centre_revision = self
+            .staged_main
             .centre_revision
             .checked_add(1)
             .ok_or(AppError::GenerationExhausted)?;
-        self.owner.stage_hot(HotState {
+        let hot = HotState {
             zoom_log2: 0.0,
             plane_theta_1: 0.0,
             plane_theta_2: 0.0,
             centre_from_reference_px: [0.0; 2],
-        });
-        self.owner.stage_main(MainState {
+        };
+        let main = MainState {
             generation_applied: 0,
             centre_revision,
             centre_f64: spec.plane_origin,
@@ -249,8 +255,12 @@ impl ViewerController {
             orbit_id: 0,
             precision_bits: 0,
             reference_shift_px: [0.0; 2],
-            ..current.main
-        });
+            ..self.staged_main
+        };
+        self.staged_hot = hot;
+        self.staged_main = main;
+        self.owner.stage_hot(hot);
+        self.owner.stage_main(main);
         Ok(())
     }
 
@@ -266,8 +276,9 @@ impl ViewerController {
             )));
         }
         self.requested.iteration_cap = max_iter;
-        let mut main = self.owner.snapshot().main;
+        let mut main = self.staged_main;
         main.requested_iter_cap = max_iter;
+        self.staged_main = main;
         self.owner.stage_main(main);
         Ok(())
     }
@@ -275,8 +286,9 @@ impl ViewerController {
     /// Stages one of present's exact palette identifiers.
     pub fn set_palette(&mut self, palette: PaletteId) {
         self.requested.palette = palette;
-        let mut main = self.owner.snapshot().main;
+        let mut main = self.staged_main;
         main.palette_id = palette as u32;
+        self.staged_main = main;
         self.owner.stage_main(main);
     }
 
