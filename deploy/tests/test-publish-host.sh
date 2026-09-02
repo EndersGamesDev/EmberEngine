@@ -21,8 +21,8 @@ BOOK="$TMP/server.json"
 # Set the top-level protocol keys the way deploy-pages.sh does. Without them
 # there is no protocol for a host to match, and the legacy address keys are
 # deliberately left alone (see the "no top-level protocol" case below).
-set_top() {
-    "$PY" - "$BOOK" "$1" "$2" <<'EOF'
+set_top_in() {
+    "$PY" - "$1" "$2" "$3" <<'EOF'
 import json, sys
 p, key, val = sys.argv[1], sys.argv[2], sys.argv[3]
 d = json.load(open(p, encoding="utf-8"))
@@ -30,6 +30,7 @@ d[key] = int(val)
 json.dump(d, open(p, "w", encoding="utf-8"), indent=2)
 EOF
 }
+set_top() { set_top_in "$BOOK" "$1" "$2"; }
 
 echo "== upsert into an empty book =="
 $PUB --book "$BOOK" --name amber-otter \
@@ -63,6 +64,18 @@ is "$(jget "$BOOK" 'd["hosts"][0]["fire_ws"]')" "wss://a-fire.example" "fire add
 is "$(jget "$BOOK" 'd["hosts"][0]["fire_proto"]')" "1" "fire protocol key is <id>_proto"
 is "$(jget "$BOOK" 'd["hosts"][0]["version"]')" "r211" "version untouched when not passed"
 
+echo "== the build stamp is per game =="
+# One pair for the whole entry meant a fire-only deploy claimed the host was
+# also running the newest ARENA build, and the legacy recompute — which ranks
+# by that number with no probe — believed it.
+$PUB --book "$BOOK" --name amber-otter \
+    --game fire --url wss://a-fire.example --proto 1 \
+    --version r250 --commit fff9999 >/dev/null
+is "$(jget "$BOOK" 'd["hosts"][0]["fire_version"]')" "r250" "fire's build lands on fire's own key"
+is "$(jget "$BOOK" 'd["hosts"][0]["fire_commit"]')" "fff9999" "and so does its commit"
+is "$(jget "$BOOK" 'd["hosts"][0]["version"]')" "r211" "the arena's bare version is untouched by a fire publish"
+is "$(jget "$BOOK" 'd["hosts"][0]["commit"]')" "aaa1111" "and so is its commit"
+
 echo "== a game nobody hard-coded =="
 $PUB --book "$BOOK" --name amber-otter \
     --game kings --url wss://a-kings.example --proto 3 >/dev/null
@@ -92,6 +105,48 @@ case "$WS" in
     *) bad "tie resolved to an unrelated host: $WS" ;;
 esac
 WS_KEPT="$WS"
+
+echo "== a one-game deploy does not steal another game's legacy key =="
+# The defect this pins: host-a runs an r300 arena, host-b a newer r305 one, so
+# `ws` is host-b's. Deploying only FIRE to host-a from a newer ref used to
+# stamp the whole entry r310, which made host-a rank as the newest ARENA build
+# and pointed every frozen page at the older of the two arenas.
+STAMPS="$TMP/stamps.json"
+$PUB --book "$STAMPS" --name host-a \
+    --game arena --url wss://a2.example --proto 12 --version r300 --commit a300000 >/dev/null
+$PUB --book "$STAMPS" --name host-b \
+    --game arena --url wss://b2.example --proto 12 --version r305 --commit b305000 >/dev/null
+set_top_in "$STAMPS" proto 12
+$PUB --book "$STAMPS" --recompute >/dev/null
+is "$(jget "$STAMPS" 'd["ws"]')" "wss://b2.example" "the newer arena owns the legacy key"
+$PUB --book "$STAMPS" --name host-a \
+    --game fire --url wss://a2-fire.example --proto 1 --version r310 --commit a310000 >/dev/null
+is "$(jget "$STAMPS" 'd["ws"]')" "wss://b2.example" \
+    "and a fire deploy on the other host does not take it away"
+is "$(jget "$STAMPS" '[h for h in d["hosts"] if h["name"]=="host-a"][0]["version"]')" "r300" \
+    "host-a still says which arena build it is running"
+is "$(jget "$STAMPS" '[h for h in d["hosts"] if h["name"]=="host-a"][0]["fire_version"]')" "r310" \
+    "and separately which fire build"
+
+echo "== an entry from before the per-game stamp still ranks =="
+# Every entry already on gh-pages carries only the bare `version`. Reading such
+# an entry as build 0 would flip each legacy key to whichever new-format host
+# published last — the same defect with the sign reversed.
+OLDFMT="$TMP/oldformat.json"
+"$PY" - "$OLDFMT" <<'EOF'
+import json, sys
+json.dump({
+    "fire_proto": 1,
+    "hosts": [
+        {"name": "old-writer", "fire_ws": "wss://old.example", "fire_proto": 1, "version": "r400"},
+        {"name": "new-writer", "fire_ws": "wss://new.example", "fire_proto": 1,
+         "version": "r100", "fire_version": "r350"},
+    ],
+}, open(sys.argv[1], "w", encoding="utf-8"), indent=2)
+EOF
+$PUB --book "$OLDFMT" --recompute >/dev/null
+is "$(jget "$OLDFMT" 'd["fire_ws"]')" "wss://old.example" \
+    "the bare version is the fallback when a game has no key of its own"
 
 echo "== no host matches: the key is left exactly as it was =="
 set_top proto 99

@@ -120,6 +120,8 @@ is "$(jget "$BOOK" 'len(d["hosts"])')" "1" "still one host: both games are on on
 is "$(jget "$BOOK" 'd["hosts"][0]["fire_ws"]')" "wss://test-fire.trycloudflare.com" "fire's address was added"
 is "$(jget "$BOOK" 'd["hosts"][0]["fire_proto"]')" "1" "with fire's own protocol"
 is "$(jget "$BOOK" 'd["hosts"][0]["ws"]')" "wss://test-arena.trycloudflare.com" "and the arena's address SURVIVED"
+is "$(jget "$BOOK" 'd["hosts"][0]["fire_version"]')" "r1" "fire published its build stamp on its own key"
+is "$(jget "$BOOK" 'd["hosts"][0]["version"]')" "r1" "and left the arena's bare stamp alone"
 is "$(jget "$BOOK" 'd["fire_ws"]')" "wss://test-fire.trycloudflare.com" "legacy fire_ws recomputed"
 is "$(jget "$BOOK" 'd["ws"]')" "wss://test-arena.trycloudflare.com" "legacy ws untouched by a fire deploy"
 

@@ -16,8 +16,9 @@
 #   --name <host>      the entry's merge key, [a-z0-9-]{3,32}
 #   --game <id> --url <ws url> --proto <n>
 #                      one game's two keys; repeat the triple per game
-#   --version rN       the build the host is running
-#   --commit <sha>     its short sha
+#   --version rN       the build the host is running THAT GAME from; with no
+#                      --game in the call it is the arena's
+#   --commit <sha>     its short sha, same rule
 #   --by <text>        free text: who deployed it from where (optional)
 #   --remove           delete the entry instead of writing it
 #   --recompute        touch nothing but the legacy address keys
@@ -189,6 +190,14 @@ def proto_key(game_id):
     return "proto" if game_id == "arena" else "%s_proto" % game_id
 
 
+def version_key(game_id):
+    return "version" if game_id == "arena" else "%s_version" % game_id
+
+
+def commit_key(game_id):
+    return "commit" if game_id == "arena" else "%s_commit" % game_id
+
+
 def game_of(key):
     """Inverse of proto_key: the game id a top-level protocol key belongs to."""
     if key == "proto":
@@ -245,16 +254,28 @@ before = json.dumps(doc, sort_keys=True)
 now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+# The build stamp is PER GAME, by the same derivation as the address keys: the
+# arena owns the bare `version`/`commit`, everyone else is `<id>_version` and
+# `<id>_commit`. It used to be one pair for the whole entry, which meant a
+# fire-only deploy stamped the host as running the newest ARENA build too —
+# and the legacy recompute, which ranks by that number and holds no socket to
+# check, then pointed `ws` at an older arena than the one it passed over.
+# A call with no --game at all (a bare --version) is the arena's, as it always
+# was.
+stamp_ids = [g["game"] for g in games] or ["arena"]
+
+
 def apply_entry(entry):
     """Merge this call's fields onto one host entry, in place."""
     entry["name"] = name
     for g in games:
         entry[addr_key(g["game"])] = g["url"]
         entry[proto_key(g["game"])] = g["proto"]
-    if version:
-        entry["version"] = version
-    if commit:
-        entry["commit"] = commit
+    for gid in stamp_ids:
+        if version:
+            entry[version_key(gid)] = version
+        if commit:
+            entry[commit_key(gid)] = commit
     if by:
         entry["by"] = by
     entry["updated"] = now
@@ -310,21 +331,10 @@ elif not recompute:
             existing = h
             break
     if existing is None:
-        # New entries are built in a fixed key order so a human reading the
-        # gh-pages diff sees the same shape every time.
-        entry = {"name": name}
-        for g in games:
-            entry[addr_key(g["game"])] = g["url"]
-            entry[proto_key(g["game"])] = g["proto"]
-        entry["version"] = version
-        entry["commit"] = commit
-        entry["updated"] = now
-        if by:
-            entry["by"] = by
-        for k in ("version", "commit"):
-            if not entry[k]:
-                del entry[k]
-        hosts.append(entry)
+        # Built by the same merge, onto nothing. It used to be a second,
+        # hand-written key order that had to be kept in step with apply_entry
+        # by memory — and was not, the moment the stamp became per game.
+        hosts.append(apply_entry({}))
         print("added %s" % name)
     else:
         # MERGE. This host may be running games this call says nothing about.
@@ -345,8 +355,18 @@ if hosts or "hosts" in doc:
 # key. Recompute from the list rather than assigning the publisher's own
 # address: a host that just deployed an older commit must not become the
 # address a frozen page hands to every player.
-def version_num(entry):
-    m = re.match(r"^r(\d+)", str(entry.get("version") or ""))
+def version_num(entry, gid):
+    """The build number this entry claims FOR ONE GAME.
+
+    The bare `version` is the fallback, not a mistake: every entry written
+    before the stamp became per game carries only that, and reading such an
+    entry as 0 would flip each legacy key to whichever new-format host
+    published last — the same defect with the sign reversed.
+    """
+    raw = entry.get(version_key(gid))
+    if raw is None:
+        raw = entry.get("version")
+    m = re.match(r"^r(\d+)", str(raw or ""))
     return int(m.group(1)) if m else 0
 
 
@@ -367,7 +387,7 @@ for key in [k for k in list(doc.keys()) if game_of(k) is not None]:
         continue
     # Newest build wins; `updated` breaks a tie between two hosts on the same
     # commit; the name breaks the remaining tie so the result is stable.
-    best = max(candidates, key=lambda h: (version_num(h), str(h.get("updated") or ""), str(h.get("name") or "")))
+    best = max(candidates, key=lambda h: (version_num(h, gid), str(h.get("updated") or ""), str(h.get("name") or "")))
     if doc.get(ak) != best.get(ak):
         repointed.append("%s -> %s (%s)" % (ak, best.get(ak), best.get("name")))
     doc[ak] = best.get(ak)
