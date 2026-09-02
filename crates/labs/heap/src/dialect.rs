@@ -63,7 +63,7 @@ pub enum ForbiddenConstruct {
 }
 
 /// Typed registration-time kernel-dialect failure.
-#[derive(Clone, Debug, Error, PartialEq)]
+#[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub enum DialectError {
     /// Descriptor names or shapes violate the dialect contract.
     #[error("kernel {kernel} has an invalid descriptor: {message}")]
@@ -100,7 +100,7 @@ pub enum DialectError {
 }
 
 /// Typed dispatch-time shape, resource, or alias failure.
-#[derive(Clone, Debug, Error, PartialEq)]
+#[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub enum DispatchError {
     /// Input count differs from registration.
     #[error("kernel expects {expected} inputs but dispatch supplied {actual}")]
