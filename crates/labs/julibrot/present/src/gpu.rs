@@ -82,7 +82,6 @@ struct GpuState {
     warp_pipeline: wgpu::RenderPipeline,
     scene_fence: wgpu::Buffer,
     warp_fence: wgpu::Buffer,
-    hot_stride: u32,
     heap_limits: DialectLimits,
 }
 
@@ -802,7 +801,6 @@ fn create_gpu_state(
         warp_pipeline,
         scene_fence: create_fence(device, "Julibrot scene four-byte fence"),
         warp_fence: create_fence(device, "Julibrot warp four-byte fence"),
-        hot_stride,
         heap_limits,
     })
 }
