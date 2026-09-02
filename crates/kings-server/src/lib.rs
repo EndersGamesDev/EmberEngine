@@ -1508,7 +1508,7 @@ mod tests {
             phases(&all),
             vec![(Phase::Finished, Some(2), Some(EndReason::LastKing))]
         );
-        let last = boards(&all).last().unwrap().clone();
+        let last = (*boards(&all).last().unwrap()).clone();
         assert_eq!(last.last.map(|a| a.eliminated), Some(Some(0)));
         assert!(!last.seats[0].alive);
         assert_eq!(l.do_move(BOB, last.turn, (6, 9), (5, 9)), Err("the game is over"));
