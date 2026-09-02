@@ -1,6 +1,6 @@
 # Julibrot presentation slice
 
-Status: implementation in progress for `crates/labs/julibrot/present`; the seam-independent foundation contains present-owned palettes, exact GPU record layouts, HOT-ring arithmetic, generic homography packing and solving, checked tumbled mesh construction, an algebra-oracle bridge to the heap dependency, heap-capacity-specialized flat/tumbled scene WGSL, and the sole warp WGSL, while math-owned warp integration and heap-resource construction remain dependency-gated.
+Status: implementation complete for `crates/labs/julibrot/present`; the merged math and heap seams drive the f64 flat/tumbled planner, exact app records, two-texture runtime, HOT ring, selected scene pass, sole warp pass, bounded four-byte fences, and app-facing facts, while target-browser facts remain labelled `requires visible replay`.
 
 ## 1. Ownership and boundary
 
@@ -122,7 +122,7 @@ The implementation solves the eight projective coefficients of the current-NDC-t
 
 Neutral height makes the approximation exact at the four anchors but not between them or at nonzero escape height; the native oracle samples a 9-by-9 chart lattice at `h₅ ∈ {−2,−1,0,1,2}`, compares homography source pixels with full per-point reprojection, and reports maximum and p95 error in output pixels.
 
-The acceptance envelope is `|Δθ_view|≤0.02 rad`, `|Δzoom_log2|≤0.25`, a successfully rebased common reference, and maximum sampled error at or below `2.0` pixels for a 1920-by-1080 target; outside it the warp remains a visibly labelled approximation, publishes that a fresh scene is needed immediately, and never turns its observed error into an invented correction.
+The implementation-retired acceptance envelope is `|Δθ_view|≤0.002 rad`, `|Δzoom_log2|≤0.025`, a successfully rebased common reference, and maximum sampled error at or below `2.0` pixels for a 1920-by-1080 target; the original argued `0.02`/`0.25` envelope measured `6.394` pixels already at `0.01`/`0.1`, so outside the narrower envelope the warp remains a visibly labelled approximation, publishes that a fresh scene is needed immediately, and never turns its observed error into an invented correction.
 
 For either view, newly exposed source coordinates outside the retained texture show `clear_rgba`; a single homography cannot detect internal tumbled visibility changes, so internal disocclusion is a candid stale-image limitation rather than being called filled or corrected.
 
@@ -373,7 +373,7 @@ Warp cost per refresh, scene-frame cost, fence wait, polls, warm-up exclusion, f
 |Deep perturbation enters the GPU as an absolute centre or tiny scalar scale|precision collapse|perturbation-layout fixture proving no centre field and mantissa/exponent scale decomposition|
 |Flat warp reverses zoom, rows, or aspect|swimming or mirrored image|analytic pixel correspondences and the `H⁻¹H` oracle at all six zooms|
 |A reference shift has the wrong sign, units, or revision|old pixels swim during a valid deep pan|physical-centre invariance oracle plus exactly-once completed/in-flight rebasing test|
-|Tumbled 2D warp exceeds its useful envelope|visible nonlinear swimming|9-by-9-by-5 error oracle plus labelled visible direct-versus-warp replay|
+|Tumbled 2D warp exceeds its useful envelope|visible nonlinear swimming|9-by-9-by-5 oracle rejected the argued `0.02`/`0.25` envelope at `6.394` pixels and pins the narrower `0.002`/`0.025` boundary at at most `2.0` pixels, plus labelled visible direct-versus-warp replay|
 |Warp clamps an exposed edge|smeared disocclusion|UV-outside unit test and visible clear-border replay|
 |An internal tumbled disocclusion is mistaken for corrected|overstated capability|explicit status/overlay contract and visible stress replay; it remains an accepted limit|
 |A scene target is overwritten while sampled|race or validation error|all state-machine interleavings plus rapid visible refinement replay|
@@ -397,23 +397,21 @@ Phase 4A now implements and validates the sole fullscreen warp WGSL, including s
 
 Phase 0 adds the present package shell, shared records, byte-layout assertions, palette scalar reference, consumption of the app-lane `HeapPresentResources` seam, and pure f64 homography/oracle code, estimated at 360 new Rust and test lines.
 
-Phase 1 adds the two-texture state machine, 3-slot dynamic HOT ring, 80-byte MAIN block, bounded four-byte fence polling, typed events, and native interleaving tests, estimated at 480 lines.
+Phase 1 is implemented by the two-texture state ledger, 3-slot dynamic HOT ring, 80-byte MAIN block, bounded four-byte fence polling, typed events, and native interleaving tests, estimated at 480 lines.
 
-Phase 2 adds the flat fullscreen scene pipeline, descriptor/span accessor generation by heap dependency, palette and honest glitch shading, resize handling, and flat image fixtures, estimated at 340 Rust/WGSL/test lines.
+Phase 2 is implemented by the flat fullscreen scene pipeline, heap-capacity descriptor/span accessor generation, palette and honest glitch shading, and target-resize handling; browser image facts remain visible replay, estimated at 340 Rust/WGSL/test lines.
 
-Phase 3 adds tumbled grid/index generation, five-dimensional vertex algebra conformance through `mode_a_endpoint`, rawgl camera/depth/lighting, nearest fragment classification, and mesh/pole tests, estimated at 520 lines.
+Phase 3 is implemented by tumbled grid/index generation, five-dimensional vertex algebra conformance through `mode_a_endpoint`, rawgl camera/depth/lighting, nearest fragment classification, and mesh/pole tests, estimated at 520 lines.
 
-Phase 4 adds flat and tumbled warp planning, the one fullscreen warp pipeline, clear/disocclusion behavior, f64 and f32 accuracy tests, approximation error facts, and the no-frame path, estimated at 440 lines.
+Phase 4 is implemented by math's flat matrix, the f64 four-anchor tumbled planner and 9-by-9-by-5 error corpus, the one fullscreen warp pipeline, clear disocclusions, and the no-frame path, estimated at 440 lines.
 
-Phase 5 adds the exact app-facing API, facts snapshots, warm-up and reproject counting, page-contract tests, visible-replay hooks, release reconciliation, and documentation updates, estimated at 360 lines.
+Phase 5 is implemented by the exact app-facing API, facts snapshots, warm-up and reproject counting, callable-surface tests, visible-replay labels, release reconciliation, and documentation updates, estimated at 360 lines.
 
 The implementation estimate is 2,500 net new lines across Rust, WGSL, tests, manifests, and present-owned documentation; only the app lane may make the J16 heap seam edits, so no heap edit is hidden inside this present estimate.
 
 ## 8. Unresolved joint-review findings
 
-- `HeapPresentResources` does not yet exist in the current heap public API; J16 assigns its visibility-first extraction to the app lane, and that lane must stop if extraction needs more than moving existing code behind `pub`, so feasibility remains unmeasured until implementation Phase 0.
-
-- Existing `ember_lab_heap::mode_a_endpoint` is reusable as the CPU algebra oracle but requires a manually constructed `FrameUniform`; the contract accepts that public function without requesting another heap seam, while implementation still has to prove its operation order covers every tumbled vertex case.
+- `HeapPresentResources` is now published and sufficient for immutable presentation bindings, but the GL backend's validation of the independently reconstructed three-binding layout remains `requires visible replay` because the seam deliberately exposes resources rather than the private heap bind-group layout object.
 
 - The present `EscapeGrid` contract embeds a cloneable `DataSpan`; kernels must confirm the exact lifetime handoff that prevents freeing a span still named by a retained or in-flight scene.
 
@@ -435,6 +433,8 @@ The implementation estimate is 2,500 net new lines across Rust, WGSL, tests, man
 
 - A reference shift is expressed in the newly accepted current basis; when the retained basis differs, projection into the retained basis has the same chart residual already reported for PLANE motion, and visible replay must establish whether that warning remains usable during simultaneous deep pan and rotation.
 
+- App §3.6 still restates an older flattened `PresentHot`/`PresentMain`, `warm_up:bool`, and generation-named clear status, while J14 assigns this API to present and present §3.4/§3.6 pins worker-owned state wrappers, `SampleClass`, and `ClearForIncompatibleMain`; implementation follows the owning present contract and app must reconcile its duplicate before consuming the package.
+
 ## 9. Refinement evidence
 
 Semantic contract commit `df5280f959bfa67d4359110a6f66c33a8af6d85a` was checked out exactly on barza and passed `cargo test -p linter -- --skip the_repository_snapshot_loads_as_one_exact_surface --skip the_repository_owner_surface_reconciles_in_both_directions`: 727 library tests and 39 corpus tests passed, both named repository tests were filtered, exit was 0, `RUN-REPORT` wall was 0.8 seconds, and SSH-observed wall was 1.80 seconds.
@@ -442,3 +442,15 @@ Semantic contract commit `df5280f959bfa67d4359110a6f66c33a8af6d85a` was checked 
 The same semantic contract commit passed `cargo-fmt --all -- --check` on barza with exit 0, `RUN-REPORT` wall 1.3 seconds, and SSH-observed wall 2.51 seconds.
 
 Before the semantic commit, local non-toolchain checks found only `docs/julibrot/present.md` changed, `git diff --check` passed, the banned token and superseded field names were absent, line endings were LF, and no UTF-8 BOM was present.
+
+## 10. Implementation evidence
+
+Implementation head `66fb25e093d73982f9cab2d92b5395a828e97974` was checked out exactly on barza and passed the required nine gates: workspace build `2.9 s`, workspace clippy with warnings denied `1.8 s`, cargo-fmt check `9.5 s`, workspace tests excluding linter `56.6 s`, linter tests with the two repository checks skipped `4.7 s`, wasm library checks for arena `1.8 s`, what-is-this `0.5 s`, fire `1.3 s`, and heap plus present `2.3 s`; each value is the corresponding `RUN-REPORT` wall and every exit was zero.
+
+The present package contributes 33 unit tests and two integration tests covering exact layouts, palette honesty, heap-specialized WGSL validation, mesh order and heap algebra, two-slot state transitions, non-mutating target selection, replacement disposition, exactly-once reference rebasing, bounded fence outcomes, all six required deep-zoom warp rows, the corrected display-chart conversion, the 9-by-9-by-5 tumbled corpus, app-facing signatures, and warp-completion identity.
+
+The final handoff audit additionally proves that synchronous `submit_scene` and `frame` refusals enter `PresentFacts.status`, all fallible scene preparation completes before the ledger reserves the in-flight slot, and palette, view, or grid replacement marks a pending scene `ReplacedMain` while retaining the last completed texture.
+
+The native oracle rejected the pre-implementation tumbled envelope at `6.394` pixels for `Δθ_view=0.01` and `Δzoom_log2=0.1`; the implementation contract therefore narrows the accepted tested fixture to `0.002` and `0.025` at no more than `2.0` pixels instead of converting a failed risk oracle into a claim.
+
+Barza establishes native and wasm compilation, byte/layout tests, CPU arithmetic, WGSL parse/validation, and bounded state transitions, but it cannot establish GL surface behavior, actual browser fence scheduling, visual orientation, disocclusion quality, console silence, or measured scene/warp costs; every such fact remains `requires visible replay`.
