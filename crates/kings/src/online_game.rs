@@ -152,8 +152,7 @@ impl OnlineGame {
             // No seat yet (the roster has not arrived) means no click: the
             // machine's `None` is the hotseat convention, acting for the
             // seat to move, which is somebody else's piece here.
-            let (Some(state), Some(me)) = (self.online.state.as_ref(), self.online.my_seat)
-            else {
+            let (Some(state), Some(me)) = (self.online.state.as_ref(), self.online.my_seat) else {
                 return;
             };
             self.ui.click(state, Some(me), self.online.phase, tile)
