@@ -115,6 +115,7 @@ impl ExecutorDispatch {
         &self.headers
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) fn set_resource(&mut self, slot: usize, span: &DataSpan) -> Result<(), ExecutorError> {
         let words = self
             .plan
@@ -708,22 +709,27 @@ impl GpuKernelExecutor {
         Ok(())
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) const fn arena(&self) -> &SpanArena {
         &self.arena
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) const fn data_texture(&self) -> &wgpu::Texture {
         &self.data
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) const fn bind_group(&self) -> &wgpu::BindGroup {
         &self.heap_group
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) const fn bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.heap_layout
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub(crate) const fn kernel_uniform_buffer(&self) -> &wgpu::Buffer {
         &self.kernel_uniform_buffer
     }
