@@ -5,21 +5,21 @@ use crate::{
 };
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct PendingScene {
-    pub(crate) scene_id: u64,
-    pub(crate) pose: Pose,
-    pub(crate) palette: PaletteId,
-    pub(crate) iteration_cap: u32,
-    pub(crate) level: RefinementLevel,
-    pub(crate) extent: [u32; 2],
-    pub(crate) texture_index: u32,
-    pub(crate) centre_revision: u32,
-    pub(crate) plane_origin_f64: [f64; 4],
-    pub(crate) drop_reason: Option<DropReason>,
+pub(super) struct PendingScene {
+    pub(super) scene_id: u64,
+    pub(super) pose: Pose,
+    pub(super) palette: PaletteId,
+    pub(super) iteration_cap: u32,
+    pub(super) level: RefinementLevel,
+    pub(super) extent: [u32; 2],
+    pub(super) texture_index: u32,
+    pub(super) centre_revision: u32,
+    pub(super) plane_origin_f64: [f64; 4],
+    pub(super) drop_reason: Option<DropReason>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum SceneCompletion {
+pub(super) enum SceneCompletion {
     Promoted(SceneFrame),
     Dropped {
         pending: PendingScene,
@@ -30,23 +30,13 @@ pub(crate) enum SceneCompletion {
 
 /// Pure two-index ledger; GPU resources mirror these identities.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct SceneLedger {
+pub(super) struct SceneLedger {
     retained: Option<SceneFrame>,
     pending: Option<PendingScene>,
 }
 
 impl SceneLedger {
-    pub(crate) fn begin(
-        &mut self,
-        scene_id: u64,
-        pose: Pose,
-        palette: PaletteId,
-        iteration_cap: u32,
-        level: RefinementLevel,
-        extent: [u32; 2],
-        centre_revision: u32,
-        plane_origin_f64: [f64; 4],
-    ) -> Result<u32, PresentError> {
+    pub(super) fn begin(&mut self, mut incoming: PendingScene) -> Result<u32, PresentError> {
         if let Some(pending) = &self.pending {
             return Err(PresentError::SceneBusy {
                 scene_id: pending.scene_id,
@@ -56,22 +46,12 @@ impl SceneLedger {
             .retained
             .as_ref()
             .map_or(0, |frame| 1 - frame.texture_index);
-        self.pending = Some(PendingScene {
-            scene_id,
-            pose,
-            palette,
-            iteration_cap,
-            level,
-            extent,
-            texture_index,
-            centre_revision,
-            plane_origin_f64,
-            drop_reason: None,
-        });
+        incoming.texture_index = texture_index;
+        self.pending = Some(incoming);
         Ok(texture_index)
     }
 
-    pub(crate) fn complete(
+    pub(super) fn complete(
         &mut self,
         measurement: SubmissionMeasurement,
     ) -> Option<SceneCompletion> {
@@ -99,11 +79,12 @@ impl SceneLedger {
         Some(SceneCompletion::Promoted(frame))
     }
 
-    pub(crate) fn cancel_pending(&mut self) -> Option<PendingScene> {
+    pub(super) const fn cancel_pending(&mut self) -> Option<PendingScene> {
         self.pending.take()
     }
 
-    pub(crate) fn invalidate_incompatible(
+    #[allow(clippy::float_cmp)]
+    pub(super) fn invalidate_incompatible(
         &mut self,
         iteration_cap: u32,
         plane_origin_f64: [f64; 4],
@@ -123,7 +104,7 @@ impl SceneLedger {
         retained_invalid
     }
 
-    pub(crate) fn apply_reference_shift(
+    pub(super) fn apply_reference_shift(
         &mut self,
         accepted_pose: &Pose,
         new_generation: u32,
@@ -146,11 +127,11 @@ impl SceneLedger {
         }
     }
 
-    pub(crate) const fn retained(&self) -> Option<&SceneFrame> {
+    pub(super) const fn retained(&self) -> Option<&SceneFrame> {
         self.retained.as_ref()
     }
 
-    pub(crate) const fn pending(&self) -> Option<&PendingScene> {
+    pub(super) const fn pending(&self) -> Option<&PendingScene> {
         self.pending.as_ref()
     }
 }
@@ -164,10 +145,14 @@ fn rebase_pose(pose: &mut Pose, accepted_pose: &Pose, shift_px: [f64; 2]) {
         dot(pose.plane.basis_v, accepted_pose.plane.basis_u),
         dot(pose.plane.basis_v, accepted_pose.plane.basis_v),
     ];
-    pose.centre_from_reference_px[0] -=
-        ratio * overlap[0].mul_add(shift_px[0], overlap[1] * shift_px[1]);
-    pose.centre_from_reference_px[1] -=
-        ratio * overlap[2].mul_add(shift_px[0], overlap[3] * shift_px[1]);
+    pose.centre_from_reference_px[0] = ratio.mul_add(
+        -overlap[0].mul_add(shift_px[0], overlap[1] * shift_px[1]),
+        pose.centre_from_reference_px[0],
+    );
+    pose.centre_from_reference_px[1] = ratio.mul_add(
+        -overlap[2].mul_add(shift_px[0], overlap[3] * shift_px[1]),
+        pose.centre_from_reference_px[1],
+    );
 }
 
 fn dot(left: [f32; 4], right: [f32; 4]) -> f64 {
@@ -218,16 +203,18 @@ mod tests {
 
     fn begin(ledger: &mut SceneLedger, scene_id: u64, generation: u32) -> u32 {
         ledger
-            .begin(
+            .begin(PendingScene {
                 scene_id,
-                pose(generation),
-                PaletteId::Classic,
-                64,
-                RefinementLevel::Preview,
-                [800, 600],
-                generation,
-                ORIGIN,
-            )
+                pose: pose(generation),
+                palette: PaletteId::Classic,
+                iteration_cap: 64,
+                level: RefinementLevel::Preview,
+                extent: [800, 600],
+                texture_index: 0,
+                centre_revision: generation,
+                plane_origin_f64: ORIGIN,
+                drop_reason: None,
+            })
             .expect("test scene is valid")
     }
 
@@ -236,16 +223,18 @@ mod tests {
         let mut ledger = SceneLedger::default();
         assert_eq!(begin(&mut ledger, 1, 1), 0);
         assert_eq!(
-            ledger.begin(
-                2,
-                pose(1),
-                PaletteId::Classic,
-                64,
-                RefinementLevel::Preview,
-                [800, 600],
-                1,
-                ORIGIN,
-            ),
+            ledger.begin(PendingScene {
+                scene_id: 2,
+                pose: pose(1),
+                palette: PaletteId::Classic,
+                iteration_cap: 64,
+                level: RefinementLevel::Preview,
+                extent: [800, 600],
+                texture_index: 0,
+                centre_revision: 1,
+                plane_origin_f64: ORIGIN,
+                drop_reason: None,
+            }),
             Err(PresentError::SceneBusy { scene_id: 1 })
         );
         assert!(matches!(

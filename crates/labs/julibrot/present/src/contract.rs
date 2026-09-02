@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use ember_julibrot_kernels::{EscapeGrid, RefinementLevel};
 use ember_julibrot_math::{Plane, Pose, ViewMode};
 use ember_julibrot_worker::{HotState, MainState};
@@ -34,7 +32,7 @@ pub struct PresentMain {
 }
 
 impl PresentMain {
-    pub(crate) fn selected_palette(&self) -> Option<(PaletteId, PaletteRecord)> {
+    pub(crate) const fn selected_palette(&self) -> Option<(PaletteId, PaletteRecord)> {
         let id = match self.state.palette_id {
             0 => PaletteId::Classic,
             1 => PaletteId::Ember,
@@ -333,7 +331,7 @@ impl Default for PresentFacts {
 }
 
 /// Typed synchronous presentation refusal.
-#[derive(Clone, Debug, Error, PartialEq)]
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum PresentError {
     /// Delivered grid prefix is empty, overflows, or exceeds its span.
     #[error("grid {width}x{height} does not fit logical length {logical_len}")]
@@ -392,10 +390,6 @@ pub enum PresentError {
     #[error("surface target extent is zero")]
     SurfaceTargetZero,
 }
-
-/// Shared device and queue ownership aliases used by the app-facing constructor.
-pub(crate) type SharedDevice = Arc<wgpu::Device>;
-pub(crate) type SharedQueue = Arc<wgpu::Queue>;
 
 #[cfg(test)]
 mod tests {

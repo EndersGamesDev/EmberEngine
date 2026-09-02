@@ -9,6 +9,10 @@ const HEIGHT_SAMPLES: [f64; 5] = [-2.0, -1.0, 0.0, 1.0, 2.0];
 const CHART_STEPS: u32 = 9;
 const PERSPECTIVE_POLE: f64 = 8.0;
 const POLE_EPSILON: f64 = 1.0e-4;
+const YAW_COSINE: f64 = 0.939_692_620_8;
+const YAW_SINE: f64 = 0.342_020_143_3;
+const PITCH_COSINE: f64 = 0.965_925_826_3;
+const PITCH_SINE: f64 = 0.258_819_045_1;
 
 /// Pure CPU reprojection planner.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -45,7 +49,7 @@ impl Warp {
     }
 }
 
-fn clear_only() -> WarpPlan {
+const fn clear_only() -> WarpPlan {
     WarpPlan {
         rows: [
             [1.0, 0.0, 0.0, 0.0],
@@ -147,8 +151,10 @@ fn chart_residual(from: &Pose, to: &Pose) -> f64 {
         .into_iter()
         .map(|chart| {
             let coordinate = [
-                to.centre_from_reference_px[0] + 0.5 * f64::from(to.grid_width) * chart[0],
-                to.centre_from_reference_px[1] + 0.5 * f64::from(to.grid_height) * chart[1],
+                (0.5 * f64::from(to.grid_width))
+                    .mul_add(chart[0], to.centre_from_reference_px[0]),
+                (0.5 * f64::from(to.grid_height))
+                    .mul_add(chart[1], to.centre_from_reference_px[1]),
             ];
             let vector = plane_point(to.plane, coordinate).map(|value| ratio * value);
             let projection = plane_projection(from.plane, vector);
@@ -224,10 +230,6 @@ fn project_presented(pose: &Pose, chart: [f64; 2], height: f64) -> Option<[f64; 
         projected_four[1] * scale_four,
         projected_four[2] * scale_four,
     ];
-    const YAW_COSINE: f64 = 0.939_692_620_8;
-    const YAW_SINE: f64 = 0.342_020_143_3;
-    const PITCH_COSINE: f64 = 0.965_925_826_3;
-    const PITCH_SINE: f64 = 0.258_819_045_1;
     let yawed = [
         YAW_COSINE.mul_add(world[0], YAW_SINE * world[2]),
         world[1],

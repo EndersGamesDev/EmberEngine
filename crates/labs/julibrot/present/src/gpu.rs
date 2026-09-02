@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex};
 use ember_lab_heap::{DialectLimits, HeapPresentResources};
 use wgpu::util::DeviceExt as _;
 
-use crate::contract::{SharedDevice, SharedQueue};
 use crate::fence::{FenceDecision, FenceLedger};
 use crate::state::{SceneCompletion, SceneLedger};
 use crate::{
@@ -58,7 +57,7 @@ impl SampleTracker {
         }
     }
 
-    fn completed(&mut self) {
+    const fn completed(&mut self) {
         self.completed_since_reset = self.completed_since_reset.saturating_add(1);
     }
 
@@ -89,8 +88,8 @@ struct GpuState {
 
 /// Two-texture Julibrot scene owner and sole warp-pass runtime.
 pub struct Presenter {
-    device: SharedDevice,
-    queue: SharedQueue,
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
     gpu: GpuState,
     config: PresentConfig,
     main: Option<PresentMain>,
@@ -114,9 +113,10 @@ impl Presenter {
     /// # Errors
     ///
     /// Returns a typed refusal for invalid limits, formats, or checked resource sizes.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn new(
-        device: SharedDevice,
-        queue: SharedQueue,
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
         heap: HeapPresentResources,
         config: PresentConfig,
     ) -> Result<Self, PresentError> {
@@ -144,6 +144,7 @@ impl Presenter {
     }
 
     /// Applies latest-wins MAIN state, exactly-once reference rebasing, and incompatibility clear.
+    #[allow(clippy::float_cmp)]
     pub fn set_main(&mut self, main: PresentMain) {
         let incompatible = self.main.as_ref().is_some_and(|previous| {
             previous.state.delivered_iter_cap != main.state.delivered_iter_cap
@@ -225,6 +226,9 @@ impl Presenter {
             .unwrap_or((PaletteId::Classic, palette(PaletteId::Classic)));
         let rotation = view_rotation(hot.view_time_seconds).unwrap_or([1.0, 0.0, 1.0, 0.0]);
         let plan = plan.unwrap_or_else(clear_warp_plan);
+        let epoch = hot.epoch.to_le_bytes();
+        let epoch_low = u32::from_le_bytes([epoch[0], epoch[1], epoch[2], epoch[3]]);
+        let epoch_high = u32::from_le_bytes([epoch[4], epoch[5], epoch[6], epoch[7]]);
         let uniform = HotUniform {
             plane_u: hot.plane.basis_u,
             plane_v: hot.plane.basis_v,
@@ -234,8 +238,8 @@ impl Presenter {
             homography_row_2: plan.rows[2],
             clear_rgba: selected.1.clear_rgba,
             flags: [
-                hot.epoch as u32,
-                (hot.epoch >> 32) as u32,
+                epoch_low,
+                epoch_high,
                 u32::from(plan.source_valid),
                 self.main
                     .as_ref()
@@ -291,16 +295,18 @@ impl Presenter {
         self.next_scene_id = scene_id.checked_add(1).ok_or(PresentError::Device {
             operation: "advance scene identity",
         })?;
-        let texture_index = self.ledger.begin(
+        let texture_index = self.ledger.begin(crate::state::PendingScene {
             scene_id,
             pose,
-            palette_id,
-            main.state.delivered_iter_cap,
-            main.grid.level,
-            [main.grid.width, main.grid.height],
-            main.state.centre_revision,
-            main.state.plane_origin_f64,
-        )?;
+            palette: palette_id,
+            iteration_cap: main.state.delivered_iter_cap,
+            level: main.grid.level,
+            extent: [main.grid.width, main.grid.height],
+            texture_index: 0,
+            centre_revision: main.state.centre_revision,
+            plane_origin_f64: main.state.plane_origin_f64,
+            drop_reason: None,
+        })?;
         let extent = [main.grid.width, main.grid.height];
         let reallocated =
             ensure_scene_texture(&self.device, &mut self.gpu, texture_index as usize, extent)?;
@@ -581,7 +587,7 @@ impl Presenter {
         self.facts.status = PresentStatus::ShowingCompletedScene;
     }
 
-    fn clear_retained_facts(&mut self) {
+    const fn clear_retained_facts(&mut self) {
         self.facts.completed_scene_id = None;
         self.facts.source_generation = None;
         self.facts.delivered_width = 0;
@@ -616,6 +622,7 @@ fn validate_config(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn create_gpu_state(
     device: &wgpu::Device,
     heap: &HeapPresentResources,
@@ -914,6 +921,7 @@ fn create_depth_target(device: &wgpu::Device, extent: [u32; 2]) -> DepthTarget {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_scene_pipeline(
     device: &wgpu::Device,
     label: &'static str,
@@ -1174,7 +1182,7 @@ fn validate_extent(device: &wgpu::Device, extent: [u32; 2]) -> Result<(), Presen
     Ok(())
 }
 
-fn extent_3d(extent: [u32; 2]) -> wgpu::Extent3d {
+const fn extent_3d(extent: [u32; 2]) -> wgpu::Extent3d {
     wgpu::Extent3d {
         width: extent[0],
         height: extent[1],
@@ -1239,7 +1247,7 @@ fn pose_is_finite(pose: &Pose) -> bool {
             .all(f32::is_finite)
 }
 
-fn clear_warp_plan() -> crate::WarpPlan {
+const fn clear_warp_plan() -> crate::WarpPlan {
     crate::WarpPlan {
         rows: [
             [1.0, 0.0, 0.0, 0.0],
