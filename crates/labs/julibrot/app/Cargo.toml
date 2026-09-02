@@ -4,6 +4,7 @@ edition.workspace = true
 version.workspace = true
 
 [lib]
+name = "ember_lab_julibrot"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]

@@ -3,6 +3,7 @@
 const INDEX: &str = include_str!("../../../../../web/labs/julibrot/index.html");
 const MAIN: &str = include_str!("../../../../../web/labs/julibrot/main.js");
 const WORKER: &str = include_str!("../../../../../web/labs/julibrot/worker.js");
+const MANIFEST: &str = include_str!("../Cargo.toml");
 const LIB: &str = include_str!("../src/lib.rs");
 const RUNTIME: &str = include_str!("../src/runtime.rs");
 const FACTS: &str = include_str!("../src/facts.rs");
@@ -32,6 +33,7 @@ fn loader_worker_and_wasm_share_version_one_before_orbit_transfer() {
     }
     assert!(!LIB.contains("pub fn worker_main(expected_abi: u32)"));
     assert!(WORKER_BROWSER.contains("pub fn worker_main(expected_abi: u32)"));
+    assert!(MANIFEST.contains("name = \"ember_lab_julibrot\""));
     assert_eq!(WORKER.matches("ember_lab_julibrot.js?v=1").count(), 1);
     assert!(FRAME.contains("WorkerChannel::new("));
     assert!(FRAME.contains("WorkerMode::WebWorker"));
