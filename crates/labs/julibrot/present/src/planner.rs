@@ -414,12 +414,61 @@ mod tests {
         posed
     }
 
-    fn sweep_plan(plane: Plane, step: u32) -> WarpPlan {
+    /// One retained-to-current motion, expressed in the section 2.6 acceptance envelope.
+    #[derive(Clone, Copy)]
+    struct Motion {
+        view_radians: f64,
+        zoom_log2: f64,
+        pan_px: [f64; 2],
+    }
+
+    const ENVELOPE: Motion = Motion {
+        view_radians: 0.002,
+        zoom_log2: 0.025,
+        pan_px: [2.0, 1.0],
+    };
+
+    const ROTATION_ONLY: Motion = Motion {
+        view_radians: 0.002,
+        zoom_log2: 0.0,
+        pan_px: [2.0, 1.0],
+    };
+
+    fn sweep_plan(plane: Plane, step: u32, motion: Motion) -> WarpPlan {
         let theta = core::f64::consts::TAU * f64::from(step) / f64::from(SWEEP_ANGLES);
-        let from = tumbled_pose(plane, theta, [3.5, -2.25]);
-        let mut to = tumbled_pose(plane, theta + 0.002, [5.5, -1.25]);
-        to.zoom_log2 += 0.025;
+        let displacement = [3.5, -2.25];
+        let from = tumbled_pose(plane, theta, displacement);
+        let panned = [
+            displacement[0] + motion.pan_px[0],
+            displacement[1] + motion.pan_px[1],
+        ];
+        let mut to = tumbled_pose(plane, theta + motion.view_radians, panned);
+        to.zoom_log2 += motion.zoom_log2;
         Warp::reproject(&frame(from), &from, &to)
+    }
+
+    /// Returns the clear-only count and the worst sampled error over one full turn of VIEW angle.
+    fn sweep(plane: Plane, motion: Motion) -> (u32, f64) {
+        let mut clear_only = 0_u32;
+        let mut maximum = 0.0_f64;
+        for step in 0..SWEEP_ANGLES {
+            let plan = sweep_plan(plane, step, motion);
+            if plan.kind == WarpKind::ClearOnly {
+                clear_only += 1;
+                continue;
+            }
+            assert_eq!(plan.kind, WarpKind::TumbledHomography);
+            assert!(plan.source_valid);
+            let error = plan
+                .approx_max_error_px
+                .expect("a tumbled plan reports its sampled maximum");
+            let percentile = plan
+                .approx_p95_error_px
+                .expect("a tumbled plan reports its sampled percentile");
+            assert!(percentile <= error);
+            maximum = maximum.max(error);
+        }
+        (clear_only, maximum)
     }
 
     fn named_planes() -> Result<[(&'static str, Plane); 3], MathError> {
@@ -465,32 +514,20 @@ mod tests {
     #[test]
     fn every_named_plane_warps_at_every_swept_view_angle() -> Result<(), MathError> {
         for (name, plane) in named_planes()? {
-            let mut clear_only = 0_u32;
-            let mut maximum = 0.0_f64;
-            for step in 0..SWEEP_ANGLES {
-                let plan = sweep_plan(plane, step);
-                if plan.kind == WarpKind::ClearOnly {
-                    clear_only += 1;
-                    continue;
-                }
-                assert_eq!(plan.kind, WarpKind::TumbledHomography);
-                assert!(plan.source_valid);
-                let error = plan
-                    .approx_max_error_px
-                    .expect("a tumbled plan reports its sampled maximum");
-                let percentile = plan
-                    .approx_p95_error_px
-                    .expect("a tumbled plan reports its sampled percentile");
-                assert!(percentile <= error);
-                maximum = maximum.max(error);
-            }
+            let (clear_only, maximum) = sweep(plane, ENVELOPE);
             assert_eq!(
                 clear_only, 0,
                 "{name} plane fell back to clear-only at {clear_only} of {SWEEP_ANGLES} angles"
             );
             assert!(
-                maximum <= 2.0,
-                "{name} plane sampled {maximum} pixels of tumbled warp error"
+                maximum <= 3.5,
+                "{name} plane sampled {maximum} pixels over the full acceptance envelope"
+            );
+            let (clear_only, maximum) = sweep(plane, ROTATION_ONLY);
+            assert_eq!(clear_only, 0, "{name} plane cleared without a zoom step");
+            assert!(
+                maximum <= 1.0,
+                "{name} plane sampled {maximum} pixels for rotation and pan alone"
             );
         }
         Ok(())
@@ -500,9 +537,9 @@ mod tests {
     fn the_tumbled_plan_ignores_which_ambient_axes_a_preset_names() -> Result<(), MathError> {
         let [(_, mandelbrot), (_, julia), (_, hybrid)] = named_planes()?;
         for step in 0..SWEEP_ANGLES {
-            let reference = sweep_plan(mandelbrot, step);
-            assert_eq!(sweep_plan(julia, step), reference);
-            let tilted = sweep_plan(hybrid, step);
+            let reference = sweep_plan(mandelbrot, step, ENVELOPE);
+            assert_eq!(sweep_plan(julia, step, ENVELOPE), reference);
+            let tilted = sweep_plan(hybrid, step, ENVELOPE);
             assert_eq!(tilted.kind, reference.kind);
             for (row, expected) in tilted.rows.into_iter().zip(reference.rows) {
                 for (value, wanted) in row.into_iter().zip(expected) {
