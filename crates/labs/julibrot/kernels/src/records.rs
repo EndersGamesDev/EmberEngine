@@ -42,7 +42,8 @@ impl KernelMode {
     }
 }
 
-pub(super) fn pixel_offset(
+/// Returns the plane-relative sample offset for one row-major pixel index.
+pub fn pixel_offset(
     index: u32,
     extent: GridExtent,
     plane: Plane,

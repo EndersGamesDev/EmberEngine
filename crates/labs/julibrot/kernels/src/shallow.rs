@@ -43,7 +43,13 @@ impl ShallowUniform {
     }
 }
 
-pub(super) fn validate_extent(extent: GridExtent) -> Result<u32, KernelError> {
+/// Returns the checked pixel count for a non-empty grid extent.
+///
+/// # Errors
+///
+/// Returns [`KernelError::InvalidExtent`] for an empty extent and
+/// [`KernelError::ArithmeticOverflow`] when the pixel count exceeds `u32`.
+pub fn validate_extent(extent: GridExtent) -> Result<u32, KernelError> {
     if extent.width == 0 || extent.height == 0 {
         return Err(KernelError::InvalidExtent);
     }
@@ -53,7 +59,13 @@ pub(super) fn validate_extent(extent: GridExtent) -> Result<u32, KernelError> {
         .ok_or(KernelError::ArithmeticOverflow)
 }
 
-pub(super) const fn validate_params(params: EscapeParams) -> Result<(), KernelError> {
+/// Validates the fixed escape policy shared by both kernels.
+///
+/// # Errors
+///
+/// Returns [`KernelError::InvalidEscapeParams`] for a zero iteration cap or a bailout other than
+/// [`EscapeParams::BAILOUT`].
+pub const fn validate_params(params: EscapeParams) -> Result<(), KernelError> {
     if params.max_iter == 0 || params.bailout.to_bits() != EscapeParams::BAILOUT.to_bits() {
         return Err(KernelError::InvalidEscapeParams);
     }
