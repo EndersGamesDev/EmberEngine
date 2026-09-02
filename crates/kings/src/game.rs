@@ -439,7 +439,8 @@ pub fn fill_board(hud: &mut HudState, wire: &BoardState, state: &State, view: &V
     hud.pieces.clone_from(&wire.pieces);
     hud.last = wire.last;
     hud.joker_fl = joker_capture_tiles(state);
-    hud.cursor = [view.cursor.x, view.cursor.y];
+    // Both games always show the cursor; a hidden one reports the corner.
+    hud.cursor = view.cursor.map_or([0, 0], |t| [t.x, t.y]);
     hud.sel = view.sel.map(|t| [t.x, t.y]);
     hud.targets = view
         .targets
@@ -960,7 +961,7 @@ mod tests {
 
     #[test]
     fn the_command_queue_is_fifo_and_drains() {
-        drain_cmds();
+        drop(drain_cmds());
         push_cmd(UiCmd::Click(1, 2));
         push_cmd(UiCmd::Start);
         push_cmd(UiCmd::Clear);

@@ -244,8 +244,13 @@ mod tests {
         let mut ui = Ui::default();
         assert_eq!(ui.click(&state, Some(0), Phase::Playing, t(3, 0)), None);
         assert_eq!(ui.selected(), Some(t(3, 0)));
-        let tiles: Vec<(u8, u8)> = ui.targets.iter().map(|x| (x.x, x.y)).collect();
-        assert_eq!(tiles, vec![(4, 0), (3, 1)]);
+        let tiles = |ui: &Ui| ui.targets.iter().map(|x| (x.x, x.y)).collect::<Vec<_>>();
+        // Its left neighbour (3,1) holds an own pawn, so only forward.
+        assert_eq!(tiles(&ui), vec![(4, 0)]);
+        // The elbow pawn has both outward axes free.
+        ui.click(&state, Some(0), Phase::Playing, t(3, 3));
+        assert_eq!(ui.selected(), Some(t(3, 3)));
+        assert_eq!(tiles(&ui), vec![(4, 3), (3, 4)]);
         // The hotseat convention: `me == None` acts for the seat to move.
         let mut ui = Ui::default();
         ui.click(&state, None, Phase::Playing, t(1, 2));
