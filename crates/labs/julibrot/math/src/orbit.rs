@@ -34,6 +34,7 @@ pub fn escape_f32(point: [f32; 4], params: EscapeParams) -> Result<EscapeSample,
     })
 }
 
+#[derive(Debug)]
 pub struct ReferenceOrbitBuilder {
     centre: BigCentre,
     plan: PrecisionPlan,
@@ -110,12 +111,13 @@ impl ReferenceOrbitBuilder {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct ComplexBig {
     re: BigScalar,
     im: BigScalar,
 }
 
+#[derive(Debug)]
 struct OrbitState {
     z: ComplexBig,
     c: ComplexBig,
@@ -333,7 +335,9 @@ mod tests {
     fn orbit_is_cooperative_and_starts_at_z_zero() -> Result<(), MathError> {
         let centre = BigCentre::from_f64([0.0, 0.0, 2.0, 0.0], 256)?;
         let plan = precision_for(0.0, 1920, 16)?;
-        let mut builder = ReferenceOrbitBuilder::new(&centre, plan, EscapeParams::new(16))?;
+        let builder_result = ReferenceOrbitBuilder::new(&centre, plan, EscapeParams::new(16));
+        assert!(builder_result.is_ok(), "builder construction failed: {builder_result:?}");
+        let mut builder = builder_result?;
         assert_eq!(
             builder.step(NonZeroU32::new(2).ok_or(MathError::InvalidMaxIter)?)?,
             OrbitStep::Pending { stored: 2 }

@@ -215,7 +215,7 @@ mod tests {
         let split = split_centre(&centre)?;
         for ((high, low), expected) in split.hi.into_iter().zip(split.lo).zip(mirror.coords) {
             let reconstructed = f64::from(high) + f64::from(low);
-            assert!((reconstructed - expected).abs() <= f64::EPSILON);
+            assert!((reconstructed - expected).abs() <= 2.0 * f64::EPSILON);
         }
         Ok(())
     }

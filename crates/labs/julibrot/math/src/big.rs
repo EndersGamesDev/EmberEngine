@@ -388,14 +388,27 @@ mod tests {
     #[test]
     fn dyadic_codec_round_trips_exact_f64_values() -> Result<(), MathError> {
         for value in [0.0, -0.0, 1.0, -2.5, f64::from_bits(1), 1.0 / 3.0] {
+            let original = value;
             let value = BigScalar::from_f64(value, 256)?;
-            let encoded = encode_big_scalar(&value)?;
-            let decoded = decode_big_scalar(
+            let encoded_result = encode_big_scalar(&value);
+            assert!(
+                encoded_result.is_ok(),
+                "encoding failed for bits {:016x}",
+                original.to_bits()
+            );
+            let encoded = encoded_result?;
+            let decoded_result = decode_big_scalar(
                 encoded.sign,
                 encoded.exponent,
                 &encoded.limbs,
                 value.precision_bits()?,
-            )?;
+            );
+            assert!(
+                decoded_result.is_ok(),
+                "decoding failed for bits {:016x}: {encoded:?}",
+                original.to_bits()
+            );
+            let decoded = decoded_result?;
             assert_eq!(decoded, value);
         }
         Ok(())
