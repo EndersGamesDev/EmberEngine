@@ -23,6 +23,7 @@ pub enum ConformanceVerdict {
 }
 
 /// Complete comparison facts for one deterministic conformance sample.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ConformanceResult {
     pub verdict: ConformanceVerdict,
@@ -90,9 +91,10 @@ pub fn record_is_well_formed(sample: KernelSample, mode: KernelMode) -> bool {
     let terminal_matches = if escaped {
         !glitch && record.smooth_iter.is_finite()
     } else {
-        record.smooth_iter == -1.0
+        record.smooth_iter.to_bits() == (-1.0_f32).to_bits()
     };
-    let mode_matches = mode != KernelMode::Shallow || (record.rebase_count == 0.0 && !glitch);
+    let mode_matches =
+        mode != KernelMode::Shallow || (record.rebase_count.to_bits() == 0 && !glitch);
     rebase_count.is_some() && index_matches && terminal_matches && mode_matches
 }
 
@@ -169,19 +171,24 @@ pub fn evaluate_perturbation_conformance(
 }
 
 fn binary_flag(value: f32) -> Option<bool> {
-    if value == 0.0 {
-        Some(false)
-    } else if value == 1.0 {
-        Some(true)
-    } else {
-        None
+    match value.to_bits() {
+        0 => Some(false),
+        bits if bits == 1.0_f32.to_bits() => Some(true),
+        _ => None,
     }
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
 fn exact_rebase_count(value: f32) -> Option<u32> {
-    (value.is_finite() && value >= 0.0 && value <= MAX_EXACT_REBASE_COUNT && value.trunc() == value)
-        .then_some(value as u32)
+    let count = value as u32;
+    (value.is_finite()
+        && (0.0..=MAX_EXACT_REBASE_COUNT).contains(&value)
+        && value.to_bits() == (count as f32).to_bits())
+    .then_some(count)
 }
 
 fn smooth_error(observed: f32, expected: f32) -> f32 {

@@ -418,18 +418,17 @@ mod tests {
         let offset = [0.0_f32; 4];
         let actual = perturb_scaled_offset(&uniforms, &orbit, offset)
             .expect("kernel mirror accepts fixture");
-        let expected = ember_julibrot_math::perturb_scaled_f64(
+        let (expected, envelope) = ember_julibrot_math::perturb_scaled_f64_with_envelope(
             &orbit,
             offset.map(f64::from),
             uniforms.scale_exponent,
             EscapeParams::new(8),
         )
         .expect("math oracle accepts fixture");
-        assert_eq!(actual.escape_index, expected.escape_index);
-        assert_eq!(actual.record.escaped == 1.0, expected.escaped);
-        assert_eq!(actual.record.rebase_count, expected.rebase_count as f32);
-        assert_eq!(actual.record.glitch == 1.0, expected.glitch);
-        assert!((actual.record.smooth_iter - expected.smooth_iter).abs() <= 2.0e-3);
+        assert_eq!(
+            crate::evaluate_perturbation_conformance(actual, expected, envelope).verdict,
+            crate::ConformanceVerdict::Pass
+        );
     }
 
     #[test]

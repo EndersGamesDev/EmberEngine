@@ -253,9 +253,10 @@ mod tests {
             let actual = escape_shallow_point(point, params).expect("kernel mirror accepts point");
             let expected =
                 ember_julibrot_math::escape_f32(point, params).expect("math oracle accepts point");
-            assert_eq!(actual.escape_index, expected.escape_index);
-            assert_eq!(actual.record.escaped == 1.0, expected.escaped);
-            assert!((actual.record.smooth_iter - expected.smooth_iter).abs() <= 1.0e-4);
+            assert_eq!(
+                crate::evaluate_shallow_conformance(actual, expected).verdict,
+                crate::ConformanceVerdict::Pass
+            );
         }
     }
 }
