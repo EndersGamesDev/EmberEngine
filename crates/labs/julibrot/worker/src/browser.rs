@@ -447,12 +447,14 @@ async fn run_producer_inner() -> Result<(), ChannelError> {
             let admission = producer.shaper.admit(clock.now_us())?;
             match admission {
                 Admission::Ready { credit_us, .. } => {
-                    let request = producer.pending.take().ok_or_else(|| {
-                        ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0)
-                    })?;
-                    let transfer = producer.orbit_buffers.pop().ok_or_else(|| {
-                        ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0)
-                    })?;
+                    let request = producer
+                        .pending
+                        .take()
+                        .ok_or_else(|| ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0))?;
+                    let transfer = producer
+                        .orbit_buffers
+                        .pop()
+                        .ok_or_else(|| ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0))?;
                     Ok(Some(BrowserWork::Run {
                         request,
                         transfer,
@@ -461,12 +463,14 @@ async fn run_producer_inner() -> Result<(), ChannelError> {
                 }
                 Admission::Delay { wait_us } => Ok(Some(BrowserWork::Delay(wait_us))),
                 Admission::TimingUnavailable => {
-                    let request = producer.pending.take().ok_or_else(|| {
-                        ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0)
-                    })?;
-                    let transfer = producer.orbit_buffers.pop().ok_or_else(|| {
-                        ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0)
-                    })?;
+                    let request = producer
+                        .pending
+                        .take()
+                        .ok_or_else(|| ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0))?;
+                    let transfer = producer
+                        .orbit_buffers
+                        .pop()
+                        .ok_or_else(|| ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0))?;
                     Ok(Some(BrowserWork::TimingUnavailable { request, transfer }))
                 }
             }

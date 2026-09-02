@@ -319,7 +319,10 @@ mod tests {
         assert_eq!(shaper.admit(101).unwrap(), Admission::Delay { wait_us: 0 });
         shaper.observe_return(200, 10_000, 100_000).unwrap();
         assert_eq!(shaper.estimate_us(), 100_000);
-        assert_eq!(shaper.admit(200).unwrap(), Admission::Delay { wait_us: 360_000 });
+        assert_eq!(
+            shaper.admit(200).unwrap(),
+            Admission::Delay { wait_us: 360_000 }
+        );
         assert_eq!(
             shaper.admit(360_200).unwrap(),
             Admission::Ready {
@@ -342,9 +345,6 @@ mod tests {
         shaper.admit(9).unwrap();
         shaper.observe_return(10, 250_000, 0).unwrap();
         assert_eq!(shaper.admit(10).unwrap(), Admission::TimingUnavailable);
-        assert_eq!(
-            shaper.admit(9).unwrap_err().code,
-            ErrorCode::TimingOverflow
-        );
+        assert_eq!(shaper.admit(9).unwrap_err().code, ErrorCode::TimingOverflow);
     }
 }

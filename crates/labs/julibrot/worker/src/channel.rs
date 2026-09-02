@@ -485,7 +485,10 @@ impl OrbitLease {
 
 impl Drop for OrbitLease {
     fn drop(&mut self) {
-        debug_assert!(self.buffer.is_none(), "orbit lease dropped without credit return");
+        debug_assert!(
+            self.buffer.is_none(),
+            "orbit lease dropped without credit return"
+        );
     }
 }
 
