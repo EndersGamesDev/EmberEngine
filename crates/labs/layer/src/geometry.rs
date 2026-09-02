@@ -53,11 +53,11 @@ pub fn lattice_steps() -> Vec<[u32; 5]> {
     steps.push([0; 5]);
     let mut axes = [1_u32; 5];
     steps.push(axes);
-    let mut axis = 0;
+    let mut axis_index = 0;
     while axes != [LATTICE_AXIS_TOP; 5] {
-        axes[axis] = axes[axis].saturating_add(2);
+        axes[axis_index] = axes[axis_index].saturating_add(2);
         steps.push(axes);
-        axis = (axis + 1) % axes.len();
+        axis_index = (axis_index + 1) % axes.len();
     }
     axes[0] = axes[0].saturating_add(2);
     steps.push(axes);
