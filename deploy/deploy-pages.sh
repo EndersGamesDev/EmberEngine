@@ -6,7 +6,7 @@
 #   index.html            games hub (lobby showcase + catalog)
 #   games.json            catalog — the newest version of each game is "live"
 #   server.json           {ws, v} — current tunnel domain + deploy stamp
-#   games/arena/v14/      live arena build — Trench City + fullscreen (page + its own frozen pkg)
+#   games/arena/v15/      live arena build — Trench City, fullscreen, the revolver (page + its own frozen pkg)
 #   games/arena/v0/       live arena v0 pong classic (page + frozen pkg)
 #   games/fire/v2/        live fire racer build (castle circuit, online)
 #   games/kings/v1/       live four kings build (2D page board + 3D wasm view, online)
@@ -57,7 +57,7 @@ trap 'st=$?; git worktree remove --force "$PAGES_DIR" >/dev/null 2>&1 || true; r
 git worktree add -q --detach "$PAGES_DIR" FETCH_HEAD
 
 # Live version dirs (older versions stay frozen on the branch untouched).
-ARENA_LIVE="games/arena/v14"
+ARENA_LIVE="games/arena/v15"
 ARENA_V0_LIVE="games/arena/v0"
 FIRE_LIVE="games/fire/v2"
 KINGS_LIVE="games/kings/v1"
