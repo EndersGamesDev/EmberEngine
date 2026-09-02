@@ -4,6 +4,7 @@
     clippy::cast_lossless,
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
+    clippy::redundant_pub_crate,
     clippy::too_many_arguments,
     clippy::too_many_lines
 )]
