@@ -31,9 +31,9 @@ use crate::executor::texture;
 use crate::selection::{SelectionEpoch, SurfaceOwnership};
 use crate::{
     BOX_INDICES, ComparatorWork, DataSpan, EqualWorkSignature, ExecutorDispatch, GpuKernel,
-    GpuKernelExecutor, GpuKernelExecutorConfig, KernelDesc, ModeCFrameUniform,
-    RegisteredKernel, box_vertices, frame_for, layer_comparator_draw_shader,
-    layer_comparator_kernel, mode_a_records, mode_a_shader, mode_c_register, mode_c_shader,
+    GpuKernelExecutor, GpuKernelExecutorConfig, KernelDesc, ModeCFrameUniform, RegisteredKernel,
+    box_vertices, frame_for, layer_comparator_draw_shader, layer_comparator_kernel, mode_a_records,
+    mode_a_shader, mode_c_register, mode_c_shader,
 };
 
 const HEAP_SIDE: u16 = 512;
