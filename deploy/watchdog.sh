@@ -111,15 +111,51 @@ host_name_of() {
     printf '%s\n' "$name"
 }
 
+# Whether a fetched body is a JSON object, i.e. a book at all. `entry_addr`
+# cannot answer this: it collapses "unparsable" and "this host is not listed"
+# into the same empty string, and those two are opposite instructions.
+book_is_object() {
+    printf '%s' "$1" | "$PY" -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+raise SystemExit(0 if isinstance(d, dict) else 1)
+' >/dev/null 2>&1
+}
+
 pass() {
     git fetch -q origin main gh-pages 2>/dev/null || { log "fetch failed; skipping pass"; return; }
 
     local head
     head="$(git rev-parse origin/main)"
 
-    # Read the book the PAGES are currently serving, once for the whole pass.
-    local book
-    book="$(curl -s --max-time 15 "$PAGES_URL/server.json?ts=$(date +%s)" 2>/dev/null || echo '{}')"
+    # Read the book the PAGES are currently serving, once for the whole pass,
+    # and remember whether it was READ at all.
+    #
+    # This used to be `curl -s … || echo '{}'`, which erased the difference
+    # between the two: a DNS blip, or a Pages 404 (curl without -f exits 0 and
+    # hands back the HTML error page), left every address empty, which the
+    # loop below reads as "no host has published anything" and answers by
+    # redeploying every game on every host — restarting healthy servers,
+    # minting a new tunnel domain for each and pushing a commit per deploy,
+    # every pass, for as long as the fetch keeps failing. Nothing about the
+    # state changes, so it never stops on its own.
+    #
+    # `git fetch` above already brought gh-pages down, so a CDN failure has a
+    # second source to fall back on before anything is given up.
+    local book="" book_ok=""
+    if book="$(curl -fs --max-time 15 "$PAGES_URL/server.json?ts=$(date +%s)" 2>/dev/null)" \
+            && book_is_object "$book"; then
+        book_ok=1
+    elif book="$(git show origin/gh-pages:server.json 2>/dev/null)" && book_is_object "$book"; then
+        book_ok=1
+        log "no readable book at $PAGES_URL; using origin/gh-pages for this pass"
+    else
+        book=""
+        log "book unavailable ($PAGES_URL) and unreadable from origin/gh-pages; not treating hosts as unpublished this pass"
+    fi
 
     # Work out what each host needs before touching anything, so the global
     # refusals below are evaluated once and a host that needs nothing costs
@@ -137,6 +173,13 @@ pass() {
         if [ "$head" != "$deployed" ]; then
             log "$remote ($name): origin/main moved (${deployed:0:7} -> ${head:0:7})"
             wants="$GAMES"
+        elif [ -z "$book_ok" ]; then
+            # The commit-driven branch above is independent of the book and
+            # still runs; only the address check needs one. A host absent from
+            # a book that PARSED still means "deploy it" — that is the
+            # bootstrap path for a new host.
+            log "$remote ($name): the book could not be read; leaving its addresses alone this pass"
+            continue
         else
             for game in $GAMES; do
                 url="$(entry_addr "$book" "$name" "$(addr_key "$game")")"

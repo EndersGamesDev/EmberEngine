@@ -15,8 +15,8 @@ DEPLOY="$(cd "$HERE/.." && pwd)"
 . "$HERE/lib.sh"
 
 # The shims have no extension on purpose — they stand in for `ssh`, `scp`,
-# `cargo` and `sleep` on PATH — so they are listed rather than globbed.
-FILES="$(find "$DEPLOY" -name '*.sh' -print; ls "$HERE"/shims/ssh "$HERE"/shims/scp "$HERE"/shims/cargo "$HERE"/shims/sleep)"
+# `cargo`, `curl` and `sleep` on PATH — so they are listed rather than globbed.
+FILES="$(find "$DEPLOY" -name '*.sh' -print; ls "$HERE"/shims/ssh "$HERE"/shims/scp "$HERE"/shims/cargo "$HERE"/shims/curl "$HERE"/shims/sleep)"
 
 while IFS= read -r f; do
     [ -n "$f" ] || continue
