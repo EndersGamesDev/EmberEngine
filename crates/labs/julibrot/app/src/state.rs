@@ -370,6 +370,10 @@ fn axis(value: u32) -> Result<Axis4, AppError> {
     }
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Result::map_err supplies the owned sibling error"
+)]
 fn math_error(error: ember_julibrot_math::MathError) -> AppError {
     AppError::Math(error.to_string())
 }
