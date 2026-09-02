@@ -13,7 +13,9 @@ pub use ember_julibrot_math::{
 };
 pub use error::KernelError;
 pub use perturb::{perturb_scaled_offset, perturb_scaled_pixel};
-pub use refinement::{DispatchFacts, LevelSpec, RefinementPlan, dispatch_facts};
+pub use refinement::{
+    DispatchFacts, LevelSpec, RefinementPlan, dispatch_facts, plan_refinement,
+};
 pub use records::{
     EscapeGrid, GridExtent, KernelMode, PerturbUniform, ReferenceOrbitInput, RefinementLevel,
     ShallowUniform,

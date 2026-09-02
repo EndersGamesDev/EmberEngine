@@ -228,6 +228,8 @@ Every `DispatchFacts` byte and count is arithmetic from the accepted plan or a c
 
 ### 3.6 Public function surface
 
+`plan_refinement(requested_extent: GridExtent, params: EscapeParams, accepts_records: impl FnMut(u32) -> bool) -> Result<RefinementPlan, KernelError>` is the seam-independent Phase-3 planner: it tests power-of-two degraded Final record counts in order and accepts the first count approved by the exact caller predicate; Phase 4 supplies the executor's cloned-arena predicate rather than replacing this arithmetic.
+
 `JulibrotKernels::new(executor: &mut ember_lab_heap::GpuKernelExecutor) -> Result<JulibrotKernels, KernelError>` registers exactly two production dialect-v2 kernels and their immutable pipelines against the executor's immutable heap layout.
 
 `JulibrotKernels::plan(executor: &ember_lab_heap::GpuKernelExecutor, requested_extent: GridExtent, params: EscapeParams) -> Result<RefinementPlan, KernelError>` performs checked extent arithmetic, applies the 4,096 policy, and uses exact cloned-arena allocation trials without mutation.

@@ -67,7 +67,7 @@ pub struct DispatchFacts {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct PrefixPage {
+struct PrefixPage {
     pub global_base: u32,
     pub valid_length: u32,
 }
@@ -99,7 +99,13 @@ fn levels(extent: GridExtent, requested_max_iter: u32) -> [LevelSpec; 3] {
     ]
 }
 
-pub(crate) fn plan_refinement(
+/// Builds the deterministic levels using an exact caller-supplied capacity predicate.
+///
+/// # Errors
+///
+/// Returns a typed refusal for invalid controls, fixed-width overflow, or failure at the minimum
+/// representable extent.
+pub fn plan_refinement(
     requested_extent: GridExtent,
     params: EscapeParams,
     mut accepts_records: impl FnMut(u32) -> bool,
@@ -133,7 +139,7 @@ pub(crate) fn plan_refinement(
     }
 }
 
-pub(crate) fn prefix_pages(
+fn prefix_pages(
     active_len: u32,
     page_records: u32,
 ) -> Result<Vec<PrefixPage>, KernelError> {
@@ -184,6 +190,12 @@ pub fn dispatch_facts(
     let page_records = page_side
         .checked_mul(page_side)
         .ok_or(KernelError::ArithmeticOverflow)?;
+    let pages = prefix_pages(active_pixels, page_records)?;
+    let last_page = pages.last().ok_or(KernelError::InvalidExtent)?;
+    debug_assert_eq!(
+        last_page.global_base + last_page.valid_length,
+        active_pixels
+    );
     let reserved_records = final_pixels
         .div_ceil(page_records)
         .checked_mul(page_records)
@@ -209,7 +221,7 @@ pub fn dispatch_facts(
         worst_case_pixel_iterations: u64::from(active_pixels)
             .checked_mul(u64::from(selected.iteration_cap))
             .ok_or(KernelError::ArithmeticOverflow)?,
-        page_passes: active_pixels.div_ceil(page_records),
+        page_passes: u32::try_from(pages.len()).map_err(|_| KernelError::ArithmeticOverflow)?,
         copy_commands: copy_commands(active_pixels, page_side),
         gpu_copy_bytes: bytes(active_pixels)?,
         logical_heap_bytes: bytes(active_pixels)?,
