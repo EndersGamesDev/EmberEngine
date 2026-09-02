@@ -444,3 +444,13 @@ Semantic contract commit `df5280f959bfa67d4359110a6f66c33a8af6d85a` was checked 
 The same semantic contract commit passed `cargo-fmt --all -- --check` on barza with exit 0, `RUN-REPORT` wall 1.3 seconds, and SSH-observed wall 2.51 seconds.
 
 Before the semantic commit, local non-toolchain checks found only `docs/julibrot/present.md` changed, `git diff --check` passed, the banned token and superseded field names were absent, line endings were LF, and no UTF-8 BOM was present.
+
+## 10. Implementation evidence
+
+Implementation head `d178e27bf29dcd39390c38fda5f32986c4b4dd52` was checked out exactly on barza and passed the required nine gates: workspace build `1.4 s`, workspace clippy with warnings denied `0.7 s`, cargo-fmt check `1.4 s`, workspace tests excluding linter `33.2 s`, linter tests with the two repository checks skipped `0.9 s`, wasm checks for arena `0.2 s`, what-is-this `0.2 s`, fire `0.2 s`, and heap plus present `0.3 s`; each value is the corresponding `RUN-REPORT` wall and every exit was zero.
+
+The present package contributes 32 unit tests and two integration tests covering exact layouts, palette honesty, heap-specialized WGSL validation, mesh order and heap algebra, two-slot state transitions, exactly-once reference rebasing, bounded fence outcomes, all six required deep-zoom warp rows, the corrected display-chart conversion, the 9-by-9-by-5 tumbled corpus, app-facing signatures, and warp-completion identity.
+
+The native oracle rejected the pre-implementation tumbled envelope at `6.394` pixels for `Δθ_view=0.01` and `Δzoom_log2=0.1`; the implementation contract therefore narrows the accepted tested fixture to `0.002` and `0.025` at no more than `2.0` pixels instead of converting a failed risk oracle into a claim.
+
+Barza establishes native and wasm compilation, byte/layout tests, CPU arithmetic, WGSL parse/validation, and bounded state transitions, but it cannot establish GL surface behavior, actual browser fence scheduling, visual orientation, disocclusion quality, console silence, or measured scene/warp costs; every such fact remains `requires visible replay`.
