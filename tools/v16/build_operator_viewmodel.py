@@ -517,25 +517,72 @@ def render_previews(objs):
         say(f"preview {name}: {scene.render.filepath}")
 
 
-def main():
-    preview = "--preview" in sys.argv
+def build_operator():
+    """Import the operator, build the rifle and the hands in the rifle's
+    frame, and return what a caller needs to export or extend:
+    (rifle, hands, muzzle, extras), where extras carries a copy of the
+    posed right fist (`fist`, still in the rifle's frame, unjoined), its
+    wrist (`wrist_r`), the right sleeve's UV (`sleeve_uv_r`) and the body
+    material (`skin`), for a build that wants the operator's fist on
+    another grip with a forearm of its own."""
     arm, body, rifle_objs = import_operator()
     hold, to_rifle, muzzle = rifle_frame(rifle_objs)
     rifle = build_rifle(rifle_objs)
     bake_body(body)
+    landmarks = {
+        name: to_rifle @ (posed_head(arm, name) - hold)
+        for name in ("RightHand", "RightHandIndex1", "RightHandIndex2", "RightHandPinky1", "RightHandThumb2")
+    }
     parts, wrists, sleeve_uv, skin = cut(body, arm)
     align([rifle, parts["hand_r"], parts["hand_l"]], hold, to_rifle)
     for arm_part, wrist in wrists.items():
         parts[arm_part] = forearm_tube(arm_part, to_rifle @ (wrist - hold), sleeve_uv[arm_part], skin)
+    fist = copy_joined("fist_source", [parts["hand_r"]])
     hands = join_hands(parts)
-    objs = [rifle, hands]
-    for o in objs:
+    for o in (rifle, hands):
         lo, hi = world_bbox([o])
         say(f"{o.name}: box {fmt(lo)}..{fmt(hi)} about the hold point")
+    extras = {
+        "fist": fist,
+        "wrist_r": to_rifle @ (wrists["arm_r"] - hold),
+        "sleeve_uv_r": sleeve_uv["arm_r"],
+        "skin": skin,
+        "landmarks": landmarks,
+    }
+    say("right hand in the rifle frame: " + ", ".join(f"{k[9:] or 'wrist'} {fmt(v)}" for k, v in landmarks.items()))
+    return rifle, hands, muzzle, extras
+
+
+def copy_joined(name, objs):
+    """A joined copy of `objs`, leaving the originals in place."""
+    copies = []
+    for o in objs:
+        c = o.copy()
+        c.data = o.data.copy()
+        c.name = f"{name}_{o.name}"
+        bpy.context.scene.collection.objects.link(c)
+        copies.append(c)
+    bpy.ops.object.select_all(action="DESELECT")
+    for c in copies:
+        c.select_set(True)
+    bpy.context.view_layer.objects.active = copies[0]
+    bpy.ops.object.join()
+    joined = bpy.context.active_object
+    joined.name = name
+    joined.data.name = name
+    return joined
+
+
+def main():
+    preview = "--preview" in sys.argv
+    rifle, hands, muzzle, extras = build_operator()
+    bpy.data.objects.remove(extras["fist"], do_unlink=True)
+    objs = [rifle, hands]
     export(objs, muzzle)
     verify_glb()
     if preview:
         render_previews(objs)
 
 
-main()
+if __name__ == "__main__":
+    main()

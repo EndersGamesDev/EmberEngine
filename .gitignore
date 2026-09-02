@@ -39,3 +39,8 @@ assets/*.zip
 # v16 viewmodel runbook: previews, captures and bytecode stay local
 /tools/v16/*.png
 /tools/v16/__pycache__/
+# v17 artist sources: the scutum and the Murasama (large; converted GLB is committed)
+assets/scutum/
+assets/murasama/
+/tools/v17/*.png
+/tools/v17/__pycache__/

@@ -181,3 +181,7 @@ Presenter and input work is planned in `docs/presenter-architecture.md` and `doc
 - v16 operator: the third-person rig still swings both arms while the rifle rides at the hand; an aiming arm pose (hands on the grip and foregrip, as the FBX's own pose has them) would close the last gap between what the player holds and what others see.
 - v16 forearms are tubes in the sleeve's colour; the operator's real sleeves are too coarse to cut. A higher-resolution arm sleeve from the picture generator, or a decimation-aware cut, would replace them.
 - v15's revolver runbook (`tools/v15/`) still works and its viewmodel is a weapon pickup waiting for a weapon-model table; the client animates by node name and would need nothing new.
+- v17 sword hand: the operator's posed right index is a trigger finger, straight along the trigger, so on the Murasama it lies along the grip rather than around it. Curling RightHandIndex1..3 on a second evaluation of the body (not the shared armature, or the rifle hands curl too) is the fix.
+- v17 slash is first person only, like the v16 strike: remote players show nothing on E until `PState` carries a melee timestamp.
+- v17 shield: the scutum's protected arc is the sim's `MELEE_ARC`-independent shield rule, not the board's outline; a player may read cover the rules do not give at the board's edges.
+- v17 VRAM: five viewmodel meshes now clone five pictures (2048 + four 1024); a renderer that shares one texture between mesh ids would let the sword hand reuse the hands' picture.

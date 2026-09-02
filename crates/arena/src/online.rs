@@ -44,13 +44,48 @@ pub struct Part {
     pub pivot: Vec3,
 }
 
-/// The Blender-authored viewmodel: pistol parts + hands/arms parts.
+/// The Blender-authored viewmodel: the weapon, the hands that hold it, and
+/// what the off-hand and the melee key bring out.
 #[derive(Clone, Default)]
 pub struct Assets {
     pub gun: Vec<Part>,
     pub arms: Vec<Part>,
+    /// The scutum, drawn where the box plate used to be. Its model origin
+    /// is the handle behind the boss, so the centres `push_shield` was
+    /// given carry over unchanged.
+    pub shield: Vec<Part>,
+    /// The Murasama: blade along +X, tip forward, origin at the grip.
+    pub sword: Vec<Part>,
+    /// The fist and forearm that hold the sword, in the sword's own frame.
+    /// Viewmodel-only, like `arms`.
+    pub fist: Vec<Part>,
     /// Model-space muzzle tip, from the sidecar; where the flash sits.
     pub muzzle: Vec3,
+}
+
+/// Which list a viewmodel node belongs in.
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+enum Slot {
+    Gun,
+    Arms,
+    Shield,
+    Sword,
+    Fist,
+}
+
+/// Sort a GLB node by name. The three v17 nodes are matched exactly, before
+/// the older prefix rule, which still sends anything called `arm*`/`hand*`
+/// to the viewmodel-only list and everything else to the weapon. `hand_sword`
+/// keeps that prefix on purpose: an older client that has only the prefix
+/// rule hides it rather than welding it to a remote player's rifle.
+fn classify(name: &str) -> Slot {
+    match name {
+        "shield" => Slot::Shield,
+        "sword" => Slot::Sword,
+        "hand_sword" => Slot::Fist,
+        _ if name.starts_with("arm") || name.starts_with("hand") => Slot::Arms,
+        _ => Slot::Gun,
+    }
 }
 
 /// The sidecar `tools/v15/build_viewmodel.py` writes beside the GLB:
@@ -104,15 +139,20 @@ pub fn load_assets() -> (Vec<ember_engine::MeshData>, Option<Assets>) {
                     pivot: pivot.unwrap_or(Vec3::ZERO),
                 };
                 meshes.push(p.mesh);
-                if p.name.starts_with("arm") || p.name.starts_with("hand") {
-                    assets.arms.push(part);
-                } else {
-                    assets.gun.push(part);
+                match classify(&p.name) {
+                    Slot::Shield => assets.shield.push(part),
+                    Slot::Sword => assets.sword.push(part),
+                    Slot::Fist => assets.fist.push(part),
+                    Slot::Arms => assets.arms.push(part),
+                    Slot::Gun => assets.gun.push(part),
                 }
             }
             tracing::info!(
                 gun_parts = assets.gun.len(),
                 arm_parts = assets.arms.len(),
+                shield_parts = assets.shield.len(),
+                sword_parts = assets.sword.len(),
+                fist_parts = assets.fist.len(),
                 "viewmodel glb loaded"
             );
             (meshes, Some(assets))
@@ -332,32 +372,57 @@ fn weapon_rot(yaw: f32, pitch: f32) -> Quat {
     Quat::from_rotation_y(yaw) * Quat::from_rotation_z(pitch)
 }
 
-/// The first-person melee: a butt-strike with the rifle. Keyframes of
-/// (seconds since the press, forward, left, up, yaw, pitch) in the weapon's
-/// own frame - metres and radians - linear between keys, nothing before the
-/// first or after the last. The last key sits on `MELEE_COOLDOWN`, so the
-/// weapon is back in the hold by the time the next swing can start. Local
-/// only: the protocol carries no melee state for remote players.
-const STRIKE: [(f32, f32, f32, f32, f32, f32); 5] = [
-    (0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-    // Wind up: back and up, the muzzle swung across to the left.
-    (0.14, -0.10, 0.06, 0.06, 0.85, 0.20),
-    // The strike: forward and across, the muzzle dropping.
-    (0.30, 0.24, 0.18, -0.05, 0.30, -0.25),
-    (0.48, 0.08, 0.10, -0.02, 0.15, -0.08),
-    (MELEE_COOLDOWN, 0.0, 0.0, 0.0, 0.0, 0.0),
+/// A melee keyframe: seconds since the press, then an offset (forward,
+/// left, up) in metres and a (yaw, pitch, roll) in radians, all in the
+/// weapon's own frame. Linear between keys, nothing before the first or
+/// after the last, and the last always sits on `MELEE_COOLDOWN` so the
+/// hold is back before the next swing can start. Local only: the protocol
+/// carries no melee state for remote players.
+type MeleeKey = (f32, f32, f32, f32, f32, f32, f32);
+
+/// Where the rifle goes while the sword is out: down and to the right,
+/// clear of the frame. It has to leave, not just dip - the operator's right
+/// fist is on the sword, and a rifle still in shot shows that hand twice.
+const LOWER: [MeleeKey; 5] = [
+    (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+    (0.14, -0.10, -0.30, -0.55, -0.30, -0.70, 0.0),
+    (0.36, -0.14, -0.34, -0.62, -0.34, -0.75, 0.0),
+    (0.55, -0.10, -0.30, -0.55, -0.30, -0.70, 0.0),
+    (MELEE_COOLDOWN, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
 ];
 
-/// Where the strike has the weapon `t` seconds after the press: an offset
-/// (forward, left, up) and a (yaw, pitch) added to the hold. `None` when no
-/// strike is in progress.
-fn strike_pose(since: f32) -> Option<(Vec3, f32, f32)> {
+/// The cut: the Murasama swings in from the lower right already raised,
+/// travels diagonally across to the lower left with the edge leading (the
+/// roll turns the edge into the direction of travel), follows through, and
+/// drops back out of frame. Positive `left` is toward the left of the
+/// screen, so the sign of that column is the direction of the cut.
+const SLASH: [MeleeKey; 6] = [
+    (0.0, 0.50, -0.34, -0.44, -0.70, 0.80, 0.0),
+    // Raised over the right shoulder: hilt low right, blade up and out of
+    // the frame, the way a sword is actually carried into a cut.
+    (0.14, 0.54, -0.26, -0.10, -0.55, 0.70, -0.10),
+    // The cut. The yaw is what makes this readable: a blade pointed away
+    // from the eye shows 1 cm of edge and draws as a red line, so the cut
+    // brings it round to 66 degrees off the look, broadside across the
+    // upper left, where its 4 cm of width faces the camera. The hilt
+    // barely moves - a cut pivots at the shoulder.
+    (0.30, 0.56, -0.08, -0.10, 1.15, 0.25, -0.45),
+    // Follow-through: further left and dropping.
+    (0.44, 0.52, 0.16, -0.26, 1.55, -0.30, -0.55),
+    // Recovering, dropping out of frame.
+    (0.64, 0.46, -0.16, -0.42, -0.20, 0.50, -0.20),
+    (MELEE_COOLDOWN, 0.50, -0.34, -0.52, -0.70, 0.80, 0.0),
+];
+
+/// Read a keyframe table `since` seconds after the press: the offset and
+/// the (yaw, pitch, roll) to add to the hold. `None` outside the swing.
+fn melee_pose(keys: &[MeleeKey], since: f32) -> Option<(Vec3, f32, f32, f32)> {
     if !(0.0..MELEE_COOLDOWN).contains(&since) {
         return None;
     }
-    let idx = STRIKE.iter().rposition(|key| key.0 <= since)?;
-    let from = STRIKE[idx];
-    let to = STRIKE[(idx + 1).min(STRIKE.len() - 1)];
+    let idx = keys.iter().rposition(|key| key.0 <= since)?;
+    let from = keys[idx];
+    let to = keys[(idx + 1).min(keys.len() - 1)];
     let span = to.0 - from.0;
     let blend = if span > 0.0 {
         ((since - from.0) / span).clamp(0.0, 1.0)
@@ -369,6 +434,7 @@ fn strike_pose(since: f32) -> Option<(Vec3, f32, f32)> {
         Vec3::new(lerp(from.1, to.1), lerp(from.2, to.2), lerp(from.3, to.3)),
         lerp(from.4, to.4),
         lerp(from.5, to.5),
+        lerp(from.6, to.6),
     ))
 }
 
@@ -1666,19 +1732,22 @@ impl EmberGame for ShooterGame {
                 // right the first-person pose uses — so both views put the
                 // shield on the same side of the body.
                 let left = Vec2::new(aim.y, -aim.x);
-                push_shield(
-                    &mut frame,
-                    // Reaching as far forward as the gun hand does (0.55),
-                    // and for the same reason: the body box is 1.0 across,
-                    // so anything held closer than 0.5 is held INSIDE the
-                    // torso and the plate's face never shows.
-                    Vec3::new(pos.x, feet_y + hand_y + 0.20, pos.y)
-                        + Vec3::new(aim.x, 0.0, aim.y) * 0.52
-                        + Vec3::new(left.x, 0.0, left.y) * 0.34,
-                    Quat::from_rotation_y(-aim.y.atan2(aim.x)),
-                    SHIELD_PLATE,
-                    fc * 0.85,
-                );
+                // Reaching as far forward as the gun hand does (0.55), and
+                // for the same reason: the body box is 1.0 across, so
+                // anything held closer than 0.5 is held INSIDE the torso
+                // and the plate's face never shows.
+                let center = Vec3::new(pos.x, feet_y + hand_y + 0.20, pos.y)
+                    + Vec3::new(aim.x, 0.0, aim.y) * 0.52
+                    + Vec3::new(left.x, 0.0, left.y) * 0.34;
+                let rot = Quat::from_rotation_y(-aim.y.atan2(aim.x));
+                // The scutum's origin is its handle, behind the boss, so it
+                // hangs on the same centre the box plate was given.
+                match self.assets.as_ref().filter(|a| !a.shield.is_empty()) {
+                    Some(a) => {
+                        push_parts(&mut frame, &a.shield, center, rot, fc, Action::REST);
+                    }
+                    None => push_shield(&mut frame, center, rot, SHIELD_PLATE, fc * 0.85),
+                }
             }
             if let Some(a) = &self.assets {
                 let yaw = -aim.y.atan2(aim.x);
@@ -1827,12 +1896,11 @@ impl EmberGame for ShooterGame {
             let yaw = -forward2.y.atan2(forward2.x);
             // Tilts with aim elevation, plus a muzzle-up kick per shot.
             let rot = weapon_rot(yaw, self.pitch + 0.16 * recoil);
-            // The melee strike moves the whole hold, in the weapon's frame.
-            let (base, rot) = match self
-                .melee_started
-                .and_then(|t0| strike_pose(self.time - t0))
-            {
-                Some((offset, yaw_add, pitch_add)) => (
+            // The melee drops the rifle out of the frame, in the weapon's
+            // own frame, and the sword comes out in its place.
+            let melee_since = self.melee_started.map(|t0| self.time - t0);
+            let (base, rot) = match melee_since.and_then(|since| melee_pose(&LOWER, since)) {
+                Some((offset, yaw_add, pitch_add, _roll)) => (
                     base + look * offset.x - right3 * offset.y + Vec3::Y * offset.z,
                     weapon_rot(yaw + yaw_add, self.pitch + 0.16 * recoil + pitch_add),
                 ),
@@ -1858,6 +1926,36 @@ impl EmberGame for ShooterGame {
             // What stood here fired on `time % cooldown` while the trigger
             // was held — a free-running clock with no relationship to
             // whether a bullet was ever spawned or ammo remained.
+            // The Murasama, in the operator's own fist, on its own hold: the
+            // eye rather than the rifle's base, so the reload dip and the
+            // recoil do not ride along with a weapon that is not firing.
+            if let Some(a) = self.assets.as_ref().filter(|a| !a.sword.is_empty())
+                && let Some(since) = melee_since
+                && let Some((offset, yaw_add, pitch_add, roll)) = melee_pose(&SLASH, since)
+            {
+                let sword_base = eye + look * offset.x - right3 * offset.y + Vec3::Y * offset.z;
+                // Roll last, in the weapon's own frame: it turns the edge
+                // into the direction of the cut.
+                let sword_rot =
+                    weapon_rot(yaw + yaw_add, self.pitch + pitch_add) * Quat::from_rotation_x(roll);
+                push_parts(
+                    &mut frame,
+                    &a.sword,
+                    sword_base,
+                    sword_rot,
+                    accent,
+                    Action::REST,
+                );
+                push_parts(
+                    &mut frame,
+                    &a.fist,
+                    sword_base,
+                    sword_rot,
+                    accent,
+                    Action::REST,
+                );
+            }
+
             let flashing = self.shot_started.is_some_and(|t0| self.time - t0 < 0.045);
             if flashing {
                 inst(
@@ -1886,13 +1984,27 @@ impl EmberGame for ShooterGame {
                 let lerp = |lo: f32, hi: f32| lo + (hi - lo) * k;
                 let center = eye + look * lerp(0.62, 0.74) - right3 * lerp(0.36, 0.26)
                     + Vec3::Y * (lerp(-0.66, -0.09) + bob * 0.4);
-                push_shield(
-                    &mut frame,
-                    center,
-                    weapon_rot(yaw, self.pitch),
-                    SHIELD_PLATE * lerp(0.9, 1.0),
-                    GUNMETAL * 1.6 + accent * 0.10,
-                );
+                let rot = weapon_rot(yaw, self.pitch);
+                // The scutum rides the same swing the plate did; what the
+                // box got from growing (lerp(0.9, 1.0)) the mesh gets from
+                // the swing alone, since parts are drawn at unit scale.
+                match self.assets.as_ref().filter(|a| !a.shield.is_empty()) {
+                    Some(a) => push_parts(
+                        &mut frame,
+                        &a.shield,
+                        center,
+                        rot,
+                        GUNMETAL * 1.6 + accent * 0.10,
+                        Action::REST,
+                    ),
+                    None => push_shield(
+                        &mut frame,
+                        center,
+                        rot,
+                        SHIELD_PLATE * lerp(0.9, 1.0),
+                        GUNMETAL * 1.6 + accent * 0.10,
+                    ),
+                }
             }
         }
 
@@ -2165,55 +2277,130 @@ mod net {
 }
 
 #[cfg(test)]
-mod strike_tests {
+mod melee_tests {
     use super::*;
 
-    #[test]
-    fn the_strike_starts_and_ends_at_the_hold() {
-        assert!(strike_pose(-0.01).is_none(), "nothing before the press");
+    fn keys_are_a_swing(keys: &[MeleeKey]) {
+        for pair in keys.windows(2) {
+            assert!(pair[1].0 > pair[0].0, "keys in time order");
+        }
         assert!(
-            strike_pose(MELEE_COOLDOWN).is_none(),
-            "nothing once the cooldown is over"
-        );
-        let (o, yaw, pitch) = strike_pose(0.0).unwrap();
-        assert!(
-            o.length() < 1e-6 && yaw.abs() < 1e-6 && pitch.abs() < 1e-6,
-            "starts at the hold"
-        );
-        let (o, yaw, pitch) = strike_pose(MELEE_COOLDOWN - 1e-4).unwrap();
-        assert!(
-            o.length() < 1e-2 && yaw.abs() < 1e-2 && pitch.abs() < 1e-2,
-            "back at the hold: {o} {yaw} {pitch}"
+            (keys[keys.len() - 1].0 - MELEE_COOLDOWN).abs() < 1e-6,
+            "the last key sits on the cooldown"
         );
     }
 
-    #[test]
-    fn the_strike_winds_up_back_then_thrusts_forward() {
-        let (wind, ..) = strike_pose(0.14).unwrap();
-        let (hit, ..) = strike_pose(0.30).unwrap();
-        assert!(wind.x < 0.0, "winds up backward: {wind}");
-        assert!(hit.x > 0.2, "strikes forward: {hit}");
-        // Continuous at 60 Hz: no frame jumps more than a few centimetres.
-        let mut prev = strike_pose(0.0).unwrap().0;
+    fn is_continuous(keys: &[MeleeKey], limit: f32) {
+        let mut prev = melee_pose(keys, 0.0).unwrap().0;
         let mut t = 1.0 / 60.0;
         while t < MELEE_COOLDOWN {
-            let cur = strike_pose(t).unwrap().0;
-            assert!(
-                (cur - prev).length() < 0.05,
-                "jump of {} at {t}",
-                (cur - prev).length()
-            );
+            let cur = melee_pose(keys, t).unwrap().0;
+            let step = (cur - prev).length();
+            assert!(step < limit, "jump of {step} at {t}");
             prev = cur;
             t += 1.0 / 60.0;
         }
     }
 
     #[test]
-    fn the_strike_keys_are_in_order_and_end_on_the_cooldown() {
-        for w in STRIKE.windows(2) {
-            assert!(w[1].0 > w[0].0, "keys in time order");
+    fn neither_table_plays_outside_the_cooldown() {
+        for keys in [&LOWER[..], &SLASH[..]] {
+            assert!(
+                melee_pose(keys, -0.01).is_none(),
+                "nothing before the press"
+            );
+            assert!(
+                melee_pose(keys, MELEE_COOLDOWN).is_none(),
+                "nothing once the cooldown is over"
+            );
+            keys_are_a_swing(keys);
         }
-        assert!((STRIKE[STRIKE.len() - 1].0 - MELEE_COOLDOWN).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_rifle_leaves_the_frame_and_comes_back_to_the_hold() {
+        let (start, yaw, pitch, _) = melee_pose(&LOWER, 0.0).unwrap();
+        assert!(
+            start.length() < 1e-6 && yaw.abs() < 1e-6 && pitch.abs() < 1e-6,
+            "starts at the hold"
+        );
+        let (down, ..) = melee_pose(&LOWER, 0.2).unwrap();
+        assert!(down.z < -0.4, "well below the hold mid-swing: {down}");
+        assert!(down.y < -0.2, "and out to the right: {down}");
+        let (back, yaw, pitch, _) = melee_pose(&LOWER, MELEE_COOLDOWN - 1e-4).unwrap();
+        assert!(
+            back.length() < 1e-2 && yaw.abs() < 1e-2 && pitch.abs() < 1e-2,
+            "back at the hold: {back} {yaw} {pitch}"
+        );
+        is_continuous(&LOWER, 0.08);
+    }
+
+    #[test]
+    fn the_cut_travels_from_the_right_to_the_left() {
+        let (raised, raised_yaw, raised_pitch, _) = melee_pose(&SLASH, 0.14).unwrap();
+        let (cut, cut_yaw, cut_pitch, _) = melee_pose(&SLASH, 0.30).unwrap();
+        let (through, through_yaw, through_pitch, _) = melee_pose(&SLASH, 0.44).unwrap();
+        // The blade is what travels. A positive yaw points it left of the
+        // crosshair and a positive pitch above it, so the cut starts high
+        // on the right and finishes low on the left.
+        assert!(raised_yaw < 0.0, "blade starts right: {raised_yaw}");
+        assert!(cut_yaw > 0.2, "sweeps through the middle: {cut_yaw}");
+        assert!(through_yaw > cut_yaw, "and on to the left: {through_yaw}");
+        assert!(
+            raised_pitch > 0.5,
+            "starts above the crosshair: {raised_pitch}"
+        );
+        assert!(
+            cut_pitch < raised_pitch,
+            "descends into the cut: {cut_pitch}"
+        );
+        assert!(
+            through_pitch < 0.0 && through_pitch < cut_pitch,
+            "and finishes below the crosshair: {through_pitch}"
+        );
+        // The hilt follows, much less far: a cut pivots at the shoulder.
+        assert!(
+            raised.y < cut.y && cut.y < through.y,
+            "the hilt drifts left"
+        );
+        assert!(
+            through.y - raised.y < 0.6,
+            "the hilt travels less than the blade: {raised} to {through}"
+        );
+        assert!(
+            raised.z > through.z,
+            "and settles lower: {raised} {through}"
+        );
+        is_continuous(&SLASH, 0.08);
+    }
+
+    #[test]
+    fn the_edge_turns_over_into_the_cut() {
+        let (.., roll_before) = melee_pose(&SLASH, 0.0).unwrap();
+        let (.., roll_cut) = melee_pose(&SLASH, 0.30).unwrap();
+        let (.., roll_through) = melee_pose(&SLASH, 0.44).unwrap();
+        let (.., roll_end) = melee_pose(&SLASH, MELEE_COOLDOWN - 1e-4).unwrap();
+        assert!(roll_before.abs() < 1e-6, "starts unrolled");
+        assert!(roll_cut < -0.4, "rolled into the cut: {roll_cut}");
+        assert!(roll_through <= roll_cut, "and holds through it");
+        // The roll stays modest on purpose: it turns about the blade, so
+        // the fist and its cuff orbit with it, and a big roll throws the
+        // arm across the screen.
+        assert!(roll_through > -0.9, "not a barrel roll: {roll_through}");
+        assert!(roll_end.abs() < 1e-2, "back to level: {roll_end}");
+    }
+
+    #[test]
+    fn the_viewmodel_nodes_are_sorted_by_name() {
+        assert_eq!(classify("shield"), Slot::Shield);
+        assert_eq!(classify("sword"), Slot::Sword);
+        // The sword hand is matched exactly, and its name also carries the
+        // older prefix, so a client with only that rule still hides it.
+        assert_eq!(classify("hand_sword"), Slot::Fist);
+        assert_eq!(classify("hands"), Slot::Arms);
+        assert_eq!(classify("arm_sword"), Slot::Arms);
+        assert_eq!(classify("rifle"), Slot::Gun);
+        assert_eq!(classify("cylinder"), Slot::Gun);
     }
 }
 
