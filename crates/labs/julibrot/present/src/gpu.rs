@@ -9,9 +9,9 @@ use crate::fence::{FenceDecision, FenceLedger};
 use crate::state::{SceneCompletion, SceneLedger};
 use crate::{
     FrameReceipt, FrameState, HotSlot, HotUniform, PaletteId, Pose, PresentConfig, PresentError,
-    PresentEvent, PresentFacts, PresentHot, PresentMain, PresentStatus, RefinementLevel, SampleClass,
-    SceneUniform, SubmissionKind, ViewMode, Warp, WarpKind, hot_ring_bytes, hot_stride, palette,
-    scene_shaders, tumbled_indices, view_rotation, warp_shader,
+    PresentEvent, PresentFacts, PresentHot, PresentMain, PresentStatus, SampleClass, SceneUniform,
+    SubmissionKind, ViewMode, Warp, WarpKind, hot_ring_bytes,
+    hot_stride, palette, scene_shaders, tumbled_indices, view_rotation, warp_shader,
 };
 
 const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -149,17 +149,21 @@ impl Presenter {
             previous.state.delivered_iter_cap != main.state.delivered_iter_cap
                 || previous.state.plane_origin_f64 != main.state.plane_origin_f64
         });
-        let revision_advanced = self.main.as_ref().is_none_or(|previous| {
-            previous.state.centre_revision != main.state.centre_revision
-        });
+        let revision_advanced = self
+            .main
+            .as_ref()
+            .is_none_or(|previous| previous.state.centre_revision != main.state.centre_revision);
         let view_changed = self
             .main
             .as_ref()
             .is_some_and(|previous| previous.view != main.view);
-        let latest_pose = self.hot.iter().flatten().max_by_key(|pose| pose.epoch).copied();
-        if revision_advanced
-            && let Some(mut accepted_pose) = latest_pose
-        {
+        let latest_pose = self
+            .hot
+            .iter()
+            .flatten()
+            .max_by_key(|pose| pose.epoch)
+            .copied();
+        if revision_advanced && let Some(mut accepted_pose) = latest_pose {
             accepted_pose.orbit_generation = main.state.generation_applied;
             accepted_pose.grid_width = main.grid.width;
             accepted_pose.grid_height = main.grid.height;
@@ -171,10 +175,10 @@ impl Presenter {
                 main.state.reference_shift_px,
             );
         }
-        if self.ledger.invalidate_incompatible(
-            main.state.delivered_iter_cap,
-            main.state.plane_origin_f64,
-        ) || incompatible
+        if self
+            .ledger
+            .invalidate_incompatible(main.state.delivered_iter_cap, main.state.plane_origin_f64)
+            || incompatible
         {
             self.facts.status = PresentStatus::ClearForIncompatibleMain;
             self.clear_retained_facts();
@@ -233,7 +237,9 @@ impl Presenter {
                 hot.epoch as u32,
                 (hot.epoch >> 32) as u32,
                 u32::from(plan.source_valid),
-                self.main.as_ref().map_or(ViewMode::Flat as u32, |main| main.view as u32),
+                self.main
+                    .as_ref()
+                    .map_or(ViewMode::Flat as u32, |main| main.view as u32),
             ],
         };
         let offset = u64::from(slot.index() * self.gpu.hot_stride);
@@ -296,12 +302,8 @@ impl Presenter {
             main.state.plane_origin_f64,
         )?;
         let extent = [main.grid.width, main.grid.height];
-        let reallocated = ensure_scene_texture(
-            &self.device,
-            &mut self.gpu,
-            texture_index as usize,
-            extent,
-        )?;
+        let reallocated =
+            ensure_scene_texture(&self.device, &mut self.gpu, texture_index as usize, extent)?;
         if reallocated {
             self.facts.texture_reallocations = self.facts.texture_reallocations.saturating_add(1);
             self.scene_samples.reset();
@@ -565,8 +567,7 @@ impl Presenter {
 
     fn publish_promoted(&mut self, frame: &crate::SceneFrame) {
         self.replaced_warp_scene = self.active_warp_scene;
-        self.facts.reprojected_per_scene =
-            self.active_warp_scene.map(|_| self.active_warp_count);
+        self.facts.reprojected_per_scene = self.active_warp_scene.map(|_| self.active_warp_count);
         self.active_warp_scene = Some(frame.scene_id);
         self.active_warp_count = 0;
         self.facts.completed_scene_id = Some(frame.scene_id);
@@ -707,7 +708,7 @@ fn create_gpu_state(
         label: Some("Julibrot nearest scene sampler"),
         mag_filter: wgpu::FilterMode::Nearest,
         min_filter: wgpu::FilterMode::Nearest,
-        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+        mipmap_filter: wgpu::FilterMode::Nearest,
         ..Default::default()
     });
     let scene_textures = [
@@ -783,32 +784,31 @@ fn create_heap_layout(
         },
         count: None,
     };
-    Ok(device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("Julibrot immutable heap presentation layout"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2Array,
-                    multisampled: false,
+    Ok(
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Julibrot immutable heap presentation layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
                 },
-                count: None,
-            },
-            uniform(1, u64::from(limits.descriptor_capacity) * 16),
-            uniform(2, u64::from(directory_records) * 16),
-        ],
-    }))
+                uniform(1, u64::from(limits.descriptor_capacity) * 16),
+                uniform(2, u64::from(directory_records) * 16),
+            ],
+        }),
+    )
 }
 
 fn create_scene_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Julibrot scene and HOT layout"),
-        entries: &[
-            uniform_entry(0, false, 80),
-            uniform_entry(1, true, 128),
-        ],
+        entries: &[uniform_entry(0, false, 80), uniform_entry(1, true, 128)],
     })
 }
 
@@ -1026,12 +1026,8 @@ fn ensure_scene_texture(
     if gpu.scene_textures[index].extent == extent {
         return Ok(false);
     }
-    gpu.scene_textures[index] = create_scene_texture(
-        device,
-        &gpu.warp_texture_layout,
-        &gpu.scene_sampler,
-        extent,
-    );
+    gpu.scene_textures[index] =
+        create_scene_texture(device, &gpu.warp_texture_layout, &gpu.scene_sampler, extent);
     Ok(true)
 }
 
@@ -1052,7 +1048,11 @@ fn ensure_indices(
     gpu: &mut GpuState,
     extent: [u32; 2],
 ) -> Result<(), PresentError> {
-    if gpu.indices.as_ref().is_some_and(|indices| indices.extent == extent) {
+    if gpu
+        .indices
+        .as_ref()
+        .is_some_and(|indices| indices.extent == extent)
+    {
         return Ok(());
     }
     let values = tumbled_indices(extent).map_err(|_| PresentError::IndexCountOverflow {
@@ -1089,16 +1089,15 @@ fn encode_scene(
     hot_offset: u32,
     clear: [f32; 4],
 ) {
-    let depth_attachment = (view == ViewMode::Tumbled).then_some(
-        wgpu::RenderPassDepthStencilAttachment {
+    let depth_attachment =
+        (view == ViewMode::Tumbled).then_some(wgpu::RenderPassDepthStencilAttachment {
             view: &gpu.depth.view,
             depth_ops: Some(wgpu::Operations {
                 load: wgpu::LoadOp::Clear(1.0),
                 store: wgpu::StoreOp::Discard,
             }),
             stencil_ops: None,
-        },
-    );
+        });
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("Julibrot selected scene pass"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1195,11 +1194,13 @@ fn create_fence(device: &wgpu::Device, label: &'static str) -> wgpu::Buffer {
 fn arm_fence(buffer: &wgpu::Buffer, ledger: FenceLedger) -> PendingFence {
     let signal = Arc::new(Mutex::new(None));
     let callback = Arc::clone(&signal);
-    buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| {
-        if let Ok(mut slot) = callback.lock() {
-            *slot = Some(result.map_err(|_| ()));
-        }
-    });
+    buffer
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, move |result| {
+            if let Ok(mut slot) = callback.lock() {
+                *slot = Some(result.map_err(|_| ()));
+            }
+        });
     PendingFence { ledger, signal }
 }
 

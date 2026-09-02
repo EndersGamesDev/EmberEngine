@@ -4,8 +4,7 @@ use crate::{
     SceneFrame, WarpKind, WarpPlan, apply_homography, pack_homography_rows, solve_homography,
 };
 
-const CHART_CORNERS: [[f64; 2]; 4] =
-    [[-1.0, -1.0], [1.0, -1.0], [-1.0, 1.0], [1.0, 1.0]];
+const CHART_CORNERS: [[f64; 2]; 4] = [[-1.0, -1.0], [1.0, -1.0], [-1.0, 1.0], [1.0, 1.0]];
 const HEIGHT_SAMPLES: [f64; 5] = [-2.0, -1.0, 0.0, 1.0, 2.0];
 const CHART_STEPS: u32 = 9;
 const PERSPECTIVE_POLE: f64 = 8.0;
@@ -79,7 +78,11 @@ fn tumbled_plan(
     let mut errors = sampled_tumbled_errors(from_pose, to_pose, flat_forward, matrix)?;
     errors.sort_by(f64::total_cmp);
     let maximum = errors.last().copied()?;
-    let percentile_index = errors.len().saturating_mul(95).div_ceil(100).saturating_sub(1);
+    let percentile_index = errors
+        .len()
+        .saturating_mul(95)
+        .div_ceil(100)
+        .saturating_sub(1);
     let percentile = *errors.get(percentile_index)?;
     Some(WarpPlan {
         rows,
@@ -144,10 +147,8 @@ fn chart_residual(from: &Pose, to: &Pose) -> f64 {
         .into_iter()
         .map(|chart| {
             let coordinate = [
-                to.centre_from_reference_px[0]
-                    + 0.5 * f64::from(to.grid_width) * chart[0],
-                to.centre_from_reference_px[1]
-                    + 0.5 * f64::from(to.grid_height) * chart[1],
+                to.centre_from_reference_px[0] + 0.5 * f64::from(to.grid_width) * chart[0],
+                to.centre_from_reference_px[1] + 0.5 * f64::from(to.grid_height) * chart[1],
             ];
             let vector = plane_point(to.plane, coordinate).map(|value| ratio * value);
             let projection = plane_projection(from.plane, vector);
@@ -163,8 +164,10 @@ fn chart_residual(from: &Pose, to: &Pose) -> f64 {
 
 fn plane_point(plane: Plane, coordinate: [f64; 2]) -> [f64; 4] {
     std::array::from_fn(|axis| {
-        f64::from(plane.basis_u[axis])
-            .mul_add(coordinate[0], f64::from(plane.basis_v[axis]) * coordinate[1])
+        f64::from(plane.basis_u[axis]).mul_add(
+            coordinate[0],
+            f64::from(plane.basis_v[axis]) * coordinate[1],
+        )
     })
 }
 

@@ -60,7 +60,11 @@ impl FenceLedger {
         self.polls
     }
 
-    pub(crate) fn observe(&mut self, now_ms: f64, callback: Option<Result<(), ()>>) -> FenceDecision {
+    pub(crate) fn observe(
+        &mut self,
+        now_ms: f64,
+        callback: Option<Result<(), ()>>,
+    ) -> FenceDecision {
         let wall_ms = nonnegative_elapsed(self.started_ms, now_ms);
         if self.first_poll_ms.is_none() {
             self.first_poll_ms = Some(now_ms);

@@ -434,8 +434,8 @@ mod tests {
     }
 
     fn test_span() -> ember_lab_heap::DataSpan {
-        let mut arena = ember_lab_heap::SpanArena::new(8, 1, 8, 256, 8)
-            .expect("test arena is valid");
+        let mut arena =
+            ember_lab_heap::SpanArena::new(8, 1, 8, 256, 8).expect("test arena is valid");
         arena.allocate_span(1, 1).expect("one record fits")
     }
 }

@@ -1,8 +1,7 @@
 use ember_julibrot_math::Pose;
 
 use crate::{
-    DropReason, PaletteId, PresentError, RefinementLevel, SampleClass, SceneFrame,
-    SubmissionMeasurement,
+    DropReason, PaletteId, PresentError, RefinementLevel, SceneFrame, SubmissionMeasurement,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -163,8 +162,7 @@ impl SceneLedger {
 }
 
 fn rebase_pose(pose: &mut Pose, accepted_pose: &Pose, shift_px: [f64; 2]) {
-    let ratio = (pose.zoom_log2 - accepted_pose.zoom_log2).exp2()
-        * f64::from(pose.grid_width)
+    let ratio = (pose.zoom_log2 - accepted_pose.zoom_log2).exp2() * f64::from(pose.grid_width)
         / f64::from(accepted_pose.grid_width);
     let overlap = [
         dot(pose.plane.basis_u, accepted_pose.plane.basis_u),
@@ -244,7 +242,16 @@ mod tests {
         let mut ledger = SceneLedger::default();
         assert_eq!(begin(&mut ledger, 1, 1), 0);
         assert_eq!(
-            begin(&mut ledger, 2, 1),
+            ledger.begin(
+                2,
+                pose(1),
+                PaletteId::Classic,
+                64,
+                RefinementLevel::Preview,
+                [800, 600],
+                1,
+                ORIGIN,
+            ),
             Err(PresentError::SceneBusy { scene_id: 1 })
         );
         assert!(matches!(
@@ -268,16 +275,22 @@ mod tests {
         let accepted = pose(2);
         ledger.apply_reference_shift(&accepted, 2, 2, [4.0, -8.0]);
         assert_eq!(
-            ledger.retained().map(|frame| frame.pose.centre_from_reference_px),
+            ledger
+                .retained()
+                .map(|frame| frame.pose.centre_from_reference_px),
             Some([7.0, 5.0])
         );
         assert_eq!(
-            ledger.pending().map(|pending| pending.pose.centre_from_reference_px),
+            ledger
+                .pending()
+                .map(|pending| pending.pose.centre_from_reference_px),
             Some([7.0, 5.0])
         );
         ledger.apply_reference_shift(&accepted, 2, 2, [4.0, -8.0]);
         assert_eq!(
-            ledger.retained().map(|frame| frame.pose.centre_from_reference_px),
+            ledger
+                .retained()
+                .map(|frame| frame.pose.centre_from_reference_px),
             Some([7.0, 5.0])
         );
     }

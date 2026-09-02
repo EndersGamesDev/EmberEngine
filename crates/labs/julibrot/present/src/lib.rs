@@ -2,10 +2,10 @@
 
 #![deny(missing_docs)]
 
-mod homography;
 mod contract;
 mod fence;
 mod gpu;
+mod homography;
 mod mesh;
 mod palette;
 mod planner;
@@ -19,12 +19,12 @@ pub use contract::{
     PresentFacts, PresentHot, PresentMain, PresentStatus, SampleClass, SceneFrame, SubmissionKind,
     SubmissionMeasurement, WarpKind, WarpPlan,
 };
-pub use ember_julibrot_math::{Pose, ViewMode};
 pub use ember_julibrot_kernels::RefinementLevel;
+pub use ember_julibrot_math::{Pose, ViewMode};
+pub use gpu::Presenter;
 pub use homography::{
     apply_homography, inverse_identity_error, pack_homography_rows, solve_homography,
 };
-pub use gpu::Presenter;
 pub use mesh::{
     HeightSample, MeshError, display_coordinate, height_for_record, tumbled_index_count,
     tumbled_indices, view_rotation,
