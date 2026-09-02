@@ -1344,7 +1344,7 @@ mod tests {
 
     #[test]
     fn header_set_handles_reject_foreign_and_stale_use() {
-        let mut arena = SpanArena::new(16, 1, 8, 256, 4).expect("arena");
+        let mut arena = SpanArena::new(16, 2, 8, 256, 4).expect("arena");
         let span = arena.allocate_span(300, 16).expect("span");
         let headers = StaticHeaders::for_span(&span, 256).expect("headers");
         let executor = Arc::new(());

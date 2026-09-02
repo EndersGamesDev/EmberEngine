@@ -709,7 +709,7 @@ mod tests {
     #[test]
     fn single_span_trial_matches_real_success_and_never_mutates() {
         let mut arena =
-            SpanArena::new(16, 2, 32, 16 * 8 + 4 * 16, 8).expect("arena configuration fits");
+            SpanArena::new(16, 3, 32, 16 * 8 + 4 * 16, 8).expect("arena configuration fits");
         let before = snapshot(&arena);
         let trial = arena.plan_span(700, 16).expect("three pages fit");
         assert_eq!(snapshot(&arena), before);
