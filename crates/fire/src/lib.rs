@@ -49,7 +49,7 @@ pub fn run_local() {
 /// # Errors
 ///
 /// Returns an error if the networking backend cannot start the connection.
-pub fn run_online(cfg: online_game::Config) -> Result<(), String> {
+pub fn run_online(cfg: &online_game::Config) -> Result<(), String> {
     let track = fire_core::castle::track();
     let (meshes, ids) = game::build_meshes(&track);
     let game = online_game::OnlineGame::connect(cfg, ids)?;
@@ -85,7 +85,7 @@ mod wasm_api {
     pub fn start_online(config_json: &str) -> Result<(), JsValue> {
         let cfg = super::online_game::Config::from_json(config_json)
             .map_err(|e| JsValue::from_str(&e))?;
-        super::run_online(cfg).map_err(|e| JsValue::from_str(&e))
+        super::run_online(&cfg).map_err(|e| JsValue::from_str(&e))
     }
 
     /// The protocol this bundle speaks. The page shows it next to the

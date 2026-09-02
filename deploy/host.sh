@@ -104,9 +104,9 @@ helper() {
 # the kind of thing that must be stated once rather than remembered twice.
 game_ids() { echo "arena fire"; }
 game_port()  { case "$1" in arena) echo "$EMBER_ARENA_PORT" ;; fire) echo "$EMBER_FIRE_PORT" ;; esac; }
-game_crate() { case "$1" in arena) echo pong-core ;; fire) echo fire-core ;; esac; }
-game_pkg()   { case "$1" in arena) echo pong-server ;; fire) echo fire-server ;; esac; }
-game_bin()   { case "$1" in arena) echo pong-server ;; fire) echo fire-server ;; esac; }
+game_crate() { case "$1" in arena) echo arena-core ;; fire) echo fire-core ;; esac; }
+game_pkg()   { case "$1" in arena) echo arena-server ;; fire) echo fire-server ;; esac; }
+game_bin()   { case "$1" in arena) echo arena-server ;; fire) echo fire-server ;; esac; }
 game_bind()  {
     case "$1" in
         arena) echo "--bind 127.0.0.1:$(game_port arena)" ;;
@@ -133,7 +133,7 @@ proto_of() {
 probe_game() {
     local id="$1" url="$2" label="${3:-check}"
     case "$id" in
-        arena) ( cd "$SRC" && cargo run --release -q -p pong-server --example wsbot -- \
+        arena) ( cd "$SRC" && cargo run --release -q -p arena-server --example wsbot -- \
                     "$url" create "health-$label" - "health-$label" 6 >/dev/null ) ;;
         fire)  ( cd "$SRC" && cargo run --release -q -p fire-server --example probe -- \
                     "$url" >/dev/null ) ;;
@@ -298,7 +298,7 @@ cmd_up() {
         cd "$SRC"
         export EMBER_BUILD_VERSION="$version" EMBER_BUILD_COMMIT="$commit"
         # shellcheck disable=SC2086
-        $nice cargo build --release -p pong-server -p fire-server
+        $nice cargo build --release -p arena-server -p fire-server
     ) || die "build failed"
     echo "   built in $(( $(date +%s) - tb ))s"
 

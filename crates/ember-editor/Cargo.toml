@@ -7,7 +7,7 @@ version.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 # Distinct name so the bin's debug artifacts don't collide with the cdylib's
-# — the same reason crates/pong names its bin pong-app.
+# — the same reason crates/arena names its bin arena-app.
 [[bin]]
 name = "ember-editor-app"
 path = "src/main.rs"
@@ -16,7 +16,7 @@ path = "src/main.rs"
 ember-engine = { path = "../ember-engine" }
 # The editor authors sim data, so it speaks the sim's own types rather
 # than a parallel format that would have to be kept in step.
-pong-core = { path = "../pong-core" }
+arena-core = { path = "../arena-core" }
 glam.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

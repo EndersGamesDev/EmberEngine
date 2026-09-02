@@ -1,0 +1,1 @@
+{"type":"lobbies","payload":{"entries":[{"game_id":"arena","game_version":12,"lobby_name":"sunset","password_protected":true,"occupancy":2,"capacity":8,"status":{"code":"waiting","detail":null}},{"game_id":"fire","game_version":1,"lobby_name":"sunset","password_protected":false,"occupancy":3,"capacity":12,"status":{"code":"racing","detail":"lap 2"}}]}}

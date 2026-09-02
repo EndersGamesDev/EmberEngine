@@ -41,7 +41,7 @@ export SHIM_HOST_NAME=amber-otter
 REPO="$TMP/repo"
 ORIGIN="$TMP/origin.git"
 git init -q --bare "$ORIGIN"
-mkdir -p "$REPO/crates/pong-core/src" "$REPO/crates/fire-core/src" "$REPO/assets/models/fire"
+mkdir -p "$REPO/crates/arena-core/src" "$REPO/crates/fire-core/src" "$REPO/assets/models/fire"
 cd "$REPO"
 git init -q -b main .
 git remote add origin "$ORIGIN"
@@ -49,7 +49,7 @@ git config user.name "ember tests"
 git config user.email "tests@ember.local"
 printf '[workspace]\nmembers = []\n' > Cargo.toml
 printf '# lock\n' > Cargo.lock
-printf 'pub const PROTO_VERSION: u16 = 12;\n' > crates/pong-core/src/proto.rs
+printf 'pub const PROTO_VERSION: u16 = 12;\n' > crates/arena-core/src/proto.rs
 printf 'pub const PROTO_VERSION: u16 = 1;\n' > crates/fire-core/src/proto.rs
 printf 'placeholder\n' > assets/models/fire/placeholder.txt
 cp -r "$DEPLOY" "$REPO/deploy"
@@ -90,7 +90,7 @@ contains "$ARGV" "EMBER_HOST_NAME='' bash -s" "host-name.sh was piped to the hos
 contains "$ARGV" "EMBER_BUILD_VERSION=r1 EMBER_BUILD_COMMIT=$OLD_SHA" "the build was stamped with the ref"
 contains "$ARGV" "EMBER_HOST_NAME=amber-otter RUST_LOG=info nohup" "the server was launched with its name in the environment"
 case "$ARGV" in
-    *"pong-server --name"*) bad "the launch used a --name flag an older binary would reject" ;;
+    *"arena-server --name"*) bad "the launch used a --name flag an older binary would reject" ;;
     *) ok "the launch used no --name flag" ;;
 esac
 
@@ -145,10 +145,10 @@ echo "== EMBER_REF deploys an older commit, and says so =="
 # nothing to do with what is being edited here, so the dirty-tree refusal must
 # not fire.
 cd "$REPO"
-printf 'pub const PROTO_VERSION: u16 = 13;\n' > crates/pong-core/src/proto.rs
+printf 'pub const PROTO_VERSION: u16 = 13;\n' > crates/arena-core/src/proto.rs
 git commit -qam "bump the arena protocol to 13"
 NEW_SHA="$(git rev-parse --short HEAD)"
-printf '// uncommitted scribble\n' >> crates/pong-core/src/proto.rs
+printf '// uncommitted scribble\n' >> crates/arena-core/src/proto.rs
 : > "$SHIM_LOG"
 if SHIM_HOST_NAME=quiet-raven EMBER_HOST=oldbox EMBER_REF="$OLD_SHA" \
         bash "$REPO/deploy/deploy-pong-online.sh" > "$TMP/arena3.log" 2>&1; then
@@ -172,7 +172,7 @@ else
     ok "a dirty HEAD deploy is refused"
 fi
 contains "$(cat "$TMP/dirty.log")" "working tree is dirty" "and says why"
-git checkout -q -- crates/pong-core/src/proto.rs
+git checkout -q -- crates/arena-core/src/proto.rs
 
 echo "== the newest build on the live protocol owns the legacy key =="
 # main now speaks 13 while the pages still say 12, so the r2 host must NOT

@@ -67,6 +67,18 @@
           "path": "games/arena/v3/",
           "live": false,
           "note": "top-down (archived)"
+        },
+        {
+          "v": "v1",
+          "path": "games/pong/v1/",
+          "live": false,
+          "note": "first web build, archived under its original path"
+        },
+        {
+          "v": "v0",
+          "path": "games/arena/v0/",
+          "live": true,
+          "note": "the original local game — the pong classic"
         }
       ]
     },
@@ -92,22 +104,16 @@
       ]
     },
     {
-      "id": "pong",
-      "title": "Pong Classic",
-      "tag": "local · 2 players, one keyboard",
-      "desc": "The first ember game. A/D vs arrow keys, first to 7.",
+      "id": "what-is-this",
+      "title": "what is this?",
+      "tag": "local diagnostic · browser + hardware · optional upload",
+      "desc": "A playful, staged answer to a practical question: what kind of machine and browser is this? Runs fixed wasm CPU and timing kernels, records floating-point and feature fingerprints, and keeps going when a probe is unavailable. The complete JSON report can stay on your device; sending it to the Ember server is a separate, explicit choice.",
       "versions": [
         {
-          "v": "v2",
-          "path": "games/pong/v2/",
-          "live": true,
-          "note": "current build"
-        },
-        {
           "v": "v1",
-          "path": "games/pong/v1/",
-          "live": false,
-          "note": "first web build (archived)"
+          "path": "games/what-is-this/v1/",
+          "live": true,
+          "note": "diagnostic suite + optional report submission"
         }
       ]
     }

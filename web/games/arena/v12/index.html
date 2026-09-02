@@ -193,8 +193,8 @@
     // legacy top-level key, which every publish keeps writing.
     const { book } = await loadBook(ROOT.href);
     const V = book.v || '0';
-    const { default: init, start_online, proto_version } = await import(`./pkg/pong.js?v=${V}`);
-    let ready = init({ module_or_path: `./pkg/pong_bg.wasm?v=${V}` })
+    const { default: init, start_online, proto_version } = await import(`./pkg/arena.js?v=${V}`);
+    let ready = init({ module_or_path: `./pkg/arena_bg.wasm?v=${V}` })
       .catch((e) => { fail(e); console.error(e); });
     const PROTO = proto_version();
 

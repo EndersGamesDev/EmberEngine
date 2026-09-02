@@ -1,0 +1,7 @@
+{"t":"hello","proto":1,"handle":"ender"}
+{"t":"list_lobbies"}
+{"t":"create_lobby","name":"duel","password":"secret"}
+{"t":"join_lobby","name":"duel","password":null}
+{"t":"leave_lobby"}
+{"t":"input","axis":1.0}
+{"t":"ping","nonce":7}

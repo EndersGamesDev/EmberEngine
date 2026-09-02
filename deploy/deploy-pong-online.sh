@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Bring pong online multiplayer up end to end:
-#   1. build + (re)start pong-server on the target host (127.0.0.1:7778)
+#   1. build + (re)start arena-server on the target host (127.0.0.1:7778)
 #   2. (re)start a Cloudflare quick tunnel in front of it — this mints a
 #      fresh https://…trycloudflare.com domain on EVERY restart
 #   3. publish the new domain to server.json on GitHub Pages so the web
@@ -108,14 +108,14 @@ if ! printf '%s' "$HOST_NAME" | grep -qE '^[a-z0-9-]{3,32}$'; then
 fi
 echo "   $REMOTE publishes as '$HOST_NAME'"
 
-echo "== building pong-server (toolbox: ember-build) =="
+echo "== building arena-server (toolbox: ember-build) =="
 # EMBER_BUILD_VERSION/EMBER_BUILD_COMMIT are read by the server crate's
 # build.rs through option_env!, so the binary can say which commit it is in
 # its Welcome. They must be set for the BUILD, not the launch.
 ssh -o BatchMode=yes "$REMOTE" \
-    "toolbox run -c ember-build bash -lc 'source ~/.cargo/env && cd ~/ember-src && EMBER_BUILD_VERSION=$VERSION EMBER_BUILD_COMMIT=$COMMIT cargo build --release -p pong-server'"
+    "toolbox run -c ember-build bash -lc 'source ~/.cargo/env && cd ~/ember-src && EMBER_BUILD_VERSION=$VERSION EMBER_BUILD_COMMIT=$COMMIT cargo build --release -p arena-server'"
 
-echo "== restarting pong-server =="
+echo "== restarting arena-server =="
 # Two ways to own the process, and they must never both be used at once. If
 # `install-watchdog.sh` has enabled the systemd unit, IT owns the lifecycle:
 # pkill+nohup here would race it, because systemd sees its child die and
@@ -154,7 +154,9 @@ if [ -z "$MANAGED" ]; then
     # launch text matches the pkill pattern and kills its own shell.
     # Only our own account's processes. `pkill -u ender` run from any other
     # account matched nothing and was swallowed by the trailing `true`.
-    ssh -o BatchMode=yes "$REMOTE" 'pkill -u "$(id -un)" -f "pong-serve[r]" 2>/dev/null; true'
+    # Kill either artifact name so the first renamed deploy also replaces the old process.
+    ssh -o BatchMode=yes "$REMOTE" \
+        'pkill -u "$(id -un)" -f "pong-serve[r]" 2>/dev/null; pkill -u "$(id -un)" -f "arena-serve[r]" 2>/dev/null; true'
     sleep 1
 
     echo "== checking nobody else holds $PORT =="
@@ -174,10 +176,10 @@ if [ -z "$MANAGED" ]; then
     # commit whose binary has never heard of the flag, and an unknown flag is
     # a crash loop where an unknown environment variable is simply ignored.
     ssh -o BatchMode=yes -f "$REMOTE" \
-        "EMBER_HOST_NAME=$HOST_NAME RUST_LOG=info nohup ~/ember-src/target/release/pong-server --bind $BIND >> ~/pong-server.log 2>&1 &"
+        "EMBER_HOST_NAME=$HOST_NAME RUST_LOG=info nohup ~/ember-src/target/release/arena-server --bind $BIND >> ~/pong-server.log 2>&1 &"
     sleep 2
-    if ! ssh -o BatchMode=yes "$REMOTE" 'pgrep -u "$(id -un)" -f "pong-serve[r]" >/dev/null'; then
-        echo "FAILED: pong-server is not running. Last log lines:" >&2
+    if ! ssh -o BatchMode=yes "$REMOTE" 'pgrep -u "$(id -un)" -f "arena-serve[r]" >/dev/null'; then
+        echo "FAILED: arena-server is not running. Last log lines:" >&2
         ssh -o BatchMode=yes "$REMOTE" 'tail -20 ~/pong-server.log' >&2 || true
         exit 1
     fi
@@ -189,7 +191,7 @@ echo "== local health check (before exposing it) =="
 # public check below is unambiguously the tunnel rather than the server. Worth
 # the extra minute on a host we have never deployed to before.
 if ! ssh -o BatchMode=yes "$REMOTE" \
-    "toolbox run -c ember-build bash -lc 'source ~/.cargo/env && cd ~/ember-src && cargo run --release -q -p pong-server --example wsbot -- ws://$BIND create local-healthcheck - healthcheck 6'"; then
+    "toolbox run -c ember-build bash -lc 'source ~/.cargo/env && cd ~/ember-src && cargo run --release -q -p arena-server --example wsbot -- ws://$BIND create local-healthcheck - healthcheck 6'"; then
     echo "FAILED: the server is listening but wsbot could not create a lobby on it." >&2
     ssh -o BatchMode=yes "$REMOTE" 'tail -20 ~/pong-server.log' >&2 || true
     exit 1
@@ -235,7 +237,7 @@ echo "tunnel domain: $TUNNEL  ->  $WS_URL"
 
 echo "== health check through the public URL =="
 # NOT a bare HTTP 101. A 101 only says a connection thread completed the
-# WebSocket handshake; pong-server was observed on the target host with its listener up
+# WebSocket handshake; arena-server was observed on the target host with its listener up
 # and its hub loop dead, handing out 101s and closing immediately — and this
 # check printed ONLINE over it. wsbot speaks the protocol: it creates a lobby
 # and counts state updates, so it can only pass if the hub is actually
@@ -254,7 +256,7 @@ sleep 15
 
 ok=""
 for _ in $(seq 1 10); do
-    if cargo run --release -q -p pong-server --example wsbot -- \
+    if cargo run --release -q -p arena-server --example wsbot -- \
         "$WS_URL" create deploy-healthcheck - healthcheck 6; then
         ok=1
         break
@@ -276,9 +278,9 @@ echo "== publishing this host's entry to the address book =="
 # The protocol number comes from the REF being deployed, not from the working
 # tree: the entry has to say what the binary on that host actually speaks, and
 # those differ the moment EMBER_REF names an older commit.
-PROTO="$(git show "$REF:crates/pong-core/src/proto.rs" \
+PROTO="$(git show "$REF:crates/arena-core/src/proto.rs" \
     | grep -oE 'PROTO_VERSION: u16 = [0-9]+' | grep -oE '[0-9]+$')"
-[ -n "$PROTO" ] || { echo "FAILED: no PROTO_VERSION in $REF:crates/pong-core/src/proto.rs" >&2; exit 1; }
+[ -n "$PROTO" ] || { echo "FAILED: no PROTO_VERSION in $REF:crates/arena-core/src/proto.rs" >&2; exit 1; }
 
 PAGES_DIR="$(mktemp -d -t ember-pages-XXXX)"
 git -C "$REPO_DIR" worktree add "$PAGES_DIR" gh-pages

@@ -259,7 +259,7 @@ echo "tunnel domain: $TUNNEL  ->  $WS_URL"
 
 echo "== health check THROUGH the public URL =="
 # The old shared form accepted an HTTP 101 as proof of life. A 101 only says a
-# connection thread completed the WebSocket handshake; pong-server was observed
+# connection thread completed the WebSocket handshake; arena-server was observed
 # on the target host with its listener up and its hub loop dead, handing out 101s and
 # closing immediately — and that check would have printed ONLINE. The probe
 # sends Hello and requires Welcome, which only the hub thread can produce.

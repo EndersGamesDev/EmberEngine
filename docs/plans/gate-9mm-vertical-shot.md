@@ -92,7 +92,7 @@ Re-run rather than carrying the previous green forward: the diff was not
 docs-only, because the branch merged main and brought `rig.rs` with it.
 Merges are where a green stops transferring.
 
-`cargo test --workspace`: no failures — pong-core 31, ember-server e2e
+`cargo test --workspace`: no failures — arena-core 31, ember-server e2e
 11, ember-engine 9 (including `rig_json_joints_resolve_whatever_the_key_order`,
 confirming the merge kept the `parse_joint` fix rather than resolving it
 away). Merging to main is Ender's call.
@@ -105,12 +105,12 @@ is still 7, so the bump lands with the merge and takes jump with it.
 The deploy coupling this creates is now **self-detecting**: `server.json`
 records the protocol the bundle speaks and `deploy-pages.sh` prints a
 loud block when it changes, naming the exact error players see and that
-`pong-server` must be redeployed in the same window (27c20d6).
+`arena-server` must be redeployed in the same window (27c20d6).
 
 Two corrections to the earlier framing in this file, both verified in the
 source rather than assumed:
 
-- The mismatch is **not silent**. `pong-server` sends `S2C::Error` —
+- The mismatch is **not silent**. `arena-server` sends `S2C::Error` —
   "this build speaks protocol vN, the live game is vM — play the live
   version" (lib.rs:628, :710) — and the client shows it (online.rs:898).
   Archived pages fail with an accurate sentence, not a mystery.
@@ -128,9 +128,9 @@ floor-cull test with a negative control.
 
 | Check | Result |
 |---|---|
-| `cargo test -p pong-core` | **31 passed, 0 failed** |
+| `cargo test -p arena-core` | **31 passed, 0 failed** |
 | `cargo test --workspace` | no failures; ember-server e2e 11 passed |
-| `cargo check -p pong --target wasm32-unknown-unknown` | clean |
+| `cargo check -p arena --target wasm32-unknown-unknown` | clean |
 
 Still open for the merge: the branch edits `docs/asset-pipeline.md`,
 which main has also changed — take dev-a1's Path D and conventions
@@ -150,14 +150,14 @@ gating does not need adler or specht provisioning.**
 | Check | Result |
 |---|---|
 | `cargo test --workspace` | 1 failure (below); all other suites pass, including the new ember-server e2e: **11 passed** |
-| `cargo check -p pong --target wasm32-unknown-unknown` | clean |
+| `cargo check -p arena --target wasm32-unknown-unknown` | clean |
 | `cargo clippy --workspace --all-targets` | no errors; the one warning (unused `mut`, ember-engine renderer) is pre-existing on main |
 | `blender --background --python tools/9mm_convert.py` | loads clean on Blender 5.2, dies correctly on the missing source |
 
 ### `shooter::tests::pitch_does_not_shorten_a_shot` — a test bug, not a sim bug
 
 ```
-panicked at crates/pong-core/src/shooter.rs:1472: "a shot must spawn a bullet"
+panicked at crates/arena-core/src/shooter.rs:1472: "a shot must spawn a bullet"
 ```
 
 The failing iteration is `pitch = -MAX_PITCH`. `MAX_PITCH` is 1.45 rad, so

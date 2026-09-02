@@ -3,7 +3,7 @@
 //!
 //! The deploy scripts used to accept an HTTP `101` as proof the server was up.
 //! A `101` only says a connection thread completed the WebSocket handshake.
-//! `pong-server` was observed on specht in exactly that state: listener up,
+//! `arena-server` was observed on specht in exactly that state: listener up,
 //! handshakes succeeding, hub loop dead, every peer getting `101` and then an
 //! immediate close — and the deploy would have printed ONLINE.
 //!

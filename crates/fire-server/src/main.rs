@@ -1,7 +1,7 @@
 //! `fire-server [bind-addr] [--name HOST]` — bind defaults to 127.0.0.1:7781.
 //!
 //! TLS terminates at the tunnel in front of this, exactly as it does for
-//! pong-server, so the listener here is plain TCP.
+//! arena-server, so the listener here is plain TCP.
 //!
 //! The bind address stays POSITIONAL: the deploy scripts and the on-host
 //! units already pass it that way, and a flag would have broken every one of

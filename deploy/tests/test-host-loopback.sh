@@ -127,7 +127,7 @@ is "$(jget "$BOOK" 'bool(len(d["commit"]) >= 7)')" "True" "commit is a short sha
 is "$(jget "$BOOK" 'bool(d["updated"].endswith("Z"))')" "True" "updated is UTC"
 # The protocol numbers must be the ones in the checkout that was deployed,
 # not whatever the machine running the test happens to have.
-SRC_PROTO="$(grep -oE 'PROTO_VERSION: u16 = [0-9]+' "$EMBER_HOME/src/crates/pong-core/src/proto.rs" | grep -oE '[0-9]+$')"
+SRC_PROTO="$(grep -oE 'PROTO_VERSION: u16 = [0-9]+' "$EMBER_HOME/src/crates/arena-core/src/proto.rs" | grep -oE '[0-9]+$')"
 is "$(jget "$BOOK" 'str(d["proto"])')" "$SRC_PROTO" "proto came from the deployed ref"
 
 echo "== status =="

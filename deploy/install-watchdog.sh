@@ -89,7 +89,7 @@ WantedBy=default.target
 UNIT
 }
 
-emit_server pong ember-src      pong-server "--bind 127.0.0.1:7780"
+emit_server pong ember-src      arena-server "--bind 127.0.0.1:7780"
 emit_server fire ember-src-fire fire-server "127.0.0.1:7781"
 emit_tunnel pong 7780
 emit_tunnel fire 7781
