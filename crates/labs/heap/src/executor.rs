@@ -1383,14 +1383,21 @@ mod tests {
         reservations.release_span(headers[3].owner());
         assert_eq!(reservations.free_sets(), 2);
         assert_eq!(reservations.longest_free_run(), 1);
-        assert!(matches!(
-            reservations.reserve(&executor, &[headers[5].clone(), headers[5].clone()]),
-            Err(DispatchError::HeaderSetCapacity {
+        let error = reservations
+            .reserve(&executor, &[headers[5].clone(), headers[5].clone()])
+            .expect_err("two total holes do not form a two-set run");
+        assert_eq!(
+            error,
+            DispatchError::HeaderSetCapacity {
                 requested_sets: 2,
                 total_free_sets: 2,
                 longest_free_run: 1,
-            })
-        ));
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            "header buffer cannot reserve contiguous run of 2 sets; 2 total set regions are free and the longest free run is 1"
+        );
     }
 
     #[test]
