@@ -283,7 +283,7 @@ fn frame_loop_preserves_cross_slice_order_and_cooperative_polling() {
         .expect("refresh boundary exists")
         .0;
     let poll = refresh
-        .find("presenter.poll(now_ms)")
+        .find("loop_state.refresh(&mut self.presenter, now_ms)")
         .expect("opening poll");
     let drain = refresh.find("viewer.drain_hot").expect("HOT drain");
     let write = refresh.find("presenter.write_hot").expect("HOT write");
@@ -293,8 +293,11 @@ fn frame_loop_preserves_cross_slice_order_and_cooperative_polling() {
     let warp = refresh.find("presenter.frame").expect("warp submit");
     assert!(poll < drain && drain < write && write < arrivals);
     assert!(arrivals < kernels && kernels < surface && surface < warp);
+    assert_eq!(refresh.matches("loop_state.refresh").count(), 1);
+    assert!(!refresh.contains("presenter.poll"));
     assert!(FRAME.contains("KernelMode::for_zoom"));
-    assert!(FRAME.contains("self.presenter.poll(now_ms)"));
+    assert!(FRAME.contains("presenter.poll_once(now_ms)"));
     assert!(MAIN.contains("requestAnimationFrame"));
+    assert!(MAIN.contains("if (api.app_needs_refresh()) scheduleFrame();"));
     assert!(FRAME.contains("runtime.complete_warp"));
 }

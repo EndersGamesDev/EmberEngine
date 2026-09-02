@@ -33,6 +33,104 @@ pub struct RefinementSchedule {
     in_flight: Option<SceneTicket>,
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+trait PresenterPoll {
+    type Event;
+
+    fn poll_once(&mut self, now_ms: f64) -> Vec<Self::Event>;
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct FrameLoop {
+    schedule: RefinementSchedule,
+    requested_run: bool,
+    completed_run: bool,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl FrameLoop {
+    fn refresh<P: PresenterPoll>(&mut self, presenter: &mut P, now_ms: f64) -> Vec<P::Event> {
+        presenter.poll_once(now_ms)
+    }
+
+    fn accept_request(&mut self, generation: u32, scene_ready: bool) {
+        self.requested_run = true;
+        self.completed_run = false;
+        if scene_ready && !self.schedule.pending() {
+            self.schedule.restart(generation);
+        }
+    }
+
+    fn restart(&mut self, generation: u32) {
+        self.schedule.restart(generation);
+        if self.requested_run {
+            self.completed_run = false;
+        }
+    }
+
+    fn due(&self) -> Option<RefinementLevel> {
+        self.schedule.due()
+    }
+
+    const fn submitted(&mut self, id: u64, level: RefinementLevel) {
+        self.schedule.submitted(id, level);
+    }
+
+    fn completed(&mut self, id: u64, generation: u32, level: RefinementLevel) -> bool {
+        let completed = self.schedule.completed(id, generation, level);
+        if completed && self.requested_run && !self.schedule.pending() {
+            self.completed_run = true;
+        }
+        completed
+    }
+
+    fn retired(&mut self, id: u64) -> bool {
+        self.schedule.retired(id)
+    }
+
+    const fn generation(&self) -> u32 {
+        self.schedule.generation()
+    }
+
+    const fn refinement_pending(&self) -> bool {
+        self.schedule.pending()
+    }
+
+    const fn warp_requested(&self, policy: crate::FramePolicy) -> bool {
+        self.requested_run || !matches!(policy, crate::FramePolicy::SingleFrameOnDemand)
+    }
+
+    const fn warp_submitted(&mut self) {
+        if self.requested_run && self.completed_run {
+            self.requested_run = false;
+            self.completed_run = false;
+        }
+    }
+
+    const fn needs_refresh(
+        &self,
+        scene_in_flight: bool,
+        warp_in_flight: bool,
+        auxiliary_pending: bool,
+    ) -> bool {
+        scene_in_flight
+            || warp_in_flight
+            || auxiliary_pending
+            || self.requested_run
+            || self.schedule.pending()
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl PresenterPoll for ember_julibrot_present::Presenter {
+    type Event = ember_julibrot_present::PresentEvent;
+
+    fn poll_once(&mut self, now_ms: f64) -> Vec<Self::Event> {
+        self.poll(now_ms)
+    }
+}
+
 impl RefinementSchedule {
     /// Restarts ordered refinement for a newly accepted selection.
     pub const fn restart(&mut self, generation: u32) {
@@ -126,7 +224,7 @@ mod browser {
     };
     use ember_lab_heap::{DataSpan, GpuKernelExecutor, GpuKernelExecutorConfig};
 
-    use super::RefinementSchedule;
+    use super::FrameLoop;
     use crate::{
         AppError, BrowserRuntime, FramePolicy, FramePolicyTracker, RefreshOutcome, RefreshStatus,
         RunRequests, ViewerController,
@@ -184,7 +282,7 @@ mod browser {
         grid: EscapeGrid,
         main: ember_julibrot_worker::MainState,
         scene_selection: Option<SceneSelection>,
-        schedule: RefinementSchedule,
+        loop_state: FrameLoop,
         prepared_level: Option<ember_julibrot_kernels::RefinementLevel>,
         hot_stride: u32,
         refresh_id: u64,
@@ -285,7 +383,7 @@ mod browser {
                 grid,
                 main,
                 scene_selection: None,
-                schedule: RefinementSchedule::default(),
+                loop_state: FrameLoop::default(),
                 prepared_level: None,
                 hot_stride,
                 refresh_id: 0,
@@ -326,8 +424,15 @@ mod browser {
                 .refresh_id
                 .checked_add(1)
                 .ok_or(AppError::GenerationExhausted)?;
-            let events = self.presenter.poll(now_ms);
-            let mut presented = self.handle_events(runtime, events)?;
+            let events = self.loop_state.refresh(&mut self.presenter, now_ms);
+            let presented = self.handle_events(runtime, events)?;
+            if requests.frame {
+                self.loop_state.accept_request(
+                    self.main.generation_applied,
+                    self.current_orbit.is_some(),
+                );
+                requests.frame = false;
+            }
             if let Some(error) = self.owner_endpoint.take_error() {
                 return Err(worker_error(error));
             }
@@ -360,10 +465,9 @@ mod browser {
             };
 
             let mut warp_id = None;
-            let warp_requested =
-                requests.frame || self.frame_policy.policy() != FramePolicy::SingleFrameOnDemand;
+            let warp_requested = self.loop_state.warp_requested(self.frame_policy.policy());
             if warp_requested && !runtime.has_pending_surface() {
-                match runtime.acquire_for_warp(self.schedule.generation()) {
+                match runtime.acquire_for_warp(self.loop_state.generation()) {
                     Ok(frame) => {
                         let view = frame
                             .texture
@@ -381,7 +485,7 @@ mod browser {
                             Ok(receipt) => receipt,
                             Err(error) => {
                                 let released =
-                                    runtime.release_unsubmitted_warp(self.schedule.generation());
+                                    runtime.release_unsubmitted_warp(self.loop_state.generation());
                                 debug_assert!(released, "failed warp must release surface token");
                                 return Err(present_error(error));
                             }
@@ -390,18 +494,16 @@ mod browser {
                         self.last_warp_source = receipt.source_scene_id;
                         if let Err(error) = runtime.retain_for_warp(
                             receipt.warp_id,
-                            self.schedule.generation(),
+                            self.loop_state.generation(),
                             frame,
                         ) {
                             let _released =
-                                runtime.release_unsubmitted_warp(self.schedule.generation());
+                                runtime.release_unsubmitted_warp(self.loop_state.generation());
                             return Err(error);
                         }
                         self.pending_warp_zoom =
                             Some((receipt.warp_id, viewer.requested().zoom_log2));
-                        let events = self.presenter.poll(now_ms);
-                        presented |= self.handle_events(runtime, events)?;
-                        requests.frame = false;
+                        self.loop_state.warp_submitted();
                     }
                     Err(AppError::SurfaceSkipped { .. }) => {
                         return Ok(self.outcome(
@@ -433,7 +535,7 @@ mod browser {
         ) -> RefreshOutcome {
             RefreshOutcome {
                 epoch: self.main_epoch(),
-                generation: self.schedule.generation(),
+                generation: self.loop_state.generation(),
                 refresh_id: self.refresh_id,
                 warp_id,
                 scene_id,
@@ -452,7 +554,7 @@ mod browser {
             for event in events {
                 match event {
                     PresentEvent::SceneCompleted { frame } => {
-                        if self.schedule.completed(
+                        if self.loop_state.completed(
                             frame.scene_id,
                             frame.pose.orbit_generation,
                             frame.level,
@@ -461,7 +563,7 @@ mod browser {
                         }
                     }
                     PresentEvent::SceneDropped { scene_id, .. } => {
-                        if self.schedule.retired(scene_id) {
+                        if self.loop_state.retired(scene_id) {
                             self.prepared_level = None;
                         }
                     }
@@ -492,7 +594,7 @@ mod browser {
                     } => {
                         match kind {
                             SubmissionKind::Scene => {
-                                if self.schedule.retired(id) {
+                                if self.loop_state.retired(id) {
                                     self.prepared_level = None;
                                 }
                             }
@@ -516,7 +618,7 @@ mod browser {
         }
 
         fn prepare_due_level(&mut self) {
-            let Some(level) = self.schedule.due() else {
+            let Some(level) = self.loop_state.due() else {
                 return;
             };
             if self.prepared_level == Some(level) {
@@ -557,7 +659,7 @@ mod browser {
                     .scene_selection
                     .is_some_and(|previous| previous != selection)
             {
-                self.schedule.restart(self.main.generation_applied);
+                self.loop_state.restart(self.main.generation_applied);
                 self.prepared_level = None;
             }
             self.scene_selection = Some(selection);
@@ -680,7 +782,7 @@ mod browser {
             self.accepted_reference_zoom_log2 = Some(submitted.zoom_log2);
             self.main = viewer.drain_main()?.main;
             self.rebuild_grid_if_needed(viewer.requested().iteration_cap)?;
-            self.schedule.restart(response.generation());
+            self.loop_state.restart(response.generation());
             self.prepared_level = None;
             self.install_main(viewer);
             Ok((disposition, true))
@@ -762,7 +864,7 @@ mod browser {
             {
                 return Ok(None);
             }
-            let Some(level) = self.schedule.due() else {
+            let Some(level) = self.loop_state.due() else {
                 return Ok(None);
             };
             if self.prepared_level != Some(level) {
@@ -842,7 +944,7 @@ mod browser {
             match self.presenter.submit_scene(slot, now_ms) {
                 Ok(scene_id) => {
                     self.last_dispatch = Some(facts);
-                    self.schedule.submitted(scene_id, level);
+                    self.loop_state.submitted(scene_id, level);
                     Ok(Some(scene_id))
                 }
                 Err(ember_julibrot_present::PresentError::SceneBusy { .. }) => Ok(None),
@@ -887,19 +989,18 @@ mod browser {
         /// Returns whether cooperative refresh work remains.
         #[must_use]
         pub fn pending(&self, runtime: &BrowserRuntime) -> bool {
-            let completion_required = runtime.has_pending_surface()
-                || self.presenter.facts().in_flight_scene_id.is_some()
-                || self.owner_endpoint.pending_request_depth() != 0
-                || !self.submitted_references.is_empty();
-            completion_required
-                || (self.frame_policy.policy() != FramePolicy::SingleFrameOnDemand
-                    && self.schedule.pending())
+            self.loop_state.needs_refresh(
+                self.presenter.facts().in_flight_scene_id.is_some(),
+                runtime.has_pending_surface(),
+                self.owner_endpoint.pending_request_depth() != 0
+                    || !self.submitted_references.is_empty(),
+            )
         }
 
         /// Reports whether a progressive level is due or has a scene fence pending.
         #[must_use]
         pub const fn refinement_pending(&self) -> bool {
-            self.schedule.pending()
+            self.loop_state.refinement_pending()
         }
 
         /// Returns the second-warp policy selected after its labelled warm-up.
@@ -1003,7 +1104,107 @@ pub use browser::BrowserFrameLoop;
 
 #[cfg(test)]
 mod tests {
-    use super::{RefinementLevel, RefinementSchedule, arrival_is_current};
+    use super::{
+        FrameLoop, PresenterPoll, RefinementLevel, RefinementSchedule, arrival_is_current,
+    };
+    use crate::FramePolicy;
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct PendingFakeScene {
+        id: u64,
+        generation: u32,
+        level: RefinementLevel,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum FakeEvent {
+        Completed(PendingFakeScene),
+        Deadline(u64),
+    }
+
+    #[derive(Debug, Default)]
+    struct FakePresenter {
+        next_id: u64,
+        pending: Option<PendingFakeScene>,
+        callback: Option<FakeEvent>,
+        fence_observations: u32,
+        submissions: Vec<RefinementLevel>,
+    }
+
+    impl FakePresenter {
+        fn submit(&mut self, generation: u32, level: RefinementLevel) -> u64 {
+            self.next_id += 1;
+            let scene = PendingFakeScene {
+                id: self.next_id,
+                generation,
+                level,
+            };
+            self.pending = Some(scene);
+            self.submissions.push(level);
+            scene.id
+        }
+
+        fn fire_completed_callback(&mut self) {
+            self.callback = self.pending.map(FakeEvent::Completed);
+        }
+
+        fn fire_deadline(&mut self) {
+            self.callback = self.pending.map(|scene| FakeEvent::Deadline(scene.id));
+        }
+    }
+
+    impl PresenterPoll for FakePresenter {
+        type Event = FakeEvent;
+
+        fn poll_once(&mut self, _now_ms: f64) -> Vec<Self::Event> {
+            if self.pending.is_none() {
+                return Vec::new();
+            }
+            self.fence_observations += 1;
+            let Some(event) = self.callback.take() else {
+                return Vec::new();
+            };
+            self.pending = None;
+            vec![event]
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    struct FakeClock {
+        now_ms: f64,
+    }
+
+    impl FakeClock {
+        fn advance(&mut self, elapsed_ms: f64) {
+            self.now_ms += elapsed_ms;
+        }
+    }
+
+    fn drive_refresh(
+        frame_loop: &mut FrameLoop,
+        presenter: &mut FakePresenter,
+        clock: FakeClock,
+    ) -> Option<u64> {
+        let mut refused = false;
+        for event in frame_loop.refresh(presenter, clock.now_ms) {
+            match event {
+                FakeEvent::Completed(scene) => {
+                    frame_loop.completed(scene.id, scene.generation, scene.level);
+                }
+                FakeEvent::Deadline(id) => {
+                    frame_loop.retired(id);
+                    refused = true;
+                }
+            }
+        }
+        if refused {
+            return None;
+        }
+        let level = frame_loop.due()?;
+        let id = presenter.submit(frame_loop.generation(), level);
+        frame_loop.submitted(id, level);
+        Some(id)
+    }
 
     #[test]
     fn coalesced_navigation_makes_an_endpoint_current_arrival_stale() {
@@ -1049,5 +1250,86 @@ mod tests {
         schedule.submitted(31, RefinementLevel::Preview);
         assert!(schedule.retired(31));
         assert_eq!(schedule.due(), Some(RefinementLevel::Preview));
+    }
+
+    #[test]
+    fn pending_fence_is_observed_once_per_refresh_and_completes_after_callback() {
+        let mut frame_loop = FrameLoop::default();
+        let mut presenter = FakePresenter::default();
+        let mut clock = FakeClock::default();
+        frame_loop.accept_request(7, true);
+        assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), Some(1));
+
+        for _ in 0..3 {
+            clock.advance(4.0);
+            assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), None);
+        }
+        assert_eq!(presenter.fence_observations, 3);
+        assert_eq!(presenter.submissions, [RefinementLevel::Preview]);
+
+        presenter.fire_completed_callback();
+        assert_eq!(presenter.submissions, [RefinementLevel::Preview]);
+        clock.advance(4.0);
+        assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), Some(2));
+        assert_eq!(presenter.fence_observations, 4);
+        assert_eq!(
+            presenter.submissions,
+            [RefinementLevel::Preview, RefinementLevel::Interactive]
+        );
+    }
+
+    #[test]
+    fn deadline_refusal_resubmits_the_same_level_on_the_following_refresh() {
+        let mut frame_loop = FrameLoop::default();
+        let mut presenter = FakePresenter::default();
+        let mut clock = FakeClock::default();
+        frame_loop.accept_request(11, true);
+        assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), Some(1));
+
+        presenter.fire_deadline();
+        clock.advance(30_000.0);
+        assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), None);
+        assert_eq!(presenter.submissions, [RefinementLevel::Preview]);
+        assert_eq!(frame_loop.due(), Some(RefinementLevel::Preview));
+
+        clock.advance(1.0);
+        assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), Some(2));
+        assert_eq!(
+            presenter.submissions,
+            [RefinementLevel::Preview, RefinementLevel::Preview]
+        );
+    }
+
+    #[test]
+    fn app_needs_refresh_while_either_fence_is_in_flight() {
+        let frame_loop = FrameLoop::default();
+        assert!(frame_loop.needs_refresh(true, false, false));
+        assert!(frame_loop.needs_refresh(false, true, false));
+        assert!(!frame_loop.needs_refresh(false, false, false));
+    }
+
+    #[test]
+    fn one_frame_request_after_idle_starts_a_new_scene_ladder() {
+        let mut frame_loop = FrameLoop::default();
+        let mut presenter = FakePresenter::default();
+        let mut clock = FakeClock::default();
+        frame_loop.accept_request(13, true);
+        assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), Some(1));
+
+        for expected in [Some(2), Some(3), None] {
+            presenter.fire_completed_callback();
+            clock.advance(1.0);
+            assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), expected);
+        }
+        frame_loop.warp_submitted();
+        assert!(!frame_loop.needs_refresh(false, false, false));
+        assert!(!frame_loop.warp_requested(FramePolicy::SingleFrameOnDemand));
+
+        frame_loop.accept_request(13, true);
+        assert!(frame_loop.needs_refresh(false, false, false));
+        assert!(frame_loop.warp_requested(FramePolicy::SingleFrameOnDemand));
+        clock.advance(1_000.0);
+        assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), Some(4));
+        assert_eq!(presenter.submissions.last(), Some(&RefinementLevel::Preview));
     }
 }
