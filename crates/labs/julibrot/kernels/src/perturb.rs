@@ -86,7 +86,7 @@ fn finite(value: [f32; 2]) -> bool {
     value.into_iter().all(finite_scalar)
 }
 
-fn finite_scalar(value: f32) -> bool {
+const fn finite_scalar(value: f32) -> bool {
     value.to_bits() & F32_EXPONENT_MASK != F32_EXPONENT_MASK
 }
 
