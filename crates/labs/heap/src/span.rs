@@ -293,6 +293,22 @@ impl SpanArena {
         })
     }
 
+    /// Allocates one span transactionally.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed capacity, directory, class, or arithmetic failure without mutation.
+    pub fn allocate_span(
+        &mut self,
+        logical_len: u32,
+        page_side: u16,
+    ) -> Result<DataSpan, SpanError> {
+        let mut trial = self.clone();
+        let span = trial.allocate_one(logical_len, page_side)?;
+        *self = trial;
+        Ok(span)
+    }
+
     /// Allocates two equal-class spans atomically; failure leaves this arena byte-for-byte logical.
     ///
     /// # Errors

@@ -1,5 +1,6 @@
 //! Descriptor-heap-effect WebGL2 lab and native allocator evidence.
 
+mod dialect;
 mod heap;
 #[cfg(any(test, target_arch = "wasm32"))]
 mod kernels;
@@ -11,6 +12,10 @@ mod spike;
 mod wasm;
 
 pub use heap::{Descriptor, Handle, HeapAllocator, HeapError, HeapKind, PackedDescriptor};
+pub use dialect::{
+    DialectError, DialectLimits, DispatchError, DispatchPlan, ForbiddenConstruct, KernelDesc,
+    PagePass, RegisteredKernel,
+};
 pub use span::{
     DataSpan, DeliveryPlan, DispatchHeader, PackedSpan, SpanArena, SpanDirectory, SpanError,
     StaticHeaders, WallTerm,

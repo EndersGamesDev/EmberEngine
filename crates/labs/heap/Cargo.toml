@@ -8,12 +8,10 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 bytemuck.workspace = true
+naga = { version = "24", features = ["wgsl-in"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-
-[dev-dependencies]
-naga = { version = "24", features = ["wgsl-in"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"
