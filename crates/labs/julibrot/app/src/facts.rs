@@ -117,7 +117,7 @@ impl PageFacts {
             delivered_width: nonzero(present.delivered_width),
             delivered_height: nonzero(present.delivered_height),
             requested_iteration_cap: requested.iteration_cap,
-            delivered_iteration_cap: nonzero(viewer.main.delivered_iter_cap),
+            delivered_iteration_cap: present.iteration_cap,
             requested_zoom_log2: requested.zoom_log2,
             presented_zoom_log2: loop_facts.last_presented_zoom_log2(),
             reference_zoom_log2: loop_facts.accepted_reference_zoom_log2(),

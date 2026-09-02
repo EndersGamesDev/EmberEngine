@@ -352,7 +352,7 @@ mod browser {
             )
             .map_err(present_error)?;
             let mut main = viewer.owner().snapshot().main;
-            main.delivered_iter_cap = plan.level(grid.level).iteration_cap;
+            main.delivered_iter_cap = plan.delivered_max_iter;
             presenter.set_main(PresentMain {
                 epoch: 0,
                 state: main,
@@ -432,6 +432,7 @@ mod browser {
                 requests.frame = false;
             }
             if let Some(error) = self.owner_endpoint.take_error() {
+                self.abandon_submitted_references(viewer);
                 return Err(worker_error(error));
             }
 
@@ -632,8 +633,8 @@ mod browser {
                 grid.width = spec.extent.width;
                 grid.height = spec.extent.height;
                 grid.level = level;
-                self.main.delivered_iter_cap = spec.iteration_cap;
             }
+            self.main.delivered_iter_cap = self.plan.delivered_max_iter;
             self.presenter.set_main(PresentMain {
                 epoch: self.owner_epoch,
                 state: self.main,
@@ -786,6 +787,15 @@ mod browser {
             Ok((disposition, true))
         }
 
+        /// Releases every reference whose typed worker refusal means no arrival can land.
+        ///
+        /// Without this the scene path stays blocked on a submission that will never return.
+        fn abandon_submitted_references(&mut self, viewer: &mut ViewerController) {
+            for submitted in std::mem::take(&mut self.submitted_references) {
+                let _finished = viewer.finish_reference_submission(submitted.generation);
+            }
+        }
+
         fn submit_pending_reference(
             &mut self,
             viewer: &mut ViewerController,
@@ -932,7 +942,7 @@ mod browser {
                 }
             };
             self.queue.submit([encoder.finish()]);
-            self.main.delivered_iter_cap = self.plan.level(level).iteration_cap;
+            self.main.delivered_iter_cap = self.plan.delivered_max_iter;
             self.presenter.set_main(PresentMain {
                 epoch: owner_epoch,
                 state: self.main,
