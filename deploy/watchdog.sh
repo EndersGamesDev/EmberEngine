@@ -48,10 +48,18 @@ log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"; }
 # command, so the old form exited here with no output at all; and `|| true`
 # alone would be worse than the silence — an empty $PY makes `entry_addr`
 # return "" for every host and every game, which reads as "nothing is
-# published" and redeploys the whole fleet on every pass.
-PY="$(command -v python3 || command -v python || true)"
-[ -n "$PY" ] && "$PY" -c '' >/dev/null 2>&1 \
-    || { log "watchdog: need a working python3 (or python) on PATH"; exit 1; }
+# published" and redeploys the whole fleet on every pass. The first candidate
+# that RUNS wins, not the first that resolves: on Windows `python3` is usually
+# an App Execution Alias that is not an interpreter, with the real `python`
+# right behind it.
+PY=""
+for py_candidate in python3 python; do
+    py_found="$(command -v "$py_candidate" || true)"
+    [ -n "$py_found" ] && "$py_found" -c '' >/dev/null 2>&1 || continue
+    PY="$py_found"
+    break
+done
+[ -n "$PY" ] || { log "watchdog: need a working python3 (or python) on PATH"; exit 1; }
 
 # The games, and the address key each one uses in the book. Derived from the
 # game id exactly as docs/hosts.md §3 says: the arena owns the bare `ws`,

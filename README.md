@@ -230,22 +230,9 @@ Web build: the same commands as the v0 section below (`-p arena --lib`, `arena.w
 
 ## Arena v0: the pong classic
 
-**Play: <https://endersgamesdev.github.io/EmberEngine/>** — local (2 players, one
-keyboard: `A`/`D` vs `←`/`→`, first to 7) or **online matchmaking**: pick a
-handle, create a lobby (password optional) or join an open one from the
-list. The match server is authoritative (the shared deterministic 60 Hz sim
-in `crates/arena-core/src/sim.rs` runs server-side); clients stream inputs
-and interpolate 30 Hz state. Either key set steers your paddle online, and
-player 2 gets a flipped camera so they also play from "their" side.
+**Play: <https://endersgamesdev.github.io/EmberEngine/>** — pick the arena's v0 entry, the pong classic. The first ember game, and today a **local two-player game only**: one keyboard, `A`/`D` against `←`/`→`, first to 7. There is no online pong; the paddle sim in `crates/arena-core/src/sim.rs` runs entirely in the client.
 
-Online infrastructure: `arena-server` (WebSocket + JSON, `arena-core/proto.rs`) runs on each host bound to loopback, fronted by a **Cloudflare quick tunnel** — a free public `https://….trycloudflare.com` domain that CHANGES every time the tunnel restarts. `EMBER_HOST=<ssh name> bash deploy/deploy-pong-online.sh` rebuilds + restarts server and tunnel, then publishes that host's fresh domain into its own entry in `server.json` on the Pages site, leaving every other host's entry alone. The book is fetched cache-busted, so a page always sees the current addresses; its `v` stamp also cache-busts the wasm bundle per deploy. Server log: `~/pong-server.log`, tunnel log: `~/cloudflared.log` on the host. See **Many hosts, one address book** above and `docs/hosts.md`.
-Headless check: `cargo run -p arena-server --example wsbot -- <URL> create|join <LOBBY> [PW|-] [HANDLE] [SECS] [MODES]`.
-`MODES` is a comma-separated list of `shield`, `jump`, `nofire` — without it
-the bot never raises the shield or jumps, so a green run says nothing about
-either. Two bots, one plain and one `shield,nofire`, demonstrate a reflect.
-
-Native: `cargo run -p arena --bin arena-app` (local) or
-`arena-app online wss://… create|join LOBBY [PASSWORD|-] [HANDLE]`
+Native: `cargo run -p arena --bin arena-app`. It ships in the same wasm bundle as the arena shooter, built by the commands below.
 
 Web build (needs `wasm32-unknown-unknown` target + `wasm-bindgen-cli`):
 

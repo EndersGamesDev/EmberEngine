@@ -5,12 +5,20 @@
 # a test harness with its own bugs would prove nothing. No framework, no
 # discovery, four helpers.
 
-# `|| true` so the guard below is reachable: under `set -e` an assignment whose
-# command substitution fails is itself a failing command, and the suite would
-# exit here with no message at all.
-PY="$(command -v python3 || command -v python || true)"
-[ -n "$PY" ] && "$PY" -c '' >/dev/null 2>&1 \
-    || { echo "tests: no working python3/python on PATH" >&2; exit 1; }
+# The first candidate that actually RUNS wins, not the first that resolves.
+# On a Windows box `command -v python3` finds the Microsoft Store app-execution
+# alias, a stub that exits 49 with an install prompt, and a `||` chain that
+# stops at the first hit never reaches the real `python` next to it. `|| true`
+# on the lookup so the loop is reachable under `set -e`: an assignment whose
+# command substitution fails is itself a failing command.
+PY=""
+for candidate in python3 python; do
+    p="$(command -v "$candidate" || true)"
+    [ -n "$p" ] && "$p" -c '' >/dev/null 2>&1 || continue
+    PY="$p"
+    break
+done
+[ -n "$PY" ] || { echo "tests: no working python3/python on PATH" >&2; exit 1; }
 
 TESTS_RUN=0
 TESTS_FAILED=0

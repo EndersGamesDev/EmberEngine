@@ -4,3 +4,7 @@
 # run on the game host. CLAUDE.md already requires LF everywhere; this makes
 # git enforce it instead of relying on every tool behaving.
 *.sh text eol=lf
+# The PATH shims under deploy/tests have no extension and are scripts all the
+# same; without this line autocrlf checks them out CRLF and the syntax suite
+# fails on a clean tree.
+deploy/tests/shims/* text eol=lf

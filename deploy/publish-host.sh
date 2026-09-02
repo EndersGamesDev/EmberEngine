@@ -50,11 +50,17 @@ set -euo pipefail
 # whose command substitution fails IS a failing command, so a box with neither
 # interpreter exited here with status 1 and not one byte of output — a deploy
 # that stopped mid-sentence with nothing naming the cause. The interpreter is
-# also RUN once rather than merely found: on Windows `python` is usually an App
-# Execution Alias that resolves on PATH and is not an interpreter.
-PY="$(command -v python3 || command -v python || true)"
-[ -n "$PY" ] && "$PY" -c '' >/dev/null 2>&1 \
-    || { echo "publish-host: need a working python3 (or python) on PATH" >&2; exit 1; }
+# also RUN rather than merely found, and the first candidate that runs wins:
+# on Windows `python3` is usually an App Execution Alias that resolves on PATH
+# and is not an interpreter, with the real `python` sitting right behind it.
+PY=""
+for py_candidate in python3 python; do
+    py_found="$(command -v "$py_candidate" || true)"
+    [ -n "$py_found" ] && "$py_found" -c '' >/dev/null 2>&1 || continue
+    PY="$py_found"
+    break
+done
+[ -n "$PY" ] || { echo "publish-host: need a working python3 (or python) on PATH" >&2; exit 1; }
 
 NAME=""
 VERSION=""

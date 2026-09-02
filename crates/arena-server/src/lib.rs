@@ -208,10 +208,10 @@ pub fn run(listener: TcpListener, cfg: ServerConfig) -> io::Result<()> {
     if version.is_empty() && commit.is_empty() {
         tracing::info!(
             host,
-            "pong-server: UNSTAMPED build (no EMBER_BUILD_VERSION/EMBER_BUILD_COMMIT at compile time)"
+            "arena-server: UNSTAMPED build (no EMBER_BUILD_VERSION/EMBER_BUILD_COMMIT at compile time)"
         );
     } else {
-        tracing::info!(host, version, commit, "pong-server build");
+        tracing::info!(host, version, commit, "arena-server build");
     }
     tracing::info!(
         "arena-server listening on {local} (proto v{PROTO_VERSION}, max {} conns, {} lobbies)",

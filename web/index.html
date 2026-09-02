@@ -399,9 +399,10 @@
     // frozen page declares a `proto` but reads only the legacy top-level
     // address, so routing a join to it silently connects the player to a
     // DIFFERENT machine, where the lobby they clicked does not exist. Only a
-    // page that reads `pending.ws` (today arena v12 and fire v2) is a routing
-    // target; every other version falls into the honest "needs a proto N
-    // build" badge below, and a page added later is safe by omission.
+    // page that reads `pending.ws` (today arena v12, arena v13 and fire v2)
+    // is a routing target; every other version falls into the honest "needs
+    // a proto N build" badge below, and a page added later is safe by
+    // omission.
     const pageFor = (gameId, proto) => {
       const g = catalog.games.find((x) => x.id === gameId);
       if (!g || typeof proto !== 'number') return null;

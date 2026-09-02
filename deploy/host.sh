@@ -86,12 +86,19 @@ RUN="$EMBER_HOME/run"
 LOGS="$EMBER_HOME/log"
 mkdir -p "$RUN" "$LOGS"
 
-PY="$(command -v python3 || command -v python || true)"
-# Found is not the same as working: on Windows `python` is usually an App
-# Execution Alias that resolves on PATH and is not an interpreter. `status`
-# degrades gracefully on an empty $PY; `up` refuses up front rather than after
-# a multi-minute build it could never publish.
-[ -n "$PY" ] && "$PY" -c '' >/dev/null 2>&1 || PY=""
+# Found is not the same as working: on Windows `python3` and `python` are
+# usually App Execution Aliases that resolve on PATH and are not interpreters,
+# and the real interpreter can sit behind one of them, so the first candidate
+# that RUNS wins rather than the first that resolves. `status` degrades
+# gracefully on an empty $PY; `up` refuses up front rather than after a
+# multi-minute build it could never publish.
+PY=""
+for py_candidate in python3 python; do
+    py_found="$(command -v "$py_candidate" || true)"
+    [ -n "$py_found" ] && "$py_found" -c '' >/dev/null 2>&1 || continue
+    PY="$py_found"
+    break
+done
 
 # Idle priority for every compile this script runs, so a host that is also
 # somebody's desktop stays usable. Both tools are unprivileged; neither is
