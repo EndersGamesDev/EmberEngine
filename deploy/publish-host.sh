@@ -122,8 +122,11 @@ WORK=""
 cleanup() { [ -n "$WORK" ] && rm -rf "$WORK"; return 0; }
 trap cleanup EXIT
 
-if [ -n "$REPO" ]; then
-    WORK="$(mktemp -d -t ember-book-XXXXXX)"
+fetch_book() {
+    # Called once per attempt, so a retry starts from what origin has NOW
+    # rather than from the copy that was just rejected.
+    rm -rf "$WORK"
+    mkdir -p "$WORK"
     echo "== fetching $REPO ($BRANCH) =="
     # Fetch ONE branch one commit deep, rather than cloning. `git clone` picks
     # the remote's default branch, and `--depth 1` implies `--single-branch`,
@@ -148,12 +151,11 @@ if [ -n "$REPO" ]; then
         git -C "$WORK" checkout -q -b "$BRANCH"
     fi
     TARGET="$WORK/$FILE"
-else
-    TARGET="$BOOK"
-fi
+}
 
 # One python for the whole of the JSON, because every rule here is about the
 # relationship between entries and no part of it is expressible in `sed`.
+write_book() {
 "$PY" - "$TARGET" "$FILE" "$NAME" "$VERSION" "$COMMIT" "$BY" \
     "${REMOVE:-}" "${RECOMPUTE:-}" \
     "${GAMES[@]+"${GAMES[@]}"}" "${DROPS[@]+"${DROPS[@]}"}" <<'PY'
@@ -444,13 +446,18 @@ doc["v"] = str(int(time.time()))
 write_json(path, doc)
 print("CHANGED")
 PY
+}
 
-if [ -n "$REPO" ]; then
+# Commit and push what write_book produced. 0 = pushed (or nothing to push),
+# 3 = the push was refused, which on this branch usually means another writer
+# landed a commit between the fetch and the push and the answer is to fetch,
+# rewrite and try again — never to force, and never to re-push a commit
+# computed against the book that was just superseded.
+push_book() {
     (
         cd "$WORK"
-        git add -- "$FILE" 2>/dev/null || true
         # `git add` cannot stage a deletion of a file it was told to add by
-        # name, so stage the whole path either way.
+        # name, so stage the whole path.
         git add -A -- "$FILE" 2>/dev/null || true
         if git diff --cached --quiet; then
             echo "== $FILE unchanged; nothing to push =="
@@ -468,8 +475,33 @@ if [ -n "$REPO" ]; then
             git -c user.name="${GIT_AUTHOR_NAME:-ember publish-host}" \
                 -c user.email="${GIT_AUTHOR_EMAIL:-ember@localhost}" \
                 commit -q -m "$MSG"
-            git push -q origin "$BRANCH"
+            # An explicit refspec: the local branch here lives in a directory
+            # this script created seconds ago, and naming both ends leaves
+            # nothing for a push default to decide.
+            git push -q origin "HEAD:refs/heads/$BRANCH" || exit 3
             echo "== pushed: $MSG =="
         fi
     )
+}
+
+if [ -n "$REPO" ]; then
+    WORK="$(mktemp -d -t ember-book-XXXXXX)"
+    attempt=1
+    while :; do
+        fetch_book
+        write_book
+        if push_book; then
+            break
+        fi
+        if [ "$attempt" -ge 3 ]; then
+            echo "publish-host: could not push $FILE to $BRANCH after $attempt attempts;" >&2
+            echo "              the branch is moving under us, or the push is being refused." >&2
+            exit 1
+        fi
+        attempt=$((attempt + 1))
+        echo "== the push was refused; refetching and rewriting (attempt $attempt) =="
+    done
+else
+    TARGET="$BOOK"
+    write_book
 fi

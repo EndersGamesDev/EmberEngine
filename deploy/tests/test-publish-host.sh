@@ -406,6 +406,46 @@ rm -rf "$CHECK"
 git clone -q --branch gh-pages "$BARE" "$CHECK"
 is "$(jget "$CHECK/server.json" 'len(d["hosts"])')" "3" "the existing book was extended, not replaced"
 
+echo "== a refused push is refetched and rewritten, not re-pushed =="
+# Several machines write this branch now — another workstation, a self-service
+# host with EMBER_PUBLISH=upstream — so a push landing on a branch that moved
+# under it is a normal event, not an error. It must not be forced and it must
+# not be retried as-is: the commit was computed against the book that was just
+# superseded. The hook refuses exactly once, standing in for another writer
+# getting there first.
+cat > "$BARE/hooks/pre-receive" <<'HOOK'
+#!/bin/sh
+if [ -e ./refuse-once ]; then
+    rm -f ./refuse-once
+    echo "another writer got there first" >&2
+    exit 1
+fi
+exit 0
+HOOK
+chmod +x "$BARE/hooks/pre-receive"
+touch "$BARE/refuse-once"
+RETRY="$($PUB --repo "$BARE" --branch gh-pages --name coral-shrike \
+    --game arena --url wss://t.example --proto 12 --version r45 2>&1)"
+contains "$RETRY" "refetching and rewriting (attempt 2)" "the writer says it is starting over"
+rm -rf "$CHECK"
+git clone -q --branch gh-pages "$BARE" "$CHECK"
+is "$(jget "$CHECK/server.json" '[h["name"] for h in d["hosts"]].count("coral-shrike")')" "1" \
+    "the entry landed on the retry"
+is "$(jget "$CHECK/server.json" 'len(d["hosts"])')" "4" "and the hosts already there survived it"
+
+echo "== a push that keeps being refused fails loudly =="
+STUCK="$TMP/stuck.git"
+git init -q --bare "$STUCK"
+printf '#!/bin/sh\nexit 1\n' > "$STUCK/hooks/pre-receive"
+chmod +x "$STUCK/hooks/pre-receive"
+if STUCKOUT="$($PUB --repo "$STUCK" --branch gh-pages --name coral-shrike \
+        --game arena --url wss://t.example --proto 12 --version r45 2>&1)"; then
+    bad "a push that never succeeds was reported as a publish"
+else
+    ok "a push that never succeeds fails"
+fi
+contains "$STUCKOUT" "after 3 attempts" "and says how hard it tried"
+
 echo "== a mirror push starts a branch that did not exist =="
 MBARE="$TMP/mirror.git"
 git init -q --bare "$MBARE"
