@@ -182,6 +182,7 @@ pub struct RegisteredKernel {
     input_count: usize,
     output_count: usize,
     uniform_size: u32,
+    output_page_side: u16,
     output_page_records: u32,
 }
 
@@ -331,6 +332,7 @@ impl RegisteredKernel {
             input_count: desc.accessors.len(),
             output_count: desc.output_fields.len(),
             uniform_size: desc.uniform_size,
+            output_page_side: desc.output_page_side,
             output_page_records: u32::from(desc.output_page_side).pow(2),
         })
     }
@@ -345,6 +347,24 @@ impl RegisteredKernel {
     #[must_use]
     pub fn source(&self) -> &str {
         &self.source
+    }
+
+    /// Number of RGBA32F outputs written through MRT.
+    #[must_use]
+    pub const fn output_count(&self) -> usize {
+        self.output_count
+    }
+
+    /// Exact uniform payload size in bytes.
+    #[must_use]
+    pub const fn uniform_size(&self) -> u32 {
+        self.uniform_size
+    }
+
+    /// Constant square side of every output page.
+    #[must_use]
+    pub const fn output_page_side(&self) -> u16 {
+        self.output_page_side
     }
 
     /// Validates dynamic span handles and constructs the static page sequence.
