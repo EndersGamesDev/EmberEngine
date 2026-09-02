@@ -37,8 +37,8 @@ pub use credit::{Admission, CreditAccount, CreditCharge, ProducerShaper, WorkerF
 pub use ember_julibrot_math::{ComputedOrbit, ReferenceOrbitRecord};
 pub use error::{ChannelError, ErrorCode};
 pub use owner::{
-    HotDrain, HotState, MainDrain, MainState, OrbitDisposition, OrbitHandle, ViewerOwner,
-    ViewerState,
+    HotDrain, HotState, MainDrain, MainState, NavigationConfig, NavigationSubmission,
+    OrbitDisposition, OrbitHandle, OwnerError, ViewerOwner, ViewerState,
 };
 pub use registry::{OrbitRegistry, RegistryError};
 pub use wire::{

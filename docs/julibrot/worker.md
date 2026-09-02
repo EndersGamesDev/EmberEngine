@@ -275,6 +275,8 @@ All owner records below are `Copy` plus `#[repr(C)]`; they are compile-time Rust
 
 `ViewerOwner::stage_main(main: MainState)` replaces the undrained MAIN value and performs no allocation; app uses it for palette, cap, and preset/origin arrivals.
 
+`ViewerOwner::configure_navigation(config: NavigationConfig) -> Result<(), OwnerError>` installs the authoritative `BigCentre`, accepted reference centre, math-produced `Plane`, and current grid width; `ViewerOwner::navigate(&mut self, delta: NavigationDelta) -> u32` delegates centre mutation to math's `BigCentre::apply_navigation` in `navigation.rs`, computes HOT displacement with `BigCentre::displacement_px`, stages the f64 mirror, checked-increments centre revision and generation, and leaves a typed `OwnerError` retrievable after any refusal. `take_navigation_submission` releases one exact centre snapshot only when no request is in flight, while later edits replace its single pending successor.
+
 `ViewerOwner::accept_orbit(response: &OrbitResponseView, handle: OrbitHandle, reference_shift_px: [f64; 2]) -> OrbitDisposition` returns `Applied` only when response generation equals the latest requested generation and handle generation matches it, stages the orbit fields and reference shift into MAIN, recomputes staged HOT displacement from the latest desired centre against the newly accepted reference, and otherwise returns `Stale`; both outcomes are infallible and require the lease to return credit.
 
 `ViewerOwner::drain_hot() -> HotDrain` publishes and returns the coherent snapshot every refresh, incrementing epoch once.
@@ -442,7 +444,7 @@ Implementation progress through Phase 4: the Phase 2 core, transferable `worker_
 
 ## 8. Unresolved joint-review findings
 
-- The owner-to-worker navigation edit API must preserve one authoritative decoded Astro-float centre while returning updated canonical bytes and an `f64` mirror; the wire codec is fixed, but the callback shape is still an implementation choice.
+The authoritative owner navigation API is resolved by direct adoption of math's `NavigationDelta`, `BigCentre::apply_navigation`, and `BigCentre::displacement_px` from `crates/labs/julibrot/math/src/navigation.rs`; worker owns only sequencing, coalescing, generation, and publication.
 - A single Astro-float iteration cannot be pre-empted by the 64-iteration or 2,000-microsecond cooperative check; visible replay must decide whether math needs finer internal cancellation points.
 - Successive accepted references may arrive before present promotes a retained scene; app and present must prove that composing queued `reference_shift_px` values re-bases that scene exactly once.
 - Browser transfer proves detachment and trailer continuity but cannot reveal an engine-internal physical copy; evidence must keep the claim at ownership transfer plus one explicit wasm memcpy.
