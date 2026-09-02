@@ -54,7 +54,7 @@ pub fn formation_on_board(state: &State, seat: u8) -> Formation {
         let (u, v) = SETUP_LOCAL[index];
         state
             .piece(to_global(seat, u, v))
-            .map_or(Formation::DEFAULT.kind_at(index), |p| p.kind)
+            .map_or_else(|| Formation::DEFAULT.kind_at(index), |p| p.kind)
     };
     Formation {
         legend: std::array::from_fn(kind_at),
@@ -94,7 +94,7 @@ pub enum Selection {
 }
 
 /// What a click produced.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiOut {
     /// A move to apply locally or send as `C2S::Move`.
     Move {
@@ -151,15 +151,21 @@ impl Ui {
         };
     }
 
-    fn emit(&mut self, out: UiOut) -> Option<UiOut> {
+    fn emit(&mut self, out: UiOut) -> UiOut {
         self.pending = true;
         self.clear();
-        Some(out)
+        out
     }
 
     /// One click on `tile` by `me` (or, with `me == None`, by the seat to
     /// move: the hotseat convention).
-    pub fn click(&mut self, state: &State, me: Option<u8>, phase: Phase, tile: Tile) -> Option<UiOut> {
+    pub fn click(
+        &mut self,
+        state: &State,
+        me: Option<u8>,
+        phase: Phase,
+        tile: Tile,
+    ) -> Option<UiOut> {
         if self.pending {
             return None;
         }
@@ -183,11 +189,11 @@ impl Ui {
             return None;
         };
         if phase == Phase::Playing && self.targets.iter().any(|t| t.tile() == tile) {
-            return self.emit(UiOut::Move {
+            return Some(self.emit(UiOut::Move {
                 turn: state.turn,
                 from,
                 to: tile,
-            });
+            }));
         }
         if phase == Phase::Waiting {
             let same_class = match (class_of(actor, from), class_of(actor, tile)) {
@@ -196,7 +202,7 @@ impl Ui {
             };
             if tile != from && own(tile) && same_class {
                 let formation = swapped_formation(state, actor, from, tile);
-                return self.emit(UiOut::SetFormation(formation));
+                return Some(self.emit(UiOut::SetFormation(formation)));
             }
             self.clear();
             return None;
@@ -244,8 +250,13 @@ mod tests {
         let mut ui = Ui::default();
         assert_eq!(ui.click(&state, Some(0), Phase::Playing, t(3, 0)), None);
         assert_eq!(ui.selected(), Some(t(3, 0)));
-        let tiles: Vec<(u8, u8)> = ui.targets.iter().map(|x| (x.x, x.y)).collect();
-        assert_eq!(tiles, vec![(4, 0), (3, 1)]);
+        let tiles = |ui: &Ui| ui.targets.iter().map(|x| (x.x, x.y)).collect::<Vec<_>>();
+        // Its left neighbour (3,1) holds an own pawn, so only forward.
+        assert_eq!(tiles(&ui), vec![(4, 0)]);
+        // The elbow pawn has both outward axes free.
+        ui.click(&state, Some(0), Phase::Playing, t(3, 3));
+        assert_eq!(ui.selected(), Some(t(3, 3)));
+        assert_eq!(tiles(&ui), vec![(4, 3), (3, 4)]);
         // The hotseat convention: `me == None` acts for the seat to move.
         let mut ui = Ui::default();
         ui.click(&state, None, Phase::Playing, t(1, 2));
@@ -270,7 +281,7 @@ mod tests {
         );
         assert!(ui.pending);
         assert_eq!(ui.selected(), None);
-        assert!(ui.targets.is_empty());
+        assert_eq!(ui.targets, Vec::new());
     }
 
     #[test]
@@ -309,7 +320,10 @@ mod tests {
     fn the_wake_in_place_is_reachable() {
         let mut state = full();
         for tile in Tile::all() {
-            if state.piece(tile).is_some_and(|p| p.owner == 0 && p.kind == Kind::Pawn) {
+            if state
+                .piece(tile)
+                .is_some_and(|p| p.owner == 0 && p.kind == Kind::Pawn)
+            {
                 state.set(tile, None);
             }
         }
@@ -420,7 +434,10 @@ mod tests {
                 Kind::Knight,
             ],
         };
-        let state = setup([true; 4], [custom, Formation::DEFAULT, custom, Formation::DEFAULT]);
+        let state = setup(
+            [true; 4],
+            [custom, Formation::DEFAULT, custom, Formation::DEFAULT],
+        );
         assert_eq!(formation_on_board(&state, 0), custom);
         assert_eq!(formation_on_board(&state, 1), Formation::DEFAULT);
         assert_eq!(formation_on_board(&state, 2), custom);

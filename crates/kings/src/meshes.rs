@@ -71,14 +71,7 @@ fn cuboid(out: &mut Vec<MeshVertex>, center: Vec3, half: Vec3, rot: Quat) {
             face_centre - u * hu + v * hv,
         ]
         .map(|p| center + rot * p);
-        quad(
-            out,
-            corners[0],
-            corners[1],
-            corners[2],
-            corners[3],
-            rot * n,
-        );
+        quad(out, corners[0], corners[1], corners[2], corners[3], rot * n);
     }
 }
 
@@ -120,7 +113,12 @@ fn sphere(out: &mut Vec<MeshVertex>, centre: Vec3, r: f32) {
         let phi = std::f32::consts::PI * (ring as f32) / (RINGS as f32);
         #[allow(clippy::cast_precision_loss)]
         let theta = TAU * (seg as f32) / (SEGMENTS as f32);
-        centre + Vec3::new(r * phi.sin() * theta.cos(), r * phi.cos(), r * phi.sin() * theta.sin())
+        centre
+            + Vec3::new(
+                r * phi.sin() * theta.cos(),
+                r * phi.cos(),
+                r * phi.sin() * theta.sin(),
+            )
     };
     for ring in 0..RINGS {
         for seg in 0..SEGMENTS {
@@ -149,7 +147,7 @@ fn annulus(out: &mut Vec<MeshVertex>, r_in: f32, r_out: f32, y0: f32, y1: f32) {
         let o0 = around(origin, r_out, y0, i);
         let o1 = around(origin, r_out, y0, i + 1);
         let lift = Vec3::Y * (y1 - y0);
-        let radial = Vec3::new((o0.x + o1.x) * 0.5, 0.0, (o0.z + o1.z) * 0.5);
+        let radial = Vec3::new(f32::midpoint(o0.x, o1.x), 0.0, f32::midpoint(o0.z, o1.z));
         // Top, bottom, outer wall, inner wall.
         quad(out, i0 + lift, o0 + lift, o1 + lift, i1 + lift, Vec3::Y);
         quad(out, i0, o0, o1, i1, Vec3::NEG_Y);
@@ -158,7 +156,7 @@ fn annulus(out: &mut Vec<MeshVertex>, r_in: f32, r_out: f32, y0: f32, y1: f32) {
     }
 }
 
-fn finish(vertices: Vec<MeshVertex>) -> MeshData {
+const fn finish(vertices: Vec<MeshVertex>) -> MeshData {
     MeshData {
         vertices,
         texture: None,
@@ -326,7 +324,10 @@ mod tests {
         for v in &m.vertices {
             let n = Vec3::from(v.normal);
             assert!(n.is_finite(), "{name}: non-finite normal {n}");
-            assert!((n.length() - 1.0).abs() < 1e-4, "{name}: normal not unit: {n}");
+            assert!(
+                (n.length() - 1.0).abs() < 1e-4,
+                "{name}: normal not unit: {n}"
+            );
             assert!(Vec3::from(v.pos).is_finite(), "{name}: non-finite position");
         }
     }
@@ -365,7 +366,10 @@ mod tests {
                 assert!((n.y > 0.0) == (centroid.y > 0.5), "cap {n} at {centroid}");
             } else {
                 let radial = Vec3::new(centroid.x, 0.0, centroid.z);
-                assert!(n.dot(radial) > 0.0, "side normal {n} points in at {centroid}");
+                assert!(
+                    n.dot(radial) > 0.0,
+                    "side normal {n} points in at {centroid}"
+                );
             }
         }
         let mut s = Vec::new();

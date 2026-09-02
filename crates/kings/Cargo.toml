@@ -31,5 +31,11 @@ web-sys = { version = "0.3", features = [
 tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
 rustls.workspace = true
 
+[dev-dependencies]
+# The online tests drive a real server over a real socket.
+kings-server = { path = "../kings-server" }
+# So the server's dropped-message warnings surface in test output.
+tracing-subscriber.workspace = true
+
 [lints]
 workspace = true
