@@ -183,7 +183,7 @@ The last 16 bytes are `PoolTrailer { pool: u32, slot: u32, capacity_bytes: u32, 
 |8|`Shutdown`|main → worker, request|zero|
 |9|`ShutdownAck`|worker → main, request|zero|
 
-`ErrorRecord` starts at byte 32 and is exactly `{ code: u32, detail: u32, requested_bytes: u32, available_bytes: u32 }`; stable codes are `1 BadMagic`, `2 BadVersion`, `3 BadKind`, `4 BadLength`, `5 BadTrailer`, `6 CentreEncodingWall`, `7 GenerationExhausted`, `8 EpochExhausted`, `9 TimingOverflow`, `10 BufferStarved`, and `11 MathFailure`.
+`ErrorRecord` starts at byte 32 and is exactly `{ code: u32, detail: u32, requested_bytes: u32, available_bytes: u32 }`; stable codes are `1 BadMagic`, `2 BadVersion`, `3 BadKind`, `4 BadLength`, `5 BadTrailer`, `6 CentreEncodingWall`, `7 GenerationExhausted`, `8 EpochExhausted`, `9 TimingOverflow`, `10 BufferStarved`, `11 MathFailure`, and `12 UnexpectedWork`.
 
 ### 3.2 Orbit request and bignum centre encoding
 

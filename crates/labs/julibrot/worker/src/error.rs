@@ -28,6 +28,8 @@ pub enum ErrorCode {
     BufferStarved = 10,
     /// The math package refused reference-orbit work.
     MathFailure = 11,
+    /// An internal browser state reached work already handled by the caller.
+    UnexpectedWork = 12,
 }
 
 impl TryFrom<u32> for ErrorCode {
@@ -46,6 +48,7 @@ impl TryFrom<u32> for ErrorCode {
             9 => Ok(Self::TimingOverflow),
             10 => Ok(Self::BufferStarved),
             11 => Ok(Self::MathFailure),
+            12 => Ok(Self::UnexpectedWork),
             detail => Err(ChannelError::new(Self::BadKind, detail, 0, 0)),
         }
     }

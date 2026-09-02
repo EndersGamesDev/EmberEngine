@@ -165,7 +165,10 @@ impl OwnerEndpoint {
         if let OwnerBackend::Browser(browser) = &self.backend {
             return browser.submit(request);
         }
-        let mut core = self.queue_core().borrow_mut();
+        let Some(queue) = self.queue_core() else {
+            return SubmitOutcome::GenerationExhausted;
+        };
+        let mut core = queue.borrow_mut();
         if core.closed || core.latest_generation == u32::MAX {
             return SubmitOutcome::GenerationExhausted;
         }
@@ -197,7 +200,7 @@ impl OwnerEndpoint {
         if let OwnerBackend::Browser(browser) = &self.backend {
             return browser.next_arrival();
         }
-        let queue = self.queue_core();
+        let queue = self.queue_core()?;
         let mut core = queue.borrow_mut();
         let buffer = core.orbit_to_main.pop()?;
         let (header, cancelled) = match buffer.header() {
@@ -277,7 +280,7 @@ impl OwnerEndpoint {
         if let OwnerBackend::Browser(browser) = &self.backend {
             return browser.take_error();
         }
-        self.queue_core().borrow_mut().last_error.take()
+        self.queue_core()?.borrow_mut().last_error.take()
     }
 
     /// Reports the latest submitted generation.
@@ -287,7 +290,8 @@ impl OwnerEndpoint {
         if let OwnerBackend::Browser(browser) = &self.backend {
             return browser.latest_generation();
         }
-        self.queue_core().borrow().latest_generation
+        self.queue_core()
+            .map_or(u32::MAX, |queue| queue.borrow().latest_generation)
     }
 
     /// Reports one coalesced request when producer delivery is saturated.
@@ -297,7 +301,8 @@ impl OwnerEndpoint {
         if let OwnerBackend::Browser(browser) = &self.backend {
             return browser.pending_request_depth();
         }
-        u32::from(self.queue_core().borrow().pending_request.is_some())
+        self.queue_core()
+            .map_or(0, |queue| u32::from(queue.borrow().pending_request.is_some()))
     }
 
     /// Returns one coherent copy of the page-visible channel accounting.
@@ -307,7 +312,9 @@ impl OwnerEndpoint {
         if let OwnerBackend::Browser(browser) = &self.backend {
             return browser.facts();
         }
-        let queue = self.queue_core();
+        let Some(queue) = self.queue_core() else {
+            return WorkerFacts::new(WorkerMode::WebWorker);
+        };
         let mut core = queue.borrow_mut();
         core.refresh_facts();
         core.facts
@@ -326,7 +333,15 @@ impl OwnerEndpoint {
         if let OwnerBackend::Browser(browser) = &self.backend {
             return browser.shutdown();
         }
-        let mut core = self.queue_core().borrow_mut();
+        let Some(queue) = self.queue_core() else {
+            return Err(ChannelError::new(
+                ErrorCode::UnexpectedWork,
+                WorkerMode::WebWorker as u32,
+                0,
+                0,
+            ));
+        };
+        let mut core = queue.borrow_mut();
         if !core.is_reconciled() {
             return Err(ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0));
         }
@@ -341,28 +356,24 @@ impl OwnerEndpoint {
         if let OwnerBackend::Browser(browser) = &self.backend {
             return browser.shutdown_acknowledged();
         }
-        let core = self.queue_core().borrow();
-        core.closed && core.is_reconciled()
+        self.queue_core().is_some_and(|queue| {
+            let core = queue.borrow();
+            core.closed && core.is_reconciled()
+        })
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    const fn queue_core(&self) -> &Rc<RefCell<ChannelCore>> {
+    const fn queue_core(&self) -> Option<&Rc<RefCell<ChannelCore>>> {
         match &self.backend {
-            OwnerBackend::Queue(core) => core,
+            OwnerBackend::Queue(core) => Some(core),
         }
     }
 
     #[cfg(target_arch = "wasm32")]
-    #[allow(
-        clippy::missing_const_for_fn,
-        reason = "the browser refusal includes a diagnostic unreachable message"
-    )]
-    fn queue_core(&self) -> &Rc<RefCell<ChannelCore>> {
+    const fn queue_core(&self) -> Option<&Rc<RefCell<ChannelCore>>> {
         match &self.backend {
-            OwnerBackend::Queue(core) => core,
-            OwnerBackend::Browser(_) => {
-                unreachable!("browser endpoint handled before queue access")
-            }
+            OwnerBackend::Queue(core) => Some(core),
+            OwnerBackend::Browser(_) => None,
         }
     }
 }
