@@ -109,6 +109,7 @@ Presenter and input work is planned in `docs/presenter-architecture.md` and `doc
 - Move animation keyed on piece ids: pieces jump between tiles today; ids are stable for the whole game so a slide is possible.
 - 3D picking: the wasm canvas is a view only, the page's 2D grid is the pointer input; a ray pick against the tiles would make the canvas clickable.
 - `net.rs` and `is_transient_read` are copied from fire-core because kings cannot depend on it; lift them to a shared crate.
+- The wasm client processes incoming messages only on animation frames; a hidden tab now keeps its seat alive (Hello and Ping left the render loop) but sees the board only when it is shown again.
 - The faceted mesh primitives in `crates/kings/src/meshes.rs` (and fire's) belong in `ember-engine`.
 - `deploy-pages.sh` still runs cargo, wasm-bindgen and python on the host; routing them through `wsl -d claude-sdk` with `CARGO_TARGET_DIR=$HOME/targets/ember` at idle priority is a separate, non-kings change.
 - A named Cloudflare tunnel with a stable hostname would make a restart of the kings pair self-healing and remove the republish step.

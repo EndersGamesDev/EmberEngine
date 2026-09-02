@@ -7,10 +7,19 @@
 //! `online.rs` can be tested natively with a real server instead of only by
 //! loading a page and squinting. Duplicating this with fire is a backlog
 //! line (lift to a shared crate).
+//!
+//! The socket owns the two messages that keep a seat: it sends `Hello` the
+//! moment it opens and a `Ping` every `CLIENT_PING_SECS` while it is open.
+//! Neither may depend on the game loop. On the web that loop runs on
+//! `requestAnimationFrame`, and a hidden tab gets no frames, so a client that
+//! greeted and pinged from `update` fell silent the moment the player looked
+//! away and was dropped after `CLIENT_TIMEOUT_SECS`. A JS interval keeps
+//! running when frames stop; natively the reader thread does the same.
 
 use std::collections::VecDeque;
+use std::time::Duration;
 
-use kings_core::proto::{C2S, S2C};
+use kings_core::proto::{C2S, CLIENT_PING_SECS, PROTO_VERSION, S2C};
 
 /// Where the socket is.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -23,11 +32,41 @@ pub enum Status {
     Closed(String),
 }
 
+/// How often the socket pings, from the protocol.
+#[must_use]
+pub const fn ping_period() -> Duration {
+    Duration::from_secs(CLIENT_PING_SECS)
+}
+
+/// The one `Hello` a connection sends, already serialized.
+fn hello_text(handle: &str) -> String {
+    serde_json::to_string(&C2S::Hello {
+        proto: PROTO_VERSION,
+        handle: handle.to_string(),
+    })
+    .unwrap_or_default()
+}
+
+/// The keepalive, already serialized.
+fn ping_text(nonce: u32) -> String {
+    serde_json::to_string(&C2S::Ping { nonce }).unwrap_or_default()
+}
+
+/// Whether the game may send this. `Hello` is the socket's: the server
+/// closes a connection on a second one, so it never goes through `send`.
+fn sendable(msg: &C2S) -> bool {
+    if matches!(msg, C2S::Hello { .. }) {
+        tracing::warn!("kings net: Hello is sent by the socket itself; ignoring the game's");
+        return false;
+    }
+    true
+}
+
 // ---- web ------------------------------------------------------------------
 
 #[cfg(target_arch = "wasm32")]
 mod imp {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::collections::VecDeque;
     use std::rc::Rc;
 
@@ -35,7 +74,7 @@ mod imp {
     use wasm_bindgen::JsCast;
     use wasm_bindgen::closure::Closure;
 
-    use super::Status;
+    use super::{Status, hello_text, ping_period, ping_text, sendable};
 
     struct Shared {
         inbox: VecDeque<S2C>,
@@ -51,10 +90,20 @@ mod imp {
         _on_open: Closure<dyn FnMut(web_sys::Event)>,
         _on_close: Closure<dyn FnMut(web_sys::CloseEvent)>,
         _on_err: Closure<dyn FnMut(web_sys::Event)>,
+        /// The keepalive timer, cleared when the channel is dropped.
+        keepalive_id: Option<i32>,
+        _keepalive: Option<Closure<dyn FnMut()>>,
     }
 
     impl Net {
-        pub fn connect(url: &str) -> Result<Self, String> {
+        /// Open the socket. It greets the server with `handle` as soon as it
+        /// is open and pings on a timer from then on; the game sends nothing
+        /// until `Welcome` arrives.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the URL is not one a `WebSocket` accepts.
+        pub fn connect(url: &str, handle: &str) -> Result<Self, String> {
             let ws = web_sys::WebSocket::new(url).map_err(|_| format!("bad url: {url}"))?;
             let shared = Rc::new(RefCell::new(Shared {
                 inbox: VecDeque::new(),
@@ -75,9 +124,17 @@ mod imp {
             );
             ws.set_onmessage(Some(on_msg.as_ref().unchecked_ref()));
 
+            // Hello goes out from the open event, not from a frame: a tab
+            // hidden at connect time gets no frames, and `open` fires exactly
+            // once per socket, which is the one Hello the server accepts.
             let s = Rc::clone(&shared);
+            let hello = hello_text(handle);
+            let ws_open = ws.clone();
             let on_open = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
                 s.borrow_mut().status = Status::Open;
+                if ws_open.send_with_str(&hello).is_err() {
+                    tracing::warn!("kings net: Hello failed to send on open");
+                }
             });
             ws.set_onopen(Some(on_open.as_ref().unchecked_ref()));
 
@@ -102,6 +159,40 @@ mod imp {
             });
             ws.set_onerror(Some(on_err.as_ref().unchecked_ref()));
 
+            // The keepalive runs on a JS interval, NOT on the frame loop, so
+            // it keeps going in a hidden tab. It sends only while the socket
+            // is open: a Ping before Hello is a protocol violation, and one
+            // after close is noise.
+            let mut keepalive = None;
+            let mut keepalive_id = None;
+            if let Some(win) = web_sys::window() {
+                let ws_ping = ws.clone();
+                let nonce = Cell::new(0u32);
+                let cb = Closure::<dyn FnMut()>::new(move || {
+                    if ws_ping.ready_state() != web_sys::WebSocket::OPEN {
+                        return;
+                    }
+                    let n = nonce.get().wrapping_add(1);
+                    nonce.set(n);
+                    if ws_ping.send_with_str(&ping_text(n)).is_err() {
+                        tracing::warn!("kings net: Ping failed to send");
+                    }
+                });
+                let period_ms = i32::try_from(ping_period().as_millis()).unwrap_or(5000);
+                match win.set_interval_with_callback_and_timeout_and_arguments_0(
+                    cb.as_ref().unchecked_ref(),
+                    period_ms,
+                ) {
+                    Ok(id) => keepalive_id = Some(id),
+                    Err(_) => {
+                        tracing::warn!("kings net: no keepalive timer; the seat will time out")
+                    }
+                }
+                keepalive = Some(cb);
+            } else {
+                tracing::warn!("kings net: no window; no keepalive timer");
+            }
+
             Ok(Self {
                 ws,
                 shared,
@@ -109,10 +200,15 @@ mod imp {
                 _on_open: on_open,
                 _on_close: on_close,
                 _on_err: on_err,
+                keepalive_id,
+                _keepalive: keepalive,
             })
         }
 
         pub fn send(&self, msg: &C2S) {
+            if !sendable(msg) {
+                return;
+            }
             if let Ok(t) = serde_json::to_string(msg)
                 && self.ws.send_with_str(&t).is_err()
             {
@@ -133,6 +229,14 @@ mod imp {
             self.shared.borrow().status.clone()
         }
     }
+
+    impl Drop for Net {
+        fn drop(&mut self) {
+            if let (Some(win), Some(id)) = (web_sys::window(), self.keepalive_id) {
+                win.clear_interval_with_handle(id);
+            }
+        }
+    }
 }
 
 // ---- native ---------------------------------------------------------------
@@ -143,13 +247,13 @@ mod imp {
     use std::sync::mpsc::{self, Receiver, Sender};
     use std::sync::{Arc, Mutex};
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use kings_core::proto::{C2S, S2C};
     use tungstenite::Message;
     use tungstenite::stream::MaybeTlsStream;
 
-    use super::Status;
+    use super::{Status, hello_text, ping_period, ping_text, sendable};
 
     fn set_status(status: &Mutex<Status>, next: Status) {
         *status
@@ -174,12 +278,15 @@ mod imp {
     }
 
     impl Net {
-        /// Connect in a background reader thread.
+        /// Connect in a background reader thread. The thread greets the
+        /// server with `handle` as soon as the socket is open and pings on
+        /// its own clock from then on; the game sends nothing until
+        /// `Welcome` arrives.
         ///
         /// # Errors
         ///
         /// Returns an error if the operating system cannot create that thread.
-        pub fn connect(url: &str) -> Result<Self, String> {
+        pub fn connect(url: &str, handle: &str) -> Result<Self, String> {
             let (in_tx, in_rx) = mpsc::channel::<S2C>();
             let (out_tx, out_rx) = mpsc::channel::<Message>();
             let status = Arc::new(Mutex::new(Status::Connecting));
@@ -190,6 +297,7 @@ mod imp {
 
             let st = Arc::clone(&status);
             let url = url.to_string();
+            let hello = hello_text(handle);
             thread::Builder::new()
                 .name("kings-net".into())
                 .spawn(move || {
@@ -201,10 +309,29 @@ mod imp {
                         }
                     };
                     set_read_timeout(&ws);
+                    // The one Hello, before anything the game queued: the
+                    // server closes on any other message first.
+                    if ws.send(Message::text(hello)).is_err() {
+                        set_status(&st, Status::Closed("Hello failed to send".into()));
+                        return;
+                    }
                     set_status(&st, Status::Open);
+                    let period = ping_period();
+                    let mut last_ping = Instant::now();
+                    let mut nonce: u32 = 0;
                     loop {
                         while let Ok(m) = out_rx.try_recv() {
                             if ws.send(m).is_err() {
+                                set_status(&st, Status::Closed("send failed".into()));
+                                return;
+                            }
+                        }
+                        // The keepalive lives here, not in the game loop, so
+                        // a game that stops calling `update` keeps its seat.
+                        if last_ping.elapsed() >= period {
+                            last_ping = Instant::now();
+                            nonce = nonce.wrapping_add(1);
+                            if ws.send(Message::text(ping_text(nonce))).is_err() {
                                 set_status(&st, Status::Closed("send failed".into()));
                                 return;
                             }
@@ -253,6 +380,9 @@ mod imp {
         }
 
         pub fn send(&self, msg: &C2S) {
+            if !sendable(msg) {
+                return;
+            }
             if let Ok(t) = serde_json::to_string(msg) {
                 drop(self.tx.send(Message::text(t)));
             }
@@ -292,10 +422,41 @@ impl Inbox {
     }
 }
 
-/// Convenience for the common send.
-pub fn hello(net: &Net, handle: &str) {
-    net.send(&C2S::Hello {
-        proto: kings_core::proto::PROTO_VERSION,
-        handle: handle.to_string(),
-    });
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_ping_period_is_the_protocols() {
+        assert_eq!(ping_period(), Duration::from_secs(CLIENT_PING_SECS));
+        assert_eq!(ping_period().as_secs(), 5);
+    }
+
+    #[test]
+    fn the_socket_greets_with_this_builds_protocol() {
+        let hello: C2S = serde_json::from_str(&hello_text("ada")).unwrap();
+        assert_eq!(
+            hello,
+            C2S::Hello {
+                proto: PROTO_VERSION,
+                handle: "ada".into(),
+            }
+        );
+        assert_eq!(
+            serde_json::from_str::<C2S>(&ping_text(7)).unwrap(),
+            C2S::Ping { nonce: 7 }
+        );
+    }
+
+    /// A second Hello closes the connection server-side, so the game's
+    /// `send` must never let one through.
+    #[test]
+    fn the_game_cannot_send_a_hello() {
+        assert!(!sendable(&C2S::Hello {
+            proto: PROTO_VERSION,
+            handle: "x".into(),
+        }));
+        assert!(sendable(&C2S::Ping { nonce: 1 }));
+        assert!(sendable(&C2S::Start));
+    }
 }

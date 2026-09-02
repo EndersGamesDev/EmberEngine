@@ -71,21 +71,20 @@ struct Peer {
 
 impl Peer {
     fn connect(port: u16, handle: &str) -> Self {
-        let net = Net::connect(&format!("ws://127.0.0.1:{port}")).expect("connect");
+        let net = Net::connect(&format!("ws://127.0.0.1:{port}"), handle).expect("connect");
         let t0 = Instant::now();
         while net.status() == Status::Connecting && t0.elapsed() < Duration::from_secs(3) {
             thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(net.status(), Status::Open, "socket never opened");
-        kings::net::hello(&net, handle);
         let mut peer = Self {
             net,
             game: Online::new(),
             inbox: VecDeque::default(),
         };
-        // Wait for Welcome before returning. Hello must be the first message
-        // on a connection and Welcome acknowledges it; anything version-gated
-        // sent before then races the server's handling of Hello.
+        // Wait for Welcome before returning. Hello is the socket's own first
+        // message and Welcome acknowledges it; anything version-gated sent
+        // before then races the server's handling of Hello.
         assert!(
             peer.wait_for(Duration::from_secs(5), |g| g.welcomed),
             "{handle}: no Welcome"
@@ -413,6 +412,88 @@ fn two_clients_create_join_start_move_and_time_out() {
     assert_eq!(court.players, 2);
     assert_eq!(court.host, "ada");
     assert!(!court.has_password);
+}
+
+/// Hello and the keepalive are the socket's job, not the game loop's. A web
+/// tab that gets no animation frames never calls `update`, so a `Net` that
+/// nobody drives has to greet the server on its own and keep the seat alive
+/// past `CLIENT_TIMEOUT_SECS`. There is no timeout knob on `ServerConfig`
+/// and this test does not add one; two Pongs prove the same thing, because
+/// the server answers Ping only after Hello and the client only pings from
+/// its reader thread.
+#[test]
+fn a_bare_net_greets_and_pings_without_update() {
+    let port = start_server(proto::TURN_MS);
+    let mut net = Net::connect(&format!("ws://127.0.0.1:{port}"), "quiet").expect("connect");
+    let mut inbox = VecDeque::new();
+    let t0 = Instant::now();
+    let mut welcomed_at = None;
+    let mut pongs = Vec::new();
+    // Hello at open, a Ping every CLIENT_PING_SECS: the second Pong is due
+    // at about 2 x CLIENT_PING_SECS, so the window is that plus slack.
+    let window = proto::CLIENT_PING_SECS * 2 + 2;
+    while t0.elapsed() < Duration::from_secs(window) && pongs.len() < 2 {
+        net.drain(&mut inbox);
+        while let Some(m) = inbox.pop_front() {
+            match m {
+                S2C::Welcome { .. } => welcomed_at = Some(t0.elapsed()),
+                S2C::Pong { nonce } => pongs.push((nonce, t0.elapsed())),
+                _ => {}
+            }
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    let welcomed_at = welcomed_at.unwrap_or_else(|| {
+        panic!(
+            "no Welcome without update: the socket did not say hello (status {:?})",
+            net.status()
+        )
+    });
+    assert!(
+        welcomed_at < Duration::from_secs(3),
+        "Welcome took {welcomed_at:?}: Hello waited for something"
+    );
+    assert!(
+        pongs.len() >= 2,
+        "{} Pong(s) in {:?}: the keepalive is not leaving the reader thread (status {:?})",
+        pongs.len(),
+        t0.elapsed(),
+        net.status()
+    );
+    assert_eq!(pongs[0].0, 1, "nonces count from one");
+    assert_eq!(pongs[1].0, 2, "and increment per ping");
+    assert_eq!(
+        net.status(),
+        Status::Open,
+        "still seated after {:?}",
+        t0.elapsed()
+    );
+    // The game never sends Hello: the server closes on a second one, and
+    // this connection must outlive an attempt.
+    net.send(&C2S::Hello {
+        proto: proto::PROTO_VERSION,
+        handle: "quiet".into(),
+    });
+    net.send(&C2S::ListLobbies);
+    let t1 = Instant::now();
+    let mut listed = false;
+    while t1.elapsed() < Duration::from_secs(3) && !listed {
+        net.drain(&mut inbox);
+        while let Some(m) = inbox.pop_front() {
+            listed |= matches!(m, S2C::Lobbies { .. });
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        listed,
+        "a Hello handed to send() reached the server and closed the connection (status {:?})",
+        net.status()
+    );
+    tracing::info!(
+        "bare net: Welcome at {welcomed_at:?}, Pongs at {:?} and {:?}",
+        pongs[0].1,
+        pongs[1].1
+    );
 }
 
 /// A refusal has to reach the client as something it can show, not a silent
