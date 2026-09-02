@@ -308,12 +308,8 @@ impl Presenter {
         })?;
         let extent = [main.grid.width, main.grid.height];
         validate_extent(&self.device, extent)?;
-        let reallocated = ensure_scene_texture(
-            &self.device,
-            &mut self.gpu,
-            texture_index as usize,
-            extent,
-        )?;
+        let reallocated =
+            ensure_scene_texture(&self.device, &mut self.gpu, texture_index as usize, extent)?;
         if reallocated {
             self.facts.texture_reallocations = self.facts.texture_reallocations.saturating_add(1);
             self.scene_samples.reset();
