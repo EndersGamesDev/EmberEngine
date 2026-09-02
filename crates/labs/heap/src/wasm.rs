@@ -271,16 +271,16 @@ fn performance_now() -> f64 {
 async fn yield_to_browser() -> Result<(), LabError> {
     let promise = js_sys::Promise::new(&mut |resolve, reject| {
         let Some(window) = web_sys::window() else {
-            let _ = reject.call1(
+            drop(reject.call1(
                 &JsValue::UNDEFINED,
                 &JsValue::from_str("window is unavailable"),
-            );
+            ));
             return;
         };
         if let Err(error) =
             window.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 0)
         {
-            let _ = reject.call1(&JsValue::UNDEFINED, &error);
+            drop(reject.call1(&JsValue::UNDEFINED, &error));
         }
     });
     wasm_bindgen_futures::JsFuture::from(promise)

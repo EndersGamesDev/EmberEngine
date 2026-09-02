@@ -3,6 +3,7 @@
 // The shader oracle intentionally mirrors fixed-width integer and f32 substrate conversions.
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+#[cfg(test)]
 use crate::Descriptor;
 
 pub(crate) const FETCH_WIDTH: u32 = 512;
@@ -32,6 +33,7 @@ pub(crate) fn payload_texel(x: u32, y: u32) -> [f32; 4] {
     ]
 }
 
+#[cfg(test)]
 fn fetch_coordinate(pixel_x: u32, pixel_y: u32, fetch: u32) -> (u32, u32) {
     let seed = pixel_x
         .wrapping_mul(1_664_525)
@@ -43,6 +45,7 @@ fn fetch_coordinate(pixel_x: u32, pixel_y: u32, fetch: u32) -> (u32, u32) {
     )
 }
 
+#[cfg(test)]
 pub(crate) fn direct_reference(pixel_x: u32, pixel_y: u32) -> [f32; 4] {
     let mut sum = [0.0_f32; 4];
     for fetch in 0..FETCHES_PER_FRAGMENT {
@@ -55,6 +58,7 @@ pub(crate) fn direct_reference(pixel_x: u32, pixel_y: u32) -> [f32; 4] {
     sum.map(|value| (value * 0.031_25).fract().abs())
 }
 
+#[cfg(test)]
 pub(crate) fn heap_reference(pixel_x: u32, pixel_y: u32, descriptor: Descriptor) -> [f32; 4] {
     let mut sum = [0.0_f32; 4];
     for fetch in 0..FETCHES_PER_FRAGMENT {
