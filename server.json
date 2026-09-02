@@ -1,8 +1,8 @@
 {
   "ws": "wss://surrey-surveys-deer-relax.trycloudflare.com",
-  "v": "1788340815",
+  "v": "1788340932",
   "proto": 11,
-  "fire_ws": "wss://handmade-episodes-prague-louis.trycloudflare.com",
+  "fire_ws": "wss://msg-crest-remembered-literally.trycloudflare.com",
   "fire_proto": 1,
   "kings_ws": "wss://respectively-showcase-provision-resolved.trycloudflare.com",
   "kings_proto": 1,
@@ -14,7 +14,15 @@
       "kings_version": "r383",
       "kings_commit": "2268ba1",
       "by": "root@DESKTOP-TOVQKRT",
-      "updated": "2026-09-02T09:20:15Z"
+      "updated": "2026-09-02T09:22:12Z",
+      "ws": "wss://maui-philip-camcorder-ict.trycloudflare.com",
+      "proto": 12,
+      "fire_ws": "wss://msg-crest-remembered-literally.trycloudflare.com",
+      "fire_proto": 1,
+      "version": "r437",
+      "commit": "f9c40d6",
+      "fire_version": "r437",
+      "fire_commit": "f9c40d6"
     }
   ]
 }
