@@ -1316,6 +1316,11 @@ mod tests {
         assert!(frame_loop.needs_refresh(true, false, false));
         assert!(frame_loop.needs_refresh(false, true, false));
         assert!(!frame_loop.needs_refresh(false, false, false));
+
+        let mut scheduled = FrameLoop::default();
+        scheduled.restart(5);
+        assert!(scheduled.refinement_pending());
+        assert!(scheduled.needs_refresh(false, false, false));
     }
 
     #[test]
