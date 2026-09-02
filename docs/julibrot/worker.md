@@ -72,11 +72,11 @@ A second wasm artifact is rejected because it adds a separately versioned URL, d
 
 Every wasm entry installs the readable panic hook before work; the app installs the non-panicking wgpu uncaptured-error handler before its first device call, and `worker_main` makes no device call.
 
-Startup selects `WorkerMode::WebWorker` by default or `WorkerMode::SameThread` when the page query contains `worker=same-thread`; native tests always select `SameThread`.
+Startup selects `WorkerMode::WebWorker` by default or `WorkerMode::SameThread` when the page query contains `worker=same-thread`; on wasm32 `WorkerChannel::new` constructs a module Worker at `./worker.js?v=1`, waits for ABI acceptance, and then transfers the initial orbit pair, while native tests exercise the deterministic queue lowering for both mode tags.
 
 ### 2.3 Four-buffer transfer channel
 
-The channel allocates two request-pool buffers and two orbit-pool buffers, four total, at startup; the two pools circulate independently, and transfer always calls `postMessage(buffer, [buffer])` so the sender is detached rather than structured-clone copying the payload.
+The channel allocates two request-pool buffers and two orbit-pool buffers, four total, at startup; the two pools circulate independently, transfer always calls `postMessage(buffer, [buffer])` so the sender is detached rather than structured-clone copying the payload, and the Rust binary listener coexists with the JavaScript object-handshake listener rather than replacing it.
 
 Main initially owns both request buffers and transfers both orbit buffers to the producer; a request buffer moves main → worker as `OrbitRequest` and worker → main as `RequestReturn`, while an orbit buffer moves worker → main as `OrbitResponse` or `OrbitCancelled` and main → worker as `CreditApplied` or `CreditStale`.
 
@@ -84,7 +84,7 @@ The request pair permits one message to be in browser delivery while main overwr
 
 Each message kind has capacity one in its pending queue and a later message of the same kind replaces the earlier unstarted message; request-buffer returns and credit returns are ownership traffic and are never coalesced.
 
-For current `max_iter = M`, every buffer has `capacity_bytes = 48+16M`: 32 header bytes, room for `M` orbit records or the request body, and a 16-byte immutable pool trailer; app's minimum requestable `M` is 64, changing `M` replaces all four buffers only after all four return to the allocator, increments `allocation_events`, and is the only steady-session resize event.
+For current `max_iter = M`, every buffer has `capacity_bytes = 48+16M`: 32 header bytes, room for `M` orbit records or the request body, and a 16-byte immutable pool trailer; app's minimum requestable `M` is 64, changing `M` stale-credits queued arrivals, replaces all four buffers only after all four return to the allocator, restarts the producer from the cached module artifact, increments `allocation_events`, and is the only steady-session resize event.
 
 The request body must fit before the trailer, so `112+4·limb_word_count ≤ 32+16M`; at the 300-digit POLICY four coordinates need at most `4·ceil(300·log₂(10)/32) = 128` limbs, hence request bytes are at most `112+4·128 = 624 ≤ 32+16·64 = 1,056`, while any failure remains a displayed `CentreEncodingWall` with requested bytes and capacity, never truncation or a hidden allocation.
 
@@ -213,6 +213,10 @@ On return, main preserves `generation`, `precision_bits`, and `compute_us`, chan
 
 `OrbitLease::return_credit(&mut self, disposition, owner_now_us)` performs the owner accounting, updates facts, rewrites the header, and transfers the orbit buffer back exactly once; a clock refusal retains the lease for retry, while dropping a live lease is a debug failure and becomes `BufferStarved` plus a visible outstanding-buffer fact in release behavior.
 
+On wasm32 `OrbitResponseView::from_transfer(buffer: ArrayBuffer) -> Result<OrbitResponseView, ChannelError>` adopts a standalone buffer and applies the same shared trailer, header, pool, kind, length, and zero-unused-byte validator as `WireBuffer`; its detached view is inspection-only, while `BrowserOwnerEndpoint::next_arrival` binds the same checked view to the owner port so `OrbitLease::return_credit` can transfer it back.
+
+`OrbitLease::transfer_record_bytes() -> Result<Uint8Array, ChannelError>` is the zero-copy browser payload view corresponding to same-thread `record_bytes() -> Result<&[u8], ChannelError>`; both expose exactly `16·length` initialized bytes and refuse use after credit return.
+
 ### 3.4 Shared GPU records recorded on the worker side
 
 `ReferenceOrbitRecord` is one little-endian RGBA32F texel and 16 bytes: byte 0 `re_hi: f32`, byte 4 `im_hi: f32`, byte 8 `re_lo: f32`, and byte 12 `im_lo: f32` for `Zₙ`.
@@ -283,7 +287,7 @@ Consumers never use owner-epoch equality as a compatibility test: each HOT or MA
 
 ### 3.7 Channel API and same-thread lowering
 
-`WorkerChannel::new(config: WorkerConfig, mode: WorkerMode) -> Result<(OwnerEndpoint, ProducerEndpoint), ChannelError>` allocates exactly four buffers and validates initial capacity; allocation or encoding-wall failure is typed initialization refusal.
+`WorkerChannel::new(config: WorkerConfig, mode: WorkerMode) -> Result<(OwnerEndpoint, ProducerEndpoint), ChannelError>` allocates exactly four buffers and validates initial capacity; on wasm32 `WebWorker` constructs `BrowserOwnerEndpoint` plus its Worker port rather than an internal queue pair, and allocation, browser-construction, listener-installation, or encoding-wall failure is a typed initialization refusal.
 
 `WorkerConfig` is `{ max_iter: u32 }`; app accepts no request below `max_iter = 64`, the implementation pins the buffer-return deadline to `4,000,000` microseconds and credit policy to `250,000` microseconds per second, and max iteration plus both constants remain displayed policies.
 
@@ -291,17 +295,21 @@ Consumers never use owner-epoch equality as a compatibility test: each HOT or MA
 
 `OwnerEndpoint::next_arrival() -> Option<OrbitResponseView>` is non-blocking on same-thread and event-driven on web; a response owns its `OrbitLease` until explicitly credited.
 
-`OwnerEndpoint::shutdown()` closes an already reconciled same-thread channel or immediately returns `BufferStarved`; the browser owner sends `Shutdown`, stops accepting requests, and drives event-based reconciliation for at most the app-enforced four-second buffer-return deadline, after which it reports the missing pool/slot rather than hanging.
+`OwnerEndpoint::return_credit(response: &mut OrbitResponseView, disposition: OrbitDisposition, owner_now_us: u64) -> Result<(), ChannelError>` delegates the response's exclusive lease return for both modes, so app need not inspect the lowering; direct `OrbitLease::return_credit` remains the equivalent lower-level call.
+
+`OwnerEndpoint::shutdown()` closes an already reconciled same-thread channel or immediately returns `BufferStarved`; the browser owner sends `Shutdown`, stops accepting requests, and drives event-based reconciliation for at most the app-enforced four-second buffer-return deadline, `shutdown_acknowledged()` reports completion without blocking, and timeout reports the missing pool/slot rather than hanging.
 
 `ProducerEndpoint::admit(producer_now_us) -> Result<Admission,ChannelError>` applies the same producer shaper used by the browser backend; `next_request`, `complete`, and `cancel` expose one deterministic step for native traces, while the browser-private run loop repeats those steps until `ShutdownAck` or a typed channel failure.
+
+On wasm32 `BrowserOwnerEndpoint::new(config: WorkerConfig) -> Result<BrowserOwnerEndpoint, ChannelError>` constructs the pinned module Worker and `BrowserOwnerEndpoint::from_worker(config, worker)` attaches an app-created port; its `submit`, `next_arrival`, `return_credit`, `take_error`, `latest_generation`, `pending_request_depth`, `facts`, `shutdown`, and `shutdown_acknowledged` methods are the browser implementation behind `OwnerEndpoint`, so app call sites do not branch by mode.
 
 `EncodedCentre::encode_math(centre:&BigCentre,revision:u32)->Result<EncodedCentre,ChannelError>` and `decode_math(precision_bits:u32)->Result<BigCentre,ChannelError>` are worker's canonical adapter over math's `encode_big_scalar` and `decode_big_scalar`; `ReferenceOrbitTask::start(request:&OrbitRequest,clock:&impl MonotonicClock)->Result<ReferenceOrbitTask,ChannelError>` constructs math's published `ReferenceOrbitBuilder`, and `poll(latest_generation:u32,clock:&impl MonotonicClock)->Result<OrbitTaskPoll,ChannelError>` returns `Pending`, `Complete`, or `Cancelled` after at most 64 builder steps or 2,000 measured microseconds.
 
 `ComputedOrbit` and `ReferenceOrbitRecord` are re-exported from math rather than copied; the completed `Vec` is reusable linear-memory storage for the one transport copy, and transport itself performs no per-message allocation.
 
-The Web Worker lowering backs endpoints with the four transferable `ArrayBuffer` objects; `SameThread` backs the identical ownership states with four preallocated byte buffers moved through bounded queues, bypasses the wasm-boundary memcpy only because producer and consumer share linear memory, and changes no ordering, generation, credit, or drain result.
+The Web Worker lowering backs endpoints with the four transferable `ArrayBuffer` objects and routes returned request, orbit, credit, and shutdown buffers through `BrowserOwnerEndpoint`; `SameThread` backs the identical ownership states with four preallocated byte buffers moved through bounded queues, bypasses the wasm-boundary memcpy only because producer and consumer share linear memory, and changes no ordering, generation, credit, or drain result.
 
-`JULIBROT_PHASE_IMPLEMENTED = 4`; on wasm32, `allocate_transfer_buffer(pool:u32,slot:u32,max_iter:u32)->Result<ArrayBuffer,JsValue>` creates the exact trailer-bearing standalone buffers and `worker_main(expected_abi:u32)->Result<u32,JsValue>` installs the heap panic hook, refuses ABI skew or a non-worker global, receives only transferred buffers, cooperatively runs the latest request, and acknowledges shutdown only after both orbit slots return.
+`JULIBROT_PHASE_IMPLEMENTED = 4`; on wasm32, `allocate_transfer_buffer(pool:u32,slot:u32,max_iter:u32)->Result<ArrayBuffer,JsValue>` creates the exact trailer-bearing standalone buffers and `worker_main(expected_abi:u32)->Result<u32,JsValue>` installs the heap panic hook, refuses ABI skew or a non-worker global, ignores the loader's object handshake, receives transferred buffers through a coexisting event listener, cooperatively runs the latest request, and returns both orbit slots before `ShutdownAck`.
 
 The wasm main-side bridge is `encode_transfer_request(&ArrayBuffer,&OrbitRequest)->Result<(),ChannelError>`, `read_transfer_header(&ArrayBuffer)->Result<MessageHeader,ChannelError>`, `transfer_record_bytes(&ArrayBuffer)->Result<Uint8Array,ChannelError>`, `write_transfer_credit(&ArrayBuffer,OrbitDisposition,&mut CreditAccount,owner_now_us:u64)->Result<CreditCharge,ChannelError>`, and `write_transfer_shutdown(&ArrayBuffer,generation:u32)->Result<(),ChannelError>`; each validates the immutable trailer and mutates or views the same standalone allocation, `transfer_record_bytes` is a zero-copy initialized-range view, and none creates a replacement transport buffer.
 
@@ -430,7 +438,7 @@ Phase 4 adds fixed-policy credit/token-bucket shaping, facts snapshots, app/kern
 
 The worker slice is therefore budgeted at about 2,060 implementation and test lines; generated wasm glue and downstream app, kernel, heap, and presentation code are excluded.
 
-Implementation progress through Phase 4: the Phase 2 core, transferable `worker_main`, field-paid heap panic-hook installation, standalone buffer pool, one-pass orbit copy, cooperative cancellation, ABI refusal, page-flag lowering, shutdown reconciliation, exact owner token bucket, producer shaper, cancelled-work accounting, and pinned facts snapshot are implemented; browser detachment, engine allocation, and timing claims remain visible-replay evidence.
+Implementation progress through Phase 4: the Phase 2 core, transferable `worker_main`, field-paid heap panic-hook installation, standalone buffer pool, checked browser owner endpoint, one-pass orbit copy, cooperative cancellation, ABI refusal, page-flag lowering, four-slot shutdown reconciliation, exact owner token bucket, producer shaper, cancelled-work accounting, and pinned facts snapshot are implemented; browser detachment, engine allocation, and timing claims remain visible-replay evidence.
 
 ## 8. Unresolved joint-review findings
 
