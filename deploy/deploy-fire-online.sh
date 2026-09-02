@@ -85,6 +85,8 @@ echo "== syncing source =="
 # assets/models/fire is included so the `fire` client crate would also build
 # there; it is 431 KB and saves a confusing failure later.
 TARBALL="$(mktemp -t ember-fire-src-XXXX.tar.gz)"
+# Reaped on every path: a failed scp used to leave the source tarball behind.
+trap 'st=$?; rm -f "$TARBALL"; exit $st' EXIT
 git archive --format=tar.gz -o "$TARBALL" "$REF" \
     Cargo.toml Cargo.lock crates/ assets/models/fire/
 echo "   $(du -h "$TARBALL" | cut -f1) of committed source"

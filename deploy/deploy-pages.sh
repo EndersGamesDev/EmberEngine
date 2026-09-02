@@ -33,8 +33,24 @@ wasm-bindgen --target web --no-typescript --out-dir web/pkg \
     target/wasm32-unknown-unknown/release/arena.wasm
 
 echo "== publishing gh-pages =="
+# Detached at what ORIGIN has, never at the local branch. `git worktree add
+# <dir> gh-pages` checked out this checkout's own gh-pages, which nothing here
+# fetches — `git fetch` moves origin/gh-pages and not the branch — so once a
+# second writer published (another workstation, a host running host.sh with
+# EMBER_PUBLISH=upstream) the push below was rejected as a non-fast-forward.
+# `--detach` also means a leftover worktree still holding the local branch
+# cannot block this one, which `-B gh-pages origin/gh-pages` would not survive.
+git fetch -q origin gh-pages \
+    || { echo "FAILED: cannot fetch origin gh-pages; is the branch there?" >&2; exit 1; }
 PAGES_DIR="$(mktemp -d -t ember-pages-XXXX)"
-git worktree add "$PAGES_DIR" gh-pages
+# Armed BEFORE the add, so neither a failing add nor anything after it can
+# leave the directory registered as a worktree. Without this, one failed push
+# left gh-pages checked out under /tmp and every later deploy — of the pages
+# and of either game — died at its own `worktree add` until a human ran
+# `git worktree remove`. The status is preserved: the trap reports the failure
+# that caused it, not the cleanup's own.
+trap 'st=$?; git worktree remove --force "$PAGES_DIR" >/dev/null 2>&1 || true; rm -rf "$PAGES_DIR"; exit $st' EXIT
+git worktree add -q --detach "$PAGES_DIR" FETCH_HEAD
 
 # Live version dirs (older versions stay frozen on the branch untouched).
 ARENA_LIVE="games/arena/v12"
@@ -188,8 +204,10 @@ bash "$REPO_DIR/deploy/publish-host.sh" --book "$PAGES_DIR/server.json" --recomp
         git commit -m "Deploy games hub
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
-        git push origin gh-pages
+        # The worktree is detached, so name both ends of the refspec.
+        git push origin HEAD:refs/heads/gh-pages
     fi
 )
-git worktree remove --force "$PAGES_DIR"
+# No explicit `worktree remove` here: the EXIT trap above does it on every
+# path, and a cleanup that only runs when nothing went wrong is the bug.
 echo "== live at https://endersgamesdev.github.io/EmberEngine/ =="

@@ -86,6 +86,9 @@ echo "== syncing source =="
 # every run — 351 MB to build a server that needs none of it. The manifests
 # and crates alone are ~0.5 MB and build identically.
 TARBALL="$(mktemp -t ember-src-XXXX.tar.gz)"
+# Reaped on every path: a failed scp used to leave half a megabyte of source
+# tarball in the temp directory on every retry.
+trap 'st=$?; rm -f "$TARBALL"; exit $st' EXIT
 git archive --format=tar.gz -o "$TARBALL" "$REF" Cargo.toml Cargo.lock crates/
 echo "   $(du -h "$TARBALL" | cut -f1) of committed source"
 scp -o BatchMode=yes "$TARBALL" "$REMOTE":ember-src.tar.gz
