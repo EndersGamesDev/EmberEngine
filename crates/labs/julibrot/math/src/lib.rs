@@ -1,11 +1,13 @@
 //! CPU truth and numeric interfaces for the Julibrot lab.
 
 mod big;
+mod orbit;
 mod plane;
 mod scale;
 mod types;
 
 pub use big::{BigCentre, BigScalar, EncodedBigScalar, decode_big_scalar, encode_big_scalar};
+pub use orbit::{ReferenceOrbitBuilder, escape_f32};
 pub use plane::{construct_plane, construct_plane_from_spec, preset_spec};
 pub use scale::{
     centre_displacement_px, mirror_centre, precision_for, scale_split, scaled_pixel_offset,

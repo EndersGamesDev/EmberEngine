@@ -179,6 +179,8 @@ pub enum MathError {
     PlaneRoundingBound,
     #[error("the centre encoding is not canonical")]
     InvalidCentreEncoding,
+    #[error("the escape bailout is not the fixed squared radius 256.0")]
+    InvalidBailout,
     #[error("bignum centres use different delivered precisions")]
     PrecisionMismatch,
     #[error("the scale exponent is outside i32 range")]
@@ -187,6 +189,10 @@ pub enum MathError {
     DegenerateWarp,
     #[error("the orbit cannot be represented by the requested record count")]
     OrbitTooLong,
+    #[error("the reference-orbit builder reached an inconsistent state")]
+    InvalidOrbitState,
+    #[error("the precision plan is internally inconsistent")]
+    InvalidPrecisionPlan,
     #[error("an exact counter overflowed")]
     CounterOverflow,
     #[error("a measured duration exceeded its u32 representation")]
