@@ -175,6 +175,9 @@ impl Presenter {
                 main.state.centre_revision,
                 main.state.reference_shift_px,
             );
+            if let Some(frame) = self.ledger.retained() {
+                self.facts.source_generation = Some(frame.pose.orbit_generation);
+            }
         }
         if self
             .ledger

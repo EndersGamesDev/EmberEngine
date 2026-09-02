@@ -122,7 +122,7 @@ The implementation solves the eight projective coefficients of the current-NDC-t
 
 Neutral height makes the approximation exact at the four anchors but not between them or at nonzero escape height; the native oracle samples a 9-by-9 chart lattice at `h₅ ∈ {−2,−1,0,1,2}`, compares homography source pixels with full per-point reprojection, and reports maximum and p95 error in output pixels.
 
-The acceptance envelope is `|Δθ_view|≤0.02 rad`, `|Δzoom_log2|≤0.25`, a successfully rebased common reference, and maximum sampled error at or below `2.0` pixels for a 1920-by-1080 target; outside it the warp remains a visibly labelled approximation, publishes that a fresh scene is needed immediately, and never turns its observed error into an invented correction.
+The implementation-retired acceptance envelope is `|Δθ_view|≤0.002 rad`, `|Δzoom_log2|≤0.025`, a successfully rebased common reference, and maximum sampled error at or below `2.0` pixels for a 1920-by-1080 target; the original argued `0.02`/`0.25` envelope measured `6.394` pixels already at `0.01`/`0.1`, so outside the narrower envelope the warp remains a visibly labelled approximation, publishes that a fresh scene is needed immediately, and never turns its observed error into an invented correction.
 
 For either view, newly exposed source coordinates outside the retained texture show `clear_rgba`; a single homography cannot detect internal tumbled visibility changes, so internal disocclusion is a candid stale-image limitation rather than being called filled or corrected.
 
@@ -373,7 +373,7 @@ Warp cost per refresh, scene-frame cost, fence wait, polls, warm-up exclusion, f
 |Deep perturbation enters the GPU as an absolute centre or tiny scalar scale|precision collapse|perturbation-layout fixture proving no centre field and mantissa/exponent scale decomposition|
 |Flat warp reverses zoom, rows, or aspect|swimming or mirrored image|analytic pixel correspondences and the `H⁻¹H` oracle at all six zooms|
 |A reference shift has the wrong sign, units, or revision|old pixels swim during a valid deep pan|physical-centre invariance oracle plus exactly-once completed/in-flight rebasing test|
-|Tumbled 2D warp exceeds its useful envelope|visible nonlinear swimming|9-by-9-by-5 error oracle plus labelled visible direct-versus-warp replay|
+|Tumbled 2D warp exceeds its useful envelope|visible nonlinear swimming|9-by-9-by-5 oracle rejected the argued `0.02`/`0.25` envelope at `6.394` pixels and pins the narrower `0.002`/`0.025` boundary at at most `2.0` pixels, plus labelled visible direct-versus-warp replay|
 |Warp clamps an exposed edge|smeared disocclusion|UV-outside unit test and visible clear-border replay|
 |An internal tumbled disocclusion is mistaken for corrected|overstated capability|explicit status/overlay contract and visible stress replay; it remains an accepted limit|
 |A scene target is overwritten while sampled|race or validation error|all state-machine interleavings plus rapid visible refinement replay|
