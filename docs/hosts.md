@@ -44,6 +44,8 @@ The writer takes `--name <host>`, a `--game <id> --url <wss> --proto <n>` triple
       "commit": "502414c",
       "proto": 12,
       "fire_proto": 1,
+      "fire_version": "r211",
+      "fire_commit": "502414c",
       "updated": "2026-09-01T12:34:56Z",
       "by": "end@specht"
     }
@@ -154,6 +156,6 @@ The on-host units from `install-watchdog.sh` pass the name through `EMBER_HOST_N
 ## 10. Deliberately not built
 
 - Hosts do not talk to each other. There is no lobby sharing, no player migration between hosts and no cross-host matchmaking; the client-side merge in §5 covers discovery without any of it.
-- No automatic pruning of the book. A host that vanishes is dropped by the probe, not by the book; `publish-host.sh --remove <name>` deletes an entry by hand.
+- No automatic pruning of the book. A host that vanishes is dropped by the probe, not by the book; `publish-host.sh --remove <name>` deletes an entry by hand, and `--drop-game <id>` retires one game's four keys from an entry that keeps running the others.
 - Quick tunnels still change address on restart. A named tunnel per host would make a reboot self-healing; see `deploy/README-watchdog.md`.
 - The `feature/one-server` branch folds the three server binaries into one process behind one tunnel. It changes what runs **on** a host, not how many hosts there are: a one-server host publishes the same entry with the same keys, pointing at its legacy selectors.
