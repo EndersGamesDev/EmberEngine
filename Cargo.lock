@@ -1123,6 +1123,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ember-lab-heap"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "ember-lab-layer",
+ "js-sys",
+ "naga",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu",
+]
+
+[[package]]
 name = "ember-lab-layer"
 version = "0.1.0"
 dependencies = [
