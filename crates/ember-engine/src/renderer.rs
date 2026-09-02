@@ -301,6 +301,11 @@ pub struct Renderer {
     // Scene pass.
     scene: SceneTargets,
     scene_scale: f32,
+    /// Size of the last swapchain texture actually presented; logged when it
+    /// changes, which is the only evidence a fullscreen switch reached the GPU
+    /// (a borderless fullscreen swapchain presents in flip mode, invisible
+    /// to screen capture).
+    presented_size: [u32; 2],
     scene_pipeline: wgpu::RenderPipeline,
     scene_uniform_buf: wgpu::Buffer,
     scene_uniform_bind: wgpu::BindGroup,
@@ -669,6 +674,7 @@ impl Renderer {
             config,
             scene,
             scene_scale,
+            presented_size: [0, 0],
             scene_pipeline,
             scene_uniform_buf,
             scene_uniform_bind,
@@ -724,6 +730,7 @@ impl Renderer {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
+        tracing::debug!(width, height, "surface configured");
         self.scene = create_scene_targets(&self.device, &self.config, self.scene_scale);
         self.present_bind = create_present_bind(
             &self.device,
@@ -774,6 +781,11 @@ impl Renderer {
         let surface_tex = match self.surface.get_current_texture() {
             Ok(t) => t,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                tracing::debug!(
+                    width = self.config.width,
+                    height = self.config.height,
+                    "surface lost or outdated; reconfiguring"
+                );
                 self.surface.configure(&self.device, &self.config);
                 return;
             }
@@ -782,6 +794,16 @@ impl Renderer {
                 return;
             }
         };
+        if surface_tex.texture.width() != self.presented_size[0]
+            || surface_tex.texture.height() != self.presented_size[1]
+        {
+            self.presented_size = [surface_tex.texture.width(), surface_tex.texture.height()];
+            tracing::debug!(
+                width = self.presented_size[0],
+                height = self.presented_size[1],
+                "presenting at a new size"
+            );
+        }
         let surface_view = surface_tex
             .texture
             .create_view(&wgpu::TextureViewDescriptor {

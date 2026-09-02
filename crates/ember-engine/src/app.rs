@@ -174,9 +174,38 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                     if code == KeyCode::Escape {
                         event_loop.exit();
                     }
+                    // F11 toggles borderless fullscreen on the native
+                    // window. It lives here in the platform layer rather
+                    // than in any game because the game never sees the
+                    // window (one-way layering), and every game wants the
+                    // same thing from the key. Borderless, not exclusive:
+                    // no mode switch, alt-tab keeps working, and the
+                    // swapchain simply follows the Resized event.
+                    //
+                    // Native only. winit's web backend would call
+                    // requestFullscreen on the bare canvas, which throws
+                    // the page's own overlays (crosshair, scoreboard) off
+                    // screen; the page fullscreens its stage element itself,
+                    // and the per-frame canvas sync below picks up the new
+                    // size. The browser's F11 stays the browser's.
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if code == KeyCode::F11
+                        && event.state == ElementState::Pressed
+                        && !event.repeat
+                        && let Some(window) = self.window.as_ref()
+                    {
+                        use winit::window::Fullscreen;
+                        let next = if window.fullscreen().is_some() {
+                            None
+                        } else {
+                            Some(Fullscreen::Borderless(None))
+                        };
+                        window.set_fullscreen(next);
+                    }
                 }
             }
             WindowEvent::Resized(size) => {
+                tracing::debug!(width = size.width, height = size.height, "window resized");
                 if let Some(renderer) = self.renderer.as_mut() {
                     renderer.resize(size.width, size.height);
                 }
