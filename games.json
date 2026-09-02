@@ -4,12 +4,20 @@
       "id": "arena",
       "title": "Arena Shooter",
       "tag": "online multiplayer · first person · up to 8",
-      "desc": "First-person drop-in deathmatch in a generated arena. WASD + mouse look, Space jump, RMB zoom, R reload, Shift sprint, C crouch — crouching also shrinks your hitbox. Q raises an off-hand shield that doesn't just block a bullet, it reflects it back at the shooter. Jump onto the low crates and fight from up there; the tall containers stay hard cover. Grab glowing pads to upgrade your pistol. Textured basalt arena, an animated SWAT operator, Blender-built viewmodel with hands. E is a melee strike that kills outright and goes straight through a raised shield — the counter to someone turtling behind Q. Headshots kill outright too, so aim high.",
+      "desc": "First-person drop-in deathmatch in a generated arena. WASD + mouse look, Space jump, RMB zoom, R reload, Shift sprint, C crouch — crouching also shrinks your hitbox. Q raises an off-hand shield that doesn't just block a bullet, it reflects it back at the shooter. Jump onto the low crates and fight from up there; the tall containers stay hard cover. Grab glowing pads to upgrade your pistol. Textured basalt arena, an animated SWAT operator, Blender-built viewmodel with hands. E is a melee strike that kills outright and goes straight through a raised shield — the counter to someone turtling behind Q. Headshots kill outright too, so aim high. v13 replaces the generated boxes with one authored map, Trench City: closed shipping containers as hard cover, crates and ammo boxes as the steps up onto their roofs, a ring of trenches with fire steps and covered tunnels holding all four weapon pads, and a bronze statue at the centre of a fought-over European city square.",
       "versions": [
+        {
+          "v": "v13",
+          "path": "games/arena/v13/",
+          "live": true,
+          "proto": 13,
+          "handover": true,
+          "note": "Trench City map + graphics update"
+        },
         {
           "v": "v12",
           "path": "games/arena/v12/",
-          "live": true,
+          "live": false,
           "proto": 12,
           "handover": true,
           "note": "E melee through shields + headshots"

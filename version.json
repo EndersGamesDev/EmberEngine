@@ -1,6 +1,6 @@
 {
-  "version": "r439",
-  "commit": "1219354",
-  "built": "2026-09-02T09:26:18Z",
-  "subject": "web: the arena page waits for the wasm init before asking its protocol"
+  "version": "r450",
+  "commit": "a39481f",
+  "built": "2026-09-02T15:36:58Z",
+  "subject": "deploy: host the arena from this Windows workstation"
 }
