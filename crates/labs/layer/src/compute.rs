@@ -156,10 +156,44 @@ pub struct CapabilityFacts {
     pub vertex_texture_units: u32,
     /// Exposed two-dimensional texture limit.
     pub max_texture_dimension_2d: u32,
+    /// Configured device buffer limit, also used as the layer's aggregate texture budget.
+    pub max_buffer_size: u64,
     /// Whether RGBA32F advertises both rendering and sampling.
     pub rgba32f_render_and_sample: bool,
     /// Golden output checksum after rendering and mapping.
     pub golden_checksum: Option<f64>,
+}
+
+/// Runtime ceiling for one square-packed `Grid1D` allocation.
+#[derive(Clone, Debug, Serialize)]
+pub struct Grid1DLimit {
+    /// Number of RGBA32F slots in the allocation.
+    pub slot_count: u32,
+    /// Bytes occupied by one logical element across every slot.
+    pub bytes_per_element: u64,
+    /// Maximum logical elements permitted by the texture dimension.
+    pub dimension_elements: u64,
+    /// Maximum logical elements permitted by the layer's square-padded byte budget.
+    pub byte_budget_elements: u64,
+    /// Maximum logical elements addressable by the dialect's `u32` index.
+    pub address_elements: u64,
+    /// Tightest of the dimension, byte-budget, and address ceilings.
+    pub max_elements: u64,
+    /// Aggregate byte ceiling used for this allocation class.
+    pub aggregate_byte_ceiling: u64,
+}
+
+impl Grid1DLimit {
+    /// Exact square-padded allocation bytes for a logical element count.
+    #[must_use]
+    pub fn required_bytes(&self, elements: u64) -> Option<u64> {
+        let side = if elements == 0 {
+            0
+        } else {
+            elements.saturating_sub(1).isqrt().saturating_add(1)
+        };
+        side.checked_mul(side)?.checked_mul(self.bytes_per_element)
+    }
 }
 
 struct Slot {
@@ -541,7 +575,7 @@ impl ComputeDevice {
         device: wgpu::Device,
         queue: wgpu::Queue,
     ) -> Result<Self, LayerError> {
-        let limits = adapter.limits();
+        let limits = device.limits();
         if limits.max_color_attachments < 4 {
             return Err(LayerError::Capability(format!(
                 "adapter exposes {} color attachments; the dialect requires four",
@@ -591,6 +625,7 @@ impl ComputeDevice {
                 max_color_attachments: limits.max_color_attachments,
                 vertex_texture_units: limits.max_sampled_textures_per_shader_stage,
                 max_texture_dimension_2d: limits.max_texture_dimension_2d,
+                max_buffer_size: limits.max_buffer_size,
                 rgba32f_render_and_sample,
                 golden_checksum: None,
             },
@@ -613,6 +648,38 @@ impl ComputeDevice {
     #[must_use]
     pub const fn facts(&self) -> &CapabilityFacts {
         &self.facts
+    }
+
+    /// Computes the exact reusable `Grid1D` wall for an RGBA32F slot count.
+    ///
+    /// # Errors
+    ///
+    /// Refuses zero slots or a slot count that cannot be represented by the layer.
+    pub fn grid1d_limit(&self, slot_count: usize) -> Result<Grid1DLimit, LayerError> {
+        let slot_count_u64 = u64::try_from(slot_count)
+            .map_err(|_| LayerError::Resource("slot count exceeds u64".to_string()))?;
+        let slot_count_u32 = u32::try_from(slot_count)
+            .map_err(|_| LayerError::Resource("slot count exceeds u32".to_string()))?;
+        let bytes_per_element = 16_u64
+            .checked_mul(slot_count_u64)
+            .filter(|bytes| *bytes != 0)
+            .ok_or_else(|| LayerError::Resource("slot count must be nonzero".to_string()))?;
+        let dimension = u64::from(self.facts.max_texture_dimension_2d);
+        let dimension_elements = dimension.saturating_mul(dimension);
+        let byte_side = (self.facts.max_buffer_size / bytes_per_element).isqrt();
+        let byte_budget_elements = byte_side.saturating_mul(byte_side);
+        let address_elements = u64::from(u32::MAX);
+        Ok(Grid1DLimit {
+            slot_count: slot_count_u32,
+            bytes_per_element,
+            dimension_elements,
+            byte_budget_elements,
+            address_elements,
+            max_elements: dimension_elements
+                .min(byte_budget_elements)
+                .min(address_elements),
+            aggregate_byte_ceiling: self.facts.max_buffer_size,
+        })
     }
 
     fn lost_reason(&self) -> Option<String> {
@@ -643,10 +710,22 @@ impl ComputeDevice {
         initial: Option<&[&[[f32; 4]]]>,
     ) -> Result<ComputeBuffer, LayerError> {
         let (width, height) = index_space.rect();
-        if index_space.is_empty() || slot_count == 0 || width > self.facts.max_texture_dimension_2d
+        let slot_count_u64 = u64::try_from(slot_count)
+            .map_err(|_| LayerError::Resource("slot count exceeds u64".to_string()))?;
+        let allocation_bytes = u64::from(width)
+            .checked_mul(u64::from(height))
+            .and_then(|texels| texels.checked_mul(16))
+            .and_then(|bytes| bytes.checked_mul(slot_count_u64))
+            .ok_or_else(|| LayerError::Resource(format!("{label} byte size overflowed")))?;
+        if index_space.is_empty()
+            || slot_count == 0
+            || width > self.facts.max_texture_dimension_2d
+            || height > self.facts.max_texture_dimension_2d
+            || allocation_bytes > self.facts.max_buffer_size
         {
             return Err(LayerError::Resource(format!(
-                "{label} has invalid space {index_space:?} or slot count {slot_count}"
+                "{label} needs {allocation_bytes} bytes for {slot_count} slots in {index_space:?}; device/layer ceiling is {} bytes and texture dimension is {}",
+                self.facts.max_buffer_size, self.facts.max_texture_dimension_2d
             )));
         }
         if let Some(values) = initial
@@ -1287,5 +1366,32 @@ mod tests {
             refusal("fn helper() { workgroupBarrier(); }"),
             ForbiddenConstruct::Barrier
         );
+    }
+
+    #[test]
+    fn lattice_kernel_parses_inside_the_accessor_only_dialect() {
+        prescan(
+            "lattice_edges",
+            crate::kernels::LATTICE_EDGE_KERNEL,
+            &["load_edge", "load_base_four", "load_base_fifth"],
+        )
+        .expect("the procedural lattice body should satisfy the dialect pre-scan");
+    }
+
+    #[test]
+    fn square_padded_limit_reports_exact_bytes() {
+        let limit = Grid1DLimit {
+            slot_count: 2,
+            bytes_per_element: 32,
+            dimension_elements: 64,
+            byte_budget_elements: 49,
+            address_elements: u64::from(u32::MAX),
+            max_elements: 49,
+            aggregate_byte_ceiling: 1_568,
+        };
+        assert_eq!(limit.required_bytes(0), Some(0));
+        assert_eq!(limit.required_bytes(1), Some(32));
+        assert_eq!(limit.required_bytes(8), Some(288));
+        assert_eq!(limit.required_bytes(49), Some(1_568));
     }
 }

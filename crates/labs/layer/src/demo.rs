@@ -7,11 +7,11 @@ use serde::Serialize;
 use wgpu::util::DeviceExt;
 
 use crate::compute::{
-    ComputeBuffer, ComputeDevice, IndexSpace, InputBinding, Kernel, KernelDesc, LayerError,
-    OutputBinding,
+    ComputeBuffer, ComputeDevice, DispatchToken, Grid1DLimit, IndexSpace, InputBinding, Kernel,
+    KernelDesc, LayerError, OutputBinding,
 };
 use crate::geometry;
-use crate::kernels::{EDGE_KERNEL, EdgeUniform, VERTEX_KERNEL, VertexUniform};
+use crate::kernels::{LATTICE_EDGE_KERNEL, LatticeUniform};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
 
@@ -62,7 +62,8 @@ struct VertexOut {
 }
 
 fn texture_coordinate(index: u32) -> vec2<i32> {
-    return vec2<i32>(i32(index % 55u), i32(index / 55u));
+    let width = textureDimensions(midpoint_hue_texture).x;
+    return vec2<i32>(i32(index % width), i32(index / width));
 }
 
 fn camera_turn(point: vec3<f32>) -> vec3<f32> {
@@ -87,6 +88,13 @@ fn vertex_main(@builtin(vertex_index) vertex: u32, @builtin(instance_index) inst
     let coordinate = texture_coordinate(instance);
     let midpoint_hue = textureLoad(midpoint_hue_texture, coordinate, 0);
     let orientation_length = textureLoad(orientation_length_texture, coordinate, 0);
+    if (orientation_length.w < 0.0) {
+        var invalid: VertexOut;
+        invalid.clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+        invalid.normal = vec3<f32>(0.0, 0.0, 1.0);
+        invalid.hue = midpoint_hue.w;
+        return invalid;
+    }
     let axis = orientation_length.xyz;
     let reference = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(axis.y) > 0.90);
     let side = normalize(cross(reference, axis));
@@ -137,12 +145,51 @@ struct DemoFacts {
     edges: usize,
     derived_edge_length: f64,
     cap_circumradius: f64,
-    vertex_grid: (u32, u32),
-    edge_grid: (u32, u32),
-    per_frame_cpu_to_gpu_bytes: u32,
+    base_vertex_grid: (u32, u32),
+    base_edge_grid: (u32, u32),
+    pose_limit: Grid1DLimit,
+    steps: Vec<StepCapacity>,
+    per_frame_cpu_to_gpu_bytes_when_delivered: u32,
     hue_mapping: &'static str,
+    projection_validity: &'static str,
     completion: &'static str,
     capabilities: crate::compute::CapabilityFacts,
+}
+
+#[derive(Clone, Serialize)]
+struct StepCapacity {
+    m: u32,
+    copies: u64,
+    requested_edges: u64,
+    output_side: u64,
+    output_bytes: u64,
+    fifth_range: f64,
+    arithmetically_deliverable: bool,
+    refusal: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct StepReport {
+    requested_m: u32,
+    requested_edges: u64,
+    delivered_edges: u64,
+    instances: u64,
+    draw_calls: u32,
+    compute_passes: u32,
+    per_frame_cpu_to_gpu_bytes: u32,
+    output_grid: Option<(u32, u32)>,
+    output_bytes: u64,
+    visible: &'static str,
+    refusal: Option<String>,
+}
+
+struct StepResources {
+    m: u32,
+    edges: u32,
+    fifth_range: f32,
+    kernel: Kernel,
+    render_bind_group: wgpu::BindGroup,
+    _poses: ComputeBuffer,
 }
 
 /// Surface-backed pillar renderer using the fragment-compute layer.
@@ -152,14 +199,12 @@ pub(crate) struct Demo {
     compute: ComputeDevice,
     depth: wgpu::TextureView,
     render_pipeline: wgpu::RenderPipeline,
-    render_bind_group: wgpu::BindGroup,
+    render_layout: wgpu::BindGroupLayout,
     camera: wgpu::Buffer,
-    vertex_kernel: Kernel,
-    edge_kernel: Kernel,
-    _base: ComputeBuffer,
-    _edge_indices: ComputeBuffer,
-    _view: ComputeBuffer,
-    _poses: ComputeBuffer,
+    base: ComputeBuffer,
+    edge_indices: ComputeBuffer,
+    steps: Vec<StepCapacity>,
+    active: Option<StepResources>,
     lost: Arc<Mutex<Option<String>>>,
     frames: u64,
 }
@@ -286,89 +331,8 @@ impl Demo {
             1,
             Some(&edge_initial),
         )?;
-        let view = compute.create_buffer(
-            "pillar projected vertices",
-            IndexSpace::Grid1D(1_200),
-            2,
-            None,
-        )?;
-        let poses =
-            compute.create_buffer("pillar edge transforms", IndexSpace::Grid1D(3_000), 2, None)?;
-        let vertex_inputs = [
-            InputBinding {
-                accessor: "load_base_four",
-                buffer: &base,
-                slot: 0,
-            },
-            InputBinding {
-                accessor: "load_base_fifth",
-                buffer: &base,
-                slot: 1,
-            },
-        ];
-        let vertex_outputs = [
-            OutputBinding {
-                field: "view_position",
-                buffer: &view,
-                slot: 0,
-            },
-            OutputBinding {
-                field: "fifth_axis",
-                buffer: &view,
-                slot: 1,
-            },
-        ];
-        let vertex_kernel = compute
-            .create_kernel(KernelDesc {
-                name: "pillar_vertex",
-                body: VERTEX_KERNEL,
-                index_space: IndexSpace::Grid1D(1_200),
-                inputs: &vertex_inputs,
-                outputs: &vertex_outputs,
-                uniform_type: "VertexUniform",
-                uniform_size: 16,
-            })
-            .await?;
-        let edge_inputs = [
-            InputBinding {
-                accessor: "load_edge",
-                buffer: &edge_indices,
-                slot: 0,
-            },
-            InputBinding {
-                accessor: "load_view",
-                buffer: &view,
-                slot: 0,
-            },
-            InputBinding {
-                accessor: "load_fifth",
-                buffer: &view,
-                slot: 1,
-            },
-        ];
-        let edge_outputs = [
-            OutputBinding {
-                field: "midpoint_hue",
-                buffer: &poses,
-                slot: 0,
-            },
-            OutputBinding {
-                field: "orientation_length",
-                buffer: &poses,
-                slot: 1,
-            },
-        ];
-        let edge_kernel = compute
-            .create_kernel(KernelDesc {
-                name: "pillar_edge",
-                body: EDGE_KERNEL,
-                index_space: IndexSpace::Grid1D(3_000),
-                inputs: &edge_inputs,
-                outputs: &edge_outputs,
-                uniform_type: "EdgeUniform",
-                uniform_size: 16,
-            })
-            .await?;
+        let pose_limit = compute.grid1d_limit(2)?;
+        let steps = step_capacities(&object, &pose_limit);
 
         compute
             .device()
@@ -410,26 +374,6 @@ impl Demo {
                     distance: 10.5,
                 }),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-        let render_bind_group = compute
-            .device()
-            .create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("pillar render textures"),
-                layout: &render_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(poses.as_vertex_texture(0)?),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(poses.as_vertex_texture(1)?),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: camera.as_entire_binding(),
-                    },
-                ],
             });
         let pipeline_layout =
             compute
@@ -494,10 +438,13 @@ impl Demo {
             edges: object.edges.len(),
             derived_edge_length: object.edge_length,
             cap_circumradius: object.cap_circumradius,
-            vertex_grid: IndexSpace::Grid1D(1_200).rect(),
-            edge_grid: IndexSpace::Grid1D(3_000).rect(),
-            per_frame_cpu_to_gpu_bytes: 48,
-            hue_mapping: "clamp(midpoint post-rotation x5 / 6 + 0.5, 0, 1)",
+            base_vertex_grid: IndexSpace::Grid1D(1_200).rect(),
+            base_edge_grid: IndexSpace::Grid1D(3_000).rect(),
+            pose_limit: pose_limit.clone(),
+            steps: steps.clone(),
+            per_frame_cpu_to_gpu_bytes_when_delivered: 48,
+            hue_mapping: "clamp(midpoint post-rotation x5 / (2 * runtime symmetric lattice range) + 0.5, 0, 1)",
+            projection_validity: "per vertex: d5-x5 > 0.05 and d4-projected_x4 > 0.05; an edge with either invalid endpoint remains submitted/delivered but its box is clipped",
             completion: "ordered submissions for rendering; 4-byte mapped-copy fence only for explicit complete(), texture mapping for read()",
             capabilities: compute.facts().clone(),
         };
@@ -510,14 +457,12 @@ impl Demo {
                 compute,
                 depth,
                 render_pipeline,
-                render_bind_group,
+                render_layout,
                 camera,
-                vertex_kernel,
-                edge_kernel,
-                _base: base,
-                _edge_indices: edge_indices,
-                _view: view,
-                _poses: poses,
+                base,
+                edge_indices,
+                steps,
+                active: None,
                 lost,
                 frames: 0,
             },
@@ -525,34 +470,165 @@ impl Demo {
         ))
     }
 
+    pub(crate) async fn set_step(&mut self, m: u32) -> Result<StepReport, LayerError> {
+        let capacity = self
+            .steps
+            .iter()
+            .find(|capacity| capacity.m == m)
+            .cloned()
+            .ok_or_else(|| LayerError::Resource(format!("lattice step m={m} is not offered")))?;
+        self.active = None;
+        if m == 0 || !capacity.arithmetically_deliverable {
+            return Ok(self.step_report(&capacity, capacity.refusal.clone()));
+        }
+        match self.build_step(&capacity).await {
+            Ok(resources) => {
+                self.active = Some(resources);
+                Ok(self.step_report(&capacity, None))
+            }
+            Err(error) => Ok(self.step_report(
+                &capacity,
+                Some(format!(
+                    "runtime allocation or registration refused after arithmetic admission: {error}"
+                )),
+            )),
+        }
+    }
+
+    async fn build_step(&self, capacity: &StepCapacity) -> Result<StepResources, LayerError> {
+        let edges = u32::try_from(capacity.requested_edges).map_err(|_| {
+            LayerError::Resource(format!(
+                "{} requested edges exceed the dialect u32 index",
+                capacity.requested_edges
+            ))
+        })?;
+        let index_space = IndexSpace::Grid1D(edges);
+        let poses = self
+            .compute
+            .create_buffer("lattice edge poses", index_space, 2, None)?;
+        let inputs = [
+            InputBinding {
+                accessor: "load_edge",
+                buffer: &self.edge_indices,
+                slot: 0,
+            },
+            InputBinding {
+                accessor: "load_base_four",
+                buffer: &self.base,
+                slot: 0,
+            },
+            InputBinding {
+                accessor: "load_base_fifth",
+                buffer: &self.base,
+                slot: 1,
+            },
+        ];
+        let outputs = [
+            OutputBinding {
+                field: "midpoint_hue",
+                buffer: &poses,
+                slot: 0,
+            },
+            OutputBinding {
+                field: "orientation_length",
+                buffer: &poses,
+                slot: 1,
+            },
+        ];
+        let kernel = self
+            .compute
+            .create_kernel(KernelDesc {
+                name: "lattice_edges",
+                body: LATTICE_EDGE_KERNEL,
+                index_space,
+                inputs: &inputs,
+                outputs: &outputs,
+                uniform_type: "LatticeUniform",
+                uniform_size: 32,
+            })
+            .await?;
+        let render_bind_group = create_render_bind_group(
+            self.compute.device(),
+            &self.render_layout,
+            &poses,
+            &self.camera,
+        )?;
+        Ok(StepResources {
+            m: capacity.m,
+            edges,
+            fifth_range: capacity.fifth_range as f32,
+            kernel,
+            render_bind_group,
+            _poses: poses,
+        })
+    }
+
+    fn step_report(&self, capacity: &StepCapacity, refusal: Option<String>) -> StepReport {
+        let active = self
+            .active
+            .as_ref()
+            .filter(|resources| resources.m == capacity.m);
+        StepReport {
+            requested_m: capacity.m,
+            requested_edges: capacity.requested_edges,
+            delivered_edges: active.map_or(0, |resources| u64::from(resources.edges)),
+            instances: active.map_or(0, |resources| u64::from(resources.edges)),
+            draw_calls: u32::from(active.is_some()),
+            compute_passes: u32::from(active.is_some()),
+            per_frame_cpu_to_gpu_bytes: if active.is_some() { 48 } else { 0 },
+            output_grid: active.map(|resources| IndexSpace::Grid1D(resources.edges).rect()),
+            output_bytes: capacity.output_bytes,
+            visible: "not counted without readback: projection-valid subset only; submitted/delivered includes every pole-discarded edge",
+            refusal,
+        }
+    }
+
     pub(crate) fn frame(&mut self, time_seconds: f32) -> Result<u64, LayerError> {
+        self.submit_frame(time_seconds).map(|(frames, _)| frames)
+    }
+
+    pub(crate) async fn probe_frame(&mut self, time_seconds: f32) -> Result<u64, LayerError> {
+        let (frames, token) = self.submit_frame(time_seconds)?;
+        if let Some(token) = token {
+            self.compute.complete(token).await?;
+        }
+        Ok(frames)
+    }
+
+    fn submit_frame(
+        &mut self,
+        time_seconds: f32,
+    ) -> Result<(u64, Option<DispatchToken>), LayerError> {
         if let Some(reason) = self.lost.lock().ok().and_then(|reason| reason.clone()) {
             return Err(LayerError::DeviceLost(reason));
         }
         let theta_one = 0.4 * time_seconds;
         let theta_two = (1.0 + 5.0_f32.sqrt()) * 0.5 * theta_one;
-        let vertex_uniform = VertexUniform {
-            theta_one,
-            theta_two,
-            pole_five: 8.0,
-            pole_four: 8.0,
-        };
-        self.compute
-            .dispatch(&self.vertex_kernel, bytemuck::bytes_of(&vertex_uniform))?;
-        let edge_uniform = EdgeUniform {
-            fifth_range: 3.0,
-            half_thickness: 0.012,
-            padding: [0.0; 2],
-        };
-        self.compute
-            .dispatch(&self.edge_kernel, bytemuck::bytes_of(&edge_uniform))?;
+        let token = self
+            .active
+            .as_ref()
+            .map(|active| {
+                let uniform = LatticeUniform {
+                    theta_one,
+                    theta_two,
+                    pole_five: 8.0,
+                    pole_four: 8.0,
+                    lattice_m: active.m as f32,
+                    spacing: geometry::LATTICE_SPACING as f32,
+                    fifth_range: active.fifth_range,
+                    pole_epsilon: 0.05,
+                };
+                self.compute
+                    .dispatch(&active.kernel, bytemuck::bytes_of(&uniform))
+            })
+            .transpose()?;
         let frame = match self.surface.get_current_texture() {
             Ok(frame) => frame,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
                 self.surface.configure(self.compute.device(), &self.config);
-                return Ok(self.frames);
+                return Ok((self.frames, token));
             }
-            Err(wgpu::SurfaceError::Timeout) => return Ok(self.frames),
+            Err(wgpu::SurfaceError::Timeout) => return Ok((self.frames, token)),
             Err(error) => {
                 return Err(LayerError::DeviceLost(format!(
                     "surface presentation failed: {error}"
@@ -565,9 +641,11 @@ impl Demo {
             pitch: -0.28,
             distance: 10.5,
         };
-        self.compute
-            .queue()
-            .write_buffer(&self.camera, 0, bytemuck::bytes_of(&camera));
+        if self.active.is_some() {
+            self.compute
+                .queue()
+                .write_buffer(&self.camera, 0, bytemuck::bytes_of(&camera));
+        }
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -605,14 +683,87 @@ impl Demo {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.render_pipeline);
-            pass.set_bind_group(0, &self.render_bind_group, &[]);
-            pass.draw(0..36, 0..3_000);
+            if let Some(active) = &self.active {
+                pass.set_bind_group(0, &active.render_bind_group, &[]);
+                pass.draw(0..36, 0..active.edges);
+            }
         }
         self.compute.queue().submit([encoder.finish()]);
         frame.present();
         self.frames = self.frames.saturating_add(1);
-        Ok(self.frames)
+        Ok((self.frames, token))
     }
+}
+
+fn step_capacities(object: &geometry::Prism, limit: &Grid1DLimit) -> Vec<StepCapacity> {
+    geometry::LATTICE_STEPS
+        .into_iter()
+        .map(|m| {
+            let requested_edges = geometry::lattice_edge_count(m);
+            let output_side = if requested_edges == 0 {
+                0
+            } else {
+                requested_edges.saturating_sub(1).isqrt().saturating_add(1)
+            };
+            let output_bytes = limit.required_bytes(requested_edges).unwrap_or(u64::MAX);
+            let mut reasons = Vec::new();
+            if requested_edges > limit.dimension_elements {
+                reasons.push(format!(
+                    "square output side {output_side} exceeds this device texture wall of {} texels per side",
+                    limit.dimension_elements.isqrt()
+                ));
+            }
+            if requested_edges > limit.byte_budget_elements {
+                reasons.push(format!(
+                    "two square-padded RGBA32F slots need {output_bytes} bytes; the layer/device aggregate ceiling is {} bytes",
+                    limit.aggregate_byte_ceiling
+                ));
+            }
+            if requested_edges > limit.address_elements {
+                reasons.push(format!(
+                    "{requested_edges} invocations exceed the dialect u32 address ceiling of {}",
+                    limit.address_elements
+                ));
+            }
+            let refusal = (!reasons.is_empty()).then(|| reasons.join("; "));
+            StepCapacity {
+                m,
+                copies: geometry::lattice_copy_count(m),
+                requested_edges,
+                output_side,
+                output_bytes,
+                fifth_range: geometry::lattice_fifth_range(object, m),
+                arithmetically_deliverable: m == 0 || refusal.is_none(),
+                refusal,
+            }
+        })
+        .collect()
+}
+
+fn create_render_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    poses: &ComputeBuffer,
+    camera: &wgpu::Buffer,
+) -> Result<wgpu::BindGroup, LayerError> {
+    Ok(device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("lattice render textures"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(poses.as_vertex_texture(0)?),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(poses.as_vertex_texture(1)?),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: camera.as_entire_binding(),
+            },
+        ],
+    }))
 }
 
 fn texture_layout_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {

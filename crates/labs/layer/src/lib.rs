@@ -72,3 +72,37 @@ pub fn render_layer_frame(time_seconds: f32) -> Result<u64, JsValue> {
             .map_err(|error| JsValue::from_str(&error.to_string()))
     })
 }
+
+/// Selects and registers one lattice step, returning requested-versus-delivered facts.
+///
+/// # Errors
+///
+/// Returns a JavaScript error when initialization is absent or the step is not offered.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn set_layer_step(m: u32) -> Result<String, JsValue> {
+    let mut demo = DEMO
+        .with_borrow_mut(Option::take)
+        .ok_or_else(|| JsValue::from_str("layer is not initialized"))?;
+    let result = demo.set_step(m).await;
+    DEMO.with_borrow_mut(|slot| *slot = Some(demo));
+    let report = result.map_err(|error| JsValue::from_str(&error.to_string()))?;
+    serde_json::to_string(&report)
+        .map_err(|error| JsValue::from_str(&format!("could not encode step report: {error}")))
+}
+
+/// Submits one frame and waits for its generation-guarded mapped-copy fence.
+///
+/// # Errors
+///
+/// Returns a JavaScript error on absent initialization, device loss, mapping failure, or deadline.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub async fn probe_layer_frame(time_seconds: f32) -> Result<u64, JsValue> {
+    let mut demo = DEMO
+        .with_borrow_mut(Option::take)
+        .ok_or_else(|| JsValue::from_str("layer is not initialized"))?;
+    let result = demo.probe_frame(time_seconds).await;
+    DEMO.with_borrow_mut(|slot| *slot = Some(demo));
+    result.map_err(|error| JsValue::from_str(&error.to_string()))
+}

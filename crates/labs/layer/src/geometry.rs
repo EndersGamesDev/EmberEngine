@@ -1,5 +1,14 @@
 //! Exact construction and reference math for the dodecahedral prism.
 
+/// Required odd lattice steps, including the honest empty scene.
+pub const LATTICE_STEPS: [u32; 12] = [0, 1, 3, 5, 7, 9, 13, 17, 21, 27, 35, 45];
+
+/// Fixed center-to-center spacing of the five-dimensional lattice.
+pub const LATTICE_SPACING: f64 = 8.0;
+
+/// Edges in one 120-cell prism copy.
+pub const EDGES_PER_COPY: u64 = 3_000;
+
 /// One edge, stored as endpoint vertex indices.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Edge {
@@ -33,6 +42,49 @@ pub struct EdgePose<T> {
     pub length: T,
     /// Fifth-axis hue coordinate in zero-to-one range.
     pub hue: T,
+}
+
+/// Number of copies at one centered five-dimensional lattice step.
+#[must_use]
+pub fn lattice_copy_count(m: u32) -> u64 {
+    if m == 0 {
+        0
+    } else {
+        u64::from(m).saturating_pow(5)
+    }
+}
+
+/// Total submitted edges requested by one lattice step.
+#[must_use]
+pub fn lattice_edge_count(m: u32) -> u64 {
+    lattice_copy_count(m).saturating_mul(EDGES_PER_COPY)
+}
+
+/// Decodes a linear copy index into centered five-dimensional lattice coordinates.
+#[must_use]
+pub fn lattice_coordinate(mut copy: u64, m: u32) -> Option<[i32; 5]> {
+    if m == 0 || copy >= lattice_copy_count(m) {
+        return None;
+    }
+    let radix = u64::from(m);
+    let half = i32::try_from(m / 2).ok()?;
+    let mut coordinate = [0_i32; 5];
+    for component in &mut coordinate {
+        *component = i32::try_from(copy % radix).ok()? - half;
+        copy /= radix;
+    }
+    Some(coordinate)
+}
+
+/// Symmetric post-rotation fifth-axis hue range enclosing a lattice step.
+#[must_use]
+pub fn lattice_fifth_range(object: &Prism, m: u32) -> f64 {
+    let center_extent = f64::from(m.saturating_sub(1) / 2) * LATTICE_SPACING;
+    object
+        .vertices
+        .iter()
+        .map(|point| (point[2].abs() + center_extent).hypot(point[4].abs() + center_extent))
+        .fold(1.0_f64, f64::max)
 }
 
 fn permutations() -> Vec<[usize; 4]> {
@@ -462,6 +514,61 @@ mod tests {
             assert!((dot(side, side) - 1.0).abs() <= 1.0e-5);
             assert!((dot(upward, upward) - 1.0).abs() <= 1.0e-5);
             assert!(dot(cross(side, upward), pose.direction) >= 1.0 - 1.0e-5);
+        }
+    }
+
+    #[test]
+    fn lattice_steps_derive_0_3000_729000_9375000_and_1113879000_edges() {
+        let expected = [
+            0_u64,
+            3_000,
+            729_000,
+            9_375_000,
+            50_421_000,
+            177_147_000,
+            1_113_879_000,
+            4_259_571_000,
+            12_259_323_000,
+            43_046_721_000,
+            157_565_625_000,
+            553_584_375_000,
+        ];
+        assert_eq!(LATTICE_STEPS.map(lattice_edge_count), expected);
+        assert_eq!(lattice_coordinate(0, 3), Some([-1; 5]));
+        assert_eq!(lattice_coordinate(121, 3), Some([0; 5]));
+        assert_eq!(lattice_coordinate(242, 3), Some([1; 5]));
+        assert_eq!(lattice_coordinate(243, 3), None);
+        assert_eq!(lattice_coordinate(0, 0), None);
+    }
+
+    #[test]
+    fn procedural_lattice_projection_matches_direct_base_plus_center_reference() {
+        let object = prism();
+        for m in [1, 3, 5] {
+            let range = lattice_fifth_range(&object, m);
+            assert!(range.is_finite() && range > 0.0);
+            let copies = lattice_copy_count(m);
+            for copy in [0, copies / 2, copies - 1] {
+                let coordinate = lattice_coordinate(copy, m).expect("copy is in range");
+                let center = coordinate.map(|value| f64::from(value) * LATTICE_SPACING);
+                for vertex in [0, 599, 600, 1_199] {
+                    let translated = std::array::from_fn(|axis| {
+                        object.vertices[vertex][axis] + center[axis]
+                    });
+                    for time in [0.0, 0.37, 2.5] {
+                        let reference = project_reference(translated, time);
+                        let gpu = project_gpu_path(translated, time);
+                        for axis in 0..3 {
+                            let tolerance = 2.0e-3 * reference.0[axis].abs().max(1.0);
+                            assert!(
+                                (reference.0[axis] - f64::from(gpu.0[axis])).abs() <= tolerance
+                            );
+                        }
+                        let fifth_tolerance = 2.0e-5 * reference.1.abs().max(1.0);
+                        assert!((reference.1 - f64::from(gpu.1)).abs() <= fifth_tolerance);
+                    }
+                }
+            }
         }
     }
 }

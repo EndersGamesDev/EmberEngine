@@ -3,22 +3,36 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ember fragment-compute layer</title>
+  <title>ember fragment-compute lattice</title>
   <style>
     :root { color-scheme: dark; font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
     * { box-sizing: border-box; }
     body { margin: 0; min-height: 100vh; background: #03050d; color: #dbe7ff; display: grid; place-items: center; }
-    main { width: min(1280px, 96vw); padding: 18px 0 28px; }
+    main { width: min(1380px, 96vw); padding: 18px 0 28px; }
     header { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
     h1 { margin: 0 0 12px; font: 500 1.05rem/1.3 system-ui, sans-serif; letter-spacing: .16em; text-transform: uppercase; }
     h1 span { color: #62ddff; }
-    #telemetry { display: flex; gap: 14px; font-size: .78rem; font-variant-numeric: tabular-nums; color: #9cb8dd; }
+    #telemetry { display: flex; gap: 14px; flex-wrap: wrap; font-size: .76rem; font-variant-numeric: tabular-nums; color: #9cb8dd; }
     #telemetry strong { color: #f3c86b; font-weight: 600; }
     .stage { position: relative; border: 1px solid #26385b; border-radius: 12px; overflow: hidden; box-shadow: 0 24px 80px #000b; }
     canvas { width: 100%; aspect-ratio: 16 / 9; height: auto; display: block; background: #02040b; }
-    #status { position: absolute; inset: 14px auto auto 14px; margin: 0; padding: 8px 10px; border: 1px solid #38527a; border-radius: 7px; background: #071020d9; font-size: .72rem; max-width: min(620px, 80%); }
+    #status { position: absolute; inset: 14px auto auto 14px; margin: 0; padding: 8px 10px; border: 1px solid #38527a; border-radius: 7px; background: #071020e8; font-size: .72rem; max-width: min(760px, 88%); }
     #status.ready { color: #83f1bf; border-color: #225f4b; }
     #status.failed { color: #ff9c9c; border-color: #7a3030; }
+    .controls { margin-top: 12px; padding: 12px; border: 1px solid #26385b; border-radius: 9px; background: #070b15; }
+    .control-line { display: grid; grid-template-columns: minmax(210px, 1fr) auto; gap: 12px; align-items: center; }
+    input[type="range"] { width: 100%; accent-color: #62ddff; }
+    button { border: 1px solid #38658a; border-radius: 6px; padding: 7px 10px; background: #10243a; color: #dbe7ff; font: inherit; cursor: pointer; }
+    button:disabled { opacity: .45; cursor: default; }
+    #selection, #wall, #validity { margin: 8px 0 0; color: #9bb0cf; font-size: .72rem; line-height: 1.45; }
+    #selection strong { color: #f3c86b; }
+    .table-wrap { margin-top: 12px; max-height: 310px; overflow: auto; border: 1px solid #1e2b46; }
+    table { width: 100%; border-collapse: collapse; font-size: .68rem; font-variant-numeric: tabular-nums; }
+    th, td { padding: 6px 8px; text-align: right; border-bottom: 1px solid #18243b; white-space: nowrap; }
+    th { position: sticky; top: 0; background: #0b1220; color: #8eabd1; }
+    td:last-child, th:last-child { text-align: left; white-space: normal; min-width: 220px; }
+    tr.active { background: #102139; }
+    tr.refused td { color: #c69292; }
     details { margin-top: 12px; color: #9bb0cf; font-size: .72rem; }
     pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; border: 1px solid #1e2b46; background: #070b15; }
     footer { margin-top: 12px; color: #7385a3; font: .75rem/1.5 system-ui, sans-serif; }
@@ -27,55 +41,166 @@
 <body>
   <main>
     <header>
-      <h1>ember <span>fragment-compute layer</span></h1>
-      <div id="telemetry"><span>frames <strong id="frames">0</strong></span><span>median <strong id="median">—</strong></span><span>p95 <strong id="p95">—</strong></span></div>
+      <h1>ember <span>fragment-compute lattice</span></h1>
+      <div id="telemetry">
+        <span>requested <strong id="requested">0</strong></span>
+        <span>delivered/submitted <strong id="delivered">0</strong></span>
+        <span>mode <strong id="mode">init</strong></span>
+        <span>frames <strong id="frames">0</strong></span>
+        <span>median <strong id="median">requires visible replay</strong></span>
+        <span>p95 <strong id="p95">requires visible replay</strong></span>
+      </div>
     </header>
     <div class="stage">
       <canvas id="layer-canvas" width="1280" height="720"></canvas>
       <p id="status">requesting WebGL2 through wgpu…</p>
     </div>
-    <details><summary>capability and invariant evidence</summary><pre id="facts">waiting</pre></details>
-    <footer>1,200 vertices and 3,000 equal-length edges. The GPU rotates in SO(5), projects 5D→4D→3D, gathers endpoints, and emits box transforms every frame. Hue is only the post-rotation fifth coordinate, mapped over the fixed range −3…+3.</footer>
+    <section class="controls" aria-label="5D lattice scale">
+      <div class="control-line">
+        <input id="step" type="range" min="0" max="11" step="1" value="0" aria-label="5D lattice step">
+        <button id="probe" type="button" disabled>render one measured frame</button>
+      </div>
+      <p id="selection">m=0 · empty baseline</p>
+      <p id="wall">runtime wall pending capability probe</p>
+      <p id="validity">Visible geometry is the projection-valid subset; delivered/submitted includes edges discarded at either projection pole.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>m</th><th>copies</th><th>requested edges</th><th>delivered</th><th>instances</th><th>draws</th><th>CPU→GPU/frame</th><th>median / p95</th><th>result</th></tr></thead>
+          <tbody id="scaling"></tbody>
+        </table>
+      </div>
+    </section>
+    <details><summary>live capability, wall, and invariant evidence</summary><pre id="facts">waiting</pre></details>
+    <footer>The fixed 1,200-vertex/3,000-edge prism and edge topology stay GPU-resident. A layer-generated fragment wrapper procedurally decodes each copy's centered 5D lattice coordinate, rotates base+center in SO(5), projects 5D→4D→3D with d₅=d₄=8, and emits two texture slots. Hue is only post-rotation x₅ over the displayed symmetric lattice range. Per delivered frame uploads 32 kernel-uniform bytes plus 16 camera bytes.</footer>
   </main>
   <script type="module">
-    import init, { start_layer, render_layer_frame } from './pkg/ember_lab_layer.js?v=2';
+    import init, { probe_layer_frame, render_layer_frame, set_layer_step, start_layer } from './pkg/ember_lab_layer.js?v=3';
 
     const status = document.querySelector('#status');
     const facts = document.querySelector('#facts');
+    const requested = document.querySelector('#requested');
+    const delivered = document.querySelector('#delivered');
+    const mode = document.querySelector('#mode');
     const frameCount = document.querySelector('#frames');
     const median = document.querySelector('#median');
     const p95 = document.querySelector('#p95');
+    const slider = document.querySelector('#step');
+    const selection = document.querySelector('#selection');
+    const wall = document.querySelector('#wall');
+    const probe = document.querySelector('#probe');
+    const scaling = document.querySelector('#scaling');
     const canvas = document.querySelector('#layer-canvas');
-    const failure = (error) => {
+    const integer = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+    const measurements = new Map();
+    const attempts = new Map();
+    let deviceFacts;
+    let currentReport;
+    let started = performance.now();
+    let animationEpoch = 0;
+    let baselineThreshold;
+    let samples = [];
+    let frames = 0;
+    let previous;
+    let currentMode = 'init';
+
+    const formatInteger = value => integer.format(value);
+    const formatBytes = value => {
+      if (!value) return '0 B';
+      const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+      let amount = Number(value);
+      let unit = 0;
+      while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit += 1; }
+      return `${amount.toFixed(amount >= 100 ? 0 : amount >= 10 ? 1 : 2)} ${units[unit]}`;
+    };
+    const statistics = values => {
+      const sorted = values.slice().sort((left, right) => left - right);
+      const middle = Math.floor(sorted.length / 2);
+      return {
+        median: sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) * 0.5,
+        p95: sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)],
+      };
+    };
+    const failureText = error => error instanceof Error ? error.message : String(error);
+    const failure = error => {
+      animationEpoch += 1;
       status.className = 'failed';
-      status.textContent = `refused: ${error instanceof Error ? error.message : String(error)}`;
+      status.textContent = `refused: ${failureText(error)}`;
+      currentMode = 'refused';
+      mode.textContent = currentMode;
+      probe.disabled = true;
     };
     addEventListener('error', event => failure(event.error || event.message));
     addEventListener('unhandledrejection', event => failure(event.reason));
 
-    try {
-      await init({ module_or_path: './pkg/ember_lab_layer_bg.wasm?v=2' });
-      const report = JSON.parse(await start_layer(canvas));
-      facts.textContent = JSON.stringify(report, null, 2);
-      status.className = 'ready';
-      status.textContent = `ready · ${report.backend} · golden checksum ${report.capabilities.golden_checksum}`;
-      const started = performance.now();
-      let previous;
-      let frames = 0;
-      const samples = [];
-      let telemetryPending = false;
-      const updateTelemetryBetweenFrames = () => {
-        telemetryPending = false;
-        if (!samples.length) return;
-        const sorted = samples.slice().sort((left, right) => left - right);
-        const middle = Math.floor(sorted.length / 2);
-        const middleValue = sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) * 0.5;
-        const p95Value = sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)];
-        frameCount.textContent = String(frames);
-        median.textContent = `${middleValue.toFixed(2)} ms`;
-        p95.textContent = `${p95Value.toFixed(2)} ms`;
-      };
+    const timingText = m => {
+      const value = measurements.get(m);
+      return value ? `${value.median.toFixed(2)} / ${value.p95.toFixed(2)} ms (${value.kind})` : 'requires visible replay';
+    };
+    const drawTable = () => {
+      scaling.replaceChildren(...deviceFacts.steps.map(step => {
+        const row = document.createElement('tr');
+        if (currentReport?.requested_m === step.m) row.classList.add('active');
+        if (!step.arithmetically_deliverable) row.classList.add('refused');
+        const attempted = attempts.get(step.m);
+        const cells = [
+          step.m,
+          formatInteger(step.copies),
+          formatInteger(step.requested_edges),
+          attempted ? formatInteger(attempted.delivered_edges) : 'not attempted',
+          attempted ? formatInteger(attempted.instances) : '—',
+          attempted ? String(attempted.draw_calls) : '—',
+          attempted ? formatBytes(attempted.per_frame_cpu_to_gpu_bytes) : '—',
+          timingText(step.m),
+          attempted?.refusal || step.refusal || (attempted ? 'delivered exactly' : 'within arithmetic wall'),
+        ];
+        for (const value of cells) {
+          const cell = document.createElement('td');
+          cell.textContent = String(value);
+          row.append(cell);
+        }
+        return row;
+      }));
+    };
+    const refreshTelemetry = () => {
+      frameCount.textContent = String(frames);
+      if (!samples.length) {
+        median.textContent = 'requires visible replay';
+        p95.textContent = 'requires visible replay';
+        return;
+      }
+      const value = statistics(samples);
+      median.textContent = `${value.median.toFixed(2)} ms`;
+      p95.textContent = `${value.p95.toFixed(2)} ms`;
+    };
+    const recordMeasurement = kind => {
+      if (!samples.length || !currentReport) return;
+      const value = { ...statistics(samples), kind, edges: currentReport.delivered_edges };
+      measurements.set(currentReport.requested_m, value);
+      drawTable();
+      refreshTelemetry();
+    };
+    const resetWindow = () => {
+      samples = [];
+      frames = 0;
+      previous = undefined;
+      refreshTelemetry();
+    };
+    const setMode = value => {
+      currentMode = value;
+      mode.textContent = value;
+    };
+
+    const beginAnimation = autoAdvanceBaseline => {
+      const epoch = ++animationEpoch;
+      probe.disabled = true;
+      setMode(currentReport.requested_m === 0 ? 'measuring zero baseline' : 'animated');
       const frame = timestamp => {
+        if (epoch !== animationEpoch) return;
+        if (document.hidden) {
+          previous = undefined;
+          requestAnimationFrame(frame);
+          return;
+        }
         if (previous !== undefined) {
           samples.push(timestamp - previous);
           if (samples.length > 180) samples.shift();
@@ -83,13 +208,128 @@
         previous = timestamp;
         render_layer_frame((timestamp - started) / 1000);
         frames += 1;
-        if (frames % 15 === 0 && !telemetryPending) {
-          telemetryPending = true;
-          setTimeout(updateTelemetryBetweenFrames, 0);
+        if (samples.length && frames % 15 === 0) recordMeasurement(currentReport.requested_m === 0 ? 'zero rAF' : 'animated rAF');
+        if (currentReport.requested_m === 0 && samples.length >= 30) {
+          recordMeasurement('zero rAF');
+          baselineThreshold = statistics(samples).p95 * 1.5;
+          wall.textContent = `${wall.dataset.hard} Animate budget = 1.5 × visible zero-work p95 = ${baselineThreshold.toFixed(2)} ms; higher-step mode is derived progressively from measured lower steps.`;
+          if (autoAdvanceBaseline) {
+            animationEpoch += 1;
+            void selectIndex(1, false).catch(failure);
+            return;
+          }
         }
         requestAnimationFrame(frame);
       };
       requestAnimationFrame(frame);
+    };
+
+    const lowerPrediction = report => {
+      const candidates = [...measurements.entries()]
+        .filter(([m, value]) => m < report.requested_m && value.edges > 0)
+        .sort((left, right) => right[0] - left[0]);
+      if (!candidates.length || baselineThreshold === undefined) return undefined;
+      const [lowerM, value] = candidates[0];
+      return {
+        lowerM,
+        milliseconds: value.median * report.delivered_edges / value.edges,
+      };
+    };
+
+    const selectIndex = async (index, autoAdvanceBaseline) => {
+      animationEpoch += 1;
+      probe.disabled = true;
+      slider.disabled = true;
+      slider.value = String(index);
+      resetWindow();
+      const step = deviceFacts.steps[index];
+      status.className = '';
+      status.textContent = `registering m=${step.m} through the layer dialect…`;
+      currentReport = JSON.parse(await set_layer_step(step.m));
+      attempts.set(step.m, currentReport);
+      requested.textContent = formatInteger(currentReport.requested_edges);
+      delivered.textContent = formatInteger(currentReport.delivered_edges);
+      selection.innerHTML = `m=<strong>${step.m}</strong> · ${formatInteger(step.copies)} copies · requested <strong>${formatInteger(currentReport.requested_edges)}</strong> edges · delivered/submitted <strong>${formatInteger(currentReport.delivered_edges)}</strong> · output ${formatBytes(currentReport.output_bytes)} · hue ±${step.fifth_range.toFixed(3)}`;
+      drawTable();
+      slider.disabled = false;
+      if (currentReport.refusal) {
+        render_layer_frame((performance.now() - started) / 1000);
+        setMode('requested, undelivered');
+        status.className = 'failed';
+        status.textContent = `requested ${formatInteger(currentReport.requested_edges)} · delivered 0 · ${currentReport.refusal}`;
+        return;
+      }
+      status.className = 'ready';
+      status.textContent = `delivered/submitted ${formatInteger(currentReport.delivered_edges)} edges · ${currentReport.compute_passes} compute pass · ${currentReport.draw_calls} draw · projection-valid visible subset is not read back`;
+      if (step.m === 0) {
+        beginAnimation(autoAdvanceBaseline);
+        return;
+      }
+      if (step.m === 1) {
+        beginAnimation(false);
+        return;
+      }
+      const prediction = lowerPrediction(currentReport);
+      if (prediction && prediction.milliseconds <= baselineThreshold) {
+        status.textContent += ` · animated from m=${prediction.lowerM} measured scaling prediction ${prediction.milliseconds.toFixed(2)} ms ≤ ${baselineThreshold.toFixed(2)} ms budget`;
+        beginAnimation(false);
+      } else {
+        const reason = prediction
+          ? `m=${prediction.lowerM} measured scaling predicts ${prediction.milliseconds.toFixed(2)} ms > ${baselineThreshold.toFixed(2)} ms budget`
+          : 'lower-step visible measurement is incomplete';
+        setMode('single-frame-on-demand');
+        probe.disabled = false;
+        status.textContent += ` · ${reason}; press “render one measured frame”`;
+      }
+    };
+
+    probe.addEventListener('click', async () => {
+      if (!currentReport || currentReport.refusal) return;
+      animationEpoch += 1;
+      probe.disabled = true;
+      slider.disabled = true;
+      setMode('measuring one fenced frame');
+      const before = performance.now();
+      try {
+        await probe_layer_frame((before - started) / 1000);
+        const elapsed = performance.now() - before;
+        samples = [elapsed];
+        frames = 1;
+        recordMeasurement('fenced probe');
+        setMode('single-frame-on-demand');
+        status.className = 'ready';
+        const budgetResult = baselineThreshold === undefined
+          ? 'animate budget still awaits the visible zero-work baseline'
+          : `${elapsed <= baselineThreshold ? 'within' : 'above'} measured animate budget ${baselineThreshold.toFixed(2)} ms`;
+        status.textContent = `one true submit→mapped-fence frame: ${elapsed.toFixed(2)} ms · requested/delivered ${formatInteger(currentReport.delivered_edges)} · ${budgetResult}`;
+      } catch (error) {
+        setMode('probe refused');
+        status.className = 'failed';
+        status.textContent = `single-frame probe refused: ${failureText(error)}`;
+      } finally {
+        probe.disabled = false;
+        slider.disabled = false;
+      }
+    });
+    slider.addEventListener('change', () => {
+      void selectIndex(Number(slider.value), false).catch(failure);
+    });
+
+    try {
+      await init({ module_or_path: './pkg/ember_lab_layer_bg.wasm?v=3' });
+      deviceFacts = JSON.parse(await start_layer(canvas));
+      facts.textContent = JSON.stringify(deviceFacts, null, 2);
+      const lastDeliverable = deviceFacts.steps.filter(step => step.arithmetically_deliverable).at(-1);
+      const firstRefused = deviceFacts.steps.find(step => !step.arithmetically_deliverable);
+      const hard = firstRefused
+        ? `Runtime arithmetic wall: m=${lastDeliverable.m} is the last admitted step; m=${firstRefused.m} requests ${formatInteger(firstRefused.requested_edges)} edges and is refused because ${firstRefused.refusal}.`
+        : 'Every offered step is within this device/layer arithmetic wall.';
+      wall.dataset.hard = hard;
+      wall.textContent = `${hard} Animate budget awaits 30 visible zero-work rAF samples.`;
+      slider.max = String(deviceFacts.steps.length - 1);
+      drawTable();
+      started = performance.now();
+      await selectIndex(0, true);
     } catch (error) {
       failure(error);
     }
