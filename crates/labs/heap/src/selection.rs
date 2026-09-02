@@ -26,7 +26,7 @@ impl SurfaceOwnership {
     }
 
     /// Releases only the generation that owns the surface.
-    pub const fn release(&mut self, generation: u64) -> bool {
+    pub fn release(&mut self, generation: u64) -> bool {
         if self.owner == Some(generation) {
             self.owner = None;
             true
@@ -82,7 +82,7 @@ impl<T: Copy> SelectionEpoch<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::SelectionEpoch;
+    use super::{SelectionEpoch, SurfaceOwnership};
 
     #[test]
     fn a_selection_at_every_yield_discards_stale_work_and_latest_wins() {
