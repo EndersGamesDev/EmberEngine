@@ -121,7 +121,7 @@ impl PackedDescriptor {
     ///
     /// Returns a typed error for the missing record, nonzero reserved bits, an unknown heap kind,
     /// or a zero extent.
-    pub fn unpack(self) -> Result<Descriptor, HeapError> {
+    pub const fn unpack(self) -> Result<Descriptor, HeapError> {
         if self.words[0] == 0 && self.words[1] == 0 && self.words[2] == 0 && self.words[3] == 0 {
             return Err(HeapError::MissingDescriptor);
         }
@@ -437,10 +437,13 @@ impl HeapAllocator {
         let index = handle.index() as usize;
         self.slot(handle)?;
         let slot = &mut self.slots[index];
-        let block = slot.block.take().ok_or(HeapError::DescriptorNotLive {
-            handle: handle.raw(),
-            index: handle.index(),
-        })?;
+        let block = slot
+            .block
+            .take()
+            .ok_or_else(|| HeapError::DescriptorNotLive {
+                handle: handle.raw(),
+                index: handle.index(),
+            })?;
         let kind = slot.descriptor.unpack()?.kind;
         self.heaps[kind.index()][block.layer as usize].free(block);
         slot.descriptor = PackedDescriptor::MISSING;
@@ -497,7 +500,7 @@ impl HeapAllocator {
 
     /// Returns the number of descriptor indices available for allocation.
     #[must_use]
-    pub fn free_descriptor_count(&self) -> usize {
+    pub const fn free_descriptor_count(&self) -> usize {
         self.free_descriptors.len()
     }
 
