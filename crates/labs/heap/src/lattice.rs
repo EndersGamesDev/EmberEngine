@@ -129,6 +129,7 @@ pub const fn box_vertices() -> [BoxVertex; 8] {
     ]
 }
 
+#[allow(clippy::suboptimal_flops)]
 fn rotate(point: [f32; 5], coefficients: [f32; 4]) -> [f32; 5] {
     [
         point[0] * coefficients[0] - point[1] * coefficients[1],
@@ -154,7 +155,7 @@ fn basis_records(coefficients: [f32; 4]) -> ([[f32; 4]; 5], [[f32; 4]; 2]) {
 
 /// Builds the 192-byte frame layout and CPU-rotated lattice bases.
 #[must_use]
-#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 pub fn frame_for(object: &Prism, axes: [u32; 5], time: f32, aspect: f32) -> FrameUniform {
     let theta_one = 0.4 * time;
     let theta_two = f32::midpoint(1.0, 5.0_f32.sqrt()) * theta_one;
@@ -180,7 +181,7 @@ pub fn frame_for(object: &Prism, axes: [u32; 5], time: f32, aspect: f32) -> Fram
 
 /// Converts the shared 120-cell prism into the three static DATA spans.
 #[must_use]
-#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 pub fn mode_a_records(object: &Prism) -> ModeARecordSet {
     ModeARecordSet {
         base_four: object
@@ -201,13 +202,17 @@ pub fn mode_a_records(object: &Prism) -> ModeARecordSet {
     }
 }
 
-fn basis_fifth(frame: &FrameUniform, axis: usize) -> f32 {
+const fn basis_fifth(frame: &FrameUniform, axis: usize) -> f32 {
     frame.basis_fifth[axis / 4][axis % 4]
 }
 
 /// Reconstructs and double-projects one endpoint in the shipped f32 operation order.
 #[must_use]
-#[allow(clippy::cast_possible_truncation, clippy::suboptimal_flops)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::suboptimal_flops
+)]
 pub fn mode_a_endpoint(
     base: [f64; 5],
     coordinate: [i32; 5],
@@ -290,6 +295,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::suboptimal_flops)]
     fn linear_decomposition_matches_direct_rotated_translation() {
         let object = prism();
         let axes = [7, 5, 3, 3, 1];
