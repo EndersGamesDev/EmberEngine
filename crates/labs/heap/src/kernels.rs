@@ -1,7 +1,11 @@
 //! Fixed benchmark workloads and their CPU address/color oracle.
 
 // The shader oracle intentionally mirrors fixed-width integer and f32 substrate conversions.
-#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::redundant_pub_crate
+)]
 
 #[cfg(test)]
 use crate::Descriptor;
