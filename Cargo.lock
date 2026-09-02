@@ -240,7 +240,7 @@ dependencies = [
 name = "astro-float"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2cf6a2cd8f38f023e63cde09f847ea702ec993334d053b0d31070ec837f34c89"
+checksum = "2cf6ecd69dd6fbe3763187ff2fa2b0e475b79f04ed86f631a7bc6b04ede0355e"
 dependencies = [
  "astro-float-macro",
  "astro-float-num",
@@ -250,7 +250,7 @@ dependencies = [
 name = "astro-float-macro"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c00d1f19c0ed247db5f952c57dfad632ff94394bb13c9ba63c7e90084978922"
+checksum = "9c007205ae7076600c8a59022866990afac02ff186f9031839f67ecce4df2146"
 dependencies = [
  "astro-float-num",
  "proc-macro2",
@@ -262,7 +262,7 @@ dependencies = [
 name = "astro-float-num"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc7d5fd016582c1a1c11e2623a68ed41cd7d5e33ce0c14d99562f32d813b61dd"
+checksum = "bc7f6a0312e8f5845f84241b21bd2394d49940b6bc333c6a84f992e6dc9ebb85"
 dependencies = [
  "itertools 0.10.5",
  "lazy_static",
@@ -2056,7 +2056,7 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 name = "itertools"
 version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0fd2260e829bddf4cb8a0a825d13c30766a8387741560d632191b66af1d8bf6"
+checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
 dependencies = [
  "either",
 ]
