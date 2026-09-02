@@ -120,6 +120,8 @@ is "$(jget "$BOOK" 'len(d["hosts"])')" "1" "still one host: both games are on on
 is "$(jget "$BOOK" 'd["hosts"][0]["fire_ws"]')" "wss://test-fire.trycloudflare.com" "fire's address was added"
 is "$(jget "$BOOK" 'd["hosts"][0]["fire_proto"]')" "1" "with fire's own protocol"
 is "$(jget "$BOOK" 'd["hosts"][0]["ws"]')" "wss://test-arena.trycloudflare.com" "and the arena's address SURVIVED"
+is "$(jget "$BOOK" 'd["hosts"][0]["fire_version"]')" "r1" "fire published its build stamp on its own key"
+is "$(jget "$BOOK" 'd["hosts"][0]["version"]')" "r1" "and left the arena's bare stamp alone"
 is "$(jget "$BOOK" 'd["fire_ws"]')" "wss://test-fire.trycloudflare.com" "legacy fire_ws recomputed"
 is "$(jget "$BOOK" 'd["ws"]')" "wss://test-arena.trycloudflare.com" "legacy ws untouched by a fire deploy"
 
@@ -191,5 +193,90 @@ is "$(jget "$BOOK" '[h for h in d["hosts"] if h["name"]=="misty-egret"][0]["ws"]
     "wss://newest-arena.trycloudflare.com" "at its own address"
 is "$(jget "$BOOK" 'd["ws"]')" "wss://test-arena.trycloudflare.com" \
     "but the legacy ws still names a host the live pages can join"
+
+echo "== a ref from before the arena rename still deploys =="
+# docs/hosts.md §7 exists so a host can be pinned to an older commit, and every
+# published arena build up to v11 is older than the rename of pong-* to
+# arena-*. The deploy hardcoded the new names, so those refs could not be built
+# at all — the remote cargo died with "package ID specification `arena-server`
+# did not match any packages", and the protocol read came back empty from a
+# path that tree does not have.
+cd "$REPO"
+git checkout -q -b prerename main
+git mv crates/arena-core crates/pong-core
+printf 'pub const PROTO_VERSION: u16 = 11;\n' > crates/pong-core/src/proto.rs
+git commit -qam "the arena is still called pong here"
+PRE_SHA="$(git rev-parse --short HEAD)"
+git checkout -q main
+: > "$SHIM_LOG"
+if SHIM_HOST_NAME=dusky-lynx SHIM_TUNNEL=old EMBER_HOST=oldbox EMBER_REF="$PRE_SHA" \
+        bash "$REPO/deploy/deploy-pong-online.sh" > "$TMP/prerename.log" 2>&1; then
+    ok "a pre-rename ref deploys"
+else
+    bad "the pre-rename deploy FAILED"
+    tail -30 "$TMP/prerename.log" >&2
+fi
+ARGV="$(cat "$SHIM_LOG")"
+contains "$ARGV" "cargo build --release -p pong-server" "it builds the package that ref actually carries"
+contains "$ARGV" "release/pong-server --bind" "and launches the binary that build produces"
+contains "$ARGV" "pgrep -u \"\$(id -un)\" -f \"pong-serve[r]\"" "and looks for it under that name"
+contains "$ARGV" "-p pong-server --example wsbot" "and probes it with that package's wsbot"
+BOOK="$(BOOK_OF)"
+is "$(jget "$BOOK" '[h for h in d["hosts"] if h["name"]=="dusky-lynx"][0]["proto"]')" "11" \
+    "and publishes the protocol read from crates/pong-core"
+
+echo "== another writer moved gh-pages, and a worktree still holds the local branch =="
+# The two states that used to make a deploy fail permanently, together, because
+# one caused the other. Nothing here fetches the LOCAL gh-pages, so a second
+# writer's publish left it behind and the push was rejected as a
+# non-fast-forward; and the rejection aborted the script before its
+# `worktree remove`, so gh-pages stayed checked out in a temp directory and
+# every later deploy — of either game, and the pages deploy — died at its own
+# `worktree add`. Both times the tunnel had already been restarted, so the book
+# was left naming a dead domain.
+OTHER="$TMP/other"
+git clone -q --branch gh-pages "$ORIGIN" "$OTHER"
+git -C "$OTHER" config user.name "another writer"
+git -C "$OTHER" config user.email "other@ember.local"
+bash "$REPO/deploy/publish-host.sh" --book "$OTHER/server.json" --name distant-plover \
+    --game arena --url wss://distant.example --proto 12 --version r1 >/dev/null
+git -C "$OTHER" commit -qam "another writer publishes"
+git -C "$OTHER" push -q origin gh-pages
+: > "$SHIM_LOG"
+if SHIM_HOST_NAME=coral-shrike SHIM_TUNNEL=coral EMBER_HOST=coralbox \
+        bash "$REPO/deploy/deploy-pong-online.sh" > "$TMP/arena5.log" 2>&1; then
+    ok "a deploy publishes over a local gh-pages that is behind origin"
+else
+    bad "the deploy FAILED with the local gh-pages behind origin"
+    tail -30 "$TMP/arena5.log" >&2
+fi
+BOOK="$(BOOK_OF)"
+is "$(jget "$BOOK" '[h["name"] for h in d["hosts"]].count("coral-shrike")')" "1" \
+    "its entry reached the branch origin actually has"
+is "$(jget "$BOOK" '[h["name"] for h in d["hosts"]].count("distant-plover")')" "1" \
+    "and the other writer's entry was merged, not overwritten"
+case "$(git -C "$REPO" worktree list)" in
+    *ember-pages*) bad "the deploy left a gh-pages worktree registered" ;;
+    *)             ok "and no gh-pages worktree of this checkout was created at all" ;;
+esac
+
+echo "== a worktree already holding gh-pages does not wedge a deploy =="
+# The leaked state itself: an earlier failure left gh-pages checked out in a
+# temp directory, and from then on every deploy of either game — and the pages
+# deploy — died at its own `worktree add` with "already used by worktree",
+# after restarting the server and minting a fresh tunnel.
+git -C "$REPO" worktree add -q "$TMP/stale-pages" gh-pages
+: > "$SHIM_LOG"
+if SHIM_HOST_NAME=coral-shrike SHIM_TUNNEL=coral EMBER_HOST=coralbox \
+        bash "$REPO/deploy/deploy-fire-online.sh" > "$TMP/fire2.log" 2>&1; then
+    ok "the fire deploy runs with gh-pages checked out elsewhere"
+else
+    bad "the fire deploy FAILED with gh-pages checked out elsewhere"
+    tail -30 "$TMP/fire2.log" >&2
+fi
+BOOK="$(BOOK_OF)"
+is "$(jget "$BOOK" '[h for h in d["hosts"] if h["name"]=="coral-shrike"][0]["fire_ws"]')" \
+    "wss://coral-fire.trycloudflare.com" "and published fire's address anyway"
+git -C "$REPO" worktree remove --force "$TMP/stale-pages"
 
 summary ssh-deploys

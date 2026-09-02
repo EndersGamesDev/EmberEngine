@@ -61,6 +61,35 @@ fi
 git rev-parse --verify -q "$REF^{commit}" >/dev/null \
     || { echo "FAILED: EMBER_REF='$REF' names no commit here." >&2; exit 1; }
 
+# The arena's crate and package names, read FROM THE REF rather than hardcoded.
+# The arena was called pong until it was renamed, and §7's whole point is that
+# a host may be pinned to an older commit — every published arena build up to
+# v11 is on the far side of that rename. Hardcoding the new names meant those
+# refs could not be deployed at all: the remote build died with "package ID
+# specification `arena-server` did not match any packages", and had it
+# survived, the protocol read would have come back empty from a path that does
+# not exist in that tree.
+if git cat-file -e "$REF:crates/arena-core/src/proto.rs" 2>/dev/null; then
+    ARENA_CRATE=arena-core
+    ARENA_PKG=arena-server
+elif git cat-file -e "$REF:crates/pong-core/src/proto.rs" 2>/dev/null; then
+    ARENA_CRATE=pong-core
+    ARENA_PKG=pong-server
+else
+    echo "FAILED: $REF carries neither crates/arena-core nor crates/pong-core." >&2
+    exit 1
+fi
+# `arena-serve[r]`: the bracket keeps pgrep's own command line from matching.
+ARENA_PGREP="${ARENA_PKG%r}[r]"
+# The public health check below runs wsbot from THIS checkout rather than from
+# the ref, so it needs the name the working tree carries, which is the ref's
+# name only when EMBER_REF is HEAD.
+if [ -d "$REPO_DIR/crates/arena-server" ]; then
+    LOCAL_ARENA_PKG=arena-server
+else
+    LOCAL_ARENA_PKG=pong-server
+fi
+
 # The build stamp the server reports in its Welcome, and the entry publishes.
 # Read from the REF, not from HEAD: a deploy of an older commit must say it is
 # an older commit or the preferred-host rule ranks it as the newest build.
@@ -86,6 +115,9 @@ echo "== syncing source =="
 # every run — 351 MB to build a server that needs none of it. The manifests
 # and crates alone are ~0.5 MB and build identically.
 TARBALL="$(mktemp -t ember-src-XXXX.tar.gz)"
+# Reaped on every path: a failed scp used to leave half a megabyte of source
+# tarball in the temp directory on every retry.
+trap 'st=$?; rm -f "$TARBALL"; exit $st' EXIT
 git archive --format=tar.gz -o "$TARBALL" "$REF" Cargo.toml Cargo.lock crates/
 echo "   $(du -h "$TARBALL" | cut -f1) of committed source"
 scp -o BatchMode=yes "$TARBALL" "$REMOTE":ember-src.tar.gz
@@ -108,14 +140,14 @@ if ! printf '%s' "$HOST_NAME" | grep -qE '^[a-z0-9-]{3,32}$'; then
 fi
 echo "   $REMOTE publishes as '$HOST_NAME'"
 
-echo "== building arena-server (toolbox: ember-build) =="
+echo "== building $ARENA_PKG (toolbox: ember-build) =="
 # EMBER_BUILD_VERSION/EMBER_BUILD_COMMIT are read by the server crate's
 # build.rs through option_env!, so the binary can say which commit it is in
 # its Welcome. They must be set for the BUILD, not the launch.
 ssh -o BatchMode=yes "$REMOTE" \
-    "toolbox run -c ember-build bash -lc 'source ~/.cargo/env && cd ~/ember-src && EMBER_BUILD_VERSION=$VERSION EMBER_BUILD_COMMIT=$COMMIT cargo build --release -p arena-server'"
+    "toolbox run -c ember-build bash -lc 'source ~/.cargo/env && cd ~/ember-src && EMBER_BUILD_VERSION=$VERSION EMBER_BUILD_COMMIT=$COMMIT cargo build --release -p $ARENA_PKG'"
 
-echo "== restarting arena-server =="
+echo "== restarting $ARENA_PKG =="
 # Two ways to own the process, and they must never both be used at once. If
 # `install-watchdog.sh` has enabled the systemd unit, IT owns the lifecycle:
 # pkill+nohup here would race it, because systemd sees its child die and
@@ -176,10 +208,10 @@ if [ -z "$MANAGED" ]; then
     # commit whose binary has never heard of the flag, and an unknown flag is
     # a crash loop where an unknown environment variable is simply ignored.
     ssh -o BatchMode=yes -f "$REMOTE" \
-        "EMBER_HOST_NAME=$HOST_NAME RUST_LOG=info nohup ~/ember-src/target/release/arena-server --bind $BIND >> ~/pong-server.log 2>&1 &"
+        "EMBER_HOST_NAME=$HOST_NAME RUST_LOG=info nohup ~/ember-src/target/release/$ARENA_PKG --bind $BIND >> ~/pong-server.log 2>&1 &"
     sleep 2
-    if ! ssh -o BatchMode=yes "$REMOTE" 'pgrep -u "$(id -un)" -f "arena-serve[r]" >/dev/null'; then
-        echo "FAILED: arena-server is not running. Last log lines:" >&2
+    if ! ssh -o BatchMode=yes "$REMOTE" "pgrep -u \"\$(id -un)\" -f \"$ARENA_PGREP\" >/dev/null"; then
+        echo "FAILED: $ARENA_PKG is not running. Last log lines:" >&2
         ssh -o BatchMode=yes "$REMOTE" 'tail -20 ~/pong-server.log' >&2 || true
         exit 1
     fi
@@ -191,7 +223,7 @@ echo "== local health check (before exposing it) =="
 # public check below is unambiguously the tunnel rather than the server. Worth
 # the extra minute on a host we have never deployed to before.
 if ! ssh -o BatchMode=yes "$REMOTE" \
-    "toolbox run -c ember-build bash -lc 'source ~/.cargo/env && cd ~/ember-src && cargo run --release -q -p arena-server --example wsbot -- ws://$BIND create local-healthcheck - healthcheck 6'"; then
+    "toolbox run -c ember-build bash -lc 'source ~/.cargo/env && cd ~/ember-src && cargo run --release -q -p $ARENA_PKG --example wsbot -- ws://$BIND create local-healthcheck - healthcheck 6'"; then
     echo "FAILED: the server is listening but wsbot could not create a lobby on it." >&2
     ssh -o BatchMode=yes "$REMOTE" 'tail -20 ~/pong-server.log' >&2 || true
     exit 1
@@ -256,7 +288,7 @@ sleep 15
 
 ok=""
 for _ in $(seq 1 10); do
-    if cargo run --release -q -p arena-server --example wsbot -- \
+    if cargo run --release -q -p "$LOCAL_ARENA_PKG" --example wsbot -- \
         "$WS_URL" create deploy-healthcheck - healthcheck 6; then
         ok=1
         break
@@ -278,36 +310,36 @@ echo "== publishing this host's entry to the address book =="
 # The protocol number comes from the REF being deployed, not from the working
 # tree: the entry has to say what the binary on that host actually speaks, and
 # those differ the moment EMBER_REF names an older commit.
-PROTO="$(git show "$REF:crates/arena-core/src/proto.rs" \
+PROTO="$(git show "$REF:crates/$ARENA_CRATE/src/proto.rs" \
     | grep -oE 'PROTO_VERSION: u16 = [0-9]+' | grep -oE '[0-9]+$')"
-[ -n "$PROTO" ] || { echo "FAILED: no PROTO_VERSION in $REF:crates/arena-core/src/proto.rs" >&2; exit 1; }
+[ -n "$PROTO" ] || { echo "FAILED: no PROTO_VERSION in $REF:crates/$ARENA_CRATE/src/proto.rs" >&2; exit 1; }
 
-PAGES_DIR="$(mktemp -d -t ember-pages-XXXX)"
-git -C "$REPO_DIR" worktree add "$PAGES_DIR" gh-pages
 # publish-host.sh upserts THIS host's entry and recomputes the legacy `ws`
 # from the whole list. The inline python this replaced assigned `ws` directly,
 # which is only correct while there is exactly one host: the second machine to
 # deploy took the first one's address out of the book, and a host deployed
 # from an older commit pointed every frozen page at a protocol they could not
 # join.
+#
+# `--repo`, not a gh-pages worktree of this checkout. Two failures came out of
+# that worktree and both were permanent. It checked out the workstation's LOCAL
+# gh-pages, which nothing ever fetches — `git fetch` moves origin/gh-pages and
+# not the branch — so as soon as any other writer published (a second
+# workstation, a host running `host.sh` with EMBER_PUBLISH=upstream) the push
+# was rejected as a non-fast-forward. And the removal at the end of the block
+# was not a trap, so that rejection also left the worktree registered with
+# gh-pages checked out in a temp directory, which made EVERY later deploy of
+# either game and the pages deploy itself die at their own `worktree add` until
+# a human ran `git worktree remove`. Both times the tunnel had already been
+# restarted, so the book was left naming a domain that no longer existed.
+# publish-host.sh fetches the branch one commit deep into its own temp
+# repository under its own EXIT trap, and retries by refetching if the branch
+# moves under it; nothing it does can touch this checkout's worktree registry.
 bash "$REPO_DIR/deploy/publish-host.sh" \
-    --book "$PAGES_DIR/server.json" \
+    --repo "$(git -C "$REPO_DIR" remote get-url origin)" --branch gh-pages \
     --name "$HOST_NAME" \
     --game arena --url "$WS_URL" --proto "$PROTO" \
     --version "$VERSION" --commit "$COMMIT" \
     --by "$(id -un)@$REMOTE"
-(
-    cd "$PAGES_DIR"
-    git add server.json
-    if git diff --cached --quiet; then
-        echo "server.json unchanged"
-    else
-        git commit -q -m "Publish host $HOST_NAME: arena at $WS_URL
-
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
-        git push -q origin gh-pages
-    fi
-)
-git -C "$REPO_DIR" worktree remove --force "$PAGES_DIR"
 
 echo "== ONLINE: $HOST_NAME -> $WS_URL (the page picks it from server.json) =="

@@ -8,6 +8,10 @@
 #   syntax        bash -n, usage lines, line endings — instant
 #   publish-host  the address book's only writer, against temp files — seconds
 #   ssh-deploys   both workstation deploys against PATH shims — seconds
+#   watchdog      what the off-host watchdog decides, against PATH shims and a
+#                 real git origin — seconds
+#   host-pids     host.sh's process control, against real `sleep` processes —
+#                 instant
 #   host-loopback host.sh up/status/update/down for real on loopback; builds
 #                 both servers, so minutes on a cold target directory
 #
@@ -15,7 +19,7 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SUITES="${*:-syntax publish-host ssh-deploys host-loopback}"
+SUITES="${*:-syntax publish-host ssh-deploys watchdog host-pids host-loopback}"
 
 T0="$(date +%s)"
 failed=""

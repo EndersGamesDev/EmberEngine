@@ -87,6 +87,20 @@ LOGS="$EMBER_HOME/log"
 mkdir -p "$RUN" "$LOGS"
 
 PY="$(command -v python3 || command -v python || true)"
+# Found is not the same as working: on Windows `python` is usually an App
+# Execution Alias that resolves on PATH and is not an interpreter. `status`
+# degrades gracefully on an empty $PY; `up` refuses up front rather than after
+# a multi-minute build it could never publish.
+[ -n "$PY" ] && "$PY" -c '' >/dev/null 2>&1 || PY=""
+
+# Idle priority for every compile this script runs, so a host that is also
+# somebody's desktop stays usable. Both tools are unprivileged; neither is
+# guaranteed to exist. At file scope because the health probes need it too and
+# a `local` in cmd_up was invisible to them.
+NICE=""
+if command -v chrt >/dev/null 2>&1 && command -v ionice >/dev/null 2>&1; then
+    NICE="chrt --idle 0 ionice -c3"
+fi
 
 say() { echo "== $* =="; }
 die() { echo "host.sh: $*" >&2; exit 1; }
@@ -102,11 +116,30 @@ helper() {
 # id, crate the protocol number lives in, binary, and how that binary wants
 # its bind address. The two servers disagree about the flag, which is exactly
 # the kind of thing that must be stated once rather than remembered twice.
+#
+# The arena's names are read from the CHECKOUT rather than fixed here. It was
+# called pong until it was renamed, and EMBER_REF is allowed to name a commit
+# older than that (§7) — every published arena build up to v11 is on the far
+# side of it. A fixed table meant such a ref could not be built at all:
+# `cargo build -p arena-server` in a tree whose package is `pong-server` dies
+# with "package ID specification did not match any packages". Fire was never
+# renamed, so its names stay literal.
 game_ids() { echo "arena fire"; }
 game_port()  { case "$1" in arena) echo "$EMBER_ARENA_PORT" ;; fire) echo "$EMBER_FIRE_PORT" ;; esac; }
-game_crate() { case "$1" in arena) echo arena-core ;; fire) echo fire-core ;; esac; }
-game_pkg()   { case "$1" in arena) echo arena-server ;; fire) echo fire-server ;; esac; }
-game_bin()   { case "$1" in arena) echo arena-server ;; fire) echo fire-server ;; esac; }
+arena_is_renamed() { [ -d "$SRC/crates/arena-core" ]; }
+game_crate() {
+    case "$1" in
+        arena) if arena_is_renamed; then echo arena-core; else echo pong-core; fi ;;
+        fire)  echo fire-core ;;
+    esac
+}
+game_pkg() {
+    case "$1" in
+        arena) if arena_is_renamed; then echo arena-server; else echo pong-server; fi ;;
+        fire)  echo fire-server ;;
+    esac
+}
+game_bin() { game_pkg "$1"; }
 game_bind()  {
     case "$1" in
         arena) echo "--bind 127.0.0.1:$(game_port arena)" ;;
@@ -130,37 +163,95 @@ proto_of() {
 # loopback and the public probe hit the SAME server seconds apart, and a
 # second `create` under a name the first one is still holding fails for a
 # reason that has nothing to do with the server's health.
+#
+# The probes EXEC the example binaries rather than going through `cargo run`.
+# `cargo run` here was a second, unniced, untimed build: the build step below
+# builds no examples and no dev-dependencies, so the first probe on a cold
+# target directory compiled wsbot, rustls and tungstenite at normal scheduling
+# and I/O priority, on a box the `chrt --idle` above exists to protect, and
+# none of that time appeared in the "built in Ns" figure. It also ran with
+# EMBER_BUILD_VERSION unset, which build.rs declares a rerun trigger, so every
+# `up` recompiled the server libs unstamped and the next one recompiled them
+# stamped again. And a probe that failed to COMPILE was reported as "the server
+# did not answer".
 probe_game() {
-    local id="$1" url="$2" label="${3:-check}"
+    local id="$1" url="$2" label="${3:-check}" bin
     case "$id" in
-        arena) ( cd "$SRC" && cargo run --release -q -p arena-server --example wsbot -- \
-                    "$url" create "health-$label" - "health-$label" 6 >/dev/null ) ;;
-        fire)  ( cd "$SRC" && cargo run --release -q -p fire-server --example probe -- \
-                    "$url" >/dev/null ) ;;
+        arena)
+            bin="$(target_dir)/release/examples/wsbot"
+            [ -x "$bin" ] || die "$bin was not built"
+            "$bin" "$url" create "health-$label" - "health-$label" 6 >/dev/null
+            ;;
+        fire)
+            bin="$(target_dir)/release/examples/probe"
+            [ -x "$bin" ] || die "$bin was not built"
+            "$bin" "$url" >/dev/null
+            ;;
     esac
 }
 
 # --- process control -------------------------------------------------------
-pid_of() { [ -f "$RUN/$1.pid" ] && cat "$RUN/$1.pid" || true; }
+# A pid file records the pid AND that process's start time — field 22 of
+# /proc/<pid>/stat, in clock ticks since boot. A bare pid is not an identity:
+# nothing clears these files across a reboot, and pids are handed out again
+# from the bottom afterwards, so `update` found a stranger holding the recorded
+# number, reported "both servers are running; nothing to do", and left the host
+# offline for good — while `down` sent that stranger SIGTERM and then SIGKILL.
+# The start time is not reused with the pid and resets on boot, so it settles
+# reuse and reboot together, with no boot-id file.
+#
+# Two degradations, both deliberate. A system with no /proc records `-`, which
+# means "cannot be verified here" and falls back to the bare `kill -0` this
+# replaces. A file with no second field at all was written by an older host.sh
+# and is read as NOT alive — which errs towards redeploying a host, never
+# towards signalling a stranger.
+start_time_of() { awk '{print $22}' "/proc/$1/stat" 2>/dev/null || true; }
+
+record_pid() {
+    local label="$1" pid="$2" st
+    st="$(start_time_of "$pid")"
+    echo "$pid ${st:--}" > "$RUN/$label.pid"
+}
+
+pid_of()   { [ -f "$RUN/$1.pid" ] && cut -d' ' -f1 "$RUN/$1.pid" || true; }
+stamp_of() { [ -f "$RUN/$1.pid" ] && cut -d' ' -s -f2 "$RUN/$1.pid" || true; }
 
 alive() {
-    local pid; pid="$(pid_of "$1")"
-    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+    local pid stamp now
+    pid="$(pid_of "$1")"
+    [ -n "$pid" ] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    stamp="$(stamp_of "$1")"
+    [ -n "$stamp" ] || return 1
+    if [ "$stamp" = "-" ]; then
+        return 0
+    fi
+    now="$(start_time_of "$pid")"
+    [ -n "$now" ] && [ "$now" = "$stamp" ]
 }
 
 stop_one() {
     local label="$1" pid i
     pid="$(pid_of "$label")"
-    rm -f "$RUN/$label.pid"
-    [ -n "$pid" ] || return 0
-    kill -0 "$pid" 2>/dev/null || return 0
+    if [ -z "$pid" ] || ! alive "$label"; then
+        # Gone, or the number now belongs to something that is not ours.
+        rm -f "$RUN/$label.pid"
+        return 0
+    fi
     kill "$pid" 2>/dev/null || true
     for i in $(seq 1 25); do
-        kill -0 "$pid" 2>/dev/null || { echo "   stopped $label ($pid)"; return 0; }
+        if ! kill -0 "$pid" 2>/dev/null; then
+            echo "   stopped $label ($pid)"
+            rm -f "$RUN/$label.pid"
+            return 0
+        fi
         sleep 0.2
     done
     kill -9 "$pid" 2>/dev/null || true
     echo "   killed $label ($pid)"
+    # Removed LAST, on every path: it used to go first, so an interrupt between
+    # the removal and the kill orphaned a live server with no record of it.
+    rm -f "$RUN/$label.pid"
 }
 
 stop_all() {
@@ -275,6 +366,9 @@ resolve_ref() {
 cmd_up() {
     local t0; t0="$(date +%s)"
     [ -x "$EMBER_TUNNEL_BIN" ] || die "no tunnel binary at $EMBER_TUNNEL_BIN (set EMBER_TUNNEL_BIN)"
+    # Every path out of `up` ends in publish-host.sh, including EMBER_PUBLISH=none.
+    # Refuse now rather than after the build, the start and both health checks.
+    [ -n "$PY" ] || die "need a working python3 (or python) on PATH to publish the entry"
 
     local name; name="$(bash "$(helper host-name.sh)")"
     say "host $name"
@@ -287,18 +381,20 @@ cmd_up() {
     commit="$(git -C "$SRC" rev-parse --short HEAD)"
     say "building $version · $commit from $EMBER_REF"
 
-    # Idle priority so a host that is also somebody's desktop stays usable.
-    # Both tools are unprivileged; neither is guaranteed to exist.
-    local nice=""
-    if command -v chrt >/dev/null 2>&1 && command -v ionice >/dev/null 2>&1; then
-        nice="chrt --idle 0 ionice -c3"
-    fi
     local tb; tb="$(date +%s)"
     (
         cd "$SRC"
         export EMBER_BUILD_VERSION="$version" EMBER_BUILD_COMMIT="$commit"
+        # The health probes are built HERE, in the same niced and timed step,
+        # rather than compiled by `cargo run` on first use. One invocation per
+        # package: a single multi-package `--example` line has to resolve the
+        # target name across packages and is easy to get subtly wrong.
         # shellcheck disable=SC2086
-        $nice cargo build --release -p arena-server -p fire-server
+        $NICE cargo build --release -p "$(game_pkg arena)" -p "$(game_pkg fire)"
+        # shellcheck disable=SC2086
+        $NICE cargo build --release -p "$(game_pkg arena)" --example wsbot
+        # shellcheck disable=SC2086
+        $NICE cargo build --release -p "$(game_pkg fire)" --example probe
     ) || die "build failed"
     echo "   built in $(( $(date +%s) - tb ))s"
 
@@ -316,7 +412,7 @@ cmd_up() {
         # shellcheck disable=SC2086
         EMBER_HOST_NAME="$name" RUST_LOG=info \
             nohup "$bin" $bind >> "$LOGS/$id-server.log" 2>&1 &
-        echo $! > "$RUN/server-$id.pid"
+        record_pid "server-$id" "$!"
         sleep 1
         alive "server-$id" || { tail -20 "$LOGS/$id-server.log" >&2; die "$id server did not stay up"; }
     done
@@ -337,7 +433,7 @@ cmd_up() {
         : > "$RUN/tunnel-$id.log"
         nohup "$EMBER_TUNNEL_BIN" tunnel --url "http://127.0.0.1:$port" --no-autoupdate \
             >> "$RUN/tunnel-$id.log" 2>&1 &
-        echo $! > "$RUN/tunnel-$id.pid"
+        record_pid "tunnel-$id" "$!"
     done
     for id in $(game_ids); do
         local url; url="$(wait_for_tunnel "$id")" || die "no public address for $id"
@@ -353,17 +449,35 @@ cmd_up() {
             || die "the $id tunnel is up but the server did not answer through it"
     done
 
+    # WHAT IS RUNNING is recorded as soon as it is proven running — both
+    # servers answered on loopback and through their public addresses — and
+    # before the publish, which is a different question. It used to come after,
+    # so a host with no push rights on EMBER_REPO (the documented normal case
+    # for "anyone with a Linux box") aborted here with both games healthy and
+    # `$RUN/deployed` never written; every later `update` then read "none",
+    # took the redeploy branch, and its first act was stop_all — tearing down
+    # two working servers mid-game, rebuilding, minting two new tunnel URLs and
+    # failing to publish again. The operator never even saw the UP line.
+    echo "$rev" > "$RUN/deployed"
+    say "UP as $name ($version · $commit) in $(( $(date +%s) - t0 ))s:$urls"
+
     say "publishing"
-    local args=()
+    local args=() pubrc=0
     for id in $(game_ids); do
         args+=(--game "$id" --url "$(cat "$RUN/$id.url")" --proto "$(proto_of "$id")")
     done
+    # Loud and non-zero, but no longer fatal to the record above: a host absent
+    # from the book IS a failure and a wrapper must see it, while `update` must
+    # stop mistaking an unpublished host for an undeployed one.
     publish_entry "$name" "${args[@]}" \
         --version "$version" --commit "$commit" \
-        --by "$(id -un)@$(hostname 2>/dev/null || uname -n)"
-
-    echo "$rev" > "$RUN/deployed"
-    say "UP as $name ($version · $commit) in $(( $(date +%s) - t0 ))s:$urls"
+        --by "$(id -un)@$(hostname 2>/dev/null || uname -n)" || pubrc=$?
+    if [ "$pubrc" -ne 0 ]; then
+        echo "host.sh: the servers are UP at$urls but publishing FAILED;" >&2
+        echo "         players will not find this host until it publishes." >&2
+        echo "         Fix EMBER_PUBLISH (currently '$EMBER_PUBLISH') and re-run." >&2
+        return "$pubrc"
+    fi
 }
 
 cmd_update() {
