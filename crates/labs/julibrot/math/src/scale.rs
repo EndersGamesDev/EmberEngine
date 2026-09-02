@@ -98,8 +98,8 @@ pub fn scale_split(zoom_log2: f64, grid_width: u32) -> Result<ScaledPixelScale, 
 ///
 /// Returns an error for invalid input or a result outside positive finite binary64 range.
 pub fn pixel_scale(zoom_log2: f64, grid_width: u32) -> Result<f64, MathError> {
-    let _scale = scaled_pixel_scale(zoom_log2, grid_width)?;
-    let value = (2.0 - zoom_log2 - f64::from(grid_width).log2()).exp2();
+    let scale = scaled_pixel_scale(zoom_log2, grid_width)?;
+    let value = f64::from(scale.mantissa) * 2.0_f64.powi(scale.exponent);
     if value.is_finite() && value > 0.0 {
         Ok(value)
     } else {
@@ -251,7 +251,7 @@ fn saturating_f64_to_u32(value: f64) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        centre_displacement_px, mirror_centre, precision_for, scaled_pixel_offset,
+        centre_displacement_px, mirror_centre, pixel_scale, precision_for, scaled_pixel_offset,
         scaled_pixel_scale, split_centre,
     };
     use crate::{BigCentre, MathError, Plane};
@@ -261,6 +261,10 @@ mod tests {
         let scale = scaled_pixel_scale(1000.25, 1920)?;
         assert!((0.5..1.0).contains(&scale.mantissa));
         assert_eq!(scale.exponent, -1009);
+        assert_eq!(
+            pixel_scale(1000.25, 1920)?,
+            f64::from(scale.mantissa) * 2.0_f64.powi(scale.exponent)
+        );
         Ok(())
     }
 

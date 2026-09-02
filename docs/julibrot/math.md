@@ -22,7 +22,7 @@ The CPU `f32` escape reference examines states at indices `n=0..max_iter−1`, d
 
 At escape index `n`, `smooth_iter = n+1−log₂(log₂|zₙ|)`; using natural logarithms this is `n+1−ln(ln(|zₙ|)/ln 2)/ln 2`, while a sample not escaped by the cap stores exactly `−1.0`.
 
-`max_iter=0`, a non-finite input, or a non-finite intermediate is a typed error, and complex multiplication follows `(a+bi)(c+di)=(ac−bd)+(ad+bc)i` in the operation order pinned by the oracle.
+`max_iter=0`, a non-finite input, or a non-finite intermediate is a typed error; the f32 classification-and-index path is operation-identical to shallow WGSL, spelling squared magnitude as `z_re*z_re+z_im*z_im`, real advance as `(z_re*z_re−z_im*z_im)+c_re`, and imaginary advance as `(2*z_re*z_im)+c_im` in that exact source order with one binary32 rounding per written operator and no fused multiply-add contraction, while smooth output retains its separate `10⁻⁴` tolerance.
 
 ### 2.2 PLANE and VIEW rotations
 
@@ -46,7 +46,7 @@ The standing time-driven VIEW rotation is present-only and unchanged: `R(t)=R₁
 
 For a `W×H` grid, pixel `(i,j)` has centred coordinates `x=i+0.5−W/2` and `y=j+0.5−H/2`; row zero is at the bottom, `+v` points up, pixels are square, and `H` follows the canvas aspect without changing horizontal pixel scale.
 
-HOT state carries finite `zoom_log2:f64`; the mathematical pixel scale is `p=4/(2^zoom_log2·W)`, displayed decimal depth is `zoom_digits=zoom_log2·log10 2`, and request label `depth_digits=ceil(max(0,zoom_log2·log10 2))`.
+HOT state carries finite `zoom_log2:f64`; the mathematical pixel scale is `p=4/(2^zoom_log2·W)`, displayed decimal depth is `zoom_digits=zoom_log2·log10 2`, and request label `depth_digits=ceil(max(0,zoom_log2·log10 2))`; after validating and rounding the scaled representation, `pixel_scale` returns the canonical delivered CPU scale reconstructed as `f64(mantissa)·2^exponent` rather than recomputing a second exponential.
 
 The precision floor is `D_floor=max(1,ceil(zoom_log2·log10 2+log10 W)+8)` decimal digits, where the lower clamp only gives extreme zoom-out a valid bignum precision; the eight guard digits protect coordinate formation but cannot bound accumulated chaotic orbit roundoff, so it is explicitly a floor rather than a sufficiency claim.
 
@@ -90,7 +90,7 @@ Rescaling `δc′` with `δ′` is required by `δc′=δc/2^e`; each power-of-t
 
 GLITCH occurs when `r=length` before the sample has escaped or reached `max_iter`: set `glitch=1`, stop, preserve `escaped=0` and `smooth_iter=−1.0`, and use the honest debug tint; re-rendering with a second reference is an explicitly displayed v1 limit.
 
-The count is incremented only when a rebase is performed; a next `rebase_count` at or above `2²⁴` glitches rather than writing an inexact integer to RGBA32F.
+The count is incremented only when a rebase is performed; when the current `rebase_count` is exactly `2²⁴`, another rebase request glitches rather than incrementing, so the maximum written value is the exactly representable `2²⁴`.
 
 ### 2.5 Centre displacement and warp math
 
@@ -311,7 +311,7 @@ One world, one heap class, no simulation tick, no general graph, no shared-memor
 
 ## 5. Oracles and tests
 
-Native escape tests pin fixed points, escaping points, exact bailout equality, `max_iter` edges, state-index order, natural-log expansion of smooth iteration, non-finite rejection, and exact `−1.0` for capped non-escape.
+Native escape tests pin fixed points, escaping points, exact bailout equality, `max_iter` edges, state-index order, natural-log expansion of smooth iteration, non-finite rejection, exact `−1.0` for capped non-escape, and a bit-exact bailout fixture where unfused WGSL order escapes at index zero while fused arithmetic would incorrectly remain capped.
 
 Native plane tests pin axis order, the exact Mandelbrot and Julia presets, `R₁₃(R₂₄(v))` order and signs, independent angles, absence of `e₅`, one f32 rounding pass, the `8·f32::EPSILON` postcondition, the π/2 preset-plane equivalence, and nonzero z and c components for `0<θ₁,θ₂<π/2`.
 

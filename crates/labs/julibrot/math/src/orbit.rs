@@ -12,11 +12,12 @@ const LOG2_10: f64 = core::f64::consts::LOG2_10;
 /// # Errors
 ///
 /// Returns an error for non-finite coordinates or invalid escape parameters.
+#[allow(clippy::suboptimal_flops)]
 pub fn escape_f32(point: [f32; 4], params: EscapeParams) -> Result<EscapeSample, MathError> {
     validate_escape_inputs(point, params)?;
     let [mut z_re, mut z_im, c_re, c_im] = point;
     for iteration in 0..params.max_iter {
-        let magnitude_squared = z_re.mul_add(z_re, z_im * z_im);
+        let magnitude_squared = z_re * z_re + z_im * z_im;
         if magnitude_squared > params.bailout {
             return Ok(EscapeSample {
                 smooth_iter: smooth_iteration_f32(iteration, z_re, z_im),
@@ -27,8 +28,8 @@ pub fn escape_f32(point: [f32; 4], params: EscapeParams) -> Result<EscapeSample,
         if iteration + 1 == params.max_iter {
             break;
         }
-        let next_re = z_re.mul_add(z_re, -(z_im * z_im)) + c_re;
-        let next_im = (2.0 * z_re).mul_add(z_im, c_im);
+        let next_re = (z_re * z_re - z_im * z_im) + c_re;
+        let next_im = (2.0 * z_re * z_im) + c_im;
         z_re = next_re;
         z_im = next_im;
     }
@@ -362,6 +363,30 @@ mod tests {
             escape_f32([0.0; 4], EscapeParams::new(0)),
             Err(MathError::InvalidMaxIter)
         );
+        Ok(())
+    }
+
+    #[test]
+    #[allow(clippy::suboptimal_flops)]
+    fn shallow_escape_uses_unfused_wgsl_radius_order() -> Result<(), MathError> {
+        let z_re = f32::from_bits(0x4174_bc8c);
+        let z_im = f32::from_bits(0x4096_3351);
+        let unfused = z_re * z_re + z_im * z_im;
+        let fused = z_re.mul_add(z_re, z_im * z_im);
+        assert_eq!(unfused.to_bits(), 256.000_03_f32.to_bits());
+        assert_eq!(fused.to_bits(), EscapeParams::BAILOUT.to_bits());
+        let sample = escape_f32([z_re, z_im, 0.0, 0.0], EscapeParams::new(1))?;
+        assert!(sample.escaped);
+        assert_eq!(sample.escape_index, Some(0));
+        let recurrence_point = [
+            f32::from_bits(0x3e27_3b8c),
+            f32::from_bits(0xbd95_1af2),
+            f32::from_bits(0xbe21_15f5),
+            f32::from_bits(0xbf5d_dbaa),
+        ];
+        let recurrence = escape_f32(recurrence_point, EscapeParams::new(64))?;
+        assert!(recurrence.escaped);
+        assert_eq!(recurrence.escape_index, Some(57));
         Ok(())
     }
 
