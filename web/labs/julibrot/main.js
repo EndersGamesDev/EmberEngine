@@ -65,6 +65,7 @@ function bindControls(api) {
         if (api.app_needs_refresh()) scheduleFrame();
       } catch (error) {
         fail(error);
+        if (api.app_needs_refresh()) scheduleFrame();
       }
     });
   };
