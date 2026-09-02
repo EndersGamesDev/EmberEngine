@@ -1438,7 +1438,9 @@ pub async fn measure_heap_fetch_json(mode: &str, repeats: u32) -> Result<String,
             .try_borrow_mut()
             .map_err(|_| LabError::BorrowConflict("submitting a fetch benchmark"))
             .map_err(JsValue::from)?;
-        borrowed.render_fetch(mode, repeats).map_err(JsValue::from)?
+        borrowed
+            .render_fetch(mode, repeats)
+            .map_err(JsValue::from)?
     };
     wait_for_fence(&lab, pending, generation)
         .await

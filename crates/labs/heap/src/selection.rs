@@ -2,14 +2,14 @@
 
 /// An infallible selection epoch whose newest value invalidates older work.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SelectionEpoch<T> {
+pub struct SelectionEpoch<T> {
     generation: u64,
     latest: T,
 }
 
 impl<T: Copy> SelectionEpoch<T> {
     /// Starts at generation zero with the supplied initial value.
-    pub(crate) const fn new(latest: T) -> Self {
+    pub const fn new(latest: T) -> Self {
         Self {
             generation: 0,
             latest,
@@ -17,30 +17,32 @@ impl<T: Copy> SelectionEpoch<T> {
     }
 
     /// Records a new selection and returns its generation.
-    pub(crate) fn select(&mut self, latest: T) -> u64 {
+    pub const fn select(&mut self, latest: T) -> u64 {
         self.generation = self.generation.wrapping_add(1);
         self.latest = latest;
         self.generation
     }
 
     /// Invalidates in-flight work without replacing the requested selection.
-    pub(crate) fn invalidate(&mut self) -> u64 {
+    pub const fn invalidate(&mut self) -> u64 {
         self.generation = self.generation.wrapping_add(1);
         self.generation
     }
 
     /// Returns the current generation.
-    pub(crate) const fn generation(self) -> u64 {
+    #[cfg(target_arch = "wasm32")]
+    pub const fn generation(self) -> u64 {
         self.generation
     }
 
     /// Returns whether work from `generation` may still publish.
-    pub(crate) const fn is_current(self, generation: u64) -> bool {
+    pub const fn is_current(self, generation: u64) -> bool {
         self.generation == generation
     }
 
     /// Returns the latest requested selection.
-    pub(crate) const fn latest(self) -> T {
+    #[cfg(test)]
+    pub const fn latest(self) -> T {
         self.latest
     }
 }
@@ -65,7 +67,10 @@ mod tests {
                     break;
                 }
             }
-            assert!(stale_discarded, "arrival at yield {arrival} was not discarded");
+            assert!(
+                stale_discarded,
+                "arrival at yield {arrival} was not discarded"
+            );
             assert_eq!(state.latest(), "latest");
         }
     }

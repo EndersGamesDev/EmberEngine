@@ -2423,11 +2423,8 @@ async fn run_conformance(
 
     let mode_c_image = {
         let pending = {
-            let mut borrowed = borrow_mut_for_generation(
-                lab,
-                generation,
-                "starting Mode C image conformance",
-            )?;
+            let mut borrowed =
+                borrow_mut_for_generation(lab, generation, "starting Mode C image conformance")?;
             let report = borrowed.select(
                 Mode::C,
                 CONFORMANCE_IMAGE_STEP,
@@ -2447,11 +2444,8 @@ async fn run_conformance(
     };
     let layer_image = {
         let pending = {
-            let mut borrowed = borrow_mut_for_generation(
-                lab,
-                generation,
-                "starting layer image conformance",
-            )?;
+            let mut borrowed =
+                borrow_mut_for_generation(lab, generation, "starting layer image conformance")?;
             let report = borrowed.select(
                 Mode::Layer,
                 CONFORMANCE_IMAGE_STEP,
@@ -2578,7 +2572,9 @@ pub async fn select_heap_lattice_json(
     let generation = begin_selection(intent);
     let lab = current_lab().map_err(JsValue::from)?;
     loop {
-        if let Some(report) = try_apply_selection(&lab, intent, generation).map_err(JsValue::from)? {
+        if let Some(report) =
+            try_apply_selection(&lab, intent, generation).map_err(JsValue::from)?
+        {
             return serialize(&report).map_err(JsValue::from);
         }
         yield_to_browser().await.map_err(JsValue::from)?;
@@ -2595,12 +2591,9 @@ pub async fn conform_heap_lattice_json() -> Result<String, JsValue> {
     let generation = current_generation();
     let lab = current_lab().map_err(JsValue::from)?;
     let (saved_mode, step, policy) = {
-        let borrowed = borrow_for_generation(
-            &lab,
-            generation,
-            "reading the selection before conformance",
-        )
-        .map_err(JsValue::from)?;
+        let borrowed =
+            borrow_for_generation(&lab, generation, "reading the selection before conformance")
+                .map_err(JsValue::from)?;
         (
             Mode::from_label(borrowed.active.mode).map_err(JsValue::from)?,
             borrowed.active.requested_step,
@@ -2635,12 +2628,8 @@ pub fn render_heap_lattice_frame_json(time_seconds: f32) -> Result<String, JsVal
     let generation = current_generation();
     let lab = current_lab().map_err(JsValue::from)?;
     let report = {
-        let mut lab = borrow_mut_for_generation(
-            &lab,
-            generation,
-            "rendering an animation frame",
-        )
-        .map_err(JsValue::from)?;
+        let mut lab = borrow_mut_for_generation(&lab, generation, "rendering an animation frame")
+            .map_err(JsValue::from)?;
         lab.render_frame(time_seconds).map_err(JsValue::from)?;
         lab.frame_report(generation)
     };
@@ -2664,12 +2653,9 @@ pub async fn measure_heap_lattice_batch_json(
     let lab = current_lab().map_err(JsValue::from)?;
     let started = performance_now();
     let (pending, frame, mode, delivered_edges) = {
-        let mut borrowed = borrow_mut_for_generation(
-            &lab,
-            generation,
-            "submitting a measured batch",
-        )
-        .map_err(JsValue::from)?;
+        let mut borrowed =
+            borrow_mut_for_generation(&lab, generation, "submitting a measured batch")
+                .map_err(JsValue::from)?;
         let (pending, frame) = borrowed
             .submit_measured_batch(time_seconds, repeats)
             .map_err(JsValue::from)?;
