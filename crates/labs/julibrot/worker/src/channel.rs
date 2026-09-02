@@ -445,7 +445,9 @@ impl ProducerEndpoint {
             admission_credit_us,
             records,
         )?;
-        core.send_to_main(orbit, MessageKind::OrbitResponse)
+        core.send_to_main(orbit, MessageKind::OrbitResponse)?;
+        core.pump_pending();
+        Ok(())
     }
 
     /// Returns the request slot and reports measured stale work without an orbit payload.
@@ -473,7 +475,9 @@ impl ProducerEndpoint {
         header.compute_us = compute_us;
         header.credit_us = admission_credit_us;
         orbit.write_header(header)?;
-        core.send_to_main(orbit, MessageKind::OrbitCancelled)
+        core.send_to_main(orbit, MessageKind::OrbitCancelled)?;
+        core.pump_pending();
+        Ok(())
     }
 
     /// Applies producer-side admission shaping at a monotonic producer timestamp.
@@ -576,7 +580,7 @@ impl OrbitResponseView {
     /// same-thread path.
     #[cfg(target_arch = "wasm32")]
     pub fn from_transfer(array: ArrayBuffer) -> Result<Self, ChannelError> {
-        Self::from_browser_parts(TransferBuffer::from_array(array)?, None, 0)
+        Self::from_browser_parts(TransferBuffer::from_array(array)?, None, 0, 0)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -584,8 +588,9 @@ impl OrbitResponseView {
         buffer: TransferBuffer,
         endpoint: BrowserOwnerEndpoint,
         centre_revision: u32,
+        pool_epoch: u32,
     ) -> Result<Self, ChannelError> {
-        Self::from_browser_parts(buffer, Some(endpoint), centre_revision)
+        Self::from_browser_parts(buffer, Some(endpoint), centre_revision, pool_epoch)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -593,6 +598,7 @@ impl OrbitResponseView {
         buffer: TransferBuffer,
         endpoint: Option<BrowserOwnerEndpoint>,
         centre_revision: u32,
+        pool_epoch: u32,
     ) -> Result<Self, ChannelError> {
         let kind = buffer.validate_message()?;
         if !matches!(
@@ -619,6 +625,7 @@ impl OrbitResponseView {
                 backend: OrbitLeaseBackend::Browser {
                     endpoint,
                     buffer: Some(buffer),
+                    pool_epoch,
                 },
             },
         })
@@ -687,6 +694,8 @@ enum OrbitLeaseBackend {
     Browser {
         endpoint: Option<BrowserOwnerEndpoint>,
         buffer: Option<TransferBuffer>,
+        /// Pool generation this lease was taken under; a superseded lease is never transferred.
+        pool_epoch: u32,
     },
 }
 
@@ -774,11 +783,15 @@ impl OrbitLease {
         let (core, buffer) = match &mut self.backend {
             OrbitLeaseBackend::Queue { core, buffer } => (core, buffer),
             #[cfg(target_arch = "wasm32")]
-            OrbitLeaseBackend::Browser { endpoint, buffer } => {
+            OrbitLeaseBackend::Browser {
+                endpoint,
+                buffer,
+                pool_epoch,
+            } => {
                 let endpoint = endpoint.as_ref().ok_or_else(|| {
                     ChannelError::new(ErrorCode::BufferStarved, Pool::Orbit as u32, 0, 0)
                 })?;
-                return endpoint.return_transfer(buffer, disposition, owner_now_us);
+                return endpoint.return_transfer(buffer, *pool_epoch, disposition, owner_now_us);
             }
         };
         let old = buffer
@@ -809,9 +822,9 @@ impl Drop for OrbitLease {
         let returned = match &self.backend {
             OrbitLeaseBackend::Queue { buffer, .. } => buffer.is_none(),
             #[cfg(target_arch = "wasm32")]
-            OrbitLeaseBackend::Browser { endpoint, buffer } => {
-                endpoint.is_none() || buffer.is_none()
-            }
+            OrbitLeaseBackend::Browser {
+                endpoint, buffer, ..
+            } => endpoint.is_none() || buffer.is_none(),
         };
         debug_assert!(returned, "orbit lease dropped without credit return");
     }
@@ -867,6 +880,8 @@ impl ChannelCore {
         Ok(None)
     }
 
+    /// Returns one request slot without dispatching: the caller still owes main its orbit, and a
+    /// coalesced cap change must not replace the orbit pool underneath that write.
     fn return_request(
         &mut self,
         mut buffer: WireBuffer,
@@ -880,7 +895,6 @@ impl ChannelCore {
         self.request_main
             .push(buffer)
             .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, id.slot, 0, 0))?;
-        self.pump_pending();
         self.bump_facts();
         self.refresh_facts();
         Ok(())
@@ -1299,12 +1313,13 @@ mod tests {
 
         let channel_source = include_str!("channel.rs");
         let browser_source = include_str!("browser_owner.rs");
+        let endpoint_source = include_str!("endpoint.rs");
         assert!(channel_source.contains("BrowserOwnerEndpoint::new(config)?"));
-        assert!(browser_source.contains("buffer.validate_message()?"));
-        assert!(browser_source.contains("OrbitResponseView::from_browser_transfer"));
         assert!(channel_source.contains("endpoint.return_transfer"));
-        assert!(browser_source.contains("restart_after_resize"));
-        assert!(browser_source.contains("pending_resize"));
+        assert!(browser_source.contains("OrbitResponseView::from_browser_transfer"));
+        assert!(browser_source.contains("impl OwnerPort for BrowserPort"));
+        assert!(browser_source.contains("OwnerCore<BrowserPort>"));
+        assert!(endpoint_source.contains("fn restart_pool"));
     }
 
     const fn zero_record() -> ReferenceOrbitRecord {

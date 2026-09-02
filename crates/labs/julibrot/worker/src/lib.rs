@@ -10,6 +10,8 @@ mod channel;
 pub(crate) mod codec;
 mod compute;
 mod credit;
+#[cfg(any(test, target_arch = "wasm32"))]
+mod endpoint;
 mod error;
 mod owner;
 mod registry;
