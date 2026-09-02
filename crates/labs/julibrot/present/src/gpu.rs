@@ -9,7 +9,7 @@ use crate::state::{SceneCompletion, SceneLedger};
 use crate::{
     FrameReceipt, FrameState, HotSlot, HotUniform, PaletteId, Pose, PresentConfig, PresentError,
     PresentEvent, PresentFacts, PresentHot, PresentMain, PresentStatus, SampleClass, SceneUniform,
-    SubmissionKind, ViewMode, Warp, WarpKind, hot_ring_bytes, hot_stride, palette, scene_shaders,
+    SubmissionKind, ViewMode, Warp, WarpKind, hot_ring_bytes, palette, scene_shaders,
     tumbled_indices, view_rotation, warp_shader,
 };
 
@@ -663,11 +663,6 @@ fn create_gpu_state(
     heap: &HeapPresentResources,
     config: PresentConfig,
 ) -> Result<GpuState, PresentError> {
-    let hot_stride = hot_stride(config.min_uniform_buffer_offset_alignment).map_err(|_| {
-        PresentError::Device {
-            operation: "compute HOT ring stride",
-        }
-    })?;
     let hot_bytes = hot_ring_bytes(config.min_uniform_buffer_offset_alignment).map_err(|_| {
         PresentError::Device {
             operation: "compute HOT ring bytes",
