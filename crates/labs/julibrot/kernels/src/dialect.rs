@@ -148,9 +148,7 @@ mod tests {
         assert!(PERTURB_BODY.contains("if (exponent < -512i)"));
         assert!(PERTURB_BODY.contains("0x7f800000u"));
         assert!(PERTURB_BODY.contains("let step = clamp(remaining, -126i, 127i);"));
-        assert!(
-            PERTURB_BODY.contains("let factor = bitcast<f32>(u32(step + 127i) << 23u);")
-        );
+        assert!(PERTURB_BODY.contains("let factor = bitcast<f32>(u32(step + 127i) << 23u);"));
         assert!(PERTURB_BODY.contains("if (steps > 67108863u)"));
         assert!(!PERTURB_BODY.contains("step < 4u"));
         assert!(!PERTURB_BODY.contains("3.402823466e38"));
