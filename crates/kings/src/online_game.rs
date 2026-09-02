@@ -7,7 +7,7 @@
 
 use ember_engine::{EmberGame, Frame, InputState};
 use kings_core::board::Tile;
-use kings_core::proto::{C2S, CLIENT_PING_SECS};
+use kings_core::proto::C2S;
 
 use crate::game::{
     self, Cursor, CursorCmd, CursorKeys, HudState, Meshes, Mode, SeatCamera, UiCmd, View,
@@ -74,13 +74,12 @@ impl Config {
     }
 }
 
-#[derive(Default)]
-struct Progress {
-    greeted: bool,
-    entered: bool,
-}
-
 /// The online game.
+///
+/// Hello and the keepalive are not here: the socket sends both on its own
+/// clock (`crate::net`), so a web tab that gets no animation frames keeps
+/// its seat. This loop only reads what arrived and sends what the player
+/// did.
 pub struct OnlineGame {
     net: Net,
     inbox: Inbox,
@@ -90,26 +89,21 @@ pub struct OnlineGame {
     cam: SeatCamera,
     meshes: Meshes,
     cfg: Config,
-    /// One-shot connection milestones: Hello, lobby entry.
-    progress: Progress,
-    ping_acc: f32,
-    nonce: u32,
+    /// One-shot milestone: the create/join has been sent.
+    entered: bool,
     /// Why the socket closed, once it has.
     lost: Option<String>,
 }
 
-fn ping_every_secs() -> f32 {
-    f32::from(u16::try_from(CLIENT_PING_SECS).unwrap_or(5))
-}
-
 impl OnlineGame {
-    /// Connect the online game to its configured server.
+    /// Connect the online game to its configured server. The socket greets
+    /// the server with the configured handle as soon as it opens.
     ///
     /// # Errors
     ///
     /// Returns an error if the networking backend cannot start the connection.
     pub fn connect(cfg: Config, meshes: Meshes) -> Result<Self, String> {
-        let net = Net::connect(&cfg.ws)?;
+        let net = Net::connect(&cfg.ws, &cfg.handle)?;
         Ok(Self {
             net,
             inbox: Inbox::default(),
@@ -119,9 +113,7 @@ impl OnlineGame {
             cam: SeatCamera::new(0),
             meshes,
             cfg,
-            progress: Progress::default(),
-            ping_acc: 0.0,
-            nonce: 0,
+            entered: false,
             lost: None,
         })
     }
@@ -198,13 +190,7 @@ impl EmberGame for OnlineGame {
     fn update(&mut self, input: &InputState, dt: f32) -> Frame {
         let dt = dt.clamp(0.0, 0.1);
 
-        // Say hello the moment the socket is open. Sending before that
-        // silently drops the frames on the web.
         let status = self.net.status();
-        if !self.progress.greeted && status == Status::Open {
-            self.progress.greeted = true;
-            crate::net::hello(&self.net, &self.cfg.handle);
-        }
         if let Status::Closed(why) = &status
             && self.lost.is_none()
         {
@@ -223,10 +209,10 @@ impl EmberGame for OnlineGame {
             self.online.apply(m);
         }
 
-        // ...but wait for Welcome before create/join. Both are version-gated,
-        // and the gate reads a protocol number that Hello is what sets.
-        if !self.progress.entered && self.online.welcomed {
-            self.progress.entered = true;
+        // Wait for Welcome before create/join. Both are version-gated, and
+        // the gate reads a protocol number that the socket's Hello sets.
+        if !self.entered && self.online.welcomed {
+            self.entered = true;
             let msg = if self.cfg.create {
                 C2S::CreateLobby {
                     name: self.cfg.lobby.clone(),
@@ -239,16 +225,6 @@ impl EmberGame for OnlineGame {
                 }
             };
             self.net.send(&msg);
-        }
-
-        // There is no input stream to keep the connection alive: ping.
-        if self.progress.greeted {
-            self.ping_acc += dt;
-            if self.ping_acc >= ping_every_secs() {
-                self.ping_acc = 0.0;
-                self.nonce = self.nonce.wrapping_add(1);
-                self.net.send(&C2S::Ping { nonce: self.nonce });
-            }
         }
 
         self.online.tick(dt);
@@ -322,10 +298,5 @@ mod tests {
     fn a_config_without_a_url_is_refused() {
         assert!(Config::from_json(r#"{"handle":"x"}"#).is_err());
         assert!(Config::from_json("not json").is_err());
-    }
-
-    #[test]
-    fn the_ping_period_is_the_protocols() {
-        assert!((ping_every_secs() - 5.0).abs() < f32::EPSILON);
     }
 }

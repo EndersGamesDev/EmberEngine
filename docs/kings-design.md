@@ -248,7 +248,7 @@ Structure is fire-server's: a thread per connection owning its socket (5 ms read
 
 `ui.rs` is a pure `Selection` machine over `rules::targets`: Idle, click an own piece (or, while Waiting, an own Legend or Epic piece) to Selected, click a target to emit `Move { turn, from, to }` (or, while Waiting, a second own piece of the same class to emit `SetFormation` with the two tiles swapped), anything else clears; `pending` is set until the next `State` or `Rejected`. Keyboard: arrows and WASD move the cursor in the local seat's frame (Right is `+u`, forward, and Up is `+v`, left: the pure rotation that puts the local corner bottom-left on screen, which is also how the page draws its 2D board), rising-edge latched like fire's boost; Enter or Space clicks, Esc clears.
 
-`online.rs` is pure client state (`welcomed, screen, my_seat, creator, phase, winner, end, state: Option<State>, roster, lobbies, notice, pending, can_start`) with `apply(S2C)` and `tick(dt)` for the countdown; `online_game.rs` wires `Net`, `Ping` every `CLIENT_PING_SECS` as the keepalive, drains `UiCmd`s, publishes the HUD, and calls `scene()`.
+`online.rs` is pure client state (`welcomed, screen, my_seat, creator, phase, winner, end, state: Option<State>, roster, lobbies, notice, pending, can_start`) with `apply(S2C)` and `tick(dt)` for the countdown; `online_game.rs` wires `Net`, drains `UiCmd`s, publishes the HUD, and calls `scene()`; `Net` itself sends `Hello` on open and `Ping` every `CLIENT_PING_SECS` off the frame loop (a JS interval on the web, the reader thread natively), so a hidden tab keeps its seat.
 
 ### 4.5 Wire protocol (`kings-core/src/proto.rs`)
 
