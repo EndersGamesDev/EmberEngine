@@ -5,21 +5,21 @@ use crate::{
 };
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct PendingScene {
-    pub(super) scene_id: u64,
-    pub(super) pose: Pose,
-    pub(super) palette: PaletteId,
-    pub(super) iteration_cap: u32,
-    pub(super) level: RefinementLevel,
-    pub(super) extent: [u32; 2],
-    pub(super) texture_index: u32,
-    pub(super) centre_revision: u32,
-    pub(super) plane_origin_f64: [f64; 4],
-    pub(super) drop_reason: Option<DropReason>,
+pub struct PendingScene {
+    pub scene_id: u64,
+    pub pose: Pose,
+    pub palette: PaletteId,
+    pub iteration_cap: u32,
+    pub level: RefinementLevel,
+    pub extent: [u32; 2],
+    pub texture_index: u32,
+    pub centre_revision: u32,
+    pub plane_origin_f64: [f64; 4],
+    pub drop_reason: Option<DropReason>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) enum SceneCompletion {
+pub enum SceneCompletion {
     Promoted(SceneFrame),
     Dropped {
         pending: PendingScene,
@@ -30,13 +30,13 @@ pub(super) enum SceneCompletion {
 
 /// Pure two-index ledger; GPU resources mirror these identities.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(super) struct SceneLedger {
+pub struct SceneLedger {
     retained: Option<SceneFrame>,
     pending: Option<PendingScene>,
 }
 
 impl SceneLedger {
-    pub(super) fn begin(&mut self, mut incoming: PendingScene) -> Result<u32, PresentError> {
+    pub fn begin(&mut self, mut incoming: PendingScene) -> Result<u32, PresentError> {
         if let Some(pending) = &self.pending {
             return Err(PresentError::SceneBusy {
                 scene_id: pending.scene_id,
@@ -51,7 +51,7 @@ impl SceneLedger {
         Ok(texture_index)
     }
 
-    pub(super) fn complete(
+    pub fn complete(
         &mut self,
         measurement: SubmissionMeasurement,
     ) -> Option<SceneCompletion> {
@@ -79,12 +79,12 @@ impl SceneLedger {
         Some(SceneCompletion::Promoted(frame))
     }
 
-    pub(super) const fn cancel_pending(&mut self) -> Option<PendingScene> {
+    pub const fn cancel_pending(&mut self) -> Option<PendingScene> {
         self.pending.take()
     }
 
     #[allow(clippy::float_cmp)]
-    pub(super) fn invalidate_incompatible(
+    pub fn invalidate_incompatible(
         &mut self,
         iteration_cap: u32,
         plane_origin_f64: [f64; 4],
@@ -104,7 +104,7 @@ impl SceneLedger {
         retained_invalid
     }
 
-    pub(super) fn apply_reference_shift(
+    pub fn apply_reference_shift(
         &mut self,
         accepted_pose: &Pose,
         new_generation: u32,
@@ -127,11 +127,11 @@ impl SceneLedger {
         }
     }
 
-    pub(super) const fn retained(&self) -> Option<&SceneFrame> {
+    pub const fn retained(&self) -> Option<&SceneFrame> {
         self.retained.as_ref()
     }
 
-    pub(super) const fn pending(&self) -> Option<&PendingScene> {
+    pub const fn pending(&self) -> Option<&PendingScene> {
         self.pending.as_ref()
     }
 }

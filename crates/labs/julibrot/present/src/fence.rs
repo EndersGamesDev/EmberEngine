@@ -2,7 +2,7 @@ use crate::{FenceRefusal, SampleClass, SubmissionKind, SubmissionMeasurement};
 
 /// One bounded asynchronous fence's CPU timing and poll ledger.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct FenceLedger {
+pub struct FenceLedger {
     kind: SubmissionKind,
     id: u64,
     source_scene_id: Option<u64>,
@@ -16,7 +16,7 @@ pub(super) struct FenceLedger {
 
 /// Result of one cooperative observation.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum FenceDecision {
+pub enum FenceDecision {
     /// Callback has not fired and the budget remains.
     Pending,
     /// Callback succeeded; the contained measurement is complete.
@@ -30,7 +30,7 @@ pub(super) enum FenceDecision {
 }
 
 impl FenceLedger {
-    pub(super) const fn new(
+    pub const fn new(
         kind: SubmissionKind,
         id: u64,
         source_scene_id: Option<u64>,
@@ -52,11 +52,11 @@ impl FenceLedger {
         }
     }
 
-    pub(super) const fn id(self) -> u64 {
+    pub const fn id(self) -> u64 {
         self.id
     }
 
-    pub(super) fn observe(
+    pub fn observe(
         &mut self,
         now_ms: f64,
         callback: Option<Result<(), ()>>,

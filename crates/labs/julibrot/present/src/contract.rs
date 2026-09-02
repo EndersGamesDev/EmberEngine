@@ -234,7 +234,7 @@ pub enum PresentEvent {
 }
 
 /// Honest current display state.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PresentStatus {
     /// No scene has completed yet; warp emits the clear colour.
     WaitingForFirstScene,
@@ -249,7 +249,7 @@ pub enum PresentStatus {
 }
 
 /// Receipt returned before a warp fence completes.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FrameReceipt {
     /// App refresh identity.
     pub refresh_id: u64,
