@@ -1155,6 +1155,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ember-julibrot-app"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "ember-julibrot-kernels",
+ "ember-julibrot-math",
+ "ember-julibrot-present",
+ "ember-julibrot-worker",
+ "ember-lab-heap",
+ "js-sys",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu",
+]
+
+[[package]]
 name = "ember-julibrot-kernels"
 version = "0.1.0"
 dependencies = [

@@ -1,6 +1,6 @@
 # Julibrot app slice — refined integration contract
 
-Status: refined after the five-document written review; this file adopts the joint rulings, records the two remaining integration arguments explicitly, and remains the contract the math, kernels, worker, and present implementations meet where a later disagreement is discovered.
+Status: implementation in progress after the five-document written review and final integration rulings; this remains the contract the math, kernels, worker, and present implementations meet where a later disagreement is discovered.
 
 ## 1. Ownership and boundary
 
@@ -10,7 +10,7 @@ The app slice owns the implementation-round heap extraction seams approved in §
 
 Math owns Julibrot algebra, corrected plane construction, `CentreSplit`, scaled perturbation theory, reference precision, the bignum adapter, `Pose`, warp matrices, and CPU oracles; kernels owns both GPU kernels, the exact three refinement levels, `DispatchFacts`, grid spans, dense-prefix headers, and SCRATCH-to-DATA landing.
 
-Worker owns the bignum centre, transfer protocol, credit, cancellation, owner records and drains; present owns `ViewMode`, palettes, `HotUniform`, `SceneUniform`, its two scene textures, the hot ring, scene and warp fences, warp planning, and present facts.
+Worker owns the bignum centre, transfer protocol, credit, cancellation, owner records and drains; math defines `ViewMode` and present re-exports it, while present owns palettes, `HotUniform`, `SceneUniform`, its two scene textures, the hot ring, scene and warp fences, warp planning, and present facts.
 
 The app does not copy sibling or heap code, reinterpret an owner’s byte layout, author fractal or gameplay truth, add a general DAG or petgraph, add another world or simulation tick, add another heap class, use shared-memory threads, repair glitches with a second reference, or add WebGPU.
 
@@ -172,7 +172,7 @@ All wire and GPU records are little-endian, every listed reserved word is writte
 
 `EscapeParams` is `repr(C) { max_iter:u32, bailout:f32 }`, exactly 8 bytes at offsets 0 and 4; `max_iter>0` and `bailout` is the squared radius fixed to `256.0`.
 
-`Pose` is defined in math with semantic fields `{ epoch:u64, orbit_generation:u32, plane:Plane, plane_theta_1:f64, plane_theta_2:f64, zoom_log2:f64, view_theta_1:f64, grid_width:u32, grid_height:u32, view, centre_from_reference_px:[f64;2] }`; `view` carries the present-owned `ViewMode` discriminant and the record has no byte ABI.
+`Pose` and `ViewMode` are defined in math with semantic fields `{ epoch:u64, orbit_generation:u32, plane:Plane, plane_theta_1:f64, plane_theta_2:f64, zoom_log2:f64, view_theta_1:f64, grid_width:u32, grid_height:u32, view, centre_from_reference_px:[f64;2] }`; present re-exports `ViewMode`, and the record has no byte ABI.
 
 Math exposes `construct_plane(preset,angles)->Result<Plane,MathError>`, `split_centre(centre)->Result<CentreSplit,MathError>`, `scaled_pixel_scale(zoom_log2,grid_width)->Result<ScaledPixelScale,MathError>`, `precision_for(zoom_log2,grid_width,max_iter)->Result<PrecisionPlan,MathError>`, the shallow and scaled-perturbation CPU oracles, and `warp_matrix(from:&Pose,to:&Pose)->Result<WarpMatrix,MathError>`.
 
@@ -305,11 +305,11 @@ Worker credit is the displayed POLICY `budget_us_per_second=250_000`; admission,
 
 `ViewerState` is `repr(C)`, 168 bytes and alignment 8: byte 0 `epoch:u64`, byte 8 `hot:HotState`, and byte 48 `main:MainState`; `HotDrain` and `MainDrain` each return the entire record.
 
-`ViewerOwner::new(initial:ViewerState)->ViewerOwner`, `stage_hot(hot:HotState)`, and `stage_main(main:MainState)` allocate nothing; `accept_orbit(response:&OrbitResponseView,handle:OrbitHandle)->OrbitDisposition` returns `Applied` only for matching latest generation and otherwise `Stale`, with both outcomes infallible.
+`ViewerOwner::new(initial:ViewerState)->ViewerOwner`, `stage_hot(hot:HotState)`, and `stage_main(main:MainState)` allocate nothing; `accept_orbit(response:&OrbitResponseView,handle:OrbitHandle,reference_shift_px:[f64;2])->OrbitDisposition` returns `Applied` only for matching latest generation and otherwise `Stale`, with both outcomes infallible.
 
 `ViewerOwner::drain_hot()->HotDrain` and `drain_main()->MainDrain` each return the full coherent viewer record and increment the shared epoch exactly once; `snapshot()->ViewerState` is diagnostic and does not increment.
 
-`WorkerChannel::new(config:WorkerConfig,mode:WorkerMode)->Result<(OwnerEndpoint,ProducerEndpoint),ChannelError>` allocates the four buffers; `WorkerConfig` is `{max_iter:u32,budget_us_per_second:u32}`, and app passes minimum max iteration 64, budget 250,000, and the worker-owned four-second return deadline.
+`WorkerChannel::new(config:WorkerConfig,mode:WorkerMode)->Result<(OwnerEndpoint,ProducerEndpoint),ChannelError>` allocates the four buffers; `WorkerConfig` is `{max_iter:u32}`, and app passes minimum max iteration 64 while worker pins budget 250,000 and the four-second return deadline as displayed constants.
 
 `OwnerEndpoint::submit(request:OrbitRequest)->SubmitOutcome` returns `Transferred`, `Coalesced`, or `GenerationExhausted`; `next_arrival()->Option<OrbitResponseView>` is nonblocking/event-driven, and `shutdown()` reconciles all four slots within the fixed return deadline or names the missing pool and slot.
 
@@ -319,7 +319,7 @@ Worker credit is the displayed POLICY `budget_us_per_second=250_000`; admission,
 
 ### 3.6 Present-owned records, uniforms, and API
 
-`ViewMode` is `repr(u32)` with `Flat=0` and `Tumbled=1`; `PaletteId` is `repr(u32)` with `Classic=0`, `Ember=1`, and `Ice=2`.
+Math defines `ViewMode` as `repr(u32)` with `Flat=0` and `Tumbled=1`, present re-exports it, and present defines `PaletteId` as `repr(u32)` with `Classic=0`, `Ember=1`, and `Ice=2`.
 
 `PaletteRecord` is `repr(C,align(16)) {map:[f32;4],interior_rgba:[f32;4],clear_rgba:[f32;4]}`, exactly 48 bytes; Classic is `{map:[64,0,0.78,1],interior:[0.005,0.005,0.008,1],clear:[0.015,0.018,0.025,1]}`, Ember is `{map:[48,0.02,0.88,1],interior:[0.01,0,0,1],clear:[0.015,0.008,0.005,1]}`, and Ice is `{map:[80,0.55,0.72,1],interior:[0,0.005,0.01,1],clear:[0.005,0.01,0.015,1]}`.
 
@@ -468,20 +468,18 @@ Phase 1 creates the app crate, ABI/error types, GL-only device, hook and handler
 
 Phase 2 integrates the exact worker channel, four-buffer leases, owner records, orbit registry, current-before-accept upload, centre/reference shifts, controls, and latest-wins cancellation, estimated at 390 Rust and test lines.
 
-Phase 3 integrates corrected math poses, scaled shallow/deep selection, exact kernels plan and dispatch records, Preview/Interactive/Final scheduling, dense-prefix facts, and power-of-two delivery, estimated at 390 Rust and test lines.
+Phase 3 integrates corrected math poses, scaled shallow/deep selection, exact kernels plan and dispatch records, Preview/Interactive/Final scheduling, dense-prefix facts, power-of-two delivery, present’s 128-byte ring, two-texture state machine, CPU warp planner, asynchronous events, and post-fence surface presentation, estimated at 820 Rust and test lines.
 
-Phase 4 integrates present’s 128-byte ring, three palettes, two-texture state machine, per-level reallocations, CPU warp planner, async scene/warp events, and post-fence surface presentation, estimated at 430 Rust and test lines.
+Phase 4 builds the page, one-module worker bootstrap, version handshake, stable controls, requested/delivered facts, unavailable gather totals, DOM overlay, bundle disclosure, and typed status rendering, estimated at 470 HTML, CSS, JavaScript, Rust and test lines.
 
-Phase 5 builds the page, one-module worker bootstrap, version handshake, stable controls, requested/delivered facts, unavailable gather totals, DOM overlay, bundle disclosure, and typed status rendering, estimated at 470 HTML, CSS, JavaScript, Rust and test lines.
+Phase 5 adds adaptive timing, single-frame policy, finite fence and timer-probe accounting, and replay instrumentation, estimated at 210 Rust, JavaScript and test lines.
 
-Phase 6 adds adaptive timing, single-frame policy, replay instrumentation, complete page-contract coverage, release bytes, rapid-interleaving scripts, doc reconciliation, and lint repair, estimated at 340 lines.
+Phase 6 adds complete page-contract coverage, release bytes, rapid-interleaving scripts, doc reconciliation, and lint repair, estimated at 130 lines.
 
 The refined app estimate is approximately 2,710 net new lines including the Phase 0 heap extraction; implementation reports actual lines per phase and stops rather than broadening the approved seam.
 
 ## 8. Unresolved for implementation review
 
-- J7 places `Pose` in math while J30 leaves `ViewMode` owned by present; to preserve one-way dependencies, the implementation must either store the discriminant as u32 in math’s semantic pose or move and re-export the enum in a reviewed change before package imports are written.
-- Present §3.7 returns `FrameReceipt` before its warp fence completes, while J31 requires app `present()` after that fence; this contract resolves runtime order with `PendingSurface`, but present’s refined event wording must confirm `WarpCompleted` is emitted only after the timing endpoint.
 - `PresentMain` needs plane origin, centre revision and `reference_shift_px` to implement J10’s rebase/clear rule; these additions are pinned here but require byte-for-byte agreement in present’s refined CPU-only record.
 - The exact f64 formula that converts a retained pose’s old reference-relative displacement through `reference_shift_px` is math/present-owned and must be the same in their refined documents; app only transports the values.
 - Math’s scaled recurrence must state how `δc′` is adjusted on each ±64 renormalization so the scale invariant remains explicit rather than inferred by kernels.
@@ -503,14 +501,14 @@ The refined app estimate is approximately 2,710 net new lines including the Phas
 |J4|ACCEPTED|Pins 32-byte origin-free `Plane` and separate 32-byte `CentreSplit`; retires the former origin field.|
 |J5|ACCEPTED|Duplicates kernels’ 96-byte shallow and 64-byte perturbation tables with mantissa at 32 and signed exponent at 60.|
 |J6|ACCEPTED|Withdraws the 192-byte dual-pose payload and adopts present’s 128-byte CPU-planned homography block and stride.|
-|J7|ARGUED|Adopts math-owned `Pose` and the added centre displacement, but records the present-owned `ViewMode` dependency-cycle spelling for implementation review.|
+|J7|ACCEPTED|Uses math-owned `Pose` and `ViewMode`; present re-exports `ViewMode`, so no dependency cycle exists.|
 |J8|ACCEPTED|Withdraws JBRT/four kinds and adopts JBL1, nine kinds, 16-byte trailer and `48+16M` capacity.|
 |J9|ACCEPTED|Withdraws app’s scalar codec and adopts worker’s four descriptors, 0/1 sign and canonical zero with no limbs.|
 |J10|ACCEPTED|Pins 40-byte HOT, 120-byte MAIN, 168-byte viewer, centre displacement, reference shift, retained-pose rebase and cap/origin-only clear.|
 |J11|ACCEPTED|Pins eight-byte `EscapeParams {max_iter,bailout}` with squared radius 256.0.|
 |J12|ACCEPTED|Withdraws Vec/WallTerm levels and adopts the exact Preview, Interactive, Final array, caps, 4,096 policy and power-of-two degradation.|
 |J13|ACCEPTED|Uses `RefinementLevel` enum in grids, schedule, scene frames and facts.|
-|J14|ARGUED|Adopts present’s API and fence ownership; adds an app-held surface keyed by `warp_id` because asynchronous `frame` cannot satisfy post-fence present otherwise.|
+|J14|ACCEPTED|Adopts present’s API and fence ownership plus the ruled app-held `PendingSurface` keyed by `warp_id`.|
 |J15|ACCEPTED|Scene texture extent equals delivered level extent and every reallocation is counted.|
 |J16|ACCEPTED|Expands Phase 0 to the six re-exports, `GpuKernelExecutor`, and exact `HeapPresentResources`, with the mandated stop condition.|
 |J17|ACCEPTED|Pins `prefix_headers(span,active_len)` and forbids convention-only header mutation.|
@@ -526,5 +524,5 @@ The refined app estimate is approximately 2,710 net new lines including the Phas
 |J27|ACCEPTED|Keeps orbit-sized request buffers and `CentreEncodingWall`; minimum request cap is 64 for 300-digit fit.|
 |J28|ACCEPTED|Keeps one wasm plus `worker_main`, version-one URLs and typed skew refusal.|
 |J29|ACCEPTED|Withdraws 144-byte palette and adopts present’s three exact 48-byte records.|
-|J30|ARGUED|Renames app’s enum to present-owned `ViewMode`; its use inside math-owned `Pose` still needs a cycle-free implementation spelling.|
-|J31|ARGUED|Accepts separate present-owned fences, counted polls, warm-up and second-frame policy; pins delayed app presentation via completion event to satisfy the outside-timing law.|
+|J30|ACCEPTED|Uses math-defined `ViewMode` with present re-exporting the same type and discriminants.|
+|J31|ACCEPTED|Uses separate present-owned fences and delays app presentation until the matching completed warp event, outside the measured region.|
