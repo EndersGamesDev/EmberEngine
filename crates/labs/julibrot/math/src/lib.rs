@@ -2,12 +2,14 @@
 
 mod big;
 mod orbit;
+mod perturb;
 mod plane;
 mod scale;
 mod types;
 
 pub use big::{BigCentre, BigScalar, EncodedBigScalar, decode_big_scalar, encode_big_scalar};
-pub use orbit::{ReferenceOrbitBuilder, escape_f32};
+pub use orbit::{ReferenceOrbitBuilder, escape_f32, smooth_iteration_f64};
+pub use perturb::{perturb_scaled_f64, perturb_scaled_f64_with_envelope};
 pub use plane::{construct_plane, construct_plane_from_spec, preset_spec};
 pub use scale::{
     centre_displacement_px, mirror_centre, precision_for, scale_split, scaled_pixel_offset,
@@ -15,6 +17,7 @@ pub use scale::{
 };
 pub use types::{
     Axis4, CentreF64, CentreSplit, ComputedOrbit, EscapeGridRecord, EscapeParams, EscapeSample,
-    MathError, OrbitStep, PerturbSample, Plane, PlaneAngles, PlanePreset, PlaneSpec, Pose,
-    PrecisionPlan, ReferenceOrbitRecord, ScaleSplit, ScaledPixelScale, ViewMode, WarpMatrix,
+    MathError, OrbitStep, PerturbSample, PerturbationEnvelope, Plane, PlaneAngles, PlanePreset,
+    PlaneSpec, Pose, PrecisionPlan, ReferenceOrbitRecord, ScaleSplit, ScaledPixelScale, ViewMode,
+    WarpMatrix,
 };

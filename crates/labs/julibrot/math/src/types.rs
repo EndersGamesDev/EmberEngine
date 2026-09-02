@@ -106,6 +106,14 @@ pub struct PerturbSample {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PerturbationEnvelope {
+    pub delta_abs_error: f64,
+    pub escape_norm2_error: f64,
+    pub smooth_error: f64,
+    pub minimum_escape_margin: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(C)]
 pub struct ReferenceOrbitRecord {
     pub re_hi: f32,
@@ -191,6 +199,8 @@ pub enum MathError {
     OrbitTooLong,
     #[error("the reference-orbit builder reached an inconsistent state")]
     InvalidOrbitState,
+    #[error("the reference orbit is empty")]
+    EmptyReferenceOrbit,
     #[error("the precision plan is internally inconsistent")]
     InvalidPrecisionPlan,
     #[error("an exact counter overflowed")]

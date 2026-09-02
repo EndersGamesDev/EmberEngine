@@ -19,6 +19,9 @@ pub fn escape_f32(point: [f32; 4], params: EscapeParams) -> Result<EscapeSample,
                 escape_index: Some(iteration),
             });
         }
+        if iteration + 1 == params.max_iter {
+            break;
+        }
         let next_re = z_re.mul_add(z_re, -(z_im * z_im)) + c_re;
         let next_im = (2.0 * z_re).mul_add(z_im, c_im);
         z_re = next_re;
@@ -296,7 +299,7 @@ fn validate_params(params: EscapeParams) -> Result<(), MathError> {
     Ok(())
 }
 
-pub(crate) fn smooth_iteration_f64(iteration: u32, z_re: f64, z_im: f64) -> f32 {
+pub fn smooth_iteration_f64(iteration: u32, z_re: f64, z_im: f64) -> f32 {
     let magnitude = z_re.hypot(z_im);
     (f64::from(iteration) + 1.0 - magnitude.log2().log2()) as f32
 }
