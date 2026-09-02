@@ -36,16 +36,20 @@ pub struct SceneLedger {
 }
 
 impl SceneLedger {
-    pub fn begin(&mut self, mut incoming: PendingScene) -> Result<u32, PresentError> {
+    pub const fn available_texture_index(&self) -> Result<u32, PresentError> {
         if let Some(pending) = &self.pending {
             return Err(PresentError::SceneBusy {
                 scene_id: pending.scene_id,
             });
         }
-        let texture_index = self
+        Ok(self
             .retained
             .as_ref()
-            .map_or(0, |frame| 1 - frame.texture_index);
+            .map_or(0, |frame| 1 - frame.texture_index))
+    }
+
+    pub fn begin(&mut self, mut incoming: PendingScene) -> Result<u32, PresentError> {
+        let texture_index = self.available_texture_index()?;
         incoming.texture_index = texture_index;
         self.pending = Some(incoming);
         Ok(texture_index)
@@ -121,6 +125,12 @@ impl SceneLedger {
             rebase_pose(&mut pending.pose, accepted_pose, shift_px);
             pending.pose.orbit_generation = new_generation;
             pending.centre_revision = new_revision;
+        }
+    }
+
+    pub fn mark_replaced(&mut self) {
+        if let Some(pending) = &mut self.pending {
+            pending.drop_reason = Some(DropReason::ReplacedMain);
         }
     }
 
@@ -218,6 +228,8 @@ mod tests {
     #[test]
     fn exactly_two_indices_alternate_and_a_third_scene_is_refused() {
         let mut ledger = SceneLedger::default();
+        assert_eq!(ledger.available_texture_index(), Ok(0));
+        assert!(ledger.pending().is_none());
         assert_eq!(begin(&mut ledger, 1, 1), 0);
         assert_eq!(
             ledger.begin(PendingScene {
@@ -244,6 +256,24 @@ mod tests {
             Some(SceneCompletion::Promoted(_))
         ));
         assert_eq!(begin(&mut ledger, 3, 1), 0);
+    }
+
+    #[test]
+    fn replaced_main_marks_only_the_pending_scene() {
+        let mut ledger = SceneLedger::default();
+        begin(&mut ledger, 1, 1);
+        ledger.complete(measurement(1));
+        begin(&mut ledger, 2, 1);
+        ledger.mark_replaced();
+        assert_eq!(ledger.retained().map(|frame| frame.scene_id), Some(1));
+        assert!(matches!(
+            ledger.complete(measurement(2)),
+            Some(SceneCompletion::Dropped {
+                reason: DropReason::ReplacedMain,
+                ..
+            })
+        ));
+        assert_eq!(ledger.retained().map(|frame| frame.scene_id), Some(1));
     }
 
     #[test]

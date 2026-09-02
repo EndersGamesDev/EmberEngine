@@ -158,6 +158,11 @@ impl Presenter {
             .main
             .as_ref()
             .is_some_and(|previous| previous.view != main.view);
+        let selection_replaced = self.main.as_ref().is_some_and(|previous| {
+            previous.view != main.view
+                || previous.state.palette_id != main.state.palette_id
+                || previous.grid != main.grid
+        });
         let latest_pose = self
             .hot
             .iter()
@@ -178,6 +183,9 @@ impl Presenter {
             if let Some(frame) = self.ledger.retained() {
                 self.facts.source_generation = Some(frame.pose.orbit_generation);
             }
+        }
+        if selection_replaced {
+            self.ledger.mark_replaced();
         }
         if self
             .ledger
@@ -277,11 +285,15 @@ impl Presenter {
     ///
     /// Returns a typed refusal for absent/invalid state, an occupied target, or checked overflow.
     pub fn submit_scene(&mut self, hot_slot: HotSlot, now_ms: f64) -> Result<u64, PresentError> {
-        if let Some(pending) = self.ledger.pending() {
-            return Err(PresentError::SceneBusy {
-                scene_id: pending.scene_id,
-            });
+        let result = self.try_submit_scene(hot_slot, now_ms);
+        if let Err(error) = &result {
+            self.facts.status = PresentStatus::Refused(error.clone());
         }
+        result
+    }
+
+    fn try_submit_scene(&mut self, hot_slot: HotSlot, now_ms: f64) -> Result<u64, PresentError> {
+        let texture_index = self.ledger.available_texture_index()?;
         let main = self.main.as_ref().ok_or(PresentError::InvalidGrid {
             width: 0,
             height: 0,
@@ -294,25 +306,14 @@ impl Presenter {
         let (palette_id, palette_record) = main.selected_palette().ok_or(PresentError::Device {
             operation: "decode palette identifier",
         })?;
-        let scene_id = self.next_scene_id;
-        self.next_scene_id = scene_id.checked_add(1).ok_or(PresentError::Device {
-            operation: "advance scene identity",
-        })?;
-        let texture_index = self.ledger.begin(crate::state::PendingScene {
-            scene_id,
-            pose,
-            palette: palette_id,
-            iteration_cap: main.state.delivered_iter_cap,
-            level: main.grid.level,
-            extent: [main.grid.width, main.grid.height],
-            texture_index: 0,
-            centre_revision: main.state.centre_revision,
-            plane_origin_f64: main.state.plane_origin_f64,
-            drop_reason: None,
-        })?;
         let extent = [main.grid.width, main.grid.height];
-        let reallocated =
-            ensure_scene_texture(&self.device, &mut self.gpu, texture_index as usize, extent)?;
+        validate_extent(&self.device, extent)?;
+        let reallocated = ensure_scene_texture(
+            &self.device,
+            &mut self.gpu,
+            texture_index as usize,
+            extent,
+        )?;
         if reallocated {
             self.facts.texture_reallocations = self.facts.texture_reallocations.saturating_add(1);
             self.scene_samples.reset();
@@ -334,6 +335,22 @@ impl Presenter {
             width: extent[0],
             height: extent[1],
             logical_len: main.grid.span.logical_len,
+        })?;
+        let scene_id = self.next_scene_id;
+        self.next_scene_id = scene_id.checked_add(1).ok_or(PresentError::Device {
+            operation: "advance scene identity",
+        })?;
+        self.ledger.begin(crate::state::PendingScene {
+            scene_id,
+            pose,
+            palette: palette_id,
+            iteration_cap: main.state.delivered_iter_cap,
+            level: main.grid.level,
+            extent: [main.grid.width, main.grid.height],
+            texture_index: 0,
+            centre_revision: main.state.centre_revision,
+            plane_origin_f64: main.state.plane_origin_f64,
+            drop_reason: None,
         })?;
         self.queue
             .write_buffer(&self.gpu.scene_buffer, 0, bytemuck::bytes_of(&uniform));
@@ -374,6 +391,18 @@ impl Presenter {
     ///
     /// Returns a typed refusal for zero surface extent, unwritten HOT state, or a pending warp.
     pub fn frame(
+        &mut self,
+        state: FrameState<'_>,
+        hot_slot: HotSlot,
+    ) -> Result<FrameReceipt, PresentError> {
+        let result = self.try_frame(state, hot_slot);
+        if let Err(error) = &result {
+            self.facts.status = PresentStatus::Refused(error.clone());
+        }
+        result
+    }
+
+    fn try_frame(
         &mut self,
         state: FrameState<'_>,
         hot_slot: HotSlot,
