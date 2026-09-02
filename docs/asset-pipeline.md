@@ -5,7 +5,7 @@ pipeline for a new one. Written down because most of what follows was
 learned by getting it wrong first — the failure modes are silent, and
 each one costs an afternoon to rediscover.
 
-There are four paths. Pick by what you are starting from:
+There are five paths. Pick by what you are starting from:
 
 | Starting from | Path | Example in the repo |
 |---|---|---|
@@ -13,6 +13,7 @@ There are four paths. Pick by what you are starting from:
 | An artist's rigged model (FBX/glTF) | **B** — imported: split by bone | the SWAT operator (`assets/models/swat-parts.glb`) |
 | An artist's scene/level | **C** — imported: split by island | the factory skyline (`assets/models/level-backdrop.glb`) |
 | An artist's static prop, already in named parts | **D** — imported: keep the parts, add pivots | the 9mm (`tools/9mm_convert.py`) |
+| A whole map's worth of surfaces and props, from nothing | **E** — generated pictures onto boxes and generated meshes | arena v13 "Trench City" — runbook `tools/v13/`, meshes `assets/models/v13/`, textures `assets/textures/v13/` |
 
 Everything the engine consumes is a **GLB with base-color textures
 embedded**, loaded by `ember_engine::assets::load_glb`.
@@ -127,9 +128,13 @@ Worked example: `tools/swat_split.py` (Mixamo-rigged FBX → 15 GLB parts
   re-export from Blender therefore ships a correctly-shaped, entirely
   untextured model. Verify the *exported* PNG's bit depth, not the
   source's.
-- **No mipmaps** (`mip_level_count: 1`, and no mipmap filter on the
-  sampler), so a detailed texture shimmers at distance. Another reason to
-  downscale at bake time rather than ship source resolution.
+- **Mipmaps exist as of arena v13.** Texture upload builds a full box-filtered
+  chain on the CPU, sets `mip_level_count` to the chain length and gives the
+  sampler `mipmap_filter: Linear`, so a detailed texture no longer shimmers at
+  distance; it costs ~33% more texture memory. Downscaling at bake time still
+  matters — every texture is embedded in the wasm bundle by `include_bytes!`,
+  so source resolution is still a download cost for every web player — but it
+  is now a **bundle-size** argument, not an aliasing one.
 - **No backface culling** (`cull_mode: None`): the interior of an open or
   non-manifold shape renders solid rather than vanishing.
 - **No blending** (`BlendState::REPLACE`): there is no additive or
@@ -172,6 +177,39 @@ The shape of this path is different from B: there is no skeleton to split by and
 - **Watch the downscale survive export.** Blender's glTF exporter copies the *original file bytes* for an on-disk image it believes unmodified, silently shipping the full-resolution texture. Pack the scaled image, then re-parse the exported PNG and fail if it is bigger than intended.
 - **The importer parents everything under a root.** Unparent with the world transform preserved (`parent_clear(CLEAR_KEEP_TRANSFORM)`, or snapshot `matrix_world` / clear `parent` / restore) *before* `transform_apply`, or the bake uses the wrong basis.
 - **A derived axis fit cannot check itself.** If the script rotates the longest axis onto +X and scales it to a target length, then "is +X longest" and "is the length right" are tautologies. Only a heuristic picks *which end* is forward, and a 180° flip leaves length, longest axis and handedness all correct — the prop ships pointing backwards, exit 0, no warning. Assert the muzzle/front is forward of the origin and near the front of the bounds.
+
+## Path E — generated pictures onto boxes and generated meshes
+
+A whole map, with no artist and no source archive: every surface and every prop is generated. Arena v13 "Trench City" is the worked example, and unlike the earlier `.claude/*` runbooks **the scripts are committed**, under `tools/v13/`, so the next map does not start from a chat transcript.
+
+The path splits in two because the renderer does. Cover volumes are AABBs the sim already owns, so they are drawn as boxes and the realism has to live entirely in the picture; decor is silhouette work, so it is a generated mesh. Both ends terminate in exactly one base-colour texture, because that is all `MeshData` holds.
+
+**What is in `tools/v13/` today**
+
+| Script | Does | Where it runs |
+|---|---|---|
+| `gen_textures.py` | The **material** pictures — 20 of them: `container-side/doors/roof`, `crate-side/top`, `ammo-side/top`, `sandbag`, `trench-wall`, `tunnel-roof`, `rubble`, `cobble`, `city-wall`, the six materials box-projected onto the props (`limestone`, `sandstone`, `bronze`, `burlap`, `scorched-steel`, `cast-iron`), and a 2048×512 `sky` panorama that is deliberately *not* a tile. Every prompt asks for a flat, evenly lit, seamless albedo **with soft ambient occlusion baked in**, because there is no AO map to add it later. Raw output lands in `assets/concepts/v13/textures/`. | the picture generator |
+| `gen_views.py` | The four orthographic **concept views** per decor prop (7 props: `cathedral`, `facade-a`, `facade-b`, `statue`, `sandbags`, `wreck`, `lamp`), the Path A input for the mesh generator. It owns the ComfyUI graph, `post`/`wait`/`fetch`, and the prompt tables; `gen_textures.py` imports all four from it. Two long props (`wreck`, `sandbags`) override the four view phrases, because "front" and "back" of a long object otherwise read as two different objects — the same fix the Fire Racer car needed. ~32 s per 1024² view. | the picture generator |
+| `fetch_pictures.py` | Pulls finished pictures **off the other generator's history** and names them from the prompt tables (see below). `--list` matches without fetching. Idempotent, and it refuses anything whose bytes are not a PNG. | workstation, over ssh |
+| `mesh-props.ps1` | The **mesh** step: Hunyuan3D-2mv (`C:\hy3d\gen3d_mv.py`) over the fetched views of each of the 7 props, front view required, then decimated a second time to a **per-part budget** (8000 faces for the statue and sandbags that are stared at from arm's length, 6000 cathedral, 5000 wreck, 4000 façades, 3000 lamp) into `assets/models/v13/<prop>.glb`. Pauses the local GLM worker for the VRAM and restarts it even on failure; skips outputs that exist, so a rerun resumes. ~135 s per prop. | workstation 4080 |
+| `bake_textures.py` | The **bake**: composes the container 2×2 and the crate/ammo 2×1 atlases, cuts the usable patch out of the three pictures the generator would not draw flat, downscales everything to the bundle budget and writes 8-bit RGB PNG into `assets/textures/v13/` — beside-then-rename, so a concurrent `include_bytes!` never reads half a file. Re-opens every output to assert the mode and size the engine will see, prints the set's total, and treats a missing raw picture as an error naming it, never a placeholder. | workstation, the Hunyuan venv's python (has PIL) |
+
+Both generator scripts skip a picture whose file already exists, so a rerun resumes rather than re-billing the GPU.
+
+**Two generators, one 4090, and why the fetch goes through `/history`**
+
+adler has one card and two ComfyUI instances that both want it: the **Qwen-Image** instance on `:8188` (the Path A generator, reached from the workstation through a local relay at `127.0.0.1:9188`, which is what `gen_views.py`'s `COMFY_API` defaults to) and an **Ideogram 4** ComfyUI on `:8288` run by another account, which is what the picture-generator connector drives. They cannot run at once — only the Ideogram instance fits in VRAM while the other is resident — so v13 generated everything through the connector.
+
+That is also why there is a fetch script at all. The connector answers with a **gallery URL that needs a key this repo does not hold**, so the pictures cannot be downloaded the obvious way. But `:8288` is a ComfyUI: its `/history` carries the full positive prompt of every job and `/view` serves the output, and both are readable on adler's loopback. `fetch_pictures.py` therefore lists the history over `ssh adler curl`, matches each job's longest `CLIPTextEncode` text (the negative prompt is the short one) against the prompt tables in `gen_textures.py` and `gen_views.py` by containment, and writes the match to the name those tables imply. **The prompt is the identity of the picture** — regenerate with the same prompt and it lands on the same filename, so delete the old file first if you want the new one.
+
+**"A detailed picture on every polygon", honestly**
+
+The ask behind v13 was a detailed picture on every polygon. This renderer samples **one texture per mesh** and has no second UV set, no atlas sharing and no decals, so that ask is met in the only two ways it can be:
+
+- **Atlas boxes** for cover. One picture per *face* of the box, composed into a single texture — a 2×2 grid of 1024² tiles for the container (side, doors, roof, floor), a 2×1 for the crate and the ammo box — with the six faces UV-mapped into their own rectangles in `MeshData::textured_box`'s face order. The box is then scaled to the obstacle's real size and the picture stretches with it, which is *correct* for a container (one door picture per door) and is exactly why containers are drawn at real proportions rather than stretched to fit a gameplay volume.
+- **Box-projected material pictures** for the generated props. A Hunyuan shape output is POSITION-only — no NORMAL, no `TEXCOORD_0`, no material — so the same treatment `crates/fire/src/meshes.rs` applies is used: face normals recomputed, planar UVs projected per dominant axis, and the prop's own generated material picture (`limestone` for the cathedral, `bronze` for the statue, `burlap` for the sandbags, `cast-iron` for the lamp, `scorched-steel` for the wreck) sampled through them. Every face gets a photographic surface at roughly the right scale; no face gets a *unique* picture, and this document is not going to pretend otherwise.
+
+Anything beyond those two — per-face detail maps, normal or roughness maps — is a renderer change, not a pipeline change. See the engine-side constraints above.
 
 ## Conventions: axes and the hold point
 

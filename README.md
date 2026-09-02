@@ -30,14 +30,24 @@ crates/
                   (+ examples/netbot.rs — headless verification client)
   ember-server/   headless dedicated server: single 60 Hz sim thread,
                   thread-per-connection IO feeding it events over channels
-  game/           the arena client: net session, world interpolation, scene
-  pong/           3D pong client — local + online modes; native bin + wasm lib
-  pong-core/      shared pong sim (deterministic, 60 Hz) + online JSON protocol
+  game/           the TCP arena client (ember-net stack): net session, world
+                  interpolation, scene — separate from the WebSocket shooter
+  pong/           the web client crate: BOTH the arena shooter and 3D pong,
+                  local + online; native bin + wasm lib
+  pong-core/      the shared deterministic 60 Hz sims — the arena shooter
+                  (shooter.rs) and pong (sim.rs) — plus their JSON protocol
   pong-server/    public matchmaking + match server (WebSocket, lobbies with
                   optional passwords, authoritative sim per match)
+  fire/           Fire Racer client: local + online; native bin + wasm lib
+  fire-core/      shared deterministic racing sim (track, car, laps) + its own
+                  protocol, versioned independently of pong-core's
+  fire-server/    Fire Racer matchmaking + race server (WebSocket)
+  ember-editor/   the native level builder: fly, place, move/rotate/scale,
+                  spawn points; its document is pong-core's Level
 web/              static page: menu, lobby browser, wasm game (GitHub Pages)
 deploy/           deploy-specht.sh (arena server) · deploy-pages.sh (web) ·
-                  deploy-pong-online.sh (pong server + tunnel + server.json)
+                  deploy-pong-online.sh (pong server + tunnel + server.json) ·
+                  deploy-fire-online.sh (fire server + its own tunnel)
 docs/             design documents (atw-first-rendering.md is adopted policy)
 ```
 
@@ -106,6 +116,14 @@ unreachable server makes launch pause ~4 s before the offline fallback.
       rig from the doc's §6 — F3 overlay (presenter-composited) with a
       scene-Hz throttle + frame-age/latency readouts; shaders hot-reload
       from disk on native
+- [x] **5.5 Authored levels + the graphics update (arena v13)**: the shooter
+      sim takes a `Level` off the wire instead of a seed, so the server names
+      one authored map ("Trench City") and every client builds the same
+      obstacles from it; `Obstacle` grows a bottom (`base`) and a cover
+      `kind`, which makes tunnels and stacked cover representable; the
+      renderer grows CPU-built mipmaps and per-frame fog; and the picture →
+      mesh → texture runbook that produced the map is checked in under
+      `tools/v13/` (`docs/asset-pipeline.md`, Path E)
 - [ ] 6. Offline asset compiler (glTF → baked blobs)
 - [ ] 7. GPU-driven rendering pass (bindless, culling in compute, indirect draws)
 - [ ] Game-specific systems — driven by the game design, step by step
@@ -147,31 +165,44 @@ The hub lists lobbies without loading a game bundle: the server lets any
 protocol version Hello + list, and enforces the live protocol only on
 create/join.
 
-## Pong
+## Arena Shooter
 
-**Play: <https://endersgamesdev.github.io/EmberEngine/>** — local (2 players, one
-keyboard: `A`/`D` vs `←`/`→`, first to 7) or **online matchmaking**: pick a
-handle, create a lobby (password optional) or join an open one from the
-list. The match server is authoritative (the shared deterministic 60 Hz sim
-in `crates/pong-core/src/sim.rs` runs server-side); clients stream inputs
-and interpolate 30 Hz state. Either key set steers your paddle online, and
-player 2 gets a flipped camera so they also play from "their" side.
+**Play: <https://endersgamesdev.github.io/EmberEngine/>** — pick Arena Shooter. First-person drop-in deathmatch for up to 8 players: WASD + mouse look, Space jump, Shift sprint, C crouch, RMB zoom, R reload, Q raises a shield that reflects the round back at the shooter, E is a melee that goes through a raised shield, and headshots kill outright.
 
-Online infrastructure: `pong-server` (WebSocket + JSON, `pong-core/proto.rs`)
-runs on specht bound to loopback, fronted by a **Cloudflare quick tunnel** —
-a free public `https://….trycloudflare.com` domain that CHANGES every time
-the tunnel restarts. `deploy/deploy-pong-online.sh` rebuilds + restarts
-server and tunnel, then publishes the fresh domain to `server.json` on the
-Pages site (fetched cache-busted, so the page always finds the current
-server; its `v` stamp also cache-busts the wasm bundle per deploy). Server
-log: `~/pong-server.log`, tunnel log: `~/cloudflared.log` on specht.
-Headless check: `cargo run -p pong-server --example wsbot -- <URL> create|join <LOBBY> [PW|-] [HANDLE] [SECS] [MODES]`.
-`MODES` is a comma-separated list of `shield`, `jump`, `nofire` — without it
-the bot never raises the shield or jumps, so a green run says nothing about
-either. Two bots, one plain and one `shield,nofire`, demonstrate a reflect.
+This is what "online" means in this repo. It runs on the WebSocket stack, not the TCP one: the shared deterministic 60 Hz sim is `crates/pong-core/src/shooter.rs` (the paddle sim in `sim.rs` is local pong only) and the authoritative server is `pong-server`. Clients predict their own movement against the same sim and reconcile against 30 Hz server state; **bullets are stepped server-side only**, which is why hit registration may use `f32` transcendentals at all.
 
-Native: `cargo run -p pong --bin pong-app` (local) or
-`pong-app online wss://… create|join LOBBY [PASSWORD|-] [HANDLE]`
+### v13 — Trench City
+
+v13 replaces the seeded box field with **one authored map every peer builds identically**. The server names it (`GameJoined.map`) and `Level::named` resolves it, so the next map is an additive string rather than another protocol bump.
+
+The map is a square in an old European city that is being fought over, four-fold symmetric, three concentric bands so eight players spread out instead of piling into one lane. The cover is real object classes rather than anonymous boxes:
+
+| Class | Height | What it does |
+|---|---|---|
+| `Container` | 2.6 (and one stacked pair at 5.2) | Closed 40-ft shipping container at real proportions. Hard cover, and its roof is high ground you cannot reach from the floor — the jump apex is 1.76. |
+| `Crate` | 1.2 | Wooden supply crate. A climbing step, and a **fire step** against a trench's outer wall: standing on one puts the eye at 2.65, over a 2.5 wall. |
+| `Ammo` | 0.55 | Ammunition box. The first step of every climbing chain: floor → ammo → crate → container roof. |
+| `Wall` | 2.5 | The trench lines. Two parallel walls with a 3 m corridor between them is a trench. |
+| `Roof` | base 2.5, top 2.9 | The first obstacle with a **bottom**. Walk under it, stand on it, and no round passes through it — a roofed trench section is a tunnel. **All four weapon pads are inside the tunnels.** |
+| `Sandbag`, `Rubble`, `Plinth` | 1.1 / 0.7 / 2.2 | Spawn cover, low cover, and the granite plinth under the bronze statue at the centre. |
+
+Around the square the client draws the city — a cathedral, a ring of Haussmann and art-nouveau façades, street lamps, burnt-out cars, and a golden-hour sky. All of it is client-only decor listed in the `Level`, so every client draws the same city; none of it is a collision volume. How the pictures and meshes were generated is `docs/asset-pipeline.md`, Path E, with the runbook checked in under `tools/v13/`.
+
+### What the protocol bump means for old builds
+
+The authored level is a protocol change, so `PROTO_VERSION` in `crates/pong-core/src/proto.rs` goes to **13**. It has to: a v12 client would predict its movement against the seeded boxes while the server resolved it against the trench city, so every wall would be either invisible or imaginary. That is the `CLAUDE.md` test — an old peer that "plays a different game" is a bump, not a `#[serde(default)]`.
+
+**The join gate is exact equality**, so the moment the server moves to 13 the frozen hub pages v7–v12 go **list-only**: they still see the lobby list (listing is ungated on purpose) but can no longer create or join, and they already say "archived" in the version picker. The lobby browser on the hub is unaffected — it sends `proto: 0` against `ListLobbies` and never loads a game bundle.
+
+The two sides deploy in this order, in one window: `deploy/deploy-pong-online.sh` (server first, so it speaks 13) and then `deploy/deploy-pages.sh` (which ships the staged v13 page and prints the bump warning it detects from `server.json`).
+
+### Running it
+
+Online infrastructure: `pong-server` (WebSocket + JSON, `pong-core/proto.rs`) runs on the game host bound to loopback, fronted by a **Cloudflare quick tunnel** — a free public `https://….trycloudflare.com` domain that CHANGES every time the tunnel restarts. `deploy/deploy-pong-online.sh` rebuilds + restarts server and tunnel, then publishes the fresh domain to `server.json` on the Pages site (fetched cache-busted, so the page always finds the current server; its `v` stamp also cache-busts the wasm bundle per deploy). Server log: `~/pong-server.log`, tunnel log: `~/cloudflared.log`.
+
+Headless check: `cargo run -p pong-server --example wsbot -- <URL> create|join <LOBBY> [PW|-] [HANDLE] [SECS] [MODES]`. `MODES` is a comma-separated list of `shield`, `jump`, `nofire` — without it the bot never raises the shield or jumps, so a green run says nothing about either. Two bots, one plain and one `shield,nofire`, demonstrate a reflect.
+
+Native: `cargo run -p pong --bin pong-app online wss://… create|join LOBBY [PASSWORD|-] [HANDLE]`
 
 Web build (needs `wasm32-unknown-unknown` target + `wasm-bindgen-cli`):
 
@@ -180,8 +211,13 @@ cargo build --target wasm32-unknown-unknown --release -p pong --lib
 wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/pong.wasm
 ```
 
-then publish `web/` to the `gh-pages` branch — or just run
-`bash deploy/deploy-pages.sh`, which does all of the above.
+then publish `web/` to the `gh-pages` branch — or just run `bash deploy/deploy-pages.sh`, which does all of the above.
+
+## Pong
+
+**Play: <https://endersgamesdev.github.io/EmberEngine/>** — pick Pong Classic. The first ember game, and today a **local two-player game only**: one keyboard, `A`/`D` against `←`/`→`, first to 7. There is no online pong; the paddle sim in `crates/pong-core/src/sim.rs` runs entirely in the client.
+
+Native: `cargo run -p pong --bin pong-app`. It ships in the same wasm bundle as the arena shooter, built by the commands above.
 
 ## Fire Racer
 

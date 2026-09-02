@@ -116,7 +116,7 @@
           First-person drop-in deathmatch in a generated arena. WASD + mouse look, Space jump, RMB zoom, R reload, Shift sprint, C crouch — crouching also shrinks your hitbox.
         </div>
         <div class="playrow">
-          <button onclick="location.href='games/arena/v12/'">Play Arena Shooter</button>
+          <button onclick="location.href='games/arena/v13/'">Play Arena Shooter</button>
         </div>
       </div>
       <div class="card">
@@ -282,7 +282,7 @@
     // Fallback for a failed games.json fetch. Must track the live version:
     // an older build speaks an older PROTO_VERSION, and the server refuses
     // a lobby on anything but an exact match.
-    let arenaLivePath = 'games/arena/v12/';
+    let arenaLivePath = 'games/arena/v13/';
     for (const g of catalog.games) {
       if (g.id === 'arena') {
         const live = g.versions.find((v) => v.live) || g.versions[0];

@@ -6,7 +6,7 @@
 #   index.html            games hub (lobby showcase + catalog)
 #   games.json            catalog — the newest version of each game is "live"
 #   server.json           {ws, v} — current tunnel domain + deploy stamp
-#   games/arena/v12/      live arena build (page + its own frozen pkg)
+#   games/arena/v13/      live arena build (page + its own frozen pkg)
 #   games/pong/v2/        live pong build (page + its own frozen pkg)
 #   games/fire/v2/        live fire racer build (castle circuit, online)
 #   games/pong/v1/        archived first web build (materialized from history)
@@ -37,7 +37,7 @@ PAGES_DIR="$(mktemp -d -t ember-pages-XXXX)"
 git worktree add "$PAGES_DIR" gh-pages
 
 # Live version dirs (older versions stay frozen on the branch untouched).
-ARENA_LIVE="games/arena/v12"
+ARENA_LIVE="games/arena/v13"
 PONG_LIVE="games/pong/v2"
 FIRE_LIVE="games/fire/v2"
 

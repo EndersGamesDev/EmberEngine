@@ -28,7 +28,8 @@ The workspace maintains two parallel, non-overlapping protocols: **TCP Arena Sho
     *   Transport: WebSocket (JSON).
     *   Format: Tagged enums (`C2S`, `S2C`) using `serde`.
     *   Purpose: Matchmaking, lobby management, and state synchronization for the Pong game and the arena shooter (in `pong`).
-    *   Key items: `LobbyInfo`, `PState`, `BState`, `PROTO_VERSION` (9), `STATE_EVERY_TICKS` (2).
+    *   Key items: `LobbyInfo`, `PState`, `BState`, `PROTO_VERSION` (13), `STATE_EVERY_TICKS` (2).
+    *   As of v13 the arena is an **authored `Level` named by the server** (`GameJoined.map`, resolved by `Level::named`) rather than a seed every peer regenerates, which is why the version moved: an old client would predict against a different set of obstacles than the server resolves against.
 
 ## ATW-first render flow
 

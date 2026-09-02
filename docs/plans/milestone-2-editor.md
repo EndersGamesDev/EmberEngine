@@ -30,6 +30,8 @@ A level builder and a character inspector, reachable from the hub beside the gam
 
 ## 3. Bites
 
+**Bite 12 is landing with arena v13** — `docs/plans/arena-v13-trench-city.md` is the plan of record for it: `Obstacle` gains `base` and `kind`, `Sim::from_level` replaces the seed path, `GameJoined` carries `map: String` resolved by `Level::named`, and `PROTO_VERSION` goes to 13. It ships with the v13 server redeploy rather than staying landed-but-unshipped, so read that document before touching the level format here.
+
 | # | Title | Gate |
 |---|---|---|
 | 1 | `ember-editor`: a native window you can fly around in — grid, three colour-overdriven world axes, static boxes | display |
