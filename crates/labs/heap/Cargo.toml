@@ -8,6 +8,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 bytemuck.workspace = true
+ember-lab-layer = { path = "../layer" }
 naga = { version = "24", features = ["wgsl-in"] }
 serde.workspace = true
 serde_json.workspace = true

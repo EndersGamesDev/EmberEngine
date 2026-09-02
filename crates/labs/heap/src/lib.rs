@@ -4,6 +4,7 @@ mod dialect;
 mod heap;
 #[cfg(any(test, target_arch = "wasm32"))]
 mod kernels;
+mod lattice;
 mod span;
 #[cfg(any(test, target_arch = "wasm32"))]
 mod spike;
@@ -16,6 +17,10 @@ pub use dialect::{
     PagePass, RegisteredKernel,
 };
 pub use heap::{Descriptor, Handle, HeapAllocator, HeapError, HeapKind, PackedDescriptor};
+pub use lattice::{
+    BOX_INDICES, BoxVertex, FrameUniform, MODE_A_ROTATION_KERNEL, ModeAEndpoint, ModeARecordSet,
+    box_vertices, frame_for, mode_a_endpoint, mode_a_records, mode_a_shader,
+};
 pub use span::{
     DataSpan, DeliveryPlan, DispatchHeader, PackedSpan, SpanArena, SpanDirectory, SpanError,
     StaticHeaders, WallTerm,
