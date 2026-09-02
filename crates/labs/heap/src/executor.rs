@@ -15,11 +15,11 @@ use std::sync::Arc;
 use thiserror::Error;
 use wgpu::util::DeviceExt as _;
 
+use crate::span::SpanIdentity;
 use crate::{
     DataSpan, DialectLimits, DispatchError, DispatchPlan, RegisteredKernel, SpanArena, SpanError,
     SpanPlan, StaticHeaders,
 };
-use crate::span::SpanIdentity;
 
 const RESOURCE_SLOTS: usize = 8;
 const RECORD_BYTES: usize = 16;
@@ -134,16 +134,11 @@ impl HeaderReservations {
         self.occupied.iter().filter(|occupied| !**occupied).count() as u32
     }
 
-    fn find(
-        &self,
-        executor: &Arc<()>,
-        headers: &[StaticHeaders],
-    ) -> Option<HeaderSetHandle> {
+    fn find(&self, executor: &Arc<()>, headers: &[StaticHeaders]) -> Option<HeaderSetHandle> {
         self.slots.iter().enumerate().find_map(|(slot, entry)| {
             let reservation = entry.reservation.as_ref()?;
-            (reservation.headers == headers).then(|| {
-                self.make_handle(executor, slot as u32, entry, reservation)
-            })
+            (reservation.headers == headers)
+                .then(|| self.make_handle(executor, slot as u32, entry, reservation))
         })
     }
 
@@ -222,16 +217,14 @@ impl HeaderReservations {
             });
         }
         if handle.set_count != reservation.headers.len() as u32
-            || handle.base_offset
-                != reservation.first_set * self.max_header_pages * self.stride
+            || handle.base_offset != reservation.first_set * self.max_header_pages * self.stride
             || handle.stride != self.stride
         {
             return Err(DispatchError::StaleHeaderSet);
         }
-        let absolute_offset = (reservation.first_set + selector.set)
-            * self.max_header_pages
-            * self.stride
-            + headers.offsets[selector.page as usize];
+        let absolute_offset =
+            (reservation.first_set + selector.set) * self.max_header_pages * self.stride
+                + headers.offsets[selector.page as usize];
         Ok((headers, absolute_offset))
     }
 
@@ -458,7 +451,9 @@ impl GpuKernelExecutor {
             .checked_mul(u64::from(config.max_header_pages))
             .and_then(|bytes| bytes.checked_mul(u64::from(config.max_header_sets)))
             .filter(|bytes| *bytes <= u64::from(u32::MAX))
-            .ok_or(ExecutorError::Contract("header buffer byte capacity overflow"))?;
+            .ok_or(ExecutorError::Contract(
+                "header buffer byte capacity overflow",
+            ))?;
         let header_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("heap executor static dispatch headers"),
             size: header_buffer_bytes,
@@ -677,11 +672,7 @@ impl GpuKernelExecutor {
     ///
     /// Returns exactly the typed failure that a real single-span allocation would return for the
     /// current buddy and directory state.
-    pub fn plan_span(
-        &self,
-        logical_len: u32,
-        page_side: u16,
-    ) -> Result<SpanPlan, SpanError> {
+    pub fn plan_span(&self, logical_len: u32, page_side: u16) -> Result<SpanPlan, SpanError> {
         self.arena.plan_span(logical_len, page_side)
     }
 
@@ -794,9 +785,7 @@ impl GpuKernelExecutor {
         if let Some(handle) = self.header_reservations.find(&self.header_owner, sets) {
             return Ok(handle);
         }
-        let handle = self
-            .header_reservations
-            .reserve(&self.header_owner, sets)?;
+        let handle = self.header_reservations.reserve(&self.header_owner, sets)?;
         let region_bytes = self.config.max_header_pages * self.header_stride;
         for (set, headers) in sets.iter().enumerate() {
             self.queue.write_buffer(
@@ -862,10 +851,7 @@ impl GpuKernelExecutor {
     /// # Errors
     ///
     /// Returns a typed header-reservation, resource, or stale-span error.
-    pub fn sync_dispatch(
-        &mut self,
-        dispatch: &ExecutorDispatch,
-    ) -> Result<(), ExecutorError> {
+    pub fn sync_dispatch(&mut self, dispatch: &ExecutorDispatch) -> Result<(), ExecutorError> {
         let headers = std::slice::from_ref(&dispatch.headers);
         let handle = self.reserve_header_sets(headers)?;
         self.compatibility_header = Some((dispatch.headers.clone(), handle));
@@ -957,23 +943,19 @@ impl GpuKernelExecutor {
         if kernel.id != dispatch.kernel_id {
             return Err(ExecutorError::Contract("dispatch kernel mismatch"));
         }
-        let (headers, absolute_offset) = self.header_reservations.resolve(
-            &self.header_owner,
-            header_sets,
-            selector,
-        )?;
+        let (headers, absolute_offset) =
+            self.header_reservations
+                .resolve(&self.header_owner, header_sets, selector)?;
         if headers != &dispatch.headers {
             return Err(DispatchError::HeaderMismatch.into());
         }
-        let page = dispatch
-            .plan
-            .passes
-            .get(selector.page as usize)
-            .ok_or(DispatchError::HeaderPageSelection {
+        let page = dispatch.plan.passes.get(selector.page as usize).ok_or(
+            DispatchError::HeaderPageSelection {
                 set: selector.set,
                 page: selector.page,
                 page_count: dispatch.plan.passes.len() as u32,
-            })?;
+            },
+        )?;
         self.encode_page(encoder, kernel, dispatch.page_side, page, absolute_offset)
     }
 

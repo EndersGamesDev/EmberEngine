@@ -472,10 +472,7 @@ impl SpanArena {
         Ok(())
     }
 
-    pub(crate) fn validate_header_owner(
-        &self,
-        identity: &SpanIdentity,
-    ) -> Result<(), SpanError> {
+    pub(crate) fn validate_header_owner(&self, identity: &SpanIdentity) -> Result<(), SpanError> {
         if !self.directory.contains(identity) {
             return Err(SpanError::DirectoryCorrupt);
         }
@@ -727,7 +724,11 @@ mod tests {
         let mut fragmented =
             SpanArena::new(8, 1, 64, 16 * 32 + 4 * 32, 32).expect("arena configuration fits");
         let blocks = (0..16)
-            .map(|_| fragmented.allocate_span(4, 2).expect("class-two block fits"))
+            .map(|_| {
+                fragmented
+                    .allocate_span(4, 2)
+                    .expect("class-two block fits")
+            })
             .collect::<Vec<_>>();
         for index in (0..blocks.len()).step_by(2) {
             fragmented
@@ -738,7 +739,11 @@ mod tests {
         let trial = fragmented.plan_span(16, 4);
         assert_eq!(snapshot(&fragmented), before);
         let mut real = fragmented.clone();
-        assert_eq!(trial, real.allocate_span(16, 4).map(|span| allocated_plan(&span, 4)));
+        assert_eq!(
+            trial,
+            real.allocate_span(16, 4)
+                .map(|span| allocated_plan(&span, 4))
+        );
 
         let mut directory =
             SpanArena::new(8, 1, 64, 16 * 8 + 4 * 6, 8).expect("arena configuration fits");
@@ -752,7 +757,11 @@ mod tests {
         assert_eq!(trial, Err(SpanError::PageDirectoryFull));
         assert_eq!(snapshot(&directory), before);
         let mut real = directory.clone();
-        assert_eq!(trial, real.allocate_span(12, 2).map(|span| allocated_plan(&span, 2)));
+        assert_eq!(
+            trial,
+            real.allocate_span(12, 2)
+                .map(|span| allocated_plan(&span, 2))
+        );
     }
 
     #[test]

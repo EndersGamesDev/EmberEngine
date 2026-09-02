@@ -44,8 +44,8 @@ pub use lattice::{
 };
 #[cfg(target_arch = "wasm32")]
 pub use lattice_gpu::{
-    cancel_heap_lattice, conform_heap_lattice_json, measure_heap_lattice_batch_json,
-    install_heap_lattice_panic_hook, render_heap_lattice_frame_json, select_heap_lattice_json,
+    cancel_heap_lattice, conform_heap_lattice_json, install_heap_lattice_panic_hook,
+    measure_heap_lattice_batch_json, render_heap_lattice_frame_json, select_heap_lattice_json,
     start_heap_lattice, take_heap_lattice_panic,
 };
 pub use mode_c::{
