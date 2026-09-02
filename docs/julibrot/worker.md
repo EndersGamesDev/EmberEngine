@@ -420,7 +420,7 @@ Phase 4 adds fixed-policy credit/token-bucket shaping, facts snapshots, app/kern
 
 The worker slice is therefore budgeted at about 2,060 implementation and test lines; generated wasm glue and downstream app, kernel, heap, and presentation code are excluded.
 
-Implementation progress through Phase 2: the pinned wire codec, four-slot ownership model, same-thread channel, Copy-cell owner, two drains, generation checks, accepted-reference shift publication, compact registry, canonical Astro-float adapter, and cooperatively cancellable validated reference task are implemented; `WorkerMode::WebWorker` returns a typed startup refusal until Phase 3.
+Implementation stop after Phase 2: the pinned wire codec, four-slot ownership model, same-thread channel, Copy-cell owner, two drains, generation checks, accepted-reference shift publication, compact registry, canonical Astro-float adapter, and cooperatively cancellable validated reference task are implemented; Phase 3 cannot install the field-paid heap panic reporter because `lattice_gpu::install_heap_lattice_panic_hook` is inside a private module and is not re-exported by `ember-lab-heap`, while copying or independently replacing it is forbidden.
 
 ## 8. Unresolved joint-review findings
 
@@ -429,3 +429,4 @@ Implementation progress through Phase 2: the pinned wire codec, four-slot owners
 - Successive accepted references may arrive before present promotes a retained scene; app and present must prove that composing queued `reference_shift_px` values re-bases that scene exactly once.
 - Browser transfer proves detachment and trailer continuity but cannot reveal an engine-internal physical copy; evidence must keep the claim at ownership transfer plus one explicit wasm memcpy.
 - Coarse `performance.now` resolution can yield a measured zero for short shallow references; implementation must choose and label a timer-unavailable shaping state without inventing elapsed time.
+- Phase 3 requires `ember_lab_heap::install_heap_lattice_panic_hook` as a public wasm32 re-export before `worker_main` can satisfy the inherited panic-hook law without copying heap behavior.
