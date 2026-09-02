@@ -1,6 +1,7 @@
 use thiserror::Error;
 
-use crate::{DEBUG_TINT, PaletteRecord, shade_escape_record};
+use crate::palette::DEBUG_TINT;
+use crate::{PaletteRecord, shade_escape_record};
 
 const GOLDEN_RATIO: f64 = 1.618_033_988_749_895;
 
