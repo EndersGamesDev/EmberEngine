@@ -363,6 +363,10 @@ impl OwnerEndpoint {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "the matching wasm accessor can refuse a browser backend without trapping"
+    )]
     const fn queue_core(&self) -> Option<&Rc<RefCell<ChannelCore>>> {
         match &self.backend {
             OwnerBackend::Queue(core) => Some(core),
