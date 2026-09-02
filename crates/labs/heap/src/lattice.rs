@@ -1,9 +1,7 @@
 //! Algebraic lattice records, frame layout, indexed box, and Mode A shaders.
 
 use bytemuck::{Pod, Zeroable};
-use ember_lab_layer::geometry::{
-    LATTICE_SPACING, Prism, lattice_coordinate, lattice_fifth_range,
-};
+use ember_lab_layer::geometry::{LATTICE_SPACING, Prism, lattice_coordinate, lattice_fifth_range};
 
 use crate::DialectLimits;
 
@@ -74,8 +72,8 @@ pub struct BoxVertex {
 
 /// Twelve triangles over the eight unique box corners.
 pub const BOX_INDICES: [u16; 36] = [
-    0, 2, 3, 0, 3, 1, 4, 5, 7, 4, 7, 6, 0, 1, 5, 0, 5, 4, 2, 6, 7, 2, 7, 3, 0, 4, 6, 0, 6,
-    2, 1, 3, 7, 1, 7, 5,
+    0, 2, 3, 0, 3, 1, 4, 5, 7, 4, 7, 6, 0, 1, 5, 0, 5, 4, 2, 6, 7, 2, 7, 3, 0, 4, 6, 0, 6, 2, 1, 3,
+    7, 1, 7, 5,
 ];
 
 /// Static DATA records uploaded once at scene construction.
@@ -261,8 +259,8 @@ pub fn mode_a_shader(limits: DialectLimits) -> String {
 #[cfg(test)]
 mod tests {
     use ember_lab_layer::geometry::{
-        EDGES_PER_COPY, LATTICE_SPACING, assert_invariants, lattice_edge_count, lattice_steps, prism,
-        project_gpu_path,
+        EDGES_PER_COPY, LATTICE_SPACING, assert_invariants, lattice_edge_count, lattice_steps,
+        prism, project_gpu_path,
     };
 
     use super::{
@@ -276,7 +274,10 @@ mod tests {
         assert_invariants();
         let object = prism();
         let records = mode_a_records(&object);
-        assert_eq!((records.base_four.len(), records.base_fifth.len()), (1_200, 1_200));
+        assert_eq!(
+            (records.base_four.len(), records.base_fifth.len()),
+            (1_200, 1_200)
+        );
         assert_eq!(records.edges.len(), 3_000);
         assert_eq!(size_of::<FrameUniform>(), 192);
         assert_eq!((box_vertices().len(), BOX_INDICES.len()), (8, 36));
@@ -317,7 +318,10 @@ mod tests {
         let first = mode_a_endpoint([1.0, 0.0, 1.0, 1.0, 1.0], [0; 5], &frame);
         let second = mode_a_endpoint([0.0, 1.0, 1.0, 1.0, 1.0], [0; 5], &frame);
         let sum = mode_a_endpoint([1.0, 1.0, 2.0, 2.0, 2.0], [0; 5], &frame);
-        assert_ne!(sum.point, std::array::from_fn(|axis| first.point[axis] + second.point[axis]));
+        assert_ne!(
+            sum.point,
+            std::array::from_fn(|axis| first.point[axis] + second.point[axis])
+        );
         let rejected = mode_a_endpoint([0.0, 0.0, 0.0, 0.0, 8.0], [0; 5], &frame);
         assert!(!rejected.valid);
     }
