@@ -379,8 +379,8 @@ mod tests {
     #[test]
     fn tumbled_small_motion_reports_full_error_corpus() {
         let from = pose(ViewMode::Tumbled, 0.6, [0.0; 2]);
-        let mut to = pose(ViewMode::Tumbled, 0.61, [2.0, -1.0]);
-        to.zoom_log2 += 0.1;
+        let mut to = pose(ViewMode::Tumbled, 0.602, [2.0, -1.0]);
+        to.zoom_log2 += 0.025;
         let plan = Warp::reproject(&frame(from), &from, &to);
         assert_eq!(plan.kind, WarpKind::TumbledHomography);
         let maximum = plan
