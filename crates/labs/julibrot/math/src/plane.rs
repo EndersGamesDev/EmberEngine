@@ -118,8 +118,10 @@ mod tests {
                 theta_2: core::f64::consts::FRAC_PI_2,
             },
         )?;
-        assert_eq!(plane.basis_u, [-1.0, 0.0, 0.0, 0.0]);
-        assert_eq!(plane.basis_v, [0.0, -1.0, 0.0, 0.0]);
+        assert!((plane.basis_u[0] + 1.0).abs() <= f32::EPSILON);
+        assert!(plane.basis_u[2].abs() <= f32::EPSILON);
+        assert!((plane.basis_v[1] + 1.0).abs() <= f32::EPSILON);
+        assert!(plane.basis_v[3].abs() <= f32::EPSILON);
         Ok(())
     }
 

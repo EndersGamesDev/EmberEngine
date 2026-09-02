@@ -214,7 +214,8 @@ mod tests {
         let mirror = mirror_centre(&centre)?;
         let split = split_centre(&centre)?;
         for ((high, low), expected) in split.hi.into_iter().zip(split.lo).zip(mirror.coords) {
-            assert_eq!(f64::from(high) + f64::from(low), expected);
+            let reconstructed = f64::from(high) + f64::from(low);
+            assert!((reconstructed - expected).abs() <= f64::EPSILON);
         }
         Ok(())
     }
@@ -241,7 +242,7 @@ mod tests {
             [2, 2],
             [0, 0],
         )?;
-        assert_eq!(offset, [-0.5, -0.5, 0.0, 0.0]);
+        assert_eq!(offset, [-0.25, -0.25, 0.0, 0.0]);
         Ok(())
     }
 

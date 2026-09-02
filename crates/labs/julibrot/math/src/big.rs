@@ -298,13 +298,21 @@ pub fn encode_big_scalar(value: &BigScalar) -> Result<EncodedBigScalar, MathErro
         });
     }
     let mut constants = Consts::new().map_err(|_| MathError::BigFloat)?;
-    let (sign, digits, radix_exponent) = value
+    let (sign, digits, mut radix_exponent) = value
         .value
         .convert_to_radix(Radix::Bin, RoundingMode::None, &mut constants)
         .map_err(|_| MathError::BigFloat)?;
-    if digits.first() != Some(&1) || digits.iter().any(|digit| *digit > 1) {
+    if digits.iter().any(|digit| *digit > 1) {
         return Err(MathError::InvalidCentreEncoding);
     }
+    let leading_zeros = digits
+        .iter()
+        .position(|digit| *digit == 1)
+        .ok_or(MathError::InvalidCentreEncoding)?;
+    radix_exponent = radix_exponent
+        .checked_sub(i32::try_from(leading_zeros).map_err(|_| MathError::CounterOverflow)?)
+        .ok_or(MathError::InvalidCentreEncoding)?;
+    let digits = &digits[leading_zeros..];
     let digit_count = i32::try_from(digits.len()).map_err(|_| MathError::CounterOverflow)?;
     let exponent = radix_exponent
         .checked_sub(digit_count)
