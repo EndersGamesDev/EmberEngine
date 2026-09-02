@@ -1,6 +1,6 @@
 # GPU resource heap
 
-Status: design contract for `ember-lab-heap`; the prototype is evidence for the WebGL2 lowering, not an engine integration proposal.
+Status: implemented contract for `ember-lab-heap`; the prototype is first evidence for the WebGL2 lowering, browser numbers still require visible replay, and this remains outside the engine.
 
 ## 1. What this is and is not
 
