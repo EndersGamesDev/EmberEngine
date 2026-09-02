@@ -84,7 +84,8 @@ pub fn inverse_identity_error(forward: [f64; 9], inverse: [f64; 9]) -> f64 {
             let mut value = 0.0;
             let mut inner = 0;
             while inner < 3 {
-                value += inverse[row * 3 + inner] * forward[inner * 3 + column];
+                value = inverse[row * 3 + inner]
+                    .mul_add(forward[inner * 3 + column], value);
                 inner += 1;
             }
             let expected = if row == column { 1.0 } else { 0.0 };
@@ -101,7 +102,9 @@ pub fn inverse_identity_error(forward: [f64; 9], inverse: [f64; 9]) -> f64 {
 #[allow(clippy::cast_possible_truncation)]
 pub fn pack_homography_rows(forward: [f64; 9]) -> Option<[[f32; 4]; 3]> {
     let mut rows = [[0.0; 4]; 3];
-    for (destination, source) in rows.iter_mut().zip(forward.chunks_exact(3)) {
+    let (source_rows, remainder) = forward.as_chunks::<3>();
+    debug_assert!(remainder.is_empty());
+    for (destination, source) in rows.iter_mut().zip(source_rows) {
         for (packed, value) in destination[..3].iter_mut().zip(source) {
             *packed = *value as f32;
             if !packed.is_finite() {
@@ -120,7 +123,12 @@ mod tests {
 
     #[test]
     fn solver_recovers_an_affine_pan_and_zoom() {
-        let source = CORNERS.map(|[x, y]| [0.5 * x + 0.25, 2.0 * y - 0.125]);
+        let source = CORNERS.map(|[x, y]| {
+            [
+                0.5_f64.mul_add(x, 0.25),
+                2.0_f64.mul_add(y, -0.125),
+            ]
+        });
         let matrix = solve_homography(CORNERS, source).expect("independent corners");
         for (destination, expected) in CORNERS.into_iter().zip(source) {
             let actual = apply_homography(matrix, destination).expect("finite affine result");

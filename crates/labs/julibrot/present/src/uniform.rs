@@ -72,6 +72,10 @@ pub enum PresentDataError {
 }
 
 /// Computes the dynamic-uniform stride for one 128-byte payload.
+///
+/// # Errors
+///
+/// Returns an error for zero alignment or checked byte-arithmetic overflow.
 pub fn hot_stride(alignment: u32) -> Result<u32, PresentDataError> {
     if alignment == 0 {
         return Err(PresentDataError::ZeroAlignment);
@@ -83,6 +87,10 @@ pub fn hot_stride(alignment: u32) -> Result<u32, PresentDataError> {
 }
 
 /// Computes the exact allocation size of the three-slot HOT ring.
+///
+/// # Errors
+///
+/// Returns an error when the stride is invalid or the ring size overflows.
 pub fn hot_ring_bytes(alignment: u32) -> Result<u32, PresentDataError> {
     hot_stride(alignment)?
         .checked_mul(HOT_RING_SLOTS)
@@ -99,12 +107,16 @@ pub struct HotSlot {
 
 impl HotSlot {
     /// Selects `refresh_id mod 3` using a previously validated stride.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a short or misaligned stride or checked offset overflow.
     pub fn for_refresh(
         refresh_id: u64,
         slot_stride: u32,
         epoch: u64,
     ) -> Result<Self, PresentDataError> {
-        if slot_stride < HOT_PAYLOAD_BYTES || slot_stride % 16 != 0 {
+        if slot_stride < HOT_PAYLOAD_BYTES || !slot_stride.is_multiple_of(16) {
             return Err(PresentDataError::InvalidStride(slot_stride));
         }
         let index = u32::try_from(refresh_id % u64::from(HOT_RING_SLOTS))
@@ -140,6 +152,10 @@ impl HotSlot {
 
 impl SceneUniform {
     /// Packs one checked scene record without sampling an inactive span suffix.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the extent is empty, overflows, or exceeds the span length.
     pub fn new(
         extent: [u32; 2],
         level: u32,
