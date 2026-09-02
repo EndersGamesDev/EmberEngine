@@ -3,11 +3,16 @@
 #![deny(missing_docs)]
 
 mod homography;
+mod mesh;
 mod palette;
 mod uniform;
 
 pub use homography::{
     apply_homography, inverse_identity_error, pack_homography_rows, solve_homography,
+};
+pub use mesh::{
+    HeightSample, MeshError, display_coordinate, height_for_record, tumbled_index_count,
+    tumbled_indices, view_rotation,
 };
 pub use palette::{
     CLASSIC_PALETTE, EMBER_PALETTE, ICE_PALETTE, PaletteId, PaletteOutcome, PaletteRecord, palette,

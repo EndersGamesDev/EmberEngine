@@ -1127,6 +1127,7 @@ name = "ember-julibrot-present"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "ember-lab-heap",
  "naga",
  "thiserror 2.0.20",
 ]
