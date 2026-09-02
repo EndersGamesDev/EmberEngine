@@ -99,6 +99,7 @@ impl WorkerChannel {
             closed: false,
             credit: CreditAccount::new(),
             shaper: ProducerShaper::new(),
+            pending_producer_credits: BoundedQueue::new(),
             facts: WorkerFacts::initial(mode),
             orbit_leases: 0,
         }));
@@ -323,7 +324,15 @@ impl ProducerEndpoint {
     ///
     /// Returns `TimingOverflow` if producer time moves backwards.
     pub fn admit(&self, producer_now_us: u64) -> Result<Admission, ChannelError> {
-        self.core.borrow_mut().shaper.admit(producer_now_us)
+        let mut core = self.core.borrow_mut();
+        while let Some(returned) = core.pending_producer_credits.pop() {
+            core.shaper.observe_return(
+                producer_now_us,
+                returned.credit_us,
+                returned.compute_us,
+            )?;
+        }
+        core.shaper.admit(producer_now_us)
     }
 
     /// Returns the shared page-visible accounting from the producer endpoint.
@@ -479,7 +488,7 @@ impl OrbitLease {
         header.credit_us = charge.credit_us;
         buffer.write_header(header)?;
         core.record_credit(old, disposition, charge.overfeed_us);
-        core.return_to_producer(buffer, kind, owner_now_us)
+        core.return_to_producer(buffer, kind)
     }
 }
 
@@ -508,6 +517,7 @@ struct ChannelCore {
     closed: bool,
     credit: CreditAccount,
     shaper: ProducerShaper,
+    pending_producer_credits: BoundedQueue<ReturnedCredit>,
     facts: WorkerFacts,
     orbit_leases: u32,
 }
@@ -576,7 +586,6 @@ impl ChannelCore {
         &mut self,
         buffer: WireBuffer,
         kind: MessageKind,
-        producer_now_us: u64,
     ) -> Result<(), ChannelError> {
         let id = id_for(&buffer)?;
         let header = buffer.header()?;
@@ -586,8 +595,12 @@ impl ChannelCore {
             .push(buffer)
             .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, id.slot, 0, 0))?;
         self.orbit_leases = self.orbit_leases.saturating_sub(1);
-        self.shaper
-            .observe_return(producer_now_us, header.credit_us, header.compute_us)?;
+        self.pending_producer_credits
+            .push(ReturnedCredit {
+                credit_us: header.credit_us,
+                compute_us: header.compute_us,
+            })
+            .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, id.slot, 0, 0))?;
         self.pump_pending();
         self.bump_facts();
         self.refresh_facts();
@@ -636,6 +649,7 @@ impl ChannelCore {
         self.orbit_producer = orbit_producer;
         self.config.max_iter = max_iter;
         self.shaper.reset_for_resize();
+        self.pending_producer_credits = BoundedQueue::new();
         self.facts.allocation_events = self.facts.allocation_events.saturating_add(1);
         self.bump_facts();
         self.refresh_facts();
@@ -684,6 +698,12 @@ impl ChannelCore {
             self.last_error = Some(ChannelError::new(ErrorCode::EpochExhausted, 0, 0, 0));
         }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ReturnedCredit {
+    credit_us: u32,
+    compute_us: u32,
 }
 
 fn id_for(buffer: &WireBuffer) -> Result<SlotId, ChannelError> {
@@ -872,6 +892,30 @@ mod tests {
         assert!(matches!(
             producer.admit(5).unwrap(),
             Admission::Ready { warm_up: true, .. }
+        ));
+    }
+
+    #[test]
+    fn owner_and_producer_clock_origins_are_independent() {
+        let (owner, producer) =
+            WorkerChannel::new(WorkerConfig { max_iter: 64 }, WorkerMode::SameThread).unwrap();
+        assert!(matches!(
+            producer.admit(5_000_000).unwrap(),
+            Admission::Ready { warm_up: true, .. }
+        ));
+        assert_eq!(owner.submit(request(3, 4)), SubmitOutcome::Transferred);
+        let lease = producer.next_request().unwrap().unwrap();
+        producer
+            .complete(lease, &[zero_record()], 64, 20_000, 250_000)
+            .unwrap();
+        let mut response = owner.next_arrival().unwrap();
+        response
+            .records
+            .return_credit(OrbitDisposition::Applied, 10)
+            .unwrap();
+        assert!(matches!(
+            producer.admit(5_000_100).unwrap(),
+            Admission::Ready { warm_up: false, .. }
         ));
     }
 
