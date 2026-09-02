@@ -171,6 +171,16 @@ Every page carries a small chip in its header naming the host it is on, its buil
 
    Send the resulting `host.json` URL over once; after that every update is yours alone and needs nobody's permission. `EMBER_PUBLISH=upstream` publishes straight into our book instead (needs push rights), and the default, `none`, prints the entry it *would* publish and changes nothing — useful for a dry run.
 
+4. **From this Windows workstation, natively** - no WSL here, and a Rust toolchain on the box:
+
+   ```
+   bash deploy/deploy-arena-local.sh          # build, start, prove on loopback and through the tunnel, publish
+   bash deploy/deploy-arena-local.sh status
+   bash deploy/deploy-arena-local.sh down
+   ```
+
+   The arena only. It reuses `host-name.sh` and `publish-host.sh` and stamps the build the way `host.sh` does, so its entry in the book is indistinguishable from a Linux host's; what it lacks is anything that restarts it after a sleep or a reboot. It exists because the day v13 was ready, specht's sshd had stopped answering and no other host carried a toolchain.
+
 **Picking or keeping a version.** `EMBER_REF` says which commit a host runs. The ssh deploys default to `HEAD`; `host.sh` defaults to `origin/main`. Pin one deliberately with `EMBER_REF=v12 bash deploy/host.sh up`. This is the point of the whole scheme: a host that stays on an older commit keeps the frozen pages of that era playable, because those pages find the hosts on their own protocol while the live page keeps landing on the newest build. Everything a deploy publishes — version, commit, protocol number — is read from that ref and never from the working tree, so a host can never advertise a build it is not running.
 
 **How updates flow.** Three routes, and they do not fight:
