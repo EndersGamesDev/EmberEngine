@@ -74,13 +74,13 @@ WebGPU lowers the descriptor table to a read-only storage buffer today and may l
 
 The dual entry's leaked-differences ledger format is retained here: every divergence names the semantic invariant, both physical lowerings, the observable cost, and the conformance oracle.
 
-| Semantic invariant | WebGL2 lowering | WebGPU lowering | Observable leak | Oracle |
-|---|---|---|---|---|
-| Descriptor lookup | 16-byte UBO record | 16-byte storage-buffer record | UBO capacity is at least 1,024 and commonly 4,096; storage capacity is much larger | Pack/decode round trip and identical sampled coordinates |
-| Resource selection | Two fixed texture arrays | Texture arrays today; future binding arrays | Per-heap format/filter uniformity remains on WebGL2 | CPU reference color for every descriptor edge and layer |
-| Generation safety | CPU debug check; no shader fetch | CPU debug check; optional storage-buffer generation field | Shader stale-handle rejection is absent in this prototype | Allocator generation-reuse test and typed stale error |
-| Completion | Four-byte MAP_READ fence plus explicit `device.poll` yield loop | Four-byte MAP_READ fence; browser backend normally progresses mappings | Polling semantics and latency differ; `on_submitted_work_done` is forbidden on browser WebGPU | Deadline-bounded fence completion and generation cancellation |
-| Capacity | Live array, UBO, and configured byte walls | Live array and storage-buffer walls | Requested distinct resources may be delivered cyclically on WebGL2 | Runtime wall arithmetic displayed beside every step |
+|Semantic invariant|WebGL2 lowering|WebGPU lowering|Observable leak|Oracle|
+|------------------|---------------|---------------|---------------|------|
+|Descriptor lookup|16-byte UBO record|16-byte storage-buffer record|UBO capacity is at least 1,024 and commonly 4,096; storage capacity is much larger|Pack/decode round trip and identical sampled coordinates|
+|Resource selection|Two fixed texture arrays|Texture arrays today; future binding arrays|Per-heap format/filter uniformity remains on WebGL2|CPU reference color for every descriptor edge and layer|
+|Generation safety|CPU debug check; no shader fetch|CPU debug check; optional storage-buffer generation field|Shader stale-handle rejection is absent in this prototype|Allocator generation-reuse test and typed stale error|
+|Completion|Four-byte MAP_READ fence plus explicit `device.poll` yield loop|Four-byte MAP_READ fence; browser backend normally progresses mappings|Polling semantics and latency differ; `on_submitted_work_done` is forbidden on browser WebGPU|Deadline-bounded fence completion and generation cancellation|
+|Capacity|Live array, UBO, and configured byte walls|Live array and storage-buffer walls|Requested distinct resources may be delivered cyclically on WebGL2|Runtime wall arithmetic displayed beside every step|
 
 ## 7. Update paths and costs
 

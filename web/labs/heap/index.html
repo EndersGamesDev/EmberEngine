@@ -4,12 +4,297 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>GPU resource heap lab</title>
+  <style>
+    :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #070910; color: #edf4ff; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 18% -15%, #243553, #070910 55%); }
+    header { padding: 1rem clamp(1rem, 3vw, 2.4rem); border-bottom: 1px solid #ffffff1a; }
+    h1, h2 { margin: 0; font-family: system-ui, sans-serif; }
+    h1 { font-size: clamp(1.2rem, 3vw, 2rem); }
+    h2 { font-size: 1.05rem; }
+    p { max-width: 84rem; color: #aebbd0; line-height: 1.55; }
+    main { display: grid; gap: 1rem; padding: 1rem clamp(1rem, 3vw, 2.4rem) 2rem; }
+    section { padding: 1rem; border: 1px solid #ffffff1c; border-radius: .55rem; background: #0b101bd9; }
+    .controls { display: flex; flex-wrap: wrap; gap: .55rem; margin: .8rem 0; }
+    button { padding: .5rem .7rem; color: #edf4ff; background: #151f30; border: 1px solid #48617f; border-radius: .35rem; font: inherit; cursor: pointer; }
+    button.selected { color: #06100b; background: #8be0b1; border-color: #8be0b1; }
+    button:disabled { opacity: .45; cursor: default; }
+    canvas { display: block; width: min(100%, 960px); aspect-ratio: 16 / 9; border: 1px solid #ffffff1d; background: #03050a; image-rendering: auto; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: .65rem; margin-top: .75rem; }
+    .card { padding: .7rem; border: 1px solid #ffffff16; border-radius: .4rem; background: #070b13; min-height: 7.6rem; }
+    .card strong { color: #8be0b1; }
+    .metric { color: #c8d5e8; line-height: 1.55; overflow-wrap: anywhere; }
+    .status { min-height: 2.4rem; color: #9edbb9; line-height: 1.5; }
+    .failed { color: #ff9d9d; }
+    pre { max-height: 25rem; overflow: auto; padding: .75rem; background: #050810; border: 1px solid #ffffff12; color: #9fb0c7; white-space: pre-wrap; }
+    code { color: #dce9fb; }
+    footer { padding: 0 clamp(1rem, 3vw, 2.4rem) 2rem; color: #8796aa; line-height: 1.55; }
+  </style>
 </head>
 <body>
-  <main id="app">GPU resource heap lab skeleton</main>
+  <header>
+    <h1>Descriptor-heap effect on WebGL2</h1>
+    <p>One immutable heap bind group, integer handles, two finite texture arrays, and no bindless claim. Every step renders immediately; mapped-fence measurement is opportunistic, cancellable, and reported separately from capacity arithmetic.</p>
+  </header>
+  <main>
+    <section>
+      <h2>Benchmark A · heap-fetch overhead</h2>
+      <p>Each base invocation shades a 512×512 RGBA8 target and performs 16 dependent nearest RGBA32F loads per fragment: 4,194,304 payload loads. Direct binds one 64×64 texture; heap reads descriptor 1, maps the same coordinates, and loads a DATA array layer.</p>
+      <div class="controls"><button id="run-a" type="button">Measure direct + heap</button></div>
+      <div id="status-a" class="status">requires visible replay · timer probe pending</div>
+      <div class="cards">
+        <div class="card"><strong>Direct-bound texture</strong><div id="a-direct" class="metric">median — · p95 — · requires visible replay</div></div>
+        <div class="card"><strong>Descriptor-indirect heap</strong><div id="a-heap" class="metric">median — · p95 — · requires visible replay</div></div>
+      </div>
+    </section>
+    <section>
+      <h2>Benchmark B · many small draws</h2>
+      <p>Both arms issue exactly N three-vertex draw calls. Traditional performs a 16-byte uniform write and bind-group/one-texel-texture switch per draw. Heap binds once, writes one 16-byte frame uniform, and transports handles through a static instance buffer.</p>
+      <div class="controls" id="steps">
+        <button type="button" data-draws="16" class="selected">16 draws</button>
+        <button type="button" data-draws="64">64 draws</button>
+        <button type="button" data-draws="256">256 draws</button>
+        <button type="button" data-draws="1024">1,024 draws</button>
+        <button type="button" data-draws="4096">4,096 draws</button>
+      </div>
+      <div class="controls" id="modes">
+        <button type="button" data-mode="traditional">Traditional</button>
+        <button type="button" data-mode="heap" class="selected">Heap</button>
+        <button id="measure-b" type="button">Measure selected arm</button>
+      </div>
+      <div id="wall" class="metric">requested/delivered wall pending initialization</div>
+      <div id="status-b" class="status">requires visible replay</div>
+      <canvas id="canvas" width="960" height="540"></canvas>
+      <div class="cards">
+        <div class="card"><strong>Traditional</strong><div id="b-traditional" class="metric">median — · p95 — · requires visible replay</div></div>
+        <div class="card"><strong>Heap</strong><div id="b-heap" class="metric">median — · p95 — · requires visible replay</div></div>
+      </div>
+    </section>
+    <section>
+      <h2>Runtime walls and lowering facts</h2>
+      <pre id="facts">loading versioned wasm…</pre>
+    </section>
+  </main>
+  <footer>Primary timing is CPU encode/write plus queue submit through an ordered four-byte MAP_READ fence. The WebGL2 backend explicitly calls <code>device.poll(Poll)</code> in a zero-timeout yield loop; every wait expires after 4,000 ms. Three warmups precede 15 samples, and each recorded sample adaptively repeats until its batch spans at least 32 measured <code>performance.now()</code> quanta. Median and p95 are visible-run observations, not admission gates. GPU timestamp results remain absent unless the selected backend path actually uses an exposed query feature.</footer>
   <script type="module">
-    import init from "./pkg/ember_lab_heap.js?v=1";
-    await init({ module_or_path: new URL("./pkg/ember_lab_heap_bg.wasm?v=1", import.meta.url) });
+    import init, {
+      cancel_heap_measurement,
+      measure_heap_fetch_json,
+      measure_many_draws_json,
+      render_heap_step_json,
+      start_heap,
+    } from "./pkg/ember_lab_heap.js?v=2";
+
+    const SAMPLE_COUNT = 15;
+    const WARMUPS = 3;
+    const TARGET_QUANTA = 32;
+    const MAX_REPEATS = 4096;
+    const MAX_BATCH_TARGET_MS = 250;
+    const SUITE_BUDGET_MS = 30000;
+    const TIMER_MAX_READS = 4000000;
+    const TIMER_TRANSITIONS = 32;
+    const TIMER_MAX_WALL_MS = 500;
+    const canvas = document.querySelector("#canvas");
+    const facts = document.querySelector("#facts");
+    const wall = document.querySelector("#wall");
+    const statusA = document.querySelector("#status-a");
+    const statusB = document.querySelector("#status-b");
+    const runA = document.querySelector("#run-a");
+    const measureB = document.querySelector("#measure-b");
+    let requestedDraws = 16;
+    let selectedMode = "heap";
+    let pageGeneration = 0;
+    let timerQuantum = null;
+    let currentReport = null;
+
+    const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+    const failureText = error => error instanceof Error ? error.message : String(error);
+    const formatInteger = value => Number(value).toLocaleString("en-US");
+    const formatBytes = value => `${formatInteger(value)} B`;
+
+    function probeTimer() {
+      const positive = [];
+      let previous = performance.now();
+      let reads = 0;
+      let equal = 0;
+      let backwards = 0;
+      const wallStarted = Date.now();
+      while (reads < TIMER_MAX_READS && positive.length < TIMER_TRANSITIONS) {
+        const current = performance.now();
+        const delta = current - previous;
+        if (delta > 0) positive.push(delta);
+        else if (delta === 0) equal += 1;
+        else backwards += 1;
+        previous = current;
+        reads += 1;
+        if (reads % 4096 === 0 && Date.now() - wallStarted >= TIMER_MAX_WALL_MS) break;
+      }
+      return { quantum: positive.length ? Math.min(...positive) : null, reads, equal, backwards };
+    }
+
+    function summarize(samples) {
+      if (!samples.length) return null;
+      const sorted = [...samples].sort((left, right) => left - right);
+      return {
+        median: sorted[Math.floor(sorted.length / 2)],
+        p95: sorted[Math.max(0, Math.ceil(sorted.length * 0.95) - 1)],
+      };
+    }
+
+    function showSamples(element, samples, repeats, detail) {
+      const summary = summarize(samples);
+      element.innerHTML = summary
+        ? `median <strong>${summary.median.toFixed(4)} ms</strong> · p95 <strong>${summary.p95.toFixed(4)} ms</strong><br>${samples.length}/${SAMPLE_COUNT} samples · repeats ${repeats.join(", ")}<br>${detail}`
+        : `median — · p95 — · requires visible replay<br>${detail}`;
+    }
+
+    async function adaptiveMeasure(label, invoke, token, onProgress) {
+      if (!Number.isFinite(timerQuantum) || timerQuantum <= 0) throw new Error("bounded timer probe observed no positive performance.now() transition");
+      const targetMs = timerQuantum * TARGET_QUANTA;
+      if (targetMs > MAX_BATCH_TARGET_MS) throw new Error(`${TARGET_QUANTA}-quantum target ${targetMs} ms exceeds ${MAX_BATCH_TARGET_MS} ms cap`);
+      for (let warmup = 0; warmup < WARMUPS; warmup += 1) {
+        if (token !== pageGeneration) throw new Error("cancelled by a newer visible request");
+        await invoke(1);
+      }
+      const samples = [];
+      const repeatCounts = [];
+      const started = Date.now();
+      let repeats = 1;
+      while (samples.length < SAMPLE_COUNT) {
+        if (token !== pageGeneration) throw new Error("cancelled by a newer visible request");
+        if (Date.now() - started >= SUITE_BUDGET_MS) throw new Error(`${label} did not collect ${SAMPLE_COUNT} resolved samples within ${SUITE_BUDGET_MS} ms`);
+        const measured = JSON.parse(await invoke(repeats));
+        if (token !== pageGeneration) throw new Error("cancelled by a newer visible request");
+        if (measured.elapsed_ms >= targetMs) {
+          samples.push(measured.normalized_ms);
+          repeatCounts.push(repeats);
+          onProgress(samples, repeatCounts, measured);
+          await delay(0);
+          continue;
+        }
+        if (repeats >= MAX_REPEATS) throw new Error(`${MAX_REPEATS} repeats span only ${measured.elapsed_ms} ms, below ${targetMs} ms`);
+        const scaled = measured.elapsed_ms > 0 ? Math.ceil(repeats * targetMs / measured.elapsed_ms * 1.125) : repeats * 8;
+        repeats = Math.min(MAX_REPEATS, Math.max(repeats + 1, scaled));
+        await delay(0);
+      }
+      return { samples, repeatCounts };
+    }
+
+    function selectButtons(selector, attribute, value) {
+      for (const button of document.querySelectorAll(selector)) button.classList.toggle("selected", button.dataset[attribute] === String(value));
+    }
+
+    function renderRequested() {
+      pageGeneration += 1;
+      cancel_heap_measurement();
+      currentReport = JSON.parse(render_heap_step_json(selectedMode, requestedDraws));
+      wall.textContent = `requested ${formatInteger(currentReport.requested_draws)} draws / ${formatInteger(currentReport.requested_distinct_resources)} distinct · delivered ${formatInteger(currentReport.delivered_draws)} draws / ${formatInteger(currentReport.delivered_distinct_resources)} distinct · ${formatInteger(currentReport.repeated_resource_draws)} cyclic repeats · ${currentReport.wall_arithmetic}`;
+      statusB.className = "status";
+      statusB.textContent = `${selectedMode} rendered immediately · per-frame CPU→GPU ${formatBytes(currentReport.per_frame_cpu_to_gpu_bytes)} · measurement requires visible replay`;
+      return pageGeneration;
+    }
+
+    async function runBenchmarkB() {
+      const token = renderRequested();
+      const mode = selectedMode;
+      const draws = requestedDraws;
+      const output = document.querySelector(`#b-${mode}`);
+      const report = currentReport;
+      measureB.disabled = true;
+      statusB.textContent = `warming ${mode} at ${formatInteger(draws)} draws…`;
+      try {
+        const detail = () => `requested/delivered ${formatInteger(draws)}/${formatInteger(draws)} draws · ${formatBytes(report.per_frame_cpu_to_gpu_bytes)} per frame · 32-quantum mapped-fence wall timing`;
+        const result = await adaptiveMeasure(
+          `Benchmark B ${mode} ${draws}`,
+          repeats => measure_many_draws_json(mode, draws, repeats),
+          token,
+          (samples, repeats) => {
+            showSamples(output, samples, repeats, detail());
+            statusB.textContent = `${mode} ${samples.length}/${SAMPLE_COUNT} visible samples at ${formatInteger(draws)} draws`;
+          },
+        );
+        showSamples(output, result.samples, result.repeatCounts, detail());
+        statusB.textContent = `${mode} complete at ${formatInteger(draws)} draws · median/p95 are visible replay only`;
+      } catch (error) {
+        if (token === pageGeneration) {
+          statusB.className = "status failed";
+          statusB.textContent = `Benchmark B unavailable: ${failureText(error)}`;
+          showSamples(output, [], [], failureText(error));
+        }
+      } finally {
+        measureB.disabled = false;
+      }
+    }
+
+    async function runBenchmarkA() {
+      pageGeneration += 1;
+      cancel_heap_measurement();
+      const token = pageGeneration;
+      runA.disabled = true;
+      statusA.className = "status";
+      try {
+        for (const mode of ["direct", "heap"]) {
+          const output = document.querySelector(`#a-${mode}`);
+          statusA.textContent = `warming Benchmark A ${mode}…`;
+          const result = await adaptiveMeasure(
+            `Benchmark A ${mode}`,
+            repeats => measure_heap_fetch_json(mode, repeats),
+            token,
+            (samples, repeats, measured) => {
+              showSamples(output, samples, repeats, `${measured.timing_method} · GPU timestamp not used`);
+              statusA.textContent = `${mode} ${samples.length}/${SAMPLE_COUNT} visible samples`;
+            },
+          );
+          showSamples(output, result.samples, result.repeatCounts, "4,194,304 loads/base invocation · submit-to-map wall time · GPU timestamp not used");
+        }
+        statusA.textContent = "direct and descriptor-indirect series complete · values require visible replay";
+      } catch (error) {
+        if (token === pageGeneration) {
+          statusA.className = "status failed";
+          statusA.textContent = `Benchmark A unavailable: ${failureText(error)}`;
+        }
+      } finally {
+        runA.disabled = false;
+      }
+    }
+
+    for (const button of document.querySelectorAll("#steps [data-draws]")) {
+      button.addEventListener("click", () => {
+        requestedDraws = Number(button.dataset.draws);
+        selectButtons("#steps [data-draws]", "draws", requestedDraws);
+        renderRequested();
+      });
+    }
+    for (const button of document.querySelectorAll("#modes [data-mode]")) {
+      button.addEventListener("click", () => {
+        selectedMode = button.dataset.mode;
+        selectButtons("#modes [data-mode]", "mode", selectedMode);
+        renderRequested();
+      });
+    }
+    runA.addEventListener("click", () => { void runBenchmarkA(); });
+    measureB.addEventListener("click", () => { void runBenchmarkB(); });
+
+    try {
+      await init({ module_or_path: new URL("./pkg/ember_lab_heap_bg.wasm?v=2", import.meta.url) });
+      const runtimeFacts = JSON.parse(await start_heap(canvas));
+      const timer = probeTimer();
+      timerQuantum = timer.quantum;
+      runtimeFacts.timer_probe = timer;
+      facts.textContent = JSON.stringify(runtimeFacts, null, 2);
+      statusA.textContent = Number.isFinite(timerQuantum)
+        ? `requires visible replay · measured timer quantum ${timerQuantum} ms · batch target ${timerQuantum * TARGET_QUANTA} ms`
+        : "requires visible replay · timer quantum unavailable";
+      renderRequested();
+    } catch (error) {
+      facts.textContent = `initialization failed: ${failureText(error)}`;
+      statusA.className = "status failed";
+      statusB.className = "status failed";
+      statusA.textContent = failureText(error);
+      statusB.textContent = failureText(error);
+      runA.disabled = true;
+      measureB.disabled = true;
+    }
   </script>
 </body>
 </html>
