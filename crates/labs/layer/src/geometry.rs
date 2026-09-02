@@ -552,9 +552,8 @@ mod tests {
                 let coordinate = lattice_coordinate(copy, m).expect("copy is in range");
                 let center = coordinate.map(|value| f64::from(value) * LATTICE_SPACING);
                 for vertex in [0, 599, 600, 1_199] {
-                    let translated = std::array::from_fn(|axis| {
-                        object.vertices[vertex][axis] + center[axis]
-                    });
+                    let translated =
+                        std::array::from_fn(|axis| object.vertices[vertex][axis] + center[axis]);
                     for time in [0.0, 0.37, 2.5] {
                         let reference = project_reference(translated, time);
                         let gpu = project_gpu_path(translated, time);
