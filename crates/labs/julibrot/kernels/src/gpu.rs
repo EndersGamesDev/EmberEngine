@@ -428,8 +428,8 @@ fn encode_pages(
         .write_kernel_uniform(kernel, uniform)
         .map_err(|_| KernelError::Dispatch)?;
     executor.sync_dispatch_resources(dispatch);
-    let page_count = u32::try_from(dispatch.plan().passes.len())
-        .map_err(|_| KernelError::ArithmeticOverflow)?;
+    let page_count =
+        u32::try_from(dispatch.plan().passes.len()).map_err(|_| KernelError::ArithmeticOverflow)?;
     for page in 0..page_count {
         executor
             .encode_dispatch_selected(
