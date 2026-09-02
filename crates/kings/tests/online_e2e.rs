@@ -113,6 +113,16 @@ impl Peer {
         false
     }
 
+    /// Pump until a notice appears, and return it.
+    fn wait_for_notice(&mut self, who: &str) -> String {
+        assert!(
+            self.wait_for(Duration::from_secs(3), |g| g.notice.is_some()),
+            "{who} got no notice.\n  {}",
+            self.dump(who)
+        );
+        self.game.notice.clone().unwrap()
+    }
+
     /// Everything that distinguishes the ways this can go wrong: a dead
     /// socket, a refusal we never looked at, or a message that simply never
     /// came. A bare `assert!` cannot tell them apart.
@@ -130,7 +140,7 @@ impl Peer {
         )
     }
 
-    fn board(&self) -> &BoardState {
+    const fn board(&self) -> &BoardState {
         self.game.board.as_ref().expect("no board yet")
     }
 }
@@ -182,19 +192,12 @@ fn browse(port: u16) -> Vec<proto::LobbyInfo> {
     panic!("the browser never got a lobby list");
 }
 
-/// The list of section 4.9 in one sitting, because every step depends on
-/// the one before it: create, join, the guest's Start refused, the creator's
-/// Start, the first move agreed on both boards, an out-of-turn move and an
-/// illegal target refused with their reasons, a silent turn passing as a
-/// timeout, and a browser peer listing the table as playing.
-#[test]
-fn two_clients_create_join_start_move_and_time_out() {
-    let port = start_server(TURN_MS);
-    let mut a = Peer::connect(port, "ada");
-    let mut b = Peer::connect(port, "bob");
+// ---- the phases of the one scenario ---------------------------------------
 
-    // The creator makes the table and sees it: Joined, Roster, a full
-    // Waiting board, Phase Waiting.
+/// The creator makes the table and sees it (Joined, Roster, a full Waiting
+/// board, Phase Waiting); the guest joins and sits diagonally; both see a
+/// 64-piece Waiting board and agree on it.
+fn create_and_join(a: &mut Peer, b: &mut Peer) {
     a.net.send(&C2S::CreateLobby {
         name: "court".into(),
         password: None,
@@ -211,7 +214,6 @@ fn two_clients_create_join_start_move_and_time_out() {
     assert_eq!(a.game.phase, Phase::Waiting);
     assert!(a.game.state.is_some(), "the Waiting board decoded");
 
-    // The guest joins and sits diagonally; both see a 64-piece Waiting board.
     b.net.send(&C2S::JoinLobby {
         name: "court".into(),
         password: None,
@@ -227,30 +229,32 @@ fn two_clients_create_join_start_move_and_time_out() {
     assert!(!b.game.is_creator);
     assert_eq!(b.game.phase, Phase::Waiting);
     assert!(
-        a.wait_for(Duration::from_secs(5), |g| g.roster.len() == 2 && g.can_start),
+        a.wait_for(Duration::from_secs(5), |g| g.roster.len() == 2
+            && g.can_start),
         "ada never learned bob had joined, or was never told she may start.\n  {}",
         a.dump("ada")
     );
     assert_eq!(a.game.roster.len(), 2);
     assert_eq!(b.game.roster.len(), 2);
     assert_eq!(a.board().pieces.len(), 64);
-    assert_eq!(agreed(a.board()), agreed(b.board()), "the Waiting boards agree");
-
-    // The guest's Start is refused with a reason the page can show.
-    b.net.send(&C2S::Start);
-    assert!(
-        b.wait_for(Duration::from_secs(3), |g| g.notice.is_some()),
-        "the guest's Start produced no notice.\n  {}",
-        b.dump("bob")
+    assert_eq!(
+        agreed(a.board()),
+        agreed(b.board()),
+        "the Waiting boards agree"
     );
-    let reason = b.game.notice.clone().unwrap();
+}
+
+/// The guest's Start is refused with a reason the page can show; the
+/// creator's Start with two seats gives Playing on both, seat 0 to move on
+/// turn 1, the two empty corners garrisons.
+fn start_with_two_seats(a: &mut Peer, b: &mut Peer) {
+    b.net.send(&C2S::Start);
+    let reason = b.wait_for_notice("bob");
     assert!(reason.contains("creator"), "{reason}");
     assert_eq!(b.game.phase, Phase::Waiting, "still waiting");
 
-    // The creator's Start with two seats: Playing on both, seat 0 to move on
-    // turn 1, the two empty corners garrisons.
     a.net.send(&C2S::Start);
-    for (peer, who) in [(&mut a, "ada"), (&mut b, "bob")] {
+    for (peer, who) in [(&mut *a, "ada"), (&mut *b, "bob")] {
         assert!(
             peer.wait_for(Duration::from_secs(5), |g| g.phase == Phase::Playing
                 && g.board.as_ref().is_some_and(|b| b.turn == 1 && b.seat == 0)),
@@ -264,12 +268,18 @@ fn two_clients_create_join_start_move_and_time_out() {
     }
     assert!(a.game.my_turn(), "{}", a.dump("ada"));
     assert!(!b.game.my_turn(), "{}", b.dump("bob"));
+}
 
-    // Seat 0's pawn (3,0) -> (4,0), through the selection machine: the
-    // click pair emits a Move stamped with the current turn.
+/// Seat 0's pawn (3,0) -> (4,0), through the selection machine: the click
+/// pair emits a Move stamped with the current turn, and both boards agree
+/// on the result.
+fn first_move(a: &mut Peer, b: &mut Peer) {
     let mut ui = Ui::default();
     let state = a.game.state.as_ref().expect("decoded board");
-    assert_eq!(ui.click(state, a.game.my_seat, a.game.phase, Tile::at(3, 0)), None);
+    assert_eq!(
+        ui.click(state, a.game.my_seat, a.game.phase, Tile::at(3, 0)),
+        None
+    );
     let out = ui.click(state, a.game.my_seat, a.game.phase, Tile::at(4, 0));
     let Some(UiOut::Move { turn, from, to }) = out else {
         panic!("the click pair did not emit a move: {out:?}");
@@ -283,7 +293,7 @@ fn two_clients_create_join_start_move_and_time_out() {
         ty: to.y,
     });
     a.game.pending = true;
-    for (peer, who) in [(&mut a, "ada"), (&mut b, "bob")] {
+    for (peer, who) in [(&mut *a, "ada"), (&mut *b, "bob")] {
         assert!(
             peer.wait_for(Duration::from_secs(3), |g| g
                 .board
@@ -321,8 +331,11 @@ fn two_clients_create_join_start_move_and_time_out() {
     assert!(!a.game.pending, "the State echo clears pending");
     assert!(b.game.my_turn());
     assert!(!a.game.my_turn());
+}
 
-    // Seat 0 moving again: "not your turn".
+/// Seat 0 moving again: "not your turn". Seat 2 aiming a pawn at the middle
+/// of the board: "cannot move there", and the board exactly as it was.
+fn two_refusals(a: &mut Peer, b: &mut Peer) {
     a.game.notice = None;
     a.net.send(&C2S::Move {
         turn: 2,
@@ -331,15 +344,8 @@ fn two_clients_create_join_start_move_and_time_out() {
         tx: 5,
         ty: 0,
     });
-    assert!(
-        a.wait_for(Duration::from_secs(3), |g| g.notice.is_some()),
-        "the out-of-turn move produced no notice.\n  {}",
-        a.dump("ada")
-    );
-    assert_eq!(a.game.notice.as_deref(), Some("not your turn"));
+    assert_eq!(a.wait_for_notice("ada"), "not your turn");
 
-    // Seat 2 aiming a pawn at the middle of the board: "cannot move there",
-    // and the board is exactly as it was.
     let before = agreed(b.board());
     b.game.notice = None;
     b.net.send(&C2S::Move {
@@ -349,23 +355,20 @@ fn two_clients_create_join_start_move_and_time_out() {
         tx: 4,
         ty: 4,
     });
-    assert!(
-        b.wait_for(Duration::from_secs(3), |g| g.notice.is_some()),
-        "the illegal move produced no notice.\n  {}",
-        b.dump("bob")
-    );
-    let reason = b.game.notice.clone().unwrap();
+    let reason = b.wait_for_notice("bob");
     assert!(reason.starts_with("cannot move there"), "{reason}");
     assert_eq!(agreed(b.board()), before, "a refused move changes nothing");
     assert_eq!(b.board().turn, 2, "the turn did not end");
+}
 
-    // Nobody moves: with a one-second turn the server passes for seat 2 and
-    // narrates it as a timeout; seat 0 is to move again on turn 3.
-    for (peer, who) in [(&mut a, "ada"), (&mut b, "bob")] {
+/// Nobody moves: with a one-second turn the server passes for seat 2 and
+/// narrates it as a timeout; seat 0 is to move again on turn 3.
+fn silent_turn(a: &mut Peer, b: &mut Peer) {
+    for (peer, who) in [(&mut *a, "ada"), (&mut *b, "bob")] {
         assert!(
-            peer.wait_for(Duration::from_secs(5), |g| g.board.as_ref().is_some_and(|b| b
-                .last
-                .is_some_and(|l| l.kind == ActionKind::Timeout))),
+            peer.wait_for(Duration::from_secs(5), |g| g.board.as_ref().is_some_and(
+                |b| b.last.is_some_and(|l| l.kind == ActionKind::Timeout)
+            )),
             "{who} never saw the silent turn pass.\n  {}",
             peer.dump(who)
         );
@@ -380,8 +383,27 @@ fn two_clients_create_join_start_move_and_time_out() {
     }
     assert_eq!(agreed(a.board()), agreed(b.board()));
     assert!(a.game.left_ms <= TURN_MS);
+}
 
-    // A browser-style peer sees the table, marked playing.
+/// The list of section 4.9 in one sitting, because every step depends on
+/// the one before it: create, join, the guest's Start refused, the creator's
+/// Start, the first move agreed on both boards, an out-of-turn move and an
+/// illegal target refused with their reasons, a silent turn passing as a
+/// timeout, and a browser peer listing the table as playing.
+#[test]
+fn two_clients_create_join_start_move_and_time_out() {
+    let port = start_server(TURN_MS);
+    let mut a = Peer::connect(port, "ada");
+    let mut b = Peer::connect(port, "bob");
+
+    create_and_join(&mut a, &mut b);
+    start_with_two_seats(&mut a, &mut b);
+    first_move(&mut a, &mut b);
+    two_refusals(&mut a, &mut b);
+    silent_turn(&mut a, &mut b);
+
+    // A browser-style peer sees the table, marked playing. Last, because a
+    // one-second clock keeps running while it looks.
     let lobbies = browse(port);
     let court = lobbies
         .iter()
@@ -414,20 +436,8 @@ fn a_refused_join_surfaces_a_reason() {
         name: "locked".into(),
         password: Some("nope".into()),
     });
-    assert!(
-        guest.wait_for(Duration::from_secs(3), |g| g.notice.is_some()),
-        "a refused join produced no notice"
-    );
-    assert!(
-        guest
-            .game
-            .notice
-            .as_deref()
-            .unwrap()
-            .contains("password"),
-        "{:?}",
-        guest.game.notice
-    );
+    let reason = guest.wait_for_notice("guest");
+    assert!(reason.contains("password"), "{reason}");
     assert_eq!(
         guest.game.screen,
         Screen::Browsing,

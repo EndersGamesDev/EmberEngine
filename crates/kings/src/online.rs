@@ -450,6 +450,9 @@ mod tests {
         let mut b = board();
         b.seats[0].captured = vec![Kind::Pawn];
         o.apply(S2C::State { board: b });
-        assert_eq!(o.state.as_ref().unwrap().seats[0].captured, vec![Kind::Pawn]);
+        assert_eq!(
+            o.state.as_ref().unwrap().seats[0].captured,
+            vec![Kind::Pawn]
+        );
     }
 }

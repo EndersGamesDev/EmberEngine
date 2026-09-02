@@ -1,14 +1,17 @@
-//! What hotseat and online play share: mesh ids in registration order, the
-//! seat colours, tile and camera maths, `scene()`, the HUD thread-local the
-//! page polls, the `UiCmd` queue the page pushes into, and the keyboard
-//! cursor (design 4.4 and 4.6).
+//! What hotseat and online play share (design 4.4 and 4.6).
+//!
+//! Mesh ids in registration order, the seat colours, tile and camera maths,
+//! `scene()`, the HUD thread-local the page polls, the `UiCmd` queue the
+//! page pushes into, and the keyboard cursor.
 
 use std::cell::RefCell;
 use std::f32::consts::FRAC_PI_2;
 
 use ember_engine::glam::Vec3;
 use ember_engine::{Camera, Frame, InputState, Instance, KeyCode, MeshData};
-use kings_core::board::{SIDE, State, TILES, Tile, frame, front_left, in_home_block, to_global, to_local};
+use kings_core::board::{
+    SIDE, State, TILES, Tile, frame, front_left, in_home_block, to_global, to_local,
+};
 use kings_core::proto::{
     ActionKind, BoardState, EndReason, Kind, LastAction, Phase, PieceState, PlayerMeta, SeatState,
 };
@@ -108,8 +111,9 @@ pub fn build_meshes() -> (Vec<MeshData>, Meshes) {
 
 // ---- colours --------------------------------------------------------------
 
-/// The page's four seat colours, `#e6b93f` gold, `#e2495c` crimson,
-/// `#4ea6f2` azure, `#3fd08c` emerald, as their sRGB components over 255.
+/// The page's four seat colours as their sRGB components over 255.
+///
+/// `#e6b93f` gold, `#e2495c` crimson, `#4ea6f2` azure, `#3fd08c` emerald.
 /// The renderer applies no transfer curve, so they are used as they are,
 /// the same convention as `fire::game::livery`; that reads a little
 /// brighter than the page's swatches under the scene light, which is the
@@ -284,7 +288,7 @@ pub struct HudTarget {
 /// Everything the page draws, polled once per animation frame as JSON
 /// (design 4.6). Coordinates are absolute board tiles; the page rotates for
 /// display only.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[allow(clippy::struct_excessive_bools)] // the page's contract, one flag per fact
 pub struct HudState {
     /// `local` or `online`.
@@ -546,10 +550,11 @@ pub fn shifted(tile: Tile, seat: u8, du: i8, dv: i8) -> Tile {
     to_global(seat, clamp(u, du), clamp(v, dv))
 }
 
-/// The keyboard cursor: arrows and WASD move it one tile in the LOCAL
-/// seat's frame (Right is `+u`, forward; Up is `+v`, left, which is how the
-/// page lays the board out with the local corner bottom-left), rising-edge
-/// latched so a held key moves once.
+/// The keyboard cursor, moving in the LOCAL seat's frame.
+///
+/// Arrows and WASD move it one tile: Right is `+u`, forward; Up is `+v`,
+/// left, which is how the page lays the board out with the local corner
+/// bottom-left. Rising-edge latched, so a held key moves once.
 #[derive(Clone, Copy, Debug)]
 pub struct Cursor {
     /// Where the cursor is.
@@ -570,7 +575,8 @@ impl Cursor {
     /// Feed one frame of keys; the cursor moves in `seat`'s frame.
     pub fn step(&mut self, keys: CursorKeys, seat: u8) -> Option<CursorCmd> {
         let edge = |now: bool, was: bool| now && !was;
-        let du = i8::from(edge(keys.right, self.was.right)) - i8::from(edge(keys.left, self.was.left));
+        let du =
+            i8::from(edge(keys.right, self.was.right)) - i8::from(edge(keys.left, self.was.left));
         let dv = i8::from(edge(keys.up, self.was.up)) - i8::from(edge(keys.down, self.was.down));
         if du != 0 || dv != 0 {
             self.tile = shifted(self.tile, seat, du, dv);
@@ -606,7 +612,11 @@ fn block_of(t: Tile) -> Option<u8> {
 
 fn push_tiles(frame: &mut Frame, meshes: &Meshes) {
     for t in Tile::all() {
-        let base = if t.colour() == 0 { TILE_DARK } else { TILE_LIGHT };
+        let base = if t.colour() == 0 {
+            TILE_DARK
+        } else {
+            TILE_LIGHT
+        };
         let colour = block_of(t).map_or(base, |s| base.lerp(seat_colour(s), BLOCK_TINT));
         frame
             .instances
@@ -629,9 +639,9 @@ fn push_pieces(frame: &mut Frame, state: &State, meshes: &Meshes) {
         }
         let pos = tile_pos(t);
         let scale = if p.kind == Kind::HeroAwake {
-            frame.instances.push(
-                Instance::new(pos, Vec3::new(0.8, 1.0, 0.8), colour).with_mesh(meshes.ring),
-            );
+            frame
+                .instances
+                .push(Instance::new(pos, Vec3::new(0.8, 1.0, 0.8), colour).with_mesh(meshes.ring));
             1.2
         } else {
             1.0
@@ -678,10 +688,12 @@ fn push_marks(frame: &mut Frame, state: &State, meshes: &Meshes, view: &View) {
     }
 }
 
-/// Build the whole frame (design 4.4): 100 tiles, one instance per piece,
-/// a disc per legal target, a ring on the selected tile and on the cursor,
-/// two dim discs on the last move. Shared by hotseat and online play so the
-/// two cannot drift apart visually. No text: the page draws the narrative.
+/// Build the whole frame (design 4.4).
+///
+/// 100 tiles, one instance per piece, a disc per legal target, a ring on
+/// the selected tile and on the cursor, two dim discs on the last move.
+/// Shared by hotseat and online play so the two cannot drift apart
+/// visually. No text: the page draws the narrative.
 #[must_use]
 pub fn scene(state: &State, meshes: &Meshes, view: &View, camera: Camera) -> Frame {
     let mut frame = Frame {
@@ -741,7 +753,12 @@ mod tests {
         }
         for (i, mesh) in list.iter().enumerate() {
             assert!(!mesh.vertices.is_empty(), "mesh slot {} is empty", i + 1);
-            assert_eq!(mesh.vertices.len() % 3, 0, "slot {} not a triangle list", i + 1);
+            assert_eq!(
+                mesh.vertices.len() % 3,
+                0,
+                "slot {} not a triangle list",
+                i + 1
+            );
             for v in &mesh.vertices {
                 let n = Vec3::from(v.normal);
                 assert!((n.length() - 1.0).abs() < 1e-4, "slot {}: {n}", i + 1);
@@ -769,7 +786,10 @@ mod tests {
             assert!((cam.eye.y - 12.0).abs() < 1e-5, "seat {seat} up");
             let out = Vec3::new(cam.eye.x, 0.0, cam.eye.z);
             assert!((out.length() - 11.0).abs() < 1e-4, "seat {seat} out");
-            assert!(out.dot(corner) > 0.0, "seat {seat} eye is over its own corner");
+            assert!(
+                out.dot(corner) > 0.0,
+                "seat {seat} eye is over its own corner"
+            );
             assert!(
                 (out.normalize().dot(corner.normalize()) - 1.0).abs() < 1e-5,
                 "seat {seat} eye is on the corner diagonal"
@@ -874,9 +894,20 @@ mod tests {
             .find(|i| i.mesh == ids.hero_awake)
             .expect("awake hero drawn");
         assert!((big.scale.x - 1.2).abs() < 1e-6);
-        assert_eq!(frame.instances.iter().filter(|i| i.mesh == ids.ring).count(), 1);
         assert_eq!(
-            frame.instances.iter().filter(|i| i.mesh == ids.disc).count(),
+            frame
+                .instances
+                .iter()
+                .filter(|i| i.mesh == ids.ring)
+                .count(),
+            1
+        );
+        assert_eq!(
+            frame
+                .instances
+                .iter()
+                .filter(|i| i.mesh == ids.disc)
+                .count(),
             2,
             "the last move's two discs"
         );
@@ -893,7 +924,14 @@ mod tests {
             eliminated: None,
         });
         let frame = scene(&state, &ids, &View::default(), seat_camera(0));
-        assert_eq!(frame.instances.iter().filter(|i| i.mesh == ids.disc).count(), 0);
+        assert_eq!(
+            frame
+                .instances
+                .iter()
+                .filter(|i| i.mesh == ids.disc)
+                .count(),
+            0
+        );
     }
 
     /// Right is `+u` (forward) and Up is `+v` (left) in the local seat's
@@ -969,7 +1007,7 @@ mod tests {
             drain_cmds(),
             vec![UiCmd::Click(1, 2), UiCmd::Start, UiCmd::Clear]
         );
-        assert!(drain_cmds().is_empty());
+        assert_eq!(drain_cmds(), Vec::new());
     }
 
     #[test]
@@ -1071,7 +1109,10 @@ mod tests {
         assert_eq!(keys, expected);
         // The value strings the page switches on.
         assert!(json.starts_with(r#"{"mode":"online","connected":true,"screen":"lobby","phase":"finished","winner":2,"end":"no_progress","me":0,"creator":0,"is_creator":true,"can_start":false,"turn":1,"seat":0,"left_ms":8400,"my_turn":false,"quiet":0,"stalls":0,"roster":[{"id":0,"handle":"ada","seat":0}],"seats":[{"seat":0,"present":true,"alive":true,"garrison":false,"own_turns":1,"timeouts":0,"captured":[]},"#), "{json}");
-        assert!(json.contains(r#""pieces":[{"id":0,"owner":0,"kind":"king","x":0,"y":0},"#), "{json}");
+        assert!(
+            json.contains(r#""pieces":[{"id":0,"owner":0,"kind":"king","x":0,"y":0},"#),
+            "{json}"
+        );
         assert!(json.contains(r#""joker_fl":[[2,2],[7,2],[7,7],[2,7]],"cursor":[2,3],"sel":[2,3],"targets":[{"x":2,"y":4,"k":"move"}],"last":{"seat":0,"kind":"move","fx":3,"fy":0,"tx":3,"ty":1,"captured":null,"promoted":false,"eliminated":null},"pending":false,"notice":"not your turn"}"#), "{json}");
         assert_eq!(obj["seats"].as_array().unwrap().len(), 4);
         assert_eq!(obj["pieces"].as_array().unwrap().len(), 64);
@@ -1080,7 +1121,10 @@ mod tests {
         bare.joker_fl = [None, Some([1, 2]), None, None];
         let s = serde_json::to_string(&bare).unwrap();
         assert!(s.contains(r#""joker_fl":[null,[1,2],null,null]"#), "{s}");
-        assert!(s.contains(r#""sel":null"#) && s.contains(r#""me":null"#), "{s}");
+        assert!(
+            s.contains(r#""sel":null"#) && s.contains(r#""me":null"#),
+            "{s}"
+        );
         assert!(s.contains(r#""mode":"local""#), "{s}");
     }
 
@@ -1088,9 +1132,18 @@ mod tests {
     #[test]
     fn state_json_value_strings_are_the_pages() {
         assert_eq!(serde_json::to_string(&Mode::Local).unwrap(), r#""local""#);
-        assert_eq!(serde_json::to_string(&Screen::Browsing).unwrap(), r#""browsing""#);
-        assert_eq!(serde_json::to_string(&Phase::Waiting).unwrap(), r#""waiting""#);
-        assert_eq!(serde_json::to_string(&Phase::Playing).unwrap(), r#""playing""#);
+        assert_eq!(
+            serde_json::to_string(&Screen::Browsing).unwrap(),
+            r#""browsing""#
+        );
+        assert_eq!(
+            serde_json::to_string(&Phase::Waiting).unwrap(),
+            r#""waiting""#
+        );
+        assert_eq!(
+            serde_json::to_string(&Phase::Playing).unwrap(),
+            r#""playing""#
+        );
         for (k, s) in [
             (TargetKind::Capture, "capture"),
             (TargetKind::Teleport, "teleport"),
@@ -1118,6 +1171,9 @@ mod tests {
         ] {
             assert_eq!(serde_json::to_string(&k).unwrap(), format!("\"{s}\""));
         }
-        assert_eq!(serde_json::to_string(&Kind::HeroAwake).unwrap(), r#""hero_awake""#);
+        assert_eq!(
+            serde_json::to_string(&Kind::HeroAwake).unwrap(),
+            r#""hero_awake""#
+        );
     }
 }
