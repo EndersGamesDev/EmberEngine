@@ -104,8 +104,7 @@ pub fn inverse_identity_error(forward: [f64; 9], inverse: [f64; 9]) -> f64 {
 #[allow(clippy::cast_possible_truncation)]
 pub fn pack_homography_rows(forward: [f64; 9]) -> Option<[[f32; 4]; 3]> {
     let mut rows = [[0.0; 4]; 3];
-    let (source_rows, remainder) = forward.as_chunks::<3>();
-    debug_assert_eq!(remainder, []);
+    let (source_rows, _) = forward.as_chunks::<3>();
     for (destination, source) in rows.iter_mut().zip(source_rows) {
         for (packed, value) in destination[..3].iter_mut().zip(source) {
             *packed = *value as f32;
