@@ -2,44 +2,44 @@
 
 use serde::Serialize;
 
-pub(crate) const SAMPLE_COUNT: usize = 8;
-pub(crate) const RECORD_STRIDE: usize = 256;
-pub(crate) const RECORDS_PER_SAMPLE: usize = 2;
-pub(crate) const IMAGE_WIDTH: u32 = 64;
-pub(crate) const IMAGE_HEIGHT: u32 = 36;
-pub(crate) const IMAGE_BYTES_PER_ROW: u32 = 256;
-pub(crate) const IMAGE_BYTES: usize = IMAGE_BYTES_PER_ROW as usize * IMAGE_HEIGHT as usize;
-pub(crate) const RECORD_BYTES: usize = SAMPLE_COUNT * RECORDS_PER_SAMPLE * RECORD_STRIDE;
-pub(crate) const F32_TOLERANCE: f32 = 4.0e-5;
+pub const SAMPLE_COUNT: usize = 8;
+pub const RECORD_STRIDE: usize = 256;
+pub const RECORDS_PER_SAMPLE: usize = 2;
+pub const IMAGE_WIDTH: u32 = 64;
+pub const IMAGE_HEIGHT: u32 = 36;
+pub const IMAGE_BYTES_PER_ROW: u32 = 256;
+pub const IMAGE_BYTES: usize = IMAGE_BYTES_PER_ROW as usize * IMAGE_HEIGHT as usize;
+pub const RECORD_BYTES: usize = SAMPLE_COUNT * RECORDS_PER_SAMPLE * RECORD_STRIDE;
+pub const F32_TOLERANCE: f32 = 4.0e-5;
 
 /// Numeric comparison of two GPU-produced edge-pose sample sets.
 #[derive(Clone, Debug, Serialize)]
-pub(crate) struct NumericComparison {
-    pub(crate) sampled_indices: Vec<u32>,
-    pub(crate) compared_records: usize,
-    pub(crate) compared_components: usize,
-    pub(crate) exact_components: usize,
-    pub(crate) mismatched_components: usize,
-    pub(crate) tolerance: f32,
-    pub(crate) max_abs_error: f32,
-    pub(crate) pass: bool,
+pub struct NumericComparison {
+    pub sampled_indices: Vec<u32>,
+    pub compared_records: usize,
+    pub compared_components: usize,
+    pub exact_components: usize,
+    pub mismatched_components: usize,
+    pub tolerance: f32,
+    pub max_abs_error: f32,
+    pub pass: bool,
 }
 
 /// Exact byte-level comparison of the two small-rung presentation images.
 #[derive(Clone, Debug, Serialize)]
-pub(crate) struct ImageComparison {
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) compared_pixels: u32,
-    pub(crate) mismatched_pixels: u32,
-    pub(crate) mode_c_checksum: String,
-    pub(crate) layer_checksum: String,
-    pub(crate) pass: bool,
+pub struct ImageComparison {
+    pub width: u32,
+    pub height: u32,
+    pub compared_pixels: u32,
+    pub mismatched_pixels: u32,
+    pub mode_c_checksum: String,
+    pub layer_checksum: String,
+    pub pass: bool,
 }
 
 /// Chooses stable samples spanning the beginning, interior, and end of a delivered range.
 #[must_use]
-pub(crate) fn deterministic_indices(edges: u32) -> Vec<u32> {
+pub fn deterministic_indices(edges: u32) -> Vec<u32> {
     let candidates = [
         0,
         1,
@@ -69,7 +69,7 @@ fn component(bytes: &[u8], offset: usize) -> Result<f32, String> {
 }
 
 /// Compares the first 16 bytes of every 256-byte-aligned copied record.
-pub(crate) fn compare_records(
+pub fn compare_records(
     mode_c: &[u8],
     layer: &[u8],
     indices: Vec<u32>,
@@ -122,7 +122,7 @@ fn checksum(bytes: &[u8]) -> String {
 }
 
 /// Compares two tightly packed 64-by-36 four-byte presentation images.
-pub(crate) fn compare_images(mode_c: &[u8], layer: &[u8]) -> Result<ImageComparison, String> {
+pub fn compare_images(mode_c: &[u8], layer: &[u8]) -> Result<ImageComparison, String> {
     if mode_c.len() != IMAGE_BYTES || layer.len() != IMAGE_BYTES {
         return Err(format!(
             "image readback requires {IMAGE_BYTES} bytes, got Mode C {} and layer {}",
