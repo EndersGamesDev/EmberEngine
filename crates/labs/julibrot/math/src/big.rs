@@ -18,7 +18,10 @@ impl BigScalar {
         if !value.is_finite() || precision_bits == 0 {
             return Err(MathError::NonFinite);
         }
-        Self::checked(BigFloat::from_f64(value, precision_bits as usize), precision_bits)
+        Self::checked(
+            BigFloat::from_f64(value, precision_bits as usize),
+            precision_bits,
+        )
     }
 
     /// Creates the exact finite binary32 value at the requested precision.
@@ -30,7 +33,10 @@ impl BigScalar {
         if !value.is_finite() || precision_bits == 0 {
             return Err(MathError::NonFinite);
         }
-        Self::checked(BigFloat::from_f32(value, precision_bits as usize), precision_bits)
+        Self::checked(
+            BigFloat::from_f32(value, precision_bits as usize),
+            precision_bits,
+        )
     }
 
     /// Creates zero at the requested precision.
@@ -123,44 +129,32 @@ impl BigScalar {
 
     pub(crate) fn add(&self, other: &Self, precision_bits: u32) -> Result<Self, MathError> {
         Self::checked(
-            self.value.add(
-                &other.value,
-                precision_bits as usize,
-                RoundingMode::ToEven,
-            ),
+            self.value
+                .add(&other.value, precision_bits as usize, RoundingMode::ToEven),
             precision_bits,
         )
     }
 
     pub(crate) fn sub(&self, other: &Self, precision_bits: u32) -> Result<Self, MathError> {
         Self::checked(
-            self.value.sub(
-                &other.value,
-                precision_bits as usize,
-                RoundingMode::ToEven,
-            ),
+            self.value
+                .sub(&other.value, precision_bits as usize, RoundingMode::ToEven),
             precision_bits,
         )
     }
 
     pub(crate) fn mul(&self, other: &Self, precision_bits: u32) -> Result<Self, MathError> {
         Self::checked(
-            self.value.mul(
-                &other.value,
-                precision_bits as usize,
-                RoundingMode::ToEven,
-            ),
+            self.value
+                .mul(&other.value, precision_bits as usize, RoundingMode::ToEven),
             precision_bits,
         )
     }
 
     pub(crate) fn div(&self, other: &Self, precision_bits: u32) -> Result<Self, MathError> {
         Self::checked(
-            self.value.div(
-                &other.value,
-                precision_bits as usize,
-                RoundingMode::ToEven,
-            ),
+            self.value
+                .div(&other.value, precision_bits as usize, RoundingMode::ToEven),
             precision_bits,
         )
     }
@@ -246,8 +240,8 @@ fn round_dyadic(encoded: &EncodedBigScalar, format: FloatFormat) -> Result<u64, 
         .limbs
         .last()
         .ok_or(MathError::InvalidCentreEncoding)?;
-    let word_count = i64::try_from(encoded.limbs.len() - 1)
-        .map_err(|_| MathError::CounterOverflow)?;
+    let word_count =
+        i64::try_from(encoded.limbs.len() - 1).map_err(|_| MathError::CounterOverflow)?;
     let bit_length = word_count
         .checked_mul(32)
         .and_then(|bits| bits.checked_add(i64::from(32 - high.leading_zeros())))

@@ -57,15 +57,11 @@ fn rotation_f32(theta: f32) -> [[f32; MATRIX_SIDE]; MATRIX_SIDE] {
 }
 
 fn identity_f64() -> [[f64; MATRIX_SIDE]; MATRIX_SIDE] {
-    core::array::from_fn(|row| {
-        core::array::from_fn(|column| if row == column { 1.0 } else { 0.0 })
-    })
+    core::array::from_fn(|row| core::array::from_fn(|column| if row == column { 1.0 } else { 0.0 }))
 }
 
 fn identity_f32() -> [[f32; MATRIX_SIDE]; MATRIX_SIDE] {
-    core::array::from_fn(|row| {
-        core::array::from_fn(|column| if row == column { 1.0 } else { 0.0 })
-    })
+    core::array::from_fn(|row| core::array::from_fn(|column| if row == column { 1.0 } else { 0.0 }))
 }
 
 fn multiply_f64(
@@ -105,7 +101,9 @@ fn gram_schmidt_f32(mut matrix: [[f32; MATRIX_SIDE]; MATRIX_SIDE]) -> [[f32; 5];
             }
         }
         let norm = (0..MATRIX_SIDE)
-            .fold(0.0, |sum, row| matrix[row][column].mul_add(matrix[row][column], sum))
+            .fold(0.0, |sum, row| {
+                matrix[row][column].mul_add(matrix[row][column], sum)
+            })
             .sqrt();
         for row in &mut matrix {
             row[column] /= norm;
@@ -133,8 +131,7 @@ fn orthonormality_error_f32(matrix: [[f32; MATRIX_SIDE]; MATRIX_SIDE]) -> f64 {
         outer_sum
             + (0..MATRIX_SIDE).fold(0.0, |inner_sum, column| {
                 let dot = (0..MATRIX_SIDE).fold(0.0_f64, |sum, axis| {
-                    f64::from(matrix[axis][row])
-                        .mul_add(f64::from(matrix[axis][column]), sum)
+                    f64::from(matrix[axis][row]).mul_add(f64::from(matrix[axis][column]), sum)
                 });
                 let residual = dot - if row == column { 1.0 } else { 0.0 };
                 residual.mul_add(residual, inner_sum)

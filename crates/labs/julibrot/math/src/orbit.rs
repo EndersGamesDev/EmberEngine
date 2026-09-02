@@ -65,7 +65,8 @@ impl ReferenceOrbitBuilder {
         if plan.working_digits < plan.floor_digits || plan.policy_digits == 0 {
             return Err(MathError::InvalidPrecisionPlan);
         }
-        let (primary, verification) = make_attempt(centre, plan.working_digits, plan.policy_digits)?;
+        let (primary, verification) =
+            make_attempt(centre, plan.working_digits, plan.policy_digits)?;
         Ok(Self {
             centre: centre.clone(),
             plan,
@@ -114,11 +115,8 @@ impl ReferenceOrbitBuilder {
             .attempt_digits
             .checked_add(16)
             .ok_or(MathError::CounterOverflow)?;
-        let (primary, verification) = make_attempt(
-            &self.centre,
-            self.attempt_digits,
-            self.plan.policy_digits,
-        )?;
+        let (primary, verification) =
+            make_attempt(&self.centre, self.attempt_digits, self.plan.policy_digits)?;
         self.primary = primary;
         self.verification = verification;
         self.mismatch = false;
@@ -372,7 +370,10 @@ mod tests {
         let centre = BigCentre::from_f64([0.0, 0.0, 2.0, 0.0], 256)?;
         let plan = precision_for(0.0, 1920, 16)?;
         let builder_result = ReferenceOrbitBuilder::new(&centre, plan, EscapeParams::new(16));
-        assert!(builder_result.is_ok(), "builder construction failed: {builder_result:?}");
+        assert!(
+            builder_result.is_ok(),
+            "builder construction failed: {builder_result:?}"
+        );
         let mut builder = builder_result?;
         assert_eq!(
             builder.step(NonZeroU32::new(2).ok_or(MathError::InvalidMaxIter)?)?,

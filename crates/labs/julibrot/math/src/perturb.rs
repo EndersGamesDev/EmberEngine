@@ -67,13 +67,7 @@ pub fn perturb_scaled_f64(
     scale_exponent: i32,
     params: EscapeParams,
 ) -> Result<PerturbSample, MathError> {
-    Ok(perturb_scaled_f64_with_envelope(
-        orbit,
-        offset_prime,
-        scale_exponent,
-        params,
-    )?
-    .0)
+    Ok(perturb_scaled_f64_with_envelope(orbit, offset_prime, scale_exponent, params)?.0)
 }
 
 /// Runs scaled perturbation and returns its propagated arithmetic envelope.
@@ -104,11 +98,19 @@ pub fn perturb_scaled_f64_with_envelope(
     let mut minimum_escape_margin = f64::INFINITY;
     let mut last_value = z_zero;
     if !renormalize(&mut delta_prime, &mut delta_c_prime, &mut exponent) {
-        return Ok(glitch_result(rebase_count, absolute_error, minimum_escape_margin));
+        return Ok(glitch_result(
+            rebase_count,
+            absolute_error,
+            minimum_escape_margin,
+        ));
     }
     for iteration in 0..params.max_iter {
         let Some(record) = orbit.get(reference_index) else {
-            return Ok(glitch_result(rebase_count, absolute_error, minimum_escape_margin));
+            return Ok(glitch_result(
+                rebase_count,
+                absolute_error,
+                minimum_escape_margin,
+            ));
         };
         let reference = reconstruct(*record);
         let actual_delta = ldexp_complex(delta_prime, exponent);
@@ -141,16 +143,28 @@ pub fn perturb_scaled_f64_with_envelope(
         let should_rebase = actual_delta.hypot() != 0.0 && z.hypot() < actual_delta.hypot();
         if should_rebase {
             if rebase_count == MAX_EXACT_F32_INTEGER {
-                return Ok(glitch_result(rebase_count, absolute_error, minimum_escape_margin));
+                return Ok(glitch_result(
+                    rebase_count,
+                    absolute_error,
+                    minimum_escape_margin,
+                ));
             }
             let Some(inverse_exponent) = exponent.checked_neg() else {
-                return Ok(glitch_result(rebase_count, absolute_error, minimum_escape_margin));
+                return Ok(glitch_result(
+                    rebase_count,
+                    absolute_error,
+                    minimum_escape_margin,
+                ));
             };
             delta_prime = ldexp_complex(z.sub(z_zero), inverse_exponent);
             reference_index = 0;
             rebase_count += 1;
             if !renormalize(&mut delta_prime, &mut delta_c_prime, &mut exponent) {
-                return Ok(glitch_result(rebase_count, absolute_error, minimum_escape_margin));
+                return Ok(glitch_result(
+                    rebase_count,
+                    absolute_error,
+                    minimum_escape_margin,
+                ));
             }
         }
         let reference = if should_rebase { z_zero } else { reference };
@@ -160,7 +174,11 @@ pub fn perturb_scaled_f64_with_envelope(
         delta_prime = ordinary_advance(delta_prime, delta_c_prime, exponent, reference);
         reference_index += 1;
         if !renormalize(&mut delta_prime, &mut delta_c_prime, &mut exponent) {
-            return Ok(glitch_result(rebase_count, absolute_error, minimum_escape_margin));
+            return Ok(glitch_result(
+                rebase_count,
+                absolute_error,
+                minimum_escape_margin,
+            ));
         }
     }
     Ok((
@@ -251,9 +269,7 @@ fn norm_squared(value: Complex64) -> f64 {
 
 fn propagated_error(reference_norm: f64, delta_norm: f64, previous: f64) -> f64 {
     let amplification = 2.0 * (reference_norm + delta_norm);
-    let arithmetic = 32.0
-        * f64::EPSILON
-        * (1.0 + reference_norm + delta_norm).powi(2);
+    let arithmetic = 32.0 * f64::EPSILON * (1.0 + reference_norm + delta_norm).powi(2);
     amplification.mul_add(previous, arithmetic)
 }
 
@@ -361,12 +377,7 @@ mod tests {
 
     #[test]
     fn orbit_exhaustion_is_an_honest_glitch() -> Result<(), MathError> {
-        let sample = perturb_scaled_f64(
-            &[record(0.0, 0.0)],
-            [0.0; 4],
-            -500,
-            EscapeParams::new(2),
-        )?;
+        let sample = perturb_scaled_f64(&[record(0.0, 0.0)], [0.0; 4], -500, EscapeParams::new(2))?;
         assert!(sample.glitch);
         assert!(!sample.escaped);
         assert_eq!(sample.smooth_iter, -1.0);
@@ -381,12 +392,8 @@ mod tests {
             record(6.0, 0.0),
             record(38.0, 0.0),
         ];
-        let (sample, envelope) = perturb_scaled_f64_with_envelope(
-            &orbit,
-            [0.0; 4],
-            -900,
-            EscapeParams::new(16),
-        )?;
+        let (sample, envelope) =
+            perturb_scaled_f64_with_envelope(&orbit, [0.0; 4], -900, EscapeParams::new(16))?;
         assert_eq!(sample.escape_index, Some(3));
         assert!(sample.escaped);
         assert!(envelope.smooth_error <= 2.0e-3);

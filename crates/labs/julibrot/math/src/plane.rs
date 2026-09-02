@@ -18,7 +18,11 @@ pub fn preset_spec(preset: PlanePreset) -> Result<PlaneSpec, MathError> {
             plane_origin: [0.0, 0.0, c0[0], c0[1]],
         },
     };
-    if spec.plane_origin.iter().all(|component| component.is_finite()) {
+    if spec
+        .plane_origin
+        .iter()
+        .all(|component| component.is_finite())
+    {
         Ok(spec)
     } else {
         Err(MathError::NonFinite)
@@ -40,10 +44,7 @@ pub fn construct_plane(preset: PlanePreset, angles: PlaneAngles) -> Result<Plane
 ///
 /// Returns an error for duplicate axes, non-finite input, or a failed postcondition.
 #[allow(clippy::cast_possible_truncation)]
-pub fn construct_plane_from_spec(
-    spec: PlaneSpec,
-    angles: PlaneAngles,
-) -> Result<Plane, MathError> {
+pub fn construct_plane_from_spec(spec: PlaneSpec, angles: PlaneAngles) -> Result<Plane, MathError> {
     if spec.axis_a == spec.axis_b {
         return Err(MathError::InvalidPlaneSeed);
     }
@@ -118,10 +119,7 @@ mod tests {
             preset_spec(PlanePreset::Julia { c0: [-0.8, 0.156] })?.plane_origin,
             [0.0, 0.0, -0.8, 0.156]
         );
-        assert_eq!(
-            preset_spec(PlanePreset::Mandelbrot)?.axis_a,
-            Axis4::E3
-        );
+        assert_eq!(preset_spec(PlanePreset::Mandelbrot)?.axis_a, Axis4::E3);
         Ok(())
     }
 

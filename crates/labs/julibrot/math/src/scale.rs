@@ -1,6 +1,5 @@
 use crate::{
-    BigCentre, BigScalar, CentreF64, CentreSplit, MathError, Plane, PrecisionPlan,
-    ScaledPixelScale,
+    BigCentre, BigScalar, CentreF64, CentreSplit, MathError, Plane, PrecisionPlan, ScaledPixelScale,
 };
 
 const LOG10_2: f64 = core::f64::consts::LOG10_2;
@@ -58,10 +57,7 @@ pub fn split_centre(centre: &BigCentre) -> Result<CentreSplit, MathError> {
 ///
 /// Returns an error for non-finite zoom, zero width, or exponent overflow.
 #[allow(clippy::cast_possible_truncation)]
-pub fn scaled_pixel_scale(
-    zoom_log2: f64,
-    grid_width: u32,
-) -> Result<ScaledPixelScale, MathError> {
+pub fn scaled_pixel_scale(zoom_log2: f64, grid_width: u32) -> Result<ScaledPixelScale, MathError> {
     if !zoom_log2.is_finite() {
         return Err(MathError::NonFinite);
     }
@@ -84,10 +80,7 @@ pub fn scaled_pixel_scale(
     if !(0.5..1.0).contains(&mantissa) {
         return Err(MathError::NonFinite);
     }
-    Ok(ScaledPixelScale {
-        mantissa,
-        exponent,
-    })
+    Ok(ScaledPixelScale { mantissa, exponent })
 }
 
 /// Compatibility spelling for [`scaled_pixel_scale`].
@@ -315,12 +308,7 @@ mod tests {
             basis_u: [1.0, 0.0, 0.0, 0.0],
             basis_v: [0.0, 1.0, 0.0, 0.0],
         };
-        let offset = scaled_pixel_offset(
-            plane,
-            scaled_pixel_scale(0.0, 2)?,
-            [2, 2],
-            [0, 0],
-        )?;
+        let offset = scaled_pixel_offset(plane, scaled_pixel_scale(0.0, 2)?, [2, 2], [0, 0])?;
         assert_eq!(offset, [-0.25, -0.25, 0.0, 0.0]);
         Ok(())
     }

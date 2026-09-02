@@ -218,7 +218,9 @@ pub enum MathError {
 
 #[cfg(test)]
 mod tests {
-    use super::{CentreF64, CentreSplit, EscapeGridRecord, EscapeParams, Plane, ReferenceOrbitRecord};
+    use super::{
+        CentreF64, CentreSplit, EscapeGridRecord, EscapeParams, Plane, ReferenceOrbitRecord,
+    };
     use std::mem::{align_of, offset_of, size_of};
 
     #[test]

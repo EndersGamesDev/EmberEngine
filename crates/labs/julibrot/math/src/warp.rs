@@ -10,8 +10,7 @@ const MINIMUM_DETERMINANT: f64 = 1.0 / 1_099_511_627_776.0;
 pub fn warp_matrix(from: &Pose, to: &Pose) -> Result<WarpMatrix, MathError> {
     validate_pose(from)?;
     validate_pose(to)?;
-    let scale_ratio = (from.zoom_log2 - to.zoom_log2).exp2()
-        * f64::from(from.grid_width)
+    let scale_ratio = (from.zoom_log2 - to.zoom_log2).exp2() * f64::from(from.grid_width)
         / f64::from(to.grid_width);
     if !scale_ratio.is_finite() || scale_ratio == 0.0 {
         return Err(MathError::DegenerateWarp);
