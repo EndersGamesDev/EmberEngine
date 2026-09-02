@@ -146,6 +146,51 @@ pub enum DispatchError {
     /// Static header count or offsets disagree with the output plan.
     #[error("static dispatch headers do not match output pages")]
     HeaderMismatch,
+    /// No immutable header set was supplied for a reservation.
+    #[error("a header reservation requires at least one set")]
+    EmptyHeaderSets,
+    /// A header set exceeds the executor's per-set page capacity.
+    #[error("header set has {actual} pages; executor capacity is {capacity}")]
+    HeaderPageCapacity {
+        /// Supplied page count.
+        actual: u32,
+        /// Fixed pages per set.
+        capacity: u32,
+    },
+    /// The fixed header-set regions cannot admit the requested reservation.
+    #[error(
+        "header buffer cannot reserve {requested_sets} sets; {available_sets} set regions are free"
+    )]
+    HeaderSetCapacity {
+        /// Contiguous set regions requested.
+        requested_sets: u32,
+        /// Total currently free set regions.
+        available_sets: u32,
+    },
+    /// A handle came from another executor.
+    #[error("header-set handle belongs to another executor")]
+    ForeignHeaderSet,
+    /// A handle names a released or reused reservation.
+    #[error("header-set handle is stale")]
+    StaleHeaderSet,
+    /// A selector names no resident set in its reservation.
+    #[error("header set {set} is outside reservation count {set_count}")]
+    HeaderSetSelection {
+        /// Requested set index.
+        set: u32,
+        /// Number of resident sets.
+        set_count: u32,
+    },
+    /// A selector names no page in its resident set.
+    #[error("header page {page} is outside set {set} page count {page_count}")]
+    HeaderPageSelection {
+        /// Selected set.
+        set: u32,
+        /// Requested page.
+        page: u32,
+        /// Number of resident pages in the set.
+        page_count: u32,
+    },
 }
 
 /// One fragment pass selected by a static dynamic-uniform offset.

@@ -34,8 +34,8 @@ pub use dialect::{
     PagePass, RegisteredKernel,
 };
 pub use executor::{
-    ExecutorCapacity, ExecutorDispatch, ExecutorError, GpuKernel, GpuKernelExecutor,
-    GpuKernelExecutorConfig, HeapPresentResources,
+    DispatchSelector, ExecutorCapacity, ExecutorDispatch, ExecutorError, GpuKernel,
+    GpuKernelExecutor, GpuKernelExecutorConfig, HeaderSetHandle, HeapPresentResources,
 };
 pub use heap::{Descriptor, Handle, HeapAllocator, HeapError, HeapKind, PackedDescriptor};
 pub use lattice::{
@@ -45,8 +45,8 @@ pub use lattice::{
 #[cfg(target_arch = "wasm32")]
 pub use lattice_gpu::{
     cancel_heap_lattice, conform_heap_lattice_json, measure_heap_lattice_batch_json,
-    render_heap_lattice_frame_json, select_heap_lattice_json, start_heap_lattice,
-    take_heap_lattice_panic,
+    install_heap_lattice_panic_hook, render_heap_lattice_frame_json, select_heap_lattice_json,
+    start_heap_lattice, take_heap_lattice_panic,
 };
 pub use mode_c::{
     ComparatorWork, EqualWorkSignature, ModeCFrameUniform, layer_comparator_draw_shader,
@@ -55,7 +55,7 @@ pub use mode_c::{
 pub use selection::{SelectionEpoch, SurfaceOwnership};
 pub use span::{
     DataSpan, DeliveryPlan, DispatchHeader, PackedSpan, SpanArena, SpanDirectory, SpanError,
-    StaticHeaders, WallTerm,
+    SpanPlan, StaticHeaders, WallTerm,
 };
 #[cfg(target_arch = "wasm32")]
 pub use spike::{cancel_heap_spike, run_heap_spike_json};

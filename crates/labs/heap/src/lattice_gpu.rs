@@ -811,6 +811,7 @@ impl LatticeLab {
                 directory_binding_bytes: DIRECTORY_BYTES,
                 scratch_layers: 4,
                 max_header_pages: MAX_HEADER_PAGES,
+                max_header_sets: 3,
                 kernel_uniform_bytes: 192,
             },
         )

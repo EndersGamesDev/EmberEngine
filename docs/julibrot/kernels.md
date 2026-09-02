@@ -254,7 +254,7 @@ The public error set is `KernelError::{InvalidExtent,ArithmeticOverflow,ScaleExp
 
 `GpuKernelExecutor` is the review-approved minimal public seam extracted by the app lane from the already-paid heap lattice runtime: it owns DATA and four-layer SCRATCH textures, `SpanArena`, immutable bind group, descriptor/directory/header/resource/uniform buffers, exact-row copy encoding, and live capacity reports; if extraction requires more than moving existing code behind a public boundary, the app lane stops and reports rather than forking behavior.
 
-The executor method is `GpuKernelExecutor::prefix_headers(&self, span: &DataSpan, active_len: u32) -> Result<StaticHeaders, SpanError>`; it requires `1 ≤ active_len ≤ span.logical_len`, emits only the prefix page headers with the exact final valid length, uses the live dynamic-uniform alignment, and performs no upload or allocation.
+The executor method is `GpuKernelExecutor::prefix_headers(&self, span: &DataSpan, active_len: u32) -> Result<StaticHeaders, DispatchError>`; it requires `1 ≤ active_len ≤ span.logical_len`, emits only the prefix page headers with the exact final valid length, uses the live dynamic-uniform alignment, and performs no upload or allocation.
 
 ### 3.7 App and present coordination
 
