@@ -182,6 +182,7 @@ pub fn mode_c_register(
     )
 }
 
+#[allow(clippy::suboptimal_flops)]
 fn rotate_project(point: [f32; 5], uniform: &LatticeUniform) -> ([f32; 3], f32, bool) {
     let (sine_one, cosine_one) = uniform.theta_one.sin_cos();
     let (sine_two, cosine_two) = uniform.theta_two.sin_cos();
