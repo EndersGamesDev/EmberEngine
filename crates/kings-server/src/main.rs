@@ -6,13 +6,17 @@
 //! out in every `Welcome` (`docs/hosts.md`, section 4): `--name` first, else
 //! the `EMBER_HOST_NAME` environment variable, else empty.
 
+use std::io::IsTerminal;
 use std::net::TcpListener;
 
 fn main() -> std::io::Result<()> {
+    // The deploy appends stdout to a log file and later prints its first
+    // line; colour codes there are noise, so they are only used on a tty.
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
+        .with_ansi(std::io::stdout().is_terminal())
         .init();
 
     let mut bind = "127.0.0.1:7782".to_string();
