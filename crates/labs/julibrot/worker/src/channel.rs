@@ -301,8 +301,9 @@ impl OwnerEndpoint {
         if let OwnerBackend::Browser(browser) = &self.backend {
             return browser.pending_request_depth();
         }
-        self.queue_core()
-            .map_or(0, |queue| u32::from(queue.borrow().pending_request.is_some()))
+        self.queue_core().map_or(0, |queue| {
+            u32::from(queue.borrow().pending_request.is_some())
+        })
     }
 
     /// Returns one coherent copy of the page-visible channel accounting.

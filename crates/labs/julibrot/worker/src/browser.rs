@@ -780,18 +780,10 @@ async fn run_producer_inner() -> Result<(), ChannelError> {
                 transfer,
                 credit_us,
             } => Ok((request, transfer, credit_us)),
-            BrowserWork::Delay(_) => Err(ChannelError::new(
-                ErrorCode::UnexpectedWork,
-                1,
-                0,
-                0,
-            )),
-            BrowserWork::TimingUnavailable { .. } => Err(ChannelError::new(
-                ErrorCode::UnexpectedWork,
-                2,
-                0,
-                0,
-            )),
+            BrowserWork::Delay(_) => Err(ChannelError::new(ErrorCode::UnexpectedWork, 1, 0, 0)),
+            BrowserWork::TimingUnavailable { .. } => {
+                Err(ChannelError::new(ErrorCode::UnexpectedWork, 2, 0, 0))
+            }
         }?;
         let mut task = match crate::ReferenceOrbitTask::start(&request, &clock) {
             Ok(task) => task,
