@@ -3,15 +3,28 @@
 #![deny(missing_docs)]
 
 mod homography;
+mod contract;
+mod fence;
+mod gpu;
 mod mesh;
 mod palette;
+mod planner;
 mod shader;
+mod state;
 mod uniform;
 mod warp_shader;
 
+pub use contract::{
+    DropReason, FenceRefusal, FrameReceipt, FrameState, PresentConfig, PresentError, PresentEvent,
+    PresentFacts, PresentHot, PresentMain, PresentStatus, SampleClass, SceneFrame, SubmissionKind,
+    SubmissionMeasurement, WarpKind, WarpPlan,
+};
+pub use ember_julibrot_math::{Pose, ViewMode};
+pub use ember_julibrot_kernels::RefinementLevel;
 pub use homography::{
     apply_homography, inverse_identity_error, pack_homography_rows, solve_homography,
 };
+pub use gpu::Presenter;
 pub use mesh::{
     HeightSample, MeshError, display_coordinate, height_for_record, tumbled_index_count,
     tumbled_indices, view_rotation,
@@ -20,6 +33,7 @@ pub use palette::{
     CLASSIC_PALETTE, EMBER_PALETTE, ICE_PALETTE, PaletteId, PaletteOutcome, PaletteRecord, palette,
     shade_escape_record,
 };
+pub use planner::Warp;
 pub use shader::{ShaderSources, scene_shaders};
 pub use uniform::{
     HOT_PAYLOAD_BYTES, HOT_RING_SLOTS, HotSlot, HotUniform, PresentDataError, SceneUniform,

@@ -6,7 +6,11 @@ version.workspace = true
 [dependencies]
 bytemuck.workspace = true
 ember-lab-heap = { path = "../../heap" }
+ember-julibrot-kernels = { path = "../kernels" }
+ember-julibrot-math = { path = "../math" }
+ember-julibrot-worker = { path = "../worker" }
 thiserror.workspace = true
+wgpu = { workspace = true, features = ["webgl", "wgsl"] }
 
 [dev-dependencies]
 naga = { version = "24", features = ["wgsl-in"] }

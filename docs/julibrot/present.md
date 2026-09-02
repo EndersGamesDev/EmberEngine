@@ -1,6 +1,6 @@
 # Julibrot presentation slice
 
-Status: implementation in progress for `crates/labs/julibrot/present`; the seam-independent foundation contains present-owned palettes, exact GPU record layouts, HOT-ring arithmetic, generic homography packing and solving, checked tumbled mesh construction, an algebra-oracle bridge to the heap dependency, heap-capacity-specialized flat/tumbled scene WGSL, and the sole warp WGSL, while math-owned warp integration and heap-resource construction remain dependency-gated.
+Status: implementation in progress for `crates/labs/julibrot/present`; the merged math and heap seams now drive the f64 flat/tumbled planner, exact app records, two-texture runtime, HOT ring, selected scene pass, sole warp pass, and bounded four-byte fences, while server gates and final implementation evidence remain pending.
 
 ## 1. Ownership and boundary
 
@@ -397,13 +397,13 @@ Phase 4A now implements and validates the sole fullscreen warp WGSL, including s
 
 Phase 0 adds the present package shell, shared records, byte-layout assertions, palette scalar reference, consumption of the app-lane `HeapPresentResources` seam, and pure f64 homography/oracle code, estimated at 360 new Rust and test lines.
 
-Phase 1 adds the two-texture state machine, 3-slot dynamic HOT ring, 80-byte MAIN block, bounded four-byte fence polling, typed events, and native interleaving tests, estimated at 480 lines.
+Phase 1 is implemented by the two-texture state ledger, 3-slot dynamic HOT ring, 80-byte MAIN block, bounded four-byte fence polling, typed events, and native interleaving tests, estimated at 480 lines.
 
-Phase 2 adds the flat fullscreen scene pipeline, descriptor/span accessor generation by heap dependency, palette and honest glitch shading, resize handling, and flat image fixtures, estimated at 340 Rust/WGSL/test lines.
+Phase 2 is implemented by the flat fullscreen scene pipeline, heap-capacity descriptor/span accessor generation, palette and honest glitch shading, and target-resize handling; browser image facts remain visible replay, estimated at 340 Rust/WGSL/test lines.
 
-Phase 3 adds tumbled grid/index generation, five-dimensional vertex algebra conformance through `mode_a_endpoint`, rawgl camera/depth/lighting, nearest fragment classification, and mesh/pole tests, estimated at 520 lines.
+Phase 3 is implemented by tumbled grid/index generation, five-dimensional vertex algebra conformance through `mode_a_endpoint`, rawgl camera/depth/lighting, nearest fragment classification, and mesh/pole tests, estimated at 520 lines.
 
-Phase 4 adds flat and tumbled warp planning, the one fullscreen warp pipeline, clear/disocclusion behavior, f64 and f32 accuracy tests, approximation error facts, and the no-frame path, estimated at 440 lines.
+Phase 4 is implemented by math's flat matrix, the f64 four-anchor tumbled planner and 9-by-9-by-5 error corpus, the one fullscreen warp pipeline, clear disocclusions, and the no-frame path, estimated at 440 lines.
 
 Phase 5 adds the exact app-facing API, facts snapshots, warm-up and reproject counting, page-contract tests, visible-replay hooks, release reconciliation, and documentation updates, estimated at 360 lines.
 
@@ -411,7 +411,7 @@ The implementation estimate is 2,500 net new lines across Rust, WGSL, tests, man
 
 ## 8. Unresolved joint-review findings
 
-- `HeapPresentResources` does not yet exist in the current heap public API; J16 assigns its visibility-first extraction to the app lane, and that lane must stop if extraction needs more than moving existing code behind `pub`, so feasibility remains unmeasured until implementation Phase 0.
+- `HeapPresentResources` is now published and sufficient for immutable presentation bindings, but the GL backend's validation of the independently reconstructed three-binding layout remains `requires visible replay` because the seam deliberately exposes resources rather than the private heap bind-group layout object.
 
 - Existing `ember_lab_heap::mode_a_endpoint` is reusable as the CPU algebra oracle but requires a manually constructed `FrameUniform`; the contract accepts that public function without requesting another heap seam, while implementation still has to prove its operation order covers every tumbled vertex case.
 
