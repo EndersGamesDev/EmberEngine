@@ -1,0 +1,606 @@
+//! Exact construction and reference math for the dodecahedral prism.
+
+/// Former uniform-axis ladder ceiling that the mixed-radix ladder crosses.
+pub const LATTICE_AXIS_TOP: u32 = 45;
+
+/// Fixed center-to-center spacing of the five-dimensional lattice.
+pub const LATTICE_SPACING: f64 = 8.0;
+
+/// Edges in one 120-cell prism copy.
+pub const EDGES_PER_COPY: u64 = 3_000;
+
+/// One edge, stored as endpoint vertex indices.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Edge {
+    /// First endpoint.
+    pub a: u32,
+    /// Second endpoint.
+    pub b: u32,
+}
+
+/// The fully derived 120-cell prism.
+#[derive(Clone, Debug)]
+pub struct Prism {
+    /// Five-dimensional vertex coordinates.
+    pub vertices: Vec<[f64; 5]>,
+    /// All in-cap edges and struts.
+    pub edges: Vec<Edge>,
+    /// Edge length derived from the minimum cap-vertex separation.
+    pub edge_length: f64,
+    /// Common four-dimensional cap circumradius.
+    pub cap_circumradius: f64,
+}
+
+/// Edge transform emitted by the second kernel.
+#[derive(Clone, Copy, Debug)]
+pub struct EdgePose<T> {
+    /// Projected midpoint.
+    pub midpoint: [T; 3],
+    /// Unit direction used as an orientation axis.
+    pub direction: [T; 3],
+    /// Projected edge length.
+    pub length: T,
+    /// Fifth-axis hue coordinate in zero-to-one range.
+    pub hue: T,
+}
+
+/// Builds the empty rung, the unit lattice, then grows one axis by two round-robin.
+///
+/// The final rung is the first one beyond the former `(45,45,45,45,45)` ceiling.
+#[must_use]
+pub fn lattice_steps() -> Vec<[u32; 5]> {
+    let mut steps = Vec::with_capacity(113);
+    steps.push([0; 5]);
+    let mut axes = [1_u32; 5];
+    steps.push(axes);
+    let mut axis_index = 0;
+    while axes != [LATTICE_AXIS_TOP; 5] {
+        axes[axis_index] = axes[axis_index].saturating_add(2);
+        steps.push(axes);
+        axis_index = (axis_index + 1) % axes.len();
+    }
+    axes[0] = axes[0].saturating_add(2);
+    steps.push(axes);
+    steps
+}
+
+/// Number of copies at one centered mixed-radix five-dimensional lattice step.
+#[must_use]
+pub fn lattice_copy_count(axes: [u32; 5]) -> u64 {
+    if axes.contains(&0) {
+        0
+    } else {
+        axes.into_iter()
+            .map(u64::from)
+            .fold(1_u64, u64::saturating_mul)
+    }
+}
+
+/// Total submitted edges requested by one lattice step.
+#[must_use]
+pub fn lattice_edge_count(axes: [u32; 5]) -> u64 {
+    lattice_copy_count(axes).saturating_mul(EDGES_PER_COPY)
+}
+
+/// Decodes a linear copy index into centered mixed-radix lattice coordinates.
+#[must_use]
+pub fn lattice_coordinate(mut copy: u64, axes: [u32; 5]) -> Option<[i32; 5]> {
+    if copy >= lattice_copy_count(axes) {
+        return None;
+    }
+    let mut coordinate = [0_i32; 5];
+    for (component, count) in coordinate.iter_mut().zip(axes) {
+        let radix = u64::from(count);
+        let half = i32::try_from(count / 2).ok()?;
+        *component = i32::try_from(copy % radix).ok()? - half;
+        copy /= radix;
+    }
+    Some(coordinate)
+}
+
+/// Symmetric post-rotation fifth-axis hue range enclosing a lattice step.
+#[must_use]
+pub fn lattice_fifth_range(object: &Prism, axes: [u32; 5]) -> f64 {
+    let third_extent = f64::from(axes[2].saturating_sub(1) / 2) * LATTICE_SPACING;
+    let fifth_extent = f64::from(axes[4].saturating_sub(1) / 2) * LATTICE_SPACING;
+    object
+        .vertices
+        .iter()
+        .map(|point| (point[2].abs() + third_extent).hypot(point[4].abs() + fifth_extent))
+        .fold(1.0_f64, f64::max)
+}
+
+fn permutations() -> Vec<[usize; 4]> {
+    let mut result = Vec::with_capacity(24);
+    for a in 0..4 {
+        for b in 0..4 {
+            for c in 0..4 {
+                for d in 0..4 {
+                    if a != b && a != c && a != d && b != c && b != d && c != d {
+                        result.push([a, b, c, d]);
+                    }
+                }
+            }
+        }
+    }
+    result
+}
+
+fn even(permutation: [usize; 4]) -> bool {
+    let mut inversions = 0;
+    for left in 0..4 {
+        for right in left + 1..4 {
+            inversions += usize::from(permutation[left] > permutation[right]);
+        }
+    }
+    inversions % 2 == 0
+}
+
+fn add_family(vertices: &mut Vec<[f64; 4]>, base: [f64; 4], even_only: bool) {
+    for permutation in permutations() {
+        if even_only && !even(permutation) {
+            continue;
+        }
+        let mut permuted = [0.0; 4];
+        for (destination, source) in permutation.into_iter().enumerate() {
+            permuted[destination] = base[source];
+        }
+        let nonzero = permuted.iter().filter(|value| **value != 0.0).count();
+        for signs in 0..(1_usize << nonzero) {
+            let mut point = permuted;
+            let mut sign_index = 0;
+            for coordinate in &mut point {
+                if *coordinate != 0.0 {
+                    if signs & (1 << sign_index) != 0 {
+                        *coordinate = -*coordinate;
+                    }
+                    sign_index += 1;
+                }
+            }
+            if !vertices.contains(&point) {
+                vertices.push(point);
+            }
+        }
+    }
+}
+
+/// Constructs the 600 vertices of a regular 120-cell from its seven coordinate families.
+#[must_use]
+pub fn cap_vertices() -> Vec<[f64; 4]> {
+    let sqrt5 = 5.0_f64.sqrt();
+    let phi = f64::midpoint(1.0, sqrt5);
+    let mut vertices = Vec::with_capacity(600);
+    add_family(&mut vertices, [0.0, 0.0, 2.0, 2.0], false);
+    add_family(&mut vertices, [1.0, 1.0, 1.0, sqrt5], false);
+    add_family(&mut vertices, [phi.powi(-2), phi, phi, phi], false);
+    add_family(
+        &mut vertices,
+        [phi.recip(), phi.recip(), phi.recip(), phi.powi(2)],
+        false,
+    );
+    add_family(&mut vertices, [0.0, phi.powi(-2), 1.0, phi.powi(2)], true);
+    add_family(&mut vertices, [0.0, phi.recip(), phi, sqrt5], true);
+    add_family(&mut vertices, [phi.recip(), 1.0, phi, 2.0], true);
+    vertices
+}
+
+fn squared_distance(left: &[f64], right: &[f64]) -> f64 {
+    left.iter().zip(right).map(|(a, b)| (a - b) * (a - b)).sum()
+}
+
+fn derive_cap_edges(vertices: &[[f64; 4]]) -> (f64, Vec<Edge>) {
+    let mut minimum = f64::INFINITY;
+    for (left_index, left) in vertices.iter().enumerate() {
+        for right in &vertices[left_index + 1..] {
+            minimum = minimum.min(squared_distance(left, right));
+        }
+    }
+    let tolerance = minimum * 1.0e-10;
+    let mut edges = Vec::new();
+    for (left_index, left) in vertices.iter().enumerate() {
+        for (right_index, right) in vertices.iter().enumerate().skip(left_index + 1) {
+            if (squared_distance(left, right) - minimum).abs() <= tolerance
+                && let (Ok(a), Ok(b)) = (u32::try_from(left_index), u32::try_from(right_index))
+            {
+                edges.push(Edge { a, b });
+            }
+        }
+    }
+    (minimum.sqrt(), edges)
+}
+
+/// Derives both caps, all minimum-distance cap edges, and the vertex-to-vertex struts.
+#[must_use]
+pub fn prism() -> Prism {
+    let cap = cap_vertices();
+    let (edge_length, cap_edges) = derive_cap_edges(&cap);
+    let half_strut = edge_length * 0.5;
+    let mut vertices = Vec::with_capacity(1_200);
+    vertices.extend(
+        cap.iter()
+            .map(|point| [point[0], point[1], point[2], point[3], -half_strut]),
+    );
+    vertices.extend(
+        cap.iter()
+            .map(|point| [point[0], point[1], point[2], point[3], half_strut]),
+    );
+    let mut edges = Vec::with_capacity(3_000);
+    edges.extend(cap_edges.iter().copied());
+    edges.extend(cap_edges.iter().map(|edge| Edge {
+        a: edge.a + 600,
+        b: edge.b + 600,
+    }));
+    edges.extend((0..600).map(|index| Edge {
+        a: index,
+        b: index + 600,
+    }));
+    let cap_circumradius = cap[0].iter().map(|value| value * value).sum::<f64>().sqrt();
+    Prism {
+        vertices,
+        edges,
+        edge_length,
+        cap_circumradius,
+    }
+}
+
+fn rotate(point: [f64; 5], time: f64) -> [f64; 5] {
+    let theta_one = 0.4 * time;
+    let theta_two = f64::midpoint(1.0, 5.0_f64.sqrt()) * theta_one;
+    let (sin_one, cos_one) = theta_one.sin_cos();
+    let (sin_two, cos_two) = theta_two.sin_cos();
+    [
+        point[1].mul_add(-sin_one, point[0] * cos_one),
+        point[1].mul_add(cos_one, point[0] * sin_one),
+        point[4].mul_add(-sin_two, point[2] * cos_two),
+        point[3],
+        point[4].mul_add(cos_two, point[2] * sin_two),
+    ]
+}
+
+/// Applies the specified SO(5) rotation and the two perspective projections in `f64`.
+#[must_use]
+pub fn project_reference(point: [f64; 5], time: f64) -> ([f64; 3], f64) {
+    let rotated = rotate(point, time);
+    let scale_five = 8.0 / (8.0 - rotated[4]);
+    let point_four = [
+        rotated[0] * scale_five,
+        rotated[1] * scale_five,
+        rotated[2] * scale_five,
+        rotated[3] * scale_five,
+    ];
+    let scale_four = 8.0 / (8.0 - point_four[3]);
+    (
+        [
+            point_four[0] * scale_four,
+            point_four[1] * scale_four,
+            point_four[2] * scale_four,
+        ],
+        rotated[4],
+    )
+}
+
+/// Mirrors the two WGSL kernels' `f32` arithmetic for native conformance tests.
+#[must_use]
+#[allow(clippy::cast_possible_truncation, clippy::suboptimal_flops)]
+pub fn project_gpu_path(point: [f64; 5], time: f64) -> ([f32; 3], f32) {
+    let point = point.map(|value| value as f32);
+    let theta_one = 0.4 * time as f32;
+    let theta_two = f32::midpoint(1.0, 5.0_f32.sqrt()) * theta_one;
+    let (sin_one, cos_one) = theta_one.sin_cos();
+    let (sin_two, cos_two) = theta_two.sin_cos();
+    let rotated = [
+        point[0] * cos_one - point[1] * sin_one,
+        point[0] * sin_one + point[1] * cos_one,
+        point[2] * cos_two - point[4] * sin_two,
+        point[3],
+        point[2] * sin_two + point[4] * cos_two,
+    ];
+    let scale_five = 8.0 / (8.0 - rotated[4]);
+    let point_four = [
+        rotated[0] * scale_five,
+        rotated[1] * scale_five,
+        rotated[2] * scale_five,
+        rotated[3] * scale_five,
+    ];
+    let scale_four = 8.0 / (8.0 - point_four[3]);
+    (
+        [
+            point_four[0] * scale_four,
+            point_four[1] * scale_four,
+            point_four[2] * scale_four,
+        ],
+        rotated[4],
+    )
+}
+
+/// Computes the `f64` reference edge transform and fixed-range fifth-axis hue.
+#[must_use]
+pub fn edge_reference(first: ([f64; 3], f64), second: ([f64; 3], f64)) -> EdgePose<f64> {
+    let delta = [
+        second.0[0] - first.0[0],
+        second.0[1] - first.0[1],
+        second.0[2] - first.0[2],
+    ];
+    let length = delta.iter().map(|value| value * value).sum::<f64>().sqrt();
+    EdgePose {
+        midpoint: [
+            f64::midpoint(first.0[0], second.0[0]),
+            f64::midpoint(first.0[1], second.0[1]),
+            f64::midpoint(first.0[2], second.0[2]),
+        ],
+        direction: delta.map(|value| value / length),
+        length,
+        hue: (f64::midpoint(first.1, second.1) / 6.0 + 0.5).clamp(0.0, 1.0),
+    }
+}
+
+/// Mirrors the edge WGSL's `f32` transform and hue arithmetic.
+#[must_use]
+pub fn edge_gpu_path(first: ([f32; 3], f32), second: ([f32; 3], f32)) -> EdgePose<f32> {
+    let delta = [
+        second.0[0] - first.0[0],
+        second.0[1] - first.0[1],
+        second.0[2] - first.0[2],
+    ];
+    let length = delta.iter().map(|value| value * value).sum::<f32>().sqrt();
+    EdgePose {
+        midpoint: [
+            f32::midpoint(first.0[0], second.0[0]),
+            f32::midpoint(first.0[1], second.0[1]),
+            f32::midpoint(first.0[2], second.0[2]),
+        ],
+        direction: delta.map(|value| value / length),
+        length,
+        hue: (f32::midpoint(first.1, second.1) / 6.0 + 0.5).clamp(0.0, 1.0),
+    }
+}
+
+/// Checks the construction invariants and both projection poles.
+///
+/// # Panics
+///
+/// Panics only if deterministic construction or reference arithmetic violates the charter.
+pub fn assert_invariants() {
+    let cap = cap_vertices();
+    assert_eq!(cap.len(), 600, "120-cell cap vertex count");
+    let prism = prism();
+    assert_eq!(prism.vertices.len(), 1_200, "prism vertex count");
+    assert_eq!(prism.edges.len(), 3_000, "prism edge count");
+    let expected_length = 3.0 - 5.0_f64.sqrt();
+    assert!((prism.edge_length - expected_length).abs() <= 1.0e-12);
+    for edge in &prism.edges {
+        let length = squared_distance(
+            &prism.vertices[edge.a as usize],
+            &prism.vertices[edge.b as usize],
+        )
+        .sqrt();
+        assert!((length - prism.edge_length).abs() <= prism.edge_length * 1.0e-9);
+    }
+    for point in &cap {
+        let radius = point.iter().map(|value| value * value).sum::<f64>().sqrt();
+        assert!((radius - prism.cap_circumradius).abs() <= 1.0e-12);
+    }
+    let maximum_fifth_reach = prism
+        .vertices
+        .iter()
+        .map(|point| point[2].hypot(point[4]))
+        .fold(0.0_f64, f64::max);
+    let maximum_fourth_projection = prism
+        .vertices
+        .iter()
+        .map(|point| point[3].abs() * 8.0 / (8.0 - maximum_fifth_reach))
+        .fold(0.0_f64, f64::max);
+    assert!(
+        maximum_fifth_reach < 8.0,
+        "5D projection pole intersects object reach"
+    );
+    assert!(
+        maximum_fourth_projection < 8.0,
+        "4D projection pole intersects object reach"
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[allow(clippy::suboptimal_flops)]
+    fn cross(left: [f32; 3], right: [f32; 3]) -> [f32; 3] {
+        [
+            left[1] * right[2] - left[2] * right[1],
+            left[2] * right[0] - left[0] * right[2],
+            left[0] * right[1] - left[1] * right[0],
+        ]
+    }
+
+    fn dot(left: [f32; 3], right: [f32; 3]) -> f32 {
+        left.into_iter().zip(right).map(|(a, b)| a * b).sum()
+    }
+
+    fn normalize(value: [f32; 3]) -> [f32; 3] {
+        let length = dot(value, value).sqrt();
+        value.map(|component| component / length)
+    }
+
+    #[allow(clippy::suboptimal_flops)]
+    fn renderer_box_point(
+        midpoint_hue: [f32; 4],
+        orientation_length: [f32; 4],
+        local: [f32; 3],
+        half_thickness: f32,
+    ) -> [f32; 3] {
+        let axis = [
+            orientation_length[0],
+            orientation_length[1],
+            orientation_length[2],
+        ];
+        let reference = if axis[1].abs() > 0.90 {
+            [1.0, 0.0, 0.0]
+        } else {
+            [0.0, 1.0, 0.0]
+        };
+        let side = normalize(cross(reference, axis));
+        let upward = cross(axis, side);
+        std::array::from_fn(|component| {
+            midpoint_hue[component]
+                + side[component] * local[0] * half_thickness
+                + upward[component] * local[1] * half_thickness
+                + axis[component] * local[2] * orientation_length[3] * 0.5
+        })
+    }
+
+    #[test]
+    fn derives_600_vertices_1200_cap_edges_3000_prism_edges_length_0p7639320225002102() {
+        assert_invariants();
+        let cap = cap_vertices();
+        let (_, edges) = derive_cap_edges(&cap);
+        assert_eq!(edges.len(), 1_200);
+    }
+
+    #[test]
+    fn gpu_path_math_matches_f64_reference_within_4e_5() {
+        let object = prism();
+        for time in [0.0, 0.37, 2.5, 19.0] {
+            for point in &object.vertices {
+                let (reference, fifth) = project_reference(*point, time);
+                let (gpu, gpu_fifth) = project_gpu_path(*point, time);
+                for axis in 0..3 {
+                    assert!((reference[axis] - f64::from(gpu[axis])).abs() <= 4.0e-5);
+                }
+                assert!((fifth - f64::from(gpu_fifth)).abs() <= 4.0e-5);
+            }
+            for edge in &object.edges {
+                let first = project_reference(object.vertices[edge.a as usize], time);
+                let second = project_reference(object.vertices[edge.b as usize], time);
+                let gpu_first = project_gpu_path(object.vertices[edge.a as usize], time);
+                let gpu_second = project_gpu_path(object.vertices[edge.b as usize], time);
+                let reference = edge_reference(first, second);
+                let gpu = edge_gpu_path(gpu_first, gpu_second);
+                for axis in 0..3 {
+                    assert!(
+                        (reference.midpoint[axis] - f64::from(gpu.midpoint[axis])).abs() <= 4.0e-5
+                    );
+                    assert!(
+                        (reference.direction[axis] - f64::from(gpu.direction[axis])).abs()
+                            <= 4.0e-5
+                    );
+                }
+                assert!((reference.length - f64::from(gpu.length)).abs() <= 4.0e-5);
+                assert!((reference.hue - f64::from(gpu.hue)).abs() <= 4.0e-5);
+            }
+        }
+    }
+
+    #[test]
+    fn packed_edge_pose_decodes_to_a_stable_long_thin_box() {
+        let cases = [
+            (([1.25, -0.75, 0.5], -1.5), ([-0.5, 1.0, 2.25], 2.0)),
+            (([0.25, -2.0, 0.75], -0.5), ([0.30, 2.0, 0.80], 0.5)),
+        ];
+        for (first, second) in cases {
+            let pose = edge_gpu_path(first, second);
+            let midpoint_hue = [
+                pose.midpoint[0],
+                pose.midpoint[1],
+                pose.midpoint[2],
+                pose.hue,
+            ];
+            let orientation_length = [
+                pose.direction[0],
+                pose.direction[1],
+                pose.direction[2],
+                pose.length,
+            ];
+            let start =
+                renderer_box_point(midpoint_hue, orientation_length, [0.0, 0.0, -1.0], 0.012);
+            let end = renderer_box_point(midpoint_hue, orientation_length, [0.0, 0.0, 1.0], 0.012);
+            for component in 0..3 {
+                assert!((start[component] - first.0[component]).abs() <= 1.0e-6);
+                assert!((end[component] - second.0[component]).abs() <= 1.0e-6);
+            }
+            assert!((midpoint_hue[3] - pose.hue).abs() <= f32::EPSILON);
+            assert!((orientation_length[3] - pose.length).abs() <= f32::EPSILON);
+
+            let side_point =
+                renderer_box_point(midpoint_hue, orientation_length, [1.0, 0.0, 0.0], 0.012);
+            let side = std::array::from_fn(|component| {
+                (side_point[component] - pose.midpoint[component]) / 0.012
+            });
+            let upward_point =
+                renderer_box_point(midpoint_hue, orientation_length, [0.0, 1.0, 0.0], 0.012);
+            let upward = std::array::from_fn(|component| {
+                (upward_point[component] - pose.midpoint[component]) / 0.012
+            });
+            assert!(dot(side, pose.direction).abs() <= 1.0e-5);
+            assert!(dot(upward, pose.direction).abs() <= 1.0e-5);
+            assert!(dot(side, upward).abs() <= 1.0e-5);
+            assert!((dot(side, side) - 1.0).abs() <= 1.0e-5);
+            assert!((dot(upward, upward) - 1.0).abs() <= 1.0e-5);
+            assert!(dot(cross(side, upward), pose.direction) >= 1.0 - 1.0e-5);
+        }
+    }
+
+    #[test]
+    fn mixed_radix_ladder_derives_0_3000_9000_27000_through_first_past_45_fifth() {
+        let steps = lattice_steps();
+        let expected = [
+            0_u64, 3_000, 9_000, 27_000, 81_000, 243_000, 729_000, 1_215_000, 2_025_000, 3_375_000,
+            5_625_000, 9_375_000,
+        ];
+        let actual: Vec<_> = steps
+            .iter()
+            .take(expected.len())
+            .copied()
+            .map(lattice_edge_count)
+            .collect();
+        assert_eq!(actual, expected);
+        assert_eq!(steps.len(), 113);
+        assert_eq!(steps[111], [45; 5]);
+        assert_eq!(steps[112], [47, 45, 45, 45, 45]);
+        assert_eq!(lattice_coordinate(0, [3; 5]), Some([-1; 5]));
+        assert_eq!(lattice_coordinate(121, [3; 5]), Some([0; 5]));
+        assert_eq!(lattice_coordinate(242, [3; 5]), Some([1; 5]));
+        assert_eq!(lattice_coordinate(243, [3; 5]), None);
+        assert_eq!(lattice_coordinate(0, [0; 5]), None);
+        assert_eq!(
+            lattice_coordinate(0, [3, 1, 1, 1, 1]),
+            Some([-1, 0, 0, 0, 0])
+        );
+        assert_eq!(lattice_coordinate(1, [3, 1, 1, 1, 1]), Some([0; 5]));
+        assert_eq!(
+            lattice_coordinate(2, [3, 1, 1, 1, 1]),
+            Some([1, 0, 0, 0, 0])
+        );
+        assert_eq!(lattice_coordinate(4, [3, 3, 1, 1, 1]), Some([0; 5]));
+    }
+
+    #[test]
+    fn procedural_lattice_projection_matches_direct_base_plus_center_reference() {
+        let object = prism();
+        for axes in [[1; 5], [3; 5], [5; 5]] {
+            let range = lattice_fifth_range(&object, axes);
+            assert!(range.is_finite() && range > 0.0);
+            let copies = lattice_copy_count(axes);
+            for copy in [0, copies / 2, copies - 1] {
+                let coordinate = lattice_coordinate(copy, axes).expect("copy is in range");
+                let center = coordinate.map(|value| f64::from(value) * LATTICE_SPACING);
+                for vertex in [0, 599, 600, 1_199] {
+                    let translated =
+                        std::array::from_fn(|axis| object.vertices[vertex][axis] + center[axis]);
+                    for time in [0.0, 0.37, 2.5] {
+                        let reference = project_reference(translated, time);
+                        let gpu = project_gpu_path(translated, time);
+                        for axis in 0..3 {
+                            let tolerance = 2.0e-3 * reference.0[axis].abs().max(1.0);
+                            assert!(
+                                (reference.0[axis] - f64::from(gpu.0[axis])).abs() <= tolerance
+                            );
+                        }
+                        let fifth_tolerance = 2.0e-5 * reference.1.abs().max(1.0);
+                        assert!((reference.1 - f64::from(gpu.1)).abs() <= fifth_tolerance);
+                    }
+                }
+            }
+        }
+    }
+}
