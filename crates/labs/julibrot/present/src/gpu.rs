@@ -563,21 +563,11 @@ impl Presenter {
             let source = source.as_ref().ok_or(PresentError::Device {
                 operation: "select relief redraw source",
             })?;
-            let main = self.main.as_ref().ok_or(PresentError::InvalidGrid {
-                width: source.extent[0],
-                height: source.extent[1],
-                logical_len: 0,
-            })?;
-            validate_grid(main, self.gpu.heap_limits)?;
-            let uniform = relief_scene_uniform(main, source, selected.1)?;
-            ensure_indices(&self.device, &mut self.gpu, source.extent)?;
-            ensure_depth(
-                &self.device,
-                &mut self.gpu,
+            self.prepare_relief_redraw(
+                source,
                 [state.canvas_width, state.canvas_height],
+                selected.1,
             )?;
-            self.queue
-                .write_buffer(&self.gpu.scene_buffer, 0, bytemuck::bytes_of(&uniform));
         }
         let mut encoder = self
             .device
@@ -641,6 +631,26 @@ impl Presenter {
             exposed: self.hot_exposed[hot_slot.index() as usize],
             status: self.facts.status.clone(),
         })
+    }
+
+    fn prepare_relief_redraw(
+        &mut self,
+        source: &crate::SceneFrame,
+        surface_extent: [u32; 2],
+        selected: PaletteRecord,
+    ) -> Result<(), PresentError> {
+        let main = self.main.as_ref().ok_or(PresentError::InvalidGrid {
+            width: source.extent[0],
+            height: source.extent[1],
+            logical_len: 0,
+        })?;
+        validate_grid(main, self.gpu.heap_limits)?;
+        let uniform = relief_scene_uniform(main, source, selected)?;
+        ensure_indices(&self.device, &mut self.gpu, source.extent)?;
+        ensure_depth(&self.device, &mut self.gpu, surface_extent)?;
+        self.queue
+            .write_buffer(&self.gpu.scene_buffer, 0, bytemuck::bytes_of(&uniform));
+        Ok(())
     }
 
     /// Observes every pending fence once without waiting and returns terminal events.
