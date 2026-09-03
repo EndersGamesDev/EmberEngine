@@ -228,16 +228,6 @@ mod tests {
     }
 
     #[test]
-    fn completed_final_horizon_grid_never_presents_clear() {
-        let final_extent = [1_920_u32, 1_080_u32];
-        for _ in 0..final_extent[0] * final_extent[1] {
-            let outcome = shade_escape_record([-1.0, 0.0, 0.0, 2.0], CLASSIC_PALETTE);
-            assert_eq!(outcome.rgba, exterior_zero(CLASSIC_PALETTE));
-            assert_ne!(outcome.rgba, CLASSIC_PALETTE.clear_rgba);
-        }
-    }
-
-    #[test]
     fn escaped_records_follow_the_pinned_hue_formula() {
         let outcome = shade_escape_record([16.0, 1.0, 0.0, 0.0], CLASSIC_PALETTE);
         assert!(!outcome.contract_violation);

@@ -13,7 +13,7 @@ thiserror.workspace = true
 wgpu = { workspace = true, features = ["webgl", "wgsl"] }
 
 [dev-dependencies]
-naga = { version = "24", features = ["wgsl-in"] }
+naga = { version = "=24.0.0", default-features = false, features = ["wgsl-in", "glsl-out"] }
 
 [lints]
 workspace = true

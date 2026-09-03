@@ -7,10 +7,10 @@ use wgpu::util::DeviceExt as _;
 use crate::fence::{FenceDecision, FenceLedger};
 use crate::state::{ExposureLatch, SceneCompletion, SceneLedger};
 use crate::{
-    FrameReceipt, FrameState, HotSlot, HotUniform, PaletteId, Pose, PoseMap,
+    FrameReceipt, FrameState, HOT_PAYLOAD_BYTES, HotSlot, HotUniform, PaletteId, Pose, PoseMap,
     PresentConfig, PresentDataError, PresentError, PresentEvent, PresentFacts, PresentHot,
-    PresentMain, PresentStatus, SampleClass, SceneUniform, SubmissionKind,
-    Warp, WarpKind, WarpValidation, camera_rotation, camera_rotation_pairs, exterior_zero,
+    PresentMain, PresentStatus, SCENE_PAYLOAD_BYTES, SampleClass, SceneUniform, SubmissionKind,
+    Warp, WarpKind, WarpValidation, camera_rotation, camera_rotation_pairs, camera_translation, exterior_zero,
     hot_ring_bytes, pack_homography_rows, palette, scene_indices, scene_shader, view_scale,
     warp_shader,
 };
@@ -18,7 +18,7 @@ use crate::{
 const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
 const FENCE_BYTES: u64 = 4;
-const HOT_SOURCE_VALID_BYTE_OFFSET: u64 = 248;
+const HOT_SOURCE_VALID_BYTE_OFFSET: u64 = 280;
 
 struct SceneTexture {
     _texture: wgpu::Texture,
@@ -157,7 +157,6 @@ impl Presenter {
         let precision_mode_name = precision_mode.map_or("unavailable", |mode| mode.as_str());
         let incompatible = self.main.as_ref().is_some_and(|previous| {
             previous.state.delivered_iter_cap != main.state.delivered_iter_cap
-                || previous.state.plane_origin_f64 != main.state.plane_origin_f64
                 || previous.state.precision_mode != main.state.precision_mode
         });
         let revision_advanced = self
@@ -211,6 +210,7 @@ impl Presenter {
                 orbit_generation: main.state.generation_applied,
                 plane: hot.plane,
                 object: hot.object,
+                plane_origin: main.state.plane_origin_f64,
                 zoom_log2: hot.state.zoom_log2,
                 view: hot.view,
                 grid_width: main.grid.width,
@@ -244,6 +244,7 @@ impl Presenter {
         // non-finite value shows the flat chart instead of the last thing that happened to be
         // in the lane.
         let ambient = camera_rotation_pairs(hot.view.camera).unwrap_or([[1.0, 0.0, 1.0, 0.0]; 5]);
+        let translation = camera_translation(hot.view.camera_translation).unwrap_or([[0.0; 4]; 2]);
         let observer = camera_rotation(hot.view.camera_yaw, hot.view.camera_pitch)
             .unwrap_or([1.0, 0.0, 1.0, 0.0]);
         let scale = view_scale(
@@ -262,6 +263,8 @@ impl Presenter {
             camera_rotation_pairs_2: ambient[2],
             camera_rotation_pairs_3: ambient[3],
             camera_rotation_pairs_4: ambient[4],
+            camera_translation_0: translation[0],
+            camera_translation_1: translation[1],
             observer_rotation: observer,
             view_scale: scale,
             homography_row_0: plan.rows[0],
@@ -767,7 +770,7 @@ fn create_gpu_state(
     });
     let scene_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Julibrot regional scene uniform"),
-        size: 80,
+        size: u64::from(SCENE_PAYLOAD_BYTES),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -781,7 +784,7 @@ fn create_gpu_state(
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &scene_buffer,
                     offset: 0,
-                    size: NonZeroU64::new(80),
+                    size: NonZeroU64::new(u64::from(SCENE_PAYLOAD_BYTES)),
                 }),
             },
             wgpu::BindGroupEntry {
@@ -789,7 +792,7 @@ fn create_gpu_state(
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &hot_buffer,
                     offset: 0,
-                    size: NonZeroU64::new(128),
+                    size: NonZeroU64::new(u64::from(HOT_PAYLOAD_BYTES)),
                 }),
             },
         ],
@@ -799,14 +802,24 @@ fn create_gpu_state(
     let warp_hot_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("Julibrot immutable warp HOT group"),
         layout: &warp_hot_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                buffer: &hot_buffer,
-                offset: 0,
-                size: NonZeroU64::new(128),
-            }),
-        }],
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &hot_buffer,
+                    offset: 0,
+                    size: NonZeroU64::new(u64::from(HOT_PAYLOAD_BYTES)),
+                }),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &scene_buffer,
+                    offset: 0,
+                    size: NonZeroU64::new(u64::from(SCENE_PAYLOAD_BYTES)),
+                }),
+            },
+        ],
     });
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("Julibrot nearest scene sampler"),
@@ -900,14 +913,20 @@ fn create_heap_layout(
 fn create_scene_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Julibrot scene and HOT layout"),
-        entries: &[uniform_entry(0, false, 80), uniform_entry(1, true, 128)],
+        entries: &[
+            uniform_entry(0, false, u64::from(SCENE_PAYLOAD_BYTES)),
+            uniform_entry(1, true, u64::from(HOT_PAYLOAD_BYTES)),
+        ],
     })
 }
 
 fn create_warp_hot_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Julibrot warp HOT layout"),
-        entries: &[uniform_entry(0, true, 128)],
+        entries: &[
+            uniform_entry(0, true, u64::from(HOT_PAYLOAD_BYTES)),
+            uniform_entry(1, false, u64::from(SCENE_PAYLOAD_BYTES)),
+        ],
     })
 }
 
@@ -1312,6 +1331,7 @@ fn pose_is_finite(pose: &Pose) -> bool {
             pose.centre_from_reference_px[1],
         ]
         .into_iter()
+        .chain(pose.plane_origin)
         .all(f64::is_finite)
         && pose
             .plane
@@ -1412,7 +1432,7 @@ mod tests {
             select_warp_source_identity(Some((41, 0)), Some((42, 1))),
             None
         );
-        assert_eq!(HOT_SOURCE_VALID_BYTE_OFFSET, 248);
+        assert_eq!(HOT_SOURCE_VALID_BYTE_OFFSET, 280);
     }
 
     #[test]

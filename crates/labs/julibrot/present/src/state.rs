@@ -124,7 +124,7 @@ impl SceneLedger {
     ) -> bool {
         let retained_invalid = self.retained.as_ref().is_some_and(|frame| {
             frame.iteration_cap != iteration_cap
-                || frame.plane_origin_f64 != plane_origin_f64
+                || !origins_share_slice(&frame.pose, plane_origin_f64)
                 || !object_samples_match(frame.pose.object, object)
                 || frame.precision_mode != precision_mode
         });
@@ -133,7 +133,7 @@ impl SceneLedger {
         }
         if let Some(pending) = &mut self.pending
             && (pending.iteration_cap != iteration_cap
-                || pending.plane_origin_f64 != plane_origin_f64
+                || !origins_share_slice(&pending.pose, plane_origin_f64)
                 || !object_samples_match(pending.pose.object, object)
                 || pending.precision_mode != precision_mode)
         {
@@ -189,6 +189,29 @@ fn object_samples_match(from: ObjectAngles, to: ObjectAngles) -> bool {
         .all(|(from, to)| (from - to).abs() <= f64::from(f32::EPSILON))
 }
 
+fn origins_share_slice(pose: &Pose, origin: [f64; 4]) -> bool {
+    let delta = core::array::from_fn(|axis| origin[axis] - pose.plane_origin[axis]);
+    let projection = [
+        dot_f64(pose.plane.basis_u, delta),
+        dot_f64(pose.plane.basis_v, delta),
+    ];
+    let residual: [f64; 4] = core::array::from_fn(|axis| {
+        delta[axis]
+            - f64::from(pose.plane.basis_u[axis]).mul_add(
+                projection[0],
+                f64::from(pose.plane.basis_v[axis]) * projection[1],
+            )
+    });
+    let pixels_per_chart = 0.25 * f64::from(pose.grid_width) * pose.zoom_log2.exp2();
+    residual.into_iter().map(|value| value * value).sum::<f64>().sqrt() * pixels_per_chart <= 0.5
+}
+
+fn dot_f64(left: [f32; 4], right: [f64; 4]) -> f64 {
+    left.into_iter()
+        .zip(right)
+        .fold(0.0, |sum, (a, b)| f64::from(a).mul_add(b, sum))
+}
+
 fn rebase_pose(pose: &mut Pose, accepted_pose: &Pose, shift_px: [f64; 2]) {
     let ratio = (pose.zoom_log2 - accepted_pose.zoom_log2).exp2() * f64::from(pose.grid_width)
         / f64::from(accepted_pose.grid_width);
@@ -235,6 +258,7 @@ mod tests {
                 basis_v: [0.0, 1.0, 0.0, 0.0],
             },
             object: ObjectAngles::JULIA,
+            plane_origin: ORIGIN,
             zoom_log2: 20.0,
             view: ViewControls::NEUTRAL,
             grid_width: 800,

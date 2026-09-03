@@ -4,7 +4,7 @@ const HEAP_SCENE_PREFIX: &str = r"
 struct HeapDescriptors { entries: array<vec4<u32>, __DESCRIPTORS__>, }
 struct HeapDirectory { spans: array<vec4<u32>, __SPANS__>, handles: array<vec4<u32>, __HANDLE_GROUPS__>, }
 struct SceneUniform { grid: vec4<u32>, span: vec4<u32>, basis_u: vec4<f32>, basis_v: vec4<f32>, screen_to_plane_row_0: vec4<f32>, screen_to_plane_row_1: vec4<f32>, screen_to_plane_row_2: vec4<f32>, palette_map: vec4<f32>, interior_rgba: vec4<f32>, clear_rgba: vec4<f32>, }
-struct HotUniform { camera_rotation_pairs_0: vec4<f32>, camera_rotation_pairs_1: vec4<f32>, camera_rotation_pairs_2: vec4<f32>, camera_rotation_pairs_3: vec4<f32>, camera_rotation_pairs_4: vec4<f32>, observer_rotation: vec4<f32>, view_scale: vec4<f32>, homography_row_0: vec4<f32>, homography_row_1: vec4<f32>, homography_row_2: vec4<f32>, screen_to_plane_row_0: vec4<f32>, screen_to_plane_row_1: vec4<f32>, screen_to_plane_row_2: vec4<f32>, exterior_zero_rgba: vec4<f32>, clear_rgba: vec4<f32>, flags: vec4<u32>, }
+struct HotUniform { camera_rotation_pairs_0: vec4<f32>, camera_rotation_pairs_1: vec4<f32>, camera_rotation_pairs_2: vec4<f32>, camera_rotation_pairs_3: vec4<f32>, camera_rotation_pairs_4: vec4<f32>, camera_translation_0: vec4<f32>, camera_translation_1: vec4<f32>, observer_rotation: vec4<f32>, view_scale: vec4<f32>, homography_row_0: vec4<f32>, homography_row_1: vec4<f32>, homography_row_2: vec4<f32>, screen_to_plane_row_0: vec4<f32>, screen_to_plane_row_1: vec4<f32>, screen_to_plane_row_2: vec4<f32>, exterior_zero_rgba: vec4<f32>, clear_rgba: vec4<f32>, flags: vec4<u32>, }
 @group(0) @binding(0) var heap_data: texture_2d_array<f32>;
 @group(0) @binding(1) var<uniform> heap_descriptors: HeapDescriptors;
 @group(0) @binding(2) var<uniform> heap_directory: HeapDirectory;
@@ -59,23 +59,31 @@ fn record_height(record: vec4<f32>) -> f32 {
 ";
 const SCENE_BODY: &str = r"
 struct SceneVertex { @builtin(position) position: vec4<f32>, @location(0) world: vec3<f32>, @location(1) grid_coordinate: vec2<f32>, @location(2) valid: f32, }
-fn rotate_pair_5(value: array<f32, 5>, first: u32, second: u32, pair: vec2<f32>) -> array<f32, 5> {
-    var rotated = value;
-    rotated[first] = pair.x * value[first] - pair.y * value[second];
-    rotated[second] = pair.y * value[first] + pair.x * value[second];
+struct Ambient5 { low: vec4<f32>, fifth: f32, }
+fn rotate_12(value: Ambient5, pair: vec2<f32>) -> Ambient5 { var out = value; out.low.x = pair.x * value.low.x - pair.y * value.low.y; out.low.y = pair.y * value.low.x + pair.x * value.low.y; return out; }
+fn rotate_13(value: Ambient5, pair: vec2<f32>) -> Ambient5 { var out = value; out.low.x = pair.x * value.low.x - pair.y * value.low.z; out.low.z = pair.y * value.low.x + pair.x * value.low.z; return out; }
+fn rotate_14(value: Ambient5, pair: vec2<f32>) -> Ambient5 { var out = value; out.low.x = pair.x * value.low.x - pair.y * value.low.w; out.low.w = pair.y * value.low.x + pair.x * value.low.w; return out; }
+fn rotate_23(value: Ambient5, pair: vec2<f32>) -> Ambient5 { var out = value; out.low.y = pair.x * value.low.y - pair.y * value.low.z; out.low.z = pair.y * value.low.y + pair.x * value.low.z; return out; }
+fn rotate_24(value: Ambient5, pair: vec2<f32>) -> Ambient5 { var out = value; out.low.y = pair.x * value.low.y - pair.y * value.low.w; out.low.w = pair.y * value.low.y + pair.x * value.low.w; return out; }
+fn rotate_34(value: Ambient5, pair: vec2<f32>) -> Ambient5 { var out = value; out.low.z = pair.x * value.low.z - pair.y * value.low.w; out.low.w = pair.y * value.low.z + pair.x * value.low.w; return out; }
+fn rotate_15(value: Ambient5, pair: vec2<f32>) -> Ambient5 { var out = value; out.low.x = pair.x * value.low.x - pair.y * value.fifth; out.fifth = pair.y * value.low.x + pair.x * value.fifth; return out; }
+fn rotate_25(value: Ambient5, pair: vec2<f32>) -> Ambient5 { var out = value; out.low.y = pair.x * value.low.y - pair.y * value.fifth; out.fifth = pair.y * value.low.y + pair.x * value.fifth; return out; }
+fn rotate_35(value: Ambient5, pair: vec2<f32>) -> Ambient5 { var out = value; out.low.z = pair.x * value.low.z - pair.y * value.fifth; out.fifth = pair.y * value.low.z + pair.x * value.fifth; return out; }
+fn rotate_45(value: Ambient5, pair: vec2<f32>) -> Ambient5 { var out = value; out.low.w = pair.x * value.low.w - pair.y * value.fifth; out.fifth = pair.y * value.low.w + pair.x * value.fifth; return out; }
+fn ambient_camera(value: Ambient5) -> Ambient5 {
+    var rotated = rotate_45(value, hot.camera_rotation_pairs_4.zw);
+    rotated = rotate_35(rotated, hot.camera_rotation_pairs_4.xy);
+    rotated = rotate_25(rotated, hot.camera_rotation_pairs_3.zw);
+    rotated = rotate_15(rotated, hot.camera_rotation_pairs_3.xy);
+    rotated = rotate_34(rotated, hot.camera_rotation_pairs_2.zw);
+    rotated = rotate_24(rotated, hot.camera_rotation_pairs_2.xy);
+    rotated = rotate_23(rotated, hot.camera_rotation_pairs_1.zw);
+    rotated = rotate_14(rotated, hot.camera_rotation_pairs_1.xy);
+    rotated = rotate_13(rotated, hot.camera_rotation_pairs_0.zw);
+    rotated = rotate_12(rotated, hot.camera_rotation_pairs_0.xy);
+    rotated.low += hot.camera_translation_0;
+    rotated.fifth += hot.camera_translation_1.x;
     return rotated;
-}
-fn ambient_camera(value: array<f32, 5>) -> array<f32, 5> {
-    var rotated = rotate_pair_5(value, 3u, 4u, hot.camera_rotation_pairs_4.zw);
-    rotated = rotate_pair_5(rotated, 2u, 4u, hot.camera_rotation_pairs_4.xy);
-    rotated = rotate_pair_5(rotated, 1u, 4u, hot.camera_rotation_pairs_3.zw);
-    rotated = rotate_pair_5(rotated, 0u, 4u, hot.camera_rotation_pairs_3.xy);
-    rotated = rotate_pair_5(rotated, 2u, 3u, hot.camera_rotation_pairs_2.zw);
-    rotated = rotate_pair_5(rotated, 1u, 3u, hot.camera_rotation_pairs_2.xy);
-    rotated = rotate_pair_5(rotated, 1u, 2u, hot.camera_rotation_pairs_1.zw);
-    rotated = rotate_pair_5(rotated, 0u, 3u, hot.camera_rotation_pairs_1.xy);
-    rotated = rotate_pair_5(rotated, 0u, 2u, hot.camera_rotation_pairs_0.zw);
-    return rotate_pair_5(rotated, 0u, 1u, hot.camera_rotation_pairs_0.xy);
 }
 @vertex fn scene_vertex(@builtin(vertex_index) index: u32) -> SceneVertex {
     let column = index % scene.grid.x;
@@ -98,15 +106,15 @@ fn ambient_camera(value: array<f32, 5>) -> array<f32, 5> {
     let chart_scale = 4.0 / f32(scene.grid.x);
     let display = chart_scale * (plane_offset.x * scene.basis_u + plane_offset.y * scene.basis_v);
     let height = hot.view_scale.x * record_height(record);
-    let ambient = ambient_camera(array<f32, 5>(display.x, display.y, display.z, display.w, height));
+    let ambient = ambient_camera(Ambient5(display, height));
     output.valid = 0.0;
     output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
     let distance_five = hot.view_scale.y;
     let distance_four = hot.view_scale.z;
-    let denominator_five = distance_five - ambient[4];
+    let denominator_five = distance_five - ambient.fifth;
     if (denominator_five <= 1.0e-4) { return output; }
     let scale_five = distance_five / denominator_five;
-    let projected_four = vec4<f32>(ambient[0], ambient[1], ambient[2], ambient[3]) * scale_five;
+    let projected_four = ambient.low * scale_five;
     let denominator_four = distance_four - projected_four.w;
     if (denominator_four <= 1.0e-4) { return output; }
     let scale_four = distance_four / denominator_four;
@@ -182,6 +190,66 @@ mod tests {
         .expect("presentation WGSL validates");
     }
 
+    fn assert_translates_to_webgl2(source: &str, stage: naga::ShaderStage, entry_point: &str) {
+        let module = naga::front::wgsl::parse_str(source).expect("presentation WGSL parses");
+        let module_info = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("presentation WGSL validates");
+        let options = naga::back::glsl::Options {
+            version: naga::back::glsl::Version::Embedded {
+                version: 300,
+                is_webgl: true,
+            },
+            ..Default::default()
+        };
+        let pipeline_options = naga::back::glsl::PipelineOptions {
+            shader_stage: stage,
+            entry_point: entry_point.to_string(),
+            multiview: None,
+        };
+        let mut glsl = String::new();
+        naga::back::glsl::Writer::new(
+            &mut glsl,
+            &module,
+            &module_info,
+            &options,
+            &pipeline_options,
+            naga::proc::BoundsCheckPolicies::default(),
+        )
+        .expect("presentation WGSL lowers to WebGL2 GLSL")
+        .write()
+        .expect("WebGL2 GLSL writes");
+        assert!(glsl.starts_with("#version 300 es"));
+    }
+
+    #[test]
+    fn both_present_shaders_translate_for_webgl2() {
+        let scene = scene_shader(limits());
+        for (source, entries) in [
+            (
+                scene.as_str(),
+                [
+                    (naga::ShaderStage::Vertex, "scene_vertex"),
+                    (naga::ShaderStage::Fragment, "scene_fragment"),
+                ],
+            ),
+            (
+                crate::warp_shader(),
+                [
+                    (naga::ShaderStage::Vertex, "warp_vertex"),
+                    (naga::ShaderStage::Fragment, "warp_fragment"),
+                ],
+            ),
+        ] {
+            for (stage, entry_point) in entries {
+                assert_translates_to_webgl2(source, stage, entry_point);
+            }
+        }
+    }
+
     #[test]
     fn the_scene_loads_bottom_row_and_debugs_before_escape() {
         let source = scene_shader(limits());
@@ -205,12 +273,14 @@ mod tests {
             "let height = hot.view_scale.x * record_height(record);",
             "scene.span.z != 0u || record.w == 2.0 || hot.view_scale.x == 0.0",
             "output.position = vec4<f32>(direct_ndc, 0.0, 1.0);",
-            "rotate_pair_5(value, 3u, 4u, hot.camera_rotation_pairs_4.zw)",
-            "rotate_pair_5(rotated, 0u, 2u, hot.camera_rotation_pairs_0.zw)",
-            "rotate_pair_5(rotated, 0u, 1u, hot.camera_rotation_pairs_0.xy)",
+            "rotate_45(value, hot.camera_rotation_pairs_4.zw)",
+            "rotate_13(rotated, hot.camera_rotation_pairs_0.zw)",
+            "rotate_12(rotated, hot.camera_rotation_pairs_0.xy)",
+            "rotated.low += hot.camera_translation_0;",
+            "rotated.fifth += hot.camera_translation_1.x;",
             "let distance_five = hot.view_scale.y;",
             "let distance_four = hot.view_scale.z;",
-            "let denominator_five = distance_five - ambient[4];",
+            "let denominator_five = distance_five - ambient.fifth;",
             "let denominator_four = distance_four - projected_four.w;",
             "if (denominator_five <= 1.0e-4) { return output; }",
             "if (denominator_four <= 1.0e-4) { return output; }",

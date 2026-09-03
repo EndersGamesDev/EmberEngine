@@ -148,6 +148,36 @@ pub fn camera_rotation_pairs(camera: [f64; 10]) -> Result<[[f32; 4]; 5], MeshErr
     ])
 }
 
+/// Returns two padded lanes for the five-dimensional camera translation.
+///
+/// # Errors
+///
+/// Returns an error when a coordinate or its narrowed value is not finite.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the HOT contract deliberately narrows validated camera controls once"
+)]
+pub fn camera_translation(translation: [f64; 5]) -> Result<[[f32; 4]; 2], MeshError> {
+    if !translation.into_iter().all(f64::is_finite) {
+        return Err(MeshError::NonFiniteRotation);
+    }
+    let lanes = [
+        [
+            translation[0] as f32,
+            translation[1] as f32,
+            translation[2] as f32,
+            translation[3] as f32,
+        ],
+        [translation[4] as f32, 0.0, 0.0, 0.0],
+    ];
+    lanes
+        .into_iter()
+        .flatten()
+        .all(f32::is_finite)
+        .then_some(lanes)
+        .ok_or(MeshError::NonFiniteRotation)
+}
+
 /// Returns `[cos yaw,sin yaw,cos pitch,sin pitch]` for the observer orientation.
 ///
 /// # Errors

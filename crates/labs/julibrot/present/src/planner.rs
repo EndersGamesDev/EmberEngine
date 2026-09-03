@@ -144,14 +144,22 @@ fn anchor_plan(
 fn warp_exposes_source(inverse_sampling: [f64; 9], from: &Pose, to: &Pose) -> bool {
     let half_width = f64::from(from.grid_width) * 0.5;
     let half_height = f64::from(from.grid_height) * 0.5;
-    screen_corners(to).into_iter().any(|corner| {
-        apply_homography(inverse_sampling, corner).is_none_or(|source| {
-            source[0] < -half_width
-                || source[0] > half_width
-                || source[1] < -half_height
-                || source[1] > half_height
+    (0..SCREEN_STEPS)
+        .flat_map(|row| (0..SCREEN_STEPS).map(move |column| (row, column)))
+        .any(|(row, column)| {
+            let target = [
+                (f64::from(column) / f64::from(SCREEN_STEPS - 1) - 0.5)
+                    * f64::from(to.grid_width),
+                (f64::from(row) / f64::from(SCREEN_STEPS - 1) - 0.5)
+                    * f64::from(to.grid_height),
+            ];
+            apply_homography(inverse_sampling, target).is_none_or(|source| {
+                source[0] < -half_width
+                    || source[0] > half_width
+                    || source[1] < -half_height
+                    || source[1] > half_height
+            })
         })
-    })
 }
 
 fn screen_corners(pose: &Pose) -> [[f64; 2]; 4] {
@@ -217,6 +225,7 @@ fn sampled_errors(from_pose: &Pose, to_pose: &Pose, approximate: [f64; 9]) -> Op
 fn chart_residual(from: &Pose, to: &Pose) -> f64 {
     let ratio = (from.zoom_log2 - to.zoom_log2).exp2() * f64::from(from.grid_width)
         / f64::from(to.grid_width);
+    let source_pixels_per_chart = 0.25 * f64::from(from.grid_width) * from.zoom_log2.exp2();
     let PoseMap::Mapped(to_map) = to.map else {
         return f64::INFINITY;
     };
@@ -228,7 +237,11 @@ fn chart_residual(from: &Pose, to: &Pose) -> f64 {
                 to.centre_from_reference_px[0] + offset[0],
                 to.centre_from_reference_px[1] + offset[1],
             ];
-            let vector = plane_point(to.plane, coordinate).map(|value| ratio * value);
+            let mut vector = plane_point(to.plane, coordinate).map(|value| ratio * value);
+            for (axis, value) in vector.iter_mut().enumerate() {
+                *value += (to.plane_origin[axis] - from.plane_origin[axis])
+                    * source_pixels_per_chart;
+            }
             let projection = plane_projection(from.plane, vector);
             vector
                 .into_iter()
@@ -250,6 +263,9 @@ fn ambient_point(plane: Plane, coordinate: [f64; 2], height: f64, view: &ViewCon
         let b = sine.mul_add(point[first], cosine * point[second]);
         point[first] = a;
         point[second] = b;
+    }
+    for (coordinate, translation) in point.iter_mut().zip(view.camera_translation) {
+        *coordinate += translation;
     }
     point
 }
@@ -281,7 +297,10 @@ fn dot4(basis: [f32; 4], point: [f64; 4]) -> f64 {
 }
 
 /// Mirrors the generated scene WGSL from one grid-screen point through its plane point and relief.
-#[allow(clippy::float_cmp)]
+#[allow(
+    clippy::float_cmp,
+    reason = "height zero is a semantic branch whose exact identity is part of the shader contract"
+)]
 fn project_presented(pose: &Pose, screen: [f64; 2], record_height: f64) -> Option<[f64; 2]> {
     if pose.grid_width == 0 || pose.grid_height == 0 || !pose.view.is_valid() {
         return None;
@@ -419,6 +438,7 @@ mod tests {
                 basis_v: [0.0, 1.0, 0.0, 0.0],
             },
             object,
+            plane_origin: [0.0; 4],
             zoom_log2: 40.0,
             view,
             grid_width: extent[0],
@@ -553,6 +573,7 @@ mod tests {
             ViewControls::NEUTRAL,
             ViewControls {
                 camera: moved_camera,
+                camera_translation: [0.2, -0.1, 0.3, 0.05, -0.2],
                 camera_yaw: RELIEF_YAW,
                 camera_pitch: RELIEF_PITCH,
                 distance_five: 6.0,
@@ -688,6 +709,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn pure_camera_translation_is_an_exact_flat_warp() {
+        let from = pose(ViewControls::NEUTRAL, [0.0; 2]);
+        let translated_view = ViewControls {
+            camera_translation: [0.2, -0.1, 0.3, -0.05, 0.1],
+            ..ViewControls::NEUTRAL
+        };
+        let to = pose(translated_view, [0.0; 2]);
+        let plan = reproject(&frame(&from), &from, &to);
+        assert_eq!(plan.kind, WarpKind::AnchorHomography);
+        assert!(plan.source_valid);
+        assert!(
+            plan.approx_max_error_px
+                .is_some_and(|error| error < 1.0e-9)
+        );
+    }
+
+    #[test]
+    fn plane_origin_translation_distinguishes_pan_from_slice_change() {
+        let from = pose(ViewControls::NEUTRAL, [0.0; 2]);
+        let mut in_plane = from;
+        in_plane.plane_origin = [1.0e-12, -2.0e-12, 0.0, 0.0];
+        assert_eq!(
+            reproject(&frame(&from), &from, &in_plane).kind,
+            WarpKind::AnchorHomography
+        );
+
+        let mut out_of_plane = from;
+        out_of_plane.plane_origin = [0.0, 0.0, 1.0e-9, 0.0];
+        assert_eq!(
+            reproject(&frame(&from), &from, &out_of_plane).kind,
+            WarpKind::ClearOnly
+        );
+    }
+
     fn named_objects() -> [(ObjectAngles, Plane); 3] {
         let quarter = core::f64::consts::FRAC_PI_2;
         let angles = [
@@ -750,5 +806,107 @@ mod tests {
             "swept p95 maximum was {observed_p95} pixels"
         );
         assert!(refused > 0, "the measured relief envelope never reached the ceiling");
+    }
+
+    fn triangle_contains(point: [f64; 2], triangle: [[f64; 2]; 3]) -> bool {
+        let cross = |a: [f64; 2], b: [f64; 2]| a[0].mul_add(b[1], -a[1] * b[0]);
+        let edges = [
+            cross(
+                [triangle[1][0] - triangle[0][0], triangle[1][1] - triangle[0][1]],
+                [point[0] - triangle[0][0], point[1] - triangle[0][1]],
+            ),
+            cross(
+                [triangle[2][0] - triangle[1][0], triangle[2][1] - triangle[1][1]],
+                [point[0] - triangle[1][0], point[1] - triangle[1][1]],
+            ),
+            cross(
+                [triangle[0][0] - triangle[2][0], triangle[0][1] - triangle[2][1]],
+                [point[0] - triangle[2][0], point[1] - triangle[2][1]],
+            ),
+        ];
+        edges.iter().all(|value| *value >= -1.0e-9)
+            || edges.iter().all(|value| *value <= 1.0e-9)
+    }
+
+    fn mesh_covers(pose: &Pose, target: [f64; 2]) -> bool {
+        let vertex = |column: u32, row: u32| {
+            project_presented(
+                pose,
+                [
+                    f64::from(column) + 0.5 - 0.5 * f64::from(pose.grid_width),
+                    f64::from(row) + 0.5 - 0.5 * f64::from(pose.grid_height),
+                ],
+                2.0,
+            )
+        };
+        (0..pose.grid_height.saturating_sub(1)).any(|row| {
+            (0..pose.grid_width.saturating_sub(1)).any(|column| {
+                let vertices = [
+                    vertex(column, row),
+                    vertex(column + 1, row),
+                    vertex(column, row + 1),
+                    vertex(column + 1, row + 1),
+                ];
+                [[0, 1, 2], [1, 3, 2]].into_iter().any(|indices| {
+                    match indices.map(|index| vertices[index]) {
+                        [Some(a), Some(b), Some(c)] => triangle_contains(target, [a, b, c]),
+                        _ => false,
+                    }
+                })
+            })
+        })
+    }
+
+    #[test]
+    fn completed_scene_surface_is_mesh_or_exterior_sky_over_pose_lattice() {
+        let extent = [17, 9];
+        let mut near_edge_camera = [0.0; 10];
+        near_edge_camera[6] = 1.2;
+        let views = [
+            ViewControls::NEUTRAL,
+            ViewControls {
+                height_scale: 2.0,
+                ..relief(0.6)
+            },
+            ViewControls {
+                camera: near_edge_camera,
+                camera_translation: [0.3, -0.2, 0.1, 0.0, 0.2],
+                height_scale: 2.0,
+                distance_five: 2.0,
+                ..ViewControls::NEUTRAL
+            },
+        ];
+        let poses = views.map(|view| {
+            let mut posed = pose(view, [0.0; 2]);
+            set_extent(&mut posed, extent);
+            posed
+        });
+        let mut edge_on = poses[0];
+        edge_on.map = PoseMap::EdgeOn;
+        let sky = crate::exterior_zero(crate::CLASSIC_PALETTE);
+        assert_ne!(sky, crate::CLASSIC_PALETTE.clear_rgba);
+        let mut saw_mesh = false;
+        let mut saw_sky = false;
+        for posed in poses.into_iter().chain([edge_on]) {
+            for row in 0..extent[1] {
+                for column in 0..extent[0] {
+                    let target = [
+                        f64::from(column) + 0.5 - 0.5 * f64::from(extent[0]),
+                        f64::from(row) + 0.5 - 0.5 * f64::from(extent[1]),
+                    ];
+                    if mesh_covers(&posed, target) {
+                        saw_mesh = true;
+                    } else {
+                        saw_sky = true;
+                        assert_ne!(sky, crate::CLASSIC_PALETTE.clear_rgba);
+                    }
+                }
+            }
+        }
+        assert!(saw_mesh);
+        assert!(saw_sky);
+        let gpu = include_str!("gpu.rs");
+        assert!(gpu.contains("exterior_zero(palette_record)"));
+        assert!(gpu.contains("load: wgpu::LoadOp::Clear(color(clear))"));
     }
 }

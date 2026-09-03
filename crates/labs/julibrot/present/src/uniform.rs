@@ -5,7 +5,7 @@ use thiserror::Error;
 use crate::{PaletteRecord, pack_homography_rows};
 
 /// Number of payload bytes in one HOT ring slot.
-pub const HOT_PAYLOAD_BYTES: u32 = 256;
+pub const HOT_PAYLOAD_BYTES: u32 = 288;
 
 /// Number of bytes in the regional scene payload.
 pub const SCENE_PAYLOAD_BYTES: u32 = 160;
@@ -27,6 +27,10 @@ pub struct HotUniform {
     pub camera_rotation_pairs_3: [f32; 4],
     /// Cosine and sine pairs for camera factors 35 and 45.
     pub camera_rotation_pairs_4: [f32; 4],
+    /// Camera translation coordinates one through four.
+    pub camera_translation_0: [f32; 4],
+    /// Camera translation coordinate five followed by zero padding.
+    pub camera_translation_1: [f32; 4],
     /// Cosine and sine of the observer yaw, then of its pitch.
     pub observer_rotation: [f32; 4],
     /// Height amplitude, both perspective distances, and one reserved zero.
@@ -247,19 +251,21 @@ mod tests {
 
     #[test]
     fn gpu_layouts_match_the_exact_byte_contract() {
-        assert_eq!(size_of::<HotUniform>(), 256);
+        assert_eq!(size_of::<HotUniform>(), 288);
         assert_eq!(align_of::<HotUniform>(), 16);
         assert_eq!(offset_of!(HotUniform, camera_rotation_pairs_0), 0);
         assert_eq!(offset_of!(HotUniform, camera_rotation_pairs_4), 64);
-        assert_eq!(offset_of!(HotUniform, observer_rotation), 80);
-        assert_eq!(offset_of!(HotUniform, view_scale), 96);
-        assert_eq!(offset_of!(HotUniform, homography_row_0), 112);
-        assert_eq!(offset_of!(HotUniform, homography_row_2), 144);
-        assert_eq!(offset_of!(HotUniform, screen_to_plane_row_0), 160);
-        assert_eq!(offset_of!(HotUniform, screen_to_plane_row_2), 192);
-        assert_eq!(offset_of!(HotUniform, exterior_zero_rgba), 208);
-        assert_eq!(offset_of!(HotUniform, clear_rgba), 224);
-        assert_eq!(offset_of!(HotUniform, flags), 240);
+        assert_eq!(offset_of!(HotUniform, camera_translation_0), 80);
+        assert_eq!(offset_of!(HotUniform, camera_translation_1), 96);
+        assert_eq!(offset_of!(HotUniform, observer_rotation), 112);
+        assert_eq!(offset_of!(HotUniform, view_scale), 128);
+        assert_eq!(offset_of!(HotUniform, homography_row_0), 144);
+        assert_eq!(offset_of!(HotUniform, homography_row_2), 176);
+        assert_eq!(offset_of!(HotUniform, screen_to_plane_row_0), 192);
+        assert_eq!(offset_of!(HotUniform, screen_to_plane_row_2), 224);
+        assert_eq!(offset_of!(HotUniform, exterior_zero_rgba), 240);
+        assert_eq!(offset_of!(HotUniform, clear_rgba), 256);
+        assert_eq!(offset_of!(HotUniform, flags), 272);
         assert_eq!(size_of::<SceneUniform>(), 160);
         assert_eq!(align_of::<SceneUniform>(), 16);
         assert_eq!(offset_of!(SceneUniform, grid), 0);
@@ -278,14 +284,17 @@ mod tests {
         // This asserts the bytes a shader samples, not a Rust re-statement of the algebra. The
         // browser found d4 reframing a height-zero chart that both the WGSL and the CPU mirror say
         // it cannot touch, and a mirror test cannot see that class of divergence at all.
-        use crate::{camera_rotation, camera_rotation_pairs, view_scale};
+        use crate::{camera_rotation, camera_rotation_pairs, camera_translation, view_scale};
         let ambient = camera_rotation_pairs([0.0; 10]).expect("neutral ambient camera");
+        let translation = camera_translation([0.0; 5]).expect("neutral camera translation");
         let uniform = HotUniform {
             camera_rotation_pairs_0: ambient[0],
             camera_rotation_pairs_1: ambient[1],
             camera_rotation_pairs_2: ambient[2],
             camera_rotation_pairs_3: ambient[3],
             camera_rotation_pairs_4: ambient[4],
+            camera_translation_0: translation[0],
+            camera_translation_1: translation[1],
             observer_rotation: camera_rotation(0.0, 0.0).expect("neutral observer"),
             view_scale: view_scale(0.0, 8.0, 8.0).expect("neutral distances"),
             homography_row_0: [1.0, 0.0, 0.0, 0.0],
@@ -299,7 +308,7 @@ mod tests {
             flags: [7, 0, 1, 0],
         };
         let bytes = bytemuck::bytes_of(&uniform);
-        assert_eq!(bytes.len(), 256);
+        assert_eq!(bytes.len(), 288);
         let lane = |offset: usize| -> [f32; 4] {
             core::array::from_fn(|index| {
                 let start = offset + index * 4;
@@ -313,17 +322,20 @@ mod tests {
         };
         // Byte 0 is the first two neutral ambient camera factors.
         assert_eq!(lane(0), [1.0, 0.0, 1.0, 0.0]);
-        // Byte 80 is the observer yaw followed by pitch.
-        assert_eq!(lane(80), [1.0, 0.0, 1.0, 0.0]);
-        // Byte 96 is [h, d5, d4, reserved]: the vertex reads .x as the height amplitude, .y as the
+        // Bytes 80 and 96 carry translation with exact zero padding.
+        assert_eq!(lane(80), [0.0; 4]);
+        assert_eq!(lane(96), [0.0; 4]);
+        // Byte 112 is the observer yaw followed by pitch.
+        assert_eq!(lane(112), [1.0, 0.0, 1.0, 0.0]);
+        // Byte 128 is [h, d5, d4, reserved]: the vertex reads .x as the height amplitude, .y as the
         // five-to-four pole, and .z as both the four-to-three pole and the observer distance.
-        assert_eq!(lane(96), [0.0, 8.0, 8.0, 0.0]);
-        assert_eq!(&bytes[252..256], &0_u32.to_le_bytes());
+        assert_eq!(lane(128), [0.0, 8.0, 8.0, 0.0]);
+        assert_eq!(&bytes[284..288], &0_u32.to_le_bytes());
         let moved = HotUniform {
             view_scale: view_scale(1.5, 2.0, 40.0).expect("moved distances"),
             ..uniform
         };
-        assert_eq!(lane_of(&moved, 96), [1.5, 2.0, 40.0, 0.0]);
+        assert_eq!(lane_of(&moved, 128), [1.5, 2.0, 40.0, 0.0]);
     }
 
     fn lane_of(uniform: &HotUniform, offset: usize) -> [f32; 4] {
@@ -341,14 +353,14 @@ mod tests {
 
     #[test]
     fn ring_stride_and_slots_are_checked() {
-        assert_eq!(hot_stride(256), Ok(256));
-        assert_eq!(hot_ring_bytes(256), Ok(768));
+        assert_eq!(hot_stride(256), Ok(512));
+        assert_eq!(hot_ring_bytes(256), Ok(1_536));
         assert_eq!(hot_stride(48), Ok(288));
         assert_eq!(hot_stride(0), Err(PresentDataError::ZeroAlignment));
-        let slot = HotSlot::for_refresh(8, 256, 19).expect("valid slot");
+        let slot = HotSlot::for_refresh(8, 512, 19).expect("valid slot");
         assert_eq!(
             (slot.index(), slot.dynamic_offset(), slot.epoch()),
-            (2, 512, 19)
+            (2, 1_024, 19)
         );
         assert_eq!(
             HotSlot::for_refresh(0, 112, 0),

@@ -26,7 +26,7 @@ pub use homography::{
     apply_homography, inverse_identity_error, pack_homography_rows, solve_homography,
 };
 pub use mesh::{
-    HeightSample, MeshError, camera_rotation, camera_rotation_pairs, display_coordinate,
+    HeightSample, MeshError, camera_rotation, camera_rotation_pairs, camera_translation, display_coordinate,
     height_for_record, scene_index_count, scene_indices, view_scale,
 };
 pub use palette::{
