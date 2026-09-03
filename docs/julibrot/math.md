@@ -92,6 +92,8 @@ An ordinary advance is `δ′ₙ₊₁=2Zᵣδ′ₙ+2^e(δ′ₙ)²+δc′`, fo
 
 For the propagated per-pixel envelope, let `Dₙ` bound the represented perturbation error, `Rᵣ` be the half-ulp reconstruction bound of the stored binary32 reference, `C` bound the current scale-split centre offset, and `ηₙ` bound all binary32 products, sums, scaling and subnormal loss in the advance; the implemented recurrence is `Dₙ₊₁ ≤ 2(|Zᵣ|+|δₙ|)Dₙ + Dₙ² + 2Rᵣ(|δₙ|+Dₙ) + C + ηₙ`, display error adds `Rᵣ`, the represented-delta error and binary32 addition allowance, every renormalization adds a scaled minimum-subnormal allowance, and every rebase replaces the carried term by `D_rebase ≤ Eₙ + R₀ + η_rebase` before the next ordinary advance rather than resetting it.
 
+The `gamma(20)` factor in `ηₙ` follows the contracted binary32 advance term by term: `2Zᵣδ′` costs four component multiplications plus two additions for the complex product and two multiplications for doubling, or 8; `2^e(δ′)²` costs four multiplications plus two additions for the complex product and two component scale multiplications, another 8; adding those two complex terms and then `δc′` costs four additions, for `8+8+4=20` rounded operations, while integer exponent construction is exact and subnormal loss is charged separately.
+
 REBASING is repeatable and occurs after the current escape test but before advancing when `|zₙ|<|2^eδ′ₙ|`; if the scaled delta underflows to zero the predicate is false, equality is false, and the comparison uses a robust norm that does not square into overflow or underflow.
 
 On rebase, set the actual delta to `zₙ−Z₀`, represent it at the current exponent as `δ′←(zₙ−Z₀)/2^e`, set `r←0`, increment `rebase_count`, and perform exactly one ordinary advance against `Z₀` to global iteration `n+1` and reference index one; thus `zₙ=Zᵣ+2^eδ′ₙ` holds before and after a nonzero-`Z₀` restart.
@@ -136,7 +138,7 @@ The oracle is exactness at the ends and the declared midpoint between them: `t=0
 
 ## 3. INTERFACES
 
-All transferred and GPU words are little-endian, `f32` and `f64` are IEEE-754 binary32 and binary64, byte offsets start at the named record, coordinate arrays use `(z.re,z.im,c.re,c.im)`, reserved words are zero, and CPU-only records marked “no byte ABI” are not serialized by native layout.
+All transferred and GPU words are little-endian, `f32` and `f64` are IEEE-754 binary32 and binary64, byte offsets start at the named record, coordinate arrays use `(z.re,z.im,c.re,c.im)`, reserved words are zero, orbit-pool bytes outside the declared record prefix and fixed fact tail are producer-owned and unread, and CPU-only records marked “no byte ABI” are not serialized by native layout.
 
 ### 3.1 Math-owned types and functions
 
@@ -250,7 +252,7 @@ Precision rounds to 64 rather than to the machine word because Astro-float's wor
 
 `ErrorRecord` begins at byte 32 and is `{ code:u32,detail:u32,requested_bytes:u32,available_bytes:u32 }`; stable codes are `1 BadMagic`, `2 BadVersion`, `3 BadKind`, `4 BadLength`, `5 BadTrailer`, `6 CentreEncodingWall`, `7 GenerationExhausted`, `8 EpochExhausted`, `9 TimingOverflow`, `10 BufferStarved`, and `11 MathFailure`.
 
-`OrbitResponse` is the header followed at byte 32 by `length` 8-byte reference records and a fixed 16-byte fact tail immediately before the pool trailer; the fact tail is `{ verification:u32,max_consumed_word_error_ulps:u32,precision_escalations:u32,reserved:u32 }`, `u32::MAX` denotes a deferred maximum, `1≤length≤max_iter`, unused capacity between records and facts is zero, and `compute_ms=f64(compute_us)/1000` is only a display conversion.
+`OrbitResponse` is the header followed at byte 32 by `length` 8-byte reference records and a fixed 16-byte fact tail immediately before the pool trailer; the fact tail is `{ verification:u32,max_consumed_word_error_ulps:u32,precision_escalations:u32,reserved:u32 }`, `u32::MAX` denotes a deferred maximum, `1≤length≤max_iter`, unused capacity between records and facts remains producer-owned and is never read, and `compute_ms=f64(compute_us)/1000` is only a display conversion.
 
 The owner's credit POLICY is `250,000` microseconds per second and is displayed; the returned `CreditApplied` or `CreditStale` header preserves generation, precision, and compute time, sets length zero, and carries the measured remaining `credit_us` without fabrication.
 
