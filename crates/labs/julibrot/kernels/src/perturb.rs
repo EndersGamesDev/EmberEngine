@@ -589,12 +589,13 @@ mod tests {
             re: f32::from_bits(16.0_f32.to_bits() - 1),
             im: 0.0,
         };
+        let offset = [2.0_f32.powi(-21), 0.0, 0.0, 0.0];
         let uniforms = uniform(1, 1);
-        let actual = perturb_scaled_offset(&uniforms, &[boundary], [0.0; 4])
+        let actual = perturb_scaled_offset(&uniforms, &[boundary], offset)
             .expect("boundary kernel mirror");
         let (expected, envelope) = ember_julibrot_math::perturb_scaled_f64_with_envelope(
             &[boundary],
-            [0.0; 4],
+            offset.map(f64::from),
             uniforms.scale_exponent,
             EscapeParams::new(1),
         )
@@ -606,8 +607,9 @@ mod tests {
             envelope,
         );
         assert_eq!(result.verdict, crate::ConformanceVerdict::Boundary);
-        let gpu = reconstruct(boundary);
-        let exact_re = f64::from(boundary.re);
+        let mut gpu = reconstruct(boundary);
+        gpu[0] += offset[0];
+        let exact_re = f64::from(boundary.re) + f64::from(offset[0]);
         let observed_norm_error =
             (f64::from(gpu[0] * gpu[0] + gpu[1] * gpu[1]) - exact_re * exact_re).abs();
         eprintln!(
