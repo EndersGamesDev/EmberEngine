@@ -535,8 +535,9 @@ mod tests {
     fn accepted_final_survives_a_completed_preview_until_the_new_final_arrives() {
         let mut ledger = SceneLedger::default();
         begin(&mut ledger, 1, 1);
-        let SceneCompletion::Promoted(mut first) =
-            ledger.complete(measurement(1)).expect("first scene completes")
+        let SceneCompletion::Promoted(mut first) = ledger
+            .complete(measurement(1))
+            .expect("first scene completes")
         else {
             panic!("first scene must promote");
         };

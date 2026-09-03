@@ -649,9 +649,7 @@ fn page_facts_carry_every_contract_field_without_fake_aggregate_counts() {
     assert!(FACTS.contains("scene_mode: loop_facts.scene_mode().as_str()"));
     assert!(FACTS.contains("scene_update_pending: loop_facts.scene_update_pending()"));
     assert!(FACTS.contains("draft_skipped_count: loop_facts.draft_skipped_count()"));
-    assert!(
-        FACTS.contains("last_draft_skip_reason: loop_facts.last_draft_skip_reason()")
-    );
+    assert!(FACTS.contains("last_draft_skip_reason: loop_facts.last_draft_skip_reason()"));
 }
 
 #[test]

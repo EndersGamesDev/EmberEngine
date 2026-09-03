@@ -525,10 +525,7 @@ impl FrameLoop {
         self.schedule.due()
     }
 
-    fn skip_drafts_for_covering_warp(
-        &mut self,
-        source_level: Option<RefinementLevel>,
-    ) -> bool {
+    fn skip_drafts_for_covering_warp(&mut self, source_level: Option<RefinementLevel>) -> bool {
         const REASON: &str = "accepted higher-level retained warp covers surface";
         let Some(due) = self.due() else {
             return false;
@@ -1262,9 +1259,9 @@ mod browser {
                 );
             }
             if !main_arrived
-                && self.loop_state.skip_drafts_for_covering_warp(
-                    self.presenter.covering_warp_source_level(slot),
-                )
+                && self
+                    .loop_state
+                    .skip_drafts_for_covering_warp(self.presenter.covering_warp_source_level(slot))
             {
                 self.prepared_level = None;
                 let final_validation = self.prepare_due_level();

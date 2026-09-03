@@ -11,8 +11,8 @@ use crate::{
     Pose, PoseMap, PresentConfig, PresentDataError, PresentError, PresentEvent, PresentFacts,
     PresentHot, PresentMain, PresentStatus, RefinementLevel, SCENE_PAYLOAD_BYTES, SampleClass,
     SceneUniform, SubmissionKind, Warp, WarpKind, WarpValidation, camera_rotation,
-    camera_rotation_pairs, camera_translation, exterior_zero, hot_ring_bytes,
-    pack_homography_rows, palette, scene_indices, scene_shader, view_scale, warp_shader,
+    camera_rotation_pairs, camera_translation, exterior_zero, hot_ring_bytes, pack_homography_rows,
+    palette, scene_indices, scene_shader, view_scale, warp_shader,
 };
 
 const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -73,11 +73,7 @@ impl WarpSourceSlot {
         exposed: bool,
         retained: Option<&'a crate::SceneFrame>,
     ) -> Option<&'a crate::SceneFrame> {
-        if exposed {
-            None
-        } else {
-            self.frame(retained)
-        }
+        if exposed { None } else { self.frame(retained) }
     }
 }
 
@@ -629,10 +625,8 @@ impl Presenter {
                     .filter_map(|(index, pose)| pose.map(|pose| (index, pose.epoch)))
                     .max_by_key(|(_, epoch)| *epoch)
                     .and_then(|(index, _)| {
-                        self.hot_warp_source[index].covering_frame(
-                            self.hot_exposed[index],
-                            self.ledger.retained(),
-                        )
+                        self.hot_warp_source[index]
+                            .covering_frame(self.hot_exposed[index], self.ledger.retained())
                     })
                     .is_some();
                 match self
