@@ -124,11 +124,15 @@ Every completed or cancelled computation is charged, including stale work, becau
 
 The producer projects a returned credit after local elapsed time `Δt` as `projected = min(B,returned_credit + floor(Δt·B/1,000,000))`.
 
-For a fixed `max_iter`, the admission estimate `E` is the greatest nonzero `compute_us` observed since the last resize; exactly one first request after startup or resize is admitted as a labelled unpriced warm-up, no second request starts until that warm-up buffer returns, and later work starts only when `projected ≥ E`.
+For a fixed `max_iter`, the admission estimate `E` tracks measured cost with immediate forward pressure upward and a halving decay downward: a nonzero `compute_us` at or above `E` replaces it at once, a cheaper nonzero measurement sets `E ← compute_us+floor((E−compute_us)/2)`, and a measured zero prices nothing and leaves `E` unchanged. A never-decaying maximum would let one expensive orbit price every later cheap one for the rest of the pricing epoch, while the halving reaches the cheap cost exactly in a bounded number of returns and still refuses to under-price the request after the expensive one.
 
-When `projected < E`, producer delay is `ceil((E−projected)·1,000,000/B)` microseconds followed by one browser-task yield and recomputation; pending edits continue to coalesce during the delay.
+Exactly one first request after startup or resize is admitted as a labelled unpriced warm-up, no second request starts until that warm-up buffer returns, and later work starts only when `projected ≥ P`, where the admission price is `P = min(E,B)`.
 
-At admission the producer subtracts `E` from its projected local balance, and the next owner return reconciles the estimate with measured cost; any actual excess is `overfeed_us`, displayed as a producer defect rather than repaired by owner throttling.
+The price is bounded by the bucket capacity because the projection is also bounded by it: asking for a balance above `B` is asking for a balance that can never arrive, so an `E` above `B` would make every later admission wait forever, freeze credit at zero, and stop the producer for the rest of the session. Bounding the price instead makes the wait at most one second at any measured cost.
+
+When `projected < P`, producer delay is `ceil((P−projected)·1,000,000/B)` microseconds, at most one second, followed by one browser-task yield and recomputation; pending edits continue to coalesce during the delay.
+
+At admission the producer subtracts `P` from its projected local balance, and the next owner return reconciles the estimate with measured cost; the owner charges the full measured cost, so an orbit costing more than `P` shows its excess as `overfeed_us`, displayed as a producer defect rather than repaired by owner throttling or by a producer that stops admitting work.
 
 Worker `compute_us` begins immediately before decoding the centre into bignum scratch and ends after the one standalone-buffer copy, uses `ceil(1,000·performance.now elapsed milliseconds)`, and returns a typed `TimingOverflow` rather than saturating beyond `u32::MAX`.
 
@@ -321,7 +325,7 @@ The Web Worker lowering backs endpoints with the four transferable `ArrayBuffer`
 
 The wasm main-side bridge is `encode_transfer_request(&ArrayBuffer,&OrbitRequest)->Result<(),ChannelError>`, `read_transfer_header(&ArrayBuffer)->Result<MessageHeader,ChannelError>`, `transfer_record_bytes(&ArrayBuffer)->Result<Uint8Array,ChannelError>`, `write_transfer_credit(&ArrayBuffer,OrbitDisposition,&mut CreditAccount,owner_now_us:u64)->Result<CreditCharge,ChannelError>`, and `write_transfer_shutdown(&ArrayBuffer,generation:u32)->Result<(),ChannelError>`; each validates the immutable trailer and mutates or views the same standalone allocation, `transfer_record_bytes` is a zero-copy initialized-range view, and none creates a replacement transport buffer.
 
-`CreditAccount::charge(owner_now_us,compute_us) -> Result<CreditCharge,ChannelError>` implements the owner formula exactly; `ProducerShaper::observe_return(producer_now_us,returned_credit_us,compute_us)` reconciles a CREDIT header, `admit(producer_now_us)` returns `Ready { credit_us, warm_up }`, `Delay { wait_us }`, or `TimingUnavailable`, and `reset_for_resize` creates exactly one new warm-up epoch.
+`CreditAccount::charge(owner_now_us,compute_us) -> Result<CreditCharge,ChannelError>` implements the owner formula exactly; `ProducerShaper::observe_return(producer_now_us,returned_credit_us,compute_us)` reconciles a CREDIT header and folds the measurement into `E`, `estimate_us()` and `admission_price_us()` expose `E` and `P = min(E,B)`, `admit(producer_now_us)` returns `Ready { credit_us, warm_up }`, `Delay { wait_us }` with `wait_us ≤ 1,000,000`, or `TimingUnavailable`, and `reset_for_resize` creates exactly one new warm-up epoch.
 
 ### 3.8 Facts supplied to app
 
@@ -387,9 +391,11 @@ Following heap `selection.rs`, the state-machine test places each newer edit at 
 
 The drain interleaving test enumerates HOT and MAIN write permutations around both drain calls, proving HOT refresh cadence, MAIN arrival cadence, one shared strictly increasing epoch, coherent 40-byte HOT and 120-byte MAIN records, latest-wins coalescing, accepted-reference displacement reset and shift publication, and absence of a borrow/refusal path.
 
-The credit arithmetic test exhausts boundary values for refill, capacity clamp, exact depletion, underflow, overfeed, timer advance, and `u32` conversion; a model token bucket and implementation must agree exactly in integer microseconds.
+The credit arithmetic test exhausts boundary values for refill, capacity clamp, exact depletion, underflow, overfeed, timer advance, `u32` conversion, and an estimate at and beyond the one-second capacity `B`, where the price is `B`, the returned wait is exactly the wait that then admits, and the charge is the price rather than the estimate; a model token bucket and implementation must agree exactly in integer microseconds.
 
-The shaping test proves one labelled unpriced warm-up per resize epoch, `E` as the observed maximum, the ceiling wait formula, coalescing while delayed, charge of cancelled work, and an overfeed fact whenever actual cost exceeds admission credit.
+The shaping test proves one labelled unpriced warm-up per resize epoch, `E` rising at once to a costlier measurement and halving to the exact cheap cost afterwards, a measured zero leaving `E` alone, the ceiling wait formula under the bounded price, coalescing while delayed, charge of cancelled work, and an overfeed fact whenever actual cost exceeds admission credit.
+
+The over-budget recovery test drives one 852,293-microsecond orbit through the same-thread lowering and requires the owner to report `last_overfeed_us = 602,293` with zero credit, the producer to wait exactly one second and then admit, and the next cheap orbit to refill credit and shorten the wait; a producer that stops admitting after a single over-budget computation fails it.
 
 The mode-equivalence trace feeds identical requests, edit timings, clock ticks, cancellations, credits, and drains to transferable and same-thread abstract backends and requires identical messages, dispositions, epochs, facts, and final state modulo the wasm-copy counter.
 
@@ -418,6 +424,7 @@ The shared navigation-drift, warp-accuracy, shallow-kernel, and perturbation-con
 |Transfer accidentally clones or a detached buffer is reused|Payload-scaled main-thread cost or exception|Visible transfer replay checks sender detachment, trailers, and copy counter|
 |A buffer is lost during cancellation, resize, error, or shutdown|Producer starvation or hang|Four-slot ownership model, the deadline-bounded resize drain over the in-process port, plus visible bounded-shutdown replay|
 |Credit rounds or underflows differently between owner and producer|Bursting, permanent delay, or invented budget|Exact integer token-bucket and shaping model tests|
+|One computation costs more than the whole one-second budget|Producer never admits again and credit sticks at zero|Bounded admission price plus the over-budget recovery test through the same-thread lowering|
 |Owner throttles instead of producer shaping|Input latency is hidden as application policy|Trace proves every edit is accepted/coalesced immediately and attributes delay to producer|
 |A stale orbit becomes MAIN state|Wrong centre or reference reaches kernels|Every-yield interleaving test and visible cancellation replay|
 |HOT and MAIN snapshots tear or a drain borrow fails|Pose and orbit belong to different versions|Exhaustive drain interleavings over Copy-cell owner|
