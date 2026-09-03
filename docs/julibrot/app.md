@@ -469,7 +469,7 @@ Native kernels integration tests pin all three levels and caps, power-of-two deg
 
 Native present integration tests pin the three palette records, corrected pose fields, reference-shift rebase, centre translation, clear only on cap/origin incompatibility, 128-byte HOT rows, three dynamic slots, two textures, no third target on `SceneBusy`, per-level reallocation count, and `RefinementLevel` rather than bare integers.
 
-Native app state tests model §§2.5–2.6 at every asynchronous boundary and require poll before HOT drain, HOT write before frame, current deep orbit upload before acceptance, direct shallow acceptance without an orbit, a deep crossing that remains blocked until its orbit, scene submission only when due and available, app-held surface keyed by warp id, fence event before present, stale drop, both mode ladders, latest-wins schedule, and no re-entrant borrow. A native frame-loop timing test reports time to first shallow scene before and after the removed paired-orbit wait.
+Native app state tests model §§2.5–2.6 at every asynchronous boundary and require poll before HOT drain, HOT write before frame, current deep orbit upload before acceptance, direct shallow acceptance without an orbit, a deep crossing that remains blocked until its orbit, scene submission only when due and available, app-held surface keyed by warp id, fence event before present, stale drop, both mode ladders, latest-wins schedule, and no re-entrant borrow. On osprey, the native frame-loop timing oracle measured median time to first shallow scene over five warmed samples as 1,212.824 ms before the removed paired-orbit wait and below 0.001 ms after it; this is a test-profile wall under idle scheduling, not a browser GPU measurement.
 
 Native page-contract tests also pin that no wheel handler exists on the canvas, that a click sets the target and a drag under four pixels is one, that the box release computes its zoom change as `log₂(min(W/w_box,H/h_box))`, that the `scale` slider spans `[−2,120]`, and that both view boxes, their save and load controls, and the `t` slider are present and that `t` is absent from `SavedView`.
 
@@ -565,7 +565,7 @@ The refined app estimate is approximately 2,710 net new lines including the Phas
 |J23|ACCEPTED|Pins reference indices and `length=min(max_iter,escape_index+1)`.|
 |J24|ACCEPTED|Pins `2·10⁻³` smooth tolerance, propagated envelope, exact outside-envelope classification and boundary fixtures.|
 |J25|SUPERSEDED|Withdrew `view_theta_1=t` for `0.4t` with a golden-ratio second angle; both derivations are now retired and each VIEW angle is an independent control.|
-|J26|ACCEPTED|Uses shallow below 14, perturbation at or above 14, displays policy, and maintains the orbit at all depths.|
+|J26|ACCEPTED|Uses shallow below 14 without an orbit, perturbation at or above 14 with a matching orbit, and displays the switch policy.|
 |J27|ACCEPTED|Keeps orbit-sized request buffers and `CentreEncodingWall`; minimum request cap is 64 for 300-digit fit.|
 |J28|ACCEPTED|Keeps one wasm plus `worker_main`, version-one URLs and typed skew refusal.|
 |J29|ACCEPTED|Withdraws 144-byte palette and adopts present’s three exact 48-byte records.|

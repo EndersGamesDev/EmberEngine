@@ -345,7 +345,7 @@ Native scale tests cover integral and fractional zoom, widths 1, 64, 1,920, 2,04
 
 Native navigation tests require anchored zoom to preserve the anchor's fractal point within one binary64 ulp at `zoom_log2∈{0,40,100}`, require drag to equal exactly `−s(dx u+dy v)`, and round-trip centre/reference displacement through plane pixels.
 
-The centre-width oracle runs the same 10,000 mixed navigation edits at the derived `PictureFast` width and at the 1,024-bit `Deterministic` width, requires the widened fast centre to remain within 0.25 current pixel of the deterministic centre, reports measured pixel drift and growth per edit, and reports both navigation walls.
+The centre-width oracle runs the same 10,000 mixed navigation edits at the derived `PictureFast` width and at the 1,024-bit `Deterministic` width, requires the widened fast centre to remain within 0.25 current pixel of the deterministic centre, reports measured pixel drift and growth per edit, and reports both navigation walls. At `zoom_log2=100`, `W=1024`, and `E=10,000`, the formula requests 126 bits and Astro-float delivers 128; osprey measured 0.001557775202 pixel total drift, or 1.557775202×10⁻⁷ pixel/edit, leaving about 160.5 times the quarter-pixel allowance, while the test walls were 3,967.833 ms at 1,024 bits and 3,770.115 ms at 128 bits.
 
 The scaled f64 perturbation oracle compares direct f64 iteration with the scaled recurrence at zoom values `{14,40,80,100,256,512,900}`, forces upward and downward 64-bit renormalizations, pins inclusive thresholds, adjusts `δc′` with every exponent change, and proves the represented actual delta is invariant across each rescale.
 

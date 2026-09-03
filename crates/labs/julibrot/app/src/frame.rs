@@ -1940,7 +1940,7 @@ mod tests {
         );
         assert!(before > after);
         eprintln!(
-            "first_shallow_scene before_ms={:.3} after_ms={:.3} saved_ms={:.3}",
+            "first_shallow_scene before_ms={:.6} after_ms={:.6} saved_ms={:.6}",
             before.as_secs_f64() * 1_000.0,
             after.as_secs_f64() * 1_000.0,
             before.saturating_sub(after).as_secs_f64() * 1_000.0,

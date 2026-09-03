@@ -408,7 +408,7 @@ The mode-equivalence trace feeds identical requests, edit timings, clock ticks, 
 
 The centre-trigger test uses bignum differences at shallow and extreme depths and covers equality and one-unit-beyond cases at `grid_width/4` pixels, zoom delta `2`, re-arm thresholds `grid_width/8` and `1`, rotated-plane projection, `reference_shift_px` sign, and a newer edit arriving while disarmed.
 
-The 10,000-edit navigation test runs identical mixed edits through 1,024-bit deterministic and derived-width fast owners, reports both walls plus drift per edit, and requires final centre error at most one quarter current pixel after widening the fast value for comparison.
+The 10,000-edit navigation test runs identical mixed edits through 1,024-bit deterministic and derived-width fast owners, reports both walls plus drift per edit, and requires final centre error at most one quarter current pixel after widening the fast value for comparison. The osprey run at `zoom_log2=100` and width 1,024 measured 3,967.833 ms deterministic versus 3,770.115 ms fast, a 197.719 ms saving, with 0.001557775202 pixel total drift or 1.557775202×10⁻⁷ pixel/edit.
 
 The inherited plane oracle checks the `R₁₃·R₂₄` operation order, exact presets, the `π/2` Mandelbrot-to-Julia result, nonzero z and c components at intermediate angles, and the `8·f32::EPSILON` postcondition without a degenerate stage.
 
