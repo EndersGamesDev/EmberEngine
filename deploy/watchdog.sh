@@ -6,7 +6,7 @@
 #   bash deploy/watchdog.sh            # loop forever
 #   bash deploy/watchdog.sh --once     # single pass, for a scheduler
 #
-#   EMBER_HOSTS="specht adler"         # the hosts to watch (docs/hosts.md §9)
+#   EMBER_HOSTS="sokol"                # the hosts to watch (docs/hosts.md §9)
 #
 # It closes the two gaps the systemd units cannot:
 #
@@ -37,7 +37,7 @@ INTERVAL="${WATCHDOG_INTERVAL:-300}"
 STATE_DIR="${WATCHDOG_STATE_DIR:-$REPO_DIR}"
 PAGES_URL="${EMBER_PAGES_URL:-https://endersgamesdev.github.io/EmberEngine}"
 # One name, several names, or the old single EMBER_HOST — all three work.
-HOSTS="${EMBER_HOSTS:-${EMBER_HOST:-specht}}"
+HOSTS="${EMBER_HOSTS:-${EMBER_HOST:-sokol}}"
 ONCE=""
 [ "${1:-}" = "--once" ] && ONCE=1
 

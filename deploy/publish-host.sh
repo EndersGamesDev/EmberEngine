@@ -4,7 +4,7 @@
 #   publish-host.sh --name amber-otter \
 #       --game arena --url wss://x.trycloudflare.com --proto 12 \
 #       --game fire  --url wss://y.trycloudflare.com --proto 1 \
-#       --version r211 --commit 502414c --by end@specht \
+#       --version r211 --commit 502414c --by end@sokol \
 #       --book /tmp/pages/server.json
 #
 #   publish-host.sh --name amber-otter --remove --book …/server.json

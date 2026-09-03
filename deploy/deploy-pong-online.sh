@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Bring pong online multiplayer up end to end:
-#   1. build + (re)start arena-server on the target host (127.0.0.1:7778)
+#   1. build + (re)start arena-server on the target host (127.0.0.1:7780)
 #   2. (re)start a Cloudflare quick tunnel in front of it — this mints a
 #      fresh https://…trycloudflare.com domain on EVERY restart
 #   3. publish the new domain to server.json on GitHub Pages so the web
@@ -22,14 +22,14 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-# The target host. specht is being decommissioned; export EMBER_HOST to point
-# this at its replacement without editing the script:
+# The target host. The default is the `sokol` ssh alias; export EMBER_HOST to
+# choose another host without editing the script:
 #
 #     EMBER_HOST=newbox bash deploy/deploy-pong-online.sh
 #
 # It must be a name `ssh` already resolves and can log into without a prompt
 # (BatchMode is on everywhere below), i.e. an entry in ~/.ssh/config with a key.
-REMOTE="${EMBER_HOST:-specht}"
+REMOTE="${EMBER_HOST:-sokol}"
 
 # NOTE: SELinux on specht denied many ports (7778, 8890, 8891 tested); 7780 was
 # the verified-bindable one there. A new host may differ — if the bind fails,
@@ -158,7 +158,14 @@ echo "== restarting $ARENA_PKG =="
 # The fallback is not legacy — a freshly built host has no units yet, and this
 # script has to be what brings the game up there in the first place.
 MANAGED=""
+USER_MANAGER=""
 if ssh -o BatchMode=yes "$REMOTE" \
+        'test -n "${XDG_RUNTIME_DIR:-}" && test -S "$XDG_RUNTIME_DIR/bus" && systemctl --user is-system-running >/dev/null 2>&1'; then
+    USER_MANAGER=1
+else
+    echo "   no running systemd user manager; using a direct launch"
+fi
+if [ -n "$USER_MANAGER" ] && ssh -o BatchMode=yes "$REMOTE" \
         'systemctl --user is-enabled ember-pong.service' >/dev/null 2>&1; then
     # `is-enabled` only reads a symlink. It does NOT prove the manager can be
     # COMMANDED, and on specht it cannot: SELinux is Enforcing and permits the

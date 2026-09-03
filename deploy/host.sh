@@ -409,7 +409,8 @@ cmd_up() {
     say "stopping whatever was running"
     stop_all
 
-    local id port bin bind
+    local id port bin bind ts
+    ts="$(date +%s)"
     for id in $(game_ids); do
         port="$(game_port "$id")"
         bin="$(target_dir)/release/$(game_bin "$id")"
@@ -424,7 +425,9 @@ cmd_up() {
         sleep 1
         alive "server-$id" || { tail -20 "$LOGS/$id-server.log" >&2; die "$id server did not stay up"; }
     done
+    echo "   servers started in $(( $(date +%s) - ts ))s"
 
+    local tl; tl="$(date +%s)"
     for id in $(game_ids); do
         port="$(game_port "$id")"
         say "local health check for $id"
@@ -433,8 +436,10 @@ cmd_up() {
         probe_game "$id" "ws://127.0.0.1:$port" local \
             || die "$id server is listening but did not answer"
     done
+    echo "   local probes passed in $(( $(date +%s) - tl ))s"
 
-    local urls=""
+    local urls="" tt
+    tt="$(date +%s)"
     for id in $(game_ids); do
         port="$(game_port "$id")"
         say "starting the $id tunnel"
@@ -449,6 +454,7 @@ cmd_up() {
         echo "   $id: $url"
         urls="$urls $id=$url"
     done
+    echo "   tunnels started in $(( $(date +%s) - tt ))s"
 
     # Let the hostnames exist before anything asks for them. The first DNS
     # query for a brand-new *.trycloudflare.com name can land before
@@ -460,7 +466,8 @@ cmd_up() {
     # arena's fresh name within a second of minting it and gave up.
     # Only a real cloudflared mints names that need this; the test stub's
     # loopback addresses resolve at once. EMBER_TUNNEL_SETTLE overrides.
-    local settle="${EMBER_TUNNEL_SETTLE:-}"
+    local settle="${EMBER_TUNNEL_SETTLE:-}" tp
+    tp="$(date +%s)"
     if [ -z "$settle" ]; then
         case "$(basename "$EMBER_TUNNEL_BIN")" in cloudflared) settle=15 ;; *) settle=0 ;; esac
     fi
@@ -479,6 +486,7 @@ cmd_up() {
         [ -n "$ok" ] || die "the $id tunnel is up but the server did not answer through it within two minutes"
         echo "   $id answered through its public address (attempt $attempt)"
     done
+    echo "   public probes passed in $(( $(date +%s) - tp ))s"
 
     # WHAT IS RUNNING is recorded as soon as it is proven running — both
     # servers answered on loopback and through their public addresses — and

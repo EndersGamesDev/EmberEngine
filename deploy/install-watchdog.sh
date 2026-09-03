@@ -2,7 +2,7 @@
 # Install the ON-HOST watchdog: systemd --user units so both game servers and
 # both tunnels come back by themselves after a reboot or a crash.
 #
-#   EMBER_HOST=specht bash deploy/install-watchdog.sh
+#   EMBER_HOST=sokol bash deploy/install-watchdog.sh
 #
 # Why user units and not system units: the deploys already run entirely as an
 # unprivileged account, the binaries live under $HOME, and nothing here needs
@@ -17,9 +17,18 @@
 # credentials already are. The two are deliberately separate.
 set -euo pipefail
 
-REMOTE="${EMBER_HOST:-specht}"
+REMOTE="${EMBER_HOST:-sokol}"
 SSH=(ssh -o BatchMode=yes "$REMOTE")
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+echo "== checking for a running systemd user manager on $REMOTE =="
+if ! "${SSH[@]}" \
+        'test -n "${XDG_RUNTIME_DIR:-}" && test -S "$XDG_RUNTIME_DIR/bus" && systemctl --user is-system-running >/dev/null 2>&1'; then
+    echo "FAILED: '$REMOTE' has no running systemd user manager or user bus." >&2
+    echo "        Do not install units there: run deploy/host.sh up on the host" >&2
+    echo "        and use deploy/watchdog.sh from the workstation for lifecycle." >&2
+    exit 1
+fi
 
 echo "== resolving this host's name =="
 # The units must start the servers with the SAME name the deploys publish
