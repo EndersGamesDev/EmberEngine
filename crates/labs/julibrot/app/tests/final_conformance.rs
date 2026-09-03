@@ -7,14 +7,14 @@
 
 use ember_julibrot_kernels::{
     ConformanceVerdict, GridExtent, KernelMode, KernelSample, PerturbUniform, RefinementLevel,
-    ShallowUniform, escape_shallow_pixel, escape_shallow_point, evaluate_perturbation_conformance,
-    perturb_scaled_offset,
+    SampleStatus, ShallowUniform, escape_shallow_pixel, escape_shallow_point,
+    evaluate_perturbation_conformance, perturb_scaled_offset,
 };
 use ember_julibrot_math::{
-    CentreSplit, EscapeGridRecord, EscapeParams, MathError, PerturbationEnvelope, Plane,
-    PlaneAngles, Pose, PrecisionMode, ReferenceOrbitRecord, ScaleSplit, ViewControls,
-    construct_plane, perturb_scaled_f64_with_envelope, precision_for, scale_split,
-    scaled_pixel_offset, shallow_pixel_scale, warp_matrix,
+    CentreSplit, EscapeGridRecord, EscapeParams, Homography, MathError, ObjectAngles,
+    PerturbationEnvelope, Plane, PlaneAngles, Pose, PoseMap, PrecisionMode, ReferenceOrbitRecord,
+    ScaleSplit, ViewControls, construct_plane, perturb_scaled_f64_with_envelope, precision_for,
+    scale_split, scaled_pixel_offset, shallow_pixel_scale, warp_matrix,
 };
 use ember_julibrot_present::{
     DEBUG_TINT, PaletteId, PaletteRecord, apply_homography, pack_homography_rows, palette,
@@ -38,7 +38,7 @@ const ZERO_RECORD: ReferenceOrbitRecord = ReferenceOrbitRecord { re: 0.0, im: 0.
 #[derive(Clone, Copy, Debug)]
 struct PlaneFixture {
     name: &'static str,
-    angles: PlaneAngles,
+    angles: ObjectAngles,
     interior_centre: [f64; 4],
     escaped_centre: [f64; 4],
 }
@@ -232,7 +232,7 @@ fn forced_rescale_rebase_and_boundary_fixtures_remain_explicit() {
             smooth_iter: -1.0,
             escaped: 0.0,
             rebase_count: 0.0,
-            glitch: 0.0,
+            status: SampleStatus::Sampled.as_f32(),
         },
         escape_index: None,
     };
@@ -328,28 +328,22 @@ fn plane_fixtures() -> [PlaneFixture; 3] {
     [
         PlaneFixture {
             name: mandelbrot.name,
-            angles: PlaneAngles {
-                theta_1: mandelbrot.plane_angles[0],
-                theta_2: mandelbrot.plane_angles[1],
-            },
+            angles: mandelbrot.object_angles,
             interior_centre: mandelbrot.plane_origin,
             escaped_centre: [0.0, 0.0, 2.0, 0.0],
         },
         PlaneFixture {
             name: julia.name,
-            angles: PlaneAngles {
-                theta_1: julia.plane_angles[0],
-                theta_2: julia.plane_angles[1],
-            },
+            angles: julia.object_angles,
             interior_centre: julia.plane_origin,
             escaped_centre: [20.0, 0.0, julia.plane_origin[2], julia.plane_origin[3]],
         },
         PlaneFixture {
             name: "Hybrid",
-            angles: PlaneAngles {
+            angles: ObjectAngles::from(PlaneAngles {
                 theta_1: 0.4,
                 theta_2: 0.7,
-            },
+            }),
             interior_centre: [0.0; 4],
             escaped_centre: [0.0, 0.0, 2.0, 0.0],
         },
@@ -400,6 +394,7 @@ fn render_deterministic(
     if zoom < 14.0 {
         let uniform = ShallowUniform::pack(
             plane,
+            &Homography::IDENTITY,
             CentreSplit {
                 hi: centre.map(|value| value as f32),
                 lo: [0.0; 4],
@@ -421,6 +416,7 @@ fn render_deterministic(
     let orbit = reference_orbit(centre, cap);
     let uniform = PerturbUniform::pack(
         plane,
+        &Homography::IDENTITY,
         scale,
         SAMPLE_EXTENT,
         EscapeParams::new(cap),
@@ -502,6 +498,7 @@ fn render_special_deterministic(
             basis_u: [1.0, 0.0, 0.0, 0.0],
             basis_v: [0.0, 1.0, 0.0, 0.0],
         },
+        &Homography::IDENTITY,
         ScaleSplit {
             mantissa: 0.5,
             exponent,
@@ -530,7 +527,7 @@ fn render_special_deterministic(
 }
 
 fn terminal(sample: KernelSample) -> TerminalClass {
-    if sample.record.glitch == 1.0 {
+    if sample.record.status == SampleStatus::Glitch.as_f32() {
         TerminalClass::Debug
     } else if sample.record.escaped == 1.0 {
         TerminalClass::Escaped
@@ -558,7 +555,7 @@ const fn record_lanes(sample: KernelSample) -> [f32; 4] {
         record.smooth_iter,
         record.escaped,
         record.rebase_count,
-        record.glitch,
+        record.status,
     ]
 }
 
@@ -627,12 +624,12 @@ const fn pose(plane: Plane, zoom_log2: f64, displacement: [f64; 2]) -> Pose {
         epoch: 1,
         orbit_generation: 1,
         plane,
-        plane_theta_1: 0.0,
-        plane_theta_2: 0.0,
+        object: ObjectAngles::IDENTITY,
         zoom_log2,
-        view: ViewControls::NEUTRAL,
+        view: ViewControls::MANDELBROT_FLAT,
         grid_width: GRID_WIDTH,
         grid_height: GRID_HEIGHT,
+        map: PoseMap::Mapped(Homography::IDENTITY),
         centre_from_reference_px: displacement,
     }
 }

@@ -336,6 +336,25 @@ pub struct ViewerController {
     pending_reason: Option<OrbitReason>,
     grid_width: u32,
     crosshair: Option<BigCentre>,
+    grid_extent: [u32; 2],
+}
+
+/// Accepted constructor forms for callers that know only width or the complete render extent.
+pub trait IntoGridExtent {
+    /// Converts the caller's extent into `[width, height]`.
+    fn into_grid_extent(self) -> [u32; 2];
+}
+
+impl IntoGridExtent for u32 {
+    fn into_grid_extent(self) -> [u32; 2] {
+        [self, self]
+    }
+}
+
+impl IntoGridExtent for [u32; 2] {
+    fn into_grid_extent(self) -> [u32; 2] {
+        self
+    }
 }
 
 impl ViewerController {
@@ -344,7 +363,9 @@ impl ViewerController {
     /// # Errors
     ///
     /// Returns a math error if the canonical preset contract is unavailable.
-    pub fn new(grid_width: u32) -> Result<Self, AppError> {
+    pub fn new(grid_extent: impl IntoGridExtent) -> Result<Self, AppError> {
+        let grid_extent = grid_extent.into_grid_extent();
+        let grid_width = grid_extent[0];
         let requested = RequestedControls::default();
         let origin = requested.plane_origin;
         let plane = construct_plane(requested.object_angles).map_err(math_error)?;
@@ -390,6 +411,7 @@ impl ViewerController {
             pending_reason: Some(OrbitReason::INITIAL),
             grid_width,
             crosshair: None,
+            grid_extent,
         })
     }
 

@@ -1,7 +1,9 @@
-use ember_julibrot_math::{Plane, Pose, PoseMap, ViewControls, warp_matrix};
+use ember_julibrot_math::{Plane, Pose, PoseMap, PrecisionMode, ViewControls, warp_matrix};
 
 use crate::homography::solve_homogeneous;
-use crate::{SceneFrame, WarpKind, WarpPlan, apply_homography, pack_homography_rows};
+use crate::{
+    SceneFrame, WarpKind, WarpPlan, WarpValidation, apply_homography, pack_homography_rows,
+};
 
 const HEIGHT_SAMPLES: [f64; 5] = [-2.0, -1.0, 0.0, 1.0, 2.0];
 const SCREEN_STEPS: u32 = 9;
@@ -17,7 +19,14 @@ impl Warp {
     /// A pose mismatch or incompatible arithmetic returns an honest clear-only plan. A screen
     /// corner beyond a horizon remains a homogeneous anchor and does not clear the whole picture.
     #[must_use]
-    pub fn reproject(last_frame: &SceneFrame, from_pose: &Pose, to_pose: &Pose) -> WarpPlan {
+    pub fn reproject(
+        last_frame: &SceneFrame,
+        from_pose: &Pose,
+        to_pose: &Pose,
+        precision_mode: PrecisionMode,
+        validation: WarpValidation,
+    ) -> WarpPlan {
+        let _policy_requires_corpus = validation.samples_corpus(precision_mode);
         if matches!(to_pose.map, PoseMap::EdgeOn) {
             return edge_on();
         }
@@ -414,16 +423,28 @@ mod tests {
             texture_index: 0,
             centre_revision: 4,
             plane_origin_f64: [0.0; 4],
+            precision_mode: PrecisionMode::PictureFast.as_str(),
             measurement: SubmissionMeasurement {
                 kind: SubmissionKind::Scene,
                 id: 3,
                 source_scene_id: None,
                 sample_class: SampleClass::Measured,
+                precision_mode: PrecisionMode::PictureFast.as_str(),
                 wall_ms: 1.0,
                 fence_wait_ms: 0.5,
                 polls: 1,
             },
         }
+    }
+
+    fn reproject(last_frame: &SceneFrame, from_pose: &Pose, to_pose: &Pose) -> WarpPlan {
+        Warp::reproject(
+            last_frame,
+            from_pose,
+            to_pose,
+            PrecisionMode::PictureFast,
+            WarpValidation::Ordinary,
+        )
     }
 
     fn unpack_rows(rows: [[f32; 4]; 3]) -> [f64; 9] {
@@ -434,7 +455,7 @@ mod tests {
     fn neutral_plan_reproduces_inverse_sampling_translation() {
         let from = pose(ViewControls::NEUTRAL, [2.0, 3.0]);
         let to = pose(ViewControls::NEUTRAL, [7.0, -1.0]);
-        let plan = Warp::reproject(&frame(&from), &from, &to);
+        let plan = reproject(&frame(&from), &from, &to);
         assert_eq!(plan.kind, WarpKind::AnchorHomography);
         assert!(plan.source_valid);
         assert!((f64::from(plan.rows[0][2]) - 5.0).abs() < 1.0e-7);
@@ -453,7 +474,7 @@ mod tests {
             let mut to = pose(view, [-4.0, 9.125]);
             to.zoom_log2 += 0.75;
             let exact = warp_matrix(&from, &to).expect("neutral fixture is finite");
-            let plan = Warp::reproject(&frame(&from), &from, &to);
+            let plan = reproject(&frame(&from), &from, &to);
             let scale = exact.inverse[8];
             for (value, wanted) in unpack_rows(plan.rows).into_iter().zip(exact.inverse) {
                 assert!((value - wanted / scale).abs() <= 1.0e-5);
@@ -510,7 +531,7 @@ mod tests {
             let mut to = pose(ViewControls::NEUTRAL, [-811.125, 401.75]);
             to.zoom_log2 = zoom_log2 + 0.2;
             let exact = warp_matrix(&from, &to).expect("required warp fixture is finite");
-            let plan = Warp::reproject(&frame(&from), &from, &to);
+            let plan = reproject(&frame(&from), &from, &to);
             let rounded = unpack_rows(plan.rows);
             for screen in screen_corners(&to).into_iter().chain([[0.0; 2]]) {
                 let expected = apply_homography(exact.inverse, screen)
@@ -529,18 +550,18 @@ mod tests {
         let mut mismatched = from;
         mismatched.epoch = 2;
         assert_eq!(
-            Warp::reproject(&frame(&from), &mismatched, &from).kind,
+            reproject(&frame(&from), &mismatched, &from).kind,
             WarpKind::ClearOnly
         );
         let mut invalid = from;
         invalid.grid_width = 0;
         assert_eq!(
-            Warp::reproject(&frame(&invalid), &invalid, &from).kind,
+            reproject(&frame(&invalid), &invalid, &from).kind,
             WarpKind::ClearOnly
         );
         let mut edge_on = from;
         edge_on.map = PoseMap::EdgeOn;
-        let plan = Warp::reproject(&frame(&from), &from, &edge_on);
+        let plan = reproject(&frame(&from), &from, &edge_on);
         assert!(plan.edge_on);
         assert!(!plan.exposed);
     }
@@ -548,7 +569,7 @@ mod tests {
     #[test]
     fn relief_identity_has_zero_sample_error() {
         let current = pose(relief(0.6), [0.0; 2]);
-        let plan = Warp::reproject(&frame(&current), &current, &current);
+        let plan = reproject(&frame(&current), &current, &current);
         assert_eq!(plan.kind, WarpKind::AnchorHomography);
         assert!(plan.source_valid);
         assert!(plan.approx_max_error_px.is_some_and(|error| error < 1.0e-9));
@@ -569,7 +590,7 @@ mod tests {
         let weights = screen_corners(&from).map(|corner| homogeneous(to_map.inverse, corner)[2]);
         assert!(weights.iter().any(|weight| *weight < 0.0));
         assert!(weights.iter().any(|weight| *weight > 0.0));
-        let plan = Warp::reproject(&frame(&from), &from, &to);
+        let plan = reproject(&frame(&from), &from, &to);
         assert_eq!(plan.kind, WarpKind::AnchorHomography);
         assert!(plan.source_valid);
     }
@@ -579,7 +600,7 @@ mod tests {
         let from = pose(relief(0.6), [0.0; 2]);
         let mut to = pose(relief(0.602), [2.0, -1.0]);
         to.zoom_log2 += 0.025;
-        let plan = Warp::reproject(&frame(&from), &from, &to);
+        let plan = reproject(&frame(&from), &from, &to);
         assert_eq!(plan.kind, WarpKind::AnchorHomography);
         let maximum = plan
             .approx_max_error_px
@@ -628,7 +649,7 @@ mod tests {
                 let from = object_pose(object, plane, from_view, [3.5, -2.25]);
                 let mut to = object_pose(object, plane, to_view, [5.5, -1.25]);
                 to.zoom_log2 += 0.025;
-                let plan = Warp::reproject(&frame(&from), &from, &to);
+                let plan = reproject(&frame(&from), &from, &to);
                 assert_eq!(plan.kind, WarpKind::AnchorHomography);
                 assert!(plan.source_valid);
                 let error = plan

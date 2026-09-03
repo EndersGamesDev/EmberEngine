@@ -7,9 +7,9 @@ use wgpu::util::DeviceExt as _;
 use crate::fence::{FenceDecision, FenceLedger};
 use crate::state::{ExposureLatch, SceneCompletion, SceneLedger};
 use crate::{
-    FrameReceipt, FrameState, HOT_PAYLOAD_BYTES, HotSlot, HotUniform, PaletteId, Pose, PoseMap,
+    FrameReceipt, FrameState, HotSlot, HotUniform, PaletteId, Pose, PoseMap,
     PresentConfig, PresentDataError, PresentError, PresentEvent, PresentFacts, PresentHot,
-    PresentMain, PresentStatus, SCENE_PAYLOAD_BYTES, SampleClass, SceneUniform, SubmissionKind,
+    PresentMain, PresentStatus, SampleClass, SceneUniform, SubmissionKind,
     Warp, WarpKind, WarpValidation, camera_rotation, camera_rotation_pairs, exterior_zero,
     hot_ring_bytes, pack_homography_rows, palette, scene_indices, scene_shader, view_scale,
     warp_shader,

@@ -5,7 +5,9 @@ use ember_julibrot_kernels::RefinementPlan;
 use ember_julibrot_kernels::{RefinementLevel, next_refinement_level};
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_math::PICTURE_FAST_EDIT_BUDGET;
-use ember_julibrot_math::{PoseMap, PrecisionMode};
+#[cfg(any(target_arch = "wasm32", test))]
+use ember_julibrot_math::PoseMap;
+use ember_julibrot_math::PrecisionMode;
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_present::{FenceRefusal, SubmissionKind};
 

@@ -31,7 +31,7 @@ pub use runtime::{BrowserRuntime, DeviceFacts, install_julibrot_panic_hook, take
 pub use saved::{SavedCentre, SavedCoordinate, SavedView};
 pub use state::{
     BOX_CLICK_THRESHOLD_PX, HotFrame, INITIAL_ITERATION_CAP, NavigationEdit, PRESET_ROWS,
-    PresetRow, RequestedControls, SCALE_RANGE_LOG2, ViewerController, anchor_px_up,
+    IntoGridExtent, PresetRow, RequestedControls, SCALE_RANGE_LOG2, ViewerController, anchor_px_up,
     box_zoom_delta_log2, css_from_anchor_px_up, drag_delta_px_down, is_box_selection, preset_row,
 };
 pub use surface::{PendingSurface, SurfaceAction, SurfaceState};
