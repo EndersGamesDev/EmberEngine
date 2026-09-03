@@ -29,6 +29,26 @@ pub enum SceneCompletion {
     },
 }
 
+/// Pure refresh-loop exposure state: only a completed scene may clear it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ExposureLatch {
+    due: bool,
+}
+
+impl ExposureLatch {
+    pub const fn observe_warp(&mut self, exposed: bool) {
+        self.due |= exposed;
+    }
+
+    pub const fn scene_completed(&mut self) {
+        self.due = false;
+    }
+
+    pub const fn due(self) -> bool {
+        self.due
+    }
+}
+
 /// Pure two-index ledger; GPU resources mirror these identities.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SceneLedger {
@@ -185,7 +205,9 @@ fn dot(left: [f32; 4], right: [f32; 4]) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use ember_julibrot_math::{Plane, PrecisionMode, ViewControls};
+    use ember_julibrot_math::{
+        Homography, ObjectAngles, Plane, PoseMap, PrecisionMode, ViewControls,
+    };
 
     use super::*;
     use crate::{SampleClass, SubmissionKind, SubmissionMeasurement};
@@ -201,12 +223,12 @@ mod tests {
                 basis_u: [1.0, 0.0, 0.0, 0.0],
                 basis_v: [0.0, 1.0, 0.0, 0.0],
             },
-            plane_theta_1: 0.0,
-            plane_theta_2: 0.0,
+            object: ObjectAngles::JULIA,
             zoom_log2: 20.0,
             view: ViewControls::NEUTRAL,
             grid_width: 800,
             grid_height: 600,
+            map: PoseMap::Mapped(Homography::IDENTITY),
             centre_from_reference_px: [11.0, -3.0],
         }
     }
@@ -371,5 +393,16 @@ mod tests {
         begin(&mut ledger, 3, 3);
         ledger.complete(measurement(3));
         assert!(ledger.invalidate_incompatible(64, ORIGIN, PrecisionMode::PictureFast.as_str()));
+    }
+
+    #[test]
+    fn exposed_warp_keeps_the_frame_loop_due_until_the_next_scene_completes() {
+        let mut latch = ExposureLatch::default();
+        latch.observe_warp(true);
+        assert!(latch.due());
+        latch.observe_warp(false);
+        assert!(latch.due());
+        latch.scene_completed();
+        assert!(!latch.due());
     }
 }

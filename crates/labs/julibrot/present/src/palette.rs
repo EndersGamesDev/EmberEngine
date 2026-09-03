@@ -92,11 +92,8 @@ pub fn shade_escape_record(record: [f32; 4], selected: PaletteRecord) -> Palette
             contract_violation: malformed,
         };
     }
-    if status == 2.0 || status == 3.0 {
-        return PaletteOutcome {
-            rgba: selected.clear_rgba,
-            contract_violation: false,
-        };
+    if status == 2.0 {
+        return shade_escape_record([0.0, 1.0, rebase_count, 0.0], selected);
     }
     if escaped == 0.0 {
         return if smooth_iter == -1.0 {
@@ -162,6 +159,12 @@ pub fn shade_lit_escape_record(
     outcome
 }
 
+/// Returns the palette's immediate-escape exterior colour.
+#[must_use]
+pub fn exterior_zero(selected: PaletteRecord) -> [f32; 4] {
+    shade_escape_record([0.0, 1.0, 0.0, 0.0], selected).rgba
+}
+
 #[cfg(test)]
 mod tests {
     use std::mem::{align_of, size_of};
@@ -211,11 +214,26 @@ mod tests {
     }
 
     #[test]
-    fn horizon_and_uncertain_records_use_the_palette_clear_colour() {
-        for status in [2.0, 3.0] {
-            let outcome = shade_escape_record([0.0, 0.0, 0.0, status], EMBER_PALETTE);
-            assert_eq!(outcome.rgba, EMBER_PALETTE.clear_rgba);
-            assert!(!outcome.contract_violation);
+    fn horizon_is_immediate_exterior_and_uncertain_is_sampled() {
+        let exterior = exterior_zero(EMBER_PALETTE);
+        let horizon = shade_escape_record([-1.0, 0.0, 0.0, 2.0], EMBER_PALETTE);
+        assert_eq!(horizon.rgba, exterior);
+        assert!(!horizon.contract_violation);
+        let uncertain = shade_escape_record([16.0, 1.0, 0.0, 3.0], EMBER_PALETTE);
+        assert_ne!(uncertain.rgba, EMBER_PALETTE.clear_rgba);
+        assert_eq!(
+            uncertain,
+            shade_escape_record([16.0, 1.0, 0.0, 0.0], EMBER_PALETTE)
+        );
+    }
+
+    #[test]
+    fn completed_final_horizon_grid_never_presents_clear() {
+        let final_extent = [1_920_u32, 1_080_u32];
+        for _ in 0..final_extent[0] * final_extent[1] {
+            let outcome = shade_escape_record([-1.0, 0.0, 0.0, 2.0], CLASSIC_PALETTE);
+            assert_eq!(outcome.rgba, exterior_zero(CLASSIC_PALETTE));
+            assert_ne!(outcome.rgba, CLASSIC_PALETTE.clear_rgba);
         }
     }
 

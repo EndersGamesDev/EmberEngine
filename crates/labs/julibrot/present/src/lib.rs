@@ -20,18 +20,18 @@ pub use contract::{
     SubmissionMeasurement, WarpKind, WarpPlan, WarpValidation,
 };
 pub use ember_julibrot_kernels::RefinementLevel;
-pub use ember_julibrot_math::{Pose, ViewControls};
+pub use ember_julibrot_math::{ObjectAngles, Pose, PoseMap, ViewControls};
 pub use gpu::Presenter;
 pub use homography::{
     apply_homography, inverse_identity_error, pack_homography_rows, solve_homography,
 };
 pub use mesh::{
-    HeightSample, MeshError, camera_rotation, display_coordinate, height_for_record,
-    scene_index_count, scene_indices, view_rotation, view_scale,
+    HeightSample, MeshError, camera_rotation, camera_rotation_pairs, display_coordinate,
+    height_for_record, scene_index_count, scene_indices, view_scale,
 };
 pub use palette::{
     CLASSIC_PALETTE, DEBUG_TINT, EMBER_PALETTE, ICE_PALETTE, PaletteId, PaletteOutcome,
-    PaletteRecord, palette, shade_escape_record, shade_lit_escape_record,
+    PaletteRecord, exterior_zero, palette, shade_escape_record, shade_lit_escape_record,
 };
 pub use planner::Warp;
 pub use shader::scene_shader;

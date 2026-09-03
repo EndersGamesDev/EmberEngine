@@ -3,8 +3,8 @@ use ember_lab_heap::DialectLimits;
 const HEAP_SCENE_PREFIX: &str = r"
 struct HeapDescriptors { entries: array<vec4<u32>, __DESCRIPTORS__>, }
 struct HeapDirectory { spans: array<vec4<u32>, __SPANS__>, handles: array<vec4<u32>, __HANDLE_GROUPS__>, }
-struct SceneUniform { grid: vec4<u32>, span: vec4<u32>, screen_to_plane_row_0: vec4<f32>, screen_to_plane_row_1: vec4<f32>, screen_to_plane_row_2: vec4<f32>, palette_map: vec4<f32>, interior_rgba: vec4<f32>, clear_rgba: vec4<f32>, }
-struct HotUniform { camera: vec4<f32>, view_scale: vec4<f32>, view_rotation: vec4<f32>, homography_row_0: vec4<f32>, homography_row_1: vec4<f32>, homography_row_2: vec4<f32>, screen_to_plane_row_0: vec4<f32>, screen_to_plane_row_1: vec4<f32>, screen_to_plane_row_2: vec4<f32>, clear_rgba: vec4<f32>, flags: vec4<u32>, }
+struct SceneUniform { grid: vec4<u32>, span: vec4<u32>, basis_u: vec4<f32>, basis_v: vec4<f32>, screen_to_plane_row_0: vec4<f32>, screen_to_plane_row_1: vec4<f32>, screen_to_plane_row_2: vec4<f32>, palette_map: vec4<f32>, interior_rgba: vec4<f32>, clear_rgba: vec4<f32>, }
+struct HotUniform { camera_rotation_pairs_0: vec4<f32>, camera_rotation_pairs_1: vec4<f32>, camera_rotation_pairs_2: vec4<f32>, camera_rotation_pairs_3: vec4<f32>, camera_rotation_pairs_4: vec4<f32>, observer_rotation: vec4<f32>, view_scale: vec4<f32>, homography_row_0: vec4<f32>, homography_row_1: vec4<f32>, homography_row_2: vec4<f32>, screen_to_plane_row_0: vec4<f32>, screen_to_plane_row_1: vec4<f32>, screen_to_plane_row_2: vec4<f32>, exterior_zero_rgba: vec4<f32>, clear_rgba: vec4<f32>, flags: vec4<u32>, }
 @group(0) @binding(0) var heap_data: texture_2d_array<f32>;
 @group(0) @binding(1) var<uniform> heap_descriptors: HeapDescriptors;
 @group(0) @binding(2) var<uniform> heap_directory: HeapDirectory;
@@ -34,7 +34,7 @@ fn hue_component(hue: f32, offset: f32) -> f32 {
 }
 fn shade(record: vec4<f32>) -> vec4<f32> {
     if (malformed(record) || record.w == 1.0) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
-    if (record.w == 2.0 || record.w == 3.0) { return scene.clear_rgba; }
+    if (record.w == 2.0) { return hot.exterior_zero_rgba; }
     if (record.y == 0.0) {
         if (record.x == -1.0) { return scene.interior_rgba; }
         return vec4<f32>(1.0, 0.0, 1.0, 1.0);
@@ -48,7 +48,7 @@ fn shade(record: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(rgb, 1.0);
 }
 fn record_height(record: vec4<f32>) -> f32 {
-    if (malformed(record) || record.w != 0.0) { return 0.0; }
+    if (malformed(record) || record.w == 1.0 || record.w == 2.0) { return 0.0; }
     if (record.y == 0.0) {
         if (record.x == -1.0) { return -2.0; }
         return 0.0;
@@ -59,6 +59,24 @@ fn record_height(record: vec4<f32>) -> f32 {
 ";
 const SCENE_BODY: &str = r"
 struct SceneVertex { @builtin(position) position: vec4<f32>, @location(0) world: vec3<f32>, @location(1) grid_coordinate: vec2<f32>, @location(2) valid: f32, }
+fn rotate_pair_5(value: array<f32, 5>, first: u32, second: u32, pair: vec2<f32>) -> array<f32, 5> {
+    var rotated = value;
+    rotated[first] = pair.x * value[first] - pair.y * value[second];
+    rotated[second] = pair.y * value[first] + pair.x * value[second];
+    return rotated;
+}
+fn ambient_camera(value: array<f32, 5>) -> array<f32, 5> {
+    var rotated = rotate_pair_5(value, 3u, 4u, hot.camera_rotation_pairs_4.zw);
+    rotated = rotate_pair_5(rotated, 2u, 4u, hot.camera_rotation_pairs_4.xy);
+    rotated = rotate_pair_5(rotated, 1u, 4u, hot.camera_rotation_pairs_3.zw);
+    rotated = rotate_pair_5(rotated, 0u, 4u, hot.camera_rotation_pairs_3.xy);
+    rotated = rotate_pair_5(rotated, 2u, 3u, hot.camera_rotation_pairs_2.zw);
+    rotated = rotate_pair_5(rotated, 1u, 3u, hot.camera_rotation_pairs_2.xy);
+    rotated = rotate_pair_5(rotated, 1u, 2u, hot.camera_rotation_pairs_1.zw);
+    rotated = rotate_pair_5(rotated, 0u, 3u, hot.camera_rotation_pairs_1.xy);
+    rotated = rotate_pair_5(rotated, 0u, 2u, hot.camera_rotation_pairs_0.zw);
+    return rotate_pair_5(rotated, 0u, 1u, hot.camera_rotation_pairs_0.xy);
+}
 @vertex fn scene_vertex(@builtin(vertex_index) index: u32) -> SceneVertex {
     let column = index % scene.grid.x;
     let row = index / scene.grid.x;
@@ -69,47 +87,36 @@ struct SceneVertex { @builtin(position) position: vec4<f32>, @location(0) world:
     var output: SceneVertex;
     output.world = vec3<f32>(0.0);
     output.grid_coordinate = vec2<f32>(f32(column), f32(row));
-    output.valid = 0.0;
-    output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
-    if (record.w == 2.0 || record.w == 3.0) { return output; }
+    output.valid = 1.0;
+    output.position = vec4<f32>(direct_ndc, 0.0, 1.0);
+    if (scene.span.z != 0u || record.w == 2.0 || hot.view_scale.x == 0.0) { return output; }
     let screen = vec3<f32>(screen_x, screen_y, 1.0);
     let plane_homogeneous = vec3<f32>(dot(scene.screen_to_plane_row_0.xyz, screen), dot(scene.screen_to_plane_row_1.xyz, screen), dot(scene.screen_to_plane_row_2.xyz, screen));
-    if (!finite(plane_homogeneous.z) || plane_homogeneous.z <= 0.0) { return output; }
-    let gamma_five = 0.000000476837158203125;
-    let screen_abs = abs(screen);
-    let plane_error = gamma_five * vec3<f32>(dot(abs(scene.screen_to_plane_row_0.xyz), screen_abs), dot(abs(scene.screen_to_plane_row_1.xyz), screen_abs), dot(abs(scene.screen_to_plane_row_2.xyz), screen_abs));
-    if (plane_homogeneous.z <= plane_error.z) { return output; }
+    if (!all(vec3<bool>(finite(plane_homogeneous.x), finite(plane_homogeneous.y), finite(plane_homogeneous.z))) || plane_homogeneous.z <= 0.0) { return output; }
     let plane_offset = plane_homogeneous.xy / plane_homogeneous.z;
-    let quotient_error = (plane_error.xy + abs(plane_offset) * plane_error.z) / (plane_homogeneous.z - plane_error.z);
-    if (!all(vec2<bool>(finite(quotient_error.x), finite(quotient_error.y))) || any(quotient_error > vec2<f32>(0.25))) { return output; }
-    let display = vec4<f32>(4.0 * plane_offset.x / f32(scene.grid.x), 4.0 * plane_offset.y / f32(scene.grid.x), 0.0, 0.0);
+    if (!all(vec2<bool>(finite(plane_offset.x), finite(plane_offset.y)))) { return output; }
+    let chart_scale = 4.0 / f32(scene.grid.x);
+    let display = chart_scale * (plane_offset.x * scene.basis_u + plane_offset.y * scene.basis_v);
     let height = hot.view_scale.x * record_height(record);
-    if (hot.view_scale.x == 0.0) {
-        output.world = display.xyz;
-        output.valid = 1.0;
-        output.position = vec4<f32>(direct_ndc, 0.0, 1.0);
-        return output;
-    }
-    let p_3 = display.z * hot.view_rotation.z - height * hot.view_rotation.w;
-    let p_5 = display.z * hot.view_rotation.w + height * hot.view_rotation.z;
-    let p_1 = display.x * hot.view_rotation.x - display.y * hot.view_rotation.y;
-    let p_2 = display.x * hot.view_rotation.y + display.y * hot.view_rotation.x;
+    let ambient = ambient_camera(array<f32, 5>(display.x, display.y, display.z, display.w, height));
+    output.valid = 0.0;
+    output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
     let distance_five = hot.view_scale.y;
     let distance_four = hot.view_scale.z;
-    let denominator_five = distance_five - p_5;
+    let denominator_five = distance_five - ambient[4];
     if (denominator_five <= 1.0e-4) { return output; }
     let scale_five = distance_five / denominator_five;
-    let projected_four = vec4<f32>(p_1, p_2, p_3, display.w) * scale_five;
+    let projected_four = vec4<f32>(ambient[0], ambient[1], ambient[2], ambient[3]) * scale_five;
     let denominator_four = distance_four - projected_four.w;
     if (denominator_four <= 1.0e-4) { return output; }
     let scale_four = distance_four / denominator_four;
     let world = projected_four.xyz * scale_four;
     output.world = world;
     output.valid = 1.0;
-    let camera_yaw_cosine = hot.camera.x;
-    let camera_yaw_sine = hot.camera.y;
-    let camera_pitch_cosine = hot.camera.z;
-    let camera_pitch_sine = hot.camera.w;
+    let camera_yaw_cosine = hot.observer_rotation.x;
+    let camera_yaw_sine = hot.observer_rotation.y;
+    let camera_pitch_cosine = hot.observer_rotation.z;
+    let camera_pitch_sine = hot.observer_rotation.w;
     let camera_near = 0.1;
     let camera_far = 4.0 * distance_four;
     let yawed = vec3<f32>(camera_yaw_cosine * world.x + camera_yaw_sine * world.z, world.y, -camera_yaw_sine * world.x + camera_yaw_cosine * world.z);
@@ -127,7 +134,7 @@ struct SceneVertex { @builtin(position) position: vec4<f32>, @location(0) world:
     let coordinate = vec2<u32>(clamp(floor(input.grid_coordinate + vec2<f32>(0.5)), vec2<f32>(0.0), limit));
     let record = load_escape(coordinate.y * scene.grid.x + coordinate.x);
     if (malformed(record) || record.w == 1.0) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
-    if (record.w == 2.0 || record.w == 3.0) { return scene.clear_rgba; }
+    if (record.w == 2.0 || scene.span.z != 0u) { return hot.exterior_zero_rgba; }
     let normal_cross = cross(dpdx(input.world), dpdy(input.world));
     var normal = vec3<f32>(0.0, 0.0, 1.0);
     if (dot(normal_cross, normal_cross) > 1.0e-12) { normal = normalize(normal_cross); }
@@ -180,7 +187,8 @@ mod tests {
         let source = scene_shader(limits());
         assert!(source.contains("let row = index / scene.grid.x;"));
         assert!(source.contains("malformed(record) || record.w == 1.0"));
-        assert!(source.contains("record.w == 2.0 || record.w == 3.0"));
+        assert!(source.contains("if (record.w == 2.0) { return hot.exterior_zero_rgba; }"));
+        assert!(!source.contains("record.w == 2.0 || record.w == 3.0"));
         assert!(source.contains("!finite(record.x) || record.x < 0.0"));
         assert!(source.contains("vec4<f32>(1.0, 0.0, 1.0, 1.0)"));
         assert!(source.contains("textureLoad(heap_data"));
@@ -193,22 +201,21 @@ mod tests {
             "let screen_x = f32(column) + 0.5 - 0.5 * f32(scene.grid.x);",
             "let screen_y = f32(row) + 0.5 - 0.5 * f32(scene.grid.y);",
             "let plane_homogeneous = vec3<f32>(dot(scene.screen_to_plane_row_0.xyz, screen), dot(scene.screen_to_plane_row_1.xyz, screen), dot(scene.screen_to_plane_row_2.xyz, screen));",
-            "if (plane_homogeneous.z <= plane_error.z) { return output; }",
-            "quotient_error > vec2<f32>(0.25)",
-            "let display = vec4<f32>(4.0 * plane_offset.x / f32(scene.grid.x), 4.0 * plane_offset.y / f32(scene.grid.x), 0.0, 0.0);",
+            "let display = chart_scale * (plane_offset.x * scene.basis_u + plane_offset.y * scene.basis_v);",
             "let height = hot.view_scale.x * record_height(record);",
-            "if (hot.view_scale.x == 0.0)",
+            "scene.span.z != 0u || record.w == 2.0 || hot.view_scale.x == 0.0",
             "output.position = vec4<f32>(direct_ndc, 0.0, 1.0);",
-            "display.z * hot.view_rotation.z - height * hot.view_rotation.w",
-            "display.x * hot.view_rotation.x - display.y * hot.view_rotation.y",
+            "rotate_pair_5(value, 3u, 4u, hot.camera_rotation_pairs_4.zw)",
+            "rotate_pair_5(rotated, 0u, 2u, hot.camera_rotation_pairs_0.zw)",
+            "rotate_pair_5(rotated, 0u, 1u, hot.camera_rotation_pairs_0.xy)",
             "let distance_five = hot.view_scale.y;",
             "let distance_four = hot.view_scale.z;",
-            "let denominator_five = distance_five - p_5;",
+            "let denominator_five = distance_five - ambient[4];",
             "let denominator_four = distance_four - projected_four.w;",
             "if (denominator_five <= 1.0e-4) { return output; }",
             "if (denominator_four <= 1.0e-4) { return output; }",
-            "let camera_yaw_cosine = hot.camera.x;",
-            "let camera_pitch_cosine = hot.camera.z;",
+            "let camera_yaw_cosine = hot.observer_rotation.x;",
+            "let camera_pitch_cosine = hot.observer_rotation.z;",
             "let camera_near = 0.1;",
             "let camera_far = 4.0 * distance_four;",
             "let yawed = vec3<f32>(camera_yaw_cosine * world.x + camera_yaw_sine * world.z, world.y, -camera_yaw_sine * world.x + camera_yaw_cosine * world.z);",
@@ -240,6 +247,7 @@ mod tests {
             "1.72",
             "hot.plane_u",
             "hot.plane_v",
+            "hot.view_rotation",
             "flat_vertex",
             "flat_fragment",
         ] {
