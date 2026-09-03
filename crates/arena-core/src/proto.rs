@@ -150,7 +150,25 @@ use serde::{Deserialize, Serialize};
 /// only), the three cosmetic events, and a later addition of the M4 to the
 /// loot pool (its stats already ship; the client draws a fallback mesh for
 /// any id whose node is missing).
-pub const PROTO_VERSION: u16 = 14;
+///
+/// v15: Trench City changed shape, and nothing on the wire did.
+///
+/// Freight Yard was added at 14 without a bump of its own because it
+/// travels by name, and a peer that does not know the name is stopped by
+/// the gate. Trench City's four pads are now gone and four loot blocks hang
+/// at the tunnel mouths instead, and the name did not change: a peer that
+/// knows `"trench-city"` builds whatever its own build says that is. So a
+/// first-cut v18 bundle joining a lobby here would predict Trench City with
+/// pads and without blocks. Its jump at a tunnel mouth is corrected under a
+/// block it cannot see, it is paid a weapon from that block by a `Loot`
+/// event it cannot place, and the pads it draws and runs across never pay,
+/// because the server has none. Every frame decodes; the game it plays is
+/// not the game the server runs. A changed map is the v13 bump's own
+/// failure mode over again, and the map name cannot gate it because the
+/// name is the one thing that stayed the same. The join gate is exact
+/// equality, so 15 it is: the same rule as every bump before it, paid for
+/// by the frozen v18 page going list-only against a v15 host.
+pub const PROTO_VERSION: u16 = 15;
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
 pub const MAX_PASSWORD_LEN: usize = 40;

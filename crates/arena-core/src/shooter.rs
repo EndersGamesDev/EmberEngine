@@ -792,11 +792,14 @@ const TRENCH_CENTRE: &[AuthoredBox] = &[(Cover::Plinth, [-1.6, -1.6], [1.6, 1.6]
 /// 4.2, in its order: inner square, trench ring, outer flank.
 ///
 /// The trench corridor is z 11.0..14.0 between the walls; the roof over its
-/// middle 12 m is the one box with a bottom above the floor, and the pad
-/// sits under it so the tunnels are contested. The three 2.6-tall containers
-/// each have a crate within 0.5 of a face and an ammo box within 0.5 of the
-/// crate: a climbing chain, floor -> 0.55 -> 1.2 -> 2.6, each step under the
-/// jump apex. The 5.2-tall stacked pair is a landmark nobody can climb.
+/// middle 12 m is the first box with a bottom above the floor, and since
+/// v18 a loot block hangs at the mouth of the tunnel so the tunnels stay
+/// contested: the v13 pad that sat under the roof is gone, because the
+/// Mario mechanic has to exist on every map and a second reward rule on one
+/// of them was never wanted. The three 2.6-tall containers each have a
+/// crate within 0.5 of a face and an ammo box within 0.5 of the crate: a
+/// climbing chain, floor -> 0.55 -> 1.2 -> 2.6, each step under the jump
+/// apex. The 5.2-tall stacked pair is a landmark nobody can climb.
 const TRENCH_NORTH: &[AuthoredBox] = &[
     // Inner square dressing.
     (Cover::Sandbag, [-2.0, 4.6], [2.0, 5.4], 0.0, 1.1),
@@ -810,6 +813,12 @@ const TRENCH_NORTH: &[AuthoredBox] = &[
     (Cover::Wall, [7.2, 14.0], [14.4, 14.4], 0.0, 2.5),
     // The tunnel: 12 m long, clearance 2.5 over a 1.86 standing body.
     (Cover::Roof, [-6.0, 11.0], [6.0, 14.0], 2.5, 2.9),
+    // The loot block, in the open inner square 0.3 m south of the inner
+    // wall's gap, so it stands at the mouth of the tunnel: walked under with
+    // 0.44 m of headroom, bonked from the floor on the fourth integrator
+    // step like the yard's train-zone blocks, and over no roof, so the
+    // lowest-base clamp rule never has two boxes to choose between here.
+    (Cover::Loot, [-0.5, 9.3], [0.5, 10.3], 2.3, 3.3),
     // Fire steps against the outer wall.
     (Cover::Crate, [-9.6, 12.8], [-8.4, 14.0], 0.0, 1.2),
     (Cover::Crate, [8.4, 12.8], [9.6, 14.0], 0.0, 1.2),
@@ -838,8 +847,6 @@ const TRENCH_NORTH: &[AuthoredBox] = &[
 /// North-side spawns; rotated they make eight, two per side, each 2.6 from
 /// the nearest box edge and at least 16 from each other.
 const TRENCH_NORTH_SPAWNS: [[f32; 2]; 2] = [[-9.0, 21.0], [9.0, 21.0]];
-/// The north pad, inside the tunnel.
-const TRENCH_NORTH_PAD: [f32; 2] = [0.0, 12.5];
 
 /// A quarter turn about the origin, `(x, z) -> (-z, x)`.
 const fn rot90_point(p: [f32; 2]) -> [f32; 2] {
@@ -880,14 +887,16 @@ impl Level {
     /// The authored v13 arena: `docs/plans/arena-v13-trench-city.md`
     /// section 4, tables transcribed above, four-fold symmetric about the
     /// origin. Spawns are listed one per side first (slots 0..4 land on
-    /// four different sides) and then the second of each side.
+    /// four different sides) and then the second of each side. No pads
+    /// since v18: the four loot blocks in `TRENCH_NORTH` are the map's only
+    /// reward, exactly as on Freight Yard, and the seeded arena is the only
+    /// level that still carries pads.
     #[must_use]
     pub fn trench_city() -> Self {
         let mut obstacles: Vec<Obstacle> = TRENCH_CENTRE
             .iter()
             .map(|&(kind, min, max, base, h)| Obstacle::boxed(kind, min, max, base, h))
             .collect();
-        let mut pads = Vec::with_capacity(4);
         for turns in 0..4 {
             for &(kind, min, max, base, h) in TRENCH_NORTH {
                 let mut o = Obstacle::boxed(kind, min, max, base, h);
@@ -896,11 +905,6 @@ impl Level {
                 }
                 obstacles.push(o);
             }
-            let mut pad = TRENCH_NORTH_PAD;
-            for _ in 0..turns {
-                pad = rot90_point(pad);
-            }
-            pads.push(pad);
         }
         let mut spawns = Vec::with_capacity(8);
         for spawn in TRENCH_NORTH_SPAWNS {
@@ -916,7 +920,7 @@ impl Level {
             arena_half: ARENA_HALF,
             obstacles,
             spawns,
-            pads,
+            pads: Vec::new(),
             decor: trench_city_decor(),
         }
     }
@@ -2387,7 +2391,9 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     // The v13 level drivers live beside the yard tests so both maps run one driver.
-    use crate::freight_yard::level_helpers::{centre, climb, contains, dist, gap, hop};
+    use crate::freight_yard::level_helpers::{
+        centre, climb, contains, dist, gap, hop, standable_floor,
+    };
 
     fn step_with(sim: &mut Sim, inputs: &HashMap<u8, PlayerIn>) {
         sim.step(&|id| inputs.get(&id).copied().unwrap_or_default());
@@ -4633,13 +4639,24 @@ mod tests {
             );
             assert!(o.base < o.h, "{o:?} has its bottom above its top");
             assert!(o.base >= 0.0, "{o:?} starts below the floor");
-            if o.kind == Cover::Roof {
-                assert!(
+            match o.kind {
+                Cover::Roof => assert!(
                     o.base >= CONTAINER_MIN_H,
                     "roof {o:?} is too low to walk under"
-                );
-            } else {
-                assert_eq!(o.base, 0.0, "{o:?}: only roofs leave the floor");
+                ),
+                Cover::Loot => {
+                    assert!(
+                        o.base > BODY_H_STAND,
+                        "block {o:?} hangs too low to walk under"
+                    );
+                    assert_eq!(o.h - o.base, LOOT_SIZE, "block {o:?} is not a unit cube");
+                    assert_eq!(o.max[0] - o.min[0], LOOT_SIZE);
+                    assert_eq!(o.max[1] - o.min[1], LOOT_SIZE);
+                }
+                _ => assert_eq!(
+                    o.base, 0.0,
+                    "{o:?}: only roofs and loot blocks leave the floor"
+                ),
             }
         }
     }
@@ -4690,13 +4707,11 @@ mod tests {
             }
         }
         let turn_pt = |p: [f32; 2]| [-p[1], p[0]];
-        for p in &level.pads {
-            let q = turn_pt(*p);
-            assert!(
-                level.pads.iter().any(|r| dist(*r, q) < 1e-4),
-                "pad {p:?} turned to {q:?} is not a pad"
-            );
-        }
+        assert!(
+            level.pads.is_empty(),
+            "Trench City has no pads since v18: {:?}",
+            level.pads
+        );
         for s in &level.spawns {
             let q = turn_pt(*s);
             assert!(
@@ -4980,74 +4995,229 @@ mod tests {
         }
     }
 
-    #[test]
-    fn all_four_pads_are_in_the_open_under_a_roof() {
-        let level = Level::trench_city();
-        assert_eq!(level.pads.len(), 4);
-        for pad in &level.pads {
-            assert!(
-                !level
-                    .obstacles
-                    .iter()
-                    .any(|o| o.base == 0.0 && overlaps(*pad, PLAYER_R, o)),
-                "pad {pad:?} is inside cover"
-            );
-            assert!(
-                level
-                    .obstacles
-                    .iter()
-                    .any(|o| o.kind == Cover::Roof && contains(o, *pad)),
-                "pad {pad:?} is not under a roof"
-            );
+    /// One jump from the floor at `pos`, pressed on tick 0 and driven for
+    /// 90 ticks of `step_vertical`: the 0-based ticks on which the clamp
+    /// named box `k`, and the highest the feet got. Any other box named is
+    /// a failure, because the point is which box the head met.
+    fn bonk_ticks(pos: [f32; 2], k: usize, obs: &[Obstacle]) -> (Vec<u32>, f32) {
+        let (mut y, mut vy, mut peak) = (0.0f32, 0.0f32, 0.0f32);
+        let mut hits = Vec::new();
+        for tick in 0..90u32 {
+            let v = step_vertical(pos, y, vy, tick == 0, FIXED_DT, obs);
+            y = v.y;
+            vy = v.vy;
+            peak = peak.max(y);
+            if v.bonked == Some(k) {
+                hits.push(tick);
+            } else {
+                assert!(v.bonked.is_none(), "bonked {:?} instead of {k}", v.bonked);
+            }
         }
+        (hits, peak)
+    }
+
+    /// The v18 reward on this map: one `?` block per side, standing at the
+    /// mouth of each tunnel where the v13 pad used to sit under the roof.
+    /// Every claim the block makes is asked of the sim's own integrator and
+    /// mover rather than read off the table: bonked from the floor on the
+    /// fourth step after the press, walked under without lifting the feet,
+    /// over no roof (so the lowest-base clamp never has to choose), and on
+    /// floor every spawn reaches through `blocked`.
+    #[test]
+    fn trench_city_has_four_blocks_at_the_tunnel_mouths() {
+        let level = Level::trench_city();
+        let obs = &level.obstacles;
+        assert!(level.pads.is_empty(), "no pads on Trench City since v18");
+        let blocks: Vec<(usize, &Obstacle)> = obs
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| o.kind == Cover::Loot)
+            .collect();
+        assert_eq!(blocks.len(), 4, "one block per side");
         let sim = Sim::from_level(&level, 0);
-        assert_eq!(sim.pads.len(), 4);
-        assert!(
-            sim.pads.iter().all(|p| p.respawn_t == 0.0),
-            "pads start active"
-        );
-        for (p, want) in sim.pads.iter().zip(&level.pads) {
-            assert_eq!(p.pos, *want);
+        assert!(sim.pads.is_empty(), "the sim arms no pad on Trench City");
+        assert_eq!(sim.loot.len(), 4, "the sim arms one slot per block");
+        for (slot, (k, _)) in sim.loot.iter().zip(&blocks) {
+            assert_eq!(slot.obstacle, *k);
+            assert_eq!(slot.respawn_t, 0.0, "blocks start armed");
         }
 
-        // Taken from the tunnel floor, not from the roof over it: the
-        // pickup is gated on the feet being under PAD_PICK_H, or a roof
-        // camper collected the pad 2.9 m below their boots through the slab
-        // without ever entering a tunnel.
-        let mut inputs = HashMap::new();
-        inputs.insert(0, PlayerIn::default());
-        for pad in &level.pads {
-            let roof = level
-                .obstacles
+        for &(k, block) in &blocks {
+            let c = centre(block);
+            // At a tunnel mouth: the nearest roof is the one over that
+            // tunnel, 0.7 m away across the inner wall's gap, on the same
+            // axis as the block, and the block hangs over no roof at all.
+            let roof = obs
                 .iter()
-                .find(|o| o.kind == Cover::Roof && contains(o, *pad))
-                .unwrap();
+                .filter(|o| o.kind == Cover::Roof)
+                .min_by(|a, b| gap(a, block).total_cmp(&gap(b, block)))
+                .expect("a roof");
+            let g = gap(roof, block);
             assert!(
-                roof.base >= PAD_PICK_H,
-                "roof {roof:?} hangs below the pickup height"
+                (g - 0.7).abs() < 1e-4,
+                "block {block:?} is {g} from the nearest roof, not at a tunnel mouth"
             );
-            let mut sim = Sim::from_level(&level, 0);
-            sim.add_player(0);
-            let pin = |sim: &mut Sim, y: f32| {
-                let p = &mut sim.players[0];
-                p.pos = *pad;
-                p.y = y;
-                p.vy = 0.0;
-            };
-            pin(&mut sim, roof.h);
-            step_with(&mut sim, &inputs);
-            assert_eq!(
-                sim.players[0].weapon, SIDEARM,
-                "pad {pad:?} taken from the roof top"
-            );
-            assert_eq!(sim.players[0].y, roof.h, "did not stay on the roof");
-            pin(&mut sim, 0.0);
-            step_with(&mut sim, &inputs);
+            let rc = centre(roof);
             assert!(
-                LOOT_POOL.contains(&sim.players[0].weapon),
-                "pad {pad:?} not taken from the tunnel floor"
+                (rc[0] - c[0]).abs() < 1e-4 || (rc[1] - c[1]).abs() < 1e-4,
+                "block {block:?} is not on its tunnel's axis"
+            );
+            for o in obs.iter().filter(|o| o.base > 0.0 && o.kind != Cover::Loot) {
+                assert!(
+                    gap(o, block) > 0.0,
+                    "block {block:?} shares a footprint with {o:?}"
+                );
+            }
+
+            // Open floor under it: a standing body may occupy the centre.
+            assert!(
+                standable_floor(c, obs),
+                "block {block:?} cannot be stood under"
+            );
+            assert_eq!(support_height(c, PLAYER_R, 0.0, obs), 0.0);
+
+            // Bonked from the floor: the head meets the block once, on the
+            // fourth integrator step after the press (0.55 m of rise
+            // against 0.44 m of headroom; the third step gives 0.42 and
+            // misses), and the feet stop exactly at bottom minus body.
+            let (hits, peak) = bonk_ticks(c, k, obs);
+            assert_eq!(hits, [3], "block {block:?}: bonk ticks (0-based)");
+            assert!(
+                (peak - (block.base - BODY_H_STAND)).abs() < 1e-4,
+                "block {block:?}: feet peaked at {peak}"
+            );
+
+            // Walked under: 3.9 m through it and back at walking speed,
+            // never touched and never lifted. The walk runs along the
+            // tunnel's axis, through the inner wall's gap and out again.
+            // A unit vector and not a per-axis `signum`: `0.0_f32.signum()`
+            // is 1.0, which would turn the walk into a diagonal.
+            let reach = dist(rc, c);
+            let toward = [(rc[0] - c[0]) / reach, (rc[1] - c[1]) / reach];
+            let start = [c[0] - toward[0] * 2.0, c[1] - toward[1] * 2.0];
+            let (mut pos, mut y, mut vy) = (start, 0.0f32, 0.0f32);
+            for tick in 0..52u32 {
+                let dir = if tick < 26 { 1.0 } else { -1.0 };
+                let mv = [toward[0] * dir, toward[1] * dir];
+                pos = move_circle(pos, y, mv, MOVE_SPEED, FIXED_DT, obs);
+                let v = step_vertical(pos, y, vy, false, FIXED_DT, obs);
+                y = v.y;
+                vy = v.vy;
+                assert_eq!(v.bonked, None, "walking under {block:?} bonked at {pos:?}");
+                assert_eq!(y, 0.0, "lifted off the floor under {block:?} at {pos:?}");
+            }
+            assert!(
+                dist(pos, start) < 0.2,
+                "did not walk under {block:?} and back: ended at {pos:?}"
             );
         }
+
+        // Reachable: every block's footprint holds a cell the flood from
+        // every spawn at y 0 reaches.
+        let footprints: Vec<&Obstacle> = blocks.iter().map(|(_, b)| *b).collect();
+        for (s, spawn) in level.spawns.iter().enumerate() {
+            let reached = floor_reaches(obs, *spawn, &footprints);
+            for (t, (k, b)) in blocks.iter().enumerate() {
+                assert!(
+                    reached[t],
+                    "spawn {s} {spawn:?} never reaches block {k} {b:?}"
+                );
+            }
+        }
+    }
+
+    /// A 0.2 m grid over the arena, each cell asked of the sim whether a
+    /// standing body may occupy it, flooded 4-way from `spawn` at y 0.
+    /// Which of `targets` hold a flooded cell. Panics when the spawn itself
+    /// is not free floor, because a flood from inside cover proves nothing.
+    fn floor_reaches(obs: &[Obstacle], spawn: [f32; 2], targets: &[&Obstacle]) -> Vec<bool> {
+        let n: i32 = 116;
+        let side = (2 * n + 1) as usize;
+        let at = |i: i32, j: i32| [0.2 * i as f32, 0.2 * j as f32];
+        let idx = |i: i32, j: i32| ((i + n) as usize) * side + (j + n) as usize;
+        let mut free = vec![false; side * side];
+        for i in -n..=n {
+            for j in -n..=n {
+                free[idx(i, j)] = standable_floor(at(i, j), obs);
+            }
+        }
+        let (si, sj) = (
+            (spawn[0] / 0.2).round() as i32,
+            (spawn[1] / 0.2).round() as i32,
+        );
+        assert!(free[idx(si, sj)], "spawn {spawn:?} is not on free floor");
+        let mut seen = vec![false; side * side];
+        let mut stack = vec![(si, sj)];
+        seen[idx(si, sj)] = true;
+        let mut reached = vec![false; targets.len()];
+        while let Some((i, j)) = stack.pop() {
+            let p = at(i, j);
+            for (t, b) in targets.iter().enumerate() {
+                if !reached[t] && contains(b, p) {
+                    reached[t] = true;
+                }
+            }
+            for (di, dj) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let (ni, nj) = (i + di, j + dj);
+                if ni.abs() > n || nj.abs() > n {
+                    continue;
+                }
+                let q = idx(ni, nj);
+                if free[q] && !seen[q] {
+                    seen[q] = true;
+                    stack.push((ni, nj));
+                }
+            }
+        }
+        reached
+    }
+
+    /// The block is not decoration: a sim built from the authored map pays
+    /// a pool weapon for a bonk on it, through the same `loot_roll` and
+    /// `grant` as the yard, and the block goes dark.
+    #[test]
+    fn a_bonk_on_a_trench_city_block_pays_a_pool_weapon() {
+        let level = Level::trench_city();
+        let mut sim = Sim::from_level(&level, 5);
+        sim.add_player(0);
+        let (k, block) = level
+            .obstacles
+            .iter()
+            .enumerate()
+            .find(|(_, o)| o.kind == Cover::Loot)
+            .expect("a block");
+        let c = centre(block);
+        let slot = sim
+            .loot
+            .iter()
+            .position(|l| l.obstacle == k)
+            .expect("the block is armed");
+        let mut inputs = HashMap::new();
+        inputs.insert(
+            0,
+            PlayerIn {
+                jump: true,
+                ..Default::default()
+            },
+        );
+        let idle = HashMap::new();
+        let mut paid = None;
+        for tick in 0..90 {
+            sim.players[0].pos = c;
+            step_with(&mut sim, if tick == 0 { &inputs } else { &idle });
+            if let Some(&ev) = sim.loot_events.first() {
+                assert!(paid.is_none(), "paid twice");
+                paid = Some(ev);
+            }
+        }
+        let (who, index, w) = paid.expect("the jump never bonked the block");
+        assert_eq!((who, usize::from(index)), (0, slot));
+        assert!(LOOT_POOL.contains(&w), "{w} is not a pool gun");
+        let p = &sim.players[0];
+        assert_eq!(p.weapon, w);
+        assert_eq!(p.ammo, weapon_stats(w).mag);
+        assert_eq!(p.reserve, weapon_stats(w).reserve);
+        assert!(sim.loot[slot].respawn_t > 0.0, "the block went dark");
     }
 
     /// A fire step is a step onto the walls, not only a place to see over
