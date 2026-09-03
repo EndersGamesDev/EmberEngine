@@ -232,7 +232,7 @@ mod tests {
                 &lerp_centre(&from, &to, 1.0, working).expect("morph at one"),
                 DEEP_BITS
             ),
-            Ok(to)
+            Ok(to.clone())
         );
         // The step below binary64 survives the round trip, so the morph is still a path.
         let quarter = round_centre(
