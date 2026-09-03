@@ -14,13 +14,58 @@
     reason = "the private module publishes its port seam to the browser and channel modules"
 )]
 
-use std::collections::VecDeque;
-
 use crate::{
     BUFFER_RETURN_DEADLINE_US, ChannelError, CreditAccount, ErrorCode, JULIBROT_ABI_VERSION,
     MIN_MAX_ITER, MessageHeader, MessageKind, OrbitDisposition, OrbitRequest, Pool, SubmitOutcome,
     WorkerConfig, WorkerFacts, WorkerMode,
 };
+
+struct TwoSlotQueue<T> {
+    slots: [Option<T>; 2],
+    head: usize,
+    len: usize,
+}
+
+impl<T> TwoSlotQueue<T> {
+    const fn new() -> Self {
+        Self {
+            slots: [None, None],
+            head: 0,
+            len: 0,
+        }
+    }
+
+    const fn len(&self) -> usize {
+        self.len
+    }
+
+    const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn push_back(&mut self, value: T) {
+        debug_assert!(self.len < 2);
+        let tail = (self.head + self.len) & 1;
+        self.slots[tail] = Some(value);
+        self.len += 1;
+    }
+
+    fn pop_front(&mut self) -> Option<T> {
+        if self.is_empty() {
+            return None;
+        }
+        let value = self.slots[self.head].take();
+        self.head = (self.head + 1) & 1;
+        self.len -= 1;
+        value
+    }
+
+    fn clear(&mut self) {
+        self.slots = [None, None];
+        self.head = 0;
+        self.len = 0;
+    }
+}
 
 /// One owner-held pool buffer with the exact wire operations the owner performs.
 pub(crate) trait OwnerSlot: Sized {
@@ -108,7 +153,7 @@ pub(crate) struct OwnerCore<P: OwnerPort> {
     config: WorkerConfig,
     request_owned: Vec<P::Slot>,
     orbit_owned: Vec<P::Slot>,
-    arrivals: VecDeque<P::Slot>,
+    arrivals: TwoSlotQueue<P::Slot>,
     pending_request: Option<OrbitRequest>,
     latest_generation: u32,
     latest_centre_revision: u32,
@@ -140,7 +185,7 @@ impl<P: OwnerPort> OwnerCore<P> {
             config,
             request_owned: Vec::with_capacity(2),
             orbit_owned: Vec::with_capacity(2),
-            arrivals: VecDeque::with_capacity(2),
+            arrivals: TwoSlotQueue::new(),
             pending_request: None,
             latest_generation: 0,
             latest_centre_revision: 0,
@@ -664,7 +709,7 @@ mod tests {
 
     use ember_julibrot_math::PrecisionMode;
 
-    use super::{ControlMessage, OwnerCore, OwnerPort, OwnerSlot};
+    use super::{ControlMessage, OwnerCore, OwnerPort, OwnerSlot, TwoSlotQueue};
     use crate::wire::WireBuffer;
     use crate::{
         ChannelError, CoordinateDescriptor, EncodedCentre, ErrorCode, JULIBROT_ABI_VERSION,
@@ -1194,25 +1239,28 @@ mod tests {
         }
         let shifted_wall = shifted_start.elapsed();
 
-        let mut deque = VecDeque::from([0_u32, 1]);
-        let deque_start = Instant::now();
-        let mut deque_sum = 0_u64;
+        let mut fixed = TwoSlotQueue::new();
+        fixed.push_back(0_u32);
+        fixed.push_back(1);
+        let fixed_start = Instant::now();
+        let mut fixed_sum = 0_u64;
         for next in 2..DRAINS + 2 {
-            deque_sum = deque_sum.wrapping_add(u64::from(
-                deque
+            fixed_sum = fixed_sum.wrapping_add(u64::from(
+                fixed
                     .pop_front()
                     .expect("the two-slot queue stays populated"),
             ));
-            deque.push_back(next);
+            fixed.push_back(next);
         }
-        let deque_wall = deque_start.elapsed();
+        let fixed_wall = fixed_start.elapsed();
 
-        assert_eq!(shifted_sum, deque_sum);
-        assert_eq!(shifted, deque.iter().copied().collect::<Vec<_>>());
+        assert_eq!(shifted_sum, fixed_sum);
+        assert_eq!(fixed.pop_front(), Some(shifted[0]));
+        assert_eq!(fixed.pop_front(), Some(shifted[1]));
         eprintln!(
-            "PF-V5 drains={DRAINS} shifted_vec_us={} vec_deque_us={}",
+            "PF-V5 drains={DRAINS} shifted_vec_us={} fixed_queue_us={}",
             shifted_wall.as_micros(),
-            deque_wall.as_micros()
+            fixed_wall.as_micros()
         );
     }
 
