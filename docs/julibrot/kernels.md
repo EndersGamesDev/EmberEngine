@@ -157,7 +157,7 @@ Every interface in this section is this slice's side of the shared contract and 
 
 `ReferenceOrbitInput<'a>` is the kernels-owned borrowed record `{ span: &'a DataSpan, generation: u32, length: u32, precision_bits: u32 }`; `length` must equal `span.logical_len`, and app's registry proves the generation is the latest accepted orbit before perturbation dispatch without transferring or cloning span ownership.
 
-The underlying worker message has the independent eight-word little-endian `u32` header `{magic,version,generation,kind,length,precision_bits,compute_us,credit_us}` at bytes 0–31, `magic = 0x314c424a` (`JBL1`), and `version = 1`; its nine kinds are `OrbitRequest = 1`, `RequestReturn = 2`, `OrbitResponse = 3`, `CreditApplied = 4`, `CreditStale = 5`, `OrbitCancelled = 6`, `ChannelError = 7`, `Shutdown = 8`, and `ShutdownAck = 9`.
+The underlying worker message has the independent eight-word little-endian `u32` header `{magic,version,generation,kind,length,precision_bits,compute_us,credit_us}` at bytes 0–31, `magic = 0x314c424a` (`JBL1`), and ABI `version = 2`; its nine kinds are `OrbitRequest = 1`, `RequestReturn = 2`, `OrbitResponse = 3`, `CreditApplied = 4`, `CreditStale = 5`, `OrbitCancelled = 6`, `ChannelError = 7`, `Shutdown = 8`, and `ShutdownAck = 9`.
 
 Each pool buffer has capacity `max(644,64+8·M)` for current maximum orbit length `M` and ends with a 16-byte worker verification-fact tail followed by the 16-byte worker-owned trailer `{pool:u32,slot:u32,capacity_bytes:u32,trailer_magic:u32}`; an `OrbitResponse` begins its 8-byte `length` records at byte 32, and kernels do not parse, retain, credit, or return this transport buffer.
 

@@ -12,9 +12,9 @@ It is a prototype of the toolchain, so every mechanism it builds is meant to be 
 
 The Julibrot is the set of pairs `(z, c)` in ℂ², which is ℝ⁴, whose orbit under `z → z² + c` stays bounded; the Mandelbrot set is its slice at `z = 0`, every Julia set is its slice at a fixed `c`, and every other 2D plane through it is a hybrid between them.
 
-The lab renders a 2D slice of the 4D Julibrot, chosen by rotating the object in ℝ⁴ from the one seed `(e₃,e₄)` and positioned by a four-coordinate plane origin; the escape value lifts that plane by height into ℝ⁵, and an independent 5D camera rotation sees the lifted slice through the double perspective `d₅` and `d₄` and the 3D observer.
+The lab renders a 2D slice of the 4D Julibrot, chosen and positioned by an affine object pose in ℝ⁴; the escape value lifts that plane by height into ℝ⁵, and an independent affine 5D camera pose sees the lifted slice through the double perspective `d₅` and `d₄` and the 3D observer.
 
-Nothing in the lab reads a clock for geometry and nothing selects a view mode: every degree of freedom of the view is a slider, and a preset is a named row of slider values, so moving the sliders morphs one preset into another continuously. Two boxes hold saved rows and one slider morphs between them, so a Mandelbrot saved in A and a Julia saved in B are the two ends of one continuous move rather than two pictures; and the view is navigated by a target click, a box drag, and a `scale` slider, never by the wheel.
+Nothing in the lab reads a clock for geometry and nothing selects a view mode: every degree of freedom is a slider, and a preset is a named row of slider values. Two boxes hold saved rows and one slider morphs between them; navigation uses a target click, plain-drag pan, Shift-drag box zoom, and a `scale` slider, never the wheel.
 
 Arbitrary zoom means arbitrary: shallow zoom runs in `f32`; deep zoom uses perturbation, one reference orbit iterated in high precision on the CPU and per-pixel deltas iterated in `f32` on the GPU, with rebasing so glitches are corrected rather than hidden; zoom depth is displayed in decimal digits with the precision in use beside it.
 

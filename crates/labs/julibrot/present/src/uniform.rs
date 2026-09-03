@@ -90,7 +90,7 @@ pub enum PresentDataError {
     /// Checked byte arithmetic exceeded `u32`.
     #[error("presentation byte arithmetic overflowed")]
     ArithmeticOverflow,
-    /// A slot stride could overlap a 256-byte payload.
+    /// A slot stride could overlap a 288-byte payload.
     #[error("HOT slot stride {0} is invalid")]
     InvalidStride(u32),
     /// A grid extent or active prefix was invalid.
@@ -108,7 +108,7 @@ pub enum PresentDataError {
     InvalidMap,
 }
 
-/// Computes the dynamic-uniform stride for one 256-byte payload.
+/// Computes the dynamic-uniform stride for one 288-byte payload.
 ///
 /// # Errors
 ///

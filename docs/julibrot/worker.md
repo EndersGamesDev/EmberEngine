@@ -231,7 +231,7 @@ On wasm32 `OrbitResponseView::from_transfer(buffer: ArrayBuffer) -> Result<Orbit
 
 `ReferenceOrbitRecord` is 8 little-endian bytes: byte 0 `re: f32` and byte 4 `im: f32` for `Zₙ`. App expands each transfer record to one 16-byte heap RGBA32F texel `(re,im,0,0)` because packing two points per texel would spread address changes into heap code owned by another lane; transfer and credit pay only the 8-byte record.
 
-`EscapeGridRecord` is one little-endian RGBA32F texel and 16 bytes: byte 0 `smooth_iter: f32`, byte 4 `escaped: f32`, byte 8 `rebase_count: f32`, and byte 12 `glitch: f32`; the last three are independently interpreted, `escaped` and `glitch` are exactly `0.0` or `1.0`, and `rebase_count` is integer-valued.
+`EscapeGridRecord` is one little-endian RGBA32F texel and 16 bytes: byte 0 `smooth_iter`, byte 4 `escaped`, byte 8 `rebase_count`, and byte 12 closed `status`; status is `Sampled=0`, `Glitch=1`, `Horizon=2`, or `MapUncertain=3` as an exactly representable f32 integer.
 
 `RefinementLevel` is `#[repr(u32)]` with `Preview = 0`, `Interactive = 1`, and `Final = 2`; kernels expose `EscapeGrid { span: DataSpan, width: u32, height: u32, level: RefinementLevel }`, app schedules the kernel-defined levels in order and may skip one, and present consumes the initialized dense prefix without CPU readback.
 
@@ -243,7 +243,7 @@ The deep plane record is `#[repr(C)] Plane { basis_u: [f32; 4], basis_v: [f32; 4
 
 The shallow centre record is `#[repr(C)] CentreSplit { hi: [f32; 4], lo: [f32; 4] }`, 32 bytes at offsets 0 and 16; math computes it from the absolute centre `C`, not by adding MAIN's defining plane origin a second time, and does not use it as deep arithmetic authority.
 
-Worker does not pack kernel uniforms, but its scale handoff is pinned to kernels' layouts: the 96-byte shallow block places `CentreSplit.hi` at byte 32 and `.lo` at 48, while the 64-byte perturbation block places mantissa `pixel_scale: f32` at byte 32 and `scale_exponent: i32` at byte 60.
+Worker does not pack kernel uniforms, but its scale handoff is pinned to kernels' layouts: the 144-byte shallow block places screen-map rows at bytes 32–79 and `CentreSplit` at 80/96, while the 112-byte perturbation block places the same map rows at 32–79 and its scalar tail at 80.
 
 ### 3.5 Owner records and exact CPU layouts
 
@@ -348,11 +348,11 @@ Aggregate rebase and glitch totals are `unavailable` during normal gather-only r
 
 ### 3.9 Presentation call and uniform ownership
 
-The worker defines no GPU uniform block and performs no GPU call; present owns `HotUniform`, exactly 128 bytes with `plane_u: [f32;4]` at byte 0, `plane_v` at 16, `view_rotation` at 32, three padded homography rows at 48, 64, and 80, `clear_rgba` at 96, and `flags: [u32;4]` at 112.
+The worker defines no GPU uniform block and performs no GPU call; present owns the 288-byte `HotUniform` carrying camera rotation/translation, observer, scale, warp and screen maps, exterior/clear colours, and flags, plus the 160-byte scene block carrying grid, span, basis, sampled map, and palette.
 
-Math defines the semantic, no-byte-ABI `Pose { epoch: u64, orbit_generation: u32, plane: Plane, plane_theta_1: f64, plane_theta_2: f64, zoom_log2: f64, view: ViewControls, grid_width: u32, grid_height: u32, centre_from_reference_px: [f64;2] }`; `ViewControls` is the seven-f64 record `{ theta_1, theta_2, camera_yaw, camera_pitch, height_scale, distance_five, distance_four }`, no field of which is derived from another or from a clock, and math exposes `warp_matrix(from: &Pose, to: &Pose)`.
+Math defines semantic `Pose` with the once-rounded plane, six object angles, four-coordinate origin, zoom, twenty-scalar `ViewControls`, extent, `PoseMap`, and reference-relative centre; no field is derived from time, and math exposes the composed `warp_matrix`.
 
-App converts each `HotDrain` into math's `Pose` and present's `PresentHot`, constructs present's `HotSlot` with index `refresh_id mod 3`, and calls `Presenter::write_hot(&mut self, slot: HotSlot, hot: PresentHot, validation: WarpValidation)`; present computes the f64 warp plan CPU-side and uploads one `HotUniform`, with `hot_stride = align_up(128,min_uniform_buffer_offset_alignment)`.
+App converts each `HotDrain` into math's mapped or edge-on `Pose`, constructs `HotSlot` at `refresh_id mod 3`, and calls `Presenter::write_hot`; present computes and enforces the f64 warp plan and uploads one `HotUniform`, with `hot_stride=align_up(288,min_uniform_buffer_offset_alignment)`.
 
 The refresh order is `Presenter::poll → drain HOT → Presenter::write_hot(refresh_id mod 3) → Presenter::frame → app present`; present owns its two scene textures and all scene/warp fences, while app retains surface ownership and presents outside both measured regions.
 
