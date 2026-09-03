@@ -59,6 +59,8 @@ canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 .box-column fieldset { display: grid; gap: .3rem; margin: 0; padding: .4rem .5rem .5rem; border: 1px solid #2d3445; background: #0d1018; }
 .row-tools { display: grid; grid-template-columns: 1fr auto; gap: .3rem; }
 .row-tools > * { min-width: 0; }
+.copy { width: 100%; }
+.copy-fallback { width: 100%; resize: vertical; font: inherit; font-size: .7rem; border: 1px solid #b64d2d; background: #171c29; color: inherit; padding: .3rem .4rem; }
 .message { color: #ffb08b; }
 .message:empty { display: none; }
 

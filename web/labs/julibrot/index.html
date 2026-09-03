@@ -30,6 +30,7 @@
           <button id="load-a" type="button" disabled>Load A</button>
           <button id="delete-a" type="button" disabled>Delete row</button>
         </div>
+        <button id="copy-a" type="button" class="copy" disabled>Copy row</button>
         <p id="message-a" class="note message" role="status"></p>
         <p id="readout-a" class="note">A is empty</p>
       </fieldset>
@@ -54,6 +55,7 @@
           <button id="load-b" type="button" disabled>Load B</button>
           <button id="delete-b" type="button" disabled>Delete row</button>
         </div>
+        <button id="copy-b" type="button" class="copy" disabled>Copy row</button>
         <p id="message-b" class="note message" role="status"></p>
         <p id="readout-b" class="note">B is empty</p>
       </fieldset>
@@ -118,9 +120,12 @@
           <button id="update-scene" type="button">Update scene</button>
           <button id="one-frame" type="button">Render one frame</button>
           <button id="measure" type="button">Measure</button>
+          <button id="copy-current" type="button" class="copy">Copy current row</button>
+          <p id="message-current" class="note message" role="status"></p>
           <p class="note">A row is a set of control values and nothing else; every control stays live after a row is applied.</p>
         </fieldset>
       </section>
+      <textarea id="copy-fallback" class="copy-fallback" readonly hidden rows="3" aria-label="The row to copy by hand"></textarea>
       <section class="facts" aria-labelledby="facts-title">
         <details id="facts-panel" open>
           <summary id="facts-title">Facts</summary>
