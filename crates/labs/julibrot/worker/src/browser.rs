@@ -16,7 +16,7 @@ use web_sys::{DedicatedWorkerGlobalScope, MessageEvent, WorkerGlobalScope};
 use crate::codec::visit_transfer_request_body_words;
 use crate::wire::{
     BUFFER_OVERHEAD_BYTES, ORBIT_FACT_BYTES, OrbitVerificationFacts, WireBuffer,
-    retains_orbit_payload, validate_message_layout,
+    retains_orbit_payload, validate_message_layout, write_words,
 };
 use crate::{
     Admission, ChannelError, CreditAccount, CreditCharge, ErrorCode, HEADER_BYTES,
@@ -28,6 +28,9 @@ use crate::{
 thread_local! {
     static PRODUCER: RefCell<Option<BrowserProducer>> = const { RefCell::new(None) };
 }
+
+const REQUEST_LIMB_COUNT_OFFSET: u32 = 44;
+const REQUEST_FIXED_BYTES: u32 = 116;
 
 struct BrowserProducer {
     scope: DedicatedWorkerGlobalScope,
@@ -304,7 +307,39 @@ impl TransferBuffer {
     }
 
     fn decode_request(&self) -> Result<OrbitRequest, ChannelError> {
-        let copied = self.bytes.to_vec().into_boxed_slice();
+        let (pool, slot) = self.identity()?;
+        let header = self.header()?;
+        if pool != Pool::Request || header.validate()? != MessageKind::OrbitRequest {
+            return Err(ChannelError::new(ErrorCode::BadKind, header.kind, 0, 0));
+        }
+        let limb_count = self.word(REQUEST_LIMB_COUNT_OFFSET);
+        let used = limb_count
+            .checked_mul(4)
+            .and_then(|limb_bytes| REQUEST_FIXED_BYTES.checked_add(limb_bytes))
+            .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, limb_count, u32::MAX, 0))?;
+        let available = self.bytes.length() - u32::try_from(POOL_TRAILER_BYTES).unwrap_or(16);
+        if used > available || (used..available).any(|offset| self.bytes.get_index(offset) != 0) {
+            return Err(ChannelError::new(
+                ErrorCode::BadLength,
+                limb_count,
+                used,
+                available,
+            ));
+        }
+        let compact_capacity = used
+            .checked_add(u32::try_from(POOL_TRAILER_BYTES).unwrap_or(16))
+            .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, limb_count, u32::MAX, 0))?;
+        let mut copied = vec![0; usize::try_from(compact_capacity).map_err(|_| {
+            ChannelError::new(ErrorCode::BadLength, limb_count, u32::MAX, available)
+        })?];
+        self.bytes
+            .subarray(0, used)
+            .copy_to(&mut copied[..usize::try_from(used).unwrap_or(0)]);
+        write_words(
+            &mut copied[usize::try_from(used).unwrap_or(0)..],
+            &[pool as u32, slot, compact_capacity, TRAILER_MAGIC],
+        );
+        let copied = copied.into_boxed_slice();
         let buffer = WireBuffer::from_transferred(copied)?;
         OrbitRequest::decode(&buffer)
     }

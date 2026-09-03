@@ -990,6 +990,30 @@ mod tests {
         .unwrap()
     }
 
+    fn largest_canonical_request(generation: u32) -> OrbitRequest {
+        let limbs = vec![1_u32; 128];
+        let coordinates = core::array::from_fn(|index| CoordinateDescriptor {
+            sign: u32::try_from(index % 2).unwrap_or(0),
+            exponent_twos_complement: 0,
+            limb_start: u32::try_from(index * 32).unwrap_or(0),
+            limb_count: 32,
+        });
+        OrbitRequest::new(
+            generation,
+            EncodedCentre {
+                revision: generation,
+                coordinates,
+                limbs,
+            },
+            0,
+            4_096,
+            4_096,
+            PrecisionMode::Deterministic,
+            OrbitReason::INITIAL,
+        )
+        .unwrap()
+    }
+
     const fn zero_record() -> ReferenceOrbitRecord {
         ReferenceOrbitRecord { re: 0.0, im: 0.0 }
     }
@@ -1187,6 +1211,59 @@ mod tests {
             "PF-V5 drains={DRAINS} shifted_vec_us={} vec_deque_us={}",
             shifted_wall.as_micros(),
             deque_wall.as_micros()
+        );
+    }
+
+    #[test]
+    fn the_largest_canonical_request_uses_only_its_declared_prefix() {
+        let request = largest_canonical_request(1);
+        let prefix_bytes = request.centre().request_bytes().unwrap();
+        let mut buffer = WireBuffer::new(Pool::Request, 0, 4_096).unwrap();
+        request.encode_into(&mut buffer).unwrap();
+
+        assert_eq!(prefix_bytes, 628);
+        assert_eq!(buffer.capacity(), 32_832);
+        assert_eq!(OrbitRequest::decode(&buffer).unwrap(), request);
+        assert!(
+            buffer.as_bytes()[prefix_bytes..buffer.capacity() - crate::POOL_TRAILER_BYTES]
+                .iter()
+                .all(|byte| *byte == 0),
+            "the browser decoder can validate the unused tail without copying it"
+        );
+    }
+
+    #[test]
+    #[ignore = "measurement harness"]
+    fn measures_browser_request_decode_copy_bytes() {
+        const COPIES: u32 = 20_000;
+        let request = largest_canonical_request(1);
+        let prefix_bytes = request.centre().request_bytes().unwrap();
+        let mut buffer = WireBuffer::new(Pool::Request, 0, 4_096).unwrap();
+        request.encode_into(&mut buffer).unwrap();
+
+        let whole_start = Instant::now();
+        let mut whole_total = 0_usize;
+        for _ in 0..COPIES {
+            let copied = std::hint::black_box(buffer.as_bytes().to_vec());
+            whole_total = whole_total.saturating_add(copied.len());
+        }
+        let whole_wall = whole_start.elapsed();
+
+        let prefix_start = Instant::now();
+        let mut prefix_total = 0_usize;
+        for _ in 0..COPIES {
+            let copied = std::hint::black_box(buffer.as_bytes()[..prefix_bytes].to_vec());
+            prefix_total = prefix_total.saturating_add(copied.len());
+        }
+        let prefix_wall = prefix_start.elapsed();
+
+        assert_eq!(whole_total, buffer.capacity() * COPIES as usize);
+        assert_eq!(prefix_total, prefix_bytes * COPIES as usize);
+        eprintln!(
+            "PF-R7 copies={COPIES} whole_bytes_per_decode={} prefix_bytes_per_decode={prefix_bytes} whole_us={} prefix_us={}",
+            buffer.capacity(),
+            whole_wall.as_micros(),
+            prefix_wall.as_micros()
         );
     }
 
