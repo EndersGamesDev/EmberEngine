@@ -1024,6 +1024,31 @@ mod browser {
             self.loop_state.refinement_pending()
         }
 
+        /// Returns the depth of orbit requests main has handed to the producer.
+        ///
+        /// Without this the page cannot separate a producer that never admits from an app that
+        /// never submits: both leave the credit ledger and the worker facts epoch frozen while the
+        /// refresh loop keeps turning.
+        #[must_use]
+        pub fn worker_request_depth(&self) -> u32 {
+            self.owner_endpoint.pending_request_depth()
+        }
+
+        /// Returns how many submitted references the app is still waiting on.
+        #[must_use]
+        pub fn outstanding_reference_count(&self) -> u32 {
+            u32::try_from(self.submitted_references.len()).unwrap_or(u32::MAX)
+        }
+
+        /// Returns the newest generation the app has submitted and not yet seen return.
+        #[must_use]
+        pub fn outstanding_reference_generation(&self) -> Option<u32> {
+            self.submitted_references
+                .iter()
+                .map(|submitted| submitted.generation)
+                .max()
+        }
+
         /// Returns the second-warp policy selected after its labelled warm-up.
         #[must_use]
         pub const fn frame_policy(&self) -> FramePolicy {
