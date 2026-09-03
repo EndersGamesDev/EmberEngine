@@ -544,11 +544,7 @@ impl Presenter {
         let texture_index = source.as_ref().map_or(0, |frame| frame.texture_index as usize);
         let relief_redraw = source_slot.relief_frame(self.ledger.retained()).is_some();
         if source.is_none() {
-            self.queue.write_buffer(
-                &self.gpu.hot_buffer,
-                u64::from(hot_slot.dynamic_offset()) + HOT_SOURCE_VALID_BYTE_OFFSET,
-                bytemuck::bytes_of(&0_u32),
-            );
+            self.clear_hot_source(hot_slot);
         }
         let selected = self
             .main
@@ -616,6 +612,14 @@ impl Presenter {
             exposed: self.hot_exposed[hot_slot.index() as usize],
             status: self.facts.status.clone(),
         })
+    }
+
+    fn clear_hot_source(&self, hot_slot: HotSlot) {
+        self.queue.write_buffer(
+            &self.gpu.hot_buffer,
+            u64::from(hot_slot.dynamic_offset()) + HOT_SOURCE_VALID_BYTE_OFFSET,
+            bytemuck::bytes_of(&0_u32),
+        );
     }
 
     fn prepare_relief_redraw(
