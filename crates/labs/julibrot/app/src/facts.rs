@@ -40,6 +40,8 @@ pub struct PageFacts {
     pub kernel_mode: Option<String>,
     pub refinement_level: Option<String>,
     pub refinement_pending: bool,
+    pub scene_mode: &'static str,
+    pub scene_update_pending: bool,
     pub extent_divisor: Option<u32>,
     pub active_pixels: Option<u32>,
     pub worst_case_pixel_iterations: Option<u64>,
@@ -174,6 +176,8 @@ impl PageFacts {
                 .delivered_level
                 .map(|level| refinement_level(level).to_string()),
             refinement_pending: loop_facts.refinement_pending(),
+            scene_mode: loop_facts.scene_mode().as_str(),
+            scene_update_pending: loop_facts.scene_update_pending(),
             extent_divisor: Some(plan.extent_divisor),
             active_pixels: dispatch.map(|facts| facts.active_pixels),
             worst_case_pixel_iterations: dispatch.map(|facts| facts.worst_case_pixel_iterations),
