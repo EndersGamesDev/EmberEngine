@@ -675,7 +675,7 @@ mod tests {
             theta_1: 0.21,
             theta_2: -0.13,
         })?;
-        let centre = BigCentre::from_f64([0.0; 4], precision_bits)?;
+        let centre = BigCentre::from_f64([0.25, -0.125, -0.5, 0.5], precision_bits)?;
         let mut owner = ViewerOwner::new(ViewerState {
             hot: HotState {
                 zoom_log2,
