@@ -19,6 +19,7 @@ const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
 const FENCE_BYTES: u64 = 4;
 const HOT_SOURCE_VALID_BYTE_OFFSET: u64 = 280;
+const EXPOSURE_FACT_STEPS: u32 = 9;
 
 struct SceneTexture {
     _texture: wgpu::Texture,
@@ -66,14 +67,6 @@ impl WarpSourceSlot {
 
     fn frame<'a>(&self, retained: Option<&'a crate::SceneFrame>) -> Option<&'a crate::SceneFrame> {
         select_warp_source(self.planned, retained)
-    }
-
-    fn covering_frame<'a>(
-        &self,
-        exposed: bool,
-        retained: Option<&'a crate::SceneFrame>,
-    ) -> Option<&'a crate::SceneFrame> {
-        if exposed { None } else { self.frame(retained) }
     }
 }
 
@@ -324,7 +317,10 @@ impl Presenter {
         self.exposure.observe_warp(plan.exposed);
         self.facts.centre_from_reference_px = hot.state.centre_from_reference_px;
         self.facts.view = hot.view;
-        self.facts.record_warp_plan(&plan);
+        let exposed_fraction = pose
+            .as_ref()
+            .and_then(|to_pose| warp_exposed_fraction(&plan, to_pose, self.ledger.retained()));
+        self.facts.record_warp_plan(&plan, exposed_fraction);
         self.facts.scene_fill_due = self.exposure.due();
         if matches!(plan.kind, WarpKind::ClearOnly | WarpKind::ReliefRedraw)
             && self.ledger.retained().is_none()
@@ -341,15 +337,12 @@ impl Presenter {
         }
     }
 
-    /// Returns the level of the accepted retained warp that covers the whole destination.
+    /// Returns the level and exposure state of the accepted retained warp source.
     #[must_use]
-    pub fn covering_warp_source_level(&self, slot: HotSlot) -> Option<RefinementLevel> {
+    pub fn accepted_warp_source(&self, slot: HotSlot) -> Option<(RefinementLevel, bool)> {
         self.hot_warp_source[slot.index() as usize]
-            .covering_frame(
-                self.hot_exposed[slot.index() as usize],
-                self.ledger.retained(),
-            )
-            .map(|frame| frame.level)
+            .frame(self.ledger.retained())
+            .map(|frame| (frame.level, self.hot_exposed[slot.index() as usize]))
     }
 
     /// Submits the one scene pass plus its four-byte completion fence.
@@ -627,8 +620,7 @@ impl Presenter {
                     .latest_hot_slot
                     .and_then(|slot| {
                         let index = slot.index() as usize;
-                        self.hot_warp_source[index]
-                            .covering_frame(self.hot_exposed[index], self.ledger.retained())
+                        self.hot_warp_source[index].frame(self.ledger.retained())
                     })
                     .is_some();
                 match self
@@ -733,6 +725,7 @@ impl Presenter {
             self.exposure.scene_completed();
             self.facts.scene_fill_due = false;
             self.facts.warp_exposed = false;
+            self.facts.warp_exposed_fraction = Some(0.0);
         }
         self.replaced_warp_scene = self.active_warp_scene;
         self.facts.reprojected_per_scene = self.active_warp_scene.map(|_| self.active_warp_count);
@@ -1421,6 +1414,63 @@ fn select_warp_source(
     })
 }
 
+/// Measures the share of a fixed destination lattice that the actual warp shader paints clear.
+/// Points behind either screen-map denominator are exterior sky rather than exposure.
+fn warp_exposed_fraction(
+    plan: &crate::WarpPlan,
+    to_pose: &Pose,
+    retained: Option<&crate::SceneFrame>,
+) -> Option<f64> {
+    let retained = select_warp_source(
+        plan.source_scene_id.zip(plan.source_texture_index),
+        retained,
+    )?;
+    if !plan.exposed {
+        return Some(0.0);
+    }
+    let PoseMap::Mapped(screen_to_plane) = to_pose.map else {
+        return None;
+    };
+    let source_half_width = f64::from(retained.extent[0]) * 0.5;
+    let source_half_height = f64::from(retained.extent[1]) * 0.5;
+    let mut exposed = 0_u32;
+    for row in 0..EXPOSURE_FACT_STEPS {
+        for column in 0..EXPOSURE_FACT_STEPS {
+            let target = [
+                (f64::from(column) / f64::from(EXPOSURE_FACT_STEPS - 1) - 0.5)
+                    * f64::from(to_pose.grid_width),
+                (f64::from(row) / f64::from(EXPOSURE_FACT_STEPS - 1) - 0.5)
+                    * f64::from(to_pose.grid_height),
+            ];
+            let plane_weight = screen_to_plane.rows[6].mul_add(
+                target[0],
+                screen_to_plane.rows[7].mul_add(target[1], screen_to_plane.rows[8]),
+            );
+            if !plane_weight.is_finite() || plane_weight <= 0.0 {
+                continue;
+            }
+            let mapped = plan.rows.map(|plan_row| {
+                f64::from(plan_row[0]).mul_add(
+                    target[0],
+                    f64::from(plan_row[1]).mul_add(target[1], f64::from(plan_row[2])),
+                )
+            });
+            if !mapped.iter().all(|value| value.is_finite()) || mapped[2] <= 0.0 {
+                continue;
+            }
+            let source_pixel = [mapped[0] / mapped[2], mapped[1] / mapped[2]];
+            if source_pixel[0] < -source_half_width
+                || source_pixel[0] > source_half_width
+                || source_pixel[1] < -source_half_height
+                || source_pixel[1] > source_half_height
+            {
+                exposed = exposed.saturating_add(1);
+            }
+        }
+    }
+    Some(f64::from(exposed) / f64::from(EXPOSURE_FACT_STEPS * EXPOSURE_FACT_STEPS))
+}
+
 const fn select_warp_source_identity(
     planned: Option<(u64, u32)>,
     retained: Option<(u64, u32)>,
@@ -1571,6 +1621,29 @@ mod tests {
             None
         );
         assert_eq!(HOT_SOURCE_VALID_BYTE_OFFSET, 280);
+    }
+
+    #[test]
+    fn accepted_exposed_plan_remains_a_source_and_reports_its_clear_share() {
+        let mut ledger = SceneLedger::default();
+        let sampled = promote_binding_scene(&mut ledger, 51);
+        let mut plan = clear_warp_plan(false, true);
+        plan.kind = WarpKind::AnchorHomography;
+        plan.source_scene_id = Some(sampled.scene_id);
+        plan.source_texture_index = Some(sampled.texture_index);
+        plan.source_valid = true;
+        plan.rows[0][2] = 16.0;
+        let mut hot = WarpSourceSlot::default();
+        hot.write_hot(&plan);
+
+        assert_eq!(
+            hot.frame(ledger.retained()).map(|frame| frame.scene_id),
+            Some(51),
+            "exposure does not invalidate the accepted source"
+        );
+        let fraction = warp_exposed_fraction(&plan, &binding_pose(), ledger.retained())
+            .expect("the accepted source has an exposure census");
+        assert!((fraction - 2.0 / 9.0).abs() <= f64::EPSILON);
     }
 
     #[test]

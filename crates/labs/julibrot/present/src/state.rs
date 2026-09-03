@@ -532,7 +532,7 @@ mod tests {
     }
 
     #[test]
-    fn accepted_final_survives_a_completed_preview_until_the_new_final_arrives() {
+    fn accepted_exposed_final_survives_a_completed_preview_until_the_new_final_arrives() {
         let mut ledger = SceneLedger::default();
         begin(&mut ledger, 1, 1);
         let SceneCompletion::Promoted(mut first) = ledger
