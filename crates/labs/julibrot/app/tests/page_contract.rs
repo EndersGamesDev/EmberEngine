@@ -14,7 +14,7 @@ const WORKER_BROWSER: &str = include_str!("../../worker/src/browser.rs");
 const WORKER_OWNER: &str = include_str!("../../worker/src/browser_owner.rs");
 
 /// Every field the page facts must carry, in publication order.
-const PAGE_FACT_FIELDS: [&str; 87] = [
+const PAGE_FACT_FIELDS: [&str; 88] = [
     "abi_version",
     "adapter_name",
     "backend",
@@ -71,6 +71,7 @@ const PAGE_FACT_FIELDS: [&str; 87] = [
     "plane_theta_1",
     "plane_theta_2",
     "plane_origin",
+    "target_plane",
     "view_theta_1",
     "view_theta_2",
     "camera_yaw",

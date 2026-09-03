@@ -5,6 +5,7 @@ mod error;
 mod facts;
 mod frame;
 mod measurement;
+mod saved;
 mod state;
 mod surface;
 
@@ -26,6 +27,7 @@ pub use measurement::{
 };
 #[cfg(target_arch = "wasm32")]
 pub use runtime::{BrowserRuntime, DeviceFacts, install_julibrot_panic_hook, take_julibrot_panic};
+pub use saved::{SavedCentre, SavedCoordinate, SavedView};
 pub use state::{
     BOX_CLICK_THRESHOLD_PX, HotFrame, INITIAL_ITERATION_CAP, NavigationEdit, PRESET_ROWS,
     PresetRow, RequestedControls, SCALE_RANGE_LOG2, ViewerController, anchor_px_up,
@@ -216,8 +218,8 @@ mod wasm_entry {
     use ember_julibrot_present::PaletteId;
 
     use crate::{
-        App, JULIBROT_ABI_VERSION, PageFacts, anchor_px_up, box_zoom_delta_log2,
-        drag_delta_px_down, is_box_selection, preset_row,
+        App, JULIBROT_ABI_VERSION, PageFacts, SavedCentre, SavedView, anchor_px_up,
+        box_zoom_delta_log2, drag_delta_px_down, is_box_selection, preset_row,
     };
 
     thread_local! {
@@ -473,6 +475,39 @@ mod wasm_entry {
         ))
     }
 
+    /// Returns the row the viewer is showing, in the form a view box stores.
+    #[wasm_bindgen]
+    pub fn app_saved_view_json() -> Result<String, JsValue> {
+        with_app(|app| {
+            let saved = SavedView::capture(app.viewer()).map_err(app_js_error)?;
+            serde_json::to_string(&saved).map_err(|error| JsValue::from_str(&error.to_string()))
+        })
+    }
+
+    /// Installs the authoritative centre of a stored row, which no control element carries.
+    ///
+    /// Every other field of a row is a control and reaches the worker through the handler a user's
+    /// own movement reaches; the centre has no widget, so loading one is this single explicit call
+    /// rather than a second path for the values that do have widgets.
+    #[wasm_bindgen]
+    pub fn app_set_centre(centre_json: String) -> Result<(), JsValue> {
+        let centre: SavedCentre = serde_json::from_str(&centre_json)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let decoded = centre.decode().map_err(app_js_error)?;
+        with_app_mut(|app| app.viewer_mut().set_centre(decoded).map_err(app_js_error))
+    }
+
+    /// Returns the row `t` of the way from one stored row to another.
+    #[wasm_bindgen]
+    pub fn app_morph_view(from_json: String, to_json: String, t: f64) -> Result<String, JsValue> {
+        let from: SavedView = serde_json::from_str(&from_json)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let to: SavedView = serde_json::from_str(&to_json)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let morphed = SavedView::lerp(&from, &to, t).map_err(app_js_error)?;
+        serde_json::to_string(&morphed).map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
     fn with_view(edit: impl FnOnce(&mut ViewControls)) -> Result<(), JsValue> {
         with_app_mut(|app| {
             let mut view = app.viewer().requested().view;
@@ -577,9 +612,9 @@ mod wasm_entry {
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm_entry::{
-    app_drag_pan, app_facts_json, app_needs_refresh, app_preset, app_refresh, app_request_frame,
-    app_request_measurement, app_set_camera, app_set_distances, app_set_height,
-    app_set_iteration_cap, app_set_palette, app_set_plane_angles, app_set_plane_origin,
-    app_set_scale, app_set_target, app_set_view_angles, app_wheel_zoom, app_zoom_box,
-    julibrot_abi_version, start_julibrot,
+    app_drag_pan, app_facts_json, app_morph_view, app_needs_refresh, app_preset, app_refresh,
+    app_request_frame, app_request_measurement, app_saved_view_json, app_set_camera,
+    app_set_centre, app_set_distances, app_set_height, app_set_iteration_cap, app_set_palette,
+    app_set_plane_angles, app_set_plane_origin, app_set_scale, app_set_target, app_set_view_angles,
+    app_wheel_zoom, app_zoom_box, julibrot_abi_version, start_julibrot,
 };

@@ -563,6 +563,34 @@ impl ViewerController {
         Ok(())
     }
 
+    /// Installs an authoritative centre as its own reference, preserving every other control.
+    ///
+    /// Loading a saved view is the one edit that names a centre outright rather than nudging the
+    /// one already there, so it configures navigation the way a new plane origin does; the loaded
+    /// centre becomes the reference too, since no orbit computed elsewhere is valid at it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed math or owner refusal for an invalid plane, scale, or centre.
+    pub fn set_centre(&mut self, centre: BigCentre) -> Result<(), AppError> {
+        self.synchronize_shadow()?;
+        let plane = construct_plane(self.requested.plane_angles).map_err(math_error)?;
+        self.owner
+            .configure_navigation(NavigationConfig {
+                centre: centre.clone(),
+                reference_centre: centre,
+                plane,
+                grid_width: self.grid_width,
+            })
+            .map_err(owner_error)?;
+        self.owner.navigate(NavigationDelta::default());
+        if let Some(error) = self.owner.take_navigation_error() {
+            return Err(owner_error(error));
+        }
+        self.add_reason(OrbitReason::CENTRE_THRESHOLD);
+        Ok(())
+    }
+
     /// Stages an iteration request without changing the last delivered value.
     ///
     /// # Errors

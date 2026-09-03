@@ -75,6 +75,7 @@ pub struct PageFacts {
     pub plane_theta_1: f64,
     pub plane_theta_2: f64,
     pub plane_origin: [f64; 4],
+    pub target_plane: [f64; 4],
     pub view_theta_1: f64,
     pub view_theta_2: f64,
     pub camera_yaw: f64,
@@ -193,6 +194,11 @@ impl PageFacts {
             plane_theta_1: requested.plane_angles.theta_1,
             plane_theta_2: requested.plane_angles.theta_2,
             plane_origin: requested.plane_origin,
+            target_plane: app
+                .viewer()
+                .owner()
+                .navigation_centre()
+                .map_or(viewer.main.centre_f64, |centre| centre.to_f64_mirror()),
             view_theta_1: requested.view.theta_1,
             view_theta_2: requested.view.theta_2,
             camera_yaw: requested.view.camera_yaw,
