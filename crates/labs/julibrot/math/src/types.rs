@@ -8,6 +8,14 @@ pub enum Axis4 {
     E4 = 3,
 }
 
+/// Precision policy: exact and cross-machine reproducible, or accurate to the picture's budget.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum PrecisionMode {
+    Deterministic = 0,
+    PictureFast = 1,
+}
+
 impl Axis4 {
     #[must_use]
     pub const fn index(self) -> usize {
