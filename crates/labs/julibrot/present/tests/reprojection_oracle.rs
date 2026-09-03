@@ -23,6 +23,8 @@ enum Expected {
     /// The retained records still describe the destination, so the fixture additionally proves
     /// that redrawing them under the destination pose needs no new sampling.
     Relief,
+    /// An exact retained-record redraw that must also expose honest disocclusion.
+    ReliefExposed,
 }
 
 fn pose_at(
@@ -541,9 +543,8 @@ fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Exp
         WarpValidation::Ordinary,
     );
     if plan.kind == WarpKind::ReliefRedraw {
-        assert_eq!(
-            expected,
-            Expected::Relief,
+        assert!(
+            matches!(expected, Expected::Relief | Expected::ReliefExposed),
             "{name}: unexpectedly selected a relief redraw"
         );
         assert!(
@@ -565,6 +566,12 @@ fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Exp
             uncertain, 0,
             "{name}: displayed relief redraw had resampling uncertainty"
         );
+        if expected == Expected::ReliefExposed {
+            assert!(
+                disoccluded > 0,
+                "{name}: fixture did not exercise redraw disocclusion"
+            );
+        }
         eprintln!(
             "oracle fixture | {name} | relief redraw | samples={compared} | uncertain={uncertain} | disoccluded={disoccluded} | homography={maximum:.3} px"
         );
@@ -751,7 +758,10 @@ fn retained_warp_matches_independent_fresh_scenes() {
 
     let retained_relief = pose(
         ObjectAngles::JULIA,
-        ViewControls::NEUTRAL,
+        ViewControls {
+            height_scale: 1.0,
+            ..ViewControls::NEUTRAL
+        },
         BASE_ORIGIN,
         0.0,
         [0.0; 2],
@@ -763,6 +773,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
         },
         ViewControls {
             height_scale: 1.0,
+            distance_five: 6.0,
             ..ViewControls::NEUTRAL
         },
         BASE_ORIGIN,
@@ -774,7 +785,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
         &retained_relief,
         &relief_rotation,
         1.0,
-        Expected::Relief,
+        Expected::ReliefExposed,
     );
 
     let lifted_camera_expectations = [
