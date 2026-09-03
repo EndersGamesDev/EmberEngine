@@ -18,11 +18,11 @@ The general resource DAG and petgraph, more than one world, the simulation tick,
 
 ### 2.1 Coordinates, reference values, and precision
 
-The common coordinate order is `(z.re, z.im, c.re, c.im) = (e₁,e₂,e₃,e₄)`; `e₅` carries escape height only in the tumbled VIEW and never enters the fractal plane or a worker message.
+The common coordinate order is `(z.re, z.im, c.re, c.im) = (e₁,e₂,e₃,e₄)`; `e₅` carries escape height only in present's height field and never enters the fractal plane or a worker message.
 
 The user-controlled PLANE rotation acts only in `ℝ⁴` and mixes the z and c subspaces: `Rₚ(θ₁,θ₂) = R₁₃(θ₁)·R₂₄(θ₂)`, applied to column vectors as `v′ = R₁₃(R₂₄(v))` with the standard `[[cos,−sin],[sin,cos]]` block, radians, and independent angles; it is HOT state and frozen per frame.
 
-The time-driven VIEW rotation is unchanged and present-only: `R(t) = R₁₂(0.4t)·R₃₅(φ·0.4t)`, where `t` is seconds and `φ = (1+√5)/2`; it acts in the tumbled VIEW, is not stored by this owner, and cannot change the reference orbit.
+The VIEW rotation is present-only and reads no clock: `Rᵥ(θᵥ₁,θᵥ₂) = R₁₂(θᵥ₁)·R₃₅(θᵥ₂)`, both angles independent controls in radians; it acts only in present's height field, is not stored by this owner, and cannot change the reference orbit.
 
 Mandelbrot uses seed axes `(e₃,e₄)` and origin `(0,0,0,0)` with identity `Rₚ`, while Julia at `c₀` uses seed axes `(e₁,e₂)` and origin `(0,0,c₀.re,c₀.im)` with identity `Rₚ`; `c₀` is carried in MAIN's plane origin, a preset initializes the absolute centre `C` to that origin, and later navigation moves `C` within the plane without changing the defining origin.
 
@@ -343,7 +343,7 @@ Aggregate rebase and glitch totals are `unavailable` during normal gather-only r
 
 The worker defines no GPU uniform block and performs no GPU call; present owns `HotUniform`, exactly 128 bytes with `plane_u: [f32;4]` at byte 0, `plane_v` at 16, `view_rotation` at 32, three padded homography rows at 48, 64, and 80, `clear_rgba` at 96, and `flags: [u32;4]` at 112.
 
-Math defines the semantic, no-byte-ABI `Pose { epoch: u64, orbit_generation: u32, plane: Plane, plane_theta_1: f64, plane_theta_2: f64, zoom_log2: f64, view_theta_1: f64, grid_width: u32, grid_height: u32, view: ViewMode, centre_from_reference_px: [f64;2] }`; `ViewMode` is `#[repr(u32)]` with `Flat = 0` and `Tumbled = 1`, `view_theta_1 = 0.4t`, present derives `view_theta_2 = φ·view_theta_1`, and math exposes `warp_matrix(from: &Pose, to: &Pose)`.
+Math defines the semantic, no-byte-ABI `Pose { epoch: u64, orbit_generation: u32, plane: Plane, plane_theta_1: f64, plane_theta_2: f64, zoom_log2: f64, view: ViewControls, grid_width: u32, grid_height: u32, centre_from_reference_px: [f64;2] }`; `ViewControls` is the seven-f64 record `{ theta_1, theta_2, camera_yaw, camera_pitch, height_scale, distance_five, distance_four }`, no field of which is derived from another or from a clock, and math exposes `warp_matrix(from: &Pose, to: &Pose)`.
 
 App converts each `HotDrain` into math's `Pose` and present's `PresentHot`, constructs present's `HotSlot` with index `refresh_id mod 3`, and calls `Presenter::write_hot(&mut self, slot: HotSlot, hot: PresentHot)`; present computes the f64 warp plan CPU-side and uploads one `HotUniform`, with `hot_stride = align_up(128,min_uniform_buffer_offset_alignment)`.
 
