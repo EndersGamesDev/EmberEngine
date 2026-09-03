@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ember arena</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 14px;
+      background: #06101f;
+      color: #c7d2e4;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      padding-bottom: 20px;
+    }
+    header {
+      width: min(1280px, 96vw);
+      display: flex; align-items: baseline; justify-content: space-between;
+      margin-top: 16px;
+    }
+    h1 { margin: 0; font-size: 1.3rem; letter-spacing: 0.16em; font-weight: 600; }
+    h1 span { color: #f0b429; }
+    h1 a { color: #6ea8fe; text-decoration: none; font-size: 0.85rem; letter-spacing: 0; }
+    .headright { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+    #account {
+      font-size: 0.85rem; color: #9fb4d8; cursor: pointer;
+      background: #0b1830; border: 1px solid #1d3050; border-radius: 999px;
+      padding: 5px 12px;
+    }
+    #account b { color: #6ea8fe; }
+    #host-chip {
+      font-size: 0.72rem; color: #7f93b5; font-family: ui-monospace, monospace;
+      background: #0b1830; border: 1px solid #1d3050; border-radius: 999px;
+      padding: 5px 10px; white-space: nowrap;
+    }
+    .card {
+      background: #0b1830; border: 1px solid #1d3050; border-radius: 12px;
+      padding: 18px 20px; width: min(560px, 94vw); box-sizing: border-box;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .card h2 { margin: 0 0 4px; font-size: 1.0rem; color: #9fb4d8; }
+    .hint { font-size: 0.85rem; opacity: 0.75; line-height: 1.4; }
+    .hint b { color: #6ea8fe; }
+    label { font-size: 0.8rem; opacity: 0.8; display: block; margin-bottom: 2px; }
+    input, select {
+      width: 100%; box-sizing: border-box; background: #08122a;
+      border: 1px solid #23406b; border-radius: 6px; color: #dce6f5;
+      padding: 7px 9px; font: inherit;
+    }
+    button {
+      background: #1c4d8f; color: #eaf1fb; border: 0; border-radius: 7px;
+      padding: 9px 14px; font: inherit; cursor: pointer;
+    }
+    button:hover { background: #2661b1; }
+    button.small { padding: 4px 10px; font-size: 0.85rem; }
+    #lobby-rows { display: flex; flex-direction: column; gap: 6px; }
+    .lobby-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      background: #08122a; border-radius: 7px; padding: 7px 10px; font-size: 0.9rem;
+    }
+    .lobby-row .right { display: flex; align-items: center; gap: 7px; margin-left: auto; }
+    .pill {
+      font-size: 0.72rem; background: #0b1830; border: 1px solid #1d3050;
+      border-radius: 999px; padding: 2px 8px; opacity: 0.9;
+      font-family: ui-monospace, monospace; white-space: nowrap;
+    }
+    #list-note { font-size: 0.8rem; opacity: 0.65; }
+    /* The menu's own status line. `#status` lives inside #game, so anything
+       written there is invisible while the menu is up. */
+    #menu-note { font-size: 0.85rem; color: #f0b429; min-height: 1.2em; }
+    #game[hidden], #menu[hidden] { display: none; }
+    #status { font-size: 0.95rem; color: #f0b429; min-height: 1.3em; }
+    #ember-root canvas {
+      /* !important on both axes: winit writes inline styles on the canvas
+         (e.g. on scale change) and inline beats non-important rules. */
+      width: min(1280px, 96vw) !important;
+      aspect-ratio: 16 / 9;
+      height: auto !important;
+      border-radius: 10px;
+      outline: none;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.55);
+      background: #000;
+    }
+    #loading { font-size: 0.9rem; opacity: 0.8; }
+    /* Fullscreen (v14). The STAGE goes fullscreen, not the bare canvas, so
+       the crosshair and the Tab scoreboard - page elements positioned over
+       the canvas - come along. The canvas then fills the whole screen at
+       the screen's own aspect: the engine syncs its backing store to the
+       canvas CSS size every frame and the camera takes the aspect from the
+       surface, so a 21:9 monitor simply sees more to the sides. */
+    #stage:fullscreen { background: #000; display: flex; align-items: center; justify-content: center; }
+    #stage:fullscreen #ember-root canvas {
+      width: 100vw !important; height: 100vh !important; aspect-ratio: auto;
+      border-radius: 0; box-shadow: none;
+    }
+    /* The browser's own F11 (no Fullscreen API involved): keep the page's
+       chrome out of the way and let the canvas take the viewport. */
+    @media (display-mode: fullscreen) {
+      body { gap: 0; padding: 0; justify-content: center; }
+      header, #status, #fs-row { display: none; }
+      #ember-root canvas { width: 100vw !important; height: 100vh !important; aspect-ratio: auto; border-radius: 0; box-shadow: none; }
+    }
+    #fs-row { font-size: 0.8rem; opacity: 0.75; }
+    #btn-fullscreen { padding: 3px 9px; font-size: 0.8rem; margin-left: 6px; vertical-align: middle; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><a href="../../../">⬅ games</a> &nbsp; ember <span>arena</span> <small style="opacity:.5">v18</small></h1>
+    <div class="headright">
+      <div id="host-chip" title="the host this page will play on">server …</div>
+      <div id="account" title="click to rename">…</div>
+    </div>
+  </header>
+
+  <div id="menu" class="card">
+    <h2>Arena Shooter — first-person drop-in deathmatch</h2>
+    <div class="hint"><b>Click the game to capture your mouse</b> (Esc releases) ·
+      <b>WASD</b> move · <b>mouse</b> look · <b>click</b> fire · <b>Space</b> jump ·
+      <b>Shift</b> sprint · <b>C</b> crouch · <b>Q</b> raises the scutum — a bullet comes back at the shooter, a rocket blows up on it ·
+      <b>E</b> cuts with the Murasama — kills outright and goes straight through a raised shield ·
+      <b>headshots kill outright</b> — aim above the chest ·
+      <b>Tab</b> scoreboard · <b>RMB</b> aims down the sights (the sniper scopes to a line) · <b>R</b> reload ·
+      <b>F</b> or ⛶ for fullscreen (Esc leaves it) · sound on 🔊 · 3 HP, respawn in 2.5 s · up to 8 players.
+      Whoever creates a lobby is hosting; joiners drop straight in.</div>
+    <div class="hint"><b>Seven guns, and you get them by head-butting boxes.</b> You spawn with the
+      <b>sidearm</b> (infinite reserve). Everything better hangs in the air as a <b>? block</b>:
+      jump so your head hits it from below, Mario-style, and a random gun pops out —
+      the <b>Vityaz</b> SMG that hoses a cone, the <b>AK-47</b> that climbs, the <b>revolver</b>
+      whose slug drops so you lead up, the <b>sniper</b> that goes through the first body it
+      meets, the <b>RPG-7</b> whose rocket blows up on anything with a 3 m splash you can hurt
+      yourself with. <b>Ammo is finite</b>: one magazine plus one reserve, no refills, and when
+      the last round is gone the sidearm is back. Death drops you to the sidearm too. A used
+      block goes dark for 18 s. On Trench City the pads roll the same loot table.</div>
+    <div class="hint"><b>Gamepad:</b> a standard controller works beside the keyboard — left stick
+      move, right stick look, RT fire, LT aim, A jump, B crouch, LB shield, RB melee, X reload,
+      L3 sprint, Start scoreboard. Browsers surface a pad only after you press a button on it.
+      Every gun has its own <b>rumble</b> on Chromium (Chrome, Edge); Firefox and Safari have
+      no vibration API, so there the pad is input-only. The status line says which you got.</div>
+    <div class="hint"><b>The map — Freight Yard.</b> A rail freight yard at golden hour,
+      the same for everyone, and the first map with a choice: whoever creates the lobby picks
+      <b>Freight Yard</b> or v13's <b>Trench City</b>. Two <b>trains of closed containers</b>
+      run east to west; nothing shoots through them and you cannot jump onto one from the
+      floor. <b>Crates</b> and <b>ammunition boxes</b> are the steps up onto their roofs.
+      Between the trains is the <b>open yard</b> with two 48 m lanes for the AK and the
+      sniper, a <b>loading dock</b> you can jump onto and the <b>king block</b> hanging over
+      it: from the floor it is a near-apex jump in the open, from the dock a hop. The
+      <b>train zone</b> is short alleys and roofs for the SMG, the revolver and a lobbed
+      rocket, with a <b>? block</b> hanging off each crossing like a signal box, and two more
+      over the middle containers that only the roof network reaches. Behind each train is a
+      walled <b>backlot</b> where you spawn, leaving through two gaps. No pads here: seven
+      blocks, and the fights are where the blocks are.</div>
+    <div style="display:flex; gap:8px;">
+      <div style="flex:1">
+        <label for="lobby-name">lobby name</label>
+        <input id="lobby-name" maxlength="24" placeholder="my-arena">
+      </div>
+      <div style="flex:1">
+        <label for="lobby-pw">password (optional)</label>
+        <input id="lobby-pw" maxlength="40" placeholder="none">
+      </div>
+      <div style="flex:1">
+        <label for="lobby-map">map</label>
+        <select id="lobby-map">
+          <option value="freight-yard" selected>Freight Yard</option>
+          <option value="trench-city">Trench City</option>
+        </select>
+      </div>
+    </div>
+    <button id="btn-create">Create arena &amp; play</button>
+    <div>
+      <label>open games <button id="btn-refresh" class="small">refresh</button></label>
+      <div id="lobby-rows"><span id="list-note">loading…</span></div>
+    </div>
+    <div id="menu-note"></div>
+  </div>
+
+  <div id="game" hidden>
+    <div id="status">…</div>
+    <div id="fs-row">press F or <button id="btn-fullscreen" class="small" title="fullscreen (F); Esc leaves it">⛶ fullscreen</button></div>
+    <div id="stage" style="position:relative">
+      <div id="ember-root"><span id="loading">loading engine…</span></div>
+      <div id="crosshair" style="position:absolute; left:50%; top:50%;
+        transform:translate(-50%,-50%); pointer-events:none; color:#9fe0ff;
+        font-size:20px; text-shadow:0 0 6px #123;">+</div>
+      <pre id="scoreboard" hidden style="position:absolute; left:50%; top:14%;
+        transform:translateX(-50%); margin:0; padding:14px 22px;
+        background:rgba(6,16,31,0.88); border:1px solid #1d3050;
+        border-radius:10px; color:#dce6f5; font-size:15px; line-height:1.5;
+        pointer-events:none;"></pre>
+    </div>
+  </div>
+
+  <script>
+    // Rumble (v18). The engine's web build cannot reach the Gamepad haptics
+    // API itself: `GamepadHapticActuator::play_effect` is behind
+    // web_sys_unstable_apis, and the deploy copies only arena.js and
+    // arena_bg.wasm, so a wasm-bindgen inline snippet would never reach the
+    // live page. The wasm client looks this function up on `window` once
+    // (js_sys::Reflect::get) and calls it with (strong, weak, ms). A pad
+    // without an actuator (Firefox, Safari today) makes every call a no-op.
+    window.emberRumble = (strong, weak, ms) => {
+      for (const g of navigator.getGamepads?.() ?? []) {
+        g?.vibrationActuator?.playEffect?.('dual-rumble', { startDelay: 0, duration: ms, strongMagnitude: strong, weakMagnitude: weak })?.catch?.(() => {});
+      }
+    };
+    // Say once what the pad can do, so a player without rumble can tell a
+    // missing feature from a broken one. Browsers fire this only after a
+    // button press on the pad. #status is inside #game and invisible while
+    // the menu is up, so the menu's own note line gets the same words.
+    window.addEventListener('gamepadconnected', (e) => {
+      const kind = e.gamepad?.vibrationActuator ? 'input+rumble' : 'input-only';
+      const text = `gamepad: ${kind}`;
+      const status = document.getElementById('status');
+      if (status) status.textContent = text;
+      const note = document.getElementById('menu-note');
+      if (note) note.textContent = text;
+    }, { once: true });
+  </script>
+
+  <script type="module">
+    import { chooseHost, listLobbies, loadBook, probeHost, rankHosts, renderChip }
+      from '../../../hosts.js';
+
+    const $ = (id) => document.getElementById(id);
+    const ROOT = new URL('../../../', location);
+    // Wire name -> what the lobby row shows. An unknown name is shown as is.
+    const MAP_NAMES = { 'freight-yard': 'Freight Yard', 'trench-city': 'Trench City' };
+
+    const fail = (msg) => {
+      const el = $('loading') || $('status');
+      if (el) el.textContent = 'failed to start: ' + (msg || 'see browser console');
+    };
+    window.addEventListener('error', (e) => fail(e.message));
+    window.addEventListener('unhandledrejection', (e) => fail(e.reason));
+    document.addEventListener('pointerdown', () => {
+      document.querySelector('#ember-root canvas')?.focus();
+    });
+
+    // ---- account (auto-created by the hub; self-heals on direct visits)
+    const ACCT_KEY = 'ember-account';
+    const pick = (a) => a[Math.floor(Math.random() * a.length)];
+    function getAccount() {
+      try {
+        const a = JSON.parse(localStorage.getItem(ACCT_KEY));
+        if (a && a.handle) return a;
+      } catch {}
+      const ADJ = ['swift', 'neon', 'lucky', 'stone', 'ember', 'shadow', 'turbo', 'frost', 'cosmic', 'wild'];
+      const NOUN = ['fox', 'wolf', 'hawk', 'viper', 'otter', 'lynx', 'raven', 'tiger', 'drake', 'comet'];
+      const a = {
+        handle: `${pick(ADJ)}-${pick(NOUN)}-${10 + Math.floor(Math.random() * 90)}`,
+        id: crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2),
+        created: new Date().toISOString(),
+      };
+      localStorage.setItem(ACCT_KEY, JSON.stringify(a));
+      return a;
+    }
+    function renderAccount() {
+      $('account').innerHTML = 'playing as <b></b>';
+      $('account').querySelector('b').textContent = getAccount().handle;
+    }
+    $('account').addEventListener('click', () => {
+      const a = getAccount();
+      const name = prompt('Your handle (visible to other players):', a.handle);
+      if (name && name.trim()) {
+        a.handle = name.trim().slice(0, 20);
+        localStorage.setItem(ACCT_KEY, JSON.stringify(a));
+      }
+      renderAccount();
+    });
+    renderAccount();
+
+    // ---- the bundle. `v` is the deploy stamp and still comes from the book's
+    // legacy top-level key, which every publish keeps writing.
+    const { book } = await loadBook(ROOT.href);
+    const V = book.v || '0';
+    const { default: init, start_online, proto_version } = await import(`./pkg/arena.js?v=${V}`);
+    let ready = init({ module_or_path: `./pkg/arena_bg.wasm?v=${V}` })
+      .catch((e) => { fail(e); console.error(e); });
+    // The bundle's exports call into the wasm module, which does not exist
+    // until init has resolved: asking for the protocol before that threw
+    // "Cannot read properties of undefined (reading 'proto_version')" on the
+    // live page (2026-09-02) and left it at "server …" for good. So wait.
+    await ready;
+    const PROTO = proto_version();
+
+    // ---- host discovery
+    // The manual override short-circuits everything, exactly as before: one
+    // address, no book, no ranking, no protocol filter. Someone typing a URL
+    // has overruled the address book on purpose.
+    const overridden = localStorage.getItem('ember-server-url-manual')
+      ? (localStorage.getItem('ember-server-url') || '').trim() : '';
+
+    let chosen = null;      // the host we will play on
+    let candidates = [];    // it, then the fallbacks, in order
+    let wrongProto = [];    // answered, but speaking another protocol
+
+    // Bumped the moment a launch commits to a host. A menu tick that started
+    // before that must not land: it would repaint the chip with a host the
+    // player is not on, and open a listing socket to every other candidate
+    // from inside a running game.
+    let gen = 0;
+
+    // One address, probed once, dressed as a ranked candidate so that
+    // everything downstream has exactly one shape to deal with.
+    async function onlyHost(url) {
+      const entry = { name: '', ws: url, version: '', commit: '', updated: '' };
+      const probes = new Map([['', await probeHost(url, { proto: PROTO })]]);
+      return rankHosts([entry], { game: 'arena', probes });
+    }
+
+    async function discover() {
+      const g = gen;
+      const r = overridden
+        ? await onlyHost(overridden)
+        : await chooseHost(ROOT.href, { game: 'arena', proto: PROTO });
+      if (g !== gen) return; // a launch committed while we were probing
+      chosen = r.chosen;
+      candidates = r.candidates;
+      wrongProto = r.wrongProto || [];
+      renderChip($('host-chip'), chosen, { wrongProto, proto: PROTO });
+    }
+
+    // "Nothing answered" and "everything answered on another protocol" are
+    // different news. The second one still has a playable build behind it —
+    // it is what a protocol bump looks like from the page that shipped first
+    // — and saying "offline" there tells the player to leave.
+    const offlineText = () => (wrongProto.length
+      ? `${wrongProto[0].name || 'the server'} is on protocol ${wrongProto[0].proto} and this build speaks ${PROTO}`
+        + ' — open the games page and pick the build that matches'
+      : 'no server answered — is the arena offline?');
+
+    // Handle of the lobby-list poll, cleared the moment we go online.
+    let lobbyPoll = null;
+    const pollOn = () => { if (lobbyPoll === null) lobbyPoll = setInterval(tick, 10000); };
+    const pollOff = () => { if (lobbyPoll !== null) { clearInterval(lobbyPoll); lobbyPoll = null; } };
+
+    const showGame = () => { $('menu').hidden = true; $('game').hidden = false; };
+
+    // ---- fullscreen (v14): the stage, not the canvas (see the CSS note).
+    // Both the button and the F key are user gestures, which the Fullscreen
+    // API requires; Esc leaves fullscreen and the pointer lock together,
+    // which is what a player who wants out means. The key listener is on the
+    // capture phase so it fires whether or not the canvas (which owns the
+    // keyboard while playing) stops the event, and it ignores typing in the
+    // lobby inputs.
+    const toggleFullscreen = () => {
+      if (document.fullscreenElement) { document.exitFullscreen?.(); return; }
+      $('stage').requestFullscreen?.().catch((e) => console.warn('fullscreen refused', e));
+    };
+    $('btn-fullscreen').addEventListener('click', toggleFullscreen);
+    window.addEventListener('keydown', (e) => {
+      if (e.code !== 'KeyF' || e.repeat || e.altKey || e.ctrlKey || e.metaKey) return;
+      if ($('game').hidden) return;
+      const t = e.target;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+      toggleFullscreen();
+    }, true);
+    // Back to a live menu, not a dead screen: the poll is re-armed and a
+    // re-rank kicked, so a host that comes back is picked up without a reload.
+    const showMenu = (msg) => {
+      $('game').hidden = true;
+      $('menu').hidden = false;
+      $('menu-note').textContent = msg || '';
+      pollOn();
+      tick();
+    };
+
+    const goOnline = async (action, lobby, password, target) => {
+      if (!lobby) { alert('Enter a lobby name.'); return; }
+      const wanted = target || chosen;
+      // Includes a handover whose host is already gone: the menu comes back
+      // with the poll running, so this is a message and not a dead end.
+      if (!wanted) { showMenu(offlineText()); return; }
+      pollOff();
+      $('menu-note').textContent = '';
+      await ready;
+      showGame();
+      $('status').textContent = 'connecting…';
+
+      // Probe again RIGHT before handing the socket to the engine. The list
+      // can be ten seconds old and a quick tunnel dies without warning; once
+      // the wasm client owns the socket there is no failover left, so this is
+      // the last moment a dead host can still be turned into a live one.
+      //
+      // A Create walks the fallbacks — one arena is as good as another. A
+      // JOIN does not: that lobby lives on that machine and nowhere else, so
+      // walking on would drop the player into a stranger's lobby of the same
+      // name, or into a host that has none and tell them it "moved". The
+      // `wanted === chosen` arm keeps the failover for the address-less
+      // handover below, where the target came from the ranking, not a row.
+      const order = (action === 'create' || wanted === chosen)
+        ? [wanted, ...candidates.filter((c) => c.url !== wanted.url)]
+        : [wanted];
+      let live = null;
+      for (const c of order) {
+        // Serial on purpose: the second host is only interesting once the
+        // first has actually failed to answer.
+        const p = await probeHost(c.url, { proto: PROTO, timeoutMs: 3000 });
+        if (p.ok) { live = c; break; }
+      }
+      if (!live) {
+        showMenu(order.length === 1
+          ? `${wanted.name || 'that lobby’s host'} stopped answering — the lobby may be gone`
+          : 'no server answered — try again in a moment');
+        return;
+      }
+      if (live.url !== wanted.url) {
+        $('status').textContent =
+          `${wanted.name || 'that server'} stopped answering — moved to ${live.name || 'another server'}`;
+      }
+      chosen = live;
+      gen += 1; // the launch owns the chip from here
+      renderChip($('host-chip'), live, { proto: PROTO });
+      try {
+        start_online(JSON.stringify({
+          url: live.url, action, lobby,
+          password: password || null,
+          handle: getAccount().handle,
+          // Only a Create reads it; "" lets the server pick its default.
+          map: action === 'create' ? ($('lobby-map').value || '') : '',
+        }));
+      } catch (e) {
+        console.error(e);
+        showMenu('could not start: ' + ((e && e.message) || e));
+      }
+    };
+
+    $('btn-create').addEventListener('click', () =>
+      goOnline('create', $('lobby-name').value.trim(), $('lobby-pw').value, chosen));
+
+    // ---- lobby browser
+    // The chosen host's lobbies first, then every other host on this protocol
+    // below, each row tagged — two people who landed on different hosts have
+    // to be able to find each other, or the fleet splits the player base.
+    async function refreshLobbies() {
+      const rows = $('lobby-rows');
+      const setNote = (msg) => {
+        const note = document.createElement('span');
+        note.id = 'list-note';
+        note.textContent = msg;
+        rows.replaceChildren(note);
+      };
+      if (!candidates.length) { setNote(offlineText()); return; }
+
+      const lists = await Promise.all(
+        candidates.map((c) => listLobbies(c.url, { proto: PROTO })),
+      );
+      const all = [];
+      candidates.forEach((host, i) => {
+        for (const l of lists[i]) all.push({ host, lobby: l });
+      });
+      if (!all.length) { setNote('no open games — create one!'); return; }
+
+      rows.replaceChildren(...all.map(({ host, lobby: l }) => {
+        const row = document.createElement('div');
+        row.className = 'lobby-row';
+        const label = document.createElement('span');
+        label.textContent = `${l.name} — ${l.host} · ${l.players}/${l.cap} `;
+        if (l.has_password) {
+          const lock = document.createElement('span');
+          lock.textContent = '🔒';
+          label.append(lock);
+        }
+        const right = document.createElement('span');
+        right.className = 'right';
+        const tag = document.createElement('span');
+        tag.className = 'pill';
+        tag.textContent = host.name || 'server';
+        tag.title = host.url;
+        // v18: the lobby's map, when the host reports one (LobbyInfo.map is
+        // serde(default), so an older host's rows carry none and get no pill).
+        let mapPill = null;
+        if (l.map) {
+          mapPill = document.createElement('span');
+          mapPill.className = 'pill';
+          mapPill.textContent = MAP_NAMES[l.map] || l.map;
+          mapPill.title = `map: ${l.map}`;
+        }
+        const btn = document.createElement('button');
+        btn.className = 'small';
+        btn.textContent = 'Join';
+        btn.addEventListener('click', () => {
+          const pw = l.has_password ? prompt(`Password for "${l.name}":`) : null;
+          if (l.has_password && pw === null) return;
+          goOnline('join', l.name, pw, host); // this row's host, not the chosen one
+        });
+        right.append(...(mapPill ? [mapPill, tag, btn] : [tag, btn]));
+        row.append(label, right);
+        return row;
+      }));
+    }
+    // A menu tick re-ranks as well as re-lists: a host that dies while the
+    // player reads the hint text must leave the chip and the fallback list,
+    // not sit there looking playable.
+    let ticking = false;
+    async function tick() {
+      if (ticking) return;
+      ticking = true;
+      try {
+        const g = gen;
+        await discover();
+        // A launch committed while the probes were out: stop here rather
+        // than opening a listing socket to every host from inside a game.
+        if (g !== gen) return;
+        await refreshLobbies();
+      } finally { ticking = false; }
+    }
+    $('btn-refresh').addEventListener('click', tick);
+
+    // ---- pending join handed over from the hub's live-lobby showcase
+    let pending = null;
+    try { pending = JSON.parse(sessionStorage.getItem('ember-pending')); } catch {}
+    sessionStorage.removeItem('ember-pending');
+
+    if (pending && pending.lobby && pending.ws) {
+      // The hub already picked the machine: this lobby lives on THAT host and
+      // nowhere else, so the address is used verbatim with no re-ranking. It
+      // is still probed once, so a dead handover says so instead of hanging.
+      const r = await onlyHost(pending.ws);
+      chosen = r.chosen;
+      candidates = r.candidates;
+      wrongProto = r.wrongProto || [];
+      if (chosen && pending.host) chosen.name = chosen.name || pending.host;
+      renderChip($('host-chip'), chosen, { wrongProto, proto: PROTO });
+      await ready;
+      goOnline(pending.action || 'join', pending.lobby, pending.password, chosen);
+    } else {
+      await discover();
+      if (pending && pending.lobby) {
+        // A handover from a page that predates the host list: no address, so
+        // the normal pick applies.
+        await ready;
+        goOnline(pending.action || 'join', pending.lobby, pending.password, chosen);
+      } else {
+        await ready;
+        refreshLobbies();
+        // Lobbies live for seconds and this list used to load exactly once, so
+        // two people waiting here for each other would never see each other's
+        // game appear. Poll like the hub does; goOnline() stops it.
+        pollOn();
+      }
+    }
+  </script>
+</body>
+</html>
