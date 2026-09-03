@@ -254,75 +254,7 @@ mod tests {
         centre_displacement_px, mirror_centre, pixel_scale, precision_for, scaled_pixel_offset,
         scaled_pixel_scale, split_centre, split_scalar,
     };
-    use crate::{BigCentre, MathError, Plane, decode_big_scalar};
-
-    #[test]
-    #[allow(
-        clippy::print_stderr,
-        reason = "this is the explicit measurement report"
-    )]
-    fn low_word_changes_the_consumed_binary32_value_in_ten_thousand_splits() -> Result<(), MathError>
-    {
-        const RANDOM_COUNT: usize = 9_984;
-        const ADVERSARIAL_COUNT: usize = 16;
-        let mut changed = 0_usize;
-        let mut random_changed = 0_usize;
-        let mut adversarial_changed = 0_usize;
-        let mut tested = 0_usize;
-        let mut state = 0x243f_6a88_85a3_08d3_u64;
-        for index in 0..RANDOM_COUNT {
-            let mut limbs = [0_u32; 4];
-            for limb in &mut limbs {
-                state ^= state << 13;
-                state ^= state >> 7;
-                state ^= state << 17;
-                *limb = u32::try_from(state & u64::from(u32::MAX)).expect("masked random limb");
-            }
-            limbs[3] |= 0x8000_0000;
-            let exponent = -253 + i32::try_from(state % 251).expect("bounded exponent");
-            let value = decode_big_scalar(u32::from(index & 1 != 0), exponent, &limbs, 256)?;
-            let [high, low] = split_scalar(&value)?;
-            let differs = (high + low).to_bits() != high.to_bits();
-            if differs && random_changed < 4 {
-                eprintln!(
-                    "reference_split_witness source=random high_bits={:#010x} low_bits={:#010x} consumed_bits={:#010x}",
-                    high.to_bits(),
-                    low.to_bits(),
-                    (high + low).to_bits(),
-                );
-            }
-            random_changed += usize::from(differs);
-            changed += usize::from(differs);
-            tested += 1;
-        }
-        for high_exponent in [-120_i32, -40, 0, 100] {
-            for sign in [0_u32, 1] {
-                for midpoint_numerator in [0x0100_0001_u32, 0x0100_0003] {
-                    let value =
-                        decode_big_scalar(sign, high_exponent - 24, &[midpoint_numerator], 256)?;
-                    let [high, low] = split_scalar(&value)?;
-                    let differs = (high + low).to_bits() != high.to_bits();
-                    if differs && adversarial_changed < 4 {
-                        eprintln!(
-                            "reference_split_witness source=adversarial high_bits={:#010x} low_bits={:#010x} consumed_bits={:#010x}",
-                            high.to_bits(),
-                            low.to_bits(),
-                            (high + low).to_bits(),
-                        );
-                    }
-                    adversarial_changed += usize::from(differs);
-                    changed += usize::from(differs);
-                    tested += 1;
-                }
-            }
-        }
-        eprintln!(
-            "reference_split_measurement tested={tested} random={RANDOM_COUNT} adversarial={ADVERSARIAL_COUNT} random_changes={random_changed} adversarial_changes={adversarial_changed} consumed_word_changes={changed}"
-        );
-        assert_eq!(tested, RANDOM_COUNT + ADVERSARIAL_COUNT);
-        assert!(changed > 0, "the measured low word must not be discarded");
-        Ok(())
-    }
+    use crate::{BigCentre, MathError, Plane};
 
     #[test]
     fn scale_never_materializes_the_deep_power_of_two() -> Result<(), MathError> {

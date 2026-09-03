@@ -561,4 +561,74 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    #[allow(
+        clippy::print_stderr,
+        reason = "this is the explicit production-shaped ABI measurement"
+    )]
+    fn production_orbit_corpus_consumes_only_the_high_words() -> Result<(), MathError> {
+        const PRESETS: [(&str, [f64; 4]); 2] = [
+            ("Mandelbrot", [0.0; 4]),
+            ("Julia", [0.0, 0.0, -0.8, 0.156]),
+        ];
+        const ZOOMS: [f64; 4] = [14.0, 40.0, 80.0, 256.0];
+        const CAPS: [u32; 2] = [512, 4_096];
+        let mut fixture_count = 0_usize;
+        let mut record_count = 0_usize;
+        let mut changed_count = 0_usize;
+        for (preset, coordinates) in PRESETS {
+            for zoom_log2 in ZOOMS {
+                for max_iter in CAPS {
+                    let plan = precision_for(zoom_log2, 960, max_iter)?;
+                    let centre = BigCentre::from_f64(coordinates, plan.requested_bits)?;
+                    let mut builder = ReferenceOrbitBuilder::new_with_policy(
+                        &centre,
+                        plan,
+                        EscapeParams::new(max_iter),
+                        PrecisionMode::PictureFast,
+                        ReferencePass::Preview,
+                    )?;
+                    let orbit = loop {
+                        match builder.step(NonZeroU32::new(max_iter).expect("cap is nonzero"))? {
+                            OrbitStep::Pending { .. } => {}
+                            OrbitStep::Complete(orbit) => break orbit,
+                        }
+                    };
+                    let mut fixture_changes = 0_usize;
+                    for record in &orbit.records {
+                        let re = f64::from(record.re_hi) + f64::from(record.re_lo);
+                        let im = f64::from(record.im_hi) + f64::from(record.im_lo);
+                        assert!(
+                            re.hypot(im) <= 16.0,
+                            "fixture={preset}/zoom-{zoom_log2}/cap-{max_iter} exceeded |Z| <= 16"
+                        );
+                        fixture_changes += usize::from(
+                            (record.re_hi + record.re_lo).to_bits() != record.re_hi.to_bits(),
+                        );
+                        fixture_changes += usize::from(
+                            (record.im_hi + record.im_lo).to_bits() != record.im_hi.to_bits(),
+                        );
+                    }
+                    let fixture = format!("{preset}/zoom-{zoom_log2}/cap-{max_iter}");
+                    assert_eq!(fixture_changes, 0, "fixture={fixture}");
+                    eprintln!(
+                        "reference_orbit_split fixture={fixture} records={} coordinates={} consumed_word_changes={fixture_changes}",
+                        orbit.records.len(),
+                        orbit.records.len() * 2,
+                    );
+                    fixture_count += 1;
+                    record_count += orbit.records.len();
+                    changed_count += fixture_changes;
+                }
+            }
+        }
+        assert_eq!(fixture_count, 16);
+        assert_eq!(changed_count, 0, "production-shaped fixture corpus");
+        eprintln!(
+            "reference_orbit_split_total fixtures={fixture_count} records={record_count} coordinates={} consumed_word_changes={changed_count}",
+            record_count * 2,
+        );
+        Ok(())
+    }
 }
