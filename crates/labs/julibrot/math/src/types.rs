@@ -16,19 +16,6 @@ impl Axis4 {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum PlanePreset {
-    Mandelbrot,
-    Julia { c0: [f64; 2] },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PlaneSpec {
-    pub axis_a: Axis4,
-    pub axis_b: Axis4,
-    pub plane_origin: [f64; 4],
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlaneAngles {
     pub theta_1: f64,
     pub theta_2: f64,
@@ -156,11 +143,72 @@ pub enum OrbitStep {
     Complete(ComputedOrbit),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u32)]
-pub enum ViewMode {
-    Flat = 0,
-    Tumbled = 1,
+/// Every degree of freedom of the VIEW, as continuous controls.
+///
+/// There is no view mode and no clock: `theta_1` and `theta_2` are the two independent angles of
+/// `R₁₂(θᵥ₁)·R₃₅(θᵥ₂)`, `camera_yaw` and `camera_pitch` orient the three-space observer,
+/// `height_scale` multiplies the escape height so zero is exactly the flat chart, and the two
+/// distances are the poles of the double perspective, the second of which is also the observer
+/// distance.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ViewControls {
+    /// First VIEW angle, acting in the display `(1,2)` plane.
+    pub theta_1: f64,
+    /// Second VIEW angle, acting in the display `(3,5)` plane.
+    pub theta_2: f64,
+    /// Observer yaw in radians.
+    pub camera_yaw: f64,
+    /// Observer pitch in radians.
+    pub camera_pitch: f64,
+    /// Escape-height amplitude; zero is the flat chart and one the shipped relief.
+    pub height_scale: f64,
+    /// Pole of the five-to-four perspective.
+    pub distance_five: f64,
+    /// Pole of the four-to-three perspective and the observer distance.
+    pub distance_four: f64,
+}
+
+impl ViewControls {
+    /// The row every preset starts from: no rotation, no relief, both distances at eight.
+    pub const NEUTRAL: Self = Self {
+        theta_1: 0.0,
+        theta_2: 0.0,
+        camera_yaw: 0.0,
+        camera_pitch: 0.0,
+        height_scale: 0.0,
+        distance_five: 8.0,
+        distance_four: 8.0,
+    };
+
+    /// Returns every control as one array, in the order the records and facts publish them.
+    #[must_use]
+    pub const fn as_array(self) -> [f64; 7] {
+        [
+            self.theta_1,
+            self.theta_2,
+            self.camera_yaw,
+            self.camera_pitch,
+            self.height_scale,
+            self.distance_five,
+            self.distance_four,
+        ]
+    }
+
+    /// Reports whether every control is finite, the height is non-negative, and both distances are
+    /// strictly positive.
+    #[must_use]
+    pub fn is_valid(self) -> bool {
+        self.as_array().iter().all(|value| value.is_finite())
+            && self.height_scale >= 0.0
+            && self.distance_five > 0.0
+            && self.distance_four > 0.0
+    }
+}
+
+impl Default for ViewControls {
+    fn default() -> Self {
+        Self::NEUTRAL
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -171,10 +219,9 @@ pub struct Pose {
     pub plane_theta_1: f64,
     pub plane_theta_2: f64,
     pub zoom_log2: f64,
-    pub view_theta_1: f64,
+    pub view: ViewControls,
     pub grid_width: u32,
     pub grid_height: u32,
-    pub view: ViewMode,
     pub centre_from_reference_px: [f64; 2],
 }
 
@@ -192,8 +239,8 @@ pub enum MathError {
     InvalidExtent,
     #[error("max_iter must be nonzero")]
     InvalidMaxIter,
-    #[error("the plane seed axes must be distinct")]
-    InvalidPlaneSeed,
+    #[error("a VIEW control was not finite, or a height or distance left its range")]
+    InvalidViewControls,
     #[error("f32 plane rounding exceeded the proved postcondition")]
     PlaneRoundingBound,
     #[error("the centre encoding is not canonical")]

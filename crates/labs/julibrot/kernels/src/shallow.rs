@@ -263,31 +263,30 @@ mod tests {
     #[test]
     #[allow(clippy::cast_possible_truncation)]
     fn preset_and_hybrid_pixels_match_the_math_oracle() {
-        use ember_julibrot_math::{
-            PlaneAngles, PlanePreset, construct_plane, escape_f32, preset_spec,
-        };
+        use ember_julibrot_math::{PlaneAngles, construct_plane, escape_f32};
 
+        let quarter = core::f64::consts::FRAC_PI_2;
         let fixtures = [
             (
-                PlanePreset::Mandelbrot,
                 PlaneAngles {
                     theta_1: 0.0,
                     theta_2: 0.0,
                 },
+                [0.0; 4],
             ),
             (
-                PlanePreset::Julia { c0: [-0.8, 0.156] },
                 PlaneAngles {
-                    theta_1: 0.0,
-                    theta_2: 0.0,
+                    theta_1: -quarter,
+                    theta_2: -quarter,
                 },
+                [0.0, 0.0, -0.8, 0.156],
             ),
             (
-                PlanePreset::Mandelbrot,
                 PlaneAngles {
                     theta_1: 0.4,
                     theta_2: 0.7,
                 },
+                [0.0; 4],
             ),
         ];
         let extent = GridExtent {
@@ -295,9 +294,8 @@ mod tests {
             height: 3,
         };
         let params = EscapeParams::new(64);
-        for (preset, angles) in fixtures {
-            let plane = construct_plane(preset, angles).expect("math plane");
-            let origin = preset_spec(preset).expect("preset origin").plane_origin;
+        for (angles, origin) in fixtures {
+            let plane = construct_plane(angles).expect("math plane");
             let uniform = ShallowUniform::pack(
                 plane,
                 CentreSplit {

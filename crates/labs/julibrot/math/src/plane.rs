@@ -1,64 +1,24 @@
-use crate::{Axis4, MathError, Plane, PlaneAngles, PlanePreset, PlaneSpec};
+use crate::{Axis4, MathError, Plane, PlaneAngles};
 
-/// Resolves a named preset into its seed axes and absolute plane origin.
-///
-/// # Errors
-///
-/// Returns an error when a Julia constant is non-finite.
-pub fn preset_spec(preset: PlanePreset) -> Result<PlaneSpec, MathError> {
-    let spec = match preset {
-        PlanePreset::Mandelbrot => PlaneSpec {
-            axis_a: Axis4::E3,
-            axis_b: Axis4::E4,
-            plane_origin: [0.0; 4],
-        },
-        PlanePreset::Julia { c0 } => PlaneSpec {
-            axis_a: Axis4::E1,
-            axis_b: Axis4::E2,
-            plane_origin: [0.0, 0.0, c0[0], c0[1]],
-        },
-    };
-    if spec
-        .plane_origin
-        .iter()
-        .all(|component| component.is_finite())
-    {
-        Ok(spec)
-    } else {
-        Err(MathError::NonFinite)
-    }
-}
+/// The one seed pair the lab rotates: the Mandelbrot axes `(e₃,e₄)`.
+pub const SEED_AXES: [Axis4; 2] = [Axis4::E3, Axis4::E4];
 
-/// Constructs a named plane with one final binary32 rounding pass.
+/// Constructs the sampled plane from the one seed and two independent angles.
+///
+/// There is no preset argument because a preset is a row of control values, not a choice of axes:
+/// `θ₁=θ₂=−π/2` carries the seed to exactly `(e₁,e₂)` and `+π/2` to the reversed pair, so every
+/// named plane and every hybrid between them is an angle position of this one construction.
 ///
 /// # Errors
 ///
 /// Returns an error for non-finite input or a failed rounding postcondition.
-pub fn construct_plane(preset: PlanePreset, angles: PlaneAngles) -> Result<Plane, MathError> {
-    construct_plane_from_spec(preset_spec(preset)?, angles)
-}
-
-/// Constructs a plane from distinct seed axes and independent rotation angles.
-///
-/// # Errors
-///
-/// Returns an error for duplicate axes, non-finite input, or a failed postcondition.
 #[allow(clippy::cast_possible_truncation)]
-pub fn construct_plane_from_spec(spec: PlaneSpec, angles: PlaneAngles) -> Result<Plane, MathError> {
-    if spec.axis_a == spec.axis_b {
-        return Err(MathError::InvalidPlaneSeed);
-    }
-    if !angles.theta_1.is_finite()
-        || !angles.theta_2.is_finite()
-        || !spec
-            .plane_origin
-            .iter()
-            .all(|component| component.is_finite())
-    {
+pub fn construct_plane(angles: PlaneAngles) -> Result<Plane, MathError> {
+    if !angles.theta_1.is_finite() || !angles.theta_2.is_finite() {
         return Err(MathError::NonFinite);
     }
-    let basis_u = rotate_axis(spec.axis_a, angles);
-    let basis_v = rotate_axis(spec.axis_b, angles);
+    let basis_u = rotate_axis(SEED_AXES[0], angles);
+    let basis_v = rotate_axis(SEED_AXES[1], angles);
     let plane = Plane {
         basis_u: basis_u.map(|component| component as f32),
         basis_v: basis_v.map(|component| component as f32),
@@ -100,38 +60,42 @@ fn dot_f32(left: [f32; 4], right: [f32; 4]) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{construct_plane, preset_spec};
-    use crate::{Axis4, MathError, PlaneAngles, PlanePreset};
+    use super::construct_plane;
+    use crate::{MathError, PlaneAngles};
+
+    fn angles(theta_1: f64, theta_2: f64) -> PlaneAngles {
+        PlaneAngles { theta_1, theta_2 }
+    }
 
     #[test]
-    fn presets_are_exact_at_identity() -> Result<(), MathError> {
-        let identity = PlaneAngles {
-            theta_1: 0.0,
-            theta_2: 0.0,
-        };
-        let mandelbrot = construct_plane(PlanePreset::Mandelbrot, identity)?;
-        assert_eq!(mandelbrot.basis_u, [0.0, 0.0, 1.0, 0.0]);
-        assert_eq!(mandelbrot.basis_v, [0.0, 0.0, 0.0, 1.0]);
-        let julia = construct_plane(PlanePreset::Julia { c0: [-0.8, 0.156] }, identity)?;
-        assert_eq!(julia.basis_u, [1.0, 0.0, 0.0, 0.0]);
-        assert_eq!(julia.basis_v, [0.0, 1.0, 0.0, 0.0]);
-        assert_eq!(
-            preset_spec(PlanePreset::Julia { c0: [-0.8, 0.156] })?.plane_origin,
-            [0.0, 0.0, -0.8, 0.156]
-        );
-        assert_eq!(preset_spec(PlanePreset::Mandelbrot)?.axis_a, Axis4::E3);
+    fn the_seed_is_exact_at_identity() -> Result<(), MathError> {
+        let plane = construct_plane(angles(0.0, 0.0))?;
+        assert_eq!(plane.basis_u, [0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(plane.basis_v, [0.0, 0.0, 0.0, 1.0]);
         Ok(())
     }
 
     #[test]
-    fn quarter_turn_maps_mandelbrot_to_reversed_julia() -> Result<(), MathError> {
-        let plane = construct_plane(
-            PlanePreset::Mandelbrot,
-            PlaneAngles {
-                theta_1: core::f64::consts::FRAC_PI_2,
-                theta_2: core::f64::consts::FRAC_PI_2,
-            },
-        )?;
+    fn a_negative_quarter_turn_is_the_julia_pair() -> Result<(), MathError> {
+        // The unit components are exact; the orthogonal ones carry only the binary32 image of
+        // cos(pi/2) = 6.1e-17, which is the bound the reversed pair has always been pinned at.
+        let quarter = core::f64::consts::FRAC_PI_2;
+        let plane = construct_plane(angles(-quarter, -quarter))?;
+        assert_eq!(plane.basis_u[0], 1.0);
+        assert_eq!(plane.basis_u[1], 0.0);
+        assert!(plane.basis_u[2].abs() <= f32::EPSILON);
+        assert_eq!(plane.basis_u[3], 0.0);
+        assert_eq!(plane.basis_v[1], 1.0);
+        assert_eq!(plane.basis_v[0], 0.0);
+        assert!(plane.basis_v[3].abs() <= f32::EPSILON);
+        assert_eq!(plane.basis_v[2], 0.0);
+        Ok(())
+    }
+
+    #[test]
+    fn a_positive_quarter_turn_is_the_reversed_pair() -> Result<(), MathError> {
+        let quarter = core::f64::consts::FRAC_PI_2;
+        let plane = construct_plane(angles(quarter, quarter))?;
         assert!((plane.basis_u[0] + 1.0).abs() <= f32::EPSILON);
         assert!(plane.basis_u[2].abs() <= f32::EPSILON);
         assert!((plane.basis_v[1] + 1.0).abs() <= f32::EPSILON);
@@ -141,17 +105,23 @@ mod tests {
 
     #[test]
     fn interior_rotation_is_a_hybrid_plane() -> Result<(), MathError> {
-        let plane = construct_plane(
-            PlanePreset::Mandelbrot,
-            PlaneAngles {
-                theta_1: 0.4,
-                theta_2: 0.7,
-            },
-        )?;
+        let plane = construct_plane(angles(0.4, 0.7))?;
         assert!(plane.basis_u[..2].iter().any(|component| *component != 0.0));
         assert!(plane.basis_u[2..].iter().any(|component| *component != 0.0));
         assert!(plane.basis_v[..2].iter().any(|component| *component != 0.0));
         assert!(plane.basis_v[2..].iter().any(|component| *component != 0.0));
         Ok(())
+    }
+
+    #[test]
+    fn non_finite_angles_are_refused() {
+        assert_eq!(
+            construct_plane(angles(f64::NAN, 0.0)),
+            Err(MathError::NonFinite)
+        );
+        assert_eq!(
+            construct_plane(angles(0.0, f64::INFINITY)),
+            Err(MathError::NonFinite)
+        );
     }
 }

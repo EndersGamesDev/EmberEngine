@@ -30,7 +30,7 @@ The PLANE rotation acts only in ℝ⁴ and mixes the z and c subspaces: `Rₚ(θ
 
 For preset seed pair `(e_a,e_b)`, math evaluates `u = Rₚe_a` and `v = Rₚe_b` in f64 and performs one f32 rounding pass; no `P₄`, Gram–Schmidt, or degenerate-plane stage exists because an orthogonal ℝ⁴ map preserves an orthonormal pair, and the postcondition is `|u·u−1|`, `|v·v−1|`, and `|u·v|` each at most `8·f32::EPSILON`.
 
-There is one seed, `(e₃,e₄)`; a Mandelbrot row is zero angles with plane origin `(0,0,0,0)` and a Julia row at `c₀` is `θ₁=θ₂=−π/2` with plane origin `(0,0,c₀.re,c₀.im)`, the rotated seed being exactly `(e₁,e₂)` there and the reversed pair at `+π/2`, and every angle strictly between requires nonzero components in both z and c subspaces.
+There is one seed, `(e₃,e₄)`; a Mandelbrot row is zero angles with plane origin `(0,0,0,0)` and a Julia row at `c₀` is `θ₁=θ₂=−π/2` with plane origin `(0,0,c₀.re,c₀.im)`, the rotated seed being `(e₁,e₂)` there to binary32 rounding and the reversed pair at `+π/2`, and every angle strictly between requires nonzero components in both z and c subspaces.
 
 The VIEW rotation is distinct and present-only: `Rᵥ = R₁₂(θᵥ₁)R₃₅(θᵥ₂)`, both angles independent controls in radians, both frozen into the HOT slot used by one scene or warp submission. Present reads no clock: a monotonic time still times fences and still drives the app's schedule, but no geometric term is a function of it.
 

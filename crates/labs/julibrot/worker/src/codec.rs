@@ -551,7 +551,6 @@ mod tests {
     #[test]
     fn full_mantissa_anchor_navigation_decodes_at_one_precision() {
         let plane = ember_julibrot_math::construct_plane(
-            ember_julibrot_math::PlanePreset::Mandelbrot,
             ember_julibrot_math::PlaneAngles {
                 theta_1: 0.0,
                 theta_2: 0.0,

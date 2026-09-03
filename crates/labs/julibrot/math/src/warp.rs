@@ -88,11 +88,13 @@ fn validate_pose(pose: &Pose) -> Result<(), MathError> {
     if pose.grid_width == 0 || pose.grid_height == 0 {
         return Err(MathError::InvalidExtent);
     }
+    if !pose.view.is_valid() {
+        return Err(MathError::InvalidViewControls);
+    }
     let scalar_values = [
         pose.plane_theta_1,
         pose.plane_theta_2,
         pose.zoom_log2,
-        pose.view_theta_1,
         pose.centre_from_reference_px[0],
         pose.centre_from_reference_px[1],
     ];
@@ -137,7 +139,7 @@ fn multiply_3x3(left: [f64; 9], right: [f64; 9]) -> [f64; 9] {
 #[cfg(test)]
 mod tests {
     use super::{warp_identity_error, warp_matrix};
-    use crate::{MathError, Plane, Pose, ViewMode};
+    use crate::{MathError, Plane, Pose, ViewControls};
 
     fn pose(zoom_log2: f64, displacement: [f64; 2]) -> Pose {
         Pose {
@@ -150,10 +152,9 @@ mod tests {
             plane_theta_1: 0.643_501_108_793_284_4,
             plane_theta_2: 0.927_295_218_001_612_3,
             zoom_log2,
-            view_theta_1: 0.0,
+            view: ViewControls::NEUTRAL,
             grid_width: 1920,
             grid_height: 1080,
-            view: ViewMode::Flat,
             centre_from_reference_px: displacement,
         }
     }

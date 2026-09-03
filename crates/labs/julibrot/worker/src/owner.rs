@@ -425,7 +425,7 @@ impl ViewerOwner {
 #[cfg(test)]
 mod tests {
     use ember_julibrot_math::{
-        BigCentre, NavigationDelta, PlaneAngles, PlanePreset, construct_plane,
+        BigCentre, NavigationDelta, PlaneAngles, construct_plane,
     };
 
     use super::{
@@ -531,7 +531,6 @@ mod tests {
 
     fn navigation_owner() -> Result<ViewerOwner, OwnerError> {
         let plane = construct_plane(
-            PlanePreset::Julia { c0: [0.0; 2] },
             PlaneAngles {
                 theta_1: 0.21,
                 theta_2: -0.13,
