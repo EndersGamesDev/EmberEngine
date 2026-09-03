@@ -24,6 +24,9 @@ Usage (from the repo root, after `cargo build -p arena -p arena-server --bins`; 
 Each step focuses client A, optionally presses a key (virtual-key name from
 [System.Windows.Forms.Keys]) or holds the left mouse button for N ms, waits,
 and captures every client window to <Out>/<Prefix>-<name>-<client>.png.
+An `rmb` step holds the RIGHT button (aim down the sights) across the wait
+and the capture, for at least N ms, so the scope is on screen when the
+picture is taken; `mouse` inside the same step fires while it is held.
 -Map picks the lobby's map (v18 servers), -Cam pins the observer camera,
 -Weapon sets EMBER_WEAPON on client A (a native debug override of the drawn
 weapon, when the client supports it). -KeepRunning leaves everything up.
@@ -71,7 +74,7 @@ public static class Win {
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, System.Text.StringBuilder s, int n);
-    public const uint LEFTDOWN = 0x0002, LEFTUP = 0x0004, KEYUP = 0x0002;
+    public const uint LEFTDOWN = 0x0002, LEFTUP = 0x0004, RIGHTDOWN = 0x0008, RIGHTUP = 0x0010, KEYUP = 0x0002;
     /// The visible top-level window of a process whose title starts with "ember", or zero.
     public static IntPtr GameWindow(uint pid) {
         IntPtr found = IntPtr.Zero;
@@ -205,6 +208,12 @@ foreach ($s in $Steps) {
             Press-Key $s.key $hold
         }
     }
+    # `rmb` holds the right button from here past the capture: the game reads it as ADS, and the eased zoom needs the wait to settle before the picture.
+    $rmbHeld = $null
+    if ($s.ContainsKey('rmb')) {
+        [Win]::mouse_event([Win]::RIGHTDOWN, 0, 0, 0, [UIntPtr]::Zero)
+        $rmbHeld = [Diagnostics.Stopwatch]::StartNew()
+    }
     if ($s.ContainsKey('mouse')) {
         [Win]::mouse_event([Win]::LEFTDOWN, 0, 0, 0, [UIntPtr]::Zero)
         Start-Sleep -Milliseconds $s.mouse
@@ -212,9 +221,16 @@ foreach ($s in $Steps) {
     }
     if ($s.ContainsKey('wait')) { Start-Sleep -Milliseconds ([int](1000 * $s.wait)) }
     # A movement step (nocap) only drives the player; nothing is captured.
+    if (-not $s.ContainsKey('nocap')) {
+        Capture-Client $a (Join-Path $repo (Join-Path $Out "$Prefix-$name-A.png"))
+        if ($b) { Capture-Client $b (Join-Path $repo (Join-Path $Out "$Prefix-$name-B.png")) }
+    }
+    if ($rmbHeld) {
+        $left = [int]$s.rmb - [int]$rmbHeld.ElapsedMilliseconds
+        if ($left -gt 0) { Start-Sleep -Milliseconds $left }
+        [Win]::mouse_event([Win]::RIGHTUP, 0, 0, 0, [UIntPtr]::Zero)
+    }
     if ($s.ContainsKey('nocap')) { continue }
-    Capture-Client $a (Join-Path $repo (Join-Path $Out "$Prefix-$name-A.png"))
-    if ($b) { Capture-Client $b (Join-Path $repo (Join-Path $Out "$Prefix-$name-B.png")) }
     Write-Host ("captured {0} at {1:n1}s" -f $name, $sw.Elapsed.TotalSeconds)
 }
 

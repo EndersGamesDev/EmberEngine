@@ -1762,17 +1762,28 @@ impl EmberGame for ShooterGame {
         let stick_l = pad.map_or([0.0, 0.0], |p| p.left);
         let stick_r = pad.map_or([0.0, 0.0], |p| p.right);
 
-        // ---- ADS (RMB or LT): tighter FOV, damped sensitivity ----
+        // ---- ADS (RMB or LT): tighter FOV, the look slowed to match ----
         let aiming = input.mouse_down(MouseButton::Right) || pad.is_some_and(|p| p.lt > 0.5);
         let zoom_target = if aiming { 1.0 } else { 0.0 };
         self.zoom += (zoom_target - self.zoom) * (1.0 - (-dt * 14.0).exp());
+        // The gun I am drawn with decides the field of view, and the field
+        // of view decides the sensitivity, so it is read here, before the
+        // look, and reused by the frame below (nothing between rewrites
+        // `latest`). The frame's recoil kick is what the wire never sees.
+        let me_latest = self.my_id.and_then(|id| self.latest.get(&id)).copied();
+        let my_weapon = shown_weapon(me_latest.map_or(SIDEARM, |p| p.weapon));
+        let my_feel = weapon_feel(my_weapon);
+        let fov_now = my_feel.fov(self.zoom);
+        // A narrower view turns slower in the same ratio (a 20x scope turns
+        // twenty times slower), so a target crossing the screen costs the
+        // same hand travel at every zoom. Mouse and stick alike.
+        let look_scale = feel::look_scale(fov_now);
 
         // ---- first-person look: mouse deltas and the right stick -> yaw/pitch ----
-        let sens = LOOK_SENS * (1.0 - 0.45 * self.zoom);
+        let sens = LOOK_SENS * look_scale;
         let (mdx, mdy) = input.mouse_delta();
-        let stick_sens = if aiming { 0.55 } else { 1.0 };
-        self.yaw += mdx * sens + stick_r[0] * 2.8 * dt * stick_sens;
-        self.pitch = (self.pitch - mdy * sens + stick_r[1] * 2.0 * dt * stick_sens)
+        self.yaw += mdx * sens + stick_r[0] * 2.8 * dt * look_scale;
+        self.pitch = (self.pitch - mdy * sens + stick_r[1] * 2.0 * dt * look_scale)
             .clamp(-MAX_PITCH, MAX_PITCH);
         let (fz, fx) = self.yaw.sin_cos();
         self.aim = Vec2::new(fx, fz);
@@ -2074,9 +2085,6 @@ impl EmberGame for ShooterGame {
         // kick, the full-auto climb and the shake. All of it is cosmetic:
         // the Input sent above carried `self.pitch` and `self.aim`, so the
         // server's aim never moves with the kick.
-        let me_latest = self.my_id.and_then(|id| self.latest.get(&id)).copied();
-        let my_weapon = shown_weapon(me_latest.map_or(SIDEARM, |p| p.weapon));
-        let my_feel = weapon_feel(my_weapon);
         let cooldown = weapon_stats(my_weapon).cooldown;
         let recoil = self
             .shot_started
@@ -2110,8 +2118,17 @@ impl EmberGame for ShooterGame {
         let camera = debug_camera().unwrap_or_else(|| Camera {
             eye,
             target: eye + look,
-            fov_y_deg: my_feel.fov(self.zoom),
+            fov_y_deg: fov_now,
         });
+        // Screen-space furniture (the crosshair markers, the aim dot) is a
+        // world-space cube a fixed distance ahead, so it grows as the view
+        // narrows; scaled by the narrowing it keeps its size on screen, and
+        // through the 20x scope it stays a marker rather than a wall.
+        let view_scale = fov_now / feel::HIP_FOV;
+        // The scope view: the sniper mostly zoomed. The held gun is not
+        // drawn (at 0.6 m it would fill a 3.5 degree view) and the tube's
+        // mask stands in front of the eye instead.
+        let scoped = feel::scoped(my_weapon, self.zoom);
 
         // ---- build the scene ----
         let mut frame = Frame {
@@ -2555,11 +2572,15 @@ impl EmberGame for ShooterGame {
             let up = Vec3::Y;
             let center = eye + look * 1.2;
             let (off, edge, col) = if self.kill_t > 0.0 {
-                (0.045, 0.016, Vec3::new(1.0, 0.15, 0.1))
+                (
+                    0.045 * view_scale,
+                    0.016 * view_scale,
+                    Vec3::new(1.0, 0.15, 0.1),
+                )
             } else {
                 (
-                    0.028 * self.hitmarker_scale,
-                    0.009 * self.hitmarker_scale,
+                    0.028 * self.hitmarker_scale * view_scale,
+                    0.009 * self.hitmarker_scale * view_scale,
                     Vec3::new(1.0, 1.0, 1.0),
                 )
             };
@@ -2642,7 +2663,12 @@ impl EmberGame for ShooterGame {
                     .map_or(1.0, |t0| ((self.time - t0) / cooldown).clamp(0.0, 1.0)),
                 shots: self.shots,
             };
-            let muzzle = if let Some(a) = &self.assets {
+            let muzzle = if scoped {
+                // Nothing of the gun is drawn through the scope; the flash
+                // below reads `scoped` too, and the muzzle only anchors the
+                // rocket's smoke, which is not a sniper's.
+                base + look * 0.95
+            } else if let Some(a) = &self.assets {
                 push_weapon(&mut frame, a, my_weapon, base, rot, action, loaded);
                 push_parts(&mut frame, &a.arms, base, rot, accent, action);
                 base + rot * a.muzzle_of(my_weapon)
@@ -2668,20 +2694,17 @@ impl EmberGame for ShooterGame {
                     });
                 }
             }
-            // The sniper's scope: four opaque black bars half a metre from
-            // the eye framing the narrow field, once the zoom is mostly in.
-            // Opaque because that is the one kind of cube there is; the
-            // scene pass has no blending.
-            if my_feel.ads_fov < 30.0 && self.zoom > 0.6 {
-                let half_h = 0.5 * (my_feel.ads_fov.to_radians() * 0.5).tan();
-                // `aspect()` is winit's inner size. On the web the surface
-                // is sized from the canvas's client width times the device
-                // pixel ratio instead, which need not equal it (the note in
-                // `app.rs`), so the frame there can be a little off the
-                // edge of the view. Fixing that is engine work; this reads
-                // what the engine gives.
-                let half_w = half_h * input.aspect();
-                // The bars' basis, built outright: `from_rotation_arc`
+            // The sniper's scope: an opaque near-black mask 0.30 m from the
+            // eye with a round hole, and a reticle across the hole. Opaque
+            // because that is the one kind of cube there is; the scene pass
+            // has no blending, so the tube is 24 overlapping slabs round a
+            // 24-gon, and the world outside the hole is simply hidden
+            // behind them. The geometry is `feel::scope_mask`, sized from
+            // the current field of view so the hole is the same fraction of
+            // the screen while the zoom is still easing in, and closed at
+            // every aspect ratio without reading the window's.
+            if scoped {
+                // The mask's basis, built outright: `from_rotation_arc`
                 // picks a roll of its own for a pitched look, and the frame
                 // then turned on its axis as the aim rose. Up is what is
                 // perpendicular to both the horizontal right and the look,
@@ -2689,23 +2712,33 @@ impl EmberGame for ShooterGame {
                 // stays orthonormal when the shake tilts the look off the
                 // yaw plane.
                 let up = right3.cross(look).normalize();
-                let bar_right = look.cross(up);
-                let bar_rot = Quat::from_mat3(&Mat3::from_cols(bar_right, up, -look));
-                let c = eye + look * 0.5;
-                let thick = 0.012;
-                for (dx, dy, sx, sy) in [
-                    (0.0, half_h, half_w * 2.4, thick),
-                    (0.0, -half_h, half_w * 2.4, thick),
-                    (half_w, 0.0, thick, half_h * 2.4),
-                    (-half_w, 0.0, thick, half_h * 2.4),
-                ] {
+                let mask_right = look.cross(up);
+                let plane = |v: Vec2| mask_right * v.x + up * v.y;
+                let c = eye + look * feel::SCOPE_DIST;
+                let (a, slabs) = feel::scope_mask(fov_now);
+                for s in slabs {
+                    let t3 = plane(s.tangent);
+                    let n3 = plane(s.normal);
+                    // Scale before rotation: x along the tangent, y along
+                    // the outward normal, z along the look; the third
+                    // column is the cross product so the basis is
+                    // right-handed whichever way the tangent runs.
+                    let rot = Quat::from_mat3(&Mat3::from_cols(t3, n3, t3.cross(n3)));
                     frame.instances.push(
                         Instance::new(
-                            c + bar_right * dx + up * dy,
-                            Vec3::new(sx, sy, thick),
-                            Vec3::splat(0.01),
+                            c + plane(s.center),
+                            Vec3::new(2.0 * s.half_len, 2.0 * s.half_thick, 0.01),
+                            feel::SCOPE_BLACK,
                         )
-                        .with_rot(bar_rot),
+                        .with_rot(rot),
+                    );
+                }
+                // The reticle, a hair nearer than the slabs so its tips do
+                // not fight them for the pixels at the polygon's edge.
+                let rot = Quat::from_mat3(&Mat3::from_cols(mask_right, up, -look));
+                for size in feel::scope_reticle(a) {
+                    frame.instances.push(
+                        Instance::new(c - look * 0.01, size, feel::SCOPE_BLACK).with_rot(rot),
                     );
                 }
             }
@@ -2746,7 +2779,7 @@ impl EmberGame for ShooterGame {
             let flashing = self
                 .shot_started
                 .is_some_and(|t0| self.time - t0 < my_feel.flash_ms);
-            if flashing {
+            if flashing && !scoped {
                 inst(
                     &mut frame,
                     muzzle,
@@ -2756,7 +2789,12 @@ impl EmberGame for ShooterGame {
             }
             // Aim dot floating on the sight line (occluded by walls,
             // which reads like a laser sight).
-            inst(&mut frame, eye + look * 4.0, Vec3::splat(0.05), accent);
+            inst(
+                &mut frame,
+                eye + look * 4.0,
+                Vec3::splat(0.05 * view_scale),
+                accent,
+            );
 
             // ---- the off-hand shield, in the hand the pistol is not ----
             // Drawn last so it is the newest instance, though the scene pass
@@ -3394,6 +3432,59 @@ mod wire_tests {
         }
         // Nothing on the wire moved the player's own aim either.
         assert_eq!(game.pitch, 0.3);
+    }
+
+    /// The scope view is a frame-level fact: the sniper mostly zoomed draws
+    /// the 24 near-black slabs of the mask 0.30 m ahead of the eye at the
+    /// scope's own field of view; any other gun, or the sniper still
+    /// easing in, draws none of them and keeps the hip field's blend.
+    #[test]
+    fn the_scope_mask_is_drawn_only_for_the_sniper_mostly_zoomed() {
+        let frame_for = |weapon: u8, zoom: f32| {
+            let (chan, _wire) = net::NetChan::detached();
+            let mut game = ShooterGame::with_chan(chan, None, None);
+            game.my_id = Some(2);
+            let mut p = me(2);
+            p.weapon = weapon;
+            game.latest.insert(2, p);
+            game.was_alive = true;
+            game.zoom = zoom;
+            game.time = 5.0;
+            // A short frame: the eased zoom moves by well under 0.02.
+            game.update(&InputState::default(), 0.001)
+        };
+        let slabs_in = |frame: &Frame| {
+            frame
+                .instances
+                .iter()
+                .filter(|i| i.color == feel::SCOPE_BLACK)
+                .filter(|i| {
+                    debug_camera().is_some()
+                        || ((i.position - frame.camera.eye)
+                            .dot((frame.camera.target - frame.camera.eye).normalize())
+                            - feel::SCOPE_DIST)
+                            .abs()
+                            < 0.02
+                })
+                .count()
+        };
+        let sniper = frame_for(feel::SCOPED_WEAPON, 1.0);
+        // The mask's 24 slabs and the reticle's two bars, nothing else
+        // that colour at that distance.
+        assert_eq!(slabs_in(&sniper), feel::SCOPE_SIDES + 2);
+        if debug_camera().is_none() {
+            // The zoom eased back a little over the frame (1.4 percent at
+            // this dt), so the field is the scope's, not exactly 3.5.
+            let fov = sniper.camera.fov_y_deg;
+            assert!(fov < 5.0 && fov > 3.4, "scope field {fov}");
+        }
+        assert_eq!(
+            slabs_in(&frame_for(feel::SCOPED_WEAPON, 0.5)),
+            0,
+            "easing in"
+        );
+        assert_eq!(slabs_in(&frame_for(3, 1.0)), 0, "an AK has no scope");
+        assert_eq!(slabs_in(&frame_for(SIDEARM, 0.0)), 0, "hip");
     }
 
     /// A predicted bonk is felt once per jump. A reconciliation can rewind

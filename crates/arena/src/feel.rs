@@ -9,7 +9,7 @@
 //! one ships as written unless a test proves it wrong.
 
 use ember_engine::Rumble;
-use ember_engine::glam::Vec3;
+use ember_engine::glam::{Vec2, Vec3};
 
 use crate::sound::Sfx;
 
@@ -174,7 +174,9 @@ pub const fn weapon_feel(id: u8) -> WeaponFeel {
             volume: 0.6,
             full_auto: false,
             launch_shake: 0.0,
-            ads_fov: 22.0,
+            // A 20x scope: the hip field over twenty. The view through it
+            // is drawn by `scope_mask`, not by the viewmodel.
+            ads_fov: 3.5,
         },
         7 => WeaponFeel {
             kick_cam: 0.05,
@@ -243,6 +245,123 @@ impl WeaponFeel {
     pub fn fov(&self, zoom: f32) -> f32 {
         HIP_FOV + (self.ads_fov - HIP_FOV) * zoom.clamp(0.0, 1.0)
     }
+}
+
+/// The least the look may slow to, as a fraction of the hip sensitivity,
+/// so a field of view that reads as zero can never freeze the look.
+pub const LOOK_SCALE_FLOOR: f32 = 0.03;
+
+/// How much slower the look turns at a vertical field of view, as a
+/// fraction of the hip sensitivity. The look slows in the same ratio the
+/// view narrows, so a target crossing the screen costs the same mouse
+/// travel at every zoom and a 20x scope turns twenty times slower. The pad's
+/// right stick reads the same scale.
+#[must_use]
+pub fn look_scale(fov_deg: f32) -> f32 {
+    (fov_deg / HIP_FOV).max(LOOK_SCALE_FLOOR)
+}
+
+/// The weapon that is looked through rather than along: the sniper.
+pub const SCOPED_WEAPON: u8 = 6;
+
+/// The eased zoom above which the scope view replaces the viewmodel, so
+/// the eye sees a brief narrowing before the tube closes round it.
+pub const SCOPE_ZOOM: f32 = 0.6;
+
+/// How far in front of the eye the mask and the reticle sit, metres. Three
+/// times the 0.1 near plane, so a shake or a dip never clips them, and
+/// well inside the 0.6 m the held gun stands at.
+pub const SCOPE_DIST: f32 = 0.30;
+
+/// How many slabs close the tube: a 24-gon reads as a circle.
+pub const SCOPE_SIDES: usize = 24;
+
+/// The hole's apothem as a fraction of the visible half-height at
+/// `SCOPE_DIST`, so the circle nearly fills the shorter screen axis.
+pub const SCOPE_APOTHEM: f32 = 0.92;
+
+/// The mask's colour: opaque near-black, since the scene pass has no blend.
+pub const SCOPE_BLACK: Vec3 = Vec3::splat(0.02);
+
+/// Whether the scope view is on: the sniper, mostly zoomed.
+#[must_use]
+pub fn scoped(weapon: u8, zoom: f32) -> bool {
+    weapon == SCOPED_WEAPON && zoom > SCOPE_ZOOM
+}
+
+/// The visible half-height of the view at `SCOPE_DIST` for a vertical
+/// field of view, metres. Everything in the mask is a multiple of it.
+#[must_use]
+pub fn scope_half_height(fov_deg: f32) -> f32 {
+    SCOPE_DIST * (fov_deg.to_radians() * 0.5).tan()
+}
+
+/// One opaque slab of the scope mask, in the plane `SCOPE_DIST` in front of
+/// the eye: `center` and the unit `tangent`/`normal` pair are in metres in
+/// that plane (x along the camera's right, y along its up), the half sizes
+/// along them. The outward normal points away from the hole.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Slab {
+    pub center: Vec2,
+    pub tangent: Vec2,
+    pub normal: Vec2,
+    pub half_len: f32,
+    pub half_thick: f32,
+}
+
+impl Slab {
+    /// Whether a point of the plane lies on this slab. The renderer never
+    /// asks (it draws the slab and the depth buffer answers); the coverage
+    /// test does, so it exists only there.
+    #[cfg(test)]
+    #[must_use]
+    pub fn contains(&self, p: Vec2) -> bool {
+        let d = p - self.center;
+        d.dot(self.tangent).abs() <= self.half_len && d.dot(self.normal).abs() <= self.half_thick
+    }
+}
+
+/// The scope mask for a vertical field of view: the hole's apothem `a` and
+/// the slabs that black out everything round it. Slab `k` is a tangent to
+/// the regular 24-gon of apothem `a` at angle `k * 2 pi / 24`, eight
+/// half-heights long and six thick, standing from the polygon's edge
+/// outward. Neighbouring slabs overlap, and their reach (6.92 half-heights
+/// from the centre) is past the corner of a 21:9 view (2.54), so the mask
+/// is closed at every aspect ratio a screen has; `scope_mask_covers_a_21_9_view`
+/// pins it. Every point outside the polygon is on the slab whose angle is
+/// nearest, because that slab's inward edge is the polygon's own edge.
+#[must_use]
+pub fn scope_mask(fov_deg: f32) -> (f32, [Slab; SCOPE_SIDES]) {
+    let h = scope_half_height(fov_deg);
+    let a = SCOPE_APOTHEM * h;
+    let slabs = std::array::from_fn(|k| {
+        // Truncation-free: k is at most 23.
+        #[allow(clippy::cast_precision_loss)]
+        let theta = k as f32 * std::f32::consts::TAU / SCOPE_SIDES as f32;
+        let (s, c) = theta.sin_cos();
+        let normal = Vec2::new(c, s);
+        let tangent = Vec2::new(-s, c);
+        Slab {
+            center: normal * (a + 3.0 * h),
+            tangent,
+            normal,
+            half_len: 4.0 * h,
+            half_thick: 3.0 * h,
+        }
+    });
+    (a, slabs)
+}
+
+/// The reticle's two bars for a hole of apothem `a`: full sizes along the
+/// camera's right and up, and their depth along the look. Crossing at the
+/// centre, spanning the hole, a fiftieth of it thick.
+#[must_use]
+pub fn scope_reticle(a: f32) -> [Vec3; 2] {
+    let thick = 0.02 * a;
+    [
+        Vec3::new(2.0 * a, thick, 0.001),
+        Vec3::new(thick, 2.0 * a, 0.001),
+    ]
 }
 
 /// Which way the sideways kick goes for the `shots`-th confirmed round:
@@ -608,6 +727,109 @@ mod feel_tests {
         prioritize(&mut same);
         assert_eq!(same[0].0, Sfx::Reload);
         assert_eq!(same[2].0, Sfx::Upgrade);
+    }
+
+    #[test]
+    fn sensitivity_scales_with_the_field_of_view() {
+        assert!((look_scale(HIP_FOV) - 1.0).abs() < 1e-6, "hip is the unit");
+        let sniper = weapon_feel(SCOPED_WEAPON);
+        let scoped = look_scale(sniper.fov(1.0));
+        assert!(
+            (scoped - 1.0 / 20.0).abs() < 1e-3,
+            "a 20x scope turns 20x slower: {scoped}"
+        );
+        // Every other gun slows by exactly its own narrowing, and none
+        // reaches the floor.
+        for id in 1..=WEAPON_COUNT {
+            let f = weapon_feel(id);
+            let s = look_scale(f.fov(1.0));
+            assert!((s - f.ads_fov / HIP_FOV).abs() < 1e-6, "id {id}: {s}");
+            assert!(s >= LOOK_SCALE_FLOOR, "id {id} froze the look");
+        }
+        // Half way in, half way slowed, for a linear FOV blend.
+        let mid = weapon_feel(3).fov(0.5);
+        assert!((look_scale(mid) - (mid / HIP_FOV)).abs() < 1e-6);
+        // The floor holds a degenerate field.
+        assert_eq!(look_scale(0.0), LOOK_SCALE_FLOOR);
+        assert_eq!(look_scale(-5.0), LOOK_SCALE_FLOOR);
+    }
+
+    #[test]
+    fn the_scope_only_appears_for_the_sniper_above_the_zoom_threshold() {
+        assert!(scoped(SCOPED_WEAPON, 1.0));
+        assert!(scoped(SCOPED_WEAPON, 0.61));
+        assert!(!scoped(SCOPED_WEAPON, 0.6), "the threshold itself is hip");
+        assert!(!scoped(SCOPED_WEAPON, 0.0));
+        for id in (0..=WEAPON_COUNT).filter(|&id| id != SCOPED_WEAPON) {
+            assert!(!scoped(id, 1.0), "id {id} has no scope");
+        }
+        // The scope's own field of view is the one below the threshold's
+        // narrowing, so the mask always opens on a world already zooming.
+        assert!(weapon_feel(SCOPED_WEAPON).fov(SCOPE_ZOOM) < HIP_FOV * 0.5);
+        assert!((weapon_feel(SCOPED_WEAPON).fov(1.0) - 3.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn scope_mask_covers_a_21_9_view() {
+        // The threshold's field (a wide hole) and the full scope (a tiny
+        // one): the mask is a pure function of the half-height, so both
+        // must close.
+        for fov in [weapon_feel(SCOPED_WEAPON).fov(SCOPE_ZOOM), 3.5, 70.0] {
+            let h = scope_half_height(fov);
+            let (a, slabs) = scope_mask(fov);
+            assert!((a - SCOPE_APOTHEM * h).abs() < 1e-7);
+            // The polygon's corners lie on its circumcircle, and the ring
+            // between the apothem and it is inside the hole at the corners
+            // and on a slab at the edges; the claim of full cover starts at
+            // the circumradius.
+            #[allow(clippy::cast_precision_loss)]
+            let sides = SCOPE_SIDES as f32;
+            let circum = a / (std::f32::consts::PI / sides).cos();
+            let half_w = h * 21.0 / 9.0;
+            let (nx, ny) = (421, 181);
+            let mut outside = 0;
+            let mut inside = 0;
+            for j in 0..ny {
+                for i in 0..nx {
+                    #[allow(clippy::cast_precision_loss)]
+                    let p = Vec2::new(
+                        -half_w + 2.0 * half_w * i as f32 / (nx - 1) as f32,
+                        -h + 2.0 * h * j as f32 / (ny - 1) as f32,
+                    );
+                    let on = slabs.iter().filter(|s| s.contains(p)).count();
+                    let r = p.length();
+                    if r > circum {
+                        assert!(on >= 1, "fov {fov}: {p} at r/h {} is uncovered", r / h);
+                        outside += 1;
+                    } else if r < 0.9 * a {
+                        assert_eq!(on, 0, "fov {fov}: {p} at r/h {} is masked", r / h);
+                        inside += 1;
+                    }
+                }
+            }
+            assert!(outside > 1000 && inside > 1000, "{outside} / {inside}");
+            // The corner of the view, and well past it, are still black.
+            let far = Vec2::new(half_w, h) * 1.5;
+            assert!(slabs.iter().any(|s| s.contains(far)));
+            // The slabs are the plan's boxes: 8h long, 6h thick, standing
+            // on the polygon's edge at every one of the 24 angles.
+            for (k, s) in slabs.iter().enumerate() {
+                assert!((s.half_len - 4.0 * h).abs() < 1e-7);
+                assert!((s.half_thick - 3.0 * h).abs() < 1e-7);
+                assert!((s.normal.length() - 1.0).abs() < 1e-6);
+                assert!(s.tangent.dot(s.normal).abs() < 1e-6, "slab {k} is skewed");
+                let inner_edge = s.center.dot(s.normal) - s.half_thick;
+                assert!(
+                    (inner_edge - a).abs() < 1e-6,
+                    "slab {k} does not start at the edge"
+                );
+            }
+        }
+        // The reticle spans the hole and is thin against it.
+        let [horiz, vert] = scope_reticle(1.0);
+        assert_eq!(horiz.x, 2.0);
+        assert_eq!(vert.y, 2.0);
+        assert!(horiz.y < 0.05 && vert.x < 0.05);
     }
 
     #[test]
