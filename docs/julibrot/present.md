@@ -381,7 +381,7 @@ Native reference-shift fixtures construct one physical centre before and after a
 
 Native zoom-interface tests decompose scales on both sides of `zoom_log2=14`, prove present never forms the deep absolute f32 scale, and pin the displayed shallow/perturbation POLICY transition while leaving the `EscapeGrid` and warp-ratio interfaces unchanged.
 
-Native anchor-warp tests pin exact flat plans against the full forward chain, enforce `WARP_MAX_ERROR_PX=1.0`, require over-budget or unbounded relief to clear, and report max and p95 for every plan. A counted policy test requires all validation modes to execute the full 9-by-9-by-5 corpus; a warmed sokol run measured 1,536 fully planned and asserted cases in `0.301460` seconds, or `0.196263` milliseconds per plan. The uploaded-row quarter-pixel oracle remains unconditional.
+Native anchor-warp tests pin exact flat plans against the full forward chain, enforce `WARP_MAX_ERROR_PX=1.0`, require over-budget or unbounded relief to clear, and report max and p95 for every plan. A counted policy test requires all validation modes to execute the full 9-by-9-by-5 corpus; a warmed sokol run measured 1,536 fully planned and asserted cases in `0.302874` seconds, or `0.197184` milliseconds per plan. The uploaded-row quarter-pixel oracle remains unconditional.
 
 A second anchor test pins the retirement of the exact plan: at zero camera angles and `h=0`, for every distance in `{2,8,64}`, the solved four-anchor rows equal math's `warp_matrix` forward within `1e−6` per f32-packed coefficient and the sampled corpus reports below `1e−9`, which is the evidence that deleting `WarpKind::FlatExact` deleted a code path and not a capability.
 
