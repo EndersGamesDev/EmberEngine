@@ -41,11 +41,17 @@ function showStatus(message) {
   STATUS.textContent = message;
 }
 
+function surviving(facts) {
+  const count = facts.transient_fence_refusals;
+  if (!count) return "";
+  return ` — survived ${count} transient fence refusal${count === 1 ? "" : "s"}, last ${facts.last_transient_refusal}`;
+}
+
 function liveStatus(facts) {
   if (facts.completed_scene_id === null || facts.completed_scene_id === undefined) {
-    return "waiting for first completed scene";
+    return `waiting for first completed scene${surviving(facts)}`;
   }
-  return `showing scene ${facts.completed_scene_id}: ${facts.refinement_level} ${facts.delivered_width}x${facts.delivered_height} at cap ${facts.delivered_iteration_cap}`;
+  return `showing scene ${facts.completed_scene_id}: ${facts.refinement_level} ${facts.delivered_width}x${facts.delivered_height} at cap ${facts.delivered_iteration_cap}${surviving(facts)}`;
 }
 
 function renderFacts(facts) {
@@ -65,6 +71,16 @@ function bindControls(api) {
     renderFacts(facts);
     return facts;
   };
+  // The app answers false only once its loop has stopped for a typed cause, so a refusal it
+  // survived still schedules the next turn; a throw from the query itself is treated as stopped.
+  const stillTurning = () => {
+    try {
+      return api.app_needs_refresh();
+    } catch (error) {
+      console.error(error);
+      return false;
+    }
+  };
   const scheduleFrame = () => {
     if (RAF_PENDING) return;
     RAF_PENDING = true;
@@ -72,11 +88,18 @@ function bindControls(api) {
       RAF_PENDING = false;
       try {
         api.app_refresh(nowMs);
-        showStatus(liveStatus(refreshFacts()));
-        if (api.app_needs_refresh()) scheduleFrame();
+        const facts = refreshFacts();
+        if (facts.loop_stopped_reason) fail(facts.loop_stopped_reason);
+        else showStatus(liveStatus(facts));
+        if (stillTurning()) scheduleFrame();
       } catch (error) {
         fail(error);
-        if (api.app_needs_refresh()) scheduleFrame();
+        try {
+          renderFacts(JSON.parse(api.app_facts_json()));
+        } catch (factsError) {
+          console.error(factsError);
+        }
+        if (stillTurning()) scheduleFrame();
       }
     });
   };

@@ -96,6 +96,10 @@ A scene is due when MAIN changed since the last accepted submission or a refinem
 
 Scene-target extent equals that level’s delivered grid extent, so Preview, Interactive, and Final may reallocate only the available member of present’s two-texture pair; every such event increments `texture_reallocations`, while the retained source remains valid until promotion.
 
+Four facts separate the three ways the reference path can go quiet, because the visible symptom of all three is one frozen overlay: `worker_request_depth` is the depth of orbit requests main has handed the producer, `outstanding_reference_count` and `outstanding_reference_generation` are how many submissions the app is still waiting on and the newest generation among them, and `navigation_pending_depth` is the owner’s coalesced-navigation depth. A producer that never admits shows a non-zero request depth beside a frozen worker epoch; an app that never submits shows depth zero beside a stale requested view; navigation that coalesces without ever resolving shows a non-zero pending depth while both other counts sit at zero.
+
+The loop reports its own liveness on the same terms: `refresh_status` names the terminal state of the last completed turn, `transient_fence_refusals` counts the bounded fence refusals the loop retried rather than died on, `last_transient_refusal` renders the newest of them as its typed text, `presented_view_stale` says whether the image on the canvas belongs to an older requested view than the one now requested, and `loop_stopped_reason` is absent until the loop stops and then carries the one typed cause it stopped for. None of these is a measurement and none is ever given a number that was not observed.
+
 Aggregate rebase and glitch totals are `unavailable` during normal gather-only rendering; only an explicit labelled measurement readback may populate them, with its own fence, poll count, bytes, and wall.
 
 ### 2.5 One refresh, in exact cross-slice call order
@@ -114,7 +118,7 @@ App next acquires the sole surface image, builds `FrameState`, calls present `Pr
 
 On matching `WarpCompleted`, present has completed its four-byte fence and recorded the ending timestamp, so app calls `SurfaceTexture::present`, releases the token, publishes facts, and schedules another refresh only when animation, input, pending refinement, pending scene completion, or pending worker work requires one.
 
-On matching warp `FenceRefused`, cancellation, device loss, or generation-tagged error, app drops the unpresented image, releases the token, preserves controls, and prints the typed event; it never calls `present()` inside either scene or warp measurement.
+On matching warp `FenceRefused`, cancellation, device loss, or generation-tagged error, app drops the unpresented image, releases the token, preserves controls, and prints the typed event; it never calls `present()` inside either scene or warp measurement. Dropping the image is not the same as giving up on the page: whether the refresh loop continues is decided by §2.7’s classification of the refusal, not by the fact that one image was discarded.
 
 ### 2.6 One zoom step, in exact cross-slice call order
 
@@ -135,6 +139,12 @@ The next completed scene atomically promotes its texture, pose, grid, palette, g
 Present owns both four-byte fences: scene cost begins immediately before scene uniform writes and encoding, warp cost begins immediately before the 128-byte HOT write and warp encoding, and each ends only when its mapped fence completion is observed; app calls `present()` afterward.
 
 No timestamp query is requested; present’s `poll` performs at most one `device.poll(wgpu::Maintain::Poll)` per pending fence per call, counts every poll, checks generation and device loss, refuses at 4,096 polls or 30,000 ms, and relies on app’s zero-timeout yield between calls.
+
+The bounded fence is the never-hang mechanism; abandoning the page is not, and the two must not be confused. A `Deadline` or `PollLimit` refusal on either fence says only that the bounded observation window closed before the fence did, which is exactly what a background-throttled tab manufactures: the wall keeps running at full speed while the callback queue is served once a second. The GPU in that case is healthy and the next frame would have completed. So app counts the refusal, displays it, retires the refused submission, and retries the same work: the same refinement level stays due, and a refused warp re-arms the run so that the next surface image is actually requested. A `Cancelled` refusal is treated the same way, since app or presenter cancelling its own submission is a reason to submit again, never a reason to stop.
+
+Only two things stop the refresh loop: device loss — an uncaptured error, a lost device, or a fence callback that itself failed, which is a `Device` refusal — and a typed worker refusal, which is every worker refusal that reaches app, the credit shaper’s `Delay` being a producer-internal wait that surfaces as a pending request depth rather than as an error. A typed refusal that escapes one refresh turn is latched: the loop stops, `loop_stopped_reason` carries that one cause, `app_needs_refresh` answers false and keeps answering false, and the page states the typed cause instead of restating a broken invariant sixty times a second.
+
+`app_needs_refresh` is therefore true whenever a scene fence is in flight, a surface image is pending, worker work is outstanding, a refinement level is due, a run is armed, or the presented image belongs to an older requested view than the one now requested; it is false only when none of those hold or the loop has stopped. The last term is what makes the policy complete: a refusal retires the only outstanding submission, and without a term for “the canvas is showing yesterday’s view” the loop would correctly observe that nothing is pending and correctly stop, leaving a live page frozen on a stale image. The stale term compares the requested view against the stamp carried by the last presented image — generation, centre revision, cap, palette, plane origin, view mode, zoom, and both plane angles — so it clears exactly when a warp has put the requested view on the canvas.
 
 The timer probe performs at most 4,000,000 consecutive `performance.now()` reads, stops after 32 positive transitions or 500 ms, and uses the smallest positive transition `Q`; no positive transition makes timing unavailable without preventing requested rendering.
 

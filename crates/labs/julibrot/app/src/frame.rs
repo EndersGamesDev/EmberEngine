@@ -3,6 +3,11 @@
 use ember_julibrot_kernels::RefinementLevel;
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_kernels::RefinementPlan;
+#[cfg(any(target_arch = "wasm32", test))]
+use ember_julibrot_present::{FenceRefusal, SubmissionKind};
+
+#[cfg(any(target_arch = "wasm32", test))]
+use crate::AppError;
 
 const LEVELS: [RefinementLevel; 3] = [
     RefinementLevel::Preview,
@@ -53,12 +58,78 @@ trait PresenterPoll {
     fn poll_once(&mut self, now_ms: f64) -> Vec<Self::Event>;
 }
 
+/// What one present fence refusal means for the life of the refresh loop.
 #[cfg(any(target_arch = "wasm32", test))]
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RefusalClass {
+    /// A bounded wall or poll budget elapsed with the fence still unobserved.
+    Transient,
+    /// App or presenter cancelled the submission in favour of newer work.
+    Cancelled,
+    /// The four-byte fence callback itself failed, which is device-level loss.
+    Device,
+}
+
+/// Names the outcome of applying the refusal policy to one refused submission.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RefusalOutcome {
+    class: RefusalClass,
+    retired_scene: bool,
+}
+
+/// Classifies a present fence refusal into the two lives it can have.
+///
+/// A deadline or a poll limit says only that the bounded observation window closed before the
+/// fence did, which is exactly what a background-throttled tab produces: the wall keeps running
+/// while the callback queue does not. Treating that as terminal kills a page whose GPU is
+/// healthy. Only a failed fence callback is evidence that the device is gone.
+#[cfg(any(target_arch = "wasm32", test))]
+const fn classify_refusal(reason: FenceRefusal) -> RefusalClass {
+    match reason {
+        FenceRefusal::PollLimit | FenceRefusal::Deadline => RefusalClass::Transient,
+        FenceRefusal::Cancelled => RefusalClass::Cancelled,
+        FenceRefusal::Device => RefusalClass::Device,
+    }
+}
+
+/// Renders one present fence refusal as the typed app error the page displays.
+#[cfg(any(target_arch = "wasm32", test))]
+fn fence_error(
+    kind: SubmissionKind,
+    reason: FenceRefusal,
+    polls: u32,
+    wall_ms: f64,
+) -> AppError {
+    let operation = match kind {
+        SubmissionKind::Scene => "scene fence",
+        SubmissionKind::Warp => "warp fence",
+    };
+    match reason {
+        FenceRefusal::PollLimit => AppError::CompletionPollLimit { operation, polls },
+        FenceRefusal::Deadline => AppError::Deadline {
+            operation,
+            deadline_ms: wall_ms,
+        },
+        FenceRefusal::Device => AppError::Mapping {
+            operation,
+            detail: "four-byte fence callback failed".to_string(),
+        },
+        FenceRefusal::Cancelled => AppError::Present(format!(
+            "{operation} was cancelled after {polls} polls and {wall_ms} ms"
+        )),
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Debug, Default, PartialEq)]
 struct FrameLoop {
     schedule: RefinementSchedule,
     requested_run: bool,
     completed_run: bool,
+    transient_refusals: u32,
+    last_transient: Option<AppError>,
+    stopped: Option<AppError>,
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -121,17 +192,86 @@ impl FrameLoop {
         }
     }
 
+    /// Applies the fence-refusal policy to one refused submission of either kind.
+    ///
+    /// A transient refusal retires the submission, is counted, and re-arms the run: the refused
+    /// warp is the only thing that would have asked for the next surface image, so without the
+    /// re-arm a single-frame-on-demand page sits on a stale image with nothing pending and never
+    /// schedules another refresh. Device loss is latched instead, and stops the loop.
+    fn refused(
+        &mut self,
+        kind: SubmissionKind,
+        reason: FenceRefusal,
+        id: u64,
+        polls: u32,
+        wall_ms: f64,
+    ) -> RefusalOutcome {
+        let class = classify_refusal(reason);
+        let error = fence_error(kind, reason, polls, wall_ms);
+        let retired_scene = matches!(kind, SubmissionKind::Scene) && self.retired(id);
+        match class {
+            RefusalClass::Device => self.stop(error),
+            RefusalClass::Transient | RefusalClass::Cancelled => self.record_transient(error),
+        }
+        RefusalOutcome {
+            class,
+            retired_scene,
+        }
+    }
+
+    /// Counts one transient refusal and re-arms exactly one more run.
+    ///
+    /// `completed_run` mirrors the ladder rather than being cleared outright: when no level
+    /// remains the re-armed run is already complete, so the very next warp submission retires the
+    /// request and the page returns to its on-demand rhythm instead of spinning forever after a
+    /// refusal it survived.
+    fn record_transient(&mut self, error: AppError) {
+        self.transient_refusals = self.transient_refusals.saturating_add(1);
+        self.last_transient = Some(error);
+        self.requested_run = true;
+        self.completed_run = !self.schedule.pending();
+    }
+
+    /// Latches the first terminal refusal; a later one never overwrites the cause.
+    fn stop(&mut self, error: AppError) {
+        if self.stopped.is_none() {
+            self.stopped = Some(error);
+        }
+    }
+
+    fn stopped(&self) -> Option<&AppError> {
+        self.stopped.as_ref()
+    }
+
+    const fn transient_refusals(&self) -> u32 {
+        self.transient_refusals
+    }
+
+    fn last_transient(&self) -> Option<&AppError> {
+        self.last_transient.as_ref()
+    }
+
+    /// Reports whether JavaScript must schedule another cooperative turn.
+    ///
+    /// `view_stale` carries the term the loop had no way to express before: an image was
+    /// presented for an older requested view, so work remains even though no submission is
+    /// outstanding. A stopped loop answers false, and only then.
     const fn needs_refresh(
         &self,
         scene_in_flight: bool,
         warp_in_flight: bool,
         auxiliary_pending: bool,
+        view_stale: bool,
     ) -> bool {
+        if self.stopped.is_some() {
+            return false;
+        }
         scene_in_flight
             || warp_in_flight
             || auxiliary_pending
             || self.requested_run
             || self.schedule.pending()
+            || view_stale
     }
 }
 
@@ -237,7 +377,7 @@ mod browser {
     };
     use ember_lab_heap::{DataSpan, GpuKernelExecutor, GpuKernelExecutorConfig};
 
-    use super::FrameLoop;
+    use super::{FrameLoop, RefusalClass};
     use crate::{
         AppError, BrowserRuntime, FramePolicy, FramePolicyTracker, RefreshOutcome, RefreshStatus,
         RunRequests, ViewerController,
@@ -277,6 +417,31 @@ mod browser {
         view: ember_julibrot_math::ViewMode,
     }
 
+    /// Everything the warp reproduces for one surface image, stamped when it is submitted.
+    ///
+    /// Comparing the stamp carried by the last presented image against the stamp of the current
+    /// request is what makes "the page is showing an older view" a fact the loop can read, rather
+    /// than something only the eye can see.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct ViewStamp {
+        generation_applied: u32,
+        centre_revision: u32,
+        requested_iter_cap: u32,
+        palette_id: u32,
+        plane_origin_f64: [f64; 4],
+        view: ember_julibrot_math::ViewMode,
+        zoom_log2: f64,
+        plane_angles: [f64; 2],
+    }
+
+    /// What one poll of present's event queue said about this turn.
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    struct ObservedEvents {
+        presented: bool,
+        refused: bool,
+        cancelled: bool,
+    }
+
     /// Browser-only owner of the heap, kernels, worker endpoint, presenter, and frame schedule.
     pub struct BrowserFrameLoop {
         device: std::sync::Arc<wgpu::Device>,
@@ -303,8 +468,9 @@ mod browser {
         frame_policy: FramePolicyTracker,
         last_dispatch: Option<DispatchFacts>,
         last_warp_source: Option<u64>,
-        pending_warp_zoom: Option<(u64, f64)>,
-        last_presented_zoom_log2: Option<f64>,
+        pending_warp_view: Option<(u64, ViewStamp)>,
+        presented_view: Option<ViewStamp>,
+        last_status: RefreshStatus,
     }
 
     impl BrowserFrameLoop {
@@ -404,19 +570,45 @@ mod browser {
                 frame_policy: FramePolicyTracker::new(),
                 last_dispatch: None,
                 last_warp_source: None,
-                pending_warp_zoom: None,
-                last_presented_zoom_log2: None,
+                pending_warp_view: None,
+                presented_view: None,
+                last_status: RefreshStatus::Waiting,
             };
             Ok(frame_loop)
         }
 
         /// Executes one bounded refresh and immediate pre-yield completion observation.
         ///
+        /// A typed refusal that escapes one turn is latched: the loop stops and every later call
+        /// returns the same cause, so the page reports one honest reason instead of restating a
+        /// broken invariant sixty times a second. A transient fence refusal never escapes.
+        ///
         /// # Errors
         ///
         /// Returns the first typed cross-slice refusal without looping or presenting an unfinished
         /// surface image.
         pub fn refresh(
+            &mut self,
+            runtime: &mut BrowserRuntime,
+            viewer: &mut ViewerController,
+            requests: &mut RunRequests,
+            now_ms: f64,
+        ) -> Result<RefreshOutcome, AppError> {
+            if let Some(stopped) = self.loop_state.stopped() {
+                return Err(stopped.clone());
+            }
+            let result = self.refresh_turn(runtime, viewer, requests, now_ms);
+            match &result {
+                Ok(outcome) => self.last_status = outcome.status,
+                Err(error) => {
+                    self.loop_state.stop(error.clone());
+                    self.last_status = RefreshStatus::FailedTyped;
+                }
+            }
+            result
+        }
+
+        fn refresh_turn(
             &mut self,
             runtime: &mut BrowserRuntime,
             viewer: &mut ViewerController,
@@ -438,7 +630,8 @@ mod browser {
                 .checked_add(1)
                 .ok_or(AppError::GenerationExhausted)?;
             let events = FrameLoop::refresh(&mut self.presenter, now_ms);
-            let presented = self.handle_events(runtime, events)?;
+            let observed = self.handle_events(runtime, events)?;
+            let presented = observed.presented;
             if requests.frame {
                 self.loop_state
                     .accept_request(self.main.generation_applied, self.current_orbit.is_some());
@@ -513,8 +706,7 @@ mod browser {
                                 runtime.release_unsubmitted_warp(self.loop_state.generation());
                             return Err(error);
                         }
-                        self.pending_warp_zoom =
-                            Some((receipt.warp_id, viewer.requested().zoom_log2));
+                        self.pending_warp_view = Some((receipt.warp_id, self.view_stamp(viewer)));
                         self.loop_state.warp_submitted();
                     }
                     Err(AppError::SurfaceSkipped { .. }) => {
@@ -532,6 +724,10 @@ mod browser {
                 RefreshStatus::Presented
             } else if warp_id.is_some() || scene_id.is_some() {
                 RefreshStatus::Submitted
+            } else if observed.cancelled {
+                RefreshStatus::Cancelled
+            } else if observed.refused {
+                RefreshStatus::Refused
             } else {
                 RefreshStatus::Waiting
             };
@@ -560,8 +756,8 @@ mod browser {
             &mut self,
             runtime: &mut BrowserRuntime,
             events: Vec<PresentEvent>,
-        ) -> Result<bool, AppError> {
-            let mut presented = false;
+        ) -> Result<ObservedEvents, AppError> {
+            let mut observed = ObservedEvents::default();
             let mut refusal = None;
             for event in events {
                 match event {
@@ -589,11 +785,12 @@ mod browser {
                             .record(measurement.wall_ms)
                             .map_err(|error| AppError::Present(error.to_string()))?;
                         if runtime.complete_warp(measurement.id) {
-                            presented = true;
-                            if let Some((warp_id, zoom_log2)) = self.pending_warp_zoom.take()
+                            observed.presented = true;
+                            if let Some((warp_id, stamp)) = self.pending_warp_view
                                 && warp_id == measurement.id
                             {
-                                self.last_presented_zoom_log2 = Some(zoom_log2);
+                                self.pending_warp_view = None;
+                                self.presented_view = Some(stamp);
                             }
                         }
                     }
@@ -604,29 +801,30 @@ mod browser {
                         polls,
                         wall_ms,
                     } => {
-                        match kind {
-                            SubmissionKind::Scene => {
-                                if self.loop_state.retired(id) {
-                                    self.prepared_level = None;
-                                }
-                            }
-                            SubmissionKind::Warp => {
-                                let _dropped = runtime.refuse_warp(id);
-                                if self
-                                    .pending_warp_zoom
-                                    .is_some_and(|pending| pending.0 == id)
-                                {
-                                    self.pending_warp_zoom = None;
-                                }
+                        let outcome = self.loop_state.refused(kind, reason, id, polls, wall_ms);
+                        if outcome.retired_scene {
+                            self.prepared_level = None;
+                        }
+                        if matches!(kind, SubmissionKind::Warp) {
+                            let _dropped = runtime.refuse_warp(id);
+                            if self.pending_warp_view.is_some_and(|pending| pending.0 == id) {
+                                self.pending_warp_view = None;
                             }
                         }
-                        if refusal.is_none() {
-                            refusal = Some(fence_error(kind, reason, polls, wall_ms));
+                        match outcome.class {
+                            RefusalClass::Device => {
+                                if refusal.is_none() {
+                                    refusal =
+                                        Some(super::fence_error(kind, reason, polls, wall_ms));
+                                }
+                            }
+                            RefusalClass::Cancelled => observed.cancelled = true,
+                            RefusalClass::Transient => observed.refused = true,
                         }
                     }
                 }
             }
-            refusal.map_or(Ok(presented), Err)
+            refusal.map_or(Ok(observed), Err)
         }
 
         fn prepare_due_level(&mut self) {
@@ -675,6 +873,33 @@ mod browser {
                 self.prepared_level = None;
             }
             self.scene_selection = Some(selection);
+        }
+
+        /// Stamps the view the next presented image is expected to reproduce.
+        fn view_stamp(&self, viewer: &ViewerController) -> ViewStamp {
+            let requested = viewer.requested();
+            ViewStamp {
+                generation_applied: self.main.generation_applied,
+                centre_revision: self.main.centre_revision,
+                requested_iter_cap: self.main.requested_iter_cap,
+                palette_id: self.main.palette_id,
+                plane_origin_f64: self.main.plane_origin_f64,
+                view: requested.view,
+                zoom_log2: requested.zoom_log2,
+                plane_angles: [
+                    requested.plane_angles.theta_1,
+                    requested.plane_angles.theta_2,
+                ],
+            }
+        }
+
+        /// Reports whether the image on the canvas belongs to an older requested view.
+        ///
+        /// Nothing has been presented before the first warp completes, so an unstarted page reads
+        /// stale, which is the honest answer: it is showing no view at all.
+        #[must_use]
+        pub fn presented_view_is_stale(&self, viewer: &ViewerController) -> bool {
+            self.presented_view != Some(self.view_stamp(viewer))
         }
 
         fn prepared_extent(&self) -> [u32; 2] {
@@ -1009,13 +1234,42 @@ mod browser {
 
         /// Returns whether cooperative refresh work remains.
         #[must_use]
-        pub fn pending(&self, runtime: &BrowserRuntime) -> bool {
+        pub fn pending(&self, runtime: &BrowserRuntime, viewer: &ViewerController) -> bool {
             self.loop_state.needs_refresh(
                 self.presenter.facts().in_flight_scene_id.is_some(),
                 runtime.has_pending_surface(),
                 self.owner_endpoint.pending_request_depth() != 0
                     || !self.submitted_references.is_empty(),
+                self.presented_view_is_stale(viewer),
             )
+        }
+
+        /// Returns the count of transient fence refusals this session survived.
+        #[must_use]
+        pub const fn transient_refusals(&self) -> u32 {
+            self.loop_state.transient_refusals()
+        }
+
+        /// Returns the newest transient fence refusal, rendered as its typed text.
+        #[must_use]
+        pub fn last_transient_refusal(&self) -> Option<String> {
+            self.loop_state
+                .last_transient()
+                .map(std::string::ToString::to_string)
+        }
+
+        /// Returns the latched terminal cause once the loop has stopped.
+        #[must_use]
+        pub fn stopped_reason(&self) -> Option<String> {
+            self.loop_state
+                .stopped()
+                .map(std::string::ToString::to_string)
+        }
+
+        /// Returns the status of the most recent completed refresh turn.
+        #[must_use]
+        pub const fn last_status(&self) -> RefreshStatus {
+            self.last_status
         }
 
         /// Reports whether a progressive level is due or has a scene fence pending.
@@ -1063,8 +1317,8 @@ mod browser {
 
         /// Returns the latest post-fence presented zoom, when known.
         #[must_use]
-        pub const fn last_presented_zoom_log2(&self) -> Option<f64> {
-            self.last_presented_zoom_log2
+        pub fn last_presented_zoom_log2(&self) -> Option<f64> {
+            self.presented_view.map(|stamp| stamp.zoom_log2)
         }
 
         /// Returns the zoom captured by the currently accepted reference orbit.
@@ -1115,34 +1369,6 @@ mod browser {
     fn registry_error(error: RegistryError) -> AppError {
         AppError::Worker(format!("orbit registry refusal: {error:?}"))
     }
-
-    fn fence_error(
-        kind: SubmissionKind,
-        reason: ember_julibrot_present::FenceRefusal,
-        polls: u32,
-        wall_ms: f64,
-    ) -> AppError {
-        use ember_julibrot_present::FenceRefusal;
-
-        let operation = match kind {
-            SubmissionKind::Scene => "scene fence",
-            SubmissionKind::Warp => "warp fence",
-        };
-        match reason {
-            FenceRefusal::PollLimit => AppError::CompletionPollLimit { operation, polls },
-            FenceRefusal::Deadline => AppError::Deadline {
-                operation,
-                deadline_ms: wall_ms,
-            },
-            FenceRefusal::Device => AppError::Mapping {
-                operation,
-                detail: "four-byte fence callback failed".to_string(),
-            },
-            FenceRefusal::Cancelled => AppError::Present(format!(
-                "{operation} was cancelled after {polls} polls and {wall_ms} ms"
-            )),
-        }
-    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1154,10 +1380,14 @@ mod tests {
     use ember_julibrot_math::EscapeParams;
 
     use super::{
-        FrameLoop, LEVELS, PresenterPoll, RefinementLevel, RefinementSchedule, arrival_is_current,
-        published_iteration_cap,
+        FenceRefusal, FrameLoop, LEVELS, PresenterPoll, RefinementLevel, RefinementSchedule,
+        RefusalClass, SubmissionKind, arrival_is_current, fence_error, published_iteration_cap,
     };
     use crate::FramePolicy;
+
+    /// Poll budget and wall the version-one present configuration refuses at.
+    const SCENE_POLLS: u32 = 4_096;
+    const SCENE_DEADLINE_MS: f64 = 30_000.0;
 
     #[derive(Clone, Copy, Debug, PartialEq)]
     struct PendingFakeScene {
@@ -1170,15 +1400,28 @@ mod tests {
     enum FakeEvent {
         Completed(PendingFakeScene),
         Deadline(u64),
+        WarpCompleted(u64),
+        Refused {
+            id: u64,
+            kind: SubmissionKind,
+            reason: FenceRefusal,
+            polls: u32,
+            wall_ms: f64,
+        },
     }
 
     #[derive(Debug, Default)]
     struct FakePresenter {
         next_id: u64,
         pending: Option<PendingFakeScene>,
+        pending_warp: Option<u64>,
         callback: Option<FakeEvent>,
+        warp_callback: Option<FakeEvent>,
         fence_observations: u32,
+        warp_fence_observations: u32,
         submissions: Vec<RefinementLevel>,
+        warp_submissions: Vec<u64>,
+        presented_warps: Vec<u64>,
     }
 
     impl FakePresenter {
@@ -1194,6 +1437,13 @@ mod tests {
             scene.id
         }
 
+        fn submit_warp(&mut self) -> u64 {
+            self.next_id += 1;
+            self.pending_warp = Some(self.next_id);
+            self.warp_submissions.push(self.next_id);
+            self.next_id
+        }
+
         fn fire_completed_callback(&mut self) {
             self.callback = self.pending.map(FakeEvent::Completed);
         }
@@ -1201,21 +1451,42 @@ mod tests {
         fn fire_deadline(&mut self) {
             self.callback = self.pending.map(|scene| FakeEvent::Deadline(scene.id));
         }
+
+        fn fire_warp_completed(&mut self) {
+            self.warp_callback = self.pending_warp.map(FakeEvent::WarpCompleted);
+        }
+
+        fn fire_warp_refusal(&mut self, reason: FenceRefusal, polls: u32, wall_ms: f64) {
+            self.warp_callback = self.pending_warp.map(|id| FakeEvent::Refused {
+                id,
+                kind: SubmissionKind::Warp,
+                reason,
+                polls,
+                wall_ms,
+            });
+        }
     }
 
     impl PresenterPoll for FakePresenter {
         type Event = FakeEvent;
 
         fn poll_once(&mut self, _now_ms: f64) -> Vec<Self::Event> {
-            if self.pending.is_none() {
-                return Vec::new();
+            let mut events = Vec::new();
+            if self.pending.is_some() {
+                self.fence_observations += 1;
+                if let Some(event) = self.callback.take() {
+                    self.pending = None;
+                    events.push(event);
+                }
             }
-            self.fence_observations += 1;
-            let Some(event) = self.callback.take() else {
-                return Vec::new();
-            };
-            self.pending = None;
-            vec![event]
+            if self.pending_warp.is_some() {
+                self.warp_fence_observations += 1;
+                if let Some(event) = self.warp_callback.take() {
+                    self.pending_warp = None;
+                    events.push(event);
+                }
+            }
+            events
         }
     }
 
@@ -1230,30 +1501,97 @@ mod tests {
         }
     }
 
-    fn drive_refresh(
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    struct TurnOutcome {
+        scene_id: Option<u64>,
+        warp_id: Option<u64>,
+        presented: bool,
+        refused: bool,
+    }
+
+    /// Drives one turn in the browser's order: poll, then scene, then surface warp.
+    fn drive_turn(
         frame_loop: &mut FrameLoop,
         presenter: &mut FakePresenter,
         clock: FakeClock,
-    ) -> Option<u64> {
-        let mut refused = false;
+        policy: FramePolicy,
+        warps: bool,
+    ) -> TurnOutcome {
+        let mut outcome = TurnOutcome::default();
         for event in FrameLoop::refresh(presenter, clock.now_ms) {
             match event {
                 FakeEvent::Completed(scene) => {
                     frame_loop.completed(scene.id, scene.generation, scene.level);
                 }
+                FakeEvent::WarpCompleted(id) => {
+                    presenter.presented_warps.push(id);
+                    outcome.presented = true;
+                }
                 FakeEvent::Deadline(id) => {
-                    frame_loop.retired(id);
-                    refused = true;
+                    let refusal = frame_loop.refused(
+                        SubmissionKind::Scene,
+                        FenceRefusal::Deadline,
+                        id,
+                        SCENE_POLLS,
+                        SCENE_DEADLINE_MS,
+                    );
+                    outcome.refused = refusal.class != RefusalClass::Device;
+                }
+                FakeEvent::Refused {
+                    id,
+                    kind,
+                    reason,
+                    polls,
+                    wall_ms,
+                } => {
+                    let refusal = frame_loop.refused(kind, reason, id, polls, wall_ms);
+                    outcome.refused = refusal.class != RefusalClass::Device;
                 }
             }
         }
-        if refused {
-            return None;
+        if frame_loop.stopped().is_some() {
+            return outcome;
         }
-        let level = frame_loop.due()?;
-        let id = presenter.submit(frame_loop.generation(), level);
-        frame_loop.submitted(id, level);
-        Some(id)
+        if !outcome.refused && let Some(level) = frame_loop.due() {
+            let id = presenter.submit(frame_loop.generation(), level);
+            frame_loop.submitted(id, level);
+            outcome.scene_id = Some(id);
+        }
+        if warps && presenter.pending_warp.is_none() && frame_loop.warp_requested(policy) {
+            outcome.warp_id = Some(presenter.submit_warp());
+            frame_loop.warp_submitted();
+        }
+        outcome
+    }
+
+    fn drive_refresh(
+        frame_loop: &mut FrameLoop,
+        presenter: &mut FakePresenter,
+        clock: FakeClock,
+    ) -> Option<u64> {
+        drive_turn(
+            frame_loop,
+            presenter,
+            clock,
+            FramePolicy::SingleFrameOnDemand,
+            false,
+        )
+        .scene_id
+    }
+
+    /// Runs the Preview, Interactive, Final ladder to its end with a warp on every turn.
+    fn run_ladder_to_idle(
+        frame_loop: &mut FrameLoop,
+        presenter: &mut FakePresenter,
+        clock: &mut FakeClock,
+        policy: FramePolicy,
+    ) {
+        for _ in 0..LEVELS.len() + 1 {
+            drive_turn(frame_loop, presenter, *clock, policy, true);
+            presenter.fire_completed_callback();
+            presenter.fire_warp_completed();
+            clock.advance(16.0);
+        }
     }
 
     #[test]
@@ -1402,14 +1740,27 @@ mod tests {
     #[test]
     fn app_needs_refresh_while_either_fence_is_in_flight() {
         let frame_loop = FrameLoop::default();
-        assert!(frame_loop.needs_refresh(true, false, false));
-        assert!(frame_loop.needs_refresh(false, true, false));
-        assert!(!frame_loop.needs_refresh(false, false, false));
+        assert!(frame_loop.needs_refresh(true, false, false, false));
+        assert!(frame_loop.needs_refresh(false, true, false, false));
+        assert!(!frame_loop.needs_refresh(false, false, false, false));
 
         let mut scheduled = FrameLoop::default();
         scheduled.restart(5);
         assert!(scheduled.refinement_pending());
-        assert!(scheduled.needs_refresh(false, false, false));
+        assert!(scheduled.needs_refresh(false, false, false, false));
+    }
+
+    #[test]
+    fn a_stale_presented_view_alone_keeps_the_loop_scheduled() {
+        let frame_loop = FrameLoop::default();
+        assert!(
+            !frame_loop.needs_refresh(false, false, false, false),
+            "an idle loop showing the requested view has nothing to do"
+        );
+        assert!(
+            frame_loop.needs_refresh(false, false, false, true),
+            "an image belonging to an older requested view is unfinished work"
+        );
     }
 
     #[test]
@@ -1432,11 +1783,11 @@ mod tests {
             );
         }
         frame_loop.warp_submitted();
-        assert!(!frame_loop.needs_refresh(false, false, false));
+        assert!(!frame_loop.needs_refresh(false, false, false, false));
         assert!(!frame_loop.warp_requested(FramePolicy::SingleFrameOnDemand));
 
         frame_loop.accept_request(13, true);
-        assert!(frame_loop.needs_refresh(false, false, false));
+        assert!(frame_loop.needs_refresh(false, false, false, false));
         assert!(frame_loop.warp_requested(FramePolicy::SingleFrameOnDemand));
         clock.advance(1_000.0);
         assert_eq!(
@@ -1446,6 +1797,173 @@ mod tests {
         assert_eq!(
             presenter.submissions.last(),
             Some(&RefinementLevel::Preview)
+        );
+    }
+
+    #[test]
+    fn the_page_reads_the_deadline_refusal_that_killed_the_throttled_tab() {
+        assert_eq!(
+            fence_error(
+                SubmissionKind::Warp,
+                FenceRefusal::Deadline,
+                7,
+                60_000.0
+            )
+            .to_string(),
+            "warp fence exceeded its 60000 ms deadline"
+        );
+        assert_eq!(
+            classified(FenceRefusal::Deadline),
+            RefusalClass::Transient,
+            "a bounded wall says the observation window closed, not that the device is gone"
+        );
+        assert_eq!(classified(FenceRefusal::PollLimit), RefusalClass::Transient);
+        assert_eq!(classified(FenceRefusal::Cancelled), RefusalClass::Cancelled);
+        assert_eq!(classified(FenceRefusal::Device), RefusalClass::Device);
+    }
+
+    fn classified(reason: FenceRefusal) -> RefusalClass {
+        super::classify_refusal(reason)
+    }
+
+    /// Reproduces the throttled-tab failure: a warp fence refuses at its deadline with an empty
+    /// ladder, no scene in flight and no surface pending, which is precisely the state whose
+    /// `needs_refresh` answer used to be false and left the page dead.
+    #[test]
+    fn a_throttled_warp_deadline_re_arms_the_loop_and_a_later_warp_presents() {
+        let policy = FramePolicy::SingleFrameOnDemand;
+        let mut frame_loop = FrameLoop::default();
+        let mut presenter = FakePresenter::default();
+        let mut clock = FakeClock::default();
+        frame_loop.accept_request(21, true);
+        run_ladder_to_idle(&mut frame_loop, &mut presenter, &mut clock, policy);
+        assert_eq!(
+            presenter.submissions,
+            [
+                RefinementLevel::Preview,
+                RefinementLevel::Interactive,
+                RefinementLevel::Final
+            ]
+        );
+        let refused_warp = *presenter
+            .warp_submissions
+            .last()
+            .expect("the ladder submits a warp on every turn");
+
+        // The tab goes to the background, the fence is polled once a second, and the wall runs out.
+        presenter.fire_warp_refusal(FenceRefusal::Deadline, 61, 60_000.0);
+        clock.advance(60_000.0);
+        let refusal_turn = drive_turn(&mut frame_loop, &mut presenter, clock, policy, true);
+        assert!(refusal_turn.refused);
+        assert!(!refusal_turn.presented);
+        assert_eq!(frame_loop.transient_refusals(), 1);
+        assert_eq!(
+            frame_loop.last_transient().map(ToString::to_string),
+            Some("warp fence exceeded its 60000 ms deadline".to_string())
+        );
+        assert!(frame_loop.stopped().is_none());
+        assert!(
+            frame_loop.needs_refresh(false, false, false, false),
+            "with the ladder empty and the refused warp retired, only the re-arm keeps the page alive"
+        );
+        let retry_warp = refusal_turn
+            .warp_id
+            .expect("the refused warp is retried on the same turn");
+        assert_ne!(retry_warp, refused_warp);
+
+        // Input resumes, the retry completes, and the page presents again.
+        presenter.fire_warp_completed();
+        clock.advance(16.0);
+        let recovery = drive_turn(&mut frame_loop, &mut presenter, clock, policy, true);
+        assert!(recovery.presented);
+        assert_eq!(presenter.presented_warps.last(), Some(&retry_warp));
+        assert!(
+            !frame_loop.needs_refresh(false, false, false, false),
+            "one survived refusal must not turn an on-demand page into a permanent spin"
+        );
+    }
+
+    #[test]
+    fn a_warp_poll_limit_refusal_is_survived_the_same_way() {
+        let policy = FramePolicy::SingleFrameOnDemand;
+        let mut frame_loop = FrameLoop::default();
+        let mut presenter = FakePresenter::default();
+        let mut clock = FakeClock::default();
+        frame_loop.accept_request(31, true);
+        run_ladder_to_idle(&mut frame_loop, &mut presenter, &mut clock, policy);
+
+        presenter.fire_warp_refusal(FenceRefusal::PollLimit, 4_096, 812.5);
+        clock.advance(812.5);
+        let refusal_turn = drive_turn(&mut frame_loop, &mut presenter, clock, policy, true);
+        assert!(refusal_turn.refused);
+        assert_eq!(frame_loop.transient_refusals(), 1);
+        assert_eq!(
+            frame_loop.last_transient().map(ToString::to_string),
+            Some("warp fence exhausted its 4096 completion polls".to_string())
+        );
+        assert!(frame_loop.stopped().is_none());
+        assert!(frame_loop.needs_refresh(false, false, false, false));
+        assert!(refusal_turn.warp_id.is_some());
+
+        presenter.fire_warp_completed();
+        clock.advance(16.0);
+        assert!(drive_turn(&mut frame_loop, &mut presenter, clock, policy, true).presented);
+    }
+
+    #[test]
+    fn a_scene_deadline_refusal_retires_the_scene_and_keeps_the_level_due() {
+        let mut frame_loop = FrameLoop::default();
+        frame_loop.accept_request(41, true);
+        frame_loop.submitted(9, RefinementLevel::Preview);
+        assert_eq!(frame_loop.due(), None);
+
+        let outcome = frame_loop.refused(
+            SubmissionKind::Scene,
+            FenceRefusal::Deadline,
+            9,
+            61,
+            30_000.0,
+        );
+        assert_eq!(outcome.class, RefusalClass::Transient);
+        assert!(outcome.retired_scene);
+        assert_eq!(frame_loop.due(), Some(RefinementLevel::Preview));
+        assert_eq!(frame_loop.transient_refusals(), 1);
+        assert!(frame_loop.stopped().is_none());
+        assert!(frame_loop.needs_refresh(false, false, false, false));
+    }
+
+    #[test]
+    fn a_device_fence_refusal_stops_the_loop_with_its_typed_status() {
+        let mut frame_loop = FrameLoop::default();
+        frame_loop.accept_request(51, true);
+        let outcome =
+            frame_loop.refused(SubmissionKind::Warp, FenceRefusal::Device, 3, 12, 41.5);
+        assert_eq!(outcome.class, RefusalClass::Device);
+        assert_eq!(
+            frame_loop.transient_refusals(),
+            0,
+            "device loss is never counted as something the page survived"
+        );
+        assert_eq!(
+            frame_loop.stopped().map(ToString::to_string),
+            Some(
+                "fence mapping failed during warp fence: four-byte fence callback failed"
+                    .to_string()
+            )
+        );
+        assert!(
+            !frame_loop.needs_refresh(true, true, true, true),
+            "a stopped loop schedules nothing, whatever else is outstanding"
+        );
+
+        frame_loop.refused(SubmissionKind::Warp, FenceRefusal::Deadline, 4, 61, 60_000.0);
+        assert_eq!(
+            frame_loop.stopped().map(ToString::to_string),
+            Some(
+                "fence mapping failed during warp fence: four-byte fence callback failed"
+                    .to_string()
+            ),
+            "a later refusal never overwrites the cause the page is reporting"
         );
     }
 }

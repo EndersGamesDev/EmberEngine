@@ -121,10 +121,17 @@ impl App {
     }
 
     /// Reports whether a yielded completion or refinement turn remains pending.
+    ///
+    /// A stopped loop answers false and stays false; every other answer carries the term for a
+    /// presented image belonging to an older requested view, so a transient refusal that retired
+    /// the only outstanding submission still leaves a turn scheduled.
     #[must_use]
     pub fn needs_refresh(&self) -> bool {
+        if self.frame_loop.stopped_reason().is_some() {
+            return false;
+        }
         self.requests.frame
-            || self.frame_loop.pending(&self.runtime)
+            || self.frame_loop.pending(&self.runtime, &self.viewer)
             || (self.frame_loop.frame_policy() != FramePolicy::SingleFrameOnDemand
                 && self.viewer.requested().view == ember_julibrot_math::ViewMode::Tumbled)
     }
@@ -175,8 +182,26 @@ pub enum RefreshStatus {
     SkippedTimeout,
     /// Newer work cancelled this refresh.
     Cancelled,
+    /// A bounded fence refused; the submission was retired and will be retried.
+    Refused,
     /// A typed failure was published.
     FailedTyped,
+}
+
+impl RefreshStatus {
+    /// Returns the stable name the page overlay displays for this status.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Waiting => "Waiting",
+            Self::Submitted => "Submitted",
+            Self::Presented => "Presented",
+            Self::SkippedTimeout => "SkippedTimeout",
+            Self::Cancelled => "Cancelled",
+            Self::Refused => "Refused",
+            Self::FailedTyped => "FailedTyped",
+        }
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
