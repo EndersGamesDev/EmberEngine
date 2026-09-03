@@ -14,7 +14,7 @@ The Julibrot is the set of pairs `(z, c)` in ℂ², which is ℝ⁴, whose orbit
 
 The lab renders a 2D plane through ℝ⁴ chosen by two PLANE angles applied to the one fixed seed `(e₃,e₄)`, positioned by a plane origin that is four more numbers, so the Mandelbrot plane, a Julia plane at a chosen `c`, and every hybrid between them are positions of the same continuous controls rather than named alternatives; the escape value of each sample lifts it to a fifth coordinate scaled by a height control, and one height-field scene carries every view, from the flat chart at height zero to full relief, through the double perspective `d₅` and `d₄` and a slider-driven observer.
 
-Nothing in the lab reads a clock for geometry and nothing selects a view mode: every degree of freedom of the view is a slider, and a preset is a named row of slider values, so moving the sliders morphs one preset into another continuously.
+Nothing in the lab reads a clock for geometry and nothing selects a view mode: every degree of freedom of the view is a slider, and a preset is a named row of slider values, so moving the sliders morphs one preset into another continuously. Two boxes hold saved rows and one slider morphs between them, so a Mandelbrot saved in A and a Julia saved in B are the two ends of one continuous move rather than two pictures; and the view is navigated by a target click, a box drag, and a `scale` slider, never by the wheel.
 
 Arbitrary zoom means arbitrary: shallow zoom runs in `f32`; deep zoom uses perturbation, one reference orbit iterated in high precision on the CPU and per-pixel deltas iterated in `f32` on the GPU, with rebasing so glitches are corrected rather than hidden; zoom depth is displayed in decimal digits with the precision in use beside it.
 
