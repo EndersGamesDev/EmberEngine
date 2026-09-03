@@ -217,7 +217,7 @@ impl Presenter {
         if self.ledger.invalidate_incompatible(
             main.state.delivered_iter_cap,
             main.state.plane_origin_f64,
-            main.object,
+            main.plane,
             precision_mode_name,
         ) || incompatible
             || precision_mode.is_none()
@@ -1814,7 +1814,7 @@ mod tests {
         assert!(!ledger.invalidate_incompatible(
             64,
             [0.0; 4],
-            ember_julibrot_math::ObjectAngles::JULIA,
+            binding_pose().plane,
             PrecisionMode::PictureFast.as_str(),
         ));
         let sampled = promote_binding_scene(&mut ledger, 41);

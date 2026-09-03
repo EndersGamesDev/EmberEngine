@@ -23,6 +23,8 @@ enum Expected {
     /// The retained records still describe the destination, so the fixture additionally proves
     /// that redrawing them under the destination pose needs no new sampling.
     Relief,
+    /// An exact retained-record redraw that must also expose honest disocclusion.
+    ReliefExposed,
 }
 
 fn pose_at(
@@ -541,14 +543,17 @@ fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Exp
         WarpValidation::Ordinary,
     );
     if plan.kind == WarpKind::ReliefRedraw {
-        assert_eq!(
-            expected,
-            Expected::Relief,
+        assert!(
+            matches!(expected, Expected::Relief | Expected::ReliefExposed),
             "{name}: unexpectedly selected a relief redraw"
         );
         assert!(
             plan.source_valid,
             "{name}: relief redraw lost its record source"
+        );
+        assert!(
+            plan.exposed,
+            "{name}: relief redraw must expose its fallback"
         );
         assert_eq!(plan.source_scene_id, Some(7), "{name}");
         assert_eq!(plan.source_texture_index, Some(1), "{name}");
@@ -561,6 +566,12 @@ fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Exp
             uncertain, 0,
             "{name}: displayed relief redraw had resampling uncertainty"
         );
+        if expected == Expected::ReliefExposed {
+            assert!(
+                disoccluded > 0,
+                "{name}: fixture did not exercise redraw disocclusion"
+            );
+        }
         eprintln!(
             "oracle fixture | {name} | relief redraw | samples={compared} | uncertain={uncertain} | disoccluded={disoccluded} | homography={maximum:.3} px"
         );
@@ -639,7 +650,15 @@ fn retained_warp_matches_independent_fresh_scenes() {
     zoom.zoom_log2 = 0.05;
     assert_fixture("pure zoom", &base, &zoom, 0.0, Expected::Agree);
 
-    for index in 0..6 {
+    let changed_expectations = [
+        Expected::Agree,
+        Expected::Clear,
+        Expected::Agree,
+        Expected::Agree,
+        Expected::Clear,
+        Expected::Agree,
+    ];
+    for (index, changed_expected) in changed_expectations.into_iter().enumerate() {
         let tiny = pose(
             object_angle(ObjectAngles::JULIA, index, 1.0e-9),
             ViewControls::NEUTRAL,
@@ -666,9 +685,108 @@ fn retained_warp_matches_independent_fresh_scenes() {
             &base,
             &changed,
             0.0,
-            Expected::Clear,
+            changed_expected,
         );
     }
+
+    let mandelbrot = pose(
+        ObjectAngles::IDENTITY,
+        ViewControls::MANDELBROT_FLAT,
+        [0.0; 4],
+        0.0,
+        [0.0; 2],
+    );
+    let in_plane_rotation = pose(
+        ObjectAngles {
+            rho_34: 0.3,
+            ..ObjectAngles::IDENTITY
+        },
+        ViewControls::MANDELBROT_FLAT,
+        [0.0; 4],
+        0.0,
+        [0.0; 2],
+    );
+    assert_fixture(
+        "object o34 picture rotation",
+        &mandelbrot,
+        &in_plane_rotation,
+        0.0,
+        Expected::Agree,
+    );
+    let inert_origin = [0.5, -0.25, 2.0, -1.0];
+    let inert = pose(
+        ObjectAngles::IDENTITY,
+        ViewControls::MANDELBROT_FLAT,
+        inert_origin,
+        0.0,
+        [0.0; 2],
+    );
+    let complement_rotation = pose(
+        ObjectAngles {
+            rho_12: 0.5,
+            ..ObjectAngles::IDENTITY
+        },
+        ViewControls::MANDELBROT_FLAT,
+        inert_origin,
+        0.0,
+        [0.0; 2],
+    );
+    assert_fixture(
+        "object o12 identity-plane inert",
+        &inert,
+        &complement_rotation,
+        0.0,
+        Expected::Agree,
+    );
+    let tilted = pose(
+        ObjectAngles {
+            rho_13: 0.3,
+            ..ObjectAngles::IDENTITY
+        },
+        ViewControls::MANDELBROT_FLAT,
+        [0.0; 4],
+        0.0,
+        [0.0; 2],
+    );
+    assert_fixture(
+        "object o13 identity tilt",
+        &mandelbrot,
+        &tilted,
+        0.0,
+        Expected::Clear,
+    );
+
+    let retained_relief = pose(
+        ObjectAngles::JULIA,
+        ViewControls {
+            height_scale: 1.0,
+            ..ViewControls::NEUTRAL
+        },
+        BASE_ORIGIN,
+        0.0,
+        [0.0; 2],
+    );
+    let relief_rotation = pose(
+        ObjectAngles {
+            rho_34: ObjectAngles::JULIA.rho_34 + 0.3,
+            ..ObjectAngles::JULIA
+        },
+        ViewControls {
+            height_scale: 1.0,
+            distance_five: 6.0,
+            ..ViewControls::NEUTRAL
+        },
+        BASE_ORIGIN,
+        0.0,
+        [0.0; 2],
+    );
+    assert_fixture(
+        "relief redraw across o34",
+        &retained_relief,
+        &relief_rotation,
+        1.0,
+        Expected::ReliefExposed,
+    );
 
     let lifted_camera_expectations = [
         Expected::Agree,

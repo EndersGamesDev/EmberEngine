@@ -420,6 +420,34 @@ impl ViewerOwner {
         self.navigation.as_ref().map(|navigation| navigation.plane)
     }
 
+    /// Re-expresses the current centre displacement in another basis of the same sampled plane.
+    ///
+    /// This changes no centre, reference identity, generation, or pending work. The app calls it
+    /// only after math proves that the new basis spans the existing plane.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal for missing navigation state or an invalid projected displacement.
+    pub fn reorient_navigation_plane(&mut self, plane: Plane) -> Result<[f64; 2], OwnerError> {
+        let navigation = self
+            .navigation
+            .as_ref()
+            .ok_or(OwnerError::NavigationUnconfigured)?;
+        let scale = pixel_scale(self.staged_hot.get().zoom_log2, navigation.grid_width)?;
+        let displacement =
+            navigation
+                .centre
+                .displacement_px(&navigation.reference_centre, &plane, scale)?;
+        self.navigation
+            .as_mut()
+            .ok_or(OwnerError::NavigationUnconfigured)?
+            .plane = plane;
+        let mut hot = self.staged_hot.get();
+        hot.centre_from_reference_px = displacement;
+        self.staged_hot.set(hot);
+        Ok(displacement)
+    }
+
     /// Returns the render-grid width navigation is configured with.
     #[must_use]
     pub fn navigation_grid_width(&self) -> Option<u32> {
