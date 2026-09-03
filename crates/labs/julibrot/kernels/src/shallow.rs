@@ -155,7 +155,7 @@ pub fn escape_shallow_pixel(
     if index >= active_len {
         return Err(KernelError::InvalidExtent);
     }
-    let offset = match pixel_offset(
+    let mapped = match pixel_offset(
         index,
         extent,
         Plane {
@@ -169,22 +169,38 @@ pub fn escape_shallow_pixel(
         ],
         uniforms.pixel_scale,
     ) {
-        Ok(offset) => offset,
+        Ok(mapped) => mapped,
         Err(status) => return Ok(terminal_sample(status)),
     };
     let point = std::array::from_fn(|axis| {
-        uniforms.centre_hi[axis] + (uniforms.centre_lo[axis] + offset[axis])
+        uniforms.centre_hi[axis] + (uniforms.centre_lo[axis] + mapped.offset[axis])
     });
-    escape_shallow_point(
+    if !point.iter().all(|value| value.is_finite()) {
+        return Ok(terminal_sample(SampleStatus::MapUncertain));
+    }
+    let mut sample = escape_shallow_point(
         point,
         EscapeParams {
             max_iter: uniforms.max_iter,
             bailout: uniforms.bailout,
         },
-    )
+    )?;
+    sample.record.status = mapped.status.as_f32();
+    Ok(sample)
 }
 
 pub const fn terminal_sample(status: SampleStatus) -> KernelSample {
+    if matches!(status, SampleStatus::MapUncertain) {
+        return KernelSample {
+            record: EscapeGridRecord {
+                smooth_iter: 0.0,
+                escaped: 1.0,
+                rebase_count: 0.0,
+                status: SampleStatus::MapUncertain.as_f32(),
+            },
+            escape_index: Some(0),
+        };
+    }
     KernelSample {
         record: EscapeGridRecord {
             smooth_iter: -1.0,
@@ -352,7 +368,8 @@ mod tests {
                         ],
                         0.25,
                     )
-                    .expect("identity map has no terminal pixel");
+                    .expect("identity map has no terminal pixel")
+                    .offset;
                     let point = std::array::from_fn(|axis| uniform.centre_hi[axis] + offset[axis]);
                     let observed = escape_shallow_pixel(&uniform, index).expect("kernel mirror");
                     let expected = escape_f32(point, params).expect("math oracle");
@@ -366,7 +383,7 @@ mod tests {
     }
 
     #[test]
-    fn horizon_and_uncertain_pixels_are_finite_exact_terminals() {
+    fn horizon_is_terminal_but_uncertain_pixels_are_sampled() {
         let plane = Plane {
             basis_u: [1.0, 0.0, 0.0, 0.0],
             basis_v: [0.0, 1.0, 0.0, 0.0],
@@ -405,7 +422,12 @@ mod tests {
             )
             .expect("finite map packs");
             let sample = escape_shallow_pixel(&uniform, 0).expect("pixel is in range");
-            assert_eq!(sample, super::terminal_sample(status));
+            if status == SampleStatus::Horizon {
+                assert_eq!(sample, super::terminal_sample(status));
+            } else {
+                assert_eq!(sample.record.status, SampleStatus::MapUncertain.as_f32());
+                assert_eq!(sample.record.escaped, 1.0);
+            }
             assert!(sample.record.smooth_iter.is_finite());
             assert!(sample.record.status.is_finite());
         }

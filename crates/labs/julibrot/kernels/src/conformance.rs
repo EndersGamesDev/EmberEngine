@@ -91,11 +91,13 @@ pub fn record_is_well_formed(sample: KernelSample, mode: KernelMode) -> bool {
     let rebase_count = exact_rebase_count(record.rebase_count);
     let index_matches = escaped == sample.escape_index.is_some();
     let terminal_matches = match status {
-        SampleStatus::Sampled if escaped => record.smooth_iter.is_finite(),
-        SampleStatus::Sampled | SampleStatus::Glitch if !escaped => {
+        SampleStatus::Sampled | SampleStatus::MapUncertain if escaped => {
+            record.smooth_iter.is_finite()
+        }
+        SampleStatus::Sampled | SampleStatus::MapUncertain | SampleStatus::Glitch if !escaped => {
             record.smooth_iter.to_bits() == (-1.0_f32).to_bits()
         }
-        SampleStatus::Horizon | SampleStatus::MapUncertain => {
+        SampleStatus::Horizon => {
             !escaped
                 && sample.escape_index.is_none()
                 && record.smooth_iter.to_bits() == (-1.0_f32).to_bits()
@@ -301,7 +303,7 @@ mod tests {
                 smooth_iter: -1.0,
                 escaped: 0.0,
                 rebase_count: 2.0,
-                glitch: 0.0,
+                status: crate::SampleStatus::Sampled.as_f32(),
             },
             escape_index: None,
         };
@@ -326,6 +328,23 @@ mod tests {
             assert!(!result.rebase_count_exact);
             assert_eq!(result.verdict, verdict);
         }
+    }
+
+    #[test]
+    fn uncertain_records_obey_the_same_sample_invariants_as_certified_records() {
+        let uncertain = KernelSample {
+            record: EscapeGridRecord {
+                smooth_iter: 0.0,
+                escaped: 1.0,
+                rebase_count: 0.0,
+                status: crate::SampleStatus::MapUncertain.as_f32(),
+            },
+            escape_index: Some(0),
+        };
+        assert!(super::record_is_well_formed(
+            uncertain,
+            crate::KernelMode::Shallow
+        ));
     }
 
     #[test]

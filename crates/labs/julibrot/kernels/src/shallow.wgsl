@@ -22,6 +22,7 @@ struct ShallowResult {
 struct ShallowMapResult {
     offset: vec2<f32>,
     status: f32,
+    sampleable: bool,
 }
 
 fn shallow_finite(value: f32) -> bool {
@@ -35,6 +36,7 @@ fn shallow_map(x: f32, y: f32, uniforms: ShallowUniform) -> ShallowMapResult {
     var result: ShallowMapResult;
     result.offset = vec2<f32>(0.0);
     result.status = 3.0;
+    result.sampleable = false;
     if (!shallow_finite(denominator)) {
         return result;
     }
@@ -49,16 +51,20 @@ fn shallow_map(x: f32, y: f32, uniforms: ShallowUniform) -> ShallowMapResult {
     let error_u = error_factor * scale_u;
     let error_v = error_factor * scale_v;
     let error_w = error_factor * scale_w;
-    if (denominator <= error_w) {
-        return result;
-    }
     let mapped = vec2<f32>(numerator_u / denominator, numerator_v / denominator);
-    let safe_denominator = denominator - error_w;
-    let quotient_error = vec2<f32>((error_u + abs(mapped.x) * error_w) / safe_denominator, (error_v + abs(mapped.y) * error_w) / safe_denominator);
-    if (!shallow_finite(mapped.x) || !shallow_finite(mapped.y) || quotient_error.x * quotient_error.x + quotient_error.y * quotient_error.y > 0.0625) {
+    if (!shallow_finite(mapped.x) || !shallow_finite(mapped.y)) {
         return result;
     }
     result.offset = mapped;
+    result.sampleable = true;
+    if (denominator <= error_w) {
+        return result;
+    }
+    let safe_denominator = denominator - error_w;
+    let quotient_error = vec2<f32>((error_u + abs(mapped.x) * error_w) / safe_denominator, (error_v + abs(mapped.y) * error_w) / safe_denominator);
+    if (quotient_error.x * quotient_error.x + quotient_error.y * quotient_error.y > 0.0625) {
+        return result;
+    }
     result.status = 0.0;
     return result;
 }
@@ -85,13 +91,28 @@ fn kernel(index: u32, uniforms: ShallowUniform) -> ShallowResult {
     let x = f32(column) + 0.5 - 0.5 * f32(uniforms.width);
     let y = f32(row) + 0.5 - 0.5 * f32(uniforms.height);
     let mapped = shallow_map(x, y, uniforms);
-    if (mapped.status != 0.0) {
+    if (mapped.status == 2.0) {
         var terminal: ShallowResult;
         terminal.escape = vec4<f32>(-1.0, 0.0, 0.0, mapped.status);
         return terminal;
     }
+    if (!mapped.sampleable) {
+        var immediate: ShallowResult;
+        immediate.escape = vec4<f32>(0.0, 1.0, 0.0, 3.0);
+        return immediate;
+    }
     let offset = (mapped.offset.x * uniforms.basis_u + mapped.offset.y * uniforms.basis_v) * uniforms.pixel_scale;
+    if (!shallow_finite(offset.x) || !shallow_finite(offset.y) || !shallow_finite(offset.z) || !shallow_finite(offset.w)) {
+        var immediate: ShallowResult;
+        immediate.escape = vec4<f32>(0.0, 1.0, 0.0, 3.0);
+        return immediate;
+    }
     let point = uniforms.centre_hi + (uniforms.centre_lo + offset);
+    if (!shallow_finite(point.x) || !shallow_finite(point.y) || !shallow_finite(point.z) || !shallow_finite(point.w)) {
+        var immediate: ShallowResult;
+        immediate.escape = vec4<f32>(0.0, 1.0, 0.0, 3.0);
+        return immediate;
+    }
     var z = point.xy;
     let c = point.zw;
     var iteration = 0u;
@@ -101,7 +122,7 @@ fn kernel(index: u32, uniforms: ShallowUniform) -> ShallowResult {
         }
         if (dot(z, z) > uniforms.bailout) {
             var escaped: ShallowResult;
-            escaped.escape = vec4<f32>(shallow_smooth(iteration, z), 1.0, 0.0, 0.0);
+            escaped.escape = vec4<f32>(shallow_smooth(iteration, z), 1.0, 0.0, mapped.status);
             return escaped;
         }
         if (iteration + 1u >= uniforms.max_iter) {
@@ -111,6 +132,6 @@ fn kernel(index: u32, uniforms: ShallowUniform) -> ShallowResult {
         iteration += 1u;
     }
     var capped: ShallowResult;
-    capped.escape = vec4<f32>(-1.0, 0.0, 0.0, 0.0);
+    capped.escape = vec4<f32>(-1.0, 0.0, 0.0, mapped.status);
     return capped;
 }

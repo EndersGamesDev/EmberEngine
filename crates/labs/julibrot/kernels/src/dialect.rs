@@ -162,6 +162,9 @@ mod tests {
             for absent in ["isFinite(", "determinant(", "inverse(", "length("] {
                 assert!(!source.contains(absent), "introduced builtin {absent}");
             }
+            assert!(source.contains("if (mapped.status == 2.0)"));
+            assert!(source.contains("if (!mapped.sampleable)"));
+            assert!(!source.contains("if (mapped.status != 0.0)"));
         }
     }
 }

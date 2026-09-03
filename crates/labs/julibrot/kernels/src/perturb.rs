@@ -11,7 +11,7 @@ use ember_julibrot_math::{
 };
 
 use crate::{
-    GridExtent, KernelError, KernelSample, PerturbUniform, RefinementLevel,
+    GridExtent, KernelError, KernelSample, PerturbUniform, RefinementLevel, SampleStatus,
     records::{pack_map_rows, pixel_offset},
     shallow::{terminal_sample, validate_extent, validate_params},
 };
@@ -321,7 +321,7 @@ pub fn perturb_scaled_pixel(
     if index >= active_len {
         return Err(KernelError::InvalidExtent);
     }
-    let offset = match pixel_offset(
+    let mapped = match pixel_offset(
         index,
         extent,
         Plane {
@@ -335,10 +335,14 @@ pub fn perturb_scaled_pixel(
         ],
         uniforms.pixel_scale,
     ) {
-        Ok(offset) => offset,
+        Ok(mapped) => mapped,
         Err(status) => return Ok(terminal_sample(status)),
     };
-    perturb_scaled_offset(uniforms, orbit, offset)
+    let mut sample = perturb_scaled_offset(uniforms, orbit, mapped.offset)?;
+    if SampleStatus::from_f32(sample.record.status) != Some(SampleStatus::Glitch) {
+        sample.record.status = mapped.status.as_f32();
+    }
+    Ok(sample)
 }
 
 #[cfg(test)]
@@ -396,6 +400,19 @@ mod tests {
             sample,
             crate::shallow::terminal_sample(SampleStatus::Horizon)
         );
+    }
+
+    #[test]
+    fn mapped_uncertainty_runs_the_scaled_recurrence_with_sticky_status() {
+        let mut uniforms = uniform(4, 4);
+        uniforms.width = 2;
+        uniforms.screen_to_plane_row_0 = [0.0, 0.0, 1.0, 0.0];
+        uniforms.screen_to_plane_row_2 = [1.0, 0.0, 0.500_000_06, 0.0];
+        let sample = perturb_scaled_pixel(&uniforms, &[ZERO; 4], 0)
+            .expect("uncertain mapped pixel remains sampleable");
+        assert_eq!(sample.record.status, SampleStatus::MapUncertain.as_f32());
+        assert_eq!(sample.record.escaped, 1.0);
+        assert_eq!(sample.escape_index, Some(1));
     }
 
     #[test]

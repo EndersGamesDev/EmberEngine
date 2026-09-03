@@ -30,7 +30,7 @@ pub enum KernelMode {
     Perturbation = 1,
 }
 
-/// Exact terminal status stored in the fourth escape-grid lane.
+/// Exact sample classification stored in the fourth escape-grid lane.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum SampleStatus {
@@ -38,6 +38,12 @@ pub enum SampleStatus {
     Glitch = 1,
     Horizon = 2,
     MapUncertain = 3,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PixelOffset {
+    pub offset: [f32; 4],
+    pub status: SampleStatus,
 }
 
 impl SampleStatus {
@@ -82,7 +88,7 @@ pub fn pixel_offset(
     plane: Plane,
     screen_to_plane: [[f32; 4]; 3],
     pixel_scale: f32,
-) -> Result<[f32; 4], SampleStatus> {
+) -> Result<PixelOffset, SampleStatus> {
     let column = index % extent.width;
     let row = index / extent.width;
     let x = column as f32 + 0.5 - 0.5 * extent.width as f32;
@@ -102,24 +108,33 @@ pub fn pixel_offset(
     let scales = screen_to_plane
         .map(|map_row| map_row[0].abs() * x.abs() + map_row[1].abs() * y.abs() + map_row[2].abs());
     let errors = scales.map(|scale| error_factor * scale);
-    if denominator <= errors[2] {
-        return Err(SampleStatus::MapUncertain);
-    }
     let mapped = [homogeneous[0] / denominator, homogeneous[1] / denominator];
-    let safe_denominator = denominator - errors[2];
-    let quotient_errors = [
-        (errors[0] + mapped[0].abs() * errors[2]) / safe_denominator,
-        (errors[1] + mapped[1].abs() * errors[2]) / safe_denominator,
-    ];
-    if !mapped.iter().all(|value| value.is_finite())
-        || quotient_errors[0] * quotient_errors[0] + quotient_errors[1] * quotient_errors[1]
-            > 0.0625
-    {
+    if !mapped.iter().all(|value| value.is_finite()) {
         return Err(SampleStatus::MapUncertain);
     }
-    Ok(std::array::from_fn(|axis| {
+    let status = if denominator <= errors[2] {
+        SampleStatus::MapUncertain
+    } else {
+        let safe_denominator = denominator - errors[2];
+        let quotient_errors = [
+            (errors[0] + mapped[0].abs() * errors[2]) / safe_denominator,
+            (errors[1] + mapped[1].abs() * errors[2]) / safe_denominator,
+        ];
+        if quotient_errors[0] * quotient_errors[0] + quotient_errors[1] * quotient_errors[1]
+            > 0.0625
+        {
+            SampleStatus::MapUncertain
+        } else {
+            SampleStatus::Sampled
+        }
+    };
+    let offset = std::array::from_fn(|axis| {
         (mapped[0] * plane.basis_u[axis] + mapped[1] * plane.basis_v[axis]) * pixel_scale
-    }))
+    });
+    if !offset.iter().all(|value| value.is_finite()) {
+        return Err(SampleStatus::MapUncertain);
+    }
+    Ok(PixelOffset { offset, status })
 }
 
 #[allow(clippy::cast_possible_truncation)]
@@ -392,11 +407,13 @@ mod tests {
             super::pixel_offset(0, extent, PLANE, map, 1.0).expect("identity has no horizon");
         let top_left =
             super::pixel_offset(2, extent, PLANE, map, 1.0).expect("identity has no horizon");
-        let vertical: [f32; 4] = std::array::from_fn(|axis| top_left[axis] - bottom_left[axis]);
-        assert_eq!(bottom_left, [-0.3, -0.4, -0.4, -0.3]);
+        let vertical: [f32; 4] =
+            std::array::from_fn(|axis| top_left.offset[axis] - bottom_left.offset[axis]);
+        assert_eq!(bottom_left.offset, [-0.3, -0.4, -0.4, -0.3]);
+        assert_eq!(bottom_left.status, SampleStatus::Sampled);
         assert_eq!(vertical, PLANE.basis_v);
-        assert!(bottom_left[..2].iter().any(|value| *value != 0.0));
-        assert!(bottom_left[2..].iter().any(|value| *value != 0.0));
+        assert!(bottom_left.offset[..2].iter().any(|value| *value != 0.0));
+        assert!(bottom_left.offset[2..].iter().any(|value| *value != 0.0));
         let odd_centre = super::pixel_offset(
             4,
             GridExtent {
@@ -408,6 +425,7 @@ mod tests {
             1.0,
         )
         .expect("identity has no horizon");
-        assert_eq!(odd_centre, [0.0; 4]);
+        assert_eq!(odd_centre.offset, [0.0; 4]);
+        assert_eq!(odd_centre.status, SampleStatus::Sampled);
     }
 }
