@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::{App, FramePolicy, JULIBROT_ABI_VERSION, LevelTimingRecord};
 
-/// Complete version-two overlay snapshot; absent delivered values serialize as `null`.
+/// Complete version-three overlay snapshot; absent delivered values serialize as `null`.
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct PageFacts {
     pub abi_version: u32,

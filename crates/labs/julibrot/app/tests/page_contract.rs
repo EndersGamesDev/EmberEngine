@@ -144,9 +144,9 @@ fn loader_version_one_and_abi_three_are_pinned_before_orbit_transfer() {
     }
     assert!(!LIB.contains("pub fn worker_main(expected_abi: u32)"));
     assert!(WORKER_BROWSER.contains("pub fn worker_main(expected_abi: u32)"));
-    assert!(MAIN.contains("const ABI = 2;"));
-    assert!(WORKER.contains("const ABI = 2;"));
-    assert!(WIRE.contains("pub const JULIBROT_ABI_VERSION: u32 = 2;"));
+    assert!(MAIN.contains("const ABI = 3;"));
+    assert!(WORKER.contains("const ABI = 3;"));
+    assert!(WIRE.contains("pub const JULIBROT_ABI_VERSION: u32 = 3;"));
     assert!(MANIFEST.contains("name = \"ember_lab_julibrot\""));
     assert_eq!(WORKER.matches("ember_lab_julibrot.js?v=1").count(), 1);
     assert!(FRAME.contains("WorkerChannel::new("));
@@ -346,6 +346,15 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
     );
     assert!(MAIN.contains(r#"field.replaceAll("_", "-")"#));
     assert!(MAIN.contains("for (const [field, value] of Object.entries(row)) {"));
+    for field in [
+        "o12", "o13", "o14", "o23", "o24", "o34", "q12", "q13", "q14", "q23", "q24",
+        "q34", "q15", "q25", "q35", "q45", "t1", "t2", "t3", "t4", "t5",
+    ] {
+        assert!(
+            LIB.contains(&format!(r#""{field}":"#)),
+            "row JSON omits affine field {field}"
+        );
+    }
     assert_eq!(MAIN.matches("api.app_set_object_angles(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_plane_origin(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_camera_angles(").count(), 1);
@@ -396,8 +405,9 @@ fn the_retired_controls_name_nothing_and_the_wasm_boundary_is_complete() {
         "pub fn app_set_distances(",
         "pub fn app_set_scale(",
         "pub fn app_set_target(",
-        "pub fn app_pan_drag(",
+        "pub fn app_pan_px(",
         "pub fn app_zoom_box(",
+        "pub fn app_clear_crosshair(",
         "pub fn app_saved_view_json(",
         "pub fn app_set_centre(",
         "pub fn app_morph_view(",
@@ -488,7 +498,8 @@ fn a_click_names_a_point_and_every_zoom_is_taken_about_it() {
     // The slider goes through the crosshair anchor rather than the screen centre.
     assert!(STATE.contains("self.zoom_about_crosshair(zoom_log2 - self.requested.zoom_log2)"));
     // A row load forgets the point, because the point belonged to the picture that was replaced.
-    assert_eq!(STATE.matches("self.crosshair = None;").count(), 3);
+    assert!(STATE.contains("pub fn clear_crosshair(&mut self)"));
+    assert_eq!(MAIN.matches("api.app_clear_crosshair();").count(), 1);
     // The page draws the marker from the projection and never from a pixel it remembered.
     assert!(MAIN.contains("const drawCrosshair = () => {"));
     assert!(MAIN.contains("api.app_crosshair_json(bounds.width, bounds.height)"));
@@ -579,7 +590,7 @@ fn two_view_boxes_share_one_path_from_a_control_value_to_the_worker() {
     assert!(SAVED.contains("pub object: [f64; 6],"));
     assert!(SAVED.contains("pub camera: [f64; 10],"));
     assert!(SAVED.contains("pub camera_translation: [f64; 5],"));
-    assert!(MAIN.contains("row.camera_translation.length !== TRANSLATION_IDS.length"));
+    assert!(MAIN.contains("affine.every(field => Number.isFinite(row[field]))"));
 }
 
 #[test]

@@ -241,6 +241,22 @@ pub fn navigation_delta(
     })
 }
 
+/// Projects a plane-offset point back to centred screen pixels through the forward homography.
+///
+/// # Errors
+///
+/// Returns an error for a non-finite point, a point on the projective horizon, or an evaluation
+/// whose conservative binary64 error exceeds one quarter pixel.
+pub fn plane_to_screen(
+    screen_to_plane: &Homography,
+    plane_offset_px: [f64; 2],
+) -> Result<[f64; 2], MathError> {
+    if !plane_offset_px.into_iter().all(f64::is_finite) {
+        return Err(MathError::NonFinite);
+    }
+    map_guarded(screen_to_plane.inverse, plane_offset_px)
+}
+
 pub fn multiply_3x3(left: [f64; 9], right: [f64; 9]) -> [f64; 9] {
     core::array::from_fn(|index| {
         let row = index / 3;
@@ -598,6 +614,26 @@ mod tests {
             delta.anchor_canvas_px,
             map_projective(homography.rows, [100.0, 50.0]).ok_or(MathError::DegenerateViewMap)?
         );
+        Ok(())
+    }
+
+    #[test]
+    fn plane_projection_is_the_inverse_navigation_uses() -> Result<(), MathError> {
+        let object = ObjectAngles::IDENTITY;
+        let view = ViewControls {
+            camera: [0.07, -1.1, 0.03, -0.11, -1.2, 0.05, 0.09, -0.04, 0.13, -0.08],
+            camera_translation: [0.2, -0.1, 0.3, -0.2, 0.15],
+            camera_yaw: 0.17,
+            camera_pitch: -0.12,
+            ..ViewControls::MANDELBROT_FLAT
+        };
+        let homography = map(object, view, [960, 540])?;
+        for screen in [[0.0, 0.0], [137.0, -64.0], [-311.0, 201.0]] {
+            let plane = navigation_delta(&homography, [0.0; 2], 0.0, screen)?.anchor_canvas_px;
+            let projected = plane_to_screen(&homography, plane)?;
+            assert!((projected[0] - screen[0]).abs() < 1.0e-9);
+            assert!((projected[1] - screen[1]).abs() < 1.0e-9);
+        }
         Ok(())
     }
 

@@ -59,7 +59,8 @@ function writeStoredJson(key, value) {
 // absent, never a view the page claims to hold and could not decode.
 function isStoredRow(row) {
   if (!row || typeof row !== "object" || !row.centre || !Array.isArray(row.centre.coords)) return false;
-  return row.centre.coords.length === 4;
+  const affine = [...OBJECT_IDS, ...CAMERA_IDS, ...TRANSLATION_IDS];
+  return row.centre.coords.length === 4 && affine.every(field => Number.isFinite(row[field]));
 }
 
 function readStoredView(box) {
@@ -93,9 +94,10 @@ function centreDigits(zoomLog2) {
 function describeRow(name, row) {
   if (!row) return `${name} is empty`;
   const digits = centreDigits(row.zoom_log2);
-  const angles = [...row.object, ...row.camera, row.camera_yaw, row.camera_pitch]
+  const angles = [...OBJECT_IDS, ...CAMERA_IDS].map(field => row[field])
+    .concat(row.camera_yaw, row.camera_pitch)
     .map(value => Number(value).toFixed(3)).join(" ");
-  const translation = row.camera_translation.map(value => Number(value).toFixed(3)).join(" ");
+  const translation = TRANSLATION_IDS.map(field => Number(row[field]).toFixed(3)).join(" ");
   const origin = row.origin.map(value => Number(value).toFixed(3)).join(" ");
   const centre = row.centre_f64.map(value => Number(value).toFixed(digits)).join(" ");
   return `${name}: angles ${angles} · translation ${translation} · origin ${origin} · zoom_log2 ${Number(row.zoom_log2).toFixed(3)} · centre ${centre}`;
@@ -428,6 +430,10 @@ function bindControls(api) {
     for (const apply of Object.values(APPLY)) apply();
     if (row.centre) api.app_set_centre(JSON.stringify(row.centre));
   };
+  const loadRow = row => {
+    api.app_clear_crosshair();
+    applyRow(row);
+  };
 
   // The built-in rows come from the app, in its own order, for as long as it has them: the page
   // never names a preset, so a row added there appears on both sides with no edit here.
@@ -501,7 +507,7 @@ function bindControls(api) {
       return;
     }
     guarded(() => {
-      applyRow(entry.row);
+      loadRow(entry.row);
       holdRow(box, entry.builtin ? captureRow() : entry.row);
       writeStoredRows();
     });
@@ -556,7 +562,7 @@ function bindControls(api) {
     document.getElementById(`save-${box}`).addEventListener("click", () => saveRow(box));
     document.getElementById(`delete-${box}`).addEventListener("click", () => deleteRow(box));
     document.getElementById(`load-${box}`).addEventListener("click", () => guarded(() => {
-      if (BOXES[box]) applyRow(BOXES[box]);
+      if (BOXES[box]) loadRow(BOXES[box]);
     }));
   }
   MORPH.addEventListener("input", () => guarded(() => {

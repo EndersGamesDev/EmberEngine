@@ -3,7 +3,7 @@
 use ember_julibrot_math::{
     Axis4, BigCentre, Homography, MathError, NavigationDelta, ObjectAngles, Plane, PlaneAngles,
     Pose, PoseMap, PrecisionMode, SEED_AXES, ViewControls, construct_plane, navigation_delta,
-    pixel_scale, screen_to_plane,
+    pixel_scale, plane_to_screen, screen_to_plane,
 };
 use ember_julibrot_present::PaletteId;
 use ember_julibrot_worker::{
@@ -435,12 +435,6 @@ impl ViewerController {
         &mut self.owner
     }
 
-    /// Returns the fixed screen-space crosshair used as the zoom anchor.
-    #[must_use]
-    pub const fn crosshair_px_up(&self) -> [f64; 2] {
-        self.crosshair_px_up
-    }
-
     /// Stages a pointer-anchored zoom immediately and returns the edit for bignum navigation.
     ///
     /// # Errors
@@ -475,7 +469,7 @@ impl ViewerController {
         })
     }
 
-    /// Converts DOM-down drag input to plane-up centre motion and stages it immediately.
+    /// Converts DOM-down drag input through the inverse screen map and stages it immediately.
     ///
     /// # Errors
     ///
@@ -485,8 +479,7 @@ impl ViewerController {
             return Err(AppError::Math("drag input is not finite".to_string()));
         }
         let map = self.mapped_screen_map(self.grid_extent)?;
-        let delta =
-            navigation_delta(&map, delta_dom, 0.0, self.crosshair_px_up).map_err(math_error)?;
+        let delta = navigation_delta(&map, delta_dom, 0.0, [0.0; 2]).map_err(math_error)?;
         self.owner.navigate(delta);
         if let Some(error) = self.owner.take_navigation_error() {
             return Err(owner_error(error));
@@ -494,42 +487,6 @@ impl ViewerController {
         self.add_reason(OrbitReason::CENTRE_THRESHOLD);
         let centre_delta_px = [-delta.pan_canvas_px[0], -delta.pan_canvas_px[1]];
         Ok(NavigationEdit::Pan { centre_delta_px })
-    }
-
-    /// Places the fixed screen-space crosshair and optionally zooms about that same point.
-    ///
-    /// A zero-delta click changes no projection state. A box path may set the crosshair to its
-    /// centre and carry a zoom; the anchored zoom keeps that newly selected point fixed on screen.
-    ///
-    /// # Errors
-    ///
-    /// Returns a math failure for non-finite input or result, or a typed owner refusal.
-    #[allow(
-        clippy::float_cmp,
-        reason = "zero is the exact no-projection click command; every nonzero value is a zoom"
-    )]
-    pub fn set_target(
-        &mut self,
-        anchor_px_up: [f64; 2],
-        delta_log2: f64,
-    ) -> Result<NavigationEdit, AppError> {
-        if !delta_log2.is_finite() || !anchor_px_up.iter().all(|component| component.is_finite()) {
-            return Err(AppError::Math("target input is not finite".to_string()));
-        }
-        let zoom_log2 = self.requested.zoom_log2 + delta_log2;
-        if !zoom_log2.is_finite() {
-            return Err(AppError::Math(
-                "target zoom exceeded finite range".to_string(),
-            ));
-        }
-        self.crosshair_px_up = anchor_px_up;
-        if delta_log2 != 0.0 {
-            self.wheel_zoom(delta_log2, anchor_px_up)?;
-        }
-        Ok(NavigationEdit::Target {
-            anchor_px_up,
-            delta_log2,
-        })
     }
 
     /// Stores one screen point as a point on the slice, without moving the picture.
@@ -548,13 +505,17 @@ impl ViewerController {
         if !anchor_px_up.iter().all(|component| component.is_finite()) {
             return Err(AppError::Math("crosshair input is not finite".to_string()));
         }
+        let map = self.mapped_screen_map(self.grid_extent)?;
+        let plane_offset = navigation_delta(&map, [0.0; 2], 0.0, anchor_px_up)
+            .map_err(math_error)?
+            .anchor_canvas_px;
         let (centre, plane, grid_width) = self.navigation_frame()?;
         let zoom_log2 = self.requested.zoom_log2;
         let mut point = centre;
         point
             .apply_navigation(
                 &NavigationDelta {
-                    pan_canvas_px: [-anchor_px_up[0], -anchor_px_up[1]],
+                    pan_canvas_px: [-plane_offset[0], -plane_offset[1]],
                     zoom_delta_log2: 0.0,
                     anchor_canvas_px: [0.0; 2],
                 },
@@ -586,7 +547,9 @@ impl ViewerController {
         let bits = target.precision_bits.max(centre.precision_bits);
         let target = target.with_precision(bits).ok()?;
         let centre = centre.with_precision(bits).ok()?;
-        target.displacement_px(&centre, &plane, scale).ok()
+        let plane_offset = target.displacement_px(&centre, &plane, scale).ok()?;
+        let map = self.mapped_screen_map(self.grid_extent).ok()?;
+        plane_to_screen(&map, plane_offset).ok()
     }
 
     /// Returns the Astro-float precision the stored point is held at.
@@ -1232,48 +1195,40 @@ mod tests {
         assert!(!is_box_selection([f64::NAN, 200.0]));
     }
 
-    /// A target click moves only the crosshair and reports the screen anchor it stored.
+    /// A mapped click, pan, and zoom preserve the stored feature and its projected anchor.
     #[test]
-    fn a_target_click_moves_only_the_crosshair() {
+    fn tilted_click_pan_and_zoom_keep_the_crosshair_on_its_feature() {
         let mut viewer = ViewerController::new([960, 540]).expect("canonical viewer");
-        let before = viewer.requested().zoom_log2;
-        let edit = viewer
-            .set_target([120.0, -45.0], 0.0)
-            .expect("finite target");
-        assert_eq!(
-            edit,
-            NavigationEdit::Target {
-                anchor_px_up: [120.0, -45.0],
-                delta_log2: 0.0
-            }
-        );
-        assert!((viewer.requested().zoom_log2 - before).abs() < f64::EPSILON);
-        assert_eq!(viewer.crosshair_px_up(), [120.0, -45.0]);
-        let displacement = viewer.owner().drain_hot().hot.centre_from_reference_px;
-        assert!(displacement.into_iter().all(|value| value.abs() < 1.0e-9));
-    }
+        let mut view = ViewControls::MANDELBROT_FLAT;
+        view.camera[0] = 0.13;
+        view.camera[8] = -0.21;
+        view.camera_translation = [0.2, -0.1, 0.3, -0.2, 0.15];
+        view.camera_yaw = 0.17;
+        view.camera_pitch = -0.12;
+        viewer.set_view_controls(view).expect("tilted view");
+        viewer.set_crosshair([120.0, -45.0]).expect("mapped click");
+        let feature = viewer
+            .crosshair_centre_f64()
+            .expect("stored feature facts");
+        let clicked = viewer
+            .crosshair_plane_px()
+            .expect("clicked feature projects");
+        assert!((clicked[0] - 120.0).abs() < 1.0e-9);
+        assert!((clicked[1] + 45.0).abs() < 1.0e-9);
 
-    /// A box release is one edit whose anchor is read at the scale the user was looking at.
-    ///
-    /// One step of zoom halves the pixel scale, so the same plane offset is twice as many pixels
-    /// afterwards; a displacement of exactly the anchor would mean the anchored term had been
-    /// evaluated after the zoom instead of before it.
-    #[test]
-    fn a_box_release_anchors_on_the_scale_before_its_zoom() {
-        let mut viewer = ViewerController::new([960, 540]).expect("canonical viewer");
-        let edit = viewer.set_target([80.0, 30.0], 1.0).expect("finite box");
-        assert_eq!(
-            edit,
-            NavigationEdit::Target {
-                anchor_px_up: [80.0, 30.0],
-                delta_log2: 1.0
-            }
-        );
-        assert!((viewer.requested().zoom_log2 - 1.0).abs() < f64::EPSILON);
-        let displacement = viewer.owner().drain_hot().hot.centre_from_reference_px;
-        assert!((displacement[0] - 80.0).abs() < 1.0e-9);
-        assert!((displacement[1] - 30.0).abs() < 1.0e-9);
-        assert_eq!(viewer.crosshair_px_up(), [80.0, 30.0]);
+        let delta = drag_delta_px_down([40.0, 25.0], REFERENCE_RECT, REFERENCE_GRID)
+            .expect("a finite drag");
+        viewer.pan_px(delta).expect("mapped pan");
+        let panned = viewer
+            .crosshair_plane_px()
+            .expect("panned feature projects");
+        viewer.zoom_about_crosshair(3.0).expect("anchored zoom");
+        let zoomed = viewer
+            .crosshair_plane_px()
+            .expect("zoomed feature projects");
+        assert!((zoomed[0] - panned[0]).abs() < 1.0e-8);
+        assert!((zoomed[1] - panned[1]).abs() < 1.0e-8);
+        assert_eq!(viewer.crosshair_centre_f64(), Some(feature));
     }
 
     /// The scale control is absolute, refuses its own ends, and zooms about the screen centre.

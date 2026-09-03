@@ -29,7 +29,7 @@ pub use scale::{
     reference_shift_px, scale_split, scaled_pixel_offset, scaled_pixel_scale, shallow_pixel_scale,
     split_centre, split_scalar,
 };
-pub use screen::{navigation_delta, rotation_orthonormality_5, screen_to_plane};
+pub use screen::{navigation_delta, plane_to_screen, rotation_orthonormality_5, screen_to_plane};
 pub use types::{
     Axis4, CentreF64, CentreSplit, ComputedOrbit, EscapeGridRecord, EscapeParams, EscapeSample,
     Homography, MathError, NavigationDelta, ObjectAngles, OrbitStep, PerturbSample,

@@ -1950,7 +1950,7 @@ mod tests {
     use crate::{FramePolicy, LevelTimingLedger, ViewerController};
     use ember_julibrot_present::{SampleClass, SubmissionMeasurement};
 
-    /// Poll budget and wall the version-two present configuration refuses at.
+    /// Poll budget and wall the version-three present configuration refuses at.
     const SCENE_POLLS: u32 = 4_096;
     const SCENE_DEADLINE_MS: f64 = 30_000.0;
 

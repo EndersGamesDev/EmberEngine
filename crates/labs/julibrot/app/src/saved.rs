@@ -251,7 +251,7 @@ mod tests {
             .set_zoom_log2(24.0)
             .expect("a scale inside the range");
         viewer
-            .set_target([137.0, -64.0], 0.0)
+            .set_crosshair([137.0, -64.0])
             .expect("a finite target");
         viewer
     }
