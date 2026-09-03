@@ -1843,6 +1843,9 @@ mod tests {
         assert_eq!(uniform.basis_u, sampled.pose.plane.basis_u);
         assert_eq!(uniform.screen_to_plane_row_0, [1.0, 0.0, 0.0, 0.0]);
         assert_eq!(uniform.screen_to_plane_row_2, [0.0, 0.0, 1.0, 0.0]);
+        let load = scene_load_color(crate::CLASSIC_PALETTE);
+        let sky = crate::exterior_zero(crate::CLASSIC_PALETTE);
+        assert_eq!([load.r, load.g, load.b, load.a], sky.map(f64::from));
     }
 
     #[test]

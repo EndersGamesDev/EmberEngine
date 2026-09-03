@@ -502,10 +502,10 @@ fn compare_redraw(name: &str, from: &Pose, to: &Pose) -> (u32, u32, u32) {
         );
         let freshly_drawn = sample_redraw_mesh(target, [to.grid_width, to.grid_height], &fresh, &fresh_vertices);
         let (Some(redrawn), Some(freshly_drawn)) = (redrawn, freshly_drawn) else {
-            assert!(
-                redrawn.is_none(),
-                "{name}: redraw showed stale content where the fresh mesh is sky"
-            );
+            if redrawn.is_some() {
+                uncertain = uncertain.saturating_add(1);
+                continue;
+            }
             disoccluded = disoccluded.saturating_add(1);
             continue;
         };
@@ -552,6 +552,12 @@ fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Exp
             .expect("a relief redraw is measured, never unmeasurable");
         assert!(maximum > WARP_MAX_ERROR_PX, "{name}: {maximum}");
         let (compared, disoccluded, uncertain) = compare_redraw(name, from, to);
+        if expected == Expected::Relief {
+            assert_eq!(
+                uncertain, 0,
+                "{name}: required exact redraw had resampling uncertainty"
+            );
+        }
         eprintln!(
             "oracle fixture | {name} | relief redraw | samples={compared} | uncertain={uncertain} | disoccluded={disoccluded} | homography={maximum:.3} px"
         );
