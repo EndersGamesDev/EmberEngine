@@ -732,6 +732,10 @@ mod tests {
 
     #[test]
     #[ignore = "native kernels measurement harness"]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the explicitly selected performance harness reports allocations and wall"
+    )]
     fn measures_dispatch_planning_allocations_and_wall_per_level() {
         const ROUNDS: u32 = 10_000;
         let harness = NativeDispatchHarness::new();

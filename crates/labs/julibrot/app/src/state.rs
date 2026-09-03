@@ -1521,6 +1521,10 @@ mod tests {
 
     #[test]
     #[ignore = "measurement harness"]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the explicitly selected performance harness reports construction counts"
+    )]
     fn measures_viewer_refresh_map_constructions_before_after() {
         let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
         for _ in 0..120 {

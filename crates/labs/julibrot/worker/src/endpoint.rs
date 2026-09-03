@@ -50,7 +50,7 @@ impl<T> TwoSlotQueue<T> {
         self.len += 1;
     }
 
-    fn pop_front(&mut self) -> Option<T> {
+    const fn pop_front(&mut self) -> Option<T> {
         if self.is_empty() {
             return None;
         }
@@ -527,7 +527,7 @@ impl<P: OwnerPort> OwnerCore<P> {
         }
     }
 
-    fn four_slots_home(&self) -> bool {
+    const fn four_slots_home(&self) -> bool {
         self.request_owned.len() == 2
             && self.orbit_owned.len() == 2
             && self.arrivals.is_empty()
@@ -1228,6 +1228,10 @@ mod tests {
 
     #[test]
     #[ignore = "measurement harness"]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the explicitly selected performance harness reports its wall measurement"
+    )]
     fn measures_two_slot_arrival_drain_wall_before_after() {
         const DRAINS: u32 = 20_000_000;
         let mut shifted = vec![0_u32, 1];
@@ -1284,6 +1288,10 @@ mod tests {
 
     #[test]
     #[ignore = "measurement harness"]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the explicitly selected performance harness reports copied bytes and wall"
+    )]
     fn measures_browser_request_decode_copy_bytes() {
         const COPIES: u32 = 20_000;
         let request = largest_canonical_request(1);
