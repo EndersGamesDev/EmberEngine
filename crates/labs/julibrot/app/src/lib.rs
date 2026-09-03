@@ -495,7 +495,8 @@ mod wasm_entry {
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm_entry::{
-    app_drag_pan, app_facts_json, app_needs_refresh, app_refresh, app_request_frame,
-    app_request_measurement, app_set_iteration_cap, app_set_palette, app_set_plane_angles,
-    app_set_preset, app_set_view, app_wheel_zoom, julibrot_abi_version, start_julibrot,
+    app_drag_pan, app_facts_json, app_needs_refresh, app_preset, app_refresh, app_request_frame,
+    app_request_measurement, app_set_camera, app_set_distances, app_set_height,
+    app_set_iteration_cap, app_set_palette, app_set_plane_angles, app_set_plane_origin,
+    app_set_view_angles, app_wheel_zoom, julibrot_abi_version, start_julibrot,
 };
