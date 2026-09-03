@@ -359,7 +359,7 @@ impl RefinementSchedule {
 mod browser {
     use ember_julibrot_kernels::{
         DispatchFacts, EscapeGrid, GridExtent, JulibrotKernels, KernelMode, OUTPUT_PAGE_SIDE,
-        ReferenceOrbitInput, RefinementPlan,
+        ReferenceOrbitInput, RefinementLevel, RefinementPlan,
     };
     use ember_julibrot_math::{
         BigCentre, EscapeParams, Plane, PrecisionMode, precision_for, reference_shift_px,
