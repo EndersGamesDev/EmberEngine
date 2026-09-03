@@ -7,6 +7,7 @@ use crate::{
 
 const HEIGHT_SAMPLES: [f64; 5] = [-2.0, -1.0, 0.0, 1.0, 2.0];
 const SCREEN_STEPS: u32 = 9;
+const MANDATORY_SCREEN_STRIDE: usize = 4;
 const POLE_EPSILON: f64 = 1.0e-4;
 const MAX_CHART_RESIDUAL_PX: f64 = 0.5;
 
@@ -30,7 +31,7 @@ impl Warp {
         precision_mode: PrecisionMode,
         validation: WarpValidation,
     ) -> WarpPlan {
-        let _policy_requires_corpus = validation.samples_corpus(precision_mode);
+        let full_corpus = validation.samples_corpus(precision_mode);
         if matches!(to_pose.map, PoseMap::EdgeOn) {
             return edge_on();
         }
@@ -47,7 +48,14 @@ impl Warp {
         if !chart_residual.is_finite() || chart_residual > MAX_CHART_RESIDUAL_PX {
             return clear_only(true);
         }
-        anchor_plan(last_frame, from_pose, to_pose, flat.forward, chart_residual)
+        anchor_plan(
+            last_frame,
+            from_pose,
+            to_pose,
+            flat.forward,
+            chart_residual,
+            full_corpus,
+        )
             .map_or_else(|| clear_only(true), enforce_error_ceiling)
     }
 }
@@ -108,24 +116,27 @@ fn anchor_plan(
     to_pose: &Pose,
     flat_forward: [f64; 9],
     chart_residual: f64,
+    full_corpus: bool,
 ) -> Option<WarpPlan> {
     let source = screen_corners(from_pose).map(|[x, y]| [x, y, 1.0]);
     let destination = screen_corners(from_pose).map(|corner| homogeneous(flat_forward, corner));
     let inverse_sampling = solve_homogeneous(destination, source)?;
     let rows = pack_homography_rows(inverse_sampling)?;
-    let metrics = sampled_errors(from_pose, to_pose, inverse_sampling).and_then(|mut errors| {
-        if errors.is_empty() {
-            return None;
-        }
-        errors.sort_by(f64::total_cmp);
-        let maximum = errors.last().copied()?;
-        let percentile_index = errors
-            .len()
-            .saturating_mul(95)
-            .div_ceil(100)
-            .saturating_sub(1);
-        Some((maximum, *errors.get(percentile_index)?))
-    });
+    let metrics = sampled_errors(from_pose, to_pose, inverse_sampling, full_corpus).and_then(
+        |mut errors| {
+            if errors.is_empty() {
+                return None;
+            }
+            errors.sort_by(f64::total_cmp);
+            let maximum = errors.last().copied()?;
+            let percentile_index = errors
+                .len()
+                .saturating_mul(95)
+                .div_ceil(100)
+                .saturating_sub(1);
+            Some((maximum, *errors.get(percentile_index)?))
+        },
+    );
     Some(WarpPlan {
         rows,
         source_scene_id: Some(last_frame.scene_id),
@@ -179,12 +190,25 @@ const fn homogeneous(matrix: [f64; 9], point: [f64; 2]) -> [f64; 3] {
     ]
 }
 
-fn sampled_errors(from_pose: &Pose, to_pose: &Pose, approximate: [f64; 9]) -> Option<Vec<f64>> {
-    let sample_count = usize::try_from(SCREEN_STEPS * SCREEN_STEPS).ok()? * HEIGHT_SAMPLES.len();
+fn sampled_errors(
+    from_pose: &Pose,
+    to_pose: &Pose,
+    approximate: [f64; 9],
+    full_corpus: bool,
+) -> Option<Vec<f64>> {
+    let screen_stride = if full_corpus {
+        1
+    } else {
+        MANDATORY_SCREEN_STRIDE
+    };
+    let screen_sample_count = usize::try_from(SCREEN_STEPS)
+        .ok()?
+        .div_ceil(screen_stride);
+    let sample_count = screen_sample_count * screen_sample_count * HEIGHT_SAMPLES.len();
     let mut errors = Vec::new();
     errors.try_reserve_exact(sample_count).ok()?;
-    for row in 0..SCREEN_STEPS {
-        for column in 0..SCREEN_STEPS {
+    for row in (0..SCREEN_STEPS).step_by(screen_stride) {
+        for column in (0..SCREEN_STEPS).step_by(screen_stride) {
             let target_screen = [
                 (f64::from(column) / f64::from(SCREEN_STEPS - 1) - 0.5)
                     * f64::from(to_pose.grid_width),
@@ -742,6 +766,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn ordinary_picture_fast_measures_the_mandatory_corpus() {
+        let from = pose(ViewControls::NEUTRAL, [0.0; 2]);
+        let mut to = pose(ViewControls::NEUTRAL, [5.0, -3.0]);
+        to.zoom_log2 += 0.1;
+        let ordinary = reproject(&frame(&from), &from, &to);
+        let approximate = unpack_rows(ordinary.rows);
+        let mandatory = sampled_errors(&from, &to, approximate, false)
+            .expect("the mandatory corpus projects");
+        let full = sampled_errors(&from, &to, approximate, true)
+            .expect("the full validation corpus projects");
+        assert_eq!(mandatory.len(), 3 * 3 * HEIGHT_SAMPLES.len());
+        assert_eq!(full.len(), 9 * 9 * HEIGHT_SAMPLES.len());
+        assert_eq!(
+            ordinary.approx_max_error_px,
+            mandatory.into_iter().reduce(f64::max)
+        );
+
+        let measured = Warp::reproject(
+            &frame(&from),
+            &from,
+            &to,
+            PrecisionMode::PictureFast,
+            WarpValidation::Measure,
+        );
+        assert_eq!(
+            measured.approx_max_error_px,
+            full.into_iter().reduce(f64::max)
+        );
+    }
+
     fn named_objects() -> [(ObjectAngles, Plane); 3] {
         let quarter = core::f64::consts::FRAC_PI_2;
         let angles = [
@@ -780,7 +835,13 @@ mod tests {
                 let from = object_pose(object, plane, from_view, [3.5, -2.25]);
                 let mut to = object_pose(object, plane, to_view, [5.5, -1.25]);
                 to.zoom_log2 += 0.025;
-                let plan = reproject(&frame(&from), &from, &to);
+                let plan = Warp::reproject(
+                    &frame(&from),
+                    &from,
+                    &to,
+                    PrecisionMode::PictureFast,
+                    WarpValidation::Measure,
+                );
                 if plan.kind == WarpKind::ClearOnly {
                     refused = refused.saturating_add(1);
                 }
