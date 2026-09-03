@@ -477,10 +477,49 @@ fn frame_loop_preserves_cross_slice_order_and_cooperative_polling() {
     assert!(MAIN.contains("return api.app_needs_refresh();"));
     assert_eq!(
         MAIN.matches("if (stillTurning()) scheduleFrame();").count(),
-        2,
-        "the loader re-schedules from both the completed turn and the caught throw"
+        3,
+        "the loader re-schedules from the completed turn, the caught throw, and the wake-up"
     );
     assert!(FRAME.contains("runtime.complete_warp"));
+}
+
+#[test]
+fn the_frame_loop_cannot_latch_on_a_frame_that_never_ran() {
+    // The flag is cleared on the way into the turn, not on the way out of a callback that a page
+    // the browser has stopped painting for may never receive.
+    assert!(MAIN.contains(
+        "  const runFrame = (ticket, nowMs, viaFallback) => {\n    if (!RAF_PENDING || ticket !== FRAME_TICKET) return;\n    RAF_PENDING = false;\n"
+    ));
+    // One low-rate timer stands behind the animation callback, and it is the only timer on the
+    // page: a second `setTimeout` would be a second clock rather than a floor under a stopped one.
+    assert!(MAIN.contains("const FRAME_FALLBACK_MS = 250;"));
+    assert_eq!(MAIN.matches("setTimeout(").count(), 1);
+    assert_eq!(MAIN.matches("requestAnimationFrame(").count(), 1);
+    assert!(MAIN.contains("requestAnimationFrame(nowMs => runFrame(ticket, nowMs, false));"));
+    assert!(MAIN.contains("runFrame(ticket, performance.now(), true);"));
+    // The timer runs a turn only when one is due and the callback did not arrive for this
+    // schedule, so a healthy animation callback leaves `frames_from_fallback` at zero.
+    assert!(MAIN.contains("      if (!RAF_PENDING || ticket !== FRAME_TICKET) return;\n      if (stillTurning()) {"));
+    // Returning to a painting page retires the schedule rather than waiting on it.
+    for required in [
+        "const wakeFrameLoop = () => {",
+        "document.addEventListener(\"visibilitychange\", () => { if (!document.hidden) wakeFrameLoop(); });",
+        "window.addEventListener(\"pageshow\", wakeFrameLoop);",
+        "window.addEventListener(\"focus\", wakeFrameLoop);",
+    ] {
+        assert!(MAIN.contains(required), "missing wake-up law: {required}");
+    }
+    // The counters are page facts, so which path drove a turn is a reported number rather than a
+    // claim: schedules against turns says the loop is alive, and the split says which clock did it.
+    for required in [
+        "frame_schedules: FRAME_COUNTS.schedules,",
+        "frames_from_raf: FRAME_COUNTS.raf,",
+        "frames_from_fallback: FRAME_COUNTS.fallback,",
+        "frame_latch_clears: FRAME_COUNTS.latch_clears,",
+        "frame_loop_wakeups: FRAME_COUNTS.wakeups,",
+    ] {
+        assert!(MAIN.contains(required), "missing frame-loop counter: {required}");
+    }
 }
 
 #[test]

@@ -6,7 +6,19 @@ const TARGET = document.getElementById("target");
 const RUBBER = document.getElementById("rubber");
 const MORPH = document.getElementById("morph");
 const BOXES = { a: null, b: null };
+// The frame loop must not be able to latch. A `requestAnimationFrame` queued while the tab or the
+// pane is not painting is never called, so a flag set at schedule time and cleared only inside that
+// callback outlives the frame it was guarding: every later schedule returns immediately while
+// `app_needs_refresh` still answers true, and the picture sleeps on a transient frame until a
+// control move happens to reach `guarded`. The flag is therefore cleared on frame entry, retired
+// whenever the page becomes visible or focused again, and backed by a low-rate timer that runs the
+// turn the animation callback did not. Whichever path arrives first for a schedule clears the flag
+// and runs it, so a healthy `requestAnimationFrame` and the timer can never both drive one turn.
+const FRAME_FALLBACK_MS = 250;
 let RAF_PENDING = false;
+let FRAME_TICKET = 0;
+let FRAME_FALLBACK_TIMER = null;
+const FRAME_COUNTS = { schedules: 0, raf: 0, fallback: 0, latch_clears: 0, wakeups: 0 };
 let STORAGE_STATUS = "available";
 
 // One key per box. Every access is wrapped because a private window, cleared site data, or a
@@ -108,6 +120,11 @@ function pageFacts() {
     view_box_b_held: BOXES.b !== null,
     morph_t: MORPH.disabled ? null : Number(MORPH.value),
     view_box_storage: STORAGE_STATUS,
+    frame_schedules: FRAME_COUNTS.schedules,
+    frames_from_raf: FRAME_COUNTS.raf,
+    frames_from_fallback: FRAME_COUNTS.fallback,
+    frame_latch_clears: FRAME_COUNTS.latch_clears,
+    frame_loop_wakeups: FRAME_COUNTS.wakeups,
   };
 }
 
@@ -150,28 +167,63 @@ function bindControls(api) {
       return false;
     }
   };
+  // One turn per schedule, whichever path arrives with it. A stale animation callback carries an
+  // older ticket, and the timer behind a callback that already ran finds the flag clear, so neither
+  // can run a turn twice; the flag is cleared before the body so the turn may schedule the next.
+  const runFrame = (ticket, nowMs, viaFallback) => {
+    if (!RAF_PENDING || ticket !== FRAME_TICKET) return;
+    RAF_PENDING = false;
+    if (viaFallback) FRAME_COUNTS.fallback += 1;
+    else FRAME_COUNTS.raf += 1;
+    try {
+      api.app_refresh(nowMs);
+      const facts = refreshFacts();
+      if (facts.loop_stopped_reason) fail(facts.loop_stopped_reason);
+      else showStatus(liveStatus(facts));
+      if (stillTurning()) scheduleFrame();
+    } catch (error) {
+      fail(error);
+      try {
+        renderFacts(JSON.parse(api.app_facts_json()));
+      } catch (factsError) {
+        console.error(factsError);
+      }
+      if (stillTurning()) scheduleFrame();
+    }
+  };
   const scheduleFrame = () => {
     if (RAF_PENDING) return;
     RAF_PENDING = true;
-    requestAnimationFrame(nowMs => {
-      RAF_PENDING = false;
-      try {
-        api.app_refresh(nowMs);
-        const facts = refreshFacts();
-        if (facts.loop_stopped_reason) fail(facts.loop_stopped_reason);
-        else showStatus(liveStatus(facts));
-        if (stillTurning()) scheduleFrame();
-      } catch (error) {
-        fail(error);
-        try {
-          renderFacts(JSON.parse(api.app_facts_json()));
-        } catch (factsError) {
-          console.error(factsError);
-        }
-        if (stillTurning()) scheduleFrame();
+    FRAME_COUNTS.schedules += 1;
+    const ticket = (FRAME_TICKET += 1);
+    requestAnimationFrame(nowMs => runFrame(ticket, nowMs, false));
+    if (FRAME_FALLBACK_TIMER !== null) clearTimeout(FRAME_FALLBACK_TIMER);
+    // The low rate is the point: it is a floor under a loop the browser has stopped painting for,
+    // not a second animation clock. Arriving after a healthy callback it does nothing at all, and
+    // arriving with nothing due it still releases the flag, because the callback it was waiting on
+    // may never be called and the next control move must be able to schedule.
+    FRAME_FALLBACK_TIMER = setTimeout(() => {
+      FRAME_FALLBACK_TIMER = null;
+      if (!RAF_PENDING || ticket !== FRAME_TICKET) return;
+      if (stillTurning()) {
+        runFrame(ticket, performance.now(), true);
+      } else {
+        RAF_PENDING = false;
+        FRAME_COUNTS.latch_clears += 1;
       }
-    });
+    }, FRAME_FALLBACK_MS);
   };
+  // Returning to a page the browser stopped painting for retires the schedule outright rather than
+  // waiting on a callback that may never be called, and asks for a turn if one is still due.
+  const wakeFrameLoop = () => {
+    FRAME_COUNTS.wakeups += 1;
+    RAF_PENDING = false;
+    FRAME_TICKET += 1;
+    if (stillTurning()) scheduleFrame();
+  };
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) wakeFrameLoop(); });
+  window.addEventListener("pageshow", wakeFrameLoop);
+  window.addEventListener("focus", wakeFrameLoop);
   const guarded = operation => {
     try {
       operation();
