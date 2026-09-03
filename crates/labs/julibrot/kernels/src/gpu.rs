@@ -155,8 +155,14 @@ impl JulibrotKernels {
             executor.free_span(span).map_err(|_| KernelError::Heap)?;
             return Err(KernelError::Dispatch);
         }
-        let shallow_dispatches =
-            match dispatch_templates(executor, &self.shallow, &[], &span, plan, &[0; 144]) {
+        let shallow_dispatches = match dispatch_templates(
+            executor,
+            &self.shallow,
+            &[],
+            &span,
+            plan,
+            &[0; core::mem::size_of::<ShallowUniform>()],
+        ) {
                 Ok(dispatches) => dispatches,
                 Err(error) => {
                     executor.free_span(span).map_err(|_| KernelError::Heap)?;
@@ -294,7 +300,7 @@ impl JulibrotKernels {
                 &[reference.span],
                 &grid.span,
                 &allocation.plan,
-                &[0; 112],
+                &[0; core::mem::size_of::<PerturbUniform>()],
             )?;
             let mut cached = allocation.reference_dispatches.borrow_mut();
             if cached.len() == 2 {
