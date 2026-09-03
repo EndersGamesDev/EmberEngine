@@ -60,7 +60,7 @@ pub(crate) trait OwnerPort {
     /// Transferred pool buffer.
     type Slot: OwnerSlot;
 
-    /// Allocates one trailer-bearing pool buffer of exactly `64 + 8 * max_iter` bytes.
+    /// Allocates one trailer-bearing pool buffer sized for the orbit and minimum request wall.
     fn allocate(&self, pool: Pool, slot: u32, max_iter: u32) -> Result<Self::Slot, ChannelError>;
 
     /// Transfers one slot to the producer, detaching this side.

@@ -21,8 +21,9 @@ pub const BUFFER_OVERHEAD_BYTES: usize = HEADER_BYTES + ORBIT_FACT_BYTES + POOL_
 pub const ORBIT_RECORD_BYTES: usize = 8;
 /// One error record size in bytes.
 pub const ERROR_RECORD_BYTES: usize = 16;
+const MIN_BUFFER_CAPACITY_BYTES: usize = 644;
 
-/// Returns the exact capacity `64 + 8 * max_iter` with checked arithmetic.
+/// Returns `max(644, 64 + 8 * max_iter)` so a cap-64 request still fits the 300-digit policy.
 ///
 /// # Errors
 ///
@@ -33,6 +34,7 @@ pub fn buffer_capacity(max_iter: u32) -> Result<usize, ChannelError> {
         .and_then(|count| count.checked_mul(ORBIT_RECORD_BYTES));
     records
         .and_then(|bytes| bytes.checked_add(BUFFER_OVERHEAD_BYTES))
+        .map(|bytes| bytes.max(MIN_BUFFER_CAPACITY_BYTES))
         .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, max_iter, u32::MAX, 0))
 }
 
@@ -743,7 +745,7 @@ mod tests {
         assert_eq!(size_of::<ReferenceOrbitRecord>(), ORBIT_RECORD_BYTES);
         assert_eq!(
             buffer_capacity(64).unwrap(),
-            BUFFER_OVERHEAD_BYTES + 64 * 8
+            MIN_BUFFER_CAPACITY_BYTES
         );
     }
 
