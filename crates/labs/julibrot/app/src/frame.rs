@@ -2179,9 +2179,7 @@ mod browser {
         /// Returns cached stopping-refusal text with no display allocation.
         #[must_use]
         pub fn stopped_text(&self) -> Option<std::sync::Arc<str>> {
-            self.loop_state
-                .stopped_text()
-                .map(std::sync::Arc::clone)
+            self.loop_state.stopped_text().map(std::sync::Arc::clone)
         }
 
         /// Returns the latched terminal cause once the loop has stopped.
@@ -2828,6 +2826,15 @@ mod tests {
                 .last_transient_text()
                 .expect("the refusal cached its display text"),
         );
+        frame_loop.stop(AppError::Deadline {
+            operation: "facts stopping harness",
+            deadline_ms: 2.0,
+        });
+        let stopped = std::sync::Arc::clone(
+            frame_loop
+                .stopped_text()
+                .expect("the stop cached its display text"),
+        );
         let timings = LevelTimingLedger::default();
         let timing_address = std::ptr::from_ref(&timings);
 
@@ -2838,6 +2845,12 @@ mod tests {
                     .expect("cached text remains available"),
             );
             assert!(std::sync::Arc::ptr_eq(&cached, &text));
+            let stopped_text = std::sync::Arc::clone(
+                frame_loop
+                    .stopped_text()
+                    .expect("cached stop text remains available"),
+            );
+            assert!(std::sync::Arc::ptr_eq(&stopped, &stopped_text));
             assert_eq!(std::ptr::from_ref(&timings), timing_address);
         }
 
