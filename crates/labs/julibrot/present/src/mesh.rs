@@ -282,6 +282,12 @@ mod tests {
         assert_eq!(uncertain.height, 0.0);
         let uncertain_interior = height_for_record([-1.0, 0.0, 0.0, 3.0], 64, CLASSIC_PALETTE)?;
         assert_eq!(uncertain_interior.height, -2.0);
+        // A beyond-bailout escape carries a negative smooth count. It is an ordinary exterior
+        // sample: the clamp puts it on the floor, and the shader's `record_height` agrees.
+        let beyond_bailout = height_for_record([-1.112_397, 1.0, 0.0, 0.0], 64, CLASSIC_PALETTE)?;
+        assert_eq!(beyond_bailout.height, -2.0);
+        assert!(!beyond_bailout.debug_tint);
+        assert!(!beyond_bailout.contract_violation);
         Ok(())
     }
 

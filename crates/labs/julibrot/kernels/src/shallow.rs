@@ -383,6 +383,84 @@ mod tests {
     }
 
     #[test]
+    fn a_horizon_crossing_map_splits_terminal_records_from_beyond_bailout_escapes() {
+        // One row whose denominator is the centred column coordinate: the left half is beyond the
+        // horizon and terminal, the right half divides and lands outside the bailout radius 16, so
+        // its escape index is zero and its smooth count `1-log2(log2|z_0|)` is below -1. Both sides
+        // are well-formed records; neither is a contract violation for present to tint.
+        let plane = Plane {
+            basis_u: [1.0, 0.0, 0.0, 0.0],
+            basis_v: [0.0, 1.0, 0.0, 0.0],
+        };
+        let centre = CentreSplit {
+            hi: [0.0; 4],
+            lo: [0.0; 4],
+        };
+        let extent = GridExtent {
+            width: 8,
+            height: 1,
+        };
+        let map = Homography {
+            rows: [0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            inverse: Homography::IDENTITY.inverse,
+            condition_number: 1.0,
+        };
+        let uniform = ShallowUniform::pack(
+            plane,
+            &map,
+            centre,
+            1.0,
+            extent,
+            EscapeParams::new(64),
+            RefinementLevel::Final,
+        )
+        .expect("finite map packs");
+        let mut horizons = 0_u32;
+        let mut beyond_bailout = 0_u32;
+        for index in 0..8 {
+            let sample = escape_shallow_pixel(&uniform, index).expect("pixel is in range");
+            assert!(crate::record_is_well_formed(
+                sample,
+                crate::KernelMode::Shallow
+            ));
+            if index < 4 {
+                assert_eq!(sample, super::terminal_sample(SampleStatus::Horizon));
+                horizons += 1;
+                continue;
+            }
+            assert_eq!(sample.record.status, SampleStatus::Sampled.as_f32());
+            assert_eq!(sample.record.escaped, 1.0);
+            assert_eq!(sample.escape_index, Some(0));
+            assert!(sample.record.smooth_iter.is_finite());
+            assert!(sample.record.smooth_iter < -1.0);
+            beyond_bailout += 1;
+            // The CPU mirror and math's binary32 oracle agree on the same negative count.
+            let offset = crate::records::pixel_offset(
+                index,
+                extent,
+                plane,
+                [
+                    uniform.screen_to_plane_row_0,
+                    uniform.screen_to_plane_row_1,
+                    uniform.screen_to_plane_row_2,
+                ],
+                1.0,
+            )
+            .expect("the positive-denominator half maps")
+            .offset;
+            let expected = ember_julibrot_math::escape_f32(offset, EscapeParams::new(64))
+                .expect("math oracle accepts the point");
+            for mode in PrecisionMode::ALL {
+                assert_eq!(
+                    crate::evaluate_shallow_conformance(mode, sample, expected).verdict,
+                    crate::ConformanceVerdict::Pass
+                );
+            }
+        }
+        assert_eq!((horizons, beyond_bailout), (4, 4));
+    }
+
+    #[test]
     fn horizon_is_terminal_but_uncertain_pixels_are_sampled() {
         let plane = Plane {
             basis_u: [1.0, 0.0, 0.0, 0.0],

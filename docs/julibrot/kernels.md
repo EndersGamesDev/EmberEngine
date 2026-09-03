@@ -191,7 +191,7 @@ Escape-grid texel `(i,j)` is record `j·width+i`, one 16-byte RGBA32F value with
 
 |Byte range|RGBA lane|Meaning|
 |---------:|---------|-------|
-|0–3|R|`smooth_iter: f32`, the specified smooth value at escape or exactly `−1.0` otherwise|
+|0–3|R|`smooth_iter: f32`, the specified smooth value at escape or exactly `−1.0` otherwise; the escape value is negative whenever `log₂(log₂|zₙ|) > n+1`, which every escape from outside radius `16` at index zero satisfies|
 |4–7|G|`escaped: f32`, exactly `0.0` or `1.0`|
 |8–11|B|`rebase_count: f32`, a nonnegative exactly representable integer, zero for shallow|
 |12–15|A|`status: f32`, exactly `0.0` sampled, `1.0` glitch, `2.0` horizon, or `3.0` uncertified near horizon|
