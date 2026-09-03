@@ -252,9 +252,56 @@ fn saturating_f64_to_u32(value: f64) -> u32 {
 mod tests {
     use super::{
         centre_displacement_px, mirror_centre, pixel_scale, precision_for, scaled_pixel_offset,
-        scaled_pixel_scale, split_centre,
+        scaled_pixel_scale, split_centre, split_scalar,
     };
-    use crate::{BigCentre, MathError, Plane};
+    use crate::{BigCentre, MathError, Plane, decode_big_scalar};
+
+    #[test]
+    fn low_word_never_changes_the_consumed_binary32_value_over_ten_thousand_splits(
+    ) -> Result<(), MathError> {
+        const RANDOM_COUNT: usize = 9_984;
+        const ADVERSARIAL_COUNT: usize = 16;
+        let mut changed = 0_usize;
+        let mut tested = 0_usize;
+        let mut state = 0x243f_6a88_85a3_08d3_u64;
+        for index in 0..RANDOM_COUNT {
+            let mut limbs = [0_u32; 4];
+            for limb in &mut limbs {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                *limb = u32::try_from(state & u64::from(u32::MAX)).expect("masked random limb");
+            }
+            limbs[3] |= 0x8000_0000;
+            let exponent = -253 + i32::try_from(state % 251).expect("bounded exponent");
+            let value =
+                decode_big_scalar(u32::from(index & 1 != 0), exponent, &limbs, 256)?;
+            let [high, low] = split_scalar(&value)?;
+            changed += usize::from((high + low).to_bits() != high.to_bits());
+            tested += 1;
+        }
+        for high_exponent in [-120_i32, -40, 0, 100] {
+            for sign in [0_u32, 1] {
+                for midpoint_numerator in [0x0100_0001_u32, 0x0100_0003] {
+                    let value = decode_big_scalar(
+                        sign,
+                        high_exponent - 24,
+                        &[midpoint_numerator],
+                        256,
+                    )?;
+                    let [high, low] = split_scalar(&value)?;
+                    changed += usize::from((high + low).to_bits() != high.to_bits());
+                    tested += 1;
+                }
+            }
+        }
+        eprintln!(
+            "reference_split_measurement tested={tested} random={RANDOM_COUNT} adversarial={ADVERSARIAL_COUNT} consumed_word_changes={changed}"
+        );
+        assert_eq!(tested, RANDOM_COUNT + ADVERSARIAL_COUNT);
+        assert_eq!(changed, 0);
+        Ok(())
+    }
 
     #[test]
     fn scale_never_materializes_the_deep_power_of_two() -> Result<(), MathError> {
