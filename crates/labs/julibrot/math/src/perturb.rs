@@ -126,6 +126,7 @@ pub fn perturb_scaled_f64_with_envelope(
         };
         let reference = reconstruct(*record);
         let reference_error = reference_reconstruction_error(*record);
+        let reconstruction_error = display_reconstruction_error(*record);
         let actual_delta = ldexp_complex(delta_prime, exponent);
         let z = reference.add(actual_delta);
         last_value = z;
@@ -135,6 +136,7 @@ pub fn perturb_scaled_f64_with_envelope(
         let display_error = displayed_error(
             reference.hypot(),
             reference_error,
+            reconstruction_error,
             actual_delta.hypot(),
             absolute_error,
             exponent,
@@ -178,6 +180,7 @@ pub fn perturb_scaled_f64_with_envelope(
             rebase_count += 1;
             absolute_error = display_error
                 + reference_reconstruction_error(orbit[0])
+                + display_reconstruction_error(orbit[0])
                 + rebase_rounding_error(z, z_zero, exponent);
             if !renormalize(
                 &mut delta_prime,
@@ -365,6 +368,14 @@ fn reference_reconstruction_error(record: ReferenceOrbitRecord) -> f64 {
     half_ulp(record.re_lo).hypot(half_ulp(record.im_lo))
 }
 
+fn display_reconstruction_error(record: ReferenceOrbitRecord) -> f64 {
+    let displayed_re = f64::from(record.re_hi + record.re_lo);
+    let displayed_im = f64::from(record.im_hi + record.im_lo);
+    let exact_re = f64::from(record.re_hi) + f64::from(record.re_lo);
+    let exact_im = f64::from(record.im_hi) + f64::from(record.im_lo);
+    (displayed_re - exact_re).hypot(displayed_im - exact_im)
+}
+
 fn half_ulp(value: f32) -> f64 {
     let exponent = (value.to_bits() >> 23) & 0xff;
     if exponent == 0 {
@@ -383,14 +394,16 @@ fn centre_offset_error(value: Complex64, exponent: i32) -> f64 {
 fn displayed_error(
     reference_norm: f64,
     reference_error: f64,
+    reconstruction_error: f64,
     delta_norm: f64,
     delta_error: f64,
     exponent: i32,
 ) -> f64 {
     reference_error
+        + reconstruction_error
         + delta_error
-        + gamma(2) * (reference_norm + delta_norm)
-        + 2.0 * scaled_subnormal_floor(exponent)
+        + gamma(1) * (reference_norm + delta_norm)
+        + scaled_subnormal_floor(exponent)
 }
 
 fn rebase_rounding_error(value: Complex64, z_zero: Complex64, exponent: i32) -> f64 {
