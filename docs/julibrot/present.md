@@ -108,7 +108,7 @@ Exactly two single-sample, one-mip `Rgba8Unorm` scene textures exist: one is the
 
 A scene submission captures reconciled `PresentMain` plus the referenced HOT slot into math's immutable `Pose`, including object angles, object origin, twenty view scalars, and the level's map; that captured sampled pose remains the sole basis for later reference-shift rebasing.
 
-While the scene fence is pending, every surface refresh may submit a warp against the retained texture. After the fence callback, `Presenter::poll` promotes the completed texture, pose, palette, grid extent, and measurement unless the retained higher-level or larger-extent scene still has an accepted, non-exposed warp for the latest HOT pose; in that case the draft completion advances the app schedule without replacing the retained source and its texture remains the next target. A Final completion replaces the older Final as usual.
+While the scene fence is pending, every surface refresh may submit a warp against the retained texture. After the fence callback, `Presenter::poll` promotes the completed texture, pose, palette, grid extent, and measurement unless the retained higher-level or larger-extent scene still has an accepted warp for the latest HOT pose, exposed or covering; in that case the draft completion advances the app schedule without replacing the retained source and its texture remains the next target. A Final completion replaces the older Final as usual.
 
 If a new level has a different extent, only the available target is reallocated before scene submission, its immutable warp bind group is rebuilt once and the allocation count advances; the retained texture and its bind group stay valid until promotion, keeping the total at two textures.
 
@@ -160,7 +160,7 @@ The corpus is measured where there is something to measure. A lattice sample bey
 
 Exposure is measured against the retained image, which reaches half a texel past its outermost sample centres. That reach is not cosmetic. A pose composed onto itself is the identity only as closely as the f32 plane basis it was built from allows: at `o₁₃=1.5` the frame's own border lands `2.1e-5` pixels outside itself, two orders of magnitude inside the half-texel footprint and three orders below any disocclusion a moved view produces. Without the footprint that rounding read as a disocclusion, and because an exposed warp latches the exposure that restarts the refinement ladder, the ladder restarted for as long as the pose was held.
 
-Newly exposed source coordinates outside the retained texture show `clear_rgba` and set the exposure latch; the next completed scene fills them over the exterior sky. The plan carries the exact `(scene_id,texture_index)` it was solved against, and draw clears if the retained source differs, preventing a scene promoted between HOT write and frame from sampling a different texture with stale rows.
+Newly exposed source coordinates outside the retained texture show `clear_rgba` and set the exposure latch; the next completed scene fills them over the exterior sky. An exposed accepted warp continues sampling the sharper retained source wherever it has coverage instead of promoting a draft over the whole surface; this lane deliberately keeps the uncovered region temporarily clear rather than adding a second texture sample and bind group. `warp_exposed_fraction` reports the share of the same fixed 9-by-9 destination lattice that the actual uploaded rows put out of source while excluding points the shader paints as horizon sky. The plan carries the exact `(scene_id,texture_index)` it was solved against, and draw clears if the retained source differs, preventing a scene promoted between HOT write and frame from sampling a different texture with stale rows.
 
 ### 2.7 Relief redraw
 
@@ -298,7 +298,7 @@ The HOT buffer size is `3·slot_stride`, where `slot_stride=align_up(288,device.
 
 `DropReason` is `IncompatibleMain`, `ReplacedMain`, or `InvalidExtent`; `FenceRefusal` is `PollLimit`, `Deadline`, `Device`, or `Cancelled`, and each variant is rendered verbatim by the app rather than collapsed into “slow.”
 
-`PresentFacts` publishes retained and pending identities, delivered state, precision provenance, view and reference displacement, scene/warp measurements, warp counts, texture reallocations, exposure/fill state, chart residual, measured maximum and p95 error, and status. `record_warp_plan` is the sole writer of the three planner facts, so they describe the same plan; every planned source has a measured maximum, while a pre-solve incompatibility has no fabricated number.
+`PresentFacts` publishes retained and pending identities, delivered state, precision provenance, view and reference displacement, scene/warp measurements, warp counts, texture reallocations, exposure/fill state and fraction, chart residual, measured maximum and p95 error, and status. `record_warp_plan` is the sole writer of the planner and exposure facts, so they describe the same plan; every planned source has a measured maximum, while a pre-solve incompatibility has no fabricated number.
 
 `PresentStatus` is `WaitingForFirstScene`, `ShowingCompletedScene`, `ShowingStaleApproximation`, `ClearForIncompatibleMain`, or `Refused(PresentError)`; app combines these delivered and measured facts with its own requested resolution, requested level, requested iteration cap, zoom digits, floor/working/delivered precision, orbit length, and rebase/glitch availability without substitution.
 
@@ -310,7 +310,7 @@ The HOT buffer size is `3·slot_stride`, where `slot_stride=align_up(288,device.
 
 `Presenter::set_main(&mut self,main:PresentMain)` is the infallible MAIN-drain endpoint: it records latest-wins state, applies a not-yet-consumed `reference_shift_px` to retained and in-flight poses for the accepted revision, and invalidates them when delivered `max_iter`, `plane_origin_f64`, or `precision_mode` changed, without allocating, submitting, waiting, or returning an error.
 
-`Presenter::write_hot(&mut self,slot:HotSlot,hot:PresentHot,validation:WarpValidation)` stores the planned source scene and texture beside the slot, measures and enforces the plan bound, writes one 288-byte payload, and falls back to `source_valid=0` on refusal; `covering_warp_source_level(slot)` reports a source only when that same accepted plan is not exposed, and `frame` rechecks the retained identity before selecting it.
+`Presenter::write_hot(&mut self,slot:HotSlot,hot:PresentHot,validation:WarpValidation)` stores the planned source scene and texture beside the slot, measures and enforces the plan bound, writes one 288-byte payload, and falls back to `source_valid=0` on refusal; `accepted_warp_source(slot)` reports the accepted source level plus its exposure bit, and `frame` rechecks the retained identity before selecting it.
 
 `Presenter::submit_scene(&mut self,hot_slot:HotSlot,now_ms:f64)->Result<u64,PresentError>` captures current MAIN and the exact HOT pose, asks the scene ledger to construct the pending record and return its single authoritative texture index, prepares and encodes against that same index, submits a four-byte fence, and returns its monotonically increasing `scene_id` without waiting.
 
@@ -318,7 +318,7 @@ The HOT buffer size is `3·slot_stride`, where `slot_stride=align_up(288,device.
 
 `FrameReceipt` is `{refresh_id:u64,warp_id:u64,source_scene_id:Option<u64>,precision_mode:&'static str,status:PresentStatus}` with no byte ABI, reports `source_scene_id=None` when that slot's warp plan paints only clear even if a retained scene exists, and contains no fabricated wall because its fence has not completed.
 
-`Presenter::poll(&mut self,now_ms:f64)->Vec<PresentEvent>` performs at most one shared `device.poll` per call to service both pending fences, increments each pending fence's own observation count once for that shared poll, retains the best accepted compatible scene across draft completions, promotes Final or a draft needed after refusal/exposure, retires bounded failures, and never waits or yields internally; app's refresh loop supplies the browser yield between polls.
+`Presenter::poll(&mut self,now_ms:f64)->Vec<PresentEvent>` performs at most one shared `device.poll` per call to service both pending fences, increments each pending fence's own observation count once for that shared poll, retains the best accepted compatible scene across draft completions including exposed accepted warps, promotes Final or a draft needed after refusal, retires bounded failures, and never waits or yields internally; app's refresh loop supplies the browser yield between polls.
 
 `Presenter::facts(&self)->PresentFacts` returns the latest immutable snapshot without polling, allocating, submitting, or draining owner state.
 
