@@ -1377,10 +1377,10 @@ mod tests {
     }
 
     #[test]
-    fn every_plane_keeps_a_full_screen_plan_through_a_view_turn() {
+    fn non_neutral_relief_sweep_measures_its_envelope_and_refuses_over_ceiling_rows() {
         let mut observed_max = 0.0_f64;
         let mut observed_p95 = 0.0_f64;
-        let mut redrawn = 0_u32;
+        let mut cleared = 0_u32;
         for (object, plane) in named_objects() {
             for step in 0..SWEEP_ANGLES {
                 let theta = -0.6 + 1.2 * f64::from(step) / f64::from(SWEEP_ANGLES - 1);
@@ -1396,8 +1396,9 @@ mod tests {
                     PrecisionMode::PictureFast,
                     WarpValidation::Measure,
                 );
-                if plan.kind == WarpKind::ReliefRedraw {
-                    redrawn = redrawn.saturating_add(1);
+                assert_ne!(plan.kind, WarpKind::ReliefRedraw);
+                if plan.kind == WarpKind::ClearOnly {
+                    cleared = cleared.saturating_add(1);
                 }
                 let error = plan
                     .approx_max_error_px
@@ -1419,8 +1420,8 @@ mod tests {
             "swept p95 maximum was {observed_p95} pixels"
         );
         assert!(
-            redrawn > 0,
-            "the measured relief envelope never selected record redraw"
+            cleared > 0,
+            "the measured non-neutral relief envelope never refused an over-ceiling row"
         );
     }
 
