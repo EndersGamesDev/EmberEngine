@@ -229,12 +229,12 @@ fn stable_fresh_sample(pose: &Pose, target: [f64; 2]) -> Option<KernelSample> {
 }
 
 fn oracle_points(extent: [u32; 2]) -> Vec<[f64; 2]> {
-    let mut points = Vec::with_capacity(99);
-    for row in 0..5 {
-        for column in 0..7 {
+    let mut points = Vec::with_capacity(181);
+    for row in 0..9 {
+        for column in 0..13 {
             points.push([
-                ((f64::from(column) + 0.37) / 7.0 - 0.5) * f64::from(extent[0]) * 0.8,
-                ((f64::from(row) + 0.61) / 5.0 - 0.5) * f64::from(extent[1]) * 0.8,
+                ((f64::from(column) + 0.37) / 13.0 - 0.5) * f64::from(extent[0]) * 0.8,
+                ((f64::from(row) + 0.61) / 9.0 - 0.5) * f64::from(extent[1]) * 0.8,
             ]);
         }
     }
