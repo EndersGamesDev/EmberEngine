@@ -525,10 +525,7 @@ impl FrameLoop {
         self.schedule.due()
     }
 
-    fn skip_drafts_for_accepted_warp(
-        &mut self,
-        source: Option<(RefinementLevel, bool)>,
-    ) -> bool {
+    fn skip_drafts_for_accepted_warp(&mut self, source: Option<(RefinementLevel, bool)>) -> bool {
         let Some(due) = self.due() else {
             return false;
         };

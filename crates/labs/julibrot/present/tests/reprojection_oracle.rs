@@ -802,18 +802,17 @@ fn a_camera_factor_turns_the_flat_picture_off_the_preset_row() {
             let Some(source) = apply_homography(inverse, target) else {
                 continue;
             };
-            if nearest_retained(
-                &retained,
-                [preset.grid_width, preset.grid_height],
-                source,
-            )
-            .is_none()
+            if nearest_retained(&retained, [preset.grid_width, preset.grid_height], source)
+                .is_none()
             {
                 exposed = exposed.saturating_add(1);
             }
         }
     }
-    assert!(exposed > 0, "the accepted source honestly leaves clear corners");
+    assert!(
+        exposed > 0,
+        "the accepted source honestly leaves clear corners"
+    );
 
     assert_fixture(
         "camera q12 off the preset row",

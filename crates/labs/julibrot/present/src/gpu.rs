@@ -68,7 +68,6 @@ impl WarpSourceSlot {
     fn frame<'a>(&self, retained: Option<&'a crate::SceneFrame>) -> Option<&'a crate::SceneFrame> {
         select_warp_source(self.planned, retained)
     }
-
 }
 
 impl SampleTracker {
@@ -318,9 +317,9 @@ impl Presenter {
         self.exposure.observe_warp(plan.exposed);
         self.facts.centre_from_reference_px = hot.state.centre_from_reference_px;
         self.facts.view = hot.view;
-        let exposed_fraction = pose.as_ref().and_then(|to_pose| {
-            warp_exposed_fraction(&plan, to_pose, self.ledger.retained())
-        });
+        let exposed_fraction = pose
+            .as_ref()
+            .and_then(|to_pose| warp_exposed_fraction(&plan, to_pose, self.ledger.retained()));
         self.facts.record_warp_plan(&plan, exposed_fraction);
         self.facts.scene_fill_due = self.exposure.due();
         if matches!(plan.kind, WarpKind::ClearOnly | WarpKind::ReliefRedraw)
