@@ -380,13 +380,13 @@ mod tests {
         }
     }
 
-    fn validated_plan(from: Pose, to: &Pose) -> WarpPlan {
+    fn validated_plan(from: Pose, to: &Pose, mode: PrecisionMode) -> WarpPlan {
         Warp::reproject(
             &frame(from),
             &from,
             to,
-            CONFORMANCE_MODE,
-            WarpValidation::Ordinary,
+            mode,
+            WarpValidation::Measure,
         )
     }
 
@@ -394,11 +394,13 @@ mod tests {
     fn the_neutral_plan_reproduces_the_exact_pan_translation() {
         let from = pose(ViewControls::NEUTRAL, [2.0, 3.0]);
         let to = pose(ViewControls::NEUTRAL, [7.0, -1.0]);
-        let plan = validated_plan(from, &to);
-        assert_eq!(plan.kind, WarpKind::AnchorHomography);
-        assert!(plan.source_valid);
-        assert!((f64::from(plan.rows[0][2]) - 10.0 / 1920.0).abs() < 1.0e-7);
-        assert!((f64::from(plan.rows[1][2]) + 8.0 / 1080.0).abs() < 1.0e-7);
+        for mode in PrecisionMode::ALL {
+            let plan = validated_plan(from, &to, mode);
+            assert_eq!(plan.kind, WarpKind::AnchorHomography);
+            assert!(plan.source_valid);
+            assert!((f64::from(plan.rows[0][2]) - 10.0 / 1920.0).abs() < 1.0e-7);
+            assert!((f64::from(plan.rows[1][2]) + 8.0 / 1080.0).abs() < 1.0e-7);
+        }
     }
 
     #[test]
@@ -416,27 +418,29 @@ mod tests {
             let mut to = pose(view, [-4.0, 9.125]);
             to.zoom_log2 += 0.75;
             let exact = warp_matrix(&from, &to).expect("the neutral fixture is finite");
-            let plan = validated_plan(from, &to);
-            assert_eq!(plan.kind, WarpKind::AnchorHomography);
-            let solved = [
-                f64::from(plan.rows[0][0]),
-                f64::from(plan.rows[0][1]),
-                f64::from(plan.rows[0][2]),
-                f64::from(plan.rows[1][0]),
-                f64::from(plan.rows[1][1]),
-                f64::from(plan.rows[1][2]),
-                f64::from(plan.rows[2][0]),
-                f64::from(plan.rows[2][1]),
-                f64::from(plan.rows[2][2]),
-            ];
-            for (index, (value, wanted)) in solved.into_iter().zip(exact.forward).enumerate() {
-                assert!(
-                    (value - wanted).abs() <= 1.0e-6,
-                    "d={distance} coefficient {index}: {value} left the exact {wanted}"
-                );
+            for mode in PrecisionMode::ALL {
+                let plan = validated_plan(from, &to, mode);
+                assert_eq!(plan.kind, WarpKind::AnchorHomography);
+                let solved = [
+                    f64::from(plan.rows[0][0]),
+                    f64::from(plan.rows[0][1]),
+                    f64::from(plan.rows[0][2]),
+                    f64::from(plan.rows[1][0]),
+                    f64::from(plan.rows[1][1]),
+                    f64::from(plan.rows[1][2]),
+                    f64::from(plan.rows[2][0]),
+                    f64::from(plan.rows[2][1]),
+                    f64::from(plan.rows[2][2]),
+                ];
+                for (index, (value, wanted)) in solved.into_iter().zip(exact.forward).enumerate() {
+                    assert!(
+                        (value - wanted).abs() <= 1.0e-6,
+                        "d={distance} coefficient {index}: {value} left the exact {wanted}"
+                    );
+                }
+                assert!(plan.approx_max_error_px.is_some_and(|error| error < 1.0e-9));
+                assert!(plan.approx_p95_error_px.is_some_and(|error| error < 1.0e-9));
             }
-            assert!(plan.approx_max_error_px.is_some_and(|error| error < 1.0e-9));
-            assert!(plan.approx_p95_error_px.is_some_and(|error| error < 1.0e-9));
         }
     }
 
@@ -553,11 +557,13 @@ mod tests {
     #[test]
     fn relief_identity_has_neutral_anchors_and_zero_sample_error() {
         let current = pose(relief(0.6), [0.0; 2]);
-        let plan = validated_plan(current, &current);
-        assert_eq!(plan.kind, WarpKind::AnchorHomography);
-        assert!(plan.source_valid);
-        assert!(plan.approx_max_error_px.is_some_and(|error| error < 1.0e-9));
-        assert!(plan.approx_p95_error_px.is_some_and(|error| error < 1.0e-9));
+        for mode in PrecisionMode::ALL {
+            let plan = validated_plan(current, &current, mode);
+            assert_eq!(plan.kind, WarpKind::AnchorHomography);
+            assert!(plan.source_valid);
+            assert!(plan.approx_max_error_px.is_some_and(|error| error < 1.0e-9));
+            assert!(plan.approx_p95_error_px.is_some_and(|error| error < 1.0e-9));
+        }
     }
 
     #[test]
@@ -565,16 +571,18 @@ mod tests {
         let from = pose(relief(0.6), [0.0; 2]);
         let mut to = pose(relief(0.602), [2.0, -1.0]);
         to.zoom_log2 += 0.025;
-        let plan = validated_plan(from, &to);
-        assert_eq!(plan.kind, WarpKind::AnchorHomography);
-        let maximum = plan
-            .approx_max_error_px
-            .expect("the complete corpus reports a maximum");
-        // Re-measured under the control-driven observer: the approximation is unchanged in chart
-        // terms, but the height-zero framing is now the chart map instead of the retired mount's
-        // 2*1.72/(9*aspect), so the same error covers about 4.65 times as many pixels at 16:9.
-        assert!(maximum <= 8.0, "maximum error was {maximum} pixels");
-        assert!(plan.approx_p95_error_px.is_some_and(f64::is_finite));
+        for mode in PrecisionMode::ALL {
+            let plan = validated_plan(from, &to, mode);
+            assert_eq!(plan.kind, WarpKind::AnchorHomography);
+            let maximum = plan
+                .approx_max_error_px
+                .expect("the complete corpus reports a maximum");
+            // Re-measured under the control-driven observer: the approximation is unchanged in
+            // chart terms, but the height-zero framing is now the chart map instead of the retired
+            // mount's 2*1.72/(9*aspect), so the same error covers about 4.65 times as many pixels.
+            assert!(maximum <= 8.0, "maximum error was {maximum} pixels");
+            assert!(plan.approx_p95_error_px.is_some_and(f64::is_finite));
+        }
     }
 
     fn relief_pose(plane: Plane, theta: f64, displacement: [f64; 2]) -> Pose {
@@ -603,7 +611,7 @@ mod tests {
         pan_px: [2.0, 1.0],
     };
 
-    fn sweep_plan(plane: Plane, step: u32, motion: Motion) -> WarpPlan {
+    fn sweep_plan(plane: Plane, step: u32, motion: Motion, mode: PrecisionMode) -> WarpPlan {
         let theta = core::f64::consts::TAU * f64::from(step) / f64::from(SWEEP_ANGLES);
         let displacement = [3.5, -2.25];
         let from = relief_pose(plane, theta, displacement);
@@ -613,15 +621,15 @@ mod tests {
         ];
         let mut to = relief_pose(plane, theta + motion.view_radians, panned);
         to.zoom_log2 += motion.zoom_log2;
-        validated_plan(from, &to)
+        validated_plan(from, &to, mode)
     }
 
     /// Returns the clear-only count and the worst sampled error over one full turn of VIEW angle.
-    fn sweep(plane: Plane, motion: Motion) -> (u32, f64) {
+    fn sweep(plane: Plane, motion: Motion, mode: PrecisionMode) -> (u32, f64) {
         let mut clear_only = 0_u32;
         let mut maximum = 0.0_f64;
         for step in 0..SWEEP_ANGLES {
-            let plan = sweep_plan(plane, step, motion);
+            let plan = sweep_plan(plane, step, motion, mode);
             if plan.kind == WarpKind::ClearOnly {
                 clear_only += 1;
                 continue;
@@ -683,22 +691,24 @@ mod tests {
 
     #[test]
     fn every_named_plane_warps_at_every_swept_view_angle() -> Result<(), MathError> {
-        for (name, plane) in named_planes()? {
-            let (clear_only, maximum) = sweep(plane, ENVELOPE);
-            assert_eq!(
-                clear_only, 0,
-                "{name} plane fell back to clear-only at {clear_only} of {SWEEP_ANGLES} angles"
-            );
-            assert!(
-                maximum <= 16.0,
-                "{name} plane sampled {maximum} pixels over the full acceptance envelope"
-            );
-            let (clear_only, maximum) = sweep(plane, ROTATION_ONLY);
-            assert_eq!(clear_only, 0, "{name} plane cleared without a zoom step");
-            assert!(
-                maximum <= 4.0,
-                "{name} plane sampled {maximum} pixels for rotation and pan alone"
-            );
+        for mode in PrecisionMode::ALL {
+            for (name, plane) in named_planes()? {
+                let (clear_only, maximum) = sweep(plane, ENVELOPE, mode);
+                assert_eq!(
+                    clear_only, 0,
+                    "{name} plane fell back to clear-only at {clear_only} of {SWEEP_ANGLES} angles"
+                );
+                assert!(
+                    maximum <= 16.0,
+                    "{name} plane sampled {maximum} pixels over the full acceptance envelope"
+                );
+                let (clear_only, maximum) = sweep(plane, ROTATION_ONLY, mode);
+                assert_eq!(clear_only, 0, "{name} plane cleared without a zoom step");
+                assert!(
+                    maximum <= 4.0,
+                    "{name} plane sampled {maximum} pixels for rotation and pan alone"
+                );
+            }
         }
         Ok(())
     }
@@ -708,8 +718,8 @@ mod tests {
         let [(_, mandelbrot), (_, julia), (_, hybrid)] = named_planes()?;
         for mode in PrecisionMode::ALL {
             for step in 0..SWEEP_ANGLES {
-                let reference = sweep_plan_for_mode(mandelbrot, step, ENVELOPE, mode);
-                let julia_plan = sweep_plan_for_mode(julia, step, ENVELOPE, mode);
+                let reference = sweep_plan(mandelbrot, step, ENVELOPE, mode);
+                let julia_plan = sweep_plan(julia, step, ENVELOPE, mode);
                 // Deliberate operation-word identity belongs only to deterministic conformance.
                 if mode.requires_bit_identity() {
                     assert_eq!(julia_plan.rows, reference.rows);
@@ -721,7 +731,7 @@ mod tests {
                 assert_eq!(julia_plan.kind, reference.kind);
                 assert!(julia_plan.chart_residual <= 1.0e-12);
                 assert!(reference.chart_residual <= 1.0e-12);
-                let tilted = sweep_plan_for_mode(hybrid, step, ENVELOPE, mode);
+                let tilted = sweep_plan(hybrid, step, ENVELOPE, mode);
                 assert_eq!(tilted.kind, reference.kind);
                 for (row, expected) in tilted.rows.into_iter().zip(reference.rows) {
                     for (value, wanted) in row.into_iter().zip(expected) {
@@ -734,24 +744,6 @@ mod tests {
             }
         }
         Ok(())
-    }
-
-    fn sweep_plan_for_mode(
-        plane: Plane,
-        step: u32,
-        motion: Motion,
-        mode: PrecisionMode,
-    ) -> WarpPlan {
-        let theta = core::f64::consts::TAU * f64::from(step) / f64::from(SWEEP_ANGLES);
-        let displacement = [3.5, -2.25];
-        let from = relief_pose(plane, theta, displacement);
-        let panned = [
-            displacement[0] + motion.pan_px[0],
-            displacement[1] + motion.pan_px[1],
-        ];
-        let mut to = relief_pose(plane, theta + motion.view_radians, panned);
-        to.zoom_log2 += motion.zoom_log2;
-        Warp::reproject(&frame(from), &from, &to, mode, WarpValidation::Measure)
     }
 
     #[test]
