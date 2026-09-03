@@ -3,6 +3,14 @@ const PIVOT_EPSILON: f64 = 1.0e-12;
 /// Solves the projective map from four destination anchors to four source anchors.
 #[must_use]
 pub fn solve_homography(destination: [[f64; 2]; 4], source: [[f64; 2]; 4]) -> Option<[f64; 9]> {
+    solve_homogeneous(
+        destination.map(|[x, y]| [x, y, 1.0]),
+        source.map(|[x, y]| [x, y, 1.0]),
+    )
+}
+
+/// Solves four homogeneous destination-to-source anchor correspondences.
+pub fn solve_homogeneous(destination: [[f64; 3]; 4], source: [[f64; 3]; 4]) -> Option<[f64; 9]> {
     if destination
         .iter()
         .chain(source.iter())
@@ -12,9 +20,9 @@ pub fn solve_homography(destination: [[f64; 2]; 4], source: [[f64; 2]; 4]) -> Op
         return None;
     }
     let mut augmented = [[0.0; 9]; 8];
-    for (point, ([x, y], [u, v])) in destination.into_iter().zip(source).enumerate() {
-        augmented[point * 2] = [x, y, 1.0, 0.0, 0.0, 0.0, -u * x, -u * y, u];
-        augmented[point * 2 + 1] = [0.0, 0.0, 0.0, x, y, 1.0, -v * x, -v * y, v];
+    for (point, ([x, y, z], [u, v, w])) in destination.into_iter().zip(source).enumerate() {
+        augmented[point * 2] = [w * x, w * y, w * z, 0.0, 0.0, 0.0, -u * x, -u * y, u * z];
+        augmented[point * 2 + 1] = [0.0, 0.0, 0.0, w * x, w * y, w * z, -v * x, -v * y, v * z];
     }
     let mut column = 0;
     while column < 8 {

@@ -3,8 +3,8 @@ use ember_lab_heap::DialectLimits;
 const HEAP_SCENE_PREFIX: &str = r"
 struct HeapDescriptors { entries: array<vec4<u32>, __DESCRIPTORS__>, }
 struct HeapDirectory { spans: array<vec4<u32>, __SPANS__>, handles: array<vec4<u32>, __HANDLE_GROUPS__>, }
-struct SceneUniform { grid: vec4<u32>, span: vec4<u32>, palette_map: vec4<f32>, interior_rgba: vec4<f32>, clear_rgba: vec4<f32>, }
-struct HotUniform { camera: vec4<f32>, view_scale: vec4<f32>, view_rotation: vec4<f32>, homography_row_0: vec4<f32>, homography_row_1: vec4<f32>, homography_row_2: vec4<f32>, clear_rgba: vec4<f32>, flags: vec4<u32>, }
+struct SceneUniform { grid: vec4<u32>, span: vec4<u32>, screen_to_plane_row_0: vec4<f32>, screen_to_plane_row_1: vec4<f32>, screen_to_plane_row_2: vec4<f32>, palette_map: vec4<f32>, interior_rgba: vec4<f32>, clear_rgba: vec4<f32>, }
+struct HotUniform { camera: vec4<f32>, view_scale: vec4<f32>, view_rotation: vec4<f32>, homography_row_0: vec4<f32>, homography_row_1: vec4<f32>, homography_row_2: vec4<f32>, screen_to_plane_row_0: vec4<f32>, screen_to_plane_row_1: vec4<f32>, screen_to_plane_row_2: vec4<f32>, clear_rgba: vec4<f32>, flags: vec4<u32>, }
 @group(0) @binding(0) var heap_data: texture_2d_array<f32>;
 @group(0) @binding(1) var<uniform> heap_descriptors: HeapDescriptors;
 @group(0) @binding(2) var<uniform> heap_directory: HeapDirectory;
@@ -25,14 +25,16 @@ fn load_escape(index: u32) -> vec4<f32> {
 }
 fn binary(value: f32) -> bool { return value == 0.0 || value == 1.0; }
 fn finite(value: f32) -> bool { return abs(value) <= 3.402823e38; }
+fn terminal_status(value: f32) -> bool { return value == 0.0 || value == 1.0 || value == 2.0 || value == 3.0; }
 fn malformed(record: vec4<f32>) -> bool {
-    return !binary(record.y) || !binary(record.w) || !finite(record.z) || record.z < 0.0 || record.z != floor(record.z);
+    return !binary(record.y) || !terminal_status(record.w) || !finite(record.z) || record.z < 0.0 || record.z != floor(record.z);
 }
 fn hue_component(hue: f32, offset: f32) -> f32 {
     return clamp(abs(fract(hue + offset) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
 }
 fn shade(record: vec4<f32>) -> vec4<f32> {
     if (malformed(record) || record.w == 1.0) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
+    if (record.w == 2.0 || record.w == 3.0) { return scene.clear_rgba; }
     if (record.y == 0.0) {
         if (record.x == -1.0) { return scene.interior_rgba; }
         return vec4<f32>(1.0, 0.0, 1.0, 1.0);
@@ -46,7 +48,7 @@ fn shade(record: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(rgb, 1.0);
 }
 fn record_height(record: vec4<f32>) -> f32 {
-    if (malformed(record) || record.w == 1.0) { return 0.0; }
+    if (malformed(record) || record.w != 0.0) { return 0.0; }
     if (record.y == 0.0) {
         if (record.x == -1.0) { return -2.0; }
         return 0.0;
@@ -61,19 +63,37 @@ struct SceneVertex { @builtin(position) position: vec4<f32>, @location(0) world:
     let column = index % scene.grid.x;
     let row = index / scene.grid.x;
     let record = load_escape(index);
-    let q_u = 4.0 * ((f32(column) + 0.5) / f32(scene.grid.x) - 0.5);
-    let q_v = 4.0 * (f32(row) + 0.5 - f32(scene.grid.y) * 0.5) / f32(scene.grid.x);
-    let display = vec4<f32>(q_u, q_v, 0.0, 0.0);
-    let height = hot.view_scale.x * record_height(record);
-    let p_3 = display.z * hot.view_rotation.z - height * hot.view_rotation.w;
-    let p_5 = display.z * hot.view_rotation.w + height * hot.view_rotation.z;
-    let p_1 = display.x * hot.view_rotation.x - display.y * hot.view_rotation.y;
-    let p_2 = display.x * hot.view_rotation.y + display.y * hot.view_rotation.x;
+    let screen_x = f32(column) + 0.5 - 0.5 * f32(scene.grid.x);
+    let screen_y = f32(row) + 0.5 - 0.5 * f32(scene.grid.y);
+    let direct_ndc = vec2<f32>(2.0 * screen_x / f32(scene.grid.x), 2.0 * screen_y / f32(scene.grid.y));
     var output: SceneVertex;
     output.world = vec3<f32>(0.0);
     output.grid_coordinate = vec2<f32>(f32(column), f32(row));
     output.valid = 0.0;
     output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+    if (record.w == 2.0 || record.w == 3.0) { return output; }
+    let screen = vec3<f32>(screen_x, screen_y, 1.0);
+    let plane_homogeneous = vec3<f32>(dot(scene.screen_to_plane_row_0.xyz, screen), dot(scene.screen_to_plane_row_1.xyz, screen), dot(scene.screen_to_plane_row_2.xyz, screen));
+    if (!finite(plane_homogeneous.z) || plane_homogeneous.z <= 0.0) { return output; }
+    let gamma_five = 0.000000476837158203125;
+    let screen_abs = abs(screen);
+    let plane_error = gamma_five * vec3<f32>(dot(abs(scene.screen_to_plane_row_0.xyz), screen_abs), dot(abs(scene.screen_to_plane_row_1.xyz), screen_abs), dot(abs(scene.screen_to_plane_row_2.xyz), screen_abs));
+    if (plane_homogeneous.z <= plane_error.z) { return output; }
+    let plane_offset = plane_homogeneous.xy / plane_homogeneous.z;
+    let quotient_error = (plane_error.xy + abs(plane_offset) * plane_error.z) / (plane_homogeneous.z - plane_error.z);
+    if (!all(vec2<bool>(finite(quotient_error.x), finite(quotient_error.y))) || any(quotient_error > vec2<f32>(0.25))) { return output; }
+    let display = vec4<f32>(4.0 * plane_offset.x / f32(scene.grid.x), 4.0 * plane_offset.y / f32(scene.grid.x), 0.0, 0.0);
+    let height = hot.view_scale.x * record_height(record);
+    if (hot.view_scale.x == 0.0) {
+        output.world = display.xyz;
+        output.valid = 1.0;
+        output.position = vec4<f32>(direct_ndc, 0.0, 1.0);
+        return output;
+    }
+    let p_3 = display.z * hot.view_rotation.z - height * hot.view_rotation.w;
+    let p_5 = display.z * hot.view_rotation.w + height * hot.view_rotation.z;
+    let p_1 = display.x * hot.view_rotation.x - display.y * hot.view_rotation.y;
+    let p_2 = display.x * hot.view_rotation.y + display.y * hot.view_rotation.x;
     let distance_five = hot.view_scale.y;
     let distance_four = hot.view_scale.z;
     let denominator_five = distance_five - p_5;
@@ -107,6 +127,7 @@ struct SceneVertex { @builtin(position) position: vec4<f32>, @location(0) world:
     let coordinate = vec2<u32>(clamp(floor(input.grid_coordinate + vec2<f32>(0.5)), vec2<f32>(0.0), limit));
     let record = load_escape(coordinate.y * scene.grid.x + coordinate.x);
     if (malformed(record) || record.w == 1.0) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
+    if (record.w == 2.0 || record.w == 3.0) { return scene.clear_rgba; }
     let normal_cross = cross(dpdx(input.world), dpdy(input.world));
     var normal = vec3<f32>(0.0, 0.0, 1.0);
     if (dot(normal_cross, normal_cross) > 1.0e-12) { normal = normalize(normal_cross); }
@@ -159,6 +180,7 @@ mod tests {
         let source = scene_shader(limits());
         assert!(source.contains("let row = index / scene.grid.x;"));
         assert!(source.contains("malformed(record) || record.w == 1.0"));
+        assert!(source.contains("record.w == 2.0 || record.w == 3.0"));
         assert!(source.contains("!finite(record.x) || record.x < 0.0"));
         assert!(source.contains("vec4<f32>(1.0, 0.0, 1.0, 1.0)"));
         assert!(source.contains("textureLoad(heap_data"));
@@ -168,8 +190,15 @@ mod tests {
     fn the_scene_pins_heap_rotation_poles_camera_depth_and_light() {
         let source = scene_shader(limits());
         for required in [
-            "let display = vec4<f32>(q_u, q_v, 0.0, 0.0);",
+            "let screen_x = f32(column) + 0.5 - 0.5 * f32(scene.grid.x);",
+            "let screen_y = f32(row) + 0.5 - 0.5 * f32(scene.grid.y);",
+            "let plane_homogeneous = vec3<f32>(dot(scene.screen_to_plane_row_0.xyz, screen), dot(scene.screen_to_plane_row_1.xyz, screen), dot(scene.screen_to_plane_row_2.xyz, screen));",
+            "if (plane_homogeneous.z <= plane_error.z) { return output; }",
+            "quotient_error > vec2<f32>(0.25)",
+            "let display = vec4<f32>(4.0 * plane_offset.x / f32(scene.grid.x), 4.0 * plane_offset.y / f32(scene.grid.x), 0.0, 0.0);",
             "let height = hot.view_scale.x * record_height(record);",
+            "if (hot.view_scale.x == 0.0)",
+            "output.position = vec4<f32>(direct_ndc, 0.0, 1.0);",
             "display.z * hot.view_rotation.z - height * hot.view_rotation.w",
             "display.x * hot.view_rotation.x - display.y * hot.view_rotation.y",
             "let distance_five = hot.view_scale.y;",
@@ -182,6 +211,8 @@ mod tests {
             "let camera_pitch_cosine = hot.camera.z;",
             "let camera_near = 0.1;",
             "let camera_far = 4.0 * distance_four;",
+            "let yawed = vec3<f32>(camera_yaw_cosine * world.x + camera_yaw_sine * world.z, world.y, -camera_yaw_sine * world.x + camera_yaw_cosine * world.z);",
+            "let view = vec3<f32>(yawed.x, camera_pitch_cosine * yawed.y - camera_pitch_sine * yawed.z, camera_pitch_sine * yawed.y + camera_pitch_cosine * yawed.z - distance_four);",
             "let perspective_scale = aspect * distance_four * 0.5;",
             // The three places d4 reaches the picture. At height zero the clip-space w is d4 and
             // the scale is proportional to d4, so the two cancel and leave the chart map, and the

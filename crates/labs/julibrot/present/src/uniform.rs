@@ -1,10 +1,14 @@
 use bytemuck::{Pod, Zeroable};
+use ember_julibrot_math::Homography;
 use thiserror::Error;
 
-use crate::PaletteRecord;
+use crate::{PaletteRecord, pack_homography_rows};
 
 /// Number of payload bytes in one HOT ring slot.
-pub const HOT_PAYLOAD_BYTES: u32 = 128;
+pub const HOT_PAYLOAD_BYTES: u32 = 176;
+
+/// Number of bytes in the regional scene payload.
+pub const SCENE_PAYLOAD_BYTES: u32 = 128;
 
 /// Number of dynamic-offset slots in the HOT ring.
 pub const HOT_RING_SLOTS: u32 = 3;
@@ -25,6 +29,12 @@ pub struct HotUniform {
     pub homography_row_1: [f32; 4],
     /// Third padded row of the inverse-sampling homography.
     pub homography_row_2: [f32; 4],
+    /// First padded row of the current screen-to-plane map.
+    pub screen_to_plane_row_0: [f32; 4],
+    /// Second padded row of the current screen-to-plane map.
+    pub screen_to_plane_row_1: [f32; 4],
+    /// Third padded row of the current screen-to-plane map.
+    pub screen_to_plane_row_2: [f32; 4],
     /// Honest clear and disocclusion colour.
     pub clear_rgba: [f32; 4],
     /// Epoch low/high words, source validity, and one reserved zero.
@@ -39,6 +49,12 @@ pub struct SceneUniform {
     pub grid: [u32; 4],
     /// Span-directory index, logical length, and zero padding.
     pub span: [u32; 4],
+    /// First padded row of the map used to sample this grid.
+    pub screen_to_plane_row_0: [f32; 4],
+    /// Second padded row of the map used to sample this grid.
+    pub screen_to_plane_row_1: [f32; 4],
+    /// Third padded row of the map used to sample this grid.
+    pub screen_to_plane_row_2: [f32; 4],
     /// Palette period, phase, colour mix, and value.
     pub palette_map: [f32; 4],
     /// Exact interior colour.
@@ -56,7 +72,7 @@ pub enum PresentDataError {
     /// Checked byte arithmetic exceeded `u32`.
     #[error("presentation byte arithmetic overflowed")]
     ArithmeticOverflow,
-    /// A slot stride could overlap a 128-byte payload.
+    /// A slot stride could overlap a 176-byte payload.
     #[error("HOT slot stride {0} is invalid")]
     InvalidStride(u32),
     /// A grid extent or active prefix was invalid.
@@ -69,9 +85,12 @@ pub enum PresentDataError {
         /// Addressable span records.
         logical_len: u32,
     },
+    /// A screen map coefficient cannot be represented by the GPU payload.
+    #[error("the screen-to-plane map cannot be represented as finite f32 rows")]
+    InvalidMap,
 }
 
-/// Computes the dynamic-uniform stride for one 128-byte payload.
+/// Computes the dynamic-uniform stride for one 176-byte payload.
 ///
 /// # Errors
 ///
@@ -162,6 +181,7 @@ impl SceneUniform {
         max_iter: u32,
         directory_index: u32,
         logical_len: u32,
+        screen_to_plane: &Homography,
         selected: PaletteRecord,
     ) -> Result<Self, PresentDataError> {
         let [width, height] = extent;
@@ -173,9 +193,14 @@ impl SceneUniform {
                 height,
                 logical_len,
             })?;
+        let rows =
+            pack_homography_rows(screen_to_plane.rows).ok_or(PresentDataError::InvalidMap)?;
         Ok(Self {
             grid: [width, height, level, max_iter],
             span: [directory_index, active_len, 0, 0],
+            screen_to_plane_row_0: rows[0],
+            screen_to_plane_row_1: rows[1],
+            screen_to_plane_row_2: rows[2],
             palette_map: selected.map,
             interior_rgba: selected.interior_rgba,
             clear_rgba: selected.clear_rgba,
@@ -192,7 +217,7 @@ mod tests {
 
     #[test]
     fn gpu_layouts_match_the_exact_byte_contract() {
-        assert_eq!(size_of::<HotUniform>(), 128);
+        assert_eq!(size_of::<HotUniform>(), 176);
         assert_eq!(align_of::<HotUniform>(), 16);
         assert_eq!(offset_of!(HotUniform, camera), 0);
         assert_eq!(offset_of!(HotUniform, view_scale), 16);
@@ -200,15 +225,21 @@ mod tests {
         assert_eq!(offset_of!(HotUniform, homography_row_0), 48);
         assert_eq!(offset_of!(HotUniform, homography_row_1), 64);
         assert_eq!(offset_of!(HotUniform, homography_row_2), 80);
-        assert_eq!(offset_of!(HotUniform, clear_rgba), 96);
-        assert_eq!(offset_of!(HotUniform, flags), 112);
-        assert_eq!(size_of::<SceneUniform>(), 80);
+        assert_eq!(offset_of!(HotUniform, screen_to_plane_row_0), 96);
+        assert_eq!(offset_of!(HotUniform, screen_to_plane_row_1), 112);
+        assert_eq!(offset_of!(HotUniform, screen_to_plane_row_2), 128);
+        assert_eq!(offset_of!(HotUniform, clear_rgba), 144);
+        assert_eq!(offset_of!(HotUniform, flags), 160);
+        assert_eq!(size_of::<SceneUniform>(), 128);
         assert_eq!(align_of::<SceneUniform>(), 16);
         assert_eq!(offset_of!(SceneUniform, grid), 0);
         assert_eq!(offset_of!(SceneUniform, span), 16);
-        assert_eq!(offset_of!(SceneUniform, palette_map), 32);
-        assert_eq!(offset_of!(SceneUniform, interior_rgba), 48);
-        assert_eq!(offset_of!(SceneUniform, clear_rgba), 64);
+        assert_eq!(offset_of!(SceneUniform, screen_to_plane_row_0), 32);
+        assert_eq!(offset_of!(SceneUniform, screen_to_plane_row_1), 48);
+        assert_eq!(offset_of!(SceneUniform, screen_to_plane_row_2), 64);
+        assert_eq!(offset_of!(SceneUniform, palette_map), 80);
+        assert_eq!(offset_of!(SceneUniform, interior_rgba), 96);
+        assert_eq!(offset_of!(SceneUniform, clear_rgba), 112);
     }
 
     #[test]
@@ -272,7 +303,7 @@ mod tests {
     fn ring_stride_and_slots_are_checked() {
         assert_eq!(hot_stride(256), Ok(256));
         assert_eq!(hot_ring_bytes(256), Ok(768));
-        assert_eq!(hot_stride(48), Ok(144));
+        assert_eq!(hot_stride(48), Ok(192));
         assert_eq!(hot_stride(0), Err(PresentDataError::ZeroAlignment));
         let slot = HotSlot::for_refresh(8, 256, 19).expect("valid slot");
         assert_eq!(
@@ -287,12 +318,13 @@ mod tests {
 
     #[test]
     fn scene_uniform_keeps_final_capacity_and_rejects_bad_prefixes() {
-        let uniform = SceneUniform::new([3, 2], 1, 64, 7, 12, CLASSIC_PALETTE)
-            .expect("six active records fit twelve-record capacity");
+        let uniform =
+            SceneUniform::new([3, 2], 1, 64, 7, 12, &Homography::IDENTITY, CLASSIC_PALETTE)
+                .expect("six active records fit twelve-record capacity");
         assert_eq!(uniform.grid, [3, 2, 1, 64]);
         assert_eq!(uniform.span, [7, 6, 0, 0]);
         assert_eq!(
-            SceneUniform::new([4, 4], 0, 64, 7, 12, CLASSIC_PALETTE),
+            SceneUniform::new([4, 4], 0, 64, 7, 12, &Homography::IDENTITY, CLASSIC_PALETTE,),
             Err(PresentDataError::InvalidGrid {
                 width: 4,
                 height: 4,

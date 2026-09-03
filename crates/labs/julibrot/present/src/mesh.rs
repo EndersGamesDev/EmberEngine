@@ -115,9 +115,9 @@ pub fn height_for_record(
         return Err(MeshError::InvalidInput);
     }
     let palette = shade_escape_record(record, selected);
-    let glitch = record[3] == 1.0;
-    let debug_tint = palette.rgba == DEBUG_TINT && (palette.contract_violation || glitch);
-    let height = if debug_tint {
+    let status = record[3];
+    let debug_tint = palette.rgba == DEBUG_TINT && (palette.contract_violation || status == 1.0);
+    let height = if debug_tint || status == 2.0 || status == 3.0 {
         0.0
     } else if record[1] == 0.0 {
         -2.0
@@ -242,6 +242,12 @@ mod tests {
         let escaped = height_for_record([32.0, 1.0, 0.0, 0.0], 64, CLASSIC_PALETTE)?;
         assert_eq!(escaped.height, 0.0);
         assert!(!escaped.debug_tint);
+        for status in [2.0, 3.0] {
+            let clear = height_for_record([0.0, 0.0, 0.0, status], 64, CLASSIC_PALETTE)?;
+            assert_eq!(clear.height, 0.0);
+            assert!(!clear.debug_tint);
+            assert!(!clear.contract_violation);
+        }
         Ok(())
     }
 

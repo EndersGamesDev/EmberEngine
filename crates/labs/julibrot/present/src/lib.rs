@@ -36,7 +36,7 @@ pub use palette::{
 pub use planner::Warp;
 pub use shader::scene_shader;
 pub use uniform::{
-    HOT_PAYLOAD_BYTES, HOT_RING_SLOTS, HotSlot, HotUniform, PresentDataError, SceneUniform,
-    hot_ring_bytes, hot_stride,
+    HOT_PAYLOAD_BYTES, HOT_RING_SLOTS, HotSlot, HotUniform, PresentDataError, SCENE_PAYLOAD_BYTES,
+    SceneUniform, hot_ring_bytes, hot_stride,
 };
 pub use warp_shader::warp_shader;

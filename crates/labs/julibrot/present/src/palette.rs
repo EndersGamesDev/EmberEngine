@@ -76,20 +76,26 @@ fn hue_component(hue: f32, offset: f32) -> f32 {
     ((hue + offset).rem_euclid(1.0).mul_add(6.0, -3.0).abs() - 1.0).clamp(0.0, 1.0)
 }
 
-/// Applies the present palette to `[smooth_iter, escaped, rebase_count, glitch]`.
+/// Applies the present palette to `[smooth_iter, escaped, rebase_count, status]`.
 #[must_use]
 #[allow(clippy::float_cmp)]
 pub fn shade_escape_record(record: [f32; 4], selected: PaletteRecord) -> PaletteOutcome {
-    let [smooth_iter, escaped, rebase_count, glitch] = record;
+    let [smooth_iter, escaped, rebase_count, status] = record;
     let malformed = !is_binary(escaped)
-        || !is_binary(glitch)
+        || !matches!(status, 0.0 | 1.0 | 2.0 | 3.0)
         || !rebase_count.is_finite()
         || rebase_count < 0.0
         || rebase_count.fract() != 0.0;
-    if malformed || glitch == 1.0 {
+    if malformed || status == 1.0 {
         return PaletteOutcome {
             rgba: DEBUG_TINT,
             contract_violation: malformed,
+        };
+    }
+    if status == 2.0 || status == 3.0 {
+        return PaletteOutcome {
+            rgba: selected.clear_rgba,
+            contract_violation: false,
         };
     }
     if escaped == 0.0 {
@@ -201,6 +207,15 @@ mod tests {
             let malformed = shade_escape_record([-1.0, 0.5, 0.0, 0.0], CLASSIC_PALETTE);
             assert_palette_contract(mode, malformed.rgba, DEBUG_TINT);
             assert!(malformed.contract_violation);
+        }
+    }
+
+    #[test]
+    fn horizon_and_uncertain_records_use_the_palette_clear_colour() {
+        for status in [2.0, 3.0] {
+            let outcome = shade_escape_record([0.0, 0.0, 0.0, status], EMBER_PALETTE);
+            assert_eq!(outcome.rgba, EMBER_PALETTE.clear_rgba);
+            assert!(!outcome.contract_violation);
         }
     }
 
