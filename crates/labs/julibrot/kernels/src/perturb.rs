@@ -610,12 +610,12 @@ mod tests {
         let exact_re = f64::from(boundary.re);
         let observed_norm_error =
             (f64::from(gpu[0] * gpu[0] + gpu[1] * gpu[1]) - exact_re * exact_re).abs();
-        assert!(envelope.escape_norm2_error >= observed_norm_error);
-        assert!(envelope.escape_norm2_error <= 4.0 * observed_norm_error);
         eprintln!(
             "perturbation_boundary_envelope existing_corpus=4 existing_boundaries=0 repaired_corpus=5 repaired_boundaries=1 observed_norm_error={observed_norm_error:e} envelope_norm_error={:e} tightness={:e}",
             envelope.escape_norm2_error,
             envelope.escape_norm2_error / observed_norm_error,
         );
+        assert!(envelope.escape_norm2_error >= observed_norm_error);
+        assert!(envelope.escape_norm2_error <= 4.0 * observed_norm_error);
     }
 }
