@@ -31,7 +31,7 @@ pub use mesh::{
 };
 pub use palette::{
     CLASSIC_PALETTE, EMBER_PALETTE, ICE_PALETTE, PaletteId, PaletteOutcome, PaletteRecord, palette,
-    shade_escape_record,
+    shade_escape_record, shade_lit_escape_record,
 };
 pub use planner::Warp;
 pub use shader::scene_shader;

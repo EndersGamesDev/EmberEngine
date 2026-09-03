@@ -12,7 +12,9 @@ pub enum Axis4 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum PrecisionMode {
+    /// Preserve the exact operation sequence used by conformance and replay.
     Deterministic = 0,
+    /// Permit implementations whose Final pixels remain inside the picture contract.
     PictureFast = 1,
 }
 

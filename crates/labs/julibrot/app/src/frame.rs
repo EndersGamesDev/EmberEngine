@@ -378,8 +378,8 @@ mod browser {
 
     use super::{FrameLoop, RefusalClass};
     use crate::{
-        AppError, BrowserRuntime, FramePolicy, FramePolicyTracker, RefreshOutcome, RefreshStatus,
-        RunRequests, ViewerController,
+        AppError, BrowserRuntime, FramePolicy, FramePolicyTracker, LevelTimingLedger,
+        LevelTimingRecord, RefreshOutcome, RefreshStatus, RunRequests, ViewerController,
     };
 
     const HEAP_SIDE: u16 = 512;
@@ -477,6 +477,7 @@ mod browser {
         pending_warp_view: Option<(u64, ViewStamp)>,
         presented_view: Option<ViewStamp>,
         last_status: RefreshStatus,
+        level_timings: LevelTimingLedger,
     }
 
     impl BrowserFrameLoop {
@@ -578,6 +579,7 @@ mod browser {
                 pending_warp_view: None,
                 presented_view: None,
                 last_status: RefreshStatus::Waiting,
+                level_timings: LevelTimingLedger::default(),
             };
             Ok(frame_loop)
         }
@@ -780,6 +782,8 @@ mod browser {
             for event in events {
                 match event {
                     PresentEvent::SceneCompleted { frame } => {
+                        self.level_timings
+                            .complete_scene(frame.scene_id, frame.measurement);
                         if self.loop_state.completed(
                             frame.scene_id,
                             frame.pose.orbit_generation,
@@ -788,12 +792,19 @@ mod browser {
                             self.prepared_level = None;
                         }
                     }
-                    PresentEvent::SceneDropped { scene_id, .. } => {
+                    PresentEvent::SceneDropped {
+                        scene_id,
+                        measurement,
+                        ..
+                    } => {
+                        self.level_timings
+                            .drop_scene(scene_id, Some(measurement));
                         if self.loop_state.retired(scene_id) {
                             self.prepared_level = None;
                         }
                     }
                     PresentEvent::WarpCompleted { measurement } => {
+                        self.level_timings.complete_warp(measurement);
                         if measurement.sample_class
                             == ember_julibrot_present::SampleClass::ColdWarmUp
                         {
@@ -820,6 +831,9 @@ mod browser {
                         wall_ms,
                         precision_mode: _,
                     } => {
+                        if matches!(kind, SubmissionKind::Scene) {
+                            self.level_timings.drop_scene(id, None);
+                        }
                         let outcome = self.loop_state.refused(kind, reason, id, polls, wall_ms);
                         if outcome.retired_scene {
                             self.prepared_level = None;
@@ -1043,6 +1057,8 @@ mod browser {
             self.accepted_reference = Some(submitted.centre);
             self.accepted_reference_zoom_log2 = Some(submitted.zoom_log2);
             self.main = viewer.drain_main()?.main;
+            self.level_timings
+                .record_worker(response.centre_revision(), response.compute_us(), None);
             self.rebuild_grid_if_needed(viewer.requested().iteration_cap)?;
             self.loop_state.restart(response.generation());
             self.prepared_level = None;
@@ -1224,6 +1240,8 @@ mod browser {
             match self.presenter.submit_scene(slot, now_ms) {
                 Ok(scene_id) => {
                     self.last_dispatch = Some(facts);
+                    self.level_timings
+                        .begin_scene(self.main.centre_revision, scene_id, level);
                     self.loop_state.submitted(scene_id, level);
                     Ok(Some(scene_id))
                 }
@@ -1349,6 +1367,12 @@ mod browser {
             self.last_warp_source
         }
 
+        /// Returns the bounded per-edit timing records in oldest-to-newest order.
+        #[must_use]
+        pub fn level_timings(&self) -> Vec<LevelTimingRecord> {
+            self.level_timings.records()
+        }
+
         /// Returns the latest post-fence presented zoom, when known.
         #[must_use]
         pub fn last_presented_zoom_log2(&self) -> Option<f64> {
@@ -1417,7 +1441,8 @@ mod tests {
         FenceRefusal, FrameLoop, LEVELS, PresenterPoll, RefinementLevel, RefinementSchedule,
         RefusalClass, SubmissionKind, arrival_is_current, fence_error, published_iteration_cap,
     };
-    use crate::FramePolicy;
+    use crate::{FramePolicy, LevelTimingLedger};
+    use ember_julibrot_present::{SampleClass, SubmissionMeasurement};
 
     /// Poll budget and wall the version-two present configuration refuses at.
     const SCENE_POLLS: u32 = 4_096;
@@ -1628,6 +1653,52 @@ mod tests {
             presenter.fire_warp_completed();
             clock.advance(16.0);
         }
+    }
+
+    #[test]
+    fn headless_frame_loop_populates_a_per_level_timing_record() {
+        let mut frame_loop = FrameLoop::default();
+        let mut presenter = FakePresenter::default();
+        let mut clock = FakeClock::default();
+        let mut timings = LevelTimingLedger::default();
+        frame_loop.accept_request(7, true);
+        let scene_id = drive_refresh(&mut frame_loop, &mut presenter, clock)
+            .expect("headless Preview submission");
+        timings.record_worker(11, 1_250, None);
+        timings.begin_scene(11, scene_id, RefinementLevel::Preview);
+        presenter.fire_completed_callback();
+        clock.advance(2.5);
+        let _next_scene = drive_refresh(&mut frame_loop, &mut presenter, clock);
+        timings.complete_scene(
+            scene_id,
+            SubmissionMeasurement {
+                kind: SubmissionKind::Scene,
+                id: scene_id,
+                source_scene_id: None,
+                sample_class: SampleClass::Measured,
+                wall_ms: 2.5,
+                fence_wait_ms: 2.0,
+                polls: 2,
+            },
+        );
+        timings.complete_warp(SubmissionMeasurement {
+            kind: SubmissionKind::Warp,
+            id: 99,
+            source_scene_id: Some(scene_id),
+            sample_class: SampleClass::Measured,
+            wall_ms: 0.75,
+            fence_wait_ms: 0.5,
+            polls: 1,
+        });
+        assert_eq!(presenter.submissions[0], RefinementLevel::Preview);
+        assert_eq!(timings.records().len(), 1);
+        let record = timings.records()[0];
+        assert_eq!(record.scene_us, Some(2_500));
+        assert_eq!(record.warp_us, Some(750));
+        assert_eq!(record.worker_reference_us, Some(1_250));
+        assert_eq!(record.dispatch_us, None);
+        assert_eq!(record.credit_wait_us, None);
+        assert!(!record.discarded);
     }
 
     #[test]
