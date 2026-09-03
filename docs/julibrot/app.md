@@ -148,7 +148,7 @@ Only two things stop the refresh loop: device loss — an uncaptured error, a lo
 
 The timer probe performs at most 4,000,000 consecutive `performance.now()` reads, stops after 32 positive transitions or 500 ms, and uses the smallest positive transition `Q`; no positive transition makes timing unavailable without preventing requested rendering.
 
-After initialization, texture reallocation, or pipeline creation, the first completed warp and first completed scene are labelled warm-up and excluded; the second fenced frame decides the 100 ms policy, with `>100 ms` selecting single-frame-on-demand and `≤100 ms` permitting continuous animation/refinement.
+After initialization, texture reallocation, or pipeline creation, the first completed warp and first completed scene are labelled warm-up and excluded; the second fenced frame decides the 100 ms policy, with `>100 ms` selecting single-frame-on-demand and `≤100 ms` permitting continuous refinement. Nothing animates on its own under either policy: the geometry has no clock, so an untouched page reaches a fixed image and the loop is allowed to go quiet, which is what makes an unattended canvas pixel-identical minutes apart.
 
 An admitted measurement performs three named untimed warm-ups and 15 samples, repeats the exact submission until a batch spans at least `32Q`, caps target at 250 ms, repeats at 4,096, and suite wall at 30,000 ms, then reports the middle sorted median and nearest-rank p95 at `ceil(0.95n)`.
 
@@ -160,7 +160,9 @@ Worker `compute_us` is separately measured from centre decode through the standa
 
 The page exposes pointer-anchored wheel zoom, drag pan, and one control per view degree of freedom: two plane-angle sliders, four plane-origin sliders each paired with a number box on the same value, two VIEW-angle sliders, two camera-angle sliders, one height slider, and two perspective-distance sliders, beside a preset selector, iteration-cap and Classic/Ember/Ice palette selectors, explicit one-frame and measurement controls, one canvas, one status element, and one DOM facts overlay.
 
-A preset is a row of control values and nothing else. `app_preset(id)` returns that row as the exported control record; the page writes it into every control element and then applies it through the same handlers a user’s own movement reaches, so there is exactly one path from a control value to the worker, no preset can set a state the controls cannot express or leave, and moving a control after a preset morphs one preset continuously into another. The rows are Mandelbrot, Julia at `c₀=(−0.8,0.156)`, and a relief row for each, the relief rows differing only in height, VIEW angles, and camera angles.
+A preset is a row of control values and nothing else. `app_preset(id)` returns that row as the exported control record; the page writes it into every control element and then applies it through the same handlers a user’s own movement reaches, so there is exactly one path from a control value to the worker, no preset can set a state the controls cannot express or leave, and moving a control after a preset morphs one preset continuously into another. The rows are Mandelbrot, Julia at `c₀=(−0.8,0.156)`, and a relief row for each; the relief rows differ only in `h=1`, `θᵥ=(0.6,0.97)`, and observer `(0.349,0.262)`, which is the orientation the retired fixed mount had, now a row of numbers a user can leave.
+
+Every control lands on `input` except the four origin coordinates, which land on `change`. The origin is MAIN work — releasing it asks the worker for a new reference orbit — and one request per pixel of a drag would be a request storm; the paired number box gives exact entry either way.
 
 One wasm module is instantiated on the main thread and in the module worker, whose entry is `worker_main`; fetch caching avoids a second network payload, but two wasm instances and separate linear memories remain displayed costs.
 
@@ -500,7 +502,7 @@ The refined app estimate is approximately 2,710 net new lines including the Phas
 - The concrete release script for atomic page/glue/wasm/worker publication remains to be selected, although ABI and refusal semantics are fixed.
 - Hidden-page suspension can delay JavaScript before it observes a 30-second or four-second deadline; the first resumed poll refuses, but wasm cannot bound unscheduled browser time.
 - Browser internals may copy a transferred buffer even though sender detachment and the one explicit wasm copy are observable; the contract claims ownership transfer, not physical browser zero-copy.
-- The 2.0-pixel anchor-warp envelope and three palette choices lack visible target-display evidence.
+- The 8.0-pixel anchor-warp envelope and three palette choices lack visible target-display evidence.
 - The existing approximately 4.5 MB bundle expectation is not this lab’s exact release size, and no reviewed regression threshold exists yet.
 
 ## 9. Joint-review ACCEPTED/ARGUED ledger
