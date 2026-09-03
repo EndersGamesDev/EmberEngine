@@ -6,7 +6,7 @@ Status: implemented slice contract for `crates/labs/julibrot/kernels`; the revie
 
 The kernels slice owns GPU data-to-data work: the production shallow `f32` escape kernel, the production perturbation-and-rebasing kernel, their dialect-v2 registration and dispatch plans, one reusable escape-grid DATA span, SCRATCH-to-DATA landing, deterministic conformance fixtures, capacity arithmetic, and the definitions of the three refinement levels.
 
-The kernels slice owns level definitions but not their schedule: app runs the levels in order and may skip, cancels stale work by orbit generation rather than owner-epoch equality, and never relabels an unfinished level as delivered.
+The kernels slice owns the mode-dependent ladder but not its submission timing: app runs the levels returned for the selected precision mode, cancels stale work by orbit generation rather than owner-epoch equality, and never relabels an unfinished level as delivered.
 
 The kernels slice consumes the math slice's plane, centre split, CPU escape and perturbation oracles, and reference-orbit semantics; it neither constructs `Rₚ`, performs bignum navigation, nor chooses the bignum implementation.
 
@@ -40,7 +40,7 @@ Below the displayed switch POLICY `zoom_log2 < 14`, the shallow path uses `pixel
 
 Zoom depth is `zoom_log2·log10(2)` decimal digits, integral `depth_digits = ceil(max(0,zoom_log2·log10(2)))`, and the precision floor is `D_floor = ceil(zoom_log2·log10(2)+log10(W))+8`; worker adds its working margin and reports floor, working, and delivered precision separately, while kernels retain only the supplied orbit bits.
 
-The owner requests a new reference when the centre moves more than one quarter of the view extent or `zoom_log2` differs by more than two from the reference zoom, with worker-owned hysteresis; kernels only reject a reference whose published generation or logical length disagrees with the dispatch input.
+At or above the deep switch, the owner requests a new reference when the centre moves more than one quarter of the view extent or `zoom_log2` differs by more than two from the reference zoom, with worker-owned hysteresis; below the switch app accepts the current centre directly and shallow kernels receive no reference input.
 
 ### 2.2 Shallow escape kernel
 
@@ -86,7 +86,7 @@ A non-escaping perturbation pixel that reaches `max_iter` records `[-1.0,0.0,reb
 
 ### 2.4 Refinement, reuse, and latest-wins
 
-There are exactly three kernel-defined levels: Preview is `ceil(W/4) × ceil(H/4)` with `min(requested_max_iter,64)`, Interactive is `ceil(W/2) × ceil(H/2)` with `min(requested_max_iter,256)`, and Final is `W × H` with `min(requested_max_iter,4096)`.
+`Deterministic` retains exactly three kernel-defined levels: Preview is `ceil(W/4) × ceil(H/4)` with `min(requested_max_iter,64)`, Interactive is `ceil(W/2) × ceil(H/2)` with `min(requested_max_iter,256)`, and Final is `W × H` with `min(requested_max_iter,4096)`. `PictureFast` instead schedules Preview at `ceil(W/8) × ceil(H/8)` with `min(requested_max_iter,32)`, omits Interactive, and then schedules the same full delivered Final extent and cap.
 
 The value 4,096 is a tab-safety POLICY rather than a hardware wall; `RefinementPlan` retains both requested and delivered caps, and app may request a different future policy only after review rather than presenting 4,096 as detected capacity.
 
@@ -222,7 +222,7 @@ The inherited input resource entry is exactly 16 bytes `{ directory_index: u32, 
 
 ### 3.5 Refinement and dispatch records
 
-`LevelSpec` is `{ level: RefinementLevel, extent: GridExtent, iteration_cap: u32 }` and `RefinementPlan` is `{ requested_extent: GridExtent, delivered_extent: GridExtent, extent_divisor: u32, requested_max_iter: u32, delivered_max_iter: u32, page_side: u16, levels: [LevelSpec;3] }`.
+`LevelSpec` is `{ level: RefinementLevel, extent: GridExtent, iteration_cap: u32 }` and `RefinementPlan` is `{ requested_extent: GridExtent, delivered_extent: GridExtent, extent_divisor: u32, requested_max_iter: u32, delivered_max_iter: u32, page_side: u16, precision_mode: PrecisionMode, levels: [LevelSpec;3] }`; the fixed array retains stable per-discriminant header selection while `next_refinement_level(mode,level)` omits Interactive in `PictureFast`.
 
 `KernelMode` has `#[repr(u32)]` discriminants `Shallow = 0` and `Perturbation = 1`.
 
@@ -242,7 +242,7 @@ The inherited input resource entry is exactly 16 bytes `{ directory_index: u32, 
 
 `record_is_well_formed(sample: KernelSample, mode: KernelMode) -> bool` checks finite sentinels, exact binary flags, escape-index presence, integer-valued rebases through `2²⁴`, and zero shallow rebase/glitch fields; `VisibleReplayCard` is the CPU-only record `{ id:&'static str,requirement:&'static str }`, and `VISIBLE_REPLAY_CARDS` is the seven-entry kernels-to-app list whose requirement strings all begin `requires visible replay:` and cover both readbacks, SCRATCH landing, present consumption, binding identity, the zoom-14 switch, and the four-byte scene-fence handoff.
 
-`DispatchFacts` is `{ owner_epoch: u64, mode: KernelMode, level: RefinementLevel, requested_extent: GridExtent, delivered_extent: GridExtent, requested_max_iter: u32, delivered_max_iter: u32, active_pixels: u32, worst_case_pixel_iterations: u64, page_passes: u32, copy_commands: u32, gpu_copy_bytes: u64, logical_heap_bytes: u64, reserved_heap_bytes: u64, scratch_bytes: u64, orbit_generation: Option<u32>, orbit_length: u32 }`.
+`DispatchFacts` is `{ owner_epoch: u64, mode: KernelMode, level: RefinementLevel, requested_extent: GridExtent, delivered_extent: GridExtent, requested_max_iter: u32, delivered_max_iter: u32, active_pixels: u32, worst_case_pixel_iterations: u64, page_passes: u32, copy_commands: u32, gpu_copy_bytes: u64, logical_heap_bytes: u64, reserved_heap_bytes: u64, scratch_bytes: u64, orbit_generation: Option<u32>, orbit_length: u32, draft_pixels_discarded:u32, draft_iterations_discarded:u64 }`; the two appended fields are the exact scheduled pixel count and worst-case iteration count discarded when a Preview or Interactive successor lands, and are zero for Final.
 
 Every `DispatchFacts` byte and count is arithmetic from the accepted plan or a copied owner fact; GPU duration and poll count are deliberately absent because app measures submissions with its four-byte fence.
 
@@ -308,7 +308,7 @@ Native layout tests assert `Plane = 32`, `CentreSplit = 32`, shallow uniform `= 
 
 Native math-and-kernels coordinate tests cover both presets, the `R₁₃·R₂₄` multiplication order, the `π/2` plane exchange, hybrid bases with nonzero z and c components, the `8·f32::EPSILON` postcondition, odd and even extents, bottom-left and top-row pixel centres, row-zero-at-bottom indexing, square pixels, and checked scale-exponent overflow.
 
-Native refinement tests pin the three dimensions and caps, exact power-of-two extent degradation, one Final-capacity allocation, prefix page counts and last valid lengths, immutable span handles across all levels, requested-versus-delivered facts, and zero-delivery behavior.
+Native refinement tests pin the deterministic three-level dimensions and caps, the fast one-eighth Preview and Preview-to-Final sequence, per-level discarded-work facts, exact power-of-two extent degradation, one Final-capacity allocation, prefix page counts and last valid lengths, immutable span handles across all scheduled levels, requested-versus-delivered facts, and zero-delivery behavior.
 
 Native heap-path tests register both bodies through dialect v2, prove shallow has zero accessors and perturbation has exactly `load_reference`, exercise alias and stale-generation refusals, require `prefix_headers` for every dense level, pin dynamic header offsets, and verify copy rows, tail width, copied bytes, command counts, and separate SCRATCH accounting.
 

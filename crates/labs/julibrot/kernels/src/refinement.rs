@@ -6,8 +6,10 @@ use crate::{
 };
 
 const PREVIEW_DIVISOR: u32 = 4;
+const FAST_PREVIEW_DIVISOR: u32 = 8;
 const INTERACTIVE_DIVISOR: u32 = 2;
 const PREVIEW_CAP: u32 = 64;
+const FAST_PREVIEW_CAP: u32 = 32;
 const INTERACTIVE_CAP: u32 = 256;
 const FINAL_CAP: u32 = 4_096;
 const RECORD_BYTES: u64 = 16;
@@ -29,6 +31,7 @@ pub struct RefinementPlan {
     pub requested_max_iter: u32,
     pub delivered_max_iter: u32,
     pub page_side: u16,
+    pub precision_mode: PrecisionMode,
     pub levels: [LevelSpec; 3],
 }
 
@@ -41,6 +44,32 @@ impl RefinementPlan {
             RefinementLevel::Interactive => self.levels[1],
             RefinementLevel::Final => self.levels[2],
         }
+    }
+
+    /// Applies the selected precision policy to the kernel-owned ladder.
+    #[must_use]
+    pub fn with_precision_mode(mut self, precision_mode: PrecisionMode) -> Self {
+        self.precision_mode = precision_mode;
+        self.levels = levels(
+            self.delivered_extent,
+            self.requested_max_iter,
+            precision_mode,
+        );
+        self
+    }
+}
+
+/// Returns the next scheduled level for the selected precision policy.
+#[must_use]
+pub const fn next_refinement_level(
+    precision_mode: PrecisionMode,
+    completed: RefinementLevel,
+) -> Option<RefinementLevel> {
+    match (precision_mode, completed) {
+        (PrecisionMode::PictureFast, RefinementLevel::Preview)
+        | (_, RefinementLevel::Interactive) => Some(RefinementLevel::Final),
+        (_, RefinementLevel::Preview) => Some(RefinementLevel::Interactive),
+        (_, RefinementLevel::Final) => None,
     }
 }
 
@@ -65,6 +94,8 @@ pub struct DispatchFacts {
     pub scratch_bytes: u64,
     pub orbit_generation: Option<u32>,
     pub orbit_length: u32,
+    pub draft_pixels_discarded: u32,
+    pub draft_iterations_discarded: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -80,12 +111,20 @@ const fn divided_extent(extent: GridExtent, divisor: u32) -> GridExtent {
     }
 }
 
-fn levels(extent: GridExtent, requested_max_iter: u32) -> [LevelSpec; 3] {
+fn levels(
+    extent: GridExtent,
+    requested_max_iter: u32,
+    precision_mode: PrecisionMode,
+) -> [LevelSpec; 3] {
+    let (preview_divisor, preview_cap) = match precision_mode {
+        PrecisionMode::Deterministic => (PREVIEW_DIVISOR, PREVIEW_CAP),
+        PrecisionMode::PictureFast => (FAST_PREVIEW_DIVISOR, FAST_PREVIEW_CAP),
+    };
     [
         LevelSpec {
             level: RefinementLevel::Preview,
-            extent: divided_extent(extent, PREVIEW_DIVISOR),
-            iteration_cap: requested_max_iter.min(PREVIEW_CAP),
+            extent: divided_extent(extent, preview_divisor),
+            iteration_cap: requested_max_iter.min(preview_cap),
         },
         LevelSpec {
             level: RefinementLevel::Interactive,
@@ -109,7 +148,12 @@ pub fn validate_plan(plan: &RefinementPlan) -> Result<(), KernelError> {
         || plan.requested_max_iter == 0
         || plan.delivered_max_iter != plan.requested_max_iter.min(FINAL_CAP)
         || plan.page_side != OUTPUT_PAGE_SIDE
-        || plan.levels != levels(plan.delivered_extent, plan.requested_max_iter)
+        || plan.levels
+            != levels(
+                plan.delivered_extent,
+                plan.requested_max_iter,
+                plan.precision_mode,
+            )
     {
         return Err(KernelError::Dispatch);
     }
@@ -142,7 +186,12 @@ pub fn plan_refinement(
                 requested_max_iter: params.max_iter,
                 delivered_max_iter: params.max_iter.min(FINAL_CAP),
                 page_side: OUTPUT_PAGE_SIDE,
-                levels: levels(delivered_extent, params.max_iter),
+                precision_mode: PrecisionMode::Deterministic,
+                levels: levels(
+                    delivered_extent,
+                    params.max_iter,
+                    PrecisionMode::Deterministic,
+                ),
             });
         }
         if delivered_extent.width == 1 && delivered_extent.height == 1 {
@@ -222,6 +271,10 @@ pub fn dispatch_facts(
         Some((generation, length)) => (Some(generation), length),
         None => (None, 0),
     };
+    let worst_case_pixel_iterations = u64::from(active_pixels)
+        .checked_mul(u64::from(selected.iteration_cap))
+        .ok_or(KernelError::ArithmeticOverflow)?;
+    let draft = level != RefinementLevel::Final;
     Ok(DispatchFacts {
         owner_epoch,
         precision_mode: precision_mode.as_str(),
@@ -232,9 +285,7 @@ pub fn dispatch_facts(
         requested_max_iter: plan.requested_max_iter,
         delivered_max_iter: selected.iteration_cap,
         active_pixels,
-        worst_case_pixel_iterations: u64::from(active_pixels)
-            .checked_mul(u64::from(selected.iteration_cap))
-            .ok_or(KernelError::ArithmeticOverflow)?,
+        worst_case_pixel_iterations,
         page_passes: u32::try_from(pages.len()).map_err(|_| KernelError::ArithmeticOverflow)?,
         copy_commands: copy_commands(active_pixels, page_side),
         gpu_copy_bytes: bytes(active_pixels)?,
@@ -243,12 +294,18 @@ pub fn dispatch_facts(
         scratch_bytes,
         orbit_generation,
         orbit_length,
+        draft_pixels_discarded: if draft { active_pixels } else { 0 },
+        draft_iterations_discarded: if draft {
+            worst_case_pixel_iterations
+        } else {
+            0
+        },
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{dispatch_facts, plan_refinement, prefix_pages};
+    use super::{dispatch_facts, next_refinement_level, plan_refinement, prefix_pages};
     use crate::{GridExtent, KernelError, KernelMode, RefinementLevel};
     use ember_julibrot_math::{EscapeParams, PrecisionMode};
 
@@ -282,6 +339,57 @@ mod tests {
         );
         assert_eq!(plan.level(RefinementLevel::Interactive).iteration_cap, 256);
         assert_eq!(plan.level(RefinementLevel::Final).iteration_cap, 4_096);
+        assert_eq!(
+            next_refinement_level(PrecisionMode::Deterministic, RefinementLevel::Preview),
+            Some(RefinementLevel::Interactive)
+        );
+    }
+
+    #[test]
+    fn picture_fast_uses_one_eighth_preview_and_omits_interactive() {
+        let plan = plan_refinement(
+            GridExtent {
+                width: 1_921,
+                height: 1_081,
+            },
+            EscapeParams::new(5_000),
+            |_| true,
+        )
+        .expect("requested extent fits")
+        .with_precision_mode(PrecisionMode::PictureFast);
+        assert_eq!(
+            plan.level(RefinementLevel::Preview).extent,
+            GridExtent {
+                width: 241,
+                height: 136,
+            }
+        );
+        assert_eq!(plan.level(RefinementLevel::Preview).iteration_cap, 32);
+        assert_eq!(
+            plan.level(RefinementLevel::Final).extent,
+            plan.delivered_extent
+        );
+        assert_eq!(plan.level(RefinementLevel::Final).iteration_cap, 4_096);
+        assert_eq!(
+            next_refinement_level(PrecisionMode::PictureFast, RefinementLevel::Preview),
+            Some(RefinementLevel::Final)
+        );
+        assert_eq!(
+            next_refinement_level(PrecisionMode::PictureFast, RefinementLevel::Final),
+            None
+        );
+        let preview = dispatch_facts(
+            &plan,
+            RefinementLevel::Preview,
+            KernelMode::Shallow,
+            1,
+            PrecisionMode::PictureFast,
+            16_777_216,
+            None,
+        )
+        .expect("fast preview facts fit fixed widths");
+        assert_eq!(preview.draft_pixels_discarded, 32_776);
+        assert_eq!(preview.draft_iterations_discarded, 1_048_832);
     }
 
     #[test]
@@ -359,6 +467,8 @@ mod tests {
         assert_eq!(preview.copy_commands, 2);
         assert_eq!(preview.reserved_heap_bytes, 8_388_608);
         assert_eq!(preview.scratch_bytes, 16_777_216);
+        assert_eq!(preview.draft_pixels_discarded, 32_400);
+        assert_eq!(preview.draft_iterations_discarded, 2_073_600);
         let final_level = dispatch_facts(
             &plan,
             RefinementLevel::Final,
@@ -375,5 +485,7 @@ mod tests {
         assert_eq!(final_level.gpu_copy_bytes, 8_294_400);
         assert_eq!(final_level.orbit_generation, Some(7));
         assert_eq!(final_level.orbit_length, 900);
+        assert_eq!(final_level.draft_pixels_discarded, 0);
+        assert_eq!(final_level.draft_iterations_discarded, 0);
     }
 }

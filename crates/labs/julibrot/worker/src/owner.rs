@@ -3,7 +3,8 @@
 use std::{cell::Cell, fmt};
 
 use ember_julibrot_math::{
-    BigCentre, MathError, NavigationDelta, Plane, mirror_centre, pixel_scale,
+    BigCentre, MathError, NavigationDelta, Plane, PrecisionMode, centre_precision_for,
+    mirror_centre, pixel_scale,
 };
 
 use crate::OrbitResponseView;
@@ -26,7 +27,7 @@ pub struct HotState {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[repr(C)]
 pub struct MainState {
-    /// Latest installed orbit generation, or zero when absent.
+    /// Latest accepted selection generation; orbit fields are zero for a shallow acceptance.
     pub generation_applied: u32,
     /// Authoritative-centre revision.
     pub centre_revision: u32,
@@ -161,6 +162,14 @@ struct NavigationState {
     grid_width: u32,
     pending_generation: Option<u32>,
     in_flight_generation: Option<u32>,
+    precision_policy: Option<NavigationPrecisionPolicy>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NavigationPrecisionPolicy {
+    mode: PrecisionMode,
+    edit_budget: u32,
+    applied_edits: u32,
 }
 
 /// Same-thread owner built only from `Cell` over `Copy` records.
@@ -200,6 +209,10 @@ impl ViewerOwner {
     ///
     /// Returns a typed math refusal for mismatched precision, invalid extent, scale, or centre.
     pub fn configure_navigation(&mut self, config: NavigationConfig) -> Result<(), OwnerError> {
+        let precision_policy = self
+            .navigation
+            .as_ref()
+            .and_then(|navigation| navigation.precision_policy);
         let zoom_log2 = self.staged_hot.get().zoom_log2;
         let scale = pixel_scale(zoom_log2, config.grid_width)?;
         let displacement =
@@ -220,8 +233,50 @@ impl ViewerOwner {
             grid_width: config.grid_width,
             pending_generation: None,
             in_flight_generation: None,
+            precision_policy,
         });
         self.navigation_error = None;
+        Ok(())
+    }
+
+    /// Installs the navigation centre-width policy before mode-specific edits begin.
+    ///
+    /// Picture-fast configuration narrows the untouched 1,024-bit centre to the current
+    /// picture-derived width. Later navigation may only grow that width.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal for missing navigation state, invalid budget, or bignum failure.
+    pub fn configure_precision_mode(
+        &mut self,
+        mode: PrecisionMode,
+        edit_budget: u32,
+    ) -> Result<(), OwnerError> {
+        let zoom_log2 = self.staged_hot.get().zoom_log2;
+        let navigation = self
+            .navigation
+            .as_mut()
+            .ok_or(OwnerError::NavigationUnconfigured)?;
+        let precision_bits =
+            centre_precision_for(mode, zoom_log2, navigation.grid_width, edit_budget)?;
+        let centre = navigation.centre.with_precision(precision_bits)?;
+        let reference_centre = navigation.reference_centre.with_precision(precision_bits)?;
+        let scale = pixel_scale(zoom_log2, navigation.grid_width)?;
+        let displacement = centre.displacement_px(&reference_centre, &navigation.plane, scale)?;
+        let centre_f64 = mirror_centre(&centre)?.coords;
+        navigation.centre = centre;
+        navigation.reference_centre = reference_centre;
+        navigation.precision_policy = Some(NavigationPrecisionPolicy {
+            mode,
+            edit_budget,
+            applied_edits: 0,
+        });
+        let mut hot = self.staged_hot.get();
+        hot.centre_from_reference_px = displacement;
+        self.staged_hot.set(hot);
+        let mut main = self.staged_main.get();
+        main.centre_f64 = centre_f64;
+        self.staged_main.set(main);
         Ok(())
     }
 
@@ -264,6 +319,30 @@ impl ViewerOwner {
             .as_mut()
             .ok_or(OwnerError::NavigationUnconfigured)?;
         let mut centre = navigation.centre.clone();
+        let mut reference_centre = navigation.reference_centre.clone();
+        let next_precision_policy = navigation.precision_policy.map(|mut policy| {
+            policy.applied_edits = policy
+                .applied_edits
+                .checked_add(1)
+                .ok_or(OwnerError::CentreRevisionExhausted)?;
+            let effective_budget = policy.edit_budget.max(policy.applied_edits);
+            let required = centre_precision_for(
+                policy.mode,
+                zoom_log2_after,
+                navigation.grid_width,
+                effective_budget,
+            )?;
+            let precision_bits = centre.precision_bits.max(required);
+            if precision_bits != centre.precision_bits {
+                centre = centre.with_precision(precision_bits)?;
+                reference_centre = reference_centre.with_precision(precision_bits)?;
+            }
+            Ok::<_, OwnerError>(policy)
+        });
+        let next_precision_policy = match next_precision_policy {
+            Some(policy) => Some(policy?),
+            None => None,
+        };
         centre.apply_navigation(
             &delta,
             &navigation.plane,
@@ -272,11 +351,12 @@ impl ViewerOwner {
             navigation.grid_width,
         )?;
         let scale = pixel_scale(zoom_log2_after, navigation.grid_width)?;
-        let displacement =
-            centre.displacement_px(&navigation.reference_centre, &navigation.plane, scale)?;
+        let displacement = centre.displacement_px(&reference_centre, &navigation.plane, scale)?;
         let centre_f64 = mirror_centre(&centre)?.coords;
 
         navigation.centre = centre;
+        navigation.reference_centre = reference_centre;
+        navigation.precision_policy = next_precision_policy;
         navigation.pending_generation = Some(generation);
         hot.zoom_log2 = zoom_log2_after;
         hot.centre_from_reference_px = displacement;
@@ -338,6 +418,20 @@ impl ViewerOwner {
         })
     }
 
+    /// Returns the generation assigned to the latest requested navigation state.
+    #[must_use]
+    pub const fn latest_requested_generation(&self) -> u32 {
+        self.latest_requested_generation.get()
+    }
+
+    /// Returns the centre against which HOT displacement is currently expressed.
+    #[must_use]
+    pub fn reference_centre(&self) -> Option<BigCentre> {
+        self.navigation
+            .as_ref()
+            .map(|navigation| navigation.reference_centre.clone())
+    }
+
     /// Returns and clears the latest typed navigation refusal.
     #[must_use]
     pub const fn take_navigation_error(&mut self) -> Option<OwnerError> {
@@ -357,6 +451,40 @@ impl ViewerOwner {
     /// Records the generation most recently accepted for submission.
     pub fn note_requested_generation(&self, generation: u32) {
         self.latest_requested_generation.set(generation);
+    }
+
+    /// Accepts the latest navigation selection without installing a reference orbit.
+    ///
+    /// The prior reference centre and HOT displacement stay paired so retained poses remain
+    /// coherent. Zero orbit metadata makes it impossible to mistake this selection for a deep
+    /// reference.
+    #[must_use]
+    pub fn accept_navigation_without_orbit(
+        &mut self,
+        generation: u32,
+        centre_revision: u32,
+    ) -> bool {
+        let Some(navigation) = self.navigation.as_mut() else {
+            return false;
+        };
+        if navigation.in_flight_generation != Some(generation) {
+            return false;
+        }
+        navigation.in_flight_generation = None;
+        if generation != self.latest_requested_generation.get()
+            || centre_revision != self.staged_main.get().centre_revision
+        {
+            return false;
+        }
+        let mut main = self.staged_main.get();
+        main.generation_applied = generation;
+        main.centre_revision = centre_revision;
+        main.precision_bits = 0;
+        main.orbit_length = 0;
+        main.orbit_id = 0;
+        main.reference_shift_px = [0.0; 2];
+        self.staged_main.set(main);
+        true
     }
 
     /// Stages latest-generation orbit fields and accepted-reference motion.
@@ -440,13 +568,15 @@ impl ViewerOwner {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use ember_julibrot_math::{
-        BigCentre, NavigationDelta, PlaneAngles, PrecisionMode, construct_plane,
+        BigCentre, NavigationDelta, PlaneAngles, PrecisionMode, construct_plane, pixel_scale,
     };
 
     use super::{
-        HotState, MainState, NavigationConfig, OrbitDisposition, OrbitHandle, OwnerError,
-        ViewerOwner, ViewerState,
+        HotState, MainState, NavigationConfig, NavigationSubmission, OrbitDisposition, OrbitHandle,
+        OwnerError, ViewerOwner, ViewerState,
     };
     use crate::{
         CoordinateDescriptor, EncodedCentre, OrbitReason, OrbitRequest, ReferenceOrbitRecord,
@@ -546,13 +676,17 @@ mod tests {
         assert_eq!(owner.snapshot(), drained);
     }
 
-    fn navigation_owner() -> Result<ViewerOwner, OwnerError> {
+    fn navigation_owner_at(precision_bits: u32, zoom_log2: f64) -> Result<ViewerOwner, OwnerError> {
         let plane = construct_plane(PlaneAngles {
             theta_1: 0.21,
             theta_2: -0.13,
         })?;
-        let centre = BigCentre::from_f64([0.0; 4], 384)?;
+        let centre = BigCentre::from_f64([0.25, -0.125, -0.5, 0.5], precision_bits)?;
         let mut owner = ViewerOwner::new(ViewerState {
+            hot: HotState {
+                zoom_log2,
+                ..HotState::default()
+            },
             main: MainState {
                 requested_iter_cap: 64,
                 ..MainState::default()
@@ -568,11 +702,16 @@ mod tests {
         Ok(owner)
     }
 
-    #[test]
-    fn ten_thousand_mixed_navigation_edits_stay_finite_and_monotone() -> Result<(), OwnerError> {
-        let mut owner = navigation_owner()?;
-        let mut previous_generation = 0;
-        for index in 0..10_000 {
+    fn navigation_owner() -> Result<ViewerOwner, OwnerError> {
+        navigation_owner_at(384, 0.0)
+    }
+
+    fn run_navigation_edits(
+        owner: &mut ViewerOwner,
+        edit_count: u32,
+    ) -> Result<(NavigationSubmission, f64), OwnerError> {
+        let mut previous_generation = 0_u32;
+        for index in 0..edit_count {
             let direction = if index % 2 == 0 { 1.0 } else { -1.0 };
             let zoom_delta_log2 = if index % 3 == 0 { 0.002 } else { -0.001 };
             let generation = owner.navigate(NavigationDelta {
@@ -591,8 +730,63 @@ mod tests {
                     .all(|component| component.is_finite())
             );
         }
-        assert_eq!(previous_generation, 10_000);
+        assert_eq!(previous_generation, edit_count);
         assert_eq!(owner.take_navigation_error(), None);
+        let zoom_log2 = owner.drain_hot().hot.zoom_log2;
+        let submission = owner
+            .take_navigation_submission()
+            .ok_or(OwnerError::NavigationUnconfigured)?;
+        Ok((submission, zoom_log2))
+    }
+
+    #[test]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the requested native performance oracle reports its before and after walls"
+    )]
+    fn ten_thousand_mixed_navigation_edits_stay_within_a_quarter_pixel() -> Result<(), OwnerError> {
+        const EDITS: u32 = 10_000;
+        const ZOOM_LOG2: f64 = 100.0;
+        const GRID_WIDTH: u32 = 1_024;
+        let plane = construct_plane(PlaneAngles {
+            theta_1: 0.21,
+            theta_2: -0.13,
+        })?;
+
+        let mut deterministic = navigation_owner_at(1_024, ZOOM_LOG2)?;
+        deterministic.configure_precision_mode(PrecisionMode::Deterministic, EDITS)?;
+        let deterministic_started = Instant::now();
+        let (deterministic_result, deterministic_zoom) =
+            run_navigation_edits(&mut deterministic, EDITS)?;
+        let deterministic_wall = deterministic_started.elapsed();
+
+        let mut fast = navigation_owner_at(1_024, ZOOM_LOG2)?;
+        fast.configure_precision_mode(PrecisionMode::PictureFast, EDITS)?;
+        let fast_started = Instant::now();
+        let (fast_result, fast_zoom) = run_navigation_edits(&mut fast, EDITS)?;
+        let fast_wall = fast_started.elapsed();
+
+        assert_eq!(fast_zoom, deterministic_zoom);
+        assert_eq!(fast_result.centre.precision_bits, 128);
+        assert_eq!(deterministic_result.centre.precision_bits, 1_024);
+        let widened_fast = fast_result.centre.with_precision(1_024)?;
+        let error_px = widened_fast.displacement_px(
+            &deterministic_result.centre,
+            &plane,
+            pixel_scale(fast_zoom, GRID_WIDTH)?,
+        )?;
+        let error_norm_px = error_px[0].hypot(error_px[1]);
+        assert!(
+            error_norm_px <= 0.25,
+            "derived-width centre drifted {error_norm_px:e} pixels"
+        );
+        eprintln!(
+            "navigation_10000 deterministic_ms={:.3} picture_fast_ms={:.3} speedup_ms={:.3} final_error_px={error_norm_px:.9e} growth_px_per_edit={:.9e}",
+            deterministic_wall.as_secs_f64() * 1_000.0,
+            fast_wall.as_secs_f64() * 1_000.0,
+            deterministic_wall.saturating_sub(fast_wall).as_secs_f64() * 1_000.0,
+            error_norm_px / f64::from(EDITS),
+        );
         Ok(())
     }
 
@@ -625,6 +819,43 @@ mod tests {
         assert_eq!(coalesced.centre_revision, 4);
         assert_eq!(owner.navigation_pending_depth(), 0);
         assert_eq!(owner.take_navigation_submission(), None);
+        Ok(())
+    }
+
+    #[test]
+    fn shallow_acceptance_publishes_selection_without_orbit_metadata() -> Result<(), OwnerError> {
+        let mut owner = navigation_owner()?;
+        owner.stage_main(MainState {
+            precision_bits: 1_024,
+            orbit_length: 64,
+            orbit_id: 9,
+            reference_shift_px: [3.0, -2.0],
+            ..MainState::default()
+        });
+        let reference_before = owner
+            .reference_centre()
+            .ok_or(OwnerError::NavigationUnconfigured)?;
+        let generation = owner.navigate(NavigationDelta {
+            pan_canvas_px: [1.0, -0.5],
+            ..NavigationDelta::default()
+        });
+        let submission = owner
+            .take_navigation_submission()
+            .ok_or(OwnerError::NavigationUnconfigured)?;
+        assert_eq!(submission.generation, generation);
+        assert!(owner.accept_navigation_without_orbit(
+            submission.generation,
+            submission.centre_revision,
+        ));
+        let state = owner.drain_main();
+        assert_eq!(state.main.generation_applied, generation);
+        assert_eq!(state.main.centre_revision, submission.centre_revision);
+        assert_eq!(state.main.precision_bits, 0);
+        assert_eq!(state.main.orbit_length, 0);
+        assert_eq!(state.main.orbit_id, 0);
+        assert_eq!(state.main.reference_shift_px, [0.0; 2]);
+        assert_ne!(state.hot.centre_from_reference_px, [0.0; 2]);
+        assert_eq!(owner.reference_centre(), Some(reference_before));
         Ok(())
     }
 

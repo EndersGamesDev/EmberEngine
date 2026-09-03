@@ -111,6 +111,8 @@ pub struct PageFacts {
     pub scene_precision_mode: Option<&'static str>,
     pub warp_precision_mode: Option<&'static str>,
     pub level_timings: Vec<LevelTimingRecord>,
+    pub draft_pixels_discarded: Option<u32>,
+    pub draft_iterations_discarded: Option<u64>,
 }
 
 impl PageFacts {
@@ -250,6 +252,8 @@ impl PageFacts {
             scene_precision_mode: present.last_scene.map(|sample| sample.precision_mode),
             warp_precision_mode: present.last_warp.map(|sample| sample.precision_mode),
             level_timings: loop_facts.level_timings(),
+            draft_pixels_discarded: dispatch.map(|facts| facts.draft_pixels_discarded),
+            draft_iterations_discarded: dispatch.map(|facts| facts.draft_iterations_discarded),
         }
     }
 }
