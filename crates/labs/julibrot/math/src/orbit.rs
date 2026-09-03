@@ -2,7 +2,8 @@ use core::num::NonZeroU32;
 
 use crate::{
     BigCentre, BigScalar, ComputedOrbit, EscapeParams, EscapeSample, MathError, OrbitStep,
-    PrecisionPlan, ReferenceOrbitRecord, split_scalar,
+    PrecisionMode, PrecisionPlan, ReferenceOrbitRecord, ReferencePass, ReferenceVerification,
+    split_scalar,
 };
 
 const LOG2_10: f64 = core::f64::consts::LOG2_10;
@@ -47,8 +48,10 @@ pub struct ReferenceOrbitBuilder {
     params: EscapeParams,
     attempt_digits: u32,
     primary: OrbitState,
-    verification: OrbitState,
+    verification: Option<OrbitState>,
     mismatch: bool,
+    max_consumed_word_error_ulps: u32,
+    precision_escalations: u32,
 }
 
 impl ReferenceOrbitBuilder {
@@ -62,12 +65,41 @@ impl ReferenceOrbitBuilder {
         plan: PrecisionPlan,
         params: EscapeParams,
     ) -> Result<Self, MathError> {
+        Self::new_with_policy(
+            centre,
+            plan,
+            params,
+            PrecisionMode::Deterministic,
+            ReferencePass::Final,
+        )
+    }
+
+    /// Creates one policy-selected reference-orbit computation.
+    ///
+    /// PictureFast Preview computes only the working orbit. Final and Measure, plus every
+    /// Deterministic request, compare all four GPU-consumed words with a D+16 orbit.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid parameters, precision policy, or bignum state.
+    pub fn new_with_policy(
+        centre: &BigCentre,
+        plan: PrecisionPlan,
+        params: EscapeParams,
+        mode: PrecisionMode,
+        pass: ReferencePass,
+    ) -> Result<Self, MathError> {
         validate_params(params)?;
         if plan.working_digits < plan.floor_digits || plan.policy_digits == 0 {
             return Err(MathError::InvalidPrecisionPlan);
         }
-        let (primary, verification) =
-            make_attempt(centre, plan.working_digits, plan.policy_digits)?;
+        let verify = mode == PrecisionMode::Deterministic || pass != ReferencePass::Preview;
+        let (primary, verification) = make_attempt(
+            centre,
+            plan.working_digits,
+            plan.policy_digits,
+            verify,
+        )?;
         Ok(Self {
             centre: centre.clone(),
             plan,
@@ -76,6 +108,8 @@ impl ReferenceOrbitBuilder {
             primary,
             verification,
             mismatch: false,
+            max_consumed_word_error_ulps: 0,
+            precision_escalations: 0,
         })
     }
 
@@ -88,21 +122,40 @@ impl ReferenceOrbitBuilder {
         let mut work = 0_u32;
         while work < max_entries.get() {
             let primary = self.primary.advance(self.params)?;
-            let verification = self.verification.advance(self.params)?;
+            let verification = self
+                .verification
+                .as_mut()
+                .map(|state| state.advance(self.params))
+                .transpose()?;
             work += 1;
-            match (primary, verification) {
-                (Some(left), Some(right)) => {
-                    self.mismatch |= !records_within_two_ulps(left.record, right.record);
-                    self.mismatch |= left.escaped != right.escaped;
-                    if left.done || right.done {
-                        if left.done != right.done || self.mismatch {
-                            self.restart_at_higher_precision()?;
-                            continue;
-                        }
-                        return Ok(OrbitStep::Complete(self.primary.finish()?));
+            let Some(left) = primary else {
+                return Err(MathError::InvalidOrbitState);
+            };
+            if let Some(right) = verification.flatten() {
+                let Some(error) = max_consumed_word_error_ulps(left.record, right.record) else {
+                    self.mismatch = true;
+                    continue;
+                };
+                self.max_consumed_word_error_ulps =
+                    self.max_consumed_word_error_ulps.max(error);
+                self.mismatch |= error > 2 || left.escaped != right.escaped;
+                if left.done || right.done {
+                    if left.done != right.done || self.mismatch {
+                        self.restart_at_higher_precision()?;
+                        continue;
                     }
+                    return Ok(OrbitStep::Complete(self.primary.finish(
+                        ReferenceVerification::Stable,
+                        Some(self.max_consumed_word_error_ulps),
+                        self.precision_escalations,
+                    )?));
                 }
-                _ => return Err(MathError::InvalidOrbitState),
+            } else if left.done {
+                return Ok(OrbitStep::Complete(self.primary.finish(
+                    ReferenceVerification::Deferred,
+                    None,
+                    self.precision_escalations,
+                )?));
             }
         }
         Ok(OrbitStep::Pending {
@@ -116,11 +169,20 @@ impl ReferenceOrbitBuilder {
             .attempt_digits
             .checked_add(16)
             .ok_or(MathError::CounterOverflow)?;
-        let (primary, verification) =
-            make_attempt(&self.centre, self.attempt_digits, self.plan.policy_digits)?;
+        let (primary, verification) = make_attempt(
+            &self.centre,
+            self.attempt_digits,
+            self.plan.policy_digits,
+            true,
+        )?;
         self.primary = primary;
         self.verification = verification;
         self.mismatch = false;
+        self.max_consumed_word_error_ulps = 0;
+        self.precision_escalations = self
+            .precision_escalations
+            .checked_add(1)
+            .ok_or(MathError::CounterOverflow)?;
         Ok(())
     }
 }
@@ -214,7 +276,12 @@ impl OrbitState {
         Ok(())
     }
 
-    fn finish(&mut self) -> Result<ComputedOrbit, MathError> {
+    fn finish(
+        &mut self,
+        verification: ReferenceVerification,
+        max_consumed_word_error_ulps: Option<u32>,
+        precision_escalations: u32,
+    ) -> Result<ComputedOrbit, MathError> {
         if !self.done || self.records.is_empty() {
             return Err(MathError::InvalidOrbitState);
         }
@@ -225,6 +292,9 @@ impl OrbitState {
             length,
             precision_bits: self.precision_bits,
             escape_index: self.escape_index,
+            verification,
+            max_consumed_word_error_ulps,
+            precision_escalations,
         })
     }
 }
@@ -233,7 +303,12 @@ fn make_attempt(
     centre: &BigCentre,
     primary_digits: u32,
     policy_digits: u32,
-) -> Result<(OrbitState, OrbitState), MathError> {
+    verify: bool,
+) -> Result<(OrbitState, Option<OrbitState>), MathError> {
+    let primary_bits = bits_for_digits(primary_digits)?;
+    if !verify {
+        return Ok((OrbitState::new(centre, primary_bits)?, None));
+    }
     let verification_digits = primary_digits
         .checked_add(16)
         .ok_or(MathError::CounterOverflow)?;
@@ -243,11 +318,10 @@ fn make_attempt(
             policy_digits,
         });
     }
-    let primary_bits = bits_for_digits(primary_digits)?;
     let verification_bits = bits_for_digits(verification_digits)?;
     Ok((
         OrbitState::new(centre, primary_bits)?,
-        OrbitState::new(centre, verification_bits)?,
+        Some(OrbitState::new(centre, verification_bits)?),
     ))
 }
 
@@ -271,7 +345,10 @@ fn split_complex(value: &ComplexBig) -> Result<ReferenceOrbitRecord, MathError> 
     })
 }
 
-fn records_within_two_ulps(left: ReferenceOrbitRecord, right: ReferenceOrbitRecord) -> bool {
+fn max_consumed_word_error_ulps(
+    left: ReferenceOrbitRecord,
+    right: ReferenceOrbitRecord,
+) -> Option<u32> {
     [
         (left.re_hi, right.re_hi),
         (left.im_hi, right.im_hi),
@@ -279,7 +356,8 @@ fn records_within_two_ulps(left: ReferenceOrbitRecord, right: ReferenceOrbitReco
         (left.im_lo, right.im_lo),
     ]
     .into_iter()
-    .all(|(a, b)| ulp_distance(a, b).is_some_and(|distance| distance <= 2))
+    .map(|(a, b)| ulp_distance(a, b))
+    .try_fold(0, |maximum, distance| distance.map(|value| maximum.max(value)))
 }
 
 fn ulp_distance(left: f32, right: f32) -> Option<u32> {
@@ -334,7 +412,10 @@ mod tests {
     use core::num::NonZeroU32;
 
     use super::{ReferenceOrbitBuilder, escape_f32};
-    use crate::{BigCentre, EscapeParams, MathError, OrbitStep, PrecisionMode, precision_for};
+    use crate::{
+        BigCentre, EscapeParams, MathError, OrbitStep, PrecisionMode, ReferencePass,
+        ReferenceVerification, precision_for,
+    };
 
     #[test]
     fn shallow_escape_uses_the_current_index() -> Result<(), MathError> {
@@ -420,6 +501,63 @@ mod tests {
         assert_eq!(orbit.escape_index, Some(3));
         assert_eq!(orbit.records[0].re_hi, 0.0);
         assert_eq!(orbit.records[1].re_hi, 2.0);
+        assert_eq!(orbit.verification, ReferenceVerification::Stable);
+        assert!(orbit.max_consumed_word_error_ulps.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn picture_fast_preview_publishes_one_working_orbit_without_verification(
+    ) -> Result<(), MathError> {
+        let centre = BigCentre::from_f64([0.0; 4], 256)?;
+        let mut plan = precision_for(100.0, 960, 512)?;
+        plan.policy_digits = plan.working_digits;
+        let mut builder = ReferenceOrbitBuilder::new_with_policy(
+            &centre,
+            plan,
+            EscapeParams::new(512),
+            PrecisionMode::PictureFast,
+            ReferencePass::Preview,
+        )?;
+        let orbit = loop {
+            match builder.step(NonZeroU32::new(64).ok_or(MathError::InvalidMaxIter)?)? {
+                OrbitStep::Pending { .. } => {}
+                OrbitStep::Complete(orbit) => break orbit,
+            }
+        };
+        assert_eq!(orbit.length, 512);
+        assert_eq!(orbit.verification, ReferenceVerification::Deferred);
+        assert_eq!(orbit.max_consumed_word_error_ulps, None);
+        assert_eq!(orbit.precision_escalations, 0);
+        assert_eq!(
+            ReferenceOrbitBuilder::new(&centre, plan, EscapeParams::new(512)).unwrap_err(),
+            MathError::PrecisionExhausted {
+                requested_digits: plan.working_digits + 16,
+                policy_digits: plan.policy_digits,
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn picture_fast_measure_runs_consumed_word_verification() -> Result<(), MathError> {
+        let centre = BigCentre::from_f64([0.0; 4], 256)?;
+        let plan = precision_for(100.0, 960, 512)?;
+        let mut builder = ReferenceOrbitBuilder::new_with_policy(
+            &centre,
+            plan,
+            EscapeParams::new(512),
+            PrecisionMode::PictureFast,
+            ReferencePass::Measure,
+        )?;
+        let orbit = loop {
+            match builder.step(NonZeroU32::new(64).ok_or(MathError::InvalidMaxIter)?)? {
+                OrbitStep::Pending { .. } => {}
+                OrbitStep::Complete(orbit) => break orbit,
+            }
+        };
+        assert_eq!(orbit.verification, ReferenceVerification::Stable);
+        assert!(orbit.max_consumed_word_error_ulps.is_some_and(|error| error <= 2));
         Ok(())
     }
 }

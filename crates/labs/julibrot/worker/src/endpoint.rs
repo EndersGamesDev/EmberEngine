@@ -60,7 +60,7 @@ pub(crate) trait OwnerPort {
     /// Transferred pool buffer.
     type Slot: OwnerSlot;
 
-    /// Allocates one trailer-bearing pool buffer of exactly `48 + 16 * max_iter` bytes.
+    /// Allocates one trailer-bearing pool buffer of exactly `64 + 16 * max_iter` bytes.
     fn allocate(&self, pool: Pool, slot: u32, max_iter: u32) -> Result<Self::Slot, ChannelError>;
 
     /// Transfers one slot to the producer, detaching this side.
@@ -712,7 +712,14 @@ mod tests {
         ) -> Result<(), ChannelError> {
             self.buffer
                 .borrow_mut()
-                .write_orbit(generation, 64, compute_us, 250_000, records)
+                .write_orbit(
+                    generation,
+                    64,
+                    compute_us,
+                    250_000,
+                    records,
+                    crate::wire::OrbitVerificationFacts::stable(0, 0),
+                )
         }
     }
 

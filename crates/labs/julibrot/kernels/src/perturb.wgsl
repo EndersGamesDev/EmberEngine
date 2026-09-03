@@ -22,6 +22,11 @@ struct ScaledState {
     glitch: bool,
 }
 
+struct PerturbReference {
+    high: vec2<f32>,
+    low: vec2<f32>,
+}
+
 fn perturb_mul(left: vec2<f32>, right: vec2<f32>) -> vec2<f32> {
     let real = left.x * right.x - left.y * right.y;
     let imaginary = left.x * right.y + left.y * right.x;
@@ -72,8 +77,19 @@ fn perturb_finite(value: vec2<f32>) -> bool {
         && (bitcast<u32>(value.y) & 0x7f800000u) != 0x7f800000u;
 }
 
-fn perturb_reference(record: vec4<f32>) -> vec2<f32> {
-    return vec2<f32>(record.x + record.z, record.y + record.w);
+fn perturb_reference(record: vec4<f32>) -> PerturbReference {
+    var reference: PerturbReference;
+    reference.high = record.xy;
+    reference.low = record.zw;
+    return reference;
+}
+
+fn perturb_reference_value(reference: PerturbReference) -> vec2<f32> {
+    return reference.high + reference.low;
+}
+
+fn perturb_reference_mul(reference: PerturbReference, delta: vec2<f32>) -> vec2<f32> {
+    return perturb_mul(reference.high, delta) + perturb_mul(reference.low, delta);
 }
 
 fn perturb_smooth(iteration: u32, value: vec2<f32>) -> f32 {
@@ -147,7 +163,8 @@ fn kernel(index: u32, uniforms: PerturbUniform) -> PerturbResult {
     var reference_index = 0u;
     var iteration = 0u;
     var rebases = 0u;
-    let z_zero = perturb_reference(load_reference(0u));
+    let z_zero_reference = perturb_reference(load_reference(0u));
+    let z_zero = perturb_reference_value(z_zero_reference);
     let initial = perturb_normalize(delta_prime, delta_c_prime, exponent);
     if (initial.glitch) {
         return perturb_glitch(rebases);
@@ -164,7 +181,7 @@ fn kernel(index: u32, uniforms: PerturbUniform) -> PerturbResult {
         }
         let reference = perturb_reference(load_reference(reference_index));
         let represented_delta = perturb_scale(delta_prime, exponent);
-        let z = reference + represented_delta;
+        let z = perturb_reference_value(reference) + represented_delta;
         if (!perturb_finite(z)) {
             return perturb_glitch(rebases);
         }
@@ -195,9 +212,9 @@ fn kernel(index: u32, uniforms: PerturbUniform) -> PerturbResult {
             delta_prime = converted.delta;
             delta_c_prime = converted.delta_c;
             exponent = converted.exponent;
-            advance_reference = z_zero;
+            advance_reference = z_zero_reference;
         }
-        let linear = 2.0 * perturb_mul(advance_reference, delta_prime);
+        let linear = 2.0 * perturb_reference_mul(advance_reference, delta_prime);
         let quadratic = perturb_scale(perturb_mul(delta_prime, delta_prime), exponent);
         delta_prime = linear + quadratic + delta_c_prime;
         reference_index += 1u;

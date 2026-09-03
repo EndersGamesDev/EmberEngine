@@ -76,7 +76,7 @@ pub enum OrbitTaskPoll {
         /// Measured compute wall accumulated across chunks.
         compute_us: u32,
     },
-    /// A validated D-versus-D+16 orbit is ready.
+    /// A policy-valid working orbit is ready, with deferred or completed verification facts.
     Complete {
         /// Math-owned reusable linear-memory records.
         orbit: ComputedOrbit,
@@ -101,7 +101,7 @@ pub struct ReferenceOrbitTask {
 }
 
 impl ReferenceOrbitTask {
-    /// Decodes a canonical request and starts its D-versus-D+16 builder.
+    /// Decodes a canonical request and starts its policy-selected reference builder.
     ///
     /// The clock includes centre decoding and builder initialization in `compute_us`.
     ///
@@ -115,9 +115,14 @@ impl ReferenceOrbitTask {
         let started = clock.now_us();
         let centre = request.centre().decode_math(request.precision_bits())?;
         let plan = precision_plan(request)?;
-        let builder =
-            ReferenceOrbitBuilder::new(&centre, plan, EscapeParams::new(request.max_iter()))
-                .map_err(|error| math_error(&error))?;
+        let builder = ReferenceOrbitBuilder::new_with_policy(
+            &centre,
+            plan,
+            EscapeParams::new(request.max_iter()),
+            request.precision_mode(),
+            request.reference_pass(),
+        )
+        .map_err(|error| math_error(&error))?;
         let compute_us = elapsed(started, clock.now_us())?;
         checked_compute_us(compute_us)?;
         Ok(Self {
@@ -254,8 +259,8 @@ mod tests {
     use std::time::Instant;
 
     use ember_julibrot_math::{
-        BigCentre, ComputedOrbit, EscapeParams, PrecisionMode, ReferenceOrbitRecord,
-        perturb_scaled_f64, precision_for,
+        BigCentre, ComputedOrbit, EscapeParams, ReferenceOrbitRecord, perturb_scaled_f64,
+        precision_for, PrecisionMode, ReferencePass,
     };
 
     use super::{
@@ -263,7 +268,7 @@ mod tests {
         ReferenceOrbitTask,
     };
     use crate::{Admission, EncodedCentre, OrbitReason, OrbitRequest, ProducerShaper};
-    use crate::wire::{Pool, WireBuffer};
+    use crate::wire::{OrbitVerificationFacts, Pool, WireBuffer};
 
     struct StepClock {
         now: Cell<u64>,
@@ -330,7 +335,8 @@ mod tests {
             max_iter,
             OrbitReason::INITIAL,
         )
-        .expect("measurement request");
+        .expect("measurement request")
+        .with_precision_policy(PrecisionMode::PictureFast, ReferencePass::Preview);
         let clock = WallClock::new();
         let mut task = ReferenceOrbitTask::start(&request, &clock).expect("measurement task");
         loop {
@@ -366,9 +372,17 @@ mod tests {
             let mut buffer = WireBuffer::new(Pool::Orbit, 0, max_iter)
                 .expect("measurement transfer buffer");
             let pack_started = Instant::now();
+            let facts = OrbitVerificationFacts::from_orbit(&orbit);
             for _ in 0..PACK_REPEATS {
                 buffer
-                    .write_orbit(1, orbit.precision_bits, compute_us, 0, &orbit.records)
+                    .write_orbit(
+                        1,
+                        orbit.precision_bits,
+                        compute_us,
+                        0,
+                        &orbit.records,
+                        facts,
+                    )
                     .expect("measurement transfer packing");
                 std::hint::black_box(buffer.as_bytes());
             }

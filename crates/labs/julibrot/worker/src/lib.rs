@@ -36,7 +36,9 @@ pub use compute::{
     ReferenceOrbitTask,
 };
 pub use credit::{Admission, CreditAccount, CreditCharge, ProducerShaper, WorkerFacts};
-pub use ember_julibrot_math::{ComputedOrbit, ReferenceOrbitRecord};
+pub use ember_julibrot_math::{
+    ComputedOrbit, PrecisionMode, ReferenceOrbitRecord, ReferencePass, ReferenceVerification,
+};
 pub use error::{ChannelError, ErrorCode};
 pub use owner::{
     HotDrain, HotState, MainDrain, MainState, NavigationConfig, NavigationSubmission,
@@ -45,6 +47,6 @@ pub use owner::{
 pub use registry::{OrbitRegistry, RegistryError};
 pub use wire::{
     BUFFER_OVERHEAD_BYTES, ERROR_RECORD_BYTES, ErrorRecord, HEADER_BYTES, JULIBROT_ABI_VERSION,
-    MAGIC, MessageHeader, MessageKind, ORBIT_RECORD_BYTES, POOL_TRAILER_BYTES, Pool, PoolTrailer,
-    TRAILER_MAGIC, buffer_capacity,
+    MAGIC, MessageHeader, MessageKind, ORBIT_FACT_BYTES, ORBIT_RECORD_BYTES,
+    OrbitVerificationFacts, POOL_TRAILER_BYTES, Pool, PoolTrailer, TRAILER_MAGIC, buffer_capacity,
 };

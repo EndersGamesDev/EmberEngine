@@ -31,7 +31,7 @@ pub use scale::{
 pub use types::{
     Axis4, CentreF64, CentreSplit, ComputedOrbit, EscapeGridRecord, EscapeParams, EscapeSample,
     MathError, NavigationDelta, OrbitStep, PerturbSample, PerturbationEnvelope, Plane, PlaneAngles,
-    Pose, PrecisionMode, PrecisionPlan, ReferenceOrbitRecord, ScaleSplit, ScaledPixelScale,
-    ViewControls, WarpMatrix,
+    Pose, PrecisionMode, PrecisionPlan, ReferenceOrbitRecord, ReferencePass,
+    ReferenceVerification, ScaleSplit, ScaledPixelScale, ViewControls, WarpMatrix,
 };
 pub use warp::{warp_identity_error, warp_matrix};

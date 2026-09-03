@@ -4,6 +4,8 @@ use crate::{EscapeParams, MathError, PerturbSample, PerturbationEnvelope, Refere
 const RESCALE_HIGH: f64 = 18_446_744_073_709_551_616.0;
 const RESCALE_LOW: f64 = 1.0 / RESCALE_HIGH;
 const MAX_EXACT_F32_INTEGER: u32 = 1 << 24;
+const F32_UNIT_ROUNDOFF: f64 = 1.0 / 16_777_216.0;
+const F32_MIN_SUBNORMAL: f64 = 1.401_298_464_324_817e-45;
 
 #[derive(Clone, Copy)]
 struct Complex64 {
@@ -94,13 +96,22 @@ pub fn perturb_scaled_f64_with_envelope(
     let mut exponent = scale_exponent;
     let mut reference_index = 0_usize;
     let mut rebase_count = 0_u32;
-    let mut absolute_error = 0.0_f64;
+    let mut absolute_error = centre_offset_error(delta_prime, exponent);
+    let mut centre_error = centre_offset_error(delta_c_prime, exponent);
     let mut minimum_escape_margin = f64::INFINITY;
+    let mut maximum_norm_error = 0.0_f64;
     let mut last_value = z_zero;
-    if !renormalize(&mut delta_prime, &mut delta_c_prime, &mut exponent) {
+    if !renormalize(
+        &mut delta_prime,
+        &mut delta_c_prime,
+        &mut exponent,
+        &mut absolute_error,
+        &mut centre_error,
+    ) {
         return Ok(glitch_result(
             rebase_count,
             absolute_error,
+            maximum_norm_error,
             minimum_escape_margin,
         ));
     }
@@ -109,24 +120,35 @@ pub fn perturb_scaled_f64_with_envelope(
             return Ok(glitch_result(
                 rebase_count,
                 absolute_error,
+                maximum_norm_error,
                 minimum_escape_margin,
             ));
         };
         let reference = reconstruct(*record);
+        let reference_error = reference_reconstruction_error(*record);
         let actual_delta = ldexp_complex(delta_prime, exponent);
         let z = reference.add(actual_delta);
         last_value = z;
         let magnitude_squared = norm_squared(z);
         let escape_margin = (magnitude_squared - f64::from(params.bailout)).abs();
         minimum_escape_margin = minimum_escape_margin.min(escape_margin);
-        let norm_error = norm_squared_error(z, absolute_error);
+        let display_error = displayed_error(
+            reference.hypot(),
+            reference_error,
+            actual_delta.hypot(),
+            absolute_error,
+            exponent,
+        );
+        let norm_error = norm_squared_error(z, display_error);
+        maximum_norm_error = maximum_norm_error.max(norm_error);
         if magnitude_squared > f64::from(params.bailout) {
             return Ok(escaped_result(
                 iteration,
                 z,
                 rebase_count,
                 absolute_error,
-                norm_error,
+                display_error,
+                maximum_norm_error,
                 minimum_escape_margin,
             ));
         }
@@ -139,6 +161,7 @@ pub fn perturb_scaled_f64_with_envelope(
                 return Ok(glitch_result(
                     rebase_count,
                     absolute_error,
+                    maximum_norm_error,
                     minimum_escape_margin,
                 ));
             }
@@ -146,30 +169,61 @@ pub fn perturb_scaled_f64_with_envelope(
                 return Ok(glitch_result(
                     rebase_count,
                     absolute_error,
+                    maximum_norm_error,
                     minimum_escape_margin,
                 ));
             };
             delta_prime = ldexp_complex(z.sub(z_zero), inverse_exponent);
             reference_index = 0;
             rebase_count += 1;
-            if !renormalize(&mut delta_prime, &mut delta_c_prime, &mut exponent) {
+            absolute_error = display_error
+                + reference_reconstruction_error(orbit[0])
+                + rebase_rounding_error(z, z_zero, exponent);
+            if !renormalize(
+                &mut delta_prime,
+                &mut delta_c_prime,
+                &mut exponent,
+                &mut absolute_error,
+                &mut centre_error,
+            ) {
                 return Ok(glitch_result(
                     rebase_count,
                     absolute_error,
+                    maximum_norm_error,
                     minimum_escape_margin,
                 ));
             }
         }
-        let reference = if should_rebase { z_zero } else { reference };
+        let (reference, reference_error) = if should_rebase {
+            (z_zero, reference_reconstruction_error(orbit[0]))
+        } else {
+            (reference, reference_error)
+        };
         let reference_norm = reference.hypot();
         let delta_norm = ldexp_complex(delta_prime, exponent).hypot();
-        absolute_error = propagated_error(reference_norm, delta_norm, absolute_error);
+        let delta_c_norm = ldexp_complex(delta_c_prime, exponent).hypot();
+        absolute_error = propagated_error(
+            reference_norm,
+            reference_error,
+            delta_norm,
+            absolute_error,
+            delta_c_norm,
+            centre_error,
+            exponent,
+        );
         delta_prime = ordinary_advance(delta_prime, delta_c_prime, exponent, reference);
         reference_index += 1;
-        if !renormalize(&mut delta_prime, &mut delta_c_prime, &mut exponent) {
+        if !renormalize(
+            &mut delta_prime,
+            &mut delta_c_prime,
+            &mut exponent,
+            &mut absolute_error,
+            &mut centre_error,
+        ) {
             return Ok(glitch_result(
                 rebase_count,
                 absolute_error,
+                maximum_norm_error,
                 minimum_escape_margin,
             ));
         }
@@ -178,6 +232,7 @@ pub fn perturb_scaled_f64_with_envelope(
         last_value,
         rebase_count,
         absolute_error,
+        maximum_norm_error,
         minimum_escape_margin,
     ))
 }
@@ -187,7 +242,8 @@ fn escaped_result(
     z: Complex64,
     rebase_count: u32,
     absolute_error: f64,
-    norm_error: f64,
+    display_error: f64,
+    maximum_norm_error: f64,
     minimum_escape_margin: f64,
 ) -> (PerturbSample, PerturbationEnvelope) {
     (
@@ -200,8 +256,8 @@ fn escaped_result(
         },
         PerturbationEnvelope {
             delta_abs_error: absolute_error,
-            escape_norm2_error: norm_error,
-            smooth_error: smooth_error_bound(z.hypot(), absolute_error),
+            escape_norm2_error: maximum_norm_error,
+            smooth_error: smooth_error_bound(z.hypot(), display_error),
             minimum_escape_margin,
         },
     )
@@ -211,6 +267,7 @@ fn bounded_result(
     last_value: Complex64,
     rebase_count: u32,
     absolute_error: f64,
+    maximum_norm_error: f64,
     minimum_escape_margin: f64,
 ) -> (PerturbSample, PerturbationEnvelope) {
     (
@@ -223,7 +280,8 @@ fn bounded_result(
         },
         PerturbationEnvelope {
             delta_abs_error: absolute_error,
-            escape_norm2_error: norm_squared_error(last_value, absolute_error),
+            escape_norm2_error: maximum_norm_error
+                .max(norm_squared_error(last_value, absolute_error)),
             smooth_error: 0.0,
             minimum_escape_margin,
         },
@@ -245,6 +303,8 @@ fn renormalize(
     delta_prime: &mut Complex64,
     delta_c_prime: &mut Complex64,
     exponent: &mut i32,
+    delta_error: &mut f64,
+    delta_c_error: &mut f64,
 ) -> bool {
     loop {
         let norm = delta_prime.hypot();
@@ -261,6 +321,8 @@ fn renormalize(
         *delta_prime = delta_prime.scale(factor);
         *delta_c_prime = delta_c_prime.scale(factor);
         *exponent = next_exponent;
+        *delta_error += subnormal_renormalization_error(*delta_prime, next_exponent);
+        *delta_c_error += subnormal_renormalization_error(*delta_c_prime, next_exponent);
     }
 }
 
@@ -299,33 +361,117 @@ fn norm_squared(value: Complex64) -> f64 {
     }
 }
 
-fn propagated_error(reference_norm: f64, delta_norm: f64, previous: f64) -> f64 {
+fn reference_reconstruction_error(record: ReferenceOrbitRecord) -> f64 {
+    half_ulp(record.re_lo).hypot(half_ulp(record.im_lo))
+}
+
+fn half_ulp(value: f32) -> f64 {
+    let exponent = (value.to_bits() >> 23) & 0xff;
+    if exponent == 0 {
+        0.5 * F32_MIN_SUBNORMAL
+    } else {
+        let unbiased = i32::try_from(exponent).unwrap_or(255) - 127;
+        0.5 * 2.0_f64.powi(unbiased - 23)
+    }
+}
+
+fn centre_offset_error(value: Complex64, exponent: i32) -> f64 {
+    let represented = ldexp_complex(value, exponent).hypot();
+    F32_UNIT_ROUNDOFF * represented + scaled_subnormal_floor(exponent)
+}
+
+fn displayed_error(
+    reference_norm: f64,
+    reference_error: f64,
+    delta_norm: f64,
+    delta_error: f64,
+    exponent: i32,
+) -> f64 {
+    reference_error
+        + delta_error
+        + gamma(2) * (reference_norm + delta_norm)
+        + 2.0 * scaled_subnormal_floor(exponent)
+}
+
+fn rebase_rounding_error(value: Complex64, z_zero: Complex64, exponent: i32) -> f64 {
+    gamma(2) * (value.hypot() + z_zero.hypot()) + scaled_subnormal_floor(exponent)
+}
+
+fn operation_rounding_error(
+    reference_norm: f64,
+    delta_norm: f64,
+    delta_c_norm: f64,
+    exponent: i32,
+) -> f64 {
+    let local_magnitude = 2.0 * reference_norm * delta_norm
+        + delta_norm * delta_norm
+        + delta_c_norm;
+    gamma(20) * local_magnitude + 20.0 * scaled_subnormal_floor(exponent)
+}
+
+fn subnormal_renormalization_error(_value: Complex64, exponent: i32) -> f64 {
+    scaled_subnormal_floor(exponent)
+}
+
+fn scaled_subnormal_floor(exponent: i32) -> f64 {
+    core::f64::consts::SQRT_2 * F32_MIN_SUBNORMAL * 2.0_f64.powi(exponent)
+}
+
+fn gamma(operation_count: u32) -> f64 {
+    let total = f64::from(operation_count) * F32_UNIT_ROUNDOFF;
+    total / (1.0 - total)
+}
+
+fn propagated_error(
+    reference_norm: f64,
+    reference_error: f64,
+    delta_norm: f64,
+    previous: f64,
+    delta_c_norm: f64,
+    centre_error: f64,
+    exponent: i32,
+) -> f64 {
     let amplification = 2.0 * (reference_norm + delta_norm);
-    let arithmetic = 32.0 * f64::EPSILON * (1.0 + reference_norm + delta_norm).powi(2);
-    amplification.mul_add(previous, arithmetic)
+    let propagated = amplification.mul_add(previous, previous * previous);
+    let reference = 2.0 * reference_error * (delta_norm + previous);
+    let arithmetic = operation_rounding_error(
+        reference_norm,
+        delta_norm,
+        delta_c_norm,
+        exponent,
+    );
+    propagated + reference + centre_error + arithmetic
 }
 
 fn norm_squared_error(value: Complex64, absolute_error: f64) -> f64 {
-    8.0_f64.mul_add(
-        f64::EPSILON,
-        2.0_f64.mul_add(value.hypot(), absolute_error) * absolute_error,
-    )
+    let magnitude = value.hypot();
+    2.0_f64.mul_add(magnitude, absolute_error, absolute_error * absolute_error)
+        + radius_rounding_error(value)
+        + 3.0 * F32_MIN_SUBNORMAL
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn radius_rounding_error(value: Complex64) -> f64 {
+    let re = value.re as f32;
+    let im = value.im as f32;
+    let computed = re * re + im * im;
+    let exact = f64::from(re).mul_add(f64::from(re), f64::from(im) * f64::from(im));
+    (f64::from(computed) - exact).abs()
 }
 
 fn smooth_error_bound(magnitude: f64, absolute_error: f64) -> f64 {
     if magnitude <= 1.0 || absolute_error == 0.0 {
         0.0
     } else {
-        16.0_f64.mul_add(
-            f64::EPSILON,
-            absolute_error / (magnitude * magnitude.ln() * core::f64::consts::LN_2),
-        )
+        gamma(6)
+            + absolute_error / (magnitude * magnitude.ln() * core::f64::consts::LN_2)
     }
 }
 
 const fn glitch_result(
     rebase_count: u32,
     absolute_error: f64,
+    _maximum_norm_error: f64,
     minimum_escape_margin: f64,
 ) -> (PerturbSample, PerturbationEnvelope) {
     (

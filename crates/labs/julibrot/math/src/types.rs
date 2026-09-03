@@ -6,6 +6,23 @@ pub enum PrecisionMode {
     PictureFast = 1,
 }
 
+/// Consumer stage that decides whether PictureFast verifies a reference orbit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum ReferencePass {
+    Preview = 0,
+    Final = 1,
+    Measure = 2,
+}
+
+/// Whether the published reference was checked against its higher-precision orbit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum ReferenceVerification {
+    Deferred = 0,
+    Stable = 1,
+}
+
 /// Axis in the fixed order `(z.re, z.im, c.re, c.im)`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -189,6 +206,9 @@ pub struct ComputedOrbit {
     pub length: u32,
     pub precision_bits: u32,
     pub escape_index: Option<u32>,
+    pub verification: ReferenceVerification,
+    pub max_consumed_word_error_ulps: Option<u32>,
+    pub precision_escalations: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]

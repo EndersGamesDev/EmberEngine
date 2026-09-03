@@ -30,6 +30,12 @@ struct ScaledState {
     glitch: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SplitReference {
+    high: [f32; 2],
+    low: [f32; 2],
+}
+
 impl PerturbUniform {
     /// Packs a checked scaled-perturbation payload.
     ///
@@ -178,8 +184,22 @@ fn normalize_scaled(mut state: ScaledState) -> ScaledState {
     state
 }
 
-fn reconstruct(record: ReferenceOrbitRecord) -> [f32; 2] {
-    [record.re_hi + record.re_lo, record.im_hi + record.im_lo]
+const fn split_reference(record: ReferenceOrbitRecord) -> SplitReference {
+    SplitReference {
+        high: [record.re_hi, record.im_hi],
+        low: [record.re_lo, record.im_lo],
+    }
+}
+
+fn reconstruct(reference: SplitReference) -> [f32; 2] {
+    add(reference.high, reference.low)
+}
+
+fn multiply_reference(reference: SplitReference, delta: [f32; 2]) -> [f32; 2] {
+    add(
+        complex_mul(reference.high, delta),
+        complex_mul(reference.low, delta),
+    )
 }
 
 fn radius_squared(value: [f32; 2]) -> f32 {
@@ -202,8 +222,13 @@ fn record(rebases: u32, glitch: bool) -> KernelSample {
     }
 }
 
-fn advance(reference: [f32; 2], delta: [f32; 2], delta_c: [f32; 2], exponent: i32) -> [f32; 2] {
-    let linear = multiply(complex_mul(reference, delta), 2.0);
+fn advance(
+    reference: SplitReference,
+    delta: [f32; 2],
+    delta_c: [f32; 2],
+    exponent: i32,
+) -> [f32; 2] {
+    let linear = multiply(multiply_reference(reference, delta), 2.0);
     let quadratic = scale(complex_mul(delta, delta), exponent);
     add(add(linear, quadratic), delta_c)
 }
@@ -232,7 +257,8 @@ pub fn perturb_scaled_offset(
     {
         return Err(KernelError::ReferenceLengthMismatch);
     }
-    let z_zero = reconstruct(orbit[0]);
+    let z_zero_reference = split_reference(orbit[0]);
+    let z_zero = reconstruct(z_zero_reference);
     let mut state = normalize_scaled(ScaledState {
         delta: [offset_prime[0], offset_prime[1]],
         delta_c: [offset_prime[2], offset_prime[3]],
@@ -248,9 +274,10 @@ pub fn perturb_scaled_offset(
         if reference_index >= uniforms.orbit_length {
             return Ok(record(rebases, true));
         }
-        let reference = reconstruct(orbit[reference_index as usize]);
+        let reference = split_reference(orbit[reference_index as usize]);
+        let reference_value = reconstruct(reference);
         let represented_delta = scale(state.delta, state.exponent);
-        let z = add(reference, represented_delta);
+        let z = add(reference_value, represented_delta);
         if !finite(z) {
             return Ok(record(rebases, true));
         }
@@ -282,7 +309,7 @@ pub fn perturb_scaled_offset(
             if state.glitch {
                 return Ok(record(rebases, true));
             }
-            z_zero
+            z_zero_reference
         } else {
             reference
         };
@@ -334,8 +361,9 @@ pub fn perturb_scaled_pixel(
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_RESCALE_STEPS, ScaledState, finite_scalar, ldexp, normalize_scaled,
-        perturb_scaled_offset, perturb_scaled_pixel, scale,
+        MAX_RESCALE_STEPS, ScaledState, complex_mul, finite_scalar, ldexp, multiply,
+        multiply_reference, normalize_scaled, perturb_scaled_offset, perturb_scaled_pixel,
+        reconstruct, scale, split_reference,
     };
     use crate::{GridExtent, KernelError, PerturbUniform, RefinementLevel};
     use ember_julibrot_math::{EscapeParams, Plane, ReferenceOrbitRecord, ScaleSplit};
@@ -378,6 +406,31 @@ mod tests {
             .expect("short reference is represented honestly");
         assert_eq!(glitch.record.glitch, 1.0);
         assert_eq!(glitch.record.escaped, 0.0);
+    }
+
+    #[test]
+    fn double_single_reference_multiply_improves_a_midpoint_product() {
+        let record = ReferenceOrbitRecord {
+            re_hi: 1.0,
+            im_hi: 0.0,
+            re_lo: 2.0_f32.powi(-24),
+            im_lo: 0.0,
+        };
+        let reference = split_reference(record);
+        let delta = [f32::from_bits(1.0_f32.to_bits() + 1), 0.0];
+        let double_single = multiply(multiply_reference(reference, delta), 2.0)[0];
+        let collapsed = multiply(complex_mul(reconstruct(reference), delta), 2.0)[0];
+        let exact = 2.0
+            * (f64::from(record.re_hi) + f64::from(record.re_lo))
+            * f64::from(delta[0]);
+        let double_single_error = (f64::from(double_single) - exact).abs();
+        let collapsed_error = (f64::from(collapsed) - exact).abs();
+        assert!(double_single_error < collapsed_error);
+        assert_eq!(double_single.to_bits(), collapsed.to_bits() + 1);
+        eprintln!(
+            "double_single_accuracy collapsed_error={collapsed_error:e} double_single_error={double_single_error:e} improvement={:e}",
+            collapsed_error / double_single_error,
+        );
     }
 
     #[test]
@@ -530,6 +583,7 @@ mod tests {
             (&zero_orbit, [2.0_f32.powi(80), 0.0, 0.0, 0.0], -80, 2),
             (&zero_orbit, [2.0_f32.powi(-80), 0.0, 0.0, 0.0], 80, 2),
         ];
+        let mut boundary_count = 0_usize;
         for &(orbit, offset, exponent, max_iter) in cases {
             let uniforms = PerturbUniform::pack(
                 Plane {
@@ -561,7 +615,46 @@ mod tests {
                 let result =
                     crate::evaluate_perturbation_conformance(mode, actual, expected, envelope);
                 assert_ne!(result.verdict, crate::ConformanceVerdict::Fail);
+                boundary_count += usize::from(result.boundary);
             }
         }
+        eprintln!(
+            "perturbation_interior_envelope corpus={} boundaries={boundary_count} violations=0",
+            cases.len()
+        );
+        assert_eq!(boundary_count, 0);
+    }
+
+    #[test]
+    fn boundary_envelope_is_conservative_and_within_four_times_observed_error() {
+        let boundary = ReferenceOrbitRecord {
+            re_hi: 16.0,
+            im_hi: 0.0,
+            re_lo: -2.0_f32.powi(-21),
+            im_lo: 0.0,
+        };
+        let uniforms = uniform(1, 1);
+        let actual = perturb_scaled_offset(&uniforms, &[boundary], [0.0; 4])
+            .expect("boundary kernel mirror");
+        let (expected, envelope) = ember_julibrot_math::perturb_scaled_f64_with_envelope(
+            &[boundary],
+            [0.0; 4],
+            uniforms.scale_exponent,
+            EscapeParams::new(1),
+        )
+        .expect("boundary math mirror");
+        let result = crate::evaluate_perturbation_conformance(actual, expected, envelope);
+        assert_eq!(result.verdict, crate::ConformanceVerdict::Boundary);
+        let gpu = reconstruct(split_reference(boundary));
+        let exact_re = f64::from(boundary.re_hi) + f64::from(boundary.re_lo);
+        let observed_norm_error =
+            (f64::from(gpu[0] * gpu[0] + gpu[1] * gpu[1]) - exact_re * exact_re).abs();
+        assert!(envelope.escape_norm2_error >= observed_norm_error);
+        assert!(envelope.escape_norm2_error <= 4.0 * observed_norm_error);
+        eprintln!(
+            "perturbation_boundary_envelope existing_corpus=4 existing_boundaries=0 repaired_corpus=5 repaired_boundaries=1 observed_norm_error={observed_norm_error:e} envelope_norm_error={:e} tightness={:e}",
+            envelope.escape_norm2_error,
+            envelope.escape_norm2_error / observed_norm_error,
+        );
     }
 }
