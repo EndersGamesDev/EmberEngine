@@ -30,7 +30,7 @@ The fractal plane lives only in ℝ⁴; `e₅` carries escape height only after 
 
 For column vectors, `Rᵢⱼ(θ)` has the standard block `[[cos θ,−sin θ],[sin θ,cos θ]]` on axes `(i,j)` and identity elsewhere, every angle is an independent HOT control in `[−π,π]`, and the rightmost factor acts first.
 
-The object rotation is `O=R₁₂(ρ₁₂)R₁₃(ρ₁₃)R₁₄(ρ₁₄)R₂₃(ρ₂₃)R₂₄(ρ₂₄)R₃₄(ρ₃₄)∈SO(4)`; with column vectors its explicit application order is `R₃₄`, `R₂₄`, `R₂₃`, `R₁₄`, `R₁₃`, then `R₁₂`. There is one seed and the sampled basis is always `u=Oe₃`, `v=Oe₄`; a general object-angle change tilts the 2D slice in ambient ℝ⁴, while a member of the seed-plane stabilizer changes only its chart basis.
+The object rotation is `O=R₁₂(ρ₁₂)R₁₃(ρ₁₃)R₁₄(ρ₁₄)R₂₃(ρ₂₃)R₂₄(ρ₂₄)R₃₄(ρ₃₄)∈SO(4)`; with column vectors its explicit application order is `R₃₄`, `R₂₄`, `R₂₃`, `R₁₄`, `R₁₃`, then `R₁₂`. There is one seed and the sampled basis is always `u=Oe₃`, `v=Oe₄`; a general object-angle change tilts the 2D slice in ambient ℝ⁴, while a member of the current plane's stabilizer changes only its chart basis. Stabilizer membership belongs to the composed pose rather than to a parameter name: at `O=I`, `ρ₃₄` rotates within the sampled plane and `ρ₁₂` is inert for every absolute plane origin, while from a tilted base the same `ρ₁₂` change can tilt the sampled span.
 
 `ObjectAngles` stores the six angles in product order. The legacy `PlaneAngles` adapter maps `θ₁` to `ρ₁₃` and `θ₂` to `ρ₂₄`; setting the other four components to zero makes `O=R₁₃(θ₁)R₂₄(θ₂)` with the former application order and bit-for-bit results after the shared rounding pass.
 
