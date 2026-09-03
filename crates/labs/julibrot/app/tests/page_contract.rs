@@ -385,6 +385,34 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
 /// in the markup or the boundary, and an entry the loader calls must exist to be called. Split out
 /// of the control roster above because that test had grown past the length at which a failure
 /// tells you which of two unrelated things broke.
+/// A row can be lifted off the page exactly, so a broken state travels as the row that broke.
+///
+/// The first line is the row's own JSON and the second is the summary the box shows. Nothing here
+/// names a field: the row is stringified whole, so a row that grows an angle is reported complete
+/// without an edit, which is the only way a copy button stays honest as the row changes.
+#[test]
+fn a_row_can_be_copied_exactly_with_its_summary_beside_it() {
+    for id in ["copy-a", "copy-b", "copy-current", "copy-fallback"] {
+        assert!(
+            INDEX.contains(&format!("id=\"{id}\"")),
+            "missing copy control {id}"
+        );
+    }
+    // The exact row first, the sentence second, and the row is never picked apart to build it.
+    assert!(MAIN.contains(
+        "const rowText = (label, row) => `${JSON.stringify(row)}\\n${describeRow(label, row)}`;"
+    ));
+    // The live row comes from the one capture the page already had, not a second path to the app.
+    assert!(MAIN.contains(r#"copyText("current", rowText("current", captureRow()))"#));
+    assert_eq!(MAIN.matches("api.app_saved_view_json()").count(), 1);
+    // The clipboard is a permission: an absent or refusing one falls back to a selected textarea.
+    assert!(MAIN.contains(r#"typeof navigator.clipboard.writeText !== "function""#));
+    assert!(MAIN.contains(r#"say(target, "row copied");"#));
+    assert!(MAIN.contains("() => offerSelection(target, text),"));
+    assert!(MAIN.contains("FALLBACK.select();"));
+    assert!(INDEX.contains("readonly"));
+}
+
 #[test]
 fn the_retired_controls_name_nothing_and_the_wasm_boundary_is_complete() {
     // The retired mode selector and its Julia-only number boxes must name nothing.

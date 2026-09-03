@@ -458,6 +458,36 @@ function bindControls(api) {
   const captureRow = () => JSON.parse(api.app_saved_view_json());
   const writeStoredRows = () => writeStoredJson(ROWS_KEY, { rows: ROWS.named, selection: ROWS.selection });
 
+  // A row copied for a bug report is the exact row first and the sentence second: line one is the
+  // JSON the page itself round-trips through the saved-view API, every field the row carries and
+  // nothing added, so it can be handed straight back; line two is the summary the box already
+  // shows, so a human reading the report knows what they are looking at without decoding limbs.
+  const rowText = (label, row) => `${JSON.stringify(row)}\n${describeRow(label, row)}`;
+  const FALLBACK = document.getElementById("copy-fallback");
+  // The clipboard is a permission, not a function: a browser may not expose it, and one that does
+  // may still refuse. Neither is an error worth losing the row over, so the refusal path puts the
+  // text on the page, selected, and says so — the copy still happens, by hand.
+  const offerSelection = (target, text) => {
+    FALLBACK.value = text;
+    FALLBACK.hidden = false;
+    FALLBACK.focus();
+    FALLBACK.select();
+    say(target, "the clipboard refused; the row is selected below");
+  };
+  const copyText = (target, text) => {
+    if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
+      offerSelection(target, text);
+      return;
+    }
+    navigator.clipboard.writeText(text).then(
+      () => {
+        FALLBACK.hidden = true;
+        say(target, "row copied");
+      },
+      () => offerSelection(target, text),
+    );
+  };
+
   // Both sides list the same rows, so a row saved on one is choosable on the other; the selection
   // is only ever a key into that one list, and a key that no longer names a row falls back to none.
   const refreshRows = () => {
@@ -485,6 +515,7 @@ function bindControls(api) {
     for (const box of ["a", "b"]) {
       document.getElementById(`readout-${box}`).textContent = describeRow(box.toUpperCase(), BOXES[box]);
       document.getElementById(`load-${box}`).disabled = BOXES[box] === null;
+      document.getElementById(`copy-${box}`).disabled = BOXES[box] === null;
     }
     MORPH.disabled = BOXES.a === null || BOXES.b === null;
     refreshRows();
@@ -567,7 +598,15 @@ function bindControls(api) {
     document.getElementById(`load-${box}`).addEventListener("click", () => guarded(() => {
       if (BOXES[box]) loadRow(BOXES[box]);
     }));
+    document.getElementById(`copy-${box}`).addEventListener("click", () => {
+      if (BOXES[box]) copyText(box, rowText(box.toUpperCase(), BOXES[box]));
+    });
   }
+  // The live row, not a saved one: a broken state is reported from where it broke, without having
+  // to be saved into a box first, because saving it is one more edit between the bug and the report.
+  document.getElementById("copy-current").addEventListener("click", () => guarded(() => {
+    copyText("current", rowText("current", captureRow()));
+  }));
   MORPH.addEventListener("input", () => guarded(() => {
     if (!BOXES.a || !BOXES.b) return;
     applyRow(JSON.parse(api.app_morph_view(JSON.stringify(BOXES.a), JSON.stringify(BOXES.b), NUMBER("morph"))));
