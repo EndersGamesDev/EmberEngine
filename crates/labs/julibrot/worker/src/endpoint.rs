@@ -14,6 +14,8 @@
     reason = "the private module publishes its port seam to the browser and channel modules"
 )]
 
+use std::collections::VecDeque;
+
 use crate::{
     BUFFER_RETURN_DEADLINE_US, ChannelError, CreditAccount, ErrorCode, JULIBROT_ABI_VERSION,
     MIN_MAX_ITER, MessageHeader, MessageKind, OrbitDisposition, OrbitRequest, Pool, SubmitOutcome,
@@ -106,7 +108,7 @@ pub(crate) struct OwnerCore<P: OwnerPort> {
     config: WorkerConfig,
     request_owned: Vec<P::Slot>,
     orbit_owned: Vec<P::Slot>,
-    arrivals: Vec<P::Slot>,
+    arrivals: VecDeque<P::Slot>,
     pending_request: Option<OrbitRequest>,
     latest_generation: u32,
     latest_centre_revision: u32,
@@ -138,7 +140,7 @@ impl<P: OwnerPort> OwnerCore<P> {
             config,
             request_owned: Vec::with_capacity(2),
             orbit_owned: Vec::with_capacity(2),
-            arrivals: Vec::with_capacity(2),
+            arrivals: VecDeque::with_capacity(2),
             pending_request: None,
             latest_generation: 0,
             latest_centre_revision: 0,
@@ -210,10 +212,7 @@ impl<P: OwnerPort> OwnerCore<P> {
     /// Takes the next arrival together with the centre revision it belongs to.
     pub(crate) fn take_arrival(&mut self) -> Option<(P::Slot, u32)> {
         self.advance();
-        if self.arrivals.is_empty() {
-            return None;
-        }
-        let slot = self.arrivals.remove(0);
+        let slot = self.arrivals.pop_front()?;
         let header = match slot.header() {
             Ok(header) => header,
             Err(error) => {
@@ -281,7 +280,7 @@ impl<P: OwnerPort> OwnerCore<P> {
                 } else if self.arrivals.len() == 2 {
                     return Err(ChannelError::new(ErrorCode::BufferStarved, 2, 0, 0));
                 } else {
-                    self.arrivals.push(slot);
+                    self.arrivals.push_back(slot);
                 }
             }
             (Pool::Orbit, MessageKind::CreditStale) => {
@@ -575,8 +574,7 @@ impl<P: OwnerPort> OwnerCore<P> {
     }
 
     fn return_queued_arrivals(&mut self) -> Result<(), ChannelError> {
-        while !self.arrivals.is_empty() {
-            let slot = self.arrivals.remove(0);
+        while let Some(slot) = self.arrivals.pop_front() {
             self.return_stale_slot(slot)?;
         }
         Ok(())
@@ -662,6 +660,7 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::VecDeque;
     use std::rc::Rc;
+    use std::time::Instant;
 
     use ember_julibrot_math::PrecisionMode;
 
@@ -1134,6 +1133,61 @@ mod tests {
             SubmitOutcome::GenerationExhausted
         );
         assert_eq!(harness.core.take_error(), None);
+    }
+
+    #[test]
+    fn two_queued_arrivals_remain_fifo() {
+        let mut harness = Harness::boot(64);
+        assert_eq!(harness.submit(1, 64), SubmitOutcome::Transferred);
+        harness.produce(4);
+        assert_eq!(harness.submit(2, 64), SubmitOutcome::Transferred);
+        harness.produce(4);
+        assert_eq!(harness.core.facts().orbit_queue_depth, 2);
+
+        assert_eq!(
+            harness.drain_arrival(OrbitDisposition::Stale).0,
+            1,
+            "the oldest queued arrival drains first"
+        );
+        assert_eq!(
+            harness.drain_arrival(OrbitDisposition::Applied).0,
+            2,
+            "the newest queued arrival drains second"
+        );
+        assert_eq!(harness.core.facts().orbit_queue_depth, 0);
+    }
+
+    #[test]
+    #[ignore = "measurement harness"]
+    fn measures_two_slot_arrival_drain_wall_before_after() {
+        const DRAINS: u32 = 20_000_000;
+        let mut shifted = vec![0_u32, 1];
+        let shifted_start = Instant::now();
+        let mut shifted_sum = 0_u64;
+        for next in 2..DRAINS + 2 {
+            shifted_sum = shifted_sum.wrapping_add(u64::from(shifted.remove(0)));
+            shifted.push(next);
+        }
+        let shifted_wall = shifted_start.elapsed();
+
+        let mut deque = VecDeque::from([0_u32, 1]);
+        let deque_start = Instant::now();
+        let mut deque_sum = 0_u64;
+        for next in 2..DRAINS + 2 {
+            deque_sum = deque_sum.wrapping_add(u64::from(
+                deque.pop_front().expect("the two-slot queue stays populated"),
+            ));
+            deque.push_back(next);
+        }
+        let deque_wall = deque_start.elapsed();
+
+        assert_eq!(shifted_sum, deque_sum);
+        assert_eq!(shifted, deque.iter().copied().collect::<Vec<_>>());
+        eprintln!(
+            "PF-V5 drains={DRAINS} shifted_vec_us={} vec_deque_us={}",
+            shifted_wall.as_micros(),
+            deque_wall.as_micros()
+        );
     }
 
     #[test]
