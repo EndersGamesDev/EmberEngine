@@ -44,7 +44,7 @@ impl Warp {
         if !chart_residual.is_finite() || chart_residual > MAX_CHART_RESIDUAL_PX {
             return clear_only(true);
         }
-        anchor_plan(from_pose, to_pose, flat.forward, chart_residual)
+        anchor_plan(last_frame, from_pose, to_pose, flat.forward, chart_residual)
             .unwrap_or_else(|| clear_only(true))
     }
 }
@@ -64,6 +64,8 @@ const fn clear_only(exposed: bool) -> WarpPlan {
             [0.0, 1.0, 0.0, 0.0],
             [0.0, 0.0, 1.0, 0.0],
         ],
+        source_scene_id: None,
+        source_texture_index: None,
         source_valid: false,
         edge_on: false,
         exposed,
@@ -83,6 +85,7 @@ const fn edge_on() -> WarpPlan {
 }
 
 fn anchor_plan(
+    last_frame: &SceneFrame,
     from_pose: &Pose,
     to_pose: &Pose,
     flat_forward: [f64; 9],
@@ -107,6 +110,8 @@ fn anchor_plan(
     });
     Some(WarpPlan {
         rows,
+        source_scene_id: Some(last_frame.scene_id),
+        source_texture_index: Some(last_frame.texture_index),
         source_valid: true,
         edge_on: false,
         exposed: warp_exposes_source(inverse_sampling, from_pose, to_pose),

@@ -18,6 +18,7 @@ use crate::{
 const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
 const FENCE_BYTES: u64 = 4;
+const HOT_SOURCE_VALID_BYTE_OFFSET: u64 = 248;
 
 struct SceneTexture {
     _texture: wgpu::Texture,
@@ -94,7 +95,7 @@ pub struct Presenter {
     config: PresentConfig,
     main: Option<PresentMain>,
     hot: [Option<Pose>; 3],
-    hot_source_valid: [bool; 3],
+    hot_warp_source: [Option<(u64, u32)>; 3],
     hot_exposed: [bool; 3],
     exposure: ExposureLatch,
     ledger: SceneLedger,
@@ -132,7 +133,7 @@ impl Presenter {
             config,
             main: None,
             hot: [None; 3],
-            hot_source_valid: [false; 3],
+            hot_warp_source: [None; 3],
             hot_exposed: [false; 3],
             exposure: ExposureLatch::default(),
             ledger: SceneLedger::default(),
@@ -295,7 +296,10 @@ impl Presenter {
         self.queue
             .write_buffer(&self.gpu.hot_buffer, offset, bytemuck::bytes_of(&uniform));
         self.hot[slot.index() as usize] = pose;
-        self.hot_source_valid[slot.index() as usize] = plan.source_valid;
+        self.hot_warp_source[slot.index() as usize] = plan
+            .source_scene_id
+            .zip(plan.source_texture_index)
+            .filter(|_| plan.source_valid);
         self.hot_exposed[slot.index() as usize] = plan.exposed;
         self.exposure.observe_warp(plan.exposed);
         self.facts.centre_from_reference_px = hot.state.centre_from_reference_px;
@@ -479,11 +483,18 @@ impl Presenter {
             operation: "advance warp identity",
         })?;
         let source = select_warp_source(
-            self.hot_source_valid[hot_slot.index() as usize],
+            self.hot_warp_source[hot_slot.index() as usize],
             self.ledger.retained(),
         );
         let source_scene_id = source.map(|frame| frame.scene_id);
         let texture_index = source.map_or(0, |frame| frame.texture_index as usize);
+        if source.is_none() {
+            self.queue.write_buffer(
+                &self.gpu.hot_buffer,
+                u64::from(hot_slot.dynamic_offset()) + HOT_SOURCE_VALID_BYTE_OFFSET,
+                bytemuck::bytes_of(&0_u32),
+            );
+        }
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1332,8 +1343,27 @@ fn pose_is_finite(pose: &Pose) -> bool {
         }
 }
 
-fn select_warp_source<T>(source_valid: bool, retained: Option<T>) -> Option<T> {
-    if source_valid { retained } else { None }
+fn select_warp_source(
+    planned: Option<(u64, u32)>,
+    retained: Option<&crate::SceneFrame>,
+) -> Option<&crate::SceneFrame> {
+    retained.filter(|frame| {
+        select_warp_source_identity(planned, Some((frame.scene_id, frame.texture_index))).is_some()
+    })
+}
+
+const fn select_warp_source_identity(
+    planned: Option<(u64, u32)>,
+    retained: Option<(u64, u32)>,
+) -> Option<(u64, u32)> {
+    match (planned, retained) {
+        (Some(planned), Some(retained))
+            if planned.0 == retained.0 && planned.1 == retained.1 =>
+        {
+            Some(retained)
+        }
+        _ => None,
+    }
 }
 
 const fn identity_rows() -> [[f32; 4]; 3] {
@@ -1347,6 +1377,8 @@ const fn identity_rows() -> [[f32; 4]; 3] {
 const fn clear_warp_plan(edge_on: bool, exposed: bool) -> crate::WarpPlan {
     crate::WarpPlan {
         rows: identity_rows(),
+        source_scene_id: None,
+        source_texture_index: None,
         source_valid: false,
         edge_on,
         exposed,
@@ -1383,9 +1415,17 @@ mod tests {
     }
 
     #[test]
-    fn clear_only_warp_never_attributes_a_retained_scene() {
-        assert_eq!(select_warp_source(false, Some(41_u64)), None);
-        assert_eq!(select_warp_source(true, Some(41_u64)), Some(41));
+    fn a_promoted_scene_cannot_be_sampled_by_an_older_hot_plan() {
+        assert_eq!(select_warp_source_identity(None, Some((41, 0))), None);
+        assert_eq!(
+            select_warp_source_identity(Some((41, 0)), Some((41, 0))),
+            Some((41, 0))
+        );
+        assert_eq!(
+            select_warp_source_identity(Some((41, 0)), Some((42, 1))),
+            None
+        );
+        assert_eq!(HOT_SOURCE_VALID_BYTE_OFFSET, 248);
     }
 
     #[test]
@@ -1393,7 +1433,7 @@ mod tests {
         let source = include_str!("gpu.rs");
         let accessor = [".dynamic_", "offset()"].concat();
         let bypass = ["index()", " * self.gpu.hot_stride"].concat();
-        assert_eq!(source.matches(&accessor).count(), 3);
+        assert_eq!(source.matches(&accessor).count(), 4);
         assert!(!source.contains(&bypass));
     }
 }

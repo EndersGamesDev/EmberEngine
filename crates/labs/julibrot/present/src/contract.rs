@@ -181,6 +181,10 @@ pub struct SceneFrame {
 pub struct WarpPlan {
     /// Three padded inverse-sampling homography rows.
     pub rows: [[f32; 4]; 3],
+    /// Retained scene identity against which the plan was solved.
+    pub source_scene_id: Option<u64>,
+    /// Retained texture identity against which the plan was solved.
+    pub source_texture_index: Option<u32>,
     /// Whether sampling the retained texture is honest.
     pub source_valid: bool,
     /// Whether the destination pose is the physical edge-on all-sky state.
@@ -519,6 +523,8 @@ mod tests {
         assert_eq!(facts.warp_p95_error_px, None);
         let anchored = WarpPlan {
             rows: [[0.0; 4]; 3],
+            source_scene_id: Some(9),
+            source_texture_index: Some(1),
             source_valid: true,
             edge_on: false,
             exposed: false,
