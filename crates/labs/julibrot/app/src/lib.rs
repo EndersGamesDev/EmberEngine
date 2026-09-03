@@ -8,6 +8,7 @@ mod measurement;
 mod saved;
 mod state;
 mod surface;
+mod timing;
 
 #[cfg(target_arch = "wasm32")]
 mod runtime;
@@ -34,6 +35,7 @@ pub use state::{
     box_zoom_delta_log2, drag_delta_px_down, is_box_selection, preset_row,
 };
 pub use surface::{PendingSurface, SurfaceAction, SurfaceState};
+pub use timing::{LEVEL_TIMING_CAPACITY, LevelTimingLedger, LevelTimingRecord, TimingLevel};
 
 /// Main integration object combining browser ownership and worker-published controls.
 #[cfg(target_arch = "wasm32")]

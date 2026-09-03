@@ -30,8 +30,8 @@ pub use mesh::{
     scene_index_count, scene_indices, view_rotation, view_scale,
 };
 pub use palette::{
-    CLASSIC_PALETTE, EMBER_PALETTE, ICE_PALETTE, PaletteId, PaletteOutcome, PaletteRecord, palette,
-    shade_escape_record,
+    CLASSIC_PALETTE, DEBUG_TINT, EMBER_PALETTE, ICE_PALETTE, PaletteId, PaletteOutcome,
+    PaletteRecord, palette, shade_escape_record, shade_lit_escape_record,
 };
 pub use planner::Warp;
 pub use shader::scene_shader;

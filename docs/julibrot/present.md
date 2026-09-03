@@ -158,6 +158,8 @@ The warp samples the retained `Rgba8Unorm` texture with a nearest sampler and no
 
 Timing uses no timestamp query: scene cost starts immediately before scene uniform writes and encoding and ends when the four-byte fence mapped after scene submission completes, while warp cost starts immediately before HOT write and warp encoding and ends when the four-byte fence mapped after warp submission completes.
 
+App's per-level timing ring consumes these existing scene and warp completion measurements without adding a fence, wait, timestamp query, or present-owned record. There is no completion boundary between the separately submitted kernels encoder and the scene encoder, so app records kernel `dispatch_us` as unavailable; the scene fence remains the first GPU completion boundary and the warp fence remains the second.
+
 Each fence records total wall milliseconds, the subset spent from first `map_async` poll through callback observation, and every `device.poll`; the first poll precedes yielding, the bound is 4,096 polls and 30,000 ms, and timeout or cancellation becomes a typed event rather than an unbounded wait.
 
 The first fenced scene and warp after initialization, texture reallocation, or pipeline creation are labelled cold warm-up and excluded from aggregates, but their walls and polls remain displayed; the second fenced scene is the labelled policy probe and selects continuous animation at `scene_ms≤100` or single-frame-on-demand at `scene_ms>100` without becoming an admission test.

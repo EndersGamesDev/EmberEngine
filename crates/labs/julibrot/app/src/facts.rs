@@ -5,7 +5,7 @@ use ember_julibrot_math::{precision_for, scaled_pixel_scale};
 use ember_julibrot_present::{SampleClass, SubmissionMeasurement};
 use serde::Serialize;
 
-use crate::{App, FramePolicy, JULIBROT_ABI_VERSION};
+use crate::{App, FramePolicy, JULIBROT_ABI_VERSION, LevelTimingRecord};
 
 /// Complete version-two overlay snapshot; absent delivered values serialize as `null`.
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -110,6 +110,7 @@ pub struct PageFacts {
     pub precision_mode: &'static str,
     pub scene_precision_mode: Option<&'static str>,
     pub warp_precision_mode: Option<&'static str>,
+    pub level_timings: Vec<LevelTimingRecord>,
 }
 
 impl PageFacts {
@@ -248,6 +249,7 @@ impl PageFacts {
             precision_mode: requested.precision_mode.as_str(),
             scene_precision_mode: present.last_scene.map(|sample| sample.precision_mode),
             warp_precision_mode: present.last_warp.map(|sample| sample.precision_mode),
+            level_timings: loop_facts.level_timings(),
         }
     }
 }

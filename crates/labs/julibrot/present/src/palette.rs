@@ -132,6 +132,30 @@ pub fn shade_escape_record(record: [f32; 4], selected: PaletteRecord) -> Palette
     }
 }
 
+/// Applies the scene shader's post-palette lighting while preserving the unlit debug category.
+#[must_use]
+#[allow(clippy::float_cmp)]
+pub fn shade_lit_escape_record(
+    record: [f32; 4],
+    selected: PaletteRecord,
+    light: f32,
+) -> PaletteOutcome {
+    let mut outcome = shade_escape_record(record, selected);
+    if outcome.rgba == DEBUG_TINT {
+        return outcome;
+    }
+    if !(0.58..=0.82).contains(&light) {
+        return PaletteOutcome {
+            rgba: DEBUG_TINT,
+            contract_violation: true,
+        };
+    }
+    for channel in &mut outcome.rgba[..3] {
+        *channel *= light;
+    }
+    outcome
+}
+
 #[cfg(test)]
 mod tests {
     use std::mem::{align_of, size_of};
@@ -190,5 +214,17 @@ mod tests {
                 .iter()
                 .all(|channel| (0.0..=1.0).contains(channel))
         );
+    }
+
+    #[test]
+    fn lighting_matches_the_scene_order_and_never_dims_debug() {
+        let escaped = shade_lit_escape_record([16.0, 1.0, 0.0, 0.0], CLASSIC_PALETTE, 0.7);
+        let base = shade_escape_record([16.0, 1.0, 0.0, 0.0], CLASSIC_PALETTE);
+        assert_eq!(escaped.rgba[0], base.rgba[0] * 0.7);
+        assert_eq!(escaped.rgba[1], base.rgba[1] * 0.7);
+        assert_eq!(escaped.rgba[2], base.rgba[2] * 0.7);
+        assert_eq!(escaped.rgba[3], 1.0);
+        let debug = shade_lit_escape_record([4.0, 0.0, 2.0, 1.0], CLASSIC_PALETTE, 0.7);
+        assert_eq!(debug.rgba, DEBUG_TINT);
     }
 }

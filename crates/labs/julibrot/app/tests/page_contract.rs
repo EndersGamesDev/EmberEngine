@@ -15,7 +15,7 @@ const WORKER_OWNER: &str = include_str!("../../worker/src/browser_owner.rs");
 const SAVED: &str = include_str!("../src/saved.rs");
 
 /// Every field the page facts must carry, in publication order.
-const PAGE_FACT_FIELDS: [&str; 91] = [
+const PAGE_FACT_FIELDS: [&str; 92] = [
     "abi_version",
     "adapter_name",
     "backend",
@@ -107,6 +107,7 @@ const PAGE_FACT_FIELDS: [&str; 91] = [
     "precision_mode",
     "scene_precision_mode",
     "warp_precision_mode",
+    "level_timings",
 ];
 
 #[test]
