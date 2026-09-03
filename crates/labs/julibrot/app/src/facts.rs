@@ -4,10 +4,11 @@ use ember_julibrot_kernels::{KernelMode, RefinementLevel};
 use ember_julibrot_math::{precision_for, scaled_pixel_scale};
 use ember_julibrot_present::{SampleClass, SubmissionMeasurement};
 use std::fmt;
+use std::sync::Arc;
 
 use serde::{Serialize, Serializer};
 
-use crate::{App, AppError, FramePolicy, JULIBROT_ABI_VERSION, LevelTimingLedger};
+use crate::{App, FramePolicy, JULIBROT_ABI_VERSION, LevelTimingLedger};
 
 const DEVICE_WALLS: &[&str] = &["WebGL2", "EXT_color_buffer_float", "RGBA32F usages"];
 const APP_POLICIES: &[&str] = &[
@@ -16,16 +17,16 @@ const APP_POLICIES: &[&str] = &[
     "worker credit=250000us/s",
 ];
 
-/// Borrowed typed refusal serialized through its existing display contract.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct DisplayFact<'a>(&'a AppError);
+/// Shared fact text cloned without allocating during a refresh.
+#[derive(Clone, Debug, PartialEq)]
+pub struct String(Arc<str>);
 
-impl Serialize for DisplayFact<'_> {
+impl Serialize for String {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        serializer.collect_str(self.0)
+        serializer.serialize_str(&self.0)
     }
 }
 
@@ -139,9 +140,9 @@ pub struct PageFacts<'a> {
     pub navigation_pending_depth: u32,
     pub refresh_status: &'static str,
     pub transient_fence_refusals: u32,
-    pub last_transient_refusal: Option<DisplayFact<'a>>,
+    pub last_transient_refusal: Option<String>,
     pub presented_view_stale: bool,
-    pub loop_stopped_reason: Option<DisplayFact<'a>>,
+    pub loop_stopped_reason: Option<String>,
     pub palette_id: u32,
     pub object_angles: [f64; 6],
     pub plane_theta_1: f64,
@@ -243,9 +244,7 @@ impl<'a> PageFacts<'a> {
             scale_mantissa: scale.map(|value| value.mantissa),
             scale_exponent: scale.map(|value| value.exponent),
             kernel_mode: dispatch.map(|facts| kernel_mode(facts.mode)),
-            refinement_level: present
-                .delivered_level
-                .map(refinement_level),
+            refinement_level: present.delivered_level.map(refinement_level),
             refinement_pending: loop_facts.refinement_pending(),
             scene_mode: loop_facts.scene_mode().as_str(),
             scene_update_pending: loop_facts.scene_update_pending(),
@@ -279,9 +278,9 @@ impl<'a> PageFacts<'a> {
             navigation_pending_depth: app.viewer().owner().navigation_pending_depth(),
             refresh_status: loop_facts.last_status().name(),
             transient_fence_refusals: loop_facts.transient_refusals(),
-            last_transient_refusal: loop_facts.last_transient_error().map(DisplayFact),
+            last_transient_refusal: loop_facts.last_transient_text().map(String),
             presented_view_stale: loop_facts.presented_view_is_stale(app.viewer()),
-            loop_stopped_reason: loop_facts.stopped_error().map(DisplayFact),
+            loop_stopped_reason: loop_facts.stopped_text().map(String),
             palette_id: requested.palette as u32,
             object_angles: requested.object_angles.as_array(),
             plane_theta_1: requested.object_angles.rho_13,
@@ -325,10 +324,9 @@ impl<'a> PageFacts<'a> {
             timer_quantum_ms: None,
             device_walls: DEVICE_WALLS,
             app_policies: APP_POLICIES,
-            limiting_term: (plan.extent_divisor > 1)
-                .then_some(LimitingTerm {
-                    extent_divisor: plan.extent_divisor,
-                }),
+            limiting_term: (plan.extent_divisor > 1).then_some(LimitingTerm {
+                extent_divisor: plan.extent_divisor,
+            }),
             wasm_bundle_bytes: None,
             javascript_bundle_bytes: None,
             wasm_instance_count: 2,

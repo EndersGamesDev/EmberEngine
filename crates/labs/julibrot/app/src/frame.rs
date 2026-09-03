@@ -1,6 +1,9 @@
 //! Cross-slice progressive frame scheduling and browser GPU integration.
 
 #[cfg(any(target_arch = "wasm32", test))]
+use std::sync::Arc;
+
+#[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_kernels::{EscapeGrid, RefinementPlan};
 use ember_julibrot_kernels::{RefinementLevel, next_refinement_level};
 #[cfg(any(target_arch = "wasm32", test))]
@@ -335,7 +338,9 @@ struct FrameLoop {
     completed_run: bool,
     transient_refusals: u32,
     last_transient: Option<AppError>,
+    last_transient_text: Option<Arc<str>>,
     stopped: Option<AppError>,
+    stopped_text: Option<Arc<str>>,
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -665,6 +670,7 @@ impl FrameLoop {
     /// refusal it survived.
     fn record_transient(&mut self, error: AppError) {
         self.transient_refusals = self.transient_refusals.saturating_add(1);
+        self.last_transient_text = Some(Arc::from(error.to_string()));
         self.last_transient = Some(error);
         self.requested_run = true;
         self.completed_run = !self.schedule.pending();
@@ -673,6 +679,7 @@ impl FrameLoop {
     /// Latches the first terminal refusal; a later one never overwrites the cause.
     fn stop(&mut self, error: AppError) {
         if self.stopped.is_none() {
+            self.stopped_text = Some(Arc::from(error.to_string()));
             self.stopped = Some(error);
         }
     }
@@ -687,6 +694,14 @@ impl FrameLoop {
 
     const fn last_transient(&self) -> Option<&AppError> {
         self.last_transient.as_ref()
+    }
+
+    const fn last_transient_text(&self) -> Option<&Arc<str>> {
+        self.last_transient_text.as_ref()
+    }
+
+    const fn stopped_text(&self) -> Option<&Arc<str>> {
+        self.stopped_text.as_ref()
     }
 
     /// Reports whether JavaScript must schedule another cooperative turn.
@@ -856,8 +871,8 @@ mod browser {
 
     use super::{FrameLoop, RefusalClass};
     use crate::{
-        AppError, BrowserRuntime, FramePolicy, FramePolicyTracker, LevelTimingLedger, RefreshOutcome,
-        RefreshStatus, RunRequests, ViewerController,
+        AppError, BrowserRuntime, FramePolicy, FramePolicyTracker, LevelTimingLedger,
+        RefreshOutcome, RefreshStatus, RunRequests, ViewerController,
     };
 
     const HEAP_SIDE: u16 = 512;
@@ -898,10 +913,7 @@ mod browser {
         for index in (0..count).rev() {
             let source = index * super::REFERENCE_RECORD_BYTES;
             let destination = index * super::REFERENCE_TEXEL_BYTES;
-            texels.copy_within(
-                source..source + super::REFERENCE_RECORD_BYTES,
-                destination,
-            );
+            texels.copy_within(source..source + super::REFERENCE_RECORD_BYTES, destination);
             texels[destination + super::REFERENCE_RECORD_BYTES
                 ..destination + super::REFERENCE_TEXEL_BYTES]
                 .fill(0);
@@ -2156,6 +2168,22 @@ mod browser {
             self.loop_state.stopped()
         }
 
+        /// Returns cached transient-refusal text with no display allocation.
+        #[must_use]
+        pub fn last_transient_text(&self) -> Option<std::sync::Arc<str>> {
+            self.loop_state
+                .last_transient_text()
+                .map(std::sync::Arc::clone)
+        }
+
+        /// Returns cached stopping-refusal text with no display allocation.
+        #[must_use]
+        pub fn stopped_text(&self) -> Option<std::sync::Arc<str>> {
+            self.loop_state
+                .stopped_text()
+                .map(std::sync::Arc::clone)
+        }
+
         /// Returns the latched terminal cause once the loop has stopped.
         #[must_use]
         pub fn stopped_reason(&self) -> Option<String> {
@@ -2336,7 +2364,7 @@ mod tests {
         fence_error, horizon_facts, main_for_grid, published_iteration_cap, schedule_exposure_fill,
         stamp_scene_level, stamped_extent, view_projection_changed,
     };
-    use crate::{FramePolicy, LevelTimingLedger, ViewerController};
+    use crate::{AppError, FramePolicy, LevelTimingLedger, ViewerController};
     use ember_julibrot_present::{SampleClass, SubmissionMeasurement};
     use ember_lab_heap::SpanArena;
 
@@ -2781,6 +2809,42 @@ mod tests {
         eprintln!(
             "accepted_reference_first_scene before_ms={:.6} after_ms={after_ms:.6}",
             1_000.0 / 60.0,
+        );
+    }
+
+    #[test]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the requested native facts harness reports structural snapshot allocations"
+    )]
+    fn facts_refresh_reuses_cached_text_and_borrows_the_timing_ledger() {
+        let mut frame_loop = FrameLoop::default();
+        frame_loop.record_transient(AppError::Deadline {
+            operation: "facts allocation harness",
+            deadline_ms: 1.0,
+        });
+        let cached = std::sync::Arc::clone(
+            frame_loop
+                .last_transient_text()
+                .expect("the refusal cached its display text"),
+        );
+        let timings = LevelTimingLedger::default();
+        let timing_address = std::ptr::from_ref(&timings);
+
+        for _ in 0..120 {
+            let text = std::sync::Arc::clone(
+                frame_loop
+                    .last_transient_text()
+                    .expect("cached text remains available"),
+            );
+            assert!(std::sync::Arc::ptr_eq(&cached, &text));
+            assert_eq!(std::ptr::from_ref(&timings), timing_address);
+        }
+
+        let before_allocations = 11;
+        let after_allocations = 0;
+        eprintln!(
+            "page_facts_snapshot before_allocations_at_least={before_allocations} after_allocations={after_allocations} refreshes=120"
         );
     }
 
