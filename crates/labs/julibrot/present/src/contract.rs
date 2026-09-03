@@ -330,7 +330,7 @@ pub struct FrameReceipt {
 /// Immutable app-facing presentation facts snapshot.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PresentFacts {
-    /// Newest retained scene identity.
+    /// Best retained scene identity.
     pub completed_scene_id: Option<u64>,
     /// Sole pending scene identity.
     pub in_flight_scene_id: Option<u64>,
@@ -366,6 +366,8 @@ pub struct PresentFacts {
     pub texture_reallocations: u32,
     /// Whether the latest warp exposed a region outside its retained source.
     pub warp_exposed: bool,
+    /// Share of the destination exposure lattice that the warp paints clear.
+    pub warp_exposed_fraction: Option<f64>,
     /// Whether exposure remains latched until a scene completion fills the surface.
     pub scene_fill_due: bool,
     /// Latest plane-chart residual.
@@ -381,11 +383,11 @@ pub struct PresentFacts {
 }
 
 impl PresentFacts {
-    /// Records the three planner-owned approximation facts from one warp plan.
+    /// Records the planner and exposure facts from one warp plan.
     ///
     /// A clear-only or exact-flat plan has no sampled tumbled corpus, so both error facts stay
     /// absent rather than reporting a stale or invented number.
-    pub const fn record_warp_plan(&mut self, plan: &WarpPlan) {
+    pub const fn record_warp_plan(&mut self, plan: &WarpPlan, exposed_fraction: Option<f64>) {
         self.chart_residual = if plan.source_valid {
             Some(plan.chart_residual)
         } else {
@@ -395,6 +397,7 @@ impl PresentFacts {
         self.warp_p95_error_px = plan.approx_p95_error_px;
         self.warp_kind = plan.kind;
         self.warp_exposed = plan.exposed;
+        self.warp_exposed_fraction = exposed_fraction;
         if plan.exposed {
             self.scene_fill_due = true;
         }
@@ -422,6 +425,7 @@ impl Default for PresentFacts {
             refreshes_without_scene: 0,
             texture_reallocations: 0,
             warp_exposed: false,
+            warp_exposed_fraction: None,
             scene_fill_due: false,
             chart_residual: None,
             warp_max_error_px: None,
@@ -550,10 +554,11 @@ mod tests {
             approx_max_error_px: Some(1.75),
             approx_p95_error_px: Some(0.5),
         };
-        facts.record_warp_plan(&anchored);
+        facts.record_warp_plan(&anchored, Some(0.0));
         assert_eq!(facts.chart_residual, Some(0.25));
         assert_eq!(facts.warp_max_error_px, Some(1.75));
         assert_eq!(facts.warp_p95_error_px, Some(0.5));
+        assert_eq!(facts.warp_exposed_fraction, Some(0.0));
         let cleared = WarpPlan {
             source_valid: false,
             exposed: true,
@@ -562,10 +567,11 @@ mod tests {
             approx_p95_error_px: None,
             ..anchored
         };
-        facts.record_warp_plan(&cleared);
+        facts.record_warp_plan(&cleared, None);
         assert_eq!(facts.chart_residual, None);
         assert_eq!(facts.warp_max_error_px, None);
         assert_eq!(facts.warp_p95_error_px, None);
+        assert_eq!(facts.warp_exposed_fraction, None);
     }
 
     fn test_span() -> ember_lab_heap::DataSpan {

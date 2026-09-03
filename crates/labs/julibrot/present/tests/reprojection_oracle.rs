@@ -777,6 +777,44 @@ fn a_camera_factor_turns_the_flat_picture_off_the_preset_row() {
         "a turned camera must resample the slice, not reproduce it: {resampled} of {compared}"
     );
 
+    let plan = Warp::reproject(
+        &frame(&preset),
+        &preset,
+        &turned,
+        PrecisionMode::PictureFast,
+        WarpValidation::Ordinary,
+    );
+    assert!(plan.source_valid, "the turned flat warp is accepted");
+    assert!(plan.exposed, "the turned rectangle exposes surface corners");
+    assert_eq!(plan.source_scene_id, Some(7));
+    let inverse = rows(plan.rows);
+    let retained = render_retained(&preset);
+    let mut exposed = 0_u32;
+    for row in 0..17 {
+        for column in 0..17 {
+            let target = [
+                ((f64::from(column) + 0.5) / 17.0 - 0.5) * f64::from(turned.grid_width),
+                ((f64::from(row) + 0.5) / 17.0 - 0.5) * f64::from(turned.grid_height),
+            ];
+            if map_plane_offset(&turned, target).is_none() {
+                continue;
+            }
+            let Some(source) = apply_homography(inverse, target) else {
+                continue;
+            };
+            if nearest_retained(
+                &retained,
+                [preset.grid_width, preset.grid_height],
+                source,
+            )
+            .is_none()
+            {
+                exposed = exposed.saturating_add(1);
+            }
+        }
+    }
+    assert!(exposed > 0, "the accepted source honestly leaves clear corners");
+
     assert_fixture(
         "camera q12 off the preset row",
         &preset,
