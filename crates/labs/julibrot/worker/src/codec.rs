@@ -514,8 +514,11 @@ const fn bad_descriptor(detail: u32) -> ChannelError {
 mod tests {
     use ember_julibrot_math::PrecisionMode;
 
-    use super::{CoordinateDescriptor, EncodedCentre, OrbitReason, OrbitRequest};
-    use crate::wire::WireBuffer;
+    use super::{
+        CoordinateDescriptor, EncodedCentre, OrbitReason, OrbitRequest, REQUEST_FIXED_END,
+        REQUEST_MODE_OFFSET, visit_transfer_request_body_words,
+    };
+    use crate::wire::{WireBuffer, write_words};
     use crate::{ErrorCode, Pool};
 
     fn centre() -> EncodedCentre {
@@ -551,6 +554,21 @@ mod tests {
         }
     }
 
+    fn deep_nonzero_request(mode: PrecisionMode) -> OrbitRequest {
+        let centre =
+            ember_julibrot_math::BigCentre::from_f64([0.25, -0.125, -0.75, 0.125], 1_024).unwrap();
+        OrbitRequest::new(
+            31,
+            EncodedCentre::encode_math(&centre, 29).unwrap(),
+            300,
+            1_024,
+            64,
+            mode,
+            OrbitReason::CENTRE_THRESHOLD,
+        )
+        .unwrap()
+    }
+
     #[test]
     fn canonical_request_round_trips_little_endian() {
         let request = OrbitRequest::new(
@@ -574,6 +592,52 @@ mod tests {
         );
         assert_eq!(&buffer.as_bytes()[112..116], &1_u32.to_le_bytes());
         assert_eq!(&buffer.as_bytes()[116..120], &0x0123_4567_u32.to_le_bytes());
+    }
+
+    #[test]
+    fn browser_transfer_body_matches_codec_for_a_deep_nonzero_centre() {
+        let request = deep_nonzero_request(PrecisionMode::PictureFast);
+        let mut codec_buffer = WireBuffer::new(Pool::Request, 1, request.max_iter()).unwrap();
+        request.encode_into(&mut codec_buffer).unwrap();
+
+        let message_end = codec_buffer.capacity() - crate::POOL_TRAILER_BYTES;
+        let mut browser_body = vec![0_u8; message_end];
+        visit_transfer_request_body_words(&request, |offset, words| {
+            let end = offset + words.len() * 4;
+            write_words(&mut browser_body[offset..end], words);
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            &browser_body[crate::HEADER_BYTES..],
+            &codec_buffer.as_bytes()[crate::HEADER_BYTES..message_end]
+        );
+        assert_eq!(
+            &browser_body[REQUEST_MODE_OFFSET..REQUEST_FIXED_END],
+            &(PrecisionMode::PictureFast as u32).to_le_bytes()
+        );
+        assert_eq!(
+            &browser_body[REQUEST_FIXED_END..REQUEST_FIXED_END + 4],
+            &request.centre().limbs[0].to_le_bytes()
+        );
+    }
+
+    #[test]
+    fn nonzero_origin_request_round_trips_with_its_precision_mode() {
+        for mode in PrecisionMode::ALL {
+            let request = deep_nonzero_request(mode);
+            let mut buffer = WireBuffer::new(Pool::Request, 0, request.max_iter()).unwrap();
+            request.encode_into(&mut buffer).unwrap();
+            let decoded = OrbitRequest::decode(&buffer).unwrap();
+
+            assert_eq!(decoded.precision_mode(), mode);
+            assert_eq!(decoded, request);
+            assert_eq!(
+                decoded.centre().decode_math(1_024).unwrap().to_f64_mirror(),
+                [0.25, -0.125, -0.75, 0.125]
+            );
+        }
     }
 
     #[test]
