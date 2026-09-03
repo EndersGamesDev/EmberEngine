@@ -295,7 +295,7 @@ The executor method is `GpuKernelExecutor::prefix_headers(&self, span: &DataSpan
 
 The cached path resolves descriptor handles during template construction once per grid or resident reference allocation; the former per-dispatch resolution was defensive only, because allocator generations already make a stale template a typed refusal.
 
-The ignored native `measures_dispatch_planning_allocations_and_wall_per_level` kernels harness compares fresh dialect planning against an already selected template for 10,000 calls per 960×540 level; on osprey on 2026-09-04 it measured Preview 3,202→3 us, Interactive 3,698→3 us, and Final 8,072→3 us, while the structural planning allocation count fell from at least five per call to zero after template construction.
+The ignored native `measures_dispatch_planning_allocations_and_wall_per_level` kernels harness compares fresh dialect planning against an already selected template for 10,000 calls per 960×540 level; on osprey on 2026-09-04 it measured Preview 3,176→3 us, Interactive 3,782→3 us, and Final 8,033→3 us, while the structural planning allocation count fell from at least five per call to zero after template construction.
 
 ### 3.7 App and present coordination
 
