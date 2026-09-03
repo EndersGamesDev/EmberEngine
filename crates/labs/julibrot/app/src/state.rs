@@ -633,6 +633,7 @@ impl ViewerController {
             return Err(AppError::Math("object angles are not valid".to_string()));
         }
         self.synchronize_shadow()?;
+        self.clear_crosshair();
         self.requested.object_angles = angles;
         let mut hot = self.staged_hot;
         hot.plane_theta_1 = angles.rho_13;
@@ -1161,6 +1162,26 @@ mod tests {
         // A drag right and down carries the content with it: `+x` on screen, `-y` up.
         assert!((after[0] - before[0] - delta[0]).abs() < 1.0e-6);
         assert!((after[1] - before[1] + delta[1]).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn changing_the_object_slice_clears_the_crosshair() {
+        let mut viewer = ViewerController::new(960).expect("canonical viewer");
+        viewer.set_crosshair([60.0, -20.0]).expect("finite click");
+        assert!(viewer.crosshair_plane_px().is_some());
+        let mut object = viewer.requested().object_angles;
+        object.rho_12 = 0.2;
+        viewer.set_object_angles(object).expect("valid slice change");
+        assert!(viewer.crosshair_plane_px().is_none());
+
+        viewer.set_crosshair([30.0, 10.0]).expect("second finite click");
+        viewer
+            .set_plane_angles(PlaneAngles {
+                theta_1: -0.1,
+                theta_2: 0.15,
+            })
+            .expect("valid legacy slice change");
+        assert!(viewer.crosshair_plane_px().is_none());
     }
 
     /// A box that is half the screen on its limiting side is exactly one zoom step.
