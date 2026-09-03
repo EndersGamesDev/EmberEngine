@@ -729,7 +729,7 @@ pub fn validate_message_layout(
     Ok(kind)
 }
 
-pub(crate) const fn retains_orbit_payload(kind: MessageKind) -> bool {
+pub const fn retains_orbit_payload(kind: MessageKind) -> bool {
     matches!(
         kind,
         MessageKind::OrbitResponse

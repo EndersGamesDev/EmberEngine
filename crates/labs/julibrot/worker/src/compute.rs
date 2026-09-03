@@ -445,6 +445,10 @@ mod tests {
         );
     }
 
+    #[allow(
+        clippy::print_stderr,
+        reason = "this shared helper emits the two explicit performance reports"
+    )]
     fn run_reference_measurement(arm: MeasurementArm) {
         const SAMPLE_COUNT: usize = 7;
         const PACK_REPEATS: u32 = 256;
