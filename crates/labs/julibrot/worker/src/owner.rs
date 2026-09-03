@@ -734,6 +734,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the requested native performance oracle reports its before and after walls"
+    )]
     fn ten_thousand_mixed_navigation_edits_stay_within_a_quarter_pixel() -> Result<(), OwnerError> {
         const EDITS: u32 = 10_000;
         const ZOOM_LOG2: f64 = 100.0;

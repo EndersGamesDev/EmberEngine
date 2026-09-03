@@ -1922,6 +1922,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the requested native performance oracle reports its before and after walls"
+    )]
     fn shallow_frame_loop_no_longer_waits_for_an_unused_orbit() -> Result<(), MathError> {
         wait_for_unused_shallow_orbit()?;
         let before = median(

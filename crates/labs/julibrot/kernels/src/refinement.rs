@@ -313,8 +313,8 @@ mod tests {
     fn exact_three_levels_and_caps_are_pinned() {
         let plan = plan_refinement(
             GridExtent {
-                width: 1_920,
-                height: 1_080,
+                width: 1_921,
+                height: 1_081,
             },
             EscapeParams::new(5_000),
             |_| true,
@@ -360,8 +360,8 @@ mod tests {
         assert_eq!(
             plan.level(RefinementLevel::Preview).extent,
             GridExtent {
-                width: 240,
-                height: 135,
+                width: 241,
+                height: 136,
             }
         );
         assert_eq!(plan.level(RefinementLevel::Preview).iteration_cap, 32);
@@ -387,8 +387,8 @@ mod tests {
             None,
         )
         .expect("fast preview facts fit fixed widths");
-        assert_eq!(preview.draft_pixels_discarded, 32_400);
-        assert_eq!(preview.draft_iterations_discarded, 1_036_800);
+        assert_eq!(preview.draft_pixels_discarded, 32_776);
+        assert_eq!(preview.draft_iterations_discarded, 1_048_832);
     }
 
     #[test]
