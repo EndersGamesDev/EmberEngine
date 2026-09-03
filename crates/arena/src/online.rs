@@ -8,15 +8,19 @@ use std::fmt::Write as _;
 
 use arena_core::proto::{BState, C2S, PROTO_VERSION, PState, PlayerMeta, S2C, STATE_EVERY_TICKS};
 use arena_core::shooter::{
-    Decor, EYE_CROUCH, EYE_STAND, FIXED_DT, Level, MAX_HP, MAX_PITCH, MELEE_COOLDOWN, Obstacle,
-    RELOAD_SECS, move_circle, stance_speed, step_vertical, weapon_name, weapon_stats,
+    Cover, Decor, EYE_CROUCH, EYE_STAND, FIXED_DT, Level, MAX_HP, MAX_PITCH, MELEE_COOLDOWN,
+    Obstacle, Projectile, RESERVE_INFINITE, SIDEARM, WEAPON_COUNT, move_circle, stance_speed,
+    step_vertical, weapon_name, weapon_stats,
 };
 use ember_engine::glam::{Quat, Vec2, Vec3};
-use ember_engine::{Camera, EmberGame, Frame, InputState, Instance, KeyCode, MouseButton};
+use ember_engine::{
+    Camera, EmberGame, Feedback, Frame, InputState, Instance, KeyCode, MouseButton, PadButton,
+};
 use serde::Deserialize;
 
-use crate::props::{Prop, Props, tex};
-use crate::sound::{Audio, Sfx};
+use crate::feel::{self, Climb, Cue, GLOW_BLUE, Shake, weapon_feel};
+use crate::props::{LOOT_SPENT_TINT, Prop, Props, tex};
+use crate::sound::{Audio, BUDGET, Sfx, prioritize};
 
 /// What a part does when the weapon fires (v15). Decided by the part's
 /// node name, which is the asset's contract with this file: `cylinder*`
@@ -44,11 +48,26 @@ pub struct Part {
     pub pivot: Vec3,
 }
 
-/// The Blender-authored viewmodel: the weapon, the hands that hold it, and
-/// what the off-hand and the melee key bring out.
+/// One slot per weapon id (`1..=WEAPON_COUNT`); slot 0 is never read.
+const WEAPON_SLOTS: usize = WEAPON_COUNT as usize + 1;
+
+/// The Blender-authored viewmodel: every weapon by id, the hands that hold
+/// them, and what the off-hand and the melee key bring out.
 #[derive(Clone, Default)]
 pub struct Assets {
-    pub gun: Vec<Part>,
+    /// Part lists by weapon id. An empty list is a weapon whose node is not
+    /// in the GLB (the M4 today, any future gap): `weapon_parts` draws the
+    /// sidearm for it, so a missing node shows as the wrong rifle, never as
+    /// an empty hand.
+    pub weapons: [Vec<Part>; WEAPON_SLOTS],
+    /// Model-space muzzle tip per weapon id, from the sidecar; where the
+    /// flash sits. Filled with the sidearm's for any weapon the sidecar
+    /// does not name.
+    pub muzzles: [Vec3; WEAPON_SLOTS],
+    /// The RPG-7's rocket, in the launcher's own frame, so it draws in the
+    /// tube at the launcher's transform and flies on its own as the
+    /// projectile.
+    pub rocket: Vec<Part>,
     pub arms: Vec<Part>,
     /// The scutum, drawn where the box plate used to be. Its model origin
     /// is the handle behind the boss, so the centres `push_shield` was
@@ -59,43 +78,110 @@ pub struct Assets {
     /// The fist and forearm that hold the sword, in the sword's own frame.
     /// Viewmodel-only, like `arms`.
     pub fist: Vec<Part>,
-    /// Model-space muzzle tip, from the sidecar; where the flash sits.
-    pub muzzle: Vec3,
+}
+
+impl Assets {
+    /// The parts that draw weapon `id`, and whether they are its own. An id
+    /// whose list is empty falls back to the sidearm's, so the caller draws
+    /// the fallback with the missing weapon's accent and the strip still
+    /// says which gun it stands for.
+    #[must_use]
+    pub fn weapon_parts(&self, id: u8) -> (&[Part], bool) {
+        let own = &self.weapons[slot(id)];
+        if own.is_empty() {
+            (&self.weapons[SIDEARM as usize], false)
+        } else {
+            (own, true)
+        }
+    }
+
+    /// The muzzle tip for weapon `id`, in the frame of whatever
+    /// `weapon_parts` returns for it.
+    #[must_use]
+    pub fn muzzle_of(&self, id: u8) -> Vec3 {
+        let (_, own) = self.weapon_parts(id);
+        if own {
+            self.muzzles[slot(id)]
+        } else {
+            self.muzzles[SIDEARM as usize]
+        }
+    }
+}
+
+/// Table index for a weapon id: ids off the table share the sidearm's
+/// slot, exactly as `weapon_stats` answers them.
+const fn slot(id: u8) -> usize {
+    if id >= 1 && id <= WEAPON_COUNT {
+        id as usize
+    } else {
+        SIDEARM as usize
+    }
 }
 
 /// Which list a viewmodel node belongs in.
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 enum Slot {
-    Gun,
+    Weapon(u8),
+    Rocket,
     Arms,
     Shield,
     Sword,
     Fist,
 }
 
-/// Sort a GLB node by name. The three v17 nodes are matched exactly, before
-/// the older prefix rule, which still sends anything called `arm*`/`hand*`
-/// to the viewmodel-only list and everything else to the weapon. `hand_sword`
-/// keeps that prefix on purpose: an older client that has only the prefix
-/// rule hides it rather than welding it to a remote player's rifle.
+/// Sort a GLB node by name. The `w_*` weapon nodes are matched exactly
+/// first (the revolver's five parts by prefix, since its moving parts carry
+/// their own suffix), then the sidearm's `rifle`, then the three v17 nodes,
+/// then the older prefix rule, which still sends anything called
+/// `arm*`/`hand*` to the viewmodel-only list; anything unnamed rides the
+/// sidearm, as it always did. `hand_sword` keeps that prefix on purpose: an
+/// older client that has only the prefix rule hides it rather than welding
+/// it to a remote player's rifle.
 fn classify(name: &str) -> Slot {
     match name {
+        "w_vityaz" => Slot::Weapon(2),
+        "w_ak47" => Slot::Weapon(3),
+        "w_m4" => Slot::Weapon(4),
+        _ if name.starts_with("w_revolver_") => Slot::Weapon(5),
+        "w_sniper" => Slot::Weapon(6),
+        "w_rpg7" => Slot::Weapon(7),
+        "w_rpg7_rocket" => Slot::Rocket,
+        "rifle" => Slot::Weapon(SIDEARM),
         "shield" => Slot::Shield,
         "sword" => Slot::Sword,
         "hand_sword" => Slot::Fist,
         _ if name.starts_with("arm") || name.starts_with("hand") => Slot::Arms,
-        _ => Slot::Gun,
+        _ => Slot::Weapon(SIDEARM),
     }
 }
 
-/// The sidecar `tools/v15/build_viewmodel.py` writes beside the GLB:
-/// per-part pivots and the muzzle tip, in engine space.
+/// What a named part does when its weapon fires. The v18 names carry the
+/// weapon as a prefix and the role as a suffix; the bare v15 names are kept
+/// so an older sidecar still animates.
+fn anim_of(name: &str) -> PartAnim {
+    if name.ends_with("_cylinder") || name.starts_with("cylinder") {
+        PartAnim::Cylinder
+    } else if name.ends_with("_hammer") || name == "hammer" {
+        PartAnim::Hammer
+    } else if name.ends_with("_trigger") || name == "trigger" {
+        PartAnim::Trigger
+    } else {
+        PartAnim::Fixed
+    }
+}
+
+/// The sidecar `tools/v18/build_weapons.py` writes beside the GLB:
+/// per-part pivots by full node name, the sidearm's muzzle tip, and one
+/// muzzle per weapon node, all in engine space. `muzzles` defaults so the
+/// v17 sidecar still loads (every weapon then flashes at the sidearm's tip).
 #[derive(Deserialize, Default)]
 struct ViewmodelRig {
     #[serde(default)]
     pivots: HashMap<String, [f32; 3]>,
     #[serde(default)]
     muzzle: Option<[f32; 3]>,
+    #[serde(default)]
+    muzzles: HashMap<String, [f32; 3]>,
 }
 
 const VIEWMODEL_GLB: &[u8] = include_bytes!("../assets/viewmodel.glb");
@@ -115,20 +201,28 @@ pub fn load_assets() -> (Vec<ember_engine::MeshData>, Option<Assets>) {
                 ViewmodelRig::default()
             });
             let mut meshes = Vec::new();
+            let sidearm_muzzle = rig.muzzle.map_or(LEGACY_MUZZLE, Vec3::from_array);
             let mut assets = Assets {
-                muzzle: rig.muzzle.map_or(LEGACY_MUZZLE, Vec3::from_array),
+                muzzles: [sidearm_muzzle; WEAPON_SLOTS],
                 ..Assets::default()
             };
+            // A weapon's muzzle is keyed by its node name; the revolver's
+            // is on its frame part. A weapon the sidecar does not name
+            // keeps the sidearm's tip, which is at least on the gun.
+            for (name, m) in &rig.muzzles {
+                if let Slot::Weapon(id) = classify(name) {
+                    assets.muzzles[slot(id)] = Vec3::from_array(*m);
+                }
+            }
             for p in parts {
                 let pivot = rig.pivots.get(&p.name).copied().map(Vec3::from_array);
                 // A moving part without a pivot would spin about the model
                 // origin, which is the hold point on the grip: worse than
                 // not moving. So no pivot, no animation.
-                let anim = match (p.name.as_str(), pivot) {
-                    (n, Some(_)) if n.starts_with("cylinder") => PartAnim::Cylinder,
-                    ("hammer", Some(_)) => PartAnim::Hammer,
-                    ("trigger", Some(_)) => PartAnim::Trigger,
-                    _ => PartAnim::Fixed,
+                let anim = if pivot.is_some() {
+                    anim_of(&p.name)
+                } else {
+                    PartAnim::Fixed
                 };
                 let part = Part {
                     mesh: u32::try_from(meshes.len()).expect("viewmodel mesh count fits in u32")
@@ -144,15 +238,22 @@ pub fn load_assets() -> (Vec<ember_engine::MeshData>, Option<Assets>) {
                     Slot::Sword => assets.sword.push(part),
                     Slot::Fist => assets.fist.push(part),
                     Slot::Arms => assets.arms.push(part),
-                    Slot::Gun => assets.gun.push(part),
+                    Slot::Rocket => assets.rocket.push(part),
+                    Slot::Weapon(id) => assets.weapons[slot(id)].push(part),
                 }
             }
+            let missing: Vec<&str> = (1..=WEAPON_COUNT)
+                .filter(|&id| assets.weapons[slot(id)].is_empty())
+                .map(weapon_name)
+                .collect();
             tracing::info!(
-                gun_parts = assets.gun.len(),
+                weapon_parts = ?assets.weapons.iter().map(Vec::len).collect::<Vec<_>>(),
+                rocket_parts = assets.rocket.len(),
                 arm_parts = assets.arms.len(),
                 shield_parts = assets.shield.len(),
                 sword_parts = assets.sword.len(),
                 fist_parts = assets.fist.len(),
+                fallback_to_sidearm = ?missing,
                 "viewmodel glb loaded"
             );
             (meshes, Some(assets))
@@ -223,6 +324,30 @@ fn debug_camera() -> Option<Camera> {
     })
 }
 
+/// The weapon id every player is DRAWN with, from `EMBER_WEAPON` ("1".."7"):
+/// a review aid for the capture harness (`tools/v18/capture.ps1`), since the
+/// only way to a looted gun in play is a random roll. Cosmetic like
+/// `EMBER_CAM`: the sim's weapon, ammo and cooldown are untouched, so a
+/// shot fired under it still leaves the sidearm's magazine. Parsed once;
+/// None when unset or malformed (and always None on the web).
+fn debug_weapon() -> Option<u8> {
+    static WEAPON: std::sync::OnceLock<Option<u8>> = std::sync::OnceLock::new();
+    *WEAPON.get_or_init(|| {
+        std::env::var("EMBER_WEAPON")
+            .ok()?
+            .trim()
+            .parse::<u8>()
+            .ok()
+            .filter(|w| (1..=WEAPON_COUNT).contains(w))
+    })
+}
+
+/// The weapon id to draw for a player who holds `id`: the debug override
+/// when one is set, else the real one.
+fn shown_weapon(id: u8) -> u8 {
+    debug_weapon().unwrap_or(id)
+}
+
 /// The artist-made SWAT operator, split one mesh per rig joint by
 /// `tools/swat_split.py` and embedded so the wasm build ships it too.
 const SWAT_GLB: &[u8] = include_bytes!("../../../assets/models/swat-parts.glb");
@@ -273,17 +398,13 @@ pub fn part_meshes(
     (meshes, Some(rc))
 }
 
-/// Weapon-level accent color (the glow strip on the pistol).
-const fn weapon_accent(level: u8) -> Vec3 {
-    match level {
-        3 => Vec3::new(1.0, 0.25, 0.20),
-        2 => Vec3::new(1.0, 0.55, 0.15),
-        _ => GLOW_BLUE,
-    }
+/// The accent colour of a weapon id: the strip on the sidearm, and what a
+/// fallback part list is tinted with so a missing node still says which gun
+/// it stands for.
+const fn weapon_accent(id: u8) -> Vec3 {
+    weapon_feel(id).accent
 }
 
-/// Draws a part list at one transform. `rot` is a full rotation rather than
-/// a yaw so a weapon can tilt with its owner's aim elevation.
 /// The mechanical state of the weapon, for the parts that move.
 ///
 /// `cycle` is progress through the current shot's cooldown, 0 at the
@@ -360,6 +481,33 @@ fn push_parts(
             Instance::new(pos + rot * shift, Vec3::ONE, color)
                 .with_rot(rot * local)
                 .with_mesh(p.mesh),
+        );
+    }
+}
+
+/// Draw weapon `id` at one transform: its own parts, or the sidearm's in
+/// its accent when it has none, plus the rocket riding the RPG's tube while
+/// `loaded` (a round in the magazine and no reload in progress: the tube is
+/// visibly empty between shots, first and third person both).
+fn push_weapon(
+    frame: &mut Frame,
+    assets: &Assets,
+    id: u8,
+    pos: Vec3,
+    rot: Quat,
+    action: Action,
+    loaded: bool,
+) {
+    let (parts, own) = assets.weapon_parts(id);
+    push_parts(frame, parts, pos, rot, weapon_accent(id), action);
+    if own && weapon_stats(id).kind == Projectile::Rocket && loaded {
+        push_parts(
+            frame,
+            &assets.rocket,
+            pos,
+            rot,
+            weapon_accent(id),
+            Action::REST,
         );
     }
 }
@@ -450,6 +598,11 @@ pub struct OnlineConfig {
     #[serde(default)]
     pub password: Option<String>,
     pub handle: String,
+    /// The level a `create` asks for, by name (`MAP_FREIGHT_YARD` or
+    /// `MAP_TRENCH_CITY`); empty is the server's default. Ignored on a
+    /// `join`, where the lobby already has one.
+    #[serde(default)]
+    pub map: String,
 }
 
 impl OnlineConfig {
@@ -458,6 +611,7 @@ impl OnlineConfig {
             "create" => C2S::CreateLobby {
                 name: self.lobby.clone(),
                 password: self.password.clone().filter(|p| !p.is_empty()),
+                map: self.map.clone(),
             },
             "join" => C2S::JoinLobby {
                 name: self.lobby.clone(),
@@ -519,7 +673,6 @@ fn set_status(text: &str) {
 const GUNMETAL: Vec3 = Vec3::new(0.16, 0.17, 0.20);
 const GUNMETAL_DARK: Vec3 = Vec3::new(0.11, 0.11, 0.13);
 const BRONZE: Vec3 = Vec3::new(0.46, 0.32, 0.21);
-const GLOW_BLUE: Vec3 = Vec3::new(0.20, 0.65, 1.00);
 
 /// The off-hand shield plate: thin along the direction it faces, taller than
 /// it is wide. Model space is +X forward, matching the pistol, so the same
@@ -606,6 +759,33 @@ struct Cmd {
     jump: bool,
     sent_at: f32,
 }
+
+/// One short-lived cube: sparks on a hit, shards and smoke from a blast,
+/// the launch smoke behind a rocket. `life` is the ttl it started with, so
+/// a size or colour can fade against it.
+#[derive(Clone, Copy)]
+struct Fx {
+    pos: Vec3,
+    vel: Vec3,
+    ttl: f32,
+    life: f32,
+    size: f32,
+    color: Vec3,
+    /// Downward acceleration; 0 for smoke.
+    gravity: f32,
+}
+
+/// A weapon rising out of a bonked block: which block, which gun, when.
+#[derive(Clone, Copy)]
+struct Pop {
+    slot: usize,
+    weapon: u8,
+    started: f32,
+}
+
+/// How long a pop takes to rise and vanish, and a bump to play out.
+const POP_SECS: f32 = 0.5;
+const BUMP_SECS: f32 = 0.25;
 
 // These flags represent independent input, connection, animation, and UI state transitions.
 #[allow(clippy::struct_excessive_bools)]
@@ -714,10 +894,46 @@ pub struct ShooterGame {
     hitmarker_t: f32,
     /// Kill-confirm marker time remaining.
     kill_t: f32,
+    /// Hitmarker scale: 1, or 1.5 for a head hit.
+    hitmarker_scale: f32,
     /// Per-victim white damage-flash time remaining.
     flash: HashMap<u8, f32>,
-    /// Impact spark particles: (position, velocity, ttl).
-    particles: Vec<(Vec3, Vec3, f32)>,
+    /// Sparks, shards and smoke.
+    fx: Vec<Fx>,
+    // ---- v18: loot blocks ----
+    /// Obstacle index of every `Cover::Loot` box, in obstacle order: the
+    /// index space `State.loot` and `S2C::Loot.block` are aligned with.
+    loot_index: Vec<usize>,
+    /// Armed (true) or spent, per block, from the last `State`.
+    loot_active: Vec<bool>,
+    /// When each block's bump started, if one is playing.
+    loot_bump: Vec<Option<f32>>,
+    /// Weapons rising out of blocks.
+    pops: Vec<Pop>,
+    /// The box my head hit last frame, so a bonk is an edge, not a level.
+    prev_bonked: Option<usize>,
+    /// When the bonk camera dip started.
+    dip_started: Option<f32>,
+    /// When my last `S2C::Loot` arrived: a weapon change right after it is
+    /// the pop, not a pad pickup.
+    last_pop_at: f32,
+    // ---- v18: the feel pass ----
+    /// Rumble requests since the platform last took them.
+    feedback: Feedback,
+    climb: Climb,
+    shake: Shake,
+    /// When the holster drop started (a looted gun ran dry).
+    holster_started: Option<f32>,
+    /// A rocket left this frame: the render pass spawns the launch smoke at
+    /// the muzzle, which only it knows the position of.
+    launch_smoke: bool,
+    /// Fire last frame, for the dry-trigger edge.
+    prev_fire: bool,
+    /// L3 last frame, and the sprint it latched.
+    prev_l3: bool,
+    sprint_latch: bool,
+    /// Whether the pad status has been shown on the status line yet.
+    pad_status_shown: &'static str,
 }
 
 impl ShooterGame {
@@ -725,7 +941,13 @@ impl ShooterGame {
         let opening_messages = cfg.opening_msgs()?;
         let chan = net::NetChan::connect(&cfg.url, &opening_messages)?;
         set_status("connecting…");
-        Ok(Self {
+        Ok(Self::with_chan(chan, assets, Audio::new()))
+    }
+
+    /// The game over an already-open channel; `connect` and the tests both
+    /// build one here so the field list lives in one place.
+    fn with_chan(chan: net::NetChan, assets: Option<Assets>, audio: Option<Audio>) -> Self {
+        Self {
             chan,
             my_id: None,
             arena_half: 24.0,
@@ -753,7 +975,7 @@ impl ShooterGame {
             history: VecDeque::new(),
             next_seq: 1,
             last_tick: 0,
-            audio: Audio::new(),
+            audio,
             assets,
             pads_pos: Vec::new(),
             pads_active: Vec::new(),
@@ -784,9 +1006,110 @@ impl ShooterGame {
             crouch_ease: HashMap::new(),
             hitmarker_t: 0.0,
             kill_t: 0.0,
+            hitmarker_scale: 1.0,
             flash: HashMap::new(),
-            particles: Vec::new(),
-        })
+            fx: Vec::new(),
+            loot_index: Vec::new(),
+            loot_active: Vec::new(),
+            loot_bump: Vec::new(),
+            pops: Vec::new(),
+            prev_bonked: None,
+            dip_started: None,
+            last_pop_at: -10.0,
+            feedback: Feedback::default(),
+            climb: Climb::default(),
+            shake: Shake::default(),
+            holster_started: None,
+            launch_smoke: false,
+            prev_fire: false,
+            prev_l3: false,
+            sprint_latch: false,
+            pad_status_shown: "none",
+        }
+    }
+
+    /// Apply one event cue: raise the shake, queue the rumble, queue the
+    /// sound. The camera's part of an event is a timer set by the caller.
+    fn cue(&mut self, c: Cue, sfx: &mut Vec<(Sfx, f32)>) {
+        self.shake.hit(c.shake);
+        if let Some(r) = c.rumble {
+            self.feedback.rumble(r.strong, r.weak, r.ms);
+        }
+        if let Some(s) = c.sfx {
+            sfx.push(s);
+        }
+    }
+
+    /// The loot slot (index into `loot_index`) of an obstacle, if it is a
+    /// block.
+    fn loot_slot(&self, obstacle: usize) -> Option<usize> {
+        self.loot_index.iter().position(|&k| k == obstacle)
+    }
+
+    /// Where a block's centre is, for distance and for the pop.
+    fn block_centre(&self, slot_idx: usize) -> Option<Vec3> {
+        let o = self.obstacles.get(*self.loot_index.get(slot_idx)?)?;
+        Some(Vec3::new(
+            f32::midpoint(o.min[0], o.max[0]),
+            f32::midpoint(o.base, o.h),
+            f32::midpoint(o.min[1], o.max[1]),
+        ))
+    }
+
+    /// Spark burst on a body that was hit.
+    fn sparks(&mut self, x: f32, y: f32, z: f32) {
+        for k in 0_u8..6 {
+            let a = f32::from(k) * std::f32::consts::TAU / 6.0;
+            self.fx.push(Fx {
+                pos: Vec3::new(x, y, z),
+                vel: Vec3::new(a.cos() * 2.2, 1.8, a.sin() * 2.2),
+                ttl: 0.3,
+                life: 0.3,
+                size: 0.09,
+                color: Vec3::new(1.0, 0.62, 0.2),
+                gravity: 9.0,
+            });
+        }
+    }
+
+    /// A rocket went off: one flash cube, twelve shards under gravity,
+    /// eight smoke cubes rising. Directions are a fixed fan, not random:
+    /// there is no RNG on the client and a burst does not need one.
+    fn blast_fx(&mut self, at: Vec3) {
+        self.fx.push(Fx {
+            pos: at,
+            vel: Vec3::ZERO,
+            ttl: 0.08,
+            life: 0.08,
+            size: 2.2,
+            color: Vec3::new(1.0, 0.85, 0.5),
+            gravity: 0.0,
+        });
+        for k in 0_u8..12 {
+            let a = f32::from(k) * std::f32::consts::TAU / 12.0;
+            let up = 0.25 + 0.35 * f32::from(k % 3);
+            self.fx.push(Fx {
+                pos: at,
+                vel: Vec3::new(a.cos(), up, a.sin()).normalize() * 9.0,
+                ttl: 0.35,
+                life: 0.35,
+                size: 0.18,
+                color: Vec3::new(1.0, 0.45, 0.12),
+                gravity: 9.0,
+            });
+        }
+        for k in 0_u8..8 {
+            let a = f32::from(k) * std::f32::consts::TAU / 8.0 + 0.4;
+            self.fx.push(Fx {
+                pos: at + Vec3::new(a.cos() * 0.6, 0.3, a.sin() * 0.6),
+                vel: Vec3::new(a.cos() * 0.8, 2.2, a.sin() * 0.8),
+                ttl: 0.6,
+                life: 0.6,
+                size: 0.7,
+                color: Vec3::new(0.30, 0.28, 0.26),
+                gravity: 0.0,
+            });
+        }
     }
 
     /// Where `env_meshes()` got registered (set by `run_online` after load).
@@ -870,22 +1193,43 @@ impl ShooterGame {
                 }
             })
             .unwrap_or_default();
-        let gun = me
-            .map(|p| {
-                if p.reloading {
-                    format!("{} ⟳", weapon_name(p.weapon))
-                } else {
-                    format!(
-                        "{} {}/{}",
-                        weapon_name(p.weapon),
-                        p.ammo,
-                        weapon_stats(p.weapon).mag
-                    )
-                }
-            })
-            .unwrap_or_default();
-        format!("{hp}  {gun}   {list}   ({} in arena)", self.latest.len())
+        let gun = me.map(gun_line).unwrap_or_default();
+        let pad = if self.pad_status_shown == "none" {
+            String::new()
+        } else {
+            format!("   gamepad: {}", self.pad_status_shown)
+        };
+        format!(
+            "{hp}  {gun}   {list}   ({} in arena){pad}",
+            self.latest.len()
+        )
     }
+}
+
+/// The HUD's weapon line: `AK-47 24/30 · 30`, `Sidearm 7/8 · ∞`, or the
+/// reload glyph in place of the count while the magazine is out.
+fn gun_line(p: &PState) -> String {
+    let reserve = if p.reserve == RESERVE_INFINITE {
+        "∞".to_string()
+    } else {
+        p.reserve.to_string()
+    };
+    if p.reloading {
+        format!("{} ⟳ · {reserve}", weapon_name(p.weapon))
+    } else {
+        format!(
+            "{} {}/{} · {reserve}",
+            weapon_name(p.weapon),
+            p.ammo,
+            weapon_stats(p.weapon).mag
+        )
+    }
+}
+
+/// What a block hands out, for the status line: `AK-47 (30+30)`.
+fn loadout_of(weapon: u8) -> String {
+    let s = weapon_stats(weapon);
+    format!("{} ({}+{})", s.name, s.mag, s.reserve)
 }
 
 impl EmberGame for ShooterGame {
@@ -937,6 +1281,18 @@ impl EmberGame for ShooterGame {
                     self.pads_pos = level.pads;
                     self.decor = level.decor;
                     self.pads_active = vec![true; self.pads_pos.len()];
+                    // The blocks, in obstacle order: the index space the
+                    // server's `State.loot` and `Loot.block` speak in.
+                    self.loot_index = self
+                        .obstacles
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, o)| o.kind == Cover::Loot)
+                        .map(|(k, _)| k)
+                        .collect();
+                    self.loot_active = vec![true; self.loot_index.len()];
+                    self.loot_bump = vec![None; self.loot_index.len()];
+                    self.pops.clear();
                     self.history.clear();
                     self.reload_started = None;
                     self.was_alive = false; // first State snaps the prediction
@@ -963,104 +1319,104 @@ impl EmberGame for ShooterGame {
                     players,
                     bullets,
                     pads,
+                    loot,
                 } => {
                     self.last_tick = tick;
                     self.pads_active = pads;
-                    // ---- audio cues from state diffs (before overwrite) ----
+                    // A block the server never mentions stays armed: the
+                    // list is index-aligned, and a short one is a server
+                    // that predates a block, not a spent block.
+                    for (i, armed) in loot.into_iter().enumerate() {
+                        if let Some(slot) = self.loot_active.get_mut(i) {
+                            *slot = armed;
+                        }
+                    }
+                    // ---- cues from state diffs (before overwrite) ----
                     {
-                        // Bullet counts per owner; position tracks the
-                        // NEWEST bullet (drives distance falloff).
+                        // Bullet counts per owner; position and weapon track
+                        // the NEWEST bullet (distance falloff, and which
+                        // gun's cue a remote shot plays).
                         let mut prev_counts: HashMap<u8, usize> = HashMap::new();
                         for b in &self.bullets {
                             *prev_counts.entry(b.owner).or_insert(0) += 1;
                         }
-                        let mut curr: HashMap<u8, (usize, [f32; 2])> = HashMap::new();
+                        let mut curr: HashMap<u8, (usize, [f32; 2], u8)> = HashMap::new();
                         for b in &bullets {
-                            let e = curr.entry(b.owner).or_insert((0, [b.x, b.z]));
+                            let e = curr.entry(b.owner).or_insert((0, [b.x, b.z], b.weapon));
                             e.0 += 1;
                             e.1 = [b.x, b.z];
+                            e.2 = b.weapon;
                         }
                         // Remote shots (mine are cued from ammo below).
-                        for (&owner, &(n, pos)) in &curr {
+                        for (&owner, &(n, pos, weapon)) in &curr {
                             if Some(owner) != self.my_id
                                 && n > prev_counts.get(&owner).copied().unwrap_or(0)
                             {
                                 let d = (Vec2::new(pos[0], pos[1]) - self.pred_pos).length();
-                                sfx.push((Sfx::Shot, (0.45 * (1.0 - d / 40.0)).clamp(0.05, 0.45)));
+                                let f = weapon_feel(weapon);
+                                let vol = (f.volume * 0.9 * (1.0 - d / 40.0)).clamp(0.05, f.volume);
+                                sfx.push((f.sound, vol));
                             }
                         }
                         // My own transitions, from authoritative state.
+                        // Copied out: the cues below borrow `self` mutably.
                         if let (Some(me), Some(new_me)) = (
-                            self.my_id.and_then(|id| self.latest.get(&id)),
+                            self.my_id.and_then(|id| self.latest.get(&id)).copied(),
                             self.my_id
-                                .and_then(|id| players.iter().find(|p| p.id == id)),
+                                .and_then(|id| players.iter().find(|p| p.id == id))
+                                .copied(),
                         ) {
                             // A falling ammo count is not by itself a shot:
-                            // a pad pickup reassigns the whole magazine
-                            // (Rapid 12 -> Heavy 6) and a respawn resets it
-                            // (12 -> 8) in the same state that flips alive.
-                            // Requiring the weapon to be unchanged and the
-                            // player alive on BOTH sides rejects those two
-                            // without losing a real shot, since firing
-                            // needs alive and the weapon only changes on
-                            // pickup or respawn.
+                            // a loot grant reassigns the whole magazine and
+                            // a respawn resets it in the same state that
+                            // flips alive. Requiring the weapon unchanged
+                            // and the player alive on BOTH sides rejects
+                            // those without losing a real shot, since
+                            // firing needs alive and the weapon only changes
+                            // on a grant, a dry gun or a respawn.
                             if new_me.ammo < me.ammo
                                 && new_me.weapon == me.weapon
                                 && me.alive
                                 && new_me.alive
                             {
-                                sfx.push((Sfx::Shot, 0.5)); // exact own-shot cue
+                                let f = weapon_feel(new_me.weapon);
+                                // A fast gun can fire twice between states;
+                                // every confirmed round climbs, one cues.
+                                for _ in new_me.ammo..me.ammo {
+                                    self.climb.shot(&f);
+                                }
+                                sfx.push((f.sound, f.volume));
+                                self.feedback
+                                    .rumble(f.rumble.strong, f.rumble.weak, f.rumble.ms);
+                                self.shake.hit(f.launch_shake);
                                 // Recoil and muzzle flash hang off the same
                                 // authoritative signal as the audio: a round
                                 // that the SERVER agrees left the weapon.
                                 self.shot_started = Some(self.time);
                                 self.shots = self.shots.wrapping_add(1);
+                                if weapon_stats(new_me.weapon).kind == Projectile::Rocket {
+                                    self.launch_smoke = true;
+                                }
                             }
-                            if new_me.hp < me.hp && new_me.alive {
-                                sfx.push((Sfx::Hurt, 0.6));
-                            }
-                            if new_me.weapon > me.weapon {
+                            let changed = new_me.weapon != me.weapon && me.alive && new_me.alive;
+                            if changed && new_me.weapon == SIDEARM {
+                                // A looted gun ran dry: the sidearm is back.
+                                self.holster_started = Some(self.time);
+                                self.cue(feel::holster(), &mut sfx);
+                            } else if changed && self.time - self.last_pop_at > 0.5 {
+                                // A grant with no pop before it: a pad.
                                 sfx.push((Sfx::Upgrade, 0.55));
-                                status_event = Some(format!(
-                                    "⬆ weapon upgraded: {}!",
-                                    weapon_name(new_me.weapon)
-                                ));
+                                status_event =
+                                    Some(format!("⬆ picked up: {}", loadout_of(new_me.weapon)));
                             }
                             if new_me.reloading && !me.reloading {
-                                sfx.push((Sfx::Reload, 0.45));
+                                self.cue(feel::reload_start(), &mut sfx);
                                 self.reload_started = Some(self.time);
                             } else if !new_me.reloading {
-                                self.reload_started = None;
-                            }
-                            // Hitmarker only when plausibly MINE: one of my
-                            // bullets vanished AND an enemy lost hp.
-                            let my_id = new_me.id;
-                            let my_gone = curr.get(&my_id).map_or(0, |e| e.0)
-                                < prev_counts.get(&my_id).copied().unwrap_or(0);
-                            let hurt: Vec<(u8, f32, f32)> = players
-                                .iter()
-                                .filter(|p| {
-                                    p.id != my_id
-                                        && self.latest.get(&p.id).is_some_and(|old| p.hp < old.hp)
-                                })
-                                .map(|p| (p.id, p.x, p.z))
-                                .collect();
-                            if my_gone && !hurt.is_empty() {
-                                sfx.push((Sfx::Hit, 0.35));
-                                // Visual confirmation: crosshair marker plus
-                                // a damage flash and spark burst on the victim.
-                                self.hitmarker_t = 0.14;
-                                for &(id, x, z) in &hurt {
-                                    self.flash.insert(id, 0.18);
-                                    for k in 0_u8..6 {
-                                        let a = f32::from(k) * std::f32::consts::TAU / 6.0;
-                                        self.particles.push((
-                                            Vec3::new(x, 1.1, z),
-                                            Vec3::new(a.cos() * 2.2, 1.8, a.sin() * 2.2),
-                                            0.3,
-                                        ));
-                                    }
+                                if me.reloading && new_me.alive {
+                                    self.cue(feel::reload_end(), &mut sfx);
                                 }
+                                self.reload_started = None;
                             }
                         }
                     }
@@ -1195,8 +1551,8 @@ impl EmberGame for ShooterGame {
                                     let stepped =
                                         step_vertical(p, y, vy, press, step, &self.obstacles);
                                     press = false;
-                                    y = stepped.0;
-                                    vy = stepped.1;
+                                    y = stepped.y;
+                                    vy = stepped.vy;
                                     left -= step;
                                 }
                             }
@@ -1219,16 +1575,20 @@ impl EmberGame for ShooterGame {
                     }
                 }
                 S2C::Kill { killer, victim } => {
-                    if Some(killer) == self.my_id {
-                        sfx.push((Sfx::Kill, 0.5));
+                    if Some(victim) == self.my_id {
+                        // A self-kill is a death first: the shake and the
+                        // long rumble, not the kill marker.
+                        self.cue(feel::death(), &mut sfx);
+                    } else if Some(killer) == self.my_id {
+                        self.cue(feel::kill(), &mut sfx);
                         // Big red confirm marker: the elimination register.
                         self.kill_t = 0.55;
-                    } else if Some(victim) == self.my_id {
-                        sfx.push((Sfx::Death, 0.55));
                     } else {
                         sfx.push((Sfx::Hit, 0.12));
                     }
-                    let line = if Some(victim) == self.my_id {
+                    let line = if killer == victim && Some(victim) == self.my_id {
+                        "☠ you blew yourself up".to_string()
+                    } else if Some(victim) == self.my_id {
                         format!("☠ you were fragged by {}", self.handle_of(killer))
                     } else if Some(killer) == self.my_id {
                         format!("✚ you fragged {}", self.handle_of(victim))
@@ -1252,30 +1612,115 @@ impl EmberGame for ShooterGame {
                         status_event = Some(format!("server: {message}"));
                     }
                 }
-                S2C::Pong { .. } | S2C::LobbyList { .. } => {}
+                // Authoritative hits, from `Sim.hits`. What stood here was
+                // a guess ("one of my bullets vanished and an enemy lost
+                // hp") that fired falsely on a reflected round and would
+                // have missed the second body of a pierce.
+                S2C::Hit {
+                    shooter,
+                    victim,
+                    dmg: _,
+                    head,
+                } => {
+                    if Some(shooter) == self.my_id && Some(victim) != self.my_id {
+                        self.cue(feel::hit(head), &mut sfx);
+                        self.hitmarker_t = 0.14;
+                        self.hitmarker_scale = if head { 1.5 } else { 1.0 };
+                    }
+                    if Some(victim) == self.my_id {
+                        self.cue(feel::hurt(), &mut sfx);
+                    } else if let Some(v) = self.latest.get(&victim).copied() {
+                        // Visual confirmation on the body: a damage flash
+                        // and a spark burst, for everyone watching.
+                        self.flash.insert(victim, 0.18);
+                        self.sparks(v.x, v.y + 1.1, v.z);
+                    }
+                }
+                S2C::Blast { x, y, z, owner: _ } => {
+                    let at = Vec3::new(x, y, z);
+                    let eye = Vec3::new(self.pred_pos.x, self.pred_y + self.eye_h, self.pred_pos.y);
+                    let d = (at - eye).length();
+                    self.cue(feel::blast(d), &mut sfx);
+                    self.blast_fx(at);
+                }
+                S2C::Loot {
+                    player,
+                    block,
+                    weapon,
+                } => {
+                    let slot_idx = usize::from(block);
+                    if let Some(armed) = self.loot_active.get_mut(slot_idx) {
+                        *armed = false;
+                    }
+                    // The bump for everyone who did not predict it (a remote
+                    // bonk, or my own if the prediction missed it).
+                    if let Some(bump) = self.loot_bump.get_mut(slot_idx)
+                        && bump.is_none_or(|t0| self.time - t0 >= BUMP_SECS)
+                    {
+                        *bump = Some(self.time);
+                    }
+                    self.pops.push(Pop {
+                        slot: slot_idx,
+                        weapon,
+                        started: self.time,
+                    });
+                    if Some(player) == self.my_id {
+                        self.last_pop_at = self.time;
+                        self.cue(feel::pop(true), &mut sfx);
+                        status_event = Some(format!("? popped: {}", loadout_of(weapon)));
+                    } else if let Some(c) = self.block_centre(slot_idx)
+                        && (c - Vec3::new(self.pred_pos.x, self.pred_y, self.pred_pos.y)).length()
+                            < feel::POP_EARSHOT
+                    {
+                        self.cue(feel::pop(false), &mut sfx);
+                    }
+                }
+                // The client never asks for a listing; a page's lobby
+                // browser does, in plain JS. Logged so a stray one is seen.
+                S2C::LobbyList { lobbies } => {
+                    tracing::debug!(
+                        maps = ?lobbies.iter().map(|l| l.map.as_str()).collect::<Vec<_>>(),
+                        "unsolicited lobby list"
+                    );
+                }
+                S2C::Pong { .. } => {}
             }
         }
         if self.chan.is_dead() && !self.lost {
             self.lost = true;
             set_status("connection lost — reload to play again");
         }
-        // Play the queued cues under a per-frame budget.
+        // Play the queued cues under a per-frame budget, the important ones
+        // first, so a crowded frame drops a footfall and never the boom.
         if !suppress_sfx && let Some(audio) = self.audio.as_ref() {
-            for (s, v) in sfx.into_iter().take(6) {
+            prioritize(&mut sfx);
+            for (s, v) in sfx.into_iter().take(BUDGET) {
                 audio.play(s, v);
             }
         }
 
-        // ---- ADS zoom (RMB): tighter FOV, damped sensitivity ----
-        let aiming = input.mouse_down(MouseButton::Right);
+        // ---- the pad, merged with the keys: either device at any moment ----
+        let pad = input.pad();
+        if pad.is_some() && self.pad_status_shown != input.pad_status() {
+            self.pad_status_shown = input.pad_status();
+            status_event = Some(format!("gamepad: {}", self.pad_status_shown));
+        }
+        let pad_down = |b: PadButton| pad.is_some_and(|p| p.down(b));
+        let stick_l = pad.map_or([0.0, 0.0], |p| p.left);
+        let stick_r = pad.map_or([0.0, 0.0], |p| p.right);
+
+        // ---- ADS (RMB or LT): tighter FOV, damped sensitivity ----
+        let aiming = input.mouse_down(MouseButton::Right) || pad.is_some_and(|p| p.lt > 0.5);
         let zoom_target = if aiming { 1.0 } else { 0.0 };
         self.zoom += (zoom_target - self.zoom) * (1.0 - (-dt * 14.0).exp());
 
-        // ---- first-person look: raw mouse deltas -> yaw/pitch ----
+        // ---- first-person look: mouse deltas and the right stick -> yaw/pitch ----
         let sens = LOOK_SENS * (1.0 - 0.45 * self.zoom);
         let (mdx, mdy) = input.mouse_delta();
-        self.yaw += mdx * sens;
-        self.pitch = (self.pitch - mdy * sens).clamp(-MAX_PITCH, MAX_PITCH);
+        let stick_sens = if aiming { 0.55 } else { 1.0 };
+        self.yaw += mdx * sens + stick_r[0] * 2.8 * dt * stick_sens;
+        self.pitch = (self.pitch - mdy * sens + stick_r[1] * 2.0 * dt * stick_sens)
+            .clamp(-MAX_PITCH, MAX_PITCH);
         let (fz, fx) = self.yaw.sin_cos();
         self.aim = Vec2::new(fx, fz);
         let forward2 = self.aim;
@@ -1283,27 +1728,60 @@ impl EmberGame for ShooterGame {
         let right2 = Vec2::new(-fz, fx);
 
         // ---- stance + camera-relative movement ----
-        let sprint = input.down(KeyCode::ShiftLeft) || input.down(KeyCode::ShiftRight);
-        let crouch = input.down(KeyCode::KeyC);
+        // L3 latches sprint until the left stick drops under half: a stick
+        // cannot hold a modifier the way a key does.
+        let l3 = pad_down(PadButton::L3);
+        if l3 && !self.prev_l3 {
+            self.sprint_latch = true;
+        }
+        self.prev_l3 = l3;
+        if stick_l[0].hypot(stick_l[1]) < 0.5 {
+            self.sprint_latch = false;
+        }
+        let sprint =
+            input.down(KeyCode::ShiftLeft) || input.down(KeyCode::ShiftRight) || self.sprint_latch;
+        let crouch = input.down(KeyCode::KeyC) || pad_down(PadButton::East);
         // Held, like every other intent: there is no local toggle state that
         // a dropped input packet could leave disagreeing with the server.
-        let shield = input.down(KeyCode::KeyQ);
+        let shield = input.down(KeyCode::KeyQ) || pad_down(PadButton::LB);
         self.shield_raise +=
             ((if shield { 1.0 } else { 0.0 }) - self.shield_raise) * (1.0 - (-dt * 16.0).exp());
         let target_eye = if crouch { EYE_CROUCH } else { EYE_STAND };
         self.eye_h += (target_eye - self.eye_h) * (1.0 - (-dt * 12.0).exp());
 
-        let mut mv = forward2 * input.axis(KeyCode::KeyS, KeyCode::KeyW)
-            + right2 * input.axis(KeyCode::KeyA, KeyCode::KeyD);
+        // The left stick is already dead-zoned and curved by the platform.
+        let mut mv = forward2 * (input.axis(KeyCode::KeyS, KeyCode::KeyW) + stick_l[1])
+            + right2 * (input.axis(KeyCode::KeyA, KeyCode::KeyD) + stick_l[0]);
         if mv.length_squared() > 1.0 {
             mv = mv.normalize();
         }
         let moving = mv.length_squared() > 0.01;
-        let fire = input.mouse_down(MouseButton::Left);
+        let fire = input.mouse_down(MouseButton::Left) || pad.is_some_and(|p| p.rt > 0.5);
+        // The dry trigger: once per press, on an empty magazine that is not
+        // being reloaded. Nothing goes to the server for it; the sim would
+        // refuse the round anyway.
+        if fire
+            && !self.prev_fire
+            && self
+                .my_id
+                .and_then(|id| self.latest.get(&id))
+                .is_some_and(|p| p.alive && p.ammo == 0 && !p.reloading)
+        {
+            let c = feel::empty_trigger();
+            self.shake.hit(c.shake);
+            if let Some(r) = c.rumble {
+                self.feedback.rumble(r.strong, r.weak, r.ms);
+            }
+            if let (Some(audio), Some((s, v))) = (self.audio.as_ref(), c.sfx) {
+                audio.play(s, v);
+            }
+        }
+        self.prev_fire = fire;
         // A jump is a press, latched until the next send frame: sampling the
         // held key at 20 Hz dropped taps shorter than 50 ms outright, and a
         // held key re-launched the player off every surface they touched.
-        let space = input.down(KeyCode::Space);
+        // The pad's South button is the same latch.
+        let space = input.down(KeyCode::Space) || pad_down(PadButton::South);
         let jump = space && !self.prev_space;
         self.prev_space = space;
         self.jump_pending |= jump;
@@ -1314,7 +1792,7 @@ impl EmberGame for ShooterGame {
         // exactly the reason it resolves bullets there, and a client that
         // guessed a kill would have to un-kill someone when the server
         // disagreed. The swing is sent; the outcome comes back.
-        let e_down = input.down(KeyCode::KeyE);
+        let e_down = input.down(KeyCode::KeyE) || pad_down(PadButton::RB);
         let melee = e_down && !self.prev_e;
         self.prev_e = e_down;
         self.melee_pending |= melee;
@@ -1395,7 +1873,7 @@ impl EmberGame for ShooterGame {
                 fire,
                 sprint,
                 crouch,
-                reload: input.down(KeyCode::KeyR),
+                reload: input.down(KeyCode::KeyR) || pad_down(PadButton::West),
                 jump: jump_press,
                 // Sent raw: the trigger gate lives in the sim, so `fire` is
                 // reported honestly even while Q is down and the server is
@@ -1409,6 +1887,9 @@ impl EmberGame for ShooterGame {
                 } else {
                     false
                 },
+                // Held, like the shield: the sim tightens the cone of the
+                // round fired this tick by it.
+                ads: aiming,
             });
         }
 
@@ -1424,7 +1905,7 @@ impl EmberGame for ShooterGame {
                 &self.obstacles,
             );
             self.pred_pos = Vec2::new(p[0], p[1]);
-            let (y, vy, _grounded) = step_vertical(
+            let stepped = step_vertical(
                 p,
                 self.pred_y,
                 self.pred_vy,
@@ -1432,6 +1913,33 @@ impl EmberGame for ShooterGame {
                 dt,
                 &self.obstacles,
             );
+            let (y, vy) = (stepped.y, stepped.vy);
+            // The predicted bump: the frame the clamp first names a block
+            // while I was rising is the bonk, felt now; the server's answer
+            // (the pop, or nothing because someone was 30 ms earlier)
+            // follows one round trip later. Requiring the pre-step vy > 0
+            // is the same belt-and-braces the sim applies.
+            let bonk = stepped
+                .bonked
+                .filter(|&k| self.prev_bonked != Some(k) && self.pred_vy > 0.0)
+                .filter(|&k| self.obstacles.get(k).is_some_and(|o| o.kind == Cover::Loot))
+                .and_then(|k| self.loot_slot(k));
+            self.prev_bonked = stepped.bonked;
+            if let Some(i) = bonk {
+                let mut cues = Vec::new();
+                if self.loot_active.get(i).copied().unwrap_or(true) {
+                    self.loot_bump[i] = Some(self.time);
+                    self.dip_started = Some(self.time);
+                    self.cue(feel::bonk(), &mut cues);
+                } else {
+                    self.cue(feel::bonk_dead(), &mut cues);
+                }
+                if let Some(audio) = self.audio.as_ref() {
+                    for (s, v) in cues {
+                        audio.play(s, v);
+                    }
+                }
+            }
             // A launch is the only thing that can raise vy, so that is the
             // press being spent - exactly the one shot the server gets.
             if vy > self.pred_vy {
@@ -1461,7 +1969,7 @@ impl EmberGame for ShooterGame {
 
         // ---- Tab scoreboard overlay ----
         self.since_score_ui += dt;
-        let tab = input.down(KeyCode::Tab);
+        let tab = input.down(KeyCode::Tab) || pad_down(PadButton::Start);
         if tab && self.my_id.is_some() {
             if self.since_score_ui > 0.25 || !self.score_shown {
                 self.since_score_ui = 0.0;
@@ -1479,31 +1987,66 @@ impl EmberGame for ShooterGame {
         // clamp used to do that for 15% of wall-clock time.
         self.t = (self.t + dt / (self.state_interval * 1.15).max(1e-3)).min(1.0);
 
-        // Shot-feel timers and impact particles.
+        // Shot-feel timers, particles, the climb and the shake.
         self.hitmarker_t = (self.hitmarker_t - dt).max(0.0);
         self.kill_t = (self.kill_t - dt).max(0.0);
         self.flash.retain(|_, t| {
             *t -= dt;
             *t > 0.0
         });
-        self.particles.retain_mut(|(p, v, ttl)| {
-            v.y -= 9.0 * dt;
-            *p += *v * dt;
-            *ttl -= dt;
-            *ttl > 0.0
+        self.fx.retain_mut(|f| {
+            f.vel.y -= f.gravity * dt;
+            f.pos += f.vel * dt;
+            f.ttl -= dt;
+            f.ttl > 0.0
         });
+        self.pops
+            .retain(|p| self.time - p.started < POP_SECS && p.slot < self.loot_index.len());
+        self.climb.decay(dt);
+        self.shake.decay(dt);
 
         // ---- first-person camera at my PREDICTED position ----
-        let my_pos = self.own_render;
-        let (ps, pc) = self.pitch.sin_cos();
-        let look = Vec3::new(fx * pc, ps, fz * pc);
+        // The camera reads the player's own yaw and pitch plus the recoil
+        // kick, the full-auto climb and the shake. All of it is cosmetic:
+        // the Input sent above carried `self.pitch` and `self.aim`, so the
+        // server's aim never moves with the kick.
+        let me_latest = self.my_id.and_then(|id| self.latest.get(&id)).copied();
+        let my_weapon = shown_weapon(me_latest.map_or(SIDEARM, |p| p.weapon));
+        let my_feel = weapon_feel(my_weapon);
+        let cooldown = weapon_stats(my_weapon).cooldown;
+        let recoil = self
+            .shot_started
+            .map_or(0.0, |t0| my_feel.recoil((self.time - t0) / cooldown));
+        let kick_side = feel::yaw_side(self.shots);
+        let cam_yaw = self.yaw + my_feel.yaw_alt * kick_side * recoil;
+        let cam_pitch = (self.pitch + my_feel.kick_cam * recoil + self.climb.value)
+            .clamp(-MAX_PITCH - 0.1, MAX_PITCH + 0.1);
+        let (cz, cx) = cam_yaw.sin_cos();
+        let (ps, pc) = cam_pitch.sin_cos();
+        let right3 = Vec3::new(-cz, 0.0, cx);
+        let (shake_eye, shake_look) = self.shake.offsets(self.time, right3);
+        let look = (Vec3::new(cx * pc, ps, cz * pc) + shake_look).normalize();
+        // The bonk dip: the head just hit a box.
+        let dip = self.dip_started.map_or(0.0, |t0| {
+            let k = (self.time - t0) / 0.08;
+            if k < 1.0 {
+                0.06 * (k * std::f32::consts::PI).sin()
+            } else {
+                0.0
+            }
+        });
         // The eye rides the predicted feet height, so jumping and standing
         // on a crate raise the view.
-        let eye = Vec3::new(my_pos.x, self.render_y_own + self.eye_h + bob, my_pos.y);
-        let camera = debug_camera().unwrap_or(Camera {
+        let my_pos = self.own_render;
+        let eye = Vec3::new(
+            my_pos.x,
+            self.render_y_own + self.eye_h + bob - dip,
+            my_pos.y,
+        ) + shake_eye;
+        let camera = debug_camera().unwrap_or_else(|| Camera {
             eye,
             target: eye + look,
-            fov_y_deg: 70.0 - 26.0 * self.zoom,
+            fov_y_deg: my_feel.fov(self.zoom),
         });
 
         // ---- build the scene ----
@@ -1613,6 +2156,10 @@ impl EmberGame for ShooterGame {
         // so what you see is what stops you. A raised box (a tunnel roof)
         // is drawn from its base, not from the floor.
         for o in &self.obstacles {
+            if o.kind == Cover::Loot {
+                // Drawn below with their own state.
+                continue;
+            }
             if let Some(pr) = &props {
                 pr.push_obstacle(&mut frame, o);
             } else {
@@ -1624,6 +2171,74 @@ impl EmberGame for ShooterGame {
                 );
                 let size = Vec3::new(o.max[0] - o.min[0], height, o.max[1] - o.min[1]);
                 inst(&mut frame, pos, size, Vec3::new(0.30, 0.33, 0.40));
+            }
+        }
+
+        // The `?` blocks: armed ones turn slowly and bob a little, a bonked
+        // one jumps a quarter metre and settles, a spent one is the same
+        // mesh tinted dark and still. The box the sim resolves against
+        // never moves; the bump is drawn, not simulated.
+        for (i, &k) in self.loot_index.iter().enumerate() {
+            let Some(o) = self.obstacles.get(k) else {
+                continue;
+            };
+            let armed = self.loot_active.get(i).copied().unwrap_or(true);
+            let bump = self.loot_bump.get(i).copied().flatten().map_or(0.0, |t0| {
+                let t = self.time - t0;
+                if t < BUMP_SECS {
+                    0.25 * (t * std::f32::consts::PI / BUMP_SECS).sin()
+                } else {
+                    0.0
+                }
+            });
+            let (yaw, bob_y, color) = if armed {
+                (self.time * 0.6, (self.time * 1.5).sin() * 0.02, Vec3::ONE)
+            } else {
+                (0.0, 0.0, Vec3::splat(LOOT_SPENT_TINT))
+            };
+            if let Some(pr) = &props {
+                pr.push_loot(&mut frame, o, bump + bob_y, yaw, color);
+            } else {
+                let extent = Vec3::new(o.max[0] - o.min[0], o.h - o.base, o.max[1] - o.min[1]);
+                inst(
+                    &mut frame,
+                    Vec3::new(
+                        f32::midpoint(o.min[0], o.max[0]),
+                        f32::midpoint(o.base, o.h) + bump + bob_y,
+                        f32::midpoint(o.min[1], o.max[1]),
+                    ),
+                    extent,
+                    color * Vec3::new(0.85, 0.65, 0.2),
+                );
+            }
+        }
+        // The pop: the granted gun rises out of the block's top, spinning
+        // two turns, and is gone half a second later.
+        for p in &self.pops {
+            let Some(o) = self
+                .loot_index
+                .get(p.slot)
+                .and_then(|&k| self.obstacles.get(k))
+            else {
+                continue;
+            };
+            let t = ((self.time - p.started) / POP_SECS).clamp(0.0, 1.0);
+            let pos = Vec3::new(
+                f32::midpoint(o.min[0], o.max[0]),
+                o.h + 0.6 * t,
+                f32::midpoint(o.min[1], o.max[1]),
+            );
+            let rot = Quat::from_rotation_y(t * 2.0 * std::f32::consts::TAU);
+            if let Some(a) = &self.assets {
+                push_weapon(&mut frame, a, p.weapon, pos, rot, Action::REST, true);
+            } else {
+                let fwd = rot * Vec3::X;
+                push_gun(
+                    &mut frame,
+                    pos,
+                    Vec2::new(fwd.x, fwd.z),
+                    weapon_accent(p.weapon),
+                );
             }
         }
 
@@ -1751,15 +2366,18 @@ impl EmberGame for ShooterGame {
             }
             if let Some(a) = &self.assets {
                 let yaw = -aim.y.atan2(aim.x);
-                // Remote weapons tilt with the owner's real aim elevation,
-                // so a player shooting down off a container looks like it.
-                push_parts(
+                // Remote weapons are drawn by id and tilt with the owner's
+                // real aim elevation, so a player shooting down off a
+                // container looks like it; the rocket rides the tube only
+                // while there is one to fire.
+                push_weapon(
                     &mut frame,
-                    &a.gun,
+                    a,
+                    shown_weapon(p.weapon),
                     hand,
                     weapon_rot(yaw, p.pitch),
-                    accent,
                     Action::REST,
+                    p.ammo > 0 && !p.reloading,
                 );
             } else {
                 push_gun(&mut frame, hand, aim, accent);
@@ -1774,135 +2392,162 @@ impl EmberGame for ShooterGame {
             }
         }
 
-        // Impact sparks: short-lived glowing shards on confirmed hits.
-        for (p, _, ttl) in &self.particles {
-            frame.instances.push(
-                Instance::new(
-                    *p,
-                    Vec3::splat(0.09 * (ttl / 0.3)),
-                    Vec3::new(1.0, 0.62, 0.2),
-                )
-                .with_yaw(*ttl * 12.0),
-            );
+        // Sparks, shards and smoke: opaque cubes, the only particle the
+        // scene pass can draw. Shards shrink out; smoke swells and dims.
+        for f in &self.fx {
+            let k = (f.ttl / f.life).clamp(0.0, 1.0);
+            let (edge, color) = if f.gravity > 0.0 {
+                (f.size * k, f.color)
+            } else {
+                (f.size * (1.4 - 0.4 * k), f.color * (0.4 + 0.6 * k))
+            };
+            frame
+                .instances
+                .push(Instance::new(f.pos, Vec3::splat(edge), color).with_yaw(f.ttl * 12.0));
         }
 
         // Bullets: tracers along the server's real 3D path, extrapolation
         // bounded to ~2 state intervals so stalls don't fly them through
         // walls. A round is drawn as a streak stretched along its flight
         // direction with a hotter head, which reads as something moving
-        // fast rather than as a floating cube.
+        // fast rather than as a floating cube; the rod's length, thickness
+        // and colour are the shooter's weapon's, from `BState.weapon`. A
+        // rocket is the rocket mesh flown along the path with an exhaust
+        // rod behind it.
         let age = self.bullets_age.min(0.12);
         for b in &self.bullets {
-            let p = Vec3::new(b.x + b.vx * age, b.y + b.vy * age, b.z + b.vz * age);
-            let v = Vec3::new(b.vx, b.vy, b.vz);
-            let speed = v.length();
+            let at = Vec3::new(b.x + b.vx * age, b.y + b.vy * age, b.z + b.vz * age);
+            let vel = Vec3::new(b.vx, b.vy, b.vz);
+            let speed = vel.length();
             if speed < 1e-3 {
                 continue;
             }
-            let dir = v / speed;
+            let dir = vel / speed;
             // Scale is applied before rotation, so a box long in X becomes
             // a rod pointing along the flight direction.
             let rot = Quat::from_rotation_arc(Vec3::X, dir);
+            let row = weapon_feel(b.weapon);
+            let rocket = weapon_stats(b.weapon).kind == Projectile::Rocket;
             // The trail is clamped so it cannot reach back through the
             // camera. Your own round is only ~0.77 from the eye on the
-            // first state that carries it, so a fixed 0.68 tail would end
-            // up inside the 0.1 near plane — and the scene pass does not
-            // cull backfaces, so it would paint a solid block across the
-            // middle of the screen, right over the crosshair.
-            let back = 0.68f32.min(((p - eye).dot(dir) - 0.35).max(0.0));
+            // first state that carries it, so a fixed tail would end up
+            // inside the 0.1 near plane — and the scene pass does not cull
+            // backfaces, so it would paint a solid block across the middle
+            // of the screen, right over the crosshair.
+            let back = row.tracer_len.min(((at - eye).dot(dir) - 0.35).max(0.0));
             if back > 0.02 {
                 frame.instances.push(
                     Instance::new(
-                        p - dir * (back * 0.5),
-                        Vec3::new(back, 0.075, 0.075),
-                        GLOW_BLUE * 0.55,
+                        at - dir * (back * 0.5),
+                        Vec3::new(back, row.tracer_thick, row.tracer_thick),
+                        row.tracer,
                     )
                     .with_rot(rot),
                 );
             }
-            frame.instances.push(
-                Instance::new(p, Vec3::new(0.22, 0.15, 0.15), Vec3::new(1.0, 0.95, 0.75))
+            if rocket {
+                match self.assets.as_ref().filter(|a| !a.rocket.is_empty()) {
+                    Some(a) => {
+                        push_parts(&mut frame, &a.rocket, at, rot, row.accent, Action::REST);
+                    }
+                    None => frame.instances.push(
+                        Instance::new(at, Vec3::new(0.5, 0.16, 0.16), Vec3::new(0.35, 0.4, 0.3))
+                            .with_rot(rot),
+                    ),
+                }
+            } else {
+                frame.instances.push(
+                    Instance::new(
+                        at,
+                        Vec3::new(row.head, row.head * 0.68, row.head * 0.68),
+                        Vec3::new(1.0, 0.95, 0.75),
+                    )
                     .with_rot(rot),
-            );
+                );
+            }
         }
 
         // ---- crosshair markers: hit (white X) and kill (red X, larger) ----
         if self.hitmarker_t > 0.0 || self.kill_t > 0.0 {
-            let f3 = Vec3::new(fx, 0.0, fz);
-            let right3 = Vec3::new(-fz, 0.0, fx);
             let up = Vec3::Y;
-            let center = eye + Vec3::new(fx * pc, ps, fz * pc) * 1.2;
-            let (off, size, col) = if self.kill_t > 0.0 {
+            let center = eye + look * 1.2;
+            let (off, edge, col) = if self.kill_t > 0.0 {
                 (0.045, 0.016, Vec3::new(1.0, 0.15, 0.1))
             } else {
-                (0.028, 0.009, Vec3::new(1.0, 1.0, 1.0))
+                (
+                    0.028 * self.hitmarker_scale,
+                    0.009 * self.hitmarker_scale,
+                    Vec3::new(1.0, 1.0, 1.0),
+                )
             };
-            let _ = f3;
             for (sx, sy) in [(-1.0f32, -1.0f32), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
                 frame.instances.push(Instance::new(
                     center + right3 * (off * sx) + up * (off * sy),
-                    Vec3::splat(size),
+                    Vec3::splat(edge),
                     col,
                 ));
             }
         }
 
-        // ---- viewmodel: the sidearm in hand, plus muzzle flash ----
+        // ---- viewmodel: the held gun by id, plus muzzle flash ----
         if me_alive {
-            let me_latest = self.my_id.and_then(|id| self.latest.get(&id));
-            let my_weapon = me_latest.map_or(1, |p| p.weapon);
             let reloading = me_latest.is_some_and(|p| p.reloading);
+            let loaded = me_latest.is_some_and(|p| p.ammo > 0 && !p.reloading);
             let accent = weapon_accent(my_weapon);
-            let right3 = Vec3::new(-fz, 0.0, fx);
 
-            // Reload animation: the gun dips and rolls out of the way.
+            // Reload animation: the gun dips and rolls out of the way, over
+            // this weapon's own reload time.
             let reload_dip = if reloading {
                 let t0 = self.reload_started.unwrap_or(self.time);
-                let progress = ((self.time - t0) / RELOAD_SECS).clamp(0.0, 1.0);
+                let progress = ((self.time - t0) / weapon_stats(my_weapon).reload).clamp(0.0, 1.0);
                 (progress * std::f32::consts::PI).sin() * 0.24
             } else {
                 0.0
             };
-            // Recoil across the weapon's own cooldown: a fast rise and a
-            // slower settle, so a rapid weapon never fully recovers between
-            // rounds and a heavy one does. Driven by the server-confirmed
-            // shot rather than the trigger — holding fire on an empty
-            // magazine, or during a reload, must not kick.
-            let cooldown = weapon_stats(my_weapon).cooldown;
-            let recoil = self.shot_started.map_or(0.0, |t0| {
-                let k = ((self.time - t0) / cooldown).clamp(0.0, 1.0);
-                if k < 0.16 {
-                    k / 0.16
+            // The holster: a looted gun ran dry, the model drops 0.3 m and
+            // the sidearm comes back up over 0.35 s.
+            let holster_drop = self.holster_started.map_or(0.0, |t0| {
+                let k = (self.time - t0) / 0.35;
+                if k < 1.0 {
+                    0.3 * (k * std::f32::consts::PI).sin()
                 } else {
-                    let settle = (1.0 - k) / 0.84;
-                    settle * settle
+                    0.0
                 }
             });
+            // Recoil across the weapon's own cooldown, shaped per weapon by
+            // the feel table (`recoil` above, the same curve the camera
+            // reads): the model kicks far more than the view and slides
+            // back by `push`. Driven by the server-confirmed shot rather
+            // than the trigger — holding fire on an empty magazine, or
+            // during a reload, must not kick.
             // ADS rides the FULL look vector rather than its horizontal
             // part. That is what puts the sights on the shot line when
             // pitched; the old pose used horizontal forward plus a
             // `pitch * 0.10` nudge, so the gun and the bullet disagreed.
             // Offsets tuned for the v16 rifle, whose hold point is the top of
-            // the pistol grip at the trigger: a bullpup, so the stock runs
-            // 0.45 back from there toward the shoulder and the hold sits
-            // further out than the revolver's did, or the receiver fills
-            // the corner of the screen.
+            // the pistol grip at the trigger: every weapon is fitted to that
+            // same hold by the build, so the one set of offsets serves all.
             let base = eye
-                + look * (0.60 + 0.08 * self.zoom - 0.06 * recoil)
+                + look * (0.60 + 0.08 * self.zoom - 0.06 * recoil - my_feel.push * recoil)
                 + right3 * (0.20 * (1.0 - self.zoom) + 0.012)
                 + Vec3::Y
-                    * (-0.24 + 0.07 * self.zoom + bob * 0.4 * (1.0 - self.zoom) - reload_dip
+                    * (-0.24 + 0.07 * self.zoom + bob * 0.4 * (1.0 - self.zoom)
+                        - reload_dip
+                        - holster_drop
                         + 0.03 * recoil);
             let yaw = -forward2.y.atan2(forward2.x);
-            // Tilts with aim elevation, plus a muzzle-up kick per shot.
-            let rot = weapon_rot(yaw, self.pitch + 0.16 * recoil);
+            // Tilts with aim elevation, plus the muzzle-up kick and the
+            // alternating sideways kick per shot.
+            let kick_yaw = yaw + my_feel.yaw_alt * kick_side * recoil;
+            let kick_pitch = self.pitch + my_feel.kick_model * recoil;
+            let rot = weapon_rot(kick_yaw, kick_pitch);
             // The melee drops the rifle out of the frame, in the weapon's
             // own frame, and the sword comes out in its place.
             let melee_since = self.melee_started.map(|t0| self.time - t0);
             let (base, rot) = match melee_since.and_then(|since| melee_pose(&LOWER, since)) {
                 Some((offset, yaw_add, pitch_add, _roll)) => (
                     base + look * offset.x - right3 * offset.y + Vec3::Y * offset.z,
-                    weapon_rot(yaw + yaw_add, self.pitch + 0.16 * recoil + pitch_add),
+                    weapon_rot(kick_yaw + yaw_add, kick_pitch + pitch_add),
                 ),
                 None => (base, rot),
             };
@@ -1915,13 +2560,57 @@ impl EmberGame for ShooterGame {
                 shots: self.shots,
             };
             let muzzle = if let Some(a) = &self.assets {
-                push_parts(&mut frame, &a.gun, base, rot, accent, action);
+                push_weapon(&mut frame, a, my_weapon, base, rot, action, loaded);
                 push_parts(&mut frame, &a.arms, base, rot, accent, action);
-                base + rot * a.muzzle
+                base + rot * a.muzzle_of(my_weapon)
             } else {
                 push_gun(&mut frame, base, forward2, accent);
                 base + look * 0.95
             };
+            // The rocket's launch smoke: six grey cubes drifting back from
+            // the muzzle, spawned on the frame the shot was confirmed.
+            if std::mem::take(&mut self.launch_smoke) {
+                for k in 0_u8..6 {
+                    let a = f32::from(k) * std::f32::consts::TAU / 6.0;
+                    self.fx.push(Fx {
+                        pos: muzzle + right3 * (a.cos() * 0.12) + Vec3::Y * (a.sin() * 0.12),
+                        vel: -look * 1.6
+                            + right3 * (a.cos() * 0.5)
+                            + Vec3::Y * (0.6 + a.sin() * 0.4),
+                        ttl: 0.4,
+                        life: 0.4,
+                        size: 0.22,
+                        color: Vec3::new(0.45, 0.43, 0.40),
+                        gravity: 0.0,
+                    });
+                }
+            }
+            // The sniper's scope: four opaque black bars half a metre from
+            // the eye framing the narrow field, once the zoom is mostly in.
+            // Opaque because that is the one kind of cube there is; the
+            // scene pass has no blending.
+            if my_feel.ads_fov < 30.0 && self.zoom > 0.6 {
+                let half_h = 0.5 * (my_feel.ads_fov.to_radians() * 0.5).tan();
+                let half_w = half_h * input.aspect();
+                let up = Vec3::Y;
+                let c = eye + look * 0.5;
+                let thick = 0.012;
+                for (dx, dy, sx, sy) in [
+                    (0.0, half_h, half_w * 2.4, thick),
+                    (0.0, -half_h, half_w * 2.4, thick),
+                    (half_w, 0.0, thick, half_h * 2.4),
+                    (-half_w, 0.0, thick, half_h * 2.4),
+                ] {
+                    frame.instances.push(
+                        Instance::new(
+                            c + right3 * dx + up * dy,
+                            Vec3::new(sx, sy, thick),
+                            Vec3::splat(0.01),
+                        )
+                        .with_rot(Quat::from_rotation_arc(Vec3::Z, -look)),
+                    );
+                }
+            }
             // Muzzle flash on a round the server agrees left the weapon.
             // What stood here fired on `time % cooldown` while the trigger
             // was held — a free-running clock with no relationship to
@@ -1956,12 +2645,14 @@ impl EmberGame for ShooterGame {
                 );
             }
 
-            let flashing = self.shot_started.is_some_and(|t0| self.time - t0 < 0.045);
+            let flashing = self
+                .shot_started
+                .is_some_and(|t0| self.time - t0 < my_feel.flash_ms);
             if flashing {
                 inst(
                     &mut frame,
                     muzzle,
-                    Vec3::splat(0.14),
+                    Vec3::splat(my_feel.flash),
                     Vec3::new(1.0, 0.9, 0.5),
                 );
             }
@@ -2009,6 +2700,13 @@ impl EmberGame for ShooterGame {
         }
 
         frame
+    }
+
+    /// Everything the pad should feel since the last frame. The platform
+    /// merges the requests per channel by max, so a hitmarker tick queued
+    /// beside a death rumble never cancels it.
+    fn feedback(&mut self) -> Feedback {
+        std::mem::take(&mut self.feedback)
     }
 }
 
@@ -2128,6 +2826,26 @@ mod net {
     /// protocol type.
     fn clone_c2s(msg: &C2S) -> C2S {
         serde_json::from_str(&serde_json::to_string(msg).unwrap()).unwrap()
+    }
+
+    #[cfg(test)]
+    impl NetChan {
+        /// A channel with no socket behind it: what the game sends lands in
+        /// the returned receiver and nothing ever arrives. Lets a test run
+        /// `update` and read the exact `Input` frames it would have put on
+        /// the wire.
+        pub fn detached() -> (Self, Receiver<C2S>) {
+            let (out_tx, out_rx) = mpsc::channel::<C2S>();
+            let (_in_tx, in_rx) = mpsc::channel::<S2C>();
+            (
+                Self {
+                    out_tx,
+                    in_rx,
+                    dead: Arc::new(AtomicBool::new(false)),
+                },
+                out_rx,
+            )
+        }
     }
 }
 
@@ -2392,15 +3110,186 @@ mod melee_tests {
 
     #[test]
     fn the_viewmodel_nodes_are_sorted_by_name() {
-        assert_eq!(classify("shield"), Slot::Shield);
-        assert_eq!(classify("sword"), Slot::Sword);
-        // The sword hand is matched exactly, and its name also carries the
-        // older prefix, so a client with only that rule still hides it.
+        // The fifteen names `verify_glb` pins, each to its slot.
         assert_eq!(classify("hand_sword"), Slot::Fist);
         assert_eq!(classify("hands"), Slot::Arms);
+        assert_eq!(classify("rifle"), Slot::Weapon(1));
+        assert_eq!(classify("shield"), Slot::Shield);
+        assert_eq!(classify("sword"), Slot::Sword);
+        assert_eq!(classify("w_ak47"), Slot::Weapon(3));
+        assert_eq!(classify("w_revolver_cylinder"), Slot::Weapon(5));
+        assert_eq!(classify("w_revolver_frame"), Slot::Weapon(5));
+        assert_eq!(classify("w_revolver_hammer"), Slot::Weapon(5));
+        assert_eq!(classify("w_revolver_receiver"), Slot::Weapon(5));
+        assert_eq!(classify("w_revolver_trigger"), Slot::Weapon(5));
+        assert_eq!(classify("w_rpg7"), Slot::Weapon(7));
+        assert_eq!(classify("w_rpg7_rocket"), Slot::Rocket);
+        assert_eq!(classify("w_sniper"), Slot::Weapon(6));
+        assert_eq!(classify("w_vityaz"), Slot::Weapon(2));
+        // The M4's node, when it exists, and the older rules.
+        assert_eq!(classify("w_m4"), Slot::Weapon(4));
         assert_eq!(classify("arm_sword"), Slot::Arms);
-        assert_eq!(classify("rifle"), Slot::Gun);
-        assert_eq!(classify("cylinder"), Slot::Gun);
+        assert_eq!(classify("cylinder"), Slot::Weapon(1));
+        // The revolver's moving parts are told by their suffix, the v15
+        // bare names still by theirs.
+        assert_eq!(anim_of("w_revolver_cylinder"), PartAnim::Cylinder);
+        assert_eq!(anim_of("w_revolver_hammer"), PartAnim::Hammer);
+        assert_eq!(anim_of("w_revolver_trigger"), PartAnim::Trigger);
+        assert_eq!(anim_of("w_revolver_frame"), PartAnim::Fixed);
+        assert_eq!(anim_of("cylinder_a"), PartAnim::Cylinder);
+        assert_eq!(anim_of("hammer"), PartAnim::Hammer);
+        assert_eq!(anim_of("w_ak47"), PartAnim::Fixed);
+    }
+
+    /// Ids off the table share the sidearm's slot, never index past it.
+    #[test]
+    fn every_weapon_id_has_a_slot() {
+        for id in 0..=255u8 {
+            let s = slot(id);
+            assert!((1..WEAPON_SLOTS).contains(&s), "id {id} -> slot {s}");
+        }
+        assert_eq!(slot(0), SIDEARM as usize);
+        assert_eq!(slot(WEAPON_COUNT + 1), SIDEARM as usize);
+        assert_eq!(slot(7), 7);
+    }
+
+    /// The real GLB: every table weapon resolves to a non-empty part list,
+    /// its own or the sidearm's. Loosened on purpose while the GLB is
+    /// being rebuilt: which ids draw their own mesh is the integrator's
+    /// assertion once `verify_glb` has passed on the shipped file.
+    #[test]
+    fn every_table_weapon_has_a_node_or_a_fallback() {
+        let (meshes, assets) = load_assets();
+        let assets = assets.expect("the embedded viewmodel loads");
+        assert!(!meshes.is_empty());
+        assert!(
+            !assets.weapons[SIDEARM as usize].is_empty(),
+            "the sidearm is the fallback and must itself exist"
+        );
+        for id in 1..=WEAPON_COUNT {
+            let (parts, own) = assets.weapon_parts(id);
+            assert!(!parts.is_empty(), "{}: no parts at all", weapon_name(id));
+            for p in parts {
+                assert!(p.mesh >= 1 && (p.mesh as usize) <= meshes.len());
+            }
+            let m = assets.muzzle_of(id);
+            assert!(
+                m.is_finite() && m.length() > 0.05,
+                "{}: muzzle {m}",
+                weapon_name(id)
+            );
+            // The shipped GLB carries a node for every weapon but the M4 (id 4,
+            // still inside its RAR5 archive), so only the M4 may take the fallback;
+            // an id that unexpectedly falls back means a node was renamed or lost.
+            assert_eq!(
+                own,
+                id != 4,
+                "{}: expected own mesh = {}, got {own}",
+                weapon_name(id),
+                id != 4
+            );
+            if !own {
+                assert_eq!(
+                    parts.as_ptr(),
+                    assets.weapons[SIDEARM as usize].as_ptr(),
+                    "{}: the fallback is the sidearm's list",
+                    weapon_name(id)
+                );
+            }
+        }
+        // An unknown id reads as the sidearm, like `weapon_stats`.
+        let (parts, _) = assets.weapon_parts(200);
+        assert_eq!(parts.as_ptr(), assets.weapons[SIDEARM as usize].as_ptr());
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod wire_tests {
+    use super::*;
+
+    const fn me(id: u8) -> PState {
+        PState {
+            id,
+            x: 0.0,
+            z: 0.0,
+            y: 0.0,
+            vy: 0.0,
+            ax: 1.0,
+            az: 0.0,
+            pitch: 0.0,
+            hp: MAX_HP,
+            score: 0,
+            alive: true,
+            crouch: false,
+            shield: false,
+            weapon: 3,
+            ammo: 20,
+            reserve: 30,
+            reloading: false,
+            deaths: 0,
+            ack: 0,
+            ack_age_ticks: 0,
+        }
+    }
+
+    /// The recoil kick and the climb move the camera and the model, never
+    /// the pitch the client sends: during a burst every `Input` on the wire
+    /// carries `self.pitch`, while the frame's camera looks higher.
+    #[test]
+    fn recoil_never_reaches_the_wire() {
+        let (chan, wire) = net::NetChan::detached();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.my_id = Some(2);
+        game.latest.insert(2, me(2));
+        game.was_alive = true;
+        game.pitch = 0.3;
+        game.time = 5.0;
+        // A confirmed AK shot an instant ago, with a climb from the burst.
+        game.shot_started = Some(game.time);
+        game.climb.value = 0.05;
+        game.shots = 1;
+        let input = InputState::default();
+        let mut inputs_seen = 0;
+        let mut kicked_frames = 0;
+        for _ in 0..12 {
+            let frame = game.update(&input, 0.01);
+            let look = (frame.camera.target - frame.camera.eye).normalize();
+            let cam_pitch = look.y.asin();
+            if (cam_pitch - game.pitch).abs() > 1e-3 {
+                kicked_frames += 1;
+            }
+            while let Ok(msg) = wire.try_recv() {
+                if let C2S::Input { pitch, ax, az, .. } = msg {
+                    inputs_seen += 1;
+                    assert_eq!(pitch, game.pitch, "the wire carries the player's own pitch");
+                    assert_eq!((ax, az), (game.aim.x, game.aim.y));
+                }
+            }
+        }
+        assert!(inputs_seen >= 2, "inputs were sent: {inputs_seen}");
+        // `EMBER_CAM` pins the camera for screenshots; the kick is then not
+        // observable, and the wire half of the claim is what matters.
+        if debug_camera().is_none() {
+            assert!(
+                kicked_frames >= 6,
+                "the camera kicked: {kicked_frames} frames"
+            );
+        }
+        // Nothing on the wire moved the player's own aim either.
+        assert_eq!(game.pitch, 0.3);
+    }
+
+    /// Rumble requests accumulate through a frame and the platform takes
+    /// them all at once; the next take is empty.
+    #[test]
+    fn feedback_is_handed_over_once() {
+        let (chan, _wire) = net::NetChan::detached();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.feedback.rumble(0.5, 0.2, 40);
+        game.feedback.rumble(0.1, 0.9, 300);
+        let fb = game.feedback();
+        assert_eq!(fb.rumbles.len(), 2);
+        assert_eq!(game.feedback(), Feedback::default());
     }
 }
 

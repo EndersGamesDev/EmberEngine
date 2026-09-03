@@ -64,11 +64,15 @@ pub enum Prop {
     Wreck,
     /// Generated: a street lamp.
     Lamp,
+    /// A loot block (v18): the riveted `?` plate on every face of a unit
+    /// cube. One picture, tinted dark when the block is spent: a second
+    /// picture would be a byte every web player downloads for nothing.
+    Loot,
 }
 
 impl Prop {
     /// Every prop, in registration order.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::Container,
         Self::Crate,
         Self::Ammo,
@@ -87,6 +91,7 @@ impl Prop {
         Self::Sandbags,
         Self::Wreck,
         Self::Lamp,
+        Self::Loot,
     ];
     pub const COUNT: usize = Self::ALL.len();
 
@@ -118,6 +123,13 @@ const TEX_BRONZE: &[u8] = include_bytes!("../../../assets/textures/v13/bronze.pn
 const TEX_BURLAP: &[u8] = include_bytes!("../../../assets/textures/v13/burlap.png");
 const TEX_SCORCHED_STEEL: &[u8] = include_bytes!("../../../assets/textures/v13/scorched-steel.png");
 const TEX_CAST_IRON: &[u8] = include_bytes!("../../../assets/textures/v13/cast-iron.png");
+/// The `?` block, drawn by `tools/v18/loot_texture.py`: deterministic, free.
+const TEX_LOOT: &[u8] = include_bytes!("../../../assets/textures/v18/loot.png");
+
+/// The tint of a block that has paid out and is waiting to re-arm. The
+/// per-instance colour multiply is the whole material model, so "dark" is
+/// the same mesh at less than half brightness.
+pub const LOOT_SPENT_TINT: f32 = 0.42;
 
 // ---- the generated meshes (Hunyuan shape output: POSITION only) ----
 
@@ -504,6 +516,11 @@ fn build(p: Prop) -> MeshData {
             "wreck",
         ),
         Prop::Lamp => prop_or_box(GLB_LAMP, tex(TEX_CAST_IRON, "cast-iron"), 5.0, "lamp"),
+        // A unit cube with the whole `?` plate on each of its six faces: a
+        // nominal size of one tile is what puts exactly one picture per
+        // face, and a block is always drawn at `LOOT_SIZE`, so nothing ever
+        // stretches or crops it.
+        Prop::Loot => tiled_box(Vec3::splat(TILE_M), tex(TEX_LOOT, "loot")),
     }
 }
 
@@ -586,8 +603,33 @@ impl Props {
             Cover::Roof => Prop::TunnelRoof,
             Cover::Rubble => Prop::Rubble,
             Cover::Plinth => Prop::Plinth,
+            // An armed block at rest. The client draws blocks itself through
+            // `push_loot` so the bump, the bob and the spent tint can ride
+            // along; this arm is what a kind-agnostic caller gets.
+            Cover::Loot => Prop::Loot,
         };
         self.push_fitted(frame, prop, center, size, Vec3::ONE);
+    }
+
+    /// Draw one loot block: the unit `?` cube filling the obstacle's box,
+    /// lifted by `lift` metres (the bump), turned by `yaw` about +Y (the
+    /// idle bob), at `color` (`Vec3::ONE` armed, `LOOT_SPENT_TINT` spent).
+    /// The mesh is a unit cube, so the box's own size is the scale and no
+    /// fit is needed; the yaw turns it about its own centre, which is what
+    /// keeps a turning block on its footprint.
+    pub fn push_loot(&self, frame: &mut Frame, o: &Obstacle, lift: f32, yaw: f32, color: Vec3) {
+        let height = (o.h - o.base).max(0.01);
+        let size = Vec3::new(o.max[0] - o.min[0], height, o.max[1] - o.min[1]);
+        let center = Vec3::new(
+            f32::midpoint(o.min[0], o.max[0]),
+            o.base + height * 0.5 + lift,
+            f32::midpoint(o.min[1], o.max[1]),
+        );
+        frame.instances.push(
+            Instance::new(center, size, color)
+                .with_yaw(yaw)
+                .with_mesh(self.mesh(Prop::Loot)),
+        );
     }
 
     /// Draw one listed decor prop: scaled uniformly so its height is
@@ -827,6 +869,71 @@ mod tests {
         assert!(close(lower.max, Vec3::new(23.0, 2.6, 22.8)));
         assert!(close(upper.min, Vec3::new(17.0, 2.6, 20.4)));
         assert!(close(upper.max, Vec3::new(23.0, 5.2, 22.8)));
+    }
+
+    /// A loot block is a unit cube standing on its base (a raised box like a
+    /// roof, so it hangs at `base + 0.5`), both through the kind-agnostic
+    /// draw and through `push_loot`, which lifts it for the bump and tints
+    /// it when spent without moving its footprint.
+    #[test]
+    fn a_loot_block_hangs_at_its_base_and_bumps_in_place() {
+        let props = props();
+        let block = Obstacle::boxed(Cover::Loot, [5.5, 9.6], [6.5, 10.6], 2.3, 3.3);
+        let b = props.fits.bounds(Prop::Loot);
+        assert!(
+            close(b.size(), Vec3::ONE),
+            "the block mesh is a unit cube: {b:?}"
+        );
+
+        let mut frame = Frame::default();
+        props.push_obstacle(&mut frame, &block);
+        assert_eq!(frame.instances.len(), 1);
+        assert_eq!(frame.instances[0].mesh, 7 + Prop::Loot as u32);
+        let wb = world_bounds(&frame.instances[0], b);
+        assert!(close(wb.min, Vec3::new(5.5, 2.3, 9.6)), "{}", wb.min);
+        assert!(close(wb.max, Vec3::new(6.5, 3.3, 10.6)), "{}", wb.max);
+        assert_eq!(frame.instances[0].color, Vec3::ONE);
+
+        // Bumped a quarter metre and a quarter turn round: still on its
+        // footprint (a unit cube turned about its centre stays inside its
+        // own diagonal only at 0 and 90 degrees, so the test turns it 90).
+        let mut frame = Frame::default();
+        props.push_loot(
+            &mut frame,
+            &block,
+            0.25,
+            FRAC_PI_2,
+            Vec3::splat(LOOT_SPENT_TINT),
+        );
+        let inst = frame.instances[0];
+        let wb = world_bounds(&inst, b);
+        assert!(close(wb.min, Vec3::new(5.5, 2.55, 9.6)), "{}", wb.min);
+        assert!(close(wb.max, Vec3::new(6.5, 3.55, 10.6)), "{}", wb.max);
+        assert_eq!(inst.color, Vec3::splat(LOOT_SPENT_TINT));
+        assert_eq!(inst.mesh, 7 + Prop::Loot as u32);
+    }
+
+    /// Every block in the freight yard draws exactly one instance, at unit
+    /// size, at its authored base: the map's seven `?` marks.
+    #[test]
+    fn every_yard_block_draws_once_at_unit_size() {
+        let props = props();
+        let level = Level::freight_yard();
+        let blocks: Vec<&Obstacle> = level
+            .obstacles
+            .iter()
+            .filter(|o| o.kind == Cover::Loot)
+            .collect();
+        assert!(!blocks.is_empty(), "the yard has blocks");
+        let b = props.fits.bounds(Prop::Loot);
+        for o in blocks {
+            let mut frame = Frame::default();
+            props.push_loot(&mut frame, o, 0.0, 0.0, Vec3::ONE);
+            assert_eq!(frame.instances.len(), 1);
+            let wb = world_bounds(&frame.instances[0], b);
+            assert!(close(wb.size(), Vec3::ONE), "{o:?}: {:?}", wb.size());
+            assert!((wb.min.y - o.base).abs() < 1e-3, "{o:?}: base {}", wb.min.y);
+        }
     }
 
     /// Every sandbag box in the trench city is filled exactly by the sandbag
