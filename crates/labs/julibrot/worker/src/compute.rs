@@ -278,8 +278,48 @@ mod tests {
         MathFailureCode, MonotonicClock, ORBIT_CHUNK_MAX_ITERATIONS,
         ORBIT_DEADLINE_CHECK_INTERVAL, OrbitTaskPoll, ReferenceOrbitTask, math_error,
     };
-    use crate::wire::{OrbitVerificationFacts, Pool, WireBuffer};
-    use crate::{Admission, EncodedCentre, OrbitReason, OrbitRequest, ProducerShaper};
+    use crate::wire::{
+        HEADER_BYTES, ORBIT_FACT_BYTES, OrbitVerificationFacts, Pool, WireBuffer, write_words,
+    };
+    use crate::{
+        Admission, EncodedCentre, MessageHeader, MessageKind, OrbitReason, OrbitRequest,
+        ProducerShaper,
+    };
+
+    const BASELINE_RECORD_BYTES: usize = 16;
+
+    #[derive(Clone, Copy)]
+    enum MeasurementArm {
+        PairedOrbit16ByteBaseline,
+        SingleOrbit8ByteCurrent,
+    }
+
+    impl MeasurementArm {
+        const fn label(self) -> &'static str {
+            match self {
+                Self::PairedOrbit16ByteBaseline => "paired_orbit_16b_baseline",
+                Self::SingleOrbit8ByteCurrent => "single_orbit_8b_current",
+            }
+        }
+
+        const fn precision(self) -> (PrecisionMode, ReferencePass) {
+            match self {
+                Self::PairedOrbit16ByteBaseline => {
+                    (PrecisionMode::Deterministic, ReferencePass::Final)
+                }
+                Self::SingleOrbit8ByteCurrent => {
+                    (PrecisionMode::PictureFast, ReferencePass::Preview)
+                }
+            }
+        }
+
+        const fn record_bytes(self) -> usize {
+            match self {
+                Self::PairedOrbit16ByteBaseline => BASELINE_RECORD_BYTES,
+                Self::SingleOrbit8ByteCurrent => size_of::<ReferenceOrbitRecord>(),
+            }
+        }
+    }
 
     struct StepClock {
         now: Cell<u64>,
@@ -341,21 +381,22 @@ mod tests {
         .unwrap()
     }
 
-    fn measured_orbit(max_iter: u32) -> (ComputedOrbit, u32, u32) {
+    fn measured_orbit(max_iter: u32, arm: MeasurementArm) -> (ComputedOrbit, u32, u32) {
         let plan = precision_for(100.0, 960, max_iter).expect("measurement precision plan");
         let centre =
             BigCentre::from_f64([0.0; 4], plan.requested_bits).expect("measurement centre");
+        let (mode, pass) = arm.precision();
         let request = OrbitRequest::new(
             1,
             EncodedCentre::encode_math(&centre, 1).expect("measurement encoding"),
             31,
             plan.requested_bits,
             max_iter,
-            PrecisionMode::PictureFast,
+            mode,
             OrbitReason::INITIAL,
         )
         .expect("measurement request")
-        .with_precision_policy(PrecisionMode::PictureFast, ReferencePass::Preview);
+        .with_precision_policy(mode, pass);
         let clock = WallClock::new();
         let mut task = ReferenceOrbitTask::start(&request, &clock).expect("measurement task");
         loop {
@@ -369,13 +410,42 @@ mod tests {
         }
     }
 
-    #[test]
-    #[ignore = "native reference performance measurement; run explicitly on the worker pod"]
-    #[allow(
-        clippy::print_stderr,
-        reason = "this is the explicit performance report"
-    )]
-    fn measures_first_orbit_transfer_and_admission_at_worker_caps() {
+    fn pack_paired_orbit_baseline(
+        buffer: &mut [u8],
+        generation: u32,
+        precision_bits: u32,
+        compute_us: u32,
+        records: &[ReferenceOrbitRecord],
+        facts: OrbitVerificationFacts,
+    ) {
+        buffer.fill(0);
+        let mut header = MessageHeader::new(MessageKind::OrbitResponse, generation);
+        header.length = u32::try_from(records.len()).expect("baseline record count");
+        header.precision_bits = precision_bits;
+        header.compute_us = compute_us;
+        header
+            .write_to(buffer)
+            .expect("baseline measurement header");
+        for (index, record) in records.iter().enumerate() {
+            let offset = HEADER_BYTES + index * BASELINE_RECORD_BYTES;
+            write_words(
+                &mut buffer[offset..offset + BASELINE_RECORD_BYTES],
+                &[record.re.to_bits(), 0, record.im.to_bits(), 0],
+            );
+        }
+        let facts_offset = buffer.len() - ORBIT_FACT_BYTES;
+        write_words(
+            &mut buffer[facts_offset..],
+            &[
+                facts.verification,
+                facts.max_consumed_word_error_ulps,
+                facts.precision_escalations,
+                facts.reserved,
+            ],
+        );
+    }
+
+    fn run_reference_measurement(arm: MeasurementArm) {
         const SAMPLE_COUNT: usize = 7;
         const PACK_REPEATS: u32 = 256;
         for max_iter in [512, 4_096] {
@@ -383,7 +453,7 @@ mod tests {
             let mut retained = None;
             let mut working_digits = 0;
             for _ in 0..SAMPLE_COUNT {
-                let (orbit, compute_us, digits) = measured_orbit(max_iter);
+                let (orbit, compute_us, digits) = measured_orbit(max_iter, arm);
                 assert_eq!(orbit.length, max_iter);
                 compute_samples.push(compute_us);
                 retained = Some(orbit);
@@ -392,25 +462,50 @@ mod tests {
             compute_samples.sort_unstable();
             let compute_us = compute_samples[SAMPLE_COUNT / 2];
             let orbit = retained.expect("at least one measurement orbit");
-            let mut buffer =
-                WireBuffer::new(Pool::Orbit, 0, max_iter).expect("measurement transfer buffer");
-            let pack_started = Instant::now();
             let facts = OrbitVerificationFacts::from_orbit(&orbit);
-            for _ in 0..PACK_REPEATS {
-                buffer
-                    .write_orbit(
-                        1,
-                        orbit.precision_bits,
-                        compute_us,
-                        0,
-                        &orbit.records,
-                        facts,
-                    )
-                    .expect("measurement transfer packing");
-                std::hint::black_box(buffer.as_bytes());
-            }
-            let pack_mean_ns = pack_started.elapsed().as_nanos() / u128::from(PACK_REPEATS);
-            let payload_bytes = orbit.records.len() * size_of::<ReferenceOrbitRecord>();
+            let pack_mean_ns = match arm {
+                MeasurementArm::PairedOrbit16ByteBaseline => {
+                    let mut buffer = vec![
+                        0_u8;
+                        HEADER_BYTES
+                            + orbit.records.len() * BASELINE_RECORD_BYTES
+                            + ORBIT_FACT_BYTES
+                    ];
+                    let pack_started = Instant::now();
+                    for _ in 0..PACK_REPEATS {
+                        pack_paired_orbit_baseline(
+                            &mut buffer,
+                            1,
+                            orbit.precision_bits,
+                            compute_us,
+                            &orbit.records,
+                            facts,
+                        );
+                        std::hint::black_box(&buffer);
+                    }
+                    pack_started.elapsed().as_nanos() / u128::from(PACK_REPEATS)
+                }
+                MeasurementArm::SingleOrbit8ByteCurrent => {
+                    let mut buffer = WireBuffer::new(Pool::Orbit, 0, max_iter)
+                        .expect("measurement transfer buffer");
+                    let pack_started = Instant::now();
+                    for _ in 0..PACK_REPEATS {
+                        buffer
+                            .write_orbit(
+                                1,
+                                orbit.precision_bits,
+                                compute_us,
+                                0,
+                                &orbit.records,
+                                facts,
+                            )
+                            .expect("measurement transfer packing");
+                        std::hint::black_box(buffer.as_bytes());
+                    }
+                    pack_started.elapsed().as_nanos() / u128::from(PACK_REPEATS)
+                }
+            };
+            let payload_bytes = orbit.records.len() * arm.record_bytes();
             let mut shaper = ProducerShaper::new();
             assert!(matches!(
                 shaper.admit(0).expect("warm-up admission"),
@@ -424,11 +519,32 @@ mod tests {
                 other => panic!("depleted bucket must delay measured work: {other:?}"),
             };
             eprintln!(
-                "reference_measurement record_bytes={} cap={max_iter} working_digits={working_digits} first_orbit_us={compute_us} payload_bytes={payload_bytes} pack_mean_ns={pack_mean_ns} admission_price_us={} depleted_wait_us={wait_us}",
-                size_of::<ReferenceOrbitRecord>(),
+                "reference_measurement arm={} record_bytes={} cap={max_iter} working_digits={working_digits} first_orbit_us={compute_us} payload_bytes={payload_bytes} pack_mean_ns={pack_mean_ns} admission_price_us={} depleted_wait_us={wait_us}",
+                arm.label(),
+                arm.record_bytes(),
                 shaper.admission_price_us(),
             );
         }
+    }
+
+    #[test]
+    #[ignore = "native reference performance measurement; run explicitly on the worker pod"]
+    #[allow(
+        clippy::print_stderr,
+        reason = "this is the explicit performance report"
+    )]
+    fn measures_first_orbit_transfer_and_admission_at_worker_caps() {
+        run_reference_measurement(MeasurementArm::SingleOrbit8ByteCurrent);
+    }
+
+    #[test]
+    #[ignore = "paired-orbit/16-byte-record baseline; run explicitly on the worker pod"]
+    #[allow(
+        clippy::print_stderr,
+        reason = "this is the explicit performance baseline report"
+    )]
+    fn measures_paired_orbit_16_byte_baseline_at_worker_caps() {
+        run_reference_measurement(MeasurementArm::PairedOrbit16ByteBaseline);
     }
 
     #[test]
