@@ -348,6 +348,19 @@ fn pose_maps_close(
     }
 }
 
+/// The extent the stamped screen map is built at.
+///
+/// The ladder renders every level below Final at a fraction of the requested extent, and a screen
+/// map's perspective row scales with the grid width, so the same requested view has a different
+/// map at each level. Stamping the map at the level currently prepared therefore makes the
+/// ladder's own progress read as a control change, and the schedule restarts at Preview forever.
+/// The requested extent keeps the stamp a property of the requested view alone, which is what
+/// staleness asks about.
+#[cfg(any(target_arch = "wasm32", test))]
+const fn stamped_extent(plan: &RefinementPlan) -> [u32; 2] {
+    [plan.requested_extent.width, plan.requested_extent.height]
+}
+
 #[cfg(any(target_arch = "wasm32", test))]
 fn view_projection_changed(
     first: ember_julibrot_math::ViewControls,
@@ -1471,7 +1484,7 @@ mod browser {
                 zoom_log2: requested.zoom_log2,
                 object_angles: requested.object_angles,
                 map: viewer
-                    .screen_map(self.prepared_extent())
+                    .screen_map(super::stamped_extent(&self.plan))
                     .unwrap_or(PoseMap::EdgeOn),
                 precision_mode: self.main.precision_mode,
             }
@@ -2139,7 +2152,7 @@ mod tests {
         FenceRefusal, FrameLoop, LEVELS, PresenterPoll, RefinementLevel, RefinementSchedule,
         RefusalClass, SceneMode, SubmissionKind, apply_precision_mode, arrival_is_current,
         expand_reference_texels, fence_error, horizon_facts, main_for_grid,
-        published_iteration_cap, schedule_exposure_fill, view_projection_changed,
+        published_iteration_cap, schedule_exposure_fill, stamped_extent, view_projection_changed,
     };
     use crate::{FramePolicy, LevelTimingLedger, ViewerController};
     use ember_julibrot_present::{SampleClass, SubmissionMeasurement};
@@ -2179,6 +2192,73 @@ mod tests {
             after,
             map(after)
         ));
+    }
+
+    #[test]
+    fn the_stamped_map_extent_does_not_follow_the_refinement_ladder() {
+        let plan = plan_refinement(
+            GridExtent {
+                width: 960,
+                height: 540,
+            },
+            EscapeParams::new(512),
+            |_| true,
+        )
+        .expect("the ladder fixture has enough capacity")
+        .with_precision_mode(PrecisionMode::PictureFast);
+
+        // A near-edge-on Mandelbrot object rotation: well outside the canonical flat pair, so the
+        // map is solved at every extent instead of collapsing to the identity.
+        let object = ObjectAngles {
+            rho_13: 1.5,
+            ..ObjectAngles::IDENTITY
+        };
+        let view = ViewControls::MANDELBROT_FLAT;
+        let map = |extent: [u32; 2]| {
+            let [width, height] = extent;
+            PoseMap::Mapped(
+                screen_to_plane(
+                    &object,
+                    &view,
+                    0.0,
+                    width,
+                    height,
+                    f64::from(width) / f64::from(height),
+                )
+                .expect("the tilted fixture map is invertible"),
+            )
+        };
+
+        // The ladder's own levels disagree about the map for one unchanged requested view, so a
+        // stamp taken at the prepared level reads stale the moment the ladder advances.
+        let preview = plan.level(RefinementLevel::Preview).extent;
+        let last = plan.level(RefinementLevel::Final).extent;
+        assert_ne!([preview.width, preview.height], [last.width, last.height]);
+        assert!(view_projection_changed(
+            view,
+            map([preview.width, preview.height]),
+            view,
+            map([last.width, last.height])
+        ));
+
+        // The stamp is taken at the requested extent, which every level of the plan shares, so an
+        // unchanged requested view stays equivalent to itself across the whole ladder.
+        assert_eq!(stamped_extent(&plan), [960, 540]);
+        assert!(!view_projection_changed(
+            view,
+            map(stamped_extent(&plan)),
+            view,
+            map(stamped_extent(&plan))
+        ));
+        // Nothing the ladder prepares can move it: only Final renders at the stamped extent.
+        for level in LEVELS {
+            let extent = plan.level(level).extent;
+            assert_eq!(
+                [extent.width, extent.height] == stamped_extent(&plan),
+                level == RefinementLevel::Final,
+                "level {level:?}"
+            );
+        }
     }
 
     #[test]

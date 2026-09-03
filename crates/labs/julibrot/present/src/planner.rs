@@ -13,6 +13,16 @@ const MAX_CHART_RESIDUAL_PX: f64 = 0.5;
 /// Maximum measured reprojection error a displayed warp may move a feature.
 pub const WARP_MAX_ERROR_PX: f64 = 1.0;
 
+/// Half a retained texel, the reach of the retained image beyond its outermost sample centre.
+///
+/// The retained scene's outermost samples sit exactly on the half-extent and own the half pixel
+/// past it, so a destination landing inside that footprint is still covered. The tolerance is not
+/// cosmetic: a pose reprojected onto itself composes to the identity only as closely as the f32
+/// plane basis it was built from allows, which at a tilted pose puts the frame's own border some
+/// tens of microns of a pixel outside itself. Without the footprint that reads as a disocclusion,
+/// and the exposure it latches restarts the refinement ladder for as long as the pose is held.
+const RETAINED_TEXEL_REACH_PX: f64 = 0.5;
+
 /// Pure CPU reprojection planner.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Warp;
@@ -141,8 +151,8 @@ fn anchor_plan(
 }
 
 fn warp_exposes_source(inverse_sampling: [f64; 9], from: &Pose, to: &Pose) -> bool {
-    let half_width = f64::from(from.grid_width) * 0.5;
-    let half_height = f64::from(from.grid_height) * 0.5;
+    let half_width = f64::from(from.grid_width).mul_add(0.5, RETAINED_TEXEL_REACH_PX);
+    let half_height = f64::from(from.grid_height).mul_add(0.5, RETAINED_TEXEL_REACH_PX);
     (0..SCREEN_STEPS)
         .flat_map(|row| (0..SCREEN_STEPS).map(move |column| (row, column)))
         .any(|(row, column)| {
@@ -179,6 +189,29 @@ const fn homogeneous(matrix: [f64; 9], point: [f64; 2]) -> [f64; 3] {
     ]
 }
 
+/// Whether one screen point lies in front of that pose's screen-map horizon.
+///
+/// Beyond the horizon the scene pass shows the exterior sky, so the point carries no reprojection
+/// error to measure. This is not the perspective pole further down the projection chain: a pole on
+/// the sampled relief surface is unbounded and still refuses the plan.
+fn in_front_of_horizon(pose: &Pose, screen: [f64; 2]) -> bool {
+    let PoseMap::Mapped(map) = pose.map else {
+        return false;
+    };
+    let weight = homogeneous(map.rows, screen)[2];
+    weight.is_finite() && weight > 0.0
+}
+
+/// Measures the displayed sampling against the full forward chain over the screen-and-relief
+/// lattice.
+///
+/// A sample beyond either pose's horizon is skipped rather than refusing the whole corpus: the
+/// exterior sky is what the scene pass leaves there and the warp pass carries it across, so there
+/// is no reprojection error to measure. Refusing instead cleared the surface of every pose whose
+/// horizon crossed the frame, a settled pose warping onto itself included. Everything else that
+/// cannot be projected — a perspective pole on the sampled surface — still refuses, as does a
+/// non-finite error, which is broken arithmetic rather than geometry. `None` means the corpus
+/// could not be measured at all.
 fn sampled_errors(from_pose: &Pose, to_pose: &Pose, approximate: [f64; 9]) -> Option<Vec<f64>> {
     let screen_sample_count = usize::try_from(SCREEN_STEPS).ok()?;
     let sample_count = screen_sample_count * screen_sample_count * HEIGHT_SAMPLES.len();
@@ -193,6 +226,11 @@ fn sampled_errors(from_pose: &Pose, to_pose: &Pose, approximate: [f64; 9]) -> Op
                     * f64::from(to_pose.grid_height),
             ];
             let source_screen = apply_homography(approximate, target_screen)?;
+            if !in_front_of_horizon(to_pose, target_screen)
+                || !in_front_of_horizon(from_pose, source_screen)
+            {
+                continue;
+            }
             for height in HEIGHT_SAMPLES {
                 let destination_relief = project_scene_point(to_pose, target_screen, height)?;
                 let expected_source = project_scene_point(from_pose, source_screen, height)?;
@@ -670,12 +708,89 @@ mod tests {
         let PoseMap::Mapped(to_map) = to.map else {
             panic!("fixture must be mapped");
         };
-        let weights = screen_corners(&from).map(|corner| homogeneous(to_map.inverse, corner)[2]);
-        assert!(weights.iter().any(|weight| *weight < 0.0));
+        let weights = screen_corners(&from).map(|corner| homogeneous(to_map.rows, corner)[2]);
+        assert!(weights.iter().any(|weight| *weight <= 0.0));
         assert!(weights.iter().any(|weight| *weight > 0.0));
+        // A corner beyond the horizon stays a homogeneous anchor. The plan is solved through it
+        // and judged on the lattice in front of the horizon, because beyond it there is nothing to
+        // reproject: the scene pass leaves the exterior sky and the warp pass carries it across.
+        // Clearing the picture instead would leave every pose whose horizon crosses the frame
+        // permanently unpainted.
         let plan = reproject(&frame(&from), &from, &to);
-        assert_eq!(plan.kind, WarpKind::ClearOnly);
-        assert!(!plan.source_valid);
+        assert_eq!(plan.kind, WarpKind::AnchorHomography);
+        assert!(plan.source_valid);
+        assert!(
+            plan.approx_max_error_px
+                .is_some_and(|error| error <= WARP_MAX_ERROR_PX)
+        );
+        let measured = sampled_errors(&from, &to, unpack_rows(plan.rows))
+            .expect("the corpus measures what lies in front of the horizon");
+        assert_ne!(measured.len(), 0);
+    }
+
+    #[test]
+    fn a_settled_near_edge_on_pose_shows_its_scene_instead_of_the_clear_colour() {
+        // The near-edge-on Mandelbrot object rotation the browser proof settles on. A third of
+        // this frame is beyond the map's horizon, and the pose is still an ordinary mapped one,
+        // not the refused edge-on state.
+        let object = ObjectAngles {
+            rho_13: 1.5,
+            ..ObjectAngles::IDENTITY
+        };
+        let plane = construct_plane(object).expect("the tilted fixture plane is orthonormal");
+        let mut settled = object_pose(object, plane, ViewControls::MANDELBROT_FLAT, [0.0; 2]);
+        set_extent(&mut settled, [960, 540]);
+        let PoseMap::Mapped(settled_map) = settled.map else {
+            panic!("fixture must be mapped");
+        };
+        let weights: Vec<f64> = (0..SCREEN_STEPS)
+            .flat_map(|row| (0..SCREEN_STEPS).map(move |column| (row, column)))
+            .map(|(row, column)| {
+                let screen = [
+                    (f64::from(column) / f64::from(SCREEN_STEPS - 1) - 0.5)
+                        * f64::from(settled.grid_width),
+                    (f64::from(row) / f64::from(SCREEN_STEPS - 1) - 0.5)
+                        * f64::from(settled.grid_height),
+                ];
+                homogeneous(settled_map.rows, screen)[2]
+            })
+            .collect();
+        assert!(weights.iter().any(|weight| *weight <= 0.0));
+        assert!(weights.iter().any(|weight| *weight > 0.0));
+
+        // A ladder that has settled reprojects the retained scene onto its own pose. That plan is
+        // the exact identity, so the completed scene is what the surface shows: every pixel is
+        // mesh or sky, none of it the clear colour, and no exposure is latched.
+        let plan = reproject(&frame(&settled), &settled, &settled);
+        assert_eq!(plan.kind, WarpKind::AnchorHomography);
+        assert!(plan.source_valid);
+        assert!(!plan.exposed);
+        assert!(plan.approx_max_error_px.is_some_and(|error| error < 1.0e-9));
+
+        // The measured corpus is thinned by the horizon rather than abandoned at it: samples do
+        // survive, and the plan is judged on them.
+        let steps = usize::try_from(SCREEN_STEPS).expect("the step count fits a machine word");
+        let whole_lattice = steps * steps * HEIGHT_SAMPLES.len();
+        let measured = sampled_errors(&settled, &settled, unpack_rows(plan.rows))
+            .expect("the settled corpus measures the samples the horizon leaves");
+        assert_ne!(measured.len(), 0);
+        assert!(measured.len() < whole_lattice);
+
+        // The retained texel's reach is load-bearing here: this pose composed onto itself is the
+        // identity only as closely as its f32 plane basis allows, so the frame's own border lands
+        // a fraction of a pixel outside the retained image. Measured without that reach it reads
+        // as a disocclusion, and the exposure it latches restarts the ladder for as long as the
+        // pose is held.
+        let flat = warp_matrix(&settled, &settled).expect("a pose composes onto itself");
+        let drift = screen_corners(&settled)
+            .into_iter()
+            .filter_map(|corner| {
+                apply_homography(flat.forward, corner)
+                    .map(|moved| (moved[0] - corner[0]).hypot(moved[1] - corner[1]))
+            })
+            .fold(0.0_f64, f64::max);
+        assert!(drift > 0.0);
+        assert!(drift < RETAINED_TEXEL_REACH_PX);
     }
 
     #[test]
