@@ -747,6 +747,7 @@ mod browser {
                         plane: hot.plane,
                         view: viewer.requested().view,
                     },
+                    WarpValidation::Ordinary,
                 );
             }
             let scene_id = if main_arrived {
