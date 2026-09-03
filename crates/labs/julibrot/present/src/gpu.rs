@@ -1891,9 +1891,13 @@ mod tests {
         let load = scene_load_color(crate::CLASSIC_PALETTE);
         let sky = crate::exterior_zero(crate::CLASSIC_PALETTE);
         assert_eq!([load.r, load.g, load.b, load.a], sky.map(f64::from));
+    }
 
+    #[test]
+    fn relief_redraw_disocclusion_is_clear_and_distinct_from_exterior() {
         let disocclusion = warp_load_color(crate::CLASSIC_PALETTE);
         let clear = crate::CLASSIC_PALETTE.clear_rgba.map(f64::from);
+        let exterior = crate::exterior_zero(crate::CLASSIC_PALETTE).map(f64::from);
         assert_eq!(
             [
                 disocclusion.r,
@@ -1903,7 +1907,7 @@ mod tests {
             ],
             clear
         );
-        assert_ne!(clear, sky.map(f64::from));
+        assert_ne!(clear, exterior);
     }
 
     #[test]
