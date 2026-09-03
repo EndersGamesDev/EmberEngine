@@ -66,9 +66,9 @@ pub const fn next_refinement_level(
     completed: RefinementLevel,
 ) -> Option<RefinementLevel> {
     match (precision_mode, completed) {
-        (PrecisionMode::PictureFast, RefinementLevel::Preview) => Some(RefinementLevel::Final),
+        (PrecisionMode::PictureFast, RefinementLevel::Preview)
+        | (_, RefinementLevel::Interactive) => Some(RefinementLevel::Final),
         (_, RefinementLevel::Preview) => Some(RefinementLevel::Interactive),
-        (_, RefinementLevel::Interactive) => Some(RefinementLevel::Final),
         (_, RefinementLevel::Final) => None,
     }
 }
