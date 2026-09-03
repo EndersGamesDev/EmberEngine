@@ -42,8 +42,10 @@ fn expand_reference_texels(records: &[u8], length: u32) -> Result<Vec<u8>, AppEr
         .ok_or_else(|| AppError::Worker("reference texel byte length overflow".to_string()))?;
     let mut texels = vec![0_u8; texel_bytes];
     for (record, texel) in records
-        .chunks_exact(REFERENCE_RECORD_BYTES)
-        .zip(texels.chunks_exact_mut(REFERENCE_TEXEL_BYTES))
+        .as_chunks::<REFERENCE_RECORD_BYTES>()
+        .0
+        .iter()
+        .zip(texels.as_chunks_mut::<REFERENCE_TEXEL_BYTES>().0)
     {
         texel[..REFERENCE_RECORD_BYTES].copy_from_slice(record);
     }
