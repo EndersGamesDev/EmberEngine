@@ -203,3 +203,4 @@ Presenter and input work is planned in `docs/presenter-architecture.md` and `doc
 - Julibrot worker: the wasm transfer bridge duplicates the codec's request layout; every layout change must land in both — now pinned by a native byte-identity test.
 - The overlay shows `wasm_bundle_bytes` and `javascript_bundle_bytes` only until the first refresh: boot renders them, then every `refreshFacts` replaces the object with the app snapshot, whose own fields are null. Carry them beside the page-owned facts so the byte counts stay on screen. (Observed on the jb-layout deploy; pre-dates the lane.)
 - Julibrot present: visible replay must confirm that over-budget relief motion shows temporary clear without feature movement and that the following completed scene fills the whole render surface over the exterior sky.
+- Julibrot deployment: define the loader cache-bust policy for a real deployment when the ABI changes.
