@@ -384,9 +384,8 @@ mod tests {
     fn nonzero_z_zero_rebase_uses_the_correct_delta() {
         for mode in ember_julibrot_math::PrecisionMode::ALL {
             let one = ReferenceOrbitRecord { re_hi: 1.0, ..ZERO };
-            let sample =
-                perturb_scaled_offset(&uniform(2, 2), &[one, one], [-0.75, 0.0, 0.0, 0.0])
-                    .expect("reference length matches");
+            let sample = perturb_scaled_offset(&uniform(2, 2), &[one, one], [-0.75, 0.0, 0.0, 0.0])
+                .expect("reference length matches");
             assert!(sample.record.rebase_count >= 0.0);
             if mode.requires_bit_identity() {
                 // Deterministic-only contract: the CPU mirror rebases on the identical iteration.

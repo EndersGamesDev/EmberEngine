@@ -656,8 +656,8 @@ mod browser {
             self.install_main();
             let slot = HotSlot::for_refresh(self.refresh_id, self.hot_stride, hot.state.epoch)
                 .map_err(|error| AppError::Present(error.to_string()))?;
-            let measure_validation = requests.measurement
-                && self.presenter.facts().completed_scene_id.is_some();
+            let measure_validation =
+                requests.measurement && self.presenter.facts().completed_scene_id.is_some();
             let validation = if measure_validation {
                 requests.measurement = false;
                 WarpValidation::Measure

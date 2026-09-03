@@ -183,14 +183,11 @@ impl Presenter {
         if selection_replaced {
             self.ledger.mark_replaced();
         }
-        if self
-            .ledger
-            .invalidate_incompatible(
-                main.state.delivered_iter_cap,
-                main.state.plane_origin_f64,
-                precision_mode_name,
-            )
-            || incompatible
+        if self.ledger.invalidate_incompatible(
+            main.state.delivered_iter_cap,
+            main.state.plane_origin_f64,
+            precision_mode_name,
+        ) || incompatible
             || precision_mode.is_none()
         {
             self.facts.status = PresentStatus::ClearForIncompatibleMain;

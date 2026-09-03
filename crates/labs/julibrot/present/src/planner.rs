@@ -43,12 +43,9 @@ impl Warp {
             return clear_only();
         };
         if validation.samples_corpus(precision_mode) {
-            let Some((maximum, percentile)) = sampled_error_summary(
-                from_pose,
-                to_pose,
-                flat.forward,
-                approximate,
-            ) else {
+            let Some((maximum, percentile)) =
+                sampled_error_summary(from_pose, to_pose, flat.forward, approximate)
+            else {
                 return clear_only();
             };
             plan.approx_max_error_px = Some(maximum);

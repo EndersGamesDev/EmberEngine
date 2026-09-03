@@ -370,10 +370,6 @@ mod tests {
 
         begin(&mut ledger, 3, 3);
         ledger.complete(measurement(3));
-        assert!(ledger.invalidate_incompatible(
-            64,
-            ORIGIN,
-            PrecisionMode::PictureFast.as_str()
-        ));
+        assert!(ledger.invalidate_incompatible(64, ORIGIN, PrecisionMode::PictureFast.as_str()));
     }
 }

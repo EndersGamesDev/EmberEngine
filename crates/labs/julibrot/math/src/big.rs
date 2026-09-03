@@ -565,7 +565,10 @@ mod tests {
                     zero.precision_bits(),
                     narrow.precision_bits(),
                 ] {
-                    assert!(actual >= requested, "requested {requested}, delivered {actual}");
+                    assert!(
+                        actual >= requested,
+                        "requested {requested}, delivered {actual}"
+                    );
                     if mode.requires_bit_identity() {
                         // Deterministic-only contract: every astro-float word size is identical.
                         assert_eq!(actual, delivered, "requested {requested}");

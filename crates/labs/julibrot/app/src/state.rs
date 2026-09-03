@@ -1057,25 +1057,37 @@ mod tests {
         let second = viewer.drain_main().expect("main drain");
         assert!(second.epoch > first.state.epoch);
         assert_eq!(viewer.requested().iteration_cap, 2_048);
-        assert_eq!(viewer.requested().precision_mode, PrecisionMode::PictureFast);
+        assert_eq!(
+            viewer.requested().precision_mode,
+            PrecisionMode::PictureFast
+        );
         assert_eq!(viewer.requested().palette, PaletteId::Ice);
         assert_eq!(viewer.requested().view, relief);
         assert_eq!(second.main.requested_iter_cap, 2_048);
-        assert_eq!(second.main.precision_mode, PrecisionMode::PictureFast as u32);
+        assert_eq!(
+            second.main.precision_mode,
+            PrecisionMode::PictureFast as u32
+        );
         assert_eq!(second.main.palette_id, PaletteId::Ice as u32);
     }
 
     #[test]
     fn precision_mode_defaults_fast_and_changes_main_generation() {
         let mut viewer = ViewerController::new(800).expect("canonical viewer");
-        assert_eq!(viewer.requested().precision_mode, PrecisionMode::PictureFast);
+        assert_eq!(
+            viewer.requested().precision_mode,
+            PrecisionMode::PictureFast
+        );
         let before = viewer.drain_hot([800, 600]).expect("initial frame");
         viewer
             .set_precision_mode(PrecisionMode::Deterministic)
             .expect("mode change");
         let after = viewer.drain_main().expect("mode main");
         assert!(after.main.centre_revision > before.state.main.centre_revision);
-        assert_eq!(after.main.precision_mode, PrecisionMode::Deterministic as u32);
+        assert_eq!(
+            after.main.precision_mode,
+            PrecisionMode::Deterministic as u32
+        );
         let submission = viewer
             .take_reference_submission()
             .expect("mode change requests a reference");

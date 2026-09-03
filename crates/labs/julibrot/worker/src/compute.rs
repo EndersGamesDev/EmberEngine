@@ -252,9 +252,7 @@ pub const fn math_error(error: &MathError) -> ChannelError {
 mod tests {
     use std::cell::Cell;
 
-    use ember_julibrot_math::{
-        BigCentre, EscapeParams, PrecisionMode, perturb_scaled_f64,
-    };
+    use ember_julibrot_math::{BigCentre, EscapeParams, PrecisionMode, perturb_scaled_f64};
 
     use super::{
         MathFailureCode, MonotonicClock, ORBIT_CHUNK_MAX_ITERATIONS, OrbitTaskPoll,

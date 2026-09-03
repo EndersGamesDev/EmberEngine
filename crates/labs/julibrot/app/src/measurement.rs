@@ -168,10 +168,7 @@ impl SampleSummary {
     /// # Errors
     ///
     /// Returns a typed refusal unless all 15 observations are finite and nonnegative.
-    pub fn new(
-        precision_mode: &'static str,
-        samples: &[f64],
-    ) -> Result<Self, MeasurementError> {
+    pub fn new(precision_mode: &'static str, samples: &[f64]) -> Result<Self, MeasurementError> {
         if samples.len() != ADAPTIVE_SAMPLES
             || !samples
                 .iter()

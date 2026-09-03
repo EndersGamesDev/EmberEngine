@@ -420,8 +420,15 @@ fn page_facts_carry_every_contract_field_without_fake_aggregate_counts() {
     assert!(MAIN.contains("javascript_bundle_bytes"));
     assert!(MAIN.contains("wasm_instance_count = 2"));
     assert!(FACTS.contains("precision_mode: requested.precision_mode.as_str()"));
-    assert!(FACTS.contains("scene_precision_mode: present.last_scene.map(|sample| sample.precision_mode)"));
-    assert!(FACTS.contains("warp_precision_mode: present.last_warp.map(|sample| sample.precision_mode)"));
+    assert!(
+        FACTS.contains(
+            "scene_precision_mode: present.last_scene.map(|sample| sample.precision_mode)"
+        )
+    );
+    assert!(
+        FACTS
+            .contains("warp_precision_mode: present.last_warp.map(|sample| sample.precision_mode)")
+    );
     assert!(FRAME.contains("precision_mode: self.main.precision_mode"));
 }
 
