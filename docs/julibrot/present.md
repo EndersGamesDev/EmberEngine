@@ -144,7 +144,11 @@ The implementation solves the eight projective coefficients of the current-NDC-t
 
 Every plan, including ordinary PictureFast, carries a measured maximum error and p95 from the same full 9-by-9-by-5 corpus. A sample with no finite destination, retained projection, or warp image makes the plan unbounded and therefore `ClearOnly`; honest texture-edge disocclusion remains the separately flagged temporary clear region that the next scene fills. The uploaded f32 rows retain their separate quarter-source-pixel accuracy oracle.
 
+The `h=0` slice of this admission corpus is structurally zero because the height-zero projection short-circuit returns each screen point directly; even a corrupted sampling matrix can therefore publish `approx_max_error_px=0.0` when `height_scale=0`. Flat exactness rests on the `warp_matrix` algebra and its full-forward-chain tests plus the unconditional quarter-source-pixel uploaded-row oracle, not on the corpus.
+
 The named acceptance ceiling is `WARP_MAX_ERROR_PX=1.0`: a resolving scene may fill missing detail but no displayed reprojection may move a feature by more than one pixel. A plan above the ceiling is refused and temporarily clear until the due scene completes.
+
+At 1920 by 1080 with `height_scale=1`, measured admission thresholds mean most camera planes clear beyond roughly `0.001` to `0.02` radians; yaw/pitch reaches the ceiling near `0.0033`, height near `0.0027`, and `d₅` motion near `0.018`, while `q₁₄` near `0.067` and `q₂₄` near `0.091` tolerate a few degrees. Relief navigation is therefore clear-then-fill except for sub-degree nudges; the owner-facing levers are a higher `WARP_MAX_ERROR_PX` or a relief-aware non-homography warp.
 
 The measured 1920-by-1080 ambient relief sweep reaches `46.94` pixels over the full envelope and `31.59` pixels for rotation with pan. These numbers describe what relief reprojection can reach, not what is accepted: they explain why relief warps outside small motions are refused under the one-pixel ceiling.
 

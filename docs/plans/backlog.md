@@ -204,3 +204,7 @@ Presenter and input work is planned in `docs/presenter-architecture.md` and `doc
 - The overlay shows `wasm_bundle_bytes` and `javascript_bundle_bytes` only until the first refresh: boot renders them, then every `refreshFacts` replaces the object with the app snapshot, whose own fields are null. Carry them beside the page-owned facts so the byte counts stay on screen. (Observed on the jb-layout deploy; pre-dates the lane.)
 - Julibrot present: visible replay must confirm that over-budget relief motion shows temporary clear without feature movement and that the following completed scene fills the whole render surface over the exterior sky.
 - Julibrot deployment: define the loader cache-bust policy for a real deployment when the ABI changes.
+- Julibrot relief reprojection: decide whether to raise `WARP_MAX_ERROR_PX` above one pixel or build a relief-aware non-homography warp; the current ceiling deliberately makes most height-one camera navigation clear-then-fill beyond sub-degree nudges.
+- Julibrot present: extend `uploaded_inverse_rows_stay_within_quarter_pixel` to rotated and translated height-zero poses, because the height-zero admission-corpus slice is structurally zero.
+- Julibrot present: pin the scene-pass `LoadOp::Clear(scene_load_color(selected))` call site directly; the CPU coverage loop's per-pixel background assertions are pixel-independent.
+- Julibrot present: remove `WarpValidation` and `PrecisionMode` from `Warp::reproject` or make them affect planning again; both arguments are currently decorative API surface.
