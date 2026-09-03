@@ -448,7 +448,10 @@ fn render_deterministic(
     })
 }
 
-#[allow(clippy::cast_possible_truncation)]
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the corpus deliberately constructs the binary32 reference path"
+)]
 fn reference_orbit(centre: [f64; 4], cap: u32) -> Vec<ReferenceOrbitRecord> {
     let [mut z_re, mut z_im, c_re, c_im] = centre.map(|value| value as f32);
     let capacity = usize::try_from(cap).expect("fixture cap fits usize");
