@@ -1,5 +1,7 @@
 //! Requested controls and worker-owned HOT/MAIN publication integration.
 
+use std::cell::Cell;
+
 use ember_julibrot_math::{
     Axis4, BigCentre, Homography, MathError, NavigationDelta, ObjectAngles, Plane, PlaneAngles,
     Pose, PoseMap, PrecisionMode, SEED_AXES, ViewControls, construct_plane, navigation_delta,
@@ -319,6 +321,16 @@ pub struct HotFrame {
     pub pose: Pose,
 }
 
+/// One checked neutral-height map and every input that determines it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CheckedScreenMap {
+    object: ObjectAngles,
+    view: ViewControls,
+    zoom_log2: f64,
+    extent: [u32; 2],
+    map: PoseMap,
+}
+
 /// One worker-owned centre snapshot paired with the app's accumulated request reason.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReferenceSubmission {
@@ -334,8 +346,11 @@ pub struct ViewerController {
     owner: ViewerOwner,
     requested: RequestedControls,
     checked_plane: Plane,
+    checked_screen_map: Cell<Option<CheckedScreenMap>>,
     #[cfg(test)]
     plane_constructions: u64,
+    #[cfg(test)]
+    map_constructions: Cell<u64>,
     navigation_centre_f64: [f64; 4],
     staged_hot: HotState,
     staged_main: MainState,
@@ -413,8 +428,11 @@ impl ViewerController {
             owner,
             requested,
             checked_plane: plane,
+            checked_screen_map: Cell::new(None),
             #[cfg(test)]
             plane_constructions: 1,
+            #[cfg(test)]
+            map_constructions: Cell::new(0),
             navigation_centre_f64: origin,
             staged_hot: initial.hot,
             staged_main: initial.main,
@@ -991,13 +1009,34 @@ impl ViewerController {
     /// # Errors
     ///
     /// Returns a typed math refusal for an invalid extent or degenerate accepted view.
+    #[allow(
+        clippy::float_cmp,
+        reason = "finite control values and the extent form an exact checked-map cache key"
+    )]
     pub fn screen_map(&self, grid_extent: [u32; 2]) -> Result<PoseMap, AppError> {
-        map_for(
-            self.requested.object_angles,
-            self.requested.view,
-            self.requested.zoom_log2,
-            grid_extent,
-        )
+        let object = self.requested.object_angles;
+        let view = self.requested.view;
+        let zoom_log2 = self.requested.zoom_log2;
+        if let Some(cached) = self.checked_screen_map.get()
+            && cached.object == object
+            && cached.view == view
+            && cached.zoom_log2 == zoom_log2
+            && cached.extent == grid_extent
+        {
+            return Ok(cached.map);
+        }
+        let map = map_for(object, view, zoom_log2, grid_extent)?;
+        self.checked_screen_map.set(Some(CheckedScreenMap {
+            object,
+            view,
+            zoom_log2,
+            extent: grid_extent,
+            map,
+        }));
+        #[cfg(test)]
+        self.map_constructions
+            .set(self.map_constructions.get().saturating_add(1));
+        Ok(map)
     }
 
     fn mapped_screen_map(&self, grid_extent: [u32; 2]) -> Result<Homography, AppError> {
@@ -1439,6 +1478,62 @@ mod tests {
         viewer.set_object_angles(angles).expect("unchanged angles");
         viewer.drain_hot([960, 540]).expect("unchanged refresh");
         assert_eq!(viewer.plane_constructions, 2);
+    }
+
+    #[test]
+    fn viewer_refresh_reuses_the_checked_map_until_one_key_field_changes() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        assert_eq!(viewer.map_constructions.get(), 0);
+
+        for _ in 0..120 {
+            let frame = viewer.drain_hot(REFERENCE_GRID).expect("unchanged refresh");
+            assert_eq!(
+                viewer.screen_map(REFERENCE_GRID).expect("refresh stamp"),
+                frame.pose.map
+            );
+        }
+        assert_eq!(
+            viewer.map_constructions.get(),
+            1,
+            "120 HOT maps and 120 refresh stamps share one checked construction"
+        );
+
+        let mut view = viewer.requested().view;
+        view.camera_yaw = 0.25;
+        viewer.set_view_controls(view).expect("changed VIEW controls");
+        viewer.drain_hot(REFERENCE_GRID).expect("changed VIEW map");
+        assert_eq!(viewer.map_constructions.get(), 2);
+
+        viewer
+            .wheel_zoom(1.0, [0.0; 2])
+            .expect("changed zoom map");
+        viewer.drain_hot(REFERENCE_GRID).expect("changed zoom frame");
+        assert_eq!(viewer.map_constructions.get(), 3);
+
+        let mut object = viewer.requested().object_angles;
+        object.rho_13 = 0.125;
+        viewer.set_object_angles(object).expect("changed object");
+        viewer.drain_hot(REFERENCE_GRID).expect("changed object map");
+        assert_eq!(viewer.map_constructions.get(), 4);
+
+        viewer.drain_hot([800, 600]).expect("changed extent map");
+        assert_eq!(viewer.map_constructions.get(), 5);
+    }
+
+    #[test]
+    #[ignore = "measurement harness"]
+    fn measures_viewer_refresh_map_constructions_before_after() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        for _ in 0..120 {
+            viewer.drain_hot(REFERENCE_GRID).expect("unchanged HOT map");
+            viewer.screen_map(REFERENCE_GRID).expect("unchanged stamp map");
+        }
+        let before_constructions = 240;
+        let after_constructions = viewer.map_constructions.get();
+        assert_eq!(after_constructions, 1);
+        eprintln!(
+            "PF-L5 viewer_refreshes=120 before_constructions={before_constructions} after_constructions={after_constructions}"
+        );
     }
 
     #[test]
