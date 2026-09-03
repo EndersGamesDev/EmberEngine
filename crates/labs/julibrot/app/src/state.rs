@@ -836,6 +836,7 @@ fn owner_error(error: ember_julibrot_worker::OwnerError) -> AppError {
 mod tests {
     use ember_julibrot_math::{PlaneAngles, PrecisionMode, ViewControls};
     use ember_julibrot_present::PaletteId;
+    use ember_julibrot_worker::OrbitReason;
 
     use super::{
         BOX_CLICK_THRESHOLD_PX, NavigationEdit, PRESET_ROWS, SCALE_RANGE_LOG2, ViewerController,
