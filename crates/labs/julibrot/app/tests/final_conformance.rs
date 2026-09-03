@@ -61,6 +61,16 @@ struct Rendered {
     envelope: Option<PerturbationEnvelope>,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct DeepFixture<'a> {
+    name: &'static str,
+    orbit: &'a [ReferenceOrbitRecord],
+    offset: [f32; 4],
+    exponent: i32,
+    cap: u32,
+    expected_rebases: f32,
+}
+
 #[test]
 fn final_image_corpus_meets_the_picture_contract() -> Result<(), MathError> {
     let (highest_zoom, highest_plan) = highest_admitted_plan()?;
@@ -116,7 +126,11 @@ fn final_image_corpus_meets_the_picture_contract() -> Result<(), MathError> {
 }
 
 #[test]
-fn forced_rescale_rebase_and_boundary_fixtures_remain_explicit() -> Result<(), MathError> {
+#[allow(
+    clippy::too_many_lines,
+    reason = "keeping the five deep fixtures beside both inherited boundary laws makes omissions visible"
+)]
+fn forced_rescale_rebase_and_boundary_fixtures_remain_explicit() {
     assert_eq!(KernelMode::for_zoom(13.999), KernelMode::Shallow);
     assert_eq!(KernelMode::for_zoom(14.0), KernelMode::Perturbation);
     let exact_bailout = shallow_bailout_boundary(PrecisionMode::Deterministic);
@@ -145,51 +159,75 @@ fn forced_rescale_rebase_and_boundary_fixtures_remain_explicit() -> Result<(), M
         ..ZERO_RECORD
     }; 4];
     let zero_orbit = [ZERO_RECORD; 2];
-    let cases: &[(&str, &[ReferenceOrbitRecord], [f32; 4], i32, u32, f32)] = &[
-        (
-            "upward",
-            &zero_orbit,
-            [2.0_f32.powi(80), 0.0, 0.0, 0.0],
-            -80,
-            2,
-            0.0,
-        ),
-        (
-            "downward",
-            &zero_orbit,
-            [2.0_f32.powi(-80), 0.0, 0.0, 0.0],
-            80,
-            2,
-            0.0,
-        ),
-        ("zero-rebase", &escaped_orbit, [0.0; 4], -900, 4, 0.0),
-        (
-            "nonzero-rebase",
-            &one_orbit[..2],
-            [-0.75, 0.0, 0.0, 0.0],
-            0,
-            2,
-            1.0,
-        ),
-        (
-            "repeated-rebase",
-            &one_orbit,
-            [-0.75, 0.0, 0.0, 0.0],
-            0,
-            4,
-            3.0,
-        ),
+    let cases = [
+        DeepFixture {
+            name: "upward",
+            orbit: &zero_orbit,
+            offset: [2.0_f32.powi(80), 0.0, 0.0, 0.0],
+            exponent: -80,
+            cap: 2,
+            expected_rebases: 0.0,
+        },
+        DeepFixture {
+            name: "downward",
+            orbit: &zero_orbit,
+            offset: [2.0_f32.powi(-80), 0.0, 0.0, 0.0],
+            exponent: 80,
+            cap: 2,
+            expected_rebases: 0.0,
+        },
+        DeepFixture {
+            name: "zero-rebase",
+            orbit: &escaped_orbit,
+            offset: [0.0; 4],
+            exponent: -900,
+            cap: 4,
+            expected_rebases: 0.0,
+        },
+        DeepFixture {
+            name: "nonzero-rebase",
+            orbit: &one_orbit[..2],
+            offset: [-0.75, 0.0, 0.0, 0.0],
+            exponent: 0,
+            cap: 2,
+            expected_rebases: 1.0,
+        },
+        DeepFixture {
+            name: "repeated-rebase",
+            orbit: &one_orbit,
+            offset: [-0.75, 0.0, 0.0, 0.0],
+            exponent: 0,
+            cap: 4,
+            expected_rebases: 3.0,
+        },
     ];
-    for &(name, orbit, offset, exponent, cap, expected_rebases) in cases {
-        let exact = render_special(PrecisionMode::Deterministic, orbit, offset, exponent, cap);
-        let fast = render_special(PrecisionMode::PictureFast, orbit, offset, exponent, cap);
-        assert_eq!(fast.sample, exact.sample, "{name}");
-        assert_eq!(exact.sample.record.rebase_count, expected_rebases, "{name}");
+    for case in cases {
+        let exact = render_special(
+            PrecisionMode::Deterministic,
+            case.orbit,
+            case.offset,
+            case.exponent,
+            case.cap,
+        );
+        let fast = render_special(
+            PrecisionMode::PictureFast,
+            case.orbit,
+            case.offset,
+            case.exponent,
+            case.cap,
+        );
+        assert_eq!(fast.sample, exact.sample, "{}", case.name);
+        assert_eq!(
+            exact.sample.record.rebase_count, case.expected_rebases,
+            "{}",
+            case.name
+        );
         let envelope = exact.envelope.expect("deep fixture carries an envelope");
         if envelope.minimum_escape_margin > envelope.escape_norm2_error {
             assert_eq!(
                 fast.sample.escape_index, exact.sample.escape_index,
-                "{name}"
+                "{}",
+                case.name
             );
         }
     }
@@ -222,7 +260,6 @@ fn forced_rescale_rebase_and_boundary_fixtures_remain_explicit() -> Result<(), M
     );
     assert_eq!(boundary.verdict, ConformanceVerdict::Boundary);
     assert!(boundary.boundary);
-    Ok(())
 }
 
 #[test]
@@ -521,7 +558,7 @@ fn assert_picture_colour(exact: KernelSample, fast: KernelSample, selected: Pale
     }
 }
 
-fn record_lanes(sample: KernelSample) -> [f32; 4] {
+const fn record_lanes(sample: KernelSample) -> [f32; 4] {
     let record = sample.record;
     [
         record.smooth_iter,
@@ -551,7 +588,7 @@ fn category_colour_deterministic(record: [f32; 4], selected: PaletteRecord) -> [
     shade_lit_escape_record(record, selected, LIGHT).rgba
 }
 
-fn clear_colour(mode: PrecisionMode, selected: PaletteRecord) -> [f32; 4] {
+const fn clear_colour(mode: PrecisionMode, selected: PaletteRecord) -> [f32; 4] {
     match mode {
         PrecisionMode::Deterministic => selected.clear_rgba,
         PrecisionMode::PictureFast => clear_colour_picture_fast(selected),
@@ -591,7 +628,7 @@ fn warp_rows_deterministic(plane: Plane, zoom: f64) -> Result<[f64; 9], MathErro
     ])
 }
 
-fn pose(plane: Plane, zoom_log2: f64, displacement: [f64; 2]) -> Pose {
+const fn pose(plane: Plane, zoom_log2: f64, displacement: [f64; 2]) -> Pose {
     Pose {
         epoch: 1,
         orbit_generation: 1,
