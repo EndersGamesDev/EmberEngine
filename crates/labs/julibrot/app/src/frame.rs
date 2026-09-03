@@ -1364,19 +1364,32 @@ mod browser {
                     WarpValidation::Final,
                 );
             }
-            let scene_id = self.submit_due_scene(
-                viewer,
-                hot.pose.object,
-                hot.plane,
-                hot.pose.map,
-                slot,
-                hot.state.epoch,
-                now_ms,
-            )?;
+            let relief_redraw = self.presenter.accepted_relief_redraw(slot);
+            let defer_scene_for_redraw = defer_scene_until_relief_redraw(
+                relief_redraw,
+                self.presented_view_is_stale(viewer),
+            );
+            let scene_id = if defer_scene_for_redraw {
+                None
+            } else {
+                self.submit_due_scene(
+                    viewer,
+                    hot.pose.object,
+                    hot.plane,
+                    hot.pose.map,
+                    slot,
+                    hot.state.epoch,
+                    now_ms,
+                )?
+            };
 
             let mut warp_id = None;
             let warp_requested = self.loop_state.warp_requested(self.frame_policy.policy());
-            if warp_requested && !runtime.has_pending_surface() {
+            let redraw_scene_in_flight = hold_redraw_during_scene(
+                relief_redraw,
+                self.presenter.facts().in_flight_scene_id.is_some(),
+            );
+            if warp_requested && !runtime.has_pending_surface() && !redraw_scene_in_flight {
                 match runtime.acquire_for_warp(self.loop_state.generation()) {
                     Ok(frame) => {
                         let view = frame
@@ -2335,6 +2348,18 @@ mod browser {
     }
 }
 
+/// Keeps the retained DATA grid intact until its relief redraw reaches the surface.
+#[cfg(any(target_arch = "wasm32", test))]
+const fn defer_scene_until_relief_redraw(relief_redraw: bool, view_stale: bool) -> bool {
+    relief_redraw && view_stale
+}
+
+/// Holds the last exact redraw while Final overwrites DATA and fills its own retained image.
+#[cfg(any(target_arch = "wasm32", test))]
+const fn hold_redraw_during_scene(relief_redraw: bool, scene_in_flight: bool) -> bool {
+    relief_redraw && scene_in_flight
+}
+
 #[cfg(target_arch = "wasm32")]
 pub use browser::BrowserFrameLoop;
 
@@ -2357,8 +2382,9 @@ mod tests {
         FenceRefusal, FrameLoop, LEVELS, PresenterPoll, REFERENCE_RECORD_BYTES,
         REFERENCE_TEXEL_BYTES, RefinementLevel, RefinementSchedule, RefusalClass, SceneMode,
         SubmissionKind, apply_precision_mode, arrival_is_current, expand_reference_texels_into,
-        fence_error, horizon_facts, main_for_grid, published_iteration_cap, schedule_exposure_fill,
-        stamp_scene_level, stamped_extent, view_projection_changed,
+        defer_scene_until_relief_redraw, fence_error, hold_redraw_during_scene, horizon_facts,
+        main_for_grid, published_iteration_cap, schedule_exposure_fill, stamp_scene_level,
+        stamped_extent, view_projection_changed,
     };
     use crate::{AppError, FramePolicy, LevelTimingLedger, ViewerController};
     use ember_julibrot_present::{SampleClass, SubmissionMeasurement};
@@ -2367,6 +2393,16 @@ mod tests {
     /// Poll budget and wall the version-three present configuration refuses at.
     const SCENE_POLLS: u32 = 4_096;
     const SCENE_DEADLINE_MS: f64 = 30_000.0;
+
+    #[test]
+    fn relief_redraw_precedes_final_and_holds_while_final_overwrites_data() {
+        assert!(defer_scene_until_relief_redraw(true, true));
+        assert!(!defer_scene_until_relief_redraw(true, false));
+        assert!(!defer_scene_until_relief_redraw(false, true));
+        assert!(hold_redraw_during_scene(true, true));
+        assert!(!hold_redraw_during_scene(true, false));
+        assert!(!hold_redraw_during_scene(false, true));
+    }
 
     #[test]
     fn compact_reference_records_expand_to_zero_padded_rgba_texels() {
