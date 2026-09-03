@@ -252,7 +252,7 @@ fn saturating_f64_to_u32(value: f64) -> u32 {
 mod tests {
     use super::{
         centre_displacement_px, mirror_centre, pixel_scale, precision_for, scaled_pixel_offset,
-        scaled_pixel_scale, split_centre, split_scalar,
+        scaled_pixel_scale, split_centre,
     };
     use crate::{BigCentre, MathError, Plane};
 
