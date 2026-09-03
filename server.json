@@ -1,6 +1,6 @@
 {
   "ws": "wss://auto-disclaimer-crop-cholesterol.trycloudflare.com",
-  "v": "1788427734",
+  "v": "1788450606",
   "proto": 13,
   "fire_ws": "wss://msg-crest-remembered-literally.trycloudflare.com",
   "fire_proto": 1,
@@ -26,12 +26,12 @@
     },
     {
       "name": "dusky-osprey",
-      "ws": "wss://auto-disclaimer-crop-cholesterol.trycloudflare.com",
-      "proto": 13,
-      "version": "r563",
-      "commit": "9fc13db",
+      "ws": "wss://heating-billy-initially-qui.trycloudflare.com",
+      "proto": 14,
+      "version": "r575",
+      "commit": "bfbf6ff",
       "by": "end@DESKTOP-E9PKJUK",
-      "updated": "2026-09-03T09:28:54Z"
+      "updated": "2026-09-03T15:50:06Z"
     }
   ]
 }
