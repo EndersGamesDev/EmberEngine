@@ -64,7 +64,7 @@ impl App {
     /// Returns a typed device, surface, or canonical-viewer failure.
     pub async fn start(canvas_id: &str, status_id: &str) -> Result<Self, AppError> {
         let runtime = BrowserRuntime::start(canvas_id, status_id).await?;
-        let mut viewer = ViewerController::new(runtime.facts().width)?;
+        let mut viewer = ViewerController::new([runtime.facts().width, runtime.facts().height])?;
         let frame_loop = BrowserFrameLoop::new(&runtime, &mut viewer)?;
         Ok(Self {
             runtime,
