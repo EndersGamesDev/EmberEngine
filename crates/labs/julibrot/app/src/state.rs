@@ -1045,8 +1045,13 @@ mod tests {
             .expect("configured navigation")
             .to_f64_mirror();
         assert!((viewer.requested().zoom_log2 - before_zoom).abs() < f64::EPSILON);
-        assert_eq!(before_centre, after_centre, "a click is not a navigation edit");
-        let drawn = viewer.crosshair_plane_px().expect("a stored point projects");
+        assert_eq!(
+            before_centre, after_centre,
+            "a click is not a navigation edit"
+        );
+        let drawn = viewer
+            .crosshair_plane_px()
+            .expect("a stored point projects");
         assert!((drawn[0] - 120.0).abs() < 1.0e-6);
         assert!((drawn[1] + 45.0).abs() < 1.0e-6);
         assert!(viewer.crosshair_precision_bits().is_some());
@@ -1061,7 +1066,9 @@ mod tests {
         viewer.set_crosshair([200.0, 130.0]).expect("finite click");
         for step in [3.0, 7.5, -2.25] {
             viewer.zoom_about_crosshair(step).expect("finite zoom");
-            let drawn = viewer.crosshair_plane_px().expect("a stored point projects");
+            let drawn = viewer
+                .crosshair_plane_px()
+                .expect("a stored point projects");
             assert!(
                 (drawn[0] - 200.0).abs() < 1.0e-6 && (drawn[1] - 130.0).abs() < 1.0e-6,
                 "the crosshair moved to {drawn:?} after a zoom of {step}"
@@ -1088,11 +1095,15 @@ mod tests {
     fn a_translation_carries_the_crosshair_with_its_feature() {
         let mut viewer = ViewerController::new(960).expect("canonical viewer");
         viewer.set_crosshair([60.0, -20.0]).expect("finite click");
-        let before = viewer.crosshair_plane_px().expect("a stored point projects");
+        let before = viewer
+            .crosshair_plane_px()
+            .expect("a stored point projects");
         let delta = drag_delta_px_down([40.0, 25.0], REFERENCE_RECT, REFERENCE_GRID)
             .expect("a finite drag");
         viewer.pan_px(delta).expect("finite pan");
-        let after = viewer.crosshair_plane_px().expect("a stored point projects");
+        let after = viewer
+            .crosshair_plane_px()
+            .expect("a stored point projects");
         // A drag right and down carries the content with it: `+x` on screen, `-y` up.
         assert!((after[0] - before[0] - delta[0]).abs() < 1.0e-6);
         assert!((after[1] - before[1] + delta[1]).abs() < 1.0e-6);
