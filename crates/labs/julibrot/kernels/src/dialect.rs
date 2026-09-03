@@ -2,6 +2,25 @@ use ember_lab_heap::KernelDesc;
 
 pub const OUTPUT_PAGE_SIDE: u16 = 256;
 
+/// Uniform capacity an executor must offer so that both Julibrot descriptors register.
+///
+/// `GpuKernelExecutor::register_kernel` refuses any descriptor whose `uniform_size` exceeds the
+/// executor's configured `kernel_uniform_bytes`, and that refusal is raised before a pipeline is
+/// built, so it lands on every device and carries no driver diagnostic. A host that repeated the
+/// number as its own literal would therefore hold a copy that silently goes stale the moment a
+/// uniform grows here. Deriving the capacity from the descriptors keeps the two in step by
+/// construction, rounded to the 16-byte multiple the executor's configuration check demands.
+pub const KERNEL_UNIFORM_BYTES: u32 = {
+    let shallow = shallow_kernel().uniform_size;
+    let perturbation = perturbation_kernel().uniform_size;
+    let widest = if shallow > perturbation {
+        shallow
+    } else {
+        perturbation
+    };
+    widest.next_multiple_of(16)
+};
+
 const ESCAPE_FIELD: &[&str] = &["escape"];
 const NO_ACCESSORS: &[&str] = &[];
 const REFERENCE_ACCESSOR: &[&str] = &["reference"];
@@ -38,7 +57,9 @@ pub const fn perturbation_kernel() -> KernelDesc<'static> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PERTURB_BODY, SHALLOW_BODY, perturbation_kernel, shallow_kernel};
+    use super::{
+        KERNEL_UNIFORM_BYTES, PERTURB_BODY, SHALLOW_BODY, perturbation_kernel, shallow_kernel,
+    };
     use ember_lab_heap::{DialectLimits, RegisteredKernel};
 
     const LIMITS: DialectLimits = DialectLimits {
@@ -46,6 +67,20 @@ mod tests {
         span_capacity: 16,
         handle_capacity: 64,
     };
+
+    #[test]
+    fn the_published_uniform_capacity_admits_both_descriptors() {
+        for descriptor in [shallow_kernel(), perturbation_kernel()] {
+            assert!(
+                descriptor.uniform_size <= KERNEL_UNIFORM_BYTES,
+                "{} needs {} uniform bytes but the published capacity is {KERNEL_UNIFORM_BYTES}",
+                descriptor.name,
+                descriptor.uniform_size,
+            );
+        }
+        assert_ne!(KERNEL_UNIFORM_BYTES, 0);
+        assert!(KERNEL_UNIFORM_BYTES.is_multiple_of(16));
+    }
 
     #[test]
     fn both_bodies_register_through_dialect_v2() {

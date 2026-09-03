@@ -273,7 +273,7 @@ Every `DispatchFacts` byte and count is arithmetic from the accepted plan or a c
 
 `plan_refinement(requested_extent: GridExtent, params: EscapeParams, accepts_records: impl FnMut(u32) -> bool) -> Result<RefinementPlan, KernelError>` is the seam-independent Phase-3 planner: it tests power-of-two degraded Final record counts in order and accepts the first count approved by the exact caller predicate; Phase 4 supplies the executor's cloned-arena predicate rather than replacing this arithmetic.
 
-`JulibrotKernels::new(executor: &mut ember_lab_heap::GpuKernelExecutor) -> Result<JulibrotKernels, KernelError>` registers exactly two production dialect-v2 kernels and their immutable pipelines against the executor's immutable heap layout.
+`JulibrotKernels::new(executor: &mut ember_lab_heap::GpuKernelExecutor) -> Result<JulibrotKernels, KernelError>` registers exactly two production dialect-v2 kernels and their immutable pipelines against the executor's immutable heap layout. Registration refuses any descriptor whose uniform exceeds the executor's configured `kernel_uniform_bytes`, and it refuses before a pipeline is built, so the refusal reaches every device identically and carries no driver diagnostic to read; `KERNEL_UNIFORM_BYTES` therefore publishes the capacity the host must configure, derived from the two descriptors and rounded to the 16-byte multiple the executor's own configuration check requires, so that a host cannot hold a stale copy of the number a widened uniform has already outgrown.
 
 `JulibrotKernels::plan(executor: &ember_lab_heap::GpuKernelExecutor, requested_extent: GridExtent, params: EscapeParams) -> Result<RefinementPlan, KernelError>` performs checked extent arithmetic, applies the 4,096 policy, and uses exact cloned-arena allocation trials without mutation.
 
@@ -327,7 +327,7 @@ The external warp oracle requires `max|H⁻¹H−I| ≤ 10⁻⁹` in `f64` at `z
 
 ## 5. Oracles and tests
 
-Native layout tests assert `Plane = 32`, `CentreSplit = 32`, shallow uniform `= 144`, perturbation uniform `= 112`, reference record `= 8`, escape record `= 16`, all six padded homography rows, every byte offset in §3, little-endian pack/unpack fixtures, zero padding, exact signed exponent bytes, and exact enum and status discriminants.
+Native layout tests assert `Plane = 32`, `CentreSplit = 32`, shallow uniform `= 144`, perturbation uniform `= 112`, that `KERNEL_UNIFORM_BYTES` admits both of those uniforms and is a nonzero multiple of 16, reference record `= 8`, escape record `= 16`, all six padded homography rows, every byte offset in §3, little-endian pack/unpack fixtures, zero padding, exact signed exponent bytes, and exact enum and status discriminants.
 
 Native math-and-kernels coordinate tests cover both preset object rows, the six-angle reduction to the former `R₁₃·R₂₄` multiplication order, the `π/2` plane exchange, hybrid bases with nonzero z and c components, the `8·f32::EPSILON` postcondition, odd and even extents, bottom-left and top-row screen centres, row-zero-at-bottom indexing, exact identity-map offsets, non-affine perspective offsets, and checked scale-exponent overflow.
 

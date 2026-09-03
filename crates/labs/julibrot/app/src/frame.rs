@@ -588,8 +588,8 @@ impl RefinementSchedule {
 #[cfg(target_arch = "wasm32")]
 mod browser {
     use ember_julibrot_kernels::{
-        DispatchFacts, EscapeGrid, GridExtent, JulibrotKernels, KernelMode, OUTPUT_PAGE_SIDE,
-        ReferenceOrbitInput, RefinementLevel, RefinementPlan,
+        DispatchFacts, EscapeGrid, GridExtent, JulibrotKernels, KERNEL_UNIFORM_BYTES, KernelMode,
+        OUTPUT_PAGE_SIDE, ReferenceOrbitInput, RefinementLevel, RefinementPlan,
     };
     use ember_julibrot_math::{
         BigCentre, EscapeParams, ObjectAngles, Plane, PoseMap, PrecisionMode, precision_for,
@@ -620,7 +620,6 @@ mod browser {
     const DIRECTORY_BYTES: u32 = SPAN_CAPACITY * 16 + HANDLE_CAPACITY * 4;
     const MAX_HEADER_PAGES: u32 = 64;
     const MAX_HEADER_SETS: u32 = 6;
-    const KERNEL_UNIFORM_BYTES: u32 = 96;
 
     fn viewer_precision_mode(value: u32) -> &'static str {
         PrecisionMode::from_u32(value).map_or("unavailable", PrecisionMode::as_str)
