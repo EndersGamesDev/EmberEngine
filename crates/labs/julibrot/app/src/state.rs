@@ -1247,7 +1247,28 @@ mod tests {
         viewer
             .set_object_angles(object)
             .expect("valid in-plane object turn");
-        assert!(viewer.crosshair_plane_px().is_some());
+        let centre = viewer
+            .owner()
+            .navigation_centre()
+            .expect("navigation has a centre");
+        let plane = viewer
+            .owner()
+            .navigation_plane()
+            .expect("navigation has a plane");
+        let scale = pixel_scale(viewer.requested().zoom_log2, 960).expect("valid scale");
+        let rotated_chart = viewer
+            .crosshair
+            .as_ref()
+            .expect("crosshair survives the in-plane turn")
+            .displacement_px(&centre, &plane, scale)
+            .expect("stored point has new chart coordinates");
+        assert!((rotated_chart[0] - 51.409_785_214_309_565).abs() <= 1.0e-3);
+        assert!((rotated_chart[1] + 36.837_942_182_192_49).abs() <= 1.0e-3);
+        let projected = viewer
+            .crosshair_plane_px()
+            .expect("the stored feature projects after an in-plane turn");
+        assert!((projected[0] - 60.0).abs() <= 1.0e-3);
+        assert!((projected[1] + 20.0).abs() <= 1.0e-3);
         assert_eq!(viewer.crosshair_centre_f64(), Some(point));
         assert_eq!(
             viewer.owner().navigation_plane(),
