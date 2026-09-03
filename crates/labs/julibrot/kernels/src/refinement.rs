@@ -313,8 +313,8 @@ mod tests {
     fn exact_three_levels_and_caps_are_pinned() {
         let plan = plan_refinement(
             GridExtent {
-                width: 1_921,
-                height: 1_081,
+                width: 1_920,
+                height: 1_080,
             },
             EscapeParams::new(5_000),
             |_| true,
@@ -349,8 +349,8 @@ mod tests {
     fn picture_fast_uses_one_eighth_preview_and_omits_interactive() {
         let plan = plan_refinement(
             GridExtent {
-                width: 1_920,
-                height: 1_080,
+                width: 1_921,
+                height: 1_081,
             },
             EscapeParams::new(5_000),
             |_| true,
