@@ -33,7 +33,7 @@ use arena_core::proto::{
     PlayerMeta, S2C, STATE_EVERY_TICKS, color_for, sanitize_text,
 };
 use arena_core::shooter::{
-    ARENA_HALF, FIXED_DT, Level, MAP_TRENCH_CITY, MAX_PLAYERS, PlayerIn, Sim,
+    ARENA_HALF, FIXED_DT, Level, MAP_FREIGHT_YARD, MAP_TRENCH_CITY, MAX_PLAYERS, PlayerIn, Sim,
 };
 use tungstenite::Message;
 use tungstenite::protocol::WebSocketConfig;
@@ -140,14 +140,17 @@ struct Conn {
     rtt_ticks: u64,
 }
 
-/// A lobby IS a running shooter game, on the authored arena.
+/// A lobby IS a running shooter game, on the authored arena it was created
+/// with.
 struct Lobby {
     password: Option<String>,
     sim: Sim,
-    /// Still minted and still sent: `GameJoined.map` names the level and the
-    /// seed is what a peer falls back to for a name it does not know. Every
-    /// lobby today runs `Level::trench_city()`, so the seed decides nothing
-    /// a v13 client can see.
+    /// The level's name, as `CreateLobby.map` resolved: what `GameJoined`
+    /// and `LobbyInfo` carry, and what every joiner rebuilds.
+    map: String,
+    /// Minted per lobby and sent in `GameJoined`: what a peer falls back to
+    /// for a map name it does not know, and since v14 the seed of every
+    /// spread and loot roll the sim makes (`Sim.seed`).
     seed: u64,
     /// Conn ids; [0] is the listed "host" (purely cosmetic after creation).
     members: Vec<u64>,
@@ -494,8 +497,40 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
                 i.melee = false;
             }
 
-            for &(killer, victim) in &lobby.sim.events {
-                if let Ok(text) = serde_json::to_string(&S2C::Kill { killer, victim }) {
+            // The sim's events of this tick, in the order they happened:
+            // a hit before the kill it caused, then the blasts and the loot
+            // pay-outs. Each is serialised once per lobby, like the state.
+            let sim = &lobby.sim;
+            let outbound = sim
+                .hits
+                .iter()
+                .map(|&(shooter, victim, dmg, head)| S2C::Hit {
+                    shooter,
+                    victim,
+                    dmg,
+                    head,
+                })
+                .chain(
+                    sim.events
+                        .iter()
+                        .map(|&(killer, victim)| S2C::Kill { killer, victim }),
+                )
+                .chain(
+                    sim.blasts
+                        .iter()
+                        .map(|&([x, y, z], owner)| S2C::Blast { x, y, z, owner }),
+                )
+                .chain(
+                    sim.loot_events
+                        .iter()
+                        .map(|&(player, block, weapon)| S2C::Loot {
+                            player,
+                            block,
+                            weapon,
+                        }),
+                );
+            for msg in outbound {
+                if let Ok(text) = serde_json::to_string(&msg) {
                     for &m in &lobby.members {
                         let _ = send_text_to(&conns, m, &text);
                     }
@@ -524,6 +559,7 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
                             shield: p.shield,
                             weapon: p.weapon,
                             ammo: p.ammo,
+                            reserve: p.reserve,
                             reloading: p.reload_t > 0.0,
                             deaths: p.death_count,
                             ack: lobby.inputs.get(&p.id).map_or(0, |(_, s, _, _)| *s),
@@ -547,9 +583,11 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
                             y: b.y,
                             vy: b.vy,
                             owner: b.owner,
+                            weapon: b.weapon,
                         })
                         .collect(),
                     pads: lobby.sim.pads.iter().map(|p| p.respawn_t <= 0.0).collect(),
+                    loot: lobby.sim.loot.iter().map(|l| l.respawn_t <= 0.0).collect(),
                 };
                 // Serialize once per lobby, not once per recipient.
                 if let Ok(text) = serde_json::to_string(&state) {
@@ -758,11 +796,19 @@ fn handle_event(
                             players: u8::try_from(l.members.len())
                                 .expect("lobby membership is capped below u8::MAX"),
                             cap: u8::try_from(MAX_PLAYERS).expect("MAX_PLAYERS fits in u8"),
+                            map: l.map.clone(),
                         })
                         .collect();
                     let _ = send_to(conns, id, &S2C::LobbyList { lobbies: list });
                 }
-                (C2S::CreateLobby { name, password }, true) => {
+                (
+                    C2S::CreateLobby {
+                        name,
+                        password,
+                        map,
+                    },
+                    true,
+                ) => {
                     if conns.get(&id).unwrap().proto != PROTO_VERSION {
                         let _ = send_to(
                             conns,
@@ -820,15 +866,36 @@ fn handle_event(
                         );
                         return;
                     }
+                    // The map, by name. Empty is the current default; a
+                    // name that is no level is refused rather than seeded,
+                    // because a page with a typo must be told, not handed a
+                    // random arena that looks like a bug.
+                    let map = if map.is_empty() {
+                        MAP_FREIGHT_YARD.to_string()
+                    } else {
+                        map
+                    };
+                    if map != MAP_FREIGHT_YARD && map != MAP_TRENCH_CITY {
+                        let _ = send_to(
+                            conns,
+                            id,
+                            &S2C::Error {
+                                message: "unknown map".into(),
+                            },
+                        );
+                        return;
+                    }
                     *lobby_counter += 1;
                     let mut hasher = DefaultHasher::new();
                     name.hash(&mut hasher);
                     lobby_counter.hash(&mut hasher);
                     let seed = hasher.finish();
 
+                    let level = Level::named(&map, seed);
                     let mut lobby = Lobby {
                         password,
-                        sim: Sim::from_level(&Level::trench_city()),
+                        sim: Sim::from_level(&level, seed),
+                        map,
                         seed,
                         members: vec![id],
                         pids: HashMap::new(),
@@ -843,10 +910,10 @@ fn handle_event(
                         seed,
                         arena_half: ARENA_HALF,
                         players: roster(&lobby, conns),
-                        map: MAP_TRENCH_CITY.to_string(),
+                        map: lobby.map.clone(),
                     };
+                    tracing::info!(conn = id, lobby = %name, map = %lobby.map, "game created");
                     lobbies.insert(name.clone(), lobby);
-                    tracing::info!(conn = id, lobby = %name, "game created");
                     let _ = send_to(conns, id, &joined);
                 }
                 (C2S::JoinLobby { name, password }, true) => {
@@ -929,7 +996,7 @@ fn handle_event(
                         seed: lobby.seed,
                         arena_half: ARENA_HALF,
                         players: roster(lobby, conns),
-                        map: MAP_TRENCH_CITY.to_string(),
+                        map: lobby.map.clone(),
                     };
                     let others: Vec<u64> =
                         lobby.members.iter().copied().filter(|&m| m != id).collect();
@@ -958,6 +1025,7 @@ fn handle_event(
                         jump,
                         shield,
                         melee,
+                        ads,
                     },
                     true,
                 ) => {
@@ -1001,6 +1069,7 @@ fn handle_event(
                                 jump,
                                 shield,
                                 melee,
+                                ads,
                                 delay_ticks: 0,
                             },
                             seq,

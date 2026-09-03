@@ -5,7 +5,7 @@ use std::net::{TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
 use arena_core::proto::{C2S, PROTO_VERSION, S2C};
-use arena_core::shooter::MAP_TRENCH_CITY;
+use arena_core::shooter::{MAP_FREIGHT_YARD, MAP_TRENCH_CITY};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
@@ -86,6 +86,7 @@ fn drop_in_arena_flow_with_password() {
         &C2S::CreateLobby {
             name: "arena".into(),
             password: Some("s3cret".into()),
+            map: MAP_TRENCH_CITY.into(),
         },
     );
     let (host_pid, seed) = recv_until(&mut host, 5, |m| match m {
@@ -184,6 +185,7 @@ fn drop_in_arena_flow_with_password() {
             jump: false,
             shield: false,
             melee: false,
+            ads: false,
         },
     );
     // The next state must echo the input's seq back as this player's ack.
@@ -231,6 +233,7 @@ fn old_proto_may_list_but_not_join() {
         &C2S::CreateLobby {
             name: "arena".into(),
             password: None,
+            map: String::new(),
         },
     );
     recv_until(&mut host, 5, |m| {
@@ -287,6 +290,123 @@ fn old_proto_may_list_but_not_join() {
     });
 }
 
+/// A lobby names its map, in the listing and in `GameJoined`, and an empty
+/// name resolves to the current default rather than to nothing.
+#[test]
+fn a_lobby_lists_its_map() {
+    let port = start_server();
+
+    // No map named: the yard, and the joiner is told so.
+    let mut alice = connect(port, "alice");
+    send(
+        &mut alice,
+        &C2S::CreateLobby {
+            name: "default".into(),
+            password: None,
+            map: String::new(),
+        },
+    );
+    recv_until(&mut alice, 5, |m| match m {
+        S2C::GameJoined { map, .. } => {
+            assert_eq!(map, MAP_FREIGHT_YARD, "an empty map is the yard");
+            Some(())
+        }
+        _ => None,
+    });
+
+    // Named: Trench City, exactly as asked.
+    let mut bob = connect(port, "bob");
+    send(
+        &mut bob,
+        &C2S::CreateLobby {
+            name: "trench".into(),
+            password: None,
+            map: MAP_TRENCH_CITY.into(),
+        },
+    );
+    recv_until(&mut bob, 5, |m| match m {
+        S2C::GameJoined { map, .. } => {
+            assert_eq!(map, MAP_TRENCH_CITY);
+            Some(())
+        }
+        _ => None,
+    });
+
+    // The listing carries both, so a browser can show the map before
+    // joining.
+    let mut carol = connect(port, "carol");
+    send(&mut carol, &C2S::ListLobbies);
+    match recv(&mut carol) {
+        S2C::LobbyList { lobbies } => {
+            assert_eq!(lobbies.len(), 2);
+            let map_of = |name: &str| {
+                lobbies
+                    .iter()
+                    .find(|l| l.name == name)
+                    .unwrap_or_else(|| panic!("no lobby {name}"))
+                    .map
+                    .clone()
+            };
+            assert_eq!(map_of("default"), MAP_FREIGHT_YARD);
+            assert_eq!(map_of("trench"), MAP_TRENCH_CITY);
+        }
+        other => panic!("expected LobbyList, got {other:?}"),
+    }
+
+    // A joiner is told the level the lobby was created with.
+    send(
+        &mut carol,
+        &C2S::JoinLobby {
+            name: "trench".into(),
+            password: None,
+        },
+    );
+    recv_until(&mut carol, 5, |m| match m {
+        S2C::GameJoined { map, .. } => {
+            assert_eq!(map, MAP_TRENCH_CITY, "the joiner rebuilds the same level");
+            Some(())
+        }
+        _ => None,
+    });
+}
+
+/// A map name that is no level is refused, never silently seeded: a page
+/// with a typo must be told, and the connection stays open to try again.
+#[test]
+fn an_unknown_map_is_refused() {
+    let port = start_server();
+    let mut alice = connect(port, "alice");
+    send(
+        &mut alice,
+        &C2S::CreateLobby {
+            name: "moon".into(),
+            password: None,
+            map: "moon-base".into(),
+        },
+    );
+    match recv(&mut alice) {
+        S2C::Error { message } => assert!(message.contains("unknown map"), "{message}"),
+        other => panic!("expected Error, got {other:?}"),
+    }
+    // Nothing was created, and the same connection may still create.
+    send(&mut alice, &C2S::ListLobbies);
+    match recv(&mut alice) {
+        S2C::LobbyList { lobbies } => assert!(lobbies.is_empty(), "{lobbies:?}"),
+        other => panic!("expected LobbyList, got {other:?}"),
+    }
+    send(
+        &mut alice,
+        &C2S::CreateLobby {
+            name: "moon".into(),
+            password: None,
+            map: MAP_FREIGHT_YARD.into(),
+        },
+    );
+    recv_until(&mut alice, 5, |m| {
+        matches!(m, S2C::GameJoined { .. }).then_some(())
+    });
+}
+
 #[test]
 fn message_before_hello_disconnects() {
     let port = start_server();
@@ -321,6 +441,7 @@ fn an_airborne_state_carries_the_velocity_that_made_it() {
         &C2S::CreateLobby {
             name: "jump-wire".into(),
             password: None,
+            map: String::new(),
         },
     );
     let me = recv_until(&mut host, 5, |m| match m {
@@ -350,6 +471,7 @@ fn an_airborne_state_carries_the_velocity_that_made_it() {
                 jump: true,
                 shield: false,
                 melee: false,
+                ads: false,
             },
         );
         std::thread::sleep(Duration::from_millis(40));
@@ -382,6 +504,7 @@ fn one_jump_press_launches_once_and_does_not_bunny_hop() {
         &C2S::CreateLobby {
             name: "hop-once".into(),
             password: None,
+            map: String::new(),
         },
     );
     let me = recv_until(&mut host, 5, |m| match m {
@@ -408,6 +531,7 @@ fn one_jump_press_launches_once_and_does_not_bunny_hop() {
             jump: true,
             shield: false,
             melee: false,
+            ads: false,
         },
     );
 
@@ -446,6 +570,7 @@ fn a_state_reports_how_long_the_acked_command_has_been_applied() {
         &C2S::CreateLobby {
             name: "ack-age".into(),
             password: None,
+            map: String::new(),
         },
     );
     let me = recv_until(&mut host, 5, |m| match m {
@@ -469,6 +594,7 @@ fn a_state_reports_how_long_the_acked_command_has_been_applied() {
             jump: false,
             shield: false,
             melee: false,
+            ads: false,
         },
     );
 
@@ -506,6 +632,7 @@ fn a_press_survives_a_second_input_in_the_same_tick() {
         &C2S::CreateLobby {
             name: "coalesce".into(),
             password: None,
+            map: String::new(),
         },
     );
     let me = recv_until(&mut host, 5, |m| match m {
@@ -528,6 +655,7 @@ fn a_press_survives_a_second_input_in_the_same_tick() {
         jump,
         shield: false,
         melee: false,
+        ads: false,
     };
     // Back to back, deliberately with no sleep: the press and the packet that
     // overtakes it reach the hub inside one 16.7 ms window.
@@ -600,6 +728,7 @@ fn welcome_names_the_host_and_reports_its_live_load() {
         &C2S::CreateLobby {
             name: "arena".into(),
             password: None,
+            map: String::new(),
         },
     );
     recv_until(&mut alice, 5, |m| {

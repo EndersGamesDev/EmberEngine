@@ -118,7 +118,39 @@ use serde::{Deserialize, Serialize};
 /// additive value: a peer that knows the name plays it, and one that does
 /// not falls back to the seeded arena, which is where the gate steps in
 /// again rather than here.
-pub const PROTO_VERSION: u16 = 13;
+/// v14: a weapon id on the wire, a map per lobby, `Input.ads`, and the
+/// loot, hit and blast events.
+///
+/// The field that decides it did not change shape. `PState.weapon` carried
+/// a level 1..3 and now carries an id 1..7. A v13 client receiving
+/// `weapon: 7` calls `weapon_stats(7)`, lands in the pistol arm, draws the
+/// KSVR and prints an eight-round magazine for a rocket launcher: every
+/// number on its HUD is a lie, and the round it then sees fly is a rocket
+/// it draws as a blue streak and never hears explode. Nothing on the wire
+/// failed to decode, and the game it plays is not the game the server is
+/// running. That alone is the bump.
+///
+/// The rest compounds it. `CreateLobby.map` defaults to Freight Yard, so a
+/// v13 client that never sent it would predict its movement against Trench
+/// City while the server resolved it against a yard it has never heard of,
+/// which is the v13 bump's own failure mode over again. `Input.ads` is
+/// dropped by a v13 server, so a v18 sniper scopes to a line and gets a
+/// hip-fire cone. `State.loot`, `S2C::Loot`, `S2C::Hit` and `S2C::Blast`
+/// are additive on their own (an unknown variant is dropped by the net
+/// layer, an absent list reads as empty) and would not have bumped alone.
+///
+/// So this goes to 14, frozen pages v13-v17 go list-only against a v14
+/// server exactly as at every earlier bump, and the lobby browser is
+/// unaffected (`proto: 0` against the ungated `ListLobbies`).
+///
+/// One rule is kept so the next map is not a bump: the map still travels
+/// by name. A peer that knows the name builds it; one that does not is
+/// stopped by the gate here, not by a level it cannot decode. Deliberately
+/// NOT bump triggers, so the next one is cheaper: `LobbyInfo.map` (listing
+/// only), the three cosmetic events, and a later addition of the M4 to the
+/// loot pool (its stats already ship; the client draws a fallback mesh for
+/// any id whose node is missing).
+pub const PROTO_VERSION: u16 = 14;
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
 pub const MAX_PASSWORD_LEN: usize = 40;
@@ -134,6 +166,12 @@ pub struct LobbyInfo {
     pub has_password: bool,
     pub players: u8,
     pub cap: u8,
+    /// Which `Level` this lobby runs, so a browser can show it before
+    /// joining. Listing only: defaulted, and deliberately not a bump
+    /// trigger, because nothing a peer does resolves differently for
+    /// not knowing it.
+    #[serde(default)]
+    pub map: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -177,11 +215,19 @@ pub struct PState {
     /// pre-shield server simply reports everyone unshielded.
     #[serde(default)]
     pub shield: bool,
-    /// Weapon level (1 pistol, 2 rapid, 3 heavy).
+    /// A weapon id, `1..=WEAPON_COUNT` (v14; it carried a level 1..3
+    /// before, and that meaning change is what bumped the version, see
+    /// `PROTO_VERSION`). Read through `weapon_stats`, whose `_` arm is the
+    /// sidearm for any id a client does not know.
     #[serde(default)]
     pub weapon: u8,
     #[serde(default)]
     pub ammo: u8,
+    /// Rounds outside the magazine; `RESERVE_INFINITE` for the sidearm.
+    /// Display only, so it defaults: a HUD that reads 0 for a v13 server's
+    /// sidearm is wrong on a screen, not in a fight.
+    #[serde(default)]
+    pub reserve: u8,
     #[serde(default)]
     pub reloading: bool,
     /// Authoritative death count for the scoreboard.
@@ -215,6 +261,12 @@ pub struct BState {
     /// Firing player — clients use it for shot audio cues.
     #[serde(default)]
     pub owner: u8,
+    /// The weapon that fired it, so the tracer, the rocket mesh and the
+    /// remote shot cue are the right ones. Defaulted: 0 reads as the
+    /// sidearm through `weapon_stats`, so a pre-v14 server's rounds draw
+    /// as the blue streak they always were.
+    #[serde(default)]
+    pub weapon: u8,
 }
 
 /// Client -> server.
@@ -230,6 +282,14 @@ pub enum C2S {
     CreateLobby {
         name: String,
         password: Option<String>,
+        /// Which `Level` the lobby runs, by name. Empty means
+        /// `MAP_FREIGHT_YARD`; a name that is no map is answered with
+        /// `Error("unknown map")`, never silently seeded, so a typo on a
+        /// page is told rather than played. Defaulted so the frame decodes
+        /// from a v13 client; the gate is what stops that client creating a
+        /// yard it would then predict against Trench City.
+        #[serde(default)]
+        map: String,
     },
     JoinLobby {
         name: String,
@@ -280,6 +340,13 @@ pub enum C2S {
         /// above for why defaulting is NOT sufficient here and the gate moved.
         #[serde(default)]
         melee: bool,
+        /// Aiming down the sights (RMB or LT), HELD like `shield`: it
+        /// tightens the spread cone of the round fired this tick. Defaulted
+        /// so a v13 client simply never tightens its cone, and a v13 server
+        /// simply drops a v18 client's scope, which is one of the reasons
+        /// the gate moved (`PROTO_VERSION`).
+        #[serde(default)]
+        ads: bool,
     },
     Ping {
         nonce: u32,
@@ -363,10 +430,44 @@ pub enum S2C {
         /// positions every client derives locally.
         #[serde(default)]
         pads: Vec<bool>,
+        /// Loot-block availability (true = armed), index-aligned with the
+        /// level's `Cover::Loot` obstacles in obstacle order, like `pads`.
+        /// Defaulted: a peer that predates blocks draws none, and it built
+        /// a level without any.
+        #[serde(default)]
+        loot: Vec<bool>,
     },
+    /// A kill. `killer == victim` is a self-kill (a rocket's own splash)
+    /// and the shape is unchanged: a v13 client prints "X fragged X".
     Kill {
         killer: u8,
         victim: u8,
+    },
+    /// A hit that landed, from `Sim.hits`: authoritative, so the client's
+    /// hitmarker no longer has to guess from a vanished bullet and a lost
+    /// hit point. `head` is the outright kill. Dropped by a v13 peer.
+    Hit {
+        shooter: u8,
+        victim: u8,
+        dmg: u8,
+        head: bool,
+    },
+    /// A rocket detonated at `(x, y, z)`, fired by `owner`, from
+    /// `Sim.blasts`. Cosmetic: the damage it did arrives as `Hit`s.
+    Blast {
+        x: f32,
+        y: f32,
+        z: f32,
+        owner: u8,
+    },
+    /// `player` bonked loot block `block` (an index into `State.loot`) and
+    /// was handed `weapon`, from `Sim.loot_events`. Cosmetic: the weapon
+    /// also arrives in the next `State`, so a peer that drops this still
+    /// holds the right gun.
+    Loot {
+        player: u8,
+        block: u8,
+        weapon: u8,
     },
     Pong {
         nonce: u32,
@@ -423,18 +524,70 @@ mod tests {
             jump: true,
             shield: true,
             melee: true,
+            ads: true,
         })
         .unwrap();
         assert!(s.contains("\"t\":\"input\""));
+        assert!(s.contains("\"ads\":true"), "{s}");
         let back: C2S = serde_json::from_str(&s).unwrap();
         assert!(matches!(
             back,
             C2S::Input {
                 fire: true,
                 shield: true,
+                ads: true,
                 ..
             }
         ));
+
+        let s = serde_json::to_string(&C2S::CreateLobby {
+            name: "yard".into(),
+            password: None,
+            map: crate::shooter::MAP_FREIGHT_YARD.to_string(),
+        })
+        .unwrap();
+        assert!(s.contains("\"map\":\"freight-yard\""), "{s}");
+        let back: C2S = serde_json::from_str(&s).unwrap();
+        assert!(
+            matches!(back, C2S::CreateLobby { ref map, .. } if map == crate::shooter::MAP_FREIGHT_YARD)
+        );
+
+        let s = serde_json::to_string(&S2C::State {
+            tick: 9,
+            players: vec![],
+            bullets: vec![BState {
+                x: 1.0,
+                z: 2.0,
+                vx: 3.0,
+                vz: 4.0,
+                y: 1.4,
+                vy: 0.0,
+                owner: 1,
+                weapon: 7,
+            }],
+            pads: vec![true],
+            loot: vec![true, false],
+        })
+        .unwrap();
+        assert!(s.contains("\"loot\":[true,false]"), "{s}");
+        assert!(s.contains("\"weapon\":7"), "{s}");
+        let back: S2C = serde_json::from_str(&s).unwrap();
+        assert!(matches!(
+            back,
+            S2C::State { ref loot, ref bullets, .. } if loot == &[true, false] && bullets[0].weapon == 7
+        ));
+
+        let info = LobbyInfo {
+            name: "yard".into(),
+            host: "ender".into(),
+            has_password: false,
+            players: 1,
+            cap: 8,
+            map: crate::shooter::MAP_FREIGHT_YARD.to_string(),
+        };
+        let s = serde_json::to_string(&info).unwrap();
+        assert!(s.contains("\"map\":\"freight-yard\""), "{s}");
+        assert_eq!(serde_json::from_str::<LobbyInfo>(&s).unwrap(), info);
 
         let s = serde_json::to_string(&S2C::GameJoined {
             id: 2,
@@ -497,6 +650,7 @@ mod tests {
             shield: true,
             weapon: 2,
             ammo: 7,
+            reserve: 30,
             reloading: false,
             deaths: 1,
             ack: 42,
@@ -565,6 +719,101 @@ mod tests {
             }
             other => panic!("wrong variant: {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_v13_create_lobby_names_the_freight_yard() {
+        // What a v13 page sends: no map. It decodes to an empty name, which
+        // the server resolves to the yard (`a_lobby_lists_its_map` in the
+        // server's tests pins that side). The gate is what stops a v13
+        // client from then predicting against the wrong level.
+        let old = r#"{"t":"create_lobby","name":"x","password":null}"#;
+        let back: C2S = serde_json::from_str(old).unwrap();
+        let C2S::CreateLobby { name, map, .. } = back else {
+            panic!("expected CreateLobby");
+        };
+        assert_eq!(name, "x");
+        assert_eq!(map, "", "an absent map is the empty name");
+        assert_eq!(
+            crate::shooter::Level::named(crate::shooter::MAP_FREIGHT_YARD, 1),
+            crate::shooter::Level::freight_yard()
+        );
+    }
+
+    #[test]
+    fn an_input_without_ads_reads_as_hip_fire() {
+        let old = r#"{"t":"input","mx":0.0,"my":0.0,"ax":1.0,"az":0.0,"fire":true}"#;
+        let back: C2S = serde_json::from_str(old).unwrap();
+        assert!(matches!(back, C2S::Input { ads: false, .. }));
+    }
+
+    #[test]
+    fn a_state_without_loot_reads_as_no_blocks() {
+        let old = r#"{"t":"state","tick":3,"players":[],"bullets":[]}"#;
+        let back: S2C = serde_json::from_str(old).unwrap();
+        let S2C::State { loot, pads, .. } = back else {
+            panic!("expected State");
+        };
+        assert!(loot.is_empty(), "an absent list is no blocks");
+        assert_eq!(pads, Vec::<bool>::new());
+    }
+
+    #[test]
+    fn the_loot_hit_and_blast_events_survive_the_codec() {
+        let events = [
+            S2C::Hit {
+                shooter: 1,
+                victim: 2,
+                dmg: 3,
+                head: true,
+            },
+            S2C::Blast {
+                x: 1.5,
+                y: 0.05,
+                z: -2.5,
+                owner: 4,
+            },
+            S2C::Loot {
+                player: 5,
+                block: 6,
+                weapon: 7,
+            },
+        ];
+        for (tag, ev) in ["\"t\":\"hit\"", "\"t\":\"blast\"", "\"t\":\"loot\""]
+            .iter()
+            .zip(&events)
+        {
+            let s = serde_json::to_string(ev).unwrap();
+            assert!(s.contains(tag), "{s}");
+            let back: S2C = serde_json::from_str(&s).unwrap();
+            assert_eq!(format!("{back:?}"), format!("{ev:?}"));
+        }
+        // An old peer's net layer drops an unknown tag rather than failing:
+        // that is what makes the three additive, and it is the decode
+        // error it sees, not a panic.
+        assert!(serde_json::from_str::<S2C>(r#"{"t":"no_such_event"}"#).is_err());
+    }
+
+    #[test]
+    fn a_v13_state_with_weapon_seven_is_why_this_bumps() {
+        // Documentary: the v13 table had three rows and read every id
+        // above them as the pistol. A v13 client handed `weapon: 7` would
+        // print the pistol's eight-round magazine for a one-round rocket
+        // launcher. The v14 table disagrees with the pistol on the id, so
+        // the field's meaning changed under an unchanged shape.
+        let p: PState = serde_json::from_str(
+            r#"{"id":1,"x":0.0,"z":0.0,"ax":1.0,"az":0.0,"hp":3,"score":0,
+            "alive":true,"crouch":false,"weapon":7}"#,
+        )
+        .unwrap();
+        assert_eq!(p.weapon, 7, "decodes fine; decoding is not the test");
+        let v13_pistol_mag = 8;
+        assert_ne!(
+            crate::shooter::weapon_stats(p.weapon).mag,
+            v13_pistol_mag,
+            "a v13 client would show the pistol's magazine for this id"
+        );
+        assert_eq!(p.reserve, 0, "a v13 state carries no reserve");
     }
 
     #[test]
