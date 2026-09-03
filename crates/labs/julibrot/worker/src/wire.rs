@@ -227,9 +227,7 @@ impl OrbitVerificationFacts {
     pub fn from_orbit(orbit: &ComputedOrbit) -> Self {
         Self {
             verification: orbit.verification as u32,
-            max_consumed_word_error_ulps: orbit
-                .max_consumed_word_error_ulps
-                .unwrap_or(u32::MAX),
+            max_consumed_word_error_ulps: orbit.max_consumed_word_error_ulps.unwrap_or(u32::MAX),
             precision_escalations: orbit.precision_escalations,
             reserved: 0,
         }
@@ -246,7 +244,8 @@ impl OrbitVerificationFacts {
         }
         match self.verification {
             value if value == ReferenceVerification::Deferred as u32 => {
-                if self.max_consumed_word_error_ulps != u32::MAX || self.precision_escalations != 0 {
+                if self.max_consumed_word_error_ulps != u32::MAX || self.precision_escalations != 0
+                {
                     return Err(ChannelError::new(
                         ErrorCode::BadLength,
                         self.max_consumed_word_error_ulps,
@@ -608,7 +607,8 @@ impl WireBuffer {
     /// Reads and validates the fixed verification-fact tail.
     pub(crate) fn orbit_facts(&self) -> Result<OrbitVerificationFacts, ChannelError> {
         let offset = self.capacity() - POOL_TRAILER_BYTES - ORBIT_FACT_BYTES;
-        let facts = OrbitVerificationFacts::read_from(&self.bytes[offset..offset + ORBIT_FACT_BYTES]);
+        let facts =
+            OrbitVerificationFacts::read_from(&self.bytes[offset..offset + ORBIT_FACT_BYTES]);
         facts.status()?;
         Ok(facts)
     }

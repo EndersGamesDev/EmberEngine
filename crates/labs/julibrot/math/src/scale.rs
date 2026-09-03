@@ -257,8 +257,8 @@ mod tests {
     use crate::{BigCentre, MathError, Plane, decode_big_scalar};
 
     #[test]
-    fn low_word_changes_the_consumed_binary32_value_in_ten_thousand_splits(
-    ) -> Result<(), MathError> {
+    fn low_word_changes_the_consumed_binary32_value_in_ten_thousand_splits() -> Result<(), MathError>
+    {
         const RANDOM_COUNT: usize = 9_984;
         const ADVERSARIAL_COUNT: usize = 16;
         let mut changed = 0_usize;
@@ -276,8 +276,7 @@ mod tests {
             }
             limbs[3] |= 0x8000_0000;
             let exponent = -253 + i32::try_from(state % 251).expect("bounded exponent");
-            let value =
-                decode_big_scalar(u32::from(index & 1 != 0), exponent, &limbs, 256)?;
+            let value = decode_big_scalar(u32::from(index & 1 != 0), exponent, &limbs, 256)?;
             let [high, low] = split_scalar(&value)?;
             let differs = (high + low).to_bits() != high.to_bits();
             if differs && random_changed < 4 {
@@ -295,12 +294,8 @@ mod tests {
         for high_exponent in [-120_i32, -40, 0, 100] {
             for sign in [0_u32, 1] {
                 for midpoint_numerator in [0x0100_0001_u32, 0x0100_0003] {
-                    let value = decode_big_scalar(
-                        sign,
-                        high_exponent - 24,
-                        &[midpoint_numerator],
-                        256,
-                    )?;
+                    let value =
+                        decode_big_scalar(sign, high_exponent - 24, &[midpoint_numerator], 256)?;
                     let [high, low] = split_scalar(&value)?;
                     let differs = (high + low).to_bits() != high.to_bits();
                     if differs && adversarial_changed < 4 {

@@ -94,12 +94,8 @@ impl ReferenceOrbitBuilder {
             return Err(MathError::InvalidPrecisionPlan);
         }
         let verify = mode == PrecisionMode::Deterministic || pass != ReferencePass::Preview;
-        let (primary, verification) = make_attempt(
-            centre,
-            plan.working_digits,
-            plan.policy_digits,
-            verify,
-        )?;
+        let (primary, verification) =
+            make_attempt(centre, plan.working_digits, plan.policy_digits, verify)?;
         Ok(Self {
             centre: centre.clone(),
             plan,
@@ -136,8 +132,7 @@ impl ReferenceOrbitBuilder {
                     self.mismatch = true;
                     continue;
                 };
-                self.max_consumed_word_error_ulps =
-                    self.max_consumed_word_error_ulps.max(error);
+                self.max_consumed_word_error_ulps = self.max_consumed_word_error_ulps.max(error);
                 self.mismatch |= error > 2 || left.escaped != right.escaped;
                 if left.done || right.done {
                     if left.done != right.done || self.mismatch {
@@ -357,7 +352,9 @@ fn max_consumed_word_error_ulps(
     ]
     .into_iter()
     .map(|(a, b)| ulp_distance(a, b))
-    .try_fold(0, |maximum, distance| distance.map(|value| maximum.max(value)))
+    .try_fold(0, |maximum, distance| {
+        distance.map(|value| maximum.max(value))
+    })
 }
 
 fn ulp_distance(left: f32, right: f32) -> Option<u32> {
@@ -507,8 +504,8 @@ mod tests {
     }
 
     #[test]
-    fn picture_fast_preview_publishes_one_working_orbit_without_verification(
-    ) -> Result<(), MathError> {
+    fn picture_fast_preview_publishes_one_working_orbit_without_verification()
+    -> Result<(), MathError> {
         let centre = BigCentre::from_f64([0.0; 4], 256)?;
         let mut plan = precision_for(100.0, 960, 512)?;
         plan.policy_digits = plan.working_digits;
@@ -557,7 +554,11 @@ mod tests {
             }
         };
         assert_eq!(orbit.verification, ReferenceVerification::Stable);
-        assert!(orbit.max_consumed_word_error_ulps.is_some_and(|error| error <= 2));
+        assert!(
+            orbit
+                .max_consumed_word_error_ulps
+                .is_some_and(|error| error <= 2)
+        );
         Ok(())
     }
 }

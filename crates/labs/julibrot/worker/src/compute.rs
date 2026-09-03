@@ -259,16 +259,16 @@ mod tests {
     use std::time::Instant;
 
     use ember_julibrot_math::{
-        BigCentre, ComputedOrbit, EscapeParams, ReferenceOrbitRecord, perturb_scaled_f64,
-        precision_for, PrecisionMode, ReferencePass,
+        BigCentre, ComputedOrbit, EscapeParams, PrecisionMode, ReferenceOrbitRecord, ReferencePass,
+        perturb_scaled_f64, precision_for,
     };
 
     use super::{
         MathFailureCode, MonotonicClock, ORBIT_CHUNK_MAX_ITERATIONS, OrbitTaskPoll,
         ReferenceOrbitTask,
     };
-    use crate::{Admission, EncodedCentre, OrbitReason, OrbitRequest, ProducerShaper};
     use crate::wire::{OrbitVerificationFacts, Pool, WireBuffer};
+    use crate::{Admission, EncodedCentre, OrbitReason, OrbitRequest, ProducerShaper};
 
     struct StepClock {
         now: Cell<u64>,
@@ -369,8 +369,8 @@ mod tests {
             compute_samples.sort_unstable();
             let compute_us = compute_samples[SAMPLE_COUNT / 2];
             let orbit = retained.expect("at least one measurement orbit");
-            let mut buffer = WireBuffer::new(Pool::Orbit, 0, max_iter)
-                .expect("measurement transfer buffer");
+            let mut buffer =
+                WireBuffer::new(Pool::Orbit, 0, max_iter).expect("measurement transfer buffer");
             let pack_started = Instant::now();
             let facts = OrbitVerificationFacts::from_orbit(&orbit);
             for _ in 0..PACK_REPEATS {

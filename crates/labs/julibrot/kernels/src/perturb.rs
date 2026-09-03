@@ -420,9 +420,7 @@ mod tests {
         let delta = [f32::from_bits(1.0_f32.to_bits() + 1), 0.0];
         let double_single = multiply(multiply_reference(reference, delta), 2.0)[0];
         let collapsed = multiply(complex_mul(reconstruct(reference), delta), 2.0)[0];
-        let exact = 2.0
-            * (f64::from(record.re_hi) + f64::from(record.re_lo))
-            * f64::from(delta[0]);
+        let exact = 2.0 * (f64::from(record.re_hi) + f64::from(record.re_lo)) * f64::from(delta[0]);
         let double_single_error = (f64::from(double_single) - exact).abs();
         let collapsed_error = (f64::from(collapsed) - exact).abs();
         assert!(double_single_error < collapsed_error);

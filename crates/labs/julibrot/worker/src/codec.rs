@@ -667,14 +667,17 @@ mod tests {
         assert_eq!(&buffer.as_bytes()[112..116], &1_u32.to_le_bytes());
         assert_eq!(&buffer.as_bytes()[116..120], &0x0123_4567_u32.to_le_bytes());
 
-        let picture = request
-            .with_precision_policy(PrecisionMode::PictureFast, ReferencePass::Measure);
+        let picture =
+            request.with_precision_policy(PrecisionMode::PictureFast, ReferencePass::Measure);
         picture.encode_into(&mut buffer).unwrap();
         let decoded = OrbitRequest::decode(&buffer).unwrap();
         assert_eq!(decoded, picture);
         assert_eq!(decoded.precision_mode(), PrecisionMode::PictureFast);
         assert_eq!(decoded.reference_pass(), ReferencePass::Measure);
-        assert_eq!(u32::from_le_bytes(buffer.as_bytes()[36..40].try_into().unwrap()), 69);
+        assert_eq!(
+            u32::from_le_bytes(buffer.as_bytes()[36..40].try_into().unwrap()),
+            69
+        );
     }
 
     #[test]

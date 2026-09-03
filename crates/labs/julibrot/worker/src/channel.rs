@@ -11,9 +11,7 @@ use crate::browser::TransferBuffer;
 #[cfg(target_arch = "wasm32")]
 use crate::browser_owner::BrowserOwnerEndpoint;
 use crate::slots::{FourSlotModel, SlotId};
-use crate::wire::{
-    HEADER_BYTES, ORBIT_RECORD_BYTES, OrbitVerificationFacts, Pool, WireBuffer,
-};
+use crate::wire::{HEADER_BYTES, ORBIT_RECORD_BYTES, OrbitVerificationFacts, Pool, WireBuffer};
 use crate::{
     Admission, ChannelError, CreditAccount, ErrorCode, MessageHeader, MessageKind,
     OrbitDisposition, OrbitRequest, ProducerShaper, ReferenceOrbitRecord, ReferenceVerification,

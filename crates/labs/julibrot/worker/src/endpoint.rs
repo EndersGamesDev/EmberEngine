@@ -710,16 +710,14 @@ mod tests {
             compute_us: u32,
             records: &[ReferenceOrbitRecord],
         ) -> Result<(), ChannelError> {
-            self.buffer
-                .borrow_mut()
-                .write_orbit(
-                    generation,
-                    64,
-                    compute_us,
-                    250_000,
-                    records,
-                    crate::wire::OrbitVerificationFacts::stable(0, 0),
-                )
+            self.buffer.borrow_mut().write_orbit(
+                generation,
+                64,
+                compute_us,
+                250_000,
+                records,
+                crate::wire::OrbitVerificationFacts::stable(0, 0),
+            )
         }
     }
 

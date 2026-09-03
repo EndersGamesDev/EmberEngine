@@ -416,9 +416,8 @@ fn operation_rounding_error(
     delta_c_norm: f64,
     exponent: i32,
 ) -> f64 {
-    let local_magnitude = 2.0 * reference_norm * delta_norm
-        + delta_norm * delta_norm
-        + delta_c_norm;
+    let local_magnitude =
+        2.0 * reference_norm * delta_norm + delta_norm * delta_norm + delta_c_norm;
     gamma(20) * local_magnitude + 20.0 * scaled_subnormal_floor(exponent)
 }
 
@@ -447,12 +446,7 @@ fn propagated_error(
     let amplification = 2.0 * (reference_norm + delta_norm);
     let propagated = amplification.mul_add(previous, previous * previous);
     let reference = 2.0 * reference_error * (delta_norm + previous);
-    let arithmetic = operation_rounding_error(
-        reference_norm,
-        delta_norm,
-        delta_c_norm,
-        exponent,
-    );
+    let arithmetic = operation_rounding_error(reference_norm, delta_norm, delta_c_norm, exponent);
     propagated + reference + centre_error + arithmetic
 }
 
@@ -476,8 +470,7 @@ fn smooth_error_bound(magnitude: f64, absolute_error: f64) -> f64 {
     if magnitude <= 1.0 || absolute_error == 0.0 {
         0.0
     } else {
-        gamma(6)
-            + absolute_error / (magnitude * magnitude.ln() * core::f64::consts::LN_2)
+        gamma(6) + absolute_error / (magnitude * magnitude.ln() * core::f64::consts::LN_2)
     }
 }
 
