@@ -673,6 +673,7 @@ mod tests {
             }
         }
         assert_eq!(fixture_count, 16);
+        assert_eq!(record_count, 20_464, "production-shaped fixture corpus");
         assert_eq!(changed_count, 0, "production-shaped fixture corpus");
         eprintln!(
             "reference_orbit_split_total fixtures={fixture_count} records={record_count} coordinates={} consumed_word_changes={changed_count}",
