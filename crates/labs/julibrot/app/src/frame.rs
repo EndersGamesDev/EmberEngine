@@ -574,7 +574,8 @@ mod browser {
                 height: runtime.facts().height,
             };
             let params = EscapeParams::new(requested.iteration_cap);
-            let mut plan = JulibrotKernels::plan(&executor, extent, params).map_err(kernel_error)?;
+            let mut plan =
+                JulibrotKernels::plan(&executor, extent, params).map_err(kernel_error)?;
             let mut loop_state = FrameLoop::default();
             let mut applied_precision_mode = PrecisionMode::Deterministic;
             super::apply_precision_mode(
@@ -1982,8 +1983,7 @@ mod tests {
     #[test]
     fn picture_fast_viewer_builds_the_fast_ladder_and_centre_policy() {
         let mut viewer = ViewerController::new(960).expect("canonical viewer");
-        let (precision_mode, mut frame_loop, plan) =
-            precision_runtime_from_viewer(&mut viewer);
+        let (precision_mode, mut frame_loop, plan) = precision_runtime_from_viewer(&mut viewer);
         assert_eq!(precision_mode, PrecisionMode::PictureFast);
         assert_eq!(plan.precision_mode, PrecisionMode::PictureFast);
         assert_eq!(plan.level(RefinementLevel::Preview).iteration_cap, 32);
