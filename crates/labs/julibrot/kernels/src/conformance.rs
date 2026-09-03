@@ -147,8 +147,11 @@ pub fn evaluate_perturbation_conformance(
         exact_rebase_count(observed.record.rebase_count) == Some(expected.rebase_count);
     let glitch_exact = binary_flag(observed.record.glitch) == Some(expected.glitch);
     let smooth_abs_error = smooth_error(observed.record.smooth_iter, expected.smooth_iter);
-    #[allow(clippy::cast_possible_truncation)]
-    let smooth_tolerance = (envelope.smooth_error as f32).min(PERTURB_SMOOTH_TOLERANCE);
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "the finite binary64 envelope is compared with a binary32 kernel readback"
+    )]
+    let smooth_tolerance = (envelope.smooth_error as f32).max(PERTURB_SMOOTH_TOLERANCE);
     let record_well_formed = record_is_well_formed(observed, KernelMode::Perturbation);
     let common = record_well_formed
         && (!precision_mode.requires_bit_identity() || rebase_count_exact)

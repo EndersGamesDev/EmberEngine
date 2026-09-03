@@ -30,12 +30,6 @@ struct ScaledState {
     glitch: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct SplitReference {
-    high: [f32; 2],
-    low: [f32; 2],
-}
-
 impl PerturbUniform {
     /// Packs a checked scaled-perturbation payload.
     ///
@@ -184,22 +178,8 @@ fn normalize_scaled(mut state: ScaledState) -> ScaledState {
     state
 }
 
-const fn split_reference(record: ReferenceOrbitRecord) -> SplitReference {
-    SplitReference {
-        high: [record.re_hi, record.im_hi],
-        low: [record.re_lo, record.im_lo],
-    }
-}
-
-fn reconstruct(reference: SplitReference) -> [f32; 2] {
-    add(reference.high, reference.low)
-}
-
-fn multiply_reference(reference: SplitReference, delta: [f32; 2]) -> [f32; 2] {
-    add(
-        complex_mul(reference.high, delta),
-        complex_mul(reference.low, delta),
-    )
+const fn reconstruct(record: ReferenceOrbitRecord) -> [f32; 2] {
+    [record.re, record.im]
 }
 
 fn radius_squared(value: [f32; 2]) -> f32 {
@@ -223,12 +203,12 @@ fn record(rebases: u32, glitch: bool) -> KernelSample {
 }
 
 fn advance(
-    reference: SplitReference,
+    reference: [f32; 2],
     delta: [f32; 2],
     delta_c: [f32; 2],
     exponent: i32,
 ) -> [f32; 2] {
-    let linear = multiply(multiply_reference(reference, delta), 2.0);
+    let linear = multiply(complex_mul(reference, delta), 2.0);
     let quadratic = scale(complex_mul(delta, delta), exponent);
     add(add(linear, quadratic), delta_c)
 }
@@ -257,8 +237,7 @@ pub fn perturb_scaled_offset(
     {
         return Err(KernelError::ReferenceLengthMismatch);
     }
-    let z_zero_reference = split_reference(orbit[0]);
-    let z_zero = reconstruct(z_zero_reference);
+    let z_zero = reconstruct(orbit[0]);
     let mut state = normalize_scaled(ScaledState {
         delta: [offset_prime[0], offset_prime[1]],
         delta_c: [offset_prime[2], offset_prime[3]],
@@ -274,10 +253,9 @@ pub fn perturb_scaled_offset(
         if reference_index >= uniforms.orbit_length {
             return Ok(record(rebases, true));
         }
-        let reference = split_reference(orbit[reference_index as usize]);
-        let reference_value = reconstruct(reference);
+        let reference = reconstruct(orbit[reference_index as usize]);
         let represented_delta = scale(state.delta, state.exponent);
-        let z = add(reference_value, represented_delta);
+        let z = add(reference, represented_delta);
         if !finite(z) {
             return Ok(record(rebases, true));
         }
@@ -309,7 +287,7 @@ pub fn perturb_scaled_offset(
             if state.glitch {
                 return Ok(record(rebases, true));
             }
-            z_zero_reference
+            z_zero
         } else {
             reference
         };
@@ -361,18 +339,15 @@ pub fn perturb_scaled_pixel(
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_RESCALE_STEPS, ScaledState, complex_mul, finite_scalar, ldexp, multiply,
-        multiply_reference, normalize_scaled, perturb_scaled_offset, perturb_scaled_pixel,
-        reconstruct, scale, split_reference,
+        MAX_RESCALE_STEPS, ScaledState, finite_scalar, ldexp, normalize_scaled,
+        perturb_scaled_offset, perturb_scaled_pixel, reconstruct, scale,
     };
     use crate::{GridExtent, KernelError, PerturbUniform, RefinementLevel};
     use ember_julibrot_math::{EscapeParams, Plane, ReferenceOrbitRecord, ScaleSplit};
 
     const ZERO: ReferenceOrbitRecord = ReferenceOrbitRecord {
-        re_hi: 0.0,
-        im_hi: 0.0,
-        re_lo: 0.0,
-        im_lo: 0.0,
+        re: 0.0,
+        im: 0.0,
     };
 
     fn uniform(max_iter: u32, orbit_length: u32) -> PerturbUniform {
@@ -409,36 +384,9 @@ mod tests {
     }
 
     #[test]
-    #[allow(
-        clippy::print_stderr,
-        reason = "this is the explicit accuracy measurement"
-    )]
-    fn double_single_reference_multiply_improves_a_midpoint_product() {
-        let record = ReferenceOrbitRecord {
-            re_hi: 1.0,
-            im_hi: 0.0,
-            re_lo: 2.0_f32.powi(-24),
-            im_lo: 0.0,
-        };
-        let reference = split_reference(record);
-        let delta = [f32::from_bits(1.0_f32.to_bits() + 1), 0.0];
-        let double_single = multiply(multiply_reference(reference, delta), 2.0)[0];
-        let collapsed = multiply(complex_mul(reconstruct(reference), delta), 2.0)[0];
-        let exact = 2.0 * (f64::from(record.re_hi) + f64::from(record.re_lo)) * f64::from(delta[0]);
-        let double_single_error = (f64::from(double_single) - exact).abs();
-        let collapsed_error = (f64::from(collapsed) - exact).abs();
-        assert!(double_single_error < collapsed_error);
-        assert_eq!(double_single.to_bits(), collapsed.to_bits() + 1);
-        eprintln!(
-            "double_single_accuracy collapsed_error={collapsed_error:e} double_single_error={double_single_error:e} improvement={:e}",
-            collapsed_error / double_single_error,
-        );
-    }
-
-    #[test]
     fn nonzero_z_zero_rebase_uses_the_correct_delta() {
         for mode in ember_julibrot_math::PrecisionMode::ALL {
-            let one = ReferenceOrbitRecord { re_hi: 1.0, ..ZERO };
+            let one = ReferenceOrbitRecord { re: 1.0, ..ZERO };
             let sample = perturb_scaled_offset(&uniform(2, 2), &[one, one], [-0.75, 0.0, 0.0, 0.0])
                 .expect("reference length matches");
             assert!(sample.record.rebase_count >= 0.0);
@@ -575,10 +523,10 @@ mod tests {
     fn deep_corpus_matches_math_across_rescales_rebase_and_mixed_offsets() {
         let escaped_orbit = [
             ZERO,
-            ReferenceOrbitRecord { re_hi: 2.0, ..ZERO },
-            ReferenceOrbitRecord { re_hi: 6.0, ..ZERO },
+            ReferenceOrbitRecord { re: 2.0, ..ZERO },
+            ReferenceOrbitRecord { re: 6.0, ..ZERO },
             ReferenceOrbitRecord {
-                re_hi: 38.0,
+                re: 38.0,
                 ..ZERO
             },
         ];
@@ -638,10 +586,8 @@ mod tests {
     )]
     fn boundary_envelope_is_conservative_and_within_four_times_observed_error() {
         let boundary = ReferenceOrbitRecord {
-            re_hi: 16.0,
-            im_hi: 0.0,
-            re_lo: -2.0_f32.powi(-21),
-            im_lo: 0.0,
+            re: f32::from_bits(16.0_f32.to_bits() - 1),
+            im: 0.0,
         };
         let uniforms = uniform(1, 1);
         let actual = perturb_scaled_offset(&uniforms, &[boundary], [0.0; 4])
@@ -653,10 +599,15 @@ mod tests {
             EscapeParams::new(1),
         )
         .expect("boundary math mirror");
-        let result = crate::evaluate_perturbation_conformance(actual, expected, envelope);
+        let result = crate::evaluate_perturbation_conformance(
+            ember_julibrot_math::PrecisionMode::PictureFast,
+            actual,
+            expected,
+            envelope,
+        );
         assert_eq!(result.verdict, crate::ConformanceVerdict::Boundary);
-        let gpu = reconstruct(split_reference(boundary));
-        let exact_re = f64::from(boundary.re_hi) + f64::from(boundary.re_lo);
+        let gpu = reconstruct(boundary);
+        let exact_re = f64::from(boundary.re);
         let observed_norm_error =
             (f64::from(gpu[0] * gpu[0] + gpu[1] * gpu[1]) - exact_re * exact_re).abs();
         assert!(envelope.escape_norm2_error >= observed_norm_error);

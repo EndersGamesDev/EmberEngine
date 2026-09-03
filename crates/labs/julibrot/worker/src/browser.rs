@@ -276,7 +276,7 @@ impl TransferBuffer {
             .checked_add(
                 header
                     .length
-                    .checked_mul(u32::try_from(ORBIT_RECORD_BYTES).unwrap_or(16))
+                    .checked_mul(u32::try_from(ORBIT_RECORD_BYTES).unwrap_or(8))
                     .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, header.length, 0, 0))?,
             )
             .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, header.length, 0, 0))?;
@@ -362,16 +362,11 @@ impl TransferBuffer {
             let index = u32::try_from(index)
                 .map_err(|_| ChannelError::new(ErrorCode::BadLength, record_count, 0, 0))?;
             let offset = u32::try_from(HEADER_BYTES).unwrap_or(32)
-                + index * u32::try_from(ORBIT_RECORD_BYTES).unwrap_or(16);
+                + index * u32::try_from(ORBIT_RECORD_BYTES).unwrap_or(8);
             write_words_at(
                 &self.bytes,
                 offset,
-                &[
-                    record.re_hi.to_bits(),
-                    record.im_hi.to_bits(),
-                    record.re_lo.to_bits(),
-                    record.im_lo.to_bits(),
-                ],
+                &[record.re.to_bits(), record.im.to_bits()],
             );
         }
         let facts_offset = self.bytes.length()

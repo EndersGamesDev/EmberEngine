@@ -3,8 +3,9 @@ use core::num::NonZeroU32;
 use crate::{
     BigCentre, BigScalar, ComputedOrbit, EscapeParams, EscapeSample, MathError, OrbitStep,
     PrecisionMode, PrecisionPlan, ReferenceOrbitRecord, ReferencePass, ReferenceVerification,
-    split_scalar,
 };
+#[cfg(test)]
+use crate::split_scalar;
 
 const LOG2_10: f64 = core::f64::consts::LOG2_10;
 
@@ -77,7 +78,7 @@ impl ReferenceOrbitBuilder {
     /// Creates one policy-selected reference-orbit computation.
     ///
     /// `PictureFast` Preview computes only the working orbit. Final and Measure, plus every
-    /// Deterministic request, compare all four GPU-consumed words with a D+16 orbit.
+    /// Deterministic request, compare both GPU-consumed words with a D+16 orbit.
     ///
     /// # Errors
     ///
@@ -128,22 +129,24 @@ impl ReferenceOrbitBuilder {
                 return Err(MathError::InvalidOrbitState);
             };
             if let Some(right) = verification.flatten() {
-                let Some(error) = max_consumed_word_error_ulps(left.record, right.record) else {
-                    self.mismatch = true;
-                    continue;
-                };
-                self.max_consumed_word_error_ulps = self.max_consumed_word_error_ulps.max(error);
-                self.mismatch |= error > 2 || left.escaped != right.escaped;
-                if left.done || right.done {
-                    if left.done != right.done || self.mismatch {
+                match observe_verification(
+                    left,
+                    right,
+                    &mut self.mismatch,
+                    &mut self.max_consumed_word_error_ulps,
+                ) {
+                    VerificationDecision::Pending => {}
+                    VerificationDecision::Restart => {
                         self.restart_at_higher_precision()?;
                         continue;
                     }
-                    return Ok(OrbitStep::Complete(self.primary.finish(
-                        ReferenceVerification::Stable,
-                        Some(self.max_consumed_word_error_ulps),
-                        self.precision_escalations,
-                    )?));
+                    VerificationDecision::Complete => {
+                        return Ok(OrbitStep::Complete(self.primary.finish(
+                            ReferenceVerification::Stable,
+                            Some(self.max_consumed_word_error_ulps),
+                            self.precision_escalations,
+                        )?));
+                    }
                 }
             } else if left.done {
                 return Ok(OrbitStep::Complete(self.primary.finish(
@@ -204,6 +207,36 @@ struct AdvanceResult {
     record: ReferenceOrbitRecord,
     escaped: bool,
     done: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum VerificationDecision {
+    Pending,
+    Complete,
+    Restart,
+}
+
+fn observe_verification(
+    left: AdvanceResult,
+    right: AdvanceResult,
+    mismatch: &mut bool,
+    maximum_error: &mut u32,
+) -> VerificationDecision {
+    if let Some(error) = max_consumed_word_error_ulps(left.record, right.record) {
+        *maximum_error = (*maximum_error).max(error);
+        *mismatch |= error > 2 || left.escaped != right.escaped;
+    } else {
+        *mismatch = true;
+    }
+    if left.done || right.done {
+        if left.done != right.done || *mismatch {
+            VerificationDecision::Restart
+        } else {
+            VerificationDecision::Complete
+        }
+    } else {
+        VerificationDecision::Pending
+    }
 }
 
 impl OrbitState {
@@ -330,13 +363,9 @@ fn bits_for_digits(digits: u32) -> Result<u32, MathError> {
 }
 
 fn split_complex(value: &ComplexBig) -> Result<ReferenceOrbitRecord, MathError> {
-    let re = split_scalar(&value.re)?;
-    let im = split_scalar(&value.im)?;
     Ok(ReferenceOrbitRecord {
-        re_hi: re[0],
-        im_hi: im[0],
-        re_lo: re[1],
-        im_lo: im[1],
+        re: value.re.to_f32()?,
+        im: value.im.to_f32()?,
     })
 }
 
@@ -344,12 +373,7 @@ fn max_consumed_word_error_ulps(
     left: ReferenceOrbitRecord,
     right: ReferenceOrbitRecord,
 ) -> Option<u32> {
-    [
-        (left.re_hi, right.re_hi),
-        (left.im_hi, right.im_hi),
-        (left.re_lo, right.re_lo),
-        (left.im_lo, right.im_lo),
-    ]
+    [(left.re, right.re), (left.im, right.im)]
     .into_iter()
     .map(|(a, b)| ulp_distance(a, b))
     .try_fold(0, |maximum, distance| {
@@ -408,7 +432,10 @@ fn smooth_iteration_f32(iteration: u32, z_re: f32, z_im: f32) -> f32 {
 mod tests {
     use core::num::NonZeroU32;
 
-    use super::{ReferenceOrbitBuilder, escape_f32};
+    use super::{
+        AdvanceResult, ReferenceOrbitBuilder, VerificationDecision, escape_f32,
+        observe_verification,
+    };
     use crate::{
         BigCentre, EscapeParams, MathError, OrbitStep, PrecisionMode, ReferencePass,
         ReferenceVerification, precision_for,
@@ -442,6 +469,31 @@ mod tests {
             Err(MathError::InvalidMaxIter)
         );
         Ok(())
+    }
+
+    #[test]
+    fn undefined_ulp_on_last_entry_restarts_before_an_exhausted_advance() {
+        let left = AdvanceResult {
+            record: crate::ReferenceOrbitRecord {
+                re: f32::INFINITY,
+                im: 0.0,
+            },
+            escaped: false,
+            done: true,
+        };
+        let right = AdvanceResult {
+            record: crate::ReferenceOrbitRecord { re: 0.0, im: 0.0 },
+            escaped: false,
+            done: true,
+        };
+        let mut mismatch = false;
+        let mut maximum_error = 0;
+        assert_eq!(
+            observe_verification(left, right, &mut mismatch, &mut maximum_error),
+            VerificationDecision::Restart
+        );
+        assert!(mismatch);
+        assert_eq!(maximum_error, 0);
     }
 
     #[test]
@@ -496,8 +548,8 @@ mod tests {
         };
         assert_eq!(orbit.length, 4);
         assert_eq!(orbit.escape_index, Some(3));
-        assert_eq!(orbit.records[0].re_hi, 0.0);
-        assert_eq!(orbit.records[1].re_hi, 2.0);
+        assert_eq!(orbit.records[0].re, 0.0);
+        assert_eq!(orbit.records[1].re, 2.0);
         assert_eq!(orbit.verification, ReferenceVerification::Stable);
         assert!(orbit.max_consumed_word_error_ulps.is_some());
         Ok(())
@@ -582,41 +634,36 @@ mod tests {
                 for max_iter in CAPS {
                     let plan = precision_for(zoom_log2, 960, max_iter)?;
                     let centre = BigCentre::from_f64(coordinates, plan.requested_bits)?;
-                    let mut builder = ReferenceOrbitBuilder::new_with_policy(
-                        &centre,
-                        plan,
-                        EscapeParams::new(max_iter),
-                        PrecisionMode::PictureFast,
-                        ReferencePass::Preview,
-                    )?;
-                    let orbit = loop {
-                        match builder.step(NonZeroU32::new(max_iter).expect("cap is nonzero"))? {
-                            OrbitStep::Pending { .. } => {}
-                            OrbitStep::Complete(orbit) => break orbit,
-                        }
-                    };
+                    let params = EscapeParams::new(max_iter);
+                    let mut orbit = OrbitState::new(&centre, bits_for_digits(plan.working_digits)?)?;
                     let mut fixture_changes = 0_usize;
                     let mut fixture_records = 0_usize;
                     let mut excluded_terminal_records = 0_usize;
-                    for (index, record) in orbit.records.iter().enumerate() {
-                        let re = f64::from(record.re_hi) + f64::from(record.re_lo);
-                        let im = f64::from(record.im_hi) + f64::from(record.im_lo);
-                        if re.hypot(im) > 16.0 {
-                            assert_eq!(
-                                orbit.escape_index,
-                                Some(u32::try_from(index).expect("orbit index fits u32")),
+                    for index in 0..max_iter {
+                        let re = split_scalar(&orbit.z.re)?;
+                        let im = split_scalar(&orbit.z.im)?;
+                        let advanced = orbit
+                            .advance(params)?
+                            .ok_or(MathError::InvalidOrbitState)?;
+                        let reconstructed_re = f64::from(re[0]) + f64::from(re[1]);
+                        let reconstructed_im = f64::from(im[0]) + f64::from(im[1]);
+                        if reconstructed_re.hypot(reconstructed_im) > 16.0 {
+                            assert!(
+                                advanced.escaped && advanced.done,
                                 "fixture={preset}/zoom-{zoom_log2}/cap-{max_iter} has a nonterminal record outside |Z| <= 16"
                             );
                             excluded_terminal_records += 1;
-                            continue;
+                        } else {
+                            fixture_records += 1;
+                            fixture_changes +=
+                                usize::from((re[0] + re[1]).to_bits() != re[0].to_bits());
+                            fixture_changes +=
+                                usize::from((im[0] + im[1]).to_bits() != im[0].to_bits());
                         }
-                        fixture_records += 1;
-                        fixture_changes += usize::from(
-                            (record.re_hi + record.re_lo).to_bits() != record.re_hi.to_bits(),
-                        );
-                        fixture_changes += usize::from(
-                            (record.im_hi + record.im_lo).to_bits() != record.im_hi.to_bits(),
-                        );
+                        assert_eq!(u32::try_from(orbit.records.len()).ok(), Some(index + 1));
+                        if advanced.done {
+                            break;
+                        }
                     }
                     let fixture = format!("{preset}/zoom-{zoom_log2}/cap-{max_iter}");
                     assert_eq!(fixture_changes, 0, "fixture={fixture}");

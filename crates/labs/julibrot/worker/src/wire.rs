@@ -18,11 +18,11 @@ pub const ORBIT_FACT_BYTES: usize = 16;
 /// Per-buffer bytes outside orbit-record capacity.
 pub const BUFFER_OVERHEAD_BYTES: usize = HEADER_BYTES + ORBIT_FACT_BYTES + POOL_TRAILER_BYTES;
 /// One reference-orbit record size in bytes.
-pub const ORBIT_RECORD_BYTES: usize = 16;
+pub const ORBIT_RECORD_BYTES: usize = 8;
 /// One error record size in bytes.
 pub const ERROR_RECORD_BYTES: usize = 16;
 
-/// Returns the exact capacity `64 + 16 * max_iter` with checked arithmetic.
+/// Returns the exact capacity `64 + 8 * max_iter` with checked arithmetic.
 ///
 /// # Errors
 ///
@@ -591,12 +591,7 @@ impl WireBuffer {
             let offset = HEADER_BYTES + index * ORBIT_RECORD_BYTES;
             write_words(
                 &mut message[offset..offset + ORBIT_RECORD_BYTES],
-                &[
-                    record.re_hi.to_bits(),
-                    record.im_hi.to_bits(),
-                    record.re_lo.to_bits(),
-                    record.im_lo.to_bits(),
-                ],
+                &[record.re.to_bits(), record.im.to_bits()],
             );
         }
         let facts_offset = message.len() - ORBIT_FACT_BYTES;
@@ -630,10 +625,8 @@ impl WireBuffer {
             .map(|index| {
                 let offset = HEADER_BYTES + index * ORBIT_RECORD_BYTES;
                 ReferenceOrbitRecord {
-                    re_hi: f32::from_bits(read_u32(&self.bytes, offset)),
-                    im_hi: f32::from_bits(read_u32(&self.bytes, offset + 4)),
-                    re_lo: f32::from_bits(read_u32(&self.bytes, offset + 8)),
-                    im_lo: f32::from_bits(read_u32(&self.bytes, offset + 12)),
+                    re: f32::from_bits(read_u32(&self.bytes, offset)),
+                    im: f32::from_bits(read_u32(&self.bytes, offset + 4)),
                 }
             })
             .collect())
@@ -750,7 +743,7 @@ mod tests {
         assert_eq!(size_of::<ReferenceOrbitRecord>(), ORBIT_RECORD_BYTES);
         assert_eq!(
             buffer_capacity(64).unwrap(),
-            BUFFER_OVERHEAD_BYTES + 64 * 16
+            BUFFER_OVERHEAD_BYTES + 64 * 8
         );
     }
 
@@ -824,16 +817,12 @@ mod tests {
     fn orbit_and_error_payloads_have_exact_bytes_and_zero_tail() {
         let records = [
             ReferenceOrbitRecord {
-                re_hi: 1.0,
-                im_hi: -2.0,
-                re_lo: 0.25,
-                im_lo: -0.125,
+                re: 1.0,
+                im: -2.0,
             },
             ReferenceOrbitRecord {
-                re_hi: 0.0,
-                im_hi: 0.0,
-                re_lo: 0.0,
-                im_lo: 0.0,
+                re: 0.0,
+                im: 0.0,
             },
         ];
         let mut orbit = WireBuffer::new(Pool::Orbit, 0, 64).unwrap();
@@ -846,7 +835,7 @@ mod tests {
         assert_eq!(orbit.orbit_facts().unwrap(), facts);
         assert_eq!(&orbit.as_bytes()[32..36], &1.0_f32.to_le_bytes());
         assert!(
-            orbit.as_bytes()[64..orbit.capacity() - 32]
+            orbit.as_bytes()[48..orbit.capacity() - 32]
                 .iter()
                 .all(|byte| *byte == 0)
         );

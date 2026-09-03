@@ -130,7 +130,6 @@ pub fn perturb_scaled_f64_with_envelope(
         };
         let reference = reconstruct(*record);
         let reference_error = reference_reconstruction_error(*record);
-        let reconstruction_error = display_reconstruction_error(*record);
         let actual_delta = ldexp_complex(delta_prime, exponent);
         let z = reference.add(actual_delta);
         last_value = z;
@@ -140,7 +139,6 @@ pub fn perturb_scaled_f64_with_envelope(
         let display_error = displayed_error(
             reference.hypot(),
             reference_error,
-            reconstruction_error,
             actual_delta.hypot(),
             absolute_error,
             exponent,
@@ -184,7 +182,6 @@ pub fn perturb_scaled_f64_with_envelope(
             rebase_count += 1;
             absolute_error = display_error
                 + reference_reconstruction_error(orbit[0])
-                + display_reconstruction_error(orbit[0])
                 + rebase_rounding_error(z, z_zero, exponent);
             if !renormalize(
                 &mut delta_prime,
@@ -335,8 +332,8 @@ fn renormalize(
 
 fn reconstruct(record: ReferenceOrbitRecord) -> Complex64 {
     Complex64 {
-        re: f64::from(record.re_hi) + f64::from(record.re_lo),
-        im: f64::from(record.im_hi) + f64::from(record.im_lo),
+        re: f64::from(record.re),
+        im: f64::from(record.im),
     }
 }
 
@@ -369,15 +366,7 @@ fn norm_squared(value: Complex64) -> f64 {
 }
 
 fn reference_reconstruction_error(record: ReferenceOrbitRecord) -> f64 {
-    half_ulp(record.re_lo).hypot(half_ulp(record.im_lo))
-}
-
-fn display_reconstruction_error(record: ReferenceOrbitRecord) -> f64 {
-    let displayed_re = f64::from(record.re_hi + record.re_lo);
-    let displayed_im = f64::from(record.im_hi + record.im_lo);
-    let exact_re = f64::from(record.re_hi) + f64::from(record.re_lo);
-    let exact_im = f64::from(record.im_hi) + f64::from(record.im_lo);
-    (displayed_re - exact_re).hypot(displayed_im - exact_im)
+    half_ulp(record.re).hypot(half_ulp(record.im))
 }
 
 fn half_ulp(value: f32) -> f64 {
@@ -398,12 +387,11 @@ fn centre_offset_error(value: Complex64, exponent: i32) -> f64 {
 fn displayed_error(
     reference_norm: f64,
     reference_error: f64,
-    reconstruction_error: f64,
     delta_norm: f64,
     delta_error: f64,
     exponent: i32,
 ) -> f64 {
-    let inherited = reference_error + reconstruction_error + delta_error;
+    let inherited = reference_error + delta_error;
     gamma(1).mul_add(
         reference_norm + delta_norm,
         inherited + scaled_subnormal_floor(exponent),
@@ -528,11 +516,9 @@ fn validate_inputs(
         return Err(MathError::InvalidBailout);
     }
     if !offset_prime.iter().all(|component| component.is_finite())
-        || !orbit.iter().all(|record| {
-            [record.re_hi, record.im_hi, record.re_lo, record.im_lo]
-                .into_iter()
-                .all(f32::is_finite)
-        })
+        || !orbit
+            .iter()
+            .all(|record| [record.re, record.im].into_iter().all(f32::is_finite))
     {
         return Err(MathError::NonFinite);
     }
@@ -548,12 +534,7 @@ mod tests {
     use crate::{EscapeParams, MathError, ReferenceOrbitRecord};
 
     fn record(re: f32, im: f32) -> ReferenceOrbitRecord {
-        ReferenceOrbitRecord {
-            re_hi: re,
-            im_hi: im,
-            re_lo: 0.0,
-            im_lo: 0.0,
-        }
+        ReferenceOrbitRecord { re, im }
     }
 
     #[test]

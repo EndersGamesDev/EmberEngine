@@ -446,7 +446,7 @@ mod tests {
         };
         assert_eq!(orbit.length, 4);
         assert_eq!(orbit.escape_index, Some(3));
-        assert_eq!(orbit.records[0].re_hi, 0.0);
+        assert_eq!(orbit.records[0].re, 0.0);
         assert!(compute_us > 0);
         let sample =
             perturb_scaled_f64(&orbit.records, [0.0; 4], -900, EscapeParams::new(64)).unwrap();

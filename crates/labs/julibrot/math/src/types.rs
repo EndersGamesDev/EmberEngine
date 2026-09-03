@@ -177,10 +177,8 @@ pub struct PerturbationEnvelope {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(C)]
 pub struct ReferenceOrbitRecord {
-    pub re_hi: f32,
-    pub im_hi: f32,
-    pub re_lo: f32,
-    pub im_lo: f32,
+    pub re: f32,
+    pub im: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -358,7 +356,7 @@ mod tests {
         assert_eq!(offset_of!(CentreSplit, hi), 0);
         assert_eq!(offset_of!(CentreSplit, lo), 16);
         assert_eq!(size_of::<EscapeParams>(), 8);
-        assert_eq!(size_of::<ReferenceOrbitRecord>(), 16);
+        assert_eq!(size_of::<ReferenceOrbitRecord>(), 8);
         assert_eq!(size_of::<EscapeGridRecord>(), 16);
         assert_eq!(size_of::<CentreF64>(), 32);
     }

@@ -20,6 +20,37 @@ const LEVELS: [RefinementLevel; 3] = [
 ];
 
 #[cfg(any(target_arch = "wasm32", test))]
+const REFERENCE_RECORD_BYTES: usize = 8;
+#[cfg(any(target_arch = "wasm32", test))]
+const REFERENCE_TEXEL_BYTES: usize = 16;
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn expand_reference_texels(records: &[u8], length: u32) -> Result<Vec<u8>, AppError> {
+    let count = usize::try_from(length)
+        .map_err(|_| AppError::Worker("reference length does not fit usize".to_string()))?;
+    let expected = count
+        .checked_mul(REFERENCE_RECORD_BYTES)
+        .ok_or_else(|| AppError::Worker("reference record byte length overflow".to_string()))?;
+    if records.len() != expected {
+        return Err(AppError::Worker(format!(
+            "reference payload has {} bytes; expected {expected}",
+            records.len()
+        )));
+    }
+    let texel_bytes = count
+        .checked_mul(REFERENCE_TEXEL_BYTES)
+        .ok_or_else(|| AppError::Worker("reference texel byte length overflow".to_string()))?;
+    let mut texels = vec![0_u8; texel_bytes];
+    for (record, texel) in records
+        .chunks_exact(REFERENCE_RECORD_BYTES)
+        .zip(texels.chunks_exact_mut(REFERENCE_TEXEL_BYTES))
+    {
+        texel[..REFERENCE_RECORD_BYTES].copy_from_slice(record);
+    }
+    Ok(texels)
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
 const fn arrival_is_current(
     cancelled: bool,
     response_generation: u32,
@@ -1096,11 +1127,12 @@ mod browser {
             }) else {
                 return Ok((OrbitDisposition::Stale, false));
             };
-            let bytes = response
+            let records = response
                 .records
                 .transfer_record_bytes()
                 .map_err(worker_error)?
                 .to_vec();
+            let bytes = super::expand_reference_texels(&records, response.length())?;
             let span = self
                 .executor
                 .allocate_span(response.length(), OUTPUT_PAGE_SIDE)
@@ -1608,8 +1640,8 @@ mod tests {
 
     use super::{
         FenceRefusal, FrameLoop, LEVELS, PresenterPoll, RefinementLevel, RefinementSchedule,
-        RefusalClass, SubmissionKind, apply_precision_mode, arrival_is_current, fence_error,
-        published_iteration_cap,
+        RefusalClass, SubmissionKind, apply_precision_mode, arrival_is_current,
+        expand_reference_texels, fence_error, published_iteration_cap,
     };
     use crate::{FramePolicy, LevelTimingLedger, ViewerController};
     use ember_julibrot_present::{SampleClass, SubmissionMeasurement};
@@ -1617,6 +1649,20 @@ mod tests {
     /// Poll budget and wall the version-two present configuration refuses at.
     const SCENE_POLLS: u32 = 4_096;
     const SCENE_DEADLINE_MS: f64 = 30_000.0;
+
+    #[test]
+    fn compact_reference_records_expand_to_zero_padded_rgba_texels() {
+        let records = [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+        ];
+        let texels = expand_reference_texels(&records, 2).expect("fixture has two records");
+        assert_eq!(texels.len(), 32);
+        assert_eq!(&texels[..8], &records[..8]);
+        assert_eq!(&texels[8..16], &[0; 8]);
+        assert_eq!(&texels[16..24], &records[8..]);
+        assert_eq!(&texels[24..], &[0; 8]);
+        assert!(expand_reference_texels(&records, 1).is_err());
+    }
 
     #[derive(Clone, Copy, Debug, PartialEq)]
     struct PendingFakeScene {

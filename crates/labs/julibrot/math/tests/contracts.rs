@@ -25,11 +25,9 @@ fn shared_gpu_and_owner_discriminants_are_exact() {
     assert_eq!(size_of::<EscapeParams>(), 8);
     assert_eq!(offset_of!(EscapeParams, max_iter), 0);
     assert_eq!(offset_of!(EscapeParams, bailout), 4);
-    assert_eq!(size_of::<ReferenceOrbitRecord>(), 16);
-    assert_eq!(offset_of!(ReferenceOrbitRecord, re_hi), 0);
-    assert_eq!(offset_of!(ReferenceOrbitRecord, im_hi), 4);
-    assert_eq!(offset_of!(ReferenceOrbitRecord, re_lo), 8);
-    assert_eq!(offset_of!(ReferenceOrbitRecord, im_lo), 12);
+    assert_eq!(size_of::<ReferenceOrbitRecord>(), 8);
+    assert_eq!(offset_of!(ReferenceOrbitRecord, re), 0);
+    assert_eq!(offset_of!(ReferenceOrbitRecord, im), 4);
     assert_eq!(size_of::<EscapeGridRecord>(), 16);
     assert_eq!(offset_of!(EscapeGridRecord, smooth_iter), 0);
     assert_eq!(offset_of!(EscapeGridRecord, escaped), 4);
