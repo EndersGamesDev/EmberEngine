@@ -22,6 +22,14 @@ struct GridAllocation {
     headers: HeaderSetHandle,
     plan: RefinementPlan,
     span_plan: SpanPlan,
+    shallow_dispatches: [ExecutorDispatch; LEVEL_COUNT as usize],
+    reference_dispatches: RefCell<Vec<ReferenceDispatches>>,
+}
+
+#[derive(Clone, Debug)]
+struct ReferenceDispatches {
+    resource_words: [u32; 4],
+    levels: [ExecutorDispatch; LEVEL_COUNT as usize],
 }
 
 #[derive(Clone, Debug)]
@@ -147,6 +155,20 @@ impl JulibrotKernels {
             executor.free_span(span).map_err(|_| KernelError::Heap)?;
             return Err(KernelError::Dispatch);
         }
+        let shallow_dispatches = match dispatch_templates(
+            executor,
+            &self.shallow,
+            &[],
+            &span,
+            plan,
+            &[0; 144],
+        ) {
+            Ok(dispatches) => dispatches,
+            Err(error) => {
+                executor.free_span(span).map_err(|_| KernelError::Heap)?;
+                return Err(error);
+            }
+        };
         let first = plan.level(RefinementLevel::Preview);
         let grid = EscapeGrid {
             span: span.clone(),
@@ -159,6 +181,8 @@ impl JulibrotKernels {
             headers: header_sets,
             plan: *plan,
             span_plan,
+            shallow_dispatches,
+            reference_dispatches: RefCell::new(Vec::with_capacity(2)),
         });
         Ok(grid)
     }
@@ -196,19 +220,11 @@ impl JulibrotKernels {
             delivered_params(params, selected.iteration_cap),
             level,
         )?;
-        let dispatch = executor
-            .plan_prefix_dispatch(
-                &self.shallow,
-                &[],
-                &[&grid.span],
-                pixel_count(selected.extent)?,
-                uniform.bytes(),
-            )
-            .map_err(|_| KernelError::Dispatch)?;
+        let dispatch = &allocation.shallow_dispatches[level_index(level)];
         let facts = checked_facts(
             executor,
             allocation,
-            &dispatch,
+            dispatch,
             level,
             KernelMode::Shallow,
             owner_epoch,
@@ -219,7 +235,7 @@ impl JulibrotKernels {
             executor,
             encoder,
             &self.shallow,
-            &dispatch,
+            dispatch,
             &allocation.headers,
             level,
             uniform.bytes(),
@@ -266,19 +282,40 @@ impl JulibrotKernels {
             used_orbit_length,
             level,
         )?;
-        let dispatch = executor
-            .plan_prefix_dispatch(
+        let resource_words = [reference.span.directory_index, reference.span.logical_len, 0, 0];
+        if !allocation
+            .reference_dispatches
+            .borrow()
+            .iter()
+            .any(|cached| cached.resource_words == resource_words)
+        {
+            let levels = dispatch_templates(
+                executor,
                 &self.perturbation,
                 &[reference.span],
-                &[&grid.span],
-                pixel_count(selected.extent)?,
-                uniform.bytes(),
-            )
-            .map_err(|_| KernelError::Dispatch)?;
+                &grid.span,
+                &allocation.plan,
+                &[0; 112],
+            )?;
+            let mut cached = allocation.reference_dispatches.borrow_mut();
+            if cached.len() == 2 {
+                cached.swap_remove(0);
+            }
+            cached.push(ReferenceDispatches {
+                resource_words,
+                levels,
+            });
+        }
+        let cached = allocation.reference_dispatches.borrow();
+        let dispatch = &cached
+            .iter()
+            .find(|cached| cached.resource_words == resource_words)
+            .ok_or(KernelError::Dispatch)?
+            .levels[level_index(level)];
         let facts = checked_facts(
             executor,
             allocation,
-            &dispatch,
+            dispatch,
             level,
             KernelMode::Perturbation,
             owner_epoch,
@@ -288,13 +325,13 @@ impl JulibrotKernels {
         let resources_changed =
             self.accept_reference(reference, allocation.plan.requested_max_iter)?;
         if resources_changed {
-            executor.sync_dispatch_resources(&dispatch);
+            executor.sync_dispatch_resources(dispatch);
         }
         encode_pages(
             executor,
             encoder,
             &self.perturbation,
-            &dispatch,
+            dispatch,
             &allocation.headers,
             level,
             uniform.bytes(),
@@ -437,6 +474,41 @@ fn pixel_count(extent: GridExtent) -> Result<u32, KernelError> {
     crate::shallow::validate_extent(extent)
 }
 
+fn dispatch_templates(
+    executor: &GpuKernelExecutor,
+    kernel: &GpuKernel,
+    inputs: &[&DataSpan],
+    output: &DataSpan,
+    plan: &RefinementPlan,
+    uniform: &[u8],
+) -> Result<[ExecutorDispatch; LEVEL_COUNT as usize], KernelError> {
+    let plan_level = |level| {
+        let selected = plan.level(level);
+        executor
+            .plan_prefix_dispatch(
+                kernel,
+                inputs,
+                &[output],
+                pixel_count(selected.extent)?,
+                uniform,
+            )
+            .map_err(|_| KernelError::Dispatch)
+    };
+    Ok([
+        plan_level(RefinementLevel::Preview)?,
+        plan_level(RefinementLevel::Interactive)?,
+        plan_level(RefinementLevel::Final)?,
+    ])
+}
+
+const fn level_index(level: RefinementLevel) -> usize {
+    match level {
+        RefinementLevel::Preview => 0,
+        RefinementLevel::Interactive => 1,
+        RefinementLevel::Final => 2,
+    }
+}
+
 const fn level_set(level: RefinementLevel) -> u32 {
     match level {
         RefinementLevel::Preview => 0,
@@ -516,10 +588,83 @@ const fn publish_level(grid: &mut EscapeGrid, extent: GridExtent, level: Refinem
 
 #[cfg(test)]
 mod tests {
-    use ember_lab_heap::SpanArena;
+    use std::time::Instant;
+
+    use ember_lab_heap::{
+        DataSpan, DialectLimits, DispatchPlan, RegisteredKernel, SpanArena, StaticHeaders,
+    };
 
     use super::{AcceptedReference, accept_reference_transition};
-    use crate::{KernelError, ReferenceOrbitInput};
+    use crate::{
+        EscapeParams, GridExtent, KernelError, ReferenceOrbitInput, RefinementLevel,
+        perturbation_kernel, plan_refinement,
+    };
+
+    struct NativeDispatchHarness {
+        arena: SpanArena,
+        kernel: RegisteredKernel,
+        reference: DataSpan,
+        outputs: [DataSpan; 3],
+    }
+
+    impl NativeDispatchHarness {
+        fn new() -> Self {
+            let mut arena = SpanArena::new(1_024, 1, 64, 4_096, 16).expect("planner arena");
+            let reference = arena
+                .allocate_span(4_096, crate::OUTPUT_PAGE_SIDE)
+                .expect("reference span");
+            let plan = plan_refinement(
+                GridExtent {
+                    width: 960,
+                    height: 540,
+                },
+                EscapeParams::new(4_096),
+                |_| true,
+            )
+            .expect("960 by 540 plan");
+            let outputs = plan.levels.map(|level| {
+                arena
+                    .allocate_span(
+                        level.extent.width * level.extent.height,
+                        crate::OUTPUT_PAGE_SIDE,
+                    )
+                    .expect("level output")
+            });
+            let kernel = RegisteredKernel::register(
+                &perturbation_kernel(),
+                DialectLimits {
+                    descriptor_capacity: 64,
+                    span_capacity: 16,
+                    handle_capacity: 64,
+                },
+            )
+            .expect("perturbation kernel");
+            Self {
+                arena,
+                kernel,
+                reference,
+                outputs,
+            }
+        }
+
+        fn plan(&self, level: usize) -> DispatchPlan {
+            let output = &self.outputs[level];
+            let headers = StaticHeaders::for_span(output, 256).expect("level headers");
+            self.kernel
+                .plan_dispatch(
+                    &self.arena,
+                    &[&self.reference],
+                    &[output],
+                    &[0; 112],
+                    &headers,
+                )
+                .expect("level dispatch")
+        }
+
+        fn templates(&self) -> [DispatchPlan; 3] {
+            [self.plan(0), self.plan(1), self.plan(2)]
+        }
+    }
 
     #[test]
     fn newer_reference_cancels_every_older_or_conflicting_identity() {
@@ -558,5 +703,58 @@ mod tests {
             accept_reference_transition(&mut accepted, input(&newer, 8, 192), 8),
             Err(KernelError::ReferencePrecisionMismatch)
         );
+    }
+
+    #[test]
+    fn cached_dispatch_templates_pin_every_level_plan() {
+        let harness = NativeDispatchHarness::new();
+        let templates = harness.templates();
+        for (index, level) in [
+            RefinementLevel::Preview,
+            RefinementLevel::Interactive,
+            RefinementLevel::Final,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let fresh = harness.plan(index);
+            assert_eq!(templates[index], fresh, "level {level:?}");
+            assert_eq!(
+                templates[index].resource_words[0],
+                [
+                    harness.reference.directory_index,
+                    harness.reference.logical_len,
+                    0,
+                    0,
+                ]
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "native kernels measurement harness"]
+    fn measures_dispatch_planning_allocations_and_wall_per_level() {
+        const ROUNDS: u32 = 10_000;
+        let harness = NativeDispatchHarness::new();
+        let templates = harness.templates();
+        for (index, level) in ["Preview", "Interactive", "Final"].into_iter().enumerate() {
+            let before_start = Instant::now();
+            for _ in 0..ROUNDS {
+                std::hint::black_box(harness.plan(index));
+            }
+            let before_wall = before_start.elapsed();
+
+            let after_start = Instant::now();
+            for _ in 0..ROUNDS {
+                std::hint::black_box(&templates[index]);
+            }
+            let after_wall = after_start.elapsed();
+
+            eprintln!(
+                "PF-V3 level={level} rounds={ROUNDS} before_allocations_at_least=5 after_allocations=0 before_us={} after_us={}",
+                before_wall.as_micros(),
+                after_wall.as_micros()
+            );
+        }
     }
 }
