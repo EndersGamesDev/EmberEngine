@@ -77,6 +77,17 @@ fn hue_component(hue: f32, offset: f32) -> f32 {
 }
 
 /// Applies the present palette to `[smooth_iter, escaped, rebase_count, status]`.
+///
+/// An escaped record's smooth count `n+1-log2(log2|z_n|)` is legitimately negative. The squared
+/// bailout is fixed at `256`, so a sample that is already outside radius `16` when the recurrence
+/// starts escapes at index zero with a count at most `-1`, and a first-iteration escape reaches
+/// `-1` too. Those are ordinary exterior samples, not malformed records, and the debug tint is
+/// reserved for contract violations. The count clamps at zero for the hue exactly as the height
+/// law already clamps it to the floor, so the whole beyond-bailout region reads as the palette
+/// exterior at zero smooth iterations. That is also the colour the horizon carries, which is the
+/// limit these samples approach: as the sample runs off to infinity the count falls without bound,
+/// and a hue left to cycle on it would alias into stripes of ever-increasing frequency against the
+/// horizon it meets.
 #[must_use]
 #[allow(clippy::float_cmp)]
 pub fn shade_escape_record(record: [f32; 4], selected: PaletteRecord) -> PaletteOutcome {
@@ -110,7 +121,6 @@ pub fn shade_escape_record(record: [f32; 4], selected: PaletteRecord) -> Palette
     }
     let [period, phase, colour_mix, value] = selected.map;
     if !smooth_iter.is_finite()
-        || smooth_iter < 0.0
         || !period.is_finite()
         || period <= 0.0
         || !phase.is_finite()
@@ -122,7 +132,7 @@ pub fn shade_escape_record(record: [f32; 4], selected: PaletteRecord) -> Palette
             contract_violation: true,
         };
     }
-    let hue = (smooth_iter / period + phase).rem_euclid(1.0);
+    let hue = (smooth_iter.max(0.0) / period + phase).rem_euclid(1.0);
     let phase_rgb = [
         hue_component(hue, 0.0),
         hue_component(hue, 2.0 / 3.0),
@@ -225,6 +235,59 @@ mod tests {
             uncertain,
             shade_escape_record([16.0, 1.0, 0.0, 0.0], EMBER_PALETTE)
         );
+    }
+
+    #[test]
+    fn a_horizon_record_is_the_exterior_under_every_palette_and_light() {
+        for id in [PaletteId::Classic, PaletteId::Ember, PaletteId::Ice] {
+            let selected = palette(id);
+            let exterior = exterior_zero(selected);
+            assert_ne!(exterior, DEBUG_TINT);
+            assert_ne!(exterior, selected.clear_rgba);
+            for rebase in [0.0, 1.0, 7.0] {
+                let record = [-1.0, 0.0, rebase, 2.0];
+                let horizon = shade_escape_record(record, selected);
+                assert_eq!(horizon.rgba, exterior);
+                assert!(!horizon.contract_violation);
+                for light in [0.58, 0.62, 0.66, 0.70, 0.74, 0.78, 0.82] {
+                    let lit = shade_lit_escape_record(record, selected, light);
+                    assert_ne!(lit.rgba, DEBUG_TINT);
+                    assert!(!lit.contract_violation);
+                    assert_eq!(lit.rgba[3], 1.0);
+                    for (channel, exact) in lit.rgba[..3].iter().zip(exterior) {
+                        assert_eq!(*channel, exact * light);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_beyond_bailout_escape_is_the_exterior_and_only_a_non_finite_count_violates() {
+        for id in [PaletteId::Classic, PaletteId::Ember, PaletteId::Ice] {
+            let selected = palette(id);
+            let exterior = exterior_zero(selected);
+            // `1-log2(log2|z_0|)` at the fixed squared bailout 256: an immediate escape is at most
+            // -1, and it falls without bound as the sample runs off toward the horizon.
+            for smooth in [-0.0, -0.5, -1.0, -1.112_397, -8.0, -1.0e6, f32::MIN] {
+                for status in [0.0, 3.0] {
+                    let outcome = shade_escape_record([smooth, 1.0, 0.0, status], selected);
+                    assert_eq!(outcome.rgba, exterior);
+                    assert!(!outcome.contract_violation);
+                    for light in [0.58, 0.70, 0.82] {
+                        let lit =
+                            shade_lit_escape_record([smooth, 1.0, 0.0, status], selected, light);
+                        assert_ne!(lit.rgba, DEBUG_TINT);
+                        assert!(!lit.contract_violation);
+                    }
+                }
+            }
+            for smooth in [f32::NAN, f32::NEG_INFINITY, f32::INFINITY] {
+                let outcome = shade_escape_record([smooth, 1.0, 0.0, 0.0], selected);
+                assert_eq!(outcome.rgba, DEBUG_TINT);
+                assert!(outcome.contract_violation);
+            }
+        }
     }
 
     #[test]

@@ -39,10 +39,10 @@ fn shade(record: vec4<f32>) -> vec4<f32> {
         if (record.x == -1.0) { return scene.interior_rgba; }
         return vec4<f32>(1.0, 0.0, 1.0, 1.0);
     }
-    if (!finite(record.x) || record.x < 0.0 || !finite(scene.palette_map.x) || scene.palette_map.x <= 0.0) {
+    if (!finite(record.x) || !finite(scene.palette_map.x) || scene.palette_map.x <= 0.0) {
         return vec4<f32>(1.0, 0.0, 1.0, 1.0);
     }
-    let hue = fract(record.x / scene.palette_map.x + scene.palette_map.y);
+    let hue = fract(max(record.x, 0.0) / scene.palette_map.x + scene.palette_map.y);
     let phase_rgb = vec3<f32>(hue_component(hue, 0.0), hue_component(hue, 0.6666666667), hue_component(hue, 0.3333333333));
     let rgb = scene.palette_map.w * mix(vec3<f32>(1.0), phase_rgb, scene.palette_map.z);
     return vec4<f32>(rgb, 1.0);
@@ -53,7 +53,7 @@ fn record_height(record: vec4<f32>) -> f32 {
         if (record.x == -1.0) { return -2.0; }
         return 0.0;
     }
-    if (!finite(record.x) || record.x < 0.0) { return 0.0; }
+    if (!finite(record.x)) { return 0.0; }
     return 4.0 * clamp(record.x / max(f32(scene.grid.w), 1.0), 0.0, 1.0) - 2.0;
 }
 ";
@@ -265,7 +265,12 @@ mod tests {
         assert!(source.contains("malformed(record) || record.w == 1.0"));
         assert!(source.contains("if (record.w == 2.0) { return hot.exterior_zero_rgba; }"));
         assert!(!source.contains("record.w == 2.0 || record.w == 3.0"));
-        assert!(source.contains("!finite(record.x) || record.x < 0.0"));
+        // A beyond-bailout escape carries a negative smooth count and is an ordinary exterior
+        // sample: only a non-finite count is a contract violation, and the hue clamps at zero the
+        // way the height law already clamps.
+        assert!(!source.contains("record.x < 0.0"));
+        assert!(source.contains("fract(max(record.x, 0.0) / scene.palette_map.x"));
+        assert!(source.contains("if (!finite(record.x)) { return 0.0; }"));
         assert!(source.contains("vec4<f32>(1.0, 0.0, 1.0, 1.0)"));
         assert!(source.contains("textureLoad(heap_data"));
     }
