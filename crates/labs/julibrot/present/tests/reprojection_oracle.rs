@@ -702,6 +702,90 @@ fn retained_warp_matches_independent_fresh_scenes() {
     assert_fixture("cross terms", &relief_from, &cross, 1.0, Expected::Either);
 }
 
+/// The Mandelbrot preset row's own plane origin, where the canonical flat pair is exact.
+const PRESET_ORIGIN: [f64; 4] = [0.0; 4];
+
+/// A camera factor turns the flat picture, and the warp turns it to the same place.
+///
+/// At height zero the scene pass draws every record at its own grid position and the picture is
+/// decided entirely by which chart point each pixel samples — that is the screen map, and the
+/// camera rotation is in it. So a camera factor off the preset row must *resample*: the same
+/// screen pixel lands on a different point of the same slice, and the picture foreshortens.
+///
+/// This is worth pinning because the failure it rules out is easy to misread on the page. A
+/// reprojected rectangle becomes a tilted quadrilateral with exposed corners, and when the next
+/// scene fills those corners the frame boundary stops being tilted. That reads as "the picture
+/// rotated and then snapped back upright" while the picture itself never moved: measured on the
+/// deployed page at 960 by 540, q₁₂ = 0.8 puts the warp and the settled scene 0.063 px apart in
+/// the interior centroid, against 49 px between the settled scene and the untouched preset row.
+///
+/// The identity picture belongs to the preset row alone. The canonical short-circuit keys on the
+/// object and camera pair, never on the height, so it holds at q₁₂ = 0 and is gone at q₁₂ = 0.8.
+#[test]
+fn a_camera_factor_turns_the_flat_picture_off_the_preset_row() {
+    let preset = pose(
+        ObjectAngles::IDENTITY,
+        ViewControls::MANDELBROT_FLAT,
+        PRESET_ORIGIN,
+        0.0,
+        [0.0; 2],
+    );
+    let PoseMap::Mapped(preset_map) = preset.map else {
+        panic!("the preset row is a mapped pose");
+    };
+    assert_eq!(
+        preset_map.condition_number, 1.0,
+        "the canonical flat pair is the exact identity map"
+    );
+
+    let mut turned_view = ViewControls::MANDELBROT_FLAT;
+    turned_view.camera[0] = 0.8;
+    let turned = pose(
+        ObjectAngles::IDENTITY,
+        turned_view,
+        PRESET_ORIGIN,
+        0.0,
+        [0.0; 2],
+    );
+    let PoseMap::Mapped(turned_map) = turned.map else {
+        panic!("a turned camera is still a mapped pose");
+    };
+    assert!(
+        turned_map.condition_number > 1.5,
+        "q12 = 0.8 leaves the canonical pair and anisotropy enters the map: {}",
+        turned_map.condition_number
+    );
+
+    let points = oracle_points([turned.grid_width, turned.grid_height]);
+    let mut resampled = 0_u32;
+    let mut compared = 0_u32;
+    for screen in &points {
+        let Some(before) = sample_pose(&preset, *screen) else {
+            continue;
+        };
+        let Some(after) = sample_pose(&turned, *screen) else {
+            continue;
+        };
+        compared = compared.saturating_add(1);
+        if !same_terminal_and_index(before, after) || !colours_within_one_code(before, after) {
+            resampled = resampled.saturating_add(1);
+        }
+    }
+    assert!(compared >= 64, "only {compared} comparable pixels");
+    assert!(
+        resampled * 4 >= compared,
+        "a turned camera must resample the slice, not reproduce it: {resampled} of {compared}"
+    );
+
+    assert_fixture(
+        "camera q12 off the preset row",
+        &preset,
+        &turned,
+        0.0,
+        Expected::Agree,
+    );
+}
+
 /// One observer bar: its name, the control it moves, and its class at height zero and lifted.
 type ObserverCase = (
     &'static str,
