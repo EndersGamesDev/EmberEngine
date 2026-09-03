@@ -1,5 +1,5 @@
 use crate::screen::{invert_3x3, multiply_3x3};
-use crate::{MathError, Plane, Pose, PoseMap, WarpMatrix};
+use crate::{MathError, Pose, PoseMap, WarpMatrix, plane_chart_relation};
 
 /// Builds the composed source-to-destination screen homography and its inverse-sampling inverse.
 ///
@@ -17,7 +17,9 @@ pub fn warp_matrix(from: &Pose, to: &Pose) -> Result<WarpMatrix, MathError> {
     if !scale_ratio.is_finite() || scale_ratio == 0.0 {
         return Err(MathError::DegenerateWarp);
     }
-    let basis_change = basis_overlap(to.plane, from.plane);
+    let basis_change = plane_chart_relation(from.plane, to.plane)
+        .ok_or(MathError::DegenerateWarp)?
+        .chart_map;
     let m00 = scale_ratio * basis_change[0];
     let m01 = scale_ratio * basis_change[1];
     let m10 = scale_ratio * basis_change[2];
@@ -108,21 +110,6 @@ fn validate_pose(pose: &Pose) -> Result<(), MathError> {
         return Err(MathError::NonFinite);
     }
     Ok(())
-}
-
-fn basis_overlap(from: Plane, to: Plane) -> [f64; 4] {
-    [
-        dot(from.basis_u, to.basis_u),
-        dot(from.basis_u, to.basis_v),
-        dot(from.basis_v, to.basis_u),
-        dot(from.basis_v, to.basis_v),
-    ]
-}
-
-fn dot(left: [f32; 4], right: [f32; 4]) -> f64 {
-    left.into_iter()
-        .zip(right)
-        .fold(0.0, |sum, (a, b)| f64::from(a).mul_add(f64::from(b), sum))
 }
 
 #[cfg(test)]

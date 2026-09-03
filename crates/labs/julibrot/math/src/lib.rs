@@ -25,7 +25,10 @@ pub use morph::{
 };
 pub use orbit::{ReferenceOrbitBuilder, escape_f32};
 pub use perturb::{perturb_scaled_f64, perturb_scaled_f64_with_envelope};
-pub use plane::{SEED_AXES, construct_plane, rotation_orthonormality_4};
+pub use plane::{
+    PlaneChartRelation, SEED_AXES, construct_plane, object_plane_relation, plane_chart_relation,
+    rotation_orthonormality_4,
+};
 pub use scale::{
     centre_displacement_px, centre_from_reference_px, mirror_centre, pixel_scale, precision_for,
     reference_shift_px, scale_split, scaled_pixel_offset, scaled_pixel_scale, shallow_pixel_scale,
