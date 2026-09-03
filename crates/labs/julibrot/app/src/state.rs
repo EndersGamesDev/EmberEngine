@@ -914,12 +914,7 @@ impl ViewerController {
         }
         let object = self.requested.object_angles;
         let plane = self.checked_plane;
-        let map = map_for(
-            object,
-            self.requested.view,
-            state.hot.zoom_log2,
-            grid_extent,
-        )?;
+        let map = self.screen_map(grid_extent)?;
         let displacement_scale = f64::from(grid_extent[0]) / f64::from(self.grid_width);
         let pose = Pose {
             epoch: state.epoch,
