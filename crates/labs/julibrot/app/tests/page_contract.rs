@@ -17,7 +17,7 @@ const SAVED: &str = include_str!("../src/saved.rs");
 const WIRE: &str = include_str!("../../worker/src/wire.rs");
 
 /// Every field the page facts must carry, in publication order.
-const PAGE_FACT_FIELDS: [&str; 102] = [
+const PAGE_FACT_FIELDS: [&str; 103] = [
     "abi_version",
     "adapter_name",
     "backend",
@@ -79,6 +79,7 @@ const PAGE_FACT_FIELDS: [&str; 102] = [
     "view_theta_1",
     "view_theta_2",
     "camera_angles",
+    "camera_translation",
     "camera_yaw",
     "camera_pitch",
     "height_scale",
@@ -194,7 +195,6 @@ fn runtime_is_gl_only_and_handlers_precede_the_first_post_device_work() {
         .expect("init scope");
     assert!(lost < scope && uncaptured < scope);
 }
-
 #[test]
 fn acquire_path_is_non_panicking_and_initial_frame_is_only_clear_plus_text() {
     let acquire = RUNTIME
@@ -293,6 +293,11 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
         "q25",
         "q35",
         "q45",
+        "t1",
+        "t2",
+        "t3",
+        "t4",
+        "t5",
         "camera-yaw",
         "camera-pitch",
         "height",
@@ -344,6 +349,7 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
     assert_eq!(MAIN.matches("api.app_set_object_angles(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_plane_origin(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_camera_angles(").count(), 1);
+    assert_eq!(MAIN.matches("api.app_set_camera_translation(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_camera(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_height(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_distances(").count(), 1);
@@ -384,11 +390,13 @@ fn the_retired_controls_name_nothing_and_the_wasm_boundary_is_complete() {
         "pub fn app_set_object_angles(",
         "pub fn app_set_plane_origin(",
         "pub fn app_set_camera_angles(",
+        "pub fn app_set_camera_translation(",
         "pub fn app_set_camera(",
         "pub fn app_set_height(",
         "pub fn app_set_distances(",
         "pub fn app_set_scale(",
         "pub fn app_set_target(",
+        "pub fn app_pan_drag(",
         "pub fn app_zoom_box(",
         "pub fn app_saved_view_json(",
         "pub fn app_set_centre(",
@@ -430,12 +438,18 @@ fn the_canvas_navigates_by_crosshair_translation_box_and_scale() {
         "api.app_zoom_box(started.x, started.y, to[0], to[1], bounds.width, bounds.height)"
     ));
     assert_eq!(MAIN.matches("api.app_zoom_box(").count(), 1);
+    assert!(MAIN.contains("event.shiftKey"));
     assert!(STATE.contains("pub fn is_box_selection("));
     assert!(STATE.contains("pub fn box_zoom_delta_log2("));
     assert!(STATE.contains("pub const BOX_CLICK_THRESHOLD_PX: f64 = 4.0;"));
     assert!(STATE.contains("pub const SCALE_RANGE_LOG2: [f64; 2] = [-2.0, 120.0];"));
     // The scale control spans exactly the range the app enforces.
     assert!(INDEX.contains("id=\"scale\" type=\"range\" min=\"-2\" max=\"120\""));
+    for id in ["t1", "t2", "t3", "t4", "t5"] {
+        assert!(INDEX.contains(&format!(
+            "id=\"{id}\" type=\"range\" min=\"-8\" max=\"8\""
+        )));
+    }
     // The marker and the rubber band are DOM overlays, not scene geometry.
     for element in ["id=\"target\"", "id=\"rubber\""] {
         assert!(INDEX.contains(element), "missing overlay {element}");
@@ -566,6 +580,8 @@ fn two_view_boxes_share_one_path_from_a_control_value_to_the_worker() {
     assert!(SAVED.contains("pub zoom_log2: f64,"));
     assert!(SAVED.contains("pub object: [f64; 6],"));
     assert!(SAVED.contains("pub camera: [f64; 10],"));
+    assert!(SAVED.contains("pub camera_translation: [f64; 5],"));
+    assert!(MAIN.contains("row.camera_translation.length !== TRANSLATION_IDS.length"));
 }
 
 #[test]

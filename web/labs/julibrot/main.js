@@ -8,6 +8,7 @@ const MORPH = document.getElementById("morph");
 const BOXES = { a: null, b: null };
 const OBJECT_IDS = ["o12", "o13", "o14", "o23", "o24", "o34"];
 const CAMERA_IDS = ["q12", "q13", "q14", "q23", "q24", "q34", "q15", "q25", "q35", "q45"];
+const TRANSLATION_IDS = ["t1", "t2", "t3", "t4", "t5"];
 // The named rows every side can choose from, and which row each side last chose. Built-in rows are
 // not in here: they come from the app, they are never deletable, and they never need storing.
 const ROWS = { named: [], selection: { a: "", b: "" } };
@@ -94,9 +95,10 @@ function describeRow(name, row) {
   const digits = centreDigits(row.zoom_log2);
   const angles = [...row.object, ...row.camera, row.camera_yaw, row.camera_pitch]
     .map(value => Number(value).toFixed(3)).join(" ");
+  const translation = row.camera_translation.map(value => Number(value).toFixed(3)).join(" ");
   const origin = row.origin.map(value => Number(value).toFixed(3)).join(" ");
   const centre = row.centre_f64.map(value => Number(value).toFixed(digits)).join(" ");
-  return `${name}: angles ${angles} · origin ${origin} · zoom_log2 ${Number(row.zoom_log2).toFixed(3)} · centre ${centre}`;
+  return `${name}: angles ${angles} · translation ${translation} · origin ${origin} · zoom_log2 ${Number(row.zoom_log2).toFixed(3)} · centre ${centre}`;
 }
 
 function timerProbe() {
@@ -303,6 +305,7 @@ function bindControls(api) {
     object: () => api.app_set_object_angles(...OBJECT_IDS.map(NUMBER)),
     origin: () => api.app_set_plane_origin(NUMBER("origin-z-re"), NUMBER("origin-z-im"), NUMBER("origin-c-re"), NUMBER("origin-c-im")),
     ambientCamera: () => api.app_set_camera_angles(...CAMERA_IDS.map(NUMBER)),
+    cameraTranslation: () => api.app_set_camera_translation(...TRANSLATION_IDS.map(NUMBER)),
     observer: () => api.app_set_camera(NUMBER("camera-yaw"), NUMBER("camera-pitch")),
     height: () => api.app_set_height(NUMBER("height")),
     distances: () => api.app_set_distances(NUMBER("distance-five"), NUMBER("distance-four")),
@@ -316,6 +319,9 @@ function bindControls(api) {
   }
   for (const id of CAMERA_IDS) {
     document.getElementById(id).addEventListener("input", () => guarded(APPLY.ambientCamera));
+  }
+  for (const id of TRANSLATION_IDS) {
+    document.getElementById(id).addEventListener("input", () => guarded(APPLY.cameraTranslation));
   }
   for (const id of ["camera-yaw", "camera-pitch"]) {
     document.getElementById(id).addEventListener("input", () => guarded(APPLY.observer));
