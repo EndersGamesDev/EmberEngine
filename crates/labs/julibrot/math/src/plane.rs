@@ -321,7 +321,7 @@ mod tests {
 
         let retained = construct_plane(retained)?;
         let requested = construct_plane(requested)?;
-        let retained_chart = [1.3, -0.7];
+        let retained_chart: [f64; 2] = [1.3, -0.7];
         let ambient: [f64; 4] = core::array::from_fn(|axis| {
             retained_chart[0].mul_add(
                 f64::from(retained.basis_u[axis]),
