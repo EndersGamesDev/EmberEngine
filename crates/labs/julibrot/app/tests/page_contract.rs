@@ -17,7 +17,7 @@ const SAVED: &str = include_str!("../src/saved.rs");
 const WIRE: &str = include_str!("../../worker/src/wire.rs");
 
 /// Every field the page facts must carry, in publication order.
-const PAGE_FACT_FIELDS: [&str; 105] = [
+const PAGE_FACT_FIELDS: [&str; 107] = [
     "abi_version",
     "adapter_name",
     "backend",
@@ -50,6 +50,8 @@ const PAGE_FACT_FIELDS: [&str; 105] = [
     "refinement_pending",
     "scene_mode",
     "scene_update_pending",
+    "draft_skipped_count",
+    "last_draft_skip_reason",
     "extent_divisor",
     "active_pixels",
     "worst_case_pixel_iterations",
@@ -646,6 +648,8 @@ fn page_facts_carry_every_contract_field_without_fake_aggregate_counts() {
     assert!(FRAME.contains("precision_mode: self.main.precision_mode"));
     assert!(FACTS.contains("scene_mode: loop_facts.scene_mode().as_str()"));
     assert!(FACTS.contains("scene_update_pending: loop_facts.scene_update_pending()"));
+    assert!(FACTS.contains("draft_skipped_count: loop_facts.draft_skipped_count()"));
+    assert!(FACTS.contains("last_draft_skip_reason: loop_facts.last_draft_skip_reason()"));
 }
 
 #[test]

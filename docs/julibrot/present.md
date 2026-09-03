@@ -100,11 +100,11 @@ All six object rotations, ten camera rotations, five camera translations, observ
 
 ### 2.4 Scene texture pair and submission
 
-Exactly two single-sample, one-mip `Rgba8Unorm` scene textures exist: one is the newest fence-completed texture sampled by warp and the other is the sole in-flight scene target; before the first completion there is no retained texture and the non-target texture has no semantic content.
+Exactly two single-sample, one-mip `Rgba8Unorm` scene textures exist: one is the best compatible fence-completed texture sampled by warp and the other is the sole in-flight scene target; before the first completion there is no retained texture and the non-target texture has no semantic content.
 
 A scene submission captures reconciled `PresentMain` plus the referenced HOT slot into math's immutable `Pose`, including object angles, object origin, twenty view scalars, and the level's map; that captured sampled pose remains the sole basis for later reference-shift rebasing.
 
-While the scene fence is pending, every surface refresh may submit a warp against the previous completed texture; after the fence callback, `Presenter::poll` atomically promotes the in-flight texture, pose, palette, grid extent, and measurement, and only then makes the previous texture available as the next target.
+While the scene fence is pending, every surface refresh may submit a warp against the retained texture. After the fence callback, `Presenter::poll` promotes the completed texture, pose, palette, grid extent, and measurement unless the retained higher-level or larger-extent scene still has an accepted, non-exposed warp for the latest HOT pose; in that case the draft completion advances the app schedule without replacing the retained source and its texture remains the next target. A Final completion replaces the older Final as usual.
 
 If a new level has a different extent, only the available target is reallocated before scene submission, its immutable warp bind group is rebuilt once and the allocation count advances; the retained texture and its bind group stay valid until promotion, keeping the total at two textures.
 
@@ -292,15 +292,15 @@ The HOT buffer size is `3·slot_stride`, where `slot_stride=align_up(288,device.
 
 `Presenter::set_main(&mut self,main:PresentMain)` is the infallible MAIN-drain endpoint: it records latest-wins state, applies a not-yet-consumed `reference_shift_px` to retained and in-flight poses for the accepted revision, and invalidates them when delivered `max_iter`, `plane_origin_f64`, or `precision_mode` changed, without allocating, submitting, waiting, or returning an error.
 
-`Presenter::write_hot(&mut self,slot:HotSlot,hot:PresentHot,validation:WarpValidation)` stores the planned source scene and texture beside the slot, measures and enforces the plan bound, writes one 288-byte payload, and falls back to `source_valid=0` on refusal; `frame` rechecks the retained identity before selecting a source.
+`Presenter::write_hot(&mut self,slot:HotSlot,hot:PresentHot,validation:WarpValidation)` stores the planned source scene and texture beside the slot, measures and enforces the plan bound, writes one 288-byte payload, and falls back to `source_valid=0` on refusal; `covering_warp_source_level(slot)` reports a source only when that same accepted plan is not exposed, and `frame` rechecks the retained identity before selecting it.
 
 `Presenter::submit_scene(&mut self,hot_slot:HotSlot,now_ms:f64)->Result<u64,PresentError>` captures current MAIN and the exact HOT pose, asks the scene ledger to construct the pending record and return its single authoritative texture index, prepares and encodes against that same index, submits a four-byte fence, and returns its monotonically increasing `scene_id` without waiting.
 
-`Presenter::frame(&mut self,state:FrameState<'_>,hot_slot:HotSlot)->Result<FrameReceipt,PresentError>` is called once per surface refresh, encodes the sole warp pass to `state.surface_view`, samples the newest compatible completed scene or writes clear colour, submits its four-byte fence, and returns before completion; app retains the surface token, polls cooperatively for that `warp_id`, then presents outside the measurement.
+`Presenter::frame(&mut self,state:FrameState<'_>,hot_slot:HotSlot)->Result<FrameReceipt,PresentError>` is called once per surface refresh, encodes the sole warp pass to `state.surface_view`, samples the best compatible completed scene or writes clear colour, submits its four-byte fence, and returns before completion; app retains the surface token, polls cooperatively for that `warp_id`, then presents outside the measurement.
 
 `FrameReceipt` is `{refresh_id:u64,warp_id:u64,source_scene_id:Option<u64>,precision_mode:&'static str,status:PresentStatus}` with no byte ABI, reports `source_scene_id=None` when that slot's warp plan paints only clear even if a retained scene exists, and contains no fabricated wall because its fence has not completed.
 
-`Presenter::poll(&mut self,now_ms:f64)->Vec<PresentEvent>` performs at most one shared `device.poll` per call to service both pending fences, increments each pending fence's own observation count once for that shared poll, promotes only a current completed scene, retires bounded failures, and never waits or yields internally; app's refresh loop supplies the browser yield between polls.
+`Presenter::poll(&mut self,now_ms:f64)->Vec<PresentEvent>` performs at most one shared `device.poll` per call to service both pending fences, increments each pending fence's own observation count once for that shared poll, retains the best accepted compatible scene across draft completions, promotes Final or a draft needed after refusal/exposure, retires bounded failures, and never waits or yields internally; app's refresh loop supplies the browser yield between polls.
 
 `Presenter::facts(&self)->PresentFacts` returns the latest immutable snapshot without polling, allocating, submitting, or draining owner state.
 

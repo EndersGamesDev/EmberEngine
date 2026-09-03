@@ -22,6 +22,8 @@ pub struct PendingScene {
 #[derive(Clone, Debug, PartialEq)]
 pub enum SceneCompletion {
     Promoted(SceneFrame),
+    /// Completed scene whose texture stays reusable because the accepted retained source is better.
+    KeptBest(SceneFrame),
     Dropped {
         pending: PendingScene,
         reason: DropReason,
@@ -84,7 +86,16 @@ impl SceneLedger {
         Ok(texture_index)
     }
 
+    #[cfg(test)]
     pub fn complete(&mut self, measurement: SubmissionMeasurement) -> Option<SceneCompletion> {
+        self.complete_preserving_accepted_best(measurement, false)
+    }
+
+    pub fn complete_preserving_accepted_best(
+        &mut self,
+        measurement: SubmissionMeasurement,
+        preserve_accepted_best: bool,
+    ) -> Option<SceneCompletion> {
         let pending = self.pending.take()?;
         if let Some(reason) = pending.drop_reason {
             return Some(SceneCompletion::Dropped {
@@ -106,6 +117,14 @@ impl SceneLedger {
             precision_mode: pending.precision_mode,
             measurement,
         };
+        if preserve_accepted_best
+            && self
+                .retained
+                .as_ref()
+                .is_some_and(|retained| retained_is_better(retained, &frame))
+        {
+            return Some(SceneCompletion::KeptBest(frame));
+        }
         self.retained = Some(frame.clone());
         Some(SceneCompletion::Promoted(frame))
     }
@@ -180,6 +199,24 @@ impl SceneLedger {
     pub const fn pending(&self) -> Option<&PendingScene> {
         self.pending.as_ref()
     }
+}
+
+const fn level_rank(level: RefinementLevel) -> u32 {
+    match level {
+        RefinementLevel::Preview => 0,
+        RefinementLevel::Interactive => 1,
+        RefinementLevel::Final => 2,
+    }
+}
+
+fn retained_is_better(retained: &SceneFrame, candidate: &SceneFrame) -> bool {
+    let retained_rank = level_rank(retained.level);
+    let candidate_rank = level_rank(candidate.level);
+    retained_rank > candidate_rank
+        || (retained_rank == candidate_rank
+            && candidate.level != RefinementLevel::Final
+            && u64::from(retained.extent[0]) * u64::from(retained.extent[1])
+                > u64::from(candidate.extent[0]) * u64::from(candidate.extent[1]))
 }
 
 fn object_samples_match(from: ObjectAngles, to: ObjectAngles) -> bool {
@@ -492,5 +529,74 @@ mod tests {
         assert!(latch.due());
         latch.scene_completed();
         assert!(!latch.due());
+    }
+
+    #[test]
+    fn accepted_final_survives_a_completed_preview_until_the_new_final_arrives() {
+        let mut ledger = SceneLedger::default();
+        begin(&mut ledger, 1, 1);
+        let SceneCompletion::Promoted(mut first) = ledger
+            .complete(measurement(1))
+            .expect("first scene completes")
+        else {
+            panic!("first scene must promote");
+        };
+        first.level = RefinementLevel::Final;
+        first.extent = [1_920, 1_080];
+        ledger.retained = Some(first);
+
+        begin(&mut ledger, 2, 1);
+        assert!(matches!(
+            ledger.complete_preserving_accepted_best(measurement(2), true),
+            Some(SceneCompletion::KeptBest(SceneFrame {
+                scene_id: 2,
+                level: RefinementLevel::Preview,
+                ..
+            }))
+        ));
+        assert_eq!(ledger.retained().map(|frame| frame.scene_id), Some(1));
+        assert_eq!(ledger.available_texture_index(), Ok(1));
+
+        ledger
+            .begin(|texture_index| {
+                let mut final_pose = pose(1);
+                final_pose.grid_width = 1_920;
+                final_pose.grid_height = 1_080;
+                Ok(PendingScene {
+                    scene_id: 3,
+                    pose: final_pose,
+                    palette: PaletteId::Classic,
+                    iteration_cap: 64,
+                    level: RefinementLevel::Final,
+                    extent: [1_920, 1_080],
+                    texture_index,
+                    centre_revision: 1,
+                    plane_origin_f64: ORIGIN,
+                    precision_mode: MODE,
+                    drop_reason: None,
+                })
+            })
+            .expect("new Final uses the non-retained texture");
+        assert!(matches!(
+            ledger.complete_preserving_accepted_best(measurement(3), true),
+            Some(SceneCompletion::Promoted(SceneFrame { scene_id: 3, .. }))
+        ));
+        assert_eq!(ledger.retained().map(|frame| frame.scene_id), Some(3));
+    }
+
+    #[test]
+    fn refused_best_warp_allows_a_preview_to_become_the_source() {
+        let mut ledger = SceneLedger::default();
+        begin(&mut ledger, 1, 1);
+        ledger.complete(measurement(1));
+        if let Some(retained) = &mut ledger.retained {
+            retained.level = RefinementLevel::Final;
+        }
+        begin(&mut ledger, 2, 1);
+        assert!(matches!(
+            ledger.complete_preserving_accepted_best(measurement(2), false),
+            Some(SceneCompletion::Promoted(SceneFrame { scene_id: 2, .. }))
+        ));
+        assert_eq!(ledger.retained().map(|frame| frame.scene_id), Some(2));
     }
 }
