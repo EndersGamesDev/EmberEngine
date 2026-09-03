@@ -269,6 +269,8 @@ pub enum OrbitStep {
 pub struct ViewControls {
     /// Ten `SO(5)` camera angles in product order: 12, 13, 14, 23, 24, 34, 15, 25, 35, 45.
     pub camera: [f64; 10],
+    /// Five-dimensional camera translation applied after rotation and before perspective.
+    pub camera_translation: [f64; 5],
     /// Observer yaw in radians.
     pub camera_yaw: f64,
     /// Observer pitch in radians.
@@ -285,6 +287,7 @@ impl ViewControls {
     /// The row every preset starts from: no rotation, no relief, both distances at eight.
     pub const NEUTRAL: Self = Self {
         camera: [0.0; 10],
+        camera_translation: [0.0; 5],
         camera_yaw: 0.0,
         camera_pitch: 0.0,
         height_scale: 0.0,
@@ -324,7 +327,7 @@ impl ViewControls {
 
     /// Returns every control as one array, in the order the records and facts publish them.
     #[must_use]
-    pub const fn as_array(self) -> [f64; 15] {
+    pub const fn as_array(self) -> [f64; 20] {
         [
             self.camera[0],
             self.camera[1],
@@ -336,6 +339,11 @@ impl ViewControls {
             self.camera[7],
             self.camera[8],
             self.camera[9],
+            self.camera_translation[0],
+            self.camera_translation[1],
+            self.camera_translation[2],
+            self.camera_translation[3],
+            self.camera_translation[4],
             self.camera_yaw,
             self.camera_pitch,
             self.height_scale,
@@ -371,6 +379,8 @@ pub struct Pose {
     pub orbit_generation: u32,
     pub plane: Plane,
     pub object: ObjectAngles,
+    /// Absolute affine-plane origin in the four-dimensional object coordinates.
+    pub plane_origin: [f64; 4],
     pub zoom_log2: f64,
     pub view: ViewControls,
     pub grid_width: u32,

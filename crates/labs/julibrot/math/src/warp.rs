@@ -25,11 +25,13 @@ pub fn warp_matrix(from: &Pose, to: &Pose) -> Result<WarpMatrix, MathError> {
     let b0 = m00.mul_add(
         from.centre_from_reference_px[0],
         m01 * from.centre_from_reference_px[1],
-    ) - to.centre_from_reference_px[0];
+    ) - to.centre_from_reference_px[0]
+        + origin_offset_px(from, to, to.plane.basis_u)?;
     let b1 = m10.mul_add(
         from.centre_from_reference_px[0],
         m11 * from.centre_from_reference_px[1],
-    ) - to.centre_from_reference_px[1];
+    ) - to.centre_from_reference_px[1]
+        + origin_offset_px(from, to, to.plane.basis_v)?;
     let plane_map = [m00, m01, b0, m10, m11, b1, 0.0, 0.0, 1.0];
     let forward = multiply_3x3(to_map.inverse, multiply_3x3(plane_map, from_map.rows));
     if !forward.iter().all(|coefficient| coefficient.is_finite()) {
@@ -37,6 +39,23 @@ pub fn warp_matrix(from: &Pose, to: &Pose) -> Result<WarpMatrix, MathError> {
     }
     let inverse = invert_3x3(forward).ok_or(MathError::DegenerateWarp)?;
     Ok(WarpMatrix { forward, inverse })
+}
+
+fn origin_offset_px(from: &Pose, to: &Pose, axis: [f32; 4]) -> Result<f64, MathError> {
+    let target_pixels_per_chart = 0.25 * f64::from(to.grid_width) * to.zoom_log2.exp2();
+    let offset = from
+        .plane_origin
+        .into_iter()
+        .zip(to.plane_origin)
+        .zip(axis)
+        .fold(0.0, |sum, ((from, to), component)| {
+            (from - to).mul_add(f64::from(component), sum)
+        });
+    let pixels = offset * target_pixels_per_chart;
+    pixels
+        .is_finite()
+        .then_some(pixels)
+        .ok_or(MathError::DegenerateWarp)
 }
 
 #[must_use]
@@ -78,6 +97,10 @@ fn validate_pose(pose: &Pose) -> Result<(), MathError> {
             .iter()
             .chain(&map.inverse)
             .all(|value| value.is_finite())
+        || !pose
+            .plane_origin
+            .into_iter()
+            .all(f64::is_finite)
         || !pose
             .plane
             .basis_u
@@ -123,6 +146,7 @@ mod tests {
                 rho_24: 0.927_295_218_001_612_3,
                 ..ObjectAngles::IDENTITY
             },
+            plane_origin: [0.0; 4],
             zoom_log2,
             view: ViewControls::NEUTRAL,
             grid_width: 1920,
@@ -158,6 +182,23 @@ mod tests {
         let matrix = warp_matrix(&from, &to)?;
         assert!((matrix.forward[2] + 5.0).abs() <= 1.0e-9);
         assert!((matrix.forward[5] - 4.0).abs() <= 1.0e-9);
+        Ok(())
+    }
+
+    #[test]
+    fn in_plane_origin_translation_is_an_exact_screen_pan() -> Result<(), MathError> {
+        let exact_plane = Plane {
+            basis_u: [1.0, 0.0, 0.0, 0.0],
+            basis_v: [0.0, 1.0, 0.0, 0.0],
+        };
+        let mut from = pose(0.0, [0.0; 2]);
+        from.plane = exact_plane;
+        let mut to = from;
+        to.plane_origin = [0.5, -0.25, 0.0, 0.0];
+        let matrix = warp_matrix(&from, &to)?;
+        assert!((matrix.forward[2] + 240.0).abs() <= 1.0e-12);
+        assert!((matrix.forward[5] - 120.0).abs() <= 1.0e-12);
+        assert!(warp_identity_error(matrix) <= 1.0e-12);
         Ok(())
     }
 }

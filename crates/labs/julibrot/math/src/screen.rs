@@ -59,6 +59,7 @@ pub fn screen_to_plane(
 fn is_canonical_flat_pair(object: ObjectAngles, view: ViewControls) -> bool {
     view.camera_yaw == 0.0
         && view.camera_pitch == 0.0
+        && view.camera_translation == [0.0; 5]
         && ((object == ObjectAngles::IDENTITY
             && view.camera == ViewControls::MANDELBROT_FLAT.camera)
             || (object == ObjectAngles::JULIA && view.camera == ViewControls::NEUTRAL.camera))
@@ -92,7 +93,7 @@ fn forward_homography(
         [
             chart_scale * transformed_basis[0][axis],
             chart_scale * transformed_basis[1][axis],
-            0.0,
+            view.camera_translation[axis],
         ]
     });
     let distance_five = view.distance_five;
@@ -435,6 +436,22 @@ mod tests {
     }
 
     #[test]
+    fn canonical_shortcut_matches_the_forward_chain_to_binary64_tolerance() -> Result<(), MathError>
+    {
+        for (object, view) in [
+            (ObjectAngles::IDENTITY, ViewControls::MANDELBROT_FLAT),
+            (ObjectAngles::JULIA, ViewControls::NEUTRAL),
+        ] {
+            let forward = forward_homography(construct_plane(object)?, &view, 960)?;
+            for (index, value) in forward.into_iter().enumerate() {
+                let expected = if index % 4 == 0 { 1.0 } else { 0.0 };
+                assert!((value - expected).abs() <= 1.0e-12);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn mandelbrot_camera_quarter_turns_face_the_seed_with_the_shipped_orientation() {
         let matrix = camera_rotation_matrix(&ViewControls::MANDELBROT_FLAT);
         assert!((matrix[0][2] - 1.0).abs() <= f64::EPSILON);
@@ -456,6 +473,7 @@ mod tests {
                 ObjectAngles::JULIA,
                 ViewControls {
                     camera: tumbled_camera,
+                    camera_translation: [0.2, -0.1, 0.3, 0.05, -0.2],
                     camera_yaw: 0.349,
                     camera_pitch: 0.262,
                     height_scale: 1.0,
@@ -471,6 +489,7 @@ mod tests {
                 },
                 ViewControls {
                     camera: second_camera,
+                    camera_translation: [-0.3, 0.2, 0.1, -0.05, 0.15],
                     camera_yaw: -0.41,
                     camera_pitch: 0.23,
                     height_scale: 0.5,

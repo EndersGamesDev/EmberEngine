@@ -55,8 +55,17 @@ pub fn lerp_view(from: ViewControls, to: ViewControls, t: f64) -> Result<ViewCon
     for (index, angle) in camera.iter_mut().enumerate() {
         *angle = lerp_f64(from.camera[index], to.camera[index], t)?;
     }
+    let mut camera_translation = [0.0; 5];
+    for (index, coordinate) in camera_translation.iter_mut().enumerate() {
+        *coordinate = lerp_f64(
+            from.camera_translation[index],
+            to.camera_translation[index],
+            t,
+        )?;
+    }
     let view = ViewControls {
         camera,
+        camera_translation,
         camera_yaw: lerp_f64(from.camera_yaw, to.camera_yaw, t)?,
         camera_pitch: lerp_f64(from.camera_pitch, to.camera_pitch, t)?,
         height_scale: lerp_f64(from.height_scale, to.height_scale, t)?,
@@ -195,6 +204,7 @@ mod tests {
     fn row_a() -> ViewControls {
         ViewControls {
             camera: [-3.0, 0.25, 0.0, 0.1, -0.2, 0.3, 0.0, 0.4, -0.5, 0.6],
+            camera_translation: [-8.0, -4.0, 0.0, 4.0, 8.0],
             camera_yaw: -1.5,
             camera_pitch: 0.125,
             height_scale: 0.0,
@@ -206,6 +216,7 @@ mod tests {
     fn row_b() -> ViewControls {
         ViewControls {
             camera: [3.0, -0.75, 0.2, -0.1, 0.4, -0.3, 0.6, -0.4, 0.5, -0.6],
+            camera_translation: [8.0, 4.0, 2.0, -4.0, -8.0],
             camera_yaw: 0.5,
             camera_pitch: -0.375,
             height_scale: 4.0,
@@ -323,6 +334,10 @@ mod tests {
         let (first, second) = (row_a(), row_b());
         for (value, ends) in [
             (midpoint.camera[1], (first.camera[1], second.camera[1])),
+            (
+                midpoint.camera_translation[2],
+                (first.camera_translation[2], second.camera_translation[2]),
+            ),
             (
                 midpoint.camera_pitch,
                 (first.camera_pitch, second.camera_pitch),

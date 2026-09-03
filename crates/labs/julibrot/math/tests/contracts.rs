@@ -40,7 +40,8 @@ fn shared_gpu_and_owner_discriminants_are_exact() {
     assert_eq!(
         ViewControls::NEUTRAL.as_array(),
         [
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 8.0, 8.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 8.0, 8.0,
         ]
     );
     assert!(ViewControls::NEUTRAL.is_valid());

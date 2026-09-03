@@ -8,7 +8,10 @@ pub const SEED_AXES: [Axis4; 2] = [Axis4::E3, Axis4::E4];
 /// # Errors
 ///
 /// Returns an error for non-finite input or a failed rounding postcondition.
-#[allow(clippy::cast_possible_truncation)]
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the plane contract deliberately rounds once from f64 to shader-compatible f32"
+)]
 pub fn construct_plane(angles: impl Into<ObjectAngles>) -> Result<Plane, MathError> {
     let angles = angles.into();
     if !angles.is_valid() {
