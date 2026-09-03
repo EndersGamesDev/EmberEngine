@@ -1,4 +1,4 @@
-use ember_julibrot_math::Pose;
+use ember_julibrot_math::{ObjectAngles, Pose};
 
 use crate::{
     DropReason, PaletteId, PresentError, RefinementLevel, SceneFrame, SubmissionMeasurement,
@@ -27,6 +27,26 @@ pub enum SceneCompletion {
         reason: DropReason,
         measurement: SubmissionMeasurement,
     },
+}
+
+/// Pure refresh-loop exposure state: only a completed scene may clear it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ExposureLatch {
+    due: bool,
+}
+
+impl ExposureLatch {
+    pub const fn observe_warp(&mut self, exposed: bool) {
+        self.due |= exposed;
+    }
+
+    pub const fn scene_completed(&mut self) {
+        self.due = false;
+    }
+
+    pub const fn due(self) -> bool {
+        self.due
+    }
 }
 
 /// Pure two-index ledger; GPU resources mirror these identities.
@@ -99,11 +119,13 @@ impl SceneLedger {
         &mut self,
         iteration_cap: u32,
         plane_origin_f64: [f64; 4],
+        object: ObjectAngles,
         precision_mode: &'static str,
     ) -> bool {
         let retained_invalid = self.retained.as_ref().is_some_and(|frame| {
             frame.iteration_cap != iteration_cap
-                || frame.plane_origin_f64 != plane_origin_f64
+                || !origins_share_slice(&frame.pose, plane_origin_f64)
+                || !object_samples_match(frame.pose.object, object)
                 || frame.precision_mode != precision_mode
         });
         if retained_invalid {
@@ -111,7 +133,8 @@ impl SceneLedger {
         }
         if let Some(pending) = &mut self.pending
             && (pending.iteration_cap != iteration_cap
-                || pending.plane_origin_f64 != plane_origin_f64
+                || !origins_share_slice(&pending.pose, plane_origin_f64)
+                || !object_samples_match(pending.pose.object, object)
                 || pending.precision_mode != precision_mode)
         {
             pending.drop_reason = Some(DropReason::IncompatibleMain);
@@ -121,7 +144,6 @@ impl SceneLedger {
 
     pub fn apply_reference_shift(
         &mut self,
-        accepted_pose: &Pose,
         new_generation: u32,
         new_revision: u32,
         shift_px: [f64; 2],
@@ -129,14 +151,16 @@ impl SceneLedger {
         if let Some(frame) = &mut self.retained
             && frame.centre_revision != new_revision
         {
-            rebase_pose(&mut frame.pose, accepted_pose, shift_px);
+            let sampled_pose = frame.pose;
+            rebase_pose(&mut frame.pose, &sampled_pose, shift_px);
             frame.pose.orbit_generation = new_generation;
             frame.centre_revision = new_revision;
         }
         if let Some(pending) = &mut self.pending
             && pending.centre_revision != new_revision
         {
-            rebase_pose(&mut pending.pose, accepted_pose, shift_px);
+            let sampled_pose = pending.pose;
+            rebase_pose(&mut pending.pose, &sampled_pose, shift_px);
             pending.pose.orbit_generation = new_generation;
             pending.centre_revision = new_revision;
         }
@@ -156,6 +180,42 @@ impl SceneLedger {
     pub const fn pending(&self) -> Option<&PendingScene> {
         self.pending.as_ref()
     }
+}
+
+fn object_samples_match(from: ObjectAngles, to: ObjectAngles) -> bool {
+    from.as_array()
+        .into_iter()
+        .zip(to.as_array())
+        .all(|(from, to)| (from - to).abs() <= f64::from(f32::EPSILON))
+}
+
+fn origins_share_slice(pose: &Pose, origin: [f64; 4]) -> bool {
+    let delta = core::array::from_fn(|axis| origin[axis] - pose.plane_origin[axis]);
+    let projection = [
+        dot_f64(pose.plane.basis_u, delta),
+        dot_f64(pose.plane.basis_v, delta),
+    ];
+    let residual: [f64; 4] = core::array::from_fn(|axis| {
+        delta[axis]
+            - f64::from(pose.plane.basis_u[axis]).mul_add(
+                projection[0],
+                f64::from(pose.plane.basis_v[axis]) * projection[1],
+            )
+    });
+    let pixels_per_chart = 0.25 * f64::from(pose.grid_width) * pose.zoom_log2.exp2();
+    residual
+        .into_iter()
+        .map(|value| value * value)
+        .sum::<f64>()
+        .sqrt()
+        * pixels_per_chart
+        <= 0.5
+}
+
+fn dot_f64(left: [f32; 4], right: [f64; 4]) -> f64 {
+    left.into_iter()
+        .zip(right)
+        .fold(0.0, |sum, (a, b)| f64::from(a).mul_add(b, sum))
 }
 
 fn rebase_pose(pose: &mut Pose, accepted_pose: &Pose, shift_px: [f64; 2]) {
@@ -185,7 +245,9 @@ fn dot(left: [f32; 4], right: [f32; 4]) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use ember_julibrot_math::{Plane, PrecisionMode, ViewControls};
+    use ember_julibrot_math::{
+        Homography, ObjectAngles, Plane, PoseMap, PrecisionMode, ViewControls,
+    };
 
     use super::*;
     use crate::{SampleClass, SubmissionKind, SubmissionMeasurement};
@@ -201,12 +263,13 @@ mod tests {
                 basis_u: [1.0, 0.0, 0.0, 0.0],
                 basis_v: [0.0, 1.0, 0.0, 0.0],
             },
-            plane_theta_1: 0.0,
-            plane_theta_2: 0.0,
+            object: ObjectAngles::JULIA,
+            plane_origin: ORIGIN,
             zoom_log2: 20.0,
             view: ViewControls::NEUTRAL,
             grid_width: 800,
             grid_height: 600,
+            map: PoseMap::Mapped(Homography::IDENTITY),
             centre_from_reference_px: [11.0, -3.0],
         }
     }
@@ -323,8 +386,7 @@ mod tests {
         begin(&mut ledger, 1, 1);
         ledger.complete(measurement(1));
         begin(&mut ledger, 2, 1);
-        let accepted = pose(2);
-        ledger.apply_reference_shift(&accepted, 2, 2, [4.0, -8.0]);
+        ledger.apply_reference_shift(2, 2, [4.0, -8.0]);
         assert_eq!(
             ledger
                 .retained()
@@ -337,7 +399,7 @@ mod tests {
                 .map(|pending| pending.pose.centre_from_reference_px),
             Some([7.0, 5.0])
         );
-        ledger.apply_reference_shift(&accepted, 2, 2, [4.0, -8.0]);
+        ledger.apply_reference_shift(2, 2, [4.0, -8.0]);
         assert_eq!(
             ledger
                 .retained()
@@ -347,19 +409,48 @@ mod tests {
     }
 
     #[test]
+    fn reference_shift_uses_the_retained_sample_pose_not_a_newer_hot_pose() {
+        let mut ledger = SceneLedger::default();
+        begin(&mut ledger, 1, 1);
+        ledger.complete(measurement(1));
+        let sampled = ledger.retained().expect("fixture retains a scene").pose;
+        let mut newer_hot = sampled;
+        newer_hot.epoch += 1;
+        newer_hot.zoom_log2 += 2.0;
+        newer_hot.grid_width *= 2;
+
+        let mut expected = sampled;
+        rebase_pose(&mut expected, &sampled, [4.0, -8.0]);
+        let mut wrong = sampled;
+        rebase_pose(&mut wrong, &newer_hot, [4.0, -8.0]);
+        assert_ne!(
+            expected.centre_from_reference_px,
+            wrong.centre_from_reference_px
+        );
+
+        ledger.apply_reference_shift(2, 2, [4.0, -8.0]);
+        assert_eq!(
+            ledger
+                .retained()
+                .map(|frame| frame.pose.centre_from_reference_px),
+            Some(expected.centre_from_reference_px)
+        );
+    }
+
+    #[test]
     fn generation_alone_survives_but_cap_origin_or_mode_drops() {
         let mut ledger = SceneLedger::default();
         begin(&mut ledger, 1, 1);
-        ledger.apply_reference_shift(&pose(2), 2, 2, [0.0; 2]);
+        ledger.apply_reference_shift(2, 2, [0.0; 2]);
         assert!(matches!(
             ledger.complete(measurement(1)),
             Some(SceneCompletion::Promoted(_))
         ));
-        assert!(!ledger.invalidate_incompatible(64, ORIGIN, MODE));
-        assert!(ledger.invalidate_incompatible(128, ORIGIN, MODE));
+        assert!(!ledger.invalidate_incompatible(64, ORIGIN, ObjectAngles::JULIA, MODE));
+        assert!(ledger.invalidate_incompatible(128, ORIGIN, ObjectAngles::JULIA, MODE));
 
         begin(&mut ledger, 2, 2);
-        ledger.invalidate_incompatible(64, [0.0, 0.0, 1.0, 0.0], MODE);
+        ledger.invalidate_incompatible(64, [0.0, 0.0, 1.0, 0.0], ObjectAngles::JULIA, MODE);
         assert!(matches!(
             ledger.complete(measurement(2)),
             Some(SceneCompletion::Dropped {
@@ -370,6 +461,36 @@ mod tests {
 
         begin(&mut ledger, 3, 3);
         ledger.complete(measurement(3));
-        assert!(ledger.invalidate_incompatible(64, ORIGIN, PrecisionMode::PictureFast.as_str()));
+        assert!(ledger.invalidate_incompatible(
+            64,
+            ORIGIN,
+            ObjectAngles::JULIA,
+            PrecisionMode::PictureFast.as_str()
+        ));
+    }
+
+    #[test]
+    fn object_angles_invalidate_above_the_sample_rounding_floor() {
+        let mut ledger = SceneLedger::default();
+        begin(&mut ledger, 1, 1);
+        ledger.complete(measurement(1));
+        let mut rounded = ObjectAngles::JULIA;
+        rounded.rho_12 = 1.0e-9;
+        assert!(!ledger.invalidate_incompatible(64, ORIGIN, rounded, MODE));
+
+        let mut changed = ObjectAngles::JULIA;
+        changed.rho_12 = 0.3;
+        assert!(ledger.invalidate_incompatible(64, ORIGIN, changed, MODE));
+    }
+
+    #[test]
+    fn exposed_warp_keeps_the_frame_loop_due_until_the_next_scene_completes() {
+        let mut latch = ExposureLatch::default();
+        latch.observe_warp(true);
+        assert!(latch.due());
+        latch.observe_warp(false);
+        assert!(latch.due());
+        latch.scene_completed();
+        assert!(!latch.due());
     }
 }

@@ -26,29 +26,31 @@ The general DAG and petgraph, more than one world, a simulation tick, more than 
 
 The four fractal axes are ordered `(z.re, z.im, c.re, c.im) = (e₁,e₂,e₃,e₄)`; `e₅` is the escape height used only by the VIEW and never belongs to the sampled fractal plane.
 
-The PLANE rotation acts only in ℝ⁴ and mixes the z and c subspaces: `Rₚ(θ₁,θ₂) = R₁₃(θ₁)R₂₄(θ₂)` on column vectors, where each named plane uses `[[cos θ,−sin θ],[sin θ,cos θ]]`, the two angles are independent radians, and the map is applied as `v′ = R₁₃(R₂₄(v))`.
+The object pose is the math-owned `O∈SO(4)` with six ordered angles, applied to the one seed as `u=Oe₃`, `v=Oe₄`; its four-coordinate plane origin is the translation part of the affine object pose. The legacy two-angle adapter occupies `ρ₁₃` and `ρ₂₄`, and all published basis components undergo one shared f32 rounding pass.
 
-For preset seed pair `(e_a,e_b)`, math evaluates `u = Rₚe_a` and `v = Rₚe_b` in f64 and performs one f32 rounding pass; no `P₄`, Gram–Schmidt, or degenerate-plane stage exists because an orthogonal ℝ⁴ map preserves an orthonormal pair, and the postcondition is `|u·u−1|`, `|v·v−1|`, and `|u·v|` each at most `8·f32::EPSILON`.
+No projection or Gram–Schmidt stage enters plane construction because `O` preserves the orthonormal seed; the postcondition remains `|u·u−1|`, `|v·v−1|`, and `|u·v|` each at most `8·f32::EPSILON`.
 
-There is one seed, `(e₃,e₄)`; a Mandelbrot row is zero angles with plane origin `(0,0,0,0)` and a Julia row at `c₀` is `θ₁=θ₂=−π/2` with plane origin `(0,0,c₀.re,c₀.im)`, the rotated seed being `(e₁,e₂)` there to binary32 rounding and the reversed pair at `+π/2`, and every angle strictly between requires nonzero components in both z and c subspaces.
+Mandelbrot uses `O=I` and the camera-facing factors `q₁₃=q₂₄=−π/2`; Julia uses object `ρ₁₃=ρ₂₄=−π/2` and `Q=I`. Both use zero camera translation and are exact identity pictures at height zero.
 
-The VIEW rotation is distinct and present-only: `Rᵥ = R₁₂(θᵥ₁)R₃₅(θᵥ₂)`, both angles independent controls in radians, both frozen into the HOT slot used by one scene or warp submission. Present reads no clock: a monotonic time still times fences and still drives the app's schedule, but no geometric term is a function of it.
+The camera pose is the independent math-owned `Q∈SO(5)` with ten ordered angles followed by translation `t∈ℝ⁵`; both are frozen into the HOT slot used by one scene or warp submission. Present reads no clock: monotonic time times fences, but no geometric term depends on it.
 
-Grid sample `(i,j)` is the pixel centre `(i+0.5,j+0.5)`; `+v` is up, row zero is the bottom row, the linear record index is `j·width+i`, and square pixels require `height/width` to equal the delivered canvas aspect up to the kernels level's integer rounding.
+Grid sample `(i,j)` is screen-aligned: its centred screen pixel is mapped through the scene's `M`, yielding plane offset `(o_u,o_v)` about the accepted centre. `+v` is up, row zero is bottom, record index is `j·width+i`, and kernels and scene consume the same packed map.
 
-The exact CPU scale remains `pixel_scale = 4/(2^zoom_log2·grid_width)` in f64, but deep dispatch decomposes it as `pixel_scale = m·2^s` with f32 mantissa `m∈[0.5,1)` and i32 exponent `s`; the GPU forms only scaled offset `o′=((i+0.5−width/2)u+(j+0.5−height/2)v)·m` at initial exponent `e₀=s`, so no absolute tiny f32 scale is ever formed.
+The exact CPU scale remains `pixel_scale = 4/(2^zoom_log2·grid_width)` in f64, but deep dispatch decomposes it as `m·2^s`; the GPU forms only `(o_u u+o_v v)·m` at exponent `s`, so no absolute tiny f32 scale is formed.
 
-The perturbation kernel is selected at `zoom_log2≥14`, a displayed POLICY, while shallower zoom uses the 96-byte shallow kernel; the reference orbit is maintained at every depth so switching kernels neither stalls presentation nor changes the `EscapeGrid` interface, and present never derives a scalar GPU scale from zoom.
+The perturbation kernel is selected at `zoom_log2≥14`, a displayed POLICY, while shallower zoom uses the 144-byte shallow kernel and can accept navigation without an orbit; switching kernels does not change the `EscapeGrid` interface, and present never derives a scalar GPU scale from zoom.
 
 The escape DATA texel is loaded with integer `textureLoad` through the `DataSpan` directory and descriptor table; no float sampler, interpolation, CPU readback, or re-packed presentation copy lies between the paid kernel output and the scene shader.
 
 ### 2.2 One scene pass and the height-zero image
 
-There is one scene pipeline: the §2.3 height-field mesh drawn into an LDR `Rgba8Unorm` scene target. The fullscreen scene triangle and the branch that chose between it and the mesh are deleted rather than hidden, because a branch on a control value is a mode, and at height zero, zero VIEW angles, and zero camera angles the mesh projects to exactly the chart NDC `(q_u/2, aspect·q_v/2)` — the image the fullscreen pass drew. Reaching the flat picture therefore costs a control value, not a second pipeline, and the two pictures cannot drift apart because only one of them exists.
+The scene pass draws the screen-grid height field into an LDR `Rgba8Unorm` target over a sky clear set to the palette's exterior colour at zero smooth iterations. At height zero every mesh vertex is its own screen position by construction, while the background guarantees that perspective-pole clipping, near-edge-on relief, and border pull-in cannot leave black or clear holes after scene completion.
 
 The scene target extent equals the delivered `EscapeGrid` extent, so a refinement level is both the delivered escape resolution and the delivered scene resolution; a changed extent is an allocation event, not a per-frame write, and is counted in `texture_reallocations`.
 
 For an escaped non-glitch record, `hue = fract(smooth_iter/period + phase)`, `phase_rgb = clamp(abs(fract(hue + (0,2/3,1/3))·6−3)−1,0,1)`, and `rgb = value·mix((1,1,1),phase_rgb,colour_mix)`; an interior record uses `interior_rgba` exactly.
+
+A status-2 Horizon record is shaded as exterior at zero smooth iterations, not clear; status-3 MapUncertain is shaded from its sampled record. Only a warp coordinate outside its retained source uses the palette's honest clear colour temporarily.
 
 The shader tests `glitch == 1` before `escaped`, emits the fixed opaque debug tint `(1,0,1,1)`, and never filters that classification; malformed non-binary `escaped` or `glitch` is also debug tinted and counted as a presentation contract violation.
 
@@ -56,29 +58,29 @@ The shader tests `glitch == 1` before `escaped`, emits the fixed opaque debug ti
 
 The scene uses one indexed triangle-list mesh with `width·height` vertices and `6·(width−1)·(height−1)` `u32` indices; for cell lower-left `a = j·width+i`, `b=a+1`, `c=a+width`, and `d=c+1`, the exact index sequence is `[a,b,c,b,d,c]`, although culling remains disabled.
 
-The display-normalized plane coordinates are `q_u = 4·((i+0.5)/width−1/2)` and `q_v = 4·(j+0.5−height/2)/width`; this equals the physical plane offset multiplied by `2^zoom_log2`, preserves square pixels, spans almost four units horizontally, and avoids multiplying very small deep-zoom offsets in the vertex shader.
+The neutral-height screen coordinate comes directly from `(i,j)`. For relief, the vertex maps that screen pixel through the scene's `M`, forms the ambient object point `p=plane_origin+(4/width)(o_u u+o_v v)`, lifts it to `(p,hH)∈ℝ⁵`, and projects that point through the same camera chain math used to build `F`; therefore height zero returns to the starting screen coordinate by construction.
 
 For a valid escaped sample the record's own height is `H = 4·clamp(smooth_iter/max(max_iter,1),0,1)−2`; an interior sample uses `H = −2`, and a glitch or malformed sample uses neutral `H = 0` plus the debug tint so the geometry does not pretend to know the missing orbit continuation.
 
 The displayed fifth coordinate is `h₅ = h·H` for the height control `h ∈ [0,4]`, so `h=0` is exactly the flat chart, `h=1` is the amplitude the lab shipped with, and every value between is a continuous morph rather than a switch; the range extends to four because the relief is a display choice and there is no reason to forbid exaggerating it, while `h<0` is refused because it would silently invert interior and escaped and is reachable anyway by a half turn of `θᵥ₂`.
 
-Each vertex begins as `p = (q_u,q_v,0,0,h₅) ∈ ℝ⁵` — the chart's own orthonormal display frame, in which the two spanning directions `u` and `v` are display axes one and two by construction — then applies the frozen VIEW rotation `R₁₂(θᵥ₁)R₃₅(θᵥ₂)` and the double perspective `P₅(p) = d₅/(d₅−p₅)·(p₁,p₂,p₃,p₄)` followed by `P₄(y) = d₄/(d₄−y₄)·(y₁,y₂,y₃)`, both distances controls in `[2,64]` whose neutral value is the `8` the heap lattice pins.
+The lifted ambient point first receives the frozen ten-factor camera rotation `Q`, then camera translation `t`, then the double perspective `P₅(p)=d₅/(d₅−p₅)·(p₁,p₂,p₃,p₄)` and `P₄(y)=d₄/(d₄−y₄)·(y₁,y₂,y₃)`, followed by the yaw/pitch observer and clip transform.
 
-The earlier form `p = (q_u·u + q_v·v, h₅)` embedded the chart's ambient ℝ⁴ components directly, and that is not a frame choice but an accident of which fractal axes a preset happens to name: the VIEW rotation `R₁₂(θ)R₃₅(φθ)` leaves `span(e₃,e₄,e₅)` invariant, so every plane inside `span(e₃,e₄)` — the Mandelbrot seed among them — has `world.x = world.y = 0` at every angle, collapsing both the height field and its four warp anchors onto one line through the origin and forcing a clear-only plan. No fixed ambient embedding escapes this: composing a constant orthogonal mount `G` with the plane rotation only moves the annihilated planes to the angles where `GRₚ` again preserves `span(e₃,e₄)`, so a two-parameter family of degenerate plane angles always survives. The chart's own frame has none, and the four-dimensional body remains fully visible where it actually lives, in the escape DATA the plane selects.
+The retired chart-display frame replaced the ambient point by `(q_u,q_v,0,0,hH)`, making the old two-angle view visible but turning the picture about its own centre rather than moving the observer in ℝ⁵. The still earlier fixed two-angle ambient rotation collapsed `span(e₃,e₄)` because its rotations preserved the subspace with zero display axes. The correct cure is neither chart coordinates nor a fixed mount: the general independent `Q`, with preset rows chosen to face their slices, preserves the real ambient object and allows physical edge-on views.
 
-The chart is an isometric two-plane, so `q_u` and `q_v` exhaust its degrees of freedom and display axis four is identically zero; `P₄` is therefore a unit scale and its pole test never fires for an in-plane sample. Both stages and both tests are kept because the double perspective is the pinned heap operation order and the guard costs nothing, and both poles now read their control rather than a literal, so a small `d₅` against a tall relief is refused honestly instead of dividing through a pole.
+Both perspective stages remain physically active because `O`, `Q`, `t`, and relief can place a component on either projected axis; both denominators are tested before division.
 
-Because `P₄` is a unit scale, `d₄` would be an inert control if it named only that stage. It names the observer distance of §2.3's camera as well, which is the same projective operation one dimension down and the only place a fourth-to-third distance can be seen; one control, one meaning, and the pinned stage keeps its guard.
+The 3D observer continues to use the same `d₄` as observer distance, with near `0.1`, far `4·d₄`, and perspective scale `aspect·d₄/2`; the generated WGSL and CPU mirror consume these quantities in that order.
 
-The `plane_u` and `plane_v` lanes leave the HOT layout with the pipeline that never read them: the vertex shader reads the display frame, the warp shader reads only the homography rows, and the plane-chart homography is built from `Pose.plane` on the CPU. The 128-byte contract is unchanged and those two lanes now carry the camera and scale terms of §3.5.
+The 288-byte HOT payload carries the ten `Q` sine/cosine pairs, five translations, observer, view scale, inverse-sampling warp, current `M`, exterior and clear colours, and flags. The 160-byte scene payload carries the sampled basis and map, so the scene shader reconstructs the same ambient point the kernels sampled.
 
-Either perspective denominator at or below `ε = 1e−4` invalidates the vertex and clips its incident triangles by emitting the fixed outside-clip position; denominators are tested before division so a pole never becomes a NaN convention.
+Either perspective denominator at or below `ε = 1e−4` invalidates the vertex and clips its incident triangles by emitting the fixed outside-clip position; denominators are tested before division so a pole never becomes a NaN convention, and the exterior sky remains behind every discarded fragment.
 
 The vertex also emits a numeric validity value and the fragment discards any interpolation below one, so every triangle incident to an invalid vertex is rejected rather than relying on the fixed outside-clip position alone.
 
 The implementation depends on `ember-lab-heap` and reuses the exact exported pure CPU oracle `mode_a_endpoint(base:[f64;5],coordinate:[i32;5],frame:&FrameUniform)->ModeAEndpoint` with zero lattice coordinate and a `FrameUniform` carrying `[cos θᵥ₁,sin θᵥ₁,cos θᵥ₂,sin θᵥ₂]`, poles `[d₅,d₄]`, and epsilon `1e−4`; the present WGSL operation order is tested against that function rather than copied into a second Rust oracle.
 
-The indexed-grid construction follows the pure-data pattern of `ember_lab_heap::box_vertices()->[BoxVertex;8]` and `ember_lab_heap::BOX_INDICES:[u16;36]`, but it does not call or duplicate their long-box geometry because the contracted object is a triangle height field; `ember_lab_heap::frame_for(object:&Prism,axes:[u32;5],time:f32,aspect:f32)->FrameUniform` is no longer called: it derives one angle from a clock and the other as a golden-ratio multiple of the first, and both of the lab's VIEW angles are independent controls. Its two pole constants survive as the neutral values of `d₅` and `d₄`, and its `axes` argument was never an axis permutation but the lattice step count per axis; the lattice may embed its vertices in standard ℝ⁵ coordinates precisely because its object genuinely occupies all five axes, which a two-dimensional chart does not.
+The indexed-grid construction follows the heap slice's pure-data mesh pattern but not its clock-derived frame: all ten `Q` angles and five translations are independent controls. The two pole constants survive as neutral `d₅` and `d₄`, while this two-dimensional slice enters standard ℝ⁵ only through its true ambient basis and relief lift.
 
 After double perspective the three-space observer is two more controls, not a fixed mount: yaw `θ_c1` and pitch `θ_c2` in `[−π,π]`, observer distance `d₄`, near `0.1`, and far `4·d₄`.
 
@@ -94,35 +96,35 @@ The scene fragment obtains a surface normal from derivatives of the interpolated
 
 The fragment also performs a nearest integer escape-record load from the interpolated grid coordinate and branches on its exact glitch flag, so the debug tint is not interpolated across neighbouring vertices; rawgl's `0.013` long-box thickness is explicitly inapplicable to a triangle height field and is the only §10 heap presentation literal not used.
 
-The VIEW rotation, the camera angles, the height scale, and both distances are HOT: each is frozen into one slot and the warp re-projects the last completed scene under the new values at refresh rate. The PLANE angles stay HOT as before. The four plane-origin coordinates are MAIN, because moving the origin selects different samples and needs a new reference orbit; that is the same publication the retired preset selection performed.
+All six object rotations, ten camera rotations, five camera translations, observer angles, height, and both distances are HOT presentation controls; the four plane-origin coordinates remain MAIN sampling state because moving the origin selects a translated affine slice and may need a new reference orbit.
 
 ### 2.4 Scene texture pair and submission
 
 Exactly two single-sample, one-mip `Rgba8Unorm` scene textures exist: one is the newest fence-completed texture sampled by warp and the other is the sole in-flight scene target; before the first completion there is no retained texture and the non-target texture has no semantic content.
 
-A scene submission captures reconciled `PresentMain` plus the referenced HOT slot into math's immutable `Pose`, encodes exactly one scene pass, submits its four-byte MAP_READ fence immediately after that pass, and returns without awaiting completion.
+A scene submission captures reconciled `PresentMain` plus the referenced HOT slot into math's immutable `Pose`, including object angles, object origin, twenty view scalars, and the level's map; that captured sampled pose remains the sole basis for later reference-shift rebasing.
 
 While the scene fence is pending, every surface refresh may submit a warp against the previous completed texture; after the fence callback, `Presenter::poll` atomically promotes the in-flight texture, pose, palette, grid extent, and measurement, and only then makes the previous texture available as the next target.
 
 If a new level has a different extent, only the available target is reallocated before scene submission, its immutable warp bind group is rebuilt once and the allocation count advances; the retained texture and its bind group stay valid until promotion, keeping the total at two textures.
 
-Scene requests while a target is already in flight return `PresentError::SceneBusy` instead of allocating a third texture, blocking, or overwriting work; an older reference generation may complete and be measured, and present rebases its captured pose on an accepted reference shift before promotion unless changed `max_iter` or plane origin makes the image incompatible.
+Scene requests while a target is already in flight return `PresentError::SceneBusy` instead of allocating a third texture, blocking, or overwriting work; an accepted reference shift rebases each retained or pending scene from its own sampled pose, never from `max_by_key(epoch)` or a newer HOT pose.
 
 ### 2.5 Exact plane-chart homography
 
-Let `B_p=[u_p v_p]` be the 4-by-2 orthonormal basis, `E_p=diag(width_p/2,height_p/2)` convert NDC to pixels, and `d_p=centre_from_reference_px`; relative to accepted reference `R`, chart point `q=(x,y)` semantically denotes `X_p(q)=R+B_p·s_p(d_p+E_pq)` for `s_p=4/(2^zoom_p·width_p)`, but present never materializes either arbitrarily small `s_p`.
+Let `M_p` be pose `p`'s accepted screen-to-plane map and `B_p=[u_p v_p]` its once-rounded basis. A screen point first passes through `M_p`; its reference-relative ambient point then follows from `B_p`, pixel scale, centre displacement, and plane origin without materializing an absolute deep GPU coordinate.
 
-For current destination pose `t` and retained source pose `f` expressed against the same accepted reference, present computes only ratio `r=s_t/s_f=2^(zoom_f−zoom_t)·width_f/width_t` in f64 and the inverse-sampling homography `H_(t→f)=[[A₀₀,A₀₁,b₀],[A₁₀,A₁₁,b₁],[0,0,1]]`, where `A=E_f^(−1)rB_fᵀB_tE_t` and `b=E_f^(−1)(rB_fᵀB_td_t−d_f)`.
+For current destination pose `t` and retained source pose `f`, math composes `H(f→t)=M_t⁻¹·T·M_f`; `T` contains basis overlap, scale ratio, centre displacement, and compatible in-plane origin translation. Present uploads the explicit inverse `H(t→f)` for texture sampling.
 
 The translation term is the desired-centre displacement difference in retained-frame pixels; when the bases agree its components reduce to `b_x=2·(r·d_t.x−d_f.x)/width_f` and `b_y=2·(r·d_t.y−d_f.y)/height_f`, so pans remain smooth without an absolute centre or absolute deep scale.
 
 The shader evaluates rows explicitly as `r = H_(t→f)·(x,y,1)`, rejects non-finite `r` or `|r.z|≤1e−12`, computes source NDC `s=(r.x/r.z,r.y/r.z)`, converts to source UV `(s+1)/2`, and emits clear colour rather than clamping whenever either UV component lies outside `[0,1]`.
 
-This is the exact projective map between the two plane charts, with aspect folded into `E`; it is exact image reprojection when both poses span the same affine plane, while normalized residual `ρ(q)=||(I−B_fB_fᵀ)rB_t(d_t+E_tq)||₂` is reported in retained-frame pixel units when changed PLANE rotation moves samples outside that plane.
+This is exact at height zero when both poses sample the same affine slice. Six object angles must agree to the f32 plane-rounding floor; a plane-origin delta may pass only when its out-of-plane component and the normalized chart residual are each at most half a source pixel, so in-plane origin motion is exact pan and out-of-plane motion is a slice change.
 
 On an accepted reference, worker publishes `reference_shift_px` as new minus old reference centre in current-zoom pixels along accepted basis `B_a`; present computes only `r_a_f=s_a/s_f=2^(zoom_f−zoom_a)·width_f/width_a` and re-expresses every retained or in-flight pose as `d_f←d_f−r_a_fB_fᵀB_a·reference_shift_px`, then advances its reference generation without clearing the image.
 
-The absolute bignum centre never enters this matrix: `centre_from_reference_px` and `reference_shift_px` are worker-computed from bignum differences divided by the current scale and remain f64-safe at arbitrary depth; a reference-generation change alone does not clear, while changed `max_iter` or changed MAIN plane origin including `c₀` invalidates retained and in-flight images.
+The absolute bignum centre never enters this matrix: `centre_from_reference_px` and `reference_shift_px` remain f64-safe at arbitrary depth. A reference-generation change alone does not clear, while cap, precision mode, object-slice, or out-of-plane origin incompatibility refuses the warp.
 
 A pan translates old content and exposes a border on the entering side; every mapped source coordinate outside `[0,1]` shows `clear_rgba` with no clamp, stretch, wrap, or stale edge pixel, while the next completed scene supplies the newly revealed fractal samples.
 
@@ -132,27 +134,31 @@ All powers, dot products, the 2-by-2 inverse, and the 3-by-3 forward/inverse che
 
 Warp is deliberately depth-free and uses one 2D homography of the already presented image, for every view, because adding depth, a coarse displaced warp mesh, or a second warp pass would answer a different lab question and violate the one-extra-pass constraint.
 
-The four destination anchors are current chart corners `q ∈ {(-1,-1),(1,-1),(-1,1),(1,1)}`; each corner maps through the flat chart homography to source chart coordinate `q_f`, both source and destination build the §2.3 display-frame five-dimensional point at neutral height `h₅=0`, and each is taken through its pose's VIEW rotation, double perspective, camera, and NDC projection.
+The four destination anchors are the current screen corners. Each passes through the current screen map, the compatible plane-chart map, and the retained forward screen map; the solve therefore composes the same maps used by screen-aligned sampling.
 
-The planner and the scene shader build that point by the identical construction, so the warp anchors and the surface they approximate are projections of the same points; a plan is degenerate only if the scene it warps is degenerate too, which the display frame makes impossible for every plane. At neutral height all four anchors carry world `z=0`, so the anchor solve is exact for the height-zero chart and the sampled corpus measures only the escape relief a plane homography cannot follow.
+The planner and scene shader use the identical ambient construction. At neutral height the composed map is exact for the compatible affine plane; under relief the sampled corpus measures the nonlinear error that one 2D homography cannot follow.
 
-There is therefore one plan kind. The exact `FlatExact` plan is retired because selecting it meant asking whether both poses were in a named mode, and a branch on control values is the mode the lab abolished; the four-anchor solve is not an approximation of the exact map where the exact map exists, it reproduces it. At zero camera angles and neutral height the four anchors are the chart corners under the exact plane-chart homography, so the solved matrix equals math's `warp_matrix` forward to the solve residual, which a native test pins, and the sampled corpus reports exactly zero because every sampled height is `h·H` at `h=0`. Math's `warp_matrix` remains the anchor source, so the exact map is still computed and still audited; what is gone is the second code path that consumed it.
+`WarpKind` remains `AnchorHomography` or `ClearOnly`. Flat compatible plans are exact; a missing source, incompatible slice, edge-on map, source-identity mismatch, failed solve, or measured error above the ceiling is `ClearOnly` and is never shown as a moving feature.
 
 The implementation solves the eight projective coefficients of the current-NDC-to-source-NDC homography with f64 Gaussian elimination and partial pivoting, fixes `h₂₂=1`, refuses a pivot below `1e−12`, and rounds the valid result to the same three-row HOT layout used by flat warp.
 
-Neutral height makes the approximation exact at the four anchors but not between them or at nonzero escape height; the native oracle samples a 9-by-9 chart lattice at `h₅ ∈ h·{−2,−1,0,1,2}`, compares homography source pixels with full per-point reprojection, and reports maximum and p95 error in output pixels; scaling the sampled heights by the height control is what makes the reported error the error of the picture actually on screen, and is why the corpus reports zero at `h=0` rather than a relief error nobody is looking at. The four-anchor solve remains unconditional, as does the uploaded-row quarter-pixel oracle; `WarpValidation::Ordinary` skips this 405-point allocation, projection, sort, max, and p95 work only under `PrecisionMode::PictureFast`, while explicit `Measure`, newly prepared `Final`, and every Deterministic refresh run it. A skipped refresh writes `None` to both error facts, never the preceding values.
+Every plan, including ordinary PictureFast, carries a measured maximum error and p95 from the same full 9-by-9-by-5 corpus. A sample with no finite destination, retained projection, or warp image makes the plan unbounded and therefore `ClearOnly`; honest texture-edge disocclusion remains the separately flagged temporary clear region that the next scene fills. The uploaded f32 rows retain their separate quarter-source-pixel accuracy oracle.
 
-The acceptance envelope is `|Δθ_view|≤0.002 rad`, `|Δzoom_log2|≤0.025`, a successfully rebased common reference, and maximum sampled error at or below `8.0` pixels for a 1920-by-1080 target. That bound is a re-measurement, not a loosening: the approximation is unchanged in chart terms, but the height-zero framing is now the chart map rather than the retired mount's `2·1.72/(9·aspect)`, so the same geometric error covers about `4.65` times as many pixels at 16:9. The `θᵥ₁=0.6` relief fixture measures `7.704` pixels where the retired mount measured under `2.0`. The envelope was also swept over one moving angle and now has four angles, a height, and two distances; the `0.002` rad bound is asserted for each angle by analogy and the height and distance terms are unmeasured, which §8 records as an open measurement rather than a bound already met; the original argued `0.02`/`0.25` envelope measured `6.394` pixels already at `0.01`/`0.1`, so outside the narrower envelope the warp remains a visibly labelled approximation, publishes that a fresh scene is needed immediately, and never turns its observed error into an invented correction.
+The `h=0` slice of this admission corpus is structurally zero because the height-zero projection short-circuit returns each screen point directly; even a corrupted sampling matrix can therefore publish `approx_max_error_px=0.0` when `height_scale=0`. Flat exactness rests on the `warp_matrix` algebra and its full-forward-chain tests plus the unconditional quarter-source-pixel uploaded-row oracle, not on the corpus.
 
-A native sweep of 256 VIEW angles across the full turn measures that budget honestly at 1920 by 1080: the full envelope reaches `15.650` pixels and rotation with a two-pixel pan reaches `3.792`, against `3.094` and `0.762` under the retired mount — the same `4.65` framing factor, applied to a measurement that was already known to exceed its published bound. The swept oracle requires the measured `16.0` pixels for the full envelope and `4.0` for rotation and pan. The zoom step remains the dominant error source, and §8 still records the open choice between a tighter zoom step and a published bound this large; what the new observer changed is how visible that choice is, because the picture now fills the frame.
+The named acceptance ceiling is `WARP_MAX_ERROR_PX=1.0`: a resolving scene may fill missing detail but no displayed reprojection may move a feature by more than one pixel. A plan above the ceiling is refused and temporarily clear until the due scene completes.
 
-Newly exposed source coordinates outside the retained texture show `clear_rgba`; a single homography cannot detect internal visibility changes in a relief, so internal disocclusion is a candid stale-image limitation rather than being called filled or corrected.
+At 1920 by 1080 with `height_scale=1`, measured admission thresholds mean most camera planes clear beyond roughly `0.001` to `0.02` radians; yaw/pitch reaches the ceiling near `0.0033`, height near `0.0027`, and `d₅` motion near `0.018`, while `q₁₄` near `0.067` and `q₂₄` near `0.091` tolerate a few degrees. Relief navigation is therefore clear-then-fill except for sub-degree nudges; the owner-facing levers are a higher `WARP_MAX_ERROR_PX` or a relief-aware non-homography warp.
+
+The measured 1920-by-1080 ambient relief sweep reaches `46.94` pixels over the full envelope and `31.59` pixels for rotation with pan. These numbers describe what relief reprojection can reach, not what is accepted: they explain why relief warps outside small motions are refused under the one-pixel ceiling.
+
+Newly exposed source coordinates outside the retained texture show `clear_rgba` and set the exposure latch; the next completed scene fills them over the exterior sky. The plan carries the exact `(scene_id,texture_index)` it was solved against, and draw clears if the retained source differs, preventing a scene promoted between HOT write and frame from sampling a different texture with stale rows.
 
 ### 2.7 Refresh, initial image, and measurements
 
 Every refresh follows the fixed order `poll completed fences → drain HOT → write_hot(refresh_id mod 3) → frame(state,hot_slot) → app present`, with `submit_scene` when the app schedule says a scene is due; after `frame` the app drives `poll` through cooperative browser yields until the matching warp fence completes, captures the ending timestamp, and only then presents its singly owned surface texture.
 
-When no compatible completed frame exists, the warp pass writes only `clear_rgba`; the app simultaneously displays the literal overlay text `waiting for first completed scene` or the current typed refusal, and no diagnostic pattern or stale incompatible image is substituted.
+When no compatible completed frame exists, the warp pass writes only `clear_rgba`; a completed scene always covers the whole target with mesh or exterior sky, and no diagnostic pattern or stale incompatible image is substituted.
 
 The warp samples the retained `Rgba8Unorm` texture with a nearest sampler and no mipmaps, preserving debug-tint classification; the disocclusion test happens before the sample and uses the palette's clear colour.
 
@@ -238,7 +244,7 @@ Worker's `ViewerState` is `#[repr(C)]`, exactly 176 bytes at alignment 8: `epoch
 
 `PresentMain` is the CPU-only adapter `pub struct PresentMain { pub epoch:u64, pub state:MainState, pub grid:EscapeGrid }` with no byte ABI; app constructs it after an infallible MAIN drain and kernels publication, and present derives generation, delivered cap, palette, reference shift, and `c₀` compatibility from the worker-owned state without variants.
 
-Math defines the immutable CPU-only `Pose` exactly as `pub struct Pose { pub epoch:u64, pub orbit_generation:u32, pub plane:Plane, pub plane_theta_1:f64, pub plane_theta_2:f64, pub zoom_log2:f64, pub view:ViewControls, pub grid_width:u32, pub grid_height:u32, pub centre_from_reference_px:[f64;2] }`; present stores and consumes it, every PLANE and VIEW angle is independent, and nothing in it is derived from another field.
+Math defines the immutable CPU-only `Pose` as `{epoch,orbit_generation,plane,object,plane_origin,zoom_log2,view,grid_width,grid_height,map,centre_from_reference_px}`; present stores the pose used by each submitted scene, including all affine object/camera state and that level's `PoseMap`.
 
 `HotSlot` is the opaque CPU token `{index:u32,dynamic_offset:u32,epoch:u64}` returned by `HotSlot::for_refresh(refresh_id,slot_stride,epoch)`, where `index=refresh_id mod 3` and `dynamic_offset=index·slot_stride`; only this constructor can create a slot, making `write_hot` infallible.
 
@@ -246,15 +252,15 @@ Math defines the immutable CPU-only `Pose` exactly as `pub struct Pose { pub epo
 
 ### 3.5 GPU uniform blocks
 
-`HotUniform` is exactly 128 bytes in eight 16-byte lanes: byte 0 `camera:[f32;4]=[cos θ_c1,sin θ_c1,cos θ_c2,sin θ_c2]`, 16 `view_scale:[f32;4]=[h,d₅,d₄,0]`, 32 `view_rotation:[f32;4]=[cos θᵥ₁,sin θᵥ₁,cos θᵥ₂,sin θᵥ₂]`, 48 `homography_row_0:[f32;4]`, 64 `homography_row_1:[f32;4]`, 80 `homography_row_2:[f32;4]`, 96 `clear_rgba:[f32;4]`, and 112 `flags:[u32;4]=[epoch_low,epoch_high,source_valid,0]`.
+`HotUniform` is exactly 288 bytes in eighteen 16-byte lanes: bytes 0–64 hold ten camera sine/cosine pairs, 80/96 camera translation, 112 observer rotation, 128 view scale, 144/160/176 inverse-sampling warp rows, 192/208/224 current screen-map rows, 240 exterior-zero colour, 256 clear colour, and 272 flags `[epoch_low,epoch_high,source_valid,edge_on]`.
 
-The first two lanes previously carried `plane_u` and `plane_v`, which no shader read; the byte size, alignment, lane count, and every later offset are unchanged, so the reuse costs no ring arithmetic and the offset test moves two names rather than a layout. The fourth flag word previously carried the view discriminant and is now a reserved zero, which the same test asserts.
+Every f64 camera value is validated and narrowed once into this payload; the explicit factor lanes avoid dynamically indexed shader writes and translate to GLSL ES 3.00 on the WebGL2 device floor.
 
-Each homography row stores three coefficients and a zero padding word, and the shader uses explicit row dot products rather than WGSL matrix layout; `source_valid` is one only when reference-shift rebasing, delivered-cap and plane-origin compatibility, dimensions, finite arithmetic, and matrix construction all pass.
+Each homography row stores three coefficients and zero padding; `source_valid` is one only when compatibility, the half-source-pixel residuals, finite arithmetic, the one-pixel measured ceiling, and the bound `(scene_id,texture_index)` all pass at draw time.
 
-The HOT buffer size is `3·slot_stride`, where `slot_stride = align_up(128,device.limits.min_uniform_buffer_offset_alignment)`; one bind group covers the whole buffer, each pass selects exactly one slot by dynamic offset, and a refresh writes exactly 128 payload bytes to that slot.
+The HOT buffer size is `3·slot_stride`, where `slot_stride=align_up(288,device.limits.min_uniform_buffer_offset_alignment)`; one bind group covers the whole buffer, each pass selects exactly one slot by dynamic offset, and a refresh writes exactly 288 payload bytes.
 
-`SceneUniform` is exactly 80 bytes in five 16-byte lanes: byte 0 `grid:[u32;4]=[width,height,level,max_iter]`, 16 `span:[u32;4]=[directory_index,active_len,0,0]`, 32 `palette_map:[f32;4]`, 48 `interior_rgba:[f32;4]`, and 64 `clear_rgba:[f32;4]`, where `active_len=width·height` by checked arithmetic.
+`SceneUniform` is exactly 160 bytes in ten 16-byte lanes: byte 0 grid, 16 span with edge-on flag, 32/48 sampled basis, 64/80/96 sampled map rows, 112 palette map, 128 interior colour, and 144 clear colour.
 
 `SceneUniform` is rewritten only when MAIN selection, palette, level, extent, span, or iteration cap changes; index-buffer updates and texture/bind-group replacement are regional allocation events tied to an extent change and are never per-refresh work.
 
@@ -264,13 +270,13 @@ The HOT buffer size is `3·slot_stride`, where `slot_stride = align_up(128,devic
 
 `SubmissionMeasurement` is `{kind:SubmissionKind,id:u64,source_scene_id:Option<u64>,sample_class:SampleClass,precision_mode:&'static str,wall_ms:f64,fence_wait_ms:f64,polls:u32}`; `SubmissionKind` is `Scene` or `Warp`, `SampleClass` is `ColdWarmUp`, `PolicyProbe`, or `Measured`, milliseconds are measured monotonic walls, and `source_scene_id` is unavailable for a clear-only warp.
 
-`WarpPlan` is `{rows:[[f32;4];3],source_valid:bool,kind:WarpKind,chart_residual:f64,approx_max_error_px:Option<f64>,approx_p95_error_px:Option<f64>}` with no byte ABI; `WarpKind` is `AnchorHomography` or `ClearOnly`. `PresentEvent` carries a documented `large_enum_variant` allow: a `Pose` now holds every control, so the completed-frame variant is 288 bytes, and boxing it would trade one fixed move for a heap allocation on every fenced scene completion.
+`WarpPlan` is `{rows,source_scene_id,source_texture_index,source_valid,edge_on,exposed,kind,chart_residual,approx_max_error_px,approx_p95_error_px}` with no byte ABI; `WarpKind` is `AnchorHomography` or `ClearOnly`. `PresentEvent` carries a documented `large_enum_variant` allow because the completed scene owns its full sampled pose.
 
 `PresentEvent` messages are `SceneCompleted { frame:SceneFrame }`, `SceneDropped { scene_id:u64, orbit_generation:u32, reason:DropReason, measurement:SubmissionMeasurement }`, `WarpCompleted { measurement:SubmissionMeasurement }`, and `FenceRefused { kind:SubmissionKind,id:u64,reason:FenceRefusal,polls:u32,wall_ms:f64,precision_mode:&'static str }`.
 
 `DropReason` is `IncompatibleMain`, `ReplacedMain`, or `InvalidExtent`; `FenceRefusal` is `PollLimit`, `Deadline`, `Device`, or `Cancelled`, and each variant is rendered verbatim by the app rather than collapsed into “slow.”
 
-`PresentFacts` is `{completed_scene_id:Option<u64>,in_flight_scene_id:Option<u64>,source_generation:Option<u32>,precision_mode:&'static str,delivered_width:u32,delivered_height:u32,delivered_level:Option<RefinementLevel>,iteration_cap:Option<u32>,palette:PaletteId,view:ViewControls,centre_from_reference_px:[f64;2],reference_shift_px:[f64;2],last_scene:Option<SubmissionMeasurement>,last_warp:Option<SubmissionMeasurement>,reprojected_per_scene:Option<u32>,refreshes_without_scene:u64,texture_reallocations:u32,chart_residual:Option<f64>,warp_max_error_px:Option<f64>,warp_p95_error_px:Option<f64>,status:PresentStatus}`; `PresentFacts::record_warp_plan(&mut self,plan:&WarpPlan)` is the sole writer of those three planner-owned facts, so the residual, the sampled maximum, and the sampled ninety-fifth percentile always describe the same plan and a clear-only or skipped-corpus plan leaves both sampled errors absent rather than stale. The two error facts are named for the warp that owns them rather than for a view that no longer exists, and a validated height-zero plan publishes the measured zero it observed.
+`PresentFacts` publishes retained and pending identities, delivered state, precision provenance, view and reference displacement, scene/warp measurements, warp counts, texture reallocations, exposure/fill state, chart residual, measured maximum and p95 error, and status. `record_warp_plan` is the sole writer of the three planner facts, so they describe the same plan; every planned source has a measured maximum, while a pre-solve incompatibility has no fabricated number.
 
 `PresentStatus` is `WaitingForFirstScene`, `ShowingCompletedScene`, `ShowingStaleApproximation`, `ClearForIncompatibleMain`, or `Refused(PresentError)`; app combines these delivered and measured facts with its own requested resolution, requested level, requested iteration cap, zoom digits, floor/working/delivered precision, orbit length, and rebase/glitch availability without substitution.
 
@@ -282,7 +288,7 @@ The HOT buffer size is `3·slot_stride`, where `slot_stride = align_up(128,devic
 
 `Presenter::set_main(&mut self,main:PresentMain)` is the infallible MAIN-drain endpoint: it records latest-wins state, applies a not-yet-consumed `reference_shift_px` to retained and in-flight poses for the accepted revision, and invalidates them when delivered `max_iter`, `plane_origin_f64`, or `precision_mode` changed, without allocating, submitting, waiting, or returning an error.
 
-`Presenter::write_hot(&mut self,slot:HotSlot,hot:PresentHot,validation:WarpValidation)` is the infallible HOT-drain endpoint: it stores math's CPU `Pose` and the plan's source validity for that same slot, passes MAIN's `PrecisionMode` plus caller-owned validation reason into the caller-side planner entry, calls `math::warp_matrix` for the f64 anchor source and the planner for the four-anchor solve, writes exactly one 128-byte ring payload, and falls back to `source_valid=0` on invalid arithmetic.
+`Presenter::write_hot(&mut self,slot:HotSlot,hot:PresentHot,validation:WarpValidation)` stores the planned source scene and texture beside the slot, measures and enforces the plan bound, writes one 288-byte payload, and falls back to `source_valid=0` on refusal; `frame` rechecks the retained identity before selecting a source.
 
 `Presenter::submit_scene(&mut self,hot_slot:HotSlot,now_ms:f64)->Result<u64,PresentError>` captures current MAIN and the exact HOT pose, asks the scene ledger to construct the pending record and return its single authoritative texture index, prepares and encodes against that same index, submits a four-byte fence, and returns its monotonically increasing `scene_id` without waiting.
 
@@ -304,7 +310,7 @@ The HOT buffer size is `3·slot_stride`, where `slot_stride = align_up(128,devic
 |-------------------|---------|----------------------|------------------|
 |math → present|`Plane`|`basis_u@0`, `basis_v@16`|32 bytes; f32 ℝ⁴ coordinates|
 |math → shallow kernel|`CentreSplit`|`hi@0`, `lo@16`|32 bytes; four f32 hi+lo pairs|
-|math → present|`Pose`|`epoch,orbit_generation,plane,plane_theta_1,plane_theta_2,zoom_log2,view,grid_width,grid_height,centre_from_reference_px`|CPU-only math record; radians, log₂ zoom, pixels|
+|math → present|`Pose`|epoch, generation, object basis/angles/origin, zoom, twenty view scalars, extent, map, centre displacement|CPU-only semantic record|
 |math → kernels/present|`EscapeParams`|`max_iter`, `bailout=256.0`|8 bytes; iterations and squared radius|
 |worker → app → kernels|reference record|`re,im`, then zero padding|8 bytes transferred, RGBA32F heap texel per iteration|
 |kernels → present|escape record|`smooth_iter,escaped,rebase_count,glitch`|RGBA32F, 16 bytes per pixel|
@@ -316,10 +322,10 @@ The HOT buffer size is `3·slot_stride`, where `slot_stride = align_up(128,devic
 |worker owner → app/present|`ViewerState`|`epoch@0,hot@8,main@48`|176 bytes, align 8; each drain bumps epoch|
 |owner/app → present HOT|`PresentHot`|`epoch,state,plane,view`|CPU-only adapter; latest HOT drain plus the VIEW controls|
 |owner/app → present MAIN|`PresentMain`|`epoch,state,grid`|CPU-only adapter; latest MAIN drain plus published grid|
-|math → present/app|`ViewControls`|seven f64 VIEW controls; present re-exports it|CPU-only record; radians and distances|
+|math → present/app|`ViewControls`|ten `Q` angles, five translations, yaw, pitch, height, two distances|twenty f64 scalars|
 |present → app|`PaletteId`,`PaletteRecord`|Classic/Ember/Ice IDs and exact map/interior/clear literals|`repr(u32)` ID; 48-byte linear-RGBA record|
-|present → GPU|`HotUniform`|camera, height and distances, view rotation, three homography rows, clear, flags|128-byte payload at dynamic ring offset|
-|present → GPU|`SceneUniform`|grid, span, palette map, interior, clear|80-byte regional MAIN payload|
+|present → GPU|`HotUniform`|camera rotation/translation, observer, scale, warp and screen maps, colours, flags|288-byte payload at dynamic ring offset|
+|present → GPU|`SceneUniform`|grid, span, basis, sampled map, palette and colours|160-byte regional MAIN payload|
 |app → present|`PresentConfig`,`HotSlot`,`FrameState`|surface format and fence limits; ring offset token; borrowed surface view and refresh facts|CPU-only records; milliseconds and physical pixels|
 |app ↔ present|callable API|`new,set_main,write_hot,submit_scene,frame,poll,facts,Warp::reproject`|Exact signatures in §3.7; drains infallible and fences asynchronous|
 |present → app|`FrameReceipt`|refresh, warp, optional source scene, status|CPU record; submission facts only|
@@ -335,7 +341,7 @@ The device floor is WebGL2 plus `EXT_color_buffer_float`, at least four colour a
 
 No `OES_texture_float_linear`, `EXT_float_blend`, timestamp query, or shared-memory thread is required; escape DATA uses integer nearest loads, scene textures use nearest sampling, colour targets have no blend, and every timing fact comes from a four-byte fence wall.
 
-Per refresh CPU-to-GPU traffic is exactly one 128-byte HOT slot write; MAIN changes may regionally write the 80-byte scene block, an index-buffer prefix, descriptors, or changed texture resources, and every such event is counted separately rather than amortized into zero.
+Per refresh CPU-to-GPU traffic is exactly one 288-byte HOT slot write; scene changes may regionally write the 160-byte scene block, an index-buffer prefix, descriptors, or changed texture resources, and every such event is counted separately.
 
 Kernel output reaches DATA only by the paid SCRATCH-to-DATA path, the `EscapeGrid` becomes publishable only after copy ordering, and present never copies that grid to a private texture or CPU array.
 
@@ -357,7 +363,7 @@ Renderer austerity is one selected scene pass plus the sole warp pass, no mips, 
 
 ## 5. Oracles and tests
 
-Native layout tests assert exact sizes and offsets for 32-byte `Plane`, 32-byte `CentreSplit`, 40-byte `HotState`, 128-byte `MainState`, 176-byte `ViewerState`, 8-byte `EscapeParams`, both RGBA32F records, 48-byte `PaletteRecord`, 128-byte `HotUniform`, and 80-byte `SceneUniform`, assert every reserved word is zero, and round-trip little-endian fixture bytes.
+Native layout tests assert exact sizes and offsets for the shared records, the 288-byte `HotUniform`, and the 160-byte `SceneUniform`, including every zero padding word.
 
 Native PLANE tests pin `R₁₃(θ₁)R₂₄(θ₂)` operation order, the zero-angle seed, the exact `(e₁,e₂)` seed at `θ₁=θ₂=−π/2` and its reversal at `+π/2`, nonzero z and c components for every angle strictly between, one f32 rounding pass, and the three `8·f32::EPSILON` orthonormal bounds.
 
@@ -369,7 +375,7 @@ Native mesh tests prove vertex count `width·height`, index count `6(width−1)(
 
 Native scene-algebra tests compare deterministic vertices at fixed control values with `ember_lab_heap::mode_a_endpoint` at zero lattice coordinate, including both perspective poles at slider distances, and parse generated WGSL to pin the control-driven camera, the wgpu depth row, `LessEqual`, lighting literals, no blend, no MSAA, and `cull_mode: None`.
 
-One native test carries the height-zero claim: at `h=0`, zero VIEW angles, zero camera angles, and every distance in `{2,8,64}`, the four chart corners and a sampled interior lattice project to exactly the flat chart NDC `(q_u/2,aspect·q_v/2)` on a square and a 16:9 extent. It compares to `1e−12` across two extents, three distances, six chart points, and all five sampled record heights, since the height control flattens every one of them. It is the reason the fullscreen pass could be deleted rather than kept beside the mesh, so it fails loudly if the framing constant `k=aspect·d₄/2` is ever edited to something convenient.
+The height-zero identity test evaluates both preset-facing object/camera rows over their screen lattice and requires every mesh vertex to return to its own NDC position; translation is zero in these rows and distance fixtures remain exact. The screen-map oracle separately covers nonzero translation and general camera factors.
 
 The shared navigation-drift oracle composes `10⁴` and `10⁵` steps of `R(Δθ)` with `Δθ=1e−3` radians and metric `||MᵀM−I||_F`; pass is at most `1e−5` for f64 without re-orthonormalization and for f32 with Gram–Schmidt every 64 steps.
 
@@ -379,13 +385,15 @@ Native reference-shift fixtures construct one physical centre before and after a
 
 Native zoom-interface tests decompose scales on both sides of `zoom_log2=14`, prove present never forms the deep absolute f32 scale, and pin the displayed shallow/perturbation POLICY transition while leaving the `EscapeGrid` and warp-ratio interfaces unchanged.
 
-Native anchor-warp tests pin the four neutral-height anchors exactly, exercise pivot refusal, report the 9-by-9-by-5 maximum and p95 errors, and require the §2.6 `8.0`-pixel bound at the single `θᵥ₁=0.6` relief fixture, which measures `7.704`; failures outside the acceptance envelope are reported facts, not test failures. A counted policy test requires twelve ordinary PictureFast refreshes to execute the corpus zero times and one Measure to execute it exactly once, while the uploaded-row quarter-pixel oracle remains an ordinary PictureFast test.
+Native anchor-warp tests pin exact flat plans against the full forward chain, enforce `WARP_MAX_ERROR_PX=1.0`, require over-budget or unbounded relief to clear, and report max and p95 for every plan. A counted policy test requires all validation modes to execute the full 9-by-9-by-5 corpus; a warmed sokol run measured 1,536 fully planned and asserted cases in `0.302874` seconds, or `0.197184` milliseconds per plan. The uploaded-row quarter-pixel oracle remains unconditional.
 
 A second anchor test pins the retirement of the exact plan: at zero camera angles and `h=0`, for every distance in `{2,8,64}`, the solved four-anchor rows equal math's `warp_matrix` forward within `1e−6` per f32-packed coefficient and the sampled corpus reports below `1e−9`, which is the evidence that deleting `WarpKind::FlatExact` deleted a code path and not a capability.
 
 Exact planner word and residual comparisons are guarded by the cfg-free `PrecisionMode::requires_bit_identity` helper and are labelled Deterministic conformance; finite plans, poles, error bounds, and every exact-path accuracy oracle execute for PictureFast as well.
 
-A native oracle sweeps 256 VIEW angles across the full turn for the Mandelbrot row, the Julia row, and the hybrid plane at `θ₁=θ₂=π/4`, and requires every swept plan to be an anchor homography with no clear-only fallback and within the §2.6 measured swept bounds of `16.0` pixels for the full envelope and `4.0` for rotation and pan; a companion test requires the plan to be independent of which ambient axes the plane names, to binary32 basis tolerance, which is the property §2.3 argues for and the property whose absence collapsed the Mandelbrot height field.
+The ambient oracle covers the two identity presets, random `O` and `Q` orthonormality, legacy two-angle equivalence, edge-on refusal, exactly one edge-on crossing on the Julia-to-Mandelbrot object morph at fixed `Q`, nonzero camera translations, and forward-after-inverse identity over a 9-by-9 screen lattice. The reprojection oracle covers pan, zoom, view rotation with and without relief, yaw/pitch, compatible object-rounding noise, incompatible object motion, in-plane and out-of-plane origin translation, camera translation, and cross terms against the published bound.
+
+The coverage oracle rasterizes the CPU vertex mirror over a pose lattice including near-edge-on and `h=2` and requires every surface pixel to be covered by the mesh or the exterior sky. Both scene and warp shaders are parsed with the normal capability set and translated to GLSL ES 3.00.
 
 Native state-machine tests permute scene completion, HOT writes, MAIN replacement, accepted-reference shift, incompatible cap, plane origin, or precision mode, control movement, resize, warp completion, deadline, and poll-limit events and prove exactly one retained plus one in-flight texture, latest-wins promotion, exactly-once pose rebasing, no third allocation, bounded retirement, and correct `reprojected_per_scene` attribution.
 
@@ -403,11 +411,11 @@ Warp cost per refresh, scene-frame cost, fence wait, polls, warm-up exclusion, f
 |----|-----------|----------------------|
 |Heap shader sees the wrong page or row|wrong fractal pixels|native multipage address fixture plus visible scratch-copy grid replay|
 |A glitch flag is interpolated or filtered|hidden numerical failure|asymmetric native tint fixture plus moving visible replay with nearest warp|
-|PLANE and VIEW rotations are conflated|wrong slice or animation|native preset matrices and heap `mode_a_endpoint` comparison|
+|Object and camera rotations are conflated|wrong slice or observer motion|independent `O`/`Q` matrices, preset identity rows, edge-on crossing, and screen-map oracle|
 |Deep perturbation enters the GPU as an absolute centre or tiny scalar scale|precision collapse|perturbation-layout fixture proving no centre field and mantissa/exponent scale decomposition|
 |Flat warp reverses zoom, rows, or aspect|swimming or mirrored image|analytic pixel correspondences and the `H⁻¹H` oracle at all six zooms|
 |A reference shift has the wrong sign, units, or revision|old pixels swim during a valid deep pan|physical-centre invariance oracle plus exactly-once completed/in-flight rebasing test|
-|The anchor 2D warp exceeds its useful envelope|visible nonlinear swimming|9-by-9-by-5 oracle rejected the argued `0.02`/`0.25` envelope and pins the narrower `0.002`/`0.025` boundary at the measured `8.0` pixels for the relief fixture and `16.0` swept, plus labelled visible direct-versus-warp replay|
+|The anchor 2D warp exceeds its useful envelope|visible nonlinear swimming|Every plan measures against `WARP_MAX_ERROR_PX=1.0`; the 46.94/31.59 relief envelope is evidence for refusal, not permission to move features|
 |Warp clamps an exposed edge|smeared disocclusion|UV-outside unit test and visible clear-border replay|
 |An internal relief disocclusion is mistaken for corrected|overstated capability|explicit status/overlay contract and visible stress replay; it remains an accepted limit|
 |A scene target is overwritten while sampled|race or validation error|all state-machine interleavings plus rapid visible refinement replay|
@@ -421,7 +429,7 @@ Warp cost per refresh, scene-frame cost, fence wait, polls, warm-up exclusion, f
 
 ## 7. Implementation phases and line budget
 
-Phase 0A is the dependency-independent subset now implemented: the package shell, exact palette records and scalar oracle, 128-byte HOT and 80-byte scene layouts, checked three-slot ring arithmetic, and finite homography solver and packer; it intentionally defines no substitute for math-owned `ViewControls`, `Plane`, `Pose`, or `warp_matrix`.
+Phase 0A is implemented: the package shell, exact palette records, 288-byte HOT and 160-byte scene layouts, checked three-slot ring arithmetic, and finite homography solver and packer consume math-owned `ViewControls`, `Plane`, `Pose`, and `warp_matrix`.
 
 Phase 3A now also implements checked mesh index and coordinate construction, present's VIEW coefficients, and an oracle bridge to heap's exported `mode_a_endpoint` without constructing any heap resource or math-owned type.
 
@@ -431,7 +439,7 @@ Phase 4A now implements and validates the sole fullscreen warp WGSL, including s
 
 Phase 0 adds the present package shell, shared records, byte-layout assertions, palette scalar reference, consumption of the app-lane `HeapPresentResources` seam, and pure f64 homography/oracle code, estimated at 360 new Rust and test lines.
 
-Phase 1 is implemented by the two-texture state ledger, 3-slot dynamic HOT ring, 80-byte MAIN block, bounded four-byte fence polling, typed events, and native interleaving tests, estimated at 480 lines.
+Phase 1 is implemented by the two-texture state ledger, 3-slot dynamic HOT ring, 160-byte scene block, bounded four-byte fence polling, typed events, and native interleaving tests.
 
 Phase 2 is implemented by the flat fullscreen scene pipeline, heap-capacity descriptor/span accessor generation, palette and honest glitch shading, and target-resize handling; browser image facts remain visible replay, estimated at 340 Rust/WGSL/test lines.
 
@@ -451,7 +459,7 @@ The implementation estimate is 2,500 net new lines across Rust, WGSL, tests, man
 
 - The exact browser behavior of sampling an `Rgba8Unorm` scene texture whose extent differs from the surface is unmeasured on the GL backend, including whether nearest warp is visually acceptable at coarse refinement levels.
 
-- The `8.0`-pixel anchor approximation envelope is a native measurement, not field evidence; a visible direct-versus-warp replay may narrow the allowed motion or reject the approximation while leaving the one-pass interface intact.
+- The one-pixel enforced ceiling is native evidence; visible replay still measures how often relief motion is refused and how quickly its replacement scene arrives.
 
 - A homography exposes only external borders, so internal relief disocclusion remains stale until a later depth-aware design; this round intentionally has no honest one-pass repair for it.
 
@@ -467,7 +475,7 @@ The implementation estimate is 2,500 net new lines across Rust, WGSL, tests, man
 
 - A reference shift is expressed in the newly accepted current basis; when the retained basis differs, projection into the retained basis has the same chart residual already reported for PLANE motion, and visible replay must establish whether that warning remains usable during simultaneous deep pan and rotation.
 
-- The anchor budget is not satisfied across VIEW angle, and the control-driven observer made the shortfall more visible rather than less: the swept worst case is now `15.650` pixels for the full envelope against `3.094` under the retired mount, purely because the height-zero framing is the chart map and the picture fills the frame. Either the zoom step tightens until the sweep meets a bound worth publishing, or the published bound stays at the measured `16.0`; that is a schedule decision the app acts on, so present reports the measurement rather than changing the policy unilaterally.
+- The ambient relief sweep can reach 46.94 pixels, or 31.59 pixels with rotation and pan; the enforced one-pixel ceiling therefore refuses these motions until a fresh scene resolves them.
 
 - The acceptance envelope has more terms than the sweep that produced it: the `0.002` rad bound is now asserted for each of the four VIEW and camera angles by analogy with the single swept angle, and no sweep exists for a moving height or a moving perspective distance. Either the sweep grows those axes or the published envelope names only the angle it actually measured.
 
@@ -487,10 +495,10 @@ Before the semantic commit, local non-toolchain checks found only `docs/julibrot
 
 Implementation head `66fb25e093d73982f9cab2d92b5395a828e97974` was checked out exactly on barza and passed the required nine gates: workspace build `2.9 s`, workspace clippy with warnings denied `1.8 s`, cargo-fmt check `9.5 s`, workspace tests excluding linter `56.6 s`, linter tests with the two repository checks skipped `4.7 s`, wasm library checks for arena `1.8 s`, what-is-this `0.5 s`, fire `1.3 s`, and heap plus present `2.3 s`; each value is the corresponding `RUN-REPORT` wall and every exit was zero.
 
-The present package contributes 36 unit tests and two integration tests covering exact layouts, palette honesty, heap-specialized WGSL validation, mesh order and heap algebra, two-slot state transitions, ledger-authored target identity, clear-only source attribution, opaque HOT offsets, replacement disposition, exactly-once reference rebasing, bounded fence outcomes, all six required deep-zoom warp rows, the corrected display-chart conversion, the 9-by-9-by-5 anchor corpus, app-facing signatures, and warp-completion identity.
+The present package's unit and integration suites cover exact layouts, palette honesty, GLSL ES 3.00 translation, mesh and exterior-sky coverage, two-slot transitions, source-bound plans, sampled-pose rebasing, slice compatibility, one-pixel enforcement, bounded fences, screen maps, the full error corpus, app-facing signatures, and the cross-motion reprojection oracle.
 
 The final handoff audit additionally proves that synchronous `submit_scene` and `frame` refusals enter `PresentFacts.status`, all fallible scene preparation completes before the ledger reserves the in-flight slot, and palette, view, or grid replacement marks a pending scene `ReplacedMain` while retaining the last completed texture.
 
-The native oracle rejected the pre-implementation anchor envelope for `Δθ_view=0.01` and `Δzoom_log2=0.1`; the implementation contract therefore narrows the accepted tested fixture to `0.002` and `0.025` at no more than the measured `8.0` pixels instead of converting a failed risk oracle into a claim.
+The native oracle rejects any motion whose measured maximum exceeds one pixel; no angle or zoom envelope can override that measured ceiling.
 
 Barza establishes native and wasm compilation, byte/layout tests, CPU arithmetic, WGSL parse/validation, and bounded state transitions, but it cannot establish GL surface behavior, actual browser fence scheduling, visual orientation, disocclusion quality, console silence, or measured scene/warp costs; every such fact remains `requires visible replay`.

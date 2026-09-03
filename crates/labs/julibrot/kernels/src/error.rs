@@ -11,6 +11,8 @@ pub enum KernelError {
     ScaleExponentOverflow,
     #[error("escape parameters or pixel scale are invalid")]
     InvalidEscapeParams,
+    #[error("the screen-to-plane map contains an unrepresentable coefficient")]
+    InvalidMap,
     #[error("the refinement-level discriminant is unknown")]
     UnknownLevel,
     #[error("a perturbation dispatch has no reference")]

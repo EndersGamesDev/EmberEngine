@@ -76,21 +76,24 @@ fn hue_component(hue: f32, offset: f32) -> f32 {
     ((hue + offset).rem_euclid(1.0).mul_add(6.0, -3.0).abs() - 1.0).clamp(0.0, 1.0)
 }
 
-/// Applies the present palette to `[smooth_iter, escaped, rebase_count, glitch]`.
+/// Applies the present palette to `[smooth_iter, escaped, rebase_count, status]`.
 #[must_use]
 #[allow(clippy::float_cmp)]
 pub fn shade_escape_record(record: [f32; 4], selected: PaletteRecord) -> PaletteOutcome {
-    let [smooth_iter, escaped, rebase_count, glitch] = record;
+    let [smooth_iter, escaped, rebase_count, status] = record;
     let malformed = !is_binary(escaped)
-        || !is_binary(glitch)
+        || !matches!(status, 0.0 | 1.0 | 2.0 | 3.0)
         || !rebase_count.is_finite()
         || rebase_count < 0.0
         || rebase_count.fract() != 0.0;
-    if malformed || glitch == 1.0 {
+    if malformed || status == 1.0 {
         return PaletteOutcome {
             rgba: DEBUG_TINT,
             contract_violation: malformed,
         };
+    }
+    if status == 2.0 {
+        return shade_escape_record([0.0, 1.0, rebase_count, 0.0], selected);
     }
     if escaped == 0.0 {
         return if smooth_iter == -1.0 {
@@ -156,6 +159,12 @@ pub fn shade_lit_escape_record(
     outcome
 }
 
+/// Returns the palette's immediate-escape exterior colour.
+#[must_use]
+pub fn exterior_zero(selected: PaletteRecord) -> [f32; 4] {
+    shade_escape_record([0.0, 1.0, 0.0, 0.0], selected).rgba
+}
+
 #[cfg(test)]
 mod tests {
     use std::mem::{align_of, size_of};
@@ -202,6 +211,20 @@ mod tests {
             assert_palette_contract(mode, malformed.rgba, DEBUG_TINT);
             assert!(malformed.contract_violation);
         }
+    }
+
+    #[test]
+    fn horizon_is_immediate_exterior_and_uncertain_is_sampled() {
+        let exterior = exterior_zero(EMBER_PALETTE);
+        let horizon = shade_escape_record([-1.0, 0.0, 0.0, 2.0], EMBER_PALETTE);
+        assert_eq!(horizon.rgba, exterior);
+        assert!(!horizon.contract_violation);
+        let uncertain = shade_escape_record([16.0, 1.0, 0.0, 3.0], EMBER_PALETTE);
+        assert_ne!(uncertain.rgba, EMBER_PALETTE.clear_rgba);
+        assert_eq!(
+            uncertain,
+            shade_escape_record([16.0, 1.0, 0.0, 0.0], EMBER_PALETTE)
+        );
     }
 
     #[test]

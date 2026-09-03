@@ -1,5 +1,5 @@
 use ember_julibrot_kernels::{EscapeGrid, RefinementLevel};
-use ember_julibrot_math::{Plane, Pose, PrecisionMode, ViewControls};
+use ember_julibrot_math::{ObjectAngles, Plane, Pose, PoseMap, PrecisionMode, ViewControls};
 use ember_julibrot_worker::{HotState, MainState};
 use thiserror::Error;
 
@@ -14,8 +14,12 @@ pub struct PresentHot {
     pub state: HotState,
     /// Math-owned sampled plane frozen for this refresh.
     pub plane: Plane,
+    /// Complete object rotation frozen for this refresh.
+    pub object: ObjectAngles,
     /// Every VIEW control frozen for this refresh.
     pub view: ViewControls,
+    /// Destination map for this refresh and level extent.
+    pub map: PoseMap,
 }
 
 /// Arrival-rate owner state adapted with a published escape grid.
@@ -27,6 +31,12 @@ pub struct PresentMain {
     pub state: MainState,
     /// Kernels-owned escape grid whose active prefix is ready in DATA.
     pub grid: EscapeGrid,
+    /// Complete object rotation used by this dispatch.
+    pub object: ObjectAngles,
+    /// Math-owned sampled plane used by this dispatch.
+    pub plane: Plane,
+    /// Exact mapped or edge-on state used by this dispatch.
+    pub map: PoseMap,
 }
 
 impl PresentMain {
@@ -112,12 +122,6 @@ pub enum WarpValidation {
     Final,
 }
 
-impl WarpValidation {
-    pub(crate) const fn samples_corpus(self, precision_mode: PrecisionMode) -> bool {
-        precision_mode.requires_bit_identity() || !matches!(self, Self::Ordinary)
-    }
-}
-
 /// Completed four-byte-fence measurement.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SubmissionMeasurement {
@@ -171,8 +175,16 @@ pub struct SceneFrame {
 pub struct WarpPlan {
     /// Three padded inverse-sampling homography rows.
     pub rows: [[f32; 4]; 3],
+    /// Retained scene identity against which the plan was solved.
+    pub source_scene_id: Option<u64>,
+    /// Retained texture identity against which the plan was solved.
+    pub source_texture_index: Option<u32>,
     /// Whether sampling the retained texture is honest.
     pub source_valid: bool,
+    /// Whether the destination pose is the physical edge-on all-sky state.
+    pub edge_on: bool,
+    /// Whether any destination surface region has no retained source sample.
+    pub exposed: bool,
     /// Exact, approximate, or clear-only plan kind.
     pub kind: WarpKind,
     /// Plane-chart residual in retained-frame pixels.
@@ -290,6 +302,8 @@ pub struct FrameReceipt {
     pub source_scene_id: Option<u64>,
     /// Precision policy under which the warp was submitted.
     pub precision_mode: &'static str,
+    /// Whether this warp exposed a region that a completed scene must fill.
+    pub exposed: bool,
     /// Honest display status at submission.
     pub status: PresentStatus,
 }
@@ -331,6 +345,10 @@ pub struct PresentFacts {
     pub refreshes_without_scene: u64,
     /// Scene-target reallocations after initial construction.
     pub texture_reallocations: u32,
+    /// Whether the latest warp exposed a region outside its retained source.
+    pub warp_exposed: bool,
+    /// Whether exposure remains latched until a scene completion fills the surface.
+    pub scene_fill_due: bool,
     /// Latest plane-chart residual.
     pub chart_residual: Option<f64>,
     /// Latest tumbled maximum approximation error.
@@ -354,6 +372,10 @@ impl PresentFacts {
         };
         self.warp_max_error_px = plan.approx_max_error_px;
         self.warp_p95_error_px = plan.approx_p95_error_px;
+        self.warp_exposed = plan.exposed;
+        if plan.exposed {
+            self.scene_fill_due = true;
+        }
     }
 }
 
@@ -377,6 +399,8 @@ impl Default for PresentFacts {
             reprojected_per_scene: None,
             refreshes_without_scene: 0,
             texture_reallocations: 0,
+            warp_exposed: false,
+            scene_fill_due: false,
             chart_residual: None,
             warp_max_error_px: None,
             warp_p95_error_px: None,
@@ -464,6 +488,12 @@ mod tests {
                 height: 1,
                 level: RefinementLevel::Preview,
             },
+            object: ObjectAngles::IDENTITY,
+            plane: Plane {
+                basis_u: [0.0, 0.0, 1.0, 0.0],
+                basis_v: [0.0, 0.0, 0.0, 1.0],
+            },
+            map: PoseMap::Mapped(ember_julibrot_math::Homography::IDENTITY),
         };
         assert_eq!(
             main(0).selected_palette().map(|selected| selected.0),
@@ -487,7 +517,11 @@ mod tests {
         assert_eq!(facts.warp_p95_error_px, None);
         let anchored = WarpPlan {
             rows: [[0.0; 4]; 3],
+            source_scene_id: Some(9),
+            source_texture_index: Some(1),
             source_valid: true,
+            edge_on: false,
+            exposed: false,
             kind: WarpKind::AnchorHomography,
             chart_residual: 0.25,
             approx_max_error_px: Some(1.75),
@@ -499,6 +533,7 @@ mod tests {
         assert_eq!(facts.warp_p95_error_px, Some(0.5));
         let cleared = WarpPlan {
             source_valid: false,
+            exposed: true,
             kind: WarpKind::ClearOnly,
             approx_max_error_px: None,
             approx_p95_error_px: None,

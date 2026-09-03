@@ -1,5 +1,5 @@
 use crate::big::rounded_astro_precision;
-use crate::{BigCentre, BigScalar, MathError, PlaneAngles, ViewControls};
+use crate::{BigCentre, BigScalar, MathError, ObjectAngles, PlaneAngles, ViewControls};
 
 /// Bits the morph itself needs beyond the deeper of the two endpoints it runs between.
 ///
@@ -41,11 +41,7 @@ pub fn lerp_f64(from: f64, to: f64, t: f64) -> Result<f64, MathError> {
         .ok_or(MathError::NonFinite)
 }
 
-/// Interpolates every VIEW control linearly on its own value.
-///
-/// Both VIEW angles and both camera angles interpolate on the number the slider shows, without
-/// shortest-arc rewrapping: the sliders span `[−π,π]`, and a rewrap would send the picture the
-/// opposite way round the circle from the way the handle travels.
+/// Interpolates every ambient and three-dimensional camera control linearly on its own value.
 ///
 /// # Errors
 ///
@@ -55,9 +51,21 @@ pub fn lerp_view(from: ViewControls, to: ViewControls, t: f64) -> Result<ViewCon
     if !from.is_valid() || !to.is_valid() {
         return Err(MathError::InvalidViewControls);
     }
+    let mut camera = [0.0; 10];
+    for (index, angle) in camera.iter_mut().enumerate() {
+        *angle = lerp_f64(from.camera[index], to.camera[index], t)?;
+    }
+    let mut camera_translation = [0.0; 5];
+    for (index, coordinate) in camera_translation.iter_mut().enumerate() {
+        *coordinate = lerp_f64(
+            from.camera_translation[index],
+            to.camera_translation[index],
+            t,
+        )?;
+    }
     let view = ViewControls {
-        theta_1: lerp_f64(from.theta_1, to.theta_1, t)?,
-        theta_2: lerp_f64(from.theta_2, to.theta_2, t)?,
+        camera,
+        camera_translation,
         camera_yaw: lerp_f64(from.camera_yaw, to.camera_yaw, t)?,
         camera_pitch: lerp_f64(from.camera_pitch, to.camera_pitch, t)?,
         height_scale: lerp_f64(from.height_scale, to.height_scale, t)?,
@@ -67,6 +75,30 @@ pub fn lerp_view(from: ViewControls, to: ViewControls, t: f64) -> Result<ViewCon
     view.is_valid()
         .then_some(view)
         .ok_or(MathError::InvalidViewControls)
+}
+
+/// Interpolates all six object angles linearly on the numbers shown by their sliders.
+///
+/// # Errors
+///
+/// Returns an error for a non-finite angle, a `t` outside `[0,1]`, or a non-finite result.
+pub fn lerp_object_angles(
+    from: ObjectAngles,
+    to: ObjectAngles,
+    t: f64,
+) -> Result<ObjectAngles, MathError> {
+    let mut values = [0.0; 6];
+    for ((value, first), second) in values.iter_mut().zip(from.as_array()).zip(to.as_array()) {
+        *value = lerp_f64(first, second, t)?;
+    }
+    Ok(ObjectAngles {
+        rho_12: values[0],
+        rho_13: values[1],
+        rho_14: values[2],
+        rho_23: values[3],
+        rho_24: values[4],
+        rho_34: values[5],
+    })
 }
 
 /// Interpolates both plane angles linearly, on the same argument as the VIEW angles.
@@ -171,8 +203,8 @@ mod tests {
 
     fn row_a() -> ViewControls {
         ViewControls {
-            theta_1: -3.0,
-            theta_2: 0.25,
+            camera: [-3.0, 0.25, 0.0, 0.1, -0.2, 0.3, 0.0, 0.4, -0.5, 0.6],
+            camera_translation: [-8.0, -4.0, 0.0, 4.0, 8.0],
             camera_yaw: -1.5,
             camera_pitch: 0.125,
             height_scale: 0.0,
@@ -183,8 +215,8 @@ mod tests {
 
     fn row_b() -> ViewControls {
         ViewControls {
-            theta_1: 3.0,
-            theta_2: -0.75,
+            camera: [3.0, -0.75, 0.2, -0.1, 0.4, -0.3, 0.6, -0.4, 0.5, -0.6],
+            camera_translation: [8.0, 4.0, 2.0, -4.0, -8.0],
             camera_yaw: 0.5,
             camera_pitch: -0.375,
             height_scale: 4.0,
@@ -258,6 +290,18 @@ mod tests {
         };
         assert_eq!(lerp_plane_angles(angles_a, angles_b, 0.0), Ok(angles_a));
         assert_eq!(lerp_plane_angles(angles_a, angles_b, 1.0), Ok(angles_b));
+        let object_a = ObjectAngles {
+            rho_12: -2.5,
+            rho_34: 0.75,
+            ..ObjectAngles::IDENTITY
+        };
+        let object_b = ObjectAngles {
+            rho_12: 1.25,
+            rho_34: -3.0,
+            ..ObjectAngles::IDENTITY
+        };
+        assert_eq!(lerp_object_angles(object_a, object_b, 0.0), Ok(object_a));
+        assert_eq!(lerp_object_angles(object_a, object_b, 1.0), Ok(object_b));
         let origin_a = [0.1, -0.2, 0.3, -0.4];
         let origin_b = [-0.8, 0.156, 1.0, -1.0];
         assert_eq!(lerp_origin(origin_a, origin_b, 0.0), Ok(origin_a));
@@ -270,7 +314,7 @@ mod tests {
     #[test]
     fn angles_interpolate_on_the_number_the_slider_shows() {
         let midpoint = lerp_view(row_a(), row_b(), 0.5).expect("valid interpolated row");
-        assert!((midpoint.theta_1 - 0.0).abs() < 1.0e-15);
+        assert!((midpoint.camera[0] - 0.0).abs() < 1.0e-15);
         assert!((midpoint.camera_yaw - (-0.5)).abs() < 1.0e-15);
         let quarter = lerp_f64(-3.0, 3.0, 0.25).expect("finite quarter");
         assert!((quarter - (-1.5)).abs() < 1.0e-15);
@@ -289,7 +333,11 @@ mod tests {
         let midpoint = lerp_view(row_a(), row_b(), 0.5).expect("valid interpolated row");
         let (first, second) = (row_a(), row_b());
         for (value, ends) in [
-            (midpoint.theta_2, (first.theta_2, second.theta_2)),
+            (midpoint.camera[1], (first.camera[1], second.camera[1])),
+            (
+                midpoint.camera_translation[2],
+                (first.camera_translation[2], second.camera_translation[2]),
+            ),
             (
                 midpoint.camera_pitch,
                 (first.camera_pitch, second.camera_pitch),

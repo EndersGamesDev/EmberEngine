@@ -1,8 +1,8 @@
 //! The stored row of control values a view box holds, and the path between two of them.
 
 use ember_julibrot_math::{
-    BigCentre, PlaneAngles, ViewControls, decode_big_scalar, encode_big_scalar, lerp_centre,
-    lerp_f64, lerp_origin, lerp_plane_angles, lerp_view, morph_precision_bits, round_centre,
+    BigCentre, ObjectAngles, ViewControls, decode_big_scalar, encode_big_scalar, lerp_centre,
+    lerp_f64, lerp_object_angles, lerp_origin, lerp_view, morph_precision_bits, round_centre,
 };
 use serde::{Deserialize, Serialize};
 
@@ -49,16 +49,15 @@ impl SavedCentre {
 /// page writes a preset and a saved view into its controls through one function.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SavedView {
-    /// First plane angle in radians.
-    pub theta_1: f64,
-    /// Second plane angle in radians.
-    pub theta_2: f64,
+    /// Six object angles in product order.
+    pub object: [f64; 6],
     /// Absolute plane origin.
     pub origin: [f64; 4],
-    /// First VIEW angle in radians.
-    pub view_theta_1: f64,
-    /// Second VIEW angle in radians.
-    pub view_theta_2: f64,
+    /// Ten ambient-camera angles in product order.
+    pub camera: [f64; 10],
+    /// Five-dimensional camera translation applied before perspective.
+    #[serde(default)]
+    pub camera_translation: [f64; 5],
     /// Observer yaw in radians.
     pub camera_yaw: f64,
     /// Observer pitch in radians.
@@ -94,11 +93,10 @@ impl SavedView {
             .navigation_centre()
             .ok_or_else(|| AppError::Math("navigation is unconfigured".to_string()))?;
         Ok(Self {
-            theta_1: requested.plane_angles.theta_1,
-            theta_2: requested.plane_angles.theta_2,
+            object: requested.object_angles.as_array(),
             origin: requested.plane_origin,
-            view_theta_1: requested.view.theta_1,
-            view_theta_2: requested.view.theta_2,
+            camera: requested.view.camera,
+            camera_translation: requested.view.camera_translation,
             camera_yaw: requested.view.camera_yaw,
             camera_pitch: requested.view.camera_pitch,
             height_scale: requested.view.height_scale,
@@ -110,12 +108,12 @@ impl SavedView {
         })
     }
 
-    /// Returns the seven VIEW controls this row carries.
+    /// Returns the twenty view controls this row carries.
     #[must_use]
     pub const fn view(&self) -> ViewControls {
         ViewControls {
-            theta_1: self.view_theta_1,
-            theta_2: self.view_theta_2,
+            camera: self.camera,
+            camera_translation: self.camera_translation,
             camera_yaw: self.camera_yaw,
             camera_pitch: self.camera_pitch,
             height_scale: self.height_scale,
@@ -124,12 +122,16 @@ impl SavedView {
         }
     }
 
-    /// Returns the two plane angles this row carries.
+    /// Returns the six object angles this row carries.
     #[must_use]
-    pub const fn plane_angles(&self) -> PlaneAngles {
-        PlaneAngles {
-            theta_1: self.theta_1,
-            theta_2: self.theta_2,
+    pub const fn object_angles(&self) -> ObjectAngles {
+        ObjectAngles {
+            rho_12: self.object[0],
+            rho_13: self.object[1],
+            rho_14: self.object[2],
+            rho_23: self.object[3],
+            rho_24: self.object[4],
+            rho_34: self.object[5],
         }
     }
 
@@ -151,7 +153,7 @@ impl SavedView {
     ///
     /// Returns a math failure for a `t` outside `[0,1]`, a malformed centre, or a refused row.
     pub fn lerp(from: &Self, to: &Self, t: f64) -> Result<Self, AppError> {
-        let angles = lerp_plane_angles(from.plane_angles(), to.plane_angles(), t)
+        let object = lerp_object_angles(from.object_angles(), to.object_angles(), t)
             .map_err(|error| math(&error))?;
         let view = lerp_view(from.view(), to.view(), t).map_err(|error| math(&error))?;
         let origin = lerp_origin(from.origin, to.origin, t).map_err(|error| math(&error))?;
@@ -170,11 +172,10 @@ impl SavedView {
         )
         .map_err(|error| math(&error))?;
         Ok(Self {
-            theta_1: angles.theta_1,
-            theta_2: angles.theta_2,
+            object: object.as_array(),
             origin,
-            view_theta_1: view.theta_1,
-            view_theta_2: view.theta_2,
+            camera: view.camera,
+            camera_translation: view.camera_translation,
             camera_yaw: view.camera_yaw,
             camera_pitch: view.camera_pitch,
             height_scale: view.height_scale,
@@ -245,12 +246,12 @@ mod tests {
     use super::*;
 
     fn deep_viewer() -> ViewerController {
-        let mut viewer = ViewerController::new(960).expect("canonical viewer");
+        let mut viewer = ViewerController::new([960, 540]).expect("canonical viewer");
         viewer
             .set_zoom_log2(24.0)
             .expect("a scale inside the range");
         viewer
-            .set_target([137.0, -64.0], 0.0)
+            .set_crosshair([137.0, -64.0])
             .expect("a finite target");
         viewer
     }
@@ -291,7 +292,7 @@ mod tests {
     #[test]
     fn the_morph_returns_each_box_at_its_own_end() {
         let first = SavedView::capture(&deep_viewer()).expect("a capturable row");
-        let mut other = ViewerController::new(960).expect("canonical viewer");
+        let mut other = ViewerController::new([960, 540]).expect("canonical viewer");
         other
             .set_plane_origin([0.0, 0.0, -0.8, 0.156])
             .expect("a finite origin");
@@ -302,7 +303,7 @@ mod tests {
         let end = SavedView::lerp(&first, &second, 1.0).expect("a finite morph");
         for (morphed, original) in [(&start, &first), (&end, &second)] {
             assert_eq!(morphed.view(), original.view());
-            assert_eq!(morphed.plane_angles(), original.plane_angles());
+            assert_eq!(morphed.object_angles(), original.object_angles());
             assert_eq!(morphed.origin, original.origin);
             assert_eq!(morphed.zoom_log2, original.zoom_log2);
             assert_eq!(

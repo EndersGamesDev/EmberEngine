@@ -66,9 +66,32 @@
     <div id="dash">
       <section class="controls" aria-label="Viewer controls">
         <fieldset>
-          <legend>Plane</legend>
-          <label>θ₁<input id="theta-1" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
-          <label>θ₂<input id="theta-2" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <legend>object</legend>
+          <label>o₁₂<input id="o12" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>o₁₃<input id="o13" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>o₁₄<input id="o14" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>o₂₃<input id="o23" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>o₂₄<input id="o24" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>o₃₄<input id="o34" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+        </fieldset>
+        <fieldset>
+          <legend>camera</legend>
+          <label>q₁₂<input id="q12" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>q₁₃<input id="q13" type="range" min="-3.141593" max="3.141593" value="-1.5707963267948966" step="any"></label>
+          <label>q₁₄<input id="q14" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>q₂₃<input id="q23" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>q₂₄<input id="q24" type="range" min="-3.141593" max="3.141593" value="-1.5707963267948966" step="any"></label>
+          <label>q₃₄<input id="q34" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>q₁₅<input id="q15" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>q₂₅<input id="q25" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>q₃₅<input id="q35" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>q₄₅<input id="q45" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>t₁<input id="t1" type="range" min="-8" max="8" value="0" step="0.001"></label>
+          <label>t₂<input id="t2" type="range" min="-8" max="8" value="0" step="0.001"></label>
+          <label>t₃<input id="t3" type="range" min="-8" max="8" value="0" step="0.001"></label>
+          <label>t₄<input id="t4" type="range" min="-8" max="8" value="0" step="0.001"></label>
+          <label>t₅<input id="t5" type="range" min="-8" max="8" value="0" step="0.001"></label>
+          <p class="note">The ±8 chart-unit range crosses the four-unit neutral chart and can retreat past either perspective pole.</p>
         </fieldset>
         <fieldset>
           <legend>Plane origin</legend>
@@ -79,13 +102,8 @@
           <p class="note">The origin is MAIN work: releasing a slider asks the worker for a new reference orbit.</p>
         </fieldset>
         <fieldset>
-          <legend>View</legend>
-          <label>θᵥ₁<input id="view-theta-1" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
-          <label>θᵥ₂<input id="view-theta-2" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
-          <label>Height<input id="height" type="range" min="0" max="4" value="0" step="0.001"></label>
-        </fieldset>
-        <fieldset>
           <legend>Observer</legend>
+          <label>Height<input id="height" type="range" min="0" max="4" value="0" step="0.001"></label>
           <label>Yaw<input id="camera-yaw" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
           <label>Pitch<input id="camera-pitch" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
           <label>d₅<input id="distance-five" type="range" min="2" max="64" value="8" step="0.1"></label>

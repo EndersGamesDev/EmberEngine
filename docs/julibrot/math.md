@@ -24,27 +24,35 @@ At escape index `n`, `smooth_iter = n+1−log₂(log₂|zₙ|)`; using natural l
 
 `max_iter=0`, a non-finite input, or a non-finite intermediate is a typed error; the f32 classification-and-index path is operation-identical to shallow WGSL, spelling squared magnitude as `z_re*z_re+z_im*z_im`, real advance as `(z_re*z_re−z_im*z_im)+c_re`, and imaginary advance as `(2*z_re*z_im)+c_im` in that exact source order with one binary32 rounding per written operator and no fused multiply-add contraction, while smooth output retains its separate `10⁻⁴` tolerance.
 
-### 2.2 PLANE and VIEW rotations
+### 2.2 Object and camera poses
 
-The fractal plane lives only in ℝ⁴; `e₅` carries escape height only in present's height field and never enters a plane, centre, worker message, or perturbation offset.
+The fractal plane lives only in ℝ⁴; `e₅` carries escape height only after present lifts that plane and never enters a plane, centre, worker message, or perturbation offset.
 
-For column vectors, `Rᵢⱼ(θ)` has the standard block `[[cos θ,−sin θ],[sin θ,cos θ]]` on axes `(i,j)` and identity elsewhere, every angle is in radians, and matrix application order is written explicitly rather than inferred from typography.
+For column vectors, `Rᵢⱼ(θ)` has the standard block `[[cos θ,−sin θ],[sin θ,cos θ]]` on axes `(i,j)` and identity elsewhere, every angle is an independent HOT control in `[−π,π]`, and the rightmost factor acts first.
 
-The user-controlled PLANE rotation is `Rₚ(θ₁,θ₂)=R₁₃(θ₁)·R₂₄(θ₂)` applied as `v′=R₁₃(R₂₄(v))`; the two angles are independent HOT state and one accepted pair is frozen for a frame.
+The object rotation is `O=R₁₂(ρ₁₂)R₁₃(ρ₁₃)R₁₄(ρ₁₄)R₂₃(ρ₂₃)R₂₄(ρ₂₄)R₃₄(ρ₃₄)∈SO(4)`; with column vectors its explicit application order is `R₃₄`, `R₂₄`, `R₂₃`, `R₁₄`, `R₁₃`, then `R₁₂`. There is one seed and the sampled basis is always `u=Oe₃`, `v=Oe₄`, so changing an object angle rotates the 2D slice in ambient ℝ⁴ rather than merely spinning its chart.
 
-Writing `cₖ=cos θₖ` and `sₖ=sin θₖ`, the transformed seed is `u=−s₁e₁+c₁e₃` and `v=−s₂e₂+c₂e₄`.
+`ObjectAngles` stores the six angles in product order. The legacy `PlaneAngles` adapter maps `θ₁` to `ρ₁₃` and `θ₂` to `ρ₂₄`; setting the other four components to zero makes `O=R₁₃(θ₁)R₂₄(θ₂)` with the former application order and bit-for-bit results after the shared rounding pass.
 
-Because `Rₚ` is orthogonal, an orthonormal seed remains orthonormal in exact arithmetic; construction evaluates its coefficients in `f64`, applies the matrix, rounds each published component exactly once to nearest `f32` with ties to even, performs no projection or Gram–Schmidt stage, and requires `|u·u−1|`, `|v·v−1|`, and `|u·v|` each at most `8·f32::EPSILON` after rounding.
+Construction evaluates `O` in `f64`, applies it to the orthonormal seed, rounds each published basis component exactly once to nearest `f32` with ties to even, performs no projection or Gram–Schmidt stage, and requires `|u·u−1|`, `|v·v−1|`, and `|u·v|` each at most `8·f32::EPSILON` after rounding.
 
-There is one seed, `(e₃,e₄)`, and no construction selects another; a preset is a row of control values, so the Mandelbrot row is `θ₁=θ₂=0` with plane origin `(0,0,0,0)` and a Julia row at finite `c₀` is `θ₁=θ₂=−π/2` with plane origin `(0,0,c₀.re,c₀.im)`. The four origin coordinates are independent MAIN state and setting them sets the absolute centre, so every `c₀` is reached by moving numbers rather than by naming a plane, and a plane spec no longer carries seed axes to choose between.
+The object rows are Mandelbrot `O=I` with origin `(0,0,0,0)` and Julia at finite `c₀` with `ρ₁₃=ρ₂₄=−π/2`, the other four angles zero, and origin `(0,0,c₀.re,c₀.im)`. The Julia row therefore preserves the former once-rounded `(e₁,e₂)` basis, while the four origin coordinates are the translation of the object pose in `SE(4)` and remain independent MAIN state that set the absolute centre.
 
-At `θ₁=θ₂=−π/2` the seed is `(e₁,e₂)` with both unit components exact and the orthogonal components carrying only the binary32 image of `cos(π/2)=6.1e−17` — the same bound the reversed pair has always been pinned at — which is why the Julia row keeps the orientation the lab has always drawn, and at `θ₁=θ₂=+π/2` it is the same plane with both basis directions reversed; for every angle strictly between zero and either quarter turn each transformed seed vector has a nonzero component in both `span(e₁,e₂)` and `span(e₃,e₄)`, which is the required hybrid-plane oracle and is now the ordinary case rather than an excursion between two named planes.
+The camera rotation is `Q=R₁₂(q₁₂)R₁₃(q₁₃)R₁₄(q₁₄)R₂₃(q₂₃)R₂₄(q₂₄)R₃₄(q₃₄)R₁₅(q₁₅)R₂₅(q₂₅)R₃₅(q₃₅)R₄₅(q₄₅)∈SO(5)`; its explicit application order is `R₄₅`, `R₃₅`, `R₂₅`, `R₁₅`, `R₃₄`, `R₂₄`, `R₂₃`, `R₁₄`, `R₁₃`, then `R₁₂`. The camera translation `t∈ℝ⁵` is then added after `Q` and before `P₅`, so the ambient camera pose is `SE(5)` rather than rotation alone.
 
-The VIEW rotation is present-only and carries no clock: `Rᵥ(θᵥ₁,θᵥ₂)=R₁₂(θᵥ₁)·R₃₅(θᵥ₂)` applied as `v′=R₁₂(R₃₅(v))`, where both angles are independent HOT controls in radians. No geometric angle in the lab is derived from time, and the second angle is no longer a golden-ratio multiple of the first.
+`ViewControls` is `{camera:[f64;10],camera_translation:[f64;5],camera_yaw,camera_pitch,height_scale,distance_five,distance_four}`, twenty scalars with neutral rotations and translation zero, neutral height zero, and both neutral distances eight. The page limits each translation to `[−8,8]` chart units: the neutral chart spans four units, so this range crosses it completely and can retreat past either perspective pole.
 
-### 2.3 Pixels, centre, zoom, precision, and splitting
+The flat Mandelbrot preset faces its seed with `q₁₃=q₂₄=−π/2` and all other camera values zero; the flat Julia preset uses `Q=I`, `t=0`. At height zero, zero 3D camera angles, and `d₅=d₄=8`, each paired object/camera row is the exact identity chart map. Object and camera poses remain independent: changing `O` at fixed `(Q,t)` turns and foreshortens the slice in ℝ⁴ until it can be edge-on, while changing `(Q,t)` at fixed object pose moves the observer around and through that slice.
+
+### 2.3 Pixels, the screen map, centre, zoom, precision, and splitting
 
 For a `W×H` grid, pixel `(i,j)` has centred coordinates `x=i+0.5−W/2` and `y=j+0.5−H/2`; row zero is at the bottom, `+v` points up, pixels are square, and `H` follows the canvas aspect without changing horizontal pixel scale.
+
+The escape grid is screen-aligned: a grid pixel denotes the inverse image of that screen-pixel centre through the accepted neutral-height view, not a cell of a fixed rectangle projected afterward. The inverse returns plane offsets `(o_u,o_v)` in units of the current pixel scale about the centre, so the sampled point remains `C+pixel_scale·(o_u u+o_v v)` and the reference orbit remains at the centre pixel.
+
+At neutral height the object point is `p=(4/W)(o_u u+o_v v)+plane_origin`; present lifts it to `(p,0)∈ℝ⁵`, applies `Q`, adds `t`, then applies `P₅`, `P₄`, the yaw/pitch 3D camera, clip, and the centred-pixel viewport. Restricted to the plane this chain is projective, so math constructs its forward 3-by-3 homography `F`, inverts it with partial pivoting, refuses a selected pivot below `1e−12`, normalizes the inverse `M` to positive centre denominator, and publishes `κ∞(F)=‖F‖∞‖F⁻¹‖∞`.
+
+`screen_to_plane(object,view,zoom_log2,W,H,aspect)` returns `PoseMap::Mapped { screen_to_plane:M, plane_to_screen:F, condition_number }` or `PoseMap::EdgeOn` for the physical singularity. For `r=M·(x,y,1)`, `(o_u,o_v)=(r_x/r_w,r_y/r_w)` when `r_w>0`; the two preset pairs at `t=0` take canonical identity paths and pack exactly `[1,0,0,0]`, `[0,1,0,0]`, `[0,0,1,0]`. A control edit that leaves `F` and the slice unchanged to `1e−12`, including `d₅` at `h=0` in the inert fixture, does not restart refinement.
 
 HOT state carries finite `zoom_log2:f64`; the mathematical pixel scale is `p=4/(2^zoom_log2·W)`, displayed decimal depth is `zoom_digits=zoom_log2·log10 2`, and request label `depth_digits=ceil(max(0,zoom_log2·log10 2))`; after validating and rounding the scaled representation, `pixel_scale` returns the canonical delivered CPU scale reconstructed as `f64(mantissa)·2^exponent` rather than recomputing a second exponential.
 
@@ -96,11 +104,11 @@ GLITCH occurs when `r=length` before the sample has escaped or reached `max_iter
 
 The count is incremented only when a rebase is performed; when the current `rebase_count` is exactly `2²⁴`, another rebase request glitches rather than incrementing, so the maximum written value is the exactly representable `2²⁴`.
 
-### 2.5 Centre displacement and warp math
+### 2.5 Centre displacement, navigation, and warp math
 
-One `NavigationDelta` combines canvas-centred drag `(dx,dy)`, zoom change `Δq`, and canvas-centred anchor `(a,b)`, all with positive y upward; the caller supplies `q_after` as the exact binary64 sum `q_before+Δq`, and for `s₀=p(q_before)` and `s₁=p(q_after)` math updates the authoritative centre by `ΔC=(s₀−s₁)(a u+b v)−s₁(dx u+dy v)` using Astro-float at the centre's delivered precision, so a combined edit establishes the after-zoom view before interpreting its drag pixels.
+App's `anchor_px_up` produces a centred render-grid point with positive y up, while `drag_delta_px_down` preserves DOM-positive-down displacement until math changes it to `(dx,−dy)`. `navigation_delta(M,drag,Δq,anchor)` maps the anchor through `M` and maps a drag as the difference of its two endpoints; it then returns the unchanged worker-facing `NavigationDelta`, whose two pixel vectors now mean local plane-offset pixels rather than an assumed affine screen vector.
 
-The anchored term keeps `C_before+s₀(a u+b v)=C_after+s₁(a u+b v)`, the drag term is exactly `−s₁(dx u+dy v)`, and conversion of `s₀`, `s₁`, canvas coordinates, and rounded f32 basis coefficients into Astro-float precedes every multiply, add, and centre mutation; invalid input or a finite-mirror overflow rejects the whole edit without partial mutation.
+The caller supplies `q_after=q_before+Δq`; because `M` is expressed in pixel-scale units and is zoom-invariant, `BigCentre::apply_navigation` retains the atomic formula `ΔC=(s₀−s₁)B a−s₁B p` for `s₀=pixel_scale(q_before)`, `s₁=pixel_scale(q_after)`, basis `B=[u v]`, mapped anchor `a`, and mapped drag `p`. A click with `Δq=0` only selects the later zoom anchor, a scale or box zoom preserves the plane point under that anchor, and a plain drag applies the mapped point difference; invalid input, horizon crossing, or finite-mirror overflow rejects the whole edit without partial mutation.
 
 For a plane basis `B=[u v]`, scale `p`, desired centre `C`, and accepted reference centre `C_ref`, worker-side bignum arithmetic publishes `centre_from_reference_px=d=[u·(C−C_ref)/p,v·(C−C_ref)/p]`; subtraction and division occur before rounding the two results to nearest finite `f64`, which remains safe because the recompute policy bounds the ratio rather than the absolute depth.
 
@@ -108,19 +116,17 @@ On an accepted replacement, `reference_shift_px` is the new reference centre min
 
 If a retained pose `f` must be expressed against the new reference using a shift `s_t` measured in current-pose pixels, convert it as `s_f=p_f⁻¹B_fᵀB_t p_t s_t` and set `d_f←d_f−s_f`; current displacement similarly becomes `d_t←d_t−s_t`, so a generation change with a valid shift does not clear the retained image.
 
-For pose `p`, let `N_p=diag(W_p/2,H_p/2)` map NDC to centred physical pixels, let `p_p=4/(2^zoom_p W_p)`, and let `d_p` be its `centre_from_reference_px`; a chart point is `X_p(q)=C_ref+B_p p_p(N_pq+d_p)`.
+For pose `p`, the accepted `M_p` converts a centred screen pixel to local plane-offset pixels; `pixel_scale`, `B_p`, the pose's `plane_origin`, and `d_p=centre_from_reference_px` then give its common-reference ambient point without materializing an absolute deep GPU coordinate.
 
-The inverse-sampling flat homography from current target pose `t` to retained source pose `f` is `H(t→f)=[[A₀₀,A₀₁,b₀],[A₁₀,A₁₁,b₁],[0,0,1]]`, where `M=(p_t/p_f)B_fᵀB_t`, `A=N_f⁻¹MN_t`, and `b=N_f⁻¹(Md_t−d_f)`.
+For retained source pose `f` and current target pose `t`, the middle chart map `T` applies the relative centre, pixel-scale ratio, basis projection, and in-plane origin translation. The exact neutral-height forward screen homography is `H(f→t)=M_t⁻¹·T·M_f`; the upload used for inverse texture sampling is its explicit `H(t→f)` inverse, and the scale ratio is evaluated directly from zoom and widths without forming either deep scale.
 
-The scale ratio is evaluated directly in `f64` as `p_t/p_f=2^(zoom_f−zoom_t)·W_f/W_t`, never by materializing either deep scale; when basis, scale, and extent match, translation reduces to the displacement difference `d_t−d_f` in pixels followed by the NDC conversion.
+The six object angles must match to the once-rounded f32 plane floor. An origin delta is compatible exactly when its component outside the source plane is at most half a source pixel: an in-plane origin move becomes exact pan, while an out-of-plane move changes the slice and is refused. The normalized `chart_residual` is likewise refused above half a source pixel.
 
-`warp_matrix(from,to)` returns row-major inverse-sampling `to→from` and its explicit `from→to` inverse, rejects a zero extent, non-finite coefficient, or `|det A|≤2⁻⁴⁰`, and never uses an absolute centre mirror; present separately checks plane-origin and max-iteration compatibility before calling it.
-
-Present computes the view-specific `WarpPlan` in hand-written `f64`, rounds only its three padded homography rows to `f32`, re-expresses a retained pose on `reference_shift_px`, and clears only when `max_iter` or the MAIN plane origin including `c₀` changes; reprojection under relief remains present's labelled homography approximation with clear colour at newly exposed samples and candid internal-disocclusion limits.
+`warp_matrix(from,to)` requires two mapped poses and returns both row-major directions, rejects non-finite arithmetic and the shared `1e−12` pivot floor, and preserves horizon signs. Present re-expresses each retained or pending pose from the pose at which that scene was sampled, never from the newest HOT epoch, then binds the solved plan to that source scene and texture identity.
 
 ### 2.6 Interpolating one view into another
 
-A view is a row of numbers, so a path between two views is a path in that row and nothing more. `lerp_view(a,b,t)` interpolates every scalar linearly on its own value: both plane angles, the four plane-origin coordinates, all seven VIEW controls, and `zoom_log2`. Angles interpolate linearly too, without shortest-arc rewrapping. The sliders show `[−π,π]` and the user is entitled to see the picture the sliders show; a rewrap would send the picture the other way round the circle from the way the slider handle travels, which is a different animation from the one the page is displaying.
+A view is a row of numbers, so a path between two views is a path in that row and nothing more. App composes `lerp_object_angles`, `lerp_origin`, `lerp_view`, and `lerp_f64` so all six object angles, four object-origin coordinates, twenty `ViewControls` scalars, and `zoom_log2` interpolate linearly. Angles do not shortest-arc rewrap: the sliders show `[−π,π]`, and a rewrap would move opposite to the visible handle.
 
 `zoom_log2` linear on the exponent makes the zoom morph geometric, which is the only reading of "half way between" that is scale-free: the midpoint between `zoom_log2` 10 and 30 is 20, a factor of 2¹⁰ from each end, rather than an arithmetic midpoint that would spend almost the whole slider inside the deeper view.
 
@@ -140,7 +146,8 @@ All transferred and GPU words are little-endian, `f32` and `f64` are IEEE-754 bi
 |`PrecisionMode`|`#[repr(u32)] { Deterministic=0,PictureFast=1 }`; one shared policy switch, with stable string spellings and cfg-free bit-identity predicate|worker, kernels, present, app|
 |`PlanePreset`|`Mandelbrot` or `Julia { c0:[f64;2] }`; `c0` is finite and lives in MAIN's plane origin|worker, app|
 |`PlaneSpec`|`{ axis_a:Axis4, axis_b:Axis4, plane_origin:[f64;4] }`; CPU-only, distinct seed axes|worker, app|
-|`PlaneAngles`|`{ theta_1:f64, theta_2:f64 }`; finite independent radians|worker, app|
+|`ObjectAngles`|`{rho_12,rho_13,rho_14,rho_23,rho_24,rho_34}`; six finite radians in object product order|kernels, present, app|
+|`PlaneAngles`|Legacy `{theta_1,theta_2}` adapter to object `rho_13,rho_24`|worker, app|
 |`NavigationDelta`|`{ pan_canvas_px:[f64;2], zoom_delta_log2:f64, anchor_canvas_px:[f64;2] }`; CPU-only, canvas-centred pixels with positive y upward|worker, app|
 |`CentreF64`|`{ coords:[f64;4] }`; 32 native bytes, finite owner mirror without deep authority|worker, owner, present|
 |`CentreSplit`|`#[repr(C,align(16))] { hi:[f32;4], lo:[f32;4] }`; 32 bytes at offsets 0 and 16|kernels|
@@ -158,19 +165,21 @@ All transferred and GPU words are little-endian, `f32` and `f64` are IEEE-754 bi
 |`ComputedOrbit`|`{ records:Vec<ReferenceOrbitRecord>, length:u32, precision_bits:u32, escape_index:Option<u32>, verification:ReferenceVerification, max_consumed_word_error_ulps:Option<u32>, precision_escalations:u32 }`; reusable linear-memory records plus verification facts|worker|
 |`OrbitStep`|`Pending { stored:u32 }` or `Complete(ComputedOrbit)`; CPU-only cooperative result|worker|
 |`Pose`|CPU-only exact field list below, no byte ABI|present, app|
-|`ViewControls`|`{theta_1:f64,theta_2:f64,camera_yaw:f64,camera_pitch:f64,height_scale:f64,distance_five:f64,distance_four:f64}`; defined by math and re-exported by present|present, app|
+|`ViewControls`|`{camera:[f64;10],camera_translation:[f64;5],camera_yaw,camera_pitch,height_scale,distance_five,distance_four}`; twenty f64 scalars|present, app|
+|`PoseMap`|`Mapped(Homography)` or `EdgeOn`|present, app|
+|`Homography`|`{rows:[f64;9],inverse:[f64;9],condition_number:f64}`; normalized screen-to-plane map and forward inverse|kernels, present, app|
 |`WarpMatrix`|`{ forward:[f64;9], inverse:[f64;9] }`; row-major, 144 native bytes|present|
 |`MathError`|`NonFinite`, `InvalidExtent`, `InvalidMaxIter`, `InvalidBailout`, `InvalidViewControls`, `PlaneRoundingBound`, `InvalidCentreEncoding`, `PrecisionMismatch`, `ScaleExponentOverflow`, `DegenerateWarp`, `OrbitTooLong`, `InvalidOrbitState`, `EmptyReferenceOrbit`, `InvalidPrecisionPlan`, `CounterOverflow`, `DurationOverflow`, `BigFloat`, or `PrecisionExhausted { requested_digits,policy_digits }`|all slices|
 
-`Pose` is `pub struct Pose { pub epoch:u64, pub orbit_generation:u32, pub plane:Plane, pub plane_theta_1:f64, pub plane_theta_2:f64, pub zoom_log2:f64, pub view:ViewControls, pub grid_width:u32, pub grid_height:u32, pub centre_from_reference_px:[f64;2] }`; every VIEW angle, the height scale, and both perspective distances are stored because every one of them is a control, and none is derived from another or from a clock.
+`Pose` is `pub struct Pose { pub epoch:u64, pub orbit_generation:u32, pub plane:Plane, pub object:ObjectAngles, pub plane_origin:[f64;4], pub zoom_log2:f64, pub view:ViewControls, pub grid_width:u32, pub grid_height:u32, pub map:PoseMap, pub centre_from_reference_px:[f64;2] }`; it carries the exact object and camera pose, the origin at which the slice was sampled, and that level's accepted map.
 
-The implementation signatures are `construct_plane(preset:PlanePreset,angles:PlaneAngles)->Result<Plane,MathError>`, `construct_plane_from_spec(spec:PlaneSpec,angles:PlaneAngles)->Result<Plane,MathError>`, `preset_spec(preset:PlanePreset)->Result<PlaneSpec,MathError>`, `mirror_centre(centre:&BigCentre)->Result<CentreF64,MathError>`, `split_scalar(value:&BigScalar)->Result<[f32;2],MathError>`, `split_centre(centre:&BigCentre)->Result<CentreSplit,MathError>`, `pixel_scale(zoom_log2:f64,grid_width:u32)->Result<f64,MathError>`, `scaled_pixel_scale(zoom_log2:f64,grid_width:u32)->Result<ScaledPixelScale,MathError>`, `scale_split(zoom_log2:f64,grid_width:u32)->Result<ScaleSplit,MathError>`, `shallow_pixel_scale(zoom_log2:f64,grid_width:u32)->Result<f32,MathError>`, `scaled_pixel_offset(plane:Plane,scale:ScaledPixelScale,extent:[u32;2],pixel:[u32;2])->Result<[f32;4],MathError>`, `centre_displacement_px(centre:&BigCentre,reference:&BigCentre,plane:Plane,zoom_log2:f64,grid_width:u32)->Result<[f64;2],MathError>`, `centre_from_reference_px` with the same arguments except `plane:&Plane`, `reference_shift_px(old:&BigCentre,new:&BigCentre,plane:&Plane,zoom_log2:f64,grid_width:u32)->Result<[f64;2],MathError>`, `precision_for(zoom_log2:f64,grid_width:u32,max_iter:u32)->Result<PrecisionPlan,MathError>`, `centre_precision_for(mode:PrecisionMode,zoom_log2:f64,grid_width:u32,edit_budget:u32)->Result<u32,MathError>`, and `escape_f32(point:[f32;4],params:EscapeParams)->Result<EscapeSample,MathError>`.
+The plane and map signatures are `construct_plane(angles:ObjectAngles)->Result<Plane,MathError>`, `construct_plane_from_spec(spec:PlaneSpec,angles:ObjectAngles)->Result<Plane,MathError>`, and `screen_to_plane(object:&ObjectAngles,view:&ViewControls,zoom_log2:f64,grid_w:u32,grid_h:u32,aspect:f64)->Result<Homography,MathError>`. The split, scale, precision, escape, centre-displacement, and reference-shift functions retain their typed checked results and never infer camera state.
 
 Orbit and perturbation signatures are `ReferenceOrbitBuilder::new(centre:&BigCentre,plan:PrecisionPlan,params:EscapeParams)->Result<ReferenceOrbitBuilder,MathError>`, policy-aware `ReferenceOrbitBuilder::new_with_policy(centre:&BigCentre,plan:PrecisionPlan,params:EscapeParams,mode:PrecisionMode,pass:ReferencePass)->Result<ReferenceOrbitBuilder,MathError>`, `ReferenceOrbitBuilder::step(&mut self,max_entries:NonZeroU32)->Result<OrbitStep,MathError>`, `perturb_scaled_f64(orbit:&[ReferenceOrbitRecord],offset_prime:[f64;4],scale_exponent:i32,params:EscapeParams)->Result<PerturbSample,MathError>`, and `perturb_scaled_f64_with_envelope` with the same inputs returning `Result<(PerturbSample,PerturbationEnvelope),MathError>`.
 
-Interpolation signatures are `lerp_f64(a:f64,b:f64,t:f64)->Result<f64,MathError>`, `lerp_view(a:ViewControls,b:ViewControls,t:f64)->Result<ViewControls,MathError>`, `lerp_plane_angles(a:PlaneAngles,b:PlaneAngles,t:f64)->Result<PlaneAngles,MathError>`, `lerp_origin(a:[f64;4],b:[f64;4],t:f64)->Result<[f64;4],MathError>`, `lerp_centre(a:&BigCentre,b:&BigCentre,t:f64,precision_bits:u32)->Result<BigCentre,MathError>`, and `morph_precision_bits(a:&BigCentre,b:&BigCentre)->Result<u32,MathError>` returning the deeper endpoint plus `MORPH_EXTRA_BITS`; each rejects a non-finite input, a `t` outside `[0,1]`, or a non-finite result without returning a partly moved value, and app composes them rather than repeating the arithmetic.
+Interpolation signatures include `lerp_f64`, `lerp_view`, `lerp_object_angles`, the legacy `lerp_plane_angles`, `lerp_origin`, `lerp_centre`, and `morph_precision_bits`; each rejects non-finite input or `t` outside `[0,1]`, and app composes them rather than repeating arithmetic.
 
-Navigation and warp signatures are `BigCentre::apply_navigation(&mut self,delta:&NavigationDelta,plane:&Plane,zoom_log2_before:f64,zoom_log2_after:f64,grid_width:u32)->Result<(),MathError>`, `BigCentre::displacement_px(&self,reference:&BigCentre,plane:&Plane,pixel_scale:f64)->Result<[f64;2],MathError>`, `BigCentre::to_f64_mirror(&self)->[f64;4]`, `centre_from_reference_px(centre:&BigCentre,reference:&BigCentre,plane:&Plane,zoom_log2:f64,grid_width:u32)->Result<[f64;2],MathError>`, `reference_shift_px(old:&BigCentre,new:&BigCentre,plane:&Plane,zoom_log2:f64,grid_width:u32)->Result<[f64;2],MathError>`, `warp_matrix(from:&Pose,to:&Pose)->Result<WarpMatrix,MathError>`, `warp_identity_error(matrix:WarpMatrix)->f64`, `navigation_drift_f64(steps:u32)->f64`, and `navigation_drift_f32(steps:u32)->f64`; `WarpMatrix.forward` is inverse-sampling `to→from` and `.inverse` is `from→to`.
+Navigation and warp signatures include `navigation_delta(screen_to_plane:&Homography,drag_delta_px_down:[f64;2],zoom_delta_log2:f64,anchor_px_up:[f64;2])->Result<NavigationDelta,MathError>`, `BigCentre::apply_navigation`, `BigCentre::displacement_px`, `centre_from_reference_px`, `reference_shift_px`, `warp_matrix(from:&Pose,to:&Pose)->Result<WarpMatrix,MathError>`, and `warp_identity_error`; `WarpMatrix.forward` is source-to-target and `.inverse` is inverse sampling.
 
 The worker document's unresolved authoritative-navigation API is resolved by adopting `NavigationDelta` and these three `BigCentre` methods by reference; worker retains the centre and sequencing, while math exclusively owns the mutation and projection algebra.
 
@@ -182,16 +191,16 @@ The worker document's unresolved authoritative-navigation API is resolved by ado
 |------|----------------------|-------------------|
 |Reference orbit transfer / RGBA32F heap texel|8 transferred bytes: 0 `re:f32`, 4 `im:f32`; app expands each point to 16 GPU bytes `(re,im,0,0)`; texel zero is `Z₀`|worker → app → kernels|
 |Escape grid RGBA32F|16 bytes: 0 `smooth_iter:f32`, 4 `escaped:f32`, 8 `rebase_count:f32`, 12 `glitch:f32`; flags are 0 or 1 and count is integer-valued|kernels → present|
-|`ShallowUniform`|96 bytes: 0 `basis_u:[f32;4]`, 16 `basis_v:[f32;4]`, 32 `centre_hi:[f32;4]`, 48 `centre_lo:[f32;4]`, 64 `pixel_scale:f32`, 68 `width:u32`, 72 `height:u32`, 76 `max_iter:u32`, 80 `bailout:f32`, 84 `level:u32`, 88 `padding:[u32;2]`|app/math → kernels|
-|`PerturbUniform`|64 bytes: 0 `basis_u:[f32;4]`, 16 `basis_v:[f32;4]`, 32 `pixel_scale:f32` mantissa, 36 `width:u32`, 40 `height:u32`, 44 `max_iter:u32`, 48 `bailout:f32`, 52 `orbit_length:u32`, 56 `level:u32`, 60 `scale_exponent:i32`|app/math → kernels|
-|`HotUniform`|128 bytes: 0 `plane_u:[f32;4]`, 16 `plane_v:[f32;4]`, 32 `view_rotation:[f32;4]`, 48/64/80 `homography_row_0/1/2:[f32;4]`, 96 `clear_rgba:[f32;4]`, 112 `flags:[u32;4]`|present → GPU|
-|`SceneUniform`|80 bytes: 0 `grid:[u32;4]`, 16 `span:[u32;4]`, 32 `palette_map:[f32;4]`, 48 `interior_rgba:[f32;4]`, 64 `clear_rgba:[f32;4]`|present → GPU|
+|`ShallowUniform`|144 bytes: basis at 0/16, `M` rows at 32/48/64, centre at 80/96, scalar tail at 112|app/math → kernels|
+|`PerturbUniform`|112 bytes: basis at 0/16, `M` rows at 32/48/64, scaled scalar tail at 80|app/math → kernels|
+|`HotUniform`|288 bytes: ten camera pairs at 0–64, translation at 80/96, observer at 112, scale at 128, warp rows at 144–176, current map at 192–224, exterior at 240, clear at 256, flags at 272|present → GPU|
+|`SceneUniform`|160 bytes: grid/span at 0/16, basis at 32/48, sampled map at 64–96, palette/interior/clear at 112/128/144|present → GPU|
 
-`HotUniform.view_rotation=[cos θ,sin θ,cos(φθ),sin(φθ)]`, each homography row has three coefficients plus zero padding, and `flags=[epoch_low,epoch_high,source_valid,view_mode]`; the shader never receives two poses.
+Each homography row has three coefficients plus zero padding, and `flags=[epoch_low,epoch_high,source_valid,edge_on]`; the shader receives the current screen map but never two semantic poses.
 
-The hot ring has exactly three slots, `hot_stride=align_up(128,min_uniform_buffer_offset_alignment)`, total bytes are `3·hot_stride`, present owns its buffer and bind group, one refresh writes exactly 128 bytes to one slot, and selection is by dynamic offset.
+The hot ring has exactly three slots, `hot_stride=align_up(288,min_uniform_buffer_offset_alignment)`, total bytes are `3·hot_stride`, present owns its buffer and bind group, one refresh writes exactly 288 bytes to one slot, and selection is by dynamic offset.
 
-`SceneUniform.grid=[width,height,level,max_iter]`, `span=[directory_index,logical_len,0,0]`, and present updates it only on changed MAIN, palette, view, refinement level, extent, span, or cap.
+`SceneUniform.grid=[width,height,level,max_iter]`, `span=[directory_index,logical_len,edge_on,0]`, and present updates it only on changed scene inputs.
 
 `RefinementLevel` is `#[repr(u32)] { Preview=0,Interactive=1,Final=2 }`; an unknown discriminant is a typed error.
 
@@ -265,11 +274,11 @@ The ABI-two owner records below are `Copy` and `#[repr(C)]`, both drains are inf
 
 ### 3.5 Presentation-owned records and calls on math's boundary
 
-Math defines `ViewControls` as the seven-scalar CPU record of the VIEW controls and present re-exports it; present defines `PaletteId` as `#[repr(u32)] { Classic=0,Ember=1,Ice=2 }`.
+Math defines the twenty-scalar `ViewControls`, `ObjectAngles`, `Homography`, `PoseMap`, and `Pose`, and present re-exports the view record; present defines `PaletteId` as `#[repr(u32)] { Classic=0,Ember=1,Ice=2 }`.
 
 `PaletteRecord` is `#[repr(C,align(16))] { map:[f32;4],interior_rgba:[f32;4],clear_rgba:[f32;4] }`, 48 bytes; Classic is `{map:[64,0,0.78,1],interior:[0.005,0.005,0.008,1],clear:[0.015,0.018,0.025,1]}`, Ember is `{map:[48,0.02,0.88,1],interior:[0.01,0,0,1],clear:[0.015,0.008,0.005,1]}`, and Ice is `{map:[80,0.55,0.72,1],interior:[0,0.005,0.01,1],clear:[0.005,0.01,0.015,1]}`.
 
-`PresentHot` is the CPU-only record `{ epoch:u64,plane:Plane,plane_theta_1:f64,plane_theta_2:f64,zoom_log2:f64,view:ViewControls,centre_from_reference_px:[f64;2] }`, and `PresentMain` carries `{ epoch:u64,orbit_generation:u32,grid:EscapeGrid,max_iter:u32,palette:PaletteId,plane_origin_f64:[f64;4],reference_shift_px:[f64;2] }`.
+`PresentHot` carries the accepted epoch, plane, six object angles, origin, zoom, twenty view scalars, level map, and reference-relative centre; `PresentMain` carries the epoch, orbit generation, grid, cap, palette, origin, reference shift, and sampled map.
 
 `HotSlot` is `{index:u32,dynamic_offset:u32,epoch:u64}`, where `index=refresh_id mod 3` and `dynamic_offset=index·hot_stride`; its checked constructor makes `Presenter::write_hot(slot,hot,validation)` infallible.
 
@@ -277,7 +286,7 @@ Math defines `ViewControls` as the seven-scalar CPU record of the VIEW controls 
 
 `Presenter::new(device:Arc<wgpu::Device>,queue:Arc<wgpu::Queue>,heap:HeapPresentResources,config:PresentConfig)->Result<Presenter,PresentError>` allocates the three-slot ring, two empty texture slots, fixed pipelines, and immutable heap group only after both error handlers exist.
 
-`Presenter::set_main(&mut self,main:PresentMain)` and `Presenter::write_hot(&mut self,slot:HotSlot,hot:PresentHot,validation:WarpValidation)` are the infallible MAIN and HOT endpoints; the latter computes the f64 plan, writes exactly 128 bytes, and lowers invalid arithmetic to `source_valid=0`.
+`Presenter::set_main(&mut self,main:PresentMain)` and `Presenter::write_hot(&mut self,slot:HotSlot,hot:PresentHot,validation:WarpValidation)` are the infallible MAIN and HOT endpoints; the latter computes the f64 plan, writes exactly 288 bytes, and lowers a refused plan to `source_valid=0`.
 
 `Presenter::submit_scene(&mut self,hot_slot:HotSlot,now_ms:f64)->Result<u64,PresentError>` submits one scene plus its four-byte fence, while `Presenter::frame(&mut self,state:FrameState<'_>,hot_slot:HotSlot)->Result<FrameReceipt,PresentError>` submits the sole warp pass to the borrowed surface view and returns before app presents.
 
@@ -285,9 +294,9 @@ Math defines `ViewControls` as the seven-scalar CPU record of the VIEW controls 
 
 `Presenter::poll(&mut self,now_ms:f64)->Vec<PresentEvent>` observes each pending fence at most once per call and never waits, while `Presenter::facts(&self)->PresentFacts` is an immutable, non-polling snapshot.
 
-`SceneFrame` is `{ scene_id:u64,pose:Pose,palette:PaletteId,iteration_cap:u32,level:RefinementLevel,extent:[u32;2],texture_index:u32,precision_mode:&'static str,measurement:SubmissionMeasurement }`; `ReferenceOrbitInput`, `SubmissionMeasurement`, `FrameReceipt`, `DispatchFacts`, `PresentFacts`, `PageFacts`, `SampleSummary`, and `RefreshOutcome` likewise carry the mode string as provenance. `WarpPlan` is `{ rows:[[f32;4];3],source_valid:bool,kind:WarpKind,chart_residual:f64,approx_max_error_px:Option<f64>,approx_p95_error_px:Option<f64> }`; all are CPU-only.
+`SceneFrame` stores the scene id, the pose at which it was sampled, palette, cap, level, extent, texture index, precision provenance, and measurement. `WarpPlan` stores its three packed rows, source validity, kind, chart residual, measured max and p95 error, and the exact source scene and texture identities it was solved against.
 
-`Warp::reproject(last_frame:&SceneFrame,from_pose:&Pose,to_pose:&Pose,precision_mode:PrecisionMode,validation:WarpValidation)->WarpPlan` is a pure CPU planner and uses math's `Pose` and `warp_matrix` without touching the GPU; `last_frame.pose` must equal `from_pose` or the result is `ClearOnly`. Deterministic always runs the sampled corpus, whereas ordinary PictureFast leaves sampled error facts unavailable and only Measure or Final validation runs it.
+`Warp::reproject(last_frame:&SceneFrame,from_pose:&Pose,to_pose:&Pose,precision_mode:PrecisionMode,validation:WarpValidation)->WarpPlan` is a pure CPU planner; `last_frame.pose` must equal `from_pose`, the slice checks in §2.5 must pass, and every accepted plan carries a measured bound no greater than `WARP_MAX_ERROR_PX=1.0`. Deterministic and explicit Measure/Final validation use the full corpus; ordinary PictureFast still measures the smaller mandatory corpus needed to enforce the bound.
 
 The refresh order is `poll → drain HOT → write_hot(refresh_id mod 3) → frame → app present`, with `submit_scene` only when app's schedule says a scene is due; present owns both scene textures and both four-byte fences, refuses `SceneBusy` rather than allocating a third texture, and app presents the surface outside all measured regions.
 
@@ -299,7 +308,7 @@ The page facts contributed or constrained here are `{ requested_generation,accep
 
 |Producer → consumer|Pinned interface|Exact payload or rule|
 |-------------------|----------------|---------------------|
-|math → worker/app|`PlaneSpec`, `PlaneAngles`, `PlanePreset`, `CentreF64`, centre adapter|ℝ⁴ axes, independent radians, worker-owned bignum, f64 mirror|
+|math → worker/app|`PlaneSpec`, `ObjectAngles`, legacy `PlaneAngles`, `CentreF64`, centre adapter|ℝ⁴ object pose, worker-owned bignum, f64 mirror|
 |math → kernels/present|`Plane`|32 bytes, two rounded f32 ℝ⁴ basis vectors|
 |math → kernels|`CentreSplit`, `ScaleSplit`, `EscapeParams`|32 bytes; f32 mantissa plus i32 exponent; 8 bytes|
 |worker → app → kernels|reference record|8-byte `[re,im]` transfer, expanded to RGBA32F `[re,im,0,0]` per heap index|
@@ -307,9 +316,9 @@ The page facts contributed or constrained here are `{ requested_generation,accep
 |kernels → present|`EscapeGrid`|typed `DataSpan`, active `width,height`, `RefinementLevel`|
 |owner → app/present|`ViewerState`|176-byte repr(C), shared epoch, latest-wins HOT and MAIN|
 |owner ↔ worker|wire protocol|32-byte `JBL1` header, nine kinds, 16-byte trailer, four buffers|
-|math → present/app|`Pose`|CPU-only exact field list including centre displacement in pixels|
-|present → GPU|`HotUniform`|128-byte payload, three dynamic-offset slots|
-|present → GPU|`SceneUniform`, palette|80-byte scene block, selected present-owned 48-byte palette|
+|math → present/app|`Pose`|CPU-only object origin, twenty-scalar view, map, and centre displacement|
+|present → GPU|`HotUniform`|288-byte payload, three dynamic-offset slots|
+|present → GPU|`SceneUniform`, palette|160-byte scene block, selected present-owned 48-byte palette|
 |present → app|present API and facts|two textures, separate scene/warp fences, delivered facts only|
 
 ## 4. Inherited laws and satisfaction
@@ -328,7 +337,7 @@ Before the first frame, app shows clear colour and honest overlay text with no d
 
 App installs the heap-provided panic hook and non-panicking uncaptured-error handler before the first device call, owns the single surface token, and presents outside the measured scene and warp regions.
 
-Hand-written `f64` remains the CPU matrix implementation; both required native matrix oracles pass on Sokol in the Phase 4 package run, so the decision rule keeps `faer` absent, and it may enter later only if the identical f64 oracle fails, never because its API is convenient or because an f32 case fails.
+Hand-written `f64` remains the CPU matrix implementation; both required native matrix oracles pass in the package and workspace gates, so the decision rule keeps `faer` absent, and it may enter later only if the identical f64 oracle fails, never because its API is convenient or because an f32 case fails.
 
 One world, one heap class, no simulation tick, no general graph, no shared-memory worker, no WebGPU path, and no second-reference repair remain deliberate prototype boundaries.
 
@@ -336,11 +345,13 @@ One world, one heap class, no simulation tick, no general graph, no shared-memor
 
 Native escape tests pin fixed points, escaping points, exact bailout equality, `max_iter` edges, state-index order, natural-log expansion of smooth iteration, non-finite rejection, exact `−1.0` for capped non-escape, and a bit-exact bailout fixture where unfused WGSL order escapes at index zero while fused arithmetic would incorrectly remain capped.
 
-Native plane tests pin axis order, the exact Mandelbrot and Julia presets, `R₁₃(R₂₄(v))` order and signs, independent angles, absence of `e₅`, one f32 rounding pass, the `8·f32::EPSILON` postcondition, the π/2 preset-plane equivalence, and nonzero z and c components for `0<θ₁,θ₂<π/2`.
+Native plane tests pin the six-factor `O` order, exact legacy `R₁₃R₂₄` equivalence, one f32 rounding pass, the `8·f32::EPSILON` postcondition, and random-angle `O` orthonormality to `1e−12`; camera tests pin the ten-factor `Q` order and random-angle orthonormality to the same bound.
 
 Navigation drift composes the five-by-five VIEW step `R₁₂(Δθ)·R₃₅(φΔθ)` for `10⁴` and `10⁵` steps with `Δθ=10⁻³` radians, measures `‖MᵀM−I‖_F=sqrt(Σᵢⱼ(MᵀM−I)ᵢⱼ²)`, and passes at `≤10⁻⁵` in hand-written f64 without re-orthonormalization and in f32 with modified Gram–Schmidt every 64 steps.
 
-Warp accuracy constructs `H` and its explicit inverse for both presets, hybrid PLANE angles, nonzero centre displacements and reference shifts, the compatible chart cases at height zero and under relief, and `zoom_log2∈{0,10,20,40,80,100}`; it requires `max|H⁻¹H−I|≤10⁻⁹` in hand-written f64 and separately pins every typed incompatibility and determinant refusal.
+The screen-map oracle requires `forward∘inverse` identity within `1e−9` on a 9-by-9 screen lattice across both exact presets, general object/camera angles, observer angles, distances, and nonzero five-dimensional translations. Preset tests require exact identity rows, the un-faced Mandelbrot plane at `Q=I` to refuse edge-on, and the 256-step Julia-to-Mandelbrot object morph at fixed `Q` to cross edge-on exactly once.
+
+Warp accuracy covers exact pan, in-plane origin translation, and flat camera translation plus relief and mixed affine-camera fixtures; it requires the published plan bound and separately pins object-angle, out-of-plane origin, half-source-pixel residual, and determinant refusals.
 
 If and only if an f64 case of either matrix oracle fails, implementation may add `faer`, rerun the identical corpus and metric, and record both values; the prior 3–13× tiny-matrix evidence otherwise keeps faer out.
 
@@ -412,11 +423,13 @@ Phase 2 adds the contracted `f32` escape reference, high-precision orbit builder
 
 Phase 3 adds the scaled f64 perturbation mirror, exponent renormalization, corrected rebasing, glitch state machine, propagated error envelope, mixed-plane corpus, and counter limits, estimated at 540 lines.
 
-Phase 4 adds `Pose`, reference-shift re-expression, flat warp matrices and explicit inversion, navigation drift, warp accuracy, hybrid geometry oracles, and the conditional faer decision point, estimated at 390 lines.
+Phase 4 adds `Homography`, the f64 neutral-height screen map and explicit inverse, `PoseMap`, reference-shift re-expression, composed screen-map warps, mapped target/drag/scale navigation, warp accuracy, ambient geometry oracles, and the conditional faer decision point.
 
 Phase 5 reconciles compile-time interfaces with worker, kernels, present, and app, adds cross-package fixtures without editing sibling packages, and closes documentation, estimated at 250 lines.
 
 Integration-audit addendum publishes the math-owned `NavigationDelta`, atomic Astro-float centre mutation, displacement projection, and direct f64 mirror needed by worker and app, estimated at 300 Rust, test, and contract lines.
+
+Fullscreen implementation checkpoint: `screen_to_plane` constructs the forward affine-camera chain consumed by scene WGSL, takes the canonical identity paths bit for bit, inverts with the shared `1e−12` pivot refusal, publishes `κ∞`, routes target, box, scale and drag through `M`, and supplies each downstream level map without forming an absolute deep coordinate.
 
 The implementation estimate is about 2,410 new Rust and test lines; Cargo metadata and generated lockfile movement are reported separately, and implementation starts only after this refined document is accepted.
 

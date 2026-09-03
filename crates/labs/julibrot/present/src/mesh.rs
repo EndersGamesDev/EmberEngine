@@ -115,9 +115,9 @@ pub fn height_for_record(
         return Err(MeshError::InvalidInput);
     }
     let palette = shade_escape_record(record, selected);
-    let glitch = record[3] == 1.0;
-    let debug_tint = palette.rgba == DEBUG_TINT && (palette.contract_violation || glitch);
-    let height = if debug_tint {
+    let status = record[3];
+    let debug_tint = palette.rgba == DEBUG_TINT && (palette.contract_violation || status == 1.0);
+    let height = if debug_tint || status == 2.0 {
         0.0
     } else if record[1] == 0.0 {
         -2.0
@@ -133,13 +133,49 @@ pub fn height_for_record(
     })
 }
 
-/// Returns `[cos θ₁,sin θ₁,cos θ₂,sin θ₂]` for the two independent VIEW angles.
+/// Returns five `[cos a,sin a,cos b,sin b]` lanes for the ten ambient camera factors.
 ///
 /// # Errors
 ///
-/// Returns an error when either angle or any narrowed coefficient is not finite.
-pub fn view_rotation(theta_1: f64, theta_2: f64) -> Result<[f32; 4], MeshError> {
-    pair_rotation(theta_1, theta_2)
+/// Returns an error when an angle or any narrowed coefficient is not finite.
+pub fn camera_rotation_pairs(camera: [f64; 10]) -> Result<[[f32; 4]; 5], MeshError> {
+    Ok([
+        pair_rotation(camera[0], camera[1])?,
+        pair_rotation(camera[2], camera[3])?,
+        pair_rotation(camera[4], camera[5])?,
+        pair_rotation(camera[6], camera[7])?,
+        pair_rotation(camera[8], camera[9])?,
+    ])
+}
+
+/// Returns two padded lanes for the five-dimensional camera translation.
+///
+/// # Errors
+///
+/// Returns an error when a coordinate or its narrowed value is not finite.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the HOT contract deliberately narrows validated camera controls once"
+)]
+pub fn camera_translation(translation: [f64; 5]) -> Result<[[f32; 4]; 2], MeshError> {
+    if !translation.into_iter().all(f64::is_finite) {
+        return Err(MeshError::NonFiniteRotation);
+    }
+    let lanes = [
+        [
+            translation[0] as f32,
+            translation[1] as f32,
+            translation[2] as f32,
+            translation[3] as f32,
+        ],
+        [translation[4] as f32, 0.0, 0.0, 0.0],
+    ];
+    lanes
+        .into_iter()
+        .flatten()
+        .all(f32::is_finite)
+        .then_some(lanes)
+        .ok_or(MeshError::NonFiniteRotation)
 }
 
 /// Returns `[cos yaw,sin yaw,cos pitch,sin pitch]` for the observer orientation.
@@ -203,8 +239,6 @@ fn pair_rotation(first: f64, second: f64) -> Result<[f32; 4], MeshError> {
 
 #[cfg(test)]
 mod tests {
-    use ember_lab_heap::{FrameUniform, mode_a_endpoint};
-
     use super::*;
     use crate::CLASSIC_PALETTE;
 
@@ -242,12 +276,18 @@ mod tests {
         let escaped = height_for_record([32.0, 1.0, 0.0, 0.0], 64, CLASSIC_PALETTE)?;
         assert_eq!(escaped.height, 0.0);
         assert!(!escaped.debug_tint);
+        let horizon = height_for_record([0.0, 0.0, 0.0, 2.0], 64, CLASSIC_PALETTE)?;
+        assert_eq!(horizon.height, 0.0);
+        let uncertain = height_for_record([32.0, 1.0, 0.0, 3.0], 64, CLASSIC_PALETTE)?;
+        assert_eq!(uncertain.height, 0.0);
+        let uncertain_interior = height_for_record([-1.0, 0.0, 0.0, 3.0], 64, CLASSIC_PALETTE)?;
+        assert_eq!(uncertain_interior.height, -2.0);
         Ok(())
     }
 
     #[test]
     fn controls_are_checked_before_they_reach_a_lane() -> Result<(), MeshError> {
-        assert_eq!(view_rotation(0.0, 0.0)?, [1.0, 0.0, 1.0, 0.0]);
+        assert_eq!(camera_rotation_pairs([0.0; 10])?, [[1.0, 0.0, 1.0, 0.0]; 5]);
         assert_eq!(camera_rotation(0.0, 0.0)?, [1.0, 0.0, 1.0, 0.0]);
         assert_eq!(view_scale(0.0, 8.0, 8.0)?, [0.0, 8.0, 8.0, 0.0]);
         assert_eq!(view_scale(1.0, 2.0, 64.0)?, [1.0, 2.0, 64.0, 0.0]);
@@ -257,34 +297,13 @@ mod tests {
         );
         assert_eq!(view_scale(1.0, 0.0, 8.0), Err(MeshError::NonFiniteRotation));
         assert_eq!(
-            view_rotation(f64::NAN, 0.0),
+            camera_rotation_pairs([f64::NAN; 10]),
             Err(MeshError::NonFiniteRotation)
         );
         assert_eq!(
             camera_rotation(0.0, f64::INFINITY),
             Err(MeshError::NonFiniteRotation)
         );
-        Ok(())
-    }
-
-    #[test]
-    fn view_coefficients_feed_the_exported_heap_algebra_oracle() -> Result<(), MeshError> {
-        let rotation = view_rotation(0.0, 0.0)?;
-        let frame = FrameUniform {
-            rotation,
-            projection_spacing: [8.0, 8.0, 0.0, 1.0e-4],
-            render: [0.0; 4],
-            axes_four: [0.0; 4],
-            axis_fifth_range: [0.0; 4],
-            basis_four: [[0.0; 4]; 5],
-            basis_fifth: [[0.0; 4]; 2],
-        };
-        let endpoint = mode_a_endpoint([1.0, 2.0, 3.0, 4.0, 0.0], [0; 5], &frame);
-        assert_eq!(endpoint.point, [2.0, 4.0, 6.0]);
-        assert_eq!(endpoint.fifth, 0.0);
-        assert!(endpoint.valid);
-        let pole = mode_a_endpoint([0.0, 0.0, 0.0, 0.0, 8.0], [0; 5], &frame);
-        assert!(!pole.valid);
         Ok(())
     }
 }

@@ -14,9 +14,10 @@ const FRAME: &str = include_str!("../src/frame.rs");
 const WORKER_BROWSER: &str = include_str!("../../worker/src/browser.rs");
 const WORKER_OWNER: &str = include_str!("../../worker/src/browser_owner.rs");
 const SAVED: &str = include_str!("../src/saved.rs");
+const WIRE: &str = include_str!("../../worker/src/wire.rs");
 
 /// Every field the page facts must carry, in publication order.
-const PAGE_FACT_FIELDS: [&str; 94] = [
+const PAGE_FACT_FIELDS: [&str; 103] = [
     "abi_version",
     "adapter_name",
     "backend",
@@ -70,17 +71,26 @@ const PAGE_FACT_FIELDS: [&str; 94] = [
     "request_buffers_owned_main",
     "orbit_buffers_owned_main",
     "palette_id",
+    "object_angles",
     "plane_theta_1",
     "plane_theta_2",
     "plane_origin",
     "target_plane",
     "view_theta_1",
     "view_theta_2",
+    "camera_angles",
+    "camera_translation",
     "camera_yaw",
     "camera_pitch",
     "height_scale",
     "distance_five",
     "distance_four",
+    "horizon_pixels",
+    "horizon_fraction",
+    "uncertain_pixels",
+    "uncertain_fraction",
+    "edge_on",
+    "map_condition_number",
     "completed_scene_id",
     "in_flight_scene_id",
     "warp_source_scene_id",
@@ -134,13 +144,15 @@ fn loader_version_one_and_abi_three_are_pinned_before_orbit_transfer() {
     }
     assert!(!LIB.contains("pub fn worker_main(expected_abi: u32)"));
     assert!(WORKER_BROWSER.contains("pub fn worker_main(expected_abi: u32)"));
+    assert!(MAIN.contains("const ABI = 3;"));
+    assert!(WORKER.contains("const ABI = 3;"));
+    assert!(WIRE.contains("pub const JULIBROT_ABI_VERSION: u32 = 3;"));
     assert!(MANIFEST.contains("name = \"ember_lab_julibrot\""));
     assert_eq!(WORKER.matches("ember_lab_julibrot.js?v=1").count(), 1);
     assert!(FRAME.contains("WorkerChannel::new("));
     assert!(FRAME.contains("WorkerMode::WebWorker"));
     assert!(WORKER_OWNER.contains("const WORKER_URL: &str = \"./worker.js?v=1\""));
 }
-
 #[test]
 fn runtime_is_gl_only_and_handlers_precede_the_first_post_device_work() {
     for required in [
@@ -183,7 +195,6 @@ fn runtime_is_gl_only_and_handlers_precede_the_first_post_device_work() {
         .expect("init scope");
     assert!(lost < scope && uncaptured < scope);
 }
-
 #[test]
 fn acquire_path_is_non_panicking_and_initial_frame_is_only_clear_plus_text() {
     let acquire = RUNTIME
@@ -250,6 +261,10 @@ fn the_page_is_one_stage_with_the_picture_between_the_two_view_boxes() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one exhaustive page surface keeps every control under the same contract"
+)]
 fn page_has_one_canvas_status_overlay_and_every_requested_control() {
     assert_eq!(INDEX.matches("<canvas").count(), 1);
     assert_eq!(INDEX.matches("id=\"status\"").count(), 1);
@@ -258,14 +273,31 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
     assert!(!INDEX.contains("id=\"preset\""));
     // One control per view degree of freedom plus the one precision-policy switch.
     for id in [
-        "theta-1",
-        "theta-2",
+        "o12",
+        "o13",
+        "o14",
+        "o23",
+        "o24",
+        "o34",
         "origin-z-re",
         "origin-z-im",
         "origin-c-re",
         "origin-c-im",
-        "view-theta-1",
-        "view-theta-2",
+        "q12",
+        "q13",
+        "q14",
+        "q23",
+        "q24",
+        "q34",
+        "q15",
+        "q25",
+        "q35",
+        "q45",
+        "t1",
+        "t2",
+        "t3",
+        "t4",
+        "t5",
         "camera-yaw",
         "camera-pitch",
         "height",
@@ -314,9 +346,19 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
     );
     assert!(MAIN.contains(r#"field.replaceAll("_", "-")"#));
     assert!(MAIN.contains("for (const [field, value] of Object.entries(row)) {"));
-    assert_eq!(MAIN.matches("api.app_set_plane_angles(").count(), 1);
+    for field in [
+        "o12", "o13", "o14", "o23", "o24", "o34", "q12", "q13", "q14", "q23", "q24", "q34", "q15",
+        "q25", "q35", "q45", "t1", "t2", "t3", "t4", "t5",
+    ] {
+        assert!(
+            LIB.contains(&format!(r#""{field}":"#)),
+            "row JSON omits affine field {field}"
+        );
+    }
+    assert_eq!(MAIN.matches("api.app_set_object_angles(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_plane_origin(").count(), 1);
-    assert_eq!(MAIN.matches("api.app_set_view_angles(").count(), 1);
+    assert_eq!(MAIN.matches("api.app_set_camera_angles(").count(), 1);
+    assert_eq!(MAIN.matches("api.app_set_camera_translation(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_camera(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_height(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_distances(").count(), 1);
@@ -354,14 +396,18 @@ fn the_retired_controls_name_nothing_and_the_wasm_boundary_is_complete() {
     assert!(!LIB.contains("pub fn app_set_view("));
     assert!(!LIB.contains("pub fn app_set_preset("));
     for required in [
+        "pub fn app_set_object_angles(",
         "pub fn app_set_plane_origin(",
-        "pub fn app_set_view_angles(",
+        "pub fn app_set_camera_angles(",
+        "pub fn app_set_camera_translation(",
         "pub fn app_set_camera(",
         "pub fn app_set_height(",
         "pub fn app_set_distances(",
         "pub fn app_set_scale(",
         "pub fn app_set_target(",
+        "pub fn app_pan_px(",
         "pub fn app_zoom_box(",
+        "pub fn app_clear_crosshair(",
         "pub fn app_saved_view_json(",
         "pub fn app_set_centre(",
         "pub fn app_morph_view(",
@@ -373,6 +419,10 @@ fn the_retired_controls_name_nothing_and_the_wasm_boundary_is_complete() {
     // Presets are pure data in one place.
     assert!(STATE.contains("pub const PRESET_ROWS: [PresetRow; 4] = ["));
     assert_eq!(STATE.matches("PresetRow {").count(), 5);
+    assert!(STATE.contains("object_angles: ObjectAngles::IDENTITY"));
+    assert!(STATE.contains("object_angles: ObjectAngles::JULIA"));
+    assert!(STATE.contains("view: ViewControls::MANDELBROT_FLAT"));
+    assert!(STATE.contains("view: ViewControls::NEUTRAL"));
 }
 
 #[test]
@@ -398,12 +448,16 @@ fn the_canvas_navigates_by_crosshair_translation_box_and_scale() {
         "api.app_zoom_box(started.x, started.y, to[0], to[1], bounds.width, bounds.height)"
     ));
     assert_eq!(MAIN.matches("api.app_zoom_box(").count(), 1);
+    assert!(MAIN.contains("event.shiftKey"));
     assert!(STATE.contains("pub fn is_box_selection("));
     assert!(STATE.contains("pub fn box_zoom_delta_log2("));
     assert!(STATE.contains("pub const BOX_CLICK_THRESHOLD_PX: f64 = 4.0;"));
     assert!(STATE.contains("pub const SCALE_RANGE_LOG2: [f64; 2] = [-2.0, 120.0];"));
     // The scale control spans exactly the range the app enforces.
     assert!(INDEX.contains("id=\"scale\" type=\"range\" min=\"-2\" max=\"120\""));
+    for id in ["t1", "t2", "t3", "t4", "t5"] {
+        assert!(INDEX.contains(&format!("id=\"{id}\" type=\"range\" min=\"-8\" max=\"8\"")));
+    }
     // The marker and the rubber band are DOM overlays, not scene geometry.
     for element in ["id=\"target\"", "id=\"rubber\""] {
         assert!(INDEX.contains(element), "missing overlay {element}");
@@ -444,7 +498,8 @@ fn a_click_names_a_point_and_every_zoom_is_taken_about_it() {
     // The slider goes through the crosshair anchor rather than the screen centre.
     assert!(STATE.contains("self.zoom_about_crosshair(zoom_log2 - self.requested.zoom_log2)"));
     // A row load forgets the point, because the point belonged to the picture that was replaced.
-    assert_eq!(STATE.matches("self.crosshair = None;").count(), 3);
+    assert!(STATE.contains("pub fn clear_crosshair(&mut self)"));
+    assert_eq!(MAIN.matches("api.app_clear_crosshair();").count(), 1);
     // The page draws the marker from the projection and never from a pixel it remembered.
     assert!(MAIN.contains("const drawCrosshair = () => {"));
     assert!(MAIN.contains("api.app_crosshair_json(bounds.width, bounds.height)"));
@@ -532,6 +587,10 @@ fn two_view_boxes_share_one_path_from_a_control_value_to_the_worker() {
     assert!(!SAVED.contains("pub t:"));
     assert!(SAVED.contains("pub centre: SavedCentre,"));
     assert!(SAVED.contains("pub zoom_log2: f64,"));
+    assert!(SAVED.contains("pub object: [f64; 6],"));
+    assert!(SAVED.contains("pub camera: [f64; 10],"));
+    assert!(SAVED.contains("pub camera_translation: [f64; 5],"));
+    assert!(MAIN.contains("affine.every(field => Number.isFinite(row[field]))"));
 }
 
 #[test]

@@ -14,7 +14,7 @@ pub use conformance::{
     VISIBLE_REPLAY_CARDS, VisibleReplayCard, evaluate_perturbation_conformance,
     evaluate_shallow_conformance, record_is_well_formed,
 };
-pub use dialect::{OUTPUT_PAGE_SIDE, perturbation_kernel, shallow_kernel};
+pub use dialect::{KERNEL_UNIFORM_BYTES, OUTPUT_PAGE_SIDE, perturbation_kernel, shallow_kernel};
 pub use ember_julibrot_math::{
     CentreSplit, EscapeGridRecord, EscapeParams, Plane, ReferenceOrbitRecord, ScaleSplit,
 };
@@ -23,7 +23,7 @@ pub use gpu::JulibrotKernels;
 pub use perturb::{perturb_scaled_offset, perturb_scaled_pixel};
 pub use records::{
     EscapeGrid, GridExtent, KernelMode, PerturbUniform, ReferenceOrbitInput, RefinementLevel,
-    ShallowUniform,
+    SampleStatus, ShallowUniform,
 };
 pub use refinement::{
     DispatchFacts, LevelSpec, RefinementPlan, dispatch_facts, next_refinement_level,

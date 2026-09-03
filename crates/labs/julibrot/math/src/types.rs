@@ -84,7 +84,64 @@ pub struct PlaneAngles {
     pub theta_2: f64,
 }
 
-/// One combined drag and pointer-anchored zoom edit in canvas-centred pixels.
+/// Six ordered object-plane rotations in four-dimensional ambient space.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ObjectAngles {
+    pub rho_12: f64,
+    pub rho_13: f64,
+    pub rho_14: f64,
+    pub rho_23: f64,
+    pub rho_24: f64,
+    pub rho_34: f64,
+}
+
+impl ObjectAngles {
+    pub const IDENTITY: Self = Self {
+        rho_12: 0.0,
+        rho_13: 0.0,
+        rho_14: 0.0,
+        rho_23: 0.0,
+        rho_24: 0.0,
+        rho_34: 0.0,
+    };
+
+    pub const JULIA: Self = Self {
+        rho_13: -core::f64::consts::FRAC_PI_2,
+        rho_24: -core::f64::consts::FRAC_PI_2,
+        ..Self::IDENTITY
+    };
+
+    #[must_use]
+    pub const fn as_array(self) -> [f64; 6] {
+        [
+            self.rho_12,
+            self.rho_13,
+            self.rho_14,
+            self.rho_23,
+            self.rho_24,
+            self.rho_34,
+        ]
+    }
+
+    #[must_use]
+    pub fn is_valid(self) -> bool {
+        self.as_array()
+            .into_iter()
+            .all(|angle| angle.is_finite() && angle.abs() <= core::f64::consts::PI)
+    }
+}
+
+impl From<PlaneAngles> for ObjectAngles {
+    fn from(value: PlaneAngles) -> Self {
+        Self {
+            rho_13: value.theta_1,
+            rho_24: value.theta_2,
+            ..Self::IDENTITY
+        }
+    }
+}
+
+/// One combined target, selection, or scale edit in mapped plane-offset pixels.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct NavigationDelta {
     /// Drag displacement with positive y upward.
@@ -187,7 +244,7 @@ pub struct EscapeGridRecord {
     pub smooth_iter: f32,
     pub escaped: f32,
     pub rebase_count: f32,
-    pub glitch: f32,
+    pub status: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -207,19 +264,13 @@ pub enum OrbitStep {
     Complete(ComputedOrbit),
 }
 
-/// Every degree of freedom of the VIEW, as continuous controls.
-///
-/// There is no view mode and no clock: `theta_1` and `theta_2` are the two independent angles of
-/// `R₁₂(θᵥ₁)·R₃₅(θᵥ₂)`, `camera_yaw` and `camera_pitch` orient the three-space observer,
-/// `height_scale` multiplies the escape height so zero is exactly the flat chart, and the two
-/// distances are the poles of the double perspective, the second of which is also the observer
-/// distance.
+/// Every degree of freedom of the ambient camera and three-dimensional observer.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ViewControls {
-    /// First VIEW angle, acting in the display `(1,2)` plane.
-    pub theta_1: f64,
-    /// Second VIEW angle, acting in the display `(3,5)` plane.
-    pub theta_2: f64,
+    /// Ten `SO(5)` camera angles in product order: 12, 13, 14, 23, 24, 34, 15, 25, 35, 45.
+    pub camera: [f64; 10],
+    /// Five-dimensional camera translation applied after rotation and before perspective.
+    pub camera_translation: [f64; 5],
     /// Observer yaw in radians.
     pub camera_yaw: f64,
     /// Observer pitch in radians.
@@ -235,8 +286,8 @@ pub struct ViewControls {
 impl ViewControls {
     /// The row every preset starts from: no rotation, no relief, both distances at eight.
     pub const NEUTRAL: Self = Self {
-        theta_1: 0.0,
-        theta_2: 0.0,
+        camera: [0.0; 10],
+        camera_translation: [0.0; 5],
         camera_yaw: 0.0,
         camera_pitch: 0.0,
         height_scale: 0.0,
@@ -244,12 +295,55 @@ impl ViewControls {
         distance_four: 8.0,
     };
 
+    /// The camera row that faces the unrotated Mandelbrot seed toward screen axes one and two.
+    pub const MANDELBROT_FLAT: Self = Self {
+        camera: [
+            0.0,
+            -core::f64::consts::FRAC_PI_2,
+            0.0,
+            0.0,
+            -core::f64::consts::FRAC_PI_2,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        ..Self::NEUTRAL
+    };
+
+    pub const CAMERA_PLANES: [(usize, usize); 10] = [
+        (0, 1),
+        (0, 2),
+        (0, 3),
+        (1, 2),
+        (1, 3),
+        (2, 3),
+        (0, 4),
+        (1, 4),
+        (2, 4),
+        (3, 4),
+    ];
+
     /// Returns every control as one array, in the order the records and facts publish them.
     #[must_use]
-    pub const fn as_array(self) -> [f64; 7] {
+    pub const fn as_array(self) -> [f64; 20] {
         [
-            self.theta_1,
-            self.theta_2,
+            self.camera[0],
+            self.camera[1],
+            self.camera[2],
+            self.camera[3],
+            self.camera[4],
+            self.camera[5],
+            self.camera[6],
+            self.camera[7],
+            self.camera[8],
+            self.camera[9],
+            self.camera_translation[0],
+            self.camera_translation[1],
+            self.camera_translation[2],
+            self.camera_translation[3],
+            self.camera_translation[4],
             self.camera_yaw,
             self.camera_pitch,
             self.height_scale,
@@ -263,6 +357,10 @@ impl ViewControls {
     #[must_use]
     pub fn is_valid(self) -> bool {
         self.as_array().iter().all(|value| value.is_finite())
+            && self
+                .camera
+                .into_iter()
+                .all(|angle| angle.abs() <= core::f64::consts::PI)
             && self.height_scale >= 0.0
             && self.distance_five > 0.0
             && self.distance_four > 0.0
@@ -280,13 +378,42 @@ pub struct Pose {
     pub epoch: u64,
     pub orbit_generation: u32,
     pub plane: Plane,
-    pub plane_theta_1: f64,
-    pub plane_theta_2: f64,
+    pub object: ObjectAngles,
+    /// Absolute affine-plane origin in the four-dimensional object coordinates.
+    pub plane_origin: [f64; 4],
     pub zoom_log2: f64,
     pub view: ViewControls,
     pub grid_width: u32,
     pub grid_height: u32,
+    pub map: PoseMap,
     pub centre_from_reference_px: [f64; 2],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PoseMap {
+    Mapped(Homography),
+    EdgeOn,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Homography {
+    pub rows: [f64; 9],
+    pub inverse: [f64; 9],
+    pub condition_number: f64,
+}
+
+impl Homography {
+    pub const IDENTITY: Self = Self {
+        rows: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        inverse: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        condition_number: 1.0,
+    };
+}
+
+impl Default for Homography {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -315,6 +442,8 @@ pub enum MathError {
     PrecisionMismatch,
     #[error("the scale exponent is outside i32 range")]
     ScaleExponentOverflow,
+    #[error("the neutral-height screen map is degenerate or uncertified")]
+    DegenerateViewMap,
     #[error("the warp matrix is degenerate")]
     DegenerateWarp,
     #[error("the orbit cannot be represented by the requested record count")]
@@ -358,6 +487,7 @@ mod tests {
         assert_eq!(size_of::<EscapeParams>(), 8);
         assert_eq!(size_of::<ReferenceOrbitRecord>(), 8);
         assert_eq!(size_of::<EscapeGridRecord>(), 16);
+        assert_eq!(offset_of!(EscapeGridRecord, status), 12);
         assert_eq!(size_of::<CentreF64>(), 32);
     }
 }

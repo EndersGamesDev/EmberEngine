@@ -5,17 +5,20 @@ use ember_lab_heap::{DialectLimits, HeapPresentResources};
 use wgpu::util::DeviceExt as _;
 
 use crate::fence::{FenceDecision, FenceLedger};
-use crate::state::{SceneCompletion, SceneLedger};
+use crate::state::{ExposureLatch, SceneCompletion, SceneLedger};
 use crate::{
-    FrameReceipt, FrameState, HotSlot, HotUniform, PaletteId, Pose, PresentConfig, PresentError,
-    PresentEvent, PresentFacts, PresentHot, PresentMain, PresentStatus, SampleClass, SceneUniform,
-    SubmissionKind, Warp, WarpKind, WarpValidation, camera_rotation, hot_ring_bytes, palette,
-    scene_indices, scene_shader, view_rotation, view_scale, warp_shader,
+    FrameReceipt, FrameState, HOT_PAYLOAD_BYTES, HotSlot, HotUniform, PaletteId, PaletteRecord,
+    Pose, PoseMap, PresentConfig, PresentDataError, PresentError, PresentEvent, PresentFacts,
+    PresentHot, PresentMain, PresentStatus, SCENE_PAYLOAD_BYTES, SampleClass, SceneUniform,
+    SubmissionKind, Warp, WarpKind, WarpValidation, camera_rotation, camera_rotation_pairs,
+    camera_translation, exterior_zero, hot_ring_bytes, pack_homography_rows, palette,
+    scene_indices, scene_shader, view_scale, warp_shader,
 };
 
 const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
 const FENCE_BYTES: u64 = 4;
+const HOT_SOURCE_VALID_BYTE_OFFSET: u64 = 280;
 
 struct SceneTexture {
     _texture: wgpu::Texture,
@@ -46,6 +49,24 @@ struct PendingFence {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct SampleTracker {
     completed_since_reset: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct WarpSourceSlot {
+    planned: Option<(u64, u32)>,
+}
+
+impl WarpSourceSlot {
+    fn write_hot(&mut self, plan: &crate::WarpPlan) {
+        self.planned = plan
+            .source_scene_id
+            .zip(plan.source_texture_index)
+            .filter(|_| plan.source_valid);
+    }
+
+    fn frame<'a>(&self, retained: Option<&'a crate::SceneFrame>) -> Option<&'a crate::SceneFrame> {
+        select_warp_source(self.planned, retained)
+    }
 }
 
 impl SampleTracker {
@@ -92,7 +113,9 @@ pub struct Presenter {
     config: PresentConfig,
     main: Option<PresentMain>,
     hot: [Option<Pose>; 3],
-    hot_source_valid: [bool; 3],
+    hot_warp_source: [WarpSourceSlot; 3],
+    hot_exposed: [bool; 3],
+    exposure: ExposureLatch,
     ledger: SceneLedger,
     scene_fence: Option<PendingFence>,
     warp_fence: Option<PendingFence>,
@@ -128,7 +151,9 @@ impl Presenter {
             config,
             main: None,
             hot: [None; 3],
-            hot_source_valid: [false; 3],
+            hot_warp_source: [WarpSourceSlot::default(); 3],
+            hot_exposed: [false; 3],
+            exposure: ExposureLatch::default(),
             ledger: SceneLedger::default(),
             scene_fence: None,
             warp_fence: None,
@@ -150,7 +175,6 @@ impl Presenter {
         let precision_mode_name = precision_mode.map_or("unavailable", |mode| mode.as_str());
         let incompatible = self.main.as_ref().is_some_and(|previous| {
             previous.state.delivered_iter_cap != main.state.delivered_iter_cap
-                || previous.state.plane_origin_f64 != main.state.plane_origin_f64
                 || previous.state.precision_mode != main.state.precision_mode
         });
         let revision_advanced = self
@@ -160,18 +184,8 @@ impl Presenter {
         let selection_replaced = self.main.as_ref().is_some_and(|previous| {
             previous.state.palette_id != main.state.palette_id || previous.grid != main.grid
         });
-        let latest_pose = self
-            .hot
-            .iter()
-            .flatten()
-            .max_by_key(|pose| pose.epoch)
-            .copied();
-        if revision_advanced && let Some(mut accepted_pose) = latest_pose {
-            accepted_pose.orbit_generation = main.state.generation_applied;
-            accepted_pose.grid_width = main.grid.width;
-            accepted_pose.grid_height = main.grid.height;
+        if revision_advanced {
             self.ledger.apply_reference_shift(
-                &accepted_pose,
                 main.state.generation_applied,
                 main.state.centre_revision,
                 main.state.reference_shift_px,
@@ -186,6 +200,7 @@ impl Presenter {
         if self.ledger.invalidate_incompatible(
             main.state.delivered_iter_cap,
             main.state.plane_origin_f64,
+            main.object,
             precision_mode_name,
         ) || incompatible
             || precision_mode.is_none()
@@ -201,37 +216,47 @@ impl Presenter {
         self.main = Some(main);
     }
 
-    /// Writes exactly one 128-byte HOT payload into the checked three-slot ring.
+    /// Writes exactly one 288-byte HOT payload into the checked three-slot ring.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "HOT publication keeps pose, source identity, and exposure in one transaction"
+    )]
     pub fn write_hot(&mut self, slot: HotSlot, hot: PresentHot, validation: WarpValidation) {
-        let mut plan = None;
+        let screen_rows = match hot.map {
+            PoseMap::Mapped(map) => pack_homography_rows(map.rows),
+            PoseMap::EdgeOn => Some(identity_rows()),
+        };
         let pose = self.main.as_ref().and_then(|main| {
             let pose = Pose {
                 epoch: hot.epoch,
                 orbit_generation: main.state.generation_applied,
                 plane: hot.plane,
-                plane_theta_1: hot.state.plane_theta_1,
-                plane_theta_2: hot.state.plane_theta_2,
+                object: hot.object,
+                plane_origin: main.state.plane_origin_f64,
                 zoom_log2: hot.state.zoom_log2,
                 view: hot.view,
                 grid_width: main.grid.width,
                 grid_height: main.grid.height,
+                map: hot.map,
                 centre_from_reference_px: hot.state.centre_from_reference_px,
             };
             pose_is_finite(&pose).then_some(pose)
         });
-        if let (Some(frame), Some(to_pose), Some(precision_mode)) = (
-            self.ledger.retained(),
-            pose.as_ref(),
-            self.main.as_ref().and_then(PresentMain::precision_mode),
-        ) {
-            plan = Some(Warp::reproject(
-                frame,
-                &frame.pose,
-                to_pose,
-                precision_mode,
-                validation,
-            ));
-        }
+        let plan = pose.as_ref().map_or_else(
+            || clear_warp_plan(false, true),
+            |to_pose| {
+                if matches!(to_pose.map, PoseMap::EdgeOn) {
+                    clear_warp_plan(true, false)
+                } else if let (Some(frame), Some(precision_mode)) = (
+                    self.ledger.retained(),
+                    self.main.as_ref().and_then(PresentMain::precision_mode),
+                ) {
+                    Warp::reproject(frame, &frame.pose, to_pose, precision_mode, validation)
+                } else {
+                    clear_warp_plan(false, true)
+                }
+            },
+        );
         let selected = self
             .main
             .as_ref()
@@ -240,9 +265,9 @@ impl Presenter {
         // A refused control falls back to the neutral row rather than to a stale one, so a
         // non-finite value shows the flat chart instead of the last thing that happened to be
         // in the lane.
-        let rotation =
-            view_rotation(hot.view.theta_1, hot.view.theta_2).unwrap_or([1.0, 0.0, 1.0, 0.0]);
-        let camera = camera_rotation(hot.view.camera_yaw, hot.view.camera_pitch)
+        let ambient = camera_rotation_pairs(hot.view.camera).unwrap_or([[1.0, 0.0, 1.0, 0.0]; 5]);
+        let translation = camera_translation(hot.view.camera_translation).unwrap_or([[0.0; 4]; 2]);
+        let observer = camera_rotation(hot.view.camera_yaw, hot.view.camera_pitch)
             .unwrap_or([1.0, 0.0, 1.0, 0.0]);
         let scale = view_scale(
             hot.view.height_scale,
@@ -250,28 +275,46 @@ impl Presenter {
             hot.view.distance_four,
         )
         .unwrap_or([0.0, 8.0, 8.0, 0.0]);
-        let plan = plan.unwrap_or_else(clear_warp_plan);
+        let screen_rows = screen_rows.unwrap_or_else(identity_rows);
         let epoch = hot.epoch.to_le_bytes();
         let epoch_low = u32::from_le_bytes([epoch[0], epoch[1], epoch[2], epoch[3]]);
         let epoch_high = u32::from_le_bytes([epoch[4], epoch[5], epoch[6], epoch[7]]);
         let uniform = HotUniform {
-            camera,
+            camera_rotation_pairs_0: ambient[0],
+            camera_rotation_pairs_1: ambient[1],
+            camera_rotation_pairs_2: ambient[2],
+            camera_rotation_pairs_3: ambient[3],
+            camera_rotation_pairs_4: ambient[4],
+            camera_translation_0: translation[0],
+            camera_translation_1: translation[1],
+            observer_rotation: observer,
             view_scale: scale,
-            view_rotation: rotation,
             homography_row_0: plan.rows[0],
             homography_row_1: plan.rows[1],
             homography_row_2: plan.rows[2],
+            screen_to_plane_row_0: screen_rows[0],
+            screen_to_plane_row_1: screen_rows[1],
+            screen_to_plane_row_2: screen_rows[2],
+            exterior_zero_rgba: exterior_zero(selected.1),
             clear_rgba: selected.1.clear_rgba,
-            flags: [epoch_low, epoch_high, u32::from(plan.source_valid), 0],
+            flags: [
+                epoch_low,
+                epoch_high,
+                u32::from(plan.source_valid),
+                u32::from(plan.edge_on),
+            ],
         };
         let offset = u64::from(slot.dynamic_offset());
         self.queue
             .write_buffer(&self.gpu.hot_buffer, offset, bytemuck::bytes_of(&uniform));
         self.hot[slot.index() as usize] = pose;
-        self.hot_source_valid[slot.index() as usize] = plan.source_valid;
+        self.hot_warp_source[slot.index() as usize].write_hot(&plan);
+        self.hot_exposed[slot.index() as usize] = plan.exposed;
+        self.exposure.observe_warp(plan.exposed);
         self.facts.centre_from_reference_px = hot.state.centre_from_reference_px;
         self.facts.view = hot.view;
         self.facts.record_warp_plan(&plan);
+        self.facts.scene_fill_due = self.exposure.due();
         if plan.kind == WarpKind::ClearOnly && self.ledger.retained().is_none() {
             self.facts.status = PresentStatus::WaitingForFirstScene;
         } else if pose.is_some_and(|current| {
@@ -298,6 +341,10 @@ impl Presenter {
         result
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "scene submission keeps validation and its ordered GPU transaction together"
+    )]
     fn try_submit_scene(&mut self, hot_slot: HotSlot, now_ms: f64) -> Result<u64, PresentError> {
         let main = self.main.as_ref().ok_or(PresentError::InvalidGrid {
             width: 0,
@@ -322,12 +369,19 @@ impl Presenter {
             main.state.delivered_iter_cap,
             main.grid.span.directory_index,
             main.grid.span.logical_len,
+            main.plane,
+            main.map,
             palette_record,
         )
-        .map_err(|_| PresentError::InvalidGrid {
-            width: extent[0],
-            height: extent[1],
-            logical_len: main.grid.span.logical_len,
+        .map_err(|error| match error {
+            PresentDataError::InvalidMap => PresentError::Device {
+                operation: "pack scene screen map",
+            },
+            _ => PresentError::InvalidGrid {
+                width: extent[0],
+                height: extent[1],
+                logical_len: main.grid.span.logical_len,
+            },
         })?;
         let scene_id = self.next_scene_id;
         let next_scene_id = scene_id.checked_add(1).ok_or(PresentError::Device {
@@ -374,7 +428,7 @@ impl Presenter {
             &self.gpu,
             texture_index as usize,
             hot_slot.dynamic_offset(),
-            palette_record.clear_rgba,
+            palette_record,
         );
         encoder.clear_buffer(&self.gpu.scene_fence, 0, Some(FENCE_BYTES));
         self.queue.submit([encoder.finish()]);
@@ -441,12 +495,16 @@ impl Presenter {
         self.next_warp_id = warp_id.checked_add(1).ok_or(PresentError::Device {
             operation: "advance warp identity",
         })?;
-        let source = select_warp_source(
-            self.hot_source_valid[hot_slot.index() as usize],
-            self.ledger.retained(),
-        );
+        let source = self.hot_warp_source[hot_slot.index() as usize].frame(self.ledger.retained());
         let source_scene_id = source.map(|frame| frame.scene_id);
         let texture_index = source.map_or(0, |frame| frame.texture_index as usize);
+        if source.is_none() {
+            self.queue.write_buffer(
+                &self.gpu.hot_buffer,
+                u64::from(hot_slot.dynamic_offset()) + HOT_SOURCE_VALID_BYTE_OFFSET,
+                bytemuck::bytes_of(&0_u32),
+            );
+        }
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -503,6 +561,7 @@ impl Presenter {
             warp_id,
             source_scene_id,
             precision_mode: precision_mode.as_str(),
+            exposed: self.hot_exposed[hot_slot.index() as usize],
             status: self.facts.status.clone(),
         })
     }
@@ -626,6 +685,17 @@ impl Presenter {
     }
 
     fn publish_promoted(&mut self, frame: &crate::SceneFrame) {
+        let fills_current = self
+            .hot
+            .iter()
+            .flatten()
+            .max_by_key(|pose| pose.epoch)
+            .is_some_and(|pose| *pose == frame.pose);
+        if fills_current {
+            self.exposure.scene_completed();
+            self.facts.scene_fill_due = false;
+            self.facts.warp_exposed = false;
+        }
         self.replaced_warp_scene = self.active_warp_scene;
         self.facts.reprojected_per_scene = self.active_warp_scene.map(|_| self.active_warp_count);
         self.active_warp_scene = Some(frame.scene_id);
@@ -720,7 +790,7 @@ fn create_gpu_state(
     });
     let scene_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Julibrot regional scene uniform"),
-        size: 80,
+        size: u64::from(SCENE_PAYLOAD_BYTES),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -734,7 +804,7 @@ fn create_gpu_state(
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &scene_buffer,
                     offset: 0,
-                    size: NonZeroU64::new(80),
+                    size: NonZeroU64::new(u64::from(SCENE_PAYLOAD_BYTES)),
                 }),
             },
             wgpu::BindGroupEntry {
@@ -742,7 +812,7 @@ fn create_gpu_state(
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &hot_buffer,
                     offset: 0,
-                    size: NonZeroU64::new(128),
+                    size: NonZeroU64::new(u64::from(HOT_PAYLOAD_BYTES)),
                 }),
             },
         ],
@@ -752,14 +822,24 @@ fn create_gpu_state(
     let warp_hot_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("Julibrot immutable warp HOT group"),
         layout: &warp_hot_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                buffer: &hot_buffer,
-                offset: 0,
-                size: NonZeroU64::new(128),
-            }),
-        }],
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &hot_buffer,
+                    offset: 0,
+                    size: NonZeroU64::new(u64::from(HOT_PAYLOAD_BYTES)),
+                }),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &scene_buffer,
+                    offset: 0,
+                    size: NonZeroU64::new(u64::from(SCENE_PAYLOAD_BYTES)),
+                }),
+            },
+        ],
     });
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("Julibrot nearest scene sampler"),
@@ -853,14 +933,20 @@ fn create_heap_layout(
 fn create_scene_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Julibrot scene and HOT layout"),
-        entries: &[uniform_entry(0, false, 80), uniform_entry(1, true, 128)],
+        entries: &[
+            uniform_entry(0, false, u64::from(SCENE_PAYLOAD_BYTES)),
+            uniform_entry(1, true, u64::from(HOT_PAYLOAD_BYTES)),
+        ],
     })
 }
 
 fn create_warp_hot_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("Julibrot warp HOT layout"),
-        entries: &[uniform_entry(0, true, 128)],
+        entries: &[
+            uniform_entry(0, true, u64::from(HOT_PAYLOAD_BYTES)),
+            uniform_entry(1, false, u64::from(SCENE_PAYLOAD_BYTES)),
+        ],
     })
 }
 
@@ -1132,7 +1218,7 @@ fn encode_scene(
     gpu: &GpuState,
     texture_index: usize,
     hot_offset: u32,
-    clear: [f32; 4],
+    selected: PaletteRecord,
 ) {
     let depth_attachment = Some(wgpu::RenderPassDepthStencilAttachment {
         view: &gpu.depth.view,
@@ -1148,7 +1234,7 @@ fn encode_scene(
             view: &gpu.scene_textures[texture_index].view,
             resolve_target: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(color(clear)),
+                load: wgpu::LoadOp::Clear(scene_load_color(selected)),
                 store: wgpu::StoreOp::Store,
             },
         })],
@@ -1163,6 +1249,10 @@ fn encode_scene(
         pass.set_index_buffer(indices.buffer.slice(..), wgpu::IndexFormat::Uint32);
         pass.draw_indexed(0..indices.count, 0, 0..1);
     }
+}
+
+pub fn scene_load_color(selected: PaletteRecord) -> wgpu::Color {
+    color(exterior_zero(selected))
 }
 
 fn validate_grid(main: &PresentMain, limits: DialectLimits) -> Result<(), PresentError> {
@@ -1258,14 +1348,14 @@ fn pose_is_finite(pose: &Pose) -> bool {
     pose.grid_width > 0
         && pose.grid_height > 0
         && pose.view.is_valid()
+        && pose.object.is_valid()
         && [
-            pose.plane_theta_1,
-            pose.plane_theta_2,
             pose.zoom_log2,
             pose.centre_from_reference_px[0],
             pose.centre_from_reference_px[1],
         ]
         .into_iter()
+        .chain(pose.plane_origin)
         .all(f64::is_finite)
         && pose
             .plane
@@ -1273,20 +1363,54 @@ fn pose_is_finite(pose: &Pose) -> bool {
             .into_iter()
             .chain(pose.plane.basis_v)
             .all(f32::is_finite)
+        && match pose.map {
+            PoseMap::Mapped(map) => map
+                .rows
+                .into_iter()
+                .chain(map.inverse)
+                .chain([map.condition_number])
+                .all(f64::is_finite),
+            PoseMap::EdgeOn => true,
+        }
 }
 
-fn select_warp_source<T>(source_valid: bool, retained: Option<T>) -> Option<T> {
-    if source_valid { retained } else { None }
+fn select_warp_source(
+    planned: Option<(u64, u32)>,
+    retained: Option<&crate::SceneFrame>,
+) -> Option<&crate::SceneFrame> {
+    retained.filter(|frame| {
+        select_warp_source_identity(planned, Some((frame.scene_id, frame.texture_index))).is_some()
+    })
 }
 
-const fn clear_warp_plan() -> crate::WarpPlan {
+const fn select_warp_source_identity(
+    planned: Option<(u64, u32)>,
+    retained: Option<(u64, u32)>,
+) -> Option<(u64, u32)> {
+    match (planned, retained) {
+        (Some(planned), Some(retained)) if planned.0 == retained.0 && planned.1 == retained.1 => {
+            Some(retained)
+        }
+        _ => None,
+    }
+}
+
+const fn identity_rows() -> [[f32; 4]; 3] {
+    [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+    ]
+}
+
+const fn clear_warp_plan(edge_on: bool, exposed: bool) -> crate::WarpPlan {
     crate::WarpPlan {
-        rows: [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-        ],
+        rows: identity_rows(),
+        source_scene_id: None,
+        source_texture_index: None,
         source_valid: false,
+        edge_on,
+        exposed,
         kind: WarpKind::ClearOnly,
         chart_residual: 0.0,
         approx_max_error_px: None,
@@ -1296,7 +1420,68 @@ const fn clear_warp_plan() -> crate::WarpPlan {
 
 #[cfg(test)]
 mod tests {
+    use ember_julibrot_kernels::RefinementLevel;
+    use ember_julibrot_math::{PrecisionMode, ViewControls};
+
     use super::*;
+    use crate::SubmissionMeasurement;
+    use crate::state::PendingScene;
+
+    fn binding_pose() -> Pose {
+        Pose {
+            epoch: 1,
+            orbit_generation: 1,
+            plane: ember_julibrot_math::Plane {
+                basis_u: [1.0, 0.0, 0.0, 0.0],
+                basis_v: [0.0, 1.0, 0.0, 0.0],
+            },
+            object: ember_julibrot_math::ObjectAngles::JULIA,
+            plane_origin: [0.0; 4],
+            zoom_log2: 0.0,
+            view: ViewControls::NEUTRAL,
+            grid_width: 64,
+            grid_height: 36,
+            map: PoseMap::Mapped(ember_julibrot_math::Homography::IDENTITY),
+            centre_from_reference_px: [0.0; 2],
+        }
+    }
+
+    fn binding_measurement(id: u64) -> SubmissionMeasurement {
+        SubmissionMeasurement {
+            kind: SubmissionKind::Scene,
+            id,
+            source_scene_id: None,
+            sample_class: SampleClass::Measured,
+            precision_mode: PrecisionMode::PictureFast.as_str(),
+            wall_ms: 1.0,
+            fence_wait_ms: 0.5,
+            polls: 1,
+        }
+    }
+
+    fn promote_binding_scene(ledger: &mut SceneLedger, scene_id: u64) -> crate::SceneFrame {
+        ledger
+            .begin(|texture_index| {
+                Ok(PendingScene {
+                    scene_id,
+                    pose: binding_pose(),
+                    palette: PaletteId::Classic,
+                    iteration_cap: 64,
+                    level: RefinementLevel::Final,
+                    extent: [64, 36],
+                    texture_index,
+                    centre_revision: 1,
+                    plane_origin_f64: [0.0; 4],
+                    precision_mode: PrecisionMode::PictureFast.as_str(),
+                    drop_reason: None,
+                })
+            })
+            .expect("binding scene begins");
+        match ledger.complete(binding_measurement(scene_id)) {
+            Some(SceneCompletion::Promoted(frame)) => frame,
+            other => panic!("binding scene did not promote: {other:?}"),
+        }
+    }
 
     #[test]
     fn sample_classes_reset_and_advance_without_hiding_warmup() {
@@ -1312,16 +1497,42 @@ mod tests {
 
     #[test]
     fn clear_plan_is_identity_but_never_samples() {
-        let plan = clear_warp_plan();
+        let plan = clear_warp_plan(false, true);
         assert_eq!(plan.kind, WarpKind::ClearOnly);
         assert!(!plan.source_valid);
+        assert!(plan.exposed);
         assert_eq!(plan.rows[2], [0.0, 0.0, 1.0, 0.0]);
     }
 
     #[test]
-    fn clear_only_warp_never_attributes_a_retained_scene() {
-        assert_eq!(select_warp_source(false, Some(41_u64)), None);
-        assert_eq!(select_warp_source(true, Some(41_u64)), Some(41));
+    fn browser_order_clears_a_hot_plan_after_scene_promotion() {
+        let mut ledger = SceneLedger::default();
+        assert!(!ledger.invalidate_incompatible(
+            64,
+            [0.0; 4],
+            ember_julibrot_math::ObjectAngles::JULIA,
+            PrecisionMode::PictureFast.as_str(),
+        ));
+        let sampled = promote_binding_scene(&mut ledger, 41);
+        let mut plan = clear_warp_plan(false, false);
+        plan.kind = WarpKind::AnchorHomography;
+        plan.source_scene_id = Some(sampled.scene_id);
+        plan.source_texture_index = Some(sampled.texture_index);
+        plan.source_valid = true;
+        let mut hot = WarpSourceSlot::default();
+        hot.write_hot(&plan);
+        assert_eq!(
+            hot.frame(ledger.retained()).map(|frame| frame.scene_id),
+            Some(41)
+        );
+
+        let promoted = promote_binding_scene(&mut ledger, 42);
+        assert_eq!(promoted.scene_id, 42);
+        assert_eq!(
+            hot.frame(ledger.retained()).map(|frame| frame.scene_id),
+            None
+        );
+        assert_eq!(HOT_SOURCE_VALID_BYTE_OFFSET, 280);
     }
 
     #[test]
@@ -1329,7 +1540,7 @@ mod tests {
         let source = include_str!("gpu.rs");
         let accessor = [".dynamic_", "offset()"].concat();
         let bypass = ["index()", " * self.gpu.hot_stride"].concat();
-        assert_eq!(source.matches(&accessor).count(), 3);
+        assert_eq!(source.matches(&accessor).count(), 4);
         assert!(!source.contains(&bypass));
     }
 }

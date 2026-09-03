@@ -2,6 +2,25 @@ use ember_lab_heap::KernelDesc;
 
 pub const OUTPUT_PAGE_SIDE: u16 = 256;
 
+/// Uniform capacity an executor must offer so that both Julibrot descriptors register.
+///
+/// `GpuKernelExecutor::register_kernel` refuses any descriptor whose `uniform_size` exceeds the
+/// executor's configured `kernel_uniform_bytes`, and that refusal is raised before a pipeline is
+/// built, so it lands on every device and carries no driver diagnostic. A host that repeated the
+/// number as its own literal would therefore hold a copy that silently goes stale the moment a
+/// uniform grows here. Deriving the capacity from the descriptors keeps the two in step by
+/// construction, rounded to the 16-byte multiple the executor's configuration check demands.
+pub const KERNEL_UNIFORM_BYTES: u32 = {
+    let shallow = shallow_kernel().uniform_size;
+    let perturbation = perturbation_kernel().uniform_size;
+    let widest = if shallow > perturbation {
+        shallow
+    } else {
+        perturbation
+    };
+    widest.next_multiple_of(16)
+};
+
 const ESCAPE_FIELD: &[&str] = &["escape"];
 const NO_ACCESSORS: &[&str] = &[];
 const REFERENCE_ACCESSOR: &[&str] = &["reference"];
@@ -17,7 +36,7 @@ pub const fn shallow_kernel() -> KernelDesc<'static> {
         accessors: NO_ACCESSORS,
         output_fields: ESCAPE_FIELD,
         uniform_type: "ShallowUniform",
-        uniform_size: 96,
+        uniform_size: 144,
         output_page_side: OUTPUT_PAGE_SIDE,
     }
 }
@@ -31,14 +50,16 @@ pub const fn perturbation_kernel() -> KernelDesc<'static> {
         accessors: REFERENCE_ACCESSOR,
         output_fields: ESCAPE_FIELD,
         uniform_type: "PerturbUniform",
-        uniform_size: 64,
+        uniform_size: 112,
         output_page_side: OUTPUT_PAGE_SIDE,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{PERTURB_BODY, SHALLOW_BODY, perturbation_kernel, shallow_kernel};
+    use super::{
+        KERNEL_UNIFORM_BYTES, PERTURB_BODY, SHALLOW_BODY, perturbation_kernel, shallow_kernel,
+    };
     use ember_lab_heap::{DialectLimits, RegisteredKernel};
 
     const LIMITS: DialectLimits = DialectLimits {
@@ -46,6 +67,20 @@ mod tests {
         span_capacity: 16,
         handle_capacity: 64,
     };
+
+    #[test]
+    fn the_published_uniform_capacity_admits_both_descriptors() {
+        for descriptor in [shallow_kernel(), perturbation_kernel()] {
+            assert!(
+                descriptor.uniform_size <= KERNEL_UNIFORM_BYTES,
+                "{} needs {} uniform bytes but the published capacity is {KERNEL_UNIFORM_BYTES}",
+                descriptor.name,
+                descriptor.uniform_size,
+            );
+        }
+        assert_ne!(KERNEL_UNIFORM_BYTES, 0);
+        assert!(KERNEL_UNIFORM_BYTES.is_multiple_of(16));
+    }
 
     #[test]
     fn both_bodies_register_through_dialect_v2() {
@@ -152,5 +187,19 @@ mod tests {
         assert!(PERTURB_BODY.contains("if (steps > 67108863u)"));
         assert!(!PERTURB_BODY.contains("step < 4u"));
         assert!(!PERTURB_BODY.contains("3.402823466e38"));
+    }
+
+    #[test]
+    fn screen_mapping_reuses_the_existing_builtin_dialect() {
+        for source in [SHALLOW_BODY, PERTURB_BODY] {
+            assert!(source.contains("0.000000476837158203125"));
+            assert!(source.contains("quotient_error.x * quotient_error.x"));
+            for absent in ["isFinite(", "determinant(", "inverse(", "length("] {
+                assert!(!source.contains(absent), "introduced builtin {absent}");
+            }
+            assert!(source.contains("if (mapped.status == 2.0)"));
+            assert!(source.contains("if (!mapped.sampleable)"));
+            assert!(!source.contains("if (mapped.status != 0.0)"));
+        }
     }
 }
