@@ -134,20 +134,27 @@ Preview and Interactive are each 100% discarded as images when their successor l
 ## Calculations with no reason found for determinism
 
 - CSS/grid conversion, anchor arithmetic, drag arithmetic, and `zoom_log2` accumulation: GPU `f32` would look like the same gesture with at most sub-quarter-pixel motion noise; CSS and event streams already prevent cross-machine replay without recording inputs.
+- Plane `sin_cos`, final narrowing, and the `8*f32::EPSILON` postcondition: GPU `f32` would look unchanged while the basis remains within the derived `5.208e-4` edge-motion budget; the current refusal is about 546 times tighter than the picture requires.
 - Fixed 1,024-bit centre precision at every zoom: an all-GPU `f32` centre would look normal only through the shallow range and then freeze or jump near zoom 15 and is therefore rejected; zoom-derived bignum width, rather than fixed maximal width, is the fast answer.
 - Exact binary64 centre mirror and overlay depth digits: GPU `f32` would only change displayed last digits; neither value may place a deep pixel.
 - The exact decimal formula and cross-machine boundary result of `precision_for`: GPU `f32` planning could choose a nearby starting width and the picture would be unchanged if adaptive Final certification passes; a fixed formula is useful provenance, not picture accuracy.
+- Exact decode round-trip width and worker reconstruction of that planner formula: GPU `f32` planning would occasionally choose a neighboring starting width, but canonical validation plus Final certification prevents a wrong picture; byte identity remains a deterministic-mode property.
 - Unconditional bignum orbit generation below `q=14`: removing it produces exactly the same shallow pixels because no shader invocation reads the orbit; only arrival time changes.
 - Cross-machine-identical credit decay/admission timing: moving it to GPU `f32` would change when an orbit starts, not which Final pixel appears, but integer CPU safety is cheaper and avoids hangs, so fast mode loosens policy rather than moving it.
 - Four-word, two-ulp `D` versus `D+16` agreement: if simply reduced to the GPU-consumed `f32` word, the lab should look identical whenever the repaired recurrence bound passes; disagreement only in a low word currently discarded by `hi+lo` cannot be seen.
+- Exact reference low words from `split_scalar`/`split_complex`: simply storing the GPU-consumed `f32` value would look identical under the current one-add reconstruction and halve orbit-texture bandwidth; the alternative is to make the shader consume a genuine double-single value.
+- Exact retained-shift `f64`, fixed zoom-14 switch, and `f64` scale mantissa: GPU `f32` would look unchanged while the shift and scale stay within 0.25 pixel and the exponent remains an exact integer; only the threshold needs to move if that oracle fails for the current extent and centre magnitude.
 - Deterministic draft dimensions/order beyond exact buffer bounds: GPU/device-selected `f32` quality heuristics would alter transient blockiness and arrival time only; Final remains exact in extent and contract.
 - Bit-exact CPU mirrors during ordinary rendering: a GPU-only implementation is already what produces the picture; the lab looks identical and loses only an always-on replay oracle, which remains available in conformance mode.
+- Exact shallow smooth words and the current `1e-4`/`2e-3` tolerances: GPU `f32` remains the displayed result, and relaxing the oracle only up to `0.03565` smooth iteration cannot change a normalized channel by more than one code.
 - Binary64 flat-warp inverse at a `1e-9` algebraic oracle: direct GPU `f32` looks the same while its source error remains below 0.25 pixel; exact inverse residual is invisible.
 - Binary64 tumbled solve and exact `1e-12` pivot threshold: GPU or CPU `f32` would be hidden beneath the model's measured multi-pixel approximation except near a rejected pole; residual/pixel checks are the correct guard.
+- Exact `f32` packing words for the homography: ordinary GPU `f32` conversion looks the same while the uploaded mapping stays within 0.25 source pixel; word identity adds nothing to that oracle.
 - The 9x9x5 error corpus on every warp: omitting it leaves exactly the same image because it only reports facts; run it at Final/Measure.
 - Drift oracle and Gram-Schmidt every 64 steps: GPU `f32` makes no difference because production consumes neither result; this is test support, not pipeline architecture.
 - Exact animated view coefficients: GPU `f32` may shift animation phase by a subpixel and otherwise looks the same; recorded angle/time is the deterministic replay mechanism.
 - Exact palette and height CPU results: GPU `f32` is already authoritative for the picture; CPU values are test oracles only.
+- Exact rebase-count agreement and record count words: GPU `f32` may take a different safe rebase and report a different integer count while producing the same colour; flags, bounds, and terminal category remain exact so a glitch cannot be hidden.
 - Cross-machine-identical lighting, rasterization, filtering, and surface conversion: simply using GPU `f32` is the current lab; visible one-code agreement and categorical debug colours are the useful specification.
 
 ## Why the deterministic path remains valuable
