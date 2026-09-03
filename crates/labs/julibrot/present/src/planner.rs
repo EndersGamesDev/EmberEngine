@@ -381,13 +381,7 @@ mod tests {
     }
 
     fn validated_plan(from: Pose, to: &Pose, mode: PrecisionMode) -> WarpPlan {
-        Warp::reproject(
-            &frame(from),
-            &from,
-            to,
-            mode,
-            WarpValidation::Measure,
-        )
+        Warp::reproject(&frame(from), &from, to, mode, WarpValidation::Measure)
     }
 
     #[test]
