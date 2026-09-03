@@ -135,9 +135,9 @@ fn sample_pose(pose: &Pose, screen: [f64; 2]) -> Option<KernelSample> {
     let point = core::array::from_fn(|axis| {
         scale.mul_add(
             f64::from(pose.plane.basis_u[axis]).mul_add(
-                    coordinate[0],
-                    f64::from(pose.plane.basis_v[axis]) * coordinate[1],
-                ),
+                coordinate[0],
+                f64::from(pose.plane.basis_v[axis]) * coordinate[1],
+            ),
             pose.plane_origin[axis],
         ) as f32
     });

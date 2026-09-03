@@ -1251,7 +1251,7 @@ fn encode_scene(
     }
 }
 
-pub(super) fn scene_load_color(selected: PaletteRecord) -> wgpu::Color {
+pub fn scene_load_color(selected: PaletteRecord) -> wgpu::Color {
     color(exterior_zero(selected))
 }
 
