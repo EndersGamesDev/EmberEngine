@@ -1,11 +1,3 @@
-/// Precision policy: exact and cross-machine reproducible, or accurate to the picture's budget.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[repr(u32)]
-pub enum PrecisionMode {
-    Deterministic = 0,
-    PictureFast = 1,
-}
-
 /// Consumer stage that decides whether `PictureFast` verifies a reference orbit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]

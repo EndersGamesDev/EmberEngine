@@ -456,7 +456,7 @@ impl crate::MonotonicClock for BrowserClock {
     }
 }
 
-/// Allocates one standalone version-two transfer buffer and initializes its immutable trailer.
+/// Allocates one standalone version-three transfer buffer and initializes its immutable trailer.
 ///
 /// # Errors
 ///

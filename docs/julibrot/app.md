@@ -170,7 +170,7 @@ Every control lands on `input` except the four origin coordinates, which land on
 
 One wasm module is instantiated on the main thread and in the module worker, whose entry is `worker_main`; fetch caching avoids a second network payload, but two wasm instances and separate linear memories remain displayed costs.
 
-JavaScript glue, wasm export, worker bootstrap, and wire protocol use `JULIBROT_ABI_VERSION=2`, while the independently pinned loader query remains `v=1` in URLs `./pkg/ember_lab_julibrot.js?v=1`, `./pkg/ember_lab_julibrot_bg.wasm?v=1`, and `./worker.js?v=1`; the browser owner creates that worker and withholds every orbit-pool transfer until the object handshake accepts ABI two, while any disagreement becomes typed `VersionSkew` before orbit work.
+JavaScript glue, wasm export, worker bootstrap, and wire protocol use `JULIBROT_ABI_VERSION=3`, while the independently pinned loader query remains `v=1` in URLs `./pkg/ember_lab_julibrot.js?v=1`, `./pkg/ember_lab_julibrot_bg.wasm?v=1`, and `./worker.js?v=1`; the browser owner creates that worker and withholds every orbit-pool transfer until the object handshake accepts ABI three, while any disagreement becomes typed `VersionSkew` before orbit work.
 
 The loader query version is deployment cache policy rather than the wire ABI and remains pinned to `v=1` by the page contract; protocol changes bump `JULIBROT_ABI_VERSION`, and a cached old page either obtains matching artifacts or receives the typed skew refusal.
 
@@ -281,7 +281,7 @@ The inherited `DispatchHeader` is 16 bytes `{global_base:u32,valid_length:u32,pa
 
 Every transferred buffer starts with `MessageHeader`, eight little-endian u32 words and exactly 32 bytes: offsets 0 `magic`, 4 `version`, 8 `generation`, 12 `kind`, 16 `length`, 20 `precision_bits`, 24 `compute_us`, and 28 `credit_us`.
 
-`magic=0x314c424a` is byte string `JBL1`, wire and module ABI `version=2`, and message kinds and `length` meanings are exactly these worker-owned values; this version is independent of the loader query version.
+`magic=0x314c424a` is byte string `JBL1`, wire and module ABI `version=3`, and message kinds and `length` meanings are exactly these worker-owned values; this version is independent of the loader query version.
 
 |Discriminant|Name|Direction and pool|`length` meaning|
 |-----------:|----|------------------|----------------|
@@ -301,7 +301,7 @@ The last 16 bytes are immutable `PoolTrailer {pool:u32,slot:u32,capacity_bytes:u
 
 `OrbitRequest` is `{ generation:u32,centre:EncodedCentre,depth_digits:u32,precision_bits:u32,max_iter:u32,precision_mode:PrecisionMode,reason:OrbitReason }`; its body at byte 32 is `{depth_digits:u32,reason_bits:u32,centre_revision:u32,limb_word_count:u32,coordinates:[CoordinateDescriptor;4],precision_mode:u32,limbs:[u32;limb_word_count]}`, with descriptors at bytes 48, 64, 80 and 96, precision mode at byte 112, and limbs beginning at 116.
 
-`reason_bits` assigns bit 0 initial reference, bit 1 centre threshold, bit 2 zoom threshold, bit 3 max-iteration change, and bit 4 precision-mode change; unknown bits are `BadLength` in version two.
+`reason_bits_and_pass` assigns bit 0 initial reference, bit 1 centre threshold, bit 2 zoom threshold, bit 3 max-iteration change, bit 4 precision-mode change, and bits 5–6 the PictureFast reference pass; unknown or contradictory bits are `BadLength` in version three.
 
 Each 16-byte `CoordinateDescriptor` is `{sign:u32,exponent_twos_complement:u32,limb_start:u32,limb_count:u32}`; for nonzero coordinates, value is `(−1)^sign·Σ(limb[k]·2^(32k))·2^exponent`, `sign∈{0,1}`, limbs are least-significant first, the top limb is nonzero, and descriptor ranges are ordered, contiguous, non-overlapping, and exhaustive.
 
@@ -463,7 +463,7 @@ Native precision tests pin `depth_digits`, `D_floor`, `D_work`, bit conversion, 
 
 Native layout tests assert `Plane=32`, `CentreSplit=32`, `EscapeParams=8`, shallow uniform 96, perturbation uniform 64 with signed exponent at byte 60, both RGBA records 16, HOT 128, scene 80, palette 48, HOT state 40, MAIN 128, ViewerState 176, header 32, trailer 16, all offsets, enum discriminants, little-endian round trips including precision mode, and zero reserved words.
 
-Native wire tests construct all nine message kinds, trailers and `ErrorRecord` values, validate canonical coordinate descriptors, capacity `48+16M`, request inequality, exact lease disposition, four-buffer ownership, resize-only-on-cap change, credit 250,000, cancellation charge, same-thread trace equality, and shutdown bounds.
+Native wire tests construct all nine message kinds, trailers and `ErrorRecord` values, validate canonical coordinate descriptors, capacity `64+16M`, request inequality, exact lease disposition, four-buffer ownership, resize-only-on-cap change, credit 250,000, cancellation charge, same-thread trace equality, and shutdown bounds.
 
 Native owner tests enumerate HOT/MAIN staging and drains, require one shared incrementing epoch without using equality for compatibility, prove the new centre and reference-shift fields across two deep recentres, reject registry generation mismatch, and prove no accepted MAIN state snaps newer controls backward.
 

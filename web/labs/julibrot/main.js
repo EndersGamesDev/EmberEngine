@@ -1,4 +1,4 @@
-const ABI = 2;
+const ABI = 3;
 const STATUS = document.getElementById("status");
 const CANVAS = document.getElementById("julibrot");
 const FACTS = document.getElementById("facts-grid");

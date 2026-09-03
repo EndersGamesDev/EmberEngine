@@ -66,7 +66,7 @@ The common squared bailout radius is `256.0`; at escape the grid stores `smooth_
 
 ### 2.2 One-module worker packaging
 
-One wasm module is loaded on the main thread and again in the Web Worker; the worker calls the exported `worker_main` entry, all loader URLs retain the independently pinned `?v=1`, exported `JULIBROT_ABI_VERSION = 2` must equal the message version before startup, the browser cache avoids a second network payload, and the second instance still pays separate wasm linear memory, globals, initialization, and bignum scratch.
+One wasm module is loaded on the main thread and again in the Web Worker; the worker calls the exported `worker_main` entry, all loader URLs retain the independently pinned `?v=1`, exported `JULIBROT_ABI_VERSION = 3` must equal the message version before startup, the browser cache avoids a second network payload, and the second instance still pays separate wasm linear memory, globals, initialization, and bignum scratch.
 
 A second wasm artifact is rejected because it adds a separately versioned URL, duplicate code-generation output, cache identity, and loader failure mode without reducing `postMessage` payload bytes; the one-module choice makes deployment atomic even though instance memory cannot be shared.
 
@@ -169,7 +169,7 @@ Every message starts with `MessageHeader`, exactly eight `u32` words and 32 byte
 |Byte|Field|Type|Meaning|
 |---:|-----|----|-------|
 |0|`magic`|`u32`|`0x314c424a`|
-|4|`version`|`u32`|wire version `2`|
+|4|`version`|`u32`|wire version `3`|
 |8|`generation`|`u32`|request generation, response generation, or generation being acknowledged|
 |12|`kind`|`u32`|`MessageKind` discriminant|
 |16|`length`|`u32`|kind-specific length from the table below|
@@ -201,7 +201,7 @@ The Rust-level request is `OrbitRequest { generation: u32, centre: EncodedCentre
 
 The request body is `{ depth_digits: u32, reason_bits_and_pass: u32, centre_revision: u32, limb_word_count: u32, coordinates: [CoordinateDescriptor; 4], precision_mode: u32, limbs: [u32; limb_word_count] }` with descriptors at bytes 48, 64, 80, and 96, the validated mode discriminant at byte 112, and limbs beginning at byte 116.
 
-The combined word assigns bit 0 to initial reference, bit 1 to centre-threshold crossing, bit 2 to zoom-threshold crossing, bit 3 to max-iteration change, bit 4 to precision-mode change, and bits 5–6 to Preview, Final, or Measure only for `PictureFast`; mode itself is read exclusively from byte 112, deterministic requests require zero pass bits and decode as Final, and unknown or contradictory bits are a version-two `BadLength` error rather than silently ignored.
+The combined word assigns bit 0 to initial reference, bit 1 to centre-threshold crossing, bit 2 to zoom-threshold crossing, bit 3 to max-iteration change, bit 4 to precision-mode change, and bits 5–6 to Preview, Final, or Measure only for `PictureFast`; mode itself is read exclusively from byte 112, deterministic requests require zero pass bits and decode as Final, and unknown or contradictory bits are a version-three `BadLength` error rather than silently ignored.
 
 Each 16-byte `CoordinateDescriptor` is `{ sign: u32, exponent_twos_complement: u32, limb_start: u32, limb_count: u32 }`; descriptors appear in `(z.re,z.im,c.re,c.im)` order at bytes 48, 64, 80, and 96.
 

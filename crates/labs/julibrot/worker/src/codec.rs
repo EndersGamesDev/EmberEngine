@@ -201,7 +201,7 @@ impl OrbitReason {
     /// Requested precision policy changed.
     pub const PRECISION_MODE_CHANGE: Self = Self(1 << 4);
 
-    /// Validates and constructs version-two reason bits.
+    /// Validates and constructs version-three reason bits.
     ///
     /// # Errors
     ///

@@ -205,7 +205,7 @@ All kernel output lands in DATA only through the paid SCRATCH-copy path, referen
 
 Every standalone message buffer begins with `MessageHeader`, eight little-endian `u32` words and 32 bytes: 0 `magic`, 4 `version`, 8 `generation`, 12 `kind`, 16 `length`, 20 `precision_bits`, 24 `compute_us`, and 28 `credit_us`.
 
-`magic=0x314c424a` is byte string `JBL1`, wire `version=2`, `JULIBROT_ABI_VERSION=2`, and loader URLs independently remain pinned to `?v=1`; any module/wire version skew is a typed refusal.
+`magic=0x314c424a` is byte string `JBL1`, wire `version=3`, `JULIBROT_ABI_VERSION=3`, and loader URLs independently remain pinned to `?v=1`; any module/wire version skew is a typed refusal.
 
 |Kind|Name|Direction and `length`|
 |---:|----|----------------------|
@@ -231,7 +231,7 @@ Coordinate descriptors start at bytes 48, 64, 80, and 96, the precision-mode wor
 
 Descriptor ranges are ordered, contiguous, non-overlapping, and cover `limb_word_count`; canonical zero is `{sign:0,exponent:0,limb_start:previous_end,limb_count:0}`, with no negative zero, leading high zero, unused limb, or out-of-range descriptor.
 
-`reason_bits_and_pass` assigns bit 0 to initial reference, bit 1 to centre-threshold crossing, bit 2 to zoom-threshold crossing, bit 3 to max-iteration change, bit 4 to precision-mode change, and bits 5–6 to `ReferencePass::{Preview,Final,Measure}` only for `PictureFast`; `PrecisionMode` itself is read exclusively from byte 112, deterministic requests require zero pass bits and decode as Final, and any unknown or contradictory bit pattern is a version-two `BadLength` refusal.
+`reason_bits_and_pass` assigns bit 0 to initial reference, bit 1 to centre-threshold crossing, bit 2 to zoom-threshold crossing, bit 3 to max-iteration change, bit 4 to precision-mode change, and bits 5–6 to `ReferencePass::{Preview,Final,Measure}` only for `PictureFast`; `PrecisionMode` itself is read exclusively from byte 112, deterministic requests require zero pass bits and decode as Final, and any unknown or contradictory bit pattern is a version-three `BadLength` refusal.
 
 Math's `encode_big_scalar` and `decode_big_scalar` adapters map Astro-float values to exactly that dyadic representation, use the `u32` bit pattern of the two's-complement `i32` exponent, preserve exact value at delivered precision, and impose no extra odd-low-limb rule; worker alone validates and transports bytes.
 
