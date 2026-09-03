@@ -1,7 +1,7 @@
 use ember_julibrot_kernels::{EscapeParams, KernelSample, RefinementLevel, escape_shallow_point};
 use ember_julibrot_math::{
     EscapeGridRecord, ObjectAngles, Pose, PoseMap, PrecisionMode, ViewControls, construct_plane,
-    pixel_scale, screen_to_plane,
+    pixel_scale, plane_chart_relation, screen_to_plane,
 };
 use ember_julibrot_present::{
     CLASSIC_PALETTE, PaletteId, SampleClass, SceneFrame, SubmissionKind, SubmissionMeasurement,
@@ -661,7 +661,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
             0.0,
             [0.0; 2],
         );
-        let changed_expected = if matches!(index, 0 | 5) {
+        let changed_expected = if plane_chart_relation(base.plane, changed.plane).is_some() {
             Expected::Agree
         } else {
             Expected::Clear
@@ -715,6 +715,23 @@ fn retained_warp_matches_independent_fresh_scenes() {
         &complement_rotation,
         0.0,
         Expected::Agree,
+    );
+    let tilted = pose(
+        ObjectAngles {
+            rho_13: 0.3,
+            ..ObjectAngles::IDENTITY
+        },
+        ViewControls::MANDELBROT_FLAT,
+        [0.0; 4],
+        0.0,
+        [0.0; 2],
+    );
+    assert_fixture(
+        "object o13 identity tilt",
+        &mandelbrot,
+        &tilted,
+        0.0,
+        Expected::Clear,
     );
 
     let lifted_camera_expectations = [
