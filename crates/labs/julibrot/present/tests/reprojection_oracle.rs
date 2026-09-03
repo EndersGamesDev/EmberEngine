@@ -23,7 +23,6 @@ enum Expected {
     /// The retained records still describe the destination, so the fixture additionally proves
     /// that redrawing them under the destination pose needs no new sampling.
     Relief,
-    Either,
 }
 
 fn pose_at(
@@ -542,13 +541,7 @@ fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Exp
         WarpValidation::Ordinary,
     );
     if plan.kind == WarpKind::ReliefRedraw {
-        assert!(
-            matches!(
-                expected,
-                Expected::Relief | Expected::Clear | Expected::Either
-            ),
-            "{name}: unexpectedly selected a relief redraw"
-        );
+        assert_eq!(expected, Expected::Relief, "{name}: unexpectedly selected a relief redraw");
         assert!(
             plan.source_valid,
             "{name}: relief redraw lost its record source"
@@ -560,30 +553,26 @@ fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Exp
             .expect("a relief redraw is measured, never unmeasurable");
         assert!(maximum > WARP_MAX_ERROR_PX, "{name}: {maximum}");
         let (compared, disoccluded, uncertain) = compare_redraw(name, from, to);
-        if expected == Expected::Relief {
-            assert_eq!(
-                uncertain, 0,
-                "{name}: required exact redraw had resampling uncertainty"
-            );
-        }
+        assert_eq!(
+            uncertain, 0,
+            "{name}: displayed relief redraw had resampling uncertainty"
+        );
         eprintln!(
             "oracle fixture | {name} | relief redraw | samples={compared} | uncertain={uncertain} | disoccluded={disoccluded} | homography={maximum:.3} px"
         );
         return;
     }
     if plan.kind == WarpKind::ClearOnly {
-        assert!(
-            matches!(expected, Expected::Clear | Expected::Either),
-            "{name}: unexpectedly cleared"
-        );
+        assert_eq!(expected, Expected::Clear, "{name}: unexpectedly cleared");
         assert!(!plan.source_valid, "{name}: clear plan retained a source");
-        eprintln!("oracle fixture | {name} | cleared");
+        if let Some(maximum) = plan.approx_max_error_px {
+            eprintln!("oracle fixture | {name} | cleared | homography={maximum:.6} px");
+        } else {
+            eprintln!("oracle fixture | {name} | cleared | unmeasurable");
+        }
         return;
     }
-    assert!(
-        matches!(expected, Expected::Agree | Expected::Either),
-        "{name}: unexpectedly displayed"
-    );
+    assert_eq!(expected, Expected::Agree, "{name}: unexpectedly displayed");
     assert!(plan.source_valid, "{name}");
     assert_eq!(plan.source_scene_id, Some(7), "{name}");
     assert_eq!(plan.source_texture_index, Some(1), "{name}");
@@ -677,7 +666,19 @@ fn retained_warp_matches_independent_fresh_scenes() {
         );
     }
 
-    for index in 0..10 {
+    let lifted_camera_expectations = [
+        Expected::Agree,
+        Expected::Clear,
+        Expected::Agree,
+        Expected::Clear,
+        Expected::Agree,
+        Expected::Clear,
+        Expected::Clear,
+        Expected::Clear,
+        Expected::Clear,
+        Expected::Clear,
+    ];
+    for (index, lifted_expected) in lifted_camera_expectations.into_iter().enumerate() {
         let mut flat_view = ViewControls::NEUTRAL;
         flat_view.camera[index] = 0.2;
         let turned = pose(ObjectAngles::JULIA, flat_view, BASE_ORIGIN, 0.0, [0.0; 2]);
@@ -698,7 +699,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
             &from,
             &to,
             1.0,
-            Expected::Either,
+            lifted_expected,
         );
     }
 
@@ -724,7 +725,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
         &relief_from,
         &observer_relief,
         1.0,
-        Expected::Either,
+        Expected::Clear,
     );
 
     for (name, field) in [("distance five", 5_u8), ("distance four", 4_u8)] {
@@ -743,12 +744,17 @@ fn retained_warp_matches_independent_fresh_scenes() {
             relief_view.distance_four = 6.5;
         }
         let relief_to = pose(ObjectAngles::JULIA, relief_view, BASE_ORIGIN, 0.0, [0.0; 2]);
+        let lifted_expected = if field == 5 {
+            Expected::Relief
+        } else {
+            Expected::Clear
+        };
         assert_fixture(
             &format!("{name} h1"),
             &relief_from,
             &relief_to,
             1.0,
-            Expected::Either,
+            lifted_expected,
         );
     }
 
@@ -856,7 +862,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
         0.03,
         [0.2, -0.15],
     );
-    assert_fixture("cross terms", &relief_from, &cross, 1.0, Expected::Either);
+    assert_fixture("cross terms", &relief_from, &cross, 1.0, Expected::Clear);
 }
 
 /// The Mandelbrot preset row's own plane origin, where the canonical flat pair is exact.
@@ -991,11 +997,11 @@ type ObserverCase = (
 /// One row for every observer bar, at height zero and again lifted.
 ///
 /// This is the page's own manual-mode table written as fixtures: move one observer control from a
-/// settled scene and record what the surface is allowed to do. Yaw, pitch and the four-space
-/// distance are observer motions the one image homography carries exactly at any height. The
-/// fifth-space distance and the height amplitude are not motions of the observer at all — they
-/// change where a record of a given escape height sits — so each retained pixel moves by its own
-/// amount and the homography is refused, honestly, in favour of a relief redraw.
+/// settled scene and record what the surface is allowed to do. At a neutral five-dimensional
+/// camera, yaw, pitch and the four-space distance are two projective views of the one fixed lifted
+/// plane and the image homography carries them exactly at any height. The fifth-space distance and
+/// height amplitude move retained records by their individual escape heights, so an over-ceiling
+/// image homography selects the independently checked record-grid redraw.
 ///
 /// At height zero the fifth-space distance and the four-space distance are inert by construction:
 /// every record projects at its chart position, so the map is the identity and the retained image

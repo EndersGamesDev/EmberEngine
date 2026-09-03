@@ -1332,7 +1332,7 @@ fn encode_scene(
         &gpu.scene_textures[texture_index].view,
         &gpu.scene_pipeline,
         hot_offset,
-        selected,
+        scene_load_color(selected),
         "Julibrot scene pass",
     );
 }
@@ -1350,7 +1350,7 @@ fn encode_relief_redraw(
         surface_view,
         &gpu.relief_redraw_pipeline,
         hot_offset,
-        selected,
+        warp_load_color(selected),
         "Julibrot relief redraw pass",
     );
 }
@@ -1369,7 +1369,7 @@ fn encode_image_warp(
             view: surface_view,
             resolve_target: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(color(selected.clear_rgba)),
+                load: wgpu::LoadOp::Clear(warp_load_color(selected)),
                 store: wgpu::StoreOp::Store,
             },
         })],
@@ -1393,7 +1393,7 @@ fn encode_scene_mesh(
     color_view: &wgpu::TextureView,
     pipeline: &wgpu::RenderPipeline,
     hot_offset: u32,
-    selected: PaletteRecord,
+    load_color: wgpu::Color,
     label: &'static str,
 ) {
     let depth_attachment = Some(wgpu::RenderPassDepthStencilAttachment {
@@ -1410,7 +1410,7 @@ fn encode_scene_mesh(
             view: color_view,
             resolve_target: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(scene_load_color(selected)),
+                load: wgpu::LoadOp::Clear(load_color),
                 store: wgpu::StoreOp::Store,
             },
         })],
@@ -1431,11 +1431,22 @@ pub fn scene_load_color(selected: PaletteRecord) -> wgpu::Color {
     color(exterior_zero(selected))
 }
 
+fn warp_load_color(selected: PaletteRecord) -> wgpu::Color {
+    color(selected.clear_rgba)
+}
+
 fn relief_scene_uniform(
     main: &PresentMain,
     source: &crate::SceneFrame,
     selected: PaletteRecord,
 ) -> Result<SceneUniform, PresentError> {
+    if [main.grid.width, main.grid.height] != source.extent {
+        return Err(PresentError::InvalidGrid {
+            width: source.extent[0],
+            height: source.extent[1],
+            logical_len: main.grid.span.logical_len,
+        });
+    }
     SceneUniform::new(
         source.extent,
         source.level as u32,
@@ -1880,6 +1891,29 @@ mod tests {
         let load = scene_load_color(crate::CLASSIC_PALETTE);
         let sky = crate::exterior_zero(crate::CLASSIC_PALETTE);
         assert_eq!([load.r, load.g, load.b, load.a], sky.map(f64::from));
+
+        let disocclusion = warp_load_color(crate::CLASSIC_PALETTE);
+        let clear = crate::CLASSIC_PALETTE.clear_rgba.map(f64::from);
+        assert_eq!(
+            [
+                disocclusion.r,
+                disocclusion.g,
+                disocclusion.b,
+                disocclusion.a
+            ],
+            clear
+        );
+        assert_ne!(clear, sky.map(f64::from));
+    }
+
+    #[test]
+    fn relief_redraw_refuses_a_retained_grid_from_an_old_extent() {
+        let mut ledger = SceneLedger::default();
+        let sampled = promote_binding_scene(&mut ledger, 62);
+        let mut main = binding_main();
+        main.grid.width /= 2;
+        main.grid.height /= 2;
+        assert!(relief_scene_uniform(&main, &sampled, crate::CLASSIC_PALETTE).is_err());
     }
 
     #[test]
