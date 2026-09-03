@@ -121,6 +121,7 @@ pub struct Presenter {
     config: PresentConfig,
     main: Option<PresentMain>,
     hot: [Option<Pose>; 3],
+    latest_hot_slot: Option<HotSlot>,
     hot_warp_source: [WarpSourceSlot; 3],
     hot_exposed: [bool; 3],
     exposure: ExposureLatch,
@@ -159,6 +160,7 @@ impl Presenter {
             config,
             main: None,
             hot: [None; 3],
+            latest_hot_slot: None,
             hot_warp_source: [WarpSourceSlot::default(); 3],
             hot_exposed: [false; 3],
             exposure: ExposureLatch::default(),
@@ -316,6 +318,7 @@ impl Presenter {
         self.queue
             .write_buffer(&self.gpu.hot_buffer, offset, bytemuck::bytes_of(&uniform));
         self.hot[slot.index() as usize] = pose;
+        self.latest_hot_slot = Some(slot);
         self.hot_warp_source[slot.index() as usize].write_hot(&plan);
         self.hot_exposed[slot.index() as usize] = plan.exposed;
         self.exposure.observe_warp(plan.exposed);
@@ -618,13 +621,9 @@ impl Presenter {
                 self.scene_samples.completed();
                 self.facts.in_flight_scene_id = None;
                 self.facts.last_scene = Some(measurement);
-                let preserve_accepted_best = self
-                    .hot
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, pose)| pose.map(|pose| (index, pose.epoch)))
-                    .max_by_key(|(_, epoch)| *epoch)
-                    .and_then(|(index, _)| {
+                let preserve_accepted_best = self.latest_hot_slot
+                    .and_then(|slot| {
+                        let index = slot.index() as usize;
                         self.hot_warp_source[index]
                             .covering_frame(self.hot_exposed[index], self.ledger.retained())
                     })
