@@ -150,6 +150,9 @@ function liveStatus(facts) {
   if (facts.completed_scene_id === null || facts.completed_scene_id === undefined) {
     return `waiting for first completed scene${surviving(facts)}`;
   }
+  if (facts.scene_mode === "manual" && facts.scene_update_pending) {
+    return `manual: changes pending since scene ${facts.completed_scene_id}${surviving(facts)}`;
+  }
   return `showing scene ${facts.completed_scene_id}: ${facts.refinement_level} ${facts.delivered_width}x${facts.delivered_height} at cap ${facts.delivered_iteration_cap}${surviving(facts)}`;
 }
 
@@ -574,6 +577,26 @@ function bindControls(api) {
     api.app_request_frame();
     showStatus("frame request queued");
   }));
+  document.getElementById("auto-scene").addEventListener("change", event => {
+    try {
+      api.app_set_scene_mode(event.target.checked ? 1 : 0);
+      const facts = refreshFacts();
+      showStatus(liveStatus(facts));
+      if (stillTurning()) scheduleFrame();
+    } catch (error) {
+      fail(error);
+    }
+  });
+  document.getElementById("update-scene").addEventListener("click", () => {
+    try {
+      api.app_update_scene();
+      refreshFacts();
+      showStatus("scene update queued");
+      scheduleFrame();
+    } catch (error) {
+      fail(error);
+    }
+  });
   document.getElementById("measure").addEventListener("click", () => guarded(() => {
     api.app_request_measurement();
     showStatus("measurement request queued; no result claimed");

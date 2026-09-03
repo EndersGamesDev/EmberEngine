@@ -17,7 +17,7 @@ const SAVED: &str = include_str!("../src/saved.rs");
 const WIRE: &str = include_str!("../../worker/src/wire.rs");
 
 /// Every field the page facts must carry, in publication order.
-const PAGE_FACT_FIELDS: [&str; 103] = [
+const PAGE_FACT_FIELDS: [&str; 105] = [
     "abi_version",
     "adapter_name",
     "backend",
@@ -48,6 +48,8 @@ const PAGE_FACT_FIELDS: [&str; 103] = [
     "kernel_mode",
     "refinement_level",
     "refinement_pending",
+    "scene_mode",
+    "scene_update_pending",
     "extent_divisor",
     "active_pixels",
     "worst_case_pixel_iterations",
@@ -306,6 +308,8 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
         "iteration-cap",
         "precision",
         "palette",
+        "auto-scene",
+        "update-scene",
         "one-frame",
         "measure",
     ] {
@@ -412,6 +416,8 @@ fn the_retired_controls_name_nothing_and_the_wasm_boundary_is_complete() {
         "pub fn app_set_centre(",
         "pub fn app_morph_view(",
         "pub fn app_set_precision_mode(",
+        "pub fn app_set_scene_mode(",
+        "pub fn app_update_scene(",
         "pub fn app_preset(",
     ] {
         assert!(LIB.contains(required), "missing wasm entry {required}");
@@ -638,6 +644,17 @@ fn page_facts_carry_every_contract_field_without_fake_aggregate_counts() {
             .contains("warp_precision_mode: present.last_warp.map(|sample| sample.precision_mode)")
     );
     assert!(FRAME.contains("precision_mode: self.main.precision_mode"));
+    assert!(FACTS.contains("scene_mode: loop_facts.scene_mode().as_str()"));
+    assert!(FACTS.contains("scene_update_pending: loop_facts.scene_update_pending()"));
+}
+
+#[test]
+fn scene_update_controls_bind_the_checkbox_and_button_to_distinct_app_commands() {
+    assert!(INDEX.contains(r#"<input id="auto-scene" type="checkbox" checked>"#));
+    assert!(INDEX.contains(r#"<button id="update-scene" type="button">Update scene</button>"#));
+    assert!(MAIN.contains("api.app_set_scene_mode(event.target.checked ? 1 : 0);"));
+    assert!(MAIN.contains("api.app_update_scene();"));
+    assert!(MAIN.contains("facts.scene_mode === \"manual\" && facts.scene_update_pending"));
 }
 
 #[test]
