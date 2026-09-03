@@ -835,6 +835,6 @@ mod tests {
         let mut buffer = WireBuffer::new(Pool::Request, 0, 64).unwrap();
         request.encode_into(&mut buffer).unwrap();
         assert_eq!(request.centre.request_bytes().unwrap(), 628);
-        assert_eq!(buffer.capacity(), 1_088);
+        assert_eq!(buffer.capacity(), 644);
     }
 }
