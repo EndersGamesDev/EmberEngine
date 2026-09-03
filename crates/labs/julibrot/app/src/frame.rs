@@ -623,6 +623,10 @@ impl FrameLoop {
         matches!(self.scene_mode, SceneMode::Manual) && self.scene_update_pending
     }
 
+    const fn hold_refused_warp(&self) -> bool {
+        matches!(self.scene_mode, SceneMode::Manual)
+    }
+
     const fn draft_skipped_count(&self) -> u64 {
         self.draft_skipped_count
     }
@@ -1298,6 +1302,7 @@ mod browser {
             } else {
                 WarpValidation::Ordinary
             };
+            let hold_refused_warp = self.loop_state.hold_refused_warp();
             self.presenter.write_hot(
                 slot,
                 PresentHot {
@@ -1312,6 +1317,7 @@ mod browser {
                     map: hot.pose.map,
                 },
                 validation,
+                hold_refused_warp,
             );
 
             let main_arrived = self.service_arrivals(viewer, now_ms)?;
@@ -1339,6 +1345,7 @@ mod browser {
                         map: hot.pose.map,
                     },
                     WarpValidation::Ordinary,
+                    hold_refused_warp,
                 );
             }
             if self
@@ -1369,6 +1376,7 @@ mod browser {
                         map: hot.pose.map,
                     },
                     WarpValidation::Final,
+                    hold_refused_warp,
                 );
             }
             let relief_redraw = self.presenter.accepted_relief_redraw(slot);

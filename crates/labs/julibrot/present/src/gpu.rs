@@ -55,6 +55,7 @@ struct SampleTracker {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct WarpSourceSlot {
     planned: Option<(u64, u32)>,
+    held_stale: bool,
     relief_redraw: bool,
 }
 
@@ -64,6 +65,7 @@ impl WarpSourceSlot {
             .source_scene_id
             .zip(plan.source_texture_index)
             .filter(|_| plan.source_valid);
+        self.held_stale = plan.kind == WarpKind::HoldStale;
         self.relief_redraw = plan.kind == WarpKind::ReliefRedraw;
     }
 
@@ -79,6 +81,17 @@ impl WarpSourceSlot {
             self.frame(retained)
         } else {
             None
+        }
+    }
+
+    fn accepted_frame<'a>(
+        &self,
+        retained: Option<&'a crate::SceneFrame>,
+    ) -> Option<&'a crate::SceneFrame> {
+        if self.held_stale {
+            None
+        } else {
+            self.frame(retained)
         }
     }
 }
@@ -234,11 +247,20 @@ impl Presenter {
     }
 
     /// Writes exactly one 288-byte HOT payload into the checked three-slot ring.
+    ///
+    /// When `hold_refused_warp` is true, a clear-only plan with a retained picture becomes an
+    /// identity `HoldStale` plan so manual mode cannot replace that picture with a permanent clear.
     #[allow(
         clippy::too_many_lines,
         reason = "HOT publication keeps pose, source identity, and exposure in one transaction"
     )]
-    pub fn write_hot(&mut self, slot: HotSlot, hot: PresentHot, validation: WarpValidation) {
+    pub fn write_hot(
+        &mut self,
+        slot: HotSlot,
+        hot: PresentHot,
+        validation: WarpValidation,
+        hold_refused_warp: bool,
+    ) {
         let screen_rows = match hot.map {
             PoseMap::Mapped(map) => pack_homography_rows(map.rows),
             PoseMap::EdgeOn => Some(identity_rows()),
@@ -274,6 +296,7 @@ impl Presenter {
                 }
             },
         );
+        let plan = apply_hold_policy(plan, self.ledger.retained(), hold_refused_warp);
         let selected = selected_or_classic(self.main.as_ref());
         // A refused control falls back to the neutral row rather than to a stale one, so a
         // non-finite value shows the flat chart instead of the last thing that happened to be
@@ -359,7 +382,7 @@ impl Presenter {
     #[must_use]
     pub fn accepted_warp_source(&self, slot: HotSlot) -> Option<(RefinementLevel, bool)> {
         self.hot_warp_source[slot.index() as usize]
-            .frame(self.ledger.retained())
+            .accepted_frame(self.ledger.retained())
             .map(|frame| (frame.level, self.hot_exposed[slot.index() as usize]))
     }
 
@@ -1697,6 +1720,26 @@ const fn clear_warp_plan(edge_on: bool, exposed: bool) -> crate::WarpPlan {
     }
 }
 
+fn apply_hold_policy(
+    mut plan: crate::WarpPlan,
+    retained: Option<&crate::SceneFrame>,
+    hold_refused_warp: bool,
+) -> crate::WarpPlan {
+    if !hold_refused_warp || plan.kind != WarpKind::ClearOnly {
+        return plan;
+    }
+    let Some(frame) = retained else {
+        return plan;
+    };
+    plan.rows = identity_rows();
+    plan.source_scene_id = Some(frame.scene_id);
+    plan.source_texture_index = Some(frame.texture_index);
+    plan.source_valid = true;
+    plan.exposed = false;
+    plan.kind = WarpKind::HoldStale;
+    plan
+}
+
 #[cfg(test)]
 mod tests {
     use ember_julibrot_kernels::{EscapeGrid, RefinementLevel};
@@ -1806,6 +1849,44 @@ mod tests {
         assert!(!plan.source_valid);
         assert!(plan.exposed);
         assert_eq!(plan.rows[2], [0.0, 0.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn manual_hold_keeps_a_refused_warp_on_the_retained_picture() {
+        let mut ledger = SceneLedger::default();
+        let sampled = promote_binding_scene(&mut ledger, 37);
+        let held = apply_hold_policy(clear_warp_plan(false, true), ledger.retained(), true);
+        assert_eq!(held.kind, WarpKind::HoldStale);
+        assert_eq!(held.source_scene_id, Some(sampled.scene_id));
+        assert_eq!(held.source_texture_index, Some(sampled.texture_index));
+        assert!(held.source_valid);
+        assert!(!held.exposed);
+        assert_eq!(held.rows, identity_rows());
+
+        let mut hot = WarpSourceSlot::default();
+        hot.write_hot(&held);
+        assert_eq!(
+            hot.frame(ledger.retained()).map(|frame| frame.scene_id),
+            Some(37)
+        );
+        assert_eq!(hot.accepted_frame(ledger.retained()), None);
+    }
+
+    #[test]
+    fn auto_refusal_still_clears_and_manual_bounded_warp_stays_accepted() {
+        let mut ledger = SceneLedger::default();
+        let sampled = promote_binding_scene(&mut ledger, 41);
+        let cleared = apply_hold_policy(clear_warp_plan(false, true), ledger.retained(), false);
+        assert_eq!(cleared.kind, WarpKind::ClearOnly);
+        assert!(!cleared.source_valid);
+
+        let mut bounded = clear_warp_plan(false, false);
+        bounded.kind = WarpKind::AnchorHomography;
+        bounded.source_scene_id = Some(sampled.scene_id);
+        bounded.source_texture_index = Some(sampled.texture_index);
+        bounded.source_valid = true;
+        let accepted = apply_hold_policy(bounded, ledger.retained(), true);
+        assert_eq!(accepted, bounded);
     }
 
     #[test]

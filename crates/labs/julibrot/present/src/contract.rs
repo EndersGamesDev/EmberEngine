@@ -202,6 +202,8 @@ pub enum WarpKind {
     AnchorHomography,
     /// Honest clear because no compatible source or finite plan exists.
     ClearOnly,
+    /// Unmoved retained picture held while manual mode waits for an explicit scene update.
+    HoldStale,
     /// Retained-record scene-mesh redraw because no image map can carry the relief deformation.
     ReliefRedraw,
 }
@@ -213,6 +215,7 @@ impl WarpKind {
         match self {
             Self::AnchorHomography => "AnchorHomography",
             Self::ClearOnly => "ClearOnly",
+            Self::HoldStale => "HoldStale",
             Self::ReliefRedraw => "ReliefRedraw",
         }
     }

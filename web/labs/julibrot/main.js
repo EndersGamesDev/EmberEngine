@@ -159,6 +159,9 @@ function liveStatus(facts) {
     return `waiting for first completed scene${surviving(facts)}`;
   }
   if (facts.scene_mode === "manual" && facts.scene_update_pending) {
+    if (facts.warp_kind === "HoldStale") {
+      return `manual: warp refused, showing scene ${facts.completed_scene_id} unmoved — Update scene to re-render${surviving(facts)}`;
+    }
     return `manual: changes pending since scene ${facts.completed_scene_id}${surviving(facts)}`;
   }
   return `showing scene ${facts.completed_scene_id}: ${facts.refinement_level} ${facts.delivered_width}x${facts.delivered_height} at cap ${facts.delivered_iteration_cap}${surviving(facts)}`;
