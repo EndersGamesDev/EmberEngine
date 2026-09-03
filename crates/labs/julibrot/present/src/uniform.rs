@@ -212,6 +212,63 @@ mod tests {
     }
 
     #[test]
+    fn the_packed_lanes_carry_the_numbers_the_shader_reads() {
+        // This asserts the bytes a shader samples, not a Rust re-statement of the algebra. The
+        // browser found d4 reframing a height-zero chart that both the WGSL and the CPU mirror say
+        // it cannot touch, and a mirror test cannot see that class of divergence at all.
+        use crate::{camera_rotation, view_rotation, view_scale};
+        let uniform = HotUniform {
+            camera: camera_rotation(0.0, 0.0).expect("neutral observer"),
+            view_scale: view_scale(0.0, 8.0, 8.0).expect("neutral distances"),
+            view_rotation: view_rotation(0.0, 0.0).expect("neutral VIEW"),
+            homography_row_0: [1.0, 0.0, 0.0, 0.0],
+            homography_row_1: [0.0, 1.0, 0.0, 0.0],
+            homography_row_2: [0.0, 0.0, 1.0, 0.0],
+            clear_rgba: [0.0; 4],
+            flags: [7, 0, 1, 0],
+        };
+        let bytes = bytemuck::bytes_of(&uniform);
+        assert_eq!(bytes.len(), 128);
+        let lane = |offset: usize| -> [f32; 4] {
+            core::array::from_fn(|index| {
+                let start = offset + index * 4;
+                f32::from_le_bytes([
+                    bytes[start],
+                    bytes[start + 1],
+                    bytes[start + 2],
+                    bytes[start + 3],
+                ])
+            })
+        };
+        // Byte 0 is the observer the vertex reads as camera.x/.y (yaw) and .z/.w (pitch).
+        assert_eq!(lane(0), [1.0, 0.0, 1.0, 0.0]);
+        // Byte 16 is [h, d5, d4, reserved]: the vertex reads .x as the height amplitude, .y as the
+        // five-to-four pole, and .z as both the four-to-three pole and the observer distance.
+        assert_eq!(lane(16), [0.0, 8.0, 8.0, 0.0]);
+        assert_eq!(lane(32), [1.0, 0.0, 1.0, 0.0]);
+        // The retired view discriminant is a reserved zero.
+        assert_eq!(&bytes[124..128], &0_u32.to_le_bytes());
+        let moved = HotUniform {
+            view_scale: view_scale(1.5, 2.0, 40.0).expect("moved distances"),
+            ..uniform
+        };
+        assert_eq!(lane_of(&moved, 16), [1.5, 2.0, 40.0, 0.0]);
+    }
+
+    fn lane_of(uniform: &HotUniform, offset: usize) -> [f32; 4] {
+        let bytes = bytemuck::bytes_of(uniform);
+        core::array::from_fn(|index| {
+            let start = offset + index * 4;
+            f32::from_le_bytes([
+                bytes[start],
+                bytes[start + 1],
+                bytes[start + 2],
+                bytes[start + 3],
+            ])
+        })
+    }
+
+    #[test]
     fn ring_stride_and_slots_are_checked() {
         assert_eq!(hot_stride(256), Ok(256));
         assert_eq!(hot_ring_bytes(256), Ok(768));
