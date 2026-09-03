@@ -1458,9 +1458,6 @@ mod tests {
     }
 
     const fn zero_record() -> ReferenceOrbitRecord {
-        ReferenceOrbitRecord {
-            re: 0.0,
-            im: 0.0,
-        }
+        ReferenceOrbitRecord { re: 0.0, im: 0.0 }
     }
 }

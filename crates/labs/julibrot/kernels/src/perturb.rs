@@ -202,12 +202,7 @@ fn record(rebases: u32, glitch: bool) -> KernelSample {
     }
 }
 
-fn advance(
-    reference: [f32; 2],
-    delta: [f32; 2],
-    delta_c: [f32; 2],
-    exponent: i32,
-) -> [f32; 2] {
+fn advance(reference: [f32; 2], delta: [f32; 2], delta_c: [f32; 2], exponent: i32) -> [f32; 2] {
     let linear = multiply(complex_mul(reference, delta), 2.0);
     let quadratic = scale(complex_mul(delta, delta), exponent);
     add(add(linear, quadratic), delta_c)
@@ -345,10 +340,7 @@ mod tests {
     use crate::{GridExtent, KernelError, PerturbUniform, RefinementLevel};
     use ember_julibrot_math::{EscapeParams, Plane, ReferenceOrbitRecord, ScaleSplit};
 
-    const ZERO: ReferenceOrbitRecord = ReferenceOrbitRecord {
-        re: 0.0,
-        im: 0.0,
-    };
+    const ZERO: ReferenceOrbitRecord = ReferenceOrbitRecord { re: 0.0, im: 0.0 };
 
     fn uniform(max_iter: u32, orbit_length: u32) -> PerturbUniform {
         PerturbUniform::pack(
@@ -525,10 +517,7 @@ mod tests {
             ZERO,
             ReferenceOrbitRecord { re: 2.0, ..ZERO },
             ReferenceOrbitRecord { re: 6.0, ..ZERO },
-            ReferenceOrbitRecord {
-                re: 38.0,
-                ..ZERO
-            },
+            ReferenceOrbitRecord { re: 38.0, ..ZERO },
         ];
         let zero_orbit = [ZERO, ZERO];
         let cases: &[(&[ReferenceOrbitRecord], [f32; 4], i32, u32)] = &[
@@ -591,8 +580,8 @@ mod tests {
         };
         let offset = [2.0_f32.powi(-21), 0.0, 0.0, 0.0];
         let uniforms = uniform(1, 1);
-        let actual = perturb_scaled_offset(&uniforms, &[boundary], offset)
-            .expect("boundary kernel mirror");
+        let actual =
+            perturb_scaled_offset(&uniforms, &[boundary], offset).expect("boundary kernel mirror");
         let (expected, envelope) = ember_julibrot_math::perturb_scaled_f64_with_envelope(
             &[boundary],
             offset.map(f64::from),

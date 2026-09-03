@@ -372,11 +372,11 @@ fn max_consumed_word_error_ulps(
     right: ReferenceOrbitRecord,
 ) -> Option<u32> {
     [(left.re, right.re), (left.im, right.im)]
-    .into_iter()
-    .map(|(a, b)| ulp_distance(a, b))
-    .try_fold(0, |maximum, distance| {
-        distance.map(|value| maximum.max(value))
-    })
+        .into_iter()
+        .map(|(a, b)| ulp_distance(a, b))
+        .try_fold(0, |maximum, distance| {
+            distance.map(|value| maximum.max(value))
+        })
 }
 
 fn ulp_distance(left: f32, right: f32) -> Option<u32> {
@@ -618,10 +618,8 @@ mod tests {
         reason = "this is the explicit production-shaped ABI measurement"
     )]
     fn production_orbit_corpus_consumes_only_the_high_words() -> Result<(), MathError> {
-        const PRESETS: [(&str, [f64; 4]); 2] = [
-            ("Mandelbrot", [0.0; 4]),
-            ("Julia", [0.0, 0.0, -0.8, 0.156]),
-        ];
+        const PRESETS: [(&str, [f64; 4]); 2] =
+            [("Mandelbrot", [0.0; 4]), ("Julia", [0.0, 0.0, -0.8, 0.156])];
         const ZOOMS: [f64; 4] = [14.0, 40.0, 80.0, 256.0];
         const CAPS: [u32; 2] = [512, 4_096];
         let mut fixture_count = 0_usize;
@@ -633,16 +631,16 @@ mod tests {
                     let plan = precision_for(zoom_log2, 960, max_iter)?;
                     let centre = BigCentre::from_f64(coordinates, plan.requested_bits)?;
                     let params = EscapeParams::new(max_iter);
-                    let mut orbit = OrbitState::new(&centre, bits_for_digits(plan.working_digits)?)?;
+                    let mut orbit =
+                        OrbitState::new(&centre, bits_for_digits(plan.working_digits)?)?;
                     let mut fixture_changes = 0_usize;
                     let mut fixture_records = 0_usize;
                     let mut excluded_terminal_records = 0_usize;
                     for index in 0..max_iter {
                         let re = split_scalar(&orbit.z.re)?;
                         let im = split_scalar(&orbit.z.im)?;
-                        let advanced = orbit
-                            .advance(params)?
-                            .ok_or(MathError::InvalidOrbitState)?;
+                        let advanced =
+                            orbit.advance(params)?.ok_or(MathError::InvalidOrbitState)?;
                         let reconstructed_re = f64::from(re[0]) + f64::from(re[1]);
                         let reconstructed_im = f64::from(im[0]) + f64::from(im[1]);
                         if reconstructed_re.hypot(reconstructed_im) > 16.0 {

@@ -1652,9 +1652,7 @@ mod tests {
 
     #[test]
     fn compact_reference_records_expand_to_zero_padded_rgba_texels() {
-        let records = [
-            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
-        ];
+        let records = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
         let texels = expand_reference_texels(&records, 2).expect("fixture has two records");
         assert_eq!(texels.len(), 32);
         assert_eq!(&texels[..8], &records[..8]);

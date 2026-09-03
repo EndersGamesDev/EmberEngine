@@ -553,7 +553,9 @@ const fn encode_request_bits(
 ) -> u32 {
     match precision_mode {
         PrecisionMode::Deterministic => reason.bits(),
-        PrecisionMode::PictureFast => reason.bits() | ((reference_pass as u32) << REFERENCE_PASS_SHIFT),
+        PrecisionMode::PictureFast => {
+            reason.bits() | ((reference_pass as u32) << REFERENCE_PASS_SHIFT)
+        }
     }
 }
 

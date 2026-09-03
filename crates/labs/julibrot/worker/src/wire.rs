@@ -743,10 +743,7 @@ mod tests {
         assert_eq!(size_of::<super::ErrorRecord>(), ERROR_RECORD_BYTES);
         assert_eq!(size_of::<super::OrbitVerificationFacts>(), ORBIT_FACT_BYTES);
         assert_eq!(size_of::<ReferenceOrbitRecord>(), ORBIT_RECORD_BYTES);
-        assert_eq!(
-            buffer_capacity(64).unwrap(),
-            MIN_BUFFER_CAPACITY_BYTES
-        );
+        assert_eq!(buffer_capacity(64).unwrap(), MIN_BUFFER_CAPACITY_BYTES);
     }
 
     #[test]
@@ -818,14 +815,8 @@ mod tests {
     #[test]
     fn orbit_and_error_payloads_have_exact_bytes_and_zero_tail() {
         let records = [
-            ReferenceOrbitRecord {
-                re: 1.0,
-                im: -2.0,
-            },
-            ReferenceOrbitRecord {
-                re: 0.0,
-                im: 0.0,
-            },
+            ReferenceOrbitRecord { re: 1.0, im: -2.0 },
+            ReferenceOrbitRecord { re: 0.0, im: 0.0 },
         ];
         let mut orbit = WireBuffer::new(Pool::Orbit, 0, 64).unwrap();
         let facts = OrbitVerificationFacts::stable(2, 1);
