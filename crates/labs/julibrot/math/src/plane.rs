@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn tilted_reflection_maps_a_feature_from_first_principles() -> Result<(), MathError> {
         let retained = ObjectAngles {
-            rho_13: 0.4,
+            rho_13: -0.4,
             rho_24: -0.9,
             rho_34: 0.2,
             ..ObjectAngles::IDENTITY
