@@ -2,6 +2,7 @@
 
 const INDEX: &str = include_str!("../../../../../web/labs/julibrot/index.html");
 const MAIN: &str = include_str!("../../../../../web/labs/julibrot/main.js");
+const STYLE: &str = include_str!("../../../../../web/labs/julibrot/style.css");
 const WORKER: &str = include_str!("../../../../../web/labs/julibrot/worker.js");
 const MANIFEST: &str = include_str!("../Cargo.toml");
 const LIB: &str = include_str!("../src/lib.rs");
@@ -206,14 +207,57 @@ fn acquire_path_is_non_panicking_and_initial_frame_is_only_clear_plus_text() {
     assert!(!INDEX.contains("diagnostic pattern"));
 }
 
+/// The page is one viewport-filling stage, and the picture is one of its regions.
+///
+/// Each region is named, because the arrangement is the feature: the transition bar above the
+/// view, a view box in each side column, the render surface between them, the zoom bar below, and
+/// every remaining control in a strip that scrolls inside its own row. A layout that quietly went
+/// back to one tall column would still pass every control assertion below and would still be the
+/// bug this lane was opened for.
+#[test]
+fn the_page_is_one_stage_with_the_picture_between_the_two_view_boxes() {
+    for region in [
+        "id=\"masthead\"",
+        "id=\"morph-bar\"",
+        "id=\"box-a\"",
+        "id=\"stage-view\"",
+        "id=\"box-b\"",
+        "id=\"zoom-bar\"",
+        "id=\"dash\"",
+        "id=\"facts-panel\"",
+    ] {
+        assert!(INDEX.contains(region), "missing layout region {region}");
+    }
+    // Order on the page is the layout: A, then the picture, then B.
+    let box_a = INDEX.find("id=\"box-a\"").expect("view box A");
+    let view = INDEX.find("id=\"stage-view\"").expect("the render surface");
+    let box_b = INDEX.find("id=\"box-b\"").expect("view box B");
+    assert!(box_a < view && view < box_b);
+    // The transition bar is above the view and the zoom bar below it.
+    let morph = INDEX.find("id=\"morph-bar\"").expect("the transition bar");
+    let zoom = INDEX.find("id=\"zoom-bar\"").expect("the zoom bar");
+    assert!(morph < view && view < zoom);
+    // The canvas keeps its delivered grid; only CSS scales it.
+    assert!(INDEX.contains(r#"<canvas id="julibrot" width="960" height="540">"#));
+    // The stylesheet sizes the viewer to the canvas rather than letting it stretch, because the
+    // marker and the rubber band are positioned in the viewer's own coordinates.
+    assert!(STYLE.contains("aspect-ratio: 16 / 9"));
+    assert!(STYLE.contains("100dvh"));
+    assert!(
+        !STYLE.contains(".viewer { position: relative; aspect-ratio: 16 / 9; border"),
+        "a border on the viewer would take two pixels out of the pointer conversion's aspect"
+    );
+}
+
 #[test]
 fn page_has_one_canvas_status_overlay_and_every_requested_control() {
     assert_eq!(INDEX.matches("<canvas").count(), 1);
     assert_eq!(INDEX.matches("id=\"status\"").count(), 1);
     assert_eq!(INDEX.matches("id=\"facts-grid\"").count(), 1);
+    // The top-level preset selector is retired: its rows moved into the two view boxes.
+    assert!(!INDEX.contains("id=\"preset\""));
     // One control per view degree of freedom plus the one precision-policy switch.
     for id in [
-        "preset",
         "theta-1",
         "theta-2",
         "origin-z-re",
@@ -257,9 +301,15 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
         "unpaired number box"
     );
     assert!(MAIN.contains("SET(id, NUMBER(`"), "unpaired origin slider");
-    // A preset writes the elements and then takes the same handlers a user's movement takes.
-    assert!(MAIN.contains("api.app_preset(Number(event.target.value))"));
+    // A row writes the elements and then takes the same handlers a user's movement takes. The
+    // built-in rows are read from the app until it runs out of them, so the page never names one.
+    assert!(MAIN.contains("row = JSON.parse(api.app_preset(id));"));
     assert!(MAIN.contains("for (const apply of Object.values(APPLY)) apply();"));
+    // Every field of a row reaches its control by name, so a row that grows a field reaches a
+    // slider named after it with no edit to the loader. This is the whole of the mapping.
+    assert!(MAIN.contains(r#"const ROW_CONTROL_ALIAS = { height_scale: "height", zoom_log2: "scale" };"#));
+    assert!(MAIN.contains(r#"field.replaceAll("_", "-")"#));
+    assert!(MAIN.contains("for (const [field, value] of Object.entries(row)) {"));
     assert_eq!(MAIN.matches("api.app_set_plane_angles(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_plane_origin(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_view_angles(").count(), 1);
@@ -276,6 +326,7 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
         "id=\"view\"",
         "id=\"julia-re\"",
         "id=\"julia-im\"",
+        "id=\"preset\"",
         "Tumbled",
         "Flat",
     ] {
@@ -326,10 +377,12 @@ fn the_view_does_not_respond_to_the_wheel_and_says_so_nowhere() {
 }
 
 #[test]
-fn the_canvas_navigates_by_target_box_and_scale() {
+fn the_canvas_navigates_by_crosshair_translation_box_and_scale() {
     // One pointer gesture reaches one entry: the page reports the rectangle it drew and the Rust
     // boundary decides whether that was a box or a click, so the two cannot drift apart here.
-    assert!(MAIN.contains("api.app_zoom_box(x, y, to[0], to[1], bounds.width, bounds.height)"));
+    assert!(MAIN.contains(
+        "api.app_zoom_box(started.x, started.y, to[0], to[1], bounds.width, bounds.height)"
+    ));
     assert_eq!(MAIN.matches("api.app_zoom_box(").count(), 1);
     assert!(STATE.contains("pub fn is_box_selection("));
     assert!(STATE.contains("pub fn box_zoom_delta_log2("));
@@ -340,6 +393,63 @@ fn the_canvas_navigates_by_target_box_and_scale() {
     // The marker and the rubber band are DOM overlays, not scene geometry.
     for element in ["id=\"target\"", "id=\"rubber\""] {
         assert!(INDEX.contains(element), "missing overlay {element}");
+    }
+    // Shift makes the box; a plain drag is a translation. The page says so in one line.
+    assert!(INDEX.contains("shift and drag a box to fill the screen with it"));
+    assert!(INDEX.contains("drag to translate"));
+    assert!(MAIN.contains("box: event.shiftKey,"));
+}
+
+/// A click names a point on the slice and moves nothing; every zoom is taken about that point.
+///
+/// The three claims are separable and all three used to be false: a click recentred the picture,
+/// the marker was drawn at a remembered pixel rather than re-projected, and the `scale` slider
+/// zoomed about the screen centre whatever the marker said. Each is pinned here at the boundary it
+/// crosses, because a page that keeps its own idea of where the crosshair is will always drift.
+#[test]
+fn a_click_names_a_point_and_every_zoom_is_taken_about_it() {
+    // The click boundary stores the point and does not navigate.
+    let set_target = LIB
+        .split_once("pub fn app_set_target(")
+        .expect("the click entry exists")
+        .1
+        .split_once("pub fn app_pan_px(")
+        .expect("the click entry ends")
+        .0;
+    assert!(set_target.contains("set_crosshair(anchor)"));
+    assert!(
+        !set_target.contains("set_target("),
+        "a click must not be a navigation edit"
+    );
+    // The conversion happens once, in the app, and the projection is its exact inverse.
+    assert!(STATE.contains("pub fn css_from_anchor_px_up("));
+    assert!(STATE.contains("pub fn set_crosshair(&mut self, anchor_px_up: [f64; 2])"));
+    assert!(STATE.contains("pub fn crosshair_plane_px(&self) -> Option<[f64; 2]>"));
+    assert!(STATE.contains("pub fn zoom_about_crosshair("));
+    assert!(STATE.contains("pub fn pan_px("));
+    // The slider goes through the crosshair anchor rather than the screen centre.
+    assert!(STATE.contains("self.zoom_about_crosshair(zoom_log2 - self.requested.zoom_log2)"));
+    // A row load forgets the point, because the point belonged to the picture that was replaced.
+    assert_eq!(STATE.matches("self.crosshair = None;").count(), 3);
+    // The page draws the marker from the projection and never from a pixel it remembered.
+    assert!(MAIN.contains("const drawCrosshair = () => {"));
+    assert!(MAIN.contains("api.app_crosshair_json(bounds.width, bounds.height)"));
+    assert!(MAIN.contains("TARGET.style.left = `${crosshair.crosshair_css[0]}px`;"));
+    assert_eq!(MAIN.matches("TARGET.style.left").count(), 1);
+    assert!(
+        !MAIN.contains("const showTarget"),
+        "the page must not place the marker itself"
+    );
+    // The projected position and the point behind it are published, so the oracle is a number.
+    for fact in [
+        "crosshair_present",
+        "crosshair_plane_px",
+        "crosshair_css",
+        "crosshair_on_surface",
+        "crosshair_precision_bits",
+        "crosshair_point_f64",
+    ] {
+        assert!(LIB.contains(fact), "missing published crosshair fact {fact}");
     }
 }
 
@@ -352,6 +462,14 @@ fn two_view_boxes_share_one_path_from_a_control_value_to_the_worker() {
         "id=\"load-b\"",
         "id=\"readout-a\"",
         "id=\"readout-b\"",
+        "id=\"rows-a\"",
+        "id=\"rows-b\"",
+        "id=\"name-a\"",
+        "id=\"name-b\"",
+        "id=\"delete-a\"",
+        "id=\"delete-b\"",
+        "id=\"message-a\"",
+        "id=\"message-b\"",
         "id=\"morph\"",
     ] {
         assert!(
@@ -371,11 +489,20 @@ fn two_view_boxes_share_one_path_from_a_control_value_to_the_worker() {
     assert!(
         SAVED.contains("let precision_bits = first.precision_bits.max(second.precision_bits);")
     );
+    // One applier, reached by a preset row, a saved row, a load and a morph alike.
     assert_eq!(
         MAIN.matches("for (const apply of Object.values(APPLY)) apply();")
             .count(),
-        2
+        1
     );
+    // Both sides list the same rows, a save needs a name, a taken name is refused, and only a
+    // saved row can be deleted — the built-in rows come from the app and are never removable.
+    assert!(MAIN.contains("const rowEntries = () => BUILT_IN.concat("));
+    assert!(MAIN.contains(r#"say(box, "a saved row needs a name");"#));
+    assert!(MAIN.contains("is already taken"));
+    assert!(MAIN.contains(r#"say(box, "a built-in row cannot be deleted");"#));
+    assert!(MAIN.contains(r#"const ROWS_KEY = "julibrot.rows";"#));
+    assert!(MAIN.contains("ROWS.named.filter(entry => entry.name !== name)"));
     assert_eq!(MAIN.matches("api.app_set_centre(").count(), 1);
     assert_eq!(MAIN.matches("api.app_morph_view(").count(), 1);
     assert_eq!(MAIN.matches("api.app_saved_view_json()").count(), 1);
@@ -398,13 +525,15 @@ fn pointer_input_reaches_the_worker_in_render_grid_pixels() {
     assert!(STATE.contains("pub fn anchor_px_up("));
     assert!(STATE.contains("pub fn drag_delta_px_down("));
     assert!(STATE.contains("fn css_to_grid_scale("));
-    assert_eq!(LIB.matches("let grid = app.grid_extent();").count(), 2);
+    assert_eq!(LIB.matches("let grid = app.grid_extent();").count(), 4);
     assert!(LIB.contains("pointer_css_x: f64"));
     assert!(LIB.contains("rect_css_height: f64"));
     assert!(LIB.contains("end_css_y_down: f64"));
-    // The marker is placed by the page in its own pixels; nothing else halves the canvas.
-    assert_eq!(MAIN.matches("bounds.width / 2").count(), 1);
-    assert_eq!(MAIN.matches("bounds.height / 2").count(), 1);
+    // The page owns no screen arithmetic at all any more: it neither halves the canvas nor scales
+    // a pixel, so CSS scaling of the canvas cannot put the marker and the pointer in two places.
+    assert!(!MAIN.contains("bounds.width / 2"));
+    assert!(!MAIN.contains("bounds.height / 2"));
+    assert!(!MAIN.contains("devicePixelRatio"));
 }
 
 #[test]

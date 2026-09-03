@@ -6,6 +6,12 @@ const TARGET = document.getElementById("target");
 const RUBBER = document.getElementById("rubber");
 const MORPH = document.getElementById("morph");
 const BOXES = { a: null, b: null };
+// The named rows every side can choose from, and which row each side last chose. Built-in rows are
+// not in here: they come from the app, they are never deletable, and they never need storing.
+const ROWS = { named: [], selection: { a: "", b: "" } };
+// The page's own pan-versus-click threshold, which mirrors the boundary's box-versus-click one: a
+// gesture too short to be a translation is the click it looked like, and the app decides the rest.
+const CLICK_THRESHOLD_PX = 4;
 // The frame loop must not be able to latch. A `requestAnimationFrame` queued while the tab or the
 // pane is not painting is never called, so a flag set at schedule time and cleared only inside that
 // callback outlives the frame it was guarding: every later schedule returns immediately while
@@ -21,30 +27,60 @@ let FRAME_FALLBACK_TIMER = null;
 const FRAME_COUNTS = { schedules: 0, raf: 0, fallback: 0, latch_clears: 0, wakeups: 0 };
 let STORAGE_STATUS = "available";
 
-// One key per box. Every access is wrapped because a private window, cleared site data, or a
-// browser told to refuse storage makes the accessor itself throw rather than return nothing.
+// One key per box, and one more for the named rows and the two selections. Every access goes
+// through this pair, because a private window, cleared site data, or a browser told to refuse
+// storage makes the accessor itself throw rather than return nothing, and one wrapped reader and
+// one wrapped writer are the whole of the page's exposure to that.
 const STORAGE_KEY = box => `julibrot.view.${box}`;
+const ROWS_KEY = "julibrot.rows";
 
-function readStoredView(box) {
+function readStoredJson(key) {
   try {
-    const text = localStorage.getItem(STORAGE_KEY(box));
-    if (!text) return null;
-    const row = JSON.parse(text);
-    if (!row || typeof row !== "object" || !row.centre || !Array.isArray(row.centre.coords)) return null;
-    if (row.centre.coords.length !== 4) return null;
-    return row;
+    const text = localStorage.getItem(key);
+    return text ? JSON.parse(text) : null;
   } catch (error) {
     STORAGE_STATUS = `unavailable: ${error && error.name ? error.name : "refused"}`;
     return null;
   }
 }
 
-function writeStoredView(box, row) {
+function writeStoredJson(key, value) {
   try {
-    localStorage.setItem(STORAGE_KEY(box), JSON.stringify(row));
+    localStorage.setItem(key, JSON.stringify(value));
   } catch (error) {
     STORAGE_STATUS = `unavailable: ${error && error.name ? error.name : "refused"}`;
   }
+}
+
+// A stored row is a row only if it carries the four-coordinate encoded centre. Anything else is
+// absent, never a view the page claims to hold and could not decode.
+function isStoredRow(row) {
+  if (!row || typeof row !== "object" || !row.centre || !Array.isArray(row.centre.coords)) return false;
+  return row.centre.coords.length === 4;
+}
+
+function readStoredView(box) {
+  const row = readStoredJson(STORAGE_KEY(box));
+  return isStoredRow(row) ? row : null;
+}
+
+function writeStoredView(box, row) {
+  writeStoredJson(STORAGE_KEY(box), row);
+}
+
+// The named rows and the two selections travel as one record, so one read restores both and a
+// malformed half is dropped rather than taken as a list the page could not read.
+function readStoredRows() {
+  const stored = readStoredJson(ROWS_KEY);
+  const rows = stored && Array.isArray(stored.rows) ? stored.rows : [];
+  const selection = stored && stored.selection && typeof stored.selection === "object" ? stored.selection : {};
+  return {
+    rows: rows.filter(entry => entry && typeof entry.name === "string" && entry.name !== "" && isStoredRow(entry.row)),
+    selection: {
+      a: typeof selection.a === "string" ? selection.a : "",
+      b: typeof selection.b === "string" ? selection.b : "",
+    },
+  };
 }
 
 function centreDigits(zoomLog2) {
@@ -120,6 +156,7 @@ function pageFacts() {
     view_box_b_held: BOXES.b !== null,
     morph_t: MORPH.disabled ? null : Number(MORPH.value),
     view_box_storage: STORAGE_STATUS,
+    named_rows_held: ROWS.named.length,
     frame_schedules: FRAME_COUNTS.schedules,
     frames_from_raf: FRAME_COUNTS.raf,
     frames_from_fallback: FRAME_COUNTS.fallback,
@@ -151,9 +188,33 @@ const ORIGIN = [
   ["origin-c-im", "c_im"],
 ];
 
+// A row is written into the controls field by field, by name: the control that carries a field is
+// the one whose id is the field's name with underscores as dashes, and the two fields whose control
+// is named differently are the only exceptions. Nothing below counts the fields, so a row that
+// grows a new angle reaches its slider with no edit here, as long as the slider is named after it.
+const ROW_CONTROL_ALIAS = { height_scale: "height", zoom_log2: "scale" };
+const controlFor = field => document.getElementById(ROW_CONTROL_ALIAS[field] ?? field.replaceAll("_", "-"));
+
 function bindControls(api) {
+  // The crosshair is a projection, never a memory of a pixel: the app is asked where the stored
+  // point falls under the current map, and the marker goes there. That is what makes it an
+  // accuracy oracle — pan, zoom, or let a reference land, and it stays on its feature or it does
+  // not, visibly, with the numbers beside it in the facts.
+  const drawCrosshair = () => {
+    const bounds = CANVAS.getBoundingClientRect();
+    if (!(bounds.width > 0 && bounds.height > 0)) return {};
+    const crosshair = JSON.parse(api.app_crosshair_json(bounds.width, bounds.height));
+    if (!crosshair.crosshair_present) {
+      TARGET.hidden = true;
+      return crosshair;
+    }
+    TARGET.style.left = `${crosshair.crosshair_css[0]}px`;
+    TARGET.style.top = `${crosshair.crosshair_css[1]}px`;
+    TARGET.hidden = !crosshair.crosshair_on_surface;
+    return crosshair;
+  };
   const refreshFacts = () => {
-    const facts = Object.assign(JSON.parse(api.app_facts_json()), pageFacts());
+    const facts = Object.assign(JSON.parse(api.app_facts_json()), pageFacts(), drawCrosshair());
     renderFacts(facts);
     return facts;
   };
@@ -277,92 +338,130 @@ function bindControls(api) {
   document.getElementById("palette").addEventListener("change", event => guarded(() => api.app_set_palette(Number(event.target.value))));
   document.getElementById("iteration-cap").addEventListener("change", event => guarded(() => api.app_set_iteration_cap(Number(event.target.value))));
   document.getElementById("precision").addEventListener("change", () => guarded(APPLY.precision));
-  document.getElementById("preset").addEventListener("change", event => guarded(() => {
-    const row = JSON.parse(api.app_preset(Number(event.target.value)));
-    SET("theta-1", row.theta_1);
-    SET("theta-2", row.theta_2);
-    for (const [index, [id]] of ORIGIN.entries()) {
-      SET(id, row.origin[index]);
-      SET(`${id}-number`, row.origin[index]);
-    }
-    SET("view-theta-1", row.view_theta_1);
-    SET("view-theta-2", row.view_theta_2);
-    SET("camera-yaw", row.camera_yaw);
-    SET("camera-pitch", row.camera_pitch);
-    SET("height", row.height_scale);
-    SET("distance-five", row.distance_five);
-    SET("distance-four", row.distance_four);
-    // A preset names every control, and the scale is now one of them; the origin it carries resets
-    // the zoom anyway, so the row that reaches the worker is the whole chart rather than the last
-    // depth the user happened to be at.
-    SET("scale", 0);
-    for (const apply of Object.values(APPLY)) apply();
-  }));
-  // The marker and the rubber band are DOM elements over the canvas, never geometry in the scene
-  // pass: the page can place them to the pixel, and the scene pass has one pipeline for a reason.
-  const showTarget = (x, y) => {
-    TARGET.style.left = `${x}px`;
-    TARGET.style.top = `${y}px`;
-    TARGET.hidden = false;
-  };
+  // One pointer gesture, read three ways here and confirmed at the boundary: shift draws a box,
+  // a plain drag past the click threshold translates the picture, and anything shorter is the click
+  // it looked like. A click is not a navigation edit at all — it names a point on the slice and the
+  // picture stays exactly where it was — so nothing here places the marker; the projection does.
   let drag = null;
   CANVAS.addEventListener("pointerdown", event => {
     event.preventDefault();
     const bounds = CANVAS.getBoundingClientRect();
     if (!(bounds.width > 0 && bounds.height > 0)) return;
-    drag = [event.pointerId, event.clientX - bounds.left, event.clientY - bounds.top];
+    drag = {
+      pointer: event.pointerId,
+      box: event.shiftKey,
+      x: event.clientX - bounds.left,
+      y: event.clientY - bounds.top,
+      last: [event.clientX, event.clientY],
+      moved: false,
+    };
     CANVAS.setPointerCapture(event.pointerId);
   });
   CANVAS.addEventListener("pointermove", event => {
-    if (!drag || drag[0] !== event.pointerId) return;
+    if (!drag || drag.pointer !== event.pointerId) return;
     const bounds = CANVAS.getBoundingClientRect();
-    const [, x, y] = drag;
     const to = [event.clientX - bounds.left, event.clientY - bounds.top];
-    RUBBER.style.left = `${Math.min(x, to[0])}px`;
-    RUBBER.style.top = `${Math.min(y, to[1])}px`;
-    RUBBER.style.width = `${Math.abs(to[0] - x)}px`;
-    RUBBER.style.height = `${Math.abs(to[1] - y)}px`;
-    RUBBER.hidden = false;
+    if (Math.max(Math.abs(to[0] - drag.x), Math.abs(to[1] - drag.y)) >= CLICK_THRESHOLD_PX) drag.moved = true;
+    if (drag.box) {
+      RUBBER.style.left = `${Math.min(drag.x, to[0])}px`;
+      RUBBER.style.top = `${Math.min(drag.y, to[1])}px`;
+      RUBBER.style.width = `${Math.abs(to[0] - drag.x)}px`;
+      RUBBER.style.height = `${Math.abs(to[1] - drag.y)}px`;
+      RUBBER.hidden = false;
+      return;
+    }
+    // A translation lands on every move rather than on release: the displacement from the accepted
+    // reference is the one HOT field built to carry a pan smoothly, and a pan the eye cannot follow
+    // is not a pan. The step is the movement since the last one, so the sum is the whole drag.
+    if (!drag.moved) return;
+    const step = [event.clientX - drag.last[0], event.clientY - drag.last[1]];
+    drag.last = [event.clientX, event.clientY];
+    guarded(() => api.app_pan_px(step[0], step[1], bounds.width, bounds.height));
   });
   CANVAS.addEventListener("pointerup", event => {
-    if (!drag || drag[0] !== event.pointerId) return;
+    if (!drag || drag.pointer !== event.pointerId) return;
     const bounds = CANVAS.getBoundingClientRect();
-    const [, x, y] = drag;
+    const started = drag;
     drag = null;
     RUBBER.hidden = true;
     if (!(bounds.width > 0 && bounds.height > 0)) return;
     const to = [event.clientX - bounds.left, event.clientY - bounds.top];
-    // The marker goes where the pointer went first, so a refused edit leaves it where you asked;
-    // on success the plane point under it is the centre, so it belongs at the middle of the canvas.
-    showTarget((x + to[0]) / 2, (y + to[1]) / 2);
-    guarded(() => {
-      api.app_zoom_box(x, y, to[0], to[1], bounds.width, bounds.height);
-      SET("scale", JSON.parse(api.app_facts_json()).requested_zoom_log2);
-      showTarget(bounds.width / 2, bounds.height / 2);
-    });
+    if (started.box) {
+      guarded(() => {
+        api.app_zoom_box(started.x, started.y, to[0], to[1], bounds.width, bounds.height);
+        SET("scale", JSON.parse(api.app_facts_json()).requested_zoom_log2);
+      });
+      return;
+    }
+    if (started.moved) return;
+    guarded(() => api.app_set_target(to[0], to[1], bounds.width, bounds.height));
   });
   CANVAS.addEventListener("pointercancel", () => { drag = null; RUBBER.hidden = true; });
 
-  // One row, one path: the sliders take the values and then the same handlers a user's own
-  // movement reaches apply them. The centre is the one field with no widget, so it is one explicit
-  // call after the row rather than a second way for the values that do have widgets to arrive.
+  // One row, one path, and no list of field names: every numeric field is written into the control
+  // named after it, and then the same handlers a user's own movement reaches apply them. The centre
+  // is the one field with no widget, so it is one explicit call after the row rather than a second
+  // way for the values that do have widgets to arrive. A built-in row has no centre and no depth.
   const applyRow = row => {
-    SET("theta-1", row.theta_1);
-    SET("theta-2", row.theta_2);
-    for (const [index, [id]] of ORIGIN.entries()) {
-      SET(id, row.origin[index]);
-      SET(`${id}-number`, row.origin[index]);
+    if (Array.isArray(row.origin)) {
+      for (const [index, [id]] of ORIGIN.entries()) {
+        SET(id, row.origin[index]);
+        SET(`${id}-number`, row.origin[index]);
+      }
     }
-    SET("view-theta-1", row.view_theta_1);
-    SET("view-theta-2", row.view_theta_2);
-    SET("camera-yaw", row.camera_yaw);
-    SET("camera-pitch", row.camera_pitch);
-    SET("height", row.height_scale);
-    SET("distance-five", row.distance_five);
-    SET("distance-four", row.distance_four);
-    SET("scale", row.zoom_log2);
+    for (const [field, value] of Object.entries(row)) {
+      if (field === "origin" || typeof value !== "number") continue;
+      const element = controlFor(field);
+      if (element) element.value = String(value);
+    }
+    // A row that names no depth starts at the top: the origin it carries resets the zoom anyway, so
+    // the row that reaches the worker is the whole chart rather than the depth the user was at.
+    if (typeof row.zoom_log2 !== "number") SET("scale", 0);
     for (const apply of Object.values(APPLY)) apply();
-    api.app_set_centre(JSON.stringify(row.centre));
+    if (row.centre) api.app_set_centre(JSON.stringify(row.centre));
+  };
+
+  // The built-in rows come from the app, in its own order, for as long as it has them: the page
+  // never names a preset, so a row added there appears on both sides with no edit here.
+  const BUILT_IN = [];
+  for (let id = 0; ; id += 1) {
+    let row = null;
+    try {
+      row = JSON.parse(api.app_preset(id));
+    } catch {
+      break;
+    }
+    BUILT_IN.push({ key: `preset:${id}`, name: row.name, row, builtin: true });
+  }
+  const rowEntries = () => BUILT_IN.concat(
+    ROWS.named.map(entry => ({ key: `named:${entry.name}`, name: entry.name, row: entry.row, builtin: false })),
+  );
+  const entryFor = key => rowEntries().find(entry => entry.key === key) ?? null;
+  const say = (box, text) => { document.getElementById(`message-${box}`).textContent = text; };
+  const captureRow = () => JSON.parse(api.app_saved_view_json());
+  const writeStoredRows = () => writeStoredJson(ROWS_KEY, { rows: ROWS.named, selection: ROWS.selection });
+
+  // Both sides list the same rows, so a row saved on one is choosable on the other; the selection
+  // is only ever a key into that one list, and a key that no longer names a row falls back to none.
+  const refreshRows = () => {
+    for (const box of ["a", "b"]) {
+      const select = document.getElementById(`rows-${box}`);
+      const chosen = entryFor(ROWS.selection[box]) ? ROWS.selection[box] : "";
+      select.replaceChildren();
+      const none = document.createElement("option");
+      none.value = "";
+      none.textContent = "— choose a row —";
+      select.append(none);
+      for (const entry of rowEntries()) {
+        const option = document.createElement("option");
+        option.value = entry.key;
+        option.textContent = entry.builtin ? entry.name : `${entry.name} (saved)`;
+        select.append(option);
+      }
+      select.value = chosen;
+      ROWS.selection[box] = chosen;
+      document.getElementById(`delete-${box}`).disabled = !chosen.startsWith("named:");
+    }
   };
 
   const refreshBoxes = () => {
@@ -371,15 +470,83 @@ function bindControls(api) {
       document.getElementById(`load-${box}`).disabled = BOXES[box] === null;
     }
     MORPH.disabled = BOXES.a === null || BOXES.b === null;
+    refreshRows();
   };
 
+  const holdRow = (box, row) => {
+    BOXES[box] = row;
+    writeStoredView(box, row);
+    refreshBoxes();
+  };
+
+  // Choosing a row on a side makes that row that side's view, which is what the two load buttons
+  // used to do on their own. A built-in row names every control but the centre and the depth, so
+  // what the side ends up holding is the whole row the app is showing once it has been applied; a
+  // saved row is already whole and is held exactly as it was saved.
+  const chooseRow = (box, key) => {
+    ROWS.selection[box] = key;
+    say(box, "");
+    const entry = entryFor(key);
+    if (!entry) {
+      writeStoredRows();
+      refreshBoxes();
+      return;
+    }
+    guarded(() => {
+      applyRow(entry.row);
+      holdRow(box, entry.builtin ? captureRow() : entry.row);
+      writeStoredRows();
+    });
+  };
+
+  // A save needs a name, and a name is refused rather than silently overwriting a row that has it.
+  const saveRow = box => {
+    const field = document.getElementById(`name-${box}`);
+    const name = field.value.trim();
+    if (name === "") {
+      say(box, "a saved row needs a name");
+      return;
+    }
+    if (rowEntries().some(entry => entry.name === name)) {
+      say(box, `the name ${name} is already taken`);
+      return;
+    }
+    guarded(() => {
+      const row = captureRow();
+      ROWS.named.push({ name, row });
+      ROWS.selection[box] = `named:${name}`;
+      field.value = "";
+      holdRow(box, row);
+      writeStoredRows();
+      say(box, `saved as ${name}`);
+    });
+  };
+
+  // Only a saved row can be deleted, and deleting it takes it off both sides at once.
+  const deleteRow = box => {
+    const key = ROWS.selection[box];
+    if (!key.startsWith("named:")) {
+      say(box, "a built-in row cannot be deleted");
+      return;
+    }
+    const name = key.slice("named:".length);
+    ROWS.named = ROWS.named.filter(entry => entry.name !== name);
+    for (const side of ["a", "b"]) {
+      if (ROWS.selection[side] === key) ROWS.selection[side] = "";
+    }
+    writeStoredRows();
+    refreshBoxes();
+    say(box, `deleted ${name}`);
+  };
+
+  const storedRows = readStoredRows();
+  ROWS.named = storedRows.rows;
+  ROWS.selection = storedRows.selection;
   for (const box of ["a", "b"]) {
     BOXES[box] = readStoredView(box);
-    document.getElementById(`save-${box}`).addEventListener("click", () => guarded(() => {
-      BOXES[box] = JSON.parse(api.app_saved_view_json());
-      writeStoredView(box, BOXES[box]);
-      refreshBoxes();
-    }));
+    document.getElementById(`rows-${box}`).addEventListener("change", event => chooseRow(box, event.target.value));
+    document.getElementById(`save-${box}`).addEventListener("click", () => saveRow(box));
+    document.getElementById(`delete-${box}`).addEventListener("click", () => deleteRow(box));
     document.getElementById(`load-${box}`).addEventListener("click", () => guarded(() => {
       if (BOXES[box]) applyRow(BOXES[box]);
     }));

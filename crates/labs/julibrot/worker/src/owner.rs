@@ -410,6 +410,24 @@ impl ViewerOwner {
             .map(|navigation| navigation.centre.clone())
     }
 
+    /// Returns the plane basis navigation is configured with.
+    ///
+    /// The app needs it to convert one screen point into a point on the slice and to project a
+    /// stored slice point back onto the screen; both conversions must use the very basis the
+    /// owner's own navigation arithmetic uses, or the crosshair and the picture disagree.
+    #[must_use]
+    pub fn navigation_plane(&self) -> Option<Plane> {
+        self.navigation.as_ref().map(|navigation| navigation.plane)
+    }
+
+    /// Returns the render-grid width navigation is configured with.
+    #[must_use]
+    pub fn navigation_grid_width(&self) -> Option<u32> {
+        self.navigation
+            .as_ref()
+            .map(|navigation| navigation.grid_width)
+    }
+
     /// Reports whether one coalesced navigation submission is waiting.
     #[must_use]
     pub fn navigation_pending_depth(&self) -> u32 {
