@@ -293,7 +293,9 @@ The executor method is `GpuKernelExecutor::prefix_headers(&self, span: &DataSpan
 
 `GpuKernelExecutor::reserve_header_sets(&mut self, sets: &[StaticHeaders]) -> Result<HeaderSetHandle, DispatchError>` uploads the three immutable level sets once and ties their reclamation to the owning span; each page is then encoded with `encode_dispatch_selected` and `DispatchSelector { set: level as u32, page }`, so changing level changes only the dynamic header offset.
 
-The ignored native `measures_dispatch_planning_allocations_and_wall_per_level` kernels harness compares fresh dialect planning against an already selected template for 10,000 calls per 960×540 level; on osprey on 2026-09-04 it measured Preview 2,952→6 us, Interactive 3,494→6 us, and Final 7,852→6 us, while the structural planning allocation count fell from at least five per call to zero after template construction.
+The cached path resolves descriptor handles during template construction once per grid or resident reference allocation; the former per-dispatch resolution was defensive only, because allocator generations already make a stale template a typed refusal.
+
+The ignored native `measures_dispatch_planning_allocations_and_wall_per_level` kernels harness compares fresh dialect planning against an already selected template for 10,000 calls per 960×540 level; on osprey on 2026-09-04 it measured Preview 3,202→3 us, Interactive 3,698→3 us, and Final 8,072→3 us, while the structural planning allocation count fell from at least five per call to zero after template construction.
 
 ### 3.7 App and present coordination
 
