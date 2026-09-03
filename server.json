@@ -1,6 +1,6 @@
 {
-  "ws": "wss://heating-billy-initially-qui.trycloudflare.com",
-  "v": "1788451233",
+  "ws": "wss://configure-vernon-complexity-baptist.trycloudflare.com",
+  "v": "1788452746",
   "proto": 14,
   "fire_ws": "wss://msg-crest-remembered-literally.trycloudflare.com",
   "fire_proto": 1,
@@ -26,12 +26,12 @@
     },
     {
       "name": "dusky-osprey",
-      "ws": "wss://heating-billy-initially-qui.trycloudflare.com",
+      "ws": "wss://configure-vernon-complexity-baptist.trycloudflare.com",
       "proto": 14,
       "version": "r575",
       "commit": "bfbf6ff",
       "by": "end@DESKTOP-E9PKJUK",
-      "updated": "2026-09-03T15:50:06Z"
+      "updated": "2026-09-03T16:25:46Z"
     }
   ]
 }
