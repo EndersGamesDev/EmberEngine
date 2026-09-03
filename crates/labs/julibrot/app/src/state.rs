@@ -333,6 +333,9 @@ pub struct ReferenceSubmission {
 pub struct ViewerController {
     owner: ViewerOwner,
     requested: RequestedControls,
+    checked_plane: Plane,
+    #[cfg(test)]
+    plane_constructions: u64,
     staged_hot: HotState,
     staged_main: MainState,
     pending_reason: Option<OrbitReason>,
@@ -408,6 +411,9 @@ impl ViewerController {
         Ok(Self {
             owner,
             requested,
+            checked_plane: plane,
+            #[cfg(test)]
+            plane_constructions: 1,
             staged_hot: initial.hot,
             staged_main: initial.main,
             pending_reason: Some(OrbitReason::INITIAL),
@@ -633,8 +639,19 @@ impl ViewerController {
             return Err(AppError::Math("object angles are not valid".to_string()));
         }
         self.synchronize_shadow()?;
+        let angles_changed = angles.as_array() != self.requested.object_angles.as_array();
+        let checked_plane = if angles_changed {
+            construct_plane(angles).map_err(math_error)?
+        } else {
+            self.checked_plane
+        };
         self.clear_crosshair();
         self.requested.object_angles = angles;
+        self.checked_plane = checked_plane;
+        #[cfg(test)]
+        if angles_changed {
+            self.plane_constructions = self.plane_constructions.saturating_add(1);
+        }
         let mut hot = self.staged_hot;
         hot.plane_theta_1 = angles.rho_13;
         hot.plane_theta_2 = angles.rho_24;
@@ -699,7 +716,7 @@ impl ViewerController {
         };
         self.staged_hot = hot;
         self.staged_main = main;
-        let plane = construct_plane(angles).map_err(math_error)?;
+        let plane = self.checked_plane;
         let centre = BigCentre::from_f64(origin, NAVIGATION_PRECISION_BITS).map_err(math_error)?;
         self.owner.stage_hot(hot);
         self.owner.stage_main(main);
@@ -730,7 +747,7 @@ impl ViewerController {
     /// Returns a typed math or owner refusal for an invalid plane, scale, or centre.
     pub fn set_centre(&mut self, centre: BigCentre) -> Result<(), AppError> {
         self.synchronize_shadow()?;
-        let plane = construct_plane(self.requested.object_angles).map_err(math_error)?;
+        let plane = self.checked_plane;
         self.owner
             .configure_navigation(NavigationConfig {
                 centre: centre.clone(),
@@ -861,7 +878,7 @@ impl ViewerController {
             ));
         }
         let object = self.requested.object_angles;
-        let plane = construct_plane(object).map_err(math_error)?;
+        let plane = self.checked_plane;
         let map = map_for(
             object,
             self.requested.view,
@@ -1366,6 +1383,30 @@ mod tests {
         assert_eq!(hot.state.hot.centre_from_reference_px, [15.0, -3.0]);
         // A drain reads the controls; it has no time argument and cannot invent an angle.
         assert_eq!(hot.pose.view, ViewControls::MANDELBROT_FLAT);
+    }
+
+    #[test]
+    fn unchanged_refreshes_reuse_one_checked_plane() {
+        let mut viewer = ViewerController::new([960, 540]).expect("canonical viewer");
+        let initial_plane = viewer.checked_plane;
+        assert_eq!(viewer.plane_constructions, 1);
+
+        for _ in 0..120 {
+            let frame = viewer.drain_hot([960, 540]).expect("unchanged refresh");
+            assert_eq!(frame.plane, initial_plane);
+        }
+        assert_eq!(viewer.plane_constructions, 1);
+
+        let mut angles = viewer.requested().object_angles;
+        angles.rho_13 = 0.25;
+        viewer.set_object_angles(angles).expect("changed angles");
+        let changed_plane = viewer.drain_hot([960, 540]).expect("changed refresh").plane;
+        assert_ne!(changed_plane, initial_plane);
+        assert_eq!(viewer.plane_constructions, 2);
+
+        viewer.set_object_angles(angles).expect("unchanged angles");
+        viewer.drain_hot([960, 540]).expect("unchanged refresh");
+        assert_eq!(viewer.plane_constructions, 2);
     }
 
     #[test]
