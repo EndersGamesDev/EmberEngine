@@ -329,9 +329,12 @@ impl TransferBuffer {
         let compact_capacity = used
             .checked_add(u32::try_from(POOL_TRAILER_BYTES).unwrap_or(16))
             .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, limb_count, u32::MAX, 0))?;
-        let mut copied = vec![0; usize::try_from(compact_capacity).map_err(|_| {
-            ChannelError::new(ErrorCode::BadLength, limb_count, u32::MAX, available)
-        })?];
+        let mut copied = vec![
+            0;
+            usize::try_from(compact_capacity).map_err(|_| {
+                ChannelError::new(ErrorCode::BadLength, limb_count, u32::MAX, available)
+            })?
+        ];
         self.bytes
             .subarray(0, used)
             .copy_to(&mut copied[..usize::try_from(used).unwrap_or(0)]);

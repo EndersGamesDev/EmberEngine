@@ -1199,7 +1199,9 @@ mod tests {
         let mut deque_sum = 0_u64;
         for next in 2..DRAINS + 2 {
             deque_sum = deque_sum.wrapping_add(u64::from(
-                deque.pop_front().expect("the two-slot queue stays populated"),
+                deque
+                    .pop_front()
+                    .expect("the two-slot queue stays populated"),
             ));
             deque.push_back(next);
         }

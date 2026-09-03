@@ -1500,20 +1500,24 @@ mod tests {
 
         let mut view = viewer.requested().view;
         view.camera_yaw = 0.25;
-        viewer.set_view_controls(view).expect("changed VIEW controls");
+        viewer
+            .set_view_controls(view)
+            .expect("changed VIEW controls");
         viewer.drain_hot(REFERENCE_GRID).expect("changed VIEW map");
         assert_eq!(viewer.map_constructions.get(), 2);
 
+        viewer.wheel_zoom(1.0, [0.0; 2]).expect("changed zoom map");
         viewer
-            .wheel_zoom(1.0, [0.0; 2])
-            .expect("changed zoom map");
-        viewer.drain_hot(REFERENCE_GRID).expect("changed zoom frame");
+            .drain_hot(REFERENCE_GRID)
+            .expect("changed zoom frame");
         assert_eq!(viewer.map_constructions.get(), 3);
 
         let mut object = viewer.requested().object_angles;
         object.rho_13 = 0.125;
         viewer.set_object_angles(object).expect("changed object");
-        viewer.drain_hot(REFERENCE_GRID).expect("changed object map");
+        viewer
+            .drain_hot(REFERENCE_GRID)
+            .expect("changed object map");
         assert_eq!(viewer.map_constructions.get(), 4);
 
         viewer.drain_hot([800, 600]).expect("changed extent map");
@@ -1526,7 +1530,9 @@ mod tests {
         let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
         for _ in 0..120 {
             viewer.drain_hot(REFERENCE_GRID).expect("unchanged HOT map");
-            viewer.screen_map(REFERENCE_GRID).expect("unchanged stamp map");
+            viewer
+                .screen_map(REFERENCE_GRID)
+                .expect("unchanged stamp map");
         }
         let before_constructions = 240;
         let after_constructions = viewer.map_constructions.get();
