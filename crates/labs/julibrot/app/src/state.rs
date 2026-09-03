@@ -1233,6 +1233,10 @@ mod tests {
     #[test]
     fn crosshair_survives_an_in_plane_object_turn_and_clears_on_a_tilt() {
         let mut viewer = ViewerController::new(960).expect("canonical viewer");
+        let initial = viewer
+            .take_reference_submission()
+            .expect("the initial slice requests a reference");
+        assert!(viewer.finish_reference_submission(initial.navigation.generation));
         viewer.set_crosshair([60.0, -20.0]).expect("finite click");
         assert!(viewer.crosshair_plane_px().is_some());
         let point = viewer
@@ -1249,11 +1253,13 @@ mod tests {
             viewer.owner().navigation_plane(),
             Some(viewer.checked_plane())
         );
+        assert!(viewer.take_reference_submission().is_none());
 
         let mut tilted = viewer.requested().object_angles;
         tilted.rho_13 += 0.3;
         viewer.set_object_angles(tilted).expect("valid slice tilt");
         assert!(viewer.crosshair_plane_px().is_none());
+        assert!(viewer.take_reference_submission().is_some());
     }
 
     /// A box that is half the screen on its limiting side is exactly one zoom step.
