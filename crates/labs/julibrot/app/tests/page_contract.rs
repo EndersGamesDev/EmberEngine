@@ -113,7 +113,7 @@ const PAGE_FACT_FIELDS: [&str; 94] = [
 ];
 
 #[test]
-fn loader_version_one_and_abi_two_are_pinned_before_orbit_transfer() {
+fn loader_version_one_and_abi_three_are_pinned_before_orbit_transfer() {
     for required in [
         "./main.js?v=1",
         "./style.css?v=1",
