@@ -144,12 +144,20 @@ def meshes():
 
 
 # ---- 1. the revolver -------------------------------------------------------
-def import_revolver():
+def import_revolver(reset=True):
+    """Import the OBJ's twenty parts and drop the display cartridge.
+
+    `reset` wipes the scene first, as this script's own run wants. A build
+    that imports this file as a library (tools/v18) already holds other
+    parts in the scene, so it passes False and only the objects the import
+    added are touched; the count check reads those, not the whole scene."""
     if not os.path.isfile(OBJ):
         die(f"missing {OBJ}", "run tools/v15/dae_to_obj.py first")
-    bpy.ops.wm.read_factory_settings(use_empty=True)
+    if reset:
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+    before = set(bpy.data.objects)
     bpy.ops.wm.obj_import(filepath=OBJ, use_split_objects=True, use_split_groups=False)
-    objs = meshes()
+    objs = [o for o in meshes() if o not in before]
     say(f"revolver: {len(objs)} parts imported")
     if len(objs) != 20:
         die(f"expected 20 parts, got {len(objs)}: {[o.name for o in objs]}")
@@ -533,7 +541,11 @@ def to_engine(v):
     return [round(v.x, 5), round(v.z, 5), round(-v.y, 5)]
 
 
-def write_sidecar(parts, grip):
+def rig_points(parts):
+    """The three pivots and the muzzle, in Blender space, from the merged
+    parts' boxes: the cylinder spins about its centre, the hammer rocks
+    about a point low at its rear, the trigger hangs from its top, and the
+    muzzle is the receiver's front on the bore line."""
     lo, hi = world_bbox([parts["cylinder"]])
     cyl_pivot = (lo + hi) * 0.5
     lo, hi = world_bbox([parts["hammer"]])
@@ -542,13 +554,14 @@ def write_sidecar(parts, grip):
     trigger_pivot = Vector(((lo.x + hi.x) * 0.5, (lo.y + hi.y) * 0.5, hi.z))
     lo, hi = world_bbox([parts["receiver"]])
     muzzle = Vector((hi.x, (lo.y + hi.y) * 0.5, (lo.z + hi.z) * 0.5))
+    return {"cylinder": cyl_pivot, "hammer": hammer_pivot, "trigger": trigger_pivot}, muzzle
+
+
+def write_sidecar(parts, grip):
+    pivots, muzzle = rig_points(parts)
     rig = {
         "comment": "arena viewmodel pivots in ENGINE space (+X forward, +Y up, +Z right); written by tools/v15/build_viewmodel.py",
-        "pivots": {
-            "cylinder": to_engine(cyl_pivot),
-            "hammer": to_engine(hammer_pivot),
-            "trigger": to_engine(trigger_pivot),
-        },
+        "pivots": {name: to_engine(p) for name, p in pivots.items()},
         "muzzle": to_engine(muzzle),
     }
     with open(OUT_RIG, "w", encoding="utf-8", newline="\n") as f:
@@ -647,6 +660,22 @@ def render_previews():
     bpy.data.objects.remove(cam, do_unlink=True)
 
 
+def build_revolver():
+    """The revolver alone, for a build that imports this file as a library
+    (tools/v18/build_weapons.py): the five merged parts in v15's own fit
+    (0.75 long, +X muzzle, +Z up, origin on the grip) wearing the 1024
+    pictures bake_textures() gives them, plus their pivots and the muzzle in
+    BLENDER space, keyed by the plain part names. The caller renames the
+    parts, re-sizes the pictures and converts the points; nothing here is
+    wiped or exported, so the scene the caller already holds survives."""
+    objs = import_revolver(reset=False)
+    fit_revolver(objs)
+    bake_textures()
+    parts = merge_parts(objs)
+    pivots, muzzle = rig_points(parts)
+    return parts, pivots, muzzle
+
+
 def main():
     objs = import_revolver()
     grip = fit_revolver(objs)
@@ -661,4 +690,5 @@ def main():
     verify_glb()
 
 
-main()
+if __name__ == "__main__":
+    main()
