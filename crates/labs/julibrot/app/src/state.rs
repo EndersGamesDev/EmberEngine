@@ -1044,7 +1044,11 @@ impl ViewerController {
         let zoom_log2 = self.requested.zoom_log2;
         let key = ScreenMapKey::new(object, view, zoom_log2, grid_extent);
         let mut cached = self.checked_screen_maps.get();
-        if let Some(cached) = cached.into_iter().flatten().find(|cached| cached.key == key) {
+        if let Some(cached) = cached
+            .into_iter()
+            .flatten()
+            .find(|cached| cached.key == key)
+        {
             return Ok(cached.map);
         }
         let map = map_for(object, view, zoom_log2, grid_extent)?;

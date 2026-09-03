@@ -163,12 +163,12 @@ impl JulibrotKernels {
             plan,
             &[0; core::mem::size_of::<ShallowUniform>()],
         ) {
-                Ok(dispatches) => dispatches,
-                Err(error) => {
-                    executor.free_span(span).map_err(|_| KernelError::Heap)?;
-                    return Err(error);
-                }
-            };
+            Ok(dispatches) => dispatches,
+            Err(error) => {
+                executor.free_span(span).map_err(|_| KernelError::Heap)?;
+                return Err(error);
+            }
+        };
         let first = plan.level(RefinementLevel::Preview);
         let grid = EscapeGrid {
             span: span.clone(),

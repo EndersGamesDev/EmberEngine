@@ -2570,9 +2570,7 @@ mod tests {
 
         let mut viewer = ViewerController::new(requested_extent).expect("canonical viewer");
         for _ in 0..120 {
-            viewer
-                .drain_hot(preview_extent)
-                .expect("Preview HOT map");
+            viewer.drain_hot(preview_extent).expect("Preview HOT map");
             std::hint::black_box(stamped_screen_map(&viewer, &plan));
             assert_eq!(viewer.map_construction_count(), 2);
         }

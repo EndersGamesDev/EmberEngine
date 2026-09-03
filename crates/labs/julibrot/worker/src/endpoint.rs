@@ -329,9 +329,9 @@ impl<P: OwnerPort> OwnerCore<P> {
                 } else if self.arrivals.len() == 2 {
                     return Err(ChannelError::new(ErrorCode::BufferStarved, 2, 0, 0));
                 } else {
-                    self.arrivals.push_back(slot).map_err(|_| {
-                        ChannelError::new(ErrorCode::BufferStarved, 2, 0, 0)
-                    })?;
+                    self.arrivals
+                        .push_back(slot)
+                        .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, 2, 0, 0))?;
                 }
             }
             (Pool::Orbit, MessageKind::CreditStale) => {
