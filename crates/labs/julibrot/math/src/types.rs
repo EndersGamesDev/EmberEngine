@@ -400,6 +400,8 @@ pub struct Homography {
     pub rows: [f64; 9],
     pub inverse: [f64; 9],
     pub condition_number: f64,
+    /// Applied fixed-record sampling apron; the homography rows remain the presented camera.
+    pub apron_scale: f64,
 }
 
 impl Homography {
@@ -407,6 +409,7 @@ impl Homography {
         rows: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
         inverse: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
         condition_number: 1.0,
+        apron_scale: 1.0,
     };
 }
 

@@ -91,6 +91,7 @@ const PAGE_FACT_FIELDS: [&str; 112] = [
     "distance_four",
     "surface_uncovered_fraction",
     "scene_apron_scale",
+    "scene_apron_requested",
     "horizon_pixels",
     "horizon_fraction",
     "uncertain_pixels",

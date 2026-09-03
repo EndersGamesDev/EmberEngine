@@ -104,7 +104,7 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     if (!all(vec3<bool>(finite(plane_homogeneous.x), finite(plane_homogeneous.y), finite(plane_homogeneous.z))) || plane_homogeneous.z <= 0.0) { return output; }
     let plane_offset = plane_homogeneous.xy / plane_homogeneous.z;
     if (!all(vec2<bool>(finite(plane_offset.x), finite(plane_offset.y)))) { return output; }
-    let chart_scale = 4.0 / f32(scene.grid.x);
+    let chart_scale = 4.0 * scene.screen_to_plane_row_2.w / f32(scene.grid.x);
     let display = chart_scale * (plane_offset.x * scene.basis_u + plane_offset.y * scene.basis_v);
     let height = hot.view_scale.x * record_height(record);
     let ambient = ambient_camera(Ambient5(display, height));
@@ -339,6 +339,7 @@ mod tests {
             "let screen_x = f32(column) + 0.5 - 0.5 * f32(scene.grid.x);",
             "let screen_y = f32(row) + 0.5 - 0.5 * f32(scene.grid.y);",
             "let plane_homogeneous = vec3<f32>(dot(scene.screen_to_plane_row_0.xyz, screen), dot(scene.screen_to_plane_row_1.xyz, screen), dot(scene.screen_to_plane_row_2.xyz, screen));",
+            "let chart_scale = 4.0 * scene.screen_to_plane_row_2.w / f32(scene.grid.x);",
             "let display = chart_scale * (plane_offset.x * scene.basis_u + plane_offset.y * scene.basis_v);",
             "let height = hot.view_scale.x * record_height(record);",
             "scene.span.z != 0u || record.w == 2.0 || hot.view_scale.x == 0.0",

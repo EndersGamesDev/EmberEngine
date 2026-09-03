@@ -158,10 +158,12 @@ pub struct PageFacts<'a> {
     pub height_scale: f64,
     pub distance_five: f64,
     pub distance_four: f64,
-    /// Share of the surface the lifted scene mesh cannot reach; the sky stands there instead.
+    /// Share of the surface the lifted scene mesh cannot reach after the applied apron.
     pub surface_uncovered_fraction: Option<f64>,
-    /// Sampling overscan that would close that gap, as a multiple of the frame extent.
+    /// Applied sampling overscan, as a multiple of the frame extent.
     pub scene_apron_scale: Option<f64>,
+    /// Requested overscan when the fixed two-times budget clamps it.
+    pub scene_apron_requested: Option<f64>,
     pub horizon_pixels: u64,
     pub horizon_fraction: f64,
     pub uncertain_pixels: u64,
@@ -310,6 +312,10 @@ impl<'a> PageFacts<'a> {
             distance_four: requested.view.distance_four,
             surface_uncovered_fraction: footprint.map(|value| value.uncovered_fraction),
             scene_apron_scale: footprint.map(|value| value.apron_scale),
+            scene_apron_requested: footprint.and_then(|value| {
+                (value.apron_scale.to_bits() != value.requested_apron_scale.to_bits())
+                    .then_some(value.requested_apron_scale)
+            }),
             horizon_pixels: loop_facts.horizon_pixels(),
             horizon_fraction: loop_facts.horizon_fraction(),
             uncertain_pixels: loop_facts.uncertain_pixels(),

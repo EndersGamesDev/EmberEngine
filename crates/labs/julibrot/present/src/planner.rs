@@ -503,13 +503,12 @@ fn project_scene_vertex_with_shortcut(
         mapped_homogeneous[1] / mapped_homogeneous[2],
     ];
     let height = pose.view.height_scale * record_height;
-    if flat_shortcut && height == 0.0 {
+    if flat_shortcut && pose.view.height_scale == 0.0 {
+        debug_assert_eq!(map.apron_scale.to_bits(), 1.0_f64.to_bits());
         return Some((screen, 1.0));
     }
-    let chart_coordinate = [
-        4.0 * mapped[0] / f64::from(pose.grid_width),
-        4.0 * mapped[1] / f64::from(pose.grid_width),
-    ];
+    let chart_scale = 4.0 * map.apron_scale / f64::from(pose.grid_width);
+    let chart_coordinate = [chart_scale * mapped[0], chart_scale * mapped[1]];
     let rotated = ambient_point(pose.plane, chart_coordinate, height, &pose.view);
     let distance_five = pose.view.distance_five;
     let distance_four = pose.view.distance_four;
@@ -900,6 +899,7 @@ mod tests {
             rows: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.002, 0.0, 1.0],
             inverse: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, -0.002, 0.0, 1.0],
             condition_number: 1.004,
+            apron_scale: 1.0,
         });
         let PoseMap::Mapped(to_map) = to.map else {
             panic!("fixture must be mapped");

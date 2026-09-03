@@ -92,8 +92,10 @@ fn validate_pose(pose: &Pose) -> Result<(), MathError> {
         pose.centre_from_reference_px[0],
         pose.centre_from_reference_px[1],
         map.condition_number,
+        map.apron_scale,
     ];
     if !scalar_values.iter().all(|value| value.is_finite())
+        || !(1.0..=2.0).contains(&map.apron_scale)
         || !map
             .rows
             .iter()

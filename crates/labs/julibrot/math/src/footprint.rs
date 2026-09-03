@@ -84,6 +84,9 @@ pub fn scene_footprint(
     let aspect = f64::from(grid_w) / f64::from(grid_h);
     let map = crate::screen_to_plane(object, view, 0.0, grid_w, grid_h, aspect)?;
     let plane = construct_plane(*object)?;
+    if view.height_scale == 0.0 {
+        return Ok(SceneFootprint::COVERED);
+    }
 
     // `record_height` spans [-2,2]; the height control scales it. The fifth coordinate is affine
     // in the record height and `d₅/(d₅ − h)` is monotone in it, so the extremes of the range bound

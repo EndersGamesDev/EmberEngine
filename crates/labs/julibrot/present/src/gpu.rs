@@ -1828,12 +1828,14 @@ fn pose_is_finite(pose: &Pose) -> bool {
             .chain(pose.plane.basis_v)
             .all(f32::is_finite)
         && match pose.map {
-            PoseMap::Mapped(map) => map
-                .rows
-                .into_iter()
-                .chain(map.inverse)
-                .chain([map.condition_number])
-                .all(f64::is_finite),
+            PoseMap::Mapped(map) => {
+                map.rows
+                    .into_iter()
+                    .chain(map.inverse)
+                    .chain([map.condition_number, map.apron_scale])
+                    .all(f64::is_finite)
+                    && (1.0..=2.0).contains(&map.apron_scale)
+            }
             PoseMap::EdgeOn => true,
         }
 }
@@ -2223,7 +2225,7 @@ mod tests {
     #[test]
     fn relief_redraw_reuses_the_retained_grid_and_scene_uniform_contract() {
         let mut ledger = SceneLedger::default();
-        let sampled = promote_binding_scene(&mut ledger, 61);
+        let mut sampled = promote_binding_scene(&mut ledger, 61);
         let mut plan = clear_warp_plan(false, true);
         plan.kind = WarpKind::ReliefRedraw;
         plan.source_scene_id = Some(sampled.scene_id);
@@ -2237,6 +2239,12 @@ mod tests {
             Some(61)
         );
 
+        let PoseMap::Mapped(mut source_map) = sampled.pose.map else {
+            panic!("binding scene is mapped");
+        };
+        source_map.apron_scale = 1.541_25;
+        sampled.pose.map = PoseMap::Mapped(source_map);
+
         let main = binding_main();
         let uniform = relief_scene_uniform(&main, &sampled, crate::CLASSIC_PALETTE)
             .expect("compatible records form a scene uniform");
@@ -2245,7 +2253,7 @@ mod tests {
         assert_eq!(uniform.span[1], 64 * 36);
         assert_eq!(uniform.basis_u, sampled.pose.plane.basis_u);
         assert_eq!(uniform.screen_to_plane_row_0, [1.0, 0.0, 0.0, 0.0]);
-        assert_eq!(uniform.screen_to_plane_row_2, [0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(uniform.screen_to_plane_row_2, [0.0, 0.0, 1.0, 1.541_25]);
         let load = scene_load_color(crate::CLASSIC_PALETTE);
         let sky = crate::exterior_zero(crate::CLASSIC_PALETTE);
         assert_eq!([load.r, load.g, load.b, load.a], sky.map(f64::from));

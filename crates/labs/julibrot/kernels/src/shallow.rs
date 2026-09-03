@@ -404,6 +404,7 @@ mod tests {
             rows: [0.0, 0.0, 100.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
             inverse: Homography::IDENTITY.inverse,
             condition_number: 1.0,
+            apron_scale: 1.0,
         };
         let uniform = ShallowUniform::pack(
             plane,
@@ -488,6 +489,7 @@ mod tests {
                 rows: rows.map(f64::from),
                 inverse: Homography::IDENTITY.inverse,
                 condition_number: 1.0,
+                apron_scale: 1.0,
             };
             let uniform = ShallowUniform::pack(
                 plane,
