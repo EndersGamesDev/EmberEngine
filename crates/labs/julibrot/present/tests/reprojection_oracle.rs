@@ -64,7 +64,7 @@ fn pose(
     pose_at(EXTENT, object, view, origin, zoom_log2, displacement)
 }
 
-fn frame(pose: &Pose) -> SceneFrame {
+const fn frame(pose: &Pose) -> SceneFrame {
     SceneFrame {
         scene_id: 7,
         pose: *pose,
@@ -133,12 +133,13 @@ fn sample_pose(pose: &Pose, screen: [f64; 2]) -> Option<KernelSample> {
         pose.centre_from_reference_px[1] + offset[1],
     ];
     let point = core::array::from_fn(|axis| {
-        (pose.plane_origin[axis]
-            + scale
-                * f64::from(pose.plane.basis_u[axis]).mul_add(
+        scale.mul_add(
+            f64::from(pose.plane.basis_u[axis]).mul_add(
                     coordinate[0],
                     f64::from(pose.plane.basis_v[axis]) * coordinate[1],
-                )) as f32
+                ),
+            pose.plane_origin[axis],
+        ) as f32
     });
     escape_shallow_point(point, ESCAPE).ok()
 }
@@ -174,8 +175,8 @@ fn nearest_retained(
     extent: [u32; 2],
     source: [f64; 2],
 ) -> Option<(KernelSample, [f64; 2])> {
-    let column = (source[0] + f64::from(extent[0]) * 0.5 - 0.5).round();
-    let row = (source[1] + f64::from(extent[1]) * 0.5 - 0.5).round();
+    let column = (f64::from(extent[0]).mul_add(0.5, source[0]) - 0.5).round();
+    let row = (f64::from(extent[1]).mul_add(0.5, source[1]) - 0.5).round();
     if column < 0.0 || row < 0.0 || column >= f64::from(extent[0]) || row >= f64::from(extent[1]) {
         return None;
     }
@@ -184,7 +185,7 @@ fn nearest_retained(
     Some((sample, pixel_screen(extent, column as u32, row as u32)))
 }
 
-fn record(sample: KernelSample) -> [f32; 4] {
+const fn record(sample: KernelSample) -> [f32; 4] {
     [
         sample.record.smooth_iter,
         sample.record.escaped,
@@ -208,10 +209,13 @@ fn colours_within_one_code(left: KernelSample, right: KernelSample) -> bool {
 }
 
 fn invert_homography(matrix: [f64; 9]) -> Option<[f64; 9]> {
-    let determinant = matrix[0].mul_add(
-        matrix[4].mul_add(matrix[8], -matrix[5] * matrix[7]),
-        -matrix[1] * matrix[3].mul_add(matrix[8], -matrix[5] * matrix[6]),
-    ) + matrix[2] * matrix[3].mul_add(matrix[7], -matrix[4] * matrix[6]);
+    let determinant = matrix[2].mul_add(
+        matrix[3].mul_add(matrix[7], -matrix[4] * matrix[6]),
+        matrix[0].mul_add(
+            matrix[4].mul_add(matrix[8], -matrix[5] * matrix[7]),
+            -matrix[1] * matrix[3].mul_add(matrix[8], -matrix[5] * matrix[6]),
+        ),
+    );
     if !determinant.is_finite() || determinant.abs() <= 1.0e-12 {
         return None;
     }
@@ -339,6 +343,10 @@ fn compare_accepted(
     compared
 }
 
+#[allow(
+    clippy::print_stderr,
+    reason = "the oracle emits the requested per-fixture verdict table"
+)]
 fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Expected) {
     let plan = Warp::reproject(
         &frame(from),
@@ -375,7 +383,7 @@ fn flat() -> Pose {
     )
 }
 
-fn relief() -> ViewControls {
+const fn relief() -> ViewControls {
     let mut camera = [0.0; 10];
     camera[8] = 0.25;
     ViewControls {
@@ -402,9 +410,8 @@ fn object_angle(mut object: ObjectAngles, index: usize, delta: f64) -> ObjectAng
 
 #[test]
 #[allow(
-    clippy::print_stderr,
     clippy::too_many_lines,
-    reason = "one independent oracle reports and keeps every required reprojection degree of freedom visible"
+    reason = "one independent oracle keeps every required reprojection degree of freedom visible"
 )]
 fn retained_warp_matches_independent_fresh_scenes() {
     let base = flat();
