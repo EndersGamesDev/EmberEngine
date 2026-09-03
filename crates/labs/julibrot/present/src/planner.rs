@@ -198,11 +198,11 @@ fn sampled_errors(from_pose: &Pose, to_pose: &Pose, approximate: [f64; 9]) -> Op
                 continue;
             };
             for height in HEIGHT_SAMPLES {
-                let Some(destination_relief) = project_presented(to_pose, target_screen, height)
+                let Some(destination_relief) = project_scene_point(to_pose, target_screen, height)
                 else {
                     continue;
                 };
-                let Some(expected_source) = project_presented(from_pose, source_screen, height)
+                let Some(expected_source) = project_scene_point(from_pose, source_screen, height)
                 else {
                     continue;
                 };
@@ -297,11 +297,19 @@ fn dot4(basis: [f32; 4], point: [f64; 4]) -> f64 {
 }
 
 /// Mirrors the generated scene WGSL from one grid-screen point through its plane point and relief.
+///
+/// `record_height` is the escape record's normalized height in `[-2,2]`. `None` means that the
+/// projected vertex lies behind one of the perspective poles and the exterior sky remains visible.
+#[must_use]
 #[allow(
     clippy::float_cmp,
     reason = "height zero is a semantic branch whose exact identity is part of the shader contract"
 )]
-fn project_presented(pose: &Pose, screen: [f64; 2], record_height: f64) -> Option<[f64; 2]> {
+pub fn project_scene_point(
+    pose: &Pose,
+    screen: [f64; 2],
+    record_height: f64,
+) -> Option<[f64; 2]> {
     if pose.grid_width == 0 || pose.grid_height == 0 || !pose.view.is_valid() {
         return None;
     }
@@ -595,7 +603,7 @@ mod tests {
                         ];
                         for record_height in HEIGHT_SAMPLES {
                             assert_eq!(
-                                project_presented(&posed, screen, record_height),
+                                project_scene_point(&posed, screen, record_height),
                                 Some(screen)
                             );
                         }
@@ -830,7 +838,7 @@ mod tests {
 
     fn mesh_covers(pose: &Pose, target: [f64; 2]) -> bool {
         let vertex = |column: u32, row: u32| {
-            project_presented(
+            project_scene_point(
                 pose,
                 [
                     f64::from(column) + 0.5 - 0.5 * f64::from(pose.grid_width),
