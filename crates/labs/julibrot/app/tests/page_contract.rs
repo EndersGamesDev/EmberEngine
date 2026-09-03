@@ -353,6 +353,10 @@ fn two_view_boxes_share_one_path_from_a_control_value_to_the_worker() {
     ));
     // Loading and morphing both go through one row applier, which ends on the shared handlers.
     assert_eq!(MAIN.matches("const applyRow = row => {").count(), 1);
+    // A morphed row carries the endpoints' precision: the working precision the arithmetic needs
+    // is refused downstream, where a centre and its reference must agree bit for bit.
+    assert!(SAVED.contains("round_centre("));
+    assert!(SAVED.contains("let precision_bits = first.precision_bits.max(second.precision_bits);"));
     assert_eq!(
         MAIN.matches("for (const apply of Object.values(APPLY)) apply();")
             .count(),

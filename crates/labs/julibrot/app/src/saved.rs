@@ -2,7 +2,7 @@
 
 use ember_julibrot_math::{
     BigCentre, PlaneAngles, ViewControls, decode_big_scalar, encode_big_scalar, lerp_centre,
-    lerp_f64, lerp_origin, lerp_plane_angles, lerp_view, morph_precision_bits,
+    lerp_f64, lerp_origin, lerp_plane_angles, lerp_view, morph_precision_bits, round_centre,
 };
 use serde::{Deserialize, Serialize};
 
@@ -158,9 +158,17 @@ impl SavedView {
         let zoom_log2 = lerp_f64(from.zoom_log2, to.zoom_log2, t).map_err(|error| math(&error))?;
         let first = from.centre()?;
         let second = to.centre()?;
-        let precision_bits = morph_precision_bits(&first, &second).map_err(|error| math(&error))?;
-        let centre =
-            lerp_centre(&first, &second, t, precision_bits).map_err(|error| math(&error))?;
+        let working_bits = morph_precision_bits(&first, &second).map_err(|error| math(&error))?;
+        // The extra bits are the arithmetic's, not the row's. A row is installed as the viewer's
+        // own centre and its reference, and displacement against a reference is refused when the
+        // two precisions differ, so a row handed back at working precision stops the loop on the
+        // first step of the slider. Rounding back to the deeper endpoint is exact for both ends.
+        let precision_bits = first.precision_bits.max(second.precision_bits);
+        let centre = round_centre(
+            &lerp_centre(&first, &second, t, working_bits).map_err(|error| math(&error))?,
+            precision_bits,
+        )
+        .map_err(|error| math(&error))?;
         Ok(Self {
             theta_1: angles.theta_1,
             theta_2: angles.theta_2,

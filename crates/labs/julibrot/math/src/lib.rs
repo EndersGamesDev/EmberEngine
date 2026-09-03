@@ -15,7 +15,7 @@ pub use big::{BigCentre, BigScalar, EncodedBigScalar, decode_big_scalar, encode_
 pub use drift::{navigation_drift_f32, navigation_drift_f64};
 pub use morph::{
     MORPH_EXTRA_BITS, lerp_centre, lerp_f64, lerp_origin, lerp_plane_angles, lerp_view,
-    morph_precision_bits,
+    morph_precision_bits, round_centre,
 };
 pub use orbit::{ReferenceOrbitBuilder, escape_f32};
 pub use perturb::{perturb_scaled_f64, perturb_scaled_f64_with_envelope};

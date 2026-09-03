@@ -129,6 +129,32 @@ pub fn lerp_centre(
     })
 }
 
+/// Returns `centre` re-rounded to `precision_bits`.
+///
+/// The morph runs at more bits than either endpoint so that two centres separated far below the
+/// deeper one still move step by step, but those extra bits belong to the arithmetic, not to the
+/// row it produces. A centre is only usable as a view once its precision is the one the rest of
+/// the pipeline is working at: displacement against a reference is refused outright when the two
+/// precisions differ, so a row handed back at working precision would stop the loop the moment it
+/// was installed. Rounding is exact whenever the value fits the target, which is what keeps both
+/// ends of the slider bit-identical to the rows the boxes hold.
+///
+/// # Errors
+///
+/// Returns an error for a zero or unrepresentable precision, or Astro-float arithmetic failure.
+pub fn round_centre(centre: &BigCentre, precision_bits: u32) -> Result<BigCentre, MathError> {
+    let precision_bits = rounded_astro_precision(precision_bits)?;
+    let zero = BigScalar::zero(precision_bits)?;
+    let mut coords = centre.coords.clone();
+    for coordinate in &mut coords {
+        *coordinate = coordinate.add(&zero, precision_bits)?;
+    }
+    Ok(BigCentre {
+        coords,
+        precision_bits,
+    })
+}
+
 fn validate_fraction(t: f64) -> Result<(), MathError> {
     if !t.is_finite() || !(0.0..=1.0).contains(&t) {
         return Err(MathError::NonFinite);
@@ -178,6 +204,43 @@ mod tests {
                 .expect("deep centres add without overflow");
         }
         (from, to)
+    }
+
+    /// A morphed row is only a view if it carries a precision the rest of the pipeline shares.
+    #[test]
+    fn a_morphed_centre_comes_back_at_the_endpoints_precision_not_the_working_one() {
+        let (from, to) = deep_pair();
+        let working = morph_precision_bits(&from, &to).expect("working precision");
+        assert_eq!(working, DEEP_BITS + MORPH_EXTRA_BITS);
+        for step in 0..=4 {
+            let t = f64::from(step) / 4.0;
+            let morphed = lerp_centre(&from, &to, t, working).expect("morph runs");
+            assert_eq!(morphed.precision_bits, working);
+            let rounded = round_centre(&morphed, DEEP_BITS).expect("round back");
+            assert_eq!(rounded.precision_bits, DEEP_BITS);
+        }
+        // Rounding cannot move an endpoint: both ends stay the row the box holds.
+        assert_eq!(
+            round_centre(
+                &lerp_centre(&from, &to, 0.0, working).expect("morph at zero"),
+                DEEP_BITS
+            ),
+            Ok(from.clone())
+        );
+        assert_eq!(
+            round_centre(
+                &lerp_centre(&from, &to, 1.0, working).expect("morph at one"),
+                DEEP_BITS
+            ),
+            Ok(to)
+        );
+        // The step below binary64 survives the round trip, so the morph is still a path.
+        let quarter = round_centre(
+            &lerp_centre(&from, &to, 0.25, working).expect("morph at a quarter"),
+            DEEP_BITS,
+        )
+        .expect("round a quarter");
+        assert_ne!(quarter, from);
     }
 
     /// Both ends of the slider must be the rows the boxes hold, bit for bit.
