@@ -49,8 +49,12 @@ die() { echo "FAILED: $*" >&2; exit 1; }
 win() { cygpath -w "$1"; }
 
 stop_all() {
-    taskkill /IM arena-server.exe /F >/dev/null 2>&1 || true
-    taskkill /IM cloudflared.exe /F >/dev/null 2>&1 || true
+    # MSYS_NO_PATHCONV: git-bash rewrites taskkill's /IM and /F switches into
+    # Windows paths ('C:/Program Files/Git/IM'), so without it nothing was
+    # ever killed and every `up` found the previous server still listening
+    # (measured 2026-09-03 while deploying v18).
+    MSYS_NO_PATHCONV=1 taskkill /IM arena-server.exe /F >/dev/null 2>&1 || true
+    MSYS_NO_PATHCONV=1 taskkill /IM cloudflared.exe /F >/dev/null 2>&1 || true
 }
 
 case "$CMD" in
@@ -125,7 +129,12 @@ WSBOT="$REPO_DIR/target/release/examples/wsbot.exe"
 
 say "stopping whatever was running"
 stop_all
-sleep 1
+# A killed server can hold its listening socket for a few seconds; wait for
+# it rather than mistaking our own previous instance for something else.
+for _ in $(seq 1 15); do
+    netstat -an | grep -q "TCP    $BIND .*LISTENING" || break
+    sleep 1
+done
 if netstat -an | grep -q "TCP    $BIND .*LISTENING"; then
     die "something else is listening on $BIND"
 fi
@@ -165,8 +174,13 @@ echo "   $WS_URL"
 # The first DNS query for a brand-new name can be cached as NXDOMAIN if it
 # lands before Cloudflare publishes the record (host.sh learned this on its
 # first real run). Wait, then retry for up to two minutes.
-say "letting the tunnel hostname propagate (15s)"
-sleep 15
+# 45 s, not 15: a home router (a FRITZ!Box here) caches the NXDOMAIN of a
+# query that lands before Cloudflare publishes the record, and then keeps
+# answering "non-existent domain" for the new tunnel long after 1.1.1.1
+# resolves it (2026-09-03: the whole two-minute retry window below was lost
+# to that cache). Not querying until the record exists costs 30 s once.
+say "letting the tunnel hostname propagate (45s)"
+sleep 45
 say "health check through $WS_URL"
 ok=""
 for attempt in $(seq 1 24); do
