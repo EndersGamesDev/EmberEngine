@@ -3,7 +3,9 @@
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_kernels::RefinementPlan;
 use ember_julibrot_kernels::{RefinementLevel, next_refinement_level};
-use ember_julibrot_math::{PICTURE_FAST_EDIT_BUDGET, PrecisionMode};
+#[cfg(any(target_arch = "wasm32", test))]
+use ember_julibrot_math::PICTURE_FAST_EDIT_BUDGET;
+use ember_julibrot_math::PrecisionMode;
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_present::{FenceRefusal, SubmissionKind};
 
@@ -1597,7 +1599,7 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use ember_julibrot_kernels::{GridExtent, KernelMode, plan_refinement};
+    use ember_julibrot_kernels::{GridExtent, KernelMode, RefinementPlan, plan_refinement};
     use ember_julibrot_math::{
         BigCentre, EscapeParams, MathError, OrbitStep, PrecisionMode, ReferenceOrbitBuilder,
         precision_for,
