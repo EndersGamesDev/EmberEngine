@@ -202,12 +202,7 @@ pub enum WarpKind {
     AnchorHomography,
     /// Honest clear because no compatible source or finite plan exists.
     ClearOnly,
-    /// Honest clear because the motion deforms the relief, which no image map can carry.
-    ///
-    /// The retained image is refused for the same reason as `ClearOnly` and the surface clears,
-    /// but the cause is different and recoverable: the retained escape records still describe the
-    /// destination exactly, so redrawing them under the new pose reprojects this motion without
-    /// any new sampling. Naming the case keeps the refusal legible instead of a mute black frame.
+    /// Retained-record scene-mesh redraw because no image map can carry the relief deformation.
     ReliefRedraw,
 }
 
@@ -360,6 +355,8 @@ pub struct PresentFacts {
     pub last_warp: Option<SubmissionMeasurement>,
     /// Warps completed against the retained scene.
     pub reprojected_per_scene: Option<u32>,
+    /// Retained-record relief redraws submitted as warp work.
+    pub relief_redraw_count: u64,
     /// Refresh submissions without a retained scene.
     pub refreshes_without_scene: u64,
     /// Scene-target reallocations after initial construction.
@@ -383,6 +380,10 @@ pub struct PresentFacts {
 }
 
 impl PresentFacts {
+    pub(crate) const fn record_relief_redraw(&mut self) {
+        self.relief_redraw_count = self.relief_redraw_count.saturating_add(1);
+    }
+
     /// Records the planner and exposure facts from one warp plan.
     ///
     /// A clear-only or exact-flat plan has no sampled tumbled corpus, so both error facts stay
@@ -422,6 +423,7 @@ impl Default for PresentFacts {
             last_scene: None,
             last_warp: None,
             reprojected_per_scene: None,
+            relief_redraw_count: 0,
             refreshes_without_scene: 0,
             texture_reallocations: 0,
             warp_exposed: false,
@@ -535,6 +537,7 @@ mod tests {
         assert_eq!(facts.delivered_width, 0);
         assert_eq!(facts.delivered_level, None);
         assert_eq!(facts.last_scene, None);
+        assert_eq!(facts.relief_redraw_count, 0);
         assert_eq!(facts.status, PresentStatus::WaitingForFirstScene);
     }
 
@@ -542,6 +545,8 @@ mod tests {
     fn recorded_warp_facts_publish_both_sampled_errors() {
         let mut facts = PresentFacts::default();
         assert_eq!(facts.warp_p95_error_px, None);
+        facts.record_relief_redraw();
+        assert_eq!(facts.relief_redraw_count, 1);
         let anchored = WarpPlan {
             rows: [[0.0; 4]; 3],
             source_scene_id: Some(9),

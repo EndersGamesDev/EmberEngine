@@ -64,11 +64,10 @@ impl Warp {
     }
 }
 
-/// Refuses a plan the measured corpus puts beyond the displayed-error ceiling.
+/// Selects retained-record redraw when the image homography exceeds the displayed-error ceiling.
 ///
-/// The refusal is the same picture either way — the surface clears and the next completed scene
-/// fills it — but the two refusals have different causes and only one of them is recoverable
-/// without new sampling, so they are named apart.
+/// A measured over-ceiling plan keeps its source identity because its record grid can be redrawn
+/// exactly. Only an unmeasurable plan clears and waits for a newly sampled scene.
 ///
 /// A plan only reaches here once the retained records have been shown to describe the destination:
 /// the object samples match and the plane-chart residual is inside its limit. What remains is
@@ -85,16 +84,20 @@ impl Warp {
 /// relief, where the projection has no finite answer to redraw towards, so the plan stays an
 /// honest `ClearOnly`.
 fn enforce_error_ceiling(mut plan: WarpPlan) -> WarpPlan {
-    let refused = match plan.approx_max_error_px {
+    match plan.approx_max_error_px {
         Some(error) if error <= WARP_MAX_ERROR_PX => return plan,
-        Some(_) => WarpKind::ReliefRedraw,
-        None => WarpKind::ClearOnly,
-    };
+        Some(_) => {
+            plan.exposed = true;
+            plan.kind = WarpKind::ReliefRedraw;
+            return plan;
+        }
+        None => {}
+    }
     plan.source_scene_id = None;
     plan.source_texture_index = None;
     plan.source_valid = false;
     plan.exposed = true;
-    plan.kind = refused;
+    plan.kind = WarpKind::ClearOnly;
     plan
 }
 
@@ -403,12 +406,21 @@ fn dot4(basis: [f32; 4], point: [f64; 4]) -> f64 {
 /// `record_height` is the escape record's normalized height in `[-2,2]`. `None` means that the
 /// projected vertex lies behind one of the perspective poles and the exterior sky remains visible.
 #[must_use]
-#[allow(
-    clippy::float_cmp,
-    reason = "height zero is a semantic branch whose exact identity is part of the shader contract"
-)]
 pub fn project_scene_point(pose: &Pose, screen: [f64; 2], record_height: f64) -> Option<[f64; 2]> {
-    project_scene_point_with_shortcut(pose, screen, record_height, true)
+    project_scene_vertex(pose, screen, record_height).map(|projected| projected.0)
+}
+
+/// Mirrors one scene vertex and returns its screen point with its clip-space `w`.
+///
+/// The second value lets CPU raster oracles reproduce perspective-correct interpolation of the
+/// grid coordinate. `None` means the vertex lies behind a perspective pole.
+#[must_use]
+pub fn project_scene_vertex(
+    pose: &Pose,
+    screen: [f64; 2],
+    record_height: f64,
+) -> Option<([f64; 2], f64)> {
+    project_scene_vertex_with_shortcut(pose, screen, record_height, true)
 }
 
 fn project_scene_point_with_shortcut(
@@ -417,6 +429,20 @@ fn project_scene_point_with_shortcut(
     record_height: f64,
     flat_shortcut: bool,
 ) -> Option<[f64; 2]> {
+    project_scene_vertex_with_shortcut(pose, screen, record_height, flat_shortcut)
+        .map(|projected| projected.0)
+}
+
+#[allow(
+    clippy::float_cmp,
+    reason = "height zero selects the scene shader's exact identity branch"
+)]
+fn project_scene_vertex_with_shortcut(
+    pose: &Pose,
+    screen: [f64; 2],
+    record_height: f64,
+    flat_shortcut: bool,
+) -> Option<([f64; 2], f64)> {
     if pose.grid_width == 0 || pose.grid_height == 0 || !pose.view.is_valid() {
         return None;
     }
@@ -433,7 +459,7 @@ fn project_scene_point_with_shortcut(
     ];
     let height = pose.view.height_scale * record_height;
     if flat_shortcut && height == 0.0 {
-        return Some(screen);
+        return Some((screen, 1.0));
     }
     let chart_coordinate = [
         4.0 * mapped[0] / f64::from(pose.grid_width),
@@ -492,7 +518,7 @@ fn project_scene_point_with_shortcut(
     projected
         .iter()
         .all(|value| value.is_finite())
-        .then_some(projected)
+        .then_some((projected, clip_w))
 }
 
 #[cfg(test)]
@@ -871,13 +897,16 @@ mod tests {
     }
 
     #[test]
-    fn relief_plan_above_the_published_ceiling_is_refused() {
+    fn relief_plan_above_the_homography_ceiling_keeps_its_record_source() {
         let from = pose(relief(0.6), [0.0; 2]);
         let mut to = pose(relief(0.8), [8.0, -4.0]);
         to.zoom_log2 += 0.25;
         let plan = reproject(&frame(&from), &from, &to);
         assert_eq!(plan.kind, WarpKind::ReliefRedraw);
-        assert!(!plan.source_valid);
+        assert!(plan.source_valid);
+        assert!(plan.exposed);
+        assert_eq!(plan.source_scene_id, Some(7));
+        assert_eq!(plan.source_texture_index, Some(1));
         let maximum = plan
             .approx_max_error_px
             .expect("the sampled corpus reports a maximum");
@@ -974,7 +1003,7 @@ mod tests {
     /// destination differs from the retained image by a displacement each pixel takes in
     /// proportion to its own escape height.
     #[test]
-    fn a_pure_height_change_is_refused_as_a_relief_redraw_and_is_flat_exact() {
+    fn a_pure_height_change_selects_a_relief_redraw_and_is_flat_exact() {
         let mut lifted = ViewControls::NEUTRAL;
         lifted.camera_yaw = 0.3;
         let from = pose(lifted, [0.0; 2]);
@@ -984,14 +1013,15 @@ mod tests {
 
         let plan = reproject(&frame(&from), &from, &to);
         assert_eq!(plan.kind, WarpKind::ReliefRedraw);
-        assert!(!plan.source_valid);
-        assert_eq!(plan.source_scene_id, None);
+        assert!(plan.source_valid);
+        assert!(plan.exposed);
+        assert_eq!(plan.source_scene_id, Some(7));
         let maximum = plan
             .approx_max_error_px
-            .expect("a relief refusal still publishes the measured maximum");
+            .expect("a relief redraw still publishes the measured maximum");
         assert!(
             maximum > WARP_MAX_ERROR_PX,
-            "a relief refusal is measured over the ceiling, not unmeasurable: {maximum}"
+            "a relief redraw is measured over the ceiling, not unmeasurable: {maximum}"
         );
 
         let displayed = unpack_rows(plan.rows);
@@ -1275,7 +1305,7 @@ mod tests {
     fn every_plane_keeps_a_full_screen_plan_through_a_view_turn() {
         let mut observed_max = 0.0_f64;
         let mut observed_p95 = 0.0_f64;
-        let mut refused = 0_u32;
+        let mut redrawn = 0_u32;
         for (object, plane) in named_objects() {
             for step in 0..SWEEP_ANGLES {
                 let theta = -0.6 + 1.2 * f64::from(step) / f64::from(SWEEP_ANGLES - 1);
@@ -1291,8 +1321,8 @@ mod tests {
                     PrecisionMode::PictureFast,
                     WarpValidation::Measure,
                 );
-                if matches!(plan.kind, WarpKind::ClearOnly | WarpKind::ReliefRedraw) {
-                    refused = refused.saturating_add(1);
+                if plan.kind == WarpKind::ReliefRedraw {
+                    redrawn = redrawn.saturating_add(1);
                 }
                 let error = plan
                     .approx_max_error_px
@@ -1314,8 +1344,8 @@ mod tests {
             "swept p95 maximum was {observed_p95} pixels"
         );
         assert!(
-            refused > 0,
-            "the measured relief envelope never reached the ceiling"
+            redrawn > 0,
+            "the measured relief envelope never selected record redraw"
         );
     }
 

@@ -251,6 +251,14 @@ mod tests {
     }
 
     #[test]
+    fn relief_redraw_reuses_the_webgl2_scene_vertex_record_load() {
+        let source = scene_shader(limits());
+        assert!(source.contains("@vertex fn scene_vertex"));
+        assert!(source.contains("let record = load_escape(index);"));
+        assert_translates_to_webgl2(&source, naga::ShaderStage::Vertex, "scene_vertex");
+    }
+
+    #[test]
     fn the_scene_loads_bottom_row_and_debugs_before_escape() {
         let source = scene_shader(limits());
         assert!(source.contains("let row = index / scene.grid.x;"));

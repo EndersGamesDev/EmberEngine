@@ -55,6 +55,7 @@ struct SampleTracker {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct WarpSourceSlot {
     planned: Option<(u64, u32)>,
+    relief_redraw: bool,
 }
 
 impl WarpSourceSlot {
@@ -63,10 +64,22 @@ impl WarpSourceSlot {
             .source_scene_id
             .zip(plan.source_texture_index)
             .filter(|_| plan.source_valid);
+        self.relief_redraw = plan.kind == WarpKind::ReliefRedraw;
     }
 
     fn frame<'a>(&self, retained: Option<&'a crate::SceneFrame>) -> Option<&'a crate::SceneFrame> {
         select_warp_source(self.planned, retained)
+    }
+
+    fn relief_frame<'a>(
+        &self,
+        retained: Option<&'a crate::SceneFrame>,
+    ) -> Option<&'a crate::SceneFrame> {
+        if self.relief_redraw {
+            self.frame(retained)
+        } else {
+            None
+        }
     }
 }
 
@@ -100,6 +113,7 @@ struct GpuState {
     depth: DepthTarget,
     indices: Option<IndexTarget>,
     scene_pipeline: wgpu::RenderPipeline,
+    relief_redraw_pipeline: wgpu::RenderPipeline,
     warp_pipeline: wgpu::RenderPipeline,
     scene_fence: wgpu::Buffer,
     warp_fence: wgpu::Buffer,
@@ -353,6 +367,14 @@ impl Presenter {
             .map(|frame| (frame.level, self.hot_exposed[slot.index() as usize]))
     }
 
+    /// Reports whether this HOT slot selects a retained-record relief redraw.
+    #[must_use]
+    pub fn accepted_relief_redraw(&self, slot: HotSlot) -> bool {
+        self.hot_warp_source[slot.index() as usize]
+            .relief_frame(self.ledger.retained())
+            .is_some()
+    }
+
     /// Submits the one scene pass plus its four-byte completion fence.
     ///
     /// # Errors
@@ -520,9 +542,11 @@ impl Presenter {
         self.next_warp_id = warp_id.checked_add(1).ok_or(PresentError::Device {
             operation: "advance warp identity",
         })?;
-        let source = self.hot_warp_source[hot_slot.index() as usize].frame(self.ledger.retained());
-        let source_scene_id = source.map(|frame| frame.scene_id);
-        let texture_index = source.map_or(0, |frame| frame.texture_index as usize);
+        let source_slot = self.hot_warp_source[hot_slot.index() as usize];
+        let source = source_slot.frame(self.ledger.retained()).cloned();
+        let source_scene_id = source.as_ref().map(|frame| frame.scene_id);
+        let texture_index = source.as_ref().map_or(0, |frame| frame.texture_index as usize);
+        let relief_redraw = source_slot.relief_frame(self.ledger.retained()).is_some();
         if source.is_none() {
             self.queue.write_buffer(
                 &self.gpu.hot_buffer,
@@ -530,19 +554,47 @@ impl Presenter {
                 bytemuck::bytes_of(&0_u32),
             );
         }
+        let selected = self
+            .main
+            .as_ref()
+            .and_then(PresentMain::selected_palette)
+            .unwrap_or((PaletteId::Classic, palette(PaletteId::Classic)));
+        if relief_redraw {
+            let source = source.as_ref().ok_or(PresentError::Device {
+                operation: "select relief redraw source",
+            })?;
+            let main = self.main.as_ref().ok_or(PresentError::InvalidGrid {
+                width: source.extent[0],
+                height: source.extent[1],
+                logical_len: 0,
+            })?;
+            validate_grid(main, self.gpu.heap_limits)?;
+            let uniform = relief_scene_uniform(main, source, selected.1)?;
+            ensure_indices(&self.device, &mut self.gpu, source.extent)?;
+            ensure_depth(
+                &self.device,
+                &mut self.gpu,
+                [state.canvas_width, state.canvas_height],
+            )?;
+            self.queue
+                .write_buffer(&self.gpu.scene_buffer, 0, bytemuck::bytes_of(&uniform));
+        }
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Julibrot warp and fence"),
             });
-        {
-            let clear = self
-                .main
-                .as_ref()
-                .and_then(PresentMain::selected_palette)
-                .map_or(palette(PaletteId::Classic).clear_rgba, |selected| {
-                    selected.1.clear_rgba
-                });
+        if relief_redraw {
+            encode_relief_redraw(
+                &mut encoder,
+                &self.gpu,
+                state.surface_view,
+                hot_slot.dynamic_offset(),
+                selected.1,
+            );
+            self.facts.record_relief_redraw();
+        } else {
+            let clear = selected.1.clear_rgba;
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Julibrot sole warp pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -901,6 +953,18 @@ fn create_gpu_state(
         "scene_fragment",
         &heap_layout,
         &scene_layout,
+        SCENE_FORMAT,
+        true,
+    );
+    let relief_redraw_pipeline = create_scene_pipeline(
+        device,
+        "Julibrot relief redraw pipeline",
+        &source,
+        "scene_vertex",
+        "scene_fragment",
+        &heap_layout,
+        &scene_layout,
+        config.surface_format,
         true,
     );
     let warp_pipeline = create_warp_pipeline(
@@ -921,6 +985,7 @@ fn create_gpu_state(
         depth,
         indices: None,
         scene_pipeline,
+        relief_redraw_pipeline,
         warp_pipeline,
         scene_fence: create_fence(device, "Julibrot scene four-byte fence"),
         warp_fence: create_fence(device, "Julibrot warp four-byte fence"),
@@ -1093,6 +1158,7 @@ fn create_scene_pipeline(
     fragment_entry: &'static str,
     heap_layout: &wgpu::BindGroupLayout,
     scene_layout: &wgpu::BindGroupLayout,
+    color_format: wgpu::TextureFormat,
     depth: bool,
 ) -> wgpu::RenderPipeline {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1118,7 +1184,7 @@ fn create_scene_pipeline(
             entry_point: Some(fragment_entry),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
-                format: SCENE_FORMAT,
+                format: color_format,
                 blend: None,
                 write_mask: wgpu::ColorWrites::ALL,
             })],
@@ -1259,6 +1325,48 @@ fn encode_scene(
     hot_offset: u32,
     selected: PaletteRecord,
 ) {
+    encode_scene_mesh(
+        encoder,
+        gpu,
+        &gpu.scene_textures[texture_index].view,
+        &gpu.scene_pipeline,
+        hot_offset,
+        selected,
+        "Julibrot scene pass",
+    );
+}
+
+fn encode_relief_redraw(
+    encoder: &mut wgpu::CommandEncoder,
+    gpu: &GpuState,
+    surface_view: &wgpu::TextureView,
+    hot_offset: u32,
+    selected: PaletteRecord,
+) {
+    encode_scene_mesh(
+        encoder,
+        gpu,
+        surface_view,
+        &gpu.relief_redraw_pipeline,
+        hot_offset,
+        selected,
+        "Julibrot relief redraw pass",
+    );
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the shared mesh encoder names its target, pipeline, bindings, palette, and label"
+)]
+fn encode_scene_mesh(
+    encoder: &mut wgpu::CommandEncoder,
+    gpu: &GpuState,
+    color_view: &wgpu::TextureView,
+    pipeline: &wgpu::RenderPipeline,
+    hot_offset: u32,
+    selected: PaletteRecord,
+    label: &'static str,
+) {
     let depth_attachment = Some(wgpu::RenderPassDepthStencilAttachment {
         view: &gpu.depth.view,
         depth_ops: Some(wgpu::Operations {
@@ -1268,9 +1376,9 @@ fn encode_scene(
         stencil_ops: None,
     });
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("Julibrot scene pass"),
+        label: Some(label),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view: &gpu.scene_textures[texture_index].view,
+            view: color_view,
             resolve_target: None,
             ops: wgpu::Operations {
                 load: wgpu::LoadOp::Clear(scene_load_color(selected)),
@@ -1283,7 +1391,7 @@ fn encode_scene(
     });
     pass.set_bind_group(0, &gpu.heap_group, &[]);
     pass.set_bind_group(1, &gpu.scene_group, &[hot_offset]);
-    pass.set_pipeline(&gpu.scene_pipeline);
+    pass.set_pipeline(pipeline);
     if let Some(indices) = &gpu.indices {
         pass.set_index_buffer(indices.buffer.slice(..), wgpu::IndexFormat::Uint32);
         pass.draw_indexed(0..indices.count, 0, 0..1);
@@ -1292,6 +1400,33 @@ fn encode_scene(
 
 pub fn scene_load_color(selected: PaletteRecord) -> wgpu::Color {
     color(exterior_zero(selected))
+}
+
+fn relief_scene_uniform(
+    main: &PresentMain,
+    source: &crate::SceneFrame,
+    selected: PaletteRecord,
+) -> Result<SceneUniform, PresentError> {
+    SceneUniform::new(
+        source.extent,
+        source.level as u32,
+        source.iteration_cap,
+        main.grid.span.directory_index,
+        main.grid.span.logical_len,
+        source.pose.plane,
+        source.pose.map,
+        selected,
+    )
+    .map_err(|error| match error {
+        PresentDataError::InvalidMap => PresentError::Device {
+            operation: "pack relief redraw source map",
+        },
+        _ => PresentError::InvalidGrid {
+            width: source.extent[0],
+            height: source.extent[1],
+            logical_len: main.grid.span.logical_len,
+        },
+    })
 }
 
 fn validate_grid(main: &PresentMain, limits: DialectLimits) -> Result<(), PresentError> {
@@ -1433,6 +1568,9 @@ fn warp_exposed_fraction(
         plan.source_scene_id.zip(plan.source_texture_index),
         retained,
     )?;
+    if plan.kind == WarpKind::ReliefRedraw {
+        return None;
+    }
     if !plan.exposed {
         return Some(0.0);
     }
@@ -1516,8 +1654,9 @@ const fn clear_warp_plan(edge_on: bool, exposed: bool) -> crate::WarpPlan {
 
 #[cfg(test)]
 mod tests {
-    use ember_julibrot_kernels::RefinementLevel;
+    use ember_julibrot_kernels::{EscapeGrid, RefinementLevel};
     use ember_julibrot_math::{PrecisionMode, ViewControls};
+    use ember_julibrot_worker::MainState;
 
     use super::*;
     use crate::SubmissionMeasurement;
@@ -1576,6 +1715,30 @@ mod tests {
         match ledger.complete(binding_measurement(scene_id)) {
             Some(SceneCompletion::Promoted(frame)) => frame,
             other => panic!("binding scene did not promote: {other:?}"),
+        }
+    }
+
+    fn binding_main() -> PresentMain {
+        let mut arena = ember_lab_heap::SpanArena::new(64, 1, 64, 4_096, 64)
+            .expect("relief fixture arena is valid");
+        let span = arena
+            .allocate_span(64 * 36, 64)
+            .expect("relief fixture grid fits");
+        PresentMain {
+            epoch: 1,
+            state: MainState {
+                delivered_iter_cap: 64,
+                ..MainState::default()
+            },
+            grid: EscapeGrid {
+                span,
+                width: 64,
+                height: 36,
+                level: RefinementLevel::Final,
+            },
+            object: ember_julibrot_math::ObjectAngles::JULIA,
+            plane: binding_pose().plane,
+            map: PoseMap::EdgeOn,
         }
     }
 
@@ -1652,6 +1815,34 @@ mod tests {
         let fraction = warp_exposed_fraction(&plan, &binding_pose(), ledger.retained())
             .expect("the accepted source has an exposure census");
         assert!((fraction - 2.0 / 9.0).abs() <= f64::EPSILON);
+    }
+
+    #[test]
+    fn relief_redraw_reuses_the_retained_grid_and_scene_uniform_contract() {
+        let mut ledger = SceneLedger::default();
+        let sampled = promote_binding_scene(&mut ledger, 61);
+        let mut plan = clear_warp_plan(false, true);
+        plan.kind = WarpKind::ReliefRedraw;
+        plan.source_scene_id = Some(sampled.scene_id);
+        plan.source_texture_index = Some(sampled.texture_index);
+        plan.source_valid = true;
+        let mut hot = WarpSourceSlot::default();
+        hot.write_hot(&plan);
+        assert_eq!(
+            hot.relief_frame(ledger.retained())
+                .map(|frame| frame.scene_id),
+            Some(61)
+        );
+
+        let main = binding_main();
+        let uniform = relief_scene_uniform(&main, &sampled, crate::CLASSIC_PALETTE)
+            .expect("compatible records form a scene uniform");
+        assert_eq!(uniform.grid, [64, 36, RefinementLevel::Final as u32, 64]);
+        assert_eq!(uniform.span[0], main.grid.span.directory_index);
+        assert_eq!(uniform.span[1], 64 * 36);
+        assert_eq!(uniform.basis_u, sampled.pose.plane.basis_u);
+        assert_eq!(uniform.screen_to_plane_row_0, [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(uniform.screen_to_plane_row_2, [0.0, 0.0, 1.0, 0.0]);
     }
 
     #[test]
