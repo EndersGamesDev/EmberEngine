@@ -1,6 +1,6 @@
 {
-  "version": "r575",
-  "commit": "bfbf6ff",
-  "built": "2026-09-03T15:59:40Z",
-  "subject": "arena v18: review fixes - the bloom counter, the sightline driver's reach, the double bonk, the audio gate, the rocket's frame, gilrs timing"
+  "version": "r581",
+  "commit": "d3e8529",
+  "built": "2026-09-03T17:50:41Z",
+  "subject": "web: showcase latest game builds on landing page"
 }

@@ -3,73 +3,89 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ember games</title>
+  <title>Ember Engine — play the latest builds</title>
+  <meta name="description" content="The latest playable games built with Ember, a from-scratch Rust and wgpu engine.">
   <style>
-    :root { color-scheme: dark; }
+    :root { color-scheme: dark; --ink: #f4f1e8; --muted: #aeb8c7; --line: rgba(225, 235, 255, .15); --panel: rgba(11, 20, 38, .78); --gold: #ffc857; --mint: #73e2b5; }
+    * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 16px;
-      background: #06101f;
-      color: #c7d2e4;
-      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-      padding-bottom: 24px;
+      gap: 28px;
+      background: radial-gradient(circle at 12% -10%, #25436b 0, transparent 34rem), radial-gradient(circle at 90% 8%, #512f51 0, transparent 30rem), #07101f;
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      padding: 0 0 34px;
     }
     header {
-      width: min(920px, 94vw);
-      display: flex; align-items: baseline; justify-content: space-between;
-      margin-top: 20px;
+      width: min(1180px, 92vw);
+      display: flex; align-items: center; justify-content: space-between;
+      margin-top: 22px;
     }
-    h1 { margin: 0; font-size: 1.5rem; letter-spacing: 0.16em; font-weight: 600; }
-    h1 span { color: #f0b429; }
+    h1 { margin: 0; font-size: 1.1rem; letter-spacing: .2em; text-transform: uppercase; font-weight: 800; }
+    h1 span { color: var(--gold); }
     #account {
-      font-size: 0.85rem; color: #9fb4d8; cursor: pointer;
-      background: #0b1830; border: 1px solid #1d3050; border-radius: 999px;
+      font-size: .8rem; color: var(--muted); cursor: pointer;
+      background: rgba(9, 18, 35, .75); border: 1px solid var(--line); border-radius: 999px;
       padding: 5px 12px;
     }
-    #account b { color: #6ea8fe; }
-    section { width: min(920px, 94vw); }
-    h2 { font-size: 0.95rem; color: #9fb4d8; letter-spacing: 0.08em;
-         text-transform: uppercase; margin: 8px 0 10px; }
-    h2 .dot { color: #43d17c; }
-    .cards { display: flex; gap: 16px; flex-wrap: wrap; }
+    #account b { color: var(--mint); }
+    section { width: min(1180px, 92vw); }
+    .intro { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(250px, .55fr); gap: 28px; align-items: end; padding: 42px 0 4px; }
+    .eyebrow { color: var(--gold); font-size: .76rem; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+    .intro h2 { margin: 9px 0 12px; max-width: 760px; font-size: clamp(2.5rem, 6vw, 5.3rem); line-height: .92; letter-spacing: -.065em; color: var(--ink); text-transform: none; }
+    .intro p { max-width: 54ch; margin: 0; color: var(--muted); font-size: 1.02rem; line-height: 1.6; }
+    .engine-note { border: 1px solid var(--line); background: linear-gradient(135deg, rgba(255, 200, 87, .14), rgba(115, 226, 181, .05)); border-radius: 16px; padding: 18px; color: var(--muted); line-height: 1.45; font-size: .9rem; }
+    .engine-note strong { display: block; color: var(--ink); margin-bottom: 5px; }
+    h2 { font-size: .78rem; color: var(--muted); letter-spacing: .14em; text-transform: uppercase; margin: 8px 0 13px; }
+    h2 .dot { color: var(--mint); }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
     .card {
-      background: #0b1830; border: 1px solid #1d3050; border-radius: 12px;
-      padding: 18px 20px; flex: 1 1 300px; max-width: 450px;
-      display: flex; flex-direction: column; gap: 10px;
+      position: relative; overflow: hidden; isolation: isolate;
+      min-height: 360px; padding: 22px; display: flex; flex-direction: column; gap: 12px;
+      background: var(--panel); border: 1px solid var(--line); border-radius: 18px;
+      box-shadow: 0 16px 38px rgba(0, 0, 0, .18); transition: transform .18s ease, border-color .18s ease;
     }
-    .card h3 { margin: 0; font-size: 1.1rem; }
-    .tag { font-size: 0.78rem; color: #f0b429; }
-    .desc { font-size: 0.9rem; opacity: 0.85; line-height: 1.45; }
+    .card:hover { transform: translateY(-4px); border-color: rgba(255, 200, 87, .58); }
+    .card::before { content: ''; position: absolute; z-index: -1; inset: 0 0 auto; height: 116px; opacity: .82; background: radial-gradient(circle at 85% 5%, var(--accent-2), transparent 42%), linear-gradient(125deg, var(--accent), transparent 64%); }
+    .card[data-game="arena"] { --accent: #8b333a; --accent-2: #e7a654; }
+    .card[data-game="fire"] { --accent: #a54128; --accent-2: #fac45b; }
+    .card[data-game="kings"] { --accent: #3c427f; --accent-2: #b47dc4; }
+    .card[data-game="what-is-this"] { --accent: #12615a; --accent-2: #76dbbb; }
+    .card h3 { margin: auto 0 0; font-size: 1.55rem; letter-spacing: -.035em; }
+    .tag { font-size: .73rem; color: var(--gold); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+    .desc { color: var(--muted); font-size: .9rem; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .update { min-height: 50px; padding: 9px 10px; border-left: 2px solid var(--gold); background: rgba(4, 10, 22, .36); color: #dce5ef; font-size: .82rem; line-height: 1.38; }
+    .update b { display: block; color: var(--gold); font-size: .67rem; letter-spacing: .1em; text-transform: uppercase; margin-bottom: 2px; }
     .playrow { display: flex; gap: 10px; align-items: center; margin-top: auto; }
     select {
-      background: #08122a; border: 1px solid #23406b; border-radius: 6px;
-      color: #dce6f5; padding: 7px 9px; font: inherit;
+      min-width: 0; max-width: 100%; background: rgba(3, 10, 23, .76); border: 1px solid var(--line); border-radius: 8px;
+      color: var(--ink); padding: 8px 9px; font: inherit;
     }
     select.small { padding: 3px 7px; font-size: 0.78rem; text-transform: none; letter-spacing: 0; }
     button {
-      background: #1c4d8f; color: #eaf1fb; border: 0; border-radius: 7px;
-      padding: 9px 16px; font: inherit; cursor: pointer;
+      background: var(--gold); color: #1d1710; border: 0; border-radius: 8px;
+      padding: 9px 15px; font: inherit; font-weight: 800; cursor: pointer;
     }
-    button:hover { background: #2661b1; }
+    button:hover { background: #ffe092; }
     button.small { padding: 4px 12px; font-size: 0.85rem; }
     #lobby-rows { display: flex; flex-direction: column; gap: 6px; }
     .lobby-row {
       display: flex; align-items: center; justify-content: space-between; gap: 8px;
-      background: #0b1830; border: 1px solid #1d3050;
-      border-radius: 9px; padding: 10px 14px; font-size: 0.92rem;
+      background: var(--panel); border: 1px solid var(--line);
+      border-radius: 10px; padding: 10px 14px; font-size: .92rem;
     }
     .lobby-row .lock { opacity: 0.7; }
     .lobby-row .right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
     #list-note { font-size: 0.85rem; opacity: 0.65; }
-    details { width: min(920px, 94vw); }
+    details { width: min(1180px, 92vw); }
     summary { font-size: 0.8rem; opacity: 0.6; cursor: pointer; }
     input {
-      width: 100%; box-sizing: border-box; background: #08122a;
-      border: 1px solid #23406b; border-radius: 6px; color: #dce6f5;
+      width: 100%; box-sizing: border-box; background: rgba(3, 10, 23, .76);
+      border: 1px solid var(--line); border-radius: 6px; color: var(--ink);
       padding: 7px 9px; font: inherit; margin-top: 4px;
     }
     .foot { font-size: 0.8rem; opacity: 0.65; }
@@ -77,18 +93,18 @@
     .headright { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
     #build, #host-chip {
       font-size: 0.72rem; color: #7f93b5; font-family: ui-monospace, monospace;
-      background: #0b1830; border: 1px solid #1d3050; border-radius: 999px;
+      background: rgba(9, 18, 35, .75); border: 1px solid var(--line); border-radius: 999px;
       padding: 5px 10px; white-space: nowrap;
     }
     #build b { color: #f0b429; font-weight: 600; }
     .badge {
-      font-size: 0.75rem; color: #0b1830; background: #f0b429;
+      font-size: .75rem; color: #1d1710; background: var(--gold);
       border-radius: 999px; padding: 4px 10px; font-weight: 600;
     }
     .badge.dim { background: #2a3d5c; color: #9fb4d8; }
     .badge.small { font-size: 0.68rem; padding: 2px 8px; }
     code {
-      background: #08122a; border: 1px solid #1d3050; border-radius: 4px;
+      background: rgba(3, 10, 23, .76); border: 1px solid var(--line); border-radius: 4px;
       padding: 1px 5px; font-size: 0.85em;
     }
     /* ---- hosts strip: the machines the games are running on ---- */
@@ -98,18 +114,21 @@
     #host-strip { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
     .host-row {
       display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-      background: #0b1830; border: 1px solid #1d3050;
+      background: var(--panel); border: 1px solid var(--line);
       border-radius: 9px; padding: 9px 14px; font-size: 0.9rem;
     }
     .host-row.preferred { border-color: #3a5a8c; }
     .host-row .nm { font-weight: 600; color: #dce6f5; }
     .host-row .right { display: flex; align-items: center; gap: 8px; margin-left: auto; }
     .pill {
-      font-size: 0.72rem; background: #08122a; border: 1px solid #1d3050;
+      font-size: .72rem; background: rgba(3, 10, 23, .76); border: 1px solid var(--line);
       border-radius: 999px; padding: 2px 8px; opacity: 0.9;
       font-family: ui-monospace, monospace; white-space: nowrap;
     }
     #host-note { font-size: 0.85rem; opacity: 0.65; }
+    .utility-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+    .foot { width: min(1180px, 92vw); }
+    @media (max-width: 720px) { .intro, .utility-grid { grid-template-columns: 1fr; } .headright { gap: 5px; } #build { display: none; } .card { min-height: 320px; } }
   </style>
 </head>
 <body>
@@ -123,55 +142,34 @@
   </header>
 
   <section>
-    <h2><span class="dot">●</span> live now — jump into a running game</h2>
-    <div id="lobby-rows"><span id="list-note">looking for open games…</span></div>
-  </section>
-
-  <section>
-    <div class="h2row">
-      <h2>hosts</h2>
-      <span class="spacer"></span>
-      <label for="host-pick" style="font-size:0.78rem; opacity:0.65">play on</label>
-      <select id="host-pick" class="small"><option value="">automatic</option></select>
+    <div class="intro">
+      <div>
+        <div class="eyebrow">Ember Engine presents</div>
+        <h2>Small games. Sharp ideas. Fresh builds.</h2>
+        <p>Pick a game, play its newest release, and find the update that changed it — from a seven-weapon multiplayer arena to a castle racer.</p>
+      </div>
+      <div class="engine-note"><strong>Built from scratch in Rust + wgpu.</strong>Each card points to the current live build. Older versions remain available when you want the history.</div>
     </div>
-    <div id="host-strip"><span id="host-note">looking for hosts…</span></div>
   </section>
 
   <section>
-    <h2>games</h2>
+    <h2>Current games</h2>
     <div class="cards" id="game-cards"></div>
-    <!-- Direct links for quick access to popular games -->
-    <div class="cards" style="margin-top: 20px;">
-      <div class="card">
-        <h3>Fight Arena</h3>
-        <div class="tag">online multiplayer · first person · up to 8</div>
-        <div class="desc">
-          First-person drop-in deathmatch in a generated arena. WASD + mouse look, Space jump, RMB zoom, R reload, Shift sprint, C crouch — crouching also shrinks your hitbox.
-        </div>
-        <div class="playrow">
-          <button onclick="location.href='games/arena/v18/'">Play Arena Shooter</button>
-        </div>
+  </section>
+
+  <section class="utility-grid">
+    <div>
+      <h2><span class="dot">●</span> live now</h2>
+      <div id="lobby-rows"><span id="list-note">looking for open games…</span></div>
+    </div>
+    <div>
+      <div class="h2row">
+        <h2>Hosts</h2>
+        <span class="spacer"></span>
+        <label for="host-pick" style="font-size:.78rem; opacity:.65">play on</label>
+        <select id="host-pick" class="small"><option value="">automatic</option></select>
       </div>
-      <div class="card">
-        <h3>Fire Racer</h3>
-        <div class="tag">local + online · 8 cars · 3 laps</div>
-        <div class="desc">
-          Arcade racing through a gothic castle bailey — a 920 m circuit with a main straight, a long sweeper, a fountain chicane and a hairpin. WASD to drive, Space for the handbrake to break traction and drift, Shift to spend one of three boost charges. Practice alone, or open a lobby and race other people on an authoritative server.
-        </div>
-        <div class="playrow">
-          <button onclick="location.href='games/fire/v2/'">Play Fire Racer</button>
-        </div>
-      </div>
-      <div class="card">
-        <h3>Four Kings</h3>
-        <div class="tag">online, turn based, 2-4 players, 15 s turns</div>
-        <div class="desc">
-          Four-corner chess on a 10x10 board with two new legends: the Joker teleports between mirror tiles and captures on exactly one tile, the Hero trades places with a pawn and wakes as a rook-plus-knight. One action per 15-second turn, last king standing wins. Click a piece, click a target; Esc clears.
-        </div>
-        <div class="playrow">
-          <button onclick="location.href='games/kings/v1/'">Play Four Kings</button>
-        </div>
-      </div>
+      <div id="host-strip"><span id="host-note">looking for hosts…</span></div>
     </div>
   </section>
 
@@ -183,8 +181,9 @@
     account, so this is a plain link outside the loop.
   -->
   <section>
-    <h2>engine</h2>
-    <div class="cards">
+    <details class="engine-tools">
+      <summary>Engine tools &amp; experiments</summary>
+      <div class="cards" style="margin-top:14px">
       <div class="card">
         <h3>Level builder</h3>
         <div class="tag">fly · place · move, rotate, scale · spawn points</div>
@@ -216,7 +215,8 @@
         </div>
         <div class="playrow"><span class="badge dim">planned</span></div>
       </div>
-    </div>
+      </div>
+    </details>
   </section>
 
   <details>
@@ -346,8 +346,10 @@
 
     const cards = $('game-cards');
     for (const g of catalog.games) {
+      const live = g.versions.find((v) => v.live) || g.versions[0];
       const card = document.createElement('div');
       card.className = 'card';
+      card.dataset.game = g.id;
       const h = document.createElement('h3');
       h.textContent = g.title;
       const tag = document.createElement('div');
@@ -356,6 +358,11 @@
       const desc = document.createElement('div');
       desc.className = 'desc';
       desc.textContent = g.desc;
+      const update = document.createElement('div');
+      update.className = 'update';
+      const updateLabel = document.createElement('b');
+      updateLabel.textContent = live ? `latest update · ${live.v}` : 'latest update';
+      update.append(updateLabel, live && live.note ? live.note : 'Current playable build.');
       const row = document.createElement('div');
       row.className = 'playrow';
       const sel = document.createElement('select');
@@ -374,10 +381,11 @@
       }
       if (livePath) sel.value = livePath;
       const btn = document.createElement('button');
-      btn.textContent = 'Play';
+      btn.textContent = `Play ${live ? live.v : ''}`.trim();
+      btn.title = `Play the latest ${g.title} build`;
       btn.addEventListener('click', () => launch(sel.value));
       row.append(sel, btn);
-      card.append(h, tag, desc, row);
+      card.append(h, tag, desc, update, row);
       cards.append(card);
     }
 
