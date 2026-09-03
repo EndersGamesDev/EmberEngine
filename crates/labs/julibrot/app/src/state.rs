@@ -321,13 +321,47 @@ pub struct HotFrame {
     pub pose: Pose,
 }
 
-/// One checked neutral-height map and every input that determines it.
+/// The bit-exact inputs that determine one checked neutral-height map.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ScreenMapKey {
+    object: [u64; 6],
+    camera: [u64; 10],
+    camera_translation: [u64; 5],
+    camera_yaw: u64,
+    camera_pitch: u64,
+    height_scale: u64,
+    distance_five: u64,
+    distance_four: u64,
+    zoom_log2: u64,
+    extent: [u32; 2],
+}
+
+impl ScreenMapKey {
+    fn new(
+        object: ObjectAngles,
+        view: ViewControls,
+        zoom_log2: f64,
+        extent: [u32; 2],
+    ) -> Self {
+        Self {
+            object: object.as_array().map(f64::to_bits),
+            camera: view.camera.map(f64::to_bits),
+            camera_translation: view.camera_translation.map(f64::to_bits),
+            camera_yaw: view.camera_yaw.to_bits(),
+            camera_pitch: view.camera_pitch.to_bits(),
+            height_scale: view.height_scale.to_bits(),
+            distance_five: view.distance_five.to_bits(),
+            distance_four: view.distance_four.to_bits(),
+            zoom_log2: zoom_log2.to_bits(),
+            extent,
+        }
+    }
+}
+
+/// One checked neutral-height map and the exact key that produced it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct CheckedScreenMap {
-    object: ObjectAngles,
-    view: ViewControls,
-    zoom_log2: f64,
-    extent: [u32; 2],
+    key: ScreenMapKey,
     map: PoseMap,
 }
 
@@ -1004,30 +1038,19 @@ impl ViewerController {
     /// # Errors
     ///
     /// Returns a typed math refusal for an invalid extent or degenerate accepted view.
-    #[allow(
-        clippy::float_cmp,
-        reason = "finite control values and the extent form an exact checked-map cache key"
-    )]
     pub fn screen_map(&self, grid_extent: [u32; 2]) -> Result<PoseMap, AppError> {
         let object = self.requested.object_angles;
         let view = self.requested.view;
         let zoom_log2 = self.requested.zoom_log2;
+        let key = ScreenMapKey::new(object, view, zoom_log2, grid_extent);
         if let Some(cached) = self.checked_screen_map.get()
-            && cached.object == object
-            && cached.view == view
-            && cached.zoom_log2 == zoom_log2
-            && cached.extent == grid_extent
+            && cached.key == key
         {
             return Ok(cached.map);
         }
         let map = map_for(object, view, zoom_log2, grid_extent)?;
-        self.checked_screen_map.set(Some(CheckedScreenMap {
-            object,
-            view,
-            zoom_log2,
-            extent: grid_extent,
-            map,
-        }));
+        self.checked_screen_map
+            .set(Some(CheckedScreenMap { key, map }));
         #[cfg(test)]
         self.map_constructions
             .set(self.map_constructions.get().saturating_add(1));
@@ -1517,6 +1540,16 @@ mod tests {
 
         viewer.drain_hot([800, 600]).expect("changed extent map");
         assert_eq!(viewer.map_constructions.get(), 5);
+
+        let mut signed_zero_view = viewer.requested().view;
+        signed_zero_view.camera_pitch = -0.0;
+        viewer
+            .set_view_controls(signed_zero_view)
+            .expect("signed-zero VIEW controls");
+        viewer
+            .drain_hot([800, 600])
+            .expect("signed-zero VIEW map");
+        assert_eq!(viewer.map_constructions.get(), 6);
     }
 
     #[test]
