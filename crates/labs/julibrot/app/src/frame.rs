@@ -1,7 +1,7 @@
 //! Cross-slice progressive frame scheduling and browser GPU integration.
 
 #[cfg(any(target_arch = "wasm32", test))]
-use ember_julibrot_kernels::RefinementPlan;
+use ember_julibrot_kernels::{EscapeGrid, RefinementPlan};
 use ember_julibrot_kernels::{RefinementLevel, next_refinement_level};
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_math::PICTURE_FAST_EDIT_BUDGET;
@@ -359,6 +359,15 @@ fn pose_maps_close(
 #[cfg(any(target_arch = "wasm32", test))]
 const fn stamped_extent(plan: &RefinementPlan) -> [u32; 2] {
     [plan.requested_extent.width, plan.requested_extent.height]
+}
+
+/// Publishes the level a scene submission represents even when no kernel dispatch runs.
+#[cfg(any(target_arch = "wasm32", test))]
+const fn stamp_scene_level(grid: &mut EscapeGrid, plan: &RefinementPlan, level: RefinementLevel) {
+    let spec = plan.level(level);
+    grid.width = spec.extent.width;
+    grid.height = spec.extent.height;
+    grid.level = level;
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -1789,6 +1798,9 @@ mod browser {
             if self.prepared_level != Some(level) {
                 return Ok(None);
             }
+            if matches!(map, PoseMap::EdgeOn) {
+                super::stamp_scene_level(&mut self.grid, &self.plan, level);
+            }
             let facts = if let PoseMap::Mapped(screen_to_plane) = map {
                 let params = EscapeParams::new(viewer.requested().iteration_cap);
                 let mut encoder =
@@ -2142,7 +2154,9 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use ember_julibrot_kernels::{GridExtent, KernelMode, RefinementPlan, plan_refinement};
+    use ember_julibrot_kernels::{
+        EscapeGrid, GridExtent, KernelMode, RefinementPlan, plan_refinement,
+    };
     use ember_julibrot_math::{
         BigCentre, EscapeParams, Homography, MathError, ObjectAngles, OrbitStep, PoseMap,
         PrecisionMode, ReferenceOrbitBuilder, ViewControls, precision_for, screen_to_plane,
@@ -2152,10 +2166,12 @@ mod tests {
         FenceRefusal, FrameLoop, LEVELS, PresenterPoll, RefinementLevel, RefinementSchedule,
         RefusalClass, SceneMode, SubmissionKind, apply_precision_mode, arrival_is_current,
         expand_reference_texels, fence_error, horizon_facts, main_for_grid,
-        published_iteration_cap, schedule_exposure_fill, stamped_extent, view_projection_changed,
+        published_iteration_cap, schedule_exposure_fill, stamp_scene_level, stamped_extent,
+        view_projection_changed,
     };
     use crate::{FramePolicy, LevelTimingLedger, ViewerController};
     use ember_julibrot_present::{SampleClass, SubmissionMeasurement};
+    use ember_lab_heap::SpanArena;
 
     /// Poll budget and wall the version-three present configuration refuses at.
     const SCENE_POLLS: u32 = 4_096;
@@ -3063,6 +3079,85 @@ mod tests {
         first_scene.restart(23);
         first_scene.set_scene_mode(SceneMode::Manual, 23, false);
         assert_eq!(first_scene.due(), Some(RefinementLevel::Preview));
+    }
+
+    #[test]
+    fn edge_on_final_completes_once_then_stays_idle_in_both_scene_modes() {
+        const SETTLED_REFRESHES: usize = 16;
+        let plan = plan_refinement(
+            GridExtent {
+                width: 8,
+                height: 8,
+            },
+            EscapeParams::new(64),
+            |_| true,
+        )
+        .expect("the edge-on fixture has enough capacity");
+        let mut arena = SpanArena::new(8, 2, 8, 256, 8).expect("fixture arena");
+        let span = arena.allocate_span(64, 8).expect("fixture grid span");
+        let edge_on_object = ObjectAngles {
+            rho_13: std::f64::consts::FRAC_PI_2,
+            ..ObjectAngles::IDENTITY
+        };
+        assert!(
+            screen_to_plane(
+                &edge_on_object,
+                &ViewControls::MANDELBROT_FLAT,
+                0.0,
+                8,
+                8,
+                1.0,
+            )
+            .is_err(),
+            "the exact browser fixture must take the all-sky EdgeOn path"
+        );
+
+        for mode in [SceneMode::Auto, SceneMode::Manual] {
+            let mut frame_loop = FrameLoop::default();
+            if mode == SceneMode::Manual {
+                frame_loop.set_scene_mode(mode, 29, false);
+            }
+            frame_loop.schedule.generation = 29;
+            frame_loop.schedule.next = Some(RefinementLevel::Final);
+
+            // EdgeOn skips the kernel encoder, so the grid still carries the preceding level until
+            // app stamps the scheduled all-sky scene explicitly.
+            let mut grid = EscapeGrid {
+                span: span.clone(),
+                width: plan.level(RefinementLevel::Preview).extent.width,
+                height: plan.level(RefinementLevel::Preview).extent.height,
+                level: RefinementLevel::Preview,
+            };
+            let scheduled = frame_loop.due().expect("Final is due");
+            assert_ne!(grid.level, scheduled);
+            stamp_scene_level(&mut grid, &plan, scheduled);
+
+            let mut presenter = FakePresenter::default();
+            let scene_id = presenter.submit(frame_loop.generation(), grid.level);
+            frame_loop.submitted(scene_id, scheduled);
+            presenter.fire_completed_callback();
+            let mut clock = FakeClock::default();
+            clock.advance(1.0);
+
+            for _ in 0..SETTLED_REFRESHES {
+                let outcome = drive_turn(
+                    &mut frame_loop,
+                    &mut presenter,
+                    clock,
+                    FramePolicy::SingleFrameOnDemand,
+                    false,
+                );
+                assert_eq!(outcome.scene_id, None, "mode {mode:?}");
+                assert!(!frame_loop.refinement_pending(), "mode {mode:?}");
+                assert!(!frame_loop.scene_update_pending(), "mode {mode:?}");
+                assert!(
+                    !frame_loop.needs_refresh(false, false, false, false),
+                    "mode {mode:?}"
+                );
+                clock.advance(1.0);
+            }
+            assert_eq!(presenter.submissions, [RefinementLevel::Final]);
+        }
     }
 
     #[test]

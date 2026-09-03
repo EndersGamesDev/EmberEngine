@@ -98,6 +98,8 @@ App’s schedule begins at Preview after a compatible selection or extent change
 
 A kernel level is due when sampling state or the composed neutral-height map changes, when an edge-on stamp becomes mapped, or when refinement remains pending. A scene is due when presentation changes, when a warp exposes source-free pixels, or when a compatible kernel level completes; a control edit that leaves both the slice and `F` unchanged to `1e−12` does not restart the ladder.
 
+An exact edge-on scene stamps its scheduled level even though its all-sky path skips kernel dispatch, so its one Final completion retires the ladder in both automatic and manual scene modes instead of resubmitting unchanged work.
+
 Scene-target extent equals that level’s delivered grid extent, so Preview, Interactive, and Final may reallocate only the available member of present’s two-texture pair; every such event increments `texture_reallocations`, while the retained source remains valid until promotion.
 
 Four facts separate the three ways the reference path can go quiet, because the visible symptom of all three is one frozen overlay: `worker_request_depth` is the depth of orbit requests main has handed the producer, `outstanding_reference_count` and `outstanding_reference_generation` are how many submissions the app is still waiting on and the newest generation among them, and `navigation_pending_depth` is the owner’s coalesced-navigation depth. A producer that never admits shows a non-zero request depth beside a frozen worker epoch; an app that never submits shows depth zero beside a stale requested view; navigation that coalesces without ever resolving shows a non-zero pending depth while both other counts sit at zero.
