@@ -7,13 +7,13 @@
 )]
 
 use ember_julibrot_math::{
-    EscapeGridRecord, EscapeParams, Plane, ReferenceOrbitRecord, ScaleSplit,
+    EscapeGridRecord, EscapeParams, Homography, Plane, ReferenceOrbitRecord, ScaleSplit,
 };
 
 use crate::{
     GridExtent, KernelError, KernelSample, PerturbUniform, RefinementLevel,
-    records::pixel_offset,
-    shallow::{validate_extent, validate_params},
+    records::{pack_map_rows, pixel_offset},
+    shallow::{terminal_sample, validate_extent, validate_params},
 };
 
 const REBASE_EXACT_LIMIT: u32 = 1 << 24;
@@ -39,6 +39,7 @@ impl PerturbUniform {
     /// length outside `1..=max_iter`.
     pub fn pack(
         plane: Plane,
+        screen_to_plane: &Homography,
         scale: ScaleSplit,
         extent: GridExtent,
         params: EscapeParams,
@@ -55,6 +56,7 @@ impl PerturbUniform {
         }
         Ok(Self::from_parts(
             plane,
+            pack_map_rows(screen_to_plane)?,
             scale,
             extent,
             params.max_iter,
@@ -190,13 +192,13 @@ fn smooth_iteration(iteration: u32, value: [f32; 2]) -> f32 {
     iteration as f32 + 1.0 - log2_norm(value).log2()
 }
 
-fn record(rebases: u32, glitch: bool) -> KernelSample {
+const fn record(rebases: u32, glitch: bool) -> KernelSample {
     KernelSample {
         record: EscapeGridRecord {
             smooth_iter: -1.0,
             escaped: 0.0,
             rebase_count: rebases as f32,
-            glitch: u8::from(glitch).into(),
+            status: if glitch { 1.0 } else { 0.0 },
         },
         escape_index: None,
     }
@@ -260,7 +262,7 @@ pub fn perturb_scaled_offset(
                     smooth_iter: smooth_iteration(iteration, z),
                     escaped: 1.0,
                     rebase_count: rebases as f32,
-                    glitch: 0.0,
+                    status: 0.0,
                 },
                 escape_index: Some(iteration),
             });
@@ -319,15 +321,23 @@ pub fn perturb_scaled_pixel(
     if index >= active_len {
         return Err(KernelError::InvalidExtent);
     }
-    let offset = pixel_offset(
+    let offset = match pixel_offset(
         index,
         extent,
         Plane {
             basis_u: uniforms.basis_u,
             basis_v: uniforms.basis_v,
         },
+        [
+            uniforms.screen_to_plane_row_0,
+            uniforms.screen_to_plane_row_1,
+            uniforms.screen_to_plane_row_2,
+        ],
         uniforms.pixel_scale,
-    );
+    ) {
+        Ok(offset) => offset,
+        Err(status) => return Ok(terminal_sample(status)),
+    };
     perturb_scaled_offset(uniforms, orbit, offset)
 }
 
@@ -337,8 +347,8 @@ mod tests {
         MAX_RESCALE_STEPS, ScaledState, finite_scalar, ldexp, normalize_scaled,
         perturb_scaled_offset, perturb_scaled_pixel, reconstruct, scale,
     };
-    use crate::{GridExtent, KernelError, PerturbUniform, RefinementLevel};
-    use ember_julibrot_math::{EscapeParams, Plane, ReferenceOrbitRecord, ScaleSplit};
+    use crate::{GridExtent, KernelError, PerturbUniform, RefinementLevel, SampleStatus};
+    use ember_julibrot_math::{EscapeParams, Homography, Plane, ReferenceOrbitRecord, ScaleSplit};
 
     const ZERO: ReferenceOrbitRecord = ReferenceOrbitRecord { re: 0.0, im: 0.0 };
 
@@ -348,6 +358,7 @@ mod tests {
                 basis_u: [0.0, 0.0, 1.0, 0.0],
                 basis_v: [0.0, 0.0, 0.0, 1.0],
             },
+            &Homography::IDENTITY,
             ScaleSplit {
                 mantissa: 0.5,
                 exponent: 0,
@@ -368,11 +379,23 @@ mod tests {
         let capped = perturb_scaled_pixel(&uniform(4, 4), &[ZERO; 4], 0)
             .expect("complete reference is valid");
         assert_eq!(capped.escape_index, None);
-        assert_eq!(capped.record.glitch, 0.0);
+        assert_eq!(capped.record.status, 0.0);
         let glitch = perturb_scaled_pixel(&uniform(4, 1), &[ZERO], 0)
             .expect("short reference is represented honestly");
-        assert_eq!(glitch.record.glitch, 1.0);
+        assert_eq!(glitch.record.status, 1.0);
         assert_eq!(glitch.record.escaped, 0.0);
+    }
+
+    #[test]
+    fn mapped_terminal_precedes_reference_iteration() {
+        let mut uniforms = uniform(4, 4);
+        uniforms.screen_to_plane_row_2 = [0.0, 0.0, -1.0, 0.0];
+        let sample = perturb_scaled_pixel(&uniforms, &[ZERO; 4], 0)
+            .expect("mapped terminal is a valid result");
+        assert_eq!(
+            sample,
+            crate::shallow::terminal_sample(SampleStatus::Horizon)
+        );
     }
 
     #[test]
@@ -386,7 +409,7 @@ mod tests {
                 // Deterministic-only contract: the CPU mirror rebases on the identical iteration.
                 assert_eq!(sample.record.rebase_count, 1.0);
             }
-            assert_eq!(sample.record.glitch, 0.0);
+            assert_eq!(sample.record.status, 0.0);
             assert_eq!(sample.escape_index, None);
         }
     }
@@ -533,6 +556,7 @@ mod tests {
                     basis_u: [1.0, 0.0, 0.0, 0.0],
                     basis_v: [0.0, 1.0, 0.0, 0.0],
                 },
+                &Homography::IDENTITY,
                 ScaleSplit {
                     mantissa: 0.5,
                     exponent,

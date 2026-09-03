@@ -1,6 +1,8 @@
 use std::cell::RefCell;
 
-use ember_julibrot_math::{CentreSplit, EscapeParams, Plane, PrecisionMode, ScaleSplit};
+use ember_julibrot_math::{
+    CentreSplit, EscapeParams, Homography, Plane, PrecisionMode, ScaleSplit,
+};
 use ember_lab_heap::{
     DataSpan, DispatchSelector, ExecutorDispatch, GpuKernel, GpuKernelExecutor, HeaderSetHandle,
     RegisteredKernel, SpanPlan,
@@ -177,6 +179,7 @@ impl JulibrotKernels {
         precision_mode: PrecisionMode,
         level: RefinementLevel,
         plane: &Plane,
+        screen_to_plane: &Homography,
         centre: &CentreSplit,
         pixel_scale: f32,
         params: EscapeParams,
@@ -186,6 +189,7 @@ impl JulibrotKernels {
         let selected = allocation.plan.level(level);
         let uniform = ShallowUniform::pack(
             *plane,
+            screen_to_plane,
             *centre,
             pixel_scale,
             selected.extent,
@@ -240,6 +244,7 @@ impl JulibrotKernels {
         precision_mode: PrecisionMode,
         level: RefinementLevel,
         plane: &Plane,
+        screen_to_plane: &Homography,
         scale: ScaleSplit,
         params: EscapeParams,
         reference: ReferenceOrbitInput<'_>,
@@ -254,6 +259,7 @@ impl JulibrotKernels {
         let used_orbit_length = reference.length.min(selected.iteration_cap);
         let uniform = PerturbUniform::pack(
             *plane,
+            screen_to_plane,
             scale,
             selected.extent,
             delivered_params(params, selected.iteration_cap),

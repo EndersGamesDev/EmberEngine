@@ -1,6 +1,6 @@
 use ember_julibrot_math::{EscapeSample, PerturbSample, PerturbationEnvelope, PrecisionMode};
 
-use crate::{KernelMode, KernelSample};
+use crate::{KernelMode, KernelSample, SampleStatus};
 
 /// Accepted absolute smooth-iteration error for shallow conformance.
 pub const SHALLOW_SMOOTH_TOLERANCE: f32 = 1.0e-4;
@@ -84,15 +84,24 @@ pub fn record_is_well_formed(sample: KernelSample, mode: KernelMode) -> bool {
     let Some(escaped) = binary_flag(record.escaped) else {
         return false;
     };
-    let Some(glitch) = binary_flag(record.glitch) else {
+    let Some(status) = SampleStatus::from_f32(record.status) else {
         return false;
     };
+    let glitch = status == SampleStatus::Glitch;
     let rebase_count = exact_rebase_count(record.rebase_count);
     let index_matches = escaped == sample.escape_index.is_some();
-    let terminal_matches = if escaped {
-        !glitch && record.smooth_iter.is_finite()
-    } else {
-        record.smooth_iter.to_bits() == (-1.0_f32).to_bits()
+    let terminal_matches = match status {
+        SampleStatus::Sampled if escaped => record.smooth_iter.is_finite(),
+        SampleStatus::Sampled | SampleStatus::Glitch if !escaped => {
+            record.smooth_iter.to_bits() == (-1.0_f32).to_bits()
+        }
+        SampleStatus::Horizon | SampleStatus::MapUncertain => {
+            !escaped
+                && sample.escape_index.is_none()
+                && record.smooth_iter.to_bits() == (-1.0_f32).to_bits()
+                && record.rebase_count.to_bits() == 0
+        }
+        _ => false,
     };
     let mode_matches =
         mode != KernelMode::Shallow || (record.rebase_count.to_bits() == 0 && !glitch);
@@ -126,7 +135,7 @@ pub fn evaluate_shallow_conformance(
         classification_exact,
         escape_index_exact,
         rebase_count_exact: observed.record.rebase_count == 0.0,
-        glitch_exact: observed.record.glitch == 0.0,
+        glitch_exact: SampleStatus::from_f32(observed.record.status) == Some(SampleStatus::Sampled),
         smooth_abs_error,
         smooth_tolerance: SHALLOW_SMOOTH_TOLERANCE,
     }
@@ -145,7 +154,9 @@ pub fn evaluate_perturbation_conformance(
     let escape_index_exact = observed.escape_index == expected.escape_index;
     let rebase_count_exact =
         exact_rebase_count(observed.record.rebase_count) == Some(expected.rebase_count);
-    let glitch_exact = binary_flag(observed.record.glitch) == Some(expected.glitch);
+    let glitch_exact = SampleStatus::from_f32(observed.record.status)
+        .map(|status| status == SampleStatus::Glitch)
+        == Some(expected.glitch);
     let smooth_abs_error = smooth_error(observed.record.smooth_iter, expected.smooth_iter);
     #[allow(
         clippy::cast_possible_truncation,
@@ -257,7 +268,7 @@ mod tests {
                 smooth_iter: -1.0,
                 escaped: 0.0,
                 rebase_count: 0.0,
-                glitch: 0.0,
+                status: 0.0,
             },
             escape_index: None,
         };

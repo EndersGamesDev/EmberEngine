@@ -1,9 +1,12 @@
 // CPU mirrors intentionally reproduce WGSL's fixed-width conversions and written operation order.
 #![allow(clippy::cast_precision_loss, clippy::suboptimal_flops)]
 
-use ember_julibrot_math::{CentreSplit, EscapeGridRecord, EscapeParams, Plane};
+use ember_julibrot_math::{CentreSplit, EscapeGridRecord, EscapeParams, Homography, Plane};
 
-use crate::{GridExtent, KernelError, RefinementLevel, ShallowUniform, records::pixel_offset};
+use crate::{
+    GridExtent, KernelError, RefinementLevel, SampleStatus, ShallowUniform,
+    records::{pack_map_rows, pixel_offset},
+};
 
 /// CPU mirror result plus the conformance-only integer escape index.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -21,6 +24,7 @@ impl ShallowUniform {
     /// parameters other than the fixed squared bailout and a nonzero cap.
     pub fn pack(
         plane: Plane,
+        screen_to_plane: &Homography,
         centre: CentreSplit,
         pixel_scale: f32,
         extent: GridExtent,
@@ -34,6 +38,7 @@ impl ShallowUniform {
         }
         Ok(Self::from_parts(
             plane,
+            pack_map_rows(screen_to_plane)?,
             centre,
             pixel_scale,
             extent,
@@ -111,7 +116,7 @@ pub fn escape_shallow_point(
                     smooth_iter: smooth_iteration(iteration, z),
                     escaped: 1.0,
                     rebase_count: 0.0,
-                    glitch: 0.0,
+                    status: SampleStatus::Sampled.as_f32(),
                 },
                 escape_index: Some(iteration),
             });
@@ -126,7 +131,7 @@ pub fn escape_shallow_point(
             smooth_iter: -1.0,
             escaped: 0.0,
             rebase_count: 0.0,
-            glitch: 0.0,
+            status: SampleStatus::Sampled.as_f32(),
         },
         escape_index: None,
     })
@@ -150,15 +155,23 @@ pub fn escape_shallow_pixel(
     if index >= active_len {
         return Err(KernelError::InvalidExtent);
     }
-    let offset = pixel_offset(
+    let offset = match pixel_offset(
         index,
         extent,
         Plane {
             basis_u: uniforms.basis_u,
             basis_v: uniforms.basis_v,
         },
+        [
+            uniforms.screen_to_plane_row_0,
+            uniforms.screen_to_plane_row_1,
+            uniforms.screen_to_plane_row_2,
+        ],
         uniforms.pixel_scale,
-    );
+    ) {
+        Ok(offset) => offset,
+        Err(status) => return Ok(terminal_sample(status)),
+    };
     let point = std::array::from_fn(|axis| {
         uniforms.centre_hi[axis] + (uniforms.centre_lo[axis] + offset[axis])
     });
@@ -171,11 +184,23 @@ pub fn escape_shallow_pixel(
     )
 }
 
+pub const fn terminal_sample(status: SampleStatus) -> KernelSample {
+    KernelSample {
+        record: EscapeGridRecord {
+            smooth_iter: -1.0,
+            escaped: 0.0,
+            rebase_count: 0.0,
+            status: status.as_f32(),
+        },
+        escape_index: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{escape_shallow_pixel, escape_shallow_point};
-    use crate::{GridExtent, KernelError, RefinementLevel, ShallowUniform};
-    use ember_julibrot_math::{CentreSplit, EscapeParams, Plane, PrecisionMode};
+    use crate::{GridExtent, KernelError, RefinementLevel, SampleStatus, ShallowUniform};
+    use ember_julibrot_math::{CentreSplit, EscapeParams, Homography, Plane, PrecisionMode};
 
     #[test]
     fn known_current_state_indices_are_exact() {
@@ -198,6 +223,7 @@ mod tests {
                 basis_u: [0.0, 0.0, 1.0, 0.0],
                 basis_v: [0.0, 0.0, 0.0, 1.0],
             },
+            &Homography::IDENTITY,
             CentreSplit {
                 hi: [0.0; 4],
                 lo: [0.0; 4],
@@ -222,7 +248,7 @@ mod tests {
     #[test]
     fn invalid_uniform_inputs_are_typed_refusals() {
         let extent = GridExtent {
-            width: 1,
+            width: 2,
             height: 1,
         };
         let result = ShallowUniform::pack(
@@ -230,6 +256,7 @@ mod tests {
                 basis_u: [1.0, 0.0, 0.0, 0.0],
                 basis_v: [0.0, 1.0, 0.0, 0.0],
             },
+            &Homography::IDENTITY,
             CentreSplit {
                 hi: [0.0; 4],
                 lo: [0.0; 4],
@@ -302,6 +329,7 @@ mod tests {
                 let plane = construct_plane(angles).expect("math plane");
                 let uniform = ShallowUniform::pack(
                     plane,
+                    &Homography::IDENTITY,
                     CentreSplit {
                         hi: origin.map(|component| component as f32),
                         lo: [0.0; 4],
@@ -313,7 +341,18 @@ mod tests {
                 )
                 .expect("fixture uniform");
                 for index in 0..9 {
-                    let offset = crate::records::pixel_offset(index, extent, plane, 0.25);
+                    let offset = crate::records::pixel_offset(
+                        index,
+                        extent,
+                        plane,
+                        [
+                            uniform.screen_to_plane_row_0,
+                            uniform.screen_to_plane_row_1,
+                            uniform.screen_to_plane_row_2,
+                        ],
+                        0.25,
+                    )
+                    .expect("identity map has no terminal pixel");
                     let point = std::array::from_fn(|axis| uniform.centre_hi[axis] + offset[axis]);
                     let observed = escape_shallow_pixel(&uniform, index).expect("kernel mirror");
                     let expected = escape_f32(point, params).expect("math oracle");
@@ -323,6 +362,52 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn horizon_and_uncertain_pixels_are_finite_exact_terminals() {
+        let plane = Plane {
+            basis_u: [1.0, 0.0, 0.0, 0.0],
+            basis_v: [0.0, 1.0, 0.0, 0.0],
+        };
+        let centre = CentreSplit {
+            hi: [0.0; 4],
+            lo: [0.0; 4],
+        };
+        let extent = GridExtent {
+            width: 2,
+            height: 1,
+        };
+        for (rows, status) in [
+            (
+                [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0],
+                SampleStatus::Horizon,
+            ),
+            (
+                [1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.500_000_06],
+                SampleStatus::MapUncertain,
+            ),
+        ] {
+            let map = Homography {
+                rows: rows.map(f64::from),
+                inverse: Homography::IDENTITY.inverse,
+                condition_number: 1.0,
+            };
+            let uniform = ShallowUniform::pack(
+                plane,
+                &map,
+                centre,
+                1.0,
+                extent,
+                EscapeParams::new(8),
+                RefinementLevel::Final,
+            )
+            .expect("finite map packs");
+            let sample = escape_shallow_pixel(&uniform, 0).expect("pixel is in range");
+            assert_eq!(sample, super::terminal_sample(status));
+            assert!(sample.record.smooth_iter.is_finite());
+            assert!(sample.record.status.is_finite());
         }
     }
 }

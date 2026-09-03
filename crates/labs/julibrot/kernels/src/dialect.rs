@@ -17,7 +17,7 @@ pub const fn shallow_kernel() -> KernelDesc<'static> {
         accessors: NO_ACCESSORS,
         output_fields: ESCAPE_FIELD,
         uniform_type: "ShallowUniform",
-        uniform_size: 96,
+        uniform_size: 144,
         output_page_side: OUTPUT_PAGE_SIDE,
     }
 }
@@ -31,7 +31,7 @@ pub const fn perturbation_kernel() -> KernelDesc<'static> {
         accessors: REFERENCE_ACCESSOR,
         output_fields: ESCAPE_FIELD,
         uniform_type: "PerturbUniform",
-        uniform_size: 64,
+        uniform_size: 112,
         output_page_side: OUTPUT_PAGE_SIDE,
     }
 }
@@ -152,5 +152,16 @@ mod tests {
         assert!(PERTURB_BODY.contains("if (steps > 67108863u)"));
         assert!(!PERTURB_BODY.contains("step < 4u"));
         assert!(!PERTURB_BODY.contains("3.402823466e38"));
+    }
+
+    #[test]
+    fn screen_mapping_reuses_the_existing_builtin_dialect() {
+        for source in [SHALLOW_BODY, PERTURB_BODY] {
+            assert!(source.contains("0.000000476837158203125"));
+            assert!(source.contains("quotient_error.x * quotient_error.x"));
+            for absent in ["isFinite(", "determinant(", "inverse(", "length("] {
+                assert!(!source.contains(absent), "introduced builtin {absent}");
+            }
+        }
     }
 }
