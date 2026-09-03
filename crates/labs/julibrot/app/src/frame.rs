@@ -2405,6 +2405,21 @@ mod tests {
     }
 
     #[test]
+    fn browser_refresh_wires_relief_redraw_before_submission_and_holds_during_scene() {
+        let source = include_str!("frame.rs");
+        assert!(source.contains(
+            "let defer_scene_for_redraw = super::defer_scene_until_relief_redraw("
+        ));
+        assert!(source.contains("let scene_id = if defer_scene_for_redraw {"));
+        assert!(source.contains(
+            "let redraw_scene_in_flight = super::hold_redraw_during_scene("
+        ));
+        assert!(source.contains(
+            "if warp_requested && !runtime.has_pending_surface() && !redraw_scene_in_flight {"
+        ));
+    }
+
+    #[test]
     fn compact_reference_records_expand_to_zero_padded_rgba_texels() {
         let records = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
         let mut texels = Vec::with_capacity(32);
