@@ -1,6 +1,6 @@
 {
-  "version": "r563",
-  "commit": "9fc13db",
-  "built": "2026-09-02T18:57:14Z",
-  "subject": "arena v17: stage the scutum-and-sword page and record it in the docs"
+  "version": "r575",
+  "commit": "bfbf6ff",
+  "built": "2026-09-03T15:59:40Z",
+  "subject": "arena v18: review fixes - the bloom counter, the sightline driver's reach, the double bonk, the audio gate, the rocket's frame, gilrs timing"
 }
