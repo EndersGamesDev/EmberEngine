@@ -200,7 +200,7 @@ pub struct OrbitVerificationFacts {
 }
 
 impl OrbitVerificationFacts {
-    /// Creates deferred-verification facts for a PictureFast Preview orbit.
+    /// Creates deferred-verification facts for a `PictureFast` Preview orbit.
     #[must_use]
     pub const fn deferred() -> Self {
         Self {
@@ -287,7 +287,7 @@ impl OrbitVerificationFacts {
         );
     }
 
-    fn read_from(source: &[u8]) -> Self {
+    const fn read_from(source: &[u8]) -> Self {
         Self {
             verification: read_u32(source, 0),
             max_consumed_word_error_ulps: read_u32(source, 4),

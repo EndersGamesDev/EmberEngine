@@ -291,7 +291,7 @@ impl OrbitRequest {
         })
     }
 
-    /// Selects the PictureFast stage policy carried in the request body.
+    /// Selects the `PictureFast` stage policy carried in the request body.
     #[must_use]
     pub const fn with_precision_policy(
         mut self,
