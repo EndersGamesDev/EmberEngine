@@ -8,6 +8,7 @@ mod orbit;
 mod perturb;
 mod plane;
 mod scale;
+mod screen;
 mod types;
 mod warp;
 
@@ -28,10 +29,11 @@ pub use scale::{
     reference_shift_px, scale_split, scaled_pixel_offset, scaled_pixel_scale, shallow_pixel_scale,
     split_centre, split_scalar,
 };
+pub use screen::{navigation_delta, screen_to_plane};
 pub use types::{
     Axis4, CentreF64, CentreSplit, ComputedOrbit, EscapeGridRecord, EscapeParams, EscapeSample,
-    MathError, NavigationDelta, OrbitStep, PerturbSample, PerturbationEnvelope, Plane, PlaneAngles,
-    Pose, PrecisionMode, PrecisionPlan, ReferenceOrbitRecord, ReferencePass, ReferenceVerification,
-    ScaleSplit, ScaledPixelScale, ViewControls, WarpMatrix,
+    Homography, MathError, NavigationDelta, OrbitStep, PerturbSample, PerturbationEnvelope, Plane,
+    PlaneAngles, Pose, PrecisionMode, PrecisionPlan, ReferenceOrbitRecord, ReferencePass,
+    ReferenceVerification, ScaleSplit, ScaledPixelScale, ViewControls, WarpMatrix,
 };
 pub use warp::{warp_identity_error, warp_matrix};

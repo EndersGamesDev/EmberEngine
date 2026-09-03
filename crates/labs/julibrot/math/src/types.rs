@@ -187,7 +187,7 @@ pub struct EscapeGridRecord {
     pub smooth_iter: f32,
     pub escaped: f32,
     pub rebase_count: f32,
-    pub glitch: f32,
+    pub status: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -286,7 +286,29 @@ pub struct Pose {
     pub view: ViewControls,
     pub grid_width: u32,
     pub grid_height: u32,
+    pub screen_to_plane: Homography,
     pub centre_from_reference_px: [f64; 2],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Homography {
+    pub rows: [f64; 9],
+    pub inverse: [f64; 9],
+    pub condition_number: f64,
+}
+
+impl Homography {
+    pub const IDENTITY: Self = Self {
+        rows: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        inverse: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        condition_number: 1.0,
+    };
+}
+
+impl Default for Homography {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -315,6 +337,8 @@ pub enum MathError {
     PrecisionMismatch,
     #[error("the scale exponent is outside i32 range")]
     ScaleExponentOverflow,
+    #[error("the neutral-height screen map is degenerate or uncertified")]
+    DegenerateViewMap,
     #[error("the warp matrix is degenerate")]
     DegenerateWarp,
     #[error("the orbit cannot be represented by the requested record count")]
@@ -358,6 +382,7 @@ mod tests {
         assert_eq!(size_of::<EscapeParams>(), 8);
         assert_eq!(size_of::<ReferenceOrbitRecord>(), 8);
         assert_eq!(size_of::<EscapeGridRecord>(), 16);
+        assert_eq!(offset_of!(EscapeGridRecord, status), 12);
         assert_eq!(size_of::<CentreF64>(), 32);
     }
 }

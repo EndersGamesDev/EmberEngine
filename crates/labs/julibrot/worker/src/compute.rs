@@ -56,6 +56,8 @@ pub enum MathFailureCode {
     PrecisionExhausted = 17,
     /// Astro-float refused an operation.
     BigFloat = 18,
+    /// The neutral-height screen map was degenerate or uncertified.
+    DegenerateViewMap = 19,
 }
 
 /// Monotonic microsecond clock used by native and browser compute loops.
@@ -240,6 +242,7 @@ pub const fn math_error(error: &MathError) -> ChannelError {
         MathError::InvalidCentreEncoding => MathFailureCode::InvalidCentreEncoding,
         MathError::PrecisionMismatch => MathFailureCode::PrecisionMismatch,
         MathError::ScaleExponentOverflow => MathFailureCode::ScaleExponentOverflow,
+        MathError::DegenerateViewMap => MathFailureCode::DegenerateViewMap,
         MathError::DegenerateWarp => MathFailureCode::DegenerateWarp,
         MathError::OrbitTooLong => MathFailureCode::OrbitTooLong,
         MathError::InvalidOrbitState => MathFailureCode::InvalidOrbitState,
@@ -259,13 +262,13 @@ mod tests {
     use std::time::Instant;
 
     use ember_julibrot_math::{
-        BigCentre, ComputedOrbit, EscapeParams, PrecisionMode, ReferenceOrbitRecord, ReferencePass,
-        perturb_scaled_f64, precision_for,
+        BigCentre, ComputedOrbit, EscapeParams, MathError, PrecisionMode, ReferenceOrbitRecord,
+        ReferencePass, perturb_scaled_f64, precision_for,
     };
 
     use super::{
         MathFailureCode, MonotonicClock, ORBIT_CHUNK_MAX_ITERATIONS, OrbitTaskPoll,
-        ReferenceOrbitTask,
+        ReferenceOrbitTask, math_error,
     };
     use crate::wire::{OrbitVerificationFacts, Pool, WireBuffer};
     use crate::{Admission, EncodedCentre, OrbitReason, OrbitRequest, ProducerShaper};
@@ -503,5 +506,12 @@ mod tests {
         let error = ReferenceOrbitTask::start(&request, &StepClock::new(1)).unwrap_err();
         assert_eq!(error.code, crate::ErrorCode::MathFailure);
         assert_eq!(error.detail, MathFailureCode::InvalidPrecisionPlan as u32);
+    }
+
+    #[test]
+    fn degenerate_view_map_is_a_stable_math_refusal() {
+        let error = math_error(&MathError::DegenerateViewMap);
+        assert_eq!(error.code, crate::ErrorCode::MathFailure);
+        assert_eq!(error.detail, MathFailureCode::DegenerateViewMap as u32);
     }
 }
