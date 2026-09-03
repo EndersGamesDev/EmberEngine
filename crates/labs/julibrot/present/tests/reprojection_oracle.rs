@@ -407,8 +407,9 @@ fn object_angle(mut object: ObjectAngles, index: usize, delta: f64) -> ObjectAng
 
 #[test]
 #[allow(
+    clippy::print_stderr,
     clippy::too_many_lines,
-    reason = "one independent oracle keeps every required reprojection degree of freedom visible"
+    reason = "one independent oracle reports and keeps every required reprojection degree of freedom visible"
 )]
 fn retained_warp_matches_independent_fresh_scenes() {
     let base = flat();

@@ -589,7 +589,6 @@ mod tests {
                 height_scale: 1.0,
                 distance_five: 6.0,
                 distance_four: 9.0,
-                ..ViewControls::NEUTRAL
             },
         ];
         for extent in [[1920, 1080], [1024, 1024]] {
@@ -894,6 +893,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the timed corpus probe reports the measured per-plan evidence"
+    )]
     fn full_corpus_cost_probe_reports_every_planned_sample() {
         let from = pose(relief(0.2), [0.0; 2]);
         let mut moved = relief(0.2);
