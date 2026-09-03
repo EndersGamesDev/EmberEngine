@@ -1365,7 +1365,7 @@ mod browser {
                 );
             }
             let relief_redraw = self.presenter.accepted_relief_redraw(slot);
-            let defer_scene_for_redraw = defer_scene_until_relief_redraw(
+            let defer_scene_for_redraw = super::defer_scene_until_relief_redraw(
                 relief_redraw,
                 self.presented_view_is_stale(viewer),
             );
@@ -1385,7 +1385,7 @@ mod browser {
 
             let mut warp_id = None;
             let warp_requested = self.loop_state.warp_requested(self.frame_policy.policy());
-            let redraw_scene_in_flight = hold_redraw_during_scene(
+            let redraw_scene_in_flight = super::hold_redraw_during_scene(
                 relief_redraw,
                 self.presenter.facts().in_flight_scene_id.is_some(),
             );
