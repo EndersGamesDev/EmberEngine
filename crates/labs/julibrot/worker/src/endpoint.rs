@@ -663,6 +663,8 @@ mod tests {
     use std::collections::VecDeque;
     use std::rc::Rc;
 
+    use ember_julibrot_math::PrecisionMode;
+
     use super::{ControlMessage, OwnerCore, OwnerPort, OwnerSlot};
     use crate::wire::WireBuffer;
     use crate::{
@@ -978,6 +980,7 @@ mod tests {
             0,
             64,
             max_iter,
+            PrecisionMode::Deterministic,
             OrbitReason::INITIAL,
         )
         .unwrap()

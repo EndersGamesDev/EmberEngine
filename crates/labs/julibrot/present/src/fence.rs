@@ -6,6 +6,7 @@ pub struct FenceLedger {
     kind: SubmissionKind,
     id: u64,
     source_scene_id: Option<u64>,
+    precision_mode: &'static str,
     sample_class: SampleClass,
     started_ms: f64,
     first_poll_ms: Option<f64>,
@@ -26,6 +27,7 @@ pub enum FenceDecision {
         reason: FenceRefusal,
         polls: u32,
         wall_ms: f64,
+        precision_mode: &'static str,
     },
 }
 
@@ -34,6 +36,7 @@ impl FenceLedger {
         kind: SubmissionKind,
         id: u64,
         source_scene_id: Option<u64>,
+        precision_mode: &'static str,
         sample_class: SampleClass,
         started_ms: f64,
         deadline_ms: f64,
@@ -43,6 +46,7 @@ impl FenceLedger {
             kind,
             id,
             source_scene_id,
+            precision_mode,
             sample_class,
             started_ms,
             first_poll_ms: None,
@@ -67,6 +71,7 @@ impl FenceLedger {
                 reason: FenceRefusal::Device,
                 polls: self.polls,
                 wall_ms,
+                precision_mode: self.precision_mode,
             };
         }
         if callback == Some(Ok(())) {
@@ -75,6 +80,7 @@ impl FenceLedger {
                 id: self.id,
                 source_scene_id: self.source_scene_id,
                 sample_class: self.sample_class,
+                precision_mode: self.precision_mode,
                 wall_ms,
                 fence_wait_ms: self
                     .first_poll_ms
@@ -87,6 +93,7 @@ impl FenceLedger {
                 reason: FenceRefusal::Deadline,
                 polls: self.polls,
                 wall_ms,
+                precision_mode: self.precision_mode,
             };
         }
         if self.polls >= self.max_polls {
@@ -94,6 +101,7 @@ impl FenceLedger {
                 reason: FenceRefusal::PollLimit,
                 polls: self.polls,
                 wall_ms,
+                precision_mode: self.precision_mode,
             };
         }
         FenceDecision::Pending
@@ -110,6 +118,8 @@ fn nonnegative_elapsed(started_ms: f64, now_ms: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use ember_julibrot_math::PrecisionMode;
+
     use super::*;
 
     fn ledger(deadline_ms: f64, max_polls: u32) -> FenceLedger {
@@ -117,6 +127,7 @@ mod tests {
             SubmissionKind::Warp,
             7,
             Some(3),
+            PrecisionMode::Deterministic.as_str(),
             SampleClass::Measured,
             100.0,
             deadline_ms,
@@ -133,6 +144,7 @@ mod tests {
         };
         assert_eq!(measurement.id, 7);
         assert_eq!(measurement.polls, 2);
+        assert_eq!(measurement.precision_mode, "Deterministic");
         assert_eq!(measurement.wall_ms, 5.5);
         assert_eq!(measurement.fence_wait_ms, 3.5);
     }

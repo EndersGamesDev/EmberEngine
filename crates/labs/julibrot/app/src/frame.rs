@@ -362,12 +362,12 @@ mod browser {
         ReferenceOrbitInput, RefinementPlan,
     };
     use ember_julibrot_math::{
-        BigCentre, EscapeParams, Plane, precision_for, reference_shift_px, scale_split,
-        shallow_pixel_scale, split_centre,
+        BigCentre, EscapeParams, Plane, PrecisionMode, precision_for, reference_shift_px,
+        scale_split, shallow_pixel_scale, split_centre,
     };
     use ember_julibrot_present::{
         FrameState, HotSlot, PresentConfig, PresentEvent, PresentHot, PresentMain, Presenter,
-        SubmissionKind, hot_stride,
+        SubmissionKind, WarpValidation, hot_stride,
     };
     use ember_julibrot_worker::{
         EncodedCentre, OrbitDisposition, OrbitHandle, OrbitRegistry, OrbitRequest, OwnerEndpoint,
@@ -392,11 +392,16 @@ mod browser {
     const MAX_HEADER_SETS: u32 = 6;
     const KERNEL_UNIFORM_BYTES: u32 = 96;
 
+    fn viewer_precision_mode(value: u32) -> &'static str {
+        PrecisionMode::from_u32(value).map_or("unavailable", PrecisionMode::as_str)
+    }
+
     #[derive(Debug)]
     struct RegisteredOrbit {
         span: DataSpan,
         length: u32,
         precision_bits: u32,
+        precision_mode: &'static str,
     }
 
     #[derive(Debug)]
@@ -405,6 +410,7 @@ mod browser {
         centre: BigCentre,
         zoom_log2: f64,
         plane: Plane,
+        precision_mode: &'static str,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq)]
@@ -413,6 +419,7 @@ mod browser {
         requested_iter_cap: u32,
         palette_id: u32,
         plane_origin_f64: [f64; 4],
+        precision_mode: u32,
     }
 
     /// Everything the warp reproduces for one surface image, stamped when it is submitted.
@@ -430,6 +437,7 @@ mod browser {
         view: ember_julibrot_math::ViewControls,
         zoom_log2: f64,
         plane_angles: [f64; 2],
+        precision_mode: u32,
     }
 
     /// What one poll of present's event queue said about this turn.
@@ -639,7 +647,7 @@ mod browser {
                 return Err(worker_error(error));
             }
 
-            self.prepare_due_level();
+            let final_validation = self.prepare_due_level();
             let extent = self.prepared_extent();
             let hot = viewer.drain_hot(extent)?;
             self.owner_epoch = hot.state.epoch;
@@ -648,6 +656,16 @@ mod browser {
             self.install_main();
             let slot = HotSlot::for_refresh(self.refresh_id, self.hot_stride, hot.state.epoch)
                 .map_err(|error| AppError::Present(error.to_string()))?;
+            let measure_validation = requests.measurement
+                && self.presenter.facts().completed_scene_id.is_some();
+            let validation = if measure_validation {
+                requests.measurement = false;
+                WarpValidation::Measure
+            } else if final_validation {
+                WarpValidation::Final
+            } else {
+                WarpValidation::Ordinary
+            };
             self.presenter.write_hot(
                 slot,
                 PresentHot {
@@ -656,6 +674,7 @@ mod browser {
                     plane: hot.plane,
                     view: viewer.requested().view,
                 },
+                validation,
             );
 
             let main_arrived = self.service_arrivals(viewer, now_ms)?;
@@ -697,6 +716,7 @@ mod browser {
                         if let Err(error) = runtime.retain_for_warp(
                             receipt.warp_id,
                             self.loop_state.generation(),
+                            receipt.precision_mode,
                             frame,
                         ) {
                             let _released =
@@ -746,6 +766,7 @@ mod browser {
                 scene_id,
                 presented,
                 status,
+                precision_mode: viewer_precision_mode(self.main.precision_mode),
             }
         }
 
@@ -797,6 +818,7 @@ mod browser {
                         reason,
                         polls,
                         wall_ms,
+                        precision_mode: _,
                     } => {
                         let outcome = self.loop_state.refused(kind, reason, id, polls, wall_ms);
                         if outcome.retired_scene {
@@ -827,14 +849,15 @@ mod browser {
             refusal.map_or(Ok(observed), Err)
         }
 
-        fn prepare_due_level(&mut self) {
+        fn prepare_due_level(&mut self) -> bool {
             let Some(level) = self.loop_state.due() else {
-                return;
+                return false;
             };
             if self.prepared_level == Some(level) {
-                return;
+                return false;
             }
             self.prepared_level = Some(level);
+            level == RefinementLevel::Final
         }
 
         fn install_main(&mut self) {
@@ -859,6 +882,7 @@ mod browser {
                 requested_iter_cap: self.main.requested_iter_cap,
                 palette_id: self.main.palette_id,
                 plane_origin_f64: self.main.plane_origin_f64,
+                precision_mode: self.main.precision_mode,
             };
             if self.current_orbit.is_some()
                 && self.submitted_references.is_empty()
@@ -888,6 +912,7 @@ mod browser {
                     requested.plane_angles.theta_1,
                     requested.plane_angles.theta_2,
                 ],
+                precision_mode: self.main.precision_mode,
             }
         }
 
@@ -946,13 +971,14 @@ mod browser {
             response: &ember_julibrot_worker::OrbitResponseView,
             submitted: Option<SubmittedReference>,
         ) -> Result<(OrbitDisposition, bool), AppError> {
-            let Some(submitted) = submitted.filter(|_| {
-                super::arrival_is_current(
-                    response.cancelled(),
-                    response.generation(),
-                    self.owner_endpoint.latest_generation(),
-                    viewer.owner().navigation_pending_depth(),
-                )
+            let Some(submitted) = submitted.filter(|submitted| {
+                submitted.precision_mode == viewer.requested().precision_mode.as_str()
+                    && super::arrival_is_current(
+                        response.cancelled(),
+                        response.generation(),
+                        self.owner_endpoint.latest_generation(),
+                        viewer.owner().navigation_pending_depth(),
+                    )
             }) else {
                 return Ok((OrbitDisposition::Stale, false));
             };
@@ -973,6 +999,7 @@ mod browser {
                 span: span.clone(),
                 length: response.length(),
                 precision_bits: response.precision_bits(),
+                precision_mode: submitted.precision_mode,
             };
             let handle = match self.orbits.insert(response.generation(), registered) {
                 Ok(handle) => handle,
@@ -1056,6 +1083,12 @@ mod browser {
                 depth_digits(navigation.zoom_log2),
                 precision.requested_bits,
                 requested.iteration_cap,
+                PrecisionMode::from_u32(navigation.precision_mode).ok_or_else(|| {
+                    AppError::Worker(format!(
+                        "precision mode {} is outside 0..1",
+                        navigation.precision_mode
+                    ))
+                })?,
                 submission.reason,
             )
             .map_err(worker_error)?;
@@ -1068,6 +1101,7 @@ mod browser {
                 centre: navigation.centre,
                 zoom_log2: navigation.zoom_log2,
                 plane,
+                precision_mode: viewer_precision_mode(navigation.precision_mode),
             });
             Ok(())
         }
@@ -1139,6 +1173,7 @@ mod browser {
                             &mut encoder,
                             &mut self.grid,
                             owner_epoch,
+                            viewer.requested().precision_mode,
                             level,
                             &plane,
                             &split,
@@ -1163,6 +1198,7 @@ mod browser {
                             &mut encoder,
                             &mut self.grid,
                             owner_epoch,
+                            viewer.requested().precision_mode,
                             level,
                             &plane,
                             scale,
@@ -1172,6 +1208,7 @@ mod browser {
                                 generation: handle.generation,
                                 length: orbit.length,
                                 precision_bits: orbit.precision_bits,
+                                precision_mode: orbit.precision_mode,
                             },
                         )
                         .map_err(kernel_error)?
@@ -1382,7 +1419,7 @@ mod tests {
     };
     use crate::FramePolicy;
 
-    /// Poll budget and wall the version-one present configuration refuses at.
+    /// Poll budget and wall the version-two present configuration refuses at.
     const SCENE_POLLS: u32 = 4_096;
     const SCENE_DEADLINE_MS: f64 = 30_000.0;
 

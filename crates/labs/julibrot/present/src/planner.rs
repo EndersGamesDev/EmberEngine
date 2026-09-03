@@ -1,7 +1,8 @@
-use ember_julibrot_math::{Plane, Pose, warp_matrix};
+use ember_julibrot_math::{Plane, Pose, PrecisionMode, warp_matrix};
 
 use crate::{
-    SceneFrame, WarpKind, WarpPlan, apply_homography, pack_homography_rows, solve_homography,
+    SceneFrame, WarpKind, WarpPlan, WarpValidation, apply_homography, pack_homography_rows,
+    solve_homography,
 };
 
 const CHART_CORNERS: [[f64; 2]; 4] = [[-1.0, -1.0], [1.0, -1.0], [-1.0, 1.0], [1.0, 1.0]];
@@ -19,7 +20,13 @@ impl Warp {
     /// A pose mismatch, incompatible arithmetic, or projection pole returns an honest clear-only
     /// plan. This function never allocates a GPU resource, submits work, or mutates the frame.
     #[must_use]
-    pub fn reproject(last_frame: &SceneFrame, from_pose: &Pose, to_pose: &Pose) -> WarpPlan {
+    pub fn reproject(
+        last_frame: &SceneFrame,
+        from_pose: &Pose,
+        to_pose: &Pose,
+        precision_mode: PrecisionMode,
+        validation: WarpValidation,
+    ) -> WarpPlan {
         if last_frame.pose != *from_pose {
             return clear_only();
         }
@@ -30,7 +37,24 @@ impl Warp {
         if !chart_residual.is_finite() {
             return clear_only();
         }
-        anchor_plan(from_pose, to_pose, flat.forward, chart_residual).unwrap_or_else(clear_only)
+        let Some((mut plan, approximate)) =
+            anchor_plan(from_pose, to_pose, flat.forward, chart_residual)
+        else {
+            return clear_only();
+        };
+        if validation.samples_corpus(precision_mode) {
+            let Some((maximum, percentile)) = sampled_error_summary(
+                from_pose,
+                to_pose,
+                flat.forward,
+                approximate,
+            ) else {
+                return clear_only();
+            };
+            plan.approx_max_error_px = Some(maximum);
+            plan.approx_p95_error_px = Some(percentile);
+        }
+        plan
     }
 }
 
@@ -54,7 +78,7 @@ fn anchor_plan(
     to_pose: &Pose,
     flat_forward: [f64; 9],
     chart_residual: f64,
-) -> Option<WarpPlan> {
+) -> Option<(WarpPlan, [f64; 9])> {
     let destination = CHART_CORNERS.map(|chart| project_presented(to_pose, chart, 0.0));
     let source = CHART_CORNERS.map(|chart| {
         let source_chart = apply_homography(flat_forward, chart)?;
@@ -64,7 +88,26 @@ fn anchor_plan(
     let source = transpose_options(source)?;
     let matrix = solve_homography(destination, source)?;
     let rows = pack_homography_rows(matrix)?;
-    let mut errors = sampled_errors(from_pose, to_pose, flat_forward, matrix)?;
+    Some((
+        WarpPlan {
+            rows,
+            source_valid: true,
+            kind: WarpKind::AnchorHomography,
+            chart_residual,
+            approx_max_error_px: None,
+            approx_p95_error_px: None,
+        },
+        matrix,
+    ))
+}
+
+fn sampled_error_summary(
+    from_pose: &Pose,
+    to_pose: &Pose,
+    flat_forward: [f64; 9],
+    approximate: [f64; 9],
+) -> Option<(f64, f64)> {
+    let mut errors = sampled_errors(from_pose, to_pose, flat_forward, approximate)?;
     errors.sort_by(f64::total_cmp);
     let maximum = errors.last().copied()?;
     let percentile_index = errors
@@ -73,14 +116,7 @@ fn anchor_plan(
         .div_ceil(100)
         .saturating_sub(1);
     let percentile = *errors.get(percentile_index)?;
-    Some(WarpPlan {
-        rows,
-        source_valid: true,
-        kind: WarpKind::AnchorHomography,
-        chart_residual,
-        approx_max_error_px: Some(maximum),
-        approx_p95_error_px: Some(percentile),
-    })
+    Some((maximum, percentile))
 }
 
 fn transpose_options(values: [Option<[f64; 2]>; 4]) -> Option<[[f64; 2]; 4]> {
@@ -97,6 +133,8 @@ fn sampled_errors(
     flat_forward: [f64; 9],
     approximate: [f64; 9],
 ) -> Option<Vec<f64>> {
+    #[cfg(test)]
+    SAMPLED_CORPUS_RUNS.with(|runs| runs.set(runs.get().saturating_add(1)));
     let sample_count = usize::try_from(CHART_STEPS * CHART_STEPS).ok()? * HEIGHT_SAMPLES.len();
     let mut errors = Vec::new();
     errors.try_reserve_exact(sample_count).ok()?;
@@ -127,6 +165,11 @@ fn sampled_errors(
         }
     }
     Some(errors)
+}
+
+#[cfg(test)]
+thread_local! {
+    static SAMPLED_CORPUS_RUNS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 fn chart_residual(from: &Pose, to: &Pose) -> f64 {
@@ -270,7 +313,9 @@ fn project_presented(pose: &Pose, chart: [f64; 2], record_height: f64) -> Option
 #[cfg(test)]
 mod tests {
     use ember_julibrot_kernels::RefinementLevel;
-    use ember_julibrot_math::{MathError, Plane, PlaneAngles, ViewControls, construct_plane};
+    use ember_julibrot_math::{
+        MathError, Plane, PlaneAngles, PrecisionMode, ViewControls, construct_plane,
+    };
 
     use super::*;
     use crate::{PaletteId, SampleClass, SubmissionKind, SubmissionMeasurement};
@@ -278,6 +323,7 @@ mod tests {
     const SWEEP_ANGLES: u32 = 256;
     const RELIEF_YAW: f64 = 0.349;
     const RELIEF_PITCH: f64 = 0.262;
+    const CONFORMANCE_MODE: PrecisionMode = PrecisionMode::Deterministic;
 
     /// One relief row parameterised by a single swept angle.
     ///
@@ -323,11 +369,13 @@ mod tests {
             texture_index: 0,
             centre_revision: 4,
             plane_origin_f64: [0.0; 4],
+            precision_mode: CONFORMANCE_MODE.as_str(),
             measurement: SubmissionMeasurement {
                 kind: SubmissionKind::Scene,
                 id: 3,
                 source_scene_id: None,
                 sample_class: SampleClass::Measured,
+                precision_mode: CONFORMANCE_MODE.as_str(),
                 wall_ms: 1.0,
                 fence_wait_ms: 0.5,
                 polls: 1,
@@ -335,11 +383,21 @@ mod tests {
         }
     }
 
+    fn validated_plan(from: Pose, to: &Pose) -> WarpPlan {
+        Warp::reproject(
+            &frame(from),
+            &from,
+            to,
+            CONFORMANCE_MODE,
+            WarpValidation::Ordinary,
+        )
+    }
+
     #[test]
     fn the_neutral_plan_reproduces_the_exact_pan_translation() {
         let from = pose(ViewControls::NEUTRAL, [2.0, 3.0]);
         let to = pose(ViewControls::NEUTRAL, [7.0, -1.0]);
-        let plan = Warp::reproject(&frame(from), &from, &to);
+        let plan = validated_plan(from, &to);
         assert_eq!(plan.kind, WarpKind::AnchorHomography);
         assert!(plan.source_valid);
         assert!((f64::from(plan.rows[0][2]) - 10.0 / 1920.0).abs() < 1.0e-7);
@@ -361,7 +419,7 @@ mod tests {
             let mut to = pose(view, [-4.0, 9.125]);
             to.zoom_log2 += 0.75;
             let exact = warp_matrix(&from, &to).expect("the neutral fixture is finite");
-            let plan = Warp::reproject(&frame(from), &from, &to);
+            let plan = validated_plan(from, &to);
             assert_eq!(plan.kind, WarpKind::AnchorHomography);
             let solved = [
                 f64::from(plan.rows[0][0]),
@@ -431,7 +489,13 @@ mod tests {
             let mut to = pose(ViewControls::NEUTRAL, [-811.125, 401.75]);
             to.zoom_log2 = zoom_log2 + 0.2;
             let exact = warp_matrix(&from, &to).expect("required warp fixture is finite");
-            let plan = Warp::reproject(&frame(from), &from, &to);
+            let plan = Warp::reproject(
+                &frame(from),
+                &from,
+                &to,
+                PrecisionMode::PictureFast,
+                WarpValidation::Ordinary,
+            );
             let rounded = [
                 f64::from(plan.rows[0][0]),
                 f64::from(plan.rows[0][1]),
@@ -464,13 +528,27 @@ mod tests {
         let mut mismatched = from;
         mismatched.epoch = 2;
         assert_eq!(
-            Warp::reproject(&frame(from), &mismatched, &from).kind,
+            Warp::reproject(
+                &frame(from),
+                &mismatched,
+                &from,
+                CONFORMANCE_MODE,
+                WarpValidation::Ordinary,
+            )
+            .kind,
             WarpKind::ClearOnly
         );
         let mut invalid = from;
         invalid.grid_width = 0;
         assert_eq!(
-            Warp::reproject(&frame(invalid), &invalid, &from).kind,
+            Warp::reproject(
+                &frame(invalid),
+                &invalid,
+                &from,
+                CONFORMANCE_MODE,
+                WarpValidation::Ordinary,
+            )
+            .kind,
             WarpKind::ClearOnly
         );
     }
@@ -478,7 +556,7 @@ mod tests {
     #[test]
     fn relief_identity_has_neutral_anchors_and_zero_sample_error() {
         let current = pose(relief(0.6), [0.0; 2]);
-        let plan = Warp::reproject(&frame(current), &current, &current);
+        let plan = validated_plan(current, &current);
         assert_eq!(plan.kind, WarpKind::AnchorHomography);
         assert!(plan.source_valid);
         assert!(plan.approx_max_error_px.is_some_and(|error| error < 1.0e-9));
@@ -490,7 +568,7 @@ mod tests {
         let from = pose(relief(0.6), [0.0; 2]);
         let mut to = pose(relief(0.602), [2.0, -1.0]);
         to.zoom_log2 += 0.025;
-        let plan = Warp::reproject(&frame(from), &from, &to);
+        let plan = validated_plan(from, &to);
         assert_eq!(plan.kind, WarpKind::AnchorHomography);
         let maximum = plan
             .approx_max_error_px
@@ -538,7 +616,7 @@ mod tests {
         ];
         let mut to = relief_pose(plane, theta + motion.view_radians, panned);
         to.zoom_log2 += motion.zoom_log2;
-        Warp::reproject(&frame(from), &from, &to)
+        validated_plan(from, &to)
     }
 
     /// Returns the clear-only count and the worst sampled error over one full turn of VIEW angle.
@@ -631,30 +709,80 @@ mod tests {
     #[test]
     fn the_plan_ignores_which_ambient_axes_the_plane_names() -> Result<(), MathError> {
         let [(_, mandelbrot), (_, julia), (_, hybrid)] = named_planes()?;
-        for step in 0..SWEEP_ANGLES {
-            let reference = sweep_plan(mandelbrot, step, ENVELOPE);
-            let julia_plan = sweep_plan(julia, step, ENVELOPE);
-            // The Julia row is a quarter turn of the one seed, so its basis carries the binary32
-            // image of cos(pi/2); the plan is identical and only the residual sees that 1e-30.
-            assert_eq!(julia_plan.rows, reference.rows);
-            assert_eq!(julia_plan.kind, reference.kind);
-            assert_eq!(
-                julia_plan.approx_max_error_px,
-                reference.approx_max_error_px
-            );
-            assert!(julia_plan.chart_residual <= 1.0e-12);
-            assert!(reference.chart_residual <= 1.0e-12);
-            let tilted = sweep_plan(hybrid, step, ENVELOPE);
-            assert_eq!(tilted.kind, reference.kind);
-            for (row, expected) in tilted.rows.into_iter().zip(reference.rows) {
-                for (value, wanted) in row.into_iter().zip(expected) {
-                    assert!(
-                        (value - wanted).abs() <= 1.0e-6,
-                        "hybrid row entry {value} left the binary32 basis tolerance of {wanted}"
+        for mode in PrecisionMode::ALL {
+            for step in 0..SWEEP_ANGLES {
+                let reference = sweep_plan_for_mode(mandelbrot, step, ENVELOPE, mode);
+                let julia_plan = sweep_plan_for_mode(julia, step, ENVELOPE, mode);
+                // Deliberate operation-word identity belongs only to deterministic conformance.
+                if mode.requires_bit_identity() {
+                    assert_eq!(julia_plan.rows, reference.rows);
+                    assert_eq!(
+                        julia_plan.approx_max_error_px,
+                        reference.approx_max_error_px
                     );
+                }
+                assert_eq!(julia_plan.kind, reference.kind);
+                assert!(julia_plan.chart_residual <= 1.0e-12);
+                assert!(reference.chart_residual <= 1.0e-12);
+                let tilted = sweep_plan_for_mode(hybrid, step, ENVELOPE, mode);
+                assert_eq!(tilted.kind, reference.kind);
+                for (row, expected) in tilted.rows.into_iter().zip(reference.rows) {
+                    for (value, wanted) in row.into_iter().zip(expected) {
+                        assert!(
+                            (value - wanted).abs() <= 1.0e-6,
+                            "hybrid row entry {value} left the binary32 basis tolerance of {wanted}"
+                        );
+                    }
                 }
             }
         }
         Ok(())
+    }
+
+    fn sweep_plan_for_mode(
+        plane: Plane,
+        step: u32,
+        motion: Motion,
+        mode: PrecisionMode,
+    ) -> WarpPlan {
+        let theta = core::f64::consts::TAU * f64::from(step) / f64::from(SWEEP_ANGLES);
+        let displacement = [3.5, -2.25];
+        let from = relief_pose(plane, theta, displacement);
+        let panned = [
+            displacement[0] + motion.pan_px[0],
+            displacement[1] + motion.pan_px[1],
+        ];
+        let mut to = relief_pose(plane, theta + motion.view_radians, panned);
+        to.zoom_log2 += motion.zoom_log2;
+        Warp::reproject(&frame(from), &from, &to, mode, WarpValidation::Measure)
+    }
+
+    #[test]
+    fn picture_fast_refreshes_skip_the_corpus_until_measure() {
+        SAMPLED_CORPUS_RUNS.with(|runs| runs.set(0));
+        let from = pose(relief(0.6), [0.0; 2]);
+        let mut to = pose(relief(0.602), [2.0, -1.0]);
+        to.zoom_log2 += 0.025;
+        for _ in 0..12 {
+            let plan = Warp::reproject(
+                &frame(from),
+                &from,
+                &to,
+                PrecisionMode::PictureFast,
+                WarpValidation::Ordinary,
+            );
+            assert_eq!(plan.approx_max_error_px, None);
+            assert_eq!(plan.approx_p95_error_px, None);
+        }
+        SAMPLED_CORPUS_RUNS.with(|runs| assert_eq!(runs.get(), 0));
+        let measured = Warp::reproject(
+            &frame(from),
+            &from,
+            &to,
+            PrecisionMode::PictureFast,
+            WarpValidation::Measure,
+        );
+        assert!(measured.approx_max_error_px.is_some());
+        SAMPLED_CORPUS_RUNS.with(|runs| assert_eq!(runs.get(), 1));
     }
 }

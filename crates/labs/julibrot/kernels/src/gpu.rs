@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 
-use ember_julibrot_math::{CentreSplit, EscapeParams, Plane, ScaleSplit};
+use ember_julibrot_math::{CentreSplit, EscapeParams, Plane, PrecisionMode, ScaleSplit};
 use ember_lab_heap::{
     DataSpan, DispatchSelector, ExecutorDispatch, GpuKernel, GpuKernelExecutor, HeaderSetHandle,
     RegisteredKernel, SpanPlan,
@@ -28,6 +28,7 @@ struct AcceptedReference {
     generation: u32,
     length: u32,
     precision_bits: u32,
+    precision_mode: &'static str,
 }
 
 /// The two registered Julibrot pipelines and their private grid-lifetime records.
@@ -173,6 +174,7 @@ impl JulibrotKernels {
         encoder: &mut wgpu::CommandEncoder,
         grid: &mut EscapeGrid,
         owner_epoch: u64,
+        precision_mode: PrecisionMode,
         level: RefinementLevel,
         plane: &Plane,
         centre: &CentreSplit,
@@ -206,6 +208,7 @@ impl JulibrotKernels {
             level,
             KernelMode::Shallow,
             owner_epoch,
+            precision_mode,
             None,
         )?;
         encode_pages(
@@ -234,6 +237,7 @@ impl JulibrotKernels {
         encoder: &mut wgpu::CommandEncoder,
         grid: &mut EscapeGrid,
         owner_epoch: u64,
+        precision_mode: PrecisionMode,
         level: RefinementLevel,
         plane: &Plane,
         scale: ScaleSplit,
@@ -243,6 +247,9 @@ impl JulibrotKernels {
         let allocation = self.allocation(grid)?;
         ensure_requested_params(&allocation.plan, params)?;
         self.validate_reference(reference, allocation.plan.requested_max_iter)?;
+        if reference.precision_mode != precision_mode.as_str() {
+            return Err(KernelError::ReferencePrecisionMismatch);
+        }
         let selected = allocation.plan.level(level);
         let used_orbit_length = reference.length.min(selected.iteration_cap);
         let uniform = PerturbUniform::pack(
@@ -269,6 +276,7 @@ impl JulibrotKernels {
             level,
             KernelMode::Perturbation,
             owner_epoch,
+            precision_mode,
             Some((reference.generation, reference.length)),
         )?;
         let resources_changed =
@@ -361,6 +369,7 @@ fn accept_reference_transition(
             generation: reference.generation,
             length: reference.length,
             precision_bits: reference.precision_bits,
+            precision_mode: reference.precision_mode,
         });
     }
     Ok(resources_changed)
@@ -391,6 +400,11 @@ fn validate_reference_transition(
         }
         if reference.generation == accepted.generation
             && reference.precision_bits != accepted.precision_bits
+        {
+            return Err(KernelError::ReferencePrecisionMismatch);
+        }
+        if reference.generation == accepted.generation
+            && reference.precision_mode != accepted.precision_mode
         {
             return Err(KernelError::ReferencePrecisionMismatch);
         }
@@ -432,6 +446,7 @@ fn checked_facts(
     level: RefinementLevel,
     mode: KernelMode,
     owner_epoch: u64,
+    precision_mode: PrecisionMode,
     orbit: Option<(u32, u32)>,
 ) -> Result<DispatchFacts, KernelError> {
     let mut facts = dispatch_facts(
@@ -439,6 +454,7 @@ fn checked_facts(
         level,
         mode,
         owner_epoch,
+        precision_mode,
         executor.capacity_report().scratch_bytes,
         orbit,
     )?;
@@ -508,6 +524,7 @@ mod tests {
             generation,
             length: 4,
             precision_bits,
+            precision_mode: "PictureFast",
         };
         let mut accepted: Option<AcceptedReference> = None;
         assert!(

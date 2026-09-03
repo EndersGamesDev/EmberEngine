@@ -175,7 +175,7 @@ pub fn escape_shallow_pixel(
 mod tests {
     use super::{escape_shallow_pixel, escape_shallow_point};
     use crate::{GridExtent, KernelError, RefinementLevel, ShallowUniform};
-    use ember_julibrot_math::{CentreSplit, EscapeParams, Plane};
+    use ember_julibrot_math::{CentreSplit, EscapeParams, Plane, PrecisionMode};
 
     #[test]
     fn known_current_state_indices_are_exact() {
@@ -244,19 +244,22 @@ mod tests {
 
     #[test]
     fn deterministic_points_match_the_math_oracle() {
-        for point in [
-            [0.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 2.0, 0.0],
-            [20.0, 0.0, 0.0, 0.0],
-        ] {
-            let params = EscapeParams::new(64);
-            let actual = escape_shallow_point(point, params).expect("kernel mirror accepts point");
-            let expected =
-                ember_julibrot_math::escape_f32(point, params).expect("math oracle accepts point");
-            assert_eq!(
-                crate::evaluate_shallow_conformance(actual, expected).verdict,
-                crate::ConformanceVerdict::Pass
-            );
+        for mode in PrecisionMode::ALL {
+            for point in [
+                [0.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 2.0, 0.0],
+                [20.0, 0.0, 0.0, 0.0],
+            ] {
+                let params = EscapeParams::new(64);
+                let actual =
+                    escape_shallow_point(point, params).expect("kernel mirror accepts point");
+                let expected = ember_julibrot_math::escape_f32(point, params)
+                    .expect("math oracle accepts point");
+                assert_eq!(
+                    crate::evaluate_shallow_conformance(mode, actual, expected).verdict,
+                    crate::ConformanceVerdict::Pass
+                );
+            }
         }
     }
 
@@ -294,29 +297,31 @@ mod tests {
             height: 3,
         };
         let params = EscapeParams::new(64);
-        for (angles, origin) in fixtures {
-            let plane = construct_plane(angles).expect("math plane");
-            let uniform = ShallowUniform::pack(
-                plane,
-                CentreSplit {
-                    hi: origin.map(|component| component as f32),
-                    lo: [0.0; 4],
-                },
-                0.25,
-                extent,
-                params,
-                RefinementLevel::Final,
-            )
-            .expect("fixture uniform");
-            for index in 0..9 {
-                let offset = crate::records::pixel_offset(index, extent, plane, 0.25);
-                let point = std::array::from_fn(|axis| uniform.centre_hi[axis] + offset[axis]);
-                let observed = escape_shallow_pixel(&uniform, index).expect("kernel mirror");
-                let expected = escape_f32(point, params).expect("math oracle");
-                assert_eq!(
-                    crate::evaluate_shallow_conformance(observed, expected).verdict,
-                    crate::ConformanceVerdict::Pass
-                );
+        for mode in PrecisionMode::ALL {
+            for (angles, origin) in fixtures {
+                let plane = construct_plane(angles).expect("math plane");
+                let uniform = ShallowUniform::pack(
+                    plane,
+                    CentreSplit {
+                        hi: origin.map(|component| component as f32),
+                        lo: [0.0; 4],
+                    },
+                    0.25,
+                    extent,
+                    params,
+                    RefinementLevel::Final,
+                )
+                .expect("fixture uniform");
+                for index in 0..9 {
+                    let offset = crate::records::pixel_offset(index, extent, plane, 0.25);
+                    let point = std::array::from_fn(|axis| uniform.centre_hi[axis] + offset[axis]);
+                    let observed = escape_shallow_pixel(&uniform, index).expect("kernel mirror");
+                    let expected = escape_f32(point, params).expect("math oracle");
+                    assert_eq!(
+                        crate::evaluate_shallow_conformance(mode, observed, expected).verdict,
+                        crate::ConformanceVerdict::Pass
+                    );
+                }
             }
         }
     }

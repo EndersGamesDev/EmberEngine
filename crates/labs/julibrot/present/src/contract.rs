@@ -1,5 +1,5 @@
 use ember_julibrot_kernels::{EscapeGrid, RefinementLevel};
-use ember_julibrot_math::{Plane, Pose, ViewControls};
+use ember_julibrot_math::{Plane, Pose, PrecisionMode, ViewControls};
 use ember_julibrot_worker::{HotState, MainState};
 use thiserror::Error;
 
@@ -38,6 +38,10 @@ impl PresentMain {
             _ => return None,
         };
         Some((id, palette(id)))
+    }
+
+    pub(crate) const fn precision_mode(&self) -> Option<PrecisionMode> {
+        PrecisionMode::from_u32(self.state.precision_mode)
     }
 }
 
@@ -96,6 +100,24 @@ pub enum SampleClass {
     Measured,
 }
 
+/// Why the caller needs the sampled warp-error corpus on this refresh.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum WarpValidation {
+    /// Ordinary display refresh.
+    #[default]
+    Ordinary,
+    /// Explicit user-requested measurement.
+    Measure,
+    /// Newly prepared Final-level validation.
+    Final,
+}
+
+impl WarpValidation {
+    pub(crate) const fn samples_corpus(self, precision_mode: PrecisionMode) -> bool {
+        precision_mode.requires_bit_identity() || !matches!(self, Self::Ordinary)
+    }
+}
+
 /// Completed four-byte-fence measurement.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SubmissionMeasurement {
@@ -107,6 +129,8 @@ pub struct SubmissionMeasurement {
     pub source_scene_id: Option<u64>,
     /// Warm-up and policy label.
     pub sample_class: SampleClass,
+    /// Precision policy that produced this submission.
+    pub precision_mode: &'static str,
     /// Submission-start through callback-observation wall in milliseconds.
     pub wall_ms: f64,
     /// First-poll through callback-observation wall in milliseconds.
@@ -136,6 +160,8 @@ pub struct SceneFrame {
     pub centre_revision: u32,
     /// Defining plane origin including Julia's constant.
     pub plane_origin_f64: [f64; 4],
+    /// Precision policy that produced the retained pixels.
+    pub precision_mode: &'static str,
     /// Fence measurement for this scene.
     pub measurement: SubmissionMeasurement,
 }
@@ -169,7 +195,7 @@ pub enum WarpKind {
 /// Why a completed scene was measured but not promoted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DropReason {
-    /// Iteration cap or defining plane origin changed.
+    /// Iteration cap, defining plane origin, or precision policy changed.
     IncompatibleMain,
     /// A later MAIN selection replaced the captured work.
     ReplacedMain,
@@ -233,6 +259,8 @@ pub enum PresentEvent {
         polls: u32,
         /// Submission-start wall at retirement in milliseconds.
         wall_ms: f64,
+        /// Precision policy under which the refused submission was attempted.
+        precision_mode: &'static str,
     },
 }
 
@@ -260,6 +288,8 @@ pub struct FrameReceipt {
     pub warp_id: u64,
     /// Retained scene sampled by this warp, absent for clear-only output.
     pub source_scene_id: Option<u64>,
+    /// Precision policy under which the warp was submitted.
+    pub precision_mode: &'static str,
     /// Honest display status at submission.
     pub status: PresentStatus,
 }
@@ -273,6 +303,8 @@ pub struct PresentFacts {
     pub in_flight_scene_id: Option<u64>,
     /// Orbit generation carried by the retained source.
     pub source_generation: Option<u32>,
+    /// Precision policy of the current MAIN selection and retained image.
+    pub precision_mode: &'static str,
     /// Delivered width in pixels.
     pub delivered_width: u32,
     /// Delivered height in pixels.
@@ -331,6 +363,7 @@ impl Default for PresentFacts {
             completed_scene_id: None,
             in_flight_scene_id: None,
             source_generation: None,
+            precision_mode: PrecisionMode::default().as_str(),
             delivered_width: 0,
             delivered_height: 0,
             delivered_level: None,

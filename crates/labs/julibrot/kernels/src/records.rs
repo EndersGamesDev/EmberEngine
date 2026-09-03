@@ -67,6 +67,8 @@ pub struct ReferenceOrbitInput<'a> {
     pub generation: u32,
     pub length: u32,
     pub precision_bits: u32,
+    /// Precision policy that produced the captured reference.
+    pub precision_mode: &'static str,
 }
 
 /// Exact 96-byte shallow uniform payload.

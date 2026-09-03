@@ -16,6 +16,42 @@ pub enum PrecisionMode {
     PictureFast = 1,
 }
 
+impl PrecisionMode {
+    /// Both supported policies, for cfg-free conformance tests.
+    pub const ALL: [Self; 2] = [Self::Deterministic, Self::PictureFast];
+
+    /// Decodes the stable worker and page discriminant.
+    #[must_use]
+    pub const fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Deterministic),
+            1 => Some(Self::PictureFast),
+            _ => None,
+        }
+    }
+
+    /// Returns the stable facts and provenance spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Deterministic => "Deterministic",
+            Self::PictureFast => "PictureFast",
+        }
+    }
+
+    /// Whether a conformance assertion requires exact operation or word identity.
+    #[must_use]
+    pub const fn requires_bit_identity(self) -> bool {
+        matches!(self, Self::Deterministic)
+    }
+}
+
+impl Default for PrecisionMode {
+    fn default() -> Self {
+        Self::Deterministic
+    }
+}
+
 impl Axis4 {
     #[must_use]
     pub const fn index(self) -> usize {

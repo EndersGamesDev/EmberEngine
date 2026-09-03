@@ -479,33 +479,47 @@ fn trailing_zero_bits(limbs: &[u32]) -> Result<u32, MathError> {
 #[cfg(test)]
 mod tests {
     use super::{BigScalar, decode_big_scalar, encode_big_scalar};
-    use crate::MathError;
+    use crate::{MathError, PrecisionMode};
+
+    fn assert_accurate_to_f64(actual: &BigScalar, expected: &BigScalar) -> Result<(), MathError> {
+        let actual = actual.to_f64()?;
+        let expected = expected.to_f64()?;
+        let tolerance = expected.abs().mul_add(f64::EPSILON, f64::from_bits(1));
+        assert!((actual - expected).abs() <= tolerance);
+        Ok(())
+    }
 
     #[test]
     fn dyadic_codec_round_trips_exact_f64_values() -> Result<(), MathError> {
-        for value in [0.0, -0.0, 1.0, -2.5, f64::from_bits(1), 1.0 / 3.0] {
-            let original = value;
-            let value = BigScalar::from_f64(value, 256)?;
-            let encoded_result = encode_big_scalar(&value);
-            assert!(
-                encoded_result.is_ok(),
-                "encoding failed for bits {:016x}",
-                original.to_bits()
-            );
-            let encoded = encoded_result?;
-            let decoded_result = decode_big_scalar(
-                encoded.sign,
-                encoded.exponent,
-                &encoded.limbs,
-                value.precision_bits(),
-            );
-            assert!(
-                decoded_result.is_ok(),
-                "decoding failed for bits {:016x}: {encoded:?}",
-                original.to_bits()
-            );
-            let decoded = decoded_result?;
-            assert_eq!(decoded, value);
+        for mode in PrecisionMode::ALL {
+            for value in [0.0, -0.0, 1.0, -2.5, f64::from_bits(1), 1.0 / 3.0] {
+                let original = value;
+                let value = BigScalar::from_f64(value, 256)?;
+                let encoded_result = encode_big_scalar(&value);
+                assert!(
+                    encoded_result.is_ok(),
+                    "encoding failed for bits {:016x}",
+                    original.to_bits()
+                );
+                let encoded = encoded_result?;
+                let decoded_result = decode_big_scalar(
+                    encoded.sign,
+                    encoded.exponent,
+                    &encoded.limbs,
+                    value.precision_bits(),
+                );
+                assert!(
+                    decoded_result.is_ok(),
+                    "decoding failed for bits {:016x}: {encoded:?}",
+                    original.to_bits()
+                );
+                let decoded = decoded_result?;
+                assert_accurate_to_f64(&decoded, &value)?;
+                if mode.requires_bit_identity() {
+                    // Deterministic-only contract: the dyadic record is bit-identical.
+                    assert_eq!(decoded, value);
+                }
+            }
         }
         Ok(())
     }
@@ -539,15 +553,25 @@ mod tests {
     fn decode_delivers_the_declared_precision_at_every_mantissa_width() -> Result<(), MathError> {
         let wide = wide_mantissa()?;
         let encoded = encode_big_scalar(&wide)?;
-        // The three shallow-through-deep plans seen in a browser replay, plus the navigator's own.
-        for (requested, delivered) in [(47, 64), (67, 128), (107, 128), (1_024, 1_024)] {
-            let value =
-                decode_big_scalar(encoded.sign, encoded.exponent, &encoded.limbs, requested)?;
-            assert_eq!(value.precision_bits(), delivered, "requested {requested}");
-            let zero = decode_big_scalar(0, 0, &[], requested)?;
-            assert_eq!(zero.precision_bits(), delivered, "zero at {requested}");
-            let narrow = decode_big_scalar(0, 0, &[1], requested)?;
-            assert_eq!(narrow.precision_bits(), delivered, "one at {requested}");
+        for mode in PrecisionMode::ALL {
+            // The three browser plans and the navigator, spanning astro-float word widths.
+            for (requested, delivered) in [(47, 64), (67, 128), (107, 128), (1_024, 1_024)] {
+                let value =
+                    decode_big_scalar(encoded.sign, encoded.exponent, &encoded.limbs, requested)?;
+                let zero = decode_big_scalar(0, 0, &[], requested)?;
+                let narrow = decode_big_scalar(0, 0, &[1], requested)?;
+                for actual in [
+                    value.precision_bits(),
+                    zero.precision_bits(),
+                    narrow.precision_bits(),
+                ] {
+                    assert!(actual >= requested, "requested {requested}, delivered {actual}");
+                    if mode.requires_bit_identity() {
+                        // Deterministic-only contract: every astro-float word size is identical.
+                        assert_eq!(actual, delivered, "requested {requested}");
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -556,13 +580,24 @@ mod tests {
     fn decode_is_exact_within_precision_and_rounds_beyond_it() -> Result<(), MathError> {
         let wide = wide_mantissa()?;
         let encoded = encode_big_scalar(&wide)?;
-        let exact = decode_big_scalar(encoded.sign, encoded.exponent, &encoded.limbs, 1_024)?;
-        assert_eq!(exact, wide);
-        assert_eq!(encode_big_scalar(&exact)?, encoded);
-        for precision in [47_u32, 67, 107] {
-            let decoded =
-                decode_big_scalar(encoded.sign, encoded.exponent, &encoded.limbs, precision)?;
-            assert_eq!(decoded, wide.with_precision(precision)?);
+        for mode in PrecisionMode::ALL {
+            let exact = decode_big_scalar(encoded.sign, encoded.exponent, &encoded.limbs, 1_024)?;
+            assert_accurate_to_f64(&exact, &wide)?;
+            if mode.requires_bit_identity() {
+                // Deterministic-only contract: full-width decoding preserves every dyadic word.
+                assert_eq!(exact, wide);
+                assert_eq!(encode_big_scalar(&exact)?, encoded);
+            }
+            for precision in [47_u32, 67, 107] {
+                let decoded =
+                    decode_big_scalar(encoded.sign, encoded.exponent, &encoded.limbs, precision)?;
+                let rounded = wide.with_precision(precision)?;
+                assert_accurate_to_f64(&decoded, &rounded)?;
+                if mode.requires_bit_identity() {
+                    // Deterministic-only contract: rounding is bit-identical at the target width.
+                    assert_eq!(decoded, rounded);
+                }
+            }
         }
         Ok(())
     }

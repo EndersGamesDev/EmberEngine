@@ -11,6 +11,8 @@ pub struct PendingSurface<T> {
     pub warp_id: u64,
     /// Orbit generation attributed to the surface refresh.
     pub generation: u32,
+    /// Precision policy captured with the acquired image.
+    pub precision_mode: &'static str,
     /// Acquired surface image, consumed by present or drop.
     pub frame: T,
 }
@@ -152,6 +154,7 @@ mod tests {
             .retain(PendingSurface {
                 warp_id: 11,
                 generation: 7,
+                precision_mode: "PictureFast",
                 frame: "frame-7",
             })
             .expect("owner may retain its image");
@@ -169,6 +172,7 @@ mod tests {
             .retain(PendingSurface {
                 warp_id: 5,
                 generation: 3,
+                precision_mode: "Deterministic",
                 frame: 19,
             })
             .expect("owner may retain its image");
@@ -179,6 +183,7 @@ mod tests {
             .retain(PendingSurface {
                 warp_id: 6,
                 generation: 4,
+                precision_mode: "PictureFast",
                 frame: 23,
             })
             .expect("new generation may retain");

@@ -334,7 +334,7 @@ mod tests {
     use core::num::NonZeroU32;
 
     use super::{ReferenceOrbitBuilder, escape_f32};
-    use crate::{BigCentre, EscapeParams, MathError, OrbitStep, precision_for};
+    use crate::{BigCentre, EscapeParams, MathError, OrbitStep, PrecisionMode, precision_for};
 
     #[test]
     fn shallow_escape_uses_the_current_index() -> Result<(), MathError> {
@@ -369,24 +369,31 @@ mod tests {
     #[test]
     #[allow(clippy::suboptimal_flops)]
     fn shallow_escape_uses_unfused_wgsl_radius_order() -> Result<(), MathError> {
-        let z_re = f32::from_bits(0x4174_bc8c);
-        let z_im = f32::from_bits(0x4096_3351);
-        let unfused = z_re * z_re + z_im * z_im;
-        let fused = z_re.mul_add(z_re, z_im * z_im);
-        assert_eq!(unfused.to_bits(), 256.000_03_f32.to_bits());
-        assert_eq!(fused.to_bits(), EscapeParams::BAILOUT.to_bits());
-        let sample = escape_f32([z_re, z_im, 0.0, 0.0], EscapeParams::new(1))?;
-        assert!(sample.escaped);
-        assert_eq!(sample.escape_index, Some(0));
-        let recurrence_point = [
-            f32::from_bits(0x3e27_3b8c),
-            f32::from_bits(0xbd95_1af2),
-            f32::from_bits(0xbe21_15f5),
-            f32::from_bits(0xbf5d_dbaa),
-        ];
-        let recurrence = escape_f32(recurrence_point, EscapeParams::new(64))?;
-        assert!(recurrence.escaped);
-        assert_eq!(recurrence.escape_index, Some(57));
+        for mode in PrecisionMode::ALL {
+            let z_re = f32::from_bits(0x4174_bc8c);
+            let z_im = f32::from_bits(0x4096_3351);
+            let unfused = z_re * z_re + z_im * z_im;
+            let fused = z_re.mul_add(z_re, z_im * z_im);
+            assert!((unfused - 256.000_03).abs() <= f32::EPSILON * 256.0);
+            assert!((fused - EscapeParams::BAILOUT).abs() <= f32::EPSILON * 256.0);
+            if mode.requires_bit_identity() {
+                // Deterministic-only contract: preserve the CPU mirror's written operation order.
+                assert_eq!(unfused.to_bits(), 256.000_03_f32.to_bits());
+                assert_eq!(fused.to_bits(), EscapeParams::BAILOUT.to_bits());
+            }
+            let sample = escape_f32([z_re, z_im, 0.0, 0.0], EscapeParams::new(1))?;
+            assert!(sample.escaped);
+            assert_eq!(sample.escape_index, Some(0));
+            let recurrence_point = [
+                f32::from_bits(0x3e27_3b8c),
+                f32::from_bits(0xbd95_1af2),
+                f32::from_bits(0xbe21_15f5),
+                f32::from_bits(0xbf5d_dbaa),
+            ];
+            let recurrence = escape_f32(recurrence_point, EscapeParams::new(64))?;
+            assert!(recurrence.escaped);
+            assert_eq!(recurrence.escape_index, Some(57));
+        }
         Ok(())
     }
 

@@ -1,8 +1,8 @@
 //! Requested controls and worker-owned HOT/MAIN publication integration.
 
 use ember_julibrot_math::{
-    Axis4, BigCentre, NavigationDelta, Plane, PlaneAngles, Pose, SEED_AXES, ViewControls,
-    construct_plane,
+    Axis4, BigCentre, NavigationDelta, Plane, PlaneAngles, Pose, PrecisionMode, SEED_AXES,
+    ViewControls, construct_plane,
 };
 use ember_julibrot_present::PaletteId;
 use ember_julibrot_worker::{
@@ -41,6 +41,8 @@ pub struct RequestedControls {
     pub plane_angles: PlaneAngles,
     /// Requested orbit and kernel iteration cap.
     pub iteration_cap: u32,
+    /// Requested precision policy.
+    pub precision_mode: PrecisionMode,
     /// Requested present-owned palette.
     pub palette: PaletteId,
     /// Every VIEW control.
@@ -57,6 +59,7 @@ impl Default for RequestedControls {
                 theta_2: 0.0,
             },
             iteration_cap: INITIAL_ITERATION_CAP,
+            precision_mode: PrecisionMode::PictureFast,
             palette: PaletteId::Classic,
             view: ViewControls::NEUTRAL,
         }
@@ -311,6 +314,7 @@ impl ViewerController {
             },
             main: MainState {
                 requested_iter_cap: requested.iteration_cap,
+                precision_mode: requested.precision_mode as u32,
                 palette_id: requested.palette as u32,
                 centre_f64: origin,
                 plane_axis_a: SEED_AXES[0] as u32,
@@ -616,6 +620,29 @@ impl ViewerController {
         Ok(())
     }
 
+    /// Stages a precision-policy change as incompatible MAIN work.
+    ///
+    /// # Errors
+    ///
+    /// Returns the owner's typed navigation or epoch refusal.
+    pub fn set_precision_mode(&mut self, precision_mode: PrecisionMode) -> Result<(), AppError> {
+        if self.requested.precision_mode == precision_mode {
+            return Ok(());
+        }
+        self.synchronize_shadow()?;
+        self.requested.precision_mode = precision_mode;
+        let mut main = self.staged_main;
+        main.precision_mode = precision_mode as u32;
+        self.staged_main = main;
+        self.owner.stage_main(main);
+        self.owner.navigate(NavigationDelta::default());
+        if let Some(error) = self.owner.take_navigation_error() {
+            return Err(owner_error(error));
+        }
+        self.add_reason(OrbitReason::PRECISION_MODE_CHANGE);
+        Ok(())
+    }
+
     /// Stages one of present's exact palette identifiers.
     ///
     /// # Errors
@@ -807,7 +834,7 @@ fn owner_error(error: ember_julibrot_worker::OwnerError) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use ember_julibrot_math::{PlaneAngles, ViewControls};
+    use ember_julibrot_math::{PlaneAngles, PrecisionMode, ViewControls};
     use ember_julibrot_present::PaletteId;
 
     use super::{
@@ -1030,10 +1057,33 @@ mod tests {
         let second = viewer.drain_main().expect("main drain");
         assert!(second.epoch > first.state.epoch);
         assert_eq!(viewer.requested().iteration_cap, 2_048);
+        assert_eq!(viewer.requested().precision_mode, PrecisionMode::PictureFast);
         assert_eq!(viewer.requested().palette, PaletteId::Ice);
         assert_eq!(viewer.requested().view, relief);
         assert_eq!(second.main.requested_iter_cap, 2_048);
+        assert_eq!(second.main.precision_mode, PrecisionMode::PictureFast as u32);
         assert_eq!(second.main.palette_id, PaletteId::Ice as u32);
+    }
+
+    #[test]
+    fn precision_mode_defaults_fast_and_changes_main_generation() {
+        let mut viewer = ViewerController::new(800).expect("canonical viewer");
+        assert_eq!(viewer.requested().precision_mode, PrecisionMode::PictureFast);
+        let before = viewer.drain_hot([800, 600]).expect("initial frame");
+        viewer
+            .set_precision_mode(PrecisionMode::Deterministic)
+            .expect("mode change");
+        let after = viewer.drain_main().expect("mode main");
+        assert!(after.main.centre_revision > before.state.main.centre_revision);
+        assert_eq!(after.main.precision_mode, PrecisionMode::Deterministic as u32);
+        let submission = viewer
+            .take_reference_submission()
+            .expect("mode change requests a reference");
+        assert_eq!(submission.navigation.precision_mode, 0);
+        assert_ne!(
+            submission.reason.bits() & OrbitReason::PRECISION_MODE_CHANGE.bits(),
+            0
+        );
     }
 
     #[test]

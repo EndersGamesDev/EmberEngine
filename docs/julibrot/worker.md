@@ -66,7 +66,7 @@ The common squared bailout radius is `256.0`; at escape the grid stores `smooth_
 
 ### 2.2 One-module worker packaging
 
-One wasm module is loaded on the main thread and again in the Web Worker; the worker calls the exported `worker_main` entry, both loader URLs carry `?v=1`, exported `JULIBROT_ABI_VERSION = 1` must equal the message version before startup, the browser cache avoids a second network payload, and the second instance still pays separate wasm linear memory, globals, initialization, and bignum scratch.
+One wasm module is loaded on the main thread and again in the Web Worker; the worker calls the exported `worker_main` entry, all loader URLs retain the independently pinned `?v=1`, exported `JULIBROT_ABI_VERSION = 2` must equal the message version before startup, the browser cache avoids a second network payload, and the second instance still pays separate wasm linear memory, globals, initialization, and bignum scratch.
 
 A second wasm artifact is rejected because it adds a separately versioned URL, duplicate code-generation output, cache identity, and loader failure mode without reducing `postMessage` payload bytes; the one-module choice makes deployment atomic even though instance memory cannot be shared.
 
@@ -86,7 +86,7 @@ Each message kind has capacity one in its pending queue and a later message of t
 
 For current `max_iter = M`, every buffer has `capacity_bytes = 48+16M`: 32 header bytes, room for `M` orbit records or the request body, and a 16-byte immutable pool trailer; app's minimum requestable `M` is 64, changing `M` arms one drain of all four buffers, delivers a queued arrival to app for its own stale disposition rather than swallowing it behind app's one-in-flight coalescing, replaces all four buffers only after all four return to the allocator or the four-second return deadline expires, restarts the producer from the cached module artifact, increments `allocation_events`, re-encodes the coalesced request at the new capacity, and is the only steady-session resize event.
 
-The request body must fit before the trailer, so `112+4·limb_word_count ≤ 32+16M`; at the 300-digit POLICY four coordinates need at most `4·ceil(300·log₂(10)/32) = 128` limbs, hence request bytes are at most `112+4·128 = 624 ≤ 32+16·64 = 1,056`, while any failure remains a displayed `CentreEncodingWall` with requested bytes and capacity, never truncation or a hidden allocation.
+The request body must fit before the trailer, so `116+4·limb_word_count ≤ 32+16M`; at the 300-digit POLICY four coordinates need at most `4·ceil(300·log₂(10)/32) = 128` limbs, hence request bytes are at most `116+4·128 = 628 ≤ 32+16·64 = 1,056`, while any failure remains a displayed `CentreEncodingWall` with requested bytes and capacity, never truncation or a hidden allocation.
 
 The main-to-worker boundary copies no orbit payload, and the worker-to-main boundary performs exactly one `O(16L)` memcpy from wasm linear scratch into the standalone orbit buffer before transfer; transfer and same-thread queue movement are `O(1)` ownership changes, so the path is `O(payload)` rather than `O(DAG)`.
 
@@ -160,12 +160,12 @@ All wire integers and floats are little-endian; reserved fields and unoccupied b
 
 ### 3.1 Shared wire header and trailer
 
-Every message starts with `MessageHeader`, exactly eight `u32` words and 32 bytes; `MAGIC = 0x314c424a` is the little-endian byte string `JBL1`, and `VERSION = 1`.
+Every message starts with `MessageHeader`, exactly eight `u32` words and 32 bytes; `MAGIC = 0x314c424a` is the little-endian byte string `JBL1`, and `VERSION = 2`.
 
 |Byte|Field|Type|Meaning|
 |---:|-----|----|-------|
 |0|`magic`|`u32`|`0x314c424a`|
-|4|`version`|`u32`|wire version `1`|
+|4|`version`|`u32`|wire version `2`|
 |8|`generation`|`u32`|request generation, response generation, or generation being acknowledged|
 |12|`kind`|`u32`|`MessageKind` discriminant|
 |16|`length`|`u32`|kind-specific length from the table below|
@@ -191,13 +191,13 @@ The last 16 bytes are `PoolTrailer { pool: u32, slot: u32, capacity_bytes: u32, 
 
 ### 3.2 Orbit request and bignum centre encoding
 
-The Rust-level request is `OrbitRequest { generation: u32, centre: EncodedCentre, depth_digits: u32, precision_bits: u32, max_iter: u32, reason: OrbitReason }`; header words carry generation, precision, and max iteration, while the request body carries the remaining fields.
+The Rust-level request is `OrbitRequest { generation: u32, centre: EncodedCentre, depth_digits: u32, precision_bits: u32, max_iter: u32, precision_mode: PrecisionMode, reason: OrbitReason }`; header words carry generation, precision, and max iteration, while the request body carries the remaining fields.
 
 `depth_digits = ceil(max(0,zoom_log2·log10(2)))`; it is the integral request label, while the overlay retains the unrounded `f64` decimal-depth fact.
 
-The request body is `{ depth_digits: u32, reason_bits: u32, centre_revision: u32, limb_word_count: u32, coordinates: [CoordinateDescriptor; 4], limbs: [u32; limb_word_count] }` with its fixed prefix at bytes 32 through 111 and limbs beginning at byte 112.
+The request body is `{ depth_digits: u32, reason_bits: u32, centre_revision: u32, limb_word_count: u32, coordinates: [CoordinateDescriptor; 4], precision_mode: u32, limbs: [u32; limb_word_count] }` with descriptors at bytes 48, 64, 80, and 96, the validated mode discriminant at byte 112, and limbs beginning at byte 116.
 
-`reason_bits` assigns bit 0 to initial reference, bit 1 to centre-threshold crossing, bit 2 to zoom-threshold crossing, and bit 3 to max-iteration change; unknown bits are a version-one `BadLength` error rather than silently ignored.
+`reason_bits` assigns bit 0 to initial reference, bit 1 to centre-threshold crossing, bit 2 to zoom-threshold crossing, bit 3 to max-iteration change, and bit 4 to precision-mode change; unknown bits are a version-two `BadLength` error rather than silently ignored.
 
 Each 16-byte `CoordinateDescriptor` is `{ sign: u32, exponent_twos_complement: u32, limb_start: u32, limb_count: u32 }`; descriptors appear in `(z.re,z.im,c.re,c.im)` order at bytes 48, 64, 80, and 96.
 
@@ -247,7 +247,7 @@ All owner records below are `Copy` plus `#[repr(C)]`; they are compile-time Rust
 
 `HotState` is 40 bytes and alignment 8: `zoom_log2: f64` at byte 0, `plane_theta_1: f64` at byte 8, `plane_theta_2: f64` at byte 16, and `centre_from_reference_px: [f64; 2]` at byte 24; angles are radians, zoom is dimensionless, and displacement is in current-zoom pixels along `(u,v)`.
 
-`MainState` is 120 bytes and alignment 8 with the following exact layout.
+`MainState` is 128 bytes and alignment 8 with the following exact layout.
 
 |Byte|Field|Type|Meaning|
 |---:|-----|----|-------|
@@ -264,12 +264,13 @@ All owner records below are `Copy` plus `#[repr(C)]`; they are compile-time Rust
 |68|`plane_axis_b`|`u32`|zero-based axis index in `e₁..e₄`|
 |72|`plane_origin_f64`|`[f64; 4]`|includes Julia `c₀`; display and pose mirror|
 |104|`reference_shift_px`|`[f64; 2]`|new accepted reference minus old reference, in current-zoom `(u,v)` pixels|
+|120|`precision_mode`|`u32`|`PrecisionMode` discriminant; bytes 124–127 are tail padding|
 
 `plane_axis_a` and `plane_axis_b` remain the seed-axis indices `0..3` for `(e₁,e₂,e₃,e₄)`; `R₁₃·R₂₄` changes the derived basis, not the preset or stored meaning of these two fields.
 
 `OrbitHandle` is the logical pair `{ id: u32, generation: u32 }`; MAIN stores `id` and `generation_applied`, and app rejects a registry lookup whose generation differs.
 
-`ViewerState` is 168 bytes and alignment 8: `epoch: u64` at byte 0, `hot: HotState` at byte 8, and `main: MainState` at byte 48.
+`ViewerState` is 176 bytes and alignment 8: `epoch: u64` at byte 0, `hot: HotState` at byte 8, and `main: MainState` at byte 48.
 
 `HotDrain` and `MainDrain` each return a full `ViewerState`; the distinct names make the update rate explicit even though their payload layout is identical.
 
@@ -279,7 +280,7 @@ All owner records below are `Copy` plus `#[repr(C)]`; they are compile-time Rust
 
 `ViewerOwner::stage_hot(hot: HotState)` replaces the undrained HOT value and performs no allocation.
 
-`ViewerOwner::stage_main(main: MainState)` replaces the undrained MAIN value and performs no allocation; app uses it for palette, cap, and preset/origin arrivals.
+`ViewerOwner::stage_main(main: MainState)` replaces the undrained MAIN value and performs no allocation; app uses it for palette, cap, precision mode, and preset/origin arrivals. A mode change checked-increments generation and centre revision through the same navigation path as a cap change, captures the mode word in `NavigationSubmission`, and adds `OrbitReason::PRECISION_MODE_CHANGE`.
 
 `ViewerOwner::configure_navigation(config: NavigationConfig) -> Result<(), OwnerError>` installs the authoritative `BigCentre`, accepted reference centre, math-produced `Plane`, and current grid width; `ViewerOwner::navigate(&mut self, delta: NavigationDelta) -> u32` delegates centre mutation to math's `BigCentre::apply_navigation` in `navigation.rs`, computes HOT displacement with `BigCentre::displacement_px`, stages the f64 mirror, checked-increments centre revision and generation, and leaves a typed `OwnerError` retrievable after any refusal. `take_navigation_submission` releases one exact centre snapshot only when no request is in flight, while later edits replace its single pending successor. `navigation_centre` returns a clone of that same desired centre without touching the pending successor, which is what saving a view needs: the row must record the centre the owner is actually holding, and reading it must not consume the submission the way taking one does.
 
@@ -345,7 +346,7 @@ The worker defines no GPU uniform block and performs no GPU call; present owns `
 
 Math defines the semantic, no-byte-ABI `Pose { epoch: u64, orbit_generation: u32, plane: Plane, plane_theta_1: f64, plane_theta_2: f64, zoom_log2: f64, view: ViewControls, grid_width: u32, grid_height: u32, centre_from_reference_px: [f64;2] }`; `ViewControls` is the seven-f64 record `{ theta_1, theta_2, camera_yaw, camera_pitch, height_scale, distance_five, distance_four }`, no field of which is derived from another or from a clock, and math exposes `warp_matrix(from: &Pose, to: &Pose)`.
 
-App converts each `HotDrain` into math's `Pose` and present's `PresentHot`, constructs present's `HotSlot` with index `refresh_id mod 3`, and calls `Presenter::write_hot(&mut self, slot: HotSlot, hot: PresentHot)`; present computes the f64 warp plan CPU-side and uploads one `HotUniform`, with `hot_stride = align_up(128,min_uniform_buffer_offset_alignment)`.
+App converts each `HotDrain` into math's `Pose` and present's `PresentHot`, constructs present's `HotSlot` with index `refresh_id mod 3`, and calls `Presenter::write_hot(&mut self, slot: HotSlot, hot: PresentHot, validation: WarpValidation)`; present computes the f64 warp plan CPU-side and uploads one `HotUniform`, with `hot_stride = align_up(128,min_uniform_buffer_offset_alignment)`.
 
 The refresh order is `Presenter::poll → drain HOT → Presenter::write_hot(refresh_id mod 3) → Presenter::frame → app present`; present owns its two scene textures and all scene/warp fences, while app retains surface ownership and presents outside both measured regions.
 
@@ -379,7 +380,9 @@ The first-frame law remains app-owned: clear colour plus honest overlay text pre
 
 All tests in this section are native unless explicitly labelled `requires visible replay`; native tests use the same-thread lowering and injected monotonic clocks, never browser guesses.
 
-The wire-layout golden constructs every message kind byte-for-byte, checks all offsets, endianness, reserved zeroes, canonical centre descriptors, record count arithmetic `32+16L`, trailer preservation, bad magic/version/kind/length rejection, and all typed errors.
+The wire-layout golden constructs every message kind byte-for-byte, checks all offsets, endianness, reserved zeroes, canonical centre descriptors, precision-mode round-trip, record count arithmetic `32+16L`, trailer preservation, bad magic/version/kind/length rejection, and all typed errors.
+
+Bit-identity assertions use the cfg-free `PrecisionMode::requires_bit_identity` policy: dyadic word round-trips, identical Astro-float delivered widths, exact CPU-mirror operation order, exact rebase-count agreement, and exact `D` versus `D+16` words belong to Deterministic conformance, while canonical byte validation and every accuracy comparison to that exact path remain unconditional in both modes.
 
 The orbit-record golden checks index zero, escaping and non-escaping lengths, high/low reconstruction, squared bailout `256.0`, exact `[re_hi,im_hi,re_lo,im_lo]` bytes, Astro-float word-rounded delivered precision, and the `D_work` versus `D_work+16` validation supplied by deterministic math fixtures.
 
@@ -460,6 +463,7 @@ Implementation progress through Phase 4: the Phase 2 core, transferable `worker_
 ## 8. Unresolved joint-review findings
 
 The authoritative owner navigation API is resolved by direct adoption of math's `NavigationDelta`, `BigCentre::apply_navigation`, and `BigCentre::displacement_px` from `crates/labs/julibrot/math/src/navigation.rs`; worker owns only sequencing, coalescing, generation, and publication.
+
 - A single Astro-float iteration cannot be pre-empted by the 64-iteration or 2,000-microsecond cooperative check; visible replay must decide whether math needs finer internal cancellation points.
 - Successive accepted references may arrive before present promotes a retained scene; app and present must prove that composing queued `reference_shift_px` values re-bases that scene exactly once.
 - Browser transfer proves detachment and trailer continuity but cannot reveal an engine-internal physical copy; evidence must keep the claim at ownership transfer plus one explicit wasm memcpy.

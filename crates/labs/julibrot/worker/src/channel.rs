@@ -1084,6 +1084,8 @@ impl<T> BoundedQueue<T> {
 
 #[cfg(test)]
 mod tests {
+    use ember_julibrot_math::PrecisionMode;
+
     use super::{
         Admission, SubmitOutcome, WorkerChannel, WorkerConfig, WorkerMode, worker_mode_from_search,
     };
@@ -1107,6 +1109,7 @@ mod tests {
             0,
             64,
             max_iter,
+            PrecisionMode::Deterministic,
             OrbitReason::INITIAL,
         )
         .unwrap()
