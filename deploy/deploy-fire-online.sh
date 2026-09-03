@@ -20,14 +20,14 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-# The target host. specht is being decommissioned; export EMBER_HOST to point
-# this at its replacement without editing the script:
+# The target host. The default is the `sokol` ssh alias; export EMBER_HOST to
+# choose another host without editing the script:
 #
 #     EMBER_HOST=newbox bash deploy/deploy-fire-online.sh
 #
 # It must be a name `ssh` already resolves and can log into without a prompt
 # (BatchMode is on everywhere below), i.e. an entry in ~/.ssh/config with a key.
-REMOTE="${EMBER_HOST:-specht}"
+REMOTE="${EMBER_HOST:-sokol}"
 
 PORT=7781
 BIND="127.0.0.1:$PORT"
@@ -156,7 +156,14 @@ echo "== restarting fire-server =="
 # The fallback is not legacy — a freshly built host has no units yet, and this
 # script has to be what brings the game up there in the first place.
 MANAGED=""
+USER_MANAGER=""
 if ssh -o BatchMode=yes "$REMOTE" \
+        'test -n "${XDG_RUNTIME_DIR:-}" && test -S "$XDG_RUNTIME_DIR/bus" && systemctl --user is-system-running >/dev/null 2>&1'; then
+    USER_MANAGER=1
+else
+    echo "   no running systemd user manager; using a direct launch"
+fi
+if [ -n "$USER_MANAGER" ] && ssh -o BatchMode=yes "$REMOTE" \
         'systemctl --user is-enabled ember-fire.service' >/dev/null 2>&1; then
     # `is-enabled` only reads a symlink. It does NOT prove the manager can be
     # COMMANDED, and on specht it cannot: SELinux is Enforcing and permits the
