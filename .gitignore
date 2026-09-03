@@ -44,3 +44,13 @@ assets/scutum/
 assets/murasama/
 /tools/v17/*.png
 /tools/v17/__pycache__/
+# v18 artist sources: the AK-47, the Vityaz, the RPG-7, the sniper and the
+# M4 (large; converted GLB is committed). tools/v18 previews, captures and
+# bytecode stay local.
+assets/ak47/
+assets/vityaz/
+assets/rpg7/
+assets/sniper/
+assets/m4/
+/tools/v18/*.png
+/tools/v18/__pycache__/
