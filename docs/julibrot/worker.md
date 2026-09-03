@@ -138,6 +138,8 @@ At admission the producer subtracts `P` from its projected local balance, and th
 
 Worker `compute_us` begins immediately before decoding the centre into bignum scratch and ends after the one standalone-buffer copy, uses `ceil(1,000·performance.now elapsed milliseconds)`, and returns a typed `TimingOverflow` rather than saturating beyond `u32::MAX`.
 
+The sokol worker measurement uses seven orbit samples and reports the median, then repeats fixed-buffer packing 256 times: at zoom 100 and width 960, PictureFast Preview reduced time-to-first orbit from 1,416 to 440 us at cap 512 and from 6,740 to 3,461 us at cap 4,096; record payload stayed 8,192 and 65,536 bytes, pack means changed from 19,681 to 13,148 ns and 94,821 to 81,297 ns, and admission price/wait followed compute from 1,416/5,664 to 440/1,760 us and 6,740/26,960 to 3,461/13,844 us.
+
 If the returned warm-up measurement is zero, `Admission::TimingUnavailable` emits a typed `TimingOverflow` channel event instead of inventing a price or admitting an unbounded stream; the overlay distinguishes this unavailable state from a measured zero credit balance.
 
 ### 2.6 Versioned owner and two drains
