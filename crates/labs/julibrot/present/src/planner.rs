@@ -94,7 +94,7 @@ fn enforce_error_ceiling(mut plan: WarpPlan, from_pose: &Pose, to_pose: &Pose) -
             plan.kind = WarpKind::ReliefRedraw;
             return plan;
         }
-        None => {}
+        Some(_) | None => {}
     }
     plan.source_scene_id = None;
     plan.source_texture_index = None;
