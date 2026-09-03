@@ -187,6 +187,37 @@ struct SceneTicket {
     level: RefinementLevel,
 }
 
+/// Whether control changes immediately refine a new scene or wait for an explicit update.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SceneMode {
+    /// Preserve the existing behaviour: every material control change restarts refinement.
+    #[default]
+    Auto,
+    /// Reproject control changes and wait for an explicit scene update before refining.
+    Manual,
+}
+
+impl SceneMode {
+    /// Decodes the browser checkbox boundary, where zero is manual and one is automatic.
+    #[must_use]
+    pub const fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Manual),
+            1 => Some(Self::Auto),
+            _ => None,
+        }
+    }
+
+    /// Returns the stable facts value shown by the page.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Manual => "manual",
+        }
+    }
+}
+
 /// Latest-wins Preview, Interactive, Final scheduler with one scene in flight.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RefinementSchedule {
@@ -274,8 +305,16 @@ fn fence_error(kind: SubmissionKind, reason: FenceRefusal, polls: u32, wall_ms: 
 
 #[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone, Debug, Default, PartialEq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "manual dirtiness, manual rendering, requested run, and completed run are independent scheduler facts"
+)]
 struct FrameLoop {
     schedule: RefinementSchedule,
+    scene_mode: SceneMode,
+    scene_update_pending: bool,
+    manual_rendering: bool,
+    restart_after_scene: Option<u32>,
     requested_run: bool,
     completed_run: bool,
     transient_refusals: u32,
@@ -289,12 +328,7 @@ const fn schedule_exposure_fill(
     exposed: bool,
     generation: u32,
 ) -> bool {
-    if exposed && !frame_loop.refinement_pending() {
-        frame_loop.restart(generation);
-        true
-    } else {
-        false
-    }
+    exposed && frame_loop.exposure_fill(generation)
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -337,9 +371,10 @@ impl FrameLoop {
     const fn accept_request(&mut self, generation: u32, restart_scene: bool) {
         self.requested_run = true;
         self.completed_run = false;
-        if restart_scene && !self.schedule.pending() {
-            self.schedule.restart(generation);
-        } else if !self.schedule.pending() {
+        if restart_scene {
+            self.scene_changed(generation);
+        }
+        if !self.schedule.pending() {
             self.completed_run = true;
         }
     }
@@ -347,18 +382,110 @@ impl FrameLoop {
     const fn apply_precision_mode(&mut self, precision_mode: PrecisionMode, generation: u32) {
         self.schedule.generation = generation;
         self.schedule.precision_mode = precision_mode;
-        self.schedule.next = Some(RefinementLevel::Preview);
-        self.schedule.in_flight = None;
-        if self.requested_run {
-            self.completed_run = false;
+        match self.scene_mode {
+            SceneMode::Auto => {
+                self.schedule.next = Some(RefinementLevel::Preview);
+                self.schedule.in_flight = None;
+                if self.requested_run {
+                    self.completed_run = false;
+                }
+            }
+            SceneMode::Manual => self.scene_changed(generation),
         }
     }
 
     const fn restart(&mut self, generation: u32) {
         self.schedule.restart(generation);
+        self.restart_after_scene = None;
         if self.requested_run {
             self.completed_run = false;
         }
+    }
+
+    const fn scene_changed(&mut self, generation: u32) {
+        match self.scene_mode {
+            SceneMode::Auto => {
+                if !self.schedule.pending() {
+                    self.restart(generation);
+                }
+            }
+            SceneMode::Manual => {
+                self.scene_update_pending = true;
+                self.manual_rendering = false;
+                self.restart_after_scene = None;
+                self.schedule.pause();
+            }
+        }
+    }
+
+    const fn scene_input_ready(&mut self, generation: u32) {
+        if matches!(self.scene_mode, SceneMode::Auto) || self.manual_rendering {
+            self.restart(generation);
+        }
+    }
+
+    const fn scene_selection_changed(&mut self, generation: u32) {
+        if matches!(self.scene_mode, SceneMode::Auto) {
+            self.restart(generation);
+        } else if !self.manual_rendering {
+            self.scene_changed(generation);
+        }
+    }
+
+    const fn request_scene_update(&mut self, generation: u32) {
+        self.requested_run = true;
+        self.completed_run = false;
+        self.manual_rendering = matches!(self.scene_mode, SceneMode::Manual);
+        if self.schedule.scene_in_flight() {
+            self.schedule.pause();
+            self.restart_after_scene = Some(generation);
+        } else {
+            self.restart(generation);
+        }
+    }
+
+    fn set_scene_mode(&mut self, mode: SceneMode, generation: u32, has_scene: bool) {
+        if self.scene_mode == mode {
+            return;
+        }
+        self.scene_mode = mode;
+        match mode {
+            SceneMode::Auto => {
+                self.manual_rendering = false;
+                if self.scene_update_pending {
+                    self.scene_update_pending = false;
+                    self.requested_run = true;
+                    self.completed_run = false;
+                    if self.schedule.scene_in_flight() {
+                        self.schedule.pause();
+                        self.restart_after_scene = Some(generation);
+                    } else {
+                        self.restart(generation);
+                    }
+                }
+            }
+            SceneMode::Manual => {
+                self.manual_rendering = !has_scene;
+                if has_scene {
+                    self.restart_after_scene = None;
+                    self.schedule.pause();
+                }
+            }
+        }
+    }
+
+    const fn exposure_fill(&mut self, generation: u32) -> bool {
+        if !matches!(self.scene_mode, SceneMode::Auto) {
+            if !self.manual_rendering {
+                self.scene_update_pending = true;
+            }
+            return false;
+        }
+        if self.refinement_pending() {
+            return false;
+        }
+        self.restart(generation);
+        true
     }
 
     fn due(&self) -> Option<RefinementLevel> {
@@ -370,15 +497,30 @@ impl FrameLoop {
     }
 
     fn completed(&mut self, id: u64, generation: u32, level: RefinementLevel) -> bool {
+        let observed = self.schedule.matches_scene(id);
         let completed = self.schedule.completed(id, generation, level);
-        if completed && self.requested_run && !self.schedule.pending() {
+        if observed && let Some(restart_generation) = self.restart_after_scene.take() {
+            self.restart(restart_generation);
+            return true;
+        }
+        if completed && self.manual_rendering {
+            self.scene_update_pending = false;
+        }
+        if self.requested_run && !self.schedule.pending() {
             self.completed_run = true;
         }
         completed
     }
 
     fn retired(&mut self, id: u64) -> bool {
-        self.schedule.retired(id)
+        let retired = self.schedule.retired(id);
+        if retired && let Some(restart_generation) = self.restart_after_scene.take() {
+            self.restart(restart_generation);
+        }
+        if self.requested_run && !self.schedule.pending() {
+            self.completed_run = true;
+        }
+        retired
     }
 
     const fn generation(&self) -> u32 {
@@ -387,6 +529,14 @@ impl FrameLoop {
 
     const fn refinement_pending(&self) -> bool {
         self.schedule.pending()
+    }
+
+    const fn scene_mode(&self) -> SceneMode {
+        self.scene_mode
+    }
+
+    const fn scene_update_pending(&self) -> bool {
+        matches!(self.scene_mode, SceneMode::Manual) && self.scene_update_pending
     }
 
     const fn warp_requested(&self, policy: crate::FramePolicy) -> bool {
@@ -521,6 +671,24 @@ impl RefinementSchedule {
     pub const fn restart(&mut self, generation: u32) {
         self.generation = generation;
         self.next = Some(RefinementLevel::Preview);
+    }
+
+    /// Stops future levels without forgetting a scene whose fence must still be observed.
+    #[cfg(any(target_arch = "wasm32", test))]
+    const fn pause(&mut self) {
+        self.next = None;
+    }
+
+    /// Reports whether a submitted scene still owns the present target.
+    #[cfg(any(target_arch = "wasm32", test))]
+    const fn scene_in_flight(&self) -> bool {
+        self.in_flight.is_some()
+    }
+
+    /// Reports whether the named scene is the one whose fence remains outstanding.
+    #[cfg(any(target_arch = "wasm32", test))]
+    fn matches_scene(&self, id: u64) -> bool {
+        self.in_flight.is_some_and(|ticket| ticket.id == id)
     }
 
     /// Returns the exact next level only when present has no scene target occupied.
@@ -946,6 +1114,12 @@ mod browser {
                     .accept_request(self.main.generation_applied, restart_scene);
                 requests.frame = false;
             }
+            if requests.scene_update {
+                requests.scene_update = false;
+                self.loop_state
+                    .request_scene_update(self.main.generation_applied);
+                self.prepared_level = None;
+            }
             if let Some(error) = self.owner_endpoint.take_error() {
                 self.abandon_submitted_references(viewer);
                 return Err(worker_error(error));
@@ -961,7 +1135,7 @@ mod browser {
             self.main = hot.state.main;
             self.observe_scene_selection(viewer);
             if !self.loop_state.refinement_pending() && self.presented_view_is_stale(viewer) {
-                self.loop_state.restart(self.main.generation_applied);
+                self.loop_state.scene_changed(self.main.generation_applied);
                 self.prepared_level = None;
                 self.prepare_due_level();
             }
@@ -1277,7 +1451,8 @@ mod browser {
                     .scene_selection
                     .is_some_and(|previous| previous != selection)
             {
-                self.loop_state.restart(self.main.generation_applied);
+                self.loop_state
+                    .scene_selection_changed(self.main.generation_applied);
                 self.prepared_level = None;
             }
             self.scene_selection = Some(selection);
@@ -1439,7 +1614,7 @@ mod browser {
                 None,
             );
             self.rebuild_grid_if_needed(viewer.requested().iteration_cap)?;
-            self.loop_state.restart(response.generation());
+            self.loop_state.scene_input_ready(response.generation());
             self.prepared_level = None;
             let requested = viewer.requested();
             let map = viewer.screen_map(self.prepared_extent())?;
@@ -1478,7 +1653,7 @@ mod browser {
                 self.shallow_centre = Some(navigation.centre);
                 self.main = viewer.drain_main()?.main;
                 self.rebuild_grid_if_needed(requested.iteration_cap)?;
-                self.loop_state.restart(navigation.generation);
+                self.loop_state.scene_input_ready(navigation.generation);
                 self.prepared_level = None;
                 let map = viewer.screen_map(self.prepared_extent())?;
                 self.install_main(requested.object_angles, plane, map);
@@ -1755,6 +1930,26 @@ mod browser {
             )
         }
 
+        /// Selects automatic or button-driven scene refinement without changing the current pose.
+        pub fn set_scene_mode(&mut self, mode: super::SceneMode) {
+            let has_scene = self.presenter.facts().completed_scene_id.is_some();
+            self.loop_state
+                .set_scene_mode(mode, self.main.generation_applied, has_scene);
+            self.prepared_level = None;
+        }
+
+        /// Returns the current automatic or manual scene policy.
+        #[must_use]
+        pub const fn scene_mode(&self) -> super::SceneMode {
+            self.loop_state.scene_mode()
+        }
+
+        /// Reports a manual pose change not yet covered by a completed requested scene.
+        #[must_use]
+        pub const fn scene_update_pending(&self) -> bool {
+            self.loop_state.scene_update_pending()
+        }
+
         /// Returns the count of transient fence refusals this session survived.
         #[must_use]
         pub const fn transient_refusals(&self) -> u32 {
@@ -1942,7 +2137,7 @@ mod tests {
 
     use super::{
         FenceRefusal, FrameLoop, LEVELS, PresenterPoll, RefinementLevel, RefinementSchedule,
-        RefusalClass, SubmissionKind, apply_precision_mode, arrival_is_current,
+        RefusalClass, SceneMode, SubmissionKind, apply_precision_mode, arrival_is_current,
         expand_reference_texels, fence_error, horizon_facts, main_for_grid,
         published_iteration_cap, schedule_exposure_fill, view_projection_changed,
     };
@@ -2058,6 +2253,7 @@ mod tests {
         warp_callback: Option<FakeEvent>,
         fence_observations: u32,
         warp_fence_observations: u32,
+        hot_writes: u32,
         submissions: Vec<RefinementLevel>,
         warp_submissions: Vec<u64>,
         presented_warps: Vec<u64>,
@@ -2074,6 +2270,10 @@ mod tests {
             self.pending = Some(scene);
             self.submissions.push(level);
             scene.id
+        }
+
+        fn write_hot(&mut self) {
+            self.hot_writes += 1;
         }
 
         fn submit_warp(&mut self) -> u64 {
@@ -2191,6 +2391,7 @@ mod tests {
         if frame_loop.stopped().is_some() {
             return outcome;
         }
+        presenter.write_hot();
         if !outcome.refused
             && let Some(level) = frame_loop.due()
         {
@@ -2666,6 +2867,125 @@ mod tests {
     }
 
     #[test]
+    fn manual_control_change_writes_hot_and_schedules_no_scene() {
+        let mut frame_loop = FrameLoop::default();
+        let mut presenter = FakePresenter::default();
+        let clock = FakeClock::default();
+        frame_loop.set_scene_mode(SceneMode::Manual, 7, true);
+        frame_loop.accept_request(7, true);
+        frame_loop.scene_selection_changed(7);
+
+        let turn = drive_turn(
+            &mut frame_loop,
+            &mut presenter,
+            clock,
+            FramePolicy::SingleFrameOnDemand,
+            true,
+        );
+        assert_eq!(presenter.hot_writes, 1);
+        assert_eq!(turn.scene_id, None);
+        assert!(
+            turn.warp_id.is_some(),
+            "the changed HOT pose is still reprojected"
+        );
+        assert!(frame_loop.scene_update_pending());
+        assert!(!frame_loop.refinement_pending());
+
+        presenter.fire_warp_completed();
+        let completed = drive_turn(
+            &mut frame_loop,
+            &mut presenter,
+            clock,
+            FramePolicy::SingleFrameOnDemand,
+            false,
+        );
+        assert!(completed.presented);
+        assert!(!frame_loop.needs_refresh(false, false, false, false));
+        assert!(frame_loop.scene_update_pending());
+    }
+
+    #[test]
+    fn manual_update_scene_restarts_the_current_ladder() {
+        let mut frame_loop = FrameLoop::default();
+        let mut presenter = FakePresenter::default();
+        let mut clock = FakeClock::default();
+        frame_loop.set_scene_mode(SceneMode::Manual, 11, true);
+        frame_loop.accept_request(11, true);
+        frame_loop.request_scene_update(11);
+        assert_eq!(frame_loop.due(), Some(RefinementLevel::Preview));
+        assert_eq!(
+            drive_refresh(&mut frame_loop, &mut presenter, clock),
+            Some(1)
+        );
+
+        presenter.fire_completed_callback();
+        clock.advance(1.0);
+        assert_eq!(
+            drive_refresh(&mut frame_loop, &mut presenter, clock),
+            Some(2)
+        );
+        assert!(!frame_loop.scene_update_pending());
+        presenter.fire_completed_callback();
+        clock.advance(1.0);
+        assert_eq!(
+            drive_refresh(&mut frame_loop, &mut presenter, clock),
+            Some(3)
+        );
+        presenter.fire_completed_callback();
+        clock.advance(1.0);
+        assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), None);
+        assert_eq!(presenter.submissions, LEVELS);
+        assert!(!frame_loop.refinement_pending());
+    }
+
+    #[test]
+    fn manual_main_change_keeps_its_orbit_request_without_a_scene() {
+        let mut viewer = ViewerController::new(960).expect("canonical viewer");
+        let initial = viewer
+            .take_reference_submission()
+            .expect("startup requests its first orbit");
+        assert!(viewer.finish_reference_submission(initial.navigation.generation));
+        viewer
+            .set_plane_origin([0.0, 0.0, -0.75, 0.1])
+            .expect("finite origin");
+        assert!(
+            viewer.take_reference_submission().is_some(),
+            "manual scene policy does not consume or suppress MAIN orbit work"
+        );
+
+        let mut frame_loop = FrameLoop::default();
+        frame_loop.set_scene_mode(SceneMode::Manual, 13, true);
+        frame_loop.accept_request(13, true);
+        frame_loop.scene_input_ready(14);
+        assert_eq!(frame_loop.due(), None);
+        assert!(frame_loop.needs_refresh(false, false, true, false));
+    }
+
+    #[test]
+    fn enabling_auto_with_a_manual_change_schedules_preview() {
+        let mut frame_loop = FrameLoop::default();
+        frame_loop.set_scene_mode(SceneMode::Manual, 17, true);
+        frame_loop.accept_request(17, true);
+        assert!(frame_loop.scene_update_pending());
+        frame_loop.set_scene_mode(SceneMode::Auto, 17, true);
+        assert_eq!(frame_loop.scene_mode(), SceneMode::Auto);
+        assert_eq!(frame_loop.due(), Some(RefinementLevel::Preview));
+        assert!(!frame_loop.scene_update_pending());
+    }
+
+    #[test]
+    fn auto_mode_and_the_first_manual_scene_keep_automatic_refinement() {
+        let mut automatic = FrameLoop::default();
+        automatic.accept_request(19, true);
+        assert_eq!(automatic.due(), Some(RefinementLevel::Preview));
+
+        let mut first_scene = FrameLoop::default();
+        first_scene.restart(23);
+        first_scene.set_scene_mode(SceneMode::Manual, 23, false);
+        assert_eq!(first_scene.due(), Some(RefinementLevel::Preview));
+    }
+
+    #[test]
     fn a_stale_presented_view_alone_keeps_the_loop_scheduled() {
         let frame_loop = FrameLoop::default();
         assert!(
@@ -2746,6 +3066,16 @@ mod tests {
         );
         assert_eq!(presenter.submissions[3], RefinementLevel::Preview);
         assert_eq!(presenter.submissions[4], RefinementLevel::Interactive);
+    }
+
+    #[test]
+    fn an_exposed_manual_warp_waits_for_update_without_latching_the_loop() {
+        let mut frame_loop = FrameLoop::default();
+        frame_loop.set_scene_mode(SceneMode::Manual, 18, true);
+        assert!(!schedule_exposure_fill(&mut frame_loop, true, 18));
+        assert_eq!(frame_loop.due(), None);
+        assert!(frame_loop.scene_update_pending());
+        assert!(!frame_loop.needs_refresh(false, false, false, false));
     }
 
     #[test]

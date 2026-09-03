@@ -18,7 +18,7 @@ pub use error::AppError;
 pub use facts::PageFacts;
 #[cfg(target_arch = "wasm32")]
 pub use frame::BrowserFrameLoop;
-pub use frame::RefinementSchedule;
+pub use frame::{RefinementSchedule, SceneMode};
 pub use measurement::{
     ADAPTIVE_SAMPLES, ADAPTIVE_WARM_UPS, AdaptivePlan, CONTINUOUS_FRAME_THRESHOLD_MS,
     FrameObservation, FramePolicy, FramePolicyTracker, MAX_ADAPTIVE_REPEATS, MAX_BATCH_MS,
@@ -46,13 +46,15 @@ pub struct App {
     requests: RunRequests,
 }
 
-/// Explicit app work requests; neither flag claims submission or measurement.
+/// Explicit app work requests; no flag claims submission or measurement.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RunRequests {
     /// A surface refresh was explicitly requested.
     pub frame: bool,
     /// An adaptive measurement suite was explicitly requested.
     pub measurement: bool,
+    /// The current pose should restart scene refinement after its controls are drained.
+    pub scene_update: bool,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -140,6 +142,7 @@ impl App {
         // control, an untouched page reaches a fixed image and the loop is allowed to go quiet.
         self.requests.frame
             || self.requests.measurement
+            || self.requests.scene_update
             || self.frame_loop.pending(&self.runtime, &self.viewer)
     }
 
@@ -151,6 +154,16 @@ impl App {
     /// Queues one explicit measurement request for the future measured submission path.
     pub const fn request_measurement(&mut self) {
         self.requests.measurement = true;
+    }
+
+    /// Selects automatic or button-driven scene refinement.
+    pub fn set_scene_mode(&mut self, mode: SceneMode) {
+        self.frame_loop.set_scene_mode(mode);
+    }
+
+    /// Restarts the scene ladder for the currently requested controls.
+    pub const fn update_scene(&mut self) {
+        self.requests.scene_update = true;
     }
 }
 
@@ -224,7 +237,7 @@ mod wasm_entry {
     use ember_julibrot_present::PaletteId;
 
     use crate::{
-        App, JULIBROT_ABI_VERSION, PageFacts, SavedCentre, SavedView, anchor_px_up,
+        App, JULIBROT_ABI_VERSION, PageFacts, SavedCentre, SavedView, SceneMode, anchor_px_up,
         box_zoom_delta_log2, css_from_anchor_px_up, drag_delta_px_down, is_box_selection,
         preset_row,
     };
@@ -735,6 +748,26 @@ mod wasm_entry {
         })
     }
 
+    /// Selects automatic scene updates for one, or manual button-driven updates for zero.
+    #[wasm_bindgen]
+    pub fn app_set_scene_mode(mode: u32) -> Result<(), JsValue> {
+        let mode = SceneMode::from_u32(mode)
+            .ok_or_else(|| JsValue::from_str("scene mode discriminant is outside 0..1"))?;
+        with_app_mut(|app| {
+            app.set_scene_mode(mode);
+            Ok(())
+        })
+    }
+
+    /// Restarts scene refinement at the currently staged pose.
+    #[wasm_bindgen]
+    pub fn app_update_scene() -> Result<(), JsValue> {
+        with_app_mut(|app| {
+            app.update_scene();
+            Ok(())
+        })
+    }
+
     /// Runs one zero-timeout refresh turn at the supplied monotonic browser timestamp.
     #[wasm_bindgen]
     pub fn app_refresh(now_ms: f64) -> Result<String, JsValue> {
@@ -794,6 +827,6 @@ pub use wasm_entry::{
     app_saved_view_json, app_set_camera, app_set_camera_angles, app_set_camera_translation,
     app_set_centre, app_set_distances, app_set_height, app_set_iteration_cap,
     app_set_object_angles, app_set_palette, app_set_plane_angles, app_set_plane_origin,
-    app_set_precision_mode, app_set_scale, app_set_target, app_set_view_angles, app_zoom_box,
-    julibrot_abi_version, start_julibrot,
+    app_set_precision_mode, app_set_scale, app_set_scene_mode, app_set_target, app_set_view_angles,
+    app_update_scene, app_zoom_box, julibrot_abi_version, start_julibrot,
 };
