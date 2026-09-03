@@ -541,7 +541,11 @@ fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Exp
         WarpValidation::Ordinary,
     );
     if plan.kind == WarpKind::ReliefRedraw {
-        assert_eq!(expected, Expected::Relief, "{name}: unexpectedly selected a relief redraw");
+        assert_eq!(
+            expected,
+            Expected::Relief,
+            "{name}: unexpectedly selected a relief redraw"
+        );
         assert!(
             plan.source_valid,
             "{name}: relief redraw lost its record source"

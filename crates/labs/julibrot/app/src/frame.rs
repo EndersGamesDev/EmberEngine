@@ -2381,8 +2381,8 @@ mod tests {
     use super::{
         FenceRefusal, FrameLoop, LEVELS, PresenterPoll, REFERENCE_RECORD_BYTES,
         REFERENCE_TEXEL_BYTES, RefinementLevel, RefinementSchedule, RefusalClass, SceneMode,
-        SubmissionKind, apply_precision_mode, arrival_is_current, expand_reference_texels_into,
-        defer_scene_until_relief_redraw, fence_error, hold_redraw_during_scene, horizon_facts,
+        SubmissionKind, apply_precision_mode, arrival_is_current, defer_scene_until_relief_redraw,
+        expand_reference_texels_into, fence_error, hold_redraw_during_scene, horizon_facts,
         main_for_grid, published_iteration_cap, schedule_exposure_fill, stamp_scene_level,
         stamped_extent, view_projection_changed,
     };
@@ -2407,13 +2407,11 @@ mod tests {
     #[test]
     fn browser_refresh_wires_relief_redraw_before_submission_and_holds_during_scene() {
         let source = include_str!("frame.rs");
-        assert!(source.contains(
-            "let defer_scene_for_redraw = super::defer_scene_until_relief_redraw("
-        ));
+        assert!(
+            source.contains("let defer_scene_for_redraw = super::defer_scene_until_relief_redraw(")
+        );
         assert!(source.contains("let scene_id = if defer_scene_for_redraw {"));
-        assert!(source.contains(
-            "let redraw_scene_in_flight = super::hold_redraw_during_scene("
-        ));
+        assert!(source.contains("let redraw_scene_in_flight = super::hold_redraw_during_scene("));
         assert!(source.contains(
             "if warp_requested && !runtime.has_pending_surface() && !redraw_scene_in_flight {"
         ));

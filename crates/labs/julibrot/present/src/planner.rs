@@ -134,16 +134,11 @@ fn pure_height_or_fifth_distance(from: &Pose, to: &Pose) -> bool {
         && close(from.view.distance_four, to.view.distance_four)
         && close(from.zoom_log2, to.zoom_log2)
         && arrays_close(from.plane_origin, to.plane_origin)
-        && arrays_close(
-            from.centre_from_reference_px,
-            to.centre_from_reference_px,
-        )
+        && arrays_close(from.centre_from_reference_px, to.centre_from_reference_px)
 }
 
 fn arrays_close<const N: usize>(from: [f64; N], to: [f64; N]) -> bool {
-    from.into_iter()
-        .zip(to)
-        .all(|(from, to)| close(from, to))
+    from.into_iter().zip(to).all(|(from, to)| close(from, to))
 }
 
 fn close(from: f64, to: f64) -> bool {
@@ -1119,10 +1114,7 @@ mod tests {
 
         let mut pure_fifth_distance = tumbled;
         pure_fifth_distance.view.distance_five = 6.0;
-        assert!(exact_relief_redraw_family(
-            &tumbled,
-            &pure_fifth_distance
-        ));
+        assert!(exact_relief_redraw_family(&tumbled, &pure_fifth_distance));
 
         let mut cross_term = pure_height;
         cross_term.view.camera_yaw += 0.1;
