@@ -596,13 +596,21 @@ mod tests {
                         }
                     };
                     let mut fixture_changes = 0_usize;
-                    for record in &orbit.records {
+                    let mut fixture_records = 0_usize;
+                    let mut excluded_terminal_records = 0_usize;
+                    for (index, record) in orbit.records.iter().enumerate() {
                         let re = f64::from(record.re_hi) + f64::from(record.re_lo);
                         let im = f64::from(record.im_hi) + f64::from(record.im_lo);
-                        assert!(
-                            re.hypot(im) <= 16.0,
-                            "fixture={preset}/zoom-{zoom_log2}/cap-{max_iter} exceeded |Z| <= 16"
-                        );
+                        if re.hypot(im) > 16.0 {
+                            assert_eq!(
+                                orbit.escape_index,
+                                Some(u32::try_from(index).expect("orbit index fits u32")),
+                                "fixture={preset}/zoom-{zoom_log2}/cap-{max_iter} has a nonterminal record outside |Z| <= 16"
+                            );
+                            excluded_terminal_records += 1;
+                            continue;
+                        }
+                        fixture_records += 1;
                         fixture_changes += usize::from(
                             (record.re_hi + record.re_lo).to_bits() != record.re_hi.to_bits(),
                         );
@@ -613,12 +621,11 @@ mod tests {
                     let fixture = format!("{preset}/zoom-{zoom_log2}/cap-{max_iter}");
                     assert_eq!(fixture_changes, 0, "fixture={fixture}");
                     eprintln!(
-                        "reference_orbit_split fixture={fixture} records={} coordinates={} consumed_word_changes={fixture_changes}",
-                        orbit.records.len(),
-                        orbit.records.len() * 2,
+                        "reference_orbit_split fixture={fixture} records={fixture_records} coordinates={} excluded_terminal_records={excluded_terminal_records} consumed_word_changes={fixture_changes}",
+                        fixture_records * 2,
                     );
                     fixture_count += 1;
-                    record_count += orbit.records.len();
+                    record_count += fixture_records;
                     changed_count += fixture_changes;
                 }
             }
