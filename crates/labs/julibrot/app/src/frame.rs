@@ -313,6 +313,8 @@ struct FrameLoop {
     schedule: RefinementSchedule,
     scene_mode: SceneMode,
     scene_update_pending: bool,
+    draft_skipped_count: u64,
+    last_draft_skip_reason: Option<&'static str>,
     manual_rendering: bool,
     restart_after_scene: Option<u32>,
     requested_run: bool,
@@ -381,6 +383,15 @@ fn view_projection_changed(
         !pose_maps_close(first_map, second_map)
     } else {
         first != second
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+const fn level_rank(level: RefinementLevel) -> u32 {
+    match level {
+        RefinementLevel::Preview => 0,
+        RefinementLevel::Interactive => 1,
+        RefinementLevel::Final => 2,
     }
 }
 
@@ -514,6 +525,31 @@ impl FrameLoop {
         self.schedule.due()
     }
 
+    fn skip_drafts_for_covering_warp(
+        &mut self,
+        source_level: Option<RefinementLevel>,
+    ) -> bool {
+        const REASON: &str = "accepted higher-level retained warp covers surface";
+        let Some(due) = self.due() else {
+            return false;
+        };
+        let Some(source_level) = source_level else {
+            return false;
+        };
+        if level_rank(source_level) <= level_rank(due) || due == RefinementLevel::Final {
+            return false;
+        }
+        let skipped = match (self.schedule.precision_mode, due) {
+            (PrecisionMode::Deterministic, RefinementLevel::Preview) => 2,
+            (_, RefinementLevel::Preview | RefinementLevel::Interactive) => 1,
+            (_, RefinementLevel::Final) => 0,
+        };
+        self.schedule.next = Some(RefinementLevel::Final);
+        self.draft_skipped_count = self.draft_skipped_count.saturating_add(skipped);
+        self.last_draft_skip_reason = Some(REASON);
+        true
+    }
+
     const fn submitted(&mut self, id: u64, level: RefinementLevel) {
         self.schedule.submitted(id, level);
     }
@@ -559,6 +595,14 @@ impl FrameLoop {
 
     const fn scene_update_pending(&self) -> bool {
         matches!(self.scene_mode, SceneMode::Manual) && self.scene_update_pending
+    }
+
+    const fn draft_skipped_count(&self) -> u64 {
+        self.draft_skipped_count
+    }
+
+    const fn last_draft_skip_reason(&self) -> Option<&'static str> {
+        self.last_draft_skip_reason
     }
 
     const fn warp_requested(&self, policy: crate::FramePolicy) -> bool {
@@ -1215,6 +1259,37 @@ mod browser {
                         map: hot.pose.map,
                     },
                     WarpValidation::Ordinary,
+                );
+            }
+            if !main_arrived
+                && self.loop_state.skip_drafts_for_covering_warp(
+                    self.presenter.covering_warp_source_level(slot),
+                )
+            {
+                self.prepared_level = None;
+                let final_validation = self.prepare_due_level();
+                debug_assert!(final_validation);
+                hot = viewer.drain_hot(self.prepared_extent())?;
+                self.owner_epoch = hot.state.epoch;
+                self.main = hot.state.main;
+                self.observe_scene_selection(viewer);
+                self.install_main(hot.pose.object, hot.plane, hot.pose.map);
+                slot = HotSlot::for_refresh(self.refresh_id, self.hot_stride, hot.state.epoch)
+                    .map_err(|error| AppError::Present(error.to_string()))?;
+                self.presenter.write_hot(
+                    slot,
+                    PresentHot {
+                        epoch: hot.state.epoch,
+                        state: ember_julibrot_worker::HotState {
+                            centre_from_reference_px: hot.pose.centre_from_reference_px,
+                            ..hot.state.hot
+                        },
+                        object: hot.pose.object,
+                        plane: hot.plane,
+                        view: viewer.requested().view,
+                        map: hot.pose.map,
+                    },
+                    WarpValidation::Final,
                 );
             }
             let scene_id = if main_arrived {
@@ -1973,6 +2048,18 @@ mod browser {
         #[must_use]
         pub const fn scene_update_pending(&self) -> bool {
             self.loop_state.scene_update_pending()
+        }
+
+        /// Returns how many draft levels an accepted better warp made unnecessary.
+        #[must_use]
+        pub const fn draft_skipped_count(&self) -> u64 {
+            self.loop_state.draft_skipped_count()
+        }
+
+        /// Returns the stable reason for the most recent direct-to-Final decision.
+        #[must_use]
+        pub const fn last_draft_skip_reason(&self) -> Option<&'static str> {
+            self.loop_state.last_draft_skip_reason()
         }
 
         /// Returns the count of transient fence refusals this session survived.
@@ -2970,6 +3057,7 @@ mod tests {
         frame_loop.set_scene_mode(SceneMode::Manual, 7, true);
         frame_loop.accept_request(7, true);
         frame_loop.scene_selection_changed(7);
+        assert!(!frame_loop.skip_drafts_for_covering_warp(Some(RefinementLevel::Final)));
 
         let turn = drive_turn(
             &mut frame_loop,
@@ -3079,6 +3167,80 @@ mod tests {
         first_scene.restart(23);
         first_scene.set_scene_mode(SceneMode::Manual, 23, false);
         assert_eq!(first_scene.due(), Some(RefinementLevel::Preview));
+    }
+
+    #[test]
+    fn accepted_final_warp_submits_final_directly_and_returns_to_idle() {
+        let mut frame_loop = FrameLoop::default();
+        frame_loop.schedule.precision_mode = PrecisionMode::PictureFast;
+        frame_loop.accept_request(31, true);
+        assert_eq!(frame_loop.due(), Some(RefinementLevel::Preview));
+        assert!(frame_loop.skip_drafts_for_covering_warp(Some(RefinementLevel::Final)));
+        assert_eq!(frame_loop.due(), Some(RefinementLevel::Final));
+        assert_eq!(frame_loop.draft_skipped_count(), 1);
+        assert_eq!(
+            frame_loop.last_draft_skip_reason(),
+            Some("accepted higher-level retained warp covers surface")
+        );
+
+        let mut presenter = FakePresenter::default();
+        let mut clock = FakeClock::default();
+        assert_eq!(
+            drive_refresh(&mut frame_loop, &mut presenter, clock),
+            Some(1)
+        );
+        assert_eq!(presenter.submissions, [RefinementLevel::Final]);
+        presenter.fire_completed_callback();
+        clock.advance(1.0);
+        let warp = drive_turn(
+            &mut frame_loop,
+            &mut presenter,
+            clock,
+            FramePolicy::SingleFrameOnDemand,
+            true,
+        );
+        assert_eq!(warp.scene_id, None);
+        assert!(warp.warp_id.is_some());
+        presenter.fire_warp_completed();
+        clock.advance(1.0);
+        let settled = drive_turn(
+            &mut frame_loop,
+            &mut presenter,
+            clock,
+            FramePolicy::SingleFrameOnDemand,
+            false,
+        );
+        assert!(settled.presented);
+        assert!(!frame_loop.needs_refresh(false, false, false, false));
+    }
+
+    #[test]
+    fn refused_warp_and_first_scene_run_the_full_ladder() {
+        let mut refused = FrameLoop::default();
+        refused.accept_request(37, true);
+        assert!(!refused.skip_drafts_for_covering_warp(None));
+        assert_eq!(refused.due(), Some(RefinementLevel::Preview));
+
+        let mut presenter = FakePresenter::default();
+        let mut clock = FakeClock::default();
+        run_ladder_to_idle(
+            &mut refused,
+            &mut presenter,
+            &mut clock,
+            FramePolicy::SingleFrameOnDemand,
+        );
+        assert_eq!(presenter.submissions, LEVELS);
+        assert_eq!(refused.draft_skipped_count(), 0);
+        assert_eq!(refused.last_draft_skip_reason(), None);
+    }
+
+    #[test]
+    fn deterministic_accepted_warp_skips_both_draft_levels() {
+        let mut frame_loop = FrameLoop::default();
+        frame_loop.accept_request(41, true);
+        assert!(frame_loop.skip_drafts_for_covering_warp(Some(RefinementLevel::Final)));
+        assert_eq!(frame_loop.due(), Some(RefinementLevel::Final));
+        assert_eq!(frame_loop.draft_skipped_count(), 2);
     }
 
     #[test]
