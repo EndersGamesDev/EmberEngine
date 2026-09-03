@@ -1,8 +1,8 @@
 //! Requested controls and worker-owned HOT/MAIN publication integration.
 
 use ember_julibrot_math::{
-    Axis4, BigCentre, NavigationDelta, Plane, PlaneAngles, PlanePreset, PlaneSpec, Pose, ViewMode,
-    construct_plane_from_spec, preset_spec,
+    Axis4, BigCentre, NavigationDelta, Plane, PlaneAngles, Pose, SEED_AXES, ViewControls,
+    construct_plane,
 };
 use ember_julibrot_present::PaletteId;
 use ember_julibrot_worker::{
@@ -20,8 +20,8 @@ const NAVIGATION_PRECISION_BITS: u32 = 1_024;
 /// Controls retain requested values independently of delayed worker or GPU work.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RequestedControls {
-    /// Named plane seed and Julia constant, if selected.
-    pub preset: PlanePreset,
+    /// Absolute plane origin `(z.re, z.im, c.re, c.im)`.
+    pub plane_origin: [f64; 4],
     /// Desired base-two zoom exponent.
     pub zoom_log2: f64,
     /// Independent plane angles in radians.
@@ -30,14 +30,14 @@ pub struct RequestedControls {
     pub iteration_cap: u32,
     /// Requested present-owned palette.
     pub palette: PaletteId,
-    /// Requested flat or tumbled presentation.
-    pub view: ViewMode,
+    /// Every VIEW control.
+    pub view: ViewControls,
 }
 
 impl Default for RequestedControls {
     fn default() -> Self {
         Self {
-            preset: PlanePreset::Mandelbrot,
+            plane_origin: [0.0; 4],
             zoom_log2: 0.0,
             plane_angles: PlaneAngles {
                 theta_1: 0.0,
@@ -45,9 +45,72 @@ impl Default for RequestedControls {
             },
             iteration_cap: INITIAL_ITERATION_CAP,
             palette: PaletteId::Classic,
-            view: ViewMode::Flat,
+            view: ViewControls::NEUTRAL,
         }
     }
+}
+
+/// One preset: a named row of control values and nothing else.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PresetRow {
+    /// Stable name shown by the page.
+    pub name: &'static str,
+    /// Both plane angles in radians.
+    pub plane_angles: [f64; 2],
+    /// Absolute plane origin.
+    pub plane_origin: [f64; 4],
+    /// Every VIEW control.
+    pub view: ViewControls,
+}
+
+const QUARTER_TURN: f64 = core::f64::consts::FRAC_PI_2;
+
+/// The relief rows' observer, which is the orientation the retired fixed mount had.
+const RELIEF_VIEW: ViewControls = ViewControls {
+    theta_1: 0.6,
+    theta_2: 0.97,
+    camera_yaw: 0.349,
+    camera_pitch: 0.262,
+    height_scale: 1.0,
+    distance_five: 8.0,
+    distance_four: 8.0,
+};
+
+/// The Julia row's constant.
+const JULIA_C0: [f64; 2] = [-0.8, 0.156];
+
+/// Every preset, defined once as pure data.
+pub const PRESET_ROWS: [PresetRow; 4] = [
+    PresetRow {
+        name: "Mandelbrot",
+        plane_angles: [0.0, 0.0],
+        plane_origin: [0.0; 4],
+        view: ViewControls::NEUTRAL,
+    },
+    PresetRow {
+        name: "Julia",
+        plane_angles: [-QUARTER_TURN, -QUARTER_TURN],
+        plane_origin: [0.0, 0.0, JULIA_C0[0], JULIA_C0[1]],
+        view: ViewControls::NEUTRAL,
+    },
+    PresetRow {
+        name: "Mandelbrot relief",
+        plane_angles: [0.0, 0.0],
+        plane_origin: [0.0; 4],
+        view: RELIEF_VIEW,
+    },
+    PresetRow {
+        name: "Julia relief",
+        plane_angles: [-QUARTER_TURN, -QUARTER_TURN],
+        plane_origin: [0.0, 0.0, JULIA_C0[0], JULIA_C0[1]],
+        view: RELIEF_VIEW,
+    },
+];
+
+/// Returns one preset row by identifier.
+#[must_use]
+pub fn preset_row(id: u32) -> Option<PresetRow> {
+    PRESET_ROWS.get(id as usize).copied()
 }
 
 /// Returns the per-axis factor that converts one CSS pixel of the canvas box into render-grid
@@ -175,10 +238,9 @@ impl ViewerController {
     /// Returns a math error if the canonical preset contract is unavailable.
     pub fn new(grid_width: u32) -> Result<Self, AppError> {
         let requested = RequestedControls::default();
-        let spec = preset_spec(requested.preset).map_err(math_error)?;
-        let plane = construct_plane_from_spec(spec, requested.plane_angles).map_err(math_error)?;
-        let centre = BigCentre::from_f64(spec.plane_origin, NAVIGATION_PRECISION_BITS)
-            .map_err(math_error)?;
+        let origin = requested.plane_origin;
+        let plane = construct_plane(requested.plane_angles).map_err(math_error)?;
+        let centre = BigCentre::from_f64(origin, NAVIGATION_PRECISION_BITS).map_err(math_error)?;
         let initial = ViewerState {
             epoch: 0,
             hot: HotState {
@@ -190,10 +252,10 @@ impl ViewerController {
             main: MainState {
                 requested_iter_cap: requested.iteration_cap,
                 palette_id: requested.palette as u32,
-                centre_f64: spec.plane_origin,
-                plane_axis_a: spec.axis_a as u32,
-                plane_axis_b: spec.axis_b as u32,
-                plane_origin_f64: spec.plane_origin,
+                centre_f64: origin,
+                plane_axis_a: SEED_AXES[0] as u32,
+                plane_axis_b: SEED_AXES[1] as u32,
+                plane_origin_f64: origin,
                 ..MainState::default()
             },
         };
@@ -320,34 +382,36 @@ impl ViewerController {
         Ok(())
     }
 
-    /// Selects Mandelbrot or Julia, resets its centre to the defining origin, and preserves cap,
-    /// palette, and view requests.
+    /// Moves the absolute plane origin, resetting the centre to it and preserving cap, palette,
+    /// and every VIEW control.
+    ///
+    /// This is MAIN work: a new origin selects different samples and needs a new reference orbit,
+    /// which is exactly the publication the retired preset selection performed.
     ///
     /// # Errors
     ///
     /// Returns a typed math or centre-revision overflow failure.
-    pub fn set_preset(&mut self, preset: PlanePreset) -> Result<(), AppError> {
+    pub fn set_plane_origin(&mut self, origin: [f64; 4]) -> Result<(), AppError> {
+        if !origin.iter().all(|value| value.is_finite()) {
+            return Err(AppError::Math("plane origin is not finite".to_string()));
+        }
         self.synchronize_shadow()?;
-        let spec = preset_spec(preset).map_err(math_error)?;
-        self.requested.preset = preset;
+        self.requested.plane_origin = origin;
         self.requested.zoom_log2 = 0.0;
-        self.requested.plane_angles = PlaneAngles {
-            theta_1: 0.0,
-            theta_2: 0.0,
-        };
+        let angles = self.requested.plane_angles;
         let hot = HotState {
             zoom_log2: 0.0,
-            plane_theta_1: 0.0,
-            plane_theta_2: 0.0,
+            plane_theta_1: angles.theta_1,
+            plane_theta_2: angles.theta_2,
             centre_from_reference_px: [0.0; 2],
         };
         let main = MainState {
             generation_applied: 0,
             centre_revision: self.staged_main.centre_revision,
-            centre_f64: spec.plane_origin,
-            plane_axis_a: spec.axis_a as u32,
-            plane_axis_b: spec.axis_b as u32,
-            plane_origin_f64: spec.plane_origin,
+            centre_f64: origin,
+            plane_axis_a: SEED_AXES[0] as u32,
+            plane_axis_b: SEED_AXES[1] as u32,
+            plane_origin_f64: origin,
             orbit_length: 0,
             orbit_id: 0,
             precision_bits: 0,
@@ -356,10 +420,8 @@ impl ViewerController {
         };
         self.staged_hot = hot;
         self.staged_main = main;
-        let plane =
-            construct_plane_from_spec(spec, self.requested.plane_angles).map_err(math_error)?;
-        let centre = BigCentre::from_f64(spec.plane_origin, NAVIGATION_PRECISION_BITS)
-            .map_err(math_error)?;
+        let plane = construct_plane(angles).map_err(math_error)?;
+        let centre = BigCentre::from_f64(origin, NAVIGATION_PRECISION_BITS).map_err(math_error)?;
         self.owner.stage_hot(hot);
         self.owner.stage_main(main);
         self.owner
@@ -418,9 +480,33 @@ impl ViewerController {
         Ok(())
     }
 
-    /// Changes the requested view without changing the fractal plane.
-    pub const fn set_view(&mut self, view: ViewMode) {
+    /// Stages every VIEW control without touching the fractal plane.
+    ///
+    /// # Errors
+    ///
+    /// Returns a math failure when a control is non-finite or outside its range.
+    pub fn set_view_controls(&mut self, view: ViewControls) -> Result<(), AppError> {
+        if !view.is_valid() {
+            return Err(AppError::Math(
+                "a VIEW control is not finite or is outside its range".to_string(),
+            ));
+        }
         self.requested.view = view;
+        Ok(())
+    }
+
+    /// Applies one preset row through the same paths a user's own movement reaches.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed failure of whichever staged control refused.
+    pub fn apply_preset(&mut self, row: PresetRow) -> Result<(), AppError> {
+        self.set_view_controls(row.view)?;
+        self.set_plane_angles(PlaneAngles {
+            theta_1: row.plane_angles[0],
+            theta_2: row.plane_angles[1],
+        })?;
+        self.set_plane_origin(row.plane_origin)
     }
 
     /// Performs the mandatory HOT drain and constructs the current math pose.
@@ -428,30 +514,29 @@ impl ViewerController {
     /// # Errors
     ///
     /// Returns a typed axis, plane, extent, or time failure.
-    pub fn drain_hot(
-        &mut self,
-        grid_extent: [u32; 2],
-        view_time_seconds: f64,
-    ) -> Result<HotFrame, AppError> {
-        if grid_extent[0] == 0 || grid_extent[1] == 0 || !view_time_seconds.is_finite() {
-            return Err(AppError::Math("pose extent or time is invalid".to_string()));
+    pub fn drain_hot(&mut self, grid_extent: [u32; 2]) -> Result<HotFrame, AppError> {
+        if grid_extent[0] == 0 || grid_extent[1] == 0 || !self.requested.view.is_valid() {
+            return Err(AppError::Math(
+                "pose extent or VIEW control is invalid".to_string(),
+            ));
         }
         let state = self.owner.drain_hot();
         if self.owner.epoch_exhausted() {
             return Err(AppError::EpochExhausted);
         }
-        let spec = PlaneSpec {
-            axis_a: axis(state.main.plane_axis_a)?,
-            axis_b: axis(state.main.plane_axis_b)?,
-            plane_origin: state.main.plane_origin_f64,
-        };
-        let plane = construct_plane_from_spec(
-            spec,
-            PlaneAngles {
-                theta_1: state.hot.plane_theta_1,
-                theta_2: state.hot.plane_theta_2,
-            },
-        )
+        // The worker record still carries the seed-axis words; no control selects axes, so the
+        // app pins them and refuses a record that disagrees rather than drawing a different plane.
+        if axis(state.main.plane_axis_a)? != SEED_AXES[0]
+            || axis(state.main.plane_axis_b)? != SEED_AXES[1]
+        {
+            return Err(AppError::Math(
+                "the owner record names seed axes the lab no longer has".to_string(),
+            ));
+        }
+        let plane = construct_plane(PlaneAngles {
+            theta_1: state.hot.plane_theta_1,
+            theta_2: state.hot.plane_theta_2,
+        })
         .map_err(math_error)?;
         let pose = Pose {
             epoch: state.epoch,
@@ -460,10 +545,9 @@ impl ViewerController {
             plane_theta_1: state.hot.plane_theta_1,
             plane_theta_2: state.hot.plane_theta_2,
             zoom_log2: state.hot.zoom_log2,
-            view_theta_1: 0.4 * view_time_seconds,
+            view: self.requested.view,
             grid_width: grid_extent[0],
             grid_height: grid_extent[1],
-            view: self.requested.view,
             centre_from_reference_px: state.hot.centre_from_reference_px,
         };
         self.staged_hot = state.hot;
@@ -572,10 +656,12 @@ fn owner_error(error: ember_julibrot_worker::OwnerError) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use ember_julibrot_math::{PlaneAngles, PlanePreset, ViewMode};
+    use ember_julibrot_math::{PlaneAngles, ViewControls};
     use ember_julibrot_present::PaletteId;
 
-    use super::{NavigationEdit, ViewerController, anchor_px_up, drag_delta_px_down};
+    use super::{
+        NavigationEdit, PRESET_ROWS, ViewerController, anchor_px_up, drag_delta_px_down, preset_row,
+    };
 
     /// The reference browser geometry: a 960x540 render grid laid out at this client rectangle.
     const REFERENCE_RECT: [f64; 2] = [1_022.793_762_207_031_2, 575.315_673_828_125];
@@ -666,10 +752,11 @@ mod tests {
             }
         );
         viewer.drag_pan([5.0, 7.0]).expect("finite drag");
-        let hot = viewer.drain_hot([960, 540], 2.5).expect("valid pose");
+        let hot = viewer.drain_hot([960, 540]).expect("valid pose");
         assert_eq!(hot.state.hot.zoom_log2, 1.0);
         assert_eq!(hot.state.hot.centre_from_reference_px, [15.0, -3.0]);
-        assert_eq!(hot.pose.view_theta_1, 1.0);
+        // A drain reads the controls; it has no time argument and cannot invent an angle.
+        assert_eq!(hot.pose.view, ViewControls::NEUTRAL);
     }
 
     #[test]
@@ -683,28 +770,33 @@ mod tests {
             .expect("finite angles");
         viewer.set_iteration_cap(2_048).expect("valid cap");
         viewer.set_palette(PaletteId::Ice).expect("valid palette");
-        viewer.set_view(ViewMode::Tumbled);
-        let first = viewer.drain_hot([800, 600], 0.0).expect("first drain");
+        let relief = preset_row(2).expect("the relief row exists").view;
+        viewer
+            .set_view_controls(relief)
+            .expect("the relief row is in range");
+        let first = viewer.drain_hot([800, 600]).expect("first drain");
         let second = viewer.drain_main().expect("main drain");
         assert!(second.epoch > first.state.epoch);
         assert_eq!(viewer.requested().iteration_cap, 2_048);
         assert_eq!(viewer.requested().palette, PaletteId::Ice);
-        assert_eq!(viewer.requested().view, ViewMode::Tumbled);
+        assert_eq!(viewer.requested().view, relief);
         assert_eq!(second.main.requested_iter_cap, 2_048);
         assert_eq!(second.main.palette_id, PaletteId::Ice as u32);
     }
 
     #[test]
-    fn preset_resets_centre_and_plane_without_resetting_other_controls() {
+    fn a_preset_is_a_row_of_controls_and_leaves_the_others_alone() {
         let mut viewer = ViewerController::new(640).expect("canonical viewer");
         viewer.set_iteration_cap(1_024).expect("valid cap");
         viewer.set_palette(PaletteId::Ember).expect("valid palette");
+        let julia = preset_row(1).expect("the Julia row exists");
         viewer
-            .set_preset(PlanePreset::Julia { c0: [-0.8, 0.156] })
-            .expect("finite Julia constant");
-        let frame = viewer.drain_hot([640, 480], 0.0).expect("valid frame");
-        assert_eq!(frame.state.main.plane_axis_a, 0);
-        assert_eq!(frame.state.main.plane_axis_b, 1);
+            .apply_preset(julia)
+            .expect("the Julia row is in range");
+        let frame = viewer.drain_hot([640, 480]).expect("valid frame");
+        // The seed axes are pinned; a row moves angles and an origin, never an axis.
+        assert_eq!(frame.state.main.plane_axis_a, 2);
+        assert_eq!(frame.state.main.plane_axis_b, 3);
         assert_eq!(frame.state.main.plane_origin_f64, [0.0, 0.0, -0.8, 0.156]);
         assert_eq!(
             frame.state.main.centre_f64,
@@ -712,7 +804,42 @@ mod tests {
         );
         assert_eq!(frame.state.main.requested_iter_cap, 1_024);
         assert_eq!(frame.state.main.palette_id, PaletteId::Ember as u32);
-        assert_eq!(frame.plane.basis_u, [1.0, 0.0, 0.0, 0.0]);
+        // The quarter turn carries the one seed onto the Julia pair.
+        assert_eq!(frame.plane.basis_u[0], 1.0);
+        assert!(frame.plane.basis_u[2].abs() <= f32::EPSILON);
+        assert_eq!(frame.plane.basis_v[1], 1.0);
+    }
+
+    #[test]
+    fn every_preset_row_is_a_reachable_control_position() {
+        // A preset that a control cannot express or leave would be a mode in disguise.
+        let mut viewer = ViewerController::new(640).expect("canonical viewer");
+        for (index, row) in PRESET_ROWS.iter().enumerate() {
+            let id = u32::try_from(index).expect("four rows fit u32");
+            assert_eq!(preset_row(id), Some(*row));
+            viewer.apply_preset(*row).expect("every row is in range");
+            let requested = viewer.requested();
+            assert_eq!(requested.view, row.view);
+            assert_eq!(requested.plane_origin, row.plane_origin);
+            assert_eq!(
+                [
+                    requested.plane_angles.theta_1,
+                    requested.plane_angles.theta_2
+                ],
+                row.plane_angles
+            );
+            assert!(row.view.is_valid());
+        }
+        let past_end = u32::try_from(PRESET_ROWS.len()).expect("four rows fit u32");
+        assert_eq!(preset_row(past_end), None);
+        // Leaving a row is one control move, not a mode switch.
+        viewer
+            .set_view_controls(ViewControls {
+                height_scale: 0.5,
+                ..viewer.requested().view
+            })
+            .expect("a half-height row is in range");
+        assert!((viewer.requested().view.height_scale - 0.5).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -728,7 +855,7 @@ mod tests {
             })
             .expect("finite angles");
         viewer.set_iteration_cap(1_024).expect("valid cap");
-        let frame = viewer.drain_hot([800, 600], 0.0).expect("valid frame");
+        let frame = viewer.drain_hot([800, 600]).expect("valid frame");
         assert_eq!(frame.state.hot.zoom_log2, 2.0);
         assert_eq!(
             frame.state.hot.centre_from_reference_px,
