@@ -1129,8 +1129,7 @@ mod browser {
             let mut main = viewer.owner().snapshot().main;
             main.delivered_iter_cap = super::published_iteration_cap(&plan);
             let map = viewer.screen_map([grid.width, grid.height])?;
-            let plane = ember_julibrot_math::construct_plane(requested.object_angles)
-                .map_err(math_error)?;
+            let plane = viewer.checked_plane();
             presenter.set_main(PresentMain {
                 epoch: 0,
                 state: super::main_for_grid(main, grid.width, plan.requested_extent.width),
@@ -1787,8 +1786,7 @@ mod browser {
             self.prepared_level = None;
             let requested = viewer.requested();
             let map = viewer.screen_map(self.prepared_extent())?;
-            let plane = ember_julibrot_math::construct_plane(requested.object_angles)
-                .map_err(math_error)?;
+            let plane = viewer.checked_plane();
             self.install_main(requested.object_angles, plane, map);
             Ok((disposition, true))
         }

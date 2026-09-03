@@ -431,6 +431,12 @@ impl ViewerController {
         self.requested
     }
 
+    /// Returns the checked plane cached for the current object angles.
+    #[must_use]
+    pub const fn checked_plane(&self) -> Plane {
+        self.checked_plane
+    }
+
     /// Returns the worker owner for response acceptance and generation notes.
     #[must_use]
     pub const fn owner(&self) -> &ViewerOwner {
