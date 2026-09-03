@@ -333,6 +333,7 @@ mod tests {
             31,
             plan.requested_bits,
             max_iter,
+            PrecisionMode::PictureFast,
             OrbitReason::INITIAL,
         )
         .expect("measurement request")
