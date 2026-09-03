@@ -33,14 +33,19 @@ const COVERAGE_LATTICE_SIDE: usize = 65;
 /// Guard the scene shader applies to both perspective denominators before dividing.
 const DENOMINATOR_EPSILON: f64 = 1.0e-4;
 
+/// Largest sampling-map apron the application will spend at a fixed record count.
+pub const MAX_APRON_SCALE: f64 = 2.0;
+
 /// Where one pose's lifted mesh lands relative to the frame it was sampled for.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SceneFootprint {
     /// Smallest radial scale the frame boundary reaches under the height range; `1.0` covers.
     pub boundary_scale: f64,
-    /// Screen-space overscan the sampling extent needs before the lifted mesh covers the frame.
+    /// Screen-space overscan applied to the sampling extent, clamped to [`MAX_APRON_SCALE`].
     pub apron_scale: f64,
-    /// Share of the render surface no lifted mesh vertex can reach, in `[0,1]`.
+    /// Unclamped screen-space overscan needed to cover the complete frame.
+    pub requested_apron_scale: f64,
+    /// Share of the render surface the mesh cannot reach after applying `apron_scale`, in `[0,1]`.
     pub uncovered_fraction: f64,
 }
 
@@ -49,6 +54,7 @@ impl SceneFootprint {
     pub const COVERED: Self = Self {
         boundary_scale: 1.0,
         apron_scale: 1.0,
+        requested_apron_scale: 1.0,
         uncovered_fraction: 0.0,
     };
 }
@@ -83,42 +89,58 @@ pub fn scene_footprint(
     // in the record height and `d₅/(d₅ − h)` is monotone in it, so the extremes of the range bound
     // every intermediate lift and two boundary traces are enough.
     let amplitude = 2.0 * view.height_scale;
-    let boundaries = [-amplitude, amplitude]
-        .map(|height| lifted_boundary(&map, plane, view, grid_w, grid_h, aspect, height));
-
-    let traced: Vec<&Vec<[f64; 2]>> = boundaries.iter().flatten().collect();
-    if traced.is_empty() {
+    let unscaled_boundaries = [-amplitude, amplitude]
+        .map(|height| lifted_boundary(&map, plane, view, grid_w, grid_h, aspect, height, 1.0));
+    let unscaled_traces: Vec<&Vec<[f64; 2]>> = unscaled_boundaries.iter().flatten().collect();
+    if unscaled_traces.is_empty() {
         // Every boundary vertex fell past a perspective pole. The shader clips those triangles and
         // paints sky there, which is the geometry answering rather than a coverage shortfall.
         return Ok(SceneFootprint {
             boundary_scale: 1.0,
             apron_scale: 1.0,
+            requested_apron_scale: 1.0,
             uncovered_fraction: 1.0,
         });
     }
-    let mut covered = 0_usize;
-    let mut total = 0_usize;
-    for row in 0..COVERAGE_LATTICE_SIDE {
-        for column in 0..COVERAGE_LATTICE_SIDE {
-            let point = lattice_point(column, row);
-            total += 1;
-            if traced.iter().all(|ring| encloses(ring, point)) {
-                covered += 1;
-            }
-        }
-    }
     let mut boundary_scale = 1.0_f64;
-    for point in traced.iter().flat_map(|ring| ring.iter()) {
+    for point in unscaled_traces.iter().flat_map(|ring| ring.iter()) {
         let radius = point[0].abs().max(point[1].abs());
         boundary_scale = boundary_scale.min(radius);
     }
     if !boundary_scale.is_finite() || boundary_scale <= 0.0 {
         return Err(MathError::DegenerateViewMap);
     }
+    let requested_apron_scale = (1.0 / boundary_scale).max(1.0);
+    let apron_scale = requested_apron_scale.min(MAX_APRON_SCALE);
+    let applied_boundaries = [-amplitude, amplitude].map(|height| {
+        lifted_boundary(
+            &map,
+            plane,
+            view,
+            grid_w,
+            grid_h,
+            aspect,
+            height,
+            apron_scale,
+        )
+    });
+    let applied_traces: Vec<&Vec<[f64; 2]>> = applied_boundaries.iter().flatten().collect();
+    let mut covered = 0_usize;
+    let mut total = 0_usize;
+    for row in 0..COVERAGE_LATTICE_SIDE {
+        for column in 0..COVERAGE_LATTICE_SIDE {
+            let point = lattice_point(column, row);
+            total += 1;
+            if applied_traces.iter().all(|ring| encloses(ring, point)) {
+                covered += 1;
+            }
+        }
+    }
     let uncovered = 1.0 - covered as f64 / total as f64;
     Ok(SceneFootprint {
         boundary_scale,
-        apron_scale: 1.0 / boundary_scale,
+        apron_scale,
+        requested_apron_scale,
         uncovered_fraction: uncovered,
     })
 }
@@ -144,6 +166,7 @@ fn lifted_boundary(
     grid_h: u32,
     aspect: f64,
     height: f64,
+    apron_scale: f64,
 ) -> Option<Vec<[f64; 2]>> {
     let half_w = f64::from(grid_w) * 0.5;
     let half_h = f64::from(grid_h) * 0.5;
@@ -159,7 +182,14 @@ fn lifted_boundary(
                 _ => [-half_w, half_h - 2.0 * half_h * t],
             };
             ring.push(project_vertex(
-                map, plane, view, grid_w, aspect, screen, height,
+                map,
+                plane,
+                view,
+                grid_w,
+                aspect,
+                screen,
+                height,
+                apron_scale,
             )?);
         }
     }
@@ -175,6 +205,7 @@ fn project_vertex(
     aspect: f64,
     screen: [f64; 2],
     height: f64,
+    apron_scale: f64,
 ) -> Option<[f64; 2]> {
     let rows = map.rows;
     let homogeneous: [f64; 3] = core::array::from_fn(|row| {
@@ -187,7 +218,7 @@ fn project_vertex(
         homogeneous[0] / homogeneous[2],
         homogeneous[1] / homogeneous[2],
     ];
-    let chart_scale = 4.0 / f64::from(grid_w);
+    let chart_scale = 4.0 * apron_scale / f64::from(grid_w);
     let display: [f64; 4] = core::array::from_fn(|axis| {
         chart_scale
             * offset[0].mul_add(
@@ -292,8 +323,9 @@ mod tests {
     fn flat_chart_covers_its_own_frame() {
         let (object, view) = owner_row(0.0);
         let footprint = scene_footprint(&object, &view, 960, 540).expect("flat pose maps");
+        assert_eq!(footprint.apron_scale.to_bits(), 1.0_f64.to_bits());
+        assert_eq!(footprint.requested_apron_scale.to_bits(), 1.0_f64.to_bits());
         assert!((footprint.boundary_scale - 1.0).abs() < 1.0e-9);
-        assert!((footprint.apron_scale - 1.0).abs() < 1.0e-9);
         assert_eq!(footprint.uncovered_fraction, 0.0);
         assert_eq!(SceneFootprint::COVERED.uncovered_fraction, 0.0);
     }
@@ -311,17 +343,9 @@ mod tests {
             "boundary {} expected {expected}",
             footprint.boundary_scale
         );
+        assert!((footprint.requested_apron_scale - 1.0 / expected).abs() < 1.0e-6);
         assert!((footprint.apron_scale - 1.0 / expected).abs() < 1.0e-6);
-        // A pure radial contraction leaves the complement of a centred box uncovered. The counted
-        // share is quantized to the fixed lattice, whose cell is 2/65 of the frame in each axis,
-        // so the continuous area is approached to about one cell rather than exactly.
-        let continuous = 1.0 - expected * expected;
-        assert!(
-            (footprint.uncovered_fraction - continuous).abs() < 0.03,
-            "uncovered {} continuous {continuous}",
-            footprint.uncovered_fraction
-        );
-        assert!(footprint.uncovered_fraction > 0.5);
+        assert_eq!(footprint.uncovered_fraction, 0.0);
     }
 
     /// Zoom never enters the scene map or the vertex chain, only the kernels' pixel scale, so the
@@ -335,7 +359,7 @@ mod tests {
             .expect("zoom -1.0014");
         assert_eq!(flat.rows, deep.rows);
         let footprint = scene_footprint(&object, &view, 960, 540).expect("relief pose maps");
-        assert!(footprint.uncovered_fraction > 0.5);
+        assert_eq!(footprint.uncovered_fraction, 0.0);
     }
 
     /// The apron bound is what the sampling extent must be multiplied by: scaling the traced frame
@@ -351,7 +375,7 @@ mod tests {
                 footprint.apron_scale
             );
             assert!(
-                (footprint.apron_scale * footprint.boundary_scale - 1.0).abs() < 1.0e-9,
+                (footprint.requested_apron_scale * footprint.boundary_scale - 1.0).abs() < 1.0e-9,
                 "height {height_scale} apron and boundary must be reciprocal"
             );
         }
@@ -367,5 +391,16 @@ mod tests {
             "apron {}",
             footprint.apron_scale
         );
+        assert!((footprint.requested_apron_scale - 2.0).abs() < 1.0e-6);
+        assert_eq!(footprint.uncovered_fraction, 0.0);
+    }
+
+    #[test]
+    fn an_apron_beyond_the_budget_is_clamped_and_its_shortfall_stays_visible() {
+        let (object, view) = owner_row(8.0);
+        let footprint = scene_footprint(&object, &view, 960, 540).expect("relief pose maps");
+        assert!((footprint.requested_apron_scale - 3.0).abs() < 1.0e-6);
+        assert_eq!(footprint.apron_scale, super::MAX_APRON_SCALE);
+        assert!(footprint.uncovered_fraction > 0.5);
     }
 }
