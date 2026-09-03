@@ -34,9 +34,19 @@ The Mandelbrot preset is basis `(e₃,e₄)`, origin `(0,0,0,0)`, and identity `
 
 At `θ₁ = θ₂ = π/2` the Mandelbrot seed becomes the Julia plane at the centre, and for `0 < θ₁,θ₂ < π/2` the math-owned hybrid oracle requires a rotated basis to have nonzero components in both the z and c subspaces; math performs one rounding to `f32` and requires the basis norm and dot-product errors to remain at most `8·f32::EPSILON`.
 
-For an active grid of width `W` and height `H`, pixel `(i,j)` samples its centre with `x = f32(i)+0.5−0.5·f32(W)` and `y = f32(j)+0.5−0.5·f32(H)`; row zero is the bottom row, `+v` is up, and linear record index is `j·W+i`.
+For an active grid of width `W` and height `H`, pixel `(i,j)` is the screen-pixel centre `x=f32(i)+0.5−0.5·f32(W)` and `y=f32(j)+0.5−0.5·f32(H)`; row zero is the bottom row, screen `+y` is up, and linear record index is `j·W+i`. The grid is screen-aligned at every refinement level rather than a plane rectangle later projected into a floating quad.
 
-Below the displayed switch POLICY `zoom_log2 < 14`, the shallow path uses `pixel_scale = f32(4.0/(2^zoom_log2·W))`, evaluated in `f64` before one `f32` conversion, and forms `o = (x·u+y·v)·pixel_scale`; at `zoom_log2 ≥ 14` the perturbation path uses the scaled representation in §2.3 and never forms the tiny absolute scale in `f32`.
+Each uniform carries math's normalized screen-to-plane homography as three padded row-major f32 rows. The kernel evaluates `r_k=(m_k0·x+m_k1·y)+m_k2` in that written order; when its denominator is accepted, `(o_u,o_v)=(r_0/r_2,r_1/r_2)` is the plane offset in pixel-scale units and the four-dimensional offset is `o_u·u+o_v·v`.
+
+Below the displayed switch POLICY `zoom_log2 < 14`, the shallow path uses `pixel_scale=f32(4.0/(2^zoom_log2·W))`, evaluated in `f64` before one `f32` conversion, and forms `o=(o_u·u+o_v·v)·pixel_scale`; at `zoom_log2≥14` the perturbation path forms the same basis combination in the scaled representation of §2.3 and never forms the tiny absolute scale in `f32`. The screen centre remains offset zero under every accepted map, so the reference orbit remains the existing centre and no absolute deep coordinate is introduced.
+
+Let binary32 unit roundoff be `u=2⁻²⁴`, `γ₅=5u/(1−5u)`, `X=W/2−1/2`, `Y=H/2−1/2`, and `S_k=|m_k0|X+|m_k1|Y+|m_k2|` for the f64 normalized row before packing. Coefficient rounding plus the two multiplies and two adds gives the conservative Final-grid dot bound `E_k=γ₅S_k`; for exact `w=r_2`, exact quotient `o_k=r_k/w`, and `|w|>E_2`, the packed-and-evaluated quotient error is bounded by `D_k=(E_k+|o_k|E_2)/(|w|−E_2)+u(|o_k|+(E_k+|o_k|E_2)/(|w|−E_2))` plane pixels. This is evaluated with f64 map evidence at the Final bounds; the kernel mirror and WGSL use the same row parenthesization and an inflated `8u` sum-of-absolute-products allowance in the equivalent quotient test, which dominates `γ₅` without adding a builtin.
+
+At the ledger's 960-by-540 Final extent the largest centred coordinates are `X=479.5` and `Y=269.5`; the formula gives a conservative `3.15e−4`-pixel bound for the exact identity rows, about 795 times inside one quarter pixel, while the actual identity evaluation is exact. With `d₄=8` and the other camera angle zero, the f64 bound first exceeds one quarter pixel at about `75.019°` pure yaw or `81.454°` pure pitch on the approaching edge, before the geometric horizon reaches that grid at `75.978°` or `82.010°`; the inflated GPU guard may clear conservatively earlier.
+
+The unconditional coordinate budget remains `max(D_0,D_1)≤0.25` pixel: the palette's `0.03565` smooth-iteration allowance cannot justify a larger coordinate error because moving the sample can cross an arbitrary escape boundary or change an exact terminal class before palette evaluation. A nonpositive denominator is `Horizon`; a positive denominator whose bound is not finite or exceeds one quarter pixel is `MapUncertain`; both are finite exact terminal records with clear colour, so the implementation never divides where the picture budget has been lost.
+
+For the current flat chart and exact `aspect=W/H`, the normalized inverse denominator is `w(x,y)=1−4[ tan(camera_yaw)·sec(camera_pitch)·x−tan(camera_pitch)·y ]/(W·d₄)`; with `a=aspect·H/W`, the general second term is `tan(camera_pitch)·y/a`. A horizon first enters the Final grid when `4(X|tan(camera_yaw)sec(camera_pitch)|+Y|tan(camera_pitch)|/a)/(W d₄)≥1`; for a pure yaw this is `|camera_yaw|≥atan(d₄W/(4X))`, and for a pure pitch it is `|camera_pitch|≥atan(a d₄W/(4Y))`. The quarter-pixel guard begins slightly before that line according to `D_k`; exact `cos(camera_yaw)cos(camera_pitch)=0` makes the forward map singular and is refused by math's `1e−12` pivot gate rather than dispatched.
 
 Zoom depth is `zoom_log2·log10(2)` decimal digits, integral `depth_digits = ceil(max(0,zoom_log2·log10(2)))`, and the precision floor is `D_floor = ceil(zoom_log2·log10(2)+log10(W))+8`; worker adds its working margin and reports floor, working, and delivered precision separately, while kernels retain only the supplied orbit bits.
 
@@ -44,7 +54,9 @@ At or above the deep switch, the owner requests a new reference when the centre 
 
 ### 2.2 Shallow escape kernel
 
-The shallow kernel receives no heap input, receives only its 96-byte uniform, and writes one RGBA32F escape record per active pixel into the escape-grid span.
+The shallow kernel receives no heap input, receives only its 144-byte uniform, and writes one RGBA32F escape record per active pixel into the escape-grid span.
+
+Before constructing a fractal point, the shallow path evaluates the map denominator and error guard. It writes `[-1.0,0.0,0.0,2.0]` for `Horizon` and `[-1.0,0.0,0.0,3.0]` for `MapUncertain`, performs no recurrence for either, and uses no NaN or infinity sentinel.
 
 For coordinate component `k`, the absolute shallow sample is evaluated in the pinned `f32` order `p[k] = centre.hi[k] + (centre.lo[k] + o[k])`; `z₀ = (p[0],p[1])` and `c = (p[2],p[3])`.
 
@@ -54,15 +66,15 @@ Complex multiplication is pinned as `mul(a,b) = (a.re·b.re−a.im·b.im, a.re·
 
 For integer `n` from zero through `max_iter−1`, the kernel first tests the current `zₙ`; escape is the strict condition `|zₙ|² > bailout`, equality does not escape, and only a non-escaping state with another iteration remaining evaluates the recurrence.
 
-At escape index `n`, `smooth_iter = n+1−log₂(log₂|zₙ|)`; the natural-log expansion is `n+1−ln(ln(|zₙ|)/ln(2))/ln(2)`, `escaped = 1`, `rebase_count = 0`, and `glitch = 0`.
+At escape index `n`, `smooth_iter = n+1−log₂(log₂|zₙ|)`; the natural-log expansion is `n+1−ln(ln(|zₙ|)/ln(2))/ln(2)`, `escaped = 1`, `rebase_count = 0`, and `status = Sampled`.
 
 At the iteration cap the shallow record is `[-1.0,0.0,0.0,0.0]`; `max_iter = 0` is a typed refusal and `bailout` is a squared radius fixed to exactly `256.0f32`, so `|z| > 16` escapes.
 
 ### 2.3 Perturbation and rebasing kernel
 
-The perturbation kernel receives one reference-orbit DATA span through the descriptor table, receives no absolute centre, receives its 64-byte uniform containing a scale mantissa and exponent, and writes the same escape-grid record as the shallow kernel.
+The perturbation kernel receives one reference-orbit DATA span through the descriptor table, receives no absolute centre, receives its 112-byte uniform containing the screen map plus scale mantissa and exponent, and writes the same escape-grid record as the shallow kernel.
 
-Let the exact pixel scale be `m·2^s` with `m ∈ [0.5,1)` carried as `f32` and `s` carried as `i32`; the normalized offset is `o′ = (x·u+y·v)·m`, `δz₀′ = (o′[0],o′[1])`, `δc′ = (o′[2],o′[3])`, and the per-pixel exponent begins at `e₀ = s`, so no absolute tiny scale is formed in `f32`.
+Let the exact pixel scale be `m·2^s` with `m ∈ [0.5,1)` carried as `f32` and `s` carried as `i32`; after the identical denominator and error guard, the normalized offset is `o′=(o_u·u+o_v·v)·m`, `δz₀′=(o′[0],o′[1])`, `δc′=(o′[2],o′[3])`, and the per-pixel exponent begins at `e₀=s`, so no absolute tiny scale is formed in `f32`. `Horizon` and `MapUncertain` terminate before a reference load and use the same records as shallow.
 
 The represented initial components are `δz₀ = 2^s·δz₀′` and `δc = 2^s·δc′`; Mandelbrot has `δz₀′ = 0` when its rotated basis remains in `span(e₃,e₄)`, Julia has `δc′ = 0` when its rotated basis remains in `span(e₁,e₂)`, and a hybrid plane retains both components.
 
@@ -80,7 +92,7 @@ The mirrors retain a defensive limit of `floor((i32::MAX−i32::MIN)/64) = 67,10
 
 Every represented-value operation uses one shared bit construction in the WGSL kernel and CPU mirror: finite nonzero inputs with exponent above `512` produce signed infinity, those below `−512` produce signed zero, and an exponent in `[-512,512]` is consumed in steps clamped to `[-126,127]`, each multiplying by the exact normal power of two whose f32 bits are `(step+127)<<23`; at most five steps are required. The repeated f32 multiplication preserves IEEE-754 overflow and gradual-underflow behavior bit for bit across the mirror and kernel, infinity is caught by the following exponent-bit finiteness check as a glitch, and an underflowed rebase comparison remains false because a negligible delta must not trigger rebasing.
 
-When `r` reaches reference `length` before escape or the outer iteration cap, iteration stops with `smooth_iter = −1.0`, `escaped = 0`, the accumulated integer-valued `rebase_count`, and `glitch = 1`; re-rendering those pixels with a second reference is explicitly out of scope and present uses the honest debug tint.
+When `r` reaches reference `length` before escape or the outer iteration cap, iteration stops with `smooth_iter = −1.0`, `escaped = 0`, the accumulated integer-valued `rebase_count`, and `status = Glitch`; re-rendering those pixels with a second reference is explicitly out of scope and present uses the honest debug tint.
 
 A non-escaping perturbation pixel that reaches `max_iter` records `[-1.0,0.0,rebase_count,0.0]`; all branch outputs are finite, so NaN and infinity are neither sentinel values nor accepted records.
 
@@ -170,6 +182,8 @@ The transferred payload is little-endian IEEE-754 binary32; owner uploads change
 
 `EscapeGrid` is the typed Rust wrapper `{ span: DataSpan, width: u32, height: u32, level: RefinementLevel }`; `span.logical_len` is Final capacity, while `width·height` is the initialized dense prefix present may fetch for the current level.
 
+`SampleStatus` is the closed semantic enum `Sampled=0`, `Glitch=1`, `Horizon=2`, and `MapUncertain=3`; its RGBA32F encoding is the exactly representable corresponding f32 integer, unknown values are malformed, and only `Sampled` permits escape/interior palette evaluation.
+
 Escape-grid texel `(i,j)` is record `j·width+i`, one 16-byte RGBA32F value with the following exact independent channels.
 
 |Byte range|RGBA lane|Meaning|
@@ -177,44 +191,50 @@ Escape-grid texel `(i,j)` is record `j·width+i`, one 16-byte RGBA32F value with
 |0–3|R|`smooth_iter: f32`, the specified smooth value at escape or exactly `−1.0` otherwise|
 |4–7|G|`escaped: f32`, exactly `0.0` or `1.0`|
 |8–11|B|`rebase_count: f32`, a nonnegative exactly representable integer, zero for shallow|
-|12–15|A|`glitch: f32`, exactly `0.0` or `1.0`|
+|12–15|A|`status: f32`, exactly `0.0` sampled, `1.0` glitch, `2.0` horizon, or `3.0` uncertified near horizon|
 
-Present consumes `&EscapeGrid`, resolves its DATA span through the unchanged heap bind group, treats row zero as bottom and `+v` as up, displays every glitch in the honest debug tint, and never samples padding records from `span.logical_len−width·height`.
+Present consumes `&EscapeGrid`, resolves its DATA span through the unchanged heap bind group, treats row zero as bottom and `+v` as up, displays status one in the honest debug tint, displays statuses two and three in the palette's exact clear colour, and never samples padding records from `span.logical_len−width·height`.
 
 ### 3.4 Uniform blocks
 
 All scalar words below are little-endian, every block is `#[repr(C, align(16))]`, `Pod`, and 16-byte aligned, every padding word is written as zero, and native layout tests assert size, alignment, and each byte offset rather than trusting source declaration order.
 
-The shallow block is exactly 96 bytes and is the only CPU-to-GPU payload of one shallow logical dispatch; its centre words are copied from one `CentreSplit` and do not belong to `Plane`.
+The shallow block is exactly 144 bytes and is the only CPU-to-GPU payload of one shallow logical dispatch; its centre words are copied from one `CentreSplit`, its map rows are rounded from math's `Homography`, and neither belongs to `Plane`.
 
 |Byte range|Field|Type|Meaning|
 |---------:|-----|----|-------|
 |0–15|`basis_u`|`[f32; 4]`|Plane basis `u`|
 |16–31|`basis_v`|`[f32; 4]`|Plane basis `v`|
-|32–47|`centre_hi`|`[f32; 4]`|`CentreSplit.hi`|
-|48–63|`centre_lo`|`[f32; 4]`|`CentreSplit.lo`|
-|64–67|`pixel_scale`|`f32`|Four-dimensional units per pixel|
-|68–71|`width`|`u32`|Active grid width in pixels|
-|72–75|`height`|`u32`|Active grid height in pixels|
-|76–79|`max_iter`|`u32`|Delivered level iteration cap|
-|80–83|`bailout`|`f32`|Squared escape radius, exactly 256.0|
-|84–87|`level`|`u32`|`RefinementLevel` discriminant|
-|88–95|`padding`|`[u32; 2]`|Zero|
+|32–47|`screen_to_plane_row_0`|`[f32; 4]`|First row of `M`, zero-padded|
+|48–63|`screen_to_plane_row_1`|`[f32; 4]`|Second row of `M`, zero-padded|
+|64–79|`screen_to_plane_row_2`|`[f32; 4]`|Denominator row of `M`, zero-padded|
+|80–95|`centre_hi`|`[f32; 4]`|`CentreSplit.hi`|
+|96–111|`centre_lo`|`[f32; 4]`|`CentreSplit.lo`|
+|112–115|`pixel_scale`|`f32`|Four-dimensional units per pixel|
+|116–119|`width`|`u32`|Active grid width in pixels|
+|120–123|`height`|`u32`|Active grid height in pixels|
+|124–127|`max_iter`|`u32`|Delivered level iteration cap|
+|128–131|`bailout`|`f32`|Squared escape radius, exactly 256.0|
+|132–135|`level`|`u32`|`RefinementLevel` discriminant|
+|136–143|`padding`|`[u32; 2]`|Zero|
 
-The perturbation block is exactly 64 bytes and is the only CPU-to-GPU payload of one perturbation logical dispatch; reference selection remains in the heap resource table and is not duplicated as a raw descriptor handle here.
+The perturbation block is exactly 112 bytes and is the only CPU-to-GPU payload of one perturbation logical dispatch; reference selection remains in the heap resource table and is not duplicated as a raw descriptor handle here.
 
 |Byte range|Field|Type|Meaning|
 |---------:|-----|----|-------|
 |0–15|`basis_u`|`[f32; 4]`|Plane basis `u`|
 |16–31|`basis_v`|`[f32; 4]`|Plane basis `v`|
-|32–35|`pixel_scale`|`f32`|Scale mantissa `m ∈ [0.5,1)`|
-|36–39|`width`|`u32`|Active grid width in pixels|
-|40–43|`height`|`u32`|Active grid height in pixels|
-|44–47|`max_iter`|`u32`|Delivered level iteration cap|
-|48–51|`bailout`|`f32`|Squared escape radius, exactly 256.0|
-|52–55|`orbit_length`|`u32`|Valid reference records usable at this level, `min(reference.length,iteration_cap)`|
-|56–59|`level`|`u32`|`RefinementLevel` discriminant|
-|60–63|`scale_exponent`|`i32`|Initial per-pixel exponent `s` in `pixel_scale = m·2^s`|
+|32–47|`screen_to_plane_row_0`|`[f32; 4]`|First row of `M`, zero-padded|
+|48–63|`screen_to_plane_row_1`|`[f32; 4]`|Second row of `M`, zero-padded|
+|64–79|`screen_to_plane_row_2`|`[f32; 4]`|Denominator row of `M`, zero-padded|
+|80–83|`pixel_scale`|`f32`|Scale mantissa `m ∈ [0.5,1)`|
+|84–87|`width`|`u32`|Active grid width in pixels|
+|88–91|`height`|`u32`|Active grid height in pixels|
+|92–95|`max_iter`|`u32`|Delivered level iteration cap|
+|96–99|`bailout`|`f32`|Squared escape radius, exactly 256.0|
+|100–103|`orbit_length`|`u32`|Valid reference records usable at this level, `min(reference.length,iteration_cap)`|
+|104–107|`level`|`u32`|`RefinementLevel` discriminant|
+|108–111|`scale_exponent`|`i32`|Initial per-pixel exponent `s` in `pixel_scale = m·2^s`|
 
 The inherited per-page `DispatchHeader` is exactly 16 bytes `{ global_base: u32, valid_length: u32, padding: [u32;2] }`; the header buffer uses live dynamic-uniform stride and the heap bind-group identity never changes.
 
@@ -228,9 +248,9 @@ The inherited input resource entry is exactly 16 bytes `{ directory_index: u32, 
 
 `KernelMode::for_zoom(zoom_log2: f64) -> KernelMode` returns `Shallow` below 14 and `Perturbation` at or above 14; 14 is a displayed POLICY, and app keeps a reference orbit maintained at every depth so crossing the boundary does not create a reference gap.
 
-`ShallowUniform::pack(plane: Plane, centre: CentreSplit, pixel_scale: f32, extent: GridExtent, params: EscapeParams, level: RefinementLevel) -> Result<ShallowUniform, KernelError>` validates the nonempty checked extent, fixed bailout, nonzero cap, and positive finite scale before producing the exact 96-byte payload.
+`ShallowUniform::pack(plane: Plane, screen_to_plane: &Homography, centre: CentreSplit, pixel_scale: f32, extent: GridExtent, params: EscapeParams, level: RefinementLevel) -> Result<ShallowUniform, KernelError>` validates the finite normalized map, nonempty checked extent, fixed bailout, nonzero cap, and positive finite scale before producing the exact 144-byte payload.
 
-`PerturbUniform::pack(plane: Plane, scale: ScaleSplit, extent: GridExtent, params: EscapeParams, orbit_length: u32, level: RefinementLevel) -> Result<PerturbUniform, KernelError>` additionally validates `mantissa ∈ [0.5,1)` and `1 ≤ orbit_length ≤ max_iter` before producing the exact 64-byte payload.
+`PerturbUniform::pack(plane: Plane, screen_to_plane: &Homography, scale: ScaleSplit, extent: GridExtent, params: EscapeParams, orbit_length: u32, level: RefinementLevel) -> Result<PerturbUniform, KernelError>` additionally validates `mantissa ∈ [0.5,1)` and `1 ≤ orbit_length ≤ max_iter` before producing the exact 112-byte payload.
 
 `escape_shallow_point(point: [f32;4], params: EscapeParams) -> Result<KernelSample, KernelError>` and `escape_shallow_pixel(uniforms: &ShallowUniform, index: u32) -> Result<KernelSample, KernelError>` expose the source-ordered CPU mirror, where `KernelSample` is `{ record: EscapeGridRecord, escape_index: Option<u32> }` and the integer index is conformance evidence rather than a production-grid lane.
 
@@ -238,9 +258,9 @@ The inherited input resource entry is exactly 16 bytes `{ directory_index: u32, 
 
 `evaluate_shallow_conformance(observed: KernelSample, expected: math::EscapeSample) -> ConformanceResult` applies the exact classification/index and `1×10⁻⁴` smooth criteria, while `evaluate_perturbation_conformance(observed: KernelSample, expected: math::PerturbSample, envelope: math::PerturbationEnvelope) -> ConformanceResult` returns the closed `ConformanceVerdict::{Pass,Boundary,Fail}`, never promotes a predeclared boundary sample to an exact pass, requires the observed smooth error to fit both the propagated smooth envelope and the `2×10⁻³` picture tolerance, and retains exact rebase and glitch criteria.
 
-`ConformanceVerdict` is `repr(u32)` with `Pass=0`, `Boundary=1`, and `Fail=2`; `ConformanceResult` is the CPU-only record `{ verdict:ConformanceVerdict,boundary:bool,record_well_formed:bool,classification_exact:bool,escape_index_exact:bool,rebase_count_exact:bool,glitch_exact:bool,smooth_abs_error:f32,smooth_tolerance:f32 }` with no stable byte ABI.
+`ConformanceVerdict` is `repr(u32)` with `Pass=0`, `Boundary=1`, and `Fail=2`; `ConformanceResult` is the CPU-only record `{ verdict:ConformanceVerdict,boundary:bool,record_well_formed:bool,classification_exact:bool,escape_index_exact:bool,rebase_count_exact:bool,status_exact:bool,smooth_abs_error:f32,smooth_tolerance:f32 }` with no stable byte ABI.
 
-`record_is_well_formed(sample: KernelSample, mode: KernelMode) -> bool` checks finite sentinels, exact binary flags, escape-index presence, integer-valued rebases through `2²⁴`, and zero shallow rebase/glitch fields; `VisibleReplayCard` is the CPU-only record `{ id:&'static str,requirement:&'static str }`, and `VISIBLE_REPLAY_CARDS` is the seven-entry kernels-to-app list whose requirement strings all begin `requires visible replay:` and cover both readbacks, SCRATCH landing, present consumption, binding identity, the zoom-14 switch, and the four-byte scene-fence handoff.
+`record_is_well_formed(sample: KernelSample, mode: KernelMode) -> bool` checks finite sentinels, the closed exact status code, escape-index presence, integer-valued rebases through `2²⁴`, zero shallow rebases, and the fixed clear records for `Horizon` and `MapUncertain`; `VisibleReplayCard` is the CPU-only record `{ id:&'static str,requirement:&'static str }`, and `VISIBLE_REPLAY_CARDS` is the seven-entry kernels-to-app list whose requirement strings all begin `requires visible replay:` and cover both readbacks, SCRATCH landing, present consumption, binding identity, the zoom-14 switch, and the four-byte scene-fence handoff.
 
 `DispatchFacts` is `{ owner_epoch: u64, mode: KernelMode, level: RefinementLevel, requested_extent: GridExtent, delivered_extent: GridExtent, requested_max_iter: u32, delivered_max_iter: u32, active_pixels: u32, worst_case_pixel_iterations: u64, page_passes: u32, copy_commands: u32, gpu_copy_bytes: u64, logical_heap_bytes: u64, reserved_heap_bytes: u64, scratch_bytes: u64, orbit_generation: Option<u32>, orbit_length: u32, draft_pixels_discarded:u32, draft_iterations_discarded:u64 }`; the two appended fields are the exact scheduled pixel count and worst-case iteration count discarded when a Preview or Interactive successor lands, and are zero for Final.
 
@@ -256,9 +276,9 @@ Every `DispatchFacts` byte and count is arithmetic from the accepted plan or a c
 
 `JulibrotKernels::allocate_grid(&mut self, executor: &mut ember_lab_heap::GpuKernelExecutor, plan: &RefinementPlan) -> Result<EscapeGrid, KernelError>` allocates one Final-capacity `DataSpan`, asks `prefix_headers` for all three static header sets, uploads them once, privately retains the `(DataSpan,HeaderSetHandle)` lifetime pair keyed by exact span identity, and returns no partially allocated value on failure; a header-capacity refusal reports the requested contiguous set count, total free set regions, and longest free run; app.md §3.2 adopts this receiver.
 
-`JulibrotKernels::encode_shallow(&self, executor: &ember_lab_heap::GpuKernelExecutor, encoder: &mut wgpu::CommandEncoder, grid: &mut EscapeGrid, owner_epoch: u64, level: RefinementLevel, plane: &Plane, centre: &CentreSplit, pixel_scale: f32, params: EscapeParams) -> Result<DispatchFacts, KernelError>` packs the 96-byte uniform, encodes page passes and exact-region copies, and tags the arithmetic receipt with the supplied epoch without using epoch equality as a compatibility test.
+`JulibrotKernels::encode_shallow(&self, executor: &ember_lab_heap::GpuKernelExecutor, encoder: &mut wgpu::CommandEncoder, grid: &mut EscapeGrid, owner_epoch: u64, level: RefinementLevel, plane: &Plane, screen_to_plane: &Homography, centre: &CentreSplit, pixel_scale: f32, params: EscapeParams) -> Result<DispatchFacts, KernelError>` packs the 144-byte uniform, encodes page passes and exact-region copies, and tags the arithmetic receipt with the supplied epoch without using epoch equality as a compatibility test.
 
-`JulibrotKernels::encode_perturbation(&self, executor: &ember_lab_heap::GpuKernelExecutor, encoder: &mut wgpu::CommandEncoder, grid: &mut EscapeGrid, owner_epoch: u64, level: RefinementLevel, plane: &Plane, scale: ScaleSplit, params: EscapeParams, reference: ReferenceOrbitInput<'_>) -> Result<DispatchFacts, KernelError>` packs the math-owned scale split into the 64-byte mantissa/exponent uniform, rejects older or same-generation conflicting orbit identities, refreshes resource words only when the accepted orbit span identity changes, and performs the one-span gather dispatch.
+`JulibrotKernels::encode_perturbation(&self, executor: &ember_lab_heap::GpuKernelExecutor, encoder: &mut wgpu::CommandEncoder, grid: &mut EscapeGrid, owner_epoch: u64, level: RefinementLevel, plane: &Plane, screen_to_plane: &Homography, scale: ScaleSplit, params: EscapeParams, reference: ReferenceOrbitInput<'_>) -> Result<DispatchFacts, KernelError>` packs the map and math-owned scale split into the 112-byte uniform, rejects older or same-generation conflicting orbit identities, refreshes resource words only when the accepted orbit span identity changes, and performs the one-span gather dispatch.
 
 `JulibrotKernels::free_grid(&mut self, executor: &mut ember_lab_heap::GpuKernelExecutor, grid: EscapeGrid) -> Result<(), KernelError>` looks up the private resident-header lifetime record, returns the span, header reservation and directory entries transactionally after app and present have relinquished all borrows, and removes private state only after executor release succeeds; app.md §3.2 adopts this receiver.
 
@@ -285,7 +305,7 @@ Present owns `new`, `set_main`, infallible `write_hot`, `submit_scene`, `frame`,
 |Law|Kernels-side satisfaction|
 |---|-------------------------|
 |WebGL2 floor|App supplies an executor built from its wgpu 24 `Backends::GL` device after checking RGBA32F render, copy, and nearest-sample support; kernels creates no instance, adapter, device, or WebGPU path.|
-|Uniforms-only per frame|A logical dispatch uploads only its 96-byte or 64-byte uniform; accepted orbit identity changes refresh resource words, orbit payload and heap metadata change only on MAIN arrival or allocation, and static level headers are pre-uploaded.|
+|Uniforms-only per frame|A logical dispatch uploads only its 144-byte or 112-byte uniform; accepted orbit identity changes refresh resource words, orbit payload and heap metadata change only on MAIN arrival or allocation, and static level headers are pre-uploaded.|
 |GPU-resident output|Escape records render to SCRATCH, copy directly into DATA, and reach present by `DataSpan`; production performs no CPU readback.|
 |Immutable binding identities|DATA, SCRATCH executor state, descriptor UBO, directory UBO, dispatch header buffer, resource buffer, and kernel uniform buffer are created before frames; dynamic header offsets and regional writes change contents only.|
 |Hot ring|Present owns exactly three slots selected by dynamic offset; kernels consume the same frozen HOT snapshot through their own dispatch uniform and do not allocate a second hot ring.|
@@ -304,9 +324,11 @@ The external warp oracle requires `max|H⁻¹H−I| ≤ 10⁻⁹` in `f64` at `z
 
 ## 5. Oracles and tests
 
-Native layout tests assert `Plane = 32`, `CentreSplit = 32`, shallow uniform `= 96`, perturbation uniform `= 64`, reference record `= 8`, escape record `= 16`, every byte offset in §3, little-endian pack/unpack fixtures, zero padding, exact signed exponent bytes, and exact enum discriminants.
+Native layout tests assert `Plane = 32`, `CentreSplit = 32`, shallow uniform `= 144`, perturbation uniform `= 112`, reference record `= 8`, escape record `= 16`, all six padded homography rows, every byte offset in §3, little-endian pack/unpack fixtures, zero padding, exact signed exponent bytes, and exact enum and status discriminants.
 
-Native math-and-kernels coordinate tests cover both presets, the `R₁₃·R₂₄` multiplication order, the `π/2` plane exchange, hybrid bases with nonzero z and c components, the `8·f32::EPSILON` postcondition, odd and even extents, bottom-left and top-row pixel centres, row-zero-at-bottom indexing, square pixels, and checked scale-exponent overflow.
+Native math-and-kernels coordinate tests cover both presets, the `R₁₃·R₂₄` multiplication order, the `π/2` plane exchange, hybrid bases with nonzero z and c components, the `8·f32::EPSILON` postcondition, odd and even extents, bottom-left and top-row screen centres, row-zero-at-bottom indexing, exact identity-map offsets, non-affine perspective offsets, and checked scale-exponent overflow.
+
+The screen-map CPU mirror evaluates the same packed rows, parenthesization, guard, and divides as both WGSL kernels. Its Final-grid corpus covers positive, zero, negative, and small-positive denominators, requires exact `Sampled`, `Horizon`, and `MapUncertain` status agreement, proves neither terminal path loads an orbit or emits a non-finite lane, and checks the §2.1 `D_k≤0.25` inequality at every sampled point accepted for recurrence.
 
 Native refinement tests pin the deterministic three-level dimensions and caps, the fast one-eighth Preview and Preview-to-Final sequence, per-level discarded-work facts, exact power-of-two extent degradation, one Final-capacity allocation, prefix page counts and last valid lengths, immutable span handles across all scheduled levels, requested-versus-delivered facts, and zero-delivery behavior.
 
@@ -318,13 +340,13 @@ The perturbation CPU fixture uses math's scaled `f64` mirror and deterministic p
 
 Math's merged `escape_f32`, `perturb_scaled_f64`, and propagated-envelope functions are unconditional test dependencies with no placeholder feature; every ordinary package and workspace test run executes their cross-package comparisons.
 
-Perturbation conformance requires exact classification and integer escape index outside math's propagated error envelope, exact rebase count and glitch flag, and `|smooth_gpu−smooth_cpu| ≤ 2×10⁻³`; samples inside the envelope remain explicit boundary fixtures and are never silently removed from reported counts.
+Perturbation conformance requires exact classification and integer escape index outside math's propagated error envelope, exact rebase count and status, and `|smooth_gpu−smooth_cpu| ≤ 2×10⁻³`; samples inside the envelope remain explicit boundary fixtures and are never silently removed from reported counts.
 
 The reference adequacy oracle recomputes at working precision `D` and `D+16`, requires identical escape index and both emitted coordinate words within two f32 ulps, then runs the deep scaled-classification corpus; failure escalates precision before a Final is re-issued.
 
-The production-output oracle checks every sampled record for finite channels, exact binary encodings of booleans and `−1.0`, integer-valued rebase count, zero shallow rebase count, and no read or presentation access beyond the active prefix.
+The production-output oracle checks every record for finite channels, exact binary escaped values, one of the four exact status codes, exact fixed records for both clear categories, integer-valued rebase count, zero shallow rebase count, and no read or presentation access beyond the active prefix.
 
-The dialect source oracle parses and validates the generated WGSL, rejects every forbidden construct, lowers both the shallow and perturbation modules through naga 24.0.0 to WebGL GLSL ES 3.00 for their vertex and fragment entry points, proves input addressing uses the reference page descriptor rather than output width, and proves changing the reference span changes resource words without pipeline or bind-group replacement.
+The dialect source oracle parses and validates the generated WGSL, rejects every forbidden construct, proves the homography and guard add no builtin to the existing dialect list, lowers both the shallow and perturbation modules through naga 24.0.0 to WebGL GLSL ES 3.00 for their vertex and fragment entry points, proves input addressing uses the reference page descriptor rather than output width, and proves changing the reference span changes resource words without pipeline or bind-group replacement.
 
 The shallow GPU readback, conformance-only integer target, perturbation GPU readback, vertex-stage consumption, SCRATCH copy at nonzero DATA origin and layer, row orientation, and a clean browser console all require visible replay.
 

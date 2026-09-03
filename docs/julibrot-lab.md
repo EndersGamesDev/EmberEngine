@@ -18,12 +18,14 @@ Nothing in the lab reads a clock for geometry and nothing selects a view mode: e
 
 Arbitrary zoom means arbitrary: shallow zoom runs in `f32`; deep zoom uses perturbation, one reference orbit iterated in high precision on the CPU and per-pixel deltas iterated in `f32` on the GPU, with rebasing so glitches are corrected rather than hidden; zoom depth is displayed in decimal digits with the precision in use beside it.
 
+Every refinement grid is screen-aligned: each grid pixel samples the inverse image of its own screen-pixel centre through the accepted neutral-height view, so scaling, rotation, tilt, and perspective change the sampled plane points while the picture continues to fill the screen.
+
 ## 3. The chain, and which slice owns which link
 
 `AST → lock boundary → owner → descriptors → heaps → kernels → geo → projection → scene → re-projection → surface`
 
 |Slice|Package|Owns|
-|---|---|---|
+|-----|-------|----|
 |math|`crates/labs/julibrot/math`|the Julibrot algebra: plane and basis from `R(t)`, presets, `f32` escape reference, high-precision reference orbits, perturbation and rebasing theory, the navigation-drift and warp-accuracy oracles, the bignum choice|
 |kernels|`crates/labs/julibrot/kernels`|the dialect v2 kernels over heap spans: the `f32` escape kernel and the perturbation kernel, their conformance against the math oracles, the scratch-copy landing of the escape grid|
 |worker|`crates/labs/julibrot/worker`|the Web Worker producer of reference orbits, the ownership-transfer channel with its credit header, the versioned owner with its two drains, the same-thread lowering of the same channel|
