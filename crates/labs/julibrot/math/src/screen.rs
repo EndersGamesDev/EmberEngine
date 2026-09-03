@@ -479,6 +479,51 @@ mod tests {
         assert!(matrix[3][3].abs() <= f64::EPSILON);
     }
 
+    /// The screen map is the neutral-height chart map, so the height control cannot appear in it.
+    ///
+    /// This is the whole reason a height change reprojects nothing on its own: the image
+    /// homography every reprojection is fitted from is built here, and it is bit-identical across
+    /// height amplitudes. The escape height reaches the picture only through the scene pass, which
+    /// lifts each vertex by that vertex's own record, so a height change is a deformation of the
+    /// surface rather than a motion of the observer.
+    #[test]
+    fn the_screen_map_is_independent_of_the_height_amplitude() -> Result<(), MathError> {
+        let mut tumbled_camera = [0.0; 10];
+        tumbled_camera[0] = 0.37;
+        tumbled_camera[8] = 0.31;
+        let base = ViewControls {
+            camera: tumbled_camera,
+            camera_translation: [0.2, -0.1, 0.3, 0.05, -0.2],
+            camera_yaw: 0.349,
+            camera_pitch: 0.262,
+            height_scale: 0.0,
+            distance_five: 6.0,
+            distance_four: 8.0,
+        };
+        let flat = map(ObjectAngles::JULIA, base, [1920, 1080])?;
+        for height_scale in [0.5, 1.0, 2.5, 4.0] {
+            let lifted = map(
+                ObjectAngles::JULIA,
+                ViewControls {
+                    height_scale,
+                    ..base
+                },
+                [1920, 1080],
+            )?;
+            assert_eq!(
+                lifted.rows.map(f64::to_bits),
+                flat.rows.map(f64::to_bits),
+                "height {height_scale} moved the screen map"
+            );
+            assert_eq!(
+                lifted.inverse.map(f64::to_bits),
+                flat.inverse.map(f64::to_bits),
+                "height {height_scale} moved the inverse map"
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn forward_after_inverse_is_identity_on_the_screen_lattice() -> Result<(), MathError> {
         let mut tumbled_camera = [0.0; 10];
