@@ -14,9 +14,10 @@ const FRAME: &str = include_str!("../src/frame.rs");
 const WORKER_BROWSER: &str = include_str!("../../worker/src/browser.rs");
 const WORKER_OWNER: &str = include_str!("../../worker/src/browser_owner.rs");
 const SAVED: &str = include_str!("../src/saved.rs");
+const WIRE: &str = include_str!("../../worker/src/wire.rs");
 
 /// Every field the page facts must carry, in publication order.
-const PAGE_FACT_FIELDS: [&str; 94] = [
+const PAGE_FACT_FIELDS: [&str; 100] = [
     "abi_version",
     "adapter_name",
     "backend",
@@ -70,17 +71,25 @@ const PAGE_FACT_FIELDS: [&str; 94] = [
     "request_buffers_owned_main",
     "orbit_buffers_owned_main",
     "palette_id",
+    "object_angles",
     "plane_theta_1",
     "plane_theta_2",
     "plane_origin",
     "target_plane",
     "view_theta_1",
     "view_theta_2",
+    "camera_angles",
     "camera_yaw",
     "camera_pitch",
     "height_scale",
     "distance_five",
     "distance_four",
+    "horizon_pixels",
+    "horizon_fraction",
+    "uncertain_pixels",
+    "uncertain_fraction",
+    "edge_on",
+    "map_condition_number",
     "completed_scene_id",
     "in_flight_scene_id",
     "warp_source_scene_id",
@@ -134,13 +143,15 @@ fn loader_version_one_and_abi_three_are_pinned_before_orbit_transfer() {
     }
     assert!(!LIB.contains("pub fn worker_main(expected_abi: u32)"));
     assert!(WORKER_BROWSER.contains("pub fn worker_main(expected_abi: u32)"));
+    assert!(MAIN.contains("const ABI = 2;"));
+    assert!(WORKER.contains("const ABI = 2;"));
+    assert!(WIRE.contains("pub const JULIBROT_ABI_VERSION: u32 = 2;"));
     assert!(MANIFEST.contains("name = \"ember_lab_julibrot\""));
     assert_eq!(WORKER.matches("ember_lab_julibrot.js?v=1").count(), 1);
     assert!(FRAME.contains("WorkerChannel::new("));
     assert!(FRAME.contains("WorkerMode::WebWorker"));
     assert!(WORKER_OWNER.contains("const WORKER_URL: &str = \"./worker.js?v=1\""));
 }
-
 #[test]
 fn runtime_is_gl_only_and_handlers_precede_the_first_post_device_work() {
     for required in [
@@ -250,6 +261,10 @@ fn the_page_is_one_stage_with_the_picture_between_the_two_view_boxes() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one exhaustive page surface keeps every control under the same contract"
+)]
 fn page_has_one_canvas_status_overlay_and_every_requested_control() {
     assert_eq!(INDEX.matches("<canvas").count(), 1);
     assert_eq!(INDEX.matches("id=\"status\"").count(), 1);
@@ -258,14 +273,26 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
     assert!(!INDEX.contains("id=\"preset\""));
     // One control per view degree of freedom plus the one precision-policy switch.
     for id in [
-        "theta-1",
-        "theta-2",
+        "o12",
+        "o13",
+        "o14",
+        "o23",
+        "o24",
+        "o34",
         "origin-z-re",
         "origin-z-im",
         "origin-c-re",
         "origin-c-im",
-        "view-theta-1",
-        "view-theta-2",
+        "q12",
+        "q13",
+        "q14",
+        "q23",
+        "q24",
+        "q34",
+        "q15",
+        "q25",
+        "q35",
+        "q45",
         "camera-yaw",
         "camera-pitch",
         "height",
@@ -314,9 +341,9 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
     );
     assert!(MAIN.contains(r#"field.replaceAll("_", "-")"#));
     assert!(MAIN.contains("for (const [field, value] of Object.entries(row)) {"));
-    assert_eq!(MAIN.matches("api.app_set_plane_angles(").count(), 1);
+    assert_eq!(MAIN.matches("api.app_set_object_angles(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_plane_origin(").count(), 1);
-    assert_eq!(MAIN.matches("api.app_set_view_angles(").count(), 1);
+    assert_eq!(MAIN.matches("api.app_set_camera_angles(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_camera(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_height(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_distances(").count(), 1);
@@ -354,8 +381,9 @@ fn the_retired_controls_name_nothing_and_the_wasm_boundary_is_complete() {
     assert!(!LIB.contains("pub fn app_set_view("));
     assert!(!LIB.contains("pub fn app_set_preset("));
     for required in [
+        "pub fn app_set_object_angles(",
         "pub fn app_set_plane_origin(",
-        "pub fn app_set_view_angles(",
+        "pub fn app_set_camera_angles(",
         "pub fn app_set_camera(",
         "pub fn app_set_height(",
         "pub fn app_set_distances(",
@@ -373,6 +401,10 @@ fn the_retired_controls_name_nothing_and_the_wasm_boundary_is_complete() {
     // Presets are pure data in one place.
     assert!(STATE.contains("pub const PRESET_ROWS: [PresetRow; 4] = ["));
     assert_eq!(STATE.matches("PresetRow {").count(), 5);
+    assert!(STATE.contains("object_angles: ObjectAngles::IDENTITY"));
+    assert!(STATE.contains("object_angles: ObjectAngles::JULIA"));
+    assert!(STATE.contains("view: ViewControls::MANDELBROT_FLAT"));
+    assert!(STATE.contains("view: ViewControls::NEUTRAL"));
 }
 
 #[test]
@@ -532,6 +564,8 @@ fn two_view_boxes_share_one_path_from_a_control_value_to_the_worker() {
     assert!(!SAVED.contains("pub t:"));
     assert!(SAVED.contains("pub centre: SavedCentre,"));
     assert!(SAVED.contains("pub zoom_log2: f64,"));
+    assert!(SAVED.contains("pub object: [f64; 6],"));
+    assert!(SAVED.contains("pub camera: [f64; 10],"));
 }
 
 #[test]

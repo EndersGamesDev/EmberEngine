@@ -6,6 +6,8 @@ const TARGET = document.getElementById("target");
 const RUBBER = document.getElementById("rubber");
 const MORPH = document.getElementById("morph");
 const BOXES = { a: null, b: null };
+const OBJECT_IDS = ["o12", "o13", "o14", "o23", "o24", "o34"];
+const CAMERA_IDS = ["q12", "q13", "q14", "q23", "q24", "q34", "q15", "q25", "q35", "q45"];
 // The named rows every side can choose from, and which row each side last chose. Built-in rows are
 // not in here: they come from the app, they are never deletable, and they never need storing.
 const ROWS = { named: [], selection: { a: "", b: "" } };
@@ -90,7 +92,7 @@ function centreDigits(zoomLog2) {
 function describeRow(name, row) {
   if (!row) return `${name} is empty`;
   const digits = centreDigits(row.zoom_log2);
-  const angles = [row.theta_1, row.theta_2, row.view_theta_1, row.view_theta_2, row.camera_yaw, row.camera_pitch]
+  const angles = [...row.object, ...row.camera, row.camera_yaw, row.camera_pitch]
     .map(value => Number(value).toFixed(3)).join(" ");
   const origin = row.origin.map(value => Number(value).toFixed(3)).join(" ");
   const centre = row.centre_f64.map(value => Number(value).toFixed(digits)).join(" ");
@@ -298,10 +300,10 @@ function bindControls(api) {
   // One function per group of controls. Listeners call these, and so does the preset row, so a
   // preset cannot reach the worker by a path a user's own movement does not take.
   const APPLY = {
-    plane: () => api.app_set_plane_angles(NUMBER("theta-1"), NUMBER("theta-2")),
+    object: () => api.app_set_object_angles(...OBJECT_IDS.map(NUMBER)),
     origin: () => api.app_set_plane_origin(NUMBER("origin-z-re"), NUMBER("origin-z-im"), NUMBER("origin-c-re"), NUMBER("origin-c-im")),
-    view: () => api.app_set_view_angles(NUMBER("view-theta-1"), NUMBER("view-theta-2")),
-    camera: () => api.app_set_camera(NUMBER("camera-yaw"), NUMBER("camera-pitch")),
+    ambientCamera: () => api.app_set_camera_angles(...CAMERA_IDS.map(NUMBER)),
+    observer: () => api.app_set_camera(NUMBER("camera-yaw"), NUMBER("camera-pitch")),
     height: () => api.app_set_height(NUMBER("height")),
     distances: () => api.app_set_distances(NUMBER("distance-five"), NUMBER("distance-four")),
     // Last, because the origin handler resets the zoom to zero: a row applied in this order ends
@@ -309,14 +311,14 @@ function bindControls(api) {
     scale: () => api.app_set_scale(NUMBER("scale")),
     precision: () => api.app_set_precision_mode(NUMBER("precision")),
   };
-  for (const id of ["theta-1", "theta-2"]) {
-    document.getElementById(id).addEventListener("input", () => guarded(APPLY.plane));
+  for (const id of OBJECT_IDS) {
+    document.getElementById(id).addEventListener("input", () => guarded(APPLY.object));
   }
-  for (const id of ["view-theta-1", "view-theta-2"]) {
-    document.getElementById(id).addEventListener("input", () => guarded(APPLY.view));
+  for (const id of CAMERA_IDS) {
+    document.getElementById(id).addEventListener("input", () => guarded(APPLY.ambientCamera));
   }
   for (const id of ["camera-yaw", "camera-pitch"]) {
-    document.getElementById(id).addEventListener("input", () => guarded(APPLY.camera));
+    document.getElementById(id).addEventListener("input", () => guarded(APPLY.observer));
   }
   document.getElementById("height").addEventListener("input", () => guarded(APPLY.height));
   for (const id of ["distance-five", "distance-four"]) {
