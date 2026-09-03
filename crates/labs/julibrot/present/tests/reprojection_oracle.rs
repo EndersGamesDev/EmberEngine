@@ -681,8 +681,24 @@ fn retained_warp_matches_independent_fresh_scenes() {
         distance_five: 1.0,
         ..ViewControls::NEUTRAL
     };
+    // The pole must be carried to a pose that is not the one it was rendered at: a scene sampled
+    // at its own pose is the identity and is displayed without ever building a corpus.
     let pole = pose(ObjectAngles::JULIA, pole_view, BASE_ORIGIN, 0.0, [0.0; 2]);
-    assert_fixture("pole inside frame", &pole, &pole, 1.0, Expected::Clear);
+    let pole_moved = pose(
+        ObjectAngles::JULIA,
+        pole_view,
+        BASE_ORIGIN,
+        0.0,
+        [6.0, -4.0],
+    );
+    assert_ne!(pole, pole_moved);
+    assert_fixture(
+        "pole inside frame",
+        &pole,
+        &pole_moved,
+        1.0,
+        Expected::Clear,
+    );
 
     observer_bars();
 

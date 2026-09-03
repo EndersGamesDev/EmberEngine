@@ -46,6 +46,9 @@ impl Warp {
         if last_frame.pose != *from_pose {
             return clear_only(true);
         }
+        if renders_same_picture(from_pose, to_pose) {
+            return exact_self(last_frame);
+        }
         if !object_samples_match(from_pose, to_pose) {
             return clear_only(true);
         }
@@ -119,6 +122,61 @@ const fn clear_only(exposed: bool) -> WarpPlan {
         chart_residual: 0.0,
         approx_max_error_px: None,
         approx_p95_error_px: None,
+    }
+}
+
+/// Whether two poses put the same picture on the surface.
+///
+/// Every field that decides a pixel is compared: the slice and its origin, the object angles, the
+/// zoom, the view controls, the sampled extent, the screen map, and the displacement from the
+/// accepted reference. `epoch` and `orbit_generation` are not among them. They are publication
+/// bookkeeping — the epoch advances on every HOT write, so a whole-`Pose` equality is false on the
+/// refresh after the one that captured it and stays false for as long as the view is held, which
+/// makes it useless as a test of what is on screen.
+#[must_use]
+#[allow(
+    clippy::float_cmp,
+    reason = "these coordinates are copied between poses, never recomputed, so identity is exact"
+)]
+pub fn renders_same_picture(first: &Pose, second: &Pose) -> bool {
+    first.plane == second.plane
+        && first.object == second.object
+        && first.plane_origin == second.plane_origin
+        && first.zoom_log2 == second.zoom_log2
+        && first.view == second.view
+        && first.grid_width == second.grid_width
+        && first.grid_height == second.grid_height
+        && first.map == second.map
+        && first.centre_from_reference_px == second.centre_from_reference_px
+}
+
+/// The exact plan for a retained scene whose pose is the one being displayed.
+///
+/// Sampling a scene at the pose it was rendered at is the identity: every destination pixel reads
+/// the source pixel it came from. There is no reprojection to approximate here and therefore none
+/// to measure, so the sampled corpus must not be consulted. It can fail to be measurable for
+/// reasons that say nothing about this plan — a relief lattice sample behind a perspective pole,
+/// a screen sample beyond the horizon — and an unmeasurable corpus refuses. Refusing the identity
+/// is not an honest clear, and unlike every other refusal it cannot recover: the clear counts as
+/// exposure, exposure restarts the refinement ladder, and the ladder can only deliver the same
+/// scene at the same pose to be refused again. That loop is what a held relief pose with a horizon
+/// inside its frame used to sit in, showing the clear colour with a completed Final in hand.
+const fn exact_self(last_frame: &SceneFrame) -> WarpPlan {
+    WarpPlan {
+        rows: [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+        ],
+        source_scene_id: Some(last_frame.scene_id),
+        source_texture_index: Some(last_frame.texture_index),
+        source_valid: true,
+        edge_on: false,
+        exposed: false,
+        kind: WarpKind::AnchorHomography,
+        chart_residual: 0.0,
+        approx_max_error_px: Some(0.0),
+        approx_p95_error_px: Some(0.0),
     }
 }
 
@@ -965,16 +1023,99 @@ mod tests {
 
     #[test]
     fn a_perspective_pole_on_the_sampled_surface_is_unbounded() {
+        // A pole on the sampled relief leaves the corpus with no finite answer to redraw towards,
+        // so the plan is an honest clear. The two poses must differ: sampling a scene at the pose
+        // it was rendered at is the identity and is never measured, let alone refused.
         let view = ViewControls {
             height_scale: 1.0,
             distance_five: 1.0,
             ..ViewControls::NEUTRAL
         };
-        let current = pose(view, [0.0; 2]);
-        let plan = reproject(&frame(&current), &current, &current);
+        let from = pose(view, [0.0; 2]);
+        let mut to = pose(view, [3.0, -2.0]);
+        to.zoom_log2 += 0.125;
+        assert_ne!(from, to);
+        let plan = reproject(&frame(&from), &from, &to);
         assert_eq!(plan.kind, WarpKind::ClearOnly);
         assert!(!plan.source_valid);
         assert_eq!(plan.approx_max_error_px, None);
+    }
+
+    /// The owner's broken row, taken from the page's own Copy row JSON.
+    fn owner_relief_row() -> ViewControls {
+        ViewControls {
+            height_scale: 1.327,
+            distance_five: 8.0,
+            distance_four: 8.0,
+            camera_yaw: 0.0,
+            camera_pitch: 0.0,
+            camera: {
+                let mut camera = [0.0; 10];
+                camera[1] = -core::f64::consts::FRAC_PI_2;
+                camera[4] = -core::f64::consts::FRAC_PI_2;
+                camera
+            },
+            camera_translation: [0.0; 5],
+        }
+    }
+
+    #[test]
+    fn the_owner_relief_row_presents_its_completed_scene_and_stops_asking_for_another() {
+        let object = ObjectAngles {
+            rho_13: 1.174_251_648_646_25,
+            rho_23: 1.612_768_861_833_65,
+            ..ObjectAngles::IDENTITY
+        };
+        let view = owner_relief_row();
+        let plane = construct_plane(object).expect("the row's plane is orthonormal");
+        let mut settled = object_pose(object, plane, view, [0.0; 2]);
+        settled.zoom_log2 = 0.0;
+        settled.plane_origin = [0.0; 4];
+        set_extent(&mut settled, [960, 540]);
+        let PoseMap::Mapped(map) = settled.map else {
+            panic!("the row is an ordinary mapped pose, not the edge-on state");
+        };
+        // The two conditions that used to combine into the refusal: a horizon crosses the frame,
+        // and the relief lattice reaches past a perspective pole so the corpus cannot be measured.
+        assert!(map.condition_number > 1.0);
+        let horizon: Vec<f64> = screen_corners(&settled)
+            .into_iter()
+            .map(|corner| homogeneous(map.rows, corner)[2])
+            .collect();
+        assert!(horizon.iter().any(|weight| *weight <= 0.0));
+        assert!(horizon.iter().any(|weight| *weight > 0.0));
+        assert_ne!(view.height_scale, 0.0);
+
+        // One Final completes at this pose, and every later refresh reprojects it onto itself.
+        // That plan is the exact identity: the surface is the scene, mesh where the map is finite
+        // and exterior sky beyond the horizon, and never the clear colour.
+        let mut retained = frame(&settled);
+        for refresh in 0..16 {
+            // Publication bookkeeping advances on every refresh while the view is held. It must
+            // not decide what is on screen: whole-pose equality would be false from the second
+            // refresh onward, which is exactly how this row stayed clear with a Final in hand.
+            let mut current = settled;
+            current.epoch = settled.epoch + u64::from(refresh) + 1;
+            current.orbit_generation = settled.orbit_generation + refresh;
+            retained.pose.epoch = settled.epoch;
+            assert!(renders_same_picture(&retained.pose, &current));
+            let plan = reproject(&retained, &retained.pose.clone(), &current);
+            assert_eq!(plan.kind, WarpKind::AnchorHomography, "refresh {refresh}");
+            assert!(plan.source_valid, "refresh {refresh}");
+            assert_eq!(plan.source_scene_id, Some(retained.scene_id));
+            assert_eq!(plan.source_texture_index, Some(retained.texture_index));
+            assert_eq!(plan.approx_max_error_px, Some(0.0), "refresh {refresh}");
+            // Nothing here asks the ladder for another scene, so it idles instead of restarting.
+            assert!(!plan.exposed, "refresh {refresh}");
+        }
+        // A pose that is not this picture is still measured, and at this row still refused.
+        let mut moved = settled;
+        moved.centre_from_reference_px = [9.0, -6.0];
+        assert!(!renders_same_picture(&settled, &moved));
+        assert_eq!(
+            reproject(&frame(&settled), &settled, &moved).kind,
+            WarpKind::ClearOnly
+        );
     }
 
     #[test]
