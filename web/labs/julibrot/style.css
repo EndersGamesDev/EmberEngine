@@ -37,8 +37,10 @@ h1 { margin: 0; font-family: ui-serif, Georgia, serif; font-size: 1.5rem; font-w
 .bar-track { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: .5rem; margin: 0; }
 .bar-end { color: #adb5c7; font-size: .75rem; }
 .bar-track > input[type="range"] { width: 100%; min-height: 1.8rem; }
+/* The note costs the bar no height — it shares the row with the slider — so it is dropped on
+   width, where it competes with the track, and never on height, where it competes with nothing. */
 .bar-note { max-width: 30rem; text-align: right; }
-@media (max-height: 820px) { .bar-note { display: none; } }
+@media (max-width: 1200px) { .bar-note { display: none; } }
 
 /* The render surface. `.viewer` is exactly the canvas box, so the target marker and the rubber
    band — absolutely positioned inside it — share the canvas's own origin however the CSS scaling
