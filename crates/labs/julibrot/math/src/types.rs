@@ -46,6 +46,7 @@ impl PrecisionMode {
     }
 }
 
+#[allow(clippy::derivable_impls)]
 impl Default for PrecisionMode {
     fn default() -> Self {
         Self::Deterministic
