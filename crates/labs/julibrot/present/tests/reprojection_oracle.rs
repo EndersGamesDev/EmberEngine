@@ -550,7 +550,10 @@ fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Exp
             plan.source_valid,
             "{name}: relief redraw lost its record source"
         );
-        assert!(plan.exposed, "{name}: relief redraw must expose its fallback");
+        assert!(
+            plan.exposed,
+            "{name}: relief redraw must expose its fallback"
+        );
         assert_eq!(plan.source_scene_id, Some(7), "{name}");
         assert_eq!(plan.source_texture_index, Some(1), "{name}");
         let maximum = plan
