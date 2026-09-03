@@ -126,11 +126,11 @@ The translation term is the desired-centre displacement difference in retained-f
 
 The shader evaluates rows explicitly as `r = H_(t→f)·(x,y,1)`, rejects non-finite `r` or `|r.z|≤1e−12`, computes source NDC `s=(r.x/r.z,r.y/r.z)`, converts to source UV `(s+1)/2`, and emits clear colour rather than clamping whenever either UV component lies outside `[0,1]`.
 
-This is exact at height zero when both poses sample the same affine slice. Six object angles must agree to the f32 plane-rounding floor; a plane-origin delta may pass only when its out-of-plane component and the normalized chart residual are each at most half a source pixel, so in-plane origin motion is exact pan and out-of-plane motion is a slice change.
+This is exact at height zero when both poses sample the same affine slice. Present compares the two constructed plane spans at the f32 rounding floor rather than comparing six object parameters, and composes math's exact in-plane orthogonal chart map when they coincide; a plane-origin delta may pass only when its out-of-plane component and the normalized chart residual are each at most half a source pixel, so in-plane origin motion is exact pan and out-of-plane motion is a slice change.
 
 On an accepted reference, worker publishes `reference_shift_px` as new minus old reference centre in current-zoom pixels along accepted basis `B_a`; present computes only `r_a_f=s_a/s_f=2^(zoom_f−zoom_a)·width_f/width_a` and re-expresses every retained or in-flight pose as `d_f←d_f−r_a_fB_fᵀB_a·reference_shift_px`, then advances its reference generation without clearing the image.
 
-The absolute bignum centre never enters this matrix: `centre_from_reference_px` and `reference_shift_px` remain f64-safe at arbitrary depth. A reference-generation change alone does not clear, while cap, precision mode, object-slice, or out-of-plane origin incompatibility refuses the warp.
+The absolute bignum centre never enters this matrix: `centre_from_reference_px` and `reference_shift_px` remain f64-safe at arbitrary depth. A reference-generation change alone does not clear, and a plane-preserving object rotation remains a valid source; cap, precision mode, a genuine object-plane tilt, or out-of-plane origin incompatibility refuses the warp.
 
 A pan translates old content and exposes a border on the entering side; every mapped source coordinate outside `[0,1]` shows `clear_rgba` with no clamp, stretch, wrap, or stale edge pixel, while the next completed scene supplies the newly revealed fractal samples.
 
@@ -142,7 +142,7 @@ The ordinary warp is deliberately depth-free and uses one 2D homography of the a
 
 The four destination anchors are the current screen corners. Each passes through the current screen map, the compatible plane-chart map, and the retained forward screen map; the solve therefore composes the same maps used by screen-aligned sampling.
 
-The planner and scene shader use the identical ambient construction. At neutral height the composed map is exact for the compatible affine plane; under relief the sampled corpus measures the nonlinear error that one 2D homography cannot follow.
+The planner and scene shader use the identical ambient construction. At neutral height the composed map is exact for the compatible affine plane, including its in-plane object-basis rotation; under relief the sampled corpus measures the nonlinear error that one 2D homography cannot follow and the existing proved fixed-plane redraw rule remains the only over-ceiling fallback.
 
 `WarpKind` is `AnchorHomography`, `ClearOnly`, or `ReliefRedraw`. Flat compatible plans are exact; a missing source, incompatible slice, edge-on map, source-identity mismatch, failed solve, an unmeasurable corpus, or an over-ceiling plan outside the proved redraw family is `ClearOnly` and is never shown as a moving feature. An over-ceiling plan is `ReliefRedraw` only for a pure height or `d₅` change with every other sampling input fixed, or when both retained and destination poses have a neutral 5D camera rotation and translation; it retains the source identity and presents the same records through the scene mesh under the destination HOT pose.
 
@@ -448,7 +448,7 @@ A second anchor test pins the retirement of the exact plan: at zero camera angle
 
 Exact planner word and residual comparisons are guarded by the cfg-free `PrecisionMode::requires_bit_identity` helper and are labelled Deterministic conformance; finite plans, poles, error bounds, and every exact-path accuracy oracle execute for PictureFast as well.
 
-The ambient oracle covers the two identity presets, random `O` and `Q` orthonormality, legacy two-angle equivalence, edge-on refusal, exactly one edge-on crossing on the Julia-to-Mandelbrot object morph at fixed `Q`, nonzero camera translations, and forward-after-inverse identity over a 9-by-9 screen lattice. The reprojection oracle covers pan, zoom, view rotation with and without relief, yaw/pitch, compatible object-rounding noise, incompatible object motion, in-plane and out-of-plane origin translation, camera translation, and cross terms against the published bound.
+The ambient oracle covers the two identity presets, random `O` and `Q` orthonormality, legacy two-angle equivalence, edge-on refusal, exactly one edge-on crossing on the Julia-to-Mandelbrot object morph at fixed `Q`, nonzero camera translations, and forward-after-inverse identity over a 9-by-9 screen lattice. The reprojection oracle covers pan, zoom, view rotation with and without relief, yaw/pitch, compatible object-rounding noise, exact `ρ₃₄` plane rotation, inert `ρ₁₂`, incompatible object tilt, in-plane and out-of-plane origin translation, camera translation, and cross terms against the published bound.
 
 The coverage oracle rasterizes the CPU vertex mirror over a pose lattice including near-edge-on and `h=2` and requires every surface pixel to be covered by the mesh or by sky the geometry accounts for. Accepting any sky pixel at all was the weaker predicate this oracle started with, and it is what let the lifted border pull-in pass unnoticed: the sky is a legitimate answer only where a pole, a horizon or an edge-on plane produced it, and `scene_footprint` is what separates those from a mesh that fell short. Both scene and warp shaders are parsed with the normal capability set and translated to GLSL ES 3.00.
 

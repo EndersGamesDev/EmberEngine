@@ -30,11 +30,13 @@ The fractal plane lives only in ℝ⁴; `e₅` carries escape height only after 
 
 For column vectors, `Rᵢⱼ(θ)` has the standard block `[[cos θ,−sin θ],[sin θ,cos θ]]` on axes `(i,j)` and identity elsewhere, every angle is an independent HOT control in `[−π,π]`, and the rightmost factor acts first.
 
-The object rotation is `O=R₁₂(ρ₁₂)R₁₃(ρ₁₃)R₁₄(ρ₁₄)R₂₃(ρ₂₃)R₂₄(ρ₂₄)R₃₄(ρ₃₄)∈SO(4)`; with column vectors its explicit application order is `R₃₄`, `R₂₄`, `R₂₃`, `R₁₄`, `R₁₃`, then `R₁₂`. There is one seed and the sampled basis is always `u=Oe₃`, `v=Oe₄`, so changing an object angle rotates the 2D slice in ambient ℝ⁴ rather than merely spinning its chart.
+The object rotation is `O=R₁₂(ρ₁₂)R₁₃(ρ₁₃)R₁₄(ρ₁₄)R₂₃(ρ₂₃)R₂₄(ρ₂₄)R₃₄(ρ₃₄)∈SO(4)`; with column vectors its explicit application order is `R₃₄`, `R₂₄`, `R₂₃`, `R₁₄`, `R₁₃`, then `R₁₂`. There is one seed and the sampled basis is always `u=Oe₃`, `v=Oe₄`; a general object-angle change tilts the 2D slice in ambient ℝ⁴, while a member of the seed-plane stabilizer changes only its chart basis.
 
 `ObjectAngles` stores the six angles in product order. The legacy `PlaneAngles` adapter maps `θ₁` to `ρ₁₃` and `θ₂` to `ρ₂₄`; setting the other four components to zero makes `O=R₁₃(θ₁)R₂₄(θ₂)` with the former application order and bit-for-bit results after the shared rounding pass.
 
 Construction evaluates `O` in `f64`, applies it to the orthonormal seed, rounds each published basis component exactly once to nearest `f32` with ties to even, performs no projection or Gram–Schmidt stage, and requires `|u·u−1|`, `|v·v−1|`, and `|u·v|` each at most `8·f32::EPSILON` after rounding.
+
+Plane compatibility compares the constructed bases rather than the six parameters. The requested basis is projected into the retained span and is the same plane when both four-dimensional residual norms are at most `8·f32::EPSILON`; its 2-by-2 overlap is then replaced by the exact orthogonal rotation or reflection with the same first-column angle. The published chart map is the transpose, taking retained chart coordinates to requested chart coordinates. At `O=I`, changing `ρ₃₄` by `α` gives basis rotation `α` and chart rotation `−α`, while `ρ₁₂` is identity on the seed plane; after a general `O`, a rightmost `ρ₃₄` increment remains an in-plane rotation even though the six parameter roles otherwise mix. This plane stabilizer is the slice-level rule one dimension down from the arena's ATW limit: only motion outside the sampled 2-flat asks for new content.
 
 The object rows are Mandelbrot `O=I` with origin `(0,0,0,0)` and Julia at finite `c₀` with `ρ₁₃=ρ₂₄=−π/2`, the other four angles zero, and origin `(0,0,c₀.re,c₀.im)`. The Julia row therefore preserves the former once-rounded `(e₁,e₂)` basis, while the four origin coordinates are the translation of the object pose in `SE(4)` and remain independent MAIN state that set the absolute centre.
 
@@ -122,7 +124,7 @@ For pose `p`, the accepted `M_p` converts a centred screen pixel to local plane-
 
 For retained source pose `f` and current target pose `t`, the middle chart map `T` applies the relative centre, pixel-scale ratio, basis projection, and in-plane origin translation. The exact neutral-height forward screen homography is `H(f→t)=M_t⁻¹·T·M_f`; the upload used for inverse texture sampling is its explicit `H(t→f)` inverse, and the scale ratio is evaluated directly from zoom and widths without forming either deep scale.
 
-The six object angles must match to the once-rounded f32 plane floor. An origin delta is compatible exactly when its component outside the source plane is at most half a source pixel: an in-plane origin move becomes exact pan, while an out-of-plane move changes the slice and is refused. The normalized `chart_residual` is likewise refused above half a source pixel.
+The retained and requested object bases must span the same plane to the once-rounded `8·f32::EPSILON` floor; their angle parameters need not match. The exact orthogonal chart relation is composed into `T`. An origin delta is compatible exactly when its component outside the source plane is at most half a source pixel: an in-plane origin move becomes exact pan, while an out-of-plane move changes the slice and is refused. The normalized `chart_residual` is likewise refused above half a source pixel.
 
 `warp_matrix(from,to)` requires two mapped poses and returns both row-major directions, rejects non-finite arithmetic and the shared `1e−12` pivot floor, and preserves horizon signs. Present re-expresses each retained or pending pose from the pose at which that scene was sampled, never from the newest HOT epoch, then binds the solved plan to that source scene and texture identity.
 
