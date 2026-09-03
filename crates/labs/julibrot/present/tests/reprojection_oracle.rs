@@ -41,10 +41,10 @@ fn pose(
     }
 }
 
-fn frame(pose: Pose) -> SceneFrame {
+const fn frame(pose: &Pose) -> SceneFrame {
     SceneFrame {
         scene_id: 7,
-        pose,
+        pose: *pose,
         palette: PaletteId::Classic,
         iteration_cap: 512,
         level: RefinementLevel::Final,
@@ -75,11 +75,11 @@ fn inside(point: [f64; 2]) -> bool {
         && point[1].abs() <= f64::from(EXTENT[1]) * 0.5
 }
 
-fn assert_agrees(name: &str, from: Pose, to: Pose, height: f64, must_clear: bool) {
+fn assert_agrees(name: &str, from: &Pose, to: &Pose, height: f64, must_clear: bool) {
     let plan = Warp::reproject(
         &frame(from),
-        &from,
-        &to,
+        from,
+        to,
         PrecisionMode::PictureFast,
         WarpValidation::Final,
     );
@@ -106,10 +106,10 @@ fn assert_agrees(name: &str, from: Pose, to: Pose, height: f64, must_clear: bool
             let Some(source_flat) = apply_homography(inverse_sampling, target) else {
                 continue;
             };
-            let Some(fresh_destination) = project_scene_point(&to, target, height) else {
+            let Some(fresh_destination) = project_scene_point(to, target, height) else {
                 continue;
             };
-            let Some(fresh_source) = project_scene_point(&from, source_flat, height) else {
+            let Some(fresh_source) = project_scene_point(from, source_flat, height) else {
                 continue;
             };
             let Some(warped_source) = apply_homography(inverse_sampling, fresh_destination) else {
@@ -127,7 +127,7 @@ fn assert_agrees(name: &str, from: Pose, to: Pose, height: f64, must_clear: bool
     assert!(comparisons > 0, "{name} had no shared source points");
 }
 
-fn relief() -> ViewControls {
+const fn relief() -> ViewControls {
     let mut camera = [0.0; 10];
     camera[8] = 0.3;
     ViewControls {
@@ -140,6 +140,10 @@ fn relief() -> ViewControls {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one corpus test keeps every accepted and refused navigation motion visible together"
+)]
 fn retained_warp_matches_fresh_scene_over_the_navigation_corpus() {
     let flat = pose(
         ObjectAngles::JULIA,
@@ -151,11 +155,11 @@ fn retained_warp_matches_fresh_scene_over_the_navigation_corpus() {
 
     let mut pan = flat;
     pan.centre_from_reference_px = [5.0, -3.0];
-    assert_agrees("pure pan", flat, pan, 0.0, false);
+    assert_agrees("pure pan", &flat, &pan, 0.0, false);
 
     let mut zoom = flat;
     zoom.zoom_log2 = 0.1;
-    assert_agrees("pure zoom", flat, zoom, 0.0, false);
+    assert_agrees("pure zoom", &flat, &zoom, 0.0, false);
 
     let mut rotated_flat_view = ViewControls::NEUTRAL;
     rotated_flat_view.camera[0] = 0.1;
@@ -166,7 +170,7 @@ fn retained_warp_matches_fresh_scene_over_the_navigation_corpus() {
         0.0,
         [0.0; 2],
     );
-    assert_agrees("view rotation h=0", flat, rotated_flat, 0.0, false);
+    assert_agrees("view rotation h=0", &flat, &rotated_flat, 0.0, false);
 
     let relief_from = pose(
         ObjectAngles::JULIA,
@@ -184,7 +188,7 @@ fn retained_warp_matches_fresh_scene_over_the_navigation_corpus() {
         0.0,
         [0.0; 2],
     );
-    assert_agrees("view rotation h=1", relief_from, relief_to, 1.0, false);
+    assert_agrees("view rotation h=1", &relief_from, &relief_to, 1.0, false);
 
     let mut observer = ViewControls::NEUTRAL;
     observer.camera_yaw = 1.0e-4;
@@ -196,7 +200,7 @@ fn retained_warp_matches_fresh_scene_over_the_navigation_corpus() {
         0.0,
         [0.0; 2],
     );
-    assert_agrees("camera yaw pitch", flat, observer_pose, 0.0, false);
+    assert_agrees("camera yaw pitch", &flat, &observer_pose, 0.0, false);
 
     let mut tiny_object = ObjectAngles::JULIA;
     tiny_object.rho_12 += 1.0e-9;
@@ -207,7 +211,7 @@ fn retained_warp_matches_fresh_scene_over_the_navigation_corpus() {
         0.0,
         [0.0; 2],
     );
-    assert_agrees("object 1e-9", flat, tiny_object_pose, 0.0, false);
+    assert_agrees("object 1e-9", &flat, &tiny_object_pose, 0.0, false);
 
     let mut changed_object = ObjectAngles::JULIA;
     changed_object.rho_12 += 0.3;
@@ -218,7 +222,7 @@ fn retained_warp_matches_fresh_scene_over_the_navigation_corpus() {
         0.0,
         [0.0; 2],
     );
-    assert_agrees("object 0.3", flat, changed_object_pose, 0.0, true);
+    assert_agrees("object 0.3", &flat, &changed_object_pose, 0.0, true);
 
     let in_plane = pose(
         ObjectAngles::JULIA,
@@ -227,7 +231,7 @@ fn retained_warp_matches_fresh_scene_over_the_navigation_corpus() {
         0.0,
         [0.0; 2],
     );
-    assert_agrees("in-plane origin", flat, in_plane, 0.0, false);
+    assert_agrees("in-plane origin", &flat, &in_plane, 0.0, false);
     let out_of_plane = pose(
         ObjectAngles::JULIA,
         ViewControls::NEUTRAL,
@@ -235,7 +239,7 @@ fn retained_warp_matches_fresh_scene_over_the_navigation_corpus() {
         0.0,
         [0.0; 2],
     );
-    assert_agrees("out-of-plane origin", flat, out_of_plane, 0.0, true);
+    assert_agrees("out-of-plane origin", &flat, &out_of_plane, 0.0, true);
 
     let translated = pose(
         ObjectAngles::JULIA,
@@ -247,7 +251,7 @@ fn retained_warp_matches_fresh_scene_over_the_navigation_corpus() {
         0.0,
         [0.0; 2],
     );
-    assert_agrees("camera translation", flat, translated, 0.0, false);
+    assert_agrees("camera translation", &flat, &translated, 0.0, false);
 
     let mut cross_view = relief();
     cross_view.camera_translation = [1.0e-4, -2.0e-4, 0.0, 0.0, 1.0e-4];
@@ -259,5 +263,5 @@ fn retained_warp_matches_fresh_scene_over_the_navigation_corpus() {
         0.001,
         [0.1, -0.1],
     );
-    assert_agrees("cross terms", relief_from, cross, 1.0, false);
+    assert_agrees("cross terms", &relief_from, &cross, 1.0, false);
 }
