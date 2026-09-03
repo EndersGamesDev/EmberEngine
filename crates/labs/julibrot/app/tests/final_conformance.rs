@@ -33,10 +33,7 @@ const PALETTES: [PaletteId; 3] = [PaletteId::Classic, PaletteId::Ember, PaletteI
 const SAMPLE_PIXELS: [[u32; 2]; 5] = [[0, 0], [2, 0], [1, 1], [0, 2], [2, 2]];
 const LIGHT: f32 = 0.7;
 
-const ZERO_RECORD: ReferenceOrbitRecord = ReferenceOrbitRecord {
-    re: 0.0,
-    im: 0.0,
-};
+const ZERO_RECORD: ReferenceOrbitRecord = ReferenceOrbitRecord { re: 0.0, im: 0.0 };
 
 #[derive(Clone, Copy, Debug)]
 struct PlaneFixture {
@@ -457,10 +454,7 @@ fn reference_orbit(centre: [f64; 4], cap: u32) -> Vec<ReferenceOrbitRecord> {
     let capacity = usize::try_from(cap).expect("fixture cap fits usize");
     let mut records = Vec::with_capacity(capacity);
     for _ in 0..cap {
-        records.push(ReferenceOrbitRecord {
-            re: z_re,
-            im: z_im,
-        });
+        records.push(ReferenceOrbitRecord { re: z_re, im: z_im });
         if z_re.mul_add(z_re, z_im * z_im) > EscapeParams::BAILOUT {
             break;
         }
