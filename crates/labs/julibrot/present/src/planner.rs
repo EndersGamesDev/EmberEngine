@@ -423,6 +423,7 @@ pub fn project_scene_vertex(
     project_scene_vertex_with_shortcut(pose, screen, record_height, true)
 }
 
+#[cfg(test)]
 fn project_scene_point_with_shortcut(
     pose: &Pose,
     screen: [f64; 2],
