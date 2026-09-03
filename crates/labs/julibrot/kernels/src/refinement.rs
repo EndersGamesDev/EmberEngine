@@ -383,6 +383,7 @@ mod tests {
             RefinementLevel::Preview,
             KernelMode::Shallow,
             1,
+            PrecisionMode::PictureFast,
             16_777_216,
             None,
         )
