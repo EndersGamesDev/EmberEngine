@@ -626,7 +626,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
     let out_of_plane = pose(
         ObjectAngles::JULIA,
         ViewControls::NEUTRAL,
-        [0.0, 0.0, BASE_ORIGIN[2] + 0.01, BASE_ORIGIN[3]],
+        [0.0, 0.0, BASE_ORIGIN[2] + 0.03, BASE_ORIGIN[3]],
         0.0,
         [0.0; 2],
     );
