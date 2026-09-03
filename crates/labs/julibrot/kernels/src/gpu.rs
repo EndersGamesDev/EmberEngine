@@ -439,6 +439,7 @@ const fn level_set(level: RefinementLevel) -> u32 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn checked_facts(
     executor: &GpuKernelExecutor,
     allocation: &GridAllocation,
