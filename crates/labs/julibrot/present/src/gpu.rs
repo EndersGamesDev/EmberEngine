@@ -10,9 +10,9 @@ use crate::{
     FrameReceipt, FrameState, HOT_PAYLOAD_BYTES, HotSlot, HotUniform, PaletteId, Pose, PoseMap,
     PresentConfig, PresentDataError, PresentError, PresentEvent, PresentFacts, PresentHot,
     PresentMain, PresentStatus, SCENE_PAYLOAD_BYTES, SampleClass, SceneUniform, SubmissionKind,
-    Warp, WarpKind, WarpValidation, camera_rotation, camera_rotation_pairs, camera_translation, exterior_zero,
-    hot_ring_bytes, pack_homography_rows, palette, scene_indices, scene_shader, view_scale,
-    warp_shader,
+    Warp, WarpKind, WarpValidation, camera_rotation, camera_rotation_pairs, camera_translation,
+    exterior_zero, hot_ring_bytes, pack_homography_rows, palette, scene_indices, scene_shader,
+    view_scale, warp_shader,
 };
 
 const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -1372,9 +1372,7 @@ const fn select_warp_source_identity(
     retained: Option<(u64, u32)>,
 ) -> Option<(u64, u32)> {
     match (planned, retained) {
-        (Some(planned), Some(retained))
-            if planned.0 == retained.0 && planned.1 == retained.1 =>
-        {
+        (Some(planned), Some(retained)) if planned.0 == retained.0 && planned.1 == retained.1 => {
             Some(retained)
         }
         _ => None,

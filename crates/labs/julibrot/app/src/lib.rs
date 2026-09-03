@@ -30,8 +30,8 @@ pub use measurement::{
 pub use runtime::{BrowserRuntime, DeviceFacts, install_julibrot_panic_hook, take_julibrot_panic};
 pub use saved::{SavedCentre, SavedCoordinate, SavedView};
 pub use state::{
-    BOX_CLICK_THRESHOLD_PX, HotFrame, INITIAL_ITERATION_CAP, NavigationEdit, PRESET_ROWS,
-    IntoGridExtent, PresetRow, RequestedControls, SCALE_RANGE_LOG2, ViewerController, anchor_px_up,
+    BOX_CLICK_THRESHOLD_PX, HotFrame, INITIAL_ITERATION_CAP, IntoGridExtent, NavigationEdit,
+    PRESET_ROWS, PresetRow, RequestedControls, SCALE_RANGE_LOG2, ViewerController, anchor_px_up,
     box_zoom_delta_log2, css_from_anchor_px_up, drag_delta_px_down, is_box_selection, preset_row,
 };
 pub use surface::{PendingSurface, SurfaceAction, SurfaceState};
@@ -699,7 +699,6 @@ mod wasm_entry {
 #[cfg(target_arch = "wasm32")]
 pub use wasm_entry::{
     app_crosshair_json, app_facts_json, app_morph_view, app_needs_refresh, app_pan_px, app_preset,
-    app_refresh, app_request_frame, app_request_measurement, app_saved_view_json, app_set_camera,
     app_refresh, app_request_frame, app_request_measurement, app_saved_view_json, app_set_camera,
     app_set_camera_angles, app_set_camera_translation, app_set_centre, app_set_distances,
     app_set_height, app_set_iteration_cap, app_set_object_angles, app_set_palette,

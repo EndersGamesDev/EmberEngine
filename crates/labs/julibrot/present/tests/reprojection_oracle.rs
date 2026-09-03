@@ -71,8 +71,7 @@ fn rows(plan: [[f32; 4]; 3]) -> [f64; 9] {
 }
 
 fn inside(point: [f64; 2]) -> bool {
-    point[0].abs() <= f64::from(EXTENT[0]) * 0.5
-        && point[1].abs() <= f64::from(EXTENT[1]) * 0.5
+    point[0].abs() <= f64::from(EXTENT[0]) * 0.5 && point[1].abs() <= f64::from(EXTENT[1]) * 0.5
 }
 
 fn assert_agrees(name: &str, from: &Pose, to: &Pose, height: f64, must_clear: bool) {
@@ -118,8 +117,8 @@ fn assert_agrees(name: &str, from: &Pose, to: &Pose, height: f64, must_clear: bo
             if !inside(fresh_source) || !inside(warped_source) {
                 continue;
             }
-            let error = (fresh_source[0] - warped_source[0])
-                .hypot(fresh_source[1] - warped_source[1]);
+            let error =
+                (fresh_source[0] - warped_source[0]).hypot(fresh_source[1] - warped_source[1]);
             assert!(error <= maximum + 1.0e-3, "{name}: {error} > {maximum}");
             comparisons = comparisons.saturating_add(1);
         }
@@ -172,45 +171,21 @@ fn retained_warp_matches_fresh_scene_over_the_navigation_corpus() {
     );
     assert_agrees("view rotation h=0", &flat, &rotated_flat, 0.0, false);
 
-    let relief_from = pose(
-        ObjectAngles::JULIA,
-        relief(),
-        [0.0; 4],
-        0.0,
-        [0.0; 2],
-    );
+    let relief_from = pose(ObjectAngles::JULIA, relief(), [0.0; 4], 0.0, [0.0; 2]);
     let mut relief_to_view = relief();
     relief_to_view.camera[8] += 1.0e-4;
-    let relief_to = pose(
-        ObjectAngles::JULIA,
-        relief_to_view,
-        [0.0; 4],
-        0.0,
-        [0.0; 2],
-    );
+    let relief_to = pose(ObjectAngles::JULIA, relief_to_view, [0.0; 4], 0.0, [0.0; 2]);
     assert_agrees("view rotation h=1", &relief_from, &relief_to, 1.0, false);
 
     let mut observer = ViewControls::NEUTRAL;
     observer.camera_yaw = 1.0e-4;
     observer.camera_pitch = -1.0e-4;
-    let observer_pose = pose(
-        ObjectAngles::JULIA,
-        observer,
-        [0.0; 4],
-        0.0,
-        [0.0; 2],
-    );
+    let observer_pose = pose(ObjectAngles::JULIA, observer, [0.0; 4], 0.0, [0.0; 2]);
     assert_agrees("camera yaw pitch", &flat, &observer_pose, 0.0, false);
 
     let mut tiny_object = ObjectAngles::JULIA;
     tiny_object.rho_12 += 1.0e-9;
-    let tiny_object_pose = pose(
-        tiny_object,
-        ViewControls::NEUTRAL,
-        [0.0; 4],
-        0.0,
-        [0.0; 2],
-    );
+    let tiny_object_pose = pose(tiny_object, ViewControls::NEUTRAL, [0.0; 4], 0.0, [0.0; 2]);
     assert_agrees("object 1e-9", &flat, &tiny_object_pose, 0.0, false);
 
     let mut changed_object = ObjectAngles::JULIA;

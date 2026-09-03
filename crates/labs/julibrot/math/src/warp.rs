@@ -97,10 +97,7 @@ fn validate_pose(pose: &Pose) -> Result<(), MathError> {
             .iter()
             .chain(&map.inverse)
             .all(|value| value.is_finite())
-        || !pose
-            .plane_origin
-            .into_iter()
-            .all(f64::is_finite)
+        || !pose.plane_origin.into_iter().all(f64::is_finite)
         || !pose
             .plane
             .basis_u

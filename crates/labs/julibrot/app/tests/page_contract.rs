@@ -446,9 +446,7 @@ fn the_canvas_navigates_by_crosshair_translation_box_and_scale() {
     // The scale control spans exactly the range the app enforces.
     assert!(INDEX.contains("id=\"scale\" type=\"range\" min=\"-2\" max=\"120\""));
     for id in ["t1", "t2", "t3", "t4", "t5"] {
-        assert!(INDEX.contains(&format!(
-            "id=\"{id}\" type=\"range\" min=\"-8\" max=\"8\""
-        )));
+        assert!(INDEX.contains(&format!("id=\"{id}\" type=\"range\" min=\"-8\" max=\"8\"")));
     }
     // The marker and the rubber band are DOM overlays, not scene geometry.
     for element in ["id=\"target\"", "id=\"rubber\""] {

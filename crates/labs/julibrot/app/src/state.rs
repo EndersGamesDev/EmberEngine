@@ -461,8 +461,8 @@ impl ViewerController {
             ));
         }
         let map = self.mapped_screen_map(self.grid_extent)?;
-        let delta = navigation_delta(&map, [0.0; 2], delta_log2, anchor_px_up)
-            .map_err(math_error)?;
+        let delta =
+            navigation_delta(&map, [0.0; 2], delta_log2, anchor_px_up).map_err(math_error)?;
         self.owner.navigate(delta);
         if let Some(error) = self.owner.take_navigation_error() {
             return Err(owner_error(error));
@@ -485,8 +485,8 @@ impl ViewerController {
             return Err(AppError::Math("drag input is not finite".to_string()));
         }
         let map = self.mapped_screen_map(self.grid_extent)?;
-        let delta = navigation_delta(&map, delta_dom, 0.0, self.crosshair_px_up)
-            .map_err(math_error)?;
+        let delta =
+            navigation_delta(&map, delta_dom, 0.0, self.crosshair_px_up).map_err(math_error)?;
         self.owner.navigate(delta);
         if let Some(error) = self.owner.take_navigation_error() {
             return Err(owner_error(error));

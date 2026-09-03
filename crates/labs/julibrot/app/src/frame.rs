@@ -298,7 +298,10 @@ const fn schedule_exposure_fill(
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
-fn pose_maps_close(first: ember_julibrot_math::PoseMap, second: ember_julibrot_math::PoseMap) -> bool {
+fn pose_maps_close(
+    first: ember_julibrot_math::PoseMap,
+    second: ember_julibrot_math::PoseMap,
+) -> bool {
     use ember_julibrot_math::PoseMap;
     match (first, second) {
         (PoseMap::EdgeOn, PoseMap::EdgeOn) => true,
@@ -590,8 +593,7 @@ mod browser {
     };
     use ember_julibrot_math::{
         BigCentre, EscapeParams, ObjectAngles, Plane, PoseMap, PrecisionMode, precision_for,
-        reference_shift_px,
-        scale_split, shallow_pixel_scale, split_centre,
+        reference_shift_px, scale_split, shallow_pixel_scale, split_centre,
     };
     use ember_julibrot_present::{
         FrameState, HotSlot, PresentConfig, PresentEvent, PresentHot, PresentMain, Presenter,
@@ -941,10 +943,8 @@ mod browser {
             if requests.frame {
                 let restart_scene = self.scene_ready(viewer.requested().zoom_log2)
                     && self.presented_view_is_stale(viewer);
-                self.loop_state.accept_request(
-                    self.main.generation_applied,
-                    restart_scene,
-                );
+                self.loop_state
+                    .accept_request(self.main.generation_applied, restart_scene);
                 requests.frame = false;
             }
             if let Some(error) = self.owner_endpoint.take_error() {

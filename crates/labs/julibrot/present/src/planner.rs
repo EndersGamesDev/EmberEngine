@@ -147,10 +147,8 @@ fn warp_exposes_source(inverse_sampling: [f64; 9], from: &Pose, to: &Pose) -> bo
         .flat_map(|row| (0..SCREEN_STEPS).map(move |column| (row, column)))
         .any(|(row, column)| {
             let target = [
-                (f64::from(column) / f64::from(SCREEN_STEPS - 1) - 0.5)
-                    * f64::from(to.grid_width),
-                (f64::from(row) / f64::from(SCREEN_STEPS - 1) - 0.5)
-                    * f64::from(to.grid_height),
+                (f64::from(column) / f64::from(SCREEN_STEPS - 1) - 0.5) * f64::from(to.grid_width),
+                (f64::from(row) / f64::from(SCREEN_STEPS - 1) - 0.5) * f64::from(to.grid_height),
             ];
             apply_homography(inverse_sampling, target).is_none_or(|source| {
                 source[0] < -half_width
@@ -304,11 +302,7 @@ fn dot4(basis: [f32; 4], point: [f64; 4]) -> f64 {
     clippy::float_cmp,
     reason = "height zero is a semantic branch whose exact identity is part of the shader contract"
 )]
-pub fn project_scene_point(
-    pose: &Pose,
-    screen: [f64; 2],
-    record_height: f64,
-) -> Option<[f64; 2]> {
+pub fn project_scene_point(pose: &Pose, screen: [f64; 2], record_height: f64) -> Option<[f64; 2]> {
     if pose.grid_width == 0 || pose.grid_height == 0 || !pose.view.is_valid() {
         return None;
     }
@@ -695,7 +689,10 @@ mod tests {
         let maximum = plan
             .approx_max_error_px
             .expect("the sampled corpus reports a maximum");
-        assert!(maximum > WARP_MAX_ERROR_PX, "maximum error was {maximum} pixels");
+        assert!(
+            maximum > WARP_MAX_ERROR_PX,
+            "maximum error was {maximum} pixels"
+        );
         assert!(
             plan.approx_p95_error_px
                 .is_some_and(|error| error <= maximum)
@@ -710,10 +707,7 @@ mod tests {
         let plan = reproject(&frame(&from), &from, &to);
         assert_eq!(plan.kind, WarpKind::AnchorHomography);
         assert!(plan.source_valid);
-        assert!(
-            plan.approx_max_error_px
-                .is_some_and(|error| error < 1.0e-9)
-        );
+        assert!(plan.approx_max_error_px.is_some_and(|error| error < 1.0e-9));
     }
 
     #[test]
@@ -727,10 +721,7 @@ mod tests {
         let plan = reproject(&frame(&from), &from, &to);
         assert_eq!(plan.kind, WarpKind::AnchorHomography);
         assert!(plan.source_valid);
-        assert!(
-            plan.approx_max_error_px
-                .is_some_and(|error| error < 1.0e-9)
-        );
+        assert!(plan.approx_max_error_px.is_some_and(|error| error < 1.0e-9));
     }
 
     #[test]
@@ -812,27 +803,38 @@ mod tests {
             observed_p95 <= 32.0,
             "swept p95 maximum was {observed_p95} pixels"
         );
-        assert!(refused > 0, "the measured relief envelope never reached the ceiling");
+        assert!(
+            refused > 0,
+            "the measured relief envelope never reached the ceiling"
+        );
     }
 
     fn triangle_contains(point: [f64; 2], triangle: [[f64; 2]; 3]) -> bool {
         let cross = |a: [f64; 2], b: [f64; 2]| a[0].mul_add(b[1], -a[1] * b[0]);
         let edges = [
             cross(
-                [triangle[1][0] - triangle[0][0], triangle[1][1] - triangle[0][1]],
+                [
+                    triangle[1][0] - triangle[0][0],
+                    triangle[1][1] - triangle[0][1],
+                ],
                 [point[0] - triangle[0][0], point[1] - triangle[0][1]],
             ),
             cross(
-                [triangle[2][0] - triangle[1][0], triangle[2][1] - triangle[1][1]],
+                [
+                    triangle[2][0] - triangle[1][0],
+                    triangle[2][1] - triangle[1][1],
+                ],
                 [point[0] - triangle[1][0], point[1] - triangle[1][1]],
             ),
             cross(
-                [triangle[0][0] - triangle[2][0], triangle[0][1] - triangle[2][1]],
+                [
+                    triangle[0][0] - triangle[2][0],
+                    triangle[0][1] - triangle[2][1],
+                ],
                 [point[0] - triangle[2][0], point[1] - triangle[2][1]],
             ),
         ];
-        edges.iter().all(|value| *value >= -1.0e-9)
-            || edges.iter().all(|value| *value <= 1.0e-9)
+        edges.iter().all(|value| *value >= -1.0e-9) || edges.iter().all(|value| *value <= 1.0e-9)
     }
 
     fn mesh_covers(pose: &Pose, target: [f64; 2]) -> bool {
@@ -840,10 +842,7 @@ mod tests {
             project_scene_point(
                 pose,
                 [
-                    0.5_f64.mul_add(
-                        -f64::from(pose.grid_width),
-                        f64::from(column) + 0.5,
-                    ),
+                    0.5_f64.mul_add(-f64::from(pose.grid_width), f64::from(column) + 0.5),
                     0.5_f64.mul_add(-f64::from(pose.grid_height), f64::from(row) + 0.5),
                 ],
                 2.0,
@@ -901,10 +900,7 @@ mod tests {
             for row in 0..extent[1] {
                 for column in 0..extent[0] {
                     let target = [
-                        0.5_f64.mul_add(
-                            -f64::from(extent[0]),
-                            f64::from(column) + 0.5,
-                        ),
+                        0.5_f64.mul_add(-f64::from(extent[0]), f64::from(column) + 0.5),
                         0.5_f64.mul_add(-f64::from(extent[1]), f64::from(row) + 0.5),
                     ];
                     if mesh_covers(&posed, target) {

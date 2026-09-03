@@ -203,7 +203,13 @@ fn origins_share_slice(pose: &Pose, origin: [f64; 4]) -> bool {
             )
     });
     let pixels_per_chart = 0.25 * f64::from(pose.grid_width) * pose.zoom_log2.exp2();
-    residual.into_iter().map(|value| value * value).sum::<f64>().sqrt() * pixels_per_chart <= 0.5
+    residual
+        .into_iter()
+        .map(|value| value * value)
+        .sum::<f64>()
+        .sqrt()
+        * pixels_per_chart
+        <= 0.5
 }
 
 fn dot_f64(left: [f32; 4], right: [f64; 4]) -> f64 {
@@ -417,7 +423,10 @@ mod tests {
         rebase_pose(&mut expected, &sampled, [4.0, -8.0]);
         let mut wrong = sampled;
         rebase_pose(&mut wrong, &newer_hot, [4.0, -8.0]);
-        assert_ne!(expected.centre_from_reference_px, wrong.centre_from_reference_px);
+        assert_ne!(
+            expected.centre_from_reference_px,
+            wrong.centre_from_reference_px
+        );
 
         ledger.apply_reference_shift(2, 2, [4.0, -8.0]);
         assert_eq!(
@@ -441,12 +450,7 @@ mod tests {
         assert!(ledger.invalidate_incompatible(128, ORIGIN, ObjectAngles::JULIA, MODE));
 
         begin(&mut ledger, 2, 2);
-        ledger.invalidate_incompatible(
-            64,
-            [0.0, 0.0, 1.0, 0.0],
-            ObjectAngles::JULIA,
-            MODE,
-        );
+        ledger.invalidate_incompatible(64, [0.0, 0.0, 1.0, 0.0], ObjectAngles::JULIA, MODE);
         assert!(matches!(
             ledger.complete(measurement(2)),
             Some(SceneCompletion::Dropped {
