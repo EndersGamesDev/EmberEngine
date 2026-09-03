@@ -1,5 +1,9 @@
 //! Requested controls and worker-owned HOT/MAIN publication integration.
 
+#[cfg(test)]
+use std::cell::Cell;
+use std::cell::RefCell;
+
 use ember_julibrot_math::{
     Axis4, BigCentre, Homography, MathError, NavigationDelta, ObjectAngles, Plane, PlaneAngles,
     Pose, PoseMap, PrecisionMode, SEED_AXES, ViewControls, construct_plane, navigation_delta,
@@ -319,6 +323,45 @@ pub struct HotFrame {
     pub pose: Pose,
 }
 
+/// The bit-exact inputs that determine one checked neutral-height map.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ScreenMapKey {
+    object: [u64; 6],
+    camera: [u64; 10],
+    camera_translation: [u64; 5],
+    camera_yaw: u64,
+    camera_pitch: u64,
+    height_scale: u64,
+    distance_five: u64,
+    distance_four: u64,
+    zoom_log2: u64,
+    extent: [u32; 2],
+}
+
+impl ScreenMapKey {
+    fn new(object: ObjectAngles, view: ViewControls, zoom_log2: f64, extent: [u32; 2]) -> Self {
+        Self {
+            object: object.as_array().map(f64::to_bits),
+            camera: view.camera.map(f64::to_bits),
+            camera_translation: view.camera_translation.map(f64::to_bits),
+            camera_yaw: view.camera_yaw.to_bits(),
+            camera_pitch: view.camera_pitch.to_bits(),
+            height_scale: view.height_scale.to_bits(),
+            distance_five: view.distance_five.to_bits(),
+            distance_four: view.distance_four.to_bits(),
+            zoom_log2: zoom_log2.to_bits(),
+            extent,
+        }
+    }
+}
+
+/// One checked neutral-height map and the exact key that produced it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CheckedScreenMap {
+    key: ScreenMapKey,
+    map: PoseMap,
+}
+
 /// One worker-owned centre snapshot paired with the app's accumulated request reason.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReferenceSubmission {
@@ -334,8 +377,11 @@ pub struct ViewerController {
     owner: ViewerOwner,
     requested: RequestedControls,
     checked_plane: Plane,
+    checked_screen_maps: RefCell<[Option<CheckedScreenMap>; 2]>,
     #[cfg(test)]
     plane_constructions: u64,
+    #[cfg(test)]
+    map_constructions: Cell<u64>,
     navigation_centre_f64: [f64; 4],
     staged_hot: HotState,
     staged_main: MainState,
@@ -413,8 +459,11 @@ impl ViewerController {
             owner,
             requested,
             checked_plane: plane,
+            checked_screen_maps: RefCell::new([None; 2]),
             #[cfg(test)]
             plane_constructions: 1,
+            #[cfg(test)]
+            map_constructions: Cell::new(0),
             navigation_centre_f64: origin,
             staged_hot: initial.hot,
             staged_main: initial.main,
@@ -902,6 +951,11 @@ impl ViewerController {
         if self.owner.epoch_exhausted() {
             return Err(AppError::EpochExhausted);
         }
+        if state.hot.zoom_log2.to_bits() != self.requested.zoom_log2.to_bits() {
+            return Err(AppError::Math(
+                "HOT zoom disagrees with the requested zoom".to_string(),
+            ));
+        }
         // The worker record still carries the seed-axis words; no control selects axes, so the
         // app pins them and refuses a record that disagrees rather than drawing a different plane.
         if axis(state.main.plane_axis_a)? != SEED_AXES[0]
@@ -913,12 +967,7 @@ impl ViewerController {
         }
         let object = self.requested.object_angles;
         let plane = self.checked_plane;
-        let map = map_for(
-            object,
-            self.requested.view,
-            state.hot.zoom_log2,
-            grid_extent,
-        )?;
+        let map = self.screen_map(grid_extent)?;
         let displacement_scale = f64::from(grid_extent[0]) / f64::from(self.grid_width);
         let pose = Pose {
             epoch: state.epoch,
@@ -1009,12 +1058,34 @@ impl ViewerController {
     ///
     /// Returns a typed math refusal for an invalid extent or degenerate accepted view.
     pub fn screen_map(&self, grid_extent: [u32; 2]) -> Result<PoseMap, AppError> {
-        map_for(
-            self.requested.object_angles,
-            self.requested.view,
-            self.requested.zoom_log2,
-            grid_extent,
-        )
+        let object = self.requested.object_angles;
+        let view = self.requested.view;
+        let zoom_log2 = self.requested.zoom_log2;
+        let key = ScreenMapKey::new(object, view, zoom_log2, grid_extent);
+        let cached = self
+            .checked_screen_maps
+            .borrow()
+            .iter()
+            .copied()
+            .flatten()
+            .find(|cached| cached.key == key)
+            .map(|cached| cached.map);
+        if let Some(cached) = cached {
+            return Ok(cached);
+        }
+        let map = map_for(object, view, zoom_log2, grid_extent)?;
+        let mut cached = self.checked_screen_maps.borrow_mut();
+        cached[0] = cached[1];
+        cached[1] = Some(CheckedScreenMap { key, map });
+        #[cfg(test)]
+        self.map_constructions
+            .set(self.map_constructions.get().saturating_add(1));
+        Ok(map)
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn map_construction_count(&self) -> u64 {
+        self.map_constructions.get()
     }
 
     fn mapped_screen_map(&self, grid_extent: [u32; 2]) -> Result<Homography, AppError> {
@@ -1487,6 +1558,94 @@ mod tests {
         viewer.set_object_angles(angles).expect("unchanged angles");
         viewer.drain_hot([960, 540]).expect("unchanged refresh");
         assert_eq!(viewer.plane_constructions, 2);
+    }
+
+    #[test]
+    fn viewer_refresh_reuses_the_checked_map_until_one_key_field_changes() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        assert_eq!(viewer.map_constructions.get(), 0);
+
+        for _ in 0..120 {
+            let frame = viewer.drain_hot(REFERENCE_GRID).expect("unchanged refresh");
+            assert_eq!(
+                viewer.screen_map(REFERENCE_GRID).expect("refresh stamp"),
+                frame.pose.map
+            );
+        }
+        assert_eq!(
+            viewer.map_constructions.get(),
+            1,
+            "120 HOT maps and 120 refresh stamps share one checked construction"
+        );
+
+        let mut view = viewer.requested().view;
+        view.camera_yaw += 0.125;
+        viewer
+            .set_view_controls(view)
+            .expect("changed VIEW controls");
+        viewer.drain_hot(REFERENCE_GRID).expect("changed VIEW map");
+        assert_eq!(viewer.map_constructions.get(), 2);
+
+        viewer.wheel_zoom(1.0, [0.0; 2]).expect("changed zoom map");
+        viewer
+            .drain_hot(REFERENCE_GRID)
+            .expect("changed zoom frame");
+        assert_eq!(viewer.map_constructions.get(), 3);
+
+        let mut object = viewer.requested().object_angles;
+        object.rho_13 = 0.125;
+        viewer.set_object_angles(object).expect("changed object");
+        viewer
+            .drain_hot(REFERENCE_GRID)
+            .expect("changed object map");
+        assert_eq!(viewer.map_constructions.get(), 4);
+
+        viewer.drain_hot([800, 600]).expect("changed extent map");
+        assert_eq!(viewer.map_constructions.get(), 5);
+
+        let mut signed_zero_view = viewer.requested().view;
+        signed_zero_view.camera_pitch = -0.0;
+        viewer
+            .set_view_controls(signed_zero_view)
+            .expect("signed-zero VIEW controls");
+        viewer.drain_hot([800, 600]).expect("signed-zero VIEW map");
+        assert_eq!(viewer.map_constructions.get(), 6);
+    }
+
+    #[test]
+    fn drained_hot_pose_zoom_matches_the_requested_zoom() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        viewer
+            .wheel_zoom(3.25, [11.0, -7.0])
+            .expect("finite zoom edit");
+        let frame = viewer.drain_hot(REFERENCE_GRID).expect("zoomed HOT frame");
+        assert_eq!(
+            frame.pose.zoom_log2.to_bits(),
+            viewer.requested().zoom_log2.to_bits()
+        );
+    }
+
+    #[test]
+    #[ignore = "measurement harness"]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the explicitly selected performance harness reports construction counts"
+    )]
+    fn measures_viewer_refresh_map_constructions_before_after() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        let preview_extent = [120, 68];
+        for _ in 0..120 {
+            viewer.drain_hot(preview_extent).expect("unchanged HOT map");
+            viewer
+                .screen_map(REFERENCE_GRID)
+                .expect("unchanged stamp map");
+        }
+        let before_constructions = 240;
+        let after_constructions = viewer.map_constructions.get();
+        assert_eq!(after_constructions, 2);
+        eprintln!(
+            "PF-L5 viewer_refreshes=120 before_constructions={before_constructions} after_constructions={after_constructions}"
+        );
     }
 
     #[test]

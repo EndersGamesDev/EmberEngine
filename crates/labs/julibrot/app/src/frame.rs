@@ -382,6 +382,13 @@ const fn stamped_extent(plan: &RefinementPlan) -> [u32; 2] {
     [plan.requested_extent.width, plan.requested_extent.height]
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+fn stamped_screen_map(viewer: &ViewerController, plan: &RefinementPlan) -> PoseMap {
+    viewer
+        .screen_map(stamped_extent(plan))
+        .unwrap_or(PoseMap::EdgeOn)
+}
+
 /// Publishes the level a scene submission represents even when no kernel dispatch runs.
 #[cfg(any(target_arch = "wasm32", test))]
 const fn stamp_scene_level(grid: &mut EscapeGrid, plan: &RefinementPlan, level: RefinementLevel) {
@@ -1648,9 +1655,7 @@ mod browser {
                 view: requested.view,
                 zoom_log2: requested.zoom_log2,
                 object_angles: requested.object_angles,
-                map: viewer
-                    .screen_map(super::stamped_extent(&self.plan))
-                    .unwrap_or(PoseMap::EdgeOn),
+                map: super::stamped_screen_map(viewer, &self.plan),
                 precision_mode: self.main.precision_mode,
             }
         }
@@ -2384,7 +2389,7 @@ mod tests {
         SubmissionKind, apply_precision_mode, arrival_is_current, defer_scene_until_relief_redraw,
         expand_reference_texels_into, fence_error, hold_redraw_during_scene, horizon_facts,
         main_for_grid, published_iteration_cap, schedule_exposure_fill, stamp_scene_level,
-        stamped_extent, view_projection_changed,
+        stamped_extent, stamped_screen_map, view_projection_changed,
     };
     use crate::{AppError, FramePolicy, LevelTimingLedger, ViewerController};
     use ember_julibrot_present::{SampleClass, SubmissionMeasurement};
@@ -2543,6 +2548,31 @@ mod tests {
                 level == RefinementLevel::Final,
                 "level {level:?}"
             );
+        }
+    }
+
+    #[test]
+    fn browser_refresh_reuses_preview_and_requested_extent_maps() {
+        let plan = plan_refinement(
+            GridExtent {
+                width: 960,
+                height: 540,
+            },
+            EscapeParams::new(512),
+            |_| true,
+        )
+        .expect("the ladder fixture has enough capacity")
+        .with_precision_mode(PrecisionMode::PictureFast);
+        let preview = plan.level(RefinementLevel::Preview).extent;
+        let preview_extent = [preview.width, preview.height];
+        let requested_extent = stamped_extent(&plan);
+        assert_ne!(preview_extent, requested_extent);
+
+        let mut viewer = ViewerController::new(requested_extent).expect("canonical viewer");
+        for _ in 0..120 {
+            viewer.drain_hot(preview_extent).expect("Preview HOT map");
+            std::hint::black_box(stamped_screen_map(&viewer, &plan));
+            assert_eq!(viewer.map_construction_count(), 2);
         }
     }
 

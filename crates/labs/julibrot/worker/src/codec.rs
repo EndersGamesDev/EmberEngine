@@ -16,7 +16,7 @@ use ember_julibrot_math::{PrecisionMode, ReferencePass};
 const REQUEST_DEPTH_OFFSET: usize = HEADER_BYTES;
 const REQUEST_REASON_OFFSET: usize = 36;
 const REQUEST_CENTRE_REVISION_OFFSET: usize = 40;
-const REQUEST_LIMB_COUNT_OFFSET: usize = 44;
+pub(crate) const REQUEST_LIMB_COUNT_OFFSET: usize = 44;
 const REQUEST_DESCRIPTORS_OFFSET: usize = 48;
 const REQUEST_DESCRIPTOR_BYTES: usize = 16;
 pub(crate) const REQUEST_MODE_OFFSET: usize = 112;

@@ -20,6 +20,57 @@ use crate::{
     WorkerConfig, WorkerFacts, WorkerMode,
 };
 
+/// A fixed-capacity FIFO whose `clear` drops occupied values in physical slot order.
+struct TwoSlotQueue<T> {
+    slots: [Option<T>; 2],
+    head: usize,
+    len: usize,
+}
+
+impl<T> TwoSlotQueue<T> {
+    const fn new() -> Self {
+        Self {
+            slots: [None, None],
+            head: 0,
+            len: 0,
+        }
+    }
+
+    const fn len(&self) -> usize {
+        self.len
+    }
+
+    const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn push_back(&mut self, value: T) -> Result<(), T> {
+        if self.len == 2 {
+            return Err(value);
+        }
+        let tail = (self.head + self.len) & 1;
+        self.slots[tail] = Some(value);
+        self.len += 1;
+        Ok(())
+    }
+
+    const fn pop_front(&mut self) -> Option<T> {
+        if self.is_empty() {
+            return None;
+        }
+        let value = self.slots[self.head].take();
+        self.head = (self.head + 1) & 1;
+        self.len -= 1;
+        value
+    }
+
+    fn clear(&mut self) {
+        self.slots = [None, None];
+        self.head = 0;
+        self.len = 0;
+    }
+}
+
 /// One owner-held pool buffer with the exact wire operations the owner performs.
 pub(crate) trait OwnerSlot: Sized {
     /// Reads the immutable pool and slot identity.
@@ -106,7 +157,7 @@ pub(crate) struct OwnerCore<P: OwnerPort> {
     config: WorkerConfig,
     request_owned: Vec<P::Slot>,
     orbit_owned: Vec<P::Slot>,
-    arrivals: Vec<P::Slot>,
+    arrivals: TwoSlotQueue<P::Slot>,
     pending_request: Option<OrbitRequest>,
     latest_generation: u32,
     latest_centre_revision: u32,
@@ -138,7 +189,7 @@ impl<P: OwnerPort> OwnerCore<P> {
             config,
             request_owned: Vec::with_capacity(2),
             orbit_owned: Vec::with_capacity(2),
-            arrivals: Vec::with_capacity(2),
+            arrivals: TwoSlotQueue::new(),
             pending_request: None,
             latest_generation: 0,
             latest_centre_revision: 0,
@@ -210,10 +261,7 @@ impl<P: OwnerPort> OwnerCore<P> {
     /// Takes the next arrival together with the centre revision it belongs to.
     pub(crate) fn take_arrival(&mut self) -> Option<(P::Slot, u32)> {
         self.advance();
-        if self.arrivals.is_empty() {
-            return None;
-        }
-        let slot = self.arrivals.remove(0);
+        let slot = self.arrivals.pop_front()?;
         let header = match slot.header() {
             Ok(header) => header,
             Err(error) => {
@@ -281,7 +329,9 @@ impl<P: OwnerPort> OwnerCore<P> {
                 } else if self.arrivals.len() == 2 {
                     return Err(ChannelError::new(ErrorCode::BufferStarved, 2, 0, 0));
                 } else {
-                    self.arrivals.push(slot);
+                    self.arrivals
+                        .push_back(slot)
+                        .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, 2, 0, 0))?;
                 }
             }
             (Pool::Orbit, MessageKind::CreditStale) => {
@@ -575,8 +625,7 @@ impl<P: OwnerPort> OwnerCore<P> {
     }
 
     fn return_queued_arrivals(&mut self) -> Result<(), ChannelError> {
-        while !self.arrivals.is_empty() {
-            let slot = self.arrivals.remove(0);
+        while let Some(slot) = self.arrivals.pop_front() {
             self.return_stale_slot(slot)?;
         }
         Ok(())
@@ -662,10 +711,11 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::VecDeque;
     use std::rc::Rc;
+    use std::time::Instant;
 
     use ember_julibrot_math::PrecisionMode;
 
-    use super::{ControlMessage, OwnerCore, OwnerPort, OwnerSlot};
+    use super::{ControlMessage, OwnerCore, OwnerPort, OwnerSlot, TwoSlotQueue};
     use crate::wire::WireBuffer;
     use crate::{
         ChannelError, CoordinateDescriptor, EncodedCentre, ErrorCode, JULIBROT_ABI_VERSION,
@@ -991,6 +1041,30 @@ mod tests {
         .unwrap()
     }
 
+    fn largest_canonical_request(generation: u32) -> OrbitRequest {
+        let limbs = vec![1_u32; 128];
+        let coordinates = core::array::from_fn(|index| CoordinateDescriptor {
+            sign: u32::try_from(index % 2).unwrap_or(0),
+            exponent_twos_complement: 0,
+            limb_start: u32::try_from(index * 32).unwrap_or(0),
+            limb_count: 32,
+        });
+        OrbitRequest::new(
+            generation,
+            EncodedCentre {
+                revision: generation,
+                coordinates,
+                limbs,
+            },
+            0,
+            4_096,
+            4_096,
+            PrecisionMode::Deterministic,
+            OrbitReason::INITIAL,
+        )
+        .unwrap()
+    }
+
     const fn zero_record() -> ReferenceOrbitRecord {
         ReferenceOrbitRecord { re: 0.0, im: 0.0 }
     }
@@ -1134,6 +1208,151 @@ mod tests {
             SubmitOutcome::GenerationExhausted
         );
         assert_eq!(harness.core.take_error(), None);
+    }
+
+    #[test]
+    fn two_queued_arrivals_remain_fifo() {
+        let mut harness = Harness::boot(64);
+        assert_eq!(harness.submit(1, 64), SubmitOutcome::Transferred);
+        harness.produce(4);
+        assert_eq!(harness.submit(2, 64), SubmitOutcome::Transferred);
+        harness.produce(4);
+        assert_eq!(harness.core.facts().orbit_queue_depth, 2);
+
+        assert_eq!(
+            harness.drain_arrival(OrbitDisposition::Stale).0,
+            1,
+            "the oldest queued arrival drains first"
+        );
+        assert_eq!(
+            harness.drain_arrival(OrbitDisposition::Applied).0,
+            2,
+            "the newest queued arrival drains second"
+        );
+        assert_eq!(harness.core.facts().orbit_queue_depth, 0);
+    }
+
+    #[test]
+    fn a_full_two_slot_queue_refuses_without_overwriting() {
+        let mut queue = TwoSlotQueue::new();
+        assert_eq!(queue.push_back(10), Ok(()));
+        assert_eq!(queue.push_back(20), Ok(()));
+        assert_eq!(queue.push_back(30), Err(30));
+        assert_eq!(queue.len(), 2);
+        assert_eq!(queue.pop_front(), Some(10));
+        assert_eq!(queue.pop_front(), Some(20));
+    }
+
+    #[test]
+    #[ignore = "measurement harness"]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the explicitly selected performance harness reports its wall measurement"
+    )]
+    fn measures_two_slot_arrival_drain_wall_before_after() {
+        const DRAINS: u32 = 20_000_000;
+        let mut shifted = vec![0_u32, 1];
+        let shifted_start = Instant::now();
+        let mut shifted_sum = 0_u64;
+        for next in 2..DRAINS + 2 {
+            shifted_sum = shifted_sum.wrapping_add(u64::from(shifted.remove(0)));
+            shifted.push(next);
+        }
+        let shifted_wall = shifted_start.elapsed();
+
+        let mut fixed = TwoSlotQueue::new();
+        fixed.push_back(0_u32).expect("first fixed slot");
+        fixed.push_back(1).expect("second fixed slot");
+        let fixed_start = Instant::now();
+        let mut fixed_sum = 0_u64;
+        for next in 2..DRAINS + 2 {
+            fixed_sum = fixed_sum.wrapping_add(u64::from(
+                fixed
+                    .pop_front()
+                    .expect("the two-slot queue stays populated"),
+            ));
+            fixed.push_back(next).expect("one fixed slot is free");
+        }
+        let fixed_wall = fixed_start.elapsed();
+
+        assert_eq!(shifted_sum, fixed_sum);
+        assert_eq!(fixed.pop_front(), Some(shifted[0]));
+        assert_eq!(fixed.pop_front(), Some(shifted[1]));
+        eprintln!(
+            "PF-V5 drains={DRAINS} shifted_vec_us={} fixed_queue_us={}",
+            shifted_wall.as_micros(),
+            fixed_wall.as_micros()
+        );
+    }
+
+    #[test]
+    fn the_largest_canonical_request_uses_only_its_declared_prefix() {
+        let request = largest_canonical_request(1);
+        let prefix_bytes = request.centre().request_bytes().unwrap();
+        let mut buffer = WireBuffer::new(Pool::Request, 0, 4_096).unwrap();
+        request.encode_into(&mut buffer).unwrap();
+
+        assert_eq!(prefix_bytes, 628);
+        assert_eq!(buffer.capacity(), 32_832);
+        assert_eq!(
+            prefix_bytes,
+            crate::codec::REQUEST_FIXED_END + request.centre().limbs.len() * 4
+        );
+        assert_eq!(OrbitRequest::decode(&buffer).unwrap(), request);
+    }
+
+    #[test]
+    fn browser_request_decode_uses_one_prefix_bulk_copy() {
+        let source = include_str!("browser.rs");
+        let body = source
+            .split_once("fn decode_request")
+            .and_then(|(_, suffix)| suffix.split_once("pub(crate) fn write_empty"))
+            .map(|(body, _)| body)
+            .expect("browser request decoder body");
+        assert!(body.contains("if used > available"));
+        assert!(body.contains(".subarray(0, used)"));
+        assert!(body.contains(".copy_to("));
+        assert!(!body.contains("get_index"));
+        assert!(!body.contains("used..available"));
+    }
+
+    #[test]
+    #[ignore = "measurement harness"]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the explicitly selected performance harness reports copied bytes and wall"
+    )]
+    fn measures_browser_request_decode_copy_bytes() {
+        const COPIES: u32 = 20_000;
+        let request = largest_canonical_request(1);
+        let prefix_bytes = request.centre().request_bytes().unwrap();
+        let mut buffer = WireBuffer::new(Pool::Request, 0, 4_096).unwrap();
+        request.encode_into(&mut buffer).unwrap();
+
+        let whole_start = Instant::now();
+        let mut whole_total = 0_usize;
+        for _ in 0..COPIES {
+            let copied = std::hint::black_box(buffer.as_bytes().to_vec());
+            whole_total = whole_total.saturating_add(copied.len());
+        }
+        let whole_wall = whole_start.elapsed();
+
+        let prefix_start = Instant::now();
+        let mut prefix_total = 0_usize;
+        for _ in 0..COPIES {
+            let copied = std::hint::black_box(buffer.as_bytes()[..prefix_bytes].to_vec());
+            prefix_total = prefix_total.saturating_add(copied.len());
+        }
+        let prefix_wall = prefix_start.elapsed();
+
+        assert_eq!(whole_total, buffer.capacity() * COPIES as usize);
+        assert_eq!(prefix_total, prefix_bytes * COPIES as usize);
+        eprintln!(
+            "PF-R7 copies={COPIES} whole_bytes_per_decode={} prefix_bytes_per_decode={prefix_bytes} native_whole_copy_us={} native_prefix_copy_us={}",
+            buffer.capacity(),
+            whole_wall.as_micros(),
+            prefix_wall.as_micros()
+        );
     }
 
     #[test]
