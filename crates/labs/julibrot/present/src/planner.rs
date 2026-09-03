@@ -48,8 +48,7 @@ impl Warp {
             return clear_only(true);
         }
         anchor_plan(last_frame, from_pose, to_pose, flat.forward, chart_residual)
-            .map(enforce_error_ceiling)
-            .unwrap_or_else(|| clear_only(true))
+            .map_or_else(|| clear_only(true), enforce_error_ceiling)
     }
 }
 
@@ -239,8 +238,8 @@ fn chart_residual(from: &Pose, to: &Pose) -> f64 {
             ];
             let mut vector = plane_point(to.plane, coordinate).map(|value| ratio * value);
             for (axis, value) in vector.iter_mut().enumerate() {
-                *value += (to.plane_origin[axis] - from.plane_origin[axis])
-                    * source_pixels_per_chart;
+                *value = (to.plane_origin[axis] - from.plane_origin[axis])
+                    .mul_add(source_pixels_per_chart, *value);
             }
             let projection = plane_projection(from.plane, vector);
             vector
@@ -841,8 +840,11 @@ mod tests {
             project_scene_point(
                 pose,
                 [
-                    f64::from(column) + 0.5 - 0.5 * f64::from(pose.grid_width),
-                    f64::from(row) + 0.5 - 0.5 * f64::from(pose.grid_height),
+                    0.5_f64.mul_add(
+                        -f64::from(pose.grid_width),
+                        f64::from(column) + 0.5,
+                    ),
+                    0.5_f64.mul_add(-f64::from(pose.grid_height), f64::from(row) + 0.5),
                 ],
                 2.0,
             )
@@ -899,8 +901,11 @@ mod tests {
             for row in 0..extent[1] {
                 for column in 0..extent[0] {
                     let target = [
-                        f64::from(column) + 0.5 - 0.5 * f64::from(extent[0]),
-                        f64::from(row) + 0.5 - 0.5 * f64::from(extent[1]),
+                        0.5_f64.mul_add(
+                            -f64::from(extent[0]),
+                            f64::from(column) + 0.5,
+                        ),
+                        0.5_f64.mul_add(-f64::from(extent[1]), f64::from(row) + 0.5),
                     ];
                     if mesh_covers(&posed, target) {
                         saw_mesh = true;

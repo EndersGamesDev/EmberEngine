@@ -198,7 +198,11 @@ impl Presenter {
         self.main = Some(main);
     }
 
-    /// Writes exactly one 256-byte HOT payload into the checked three-slot ring.
+    /// Writes exactly one 288-byte HOT payload into the checked three-slot ring.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "HOT publication keeps pose, source identity, and exposure in one transaction"
+    )]
     pub fn write_hot(&mut self, slot: HotSlot, hot: PresentHot, validation: WarpValidation) {
         let screen_rows = match hot.map {
             PoseMap::Mapped(map) => pack_homography_rows(map.rows),
@@ -322,6 +326,10 @@ impl Presenter {
         result
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "scene submission keeps validation and its ordered GPU transaction together"
+    )]
     fn try_submit_scene(&mut self, hot_slot: HotSlot, now_ms: f64) -> Result<u64, PresentError> {
         let main = self.main.as_ref().ok_or(PresentError::InvalidGrid {
             width: 0,
