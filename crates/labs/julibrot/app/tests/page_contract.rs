@@ -325,6 +325,19 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
     assert!(INDEX.contains(
         r#"<label>precision<select id="precision"><option value="0">Deterministic</option><option value="1" selected>PictureFast</option></select></label>"#
     ));
+    assert!(MAIN.contains("event.preventDefault()"));
+    assert!(MAIN.contains("bounds.width, bounds.height"));
+    assert!(!MAIN.contains("SharedArrayBuffer"));
+}
+
+/// Nothing retired is still named, and every entry the page calls is still exported.
+///
+/// The two halves are one subject from opposite sides: a control the page dropped must not survive
+/// in the markup or the boundary, and an entry the loader calls must exist to be called. Split out
+/// of the control roster above because that test had grown past the length at which a failure
+/// tells you which of two unrelated things broke.
+#[test]
+fn the_retired_controls_name_nothing_and_the_wasm_boundary_is_complete() {
     // The retired mode selector and its Julia-only number boxes must name nothing.
     for retired in [
         "id=\"view\"",
@@ -360,9 +373,6 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
     // Presets are pure data in one place.
     assert!(STATE.contains("pub const PRESET_ROWS: [PresetRow; 4] = ["));
     assert_eq!(STATE.matches("PresetRow {").count(), 5);
-    assert!(MAIN.contains("event.preventDefault()"));
-    assert!(MAIN.contains("bounds.width, bounds.height"));
-    assert!(!MAIN.contains("SharedArrayBuffer"));
 }
 
 #[test]
