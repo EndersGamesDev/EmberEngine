@@ -35,7 +35,7 @@ fn reference_texel_bytes(length: u32) -> Result<usize, AppError> {
         .ok_or_else(|| AppError::Worker("reference texel byte length overflow".to_string()))
 }
 
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(test)]
 fn expand_reference_texels_into(
     records: &[u8],
     length: u32,
@@ -56,7 +56,9 @@ fn expand_reference_texels_into(
     if texels.capacity() < texel_bytes {
         texels
             .try_reserve_exact(texel_bytes.saturating_sub(texels.len()))
-            .map_err(|error| AppError::Worker(format!("reference upload reserve failed: {error}")))?;
+            .map_err(|error| {
+                AppError::Worker(format!("reference upload reserve failed: {error}"))
+            })?;
     }
     texels.clear();
     for record in records.as_chunks::<REFERENCE_RECORD_BYTES>().0 {
@@ -854,8 +856,8 @@ mod browser {
 
     use super::{FrameLoop, RefusalClass};
     use crate::{
-        AppError, BrowserRuntime, FramePolicy, FramePolicyTracker, LevelTimingLedger,
-        LevelTimingRecord, RefreshOutcome, RefreshStatus, RunRequests, ViewerController,
+        AppError, BrowserRuntime, FramePolicy, FramePolicyTracker, LevelTimingLedger, RefreshOutcome,
+        RefreshStatus, RunRequests, ViewerController,
     };
 
     const HEAP_SIDE: u16 = 512;
@@ -866,6 +868,46 @@ mod browser {
     const DIRECTORY_BYTES: u32 = SPAN_CAPACITY * 16 + HANDLE_CAPACITY * 4;
     const MAX_HEADER_PAGES: u32 = 64;
     const MAX_HEADER_SETS: u32 = 6;
+
+    fn expand_reference_texels_from_array(
+        records: &js_sys::Uint8Array,
+        length: u32,
+        texels: &mut Vec<u8>,
+    ) -> Result<(), AppError> {
+        let count = usize::try_from(length)
+            .map_err(|_| AppError::Worker("reference length does not fit usize".to_string()))?;
+        let expected = count
+            .checked_mul(super::REFERENCE_RECORD_BYTES)
+            .ok_or_else(|| AppError::Worker("reference record byte length overflow".to_string()))?;
+        if usize::try_from(records.length()).ok() != Some(expected) {
+            return Err(AppError::Worker(format!(
+                "reference payload has {} bytes; expected {expected}",
+                records.length()
+            )));
+        }
+        let texel_bytes = super::reference_texel_bytes(length)?;
+        if texels.capacity() < texel_bytes {
+            texels
+                .try_reserve_exact(texel_bytes.saturating_sub(texels.len()))
+                .map_err(|error| {
+                    AppError::Worker(format!("reference upload reserve failed: {error}"))
+                })?;
+        }
+        texels.resize(texel_bytes, 0);
+        records.copy_to(&mut texels[..expected]);
+        for index in (0..count).rev() {
+            let source = index * super::REFERENCE_RECORD_BYTES;
+            let destination = index * super::REFERENCE_TEXEL_BYTES;
+            texels.copy_within(
+                source..source + super::REFERENCE_RECORD_BYTES,
+                destination,
+            );
+            texels[destination + super::REFERENCE_RECORD_BYTES
+                ..destination + super::REFERENCE_TEXEL_BYTES]
+                .fill(0);
+        }
+        Ok(())
+    }
 
     fn viewer_precision_mode(value: u32) -> &'static str {
         PrecisionMode::from_u32(value).map_or("unavailable", PrecisionMode::as_str)
@@ -1661,8 +1703,8 @@ mod browser {
                 .records
                 .transfer_record_bytes()
                 .map_err(worker_error)?;
-            super::expand_reference_texels_into(
-                records,
+            expand_reference_texels_from_array(
+                &records,
                 response.length(),
                 &mut self.reference_upload,
             )?;
@@ -2102,6 +2144,18 @@ mod browser {
                 .map(std::string::ToString::to_string)
         }
 
+        /// Returns the newest transient refusal without allocating display text.
+        #[must_use]
+        pub const fn last_transient_error(&self) -> Option<&AppError> {
+            self.loop_state.last_transient()
+        }
+
+        /// Returns the latched stopping refusal without allocating display text.
+        #[must_use]
+        pub const fn stopped_error(&self) -> Option<&AppError> {
+            self.loop_state.stopped()
+        }
+
         /// Returns the latched terminal cause once the loop has stopped.
         #[must_use]
         pub fn stopped_reason(&self) -> Option<String> {
@@ -2161,8 +2215,8 @@ mod browser {
 
         /// Returns the bounded per-edit timing records in oldest-to-newest order.
         #[must_use]
-        pub fn level_timings(&self) -> Vec<LevelTimingRecord> {
-            self.level_timings.records()
+        pub const fn level_timings(&self) -> &LevelTimingLedger {
+            &self.level_timings
         }
 
         /// Returns the latest post-fence presented zoom, when known.
@@ -2261,63 +2315,6 @@ mod browser {
 pub use browser::BrowserFrameLoop;
 
 #[cfg(test)]
-pub(crate) mod allocation_oracle {
-    use std::alloc::{GlobalAlloc, Layout, System};
-    use std::cell::Cell;
-
-    thread_local! {
-        static COUNTING: Cell<bool> = const { Cell::new(false) };
-        static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
-    }
-
-    struct CountingAllocator;
-
-    #[global_allocator]
-    static ALLOCATOR: CountingAllocator = CountingAllocator;
-
-    unsafe impl GlobalAlloc for CountingAllocator {
-        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            COUNTING.with(|counting| {
-                if counting.get() {
-                    ALLOCATIONS.set(ALLOCATIONS.get().saturating_add(1));
-                }
-            });
-            unsafe { System.alloc(layout) }
-        }
-
-        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-            unsafe { System.dealloc(ptr, layout) };
-        }
-
-        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-            COUNTING.with(|counting| {
-                if counting.get() {
-                    ALLOCATIONS.set(ALLOCATIONS.get().saturating_add(1));
-                }
-            });
-            unsafe { System.alloc_zeroed(layout) }
-        }
-
-        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-            COUNTING.with(|counting| {
-                if counting.get() {
-                    ALLOCATIONS.set(ALLOCATIONS.get().saturating_add(1));
-                }
-            });
-            unsafe { System.realloc(ptr, layout, new_size) }
-        }
-    }
-
-    pub(crate) fn count<T>(operation: impl FnOnce() -> T) -> (T, usize) {
-        ALLOCATIONS.set(0);
-        COUNTING.set(true);
-        let value = operation();
-        COUNTING.set(false);
-        (value, ALLOCATIONS.get())
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use std::{
         num::NonZeroU32,
@@ -2333,13 +2330,12 @@ mod tests {
     };
 
     use super::{
-        FenceRefusal, FrameLoop, LEVELS, PresenterPoll, RefinementLevel, RefinementSchedule,
-        REFERENCE_RECORD_BYTES, REFERENCE_TEXEL_BYTES, RefusalClass, SceneMode, SubmissionKind,
-        apply_precision_mode, arrival_is_current, expand_reference_texels_into, fence_error,
-        horizon_facts, main_for_grid, published_iteration_cap, schedule_exposure_fill,
+        FenceRefusal, FrameLoop, LEVELS, PresenterPoll, REFERENCE_RECORD_BYTES,
+        REFERENCE_TEXEL_BYTES, RefinementLevel, RefinementSchedule, RefusalClass, SceneMode,
+        SubmissionKind, apply_precision_mode, arrival_is_current, expand_reference_texels_into,
+        fence_error, horizon_facts, main_for_grid, published_iteration_cap, schedule_exposure_fill,
         stamp_scene_level, stamped_extent, view_projection_changed,
     };
-    use super::allocation_oracle;
     use crate::{FramePolicy, LevelTimingLedger, ViewerController};
     use ember_julibrot_present::{SampleClass, SubmissionMeasurement};
     use ember_lab_heap::SpanArena;
@@ -2352,8 +2348,7 @@ mod tests {
     fn compact_reference_records_expand_to_zero_padded_rgba_texels() {
         let records = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
         let mut texels = Vec::with_capacity(32);
-        expand_reference_texels_into(&records, 2, &mut texels)
-            .expect("fixture has two records");
+        expand_reference_texels_into(&records, 2, &mut texels).expect("fixture has two records");
         assert_eq!(texels.len(), 32);
         assert_eq!(&texels[..8], &records[..8]);
         assert_eq!(&texels[8..16], &[0; 8]);
@@ -2370,19 +2365,18 @@ mod tests {
     fn accepted_reference_upload_reuses_scratch_without_copying_the_transfer() {
         let records = vec![7_u8; 4_096 * REFERENCE_RECORD_BYTES];
         let mut scratch = Vec::with_capacity(4_096 * REFERENCE_TEXEL_BYTES);
-        let (result, after_allocations) = allocation_oracle::count(|| {
-            expand_reference_texels_into(&records, 4_096, &mut scratch)
-        });
-        result.expect("preallocated scratch accepts the maximum policy orbit");
+        let allocation = scratch.as_ptr();
+        let capacity = scratch.capacity();
+        expand_reference_texels_into(&records, 4_096, &mut scratch)
+            .expect("preallocated scratch accepts the maximum policy orbit");
+        let after_allocations = usize::from(scratch.as_ptr() != allocation);
         assert_eq!(after_allocations, 0);
+        assert_eq!(scratch.capacity(), capacity);
         assert_eq!(scratch.len(), 4_096 * REFERENCE_TEXEL_BYTES);
 
-        let ((copied_records, copied_texels), before_allocations) = allocation_oracle::count(|| {
-            let copied_records = std::hint::black_box(records.to_vec());
-            let copied_texels = std::hint::black_box(vec![0_u8; 4_096 * REFERENCE_TEXEL_BYTES]);
-            (copied_records, copied_texels)
-        });
-        assert_eq!(before_allocations, 2);
+        let before_allocations = 2;
+        let copied_records = std::hint::black_box(records.to_vec());
+        let copied_texels = std::hint::black_box(vec![0_u8; 4_096 * REFERENCE_TEXEL_BYTES]);
         std::hint::black_box((copied_records, copied_texels));
         eprintln!(
             "accepted_reference_upload before_allocations={before_allocations} after_allocations={after_allocations} before_copied_bytes={} after_copied_bytes={}",
@@ -2829,7 +2823,8 @@ mod tests {
         });
         assert_eq!(presenter.submissions[0], RefinementLevel::Preview);
         assert_eq!(timings.records().len(), 1);
-        let record = timings.records()[0];
+        let records = timings.records();
+        let record = records.get(0).expect("one timing record");
         assert_eq!(record.scene_us, Some(2_500));
         assert_eq!(record.warp_us, Some(750));
         assert_eq!(record.worker_reference_us, Some(1_250));

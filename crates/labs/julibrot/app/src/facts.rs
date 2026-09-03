@@ -3,16 +3,83 @@
 use ember_julibrot_kernels::{KernelMode, RefinementLevel};
 use ember_julibrot_math::{precision_for, scaled_pixel_scale};
 use ember_julibrot_present::{SampleClass, SubmissionMeasurement};
-use serde::Serialize;
+use std::fmt;
 
-use crate::{App, FramePolicy, JULIBROT_ABI_VERSION, LevelTimingRecord};
+use serde::{Serialize, Serializer};
+
+use crate::{App, AppError, FramePolicy, JULIBROT_ABI_VERSION, LevelTimingLedger};
+
+const DEVICE_WALLS: &[&str] = &["WebGL2", "EXT_color_buffer_float", "RGBA32F usages"];
+const APP_POLICIES: &[&str] = &[
+    "shallow/deep switch zoom_log2=14",
+    "iteration cap=4096",
+    "worker credit=250000us/s",
+];
+
+/// Borrowed typed refusal serialized through its existing display contract.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DisplayFact<'a>(&'a AppError);
+
+impl Serialize for DisplayFact<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_str(self.0)
+    }
+}
+
+/// Capacity term serialized with the same text as the former allocated string.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LimitingTerm {
+    extent_divisor: u32,
+}
+
+impl fmt::Display for LimitingTerm {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "live heap/header capacity divisor {}",
+            self.extent_divisor
+        )
+    }
+}
+
+impl Serialize for LimitingTerm {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_str(self)
+    }
+}
+
+/// Allocation-free worker overlay object with the version-three JSON field order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct WorkerPageFacts {
+    epoch: u64,
+    last_applied_generation: u32,
+    last_ack_generation: u32,
+    orbit_queue_depth: u32,
+    shutdown_queue_depth: u32,
+    credit_us: u32,
+    last_compute_us: u32,
+    last_overfeed_us: u32,
+    applied_count: u32,
+    stale_count: u32,
+    cancelled_count: u32,
+    allocation_events: u32,
+    request_buffers_owned_main: u32,
+    orbit_buffers_owned_main: u32,
+    mode: u32,
+}
 
 /// Complete version-three overlay snapshot; absent delivered values serialize as `null`.
 #[derive(Clone, Debug, Serialize, PartialEq)]
-pub struct PageFacts {
+pub struct PageFacts<'a> {
     pub abi_version: u32,
-    pub adapter_name: String,
-    pub backend: String,
+    pub adapter_name: &'a str,
+    pub backend: &'a str,
     pub rgba32f_renderable: bool,
     pub requested_width: u32,
     pub requested_height: u32,
@@ -37,8 +104,8 @@ pub struct PageFacts {
     pub reference_shift_px: [f64; 2],
     pub scale_mantissa: Option<f32>,
     pub scale_exponent: Option<i32>,
-    pub kernel_mode: Option<String>,
-    pub refinement_level: Option<String>,
+    pub kernel_mode: Option<&'static str>,
+    pub refinement_level: Option<&'static str>,
     pub refinement_pending: bool,
     pub scene_mode: &'static str,
     pub scene_update_pending: bool,
@@ -59,7 +126,7 @@ pub struct PageFacts {
     pub rebase_count_sum: &'static str,
     pub rebase_count_max: &'static str,
     pub glitch_pixel_count: &'static str,
-    pub worker_facts: Option<serde_json::Value>,
+    pub worker_facts: Option<WorkerPageFacts>,
     pub worker_compute_us: Option<u32>,
     pub worker_credit_us: Option<u32>,
     pub worker_overfeed_us: Option<u32>,
@@ -72,9 +139,9 @@ pub struct PageFacts {
     pub navigation_pending_depth: u32,
     pub refresh_status: &'static str,
     pub transient_fence_refusals: u32,
-    pub last_transient_refusal: Option<String>,
+    pub last_transient_refusal: Option<DisplayFact<'a>>,
     pub presented_view_stale: bool,
-    pub loop_stopped_reason: Option<String>,
+    pub loop_stopped_reason: Option<DisplayFact<'a>>,
     pub palette_id: u32,
     pub object_angles: [f64; 6],
     pub plane_theta_1: f64,
@@ -105,19 +172,19 @@ pub struct PageFacts {
     pub warp_max_error_px: Option<f64>,
     pub warp_p95_error_px: Option<f64>,
     pub warp_exposed_fraction: Option<f64>,
-    pub warp_kind: String,
+    pub warp_kind: &'static str,
     pub scene_wall_ms: Option<f64>,
     pub scene_fence_wait_ms: Option<f64>,
     pub scene_polls: Option<u32>,
     pub warp_wall_ms: Option<f64>,
     pub warp_fence_wait_ms: Option<f64>,
     pub warp_polls: Option<u32>,
-    pub warmup_label: Option<String>,
-    pub second_frame_policy: Option<String>,
+    pub warmup_label: Option<&'static str>,
+    pub second_frame_policy: Option<&'static str>,
     pub timer_quantum_ms: Option<f64>,
-    pub device_walls: Vec<String>,
-    pub app_policies: Vec<String>,
-    pub limiting_term: Option<String>,
+    pub device_walls: &'static [&'static str],
+    pub app_policies: &'static [&'static str],
+    pub limiting_term: Option<LimitingTerm>,
     pub wasm_bundle_bytes: Option<u64>,
     pub javascript_bundle_bytes: Option<u64>,
     pub wasm_instance_count: u32,
@@ -125,15 +192,15 @@ pub struct PageFacts {
     pub precision_mode: &'static str,
     pub scene_precision_mode: Option<&'static str>,
     pub warp_precision_mode: Option<&'static str>,
-    pub level_timings: Vec<LevelTimingRecord>,
+    pub level_timings: &'a LevelTimingLedger,
     pub draft_pixels_discarded: Option<u32>,
     pub draft_iterations_discarded: Option<u64>,
 }
 
-impl PageFacts {
+impl<'a> PageFacts<'a> {
     /// Builds a snapshot without inventing any delivered or browser measurement.
     #[must_use]
-    pub fn snapshot(app: &App) -> Self {
+    pub fn snapshot(app: &'a App) -> Self {
         let requested = app.viewer().requested();
         let viewer = app.viewer().owner().snapshot();
         let device = app.runtime().facts();
@@ -149,8 +216,8 @@ impl PageFacts {
         let plan = loop_facts.plan();
         Self {
             abi_version: JULIBROT_ABI_VERSION,
-            adapter_name: device.adapter_name.clone(),
-            backend: device.backend.clone(),
+            adapter_name: &device.adapter_name,
+            backend: &device.backend,
             rgba32f_renderable: device.rgba32f_renderable,
             requested_width: device.width,
             requested_height: device.height,
@@ -175,10 +242,10 @@ impl PageFacts {
             reference_shift_px: viewer.main.reference_shift_px,
             scale_mantissa: scale.map(|value| value.mantissa),
             scale_exponent: scale.map(|value| value.exponent),
-            kernel_mode: dispatch.map(|facts| kernel_mode(facts.mode).to_string()),
+            kernel_mode: dispatch.map(|facts| kernel_mode(facts.mode)),
             refinement_level: present
                 .delivered_level
-                .map(|level| refinement_level(level).to_string()),
+                .map(refinement_level),
             refinement_pending: loop_facts.refinement_pending(),
             scene_mode: loop_facts.scene_mode().as_str(),
             scene_update_pending: loop_facts.scene_update_pending(),
@@ -199,7 +266,7 @@ impl PageFacts {
             rebase_count_sum: "unavailable",
             rebase_count_max: "unavailable",
             glitch_pixel_count: "unavailable",
-            worker_facts: Some(worker_json(worker)),
+            worker_facts: Some(worker_page_facts(worker)),
             worker_compute_us: nonzero(worker.last_compute_us),
             worker_credit_us: Some(worker.credit_us),
             worker_overfeed_us: Some(worker.last_overfeed_us),
@@ -212,19 +279,15 @@ impl PageFacts {
             navigation_pending_depth: app.viewer().owner().navigation_pending_depth(),
             refresh_status: loop_facts.last_status().name(),
             transient_fence_refusals: loop_facts.transient_refusals(),
-            last_transient_refusal: loop_facts.last_transient_refusal(),
+            last_transient_refusal: loop_facts.last_transient_error().map(DisplayFact),
             presented_view_stale: loop_facts.presented_view_is_stale(app.viewer()),
-            loop_stopped_reason: loop_facts.stopped_reason(),
+            loop_stopped_reason: loop_facts.stopped_error().map(DisplayFact),
             palette_id: requested.palette as u32,
             object_angles: requested.object_angles.as_array(),
             plane_theta_1: requested.object_angles.rho_13,
             plane_theta_2: requested.object_angles.rho_24,
             plane_origin: requested.plane_origin,
-            target_plane: app
-                .viewer()
-                .owner()
-                .navigation_centre()
-                .map_or(viewer.main.centre_f64, |centre| centre.to_f64_mirror()),
+            target_plane: app.viewer().navigation_centre_f64(),
             view_theta_1: requested.view.camera[0],
             view_theta_2: requested.view.camera[8],
             camera_angles: requested.view.camera,
@@ -249,7 +312,7 @@ impl PageFacts {
             warp_max_error_px: present.warp_max_error_px,
             warp_p95_error_px: present.warp_p95_error_px,
             warp_exposed_fraction: present.warp_exposed_fraction,
-            warp_kind: present.warp_kind.as_str().to_string(),
+            warp_kind: present.warp_kind.as_str(),
             scene_wall_ms: present.last_scene.map(|sample| sample.wall_ms),
             scene_fence_wait_ms: present.last_scene.map(|sample| sample.fence_wait_ms),
             scene_polls: present.last_scene.map(|sample| sample.polls),
@@ -257,23 +320,15 @@ impl PageFacts {
             warp_fence_wait_ms: present.last_warp.map(|sample| sample.fence_wait_ms),
             warp_polls: present.last_warp.map(|sample| sample.polls),
             warmup_label: newest_measurement(present.last_scene, present.last_warp)
-                .map(|sample| sample_class(sample.sample_class).to_string()),
-            second_frame_policy: frame_policy(loop_facts.frame_policy()).map(str::to_string),
+                .map(|sample| sample_class(sample.sample_class)),
+            second_frame_policy: frame_policy(loop_facts.frame_policy()),
             timer_quantum_ms: None,
-            device_walls: vec!["WebGL2", "EXT_color_buffer_float", "RGBA32F usages"]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
-            app_policies: vec![
-                "shallow/deep switch zoom_log2=14",
-                "iteration cap=4096",
-                "worker credit=250000us/s",
-            ]
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
+            device_walls: DEVICE_WALLS,
+            app_policies: APP_POLICIES,
             limiting_term: (plan.extent_divisor > 1)
-                .then(|| format!("live heap/header capacity divisor {}", plan.extent_divisor)),
+                .then_some(LimitingTerm {
+                    extent_divisor: plan.extent_divisor,
+                }),
             wasm_bundle_bytes: None,
             javascript_bundle_bytes: None,
             wasm_instance_count: 2,
@@ -327,24 +382,24 @@ fn newest_measurement(
     }
 }
 
-fn worker_json(facts: ember_julibrot_worker::WorkerFacts) -> serde_json::Value {
-    serde_json::json!({
-        "epoch": facts.epoch,
-        "last_applied_generation": facts.last_applied_generation,
-        "last_ack_generation": facts.last_ack_generation,
-        "orbit_queue_depth": facts.orbit_queue_depth,
-        "shutdown_queue_depth": facts.shutdown_queue_depth,
-        "credit_us": facts.credit_us,
-        "last_compute_us": facts.last_compute_us,
-        "last_overfeed_us": facts.last_overfeed_us,
-        "applied_count": facts.applied_count,
-        "stale_count": facts.stale_count,
-        "cancelled_count": facts.cancelled_count,
-        "allocation_events": facts.allocation_events,
-        "request_buffers_owned_main": facts.request_buffers_owned_main,
-        "orbit_buffers_owned_main": facts.orbit_buffers_owned_main,
-        "mode": facts.mode,
-    })
+const fn worker_page_facts(facts: ember_julibrot_worker::WorkerFacts) -> WorkerPageFacts {
+    WorkerPageFacts {
+        epoch: facts.epoch,
+        last_applied_generation: facts.last_applied_generation,
+        last_ack_generation: facts.last_ack_generation,
+        orbit_queue_depth: facts.orbit_queue_depth,
+        shutdown_queue_depth: facts.shutdown_queue_depth,
+        credit_us: facts.credit_us,
+        last_compute_us: facts.last_compute_us,
+        last_overfeed_us: facts.last_overfeed_us,
+        applied_count: facts.applied_count,
+        stale_count: facts.stale_count,
+        cancelled_count: facts.cancelled_count,
+        allocation_events: facts.allocation_events,
+        request_buffers_owned_main: facts.request_buffers_owned_main,
+        orbit_buffers_owned_main: facts.orbit_buffers_owned_main,
+        mode: facts.mode,
+    }
 }
 
 const fn frame_policy(policy: FramePolicy) -> Option<&'static str> {

@@ -336,6 +336,7 @@ pub struct ViewerController {
     checked_plane: Plane,
     #[cfg(test)]
     plane_constructions: u64,
+    navigation_centre_f64: [f64; 4],
     staged_hot: HotState,
     staged_main: MainState,
     pending_reason: Option<OrbitReason>,
@@ -414,6 +415,7 @@ impl ViewerController {
             checked_plane: plane,
             #[cfg(test)]
             plane_constructions: 1,
+            navigation_centre_f64: origin,
             staged_hot: initial.hot,
             staged_main: initial.main,
             pending_reason: Some(OrbitReason::INITIAL),
@@ -467,6 +469,7 @@ impl ViewerController {
         if let Some(error) = self.owner.take_navigation_error() {
             return Err(owner_error(error));
         }
+        self.refresh_navigation_centre_mirror();
         self.requested.zoom_log2 = zoom_log2;
         self.add_reason(OrbitReason::ZOOM_THRESHOLD.union(OrbitReason::CENTRE_THRESHOLD));
         Ok(NavigationEdit::Zoom {
@@ -490,6 +493,7 @@ impl ViewerController {
         if let Some(error) = self.owner.take_navigation_error() {
             return Err(owner_error(error));
         }
+        self.refresh_navigation_centre_mirror();
         self.add_reason(OrbitReason::CENTRE_THRESHOLD);
         let centre_delta_px = [-delta.pan_canvas_px[0], -delta.pan_canvas_px[1]];
         Ok(NavigationEdit::Pan { centre_delta_px })
@@ -733,6 +737,7 @@ impl ViewerController {
             return Err(owner_error(error));
         }
         self.pending_reason = Some(OrbitReason::INITIAL);
+        self.navigation_centre_f64 = origin;
         Ok(())
     }
 
@@ -748,6 +753,7 @@ impl ViewerController {
     pub fn set_centre(&mut self, centre: BigCentre) -> Result<(), AppError> {
         self.synchronize_shadow()?;
         let plane = self.checked_plane;
+        let centre_f64 = centre.to_f64_mirror();
         self.owner
             .configure_navigation(NavigationConfig {
                 centre: centre.clone(),
@@ -760,6 +766,7 @@ impl ViewerController {
         if let Some(error) = self.owner.take_navigation_error() {
             return Err(owner_error(error));
         }
+        self.navigation_centre_f64 = centre_f64;
         self.add_reason(OrbitReason::CENTRE_THRESHOLD);
         Ok(())
     }
@@ -950,6 +957,7 @@ impl ViewerController {
         reference_centre: BigCentre,
         plane: Plane,
     ) -> Result<(), AppError> {
+        let centre_f64 = centre.to_f64_mirror();
         self.owner
             .configure_navigation(NavigationConfig {
                 centre,
@@ -957,7 +965,15 @@ impl ViewerController {
                 plane,
                 grid_width: self.grid_width,
             })
-            .map_err(owner_error)
+            .map_err(owner_error)?;
+        self.navigation_centre_f64 = centre_f64;
+        Ok(())
+    }
+
+    /// Returns the cached finite navigation-centre mirror for allocation-free page facts.
+    #[must_use]
+    pub const fn navigation_centre_f64(&self) -> [f64; 4] {
+        self.navigation_centre_f64
     }
 
     /// Builds the accepted neutral-height screen map for one refinement extent.
@@ -997,6 +1013,12 @@ impl ViewerController {
             self.pending_reason
                 .map_or(reason, |pending| pending.union(reason)),
         );
+    }
+
+    fn refresh_navigation_centre_mirror(&mut self) {
+        if let Some(centre) = self.owner.navigation_centre() {
+            self.navigation_centre_f64 = centre.to_f64_mirror();
+        }
     }
 }
 
@@ -1407,6 +1429,49 @@ mod tests {
         viewer.set_object_angles(angles).expect("unchanged angles");
         viewer.drain_hot([960, 540]).expect("unchanged refresh");
         assert_eq!(viewer.plane_constructions, 2);
+    }
+
+    #[test]
+    fn cached_navigation_mirror_matches_the_owner_after_edits_and_acceptance() {
+        let mut viewer = ViewerController::new([960, 540]).expect("canonical viewer");
+        assert_eq!(
+            viewer.navigation_centre_f64(),
+            viewer
+                .owner()
+                .navigation_centre()
+                .expect("configured centre")
+                .to_f64_mirror()
+        );
+
+        viewer
+            .wheel_zoom(1.0, [37.0, -19.0])
+            .expect("finite anchored zoom");
+        viewer.drag_pan([8.0, -5.0]).expect("finite pan");
+        assert_eq!(
+            viewer.navigation_centre_f64(),
+            viewer
+                .owner()
+                .navigation_centre()
+                .expect("configured centre")
+                .to_f64_mirror()
+        );
+
+        let accepted = viewer
+            .owner()
+            .navigation_centre()
+            .expect("configured centre");
+        let plane = viewer.checked_plane;
+        viewer
+            .configure_navigation_context(accepted.clone(), accepted, plane)
+            .expect("accepted context");
+        assert_eq!(
+            viewer.navigation_centre_f64(),
+            viewer
+                .owner()
+                .navigation_centre()
+                .expect("configured centre")
+                .to_f64_mirror()
+        );
     }
 
     #[test]

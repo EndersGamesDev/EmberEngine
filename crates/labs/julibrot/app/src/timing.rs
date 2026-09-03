@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 
 use ember_julibrot_kernels::RefinementLevel;
 use ember_julibrot_present::SubmissionMeasurement;
-use serde::Serialize;
+use serde::{Serialize, Serializer, ser::SerializeSeq};
 
 /// Maximum number of per-level observations retained for the facts overlay.
 pub const LEVEL_TIMING_CAPACITY: usize = 64;
@@ -65,7 +65,7 @@ struct WorkerTiming {
 }
 
 /// Bounded application ledger populated only from measured completion records.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct LevelTimingLedger {
     levels: VecDeque<TrackedLevel>,
     workers: VecDeque<WorkerTiming>,
@@ -149,6 +149,19 @@ impl LevelTimingLedger {
             .iter_mut()
             .rev()
             .find(|item| item.scene_id == scene_id)
+    }
+}
+
+impl Serialize for LevelTimingLedger {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut sequence = serializer.serialize_seq(Some(self.levels.len()))?;
+        for level in &self.levels {
+            sequence.serialize_element(&level.record)?;
+        }
+        sequence.end()
     }
 }
 
