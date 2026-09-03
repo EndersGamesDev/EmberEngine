@@ -7,7 +7,6 @@ use crate::{
 
 const HEIGHT_SAMPLES: [f64; 5] = [-2.0, -1.0, 0.0, 1.0, 2.0];
 const SCREEN_STEPS: u32 = 9;
-const MANDATORY_SCREEN_STRIDE: usize = 4;
 const POLE_EPSILON: f64 = 1.0e-4;
 const MAX_CHART_RESIDUAL_PX: f64 = 0.5;
 
@@ -28,10 +27,9 @@ impl Warp {
         last_frame: &SceneFrame,
         from_pose: &Pose,
         to_pose: &Pose,
-        precision_mode: PrecisionMode,
-        validation: WarpValidation,
+        _precision_mode: PrecisionMode,
+        _validation: WarpValidation,
     ) -> WarpPlan {
-        let full_corpus = validation.samples_corpus(precision_mode);
         if matches!(to_pose.map, PoseMap::EdgeOn) {
             return edge_on();
         }
@@ -54,7 +52,6 @@ impl Warp {
             to_pose,
             flat.forward,
             chart_residual,
-            full_corpus,
         )
         .map_or_else(|| clear_only(true), enforce_error_ceiling)
     }
@@ -116,14 +113,12 @@ fn anchor_plan(
     to_pose: &Pose,
     flat_forward: [f64; 9],
     chart_residual: f64,
-    full_corpus: bool,
 ) -> Option<WarpPlan> {
     let source = screen_corners(from_pose).map(|[x, y]| [x, y, 1.0]);
     let destination = screen_corners(from_pose).map(|corner| homogeneous(flat_forward, corner));
     let inverse_sampling = solve_homogeneous(destination, source)?;
     let rows = pack_homography_rows(inverse_sampling)?;
-    let metrics =
-        sampled_errors(from_pose, to_pose, inverse_sampling, full_corpus).and_then(|mut errors| {
+    let metrics = sampled_errors(from_pose, to_pose, inverse_sampling).and_then(|mut errors| {
             if errors.is_empty() {
                 return None;
             }
@@ -193,41 +188,24 @@ fn sampled_errors(
     from_pose: &Pose,
     to_pose: &Pose,
     approximate: [f64; 9],
-    full_corpus: bool,
 ) -> Option<Vec<f64>> {
-    let screen_stride = if full_corpus {
-        1
-    } else {
-        MANDATORY_SCREEN_STRIDE
-    };
-    let screen_sample_count = usize::try_from(SCREEN_STEPS).ok()?.div_ceil(screen_stride);
+    let screen_sample_count = usize::try_from(SCREEN_STEPS).ok()?;
     let sample_count = screen_sample_count * screen_sample_count * HEIGHT_SAMPLES.len();
     let mut errors = Vec::new();
     errors.try_reserve_exact(sample_count).ok()?;
-    for row in (0..SCREEN_STEPS).step_by(screen_stride) {
-        for column in (0..SCREEN_STEPS).step_by(screen_stride) {
+    for row in 0..SCREEN_STEPS {
+        for column in 0..SCREEN_STEPS {
             let target_screen = [
                 (f64::from(column) / f64::from(SCREEN_STEPS - 1) - 0.5)
                     * f64::from(to_pose.grid_width),
                 (f64::from(row) / f64::from(SCREEN_STEPS - 1) - 0.5)
                     * f64::from(to_pose.grid_height),
             ];
-            let Some(source_screen) = apply_homography(approximate, target_screen) else {
-                continue;
-            };
+            let source_screen = apply_homography(approximate, target_screen)?;
             for height in HEIGHT_SAMPLES {
-                let Some(destination_relief) = project_scene_point(to_pose, target_screen, height)
-                else {
-                    continue;
-                };
-                let Some(expected_source) = project_scene_point(from_pose, source_screen, height)
-                else {
-                    continue;
-                };
-                let Some(approximate_source) = apply_homography(approximate, destination_relief)
-                else {
-                    continue;
-                };
+                let destination_relief = project_scene_point(to_pose, target_screen, height)?;
+                let expected_source = project_scene_point(from_pose, source_screen, height)?;
+                let approximate_source = apply_homography(approximate, destination_relief)?;
                 let pixel_error = (approximate_source[0] - expected_source[0])
                     .hypot(approximate_source[1] - expected_source[1]);
                 if !pixel_error.is_finite() {
@@ -324,6 +302,15 @@ fn dot4(basis: [f32; 4], point: [f64; 4]) -> f64 {
     reason = "height zero is a semantic branch whose exact identity is part of the shader contract"
 )]
 pub fn project_scene_point(pose: &Pose, screen: [f64; 2], record_height: f64) -> Option<[f64; 2]> {
+    project_scene_point_with_shortcut(pose, screen, record_height, true)
+}
+
+fn project_scene_point_with_shortcut(
+    pose: &Pose,
+    screen: [f64; 2],
+    record_height: f64,
+    flat_shortcut: bool,
+) -> Option<[f64; 2]> {
     if pose.grid_width == 0 || pose.grid_height == 0 || !pose.view.is_valid() {
         return None;
     }
@@ -339,7 +326,7 @@ pub fn project_scene_point(pose: &Pose, screen: [f64; 2], record_height: f64) ->
         mapped_homogeneous[1] / mapped_homogeneous[2],
     ];
     let height = pose.view.height_scale * record_height;
-    if height == 0.0 {
+    if flat_shortcut && height == 0.0 {
         return Some(screen);
     }
     let chart_coordinate = [
@@ -587,7 +574,7 @@ mod tests {
     }
 
     #[test]
-    fn height_zero_is_identity_for_every_view_fixture() {
+    fn height_zero_shortcut_matches_the_full_forward_chain() {
         let mut moved_camera = [0.0; 10];
         moved_camera[0] = 0.6;
         moved_camera[8] = -0.3;
@@ -598,6 +585,7 @@ mod tests {
                 camera_translation: [0.2, -0.1, 0.3, 0.05, -0.2],
                 camera_yaw: RELIEF_YAW,
                 camera_pitch: RELIEF_PITCH,
+                height_scale: 1.0,
                 distance_five: 6.0,
                 distance_four: 9.0,
                 ..ViewControls::NEUTRAL
@@ -615,12 +603,13 @@ mod tests {
                             (f64::from(row) / f64::from(SCREEN_STEPS - 1) - 0.5)
                                 * f64::from(extent[1]),
                         ];
-                        for record_height in HEIGHT_SAMPLES {
-                            assert_eq!(
-                                project_scene_point(&posed, screen, record_height),
-                                Some(screen)
-                            );
-                        }
+                        let shortcut = project_scene_point(&posed, screen, 0.0)
+                            .expect("the flat shortcut projects");
+                        let full = project_scene_point_with_shortcut(&posed, screen, 0.0, false)
+                            .expect("the full flat chain projects");
+                        assert_eq!(shortcut, screen);
+                        let error = (shortcut[0] - full[0]).hypot(shortcut[1] - full[1]);
+                        assert!(error <= 1.0e-9, "full-chain error was {error} px");
                     }
                 }
             }
@@ -680,7 +669,7 @@ mod tests {
     }
 
     #[test]
-    fn negative_homogeneous_corner_weights_keep_a_valid_plan() {
+    fn a_horizon_inside_the_destination_frame_refuses_the_plan() {
         let from = pose(ViewControls::NEUTRAL, [0.0; 2]);
         let mut to = from;
         to.map = PoseMap::Mapped(Homography {
@@ -695,8 +684,8 @@ mod tests {
         assert!(weights.iter().any(|weight| *weight < 0.0));
         assert!(weights.iter().any(|weight| *weight > 0.0));
         let plan = reproject(&frame(&from), &from, &to);
-        assert_eq!(plan.kind, WarpKind::AnchorHomography);
-        assert!(plan.source_valid);
+        assert_eq!(plan.kind, WarpKind::ClearOnly);
+        assert!(!plan.source_valid);
     }
 
     #[test]
@@ -720,6 +709,92 @@ mod tests {
         );
     }
 
+    fn counterexample_view(
+        distance_five: f64,
+        distance_four: f64,
+        camera: [f64; 3],
+        observer: [f64; 2],
+        translation: [f64; 5],
+    ) -> ViewControls {
+        let mut factors = [0.0; 10];
+        factors[0] = camera[0];
+        factors[6] = camera[1];
+        factors[8] = camera[2];
+        ViewControls {
+            camera: factors,
+            camera_translation: translation,
+            camera_yaw: observer[0],
+            camera_pitch: observer[1],
+            height_scale: 1.0,
+            distance_five,
+            distance_four,
+        }
+    }
+
+    #[test]
+    fn reviewers_pole_counterexamples_are_fail_closed() {
+        let cases = [
+            (
+                counterexample_view(
+                    1.682,
+                    3.947,
+                    [0.6371, -1.3451, -0.7003],
+                    [0.2566, -0.4173],
+                    [0.6332, 0.6895, -0.7479, -0.2055, -0.4357],
+                ),
+                counterexample_view(
+                    1.682,
+                    3.947,
+                    [0.6524, -1.3451, -0.7088],
+                    [0.2566, -0.4173],
+                    [0.6516, 0.6744, -0.7417, -0.1976, -0.4433],
+                ),
+                [-0.64, -5.663],
+                39.965,
+            ),
+            (
+                counterexample_view(
+                    4.235,
+                    5.195,
+                    [0.2422, -1.3395, 0.9025],
+                    [-0.1128, 0.1702],
+                    [0.9049, -0.671, -0.8312, -0.2096, 0.9151],
+                ),
+                counterexample_view(
+                    4.235,
+                    5.195,
+                    [0.2432, -1.3395, 0.8874],
+                    [-0.1128, 0.1702],
+                    [0.9111, -0.6721, -0.8317, -0.2196, 0.9234],
+                ),
+                [-0.72, 1.583],
+                39.9503,
+            ),
+        ];
+        for (from_view, to_view, displacement, zoom_log2) in cases {
+            let from = pose(from_view, [0.0; 2]);
+            let mut to = pose(to_view, displacement);
+            to.zoom_log2 = zoom_log2;
+            let plan = reproject(&frame(&from), &from, &to);
+            assert_eq!(plan.kind, WarpKind::ClearOnly);
+            assert!(!plan.source_valid);
+        }
+    }
+
+    #[test]
+    fn a_perspective_pole_on_the_sampled_surface_is_unbounded() {
+        let view = ViewControls {
+            height_scale: 1.0,
+            distance_five: 1.0,
+            ..ViewControls::NEUTRAL
+        };
+        let current = pose(view, [0.0; 2]);
+        let plan = reproject(&frame(&current), &current, &current);
+        assert_eq!(plan.kind, WarpKind::ClearOnly);
+        assert!(!plan.source_valid);
+        assert_eq!(plan.approx_max_error_px, None);
+    }
+
     #[test]
     fn flat_plan_is_exact_and_remains_displayable() {
         let from = pose(ViewControls::NEUTRAL, [3.0, -2.0]);
@@ -733,16 +808,48 @@ mod tests {
 
     #[test]
     fn pure_camera_translation_is_an_exact_flat_warp() {
-        let from = pose(ViewControls::NEUTRAL, [0.0; 2]);
+        let base_view = ViewControls {
+            camera_yaw: 0.17,
+            camera_pitch: -0.11,
+            height_scale: 1.0,
+            ..relief(0.2)
+        };
+        let from = pose(base_view, [0.0; 2]);
         let translated_view = ViewControls {
             camera_translation: [0.2, -0.1, 0.3, -0.05, 0.1],
-            ..ViewControls::NEUTRAL
+            ..base_view
         };
         let to = pose(translated_view, [0.0; 2]);
+        let inverse = warp_matrix(&from, &to)
+            .expect("translated flat warp is finite")
+            .inverse;
+        for target in [[-321.0, 117.0], [0.0, 0.0], [287.0, -91.0]] {
+            let source_flat = apply_homography(inverse, target).expect("flat source is finite");
+            let destination = project_scene_point_with_shortcut(&to, target, 0.0, false)
+                .expect("translated full chain projects");
+            let expected = project_scene_point_with_shortcut(&from, source_flat, 0.0, false)
+                .expect("source full chain projects");
+            let actual = apply_homography(inverse, destination).expect("warp projects");
+            let error = (actual[0] - expected[0]).hypot(actual[1] - expected[1]);
+            assert!(error <= 1.0e-9, "translated flat error was {error} px");
+        }
+    }
+
+    #[test]
+    fn relief_translation_is_measured_through_the_affine_camera() {
+        let from = pose(relief(0.2), [0.0; 2]);
+        let mut translated = relief(0.2);
+        translated.camera_translation = [1.0e-4, -2.0e-4, 1.5e-4, 0.0, 1.0e-4];
+        let to = pose(translated, [0.0; 2]);
         let plan = reproject(&frame(&from), &from, &to);
         assert_eq!(plan.kind, WarpKind::AnchorHomography);
-        assert!(plan.source_valid);
-        assert!(plan.approx_max_error_px.is_some_and(|error| error < 1.0e-9));
+        let maximum = plan.approx_max_error_px.expect("translation is measured");
+        assert!(maximum > 0.0 && maximum <= WARP_MAX_ERROR_PX);
+        let with_translation = project_scene_point(&to, [200.0, -100.0], 1.0)
+            .expect("translated relief projects");
+        let without_translation = project_scene_point(&from, [200.0, -100.0], 1.0)
+            .expect("untranslated relief projects");
+        assert_ne!(with_translation, without_translation);
     }
 
     #[test]
@@ -764,22 +871,16 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_picture_fast_measures_the_mandatory_corpus() {
+    fn every_validation_mode_measures_the_full_corpus() {
         let from = pose(ViewControls::NEUTRAL, [0.0; 2]);
         let mut to = pose(ViewControls::NEUTRAL, [5.0, -3.0]);
         to.zoom_log2 += 0.1;
         let ordinary = reproject(&frame(&from), &from, &to);
         let approximate = unpack_rows(ordinary.rows);
-        let mandatory =
-            sampled_errors(&from, &to, approximate, false).expect("the mandatory corpus projects");
-        let full = sampled_errors(&from, &to, approximate, true)
+        let full = sampled_errors(&from, &to, approximate)
             .expect("the full validation corpus projects");
-        assert_eq!(mandatory.len(), 3 * 3 * HEIGHT_SAMPLES.len());
         assert_eq!(full.len(), 9 * 9 * HEIGHT_SAMPLES.len());
-        assert_eq!(
-            ordinary.approx_max_error_px,
-            mandatory.into_iter().reduce(f64::max)
-        );
+        assert_eq!(ordinary.approx_max_error_px, full.iter().copied().reduce(f64::max));
 
         let measured = Warp::reproject(
             &frame(&from),
@@ -788,9 +889,27 @@ mod tests {
             PrecisionMode::PictureFast,
             WarpValidation::Measure,
         );
-        assert_eq!(
-            measured.approx_max_error_px,
-            full.into_iter().reduce(f64::max)
+        assert_eq!(measured.approx_max_error_px, full.into_iter().reduce(f64::max));
+    }
+
+    #[test]
+    fn full_corpus_cost_probe_reports_every_planned_sample() {
+        let from = pose(relief(0.2), [0.0; 2]);
+        let mut moved = relief(0.2);
+        moved.camera[8] += 1.0e-5;
+        let to = pose(moved, [0.0; 2]);
+        let started = std::time::Instant::now();
+        let plans = 1_536_u32;
+        for _ in 0..plans {
+            let plan = std::hint::black_box(reproject(&frame(&from), &from, &to));
+            assert_eq!(plan.kind, WarpKind::AnchorHomography);
+            assert!(plan.approx_max_error_px.is_some());
+        }
+        let elapsed = started.elapsed();
+        eprintln!(
+            "full warp corpus: {plans} plans in {:.6}s, {:.6}ms/plan",
+            elapsed.as_secs_f64(),
+            elapsed.as_secs_f64() * 1_000.0 / f64::from(plans)
         );
     }
 
@@ -951,7 +1070,22 @@ mod tests {
         let mut edge_on = poses[0];
         edge_on.map = PoseMap::EdgeOn;
         let sky = crate::exterior_zero(crate::CLASSIC_PALETTE);
-        assert_ne!(sky, crate::CLASSIC_PALETTE.clear_rgba);
+        let scene_load = crate::gpu::scene_load_color(crate::CLASSIC_PALETTE);
+        let expected_sky = wgpu::Color {
+            r: f64::from(sky[0]),
+            g: f64::from(sky[1]),
+            b: f64::from(sky[2]),
+            a: f64::from(sky[3]),
+        };
+        let clear = crate::CLASSIC_PALETTE.clear_rgba;
+        let clear = wgpu::Color {
+            r: f64::from(clear[0]),
+            g: f64::from(clear[1]),
+            b: f64::from(clear[2]),
+            a: f64::from(clear[3]),
+        };
+        assert_eq!(scene_load, expected_sky);
+        assert_ne!(scene_load, clear);
         let mut saw_mesh = false;
         let mut saw_sky = false;
         for posed in poses.into_iter().chain([edge_on]) {
@@ -965,15 +1099,13 @@ mod tests {
                         saw_mesh = true;
                     } else {
                         saw_sky = true;
-                        assert_ne!(sky, crate::CLASSIC_PALETTE.clear_rgba);
+                        assert_eq!(scene_load, expected_sky, "pixel {column},{row} was not sky");
+                        assert_ne!(scene_load, clear, "pixel {column},{row} used clear colour");
                     }
                 }
             }
         }
         assert!(saw_mesh);
         assert!(saw_sky);
-        let gpu = include_str!("gpu.rs");
-        assert!(gpu.contains("exterior_zero(palette_record)"));
-        assert!(gpu.contains("load: wgpu::LoadOp::Clear(color(clear))"));
     }
 }

@@ -122,12 +122,6 @@ pub enum WarpValidation {
     Final,
 }
 
-impl WarpValidation {
-    pub(crate) const fn samples_corpus(self, precision_mode: PrecisionMode) -> bool {
-        precision_mode.requires_bit_identity() || !matches!(self, Self::Ordinary)
-    }
-}
-
 /// Completed four-byte-fence measurement.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SubmissionMeasurement {

@@ -7,8 +7,8 @@ use wgpu::util::DeviceExt as _;
 use crate::fence::{FenceDecision, FenceLedger};
 use crate::state::{ExposureLatch, SceneCompletion, SceneLedger};
 use crate::{
-    FrameReceipt, FrameState, HOT_PAYLOAD_BYTES, HotSlot, HotUniform, PaletteId, Pose, PoseMap,
-    PresentConfig, PresentDataError, PresentError, PresentEvent, PresentFacts, PresentHot,
+    FrameReceipt, FrameState, HOT_PAYLOAD_BYTES, HotSlot, HotUniform, PaletteId, PaletteRecord, Pose,
+    PoseMap, PresentConfig, PresentDataError, PresentError, PresentEvent, PresentFacts, PresentHot,
     PresentMain, PresentStatus, SCENE_PAYLOAD_BYTES, SampleClass, SceneUniform, SubmissionKind,
     Warp, WarpKind, WarpValidation, camera_rotation, camera_rotation_pairs, camera_translation,
     exterior_zero, hot_ring_bytes, pack_homography_rows, palette, scene_indices, scene_shader,
@@ -49,6 +49,24 @@ struct PendingFence {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct SampleTracker {
     completed_since_reset: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct WarpSourceSlot {
+    planned: Option<(u64, u32)>,
+}
+
+impl WarpSourceSlot {
+    fn write_hot(&mut self, plan: &crate::WarpPlan) {
+        self.planned = plan
+            .source_scene_id
+            .zip(plan.source_texture_index)
+            .filter(|_| plan.source_valid);
+    }
+
+    fn frame<'a>(&self, retained: Option<&'a crate::SceneFrame>) -> Option<&'a crate::SceneFrame> {
+        select_warp_source(self.planned, retained)
+    }
 }
 
 impl SampleTracker {
@@ -95,7 +113,7 @@ pub struct Presenter {
     config: PresentConfig,
     main: Option<PresentMain>,
     hot: [Option<Pose>; 3],
-    hot_warp_source: [Option<(u64, u32)>; 3],
+    hot_warp_source: [WarpSourceSlot; 3],
     hot_exposed: [bool; 3],
     exposure: ExposureLatch,
     ledger: SceneLedger,
@@ -133,7 +151,7 @@ impl Presenter {
             config,
             main: None,
             hot: [None; 3],
-            hot_warp_source: [None; 3],
+            hot_warp_source: [WarpSourceSlot::default(); 3],
             hot_exposed: [false; 3],
             exposure: ExposureLatch::default(),
             ledger: SceneLedger::default(),
@@ -290,10 +308,7 @@ impl Presenter {
         self.queue
             .write_buffer(&self.gpu.hot_buffer, offset, bytemuck::bytes_of(&uniform));
         self.hot[slot.index() as usize] = pose;
-        self.hot_warp_source[slot.index() as usize] = plan
-            .source_scene_id
-            .zip(plan.source_texture_index)
-            .filter(|_| plan.source_valid);
+        self.hot_warp_source[slot.index() as usize].write_hot(&plan);
         self.hot_exposed[slot.index() as usize] = plan.exposed;
         self.exposure.observe_warp(plan.exposed);
         self.facts.centre_from_reference_px = hot.state.centre_from_reference_px;
@@ -413,7 +428,7 @@ impl Presenter {
             &self.gpu,
             texture_index as usize,
             hot_slot.dynamic_offset(),
-            exterior_zero(palette_record),
+            palette_record,
         );
         encoder.clear_buffer(&self.gpu.scene_fence, 0, Some(FENCE_BYTES));
         self.queue.submit([encoder.finish()]);
@@ -480,10 +495,7 @@ impl Presenter {
         self.next_warp_id = warp_id.checked_add(1).ok_or(PresentError::Device {
             operation: "advance warp identity",
         })?;
-        let source = select_warp_source(
-            self.hot_warp_source[hot_slot.index() as usize],
-            self.ledger.retained(),
-        );
+        let source = self.hot_warp_source[hot_slot.index() as usize].frame(self.ledger.retained());
         let source_scene_id = source.map(|frame| frame.scene_id);
         let texture_index = source.map_or(0, |frame| frame.texture_index as usize);
         if source.is_none() {
@@ -1206,7 +1218,7 @@ fn encode_scene(
     gpu: &GpuState,
     texture_index: usize,
     hot_offset: u32,
-    clear: [f32; 4],
+    selected: PaletteRecord,
 ) {
     let depth_attachment = Some(wgpu::RenderPassDepthStencilAttachment {
         view: &gpu.depth.view,
@@ -1222,7 +1234,7 @@ fn encode_scene(
             view: &gpu.scene_textures[texture_index].view,
             resolve_target: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(color(clear)),
+                load: wgpu::LoadOp::Clear(scene_load_color(selected)),
                 store: wgpu::StoreOp::Store,
             },
         })],
@@ -1237,6 +1249,10 @@ fn encode_scene(
         pass.set_index_buffer(indices.buffer.slice(..), wgpu::IndexFormat::Uint32);
         pass.draw_indexed(0..indices.count, 0, 0..1);
     }
+}
+
+pub(crate) fn scene_load_color(selected: PaletteRecord) -> wgpu::Color {
+    color(exterior_zero(selected))
 }
 
 fn validate_grid(main: &PresentMain, limits: DialectLimits) -> Result<(), PresentError> {
@@ -1404,7 +1420,66 @@ const fn clear_warp_plan(edge_on: bool, exposed: bool) -> crate::WarpPlan {
 
 #[cfg(test)]
 mod tests {
+    use ember_julibrot_math::{PrecisionMode, ViewControls};
+
     use super::*;
+    use crate::state::PendingScene;
+
+    fn binding_pose() -> Pose {
+        Pose {
+            epoch: 1,
+            orbit_generation: 1,
+            plane: ember_julibrot_math::Plane {
+                basis_u: [1.0, 0.0, 0.0, 0.0],
+                basis_v: [0.0, 1.0, 0.0, 0.0],
+            },
+            object: ember_julibrot_math::ObjectAngles::JULIA,
+            plane_origin: [0.0; 4],
+            zoom_log2: 0.0,
+            view: ViewControls::NEUTRAL,
+            grid_width: 64,
+            grid_height: 36,
+            map: PoseMap::Mapped(ember_julibrot_math::Homography::IDENTITY),
+            centre_from_reference_px: [0.0; 2],
+        }
+    }
+
+    fn binding_measurement(id: u64) -> SubmissionMeasurement {
+        SubmissionMeasurement {
+            kind: SubmissionKind::Scene,
+            id,
+            source_scene_id: None,
+            sample_class: SampleClass::Measured,
+            precision_mode: PrecisionMode::PictureFast.as_str(),
+            wall_ms: 1.0,
+            fence_wait_ms: 0.5,
+            polls: 1,
+        }
+    }
+
+    fn promote_binding_scene(ledger: &mut SceneLedger, scene_id: u64) -> crate::SceneFrame {
+        ledger
+            .begin(|texture_index| {
+                Ok(PendingScene {
+                    scene_id,
+                    pose: binding_pose(),
+                    palette: PaletteId::Classic,
+                    iteration_cap: 64,
+                    level: RefinementLevel::Final,
+                    extent: [64, 36],
+                    texture_index,
+                    centre_revision: 1,
+                    plane_origin_f64: [0.0; 4],
+                    precision_mode: PrecisionMode::PictureFast.as_str(),
+                    drop_reason: None,
+                })
+            })
+            .expect("binding scene begins");
+        match ledger.complete(binding_measurement(scene_id)) {
+            Some(SceneCompletion::Promoted(frame)) => frame,
+            other => panic!("binding scene did not promote: {other:?}"),
+        }
+    }
 
     #[test]
     fn sample_classes_reset_and_advance_without_hiding_warmup() {
@@ -1428,16 +1503,27 @@ mod tests {
     }
 
     #[test]
-    fn a_promoted_scene_cannot_be_sampled_by_an_older_hot_plan() {
-        assert_eq!(select_warp_source_identity(None, Some((41, 0))), None);
-        assert_eq!(
-            select_warp_source_identity(Some((41, 0)), Some((41, 0))),
-            Some((41, 0))
-        );
-        assert_eq!(
-            select_warp_source_identity(Some((41, 0)), Some((42, 1))),
-            None
-        );
+    fn browser_order_clears_a_hot_plan_after_scene_promotion() {
+        let mut ledger = SceneLedger::default();
+        assert!(!ledger.invalidate_incompatible(
+            64,
+            [0.0; 4],
+            ember_julibrot_math::ObjectAngles::JULIA,
+            PrecisionMode::PictureFast.as_str(),
+        ));
+        let sampled = promote_binding_scene(&mut ledger, 41);
+        let mut plan = clear_warp_plan(false, false);
+        plan.kind = WarpKind::AnchorHomography;
+        plan.source_scene_id = Some(sampled.scene_id);
+        plan.source_texture_index = Some(sampled.texture_index);
+        plan.source_valid = true;
+        let mut hot = WarpSourceSlot::default();
+        hot.write_hot(&plan);
+        assert_eq!(hot.frame(ledger.retained()).map(|frame| frame.scene_id), Some(41));
+
+        let promoted = promote_binding_scene(&mut ledger, 42);
+        assert_eq!(promoted.scene_id, 42);
+        assert_eq!(hot.frame(ledger.retained()).map(|frame| frame.scene_id), None);
         assert_eq!(HOT_SOURCE_VALID_BYTE_OFFSET, 280);
     }
 
