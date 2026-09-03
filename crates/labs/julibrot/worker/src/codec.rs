@@ -557,7 +557,7 @@ const fn encode_request_bits(
     }
 }
 
-const fn decode_request_bits(
+fn decode_request_bits(
     bits: u32,
     precision_mode: PrecisionMode,
 ) -> Result<(OrbitReason, ReferencePass), ChannelError> {
