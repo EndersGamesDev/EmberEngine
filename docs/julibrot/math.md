@@ -328,7 +328,7 @@ Before the first frame, app shows clear colour and honest overlay text with no d
 
 App installs the heap-provided panic hook and non-panicking uncaptured-error handler before the first device call, owns the single surface token, and presents outside the measured scene and warp regions.
 
-Hand-written `f64` remains the CPU matrix implementation; both required native matrix oracles pass on Sokol in the Phase 4 package run, so the decision rule keeps `faer` absent, and it may enter later only if the identical f64 oracle fails, never because its API is convenient or because an f32 case fails.
+Hand-written `f64` remains the CPU matrix implementation; both required native matrix oracles pass in the package and workspace gates, so the decision rule keeps `faer` absent, and it may enter later only if the identical f64 oracle fails, never because its API is convenient or because an f32 case fails.
 
 One world, one heap class, no simulation tick, no general graph, no shared-memory worker, no WebGPU path, and no second-reference repair remain deliberate prototype boundaries.
 
@@ -412,11 +412,13 @@ Phase 2 adds the contracted `f32` escape reference, high-precision orbit builder
 
 Phase 3 adds the scaled f64 perturbation mirror, exponent renormalization, corrected rebasing, glitch state machine, propagated error envelope, mixed-plane corpus, and counter limits, estimated at 540 lines.
 
-Phase 4 adds `Pose`, reference-shift re-expression, flat warp matrices and explicit inversion, navigation drift, warp accuracy, hybrid geometry oracles, and the conditional faer decision point, estimated at 390 lines.
+Phase 4 adds `Homography`, the f64 neutral-height screen map and explicit inverse, `Pose.screen_to_plane`, reference-shift re-expression, composed screen-map warps, mapped wheel/drag navigation, warp accuracy, hybrid geometry oracles, and the conditional faer decision point, estimated at 390 lines.
 
 Phase 5 reconciles compile-time interfaces with worker, kernels, present, and app, adds cross-package fixtures without editing sibling packages, and closes documentation, estimated at 250 lines.
 
 Integration-audit addendum publishes the math-owned `NavigationDelta`, atomic Astro-float centre mutation, displacement projection, and direct f64 mirror needed by worker and app, estimated at 300 Rust, test, and contract lines.
+
+Fullscreen implementation checkpoint: `screen_to_plane` now constructs the forward chain from the same camera equations consumed by generated scene WGSL, takes the canonical identity path bit for bit, inverts with the shared `1e−12` pivot refusal, publishes `κ∞`, routes wheel anchors and drag differences through `M`, and supplies each downstream level map without forming an absolute deep coordinate.
 
 The implementation estimate is about 2,410 new Rust and test lines; Cargo metadata and generated lockfile movement are reported separately, and implementation starts only after this refined document is accepted.
 
