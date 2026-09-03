@@ -906,8 +906,8 @@ mod tests {
         assert_eq!(plan.kind, WarpKind::ReliefRedraw);
         assert!(plan.source_valid);
         assert!(plan.exposed);
-        assert_eq!(plan.source_scene_id, Some(7));
-        assert_eq!(plan.source_texture_index, Some(1));
+        assert_eq!(plan.source_scene_id, Some(3));
+        assert_eq!(plan.source_texture_index, Some(0));
         let maximum = plan
             .approx_max_error_px
             .expect("the sampled corpus reports a maximum");
@@ -1016,7 +1016,7 @@ mod tests {
         assert_eq!(plan.kind, WarpKind::ReliefRedraw);
         assert!(plan.source_valid);
         assert!(plan.exposed);
-        assert_eq!(plan.source_scene_id, Some(7));
+        assert_eq!(plan.source_scene_id, Some(3));
         let maximum = plan
             .approx_max_error_px
             .expect("a relief redraw still publishes the measured maximum");
