@@ -88,7 +88,7 @@ pub enum Admission {
     TimingUnavailable,
 }
 
-/// Producer-side projection and greatest-observed-cost admission shaper.
+/// Producer-side projection and bounded measured-cost admission shaper.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProducerShaper {
     local_credit_us: u32,
@@ -140,7 +140,7 @@ impl ProducerShaper {
         }
         self.local_credit_us = returned_credit_us.min(ORBIT_BUDGET_US_PER_SECOND);
         self.local_update_us = Some(producer_now_us);
-        self.estimate_us = self.estimate_us.max(compute_us);
+        self.fold_estimate(compute_us);
         self.awaiting_warm_up_return = false;
         Ok(())
     }
@@ -166,8 +166,9 @@ impl ProducerShaper {
         if self.estimate_us == 0 {
             return Ok(Admission::TimingUnavailable);
         }
-        if self.local_credit_us < self.estimate_us {
-            let deficit = u64::from(self.estimate_us - self.local_credit_us);
+        let price_us = self.admission_price_us();
+        if self.local_credit_us < price_us {
+            let deficit = u64::from(price_us - self.local_credit_us);
             let numerator = deficit
                 .checked_mul(MICROS_PER_SECOND)
                 .ok_or_else(timing_refusal)?;
@@ -177,17 +178,50 @@ impl ProducerShaper {
             });
         }
         let credit_us = self.local_credit_us;
-        self.local_credit_us -= self.estimate_us;
+        self.local_credit_us -= price_us;
         Ok(Admission::Ready {
             credit_us,
             warm_up: false,
         })
     }
 
-    /// Returns the greatest nonzero measured cost in the current pricing epoch.
+    /// Returns the decayed measured cost that prices the next computation.
     #[must_use]
     pub const fn estimate_us(self) -> u32 {
         self.estimate_us
+    }
+
+    /// Returns the bounded balance one admission asks of the local projection.
+    ///
+    /// The bucket's capacity is one second of budget, so a price above it is a
+    /// balance the projection can never reach; charging the bounded price keeps
+    /// the implied wait at one second at most, and the owner still charges the
+    /// full measured cost and reports the excess as `overfeed_us`.
+    #[must_use]
+    pub const fn admission_price_us(self) -> u32 {
+        if self.estimate_us < ORBIT_BUDGET_US_PER_SECOND {
+            self.estimate_us
+        } else {
+            ORBIT_BUDGET_US_PER_SECOND
+        }
+    }
+
+    /// Folds one measured cost into the admission estimate.
+    ///
+    /// A nonzero measurement at or above the estimate replaces it at once, so
+    /// the next request is priced at a cost the producer has just proved it can
+    /// incur; a cheaper nonzero measurement halves the remaining gap, so one
+    /// expensive orbit stops pricing every later cheap one after a bounded
+    /// number of returns. A measured zero prices nothing and changes nothing.
+    const fn fold_estimate(&mut self, compute_us: u32) {
+        if compute_us == 0 {
+            return;
+        }
+        if compute_us >= self.estimate_us {
+            self.estimate_us = compute_us;
+            return;
+        }
+        self.estimate_us = compute_us + (self.estimate_us - compute_us) / 2;
     }
 
     fn project(&mut self, producer_now_us: u64) -> Result<(), ChannelError> {
@@ -339,6 +373,91 @@ mod tests {
             shaper.admit(700_000).unwrap(),
             Admission::Ready { warm_up: true, .. }
         ));
+    }
+
+    #[test]
+    fn an_estimate_beyond_capacity_prices_at_most_one_second_of_budget() {
+        let mut shaper = ProducerShaper::new();
+        shaper.admit(0).unwrap();
+        shaper.observe_return(0, 0, 852_293).unwrap();
+        assert_eq!(shaper.estimate_us(), 852_293);
+        assert_eq!(shaper.admission_price_us(), ORBIT_BUDGET_US_PER_SECOND);
+        assert_eq!(
+            shaper.admit(0).unwrap(),
+            Admission::Delay { wait_us: 1_000_000 }
+        );
+        assert_eq!(
+            shaper.admit(999_999).unwrap(),
+            Admission::Delay { wait_us: 4 }
+        );
+        assert_eq!(
+            shaper.admit(1_000_003).unwrap(),
+            Admission::Ready {
+                credit_us: 250_000,
+                warm_up: false
+            }
+        );
+        assert_eq!(
+            shaper.admit(1_000_003).unwrap(),
+            Admission::Delay { wait_us: 1_000_000 }
+        );
+    }
+
+    #[test]
+    fn an_estimate_at_capacity_is_priced_without_a_wait() {
+        let mut shaper = ProducerShaper::new();
+        shaper.admit(0).unwrap();
+        shaper
+            .observe_return(
+                0,
+                ORBIT_BUDGET_US_PER_SECOND,
+                ORBIT_BUDGET_US_PER_SECOND + 1,
+            )
+            .unwrap();
+        assert_eq!(shaper.admission_price_us(), ORBIT_BUDGET_US_PER_SECOND);
+        assert_eq!(
+            shaper.admit(0).unwrap(),
+            Admission::Ready {
+                credit_us: 250_000,
+                warm_up: false
+            }
+        );
+    }
+
+    #[test]
+    fn the_estimate_rises_at_once_and_halves_toward_cheaper_measurements() {
+        let mut shaper = ProducerShaper::new();
+        shaper.admit(0).unwrap();
+        shaper.observe_return(0, 250_000, 100_000).unwrap();
+        assert_eq!(shaper.estimate_us(), 100_000);
+        shaper.observe_return(1, 250_000, 200_000).unwrap();
+        assert_eq!(shaper.estimate_us(), 200_000);
+        shaper.observe_return(2, 250_000, 0).unwrap();
+        assert_eq!(shaper.estimate_us(), 200_000);
+        for expected in [
+            100_500_u32,
+            50_750,
+            25_875,
+            13_437,
+            7_218,
+            4_109,
+            2_554,
+            1_777,
+            1_388,
+            1_194,
+            1_097,
+            1_048,
+            1_024,
+            1_012,
+            1_006,
+            1_003,
+            1_001,
+            1_000,
+            1_000,
+        ] {
+            shaper.observe_return(3, 250_000, 1_000).unwrap();
+            assert_eq!(shaper.estimate_us(), expected);
+        }
     }
 
     #[test]

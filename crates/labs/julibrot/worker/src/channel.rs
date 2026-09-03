@@ -1253,6 +1253,58 @@ mod tests {
     }
 
     #[test]
+    fn an_orbit_beyond_the_budget_still_admits_the_next_request() {
+        let (owner, producer) =
+            WorkerChannel::new(WorkerConfig { max_iter: 64 }, WorkerMode::SameThread).unwrap();
+        assert!(matches!(
+            producer.admit(0).unwrap(),
+            Admission::Ready { warm_up: true, .. }
+        ));
+        assert_eq!(owner.submit(request(1, 1)), SubmitOutcome::Transferred);
+        let lease = producer.next_request().unwrap().unwrap();
+        producer
+            .complete(lease, &[zero_record()], 64, 852_293, 250_000)
+            .unwrap();
+        let mut response = owner.next_arrival().unwrap();
+        response
+            .records
+            .return_credit(OrbitDisposition::Applied, 1)
+            .unwrap();
+        let overfed = owner.facts();
+        assert_eq!(overfed.last_compute_us, 852_293);
+        assert_eq!(overfed.last_overfeed_us, 602_293);
+        assert_eq!(overfed.credit_us, 0);
+
+        assert_eq!(
+            producer.admit(1).unwrap(),
+            Admission::Delay { wait_us: 1_000_000 }
+        );
+        assert!(matches!(
+            producer.admit(1_000_001).unwrap(),
+            Admission::Ready { warm_up: false, .. }
+        ));
+
+        assert_eq!(owner.submit(request(2, 2)), SubmitOutcome::Transferred);
+        let second = producer.next_request().unwrap().unwrap();
+        producer
+            .complete(second, &[zero_record()], 64, 1_000, 250_000)
+            .unwrap();
+        let mut cheap = owner.next_arrival().unwrap();
+        cheap
+            .records
+            .return_credit(OrbitDisposition::Applied, 2_000_001)
+            .unwrap();
+        let refilled = owner.facts();
+        assert_eq!(refilled.last_compute_us, 1_000);
+        assert_eq!(refilled.last_overfeed_us, 0);
+        assert_eq!(refilled.credit_us, 249_000);
+        assert_eq!(
+            producer.admit(2_000_002).unwrap(),
+            Admission::Delay { wait_us: 4_000 }
+        );
+    }
+
+    #[test]
     fn endpoint_credit_return_rejects_a_foreign_lease() {
         let (owner, producer) =
             WorkerChannel::new(WorkerConfig { max_iter: 64 }, WorkerMode::SameThread).unwrap();
