@@ -18,6 +18,11 @@ const LIGHT: f32 = 0.7;
 enum Expected {
     Agree,
     Clear,
+    /// Refused because the measured corpus put the one image homography beyond its ceiling.
+    ///
+    /// The retained records still describe the destination, so the fixture additionally proves
+    /// that redrawing them under the destination pose needs no new sampling.
+    Relief,
     Either,
 }
 
@@ -343,6 +348,57 @@ fn compare_accepted(
     compared
 }
 
+/// Half a retained texel: a destination pixel takes the record of the retained vertex nearest it.
+const REDRAW_SAMPLING_REACH_PX: f64 = 0.5;
+
+/// Proves the retained escape records already describe the destination pose.
+///
+/// A relief redraw carries no new sampling: it re-draws the retained records through the scene
+/// mesh under the new pose, so the only question the oracle can ask of it is whether the record a
+/// destination pixel would receive is the record a freshly computed scene at that pose puts there.
+/// The chart correspondence is the flat screen map the refused plan already solved — the relief
+/// changes where along the screen a lifted vertex lands, never which chart point it is — so the
+/// comparison runs the refused plan's own rows and skips a point whose neighbourhood is not stable
+/// across the half-texel the redraw samples over.
+fn compare_redraw(name: &str, from: &Pose, to: &Pose, plan_rows: [[f32; 4]; 3]) -> u32 {
+    let inverse = rows(plan_rows);
+    let forward = invert_homography(inverse).expect("a refused relief plan is still invertible");
+    let retained = render_retained(from);
+    let mut compared = 0_u32;
+    for target in oracle_points([to.grid_width, to.grid_height]) {
+        let Some(source) = apply_homography(inverse, target) else {
+            continue;
+        };
+        let Some((retained_sample, retained_pixel)) =
+            nearest_retained(&retained, [from.grid_width, from.grid_height], source)
+        else {
+            continue;
+        };
+        let Some(sampled_target) = apply_homography(forward, retained_pixel) else {
+            continue;
+        };
+        let Some(fresh) =
+            stable_across_sampling_envelope(to, target, sampled_target, REDRAW_SAMPLING_REACH_PX)
+        else {
+            continue;
+        };
+        assert!(
+            same_terminal_and_index(retained_sample, fresh),
+            "{name}: redrawn record has a different terminal or index"
+        );
+        assert!(
+            colours_within_one_code(retained_sample, fresh),
+            "{name}: redrawn record has a different colour"
+        );
+        compared = compared.saturating_add(1);
+    }
+    assert!(
+        compared >= 8,
+        "{name}: only {compared} stable independent redraw samples"
+    );
+    compared
+}
+
 #[allow(
     clippy::print_stderr,
     reason = "the oracle emits the requested per-fixture verdict table"
@@ -355,13 +411,38 @@ fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Exp
         PrecisionMode::PictureFast,
         WarpValidation::Ordinary,
     );
+    if plan.kind == WarpKind::ReliefRedraw {
+        assert!(
+            matches!(
+                expected,
+                Expected::Relief | Expected::Clear | Expected::Either
+            ),
+            "{name}: unexpectedly refused as a relief redraw"
+        );
+        assert!(!plan.source_valid, "{name}: refused plan retained a source");
+        let maximum = plan
+            .approx_max_error_px
+            .expect("a relief refusal is measured, never unmeasurable");
+        assert!(maximum > WARP_MAX_ERROR_PX, "{name}: {maximum}");
+        let compared = compare_redraw(name, from, to, plan.rows);
+        eprintln!(
+            "oracle fixture | {name} | relief redraw | samples={compared} | homography={maximum:.3} px"
+        );
+        return;
+    }
     if plan.kind == WarpKind::ClearOnly {
-        assert_ne!(expected, Expected::Agree, "{name}: unexpectedly cleared");
+        assert!(
+            matches!(expected, Expected::Clear | Expected::Either),
+            "{name}: unexpectedly cleared"
+        );
         assert!(!plan.source_valid, "{name}: clear plan retained a source");
         eprintln!("oracle fixture | {name} | cleared");
         return;
     }
-    assert_ne!(expected, Expected::Clear, "{name}: unexpectedly displayed");
+    assert!(
+        matches!(expected, Expected::Agree | Expected::Either),
+        "{name}: unexpectedly displayed"
+    );
     assert!(plan.source_valid, "{name}");
     assert_eq!(plan.source_scene_id, Some(7), "{name}");
     assert_eq!(plan.source_texture_index, Some(1), "{name}");
@@ -538,7 +619,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
         &relief_from,
         &height_to,
         1.0,
-        Expected::Either,
+        Expected::Relief,
     );
 
     let mut translated_view = relief();
@@ -603,6 +684,8 @@ fn retained_warp_matches_independent_fresh_scenes() {
     let pole = pose(ObjectAngles::JULIA, pole_view, BASE_ORIGIN, 0.0, [0.0; 2]);
     assert_fixture("pole inside frame", &pole, &pole, 1.0, Expected::Clear);
 
+    observer_bars();
+
     let mut cross_view = relief();
     cross_view.camera[0] += 0.08;
     cross_view.camera[6] -= 0.05;
@@ -617,4 +700,128 @@ fn retained_warp_matches_independent_fresh_scenes() {
         [0.2, -0.15],
     );
     assert_fixture("cross terms", &relief_from, &cross, 1.0, Expected::Either);
+}
+
+/// One observer bar: its name, the control it moves, and its class at height zero and lifted.
+type ObserverCase = (
+    &'static str,
+    fn(ViewControls) -> ViewControls,
+    Expected,
+    Expected,
+);
+
+/// One row for every observer bar, at height zero and again lifted.
+///
+/// This is the page's own manual-mode table written as fixtures: move one observer control from a
+/// settled scene and record what the surface is allowed to do. Yaw, pitch and the four-space
+/// distance are observer motions the one image homography carries exactly at any height. The
+/// fifth-space distance and the height amplitude are not motions of the observer at all — they
+/// change where a record of a given escape height sits — so each retained pixel moves by its own
+/// amount and the homography is refused, honestly, in favour of a relief redraw.
+///
+/// At height zero the fifth-space distance and the four-space distance are inert by construction:
+/// every record projects at its chart position, so the map is the identity and the retained image
+/// is displayed unchanged.
+fn observer_bars() {
+    let flat_view = ViewControls::NEUTRAL;
+    let lifted_view = ViewControls {
+        height_scale: 1.0,
+        ..ViewControls::NEUTRAL
+    };
+    let flat_from = pose(ObjectAngles::JULIA, flat_view, BASE_ORIGIN, 0.0, [0.0; 2]);
+    let lifted_from = pose(ObjectAngles::JULIA, lifted_view, BASE_ORIGIN, 0.0, [0.0; 2]);
+
+    let cases: [ObserverCase; 4] = [
+        (
+            "yaw",
+            |mut view| {
+                view.camera_yaw += 0.3;
+                view
+            },
+            Expected::Agree,
+            Expected::Agree,
+        ),
+        (
+            "pitch",
+            |mut view| {
+                view.camera_pitch += 0.3;
+                view
+            },
+            Expected::Agree,
+            Expected::Agree,
+        ),
+        (
+            "distance five",
+            |mut view| {
+                view.distance_five = 6.0;
+                view
+            },
+            Expected::Agree,
+            Expected::Relief,
+        ),
+        (
+            "distance four",
+            |mut view| {
+                view.distance_four = 6.0;
+                view
+            },
+            Expected::Agree,
+            Expected::Agree,
+        ),
+    ];
+    for (name, moved, at_zero, at_one) in cases {
+        let flat_to = pose(
+            ObjectAngles::JULIA,
+            moved(flat_view),
+            BASE_ORIGIN,
+            0.0,
+            [0.0; 2],
+        );
+        assert_fixture(
+            &format!("observer {name} h0"),
+            &flat_from,
+            &flat_to,
+            0.0,
+            at_zero,
+        );
+        let lifted_to = pose(
+            ObjectAngles::JULIA,
+            moved(lifted_view),
+            BASE_ORIGIN,
+            0.0,
+            [0.0; 2],
+        );
+        assert_fixture(
+            &format!("observer {name} h1"),
+            &lifted_from,
+            &lifted_to,
+            1.0,
+            at_one,
+        );
+    }
+
+    assert_fixture(
+        "observer height 0 to 1",
+        &flat_from,
+        &lifted_from,
+        1.0,
+        Expected::Relief,
+    );
+    let half = pose(
+        ObjectAngles::JULIA,
+        ViewControls {
+            height_scale: 0.5,
+            ..ViewControls::NEUTRAL
+        },
+        BASE_ORIGIN,
+        0.0,
+        [0.0; 2],
+    );
+    assert_fixture(
+        "observer height 1 to half",
+        &lifted_from,
+        &half,
+        1.0,
+        Expected::Relief,
+    );
 }

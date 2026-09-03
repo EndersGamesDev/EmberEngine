@@ -61,18 +61,37 @@ impl Warp {
     }
 }
 
+/// Refuses a plan the measured corpus puts beyond the displayed-error ceiling.
+///
+/// The refusal is the same picture either way — the surface clears and the next completed scene
+/// fills it — but the two refusals have different causes and only one of them is recoverable
+/// without new sampling, so they are named apart.
+///
+/// A plan only reaches here once the retained records have been shown to describe the destination:
+/// the object samples match and the plane-chart residual is inside its limit. What remains is
+/// whether the one image homography can carry the picture, and the corpus answers that in pixels.
+/// A measured error beyond the ceiling means the destination differs from the retained image by a
+/// displacement that depends on each pixel's own escape height — the escape height enters the
+/// projection on the fifth ambient axis, so `height_scale`, the fifth-axis distance, the four
+/// camera factors that turn that axis into the chart and the fifth translation all move a lifted
+/// record by an amount no image map is able to express. That case is `ReliefRedraw`: the retained
+/// escape records still describe the destination exactly, so redrawing them under the new pose
+/// reprojects the motion with no new sampling at all.
+///
+/// An unmeasurable corpus is a different matter. It means a perspective pole fell on the sampled
+/// relief, where the projection has no finite answer to redraw towards, so the plan stays an
+/// honest `ClearOnly`.
 fn enforce_error_ceiling(mut plan: WarpPlan) -> WarpPlan {
-    if plan
-        .approx_max_error_px
-        .is_some_and(|error| error <= WARP_MAX_ERROR_PX)
-    {
-        return plan;
-    }
+    let refused = match plan.approx_max_error_px {
+        Some(error) if error <= WARP_MAX_ERROR_PX => return plan,
+        Some(_) => WarpKind::ReliefRedraw,
+        None => WarpKind::ClearOnly,
+    };
     plan.source_scene_id = None;
     plan.source_texture_index = None;
     plan.source_valid = false;
     plan.exposed = true;
-    plan.kind = WarpKind::ClearOnly;
+    plan.kind = refused;
     plan
 }
 
@@ -799,7 +818,7 @@ mod tests {
         let mut to = pose(relief(0.8), [8.0, -4.0]);
         to.zoom_log2 += 0.25;
         let plan = reproject(&frame(&from), &from, &to);
-        assert_eq!(plan.kind, WarpKind::ClearOnly);
+        assert_eq!(plan.kind, WarpKind::ReliefRedraw);
         assert!(!plan.source_valid);
         let maximum = plan
             .approx_max_error_px
@@ -883,7 +902,65 @@ mod tests {
             let plan = reproject(&frame(&from), &from, &to);
             assert_eq!(plan.kind, WarpKind::ClearOnly);
             assert!(!plan.source_valid);
+            assert_eq!(
+                plan.approx_max_error_px, None,
+                "a pole counterexample has nothing to measure and nothing to redraw towards"
+            );
         }
+    }
+
+    /// The height control is the one observer degree of freedom the image homography cannot hold.
+    ///
+    /// The same plan is proved exact wherever the record height is zero and beyond the ceiling as
+    /// soon as it is not, which is what makes the refusal geometry rather than arithmetic: the
+    /// destination differs from the retained image by a displacement each pixel takes in
+    /// proportion to its own escape height.
+    #[test]
+    fn a_pure_height_change_is_refused_as_a_relief_redraw_and_is_flat_exact() {
+        let mut lifted = ViewControls::NEUTRAL;
+        lifted.camera_yaw = 0.3;
+        let from = pose(lifted, [0.0; 2]);
+        let mut raised = lifted;
+        raised.height_scale = 1.0;
+        let to = pose(raised, [0.0; 2]);
+
+        let plan = reproject(&frame(&from), &from, &to);
+        assert_eq!(plan.kind, WarpKind::ReliefRedraw);
+        assert!(!plan.source_valid);
+        assert_eq!(plan.source_scene_id, None);
+        let maximum = plan
+            .approx_max_error_px
+            .expect("a relief refusal still publishes the measured maximum");
+        assert!(
+            maximum > WARP_MAX_ERROR_PX,
+            "a relief refusal is measured over the ceiling, not unmeasurable: {maximum}"
+        );
+
+        let displayed = unpack_rows(plan.rows);
+        let mut flat_error = 0.0_f64;
+        let mut lifted_error = 0.0_f64;
+        for corner in screen_corners(&to).into_iter().chain([[0.0; 2]]) {
+            for (height, worst) in [(0.0, &mut flat_error), (1.0, &mut lifted_error)] {
+                let source =
+                    apply_homography(displayed, corner).expect("displayed map has no pole");
+                let destination =
+                    project_scene_point(&to, corner, height).expect("destination projects");
+                let expected =
+                    project_scene_point(&from, source, height).expect("retained pose projects");
+                let approximate =
+                    apply_homography(displayed, destination).expect("displayed map has no pole");
+                *worst =
+                    worst.max((approximate[0] - expected[0]).hypot(approximate[1] - expected[1]));
+            }
+        }
+        assert!(
+            flat_error <= 1.0e-6,
+            "the same map carries every flat record exactly: {flat_error}"
+        );
+        assert!(
+            lifted_error > WARP_MAX_ERROR_PX,
+            "the record height alone breaks it: {lifted_error}"
+        );
     }
 
     #[test]
@@ -1073,7 +1150,7 @@ mod tests {
                     PrecisionMode::PictureFast,
                     WarpValidation::Measure,
                 );
-                if plan.kind == WarpKind::ClearOnly {
+                if matches!(plan.kind, WarpKind::ClearOnly | WarpKind::ReliefRedraw) {
                     refused = refused.saturating_add(1);
                 }
                 let error = plan

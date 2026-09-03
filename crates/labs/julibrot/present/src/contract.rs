@@ -202,6 +202,25 @@ pub enum WarpKind {
     AnchorHomography,
     /// Honest clear because no compatible source or finite plan exists.
     ClearOnly,
+    /// Honest clear because the motion deforms the relief, which no image map can carry.
+    ///
+    /// The retained image is refused for the same reason as `ClearOnly` and the surface clears,
+    /// but the cause is different and recoverable: the retained escape records still describe the
+    /// destination exactly, so redrawing them under the new pose reprojects this motion without
+    /// any new sampling. Naming the case keeps the refusal legible instead of a mute black frame.
+    ReliefRedraw,
+}
+
+impl WarpKind {
+    /// Returns the stable published name of this reprojection algorithm.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AnchorHomography => "AnchorHomography",
+            Self::ClearOnly => "ClearOnly",
+            Self::ReliefRedraw => "ReliefRedraw",
+        }
+    }
 }
 
 /// Why a completed scene was measured but not promoted.
@@ -355,6 +374,8 @@ pub struct PresentFacts {
     pub warp_max_error_px: Option<f64>,
     /// Latest tumbled ninety-fifth-percentile approximation error.
     pub warp_p95_error_px: Option<f64>,
+    /// Reprojection algorithm the latest plan selected.
+    pub warp_kind: WarpKind,
     /// Honest current status.
     pub status: PresentStatus,
 }
@@ -372,6 +393,7 @@ impl PresentFacts {
         };
         self.warp_max_error_px = plan.approx_max_error_px;
         self.warp_p95_error_px = plan.approx_p95_error_px;
+        self.warp_kind = plan.kind;
         self.warp_exposed = plan.exposed;
         if plan.exposed {
             self.scene_fill_due = true;
@@ -404,6 +426,7 @@ impl Default for PresentFacts {
             chart_residual: None,
             warp_max_error_px: None,
             warp_p95_error_px: None,
+            warp_kind: WarpKind::ClearOnly,
             status: PresentStatus::WaitingForFirstScene,
         }
     }

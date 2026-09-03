@@ -326,7 +326,9 @@ impl Presenter {
         self.facts.view = hot.view;
         self.facts.record_warp_plan(&plan);
         self.facts.scene_fill_due = self.exposure.due();
-        if plan.kind == WarpKind::ClearOnly && self.ledger.retained().is_none() {
+        if matches!(plan.kind, WarpKind::ClearOnly | WarpKind::ReliefRedraw)
+            && self.ledger.retained().is_none()
+        {
             self.facts.status = PresentStatus::WaitingForFirstScene;
         } else if pose.is_some_and(|current| {
             self.ledger
