@@ -797,8 +797,7 @@ mod browser {
                         measurement,
                         ..
                     } => {
-                        self.level_timings
-                            .drop_scene(scene_id, Some(measurement));
+                        self.level_timings.drop_scene(scene_id, Some(measurement));
                         if self.loop_state.retired(scene_id) {
                             self.prepared_level = None;
                         }
@@ -1057,8 +1056,11 @@ mod browser {
             self.accepted_reference = Some(submitted.centre);
             self.accepted_reference_zoom_log2 = Some(submitted.zoom_log2);
             self.main = viewer.drain_main()?.main;
-            self.level_timings
-                .record_worker(response.centre_revision(), response.compute_us(), None);
+            self.level_timings.record_worker(
+                response.centre_revision(),
+                response.compute_us(),
+                None,
+            );
             self.rebuild_grid_if_needed(viewer.requested().iteration_cap)?;
             self.loop_state.restart(response.generation());
             self.prepared_level = None;

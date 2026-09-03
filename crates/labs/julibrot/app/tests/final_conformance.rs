@@ -1,11 +1,14 @@
 //! Final exact-versus-fast cross-slice conformance corpus.
 
-#![allow(clippy::float_cmp, reason = "the corpus pins exact policy and category values")]
+#![allow(
+    clippy::float_cmp,
+    reason = "the corpus pins exact policy and category values"
+)]
 
 use ember_julibrot_kernels::{
     ConformanceVerdict, GridExtent, KernelMode, KernelSample, PerturbUniform, RefinementLevel,
-    ShallowUniform, evaluate_perturbation_conformance, escape_shallow_pixel,
-    escape_shallow_point, perturb_scaled_offset,
+    ShallowUniform, escape_shallow_pixel, escape_shallow_point, evaluate_perturbation_conformance,
+    perturb_scaled_offset,
 };
 use ember_julibrot_math::{
     CentreSplit, EscapeGridRecord, EscapeParams, MathError, PerturbationEnvelope, Plane,
@@ -64,7 +67,11 @@ fn final_image_corpus_meets_the_picture_contract() -> Result<(), MathError> {
     assert!((946.0..947.0).contains(&highest_zoom));
     assert_eq!(highest_plan.working_digits, highest_plan.policy_digits);
     assert!(matches!(
-        precision_for(f64::from_bits(highest_zoom.to_bits() + 1), GRID_WIDTH, 4_096),
+        precision_for(
+            f64::from_bits(highest_zoom.to_bits() + 1),
+            GRID_WIDTH,
+            4_096
+        ),
         Err(MathError::PrecisionExhausted { .. })
     ));
     let zooms = [13.999, 14.0, 40.0, 80.0, 100.0, 256.0, 512.0, highest_zoom];
@@ -84,14 +91,8 @@ fn final_image_corpus_meets_the_picture_contract() -> Result<(), MathError> {
                             cap,
                             pixel,
                         )?;
-                        let fast = render(
-                            PrecisionMode::PictureFast,
-                            plane,
-                            centre,
-                            zoom,
-                            cap,
-                            pixel,
-                        )?;
+                        let fast =
+                            render(PrecisionMode::PictureFast, plane, centre, zoom, cap, pixel)?;
                         let outside = exact.envelope.is_none_or(|envelope| {
                             envelope.minimum_escape_margin > envelope.escape_norm2_error
                         });
@@ -139,20 +140,45 @@ fn forced_rescale_rebase_and_boundary_fixtures_remain_explicit() -> Result<(), M
             ..ZERO_RECORD
         },
     ];
-    let one_orbit = [
-        ReferenceOrbitRecord {
-            re_hi: 1.0,
-            ..ZERO_RECORD
-        };
-        4
-    ];
+    let one_orbit = [ReferenceOrbitRecord {
+        re_hi: 1.0,
+        ..ZERO_RECORD
+    }; 4];
     let zero_orbit = [ZERO_RECORD; 2];
     let cases: &[(&str, &[ReferenceOrbitRecord], [f32; 4], i32, u32, f32)] = &[
-        ("upward", &zero_orbit, [2.0_f32.powi(80), 0.0, 0.0, 0.0], -80, 2, 0.0),
-        ("downward", &zero_orbit, [2.0_f32.powi(-80), 0.0, 0.0, 0.0], 80, 2, 0.0),
+        (
+            "upward",
+            &zero_orbit,
+            [2.0_f32.powi(80), 0.0, 0.0, 0.0],
+            -80,
+            2,
+            0.0,
+        ),
+        (
+            "downward",
+            &zero_orbit,
+            [2.0_f32.powi(-80), 0.0, 0.0, 0.0],
+            80,
+            2,
+            0.0,
+        ),
         ("zero-rebase", &escaped_orbit, [0.0; 4], -900, 4, 0.0),
-        ("nonzero-rebase", &one_orbit[..2], [-0.75, 0.0, 0.0, 0.0], 0, 2, 1.0),
-        ("repeated-rebase", &one_orbit, [-0.75, 0.0, 0.0, 0.0], 0, 4, 3.0),
+        (
+            "nonzero-rebase",
+            &one_orbit[..2],
+            [-0.75, 0.0, 0.0, 0.0],
+            0,
+            2,
+            1.0,
+        ),
+        (
+            "repeated-rebase",
+            &one_orbit,
+            [-0.75, 0.0, 0.0, 0.0],
+            0,
+            4,
+            3.0,
+        ),
     ];
     for &(name, orbit, offset, exponent, cap, expected_rebases) in cases {
         let exact = render_special(PrecisionMode::Deterministic, orbit, offset, exponent, cap);
@@ -161,7 +187,10 @@ fn forced_rescale_rebase_and_boundary_fixtures_remain_explicit() -> Result<(), M
         assert_eq!(exact.sample.record.rebase_count, expected_rebases, "{name}");
         let envelope = exact.envelope.expect("deep fixture carries an envelope");
         if envelope.minimum_escape_margin > envelope.escape_norm2_error {
-            assert_eq!(fast.sample.escape_index, exact.sample.escape_index, "{name}");
+            assert_eq!(
+                fast.sample.escape_index, exact.sample.escape_index,
+                "{name}"
+            );
         }
     }
 
@@ -229,7 +258,11 @@ fn exact_terminal_colours_and_warp_budget_are_pinned() -> Result<(), MathError> 
                 let exact_source = apply_homography(exact, point).expect("exact warp is finite");
                 let fast_source = apply_homography(fast, point).expect("fast warp is finite");
                 let error = source_error_px(exact_source, fast_source);
-                assert!(error <= 0.25, "{} zoom {zoom} moved {error} px", fixture.name);
+                assert!(
+                    error <= 0.25,
+                    "{} zoom {zoom} moved {error} px",
+                    fixture.name
+                );
             }
         }
     }
@@ -345,8 +378,7 @@ fn render_deterministic(
         )
         .expect("the corpus shallow uniform is valid");
         let index = pixel[1] * SAMPLE_EXTENT.width + pixel[0];
-        let sample =
-            escape_shallow_pixel(&uniform, index).expect("the corpus pixel is in bounds");
+        let sample = escape_shallow_pixel(&uniform, index).expect("the corpus pixel is in bounds");
         return Ok(Rendered {
             sample,
             envelope: None,
@@ -491,7 +523,12 @@ fn assert_picture_colour(exact: KernelSample, fast: KernelSample, selected: Pale
 
 fn record_lanes(sample: KernelSample) -> [f32; 4] {
     let record = sample.record;
-    [record.smooth_iter, record.escaped, record.rebase_count, record.glitch]
+    [
+        record.smooth_iter,
+        record.escaped,
+        record.rebase_count,
+        record.glitch,
+    ]
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -539,8 +576,8 @@ fn warp_rows_picture_fast(plane: Plane, zoom: f64) -> Result<[f64; 9], MathError
 fn warp_rows_deterministic(plane: Plane, zoom: f64) -> Result<[f64; 9], MathError> {
     let from = pose(plane, zoom, [13.25, -7.5]);
     let to = pose(plane, zoom + 0.025, [-4.0, 9.125]);
-    let rows = pack_homography_rows(warp_matrix(&from, &to)?.forward)
-        .ok_or(MathError::DegenerateWarp)?;
+    let rows =
+        pack_homography_rows(warp_matrix(&from, &to)?.forward).ok_or(MathError::DegenerateWarp)?;
     Ok([
         f64::from(rows[0][0]),
         f64::from(rows[0][1]),
