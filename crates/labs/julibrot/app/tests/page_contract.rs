@@ -499,7 +499,9 @@ fn the_frame_loop_cannot_latch_on_a_frame_that_never_ran() {
     assert!(MAIN.contains("runFrame(ticket, performance.now(), true);"));
     // The timer runs a turn only when one is due and the callback did not arrive for this
     // schedule, so a healthy animation callback leaves `frames_from_fallback` at zero.
-    assert!(MAIN.contains("      if (!RAF_PENDING || ticket !== FRAME_TICKET) return;\n      if (stillTurning()) {"));
+    assert!(MAIN.contains(
+        "      if (!RAF_PENDING || ticket !== FRAME_TICKET) return;\n      if (stillTurning()) {"
+    ));
     // Returning to a painting page retires the schedule rather than waiting on it.
     for required in [
         "const wakeFrameLoop = () => {",
@@ -518,7 +520,10 @@ fn the_frame_loop_cannot_latch_on_a_frame_that_never_ran() {
         "frame_latch_clears: FRAME_COUNTS.latch_clears,",
         "frame_loop_wakeups: FRAME_COUNTS.wakeups,",
     ] {
-        assert!(MAIN.contains(required), "missing frame-loop counter: {required}");
+        assert!(
+            MAIN.contains(required),
+            "missing frame-loop counter: {required}"
+        );
     }
 }
 
