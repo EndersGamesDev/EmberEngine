@@ -482,7 +482,7 @@ impl<P: OwnerPort> OwnerCore<P> {
         }
     }
 
-    const fn four_slots_home(&self) -> bool {
+    fn four_slots_home(&self) -> bool {
         self.request_owned.len() == 2
             && self.orbit_owned.len() == 2
             && self.arrivals.is_empty()
