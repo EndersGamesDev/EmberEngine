@@ -1,3 +1,11 @@
+/// Precision policy: exact and cross-machine reproducible, or accurate to the picture's budget.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum PrecisionMode {
+    Deterministic = 0,
+    PictureFast = 1,
+}
+
 /// Axis in the fixed order `(z.re, z.im, c.re, c.im)`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
