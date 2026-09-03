@@ -1943,9 +1943,9 @@ mod tests {
 
     use super::{
         FenceRefusal, FrameLoop, LEVELS, PresenterPoll, RefinementLevel, RefinementSchedule,
-        RefusalClass, SubmissionKind, apply_precision_mode, arrival_is_current, fence_error,
-        expand_reference_texels, horizon_facts, main_for_grid, published_iteration_cap,
-        schedule_exposure_fill, view_projection_changed,
+        RefusalClass, SubmissionKind, apply_precision_mode, arrival_is_current,
+        expand_reference_texels, fence_error, horizon_facts, main_for_grid,
+        published_iteration_cap, schedule_exposure_fill, view_projection_changed,
     };
     use crate::{FramePolicy, LevelTimingLedger, ViewerController};
     use ember_julibrot_present::{SampleClass, SubmissionMeasurement};

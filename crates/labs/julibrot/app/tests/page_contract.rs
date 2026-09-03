@@ -347,8 +347,8 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
     assert!(MAIN.contains(r#"field.replaceAll("_", "-")"#));
     assert!(MAIN.contains("for (const [field, value] of Object.entries(row)) {"));
     for field in [
-        "o12", "o13", "o14", "o23", "o24", "o34", "q12", "q13", "q14", "q23", "q24",
-        "q34", "q15", "q25", "q35", "q45", "t1", "t2", "t3", "t4", "t5",
+        "o12", "o13", "o14", "o23", "o24", "o34", "q12", "q13", "q14", "q23", "q24", "q34", "q15",
+        "q25", "q35", "q45", "t1", "t2", "t3", "t4", "t5",
     ] {
         assert!(
             LIB.contains(&format!(r#""{field}":"#)),

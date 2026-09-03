@@ -621,7 +621,9 @@ mod tests {
     fn plane_projection_is_the_inverse_navigation_uses() -> Result<(), MathError> {
         let object = ObjectAngles::IDENTITY;
         let view = ViewControls {
-            camera: [0.07, -1.1, 0.03, -0.11, -1.2, 0.05, 0.09, -0.04, 0.13, -0.08],
+            camera: [
+                0.07, -1.1, 0.03, -0.11, -1.2, 0.05, 0.09, -0.04, 0.13, -0.08,
+            ],
             camera_translation: [0.2, -0.1, 0.3, -0.2, 0.15],
             camera_yaw: 0.17,
             camera_pitch: -0.12,

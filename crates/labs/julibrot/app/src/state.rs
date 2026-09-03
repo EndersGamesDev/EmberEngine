@@ -1207,9 +1207,7 @@ mod tests {
         view.camera_pitch = -0.12;
         viewer.set_view_controls(view).expect("tilted view");
         viewer.set_crosshair([120.0, -45.0]).expect("mapped click");
-        let feature = viewer
-            .crosshair_centre_f64()
-            .expect("stored feature facts");
+        let feature = viewer.crosshair_centre_f64().expect("stored feature facts");
         let clicked = viewer
             .crosshair_plane_px()
             .expect("clicked feature projects");
