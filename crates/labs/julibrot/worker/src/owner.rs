@@ -314,6 +314,17 @@ impl ViewerOwner {
         true
     }
 
+    /// Returns the desired authoritative centre, or `None` before navigation is configured.
+    ///
+    /// Saving a view has to record the centre the owner is actually holding rather than its finite
+    /// mirror, and reading it must leave the coalesced submission alone, which taking one does not.
+    #[must_use]
+    pub fn navigation_centre(&self) -> Option<BigCentre> {
+        self.navigation
+            .as_ref()
+            .map(|navigation| navigation.centre.clone())
+    }
+
     /// Reports whether one coalesced navigation submission is waiting.
     #[must_use]
     pub fn navigation_pending_depth(&self) -> u32 {

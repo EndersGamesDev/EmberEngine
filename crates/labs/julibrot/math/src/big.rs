@@ -194,7 +194,7 @@ impl BigScalar {
 /// the value ever reaches Astro-float makes the precision this type reports equal to the precision
 /// Astro-float actually allocated on every target: a request of 90 bits is 128 bits in both builds
 /// rather than 128 natively and 96 in the browser.
-fn rounded_astro_precision(precision_bits: u32) -> Result<u32, MathError> {
+pub fn rounded_astro_precision(precision_bits: u32) -> Result<u32, MathError> {
     precision_bits
         .checked_add(63)
         .map(|bits| bits & !63)

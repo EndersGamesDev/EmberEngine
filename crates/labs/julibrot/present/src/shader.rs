@@ -183,6 +183,14 @@ mod tests {
             "let camera_near = 0.1;",
             "let camera_far = 4.0 * distance_four;",
             "let perspective_scale = aspect * distance_four * 0.5;",
+            // The three places d4 reaches the picture. At height zero the clip-space w is d4 and
+            // the scale is proportional to d4, so the two cancel and leave the chart map, and the
+            // browser agrees once the picture is read at rest. The earlier report of a d4-dependent
+            // height-zero framing sampled the picture mid-refresh; the same wrong framing appears
+            // with d4 held fixed while d5 moves, so it is not d4's. These lines stay pinned because
+            // the cancellation is the whole reason the height-zero image is exact.
+            "camera_pitch_sine * yawed.y + camera_pitch_cosine * yawed.z - distance_four",
+            "output.position = vec4<f32>(perspective_scale * view.x / aspect, perspective_scale * view.y, clip_depth, -view.z);",
             "0.58 + 0.24",
             "normalize(vec3<f32>(0.4, 0.7, 0.6))",
         ] {

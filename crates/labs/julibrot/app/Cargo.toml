@@ -15,7 +15,9 @@ ember-julibrot-present = { path = "../present" }
 ember-julibrot-worker = { path = "../worker" }
 ember-lab-heap = { path = "../../heap" }
 serde.workspace = true
-serde_json.workspace = true
+# float_roundtrip: a saved view must survive its own JSON exactly. Without it serde_json's fast
+# parse path can land one unit in the last place away, and a reloaded row would be a different row.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 thiserror.workspace = true
 wgpu = { workspace = true, features = ["webgl", "wgsl"] }
 

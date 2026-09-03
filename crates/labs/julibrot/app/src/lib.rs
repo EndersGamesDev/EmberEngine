@@ -5,6 +5,7 @@ mod error;
 mod facts;
 mod frame;
 mod measurement;
+mod saved;
 mod state;
 mod surface;
 
@@ -26,9 +27,11 @@ pub use measurement::{
 };
 #[cfg(target_arch = "wasm32")]
 pub use runtime::{BrowserRuntime, DeviceFacts, install_julibrot_panic_hook, take_julibrot_panic};
+pub use saved::{SavedCentre, SavedCoordinate, SavedView};
 pub use state::{
-    HotFrame, INITIAL_ITERATION_CAP, NavigationEdit, PRESET_ROWS, PresetRow, RequestedControls,
-    ViewerController, anchor_px_up, drag_delta_px_down, preset_row,
+    BOX_CLICK_THRESHOLD_PX, HotFrame, INITIAL_ITERATION_CAP, NavigationEdit, PRESET_ROWS,
+    PresetRow, RequestedControls, SCALE_RANGE_LOG2, ViewerController, anchor_px_up,
+    box_zoom_delta_log2, drag_delta_px_down, is_box_selection, preset_row,
 };
 pub use surface::{PendingSurface, SurfaceAction, SurfaceState};
 
@@ -215,7 +218,8 @@ mod wasm_entry {
     use ember_julibrot_present::PaletteId;
 
     use crate::{
-        App, JULIBROT_ABI_VERSION, PageFacts, anchor_px_up, drag_delta_px_down, preset_row,
+        App, JULIBROT_ABI_VERSION, PageFacts, SavedCentre, SavedView, anchor_px_up,
+        box_zoom_delta_log2, is_box_selection, preset_row,
     };
 
     thread_local! {
@@ -255,14 +259,13 @@ mod wasm_entry {
         })
     }
 
-    /// Stages pointer-anchored zoom and preserves the requested control on delayed work.
+    /// Places the target at a clicked canvas point, whose plane point becomes the centre.
     ///
-    /// The pointer arrives as canvas-relative DOM CSS pixels together with the canvas client
-    /// rectangle; centring, the CSS-to-grid scale, and the y flip all happen inside this boundary
-    /// so the anchor reaches the worker in the render-grid pixels its scale is expressed in.
+    /// The click arrives as canvas-relative DOM CSS pixels beside the canvas client rectangle,
+    /// exactly as the retired wheel did, so centring, the CSS-to-grid scale and the y flip stay on
+    /// this one boundary and the target reaches the worker in the pixels its scale is expressed in.
     #[wasm_bindgen]
-    pub fn app_wheel_zoom(
-        delta_log2: f64,
+    pub fn app_set_target(
         pointer_css_x: f64,
         pointer_css_y_down: f64,
         rect_css_width: f64,
@@ -277,31 +280,60 @@ mod wasm_entry {
             )
             .map_err(app_js_error)?;
             app.viewer_mut()
-                .wheel_zoom(delta_log2, anchor)
+                .set_target(anchor, 0.0)
                 .map(|_| ())
                 .map_err(app_js_error)
         })
     }
 
-    /// Stages drag pan after scaling CSS pixels to the grid and converting DOM-down y inside the
-    /// Rust control boundary.
+    /// Zooms a dragged screen box to fill the screen, or treats a box under four pixels as a click.
+    ///
+    /// The page reports the rectangle it drew and nothing else; whether that rectangle was a box or
+    /// a click, and what zoom change it earns, are decided here so the two gestures cannot drift
+    /// apart in the loader.
     #[wasm_bindgen]
-    pub fn app_drag_pan(
-        delta_css_x: f64,
-        delta_css_y_down: f64,
+    pub fn app_zoom_box(
+        start_css_x: f64,
+        start_css_y_down: f64,
+        end_css_x: f64,
+        end_css_y_down: f64,
         rect_css_width: f64,
         rect_css_height: f64,
     ) -> Result<(), JsValue> {
         with_app_mut(|app| {
             let grid = app.grid_extent();
-            let delta = drag_delta_px_down(
-                [delta_css_x, delta_css_y_down],
-                [rect_css_width, rect_css_height],
+            let rect = [rect_css_width, rect_css_height];
+            let extent = [
+                (end_css_x - start_css_x).abs(),
+                (end_css_y_down - start_css_y_down).abs(),
+            ];
+            let anchor = anchor_px_up(
+                [
+                    f64::midpoint(start_css_x, end_css_x),
+                    f64::midpoint(start_css_y_down, end_css_y_down),
+                ],
+                rect,
                 grid,
             )
             .map_err(app_js_error)?;
+            let delta_log2 = if is_box_selection(extent) {
+                box_zoom_delta_log2(extent, rect).map_err(app_js_error)?
+            } else {
+                0.0
+            };
             app.viewer_mut()
-                .drag_pan(delta)
+                .set_target(anchor, delta_log2)
+                .map(|_| ())
+                .map_err(app_js_error)
+        })
+    }
+
+    /// Moves the absolute `scale` control, zooming about the target at the screen centre.
+    #[wasm_bindgen]
+    pub fn app_set_scale(zoom_log2: f64) -> Result<(), JsValue> {
+        with_app_mut(|app| {
+            app.viewer_mut()
+                .set_zoom_log2(zoom_log2)
                 .map(|_| ())
                 .map_err(app_js_error)
         })
@@ -389,6 +421,39 @@ mod wasm_entry {
             row.view.distance_five,
             row.view.distance_four,
         ))
+    }
+
+    /// Returns the row the viewer is showing, in the form a view box stores.
+    #[wasm_bindgen]
+    pub fn app_saved_view_json() -> Result<String, JsValue> {
+        with_app(|app| {
+            let saved = SavedView::capture(app.viewer()).map_err(app_js_error)?;
+            serde_json::to_string(&saved).map_err(|error| JsValue::from_str(&error.to_string()))
+        })
+    }
+
+    /// Installs the authoritative centre of a stored row, which no control element carries.
+    ///
+    /// Every other field of a row is a control and reaches the worker through the handler a user's
+    /// own movement reaches; the centre has no widget, so loading one is this single explicit call
+    /// rather than a second path for the values that do have widgets.
+    #[wasm_bindgen]
+    pub fn app_set_centre(centre_json: String) -> Result<(), JsValue> {
+        let centre: SavedCentre = serde_json::from_str(&centre_json)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let decoded = centre.decode().map_err(app_js_error)?;
+        with_app_mut(|app| app.viewer_mut().set_centre(decoded).map_err(app_js_error))
+    }
+
+    /// Returns the row `t` of the way from one stored row to another.
+    #[wasm_bindgen]
+    pub fn app_morph_view(from_json: String, to_json: String, t: f64) -> Result<String, JsValue> {
+        let from: SavedView = serde_json::from_str(&from_json)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let to: SavedView = serde_json::from_str(&to_json)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let morphed = SavedView::lerp(&from, &to, t).map_err(app_js_error)?;
+        serde_json::to_string(&morphed).map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
     fn with_view(edit: impl FnOnce(&mut ViewControls)) -> Result<(), JsValue> {
@@ -495,8 +560,9 @@ mod wasm_entry {
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm_entry::{
-    app_drag_pan, app_facts_json, app_needs_refresh, app_preset, app_refresh, app_request_frame,
-    app_request_measurement, app_set_camera, app_set_distances, app_set_height,
-    app_set_iteration_cap, app_set_palette, app_set_plane_angles, app_set_plane_origin,
-    app_set_view_angles, app_wheel_zoom, julibrot_abi_version, start_julibrot,
+    app_facts_json, app_morph_view, app_needs_refresh, app_preset, app_refresh, app_request_frame,
+    app_request_measurement, app_saved_view_json, app_set_camera, app_set_centre,
+    app_set_distances, app_set_height, app_set_iteration_cap, app_set_palette,
+    app_set_plane_angles, app_set_plane_origin, app_set_scale, app_set_target, app_set_view_angles,
+    app_zoom_box, julibrot_abi_version, start_julibrot,
 };
