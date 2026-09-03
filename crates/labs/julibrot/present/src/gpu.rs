@@ -274,11 +274,7 @@ impl Presenter {
                 }
             },
         );
-        let selected = self
-            .main
-            .as_ref()
-            .and_then(PresentMain::selected_palette)
-            .unwrap_or((PaletteId::Classic, palette(PaletteId::Classic)));
+        let selected = selected_or_classic(self.main.as_ref());
         // A refused control falls back to the neutral row rather than to a stale one, so a
         // non-finite value shows the flat chart instead of the last thing that happened to be
         // in the lane.
@@ -1454,6 +1450,11 @@ fn relief_scene_uniform(
             logical_len: main.grid.span.logical_len,
         },
     })
+}
+
+fn selected_or_classic(main: Option<&PresentMain>) -> (PaletteId, PaletteRecord) {
+    main.and_then(PresentMain::selected_palette)
+        .unwrap_or((PaletteId::Classic, palette(PaletteId::Classic)))
 }
 
 fn validate_grid(main: &PresentMain, limits: DialectLimits) -> Result<(), PresentError> {
