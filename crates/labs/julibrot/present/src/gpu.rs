@@ -7,12 +7,12 @@ use wgpu::util::DeviceExt as _;
 use crate::fence::{FenceDecision, FenceLedger};
 use crate::state::{ExposureLatch, SceneCompletion, SceneLedger};
 use crate::{
-    FrameReceipt, FrameState, HOT_PAYLOAD_BYTES, HotSlot, HotUniform, PaletteId, PaletteRecord, Pose,
-    PoseMap, PresentConfig, PresentDataError, PresentError, PresentEvent, PresentFacts, PresentHot,
-    PresentMain, PresentStatus, SCENE_PAYLOAD_BYTES, SampleClass, SceneUniform, SubmissionKind,
-    Warp, WarpKind, WarpValidation, camera_rotation, camera_rotation_pairs, camera_translation,
-    exterior_zero, hot_ring_bytes, pack_homography_rows, palette, scene_indices, scene_shader,
-    view_scale, warp_shader,
+    FrameReceipt, FrameState, HOT_PAYLOAD_BYTES, HotSlot, HotUniform, PaletteId, PaletteRecord,
+    Pose, PoseMap, PresentConfig, PresentDataError, PresentError, PresentEvent, PresentFacts,
+    PresentHot, PresentMain, PresentStatus, SCENE_PAYLOAD_BYTES, SampleClass, SceneUniform,
+    SubmissionKind, Warp, WarpKind, WarpValidation, camera_rotation, camera_rotation_pairs,
+    camera_translation, exterior_zero, hot_ring_bytes, pack_homography_rows, palette,
+    scene_indices, scene_shader, view_scale, warp_shader,
 };
 
 const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -1521,11 +1521,17 @@ mod tests {
         plan.source_valid = true;
         let mut hot = WarpSourceSlot::default();
         hot.write_hot(&plan);
-        assert_eq!(hot.frame(ledger.retained()).map(|frame| frame.scene_id), Some(41));
+        assert_eq!(
+            hot.frame(ledger.retained()).map(|frame| frame.scene_id),
+            Some(41)
+        );
 
         let promoted = promote_binding_scene(&mut ledger, 42);
         assert_eq!(promoted.scene_id, 42);
-        assert_eq!(hot.frame(ledger.retained()).map(|frame| frame.scene_id), None);
+        assert_eq!(
+            hot.frame(ledger.retained()).map(|frame| frame.scene_id),
+            None
+        );
         assert_eq!(HOT_SOURCE_VALID_BYTE_OFFSET, 280);
     }
 

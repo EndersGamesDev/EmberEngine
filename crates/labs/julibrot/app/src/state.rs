@@ -1171,10 +1171,14 @@ mod tests {
         assert!(viewer.crosshair_plane_px().is_some());
         let mut object = viewer.requested().object_angles;
         object.rho_12 = 0.2;
-        viewer.set_object_angles(object).expect("valid slice change");
+        viewer
+            .set_object_angles(object)
+            .expect("valid slice change");
         assert!(viewer.crosshair_plane_px().is_none());
 
-        viewer.set_crosshair([30.0, 10.0]).expect("second finite click");
+        viewer
+            .set_crosshair([30.0, 10.0])
+            .expect("second finite click");
         viewer
             .set_plane_angles(PlaneAngles {
                 theta_1: -0.1,

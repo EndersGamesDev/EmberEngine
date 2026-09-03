@@ -1,6 +1,4 @@
-use ember_julibrot_kernels::{
-    EscapeParams, KernelSample, RefinementLevel, escape_shallow_point,
-};
+use ember_julibrot_kernels::{EscapeParams, KernelSample, RefinementLevel, escape_shallow_point};
 use ember_julibrot_math::{
     EscapeGridRecord, ObjectAngles, Pose, PoseMap, PrecisionMode, ViewControls, construct_plane,
     pixel_scale, screen_to_plane,
@@ -99,16 +97,13 @@ fn map_plane_offset(pose: &Pose, screen: [f64; 2]) -> Option<[f64; 2]> {
     let PoseMap::Mapped(map) = pose.map else {
         return None;
     };
-    let denominator =
-        map.rows[6].mul_add(screen[0], map.rows[7].mul_add(screen[1], map.rows[8]));
+    let denominator = map.rows[6].mul_add(screen[0], map.rows[7].mul_add(screen[1], map.rows[8]));
     if !denominator.is_finite() || denominator <= 0.0 {
         return None;
     }
     let mapped = [
-        map.rows[0].mul_add(screen[0], map.rows[1].mul_add(screen[1], map.rows[2]))
-            / denominator,
-        map.rows[3].mul_add(screen[0], map.rows[4].mul_add(screen[1], map.rows[5]))
-            / denominator,
+        map.rows[0].mul_add(screen[0], map.rows[1].mul_add(screen[1], map.rows[2])) / denominator,
+        map.rows[3].mul_add(screen[0], map.rows[4].mul_add(screen[1], map.rows[5])) / denominator,
     ];
     mapped
         .iter()
@@ -181,19 +176,12 @@ fn nearest_retained(
 ) -> Option<(KernelSample, [f64; 2])> {
     let column = (source[0] + f64::from(extent[0]) * 0.5 - 0.5).round();
     let row = (source[1] + f64::from(extent[1]) * 0.5 - 0.5).round();
-    if column < 0.0
-        || row < 0.0
-        || column >= f64::from(extent[0])
-        || row >= f64::from(extent[1])
-    {
+    if column < 0.0 || row < 0.0 || column >= f64::from(extent[0]) || row >= f64::from(extent[1]) {
         return None;
     }
     let index = row as usize * extent[0] as usize + column as usize;
     let sample = image.get(index).copied()?;
-    Some((
-        sample,
-        pixel_screen(extent, column as u32, row as u32),
-    ))
+    Some((sample, pixel_screen(extent, column as u32, row as u32)))
 }
 
 fn record(sample: KernelSample) -> [f32; 4] {
@@ -220,12 +208,10 @@ fn colours_within_one_code(left: KernelSample, right: KernelSample) -> bool {
 }
 
 fn invert_homography(matrix: [f64; 9]) -> Option<[f64; 9]> {
-    let determinant = matrix[0]
-        .mul_add(
-            matrix[4].mul_add(matrix[8], -matrix[5] * matrix[7]),
-            -matrix[1] * matrix[3].mul_add(matrix[8], -matrix[5] * matrix[6]),
-        )
-        + matrix[2] * matrix[3].mul_add(matrix[7], -matrix[4] * matrix[6]);
+    let determinant = matrix[0].mul_add(
+        matrix[4].mul_add(matrix[8], -matrix[5] * matrix[7]),
+        -matrix[1] * matrix[3].mul_add(matrix[8], -matrix[5] * matrix[6]),
+    ) + matrix[2] * matrix[3].mul_add(matrix[7], -matrix[4] * matrix[6]);
     if !determinant.is_finite() || determinant.abs() <= 1.0e-12 {
         return None;
     }
@@ -240,7 +226,10 @@ fn invert_homography(matrix: [f64; 9]) -> Option<[f64; 9]> {
         matrix[1].mul_add(matrix[6], -matrix[0] * matrix[7]) / determinant,
         matrix[0].mul_add(matrix[4], -matrix[1] * matrix[3]) / determinant,
     ];
-    inverse.iter().all(|value| value.is_finite()).then_some(inverse)
+    inverse
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(inverse)
 }
 
 fn stable_across_sampling_envelope(
@@ -256,9 +245,16 @@ fn stable_across_sampling_envelope(
             (sampled_target[0] - target[0]).mul_add(fraction, target[0]),
             (sampled_target[1] - target[1]).mul_add(fraction, target[1]),
         ];
-        for offset in [[0.0, 0.0], [maximum, 0.0], [-maximum, 0.0], [0.0, maximum], [0.0, -maximum]] {
+        for offset in [
+            [0.0, 0.0],
+            [maximum, 0.0],
+            [-maximum, 0.0],
+            [0.0, maximum],
+            [0.0, -maximum],
+        ] {
             let nearby = sample_pose(pose, [point[0] + offset[0], point[1] + offset[1]])?;
-            if !same_terminal_and_index(centre, nearby) || !colours_within_one_code(centre, nearby) {
+            if !same_terminal_and_index(centre, nearby) || !colours_within_one_code(centre, nearby)
+            {
                 return None;
             }
         }
@@ -311,8 +307,8 @@ fn compare_accepted(
             .unwrap_or_else(|| panic!("{name}: retained scene had an off-corpus pole"));
         let warped_source = apply_homography(inverse, destination_relief)
             .unwrap_or_else(|| panic!("{name}: warp had an off-corpus pole"));
-        let error = (warped_source[0] - expected_source[0])
-            .hypot(warped_source[1] - expected_source[1]);
+        let error =
+            (warped_source[0] - expected_source[0]).hypot(warped_source[1] - expected_source[1]);
         assert!(error <= maximum + 1.0e-6, "{name}: {error} > {maximum}");
 
         let Some((retained, retained_pixel)) =
@@ -322,8 +318,7 @@ fn compare_accepted(
         };
         let sampled_target = apply_homography(forward, retained_pixel)
             .unwrap_or_else(|| panic!("{name}: retained pixel mapped through a pole"));
-        let Some(fresh) =
-            stable_across_sampling_envelope(to, target, sampled_target, maximum)
+        let Some(fresh) = stable_across_sampling_envelope(to, target, sampled_target, maximum)
         else {
             continue;
         };
@@ -456,13 +451,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
     for index in 0..10 {
         let mut flat_view = ViewControls::NEUTRAL;
         flat_view.camera[index] = 0.2;
-        let turned = pose(
-            ObjectAngles::JULIA,
-            flat_view,
-            BASE_ORIGIN,
-            0.0,
-            [0.0; 2],
-        );
+        let turned = pose(ObjectAngles::JULIA, flat_view, BASE_ORIGIN, 0.0, [0.0; 2]);
         assert_fixture(
             &format!("camera {index} h0"),
             &base,
@@ -471,22 +460,10 @@ fn retained_warp_matches_independent_fresh_scenes() {
             Expected::Agree,
         );
 
-        let from = pose(
-            ObjectAngles::JULIA,
-            relief(),
-            BASE_ORIGIN,
-            0.0,
-            [0.0; 2],
-        );
+        let from = pose(ObjectAngles::JULIA, relief(), BASE_ORIGIN, 0.0, [0.0; 2]);
         let mut relief_view = relief();
         relief_view.camera[index] += 0.2;
-        let to = pose(
-            ObjectAngles::JULIA,
-            relief_view,
-            BASE_ORIGIN,
-            0.0,
-            [0.0; 2],
-        );
+        let to = pose(ObjectAngles::JULIA, relief_view, BASE_ORIGIN, 0.0, [0.0; 2]);
         assert_fixture(
             &format!("camera {index} h1"),
             &from,
@@ -499,22 +476,10 @@ fn retained_warp_matches_independent_fresh_scenes() {
     let mut observer = ViewControls::NEUTRAL;
     observer.camera_yaw = 0.2;
     observer.camera_pitch = -0.15;
-    let observer = pose(
-        ObjectAngles::JULIA,
-        observer,
-        BASE_ORIGIN,
-        0.0,
-        [0.0; 2],
-    );
+    let observer = pose(ObjectAngles::JULIA, observer, BASE_ORIGIN, 0.0, [0.0; 2]);
     assert_fixture("yaw pitch h0", &base, &observer, 0.0, Expected::Agree);
 
-    let relief_from = pose(
-        ObjectAngles::JULIA,
-        relief(),
-        BASE_ORIGIN,
-        0.0,
-        [0.0; 2],
-    );
+    let relief_from = pose(ObjectAngles::JULIA, relief(), BASE_ORIGIN, 0.0, [0.0; 2]);
     let mut observer_relief = relief();
     observer_relief.camera_yaw += 0.2;
     observer_relief.camera_pitch -= 0.15;
@@ -540,33 +505,15 @@ fn retained_warp_matches_independent_fresh_scenes() {
         } else {
             flat_view.distance_four = 6.5;
         }
-        let flat_to = pose(
-            ObjectAngles::JULIA,
-            flat_view,
-            BASE_ORIGIN,
-            0.0,
-            [0.0; 2],
-        );
-        assert_fixture(
-            &format!("{name} h0"),
-            &base,
-            &flat_to,
-            0.0,
-            Expected::Agree,
-        );
+        let flat_to = pose(ObjectAngles::JULIA, flat_view, BASE_ORIGIN, 0.0, [0.0; 2]);
+        assert_fixture(&format!("{name} h0"), &base, &flat_to, 0.0, Expected::Agree);
         let mut relief_view = relief();
         if field == 5 {
             relief_view.distance_five = 6.5;
         } else {
             relief_view.distance_four = 6.5;
         }
-        let relief_to = pose(
-            ObjectAngles::JULIA,
-            relief_view,
-            BASE_ORIGIN,
-            0.0,
-            [0.0; 2],
-        );
+        let relief_to = pose(ObjectAngles::JULIA, relief_view, BASE_ORIGIN, 0.0, [0.0; 2]);
         assert_fixture(
             &format!("{name} h1"),
             &relief_from,
@@ -578,13 +525,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
 
     let mut height_view = relief();
     height_view.height_scale = 1.4;
-    let height_to = pose(
-        ObjectAngles::JULIA,
-        height_view,
-        BASE_ORIGIN,
-        0.0,
-        [0.0; 2],
-    );
+    let height_to = pose(ObjectAngles::JULIA, height_view, BASE_ORIGIN, 0.0, [0.0; 2]);
     assert_fixture(
         "height scale",
         &relief_from,
@@ -617,13 +558,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
         0.0,
         [0.0; 2],
     );
-    assert_fixture(
-        "in-plane origin",
-        &base,
-        &in_plane,
-        0.0,
-        Expected::Agree,
-    );
+    assert_fixture("in-plane origin", &base, &in_plane, 0.0, Expected::Agree);
     let out_of_plane = pose(
         ObjectAngles::JULIA,
         ViewControls::NEUTRAL,
@@ -647,13 +582,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
         0.0,
         [0.0; 2],
     );
-    assert_fixture(
-        "extent aspect",
-        &base,
-        &resized,
-        0.0,
-        Expected::Agree,
-    );
+    assert_fixture("extent aspect", &base, &resized, 0.0, Expected::Agree);
 
     let mut edge_on = base;
     edge_on.map = PoseMap::EdgeOn;
@@ -664,20 +593,8 @@ fn retained_warp_matches_independent_fresh_scenes() {
         distance_five: 1.0,
         ..ViewControls::NEUTRAL
     };
-    let pole = pose(
-        ObjectAngles::JULIA,
-        pole_view,
-        BASE_ORIGIN,
-        0.0,
-        [0.0; 2],
-    );
-    assert_fixture(
-        "pole inside frame",
-        &pole,
-        &pole,
-        1.0,
-        Expected::Clear,
-    );
+    let pole = pose(ObjectAngles::JULIA, pole_view, BASE_ORIGIN, 0.0, [0.0; 2]);
+    assert_fixture("pole inside frame", &pole, &pole, 1.0, Expected::Clear);
 
     let mut cross_view = relief();
     cross_view.camera[0] += 0.08;
@@ -692,11 +609,5 @@ fn retained_warp_matches_independent_fresh_scenes() {
         0.03,
         [0.2, -0.15],
     );
-    assert_fixture(
-        "cross terms",
-        &relief_from,
-        &cross,
-        1.0,
-        Expected::Either,
-    );
+    assert_fixture("cross terms", &relief_from, &cross, 1.0, Expected::Either);
 }

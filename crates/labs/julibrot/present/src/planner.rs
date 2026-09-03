@@ -46,14 +46,8 @@ impl Warp {
         if !chart_residual.is_finite() || chart_residual > MAX_CHART_RESIDUAL_PX {
             return clear_only(true);
         }
-        anchor_plan(
-            last_frame,
-            from_pose,
-            to_pose,
-            flat.forward,
-            chart_residual,
-        )
-        .map_or_else(|| clear_only(true), enforce_error_ceiling)
+        anchor_plan(last_frame, from_pose, to_pose, flat.forward, chart_residual)
+            .map_or_else(|| clear_only(true), enforce_error_ceiling)
     }
 }
 
@@ -123,15 +117,15 @@ fn anchor_plan(
         if errors.is_empty() {
             return None;
         }
-            errors.sort_by(f64::total_cmp);
-            let maximum = errors.last().copied()?;
-            let percentile_index = errors
-                .len()
-                .saturating_mul(95)
-                .div_ceil(100)
-                .saturating_sub(1);
-            Some((maximum, *errors.get(percentile_index)?))
-        });
+        errors.sort_by(f64::total_cmp);
+        let maximum = errors.last().copied()?;
+        let percentile_index = errors
+            .len()
+            .saturating_mul(95)
+            .div_ceil(100)
+            .saturating_sub(1);
+        Some((maximum, *errors.get(percentile_index)?))
+    });
     Some(WarpPlan {
         rows,
         source_scene_id: Some(last_frame.scene_id),
@@ -185,11 +179,7 @@ const fn homogeneous(matrix: [f64; 9], point: [f64; 2]) -> [f64; 3] {
     ]
 }
 
-fn sampled_errors(
-    from_pose: &Pose,
-    to_pose: &Pose,
-    approximate: [f64; 9],
-) -> Option<Vec<f64>> {
+fn sampled_errors(from_pose: &Pose, to_pose: &Pose, approximate: [f64; 9]) -> Option<Vec<f64>> {
     let screen_sample_count = usize::try_from(SCREEN_STEPS).ok()?;
     let sample_count = screen_sample_count * screen_sample_count * HEIGHT_SAMPLES.len();
     let mut errors = Vec::new();
@@ -845,10 +835,10 @@ mod tests {
         assert_eq!(plan.kind, WarpKind::AnchorHomography);
         let maximum = plan.approx_max_error_px.expect("translation is measured");
         assert!(maximum > 0.0 && maximum <= WARP_MAX_ERROR_PX);
-        let with_translation = project_scene_point(&to, [200.0, -100.0], 1.0)
-            .expect("translated relief projects");
-        let without_translation = project_scene_point(&from, [200.0, -100.0], 1.0)
-            .expect("untranslated relief projects");
+        let with_translation =
+            project_scene_point(&to, [200.0, -100.0], 1.0).expect("translated relief projects");
+        let without_translation =
+            project_scene_point(&from, [200.0, -100.0], 1.0).expect("untranslated relief projects");
         assert_ne!(with_translation, without_translation);
     }
 
@@ -877,10 +867,13 @@ mod tests {
         to.zoom_log2 += 0.1;
         let ordinary = reproject(&frame(&from), &from, &to);
         let approximate = unpack_rows(ordinary.rows);
-        let full = sampled_errors(&from, &to, approximate)
-            .expect("the full validation corpus projects");
+        let full =
+            sampled_errors(&from, &to, approximate).expect("the full validation corpus projects");
         assert_eq!(full.len(), 9 * 9 * HEIGHT_SAMPLES.len());
-        assert_eq!(ordinary.approx_max_error_px, full.iter().copied().reduce(f64::max));
+        assert_eq!(
+            ordinary.approx_max_error_px,
+            full.iter().copied().reduce(f64::max)
+        );
 
         let measured = Warp::reproject(
             &frame(&from),
@@ -889,7 +882,10 @@ mod tests {
             PrecisionMode::PictureFast,
             WarpValidation::Measure,
         );
-        assert_eq!(measured.approx_max_error_px, full.into_iter().reduce(f64::max));
+        assert_eq!(
+            measured.approx_max_error_px,
+            full.into_iter().reduce(f64::max)
+        );
     }
 
     #[test]
