@@ -3,9 +3,9 @@ use core::num::NonZeroU32;
 
 use ember_julibrot_math::{
     BigCentre, CentreSplit, EscapeGridRecord, EscapeParams, Homography, MathError, NavigationDelta,
-    OrbitStep, Plane, PlaneAngles, Pose, ReferenceOrbitBuilder, ReferenceOrbitRecord, ViewControls,
-    centre_from_reference_px, construct_plane, navigation_delta, pixel_scale, precision_for,
-    reference_shift_px, scaled_pixel_scale, screen_to_plane,
+    ObjectAngles, OrbitStep, Plane, PlaneAngles, Pose, ReferenceOrbitBuilder, ReferenceOrbitRecord,
+    ViewControls, centre_from_reference_px, construct_plane, navigation_delta, pixel_scale,
+    precision_for, reference_shift_px, scaled_pixel_scale, screen_to_plane,
 };
 
 type ApplyNavigationFn =
@@ -13,6 +13,8 @@ type ApplyNavigationFn =
 type DisplacementFn = fn(&BigCentre, &BigCentre, &Plane, f64) -> Result<[f64; 2], MathError>;
 type NavigationMapFn =
     fn(&Homography, [f64; 2], f64, [f64; 2]) -> Result<NavigationDelta, MathError>;
+type ScreenMapFn =
+    fn(&ObjectAngles, &ViewControls, f64, u32, u32, f64) -> Result<Homography, MathError>;
 
 #[test]
 fn shared_gpu_and_owner_discriminants_are_exact() {
@@ -37,7 +39,9 @@ fn shared_gpu_and_owner_discriminants_are_exact() {
     assert_eq!(offset_of!(EscapeGridRecord, status), 12);
     assert_eq!(
         ViewControls::NEUTRAL.as_array(),
-        [0.0, 0.0, 0.0, 0.0, 0.0, 8.0, 8.0]
+        [
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 8.0, 8.0,
+        ]
     );
     assert!(ViewControls::NEUTRAL.is_valid());
     assert!(
@@ -66,7 +70,7 @@ fn app_facing_function_signatures_stay_stable() {
     let _: fn(&Pose, &Pose) -> Result<ember_julibrot_math::WarpMatrix, MathError> =
         ember_julibrot_math::warp_matrix;
     let _: fn(f64, u32) -> Result<f64, MathError> = pixel_scale;
-    let _: fn(&ViewControls, f64, u32, u32, f64) -> Result<Homography, MathError> = screen_to_plane;
+    let _: ScreenMapFn = screen_to_plane;
     let _: NavigationMapFn = navigation_delta;
     let _: ApplyNavigationFn = BigCentre::apply_navigation;
     let _: DisplacementFn = BigCentre::displacement_px;

@@ -1,5 +1,5 @@
 use crate::screen::{invert_3x3, multiply_3x3};
-use crate::{MathError, Plane, Pose, WarpMatrix};
+use crate::{MathError, Plane, Pose, PoseMap, WarpMatrix};
 
 /// Builds the composed source-to-destination screen homography and its inverse-sampling inverse.
 ///
@@ -9,6 +9,9 @@ use crate::{MathError, Plane, Pose, WarpMatrix};
 pub fn warp_matrix(from: &Pose, to: &Pose) -> Result<WarpMatrix, MathError> {
     validate_pose(from)?;
     validate_pose(to)?;
+    let (PoseMap::Mapped(from_map), PoseMap::Mapped(to_map)) = (from.map, to.map) else {
+        return Err(MathError::DegenerateWarp);
+    };
     let scale_ratio = (to.zoom_log2 - from.zoom_log2).exp2() * f64::from(to.grid_width)
         / f64::from(from.grid_width);
     if !scale_ratio.is_finite() || scale_ratio == 0.0 {
@@ -28,10 +31,7 @@ pub fn warp_matrix(from: &Pose, to: &Pose) -> Result<WarpMatrix, MathError> {
         m11 * from.centre_from_reference_px[1],
     ) - to.centre_from_reference_px[1];
     let plane_map = [m00, m01, b0, m10, m11, b1, 0.0, 0.0, 1.0];
-    let forward = multiply_3x3(
-        to.screen_to_plane.inverse,
-        multiply_3x3(plane_map, from.screen_to_plane.rows),
-    );
+    let forward = multiply_3x3(to_map.inverse, multiply_3x3(plane_map, from_map.rows));
     if !forward.iter().all(|coefficient| coefficient.is_finite()) {
         return Err(MathError::NonFinite);
     }
@@ -59,20 +59,24 @@ fn validate_pose(pose: &Pose) -> Result<(), MathError> {
     if !pose.view.is_valid() {
         return Err(MathError::InvalidViewControls);
     }
+    if !pose.object.is_valid() {
+        return Err(MathError::NonFinite);
+    }
+    let map = match pose.map {
+        PoseMap::Mapped(map) => map,
+        PoseMap::EdgeOn => return Ok(()),
+    };
     let scalar_values = [
-        pose.plane_theta_1,
-        pose.plane_theta_2,
         pose.zoom_log2,
         pose.centre_from_reference_px[0],
         pose.centre_from_reference_px[1],
-        pose.screen_to_plane.condition_number,
+        map.condition_number,
     ];
     if !scalar_values.iter().all(|value| value.is_finite())
-        || !pose
-            .screen_to_plane
+        || !map
             .rows
             .iter()
-            .chain(&pose.screen_to_plane.inverse)
+            .chain(&map.inverse)
             .all(|value| value.is_finite())
         || !pose
             .plane
@@ -104,7 +108,7 @@ fn dot(left: [f32; 4], right: [f32; 4]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{warp_identity_error, warp_matrix};
-    use crate::{Homography, MathError, Plane, Pose, ViewControls};
+    use crate::{Homography, MathError, ObjectAngles, Plane, Pose, PoseMap, ViewControls};
 
     fn pose(zoom_log2: f64, displacement: [f64; 2]) -> Pose {
         Pose {
@@ -114,13 +118,16 @@ mod tests {
                 basis_u: [0.8, 0.0, 0.6, 0.0],
                 basis_v: [0.0, 0.6, 0.0, 0.8],
             },
-            plane_theta_1: 0.643_501_108_793_284_4,
-            plane_theta_2: 0.927_295_218_001_612_3,
+            object: ObjectAngles {
+                rho_13: 0.643_501_108_793_284_4,
+                rho_24: 0.927_295_218_001_612_3,
+                ..ObjectAngles::IDENTITY
+            },
             zoom_log2,
             view: ViewControls::NEUTRAL,
             grid_width: 1920,
             grid_height: 1080,
-            screen_to_plane: Homography::IDENTITY,
+            map: PoseMap::Mapped(Homography::IDENTITY),
             centre_from_reference_px: displacement,
         }
     }

@@ -1,4 +1,4 @@
-use crate::{Homography, MathError, ViewControls};
+use crate::{Homography, MathError, ObjectAngles, Plane, ViewControls, construct_plane};
 
 const PIVOT_EPSILON: f64 = 1.0e-12;
 const MAP_ERROR_LIMIT_PX: f64 = 0.25;
@@ -13,13 +13,14 @@ const MAP_ERROR_LIMIT_PX: f64 = 0.25;
 /// Returns an error for invalid controls, zoom, extent, aspect, or a forward map whose partial
 /// pivot falls below `1e-12`.
 pub fn screen_to_plane(
+    object: &ObjectAngles,
     view: &ViewControls,
     zoom_log2: f64,
     grid_w: u32,
     grid_h: u32,
     aspect: f64,
 ) -> Result<Homography, MathError> {
-    if !view.is_valid() {
+    if !object.is_valid() || !view.is_valid() {
         return Err(MathError::InvalidViewControls);
     }
     if grid_w == 0 || grid_h == 0 {
@@ -32,35 +33,11 @@ pub fn screen_to_plane(
         return Err(MathError::DegenerateViewMap);
     }
 
-    if view.theta_1 == 0.0
-        && view.theta_2 == 0.0
-        && view.camera_yaw == 0.0
-        && view.camera_pitch == 0.0
-    {
+    let plane = construct_plane(*object)?;
+    if is_canonical_flat_pair(*object, *view) {
         return Ok(Homography::IDENTITY);
     }
-
-    let (view_sine, view_cosine) = view.theta_1.sin_cos();
-    let (yaw_sine, yaw_cosine) = view.camera_yaw.sin_cos();
-    let (pitch_sine, pitch_cosine) = view.camera_pitch.sin_cos();
-    let inverse_camera_distance = 1.0 / view.distance_four;
-    let denominator_scale = 4.0 * inverse_camera_distance / f64::from(grid_w);
-
-    // These are the generated scene WGSL camera equations at h=0, with the common homogeneous
-    // factor d4 removed. The five- and four-dimensional perspective denominators are one on this
-    // two-flat; theta_2 and d5 therefore cancel before this matrix is formed.
-    let forward = [
-        yaw_cosine * view_cosine,
-        -yaw_cosine * view_sine,
-        0.0,
-        pitch_sine.mul_add(yaw_sine * view_cosine, pitch_cosine * view_sine),
-        (-pitch_sine).mul_add(yaw_sine * view_sine, pitch_cosine * view_cosine),
-        0.0,
-        denominator_scale * pitch_cosine.mul_add(yaw_sine * view_cosine, -pitch_sine * view_sine),
-        denominator_scale
-            * (-pitch_cosine).mul_add(yaw_sine * view_sine, -pitch_sine * view_cosine),
-        1.0,
-    ];
+    let forward = forward_homography(plane, view, grid_w)?;
     if !forward.iter().all(|value| value.is_finite()) {
         return Err(MathError::NonFinite);
     }
@@ -79,7 +56,151 @@ pub fn screen_to_plane(
     })
 }
 
-/// Converts DOM drag and wheel-anchor inputs into local plane-offset pixels.
+fn is_canonical_flat_pair(object: ObjectAngles, view: ViewControls) -> bool {
+    view.camera_yaw == 0.0
+        && view.camera_pitch == 0.0
+        && ((object == ObjectAngles::IDENTITY
+            && view.camera == ViewControls::MANDELBROT_FLAT.camera)
+            || (object == ObjectAngles::JULIA && view.camera == ViewControls::NEUTRAL.camera))
+}
+
+fn forward_homography(
+    plane: Plane,
+    view: &ViewControls,
+    grid_w: u32,
+) -> Result<[f64; 9], MathError> {
+    let camera = camera_rotation_matrix(view);
+    let chart_scale = 4.0 / f64::from(grid_w);
+    let transformed_basis: [[f64; 5]; 2] = [plane.basis_u, plane.basis_v].map(|basis| {
+        let ambient = [
+            f64::from(basis[0]),
+            f64::from(basis[1]),
+            f64::from(basis[2]),
+            f64::from(basis[3]),
+            0.0,
+        ];
+        core::array::from_fn(|row| {
+            camera[row]
+                .into_iter()
+                .zip(ambient)
+                .fold(0.0, |sum, (coefficient, value)| {
+                    coefficient.mul_add(value, sum)
+                })
+        })
+    });
+    let q: [[f64; 3]; 5] = core::array::from_fn(|axis| {
+        [
+            chart_scale * transformed_basis[0][axis],
+            chart_scale * transformed_basis[1][axis],
+            0.0,
+        ]
+    });
+    let distance_five = view.distance_five;
+    let distance_four = view.distance_four;
+    let perspective_product = distance_four * distance_five;
+    let numerator = [
+        scale_row(q[0], perspective_product),
+        scale_row(q[1], perspective_product),
+        scale_row(q[2], perspective_product),
+    ];
+    let denominator_four = add_rows(
+        add_rows(
+            [0.0, 0.0, perspective_product],
+            scale_row(q[4], -distance_four),
+        ),
+        scale_row(q[3], -distance_five),
+    );
+    let (yaw_sine, yaw_cosine) = view.camera_yaw.sin_cos();
+    let (pitch_sine, pitch_cosine) = view.camera_pitch.sin_cos();
+    let yawed_x = add_rows(
+        scale_row(numerator[0], yaw_cosine),
+        scale_row(numerator[2], yaw_sine),
+    );
+    let yawed_z = add_rows(
+        scale_row(numerator[0], -yaw_sine),
+        scale_row(numerator[2], yaw_cosine),
+    );
+    let view_y = add_rows(
+        scale_row(numerator[1], pitch_cosine),
+        scale_row(yawed_z, -pitch_sine),
+    );
+    let clip_w = add_rows(
+        add_rows(
+            scale_row(denominator_four, distance_four),
+            scale_row(numerator[1], -pitch_sine),
+        ),
+        scale_row(yawed_z, -pitch_cosine),
+    );
+    let viewport_scale = f64::from(grid_w) * distance_four * 0.25;
+    let x = scale_row(yawed_x, viewport_scale);
+    let y = scale_row(view_y, viewport_scale);
+    let normalizer = clip_w[2];
+    if !normalizer.is_finite() || normalizer.abs() < PIVOT_EPSILON {
+        return Err(MathError::DegenerateViewMap);
+    }
+    let forward = [
+        x[0] / normalizer,
+        x[1] / normalizer,
+        x[2] / normalizer,
+        y[0] / normalizer,
+        y[1] / normalizer,
+        y[2] / normalizer,
+        clip_w[0] / normalizer,
+        clip_w[1] / normalizer,
+        1.0,
+    ];
+    forward
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(forward)
+        .ok_or(MathError::NonFinite)
+}
+
+const fn scale_row(row: [f64; 3], scale: f64) -> [f64; 3] {
+    [row[0] * scale, row[1] * scale, row[2] * scale]
+}
+
+const fn add_rows(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
+    [left[0] + right[0], left[1] + right[1], left[2] + right[2]]
+}
+
+fn camera_rotation_matrix(view: &ViewControls) -> [[f64; 5]; 5] {
+    let columns: [[f64; 5]; 5] = core::array::from_fn(|column| {
+        let mut value = [0.0; 5];
+        value[column] = 1.0;
+        for factor in (0..ViewControls::CAMERA_PLANES.len()).rev() {
+            let (first, second) = ViewControls::CAMERA_PLANES[factor];
+            rotate_pair(&mut value, first, second, view.camera[factor]);
+        }
+        value
+    });
+    core::array::from_fn(|row| core::array::from_fn(|column| columns[column][row]))
+}
+
+fn rotate_pair(value: &mut [f64; 5], first: usize, second: usize, angle: f64) {
+    let (sine, cosine) = angle.sin_cos();
+    let a = cosine.mul_add(value[first], -sine * value[second]);
+    let b = sine.mul_add(value[first], cosine * value[second]);
+    value[first] = a;
+    value[second] = b;
+}
+
+#[must_use]
+pub fn rotation_orthonormality_5(view: &ViewControls) -> f64 {
+    let matrix = camera_rotation_matrix(view);
+    (0..5)
+        .flat_map(|row| (0..5).map(move |column| (row, column)))
+        .map(|(row, column)| {
+            let product = (0..5).fold(0.0, |sum, inner| {
+                matrix[inner][row].mul_add(matrix[inner][column], sum)
+            });
+            let expected = if row == column { 1.0 } else { 0.0 };
+            (product - expected).abs()
+        })
+        .fold(0.0, f64::max)
+}
+
+/// Converts page target, selection, and scale inputs into local plane-offset pixels.
 ///
 /// # Errors
 ///
@@ -263,8 +384,13 @@ fn norm_infinity(matrix: [f64; 9]) -> f64 {
 mod tests {
     use super::*;
 
-    fn map(view: ViewControls, extent: [u32; 2]) -> Result<Homography, MathError> {
+    fn map(
+        object: ObjectAngles,
+        view: ViewControls,
+        extent: [u32; 2],
+    ) -> Result<Homography, MathError> {
         screen_to_plane(
+            &object,
             &view,
             40.0,
             extent[0],
@@ -278,19 +404,30 @@ mod tests {
         for extent in [[960, 540], [1024, 1024]] {
             for zoom in [0.0, 40.0, 100.0] {
                 for distance in [2.0, 8.0, 64.0] {
-                    let view = ViewControls {
+                    let mandelbrot = ViewControls {
+                        distance_five: distance,
+                        distance_four: distance,
+                        ..ViewControls::MANDELBROT_FLAT
+                    };
+                    let julia = ViewControls {
                         distance_five: distance,
                         distance_four: distance,
                         ..ViewControls::NEUTRAL
                     };
-                    let homography = screen_to_plane(
-                        &view,
-                        zoom,
-                        extent[0],
-                        extent[1],
-                        f64::from(extent[0]) / f64::from(extent[1]),
-                    )?;
-                    assert_eq!(homography, Homography::IDENTITY);
+                    for (object, view) in [
+                        (ObjectAngles::IDENTITY, mandelbrot),
+                        (ObjectAngles::JULIA, julia),
+                    ] {
+                        let homography = screen_to_plane(
+                            &object,
+                            &view,
+                            zoom,
+                            extent[0],
+                            extent[1],
+                            f64::from(extent[0]) / f64::from(extent[1]),
+                        )?;
+                        assert_eq!(homography, Homography::IDENTITY);
+                    }
                 }
             }
         }
@@ -298,31 +435,53 @@ mod tests {
     }
 
     #[test]
+    fn mandelbrot_camera_quarter_turns_face_the_seed_with_the_shipped_orientation() {
+        let matrix = camera_rotation_matrix(&ViewControls::MANDELBROT_FLAT);
+        assert!((matrix[0][2] - 1.0).abs() <= f64::EPSILON);
+        assert!((matrix[1][3] - 1.0).abs() <= f64::EPSILON);
+        assert!(matrix[2][2].abs() <= f64::EPSILON);
+        assert!(matrix[3][3].abs() <= f64::EPSILON);
+    }
+
+    #[test]
     fn forward_after_inverse_is_identity_on_the_screen_lattice() -> Result<(), MathError> {
+        let mut tumbled_camera = [0.0; 10];
+        tumbled_camera[0] = 0.37;
+        tumbled_camera[8] = 0.31;
+        let mut second_camera = ViewControls::MANDELBROT_FLAT.camera;
+        second_camera[6] = -0.2;
         let fixtures = [
-            ViewControls::NEUTRAL,
-            ViewControls {
-                theta_1: 0.37,
-                theta_2: 0.61,
-                camera_yaw: 0.349,
-                camera_pitch: 0.262,
-                height_scale: 1.0,
-                distance_five: 6.0,
-                distance_four: 8.0,
-            },
-            ViewControls {
-                theta_1: -0.4,
-                theta_2: 0.2,
-                camera_yaw: -0.41,
-                camera_pitch: 0.23,
-                height_scale: 0.5,
-                distance_five: 2.0,
-                distance_four: 64.0,
-            },
+            (ObjectAngles::JULIA, ViewControls::NEUTRAL),
+            (
+                ObjectAngles::JULIA,
+                ViewControls {
+                    camera: tumbled_camera,
+                    camera_yaw: 0.349,
+                    camera_pitch: 0.262,
+                    height_scale: 1.0,
+                    distance_five: 6.0,
+                    distance_four: 8.0,
+                },
+            ),
+            (
+                ObjectAngles {
+                    rho_14: 0.2,
+                    rho_23: -0.15,
+                    ..ObjectAngles::IDENTITY
+                },
+                ViewControls {
+                    camera: second_camera,
+                    camera_yaw: -0.41,
+                    camera_pitch: 0.23,
+                    height_scale: 0.5,
+                    distance_five: 2.0,
+                    distance_four: 64.0,
+                },
+            ),
         ];
         for extent in [[1024, 1024], [1920, 1080]] {
-            for view in fixtures {
-                let homography = map(view, extent)?;
+            for (object, view) in fixtures {
+                let homography = map(object, view, extent)?;
                 assert!(homography.condition_number.is_finite());
                 for row in 0..9 {
                     for column in 0..9 {
@@ -347,35 +506,31 @@ mod tests {
 
     #[test]
     fn edge_on_camera_is_refused_at_the_declared_pivot() {
-        let view = ViewControls {
-            camera_yaw: core::f64::consts::FRAC_PI_2,
-            ..ViewControls::NEUTRAL
-        };
-        assert_eq!(map(view, [960, 540]), Err(MathError::DegenerateViewMap));
+        assert_eq!(
+            map(ObjectAngles::IDENTITY, ViewControls::NEUTRAL, [960, 540]),
+            Err(MathError::DegenerateViewMap)
+        );
     }
 
     #[test]
     fn zoom_does_not_enter_pixel_unit_rows() -> Result<(), MathError> {
-        let view = ViewControls {
-            theta_1: 0.2,
-            camera_yaw: 0.3,
-            camera_pitch: -0.15,
-            ..ViewControls::NEUTRAL
-        };
-        let first = screen_to_plane(&view, 0.0, 960, 540, 16.0 / 9.0)?;
-        let deep = screen_to_plane(&view, 100.0, 960, 540, 16.0 / 9.0)?;
+        let view = ViewControls::MANDELBROT_FLAT;
+        let first = screen_to_plane(&ObjectAngles::IDENTITY, &view, 0.0, 960, 540, 16.0 / 9.0)?;
+        let deep = screen_to_plane(&ObjectAngles::IDENTITY, &view, 100.0, 960, 540, 16.0 / 9.0)?;
         assert_eq!(first, deep);
         Ok(())
     }
 
     #[test]
     fn inverse_retains_negative_denominators_beyond_the_horizon() -> Result<(), MathError> {
+        let mut camera = [0.0; 10];
+        camera[6] = 1.4;
         let view = ViewControls {
-            camera_yaw: 1.4,
-            distance_four: 0.5,
+            camera,
+            distance_five: 0.5,
             ..ViewControls::NEUTRAL
         };
-        let homography = map(view, [960, 540])?;
+        let homography = map(ObjectAngles::JULIA, view, [960, 540])?;
         let denominators = [-10_000.0, 10_000.0].map(|x| homogeneous(homography.rows, [x, 0.0])[2]);
         assert!(
             denominators
@@ -393,9 +548,12 @@ mod tests {
         assert_eq!(identity.anchor_canvas_px, [19.5, -7.25]);
         assert_eq!(identity.zoom_delta_log2, 0.2);
 
+        let mut camera = ViewControls::MANDELBROT_FLAT.camera;
+        camera[0] = 0.2;
         let homography = map(
+            ObjectAngles::IDENTITY,
             ViewControls {
-                theta_1: 0.2,
+                camera,
                 camera_yaw: 0.3,
                 camera_pitch: -0.15,
                 ..ViewControls::NEUTRAL
@@ -419,5 +577,49 @@ mod tests {
             map_projective(homography.rows, [100.0, 50.0]).ok_or(MathError::DegenerateViewMap)?
         );
         Ok(())
+    }
+
+    #[test]
+    fn object_and_camera_rotations_remain_orthonormal_for_random_angles() {
+        let mut state = 0x4d59_5df4_d0f3_3173_u64;
+        let mut next_angle = || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            let word = u32::try_from(state >> 32).expect("shifted random word fits u32");
+            let unit = f64::from(word) / f64::from(u32::MAX);
+            core::f64::consts::TAU.mul_add(unit, -core::f64::consts::PI)
+        };
+        for _ in 0..256 {
+            let values: [f64; 6] = core::array::from_fn(|_| next_angle());
+            let object = ObjectAngles {
+                rho_12: values[0],
+                rho_13: values[1],
+                rho_14: values[2],
+                rho_23: values[3],
+                rho_24: values[4],
+                rho_34: values[5],
+            };
+            let view = ViewControls {
+                camera: core::array::from_fn(|_| next_angle()),
+                ..ViewControls::NEUTRAL
+            };
+            assert!(crate::rotation_orthonormality_4(&object) <= 1.0e-12);
+            assert!(rotation_orthonormality_5(&view) <= 1.0e-12);
+        }
+    }
+
+    #[test]
+    fn the_julia_to_mandelbrot_object_morph_meets_edge_on_once() {
+        let refusals = (0..=256)
+            .filter(|step| {
+                let t = f64::from(*step) / 256.0;
+                let object =
+                    crate::lerp_object_angles(ObjectAngles::JULIA, ObjectAngles::IDENTITY, t)
+                        .expect("finite object morph");
+                map(object, ViewControls::NEUTRAL, [960, 540]).is_err()
+            })
+            .count();
+        assert_eq!(refusals, 1);
     }
 }

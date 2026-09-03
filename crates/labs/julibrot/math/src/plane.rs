@@ -1,24 +1,21 @@
-use crate::{Axis4, MathError, Plane, PlaneAngles};
+use crate::{Axis4, MathError, ObjectAngles, Plane};
 
 /// The one seed pair the lab rotates: the Mandelbrot axes `(e₃,e₄)`.
 pub const SEED_AXES: [Axis4; 2] = [Axis4::E3, Axis4::E4];
 
-/// Constructs the sampled plane from the one seed and two independent angles.
-///
-/// There is no preset argument because a preset is a row of control values, not a choice of axes:
-/// `θ₁=θ₂=−π/2` carries the seed to exactly `(e₁,e₂)` and `+π/2` to the reversed pair, so every
-/// named plane and every hybrid between them is an angle position of this one construction.
+/// Constructs the sampled plane by applying the six-factor object rotation to the one seed.
 ///
 /// # Errors
 ///
 /// Returns an error for non-finite input or a failed rounding postcondition.
 #[allow(clippy::cast_possible_truncation)]
-pub fn construct_plane(angles: PlaneAngles) -> Result<Plane, MathError> {
-    if !angles.theta_1.is_finite() || !angles.theta_2.is_finite() {
+pub fn construct_plane(angles: impl Into<ObjectAngles>) -> Result<Plane, MathError> {
+    let angles = angles.into();
+    if !angles.is_valid() {
         return Err(MathError::NonFinite);
     }
-    let basis_u = rotate_axis(SEED_AXES[0], angles);
-    let basis_v = rotate_axis(SEED_AXES[1], angles);
+    let basis_u = rotate_axis(SEED_AXES[0], &angles);
+    let basis_v = rotate_axis(SEED_AXES[1], &angles);
     let plane = Plane {
         basis_u: basis_u.map(|component| component as f32),
         basis_v: basis_v.map(|component| component as f32),
@@ -36,20 +33,53 @@ pub fn construct_plane(angles: PlaneAngles) -> Result<Plane, MathError> {
     Ok(plane)
 }
 
-fn rotate_axis(axis: Axis4, angles: PlaneAngles) -> [f64; 4] {
+fn rotate_axis(axis: Axis4, angles: &ObjectAngles) -> [f64; 4] {
     let mut value = [0.0; 4];
     value[axis.index()] = 1.0;
-    let (sin_2, cos_2) = angles.theta_2.sin_cos();
-    let e2 = cos_2.mul_add(value[1], -sin_2 * value[3]);
-    let e4 = sin_2.mul_add(value[1], cos_2 * value[3]);
-    value[1] = e2;
-    value[3] = e4;
-    let (sin_1, cos_1) = angles.theta_1.sin_cos();
-    let e1 = cos_1.mul_add(value[0], -sin_1 * value[2]);
-    let e3 = sin_1.mul_add(value[0], cos_1 * value[2]);
-    value[0] = e1;
-    value[2] = e3;
+    for (first, second, angle) in [
+        (2, 3, angles.rho_34),
+        (1, 3, angles.rho_24),
+        (1, 2, angles.rho_23),
+        (0, 3, angles.rho_14),
+        (0, 2, angles.rho_13),
+        (0, 1, angles.rho_12),
+    ] {
+        rotate_pair(&mut value, first, second, angle);
+    }
     value
+}
+
+fn rotate_pair<const N: usize>(value: &mut [f64; N], first: usize, second: usize, angle: f64) {
+    let (sine, cosine) = angle.sin_cos();
+    let a = cosine.mul_add(value[first], -sine * value[second]);
+    let b = sine.mul_add(value[first], cosine * value[second]);
+    value[first] = a;
+    value[second] = b;
+}
+
+fn object_rotation_matrix(angles: &ObjectAngles) -> [[f64; 4]; 4] {
+    let columns: [[f64; 4]; 4] = core::array::from_fn(|column| {
+        rotate_axis([Axis4::E1, Axis4::E2, Axis4::E3, Axis4::E4][column], angles)
+    });
+    core::array::from_fn(|row| core::array::from_fn(|column| columns[column][row]))
+}
+
+#[must_use]
+pub fn rotation_orthonormality_4(angles: &ObjectAngles) -> f64 {
+    orthonormality_error(object_rotation_matrix(angles))
+}
+
+fn orthonormality_error<const N: usize>(matrix: [[f64; N]; N]) -> f64 {
+    (0..N)
+        .flat_map(|row| (0..N).map(move |column| (row, column)))
+        .map(|(row, column)| {
+            let product = (0..N).fold(0.0, |sum, inner| {
+                matrix[inner][row].mul_add(matrix[inner][column], sum)
+            });
+            let expected = if row == column { 1.0 } else { 0.0 };
+            (product - expected).abs()
+        })
+        .fold(0.0, f64::max)
 }
 
 fn dot_f32(left: [f32; 4], right: [f32; 4]) -> f32 {
@@ -61,10 +91,21 @@ fn dot_f32(left: [f32; 4], right: [f32; 4]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::construct_plane;
-    use crate::{MathError, PlaneAngles};
+    use crate::{MathError, ObjectAngles, PlaneAngles};
 
     fn angles(theta_1: f64, theta_2: f64) -> PlaneAngles {
         PlaneAngles { theta_1, theta_2 }
+    }
+
+    #[test]
+    fn six_angles_reproduce_the_legacy_two_angle_plane_exactly() -> Result<(), MathError> {
+        for legacy in [angles(0.0, 0.0), angles(-0.7, 1.1), angles(0.4, -2.0)] {
+            assert_eq!(
+                construct_plane(legacy)?,
+                construct_plane(ObjectAngles::from(legacy))?
+            );
+        }
+        Ok(())
     }
 
     #[test]
