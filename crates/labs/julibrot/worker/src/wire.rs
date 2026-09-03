@@ -728,7 +728,7 @@ pub fn validate_message_layout(
 #[cfg(test)]
 mod tests {
     use super::{
-        BUFFER_OVERHEAD_BYTES, ERROR_RECORD_BYTES, HEADER_BYTES, MessageHeader, MessageKind,
+        ERROR_RECORD_BYTES, HEADER_BYTES, MIN_BUFFER_CAPACITY_BYTES, MessageHeader, MessageKind,
         ORBIT_FACT_BYTES, ORBIT_RECORD_BYTES, OrbitVerificationFacts, POOL_TRAILER_BYTES, Pool,
         PoolTrailer, WireBuffer, buffer_capacity,
     };
