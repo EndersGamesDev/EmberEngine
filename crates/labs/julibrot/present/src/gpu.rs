@@ -621,7 +621,8 @@ impl Presenter {
                 self.scene_samples.completed();
                 self.facts.in_flight_scene_id = None;
                 self.facts.last_scene = Some(measurement);
-                let preserve_accepted_best = self.latest_hot_slot
+                let preserve_accepted_best = self
+                    .latest_hot_slot
                     .and_then(|slot| {
                         let index = slot.index() as usize;
                         self.hot_warp_source[index]
