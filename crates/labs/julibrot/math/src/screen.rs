@@ -59,7 +59,10 @@ pub fn screen_to_plane(
 fn is_canonical_flat_pair(object: ObjectAngles, view: ViewControls) -> bool {
     view.camera_yaw == 0.0
         && view.camera_pitch == 0.0
-        && view.camera_translation == [0.0; 5]
+        && view
+            .camera_translation
+            .iter()
+            .all(|value| value.to_bits() << 1 == 0)
         && ((object == ObjectAngles::IDENTITY
             && view.camera == ViewControls::MANDELBROT_FLAT.camera)
             || (object == ObjectAngles::JULIA && view.camera == ViewControls::NEUTRAL.camera))
