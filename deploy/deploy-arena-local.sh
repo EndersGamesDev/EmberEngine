@@ -48,13 +48,19 @@ say() { echo "== $* =="; }
 die() { echo "FAILED: $*" >&2; exit 1; }
 win() { cygpath -w "$1"; }
 
+# Stop ONLY the two processes this script started, found by the bind address
+# on their command line, never by image name: this PC runs other agents'
+# cloudflared tunnels (barza's, for 127.0.0.1:8901), and a kill by image name
+# took one of them down on 2026-09-03 the first time the kill actually
+# worked. (It had not, for months: git-bash rewrites taskkill's /IM and /F
+# switches into Windows paths, so every `up` found the previous server
+# still listening.) PowerShell's Stop-Process by pid needs no switch at all.
 stop_all() {
-    # MSYS_NO_PATHCONV: git-bash rewrites taskkill's /IM and /F switches into
-    # Windows paths ('C:/Program Files/Git/IM'), so without it nothing was
-    # ever killed and every `up` found the previous server still listening
-    # (measured 2026-09-03 while deploying v18).
-    MSYS_NO_PATHCONV=1 taskkill /IM arena-server.exe /F >/dev/null 2>&1 || true
-    MSYS_NO_PATHCONV=1 taskkill /IM cloudflared.exe /F >/dev/null 2>&1 || true
+    powershell -NoProfile -Command "
+      Get-CimInstance Win32_Process -Filter \"Name='cloudflared.exe' OR Name='arena-server.exe'\" |
+        Where-Object { \$_.CommandLine -match '127\.0\.0\.1:$PORT' } |
+        ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }
+    " >/dev/null 2>&1 || true
 }
 
 case "$CMD" in
