@@ -1,4 +1,6 @@
-use ember_julibrot_math::{Plane, Pose, PoseMap, PrecisionMode, ViewControls, warp_matrix};
+use ember_julibrot_math::{
+    Plane, Pose, PoseMap, PrecisionMode, ViewControls, plane_chart_relation, warp_matrix,
+};
 
 use crate::homography::solve_homogeneous;
 use crate::{
@@ -146,11 +148,7 @@ fn close(from: f64, to: f64) -> bool {
 }
 
 fn object_samples_match(from: &Pose, to: &Pose) -> bool {
-    from.object
-        .as_array()
-        .into_iter()
-        .zip(to.object.as_array())
-        .all(|(from, to)| (from - to).abs() <= f64::from(f32::EPSILON))
+    plane_chart_relation(from.plane, to.plane).is_some()
 }
 
 const fn clear_only(exposed: bool) -> WarpPlan {
@@ -654,6 +652,16 @@ mod tests {
         pose.map = PoseMap::Mapped(map(pose.object, pose.view, extent));
     }
 
+    fn set_object(pose: &mut Pose, object: ObjectAngles) {
+        pose.object = object;
+        pose.plane = construct_plane(object).expect("fixture object constructs a plane");
+        pose.map = PoseMap::Mapped(map(
+            pose.object,
+            pose.view,
+            [pose.grid_width, pose.grid_height],
+        ));
+    }
+
     fn frame(pose: &Pose) -> SceneFrame {
         SceneFrame {
             scene_id: 3,
@@ -708,14 +716,18 @@ mod tests {
     fn slice_change_clears_above_the_plane_rounding_floor() {
         let from = pose(ViewControls::NEUTRAL, [0.0; 2]);
         let mut large = from;
-        large.object.rho_12 += 0.3;
+        let mut large_object = large.object;
+        large_object.rho_13 += 0.3;
+        set_object(&mut large, large_object);
         assert_eq!(
             reproject(&frame(&from), &from, &large).kind,
             WarpKind::ClearOnly
         );
 
         let mut rounded = from;
-        rounded.object.rho_12 += 1.0e-9;
+        let mut rounded_object = rounded.object;
+        rounded_object.rho_13 += 1.0e-9;
+        set_object(&mut rounded, rounded_object);
         assert_eq!(
             reproject(&frame(&from), &from, &rounded).kind,
             WarpKind::AnchorHomography
@@ -727,6 +739,40 @@ mod tests {
             reproject(&frame(&from), &from, &panned).kind,
             WarpKind::AnchorHomography
         );
+    }
+
+    #[test]
+    fn plane_stabilizer_object_turns_are_exact_flat_warps() {
+        let retained_object = ObjectAngles::IDENTITY;
+        let retained_plane = construct_plane(retained_object).expect("identity plane constructs");
+        let from = object_pose(
+            retained_object,
+            retained_plane,
+            ViewControls::MANDELBROT_FLAT,
+            [0.0; 2],
+        );
+
+        for requested_object in [
+            ObjectAngles {
+                rho_34: 0.3,
+                ..retained_object
+            },
+            ObjectAngles {
+                rho_12: 0.5,
+                ..retained_object
+            },
+        ] {
+            let to = object_pose(
+                requested_object,
+                construct_plane(requested_object).expect("stabilizer plane constructs"),
+                ViewControls::MANDELBROT_FLAT,
+                [0.0; 2],
+            );
+            let plan = reproject(&frame(&from), &from, &to);
+            assert_eq!(plan.kind, WarpKind::AnchorHomography);
+            assert_eq!(plan.approx_max_error_px, Some(0.0));
+            assert!(plan.source_valid);
+        }
     }
 
     #[test]

@@ -661,14 +661,61 @@ fn retained_warp_matches_independent_fresh_scenes() {
             0.0,
             [0.0; 2],
         );
+        let changed_expected = if matches!(index, 0 | 5) {
+            Expected::Agree
+        } else {
+            Expected::Clear
+        };
         assert_fixture(
             &format!("object {index} changed"),
             &base,
             &changed,
             0.0,
-            Expected::Clear,
+            changed_expected,
         );
     }
+
+    let mandelbrot = pose(
+        ObjectAngles::IDENTITY,
+        ViewControls::MANDELBROT_FLAT,
+        [0.0; 4],
+        0.0,
+        [0.0; 2],
+    );
+    let in_plane_rotation = pose(
+        ObjectAngles {
+            rho_34: 0.3,
+            ..ObjectAngles::IDENTITY
+        },
+        ViewControls::MANDELBROT_FLAT,
+        [0.0; 4],
+        0.0,
+        [0.0; 2],
+    );
+    assert_fixture(
+        "object o34 picture rotation",
+        &mandelbrot,
+        &in_plane_rotation,
+        0.0,
+        Expected::Agree,
+    );
+    let complement_rotation = pose(
+        ObjectAngles {
+            rho_12: 0.5,
+            ..ObjectAngles::IDENTITY
+        },
+        ViewControls::MANDELBROT_FLAT,
+        [0.0; 4],
+        0.0,
+        [0.0; 2],
+    );
+    assert_fixture(
+        "object o12 zero-origin inert",
+        &mandelbrot,
+        &complement_rotation,
+        0.0,
+        Expected::Agree,
+    );
 
     let lifted_camera_expectations = [
         Expected::Agree,

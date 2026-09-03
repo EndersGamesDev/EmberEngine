@@ -1,4 +1,4 @@
-use ember_julibrot_math::{ObjectAngles, Pose};
+use ember_julibrot_math::{Plane, Pose, plane_chart_relation};
 
 use crate::{
     DropReason, PaletteId, PresentError, RefinementLevel, SceneFrame, SubmissionMeasurement,
@@ -133,18 +133,17 @@ impl SceneLedger {
         self.pending.take()
     }
 
-    #[allow(clippy::float_cmp)]
     pub fn invalidate_incompatible(
         &mut self,
         iteration_cap: u32,
         plane_origin_f64: [f64; 4],
-        object: ObjectAngles,
+        plane: Plane,
         precision_mode: &'static str,
     ) -> bool {
         let retained_invalid = self.retained.as_ref().is_some_and(|frame| {
             frame.iteration_cap != iteration_cap
                 || !origins_share_slice(&frame.pose, plane_origin_f64)
-                || !object_samples_match(frame.pose.object, object)
+                || plane_chart_relation(frame.pose.plane, plane).is_none()
                 || frame.precision_mode != precision_mode
         });
         if retained_invalid {
@@ -153,7 +152,7 @@ impl SceneLedger {
         if let Some(pending) = &mut self.pending
             && (pending.iteration_cap != iteration_cap
                 || !origins_share_slice(&pending.pose, plane_origin_f64)
-                || !object_samples_match(pending.pose.object, object)
+                || plane_chart_relation(pending.pose.plane, plane).is_none()
                 || pending.precision_mode != precision_mode)
         {
             pending.drop_reason = Some(DropReason::IncompatibleMain);
@@ -219,13 +218,6 @@ fn retained_is_better(retained: &SceneFrame, candidate: &SceneFrame) -> bool {
                 > u64::from(candidate.extent[0]) * u64::from(candidate.extent[1]))
 }
 
-fn object_samples_match(from: ObjectAngles, to: ObjectAngles) -> bool {
-    from.as_array()
-        .into_iter()
-        .zip(to.as_array())
-        .all(|(from, to)| (from - to).abs() <= f64::from(f32::EPSILON))
-}
-
 fn origins_share_slice(pose: &Pose, origin: [f64; 4]) -> bool {
     let delta = core::array::from_fn(|axis| origin[axis] - pose.plane_origin[axis]);
     let projection = [
@@ -283,7 +275,7 @@ fn dot(left: [f32; 4], right: [f32; 4]) -> f64 {
 #[cfg(test)]
 mod tests {
     use ember_julibrot_math::{
-        Homography, ObjectAngles, Plane, PoseMap, PrecisionMode, ViewControls,
+        Homography, ObjectAngles, Plane, PoseMap, PrecisionMode, ViewControls, construct_plane,
     };
 
     use super::*;
@@ -483,11 +475,12 @@ mod tests {
             ledger.complete(measurement(1)),
             Some(SceneCompletion::Promoted(_))
         ));
-        assert!(!ledger.invalidate_incompatible(64, ORIGIN, ObjectAngles::JULIA, MODE));
-        assert!(ledger.invalidate_incompatible(128, ORIGIN, ObjectAngles::JULIA, MODE));
+        let plane = pose(2).plane;
+        assert!(!ledger.invalidate_incompatible(64, ORIGIN, plane, MODE));
+        assert!(ledger.invalidate_incompatible(128, ORIGIN, plane, MODE));
 
         begin(&mut ledger, 2, 2);
-        ledger.invalidate_incompatible(64, [0.0, 0.0, 1.0, 0.0], ObjectAngles::JULIA, MODE);
+        ledger.invalidate_incompatible(64, [0.0, 0.0, 1.0, 0.0], plane, MODE);
         assert!(matches!(
             ledger.complete(measurement(2)),
             Some(SceneCompletion::Dropped {
@@ -501,23 +494,50 @@ mod tests {
         assert!(ledger.invalidate_incompatible(
             64,
             ORIGIN,
-            ObjectAngles::JULIA,
+            plane,
             PrecisionMode::PictureFast.as_str()
         ));
     }
 
     #[test]
-    fn object_angles_invalidate_above_the_sample_rounding_floor() {
+    fn plane_span_invalidation_accepts_stabilizers_and_refuses_tilts() {
         let mut ledger = SceneLedger::default();
         begin(&mut ledger, 1, 1);
         ledger.complete(measurement(1));
-        let mut rounded = ObjectAngles::JULIA;
-        rounded.rho_12 = 1.0e-9;
-        assert!(!ledger.invalidate_incompatible(64, ORIGIN, rounded, MODE));
+        let retained = ObjectAngles::JULIA;
 
-        let mut changed = ObjectAngles::JULIA;
-        changed.rho_12 = 0.3;
-        assert!(ledger.invalidate_incompatible(64, ORIGIN, changed, MODE));
+        let rounded = ObjectAngles {
+            rho_13: retained.rho_13 + 1.0e-9,
+            ..retained
+        };
+        assert!(!ledger.invalidate_incompatible(
+            64,
+            ORIGIN,
+            construct_plane(rounded).expect("rounded tilt constructs"),
+            MODE
+        ));
+
+        let in_plane = ObjectAngles {
+            rho_34: 0.3,
+            ..retained
+        };
+        assert!(!ledger.invalidate_incompatible(
+            64,
+            ORIGIN,
+            construct_plane(in_plane).expect("in-plane turn constructs"),
+            MODE
+        ));
+
+        let tilted = ObjectAngles {
+            rho_13: retained.rho_13 + 0.3,
+            ..retained
+        };
+        assert!(ledger.invalidate_incompatible(
+            64,
+            ORIGIN,
+            construct_plane(tilted).expect("tilt constructs"),
+            MODE
+        ));
     }
 
     #[test]
