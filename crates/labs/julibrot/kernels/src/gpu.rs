@@ -155,20 +155,14 @@ impl JulibrotKernels {
             executor.free_span(span).map_err(|_| KernelError::Heap)?;
             return Err(KernelError::Dispatch);
         }
-        let shallow_dispatches = match dispatch_templates(
-            executor,
-            &self.shallow,
-            &[],
-            &span,
-            plan,
-            &[0; 144],
-        ) {
-            Ok(dispatches) => dispatches,
-            Err(error) => {
-                executor.free_span(span).map_err(|_| KernelError::Heap)?;
-                return Err(error);
-            }
-        };
+        let shallow_dispatches =
+            match dispatch_templates(executor, &self.shallow, &[], &span, plan, &[0; 144]) {
+                Ok(dispatches) => dispatches,
+                Err(error) => {
+                    executor.free_span(span).map_err(|_| KernelError::Heap)?;
+                    return Err(error);
+                }
+            };
         let first = plan.level(RefinementLevel::Preview);
         let grid = EscapeGrid {
             span: span.clone(),
@@ -282,7 +276,12 @@ impl JulibrotKernels {
             used_orbit_length,
             level,
         )?;
-        let resource_words = [reference.span.directory_index, reference.span.logical_len, 0, 0];
+        let resource_words = [
+            reference.span.directory_index,
+            reference.span.logical_len,
+            0,
+            0,
+        ];
         if !allocation
             .reference_dispatches
             .borrow()
