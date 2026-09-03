@@ -1,6 +1,6 @@
 //! Requested controls and worker-owned HOT/MAIN publication integration.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use ember_julibrot_math::{
     Axis4, BigCentre, Homography, MathError, NavigationDelta, ObjectAngles, Plane, PlaneAngles,
@@ -375,7 +375,7 @@ pub struct ViewerController {
     owner: ViewerOwner,
     requested: RequestedControls,
     checked_plane: Plane,
-    checked_screen_maps: Cell<[Option<CheckedScreenMap>; 2]>,
+    checked_screen_maps: RefCell<[Option<CheckedScreenMap>; 2]>,
     #[cfg(test)]
     plane_constructions: u64,
     #[cfg(test)]
@@ -457,7 +457,7 @@ impl ViewerController {
             owner,
             requested,
             checked_plane: plane,
-            checked_screen_maps: Cell::new([None; 2]),
+            checked_screen_maps: RefCell::new([None; 2]),
             #[cfg(test)]
             plane_constructions: 1,
             #[cfg(test)]
@@ -1043,18 +1043,21 @@ impl ViewerController {
         let view = self.requested.view;
         let zoom_log2 = self.requested.zoom_log2;
         let key = ScreenMapKey::new(object, view, zoom_log2, grid_extent);
-        let mut cached = self.checked_screen_maps.get();
-        if let Some(cached) = cached
-            .into_iter()
+        let cached = self
+            .checked_screen_maps
+            .borrow()
+            .iter()
+            .copied()
             .flatten()
             .find(|cached| cached.key == key)
-        {
-            return Ok(cached.map);
+            .map(|cached| cached.map);
+        if let Some(cached) = cached {
+            return Ok(cached);
         }
         let map = map_for(object, view, zoom_log2, grid_extent)?;
+        let mut cached = self.checked_screen_maps.borrow_mut();
         cached[0] = cached[1];
         cached[1] = Some(CheckedScreenMap { key, map });
-        self.checked_screen_maps.set(cached);
         #[cfg(test)]
         self.map_constructions
             .set(self.map_constructions.get().saturating_add(1));

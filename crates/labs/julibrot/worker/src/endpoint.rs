@@ -1302,6 +1302,21 @@ mod tests {
     }
 
     #[test]
+    fn browser_request_decode_uses_one_prefix_bulk_copy() {
+        let source = include_str!("browser.rs");
+        let body = source
+            .split_once("fn decode_request")
+            .and_then(|(_, suffix)| suffix.split_once("pub(crate) fn write_empty"))
+            .map(|(body, _)| body)
+            .expect("browser request decoder body");
+        assert!(body.contains("if used > available"));
+        assert!(body.contains(".subarray(0, used)"));
+        assert!(body.contains(".copy_to("));
+        assert!(!body.contains("get_index"));
+        assert!(!body.contains("used..available"));
+    }
+
+    #[test]
     #[ignore = "measurement harness"]
     #[allow(
         clippy::print_stderr,
