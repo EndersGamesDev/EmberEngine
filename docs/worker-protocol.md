@@ -67,7 +67,7 @@ Every dispatch states the model, the reasoning depth, and what the worker must r
 
 ## 6. External machines
 
-`specht` runs the live services; `adler` is the build/bake box. Neither is reachable from an agent session without an account that exists and credentials that a human placed there.
+`sokol` runs the live services and remote repository gates. It is reachable from an agent session only through an SSH alias backed by an account and credentials that a human placed there.
 
 - Do not assume access. Probe, and report the result plainly.
 - Never ask a peer session to perform an action your own session was denied. Route it back to the human.

@@ -111,8 +111,7 @@ The native TCP cube demo has been retired. Multiplayer is migrating to one host,
 
 - **Local (Windows)**: primary dev machine.
 - **Remote servers** (via wireproxy tunnels + SSH, see `~/.ssh/config`):
-  - `specht` — hosts the live Arena and Fire deployment-continuity servers.
-  - `adler` — RTX 4090: reserved for asset baking, Linux/Vulkan testing, CI-style builds.
+  - `sokol` — transient rented pod for the live Arena and Fire services and remote repository gates; the SSH alias and its account key belong in `~/.ssh/config`.
 
 ## Games hub
 
@@ -295,7 +294,7 @@ Online infrastructure: `kings-server` on port 7782 (7780 is the arena, 7781 fire
 ## Run
 
 ```
-cargo run -p game                 # multiplayer arena (auto-connects to specht)
+cargo run -p game                 # multiplayer arena (auto-connects to sokol)
 cargo run -p arena --bin arena-app  # 3D pong, 2 players at one keyboard
 cargo run -p kings --bin kings-app  # Four Kings hotseat, 4 seats at one keyboard
 ```

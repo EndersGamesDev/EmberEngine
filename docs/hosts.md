@@ -47,7 +47,7 @@ The writer takes `--name <host>`, a `--game <id> --url <wss> --proto <n>` triple
       "fire_version": "r211",
       "fire_commit": "502414c",
       "updated": "2026-09-01T12:34:56Z",
-      "by": "end@specht"
+      "by": "end@sokol"
     }
   ],
   "mirrors": [
@@ -127,7 +127,11 @@ There are three ways in, in increasing order of independence.
 
 **From a workstation over ssh.** `EMBER_HOST=<ssh name> bash deploy/deploy-pong-online.sh` and `…/deploy-fire-online.sh`, as before. They now stamp the build, start the server with its name, and publish a host entry into the book instead of overwriting the single address: each calls `deploy/publish-host.sh --name <host> --game <id> --url <wss> --proto <n> …`, which upserts that game's two keys on the host's entry and recomputes the legacy keys. `EMBER_REF` picks the commit, `EMBER_HOST_NAME` overrides the generated name. The name is resolved **on the target machine**, by piping `host-name.sh` into `bash -s` over ssh, because the name is a property of the machine and not of the workstation deploying to it — which is also what makes both games deployed to the same box land on one entry rather than two. Publishing happens only after a health check that speaks the protocol through the public URL, so a failed deploy leaves the previous address in the book rather than pointing every player at a server nobody has proved is alive; Fire Racer additionally refuses to redeploy over people mid-race unless `EMBER_FORCE` is set. A new game's deploy script is the same call with its own id.
 
+The workstation deploys default to the `sokol` ssh alias. That alias and its account key must exist in the deployer's `~/.ssh/config`; network addresses and key paths do not belong in this repository.
+
 **On the machine itself.** `bash deploy/host.sh up` clones or updates the repo, builds both servers from `EMBER_REF` at idle priority, starts them, proves each answers on loopback first, brings up their tunnels, proves each answers again through its public address, and only then publishes. Loopback before public, so a failure at the public URL is unambiguously the tunnel rather than the server. `host.sh update` redeploys when the ref moved **or** when a server is not running, and does nothing when the ref is unchanged and both are up; `host.sh status` says what is running, from what, at what address, and prints this host's own entry as currently published; `host.sh down` stops the servers and their tunnels.
+
+On a pod without a running systemd user manager, `host.sh` owns the lifecycle directly through `nohup` and PID files that include process start-time identity. `install-watchdog.sh` detects the missing runtime directory, user bus or running manager before it writes units and directs the operator back to `host.sh` plus the off-host workstation watchdog; the workstation deploy scripts likewise use their direct-launch path instead of mistaking an enabled-unit symlink for a usable manager.
 
 Two rules keep `update` honest about that promise. What is RUNNING is recorded as soon as both servers have answered through their public addresses, before the publish and independently of it: a publish failure is loud and still makes `up` exit non-zero, but it no longer leaves the host with no record of its own deploy, which used to make every later `update` tear down two healthy games and mint two new tunnel URLs. And a pid file carries the process's start time beside its pid, because a bare number is not an identity — nothing clears these files across a reboot and pids are handed out again from the bottom afterwards, so `update` believed a stranger was the game server and `down` sent it SIGTERM. A file written before this rule existed reads as "not running", which errs towards redeploying rather than towards signalling a stranger.
 
@@ -135,9 +139,20 @@ The health probes are built in the same idle-priority, timed step as the servers
 
 Configuration lives in `~/.ember/host.env`, which the script writes on first run with every setting commented out at its default; a real value in the environment always beats the file, so a one-off run needs no edit (`EMBER_REF=v12 bash deploy/host.sh up`). The knobs are `EMBER_REPO` (default the project's GitHub URL), `EMBER_REF` (default `origin/main`), `EMBER_HOST_NAME`, `EMBER_PUBLISH` (default `none`), `EMBER_ARENA_PORT` and `EMBER_FIRE_PORT` (7780 and 7781, loopback only — the tunnels are what the world sees), `EMBER_HOME` (default `~/ember-host`, holding the checkout, logs and pid files) and `EMBER_TUNNEL_BIN` (default `~/bin/cloudflared`).
 
+`deploy/bootstrap-host.sh` is the idempotent preparation step for a bare unprivileged Linux account. It checks for git, the Rust toolchain, python3, curl and sha256sum with a specific failure for the missing dependency, installs a release-pinned cloudflared binary into `~/bin` only after its pinned SHA-256 matches, and creates the default `~/.ember/host.env` only when that file is absent.
+
+A replacement pod is rebuilt in this order:
+
+1. The estate provisions the unprivileged account and its SSH key, and the deployer maps the replacement to the `sokol` SSH alias.
+2. Clone the repository into `~/ember-host/src` and enter that checkout.
+3. Run `bash deploy/bootstrap-host.sh`.
+4. Run `bash deploy/host.sh up`.
+
+Everything under `~/ember-host` — the checkout and build output, logs, PID files and recorded quick-tunnel URL — is cache and may be discarded. The tunnel URL changes on every restart, which is why `host.sh` republishes it after proving the public path. `~/.ember/host-name` is the host's identity, but `host-name.sh` derives the same name again when the file is lost, so it is not precious; bootstrap recreates a default `~/.ember/host.env`, and any deliberate overrides must come from the deployment invocation or separately managed provisioning.
+
 Where the entry goes is `EMBER_PUBLISH`: `upstream` merges it into the book on the project's gh-pages (needs push rights), a `<git url>#<branch>` writes a `host.json` into that repository for use as a mirror, and `none` — the default — prints the entry it would have published and changes nothing. All three go through `publish-host.sh`, so what `none` shows is exactly what the other two would write.
 
-Needs git, a Rust toolchain, `cloudflared` and `python3`; the first build takes minutes, later ones seconds. The servers are started with the name in `EMBER_HOST_NAME` and never a `--name` flag, because a host is allowed to stay on an older commit and an older binary that has never heard of the flag would crash-loop on it, where an unknown environment variable is ignored by every build there has ever been.
+Bootstrap needs git, a Rust toolchain, `python3`, curl and sha256sum; `host.sh` then needs git, that toolchain, the installed `cloudflared` and `python3`. The first build takes minutes, later ones seconds. The servers are started with the name in `EMBER_HOST_NAME` and never a `--name` flag, because a host is allowed to stay on an older commit and an older binary that has never heard of the flag would crash-loop on it, where an unknown environment variable is ignored by every build there has ever been.
 
 `EMBER_TUNNEL_BIN` is load-bearing beyond "which cloudflared". `host.sh` reads the public address out of the tunnel's log, and it accepts a `https://…trycloudflare.com` line always; when the binary is **not** the default it additionally accepts any `ws://` or `wss://` line verbatim. That is what lets the whole path — build, start, probe through the "public" URL, publish — be exercised on loopback against a stub tunnel with no Cloudflare account and no network, which is how `deploy/tests/test-host-loopback.sh` works.
 
@@ -145,7 +160,7 @@ Needs git, a Rust toolchain, `cloudflared` and `python3`; the first build takes 
 
 ## 9. The watchdog
 
-`deploy/watchdog.sh` now loops over the ssh names in `EMBER_HOSTS` (a space-separated list; default: `EMBER_HOST`, default `specht`). For each it resolves the host's name over ssh, finds its entry in `hosts[]`, probes the addresses that entry carries, and redeploys that one host when an address stops answering or when `origin/main` has moved, with the same never-over-players rule as before. It reads `hosts[]` and never the legacy top-level keys: those name whichever host is preferred, so probing them would test the same machine once per host in the list.
+`deploy/watchdog.sh` now loops over the ssh names in `EMBER_HOSTS` (a space-separated list; default: `EMBER_HOST`, default `sokol`). For each it resolves the host's name over ssh, finds its entry in `hosts[]`, probes the addresses that entry carries, and redeploys that one host when an address stops answering or when `origin/main` has moved, with the same never-over-players rule as before. It reads `hosts[]` and never the legacy top-level keys: those name whichever host is preferred, so probing them would test the same machine once per host in the list.
 
 The book is read once per pass, and a pass that could not read it says so and leaves every host's addresses alone rather than treating them as unpublished — a fetch failure is not evidence that anything is down, and answering one by redeploying every game on every host restarts healthy servers, mints a new tunnel domain for each, and then does it again on the next pass for as long as the fetch keeps failing. The HTTP fetch fails hard on a 404 (a plain `curl -s` exits 0 and hands back the error page), and `origin/gh-pages` — already fetched at the top of the pass — is the fallback before anything is given up. A host missing from a book that *did* parse still means "deploy it": that is how a new host bootstraps. The commit-driven redeploy and the pages redeploy do not depend on the book and run regardless. State is one file per host (`.watchdog-state-<ssh name>`), and the commit is recorded only when every deploy in that pass succeeded, so one failing host cannot stop another from being retried and a failed publish cannot become permanent. It also redeploys the **pages** on its own state file when `origin/main` moves. Its probe bar is a completed WebSocket handshake — enough to tell "reachable" from "gone", which is all it needs; the deploys are where the protocol is actually spoken.
 
