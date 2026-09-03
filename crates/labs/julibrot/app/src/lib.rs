@@ -469,7 +469,10 @@ mod wasm_entry {
 
     /// Stages all ten ambient-camera rotations in product order.
     #[wasm_bindgen]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the browser contract exposes one scalar for each named camera plane"
+    )]
     pub fn app_set_camera_angles(
         q_12: f64,
         q_13: f64,

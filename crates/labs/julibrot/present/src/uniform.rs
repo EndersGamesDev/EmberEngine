@@ -193,7 +193,10 @@ impl SceneUniform {
     /// # Errors
     ///
     /// Returns an error when the extent is empty, overflows, or exceeds the span length.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the scene ABI constructor names every independently validated payload field"
+    )]
     pub fn new(
         extent: [u32; 2],
         level: u32,

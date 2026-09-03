@@ -137,7 +137,10 @@ pub fn pixel_offset(
     Ok(PixelOffset { offset, status })
 }
 
-#[allow(clippy::cast_possible_truncation)]
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the kernel ABI deliberately narrows the certified f64 screen map once"
+)]
 fn pack_screen_to_plane(map: &Homography) -> Result<[[f32; 4]; 3], crate::KernelError> {
     let mut rows = [[0.0; 4]; 3];
     for (destination, source) in rows.iter_mut().zip(map.rows.as_chunks::<3>().0) {
