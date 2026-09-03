@@ -1093,7 +1093,9 @@ fn owner_error(error: ember_julibrot_worker::OwnerError) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use ember_julibrot_math::{ObjectAngles, PlaneAngles, PoseMap, PrecisionMode, ViewControls};
+    use ember_julibrot_math::{
+        ObjectAngles, PlaneAngles, PoseMap, PrecisionMode, ViewControls, pixel_scale,
+    };
     use ember_julibrot_present::PaletteId;
     use ember_julibrot_worker::OrbitReason;
 
