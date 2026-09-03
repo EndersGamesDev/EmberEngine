@@ -397,7 +397,7 @@ The ring has three slots, `hot_stride=align_up(288,min_uniform_buffer_offset_ali
 
 `FrameReceipt` carries refresh and warp ids, optional source scene, precision provenance, the exposure bit that keeps a scene due, and status, but no timing before fence completion.
 
-`Warp::reproject(last_frame,from_pose,to_pose,precision_mode,validation)` is pure f64 planning. It refuses absent or mismatched source identity, cap/precision mismatch, object-angle incompatibility, more than half a source pixel of out-of-plane origin or chart residual, edge-on/invalid arithmetic, and measured maximum above `WARP_MAX_ERROR_PX=1.0`; every accepted plan publishes a measured bound, including ordinary PictureFast.
+`Warp::reproject(last_frame,from_pose,to_pose,precision_mode,validation)` is pure f64 planning. It refuses absent or mismatched source identity, cap/precision mismatch, object-angle incompatibility, more than half a source pixel of out-of-plane origin or chart residual, edge-on/invalid arithmetic, any unprojectable sample in the full 9-by-9-by-5 corpus, and measured maximum above `WARP_MAX_ERROR_PX=1.0`; every accepted plan publishes that complete measured bound, including ordinary PictureFast.
 
 ### 3.7 App-owned runtime, surface, and facts
 

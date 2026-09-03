@@ -142,7 +142,7 @@ The planner and scene shader use the identical ambient construction. At neutral 
 
 The implementation solves the eight projective coefficients of the current-NDC-to-source-NDC homography with f64 Gaussian elimination and partial pivoting, fixes `h₂₂=1`, refuses a pivot below `1e−12`, and rounds the valid result to the same three-row HOT layout used by flat warp.
 
-Every plan, including ordinary PictureFast, carries a measured maximum error and p95. Deterministic and explicit Measure/Final validation sample the full 9-by-9-by-5 corpus; ordinary PictureFast samples the mandatory 3-by-3-by-5 subset formed by every fourth screen row and column plus all five heights, so no plan can bypass the enforced ceiling. The uploaded f32 rows retain their separate quarter-source-pixel accuracy oracle.
+Every plan, including ordinary PictureFast, carries a measured maximum error and p95 from the same full 9-by-9-by-5 corpus. A sample with no finite destination, retained projection, or warp image makes the plan unbounded and therefore `ClearOnly`; honest texture-edge disocclusion remains the separately flagged temporary clear region that the next scene fills. The uploaded f32 rows retain their separate quarter-source-pixel accuracy oracle.
 
 The named acceptance ceiling is `WARP_MAX_ERROR_PX=1.0`: a resolving scene may fill missing detail but no displayed reprojection may move a feature by more than one pixel. A plan above the ceiling is refused and temporarily clear until the due scene completes.
 
@@ -381,7 +381,7 @@ Native reference-shift fixtures construct one physical centre before and after a
 
 Native zoom-interface tests decompose scales on both sides of `zoom_log2=14`, prove present never forms the deep absolute f32 scale, and pin the displayed shallow/perturbation POLICY transition while leaving the `EscapeGrid` and warp-ratio interfaces unchanged.
 
-Native anchor-warp tests pin exact flat plans, enforce `WARP_MAX_ERROR_PX=1.0`, require over-budget relief to clear, and report max and p95 for every plan. A counted policy test keeps the mandatory PictureFast corpus within PL-07 while Deterministic and Measure/Final retain the full 9-by-9-by-5 corpus; the uploaded-row quarter-pixel oracle remains unconditional.
+Native anchor-warp tests pin exact flat plans against the full forward chain, enforce `WARP_MAX_ERROR_PX=1.0`, require over-budget or unbounded relief to clear, and report max and p95 for every plan. A counted policy test requires all validation modes to execute the full 9-by-9-by-5 corpus; a warmed sokol run measured 1,536 fully planned and asserted cases in `0.301460` seconds, or `0.196263` milliseconds per plan. The uploaded-row quarter-pixel oracle remains unconditional.
 
 A second anchor test pins the retirement of the exact plan: at zero camera angles and `h=0`, for every distance in `{2,8,64}`, the solved four-anchor rows equal math's `warp_matrix` forward within `1e−6` per f32-packed coefficient and the sampled corpus reports below `1e−9`, which is the evidence that deleting `WarpKind::FlatExact` deleted a code path and not a capability.
 

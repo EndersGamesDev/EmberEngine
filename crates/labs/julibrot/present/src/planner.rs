@@ -118,10 +118,11 @@ fn anchor_plan(
     let destination = screen_corners(from_pose).map(|corner| homogeneous(flat_forward, corner));
     let inverse_sampling = solve_homogeneous(destination, source)?;
     let rows = pack_homography_rows(inverse_sampling)?;
-    let metrics = sampled_errors(from_pose, to_pose, inverse_sampling).and_then(|mut errors| {
-            if errors.is_empty() {
-                return None;
-            }
+    let displayed_sampling = core::array::from_fn(|index| f64::from(rows[index / 3][index % 3]));
+    let metrics = sampled_errors(from_pose, to_pose, displayed_sampling).and_then(|mut errors| {
+        if errors.is_empty() {
+            return None;
+        }
             errors.sort_by(f64::total_cmp);
             let maximum = errors.last().copied()?;
             let percentile_index = errors
