@@ -3,7 +3,7 @@
 use ember_julibrot_math::{
     Axis4, BigCentre, Homography, MathError, NavigationDelta, ObjectAngles, Plane, PlaneAngles,
     Pose, PoseMap, PrecisionMode, SEED_AXES, ViewControls, construct_plane, navigation_delta,
-    pixel_scale, plane_to_screen, screen_to_plane,
+    pixel_scale, plane_chart_relation, plane_to_screen, screen_to_plane,
 };
 use ember_julibrot_present::PaletteId;
 use ember_julibrot_worker::{
@@ -659,7 +659,19 @@ impl ViewerController {
         } else {
             self.checked_plane
         };
-        self.clear_crosshair();
+        let plane_preserving = plane_chart_relation(self.checked_plane, checked_plane).is_some();
+        let rotated_displacement = if angles_changed && plane_preserving {
+            Some(
+                self.owner
+                    .reorient_navigation_plane(checked_plane)
+                    .map_err(owner_error)?,
+            )
+        } else {
+            None
+        };
+        if angles_changed && !plane_preserving {
+            self.clear_crosshair();
+        }
         self.requested.object_angles = angles;
         self.checked_plane = checked_plane;
         #[cfg(test)]
@@ -669,13 +681,18 @@ impl ViewerController {
         let mut hot = self.staged_hot;
         hot.plane_theta_1 = angles.rho_13;
         hot.plane_theta_2 = angles.rho_24;
+        if let Some(displacement) = rotated_displacement {
+            hot.centre_from_reference_px = displacement;
+        }
         self.staged_hot = hot;
         self.owner.stage_hot(hot);
-        self.owner.navigate(NavigationDelta::default());
-        if let Some(error) = self.owner.take_navigation_error() {
-            return Err(owner_error(error));
+        if angles_changed && !plane_preserving {
+            self.owner.navigate(NavigationDelta::default());
+            if let Some(error) = self.owner.take_navigation_error() {
+                return Err(owner_error(error));
+            }
+            self.add_reason(OrbitReason::CENTRE_THRESHOLD);
         }
-        self.add_reason(OrbitReason::CENTRE_THRESHOLD);
         Ok(())
     }
 
@@ -1214,26 +1231,28 @@ mod tests {
     }
 
     #[test]
-    fn changing_the_object_slice_clears_the_crosshair() {
+    fn crosshair_survives_an_in_plane_object_turn_and_clears_on_a_tilt() {
         let mut viewer = ViewerController::new(960).expect("canonical viewer");
         viewer.set_crosshair([60.0, -20.0]).expect("finite click");
         assert!(viewer.crosshair_plane_px().is_some());
+        let point = viewer
+            .crosshair_centre_f64()
+            .expect("stored crosshair has an ambient point");
         let mut object = viewer.requested().object_angles;
-        object.rho_12 = 0.2;
+        object.rho_34 = 0.3;
         viewer
             .set_object_angles(object)
-            .expect("valid slice change");
-        assert!(viewer.crosshair_plane_px().is_none());
+            .expect("valid in-plane object turn");
+        assert!(viewer.crosshair_plane_px().is_some());
+        assert_eq!(viewer.crosshair_centre_f64(), Some(point));
+        assert_eq!(
+            viewer.owner().navigation_plane(),
+            Some(viewer.checked_plane())
+        );
 
-        viewer
-            .set_crosshair([30.0, 10.0])
-            .expect("second finite click");
-        viewer
-            .set_plane_angles(PlaneAngles {
-                theta_1: -0.1,
-                theta_2: 0.15,
-            })
-            .expect("valid legacy slice change");
+        let mut tilted = viewer.requested().object_angles;
+        tilted.rho_13 += 0.3;
+        viewer.set_object_angles(tilted).expect("valid slice tilt");
         assert!(viewer.crosshair_plane_px().is_none());
     }
 
