@@ -1,4 +1,4 @@
-use ember_julibrot_math::Pose;
+use ember_julibrot_math::{ObjectAngles, Pose};
 
 use crate::{
     DropReason, PaletteId, PresentError, RefinementLevel, SceneFrame, SubmissionMeasurement,
@@ -119,11 +119,13 @@ impl SceneLedger {
         &mut self,
         iteration_cap: u32,
         plane_origin_f64: [f64; 4],
+        object: ObjectAngles,
         precision_mode: &'static str,
     ) -> bool {
         let retained_invalid = self.retained.as_ref().is_some_and(|frame| {
             frame.iteration_cap != iteration_cap
                 || frame.plane_origin_f64 != plane_origin_f64
+                || !object_samples_match(frame.pose.object, object)
                 || frame.precision_mode != precision_mode
         });
         if retained_invalid {
@@ -132,6 +134,7 @@ impl SceneLedger {
         if let Some(pending) = &mut self.pending
             && (pending.iteration_cap != iteration_cap
                 || pending.plane_origin_f64 != plane_origin_f64
+                || !object_samples_match(pending.pose.object, object)
                 || pending.precision_mode != precision_mode)
         {
             pending.drop_reason = Some(DropReason::IncompatibleMain);
@@ -176,6 +179,13 @@ impl SceneLedger {
     pub const fn pending(&self) -> Option<&PendingScene> {
         self.pending.as_ref()
     }
+}
+
+fn object_samples_match(from: ObjectAngles, to: ObjectAngles) -> bool {
+    from.as_array()
+        .into_iter()
+        .zip(to.as_array())
+        .all(|(from, to)| (from - to).abs() <= f64::from(f32::EPSILON))
 }
 
 fn rebase_pose(pose: &mut Pose, accepted_pose: &Pose, shift_px: [f64; 2]) {
@@ -377,11 +387,16 @@ mod tests {
             ledger.complete(measurement(1)),
             Some(SceneCompletion::Promoted(_))
         ));
-        assert!(!ledger.invalidate_incompatible(64, ORIGIN, MODE));
-        assert!(ledger.invalidate_incompatible(128, ORIGIN, MODE));
+        assert!(!ledger.invalidate_incompatible(64, ORIGIN, ObjectAngles::JULIA, MODE));
+        assert!(ledger.invalidate_incompatible(128, ORIGIN, ObjectAngles::JULIA, MODE));
 
         begin(&mut ledger, 2, 2);
-        ledger.invalidate_incompatible(64, [0.0, 0.0, 1.0, 0.0], MODE);
+        ledger.invalidate_incompatible(
+            64,
+            [0.0, 0.0, 1.0, 0.0],
+            ObjectAngles::JULIA,
+            MODE,
+        );
         assert!(matches!(
             ledger.complete(measurement(2)),
             Some(SceneCompletion::Dropped {
@@ -392,7 +407,26 @@ mod tests {
 
         begin(&mut ledger, 3, 3);
         ledger.complete(measurement(3));
-        assert!(ledger.invalidate_incompatible(64, ORIGIN, PrecisionMode::PictureFast.as_str()));
+        assert!(ledger.invalidate_incompatible(
+            64,
+            ORIGIN,
+            ObjectAngles::JULIA,
+            PrecisionMode::PictureFast.as_str()
+        ));
+    }
+
+    #[test]
+    fn object_angles_invalidate_above_the_sample_rounding_floor() {
+        let mut ledger = SceneLedger::default();
+        begin(&mut ledger, 1, 1);
+        ledger.complete(measurement(1));
+        let mut rounded = ObjectAngles::JULIA;
+        rounded.rho_12 = 1.0e-9;
+        assert!(!ledger.invalidate_incompatible(64, ORIGIN, rounded, MODE));
+
+        let mut changed = ObjectAngles::JULIA;
+        changed.rho_12 = 0.3;
+        assert!(ledger.invalidate_incompatible(64, ORIGIN, changed, MODE));
     }
 
     #[test]

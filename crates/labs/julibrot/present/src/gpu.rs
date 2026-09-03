@@ -195,6 +195,7 @@ impl Presenter {
         if self.ledger.invalidate_incompatible(
             main.state.delivered_iter_cap,
             main.state.plane_origin_f64,
+            main.object,
             precision_mode_name,
         ) || incompatible
             || precision_mode.is_none()

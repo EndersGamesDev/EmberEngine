@@ -8,6 +8,7 @@ use crate::{
 const HEIGHT_SAMPLES: [f64; 5] = [-2.0, -1.0, 0.0, 1.0, 2.0];
 const SCREEN_STEPS: u32 = 9;
 const POLE_EPSILON: f64 = 1.0e-4;
+const MAX_CHART_RESIDUAL_PX: f64 = 0.5;
 
 /// Pure CPU reprojection planner.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -33,16 +34,27 @@ impl Warp {
         if last_frame.pose != *from_pose {
             return clear_only(true);
         }
+        if !object_samples_match(from_pose, to_pose) {
+            return clear_only(true);
+        }
         let Ok(flat) = warp_matrix(from_pose, to_pose) else {
             return clear_only(true);
         };
         let chart_residual = chart_residual(from_pose, to_pose);
-        if !chart_residual.is_finite() {
+        if !chart_residual.is_finite() || chart_residual > MAX_CHART_RESIDUAL_PX {
             return clear_only(true);
         }
         anchor_plan(from_pose, to_pose, flat.forward, chart_residual)
             .unwrap_or_else(|| clear_only(true))
     }
+}
+
+fn object_samples_match(from: &Pose, to: &Pose) -> bool {
+    from.object
+        .as_array()
+        .into_iter()
+        .zip(to.object.as_array())
+        .all(|(from, to)| (from - to).abs() <= f64::from(f32::EPSILON))
 }
 
 const fn clear_only(exposed: bool) -> WarpPlan {
@@ -460,6 +472,31 @@ mod tests {
         assert!(plan.source_valid);
         assert!((f64::from(plan.rows[0][2]) - 5.0).abs() < 1.0e-7);
         assert!((f64::from(plan.rows[1][2]) + 4.0).abs() < 1.0e-7);
+    }
+
+    #[test]
+    fn slice_change_clears_above_the_plane_rounding_floor() {
+        let from = pose(ViewControls::NEUTRAL, [0.0; 2]);
+        let mut large = from;
+        large.object.rho_12 += 0.3;
+        assert_eq!(
+            reproject(&frame(&from), &from, &large).kind,
+            WarpKind::ClearOnly
+        );
+
+        let mut rounded = from;
+        rounded.object.rho_12 += 1.0e-9;
+        assert_eq!(
+            reproject(&frame(&from), &from, &rounded).kind,
+            WarpKind::AnchorHomography
+        );
+
+        let mut panned = from;
+        panned.centre_from_reference_px = [8.0, -5.0];
+        assert_eq!(
+            reproject(&frame(&from), &from, &panned).kind,
+            WarpKind::AnchorHomography
+        );
     }
 
     #[test]
