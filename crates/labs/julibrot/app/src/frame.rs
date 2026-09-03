@@ -1,6 +1,7 @@
 //! Cross-slice progressive frame scheduling and browser GPU integration.
 
-use ember_julibrot_kernels::RefinementLevel;
+use ember_julibrot_kernels::{RefinementLevel, next_refinement_level};
+use ember_julibrot_math::PrecisionMode;
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_kernels::RefinementPlan;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -9,6 +10,7 @@ use ember_julibrot_present::{FenceRefusal, SubmissionKind};
 #[cfg(any(target_arch = "wasm32", test))]
 use crate::AppError;
 
+#[cfg(test)]
 const LEVELS: [RefinementLevel; 3] = [
     RefinementLevel::Preview,
     RefinementLevel::Interactive,
@@ -44,11 +46,23 @@ struct SceneTicket {
 }
 
 /// Latest-wins Preview, Interactive, Final scheduler with one scene in flight.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RefinementSchedule {
     generation: u32,
-    next: Option<usize>,
+    precision_mode: PrecisionMode,
+    next: Option<RefinementLevel>,
     in_flight: Option<SceneTicket>,
+}
+
+impl Default for RefinementSchedule {
+    fn default() -> Self {
+        Self {
+            generation: 0,
+            precision_mode: PrecisionMode::Deterministic,
+            next: None,
+            in_flight: None,
+        }
+    }
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -139,6 +153,10 @@ impl FrameLoop {
         if scene_ready && !self.schedule.pending() {
             self.schedule.restart(generation);
         }
+    }
+
+    const fn set_precision_mode(&mut self, precision_mode: PrecisionMode) {
+        self.schedule.precision_mode = precision_mode;
     }
 
     const fn restart(&mut self, generation: u32) {
@@ -287,16 +305,13 @@ impl RefinementSchedule {
     /// Restarts ordered refinement for a newly accepted selection.
     pub const fn restart(&mut self, generation: u32) {
         self.generation = generation;
-        self.next = Some(0);
+        self.next = Some(RefinementLevel::Preview);
     }
 
     /// Returns the exact next level only when present has no scene target occupied.
     #[must_use]
     pub fn due(&self) -> Option<RefinementLevel> {
-        self.in_flight
-            .is_none()
-            .then(|| self.next.map(|index| LEVELS[index]))
-            .flatten()
+        self.in_flight.is_none().then_some(self.next).flatten()
     }
 
     /// Records a successful present scene submission.
@@ -321,13 +336,13 @@ impl RefinementSchedule {
         {
             return false;
         }
-        let Some(index) = self.next else {
+        let Some(next) = self.next else {
             return false;
         };
-        if LEVELS[index] != level {
+        if next != level {
             return false;
         }
-        self.next = (index + 1 < LEVELS.len()).then_some(index + 1);
+        self.next = next_refinement_level(self.precision_mode, level);
         true
     }
 
@@ -362,8 +377,8 @@ mod browser {
         ReferenceOrbitInput, RefinementLevel, RefinementPlan,
     };
     use ember_julibrot_math::{
-        BigCentre, EscapeParams, Plane, PrecisionMode, precision_for, reference_shift_px,
-        scale_split, shallow_pixel_scale, split_centre,
+        BigCentre, EscapeParams, PICTURE_FAST_EDIT_BUDGET, Plane, PrecisionMode, precision_for,
+        reference_shift_px, scale_split, shallow_pixel_scale, split_centre,
     };
     use ember_julibrot_present::{
         FrameState, HotSlot, PresentConfig, PresentEvent, PresentHot, PresentMain, Presenter,
@@ -460,6 +475,7 @@ mod browser {
         orbits: OrbitRegistry<RegisteredOrbit>,
         current_orbit: Option<OrbitHandle>,
         accepted_reference: Option<BigCentre>,
+        shallow_centre: Option<BigCentre>,
         accepted_reference_zoom_log2: Option<f64>,
         submitted_references: Vec<SubmittedReference>,
         plan: RefinementPlan,
@@ -478,6 +494,7 @@ mod browser {
         presented_view: Option<ViewStamp>,
         last_status: RefreshStatus,
         level_timings: LevelTimingLedger,
+        precision_mode: PrecisionMode,
     }
 
     impl BrowserFrameLoop {
@@ -490,6 +507,27 @@ mod browser {
             runtime: &BrowserRuntime,
             viewer: &mut ViewerController,
         ) -> Result<Self, AppError> {
+            Self::new_with_mode(runtime, viewer, PrecisionMode::Deterministic)
+        }
+
+        /// Constructs the browser loop under one explicit precision policy.
+        ///
+        /// # Errors
+        ///
+        /// Returns the same typed initialization refusals as [`Self::new`].
+        pub fn new_with_mode(
+            runtime: &BrowserRuntime,
+            viewer: &mut ViewerController,
+            precision_mode: PrecisionMode,
+        ) -> Result<Self, AppError> {
+            viewer
+                .owner_mut()
+                .configure_precision_mode(precision_mode, PICTURE_FAST_EDIT_BUDGET)
+                .map_err(|error| AppError::Worker(error.to_string()))?;
+            let accepted_reference = viewer
+                .owner()
+                .reference_centre()
+                .ok_or_else(|| AppError::Worker("owner navigation is unconfigured".to_string()))?;
             let device = runtime.device();
             let queue = runtime.queue();
             let mut executor = GpuKernelExecutor::new(
@@ -515,7 +553,9 @@ mod browser {
                 height: runtime.facts().height,
             };
             let params = EscapeParams::new(requested.iteration_cap);
-            let plan = JulibrotKernels::plan(&executor, extent, params).map_err(kernel_error)?;
+            let plan = JulibrotKernels::plan(&executor, extent, params)
+                .map_err(kernel_error)?
+                .with_precision_mode(precision_mode);
             let mut kernels = kernels;
             let grid = kernels
                 .allocate_grid(&mut executor, &plan)
@@ -551,6 +591,8 @@ mod browser {
                 WorkerMode::WebWorker,
             )
             .map_err(worker_error)?;
+            let mut loop_state = FrameLoop::default();
+            loop_state.set_precision_mode(precision_mode);
             let frame_loop = Self {
                 device,
                 queue,
@@ -561,14 +603,15 @@ mod browser {
                 _producer_endpoint: producer_endpoint,
                 orbits: OrbitRegistry::new(),
                 current_orbit: None,
-                accepted_reference: None,
+                accepted_reference: Some(accepted_reference),
+                shallow_centre: None,
                 accepted_reference_zoom_log2: None,
                 submitted_references: Vec::with_capacity(2),
                 plan,
                 grid,
                 main,
                 scene_selection: None,
-                loop_state: FrameLoop::default(),
+                loop_state,
                 prepared_level: None,
                 hot_stride,
                 refresh_id: 0,
@@ -580,6 +623,7 @@ mod browser {
                 presented_view: None,
                 last_status: RefreshStatus::Waiting,
                 level_timings: LevelTimingLedger::default(),
+                precision_mode,
             };
             Ok(frame_loop)
         }
@@ -640,8 +684,10 @@ mod browser {
             let observed = self.handle_events(runtime, events)?;
             let presented = observed.presented;
             if requests.frame {
-                self.loop_state
-                    .accept_request(self.main.generation_applied, self.current_orbit.is_some());
+                self.loop_state.accept_request(
+                    self.main.generation_applied,
+                    self.scene_ready(viewer.requested().zoom_log2),
+                );
                 requests.frame = false;
             }
             if let Some(error) = self.owner_endpoint.take_error() {
@@ -649,14 +695,17 @@ mod browser {
                 return Err(worker_error(error));
             }
 
+            if KernelMode::for_zoom(viewer.requested().zoom_log2) == KernelMode::Shallow {
+                self.abandon_submitted_references(viewer);
+            }
             let final_validation = self.prepare_due_level();
             let extent = self.prepared_extent();
-            let hot = viewer.drain_hot(extent)?;
+            let mut hot = viewer.drain_hot(extent)?;
             self.owner_epoch = hot.state.epoch;
             self.main = hot.state.main;
             self.observe_scene_selection(viewer);
             self.install_main();
-            let slot = HotSlot::for_refresh(self.refresh_id, self.hot_stride, hot.state.epoch)
+            let mut slot = HotSlot::for_refresh(self.refresh_id, self.hot_stride, hot.state.epoch)
                 .map_err(|error| AppError::Present(error.to_string()))?;
             let measure_validation =
                 requests.measurement && self.presenter.facts().completed_scene_id.is_some();
@@ -680,7 +729,26 @@ mod browser {
             );
 
             let main_arrived = self.service_arrivals(viewer, now_ms)?;
-            self.submit_pending_reference(viewer, hot.plane)?;
+            let shallow_accepted = self.submit_pending_reference(viewer, hot.plane)?;
+            if shallow_accepted {
+                self.prepare_due_level();
+                hot = viewer.drain_hot(self.prepared_extent())?;
+                self.owner_epoch = hot.state.epoch;
+                self.main = hot.state.main;
+                self.observe_scene_selection(viewer);
+                self.install_main();
+                slot = HotSlot::for_refresh(self.refresh_id, self.hot_stride, hot.state.epoch)
+                    .map_err(|error| AppError::Present(error.to_string()))?;
+                self.presenter.write_hot(
+                    slot,
+                    PresentHot {
+                        epoch: hot.state.epoch,
+                        state: hot.state.hot,
+                        plane: hot.plane,
+                        view: viewer.requested().view,
+                    },
+                );
+            }
             let scene_id = if main_arrived {
                 None
             } else {
@@ -897,7 +965,7 @@ mod browser {
                 plane_origin_f64: self.main.plane_origin_f64,
                 precision_mode: self.main.precision_mode,
             };
-            if self.current_orbit.is_some()
+            if self.scene_ready(viewer.requested().zoom_log2)
                 && self.submitted_references.is_empty()
                 && viewer.owner().navigation_pending_depth() == 0
                 && self
@@ -1025,8 +1093,9 @@ mod browser {
                 .accepted_reference
                 .as_ref()
                 .map_or(Ok([0.0; 2]), |old| {
+                    let old = old.with_precision(submitted.centre.precision_bits)?;
                     reference_shift_px(
-                        old,
+                        &old,
                         &submitted.centre,
                         &submitted.plane,
                         submitted.zoom_log2,
@@ -1081,12 +1150,27 @@ mod browser {
             &mut self,
             viewer: &mut ViewerController,
             plane: Plane,
-        ) -> Result<(), AppError> {
+        ) -> Result<bool, AppError> {
             let Some(submission) = viewer.take_reference_submission() else {
-                return Ok(());
+                return Ok(false);
             };
             let navigation = submission.navigation;
             let requested = viewer.requested();
+            if KernelMode::for_zoom(navigation.zoom_log2) == KernelMode::Shallow {
+                if !viewer.owner_mut().accept_navigation_without_orbit(
+                    navigation.generation,
+                    navigation.centre_revision,
+                ) {
+                    return Ok(false);
+                }
+                self.shallow_centre = Some(navigation.centre);
+                self.main = viewer.drain_main()?.main;
+                self.rebuild_grid_if_needed(requested.iteration_cap)?;
+                self.loop_state.restart(navigation.generation);
+                self.prepared_level = None;
+                self.install_main();
+                return Ok(true);
+            }
             let precision = precision_for(
                 navigation.zoom_log2,
                 self.plan.requested_extent.width,
@@ -1121,7 +1205,7 @@ mod browser {
                 plane,
                 precision_mode: viewer_precision_mode(navigation.precision_mode),
             });
-            Ok(())
+            Ok(false)
         }
 
         fn rebuild_grid_if_needed(&mut self, requested_max_iter: u32) -> Result<(), AppError> {
@@ -1131,7 +1215,8 @@ mod browser {
                 requested_extent,
                 EscapeParams::new(requested_max_iter),
             )
-            .map_err(kernel_error)?;
+            .map_err(kernel_error)?
+            .with_precision_mode(self.precision_mode);
             if next == self.plan {
                 return Ok(());
             }
@@ -1176,7 +1261,7 @@ mod browser {
             let facts = match mode {
                 KernelMode::Shallow => {
                     let centre = self
-                        .accepted_reference
+                        .shallow_centre
                         .as_ref()
                         .ok_or_else(|| AppError::Kernel("missing shallow centre".to_string()))?;
                     let split = split_centre(centre).map_err(math_error)?;
@@ -1249,6 +1334,13 @@ mod browser {
                 }
                 Err(ember_julibrot_present::PresentError::SceneBusy { .. }) => Ok(None),
                 Err(error) => Err(present_error(error)),
+            }
+        }
+
+        fn scene_ready(&self, zoom_log2: f64) -> bool {
+            match KernelMode::for_zoom(zoom_log2) {
+                KernelMode::Shallow => self.shallow_centre.is_some(),
+                KernelMode::Perturbation => self.current_orbit.is_some(),
             }
         }
 
@@ -1436,8 +1528,16 @@ pub use browser::BrowserFrameLoop;
 
 #[cfg(test)]
 mod tests {
-    use ember_julibrot_kernels::{GridExtent, plan_refinement};
-    use ember_julibrot_math::{EscapeParams, PrecisionMode};
+    use std::{
+        num::NonZeroU32,
+        time::{Duration, Instant},
+    };
+
+    use ember_julibrot_kernels::{GridExtent, KernelMode, plan_refinement};
+    use ember_julibrot_math::{
+        BigCentre, EscapeParams, MathError, OrbitStep, PrecisionMode, ReferenceOrbitBuilder,
+        precision_for,
+    };
 
     use super::{
         FenceRefusal, FrameLoop, LEVELS, PresenterPoll, RefinementLevel, RefinementSchedule,
@@ -1766,6 +1866,96 @@ mod tests {
         schedule.submitted(13, RefinementLevel::Final);
         assert!(schedule.completed(13, 7, RefinementLevel::Final));
         assert!(!schedule.pending());
+    }
+
+    #[test]
+    fn picture_fast_advances_directly_from_preview_to_final() {
+        let mut frame_loop = FrameLoop::default();
+        frame_loop.set_precision_mode(PrecisionMode::PictureFast);
+        frame_loop.restart(8);
+        assert_eq!(frame_loop.due(), Some(RefinementLevel::Preview));
+        frame_loop.submitted(21, RefinementLevel::Preview);
+        assert!(frame_loop.completed(21, 8, RefinementLevel::Preview));
+        assert_eq!(frame_loop.due(), Some(RefinementLevel::Final));
+        frame_loop.submitted(22, RefinementLevel::Final);
+        assert!(frame_loop.completed(22, 8, RefinementLevel::Final));
+        assert!(!frame_loop.refinement_pending());
+    }
+
+    fn wait_for_unused_shallow_orbit() -> Result<(), MathError> {
+        let centre = BigCentre::from_f64([0.0, 0.0, -0.5, 0.5], 1_024)?;
+        let params = EscapeParams::new(4_096);
+        let mut builder = ReferenceOrbitBuilder::new(
+            &centre,
+            precision_for(0.0, 960, params.max_iter)?,
+            params,
+        )?;
+        let chunk = NonZeroU32::new(params.max_iter).ok_or(MathError::InvalidMaxIter)?;
+        loop {
+            match builder.step(chunk)? {
+                OrbitStep::Pending { .. } => {}
+                OrbitStep::Complete(orbit) => {
+                    std::hint::black_box(orbit);
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    fn time_to_first_shallow_scene(wait_for_orbit: bool) -> Result<Duration, MathError> {
+        let mut frame_loop = FrameLoop::default();
+        let mut presenter = FakePresenter::default();
+        let clock = FakeClock::default();
+        let started = Instant::now();
+        if wait_for_orbit {
+            wait_for_unused_shallow_orbit()?;
+        }
+        frame_loop.accept_request(1, true);
+        assert_eq!(KernelMode::for_zoom(0.0), KernelMode::Shallow);
+        assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), Some(1));
+        Ok(started.elapsed())
+    }
+
+    fn median(mut samples: Vec<Duration>) -> Duration {
+        samples.sort_unstable();
+        samples[samples.len() / 2]
+    }
+
+    #[test]
+    fn shallow_frame_loop_no_longer_waits_for_an_unused_orbit() -> Result<(), MathError> {
+        wait_for_unused_shallow_orbit()?;
+        let before = median(
+            (0..5)
+                .map(|_| time_to_first_shallow_scene(true))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        let after = median(
+            (0..5)
+                .map(|_| time_to_first_shallow_scene(false))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        assert!(before > after);
+        eprintln!(
+            "first_shallow_scene before_ms={:.3} after_ms={:.3} saved_ms={:.3}",
+            before.as_secs_f64() * 1_000.0,
+            after.as_secs_f64() * 1_000.0,
+            before.saturating_sub(after).as_secs_f64() * 1_000.0,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_shallow_selection_is_ready_without_an_orbit_but_a_deep_crossing_waits() {
+        let mut shallow = FrameLoop::default();
+        shallow.accept_request(7, true);
+        assert_eq!(shallow.due(), Some(RefinementLevel::Preview));
+
+        let mut deep = FrameLoop::default();
+        deep.accept_request(8, false);
+        assert_eq!(deep.due(), None);
+        deep.restart(8);
+        assert_eq!(deep.due(), Some(RefinementLevel::Preview));
+        assert_eq!(KernelMode::for_zoom(14.0), KernelMode::Perturbation);
     }
 
     #[test]

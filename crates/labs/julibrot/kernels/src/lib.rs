@@ -25,5 +25,8 @@ pub use records::{
     EscapeGrid, GridExtent, KernelMode, PerturbUniform, ReferenceOrbitInput, RefinementLevel,
     ShallowUniform,
 };
-pub use refinement::{DispatchFacts, LevelSpec, RefinementPlan, dispatch_facts, plan_refinement};
+pub use refinement::{
+    DispatchFacts, LevelSpec, RefinementPlan, dispatch_facts, next_refinement_level,
+    plan_refinement,
+};
 pub use shallow::{KernelSample, escape_shallow_pixel, escape_shallow_point};

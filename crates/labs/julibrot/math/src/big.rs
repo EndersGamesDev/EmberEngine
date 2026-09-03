@@ -1,6 +1,49 @@
 use astro_float::{BigFloat, Consts, Radix, RoundingMode, Sign};
 
-use crate::MathError;
+use crate::{MathError, PrecisionMode};
+
+/// Fixed centre width retained by the deterministic navigation path.
+pub const DETERMINISTIC_CENTRE_BITS: u32 = 1_024;
+
+/// Number of edits the shipped picture-fast centre guard budgets before it must grow.
+pub const PICTURE_FAST_EDIT_BUDGET: u32 = 10_000;
+
+/// Derives the centre width from picture resolution and accumulated-navigation budget.
+///
+/// One quarter pixel is `2^-(zoom_log2 + log2(grid_width))`. Budgeting one final-width ulp of
+/// accumulated centre error per edit requires an additional `ceil(log2(4 * edit_budget))` bits.
+/// The result is rounded upward to the common 64-bit Astro-float allocation unit.
+///
+/// # Errors
+///
+/// Returns an error for non-finite zoom, zero width or edit budget, or an unrepresentable width.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub fn centre_precision_for(
+    mode: PrecisionMode,
+    zoom_log2: f64,
+    grid_width: u32,
+    edit_budget: u32,
+) -> Result<u32, MathError> {
+    if !zoom_log2.is_finite() {
+        return Err(MathError::NonFinite);
+    }
+    if grid_width == 0 {
+        return Err(MathError::InvalidExtent);
+    }
+    if edit_budget == 0 {
+        return Err(MathError::InvalidPrecisionPlan);
+    }
+    if mode == PrecisionMode::Deterministic {
+        return Ok(DETERMINISTIC_CENTRE_BITS);
+    }
+    let coordinate_bits = (zoom_log2 + f64::from(grid_width).log2()).ceil();
+    let guard_bits = (4.0 * f64::from(edit_budget)).log2().ceil();
+    let requested = (coordinate_bits + guard_bits).max(64.0);
+    if requested > f64::from(u32::MAX) {
+        return Err(MathError::CounterOverflow);
+    }
+    rounded_astro_precision(requested as u32)
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BigScalar {
@@ -223,6 +266,24 @@ impl BigCentre {
                 BigScalar::from_f64(b, precision_bits)?,
                 BigScalar::from_f64(c, precision_bits)?,
                 BigScalar::from_f64(d, precision_bits)?,
+            ],
+            precision_bits,
+        })
+    }
+
+    /// Returns the same centre rounded to the requested common Astro-float width.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for zero or unrepresentable precision, or a bignum rounding failure.
+    pub fn with_precision(&self, precision_bits: u32) -> Result<Self, MathError> {
+        let precision_bits = rounded_astro_precision(precision_bits)?;
+        Ok(Self {
+            coords: [
+                self.coords[0].with_precision(precision_bits)?,
+                self.coords[1].with_precision(precision_bits)?,
+                self.coords[2].with_precision(precision_bits)?,
+                self.coords[3].with_precision(precision_bits)?,
             ],
             precision_bits,
         })
@@ -478,7 +539,7 @@ fn trailing_zero_bits(limbs: &[u32]) -> Result<u32, MathError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BigScalar, decode_big_scalar, encode_big_scalar};
+    use super::{BigScalar, centre_precision_for, decode_big_scalar, encode_big_scalar};
     use crate::{MathError, PrecisionMode};
 
     fn assert_accurate_to_f64(actual: &BigScalar, expected: &BigScalar) -> Result<(), MathError> {
@@ -486,6 +547,35 @@ mod tests {
         let expected = expected.to_f64()?;
         let tolerance = expected.abs().mul_add(f64::EPSILON, f64::from_bits(1));
         assert!((actual - expected).abs() <= tolerance);
+        Ok(())
+    }
+
+    #[test]
+    fn centre_precision_tracks_zoom_width_and_edit_budget() -> Result<(), MathError> {
+        assert_eq!(
+            centre_precision_for(PrecisionMode::Deterministic, 0.0, 960, 10_000)?,
+            1_024
+        );
+        assert_eq!(
+            centre_precision_for(PrecisionMode::PictureFast, 0.0, 960, 10_000)?,
+            64
+        );
+        assert_eq!(
+            centre_precision_for(PrecisionMode::PictureFast, 40.0, 960, 10_000)?,
+            128
+        );
+        assert_eq!(
+            centre_precision_for(PrecisionMode::PictureFast, 100.0, 960, 10_000)?,
+            128
+        );
+        assert_eq!(
+            centre_precision_for(PrecisionMode::PictureFast, 512.0, 960, 10_000)?,
+            576
+        );
+        assert_eq!(
+            centre_precision_for(PrecisionMode::PictureFast, 0.0, 960, 0),
+            Err(MathError::InvalidPrecisionPlan)
+        );
         Ok(())
     }
 
