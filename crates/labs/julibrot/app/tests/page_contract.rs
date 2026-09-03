@@ -318,6 +318,55 @@ fn frame_loop_preserves_cross_slice_order_and_cooperative_polling() {
     assert!(FRAME.contains("KernelMode::for_zoom"));
     assert!(FRAME.contains("presenter.poll_once(now_ms)"));
     assert!(MAIN.contains("requestAnimationFrame"));
-    assert!(MAIN.contains("if (api.app_needs_refresh()) scheduleFrame();"));
+    assert!(MAIN.contains("return api.app_needs_refresh();"));
+    assert_eq!(
+        MAIN.matches("if (stillTurning()) scheduleFrame();").count(),
+        2,
+        "the loader re-schedules from both the completed turn and the caught throw"
+    );
     assert!(FRAME.contains("runtime.complete_warp"));
+}
+
+#[test]
+fn a_transient_fence_refusal_is_survived_rather_than_ending_the_page() {
+    for required in [
+        "const fn classify_refusal(reason: FenceRefusal) -> RefusalClass {",
+        "FenceRefusal::PollLimit | FenceRefusal::Deadline => RefusalClass::Transient,",
+        "FenceRefusal::Cancelled => RefusalClass::Cancelled,",
+        "FenceRefusal::Device => RefusalClass::Device,",
+        "fn record_transient(&mut self, error: AppError) {",
+        "self.completed_run = !self.schedule.pending();",
+        "view_stale: bool,",
+        "|| view_stale",
+        "self.loop_state.stop(error.clone());",
+        "pub fn presented_view_is_stale(&self, viewer: &ViewerController) -> bool {",
+    ] {
+        assert!(
+            FRAME.contains(required),
+            "missing never-hang law: {required}"
+        );
+    }
+    for required in [
+        "pub refresh_status: &'static str,",
+        "pub transient_fence_refusals: u32,",
+        "pub last_transient_refusal: Option<String>,",
+        "pub presented_view_stale: bool,",
+        "pub loop_stopped_reason: Option<String>,",
+    ] {
+        assert!(
+            FACTS.contains(required),
+            "missing published fact: {required}"
+        );
+    }
+    for required in [
+        "if (facts.loop_stopped_reason) fail(facts.loop_stopped_reason);",
+        "facts.transient_fence_refusals",
+        "facts.last_transient_refusal",
+    ] {
+        assert!(MAIN.contains(required), "missing page display: {required}");
+    }
+    assert!(
+        LIB.contains("if self.frame_loop.stopped_reason().is_some() {"),
+        "a stopped loop must answer false to needs_refresh"
+    );
 }
