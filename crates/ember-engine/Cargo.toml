@@ -26,6 +26,10 @@ tracing-log.workspace = true
 egui = "0.31"
 egui-wgpu = "0.31"
 egui-winit = "0.31"
+# Gamepads and force feedback. Its Windows backend is XInput, which is the
+# one that supports rumble; a pad it cannot see (a DualShock without a
+# driver) is simply absent, and the game keeps its keys.
+gilrs = "0.11"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wgpu = { workspace = true, features = ["webgl"] }
@@ -34,7 +38,14 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 console_log = "1"
 console_error_panic_hook = "0.1"
-web-sys = { version = "0.3", features = ["Document", "Window", "Element", "HtmlCanvasElement"] }
+# Reflect and Function: the page's rumble shim is looked up by name and
+# called, because the Gamepad haptics binding in web-sys is unstable and the
+# deploy copies no wasm-bindgen snippets to the live page.
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "Document", "Window", "Element", "HtmlCanvasElement",
+    "Navigator", "Gamepad", "GamepadButton", "GamepadMappingType",
+] }
 
 [lints]
 workspace = true

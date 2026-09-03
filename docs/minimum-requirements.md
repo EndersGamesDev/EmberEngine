@@ -24,6 +24,8 @@ WebGPU is not required and is not a target: portability on the WebGL2 floor is t
 
 Shared-memory threads are not required: concurrency is Web Workers with message passing and ownership transfer, so no page depends on cross-origin isolation headers.
 
+The Gamepad API and its `vibrationActuator` are **not required**. Ember reads `navigator.getGamepads()` when it exists and treats an absent API, an absent actuator (Firefox, Safari) or a rejected `playEffect` as "keyboard and mouse only": every intent has a key, and rumble is a silent no-op. No WebGL capability changes. The arena page reports the probe result (`gamepad: none | input-only | input+rumble`) in its status line once a pad is seen, beside the existing renderer probe, so a player without rumble can tell a missing feature from a broken one.
+
 ## 3. When the floor is missing
 
 Initialization probes the adapter once and reports the exact missing capability as a typed refusal with the adapter string, the backend and the failed usage, in the page and in any submitted report; it never falls back to a silently different renderer, never retries a lesser format on its own, and never presents a blank canvas as a running game.

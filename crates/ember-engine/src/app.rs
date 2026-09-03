@@ -13,7 +13,8 @@ use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowId};
 
 use crate::EmberGame;
-use crate::input::InputState;
+use crate::feedback::Rumble;
+use crate::input::{InputState, PadButton, PadState};
 use crate::renderer::Renderer;
 
 #[cfg(target_arch = "wasm32")]
@@ -75,6 +76,13 @@ struct App<G: EmberGame> {
     pending_renderer: Rc<RefCell<Option<Renderer>>>,
     game: G,
     input: InputState,
+    /// Gamepads and rumble; the platform side of `EmberGame::feedback`.
+    haptics: Haptics,
+    /// Whether the window has keyboard focus. Keys arrive only while it
+    /// does, but a pad is polled, not delivered, so the platform has to
+    /// remember focus itself to give the pad the same rule: an alt-tabbed
+    /// game neither reads a held trigger nor buzzes the pad.
+    focused: bool,
     last_frame: Instant,
     /// Rate limit for stall warnings so one bad stretch doesn't spam.
     last_stall_warn: Option<Instant>,
@@ -163,7 +171,12 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
         }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Focused(false) => self.input.clear(),
+            WindowEvent::Focused(false) => {
+                self.focused = false;
+                self.input.clear();
+                self.haptics.stop();
+            }
+            WindowEvent::Focused(true) => self.focused = true,
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
                     match event.state {
@@ -333,8 +346,23 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
                     }
                 }
 
+                // The pad is polled, not delivered: read it here, on the
+                // main thread, right before the game sees the frame's
+                // input, so a stick and a key pressed in the same frame
+                // arrive together.
+                let pad = self.haptics.poll_pad();
+                self.input.set_pad(if self.focused { pad } else { None });
+                self.input.set_pad_status(self.haptics.status());
+
                 let frame = self.game.update(&self.input, dt);
+                let feedback = self.game.feedback();
                 self.input.end_frame();
+                self.haptics.tick(now);
+                if self.focused {
+                    for r in feedback.rumbles {
+                        self.haptics.request(r, now);
+                    }
+                }
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some(renderer) = self.renderer.as_mut() {
                     let draw = match (self.overlay.as_mut(), self.window.as_ref()) {
@@ -396,6 +424,8 @@ pub fn run<G: EmberGame + 'static>(config: EngineConfig, game: G) {
         pending_renderer: Rc::new(RefCell::new(None)),
         game,
         input: InputState::default(),
+        haptics: Haptics::new(),
+        focused: true,
         last_frame: Instant::now(),
         last_stall_warn: None,
         #[cfg(not(target_arch = "wasm32"))]
@@ -411,5 +441,561 @@ pub fn run<G: EmberGame + 'static>(config: EngineConfig, game: G) {
     {
         use winit::platform::web::EventLoopExtWebSys;
         event_loop.spawn_app(app); // returns immediately; runs on rAF
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Haptics: the platform side of `EmberGame::feedback`, and the gamepad poll.
+// ---------------------------------------------------------------------------
+
+/// Gamepads and rumble. Owns whatever the platform has (gilrs on native,
+/// the Gamepad API and the page's `emberRumble` shim on the web), and the
+/// one piece of state both share: what the motors are doing right now.
+///
+/// Requests merge per channel by `max` while an earlier request is still
+/// playing, and `ends_at` is the later of the two ends. That is the rule
+/// that stops a 30 ms hitmarker tick from cutting a 400 ms death rumble
+/// short, and stops a finished death rumble from leaking its magnitude into
+/// the next tick: a request that arrives after `ends_at` starts from zero.
+pub struct Haptics {
+    /// The merged strong-motor magnitude on the pad now (0 while idle).
+    strong: f32,
+    /// The merged weak-motor magnitude on the pad now (0 while idle).
+    weak: f32,
+    /// When the motors stop; `None` while idle.
+    ends_at: Option<Instant>,
+    /// What the probe found; see `InputState::pad_status`. Logged on change.
+    status: &'static str,
+    #[cfg(not(target_arch = "wasm32"))]
+    pads: Option<NativePads>,
+    #[cfg(target_arch = "wasm32")]
+    pads: WebPads,
+}
+
+impl Haptics {
+    /// Open the platform's pad backend. Never fails: a platform without pads
+    /// is a game with keys, which every game already is.
+    pub fn new() -> Self {
+        Self {
+            strong: 0.0,
+            weak: 0.0,
+            ends_at: None,
+            status: "none",
+            #[cfg(not(target_arch = "wasm32"))]
+            pads: NativePads::open(),
+            #[cfg(target_arch = "wasm32")]
+            pads: WebPads::open(),
+        }
+    }
+
+    /// A `Haptics` with no backend, so the merge rule can be tested without
+    /// a pad or a window.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    const fn detached() -> Self {
+        Self {
+            strong: 0.0,
+            weak: 0.0,
+            ends_at: None,
+            status: "none",
+            pads: None,
+        }
+    }
+
+    /// Read the first connected pad. Called once per frame on the main
+    /// thread before the game's update, which is the only place gilrs may
+    /// be polled from.
+    pub fn poll_pad(&mut self) -> Option<PadState> {
+        #[cfg(not(target_arch = "wasm32"))]
+        let (pad, rumble) = self.pads.as_mut().map_or((None, false), NativePads::poll);
+        #[cfg(target_arch = "wasm32")]
+        let (pad, rumble) = self.pads.poll();
+        if pad.is_some() {
+            let status = if rumble { "input+rumble" } else { "input-only" };
+            if status != self.status {
+                tracing::info!(gamepad = status, "gamepad probe");
+                self.status = status;
+            }
+        }
+        pad
+    }
+
+    /// `none | input-only | input+rumble`: what the probe found the last
+    /// time a pad was seen.
+    pub const fn status(&self) -> &'static str {
+        self.status
+    }
+
+    /// Merge one request into what is playing and drive the motors.
+    pub fn request(&mut self, r: Rumble, now: Instant) {
+        if r.ms == 0 || (r.strong <= 0.0 && r.weak <= 0.0) {
+            return;
+        }
+        let running = self.ends_at.is_some_and(|t| now < t);
+        let new_end = now + std::time::Duration::from_millis(u64::from(r.ms));
+        if running {
+            self.strong = self.strong.max(r.strong);
+            self.weak = self.weak.max(r.weak);
+            self.ends_at = Some(self.ends_at.map_or(new_end, |t| t.max(new_end)));
+        } else {
+            self.strong = r.strong;
+            self.weak = r.weak;
+            self.ends_at = Some(new_end);
+        }
+        let remaining_ms = self
+            .ends_at
+            .map_or(0, |t| t.saturating_duration_since(now).as_millis());
+        self.play(remaining_ms);
+    }
+
+    /// Stop the motors once the merged request has run its course.
+    pub fn tick(&mut self, now: Instant) {
+        if self.ends_at.is_some_and(|t| now >= t) {
+            self.stop();
+        }
+    }
+
+    /// Stop both motors now and forget the request: focus loss, and expiry.
+    pub fn stop(&mut self) {
+        let was_playing = self.ends_at.is_some();
+        self.strong = 0.0;
+        self.weak = 0.0;
+        self.ends_at = None;
+        if was_playing {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(p) = self.pads.as_ref() {
+                p.stop();
+            }
+            #[cfg(target_arch = "wasm32")]
+            self.pads.stop();
+        }
+    }
+
+    /// What is on the motors: `(strong, weak, ends_at)`, or `None` while idle.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    fn playing(&self) -> Option<(f32, f32, Instant)> {
+        self.ends_at.map(|t| (self.strong, self.weak, t))
+    }
+
+    // Only the web path uses the remaining time (the actuator wants a
+    // duration) and mutates (the shim is looked up lazily); gilrs needs
+    // neither, so the native build sees both as unneeded.
+    #[cfg_attr(
+        not(target_arch = "wasm32"),
+        allow(unused_variables, clippy::needless_pass_by_ref_mut)
+    )]
+    fn play(&mut self, remaining_ms: u128) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(p) = self.pads.as_ref() {
+            p.play(self.strong, self.weak);
+        }
+        #[cfg(target_arch = "wasm32")]
+        self.pads.play(self.strong, self.weak, remaining_ms);
+    }
+}
+
+/// gilrs on the main thread: the pad snapshot and two persistent effects.
+#[cfg(not(target_arch = "wasm32"))]
+struct NativePads {
+    gilrs: gilrs::Gilrs,
+    /// The pad the two effects were built for. They are rebuilt when the
+    /// first connected pad changes, and never per request: a pad has a
+    /// small number of effect slots, and building a fresh `ff::Effect` for
+    /// every hitmarker exhausts them within a minute.
+    ff_pad: Option<gilrs::GamepadId>,
+    strong_fx: Option<gilrs::ff::Effect>,
+    weak_fx: Option<gilrs::ff::Effect>,
+}
+
+/// gilrs's button names in W3C standard-mapping order, so
+/// `GILRS_BUTTONS[i]` is the button whose bit is `i`. The pairing with
+/// `PadButton` is spelled out rather than implied by position so a test can
+/// check both halves of the table against each other.
+#[cfg(not(target_arch = "wasm32"))]
+const GILRS_BUTTONS: [(gilrs::Button, PadButton); 16] = [
+    (gilrs::Button::South, PadButton::South),
+    (gilrs::Button::East, PadButton::East),
+    (gilrs::Button::West, PadButton::West),
+    (gilrs::Button::North, PadButton::North),
+    (gilrs::Button::LeftTrigger, PadButton::LB),
+    (gilrs::Button::RightTrigger, PadButton::RB),
+    (gilrs::Button::LeftTrigger2, PadButton::LT),
+    (gilrs::Button::RightTrigger2, PadButton::RT),
+    (gilrs::Button::Select, PadButton::Back),
+    (gilrs::Button::Start, PadButton::Start),
+    (gilrs::Button::LeftThumb, PadButton::L3),
+    (gilrs::Button::RightThumb, PadButton::R3),
+    (gilrs::Button::DPadUp, PadButton::Up),
+    (gilrs::Button::DPadDown, PadButton::Down),
+    (gilrs::Button::DPadLeft, PadButton::Left),
+    (gilrs::Button::DPadRight, PadButton::Right),
+];
+
+#[cfg(not(target_arch = "wasm32"))]
+impl NativePads {
+    /// Open gilrs, or log why not and go without. `Gilrs::new` fails on a
+    /// platform gilrs does not implement; on Windows it is `XInput` and
+    /// succeeds with zero pads attached, which is the path this workstation
+    /// exercises.
+    fn open() -> Option<Self> {
+        match gilrs::Gilrs::new() {
+            Ok(gilrs) => Some(Self {
+                gilrs,
+                ff_pad: None,
+                strong_fx: None,
+                weak_fx: None,
+            }),
+            Err(e) => {
+                tracing::debug!(error = %e, "gamepads unavailable: gilrs failed to open");
+                None
+            }
+        }
+    }
+
+    /// Drain gilrs's queue (that is what refreshes its cached state) and
+    /// snapshot the first connected pad. Returns the snapshot and whether
+    /// the pad can rumble.
+    fn poll(&mut self) -> (Option<PadState>, bool) {
+        while let Some(ev) = self.gilrs.next_event() {
+            match ev.event {
+                gilrs::EventType::Connected => {
+                    let name = self.gilrs.gamepad(ev.id).name().to_owned();
+                    tracing::info!(pad = %name, "gamepad connected");
+                }
+                gilrs::EventType::Disconnected => tracing::info!("gamepad disconnected"),
+                _ => {}
+            }
+        }
+        let Some((id, pad)) = self.gilrs.gamepads().next() else {
+            return (None, false);
+        };
+        let ff = pad.is_ff_supported();
+        let state = Self::snapshot(&pad);
+        if self.ff_pad != Some(id) {
+            self.build_effects(id, ff);
+        }
+        (Some(state), self.strong_fx.is_some())
+    }
+
+    fn snapshot(pad: &gilrs::Gamepad<'_>) -> PadState {
+        use gilrs::Axis;
+        // gilrs reports stick Y up-positive on every backend, so no negation here.
+        let left = PadState::stick([pad.value(Axis::LeftStickX), pad.value(Axis::LeftStickY)]);
+        let right = PadState::stick([pad.value(Axis::RightStickX), pad.value(Axis::RightStickY)]);
+        let trigger = |b: gilrs::Button| {
+            pad.button_data(b)
+                .map_or(0.0, gilrs::ev::state::ButtonData::value)
+        };
+        let mut buttons = 0u16;
+        for (g, b) in GILRS_BUTTONS {
+            if pad.is_pressed(g) {
+                buttons |= b.mask();
+            }
+        }
+        PadState {
+            left,
+            right,
+            lt: trigger(gilrs::Button::LeftTrigger2),
+            rt: trigger(gilrs::Button::RightTrigger2),
+            buttons,
+        }
+    }
+
+    /// Build the strong and weak effects for `id`, once. Dropping the old
+    /// handles frees their slots on the pad they were built for.
+    fn build_effects(&mut self, id: gilrs::GamepadId, ff: bool) {
+        self.strong_fx = None;
+        self.weak_fx = None;
+        self.ff_pad = Some(id);
+        if !ff {
+            tracing::debug!("gamepad has no force feedback; input only");
+            return;
+        }
+        let build = |gilrs: &mut gilrs::Gilrs, kind: gilrs::ff::BaseEffectType| {
+            use gilrs::ff::{BaseEffect, EffectBuilder, Replay, Ticks};
+            EffectBuilder::new()
+                .add_effect(BaseEffect {
+                    kind,
+                    scheduling: Replay {
+                        play_for: Ticks::from_ms(10_000),
+                        ..Replay::default()
+                    },
+                    ..BaseEffect::default()
+                })
+                .gamepads(&[id])
+                .finish(gilrs)
+        };
+        let strong = build(
+            &mut self.gilrs,
+            gilrs::ff::BaseEffectType::Strong {
+                magnitude: u16::MAX,
+            },
+        );
+        let weak = build(
+            &mut self.gilrs,
+            gilrs::ff::BaseEffectType::Weak {
+                magnitude: u16::MAX,
+            },
+        );
+        match (strong, weak) {
+            (Ok(s), Ok(w)) => {
+                self.strong_fx = Some(s);
+                self.weak_fx = Some(w);
+            }
+            (Err(e), _) | (_, Err(e)) => {
+                tracing::debug!(error = %e, "gamepad rumble effect failed to build");
+            }
+        }
+    }
+
+    /// Set each channel's gain and (re)start it. `play` restarts the
+    /// effect's 10 s window, so a request that arrives mid-rumble does not
+    /// inherit the remainder of an older one.
+    fn play(&self, strong: f32, weak: f32) {
+        for (fx, gain) in [(&self.strong_fx, strong), (&self.weak_fx, weak)] {
+            if let Some(fx) = fx
+                && let Err(e) = fx.set_gain(gain).and_then(|()| fx.play())
+            {
+                tracing::debug!(error = %e, "gamepad rumble play failed");
+            }
+        }
+    }
+
+    fn stop(&self) {
+        for fx in [&self.strong_fx, &self.weak_fx].into_iter().flatten() {
+            if let Err(e) = fx.stop() {
+                tracing::debug!(error = %e, "gamepad rumble stop failed");
+            }
+        }
+    }
+}
+
+/// The browser's Gamepad API for input and the page's `emberRumble` shim
+/// for rumble.
+///
+/// The shim exists because `GamepadHapticActuator::play_effect` sits behind
+/// web-sys's unstable-APIs flag, and the deploy copies only `arena.js` and
+/// the wasm to the live page, so a wasm-bindgen `inline_js` snippet would
+/// never arrive. A page without the shim, or a browser without the actuator
+/// (Firefox, Safari), is a silent no-op: every intent has a key.
+#[cfg(target_arch = "wasm32")]
+struct WebPads {
+    /// `window.emberRumble`, looked up once: on the first frame a pad is
+    /// seen, not at startup, because a browser surfaces a pad only after a
+    /// button press, by which time every script on the page has run. A
+    /// lookup at startup would race the page's own `<script>` order.
+    shim: Option<js_sys::Function>,
+    /// Whether `shim` has been looked up yet.
+    shim_probed: bool,
+    /// A pad with a non-standard mapping is logged once, not every frame.
+    warned_mapping: bool,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl WebPads {
+    const fn open() -> Self {
+        Self {
+            shim: None,
+            shim_probed: false,
+            warned_mapping: false,
+        }
+    }
+
+    /// The page's shim, looked up on first use and cached, absent or not.
+    fn shim(&mut self) -> Option<&js_sys::Function> {
+        use wasm_bindgen::JsCast;
+        if !self.shim_probed {
+            self.shim_probed = true;
+            self.shim = web_sys::window()
+                .and_then(|w| {
+                    js_sys::Reflect::get(&w, &wasm_bindgen::JsValue::from_str("emberRumble")).ok()
+                })
+                .and_then(|v| v.dyn_into::<js_sys::Function>().ok());
+            if self.shim.is_none() {
+                tracing::debug!("no window.emberRumble on this page; rumble is a no-op");
+            }
+        }
+        self.shim.as_ref()
+    }
+
+    /// The first connected pad with the standard mapping, read by the
+    /// standard indices. A pad with another mapping is skipped: its fire
+    /// button could be anywhere, and a wrong guess is worse than no pad.
+    fn poll(&mut self) -> (Option<PadState>, bool) {
+        use wasm_bindgen::JsCast;
+        let Some(window) = web_sys::window() else {
+            return (None, false);
+        };
+        // `getGamepads` throws in an insecure context and is absent on old
+        // browsers; both read as "no pad".
+        let Ok(list) = window.navigator().get_gamepads() else {
+            return (None, false);
+        };
+        for entry in list.iter() {
+            let Ok(pad) = entry.dyn_into::<web_sys::Gamepad>() else {
+                continue;
+            };
+            if !pad.connected() {
+                continue;
+            }
+            if pad.mapping() != web_sys::GamepadMappingType::Standard {
+                if !self.warned_mapping {
+                    self.warned_mapping = true;
+                    tracing::debug!(id = %pad.id(), "gamepad without the standard mapping ignored");
+                }
+                continue;
+            }
+            let state = Self::snapshot(&pad);
+            return (Some(state), self.shim().is_some());
+        }
+        (None, false)
+    }
+
+    fn snapshot(pad: &web_sys::Gamepad) -> PadState {
+        use wasm_bindgen::JsCast;
+        let axes = pad.axes();
+        let axis = |i: u32| axes.get(i).as_f64().unwrap_or(0.0) as f32;
+        // The browser reports stick Y down-positive; the engine's contract is up-positive.
+        let left = PadState::stick([axis(0), -axis(1)]);
+        let right = PadState::stick([axis(2), -axis(3)]);
+        let buttons = pad.buttons();
+        let button = |b: PadButton| {
+            buttons
+                .get(u32::from(b as u8))
+                .dyn_into::<web_sys::GamepadButton>()
+                .ok()
+        };
+        let mut bits = 0u16;
+        for b in PadButton::ALL {
+            if button(b).is_some_and(|gb| gb.pressed()) {
+                bits |= b.mask();
+            }
+        }
+        let value = |b: PadButton| button(b).map_or(0.0, |gb| gb.value() as f32);
+        PadState {
+            left,
+            right,
+            lt: value(PadButton::LT),
+            rt: value(PadButton::RT),
+            buttons: bits,
+        }
+    }
+
+    /// `emberRumble(strong, weak, ms)`. Each call replaces the running
+    /// effect on the actuator, which is what the merge wants: the merged
+    /// magnitudes for the merged remaining time.
+    fn play(&mut self, strong: f32, weak: f32, remaining_ms: u128) {
+        self.call(strong, weak, remaining_ms as f64);
+    }
+
+    /// Zero magnitudes for zero time: the replacement that ends the running effect.
+    fn stop(&mut self) {
+        self.call(0.0, 0.0, 0.0);
+    }
+
+    fn call(&mut self, strong: f32, weak: f32, ms: f64) {
+        use wasm_bindgen::JsValue;
+        if let Some(shim) = self.shim() {
+            drop(shim.call3(
+                &JsValue::NULL,
+                &JsValue::from_f64(f64::from(strong)),
+                &JsValue::from_f64(f64::from(weak)),
+                &JsValue::from_f64(ms),
+            ));
+        }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    const fn r(strong: f32, weak: f32, ms: u16) -> Rumble {
+        Rumble { strong, weak, ms }
+    }
+
+    #[test]
+    fn feedback_merges_per_channel_max() {
+        let mut h = Haptics::detached();
+        let t0 = Instant::now();
+        h.request(r(0.2, 0.8, 40), t0);
+        h.request(r(0.9, 0.1, 300), t0);
+        let (s, w, end) = h.playing().expect("playing");
+        assert_eq!((s, w), (0.9, 0.8));
+        assert_eq!(end, t0 + Duration::from_millis(300));
+
+        // A short request arriving mid-rumble neither shortens it nor lowers it.
+        h.request(r(0.1, 0.1, 30), t0 + Duration::from_millis(100));
+        let (s, w, end) = h.playing().expect("playing");
+        assert_eq!((s, w), (0.9, 0.8));
+        assert_eq!(end, t0 + Duration::from_millis(300));
+
+        // Expiry stops it; a tick just before the end does not.
+        h.tick(t0 + Duration::from_millis(299));
+        assert!(h.playing().is_some());
+        h.tick(t0 + Duration::from_millis(300));
+        assert_eq!(h.playing(), None);
+    }
+
+    #[test]
+    fn an_expired_rumble_does_not_leak_into_the_next() {
+        let mut h = Haptics::detached();
+        let t0 = Instant::now();
+        h.request(r(0.9, 0.1, 300), t0);
+        // No tick in between: the request itself must notice the old one is over.
+        let t1 = t0 + Duration::from_millis(400);
+        h.request(r(0.2, 0.8, 40), t1);
+        let (s, w, end) = h.playing().expect("playing");
+        assert_eq!((s, w), (0.2, 0.8));
+        assert_eq!(end, t1 + Duration::from_millis(40));
+
+        // Silence and zero-length requests are not rumbles and start nothing.
+        h.stop();
+        h.request(r(0.0, 0.0, 500), t1);
+        h.request(r(0.5, 0.5, 0), t1);
+        assert_eq!(h.playing(), None);
+        assert_eq!(h.status(), "none");
+    }
+
+    #[test]
+    fn standard_mapping_indices_match_gilrs_names() {
+        let expected = [
+            "South",
+            "East",
+            "West",
+            "North",
+            "LeftTrigger",
+            "RightTrigger",
+            "LeftTrigger2",
+            "RightTrigger2",
+            "Select",
+            "Start",
+            "LeftThumb",
+            "RightThumb",
+            "DPadUp",
+            "DPadDown",
+            "DPadLeft",
+            "DPadRight",
+        ];
+        for (i, (g, b)) in GILRS_BUTTONS.iter().enumerate() {
+            assert_eq!(format!("{g:?}"), expected[i], "gilrs name at bit {i}");
+            assert_eq!(*b as usize, i, "PadButton bit for {g:?}");
+            assert_eq!(*b, PadButton::ALL[i]);
+        }
+    }
+
+    /// Opens the host's backend for real. Ignored by default because it
+    /// depends on the machine (`XInput` on Windows, evdev on Linux); run it
+    /// with `--ignored` to see what this host exposes.
+    #[test]
+    #[ignore = "touches the host's gamepad backend"]
+    // The report is the point of the test, and `--nocapture` is how it is read.
+    #[allow(clippy::print_stderr)]
+    fn gilrs_opens_on_this_host() {
+        let mut pads = NativePads::open().expect("gilrs opens");
+        let (pad, rumble) = pads.poll();
+        let count = pads.gilrs.gamepads().count();
+        eprintln!("gilrs: {count} pad(s); first = {pad:?}; rumble = {rumble}");
     }
 }
