@@ -337,12 +337,7 @@ struct ScreenMapKey {
 }
 
 impl ScreenMapKey {
-    fn new(
-        object: ObjectAngles,
-        view: ViewControls,
-        zoom_log2: f64,
-        extent: [u32; 2],
-    ) -> Self {
+    fn new(object: ObjectAngles, view: ViewControls, zoom_log2: f64, extent: [u32; 2]) -> Self {
         Self {
             object: object.as_array().map(f64::to_bits),
             camera: view.camera.map(f64::to_bits),
@@ -1546,9 +1541,7 @@ mod tests {
         viewer
             .set_view_controls(signed_zero_view)
             .expect("signed-zero VIEW controls");
-        viewer
-            .drain_hot([800, 600])
-            .expect("signed-zero VIEW map");
+        viewer.drain_hot([800, 600]).expect("signed-zero VIEW map");
         assert_eq!(viewer.map_constructions.get(), 6);
     }
 
