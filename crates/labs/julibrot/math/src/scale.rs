@@ -257,7 +257,7 @@ mod tests {
     use crate::{BigCentre, MathError, Plane, decode_big_scalar};
 
     #[test]
-    fn low_word_never_changes_the_consumed_binary32_value_over_ten_thousand_splits(
+    fn low_word_changes_the_consumed_binary32_value_in_ten_thousand_splits(
     ) -> Result<(), MathError> {
         const RANDOM_COUNT: usize = 9_984;
         const ADVERSARIAL_COUNT: usize = 16;
