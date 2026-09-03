@@ -95,12 +95,7 @@ const fn classify_refusal(reason: FenceRefusal) -> RefusalClass {
 
 /// Renders one present fence refusal as the typed app error the page displays.
 #[cfg(any(target_arch = "wasm32", test))]
-fn fence_error(
-    kind: SubmissionKind,
-    reason: FenceRefusal,
-    polls: u32,
-    wall_ms: f64,
-) -> AppError {
+fn fence_error(kind: SubmissionKind, reason: FenceRefusal, polls: u32, wall_ms: f64) -> AppError {
     let operation = match kind {
         SubmissionKind::Scene => "scene fence",
         SubmissionKind::Warp => "warp fence",
@@ -239,7 +234,7 @@ impl FrameLoop {
         }
     }
 
-    fn stopped(&self) -> Option<&AppError> {
+    const fn stopped(&self) -> Option<&AppError> {
         self.stopped.as_ref()
     }
 
@@ -247,7 +242,7 @@ impl FrameLoop {
         self.transient_refusals
     }
 
-    fn last_transient(&self) -> Option<&AppError> {
+    const fn last_transient(&self) -> Option<&AppError> {
         self.last_transient.as_ref()
     }
 
@@ -256,6 +251,10 @@ impl FrameLoop {
     /// `view_stale` carries the term the loop had no way to express before: an image was
     /// presented for an older requested view, so work remains even though no submission is
     /// outstanding. A stopped loop answers false, and only then.
+    #[allow(
+        clippy::fn_params_excessive_bools,
+        reason = "four independent outstanding-work terms; grouping them into a record only moves the same four flags behind a second name"
+    )]
     const fn needs_refresh(
         &self,
         scene_in_flight: bool,
@@ -807,7 +806,10 @@ mod browser {
                         }
                         if matches!(kind, SubmissionKind::Warp) {
                             let _dropped = runtime.refuse_warp(id);
-                            if self.pending_warp_view.is_some_and(|pending| pending.0 == id) {
+                            if self
+                                .pending_warp_view
+                                .is_some_and(|pending| pending.0 == id)
+                            {
                                 self.pending_warp_view = None;
                             }
                         }
@@ -1552,7 +1554,9 @@ mod tests {
         if frame_loop.stopped().is_some() {
             return outcome;
         }
-        if !outcome.refused && let Some(level) = frame_loop.due() {
+        if !outcome.refused
+            && let Some(level) = frame_loop.due()
+        {
             let id = presenter.submit(frame_loop.generation(), level);
             frame_loop.submitted(id, level);
             outcome.scene_id = Some(id);
@@ -1586,7 +1590,7 @@ mod tests {
         clock: &mut FakeClock,
         policy: FramePolicy,
     ) {
-        for _ in 0..LEVELS.len() + 1 {
+        for _ in 0..=LEVELS.len() {
             drive_turn(frame_loop, presenter, *clock, policy, true);
             presenter.fire_completed_callback();
             presenter.fire_warp_completed();
@@ -1803,13 +1807,7 @@ mod tests {
     #[test]
     fn the_page_reads_the_deadline_refusal_that_killed_the_throttled_tab() {
         assert_eq!(
-            fence_error(
-                SubmissionKind::Warp,
-                FenceRefusal::Deadline,
-                7,
-                60_000.0
-            )
-            .to_string(),
+            fence_error(SubmissionKind::Warp, FenceRefusal::Deadline, 7, 60_000.0).to_string(),
             "warp fence exceeded its 60000 ms deadline"
         );
         assert_eq!(
@@ -1853,7 +1851,7 @@ mod tests {
         // The tab goes to the background, the fence is polled once a second, and the wall runs out.
         presenter.fire_warp_refusal(FenceRefusal::Deadline, 61, 60_000.0);
         clock.advance(60_000.0);
-        let refusal_turn = drive_turn(&mut frame_loop, &mut presenter, clock, policy, true);
+        let refusal_turn = drive_turn(&mut frame_loop, &mut presenter, clock, policy, false);
         assert!(refusal_turn.refused);
         assert!(!refusal_turn.presented);
         assert_eq!(frame_loop.transient_refusals(), 1);
@@ -1866,12 +1864,14 @@ mod tests {
             frame_loop.needs_refresh(false, false, false, false),
             "with the ladder empty and the refused warp retired, only the re-arm keeps the page alive"
         );
-        let retry_warp = refusal_turn
+
+        // Input resumes: the very next turn asks for the surface image the refusal cost.
+        clock.advance(16.0);
+        let retry_warp = drive_turn(&mut frame_loop, &mut presenter, clock, policy, true)
             .warp_id
-            .expect("the refused warp is retried on the same turn");
+            .expect("a re-armed run requests the next surface image");
         assert_ne!(retry_warp, refused_warp);
 
-        // Input resumes, the retry completes, and the page presents again.
         presenter.fire_warp_completed();
         clock.advance(16.0);
         let recovery = drive_turn(&mut frame_loop, &mut presenter, clock, policy, true);
@@ -1894,7 +1894,7 @@ mod tests {
 
         presenter.fire_warp_refusal(FenceRefusal::PollLimit, 4_096, 812.5);
         clock.advance(812.5);
-        let refusal_turn = drive_turn(&mut frame_loop, &mut presenter, clock, policy, true);
+        let refusal_turn = drive_turn(&mut frame_loop, &mut presenter, clock, policy, false);
         assert!(refusal_turn.refused);
         assert_eq!(frame_loop.transient_refusals(), 1);
         assert_eq!(
@@ -1903,11 +1903,15 @@ mod tests {
         );
         assert!(frame_loop.stopped().is_none());
         assert!(frame_loop.needs_refresh(false, false, false, false));
-        assert!(refusal_turn.warp_id.is_some());
 
+        clock.advance(16.0);
+        let retry_warp = drive_turn(&mut frame_loop, &mut presenter, clock, policy, true)
+            .warp_id
+            .expect("a re-armed run requests the next surface image");
         presenter.fire_warp_completed();
         clock.advance(16.0);
         assert!(drive_turn(&mut frame_loop, &mut presenter, clock, policy, true).presented);
+        assert_eq!(presenter.presented_warps.last(), Some(&retry_warp));
     }
 
     #[test]
@@ -1936,8 +1940,7 @@ mod tests {
     fn a_device_fence_refusal_stops_the_loop_with_its_typed_status() {
         let mut frame_loop = FrameLoop::default();
         frame_loop.accept_request(51, true);
-        let outcome =
-            frame_loop.refused(SubmissionKind::Warp, FenceRefusal::Device, 3, 12, 41.5);
+        let outcome = frame_loop.refused(SubmissionKind::Warp, FenceRefusal::Device, 3, 12, 41.5);
         assert_eq!(outcome.class, RefusalClass::Device);
         assert_eq!(
             frame_loop.transient_refusals(),
@@ -1956,7 +1959,13 @@ mod tests {
             "a stopped loop schedules nothing, whatever else is outstanding"
         );
 
-        frame_loop.refused(SubmissionKind::Warp, FenceRefusal::Deadline, 4, 61, 60_000.0);
+        frame_loop.refused(
+            SubmissionKind::Warp,
+            FenceRefusal::Deadline,
+            4,
+            61,
+            60_000.0,
+        );
         assert_eq!(
             frame_loop.stopped().map(ToString::to_string),
             Some(
