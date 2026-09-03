@@ -136,7 +136,22 @@ pub fn shade_escape_record(record: [f32; 4], selected: PaletteRecord) -> Palette
 mod tests {
     use std::mem::{align_of, size_of};
 
+    use ember_julibrot_math::PrecisionMode;
+
     use super::*;
+
+    fn assert_palette_contract(mode: PrecisionMode, actual: [f32; 4], exact: [f32; 4]) {
+        assert!(
+            actual
+                .into_iter()
+                .zip(exact)
+                .all(|(actual, exact)| (actual - exact).abs() <= 1.0 / 255.0)
+        );
+        if mode.requires_bit_identity() {
+            // Deterministic-only contract: preserve every palette-oracle word.
+            assert_eq!(actual, exact);
+        }
+    }
 
     #[test]
     fn records_are_exact_and_palette_ids_are_stable() {
@@ -152,15 +167,17 @@ mod tests {
 
     #[test]
     fn interior_glitch_and_malformed_records_stay_distinct() {
-        let interior = shade_escape_record([-1.0, 0.0, 7.0, 0.0], CLASSIC_PALETTE);
-        assert_eq!(interior.rgba, CLASSIC_PALETTE.interior_rgba);
-        assert!(!interior.contract_violation);
-        let glitch = shade_escape_record([4.0, 0.0, 2.0, 1.0], CLASSIC_PALETTE);
-        assert_eq!(glitch.rgba, DEBUG_TINT);
-        assert!(!glitch.contract_violation);
-        let malformed = shade_escape_record([-1.0, 0.5, 0.0, 0.0], CLASSIC_PALETTE);
-        assert_eq!(malformed.rgba, DEBUG_TINT);
-        assert!(malformed.contract_violation);
+        for mode in PrecisionMode::ALL {
+            let interior = shade_escape_record([-1.0, 0.0, 7.0, 0.0], CLASSIC_PALETTE);
+            assert_palette_contract(mode, interior.rgba, CLASSIC_PALETTE.interior_rgba);
+            assert!(!interior.contract_violation);
+            let glitch = shade_escape_record([4.0, 0.0, 2.0, 1.0], CLASSIC_PALETTE);
+            assert_palette_contract(mode, glitch.rgba, DEBUG_TINT);
+            assert!(!glitch.contract_violation);
+            let malformed = shade_escape_record([-1.0, 0.5, 0.0, 0.0], CLASSIC_PALETTE);
+            assert_palette_contract(mode, malformed.rgba, DEBUG_TINT);
+            assert!(malformed.contract_violation);
+        }
     }
 
     #[test]

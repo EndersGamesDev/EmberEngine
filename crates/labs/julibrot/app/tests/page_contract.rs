@@ -15,7 +15,7 @@ const WORKER_OWNER: &str = include_str!("../../worker/src/browser_owner.rs");
 const SAVED: &str = include_str!("../src/saved.rs");
 
 /// Every field the page facts must carry, in publication order.
-const PAGE_FACT_FIELDS: [&str; 88] = [
+const PAGE_FACT_FIELDS: [&str; 91] = [
     "abi_version",
     "adapter_name",
     "backend",
@@ -104,14 +104,17 @@ const PAGE_FACT_FIELDS: [&str; 88] = [
     "javascript_bundle_bytes",
     "wasm_instance_count",
     "timing_status",
+    "precision_mode",
+    "scene_precision_mode",
+    "warp_precision_mode",
 ];
 
 #[test]
-fn loader_worker_and_wasm_share_version_one_before_orbit_transfer() {
+fn loader_version_one_and_abi_two_are_pinned_before_orbit_transfer() {
     for required in [
         "./main.js?v=1",
         "./style.css?v=1",
-        "const ABI = 1",
+        "const ABI = 2",
         "./worker.js?v=1",
         "./pkg/ember_lab_julibrot.js?v=1",
         "./pkg/ember_lab_julibrot_bg.wasm?v=1",
@@ -205,7 +208,7 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
     assert_eq!(INDEX.matches("<canvas").count(), 1);
     assert_eq!(INDEX.matches("id=\"status\"").count(), 1);
     assert_eq!(INDEX.matches("id=\"facts-grid\"").count(), 1);
-    // One control per view degree of freedom, and no control that names a mode.
+    // One control per view degree of freedom plus the one precision-policy switch.
     for id in [
         "preset",
         "theta-1",
@@ -222,6 +225,7 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
         "distance-five",
         "distance-four",
         "iteration-cap",
+        "precision",
         "palette",
         "one-frame",
         "measure",
@@ -260,6 +264,10 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
     assert_eq!(MAIN.matches("api.app_set_height(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_distances(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_scale(").count(), 1);
+    assert_eq!(MAIN.matches("api.app_set_precision_mode(").count(), 1);
+    assert!(INDEX.contains(
+        r#"<label>precision<select id="precision"><option value="0">Deterministic</option><option value="1" selected>PictureFast</option></select></label>"#
+    ));
     // The retired mode selector and its Julia-only number boxes must name nothing.
     for retired in [
         "id=\"view\"",
@@ -286,6 +294,7 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
         "pub fn app_saved_view_json(",
         "pub fn app_set_centre(",
         "pub fn app_morph_view(",
+        "pub fn app_set_precision_mode(",
         "pub fn app_preset(",
     ] {
         assert!(LIB.contains(required), "missing wasm entry {required}");
@@ -410,6 +419,17 @@ fn page_facts_carry_every_contract_field_without_fake_aggregate_counts() {
     assert!(MAIN.contains("wasm_bundle_bytes"));
     assert!(MAIN.contains("javascript_bundle_bytes"));
     assert!(MAIN.contains("wasm_instance_count = 2"));
+    assert!(FACTS.contains("precision_mode: requested.precision_mode.as_str()"));
+    assert!(
+        FACTS.contains(
+            "scene_precision_mode: present.last_scene.map(|sample| sample.precision_mode)"
+        )
+    );
+    assert!(
+        FACTS
+            .contains("warp_precision_mode: present.last_warp.map(|sample| sample.precision_mode)")
+    );
+    assert!(FRAME.contains("precision_mode: self.main.precision_mode"));
 }
 
 #[test]

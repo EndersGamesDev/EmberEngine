@@ -154,6 +154,8 @@ impl AdaptivePlan {
 /// Median and nearest-rank p95 of exactly 15 normalized observations.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SampleSummary {
+    /// Precision policy that produced the observations.
+    pub precision_mode: &'static str,
     /// Middle sorted observation.
     pub median_ms: f64,
     /// Nearest-rank 95th percentile at `ceil(0.95n)`.
@@ -166,7 +168,7 @@ impl SampleSummary {
     /// # Errors
     ///
     /// Returns a typed refusal unless all 15 observations are finite and nonnegative.
-    pub fn new(samples: &[f64]) -> Result<Self, MeasurementError> {
+    pub fn new(precision_mode: &'static str, samples: &[f64]) -> Result<Self, MeasurementError> {
         if samples.len() != ADAPTIVE_SAMPLES
             || !samples
                 .iter()
@@ -178,6 +180,7 @@ impl SampleSummary {
         ordered.sort_by(f64::total_cmp);
         let p95_index = (ordered.len() * 95).div_ceil(100) - 1;
         Ok(Self {
+            precision_mode,
             median_ms: ordered[ordered.len() / 2],
             p95_ms: ordered[p95_index],
         })
@@ -304,8 +307,9 @@ mod tests {
             14.0, 0.0, 7.0, 1.0, 8.0, 2.0, 9.0, 3.0, 10.0, 4.0, 11.0, 5.0, 12.0, 6.0, 13.0,
         ];
         assert_eq!(
-            SampleSummary::new(&samples),
+            SampleSummary::new("PictureFast", &samples),
             Ok(SampleSummary {
+                precision_mode: "PictureFast",
                 median_ms: 7.0,
                 p95_ms: 14.0
             })

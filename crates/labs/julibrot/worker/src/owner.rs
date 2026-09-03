@@ -52,6 +52,8 @@ pub struct MainState {
     pub plane_origin_f64: [f64; 4],
     /// New reference minus old reference in current-zoom pixels.
     pub reference_shift_px: [f64; 2],
+    /// [`ember_julibrot_math::PrecisionMode`] discriminant for this MAIN selection.
+    pub precision_mode: u32,
 }
 
 /// One coherent owner publication.
@@ -147,6 +149,8 @@ pub struct NavigationSubmission {
     pub centre: BigCentre,
     /// Desired base-two zoom exponent.
     pub zoom_log2: f64,
+    /// Precision policy discriminant captured with this generation.
+    pub precision_mode: u32,
 }
 
 #[derive(Debug)]
@@ -298,6 +302,7 @@ impl ViewerOwner {
             centre_revision: self.staged_main.get().centre_revision,
             centre: navigation.centre.clone(),
             zoom_log2: self.staged_hot.get().zoom_log2,
+            precision_mode: self.staged_main.get().precision_mode,
         })
     }
 
@@ -435,7 +440,9 @@ impl ViewerOwner {
 
 #[cfg(test)]
 mod tests {
-    use ember_julibrot_math::{BigCentre, NavigationDelta, PlaneAngles, construct_plane};
+    use ember_julibrot_math::{
+        BigCentre, NavigationDelta, PlaneAngles, PrecisionMode, construct_plane,
+    };
 
     use super::{
         HotState, MainState, NavigationConfig, OrbitDisposition, OrbitHandle, OwnerError,
@@ -459,13 +466,14 @@ mod tests {
         assert_eq!(size_of::<HotState>(), 40);
         assert_eq!(align_of::<HotState>(), 8);
         assert_eq!(std::mem::offset_of!(HotState, centre_from_reference_px), 24);
-        assert_eq!(size_of::<MainState>(), 120);
+        assert_eq!(size_of::<MainState>(), 128);
         assert_eq!(align_of::<MainState>(), 8);
         assert_eq!(std::mem::offset_of!(MainState, centre_f64), 32);
         assert_eq!(std::mem::offset_of!(MainState, plane_axis_a), 64);
         assert_eq!(std::mem::offset_of!(MainState, plane_origin_f64), 72);
         assert_eq!(std::mem::offset_of!(MainState, reference_shift_px), 104);
-        assert_eq!(size_of::<ViewerState>(), 168);
+        assert_eq!(std::mem::offset_of!(MainState, precision_mode), 120);
+        assert_eq!(size_of::<ViewerState>(), 176);
         assert_eq!(align_of::<ViewerState>(), 8);
         assert_eq!(std::mem::offset_of!(ViewerState, hot), 8);
         assert_eq!(std::mem::offset_of!(ViewerState, main), 48);
@@ -634,6 +642,7 @@ mod tests {
             0,
             64,
             64,
+            PrecisionMode::Deterministic,
             OrbitReason::INITIAL,
         )
         .unwrap();

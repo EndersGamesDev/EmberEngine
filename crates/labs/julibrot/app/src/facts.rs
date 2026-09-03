@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::{App, FramePolicy, JULIBROT_ABI_VERSION};
 
-/// Complete version-one overlay snapshot; absent delivered values serialize as `null`.
+/// Complete version-two overlay snapshot; absent delivered values serialize as `null`.
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct PageFacts {
     pub abi_version: u32,
@@ -107,6 +107,9 @@ pub struct PageFacts {
     pub javascript_bundle_bytes: Option<u64>,
     pub wasm_instance_count: u32,
     pub timing_status: &'static str,
+    pub precision_mode: &'static str,
+    pub scene_precision_mode: Option<&'static str>,
+    pub warp_precision_mode: Option<&'static str>,
 }
 
 impl PageFacts {
@@ -242,6 +245,9 @@ impl PageFacts {
             javascript_bundle_bytes: None,
             wasm_instance_count: 2,
             timing_status: "requires visible replay",
+            precision_mode: requested.precision_mode.as_str(),
+            scene_precision_mode: present.last_scene.map(|sample| sample.precision_mode),
+            warp_precision_mode: present.last_warp.map(|sample| sample.precision_mode),
         }
     }
 }

@@ -133,6 +133,7 @@ All transferred and GPU words are little-endian, `f32` and `f64` are IEEE-754 bi
 |Interface|Exact contract|Consumer|
 |---------|--------------|--------|
 |`Axis4`|`#[repr(u32)] { E1=0,E2=1,E3=2,E4=3 }`|worker, app|
+|`PrecisionMode`|`#[repr(u32)] { Deterministic=0,PictureFast=1 }`; one shared policy switch, with stable string spellings and cfg-free bit-identity predicate|worker, kernels, present, app|
 |`PlanePreset`|`Mandelbrot` or `Julia { c0:[f64;2] }`; `c0` is finite and lives in MAIN's plane origin|worker, app|
 |`PlaneSpec`|`{ axis_a:Axis4, axis_b:Axis4, plane_origin:[f64;4] }`; CPU-only, distinct seed axes|worker, app|
 |`PlaneAngles`|`{ theta_1:f64, theta_2:f64 }`; finite independent radians|worker, app|
@@ -198,7 +199,7 @@ All kernel output lands in DATA only through the paid SCRATCH-copy path, referen
 
 Every standalone message buffer begins with `MessageHeader`, eight little-endian `u32` words and 32 bytes: 0 `magic`, 4 `version`, 8 `generation`, 12 `kind`, 16 `length`, 20 `precision_bits`, 24 `compute_us`, and 28 `credit_us`.
 
-`magic=0x314c424a` is byte string `JBL1`, wire `version=1`, `JULIBROT_ABI_VERSION=1`, and loader URLs carry `?v=1`; any module/wire version skew is a typed refusal.
+`magic=0x314c424a` is byte string `JBL1`, wire `version=2`, `JULIBROT_ABI_VERSION=2`, and loader URLs independently remain pinned to `?v=1`; any module/wire version skew is a typed refusal.
 
 |Kind|Name|Direction and `length`|
 |---:|----|----------------------|
@@ -216,15 +217,15 @@ The last 16 bytes are `PoolTrailer { pool:u32,slot:u32,capacity_bytes:u32,traile
 
 For current `max_iter=M`, each of the four buffers has capacity `48+16M`; two circulate independently in each direction, resizing all four occurs only when `max_iter` changes after ownership reconciliation, and each resize is a reported allocation event.
 
-`OrbitRequest` is `{ generation:u32, centre:EncodedCentre, depth_digits:u32, precision_bits:u32, max_iter:u32, reason:OrbitReason }`; header fields carry generation, precision, and cap, while the body at byte 32 is `{ depth_digits:u32,reason_bits:u32,centre_revision:u32,limb_word_count:u32,coordinates:[CoordinateDescriptor;4],limbs:[u32;limb_word_count] }`.
+`OrbitRequest` is `{ generation:u32, centre:EncodedCentre, depth_digits:u32, precision_bits:u32, max_iter:u32, precision_mode:PrecisionMode, reason:OrbitReason }`; header fields carry generation, precision, and cap, while the body at byte 32 is `{ depth_digits:u32,reason_bits:u32,centre_revision:u32,limb_word_count:u32,coordinates:[CoordinateDescriptor;4],precision_mode:u32,limbs:[u32;limb_word_count] }`.
 
-The fixed request body occupies bytes 32–111, coordinate descriptors start at bytes 48, 64, 80, and 96, and limbs start at byte 112; request fit requires `112+4·limb_word_count≤32+16M`, otherwise worker returns the displayed `CentreEncodingWall` without truncation or hidden allocation.
+Coordinate descriptors start at bytes 48, 64, 80, and 96, the precision-mode word is at byte 112, and limbs start at byte 116; request fit requires `116+4·limb_word_count≤32+16M`, otherwise worker returns the displayed `CentreEncodingWall` without truncation or hidden allocation.
 
 `CoordinateDescriptor` is exactly 16 bytes `{ sign:u32,exponent_twos_complement:u32,limb_start:u32,limb_count:u32 }`; a nonzero value is `(−1)^sign·(Σ limbs[limb_start+k]·2^(32k))·2^exponent`, limbs are least-significant first, `sign∈{0,1}`, and the high stored limb is nonzero.
 
 Descriptor ranges are ordered, contiguous, non-overlapping, and cover `limb_word_count`; canonical zero is `{sign:0,exponent:0,limb_start:previous_end,limb_count:0}`, with no negative zero, leading high zero, unused limb, or out-of-range descriptor.
 
-`reason_bits` assigns bit 0 to initial reference, bit 1 to centre-threshold crossing, bit 2 to zoom-threshold crossing, and bit 3 to max-iteration change; any unknown bit is a version-one `BadLength` refusal.
+`reason_bits` assigns bit 0 to initial reference, bit 1 to centre-threshold crossing, bit 2 to zoom-threshold crossing, bit 3 to max-iteration change, and bit 4 to precision-mode change; any unknown bit is a version-two `BadLength` refusal.
 
 Math's `encode_big_scalar` and `decode_big_scalar` adapters map Astro-float values to exactly that dyadic representation, use the `u32` bit pattern of the two's-complement `i32` exponent, preserve exact value at delivered precision, and impose no extra odd-low-limb rule; worker alone validates and transports bytes.
 
@@ -242,19 +243,19 @@ One wasm module is instantiated on main and in the worker with exported `worker_
 
 ### 3.4 Worker owner state
 
-`VIEWER_STATE_VERSION=1`; owner records below are `Copy` and `#[repr(C)]`, both drains are infallible, each drain bumps one shared checked `u64` epoch, later staged values replace undrained values, and consumers never use epoch equality as an orbit or warp compatibility test.
+The ABI-two owner records below are `Copy` and `#[repr(C)]`, both drains are infallible, each drain bumps one shared checked `u64` epoch, later staged values replace undrained values, and consumers never use epoch equality as an orbit or warp compatibility test.
 
 `HotState` is 40 bytes, alignment 8: byte 0 `zoom_log2:f64`, byte 8 `plane_theta_1:f64`, byte 16 `plane_theta_2:f64`, and byte 24 `centre_from_reference_px:[f64;2]`.
 
-`MainState` is 120 bytes, alignment 8: byte 0 `generation_applied:u32`, 4 `centre_revision:u32`, 8 `requested_iter_cap:u32`, 12 `delivered_iter_cap:u32`, 16 `precision_bits:u32`, 20 `orbit_length:u32`, 24 `palette_id:u32`, 28 `orbit_id:u32`, 32 `centre_f64:[f64;4]`, 64 `plane_axis_a:u32`, 68 `plane_axis_b:u32`, 72 `plane_origin_f64:[f64;4]`, and 104 `reference_shift_px:[f64;2]`.
+`MainState` is 128 bytes, alignment 8: byte 0 `generation_applied:u32`, 4 `centre_revision:u32`, 8 `requested_iter_cap:u32`, 12 `delivered_iter_cap:u32`, 16 `precision_bits:u32`, 20 `orbit_length:u32`, 24 `palette_id:u32`, 28 `orbit_id:u32`, 32 `centre_f64:[f64;4]`, 64 `plane_axis_a:u32`, 68 `plane_axis_b:u32`, 72 `plane_origin_f64:[f64;4]`, 104 `reference_shift_px:[f64;2]`, and 120 `precision_mode:u32`, followed by four tail-padding bytes.
 
-`ViewerState` is 168 bytes, alignment 8: byte 0 `epoch:u64`, byte 8 `hot:HotState`, and byte 48 `main:MainState`; `HotDrain` and `MainDrain` each return the full record.
+`ViewerState` is 176 bytes, alignment 8: byte 0 `epoch:u64`, byte 8 `hot:HotState`, and byte 48 `main:MainState`; `HotDrain` and `MainDrain` each return the full record.
 
 `OrbitHandle` is `{ id:u32,generation:u32 }`, zero ID means no orbit, and app rejects a registry lookup whose generation differs; orbit generation is checked monotonic `u32` and wrap is impossible within a session because exhaustion ends new work.
 
 `ViewerOwner::drain_hot()->HotDrain` runs each refresh and `ViewerOwner::drain_main()->MainDrain` runs on accepted orbit, cap, palette, or plane-origin arrival; both increment epoch even when the corresponding staged value is unchanged, as intentionally accepted in the review.
 
-`ViewerOwner::accept_orbit` publishes the latest matching generation and `reference_shift_px`, while stale responses return credit without publication; a new accepted reference re-expresses retained poses, and only cap or plane-origin changes force present to clear.
+`ViewerOwner::accept_orbit` publishes the latest matching generation and `reference_shift_px`, while stale responses return credit without publication; a new accepted reference re-expresses retained poses, and cap, plane-origin, or precision-mode changes force present to clear.
 
 ### 3.5 Presentation-owned records and calls on math's boundary
 
@@ -264,23 +265,23 @@ Math defines `ViewControls` as the seven-scalar CPU record of the VIEW controls 
 
 `PresentHot` is the CPU-only record `{ epoch:u64,plane:Plane,plane_theta_1:f64,plane_theta_2:f64,zoom_log2:f64,view:ViewControls,centre_from_reference_px:[f64;2] }`, and `PresentMain` carries `{ epoch:u64,orbit_generation:u32,grid:EscapeGrid,max_iter:u32,palette:PaletteId,plane_origin_f64:[f64;4],reference_shift_px:[f64;2] }`.
 
-`HotSlot` is `{index:u32,dynamic_offset:u32,epoch:u64}`, where `index=refresh_id mod 3` and `dynamic_offset=index·hot_stride`; its checked constructor makes `Presenter::write_hot(slot,hot)` infallible.
+`HotSlot` is `{index:u32,dynamic_offset:u32,epoch:u64}`, where `index=refresh_id mod 3` and `dynamic_offset=index·hot_stride`; its checked constructor makes `Presenter::write_hot(slot,hot,validation)` infallible.
 
 `PresentConfig` is `{ surface_format:wgpu::TextureFormat,min_uniform_buffer_offset_alignment:u32,fence_deadline_ms:f64,max_fence_polls:u32 }`; v1 passes the live alignment, `30_000.0`, and `4_096`, and the scene texture format is `Rgba8Unorm`.
 
 `Presenter::new(device:Arc<wgpu::Device>,queue:Arc<wgpu::Queue>,heap:HeapPresentResources,config:PresentConfig)->Result<Presenter,PresentError>` allocates the three-slot ring, two empty texture slots, fixed pipelines, and immutable heap group only after both error handlers exist.
 
-`Presenter::set_main(&mut self,main:PresentMain)` and `Presenter::write_hot(&mut self,slot:HotSlot,hot:PresentHot)` are the infallible MAIN and HOT endpoints; the latter computes the f64 plan, writes exactly 128 bytes, and lowers invalid arithmetic to `source_valid=0`.
+`Presenter::set_main(&mut self,main:PresentMain)` and `Presenter::write_hot(&mut self,slot:HotSlot,hot:PresentHot,validation:WarpValidation)` are the infallible MAIN and HOT endpoints; the latter computes the f64 plan, writes exactly 128 bytes, and lowers invalid arithmetic to `source_valid=0`.
 
 `Presenter::submit_scene(&mut self,hot_slot:HotSlot,now_ms:f64)->Result<u64,PresentError>` submits one scene plus its four-byte fence, while `Presenter::frame(&mut self,state:FrameState<'_>,hot_slot:HotSlot)->Result<FrameReceipt,PresentError>` submits the sole warp pass to the borrowed surface view and returns before app presents.
 
-`FrameState<'a>` is `{ surface_view:&'a wgpu::TextureView,canvas_width:u32,canvas_height:u32,refresh_id:u64,now_ms:f64 }`; `FrameReceipt` is `{ refresh_id:u64,warp_id:u64,source_scene_id:Option<u64>,status:PresentStatus }`, both are CPU-only, and receipt contains no wall before fence completion.
+`FrameState<'a>` is `{ surface_view:&'a wgpu::TextureView,canvas_width:u32,canvas_height:u32,refresh_id:u64,now_ms:f64 }`; `FrameReceipt` is `{ refresh_id:u64,warp_id:u64,source_scene_id:Option<u64>,precision_mode:&'static str,status:PresentStatus }`, both are CPU-only, and receipt contains no wall before fence completion.
 
 `Presenter::poll(&mut self,now_ms:f64)->Vec<PresentEvent>` observes each pending fence at most once per call and never waits, while `Presenter::facts(&self)->PresentFacts` is an immutable, non-polling snapshot.
 
-`SceneFrame` is `{ scene_id:u64,pose:Pose,palette:PaletteId,iteration_cap:u32,level:RefinementLevel,extent:[u32;2],texture_index:u32,measurement:SubmissionMeasurement }`; `WarpPlan` is `{ rows:[[f32;4];3],source_valid:bool,kind:WarpKind,chart_residual:f64,approx_max_error_px:Option<f64>,approx_p95_error_px:Option<f64> }`, both CPU-only.
+`SceneFrame` is `{ scene_id:u64,pose:Pose,palette:PaletteId,iteration_cap:u32,level:RefinementLevel,extent:[u32;2],texture_index:u32,precision_mode:&'static str,measurement:SubmissionMeasurement }`; `ReferenceOrbitInput`, `SubmissionMeasurement`, `FrameReceipt`, `DispatchFacts`, `PresentFacts`, `PageFacts`, `SampleSummary`, and `RefreshOutcome` likewise carry the mode string as provenance. `WarpPlan` is `{ rows:[[f32;4];3],source_valid:bool,kind:WarpKind,chart_residual:f64,approx_max_error_px:Option<f64>,approx_p95_error_px:Option<f64> }`; all are CPU-only.
 
-`Warp::reproject(last_frame:&SceneFrame,from_pose:&Pose,to_pose:&Pose)->WarpPlan` is a pure CPU planner and uses math's `Pose` and `warp_matrix` without touching the GPU; `last_frame.pose` must equal `from_pose` or the result is `ClearOnly`.
+`Warp::reproject(last_frame:&SceneFrame,from_pose:&Pose,to_pose:&Pose,precision_mode:PrecisionMode,validation:WarpValidation)->WarpPlan` is a pure CPU planner and uses math's `Pose` and `warp_matrix` without touching the GPU; `last_frame.pose` must equal `from_pose` or the result is `ClearOnly`. Deterministic always runs the sampled corpus, whereas ordinary PictureFast leaves sampled error facts unavailable and only Measure or Final validation runs it.
 
 The refresh order is `poll → drain HOT → write_hot(refresh_id mod 3) → frame → app present`, with `submit_scene` only when app's schedule says a scene is due; present owns both scene textures and both four-byte fences, refuses `SceneBusy` rather than allocating a third texture, and app presents the surface outside all measured regions.
 
@@ -298,7 +299,7 @@ The page facts contributed or constrained here are `{ requested_generation,accep
 |worker → kernels|reference record|RGBA32F `[re_hi,im_hi,re_lo,im_lo]`, 16 bytes per index|
 |kernels → present|escape record|RGBA32F `[smooth_iter,escaped,rebase_count,glitch]`, 16 bytes per pixel|
 |kernels → present|`EscapeGrid`|typed `DataSpan`, active `width,height`, `RefinementLevel`|
-|owner → app/present|`ViewerState`|168-byte repr(C), shared epoch, latest-wins HOT and MAIN|
+|owner → app/present|`ViewerState`|176-byte repr(C), shared epoch, latest-wins HOT and MAIN|
 |owner ↔ worker|wire protocol|32-byte `JBL1` header, nine kinds, 16-byte trailer, four buffers|
 |math → present/app|`Pose`|CPU-only exact field list including centre displacement in pixels|
 |present → GPU|`HotUniform`|128-byte payload, three dynamic-offset slots|
@@ -357,7 +358,9 @@ Perturbation GPU conformance uses the scaled f64 oracle, requires exact classifi
 
 The propagated envelope begins at actual rounded `δz₀′`, applies the contracted f32 operation sequence including reference reconstruction, `ldexp`, rebases, and exact power-of-two rescaling, and converts complex error `eₙ` to squared-radius uncertainty `2|zₙ|eₙ+eₙ²`; classification tolerance is arithmetic rather than a guessed pixel exclusion.
 
-Native state tests interleave HOT and MAIN drains, accepted and stale generations, centre displacement, reference shifts, and same-thread responses; they require the 40/120/168-byte layouts, monotonic shared epochs, infallible drains, re-expressed retained poses, and no stale orbit publication.
+Native state tests interleave HOT and MAIN drains, accepted and stale generations, centre displacement, reference shifts, and same-thread responses; they require the 40/128/176-byte layouts, monotonic shared epochs, infallible drains, re-expressed retained poses, mode-change staleness, and no stale orbit publication.
+
+Native test policy is cfg-free: tests iterate `PrecisionMode::ALL` where both policies are meaningful, and `requires_bit_identity` marks only exact CPU-mirror operation sequences, exact rebase counts, dyadic decode identity, Astro-float word-width identity, exact `D` versus `D+16` words, synthetic drift identity, palette words, and planner residual words as Deterministic/conformance assertions. Every semantic layout or wire check and every accuracy oracle against the Deterministic path remains unconditional.
 
 Native wire tests pin all header, kind, trailer, request, descriptor, response, capacity, credit, and version bytes; browser ownership transfer, worker timing, fetch caching, and duplicated instance memory `requires visible replay`.
 

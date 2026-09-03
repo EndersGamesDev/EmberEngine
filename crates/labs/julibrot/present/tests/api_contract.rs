@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ember_julibrot_present::{
     FrameReceipt, FrameState, HotSlot, PresentConfig, PresentError, PresentEvent, PresentFacts,
-    PresentHot, PresentMain, Presenter, Warp, WarpPlan,
+    PresentHot, PresentMain, Presenter, Warp, WarpPlan, WarpValidation,
 };
 use ember_lab_heap::HeapPresentResources;
 
@@ -18,7 +18,7 @@ type NewPresenter = fn(
 fn app_facing_callable_surface_has_the_pinned_signatures() {
     let new: NewPresenter = Presenter::new;
     let set_main: fn(&mut Presenter, PresentMain) = Presenter::set_main;
-    let write_hot: fn(&mut Presenter, HotSlot, PresentHot) = Presenter::write_hot;
+    let write_hot: fn(&mut Presenter, HotSlot, PresentHot, WarpValidation) = Presenter::write_hot;
     let submit_scene: fn(&mut Presenter, HotSlot, f64) -> Result<u64, PresentError> =
         Presenter::submit_scene;
     let frame: for<'a> fn(
@@ -32,6 +32,8 @@ fn app_facing_callable_surface_has_the_pinned_signatures() {
         &ember_julibrot_present::SceneFrame,
         &ember_julibrot_present::Pose,
         &ember_julibrot_present::Pose,
+        ember_julibrot_math::PrecisionMode,
+        WarpValidation,
     ) -> WarpPlan = Warp::reproject;
     std::hint::black_box(new);
     std::hint::black_box(set_main);
@@ -50,6 +52,7 @@ fn pending_surface_contract_has_one_warp_completion_identity() {
         id: 41,
         source_scene_id: Some(9),
         sample_class: ember_julibrot_present::SampleClass::Measured,
+        precision_mode: "PictureFast",
         wall_ms: 2.5,
         fence_wait_ms: 1.5,
         polls: 3,

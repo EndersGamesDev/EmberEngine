@@ -51,8 +51,8 @@ impl BrowserOwnerEndpoint {
 
     /// Attaches the four-buffer owner endpoint to an app-created module Worker.
     ///
-    /// The worker must load the version-one bootstrap at `./worker.js?v=1`; no pool buffer moves
-    /// until its object handshake acknowledges ABI version one.
+    /// The worker must load the loader-version-one bootstrap at `./worker.js?v=1`; no pool buffer
+    /// moves until its object handshake acknowledges ABI version two.
     ///
     /// # Errors
     ///

@@ -252,7 +252,7 @@ pub const fn math_error(error: &MathError) -> ChannelError {
 mod tests {
     use std::cell::Cell;
 
-    use ember_julibrot_math::{BigCentre, EscapeParams, perturb_scaled_f64};
+    use ember_julibrot_math::{BigCentre, EscapeParams, PrecisionMode, perturb_scaled_f64};
 
     use super::{
         MathFailureCode, MonotonicClock, ORBIT_CHUNK_MAX_ITERATIONS, OrbitTaskPoll,
@@ -289,6 +289,7 @@ mod tests {
             0,
             128,
             max_iter,
+            PrecisionMode::Deterministic,
             OrbitReason::INITIAL,
         )
         .unwrap()
@@ -299,7 +300,21 @@ mod tests {
         let centre = BigCentre::from_f64([0.0, -0.0, -0.75, 0.125], 128).unwrap();
         let encoded = EncodedCentre::encode_math(&centre, 41).unwrap();
         assert_eq!(encoded.revision, 41);
-        assert_eq!(encoded.decode_math(128).unwrap(), centre);
+        for mode in PrecisionMode::ALL {
+            let decoded = encoded.decode_math(128).unwrap();
+            for (actual, expected) in decoded
+                .to_f64_mirror()
+                .into_iter()
+                .zip(centre.to_f64_mirror())
+            {
+                let tolerance = expected.abs().mul_add(f64::EPSILON, f64::from_bits(1));
+                assert!((actual - expected).abs() <= tolerance);
+            }
+            if mode.requires_bit_identity() {
+                // Deterministic-only contract: all four dyadic records round-trip identically.
+                assert_eq!(decoded, centre);
+            }
+        }
         assert_eq!(encoded.coordinates[0].limb_count, 0);
         assert_eq!(encoded.coordinates[1].sign, 0);
     }
@@ -357,7 +372,16 @@ mod tests {
     fn insufficient_transported_precision_is_a_stable_math_refusal() {
         let centre = BigCentre::from_f64([0.0; 4], 128).unwrap();
         let encoded = EncodedCentre::encode_math(&centre, 1).unwrap();
-        let request = OrbitRequest::new(1, encoded, 100, 64, 64, OrbitReason::INITIAL).unwrap();
+        let request = OrbitRequest::new(
+            1,
+            encoded,
+            100,
+            64,
+            64,
+            PrecisionMode::Deterministic,
+            OrbitReason::INITIAL,
+        )
+        .unwrap();
         let error = ReferenceOrbitTask::start(&request, &StepClock::new(1)).unwrap_err();
         assert_eq!(error.code, crate::ErrorCode::MathFailure);
         assert_eq!(error.detail, MathFailureCode::InvalidPrecisionPlan as u32);

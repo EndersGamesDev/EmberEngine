@@ -382,12 +382,18 @@ mod tests {
 
     #[test]
     fn nonzero_z_zero_rebase_uses_the_correct_delta() {
-        let one = ReferenceOrbitRecord { re_hi: 1.0, ..ZERO };
-        let sample = perturb_scaled_offset(&uniform(2, 2), &[one, one], [-0.75, 0.0, 0.0, 0.0])
-            .expect("reference length matches");
-        assert_eq!(sample.record.rebase_count, 1.0);
-        assert_eq!(sample.record.glitch, 0.0);
-        assert_eq!(sample.escape_index, None);
+        for mode in ember_julibrot_math::PrecisionMode::ALL {
+            let one = ReferenceOrbitRecord { re_hi: 1.0, ..ZERO };
+            let sample = perturb_scaled_offset(&uniform(2, 2), &[one, one], [-0.75, 0.0, 0.0, 0.0])
+                .expect("reference length matches");
+            assert!(sample.record.rebase_count >= 0.0);
+            if mode.requires_bit_identity() {
+                // Deterministic-only contract: the CPU mirror rebases on the identical iteration.
+                assert_eq!(sample.record.rebase_count, 1.0);
+            }
+            assert_eq!(sample.record.glitch, 0.0);
+            assert_eq!(sample.escape_index, None);
+        }
     }
 
     #[test]
@@ -498,10 +504,12 @@ mod tests {
             EscapeParams::new(8),
         )
         .expect("math oracle accepts fixture");
-        assert_eq!(
-            crate::evaluate_perturbation_conformance(actual, expected, envelope).verdict,
-            crate::ConformanceVerdict::Pass
-        );
+        for mode in ember_julibrot_math::PrecisionMode::ALL {
+            assert_eq!(
+                crate::evaluate_perturbation_conformance(mode, actual, expected, envelope).verdict,
+                crate::ConformanceVerdict::Pass
+            );
+        }
     }
 
     #[test]
@@ -549,8 +557,11 @@ mod tests {
                 EscapeParams::new(max_iter),
             )
             .expect("math mirror");
-            let result = crate::evaluate_perturbation_conformance(actual, expected, envelope);
-            assert_ne!(result.verdict, crate::ConformanceVerdict::Fail);
+            for mode in ember_julibrot_math::PrecisionMode::ALL {
+                let result =
+                    crate::evaluate_perturbation_conformance(mode, actual, expected, envelope);
+                assert_ne!(result.verdict, crate::ConformanceVerdict::Fail);
+            }
         }
     }
 }

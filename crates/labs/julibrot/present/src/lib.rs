@@ -17,7 +17,7 @@ mod warp_shader;
 pub use contract::{
     DropReason, FenceRefusal, FrameReceipt, FrameState, PresentConfig, PresentError, PresentEvent,
     PresentFacts, PresentHot, PresentMain, PresentStatus, SampleClass, SceneFrame, SubmissionKind,
-    SubmissionMeasurement, WarpKind, WarpPlan,
+    SubmissionMeasurement, WarpKind, WarpPlan, WarpValidation,
 };
 pub use ember_julibrot_kernels::RefinementLevel;
 pub use ember_julibrot_math::{Pose, ViewControls};

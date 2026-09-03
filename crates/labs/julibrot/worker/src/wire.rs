@@ -3,7 +3,7 @@
 use crate::{ChannelError, ErrorCode, ReferenceOrbitRecord};
 
 /// Exported module and wire ABI version.
-pub const JULIBROT_ABI_VERSION: u32 = 1;
+pub const JULIBROT_ABI_VERSION: u32 = 2;
 /// Little-endian byte string `JBL1`.
 pub const MAGIC: u32 = 0x314c_424a;
 /// Little-endian pool-trailer byte string `JBLT`.
@@ -33,7 +33,7 @@ pub fn buffer_capacity(max_iter: u32) -> Result<usize, ChannelError> {
         .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, max_iter, u32::MAX, 0))
 }
 
-/// The nine version-one wire messages.
+/// The nine version-two wire messages.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum MessageKind {
@@ -99,7 +99,7 @@ pub struct MessageHeader {
 }
 
 impl MessageHeader {
-    /// Builds a canonical version-one header.
+    /// Builds a canonical version-two header.
     #[must_use]
     pub const fn new(kind: MessageKind, generation: u32) -> Self {
         Self {
@@ -660,7 +660,7 @@ mod tests {
         header.magic = 0;
         assert_eq!(header.validate().unwrap_err().code, ErrorCode::BadMagic);
         header.magic = super::MAGIC;
-        header.version = 2;
+        header.version = super::JULIBROT_ABI_VERSION + 1;
         assert_eq!(header.validate().unwrap_err().code, ErrorCode::BadVersion);
         header.version = super::JULIBROT_ABI_VERSION;
         header.kind = 10;

@@ -1,4 +1,4 @@
-const ABI = 1;
+const ABI = 2;
 
 async function boot() {
   try {

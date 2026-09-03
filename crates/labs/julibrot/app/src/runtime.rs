@@ -230,11 +230,13 @@ impl BrowserRuntime {
         &mut self,
         warp_id: u64,
         generation: u32,
+        precision_mode: &'static str,
         frame: wgpu::SurfaceTexture,
     ) -> Result<(), AppError> {
         self.surfaces.retain(PendingSurface {
             warp_id,
             generation,
+            precision_mode,
             frame,
         })
     }

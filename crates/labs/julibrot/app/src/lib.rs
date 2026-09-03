@@ -136,7 +136,9 @@ impl App {
         // Nothing animates on its own. The retired term kept the loop turning forever whenever
         // the tumbled mode was selected, because the geometry read a clock; with every angle a
         // control, an untouched page reaches a fixed image and the loop is allowed to go quiet.
-        self.requests.frame || self.frame_loop.pending(&self.runtime, &self.viewer)
+        self.requests.frame
+            || self.requests.measurement
+            || self.frame_loop.pending(&self.runtime, &self.viewer)
     }
 
     /// Queues one explicit frame request for the next cooperative refresh turn.
@@ -170,6 +172,8 @@ pub struct RefreshOutcome {
     pub presented: bool,
     /// Honest terminal state for this refresh.
     pub status: RefreshStatus,
+    /// Precision policy under which this refresh was planned.
+    pub precision_mode: &'static str,
 }
 
 /// App-owned refresh status.
@@ -214,7 +218,7 @@ mod wasm_entry {
     use wasm_bindgen::prelude::*;
 
     use crate::runtime::publish_start_error;
-    use ember_julibrot_math::{PlaneAngles, ViewControls};
+    use ember_julibrot_math::{PlaneAngles, PrecisionMode, ViewControls};
     use ember_julibrot_present::PaletteId;
 
     use crate::{
@@ -476,6 +480,18 @@ mod wasm_entry {
         })
     }
 
+    /// Stages the requested precision policy as incompatible MAIN work.
+    #[wasm_bindgen]
+    pub fn app_set_precision_mode(mode: u32) -> Result<(), JsValue> {
+        let precision_mode = PrecisionMode::from_u32(mode)
+            .ok_or_else(|| JsValue::from_str("precision discriminant is outside 0..1"))?;
+        with_app_mut(|app| {
+            app.viewer_mut()
+                .set_precision_mode(precision_mode)
+                .map_err(app_js_error)
+        })
+    }
+
     /// Stages one of present's exact palette records.
     #[wasm_bindgen]
     pub fn app_set_palette(palette: u32) -> Result<(), JsValue> {
@@ -563,6 +579,6 @@ pub use wasm_entry::{
     app_facts_json, app_morph_view, app_needs_refresh, app_preset, app_refresh, app_request_frame,
     app_request_measurement, app_saved_view_json, app_set_camera, app_set_centre,
     app_set_distances, app_set_height, app_set_iteration_cap, app_set_palette,
-    app_set_plane_angles, app_set_plane_origin, app_set_scale, app_set_target, app_set_view_angles,
-    app_zoom_box, julibrot_abi_version, start_julibrot,
+    app_set_plane_angles, app_set_plane_origin, app_set_precision_mode, app_set_scale,
+    app_set_target, app_set_view_angles, app_zoom_box, julibrot_abi_version, start_julibrot,
 };

@@ -1,4 +1,4 @@
-const ABI = 1;
+const ABI = 2;
 const STATUS = document.getElementById("status");
 const CANVAS = document.getElementById("julibrot");
 const FACTS = document.getElementById("facts-grid");
@@ -246,6 +246,7 @@ function bindControls(api) {
     // Last, because the origin handler resets the zoom to zero: a row applied in this order ends
     // at the scale it names rather than at the scale the origin change forced.
     scale: () => api.app_set_scale(NUMBER("scale")),
+    precision: () => api.app_set_precision_mode(NUMBER("precision")),
   };
   for (const id of ["theta-1", "theta-2"]) {
     document.getElementById(id).addEventListener("input", () => guarded(APPLY.plane));
@@ -275,6 +276,7 @@ function bindControls(api) {
   }
   document.getElementById("palette").addEventListener("change", event => guarded(() => api.app_set_palette(Number(event.target.value))));
   document.getElementById("iteration-cap").addEventListener("change", event => guarded(() => api.app_set_iteration_cap(Number(event.target.value))));
+  document.getElementById("precision").addEventListener("change", () => guarded(APPLY.precision));
   document.getElementById("preset").addEventListener("change", event => guarded(() => {
     const row = JSON.parse(api.app_preset(Number(event.target.value)));
     SET("theta-1", row.theta_1);

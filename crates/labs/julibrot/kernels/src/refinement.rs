@@ -1,4 +1,4 @@
-use ember_julibrot_math::EscapeParams;
+use ember_julibrot_math::{EscapeParams, PrecisionMode};
 
 use crate::{
     GridExtent, KernelError, KernelMode, OUTPUT_PAGE_SIDE, RefinementLevel,
@@ -48,6 +48,7 @@ impl RefinementPlan {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DispatchFacts {
     pub owner_epoch: u64,
+    pub precision_mode: &'static str,
     pub mode: KernelMode,
     pub level: RefinementLevel,
     pub requested_extent: GridExtent,
@@ -188,6 +189,7 @@ pub fn dispatch_facts(
     level: RefinementLevel,
     mode: KernelMode,
     owner_epoch: u64,
+    precision_mode: PrecisionMode,
     scratch_bytes: u64,
     orbit: Option<(u32, u32)>,
 ) -> Result<DispatchFacts, KernelError> {
@@ -222,6 +224,7 @@ pub fn dispatch_facts(
     };
     Ok(DispatchFacts {
         owner_epoch,
+        precision_mode: precision_mode.as_str(),
         mode,
         level,
         requested_extent: plan.requested_extent,
@@ -247,7 +250,7 @@ pub fn dispatch_facts(
 mod tests {
     use super::{dispatch_facts, plan_refinement, prefix_pages};
     use crate::{GridExtent, KernelError, KernelMode, RefinementLevel};
-    use ember_julibrot_math::EscapeParams;
+    use ember_julibrot_math::{EscapeParams, PrecisionMode};
 
     #[test]
     fn exact_three_levels_and_caps_are_pinned() {
@@ -344,11 +347,13 @@ mod tests {
             RefinementLevel::Preview,
             KernelMode::Shallow,
             9,
+            PrecisionMode::PictureFast,
             16_777_216,
             None,
         )
         .expect("facts fit fixed widths");
         assert_eq!(preview.active_pixels, 32_400);
+        assert_eq!(preview.precision_mode, "PictureFast");
         assert_eq!(preview.gpu_copy_bytes, 518_400);
         assert_eq!(preview.page_passes, 1);
         assert_eq!(preview.copy_commands, 2);
@@ -359,6 +364,7 @@ mod tests {
             RefinementLevel::Final,
             KernelMode::Perturbation,
             10,
+            PrecisionMode::Deterministic,
             16_777_216,
             Some((7, 900)),
         )

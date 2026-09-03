@@ -6,10 +6,11 @@ use crate::wire::{
     buffer_capacity, read_u32, write_words,
 };
 use crate::{ChannelError, ErrorCode};
+use ember_julibrot_math::PrecisionMode;
 
-const REQUEST_FIXED_END: usize = 112;
+const REQUEST_FIXED_END: usize = 116;
 const COORDINATE_COUNT: usize = 4;
-const KNOWN_REASON_BITS: u32 = 0b1111;
+const KNOWN_REASON_BITS: u32 = 0b1_1111;
 
 /// One canonical dyadic coordinate descriptor.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -182,8 +183,10 @@ impl OrbitReason {
     pub const ZOOM_THRESHOLD: Self = Self(1 << 2);
     /// Requested maximum iteration changed.
     pub const MAX_ITER_CHANGE: Self = Self(1 << 3);
+    /// Requested precision policy changed.
+    pub const PRECISION_MODE_CHANGE: Self = Self(1 << 4);
 
-    /// Validates and constructs version-one reason bits.
+    /// Validates and constructs version-two reason bits.
     ///
     /// # Errors
     ///
@@ -221,6 +224,8 @@ pub struct OrbitRequest {
     precision_bits: u32,
     /// Requested orbit-entry cap.
     max_iter: u32,
+    /// Requested precision policy.
+    precision_mode: PrecisionMode,
     /// Triggering policy reason or reasons.
     reason: OrbitReason,
 }
@@ -238,6 +243,7 @@ impl OrbitRequest {
         depth_digits: u32,
         precision_bits: u32,
         max_iter: u32,
+        precision_mode: PrecisionMode,
         reason: OrbitReason,
     ) -> Result<Self, ChannelError> {
         if generation == 0 || precision_bits == 0 || max_iter == 0 {
@@ -259,6 +265,7 @@ impl OrbitRequest {
             depth_digits,
             precision_bits,
             max_iter,
+            precision_mode,
             reason,
         })
     }
@@ -291,6 +298,12 @@ impl OrbitRequest {
     #[must_use]
     pub const fn max_iter(&self) -> u32 {
         self.max_iter
+    }
+
+    /// Returns the requested precision policy.
+    #[must_use]
+    pub const fn precision_mode(&self) -> PrecisionMode {
+        self.precision_mode
     }
 
     /// Returns the policy reasons that triggered this request.
@@ -342,6 +355,7 @@ impl OrbitRequest {
                 ],
             );
         }
+        write_words(&mut message[112..116], &[self.precision_mode as u32]);
         write_words(
             &mut message[REQUEST_FIXED_END..requested],
             &self.centre.limbs,
@@ -362,6 +376,7 @@ impl OrbitRequest {
             depth_digits: view.depth_digits,
             precision_bits: view.precision_bits,
             max_iter: view.max_iter,
+            precision_mode: view.precision_mode,
             reason: view.reason,
         })
     }
@@ -378,6 +393,8 @@ pub struct RequestBodyView {
     pub(crate) precision_bits: u32,
     /// Requested orbit cap.
     pub(crate) max_iter: u32,
+    /// Requested precision policy.
+    pub(crate) precision_mode: PrecisionMode,
     /// Triggering reasons.
     pub(crate) reason: OrbitReason,
     /// Authoritative-centre revision.
@@ -402,7 +419,7 @@ impl RequestBodyView {
             return Err(ChannelError::new(
                 ErrorCode::BadLength,
                 0,
-                112,
+                116,
                 u32::try_from(bytes.len()).unwrap_or(u32::MAX),
             ));
         }
@@ -441,11 +458,14 @@ impl RequestBodyView {
             limbs,
         };
         centre.validate()?;
+        let precision_mode = PrecisionMode::from_u32(read_u32(bytes, 112))
+            .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, read_u32(bytes, 112), 0, 0))?;
         Ok(Self {
             generation: header.generation,
             depth_digits: read_u32(bytes, 32),
             precision_bits: header.precision_bits,
             max_iter: header.length,
+            precision_mode,
             reason: OrbitReason::from_bits(read_u32(bytes, 36))?,
             centre_revision: centre.revision,
             coordinates,
@@ -460,6 +480,8 @@ const fn bad_descriptor(detail: u32) -> ChannelError {
 
 #[cfg(test)]
 mod tests {
+    use ember_julibrot_math::PrecisionMode;
+
     use super::{CoordinateDescriptor, EncodedCentre, OrbitReason, OrbitRequest};
     use crate::wire::WireBuffer;
     use crate::{ErrorCode, Pool};
@@ -505,6 +527,7 @@ mod tests {
             101,
             384,
             64,
+            PrecisionMode::PictureFast,
             OrbitReason::INITIAL.union(OrbitReason::ZOOM_THRESHOLD),
         )
         .unwrap();
@@ -517,7 +540,8 @@ mod tests {
             &buffer.as_bytes()[32..48],
             &[101, 0, 0, 0, 5, 0, 0, 0, 17, 0, 0, 0, 4, 0, 0, 0]
         );
-        assert_eq!(&buffer.as_bytes()[112..116], &0x0123_4567_u32.to_le_bytes());
+        assert_eq!(&buffer.as_bytes()[112..116], &1_u32.to_le_bytes());
+        assert_eq!(&buffer.as_bytes()[116..120], &0x0123_4567_u32.to_le_bytes());
     }
 
     #[test]
@@ -579,15 +603,21 @@ mod tests {
                 .unwrap();
             zoom_log2 = after;
             let encoded = EncodedCentre::encode_math(&centre, tick).unwrap();
-            let decoded = encoded.decode_math(47).unwrap();
-            assert_eq!(decoded.precision_bits, 64, "tick {tick}");
-            assert!(
-                decoded
-                    .coords
-                    .iter()
-                    .all(|coordinate| coordinate.precision_bits() == 64),
-                "tick {tick} delivered mixed coordinate precisions"
-            );
+            for mode in PrecisionMode::ALL {
+                let decoded = encoded.decode_math(47).unwrap();
+                assert!(decoded.precision_bits >= 47, "tick {tick}");
+                assert!(
+                    decoded
+                        .coords
+                        .iter()
+                        .all(|coordinate| coordinate.precision_bits() == decoded.precision_bits),
+                    "tick {tick} delivered mixed coordinate precisions"
+                );
+                if mode.requires_bit_identity() {
+                    // Deterministic-only contract: astro-float's word rounding is identical.
+                    assert_eq!(decoded.precision_bits, 64, "tick {tick}");
+                }
+            }
         }
     }
 
@@ -614,12 +644,13 @@ mod tests {
             300,
             1_024,
             64,
+            PrecisionMode::Deterministic,
             OrbitReason::INITIAL,
         )
         .unwrap();
         let mut buffer = WireBuffer::new(Pool::Request, 0, 64).unwrap();
         request.encode_into(&mut buffer).unwrap();
-        assert_eq!(request.centre.request_bytes().unwrap(), 624);
+        assert_eq!(request.centre.request_bytes().unwrap(), 628);
         assert_eq!(buffer.capacity(), 1_072);
     }
 }

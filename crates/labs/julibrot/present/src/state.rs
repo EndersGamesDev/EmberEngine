@@ -15,6 +15,7 @@ pub struct PendingScene {
     pub texture_index: u32,
     pub centre_revision: u32,
     pub plane_origin_f64: [f64; 4],
+    pub precision_mode: &'static str,
     pub drop_reason: Option<DropReason>,
 }
 
@@ -82,6 +83,7 @@ impl SceneLedger {
             texture_index: pending.texture_index,
             centre_revision: pending.centre_revision,
             plane_origin_f64: pending.plane_origin_f64,
+            precision_mode: pending.precision_mode,
             measurement,
         };
         self.retained = Some(frame.clone());
@@ -97,16 +99,20 @@ impl SceneLedger {
         &mut self,
         iteration_cap: u32,
         plane_origin_f64: [f64; 4],
+        precision_mode: &'static str,
     ) -> bool {
         let retained_invalid = self.retained.as_ref().is_some_and(|frame| {
-            frame.iteration_cap != iteration_cap || frame.plane_origin_f64 != plane_origin_f64
+            frame.iteration_cap != iteration_cap
+                || frame.plane_origin_f64 != plane_origin_f64
+                || frame.precision_mode != precision_mode
         });
         if retained_invalid {
             self.retained = None;
         }
         if let Some(pending) = &mut self.pending
             && (pending.iteration_cap != iteration_cap
-                || pending.plane_origin_f64 != plane_origin_f64)
+                || pending.plane_origin_f64 != plane_origin_f64
+                || pending.precision_mode != precision_mode)
         {
             pending.drop_reason = Some(DropReason::IncompatibleMain);
         }
@@ -179,12 +185,13 @@ fn dot(left: [f32; 4], right: [f32; 4]) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use ember_julibrot_math::{Plane, ViewControls};
+    use ember_julibrot_math::{Plane, PrecisionMode, ViewControls};
 
     use super::*;
     use crate::{SampleClass, SubmissionKind, SubmissionMeasurement};
 
     const ORIGIN: [f64; 4] = [0.0; 4];
+    const MODE: &str = PrecisionMode::Deterministic.as_str();
 
     fn pose(generation: u32) -> Pose {
         Pose {
@@ -210,6 +217,7 @@ mod tests {
             id: scene_id,
             source_scene_id: None,
             sample_class: SampleClass::Measured,
+            precision_mode: MODE,
             wall_ms: 2.0,
             fence_wait_ms: 1.0,
             polls: 2,
@@ -229,6 +237,7 @@ mod tests {
                     texture_index,
                     centre_revision: generation,
                     plane_origin_f64: ORIGIN,
+                    precision_mode: MODE,
                     drop_reason: None,
                 })
             })
@@ -253,6 +262,7 @@ mod tests {
                     texture_index,
                     centre_revision: 1,
                     plane_origin_f64: ORIGIN,
+                    precision_mode: MODE,
                     drop_reason: None,
                 })
             }),
@@ -337,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn generation_alone_survives_but_cap_or_origin_drops() {
+    fn generation_alone_survives_but_cap_origin_or_mode_drops() {
         let mut ledger = SceneLedger::default();
         begin(&mut ledger, 1, 1);
         ledger.apply_reference_shift(&pose(2), 2, 2, [0.0; 2]);
@@ -345,11 +355,11 @@ mod tests {
             ledger.complete(measurement(1)),
             Some(SceneCompletion::Promoted(_))
         ));
-        assert!(!ledger.invalidate_incompatible(64, ORIGIN));
-        assert!(ledger.invalidate_incompatible(128, ORIGIN));
+        assert!(!ledger.invalidate_incompatible(64, ORIGIN, MODE));
+        assert!(ledger.invalidate_incompatible(128, ORIGIN, MODE));
 
         begin(&mut ledger, 2, 2);
-        ledger.invalidate_incompatible(64, [0.0, 0.0, 1.0, 0.0]);
+        ledger.invalidate_incompatible(64, [0.0, 0.0, 1.0, 0.0], MODE);
         assert!(matches!(
             ledger.complete(measurement(2)),
             Some(SceneCompletion::Dropped {
@@ -357,5 +367,9 @@ mod tests {
                 ..
             })
         ));
+
+        begin(&mut ledger, 3, 3);
+        ledger.complete(measurement(3));
+        assert!(ledger.invalidate_incompatible(64, ORIGIN, PrecisionMode::PictureFast.as_str()));
     }
 }

@@ -78,11 +78,11 @@ The worker-owned HOT and MAIN records are `Copy`, `repr(C)`, independently stage
 
 HOT contains desired zoom, independent plane angles, and `centre_from_reference_px`, the desired centre’s displacement from the accepted reference expressed in current-zoom pixels along `(u,v)`; worker computes this from bignum subtraction divided by scale, so pan and pointer-anchored zoom remain smooth at arbitrary depth.
 
-MAIN contains requested and delivered cap, delivered precision and orbit length, palette identifier, orbit registry identifier, f64 centre and plane-origin mirrors, the seed-axis words the worker record still carries and the app now pins to `(e₃,e₄)` because no control selects axes any more, and `reference_shift_px`, the new minus old accepted reference centre in current pixels.
+MAIN contains requested and delivered cap, delivered precision and orbit length, palette identifier, orbit registry identifier, f64 centre and plane-origin mirrors, the seed-axis words the worker record still carries and the app now pins to `(e₃,e₄)` because no control selects axes any more, `reference_shift_px`, the new minus old accepted reference centre in current pixels, and the `PrecisionMode` discriminant. `PrecisionMode` is `Deterministic=0` or `PictureFast=1`; PictureFast is the requested page default, while changing the mode is incompatible MAIN work that advances the request generation and clears retained and in-flight imagery exactly like changing the iteration cap.
 
 When a reference is accepted, present re-expresses its retained pose by subtracting the delivered `reference_shift_px` from the previous reference-relative displacement; generation change alone no longer clears, while a changed `max_iter` or plane origin including Julia `c₀` clears the retained frame.
 
-The view does not respond to the mouse wheel. A click on the canvas sets a target: the plane point under the clicked pixel becomes the centre, so the marker drawn there comes to rest at the screen centre and a second click elsewhere moves the centre again. A drag is a box selection, and on release the view zooms so the box fills the screen; a box under four pixels in either dimension is a click instead, which is why there is no separate pan gesture — pan by placing the target, zoom by the box or by the slider. One `scale` slider carries `zoom_log2` over `[−2,120]` and zooms about the target, which after a click is always the centre. All three reach the worker through the one pixel-to-plane mapping — `anchor_px_up` for a screen point, `drag_delta_px_down` for a screen displacement, and one `NavigationDelta` per edit — so a click, a box release and a slider move are three callers of one conversion rather than three derivations of it. The two rotation sliders stage `θ₁` and `θ₂` independently, the four origin sliders stage the plane origin as MAIN with a centre revision exactly as the retired preset selection did, the VIEW, camera, height, and distance sliders stage HOT alone, and every widget retains its requested value across stale work, degradation, `SceneBusy`, or typed refusal.
+The view does not respond to the mouse wheel. A click on the canvas sets a target: the plane point under the clicked pixel becomes the centre, so the marker drawn there comes to rest at the screen centre and a second click elsewhere moves the centre again. A drag is a box selection, and on release the view zooms so the box fills the screen; a box under four pixels in either dimension is a click instead, which is why there is no separate pan gesture — pan by placing the target, zoom by the box or by the slider. One `scale` slider carries `zoom_log2` over `[−2,120]` and zooms about the target, which after a click is always the centre. All three reach the worker through the one pixel-to-plane mapping — `anchor_px_up` for a screen point, `drag_delta_px_down` for a screen displacement, and one `NavigationDelta` per edit — so a click, a box release and a slider move are three callers of one conversion rather than three derivations of it. The two rotation sliders stage `θ₁` and `θ₂` independently, the four origin sliders stage the plane origin as MAIN with a centre revision exactly as the retired preset selection did, the precision select stages incompatible MAIN, the VIEW, camera, height, and distance sliders stage HOT alone, and every widget retains its requested value across stale work, degradation, `SceneBusy`, or typed refusal.
 
 Worker recomputes a reference when centre displacement exceeds one quarter of the view extent or `|zoom_log2−reference_zoom_log2|>2`, with worker-owned re-arm hysteresis; app reports trigger and policy separately from device walls.
 
@@ -106,7 +106,7 @@ Aggregate rebase and glitch totals are `unavailable` during normal gather-only r
 
 At the start of a refresh or cooperative completion turn, app calls present `Presenter::poll(now_ms)`; it handles `SceneCompleted`, `SceneDropped`, `WarpCompleted`, and `FenceRefused`, updates schedule and facts, and presents or drops an app-held surface image only for the matching `warp_id`.
 
-App then calls worker `ViewerOwner::drain_hot()`, takes the returned full `ViewerState`, calls math’s corrected plane constructor, builds `PresentHot` and math-owned `Pose`, constructs `HotSlot::for_refresh(refresh_id,hot_stride,epoch)`, and calls infallible present `Presenter::write_hot(slot,hot)`.
+App then calls worker `ViewerOwner::drain_hot()`, takes the returned full `ViewerState`, calls math’s corrected plane constructor, builds `PresentHot` and math-owned `Pose`, constructs `HotSlot::for_refresh(refresh_id,hot_stride,epoch)`, chooses `WarpValidation::Ordinary`, `Measure`, or `Final`, and calls infallible present `Presenter::write_hot(slot,hot,validation)`.
 
 App services worker `OwnerEndpoint::next_arrival()` without blocking; for a current orbit it synchronously gives the leased records to kernels’ executor for regional reference upload, registers the resulting `ReferenceOrbit`, calls owner `accept_orbit`, drains MAIN, calls present `Presenter::set_main`, and returns `CreditApplied`, while a stale response returns `CreditStale` without publication.
 
@@ -144,7 +144,7 @@ The bounded fence is the never-hang mechanism; abandoning the page is not, and t
 
 Only two things stop the refresh loop: device loss — an uncaptured error, a lost device, or a fence callback that itself failed, which is a `Device` refusal — and a typed worker refusal, which is every worker refusal that reaches app, the credit shaper’s `Delay` being a producer-internal wait that surfaces as a pending request depth rather than as an error. A typed refusal that escapes one refresh turn is latched: the loop stops, `loop_stopped_reason` carries that one cause, `app_needs_refresh` answers false and keeps answering false, and the page states the typed cause instead of restating a broken invariant sixty times a second.
 
-`app_needs_refresh` is therefore true whenever a scene fence is in flight, a surface image is pending, worker work is outstanding, a refinement level is due, a run is armed, or the presented image belongs to an older requested view than the one now requested; it is false only when none of those hold or the loop has stopped. The last term is what makes the policy complete: a refusal retires the only outstanding submission, and without a term for “the canvas is showing yesterday’s view” the loop would correctly observe that nothing is pending and correctly stop, leaving a live page frozen on a stale image. The stale term compares the requested view against the stamp carried by the last presented image — generation, centre revision, cap, palette, plane origin, zoom, both plane angles, both VIEW angles, both camera angles, the height scale, and both perspective distances — so it clears exactly when a warp has put the requested view on the canvas. Every control is a term, without exception: a control that is not a term is a control whose movement leaves the loop correctly asleep on an image that no longer answers the question the user just asked.
+`app_needs_refresh` is therefore true whenever a measurement is requested, a scene fence is in flight, a surface image is pending, worker work is outstanding, a refinement level is due, a run is armed, or the presented image belongs to an older requested view than the one now requested; it is false only when none of those hold or the loop has stopped. The last term is what makes the policy complete: a refusal retires the only outstanding submission, and without a term for “the canvas is showing yesterday’s view” the loop would correctly observe that nothing is pending and correctly stop, leaving a live page frozen on a stale image. The stale term compares the requested view against the stamp carried by the last presented image — generation, centre revision, cap, precision mode, palette, plane origin, zoom, both plane angles, both VIEW angles, both camera angles, the height scale, and both perspective distances — so it clears exactly when a warp has put the requested view on the canvas. Every control is a term, without exception: a control that is not a term is a control whose movement leaves the loop correctly asleep on an image that no longer answers the question the user just asked.
 
 The page owns the other half of the same policy, because a loop that answers true forever is only as live as the clock that asks it. The page drives one turn per schedule and guards the schedule with a pending flag, and that flag is exactly where a browser can strand it: a `requestAnimationFrame` queued while the tab or the pane is not painting is never called, so a flag cleared only inside that callback outlives the frame it was guarding and every later schedule returns immediately while `app_needs_refresh` still answers true. The page therefore clears the flag on the way *into* a turn rather than on the way out of a callback, retires the outstanding schedule whenever the document becomes visible again or the window receives `pageshow` or `focus`, and stands one 250 ms timer behind every schedule. That timer runs the turn the animation callback did not, and only that: arriving after a callback that already ran, or carrying a ticket a later schedule has superseded, it does nothing, and arriving with no refresh due it still releases the flag, since the callback it was waiting on may never come and the next control move has to be able to schedule. The two clocks cannot both drive one schedule — whichever arrives first clears the flag, and the other finds it clear.
 
@@ -162,7 +162,7 @@ Worker `compute_us` is separately measured from centre decode through the standa
 
 ### 2.8 Page, worker module, and deployment
 
-The page exposes target click and box drag on the canvas, and one control per view degree of freedom: two plane-angle sliders, four plane-origin sliders each paired with a number box on the same value, two VIEW-angle sliders, two camera-angle sliders, one height slider, two perspective-distance sliders, and one `scale` slider carrying `zoom_log2`, beside a preset selector, iteration-cap and Classic/Ember/Ice palette selectors, explicit one-frame and measurement controls, the two view boxes and their morph slider, one canvas, one status element, and one DOM facts overlay. The target marker and the rubber-band rectangle are DOM elements positioned over the canvas, never geometry in the scene pass; the scene pass has one pipeline and one depth buffer and gains nothing by drawing an overlay the page can position exactly.
+The page exposes target click and box drag on the canvas, and one control per view degree of freedom: two plane-angle sliders, four plane-origin sliders each paired with a number box on the same value, two VIEW-angle sliders, two camera-angle sliders, one height slider, two perspective-distance sliders, and one `scale` slider carrying `zoom_log2`, beside a preset selector, iteration-cap and Classic/Ember/Ice palette selectors, explicit one-frame and measurement controls, the two view boxes and their morph slider, followed by one select labelled `precision` with `Deterministic` and default-selected `PictureFast`, one canvas, one status element, and one DOM facts overlay. The target marker and the rubber-band rectangle are DOM elements positioned over the canvas, never geometry in the scene pass; the scene pass has one pipeline and one depth buffer and gains nothing by drawing an overlay the page can position exactly.
 
 A preset is a row of control values and nothing else. `app_preset(id)` returns that row as the exported control record; the page writes it into every control element and then applies it through the same handlers a user’s own movement reaches, so there is exactly one path from a control value to the worker, no preset can set a state the controls cannot express or leave, and moving a control after a preset morphs one preset continuously into another. The rows are Mandelbrot, Julia at `c₀=(−0.8,0.156)`, and a relief row for each; the relief rows differ only in `h=1`, `θᵥ=(0.6,0.97)`, and observer `(0.349,0.262)`, which is the orientation the retired fixed mount had, now a row of numbers a user can leave.
 
@@ -170,9 +170,9 @@ Every control lands on `input` except the four origin coordinates, which land on
 
 One wasm module is instantiated on the main thread and in the module worker, whose entry is `worker_main`; fetch caching avoids a second network payload, but two wasm instances and separate linear memories remain displayed costs.
 
-Loader, JavaScript glue, wasm export, worker bootstrap, and wire protocol use `JULIBROT_ABI_VERSION=1` and URLs `./pkg/ember_lab_julibrot.js?v=1`, `./pkg/ember_lab_julibrot_bg.wasm?v=1`, and `./worker.js?v=1`; the browser owner creates that worker and withholds every orbit-pool transfer until the object handshake accepts the ABI, while any disagreement becomes typed `VersionSkew` before orbit work.
+JavaScript glue, wasm export, worker bootstrap, and wire protocol use `JULIBROT_ABI_VERSION=2`, while the independently pinned loader query remains `v=1` in URLs `./pkg/ember_lab_julibrot.js?v=1`, `./pkg/ember_lab_julibrot_bg.wasm?v=1`, and `./worker.js?v=1`; the browser owner creates that worker and withholds every orbit-pool transfer until the object handshake accepts ABI two, while any disagreement becomes typed `VersionSkew` before orbit work.
 
-Every semantic change to page, glue, wasm, worker, or protocol increments the query version and deploys all four atomically; a cached old page either obtains matching artifacts or receives the typed skew refusal.
+The loader query version is deployment cache policy rather than the wire ABI and remains pinned to `v=1` by the page contract; protocol changes bump `JULIBROT_ABI_VERSION`, and a cached old page either obtains matching artifacts or receives the typed skew refusal.
 
 Existing wgpu lab bundles are approximately 4.5 MB; release gates record exact wasm and JavaScript byte counts, the overlay reports them beside two-instance memory, and the approximation is never substituted for this lab’s unbuilt artifact.
 
@@ -223,7 +223,7 @@ Math exposes `construct_plane(preset,angles)->Result<Plane,MathError>`, `split_c
 `ShallowUniform` is exactly 96 bytes and 16-byte aligned, with the following owner-defined layout.
 
 |Byte range|Field|Type|Meaning|
-|---:|---|---|---|
+|---------:|-----|----|-------|
 |0–15|`basis_u`|`[f32;4]`|Corrected PLANE basis u|
 |16–31|`basis_v`|`[f32;4]`|Corrected PLANE basis v|
 |32–47|`centre_hi`|`[f32;4]`|`CentreSplit.hi`|
@@ -239,7 +239,7 @@ Math exposes `construct_plane(preset,angles)->Result<Plane,MathError>`, `split_c
 `PerturbUniform` is exactly 64 bytes and 16-byte aligned, with the following owner-defined layout and no centre field.
 
 |Byte range|Field|Type|Meaning|
-|---:|---|---|---|
+|---------:|-----|----|-------|
 |0–15|`basis_u`|`[f32;4]`|Corrected PLANE basis u|
 |16–31|`basis_v`|`[f32;4]`|Corrected PLANE basis v|
 |32–35|`pixel_scale`|`f32`|Normalized mantissa `m∈[0.5,1)`|
@@ -263,17 +263,17 @@ The inherited `DispatchHeader` is 16 bytes `{global_base:u32,valid_length:u32,pa
 
 `KernelMode` is `repr(u32)` with `Shallow=0` and `Perturbation=1`.
 
-`DispatchFacts` is `{ owner_epoch:u64,mode:KernelMode,level:RefinementLevel,requested_extent:GridExtent,delivered_extent:GridExtent,requested_max_iter:u32,delivered_max_iter:u32,active_pixels:u32,worst_case_pixel_iterations:u64,page_passes:u32,copy_commands:u32,gpu_copy_bytes:u64,logical_heap_bytes:u64,reserved_heap_bytes:u64,scratch_bytes:u64,orbit_generation:Option<u32>,orbit_length:u32 }`; `owner_epoch` is observation attribution and never a compatibility key.
+`DispatchFacts` is `{ owner_epoch:u64,precision_mode:&'static str,mode:KernelMode,level:RefinementLevel,requested_extent:GridExtent,delivered_extent:GridExtent,requested_max_iter:u32,delivered_max_iter:u32,active_pixels:u32,worst_case_pixel_iterations:u64,page_passes:u32,copy_commands:u32,gpu_copy_bytes:u64,logical_heap_bytes:u64,reserved_heap_bytes:u64,scratch_bytes:u64,orbit_generation:Option<u32>,orbit_length:u32 }`; `owner_epoch` is observation attribution and never a compatibility key, while `precision_mode` is required provenance.
 
-`ReferenceOrbitInput` is the borrowed semantic record `{ span:&DataSpan,generation:u32,length:u32,precision_bits:u32 }`; `length=span.logical_len`, and current-generation validation precedes dispatch.
+`ReferenceOrbitInput` is the borrowed semantic record `{ span:&DataSpan,generation:u32,length:u32,precision_bits:u32,precision_mode:&'static str }`; `length=span.logical_len`, and current-generation plus mode validation precedes dispatch.
 
 `JulibrotKernels::new(executor:&mut GpuKernelExecutor)->Result<JulibrotKernels,KernelError>` registers exactly the shallow and perturbation dialect-v2 pipelines; `JulibrotKernels::plan(executor:&GpuKernelExecutor,requested_extent:GridExtent,params:EscapeParams)->Result<RefinementPlan,KernelError>` applies the exact levels, policy and cloned-arena delivery arithmetic.
 
 `JulibrotKernels::allocate_grid(&mut self,executor:&mut GpuKernelExecutor,plan:&RefinementPlan)->Result<EscapeGrid,KernelError>` allocates one Final-capacity span and immutable prefix headers for all three levels without partial publication.
 
-`JulibrotKernels::encode_shallow(&self,executor:&GpuKernelExecutor,encoder:&mut wgpu::CommandEncoder,grid:&mut EscapeGrid,owner_epoch:u64,level:RefinementLevel,plane:&Plane,centre:&CentreSplit,pixel_scale:f32,params:EscapeParams)->Result<DispatchFacts,KernelError>` packs the owner table and encodes one logical level.
+`JulibrotKernels::encode_shallow(&self,executor:&GpuKernelExecutor,encoder:&mut wgpu::CommandEncoder,grid:&mut EscapeGrid,owner_epoch:u64,precision_mode:PrecisionMode,level:RefinementLevel,plane:&Plane,centre:&CentreSplit,pixel_scale:f32,params:EscapeParams)->Result<DispatchFacts,KernelError>` packs the owner table and encodes one logical level.
 
-`JulibrotKernels::encode_perturbation(&self,executor:&GpuKernelExecutor,encoder:&mut wgpu::CommandEncoder,grid:&mut EscapeGrid,owner_epoch:u64,level:RefinementLevel,plane:&Plane,scale:ScaleSplit,params:EscapeParams,reference:ReferenceOrbitInput)->Result<DispatchFacts,KernelError>` packs mantissa and signed exponent and encodes one scaled logical level.
+`JulibrotKernels::encode_perturbation(&self,executor:&GpuKernelExecutor,encoder:&mut wgpu::CommandEncoder,grid:&mut EscapeGrid,owner_epoch:u64,precision_mode:PrecisionMode,level:RefinementLevel,plane:&Plane,scale:ScaleSplit,params:EscapeParams,reference:ReferenceOrbitInput)->Result<DispatchFacts,KernelError>` packs mantissa and signed exponent and encodes one scaled logical level.
 
 `JulibrotKernels::free_grid(&mut self,executor:&mut GpuKernelExecutor,grid:EscapeGrid)->Result<(),KernelError>` transactionally returns the span after present relinquishes it; the error set is `InvalidExtent`, `ArithmeticOverflow`, `InvalidEscapeParams`, `UnknownLevel`, `MissingReference`, `StaleReference`, `ReferenceLengthMismatch`, `ReferencePrecisionMismatch`, `Heap`, `Register`, `Dispatch`, `OutputTransferUnsupported`, and `DeviceLost`, with generation and span identity rather than epoch equality deciding staleness.
 
@@ -281,10 +281,10 @@ The inherited `DispatchHeader` is 16 bytes `{global_base:u32,valid_length:u32,pa
 
 Every transferred buffer starts with `MessageHeader`, eight little-endian u32 words and exactly 32 bytes: offsets 0 `magic`, 4 `version`, 8 `generation`, 12 `kind`, 16 `length`, 20 `precision_bits`, 24 `compute_us`, and 28 `credit_us`.
 
-`magic=0x314c424a` is byte string `JBL1`, `version=1`, and message kinds and `length` meanings are exactly these worker-owned values.
+`magic=0x314c424a` is byte string `JBL1`, wire and module ABI `version=2`, and message kinds and `length` meanings are exactly these worker-owned values; this version is independent of the loader query version.
 
 |Discriminant|Name|Direction and pool|`length` meaning|
-|---:|---|---|---|
+|-----------:|----|------------------|----------------|
 |1|`OrbitRequest`|main → worker, request|requested `max_iter`|
 |2|`RequestReturn`|worker → main, request|zero|
 |3|`OrbitResponse`|worker → main, orbit|stored orbit-entry count|
@@ -299,15 +299,15 @@ The last 16 bytes are immutable `PoolTrailer {pool:u32,slot:u32,capacity_bytes:u
 
 `ErrorRecord` at byte 32 is `{code:u32,detail:u32,requested_bytes:u32,available_bytes:u32}`; codes are 1 `BadMagic`, 2 `BadVersion`, 3 `BadKind`, 4 `BadLength`, 5 `BadTrailer`, 6 `CentreEncodingWall`, 7 `GenerationExhausted`, 8 `EpochExhausted`, 9 `TimingOverflow`, 10 `BufferStarved`, and 11 `MathFailure`.
 
-`OrbitRequest` is `{ generation:u32,centre:EncodedCentre,depth_digits:u32,precision_bits:u32,max_iter:u32,reason:OrbitReason }`; its body at byte 32 is `{depth_digits:u32,reason_bits:u32,centre_revision:u32,limb_word_count:u32,coordinates:[CoordinateDescriptor;4],limbs:[u32;limb_word_count]}`, with descriptors at bytes 48, 64, 80 and 96 and limbs beginning at 112.
+`OrbitRequest` is `{ generation:u32,centre:EncodedCentre,depth_digits:u32,precision_bits:u32,max_iter:u32,precision_mode:PrecisionMode,reason:OrbitReason }`; its body at byte 32 is `{depth_digits:u32,reason_bits:u32,centre_revision:u32,limb_word_count:u32,coordinates:[CoordinateDescriptor;4],precision_mode:u32,limbs:[u32;limb_word_count]}`, with descriptors at bytes 48, 64, 80 and 96, precision mode at byte 112, and limbs beginning at 116.
 
-`reason_bits` assigns bit 0 initial reference, bit 1 centre threshold, bit 2 zoom threshold, and bit 3 max-iteration change; unknown bits are `BadLength` in version one.
+`reason_bits` assigns bit 0 initial reference, bit 1 centre threshold, bit 2 zoom threshold, bit 3 max-iteration change, and bit 4 precision-mode change; unknown bits are `BadLength` in version two.
 
 Each 16-byte `CoordinateDescriptor` is `{sign:u32,exponent_twos_complement:u32,limb_start:u32,limb_count:u32}`; for nonzero coordinates, value is `(−1)^sign·Σ(limb[k]·2^(32k))·2^exponent`, `sign∈{0,1}`, limbs are least-significant first, the top limb is nonzero, and descriptor ranges are ordered, contiguous, non-overlapping, and exhaustive.
 
 Canonical zero has sign zero, exponent zero, `limb_count=0`, and `limb_start=previous_end`; negative zero, leading zero limbs, unused limbs, range overlap, and out-of-range descriptors are typed refusals.
 
-For current `max_iter=M`, two request-pool and two orbit-pool buffers each have capacity `48+16M`; request fit is `112+4·limb_word_count≤32+16M`, resize occurs only when M changes after all four buffers return, and each replacement increments `allocation_events`.
+For current `max_iter=M`, two request-pool and two orbit-pool buffers each have capacity `48+16M`; request fit is `116+4·limb_word_count≤32+16M`, resize occurs only when M changes after all four buffers return, and each replacement increments `allocation_events`.
 
 App pins minimum requestable `max_iter=64`, which admits the 300-digit centre under that request-pool inequality; exceeding capacity remains honest `CentreEncodingWall` rather than a precision-driven resize.
 
@@ -319,10 +319,10 @@ Worker credit is the displayed POLICY `budget_us_per_second=250_000`; admission,
 
 `HotState` is `repr(C)`, 40 bytes and alignment 8: byte 0 `zoom_log2:f64`, 8 `plane_theta_1:f64`, 16 `plane_theta_2:f64`, and 24 `centre_from_reference_px:[f64;2]` in current-zoom pixels along `(u,v)`.
 
-`MainState` is `repr(C)`, 120 bytes and alignment 8, with this exact reconciled layout.
+`MainState` is `repr(C)`, 128 bytes and alignment 8, with this exact reconciled layout.
 
 |Byte|Field|Type|Meaning|
-|---:|---|---|---|
+|---:|-----|----|-------|
 |0|`generation_applied`|`u32`|Latest installed orbit; zero means none|
 |4|`centre_revision`|`u32`|Authoritative encoded-centre revision|
 |8|`requested_iter_cap`|`u32`|Application request|
@@ -336,10 +336,11 @@ Worker credit is the displayed POLICY `budget_us_per_second=250_000`; admission,
 |68|`plane_axis_b`|`u32`|Zero-based seed axis in e₁ through e₄|
 |72|`plane_origin_f64`|`[f64;4]`|Defining origin including Julia `c₀`|
 |104|`reference_shift_px`|`[f64;2]`|New minus old reference centre in current pixels|
+|120|`precision_mode`|`u32`|`PrecisionMode` discriminant; bytes 124–127 are tail padding|
 
 `OrbitHandle` is `{id:u32,generation:u32}`; MAIN stores its two words separately, app’s registry validates both, and handle zero is invalid.
 
-`ViewerState` is `repr(C)`, 168 bytes and alignment 8: byte 0 `epoch:u64`, byte 8 `hot:HotState`, and byte 48 `main:MainState`; `HotDrain` and `MainDrain` each return the entire record.
+`ViewerState` is `repr(C)`, 176 bytes and alignment 8: byte 0 `epoch:u64`, byte 8 `hot:HotState`, and byte 48 `main:MainState`; `HotDrain` and `MainDrain` each return the entire record.
 
 `ViewerOwner::new(initial:ViewerState)->ViewerOwner`, `stage_hot(hot:HotState)`, and `stage_main(main:MainState)` allocate nothing; `accept_orbit(response:&OrbitResponseView,handle:OrbitHandle,reference_shift_px:[f64;2])->OrbitDisposition` returns `Applied` only for matching latest generation and otherwise `Stale`, with both outcomes infallible.
 
@@ -377,23 +378,23 @@ The ring has three slots, `hot_stride=align_up(128,min_uniform_buffer_offset_ali
 
 `SceneUniform` is exactly 80 bytes: byte 0 `grid:[u32;4]=[width,height,level,max_iter]`, 16 `span:[u32;4]=[directory_index,logical_len,0,0]`, 32 `palette_map:[f32;4]`, 48 `interior_rgba:[f32;4]`, and 64 `clear_rgba:[f32;4]`.
 
-`SceneFrame` is `{scene_id:u64,pose:Pose,palette:PaletteId,iteration_cap:u32,level:RefinementLevel,extent:[u32;2],texture_index:u32,measurement:SubmissionMeasurement}`; `SubmissionMeasurement` is `{kind:SubmissionKind,id:u64,source_scene_id:Option<u64>,warm_up:bool,wall_ms:f64,fence_wait_ms:f64,polls:u32}`, with kind `Scene` or `Warp`.
+`SceneFrame` is `{scene_id:u64,pose:Pose,palette:PaletteId,iteration_cap:u32,level:RefinementLevel,extent:[u32;2],texture_index:u32,precision_mode:&'static str,measurement:SubmissionMeasurement}`; `SubmissionMeasurement` is `{kind:SubmissionKind,id:u64,source_scene_id:Option<u64>,sample_class:SampleClass,precision_mode:&'static str,wall_ms:f64,fence_wait_ms:f64,polls:u32}`, with kind `Scene` or `Warp`.
 
 `WarpPlan` is `{rows:[[f32;4];3],source_valid:bool,kind:WarpKind,chart_residual:f64,approx_max_error_px:Option<f64>,approx_p95_error_px:Option<f64>}`; `WarpKind` is `AnchorHomography` or `ClearOnly`.
 
-`PresentEvent` is `SceneCompleted {frame:SceneFrame}`, `SceneDropped {scene_id:u64,orbit_generation:u32,reason:DropReason,measurement:SubmissionMeasurement}`, `WarpCompleted {measurement:SubmissionMeasurement}`, or `FenceRefused {kind:SubmissionKind,id:u64,reason:FenceRefusal,polls:u32,wall_ms:f64}`.
+`PresentEvent` is `SceneCompleted {frame:SceneFrame}`, `SceneDropped {scene_id:u64,orbit_generation:u32,reason:DropReason,measurement:SubmissionMeasurement}`, `WarpCompleted {measurement:SubmissionMeasurement}`, or `FenceRefused {kind:SubmissionKind,id:u64,reason:FenceRefusal,polls:u32,wall_ms:f64,precision_mode:&'static str}`.
 
 `DropReason` is `StaleGeneration`, `ReplacedMain`, or `InvalidExtent`; `FenceRefusal` is `PollLimit`, `Deadline`, `Device`, or `Cancelled`; `PresentStatus` is `WaitingForFirstScene`, `ShowingCompletedScene`, `ShowingStaleApproximation`, `ClearForIncompatibleGeneration`, or `Refused(PresentError)`.
 
-`PresentFacts` is `{completed_scene_id:Option<u64>,in_flight_scene_id:Option<u64>,source_generation:Option<u32>,delivered_width:u32,delivered_height:u32,delivered_level:Option<RefinementLevel>,iteration_cap:Option<u32>,palette:PaletteId,view:ViewControls,last_scene:Option<SubmissionMeasurement>,last_warp:Option<SubmissionMeasurement>,reprojected_per_scene:Option<u32>,refreshes_without_scene:u64,texture_reallocations:u32,chart_residual:Option<f64>,warp_max_error_px:Option<f64>,warp_p95_error_px:Option<f64>,status:PresentStatus}`.
+`PresentFacts` is `{completed_scene_id:Option<u64>,in_flight_scene_id:Option<u64>,source_generation:Option<u32>,precision_mode:&'static str,delivered_width:u32,delivered_height:u32,delivered_level:Option<RefinementLevel>,iteration_cap:Option<u32>,palette:PaletteId,view:ViewControls,last_scene:Option<SubmissionMeasurement>,last_warp:Option<SubmissionMeasurement>,reprojected_per_scene:Option<u32>,refreshes_without_scene:u64,texture_reallocations:u32,chart_residual:Option<f64>,warp_max_error_px:Option<f64>,warp_p95_error_px:Option<f64>,status:PresentStatus}`.
 
 `PresentConfig` is `{surface_format:wgpu::TextureFormat,min_uniform_buffer_offset_alignment:u32,fence_deadline_ms:f64,max_fence_polls:u32}`; `Presenter::new(device:Arc<wgpu::Device>,queue:Arc<wgpu::Queue>,heap:HeapPresentResources,config:PresentConfig)->Result<Presenter,PresentError>` receives deadline 30,000 ms and poll limit 4,096 after app installs error handlers.
 
-`Presenter::set_main(&mut self,main:PresentMain)` and `Presenter::write_hot(&mut self,slot:HotSlot,hot:PresentHot)` are infallible; `submit_scene(&mut self,hot_slot:HotSlot,now_ms:f64)->Result<u64,PresentError>`, `frame(&mut self,state:FrameState,hot_slot:HotSlot)->Result<FrameReceipt,PresentError>`, `poll(&mut self,now_ms:f64)->Vec<PresentEvent>`, and `facts(&self)->PresentFacts` preserve present §3.7 semantics.
+`Presenter::set_main(&mut self,main:PresentMain)` and `Presenter::write_hot(&mut self,slot:HotSlot,hot:PresentHot,validation:WarpValidation)` are infallible; `submit_scene(&mut self,hot_slot:HotSlot,now_ms:f64)->Result<u64,PresentError>`, `frame(&mut self,state:FrameState,hot_slot:HotSlot)->Result<FrameReceipt,PresentError>`, `poll(&mut self,now_ms:f64)->Vec<PresentEvent>`, and `facts(&self)->PresentFacts` preserve present §3.7 semantics.
 
-`FrameReceipt` is `{refresh_id:u64,warp_id:u64,source_scene_id:Option<u64>,status:PresentStatus}` and carries submission identity but no timing before the fence-completion event.
+`FrameReceipt` is `{refresh_id:u64,warp_id:u64,source_scene_id:Option<u64>,precision_mode:&'static str,status:PresentStatus}` and carries submission identity and mode provenance but no timing before the fence-completion event.
 
-`Warp::reproject(last_frame:&SceneFrame,from_pose:&Pose,to_pose:&Pose)->WarpPlan` is a pure CPU f64 planner; it rebases a retained pose with `reference_shift_px`, includes centre-displacement translation, clears only for absent source, invalid arithmetic, changed `max_iter`, or changed plane origin, and never submits or presents.
+`Warp::reproject(last_frame:&SceneFrame,from_pose:&Pose,to_pose:&Pose,precision_mode:PrecisionMode,validation:WarpValidation)->WarpPlan` is a pure CPU f64 planner; it rebases a retained pose with `reference_shift_px`, includes centre-displacement translation, clears only for absent source, invalid arithmetic, changed `max_iter`, changed plane origin, or changed precision mode, and never submits or presents. The four-anchor solve and unconditional uploaded-row quarter-pixel oracle are unchanged; the 9-by-9-by-five sampled corpus runs for every Deterministic plan and only for explicit Measure or newly prepared Final validation in PictureFast, so skipped ordinary refreshes publish both error facts as unavailable.
 
 ### 3.7 App-owned runtime, surface, and facts
 
@@ -407,7 +408,7 @@ The ring has three slots, `hot_stride=align_up(128,min_uniform_buffer_offset_ali
 
 `SavedView` is the app-owned CPU record `{ plane_angles:[f64;2], plane_origin:[f64;4], view:ViewControls, zoom_log2:f64, centre:[EncodedBigScalar;4], centre_precision_bits:u32 }`; it is the whole row that determines the picture except cap and palette, it round-trips through its encoded centre exactly, and `SavedView::lerp(a,b,t)` composes math's interpolators without performing arithmetic of its own.
 
-`PageFacts` contains exactly `{ abi_version, adapter_name, backend, rgba32f_renderable, requested_width, requested_height, delivered_width, delivered_height, requested_iteration_cap, delivered_iteration_cap, requested_zoom_log2, presented_zoom_log2, reference_zoom_log2, zoom_digits_f64, depth_digits, precision_floor_digits, precision_working_digits, requested_precision_bits, delivered_precision_bits, orbit_length, orbit_generation, owner_epoch, centre_revision, centre_from_reference_px, reference_shift_px, scale_mantissa, scale_exponent, kernel_mode, refinement_level, refinement_pending, extent_divisor, active_pixels, worst_case_pixel_iterations, kernel_page_passes, scratch_copy_commands, scratch_copy_bytes, logical_heap_bytes, reserved_heap_bytes, scratch_bytes, hot_write_bytes, scene_uniform_write_bytes, texture_reallocations, rebase_count_sum, rebase_count_max, glitch_pixel_count, worker_facts, worker_compute_us, worker_credit_us, worker_overfeed_us, worker_allocation_events, request_buffers_owned_main, orbit_buffers_owned_main, palette_id, plane_theta_1, plane_theta_2, plane_origin, view_theta_1, view_theta_2, camera_yaw, camera_pitch, height_scale, distance_five, distance_four, completed_scene_id, in_flight_scene_id, warp_source_scene_id, reprojected_per_scene, refreshes_without_scene, chart_residual, warp_max_error_px, warp_p95_error_px, scene_wall_ms, scene_fence_wait_ms, scene_polls, warp_wall_ms, warp_fence_wait_ms, warp_polls, warmup_label, second_frame_policy, timer_quantum_ms, device_walls, app_policies, limiting_term, wasm_bundle_bytes, javascript_bundle_bytes, wasm_instance_count, timing_status, target_plane }`, where `target_plane` is the finite mirror of the desired centre, which is where the target is.
+`PageFacts` contains exactly `{ abi_version, adapter_name, backend, rgba32f_renderable, requested_width, requested_height, delivered_width, delivered_height, requested_iteration_cap, delivered_iteration_cap, requested_zoom_log2, presented_zoom_log2, reference_zoom_log2, zoom_digits_f64, depth_digits, precision_floor_digits, precision_working_digits, requested_precision_bits, delivered_precision_bits, orbit_length, orbit_generation, owner_epoch, centre_revision, centre_from_reference_px, reference_shift_px, scale_mantissa, scale_exponent, kernel_mode, refinement_level, refinement_pending, extent_divisor, active_pixels, worst_case_pixel_iterations, kernel_page_passes, scratch_copy_commands, scratch_copy_bytes, logical_heap_bytes, reserved_heap_bytes, scratch_bytes, hot_write_bytes, scene_uniform_write_bytes, texture_reallocations, rebase_count_sum, rebase_count_max, glitch_pixel_count, worker_facts, worker_compute_us, worker_credit_us, worker_overfeed_us, worker_allocation_events, request_buffers_owned_main, orbit_buffers_owned_main, worker_request_depth, outstanding_reference_count, outstanding_reference_generation, navigation_pending_depth, refresh_status, transient_fence_refusals, last_transient_refusal, presented_view_stale, loop_stopped_reason, palette_id, plane_theta_1, plane_theta_2, plane_origin, target_plane, view_theta_1, view_theta_2, camera_yaw, camera_pitch, height_scale, distance_five, distance_four, completed_scene_id, in_flight_scene_id, warp_source_scene_id, reprojected_per_scene, refreshes_without_scene, chart_residual, warp_max_error_px, warp_p95_error_px, scene_wall_ms, scene_fence_wait_ms, scene_polls, warp_wall_ms, warp_fence_wait_ms, warp_polls, warmup_label, second_frame_policy, timer_quantum_ms, device_walls, app_policies, limiting_term, wasm_bundle_bytes, javascript_bundle_bytes, wasm_instance_count, timing_status, precision_mode, scene_precision_mode, warp_precision_mode }`, where `target_plane` is the finite mirror of the desired centre, which is where the target is; the appended precision fields name requested, last-scene, and last-warp provenance so no old timing can inherit a new mode label.
 
 The page contributes four more facts of its own to the same overlay: `view_box_a_held` and `view_box_b_held`, `morph_t`, and `view_box_storage`. They are not `PageFacts` fields because none of them is app state — two boxes and a slider live in the document and in per-viewer storage, and pushing them into the app would invent a second owner for them. `morph_t` is `null` while the slider is disabled, and `view_box_storage` names the refusal when the storage accessor threw, so a page with no memory says so rather than silently holding nothing.
 
@@ -432,7 +433,7 @@ The executor is extraction, not a fork or new backend abstraction; if implementa
 ## 4. Inherited laws and satisfaction
 
 |Law|App-side satisfaction|
-|---|---|
+|---|---------------------|
 |WebGL2 only|Requests only `Backends::GL`, verifies backend Gl and the minimum floor, and has no WebGPU fallback or promise.|
 |Uniform and regional traffic|Each surface frame writes one 128-byte HOT slot; a scene writes only its 96- or 64-byte kernel uniform and changed 80-byte scene uniform, while orbit, metadata and textures update regionally on named events.|
 |GPU-resident data|Kernels land through paid SCRATCH-to-DATA copy and present samples the typed span; normal rendering reads no grid back.|
@@ -454,7 +455,7 @@ Native math integration tests pin R₁₃/R₂₄ order and signs, presets, the 
 
 Native precision tests pin `depth_digits`, `D_floor`, `D_work`, bit conversion, Astro-float word rounding, the 300-digit policy, D-versus-D+16 convergence, the deep classification corpus, and minimum request cap 64 fitting the centre payload.
 
-Native layout tests assert `Plane=32`, `CentreSplit=32`, `EscapeParams=8`, shallow uniform 96, perturbation uniform 64 with signed exponent at byte 60, both RGBA records 16, HOT 128, scene 80, palette 48, HOT state 40, MAIN 120, ViewerState 168, header 32, trailer 16, all offsets, enum discriminants, little-endian round trips, and zero reserved words.
+Native layout tests assert `Plane=32`, `CentreSplit=32`, `EscapeParams=8`, shallow uniform 96, perturbation uniform 64 with signed exponent at byte 60, both RGBA records 16, HOT 128, scene 80, palette 48, HOT state 40, MAIN 128, ViewerState 176, header 32, trailer 16, all offsets, enum discriminants, little-endian round trips including precision mode, and zero reserved words.
 
 Native wire tests construct all nine message kinds, trailers and `ErrorRecord` values, validate canonical coordinate descriptors, capacity `48+16M`, request inequality, exact lease disposition, four-buffer ownership, resize-only-on-cap change, credit 250,000, cancellation charge, same-thread trace equality, and shutdown bounds.
 
@@ -474,7 +475,7 @@ Native measurement tests pin separate present-owned scene and warp fences, poll-
 
 `requires visible replay`: GL identity, RGBA32F usages, scratch-copy visibility, height-zero and relief orientation, the continuity of the morph as each control moves, corrected hybrid planes, scaled deep zoom beyond the former f32-underflow boundary, debug glitch tint, clear disocclusion, and a clean console.
 
-`requires visible replay`: rapid pan, zoom, angle, preset, cap and palette changes while worker, scene and warp work overlap must end at the newest controls, translate smoothly at depth, rebase retained frames across accepted references, and clear only on cap or plane-origin changes.
+`requires visible replay`: rapid pan, zoom, angle, preset, cap, precision-mode, and palette changes while worker, scene and warp work overlap must end at the newest controls, translate smoothly at depth, rebase retained frames across accepted references, and clear only on cap, plane-origin, or precision-mode changes.
 
 `requires visible replay`: worker transfer must detach senders, preserve all four trailers, report one explicit wasm copy, charge credit and cancelled work, allocate only on cap change, and return every buffer within the bounded shutdown window.
 
@@ -485,7 +486,7 @@ Native measurement tests pin separate present-owned scene and warp fences, poll-
 ## 6. Risks and retirement oracles
 
 |Risk|Oracle that retires it|
-|---|---|
+|----|----------------------|
 |Plane rotation still fails to make hybrids|π/2 endpoint and intermediate nonzero-both-subspaces math fixtures.|
 |Scaled recurrence loses exponent state|f64 scaled mirror over renormalization, rebase, deep corpus and exact outside-envelope classification.|
 |Nonzero-Z₀ rebase shifts the reconstructed pixel|Fixture checks invariant before rebase, after assignment and after the mandatory ordinary advance.|
@@ -534,7 +535,7 @@ The refined app estimate is approximately 2,710 net new lines including the Phas
 ## 9. Joint-review ACCEPTED/ARGUED ledger
 
 |Item|Disposition|App-slice action|
-|---|---|---|
+|----|-----------|----------------|
 |J1|ACCEPTED|Uses ℝ⁴ `R₁₃·R₂₄`, removes projection/Gram–Schmidt/degenerate stages, pins one f32 rounding, hybrid oracle and unchanged presets.|
 |J2|ACCEPTED|Uses `δ←zₙ−Z₀`, reset, count and exactly one advance; nonzero-Z₀ is a pass fixture.|
 |J3|ACCEPTED|Adopts scaled perturbation, mantissa/exponent upload, renormalization, f64 mirror and double-single sufficiency oracle.|

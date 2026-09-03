@@ -9,8 +9,8 @@ use crate::state::{SceneCompletion, SceneLedger};
 use crate::{
     FrameReceipt, FrameState, HotSlot, HotUniform, PaletteId, Pose, PresentConfig, PresentError,
     PresentEvent, PresentFacts, PresentHot, PresentMain, PresentStatus, SampleClass, SceneUniform,
-    SubmissionKind, Warp, WarpKind, camera_rotation, hot_ring_bytes, palette, scene_indices,
-    scene_shader, view_rotation, view_scale, warp_shader,
+    SubmissionKind, Warp, WarpKind, WarpValidation, camera_rotation, hot_ring_bytes, palette,
+    scene_indices, scene_shader, view_rotation, view_scale, warp_shader,
 };
 
 const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -146,9 +146,12 @@ impl Presenter {
     /// Applies latest-wins MAIN state, exactly-once reference rebasing, and incompatibility clear.
     #[allow(clippy::float_cmp)]
     pub fn set_main(&mut self, main: PresentMain) {
+        let precision_mode = main.precision_mode();
+        let precision_mode_name = precision_mode.map_or("unavailable", |mode| mode.as_str());
         let incompatible = self.main.as_ref().is_some_and(|previous| {
             previous.state.delivered_iter_cap != main.state.delivered_iter_cap
                 || previous.state.plane_origin_f64 != main.state.plane_origin_f64
+                || previous.state.precision_mode != main.state.precision_mode
         });
         let revision_advanced = self
             .main
@@ -180,15 +183,18 @@ impl Presenter {
         if selection_replaced {
             self.ledger.mark_replaced();
         }
-        if self
-            .ledger
-            .invalidate_incompatible(main.state.delivered_iter_cap, main.state.plane_origin_f64)
-            || incompatible
+        if self.ledger.invalidate_incompatible(
+            main.state.delivered_iter_cap,
+            main.state.plane_origin_f64,
+            precision_mode_name,
+        ) || incompatible
+            || precision_mode.is_none()
         {
             self.facts.status = PresentStatus::ClearForIncompatibleMain;
             self.clear_retained_facts();
         }
         self.facts.reference_shift_px = main.state.reference_shift_px;
+        self.facts.precision_mode = precision_mode_name;
         if let Some((palette_id, _)) = main.selected_palette() {
             self.facts.palette = palette_id;
         }
@@ -196,7 +202,7 @@ impl Presenter {
     }
 
     /// Writes exactly one 128-byte HOT payload into the checked three-slot ring.
-    pub fn write_hot(&mut self, slot: HotSlot, hot: PresentHot) {
+    pub fn write_hot(&mut self, slot: HotSlot, hot: PresentHot, validation: WarpValidation) {
         let mut plan = None;
         let pose = self.main.as_ref().and_then(|main| {
             let pose = Pose {
@@ -213,8 +219,18 @@ impl Presenter {
             };
             pose_is_finite(&pose).then_some(pose)
         });
-        if let (Some(frame), Some(to_pose)) = (self.ledger.retained(), pose.as_ref()) {
-            plan = Some(Warp::reproject(frame, &frame.pose, to_pose));
+        if let (Some(frame), Some(to_pose), Some(precision_mode)) = (
+            self.ledger.retained(),
+            pose.as_ref(),
+            self.main.as_ref().and_then(PresentMain::precision_mode),
+        ) {
+            plan = Some(Warp::reproject(
+                frame,
+                &frame.pose,
+                to_pose,
+                precision_mode,
+                validation,
+            ));
         }
         let selected = self
             .main
@@ -295,6 +311,9 @@ impl Presenter {
         let (palette_id, palette_record) = main.selected_palette().ok_or(PresentError::Device {
             operation: "decode palette identifier",
         })?;
+        let precision_mode = main.precision_mode().ok_or(PresentError::Device {
+            operation: "decode precision policy",
+        })?;
         let extent = [main.grid.width, main.grid.height];
         validate_extent(&self.device, extent)?;
         let uniform = SceneUniform::new(
@@ -338,6 +357,7 @@ impl Presenter {
                 texture_index,
                 centre_revision: main.state.centre_revision,
                 plane_origin_f64: main.state.plane_origin_f64,
+                precision_mode: precision_mode.as_str(),
                 drop_reason: None,
             })
         })?;
@@ -364,6 +384,7 @@ impl Presenter {
                 SubmissionKind::Scene,
                 scene_id,
                 None,
+                precision_mode.as_str(),
                 self.scene_samples.next(),
                 now_ms,
                 self.config.fence_deadline_ms,
@@ -409,6 +430,13 @@ impl Presenter {
                 operation: "select unwritten HOT slot",
             });
         }
+        let precision_mode = self
+            .main
+            .as_ref()
+            .and_then(PresentMain::precision_mode)
+            .ok_or(PresentError::Device {
+                operation: "decode precision policy",
+            })?;
         let warp_id = self.next_warp_id;
         self.next_warp_id = warp_id.checked_add(1).ok_or(PresentError::Device {
             operation: "advance warp identity",
@@ -459,6 +487,7 @@ impl Presenter {
                 SubmissionKind::Warp,
                 warp_id,
                 source_scene_id,
+                precision_mode.as_str(),
                 self.warp_samples.next(),
                 state.now_ms,
                 self.config.fence_deadline_ms,
@@ -473,6 +502,7 @@ impl Presenter {
             refresh_id: state.refresh_id,
             warp_id,
             source_scene_id,
+            precision_mode: precision_mode.as_str(),
             status: self.facts.status.clone(),
         })
     }
@@ -531,6 +561,7 @@ impl Presenter {
                 reason,
                 polls,
                 wall_ms,
+                precision_mode,
             } => {
                 let id = pending.ledger.id();
                 self.gpu.scene_fence.unmap();
@@ -543,6 +574,7 @@ impl Presenter {
                     reason,
                     polls,
                     wall_ms,
+                    precision_mode,
                 })
             }
         }
@@ -576,6 +608,7 @@ impl Presenter {
                 reason,
                 polls,
                 wall_ms,
+                precision_mode,
             } => {
                 let id = pending.ledger.id();
                 self.gpu.warp_fence.unmap();
@@ -586,6 +619,7 @@ impl Presenter {
                     reason,
                     polls,
                     wall_ms,
+                    precision_mode,
                 })
             }
         }
@@ -598,6 +632,7 @@ impl Presenter {
         self.active_warp_count = 0;
         self.facts.completed_scene_id = Some(frame.scene_id);
         self.facts.source_generation = Some(frame.pose.orbit_generation);
+        self.facts.precision_mode = frame.precision_mode;
         self.facts.delivered_width = frame.extent[0];
         self.facts.delivered_height = frame.extent[1];
         self.facts.delivered_level = Some(frame.level);
