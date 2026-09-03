@@ -144,7 +144,6 @@ impl SceneLedger {
 
     pub fn apply_reference_shift(
         &mut self,
-        accepted_pose: &Pose,
         new_generation: u32,
         new_revision: u32,
         shift_px: [f64; 2],
@@ -152,14 +151,16 @@ impl SceneLedger {
         if let Some(frame) = &mut self.retained
             && frame.centre_revision != new_revision
         {
-            rebase_pose(&mut frame.pose, accepted_pose, shift_px);
+            let sampled_pose = frame.pose;
+            rebase_pose(&mut frame.pose, &sampled_pose, shift_px);
             frame.pose.orbit_generation = new_generation;
             frame.centre_revision = new_revision;
         }
         if let Some(pending) = &mut self.pending
             && pending.centre_revision != new_revision
         {
-            rebase_pose(&mut pending.pose, accepted_pose, shift_px);
+            let sampled_pose = pending.pose;
+            rebase_pose(&mut pending.pose, &sampled_pose, shift_px);
             pending.pose.orbit_generation = new_generation;
             pending.centre_revision = new_revision;
         }
@@ -355,8 +356,7 @@ mod tests {
         begin(&mut ledger, 1, 1);
         ledger.complete(measurement(1));
         begin(&mut ledger, 2, 1);
-        let accepted = pose(2);
-        ledger.apply_reference_shift(&accepted, 2, 2, [4.0, -8.0]);
+        ledger.apply_reference_shift(2, 2, [4.0, -8.0]);
         assert_eq!(
             ledger
                 .retained()
@@ -369,7 +369,7 @@ mod tests {
                 .map(|pending| pending.pose.centre_from_reference_px),
             Some([7.0, 5.0])
         );
-        ledger.apply_reference_shift(&accepted, 2, 2, [4.0, -8.0]);
+        ledger.apply_reference_shift(2, 2, [4.0, -8.0]);
         assert_eq!(
             ledger
                 .retained()
@@ -379,10 +379,36 @@ mod tests {
     }
 
     #[test]
+    fn reference_shift_uses_the_retained_sample_pose_not_a_newer_hot_pose() {
+        let mut ledger = SceneLedger::default();
+        begin(&mut ledger, 1, 1);
+        ledger.complete(measurement(1));
+        let sampled = ledger.retained().expect("fixture retains a scene").pose;
+        let mut newer_hot = sampled;
+        newer_hot.epoch += 1;
+        newer_hot.zoom_log2 += 2.0;
+        newer_hot.grid_width *= 2;
+
+        let mut expected = sampled;
+        rebase_pose(&mut expected, &sampled, [4.0, -8.0]);
+        let mut wrong = sampled;
+        rebase_pose(&mut wrong, &newer_hot, [4.0, -8.0]);
+        assert_ne!(expected.centre_from_reference_px, wrong.centre_from_reference_px);
+
+        ledger.apply_reference_shift(2, 2, [4.0, -8.0]);
+        assert_eq!(
+            ledger
+                .retained()
+                .map(|frame| frame.pose.centre_from_reference_px),
+            Some(expected.centre_from_reference_px)
+        );
+    }
+
+    #[test]
     fn generation_alone_survives_but_cap_origin_or_mode_drops() {
         let mut ledger = SceneLedger::default();
         begin(&mut ledger, 1, 1);
-        ledger.apply_reference_shift(&pose(2), 2, 2, [0.0; 2]);
+        ledger.apply_reference_shift(2, 2, [0.0; 2]);
         assert!(matches!(
             ledger.complete(measurement(1)),
             Some(SceneCompletion::Promoted(_))

@@ -167,21 +167,8 @@ impl Presenter {
         let selection_replaced = self.main.as_ref().is_some_and(|previous| {
             previous.state.palette_id != main.state.palette_id || previous.grid != main.grid
         });
-        let latest_pose = self
-            .hot
-            .iter()
-            .flatten()
-            .max_by_key(|pose| pose.epoch)
-            .copied();
-        if revision_advanced && let Some(mut accepted_pose) = latest_pose {
-            accepted_pose.orbit_generation = main.state.generation_applied;
-            accepted_pose.grid_width = main.grid.width;
-            accepted_pose.grid_height = main.grid.height;
-            accepted_pose.object = main.object;
-            accepted_pose.plane = main.plane;
-            accepted_pose.map = main.map;
+        if revision_advanced {
             self.ledger.apply_reference_shift(
-                &accepted_pose,
                 main.state.generation_applied,
                 main.state.centre_revision,
                 main.state.reference_shift_px,
