@@ -230,7 +230,7 @@ pub enum FenceRefusal {
 
 /// App-visible asynchronous completion event.
 ///
-/// `SceneCompleted` carries the whole promoted frame, which is larger than the other variants
+/// `SceneCompleted` carries the whole completed frame, which is larger than the other variants
 /// because a `Pose` now carries every VIEW control. Boxing it would trade one fixed move for a
 /// heap allocation on every completed scene, and a completed scene is a fenced GPU submission
 /// costing milliseconds; the move is not the cost worth optimizing, and the pinned interface says
@@ -238,9 +238,9 @@ pub enum FenceRefusal {
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum PresentEvent {
-    /// A compatible scene became the retained warp source.
+    /// A compatible scene completed; the ledger may retain a better accepted source instead.
     SceneCompleted {
-        /// Newly promoted frame.
+        /// Newly completed frame.
         frame: SceneFrame,
     },
     /// A scene completed and was measured but was not compatible.

@@ -9,10 +9,10 @@ use crate::state::{ExposureLatch, SceneCompletion, SceneLedger};
 use crate::{
     FrameReceipt, FrameState, HOT_PAYLOAD_BYTES, HotSlot, HotUniform, PaletteId, PaletteRecord,
     Pose, PoseMap, PresentConfig, PresentDataError, PresentError, PresentEvent, PresentFacts,
-    PresentHot, PresentMain, PresentStatus, SCENE_PAYLOAD_BYTES, SampleClass, SceneUniform,
-    SubmissionKind, Warp, WarpKind, WarpValidation, camera_rotation, camera_rotation_pairs,
-    camera_translation, exterior_zero, hot_ring_bytes, pack_homography_rows, palette,
-    scene_indices, scene_shader, view_scale, warp_shader,
+    PresentHot, PresentMain, PresentStatus, RefinementLevel, SCENE_PAYLOAD_BYTES, SampleClass,
+    SceneUniform, SubmissionKind, Warp, WarpKind, WarpValidation, camera_rotation,
+    camera_rotation_pairs, camera_translation, exterior_zero, hot_ring_bytes,
+    pack_homography_rows, palette, scene_indices, scene_shader, view_scale, warp_shader,
 };
 
 const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -66,6 +66,18 @@ impl WarpSourceSlot {
 
     fn frame<'a>(&self, retained: Option<&'a crate::SceneFrame>) -> Option<&'a crate::SceneFrame> {
         select_warp_source(self.planned, retained)
+    }
+
+    fn covering_frame<'a>(
+        &self,
+        exposed: bool,
+        retained: Option<&'a crate::SceneFrame>,
+    ) -> Option<&'a crate::SceneFrame> {
+        if exposed {
+            None
+        } else {
+            self.frame(retained)
+        }
     }
 }
 
@@ -326,6 +338,17 @@ impl Presenter {
         } else if plan.source_valid {
             self.facts.status = PresentStatus::ShowingStaleApproximation;
         }
+    }
+
+    /// Returns the level of the accepted retained warp that covers the whole destination.
+    #[must_use]
+    pub fn covering_warp_source_level(&self, slot: HotSlot) -> Option<RefinementLevel> {
+        self.hot_warp_source[slot.index() as usize]
+            .covering_frame(
+                self.hot_exposed[slot.index() as usize],
+                self.ledger.retained(),
+            )
+            .map(|frame| frame.level)
     }
 
     /// Submits the one scene pass plus its four-byte completion fence.
@@ -599,9 +622,28 @@ impl Presenter {
                 self.scene_samples.completed();
                 self.facts.in_flight_scene_id = None;
                 self.facts.last_scene = Some(measurement);
-                match self.ledger.complete(measurement)? {
+                let preserve_accepted_best = self
+                    .hot
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, pose)| pose.map(|pose| (index, pose.epoch)))
+                    .max_by_key(|(_, epoch)| *epoch)
+                    .and_then(|(index, _)| {
+                        self.hot_warp_source[index].covering_frame(
+                            self.hot_exposed[index],
+                            self.ledger.retained(),
+                        )
+                    })
+                    .is_some();
+                match self
+                    .ledger
+                    .complete_preserving_accepted_best(measurement, preserve_accepted_best)?
+                {
                     SceneCompletion::Promoted(frame) => {
                         self.publish_promoted(&frame);
+                        Some(PresentEvent::SceneCompleted { frame })
+                    }
+                    SceneCompletion::KeptBest(frame) => {
                         Some(PresentEvent::SceneCompleted { frame })
                     }
                     SceneCompletion::Dropped {
