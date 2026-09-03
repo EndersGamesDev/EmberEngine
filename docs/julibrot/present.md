@@ -142,7 +142,7 @@ The planner and scene shader use the identical ambient construction. At neutral 
 
 The implementation solves the eight projective coefficients of the current-NDC-to-source-NDC homography with f64 Gaussian elimination and partial pivoting, fixes `h₂₂=1`, refuses a pivot below `1e−12`, and rounds the valid result to the same three-row HOT layout used by flat warp.
 
-Every plan, including ordinary PictureFast, carries a measured maximum error and p95. Deterministic and explicit Measure/Final validation sample the full 9-by-9-by-5 corpus; ordinary PictureFast samples the mandatory reduced corpus, so no plan can bypass the enforced ceiling. The uploaded f32 rows retain their separate quarter-source-pixel accuracy oracle.
+Every plan, including ordinary PictureFast, carries a measured maximum error and p95. Deterministic and explicit Measure/Final validation sample the full 9-by-9-by-5 corpus; ordinary PictureFast samples the mandatory 3-by-3-by-5 subset formed by every fourth screen row and column plus all five heights, so no plan can bypass the enforced ceiling. The uploaded f32 rows retain their separate quarter-source-pixel accuracy oracle.
 
 The named acceptance ceiling is `WARP_MAX_ERROR_PX=1.0`: a resolving scene may fill missing detail but no displayed reprojection may move a feature by more than one pixel. A plan above the ceiling is refused and temporarily clear until the due scene completes.
 
