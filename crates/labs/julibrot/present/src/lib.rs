@@ -33,7 +33,9 @@ pub use palette::{
     CLASSIC_PALETTE, DEBUG_TINT, EMBER_PALETTE, ICE_PALETTE, PaletteId, PaletteOutcome,
     PaletteRecord, exterior_zero, palette, shade_escape_record, shade_lit_escape_record,
 };
-pub use planner::{WARP_MAX_ERROR_PX, Warp, project_scene_point, renders_same_picture};
+pub use planner::{
+    WARP_MAX_ERROR_PX, Warp, project_scene_point, project_scene_vertex, renders_same_picture,
+};
 pub use shader::scene_shader;
 pub use uniform::{
     HOT_PAYLOAD_BYTES, HOT_RING_SLOTS, HotSlot, HotUniform, PresentDataError, SCENE_PAYLOAD_BYTES,

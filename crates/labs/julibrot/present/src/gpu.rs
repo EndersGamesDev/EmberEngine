@@ -55,6 +55,7 @@ struct SampleTracker {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct WarpSourceSlot {
     planned: Option<(u64, u32)>,
+    relief_redraw: bool,
 }
 
 impl WarpSourceSlot {
@@ -63,10 +64,22 @@ impl WarpSourceSlot {
             .source_scene_id
             .zip(plan.source_texture_index)
             .filter(|_| plan.source_valid);
+        self.relief_redraw = plan.kind == WarpKind::ReliefRedraw;
     }
 
     fn frame<'a>(&self, retained: Option<&'a crate::SceneFrame>) -> Option<&'a crate::SceneFrame> {
         select_warp_source(self.planned, retained)
+    }
+
+    fn relief_frame<'a>(
+        &self,
+        retained: Option<&'a crate::SceneFrame>,
+    ) -> Option<&'a crate::SceneFrame> {
+        if self.relief_redraw {
+            self.frame(retained)
+        } else {
+            None
+        }
     }
 }
 
@@ -100,6 +113,7 @@ struct GpuState {
     depth: DepthTarget,
     indices: Option<IndexTarget>,
     scene_pipeline: wgpu::RenderPipeline,
+    relief_redraw_pipeline: wgpu::RenderPipeline,
     warp_pipeline: wgpu::RenderPipeline,
     scene_fence: wgpu::Buffer,
     warp_fence: wgpu::Buffer,
@@ -260,11 +274,7 @@ impl Presenter {
                 }
             },
         );
-        let selected = self
-            .main
-            .as_ref()
-            .and_then(PresentMain::selected_palette)
-            .unwrap_or((PaletteId::Classic, palette(PaletteId::Classic)));
+        let selected = selected_or_classic(self.main.as_ref());
         // A refused control falls back to the neutral row rather than to a stale one, so a
         // non-finite value shows the flat chart instead of the last thing that happened to be
         // in the lane.
@@ -351,6 +361,14 @@ impl Presenter {
         self.hot_warp_source[slot.index() as usize]
             .frame(self.ledger.retained())
             .map(|frame| (frame.level, self.hot_exposed[slot.index() as usize]))
+    }
+
+    /// Reports whether this HOT slot selects a retained-record relief redraw.
+    #[must_use]
+    pub fn accepted_relief_redraw(&self, slot: HotSlot) -> bool {
+        self.hot_warp_source[slot.index() as usize]
+            .relief_frame(self.ledger.retained())
+            .is_some()
     }
 
     /// Submits the one scene pass plus its four-byte completion fence.
@@ -520,47 +538,54 @@ impl Presenter {
         self.next_warp_id = warp_id.checked_add(1).ok_or(PresentError::Device {
             operation: "advance warp identity",
         })?;
-        let source = self.hot_warp_source[hot_slot.index() as usize].frame(self.ledger.retained());
-        let source_scene_id = source.map(|frame| frame.scene_id);
-        let texture_index = source.map_or(0, |frame| frame.texture_index as usize);
+        let source_slot = self.hot_warp_source[hot_slot.index() as usize];
+        let source = source_slot.frame(self.ledger.retained()).cloned();
+        let source_scene_id = source.as_ref().map(|frame| frame.scene_id);
+        let texture_index = source
+            .as_ref()
+            .map_or(0, |frame| frame.texture_index as usize);
+        let relief_redraw = source_slot.relief_frame(self.ledger.retained()).is_some();
         if source.is_none() {
-            self.queue.write_buffer(
-                &self.gpu.hot_buffer,
-                u64::from(hot_slot.dynamic_offset()) + HOT_SOURCE_VALID_BYTE_OFFSET,
-                bytemuck::bytes_of(&0_u32),
-            );
+            self.clear_hot_source(hot_slot);
+        }
+        let selected = self
+            .main
+            .as_ref()
+            .and_then(PresentMain::selected_palette)
+            .unwrap_or((PaletteId::Classic, palette(PaletteId::Classic)));
+        if relief_redraw {
+            let source = source.as_ref().ok_or(PresentError::Device {
+                operation: "select relief redraw source",
+            })?;
+            self.prepare_relief_redraw(
+                source,
+                [state.canvas_width, state.canvas_height],
+                selected.1,
+            )?;
         }
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Julibrot warp and fence"),
             });
-        {
-            let clear = self
-                .main
-                .as_ref()
-                .and_then(PresentMain::selected_palette)
-                .map_or(palette(PaletteId::Classic).clear_rgba, |selected| {
-                    selected.1.clear_rgba
-                });
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Julibrot sole warp pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: state.surface_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(color(clear)),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.gpu.warp_pipeline);
-            pass.set_bind_group(0, &self.gpu.scene_textures[texture_index].warp_group, &[]);
-            pass.set_bind_group(1, &self.gpu.warp_hot_group, &[hot_slot.dynamic_offset()]);
-            pass.draw(0..3, 0..1);
+        if relief_redraw {
+            encode_relief_redraw(
+                &mut encoder,
+                &self.gpu,
+                state.surface_view,
+                hot_slot.dynamic_offset(),
+                selected.1,
+            );
+            self.facts.record_relief_redraw();
+        } else {
+            encode_image_warp(
+                &mut encoder,
+                &self.gpu,
+                state.surface_view,
+                texture_index,
+                hot_slot.dynamic_offset(),
+                selected.1,
+            );
         }
         encoder.clear_buffer(&self.gpu.warp_fence, 0, Some(FENCE_BYTES));
         self.queue.submit([encoder.finish()]);
@@ -589,6 +614,34 @@ impl Presenter {
             exposed: self.hot_exposed[hot_slot.index() as usize],
             status: self.facts.status.clone(),
         })
+    }
+
+    fn clear_hot_source(&self, hot_slot: HotSlot) {
+        self.queue.write_buffer(
+            &self.gpu.hot_buffer,
+            u64::from(hot_slot.dynamic_offset()) + HOT_SOURCE_VALID_BYTE_OFFSET,
+            bytemuck::bytes_of(&0_u32),
+        );
+    }
+
+    fn prepare_relief_redraw(
+        &mut self,
+        source: &crate::SceneFrame,
+        surface_extent: [u32; 2],
+        selected: PaletteRecord,
+    ) -> Result<(), PresentError> {
+        let main = self.main.as_ref().ok_or(PresentError::InvalidGrid {
+            width: source.extent[0],
+            height: source.extent[1],
+            logical_len: 0,
+        })?;
+        validate_grid(main, self.gpu.heap_limits)?;
+        let uniform = relief_scene_uniform(main, source, selected)?;
+        ensure_indices(&self.device, &mut self.gpu, source.extent)?;
+        ensure_depth(&self.device, &mut self.gpu, surface_extent)?;
+        self.queue
+            .write_buffer(&self.gpu.scene_buffer, 0, bytemuck::bytes_of(&uniform));
+        Ok(())
     }
 
     /// Observes every pending fence once without waiting and returns terminal events.
@@ -901,6 +954,18 @@ fn create_gpu_state(
         "scene_fragment",
         &heap_layout,
         &scene_layout,
+        SCENE_FORMAT,
+        true,
+    );
+    let relief_redraw_pipeline = create_scene_pipeline(
+        device,
+        "Julibrot relief redraw pipeline",
+        &source,
+        "scene_vertex",
+        "scene_fragment",
+        &heap_layout,
+        &scene_layout,
+        config.surface_format,
         true,
     );
     let warp_pipeline = create_warp_pipeline(
@@ -921,6 +986,7 @@ fn create_gpu_state(
         depth,
         indices: None,
         scene_pipeline,
+        relief_redraw_pipeline,
         warp_pipeline,
         scene_fence: create_fence(device, "Julibrot scene four-byte fence"),
         warp_fence: create_fence(device, "Julibrot warp four-byte fence"),
@@ -1093,6 +1159,7 @@ fn create_scene_pipeline(
     fragment_entry: &'static str,
     heap_layout: &wgpu::BindGroupLayout,
     scene_layout: &wgpu::BindGroupLayout,
+    color_format: wgpu::TextureFormat,
     depth: bool,
 ) -> wgpu::RenderPipeline {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1118,7 +1185,7 @@ fn create_scene_pipeline(
             entry_point: Some(fragment_entry),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
-                format: SCENE_FORMAT,
+                format: color_format,
                 blend: None,
                 write_mask: wgpu::ColorWrites::ALL,
             })],
@@ -1259,6 +1326,76 @@ fn encode_scene(
     hot_offset: u32,
     selected: PaletteRecord,
 ) {
+    encode_scene_mesh(
+        encoder,
+        gpu,
+        &gpu.scene_textures[texture_index].view,
+        &gpu.scene_pipeline,
+        hot_offset,
+        scene_load_color(selected),
+        "Julibrot scene pass",
+    );
+}
+
+fn encode_relief_redraw(
+    encoder: &mut wgpu::CommandEncoder,
+    gpu: &GpuState,
+    surface_view: &wgpu::TextureView,
+    hot_offset: u32,
+    selected: PaletteRecord,
+) {
+    encode_scene_mesh(
+        encoder,
+        gpu,
+        surface_view,
+        &gpu.relief_redraw_pipeline,
+        hot_offset,
+        warp_load_color(selected),
+        "Julibrot relief redraw pass",
+    );
+}
+
+fn encode_image_warp(
+    encoder: &mut wgpu::CommandEncoder,
+    gpu: &GpuState,
+    surface_view: &wgpu::TextureView,
+    texture_index: usize,
+    hot_offset: u32,
+    selected: PaletteRecord,
+) {
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Julibrot sole warp pass"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: surface_view,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(warp_load_color(selected)),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        occlusion_query_set: None,
+        timestamp_writes: None,
+    });
+    pass.set_pipeline(&gpu.warp_pipeline);
+    pass.set_bind_group(0, &gpu.scene_textures[texture_index].warp_group, &[]);
+    pass.set_bind_group(1, &gpu.warp_hot_group, &[hot_offset]);
+    pass.draw(0..3, 0..1);
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the shared mesh encoder names its target, pipeline, bindings, palette, and label"
+)]
+fn encode_scene_mesh(
+    encoder: &mut wgpu::CommandEncoder,
+    gpu: &GpuState,
+    color_view: &wgpu::TextureView,
+    pipeline: &wgpu::RenderPipeline,
+    hot_offset: u32,
+    load_color: wgpu::Color,
+    label: &'static str,
+) {
     let depth_attachment = Some(wgpu::RenderPassDepthStencilAttachment {
         view: &gpu.depth.view,
         depth_ops: Some(wgpu::Operations {
@@ -1268,12 +1405,12 @@ fn encode_scene(
         stencil_ops: None,
     });
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("Julibrot scene pass"),
+        label: Some(label),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view: &gpu.scene_textures[texture_index].view,
+            view: color_view,
             resolve_target: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(scene_load_color(selected)),
+                load: wgpu::LoadOp::Clear(load_color),
                 store: wgpu::StoreOp::Store,
             },
         })],
@@ -1283,7 +1420,7 @@ fn encode_scene(
     });
     pass.set_bind_group(0, &gpu.heap_group, &[]);
     pass.set_bind_group(1, &gpu.scene_group, &[hot_offset]);
-    pass.set_pipeline(&gpu.scene_pipeline);
+    pass.set_pipeline(pipeline);
     if let Some(indices) = &gpu.indices {
         pass.set_index_buffer(indices.buffer.slice(..), wgpu::IndexFormat::Uint32);
         pass.draw_indexed(0..indices.count, 0, 0..1);
@@ -1292,6 +1429,49 @@ fn encode_scene(
 
 pub fn scene_load_color(selected: PaletteRecord) -> wgpu::Color {
     color(exterior_zero(selected))
+}
+
+fn warp_load_color(selected: PaletteRecord) -> wgpu::Color {
+    color(selected.clear_rgba)
+}
+
+fn relief_scene_uniform(
+    main: &PresentMain,
+    source: &crate::SceneFrame,
+    selected: PaletteRecord,
+) -> Result<SceneUniform, PresentError> {
+    if [main.grid.width, main.grid.height] != source.extent {
+        return Err(PresentError::InvalidGrid {
+            width: source.extent[0],
+            height: source.extent[1],
+            logical_len: main.grid.span.logical_len,
+        });
+    }
+    SceneUniform::new(
+        source.extent,
+        source.level as u32,
+        source.iteration_cap,
+        main.grid.span.directory_index,
+        main.grid.span.logical_len,
+        source.pose.plane,
+        source.pose.map,
+        selected,
+    )
+    .map_err(|error| match error {
+        PresentDataError::InvalidMap => PresentError::Device {
+            operation: "pack relief redraw source map",
+        },
+        _ => PresentError::InvalidGrid {
+            width: source.extent[0],
+            height: source.extent[1],
+            logical_len: main.grid.span.logical_len,
+        },
+    })
+}
+
+fn selected_or_classic(main: Option<&PresentMain>) -> (PaletteId, PaletteRecord) {
+    main.and_then(PresentMain::selected_palette)
+        .unwrap_or((PaletteId::Classic, palette(PaletteId::Classic)))
 }
 
 fn validate_grid(main: &PresentMain, limits: DialectLimits) -> Result<(), PresentError> {
@@ -1433,6 +1613,9 @@ fn warp_exposed_fraction(
         plan.source_scene_id.zip(plan.source_texture_index),
         retained,
     )?;
+    if plan.kind == WarpKind::ReliefRedraw {
+        return None;
+    }
     if !plan.exposed {
         return Some(0.0);
     }
@@ -1516,8 +1699,9 @@ const fn clear_warp_plan(edge_on: bool, exposed: bool) -> crate::WarpPlan {
 
 #[cfg(test)]
 mod tests {
-    use ember_julibrot_kernels::RefinementLevel;
+    use ember_julibrot_kernels::{EscapeGrid, RefinementLevel};
     use ember_julibrot_math::{PrecisionMode, ViewControls};
+    use ember_julibrot_worker::MainState;
 
     use super::*;
     use crate::SubmissionMeasurement;
@@ -1576,6 +1760,30 @@ mod tests {
         match ledger.complete(binding_measurement(scene_id)) {
             Some(SceneCompletion::Promoted(frame)) => frame,
             other => panic!("binding scene did not promote: {other:?}"),
+        }
+    }
+
+    fn binding_main() -> PresentMain {
+        let mut arena = ember_lab_heap::SpanArena::new(64, 1, 64, 4_096, 64)
+            .expect("relief fixture arena is valid");
+        let span = arena
+            .allocate_span(64 * 36, 64)
+            .expect("relief fixture grid fits");
+        PresentMain {
+            epoch: 1,
+            state: MainState {
+                delivered_iter_cap: 64,
+                ..MainState::default()
+            },
+            grid: EscapeGrid {
+                span,
+                width: 64,
+                height: 36,
+                level: RefinementLevel::Final,
+            },
+            object: ember_julibrot_math::ObjectAngles::JULIA,
+            plane: binding_pose().plane,
+            map: PoseMap::EdgeOn,
         }
     }
 
@@ -1655,11 +1863,69 @@ mod tests {
     }
 
     #[test]
+    fn relief_redraw_reuses_the_retained_grid_and_scene_uniform_contract() {
+        let mut ledger = SceneLedger::default();
+        let sampled = promote_binding_scene(&mut ledger, 61);
+        let mut plan = clear_warp_plan(false, true);
+        plan.kind = WarpKind::ReliefRedraw;
+        plan.source_scene_id = Some(sampled.scene_id);
+        plan.source_texture_index = Some(sampled.texture_index);
+        plan.source_valid = true;
+        let mut hot = WarpSourceSlot::default();
+        hot.write_hot(&plan);
+        assert_eq!(
+            hot.relief_frame(ledger.retained())
+                .map(|frame| frame.scene_id),
+            Some(61)
+        );
+
+        let main = binding_main();
+        let uniform = relief_scene_uniform(&main, &sampled, crate::CLASSIC_PALETTE)
+            .expect("compatible records form a scene uniform");
+        assert_eq!(uniform.grid, [64, 36, RefinementLevel::Final as u32, 64]);
+        assert_eq!(uniform.span[0], main.grid.span.directory_index);
+        assert_eq!(uniform.span[1], 64 * 36);
+        assert_eq!(uniform.basis_u, sampled.pose.plane.basis_u);
+        assert_eq!(uniform.screen_to_plane_row_0, [1.0, 0.0, 0.0, 0.0]);
+        assert_eq!(uniform.screen_to_plane_row_2, [0.0, 0.0, 1.0, 0.0]);
+        let load = scene_load_color(crate::CLASSIC_PALETTE);
+        let sky = crate::exterior_zero(crate::CLASSIC_PALETTE);
+        assert_eq!([load.r, load.g, load.b, load.a], sky.map(f64::from));
+    }
+
+    #[test]
+    fn relief_redraw_disocclusion_is_clear_and_distinct_from_exterior() {
+        let disocclusion = warp_load_color(crate::CLASSIC_PALETTE);
+        let clear = crate::CLASSIC_PALETTE.clear_rgba.map(f64::from);
+        let exterior = crate::exterior_zero(crate::CLASSIC_PALETTE).map(f64::from);
+        assert_eq!(
+            [
+                disocclusion.r,
+                disocclusion.g,
+                disocclusion.b,
+                disocclusion.a
+            ],
+            clear
+        );
+        assert_ne!(clear, exterior);
+    }
+
+    #[test]
+    fn relief_redraw_refuses_a_retained_grid_from_an_old_extent() {
+        let mut ledger = SceneLedger::default();
+        let sampled = promote_binding_scene(&mut ledger, 62);
+        let mut main = binding_main();
+        main.grid.width /= 2;
+        main.grid.height /= 2;
+        assert!(relief_scene_uniform(&main, &sampled, crate::CLASSIC_PALETTE).is_err());
+    }
+
+    #[test]
     fn every_gpu_dynamic_offset_comes_from_the_opaque_slot() {
         let source = include_str!("gpu.rs");
         let accessor = [".dynamic_", "offset()"].concat();
         let bypass = ["index()", " * self.gpu.hot_stride"].concat();
-        assert_eq!(source.matches(&accessor).count(), 4);
+        assert_eq!(source.matches(&accessor).count(), 5);
         assert!(!source.contains(&bypass));
     }
 }

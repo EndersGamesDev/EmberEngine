@@ -5,8 +5,8 @@ use ember_julibrot_math::{
 };
 use ember_julibrot_present::{
     CLASSIC_PALETTE, PaletteId, SampleClass, SceneFrame, SubmissionKind, SubmissionMeasurement,
-    WARP_MAX_ERROR_PX, Warp, WarpKind, WarpValidation, apply_homography, project_scene_point,
-    shade_lit_escape_record,
+    WARP_MAX_ERROR_PX, Warp, WarpKind, WarpValidation, apply_homography, height_for_record,
+    project_scene_point, project_scene_vertex, shade_lit_escape_record,
 };
 
 const EXTENT: [u32; 2] = [96, 54];
@@ -18,12 +18,11 @@ const LIGHT: f32 = 0.7;
 enum Expected {
     Agree,
     Clear,
-    /// Refused because the measured corpus put the one image homography beyond its ceiling.
+    /// Redrawn because the measured corpus put the one image homography beyond its ceiling.
     ///
     /// The retained records still describe the destination, so the fixture additionally proves
     /// that redrawing them under the destination pose needs no new sampling.
     Relief,
-    Either,
 }
 
 fn pose_at(
@@ -348,55 +347,185 @@ fn compare_accepted(
     compared
 }
 
-/// Half a retained texel: a destination pixel takes the record of the retained vertex nearest it.
-const REDRAW_SAMPLING_REACH_PX: f64 = 0.5;
-
 /// Proves the retained escape records already describe the destination pose.
 ///
-/// A relief redraw carries no new sampling: it re-draws the retained records through the scene
-/// mesh under the new pose, so the only question the oracle can ask of it is whether the record a
-/// destination pixel would receive is the record a freshly computed scene at that pose puts there.
-/// The chart correspondence is the flat screen map the refused plan already solved — the relief
-/// changes where along the screen a lifted vertex lands, never which chart point it is — so the
-/// comparison runs the refused plan's own rows and skips a point whose neighbourhood is not stable
-/// across the half-texel the redraw samples over.
-fn compare_redraw(name: &str, from: &Pose, to: &Pose, plan_rows: [[f32; 4]; 3]) -> u32 {
-    let inverse = rows(plan_rows);
-    let forward = invert_homography(inverse).expect("a refused relief plan is still invertible");
+/// A relief redraw carries no new sampling: the oracle independently rasterizes both the retained
+/// record mesh under the destination view and a freshly sampled destination mesh. It reproduces
+/// the GPU's perspective-correct grid-coordinate interpolation rather than consulting the image
+/// homography whose failure selected this path. Points where the two finite grids choose adjacent
+/// records are counted as resampling uncertainty; every certified point keeps its terminal class,
+/// escape index, and colour to one code.
+#[derive(Clone, Copy)]
+struct RedrawVertex {
+    screen: [f64; 2],
+    reciprocal_w: f64,
+    grid: [f64; 2],
+}
+
+fn cross(left: [f64; 2], right: [f64; 2]) -> f64 {
+    left[0].mul_add(right[1], -left[1] * right[0])
+}
+
+fn barycentric(point: [f64; 2], triangle: [RedrawVertex; 3]) -> Option<[f64; 3]> {
+    let [a, b, c] = triangle.map(|vertex| vertex.screen);
+    let denominator = cross([b[0] - a[0], b[1] - a[1]], [c[0] - a[0], c[1] - a[1]]);
+    if !denominator.is_finite() || denominator.abs() <= 1.0e-12 {
+        return None;
+    }
+    let weights = [
+        cross(
+            [b[0] - point[0], b[1] - point[1]],
+            [c[0] - point[0], c[1] - point[1]],
+        ) / denominator,
+        cross(
+            [c[0] - point[0], c[1] - point[1]],
+            [a[0] - point[0], a[1] - point[1]],
+        ) / denominator,
+        cross(
+            [a[0] - point[0], a[1] - point[1]],
+            [b[0] - point[0], b[1] - point[1]],
+        ) / denominator,
+    ];
+    weights
+        .iter()
+        .all(|weight| *weight >= -1.0e-9)
+        .then_some(weights)
+}
+
+fn redraw_vertices(from: &Pose, to: &Pose, retained: &[KernelSample]) -> Vec<Option<RedrawVertex>> {
+    let mut redraw_pose = *to;
+    redraw_pose.plane = from.plane;
+    redraw_pose.object = from.object;
+    redraw_pose.map = from.map;
+    redraw_pose.grid_width = from.grid_width;
+    redraw_pose.grid_height = from.grid_height;
+    retained
+        .iter()
+        .enumerate()
+        .map(|(index, sample)| {
+            let index = u32::try_from(index).expect("fixture grid index fits u32");
+            let column = index % from.grid_width;
+            let row = index / from.grid_width;
+            let height = height_for_record(record(*sample), ESCAPE.max_iter, CLASSIC_PALETTE)
+                .expect("fixture record has a height")
+                .height;
+            project_scene_vertex(
+                &redraw_pose,
+                pixel_screen([from.grid_width, from.grid_height], column, row),
+                f64::from(height),
+            )
+            .map(|(screen, clip_w)| RedrawVertex {
+                screen,
+                reciprocal_w: clip_w.recip(),
+                grid: [f64::from(column), f64::from(row)],
+            })
+        })
+        .collect()
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "bounds checks prove the rounded oracle grid coordinate fits the fixture"
+)]
+fn sample_redraw_mesh(
+    target: [f64; 2],
+    extent: [u32; 2],
+    records: &[KernelSample],
+    vertices: &[Option<RedrawVertex>],
+) -> Option<KernelSample> {
+    let width = usize::try_from(extent[0]).expect("fixture width fits usize");
+    for row in 0..extent[1].saturating_sub(1) {
+        for column in 0..extent[0].saturating_sub(1) {
+            let a = usize::try_from(row * extent[0] + column).expect("fixture index fits usize");
+            let b = a + 1;
+            let c = a + width;
+            let d = c + 1;
+            for indices in [[a, b, c], [b, d, c]] {
+                let [Some(a), Some(b), Some(c)] = indices.map(|index| vertices[index]) else {
+                    continue;
+                };
+                let triangle = [a, b, c];
+                let Some(weights) = barycentric(target, triangle) else {
+                    continue;
+                };
+                let reciprocal_w = weights
+                    .into_iter()
+                    .zip(triangle)
+                    .fold(0.0, |sum, (weight, vertex)| {
+                        weight.mul_add(vertex.reciprocal_w, sum)
+                    });
+                if !reciprocal_w.is_finite() || reciprocal_w <= 0.0 {
+                    continue;
+                }
+                let grid: [f64; 2] = core::array::from_fn(|axis| {
+                    weights
+                        .into_iter()
+                        .zip(triangle)
+                        .fold(0.0, |sum, (weight, vertex)| {
+                            (weight * vertex.reciprocal_w).mul_add(vertex.grid[axis], sum)
+                        })
+                        / reciprocal_w
+                });
+                let sample_column = grid[0].round();
+                let sample_row = grid[1].round();
+                if sample_column < 0.0
+                    || sample_row < 0.0
+                    || sample_column >= f64::from(extent[0])
+                    || sample_row >= f64::from(extent[1])
+                {
+                    continue;
+                }
+                let index = sample_row as usize * width + sample_column as usize;
+                return records.get(index).copied();
+            }
+        }
+    }
+    None
+}
+
+fn compare_redraw(name: &str, from: &Pose, to: &Pose) -> (u32, u32, u32) {
     let retained = render_retained(from);
+    let fresh = render_retained(to);
+    let retained_vertices = redraw_vertices(from, to, &retained);
+    let fresh_vertices = redraw_vertices(to, to, &fresh);
     let mut compared = 0_u32;
+    let mut disoccluded = 0_u32;
+    let mut uncertain = 0_u32;
     for target in oracle_points([to.grid_width, to.grid_height]) {
-        let Some(source) = apply_homography(inverse, target) else {
-            continue;
-        };
-        let Some((retained_sample, retained_pixel)) =
-            nearest_retained(&retained, [from.grid_width, from.grid_height], source)
-        else {
-            continue;
-        };
-        let Some(sampled_target) = apply_homography(forward, retained_pixel) else {
-            continue;
-        };
-        let Some(fresh) =
-            stable_across_sampling_envelope(to, target, sampled_target, REDRAW_SAMPLING_REACH_PX)
-        else {
-            continue;
-        };
-        assert!(
-            same_terminal_and_index(retained_sample, fresh),
-            "{name}: redrawn record has a different terminal or index"
+        let redrawn = sample_redraw_mesh(
+            target,
+            [from.grid_width, from.grid_height],
+            &retained,
+            &retained_vertices,
         );
-        assert!(
-            colours_within_one_code(retained_sample, fresh),
-            "{name}: redrawn record has a different colour"
+        let freshly_drawn = sample_redraw_mesh(
+            target,
+            [to.grid_width, to.grid_height],
+            &fresh,
+            &fresh_vertices,
         );
-        compared = compared.saturating_add(1);
+        let (Some(redrawn), Some(freshly_drawn)) = (redrawn, freshly_drawn) else {
+            if redrawn.is_some() {
+                uncertain = uncertain.saturating_add(1);
+                continue;
+            }
+            disoccluded = disoccluded.saturating_add(1);
+            continue;
+        };
+        if same_terminal_and_index(redrawn, freshly_drawn)
+            && colours_within_one_code(redrawn, freshly_drawn)
+        {
+            compared = compared.saturating_add(1);
+        } else {
+            uncertain = uncertain.saturating_add(1);
+        }
     }
     assert!(
         compared >= 8,
         "{name}: only {compared} stable independent redraw samples"
     );
-    compared
+    (compared, disoccluded, uncertain)
 }
 
 #[allow(
@@ -412,37 +541,42 @@ fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Exp
         WarpValidation::Ordinary,
     );
     if plan.kind == WarpKind::ReliefRedraw {
-        assert!(
-            matches!(
-                expected,
-                Expected::Relief | Expected::Clear | Expected::Either
-            ),
-            "{name}: unexpectedly refused as a relief redraw"
+        assert_eq!(
+            expected,
+            Expected::Relief,
+            "{name}: unexpectedly selected a relief redraw"
         );
-        assert!(!plan.source_valid, "{name}: refused plan retained a source");
+        assert!(
+            plan.source_valid,
+            "{name}: relief redraw lost its record source"
+        );
+        assert_eq!(plan.source_scene_id, Some(7), "{name}");
+        assert_eq!(plan.source_texture_index, Some(1), "{name}");
         let maximum = plan
             .approx_max_error_px
-            .expect("a relief refusal is measured, never unmeasurable");
+            .expect("a relief redraw is measured, never unmeasurable");
         assert!(maximum > WARP_MAX_ERROR_PX, "{name}: {maximum}");
-        let compared = compare_redraw(name, from, to, plan.rows);
+        let (compared, disoccluded, uncertain) = compare_redraw(name, from, to);
+        assert_eq!(
+            uncertain, 0,
+            "{name}: displayed relief redraw had resampling uncertainty"
+        );
         eprintln!(
-            "oracle fixture | {name} | relief redraw | samples={compared} | homography={maximum:.3} px"
+            "oracle fixture | {name} | relief redraw | samples={compared} | uncertain={uncertain} | disoccluded={disoccluded} | homography={maximum:.3} px"
         );
         return;
     }
     if plan.kind == WarpKind::ClearOnly {
-        assert!(
-            matches!(expected, Expected::Clear | Expected::Either),
-            "{name}: unexpectedly cleared"
-        );
+        assert_eq!(expected, Expected::Clear, "{name}: unexpectedly cleared");
         assert!(!plan.source_valid, "{name}: clear plan retained a source");
-        eprintln!("oracle fixture | {name} | cleared");
+        if let Some(maximum) = plan.approx_max_error_px {
+            eprintln!("oracle fixture | {name} | cleared | homography={maximum:.6} px");
+        } else {
+            eprintln!("oracle fixture | {name} | cleared | unmeasurable");
+        }
         return;
     }
-    assert!(
-        matches!(expected, Expected::Agree | Expected::Either),
-        "{name}: unexpectedly displayed"
-    );
+    assert_eq!(expected, Expected::Agree, "{name}: unexpectedly displayed");
     assert!(plan.source_valid, "{name}");
     assert_eq!(plan.source_scene_id, Some(7), "{name}");
     assert_eq!(plan.source_texture_index, Some(1), "{name}");
@@ -536,7 +670,19 @@ fn retained_warp_matches_independent_fresh_scenes() {
         );
     }
 
-    for index in 0..10 {
+    let lifted_camera_expectations = [
+        Expected::Agree,
+        Expected::Clear,
+        Expected::Agree,
+        Expected::Clear,
+        Expected::Agree,
+        Expected::Clear,
+        Expected::Clear,
+        Expected::Clear,
+        Expected::Clear,
+        Expected::Clear,
+    ];
+    for (index, lifted_expected) in lifted_camera_expectations.into_iter().enumerate() {
         let mut flat_view = ViewControls::NEUTRAL;
         flat_view.camera[index] = 0.2;
         let turned = pose(ObjectAngles::JULIA, flat_view, BASE_ORIGIN, 0.0, [0.0; 2]);
@@ -557,7 +703,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
             &from,
             &to,
             1.0,
-            Expected::Either,
+            lifted_expected,
         );
     }
 
@@ -583,7 +729,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
         &relief_from,
         &observer_relief,
         1.0,
-        Expected::Either,
+        Expected::Clear,
     );
 
     for (name, field) in [("distance five", 5_u8), ("distance four", 4_u8)] {
@@ -602,12 +748,17 @@ fn retained_warp_matches_independent_fresh_scenes() {
             relief_view.distance_four = 6.5;
         }
         let relief_to = pose(ObjectAngles::JULIA, relief_view, BASE_ORIGIN, 0.0, [0.0; 2]);
+        let lifted_expected = if field == 5 {
+            Expected::Relief
+        } else {
+            Expected::Clear
+        };
         assert_fixture(
             &format!("{name} h1"),
             &relief_from,
             &relief_to,
             1.0,
-            Expected::Either,
+            lifted_expected,
         );
     }
 
@@ -715,7 +866,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
         0.03,
         [0.2, -0.15],
     );
-    assert_fixture("cross terms", &relief_from, &cross, 1.0, Expected::Either);
+    assert_fixture("cross terms", &relief_from, &cross, 1.0, Expected::Clear);
 }
 
 /// The Mandelbrot preset row's own plane origin, where the canonical flat pair is exact.
@@ -850,11 +1001,11 @@ type ObserverCase = (
 /// One row for every observer bar, at height zero and again lifted.
 ///
 /// This is the page's own manual-mode table written as fixtures: move one observer control from a
-/// settled scene and record what the surface is allowed to do. Yaw, pitch and the four-space
-/// distance are observer motions the one image homography carries exactly at any height. The
-/// fifth-space distance and the height amplitude are not motions of the observer at all — they
-/// change where a record of a given escape height sits — so each retained pixel moves by its own
-/// amount and the homography is refused, honestly, in favour of a relief redraw.
+/// settled scene and record what the surface is allowed to do. At a neutral five-dimensional
+/// camera, yaw, pitch and the four-space distance are two projective views of the one fixed lifted
+/// plane and the image homography carries them exactly at any height. The fifth-space distance and
+/// height amplitude move retained records by their individual escape heights, so an over-ceiling
+/// image homography selects the independently checked record-grid redraw.
 ///
 /// At height zero the fifth-space distance and the four-space distance are inert by construction:
 /// every record projects at its chart position, so the map is the identity and the retained image
