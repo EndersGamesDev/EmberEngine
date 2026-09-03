@@ -44,7 +44,7 @@ The escape DATA texel is loaded with integer `textureLoad` through the `DataSpan
 
 ### 2.2 One scene pass and the height-zero image
 
-The scene pass draws the screen-grid height field into an LDR `Rgba8Unorm` target over a sky clear set to the palette's exterior colour at zero smooth iterations. At height zero every mesh vertex is its own screen position by construction, while the background guarantees that perspective-pole clipping, near-edge-on relief, and border pull-in cannot leave black or clear holes after scene completion.
+The scene pass draws the screen-grid height field into an LDR `Rgba8Unorm` target over a sky clear set to the palette's exterior colour at zero smooth iterations. At height zero every mesh vertex is its own screen position by construction, so the mesh tiles the frame exactly and the clear is never seen. Under a lift it is seen, and the sky deliberately keeps a colour of its own rather than matching the mesh's exterior shade: a sky that blended in would hide exactly the coverage defects it is there to expose. Sky is honest where the geometry produces it -- a perspective pole, a near-edge-on plane, the far side of the horizon. Sky as a border around a mesh that no longer reaches the frame is not geometry, it is a shortfall, and section 2.4 measures it.
 
 The scene target extent equals the delivered `EscapeGrid` extent, so a refinement level is both the delivered escape resolution and the delivered scene resolution; a changed extent is an allocation event, not a per-frame write, and is counted in `texture_reallocations`.
 
@@ -195,6 +195,37 @@ Each fence records total wall milliseconds, the subset spent from first `map_asy
 The first fenced scene and warp after initialization, texture reallocation, or pipeline creation are labelled cold warm-up and excluded from aggregates, but their walls and polls remain displayed; the second fenced scene is the labelled policy probe and selects continuous animation at `scene_ms≤100` or single-frame-on-demand at `scene_ms>100` without becoming an admission test.
 
 `reprojected_per_scene` counts fence-completed warp submissions that sampled one completed scene and is published when that scene is replaced; refreshes shown as clear before the first frame are counted separately and are never credited to a scene.
+
+### 2.4 The lifted footprint, and why the frame is not always covered
+
+Screen-aligned sampling inverts the scene map at height zero. That is what makes the flat chart exact -- vertex `(i,j)` is pixel `(i,j)` -- and it is also the whole of the problem, because the map that chose the chart points knows nothing about the heights those points will carry. Lifting a vertex by `h` divides the five-to-four perspective by `d5 - h`, scaling its position about the frame centre by `s5 = d5 / (d5 - h)`. A record below the chart pulls in, one above pushes out.
+
+The frame's own boundary vertices are pulled in with everything else, and the mesh then stops covering the surface it was sampled for. On the Julia relief plane (`o13 = o24 = -pi/2`) the chart basis is `(e1,e2)`, so the fourth display coordinate is zero, the four-to-three divide is exactly one, and the lift is a pure radial scale. At the owner's row -- height `2.165`, `d5 = 8`, edge records escaping immediately at `record_height = -2` -- that scale is `8 / (8 + 4.33) = 0.6488`. The mesh occupies the central `64.9%` of the frame in each axis, `42.1%` of its area, and the remaining `57.9%` is unsampled surface with the sky standing behind it. That is the rectangle the owner saw.
+
+`ember_julibrot_math::scene_footprint` mirrors the shader's vertex chain in binary64, traces the frame boundary at both extremes of the height range, and reports `boundary_scale`, `apron_scale = 1/boundary_scale`, and `uncovered_fraction`. It reads no records: `record_height` is bounded to `[-2,2]` by contract, so the bound is a property of the pose alone. The page publishes `surface_uncovered_fraction` and `scene_apron_scale` beside the other measured facts.
+
+The quantity is screen-space and zoom-invariant. `screen_to_plane` takes `zoom_log2` only to validate it; the map is built from the plane, the view controls and the grid width. Zoom reaches the picture solely through `pixel_scale`, which converts plane offsets into complex coordinates for the kernels. Two rows differing only in zoom therefore have identical footprints and identical shortfalls, which is why the owner's `zoom_log2 = 0` and `zoom_log2 = -1.00141771703254` rows show the same rectangle at the same size.
+
+#### The apron, and why it is not enabled
+
+The fix that closes the gap honestly is an apron: sample a screen region `apron_scale` times the frame in each axis, so that after the lift the mesh still reaches the frame edge. `apron_scale = 1 + 2*height_scale/d5` on this plane. It preserves the height-zero identity that the warp machinery depends on, because the apron is extra grid beyond the frame rather than a change to the map -- the map, `chart_scale` and the projection aspect stay keyed to the frame extent while only the vertex indexing and the record count grow.
+
+Its cost is `apron_scale` squared in records, and that is what stops it:
+
+| Height | `apron_scale` | Records at 960x540 | Records at 1920x1080 |
+|---|---|---|---|
+| 0 | 1.000 | 518,400 (16.6 MB) | 2,073,600 (66.4 MB) |
+| 1 | 1.250 | 810,000 (25.9 MB) | 3,240,000 (103.7 MB) |
+| 2.165 | 1.541 | 1,231,469 (39.4 MB) | 4,925,875 (157.6 MB) |
+| 4 (slider maximum) | 2.000 | 2,073,600 (66.4 MB) | 8,294,400 (265.4 MB) |
+
+Records are 16 bytes and the ladder holds preview, interactive and final, so the figures above are the final level alone. At the slider maximum a 1080p frame asks for a quarter of a gigabyte of escape records and four times the iteration work, on a floor that is WebGL2 with `EXT_color_buffer_float` and guaranteed minimums of 2,048 texels and 256 array layers. That is not a workload the floor carries.
+
+Nor does the existing capacity governor degrade gracefully into it. `plan_refinement` fits a plan by halving the extent through power-of-two `extent_divisor` steps, so the first refusal of an apron plan does not trim the apron -- it halves the whole picture. Buying a covered border with a uniformly half-resolution image is a worse render than the one being fixed.
+
+A variant sampling the wider region at the same record count is possible: hold the grid and scale the map by `apron_scale`, spending resolution instead of memory. It costs nothing in records and coarsens every relief picture by `1.54x` at the owner's row and `2x` at the slider maximum. It also redefines a screen pixel for pointer input, warp anchors and the reprojection oracle, all of which compose this map.
+
+Both are project decisions about what a relief view is worth, not choices to make silently inside a rendering lane. Until one is taken, the lane's position is the honest one: the mesh covers what it covers, the sky keeps its own colour so the shortfall stays visible, and `surface_uncovered_fraction` says how much of the surface the picture did not reach.
 
 ## 3. INTERFACES
 
@@ -417,7 +448,7 @@ Exact planner word and residual comparisons are guarded by the cfg-free `Precisi
 
 The ambient oracle covers the two identity presets, random `O` and `Q` orthonormality, legacy two-angle equivalence, edge-on refusal, exactly one edge-on crossing on the Julia-to-Mandelbrot object morph at fixed `Q`, nonzero camera translations, and forward-after-inverse identity over a 9-by-9 screen lattice. The reprojection oracle covers pan, zoom, view rotation with and without relief, yaw/pitch, compatible object-rounding noise, incompatible object motion, in-plane and out-of-plane origin translation, camera translation, and cross terms against the published bound.
 
-The coverage oracle rasterizes the CPU vertex mirror over a pose lattice including near-edge-on and `h=2` and requires every surface pixel to be covered by the mesh or the exterior sky. Both scene and warp shaders are parsed with the normal capability set and translated to GLSL ES 3.00.
+The coverage oracle rasterizes the CPU vertex mirror over a pose lattice including near-edge-on and `h=2` and requires every surface pixel to be covered by the mesh or by sky the geometry accounts for. Accepting any sky pixel at all was the weaker predicate this oracle started with, and it is what let the lifted border pull-in pass unnoticed: the sky is a legitimate answer only where a pole, a horizon or an edge-on plane produced it, and `scene_footprint` is what separates those from a mesh that fell short. Both scene and warp shaders are parsed with the normal capability set and translated to GLSL ES 3.00.
 
 Native state-machine tests permute scene completion, HOT writes, MAIN replacement, accepted-reference shift, incompatible cap, plane origin, or precision mode, control movement, resize, warp completion, deadline, and poll-limit events and prove exactly one retained plus one in-flight texture, latest-wins promotion, exactly-once pose rebasing, no third allocation, bounded retirement, and correct `reprojected_per_scene` attribution.
 

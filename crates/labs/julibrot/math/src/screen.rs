@@ -73,7 +73,7 @@ fn forward_homography(
     view: &ViewControls,
     grid_w: u32,
 ) -> Result<[f64; 9], MathError> {
-    let camera = camera_rotation_matrix(view);
+    let camera = camera_matrix(view);
     let chart_scale = 4.0 / f64::from(grid_w);
     let transformed_basis: [[f64; 5]; 2] = [plane.basis_u, plane.basis_v].map(|basis| {
         let ambient = [
@@ -168,7 +168,7 @@ const fn add_rows(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
     [left[0] + right[0], left[1] + right[1], left[2] + right[2]]
 }
 
-fn camera_rotation_matrix(view: &ViewControls) -> [[f64; 5]; 5] {
+pub fn camera_matrix(view: &ViewControls) -> [[f64; 5]; 5] {
     let columns: [[f64; 5]; 5] = core::array::from_fn(|column| {
         let mut value = [0.0; 5];
         value[column] = 1.0;
@@ -191,7 +191,7 @@ fn rotate_pair(value: &mut [f64; 5], first: usize, second: usize, angle: f64) {
 
 #[must_use]
 pub fn rotation_orthonormality_5(view: &ViewControls) -> f64 {
-    let matrix = camera_rotation_matrix(view);
+    let matrix = camera_matrix(view);
     (0..5)
         .flat_map(|row| (0..5).map(move |column| (row, column)))
         .map(|(row, column)| {
@@ -472,7 +472,7 @@ mod tests {
 
     #[test]
     fn mandelbrot_camera_quarter_turns_face_the_seed_with_the_shipped_orientation() {
-        let matrix = camera_rotation_matrix(&ViewControls::MANDELBROT_FLAT);
+        let matrix = camera_matrix(&ViewControls::MANDELBROT_FLAT);
         assert!((matrix[0][2] - 1.0).abs() <= f64::EPSILON);
         assert!((matrix[1][3] - 1.0).abs() <= f64::EPSILON);
         assert!(matrix[2][2].abs() <= f64::EPSILON);

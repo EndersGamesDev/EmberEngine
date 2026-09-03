@@ -1,7 +1,7 @@
 //! Honest requested, delivered, measured, unavailable, and replay-only page facts.
 
 use ember_julibrot_kernels::{KernelMode, RefinementLevel};
-use ember_julibrot_math::{precision_for, scaled_pixel_scale};
+use ember_julibrot_math::{precision_for, scaled_pixel_scale, scene_footprint};
 use ember_julibrot_present::{SampleClass, SubmissionMeasurement};
 use serde::Serialize;
 
@@ -90,6 +90,10 @@ pub struct PageFacts {
     pub height_scale: f64,
     pub distance_five: f64,
     pub distance_four: f64,
+    /// Share of the surface the lifted scene mesh cannot reach; the sky stands there instead.
+    pub surface_uncovered_fraction: Option<f64>,
+    /// Sampling overscan that would close that gap, as a multiple of the frame extent.
+    pub scene_apron_scale: Option<f64>,
     pub horizon_pixels: u64,
     pub horizon_fraction: f64,
     pub uncertain_pixels: u64,
@@ -142,6 +146,13 @@ impl PageFacts {
         let scale = scaled_pixel_scale(requested.zoom_log2, device.width).ok();
         let zoom_digits_f64 = requested.zoom_log2 * core::f64::consts::LOG10_2;
         let depth_digits = ceil_nonnegative_to_u32(zoom_digits_f64);
+        let footprint = scene_footprint(
+            &requested.object_angles,
+            &requested.view,
+            device.width,
+            device.height,
+        )
+        .ok();
         let loop_facts = app.frame_loop();
         let present = loop_facts.present_facts();
         let dispatch = loop_facts.dispatch_facts();
@@ -234,6 +245,8 @@ impl PageFacts {
             height_scale: requested.view.height_scale,
             distance_five: requested.view.distance_five,
             distance_four: requested.view.distance_four,
+            surface_uncovered_fraction: footprint.map(|value| value.uncovered_fraction),
+            scene_apron_scale: footprint.map(|value| value.apron_scale),
             horizon_pixels: loop_facts.horizon_pixels(),
             horizon_fraction: loop_facts.horizon_fraction(),
             uncertain_pixels: loop_facts.uncertain_pixels(),
