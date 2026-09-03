@@ -34,10 +34,8 @@ const SAMPLE_PIXELS: [[u32; 2]; 5] = [[0, 0], [2, 0], [1, 1], [0, 2], [2, 2]];
 const LIGHT: f32 = 0.7;
 
 const ZERO_RECORD: ReferenceOrbitRecord = ReferenceOrbitRecord {
-    re_hi: 0.0,
-    im_hi: 0.0,
-    re_lo: 0.0,
-    im_lo: 0.0,
+    re: 0.0,
+    im: 0.0,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -142,20 +140,20 @@ fn forced_rescale_rebase_and_boundary_fixtures_remain_explicit() {
     let escaped_orbit = [
         ZERO_RECORD,
         ReferenceOrbitRecord {
-            re_hi: 2.0,
+            re: 2.0,
             ..ZERO_RECORD
         },
         ReferenceOrbitRecord {
-            re_hi: 6.0,
+            re: 6.0,
             ..ZERO_RECORD
         },
         ReferenceOrbitRecord {
-            re_hi: 38.0,
+            re: 38.0,
             ..ZERO_RECORD
         },
     ];
     let one_orbit = [ReferenceOrbitRecord {
-        re_hi: 1.0,
+        re: 1.0,
         ..ZERO_RECORD
     }; 4];
     let zero_orbit = [ZERO_RECORD; 2];
@@ -460,10 +458,8 @@ fn reference_orbit(centre: [f64; 4], cap: u32) -> Vec<ReferenceOrbitRecord> {
     let mut records = Vec::with_capacity(capacity);
     for _ in 0..cap {
         records.push(ReferenceOrbitRecord {
-            re_hi: z_re,
-            im_hi: z_im,
-            re_lo: 0.0,
-            im_lo: 0.0,
+            re: z_re,
+            im: z_im,
         });
         if z_re.mul_add(z_re, z_im * z_im) > EscapeParams::BAILOUT {
             break;
