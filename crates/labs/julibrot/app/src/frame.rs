@@ -525,12 +525,14 @@ impl FrameLoop {
         self.schedule.due()
     }
 
-    fn skip_drafts_for_covering_warp(&mut self, source_level: Option<RefinementLevel>) -> bool {
-        const REASON: &str = "accepted higher-level retained warp covers surface";
+    fn skip_drafts_for_accepted_warp(
+        &mut self,
+        source: Option<(RefinementLevel, bool)>,
+    ) -> bool {
         let Some(due) = self.due() else {
             return false;
         };
-        let Some(source_level) = source_level else {
+        let Some((source_level, exposed)) = source else {
             return false;
         };
         if level_rank(source_level) <= level_rank(due) || due == RefinementLevel::Final {
@@ -543,7 +545,11 @@ impl FrameLoop {
         };
         self.schedule.next = Some(RefinementLevel::Final);
         self.draft_skipped_count = self.draft_skipped_count.saturating_add(skipped);
-        self.last_draft_skip_reason = Some(REASON);
+        self.last_draft_skip_reason = Some(if exposed {
+            "accepted exposed higher-level retained warp"
+        } else {
+            "accepted covering higher-level retained warp"
+        });
         true
     }
 
@@ -1261,7 +1267,7 @@ mod browser {
             if !main_arrived
                 && self
                     .loop_state
-                    .skip_drafts_for_covering_warp(self.presenter.covering_warp_source_level(slot))
+                    .skip_drafts_for_accepted_warp(self.presenter.accepted_warp_source(slot))
             {
                 self.prepared_level = None;
                 let final_validation = self.prepare_due_level();
@@ -3054,7 +3060,7 @@ mod tests {
         frame_loop.set_scene_mode(SceneMode::Manual, 7, true);
         frame_loop.accept_request(7, true);
         frame_loop.scene_selection_changed(7);
-        assert!(!frame_loop.skip_drafts_for_covering_warp(Some(RefinementLevel::Final)));
+        assert!(!frame_loop.skip_drafts_for_accepted_warp(Some((RefinementLevel::Final, true))));
 
         let turn = drive_turn(
             &mut frame_loop,
@@ -3167,17 +3173,17 @@ mod tests {
     }
 
     #[test]
-    fn accepted_final_warp_submits_final_directly_and_returns_to_idle() {
+    fn exposed_accepted_final_warp_submits_final_directly_and_returns_to_idle() {
         let mut frame_loop = FrameLoop::default();
         frame_loop.schedule.precision_mode = PrecisionMode::PictureFast;
         frame_loop.accept_request(31, true);
         assert_eq!(frame_loop.due(), Some(RefinementLevel::Preview));
-        assert!(frame_loop.skip_drafts_for_covering_warp(Some(RefinementLevel::Final)));
+        assert!(frame_loop.skip_drafts_for_accepted_warp(Some((RefinementLevel::Final, true))));
         assert_eq!(frame_loop.due(), Some(RefinementLevel::Final));
         assert_eq!(frame_loop.draft_skipped_count(), 1);
         assert_eq!(
             frame_loop.last_draft_skip_reason(),
-            Some("accepted higher-level retained warp covers surface")
+            Some("accepted exposed higher-level retained warp")
         );
 
         let mut presenter = FakePresenter::default();
@@ -3215,7 +3221,7 @@ mod tests {
     fn refused_warp_and_first_scene_run_the_full_ladder() {
         let mut refused = FrameLoop::default();
         refused.accept_request(37, true);
-        assert!(!refused.skip_drafts_for_covering_warp(None));
+        assert!(!refused.skip_drafts_for_accepted_warp(None));
         assert_eq!(refused.due(), Some(RefinementLevel::Preview));
 
         let mut presenter = FakePresenter::default();
@@ -3235,9 +3241,13 @@ mod tests {
     fn deterministic_accepted_warp_skips_both_draft_levels() {
         let mut frame_loop = FrameLoop::default();
         frame_loop.accept_request(41, true);
-        assert!(frame_loop.skip_drafts_for_covering_warp(Some(RefinementLevel::Final)));
+        assert!(frame_loop.skip_drafts_for_accepted_warp(Some((RefinementLevel::Final, false))));
         assert_eq!(frame_loop.due(), Some(RefinementLevel::Final));
         assert_eq!(frame_loop.draft_skipped_count(), 2);
+        assert_eq!(
+            frame_loop.last_draft_skip_reason(),
+            Some("accepted covering higher-level retained warp")
+        );
     }
 
     #[test]
