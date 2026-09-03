@@ -115,7 +115,6 @@ pub fn perturb_scaled_f64_with_envelope(
         return Ok(glitch_result(
             rebase_count,
             absolute_error,
-            maximum_norm_error,
             minimum_escape_margin,
         ));
     }
@@ -124,7 +123,6 @@ pub fn perturb_scaled_f64_with_envelope(
             return Ok(glitch_result(
                 rebase_count,
                 absolute_error,
-                maximum_norm_error,
                 minimum_escape_margin,
             ));
         };
@@ -165,7 +163,6 @@ pub fn perturb_scaled_f64_with_envelope(
                 return Ok(glitch_result(
                     rebase_count,
                     absolute_error,
-                    maximum_norm_error,
                     minimum_escape_margin,
                 ));
             }
@@ -173,7 +170,6 @@ pub fn perturb_scaled_f64_with_envelope(
                 return Ok(glitch_result(
                     rebase_count,
                     absolute_error,
-                    maximum_norm_error,
                     minimum_escape_margin,
                 ));
             };
@@ -193,7 +189,6 @@ pub fn perturb_scaled_f64_with_envelope(
                 return Ok(glitch_result(
                     rebase_count,
                     absolute_error,
-                    maximum_norm_error,
                     minimum_escape_margin,
                 ));
             }
@@ -227,7 +222,6 @@ pub fn perturb_scaled_f64_with_envelope(
             return Ok(glitch_result(
                 rebase_count,
                 absolute_error,
-                maximum_norm_error,
                 minimum_escape_margin,
             ));
         }
@@ -481,7 +475,6 @@ fn smooth_error_bound(magnitude: f64, absolute_error: f64) -> f64 {
 const fn glitch_result(
     rebase_count: u32,
     absolute_error: f64,
-    _maximum_norm_error: f64,
     minimum_escape_margin: f64,
 ) -> (PerturbSample, PerturbationEnvelope) {
     (

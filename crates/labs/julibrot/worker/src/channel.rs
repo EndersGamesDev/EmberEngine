@@ -615,8 +615,8 @@ impl OrbitResponseView {
     ///
     /// # Errors
     ///
-    /// Returns the same trailer, header, pool, kind, length, and unused-byte refusals as the
-    /// same-thread path.
+    /// Returns the same trailer, header, pool, kind, length, and kind-owned unused-byte refusals as
+    /// the same-thread path.
     #[cfg(target_arch = "wasm32")]
     pub fn from_transfer(array: ArrayBuffer) -> Result<Self, ChannelError> {
         Self::from_browser_parts(TransferBuffer::from_array(array)?, None, 0, 0)
