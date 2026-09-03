@@ -52,7 +52,6 @@ impl Default for PrecisionMode {
         Self::Deterministic
     }
 }
-
 impl Axis4 {
     #[must_use]
     pub const fn index(self) -> usize {

@@ -368,7 +368,13 @@ The total implementation estimate is 2,140 net new Rust, WGSL, JavaScript fixtur
 
 The completed package is 2,685 lines, 545 lines or 25.5% above the 2,140-line estimate: the adopted lifetime ruling required the 538-line executor adapter with rollback, live header walls, span-keyed handles and stale-reference state, while the now-explicit conformance result and seven replay cards account for 283 lines; no heap implementation was copied to pay that overrun.
 
-## 8. Unresolved joint-review findings
+## 8. Final exact-versus-fast corpus
+
+The Final exact-versus-fast corpus lives in `crates/labs/julibrot/app/tests/final_conformance.rs`, not inside kernels, because the acceptance result crosses the math and kernels CPU mirrors, present's palette/lighting result, and math/present warp oracle. The app integration-test crate already depends on all three owners, so this placement exercises their public contracts without adding a kernels-to-present dependency cycle. Each fixture is rendered through `PrecisionMode::Deterministic` and `PrecisionMode::PictureFast`; until a real fast implementation lands, the latter deliberately selects the same mirror after carrying the distinct mode flag, so a fast-path lane adds a case or changes one dispatch branch rather than rewriting the corpus.
+
+The corpus covers the zoom-14 boundary, zooms 40, 80, 100, 256, 512, and the largest integral zoom admitted by `precision_for(zoom,960,4096)` under the 300-digit policy; the admitted fixture and immediately refused successor are asserted rather than copied from a magic policy calculation. It crosses caps 64, 256, 512, and 4,096, the Mandelbrot and Julia preset rows plus a rotated hybrid plane, all three palettes, upward and downward normalization, zero/nonzero/repeated rebases, and the existing shallow and perturbation boundary fixtures. Outside the propagated envelope, terminal class and escape index are exact; escaped lit colour is within one `Rgba8Unorm` code per channel; interior, clear, debug, and alpha are exact; and uploaded warp source coordinates are within 0.25 pixel.
+
+## 9. Unresolved joint-review findings
 
 - The two-f32 reference record carries about 48 relative bits rather than the worker's full 100–300 decimal-digit precision; the accepted D-versus-D+16 validation and deep scaled corpus decide adequacy, and a failure requires a reviewed record change.
 
