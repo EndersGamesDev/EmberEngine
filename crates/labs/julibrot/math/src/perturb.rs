@@ -445,7 +445,7 @@ fn propagated_error(
 
 fn norm_squared_error(value: Complex64, absolute_error: f64) -> f64 {
     let magnitude = value.hypot();
-    2.0_f64.mul_add(magnitude, absolute_error, absolute_error * absolute_error)
+    (2.0 * magnitude).mul_add(absolute_error, absolute_error * absolute_error)
         + radius_rounding_error(value)
         + 3.0 * F32_MIN_SUBNORMAL
 }
