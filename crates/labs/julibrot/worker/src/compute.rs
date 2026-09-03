@@ -10,6 +10,8 @@ use crate::{ChannelError, ErrorCode, OrbitRequest};
 
 /// Maximum reference iterations evaluated between browser-task yields.
 pub const ORBIT_CHUNK_MAX_ITERATIONS: u32 = 64;
+/// Reference iterations evaluated between monotonic deadline checks.
+pub const ORBIT_DEADLINE_CHECK_INTERVAL: u32 = 8;
 /// Maximum measured compute wall targeted between browser-task yields.
 pub const ORBIT_CHUNK_MAX_US: u32 = 2_000;
 
@@ -134,7 +136,8 @@ impl ReferenceOrbitTask {
         })
     }
 
-    /// Advances through at most 64 records or 2,000 measured microseconds.
+    /// Advances through at most 64 records, checking the 2,000-microsecond target every eight
+    /// records.
     ///
     /// A caller yields one browser task after `Pending` and supplies the latest generation on the
     /// next call; a mismatch cancels without publishing partial records.
@@ -156,30 +159,35 @@ impl ReferenceOrbitTask {
         let started = clock.now_us();
         let one = NonZeroU32::MIN;
         let mut last_stored = 0;
+        let mut last_chunk_us = 0;
         for chunk_iterations in 1..=ORBIT_CHUNK_MAX_ITERATIONS {
             let step = self.builder.step(one).map_err(|error| math_error(&error))?;
-            let chunk_us = elapsed(started, clock.now_us())?;
             match step {
                 OrbitStep::Complete(orbit) => {
+                    let chunk_us = elapsed(started, clock.now_us())?;
                     self.add_compute_us(chunk_us)?;
                     return Ok(OrbitTaskPoll::Complete {
                         orbit,
                         compute_us: checked_compute_us(self.compute_us)?,
                     });
                 }
-                OrbitStep::Pending { stored } if chunk_us >= u64::from(ORBIT_CHUNK_MAX_US) => {
-                    self.add_compute_us(chunk_us)?;
+                OrbitStep::Pending { stored } => last_stored = stored,
+            }
+            if chunk_iterations % ORBIT_DEADLINE_CHECK_INTERVAL == 0
+                || chunk_iterations == ORBIT_CHUNK_MAX_ITERATIONS
+            {
+                last_chunk_us = elapsed(started, clock.now_us())?;
+                if last_chunk_us >= u64::from(ORBIT_CHUNK_MAX_US) {
+                    self.add_compute_us(last_chunk_us)?;
                     return Ok(OrbitTaskPoll::Pending {
-                        stored,
+                        stored: last_stored,
                         chunk_iterations,
                         compute_us: checked_compute_us(self.compute_us)?,
                     });
                 }
-                OrbitStep::Pending { stored } => last_stored = stored,
             }
         }
-        let chunk_us = elapsed(started, clock.now_us())?;
-        self.add_compute_us(chunk_us)?;
+        self.add_compute_us(last_chunk_us)?;
         Ok(OrbitTaskPoll::Pending {
             stored: last_stored,
             chunk_iterations: ORBIT_CHUNK_MAX_ITERATIONS,
@@ -267,8 +275,8 @@ mod tests {
     };
 
     use super::{
-        MathFailureCode, MonotonicClock, ORBIT_CHUNK_MAX_ITERATIONS, OrbitTaskPoll,
-        ReferenceOrbitTask, math_error,
+        MathFailureCode, MonotonicClock, ORBIT_CHUNK_MAX_ITERATIONS,
+        ORBIT_DEADLINE_CHECK_INTERVAL, OrbitTaskPoll, ReferenceOrbitTask, math_error,
     };
     use crate::wire::{OrbitVerificationFacts, Pool, WireBuffer};
     use crate::{Admission, EncodedCentre, OrbitReason, OrbitRequest, ProducerShaper};
@@ -276,6 +284,7 @@ mod tests {
     struct StepClock {
         now: Cell<u64>,
         step: u64,
+        reads: Cell<u32>,
     }
 
     impl StepClock {
@@ -283,12 +292,18 @@ mod tests {
             Self {
                 now: Cell::new(0),
                 step,
+                reads: Cell::new(0),
             }
+        }
+
+        fn reads(&self) -> u32 {
+            self.reads.get()
         }
     }
 
     impl MonotonicClock for StepClock {
         fn now_us(&self) -> u64 {
+            self.reads.set(self.reads.get() + 1);
             let now = self.now.get();
             self.now.set(now + self.step);
             now
@@ -463,6 +478,7 @@ mod tests {
         let centre = BigCentre::from_f64([0.0; 4], 128).unwrap();
         let clock = StepClock::new(1);
         let mut task = ReferenceOrbitTask::start(&request(&centre, 128), &clock).unwrap();
+        let reads_before_poll = clock.reads();
         let OrbitTaskPoll::Pending {
             stored,
             chunk_iterations,
@@ -473,12 +489,16 @@ mod tests {
         };
         assert_eq!(stored, ORBIT_CHUNK_MAX_ITERATIONS);
         assert_eq!(chunk_iterations, ORBIT_CHUNK_MAX_ITERATIONS);
+        assert_eq!(
+            clock.reads() - reads_before_poll,
+            1 + ORBIT_CHUNK_MAX_ITERATIONS / ORBIT_DEADLINE_CHECK_INTERVAL
+        );
         assert!(matches!(
             task.poll(8, &clock).unwrap(),
             OrbitTaskPoll::Cancelled { generation: 7, .. }
         ));
 
-        let slow_clock = StepClock::new(1_000);
+        let slow_clock = StepClock::new(2_000);
         let mut slow = ReferenceOrbitTask::start(&request(&centre, 128), &slow_clock).unwrap();
         let OrbitTaskPoll::Pending {
             chunk_iterations, ..
@@ -486,7 +506,7 @@ mod tests {
         else {
             panic!("clock-bound orbit must yield");
         };
-        assert_eq!(chunk_iterations, 2);
+        assert_eq!(chunk_iterations, ORBIT_DEADLINE_CHECK_INTERVAL);
     }
 
     #[test]
