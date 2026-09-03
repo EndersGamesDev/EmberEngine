@@ -363,7 +363,7 @@ const fn stamped_extent(plan: &RefinementPlan) -> [u32; 2] {
 
 /// Publishes the level a scene submission represents even when no kernel dispatch runs.
 #[cfg(any(target_arch = "wasm32", test))]
-fn stamp_scene_level(grid: &mut EscapeGrid, plan: &RefinementPlan, level: RefinementLevel) {
+const fn stamp_scene_level(grid: &mut EscapeGrid, plan: &RefinementPlan, level: RefinementLevel) {
     let spec = plan.level(level);
     grid.width = spec.extent.width;
     grid.height = spec.extent.height;
