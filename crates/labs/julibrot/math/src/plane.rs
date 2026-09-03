@@ -190,7 +190,7 @@ fn dot_f32(left: [f32; 4], right: [f32; 4]) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{construct_plane, object_plane_relation};
+    use super::{construct_plane, dot_f64, object_plane_relation};
     use crate::{MathError, ObjectAngles, PlaneAngles};
 
     fn angles(theta_1: f64, theta_2: f64) -> PlaneAngles {
@@ -286,6 +286,61 @@ mod tests {
         assert_eq!(relation.chart_map, [1.0, 0.0, 0.0, 1.0]);
         assert_eq!(relation.basis_angle, 0.0);
         assert!(!relation.reflected);
+        Ok(())
+    }
+
+    #[test]
+    fn identity_o14_half_turn_reflects_the_seed_chart() -> Result<(), MathError> {
+        let requested = ObjectAngles {
+            rho_14: core::f64::consts::PI,
+            ..ObjectAngles::IDENTITY
+        };
+        let relation = object_plane_relation(ObjectAngles::IDENTITY, requested)?
+            .expect("an o14 half turn preserves the identity seed span");
+        assert_eq!(relation.chart_map, [1.0, 0.0, 0.0, -1.0]);
+        assert_eq!(relation.basis_angle, 0.0);
+        assert!(relation.reflected);
+        Ok(())
+    }
+
+    #[test]
+    fn tilted_reflection_maps_a_feature_from_first_principles() -> Result<(), MathError> {
+        let retained = ObjectAngles {
+            rho_13: 0.4,
+            rho_24: -0.9,
+            rho_34: 0.2,
+            ..ObjectAngles::IDENTITY
+        };
+        let requested = ObjectAngles {
+            rho_13: retained.rho_13 + core::f64::consts::PI,
+            ..retained
+        };
+        let relation = object_plane_relation(retained, requested)?
+            .expect("the tilted half turn preserves the sampled plane with reversed orientation");
+        assert!(relation.reflected);
+
+        let retained = construct_plane(retained)?;
+        let requested = construct_plane(requested)?;
+        let retained_chart = [1.3, -0.7];
+        let ambient: [f64; 4] = core::array::from_fn(|axis| {
+            retained_chart[0].mul_add(
+                f64::from(retained.basis_u[axis]),
+                retained_chart[1] * f64::from(retained.basis_v[axis]),
+            )
+        });
+        let direct = [
+            dot_f64(requested.basis_u.map(f64::from), ambient),
+            dot_f64(requested.basis_v.map(f64::from), ambient),
+        ];
+        let mapped = [
+            relation.chart_map[0]
+                .mul_add(retained_chart[0], relation.chart_map[1] * retained_chart[1]),
+            relation.chart_map[2]
+                .mul_add(retained_chart[0], relation.chart_map[3] * retained_chart[1]),
+        ];
+        for (actual, expected) in mapped.into_iter().zip(direct) {
+            assert!((actual - expected).abs() <= 1.0e-7);
+        }
         Ok(())
     }
 
