@@ -108,11 +108,13 @@ fn enforce_error_ceiling(mut plan: WarpPlan, from_pose: &Pose, to_pose: &Pose) -
 
 /// Whether the retained grid is a proved exact record source for a relief redraw.
 ///
-/// A pure height or fifth-distance change keeps every other sampled-chart input fixed, so the
+/// A pure height or fifth-distance change keeps every sampled ambient four-point fixed, so the
 /// retained records are the destination records. More generally, with neutral five-dimensional
-/// rotation and translation the lifted grid remains in one fixed plane for every record height;
-/// the later perspectives and observer map that plane projectively. Equal non-neutral cameras do
-/// not suffice because mixing the height axis generally destroys that fixed plane.
+/// rotation and translation, equal constructed plane spans let an in-plane basis change express
+/// the retained record at the same ambient point before its destination lift; each constant-height
+/// layer remains one fixed plane that the later perspectives and observer map projectively. Equal
+/// non-neutral cameras do not suffice because mixing the height axis generally destroys that
+/// fixed-plane relation.
 fn exact_relief_redraw_family(from: &Pose, to: &Pose) -> bool {
     if [from.grid_width, from.grid_height] != [to.grid_width, to.grid_height] {
         return false;

@@ -1,7 +1,7 @@
 use ember_julibrot_kernels::{EscapeParams, KernelSample, RefinementLevel, escape_shallow_point};
 use ember_julibrot_math::{
     EscapeGridRecord, ObjectAngles, Pose, PoseMap, PrecisionMode, ViewControls, construct_plane,
-    pixel_scale, plane_chart_relation, screen_to_plane,
+    pixel_scale, screen_to_plane,
 };
 use ember_julibrot_present::{
     CLASSIC_PALETTE, PaletteId, SampleClass, SceneFrame, SubmissionKind, SubmissionMeasurement,
@@ -550,6 +550,7 @@ fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Exp
             plan.source_valid,
             "{name}: relief redraw lost its record source"
         );
+        assert!(plan.exposed, "{name}: relief redraw must expose its fallback");
         assert_eq!(plan.source_scene_id, Some(7), "{name}");
         assert_eq!(plan.source_texture_index, Some(1), "{name}");
         let maximum = plan
@@ -639,7 +640,15 @@ fn retained_warp_matches_independent_fresh_scenes() {
     zoom.zoom_log2 = 0.05;
     assert_fixture("pure zoom", &base, &zoom, 0.0, Expected::Agree);
 
-    for index in 0..6 {
+    let changed_expectations = [
+        Expected::Agree,
+        Expected::Clear,
+        Expected::Agree,
+        Expected::Agree,
+        Expected::Clear,
+        Expected::Agree,
+    ];
+    for (index, changed_expected) in changed_expectations.into_iter().enumerate() {
         let tiny = pose(
             object_angle(ObjectAngles::JULIA, index, 1.0e-9),
             ViewControls::NEUTRAL,
@@ -661,11 +670,6 @@ fn retained_warp_matches_independent_fresh_scenes() {
             0.0,
             [0.0; 2],
         );
-        let changed_expected = if plane_chart_relation(base.plane, changed.plane).is_some() {
-            Expected::Agree
-        } else {
-            Expected::Clear
-        };
         assert_fixture(
             &format!("object {index} changed"),
             &base,
@@ -699,19 +703,27 @@ fn retained_warp_matches_independent_fresh_scenes() {
         0.0,
         Expected::Agree,
     );
+    let inert_origin = [0.5, -0.25, 2.0, -1.0];
+    let inert = pose(
+        ObjectAngles::IDENTITY,
+        ViewControls::MANDELBROT_FLAT,
+        inert_origin,
+        0.0,
+        [0.0; 2],
+    );
     let complement_rotation = pose(
         ObjectAngles {
             rho_12: 0.5,
             ..ObjectAngles::IDENTITY
         },
         ViewControls::MANDELBROT_FLAT,
-        [0.0; 4],
+        inert_origin,
         0.0,
         [0.0; 2],
     );
     assert_fixture(
-        "object o12 zero-origin inert",
-        &mandelbrot,
+        "object o12 identity-plane inert",
+        &inert,
         &complement_rotation,
         0.0,
         Expected::Agree,
@@ -732,6 +744,34 @@ fn retained_warp_matches_independent_fresh_scenes() {
         &tilted,
         0.0,
         Expected::Clear,
+    );
+
+    let retained_relief = pose(
+        ObjectAngles::JULIA,
+        ViewControls::NEUTRAL,
+        BASE_ORIGIN,
+        0.0,
+        [0.0; 2],
+    );
+    let relief_rotation = pose(
+        ObjectAngles {
+            rho_34: ObjectAngles::JULIA.rho_34 + 0.3,
+            ..ObjectAngles::JULIA
+        },
+        ViewControls {
+            height_scale: 1.0,
+            ..ViewControls::NEUTRAL
+        },
+        BASE_ORIGIN,
+        0.0,
+        [0.0; 2],
+    );
+    assert_fixture(
+        "relief redraw across o34",
+        &retained_relief,
+        &relief_rotation,
+        1.0,
+        Expected::Relief,
     );
 
     let lifted_camera_expectations = [
