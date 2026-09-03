@@ -12,13 +12,13 @@ It is a prototype of the toolchain, so every mechanism it builds is meant to be 
 
 The Julibrot is the set of pairs `(z, c)` in ℂ², which is ℝ⁴, whose orbit under `z → z² + c` stays bounded; the Mandelbrot set is its slice at `z = 0`, every Julia set is its slice at a fixed `c`, and every other 2D plane through it is a hybrid between them.
 
-The lab renders a 2D plane through ℝ⁴ chosen by two PLANE angles applied to the one fixed seed `(e₃,e₄)`, positioned by a plane origin that is four more numbers, so the Mandelbrot plane, a Julia plane at a chosen `c`, and every hybrid between them are positions of the same continuous controls rather than named alternatives; the escape value of each sample lifts it to a fifth coordinate scaled by a height control, and one height-field scene carries every view, from the flat chart at height zero to full relief, through the double perspective `d₅` and `d₄` and a slider-driven observer.
+The lab renders a 2D slice of the 4D Julibrot, chosen by rotating the object in ℝ⁴ from the one seed `(e₃,e₄)` and positioned by a four-coordinate plane origin; the escape value lifts that plane by height into ℝ⁵, and an independent 5D camera rotation sees the lifted slice through the double perspective `d₅` and `d₄` and the 3D observer.
 
 Nothing in the lab reads a clock for geometry and nothing selects a view mode: every degree of freedom of the view is a slider, and a preset is a named row of slider values, so moving the sliders morphs one preset into another continuously. Two boxes hold saved rows and one slider morphs between them, so a Mandelbrot saved in A and a Julia saved in B are the two ends of one continuous move rather than two pictures; and the view is navigated by a target click, a box drag, and a `scale` slider, never by the wheel.
 
 Arbitrary zoom means arbitrary: shallow zoom runs in `f32`; deep zoom uses perturbation, one reference orbit iterated in high precision on the CPU and per-pixel deltas iterated in `f32` on the GPU, with rebasing so glitches are corrected rather than hidden; zoom depth is displayed in decimal digits with the precision in use beside it.
 
-Every refinement grid is screen-aligned: each grid pixel samples the inverse image of its own screen-pixel centre through the accepted neutral-height view, so scaling, rotation, tilt, and perspective change the sampled plane points while the picture continues to fill the screen.
+Every refinement grid is screen-aligned: each grid pixel samples the inverse image of its own render-surface pixel centre through the accepted neutral-height view, so object rotation, camera rotation, scaling, tilt, and perspective change the sampled plane points while every completed scene paints the whole page-owned render surface.
 
 ## 3. The chain, and which slice owns which link
 
@@ -26,23 +26,23 @@ Every refinement grid is screen-aligned: each grid pixel samples the inverse ima
 
 |Slice|Package|Owns|
 |-----|-------|----|
-|math|`crates/labs/julibrot/math`|the Julibrot algebra: plane and basis from `R(t)`, presets, `f32` escape reference, high-precision reference orbits, perturbation and rebasing theory, the navigation-drift and warp-accuracy oracles, the bignum choice|
+|math|`crates/labs/julibrot/math`|the Julibrot algebra: object rotation `O`, camera rotation `Q`, plane basis, presets, `f32` escape reference, high-precision reference orbits, perturbation and rebasing theory, the navigation-drift and warp-accuracy oracles, the bignum choice|
 |kernels|`crates/labs/julibrot/kernels`|the dialect v2 kernels over heap spans: the `f32` escape kernel and the perturbation kernel, their conformance against the math oracles, the scratch-copy landing of the escape grid|
 |worker|`crates/labs/julibrot/worker`|the Web Worker producer of reference orbits, the ownership-transfer channel with its credit header, the versioned owner with its two drains, the same-thread lowering of the same channel|
-|present|`crates/labs/julibrot/present`|the one height-field scene fetching the escape grid by handle, the slider-driven presentation, the warp pass that re-projects the last completed frame under the current zoom, plane and view, the hot ring|
+|present|`crates/labs/julibrot/present`|the one ambient height-field scene fetching the escape grid by handle, the slider-driven 5D camera presentation, the warp pass that re-projects the last completed frame under the current zoom, object and camera, the hot ring|
 |app|`crates/labs/julibrot/app` and `web/labs/julibrot/`|the GL-only device and surface, single surface ownership, the panic hook and the non-panicking error handler, counted fences, the progressive-refinement policy, controls, the facts overlay, page-contract tests, the versioned loader|
 
 Each slice is a package with its own tests and its own example or page where one makes sense; `app` integrates the other four through the interfaces their documents pin, and no slice edits another slice's package.
 
 ## 4. Laws that bind every slice
 
-- Substrate: wgpu 24 `Backends::GL` over WebGL2 only, the device floor of `docs/minimum-requirements.md`, nothing more.
+- Substrate: wgpu 24 `Backends::GL` over WebGL2 only, at the project's established minimum device floor, nothing more.
 - Per-frame CPU-to-GPU traffic is uniforms plus regional writes for changed data; the reference orbit changes only when the zoom centre moves far enough, and the escape grid never crosses back to the CPU except for measurement and conformance.
 - Kernel outputs land in the heap through the paid scratch-copy path; the heap bind group's identities never change; a hot ring selected by dynamic offset carries zoom and rotation at refresh rate.
 - No shared memory: the worker owns what it writes, transfers it, and reads the owner's credit from the buffer that comes back; the same-thread lowering of the channel is the cheapest case of the same abstraction, not a special mode.
 - Honesty: requested versus delivered, walls computed from live limits and labelled apart from policies, zoom depth in digits, precision in use, orbit length, rebase and glitch counts, delivered resolution and iteration cap, warm-up frames labelled and excluded, polls counted, never a hang, never a number that was not measured, browser values `requires visible replay` until a visible replay supplies them.
 - Every wasm entry installs a panic hook and replaces wgpu's fatal uncaptured-error handler before the first device call; a bare `unreachable` is a bug nobody can read.
-- The CPU-math question is answered by measurement, not assumption: a navigation-drift oracle composes ten thousand or more rotation steps in `f32` and `f64` and reports the orthonormality error against the re-orthonormalization bound; a warp-accuracy oracle checks inverse times forward against identity across the zoom range; `faer` enters only if one of them fails with hand-written `f64` math (`docs/faer-cpu-math-study.md` predicts neither will).
+- The CPU-math question is answered by measurement, not assumption: random-angle object/camera oracles measure orthonormality in `f64`, a warp-accuracy oracle checks inverse times forward against identity across the zoom range, and `faer` enters only if one of the hand-written `f64` cases fails.
 - Renderer austerity, authority and the one-way layering are unchanged; nothing here authors gameplay truth.
 
 ## 5. Deliberately out of scope
