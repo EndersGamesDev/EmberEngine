@@ -46,7 +46,7 @@ pub struct App {
     requests: RunRequests,
 }
 
-/// Explicit app work requests; neither flag claims submission or measurement.
+/// Explicit app work requests; no flag claims submission or measurement.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RunRequests {
     /// A surface refresh was explicitly requested.
