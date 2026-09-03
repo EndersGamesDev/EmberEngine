@@ -10,6 +10,9 @@ const SCREEN_STEPS: u32 = 9;
 const POLE_EPSILON: f64 = 1.0e-4;
 const MAX_CHART_RESIDUAL_PX: f64 = 0.5;
 
+/// Maximum measured reprojection error a displayed warp may move a feature.
+pub const WARP_MAX_ERROR_PX: f64 = 1.0;
+
 /// Pure CPU reprojection planner.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Warp;
@@ -45,8 +48,24 @@ impl Warp {
             return clear_only(true);
         }
         anchor_plan(last_frame, from_pose, to_pose, flat.forward, chart_residual)
+            .map(enforce_error_ceiling)
             .unwrap_or_else(|| clear_only(true))
     }
+}
+
+fn enforce_error_ceiling(mut plan: WarpPlan) -> WarpPlan {
+    if plan
+        .approx_max_error_px
+        .is_some_and(|error| error <= WARP_MAX_ERROR_PX)
+    {
+        return plan;
+    }
+    plan.source_scene_id = None;
+    plan.source_texture_index = None;
+    plan.source_valid = false;
+    plan.exposed = true;
+    plan.kind = WarpKind::ClearOnly;
+    plan
 }
 
 fn object_samples_match(from: &Pose, to: &Pose) -> bool {
@@ -638,19 +657,34 @@ mod tests {
     }
 
     #[test]
-    fn relief_small_motion_stays_inside_the_measured_envelope() {
+    fn relief_plan_above_the_published_ceiling_is_refused() {
         let from = pose(relief(0.6), [0.0; 2]);
-        let mut to = pose(relief(0.602), [2.0, -1.0]);
-        to.zoom_log2 += 0.025;
+        let mut to = pose(relief(0.8), [8.0, -4.0]);
+        to.zoom_log2 += 0.25;
         let plan = reproject(&frame(&from), &from, &to);
-        assert_eq!(plan.kind, WarpKind::AnchorHomography);
+        assert_eq!(plan.kind, WarpKind::ClearOnly);
+        assert!(!plan.source_valid);
         let maximum = plan
             .approx_max_error_px
             .expect("the sampled corpus reports a maximum");
-        assert!(maximum <= 8.25, "maximum error was {maximum} pixels");
+        assert!(maximum > WARP_MAX_ERROR_PX, "maximum error was {maximum} pixels");
         assert!(
             plan.approx_p95_error_px
                 .is_some_and(|error| error <= maximum)
+        );
+    }
+
+    #[test]
+    fn flat_plan_is_exact_and_remains_displayable() {
+        let from = pose(ViewControls::NEUTRAL, [3.0, -2.0]);
+        let mut to = pose(ViewControls::NEUTRAL, [11.0, 7.0]);
+        to.zoom_log2 += 0.5;
+        let plan = reproject(&frame(&from), &from, &to);
+        assert_eq!(plan.kind, WarpKind::AnchorHomography);
+        assert!(plan.source_valid);
+        assert!(
+            plan.approx_max_error_px
+                .is_some_and(|error| error < 1.0e-9)
         );
     }
 
@@ -683,6 +717,7 @@ mod tests {
     fn every_plane_keeps_a_full_screen_plan_through_a_view_turn() {
         let mut observed_max = 0.0_f64;
         let mut observed_p95 = 0.0_f64;
+        let mut refused = 0_u32;
         for (object, plane) in named_objects() {
             for step in 0..SWEEP_ANGLES {
                 let theta = -0.6 + 1.2 * f64::from(step) / f64::from(SWEEP_ANGLES - 1);
@@ -692,8 +727,9 @@ mod tests {
                 let mut to = object_pose(object, plane, to_view, [5.5, -1.25]);
                 to.zoom_log2 += 0.025;
                 let plan = reproject(&frame(&from), &from, &to);
-                assert_eq!(plan.kind, WarpKind::AnchorHomography);
-                assert!(plan.source_valid);
+                if plan.kind == WarpKind::ClearOnly {
+                    refused = refused.saturating_add(1);
+                }
                 let error = plan
                     .approx_max_error_px
                     .expect("the swept plan reports a sampled maximum");
@@ -713,5 +749,6 @@ mod tests {
             observed_p95 <= 32.0,
             "swept p95 maximum was {observed_p95} pixels"
         );
+        assert!(refused > 0, "the measured relief envelope never reached the ceiling");
     }
 }
