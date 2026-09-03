@@ -15,6 +15,8 @@
     </header>
     <section class="viewer" aria-label="Julibrot viewer">
       <canvas id="julibrot" width="960" height="540"></canvas>
+      <div id="target" class="target" hidden aria-hidden="true"></div>
+      <div id="rubber" class="rubber" hidden aria-hidden="true"></div>
       <p id="status" class="status" role="status">waiting for first completed scene</p>
     </section>
     <section class="controls" aria-label="Viewer controls">
@@ -48,6 +50,26 @@
         <label>Pitch<input id="camera-pitch" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
         <label>d₅<input id="distance-five" type="range" min="2" max="64" value="8" step="0.1"></label>
         <label>d₄<input id="distance-four" type="range" min="2" max="64" value="8" step="0.1"></label>
+      </fieldset>
+      <fieldset>
+        <legend>Navigation</legend>
+        <label>scale<input id="scale" type="range" min="-2" max="120" value="0" step="any"></label>
+        <p class="note">Click to put the target under the pointer at the centre; drag a box to fill the screen with it. There is no wheel.</p>
+      </fieldset>
+      <fieldset>
+        <legend>View boxes</legend>
+        <div class="box">
+          <button id="save-a" type="button">Save current → A</button>
+          <button id="load-a" type="button" disabled>Load A</button>
+          <p id="readout-a" class="note">A is empty</p>
+        </div>
+        <div class="box">
+          <button id="save-b" type="button">Save current → B</button>
+          <button id="load-b" type="button" disabled>Load B</button>
+          <p id="readout-b" class="note">B is empty</p>
+        </div>
+        <label>A ↔ B<input id="morph" type="range" min="0" max="1" value="0" step="any" disabled></label>
+        <p class="note">The slider writes the interpolated row into every control and applies it through the handlers your own movement reaches.</p>
       </fieldset>
       <fieldset>
         <legend>Sampling</legend>

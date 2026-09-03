@@ -7,6 +7,9 @@ header { max-width: 54rem; }
 h1 { margin: .15rem 0; font-family: ui-serif, Georgia, serif; font-size: clamp(3rem, 10vw, 7rem); font-weight: 500; }
 .viewer { position: relative; margin: 2rem 0 1rem; border: 1px solid #394155; background: #0f1119; box-shadow: 0 1.5rem 5rem #0009; }
 canvas { display: block; width: 100%; aspect-ratio: 16 / 9; touch-action: none; }
+.target { position: absolute; width: 1.4rem; height: 1.4rem; margin: -.7rem 0 0 -.7rem; pointer-events: none; background: linear-gradient(#ff8b5e, #ff8b5e) center/100% 1px no-repeat, linear-gradient(#ff8b5e, #ff8b5e) center/1px 100% no-repeat; }
+.rubber { position: absolute; pointer-events: none; border: 1px dashed #ff8b5e; background: #ff8b5e14; }
+.controls .box { display: grid; gap: .35rem; }
 .status { position: absolute; left: .75rem; bottom: .75rem; margin: 0; padding: .5rem .7rem; background: #090b10df; border: 1px solid #59627a; }
 .status.failed { color: #ff8b8b; border-color: #a43b46; }
 .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: .75rem; padding: 1rem; border: 1px solid #2d3445; background: #10141e; align-items: start; }

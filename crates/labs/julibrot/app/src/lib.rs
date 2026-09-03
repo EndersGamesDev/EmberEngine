@@ -219,7 +219,7 @@ mod wasm_entry {
 
     use crate::{
         App, JULIBROT_ABI_VERSION, PageFacts, SavedCentre, SavedView, anchor_px_up,
-        box_zoom_delta_log2, drag_delta_px_down, is_box_selection, preset_row,
+        box_zoom_delta_log2, is_box_selection, preset_row,
     };
 
     thread_local! {
@@ -256,58 +256,6 @@ mod wasm_entry {
         with_app(|app| {
             serde_json::to_string(&PageFacts::snapshot(app))
                 .map_err(|error| JsValue::from_str(&error.to_string()))
-        })
-    }
-
-    /// Stages pointer-anchored zoom and preserves the requested control on delayed work.
-    ///
-    /// The pointer arrives as canvas-relative DOM CSS pixels together with the canvas client
-    /// rectangle; centring, the CSS-to-grid scale, and the y flip all happen inside this boundary
-    /// so the anchor reaches the worker in the render-grid pixels its scale is expressed in.
-    #[wasm_bindgen]
-    pub fn app_wheel_zoom(
-        delta_log2: f64,
-        pointer_css_x: f64,
-        pointer_css_y_down: f64,
-        rect_css_width: f64,
-        rect_css_height: f64,
-    ) -> Result<(), JsValue> {
-        with_app_mut(|app| {
-            let grid = app.grid_extent();
-            let anchor = anchor_px_up(
-                [pointer_css_x, pointer_css_y_down],
-                [rect_css_width, rect_css_height],
-                grid,
-            )
-            .map_err(app_js_error)?;
-            app.viewer_mut()
-                .wheel_zoom(delta_log2, anchor)
-                .map(|_| ())
-                .map_err(app_js_error)
-        })
-    }
-
-    /// Stages drag pan after scaling CSS pixels to the grid and converting DOM-down y inside the
-    /// Rust control boundary.
-    #[wasm_bindgen]
-    pub fn app_drag_pan(
-        delta_css_x: f64,
-        delta_css_y_down: f64,
-        rect_css_width: f64,
-        rect_css_height: f64,
-    ) -> Result<(), JsValue> {
-        with_app_mut(|app| {
-            let grid = app.grid_extent();
-            let delta = drag_delta_px_down(
-                [delta_css_x, delta_css_y_down],
-                [rect_css_width, rect_css_height],
-                grid,
-            )
-            .map_err(app_js_error)?;
-            app.viewer_mut()
-                .drag_pan(delta)
-                .map(|_| ())
-                .map_err(app_js_error)
         })
     }
 
@@ -612,9 +560,9 @@ mod wasm_entry {
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm_entry::{
-    app_drag_pan, app_facts_json, app_morph_view, app_needs_refresh, app_preset, app_refresh,
-    app_request_frame, app_request_measurement, app_saved_view_json, app_set_camera,
-    app_set_centre, app_set_distances, app_set_height, app_set_iteration_cap, app_set_palette,
+    app_facts_json, app_morph_view, app_needs_refresh, app_preset, app_refresh, app_request_frame,
+    app_request_measurement, app_saved_view_json, app_set_camera, app_set_centre,
+    app_set_distances, app_set_height, app_set_iteration_cap, app_set_palette,
     app_set_plane_angles, app_set_plane_origin, app_set_scale, app_set_target, app_set_view_angles,
-    app_wheel_zoom, app_zoom_box, julibrot_abi_version, start_julibrot,
+    app_zoom_box, julibrot_abi_version, start_julibrot,
 };

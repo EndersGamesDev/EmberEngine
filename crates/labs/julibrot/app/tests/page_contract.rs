@@ -12,6 +12,7 @@ const MEASUREMENT: &str = include_str!("../src/measurement.rs");
 const FRAME: &str = include_str!("../src/frame.rs");
 const WORKER_BROWSER: &str = include_str!("../../worker/src/browser.rs");
 const WORKER_OWNER: &str = include_str!("../../worker/src/browser_owner.rs");
+const SAVED: &str = include_str!("../src/saved.rs");
 
 /// Every field the page facts must carry, in publication order.
 const PAGE_FACT_FIELDS: [&str; 88] = [
@@ -258,6 +259,7 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
     assert_eq!(MAIN.matches("api.app_set_camera(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_height(").count(), 1);
     assert_eq!(MAIN.matches("api.app_set_distances(").count(), 1);
+    assert_eq!(MAIN.matches("api.app_set_scale(").count(), 1);
     // The retired mode selector and its Julia-only number boxes must name nothing.
     for retired in [
         "id=\"view\"",
@@ -278,6 +280,12 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
         "pub fn app_set_camera(",
         "pub fn app_set_height(",
         "pub fn app_set_distances(",
+        "pub fn app_set_scale(",
+        "pub fn app_set_target(",
+        "pub fn app_zoom_box(",
+        "pub fn app_saved_view_json(",
+        "pub fn app_set_centre(",
+        "pub fn app_morph_view(",
         "pub fn app_preset(",
     ] {
         assert!(LIB.contains(required), "missing wasm entry {required}");
@@ -291,22 +299,94 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
 }
 
 #[test]
+fn the_view_does_not_respond_to_the_wheel_and_says_so_nowhere() {
+    // The mechanism is retired, not the word: the page is expected to say the wheel does nothing,
+    // and the entry points that made it do something are the things that must be gone.
+    for retired in ["app_wheel_zoom", "app_drag_pan", "deltaY"] {
+        assert!(!MAIN.contains(retired), "the page still carries {retired}");
+        assert!(!LIB.contains(retired), "the app still carries {retired}");
+    }
+    assert!(!MAIN.contains("addEventListener(\"wheel\""));
+    assert!(!LIB.contains("pub fn app_wheel_zoom("));
+    assert!(!LIB.contains("pub fn app_drag_pan("));
+    // And the page says so, so a reader does not go looking for a handler that is not there.
+    assert!(INDEX.contains("There is no wheel."));
+}
+
+#[test]
+fn the_canvas_navigates_by_target_box_and_scale() {
+    // One pointer gesture reaches one entry: the page reports the rectangle it drew and the Rust
+    // boundary decides whether that was a box or a click, so the two cannot drift apart here.
+    assert!(MAIN.contains("api.app_zoom_box(x, y, to[0], to[1], bounds.width, bounds.height)"));
+    assert_eq!(MAIN.matches("api.app_zoom_box(").count(), 1);
+    assert!(STATE.contains("pub fn is_box_selection("));
+    assert!(STATE.contains("pub fn box_zoom_delta_log2("));
+    assert!(STATE.contains("pub const BOX_CLICK_THRESHOLD_PX: f64 = 4.0;"));
+    assert!(STATE.contains("pub const SCALE_RANGE_LOG2: [f64; 2] = [-2.0, 120.0];"));
+    // The scale control spans exactly the range the app enforces.
+    assert!(INDEX.contains("id=\"scale\" type=\"range\" min=\"-2\" max=\"120\""));
+    // The marker and the rubber band are DOM overlays, not scene geometry.
+    for element in ["id=\"target\"", "id=\"rubber\""] {
+        assert!(INDEX.contains(element), "missing overlay {element}");
+    }
+}
+
+#[test]
+fn two_view_boxes_share_one_path_from_a_control_value_to_the_worker() {
+    for element in [
+        "id=\"save-a\"",
+        "id=\"save-b\"",
+        "id=\"load-a\"",
+        "id=\"load-b\"",
+        "id=\"readout-a\"",
+        "id=\"readout-b\"",
+        "id=\"morph\"",
+    ] {
+        assert!(
+            INDEX.contains(element),
+            "missing view-box element {element}"
+        );
+    }
+    // The morph slider is inert until both boxes hold a view.
+    assert!(INDEX.contains(
+        "id=\"morph\" type=\"range\" min=\"0\" max=\"1\" value=\"0\" step=\"any\" disabled"
+    ));
+    // Loading and morphing both go through one row applier, which ends on the shared handlers.
+    assert_eq!(MAIN.matches("const applyRow = row => {").count(), 1);
+    assert_eq!(
+        MAIN.matches("for (const apply of Object.values(APPLY)) apply();")
+            .count(),
+        2
+    );
+    assert_eq!(MAIN.matches("api.app_set_centre(").count(), 1);
+    assert_eq!(MAIN.matches("api.app_morph_view(").count(), 1);
+    assert_eq!(MAIN.matches("api.app_saved_view_json()").count(), 1);
+    // Every storage access is wrapped, and the page states what it could not reach.
+    assert_eq!(MAIN.matches("localStorage.").count(), 2);
+    assert_eq!(MAIN.matches("STORAGE_STATUS = `unavailable:").count(), 2);
+    // `t` is page state: it is a fact and never a stored field of the row.
+    assert!(MAIN.contains("morph_t: MORPH.disabled ? null : Number(MORPH.value)"));
+    assert!(!SAVED.contains("pub morph_t"));
+    assert!(!SAVED.contains("pub t:"));
+    assert!(SAVED.contains("pub centre: SavedCentre,"));
+    assert!(SAVED.contains("pub zoom_log2: f64,"));
+}
+
+#[test]
 fn pointer_input_reaches_the_worker_in_render_grid_pixels() {
     // The loader hands over raw canvas-relative CSS pixels plus the client rectangle; centring, the
     // CSS-to-grid scale, and the y flip are the Rust boundary's work, so they stay testable.
-    assert!(MAIN.contains(
-        "event.clientX - bounds.left, event.clientY - bounds.top, bounds.width, bounds.height"
-    ));
-    assert!(MAIN.contains("event.clientX - x, event.clientY - y, bounds.width, bounds.height"));
-    assert!(!MAIN.contains("bounds.height / 2"));
-    assert!(!MAIN.contains("bounds.width / 2"));
+    assert!(MAIN.contains("event.clientX - bounds.left, event.clientY - bounds.top"));
     assert!(STATE.contains("pub fn anchor_px_up("));
     assert!(STATE.contains("pub fn drag_delta_px_down("));
     assert!(STATE.contains("fn css_to_grid_scale("));
-    assert_eq!(LIB.matches("let grid = app.grid_extent();").count(), 4);
+    assert_eq!(LIB.matches("let grid = app.grid_extent();").count(), 2);
     assert!(LIB.contains("pointer_css_x: f64"));
     assert!(LIB.contains("rect_css_height: f64"));
-    assert!(LIB.contains("delta_css_y_down: f64"));
+    assert!(LIB.contains("end_css_y_down: f64"));
+    // The marker is placed by the page in its own pixels; nothing else halves the canvas.
+    assert_eq!(MAIN.matches("bounds.width / 2").count(), 1);
+    assert_eq!(MAIN.matches("bounds.height / 2").count(), 1);
 }
 
 #[test]
