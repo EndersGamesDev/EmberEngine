@@ -307,7 +307,11 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
     assert!(MAIN.contains("for (const apply of Object.values(APPLY)) apply();"));
     // Every field of a row reaches its control by name, so a row that grows a field reaches a
     // slider named after it with no edit to the loader. This is the whole of the mapping.
-    assert!(MAIN.contains(r#"const ROW_CONTROL_ALIAS = { height_scale: "height", zoom_log2: "scale" };"#));
+    assert!(
+        MAIN.contains(
+            r#"const ROW_CONTROL_ALIAS = { height_scale: "height", zoom_log2: "scale" };"#
+        )
+    );
     assert!(MAIN.contains(r#"field.replaceAll("_", "-")"#));
     assert!(MAIN.contains("for (const [field, value] of Object.entries(row)) {"));
     assert_eq!(MAIN.matches("api.app_set_plane_angles(").count(), 1);
@@ -449,7 +453,10 @@ fn a_click_names_a_point_and_every_zoom_is_taken_about_it() {
         "crosshair_precision_bits",
         "crosshair_point_f64",
     ] {
-        assert!(LIB.contains(fact), "missing published crosshair fact {fact}");
+        assert!(
+            LIB.contains(fact),
+            "missing published crosshair fact {fact}"
+        );
     }
 }
 

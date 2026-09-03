@@ -323,7 +323,10 @@ mod wasm_entry {
     /// the point rather than a memory of a pixel. `on_surface` is false when the point has left
     /// the canvas box; the point is kept either way.
     #[wasm_bindgen]
-    pub fn app_crosshair_json(rect_css_width: f64, rect_css_height: f64) -> Result<String, JsValue> {
+    pub fn app_crosshair_json(
+        rect_css_width: f64,
+        rect_css_height: f64,
+    ) -> Result<String, JsValue> {
         with_app(|app| {
             let grid = app.grid_extent();
             let viewer = app.viewer();
