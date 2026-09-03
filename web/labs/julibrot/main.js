@@ -94,13 +94,21 @@ function centreDigits(zoomLog2) {
 function describeRow(name, row) {
   if (!row) return `${name} is empty`;
   const digits = centreDigits(row.zoom_log2);
-  const angles = [...OBJECT_IDS, ...CAMERA_IDS].map(field => row[field])
-    .concat(row.camera_yaw, row.camera_pitch)
-    .map(value => Number(value).toFixed(3)).join(" ");
+  const angles = [...OBJECT_IDS, ...CAMERA_IDS].map(field => Number(row[field]).toFixed(3)).join(" ");
   const translation = TRANSLATION_IDS.map(field => Number(row[field]).toFixed(3)).join(" ");
   const origin = row.origin.map(value => Number(value).toFixed(3)).join(" ");
   const centre = row.centre_f64.map(value => Number(value).toFixed(digits)).join(" ");
-  return `${name}: angles ${angles} · translation ${translation} · origin ${origin} · zoom_log2 ${Number(row.zoom_log2).toFixed(3)} · centre ${centre}`;
+  // The view scalars are named rather than folded into the angle run. A row differing only in
+  // height is a different picture and, at a tilted slice, a different reprojection problem; a
+  // summary that omits it sends anyone comparing two rows looking in the wrong place.
+  const view = [
+    `height ${Number(row.height_scale).toFixed(3)}`,
+    `d5 ${Number(row.distance_five).toFixed(3)}`,
+    `d4 ${Number(row.distance_four).toFixed(3)}`,
+    `yaw ${Number(row.camera_yaw).toFixed(3)}`,
+    `pitch ${Number(row.camera_pitch).toFixed(3)}`,
+  ].join(" ");
+  return `${name}: angles ${angles} · view ${view} · translation ${translation} · origin ${origin} · zoom_log2 ${Number(row.zoom_log2).toFixed(3)} · centre ${centre}`;
 }
 
 function timerProbe() {

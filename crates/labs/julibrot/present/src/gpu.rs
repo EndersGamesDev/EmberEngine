@@ -313,24 +313,32 @@ impl Presenter {
         self.hot[slot.index() as usize] = pose;
         self.latest_hot_slot = Some(slot);
         self.hot_warp_source[slot.index() as usize].write_hot(&plan);
-        self.hot_exposed[slot.index() as usize] = plan.exposed;
-        self.exposure.observe_warp(plan.exposed);
+        // A refusal against the pose the retained scene was rendered at is not a disocclusion.
+        // Exposure means the destination shows ground the source cannot cover, and the answer to
+        // it is a completed scene; when the source already is the completed scene at this exact
+        // pose there is no such ground, and restarting the ladder can only produce the same scene
+        // again. Latching it there is how a held pose spends forever refining what it already has.
+        let showing_retained_pose = pose.as_ref().is_some_and(|current| {
+            self.ledger
+                .retained()
+                .is_some_and(|frame| crate::renders_same_picture(&frame.pose, current))
+        });
+        let exposed = plan.exposed && !showing_retained_pose;
+        self.hot_exposed[slot.index() as usize] = exposed;
+        self.exposure.observe_warp(exposed);
         self.facts.centre_from_reference_px = hot.state.centre_from_reference_px;
         self.facts.view = hot.view;
         let exposed_fraction = pose
             .as_ref()
             .and_then(|to_pose| warp_exposed_fraction(&plan, to_pose, self.ledger.retained()));
         self.facts.record_warp_plan(&plan, exposed_fraction);
+        self.facts.warp_exposed = exposed;
         self.facts.scene_fill_due = self.exposure.due();
         if matches!(plan.kind, WarpKind::ClearOnly | WarpKind::ReliefRedraw)
             && self.ledger.retained().is_none()
         {
             self.facts.status = PresentStatus::WaitingForFirstScene;
-        } else if pose.is_some_and(|current| {
-            self.ledger
-                .retained()
-                .is_some_and(|frame| frame.pose == current)
-        }) {
+        } else if showing_retained_pose {
             self.facts.status = PresentStatus::ShowingCompletedScene;
         } else if plan.source_valid {
             self.facts.status = PresentStatus::ShowingStaleApproximation;
