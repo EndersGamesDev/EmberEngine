@@ -275,8 +275,8 @@ mod tests {
     };
 
     use super::{
-        MathFailureCode, MonotonicClock, ORBIT_CHUNK_MAX_ITERATIONS,
-        ORBIT_DEADLINE_CHECK_INTERVAL, OrbitTaskPoll, ReferenceOrbitTask, math_error,
+        MathFailureCode, MonotonicClock, ORBIT_CHUNK_MAX_ITERATIONS, ORBIT_DEADLINE_CHECK_INTERVAL,
+        OrbitTaskPoll, ReferenceOrbitTask, math_error,
     };
     use crate::wire::{
         HEADER_BYTES, ORBIT_FACT_BYTES, OrbitVerificationFacts, Pool, WireBuffer, write_words,
