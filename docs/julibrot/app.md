@@ -490,6 +490,8 @@ The native `facts_refresh_reuses_cached_text_and_borrows_the_timing_ledger` fram
 
 The native `unchanged_refreshes_reuse_one_checked_plane` viewer-refresh harness measures 120 plane constructions before and zero after across 120 unchanged refreshes, with one construction at initialization and exactly one more when the object angles change.
 
+The controller caches the accepted neutral-height `PoseMap` by every input to its construction — all object angles, all VIEW controls, zoom and extent — so the HOT drain and the refresh `ViewStamp` share the checked value; the ignored `measures_viewer_refresh_map_constructions_before_after` viewer-refresh harness measures 240 constructions before and one after across 120 unchanged refreshes, and its pinning test changes each key field independently.
+
 Native page-contract tests pin no wheel handler, click target, plain-drag pan, Shift-box zoom, scale range, all six object, ten camera, and five translation ids, checked `auto-scene` and `update-scene` bindings, both view boxes, row persistence, morph, loader `?v=1`, and ABI 3.
 
 Native page-contract tests pin ABI and URLs, one wasm artifact plus `worker_main`, browser-owner construction and typed skew refusal before orbit transfer, explicit GL-only descriptor, hook and handler ordering, clear-first overlay text, no panic accessor in acquisition, all facts fields, DOM overlay, and approximately 4.5 MB disclosure beside exact release bytes.
