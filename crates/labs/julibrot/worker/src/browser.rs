@@ -16,7 +16,7 @@ use web_sys::{DedicatedWorkerGlobalScope, MessageEvent, WorkerGlobalScope};
 use crate::codec::visit_transfer_request_body_words;
 use crate::wire::{
     BUFFER_OVERHEAD_BYTES, ORBIT_FACT_BYTES, OrbitVerificationFacts, WireBuffer,
-    validate_message_layout,
+    retains_orbit_payload, validate_message_layout,
 };
 use crate::{
     Admission, ChannelError, CreditAccount, CreditCharge, ErrorCode, HEADER_BYTES,
@@ -386,8 +386,11 @@ impl TransferBuffer {
 
     pub(crate) fn write_header(&self, header: MessageHeader) -> Result<(), ChannelError> {
         self.validate_trailer()?;
-        let message_end = self.bytes.length() - u32::try_from(POOL_TRAILER_BYTES).unwrap_or(16);
-        drop(self.bytes.fill(0, 0, message_end));
+        let kind = header.validate()?;
+        if !retains_orbit_payload(kind) {
+            let message_end = self.bytes.length() - u32::try_from(POOL_TRAILER_BYTES).unwrap_or(16);
+            drop(self.bytes.fill(0, 0, message_end));
+        }
         write_words_at(
             &self.bytes,
             0,

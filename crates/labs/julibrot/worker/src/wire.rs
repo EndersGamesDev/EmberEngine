@@ -503,9 +503,13 @@ impl WireBuffer {
         self.message_bytes_mut().fill(0);
     }
 
-    /// Writes one canonical header after clearing stale payload bytes.
+    /// Writes one canonical header, retaining producer-owned orbit payload bytes when the kind
+    /// never reads them.
     pub(crate) fn write_header(&mut self, header: MessageHeader) -> Result<(), ChannelError> {
-        self.clear_message();
+        let kind = header.validate()?;
+        if !retains_orbit_payload(kind) {
+            self.clear_message();
+        }
         header.write_to(self.message_bytes_mut())
     }
 
@@ -515,7 +519,7 @@ impl WireBuffer {
         MessageHeader::read_from(&self.bytes)
     }
 
-    /// Validates pool, kind, count, and zero-filled unused capacity.
+    /// Validates pool, kind, count, and any unused capacity owned by the message kind.
     pub(crate) fn validate_message(&self) -> Result<MessageKind, ChannelError> {
         let (pool, _) = self.identity()?;
         let header = self.header()?;
@@ -714,7 +718,7 @@ pub fn validate_message_layout(
     let message_end = capacity
         - POOL_TRAILER_BYTES
         - usize::from(kind == MessageKind::OrbitResponse) * ORBIT_FACT_BYTES;
-    if !unused_is_zero(used, message_end) {
+    if !retains_orbit_payload(kind) && !unused_is_zero(used, message_end) {
         return Err(ChannelError::new(
             ErrorCode::BadLength,
             header.length,
@@ -723,6 +727,16 @@ pub fn validate_message_layout(
         ));
     }
     Ok(kind)
+}
+
+pub(crate) const fn retains_orbit_payload(kind: MessageKind) -> bool {
+    matches!(
+        kind,
+        MessageKind::OrbitResponse
+            | MessageKind::CreditApplied
+            | MessageKind::CreditStale
+            | MessageKind::OrbitCancelled
+    )
 }
 
 #[cfg(test)]
@@ -813,12 +827,13 @@ mod tests {
     }
 
     #[test]
-    fn orbit_and_error_payloads_have_exact_bytes_and_zero_tail() {
+    fn orbit_decode_ignores_poisoned_tail_and_credit_retains_payload() {
         let records = [
             ReferenceOrbitRecord { re: 1.0, im: -2.0 },
             ReferenceOrbitRecord { re: 0.0, im: 0.0 },
         ];
         let mut orbit = WireBuffer::new(Pool::Orbit, 0, 64).unwrap();
+        orbit.message_bytes_mut()[HEADER_BYTES..].fill(0xa5);
         let facts = OrbitVerificationFacts::stable(2, 1);
         orbit
             .write_orbit(7, 320, 901, 249_099, &records, facts)
@@ -830,8 +845,17 @@ mod tests {
         assert!(
             orbit.as_bytes()[48..orbit.capacity() - 32]
                 .iter()
-                .all(|byte| *byte == 0)
+                .all(|byte| *byte == 0xa5)
         );
+
+        let payload = orbit.as_bytes()[HEADER_BYTES..48].to_vec();
+        let mut credit = MessageHeader::new(MessageKind::CreditApplied, 7);
+        credit.precision_bits = 320;
+        credit.compute_us = 901;
+        credit.credit_us = 249_099;
+        orbit.write_header(credit).unwrap();
+        assert_eq!(orbit.validate_message(), Ok(MessageKind::CreditApplied));
+        assert_eq!(&orbit.as_bytes()[HEADER_BYTES..48], payload.as_slice());
 
         let expected = crate::ChannelError::new(ErrorCode::CentreEncodingWall, 128, 624, 512);
         let mut error = WireBuffer::new(Pool::Request, 1, 64).unwrap();

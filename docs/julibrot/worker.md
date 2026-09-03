@@ -160,7 +160,7 @@ MAIN stores a session-local `OrbitHandle` only after kernels have synchronously 
 
 ## 3. INTERFACES
 
-All wire integers and floats are little-endian; reserved fields and unoccupied bytes are zero on send and ignored only after version validation; all byte offsets below are from the start of the standalone `ArrayBuffer`.
+All wire integers and floats are little-endian; reserved fields are zero on send, request/error padding is zero, and orbit-pool bytes outside the declared record prefix and fixed fact tail remain producer-owned and are never read; all byte offsets below are from the start of the standalone `ArrayBuffer`.
 
 ### 3.1 Shared wire header and trailer
 
@@ -215,7 +215,7 @@ The library-independent dyadic encoding lets math's selected Astro-float `BigSca
 
 ### 3.3 Orbit response and credit return
 
-`OrbitResponse` is the 32-byte header followed immediately by `length` reference records, a zero unused region, a 16-byte verification-fact tail, and the 16-byte pool trailer; records use `32+8·length` bytes, the fact tail is `{ verification:u32,max_consumed_word_error_ulps:u32,precision_escalations:u32,reserved:u32 }`, deferred error is `u32::MAX`, and `1 ≤ length ≤ max_iter`.
+`OrbitResponse` is the 32-byte header followed immediately by `length` reference records, producer-owned unused capacity that no validator or decoder reads, a 16-byte verification-fact tail, and the 16-byte pool trailer; records use `32+8·length` bytes, the fact tail is `{ verification:u32,max_consumed_word_error_ulps:u32,precision_escalations:u32,reserved:u32 }`, deferred error is `u32::MAX`, and `1 ≤ length ≤ max_iter`.
 
 The high-level response view exposes generation, length, compute wall, delivered precision, admission credit, cancellation, the exclusive orbit lease, `reference_verification()`, `max_consumed_word_error_ulps()`, and `precision_escalations()`; a cancelled response has `length = 0`, no record bytes, and deferred verification, while `compute_ms()` is exactly `f64::from(compute_us)/1,000` and is a display conversion, not another measurement.
 

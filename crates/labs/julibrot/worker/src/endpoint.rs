@@ -28,10 +28,10 @@ pub(crate) trait OwnerSlot: Sized {
     /// Reads and validates the message header.
     fn header(&self) -> Result<MessageHeader, ChannelError>;
 
-    /// Validates pool, kind, count, and zero-filled unused capacity.
+    /// Validates pool, kind, count, and kind-owned unused capacity.
     fn validate_message(&self) -> Result<MessageKind, ChannelError>;
 
-    /// Clears the message bytes and writes one canonical header.
+    /// Writes one canonical header under the message kind's payload-ownership rule.
     fn write_header(&self, header: MessageHeader) -> Result<(), ChannelError>;
 
     /// Writes one canonical request body into a request-pool slot.
