@@ -728,8 +728,8 @@ fn frame_loop_preserves_cross_slice_order_and_cooperative_polling() {
     assert!(MAIN.contains("return api.app_needs_refresh();"));
     assert_eq!(
         MAIN.matches("if (stillTurning()) scheduleFrame();").count(),
-        3,
-        "the loader re-schedules from the completed turn, the caught throw, and the wake-up"
+        4,
+        "the loader re-schedules from the completed turn, the caught throw, the wake-up, and automatic scene re-entry"
     );
     assert!(FRAME.contains("runtime.complete_warp"));
 }
