@@ -1420,9 +1420,11 @@ const fn clear_warp_plan(edge_on: bool, exposed: bool) -> crate::WarpPlan {
 
 #[cfg(test)]
 mod tests {
+    use ember_julibrot_kernels::RefinementLevel;
     use ember_julibrot_math::{PrecisionMode, ViewControls};
 
     use super::*;
+    use crate::SubmissionMeasurement;
     use crate::state::PendingScene;
 
     fn binding_pose() -> Pose {
