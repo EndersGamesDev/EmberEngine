@@ -86,6 +86,7 @@ impl SceneLedger {
         Ok(texture_index)
     }
 
+    #[cfg(test)]
     pub fn complete(&mut self, measurement: SubmissionMeasurement) -> Option<SceneCompletion> {
         self.complete_preserving_accepted_best(measurement, false)
     }
