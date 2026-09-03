@@ -4,13 +4,15 @@ Status: draft design study.
 
 ## Decision summary
 
-The cache is a set of rendered tiles captured from many five-dimensional render poses of the same scene; a requested frame reprojects every candidate tile from its own pose through the full five-dimensional camera chain and depth-composites their transformed meshes, so tiles rendered at different angles may overlap and intersect and are layered by nearness.
+The cache is a set of rendered tiles captured from many five-dimensional render poses of the same scene, represented to the GPU by an RGBA32F descriptor map that joins each tile's pose header to its value and lifted-position samples. A requested frame lays every candidate tile out from its own pose through the full five-dimensional camera chain and depth-composites the transformed meshes, so tiles rendered at different angles may overlap and intersect and are layered by nearness.
 
 Rendering itself is tile-based and demand-ordered: a missing part of the requested wide scene is filled at the coarsest sufficient level before any already-covered region receives more detail. The cached unit is a screen-aligned fragment of one completed render, not a rectangle of a canonical chart image. Each tile is stamped with the source object `O` and origin, camera `Q` and translation, height, `d5`, `d4`, yaw, pitch, zoom, canvas extent, source pixel rectangle, slice identity, and MAIN generation, and it retains both palette-independent value records and lifted source depth for its samples.
 
 Reprojection is per tile and per mesh vertex. A source pixel plus its depth and source pose reconstructs the lifted point represented by that sample; the requested pose then runs that point through its own full five-dimensional projection and produces a new screen position and true target depth. There is no single global homography warp in this design, including when many tiles happen to share a source pose.
 
-Composition is one depth-tested render pass over the selected transformed tile meshes. True target depth chooses between distinct surface points, while refinement level, sampling density, error bound, and age choose only between competing representations of the same surface point; quality is never added to physical depth.
+Composition is one depth-tested render pass over instanced tile meshes whose vertex stage reads source pose and lifted samples from the descriptor map. True target depth chooses between distinct surface points, while refinement level, sampling density, error bound, and age choose only between competing representations of the same surface point; quality is never added to physical depth.
+
+Resolution follows geometry rather than a CPU quality ranking: a tile captured nearer to its scene part carries denser surface samples, that density remains attached to its reconstructed points on the target screen, and after every candidate is laid out in the requested five-dimensional pose the nearest-by-depth winner is the best-resolved visible part by construction. The CPU does not solve a set cover to choose resolution.
 
 The chart-space pyramid remains, but only as a semantic and spatial index. It partitions slice and MAIN identity, records each rendered tile's derived chart coverage and density, drives the direct candidate walk, and names the protected coarse backdrop window; it is not the tile's storage geometry or sampling lattice.
 
@@ -68,9 +70,9 @@ Consequently, a successful lab proof establishes pose provenance, full-chain rep
 
 A rendered tile lives in post-visibility source-screen pixel space. Its physical record grid is initially 256×256, with a 254×254 drawn core and one retained-pixel apron on every edge; its key names the source render pose and integer source pixel rectangle. Adjacent tiles cut from the same rendered view share source edge pixels, but tiles from different views need not share surface samples, axes, or edges.
 
-The durable payload is two equal-length post-visibility arrays: the winning palette-independent escape-value record per source pixel and its lifted source-depth/reconstruction record with validity. No screen color, palette result, exposure result, tone-mapped pixel, hidden source fragment, or target depth attachment is retained as tile cache.
+The durable GPU payload is the descriptor map: one pose header per rendered tile and two equal-length post-visibility RGBA32F sample columns, the winning palette-independent escape-value record and the lifted source-depth/reconstruction record with validity. No screen color, palette result, exposure result, tone-mapped pixel, hidden source fragment, or target depth attachment is retained as tile cache.
 
-Deep-zoom surface identity remains exact because the source pose carries the bignum center and scale provenance and the reconstruction record identifies the source-local plane point represented by a retained pixel. A finite `f64` offset may drive projection after that mapping is certified, but it is never the equality key for an absolute deep position.
+Deep-zoom surface identity remains exact because the CPU semantic descriptor carries an interned bignum-anchor ID and scale provenance and the reconstruction record identifies the source-local plane point represented by a retained pixel. RGBA32F never stores the absolute bignum coordinate: before composition the CPU resolves the source and requested anchors exactly and materializes a compensated high/low local delta in the tile header; a finite mirror drives projection only after that mapping is certified and is never an equality key.
 
 The chart pyramid has an immutable bignum anchor and signed dyadic node coordinates. Publication conservatively derives each rendered tile's canonical chart footprint, density interval, horizon cuts, and uncertainty from its source map and valid sample domain, then inserts the tile ID into every bounded index node required by that footprint. A tile may occupy several nodes, and a node may reference tiles from many render poses.
 
@@ -88,8 +90,8 @@ Every backdrop tile must pass the normal precision, glitch, source-depth, and pl
 
 |Property|Current retained scene|Proposed rendered tile|
 |--------|----------------------|----------------------|
-|Retained unit|One whole LDR screen image|One source-screen fragment with value and lifted depth|
-|Pose provenance|One retained pose|Full render pose per tile, with many poses resident together|
+|Retained unit|One whole LDR screen image|One source-screen fragment with descriptor header and `S0/S1` samples|
+|Pose provenance|One retained pose|Full RGBA32F pose header per tile, with many poses resident together|
 |Reprojection|One depth-free screen homography|One full-chain depth-bearing mesh transform per tile|
 |Overlap|Only the last image|Arbitrary transformed overlap among source poses|
 |Visibility|Already baked into source color|Recomputed per pixel with true target depth for retained samples|
@@ -98,17 +100,56 @@ Every backdrop tile must pass the normal precision, glitch, source-depth, and pl
 
 ## Rendered-tile descriptor and heap relationship
 
-Each descriptor has a stable `tile_id` and a `content_key`. The content key contains the canonical slice identity, formula and record ABI, MAIN generation, precision mode, requested-cap semantics, reference-orbit generation under the conservative first policy, and any record interpretation version; it contains no render pose or display control.
+Each CPU semantic descriptor has a stable `tile_id` and a `content_key`. The content key contains the canonical slice identity, formula and record ABI, MAIN generation, precision mode, requested-cap semantics, reference-orbit generation under the conservative first policy, and any record interpretation version; it contains no render pose or display control. This CPU form remains the f64 and bignum identity authority, while the GPU descriptor map is its bounded RGBA32F projection for composition.
 
 The separate `render_key` contains the complete source pose: object angles `O`, plane origin, certified plane basis and canonical transform, exact bignum-center serialization and revision, scale, camera `Q`, five-dimensional translation, height scale, `d5`, `d4`, yaw, pitch, zoom, source canvas extent, and accepted source screen map. The cache lookup key is `(content_key, render_key, source_rect, delivered_rung)`; publication epoch and age are lifetime facts, not pose identity.
 
-Source geometry facts contain the 256×256 physical extent, 254×254 core, apron, post-visibility valid-pixel mask or validity channel, source depth and reconstruction definition, minimum and maximum finite source depth, horizon and pole classifications, and enough mesh topology information to reproduce the rendered fragment without consulting a discarded scene texture or pre-raster grid.
+The GPU descriptor map is one logical record set over the heap lattice's stable RGBA32F DATA view: a shared header `DataSpan`, one existing value `DataSpan` per tile, and one lifted-sample `DataSpan` per tile. The header references both sample spans through their generation-checked directory indices, so after the CPU materializes the requested anchor residual the composition pass needs only the descriptor map, one current-target uniform, and current palette or HDR inputs; it does not rebuild source pose from CPU uniforms.
 
-Payload facts contain the generation-checked value `DataSpan`, depth `DataSpan`, logical and reserved bytes for both, initialized prefix, publication fences, and record count. On the current heap floor the two columns are separate RGBA32F spans; a later compact depth format is a distinct capability and ABI, not assumed padding savings.
+One header slot is exactly 32 RGBA32F texels, 512 bytes, aligned to the existing 16-byte heap record and to a power-of-two texel stride. A 256×256 descriptor page reserves texels 0–63 for the frame's maximum 64 active-instance records `[header_slot,mesh_class,ownership_revision,flags]`, texels 64–2,111 for 64 complete header slots at `64+32*header_slot`, and texels 2,112–65,535 as a 63,424-record compact chart-ownership arena addressed by each header. The three regions are 1,024, 32,768, and 1,014,784 bytes and fill the 1 MiB page exactly.
+
+|Header texels|RGBA32F lanes|Meaning|
+|-------------|-------------|-------|
+|`H00`|`tile_id, content_key_id, anchor_id, flags`|Stable tile, semantic partition, exact-anchor interner reference, and validity bits|
+|`H01`|`value_span, lifted_span, ownership_base, header_generation`|Generation-checked sample-span directory indices, ownership-arena base, and header generation|
+|`H02–H04`|Six ordered `(cos O_ij,sin O_ij)` factor pairs, two per texel|Six `SO(4)` object factors in `12,13,14,23,24,34` order|
+|`H05–H09`|Ten ordered `(cos Q_ij,sin Q_ij)` factor pairs, two per texel|Ten `SO(5)` camera factors in `12,13,14,23,24,34,15,25,35,45` order|
+|`H10`|`cos yaw,sin yaw,cos pitch,sin pitch`|Source observer rotation|
+|`H11–H12`|`origin0_hi..origin3_hi, origin0_lo..origin3_lo`|Compensated four-dimensional source plane origin|
+|`H13`|`t0,t1,t2,t3`|First four source camera-translation coordinates|
+|`H14`|`t4,height,d5,d4`|Fifth translation, source height, and both source perspective distances|
+|`H15`|`zoom_log2,extent_w,extent_h,chart_density`|Source zoom, canvas extent, and delivered density|
+|`H16`|`rect_x,rect_y,rect_w,rect_h`|Integer source-screen rectangle|
+|`H17`|`anchor_dx_hi,anchor_dx_lo,anchor_dy_hi,anchor_dy_lo`|Requested-pose-relative deep-anchor delta materialized before the pass|
+|`H18–H20`|Three padded rows of the accepted source screen map|Source pixel-to-plane reconstruction and round-trip oracle|
+|`H21`|`depth_min,depth_max,coordinate_error,reprojection_error`|Finite source-depth range and admission bounds|
+|`H22`|`residency_rank,refinement_rung,iteration_cap,age_rank`|Same-surface ownership and scheduling facts|
+|`H23`|`valid_count,glitch_count,uncertain_count,mesh_class`|Sample status and mesh selection|
+|`H24`|`chart_scale_hi,chart_scale_lo,anchor_precision_bits,anchor_revision`|Compensated local scale and exact-anchor provenance|
+|`H25`|`slice_key_id,MAIN_generation,record_ABI,reference_generation`|Semantic and record provenance checked before admission|
+|`H26`|`ownership_count,ownership_revision,value_generation,lifted_generation`|Bounded same-surface mask records and sample-span generations|
+|`H27–H31`|Zero|Reserved; nonzero use requires a descriptor-map ABI revision|
+
+Every ID, count, extent, rank, and flag lane is an integer-valued finite `f32` strictly below `2^24`; arbitrary integer bit patterns and NaN payloads are forbidden. The rotation lanes carry the same precomputed sine/cosine factor representation already used by the present HOT payload, and the high/low lanes carry a checked compensated split rather than claiming one `f32` is the source authority.
+
+Each compact ownership-arena texel is `[first_local_cell,run_length,owner_header_slot,quality_rank]`, an exact-in-f32 run over same-surface chart cells sorted by local cell. `H01.ownership_base` and `H26.ownership_count` bound the runs for one tile; zero runs means no duplicate exclusion, and exhaustion refuses additional duplicates rather than suppressing a distinct intersection. These records implement only the same-surface tie-break and are not a CPU-selected screen cover.
+
+Each physical 256×256 tile has 65,536 sample indices and exactly two RGBA32F texels per sample, expressed as paired structure-of-arrays spans so the existing two-output executor can publish without an interleave copy.
+
+|Sample texel|RGBA32F lanes|Bytes|Meaning|
+|------------|-------------|----:|-------|
+|`S0[k]`|Existing escape-record lanes unchanged|16|Palette-independent value, escape classification, rebase, and status under the existing record ABI|
+|`S1[k]`|`a_F,b_F,zeta_F,validity`|16|Source-local plane coordinates, positive linear lifted source depth, and exact zero-or-one validity|
+
+The descriptor map therefore costs exactly 32 bytes per sample, 2,097,152 sample bytes per physical tile, plus one 512-byte header slot: 2,097,664 logical bytes per resident tile. `S0` preserves the existing 16-byte record byte-for-byte and `S1` replaces the former ad-hoc depth record with the versioned lifted-position half of the descriptor-map ABI.
+
+Source geometry facts contain the 256×256 physical extent, 254×254 core, apron, post-visibility validity channel, source depth and reconstruction definition, minimum and maximum finite source depth, horizon and pole classifications, and enough mesh topology information to reproduce the rendered fragment without consulting a discarded scene texture or pre-raster grid.
+
+Payload facts contain the generation-checked header slot, value `DataSpan`, lifted-sample `DataSpan`, logical and reserved bytes, initialized prefixes, publication fences, and record count. Header, `S0`, and `S1` publish transactionally; a later compact representation is a distinct descriptor-map ABI and capability, not assumed padding savings.
 
 Derived index facts contain the canonical chart footprint and conservative bound, chart-density interval, pyramid nodes containing the tile ID, bignum anchor digest, source-to-canonical error, and index revision. These facts may be rebuilt from the render pose and sample domain; they accelerate selection but never redefine the stored samples.
 
-Quality facts contain Detail or Backdrop residency, Preview, Interactive, or Final rung, delivered cap, sample density, coordinate and source-depth errors, glitch and uncertain counts, mesh interpolation bound, and a monotonic quality tuple. Age is a deterministic serial and breaks ties only after refinement, density, completeness, and error.
+Quality facts contain Detail or Backdrop residency, Preview, Interactive, or Final rung, delivered cap, sample density, coordinate and source-depth errors, glitch and uncertain counts, mesh interpolation bound, and a monotonic quality tuple. These facts schedule upgrades and break ties only for the same canonical surface point; they never choose resolution between intersecting surface points. Age is a deterministic serial and breaks same-surface ties only after refinement, density, completeness, and error.
 
 Lifetime facts contain creation, last-selected and last-visible serials, hit count, target-pose reuse count, source-pose family, pin reasons, backdrop-window generation, publication state, and eviction class. Pose diversity is observable rather than inferred from tile coordinates.
 
@@ -147,13 +188,13 @@ Selection starts with the target pose, not a preferred source pose. It derives t
 
 A candidate is admitted only where its transformed mesh is finite, intersects the requested screen, has valid value and source-depth samples, and carries a measured interpolation bound at most 1.0 px. Admission may be cell-local: a pole or missing sample clips the affected cells rather than converting a valid remainder into invented geometry.
 
-Pose proximity is a cost heuristic, not a correctness rule. A distant-angle tile can be the best source for a newly visible region, while a nearby source can become edge-on or expose no useful footprint. The selector ranks projected hole coverage, certified sampling density, refinement rung, reprojection error, and age when reducing candidates to the placement capacity; the definitive per-pixel ranking remains true target depth between distinct points and quality only between representations of the same point.
+Pose proximity is a bounded-enumeration heuristic, not a correctness or resolution rule. A distant-angle tile can contribute the nearest visible surface while a nearby source can become edge-on or expose no useful footprint, so the selector emits every valid intersecting tile admitted by the direct index walk and fixed placement wall; overflow follows the coverage-first scheduler and is published as omitted candidates or holes, not optimized by a CPU set-cover search. Same-surface ownership may discard duplicate representations, but only the GPU target-depth result chooses among different surface points.
 
-For every admitted mesh vertex, the vertex stage identifies the retained source pixel, loads its winning value and lifted source-depth/reconstruction record, reconstructs that source-visible surface point under the source pose, maps it through canonical slice identity, applies the requested height, and evaluates the requested five-dimensional camera and depth equations. The target position and `Depth24Plus` value therefore come from the requested pose rather than from interpolating a screen homography or copying source depth.
+For every admitted mesh vertex, instance index selects the tile header in the descriptor map, vertex index selects the retained source sample, and two nearest RGBA32F loads return its value and lifted source-depth/reconstruction records. The vertex stage reconstructs that source-visible surface point under the header's `O`, origin, `Q`, translation, observer, height, and perspective facts, maps it through canonical slice identity, applies the requested height, and evaluates the requested five-dimensional camera and depth equations. The target position and `Depth24Plus` value therefore come from the requested pose rather than from interpolating a screen homography or copying source depth.
 
-Version one reuses the present scene's screen-grid relief topology and complete five-dimensional vertex algebra once per tile, changing their inputs from the live grid and one pose to the tile's retained value/depth samples, source pose, and requested pose. This is the direct mechanical bridge from today's proven scene projection to multi-view reprojection.
+Version one reuses the present scene's screen-grid relief topology and complete five-dimensional vertex algebra once per tile, changing their inputs from the live grid and one pose to the tile's retained `S0/S1` descriptor samples, source header, and requested pose. This is the direct mechanical bridge from today's proven scene projection to multi-view reprojection.
 
-The baseline mesh draws the complete 254×254 retained core, with 253×253 cells and two triangles per cell. A coarser mesh class is allowed only when deterministic interior witnesses prove its target interpolation error remains at most 1.0 px; no mesh may subdivide past unavailable value/depth samples and pretend to discover surface detail.
+The baseline mesh draws the complete 254×254 retained core, with 253×253 cells and two triangles per cell. A coarser mesh class is allowed only when deterministic interior witnesses prove its target interpolation error remains at most 1.0 px; no mesh may subdivide past unavailable descriptor samples and pretend to discover surface detail.
 
 The source-depth receipt is checked during reconstruction. Reprojecting a tile back to its own render pose must reproduce every valid source pixel center, winning surface identity, and source depth within the declared numeric bound; disagreement marks the tile corrupt or the ABI mismatched before it can contaminate another pose.
 
@@ -161,9 +202,11 @@ The current depth-free `Warp::reproject` incompatibility checks remain useful in
 
 ## One-pass depth composition and intersections
 
-The target render pass begins with the transient clear, establishes only certified sky or exterior at far depth with a bounded background classification in that same pass, and submits every selected rendered tile mesh with depth writes enabled, `LessEqual`, no blending, and no cached color input. A fragment with no valid retained surface sample is discarded so source sky cannot occlude geometry contributed by another source view, while an unknown uncovered region remains clear rather than being mislabeled as exterior.
+The target render pass begins with the transient clear, establishes only certified sky or exterior at far depth with a bounded background classification in that same pass, and submits every selected rendered tile mesh with depth writes enabled, `LessEqual`, no blending, and no cached color input. Its required machinery is one `Depth24Plus` attachment, instanced per-tile meshes, an active-instance list into the descriptor map, and integer-addressed `textureLoad` lowered to nearest RGBA32F vertex-stage fetches on WebGL2 plus `EXT_color_buffer_float`. A fragment with no valid retained surface sample is discarded so source sky cannot occlude geometry contributed by another source view, while an unknown uncovered region remains clear rather than being mislabeled as exterior.
 
-For different surface points that reach the same target pixel, the smallest true target depth wins regardless of source pose, refinement, age, or draw order. This includes projected folds of the lifted Julibrot surface and intersections between tiles rendered at different angles.
+Tiles from different render poses are independent meshes and may intersect one another in the lifted surface. When different surface points reach the same target pixel, the smallest true target depth wins regardless of source pose, refinement, age, or draw order; this includes projected folds of the lifted Julibrot surface and every cross-pose tile intersection.
+
+No CPU set cover, global quality sort, or resolution-selection pass precedes that result. A nearer source capture already samples its represented scene part more densely, its descriptor reconstructs that density geometrically, and target depth exposes the best-resolved nearest part automatically after layout; candidate traversal supplies bounded inputs but does not decide the visible resolution.
 
 Quality is consulted only among representations of the same canonical surface point or chart microcell. The index walk assigns a deterministic same-surface owner using Detail before Backdrop, Final before Interactive before Preview, finer certified density, lower coordinate/depth/reprojection error, then newer age and stable tile ID; a compact per-tile chart-ownership mask suppresses inferior duplicate claims before depth testing.
 
@@ -187,11 +230,11 @@ The scheduler is back-ordered by need with the explicit ascending key `K(job)=(c
 
 Within either class, `visible_benefit=visible_area*quality_gain`, where visible area counts requested-frame pixels newly covered or improved and quality gain is the monotonic delivered-quality increase from Missing, Backdrop, Preview, Interactive, or Final. Larger benefit runs first, lower proved work cost breaks equal benefit, and stable job ID makes the order reproducible; thus a missing part of a wide view outranks a Final upgrade over an already usable picture.
 
-Visible-first rendered-tile families remain the source of demand, but “visible first” now means visible coverage before visible refinement. A draft may fill a hole because no incumbent exists, yet the draft-never-displaces rule still forbids it from replacing any better covered sample; a class-one publication replaces an incumbent only after the paired value/depth tile completes and wins the same-surface quality comparison.
+Visible-first rendered-tile families remain the source of demand, but “visible first” now means visible coverage before visible refinement. A draft may fill a hole because no incumbent exists, yet the draft-never-displaces rule still forbids it from replacing any better covered sample; a class-one publication replaces an incumbent only after its header and paired `S0/S1` spans complete transactionally and win the same-surface chart-ownership comparison. Quality and age never select resolution between different surface points.
 
 Invisible Detail tiles are never newly rendered. A Backdrop job whose transformed footprint closes a requested-frame hole is ordinary class-zero work and may consume the main tile budget before every Detail upgrade. Proactive off-screen maintenance of the protected 3×3 backdrop window uses only its separately bounded rolling budget, may begin only when no runnable class-zero requested-frame job remains, and may not consume the last credit, span pair, or publication slot needed to close a visible hole.
 
-Nine active backdrop tiles stay pinned, while three rolling rendered tiles, each with paired value/depth spans, let one row or column update without discarding the prior coverage. Each backdrop is still stamped with the source pose that rendered it; rolling the chart window or changing its preferred source angle creates new rendered tiles and leaves old ones as ordinary history once pins transfer.
+Nine active backdrop tiles stay pinned, while three rolling rendered tiles, each with a descriptor header and paired `S0/S1` spans, let one row or column update without discarding the prior coverage. Each backdrop is still stamped with the source pose that rendered it; rolling the chart window or changing its preferred source angle creates new rendered tiles and leaves old ones as ordinary history once pins transfer.
 
 The cache should retain useful pose diversity rather than forty-four nearly identical angles. After visible quality and recency, eviction policy favors tiles that uniquely cover a chart region or source-view direction, and the page publishes the delivered distribution rather than hiding it behind one LRU count.
 
@@ -203,63 +246,67 @@ Publication and selection both preserve the draft rule. A completed tile can ent
 
 ## Device-floor resource model
 
-The current heap's unit is one nearest-sampled RGBA32F record of 16 bytes. A rendered tile therefore uses one 256×256 RGBA32F span for escape values and, on the conservative floor, a second equal span for source depth and validity: 2 MiB per physical tile and 32 bytes per sample.
+The current heap's unit is one nearest-loaded RGBA32F record of 16 bytes, exactly the descriptor map's texel. Each rendered tile uses one 256×256 page for `S0` values and one for `S1` lifted positions, while all tile headers and the active-instance list share one 256×256 descriptor page; no new texture format, filterability, or binding class is required.
 
-The information lower bound is smaller only if every reconstruction auxiliary is derived exactly from pose: current 16-byte values plus one 4-byte depth is 20 bytes per sample, and a future 8-byte value dialect plus depth is 12 bytes. Version one may need source-local coordinates and validity in the depth record, and neither lower bound saves physical memory until a compact ABI is proved; padding either path into two RGBA32F spans still costs 32 bytes.
+The version-one ABI is decided at two records and 32 bytes per sample, not an information-theoretic compact estimate. The 512-byte header is a power-of-two record block, each sample column is exactly one 1 MiB page, and the shared descriptor page's active list, 64 headers, and chart-ownership arena exactly occupy 1 MiB.
 
-The existing example 64-page DATA heap cannot hold the earlier 56-tile promise once every tile owns two spans. Reserving eight pages for the orbit and other users leaves 56 pages, or 28 rendered tiles; protecting twelve backdrop tiles consumes 24 pages and leaves sixteen Detail/history tiles. This constrained profile must be published rather than silently dropping depth.
+In the existing example 64-page DATA heap, the shared descriptor page consumes one of the eight pages already reserved for the orbit and other non-sample users, leaving seven such pages and 56 sample pages, or 28 rendered tiles. Protecting twelve backdrop tiles consumes 24 sample pages and leaves sixteen Detail/history tiles; if the other users require all eight pages independently, the constructor must reduce the cache to 27 tiles or grow the heap rather than alias the descriptor map.
 
-Keeping the former twelve-backdrop plus forty-four-Detail policy requires 56 rendered tiles, 112 DATA pages for their paired spans, and eight non-tile pages: 120 pages total. With four 256 pages per 512×512 layer that is 30 RGBA32F array layers and 120 MiB of physical DATA allocation, subject to the constructor's memory and layer walls even though it is below the 256-layer dimensional limit.
+Keeping twelve backdrop plus forty-four Detail/history tiles requires 112 sample pages, one descriptor page, and seven other pages: 120 pages total. With four 256 pages per 512×512 layer that is 30 RGBA32F array layers and 120 MiB of physical DATA allocation, subject to the constructor's memory and layer walls even though it is below the 256-layer dimensional limit.
+
+The descriptor lattice has an independent span-directory wall: one shared header span plus two sample spans per resident tile requires 57 entries for 28 tiles and 113 entries for 56 tiles before the reference orbit or other live spans. The heap demo's 16-entry configuration is therefore insufficient; the Julibrot constructor must deliver and publish at least 64 entries for the constrained tier and 128 for the expanded tier, with enough page-handle records for every sample, header, orbit, and scratch page, or reduce the cache explicitly. These directory records remain comfortably below a 16 KiB binding when configured, but their actual delivered capacity is a gate rather than an assumption.
 
 Each full-core mesh has 64,516 vertices, 64,009 cells, 128,018 triangles, and 384,054 `u32` indices. One immutable 1,536,216-byte index buffer is shared by every full-core tile; vertex positions are generated from vertex index and placement entry, so cached per-tile vertex buffers are unnecessary.
 
-A naïve implementation issues one draw per transformed tile. The target uses one instanced indexed draw for every common mesh and pipeline class, with the tile descriptor selected by instance index; unusual clipped or coarsened meshes form a small bounded number of additional batches inside the same render pass.
+A naïve implementation issues one draw per transformed tile. The target instead uses one instanced indexed draw for every common mesh and pipeline class: instance index loads an active-list texel, that texel names a descriptor header, and the header names the two sample spans. Unusual clipped or coarsened meshes form a small bounded number of additional batches inside the same render pass.
 
-The placement uniform remains a constructor contract. A 192-byte entry for source inverse map, source rect, value and depth handles, canonical transform, target receipt, quality, and ownership-mask references allows 64 entries to consume 12,288 bytes, leaving a 256-byte header within the 16 KiB floor; if the proven layout is larger, capacity decreases explicitly or immutable data moves to an indexed texture, never past the uniform wall.
+The former ad-hoc 192-byte per-placement presentation-uniform entry is removed. Source pose, source rectangle, sample handles, quality tie-break, and ownership reference live in the descriptor map; the bounded presentation uniform contains only the requested target pose and frame shading inputs, while the 64-entry active list costs 1,024 bytes in the descriptor page. The heap's generic descriptor, span-directory, header, and resource uniforms remain fixed executor bindings. This keeps per-tile presentation state out of the 16 KiB uniform floor and makes the 64-instance wall explicit.
 
-The target uses one canvas-sized `Depth24Plus` attachment, cleared once and shared by every tile batch. Four bytes per pixel is a useful planning estimate—1.98 MiB at 960×540 and 7.91 MiB at 1920×1080—but actual allocation and padding are implementation facts, while the cached source-depth spans remain separate and persistent.
+The target uses one canvas-sized `Depth24Plus` attachment, cleared once and shared by every tile batch. Four bytes per pixel is a useful planning estimate—1.98 MiB at 960×540 and 7.91 MiB at 1920×1080—but actual allocation and padding are implementation facts, while the descriptor map's lifted-position spans remain separate and persistent.
 
-Two RGBA32F outputs fit under the four-attachment floor if value and source depth are produced together. The executor must nevertheless declare output, SCRATCH, directory, handle, and copy capacities for the paired publication; no design argument assumes an unused attachment or uniform slot.
+Two RGBA32F outputs fit under the four-attachment floor when `S0` and `S1` are produced together. The executor must nevertheless declare output, SCRATCH, directory, handle, header-slot, and copy capacities for transactional descriptor-map publication; no design argument assumes an unused attachment or directory entry.
 
 The cache allocates no palette-color atlas. Direct shading adds no color target beyond ordinary presentation; if wider arena composition needs linear accumulation, exactly one frame-scoped RGBA16F transient costs 3.96 MiB at 960×540 or 15.82 MiB at 1920×1080, is cleared and logically released every frame, and is never keyed or evicted as cache.
 
 ## Cost model and eviction
 
-All retained byte figures are binary MiB and exclude SCRATCH, the reference orbit, descriptors, the shared index buffer, target depth, ordinary presentation, and the optional frame transient unless stated otherwise.
+All retained totals below include the descriptor-map sample pair and 512-byte header slot, but exclude the one shared physical header page, SCRATCH, reference orbit, shared index buffer, target depth, ordinary presentation, and optional frame transient unless stated otherwise.
 
-|Resident set|Lower bound: 8-byte value plus 4-byte depth|Lower bound: 16-byte value plus 4-byte depth|Version-one floor: two RGBA32F spans|
-|------------|------------------------------------------:|-------------------------------------------:|-----------------------------------:|
-|One 256×256 rendered tile|0.75 MiB|1.25 MiB|2 MiB|
-|Nine active backdrop tiles|6.75 MiB|11.25 MiB|18 MiB|
-|Twelve protected and rolling backdrop tiles|9 MiB|15 MiB|24 MiB|
-|Sixteen Detail/history tiles in the 64-page profile|12 MiB|20 MiB|32 MiB|
-|Twenty-eight total tiles in the 64-page profile|21 MiB|35 MiB|56 MiB|
-|Forty-four Detail/history tiles in the expanded profile|33 MiB|55 MiB|88 MiB|
-|Fifty-six total tiles in the expanded profile|42 MiB|70 MiB|112 MiB|
+|Resident set|`S0+S1` sample bytes|Header bytes|Logical total bytes|Binary MiB|
+|------------|-------------------:|-----------:|------------------:|---------:|
+|One 256×256 rendered tile|2,097,152|512|2,097,664|2.000488|
+|Nine active backdrop tiles|18,874,368|4,608|18,878,976|18.004395|
+|Twelve protected and rolling backdrop tiles|25,165,824|6,144|25,171,968|24.005859|
+|Sixteen Detail/history tiles in the 64-page profile|33,554,432|8,192|33,562,624|32.007813|
+|Twenty-eight total tiles in the 64-page profile|58,720,256|14,336|58,734,592|56.013672|
+|Forty-four Detail/history tiles in the expanded profile|92,274,688|22,528|92,297,216|88.021484|
+|Fifty-six total tiles in the expanded profile|117,440,512|28,672|117,469,184|112.027344|
 
 The screen-aligned 254-sample core covers 253 source intervals per axis. A phase-friendly source view therefore needs 12 tiles at 960×540 and 40 at 1920×1080; arbitrary alignment can require 20 and 54 respectively.
 
-With nine active backdrop tiles, the friendly and worst 960×540 demand is 21 and 29 drawn tiles, costing 42 and 58 MiB on the floor, invoking 1,354,836 or 1,870,964 mesh vertices, and submitting 2,688,378 or 3,712,522 triangles before clipping. The 64-page profile can retain twelve Detail plus all twelve protected backdrop tiles for 48 MiB and four additional Detail history tiles; at worst it retains sixteen Detail plus twelve backdrop tiles for 56 MiB, draws only 25, and leaves four fine regions at backdrop quality.
+With nine active backdrop tiles, the friendly and worst 960×540 demand is 21 and 29 drawn tiles, referencing 42.010254 and 58.014160 logical MiB of descriptor records, invoking 1,354,836 or 1,870,964 mesh vertices, and submitting 2,688,378 or 3,712,522 triangles before clipping. The 64-page profile can retain twelve Detail plus all twelve protected backdrop tiles in 48 sample pages and 48.011719 logical MiB plus the shared header page, with four additional Detail history tiles; at worst it retains sixteen Detail plus twelve backdrop tiles in 56 sample pages and 56.013672 logical MiB, draws only 25, and leaves four fine regions at backdrop quality.
 
-At 1920×1080 the expanded profile retains forty friendly Detail plus all twelve protected backdrop tiles for 104 MiB and leaves four Detail history slots. It draws 49 active tiles for 98 MiB of referenced payload, 3,161,284 vertices, and 6,272,882 triangles; at worst it retains forty-four Detail plus twelve backdrop tiles for the full 112 MiB, draws 53 for 106 MiB of referenced payload, 3,419,348 vertices, and 6,784,954 triangles, while ten unavailable fine regions deliberately fall back to depth-bearing backdrop.
+At 1920×1080 the expanded profile retains forty friendly Detail plus all twelve protected backdrop tiles in 104 sample pages and 104.025391 logical MiB plus the shared header page, leaving four Detail history slots. It draws 49 active tiles with 98.023926 logical MiB of referenced records, 3,161,284 vertices, and 6,272,882 triangles; at worst it retains forty-four Detail plus twelve backdrop tiles in 112 sample pages and 112.027344 logical MiB, draws 53 with 106.025879 logical MiB, 3,419,348 vertices, and 6,784,954 triangles, while ten unavailable fine regions deliberately fall back to depth-bearing backdrop.
 
 These triangle counts are topology submissions, not raster cost. Projection can shrink, magnify, overlap, or clip every source tile, so the page must publish surviving fragments, depth-passed fragments, overdraw, rejected cells, and batches rather than deriving GPU time from source sample count.
 
-A whole screen-aligned value-plus-depth view before tiling reserves about 16 MiB at 960×540 and 64 MiB at 1920×1080 when both columns use the current RGBA32F page classes; retaining `N` whole views in migration stage 2 multiplies that cost. Splitting into tiles adds page-edge rounding but permits regional eviction and mixed-pose coverage.
+A whole screen-aligned descriptor sample pair before tiling logically costs 32 bytes per pixel plus its 512-byte pose header and reserves about 16 MiB at 960×540 or 64 MiB at 1920×1080 in the current RGBA32F page classes; retaining `N` whole views in migration stage 2 multiplies that cost. Splitting into tiles adds page-edge rounding but permits regional eviction and mixed-pose coverage.
 
-Today's retained design costs about 11.96 MiB at 960×540 and 47.82 MiB at 1920×1080 for one Final record reservation plus two LDR scene textures. Friendly rendered-tile draws reference 42 and 98 MiB, their resident sets including three rolling backdrop tiles cost 48 and 104 MiB, and the expanded full cache costs 112 MiB before shared resources. The design buys multi-angle depth history and return continuity with real memory rather than presenting tiling as a free optimization.
+Today's retained design costs about 11.96 MiB at 960×540 and 47.82 MiB at 1920×1080 for one Final record reservation plus two LDR scene textures. Friendly rendered-tile draws reference about 42.010 and 98.024 logical MiB, their resident sets including three rolling backdrop tiles cost about 48.012 and 104.025 logical MiB plus the shared header page, and the expanded full cache costs 112.027 logical MiB plus that page before other resources. The design buys GPU-readable pose descriptors, multi-angle lifted history, and return continuity with real memory rather than presenting tiling as a free optimization.
 
-The active backdrop's nine tiles contain 589,824 physical samples in each column. At cap 32 its value computation ceiling is 18,874,368 iterations and at cap 64 it is 37,748,736; source-depth generation and mesh presentation are additional measured work.
+The active backdrop's nine tiles contain 589,824 physical samples in each descriptor column plus 4,608 header bytes. At cap 32 its value computation ceiling is 18,874,368 iterations and at cap 64 it is 37,748,736; lifted-descriptor generation and mesh presentation are additional measured work.
 
-Eviction first removes invalid partitions, corrupt pairs, and failed drafts. It never frees either span of a selected, in-flight, publication-source, ownership-source, or pinned backdrop tile until all fences and frame references release both.
+Eviction first removes invalid partitions, corrupt descriptor sets, and failed drafts. It never reuses a header slot or frees either sample span of a selected, in-flight, publication-source, ownership-source, or pinned backdrop tile until all fences and frame references release the complete set.
 
 Among unpinned valid tiles, eviction uses last-selected age, distance from the requested chart footprint, projected usefulness, source-pose distance, unique chart coverage, and pose-direction diversity in that order after protecting better same-surface quality. Stable tile ID resolves exact ties.
 
-The principal wins are reuse after returning to a stored render pose, useful coverage from a different angle, camera continuity through old depth, regional replacement, and a coarse backdrop where no fine tile survives. The losses are paired value/depth storage, millions of mesh vertices, target overdraw, and inevitable holes where retained views never contained the newly visible arena surface.
+The principal wins are reuse after returning to a stored render pose, useful coverage from a different angle, camera continuity through old lifted descriptors, regional replacement, and a coarse backdrop where no fine tile survives. The losses are two RGBA32F sample records per point, millions of mesh vertices, target overdraw, and inevitable holes where retained views never contained the newly visible arena surface.
 
 ## Oracle, browser proofs, and published facts
 
-Source reconstruction tests take retained source sample centers and depths through source unprojection and require agreement with independent canonical-chart reconstruction, then project them back through the source pose and require the original screen center and source depth within the declared numeric bound.
+The descriptor-map layout oracle pins 32 header texels, both two-record sample columns, every lane and factor order, the 512-byte slot stride, the 64-record active prefix, 64 header slots, 63,424-record ownership arena, header and span generations, exact-in-f32 integer limits, zero reserved lanes, and the 2,097,664 logical bytes per tile. CPU packing followed by GPU readback must reproduce every finite header lane and both sample records bit-for-bit except the explicitly tolerance-bounded compensated splits.
+
+The descriptor round-trip oracle selects a header and sample using the same active-instance and vertex indices as the draw, reconstructs `O`, `Q`, origin, translation, observer, perspectives, source rectangle, exact-anchor-relative position, value height, and lifted source depth, and produces the source-visible five-dimensional point. It then projects that point back through the stored source pose to the original source pixel and depth, and through an independently supplied requested pose to screen and target depth; both results must agree with direct f64 construction within the declared source and 1.0 px target bounds.
 
 Per-tile reprojection tests transform every edge, a deterministic interior lattice, depth extrema, all five existing height witnesses, and adversarial pole cases from many source poses to many requested poses. Each admitted mesh reports finite maximum and p95 disagreement with direct full-chain projection, with the maximum at most 1.0 px.
 
@@ -273,7 +320,7 @@ Shading tests begin with the winning value record after depth and ownership, eva
 
 The arena-boundary oracle includes a synthetic three-dimensional slice scene in which one source view hides a surface that a target view reveals. The expected result is a reprojection hole until another rendered view or new render supplies it; any test that fills it from the foreground depth fails because the lab must not teach a false disocclusion guarantee.
 
-The first browser proof renders pose A, a materially different angle B, then returns to A under one content key. It shows both pose families resident, zero new escape work for A, per-tile source identities, correct target depth, and no stale LDR texture use.
+The first browser proof renders pose A, a materially different angle B, then returns to A under one content key. It shows both pose families resident, zero new escape work for A, per-tile descriptor header and sample-span identities, vertex-stage RGBA32F reads, correct target depth, and no stale LDR texture or per-tile source uniform use.
 
 The second proof retains several whole rendered views before chart tiling, reprojects all of them into an intermediate pose, and shows a one-pass depth image with constructed intersections whose result is independent of submission order. This pins migration stage 2 as the mechanism rather than merely a larger scene ledger.
 
@@ -283,15 +330,15 @@ The fourth proof establishes the nine-tile backdrop, then exercises every camera
 
 The fifth proof performs plane-preserving object and origin changes, then slice tilt, out-of-plane origin, cap, precision, and reference changes. It keeps every render-pose family for certified same-slice moves and immediately partitions every genuine content change.
 
-The sixth proof reverses Preview, Interactive, Final, backdrop, and fence completion order across overlapping source poses. It proves visible-first scheduling, paired value/depth publication, no draft downgrade, same-surface quality ownership, and physical-depth priority across distinct surfaces.
+The sixth proof reverses Preview, Interactive, Final, backdrop, and fence completion order across overlapping source poses. It proves visible-first scheduling, transactional header-plus-`S0/S1` publication, no draft downgrade, same-surface quality ownership, and physical-depth priority across distinct surfaces.
 
 The seventh proof gives the scheduler one dispatch credit while a coarse tile can close a visible hole in the requested wide frame and a Final tile can upgrade a region already covered by Preview. Every insertion-order permutation must select and publish the hole-closing tile first, leave the Preview incumbent undisplaced elsewhere, report the class-zero key and visible benefit, and select the Final upgrade only after coverage is closed; the browser sequence visibly removes the clear hole before sharpening the covered region.
 
-The page must publish content and render-key digests; source-pose family; source rectangle and extent; value and depth formats, spans, bytes, generations, ranges, and validity; derived chart footprint, density, index nodes, and uncertainty; requested and delivered backdrop extent; total, backdrop, Detail, pinned, candidate, deduplicated, selected, clipped, corrupt, and evicted tile counts; and pose-diversity facts.
+The page must publish content and render-key digests; source-pose family; descriptor-map ABI, header slot, active index, anchor ID and revision, compensated-anchor error, value and lifted span indices and generations, exact logical and reserved bytes, source rectangle and extent, depth range and validity; derived chart footprint, density, index nodes, and uncertainty; requested and delivered backdrop extent; total, backdrop, Detail, pinned, candidate, deduplicated, selected, clipped, corrupt, and evicted tile counts; and pose-diversity facts.
 
 For each frame it must publish the requested pose digest, chart nodes visited, candidate IDs returned, forward bounds tested, placement receipts accepted and refused by reason, scheduler coverage class, visible area, quality gain, visible benefit, selected stable job ID, deferred upgrades, backdrop-maintenance credits, mesh classes, vertices, triangles, batches, draw calls, target-depth mode, same-surface mask cells, shaded fragments, depth-passed fragments, overdraw, clear and sky fractions, optional HDR transient bytes, normalized compute and copy work, and CPU and fence walls.
 
-Correctness facts include maximum and p95 source reconstruction error, target reprojection error, depth disagreement, seam disagreement, horizon and pole counts, glitch and coordinate-uncertain counts, same-surface conflicts, quality-tie decisions, distinct-surface intersection decisions, stale-generation refusals, draft-downgrade refusals, and whether every displayed tile region has a current oracle receipt.
+Correctness facts include descriptor pack/readback agreement, maximum and p95 source reconstruction error, target reprojection error, depth disagreement, seam disagreement, horizon and pole counts, glitch and coordinate-uncertain counts, same-surface conflicts, quality-tie decisions, distinct-surface intersection decisions, stale-generation refusals, draft-downgrade refusals, and whether every displayed tile region has a current oracle receipt.
 
 ## Staged migration
 
@@ -299,20 +346,20 @@ Every stage keeps the page usable behind a capability switch, retains the last p
 
 |Stage|Working implementation at the end|Pinning tests and proofs|Estimate|
 |-----|---------------------------------|------------------------|-------:|
-|0. Rendered-view policy and math|Add render keys, source-depth ABI, source reconstruction, target full-chain projection, slice validity, derived chart footprints, quality ownership, and cost types without changing the current page|Pose serialization, source round-trip, direct target projection, depth definitions, same-slice equivalence, invalidation matrix, resource arithmetic|20–28 lane-hours|
-|1. One depth-bearing retained view|Replace the retained LDR source dependency with one whole-screen value-plus-depth view; reproject its mesh per vertex through the full target chain and shade values at placement, retaining the old homography path as a switchable fallback|Self-reprojection, material camera deltas, height changes, poles, 1.0 px admission, palette and HDR immediacy, current preset parity|36–52 lane-hours|
-|2. N retained rendered views reprojected and depth-composited|Generalize the ledger to bounded whole rendered views from different source poses and submit all selected meshes in one target depth pass before introducing chart tiling|Opposing angles, crossing relief, near Preview versus far Final, same-surface quality ties, order independence, holes, fence-safe paired spans, N=1 parity|40–60 lane-hours|
+|0. Rendered-view policy and math|Add render keys, the exact descriptor-map ABI, source reconstruction, target full-chain projection, slice validity, derived chart footprints, same-surface ownership, and cost types without changing the current page|Header and sample packing, pose serialization, descriptor round-trip, direct target projection, same-slice equivalence, invalidation matrix, resource arithmetic|20–28 lane-hours|
+|1. One depth-bearing retained view|Replace the retained LDR source dependency with one whole-screen descriptor-map view; reproject its mesh per vertex through the full target chain and shade values at placement, retaining the old homography path as a switchable fallback|GPU descriptor readback, self-reprojection, material camera deltas, height changes, poles, 1.0 px admission, palette and HDR immediacy, current preset parity|36–52 lane-hours|
+|2. N retained rendered views reprojected and depth-composited|Generalize the ledger to bounded whole descriptor-map views from different source poses and submit all selected meshes in one target depth pass before introducing chart tiling|Opposing angles, crossing relief, near Preview versus far Final, same-surface quality ties, order independence, holes, fence-safe header and sample spans, N=1 parity|40–60 lane-hours|
 |3. Screen-aligned rendered tiles and chart index|Split each rendered view into fixed source-screen tiles, derive chart footprints and density nodes, direct-walk and deduplicate candidates, batch instanced meshes, and permit regional publication and eviction|Same-view aprons, arbitrary cross-view overlaps, exhaustive index versus slow scan, unrelated-cache scaling, uniform and draw walls, both target extents|56–84 lane-hours|
-|4. Backdrop and per-tile refinement|Add nine active plus three rolling coarse rendered backdrop tiles, hole-before-upgrade demand ordering, visible-first tile families, paired value/depth refinement, reference sharing, pose-diverse retention, and protected eviction|3× extent, 127–253 interval density, rotate/pitch/zoom-out fallback, one-credit hole-versus-Final ordering, rolling fences, no invisible Detail work, no backdrop or draft displacement|40–60 lane-hours|
+|4. Backdrop and per-tile refinement|Add nine active plus three rolling coarse rendered backdrop tiles, hole-before-upgrade demand ordering, visible-first tile families, transactional descriptor-map refinement, reference sharing, pose-diverse retention, and protected eviction|3× extent, 127–253 interval density, rotate/pitch/zoom-out fallback, one-credit hole-versus-Final ordering, rolling fences, no invisible Detail work, no backdrop or draft displacement|40–60 lane-hours|
 |5. Hardening and arena-facing proof|Make the rendered-tile path default after parity, publish complete resource and intersection facts, add long navigation and device-loss soak, and pin the explicit arena disocclusion counterexample|All sliders and presets, 64- and 120-page profiles, capacity refusals, source corruption, depth precision, overdraw walls, return proofs, arena hole honesty, console cleanliness|32–48 lane-hours|
 
 The total estimate is 224–332 lane-hours. Stage 2 intentionally precedes chart tiling: it proves that several independently rendered, depth-bearing views can be transformed and composited as the arena mechanism before storage subdivision and cache indexing complicate the evidence.
 
 ## Backlog
 
-- `JB-TILE-001` — Specify canonical slice identity, full render-pose serialization, source pixel rectangles, source-depth semantics, and exact cache-key equality with display controls excluded.
-- `JB-TILE-002` — Implement pure source-sample reconstruction and full target five-dimensional projection, including source self-round-trip and 1.0 px target receipts.
-- `JB-TILE-003` — Define paired value/depth publication, corruption and fence behavior, and the conservative two-RGBA32F floor layout plus compact-format study.
+- `JB-TILE-001` — Specify canonical slice identity, full render-pose serialization, exact bignum-anchor interning, source pixel rectangles, the 32-texel header and two-texel sample ABI, and exact cache-key equality with display controls excluded.
+- `JB-TILE-002` — Implement descriptor-map packing, GPU readback, pure source-sample reconstruction, and full target five-dimensional projection, including source self-round-trip and 1.0 px target receipts.
+- `JB-TILE-003` — Define transactional header-plus-`S0/S1` publication, corruption and fence behavior, the shared header page and active list, and compensated deep-anchor placement.
 - `JB-TILE-004` — Generalize the retained ledger to N whole rendered views from different poses and depth-compose their independently transformed meshes in one pass.
 - `JB-TILE-005` — Implement same-surface identity and ownership masks, low-to-high exact-tie ordering, and adversarial proof that quality cannot reverse distinct physical depths.
 - `JB-TILE-006` — Move palette-to-linear lookup, exposure, tone mapping, and output encoding into per-fragment reprojection shading with no retained color payload.
@@ -320,7 +367,7 @@ The total estimate is 224–332 lane-hours. Stage 2 intentionally precedes chart
 - `JB-TILE-008` — Add conservative derived chart footprints, density levels, multi-node tile membership, direct candidate traversal, ID deduplication, and a slow exhaustive oracle.
 - `JB-TILE-009` — Add per-tile placement receipts, cell-local poles and holes, full-core and proved-coarse mesh classes, instanced batching, and the 64-entry capacity wall.
 - `JB-TILE-010` — Add and prove the nine-active plus three-rolling depth-bearing rendered backdrop with published coverage, source poses, certification holes, and work walls.
-- `JB-TILE-011` — Replace the global ladder with visible rendered-tile families, the lexicographic hole-before-upgrade scheduler, bounded backdrop-maintenance credits, paired value/depth publication, no-draft-downgrade rules, and pose-diverse eviction.
+- `JB-TILE-011` — Replace the global ladder with visible rendered-tile families, the lexicographic hole-before-upgrade scheduler, bounded backdrop-maintenance credits, transactional descriptor-map publication, no-draft-downgrade rules, and pose-diverse eviction.
 - `JB-TILE-012` — Publish source-pose, source-depth, chart-index, candidate, scheduler-priority, mesh, intersection, overdraw, shading, resource, eviction, and timing facts and add seven browser proofs.
 - `JB-TILE-013` — Study promotion of certified Final value records across reference generations without weakening source-depth or MAIN provenance.
 - `JB-TILE-014` — Build the arena disocclusion counterexample and document which rendered-view mechanisms transfer from the 2D lab and which require new 3D slice content.
@@ -330,6 +377,8 @@ The total estimate is 224–332 lane-hours. Stage 2 intentionally precedes chart
 The largest conceptual risk is accidentally returning to chart-image thinking. A chart footprint is only an index receipt; shader inputs, depth, reconstruction, coverage, and reuse must remain attached to the source screen tile and its render pose.
 
 Source depth needs a precise reusable definition. Caching nonlinear `Depth24Plus`, omitting clip sign, or reconstructing through a different camera convention can move points or reverse intersections; the source self-round-trip and independent full-chain oracle are release gates.
+
+RGBA32F descriptor precision cannot become deep-position authority. Reusing an `anchor_id` after its exact CPU interner entry changes, uploading an uncertified high/low residual, or overflowing the exact-in-f32 integer range can place an otherwise valid tile on the wrong scene part; generation checks, compensated-split bounds, and descriptor round-trip refusal are release gates.
 
 The existing 64-page heap is too small for the earlier 56-tile promise once depth is honest. Its 28-tile constrained profile leaves only sixteen Detail tiles after backdrop protection, while the 56-tile profile needs 120 DATA pages including reserves. Memory refusal and delivered cache size must be visible interface facts.
 
@@ -351,7 +400,7 @@ Per-pixel value lookup, depth testing, palette evaluation, and HDR output add pr
 
 ## Open questions for the owner
 
-1. What exact source-depth record should version one retain? Recommendation: begin with the specified second RGBA32F record containing positive linear post-observer view distance, two normalized source-local plane coordinates, and validity; prove source round-trip and target reconstruction across both perspective divides, never cache quantized `Depth24Plus`, and compact only after the oracle identifies which auxiliaries can be derived exactly.
+1. Descriptor-map ABI — decided by the owner: use the versioned RGBA32F descriptor map specified above, with a 32-texel pose header and the exact two-texel sample pair `S0=existing value record` and `S1=(a_F,b_F,zeta_F,validity)`. This is 512 header bytes plus 32 bytes per sample, uses the heap's existing 16-byte record alignment, and never caches quantized `Depth24Plus`.
 
 2. Is 256×256 physical with a 254×254 source-screen core and one-sample apron still the first tile geometry? Recommendation: yes for the first proof because it reuses the heap page and one shared mesh, but treat 128 and 512 as measured source-screen alternatives rather than chart levels.
 
@@ -359,7 +408,7 @@ Per-pixel value lookup, depth testing, palette evaluation, and HDR output add pr
 
 4. Which cache profile is the product floor? Recommendation: expose the existing 64-page, 28-rendered-tile constrained profile first, and make the 120-page, 56-rendered-tile profile an explicitly delivered higher memory tier until weak-device measurements justify changing the floor.
 
-5. How many transformed candidates may one frame submit? Recommendation: retain a constructor-validated 64-entry ceiling, rank by newly covered screen area and certified error after semantic admission, and publish dropped candidates and remaining holes rather than overflowing uniforms.
+5. How many transformed candidates may one frame submit? Recommendation: retain a constructor-validated 64-entry active-list ceiling, enumerate by direct chart walk and coverage-first scheduler order, submit every admitted intersection up to that wall, and publish overflow and remaining holes rather than running a CPU set-cover or resolution ranking.
 
 6. Does reprojection need a frame-scoped HDR color transient? Recommendation: shade directly into presentation for the Julibrot proof; if arena composition requires linear accumulation, permit exactly one RGBA16F canvas target with published bytes and frame lifetime, never retained cache identity.
 
@@ -374,6 +423,8 @@ Per-pixel value lookup, depth testing, palette evaluation, and HDR output add pr
 11. What arena claim may the lab make, and what identity must the arena provide? Recommendation: claim proof of pose-stamped value/depth retention, full-chain per-view reprojection, depth intersections, chart-backed same-surface quality ownership, and honest gaps; require the arena to supply stable surface or primitive identity before transferring that quality rule, and explicitly do not claim hidden-surface recovery or complete 3D slice reprojection.
 
 12. Should rendered tiles persist across reloads? Recommendation: remain session-local until pose, bignum, value, depth, ABI, corruption, quota, and privacy contracts are versioned together.
+
+13. What deep-zoom precision contract should the descriptor map expose? Recommendation: keep the absolute bignum anchor in the CPU's exact intern table, store only its exact-in-f32 `anchor_id` and revision in the RGBA32F header, materialize the source-to-request anchor delta as compensated high/low `H17` lanes before each placement, and refuse the tile whenever the independent f64 oracle cannot certify the uploaded split below the 1.0 px bound.
 
 ## Repository sources
 
