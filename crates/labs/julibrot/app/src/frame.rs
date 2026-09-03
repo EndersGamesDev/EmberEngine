@@ -1,9 +1,9 @@
 //! Cross-slice progressive frame scheduling and browser GPU integration.
 
-use ember_julibrot_kernels::{RefinementLevel, next_refinement_level};
-use ember_julibrot_math::PrecisionMode;
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_kernels::RefinementPlan;
+use ember_julibrot_kernels::{RefinementLevel, next_refinement_level};
+use ember_julibrot_math::PrecisionMode;
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_present::{FenceRefusal, SubmissionKind};
 
@@ -1885,11 +1885,8 @@ mod tests {
     fn wait_for_unused_shallow_orbit() -> Result<(), MathError> {
         let centre = BigCentre::from_f64([0.0, 0.0, -0.5, 0.5], 1_024)?;
         let params = EscapeParams::new(4_096);
-        let mut builder = ReferenceOrbitBuilder::new(
-            &centre,
-            precision_for(0.0, 960, params.max_iter)?,
-            params,
-        )?;
+        let mut builder =
+            ReferenceOrbitBuilder::new(&centre, precision_for(0.0, 960, params.max_iter)?, params)?;
         let chunk = NonZeroU32::new(params.max_iter).ok_or(MathError::InvalidMaxIter)?;
         loop {
             match builder.step(chunk)? {
@@ -1912,7 +1909,10 @@ mod tests {
         }
         frame_loop.accept_request(1, true);
         assert_eq!(KernelMode::for_zoom(0.0), KernelMode::Shallow);
-        assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), Some(1));
+        assert_eq!(
+            drive_refresh(&mut frame_loop, &mut presenter, clock),
+            Some(1)
+        );
         Ok(started.elapsed())
     }
 

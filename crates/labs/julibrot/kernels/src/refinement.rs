@@ -365,7 +365,10 @@ mod tests {
             }
         );
         assert_eq!(plan.level(RefinementLevel::Preview).iteration_cap, 32);
-        assert_eq!(plan.level(RefinementLevel::Final).extent, plan.delivered_extent);
+        assert_eq!(
+            plan.level(RefinementLevel::Final).extent,
+            plan.delivered_extent
+        );
         assert_eq!(plan.level(RefinementLevel::Final).iteration_cap, 4_096);
         assert_eq!(
             next_refinement_level(PrecisionMode::PictureFast, RefinementLevel::Preview),

@@ -253,8 +253,7 @@ impl PageFacts {
             warp_precision_mode: present.last_warp.map(|sample| sample.precision_mode),
             level_timings: loop_facts.level_timings(),
             draft_pixels_discarded: dispatch.map(|facts| facts.draft_pixels_discarded),
-            draft_iterations_discarded: dispatch
-                .map(|facts| facts.draft_iterations_discarded),
+            draft_iterations_discarded: dispatch.map(|facts| facts.draft_iterations_discarded),
         }
     }
 }

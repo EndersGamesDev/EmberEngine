@@ -12,8 +12,8 @@ mod types;
 mod warp;
 
 pub use big::{
-    BigCentre, BigScalar, DETERMINISTIC_CENTRE_BITS, EncodedBigScalar,
-    PICTURE_FAST_EDIT_BUDGET, centre_precision_for, decode_big_scalar, encode_big_scalar,
+    BigCentre, BigScalar, DETERMINISTIC_CENTRE_BITS, EncodedBigScalar, PICTURE_FAST_EDIT_BUDGET,
+    centre_precision_for, decode_big_scalar, encode_big_scalar,
 };
 pub use drift::{navigation_drift_f32, navigation_drift_f64};
 pub use morph::{

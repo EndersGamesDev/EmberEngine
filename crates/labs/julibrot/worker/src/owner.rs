@@ -734,8 +734,7 @@ mod tests {
     }
 
     #[test]
-    fn ten_thousand_mixed_navigation_edits_stay_within_a_quarter_pixel()
-    -> Result<(), OwnerError> {
+    fn ten_thousand_mixed_navigation_edits_stay_within_a_quarter_pixel() -> Result<(), OwnerError> {
         const EDITS: u32 = 10_000;
         const ZOOM_LOG2: f64 = 100.0;
         const GRID_WIDTH: u32 = 1_024;
@@ -814,8 +813,7 @@ mod tests {
     }
 
     #[test]
-    fn shallow_acceptance_publishes_selection_without_orbit_metadata()
-    -> Result<(), OwnerError> {
+    fn shallow_acceptance_publishes_selection_without_orbit_metadata() -> Result<(), OwnerError> {
         let mut owner = navigation_owner()?;
         owner.stage_main(MainState {
             precision_bits: 1_024,
