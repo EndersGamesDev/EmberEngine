@@ -457,7 +457,7 @@ fn sample_redraw_mesh(
                 if !reciprocal_w.is_finite() || reciprocal_w <= 0.0 {
                     continue;
                 }
-                let grid = core::array::from_fn(|axis| {
+                let grid: [f64; 2] = core::array::from_fn(|axis| {
                     weights
                         .into_iter()
                         .zip(triangle)
