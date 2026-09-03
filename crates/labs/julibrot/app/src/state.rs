@@ -1499,7 +1499,7 @@ mod tests {
         );
 
         let mut view = viewer.requested().view;
-        view.camera_yaw = 0.25;
+        view.camera_yaw += 0.125;
         viewer
             .set_view_controls(view)
             .expect("changed VIEW controls");
