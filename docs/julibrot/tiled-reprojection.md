@@ -6,9 +6,9 @@ Status: draft design study.
 
 The cache should live in the two-dimensional chart of one affine Julibrot slice, not in screen space: its durable payload is a palette-independent escape-record tile addressed by an exact bignum anchor, a dyadic zoom-pyramid level, and signed integer tile coordinates.
 
-Screen images are derived data. A small RGBA8 atlas may cache the current palette's chart-space texels, but camera pose, observer pose, canvas extent, palette, and surface format must not enter the escape-tile key.
+Screen images are derived data and never tile-cache payload. The cache holds only the value map: Julibrot escape records here and, by the same arena contract, linear HDR values where an arena layer supplies them. The reprojection layer performs the per-pixel palette lookup, exposure, tone mapping, and output encoding at placement; none of those display inputs enters any cache key.
 
-The first implementation should use one 256×256 heap page per tile, with a 254×254 core sample grid spanning 253 dyadic intervals and one record of apron on every edge, 16-byte RGBA32F escape records, at most 56 resident record tiles in the example 64-page DATA heap, and one 2048×2048 RGBA8 atlas containing 64 256×256 slots. Twelve tile pages are a protected backdrop tier, 44 are detail and history, and eight DATA pages outside the tile budget remain available for the active reference orbit, publication, and non-cache allocations.
+The first implementation should use one 256×256 heap page per tile, with a 254×254 core sample grid spanning 253 dyadic intervals and one record of apron on every edge, 16-byte RGBA32F escape records, and at most 56 resident record tiles in the example 64-page DATA heap. Twelve tile pages are a protected backdrop tier, 44 are detail and history, and eight DATA pages outside the tile budget remain available for the active reference orbit, publication, and non-cache allocations; there is no palette-color atlas.
 
 Every request is decided in three separate steps: semantic validity asks whether the records describe the requested mathematical slice and MAIN generation; placement admission asks whether the requested camera projection is finite and stays within the 1.0 px error ceiling; quality selection asks whether a candidate is better than the picture already covering that screen region.
 
@@ -20,7 +20,7 @@ A protected 3×3 backdrop at a coarse pyramid level covers at least three times 
 
 A cache hit may eliminate fractal iteration, but it does not weaken presentation correctness. Flat tiles use their exact chart-to-screen homography; relief tiles use a height-aware mesh whose measured interpolation error is at most 1.0 px; a pole, missing proof, or unbounded error refuses that placement and exposes only the affected region for refinement.
 
-The migration should preserve the current page after every stage: first retain several whole scenes by chart footprint, then introduce chart keys and a catalog, then split computation and presentation into fixed tiles with a coarse backdrop, then add bounded relief placement, and only then replace the single global ladder with visible-Detail plus bounded-backdrop scheduling.
+The migration should preserve the current page after every stage: first retain several whole-screen value maps by chart footprint and shade them at reprojection, then introduce chart keys and a catalog, then split computation and presentation into fixed tiles with a coarse backdrop, then add bounded relief placement, and only then replace the single global ladder with visible-Detail plus bounded-backdrop scheduling.
 
 ## Scope and binding invariants
 
@@ -43,6 +43,8 @@ The priorities are finish the two-dimensional lab, make it fast, make it robust,
 ## Coordinate model and terminology
 
 Let the requested affine slice be `X(a,b) = o + a u + b v`, where `o` is the four-dimensional origin and the orthonormal columns `u` and `v` are obtained from the object rotation `O`. Let `r(a,b)` be the palette-independent escape record and `z(r)` its normalized height before the current height-scale slider. The point presented to the five-dimensional camera is `Y(a,b) = (X(a,b), z(r))`.
+
+For each placed fragment, the reprojection layer evaluates a current value-to-linear-color map `L(r; palette)`, applies exposure and tone mapping, and encodes the result for the presentation target. These operations are frame shading, not computation or cache mutation; the arena analogue begins with an already linear HDR value and applies the same exposure, tone-mapping, and output stage.
 
 For a fixed target camera pose `P`, neutral height has a projective map `s ~ M_P [a b 1]^T`. A rectangular chart tile is therefore placed exactly by a homography when `z = 0`; no source-screen pose is needed. When height is nonzero, vertices use the full five-dimensional projection `s = Pi_P(Y)`, and the rasterized triangle interpolation is an approximation whose screen-space error must be measured.
 
@@ -74,9 +76,9 @@ Deep-zoom identity is exact because the anchor and signed indices are serialized
 
 Precision is decided per tile. The tile computation must publish a conservative coordinate-error bound `epsilon_coord` satisfying `epsilon_coord <= sigma_l / 4` at every owned sample after bignum center arithmetic, plane-basis multiplication, reference displacement, and the cap-dependent perturbation allowance; its descriptor records requested bits, delivered bits, and the proven bound. The existing precision policy and quarter-pixel discipline provide the starting contract in [Julibrot math](math.md) and [the precision ledger](precision-ledger.md).
 
-The durable record is palette-independent and retains smooth escape, escaped classification, rebase count, and status, as today's 16-byte RGBA32F escape record does. Height is derived from those facts and the current height slider, so a tile does not become invalid when height scale or palette changes.
+The durable value-map record retains smooth escape, escaped classification, rebase count, and status, as today's 16-byte RGBA32F escape record does. Height and linear palette input are derived from those facts, so a tile does not become invalid when height scale, palette, exposure, tone mapping, or output encoding changes.
 
-An RGBA8 atlas slot is an optional, rebuildable chart-space colorization of a record tile for one palette version. It accelerates placement but is not authoritative: dropping an atlas slot leaves the record tile valid, and changing palette invalidates or recolors atlas slots without invalidating record spans.
+No durable or rebuildable per-tile colorization is retained. If composition requires an intermediate color attachment, it is a frame-scoped reprojection output that is cleared and released logically with that frame, never a keyed catalog entry or an eviction candidate.
 
 Backdrop tiles use the same keys and record ABI as detail tiles but carry a `Backdrop` residency class. For current conservative chart bounds `D_x × D_y`, choose a dyadic backdrop tile side `S_b = 253 sigma_b` such that `max(D_x,D_y) <= S_b < 2 max(D_x,D_y)`, and pin the 3×3 neighborhood whose center tile contains the view center. Its union spans at least three times each current chart-axis extent, and its pitch provides roughly 127–253 sample intervals across the longest view dimension.
 
@@ -84,19 +86,19 @@ That is the requested geometric and memory envelope, not permission to publish u
 
 | Property | Current screen scene | Proposed chart tile |
 |---|---|---|
-| Identity | Screen extent, screen map, pose, palette, scene generation | Canonical slice and MAIN generation, bignum anchor, pyramid level, integer chart coordinates, record ABI |
-| Durable payload | RGBA8 pixels plus one globally reused record grid | Palette-independent escape records per tile |
+| Identity | Screen extent, screen map, pose, palette, scene generation | Canonical slice and MAIN generation, bignum anchor, pyramid level, integer chart coordinates, record ABI; no display controls |
+| Durable payload | RGBA8 pixels plus one globally reused record grid | Value-map escape records per tile; never palette colors |
 | Camera change | Warp the last screen image if admitted | Reproject the same chart records; no content invalidation |
 | Return to an older position | Miss after the retained slot is replaced | Hit while the keyed tile remains resident |
 | Deep zoom | Position is relative to the current reference and screen width | Exact bignum anchor plus dyadic integer offsets; precision receipt per tile |
 | Height lift | Approximation inferred from the old scene's record field | Records remain resident and directly supply mesh height |
-| Palette change | Re-render the full scene image | Recolor selected atlas patches from unchanged records |
+| Palette, exposure, or tone change | Re-render the full scene image | Shade the next placement from unchanged records; no invalidation or cache work |
 
 ## Tile descriptor and heap relationship
 
 The CPU catalog owns semantic descriptors. Heap descriptors remain physical GPU addresses and must not be overloaded with bignum keys or cache policy.
 
-Each semantic tile descriptor contains a stable `tile_id` and a `content_key` comprising the formula and record-ABI version, canonical geometric slice key, MAIN generation, precision mode, requested and delivered cap, and reference-orbit generation. Palette is explicitly absent.
+Each semantic tile descriptor contains a stable `tile_id` and a `content_key` comprising the formula and record-ABI version, canonical geometric slice key, MAIN generation, precision mode, requested and delivered cap, and reference-orbit generation. Palette, exposure, tone mapping, output encoding, target format, camera, and canvas are explicitly absent from every key.
 
 The descriptor retains slice provenance sufficient to audit canonicalization: the six requested object angles or their exact control bytes, the delivered plane basis, the bignum plane origin and its finite mirror, the canonical normal-space identity, and the chart-frame transform. Keeping both provenance and a canonical key prevents a plane-preserving object reparameterization from masquerading as a new slice.
 
@@ -110,7 +112,7 @@ Intrinsic error facts contain sampled, glitch, and coordinate-uncertain counts, 
 
 Lifetime facts contain creation serial, last-selected serial, last-visible serial, hit count, recompute count, current pin reasons, publication fence state, eviction class, backdrop-window generation, and whether the entry is one of the nine active or three rolling backdrop slots. Age is a monotonic serial rather than wall-clock time so ordering remains deterministic in tests.
 
-Storage facts contain the generation-checked `DataSpan`, logical and reserved record bytes, initialized prefix or full-tile state, optional RGBA8 atlas slot plus slot generation and palette version, and any temporary scratch or publication ticket. A catalog entry is not selectable until its DATA copy and atlas write, if required, have crossed their completion fence.
+Storage facts contain the generation-checked `DataSpan`, logical and reserved record bytes, initialized prefix or full-tile state, and any temporary scratch or publication ticket. A catalog entry is not selectable until its DATA copy has crossed its completion fence; frame color attachments and shading revisions are not tile-descriptor state.
 
 Placement receipts contain target pose digest, chosen warp kind, screen coverage polygon, selected pyramid mismatch, maximum and p95 projection error, horizon-clipped samples, projection-uncertain samples, seam checks, and refusal reason. These receipts can be replaced freely because they do not define content identity.
 
@@ -118,7 +120,7 @@ Placement receipts contain target pose digest, chosen warp kind, screen coverage
 
 The 256×256 tile choice deliberately fits one DATA page, so most tile spans have one page and one directory entry. Larger reference orbits may still use the existing multi-page span machinery, and the presenter can read every selected tile through the same stable heap view.
 
-The heap does not supply the semantic pyramid-node catalog, canonical bignum key, slice-equivalence proof, direct hierarchy walker, quality order, parent-exclusion masks, Detail/backdrop scheduler, atlas-slot generation, LRU and distance policy, multi-tile publication transaction, seam ownership, or per-pose oracle. Those belong above `heap`, split between pure Julibrot math/policy and the app/present owners according to the existing layering.
+The heap does not supply the semantic pyramid-node catalog, canonical bignum key, slice-equivalence proof, direct hierarchy walker, quality order, parent-exclusion masks, Detail/backdrop scheduler, LRU and distance policy, multi-tile publication transaction, seam ownership, per-pose oracle, or value-to-pixel shading policy. Those belong above `heap`, split between pure Julibrot math/policy and the app/present owners according to the existing layering.
 
 The executor also does not promise arbitrary tile counts. Its descriptor, span-directory, handle, input, output, header-set, scratch, and kernel-uniform capacities are constructor contracts; tile planning must reserve them explicitly, publish requested versus delivered counts, and degrade the cache rather than indexing beyond a wall.
 
@@ -126,13 +128,13 @@ The executor also does not promise arbitrary tile counts. Its descriptor, span-d
 
 The active `ContentKey` is equal only when the canonical geometric slice, plane origin, formula and record ABI, precision mode, requested cap, delivered-cap semantics, and MAIN/reference generation agree. “The model has not changed” means exactly that equality; visual similarity and nearby slider values are not substitutes.
 
-Content invalidation is immediate logical unavailability, not necessarily immediate GPU destruction. When MAIN changes incompatibly, all old descriptors leave the selectable set before the next frame; their spans and atlas slots may be reclaimed later after fences, but they cannot fill the new picture.
+Content invalidation is immediate logical unavailability, not necessarily immediate GPU destruction. When MAIN changes incompatibly, all old descriptors leave the selectable set before the next frame; their spans may be reclaimed later after fences, but they cannot fill the new picture.
 
 Camera `Q`, five-dimensional camera translation, yaw, pitch, `d5`, `d4`, canvas extent, and height scale do not change escape records. They leave a tile content-valid; the tile is placeable only if target projection is finite and its flat or relief placement proof is at most 1.0 px. A large or pole-crossing camera move may therefore refuse every old placement while retaining every record for a later return.
 
 Chart pan and zoom do not change content. They alter the requested chart footprint and preferred pyramid level, selecting existing tiles where available and scheduling only uncovered visible tiles. Resizing the canvas behaves the same way.
 
-A palette change leaves every record tile valid and changes only derived atlas colorization. Until recoloring completes, a slot with the wrong palette is not selected; the composer may color directly from records, use a correctly colored older slot, or show the clear color in the uncovered region, but it must not label the wrong palette as current.
+A palette, exposure, tone-mapping, or output-encoding change updates only reprojection-layer frame inputs. The next placement draw shades every covered pixel from the same value-map records with no tile invalidation, recolor job, publication fence, asynchronous gap, or clear; this instant response is part of the interface contract.
 
 A plane-preserving object motion is valid as a chart re-key. The compatibility proof first shows equality of the two affine planes: their two basis spans agree within the delivered basis-rounding bound and the origin's normal residual is zero within the same bound. It then derives the two-dimensional isometry `c_new = R c_old + delta` from basis dot products and the in-plane origin displacement.
 
@@ -154,7 +156,7 @@ Reference generation is a computation provenance boundary, not inherently a chan
 |---|---|---|---|
 | Camera rotation or translation, yaw, pitch, `d5`, `d4`, height scale | Keep | None | Recompute target placement; accept only finite error at most 1.0 px |
 | Pan, zoom, resize | Keep | Walk the canonical pyramid and roll the backdrop window | Prefer Detail, fall back to valid backdrop, and expose only regions outside delivered coverage |
-| Palette | Keep | Retain record keys; expire or recolor atlas slots | Use only matching palette version |
+| Palette, exposure, tone mapping, output encoding | Keep | None | Shade every placed fragment with the current frame inputs |
 | Plane-preserving `O` change or in-plane origin move | Keep after affine-plane proof | Transform the request into the fixed canonical chart; tile keys remain aligned | Recompute placement from the request-to-canonical isometry |
 | Slice tilt | Invalidate all active tiles | Start new content partition | Clear or sky until new content arrives |
 | Out-of-plane origin move | Invalidate all active tiles | Start new content partition | Clear or sky until new content arrives |
@@ -182,7 +184,7 @@ The flat inverse polygon is exact for height zero. Relief may move silhouettes, 
 
 The incompatibility is mathematical, not merely a Depth24Plus precision concern. If a scalar depth `D(q,z)` gives quality `q` enough separation to make the better representation win for every admissible depth error at the same chart point, that separation can reverse two distinct lifted surfaces whose true depths are arbitrarily close; if the quality separation is zero, it cannot resolve the duplicate representations. The hierarchy must establish representation ownership before rasterization, leaving projected `z` as the sole depth order.
 
-Each candidate receives a placement receipt for the target pose before ranking. Candidates with an incompatible content key, stale span or atlas generation, incomplete publication fence, wrong palette slot, projective pole, unbounded relief, or maximum error above 1.0 px are removed rather than penalized.
+Each candidate receives a placement receipt for the target pose before ranking. Candidates with an incompatible content key, stale span generation, incomplete publication fence, projective pole, unbounded relief, or maximum error above 1.0 px are removed rather than penalized. Palette, exposure, tone mapping, and output format do not participate in candidate admission.
 
 The quality order is lexicographic and total: admitted Detail beats Backdrop; within Detail, certified Final beats Interactive beats Preview; within a rung, a delivered cap satisfying the request beats a lower cap; then smaller projected texel error and closer pyramid match win; then lower coordinate, glitch, projection, and warp error win; then newer last-selection age breaks an otherwise exact tie. Backdrop entries use the same internal ordering but never cross the Detail boundary, and tile identity is the final deterministic tie-breaker.
 
@@ -192,7 +194,7 @@ The pyramid walk emits non-overlapping chart ownership: a selected child exclude
 
 The floor profile uses a 16×16, 256-bit exclusion mask per emitted ancestor, representing four descendant levels in eight `u32` words; the flat 960×540 and 1920×1080 backdrop-to-ideal gaps are ordinarily two and three levels. If a requested gap or irregular cover cannot be represented exactly, traversal emits an intermediate ancestor or coarsens the selected Detail cover and publishes that wall; it never rounds an exclusion outward and creates a false hole.
 
-The composer groups selected entries by pipeline, record or atlas binding, and mesh class in one render pass. Flat tiles emit the chart rectangle through their target homography. Relief tiles emit the adaptive indexed mesh from chart positions and record-derived heights. Both are clipped by their chart ownership and child-exclusion masks; the depth attachment receives true projected lifted depth and resolves only overlaps from distinct chart points, including relief folds.
+The composer groups selected entries by value-map binding, pipeline, and mesh class in one render pass. Flat tiles emit the chart rectangle through their target homography, and relief tiles emit the adaptive indexed mesh from chart positions and record-derived heights. For every surviving output fragment, the GPU looks up the escape record, evaluates the current palette to linear color, applies exposure and tone mapping, and encodes the presentation pixel; chart ownership and child-exclusion masks clip duplicate representations, while the depth attachment receives true projected lifted depth and resolves only overlaps from distinct chart points, including relief folds. In optional arena HDR accumulation mode the fragment instead writes the linear frame transient and the reprojection layer owns its final exposure, tone-map, and output resolve.
 
 For a flat tile, the homography is evaluated from the tile's stored chart frame directly into the target screen. Its proof checks coefficient rounding and representative points against direct five-dimensional projection at height zero; the map is exact in real arithmetic, and uploaded f32 coefficients still obey the 1.0 px ceiling.
 
@@ -204,7 +206,7 @@ Seams use four independent rules: half-open cores choose one owner, duplicate on
 
 At a mixed-level boundary, the oracle compares direct projections of all shared dyadic edge points and checks that the two rasterized coverage polygons differ by no more than 1.0 px and leave no uncovered sample. If that proof fails, the lower-quality side is clipped back and the seam strip becomes an explicit hole to refine.
 
-The exterior pass paints the palette's sky or exterior color wherever the requested slice is beyond the projective horizon; this is known absence of surface, not a cache miss. Once a backdrop window is established, ordinary bounded rotations, zoom-out, pitch, and detail eviction fall back to its coarse fragments rather than clear. The transient clear color remains only where the active slice or MAIN has no valid, placeable record, most notably immediately after an invalidation or at an oracle refusal; published facts report backdrop, sky, and clear coverage separately.
+The exterior pass shades the current reprojection style's sky or exterior value wherever the requested slice is beyond the projective horizon; this is known absence of surface, not a cache miss. Once a backdrop window is established, ordinary bounded rotations, zoom-out, pitch, and detail eviction fall back to its coarse fragments rather than clear. The transient clear color remains only where the active slice or MAIN has no valid, placeable record, most notably immediately after an invalidation or at an oracle refusal; published facts report backdrop, sky, and clear coverage separately.
 
 An all-edge-on request remains an all-sky state. It does not schedule invisible fractal tiles merely to make cache statistics look busy.
 
@@ -216,19 +218,19 @@ Draft resolution is represented explicitly. A Preview or Interactive tile may us
 
 The queue priority is: a missing central or visible backdrop after MAIN invalidation; visible clear or backdrop-covered regions at their cheapest Detail rung; missing cells in the protected 3×3 backdrop window; visible Detail incumbents whose next rung strictly improves quality; then visible seam repairs. Projected screen area and distance from the interaction focus are deterministic tie-breakers.
 
-Invisible Detail tiles are still never computed or recolored. Backdrop maintenance is the sole deliberate exception: after the visible region has a bounded picture, the scheduler may compute coarse off-screen cells inside the protected window so a subsequent rotation, pitch, pan, or zoom-out has a valid fallback. Backdrop work has its own per-frame dispatch and copy wall and yields immediately to a new visible hole.
+Invisible Detail tiles are still never computed. Backdrop maintenance is the sole deliberate exception: after the visible region has a bounded picture, the scheduler may compute coarse off-screen cells inside the protected window so a subsequent rotation, pitch, pan, or zoom-out has a valid fallback. Backdrop work has its own per-frame dispatch and copy wall and yields immediately to a new visible hole; display-only changes create no tile work anywhere.
 
 The nine active backdrop tiles use the current policy's cheapest rung, cap 64 for Deterministic or cap 32 for PictureFast, and remain presentation class `Backdrop` even if their records are complete at that rung. When one becomes visible, ordinary Detail work is scheduled over it; improving or refreshing a backdrop can never publish over an admitted Detail incumbent.
 
 The backdrop window rolls only after replacement cells are complete. Three additional reserved pages permit a row or column to be prepared while the prior nine remain selectable; a level change that needs more than three simultaneous replacements proceeds in bounded strips and retains the older coarser cover until the new window is complete.
 
-The scheduler spends explicit per-frame walls on CPU selection, kernel dispatch count, record-copy bytes, atlas-colorization patches, mesh vertices, and draw batches. It does not express a GPU duration that the WebGL2 floor cannot measure; it publishes normalized work and fence wall time just as the current ledgers do.
+The scheduler spends explicit per-frame walls on CPU selection, kernel dispatch count, record-copy bytes, mesh vertices, shaded fragments, optional transient-target bytes, and draw batches. It does not express a GPU duration that the WebGL2 floor cannot measure; it publishes normalized work and fence wall time just as the current ledgers do.
 
 One accepted reference orbit is shared by every deep tile job in its MAIN generation. The reference span is pinned while any submitted tile dispatch can read it, and every resulting descriptor records the generation, length, bits, policy, and center revision. Tiles do not copy the orbit.
 
 Jobs whose tile center falls outside the accepted reference's perturbation validity region are not silently attempted. The controller leaves the region covered by a cached Detail or certified backdrop tile where possible, publishes a missing-backdrop cell otherwise, or requests a new reference generation; under the version-one invalidation rule, accepting that generation retires the former active tile partition and temporarily returns to clear until its new central backdrop arrives.
 
-Publication is atomic per tile. A job writes SCRATCH, copies its initialized records to its planned DATA span, optionally colorizes a vacant atlas slot, and crosses a completion fence; only then does the catalog publish the new quality. Cancellation, stale generation, device refusal, or atlas failure frees unpublished resources and leaves the incumbent untouched.
+Publication is atomic per tile. A job writes SCRATCH, copies its initialized value-map records to its planned DATA span, and crosses a completion fence; only then does the catalog publish the new quality. Cancellation, stale generation, or device refusal frees unpublished resources and leaves the incumbent untouched. Reprojection shading has frame lifetime and is never part of tile publication.
 
 The draft policy is enforced twice. The publication ledger rejects a candidate whose quality key is not strictly better than the resident entry for the same footprint, and the pyramid walk never assigns a Backdrop or draft ancestor over a better selected descendant. Thus an out-of-order Preview or backdrop fence cannot displace an Interactive or Final picture.
 
@@ -242,11 +244,11 @@ Version one keeps 16-byte escape records because that is the existing RGBA32F he
 
 One physical tile consumes one 256×256 RGBA32F DATA page, exactly 1 MiB. In the documented 512×512×16 DATA heap there are 64 such pages; the floor profile caps the cache at 56 tile pages, assigns 12 to backdrop ownership and rolling replacement, assigns 44 to Detail and ordinary history, and reserves eight pages outside the tile cache for the current orbit, transient publication needs, and other lattice users. If configuration supplies fewer pages, planning reduces Detail history first, then publishes a smaller backdrop window rather than silently over-allocating.
 
-The color cache is one 2048×2048 RGBA8 atlas, 16 MiB, divided into 64 256×256 slots. A slot includes the same one-texel apron as its record page, is addressed by slot plus generation, and is written only while vacant. Fifty-six occupied slots mirror the maximum record budget, including at most 12 backdrop slots, and eight atlas slots remain vacant or available for publication staging.
+The tile cache allocates no RGBA8 atlas, color texture array, palette patch, or other retained pixel payload. Reprojection reads the stable RGBA32F DATA view directly in the fragment shader, uses nearest value-map sampling as the correctness baseline, and shades the current pixel from current frame inputs.
 
-A 256-layer 256×256 texture array is a viable later alternative, but the first atlas uses one core-sized texture and one binding, leaves array layers for other systems, and stays at the guaranteed dimension. The page must publish whether atlas or array mode was delivered rather than infer it from adapter class.
+Direct shading into the presentation target requires no additional color attachment beyond the frame's ordinary output and depth. If a wider arena composition genuinely requires linear HDR accumulation before tone mapping, it may request exactly one canvas-sized frame transient, preferably RGBA16F on the stated extension floor; that attachment may be physically pooled but is logically cleared and released each frame, has no tile key or descriptor, and never participates in cache eviction.
 
-The placement block is capped at 64 entries. Budgeting twelve `vec4` values, or 192 bytes, per entry costs 12,288 bytes; a 256-byte header keeps the binding at 12,544 bytes, below the 16 KiB floor. The record includes chart bounds, atlas coordinates, transform, quality facts, and a fixed child-exclusion mask; 44 Detail plus nine active backdrop entries leave eleven entries for transitions or temporary overlap. The exact layout must be a constructor-validated capacity, and relief data that cannot fit that record is moved to vertex/index buffers or split into another draw batch rather than growing the uniform silently.
+The placement block is capped at 64 entries. Budgeting twelve `vec4` values, or 192 bytes, per entry costs 12,288 bytes; a 256-byte header keeps the binding at 12,544 bytes, below the 16 KiB floor. The record includes chart bounds, DATA span coordinates, transform, quality facts, and a fixed child-exclusion mask; 44 Detail plus nine active backdrop entries leave eleven entries for transitions or temporary overlap. The exact layout must be a constructor-validated capacity, and relief data that cannot fit that record is moved to vertex/index buffers or split into another draw batch rather than growing the uniform silently.
 
 The executor's existing descriptor buffer already consumes its own fixed capacity and the span directory consumes another fixed uniform binding. Tile placement must use a separate declared presenter block and must validate the combined binding count and per-stage texture count; it cannot assume unused bytes in executor uniforms.
 
@@ -254,57 +256,64 @@ Naively drawing one tile at a time would make an ordinary 1080p view cost 40 to 
 
 Depth remains `Depth24Plus`, written from the projected lifted geometry and compared in the ordinary direction. Quality, bound, and age never consume depth bits or polygon offset, so a detail/backdrop choice cannot perturb physical visibility or create quality-dependent relief z-fighting.
 
-Nearest sampling is the correctness baseline for record and atlas textures. Aprons and ownership masks replace any reliance on unavailable float linear filtering, and opaque replacement replaces any reliance on float blending.
+Nearest sampling is the correctness baseline for value-map records. Aprons and ownership masks replace any reliance on unavailable float linear filtering, and the fragment shader applies the palette and HDR output transform only after the winning record sample and true-depth visibility are known.
 
 SCRATCH remains executor-owned RGBA32F storage. Tile jobs reduce the active rectangle and copy bytes, but they do not resize, alias, or bypass the executor's configured scratch layers; requested and delivered scratch, DATA, span, handle, header-set, and uniform walls remain public facts.
 
 ## Cost model and eviction
 
-All byte figures below are binary MiB unless marked as bytes. They count record storage and the RGBA8 chart atlas; scratch, reference-orbit storage, depth, index and vertex buffers, uniforms, surface textures, and implementation metadata are stated separately rather than hidden in the total.
+All byte figures below are binary MiB unless marked as bytes. Tile-cache figures count value-map record storage only; scratch, reference-orbit storage, depth, index and vertex buffers, uniforms, the ordinary presentation target, any optional frame transient, and implementation metadata are stated separately rather than hidden in the total.
 
-| Unit | 8-byte record column | 16-byte RGBA32F record column | RGBA8 atlas |
-|---|---:|---:|---:|
-| One 256×256 physical tile | 0.5 MiB | 1 MiB | 0.25 MiB |
-| Nine active backdrop tiles | 4.5 MiB | 9 MiB | 2.25 MiB |
-| Twelve protected backdrop and rolling tiles | 6 MiB | 12 MiB | 3 MiB |
-| 44 Detail and history tiles | 22 MiB | 44 MiB | 11 MiB |
-| All 56 resident record tiles | 28 MiB | 56 MiB | 14 MiB for 56 occupied slots |
-| Full 64-slot allocation | 32 MiB | 64 MiB | 16 MiB |
+| Unit | 8-byte record column | 16-byte RGBA32F record column |
+|---|---:|---:|
+| One 256×256 physical tile | 0.5 MiB | 1 MiB |
+| Nine active backdrop tiles | 4.5 MiB | 9 MiB |
+| Twelve protected backdrop and rolling tiles | 6 MiB | 12 MiB |
+| 44 Detail and history tiles | 22 MiB | 44 MiB |
+| All 56 resident record tiles | 28 MiB | 56 MiB |
+| Full 64-page DATA allocation | 32 MiB | 64 MiB |
 
 The 8-byte column is a design comparison, not a claim about the current heap: today's RGBA32F DATA path charges 16 bytes per physical record. CPU or worker compaction alone does not change that GPU cost.
 
 With 253 owned chart intervals per tile axis, a phase-friendly Detail cover needs `ceil(W/253) × ceil(H/253)` tiles at one chart sample per screen pixel, while an arbitrary alignment can require one more tile on each axis. The two target canvases retain the same 12/20 and 40/54 counts as the earlier approximation. The table first shows uncapped Detail demand without the separately resident backdrop, because that reveals where the 44-page Detail budget degrades to coarse fallback.
 
-| Canvas | Friendly / worst tile count | Occupied 8-byte records plus atlas share | Occupied 16-byte records plus atlas share | Physical samples, friendly / worst |
+| Canvas | Friendly / worst tile count | Occupied 8-byte records | Occupied 16-byte records | Physical samples, friendly / worst |
 |---|---:|---:|---:|---:|
-| 960×540 | 12 / 20 | 9 / 15 MiB | 15 / 25 MiB | 786,432 / 1,310,720 |
-| 1920×1080 | 40 / 54 | 30 / 40.5 MiB | 50 / 67.5 MiB | 2,621,440 / 3,538,944 |
+| 960×540 | 12 / 20 | 6 / 10 MiB | 12 / 20 MiB | 786,432 / 1,310,720 |
+| 1920×1080 | 40 / 54 | 20 / 27 MiB | 40 / 54 MiB | 2,621,440 / 3,538,944 |
 
-The viewport table charges each occupied atlas slot its 0.25 MiB share, which is useful for comparing tile geometries, but the proposed atlas is one fixed 16 MiB allocation. Adding nine active backdrop tiles makes the friendly and worst-phase 960×540 sets 21 and 29 active tiles, or 26.25 and 36.25 MiB of occupied 16-byte records plus atlas shares; with the fixed atlas allocated they reserve 37 and 45 MiB. At 1920×1080, the floor delivers 40 friendly or at most 44 of the 54 worst-phase Detail tiles plus nine backdrop tiles, giving 49 or 53 active tiles, 61.25 or 66.25 MiB of occupied record-plus-slot shares, and 65 or 69 MiB with the fixed atlas allocation.
+Adding nine active backdrop tiles makes the friendly and worst-phase 960×540 sets 21 and 29 active tiles, occupying 10.5 or 14.5 MiB with an actual 8-byte dialect and 21 or 29 MiB with current 16-byte records. At 1920×1080, the floor delivers 40 friendly or at most 44 of the 54 worst-phase Detail tiles plus nine backdrop tiles, giving 49 or 53 active tiles and occupying 24.5 or 26.5 MiB at 8 bytes or 49 or 53 MiB at 16 bytes.
 
-The fully delivered active backdrop is exactly 589,824 records. It costs 4.5 MiB at 8 bytes or 9 MiB at 16 bytes, plus 2.25 MiB of occupied RGBA8 slots; the full 12-page protected budget including three rolling replacements is 6 or 12 MiB of records plus at most 3 MiB of occupied slots. At cap 32 its nine-tile worst case is 18,874,368 pixel-iterations, and at cap 64 it is 37,748,736, small enough to establish before expensive visible Final work but still charged and published; reference-limited missing cells reduce delivered bytes and coverage rather than becoming uncertified records.
+The fully delivered active backdrop is exactly 589,824 records. It costs 4.5 MiB at 8 bytes or 9 MiB at 16 bytes; the full 12-page protected budget including three rolling replacements is 6 or 12 MiB of records. At cap 32 its nine-tile worst case is 18,874,368 pixel-iterations, and at cap 64 it is 37,748,736, small enough to establish before expensive visible Final work but still charged and published; reference-limited missing cells reduce delivered bytes and coverage rather than becoming uncertified records.
+
+| Canvas | Direct shading extra | One frame-scoped RGBA16F transient | One frame-scoped RGBA32F transient |
+|---|---:|---:|---:|
+| 960×540 | 0 MiB | 3.96 MiB | 7.91 MiB |
+| 1920×1080 | 0 MiB | 15.82 MiB | 31.64 MiB |
+
+The transient table excludes the ordinary presentation target and depth attachment, which exist independently of tile caching. Version one recommends direct shading with zero extra color target; if arena composition requires the linear transient, its exact delivered format and canvas-sized bytes are frame resource facts, never cache capacity or retained-history cost.
 
 At cap 4096, one full physical tile has a worst-case 268,435,456 pixel-iterations. A friendly 960×540 full cover has about 3.22 billion worst-case iterations versus about 2.12 billion for today's exact screen grid; a friendly 1920×1080 cover has about 10.74 billion versus about 8.49 billion. Aprons and whole-tile rounding make a cold full render more expensive, so tiling is justified by reuse and partial work, not by claiming a cheaper cold frame.
 
 Today's 960×540 design reserves 8 MiB for the 16-byte Final grid and allocates two 1.98 MiB RGBA8 scene textures, about 11.96 MiB combined before 16 MiB SCRATCH and other resources. At 1920×1080 it reserves 32 MiB for records and two 7.91 MiB scene textures, about 47.82 MiB combined. These values follow the resource arithmetic in [Julibrot kernels](kernels.md) and [the precision ledger](precision-ledger.md).
 
-With the backdrop active, allocation-level comparison is 37 MiB versus today's approximately 11.96 MiB at friendly 960×540 and 65 MiB versus approximately 47.82 MiB at friendly 1920×1080. The floor profile deliberately spends memory on navigation continuity. A full 56-tile cache plus the complete atlas still reserves 72 MiB: 12 record pages are protected for backdrop, 44 for Detail and history, and eight atlas slots remain vacant. After a friendly 40-tile 1080p Detail cover only four Detail pages, or 5 MiB including their atlas shares, are guaranteed return history; at 960×540 the friendly and worst phases leave 32 and 24 Detail pages. The separate documented 16 MiB SCRATCH and eight non-tile DATA pages still apply, and the shared heap texture's total allocation is outside both span-reservation comparisons.
+With the backdrop active, the retained 16-byte record working set is 21 MiB versus today's approximately 11.96 MiB combined retained allocation at friendly 960×540 and 49 MiB versus approximately 47.82 MiB at friendly 1920×1080. The floor profile deliberately spends memory on navigation continuity. A full 56-tile value-map cache reserves 56 MiB: 12 record pages are protected for backdrop and 44 for Detail and history. After a friendly 40-tile 1080p Detail cover only four Detail pages, or 4 MiB, are guaranteed return history; at 960×540 the friendly and worst phases leave 32 and 24 Detail pages. The separate documented 16 MiB SCRATCH, eight non-tile DATA pages, ordinary frame targets, and any optional frame transient still apply, and the shared heap texture's total allocation is outside both span-reservation comparisons.
 
-The primary win is a zero-iteration return to a resident chart position, including after unrelated camera motion; continuous pan and zoom reuse the overlap and compute only newly exposed tiles; a small camera, observer, height, palette, or canvas change reprojects or recolors records instead of rerunning escape; and a cancelled or failed tile leaves other regions intact. Under strict version-one rules there is no reuse after slice tilt, out-of-plane origin motion, cap change, precision change, or accepted reference regeneration, and the page must not call those cases partial hits.
+The primary win is a zero-iteration return to a resident chart position, including after unrelated camera motion; continuous pan and zoom reuse the overlap and compute only newly exposed tiles; a camera, observer, height, palette, exposure, tone, output, or canvas change reprojects and shades records without rerunning escape; and a cancelled or failed tile leaves other regions intact. Under strict version-one rules there is no reuse after slice tilt, out-of-plane origin motion, cap change, precision change, or accepted reference regeneration, and the page must not call those cases partial hits.
 
-Eviction first removes logically invalid partitions, stale atlas generations, and failed drafts. It then considers only unpinned valid tiles: the nine active backdrop entries, selected Detail, in-flight, publication-source, seam-source, and active-orbit-dependent entries are pinned until their replacement, fences, and frame ownership release them.
+Eviction first removes logically invalid partitions and failed drafts. It then considers only unpinned valid tiles: the nine active backdrop entries, selected Detail, in-flight, publication-source, seam-source, and active-orbit-dependent entries are pinned until their replacement, fences, and frame ownership release them. Frame color outputs are released by the render graph and never enter this policy.
 
 Among remaining tiles, eviction is LRU by `last_selected_serial` with chart distance from the current visible footprint as the secondary policy requested by the owner. Distance is compared in integer tile space at a common pyramid level, using saturating magnitude or shared-key-prefix order so a deep bignum coordinate is never narrowed to f64; larger pyramid mismatch is the next tie-breaker and stable tile identity is last.
 
 The policy retains invisible Detail tiles when budget permits but never computes them. The explicit backdrop window is exempt and may be maintained off screen within its 12-page wall. Eviction protects the active backdrop and current visible Detail before ordinary history, protects Final over an equivalent draft, and keeps a small balance across recent Detail pyramid levels when pages remain.
 
-When no safe victim exists, allocation fails closed: the scheduler lowers concurrent work and Detail resolution while the protected backdrop continues to own the missing quadrants. Clear appears only when no valid, placeable backdrop exists, such as after a slice or MAIN invalidation, outside the finite backdrop window after an unbounded jump, or after an oracle refusal. The allocator never frees a span or atlas slot still reachable by a submitted draw.
+When no safe victim exists, allocation fails closed: the scheduler lowers concurrent work and Detail resolution while the protected backdrop continues to own the missing quadrants. Clear appears only when no valid, placeable backdrop exists, such as after a slice or MAIN invalidation, outside the finite backdrop window after an unbounded jump, or after an oracle refusal. The allocator never frees a value-map span still reachable by a submitted draw.
 
 ## Oracle, browser proofs, and published facts
 
 Pure key tests must prove that bignum anchor serialization and signed dyadic indices round-trip, adjacent aprons name identical chart sample points, parent and child pyramid points agree where their dyadic lattices coincide, extreme deep-zoom keys do not pass through f64, and arbitrary plane-preserving chart isometries preserve ambient sample points within the stated basis bound.
 
-Compatibility table tests must pin every row in the invalidation matrix, including exact in-plane origin motion, representation-noise tolerance, first out-of-plane displacement beyond the proof bound, plane tilt, cap, precision, reference generation, camera-only changes, palette-only changes, and stale heap or atlas generations.
+Compatibility table tests must pin every row in the invalidation matrix, including exact in-plane origin motion, representation-noise tolerance, first out-of-plane displacement beyond the proof bound, plane tilt, cap, precision, reference generation, camera-only changes, palette-, exposure-, and tone-only changes, and stale heap generations.
 
 Selection tests must prove that direct pyramid traversal visits only intersecting ancestors and children, is independent of catalog insertion order and total unrelated cache population, emits a disjoint chart cover, masks every selected child out of its ancestors, falls back to the nearest valid backdrop, rejects invalid generations before emission, never admits error above 1.0 px, and preserves stable quality and age tie-breaking. Property tests should compare the walk with a slow exhaustive cover oracle for small random pyramids.
 
@@ -312,23 +321,25 @@ Flat placement tests compare every tile homography at corners, edges, interior w
 
 Relief tests compare the tessellated placement against direct projection using actual tile record heights, the existing five-height regression values, adversarial height discontinuities, near-pole cameras, and maximum subdivision walls. They publish per-tile maximum and p95 error and require every selected tile to have a finite maximum at most 1.0 px. A separate overlap corpus places differently aged fine and backdrop representations over two nearly coincident lifted surfaces and proves that CPU masks choose representation quality while true depth, unaffected by quality, chooses physical visibility.
 
-Seam tests render equal-level and one- or two-level transitions at subpixel pans, fractional zooms, all four edges, mixed quality, and relief. They compare shared-edge screen positions and an ownership image, requiring no clear crack, no double ownership, no wrong-palette texel, and at most 1.0 px geometric disagreement.
+Seam tests render equal-level and one- or two-level transitions at subpixel pans, fractional zooms, all four edges, mixed quality, and relief. They compare shared-edge screen positions and an ownership image, requiring no clear crack, no double ownership, identical current-frame shading for an identical value record, and at most 1.0 px geometric disagreement.
 
-Heap and publication tests inject stale handles, span exhaustion, directory exhaustion, atlas-slot reuse, cancellation before and after DATA copy, out-of-order fences, and eviction during queued work. The incumbent must remain selectable until a strictly better completed tile is atomically published.
+The shading oracle starts from the selected value-map record, evaluates a CPU reference for palette-to-linear conversion, exposure, tone mapping, and output encoding, and compares it with the pixel produced after GPU placement within the delivered output-format tolerance. Changing any display control must keep selected tile identities and escape-dispatch counts unchanged, affect the next frame without an asynchronous recolor phase, and prove that no cached color payload was sampled.
+
+Heap and publication tests inject stale handles, span exhaustion, directory exhaustion, cancellation before and after DATA copy, out-of-order fences, and eviction during queued work. Frame-resource tests inject optional-transient allocation refusal and prove direct shading or an explicit frame refusal without changing tile validity. The incumbent must remain selectable until a strictly better completed value-map tile is atomically published.
 
 The first browser proof navigates from view A to disjoint view B and back to A under the same MAIN generation, and demonstrates identical selected tile identities, zero new escape dispatches for the resident A cover, and no transient clear after the return frame. A control run with capacity below the A-plus-B working set must show honest evictions and misses.
 
 The second browser proof pans by less than one tile and zooms fractionally, demonstrating reuse of the overlap, direct-walk cost proportional to intersecting nodes, computation only for visible Detail holes plus bounded backdrop maintenance, correct parent masks and mixed-level seams, and monotonically improving regional quality. It repeats at 960×540 and 1920×1080 on the device floor.
 
-The third browser proof first establishes the 3×3 backdrop, then exercises every camera and observer slider, height zero and nonzero, both perspective distances, rotation, pitch, zoom-out, resize, and palette change without changing MAIN. It demonstrates fine-to-backdrop fallback without clear for motions inside the published chart extent, true lifted depth under relief, record-cache retention, refusal at a constructed pole, and separate detail, backdrop, sky, and clear accounting.
+The third browser proof first establishes the 3×3 backdrop, then exercises every camera and observer slider, height zero and nonzero, both perspective distances, rotation, pitch, zoom-out, resize, palette, exposure, and tone mapping without changing MAIN. It demonstrates fine-to-backdrop fallback without clear for motions inside the published chart extent, true lifted depth under relief, instant per-pixel reshading with unchanged tile identities and zero display-only escape dispatches, refusal at a constructed pole, and separate detail, backdrop, sky, and clear accounting.
 
 The fourth browser proof changes plane within its stabilizer, then tilts it, moves origin in-plane, then out-of-plane, changes cap and precision, and accepts a new reference. It demonstrates re-keying only for the plane-preserving cases and immediate logical invalidation for every new-content case.
 
 The fifth browser proof runs automatic and manual scene modes through Backdrop, Preview, Interactive, and Final with delayed and reversed completion callbacks. It proves that visible work is prioritized, invisible Detail work is absent, backdrop maintenance stays within its separate wall, manual controls remain honest, and no backdrop or draft ever replaces a better regional picture.
 
-The page must publish the requested and delivered tile geometry; record and atlas format; total, Detail, active-backdrop, and rolling-backdrop page budgets; backdrop level, 3×3 chart extent, extent multiples, samples across the longest view axis, cap, bytes, and window generation; record, atlas, scratch, orbit, descriptor, span, handle, header-set, uniform, vertex, index, and staging byte walls; resident, valid, invalid, pinned, visible, candidate, selected, queued, in-flight, completed, cancelled, hit, miss, recolor, and eviction counts; and atlas occupancy plus slot generations.
+The page must publish the requested and delivered tile geometry; value-map record format; total, Detail, active-backdrop, and rolling-backdrop page budgets; backdrop level, 3×3 chart extent, extent multiples, samples across the longest view axis, cap, bytes, and window generation; record, scratch, orbit, descriptor, span, handle, header-set, uniform, vertex, index, staging, and optional frame-transient byte walls; resident, valid, invalid, pinned, visible, candidate, selected, queued, in-flight, completed, cancelled, hit, miss, and eviction counts; and whether direct or transient HDR composition was delivered.
 
-For the current frame it must publish MAIN and reference generation, slice-key digest, chart anchor digest, requested chart footprint, inverse-bound kind, pyramid nodes visited, exact key lookups, maximum descent, rejected generations, emitted Detail and backdrop entries, parent-mask bits, ideal and selected pyramid-level histograms, refinement-level histogram, detail, backdrop, clear, and sky pixels or fractions, true-depth mode, tiles per draw batch, total draw calls, render-pass count, placement-uniform bytes, mesh vertices and triangles, and normalized kernel/copy work.
+For the current frame it must publish MAIN and reference generation, slice-key digest, chart anchor digest, requested chart footprint, inverse-bound kind, pyramid nodes visited, exact key lookups, maximum descent, rejected generations, emitted Detail and backdrop entries, parent-mask bits, ideal and selected pyramid-level histograms, refinement-level histogram, detail, backdrop, clear, and sky pixels or fractions, true-depth mode, value-to-pixel shader revision, shaded-fragment count, transient format and bytes if present, tiles per draw batch, total draw calls, render-pass count, placement-uniform bytes, mesh vertices and triangles, and normalized kernel/copy work.
 
 For correctness it must publish the latest invalidation or refusal reason, per-tile or aggregate maximum and p95 warp error, unbounded and pole refusal counts, coordinate-uncertain, projection-uncertain, horizon, and glitch counts, seam witnesses and maximum disagreement, draft-downgrade rejection count, stale-generation rejection count, and whether every selected region has an oracle receipt.
 
@@ -340,16 +351,16 @@ Lane-hours are focused implementation-and-test hours for one engineer familiar w
 
 | Stage | Working implementation at the end of the stage | Pinning tests and proofs | Estimate |
 |---|---|---|---:|
-| 0. Pure policy foundation | Current one-scene page unchanged; add canonical chart keys, stable slice-frame aliases, affine-plane equivalence, node-local quality ordering, direct pyramid-walk policy, backdrop sizing, invalidation decisions, cost arithmetic, and public fact types behind unused seams | Deep key round-trips, dyadic parent/child and apron identity, equivalent-chart request transforms, exhaustive walk-versus-cover oracle, full invalidation matrix, backdrop extent and byte arithmetic | 16–24 lane-hours |
-| 1. N retained whole scenes | Generalize the retained ledger from one promoted scene to a bounded LRU of full-screen scenes catalogued by content key and chart footprint while retaining source pose and palette as presentation metadata; current renderer and whole-grid ladder remain intact, and N=1 reproduces today's behavior | N=1 compatibility, A→B→A cache hit, fence-safe texture reuse, palette/version handling, no draft downgrade, LRU under a forced wall | 20–32 lane-hours |
-| 2. Fixed record tiles, backdrop, and flat composition | Kernels sample canonical chart rectangles into one-page spans; a semantic pyramid catalog, 12-page backdrop tier, and 2048² atlas publish fixed tiles; inverse-map traversal emits direct-key parent/child masks and height-zero presentation batches exact homographies, while the legacy whole scene remains a fallback switch | Walk cost independent of unrelated cache size, nested 253-interval nodes, 3×3 extent and roughly 127–253 interval resolution, Detail-over-backdrop masks, flat image oracle, seams, stale generations, and both device-floor extents | 56–80 lane-hours |
+| 0. Pure policy foundation | Current one-scene page unchanged; add canonical chart keys, stable slice-frame aliases, affine-plane equivalence, node-local quality ordering, direct pyramid-walk policy, backdrop sizing, display-input exclusion, invalidation decisions, cost arithmetic, and public fact types behind unused seams | Deep key round-trips, dyadic parent/child and apron identity, equivalent-chart request transforms, exhaustive walk-versus-cover oracle, full invalidation matrix including display-only changes, backdrop extent and byte arithmetic | 16–24 lane-hours |
+| 1. N retained whole value maps | Generalize the retained ledger from one promoted picture to a bounded LRU of whole-grid escape-record maps catalogued by content key and chart footprint; the reprojection layer shades the selected records with current palette and HDR inputs, the screen-grid kernel and global ladder remain intact, and N=1 preserves current geometry | N=1 compatibility, A→B→A value-map hit, fence-safe span reuse, instant palette/exposure/tone changes with stable identities and zero escape work, no draft downgrade, LRU under a forced wall | 28–40 lane-hours |
+| 2. Fixed record tiles, backdrop, and flat composition | Kernels sample canonical chart rectangles into one-page spans; a semantic pyramid catalog and 12-page backdrop tier publish fixed value-map tiles; inverse-map traversal emits direct-key parent/child masks and height-zero presentation batches exact homographies while per-fragment shading produces pixels, with the legacy whole-map path as fallback | Walk cost independent of unrelated cache size, nested 253-interval nodes, 3×3 extent and roughly 127–253 interval resolution, Detail-over-backdrop masks, flat geometry and post-shading image oracles, seams, stale generations, and both device-floor extents | 52–76 lane-hours |
 | 3. Relief-aware one-pass tile placement | Height-bearing tiles use adaptive meshes and per-tile 1.0 px admission; CPU masks remove duplicate representations and one GPU render pass uses only true lifted depth; poles and unproved cells retain legacy fallback during migration | Direct-projection mesh corpus, quality-versus-depth counterexamples, nearly coincident relief surfaces, parent masks, five-height regression, horizon and pole refusal, subdivision wall, and seam continuity | 40–60 lane-hours |
 | 4. Per-tile refinement and backdrop scheduler | Replace the one global ladder with visible-first TileFamily jobs plus bounded off-screen backdrop maintenance, sharing one pinned orbit per MAIN generation; atomic publication and pyramid ownership enforce monotonic quality | Automatic and manual ordering, delayed/reversed fences, cancellation, zero invisible Detail dispatches, exact backdrop work wall, rolling-window pinning, shared orbit, and no backdrop or Preview downgrade | 40–56 lane-hours |
-| 5. Cache policy, facts, and hardening | Enable the 12-backdrop/44-Detail split by default, remove the legacy fallback only after parity, publish traversal and true-depth facts, and ship browser return/pan/camera/backdrop/invalidation proofs | Long navigation and rolling-backdrop soak, device loss and capacity refusals, both target extents, preset rows and every slider, rotate/zoom-out/pitch fallback without clear inside the extent, A→B→A zero-dispatch proof, and console cleanliness | 28–44 lane-hours |
+| 5. Cache policy, facts, and hardening | Enable the 12-backdrop/44-Detail split by default, remove the legacy fallback only after parity, publish traversal, true-depth, value-shading, and transient-resource facts, and ship browser return/pan/camera/backdrop/invalidation proofs | Long navigation and rolling-backdrop soak, device loss and capacity refusals, both target extents, preset rows and every slider, display-only instant reshading, rotate/zoom-out/pitch fallback without clear inside the extent, A→B→A zero-dispatch proof, and console cleanliness | 28–44 lane-hours |
 
-The revised estimate is 200–296 lane-hours. Stage 2 is the largest seam because screen-aligned kernel output, full-screen scene targets, a single `EscapeGrid`, direct hierarchy traversal, and protected backdrop ownership all change together; splitting it further is acceptable if the legacy presenter remains the working fallback after each intermediate commit.
+The revised estimate is 204–300 lane-hours. Stage 2 is the largest seam because screen-aligned kernel output, full-screen scene targets, a single `EscapeGrid`, direct hierarchy traversal, per-fragment value shading, and protected backdrop ownership all change together; splitting it further is acceptable if the legacy whole-map presenter remains the working fallback after each intermediate commit.
 
-Stage 1 is intentionally useful even if later tile work pauses: it proves keying, return-to-position behavior, N-way ledger ownership, and eviction with minimal shader change. It does not claim pan continuity or reduce partial recomputation.
+Stage 1 is intentionally useful even if later tile work pauses: it proves keying, return-to-position behavior, N-way value-map ownership, display-time shading, and eviction before tile geometry lands. It does not claim pan continuity or reduce partial recomputation.
 
 Stage 2 should initially support height zero, one Detail rung, and the coarse backdrop behind a runtime capability flag. Stage 3 removes the geometric limitation while pinning true-depth semantics, Stage 4 adds Detail and backdrop scheduling policy, and Stage 5 makes the tile path the default only after the same page facts and browser pins are stronger than the legacy path.
 
@@ -357,14 +368,14 @@ Stage 2 should initially support height zero, one Detail rung, and the coarse ba
 
 - `JB-TILE-001` — Specify and test canonical geometric-slice, bignum-anchor, dyadic pyramid, and arbitrary-precision tile-key encodings, including the 254-sample/253-interval core, shared boundary, apron equations, nested parent/child samples, and plane-preserving chart transforms.
 - `JB-TILE-002` — Implement the pure compatibility and invalidation matrix with content-valid, placeable, and preferred as distinct results, preserving the half-texel representation bound and refusing genuine off-plane motion.
-- `JB-TILE-003` — Generalize `SceneLedger` to a bounded N-scene whole-frame cache with generation-safe texture ownership, monotonic quality, LRU facts, and the A→B→A browser proof.
+- `JB-TILE-003` — Generalize `SceneLedger` to a bounded N-entry whole-grid value-map cache with generation-safe `DataSpan` ownership, monotonic quality, LRU facts, display-time shading, and the A→B→A browser proof.
 - `JB-TILE-004` — Add the semantic pyramid-node catalog, fixed canonical-chart aliases, direct inverse-bound traversal, node-local quality buckets, capacity planner, pin ledger, and fence-safe `DataSpan` lifetime without a general spatial search or heap-descriptor change.
 - `JB-TILE-005` — Add canonical chart-rectangle shallow and perturbation dispatches with one shared, pinned reference orbit per active MAIN generation and per-tile precision and glitch receipts.
-- `JB-TILE-006` — Add the 2048² RGBA8 atlas, 64 generation-tagged slots, palette recolor path, atomic tile publication, and stale-slot refusal.
+- `JB-TILE-006` — Add reprojection-layer per-fragment value lookup, palette-to-linear conversion, exposure, tone mapping, output encoding, direct-output mode, and an optional single frame-scoped HDR transient with no cached colors or display controls in tile state.
 - `JB-TILE-007` — Implement deterministic fine-over-coarse pyramid ownership, parent child-exclusion masks, 64-entry placement batches, exact flat homographies, half-open ownership, aprons, mixed-level transitions, sky, backdrop, and clear accounting.
 - `JB-TILE-008` — Extend the reprojection oracle to adaptive relief meshes, actual record heights, seam witnesses, local refusal, and the hard 1.0 px ceiling.
 - `JB-TILE-009` — Replace the global ladder with the visible-Detail TileFamily queue plus separately walled backdrop maintenance, no-draft-or-backdrop-downgrade publication, rolling-window pinning, and cancellation tests.
-- `JB-TILE-010` — Publish tile, cache, traversal, backdrop, true-depth, resource, cover, quality, error, seam, invalidation, scheduling, eviction, and timing facts and add the five browser proof sequences.
+- `JB-TILE-010` — Publish tile, cache, traversal, backdrop, true-depth, value-shading, transient-resource, cover, quality, error, seam, invalidation, scheduling, eviction, and timing facts and add the five browser proof sequences.
 - `JB-TILE-011` — Study an actual 8-byte GPU escape-record dialect; accept it only if the device-floor format, exact status and rebase representation, heap kind, shader access, and measured bandwidth benefit are all proved.
 - `JB-TILE-012` — Study promotion of certified Final tiles from orbit-generation provenance to reference-independent mathematical content so a reference refresh does not discard a valid return cache.
 - `JB-TILE-013` — Implement and prove the protected 3×3 coarse backdrop with nine active and three rolling pages, at least 3× chart extent, roughly 127–253 sample intervals across the longest view dimension, and fine-first fallback under rotation, pitch, pan, and zoom-out.
@@ -388,13 +399,13 @@ The 12-backdrop/44-Detail split leaves only four guaranteed Detail history pages
 
 The backdrop is finite. Its 3×3 union covers at least three times the current conservative chart bounds, but no finite cache can guarantee an arbitrary teleport or an unbounded near-horizon inverse; outside that published extent the honest result may still be sky or clear until a new coarse window arrives, consistent with the arena's finite-slice limit.
 
-One 2048² atlas is simple but palette recoloring can temporarily contend for its vacant slots. Record validity must survive atlas eviction, and a wrong-palette slot must never be used as a visually convenient stale fallback.
+Per-pixel value lookup, palette evaluation, exposure, and tone mapping add fragment bandwidth and arithmetic exactly when cached geometry avoids iteration work. Browser measurements must separate selection, value fetch, shading, and raster cost; an optional HDR transient must stay at one canvas-sized frame resource and may never quietly become retained color history.
 
 Canonical inverse bounds, bignum key arithmetic, hierarchy masks, mesh building, and per-tile descriptors can move cost from GPU iteration to the main thread even without a search. Direct key descent, one visit per intersecting node, bounded node-local buckets, cached placement receipts, and batched draws require measured walk counts and browser walls before the legacy path is removed.
 
 The present heap lattice has fixed uniform and directory capacities and a non-compacting buddy allocator. Fragmentation, span/header exhaustion, or a live fence can prevent publication even when byte totals look sufficient; every allocation path needs a typed wall and an incumbent-preserving failure mode.
 
-Stage 1 full-screen scenes and later chart tiles have different semantics. The migration must not fossilize screen pose or palette in the final `ContentKey`; the multi-scene cache is a proof scaffold whose key and facts should already separate content from presentation.
+Stage 1 whole-grid value maps and later chart tiles have different geometry but the same value-domain semantics. The migration must not fossilize screen pose, palette, exposure, tone mapping, or output format in any key; its first cache stage should already prove that presentation inputs remain frame-local.
 
 ## Open questions for the owner
 
@@ -404,11 +415,11 @@ Stage 1 full-screen scenes and later chart tiles have different semantics. The m
 
 3. Should version one pursue an 8-byte record? Recommendation: no; use the existing 16-byte RGBA32F record and treat 8 bytes as a measured follow-up, because padding an 8-byte logical record into the present heap saves nothing and packing status plus rebase must remain exact.
 
-4. What floor cache promise should the interface make? Recommendation: promise 56 tile pages split into 12 protected backdrop and 44 Detail/history pages plus a 64-slot atlas, not “two complete fine views”; publish that a friendly 1080p view leaves four guaranteed Detail history pages and a worst-phase view falls back to backdrop for ten fine regions.
+4. What floor cache promise should the interface make? Recommendation: promise 56 value-map tile pages split into 12 protected backdrop and 44 Detail/history pages, not “two complete fine views”; publish that a friendly 1080p view leaves four guaranteed Detail history pages and a worst-phase view falls back to backdrop for ten fine regions.
 
 5. How broadly should “plane-preserving re-key” apply? Recommendation: accept every certified affine-plane stabilizer motion as semantically valid, intern one canonical chart per geometric slice, transform each request into that chart, and keep stored pyramid keys axis-aligned; use integer aliases only as an optional dyadic shortcut and never resample records.
 
-6. Should the color atlas retain more than one palette? Recommendation: no for the first version; keep records authoritative, dedicate the atlas to the current palette version, recolor visible tiles first, and revisit multi-palette residency only if measured palette toggling justifies stealing history slots.
+6. Does reprojection need a frame-scoped HDR color transient? Recommendation: no extra target for the first Julibrot path; shade records directly into the ordinary presentation target. If wider arena composition requires linear accumulation, permit exactly one canvas-sized RGBA16F transient, 3.96 MiB at 960×540 or 15.82 MiB at 1920×1080, publish its delivered format and bytes, and never key, retain, or evict it as cache.
 
 7. Should relief use a fixed mesh or adaptive subdivision? Recommendation: begin at 16×16 cells per tile and adapt under the existing 1.0 px oracle with hard vertex and depth walls; use true projected lifted depth after CPU hierarchy masks remove parent/child duplicates, because a fixed mesh or quality-biased depth cannot honestly cover near-pole, folded, and discontinuous-height cases.
 
@@ -416,7 +427,7 @@ Stage 1 full-screen scenes and later chart tiles have different semantics. The m
 
 9. May a lower-cap tile be reused after a cap reduction or increase? Recommendation: keep cap equality in the first `ContentKey`; add a partial order only after the record stores enough first-escape evidence to prove equivalence for the requested cap.
 
-10. When no Detail tile meets the 1.0 px relief ceiling, should the presenter fall back to backdrop or a stale full-screen scene? Recommendation: use the backdrop only if its own mesh passes the same oracle and use a stale scene only if it independently passes content and regional placement; otherwise render sky where geometrically exterior and transient clear where no valid placement exists.
+10. When no Detail tile meets the 1.0 px relief ceiling, should the presenter fall back to backdrop or a stale whole-grid value map? Recommendation: use the backdrop only if its own mesh passes the same oracle and use a stale value map only if it independently passes content and regional placement; shade either with current frame inputs, otherwise render sky where geometrically exterior and transient clear where no valid placement exists.
 
 11. Should `(level,bound,age)` be encoded into GPU depth to avoid CPU overlap selection? Recommendation: adopt the speed objective but not that relief encoding; direct pyramid traversal should eliminate representation overlap, child masks should preserve fine-first ownership, and the one render pass should reserve depth for true lifted visibility. A flat-only encoding remains a benchmarkable optimization, not a contract.
 
