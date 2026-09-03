@@ -40,16 +40,20 @@ fn shared_gpu_and_owner_discriminants_are_exact() {
         [0.0, 0.0, 0.0, 0.0, 0.0, 8.0, 8.0]
     );
     assert!(ViewControls::NEUTRAL.is_valid());
-    assert!(!ViewControls {
-        height_scale: -0.001,
-        ..ViewControls::NEUTRAL
-    }
-    .is_valid());
-    assert!(!ViewControls {
-        distance_five: 0.0,
-        ..ViewControls::NEUTRAL
-    }
-    .is_valid());
+    assert!(
+        !ViewControls {
+            height_scale: -0.001,
+            ..ViewControls::NEUTRAL
+        }
+        .is_valid()
+    );
+    assert!(
+        !ViewControls {
+            distance_five: 0.0,
+            ..ViewControls::NEUTRAL
+        }
+        .is_valid()
+    );
 }
 
 #[test]

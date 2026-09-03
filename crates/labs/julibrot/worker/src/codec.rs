@@ -550,12 +550,10 @@ mod tests {
 
     #[test]
     fn full_mantissa_anchor_navigation_decodes_at_one_precision() {
-        let plane = ember_julibrot_math::construct_plane(
-            ember_julibrot_math::PlaneAngles {
-                theta_1: 0.0,
-                theta_2: 0.0,
-            },
-        )
+        let plane = ember_julibrot_math::construct_plane(ember_julibrot_math::PlaneAngles {
+            theta_1: 0.0,
+            theta_2: 0.0,
+        })
         .unwrap();
         // The navigator holds 1,024 bits while a shallow request declares the plan's 47.
         let mut centre = ember_julibrot_math::BigCentre::from_f64([0.0; 4], 1_024).unwrap();

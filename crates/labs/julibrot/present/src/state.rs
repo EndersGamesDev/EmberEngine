@@ -179,7 +179,7 @@ fn dot(left: [f32; 4], right: [f32; 4]) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use ember_julibrot_math::{Plane, ViewMode};
+    use ember_julibrot_math::{Plane, ViewControls};
 
     use super::*;
     use crate::{SampleClass, SubmissionKind, SubmissionMeasurement};
@@ -197,10 +197,9 @@ mod tests {
             plane_theta_1: 0.0,
             plane_theta_2: 0.0,
             zoom_log2: 20.0,
-            view_theta_1: 0.0,
+            view: ViewControls::NEUTRAL,
             grid_width: 800,
             grid_height: 600,
-            view: ViewMode::Flat,
             centre_from_reference_px: [11.0, -3.0],
         }
     }

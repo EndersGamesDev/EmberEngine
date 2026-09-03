@@ -1,5 +1,5 @@
 use ember_julibrot_kernels::{EscapeGrid, RefinementLevel};
-use ember_julibrot_math::{Plane, Pose, ViewMode};
+use ember_julibrot_math::{Plane, Pose, ViewControls};
 use ember_julibrot_worker::{HotState, MainState};
 use thiserror::Error;
 
@@ -14,11 +14,11 @@ pub struct PresentHot {
     pub state: HotState,
     /// Math-owned sampled plane frozen for this refresh.
     pub plane: Plane,
-    /// Monotonic seconds used by the standing VIEW rotation.
-    pub view_time_seconds: f64,
+    /// Every VIEW control frozen for this refresh.
+    pub view: ViewControls,
 }
 
-/// Arrival-rate owner state adapted with a published escape grid and selected view.
+/// Arrival-rate owner state adapted with a published escape grid.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PresentMain {
     /// Owner observation epoch; attribution only.
@@ -27,8 +27,6 @@ pub struct PresentMain {
     pub state: MainState,
     /// Kernels-owned escape grid whose active prefix is ready in DATA.
     pub grid: EscapeGrid,
-    /// Selected presentation view.
-    pub view: ViewMode,
 }
 
 impl PresentMain {
@@ -153,19 +151,17 @@ pub struct WarpPlan {
     pub kind: WarpKind,
     /// Plane-chart residual in retained-frame pixels.
     pub chart_residual: f64,
-    /// Maximum tumbled approximation error in pixels, when applicable.
+    /// Maximum sampled approximation error in pixels, when applicable.
     pub approx_max_error_px: Option<f64>,
-    /// Ninety-fifth-percentile tumbled approximation error in pixels, when applicable.
+    /// Ninety-fifth-percentile sampled approximation error in pixels, when applicable.
     pub approx_p95_error_px: Option<f64>,
 }
 
 /// Reprojection algorithm selected for one HOT payload.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WarpKind {
-    /// Math-owned exact plane-chart homography.
-    FlatExact,
-    /// Four-anchor image homography for a tumbled endpoint.
-    TumbledHomography,
+    /// The one four-anchor image homography, exact at height zero and zero camera angles.
+    AnchorHomography,
     /// Honest clear because no compatible source or finite plan exists.
     ClearOnly,
 }
@@ -195,6 +191,13 @@ pub enum FenceRefusal {
 }
 
 /// App-visible asynchronous completion event.
+///
+/// `SceneCompleted` carries the whole promoted frame, which is larger than the other variants
+/// because a `Pose` now carries every VIEW control. Boxing it would trade one fixed move for a
+/// heap allocation on every completed scene, and a completed scene is a fenced GPU submission
+/// costing milliseconds; the move is not the cost worth optimizing, and the pinned interface says
+/// `SceneCompleted { frame: SceneFrame }`.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum PresentEvent {
     /// A compatible scene became the retained warp source.
@@ -280,8 +283,8 @@ pub struct PresentFacts {
     pub iteration_cap: Option<u32>,
     /// Latest MAIN palette selection.
     pub palette: PaletteId,
-    /// Latest MAIN view selection.
-    pub view: ViewMode,
+    /// Latest VIEW controls carried by a HOT write.
+    pub view: ViewControls,
     /// Latest HOT displacement in current pixels.
     pub centre_from_reference_px: [f64; 2],
     /// Latest accepted reference shift in current pixels.
@@ -299,9 +302,9 @@ pub struct PresentFacts {
     /// Latest plane-chart residual.
     pub chart_residual: Option<f64>,
     /// Latest tumbled maximum approximation error.
-    pub tumbled_max_error_px: Option<f64>,
+    pub warp_max_error_px: Option<f64>,
     /// Latest tumbled ninety-fifth-percentile approximation error.
-    pub tumbled_p95_error_px: Option<f64>,
+    pub warp_p95_error_px: Option<f64>,
     /// Honest current status.
     pub status: PresentStatus,
 }
@@ -317,8 +320,8 @@ impl PresentFacts {
         } else {
             None
         };
-        self.tumbled_max_error_px = plan.approx_max_error_px;
-        self.tumbled_p95_error_px = plan.approx_p95_error_px;
+        self.warp_max_error_px = plan.approx_max_error_px;
+        self.warp_p95_error_px = plan.approx_p95_error_px;
     }
 }
 
@@ -333,7 +336,7 @@ impl Default for PresentFacts {
             delivered_level: None,
             iteration_cap: None,
             palette: PaletteId::Classic,
-            view: ViewMode::Flat,
+            view: ViewControls::NEUTRAL,
             centre_from_reference_px: [0.0; 2],
             reference_shift_px: [0.0; 2],
             last_scene: None,
@@ -342,8 +345,8 @@ impl Default for PresentFacts {
             refreshes_without_scene: 0,
             texture_reallocations: 0,
             chart_residual: None,
-            tumbled_max_error_px: None,
-            tumbled_p95_error_px: None,
+            warp_max_error_px: None,
+            warp_p95_error_px: None,
             status: PresentStatus::WaitingForFirstScene,
         }
     }
@@ -428,7 +431,6 @@ mod tests {
                 height: 1,
                 level: RefinementLevel::Preview,
             },
-            view: ViewMode::Flat,
         };
         assert_eq!(
             main(0).selected_palette().map(|selected| selected.0),
@@ -447,32 +449,32 @@ mod tests {
     }
 
     #[test]
-    fn recorded_warp_facts_publish_both_sampled_tumbled_errors() {
+    fn recorded_warp_facts_publish_both_sampled_errors() {
         let mut facts = PresentFacts::default();
-        assert_eq!(facts.tumbled_p95_error_px, None);
-        let tumbled = WarpPlan {
+        assert_eq!(facts.warp_p95_error_px, None);
+        let anchored = WarpPlan {
             rows: [[0.0; 4]; 3],
             source_valid: true,
-            kind: WarpKind::TumbledHomography,
+            kind: WarpKind::AnchorHomography,
             chart_residual: 0.25,
             approx_max_error_px: Some(1.75),
             approx_p95_error_px: Some(0.5),
         };
-        facts.record_warp_plan(&tumbled);
+        facts.record_warp_plan(&anchored);
         assert_eq!(facts.chart_residual, Some(0.25));
-        assert_eq!(facts.tumbled_max_error_px, Some(1.75));
-        assert_eq!(facts.tumbled_p95_error_px, Some(0.5));
+        assert_eq!(facts.warp_max_error_px, Some(1.75));
+        assert_eq!(facts.warp_p95_error_px, Some(0.5));
         let cleared = WarpPlan {
             source_valid: false,
             kind: WarpKind::ClearOnly,
             approx_max_error_px: None,
             approx_p95_error_px: None,
-            ..tumbled
+            ..anchored
         };
         facts.record_warp_plan(&cleared);
         assert_eq!(facts.chart_residual, None);
-        assert_eq!(facts.tumbled_max_error_px, None);
-        assert_eq!(facts.tumbled_p95_error_px, None);
+        assert_eq!(facts.warp_max_error_px, None);
+        assert_eq!(facts.warp_p95_error_px, None);
     }
 
     fn test_span() -> ember_lab_heap::DataSpan {

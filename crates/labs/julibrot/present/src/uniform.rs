@@ -13,10 +13,10 @@ pub const HOT_RING_SLOTS: u32 = 3;
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 #[repr(C, align(16))]
 pub struct HotUniform {
-    /// Frozen plane basis vector u.
-    pub plane_u: [f32; 4],
-    /// Frozen plane basis vector v.
-    pub plane_v: [f32; 4],
+    /// Cosine and sine of the observer yaw, then of its pitch.
+    pub camera: [f32; 4],
+    /// Height amplitude, both perspective distances, and one reserved zero.
+    pub view_scale: [f32; 4],
     /// Cosine and sine for both standing VIEW rotations.
     pub view_rotation: [f32; 4],
     /// First padded row of the inverse-sampling homography.
@@ -27,7 +27,7 @@ pub struct HotUniform {
     pub homography_row_2: [f32; 4],
     /// Honest clear and disocclusion colour.
     pub clear_rgba: [f32; 4],
-    /// Epoch low/high words, source validity, and view discriminant.
+    /// Epoch low/high words, source validity, and one reserved zero.
     pub flags: [u32; 4],
 }
 
@@ -194,8 +194,8 @@ mod tests {
     fn gpu_layouts_match_the_exact_byte_contract() {
         assert_eq!(size_of::<HotUniform>(), 128);
         assert_eq!(align_of::<HotUniform>(), 16);
-        assert_eq!(offset_of!(HotUniform, plane_u), 0);
-        assert_eq!(offset_of!(HotUniform, plane_v), 16);
+        assert_eq!(offset_of!(HotUniform, camera), 0);
+        assert_eq!(offset_of!(HotUniform, view_scale), 16);
         assert_eq!(offset_of!(HotUniform, view_rotation), 32);
         assert_eq!(offset_of!(HotUniform, homography_row_0), 48);
         assert_eq!(offset_of!(HotUniform, homography_row_1), 64);
