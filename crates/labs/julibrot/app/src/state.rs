@@ -17,6 +17,19 @@ pub const INITIAL_ITERATION_CAP: u32 = 512;
 
 const NAVIGATION_PRECISION_BITS: u32 = 1_024;
 
+/// The `scale` control's ends, in base-two zoom exponent.
+///
+/// The lower end is a step out from the whole chart rather than zero, so the picture can be
+/// pulled back off the edges; the upper end is far past where binary64 gives out, which is the
+/// point of holding the centre in bignum.
+pub const SCALE_RANGE_LOG2: [f64; 2] = [-2.0, 120.0];
+
+/// A drag whose shorter side is under this many CSS pixels is a click, not a box.
+///
+/// Without a floor there is no click at all: a pointer that moves one pixel between press and
+/// release would zoom by three orders of magnitude, which is the opposite of what the hand meant.
+pub const BOX_CLICK_THRESHOLD_PX: f64 = 4.0;
+
 /// Controls retain requested values independently of delayed worker or GPU work.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RequestedControls {
@@ -182,6 +195,46 @@ pub fn drag_delta_px_down(
     Ok([delta_css[0] * scale[0], delta_css[1] * scale[1]])
 }
 
+/// Reports whether a drag rectangle is a box selection rather than a click.
+#[must_use]
+pub fn is_box_selection(box_css: [f64; 2]) -> bool {
+    box_css
+        .iter()
+        .all(|side| side.is_finite() && *side >= BOX_CLICK_THRESHOLD_PX)
+}
+
+/// Returns the zoom change that makes a screen box fill the screen without spilling past it.
+///
+/// The factor is the smaller of the two ratios, so the box fits inside the viewport on its
+/// limiting side and the aspect ratio of the picture is untouched; taking the larger one would
+/// crop the box the user just drew.
+///
+/// # Errors
+///
+/// Returns a math failure for a non-finite or non-positive box or client rectangle.
+pub fn box_zoom_delta_log2(box_css: [f64; 2], rect_css: [f64; 2]) -> Result<f64, AppError> {
+    if !box_css
+        .iter()
+        .chain(rect_css.iter())
+        .all(|side| side.is_finite() && *side > 0.0)
+    {
+        return Err(AppError::Math(
+            "selection box is not a positive finite size".to_string(),
+        ));
+    }
+    let factor = (rect_css[0] / box_css[0]).min(rect_css[1] / box_css[1]);
+    if !factor.is_finite() || factor <= 0.0 {
+        return Err(AppError::Math(
+            "selection box has no finite zoom factor".to_string(),
+        ));
+    }
+    let delta = factor.log2();
+    delta
+        .is_finite()
+        .then_some(delta)
+        .ok_or_else(|| AppError::Math("selection box has no finite zoom factor".to_string()))
+}
+
 /// Worker navigation instruction paired with immediately staged visual HOT state.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum NavigationEdit {
@@ -196,6 +249,13 @@ pub enum NavigationEdit {
     Pan {
         /// Desired-centre change in current pixels along `(u,v)`.
         centre_delta_px: [f64; 2],
+    },
+    /// A target placed at one screen point, optionally carrying the box's zoom change.
+    Target {
+        /// Target position relative to canvas centre, in render-grid pixels with `+y` up.
+        anchor_px_up: [f64; 2],
+        /// Change in base-two zoom exponent; zero for a click.
+        delta_log2: f64,
     },
 }
 
@@ -356,6 +416,69 @@ impl ViewerController {
         self.add_reason(OrbitReason::CENTRE_THRESHOLD);
         let centre_delta_px = [-pan_canvas_px[0], -pan_canvas_px[1]];
         Ok(NavigationEdit::Pan { centre_delta_px })
+    }
+
+    /// Places the target at one screen point, carrying an optional zoom change with it.
+    ///
+    /// The plane point under the target becomes the centre, so the marker comes to rest at the
+    /// screen centre. The edit is the existing anchored-zoom path with the pan set to minus the
+    /// anchor: the anchored term contributes `(s_before - s_after)A` and the pan term `+s_after·A`,
+    /// which sum to `s_before·A` — the plane offset the point had at the scale the user was
+    /// looking at, independent of how much the zoom then changes. A click passes zero, a box
+    /// release passes the factor that makes it fill the screen, and both are one navigation edit.
+    ///
+    /// # Errors
+    ///
+    /// Returns a math failure for non-finite input or result, or a typed owner refusal.
+    pub fn set_target(
+        &mut self,
+        anchor_px_up: [f64; 2],
+        delta_log2: f64,
+    ) -> Result<NavigationEdit, AppError> {
+        if !delta_log2.is_finite() || !anchor_px_up.iter().all(|component| component.is_finite()) {
+            return Err(AppError::Math("target input is not finite".to_string()));
+        }
+        let zoom_log2 = self.requested.zoom_log2 + delta_log2;
+        if !zoom_log2.is_finite() {
+            return Err(AppError::Math(
+                "target zoom exceeded finite range".to_string(),
+            ));
+        }
+        self.owner.navigate(NavigationDelta {
+            pan_canvas_px: [-anchor_px_up[0], -anchor_px_up[1]],
+            zoom_delta_log2: delta_log2,
+            anchor_canvas_px: anchor_px_up,
+        });
+        if let Some(error) = self.owner.take_navigation_error() {
+            return Err(owner_error(error));
+        }
+        self.requested.zoom_log2 = zoom_log2;
+        self.add_reason(OrbitReason::ZOOM_THRESHOLD.union(OrbitReason::CENTRE_THRESHOLD));
+        Ok(NavigationEdit::Target {
+            anchor_px_up,
+            delta_log2,
+        })
+    }
+
+    /// Moves the `scale` control to an absolute zoom exponent, about the screen centre.
+    ///
+    /// The worker's centre update needs the scale before and the scale after, so an absolute
+    /// slider reaches it as the difference; the accumulated sum equals the slider's own number to
+    /// within one unit in its last place, which no readout in the lab resolves.
+    ///
+    /// # Errors
+    ///
+    /// Returns a math failure outside the control's own ends, or a typed owner refusal.
+    pub fn set_zoom_log2(&mut self, zoom_log2: f64) -> Result<NavigationEdit, AppError> {
+        if !zoom_log2.is_finite()
+            || zoom_log2 < SCALE_RANGE_LOG2[0]
+            || zoom_log2 > SCALE_RANGE_LOG2[1]
+        {
+            return Err(AppError::Math(format!(
+                "scale {zoom_log2} is outside the control range"
+            )));
+        }
+        self.wheel_zoom(zoom_log2 - self.requested.zoom_log2, [0.0, 0.0])
     }
 
     /// Stages two independent plane angles without resetting other HOT controls.
@@ -660,12 +783,113 @@ mod tests {
     use ember_julibrot_present::PaletteId;
 
     use super::{
-        NavigationEdit, PRESET_ROWS, ViewerController, anchor_px_up, drag_delta_px_down, preset_row,
+        BOX_CLICK_THRESHOLD_PX, NavigationEdit, PRESET_ROWS, SCALE_RANGE_LOG2, ViewerController,
+        anchor_px_up, box_zoom_delta_log2, drag_delta_px_down, is_box_selection, preset_row,
     };
 
     /// The reference browser geometry: a 960x540 render grid laid out at this client rectangle.
     const REFERENCE_RECT: [f64; 2] = [1_022.793_762_207_031_2, 575.315_673_828_125];
     const REFERENCE_GRID: [u32; 2] = [960, 540];
+
+    /// A box that is half the screen on its limiting side is exactly one zoom step.
+    #[test]
+    fn a_selection_box_zooms_by_its_limiting_ratio() {
+        let half = box_zoom_delta_log2(
+            [REFERENCE_RECT[0] / 2.0, REFERENCE_RECT[1] / 2.0],
+            REFERENCE_RECT,
+        )
+        .expect("a half-screen box has a finite factor");
+        assert!((half - 1.0).abs() < 1.0e-12);
+        // A wide, short box is limited by its width, not by the side that would crop it.
+        let wide = box_zoom_delta_log2(
+            [REFERENCE_RECT[0] / 2.0, REFERENCE_RECT[1] / 8.0],
+            REFERENCE_RECT,
+        )
+        .expect("a wide box has a finite factor");
+        assert!((wide - 1.0).abs() < 1.0e-12);
+        assert!(box_zoom_delta_log2([0.0, 10.0], REFERENCE_RECT).is_err());
+        assert!(box_zoom_delta_log2([10.0, f64::NAN], REFERENCE_RECT).is_err());
+    }
+
+    /// Under four pixels on either side there is no box, so the gesture is the click it looked like.
+    #[test]
+    fn a_box_under_the_threshold_is_a_click() {
+        assert!(is_box_selection([
+            BOX_CLICK_THRESHOLD_PX,
+            BOX_CLICK_THRESHOLD_PX
+        ]));
+        assert!(!is_box_selection([BOX_CLICK_THRESHOLD_PX - 0.001, 200.0]));
+        assert!(!is_box_selection([200.0, 0.0]));
+        assert!(!is_box_selection([f64::NAN, 200.0]));
+    }
+
+    /// A target click recentres without changing scale, and reports the edit it staged.
+    ///
+    /// The displacement the worker publishes is the click's own pixel offset, because the plane
+    /// point that was under the click becomes the centre and the reference has not moved.
+    #[test]
+    fn a_target_click_moves_the_centre_by_its_own_pixels() {
+        let mut viewer = ViewerController::new(960).expect("canonical viewer");
+        let before = viewer.requested().zoom_log2;
+        let edit = viewer
+            .set_target([120.0, -45.0], 0.0)
+            .expect("finite target");
+        assert_eq!(
+            edit,
+            NavigationEdit::Target {
+                anchor_px_up: [120.0, -45.0],
+                delta_log2: 0.0
+            }
+        );
+        assert!((viewer.requested().zoom_log2 - before).abs() < f64::EPSILON);
+        let displacement = viewer.owner().drain_hot().hot.centre_from_reference_px;
+        assert!((displacement[0] - 120.0).abs() < 1.0e-9);
+        assert!((displacement[1] + 45.0).abs() < 1.0e-9);
+    }
+
+    /// A box release is one edit whose anchor is read at the scale the user was looking at.
+    ///
+    /// One step of zoom halves the pixel scale, so the same plane offset is twice as many pixels
+    /// afterwards; a displacement of exactly the anchor would mean the anchored term had been
+    /// evaluated after the zoom instead of before it.
+    #[test]
+    fn a_box_release_anchors_on_the_scale_before_its_zoom() {
+        let mut viewer = ViewerController::new(960).expect("canonical viewer");
+        let edit = viewer.set_target([80.0, 30.0], 1.0).expect("finite box");
+        assert_eq!(
+            edit,
+            NavigationEdit::Target {
+                anchor_px_up: [80.0, 30.0],
+                delta_log2: 1.0
+            }
+        );
+        assert!((viewer.requested().zoom_log2 - 1.0).abs() < f64::EPSILON);
+        let displacement = viewer.owner().drain_hot().hot.centre_from_reference_px;
+        assert!((displacement[0] - 160.0).abs() < 1.0e-9);
+        assert!((displacement[1] - 60.0).abs() < 1.0e-9);
+    }
+
+    /// The scale control is absolute, refuses its own ends, and zooms about the screen centre.
+    #[test]
+    fn the_scale_control_is_absolute_and_bounded() {
+        let mut viewer = ViewerController::new(960).expect("canonical viewer");
+        viewer
+            .set_zoom_log2(12.5)
+            .expect("a scale inside the range");
+        let reached = viewer.requested().zoom_log2;
+        assert!(
+            (reached - 12.5).abs() <= f64::EPSILON * 12.5,
+            "scale reached {reached} rather than 12.5"
+        );
+        let displacement = viewer.owner().drain_hot().hot.centre_from_reference_px;
+        assert!(
+            displacement.iter().all(|value| value.abs() < 1.0e-9),
+            "a centred zoom moved the centre"
+        );
+        assert!(viewer.set_zoom_log2(SCALE_RANGE_LOG2[0] - 0.001).is_err());
+        assert!(viewer.set_zoom_log2(SCALE_RANGE_LOG2[1] + 0.001).is_err());
+        assert!(viewer.set_zoom_log2(f64::NAN).is_err());
+    }
 
     #[test]
     fn the_anchor_is_canvas_centred_render_grid_pixels_with_y_up() {

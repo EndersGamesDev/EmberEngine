@@ -302,7 +302,7 @@ fn pointer_input_reaches_the_worker_in_render_grid_pixels() {
     assert!(STATE.contains("pub fn anchor_px_up("));
     assert!(STATE.contains("pub fn drag_delta_px_down("));
     assert!(STATE.contains("fn css_to_grid_scale("));
-    assert_eq!(LIB.matches("let grid = app.grid_extent();").count(), 2);
+    assert_eq!(LIB.matches("let grid = app.grid_extent();").count(), 4);
     assert!(LIB.contains("pointer_css_x: f64"));
     assert!(LIB.contains("rect_css_height: f64"));
     assert!(LIB.contains("delta_css_y_down: f64"));

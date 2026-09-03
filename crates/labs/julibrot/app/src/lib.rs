@@ -27,8 +27,9 @@ pub use measurement::{
 #[cfg(target_arch = "wasm32")]
 pub use runtime::{BrowserRuntime, DeviceFacts, install_julibrot_panic_hook, take_julibrot_panic};
 pub use state::{
-    HotFrame, INITIAL_ITERATION_CAP, NavigationEdit, PRESET_ROWS, PresetRow, RequestedControls,
-    ViewerController, anchor_px_up, drag_delta_px_down, preset_row,
+    BOX_CLICK_THRESHOLD_PX, HotFrame, INITIAL_ITERATION_CAP, NavigationEdit, PRESET_ROWS,
+    PresetRow, RequestedControls, SCALE_RANGE_LOG2, ViewerController, anchor_px_up,
+    box_zoom_delta_log2, drag_delta_px_down, is_box_selection, preset_row,
 };
 pub use surface::{PendingSurface, SurfaceAction, SurfaceState};
 
@@ -215,7 +216,8 @@ mod wasm_entry {
     use ember_julibrot_present::PaletteId;
 
     use crate::{
-        App, JULIBROT_ABI_VERSION, PageFacts, anchor_px_up, drag_delta_px_down, preset_row,
+        App, JULIBROT_ABI_VERSION, PageFacts, anchor_px_up, box_zoom_delta_log2,
+        drag_delta_px_down, is_box_selection, preset_row,
     };
 
     thread_local! {
@@ -302,6 +304,86 @@ mod wasm_entry {
             .map_err(app_js_error)?;
             app.viewer_mut()
                 .drag_pan(delta)
+                .map(|_| ())
+                .map_err(app_js_error)
+        })
+    }
+
+    /// Places the target at a clicked canvas point, whose plane point becomes the centre.
+    ///
+    /// The click arrives as canvas-relative DOM CSS pixels beside the canvas client rectangle,
+    /// exactly as the retired wheel did, so centring, the CSS-to-grid scale and the y flip stay on
+    /// this one boundary and the target reaches the worker in the pixels its scale is expressed in.
+    #[wasm_bindgen]
+    pub fn app_set_target(
+        pointer_css_x: f64,
+        pointer_css_y_down: f64,
+        rect_css_width: f64,
+        rect_css_height: f64,
+    ) -> Result<(), JsValue> {
+        with_app_mut(|app| {
+            let grid = app.grid_extent();
+            let anchor = anchor_px_up(
+                [pointer_css_x, pointer_css_y_down],
+                [rect_css_width, rect_css_height],
+                grid,
+            )
+            .map_err(app_js_error)?;
+            app.viewer_mut()
+                .set_target(anchor, 0.0)
+                .map(|_| ())
+                .map_err(app_js_error)
+        })
+    }
+
+    /// Zooms a dragged screen box to fill the screen, or treats a box under four pixels as a click.
+    ///
+    /// The page reports the rectangle it drew and nothing else; whether that rectangle was a box or
+    /// a click, and what zoom change it earns, are decided here so the two gestures cannot drift
+    /// apart in the loader.
+    #[wasm_bindgen]
+    pub fn app_zoom_box(
+        start_css_x: f64,
+        start_css_y_down: f64,
+        end_css_x: f64,
+        end_css_y_down: f64,
+        rect_css_width: f64,
+        rect_css_height: f64,
+    ) -> Result<(), JsValue> {
+        with_app_mut(|app| {
+            let grid = app.grid_extent();
+            let rect = [rect_css_width, rect_css_height];
+            let extent = [
+                (end_css_x - start_css_x).abs(),
+                (end_css_y_down - start_css_y_down).abs(),
+            ];
+            let anchor = anchor_px_up(
+                [
+                    f64::midpoint(start_css_x, end_css_x),
+                    f64::midpoint(start_css_y_down, end_css_y_down),
+                ],
+                rect,
+                grid,
+            )
+            .map_err(app_js_error)?;
+            let delta_log2 = if is_box_selection(extent) {
+                box_zoom_delta_log2(extent, rect).map_err(app_js_error)?
+            } else {
+                0.0
+            };
+            app.viewer_mut()
+                .set_target(anchor, delta_log2)
+                .map(|_| ())
+                .map_err(app_js_error)
+        })
+    }
+
+    /// Moves the absolute `scale` control, zooming about the target at the screen centre.
+    #[wasm_bindgen]
+    pub fn app_set_scale(zoom_log2: f64) -> Result<(), JsValue> {
+        with_app_mut(|app| {
+            app.viewer_mut()
+                .set_zoom_log2(zoom_log2)
                 .map(|_| ())
                 .map_err(app_js_error)
         })
@@ -498,5 +580,6 @@ pub use wasm_entry::{
     app_drag_pan, app_facts_json, app_needs_refresh, app_preset, app_refresh, app_request_frame,
     app_request_measurement, app_set_camera, app_set_distances, app_set_height,
     app_set_iteration_cap, app_set_palette, app_set_plane_angles, app_set_plane_origin,
-    app_set_view_angles, app_wheel_zoom, julibrot_abi_version, start_julibrot,
+    app_set_scale, app_set_target, app_set_view_angles, app_wheel_zoom, app_zoom_box,
+    julibrot_abi_version, start_julibrot,
 };
