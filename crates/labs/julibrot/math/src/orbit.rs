@@ -4,8 +4,6 @@ use crate::{
     BigCentre, BigScalar, ComputedOrbit, EscapeParams, EscapeSample, MathError, OrbitStep,
     PrecisionMode, PrecisionPlan, ReferenceOrbitRecord, ReferencePass, ReferenceVerification,
 };
-#[cfg(test)]
-use crate::split_scalar;
 
 const LOG2_10: f64 = core::f64::consts::LOG2_10;
 
@@ -433,12 +431,12 @@ mod tests {
     use core::num::NonZeroU32;
 
     use super::{
-        AdvanceResult, ReferenceOrbitBuilder, VerificationDecision, escape_f32,
-        observe_verification,
+        AdvanceResult, OrbitState, ReferenceOrbitBuilder, VerificationDecision, bits_for_digits,
+        escape_f32, observe_verification,
     };
     use crate::{
         BigCentre, EscapeParams, MathError, OrbitStep, PrecisionMode, ReferencePass,
-        ReferenceVerification, precision_for,
+        ReferenceVerification, precision_for, split_scalar,
     };
 
     #[test]
