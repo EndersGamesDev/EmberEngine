@@ -660,7 +660,7 @@ mod tests {
         header.magic = 0;
         assert_eq!(header.validate().unwrap_err().code, ErrorCode::BadMagic);
         header.magic = super::MAGIC;
-        header.version = 2;
+        header.version = super::JULIBROT_ABI_VERSION + 1;
         assert_eq!(header.validate().unwrap_err().code, ErrorCode::BadVersion);
         header.version = super::JULIBROT_ABI_VERSION;
         header.kind = 10;
