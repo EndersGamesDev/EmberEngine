@@ -3,24 +3,24 @@ use thiserror::Error;
 use crate::palette::DEBUG_TINT;
 use crate::{PaletteRecord, shade_escape_record};
 
-/// Refusal from checked tumbled-grid construction.
+/// Refusal from checked scene-grid construction.
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 pub enum MeshError {
     /// Width, height, or iteration cap was zero, or a pixel was outside the extent.
-    #[error("the tumbled grid extent, pixel, or iteration cap is invalid")]
+    #[error("the scene grid extent, pixel, or iteration cap is invalid")]
     InvalidInput,
     /// The exact index count cannot be represented by the renderer's u32 contract.
-    #[error("the tumbled index count overflowed u32")]
+    #[error("the scene index count overflowed u32")]
     IndexCountOverflow,
     /// Reserving the exact index payload failed.
-    #[error("the tumbled index allocation failed")]
+    #[error("the scene index allocation failed")]
     Allocation,
-    /// A time or derived VIEW coefficient was not finite.
-    #[error("the VIEW rotation is not finite")]
+    /// A control or derived coefficient was not finite, or a control left its range.
+    #[error("a VIEW control is not finite or is outside its range")]
     NonFiniteRotation,
 }
 
-/// CPU mirror of the height and debug decision made by the tumbled shaders.
+/// CPU mirror of the height and debug decision made by the scene shader.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HeightSample {
     /// Display height in the fifth coordinate.
@@ -36,7 +36,7 @@ pub struct HeightSample {
 /// # Errors
 ///
 /// Returns an error for a zero extent or when the count exceeds u32.
-pub fn tumbled_index_count(extent: [u32; 2]) -> Result<u32, MeshError> {
+pub fn scene_index_count(extent: [u32; 2]) -> Result<u32, MeshError> {
     let [width, height] = extent;
     if width == 0 || height == 0 {
         return Err(MeshError::InvalidInput);
@@ -53,9 +53,9 @@ pub fn tumbled_index_count(extent: [u32; 2]) -> Result<u32, MeshError> {
 /// # Errors
 ///
 /// Returns a typed extent, count, or allocation failure before writing any index.
-pub fn tumbled_indices(extent: [u32; 2]) -> Result<Vec<u32>, MeshError> {
+pub fn scene_indices(extent: [u32; 2]) -> Result<Vec<u32>, MeshError> {
     let [width, height] = extent;
-    let count = tumbled_index_count(extent)?;
+    let count = scene_index_count(extent)?;
     width
         .checked_mul(height)
         .ok_or(MeshError::IndexCountOverflow)?;
@@ -97,7 +97,10 @@ pub fn display_coordinate(extent: [u32; 2], pixel: [u32; 2]) -> Result<[f32; 2],
     ])
 }
 
-/// Applies the exact tumbled height and honest-debug decision to an escape record.
+/// Applies the exact record height and honest-debug decision to an escape record.
+///
+/// The returned height is the record's own `H` in `[-2,2]`; the height control multiplies it, so
+/// `h=0` flattens every vertex without changing this classification.
 ///
 /// # Errors
 ///
@@ -130,20 +133,61 @@ pub fn height_for_record(
     })
 }
 
-/// Returns `[cos(theta),sin(theta),cos(phi*theta),sin(phi*theta)]` for `theta=0.4t`.
+/// Returns `[cos θ₁,sin θ₁,cos θ₂,sin θ₂]` for the two independent VIEW angles.
 ///
 /// # Errors
 ///
-/// Returns an error when time or any narrowed coefficient is not finite.
+/// Returns an error when either angle or any narrowed coefficient is not finite.
+pub fn view_rotation(theta_1: f64, theta_2: f64) -> Result<[f32; 4], MeshError> {
+    pair_rotation(theta_1, theta_2)
+}
+
+/// Returns `[cos yaw,sin yaw,cos pitch,sin pitch]` for the observer orientation.
+///
+/// # Errors
+///
+/// Returns an error when either angle or any narrowed coefficient is not finite.
+pub fn camera_rotation(yaw: f64, pitch: f64) -> Result<[f32; 4], MeshError> {
+    pair_rotation(yaw, pitch)
+}
+
+/// Returns the `[h,d₅,d₄,0]` scale lane for one refresh.
+///
+/// # Errors
+///
+/// Returns an error for a non-finite value, a negative height, or a non-positive distance.
 #[allow(clippy::cast_possible_truncation)]
-pub fn view_rotation(time_seconds: f64) -> Result<[f32; 4], MeshError> {
-    if !time_seconds.is_finite() {
+pub fn view_scale(
+    height_scale: f64,
+    distance_five: f64,
+    distance_four: f64,
+) -> Result<[f32; 4], MeshError> {
+    let values = [height_scale, distance_five, distance_four];
+    if !values.iter().all(|value| value.is_finite())
+        || height_scale < 0.0
+        || distance_five <= 0.0
+        || distance_four <= 0.0
+    {
         return Err(MeshError::NonFiniteRotation);
     }
-    let theta_one = 0.4 * time_seconds;
-    let theta_two = f64::midpoint(1.0, 5.0_f64.sqrt()) * theta_one;
-    let (sine_one, cosine_one) = theta_one.sin_cos();
-    let (sine_two, cosine_two) = theta_two.sin_cos();
+    let lane = [
+        height_scale as f32,
+        distance_five as f32,
+        distance_four as f32,
+        0.0,
+    ];
+    (lane[1] > 0.0 && lane[2] > 0.0 && lane.iter().all(|value| value.is_finite()))
+        .then_some(lane)
+        .ok_or(MeshError::NonFiniteRotation)
+}
+
+#[allow(clippy::cast_possible_truncation)]
+fn pair_rotation(first: f64, second: f64) -> Result<[f32; 4], MeshError> {
+    if !first.is_finite() || !second.is_finite() {
+        return Err(MeshError::NonFiniteRotation);
+    }
+    let (sine_one, cosine_one) = first.sin_cos();
+    let (sine_two, cosine_two) = second.sin_cos();
     let coefficients = [
         cosine_one as f32,
         sine_one as f32,
@@ -166,14 +210,11 @@ mod tests {
 
     #[test]
     fn mesh_counts_and_cell_order_are_exact() -> Result<(), MeshError> {
-        assert_eq!(tumbled_index_count([3, 2])?, 12);
+        assert_eq!(scene_index_count([3, 2])?, 12);
+        assert_eq!(scene_indices([3, 2])?, [0, 1, 3, 1, 4, 3, 1, 2, 4, 2, 5, 4]);
+        assert_eq!(scene_index_count([1, 1])?, 0);
         assert_eq!(
-            tumbled_indices([3, 2])?,
-            [0, 1, 3, 1, 4, 3, 1, 2, 4, 2, 5, 4]
-        );
-        assert_eq!(tumbled_index_count([1, 1])?, 0);
-        assert_eq!(
-            tumbled_index_count([u32::MAX, u32::MAX]),
+            scene_index_count([u32::MAX, u32::MAX]),
             Err(MeshError::IndexCountOverflow)
         );
         Ok(())
@@ -205,8 +246,30 @@ mod tests {
     }
 
     #[test]
+    fn controls_are_checked_before_they_reach_a_lane() -> Result<(), MeshError> {
+        assert_eq!(view_rotation(0.0, 0.0)?, [1.0, 0.0, 1.0, 0.0]);
+        assert_eq!(camera_rotation(0.0, 0.0)?, [1.0, 0.0, 1.0, 0.0]);
+        assert_eq!(view_scale(0.0, 8.0, 8.0)?, [0.0, 8.0, 8.0, 0.0]);
+        assert_eq!(view_scale(1.0, 2.0, 64.0)?, [1.0, 2.0, 64.0, 0.0]);
+        assert_eq!(
+            view_scale(-0.001, 8.0, 8.0),
+            Err(MeshError::NonFiniteRotation)
+        );
+        assert_eq!(view_scale(1.0, 0.0, 8.0), Err(MeshError::NonFiniteRotation));
+        assert_eq!(
+            view_rotation(f64::NAN, 0.0),
+            Err(MeshError::NonFiniteRotation)
+        );
+        assert_eq!(
+            camera_rotation(0.0, f64::INFINITY),
+            Err(MeshError::NonFiniteRotation)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn view_coefficients_feed_the_exported_heap_algebra_oracle() -> Result<(), MeshError> {
-        let rotation = view_rotation(0.0)?;
+        let rotation = view_rotation(0.0, 0.0)?;
         let frame = FrameUniform {
             rotation,
             projection_spacing: [8.0, 8.0, 0.0, 1.0e-4],

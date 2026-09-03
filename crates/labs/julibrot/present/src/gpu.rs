@@ -9,8 +9,8 @@ use crate::state::{SceneCompletion, SceneLedger};
 use crate::{
     FrameReceipt, FrameState, HotSlot, HotUniform, PaletteId, Pose, PresentConfig, PresentError,
     PresentEvent, PresentFacts, PresentHot, PresentMain, PresentStatus, SampleClass, SceneUniform,
-    SubmissionKind, ViewMode, Warp, WarpKind, hot_ring_bytes, palette, scene_shaders,
-    tumbled_indices, view_rotation, warp_shader,
+    SubmissionKind, Warp, WarpKind, camera_rotation, hot_ring_bytes, palette, scene_indices,
+    scene_shader, view_rotation, view_scale, warp_shader,
 };
 
 const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -77,8 +77,7 @@ struct GpuState {
     scene_textures: [SceneTexture; 2],
     depth: DepthTarget,
     indices: Option<IndexTarget>,
-    flat_pipeline: wgpu::RenderPipeline,
-    tumbled_pipeline: wgpu::RenderPipeline,
+    scene_pipeline: wgpu::RenderPipeline,
     warp_pipeline: wgpu::RenderPipeline,
     scene_fence: wgpu::Buffer,
     warp_fence: wgpu::Buffer,
@@ -155,14 +154,8 @@ impl Presenter {
             .main
             .as_ref()
             .is_none_or(|previous| previous.state.centre_revision != main.state.centre_revision);
-        let view_changed = self
-            .main
-            .as_ref()
-            .is_some_and(|previous| previous.view != main.view);
         let selection_replaced = self.main.as_ref().is_some_and(|previous| {
-            previous.view != main.view
-                || previous.state.palette_id != main.state.palette_id
-                || previous.grid != main.grid
+            previous.state.palette_id != main.state.palette_id || previous.grid != main.grid
         });
         let latest_pose = self
             .hot
@@ -174,7 +167,6 @@ impl Presenter {
             accepted_pose.orbit_generation = main.state.generation_applied;
             accepted_pose.grid_width = main.grid.width;
             accepted_pose.grid_height = main.grid.height;
-            accepted_pose.view = main.view;
             self.ledger.apply_reference_shift(
                 &accepted_pose,
                 main.state.generation_applied,
@@ -196,11 +188,6 @@ impl Presenter {
             self.facts.status = PresentStatus::ClearForIncompatibleMain;
             self.clear_retained_facts();
         }
-        if view_changed {
-            self.scene_samples.reset();
-            self.warp_samples.reset();
-        }
-        self.facts.view = main.view;
         self.facts.reference_shift_px = main.state.reference_shift_px;
         if let Some((palette_id, _)) = main.selected_palette() {
             self.facts.palette = palette_id;
@@ -212,7 +199,6 @@ impl Presenter {
     pub fn write_hot(&mut self, slot: HotSlot, hot: PresentHot) {
         let mut plan = None;
         let pose = self.main.as_ref().and_then(|main| {
-            let view_theta_1 = 0.4 * hot.view_time_seconds;
             let pose = Pose {
                 epoch: hot.epoch,
                 orbit_generation: main.state.generation_applied,
@@ -220,10 +206,9 @@ impl Presenter {
                 plane_theta_1: hot.state.plane_theta_1,
                 plane_theta_2: hot.state.plane_theta_2,
                 zoom_log2: hot.state.zoom_log2,
-                view_theta_1,
+                view: hot.view,
                 grid_width: main.grid.width,
                 grid_height: main.grid.height,
-                view: main.view,
                 centre_from_reference_px: hot.state.centre_from_reference_px,
             };
             pose_is_finite(&pose).then_some(pose)
@@ -236,27 +221,32 @@ impl Presenter {
             .as_ref()
             .and_then(PresentMain::selected_palette)
             .unwrap_or((PaletteId::Classic, palette(PaletteId::Classic)));
-        let rotation = view_rotation(hot.view_time_seconds).unwrap_or([1.0, 0.0, 1.0, 0.0]);
+        // A refused control falls back to the neutral row rather than to a stale one, so a
+        // non-finite value shows the flat chart instead of the last thing that happened to be
+        // in the lane.
+        let rotation =
+            view_rotation(hot.view.theta_1, hot.view.theta_2).unwrap_or([1.0, 0.0, 1.0, 0.0]);
+        let camera = camera_rotation(hot.view.camera_yaw, hot.view.camera_pitch)
+            .unwrap_or([1.0, 0.0, 1.0, 0.0]);
+        let scale = view_scale(
+            hot.view.height_scale,
+            hot.view.distance_five,
+            hot.view.distance_four,
+        )
+        .unwrap_or([0.0, 8.0, 8.0, 0.0]);
         let plan = plan.unwrap_or_else(clear_warp_plan);
         let epoch = hot.epoch.to_le_bytes();
         let epoch_low = u32::from_le_bytes([epoch[0], epoch[1], epoch[2], epoch[3]]);
         let epoch_high = u32::from_le_bytes([epoch[4], epoch[5], epoch[6], epoch[7]]);
         let uniform = HotUniform {
-            plane_u: hot.plane.basis_u,
-            plane_v: hot.plane.basis_v,
+            camera,
+            view_scale: scale,
             view_rotation: rotation,
             homography_row_0: plan.rows[0],
             homography_row_1: plan.rows[1],
             homography_row_2: plan.rows[2],
             clear_rgba: selected.1.clear_rgba,
-            flags: [
-                epoch_low,
-                epoch_high,
-                u32::from(plan.source_valid),
-                self.main
-                    .as_ref()
-                    .map_or(ViewMode::Flat as u32, |main| main.view as u32),
-            ],
+            flags: [epoch_low, epoch_high, u32::from(plan.source_valid), 0],
         };
         let offset = u64::from(slot.dynamic_offset());
         self.queue
@@ -264,23 +254,22 @@ impl Presenter {
         self.hot[slot.index() as usize] = pose;
         self.hot_source_valid[slot.index() as usize] = plan.source_valid;
         self.facts.centre_from_reference_px = hot.state.centre_from_reference_px;
+        self.facts.view = hot.view;
         self.facts.record_warp_plan(&plan);
         if plan.kind == WarpKind::ClearOnly && self.ledger.retained().is_none() {
             self.facts.status = PresentStatus::WaitingForFirstScene;
-        } else if plan.kind == WarpKind::FlatExact
-            && pose.is_some_and(|current| {
-                self.ledger
-                    .retained()
-                    .is_some_and(|frame| frame.pose == current)
-            })
-        {
+        } else if pose.is_some_and(|current| {
+            self.ledger
+                .retained()
+                .is_some_and(|frame| frame.pose == current)
+        }) {
             self.facts.status = PresentStatus::ShowingCompletedScene;
         } else if plan.source_valid {
             self.facts.status = PresentStatus::ShowingStaleApproximation;
         }
     }
 
-    /// Submits one flat or tumbled scene pass plus its four-byte completion fence.
+    /// Submits the one scene pass plus its four-byte completion fence.
     ///
     /// # Errors
     ///
@@ -337,10 +326,8 @@ impl Presenter {
                 scene_samples.reset();
                 warp_samples.reset();
             }
-            if main.view == ViewMode::Tumbled {
-                ensure_indices(device, gpu, extent)?;
-                ensure_depth(device, gpu, extent)?;
-            }
+            ensure_indices(device, gpu, extent)?;
+            ensure_depth(device, gpu, extent)?;
             Ok(crate::state::PendingScene {
                 scene_id,
                 pose,
@@ -366,7 +353,6 @@ impl Presenter {
             &mut encoder,
             &self.gpu,
             texture_index as usize,
-            main.view,
             hot_slot.dynamic_offset(),
             palette_record.clear_rgba,
         );
@@ -752,23 +738,13 @@ fn create_gpu_state(
         create_scene_texture(device, &warp_texture_layout, &sampler, [1, 1]),
     ];
     let depth = create_depth_target(device, [1, 1]);
-    let sources = scene_shaders(heap_limits);
-    let flat_pipeline = create_scene_pipeline(
+    let source = scene_shader(heap_limits);
+    let scene_pipeline = create_scene_pipeline(
         device,
-        "Julibrot flat scene pipeline",
-        &sources.flat,
-        "flat_vertex",
-        "flat_fragment",
-        &heap_layout,
-        &scene_layout,
-        false,
-    );
-    let tumbled_pipeline = create_scene_pipeline(
-        device,
-        "Julibrot tumbled scene pipeline",
-        &sources.tumbled,
-        "tumbled_vertex",
-        "tumbled_fragment",
+        "Julibrot scene pipeline",
+        &source,
+        "scene_vertex",
+        "scene_fragment",
         &heap_layout,
         &scene_layout,
         true,
@@ -790,8 +766,7 @@ fn create_gpu_state(
         scene_textures,
         depth,
         indices: None,
-        flat_pipeline,
-        tumbled_pipeline,
+        scene_pipeline,
         warp_pipeline,
         scene_fence: create_fence(device, "Julibrot scene four-byte fence"),
         warp_fence: create_fence(device, "Julibrot warp four-byte fence"),
@@ -932,7 +907,7 @@ fn create_scene_texture(
 
 fn create_depth_target(device: &wgpu::Device, extent: [u32; 2]) -> DepthTarget {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("Julibrot tumbled depth target"),
+        label: Some("Julibrot scene depth target"),
         size: extent_3d(extent),
         mip_level_count: 1,
         sample_count: 1,
@@ -1091,7 +1066,7 @@ fn ensure_indices(
     {
         return Ok(());
     }
-    let values = tumbled_indices(extent).map_err(|_| PresentError::IndexCountOverflow {
+    let values = scene_indices(extent).map_err(|_| PresentError::IndexCountOverflow {
         width: extent[0],
         height: extent[1],
     })?;
@@ -1105,7 +1080,7 @@ fn ensure_indices(
         &values
     };
     let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Julibrot tumbled u32 index buffer"),
+        label: Some("Julibrot scene u32 index buffer"),
         contents: bytemuck::cast_slice(contents),
         usage: wgpu::BufferUsages::INDEX,
     });
@@ -1121,21 +1096,19 @@ fn encode_scene(
     encoder: &mut wgpu::CommandEncoder,
     gpu: &GpuState,
     texture_index: usize,
-    view: ViewMode,
     hot_offset: u32,
     clear: [f32; 4],
 ) {
-    let depth_attachment =
-        (view == ViewMode::Tumbled).then_some(wgpu::RenderPassDepthStencilAttachment {
-            view: &gpu.depth.view,
-            depth_ops: Some(wgpu::Operations {
-                load: wgpu::LoadOp::Clear(1.0),
-                store: wgpu::StoreOp::Discard,
-            }),
-            stencil_ops: None,
-        });
+    let depth_attachment = Some(wgpu::RenderPassDepthStencilAttachment {
+        view: &gpu.depth.view,
+        depth_ops: Some(wgpu::Operations {
+            load: wgpu::LoadOp::Clear(1.0),
+            store: wgpu::StoreOp::Discard,
+        }),
+        stencil_ops: None,
+    });
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("Julibrot selected scene pass"),
+        label: Some("Julibrot scene pass"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
             view: &gpu.scene_textures[texture_index].view,
             resolve_target: None,
@@ -1150,18 +1123,10 @@ fn encode_scene(
     });
     pass.set_bind_group(0, &gpu.heap_group, &[]);
     pass.set_bind_group(1, &gpu.scene_group, &[hot_offset]);
-    match view {
-        ViewMode::Flat => {
-            pass.set_pipeline(&gpu.flat_pipeline);
-            pass.draw(0..3, 0..1);
-        }
-        ViewMode::Tumbled => {
-            pass.set_pipeline(&gpu.tumbled_pipeline);
-            if let Some(indices) = &gpu.indices {
-                pass.set_index_buffer(indices.buffer.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..indices.count, 0, 0..1);
-            }
-        }
+    pass.set_pipeline(&gpu.scene_pipeline);
+    if let Some(indices) = &gpu.indices {
+        pass.set_index_buffer(indices.buffer.slice(..), wgpu::IndexFormat::Uint32);
+        pass.draw_indexed(0..indices.count, 0, 0..1);
     }
 }
 
@@ -1257,11 +1222,11 @@ fn color(rgba: [f32; 4]) -> wgpu::Color {
 fn pose_is_finite(pose: &Pose) -> bool {
     pose.grid_width > 0
         && pose.grid_height > 0
+        && pose.view.is_valid()
         && [
             pose.plane_theta_1,
             pose.plane_theta_2,
             pose.zoom_log2,
-            pose.view_theta_1,
             pose.centre_from_reference_px[0],
             pose.centre_from_reference_px[1],
         ]

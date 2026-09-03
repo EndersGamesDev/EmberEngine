@@ -12,7 +12,7 @@ The kernels slice consumes the math slice's plane, centre split, CPU escape and 
 
 The kernels slice consumes a reference-orbit DATA span produced through worker and owner state; it does not parse worker messages, own transfer buffers, grant credit, select latest-wins generations, or invent a same-thread transport.
 
-The kernels slice exposes an `EscapeGrid` typed wrapper to present; it does not own palettes, flat or tumbled presentation, the standing VIEW rotation, warp, the three-slot hot ring, surface acquisition, or presentation fences.
+The kernels slice exposes an `EscapeGrid` typed wrapper to present; it does not own palettes, scene presentation, the VIEW rotation, warp, the three-slot hot ring, surface acquisition, or presentation fences.
 
 The kernels slice does not create the GL device, install the panic hook or uncaptured-error handler, define the facts overlay, or own the application runtime; those are app duties and are preconditions of any kernels construction.
 
@@ -24,7 +24,7 @@ No kernel result authors simulation, collision, protocol, reconciliation, or gam
 
 ### 2.1 Coordinates, planes, and pixels
 
-The fractal coordinates are ordered `(z.re, z.im, c.re, c.im) = (e₁,e₂,e₃,e₄)`; `e₅` carries escape height only in present's tumbled VIEW and never enters either fractal kernel.
+The fractal coordinates are ordered `(z.re, z.im, c.re, c.im) = (e₁,e₂,e₃,e₄)`; `e₅` carries escape height only in present's height field and never enters either fractal kernel.
 
 The user-controlled PLANE rotation acts in ℝ⁴ as `Rₚ(θ₁,θ₂) = R₁₃(θ₁)·R₂₄(θ₂)`, applied to column vectors as `v′ = R₁₃(R₂₄(v))` with the standard `[cos,−sin; sin,cos]` blocks and independent radian angles; `e₅`, `P₄`, Gram–Schmidt, and degenerate-plane stages play no part because this orthogonal map preserves an orthonormal seed pair.
 

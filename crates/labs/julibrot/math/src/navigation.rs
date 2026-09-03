@@ -152,16 +152,15 @@ fn validate_navigation_input(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PlaneAngles, PlanePreset, construct_plane};
+    use crate::{PlaneAngles, construct_plane};
 
-    fn julia_plane() -> Result<Plane, MathError> {
-        construct_plane(
-            PlanePreset::Julia { c0: [0.0, 0.0] },
-            PlaneAngles {
-                theta_1: 0.0,
-                theta_2: 0.0,
-            },
-        )
+    /// The zero-angle seed, whose basis is exactly `(e₃,e₄)` with no rounding at all, so a
+    /// navigation assertion measures navigation rather than the binary32 image of `cos(π/2)`.
+    fn exact_seed_plane() -> Result<Plane, MathError> {
+        construct_plane(PlaneAngles {
+            theta_1: 0.0,
+            theta_2: 0.0,
+        })
     }
 
     fn ulp_distance(left: f64, right: f64) -> u64 {
@@ -178,7 +177,7 @@ mod tests {
 
     #[test]
     fn anchored_zoom_preserves_the_anchor_through_depth() -> Result<(), MathError> {
-        let plane = julia_plane()?;
+        let plane = exact_seed_plane()?;
         let anchor = [19.5, -7.25];
         for zoom_before in [0.0, 40.0, 100.0] {
             let zoom_after = zoom_before + 1.0;
@@ -199,7 +198,7 @@ mod tests {
             let mirror = centre.to_f64_mirror();
             for axis in 0..2 {
                 let before_point = scale_before * anchor[axis];
-                let after_point = scale_after.mul_add(anchor[axis], mirror[axis]);
+                let after_point = scale_after.mul_add(anchor[axis], mirror[axis + 2]);
                 assert!(
                     ulp_distance(before_point, after_point) <= 1,
                     "zoom {zoom_before}, axis {axis}: {before_point:e} != {after_point:e}"
@@ -211,7 +210,7 @@ mod tests {
 
     #[test]
     fn navigation_holds_every_coordinate_at_the_declared_precision() -> Result<(), MathError> {
-        let plane = julia_plane()?;
+        let plane = exact_seed_plane()?;
         // Canvas-relative CSS pixels scaled by 960/1022.794: full 53-bit mantissas.
         let pixel_ratio = 960.0_f64 / 1_022.794_f64;
         for requested in [47_u32, 64, 90, 128, 384, 1_024] {
@@ -251,7 +250,7 @@ mod tests {
 
     #[test]
     fn drag_is_exactly_negative_current_scale_times_plane_motion() -> Result<(), MathError> {
-        let plane = julia_plane()?;
+        let plane = exact_seed_plane()?;
         let zoom = 40.0;
         let scale = pixel_scale(zoom, 1024)?;
         let pan = [3.5, -2.25];
@@ -269,14 +268,14 @@ mod tests {
         )?;
         assert_eq!(
             centre.to_f64_mirror(),
-            [-scale * pan[0], -scale * pan[1], 0.0, 0.0]
+            [0.0, 0.0, -scale * pan[0], -scale * pan[1]]
         );
         Ok(())
     }
 
     #[test]
     fn displacement_round_trips_plane_pixel_motion() -> Result<(), MathError> {
-        let plane = julia_plane()?;
+        let plane = exact_seed_plane()?;
         let zoom = 80.0;
         let scale = pixel_scale(zoom, 2048)?;
         let reference = BigCentre::from_f64([0.0; 4], 384)?;

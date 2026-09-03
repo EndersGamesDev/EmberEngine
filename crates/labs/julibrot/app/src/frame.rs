@@ -413,7 +413,6 @@ mod browser {
         requested_iter_cap: u32,
         palette_id: u32,
         plane_origin_f64: [f64; 4],
-        view: ember_julibrot_math::ViewMode,
     }
 
     /// Everything the warp reproduces for one surface image, stamped when it is submitted.
@@ -428,7 +427,7 @@ mod browser {
         requested_iter_cap: u32,
         palette_id: u32,
         plane_origin_f64: [f64; 4],
-        view: ember_julibrot_math::ViewMode,
+        view: ember_julibrot_math::ViewControls,
         zoom_log2: f64,
         plane_angles: [f64; 2],
     }
@@ -535,7 +534,6 @@ mod browser {
                 epoch: 0,
                 state: main,
                 grid: grid.clone(),
-                view: requested.view,
             });
             let (owner_endpoint, producer_endpoint) = WorkerChannel::new(
                 WorkerConfig {
@@ -643,11 +641,11 @@ mod browser {
 
             self.prepare_due_level();
             let extent = self.prepared_extent();
-            let hot = viewer.drain_hot(extent, now_ms / 1_000.0)?;
+            let hot = viewer.drain_hot(extent)?;
             self.owner_epoch = hot.state.epoch;
             self.main = hot.state.main;
             self.observe_scene_selection(viewer);
-            self.install_main(viewer);
+            self.install_main();
             let slot = HotSlot::for_refresh(self.refresh_id, self.hot_stride, hot.state.epoch)
                 .map_err(|error| AppError::Present(error.to_string()))?;
             self.presenter.write_hot(
@@ -656,7 +654,7 @@ mod browser {
                     epoch: hot.state.epoch,
                     state: hot.state.hot,
                     plane: hot.plane,
-                    view_time_seconds: now_ms / 1_000.0,
+                    view: viewer.requested().view,
                 },
             );
 
@@ -839,7 +837,7 @@ mod browser {
             self.prepared_level = Some(level);
         }
 
-        fn install_main(&mut self, viewer: &ViewerController) {
+        fn install_main(&mut self) {
             let mut grid = self.grid.clone();
             if let Some(level) = self.prepared_level {
                 let spec = self.plan.level(level);
@@ -852,7 +850,6 @@ mod browser {
                 epoch: self.owner_epoch,
                 state: self.main,
                 grid,
-                view: viewer.requested().view,
             });
         }
 
@@ -862,7 +859,6 @@ mod browser {
                 requested_iter_cap: self.main.requested_iter_cap,
                 palette_id: self.main.palette_id,
                 plane_origin_f64: self.main.plane_origin_f64,
-                view: viewer.requested().view,
             };
             if self.current_orbit.is_some()
                 && self.submitted_references.is_empty()
@@ -1023,7 +1019,7 @@ mod browser {
             self.rebuild_grid_if_needed(viewer.requested().iteration_cap)?;
             self.loop_state.restart(response.generation());
             self.prepared_level = None;
-            self.install_main(viewer);
+            self.install_main();
             Ok((disposition, true))
         }
 
@@ -1187,7 +1183,6 @@ mod browser {
                 epoch: owner_epoch,
                 state: self.main,
                 grid: self.grid.clone(),
-                view: viewer.requested().view,
             });
             match self.presenter.submit_scene(slot, now_ms) {
                 Ok(scene_id) => {

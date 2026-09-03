@@ -3,7 +3,7 @@ use core::num::NonZeroU32;
 
 use ember_julibrot_math::{
     BigCentre, CentreSplit, EscapeGridRecord, EscapeParams, MathError, NavigationDelta, OrbitStep,
-    Plane, PlaneAngles, PlanePreset, Pose, ReferenceOrbitBuilder, ReferenceOrbitRecord, ViewMode,
+    Plane, PlaneAngles, Pose, ReferenceOrbitBuilder, ReferenceOrbitRecord, ViewControls,
     centre_from_reference_px, construct_plane, pixel_scale, precision_for, reference_shift_px,
     scaled_pixel_scale,
 };
@@ -35,13 +35,30 @@ fn shared_gpu_and_owner_discriminants_are_exact() {
     assert_eq!(offset_of!(EscapeGridRecord, escaped), 4);
     assert_eq!(offset_of!(EscapeGridRecord, rebase_count), 8);
     assert_eq!(offset_of!(EscapeGridRecord, glitch), 12);
-    assert_eq!(ViewMode::Flat as u32, 0);
-    assert_eq!(ViewMode::Tumbled as u32, 1);
+    assert_eq!(
+        ViewControls::NEUTRAL.as_array(),
+        [0.0, 0.0, 0.0, 0.0, 0.0, 8.0, 8.0]
+    );
+    assert!(ViewControls::NEUTRAL.is_valid());
+    assert!(
+        !ViewControls {
+            height_scale: -0.001,
+            ..ViewControls::NEUTRAL
+        }
+        .is_valid()
+    );
+    assert!(
+        !ViewControls {
+            distance_five: 0.0,
+            ..ViewControls::NEUTRAL
+        }
+        .is_valid()
+    );
 }
 
 #[test]
 fn app_facing_function_signatures_stay_stable() {
-    let _: fn(PlanePreset, PlaneAngles) -> Result<Plane, MathError> = construct_plane;
+    let _: fn(PlaneAngles) -> Result<Plane, MathError> = construct_plane;
     let _: fn(f64, u32) -> Result<ember_julibrot_math::ScaledPixelScale, MathError> =
         scaled_pixel_scale;
     let _: fn(f64, u32, u32) -> Result<ember_julibrot_math::PrecisionPlan, MathError> =
@@ -88,13 +105,11 @@ fn worker_can_drive_the_cooperative_orbit_contract() -> Result<(), MathError> {
 fn worker_displacements_have_the_ruled_directions() -> Result<(), MathError> {
     let old = BigCentre::from_f64([0.0; 4], 256)?;
     let new = BigCentre::from_f64([0.25, -0.5, 0.0, 0.0], 256)?;
-    let plane = construct_plane(
-        PlanePreset::Julia { c0: [0.0, 0.0] },
-        PlaneAngles {
-            theta_1: 0.0,
-            theta_2: 0.0,
-        },
-    )?;
+    let quarter = core::f64::consts::FRAC_PI_2;
+    let plane = construct_plane(PlaneAngles {
+        theta_1: -quarter,
+        theta_2: -quarter,
+    })?;
     let desired = centre_from_reference_px(&new, &old, &plane, 0.0, 4)?;
     let shift = reference_shift_px(&old, &new, &plane, 0.0, 4)?;
     assert_eq!(desired, [0.25, -0.5]);

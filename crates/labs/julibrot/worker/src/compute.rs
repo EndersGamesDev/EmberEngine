@@ -28,8 +28,8 @@ pub enum MathFailureCode {
     InvalidMaxIter = 3,
     /// The fixed bailout was not used.
     InvalidBailout = 4,
-    /// A plane seed was invalid.
-    InvalidPlaneSeed = 5,
+    /// A VIEW control was invalid.
+    InvalidViewControls = 5,
     /// Plane rounding exceeded its bound.
     PlaneRoundingBound = 6,
     /// Centre bytes were not canonical math input.
@@ -230,7 +230,7 @@ pub const fn math_error(error: &MathError) -> ChannelError {
         MathError::InvalidExtent => MathFailureCode::InvalidExtent,
         MathError::InvalidMaxIter => MathFailureCode::InvalidMaxIter,
         MathError::InvalidBailout => MathFailureCode::InvalidBailout,
-        MathError::InvalidPlaneSeed => MathFailureCode::InvalidPlaneSeed,
+        MathError::InvalidViewControls => MathFailureCode::InvalidViewControls,
         MathError::PlaneRoundingBound => MathFailureCode::PlaneRoundingBound,
         MathError::InvalidCentreEncoding => MathFailureCode::InvalidCentreEncoding,
         MathError::PrecisionMismatch => MathFailureCode::PrecisionMismatch,

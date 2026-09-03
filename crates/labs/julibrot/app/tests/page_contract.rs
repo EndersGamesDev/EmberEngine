@@ -13,6 +13,97 @@ const FRAME: &str = include_str!("../src/frame.rs");
 const WORKER_BROWSER: &str = include_str!("../../worker/src/browser.rs");
 const WORKER_OWNER: &str = include_str!("../../worker/src/browser_owner.rs");
 
+/// Every field the page facts must carry, in publication order.
+const PAGE_FACT_FIELDS: [&str; 87] = [
+    "abi_version",
+    "adapter_name",
+    "backend",
+    "rgba32f_renderable",
+    "requested_width",
+    "requested_height",
+    "delivered_width",
+    "delivered_height",
+    "requested_iteration_cap",
+    "delivered_iteration_cap",
+    "requested_zoom_log2",
+    "presented_zoom_log2",
+    "reference_zoom_log2",
+    "zoom_digits_f64",
+    "depth_digits",
+    "precision_floor_digits",
+    "precision_working_digits",
+    "requested_precision_bits",
+    "delivered_precision_bits",
+    "orbit_length",
+    "orbit_generation",
+    "owner_epoch",
+    "centre_revision",
+    "centre_from_reference_px",
+    "reference_shift_px",
+    "scale_mantissa",
+    "scale_exponent",
+    "kernel_mode",
+    "refinement_level",
+    "refinement_pending",
+    "extent_divisor",
+    "active_pixels",
+    "worst_case_pixel_iterations",
+    "kernel_page_passes",
+    "scratch_copy_commands",
+    "scratch_copy_bytes",
+    "logical_heap_bytes",
+    "reserved_heap_bytes",
+    "scratch_bytes",
+    "hot_write_bytes",
+    "scene_uniform_write_bytes",
+    "texture_reallocations",
+    "rebase_count_sum",
+    "rebase_count_max",
+    "glitch_pixel_count",
+    "worker_facts",
+    "worker_compute_us",
+    "worker_credit_us",
+    "worker_overfeed_us",
+    "worker_allocation_events",
+    "request_buffers_owned_main",
+    "orbit_buffers_owned_main",
+    "palette_id",
+    "plane_theta_1",
+    "plane_theta_2",
+    "plane_origin",
+    "view_theta_1",
+    "view_theta_2",
+    "camera_yaw",
+    "camera_pitch",
+    "height_scale",
+    "distance_five",
+    "distance_four",
+    "completed_scene_id",
+    "in_flight_scene_id",
+    "warp_source_scene_id",
+    "reprojected_per_scene",
+    "refreshes_without_scene",
+    "chart_residual",
+    "warp_max_error_px",
+    "warp_p95_error_px",
+    "scene_wall_ms",
+    "scene_fence_wait_ms",
+    "scene_polls",
+    "warp_wall_ms",
+    "warp_fence_wait_ms",
+    "warp_polls",
+    "warmup_label",
+    "second_frame_policy",
+    "timer_quantum_ms",
+    "device_walls",
+    "app_policies",
+    "limiting_term",
+    "wasm_bundle_bytes",
+    "javascript_bundle_bytes",
+    "wasm_instance_count",
+    "timing_status",
+];
+
 #[test]
 fn loader_worker_and_wasm_share_version_one_before_orbit_transfer() {
     for required in [
@@ -112,13 +203,22 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
     assert_eq!(INDEX.matches("<canvas").count(), 1);
     assert_eq!(INDEX.matches("id=\"status\"").count(), 1);
     assert_eq!(INDEX.matches("id=\"facts-grid\"").count(), 1);
+    // One control per view degree of freedom, and no control that names a mode.
     for id in [
-        "view",
         "preset",
-        "julia-re",
-        "julia-im",
         "theta-1",
         "theta-2",
+        "origin-z-re",
+        "origin-z-im",
+        "origin-c-re",
+        "origin-c-im",
+        "view-theta-1",
+        "view-theta-2",
+        "camera-yaw",
+        "camera-pitch",
+        "height",
+        "distance-five",
+        "distance-four",
         "iteration-cap",
         "palette",
         "one-frame",
@@ -130,6 +230,60 @@ fn page_has_one_canvas_status_overlay_and_every_requested_control() {
         );
         assert!(MAIN.contains(&format!("\"{id}\"")), "unbound control {id}");
     }
+    // Each origin slider carries a number box on the same value, bound through one template.
+    for id in [
+        "origin-z-re-number",
+        "origin-z-im-number",
+        "origin-c-re-number",
+        "origin-c-im-number",
+    ] {
+        assert!(
+            INDEX.contains(&format!("id=\"{id}\"")),
+            "missing origin number box {id}"
+        );
+    }
+    // Substrings chosen to avoid a brace pair, which clippy reads as a stray format argument.
+    assert!(
+        MAIN.contains("-number`, NUMBER(id));"),
+        "unpaired number box"
+    );
+    assert!(MAIN.contains("SET(id, NUMBER(`"), "unpaired origin slider");
+    // A preset writes the elements and then takes the same handlers a user's movement takes.
+    assert!(MAIN.contains("api.app_preset(Number(event.target.value))"));
+    assert!(MAIN.contains("for (const apply of Object.values(APPLY)) apply();"));
+    assert_eq!(MAIN.matches("api.app_set_plane_angles(").count(), 1);
+    assert_eq!(MAIN.matches("api.app_set_plane_origin(").count(), 1);
+    assert_eq!(MAIN.matches("api.app_set_view_angles(").count(), 1);
+    assert_eq!(MAIN.matches("api.app_set_camera(").count(), 1);
+    assert_eq!(MAIN.matches("api.app_set_height(").count(), 1);
+    assert_eq!(MAIN.matches("api.app_set_distances(").count(), 1);
+    // The retired mode selector and its Julia-only number boxes must name nothing.
+    for retired in [
+        "id=\"view\"",
+        "id=\"julia-re\"",
+        "id=\"julia-im\"",
+        "Tumbled",
+        "Flat",
+    ] {
+        assert!(!INDEX.contains(retired), "the page still carries {retired}");
+    }
+    assert!(!MAIN.contains("app_set_view("));
+    assert!(!MAIN.contains("app_set_preset("));
+    assert!(!LIB.contains("pub fn app_set_view("));
+    assert!(!LIB.contains("pub fn app_set_preset("));
+    for required in [
+        "pub fn app_set_plane_origin(",
+        "pub fn app_set_view_angles(",
+        "pub fn app_set_camera(",
+        "pub fn app_set_height(",
+        "pub fn app_set_distances(",
+        "pub fn app_preset(",
+    ] {
+        assert!(LIB.contains(required), "missing wasm entry {required}");
+    }
+    // Presets are pure data in one place.
+    assert!(STATE.contains("pub const PRESET_ROWS: [PresetRow; 4] = ["));
+    assert_eq!(STATE.matches("PresetRow {").count(), 5);
     assert!(MAIN.contains("event.preventDefault()"));
     assert!(MAIN.contains("bounds.width, bounds.height"));
     assert!(!MAIN.contains("SharedArrayBuffer"));
@@ -156,86 +310,7 @@ fn pointer_input_reaches_the_worker_in_render_grid_pixels() {
 
 #[test]
 fn page_facts_carry_every_contract_field_without_fake_aggregate_counts() {
-    let fields = [
-        "abi_version",
-        "adapter_name",
-        "backend",
-        "rgba32f_renderable",
-        "requested_width",
-        "requested_height",
-        "delivered_width",
-        "delivered_height",
-        "requested_iteration_cap",
-        "delivered_iteration_cap",
-        "requested_zoom_log2",
-        "presented_zoom_log2",
-        "reference_zoom_log2",
-        "zoom_digits_f64",
-        "depth_digits",
-        "precision_floor_digits",
-        "precision_working_digits",
-        "requested_precision_bits",
-        "delivered_precision_bits",
-        "orbit_length",
-        "orbit_generation",
-        "owner_epoch",
-        "centre_revision",
-        "centre_from_reference_px",
-        "reference_shift_px",
-        "scale_mantissa",
-        "scale_exponent",
-        "kernel_mode",
-        "refinement_level",
-        "refinement_pending",
-        "extent_divisor",
-        "active_pixels",
-        "worst_case_pixel_iterations",
-        "kernel_page_passes",
-        "scratch_copy_commands",
-        "scratch_copy_bytes",
-        "logical_heap_bytes",
-        "reserved_heap_bytes",
-        "scratch_bytes",
-        "hot_write_bytes",
-        "scene_uniform_write_bytes",
-        "texture_reallocations",
-        "rebase_count_sum",
-        "rebase_count_max",
-        "glitch_pixel_count",
-        "worker_facts",
-        "worker_compute_us",
-        "worker_credit_us",
-        "worker_overfeed_us",
-        "worker_allocation_events",
-        "request_buffers_owned_main",
-        "orbit_buffers_owned_main",
-        "palette_id",
-        "view_mode",
-        "completed_scene_id",
-        "in_flight_scene_id",
-        "warp_source_scene_id",
-        "reprojected_per_scene",
-        "refreshes_without_scene",
-        "chart_residual",
-        "tumbled_max_error_px",
-        "tumbled_p95_error_px",
-        "scene_wall_ms",
-        "scene_fence_wait_ms",
-        "scene_polls",
-        "warp_wall_ms",
-        "warp_fence_wait_ms",
-        "warp_polls",
-        "warmup_label",
-        "second_frame_policy",
-        "timer_quantum_ms",
-        "device_walls",
-        "app_policies",
-        "limiting_term",
-        "wasm_bundle_bytes",
-        "javascript_bundle_bytes",
-        "wasm_instance_count",
-        "timing_status",
-    ];
+    let fields = PAGE_FACT_FIELDS;
     for field in fields {
         assert!(
             FACTS.contains(&format!("pub {field}:")),

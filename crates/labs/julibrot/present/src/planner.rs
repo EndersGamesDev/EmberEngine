@@ -1,4 +1,4 @@
-use ember_julibrot_math::{Plane, Pose, ViewMode, warp_matrix};
+use ember_julibrot_math::{Plane, Pose, warp_matrix};
 
 use crate::{
     SceneFrame, WarpKind, WarpPlan, apply_homography, pack_homography_rows, solve_homography,
@@ -7,19 +7,14 @@ use crate::{
 const CHART_CORNERS: [[f64; 2]; 4] = [[-1.0, -1.0], [1.0, -1.0], [-1.0, 1.0], [1.0, 1.0]];
 const HEIGHT_SAMPLES: [f64; 5] = [-2.0, -1.0, 0.0, 1.0, 2.0];
 const CHART_STEPS: u32 = 9;
-const PERSPECTIVE_POLE: f64 = 8.0;
 const POLE_EPSILON: f64 = 1.0e-4;
-const YAW_COSINE: f64 = 0.939_692_620_8;
-const YAW_SINE: f64 = 0.342_020_143_3;
-const PITCH_COSINE: f64 = 0.965_925_826_3;
-const PITCH_SINE: f64 = 0.258_819_045_1;
 
 /// Pure CPU reprojection planner.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Warp;
 
 impl Warp {
-    /// Builds the exact flat or four-anchor tumbled inverse-sampling plan.
+    /// Builds the one four-anchor inverse-sampling plan.
     ///
     /// A pose mismatch, incompatible arithmetic, or projection pole returns an honest clear-only
     /// plan. This function never allocates a GPU resource, submits work, or mutates the frame.
@@ -35,17 +30,7 @@ impl Warp {
         if !chart_residual.is_finite() {
             return clear_only();
         }
-        if from_pose.view == ViewMode::Flat && to_pose.view == ViewMode::Flat {
-            return pack_homography_rows(flat.forward).map_or_else(clear_only, |rows| WarpPlan {
-                rows,
-                source_valid: true,
-                kind: WarpKind::FlatExact,
-                chart_residual,
-                approx_max_error_px: None,
-                approx_p95_error_px: None,
-            });
-        }
-        tumbled_plan(from_pose, to_pose, flat.forward, chart_residual).unwrap_or_else(clear_only)
+        anchor_plan(from_pose, to_pose, flat.forward, chart_residual).unwrap_or_else(clear_only)
     }
 }
 
@@ -64,7 +49,7 @@ const fn clear_only() -> WarpPlan {
     }
 }
 
-fn tumbled_plan(
+fn anchor_plan(
     from_pose: &Pose,
     to_pose: &Pose,
     flat_forward: [f64; 9],
@@ -79,7 +64,7 @@ fn tumbled_plan(
     let source = transpose_options(source)?;
     let matrix = solve_homography(destination, source)?;
     let rows = pack_homography_rows(matrix)?;
-    let mut errors = sampled_tumbled_errors(from_pose, to_pose, flat_forward, matrix)?;
+    let mut errors = sampled_errors(from_pose, to_pose, flat_forward, matrix)?;
     errors.sort_by(f64::total_cmp);
     let maximum = errors.last().copied()?;
     let percentile_index = errors
@@ -91,7 +76,7 @@ fn tumbled_plan(
     Some(WarpPlan {
         rows,
         source_valid: true,
-        kind: WarpKind::TumbledHomography,
+        kind: WarpKind::AnchorHomography,
         chart_residual,
         approx_max_error_px: Some(maximum),
         approx_p95_error_px: Some(percentile),
@@ -106,7 +91,7 @@ fn transpose_options(values: [Option<[f64; 2]>; 4]) -> Option<[[f64; 2]; 4]> {
     Some(output)
 }
 
-fn sampled_tumbled_errors(
+fn sampled_errors(
     from_pose: &Pose,
     to_pose: &Pose,
     flat_forward: [f64; 9],
@@ -175,7 +160,7 @@ fn chart_residual(from: &Pose, to: &Pose) -> f64 {
 /// and `y` for every plane missing `span(e1,e2)` — the Mandelbrot seed `(e3,e4)` among them. The
 /// display frame has no such plane.
 ///
-/// `rotation` is `[cos θ, sin θ, cos φθ, sin φθ]` for the standing VIEW rotation `R12(θ)R35(φθ)`.
+/// `rotation` is `[cos θᵥ₁, sin θᵥ₁, cos θᵥ₂, sin θᵥ₂]` for the VIEW rotation `R12(θᵥ₁)R35(θᵥ₂)`.
 fn display_point(coordinate: [f64; 2], height: f64, rotation: [f64; 4]) -> [f64; 5] {
     let [cosine_one, sine_one, cosine_two, sine_two] = rotation;
     [
@@ -213,73 +198,103 @@ fn dot4(basis: [f32; 4], point: [f64; 4]) -> f64 {
         })
 }
 
-fn project_presented(pose: &Pose, chart: [f64; 2], height: f64) -> Option<[f64; 2]> {
-    if pose.grid_width == 0 || pose.grid_height == 0 {
+/// Projects one chart point at one record height through the pose's own VIEW controls.
+///
+/// `record_height` is the escape record's own `H`; the pose's height control scales it, so a pose
+/// at `height_scale = 0` projects every sample to the height-zero chart no matter what `H` is.
+///
+/// The observer's perspective scale is `aspect·d₄/2`, which is the whole reason the height-zero
+/// image is exact: at world `z = 0` the divide is by `d₄`, the two cancel, and NDC reduces to
+/// `(x/2, aspect·y/2)` for every `d₄` and every extent.
+fn project_presented(pose: &Pose, chart: [f64; 2], record_height: f64) -> Option<[f64; 2]> {
+    if pose.grid_width == 0 || pose.grid_height == 0 || !pose.view.is_valid() {
         return None;
     }
     let display_coordinate = [
         2.0 * chart[0],
         2.0 * f64::from(pose.grid_height) / f64::from(pose.grid_width) * chart[1],
     ];
-    let theta_two = f64::midpoint(1.0, 5.0_f64.sqrt()) * pose.view_theta_1;
-    let (sine_one, cosine_one) = pose.view_theta_1.sin_cos();
-    let (sine_two, cosine_two) = theta_two.sin_cos();
+    let (sine_one, cosine_one) = pose.view.theta_1.sin_cos();
+    let (sine_two, cosine_two) = pose.view.theta_2.sin_cos();
     let rotation = [cosine_one, sine_one, cosine_two, sine_two];
+    let height = pose.view.height_scale * record_height;
     let rotated = display_point(display_coordinate, height, rotation);
-    let denominator_five = PERSPECTIVE_POLE - rotated[4];
+    let distance_five = pose.view.distance_five;
+    let distance_four = pose.view.distance_four;
+    let denominator_five = distance_five - rotated[4];
     if denominator_five <= POLE_EPSILON {
         return None;
     }
-    let scale_five = PERSPECTIVE_POLE / denominator_five;
+    let scale_five = distance_five / denominator_five;
     let projected_four = [
         rotated[0] * scale_five,
         rotated[1] * scale_five,
         rotated[2] * scale_five,
         rotated[3] * scale_five,
     ];
-    let denominator_four = PERSPECTIVE_POLE - projected_four[3];
+    let denominator_four = distance_four - projected_four[3];
     if denominator_four <= POLE_EPSILON {
         return None;
     }
-    let scale_four = PERSPECTIVE_POLE / denominator_four;
+    let scale_four = distance_four / denominator_four;
     let world = [
         projected_four[0] * scale_four,
         projected_four[1] * scale_four,
         projected_four[2] * scale_four,
     ];
+    let (yaw_sine, yaw_cosine) = pose.view.camera_yaw.sin_cos();
+    let (pitch_sine, pitch_cosine) = pose.view.camera_pitch.sin_cos();
     let yawed = [
-        YAW_COSINE.mul_add(world[0], YAW_SINE * world[2]),
+        yaw_cosine.mul_add(world[0], yaw_sine * world[2]),
         world[1],
-        (-YAW_SINE).mul_add(world[0], YAW_COSINE * world[2]),
+        (-yaw_sine).mul_add(world[0], yaw_cosine * world[2]),
     ];
     let view = [
         yawed[0],
-        PITCH_COSINE.mul_add(yawed[1], -PITCH_SINE * yawed[2]),
-        PITCH_SINE.mul_add(yawed[1], PITCH_COSINE * yawed[2]) - 9.0,
+        pitch_cosine.mul_add(yawed[1], -pitch_sine * yawed[2]),
+        pitch_sine.mul_add(yawed[1], pitch_cosine * yawed[2]) - distance_four,
     ];
     let clip_w = -view[2];
     if !clip_w.is_finite() || clip_w <= POLE_EPSILON {
         return None;
     }
     let aspect = f64::from(pose.grid_width) / f64::from(pose.grid_height);
-    let ndc = [1.72 * view[0] / aspect / clip_w, 1.72 * view[1] / clip_w];
+    let perspective_scale = aspect * distance_four * 0.5;
+    let ndc = [
+        perspective_scale * view[0] / aspect / clip_w,
+        perspective_scale * view[1] / clip_w,
+    ];
     ndc.iter().all(|value| value.is_finite()).then_some(ndc)
 }
 
 #[cfg(test)]
 mod tests {
     use ember_julibrot_kernels::RefinementLevel;
-    use ember_julibrot_math::{
-        MathError, Plane, PlaneAngles, PlanePreset, ViewMode, construct_plane,
-    };
+    use ember_julibrot_math::{MathError, Plane, PlaneAngles, ViewControls, construct_plane};
 
     use super::*;
     use crate::{PaletteId, SampleClass, SubmissionKind, SubmissionMeasurement};
 
     const SWEEP_ANGLES: u32 = 256;
-    const JULIA_SEED: [f64; 2] = [-0.8, 0.156];
+    const RELIEF_YAW: f64 = 0.349;
+    const RELIEF_PITCH: f64 = 0.262;
 
-    fn pose(view: ViewMode, theta: f64, displacement: [f64; 2]) -> Pose {
+    /// One relief row parameterised by a single swept angle.
+    ///
+    /// The second VIEW angle is the golden-ratio multiple of the first only so that this sweep
+    /// covers the geometry the retired clock covered; nothing in the lab derives it that way.
+    fn relief(theta: f64) -> ViewControls {
+        ViewControls {
+            theta_1: theta,
+            theta_2: f64::midpoint(1.0, 5.0_f64.sqrt()) * theta,
+            camera_yaw: RELIEF_YAW,
+            camera_pitch: RELIEF_PITCH,
+            height_scale: 1.0,
+            ..ViewControls::NEUTRAL
+        }
+    }
+
+    fn pose(view: ViewControls, displacement: [f64; 2]) -> Pose {
         Pose {
             epoch: 1,
             orbit_generation: 4,
@@ -290,10 +305,9 @@ mod tests {
             plane_theta_1: 0.0,
             plane_theta_2: 0.0,
             zoom_log2: 40.0,
-            view_theta_1: theta,
+            view,
             grid_width: 1920,
             grid_height: 1080,
-            view,
             centre_from_reference_px: displacement,
         }
     }
@@ -322,22 +336,99 @@ mod tests {
     }
 
     #[test]
-    fn flat_plan_delegates_pan_translation_to_math() {
-        let from = pose(ViewMode::Flat, 0.0, [2.0, 3.0]);
-        let to = pose(ViewMode::Flat, 0.0, [7.0, -1.0]);
+    fn the_neutral_plan_reproduces_the_exact_pan_translation() {
+        let from = pose(ViewControls::NEUTRAL, [2.0, 3.0]);
+        let to = pose(ViewControls::NEUTRAL, [7.0, -1.0]);
         let plan = Warp::reproject(&frame(from), &from, &to);
-        assert_eq!(plan.kind, WarpKind::FlatExact);
+        assert_eq!(plan.kind, WarpKind::AnchorHomography);
         assert!(plan.source_valid);
         assert!((f64::from(plan.rows[0][2]) - 10.0 / 1920.0).abs() < 1.0e-7);
         assert!((f64::from(plan.rows[1][2]) + 8.0 / 1080.0).abs() < 1.0e-7);
     }
 
     #[test]
-    fn uploaded_flat_rows_stay_within_quarter_pixel_at_all_required_depths() {
+    fn the_neutral_plan_is_math_s_exact_matrix_and_reports_zero_error() {
+        // Retiring the exact plan retired a code path, not a capability: at height zero and zero
+        // camera angles the four anchors are the chart corners under the exact plane-chart
+        // homography, so the solve reproduces it and the sampled corpus has nothing to report.
+        for distance in [2.0, 8.0, 64.0] {
+            let view = ViewControls {
+                distance_five: distance,
+                distance_four: distance,
+                ..ViewControls::NEUTRAL
+            };
+            let from = pose(view, [13.25, -7.5]);
+            let mut to = pose(view, [-4.0, 9.125]);
+            to.zoom_log2 += 0.75;
+            let exact = warp_matrix(&from, &to).expect("the neutral fixture is finite");
+            let plan = Warp::reproject(&frame(from), &from, &to);
+            assert_eq!(plan.kind, WarpKind::AnchorHomography);
+            let solved = [
+                f64::from(plan.rows[0][0]),
+                f64::from(plan.rows[0][1]),
+                f64::from(plan.rows[0][2]),
+                f64::from(plan.rows[1][0]),
+                f64::from(plan.rows[1][1]),
+                f64::from(plan.rows[1][2]),
+                f64::from(plan.rows[2][0]),
+                f64::from(plan.rows[2][1]),
+                f64::from(plan.rows[2][2]),
+            ];
+            for (index, (value, wanted)) in solved.into_iter().zip(exact.forward).enumerate() {
+                assert!(
+                    (value - wanted).abs() <= 1.0e-6,
+                    "d={distance} coefficient {index}: {value} left the exact {wanted}"
+                );
+            }
+            assert!(plan.approx_max_error_px.is_some_and(|error| error < 1.0e-9));
+            assert!(plan.approx_p95_error_px.is_some_and(|error| error < 1.0e-9));
+        }
+    }
+
+    #[test]
+    fn height_zero_projects_to_the_exact_flat_chart() {
+        // This is why the fullscreen pass could be deleted rather than kept beside the mesh.
+        for extent in [[1920_u32, 1080_u32], [1024, 1024]] {
+            for distance in [2.0, 8.0, 64.0] {
+                let mut posed = pose(
+                    ViewControls {
+                        distance_five: distance,
+                        distance_four: distance,
+                        ..ViewControls::NEUTRAL
+                    },
+                    [0.0; 2],
+                );
+                posed.grid_width = extent[0];
+                posed.grid_height = extent[1];
+                let aspect = f64::from(extent[0]) / f64::from(extent[1]);
+                for chart in CHART_CORNERS.into_iter().chain([[0.0, 0.0], [0.25, -0.5]]) {
+                    // Every record height is flattened by the zero height control, so even an
+                    // interior sample at H = -2 lands on the chart.
+                    for record_height in HEIGHT_SAMPLES {
+                        let ndc = project_presented(&posed, chart, record_height)
+                            .expect("the neutral projection has no pole");
+                        let display = [
+                            2.0 * chart[0],
+                            2.0 * f64::from(extent[1]) / f64::from(extent[0]) * chart[1],
+                        ];
+                        let expected = [display[0] * 0.5, display[1] * aspect * 0.5];
+                        assert!(
+                            (ndc[0] - expected[0]).abs() <= 1.0e-12
+                                && (ndc[1] - expected[1]).abs() <= 1.0e-12,
+                            "{extent:?} d={distance} chart {chart:?}: {ndc:?} != {expected:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn uploaded_rows_stay_within_quarter_pixel_at_all_required_depths() {
         for zoom_log2 in [0.0, 10.0, 20.0, 40.0, 80.0, 100.0] {
-            let mut from = pose(ViewMode::Flat, 0.0, [1_003.25, -507.5]);
+            let mut from = pose(ViewControls::NEUTRAL, [1_003.25, -507.5]);
             from.zoom_log2 = zoom_log2;
-            let mut to = pose(ViewMode::Flat, 0.0, [-811.125, 401.75]);
+            let mut to = pose(ViewControls::NEUTRAL, [-811.125, 401.75]);
             to.zoom_log2 = zoom_log2 + 0.2;
             let exact = warp_matrix(&from, &to).expect("required warp fixture is finite");
             let plan = Warp::reproject(&frame(from), &from, &to);
@@ -369,7 +460,7 @@ mod tests {
 
     #[test]
     fn pose_mismatch_or_invalid_extent_is_clear_only() {
-        let from = pose(ViewMode::Flat, 0.0, [0.0; 2]);
+        let from = pose(ViewControls::NEUTRAL, [0.0; 2]);
         let mut mismatched = from;
         mismatched.epoch = 2;
         assert_eq!(
@@ -385,31 +476,34 @@ mod tests {
     }
 
     #[test]
-    fn tumbled_identity_has_neutral_anchors_and_zero_sample_error() {
-        let current = pose(ViewMode::Tumbled, 0.6, [0.0; 2]);
+    fn relief_identity_has_neutral_anchors_and_zero_sample_error() {
+        let current = pose(relief(0.6), [0.0; 2]);
         let plan = Warp::reproject(&frame(current), &current, &current);
-        assert_eq!(plan.kind, WarpKind::TumbledHomography);
+        assert_eq!(plan.kind, WarpKind::AnchorHomography);
         assert!(plan.source_valid);
         assert!(plan.approx_max_error_px.is_some_and(|error| error < 1.0e-9));
         assert!(plan.approx_p95_error_px.is_some_and(|error| error < 1.0e-9));
     }
 
     #[test]
-    fn tumbled_small_motion_reports_full_error_corpus() {
-        let from = pose(ViewMode::Tumbled, 0.6, [0.0; 2]);
-        let mut to = pose(ViewMode::Tumbled, 0.602, [2.0, -1.0]);
+    fn relief_small_motion_reports_full_error_corpus() {
+        let from = pose(relief(0.6), [0.0; 2]);
+        let mut to = pose(relief(0.602), [2.0, -1.0]);
         to.zoom_log2 += 0.025;
         let plan = Warp::reproject(&frame(from), &from, &to);
-        assert_eq!(plan.kind, WarpKind::TumbledHomography);
+        assert_eq!(plan.kind, WarpKind::AnchorHomography);
         let maximum = plan
             .approx_max_error_px
             .expect("the complete corpus reports a maximum");
-        assert!(maximum <= 2.0, "maximum error was {maximum} pixels");
+        // Re-measured under the control-driven observer: the approximation is unchanged in chart
+        // terms, but the height-zero framing is now the chart map instead of the retired mount's
+        // 2*1.72/(9*aspect), so the same error covers about 4.65 times as many pixels at 16:9.
+        assert!(maximum <= 8.0, "maximum error was {maximum} pixels");
         assert!(plan.approx_p95_error_px.is_some_and(f64::is_finite));
     }
 
-    fn tumbled_pose(plane: Plane, theta: f64, displacement: [f64; 2]) -> Pose {
-        let mut posed = pose(ViewMode::Tumbled, theta, displacement);
+    fn relief_pose(plane: Plane, theta: f64, displacement: [f64; 2]) -> Pose {
+        let mut posed = pose(relief(theta), displacement);
         posed.plane = plane;
         posed
     }
@@ -437,12 +531,12 @@ mod tests {
     fn sweep_plan(plane: Plane, step: u32, motion: Motion) -> WarpPlan {
         let theta = core::f64::consts::TAU * f64::from(step) / f64::from(SWEEP_ANGLES);
         let displacement = [3.5, -2.25];
-        let from = tumbled_pose(plane, theta, displacement);
+        let from = relief_pose(plane, theta, displacement);
         let panned = [
             displacement[0] + motion.pan_px[0],
             displacement[1] + motion.pan_px[1],
         ];
-        let mut to = tumbled_pose(plane, theta + motion.view_radians, panned);
+        let mut to = relief_pose(plane, theta + motion.view_radians, panned);
         to.zoom_log2 += motion.zoom_log2;
         Warp::reproject(&frame(from), &from, &to)
     }
@@ -457,14 +551,14 @@ mod tests {
                 clear_only += 1;
                 continue;
             }
-            assert_eq!(plan.kind, WarpKind::TumbledHomography);
+            assert_eq!(plan.kind, WarpKind::AnchorHomography);
             assert!(plan.source_valid);
             let error = plan
                 .approx_max_error_px
-                .expect("a tumbled plan reports its sampled maximum");
+                .expect("an anchor plan reports its sampled maximum");
             let percentile = plan
                 .approx_p95_error_px
-                .expect("a tumbled plan reports its sampled percentile");
+                .expect("an anchor plan reports its sampled percentile");
             assert!(percentile <= error);
             maximum = maximum.max(error);
         }
@@ -480,16 +574,17 @@ mod tests {
             theta_1: core::f64::consts::FRAC_PI_4,
             theta_2: core::f64::consts::FRAC_PI_4,
         };
+        let quarter = core::f64::consts::FRAC_PI_2;
         Ok([
-            (
-                "mandelbrot",
-                construct_plane(PlanePreset::Mandelbrot, identity)?,
-            ),
+            ("mandelbrot", construct_plane(identity)?),
             (
                 "julia",
-                construct_plane(PlanePreset::Julia { c0: JULIA_SEED }, identity)?,
+                construct_plane(PlaneAngles {
+                    theta_1: -quarter,
+                    theta_2: -quarter,
+                })?,
             ),
-            ("hybrid", construct_plane(PlanePreset::Mandelbrot, hybrid)?),
+            ("hybrid", construct_plane(hybrid)?),
         ])
     }
 
@@ -520,13 +615,13 @@ mod tests {
                 "{name} plane fell back to clear-only at {clear_only} of {SWEEP_ANGLES} angles"
             );
             assert!(
-                maximum <= 3.5,
+                maximum <= 16.0,
                 "{name} plane sampled {maximum} pixels over the full acceptance envelope"
             );
             let (clear_only, maximum) = sweep(plane, ROTATION_ONLY);
             assert_eq!(clear_only, 0, "{name} plane cleared without a zoom step");
             assert!(
-                maximum <= 1.0,
+                maximum <= 4.0,
                 "{name} plane sampled {maximum} pixels for rotation and pan alone"
             );
         }
@@ -534,11 +629,21 @@ mod tests {
     }
 
     #[test]
-    fn the_tumbled_plan_ignores_which_ambient_axes_a_preset_names() -> Result<(), MathError> {
+    fn the_plan_ignores_which_ambient_axes_the_plane_names() -> Result<(), MathError> {
         let [(_, mandelbrot), (_, julia), (_, hybrid)] = named_planes()?;
         for step in 0..SWEEP_ANGLES {
             let reference = sweep_plan(mandelbrot, step, ENVELOPE);
-            assert_eq!(sweep_plan(julia, step, ENVELOPE), reference);
+            let julia_plan = sweep_plan(julia, step, ENVELOPE);
+            // The Julia row is a quarter turn of the one seed, so its basis carries the binary32
+            // image of cos(pi/2); the plan is identical and only the residual sees that 1e-30.
+            assert_eq!(julia_plan.rows, reference.rows);
+            assert_eq!(julia_plan.kind, reference.kind);
+            assert_eq!(
+                julia_plan.approx_max_error_px,
+                reference.approx_max_error_px
+            );
+            assert!(julia_plan.chart_residual <= 1.0e-12);
+            assert!(reference.chart_residual <= 1.0e-12);
             let tilted = sweep_plan(hybrid, step, ENVELOPE);
             assert_eq!(tilted.kind, reference.kind);
             for (row, expected) in tilted.rows.into_iter().zip(reference.rows) {

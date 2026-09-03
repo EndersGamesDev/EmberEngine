@@ -12,7 +12,9 @@ It is a prototype of the toolchain, so every mechanism it builds is meant to be 
 
 The Julibrot is the set of pairs `(z, c)` in ℂ², which is ℝ⁴, whose orbit under `z → z² + c` stays bounded; the Mandelbrot set is its slice at `z = 0`, every Julia set is its slice at a fixed `c`, and every other 2D plane through it is a hybrid between them.
 
-The lab renders a 2D plane through ℝ⁴ chosen by the standing 5D rotation `R(t)` applied to a fixed 4D basis, with two presets that snap the rotation to the Mandelbrot plane and to a Julia plane at a chosen `c`, and free rotation between; the escape value of each sample lifts it to a fifth coordinate, so every slice has two views: flat, a screen quad textured by the escape grid, and tumbled, a 5D height field through the standing double perspective `d₅ = d₄ = 8` with the rawgl presentation adopted by the heap lattice.
+The lab renders a 2D plane through ℝ⁴ chosen by two PLANE angles applied to the one fixed seed `(e₃,e₄)`, positioned by a plane origin that is four more numbers, so the Mandelbrot plane, a Julia plane at a chosen `c`, and every hybrid between them are positions of the same continuous controls rather than named alternatives; the escape value of each sample lifts it to a fifth coordinate scaled by a height control, and one height-field scene carries every view, from the flat chart at height zero to full relief, through the double perspective `d₅` and `d₄` and a slider-driven observer.
+
+Nothing in the lab reads a clock for geometry and nothing selects a view mode: every degree of freedom of the view is a slider, and a preset is a named row of slider values, so moving the sliders morphs one preset into another continuously.
 
 Arbitrary zoom means arbitrary: shallow zoom runs in `f32`; deep zoom uses perturbation, one reference orbit iterated in high precision on the CPU and per-pixel deltas iterated in `f32` on the GPU, with rebasing so glitches are corrected rather than hidden; zoom depth is displayed in decimal digits with the precision in use beside it.
 
@@ -25,7 +27,7 @@ Arbitrary zoom means arbitrary: shallow zoom runs in `f32`; deep zoom uses pertu
 |math|`crates/labs/julibrot/math`|the Julibrot algebra: plane and basis from `R(t)`, presets, `f32` escape reference, high-precision reference orbits, perturbation and rebasing theory, the navigation-drift and warp-accuracy oracles, the bignum choice|
 |kernels|`crates/labs/julibrot/kernels`|the dialect v2 kernels over heap spans: the `f32` escape kernel and the perturbation kernel, their conformance against the math oracles, the scratch-copy landing of the escape grid|
 |worker|`crates/labs/julibrot/worker`|the Web Worker producer of reference orbits, the ownership-transfer channel with its credit header, the versioned owner with its two drains, the same-thread lowering of the same channel|
-|present|`crates/labs/julibrot/present`|the flat and tumbled views fetching the escape grid by handle, the standing presentation, the warp pass that re-projects the last completed frame under the current zoom and rotation, the hot ring|
+|present|`crates/labs/julibrot/present`|the one height-field scene fetching the escape grid by handle, the slider-driven presentation, the warp pass that re-projects the last completed frame under the current zoom, plane and view, the hot ring|
 |app|`crates/labs/julibrot/app` and `web/labs/julibrot/`|the GL-only device and surface, single surface ownership, the panic hook and the non-panicking error handler, counted fences, the progressive-refinement policy, controls, the facts overlay, page-contract tests, the versioned loader|
 
 Each slice is a package with its own tests and its own example or page where one makes sense; `app` integrates the other four through the interfaces their documents pin, and no slice edits another slice's package.

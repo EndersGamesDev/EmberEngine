@@ -9,7 +9,13 @@ h1 { margin: .15rem 0; font-family: ui-serif, Georgia, serif; font-size: clamp(3
 canvas { display: block; width: 100%; aspect-ratio: 16 / 9; touch-action: none; }
 .status { position: absolute; left: .75rem; bottom: .75rem; margin: 0; padding: .5rem .7rem; background: #090b10df; border: 1px solid #59627a; }
 .status.failed { color: #ff8b8b; border-color: #a43b46; }
-.controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: .75rem; padding: 1rem; border: 1px solid #2d3445; background: #10141e; }
+.controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: .75rem; padding: 1rem; border: 1px solid #2d3445; background: #10141e; align-items: start; }
+.controls fieldset { display: grid; gap: .5rem; margin: 0; padding: .6rem .7rem .8rem; border: 1px solid #2d3445; background: #0d1018; }
+.controls legend { padding: 0 .35rem; color: #ff8b5e; font-size: .72rem; letter-spacing: .1em; text-transform: uppercase; }
+.controls .note { margin: 0; color: #79839a; font-size: .72rem; }
+.controls label:has(input[type="number"]) { grid-template-columns: 1fr 5.5rem; align-items: center; }
+.controls label:has(input[type="number"]) > input[type="range"] { grid-column: 1; }
+.controls label:has(input[type="number"]) > input[type="number"] { grid-column: 2; }
 label { display: grid; gap: .35rem; color: #adb5c7; font-size: .8rem; }
 input, select, button { min-height: 2.25rem; border: 1px solid #465069; border-radius: 0; background: #171c29; color: inherit; padding: .35rem .5rem; }
 button { align-self: end; cursor: pointer; border-color: #b64d2d; }

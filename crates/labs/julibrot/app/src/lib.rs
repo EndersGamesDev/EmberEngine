@@ -27,8 +27,8 @@ pub use measurement::{
 #[cfg(target_arch = "wasm32")]
 pub use runtime::{BrowserRuntime, DeviceFacts, install_julibrot_panic_hook, take_julibrot_panic};
 pub use state::{
-    HotFrame, INITIAL_ITERATION_CAP, NavigationEdit, RequestedControls, ViewerController,
-    anchor_px_up, drag_delta_px_down,
+    HotFrame, INITIAL_ITERATION_CAP, NavigationEdit, PRESET_ROWS, PresetRow, RequestedControls,
+    ViewerController, anchor_px_up, drag_delta_px_down, preset_row,
 };
 pub use surface::{PendingSurface, SurfaceAction, SurfaceState};
 
@@ -130,10 +130,10 @@ impl App {
         if self.frame_loop.stopped_reason().is_some() {
             return false;
         }
-        self.requests.frame
-            || self.frame_loop.pending(&self.runtime, &self.viewer)
-            || (self.frame_loop.frame_policy() != FramePolicy::SingleFrameOnDemand
-                && self.viewer.requested().view == ember_julibrot_math::ViewMode::Tumbled)
+        // Nothing animates on its own. The retired term kept the loop turning forever whenever
+        // the tumbled mode was selected, because the geometry read a clock; with every angle a
+        // control, an untouched page reaches a fixed image and the loop is allowed to go quiet.
+        self.requests.frame || self.frame_loop.pending(&self.runtime, &self.viewer)
     }
 
     /// Queues one explicit frame request for the next cooperative refresh turn.
@@ -211,10 +211,12 @@ mod wasm_entry {
     use wasm_bindgen::prelude::*;
 
     use crate::runtime::publish_start_error;
-    use ember_julibrot_math::{PlaneAngles, PlanePreset, ViewMode};
+    use ember_julibrot_math::{PlaneAngles, ViewControls};
     use ember_julibrot_present::PaletteId;
 
-    use crate::{App, JULIBROT_ABI_VERSION, PageFacts, anchor_px_up, drag_delta_px_down};
+    use crate::{
+        App, JULIBROT_ABI_VERSION, PageFacts, anchor_px_up, drag_delta_px_down, preset_row,
+    };
 
     thread_local! {
         static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -315,15 +317,88 @@ mod wasm_entry {
         })
     }
 
-    /// Selects Mandelbrot or Julia and resets its centre to the defining origin.
+    /// Moves the absolute plane origin and resets the centre to it.
     #[wasm_bindgen]
-    pub fn app_set_preset(kind: u32, c_re: f64, c_im: f64) -> Result<(), JsValue> {
-        let preset = match kind {
-            0 => PlanePreset::Mandelbrot,
-            1 => PlanePreset::Julia { c0: [c_re, c_im] },
-            _ => return Err(JsValue::from_str("preset discriminant is outside 0..1")),
-        };
-        with_app_mut(|app| app.viewer_mut().set_preset(preset).map_err(app_js_error))
+    pub fn app_set_plane_origin(z_re: f64, z_im: f64, c_re: f64, c_im: f64) -> Result<(), JsValue> {
+        with_app_mut(|app| {
+            app.viewer_mut()
+                .set_plane_origin([z_re, z_im, c_re, c_im])
+                .map_err(app_js_error)
+        })
+    }
+
+    /// Stages both VIEW angles in radians.
+    #[wasm_bindgen]
+    pub fn app_set_view_angles(theta_1: f64, theta_2: f64) -> Result<(), JsValue> {
+        with_view(|view| {
+            view.theta_1 = theta_1;
+            view.theta_2 = theta_2;
+        })
+    }
+
+    /// Stages the observer yaw and pitch in radians.
+    #[wasm_bindgen]
+    pub fn app_set_camera(yaw: f64, pitch: f64) -> Result<(), JsValue> {
+        with_view(|view| {
+            view.camera_yaw = yaw;
+            view.camera_pitch = pitch;
+        })
+    }
+
+    /// Stages the escape-height amplitude; zero is exactly the flat chart.
+    #[wasm_bindgen]
+    pub fn app_set_height(height_scale: f64) -> Result<(), JsValue> {
+        with_view(|view| view.height_scale = height_scale)
+    }
+
+    /// Stages both perspective distances.
+    #[wasm_bindgen]
+    pub fn app_set_distances(distance_five: f64, distance_four: f64) -> Result<(), JsValue> {
+        with_view(|view| {
+            view.distance_five = distance_five;
+            view.distance_four = distance_four;
+        })
+    }
+
+    /// Returns one preset as the JSON row of control values the page writes into its elements.
+    ///
+    /// The page applies the row through the same handlers a user's own movement reaches, so this
+    /// is a source of values and never a second path into the worker.
+    #[wasm_bindgen]
+    pub fn app_preset(id: u32) -> Result<String, JsValue> {
+        let row = preset_row(id)
+            .ok_or_else(|| JsValue::from_str("preset identifier is outside its range"))?;
+        Ok(format!(
+            concat!(
+                r#"{{"name":"{}","theta_1":{},"theta_2":{},"origin":[{},{},{},{}],"#,
+                r#""view_theta_1":{},"view_theta_2":{},"camera_yaw":{},"camera_pitch":{},"#,
+                r#""height_scale":{},"distance_five":{},"distance_four":{}}}"#
+            ),
+            row.name,
+            row.plane_angles[0],
+            row.plane_angles[1],
+            row.plane_origin[0],
+            row.plane_origin[1],
+            row.plane_origin[2],
+            row.plane_origin[3],
+            row.view.theta_1,
+            row.view.theta_2,
+            row.view.camera_yaw,
+            row.view.camera_pitch,
+            row.view.height_scale,
+            row.view.distance_five,
+            row.view.distance_four,
+        ))
+    }
+
+    fn with_view(edit: impl FnOnce(&mut ViewControls)) -> Result<(), JsValue> {
+        with_app_mut(|app| {
+            let mut view = app.viewer().requested().view;
+            edit(&mut view);
+            app.viewer_mut()
+                .set_view_controls(view)
+                .map_err(app_js_error)
+        })
     }
 
     /// Stages the requested iteration cap.
@@ -346,20 +421,6 @@ mod wasm_entry {
             _ => return Err(JsValue::from_str("palette discriminant is outside 0..2")),
         };
         with_app_mut(|app| app.viewer_mut().set_palette(palette).map_err(app_js_error))
-    }
-
-    /// Stages the math-owned flat or tumbled view discriminant.
-    #[wasm_bindgen]
-    pub fn app_set_view(view: u32) -> Result<(), JsValue> {
-        let view = match view {
-            0 => ViewMode::Flat,
-            1 => ViewMode::Tumbled,
-            _ => return Err(JsValue::from_str("view discriminant is outside 0..1")),
-        };
-        with_app_mut(|app| {
-            app.viewer_mut().set_view(view);
-            Ok(())
-        })
     }
 
     /// Queues one explicit surface-frame request without claiming it was submitted.
@@ -434,7 +495,8 @@ mod wasm_entry {
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm_entry::{
-    app_drag_pan, app_facts_json, app_needs_refresh, app_refresh, app_request_frame,
-    app_request_measurement, app_set_iteration_cap, app_set_palette, app_set_plane_angles,
-    app_set_preset, app_set_view, app_wheel_zoom, julibrot_abi_version, start_julibrot,
+    app_drag_pan, app_facts_json, app_needs_refresh, app_preset, app_refresh, app_request_frame,
+    app_request_measurement, app_set_camera, app_set_distances, app_set_height,
+    app_set_iteration_cap, app_set_palette, app_set_plane_angles, app_set_plane_origin,
+    app_set_view_angles, app_wheel_zoom, julibrot_abi_version, start_julibrot,
 };

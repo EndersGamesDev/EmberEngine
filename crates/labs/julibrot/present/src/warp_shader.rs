@@ -1,5 +1,5 @@
 const WARP_SHADER: &str = r"
-struct HotUniform { plane_u: vec4<f32>, plane_v: vec4<f32>, view_rotation: vec4<f32>, homography_row_0: vec4<f32>, homography_row_1: vec4<f32>, homography_row_2: vec4<f32>, clear_rgba: vec4<f32>, flags: vec4<u32>, }
+struct HotUniform { camera: vec4<f32>, view_scale: vec4<f32>, view_rotation: vec4<f32>, homography_row_0: vec4<f32>, homography_row_1: vec4<f32>, homography_row_2: vec4<f32>, clear_rgba: vec4<f32>, flags: vec4<u32>, }
 @group(0) @binding(0) var source_scene: texture_2d<f32>;
 @group(0) @binding(1) var source_sampler: sampler;
 @group(1) @binding(0) var<uniform> hot: HotUniform;

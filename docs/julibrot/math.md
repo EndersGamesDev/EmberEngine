@@ -26,21 +26,21 @@ At escape index `n`, `smooth_iter = n+1−log₂(log₂|zₙ|)`; using natural l
 
 ### 2.2 PLANE and VIEW rotations
 
-The fractal plane lives only in ℝ⁴; `e₅` carries escape height only in present's tumbled VIEW and never enters a plane, centre, worker message, or perturbation offset.
+The fractal plane lives only in ℝ⁴; `e₅` carries escape height only in present's height field and never enters a plane, centre, worker message, or perturbation offset.
 
 For column vectors, `Rᵢⱼ(θ)` has the standard block `[[cos θ,−sin θ],[sin θ,cos θ]]` on axes `(i,j)` and identity elsewhere, every angle is in radians, and matrix application order is written explicitly rather than inferred from typography.
 
 The user-controlled PLANE rotation is `Rₚ(θ₁,θ₂)=R₁₃(θ₁)·R₂₄(θ₂)` applied as `v′=R₁₃(R₂₄(v))`; the two angles are independent HOT state and one accepted pair is frozen for a frame.
 
-Writing `cₖ=cos θₖ` and `sₖ=sin θₖ`, the transformed Mandelbrot seed is `u=−s₁e₁+c₁e₃`, `v=−s₂e₂+c₂e₄`, and the transformed Julia seed is `u=c₁e₁+s₁e₃`, `v=c₂e₂+s₂e₄`.
+Writing `cₖ=cos θₖ` and `sₖ=sin θₖ`, the transformed seed is `u=−s₁e₁+c₁e₃` and `v=−s₂e₂+c₂e₄`.
 
 Because `Rₚ` is orthogonal, an orthonormal seed remains orthonormal in exact arithmetic; construction evaluates its coefficients in `f64`, applies the matrix, rounds each published component exactly once to nearest `f32` with ties to even, performs no projection or Gram–Schmidt stage, and requires `|u·u−1|`, `|v·v−1|`, and `|u·v|` each at most `8·f32::EPSILON` after rounding.
 
-The Mandelbrot preset has seed `(e₃,e₄)`, plane origin `(0,0,0,0)`, and `θ₁=θ₂=0`; Julia at finite `c₀` has seed `(e₁,e₂)`, plane origin `(0,0,c₀.re,c₀.im)`, and `θ₁=θ₂=0`, with `c₀` in MAIN state and preset selection setting the absolute centre to that origin.
+There is one seed, `(e₃,e₄)`, and no construction selects another; a preset is a row of control values, so the Mandelbrot row is `θ₁=θ₂=0` with plane origin `(0,0,0,0)` and a Julia row at finite `c₀` is `θ₁=θ₂=−π/2` with plane origin `(0,0,c₀.re,c₀.im)`. The four origin coordinates are independent MAIN state and setting them sets the absolute centre, so every `c₀` is reached by moving numbers rather than by naming a plane, and a plane spec no longer carries seed axes to choose between.
 
-At `θ₁=θ₂=π/2` the Mandelbrot seed spans the Julia plane at the centre, with both basis directions reversed; for every `0<θ₁,θ₂<π/2`, each transformed seed vector has a nonzero component in both `span(e₁,e₂)` and `span(e₃,e₄)`, which is the required hybrid-plane oracle.
+At `θ₁=θ₂=−π/2` the seed is `(e₁,e₂)` with both unit components exact and the orthogonal components carrying only the binary32 image of `cos(π/2)=6.1e−17` — the same bound the reversed pair has always been pinned at — which is why the Julia row keeps the orientation the lab has always drawn, and at `θ₁=θ₂=+π/2` it is the same plane with both basis directions reversed; for every angle strictly between zero and either quarter turn each transformed seed vector has a nonzero component in both `span(e₁,e₂)` and `span(e₃,e₄)`, which is the required hybrid-plane oracle and is now the ordinary case rather than an excursion between two named planes.
 
-The standing time-driven VIEW rotation is present-only and unchanged: `R(t)=R₁₂(0.4t)·R₃₅(φ·0.4t)` applied as `v′=R₁₂(R₃₅(v))`, where `t` is seconds, `φ=(1+√5)/2`, `view_theta_1=0.4t`, and `view_theta_2=φ·view_theta_1`.
+The VIEW rotation is present-only and carries no clock: `Rᵥ(θᵥ₁,θᵥ₂)=R₁₂(θᵥ₁)·R₃₅(θᵥ₂)` applied as `v′=R₁₂(R₃₅(v))`, where both angles are independent HOT controls in radians. No geometric angle in the lab is derived from time, and the second angle is no longer a golden-ratio multiple of the first.
 
 ### 2.3 Pixels, centre, zoom, precision, and splitting
 
@@ -112,7 +112,7 @@ The scale ratio is evaluated directly in `f64` as `p_t/p_f=2^(zoom_f−zoom_t)·
 
 `warp_matrix(from,to)` returns row-major inverse-sampling `to→from` and its explicit `from→to` inverse, rejects a zero extent, non-finite coefficient, or `|det A|≤2⁻⁴⁰`, and never uses an absolute centre mirror; present separately checks plane-origin and max-iteration compatibility before calling it.
 
-Present computes the view-specific `WarpPlan` in hand-written `f64`, rounds only its three padded homography rows to `f32`, re-expresses a retained pose on `reference_shift_px`, and clears only when `max_iter` or the MAIN plane origin including `c₀` changes; tumbled reprojection remains present's labelled homography approximation with clear colour at newly exposed samples and candid internal-disocclusion limits.
+Present computes the view-specific `WarpPlan` in hand-written `f64`, rounds only its three padded homography rows to `f32`, re-expresses a retained pose on `reference_shift_px`, and clears only when `max_iter` or the MAIN plane origin including `c₀` changes; reprojection under relief remains present's labelled homography approximation with clear colour at newly exposed samples and candid internal-disocclusion limits.
 
 ## 3. INTERFACES
 
@@ -141,11 +141,11 @@ All transferred and GPU words are little-endian, `f32` and `f64` are IEEE-754 bi
 |`ComputedOrbit`|`{ records:Vec<ReferenceOrbitRecord>, length:u32, precision_bits:u32, escape_index:Option<u32> }`; reusable linear-memory records|worker|
 |`OrbitStep`|`Pending { stored:u32 }` or `Complete(ComputedOrbit)`; CPU-only cooperative result|worker|
 |`Pose`|CPU-only exact field list below, no byte ABI|present, app|
-|`ViewMode`|`#[repr(u32)] { Flat=0,Tumbled=1 }`; defined by math and re-exported by present|present, app|
+|`ViewControls`|`{theta_1:f64,theta_2:f64,camera_yaw:f64,camera_pitch:f64,height_scale:f64,distance_five:f64,distance_four:f64}`; defined by math and re-exported by present|present, app|
 |`WarpMatrix`|`{ forward:[f64;9], inverse:[f64;9] }`; row-major, 144 native bytes|present|
-|`MathError`|`NonFinite`, `InvalidExtent`, `InvalidMaxIter`, `InvalidBailout`, `InvalidPlaneSeed`, `PlaneRoundingBound`, `InvalidCentreEncoding`, `PrecisionMismatch`, `ScaleExponentOverflow`, `DegenerateWarp`, `OrbitTooLong`, `InvalidOrbitState`, `EmptyReferenceOrbit`, `InvalidPrecisionPlan`, `CounterOverflow`, `DurationOverflow`, `BigFloat`, or `PrecisionExhausted { requested_digits,policy_digits }`|all slices|
+|`MathError`|`NonFinite`, `InvalidExtent`, `InvalidMaxIter`, `InvalidBailout`, `InvalidViewControls`, `PlaneRoundingBound`, `InvalidCentreEncoding`, `PrecisionMismatch`, `ScaleExponentOverflow`, `DegenerateWarp`, `OrbitTooLong`, `InvalidOrbitState`, `EmptyReferenceOrbit`, `InvalidPrecisionPlan`, `CounterOverflow`, `DurationOverflow`, `BigFloat`, or `PrecisionExhausted { requested_digits,policy_digits }`|all slices|
 
-`Pose` is `pub struct Pose { pub epoch:u64, pub orbit_generation:u32, pub plane:Plane, pub plane_theta_1:f64, pub plane_theta_2:f64, pub zoom_log2:f64, pub view_theta_1:f64, pub grid_width:u32, pub grid_height:u32, pub view:ViewMode, pub centre_from_reference_px:[f64;2] }`; VIEW angle two is derived as `φ·view_theta_1` and is not stored.
+`Pose` is `pub struct Pose { pub epoch:u64, pub orbit_generation:u32, pub plane:Plane, pub plane_theta_1:f64, pub plane_theta_2:f64, pub zoom_log2:f64, pub view:ViewControls, pub grid_width:u32, pub grid_height:u32, pub centre_from_reference_px:[f64;2] }`; every VIEW angle, the height scale, and both perspective distances are stored because every one of them is a control, and none is derived from another or from a clock.
 
 The implementation signatures are `construct_plane(preset:PlanePreset,angles:PlaneAngles)->Result<Plane,MathError>`, `construct_plane_from_spec(spec:PlaneSpec,angles:PlaneAngles)->Result<Plane,MathError>`, `preset_spec(preset:PlanePreset)->Result<PlaneSpec,MathError>`, `mirror_centre(centre:&BigCentre)->Result<CentreF64,MathError>`, `split_scalar(value:&BigScalar)->Result<[f32;2],MathError>`, `split_centre(centre:&BigCentre)->Result<CentreSplit,MathError>`, `pixel_scale(zoom_log2:f64,grid_width:u32)->Result<f64,MathError>`, `scaled_pixel_scale(zoom_log2:f64,grid_width:u32)->Result<ScaledPixelScale,MathError>`, `scale_split(zoom_log2:f64,grid_width:u32)->Result<ScaleSplit,MathError>`, `shallow_pixel_scale(zoom_log2:f64,grid_width:u32)->Result<f32,MathError>`, `scaled_pixel_offset(plane:Plane,scale:ScaledPixelScale,extent:[u32;2],pixel:[u32;2])->Result<[f32;4],MathError>`, `centre_displacement_px(centre:&BigCentre,reference:&BigCentre,plane:Plane,zoom_log2:f64,grid_width:u32)->Result<[f64;2],MathError>`, `centre_from_reference_px` with the same arguments except `plane:&Plane`, `reference_shift_px(old:&BigCentre,new:&BigCentre,plane:&Plane,zoom_log2:f64,grid_width:u32)->Result<[f64;2],MathError>`, `precision_for(zoom_log2:f64,grid_width:u32,max_iter:u32)->Result<PrecisionPlan,MathError>`, and `escape_f32(point:[f32;4],params:EscapeParams)->Result<EscapeSample,MathError>`.
 
@@ -246,11 +246,11 @@ One wasm module is instantiated on main and in the worker with exported `worker_
 
 ### 3.5 Presentation-owned records and calls on math's boundary
 
-Math defines `ViewMode` as `#[repr(u32)] { Flat=0,Tumbled=1 }` and present re-exports it; present defines `PaletteId` as `#[repr(u32)] { Classic=0,Ember=1,Ice=2 }`.
+Math defines `ViewControls` as the seven-scalar CPU record of the VIEW controls and present re-exports it; present defines `PaletteId` as `#[repr(u32)] { Classic=0,Ember=1,Ice=2 }`.
 
 `PaletteRecord` is `#[repr(C,align(16))] { map:[f32;4],interior_rgba:[f32;4],clear_rgba:[f32;4] }`, 48 bytes; Classic is `{map:[64,0,0.78,1],interior:[0.005,0.005,0.008,1],clear:[0.015,0.018,0.025,1]}`, Ember is `{map:[48,0.02,0.88,1],interior:[0.01,0,0,1],clear:[0.015,0.008,0.005,1]}`, and Ice is `{map:[80,0.55,0.72,1],interior:[0,0.005,0.01,1],clear:[0.005,0.01,0.015,1]}`.
 
-`PresentHot` is the CPU-only record `{ epoch:u64,plane:Plane,plane_theta_1:f64,plane_theta_2:f64,zoom_log2:f64,view_time_seconds:f64,centre_from_reference_px:[f64;2] }`, and `PresentMain` carries `{ epoch:u64,orbit_generation:u32,grid:EscapeGrid,max_iter:u32,palette:PaletteId,view:ViewMode,plane_origin_f64:[f64;4],reference_shift_px:[f64;2] }`.
+`PresentHot` is the CPU-only record `{ epoch:u64,plane:Plane,plane_theta_1:f64,plane_theta_2:f64,zoom_log2:f64,view:ViewControls,centre_from_reference_px:[f64;2] }`, and `PresentMain` carries `{ epoch:u64,orbit_generation:u32,grid:EscapeGrid,max_iter:u32,palette:PaletteId,plane_origin_f64:[f64;4],reference_shift_px:[f64;2] }`.
 
 `HotSlot` is `{index:u32,dynamic_offset:u32,epoch:u64}`, where `index=refresh_id mod 3` and `dynamic_offset=index·hot_stride`; its checked constructor makes `Presenter::write_hot(slot,hot)` infallible.
 
@@ -321,7 +321,7 @@ Native plane tests pin axis order, the exact Mandelbrot and Julia presets, `R₁
 
 Navigation drift composes the five-by-five VIEW step `R₁₂(Δθ)·R₃₅(φΔθ)` for `10⁴` and `10⁵` steps with `Δθ=10⁻³` radians, measures `‖MᵀM−I‖_F=sqrt(Σᵢⱼ(MᵀM−I)ᵢⱼ²)`, and passes at `≤10⁻⁵` in hand-written f64 without re-orthonormalization and in f32 with modified Gram–Schmidt every 64 steps.
 
-Warp accuracy constructs `H` and its explicit inverse for both presets, hybrid PLANE angles, nonzero centre displacements and reference shifts, both view modes' compatible chart cases, and `zoom_log2∈{0,10,20,40,80,100}`; it requires `max|H⁻¹H−I|≤10⁻⁹` in hand-written f64 and separately pins every typed incompatibility and determinant refusal.
+Warp accuracy constructs `H` and its explicit inverse for both presets, hybrid PLANE angles, nonzero centre displacements and reference shifts, the compatible chart cases at height zero and under relief, and `zoom_log2∈{0,10,20,40,80,100}`; it requires `max|H⁻¹H−I|≤10⁻⁹` in hand-written f64 and separately pins every typed incompatibility and determinant refusal.
 
 If and only if an f64 case of either matrix oracle fails, implementation may add `faer`, rerun the identical corpus and metric, and record both values; the prior 3–13× tiny-matrix evidence otherwise keeps faer out.
 
@@ -375,7 +375,7 @@ A hand-rolled fixed-point scalar would make scaling explicit but would also make
 |Authoritative navigation may use a rounded mirror, the wrong drag scale, or the wrong sign.|The Astro-float navigation fixtures pin the anchor invariant through depth, exact negative after-scale drag, displacement round-trip, and atomic failure on invalid arithmetic.|
 |A single native bignum probe does not predict wasm worker speed or memory.|A labelled visible replay reports `compute_us`, credit, wasm size, and both instance memories at all four probe points.|
 |The 300-digit precision ceiling rejects valid deeper requests.|Overlay distinguishes requested depth, working precision, and policy refusal; a later increase requires measured worker memory/time evidence.|
-|Tumbled homography cannot reconstruct internal disocclusion or escape height.|Present's 9×9×5 visible error corpus reports max and p95 pixels and labels stale regions; evidence `requires visible replay`.|
+|The anchor homography cannot reconstruct internal disocclusion or escape height.|Present's 9×9×5 visible error corpus reports max and p95 pixels and labels stale regions; evidence `requires visible replay`.|
 |Generation and epoch exhaustion could become silent wrap.|Native tests begin one below each maximum and require typed session refusal.|
 |Normal rendering cannot cheaply total rebase and glitch channels.|Overlay says `unavailable`; an explicit labelled measurement readback is the sole counting oracle.|
 
@@ -405,5 +405,5 @@ The implementation estimate is about 2,410 new Rust and test lines; Cargo metada
 - Cross-slice source fixtures pin math's records, discriminants, callable signatures, cooperative orbit boundary, displacement directions, and authoritative navigation API; worker's formerly unresolved navigation item is closed by this math-owned interface, while downstream adoption remains orchestrator integration work.
 - The scaled GPU operation sequence, especially exponent-aware products near subnormal range, still needs browser conformance evidence against the f64 mirror.
 - Astro-float won the native probe, but browser worker throughput, wasm size, and duplicated instance-memory cost remain unmeasured.
-- The exact visible acceptance envelope for tumbled warp remains present policy and cannot be retired by math's inverse-times-forward oracle alone.
+- The exact visible acceptance envelope for the anchor warp remains present policy and cannot be retired by math's inverse-times-forward oracle alone.
 - Aggregate rebase and glitch totals remain unavailable during normal rendering; whether explicit measurement mode is worth its readback cost is an app decision.
