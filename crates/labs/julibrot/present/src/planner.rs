@@ -56,7 +56,7 @@ impl Warp {
             chart_residual,
             full_corpus,
         )
-            .map_or_else(|| clear_only(true), enforce_error_ceiling)
+        .map_or_else(|| clear_only(true), enforce_error_ceiling)
     }
 }
 
@@ -122,8 +122,8 @@ fn anchor_plan(
     let destination = screen_corners(from_pose).map(|corner| homogeneous(flat_forward, corner));
     let inverse_sampling = solve_homogeneous(destination, source)?;
     let rows = pack_homography_rows(inverse_sampling)?;
-    let metrics = sampled_errors(from_pose, to_pose, inverse_sampling, full_corpus).and_then(
-        |mut errors| {
+    let metrics =
+        sampled_errors(from_pose, to_pose, inverse_sampling, full_corpus).and_then(|mut errors| {
             if errors.is_empty() {
                 return None;
             }
@@ -135,8 +135,7 @@ fn anchor_plan(
                 .div_ceil(100)
                 .saturating_sub(1);
             Some((maximum, *errors.get(percentile_index)?))
-        },
-    );
+        });
     Some(WarpPlan {
         rows,
         source_scene_id: Some(last_frame.scene_id),
@@ -201,9 +200,7 @@ fn sampled_errors(
     } else {
         MANDATORY_SCREEN_STRIDE
     };
-    let screen_sample_count = usize::try_from(SCREEN_STEPS)
-        .ok()?
-        .div_ceil(screen_stride);
+    let screen_sample_count = usize::try_from(SCREEN_STEPS).ok()?.div_ceil(screen_stride);
     let sample_count = screen_sample_count * screen_sample_count * HEIGHT_SAMPLES.len();
     let mut errors = Vec::new();
     errors.try_reserve_exact(sample_count).ok()?;
@@ -773,8 +770,8 @@ mod tests {
         to.zoom_log2 += 0.1;
         let ordinary = reproject(&frame(&from), &from, &to);
         let approximate = unpack_rows(ordinary.rows);
-        let mandatory = sampled_errors(&from, &to, approximate, false)
-            .expect("the mandatory corpus projects");
+        let mandatory =
+            sampled_errors(&from, &to, approximate, false).expect("the mandatory corpus projects");
         let full = sampled_errors(&from, &to, approximate, true)
             .expect("the full validation corpus projects");
         assert_eq!(mandatory.len(), 3 * 3 * HEIGHT_SAMPLES.len());
