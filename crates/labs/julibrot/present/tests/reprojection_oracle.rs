@@ -1,15 +1,30 @@
-use ember_julibrot_kernels::RefinementLevel;
+use ember_julibrot_kernels::{
+    EscapeParams, KernelSample, RefinementLevel, escape_shallow_point,
+};
 use ember_julibrot_math::{
-    ObjectAngles, Pose, PoseMap, PrecisionMode, ViewControls, construct_plane, screen_to_plane,
+    EscapeGridRecord, ObjectAngles, Pose, PoseMap, PrecisionMode, ViewControls, construct_plane,
+    pixel_scale, screen_to_plane,
 };
 use ember_julibrot_present::{
-    PaletteId, SampleClass, SceneFrame, SubmissionKind, SubmissionMeasurement, WARP_MAX_ERROR_PX,
-    Warp, WarpKind, WarpValidation, apply_homography, project_scene_point,
+    CLASSIC_PALETTE, PaletteId, SampleClass, SceneFrame, SubmissionKind, SubmissionMeasurement,
+    WARP_MAX_ERROR_PX, Warp, WarpKind, WarpValidation, apply_homography, project_scene_point,
+    shade_lit_escape_record,
 };
 
-const EXTENT: [u32; 2] = [960, 540];
+const EXTENT: [u32; 2] = [96, 54];
+const BASE_ORIGIN: [f64; 4] = [0.0, 0.0, -0.75, 0.1];
+const ESCAPE: EscapeParams = EscapeParams::new(128);
+const LIGHT: f32 = 0.7;
 
-fn pose(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Expected {
+    Agree,
+    Clear,
+    Either,
+}
+
+fn pose_at(
+    extent: [u32; 2],
     object: ObjectAngles,
     view: ViewControls,
     origin: [f64; 4],
@@ -21,9 +36,9 @@ fn pose(
         &object,
         &view,
         zoom_log2,
-        EXTENT[0],
-        EXTENT[1],
-        f64::from(EXTENT[0]) / f64::from(EXTENT[1]),
+        extent[0],
+        extent[1],
+        f64::from(extent[0]) / f64::from(extent[1]),
     )
     .map_or(PoseMap::EdgeOn, PoseMap::Mapped);
     Pose {
@@ -34,21 +49,31 @@ fn pose(
         plane_origin: origin,
         zoom_log2,
         view,
-        grid_width: EXTENT[0],
-        grid_height: EXTENT[1],
+        grid_width: extent[0],
+        grid_height: extent[1],
         map,
         centre_from_reference_px: displacement,
     }
 }
 
-const fn frame(pose: &Pose) -> SceneFrame {
+fn pose(
+    object: ObjectAngles,
+    view: ViewControls,
+    origin: [f64; 4],
+    zoom_log2: f64,
+    displacement: [f64; 2],
+) -> Pose {
+    pose_at(EXTENT, object, view, origin, zoom_log2, displacement)
+}
+
+fn frame(pose: &Pose) -> SceneFrame {
     SceneFrame {
         scene_id: 7,
         pose: *pose,
         palette: PaletteId::Classic,
-        iteration_cap: 512,
+        iteration_cap: ESCAPE.max_iter,
         level: RefinementLevel::Final,
-        extent: EXTENT,
+        extent: [pose.grid_width, pose.grid_height],
         texture_index: 1,
         centre_revision: 1,
         plane_origin_f64: pose.plane_origin,
@@ -70,23 +95,227 @@ fn rows(plan: [[f32; 4]; 3]) -> [f64; 9] {
     core::array::from_fn(|index| f64::from(plan[index / 3][index % 3]))
 }
 
-fn inside(point: [f64; 2]) -> bool {
-    point[0].abs() <= f64::from(EXTENT[0]) * 0.5 && point[1].abs() <= f64::from(EXTENT[1]) * 0.5
+fn map_plane_offset(pose: &Pose, screen: [f64; 2]) -> Option<[f64; 2]> {
+    let PoseMap::Mapped(map) = pose.map else {
+        return None;
+    };
+    let denominator =
+        map.rows[6].mul_add(screen[0], map.rows[7].mul_add(screen[1], map.rows[8]));
+    if !denominator.is_finite() || denominator <= 0.0 {
+        return None;
+    }
+    let mapped = [
+        map.rows[0].mul_add(screen[0], map.rows[1].mul_add(screen[1], map.rows[2]))
+            / denominator,
+        map.rows[3].mul_add(screen[0], map.rows[4].mul_add(screen[1], map.rows[5]))
+            / denominator,
+    ];
+    mapped
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(mapped)
 }
 
-fn assert_agrees(name: &str, from: &Pose, to: &Pose, height: f64, must_clear: bool) {
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the oracle intentionally rounds the same finite chart coordinates to kernel f32"
+)]
+fn sample_pose(pose: &Pose, screen: [f64; 2]) -> Option<KernelSample> {
+    let Some(offset) = map_plane_offset(pose, screen) else {
+        return Some(KernelSample {
+            record: EscapeGridRecord {
+                smooth_iter: -1.0,
+                escaped: 0.0,
+                rebase_count: 0.0,
+                status: 2.0,
+            },
+            escape_index: None,
+        });
+    };
+    let scale = pixel_scale(pose.zoom_log2, pose.grid_width).ok()?;
+    let coordinate = [
+        pose.centre_from_reference_px[0] + offset[0],
+        pose.centre_from_reference_px[1] + offset[1],
+    ];
+    let point = core::array::from_fn(|axis| {
+        (pose.plane_origin[axis]
+            + scale
+                * f64::from(pose.plane.basis_u[axis]).mul_add(
+                    coordinate[0],
+                    f64::from(pose.plane.basis_v[axis]) * coordinate[1],
+                )) as f32
+    });
+    escape_shallow_point(point, ESCAPE).ok()
+}
+
+fn pixel_screen(extent: [u32; 2], column: u32, row: u32) -> [f64; 2] {
+    [
+        0.5_f64.mul_add(-f64::from(extent[0]), f64::from(column) + 0.5),
+        0.5_f64.mul_add(-f64::from(extent[1]), f64::from(row) + 0.5),
+    ]
+}
+
+fn render_retained(pose: &Pose) -> Vec<KernelSample> {
+    (0..pose.grid_height)
+        .flat_map(|row| {
+            (0..pose.grid_width).map(move |column| {
+                sample_pose(
+                    pose,
+                    pixel_screen([pose.grid_width, pose.grid_height], column, row),
+                )
+                .expect("retained pixel samples")
+            })
+        })
+        .collect()
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "bounds checks prove the rounded nearest-pixel indices fit the render extent"
+)]
+fn nearest_retained(
+    image: &[KernelSample],
+    extent: [u32; 2],
+    source: [f64; 2],
+) -> Option<KernelSample> {
+    let column = (source[0] + f64::from(extent[0]) * 0.5 - 0.5).round();
+    let row = (source[1] + f64::from(extent[1]) * 0.5 - 0.5).round();
+    if column < 0.0
+        || row < 0.0
+        || column >= f64::from(extent[0])
+        || row >= f64::from(extent[1])
+    {
+        return None;
+    }
+    let index = row as usize * extent[0] as usize + column as usize;
+    image.get(index).copied()
+}
+
+fn record(sample: KernelSample) -> [f32; 4] {
+    [
+        sample.record.smooth_iter,
+        sample.record.escaped,
+        sample.record.rebase_count,
+        sample.record.status,
+    ]
+}
+
+fn same_terminal_and_index(left: KernelSample, right: KernelSample) -> bool {
+    left.record.escaped.to_bits() == right.record.escaped.to_bits()
+        && left.record.status.to_bits() == right.record.status.to_bits()
+        && left.escape_index == right.escape_index
+}
+
+fn colours_within_one_code(left: KernelSample, right: KernelSample) -> bool {
+    let left = shade_lit_escape_record(record(left), CLASSIC_PALETTE, LIGHT).rgba;
+    let right = shade_lit_escape_record(record(right), CLASSIC_PALETTE, LIGHT).rgba;
+    left.into_iter()
+        .zip(right)
+        .all(|(left, right)| (left - right).abs() <= 1.0 / 255.0 + f32::EPSILON)
+}
+
+fn stable_fresh_sample(pose: &Pose, target: [f64; 2]) -> Option<KernelSample> {
+    let centre = sample_pose(pose, target)?;
+    for y in [-0.5, 0.0, 0.5] {
+        for x in [-0.5, 0.0, 0.5] {
+            let nearby = sample_pose(pose, [target[0] + x, target[1] + y])?;
+            if !same_terminal_and_index(centre, nearby) || !colours_within_one_code(centre, nearby) {
+                return None;
+            }
+        }
+    }
+    Some(centre)
+}
+
+fn oracle_points(extent: [u32; 2]) -> Vec<[f64; 2]> {
+    let mut points = Vec::with_capacity(99);
+    for row in 0..5 {
+        for column in 0..7 {
+            points.push([
+                ((f64::from(column) + 0.37) / 7.0 - 0.5) * f64::from(extent[0]) * 0.8,
+                ((f64::from(row) + 0.61) / 5.0 - 0.5) * f64::from(extent[1]) * 0.8,
+            ]);
+        }
+    }
+    let mut state = 0x7a11_ce55_u32;
+    for _ in 0..64 {
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let x = f64::from(state) / f64::from(u32::MAX) - 0.5;
+        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let y = f64::from(state) / f64::from(u32::MAX) - 0.5;
+        points.push([
+            x * f64::from(extent[0]) * 0.8,
+            y * f64::from(extent[1]) * 0.8,
+        ]);
+    }
+    points
+}
+
+fn compare_accepted(
+    name: &str,
+    from: &Pose,
+    to: &Pose,
+    plan_rows: [[f32; 4]; 3],
+    maximum: f64,
+    height: f64,
+) -> u32 {
+    let inverse = rows(plan_rows);
+    let retained = render_retained(from);
+    let mut compared = 0_u32;
+    for target in oracle_points([to.grid_width, to.grid_height]) {
+        let source = apply_homography(inverse, target)
+            .unwrap_or_else(|| panic!("{name}: accepted map had an off-corpus pole"));
+        let destination_relief = project_scene_point(to, target, height)
+            .unwrap_or_else(|| panic!("{name}: destination had an off-corpus pole"));
+        let expected_source = project_scene_point(from, source, height)
+            .unwrap_or_else(|| panic!("{name}: retained scene had an off-corpus pole"));
+        let warped_source = apply_homography(inverse, destination_relief)
+            .unwrap_or_else(|| panic!("{name}: warp had an off-corpus pole"));
+        let error = (warped_source[0] - expected_source[0])
+            .hypot(warped_source[1] - expected_source[1]);
+        assert!(error <= maximum + 1.0e-6, "{name}: {error} > {maximum}");
+
+        let Some(fresh) = stable_fresh_sample(to, target) else {
+            continue;
+        };
+        let Some(retained) =
+            nearest_retained(&retained, [from.grid_width, from.grid_height], source)
+        else {
+            continue;
+        };
+        assert!(
+            same_terminal_and_index(retained, fresh),
+            "{name}: terminal/index mismatch"
+        );
+        assert!(
+            colours_within_one_code(retained, fresh),
+            "{name}: colour mismatch"
+        );
+        compared = compared.saturating_add(1);
+    }
+    assert!(
+        compared >= 8,
+        "{name}: only {compared} stable independent samples"
+    );
+    compared
+}
+
+fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Expected) {
     let plan = Warp::reproject(
         &frame(from),
         from,
         to,
         PrecisionMode::PictureFast,
-        WarpValidation::Final,
+        WarpValidation::Ordinary,
     );
-    if must_clear {
-        assert_eq!(plan.kind, WarpKind::ClearOnly, "{name}");
+    if plan.kind == WarpKind::ClearOnly {
+        assert_ne!(expected, Expected::Agree, "{name}: unexpectedly cleared");
+        assert!(!plan.source_valid, "{name}: clear plan retained a source");
+        eprintln!("oracle fixture | {name} | cleared");
         return;
     }
-    assert_eq!(plan.kind, WarpKind::AnchorHomography, "{name}");
+    assert_ne!(expected, Expected::Clear, "{name}: unexpectedly displayed");
     assert!(plan.source_valid, "{name}");
     assert_eq!(plan.source_scene_id, Some(7), "{name}");
     assert_eq!(plan.source_texture_index, Some(1), "{name}");
@@ -94,149 +323,336 @@ fn assert_agrees(name: &str, from: &Pose, to: &Pose, height: f64, must_clear: bo
         .approx_max_error_px
         .expect("every displayable plan publishes its measured maximum");
     assert!(maximum <= WARP_MAX_ERROR_PX, "{name}: {maximum}");
-    let inverse_sampling = rows(plan.rows);
-    let mut comparisons = 0_u32;
-    for row in 0..9 {
-        for column in 0..9 {
-            let target = [
-                (f64::from(column) / 8.0 - 0.5) * f64::from(EXTENT[0]),
-                (f64::from(row) / 8.0 - 0.5) * f64::from(EXTENT[1]),
-            ];
-            let Some(source_flat) = apply_homography(inverse_sampling, target) else {
-                continue;
-            };
-            let Some(fresh_destination) = project_scene_point(to, target, height) else {
-                continue;
-            };
-            let Some(fresh_source) = project_scene_point(from, source_flat, height) else {
-                continue;
-            };
-            let Some(warped_source) = apply_homography(inverse_sampling, fresh_destination) else {
-                continue;
-            };
-            if !inside(fresh_source) || !inside(warped_source) {
-                continue;
-            }
-            let error =
-                (fresh_source[0] - warped_source[0]).hypot(fresh_source[1] - warped_source[1]);
-            assert!(error <= maximum + 1.0e-3, "{name}: {error} > {maximum}");
-            comparisons = comparisons.saturating_add(1);
-        }
-    }
-    assert!(comparisons > 0, "{name} had no shared source points");
+    let compared = compare_accepted(name, from, to, plan.rows, maximum, height);
+    eprintln!("oracle fixture | {name} | agree | samples={compared} | bound={maximum:.6}");
 }
 
-const fn relief() -> ViewControls {
+fn flat() -> Pose {
+    pose(
+        ObjectAngles::JULIA,
+        ViewControls::NEUTRAL,
+        BASE_ORIGIN,
+        0.0,
+        [0.0; 2],
+    )
+}
+
+fn relief() -> ViewControls {
     let mut camera = [0.0; 10];
-    camera[8] = 0.3;
+    camera[8] = 0.25;
     ViewControls {
         camera,
-        camera_yaw: 0.2,
-        camera_pitch: -0.15,
+        camera_yaw: 0.12,
+        camera_pitch: -0.09,
         height_scale: 1.0,
         ..ViewControls::NEUTRAL
     }
 }
 
+fn object_angle(mut object: ObjectAngles, index: usize, delta: f64) -> ObjectAngles {
+    match index {
+        0 => object.rho_12 += delta,
+        1 => object.rho_13 += delta,
+        2 => object.rho_14 += delta,
+        3 => object.rho_23 += delta,
+        4 => object.rho_24 += delta,
+        5 => object.rho_34 += delta,
+        _ => panic!("object factor index {index}"),
+    }
+    object
+}
+
 #[test]
 #[allow(
     clippy::too_many_lines,
-    reason = "one corpus test keeps every accepted and refused navigation motion visible together"
+    reason = "one independent oracle keeps every required reprojection degree of freedom visible"
 )]
-fn retained_warp_matches_fresh_scene_over_the_navigation_corpus() {
-    let flat = pose(
-        ObjectAngles::JULIA,
-        ViewControls::NEUTRAL,
-        [0.0; 4],
-        0.0,
-        [0.0; 2],
-    );
+fn retained_warp_matches_independent_fresh_scenes() {
+    let base = flat();
 
-    let mut pan = flat;
-    pan.centre_from_reference_px = [5.0, -3.0];
-    assert_agrees("pure pan", &flat, &pan, 0.0, false);
+    let mut pan = base;
+    pan.centre_from_reference_px = [0.25, -0.2];
+    assert_fixture("pure pan", &base, &pan, 0.0, Expected::Agree);
 
-    let mut zoom = flat;
-    zoom.zoom_log2 = 0.1;
-    assert_agrees("pure zoom", &flat, &zoom, 0.0, false);
+    let mut zoom = base;
+    zoom.zoom_log2 = 0.05;
+    assert_fixture("pure zoom", &base, &zoom, 0.0, Expected::Agree);
 
-    let mut rotated_flat_view = ViewControls::NEUTRAL;
-    rotated_flat_view.camera[0] = 0.1;
-    let rotated_flat = pose(
-        ObjectAngles::JULIA,
-        rotated_flat_view,
-        [0.0; 4],
-        0.0,
-        [0.0; 2],
-    );
-    assert_agrees("view rotation h=0", &flat, &rotated_flat, 0.0, false);
+    for index in 0..6 {
+        let tiny = pose(
+            object_angle(ObjectAngles::JULIA, index, 1.0e-9),
+            ViewControls::NEUTRAL,
+            BASE_ORIGIN,
+            0.0,
+            [0.0; 2],
+        );
+        assert_fixture(
+            &format!("object {index} tiny"),
+            &base,
+            &tiny,
+            0.0,
+            Expected::Agree,
+        );
+        let changed = pose(
+            object_angle(ObjectAngles::JULIA, index, 0.3),
+            ViewControls::NEUTRAL,
+            BASE_ORIGIN,
+            0.0,
+            [0.0; 2],
+        );
+        assert_fixture(
+            &format!("object {index} changed"),
+            &base,
+            &changed,
+            0.0,
+            Expected::Clear,
+        );
+    }
 
-    let relief_from = pose(ObjectAngles::JULIA, relief(), [0.0; 4], 0.0, [0.0; 2]);
-    let mut relief_to_view = relief();
-    relief_to_view.camera[8] += 1.0e-4;
-    let relief_to = pose(ObjectAngles::JULIA, relief_to_view, [0.0; 4], 0.0, [0.0; 2]);
-    assert_agrees("view rotation h=1", &relief_from, &relief_to, 1.0, false);
+    for index in 0..10 {
+        let mut flat_view = ViewControls::NEUTRAL;
+        flat_view.camera[index] = 0.2;
+        let turned = pose(
+            ObjectAngles::JULIA,
+            flat_view,
+            BASE_ORIGIN,
+            0.0,
+            [0.0; 2],
+        );
+        assert_fixture(
+            &format!("camera {index} h0"),
+            &base,
+            &turned,
+            0.0,
+            Expected::Agree,
+        );
+
+        let from = pose(
+            ObjectAngles::JULIA,
+            relief(),
+            BASE_ORIGIN,
+            0.0,
+            [0.0; 2],
+        );
+        let mut relief_view = relief();
+        relief_view.camera[index] += 0.2;
+        let to = pose(
+            ObjectAngles::JULIA,
+            relief_view,
+            BASE_ORIGIN,
+            0.0,
+            [0.0; 2],
+        );
+        assert_fixture(
+            &format!("camera {index} h1"),
+            &from,
+            &to,
+            1.0,
+            Expected::Either,
+        );
+    }
 
     let mut observer = ViewControls::NEUTRAL;
-    observer.camera_yaw = 1.0e-4;
-    observer.camera_pitch = -1.0e-4;
-    let observer_pose = pose(ObjectAngles::JULIA, observer, [0.0; 4], 0.0, [0.0; 2]);
-    assert_agrees("camera yaw pitch", &flat, &observer_pose, 0.0, false);
-
-    let mut tiny_object = ObjectAngles::JULIA;
-    tiny_object.rho_12 += 1.0e-9;
-    let tiny_object_pose = pose(tiny_object, ViewControls::NEUTRAL, [0.0; 4], 0.0, [0.0; 2]);
-    assert_agrees("object 1e-9", &flat, &tiny_object_pose, 0.0, false);
-
-    let mut changed_object = ObjectAngles::JULIA;
-    changed_object.rho_12 += 0.3;
-    let changed_object_pose = pose(
-        changed_object,
-        ViewControls::NEUTRAL,
-        [0.0; 4],
+    observer.camera_yaw = 0.2;
+    observer.camera_pitch = -0.15;
+    let observer = pose(
+        ObjectAngles::JULIA,
+        observer,
+        BASE_ORIGIN,
         0.0,
         [0.0; 2],
     );
-    assert_agrees("object 0.3", &flat, &changed_object_pose, 0.0, true);
+    assert_fixture("yaw pitch h0", &base, &observer, 0.0, Expected::Agree);
+
+    let relief_from = pose(
+        ObjectAngles::JULIA,
+        relief(),
+        BASE_ORIGIN,
+        0.0,
+        [0.0; 2],
+    );
+    let mut observer_relief = relief();
+    observer_relief.camera_yaw += 0.2;
+    observer_relief.camera_pitch -= 0.15;
+    let observer_relief = pose(
+        ObjectAngles::JULIA,
+        observer_relief,
+        BASE_ORIGIN,
+        0.0,
+        [0.0; 2],
+    );
+    assert_fixture(
+        "yaw pitch h1",
+        &relief_from,
+        &observer_relief,
+        1.0,
+        Expected::Either,
+    );
+
+    for (name, field) in [("distance five", 5_u8), ("distance four", 4_u8)] {
+        let mut flat_view = ViewControls::NEUTRAL;
+        if field == 5 {
+            flat_view.distance_five = 6.5;
+        } else {
+            flat_view.distance_four = 6.5;
+        }
+        let flat_to = pose(
+            ObjectAngles::JULIA,
+            flat_view,
+            BASE_ORIGIN,
+            0.0,
+            [0.0; 2],
+        );
+        assert_fixture(
+            &format!("{name} h0"),
+            &base,
+            &flat_to,
+            0.0,
+            Expected::Agree,
+        );
+        let mut relief_view = relief();
+        if field == 5 {
+            relief_view.distance_five = 6.5;
+        } else {
+            relief_view.distance_four = 6.5;
+        }
+        let relief_to = pose(
+            ObjectAngles::JULIA,
+            relief_view,
+            BASE_ORIGIN,
+            0.0,
+            [0.0; 2],
+        );
+        assert_fixture(
+            &format!("{name} h1"),
+            &relief_from,
+            &relief_to,
+            1.0,
+            Expected::Either,
+        );
+    }
+
+    let mut height_view = relief();
+    height_view.height_scale = 1.4;
+    let height_to = pose(
+        ObjectAngles::JULIA,
+        height_view,
+        BASE_ORIGIN,
+        0.0,
+        [0.0; 2],
+    );
+    assert_fixture(
+        "height scale",
+        &relief_from,
+        &height_to,
+        1.0,
+        Expected::Either,
+    );
+
+    let mut translated_view = relief();
+    translated_view.camera_translation = [1.0e-4, -2.0e-4, 1.5e-4, 0.0, 1.0e-4];
+    let translated = pose(
+        ObjectAngles::JULIA,
+        translated_view,
+        BASE_ORIGIN,
+        0.0,
+        [0.0; 2],
+    );
+    assert_fixture(
+        "camera translation h1",
+        &relief_from,
+        &translated,
+        1.0,
+        Expected::Agree,
+    );
 
     let in_plane = pose(
         ObjectAngles::JULIA,
         ViewControls::NEUTRAL,
-        [0.001, -0.0005, 0.0, 0.0],
+        [0.01, -0.005, BASE_ORIGIN[2], BASE_ORIGIN[3]],
         0.0,
         [0.0; 2],
     );
-    assert_agrees("in-plane origin", &flat, &in_plane, 0.0, false);
+    assert_fixture(
+        "in-plane origin",
+        &base,
+        &in_plane,
+        0.0,
+        Expected::Agree,
+    );
     let out_of_plane = pose(
         ObjectAngles::JULIA,
         ViewControls::NEUTRAL,
-        [0.0, 0.0, 0.01, 0.0],
+        [0.0, 0.0, BASE_ORIGIN[2] + 0.01, BASE_ORIGIN[3]],
         0.0,
         [0.0; 2],
     );
-    assert_agrees("out-of-plane origin", &flat, &out_of_plane, 0.0, true);
+    assert_fixture(
+        "out-of-plane origin",
+        &base,
+        &out_of_plane,
+        0.0,
+        Expected::Clear,
+    );
 
-    let translated = pose(
+    let resized = pose_at(
+        [80, 60],
         ObjectAngles::JULIA,
-        ViewControls {
-            camera_translation: [0.1, -0.05, 0.02, 0.0, 0.03],
-            ..ViewControls::NEUTRAL
-        },
-        [0.0; 4],
+        ViewControls::NEUTRAL,
+        BASE_ORIGIN,
         0.0,
         [0.0; 2],
     );
-    assert_agrees("camera translation", &flat, &translated, 0.0, false);
+    assert_fixture(
+        "extent aspect",
+        &base,
+        &resized,
+        0.0,
+        Expected::Agree,
+    );
+
+    let mut edge_on = base;
+    edge_on.map = PoseMap::EdgeOn;
+    assert_fixture("edge on", &base, &edge_on, 0.0, Expected::Clear);
+
+    let pole_view = ViewControls {
+        height_scale: 1.0,
+        distance_five: 1.0,
+        ..ViewControls::NEUTRAL
+    };
+    let pole = pose(
+        ObjectAngles::JULIA,
+        pole_view,
+        BASE_ORIGIN,
+        0.0,
+        [0.0; 2],
+    );
+    assert_fixture(
+        "pole inside frame",
+        &pole,
+        &pole,
+        1.0,
+        Expected::Clear,
+    );
 
     let mut cross_view = relief();
-    cross_view.camera_translation = [1.0e-4, -2.0e-4, 0.0, 0.0, 1.0e-4];
-    cross_view.camera_yaw += 1.0e-4;
+    cross_view.camera[0] += 0.08;
+    cross_view.camera[6] -= 0.05;
+    cross_view.camera_translation = [0.01, -0.005, 0.008, 0.0, 0.006];
+    cross_view.camera_yaw += 0.04;
+    cross_view.distance_four = 7.8;
     let cross = pose(
         ObjectAngles::JULIA,
         cross_view,
-        [1.0e-5, -1.0e-5, 0.0, 0.0],
-        0.001,
-        [0.1, -0.1],
+        [0.002, -0.001, BASE_ORIGIN[2], BASE_ORIGIN[3]],
+        0.03,
+        [0.2, -0.15],
     );
-    assert_agrees("cross terms", &relief_from, &cross, 1.0, false);
+    assert_fixture(
+        "cross terms",
+        &relief_from,
+        &cross,
+        1.0,
+        Expected::Either,
+    );
 }
