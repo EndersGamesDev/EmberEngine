@@ -178,7 +178,7 @@ fn nearest_retained(
     image: &[KernelSample],
     extent: [u32; 2],
     source: [f64; 2],
-) -> Option<KernelSample> {
+) -> Option<(KernelSample, [f64; 2])> {
     let column = (source[0] + f64::from(extent[0]) * 0.5 - 0.5).round();
     let row = (source[1] + f64::from(extent[1]) * 0.5 - 0.5).round();
     if column < 0.0
@@ -189,7 +189,11 @@ fn nearest_retained(
         return None;
     }
     let index = row as usize * extent[0] as usize + column as usize;
-    image.get(index).copied()
+    let sample = image.get(index).copied()?;
+    Some((
+        sample,
+        pixel_screen(extent, column as u32, row as u32),
+    ))
 }
 
 fn record(sample: KernelSample) -> [f32; 4] {
@@ -215,11 +219,45 @@ fn colours_within_one_code(left: KernelSample, right: KernelSample) -> bool {
         .all(|(left, right)| (left - right).abs() <= 1.0 / 255.0 + f32::EPSILON)
 }
 
-fn stable_fresh_sample(pose: &Pose, target: [f64; 2]) -> Option<KernelSample> {
+fn invert_homography(matrix: [f64; 9]) -> Option<[f64; 9]> {
+    let determinant = matrix[0]
+        .mul_add(
+            matrix[4].mul_add(matrix[8], -matrix[5] * matrix[7]),
+            -matrix[1] * matrix[3].mul_add(matrix[8], -matrix[5] * matrix[6]),
+        )
+        + matrix[2] * matrix[3].mul_add(matrix[7], -matrix[4] * matrix[6]);
+    if !determinant.is_finite() || determinant.abs() <= 1.0e-12 {
+        return None;
+    }
+    let inverse = [
+        matrix[4].mul_add(matrix[8], -matrix[5] * matrix[7]) / determinant,
+        matrix[2].mul_add(matrix[7], -matrix[1] * matrix[8]) / determinant,
+        matrix[1].mul_add(matrix[5], -matrix[2] * matrix[4]) / determinant,
+        matrix[5].mul_add(matrix[6], -matrix[3] * matrix[8]) / determinant,
+        matrix[0].mul_add(matrix[8], -matrix[2] * matrix[6]) / determinant,
+        matrix[2].mul_add(matrix[3], -matrix[0] * matrix[5]) / determinant,
+        matrix[3].mul_add(matrix[7], -matrix[4] * matrix[6]) / determinant,
+        matrix[1].mul_add(matrix[6], -matrix[0] * matrix[7]) / determinant,
+        matrix[0].mul_add(matrix[4], -matrix[1] * matrix[3]) / determinant,
+    ];
+    inverse.iter().all(|value| value.is_finite()).then_some(inverse)
+}
+
+fn stable_across_sampling_envelope(
+    pose: &Pose,
+    target: [f64; 2],
+    sampled_target: [f64; 2],
+    maximum: f64,
+) -> Option<KernelSample> {
     let centre = sample_pose(pose, target)?;
-    for y in [-0.5, 0.0, 0.5] {
-        for x in [-0.5, 0.0, 0.5] {
-            let nearby = sample_pose(pose, [target[0] + x, target[1] + y])?;
+    for step in 0..=4 {
+        let fraction = f64::from(step) * 0.25;
+        let point = [
+            (sampled_target[0] - target[0]).mul_add(fraction, target[0]),
+            (sampled_target[1] - target[1]).mul_add(fraction, target[1]),
+        ];
+        for offset in [[0.0, 0.0], [maximum, 0.0], [-maximum, 0.0], [0.0, maximum], [0.0, -maximum]] {
+            let nearby = sample_pose(pose, [point[0] + offset[0], point[1] + offset[1]])?;
             if !same_terminal_and_index(centre, nearby) || !colours_within_one_code(centre, nearby) {
                 return None;
             }
@@ -261,6 +299,7 @@ fn compare_accepted(
     height: f64,
 ) -> u32 {
     let inverse = rows(plan_rows);
+    let forward = invert_homography(inverse).expect("accepted warp is invertible");
     let retained = render_retained(from);
     let mut compared = 0_u32;
     for target in oracle_points([to.grid_width, to.grid_height]) {
@@ -276,11 +315,15 @@ fn compare_accepted(
             .hypot(warped_source[1] - expected_source[1]);
         assert!(error <= maximum + 1.0e-6, "{name}: {error} > {maximum}");
 
-        let Some(fresh) = stable_fresh_sample(to, target) else {
+        let Some((retained, retained_pixel)) =
+            nearest_retained(&retained, [from.grid_width, from.grid_height], source)
+        else {
             continue;
         };
-        let Some(retained) =
-            nearest_retained(&retained, [from.grid_width, from.grid_height], source)
+        let sampled_target = apply_homography(forward, retained_pixel)
+            .unwrap_or_else(|| panic!("{name}: retained pixel mapped through a pole"));
+        let Some(fresh) =
+            stable_across_sampling_envelope(to, target, sampled_target, maximum)
         else {
             continue;
         };
