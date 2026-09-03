@@ -500,7 +500,12 @@ fn compare_redraw(name: &str, from: &Pose, to: &Pose) -> (u32, u32, u32) {
             &retained,
             &retained_vertices,
         );
-        let freshly_drawn = sample_redraw_mesh(target, [to.grid_width, to.grid_height], &fresh, &fresh_vertices);
+        let freshly_drawn = sample_redraw_mesh(
+            target,
+            [to.grid_width, to.grid_height],
+            &fresh,
+            &fresh_vertices,
+        );
         let (Some(redrawn), Some(freshly_drawn)) = (redrawn, freshly_drawn) else {
             if redrawn.is_some() {
                 uncertain = uncertain.saturating_add(1);
@@ -544,7 +549,10 @@ fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Exp
             ),
             "{name}: unexpectedly selected a relief redraw"
         );
-        assert!(plan.source_valid, "{name}: relief redraw lost its record source");
+        assert!(
+            plan.source_valid,
+            "{name}: relief redraw lost its record source"
+        );
         assert_eq!(plan.source_scene_id, Some(7), "{name}");
         assert_eq!(plan.source_texture_index, Some(1), "{name}");
         let maximum = plan

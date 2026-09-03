@@ -541,7 +541,9 @@ impl Presenter {
         let source_slot = self.hot_warp_source[hot_slot.index() as usize];
         let source = source_slot.frame(self.ledger.retained()).cloned();
         let source_scene_id = source.as_ref().map(|frame| frame.scene_id);
-        let texture_index = source.as_ref().map_or(0, |frame| frame.texture_index as usize);
+        let texture_index = source
+            .as_ref()
+            .map_or(0, |frame| frame.texture_index as usize);
         let relief_redraw = source_slot.relief_frame(self.ledger.retained()).is_some();
         if source.is_none() {
             self.clear_hot_source(hot_slot);
