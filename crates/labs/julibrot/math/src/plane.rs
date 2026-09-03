@@ -80,10 +80,19 @@ pub fn plane_chart_relation(retained: Plane, requested: Plane) -> Option<PlaneCh
         dot_f64(retained_v, requested_u),
         dot_f64(retained_v, requested_v),
     ];
-    let residual_u = span_residual(requested_u, retained_u, retained_v, [overlap[0], overlap[2]]);
-    let residual_v = span_residual(requested_v, retained_u, retained_v, [overlap[1], overlap[3]]);
-    if residual_u > f64::from(PLANE_SPAN_TOLERANCE)
-        || residual_v > f64::from(PLANE_SPAN_TOLERANCE)
+    let residual_u = span_residual(
+        requested_u,
+        retained_u,
+        retained_v,
+        [overlap[0], overlap[2]],
+    );
+    let residual_v = span_residual(
+        requested_v,
+        retained_u,
+        retained_v,
+        [overlap[1], overlap[3]],
+    );
+    if residual_u > f64::from(PLANE_SPAN_TOLERANCE) || residual_v > f64::from(PLANE_SPAN_TOLERANCE)
     {
         return None;
     }
