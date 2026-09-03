@@ -12,8 +12,9 @@
 #
 #   EMBER_REF=v12 bash deploy/host.sh up
 #
-# Needs git, a Rust toolchain, cloudflared, python3 and curl. The first build
-# takes minutes; later ones seconds.
+# Run deploy/bootstrap-host.sh first on a bare host. This script itself needs
+# git, a Rust toolchain, cloudflared and python3. The first build takes minutes;
+# later ones seconds.
 #
 # WHY THE NAME GOES THROUGH THE ENVIRONMENT. The servers are started with
 # EMBER_HOST_NAME in their environment rather than a `--name` flag, because a
