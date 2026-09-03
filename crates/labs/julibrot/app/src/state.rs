@@ -644,6 +644,10 @@ impl ViewerController {
     /// # Errors
     ///
     /// Returns a math failure when an angle is non-finite or outside its range.
+    #[allow(
+        clippy::float_cmp,
+        reason = "finite slider values are an exact cache key and signed zero constructs the same plane"
+    )]
     pub fn set_object_angles(&mut self, angles: ObjectAngles) -> Result<(), AppError> {
         if !angles.is_valid() {
             return Err(AppError::Math("object angles are not valid".to_string()));

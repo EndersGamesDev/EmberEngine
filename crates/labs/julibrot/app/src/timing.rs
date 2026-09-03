@@ -65,7 +65,7 @@ struct WorkerTiming {
 }
 
 /// Bounded application ledger populated only from measured completion records.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, Eq, PartialEq)]
 pub struct LevelTimingLedger {
     levels: VecDeque<TrackedLevel>,
     workers: VecDeque<WorkerTiming>,

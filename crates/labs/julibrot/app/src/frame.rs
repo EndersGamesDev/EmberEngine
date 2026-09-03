@@ -2399,7 +2399,7 @@ mod tests {
         assert_eq!(scratch.len(), 4_096 * REFERENCE_TEXEL_BYTES);
 
         let before_allocations = 2;
-        let copied_records = std::hint::black_box(records.to_vec());
+        let copied_records = std::hint::black_box(records.clone());
         let copied_texels = std::hint::black_box(vec![0_u8; 4_096 * REFERENCE_TEXEL_BYTES]);
         std::hint::black_box((copied_records, copied_texels));
         eprintln!(
@@ -2899,7 +2899,7 @@ mod tests {
         assert_eq!(presenter.submissions[0], RefinementLevel::Preview);
         assert_eq!(timings.records().len(), 1);
         let records = timings.records();
-        let record = records.get(0).expect("one timing record");
+        let record = records.first().expect("one timing record");
         assert_eq!(record.scene_us, Some(2_500));
         assert_eq!(record.warp_us, Some(750));
         assert_eq!(record.worker_reference_us, Some(1_250));
