@@ -88,7 +88,7 @@ For current `max_iter = M`, every buffer has `capacity_bytes = max(644,64+8M)`: 
 
 The request body must fit before the trailer, so `116+4·limb_word_count ≤ capacity_bytes−16`; at the 300-digit POLICY four coordinates need at most `4·ceil(300·log₂(10)/32) = 128` limbs, hence request bytes are at most `116+4·128 = 628`, exactly the usable request region at the 644-byte floor, while any failure remains a displayed `CentreEncodingWall` with requested bytes and capacity, never truncation or a hidden allocation.
 
-The main-to-worker boundary copies no orbit payload, and the worker-to-main boundary performs exactly one `O(16L)` memcpy from wasm linear scratch into the standalone orbit buffer before transfer; transfer and same-thread queue movement are `O(1)` ownership changes, so the path is `O(payload)` rather than `O(DAG)`.
+The main-to-worker boundary copies no orbit payload, and the worker-to-main boundary performs exactly one `O(8L)` memcpy from wasm linear scratch into the standalone orbit buffer before transfer; transfer and same-thread queue movement are `O(1)` ownership changes, so the path is `O(payload)` rather than `O(DAG)`.
 
 The standalone buffer is returned only after app has synchronously handed its orbit bytes to kernels for a regional heap write and installed the resulting `OrbitHandle`; holding a transferred buffer across a frame is a channel bug visible as an outstanding-buffer count.
 
