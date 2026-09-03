@@ -76,7 +76,7 @@ impl ReferenceOrbitBuilder {
 
     /// Creates one policy-selected reference-orbit computation.
     ///
-    /// PictureFast Preview computes only the working orbit. Final and Measure, plus every
+    /// `PictureFast` Preview computes only the working orbit. Final and Measure, plus every
     /// Deterministic request, compare all four GPU-consumed words with a D+16 orbit.
     ///
     /// # Errors

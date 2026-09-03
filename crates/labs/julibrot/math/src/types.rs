@@ -6,7 +6,7 @@ pub enum PrecisionMode {
     PictureFast = 1,
 }
 
-/// Consumer stage that decides whether PictureFast verifies a reference orbit.
+/// Consumer stage that decides whether `PictureFast` verifies a reference orbit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum ReferencePass {

@@ -352,6 +352,7 @@ mod tests {
 
     #[test]
     #[ignore = "native reference performance measurement; run explicitly on the worker pod"]
+    #[allow(clippy::print_stderr, reason = "this is the explicit performance report")]
     fn measures_first_orbit_transfer_and_admission_at_worker_caps() {
         const SAMPLE_COUNT: usize = 7;
         const PACK_REPEATS: u32 = 256;

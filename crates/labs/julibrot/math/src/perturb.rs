@@ -77,6 +77,10 @@ pub fn perturb_scaled_f64(
 /// # Errors
 ///
 /// Returns an error for an empty orbit, non-finite data, or invalid parameters.
+#[allow(
+    clippy::too_many_lines,
+    reason = "the recurrence and its error state advance together in one source-ordered loop"
+)]
 pub fn perturb_scaled_f64_with_envelope(
     orbit: &[ReferenceOrbitRecord],
     offset_prime: [f64; 4],
@@ -388,7 +392,7 @@ fn half_ulp(value: f32) -> f64 {
 
 fn centre_offset_error(value: Complex64, exponent: i32) -> f64 {
     let represented = ldexp_complex(value, exponent).hypot();
-    F32_UNIT_ROUNDOFF * represented + scaled_subnormal_floor(exponent)
+    F32_UNIT_ROUNDOFF.mul_add(represented, scaled_subnormal_floor(exponent))
 }
 
 fn displayed_error(
@@ -399,15 +403,18 @@ fn displayed_error(
     delta_error: f64,
     exponent: i32,
 ) -> f64 {
-    reference_error
-        + reconstruction_error
-        + delta_error
-        + gamma(1) * (reference_norm + delta_norm)
-        + scaled_subnormal_floor(exponent)
+    let inherited = reference_error + reconstruction_error + delta_error;
+    gamma(1).mul_add(
+        reference_norm + delta_norm,
+        inherited + scaled_subnormal_floor(exponent),
+    )
 }
 
 fn rebase_rounding_error(value: Complex64, z_zero: Complex64, exponent: i32) -> f64 {
-    gamma(2) * (value.hypot() + z_zero.hypot()) + scaled_subnormal_floor(exponent)
+    gamma(2).mul_add(
+        value.hypot() + z_zero.hypot(),
+        scaled_subnormal_floor(exponent),
+    )
 }
 
 fn operation_rounding_error(
@@ -416,9 +423,13 @@ fn operation_rounding_error(
     delta_c_norm: f64,
     exponent: i32,
 ) -> f64 {
-    let local_magnitude =
-        2.0 * reference_norm * delta_norm + delta_norm * delta_norm + delta_c_norm;
-    gamma(20) * local_magnitude + 20.0 * scaled_subnormal_floor(exponent)
+    let local_magnitude = delta_norm
+        .mul_add(delta_norm, 2.0 * reference_norm * delta_norm)
+        + delta_c_norm;
+    20.0_f64.mul_add(
+        scaled_subnormal_floor(exponent),
+        gamma(20) * local_magnitude,
+    )
 }
 
 fn subnormal_renormalization_error(_value: Complex64, exponent: i32) -> f64 {
@@ -452,12 +463,18 @@ fn propagated_error(
 
 fn norm_squared_error(value: Complex64, absolute_error: f64) -> f64 {
     let magnitude = value.hypot();
-    (2.0 * magnitude).mul_add(absolute_error, absolute_error * absolute_error)
-        + radius_rounding_error(value)
-        + 3.0 * F32_MIN_SUBNORMAL
+    3.0_f64.mul_add(
+        F32_MIN_SUBNORMAL,
+        (2.0 * magnitude).mul_add(absolute_error, absolute_error * absolute_error)
+            + radius_rounding_error(value),
+    )
 }
 
-#[allow(clippy::cast_possible_truncation)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::suboptimal_flops,
+    reason = "the unfused binary32 radius mirrors the WGSL operation order"
+)]
 fn radius_rounding_error(value: Complex64) -> f64 {
     let re = value.re as f32;
     let im = value.im as f32;
