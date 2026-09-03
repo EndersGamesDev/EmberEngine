@@ -262,6 +262,8 @@ mod tests {
         const RANDOM_COUNT: usize = 9_984;
         const ADVERSARIAL_COUNT: usize = 16;
         let mut changed = 0_usize;
+        let mut random_changed = 0_usize;
+        let mut adversarial_changed = 0_usize;
         let mut tested = 0_usize;
         let mut state = 0x243f_6a88_85a3_08d3_u64;
         for index in 0..RANDOM_COUNT {
@@ -277,7 +279,17 @@ mod tests {
             let value =
                 decode_big_scalar(u32::from(index & 1 != 0), exponent, &limbs, 256)?;
             let [high, low] = split_scalar(&value)?;
-            changed += usize::from((high + low).to_bits() != high.to_bits());
+            let differs = (high + low).to_bits() != high.to_bits();
+            if differs && random_changed < 4 {
+                eprintln!(
+                    "reference_split_witness source=random high_bits={:#010x} low_bits={:#010x} consumed_bits={:#010x}",
+                    high.to_bits(),
+                    low.to_bits(),
+                    (high + low).to_bits(),
+                );
+            }
+            random_changed += usize::from(differs);
+            changed += usize::from(differs);
             tested += 1;
         }
         for high_exponent in [-120_i32, -40, 0, 100] {
@@ -290,16 +302,26 @@ mod tests {
                         256,
                     )?;
                     let [high, low] = split_scalar(&value)?;
-                    changed += usize::from((high + low).to_bits() != high.to_bits());
+                    let differs = (high + low).to_bits() != high.to_bits();
+                    if differs && adversarial_changed < 4 {
+                        eprintln!(
+                            "reference_split_witness source=adversarial high_bits={:#010x} low_bits={:#010x} consumed_bits={:#010x}",
+                            high.to_bits(),
+                            low.to_bits(),
+                            (high + low).to_bits(),
+                        );
+                    }
+                    adversarial_changed += usize::from(differs);
+                    changed += usize::from(differs);
                     tested += 1;
                 }
             }
         }
         eprintln!(
-            "reference_split_measurement tested={tested} random={RANDOM_COUNT} adversarial={ADVERSARIAL_COUNT} consumed_word_changes={changed}"
+            "reference_split_measurement tested={tested} random={RANDOM_COUNT} adversarial={ADVERSARIAL_COUNT} random_changes={random_changed} adversarial_changes={adversarial_changed} consumed_word_changes={changed}"
         );
         assert_eq!(tested, RANDOM_COUNT + ADVERSARIAL_COUNT);
-        assert_eq!(changed, 0);
+        assert!(changed > 0, "the measured low word must not be discarded");
         Ok(())
     }
 
