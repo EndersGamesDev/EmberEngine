@@ -333,6 +333,10 @@ pub struct ReferenceSubmission {
 pub struct ViewerController {
     owner: ViewerOwner,
     requested: RequestedControls,
+    checked_plane: Plane,
+    #[cfg(test)]
+    plane_constructions: u64,
+    navigation_centre_f64: [f64; 4],
     staged_hot: HotState,
     staged_main: MainState,
     pending_reason: Option<OrbitReason>,
@@ -408,6 +412,10 @@ impl ViewerController {
         Ok(Self {
             owner,
             requested,
+            checked_plane: plane,
+            #[cfg(test)]
+            plane_constructions: 1,
+            navigation_centre_f64: origin,
             staged_hot: initial.hot,
             staged_main: initial.main,
             pending_reason: Some(OrbitReason::INITIAL),
@@ -421,6 +429,12 @@ impl ViewerController {
     #[must_use]
     pub const fn requested(&self) -> RequestedControls {
         self.requested
+    }
+
+    /// Returns the checked plane cached for the current object angles.
+    #[must_use]
+    pub const fn checked_plane(&self) -> Plane {
+        self.checked_plane
     }
 
     /// Returns the worker owner for response acceptance and generation notes.
@@ -461,6 +475,7 @@ impl ViewerController {
         if let Some(error) = self.owner.take_navigation_error() {
             return Err(owner_error(error));
         }
+        self.refresh_navigation_centre_mirror();
         self.requested.zoom_log2 = zoom_log2;
         self.add_reason(OrbitReason::ZOOM_THRESHOLD.union(OrbitReason::CENTRE_THRESHOLD));
         Ok(NavigationEdit::Zoom {
@@ -484,6 +499,7 @@ impl ViewerController {
         if let Some(error) = self.owner.take_navigation_error() {
             return Err(owner_error(error));
         }
+        self.refresh_navigation_centre_mirror();
         self.add_reason(OrbitReason::CENTRE_THRESHOLD);
         let centre_delta_px = [-delta.pan_canvas_px[0], -delta.pan_canvas_px[1]];
         Ok(NavigationEdit::Pan { centre_delta_px })
@@ -628,13 +644,28 @@ impl ViewerController {
     /// # Errors
     ///
     /// Returns a math failure when an angle is non-finite or outside its range.
+    #[allow(
+        clippy::float_cmp,
+        reason = "finite slider values are an exact cache key and signed zero constructs the same plane"
+    )]
     pub fn set_object_angles(&mut self, angles: ObjectAngles) -> Result<(), AppError> {
         if !angles.is_valid() {
             return Err(AppError::Math("object angles are not valid".to_string()));
         }
         self.synchronize_shadow()?;
+        let angles_changed = angles.as_array() != self.requested.object_angles.as_array();
+        let checked_plane = if angles_changed {
+            construct_plane(angles).map_err(math_error)?
+        } else {
+            self.checked_plane
+        };
         self.clear_crosshair();
         self.requested.object_angles = angles;
+        self.checked_plane = checked_plane;
+        #[cfg(test)]
+        if angles_changed {
+            self.plane_constructions = self.plane_constructions.saturating_add(1);
+        }
         let mut hot = self.staged_hot;
         hot.plane_theta_1 = angles.rho_13;
         hot.plane_theta_2 = angles.rho_24;
@@ -699,7 +730,7 @@ impl ViewerController {
         };
         self.staged_hot = hot;
         self.staged_main = main;
-        let plane = construct_plane(angles).map_err(math_error)?;
+        let plane = self.checked_plane;
         let centre = BigCentre::from_f64(origin, NAVIGATION_PRECISION_BITS).map_err(math_error)?;
         self.owner.stage_hot(hot);
         self.owner.stage_main(main);
@@ -716,6 +747,7 @@ impl ViewerController {
             return Err(owner_error(error));
         }
         self.pending_reason = Some(OrbitReason::INITIAL);
+        self.navigation_centre_f64 = origin;
         Ok(())
     }
 
@@ -730,7 +762,8 @@ impl ViewerController {
     /// Returns a typed math or owner refusal for an invalid plane, scale, or centre.
     pub fn set_centre(&mut self, centre: BigCentre) -> Result<(), AppError> {
         self.synchronize_shadow()?;
-        let plane = construct_plane(self.requested.object_angles).map_err(math_error)?;
+        let plane = self.checked_plane;
+        let centre_f64 = centre.to_f64_mirror();
         self.owner
             .configure_navigation(NavigationConfig {
                 centre: centre.clone(),
@@ -743,6 +776,7 @@ impl ViewerController {
         if let Some(error) = self.owner.take_navigation_error() {
             return Err(owner_error(error));
         }
+        self.navigation_centre_f64 = centre_f64;
         self.add_reason(OrbitReason::CENTRE_THRESHOLD);
         Ok(())
     }
@@ -861,7 +895,7 @@ impl ViewerController {
             ));
         }
         let object = self.requested.object_angles;
-        let plane = construct_plane(object).map_err(math_error)?;
+        let plane = self.checked_plane;
         let map = map_for(
             object,
             self.requested.view,
@@ -933,6 +967,7 @@ impl ViewerController {
         reference_centre: BigCentre,
         plane: Plane,
     ) -> Result<(), AppError> {
+        let centre_f64 = centre.to_f64_mirror();
         self.owner
             .configure_navigation(NavigationConfig {
                 centre,
@@ -940,7 +975,15 @@ impl ViewerController {
                 plane,
                 grid_width: self.grid_width,
             })
-            .map_err(owner_error)
+            .map_err(owner_error)?;
+        self.navigation_centre_f64 = centre_f64;
+        Ok(())
+    }
+
+    /// Returns the cached finite navigation-centre mirror for allocation-free page facts.
+    #[must_use]
+    pub const fn navigation_centre_f64(&self) -> [f64; 4] {
+        self.navigation_centre_f64
     }
 
     /// Builds the accepted neutral-height screen map for one refinement extent.
@@ -980,6 +1023,12 @@ impl ViewerController {
             self.pending_reason
                 .map_or(reason, |pending| pending.union(reason)),
         );
+    }
+
+    fn refresh_navigation_centre_mirror(&mut self) {
+        if let Some(centre) = self.owner.navigation_centre() {
+            self.navigation_centre_f64 = centre.to_f64_mirror();
+        }
     }
 }
 
@@ -1366,6 +1415,73 @@ mod tests {
         assert_eq!(hot.state.hot.centre_from_reference_px, [15.0, -3.0]);
         // A drain reads the controls; it has no time argument and cannot invent an angle.
         assert_eq!(hot.pose.view, ViewControls::MANDELBROT_FLAT);
+    }
+
+    #[test]
+    fn unchanged_refreshes_reuse_one_checked_plane() {
+        let mut viewer = ViewerController::new([960, 540]).expect("canonical viewer");
+        let initial_plane = viewer.checked_plane;
+        assert_eq!(viewer.plane_constructions, 1);
+
+        for _ in 0..120 {
+            let frame = viewer.drain_hot([960, 540]).expect("unchanged refresh");
+            assert_eq!(frame.plane, initial_plane);
+        }
+        assert_eq!(viewer.plane_constructions, 1);
+
+        let mut angles = viewer.requested().object_angles;
+        angles.rho_13 = 0.25;
+        viewer.set_object_angles(angles).expect("changed angles");
+        let changed_plane = viewer.drain_hot([960, 540]).expect("changed refresh").plane;
+        assert_ne!(changed_plane, initial_plane);
+        assert_eq!(viewer.plane_constructions, 2);
+
+        viewer.set_object_angles(angles).expect("unchanged angles");
+        viewer.drain_hot([960, 540]).expect("unchanged refresh");
+        assert_eq!(viewer.plane_constructions, 2);
+    }
+
+    #[test]
+    fn cached_navigation_mirror_matches_the_owner_after_edits_and_acceptance() {
+        let mut viewer = ViewerController::new([960, 540]).expect("canonical viewer");
+        assert_eq!(
+            viewer.navigation_centre_f64(),
+            viewer
+                .owner()
+                .navigation_centre()
+                .expect("configured centre")
+                .to_f64_mirror()
+        );
+
+        viewer
+            .wheel_zoom(1.0, [37.0, -19.0])
+            .expect("finite anchored zoom");
+        viewer.drag_pan([8.0, -5.0]).expect("finite pan");
+        assert_eq!(
+            viewer.navigation_centre_f64(),
+            viewer
+                .owner()
+                .navigation_centre()
+                .expect("configured centre")
+                .to_f64_mirror()
+        );
+
+        let accepted = viewer
+            .owner()
+            .navigation_centre()
+            .expect("configured centre");
+        let plane = viewer.checked_plane;
+        viewer
+            .configure_navigation_context(accepted.clone(), accepted, plane)
+            .expect("accepted context");
+        assert_eq!(
+            viewer.navigation_centre_f64(),
+            viewer
+                .owner()
+                .navigation_centre()
+                .expect("configured centre")
+                .to_f64_mirror()
+        );
     }
 
     #[test]

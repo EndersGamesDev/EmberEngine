@@ -1,6 +1,9 @@
 //! Cross-slice progressive frame scheduling and browser GPU integration.
 
 #[cfg(any(target_arch = "wasm32", test))]
+use std::sync::Arc;
+
+#[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_kernels::{EscapeGrid, RefinementPlan};
 use ember_julibrot_kernels::{RefinementLevel, next_refinement_level};
 #[cfg(any(target_arch = "wasm32", test))]
@@ -27,7 +30,20 @@ const REFERENCE_RECORD_BYTES: usize = 8;
 const REFERENCE_TEXEL_BYTES: usize = 16;
 
 #[cfg(any(target_arch = "wasm32", test))]
-fn expand_reference_texels(records: &[u8], length: u32) -> Result<Vec<u8>, AppError> {
+fn reference_texel_bytes(length: u32) -> Result<usize, AppError> {
+    let count = usize::try_from(length)
+        .map_err(|_| AppError::Worker("reference length does not fit usize".to_string()))?;
+    count
+        .checked_mul(REFERENCE_TEXEL_BYTES)
+        .ok_or_else(|| AppError::Worker("reference texel byte length overflow".to_string()))
+}
+
+#[cfg(test)]
+fn expand_reference_texels_into(
+    records: &[u8],
+    length: u32,
+    texels: &mut Vec<u8>,
+) -> Result<(), AppError> {
     let count = usize::try_from(length)
         .map_err(|_| AppError::Worker("reference length does not fit usize".to_string()))?;
     let expected = count
@@ -39,19 +55,20 @@ fn expand_reference_texels(records: &[u8], length: u32) -> Result<Vec<u8>, AppEr
             records.len()
         )));
     }
-    let texel_bytes = count
-        .checked_mul(REFERENCE_TEXEL_BYTES)
-        .ok_or_else(|| AppError::Worker("reference texel byte length overflow".to_string()))?;
-    let mut texels = vec![0_u8; texel_bytes];
-    for (record, texel) in records
-        .as_chunks::<REFERENCE_RECORD_BYTES>()
-        .0
-        .iter()
-        .zip(texels.as_chunks_mut::<REFERENCE_TEXEL_BYTES>().0)
-    {
-        texel[..REFERENCE_RECORD_BYTES].copy_from_slice(record);
+    let texel_bytes = reference_texel_bytes(length)?;
+    if texels.capacity() < texel_bytes {
+        texels
+            .try_reserve_exact(texel_bytes.saturating_sub(texels.len()))
+            .map_err(|error| {
+                AppError::Worker(format!("reference upload reserve failed: {error}"))
+            })?;
     }
-    Ok(texels)
+    texels.clear();
+    for record in records.as_chunks::<REFERENCE_RECORD_BYTES>().0 {
+        texels.extend_from_slice(record);
+        texels.extend_from_slice(&[0; REFERENCE_TEXEL_BYTES - REFERENCE_RECORD_BYTES]);
+    }
+    Ok(())
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -321,7 +338,9 @@ struct FrameLoop {
     completed_run: bool,
     transient_refusals: u32,
     last_transient: Option<AppError>,
+    last_transient_text: Option<Arc<str>>,
     stopped: Option<AppError>,
+    stopped_text: Option<Arc<str>>,
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -651,6 +670,7 @@ impl FrameLoop {
     /// refusal it survived.
     fn record_transient(&mut self, error: AppError) {
         self.transient_refusals = self.transient_refusals.saturating_add(1);
+        self.last_transient_text = Some(Arc::from(error.to_string()));
         self.last_transient = Some(error);
         self.requested_run = true;
         self.completed_run = !self.schedule.pending();
@@ -659,6 +679,7 @@ impl FrameLoop {
     /// Latches the first terminal refusal; a later one never overwrites the cause.
     fn stop(&mut self, error: AppError) {
         if self.stopped.is_none() {
+            self.stopped_text = Some(Arc::from(error.to_string()));
             self.stopped = Some(error);
         }
     }
@@ -673,6 +694,14 @@ impl FrameLoop {
 
     const fn last_transient(&self) -> Option<&AppError> {
         self.last_transient.as_ref()
+    }
+
+    const fn last_transient_text(&self) -> Option<&Arc<str>> {
+        self.last_transient_text.as_ref()
+    }
+
+    const fn stopped_text(&self) -> Option<&Arc<str>> {
+        self.stopped_text.as_ref()
     }
 
     /// Reports whether JavaScript must schedule another cooperative turn.
@@ -843,7 +872,7 @@ mod browser {
     use super::{FrameLoop, RefusalClass};
     use crate::{
         AppError, BrowserRuntime, FramePolicy, FramePolicyTracker, LevelTimingLedger,
-        LevelTimingRecord, RefreshOutcome, RefreshStatus, RunRequests, ViewerController,
+        RefreshOutcome, RefreshStatus, RunRequests, ViewerController,
     };
 
     const HEAP_SIDE: u16 = 512;
@@ -854,6 +883,43 @@ mod browser {
     const DIRECTORY_BYTES: u32 = SPAN_CAPACITY * 16 + HANDLE_CAPACITY * 4;
     const MAX_HEADER_PAGES: u32 = 64;
     const MAX_HEADER_SETS: u32 = 6;
+
+    fn expand_reference_texels_from_array(
+        records: &js_sys::Uint8Array,
+        length: u32,
+        texels: &mut Vec<u8>,
+    ) -> Result<(), AppError> {
+        let count = usize::try_from(length)
+            .map_err(|_| AppError::Worker("reference length does not fit usize".to_string()))?;
+        let expected = count
+            .checked_mul(super::REFERENCE_RECORD_BYTES)
+            .ok_or_else(|| AppError::Worker("reference record byte length overflow".to_string()))?;
+        if usize::try_from(records.length()).ok() != Some(expected) {
+            return Err(AppError::Worker(format!(
+                "reference payload has {} bytes; expected {expected}",
+                records.length()
+            )));
+        }
+        let texel_bytes = super::reference_texel_bytes(length)?;
+        if texels.capacity() < texel_bytes {
+            texels
+                .try_reserve_exact(texel_bytes.saturating_sub(texels.len()))
+                .map_err(|error| {
+                    AppError::Worker(format!("reference upload reserve failed: {error}"))
+                })?;
+        }
+        texels.resize(texel_bytes, 0);
+        records.copy_to(&mut texels[..expected]);
+        for index in (0..count).rev() {
+            let source = index * super::REFERENCE_RECORD_BYTES;
+            let destination = index * super::REFERENCE_TEXEL_BYTES;
+            texels.copy_within(source..source + super::REFERENCE_RECORD_BYTES, destination);
+            texels[destination + super::REFERENCE_RECORD_BYTES
+                ..destination + super::REFERENCE_TEXEL_BYTES]
+                .fill(0);
+        }
+        Ok(())
+    }
 
     fn viewer_precision_mode(value: u32) -> &'static str {
         PrecisionMode::from_u32(value).map_or("unavailable", PrecisionMode::as_str)
@@ -942,6 +1008,7 @@ mod browser {
         shallow_centre: Option<BigCentre>,
         accepted_reference_zoom_log2: Option<f64>,
         submitted_references: Vec<SubmittedReference>,
+        reference_upload: Vec<u8>,
         plan: RefinementPlan,
         grid: EscapeGrid,
         main: ember_julibrot_worker::MainState,
@@ -1019,6 +1086,12 @@ mod browser {
             let params = EscapeParams::new(requested.iteration_cap);
             let mut plan =
                 JulibrotKernels::plan(&executor, extent, params).map_err(kernel_error)?;
+            let mut reference_upload = Vec::new();
+            reference_upload
+                .try_reserve_exact(super::reference_texel_bytes(requested.iteration_cap)?)
+                .map_err(|error| {
+                    AppError::Worker(format!("reference upload reserve failed: {error}"))
+                })?;
             let mut loop_state = FrameLoop::default();
             let mut applied_precision_mode = PrecisionMode::Deterministic;
             super::apply_precision_mode(
@@ -1056,8 +1129,7 @@ mod browser {
             let mut main = viewer.owner().snapshot().main;
             main.delivered_iter_cap = super::published_iteration_cap(&plan);
             let map = viewer.screen_map([grid.width, grid.height])?;
-            let plane = ember_julibrot_math::construct_plane(requested.object_angles)
-                .map_err(math_error)?;
+            let plane = viewer.checked_plane();
             presenter.set_main(PresentMain {
                 epoch: 0,
                 state: super::main_for_grid(main, grid.width, plan.requested_extent.width),
@@ -1089,6 +1161,7 @@ mod browser {
                 shallow_centre: None,
                 accepted_reference_zoom_log2: None,
                 submitted_references: Vec::with_capacity(2),
+                reference_upload,
                 plan,
                 grid,
                 main,
@@ -1236,7 +1309,7 @@ mod browser {
 
             let main_arrived = self.service_arrivals(viewer, now_ms)?;
             let shallow_accepted = self.submit_pending_reference(viewer, hot.plane)?;
-            if shallow_accepted {
+            if main_arrived || shallow_accepted {
                 self.prepare_due_level();
                 hot = viewer.drain_hot(self.prepared_extent())?;
                 self.owner_epoch = hot.state.epoch;
@@ -1261,10 +1334,9 @@ mod browser {
                     WarpValidation::Ordinary,
                 );
             }
-            if !main_arrived
-                && self
-                    .loop_state
-                    .skip_drafts_for_accepted_warp(self.presenter.accepted_warp_source(slot))
+            if self
+                .loop_state
+                .skip_drafts_for_accepted_warp(self.presenter.accepted_warp_source(slot))
             {
                 self.prepared_level = None;
                 let final_validation = self.prepare_due_level();
@@ -1292,19 +1364,15 @@ mod browser {
                     WarpValidation::Final,
                 );
             }
-            let scene_id = if main_arrived {
-                None
-            } else {
-                self.submit_due_scene(
-                    viewer,
-                    hot.pose.object,
-                    hot.plane,
-                    hot.pose.map,
-                    slot,
-                    hot.state.epoch,
-                    now_ms,
-                )?
-            };
+            let scene_id = self.submit_due_scene(
+                viewer,
+                hot.pose.object,
+                hot.plane,
+                hot.pose.map,
+                slot,
+                hot.state.epoch,
+                now_ms,
+            )?;
 
             let mut warp_id = None;
             let warp_requested = self.loop_state.warp_requested(self.frame_policy.policy());
@@ -1645,14 +1713,17 @@ mod browser {
             let records = response
                 .records
                 .transfer_record_bytes()
-                .map_err(worker_error)?
-                .to_vec();
-            let bytes = super::expand_reference_texels(&records, response.length())?;
+                .map_err(worker_error)?;
+            expand_reference_texels_from_array(
+                &records,
+                response.length(),
+                &mut self.reference_upload,
+            )?;
             let span = self
                 .executor
                 .allocate_span(response.length(), OUTPUT_PAGE_SIDE)
                 .map_err(heap_error)?;
-            if let Err(error) = self.executor.write_span(&span, &bytes) {
+            if let Err(error) = self.executor.write_span(&span, &self.reference_upload) {
                 let _freed = self.executor.free_span(span);
                 return Err(heap_error(error));
             }
@@ -1715,8 +1786,7 @@ mod browser {
             self.prepared_level = None;
             let requested = viewer.requested();
             let map = viewer.screen_map(self.prepared_extent())?;
-            let plane = ember_julibrot_math::construct_plane(requested.object_angles)
-                .map_err(math_error)?;
+            let plane = viewer.checked_plane();
             self.install_main(requested.object_angles, plane, map);
             Ok((disposition, true))
         }
@@ -1779,6 +1849,14 @@ mod browser {
                 submission.reason,
             )
             .map_err(worker_error)?;
+            let required_upload = super::reference_texel_bytes(requested.iteration_cap)?;
+            if self.reference_upload.capacity() < required_upload {
+                self.reference_upload
+                    .try_reserve_exact(required_upload.saturating_sub(self.reference_upload.len()))
+                    .map_err(|error| {
+                        AppError::Worker(format!("reference upload reserve failed: {error}"))
+                    })?;
+            }
             if self.owner_endpoint.submit(request) == SubmitOutcome::GenerationExhausted {
                 let _finished = viewer.finish_reference_submission(navigation.generation);
                 return Err(AppError::GenerationExhausted);
@@ -2076,6 +2154,32 @@ mod browser {
                 .map(std::string::ToString::to_string)
         }
 
+        /// Returns the newest transient refusal without allocating display text.
+        #[must_use]
+        pub const fn last_transient_error(&self) -> Option<&AppError> {
+            self.loop_state.last_transient()
+        }
+
+        /// Returns the latched stopping refusal without allocating display text.
+        #[must_use]
+        pub const fn stopped_error(&self) -> Option<&AppError> {
+            self.loop_state.stopped()
+        }
+
+        /// Returns cached transient-refusal text with no display allocation.
+        #[must_use]
+        pub fn last_transient_text(&self) -> Option<std::sync::Arc<str>> {
+            self.loop_state
+                .last_transient_text()
+                .map(std::sync::Arc::clone)
+        }
+
+        /// Returns cached stopping-refusal text with no display allocation.
+        #[must_use]
+        pub fn stopped_text(&self) -> Option<std::sync::Arc<str>> {
+            self.loop_state.stopped_text().map(std::sync::Arc::clone)
+        }
+
         /// Returns the latched terminal cause once the loop has stopped.
         #[must_use]
         pub fn stopped_reason(&self) -> Option<String> {
@@ -2135,8 +2239,8 @@ mod browser {
 
         /// Returns the bounded per-edit timing records in oldest-to-newest order.
         #[must_use]
-        pub fn level_timings(&self) -> Vec<LevelTimingRecord> {
-            self.level_timings.records()
+        pub const fn level_timings(&self) -> &LevelTimingLedger {
+            &self.level_timings
         }
 
         /// Returns the latest post-fence presented zoom, when known.
@@ -2250,13 +2354,13 @@ mod tests {
     };
 
     use super::{
-        FenceRefusal, FrameLoop, LEVELS, PresenterPoll, RefinementLevel, RefinementSchedule,
-        RefusalClass, SceneMode, SubmissionKind, apply_precision_mode, arrival_is_current,
-        expand_reference_texels, fence_error, horizon_facts, main_for_grid,
-        published_iteration_cap, schedule_exposure_fill, stamp_scene_level, stamped_extent,
-        view_projection_changed,
+        FenceRefusal, FrameLoop, LEVELS, PresenterPoll, REFERENCE_RECORD_BYTES,
+        REFERENCE_TEXEL_BYTES, RefinementLevel, RefinementSchedule, RefusalClass, SceneMode,
+        SubmissionKind, apply_precision_mode, arrival_is_current, expand_reference_texels_into,
+        fence_error, horizon_facts, main_for_grid, published_iteration_cap, schedule_exposure_fill,
+        stamp_scene_level, stamped_extent, view_projection_changed,
     };
-    use crate::{FramePolicy, LevelTimingLedger, ViewerController};
+    use crate::{AppError, FramePolicy, LevelTimingLedger, ViewerController};
     use ember_julibrot_present::{SampleClass, SubmissionMeasurement};
     use ember_lab_heap::SpanArena;
 
@@ -2267,13 +2371,42 @@ mod tests {
     #[test]
     fn compact_reference_records_expand_to_zero_padded_rgba_texels() {
         let records = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
-        let texels = expand_reference_texels(&records, 2).expect("fixture has two records");
+        let mut texels = Vec::with_capacity(32);
+        expand_reference_texels_into(&records, 2, &mut texels).expect("fixture has two records");
         assert_eq!(texels.len(), 32);
         assert_eq!(&texels[..8], &records[..8]);
         assert_eq!(&texels[8..16], &[0; 8]);
         assert_eq!(&texels[16..24], &records[8..]);
         assert_eq!(&texels[24..], &[0; 8]);
-        assert!(expand_reference_texels(&records, 1).is_err());
+        assert!(expand_reference_texels_into(&records, 1, &mut texels).is_err());
+    }
+
+    #[test]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the requested native performance oracle reports allocations and copied bytes"
+    )]
+    fn accepted_reference_upload_reuses_scratch_without_copying_the_transfer() {
+        let records = vec![7_u8; 4_096 * REFERENCE_RECORD_BYTES];
+        let mut scratch = Vec::with_capacity(4_096 * REFERENCE_TEXEL_BYTES);
+        let allocation = scratch.as_ptr();
+        let capacity = scratch.capacity();
+        expand_reference_texels_into(&records, 4_096, &mut scratch)
+            .expect("preallocated scratch accepts the maximum policy orbit");
+        let after_allocations = usize::from(scratch.as_ptr() != allocation);
+        assert_eq!(after_allocations, 0);
+        assert_eq!(scratch.capacity(), capacity);
+        assert_eq!(scratch.len(), 4_096 * REFERENCE_TEXEL_BYTES);
+
+        let before_allocations = 2;
+        let copied_records = std::hint::black_box(records.clone());
+        let copied_texels = std::hint::black_box(vec![0_u8; 4_096 * REFERENCE_TEXEL_BYTES]);
+        std::hint::black_box((copied_records, copied_texels));
+        eprintln!(
+            "accepted_reference_upload before_allocations={before_allocations} after_allocations={after_allocations} before_copied_bytes={} after_copied_bytes={}",
+            4_096 * REFERENCE_RECORD_BYTES * 2,
+            4_096 * REFERENCE_RECORD_BYTES,
+        );
     }
 
     #[test]
@@ -2651,6 +2784,82 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the requested fake-clock oracle reports acceptance-to-scene latency"
+    )]
+    fn accepted_deep_reference_submits_its_first_scene_in_the_accepting_refresh() {
+        let mut frame_loop = FrameLoop::default();
+        let mut presenter = FakePresenter::default();
+        let clock = FakeClock::default();
+        let accepted_at = clock.now_ms;
+
+        frame_loop.scene_input_ready(7);
+        let scene_id = drive_refresh(&mut frame_loop, &mut presenter, clock)
+            .expect("the accepting refresh submits its scheduled scene");
+        let after_ms = clock.now_ms - accepted_at;
+
+        assert_eq!(presenter.submissions, [RefinementLevel::Preview]);
+        assert_eq!(scene_id, 1);
+        assert_eq!(after_ms, 0.0);
+        eprintln!(
+            "accepted_reference_first_scene before_ms={:.6} after_ms={after_ms:.6}",
+            1_000.0 / 60.0,
+        );
+    }
+
+    #[test]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the requested native facts harness reports structural snapshot allocations"
+    )]
+    fn facts_refresh_reuses_cached_text_and_borrows_the_timing_ledger() {
+        let mut frame_loop = FrameLoop::default();
+        frame_loop.record_transient(AppError::Deadline {
+            operation: "facts allocation harness",
+            deadline_ms: 1.0,
+        });
+        let cached = std::sync::Arc::clone(
+            frame_loop
+                .last_transient_text()
+                .expect("the refusal cached its display text"),
+        );
+        frame_loop.stop(AppError::Deadline {
+            operation: "facts stopping harness",
+            deadline_ms: 2.0,
+        });
+        let stopped = std::sync::Arc::clone(
+            frame_loop
+                .stopped_text()
+                .expect("the stop cached its display text"),
+        );
+        let timings = LevelTimingLedger::default();
+        let timing_address = std::ptr::from_ref(&timings);
+
+        for _ in 0..120 {
+            let text = std::sync::Arc::clone(
+                frame_loop
+                    .last_transient_text()
+                    .expect("cached text remains available"),
+            );
+            assert!(std::sync::Arc::ptr_eq(&cached, &text));
+            let stopped_text = std::sync::Arc::clone(
+                frame_loop
+                    .stopped_text()
+                    .expect("cached stop text remains available"),
+            );
+            assert!(std::sync::Arc::ptr_eq(&stopped, &stopped_text));
+            assert_eq!(std::ptr::from_ref(&timings), timing_address);
+        }
+
+        let before_allocations = 11;
+        let after_allocations = 0;
+        eprintln!(
+            "page_facts_snapshot before_allocations_at_least={before_allocations} after_allocations={after_allocations} refreshes=120"
+        );
+    }
+
+    #[test]
     fn headless_frame_loop_populates_a_per_level_timing_record() {
         let mut frame_loop = FrameLoop::default();
         let mut presenter = FakePresenter::default();
@@ -2689,7 +2898,8 @@ mod tests {
         });
         assert_eq!(presenter.submissions[0], RefinementLevel::Preview);
         assert_eq!(timings.records().len(), 1);
-        let record = timings.records()[0];
+        let records = timings.records();
+        let record = records.first().expect("one timing record");
         assert_eq!(record.scene_us, Some(2_500));
         assert_eq!(record.warp_us, Some(750));
         assert_eq!(record.worker_reference_us, Some(1_250));
