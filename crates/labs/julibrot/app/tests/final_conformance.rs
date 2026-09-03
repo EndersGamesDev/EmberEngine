@@ -625,6 +625,7 @@ const fn pose(plane: Plane, zoom_log2: f64, displacement: [f64; 2]) -> Pose {
         orbit_generation: 1,
         plane,
         object: ObjectAngles::IDENTITY,
+        plane_origin: [0.0; 4],
         zoom_log2,
         view: ViewControls::MANDELBROT_FLAT,
         grid_width: GRID_WIDTH,

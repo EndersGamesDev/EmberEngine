@@ -93,6 +93,7 @@ const MANDELBROT_RELIEF_VIEW: ViewControls = ViewControls {
         0.97,
         0.0,
     ],
+    camera_translation: [0.0; 5],
     camera_yaw: 0.349,
     camera_pitch: 0.262,
     height_scale: 1.0,
@@ -102,6 +103,7 @@ const MANDELBROT_RELIEF_VIEW: ViewControls = ViewControls {
 
 const JULIA_RELIEF_VIEW: ViewControls = ViewControls {
     camera: [0.6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.97, 0.0],
+    camera_translation: [0.0; 5],
     camera_yaw: 0.349,
     camera_pitch: 0.262,
     height_scale: 1.0,
@@ -433,6 +435,12 @@ impl ViewerController {
         &mut self.owner
     }
 
+    /// Returns the fixed screen-space crosshair used as the zoom anchor.
+    #[must_use]
+    pub const fn crosshair_px_up(&self) -> [f64; 2] {
+        self.crosshair_px_up
+    }
+
     /// Stages a pointer-anchored zoom immediately and returns the edit for bignum navigation.
     ///
     /// # Errors
@@ -452,11 +460,10 @@ impl ViewerController {
                 "wheel zoom exceeded finite range".to_string(),
             ));
         }
-        self.owner.navigate(NavigationDelta {
-            pan_canvas_px: [0.0; 2],
-            zoom_delta_log2: delta_log2,
-            anchor_canvas_px: anchor_px_up,
-        });
+        let map = self.mapped_screen_map(self.grid_extent)?;
+        let delta = navigation_delta(&map, [0.0; 2], delta_log2, anchor_px_up)
+            .map_err(math_error)?;
+        self.owner.navigate(delta);
         if let Some(error) = self.owner.take_navigation_error() {
             return Err(owner_error(error));
         }
@@ -477,31 +484,30 @@ impl ViewerController {
         if !delta_dom.iter().all(|component| component.is_finite()) {
             return Err(AppError::Math("drag input is not finite".to_string()));
         }
-        let pan_canvas_px = [delta_dom[0], -delta_dom[1]];
-        self.owner.navigate(NavigationDelta {
-            pan_canvas_px,
-            ..NavigationDelta::default()
-        });
+        let map = self.mapped_screen_map(self.grid_extent)?;
+        let delta = navigation_delta(&map, delta_dom, 0.0, self.crosshair_px_up)
+            .map_err(math_error)?;
+        self.owner.navigate(delta);
         if let Some(error) = self.owner.take_navigation_error() {
             return Err(owner_error(error));
         }
         self.add_reason(OrbitReason::CENTRE_THRESHOLD);
-        let centre_delta_px = [-pan_canvas_px[0], -pan_canvas_px[1]];
+        let centre_delta_px = [-delta.pan_canvas_px[0], -delta.pan_canvas_px[1]];
         Ok(NavigationEdit::Pan { centre_delta_px })
     }
 
-    /// Places the target at one screen point, carrying an optional zoom change with it.
+    /// Places the fixed screen-space crosshair and optionally zooms about that same point.
     ///
-    /// The plane point under the target becomes the centre, so the marker comes to rest at the
-    /// screen centre. The edit is the existing anchored-zoom path with the pan set to minus the
-    /// anchor: the anchored term contributes `(s_before - s_after)A` and the pan term `+s_after·A`,
-    /// which sum to `s_before·A` — the plane offset the point had at the scale the user was
-    /// looking at, independent of how much the zoom then changes. A click passes zero, a box
-    /// release passes the factor that makes it fill the screen, and both are one navigation edit.
+    /// A zero-delta click changes no projection state. A box path may set the crosshair to its
+    /// centre and carry a zoom; the anchored zoom keeps that newly selected point fixed on screen.
     ///
     /// # Errors
     ///
     /// Returns a math failure for non-finite input or result, or a typed owner refusal.
+    #[allow(
+        clippy::float_cmp,
+        reason = "zero is the exact no-projection click command; every nonzero value is a zoom"
+    )]
     pub fn set_target(
         &mut self,
         anchor_px_up: [f64; 2],
@@ -516,16 +522,10 @@ impl ViewerController {
                 "target zoom exceeded finite range".to_string(),
             ));
         }
-        let map = self.mapped_screen_map(self.grid_extent)?;
-        let mut delta =
-            navigation_delta(&map, [0.0; 2], delta_log2, anchor_px_up).map_err(math_error)?;
-        delta.pan_canvas_px = [-delta.anchor_canvas_px[0], -delta.anchor_canvas_px[1]];
-        self.owner.navigate(delta);
-        if let Some(error) = self.owner.take_navigation_error() {
-            return Err(owner_error(error));
+        self.crosshair_px_up = anchor_px_up;
+        if delta_log2 != 0.0 {
+            self.wheel_zoom(delta_log2, anchor_px_up)?;
         }
-        self.requested.zoom_log2 = zoom_log2;
-        self.add_reason(OrbitReason::ZOOM_THRESHOLD.union(OrbitReason::CENTRE_THRESHOLD));
         Ok(NavigationEdit::Target {
             anchor_px_up,
             delta_log2,
@@ -910,6 +910,7 @@ impl ViewerController {
             orbit_generation: state.main.generation_applied,
             plane,
             object,
+            plane_origin: self.requested.plane_origin,
             zoom_log2: state.hot.zoom_log2,
             view: self.requested.view,
             grid_width: grid_extent[0],
@@ -1231,12 +1232,9 @@ mod tests {
         assert!(!is_box_selection([f64::NAN, 200.0]));
     }
 
-    /// A target click recentres without changing scale, and reports the edit it staged.
-    ///
-    /// The displacement the worker publishes is the click's own pixel offset, because the plane
-    /// point that was under the click becomes the centre and the reference has not moved.
+    /// A target click moves only the crosshair and reports the screen anchor it stored.
     #[test]
-    fn a_target_click_moves_the_centre_by_its_own_pixels() {
+    fn a_target_click_moves_only_the_crosshair() {
         let mut viewer = ViewerController::new([960, 540]).expect("canonical viewer");
         let before = viewer.requested().zoom_log2;
         let edit = viewer
@@ -1250,9 +1248,9 @@ mod tests {
             }
         );
         assert!((viewer.requested().zoom_log2 - before).abs() < f64::EPSILON);
+        assert_eq!(viewer.crosshair_px_up(), [120.0, -45.0]);
         let displacement = viewer.owner().drain_hot().hot.centre_from_reference_px;
-        assert!((displacement[0] - 120.0).abs() < 1.0e-9);
-        assert!((displacement[1] + 45.0).abs() < 1.0e-9);
+        assert!(displacement.into_iter().all(|value| value.abs() < 1.0e-9));
     }
 
     /// A box release is one edit whose anchor is read at the scale the user was looking at.
@@ -1273,8 +1271,9 @@ mod tests {
         );
         assert!((viewer.requested().zoom_log2 - 1.0).abs() < f64::EPSILON);
         let displacement = viewer.owner().drain_hot().hot.centre_from_reference_px;
-        assert!((displacement[0] - 160.0).abs() < 1.0e-9);
-        assert!((displacement[1] - 60.0).abs() < 1.0e-9);
+        assert!((displacement[0] - 80.0).abs() < 1.0e-9);
+        assert!((displacement[1] - 30.0).abs() < 1.0e-9);
+        assert_eq!(viewer.crosshair_px_up(), [80.0, 30.0]);
     }
 
     /// The scale control is absolute, refuses its own ends, and zooms about the screen centre.

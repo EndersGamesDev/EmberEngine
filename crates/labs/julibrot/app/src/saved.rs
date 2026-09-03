@@ -55,6 +55,9 @@ pub struct SavedView {
     pub origin: [f64; 4],
     /// Ten ambient-camera angles in product order.
     pub camera: [f64; 10],
+    /// Five-dimensional camera translation applied before perspective.
+    #[serde(default)]
+    pub camera_translation: [f64; 5],
     /// Observer yaw in radians.
     pub camera_yaw: f64,
     /// Observer pitch in radians.
@@ -93,6 +96,7 @@ impl SavedView {
             object: requested.object_angles.as_array(),
             origin: requested.plane_origin,
             camera: requested.view.camera,
+            camera_translation: requested.view.camera_translation,
             camera_yaw: requested.view.camera_yaw,
             camera_pitch: requested.view.camera_pitch,
             height_scale: requested.view.height_scale,
@@ -104,11 +108,12 @@ impl SavedView {
         })
     }
 
-    /// Returns the fifteen view controls this row carries.
+    /// Returns the twenty view controls this row carries.
     #[must_use]
     pub const fn view(&self) -> ViewControls {
         ViewControls {
             camera: self.camera,
+            camera_translation: self.camera_translation,
             camera_yaw: self.camera_yaw,
             camera_pitch: self.camera_pitch,
             height_scale: self.height_scale,
@@ -170,6 +175,7 @@ impl SavedView {
             object: object.as_array(),
             origin,
             camera: view.camera,
+            camera_translation: view.camera_translation,
             camera_yaw: view.camera_yaw,
             camera_pitch: view.camera_pitch,
             height_scale: view.height_scale,

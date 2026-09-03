@@ -487,6 +487,18 @@ mod wasm_entry {
         })
     }
 
+    /// Stages the five-dimensional camera translation in chart units.
+    #[wasm_bindgen]
+    pub fn app_set_camera_translation(
+        t_1: f64,
+        t_2: f64,
+        t_3: f64,
+        t_4: f64,
+        t_5: f64,
+    ) -> Result<(), JsValue> {
+        with_view(|view| view.camera_translation = [t_1, t_2, t_3, t_4, t_5])
+    }
+
     /// Stages the observer yaw and pitch in radians.
     #[wasm_bindgen]
     pub fn app_set_camera(yaw: f64, pitch: f64) -> Result<(), JsValue> {
@@ -524,6 +536,7 @@ mod wasm_entry {
             "object": row.object_angles.as_array(),
             "origin": row.plane_origin,
             "camera": row.view.camera,
+            "camera_translation": row.view.camera_translation,
             "camera_yaw": row.view.camera_yaw,
             "camera_pitch": row.view.camera_pitch,
             "height_scale": row.view.height_scale,
@@ -684,8 +697,9 @@ mod wasm_entry {
 pub use wasm_entry::{
     app_crosshair_json, app_facts_json, app_morph_view, app_needs_refresh, app_pan_px, app_preset,
     app_refresh, app_request_frame, app_request_measurement, app_saved_view_json, app_set_camera,
-    app_set_camera_angles, app_set_centre, app_set_distances, app_set_height,
-    app_set_iteration_cap, app_set_object_angles, app_set_palette, app_set_plane_angles,
-    app_set_plane_origin, app_set_precision_mode, app_set_scale, app_set_target,
-    app_set_view_angles, app_zoom_box, julibrot_abi_version, start_julibrot,
+    app_refresh, app_request_frame, app_request_measurement, app_saved_view_json, app_set_camera,
+    app_set_camera_angles, app_set_camera_translation, app_set_centre, app_set_distances,
+    app_set_height, app_set_iteration_cap, app_set_object_angles, app_set_palette,
+    app_set_plane_angles, app_set_plane_origin, app_set_precision_mode, app_set_scale,
+    app_set_target, app_set_view_angles, app_zoom_box, julibrot_abi_version, start_julibrot,
 };

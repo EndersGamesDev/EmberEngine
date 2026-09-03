@@ -298,16 +298,46 @@ const fn schedule_exposure_fill(
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
+fn pose_maps_close(first: ember_julibrot_math::PoseMap, second: ember_julibrot_math::PoseMap) -> bool {
+    use ember_julibrot_math::PoseMap;
+    match (first, second) {
+        (PoseMap::EdgeOn, PoseMap::EdgeOn) => true,
+        (PoseMap::Mapped(first), PoseMap::Mapped(second)) => first
+            .inverse
+            .into_iter()
+            .zip(second.inverse)
+            .all(|(first, second)| (first - second).abs() <= 1.0e-12),
+        _ => false,
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn view_projection_changed(
+    first: ember_julibrot_math::ViewControls,
+    first_map: ember_julibrot_math::PoseMap,
+    second: ember_julibrot_math::ViewControls,
+    second_map: ember_julibrot_math::PoseMap,
+) -> bool {
+    if first.height_scale == 0.0 && second.height_scale == 0.0 {
+        !pose_maps_close(first_map, second_map)
+    } else {
+        first != second
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
 impl FrameLoop {
     fn refresh<P: PresenterPoll>(presenter: &mut P, now_ms: f64) -> Vec<P::Event> {
         presenter.poll_once(now_ms)
     }
 
-    const fn accept_request(&mut self, generation: u32, scene_ready: bool) {
+    const fn accept_request(&mut self, generation: u32, restart_scene: bool) {
         self.requested_run = true;
         self.completed_run = false;
-        if scene_ready && !self.schedule.pending() {
+        if restart_scene && !self.schedule.pending() {
             self.schedule.restart(generation);
+        } else if !self.schedule.pending() {
+            self.completed_run = true;
         }
     }
 
@@ -635,7 +665,23 @@ mod browser {
         view: ember_julibrot_math::ViewControls,
         zoom_log2: f64,
         object_angles: ObjectAngles,
+        map: PoseMap,
         precision_mode: u32,
+    }
+
+    impl ViewStamp {
+        fn render_equivalent(self, other: Self) -> bool {
+            let selection_matches = self.generation_applied == other.generation_applied
+                && self.centre_revision == other.centre_revision
+                && self.requested_iter_cap == other.requested_iter_cap
+                && self.palette_id == other.palette_id
+                && self.plane_origin_f64 == other.plane_origin_f64
+                && self.zoom_log2 == other.zoom_log2
+                && self.object_angles == other.object_angles
+                && self.precision_mode == other.precision_mode;
+            selection_matches
+                && !super::view_projection_changed(self.view, self.map, other.view, other.map)
+        }
     }
 
     /// What one poll of present's event queue said about this turn.
@@ -893,9 +939,11 @@ mod browser {
             self.synchronize_precision_mode(viewer)?;
             let presented = observed.presented;
             if requests.frame {
+                let restart_scene = self.scene_ready(viewer.requested().zoom_log2)
+                    && self.presented_view_is_stale(viewer);
                 self.loop_state.accept_request(
                     self.main.generation_applied,
-                    self.scene_ready(viewer.requested().zoom_log2),
+                    restart_scene,
                 );
                 requests.frame = false;
             }
@@ -913,10 +961,7 @@ mod browser {
             self.owner_epoch = hot.state.epoch;
             self.main = hot.state.main;
             self.observe_scene_selection(viewer);
-            if matches!(hot.pose.map, PoseMap::EdgeOn)
-                && !self.loop_state.refinement_pending()
-                && self.presented_view_is_stale(viewer)
-            {
+            if !self.loop_state.refinement_pending() && self.presented_view_is_stale(viewer) {
                 self.loop_state.restart(self.main.generation_applied);
                 self.prepared_level = None;
                 self.prepare_due_level();
@@ -1251,6 +1296,9 @@ mod browser {
                 view: requested.view,
                 zoom_log2: requested.zoom_log2,
                 object_angles: requested.object_angles,
+                map: viewer
+                    .screen_map(self.prepared_extent())
+                    .unwrap_or(PoseMap::EdgeOn),
                 precision_mode: self.main.precision_mode,
             }
         }
@@ -1261,7 +1309,9 @@ mod browser {
         /// stale, which is the honest answer: it is showing no view at all.
         #[must_use]
         pub fn presented_view_is_stale(&self, viewer: &ViewerController) -> bool {
-            self.presented_view != Some(self.view_stamp(viewer))
+            let current = self.view_stamp(viewer);
+            self.presented_view
+                .is_none_or(|presented| !presented.render_equivalent(current))
         }
 
         fn prepared_extent(&self) -> [u32; 2] {
@@ -1887,15 +1937,15 @@ mod tests {
 
     use ember_julibrot_kernels::{GridExtent, KernelMode, RefinementPlan, plan_refinement};
     use ember_julibrot_math::{
-        BigCentre, EscapeParams, Homography, MathError, OrbitStep, PoseMap, PrecisionMode,
-        ReferenceOrbitBuilder, precision_for,
+        BigCentre, EscapeParams, Homography, MathError, ObjectAngles, OrbitStep, PoseMap,
+        PrecisionMode, ReferenceOrbitBuilder, ViewControls, precision_for, screen_to_plane,
     };
 
     use super::{
         FenceRefusal, FrameLoop, LEVELS, PresenterPoll, RefinementLevel, RefinementSchedule,
         RefusalClass, SubmissionKind, apply_precision_mode, arrival_is_current, fence_error,
         expand_reference_texels, horizon_facts, main_for_grid, published_iteration_cap,
-        schedule_exposure_fill,
+        schedule_exposure_fill, view_projection_changed,
     };
     use crate::{FramePolicy, LevelTimingLedger, ViewerController};
     use ember_julibrot_present::{SampleClass, SubmissionMeasurement};
@@ -1914,6 +1964,27 @@ mod tests {
         assert_eq!(&texels[16..24], &records[8..]);
         assert_eq!(&texels[24..], &[0; 8]);
         assert!(expand_reference_texels(&records, 1).is_err());
+    }
+
+    #[test]
+    fn inert_distance_five_change_does_not_restart_a_flat_ladder() {
+        let before = ViewControls::MANDELBROT_FLAT;
+        let after = ViewControls {
+            distance_five: 64.0,
+            ..before
+        };
+        let map = |view| {
+            PoseMap::Mapped(
+                screen_to_plane(&ObjectAngles::IDENTITY, &view, 0.0, 960, 540, 16.0 / 9.0)
+                    .expect("faced flat map"),
+            )
+        };
+        assert!(!view_projection_changed(
+            before,
+            map(before),
+            after,
+            map(after)
+        ));
     }
 
     #[test]
