@@ -17,8 +17,8 @@ use ember_julibrot_math::{
     scale_split, scaled_pixel_offset, shallow_pixel_scale, warp_matrix,
 };
 use ember_julibrot_present::{
-    DEBUG_TINT, PaletteId, PaletteRecord, apply_homography, pack_homography_rows, palette,
-    shade_lit_escape_record,
+    DEBUG_TINT, GLITCH_DIAGNOSTIC, PaletteId, PaletteRecord, apply_homography,
+    pack_homography_rows, palette, shade_lit_escape_record,
 };
 use ember_lab_julibrot::preset_row;
 
@@ -272,6 +272,14 @@ fn exact_terminal_colours_and_warp_budget_are_pinned() -> Result<(), MathError> 
         assert_eq!(fast_clear.map(f32::to_bits), exact_clear.map(f32::to_bits));
         assert_eq!(exact_clear[3], 1.0);
         assert_eq!(
+            category_colour(
+                PrecisionMode::Deterministic,
+                [-1.0, 0.0, 0.0, 1.0],
+                selected,
+            ),
+            GLITCH_DIAGNOSTIC
+        );
+        assert_ne!(
             category_colour(
                 PrecisionMode::Deterministic,
                 [-1.0, 0.0, 0.0, 1.0],

@@ -33,7 +33,8 @@ fn hue_component(hue: f32, offset: f32) -> f32 {
     return clamp(abs(fract(hue + offset) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
 }
 fn shade(record: vec4<f32>) -> vec4<f32> {
-    if (malformed(record) || record.w == 1.0) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
+    if (malformed(record)) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
+    if (record.w == 1.0) { return vec4<f32>(1.0, 0.375, 0.0, 1.0); }
     if (record.w == 2.0) { return hot.exterior_zero_rgba; }
     if (record.y == 0.0) {
         if (record.x == -1.0) { return scene.interior_rgba; }
@@ -141,7 +142,8 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     let limit = vec2<f32>(f32(scene.grid.x - 1u), f32(scene.grid.y - 1u));
     let coordinate = vec2<u32>(clamp(floor(input.grid_coordinate + vec2<f32>(0.5)), vec2<f32>(0.0), limit));
     let record = load_escape(coordinate.y * scene.grid.x + coordinate.x);
-    if (malformed(record) || record.w == 1.0) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
+    if (malformed(record)) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
+    if (record.w == 1.0) { return vec4<f32>(1.0, 0.375, 0.0, 1.0); }
     if (record.w == 2.0 || scene.span.z != 0u) { return hot.exterior_zero_rgba; }
     let normal_cross = cross(dpdx(input.world), dpdy(input.world));
     var normal = vec3<f32>(0.0, 0.0, 1.0);
@@ -259,10 +261,14 @@ mod tests {
     }
 
     #[test]
-    fn the_scene_loads_bottom_row_and_debugs_before_escape() {
+    fn the_scene_loads_bottom_row_and_keeps_glitches_out_of_debug() {
         let source = scene_shader(limits());
         assert!(source.contains("let row = index / scene.grid.x;"));
-        assert!(source.contains("malformed(record) || record.w == 1.0"));
+        assert!(source.contains("if (malformed(record))"));
+        assert!(
+            source.contains("if (record.w == 1.0) { return vec4<f32>(1.0, 0.375, 0.0, 1.0); }")
+        );
+        assert!(!source.contains("malformed(record) || record.w == 1.0"));
         assert!(source.contains("if (record.w == 2.0) { return hot.exterior_zero_rgba; }"));
         assert!(!source.contains("record.w == 2.0 || record.w == 3.0"));
         // A beyond-bailout escape carries a negative smooth count and is an ordinary exterior

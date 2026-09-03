@@ -116,8 +116,8 @@ pub fn height_for_record(
     }
     let palette = shade_escape_record(record, selected);
     let status = record[3];
-    let debug_tint = palette.rgba == DEBUG_TINT && (palette.contract_violation || status == 1.0);
-    let height = if debug_tint || status == 2.0 {
+    let debug_tint = palette.rgba == DEBUG_TINT && palette.contract_violation;
+    let height = if debug_tint || status == 1.0 || status == 2.0 {
         0.0
     } else if record[1] == 0.0 {
         -2.0
@@ -271,7 +271,7 @@ mod tests {
         );
         let glitch = height_for_record([20.0, 1.0, 4.0, 1.0], 64, CLASSIC_PALETTE)?;
         assert_eq!(glitch.height, 0.0);
-        assert!(glitch.debug_tint);
+        assert!(!glitch.debug_tint);
         assert!(!glitch.contract_violation);
         let escaped = height_for_record([32.0, 1.0, 0.0, 0.0], 64, CLASSIC_PALETTE)?;
         assert_eq!(escaped.height, 0.0);

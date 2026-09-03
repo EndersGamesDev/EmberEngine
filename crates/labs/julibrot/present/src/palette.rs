@@ -1,7 +1,10 @@
 use bytemuck::{Pod, Zeroable};
 
-/// Opaque debug tint used for glitches and malformed escape records.
+/// Opaque debug tint reserved for malformed escape records.
 pub const DEBUG_TINT: [f32; 4] = [1.0, 0.0, 1.0, 1.0];
+
+/// Opaque diagnostic colour used for a measured perturbation glitch.
+pub const GLITCH_DIAGNOSTIC: [f32; 4] = [1.0, 0.375, 0.0, 1.0];
 
 /// A stable identifier for one present-owned palette.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,10 +100,16 @@ pub fn shade_escape_record(record: [f32; 4], selected: PaletteRecord) -> Palette
         || !rebase_count.is_finite()
         || rebase_count < 0.0
         || rebase_count.fract() != 0.0;
-    if malformed || status == 1.0 {
+    if malformed {
         return PaletteOutcome {
             rgba: DEBUG_TINT,
-            contract_violation: malformed,
+            contract_violation: true,
+        };
+    }
+    if status == 1.0 {
+        return PaletteOutcome {
+            rgba: GLITCH_DIAGNOSTIC,
+            contract_violation: false,
         };
     }
     if status == 2.0 {
@@ -154,7 +163,7 @@ pub fn shade_lit_escape_record(
     light: f32,
 ) -> PaletteOutcome {
     let mut outcome = shade_escape_record(record, selected);
-    if outcome.rgba == DEBUG_TINT {
+    if outcome.rgba == DEBUG_TINT || outcome.rgba == GLITCH_DIAGNOSTIC {
         return outcome;
     }
     if !(0.58..=0.82).contains(&light) {
@@ -215,7 +224,10 @@ mod tests {
             assert_palette_contract(mode, interior.rgba, CLASSIC_PALETTE.interior_rgba);
             assert!(!interior.contract_violation);
             let glitch = shade_escape_record([4.0, 0.0, 2.0, 1.0], CLASSIC_PALETTE);
-            assert_palette_contract(mode, glitch.rgba, DEBUG_TINT);
+            assert_palette_contract(mode, glitch.rgba, GLITCH_DIAGNOSTIC);
+            assert_ne!(glitch.rgba, DEBUG_TINT);
+            assert_ne!(glitch.rgba, CLASSIC_PALETTE.clear_rgba);
+            assert_ne!(glitch.rgba, exterior_zero(CLASSIC_PALETTE));
             assert!(!glitch.contract_violation);
             let malformed = shade_escape_record([-1.0, 0.5, 0.0, 0.0], CLASSIC_PALETTE);
             assert_palette_contract(mode, malformed.rgba, DEBUG_TINT);
@@ -310,7 +322,7 @@ mod tests {
         assert_eq!(escaped.rgba[1], base.rgba[1] * 0.7);
         assert_eq!(escaped.rgba[2], base.rgba[2] * 0.7);
         assert_eq!(escaped.rgba[3], 1.0);
-        let debug = shade_lit_escape_record([4.0, 0.0, 2.0, 1.0], CLASSIC_PALETTE, 0.7);
-        assert_eq!(debug.rgba, DEBUG_TINT);
+        let diagnostic = shade_lit_escape_record([4.0, 0.0, 2.0, 1.0], CLASSIC_PALETTE, 0.7);
+        assert_eq!(diagnostic.rgba, GLITCH_DIAGNOSTIC);
     }
 }

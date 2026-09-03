@@ -30,8 +30,9 @@ pub use mesh::{
     display_coordinate, height_for_record, scene_index_count, scene_indices, view_scale,
 };
 pub use palette::{
-    CLASSIC_PALETTE, DEBUG_TINT, EMBER_PALETTE, ICE_PALETTE, PaletteId, PaletteOutcome,
-    PaletteRecord, exterior_zero, palette, shade_escape_record, shade_lit_escape_record,
+    CLASSIC_PALETTE, DEBUG_TINT, EMBER_PALETTE, GLITCH_DIAGNOSTIC, ICE_PALETTE, PaletteId,
+    PaletteOutcome, PaletteRecord, exterior_zero, palette, shade_escape_record,
+    shade_lit_escape_record,
 };
 pub use planner::{
     WARP_MAX_ERROR_PX, Warp, project_scene_point, project_scene_vertex, renders_same_picture,
