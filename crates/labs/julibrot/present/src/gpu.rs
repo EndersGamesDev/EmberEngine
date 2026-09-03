@@ -584,25 +584,14 @@ impl Presenter {
             );
             self.facts.record_relief_redraw();
         } else {
-            let clear = selected.1.clear_rgba;
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Julibrot sole warp pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: state.surface_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(color(clear)),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.gpu.warp_pipeline);
-            pass.set_bind_group(0, &self.gpu.scene_textures[texture_index].warp_group, &[]);
-            pass.set_bind_group(1, &self.gpu.warp_hot_group, &[hot_slot.dynamic_offset()]);
-            pass.draw(0..3, 0..1);
+            encode_image_warp(
+                &mut encoder,
+                &self.gpu,
+                state.surface_view,
+                texture_index,
+                hot_slot.dynamic_offset(),
+                selected.1,
+            );
         }
         encoder.clear_buffer(&self.gpu.warp_fence, 0, Some(FENCE_BYTES));
         self.queue.submit([encoder.finish()]);
@@ -1362,6 +1351,34 @@ fn encode_relief_redraw(
         selected,
         "Julibrot relief redraw pass",
     );
+}
+
+fn encode_image_warp(
+    encoder: &mut wgpu::CommandEncoder,
+    gpu: &GpuState,
+    surface_view: &wgpu::TextureView,
+    texture_index: usize,
+    hot_offset: u32,
+    selected: PaletteRecord,
+) {
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Julibrot sole warp pass"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: surface_view,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(color(selected.clear_rgba)),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        occlusion_query_set: None,
+        timestamp_writes: None,
+    });
+    pass.set_pipeline(&gpu.warp_pipeline);
+    pass.set_bind_group(0, &gpu.scene_textures[texture_index].warp_group, &[]);
+    pass.set_bind_group(1, &gpu.warp_hot_group, &[hot_offset]);
+    pass.draw(0..3, 0..1);
 }
 
 #[allow(
