@@ -249,6 +249,7 @@ fn forced_rescale_rebase_and_boundary_fixtures_remain_explicit() {
         glitch: false,
     };
     let boundary = evaluate_perturbation_conformance(
+        PrecisionMode::Deterministic,
         observed,
         expected,
         PerturbationEnvelope {
