@@ -1,6 +1,6 @@
 {
   "ws": "wss://privacy-interracial-thumbnails-bedford.trycloudflare.com",
-  "v": "1788453270",
+  "v": "1788456596",
   "proto": 14,
   "fire_ws": "wss://msg-crest-remembered-literally.trycloudflare.com",
   "fire_proto": 1,
@@ -26,12 +26,12 @@
     },
     {
       "name": "dusky-osprey",
-      "ws": "wss://privacy-interracial-thumbnails-bedford.trycloudflare.com",
-      "proto": 14,
-      "version": "r576",
-      "commit": "c375ae9",
+      "ws": "wss://his-cartoon-story-remark.trycloudflare.com",
+      "proto": 15,
+      "version": "r580",
+      "commit": "fa12c2a",
       "by": "end@DESKTOP-E9PKJUK",
-      "updated": "2026-09-03T16:34:30Z"
+      "updated": "2026-09-03T17:29:56Z"
     }
   ]
 }
