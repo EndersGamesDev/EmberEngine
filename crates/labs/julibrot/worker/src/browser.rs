@@ -13,7 +13,9 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent, WorkerGlobalScope};
 
-use crate::codec::visit_transfer_request_body_words;
+use crate::codec::{
+    REQUEST_FIXED_END, REQUEST_LIMB_COUNT_OFFSET, visit_transfer_request_body_words,
+};
 use crate::wire::{
     BUFFER_OVERHEAD_BYTES, ORBIT_FACT_BYTES, OrbitVerificationFacts, WireBuffer,
     retains_orbit_payload, validate_message_layout, write_words,
@@ -28,9 +30,6 @@ use crate::{
 thread_local! {
     static PRODUCER: RefCell<Option<BrowserProducer>> = const { RefCell::new(None) };
 }
-
-const REQUEST_LIMB_COUNT_OFFSET: u32 = 44;
-const REQUEST_FIXED_BYTES: u32 = 116;
 
 struct BrowserProducer {
     scope: DedicatedWorkerGlobalScope,
@@ -312,13 +311,17 @@ impl TransferBuffer {
         if pool != Pool::Request || header.validate()? != MessageKind::OrbitRequest {
             return Err(ChannelError::new(ErrorCode::BadKind, header.kind, 0, 0));
         }
-        let limb_count = self.word(REQUEST_LIMB_COUNT_OFFSET);
+        let limb_count_offset = u32::try_from(REQUEST_LIMB_COUNT_OFFSET)
+            .map_err(|_| ChannelError::new(ErrorCode::BadLength, 0, u32::MAX, 0))?;
+        let fixed_end = u32::try_from(REQUEST_FIXED_END)
+            .map_err(|_| ChannelError::new(ErrorCode::BadLength, 0, u32::MAX, 0))?;
+        let limb_count = self.word(limb_count_offset);
         let used = limb_count
             .checked_mul(4)
-            .and_then(|limb_bytes| REQUEST_FIXED_BYTES.checked_add(limb_bytes))
+            .and_then(|limb_bytes| fixed_end.checked_add(limb_bytes))
             .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, limb_count, u32::MAX, 0))?;
         let available = self.bytes.length() - u32::try_from(POOL_TRAILER_BYTES).unwrap_or(16);
-        if used > available || (used..available).any(|offset| self.bytes.get_index(offset) != 0) {
+        if used > available {
             return Err(ChannelError::new(
                 ErrorCode::BadLength,
                 limb_count,

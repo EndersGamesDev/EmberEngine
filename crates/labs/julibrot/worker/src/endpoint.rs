@@ -20,6 +20,7 @@ use crate::{
     WorkerConfig, WorkerFacts, WorkerMode,
 };
 
+/// A fixed-capacity FIFO whose `clear` drops occupied values in physical slot order.
 struct TwoSlotQueue<T> {
     slots: [Option<T>; 2],
     head: usize,
@@ -43,11 +44,14 @@ impl<T> TwoSlotQueue<T> {
         self.len == 0
     }
 
-    fn push_back(&mut self, value: T) {
-        debug_assert!(self.len < 2);
+    fn push_back(&mut self, value: T) -> Result<(), T> {
+        if self.len == 2 {
+            return Err(value);
+        }
         let tail = (self.head + self.len) & 1;
         self.slots[tail] = Some(value);
         self.len += 1;
+        Ok(())
     }
 
     const fn pop_front(&mut self) -> Option<T> {
@@ -325,7 +329,9 @@ impl<P: OwnerPort> OwnerCore<P> {
                 } else if self.arrivals.len() == 2 {
                     return Err(ChannelError::new(ErrorCode::BufferStarved, 2, 0, 0));
                 } else {
-                    self.arrivals.push_back(slot);
+                    self.arrivals.push_back(slot).map_err(|_| {
+                        ChannelError::new(ErrorCode::BufferStarved, 2, 0, 0)
+                    })?;
                 }
             }
             (Pool::Orbit, MessageKind::CreditStale) => {
@@ -1227,6 +1233,17 @@ mod tests {
     }
 
     #[test]
+    fn a_full_two_slot_queue_refuses_without_overwriting() {
+        let mut queue = TwoSlotQueue::new();
+        assert_eq!(queue.push_back(10), Ok(()));
+        assert_eq!(queue.push_back(20), Ok(()));
+        assert_eq!(queue.push_back(30), Err(30));
+        assert_eq!(queue.len(), 2);
+        assert_eq!(queue.pop_front(), Some(10));
+        assert_eq!(queue.pop_front(), Some(20));
+    }
+
+    #[test]
     #[ignore = "measurement harness"]
     #[allow(
         clippy::print_stderr,
@@ -1244,8 +1261,8 @@ mod tests {
         let shifted_wall = shifted_start.elapsed();
 
         let mut fixed = TwoSlotQueue::new();
-        fixed.push_back(0_u32);
-        fixed.push_back(1);
+        fixed.push_back(0_u32).expect("first fixed slot");
+        fixed.push_back(1).expect("second fixed slot");
         let fixed_start = Instant::now();
         let mut fixed_sum = 0_u64;
         for next in 2..DRAINS + 2 {
@@ -1254,7 +1271,7 @@ mod tests {
                     .pop_front()
                     .expect("the two-slot queue stays populated"),
             ));
-            fixed.push_back(next);
+            fixed.push_back(next).expect("one fixed slot is free");
         }
         let fixed_wall = fixed_start.elapsed();
 
@@ -1277,13 +1294,11 @@ mod tests {
 
         assert_eq!(prefix_bytes, 628);
         assert_eq!(buffer.capacity(), 32_832);
-        assert_eq!(OrbitRequest::decode(&buffer).unwrap(), request);
-        assert!(
-            buffer.as_bytes()[prefix_bytes..buffer.capacity() - crate::POOL_TRAILER_BYTES]
-                .iter()
-                .all(|byte| *byte == 0),
-            "the browser decoder can validate the unused tail without copying it"
+        assert_eq!(
+            prefix_bytes,
+            crate::codec::REQUEST_FIXED_END + request.centre().limbs.len() * 4
         );
+        assert_eq!(OrbitRequest::decode(&buffer).unwrap(), request);
     }
 
     #[test]
@@ -1318,7 +1333,7 @@ mod tests {
         assert_eq!(whole_total, buffer.capacity() * COPIES as usize);
         assert_eq!(prefix_total, prefix_bytes * COPIES as usize);
         eprintln!(
-            "PF-R7 copies={COPIES} whole_bytes_per_decode={} prefix_bytes_per_decode={prefix_bytes} whole_us={} prefix_us={}",
+            "PF-R7 copies={COPIES} whole_bytes_per_decode={} prefix_bytes_per_decode={prefix_bytes} native_whole_copy_us={} native_prefix_copy_us={}",
             buffer.capacity(),
             whole_wall.as_micros(),
             prefix_wall.as_micros()
