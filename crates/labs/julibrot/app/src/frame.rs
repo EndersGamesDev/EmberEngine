@@ -305,6 +305,10 @@ fn fence_error(kind: SubmissionKind, reason: FenceRefusal, polls: u32, wall_ms: 
 
 #[cfg(any(target_arch = "wasm32", test))]
 #[derive(Clone, Debug, Default, PartialEq)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "manual dirtiness, manual rendering, requested run, and completed run are independent scheduler facts"
+)]
 struct FrameLoop {
     schedule: RefinementSchedule,
     scene_mode: SceneMode,
@@ -440,7 +444,7 @@ impl FrameLoop {
         }
     }
 
-    const fn set_scene_mode(&mut self, mode: SceneMode, generation: u32, has_scene: bool) {
+    fn set_scene_mode(&mut self, mode: SceneMode, generation: u32, has_scene: bool) {
         if self.scene_mode == mode {
             return;
         }
@@ -495,9 +499,7 @@ impl FrameLoop {
     fn completed(&mut self, id: u64, generation: u32, level: RefinementLevel) -> bool {
         let observed = self.schedule.matches_scene(id);
         let completed = self.schedule.completed(id, generation, level);
-        if observed
-            && let Some(restart_generation) = self.restart_after_scene.take()
-        {
+        if observed && let Some(restart_generation) = self.restart_after_scene.take() {
             self.restart(restart_generation);
             return true;
         }
@@ -512,9 +514,7 @@ impl FrameLoop {
 
     fn retired(&mut self, id: u64) -> bool {
         let retired = self.schedule.retired(id);
-        if retired
-            && let Some(restart_generation) = self.restart_after_scene.take()
-        {
+        if retired && let Some(restart_generation) = self.restart_after_scene.take() {
             self.restart(restart_generation);
         }
         if self.requested_run && !self.schedule.pending() {
@@ -674,16 +674,19 @@ impl RefinementSchedule {
     }
 
     /// Stops future levels without forgetting a scene whose fence must still be observed.
+    #[cfg(any(target_arch = "wasm32", test))]
     const fn pause(&mut self) {
         self.next = None;
     }
 
     /// Reports whether a submitted scene still owns the present target.
+    #[cfg(any(target_arch = "wasm32", test))]
     const fn scene_in_flight(&self) -> bool {
         self.in_flight.is_some()
     }
 
     /// Reports whether the named scene is the one whose fence remains outstanding.
+    #[cfg(any(target_arch = "wasm32", test))]
     fn matches_scene(&self, id: u64) -> bool {
         self.in_flight.is_some_and(|ticket| ticket.id == id)
     }
@@ -2870,6 +2873,7 @@ mod tests {
         let clock = FakeClock::default();
         frame_loop.set_scene_mode(SceneMode::Manual, 7, true);
         frame_loop.accept_request(7, true);
+        frame_loop.scene_selection_changed(7);
 
         let turn = drive_turn(
             &mut frame_loop,
@@ -2880,7 +2884,10 @@ mod tests {
         );
         assert_eq!(presenter.hot_writes, 1);
         assert_eq!(turn.scene_id, None);
-        assert!(turn.warp_id.is_some(), "the changed HOT pose is still reprojected");
+        assert!(
+            turn.warp_id.is_some(),
+            "the changed HOT pose is still reprojected"
+        );
         assert!(frame_loop.scene_update_pending());
         assert!(!frame_loop.refinement_pending());
 
@@ -2906,15 +2913,24 @@ mod tests {
         frame_loop.accept_request(11, true);
         frame_loop.request_scene_update(11);
         assert_eq!(frame_loop.due(), Some(RefinementLevel::Preview));
-        assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), Some(1));
+        assert_eq!(
+            drive_refresh(&mut frame_loop, &mut presenter, clock),
+            Some(1)
+        );
 
         presenter.fire_completed_callback();
         clock.advance(1.0);
-        assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), Some(2));
+        assert_eq!(
+            drive_refresh(&mut frame_loop, &mut presenter, clock),
+            Some(2)
+        );
         assert!(!frame_loop.scene_update_pending());
         presenter.fire_completed_callback();
         clock.advance(1.0);
-        assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), Some(3));
+        assert_eq!(
+            drive_refresh(&mut frame_loop, &mut presenter, clock),
+            Some(3)
+        );
         presenter.fire_completed_callback();
         clock.advance(1.0);
         assert_eq!(drive_refresh(&mut frame_loop, &mut presenter, clock), None);
@@ -2940,6 +2956,7 @@ mod tests {
         let mut frame_loop = FrameLoop::default();
         frame_loop.set_scene_mode(SceneMode::Manual, 13, true);
         frame_loop.accept_request(13, true);
+        frame_loop.scene_input_ready(14);
         assert_eq!(frame_loop.due(), None);
         assert!(frame_loop.needs_refresh(false, false, true, false));
     }

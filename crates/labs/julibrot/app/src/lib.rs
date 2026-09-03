@@ -237,9 +237,9 @@ mod wasm_entry {
     use ember_julibrot_present::PaletteId;
 
     use crate::{
-        App, JULIBROT_ABI_VERSION, PageFacts, SavedCentre, SavedView, anchor_px_up,
+        App, JULIBROT_ABI_VERSION, PageFacts, SavedCentre, SavedView, SceneMode, anchor_px_up,
         box_zoom_delta_log2, css_from_anchor_px_up, drag_delta_px_down, is_box_selection,
-        preset_row, SceneMode,
+        preset_row,
     };
 
     thread_local! {
