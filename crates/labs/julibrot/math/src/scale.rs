@@ -257,7 +257,10 @@ mod tests {
     use crate::{BigCentre, MathError, Plane, decode_big_scalar};
 
     #[test]
-    #[allow(clippy::print_stderr, reason = "this is the explicit measurement report")]
+    #[allow(
+        clippy::print_stderr,
+        reason = "this is the explicit measurement report"
+    )]
     fn low_word_changes_the_consumed_binary32_value_in_ten_thousand_splits() -> Result<(), MathError>
     {
         const RANDOM_COUNT: usize = 9_984;

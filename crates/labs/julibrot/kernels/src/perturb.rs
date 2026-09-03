@@ -409,7 +409,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::print_stderr, reason = "this is the explicit accuracy measurement")]
+    #[allow(
+        clippy::print_stderr,
+        reason = "this is the explicit accuracy measurement"
+    )]
     fn double_single_reference_multiply_improves_a_midpoint_product() {
         let record = ReferenceOrbitRecord {
             re_hi: 1.0,
@@ -565,7 +568,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::print_stderr, reason = "this is the explicit corpus measurement")]
+    #[allow(
+        clippy::print_stderr,
+        reason = "this is the explicit corpus measurement"
+    )]
     fn deep_corpus_matches_math_across_rescales_rebase_and_mixed_offsets() {
         let escaped_orbit = [
             ZERO,
@@ -626,7 +632,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::print_stderr, reason = "this is the explicit boundary measurement")]
+    #[allow(
+        clippy::print_stderr,
+        reason = "this is the explicit boundary measurement"
+    )]
     fn boundary_envelope_is_conservative_and_within_four_times_observed_error() {
         let boundary = ReferenceOrbitRecord {
             re_hi: 16.0,

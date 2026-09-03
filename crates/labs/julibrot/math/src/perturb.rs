@@ -423,9 +423,8 @@ fn operation_rounding_error(
     delta_c_norm: f64,
     exponent: i32,
 ) -> f64 {
-    let local_magnitude = delta_norm
-        .mul_add(delta_norm, 2.0 * reference_norm * delta_norm)
-        + delta_c_norm;
+    let local_magnitude =
+        delta_norm.mul_add(delta_norm, 2.0 * reference_norm * delta_norm) + delta_c_norm;
     20.0_f64.mul_add(
         scaled_subnormal_floor(exponent),
         gamma(20) * local_magnitude,
