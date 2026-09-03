@@ -5,7 +5,7 @@ use ember_julibrot_kernels::RefinementPlan;
 use ember_julibrot_kernels::{RefinementLevel, next_refinement_level};
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_math::PICTURE_FAST_EDIT_BUDGET;
-use ember_julibrot_math::PrecisionMode;
+use ember_julibrot_math::{PoseMap, PrecisionMode};
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_present::{FenceRefusal, SubmissionKind};
 
@@ -50,6 +50,111 @@ fn expand_reference_texels(records: &[u8], length: u32) -> Result<Vec<u8>, AppEr
         texel[..REFERENCE_RECORD_BYTES].copy_from_slice(record);
     }
     Ok(texels)
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct HorizonFacts {
+    pixels: u64,
+    fraction: f64,
+    uncertain_pixels: u64,
+    uncertain_fraction: f64,
+    condition_number: f64,
+    edge_on: bool,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::suboptimal_flops,
+    reason = "the facts census mirrors the kernel's f32 operation sequence"
+)]
+fn horizon_facts(map: PoseMap, extent: [u32; 2]) -> HorizonFacts {
+    let [width, height] = extent;
+    if width == 0 || height == 0 {
+        return HorizonFacts::default();
+    }
+    let total = u64::from(width) * u64::from(height);
+    let PoseMap::Mapped(screen_to_plane) = map else {
+        return HorizonFacts {
+            pixels: total,
+            fraction: 1.0,
+            uncertain_pixels: 0,
+            uncertain_fraction: 0.0,
+            condition_number: 0.0,
+            edge_on: true,
+        };
+    };
+    let rows: [[f32; 3]; 3] = core::array::from_fn(|row| {
+        core::array::from_fn(|column| screen_to_plane.rows[row * 3 + column] as f32)
+    });
+    let mut horizon = 0_u64;
+    let mut uncertain = 0_u64;
+    for row in 0..height {
+        for column in 0..width {
+            let x = column as f32 + 0.5 - 0.5 * width as f32;
+            let y = row as f32 + 0.5 - 0.5 * height as f32;
+            let homogeneous = rows.map(|map_row| map_row[0] * x + map_row[1] * y + map_row[2]);
+            if homogeneous[2].is_finite() && homogeneous[2] <= 0.0 {
+                horizon += 1;
+                continue;
+            }
+            if map_is_uncertain(rows, [x, y], homogeneous) {
+                uncertain += 1;
+            }
+        }
+    }
+    HorizonFacts {
+        pixels: horizon,
+        fraction: horizon as f64 / total as f64,
+        uncertain_pixels: uncertain,
+        uncertain_fraction: uncertain as f64 / total as f64,
+        condition_number: screen_to_plane.condition_number,
+        edge_on: false,
+    }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+#[allow(
+    clippy::suboptimal_flops,
+    reason = "the facts census mirrors the kernel's f32 operation sequence"
+)]
+fn map_is_uncertain(rows: [[f32; 3]; 3], point: [f32; 2], homogeneous: [f32; 3]) -> bool {
+    if !homogeneous.iter().all(|value| value.is_finite()) || homogeneous[2] <= 0.0 {
+        return true;
+    }
+    let scales = rows.map(|row| {
+        row[0]
+            .abs()
+            .mul_add(point[0].abs(), row[1].abs() * point[1].abs())
+            + row[2].abs()
+    });
+    let errors = scales.map(|scale| 4.0 * f32::EPSILON * scale);
+    let mapped = [
+        homogeneous[0] / homogeneous[2],
+        homogeneous[1] / homogeneous[2],
+    ];
+    if !mapped.iter().all(|value| value.is_finite()) || homogeneous[2] <= errors[2] {
+        return true;
+    }
+    let safe_denominator = homogeneous[2] - errors[2];
+    let quotient = [
+        (errors[0] + mapped[0].abs() * errors[2]) / safe_denominator,
+        (errors[1] + mapped[1].abs() * errors[2]) / safe_denominator,
+    ];
+    quotient[0] * quotient[0] + quotient[1] * quotient[1] > 0.0625
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn main_for_grid(
+    mut state: ember_julibrot_worker::MainState,
+    grid_width: u32,
+    requested_width: u32,
+) -> ember_julibrot_worker::MainState {
+    let ratio = f64::from(grid_width) / f64::from(requested_width);
+    state.reference_shift_px = state.reference_shift_px.map(|value| value * ratio);
+    state
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -174,6 +279,20 @@ struct FrameLoop {
     transient_refusals: u32,
     last_transient: Option<AppError>,
     stopped: Option<AppError>,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+const fn schedule_exposure_fill(
+    frame_loop: &mut FrameLoop,
+    exposed: bool,
+    generation: u32,
+) -> bool {
+    if exposed && !frame_loop.refinement_pending() {
+        frame_loop.restart(generation);
+        true
+    } else {
+        false
+    }
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -438,7 +557,8 @@ mod browser {
         ReferenceOrbitInput, RefinementLevel, RefinementPlan,
     };
     use ember_julibrot_math::{
-        BigCentre, EscapeParams, Plane, PrecisionMode, precision_for, reference_shift_px,
+        BigCentre, EscapeParams, ObjectAngles, Plane, PoseMap, PrecisionMode, precision_for,
+        reference_shift_px,
         scale_split, shallow_pixel_scale, split_centre,
     };
     use ember_julibrot_present::{
@@ -512,7 +632,7 @@ mod browser {
         plane_origin_f64: [f64; 4],
         view: ember_julibrot_math::ViewControls,
         zoom_log2: f64,
-        plane_angles: [f64; 2],
+        object_angles: ObjectAngles,
         precision_mode: u32,
     }
 
@@ -556,6 +676,13 @@ mod browser {
         last_status: RefreshStatus,
         level_timings: LevelTimingLedger,
         precision_mode: PrecisionMode,
+        horizon_pixels: u64,
+        horizon_fraction: f64,
+        uncertain_pixels: u64,
+        uncertain_fraction: f64,
+        map_condition_number: f64,
+        edge_on: bool,
+        facts_pose: (PoseMap, [u32; 2]),
     }
 
     impl BrowserFrameLoop {
@@ -645,10 +772,16 @@ mod browser {
             .map_err(present_error)?;
             let mut main = viewer.owner().snapshot().main;
             main.delivered_iter_cap = super::published_iteration_cap(&plan);
+            let map = viewer.screen_map([grid.width, grid.height])?;
+            let plane = ember_julibrot_math::construct_plane(requested.object_angles)
+                .map_err(math_error)?;
             presenter.set_main(PresentMain {
                 epoch: 0,
-                state: main,
+                state: super::main_for_grid(main, grid.width, plan.requested_extent.width),
                 grid: grid.clone(),
+                object: requested.object_angles,
+                plane,
+                map,
             });
             let (owner_endpoint, producer_endpoint) = WorkerChannel::new(
                 WorkerConfig {
@@ -657,6 +790,8 @@ mod browser {
                 WorkerMode::WebWorker,
             )
             .map_err(worker_error)?;
+            let grid_extent = [grid.width, grid.height];
+            let initial_horizon = super::horizon_facts(map, grid_extent);
             let frame_loop = Self {
                 device,
                 queue,
@@ -688,6 +823,13 @@ mod browser {
                 last_status: RefreshStatus::Waiting,
                 level_timings: LevelTimingLedger::default(),
                 precision_mode: applied_precision_mode,
+                horizon_pixels: initial_horizon.pixels,
+                horizon_fraction: initial_horizon.fraction,
+                uncertain_pixels: initial_horizon.uncertain_pixels,
+                uncertain_fraction: initial_horizon.uncertain_fraction,
+                map_condition_number: initial_horizon.condition_number,
+                edge_on: initial_horizon.edge_on,
+                facts_pose: (map, grid_extent),
             };
             Ok(frame_loop)
         }
@@ -769,7 +911,15 @@ mod browser {
             self.owner_epoch = hot.state.epoch;
             self.main = hot.state.main;
             self.observe_scene_selection(viewer);
-            self.install_main();
+            if matches!(hot.pose.map, PoseMap::EdgeOn)
+                && !self.loop_state.refinement_pending()
+                && self.presented_view_is_stale(viewer)
+            {
+                self.loop_state.restart(self.main.generation_applied);
+                self.prepared_level = None;
+                self.prepare_due_level();
+            }
+            self.install_main(hot.pose.object, hot.plane, hot.pose.map);
             let mut slot = HotSlot::for_refresh(self.refresh_id, self.hot_stride, hot.state.epoch)
                 .map_err(|error| AppError::Present(error.to_string()))?;
             let measure_validation =
@@ -786,9 +936,14 @@ mod browser {
                 slot,
                 PresentHot {
                     epoch: hot.state.epoch,
-                    state: hot.state.hot,
+                    state: ember_julibrot_worker::HotState {
+                        centre_from_reference_px: hot.pose.centre_from_reference_px,
+                        ..hot.state.hot
+                    },
+                    object: hot.pose.object,
                     plane: hot.plane,
                     view: viewer.requested().view,
+                    map: hot.pose.map,
                 },
                 validation,
             );
@@ -801,16 +956,21 @@ mod browser {
                 self.owner_epoch = hot.state.epoch;
                 self.main = hot.state.main;
                 self.observe_scene_selection(viewer);
-                self.install_main();
+                self.install_main(hot.pose.object, hot.plane, hot.pose.map);
                 slot = HotSlot::for_refresh(self.refresh_id, self.hot_stride, hot.state.epoch)
                     .map_err(|error| AppError::Present(error.to_string()))?;
                 self.presenter.write_hot(
                     slot,
                     PresentHot {
                         epoch: hot.state.epoch,
-                        state: hot.state.hot,
+                        state: ember_julibrot_worker::HotState {
+                            centre_from_reference_px: hot.pose.centre_from_reference_px,
+                            ..hot.state.hot
+                        },
+                        object: hot.pose.object,
                         plane: hot.plane,
                         view: viewer.requested().view,
+                        map: hot.pose.map,
                     },
                     WarpValidation::Ordinary,
                 );
@@ -818,7 +978,15 @@ mod browser {
             let scene_id = if main_arrived {
                 None
             } else {
-                self.submit_due_scene(viewer, hot.plane, slot, hot.state.epoch, now_ms)?
+                self.submit_due_scene(
+                    viewer,
+                    hot.pose.object,
+                    hot.plane,
+                    hot.pose.map,
+                    slot,
+                    hot.state.epoch,
+                    now_ms,
+                )?
             };
 
             let mut warp_id = None;
@@ -849,6 +1017,13 @@ mod browser {
                         };
                         warp_id = Some(receipt.warp_id);
                         self.last_warp_source = receipt.source_scene_id;
+                        if super::schedule_exposure_fill(
+                            &mut self.loop_state,
+                            receipt.exposed,
+                            self.main.generation_applied,
+                        ) {
+                            self.prepared_level = None;
+                        }
                         if let Err(error) = runtime.retain_for_warp(
                             receipt.warp_id,
                             self.loop_state.generation(),
@@ -1007,7 +1182,7 @@ mod browser {
             level == RefinementLevel::Final
         }
 
-        fn install_main(&mut self) {
+        fn install_main(&mut self, object: ObjectAngles, plane: Plane, map: PoseMap) {
             let mut grid = self.grid.clone();
             if let Some(level) = self.prepared_level {
                 let spec = self.plan.level(level);
@@ -1016,10 +1191,28 @@ mod browser {
                 grid.level = level;
             }
             self.main.delivered_iter_cap = super::published_iteration_cap(&self.plan);
+            let facts_pose = (map, [grid.width, grid.height]);
+            if self.facts_pose != facts_pose {
+                let horizon = super::horizon_facts(map, facts_pose.1);
+                self.horizon_pixels = horizon.pixels;
+                self.horizon_fraction = horizon.fraction;
+                self.uncertain_pixels = horizon.uncertain_pixels;
+                self.uncertain_fraction = horizon.uncertain_fraction;
+                self.map_condition_number = horizon.condition_number;
+                self.edge_on = horizon.edge_on;
+                self.facts_pose = facts_pose;
+            }
             self.presenter.set_main(PresentMain {
                 epoch: self.owner_epoch,
-                state: self.main,
+                state: super::main_for_grid(
+                    self.main,
+                    grid.width,
+                    self.plan.requested_extent.width,
+                ),
                 grid,
+                object,
+                plane,
+                map,
             });
         }
 
@@ -1055,10 +1248,7 @@ mod browser {
                 plane_origin_f64: self.main.plane_origin_f64,
                 view: requested.view,
                 zoom_log2: requested.zoom_log2,
-                plane_angles: [
-                    requested.plane_angles.theta_1,
-                    requested.plane_angles.theta_2,
-                ],
+                object_angles: requested.object_angles,
                 precision_mode: self.main.precision_mode,
             }
         }
@@ -1200,7 +1390,11 @@ mod browser {
             self.rebuild_grid_if_needed(viewer.requested().iteration_cap)?;
             self.loop_state.restart(response.generation());
             self.prepared_level = None;
-            self.install_main();
+            let requested = viewer.requested();
+            let map = viewer.screen_map(self.prepared_extent())?;
+            let plane = ember_julibrot_math::construct_plane(requested.object_angles)
+                .map_err(math_error)?;
+            self.install_main(requested.object_angles, plane, map);
             Ok((disposition, true))
         }
 
@@ -1235,7 +1429,8 @@ mod browser {
                 self.rebuild_grid_if_needed(requested.iteration_cap)?;
                 self.loop_state.restart(navigation.generation);
                 self.prepared_level = None;
-                self.install_main();
+                let map = viewer.screen_map(self.prepared_extent())?;
+                self.install_main(requested.object_angles, plane, map);
                 return Ok(true);
             }
             let precision = precision_for(
@@ -1336,13 +1531,16 @@ mod browser {
         fn submit_due_scene(
             &mut self,
             viewer: &ViewerController,
+            object: ObjectAngles,
             plane: Plane,
+            map: PoseMap,
             slot: HotSlot,
             owner_epoch: u64,
             now_ms: f64,
         ) -> Result<Option<u64>, AppError> {
-            if !self.submitted_references.is_empty()
-                || viewer.owner().navigation_pending_depth() != 0
+            if matches!(map, PoseMap::Mapped(_))
+                && (!self.submitted_references.is_empty()
+                    || viewer.owner().navigation_pending_depth() != 0)
             {
                 return Ok(None);
             }
@@ -1352,82 +1550,95 @@ mod browser {
             if self.prepared_level != Some(level) {
                 return Ok(None);
             }
-            let params = EscapeParams::new(viewer.requested().iteration_cap);
-            let mut encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Julibrot kernels SCRATCH and DATA copy"),
-                });
-            let mode = KernelMode::for_zoom(viewer.requested().zoom_log2);
-            let facts = match mode {
-                KernelMode::Shallow => {
-                    let centre = self
-                        .shallow_centre
-                        .as_ref()
-                        .ok_or_else(|| AppError::Kernel("missing shallow centre".to_string()))?;
-                    let split = split_centre(centre).map_err(math_error)?;
-                    let scale = shallow_pixel_scale(
-                        viewer.requested().zoom_log2,
-                        self.plan.requested_extent.width,
-                    )
-                    .map_err(math_error)?;
-                    self.kernels
-                        .encode_shallow(
-                            &self.executor,
-                            &mut encoder,
-                            &mut self.grid,
-                            owner_epoch,
-                            viewer.requested().precision_mode,
-                            level,
-                            &plane,
-                            &split,
-                            scale,
-                            params,
+            let facts = if let PoseMap::Mapped(screen_to_plane) = map {
+                let params = EscapeParams::new(viewer.requested().iteration_cap);
+                let mut encoder =
+                    self.device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Julibrot kernels SCRATCH and DATA copy"),
+                        });
+                let mode = KernelMode::for_zoom(viewer.requested().zoom_log2);
+                let facts = match mode {
+                    KernelMode::Shallow => {
+                        let centre = self.shallow_centre.as_ref().ok_or_else(|| {
+                            AppError::Kernel("missing shallow centre".to_string())
+                        })?;
+                        let split = split_centre(centre).map_err(math_error)?;
+                        let scale = shallow_pixel_scale(
+                            viewer.requested().zoom_log2,
+                            self.plan.level(level).extent.width,
                         )
-                        .map_err(kernel_error)?
-                }
-                KernelMode::Perturbation => {
-                    let handle = self
-                        .current_orbit
-                        .ok_or_else(|| AppError::Kernel("missing reference orbit".to_string()))?;
-                    let orbit = self.orbits.get(handle).map_err(registry_error)?;
-                    let scale = scale_split(
-                        viewer.requested().zoom_log2,
-                        self.plan.requested_extent.width,
-                    )
-                    .map_err(math_error)?;
-                    self.kernels
-                        .encode_perturbation(
-                            &self.executor,
-                            &mut encoder,
-                            &mut self.grid,
-                            owner_epoch,
-                            viewer.requested().precision_mode,
-                            level,
-                            &plane,
-                            scale,
-                            params,
-                            ReferenceOrbitInput {
-                                span: &orbit.span,
-                                generation: handle.generation,
-                                length: orbit.length,
-                                precision_bits: orbit.precision_bits,
-                                precision_mode: orbit.precision_mode,
-                            },
+                        .map_err(math_error)?;
+                        self.kernels
+                            .encode_shallow(
+                                &self.executor,
+                                &mut encoder,
+                                &mut self.grid,
+                                owner_epoch,
+                                viewer.requested().precision_mode,
+                                level,
+                                &plane,
+                                &screen_to_plane,
+                                &split,
+                                scale,
+                                params,
+                            )
+                            .map_err(kernel_error)?
+                    }
+                    KernelMode::Perturbation => {
+                        let handle = self.current_orbit.ok_or_else(|| {
+                            AppError::Kernel("missing reference orbit".to_string())
+                        })?;
+                        let orbit = self.orbits.get(handle).map_err(registry_error)?;
+                        let scale = scale_split(
+                            viewer.requested().zoom_log2,
+                            self.plan.level(level).extent.width,
                         )
-                        .map_err(kernel_error)?
-                }
+                        .map_err(math_error)?;
+                        self.kernels
+                            .encode_perturbation(
+                                &self.executor,
+                                &mut encoder,
+                                &mut self.grid,
+                                owner_epoch,
+                                viewer.requested().precision_mode,
+                                level,
+                                &plane,
+                                &screen_to_plane,
+                                scale,
+                                params,
+                                ReferenceOrbitInput {
+                                    span: &orbit.span,
+                                    generation: handle.generation,
+                                    length: orbit.length,
+                                    precision_bits: orbit.precision_bits,
+                                    precision_mode: orbit.precision_mode,
+                                },
+                            )
+                            .map_err(kernel_error)?
+                    }
+                };
+                self.queue.submit([encoder.finish()]);
+                Some(facts)
+            } else {
+                None
             };
-            self.queue.submit([encoder.finish()]);
             self.main.delivered_iter_cap = super::published_iteration_cap(&self.plan);
             self.presenter.set_main(PresentMain {
                 epoch: owner_epoch,
-                state: self.main,
+                state: super::main_for_grid(
+                    self.main,
+                    self.grid.width,
+                    self.plan.requested_extent.width,
+                ),
                 grid: self.grid.clone(),
+                object,
+                plane,
+                map,
             });
             match self.presenter.submit_scene(slot, now_ms) {
                 Ok(scene_id) => {
-                    self.last_dispatch = Some(facts);
+                    self.last_dispatch = facts;
                     self.level_timings
                         .begin_scene(self.main.centre_revision, scene_id, level);
                     self.loop_state.submitted(scene_id, level);
@@ -1482,11 +1693,13 @@ mod browser {
         /// Returns whether cooperative refresh work remains.
         #[must_use]
         pub fn pending(&self, runtime: &BrowserRuntime, viewer: &ViewerController) -> bool {
+            let present = self.presenter.facts();
             self.loop_state.needs_refresh(
-                self.presenter.facts().in_flight_scene_id.is_some(),
+                present.in_flight_scene_id.is_some(),
                 runtime.has_pending_surface(),
                 self.owner_endpoint.pending_request_depth() != 0
-                    || !self.submitted_references.is_empty(),
+                    || !self.submitted_references.is_empty()
+                    || present.scene_fill_due,
                 self.presented_view_is_stale(viewer),
             )
         }
@@ -1585,6 +1798,42 @@ mod browser {
         pub const fn plan(&self) -> RefinementPlan {
             self.plan
         }
+
+        /// Returns the share of current grid centres beyond the neutral-height horizon.
+        #[must_use]
+        pub const fn horizon_fraction(&self) -> f64 {
+            self.horizon_fraction
+        }
+
+        /// Returns the number of current grid centres beyond the neutral-height horizon.
+        #[must_use]
+        pub const fn horizon_pixels(&self) -> u64 {
+            self.horizon_pixels
+        }
+
+        /// Returns the share of mapped centres whose f32 position is uncertified.
+        #[must_use]
+        pub const fn uncertain_fraction(&self) -> f64 {
+            self.uncertain_fraction
+        }
+
+        /// Returns the number of mapped centres whose f32 position is uncertified.
+        #[must_use]
+        pub const fn uncertain_pixels(&self) -> u64 {
+            self.uncertain_pixels
+        }
+
+        /// Reports the physical edge-on all-sky state.
+        #[must_use]
+        pub const fn edge_on(&self) -> bool {
+            self.edge_on
+        }
+
+        /// Returns the infinity-norm condition number of the current screen map.
+        #[must_use]
+        pub const fn map_condition_number(&self) -> f64 {
+            self.map_condition_number
+        }
     }
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -1636,14 +1885,15 @@ mod tests {
 
     use ember_julibrot_kernels::{GridExtent, KernelMode, RefinementPlan, plan_refinement};
     use ember_julibrot_math::{
-        BigCentre, EscapeParams, MathError, OrbitStep, PrecisionMode, ReferenceOrbitBuilder,
-        precision_for,
+        BigCentre, EscapeParams, Homography, MathError, OrbitStep, PoseMap, PrecisionMode,
+        ReferenceOrbitBuilder, precision_for,
     };
 
     use super::{
         FenceRefusal, FrameLoop, LEVELS, PresenterPoll, RefinementLevel, RefinementSchedule,
-        RefusalClass, SubmissionKind, apply_precision_mode, arrival_is_current,
-        expand_reference_texels, fence_error, published_iteration_cap,
+        RefusalClass, SubmissionKind, apply_precision_mode, arrival_is_current, fence_error,
+        expand_reference_texels, horizon_facts, main_for_grid, published_iteration_cap,
+        schedule_exposure_fill,
     };
     use crate::{FramePolicy, LevelTimingLedger, ViewerController};
     use ember_julibrot_present::{SampleClass, SubmissionMeasurement};
@@ -1664,6 +1914,48 @@ mod tests {
         assert!(expand_reference_texels(&records, 1).is_err());
     }
 
+    #[test]
+    fn horizon_fraction_counts_pixel_centres_without_sampling_the_grid() {
+        assert_eq!(
+            horizon_facts(PoseMap::Mapped(Homography::IDENTITY), [8, 4]).fraction,
+            0.0
+        );
+        let half = Homography {
+            rows: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+            ..Homography::IDENTITY
+        };
+        assert_eq!(
+            horizon_facts(PoseMap::Mapped(half), [8, 4]),
+            super::HorizonFacts {
+                pixels: 16,
+                fraction: 0.5,
+                uncertain_pixels: 0,
+                uncertain_fraction: 0.0,
+                condition_number: 1.0,
+                edge_on: false,
+            }
+        );
+        let all = Homography {
+            rows: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -1.0],
+            ..Homography::IDENTITY
+        };
+        assert_eq!(horizon_facts(PoseMap::Mapped(all), [8, 4]).fraction, 1.0);
+        let edge = horizon_facts(PoseMap::EdgeOn, [8, 4]);
+        assert_eq!(edge.fraction, 1.0);
+        assert!(edge.edge_on);
+    }
+
+    #[test]
+    fn reference_shift_is_expressed_in_each_level_pixel_scale() {
+        let state = ember_julibrot_worker::MainState {
+            reference_shift_px: [12.0, -8.0],
+            ..ember_julibrot_worker::MainState::default()
+        };
+        assert_eq!(
+            main_for_grid(state, 240, 960).reference_shift_px,
+            [3.0, -2.0]
+        );
+    }
     #[derive(Clone, Copy, Debug, PartialEq)]
     struct PendingFakeScene {
         id: u64,
@@ -2349,6 +2641,39 @@ mod tests {
             presenter.submissions.last(),
             Some(&RefinementLevel::Preview)
         );
+    }
+
+    #[test]
+    fn an_exposed_warp_starts_the_scene_that_fills_its_edge() {
+        let mut frame_loop = FrameLoop::default();
+        let mut presenter = FakePresenter::default();
+        let mut clock = FakeClock::default();
+        frame_loop.accept_request(17, true);
+        run_ladder_to_idle(
+            &mut frame_loop,
+            &mut presenter,
+            &mut clock,
+            FramePolicy::SingleFrameOnDemand,
+        );
+        assert!(!frame_loop.refinement_pending());
+
+        assert!(schedule_exposure_fill(&mut frame_loop, true, 17));
+        assert_eq!(frame_loop.due(), Some(RefinementLevel::Preview));
+        let preview_id = presenter.next_id + 1;
+        clock.advance(1.0);
+        assert_eq!(
+            drive_refresh(&mut frame_loop, &mut presenter, clock),
+            Some(preview_id)
+        );
+        presenter.fire_completed_callback();
+        let interactive_id = presenter.next_id + 1;
+        clock.advance(1.0);
+        assert_eq!(
+            drive_refresh(&mut frame_loop, &mut presenter, clock),
+            Some(interactive_id)
+        );
+        assert_eq!(presenter.submissions[3], RefinementLevel::Preview);
+        assert_eq!(presenter.submissions[4], RefinementLevel::Interactive);
     }
 
     #[test]

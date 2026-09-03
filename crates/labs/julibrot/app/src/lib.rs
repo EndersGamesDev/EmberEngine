@@ -220,7 +220,7 @@ mod wasm_entry {
     use wasm_bindgen::prelude::*;
 
     use crate::runtime::publish_start_error;
-    use ember_julibrot_math::{PlaneAngles, PrecisionMode, ViewControls};
+    use ember_julibrot_math::{ObjectAngles, PlaneAngles, PrecisionMode, ViewControls};
     use ember_julibrot_present::PaletteId;
 
     use crate::{
@@ -424,6 +424,30 @@ mod wasm_entry {
         })
     }
 
+    /// Stages all six object rotations in product order.
+    #[wasm_bindgen]
+    pub fn app_set_object_angles(
+        rho_12: f64,
+        rho_13: f64,
+        rho_14: f64,
+        rho_23: f64,
+        rho_24: f64,
+        rho_34: f64,
+    ) -> Result<(), JsValue> {
+        with_app_mut(|app| {
+            app.viewer_mut()
+                .set_object_angles(ObjectAngles {
+                    rho_12,
+                    rho_13,
+                    rho_14,
+                    rho_23,
+                    rho_24,
+                    rho_34,
+                })
+                .map_err(app_js_error)
+        })
+    }
+
     /// Moves the absolute plane origin and resets the centre to it.
     #[wasm_bindgen]
     pub fn app_set_plane_origin(z_re: f64, z_im: f64, c_re: f64, c_im: f64) -> Result<(), JsValue> {
@@ -434,12 +458,32 @@ mod wasm_entry {
         })
     }
 
-    /// Stages both VIEW angles in radians.
+    /// Stages the two retired VIEW aliases as camera factors q12 and q35.
     #[wasm_bindgen]
     pub fn app_set_view_angles(theta_1: f64, theta_2: f64) -> Result<(), JsValue> {
         with_view(|view| {
-            view.theta_1 = theta_1;
-            view.theta_2 = theta_2;
+            view.camera[0] = theta_1;
+            view.camera[8] = theta_2;
+        })
+    }
+
+    /// Stages all ten ambient-camera rotations in product order.
+    #[wasm_bindgen]
+    #[allow(clippy::too_many_arguments)]
+    pub fn app_set_camera_angles(
+        q_12: f64,
+        q_13: f64,
+        q_14: f64,
+        q_23: f64,
+        q_24: f64,
+        q_34: f64,
+        q_15: f64,
+        q_25: f64,
+        q_35: f64,
+        q_45: f64,
+    ) -> Result<(), JsValue> {
+        with_view(|view| {
+            view.camera = [q_12, q_13, q_14, q_23, q_24, q_34, q_15, q_25, q_35, q_45];
         })
     }
 
@@ -475,27 +519,18 @@ mod wasm_entry {
     pub fn app_preset(id: u32) -> Result<String, JsValue> {
         let row = preset_row(id)
             .ok_or_else(|| JsValue::from_str("preset identifier is outside its range"))?;
-        Ok(format!(
-            concat!(
-                r#"{{"name":"{}","theta_1":{},"theta_2":{},"origin":[{},{},{},{}],"#,
-                r#""view_theta_1":{},"view_theta_2":{},"camera_yaw":{},"camera_pitch":{},"#,
-                r#""height_scale":{},"distance_five":{},"distance_four":{}}}"#
-            ),
-            row.name,
-            row.plane_angles[0],
-            row.plane_angles[1],
-            row.plane_origin[0],
-            row.plane_origin[1],
-            row.plane_origin[2],
-            row.plane_origin[3],
-            row.view.theta_1,
-            row.view.theta_2,
-            row.view.camera_yaw,
-            row.view.camera_pitch,
-            row.view.height_scale,
-            row.view.distance_five,
-            row.view.distance_four,
-        ))
+        Ok(serde_json::json!({
+            "name": row.name,
+            "object": row.object_angles.as_array(),
+            "origin": row.plane_origin,
+            "camera": row.view.camera,
+            "camera_yaw": row.view.camera_yaw,
+            "camera_pitch": row.view.camera_pitch,
+            "height_scale": row.view.height_scale,
+            "distance_five": row.view.distance_five,
+            "distance_four": row.view.distance_four,
+        })
+        .to_string())
     }
 
     /// Returns the row the viewer is showing, in the form a view box stores.
@@ -649,7 +684,8 @@ mod wasm_entry {
 pub use wasm_entry::{
     app_crosshair_json, app_facts_json, app_morph_view, app_needs_refresh, app_pan_px, app_preset,
     app_refresh, app_request_frame, app_request_measurement, app_saved_view_json, app_set_camera,
-    app_set_centre, app_set_distances, app_set_height, app_set_iteration_cap, app_set_palette,
-    app_set_plane_angles, app_set_plane_origin, app_set_precision_mode, app_set_scale,
-    app_set_target, app_set_view_angles, app_zoom_box, julibrot_abi_version, start_julibrot,
+    app_set_camera_angles, app_set_centre, app_set_distances, app_set_height,
+    app_set_iteration_cap, app_set_object_angles, app_set_palette, app_set_plane_angles,
+    app_set_plane_origin, app_set_precision_mode, app_set_scale, app_set_target,
+    app_set_view_angles, app_zoom_box, julibrot_abi_version, start_julibrot,
 };

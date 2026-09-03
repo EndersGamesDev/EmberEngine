@@ -1,8 +1,9 @@
 //! Requested controls and worker-owned HOT/MAIN publication integration.
 
 use ember_julibrot_math::{
-    Axis4, BigCentre, NavigationDelta, Plane, PlaneAngles, Pose, PrecisionMode, SEED_AXES,
-    ViewControls, construct_plane, pixel_scale,
+    Axis4, BigCentre, Homography, MathError, NavigationDelta, ObjectAngles, Plane, PlaneAngles,
+    Pose, PoseMap, PrecisionMode, SEED_AXES, ViewControls, construct_plane, navigation_delta,
+    pixel_scale, screen_to_plane,
 };
 use ember_julibrot_present::PaletteId;
 use ember_julibrot_worker::{
@@ -37,8 +38,8 @@ pub struct RequestedControls {
     pub plane_origin: [f64; 4],
     /// Desired base-two zoom exponent.
     pub zoom_log2: f64,
-    /// Independent plane angles in radians.
-    pub plane_angles: PlaneAngles,
+    /// Six ordered object angles in radians.
+    pub object_angles: ObjectAngles,
     /// Requested orbit and kernel iteration cap.
     pub iteration_cap: u32,
     /// Requested precision policy.
@@ -54,14 +55,11 @@ impl Default for RequestedControls {
         Self {
             plane_origin: [0.0; 4],
             zoom_log2: 0.0,
-            plane_angles: PlaneAngles {
-                theta_1: 0.0,
-                theta_2: 0.0,
-            },
+            object_angles: ObjectAngles::IDENTITY,
             iteration_cap: INITIAL_ITERATION_CAP,
             precision_mode: PrecisionMode::PictureFast,
             palette: PaletteId::Classic,
-            view: ViewControls::NEUTRAL,
+            view: ViewControls::MANDELBROT_FLAT,
         }
     }
 }
@@ -71,8 +69,8 @@ impl Default for RequestedControls {
 pub struct PresetRow {
     /// Stable name shown by the page.
     pub name: &'static str,
-    /// Both plane angles in radians.
-    pub plane_angles: [f64; 2],
+    /// Six ordered object angles in radians.
+    pub object_angles: ObjectAngles,
     /// Absolute plane origin.
     pub plane_origin: [f64; 4],
     /// Every VIEW control.
@@ -82,9 +80,28 @@ pub struct PresetRow {
 const QUARTER_TURN: f64 = core::f64::consts::FRAC_PI_2;
 
 /// The relief rows' observer, which is the orientation the retired fixed mount had.
-const RELIEF_VIEW: ViewControls = ViewControls {
-    theta_1: 0.6,
-    theta_2: 0.97,
+const MANDELBROT_RELIEF_VIEW: ViewControls = ViewControls {
+    camera: [
+        0.6,
+        -QUARTER_TURN,
+        0.0,
+        0.0,
+        -QUARTER_TURN,
+        0.0,
+        0.0,
+        0.0,
+        0.97,
+        0.0,
+    ],
+    camera_yaw: 0.349,
+    camera_pitch: 0.262,
+    height_scale: 1.0,
+    distance_five: 8.0,
+    distance_four: 8.0,
+};
+
+const JULIA_RELIEF_VIEW: ViewControls = ViewControls {
+    camera: [0.6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.97, 0.0],
     camera_yaw: 0.349,
     camera_pitch: 0.262,
     height_scale: 1.0,
@@ -99,27 +116,27 @@ const JULIA_C0: [f64; 2] = [-0.8, 0.156];
 pub const PRESET_ROWS: [PresetRow; 4] = [
     PresetRow {
         name: "Mandelbrot",
-        plane_angles: [0.0, 0.0],
+        object_angles: ObjectAngles::IDENTITY,
         plane_origin: [0.0; 4],
-        view: ViewControls::NEUTRAL,
+        view: ViewControls::MANDELBROT_FLAT,
     },
     PresetRow {
         name: "Julia",
-        plane_angles: [-QUARTER_TURN, -QUARTER_TURN],
+        object_angles: ObjectAngles::JULIA,
         plane_origin: [0.0, 0.0, JULIA_C0[0], JULIA_C0[1]],
         view: ViewControls::NEUTRAL,
     },
     PresetRow {
         name: "Mandelbrot relief",
-        plane_angles: [0.0, 0.0],
+        object_angles: ObjectAngles::IDENTITY,
         plane_origin: [0.0; 4],
-        view: RELIEF_VIEW,
+        view: MANDELBROT_RELIEF_VIEW,
     },
     PresetRow {
         name: "Julia relief",
-        plane_angles: [-QUARTER_TURN, -QUARTER_TURN],
+        object_angles: ObjectAngles::JULIA,
         plane_origin: [0.0, 0.0, JULIA_C0[0], JULIA_C0[1]],
-        view: RELIEF_VIEW,
+        view: JULIA_RELIEF_VIEW,
     },
 ];
 
@@ -330,14 +347,14 @@ impl ViewerController {
     pub fn new(grid_width: u32) -> Result<Self, AppError> {
         let requested = RequestedControls::default();
         let origin = requested.plane_origin;
-        let plane = construct_plane(requested.plane_angles).map_err(math_error)?;
+        let plane = construct_plane(requested.object_angles).map_err(math_error)?;
         let centre = BigCentre::from_f64(origin, NAVIGATION_PRECISION_BITS).map_err(math_error)?;
         let initial = ViewerState {
             epoch: 0,
             hot: HotState {
                 zoom_log2: requested.zoom_log2,
-                plane_theta_1: requested.plane_angles.theta_1,
-                plane_theta_2: requested.plane_angles.theta_2,
+                plane_theta_1: requested.object_angles.rho_13,
+                plane_theta_2: requested.object_angles.rho_24,
                 centre_from_reference_px: [0.0; 2],
             },
             main: MainState {
@@ -477,11 +494,11 @@ impl ViewerController {
                 "target zoom exceeded finite range".to_string(),
             ));
         }
-        self.owner.navigate(NavigationDelta {
-            pan_canvas_px: [-anchor_px_up[0], -anchor_px_up[1]],
-            zoom_delta_log2: delta_log2,
-            anchor_canvas_px: anchor_px_up,
-        });
+        let map = self.mapped_screen_map(self.grid_extent)?;
+        let mut delta =
+            navigation_delta(&map, [0.0; 2], delta_log2, anchor_px_up).map_err(math_error)?;
+        delta.pan_canvas_px = [-delta.anchor_canvas_px[0], -delta.anchor_canvas_px[1]];
+        self.owner.navigate(delta);
         if let Some(error) = self.owner.take_navigation_error() {
             return Err(owner_error(error));
         }
@@ -621,20 +638,20 @@ impl ViewerController {
         self.zoom_about_crosshair(zoom_log2 - self.requested.zoom_log2)
     }
 
-    /// Stages two independent plane angles without resetting other HOT controls.
+    /// Stages all six ordered object angles without resetting other HOT controls.
     ///
     /// # Errors
     ///
-    /// Returns a math failure when either angle is non-finite.
-    pub fn set_plane_angles(&mut self, angles: PlaneAngles) -> Result<(), AppError> {
-        if !angles.theta_1.is_finite() || !angles.theta_2.is_finite() {
-            return Err(AppError::Math("plane angles are not finite".to_string()));
+    /// Returns a math failure when an angle is non-finite or outside its range.
+    pub fn set_object_angles(&mut self, angles: ObjectAngles) -> Result<(), AppError> {
+        if !angles.is_valid() {
+            return Err(AppError::Math("object angles are not valid".to_string()));
         }
         self.synchronize_shadow()?;
-        self.requested.plane_angles = angles;
+        self.requested.object_angles = angles;
         let mut hot = self.staged_hot;
-        hot.plane_theta_1 = angles.theta_1;
-        hot.plane_theta_2 = angles.theta_2;
+        hot.plane_theta_1 = angles.rho_13;
+        hot.plane_theta_2 = angles.rho_24;
         self.staged_hot = hot;
         self.owner.stage_hot(hot);
         self.owner.navigate(NavigationDelta::default());
@@ -643,6 +660,19 @@ impl ViewerController {
         }
         self.add_reason(OrbitReason::CENTRE_THRESHOLD);
         Ok(())
+    }
+
+    /// Updates the two legacy plane-angle aliases while preserving the other object factors.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same typed failure as [`Self::set_object_angles`].
+    pub fn set_plane_angles(&mut self, angles: PlaneAngles) -> Result<(), AppError> {
+        self.set_object_angles(ObjectAngles {
+            rho_13: angles.theta_1,
+            rho_24: angles.theta_2,
+            ..self.requested.object_angles
+        })
     }
 
     /// Moves the absolute plane origin, resetting the centre to it and preserving cap, palette,
@@ -659,14 +689,13 @@ impl ViewerController {
             return Err(AppError::Math("plane origin is not finite".to_string()));
         }
         self.synchronize_shadow()?;
-        self.crosshair = None;
         self.requested.plane_origin = origin;
         self.requested.zoom_log2 = 0.0;
-        let angles = self.requested.plane_angles;
+        let angles = self.requested.object_angles;
         let hot = HotState {
             zoom_log2: 0.0,
-            plane_theta_1: angles.theta_1,
-            plane_theta_2: angles.theta_2,
+            plane_theta_1: angles.rho_13,
+            plane_theta_2: angles.rho_24,
             centre_from_reference_px: [0.0; 2],
         };
         let main = MainState {
@@ -715,14 +744,13 @@ impl ViewerController {
     /// Returns a typed math or owner refusal for an invalid plane, scale, or centre.
     pub fn set_centre(&mut self, centre: BigCentre) -> Result<(), AppError> {
         self.synchronize_shadow()?;
-        self.crosshair = None;
-        let plane = construct_plane(self.requested.plane_angles).map_err(math_error)?;
+        let plane = construct_plane(self.requested.object_angles).map_err(math_error)?;
         self.owner
             .configure_navigation(NavigationConfig {
                 centre: centre.clone(),
                 reference_centre: centre,
                 plane,
-                grid_width: self.grid_width,
+                grid_width: self.grid_extent[0],
             })
             .map_err(owner_error)?;
         self.owner.navigate(NavigationDelta::default());
@@ -818,10 +846,7 @@ impl ViewerController {
     /// Returns the typed failure of whichever staged control refused.
     pub fn apply_preset(&mut self, row: PresetRow) -> Result<(), AppError> {
         self.set_view_controls(row.view)?;
-        self.set_plane_angles(PlaneAngles {
-            theta_1: row.plane_angles[0],
-            theta_2: row.plane_angles[1],
-        })?;
+        self.set_object_angles(row.object_angles)?;
         self.set_plane_origin(row.plane_origin)
     }
 
@@ -849,22 +874,29 @@ impl ViewerController {
                 "the owner record names seed axes the lab no longer has".to_string(),
             ));
         }
-        let plane = construct_plane(PlaneAngles {
-            theta_1: state.hot.plane_theta_1,
-            theta_2: state.hot.plane_theta_2,
-        })
-        .map_err(math_error)?;
+        let object = self.requested.object_angles;
+        let plane = construct_plane(object).map_err(math_error)?;
+        let map = map_for(
+            object,
+            self.requested.view,
+            state.hot.zoom_log2,
+            grid_extent,
+        )?;
+        let displacement_scale = f64::from(grid_extent[0]) / f64::from(self.grid_width);
         let pose = Pose {
             epoch: state.epoch,
             orbit_generation: state.main.generation_applied,
             plane,
-            plane_theta_1: state.hot.plane_theta_1,
-            plane_theta_2: state.hot.plane_theta_2,
+            object,
             zoom_log2: state.hot.zoom_log2,
             view: self.requested.view,
             grid_width: grid_extent[0],
             grid_height: grid_extent[1],
-            centre_from_reference_px: state.hot.centre_from_reference_px,
+            map,
+            centre_from_reference_px: state
+                .hot
+                .centre_from_reference_px
+                .map(|value| value * displacement_scale),
         };
         self.staged_hot = state.hot;
         self.staged_main = state.main;
@@ -924,6 +956,28 @@ impl ViewerController {
             .map_err(owner_error)
     }
 
+    /// Builds the accepted neutral-height screen map for one refinement extent.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed math refusal for an invalid extent or degenerate accepted view.
+    pub fn screen_map(&self, grid_extent: [u32; 2]) -> Result<PoseMap, AppError> {
+        map_for(
+            self.requested.object_angles,
+            self.requested.view,
+            self.requested.zoom_log2,
+            grid_extent,
+        )
+    }
+
+    fn mapped_screen_map(&self, grid_extent: [u32; 2]) -> Result<Homography, AppError> {
+        match self.screen_map(grid_extent)? {
+            PoseMap::Mapped(map) => Ok(map),
+            PoseMap::EdgeOn => Err(AppError::Math(
+                "navigation is undefined for an edge-on plane".to_string(),
+            )),
+        }
+    }
     fn synchronize_shadow(&mut self) -> Result<(), AppError> {
         let state = self.owner.drain_hot();
         if self.owner.epoch_exhausted() {
@@ -942,6 +996,20 @@ impl ViewerController {
     }
 }
 
+fn map_for(
+    object: ObjectAngles,
+    view: ViewControls,
+    zoom_log2: f64,
+    grid_extent: [u32; 2],
+) -> Result<PoseMap, AppError> {
+    let [width, height] = grid_extent;
+    let aspect = f64::from(width) / f64::from(height);
+    match screen_to_plane(&object, &view, zoom_log2, width, height, aspect) {
+        Ok(map) => Ok(PoseMap::Mapped(map)),
+        Err(MathError::DegenerateViewMap) => Ok(PoseMap::EdgeOn),
+        Err(error) => Err(math_error(error)),
+    }
+}
 fn axis(value: u32) -> Result<Axis4, AppError> {
     match value {
         0 => Ok(Axis4::E1),
@@ -972,7 +1040,7 @@ fn owner_error(error: ember_julibrot_worker::OwnerError) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use ember_julibrot_math::{PlaneAngles, PrecisionMode, ViewControls};
+    use ember_julibrot_math::{ObjectAngles, PlaneAngles, PoseMap, PrecisionMode, ViewControls};
     use ember_julibrot_present::PaletteId;
     use ember_julibrot_worker::OrbitReason;
 
@@ -1147,7 +1215,7 @@ mod tests {
     /// point that was under the click becomes the centre and the reference has not moved.
     #[test]
     fn a_target_click_moves_the_centre_by_its_own_pixels() {
-        let mut viewer = ViewerController::new(960).expect("canonical viewer");
+        let mut viewer = ViewerController::new([960, 540]).expect("canonical viewer");
         let before = viewer.requested().zoom_log2;
         let edit = viewer
             .set_target([120.0, -45.0], 0.0)
@@ -1172,7 +1240,7 @@ mod tests {
     /// evaluated after the zoom instead of before it.
     #[test]
     fn a_box_release_anchors_on_the_scale_before_its_zoom() {
-        let mut viewer = ViewerController::new(960).expect("canonical viewer");
+        let mut viewer = ViewerController::new([960, 540]).expect("canonical viewer");
         let edit = viewer.set_target([80.0, 30.0], 1.0).expect("finite box");
         assert_eq!(
             edit,
@@ -1190,7 +1258,7 @@ mod tests {
     /// The scale control is absolute, refuses its own ends, and zooms about the screen centre.
     #[test]
     fn the_scale_control_is_absolute_and_bounded() {
-        let mut viewer = ViewerController::new(960).expect("canonical viewer");
+        let mut viewer = ViewerController::new([960, 540]).expect("canonical viewer");
         viewer
             .set_zoom_log2(12.5)
             .expect("a scale inside the range");
@@ -1298,7 +1366,7 @@ mod tests {
         assert_eq!(hot.state.hot.zoom_log2, 1.0);
         assert_eq!(hot.state.hot.centre_from_reference_px, [15.0, -3.0]);
         // A drain reads the controls; it has no time argument and cannot invent an angle.
-        assert_eq!(hot.pose.view, ViewControls::NEUTRAL);
+        assert_eq!(hot.pose.view, ViewControls::MANDELBROT_FLAT);
     }
 
     #[test]
@@ -1398,13 +1466,7 @@ mod tests {
             let requested = viewer.requested();
             assert_eq!(requested.view, row.view);
             assert_eq!(requested.plane_origin, row.plane_origin);
-            assert_eq!(
-                [
-                    requested.plane_angles.theta_1,
-                    requested.plane_angles.theta_2
-                ],
-                row.plane_angles
-            );
+            assert_eq!(requested.object_angles, row.object_angles);
             assert!(row.view.is_valid());
         }
         let past_end = u32::try_from(PRESET_ROWS.len()).expect("four rows fit u32");
@@ -1441,5 +1503,31 @@ mod tests {
         assert_eq!(frame.state.main.palette_id, PaletteId::Ice as u32);
         assert_eq!(frame.state.main.requested_iter_cap, 1_024);
         assert_eq!(frame.state.main.centre_revision, 4);
+    }
+
+    #[test]
+    fn preset_rows_are_exact_identity_maps_and_neutral_mandelbrot_is_edge_on() {
+        let mut viewer = ViewerController::new([640, 480]).expect("canonical viewer");
+        for row in [PRESET_ROWS[0], PRESET_ROWS[1]] {
+            viewer.apply_preset(row).expect("preset is valid");
+            assert_eq!(
+                viewer.screen_map([640, 480]).expect("preset map"),
+                PoseMap::Mapped(ember_julibrot_math::Homography::IDENTITY)
+            );
+        }
+        viewer
+            .set_object_angles(ObjectAngles::IDENTITY)
+            .expect("identity object");
+        viewer
+            .set_view_controls(ViewControls::NEUTRAL)
+            .expect("neutral camera is physical edge-on");
+        assert_eq!(
+            viewer.screen_map([640, 480]).expect("edge-on is a state"),
+            PoseMap::EdgeOn
+        );
+        for row in [PRESET_ROWS[2], PRESET_ROWS[3]] {
+            assert_eq!(row.view.camera[0], 0.6);
+            assert_eq!(row.view.camera[8], 0.97);
+        }
     }
 }
