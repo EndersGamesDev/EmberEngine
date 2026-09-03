@@ -2,6 +2,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use web_time::Instant;
 use winit::application::ApplicationHandler;
@@ -436,6 +437,16 @@ pub fn run<G: EmberGame + 'static>(config: EngineConfig, game: G) {
     {
         let mut app = app;
         event_loop.run_app(&mut app).expect("event loop error");
+        // Every native exit (Escape, the close button) returns here, and
+        // the motors may still be on: gilrs's force-feedback server never
+        // resets a pad on its own, WGI's `SetVibration` is persistent, and
+        // the server thread simply dies with the process. So the stop is
+        // sent from this one place rather than from each exit path, and
+        // the process waits one server tick for it to be delivered.
+        if app.haptics.is_playing() {
+            app.haptics.stop();
+            std::thread::sleep(PLAY_TO_STOP_GRACE);
+        }
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -448,15 +459,31 @@ pub fn run<G: EmberGame + 'static>(config: EngineConfig, game: G) {
 // Haptics: the platform side of `EmberGame::feedback`, and the gamepad poll.
 // ---------------------------------------------------------------------------
 
+/// The least time between a play and the stop that ends it.
+///
+/// gilrs's force-feedback server runs on its own thread at 50 ms ticks and
+/// drains its command queue once per tick, so a play and a stop that land
+/// in the same tick collapse to the stop and the motors never move. A stop
+/// is therefore never sent sooner than this after the last play, whatever
+/// the request's own length: a 30 ms hitmarker becomes one server tick of
+/// rumble rather than none. The web actuator is handed a duration and ends
+/// the effect itself, so it needs no spacing.
+#[cfg(not(target_arch = "wasm32"))]
+const PLAY_TO_STOP_GRACE: Duration = Duration::from_millis(60);
+#[cfg(target_arch = "wasm32")]
+const PLAY_TO_STOP_GRACE: Duration = Duration::ZERO;
+
 /// Gamepads and rumble. Owns whatever the platform has (gilrs on native,
 /// the Gamepad API and the page's `emberRumble` shim on the web), and the
 /// one piece of state both share: what the motors are doing right now.
 ///
-/// Requests merge per channel by `max` while an earlier request is still
-/// playing, and `ends_at` is the later of the two ends. That is the rule
-/// that stops a 30 ms hitmarker tick from cutting a 400 ms death rumble
-/// short, and stops a finished death rumble from leaking its magnitude into
-/// the next tick: a request that arrives after `ends_at` starts from zero.
+/// Requests merge by `max` per motor while an earlier request is still
+/// playing, and the one `ends_at` is the later of the two ends. A short
+/// request never cuts a long one short, and its magnitude stays in the
+/// merge until that single end passes: there is no per-motor end (see
+/// [`Rumble`] for why). A request that arrives after `ends_at` starts from
+/// zero, so a finished death rumble never leaks its magnitude into the
+/// next tick.
 pub struct Haptics {
     /// The merged strong-motor magnitude on the pad now (0 while idle).
     strong: f32,
@@ -464,6 +491,9 @@ pub struct Haptics {
     weak: f32,
     /// When the motors stop; `None` while idle.
     ends_at: Option<Instant>,
+    /// When the motors were last (re)started, so `tick` can hold the stop
+    /// back until [`PLAY_TO_STOP_GRACE`] has passed; `None` while idle.
+    last_play: Option<Instant>,
     /// What the probe found; see `InputState::pad_status`. Logged on change.
     status: &'static str,
     #[cfg(not(target_arch = "wasm32"))]
@@ -480,6 +510,7 @@ impl Haptics {
             strong: 0.0,
             weak: 0.0,
             ends_at: None,
+            last_play: None,
             status: "none",
             #[cfg(not(target_arch = "wasm32"))]
             pads: NativePads::open(),
@@ -496,6 +527,7 @@ impl Haptics {
             strong: 0.0,
             weak: 0.0,
             ends_at: None,
+            last_play: None,
             status: "none",
             pads: None,
         }
@@ -545,21 +577,40 @@ impl Haptics {
             .ends_at
             .map_or(0, |t| t.saturating_duration_since(now).as_millis());
         self.play(remaining_ms);
+        self.last_play = Some(now);
     }
 
-    /// Stop the motors once the merged request has run its course.
+    /// Stop the motors once the merged request has run its course, and not
+    /// before [`PLAY_TO_STOP_GRACE`] has passed since the last play.
     pub fn tick(&mut self, now: Instant) {
-        if self.ends_at.is_some_and(|t| now >= t) {
+        let Some(end) = self.ends_at else {
+            return;
+        };
+        let earliest = self
+            .last_play
+            .map_or(end, |p| end.max(p + PLAY_TO_STOP_GRACE));
+        if now >= earliest {
             self.stop();
         }
     }
 
-    /// Stop both motors now and forget the request: focus loss, and expiry.
+    /// Whether a request is on the motors, or waiting for its stop. Only
+    /// the native exit path asks; the web page has no exit of its own.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub const fn is_playing(&self) -> bool {
+        self.ends_at.is_some()
+    }
+
+    /// Stop both motors now and forget the request: focus loss, expiry and
+    /// exit. This ignores the grace period on purpose: a stop that lands
+    /// in the same server tick as its play leaves the motors silent, which
+    /// is the right result on every path that calls this directly.
     pub fn stop(&mut self) {
         let was_playing = self.ends_at.is_some();
         self.strong = 0.0;
         self.weak = 0.0;
         self.ends_at = None;
+        self.last_play = None;
         if was_playing {
             #[cfg(not(target_arch = "wasm32"))]
             if let Some(p) = self.pads.as_ref() {
@@ -633,7 +684,8 @@ const GILRS_BUTTONS: [(gilrs::Button, PadButton); 16] = [
 #[cfg(not(target_arch = "wasm32"))]
 impl NativePads {
     /// Open gilrs, or log why not and go without. `Gilrs::new` fails on a
-    /// platform gilrs does not implement; on Windows it is `XInput` and
+    /// platform gilrs does not implement; on Windows it is
+    /// Windows.Gaming.Input (WGI, the crate's default backend there) and
     /// succeeds with zero pads attached, which is the path this workstation
     /// exercises.
     fn open() -> Option<Self> {
@@ -786,6 +838,12 @@ struct WebPads {
     shim: Option<js_sys::Function>,
     /// Whether `shim` has been looked up yet.
     shim_probed: bool,
+    /// The shim's last answer: whether it found a pad with a
+    /// `vibrationActuator`. `None` until it has been called once. The
+    /// status line is derived from this rather than from the shim's mere
+    /// presence, because the page carries the shim on every browser and
+    /// only Chromium has the actuator behind it.
+    actuator: Option<bool>,
     /// A pad with a non-standard mapping is logged once, not every frame.
     warned_mapping: bool,
 }
@@ -796,6 +854,7 @@ impl WebPads {
         Self {
             shim: None,
             shim_probed: false,
+            actuator: None,
             warned_mapping: false,
         }
     }
@@ -845,7 +904,13 @@ impl WebPads {
                 continue;
             }
             let state = Self::snapshot(&pad);
-            return (Some(state), self.shim().is_some());
+            // The first sight of a pad asks the shim whether an actuator is
+            // behind it, with the same silent zero-length call `stop` makes,
+            // so the status is right before the first shot rather than after.
+            if self.actuator.is_none() {
+                self.stop();
+            }
+            return (Some(state), self.actuator == Some(true));
         }
         (None, false)
     }
@@ -892,15 +957,26 @@ impl WebPads {
         self.call(0.0, 0.0, 0.0);
     }
 
+    /// Call the shim and record its answer. The shim returns `true` only
+    /// when it found a pad with a `vibrationActuator`; anything else (an
+    /// older shim's `undefined`, a thrown call) leaves the last answer as
+    /// it was, so an unknown reads as "input-only" until proven otherwise.
     fn call(&mut self, strong: f32, weak: f32, ms: f64) {
         use wasm_bindgen::JsValue;
-        if let Some(shim) = self.shim() {
-            drop(shim.call3(
-                &JsValue::NULL,
-                &JsValue::from_f64(f64::from(strong)),
-                &JsValue::from_f64(f64::from(weak)),
-                &JsValue::from_f64(ms),
-            ));
+        let answer = self
+            .shim()
+            .and_then(|shim| {
+                shim.call3(
+                    &JsValue::NULL,
+                    &JsValue::from_f64(f64::from(strong)),
+                    &JsValue::from_f64(f64::from(weak)),
+                    &JsValue::from_f64(ms),
+                )
+                .ok()
+            })
+            .and_then(|v| v.as_bool());
+        if let Some(found) = answer {
+            self.actuator = Some(found);
         }
     }
 }
@@ -925,10 +1001,12 @@ mod tests {
         assert_eq!((s, w), (0.9, 0.8));
         assert_eq!(end, t0 + Duration::from_millis(300));
 
-        // A short request arriving mid-rumble neither shortens it nor lowers it.
-        h.request(r(0.1, 0.1, 30), t0 + Duration::from_millis(100));
+        // A short request arriving mid-rumble neither shortens it nor lowers
+        // it, and there is one end, not one per motor: the weak magnitude it
+        // raises holds until the merged rumble ends, not for its own 30 ms.
+        h.request(r(0.1, 1.0, 30), t0 + Duration::from_millis(100));
         let (s, w, end) = h.playing().expect("playing");
-        assert_eq!((s, w), (0.9, 0.8));
+        assert_eq!((s, w), (0.9, 1.0));
         assert_eq!(end, t0 + Duration::from_millis(300));
 
         // Expiry stops it; a tick just before the end does not.
@@ -936,6 +1014,37 @@ mod tests {
         assert!(h.playing().is_some());
         h.tick(t0 + Duration::from_millis(300));
         assert_eq!(h.playing(), None);
+        assert!(!h.is_playing());
+    }
+
+    #[test]
+    fn a_stop_waits_one_server_tick_after_the_last_play() {
+        let mut h = Haptics::detached();
+        let t0 = Instant::now();
+        // A 30 ms hitmarker outlives its own length: the stop is held until
+        // gilrs's server has had a tick to start the motors.
+        h.request(r(0.5, 0.5, 30), t0);
+        h.tick(t0 + Duration::from_millis(30));
+        assert!(h.is_playing());
+        h.tick(t0 + PLAY_TO_STOP_GRACE.saturating_sub(Duration::from_millis(1)));
+        assert!(h.is_playing());
+        h.tick(t0 + PLAY_TO_STOP_GRACE);
+        assert!(!h.is_playing());
+
+        // A re-play near the end of a long rumble pushes the stop out too,
+        // because the re-play is a fresh command in the server's queue.
+        h.request(r(0.9, 0.1, 300), t0);
+        let t1 = t0 + Duration::from_millis(290);
+        h.request(r(0.1, 0.1, 10), t1);
+        h.tick(t0 + Duration::from_millis(300));
+        assert!(h.is_playing());
+        h.tick(t1 + PLAY_TO_STOP_GRACE);
+        assert!(!h.is_playing());
+
+        // A direct stop (focus loss, exit) does not wait.
+        h.request(r(0.5, 0.5, 300), t0);
+        h.stop();
+        assert!(!h.is_playing());
     }
 
     #[test]
@@ -986,7 +1095,7 @@ mod tests {
     }
 
     /// Opens the host's backend for real. Ignored by default because it
-    /// depends on the machine (`XInput` on Windows, evdev on Linux); run it
+    /// depends on the machine (WGI on Windows, evdev on Linux); run it
     /// with `--ignored` to see what this host exposes.
     #[test]
     #[ignore = "touches the host's gamepad backend"]

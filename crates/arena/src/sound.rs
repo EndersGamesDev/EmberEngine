@@ -33,7 +33,8 @@ pub enum Sfx {
     Bonk,
     /// A weapon popping out of a block.
     Pop,
-    /// A dry trigger, or a bonk on a dead block: "nothing happened", felt.
+    /// A trigger pulled during a reload, or a bonk on a dead block:
+    /// "nothing happened", felt.
     Click,
     /// A looted gun running dry and the sidearm coming back.
     Holster,
@@ -70,7 +71,10 @@ impl Sfx {
     /// the queue, so the cues that carry information a player cannot get
     /// any other way (a rocket went off, someone died, a block paid) sort
     /// before the ones the next state repeats anyway (another footfall of
-    /// a burst, another remote shot).
+    /// a burst, another remote shot). Being hurt and landing a hit sit
+    /// between those: each happens once per event and a crowded frame is
+    /// exactly when a player needs to hear that they were shot, so they
+    /// must not queue behind a remote burst's footfalls.
     #[must_use]
     pub const fn priority(self) -> u8 {
         match self {
@@ -79,7 +83,8 @@ impl Sfx {
             Self::Kill => 2,
             Self::Pop => 3,
             Self::Bonk => 4,
-            _ => 5,
+            Self::Hurt | Self::Hit => 5,
+            _ => 6,
         }
     }
 }

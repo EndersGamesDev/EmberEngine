@@ -15,8 +15,12 @@
 //! dock and the king block sit on the origin. Mirrors and not Trench City's
 //! quarter turn because of the lanes: a rotation would turn the trains
 //! into a ring, and mirrors keep every container parallel to x, which is
-//! what gives the yard two 48 m sightlines and the train zone its short
-//! alleys. That is what makes the sniper and the SMG different guns here.
+//! what gives the yard its two 48 m sightlines and boxes the train zone
+//! off from the yard and the backlot. The train zone is itself a lane: its
+//! blocks hang above eye level and nothing else in it stands taller than
+//! 1.45, so it runs 48 m end to end like the yard, and what separates the
+//! two is that a body in one cannot see into the other. That is what makes
+//! the sniper and the SMG different guns here.
 //!
 //! Every number below is the plan's, and the invariants at the bottom are
 //! what decide it: a sightline or a clearance the tests reject is moved by
@@ -259,10 +263,12 @@ fn freight_yard_decor() -> Vec<Decor> {
 
 /// The drivers the map invariants are proven with: a player made of the
 /// sim's own `move_circle` and `step_vertical`, and a shot made of the
-/// sim's own round. `climb`, `hop`, `shot_over`, `centre`, `gap`,
-/// `contains` and `dist` are Trench City's (v13) drivers, copied here so
-/// both maps run one driver; the copies in `shooter.rs`'s test module are
-/// the originals and are the ones to delete when the two are merged.
+/// sim's own round. `climb`, `hop`, `centre`, `gap`, `contains` and `dist`
+/// began as Trench City's (v13) drivers and live here now; `shooter.rs`'s
+/// test module imports them from this module, so both maps run one driver.
+/// Only `shot_over` exists twice: the one here takes a `Level`, and the
+/// one in `shooter.rs` takes a bare obstacle list and a target height,
+/// which its tests need and the map invariants do not.
 ///
 /// New here: `perch`, which finds where a body can actually stand on a
 /// box, because a chain step hemmed by a taller neighbour within a body's
@@ -512,6 +518,15 @@ pub(crate) mod level_helpers {
     /// Whether it connected within two seconds. The sidearm's round, so
     /// the ray is exactly the aim: spread would make a sightline a die
     /// roll.
+    ///
+    /// The shooter holds the sidearm, whose round expires at 54 m
+    /// (`BULLET_TTL` 1.6 s at `BULLET_SPEED`), which is short of the far
+    /// spawn pairs of a 48 m arena; a test that could not reach a pair could
+    /// not fail for it. So every round in flight is held at 4 s of life on
+    /// every tick, which is to say it never expires inside the driver's
+    /// 180-tick window, and the window itself is the range: 3 s at 34 m/s
+    /// is 102 m, half again the diagonal. This asks whether the geometry
+    /// blocks the line, not whether the sidearm reaches it.
     pub fn shot_over(level: &Level, from: [f32; 2], from_y: f32, pitch: f32, to: [f32; 2]) -> bool {
         let mut sim = Sim::from_level(level, 0);
         sim.add_player(0);
@@ -528,7 +543,7 @@ pub(crate) mod level_helpers {
             },
         );
         inputs.insert(1, PlayerIn::default());
-        for _ in 0..120 {
+        for _ in 0..180 {
             sim.players.iter_mut().for_each(|p| match p.id {
                 0 if p.alive => {
                     p.pos = from;
@@ -543,6 +558,9 @@ pub(crate) mod level_helpers {
                 _ => {}
             });
             step_with(&mut sim, &inputs);
+            for b in &mut sim.bullets {
+                b.ttl = 4.0;
+            }
             if sim.players.iter().find(|p| p.id == 1).unwrap().hp < MAX_HP {
                 return true;
             }
@@ -1024,6 +1042,15 @@ mod tests {
         // round's per-tick samples fall depends on which end it leaves
         // from. Every diagonal class is decided here, not by hand.
         let level = yard();
+        // The driver must be able to fail: the far-corner pairs are 57 m
+        // apart, past the sidearm's own 54 m, so first prove its round
+        // reaches the far corner of an empty arena.
+        let mut open = level.clone();
+        open.obstacles.clear();
+        assert!(
+            shot_over(&open, [-22.0, -22.0], 0.0, 0.0, [22.0, 22.0]),
+            "the driver's round does not cross an empty arena"
+        );
         for (i, a) in level.spawns.iter().enumerate() {
             for (j, b) in level.spawns.iter().enumerate() {
                 if i == j {

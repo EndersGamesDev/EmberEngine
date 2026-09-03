@@ -330,7 +330,10 @@ const fn cue(shake: f32, rumble: Option<Rumble>, sfx: Option<(Sfx, f32)>) -> Cue
     Cue { shake, rumble, sfx }
 }
 
-/// Fire held on an empty magazine, not reloading: once per press.
+/// Fire pressed while the magazine is out for a reload: once per press.
+/// An empty magazine that is not reloading never exists in play, because
+/// the sim starts the reload on the tick the last round leaves, so the
+/// click is the one dry pull a player can actually make.
 #[must_use]
 pub const fn empty_trigger() -> Cue {
     cue(0.0, Some(rumble(0.0, 0.20, 30)), Some((Sfx::Click, 0.35)))
@@ -566,20 +569,45 @@ mod feel_tests {
         prioritize(&mut queue);
         let played: Vec<Sfx> = queue.iter().take(BUDGET).map(|(s, _)| *s).collect();
         assert_eq!(played[0], Sfx::Blast);
+        assert_eq!(
+            played[1],
+            Sfx::Hit,
+            "the hitmarker plays before the remote footfalls"
+        );
         assert!(
             played.contains(&Sfx::Shot),
             "the budget still plays the shots"
         );
         assert_eq!(played.len(), BUDGET);
-        // The order the plan names, and the sort is stable for the rest.
-        let order = [Sfx::Blast, Sfx::Death, Sfx::Kill, Sfx::Pop, Sfx::Bonk];
+        // The order the plan names, then being hurt and hitting, then the
+        // rest; the sort is stable within a rank.
+        let order = [
+            Sfx::Blast,
+            Sfx::Death,
+            Sfx::Kill,
+            Sfx::Pop,
+            Sfx::Bonk,
+            Sfx::Hurt,
+            Sfx::Shot,
+        ];
         for pair in order.windows(2) {
             assert!(pair[0].priority() < pair[1].priority(), "{pair:?}");
         }
-        let mut same = vec![(Sfx::Shot, 0.1), (Sfx::Hit, 0.2), (Sfx::Hurt, 0.3)];
+        assert_eq!(Sfx::Hurt.priority(), Sfx::Hit.priority());
+        // Eight footfalls of remote fire, then the hurt thud arrives last:
+        // the thud is the cue the budget keeps, and the footfalls keep
+        // their own order behind it.
+        let mut crowded: Vec<(Sfx, f32)> = (0..8u8)
+            .map(|i| (Sfx::ShotSmg, 0.1 * f32::from(i)))
+            .collect();
+        crowded.push((Sfx::Hurt, 0.6));
+        prioritize(&mut crowded);
+        assert_eq!(crowded[0].0, Sfx::Hurt);
+        assert!((crowded[1].1 - 0.0).abs() < 1e-6 && (crowded[8].1 - 0.7).abs() < 1e-6);
+        let mut same = vec![(Sfx::Reload, 0.1), (Sfx::Shot, 0.2), (Sfx::Upgrade, 0.3)];
         prioritize(&mut same);
-        assert_eq!(same[0].0, Sfx::Shot);
-        assert_eq!(same[2].0, Sfx::Hurt);
+        assert_eq!(same[0].0, Sfx::Reload);
+        assert_eq!(same[2].0, Sfx::Upgrade);
     }
 
     #[test]

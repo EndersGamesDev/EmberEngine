@@ -117,11 +117,12 @@ Worked example: `tools/swat_split.py` (Mixamo-rigged FBX → 15 GLB parts
   cost ~60 MB of VRAM. Keep part atlases at 1024² until the renderer
   learns to share textures.
 - **The wasm build embeds assets** via `include_bytes!`. Every megabyte
-  of GLB is a megabyte of download: the arena bundle measured **31.0 MB**
-  on 2026-09-02 (`target/wasm32-unknown-unknown/release/arena.wasm`,
-  before the v18 weapons; the "~17 MB" this line used to carry was stale),
-  of which the operator is ~5 MB and the v18 viewmodel 17.4 MB. Check the
-  size before embedding.
+  of GLB is a megabyte of download: the arena bundle measured **40.5 MB**
+  of raw wasm on 2026-09-03 (`target/wasm32-unknown-unknown/release/arena.wasm`)
+  and **39.1 MB** after wasm-bindgen, with the v18 weapons in; before v18
+  it was 31.0 MB on 2026-09-02 (the "~17 MB" this line used to carry was
+  stale). Of the v18 bundle the operator is ~5 MB and the v18 viewmodel
+  17.4 MB. Check the size before embedding.
 - **Meshes are de-indexed** into flat triangle lists at load, so vertex
   count is 3× the triangle count in memory.
 - The loader reads `TEXCOORD_0` and the material's base-colour texture

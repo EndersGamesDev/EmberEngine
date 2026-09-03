@@ -26,9 +26,10 @@ tracing-log.workspace = true
 egui = "0.31"
 egui-wgpu = "0.31"
 egui-winit = "0.31"
-# Gamepads and force feedback. Its Windows backend is XInput, which is the
-# one that supports rumble; a pad it cannot see (a DualShock without a
-# driver) is simply absent, and the game keeps its keys.
+# Gamepads and force feedback. Its default Windows backend is
+# Windows.Gaming.Input (the crate's `wgi` feature, not `xinput`), which
+# rumbles the pads WGI classes as a Gamepad; a pad it cannot see (a
+# DualShock without a driver) is simply absent, and the game keeps its keys.
 gilrs = "0.11"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

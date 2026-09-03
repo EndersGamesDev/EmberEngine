@@ -11,18 +11,25 @@
 /// One rumble request: motor magnitudes in `0..=1` and a duration.
 ///
 /// Requests made in one frame, and requests that arrive while an earlier one
-/// is still playing, are merged by the platform per channel with `max`, and
-/// the longest remaining duration wins. That rule is what keeps a 30 ms
-/// hitmarker tick from cancelling a 400 ms death rumble: the tick raises the
-/// weak motor for its own 30 ms and the death keeps the strong motor for the
-/// rest of its 400.
+/// is still playing, are merged by the platform: each motor takes the `max`
+/// of the magnitudes asked of it, and the merged rumble ends at the latest
+/// end among them. There is one end, not one per motor, so a request holds
+/// its magnitude in the merge until that end passes, however short it asked
+/// for. A 30 ms hitmarker tick that lands inside a 400 ms death rumble
+/// therefore never cancels or shortens the death, and it raises the weak
+/// motor for the rest of the 400, not for 30. The trade is deliberate: a
+/// per-motor end would need a re-play in the middle of a rumble on both
+/// platforms, and a hitmarker held inside a death rumble is not felt as
+/// wrong, where a death rumble cut short by a hitmarker is.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Rumble {
-    /// The heavy, low-frequency motor (the left one on an `XInput` pad).
+    /// The heavy, low-frequency motor (the left one on an Xbox-style pad).
     pub strong: f32,
-    /// The light, high-frequency motor (the right one on an `XInput` pad).
+    /// The light, high-frequency motor (the right one on an Xbox-style pad).
     pub weak: f32,
-    /// How long the request lasts, in milliseconds.
+    /// How long the request lasts, in milliseconds. The browser's actuator
+    /// rejects an effect longer than 5000 ms, so the page's shim clamps the
+    /// merged duration there; native plays the full length.
     pub ms: u16,
 }
 

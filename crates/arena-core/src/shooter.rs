@@ -1065,6 +1065,7 @@ const fn grant(p: &mut PlayerSt, id: u8) {
     p.weapon = id;
     p.ammo = stats.mag;
     p.reserve = stats.reserve;
+    p.fired = 0;
     p.reload_t = 0.0;
     p.cooldown = 0.2;
 }
@@ -1298,6 +1299,13 @@ pub struct PlayerSt {
     /// When both this and `ammo` reach zero the gun is gone and the sidearm
     /// is back, which is what makes a looted gun a loan.
     pub reserve: u8,
+    /// Rounds fired since the magazine was last filled: the bloom's input.
+    /// Counted rather than derived from `mag - ammo` because a reserve-short
+    /// refill fills the magazine only partly, and the difference would then
+    /// read a fresh magazine as twenty rounds into a spray. Server-only: the
+    /// wire carries `ammo`, never this, and it resets on every event that
+    /// fills the magazine (reload, grant, respawn, the dry swap).
+    fired: u8,
     /// Counting down while reloading; 0 = ready.
     pub reload_t: f32,
     /// Authoritative death count (the scoreboard's DEATHS column).
@@ -1353,10 +1361,13 @@ const fn id_bit(id: u8) -> u8 {
 /// Pure so a test can hand it any table row, and because everything that
 /// decides where the round goes is an argument: the shooter's state, the
 /// row, whether the sights are up, whether the feet are planted, and the
-/// (seed, tick) the cone is rolled from. The caller charges the cooldown and
-/// the magazine; `fired` here is read BEFORE that decrement, so the first
-/// round after a reload is round zero of the bloom (the Vityaz starts tight
-/// and opens up; the AK's climb reads as the cone).
+/// (seed, tick) the cone is rolled from. The caller charges the cooldown,
+/// the magazine and the shooter's `fired` count; `fired` is read here BEFORE
+/// that increment, so the first round after a reload is round zero of the
+/// bloom (the Vityaz starts tight and opens up; the AK's climb reads as the
+/// cone). It is the count, not `mag - ammo`: a reserve-short refill leaves
+/// the magazine part-full, and the difference would open the first round of
+/// a fresh magazine to the cap.
 ///
 /// When the effective cone is zero the aim is used exactly as it was before
 /// v18 and no rotation happens at all: the sidearm's ray is bit-identical
@@ -1378,9 +1389,7 @@ pub fn launch(
     delay: u16,
     out: &mut Vec<Bullet>,
 ) {
-    // Saturating: a weapon set by hand with more rounds than its magazine
-    // holds has fired nothing since its last reload.
-    let fired = f32::from(stats.mag.saturating_sub(p.ammo));
+    let fired = f32::from(p.fired);
     let cone = (stats.spread + stats.bloom * fired).min(stats.spread_max)
         * if ads { stats.ads_spread } else { 1.0 }
         * if grounded { 1.0 } else { ADS_SPREAD_AIR_MULT };
@@ -1541,6 +1550,7 @@ impl Sim {
             weapon: SIDEARM,
             ammo: weapon_stats(SIDEARM).mag,
             reserve: RESERVE_INFINITE,
+            fired: 0,
             reload_t: 0.0,
             death_count: 0,
             respawn_in: 0.0,
@@ -1690,6 +1700,7 @@ impl Sim {
                     p.weapon = SIDEARM;
                     p.ammo = weapon_stats(SIDEARM).mag;
                     p.reserve = RESERVE_INFINITE;
+                    p.fired = 0;
                     p.reload_t = 0.0;
                 }
                 continue;
@@ -1767,6 +1778,8 @@ impl Sim {
                     if p.reserve != RESERVE_INFINITE {
                         p.reserve -= take;
                     }
+                    // A short refill is still a fresh magazine to the bloom.
+                    p.fired = 0;
                 }
             } else if p.ammo == 0 && p.reserve == 0 {
                 // Dry: the loot gun is gone and the sidearm is back, this
@@ -1774,6 +1787,7 @@ impl Sim {
                 p.weapon = SIDEARM;
                 p.ammo = weapon_stats(SIDEARM).mag;
                 p.reserve = RESERVE_INFINITE;
+                p.fired = 0;
                 p.reload_t = 0.0;
                 p.cooldown = 0.25;
             } else if (input.reload && p.ammo < stats.mag && p.reserve > 0) || p.ammo == 0 {
@@ -1791,11 +1805,11 @@ impl Sim {
                     + new_bullets.iter().filter(|b| b.owner == owner).count();
                 if active < MAX_BULLETS_PER_PLAYER {
                     let p = &mut self.players[i];
-                    // The round reads the magazine before it is charged:
-                    // `launch` counts rounds fired since the reload for
-                    // the bloom. `v.grounded` is this tick's own vertical
-                    // step, so a jumping spray is judged airborne on the
-                    // tick it leaves the ground.
+                    // The round reads `fired` before it is counted, so
+                    // the first round after a refill is round zero of the
+                    // bloom. `v.grounded` is this tick's own vertical step,
+                    // so a jumping spray is judged airborne on the tick it
+                    // leaves the ground.
                     launch(
                         p,
                         &stats,
@@ -1808,6 +1822,9 @@ impl Sim {
                     );
                     p.cooldown = stats.cooldown;
                     p.ammo -= 1;
+                    // Saturating because a hand-built test can fire past
+                    // any magazine; the cone is capped long before 255.
+                    p.fired = p.fired.saturating_add(1);
                 }
             }
         }
@@ -5493,7 +5510,7 @@ mod tests {
             let p = &mut sim.players[0];
             p.aim = aim;
             p.pitch = pitch;
-            p.ammo = 0;
+            p.fired = stats.mag;
             let cone = f64::from(stats.spread_max * ADS_SPREAD_AIR_MULT);
             let mut widest: f64 = 0.0;
             for tick in 0..10_000u64 {
@@ -5521,7 +5538,7 @@ mod tests {
         let mut widest = |rounds: std::ops::Range<u8>| -> f64 {
             let mut w: f64 = 0.0;
             for fired in rounds {
-                sim.players[0].ammo = stats.mag - fired;
+                sim.players[0].fired = fired;
                 for tick in 0..300u64 {
                     let mut out = Vec::new();
                     launch(&sim.players[0], &stats, false, true, 7, tick, 0, &mut out);
@@ -5536,6 +5553,93 @@ mod tests {
             early < late,
             "early {early} is not tighter than late {late}"
         );
+    }
+
+    #[test]
+    fn a_reserve_short_refill_starts_the_bloom_over() {
+        // AK, 30 + 30. Twenty rounds, a manual reload (the reserve pays
+        // twenty, ten are left), thirty more, and the auto-reload can only
+        // hand back ten: the magazine reads 10 of 30. Derived from the
+        // magazine that is twenty rounds into a spray; counted, it is a
+        // fresh magazine, and its first round is the same round a full
+        // magazine's first round would be for the same roll.
+        let mut sim = open_sim(7, 1);
+        arm(&mut sim.players[0], 3);
+        let stats = weapon_stats(3);
+        let mut fire = HashMap::new();
+        fire.insert(
+            0,
+            PlayerIn {
+                aim: [1.0, 0.0],
+                fire: true,
+                ..Default::default()
+            },
+        );
+        let mut reload = HashMap::new();
+        reload.insert(
+            0,
+            PlayerIn {
+                reload: true,
+                ..Default::default()
+            },
+        );
+        let idle = HashMap::new();
+        let fire_rounds = |sim: &mut Sim, n: u8| {
+            let target = sim.players[0].ammo - n;
+            let mut ticks = 0;
+            while sim.players[0].ammo > target && ticks < 2000 {
+                step_with(sim, &fire);
+                ticks += 1;
+            }
+            assert_eq!(sim.players[0].ammo, target);
+        };
+        let settle = |sim: &mut Sim, inputs: &HashMap<u8, PlayerIn>| {
+            for _ in 0..((stats.reload / FIXED_DT) as u32 + 3) {
+                step_with(sim, inputs);
+            }
+        };
+        fire_rounds(&mut sim, 20);
+        assert_eq!(sim.players[0].fired, 20);
+        settle(&mut sim, &reload);
+        assert_eq!((sim.players[0].ammo, sim.players[0].reserve), (30, 10));
+        assert_eq!(
+            sim.players[0].fired, 0,
+            "a manual reload restarts the count"
+        );
+        fire_rounds(&mut sim, 30);
+        assert_eq!(sim.players[0].fired, 30);
+        // The empty magazine started the auto-reload on its own tick.
+        settle(&mut sim, &idle);
+        let p = &sim.players[0];
+        assert_eq!(
+            (p.weapon, p.ammo, p.reserve),
+            (3, 10, 0),
+            "the short refill"
+        );
+        assert_eq!(p.fired, 0, "the short magazine is a fresh magazine");
+        // Its first round is a full magazine's first round, roll for roll.
+        let mut fresh = p.clone();
+        arm(&mut fresh, 3);
+        assert_eq!((fresh.ammo, fresh.fired), (30, 0));
+        for tick in 0..50u64 {
+            let (mut a, mut b) = (Vec::new(), Vec::new());
+            launch(p, &stats, false, true, 7, tick, 0, &mut a);
+            launch(&fresh, &stats, false, true, 7, tick, 0, &mut b);
+            assert_eq!(bullet_bits(&a[0]), bullet_bits(&b[0]), "tick {tick}");
+            assert!(
+                offset_angle(&a[0], [1.0, 0.0], 0.0, stats.speed) <= f64::from(stats.spread) + 1e-4
+            );
+        }
+        // And the count is the rounds fired, until the magazine is empty
+        // and the dry swap hands the sidearm back at zero.
+        fire_rounds(&mut sim, 4);
+        assert_eq!(sim.players[0].fired, 4);
+        fire_rounds(&mut sim, 6);
+        for _ in 0..2 {
+            step_with(&mut sim, &idle);
+        }
+        let p = &sim.players[0];
+        assert_eq!((p.weapon, p.fired), (SIDEARM, 0), "the dry swap resets it");
     }
 
     #[test]
@@ -5556,7 +5660,7 @@ mod tests {
         }
         grant(&mut sim.players[0], 3);
         sim.players[0].pitch = 0.0;
-        sim.players[0].ammo = 15;
+        sim.players[0].fired = 15;
         let ak = weapon_stats(3);
         let widest = |grounded: bool| -> f64 {
             let mut w: f64 = 0.0;

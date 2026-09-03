@@ -12,7 +12,7 @@ use arena_core::shooter::{
     Obstacle, Projectile, RESERVE_INFINITE, SIDEARM, WEAPON_COUNT, move_circle, stance_speed,
     step_vertical, weapon_name, weapon_stats,
 };
-use ember_engine::glam::{Quat, Vec2, Vec3};
+use ember_engine::glam::{Mat3, Quat, Vec2, Vec3};
 use ember_engine::{
     Camera, EmberGame, Feedback, Frame, InputState, Instance, KeyCode, MouseButton, PadButton,
 };
@@ -137,6 +137,13 @@ enum Slot {
 /// sidearm, as it always did. `hand_sword` keeps that prefix on purpose: an
 /// older client that has only the prefix rule hides it rather than welding
 /// it to a remote player's rifle.
+///
+/// Every weapon also gets a `w_<weapon>_<part>` prefix rule, because the
+/// build's `--split` fallback (`tools/v18/build_weapons.py`) ships a
+/// multi-material gun as one node per material named that way when the
+/// atlas bake fails; without the rule those parts would ride the sidearm.
+/// The rocket's exact name is matched before the `w_rpg7_` prefix so it
+/// keeps its own list.
 fn classify(name: &str) -> Slot {
     match name {
         "w_vityaz" => Slot::Weapon(2),
@@ -146,6 +153,11 @@ fn classify(name: &str) -> Slot {
         "w_sniper" => Slot::Weapon(6),
         "w_rpg7" => Slot::Weapon(7),
         "w_rpg7_rocket" => Slot::Rocket,
+        _ if name.starts_with("w_vityaz_") => Slot::Weapon(2),
+        _ if name.starts_with("w_ak47_") => Slot::Weapon(3),
+        _ if name.starts_with("w_m4_") => Slot::Weapon(4),
+        _ if name.starts_with("w_sniper_") => Slot::Weapon(6),
+        _ if name.starts_with("w_rpg7_") => Slot::Weapon(7),
         "rifle" => Slot::Weapon(SIDEARM),
         "shield" => Slot::Shield,
         "sword" => Slot::Sword,
@@ -190,6 +202,15 @@ const VIEWMODEL_RIG: &str = include_str!("../assets/viewmodel-rig.json");
 /// How far along the muzzle axis the flash sat on the old box pistol; the
 /// fallback when the sidecar names no muzzle.
 const LEGACY_MUZZLE: Vec3 = Vec3::new(0.95, 0.0, 0.0);
+
+/// The middle of the rocket along the bore, in the launcher's frame. The
+/// asset build report (`tools/v18/build_weapons.py`, the `w_rpg7_rocket`
+/// box line) seats the rocket at x -0.266..0.538: 0.43 m of it inside the
+/// tube behind the muzzle at x 0.166 and the warhead 0.37 m out of it, so
+/// its centre is 0.136 ahead of the grip. An in-flight rocket is drawn
+/// with this point on the server's path, at the bore height the sidecar
+/// gives the launcher's muzzle.
+const ROCKET_CENTRE_X: f32 = 0.136;
 
 /// Load the GLB into engine meshes + part lists. Falls back to the classic
 /// cube pistol when the asset is missing/broken.
@@ -787,6 +808,19 @@ struct Pop {
 const POP_SECS: f32 = 0.5;
 const BUMP_SECS: f32 = 0.25;
 
+/// How long after a predicted bonk the same block stays silent. Longer
+/// than the slice of history a reconciliation replays (0.3 s per command),
+/// which is how far a rewind can put the head back under the block, and
+/// shorter than a block's own 18 s cooldown, so the only bonk it can eat
+/// is the dead click of a bunny-hop straight back into a block that has
+/// already paid.
+const BONK_DEBOUNCE: f32 = 0.5;
+
+/// Whether a bonk at `now` is a new one for a block last bonked at `last`.
+fn bonk_is_new(last: Option<f32>, now: f32) -> bool {
+    last.is_none_or(|t| now - t >= BONK_DEBOUNCE)
+}
+
 // These flags represent independent input, connection, animation, and UI state transitions.
 #[allow(clippy::struct_excessive_bools)]
 pub struct ShooterGame {
@@ -912,6 +946,12 @@ pub struct ShooterGame {
     pops: Vec<Pop>,
     /// The box my head hit last frame, so a bonk is an edge, not a level.
     prev_bonked: Option<usize>,
+    /// When each block was last bonked by the prediction, per loot slot.
+    /// The edge above is not enough on its own: a reconciliation can
+    /// rewind the arc to below the block with the head still rising, the
+    /// edge clears on the frame between, and the forward prediction clamps
+    /// on the same block a second time.
+    last_bonk_at: Vec<Option<f32>>,
     /// When the bonk camera dip started.
     dip_started: Option<f32>,
     /// When my last `S2C::Loot` arrived: a weapon change right after it is
@@ -1014,6 +1054,7 @@ impl ShooterGame {
             loot_bump: Vec::new(),
             pops: Vec::new(),
             prev_bonked: None,
+            last_bonk_at: Vec::new(),
             dip_started: None,
             last_pop_at: -10.0,
             feedback: Feedback::default(),
@@ -1255,7 +1296,18 @@ impl EmberGame for ShooterGame {
         while let Some(msg) = self.chan.poll() {
             drained.push(msg);
         }
-        let suppress_sfx = drained.len() > 6;
+        // A backlog is measured in states, not messages: one tick fans out
+        // into up to eight `Hit`, eight `Kill`, a `Blast`, a `Loot` and the
+        // `State` that carries them, which is a crowded moment and not a
+        // stall, and it is exactly the frame the blast, the death and the
+        // hurt cues matter. More than three states in one frame is a
+        // hidden tab catching up; anything less is thinned by
+        // `prioritize` and the budget below.
+        let states_drained = drained
+            .iter()
+            .filter(|m| matches!(m, S2C::State { .. }))
+            .count();
+        let suppress_sfx = states_drained > 3;
         // The arrival-gap estimate must see at most one sample per frame:
         // self.time advances once per frame, so every extra state drained in
         // the same frame reads as a 0 ms gap and would collapse the estimate.
@@ -1292,6 +1344,7 @@ impl EmberGame for ShooterGame {
                         .collect();
                     self.loot_active = vec![true; self.loot_index.len()];
                     self.loot_bump = vec![None; self.loot_index.len()];
+                    self.last_bonk_at = vec![None; self.loot_index.len()];
                     self.pops.clear();
                     self.history.clear();
                     self.reload_started = None;
@@ -1757,15 +1810,18 @@ impl EmberGame for ShooterGame {
         }
         let moving = mv.length_squared() > 0.01;
         let fire = input.mouse_down(MouseButton::Left) || pad.is_some_and(|p| p.rt > 0.5);
-        // The dry trigger: once per press, on an empty magazine that is not
-        // being reloaded. Nothing goes to the server for it; the sim would
-        // refuse the round anyway.
+        // The dry trigger: once per press, while the magazine is out for a
+        // reload. An empty magazine that is not reloading cannot be seen
+        // from here, because the sim starts the reload on the tick the last
+        // round leaves, so the reload is the only state a pull can find
+        // nothing in. Nothing goes to the server for it; the sim refuses
+        // the round anyway.
         if fire
             && !self.prev_fire
             && self
                 .my_id
                 .and_then(|id| self.latest.get(&id))
-                .is_some_and(|p| p.alive && p.ammo == 0 && !p.reloading)
+                .is_some_and(|p| p.alive && p.reloading)
         {
             let c = feel::empty_trigger();
             self.shake.hit(c.shake);
@@ -1919,13 +1975,21 @@ impl EmberGame for ShooterGame {
             // (the pop, or nothing because someone was 30 ms earlier)
             // follows one round trip later. Requiring the pre-step vy > 0
             // is the same belt-and-braces the sim applies.
+            // The edge alone fires twice on most bonks: the reconciliation
+            // replay rewinds the arc to below the block, the edge clears
+            // on the frame between, and the clamp names the block again.
+            // So a bonk is also once per block per `BONK_DEBOUNCE`.
             let bonk = stepped
                 .bonked
                 .filter(|&k| self.prev_bonked != Some(k) && self.pred_vy > 0.0)
                 .filter(|&k| self.obstacles.get(k).is_some_and(|o| o.kind == Cover::Loot))
-                .and_then(|k| self.loot_slot(k));
+                .and_then(|k| self.loot_slot(k))
+                .filter(|&i| bonk_is_new(self.last_bonk_at.get(i).copied().flatten(), self.time));
             self.prev_bonked = stepped.bonked;
             if let Some(i) = bonk {
+                if let Some(last) = self.last_bonk_at.get_mut(i) {
+                    *last = Some(self.time);
+                }
                 let mut cues = Vec::new();
                 if self.loot_active.get(i).copied().unwrap_or(true) {
                     self.loot_bump[i] = Some(self.time);
@@ -2446,13 +2510,32 @@ impl EmberGame for ShooterGame {
                 );
             }
             if rocket {
+                // The rocket is a body, not a rod: `from_rotation_arc`
+                // rolls it with its heading, so the same mesh reads
+                // differently on every bearing. The held launcher's own
+                // convention (a yaw, then an elevation) is roll-stable.
+                let rocket_rot = weapon_rot(-dir.z.atan2(dir.x), dir.y.asin());
                 match self.assets.as_ref().filter(|a| !a.rocket.is_empty()) {
                     Some(a) => {
-                        push_parts(&mut frame, &a.rocket, at, rot, row.accent, Action::REST);
+                        // The mesh lives in the launcher's frame, so drawing
+                        // it at the bullet position would put the launcher's
+                        // origin (the grip) on the server's path and the bore
+                        // a hand's width off it. Shift it so the rocket's own
+                        // centre, on the bore line, sits on the path.
+                        let bore = a.muzzles[slot(7)];
+                        let centre = Vec3::new(ROCKET_CENTRE_X, bore.y, bore.z);
+                        push_parts(
+                            &mut frame,
+                            &a.rocket,
+                            at - rocket_rot * centre,
+                            rocket_rot,
+                            row.accent,
+                            Action::REST,
+                        );
                     }
                     None => frame.instances.push(
                         Instance::new(at, Vec3::new(0.5, 0.16, 0.16), Vec3::new(0.35, 0.4, 0.3))
-                            .with_rot(rot),
+                            .with_rot(rocket_rot),
                     ),
                 }
             } else {
@@ -2591,8 +2674,23 @@ impl EmberGame for ShooterGame {
             // scene pass has no blending.
             if my_feel.ads_fov < 30.0 && self.zoom > 0.6 {
                 let half_h = 0.5 * (my_feel.ads_fov.to_radians() * 0.5).tan();
+                // `aspect()` is winit's inner size. On the web the surface
+                // is sized from the canvas's client width times the device
+                // pixel ratio instead, which need not equal it (the note in
+                // `app.rs`), so the frame there can be a little off the
+                // edge of the view. Fixing that is engine work; this reads
+                // what the engine gives.
                 let half_w = half_h * input.aspect();
-                let up = Vec3::Y;
+                // The bars' basis, built outright: `from_rotation_arc`
+                // picks a roll of its own for a pitched look, and the frame
+                // then turned on its axis as the aim rose. Up is what is
+                // perpendicular to both the horizontal right and the look,
+                // and the right is re-derived from those two so the basis
+                // stays orthonormal when the shake tilts the look off the
+                // yaw plane.
+                let up = right3.cross(look).normalize();
+                let bar_right = look.cross(up);
+                let bar_rot = Quat::from_mat3(&Mat3::from_cols(bar_right, up, -look));
                 let c = eye + look * 0.5;
                 let thick = 0.012;
                 for (dx, dy, sx, sy) in [
@@ -2603,11 +2701,11 @@ impl EmberGame for ShooterGame {
                 ] {
                     frame.instances.push(
                         Instance::new(
-                            c + right3 * dx + up * dy,
+                            c + bar_right * dx + up * dy,
                             Vec3::new(sx, sy, thick),
                             Vec3::splat(0.01),
                         )
-                        .with_rot(Quat::from_rotation_arc(Vec3::Z, -look)),
+                        .with_rot(bar_rot),
                     );
                 }
             }
@@ -2835,14 +2933,23 @@ mod net {
         /// `update` and read the exact `Input` frames it would have put on
         /// the wire.
         pub fn detached() -> (Self, Receiver<C2S>) {
+            let (chan, _inbox, wire) = Self::detached_duplex();
+            (chan, wire)
+        }
+
+        /// `detached`, plus the sender a test feeds server messages
+        /// through: what a state does to the prediction is only observable
+        /// by handing the game one.
+        pub fn detached_duplex() -> (Self, Sender<S2C>, Receiver<C2S>) {
             let (out_tx, out_rx) = mpsc::channel::<C2S>();
-            let (_in_tx, in_rx) = mpsc::channel::<S2C>();
+            let (in_tx, in_rx) = mpsc::channel::<S2C>();
             (
                 Self {
                     out_tx,
                     in_rx,
                     dead: Arc::new(AtomicBool::new(false)),
                 },
+                in_tx,
                 out_rx,
             )
         }
@@ -3128,6 +3235,16 @@ mod melee_tests {
         assert_eq!(classify("w_vityaz"), Slot::Weapon(2));
         // The M4's node, when it exists, and the older rules.
         assert_eq!(classify("w_m4"), Slot::Weapon(4));
+        // The `--split` fallback's per-material nodes, by prefix; the
+        // rocket keeps its own list under the `w_rpg7_` prefix.
+        assert_eq!(classify("w_vityaz_Glass"), Slot::Weapon(2));
+        assert_eq!(classify("w_vityaz_receiver"), Slot::Weapon(2));
+        assert_eq!(classify("w_sniper_mag"), Slot::Weapon(6));
+        assert_eq!(classify("w_sniper_rifle.001"), Slot::Weapon(6));
+        assert_eq!(classify("w_ak47_AK"), Slot::Weapon(3));
+        assert_eq!(classify("w_m4_body"), Slot::Weapon(4));
+        assert_eq!(classify("w_rpg7_RPG7"), Slot::Weapon(7));
+        assert_eq!(classify("w_rpg7_rocket"), Slot::Rocket);
         assert_eq!(classify("arm_sword"), Slot::Arms);
         assert_eq!(classify("cylinder"), Slot::Weapon(1));
         // The revolver's moving parts are told by their suffix, the v15
@@ -3277,6 +3394,89 @@ mod wire_tests {
         }
         // Nothing on the wire moved the player's own aim either.
         assert_eq!(game.pitch, 0.3);
+    }
+
+    /// A predicted bonk is felt once per jump. A reconciliation can rewind
+    /// the arc to below the block with the head still rising, and the
+    /// forward prediction then clamps on the block a second time; the
+    /// per-slot debounce keeps that second clamp silent, and a jump made
+    /// after the window bonks again.
+    #[test]
+    fn a_rewound_jump_does_not_bonk_twice() {
+        use arena_core::shooter::BODY_H_STAND;
+
+        let (chan, inbox, _wire) = net::NetChan::detached_duplex();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.my_id = Some(2);
+        game.latest.insert(2, me(2));
+        game.was_alive = true;
+        // One armed block hung 0.6 m above a standing head, over the spawn.
+        let base = BODY_H_STAND + 0.6;
+        game.obstacles = vec![Obstacle {
+            min: [-0.5, -0.5],
+            max: [0.5, 0.5],
+            h: base + 1.0,
+            base,
+            kind: Cover::Loot,
+        }];
+        game.loot_index = vec![0];
+        game.loot_active = vec![true];
+        game.loot_bump = vec![None];
+        game.last_bonk_at = vec![None];
+        let input = InputState::default();
+        let dt = 1.0 / 60.0;
+        let bonk_rumble = feel::bonk().rumble.unwrap();
+        let clamp_y = base - BODY_H_STAND;
+        // Run `n` frames; how many bonks were felt and how high the feet got.
+        let run = |game: &mut ShooterGame, n: usize| {
+            let mut bonks = 0;
+            let mut top = f32::MIN;
+            for _ in 0..n {
+                game.update(&input, dt);
+                top = top.max(game.pred_y);
+                bonks += game
+                    .feedback()
+                    .rumbles
+                    .iter()
+                    .filter(|r| **r == bonk_rumble)
+                    .count();
+            }
+            (bonks, top)
+        };
+        game.pred_jump = true;
+        let (bonks, top) = run(&mut game, 20);
+        assert!(top >= clamp_y - 1e-3, "the jump reached the block: {top}");
+        assert_eq!(bonks, 1, "the jump bonked once");
+        assert!(game.last_bonk_at[0].is_some(), "the bonk was recorded");
+        // The server's state rewinds the arc to 0.3 m up and still rising,
+        // with nothing left to replay over it, so the prediction climbs
+        // into the block a second time.
+        game.history.clear();
+        let mut rewound = me(2);
+        rewound.y = 0.3;
+        rewound.vy = 5.0;
+        inbox
+            .send(S2C::State {
+                tick: 1,
+                players: vec![rewound],
+                bullets: Vec::new(),
+                pads: Vec::new(),
+                loot: vec![true],
+            })
+            .unwrap();
+        let (bonks, top) = run(&mut game, 20);
+        assert!(
+            top >= clamp_y - 1e-3,
+            "the rewound arc reached the block: {top}"
+        );
+        assert_eq!(bonks, 0, "the rewound arc did not bonk again");
+        // Once the window has passed, a fresh jump from the floor bonks.
+        run(&mut game, 30);
+        assert!(game.pred_y <= 1e-3, "landed: {}", game.pred_y);
+        game.time += BONK_DEBOUNCE;
+        game.pred_jump = true;
+        let (bonks, _) = run(&mut game, 20);
+        assert_eq!(bonks, 1, "a later jump bonks again");
     }
 
     /// Rumble requests accumulate through a frame and the platform takes

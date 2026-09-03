@@ -203,12 +203,21 @@
     // web_sys_unstable_apis, and the deploy copies only arena.js and
     // arena_bg.wasm, so a wasm-bindgen inline snippet would never reach the
     // live page. The wasm client looks this function up on `window` once
-    // (js_sys::Reflect::get) and calls it with (strong, weak, ms). A pad
-    // without an actuator (Firefox, Safari today) makes every call a no-op.
+    // (js_sys::Reflect::get) and calls it with (strong, weak, ms). It
+    // returns whether a pad with an actuator was found, and the client's
+    // status line is derived from that answer: a pad without one (Firefox,
+    // Safari today) makes every call a no-op and reads as input-only.
+    // Chromium rejects an effect longer than 5000 ms, and the rejection
+    // would vanish in the catch, so the duration is clamped there.
     window.emberRumble = (strong, weak, ms) => {
+      let found = false;
       for (const g of navigator.getGamepads?.() ?? []) {
-        g?.vibrationActuator?.playEffect?.('dual-rumble', { startDelay: 0, duration: ms, strongMagnitude: strong, weakMagnitude: weak })?.catch?.(() => {});
+        const actuator = g?.vibrationActuator;
+        if (!actuator?.playEffect) continue;
+        found = true;
+        actuator.playEffect('dual-rumble', { startDelay: 0, duration: Math.min(ms, 5000), strongMagnitude: strong, weakMagnitude: weak })?.catch?.(() => {});
       }
+      return found;
     };
     // Say once what the pad can do, so a player without rumble can tell a
     // missing feature from a broken one. Browsers fire this only after a
