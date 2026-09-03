@@ -65,6 +65,18 @@ function renderFacts(facts) {
   }
 }
 
+const NUMBER = id => Number(document.getElementById(id).value);
+const SET = (id, value) => { document.getElementById(id).value = String(value); };
+
+// Every origin slider is paired with a number box on the same value; writing one writes the other,
+// so precision and dragging are two views of one control rather than two controls.
+const ORIGIN = [
+  ["origin-z-re", "z_re"],
+  ["origin-z-im", "z_im"],
+  ["origin-c-re", "c_re"],
+  ["origin-c-im", "c_im"],
+];
+
 function bindControls(api) {
   const refreshFacts = () => {
     const facts = JSON.parse(api.app_facts_json());
@@ -113,20 +125,60 @@ function bindControls(api) {
       fail(error);
     }
   };
-  const angles = () => guarded(() => api.app_set_plane_angles(Number(document.getElementById("theta-1").value), Number(document.getElementById("theta-2").value)));
-  document.getElementById("theta-1").addEventListener("input", angles);
-  document.getElementById("theta-2").addEventListener("input", angles);
-  document.getElementById("view").addEventListener("change", event => guarded(() => api.app_set_view(Number(event.target.value))));
-  document.getElementById("palette").addEventListener("change", event => guarded(() => api.app_set_palette(Number(event.target.value))));
-  document.getElementById("iteration-cap").addEventListener("change", event => guarded(() => api.app_set_iteration_cap(Number(event.target.value))));
-  document.getElementById("preset").addEventListener("change", event => guarded(() => api.app_set_preset(Number(event.target.value), Number(document.getElementById("julia-re").value), Number(document.getElementById("julia-im").value))));
-  for (const id of ["julia-re", "julia-im"]) {
+  // One function per group of controls. Listeners call these, and so does the preset row, so a
+  // preset cannot reach the worker by a path a user's own movement does not take.
+  const APPLY = {
+    plane: () => api.app_set_plane_angles(NUMBER("theta-1"), NUMBER("theta-2")),
+    origin: () => api.app_set_plane_origin(NUMBER("origin-z-re"), NUMBER("origin-z-im"), NUMBER("origin-c-re"), NUMBER("origin-c-im")),
+    view: () => api.app_set_view_angles(NUMBER("view-theta-1"), NUMBER("view-theta-2")),
+    camera: () => api.app_set_camera(NUMBER("camera-yaw"), NUMBER("camera-pitch")),
+    height: () => api.app_set_height(NUMBER("height")),
+    distances: () => api.app_set_distances(NUMBER("distance-five"), NUMBER("distance-four")),
+  };
+  for (const id of ["theta-1", "theta-2"]) {
+    document.getElementById(id).addEventListener("input", () => guarded(APPLY.plane));
+  }
+  for (const id of ["view-theta-1", "view-theta-2"]) {
+    document.getElementById(id).addEventListener("input", () => guarded(APPLY.view));
+  }
+  for (const id of ["camera-yaw", "camera-pitch"]) {
+    document.getElementById(id).addEventListener("input", () => guarded(APPLY.camera));
+  }
+  document.getElementById("height").addEventListener("input", () => guarded(APPLY.height));
+  for (const id of ["distance-five", "distance-four"]) {
+    document.getElementById(id).addEventListener("input", () => guarded(APPLY.distances));
+  }
+  // The origin is MAIN work — a new reference orbit — so it lands on release rather than on every
+  // pixel of a drag; the paired number box mirrors it either way.
+  for (const [id] of ORIGIN) {
     document.getElementById(id).addEventListener("change", () => {
-      if (document.getElementById("preset").value === "1") {
-        guarded(() => api.app_set_preset(1, Number(document.getElementById("julia-re").value), Number(document.getElementById("julia-im").value)));
-      }
+      SET(`${id}-number`, NUMBER(id));
+      guarded(APPLY.origin);
+    });
+    document.getElementById(`${id}-number`).addEventListener("change", () => {
+      SET(id, NUMBER(`${id}-number`));
+      guarded(APPLY.origin);
     });
   }
+  document.getElementById("palette").addEventListener("change", event => guarded(() => api.app_set_palette(Number(event.target.value))));
+  document.getElementById("iteration-cap").addEventListener("change", event => guarded(() => api.app_set_iteration_cap(Number(event.target.value))));
+  document.getElementById("preset").addEventListener("change", event => guarded(() => {
+    const row = JSON.parse(api.app_preset(Number(event.target.value)));
+    SET("theta-1", row.theta_1);
+    SET("theta-2", row.theta_2);
+    for (const [index, [id]] of ORIGIN.entries()) {
+      SET(id, row.origin[index]);
+      SET(`${id}-number`, row.origin[index]);
+    }
+    SET("view-theta-1", row.view_theta_1);
+    SET("view-theta-2", row.view_theta_2);
+    SET("camera-yaw", row.camera_yaw);
+    SET("camera-pitch", row.camera_pitch);
+    SET("height", row.height_scale);
+    SET("distance-five", row.distance_five);
+    SET("distance-four", row.distance_four);
+    for (const apply of Object.values(APPLY)) apply();
+  }));
   CANVAS.addEventListener("wheel", event => {
     event.preventDefault();
     const bounds = CANVAS.getBoundingClientRect();

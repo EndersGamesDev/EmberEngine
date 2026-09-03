@@ -18,16 +18,44 @@
       <p id="status" class="status" role="status">waiting for first completed scene</p>
     </section>
     <section class="controls" aria-label="Viewer controls">
-      <label>View<select id="view"><option value="0">Flat</option><option value="1">Tumbled</option></select></label>
-      <label>Preset<select id="preset"><option value="0">Mandelbrot</option><option value="1">Julia(c)</option></select></label>
-      <label>Julia c real<input id="julia-re" type="number" value="-0.8" step="0.001"></label>
-      <label>Julia c imaginary<input id="julia-im" type="number" value="0.156" step="0.001"></label>
-      <label>Plane θ₁<input id="theta-1" type="range" min="-3.141593" max="3.141593" value="0" step="0.001"></label>
-      <label>Plane θ₂<input id="theta-2" type="range" min="-3.141593" max="3.141593" value="0" step="0.001"></label>
-      <label>Iteration cap<select id="iteration-cap"><option>64</option><option>256</option><option selected>512</option><option>1024</option><option>2048</option><option>4096</option></select></label>
-      <label>Palette<select id="palette"><option value="0">Classic</option><option value="1">Ember</option><option value="2">Ice</option></select></label>
-      <button id="one-frame" type="button">Render one frame</button>
-      <button id="measure" type="button">Measure</button>
+      <fieldset>
+        <legend>Preset</legend>
+        <label>Row<select id="preset"><option value="0">Mandelbrot</option><option value="1">Julia</option><option value="2">Mandelbrot relief</option><option value="3">Julia relief</option></select></label>
+        <p class="note">A preset is a row of control values and nothing else; every control below stays live after it is applied.</p>
+      </fieldset>
+      <fieldset>
+        <legend>Plane</legend>
+        <label>θ₁<input id="theta-1" type="range" min="-3.141593" max="3.141593" value="0" step="0.001"></label>
+        <label>θ₂<input id="theta-2" type="range" min="-3.141593" max="3.141593" value="0" step="0.001"></label>
+      </fieldset>
+      <fieldset>
+        <legend>Plane origin</legend>
+        <label>z real<input id="origin-z-re" type="range" min="-2" max="2" value="0" step="0.001"><input id="origin-z-re-number" type="number" min="-2" max="2" value="0" step="0.001"></label>
+        <label>z imaginary<input id="origin-z-im" type="range" min="-2" max="2" value="0" step="0.001"><input id="origin-z-im-number" type="number" min="-2" max="2" value="0" step="0.001"></label>
+        <label>c real<input id="origin-c-re" type="range" min="-2" max="2" value="0" step="0.001"><input id="origin-c-re-number" type="number" min="-2" max="2" value="0" step="0.001"></label>
+        <label>c imaginary<input id="origin-c-im" type="range" min="-2" max="2" value="0" step="0.001"><input id="origin-c-im-number" type="number" min="-2" max="2" value="0" step="0.001"></label>
+        <p class="note">The origin is MAIN work: releasing a slider asks the worker for a new reference orbit.</p>
+      </fieldset>
+      <fieldset>
+        <legend>View</legend>
+        <label>θᵥ₁<input id="view-theta-1" type="range" min="-3.141593" max="3.141593" value="0" step="0.001"></label>
+        <label>θᵥ₂<input id="view-theta-2" type="range" min="-3.141593" max="3.141593" value="0" step="0.001"></label>
+        <label>Height<input id="height" type="range" min="0" max="4" value="0" step="0.001"></label>
+      </fieldset>
+      <fieldset>
+        <legend>Observer</legend>
+        <label>Yaw<input id="camera-yaw" type="range" min="-3.141593" max="3.141593" value="0" step="0.001"></label>
+        <label>Pitch<input id="camera-pitch" type="range" min="-3.141593" max="3.141593" value="0" step="0.001"></label>
+        <label>d₅<input id="distance-five" type="range" min="2" max="64" value="8" step="0.1"></label>
+        <label>d₄<input id="distance-four" type="range" min="2" max="64" value="8" step="0.1"></label>
+      </fieldset>
+      <fieldset>
+        <legend>Sampling</legend>
+        <label>Iteration cap<select id="iteration-cap"><option>64</option><option>256</option><option selected>512</option><option>1024</option><option>2048</option><option>4096</option></select></label>
+        <label>Palette<select id="palette"><option value="0">Classic</option><option value="1">Ember</option><option value="2">Ice</option></select></label>
+        <button id="one-frame" type="button">Render one frame</button>
+        <button id="measure" type="button">Measure</button>
+      </fieldset>
     </section>
     <section class="facts" aria-labelledby="facts-title">
       <h2 id="facts-title">Facts</h2>
