@@ -136,7 +136,6 @@ impl ReferenceOrbitBuilder {
                     VerificationDecision::Pending => {}
                     VerificationDecision::Restart => {
                         self.restart_at_higher_precision()?;
-                        continue;
                     }
                     VerificationDecision::Complete => {
                         return Ok(OrbitStep::Complete(self.primary.finish(
