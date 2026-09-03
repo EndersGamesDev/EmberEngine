@@ -343,10 +343,10 @@ fn render_deterministic(
             EscapeParams::new(cap),
             RefinementLevel::Final,
         )
-        .map_err(|_| MathError::InvalidEscapeParams)?;
+        .expect("the corpus shallow uniform is valid");
         let index = pixel[1] * SAMPLE_EXTENT.width + pixel[0];
-        let sample = escape_shallow_pixel(&uniform, index)
-            .map_err(|_| MathError::InvalidEscapeParams)?;
+        let sample =
+            escape_shallow_pixel(&uniform, index).expect("the corpus pixel is in bounds");
         return Ok(Rendered {
             sample,
             envelope: None,
@@ -362,7 +362,7 @@ fn render_deterministic(
         u32::try_from(orbit.len()).map_err(|_| MathError::OrbitTooLong)?,
         RefinementLevel::Final,
     )
-    .map_err(|_| MathError::InvalidEscapeParams)?;
+    .expect("the corpus perturbation uniform is valid");
     let offset = scaled_pixel_offset(
         plane,
         scale,
