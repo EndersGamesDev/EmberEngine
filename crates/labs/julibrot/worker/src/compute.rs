@@ -251,14 +251,19 @@ pub const fn math_error(error: &MathError) -> ChannelError {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
+    use std::time::Instant;
 
-    use ember_julibrot_math::{BigCentre, EscapeParams, PrecisionMode, perturb_scaled_f64};
+    use ember_julibrot_math::{
+        BigCentre, ComputedOrbit, EscapeParams, PrecisionMode, ReferenceOrbitRecord,
+        perturb_scaled_f64, precision_for,
+    };
 
     use super::{
         MathFailureCode, MonotonicClock, ORBIT_CHUNK_MAX_ITERATIONS, OrbitTaskPoll,
         ReferenceOrbitTask,
     };
-    use crate::{EncodedCentre, OrbitReason, OrbitRequest};
+    use crate::{Admission, EncodedCentre, OrbitReason, OrbitRequest, ProducerShaper};
+    use crate::wire::{Pool, WireBuffer};
 
     struct StepClock {
         now: Cell<u64>,
@@ -282,6 +287,24 @@ mod tests {
         }
     }
 
+    struct WallClock {
+        started: Instant,
+    }
+
+    impl WallClock {
+        fn new() -> Self {
+            Self {
+                started: Instant::now(),
+            }
+        }
+    }
+
+    impl MonotonicClock for WallClock {
+        fn now_us(&self) -> u64 {
+            u64::try_from(self.started.elapsed().as_micros()).unwrap_or(u64::MAX)
+        }
+    }
+
     fn request(centre: &BigCentre, max_iter: u32) -> OrbitRequest {
         OrbitRequest::new(
             7,
@@ -293,6 +316,82 @@ mod tests {
             OrbitReason::INITIAL,
         )
         .unwrap()
+    }
+
+    fn measured_orbit(max_iter: u32) -> (ComputedOrbit, u32, u32) {
+        let plan = precision_for(100.0, 960, max_iter).expect("measurement precision plan");
+        let centre =
+            BigCentre::from_f64([0.0; 4], plan.requested_bits).expect("measurement centre");
+        let request = OrbitRequest::new(
+            1,
+            EncodedCentre::encode_math(&centre, 1).expect("measurement encoding"),
+            31,
+            plan.requested_bits,
+            max_iter,
+            OrbitReason::INITIAL,
+        )
+        .expect("measurement request");
+        let clock = WallClock::new();
+        let mut task = ReferenceOrbitTask::start(&request, &clock).expect("measurement task");
+        loop {
+            match task.poll(1, &clock).expect("measurement poll") {
+                OrbitTaskPoll::Pending { .. } => {}
+                OrbitTaskPoll::Complete { orbit, compute_us } => {
+                    return (orbit, compute_us, plan.working_digits);
+                }
+                OrbitTaskPoll::Cancelled { .. } => panic!("current measurement was cancelled"),
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "native reference performance measurement; run explicitly on the worker pod"]
+    fn measures_first_orbit_transfer_and_admission_at_worker_caps() {
+        const SAMPLE_COUNT: usize = 7;
+        const PACK_REPEATS: u32 = 256;
+        for max_iter in [512, 4_096] {
+            let mut compute_samples = Vec::with_capacity(SAMPLE_COUNT);
+            let mut retained = None;
+            let mut working_digits = 0;
+            for _ in 0..SAMPLE_COUNT {
+                let (orbit, compute_us, digits) = measured_orbit(max_iter);
+                assert_eq!(orbit.length, max_iter);
+                compute_samples.push(compute_us);
+                retained = Some(orbit);
+                working_digits = digits;
+            }
+            compute_samples.sort_unstable();
+            let compute_us = compute_samples[SAMPLE_COUNT / 2];
+            let orbit = retained.expect("at least one measurement orbit");
+            let mut buffer = WireBuffer::new(Pool::Orbit, 0, max_iter)
+                .expect("measurement transfer buffer");
+            let pack_started = Instant::now();
+            for _ in 0..PACK_REPEATS {
+                buffer
+                    .write_orbit(1, orbit.precision_bits, compute_us, 0, &orbit.records)
+                    .expect("measurement transfer packing");
+                std::hint::black_box(buffer.as_bytes());
+            }
+            let pack_mean_ns = pack_started.elapsed().as_nanos() / u128::from(PACK_REPEATS);
+            let payload_bytes = orbit.records.len() * size_of::<ReferenceOrbitRecord>();
+            let mut shaper = ProducerShaper::new();
+            assert!(matches!(
+                shaper.admit(0).expect("warm-up admission"),
+                Admission::Ready { warm_up: true, .. }
+            ));
+            shaper
+                .observe_return(0, 0, compute_us)
+                .expect("measured price return");
+            let wait_us = match shaper.admit(0).expect("priced admission") {
+                Admission::Delay { wait_us } => wait_us,
+                other => panic!("depleted bucket must delay measured work: {other:?}"),
+            };
+            eprintln!(
+                "reference_measurement record_bytes={} cap={max_iter} working_digits={working_digits} first_orbit_us={compute_us} payload_bytes={payload_bytes} pack_mean_ns={pack_mean_ns} admission_price_us={} depleted_wait_us={wait_us}",
+                size_of::<ReferenceOrbitRecord>(),
+                shaper.admission_price_us(),
+            );
+        }
     }
 
     #[test]
