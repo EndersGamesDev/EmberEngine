@@ -1,6 +1,8 @@
 //! Requested controls and worker-owned HOT/MAIN publication integration.
 
-use std::cell::{Cell, RefCell};
+#[cfg(test)]
+use std::cell::Cell;
+use std::cell::RefCell;
 
 use ember_julibrot_math::{
     Axis4, BigCentre, Homography, MathError, NavigationDelta, ObjectAngles, Plane, PlaneAngles,
@@ -1065,7 +1067,7 @@ impl ViewerController {
     }
 
     #[cfg(test)]
-    pub(crate) fn map_construction_count(&self) -> u64 {
+    pub(crate) const fn map_construction_count(&self) -> u64 {
         self.map_constructions.get()
     }
 
