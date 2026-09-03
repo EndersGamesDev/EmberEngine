@@ -418,6 +418,12 @@ impl ViewerOwner {
         })
     }
 
+    /// Returns the generation assigned to the latest requested navigation state.
+    #[must_use]
+    pub const fn latest_requested_generation(&self) -> u32 {
+        self.latest_requested_generation.get()
+    }
+
     /// Returns the centre against which HOT displacement is currently expressed.
     #[must_use]
     pub fn reference_centre(&self) -> Option<BigCentre> {

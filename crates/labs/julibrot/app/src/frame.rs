@@ -3,12 +3,12 @@
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_kernels::RefinementPlan;
 use ember_julibrot_kernels::{RefinementLevel, next_refinement_level};
-use ember_julibrot_math::PrecisionMode;
+use ember_julibrot_math::{PICTURE_FAST_EDIT_BUDGET, PrecisionMode};
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_present::{FenceRefusal, SubmissionKind};
 
 #[cfg(any(target_arch = "wasm32", test))]
-use crate::AppError;
+use crate::{AppError, ViewerController};
 
 #[cfg(test)]
 const LEVELS: [RefinementLevel; 3] = [
@@ -155,8 +155,14 @@ impl FrameLoop {
         }
     }
 
-    const fn set_precision_mode(&mut self, precision_mode: PrecisionMode) {
+    const fn apply_precision_mode(&mut self, precision_mode: PrecisionMode, generation: u32) {
+        self.schedule.generation = generation;
         self.schedule.precision_mode = precision_mode;
+        self.schedule.next = Some(RefinementLevel::Preview);
+        self.schedule.in_flight = None;
+        if self.requested_run {
+            self.completed_run = false;
+        }
     }
 
     const fn restart(&mut self, generation: u32) {
@@ -292,6 +298,26 @@ impl FrameLoop {
     }
 }
 
+/// Applies one requested precision policy to every CPU owner of that policy.
+#[cfg(any(target_arch = "wasm32", test))]
+fn apply_precision_mode(
+    next: PrecisionMode,
+    precision_mode: &mut PrecisionMode,
+    loop_state: &mut FrameLoop,
+    plan: &mut RefinementPlan,
+    viewer: &mut ViewerController,
+) -> Result<(), AppError> {
+    viewer
+        .owner_mut()
+        .configure_precision_mode(next, PICTURE_FAST_EDIT_BUDGET)
+        .map_err(|error| AppError::Worker(error.to_string()))?;
+    let generation = viewer.owner().latest_requested_generation();
+    *precision_mode = next;
+    loop_state.apply_precision_mode(next, generation);
+    *plan = (*plan).with_precision_mode(next);
+    Ok(())
+}
+
 #[cfg(target_arch = "wasm32")]
 impl PresenterPoll for ember_julibrot_present::Presenter {
     type Event = ember_julibrot_present::PresentEvent;
@@ -377,8 +403,8 @@ mod browser {
         ReferenceOrbitInput, RefinementLevel, RefinementPlan,
     };
     use ember_julibrot_math::{
-        BigCentre, EscapeParams, PICTURE_FAST_EDIT_BUDGET, Plane, PrecisionMode, precision_for,
-        reference_shift_px, scale_split, shallow_pixel_scale, split_centre,
+        BigCentre, EscapeParams, Plane, PrecisionMode, precision_for, reference_shift_px,
+        scale_split, shallow_pixel_scale, split_centre,
     };
     use ember_julibrot_present::{
         FrameState, HotSlot, PresentConfig, PresentEvent, PresentHot, PresentMain, Presenter,
@@ -507,7 +533,8 @@ mod browser {
             runtime: &BrowserRuntime,
             viewer: &mut ViewerController,
         ) -> Result<Self, AppError> {
-            Self::new_with_mode(runtime, viewer, PrecisionMode::Deterministic)
+            let precision_mode = viewer.requested().precision_mode;
+            Self::new_with_mode(runtime, viewer, precision_mode)
         }
 
         /// Constructs the browser loop under one explicit precision policy.
@@ -520,14 +547,6 @@ mod browser {
             viewer: &mut ViewerController,
             precision_mode: PrecisionMode,
         ) -> Result<Self, AppError> {
-            viewer
-                .owner_mut()
-                .configure_precision_mode(precision_mode, PICTURE_FAST_EDIT_BUDGET)
-                .map_err(|error| AppError::Worker(error.to_string()))?;
-            let accepted_reference = viewer
-                .owner()
-                .reference_centre()
-                .ok_or_else(|| AppError::Worker("owner navigation is unconfigured".to_string()))?;
             let device = runtime.device();
             let queue = runtime.queue();
             let mut executor = GpuKernelExecutor::new(
@@ -553,9 +572,20 @@ mod browser {
                 height: runtime.facts().height,
             };
             let params = EscapeParams::new(requested.iteration_cap);
-            let plan = JulibrotKernels::plan(&executor, extent, params)
-                .map_err(kernel_error)?
-                .with_precision_mode(precision_mode);
+            let mut plan = JulibrotKernels::plan(&executor, extent, params).map_err(kernel_error)?;
+            let mut loop_state = FrameLoop::default();
+            let mut applied_precision_mode = PrecisionMode::Deterministic;
+            super::apply_precision_mode(
+                precision_mode,
+                &mut applied_precision_mode,
+                &mut loop_state,
+                &mut plan,
+                viewer,
+            )?;
+            let accepted_reference = viewer
+                .owner()
+                .reference_centre()
+                .ok_or_else(|| AppError::Worker("owner navigation is unconfigured".to_string()))?;
             let mut kernels = kernels;
             let grid = kernels
                 .allocate_grid(&mut executor, &plan)
@@ -591,8 +621,6 @@ mod browser {
                 WorkerMode::WebWorker,
             )
             .map_err(worker_error)?;
-            let mut loop_state = FrameLoop::default();
-            loop_state.set_precision_mode(precision_mode);
             let frame_loop = Self {
                 device,
                 queue,
@@ -623,7 +651,7 @@ mod browser {
                 presented_view: None,
                 last_status: RefreshStatus::Waiting,
                 level_timings: LevelTimingLedger::default(),
-                precision_mode,
+                precision_mode: applied_precision_mode,
             };
             Ok(frame_loop)
         }
@@ -682,6 +710,7 @@ mod browser {
                 .ok_or(AppError::GenerationExhausted)?;
             let events = FrameLoop::refresh(&mut self.presenter, now_ms);
             let observed = self.handle_events(runtime, events)?;
+            self.synchronize_precision_mode(viewer)?;
             let presented = observed.presented;
             if requests.frame {
                 self.loop_state.accept_request(
@@ -1233,6 +1262,40 @@ mod browser {
             Ok(())
         }
 
+        fn synchronize_precision_mode(
+            &mut self,
+            viewer: &mut ViewerController,
+        ) -> Result<(), AppError> {
+            let next = viewer.requested().precision_mode;
+            if next == self.precision_mode {
+                return Ok(());
+            }
+            let next_plan = self.plan.with_precision_mode(next);
+            let next_grid = self
+                .kernels
+                .allocate_grid(&mut self.executor, &next_plan)
+                .map_err(kernel_error)?;
+            if let Err(error) = super::apply_precision_mode(
+                next,
+                &mut self.precision_mode,
+                &mut self.loop_state,
+                &mut self.plan,
+                viewer,
+            ) {
+                self.kernels
+                    .free_grid(&mut self.executor, next_grid)
+                    .map_err(kernel_error)?;
+                return Err(error);
+            }
+            let old_grid = std::mem::replace(&mut self.grid, next_grid);
+            self.kernels
+                .free_grid(&mut self.executor, old_grid)
+                .map_err(kernel_error)?;
+            self.prepared_level = None;
+            self.scene_selection = None;
+            Ok(())
+        }
+
         fn submit_due_scene(
             &mut self,
             viewer: &ViewerController,
@@ -1542,9 +1605,10 @@ mod tests {
 
     use super::{
         FenceRefusal, FrameLoop, LEVELS, PresenterPoll, RefinementLevel, RefinementSchedule,
-        RefusalClass, SubmissionKind, arrival_is_current, fence_error, published_iteration_cap,
+        RefusalClass, SubmissionKind, apply_precision_mode, arrival_is_current, fence_error,
+        published_iteration_cap,
     };
-    use crate::{FramePolicy, LevelTimingLedger};
+    use crate::{FramePolicy, LevelTimingLedger, ViewerController};
     use ember_julibrot_present::{SampleClass, SubmissionMeasurement};
 
     /// Poll budget and wall the version-two present configuration refuses at.
@@ -1743,6 +1807,37 @@ mod tests {
         .scene_id
     }
 
+    fn precision_runtime_from_viewer(
+        viewer: &mut ViewerController,
+    ) -> (PrecisionMode, FrameLoop, RefinementPlan) {
+        let mut precision_mode = PrecisionMode::Deterministic;
+        let mut frame_loop = FrameLoop::default();
+        let mut plan = plan_refinement(
+            GridExtent {
+                width: 960,
+                height: 540,
+            },
+            EscapeParams::new(4_096),
+            |_| true,
+        )
+        .expect("the native precision fixture has enough capacity");
+        apply_precision_mode(
+            viewer.requested().precision_mode,
+            &mut precision_mode,
+            &mut frame_loop,
+            &mut plan,
+            viewer,
+        )
+        .expect("the viewer precision request is applicable");
+        (precision_mode, frame_loop, plan)
+    }
+
+    fn complete_preview(frame_loop: &mut FrameLoop, id: u64) {
+        let generation = frame_loop.generation();
+        frame_loop.submitted(id, RefinementLevel::Preview);
+        assert!(frame_loop.completed(id, generation, RefinementLevel::Preview));
+    }
+
     /// Runs the Preview, Interactive, Final ladder to its end with a warp on every turn.
     fn run_ladder_to_idle(
         frame_loop: &mut FrameLoop,
@@ -1872,8 +1967,7 @@ mod tests {
     #[test]
     fn picture_fast_advances_directly_from_preview_to_final() {
         let mut frame_loop = FrameLoop::default();
-        frame_loop.set_precision_mode(PrecisionMode::PictureFast);
-        frame_loop.restart(8);
+        frame_loop.apply_precision_mode(PrecisionMode::PictureFast, 8);
         assert_eq!(frame_loop.due(), Some(RefinementLevel::Preview));
         frame_loop.submitted(21, RefinementLevel::Preview);
         assert!(frame_loop.completed(21, 8, RefinementLevel::Preview));
@@ -1881,6 +1975,109 @@ mod tests {
         frame_loop.submitted(22, RefinementLevel::Final);
         assert!(frame_loop.completed(22, 8, RefinementLevel::Final));
         assert!(!frame_loop.refinement_pending());
+    }
+
+    #[test]
+    fn picture_fast_viewer_builds_the_fast_ladder_and_centre_policy() {
+        let mut viewer = ViewerController::new(960).expect("canonical viewer");
+        let (precision_mode, mut frame_loop, plan) =
+            precision_runtime_from_viewer(&mut viewer);
+        assert_eq!(precision_mode, PrecisionMode::PictureFast);
+        assert_eq!(plan.precision_mode, PrecisionMode::PictureFast);
+        assert_eq!(plan.level(RefinementLevel::Preview).iteration_cap, 32);
+        assert_eq!(
+            viewer
+                .owner()
+                .navigation_centre()
+                .expect("configured centre")
+                .precision_bits,
+            64
+        );
+        assert_eq!(frame_loop.due(), Some(RefinementLevel::Preview));
+        complete_preview(&mut frame_loop, 31);
+        assert_eq!(frame_loop.due(), Some(RefinementLevel::Final));
+    }
+
+    #[test]
+    fn viewer_mode_changes_reapply_the_ladder_plan_and_centre_width() {
+        let mut viewer = ViewerController::new(960).expect("canonical viewer");
+        let (mut precision_mode, mut frame_loop, mut plan) =
+            precision_runtime_from_viewer(&mut viewer);
+
+        viewer
+            .set_precision_mode(PrecisionMode::Deterministic)
+            .expect("the page mode path accepts deterministic");
+        apply_precision_mode(
+            viewer.requested().precision_mode,
+            &mut precision_mode,
+            &mut frame_loop,
+            &mut plan,
+            &mut viewer,
+        )
+        .expect("deterministic mode applies everywhere");
+        assert_eq!(precision_mode, PrecisionMode::Deterministic);
+        assert_eq!(plan.precision_mode, PrecisionMode::Deterministic);
+        assert_eq!(
+            viewer
+                .owner()
+                .navigation_centre()
+                .expect("configured centre")
+                .precision_bits,
+            1_024
+        );
+        assert_eq!(frame_loop.due(), Some(RefinementLevel::Preview));
+        complete_preview(&mut frame_loop, 41);
+        assert_eq!(frame_loop.due(), Some(RefinementLevel::Interactive));
+
+        viewer
+            .set_precision_mode(PrecisionMode::PictureFast)
+            .expect("the page mode path accepts picture-fast");
+        apply_precision_mode(
+            viewer.requested().precision_mode,
+            &mut precision_mode,
+            &mut frame_loop,
+            &mut plan,
+            &mut viewer,
+        )
+        .expect("picture-fast mode applies everywhere");
+        assert_eq!(precision_mode, PrecisionMode::PictureFast);
+        assert_eq!(plan.precision_mode, PrecisionMode::PictureFast);
+        assert_eq!(
+            viewer
+                .owner()
+                .navigation_centre()
+                .expect("configured centre")
+                .precision_bits,
+            64
+        );
+        assert_eq!(frame_loop.due(), Some(RefinementLevel::Preview));
+        complete_preview(&mut frame_loop, 42);
+        assert_eq!(frame_loop.due(), Some(RefinementLevel::Final));
+
+        viewer
+            .set_precision_mode(PrecisionMode::Deterministic)
+            .expect("the page mode path switches back to deterministic");
+        apply_precision_mode(
+            viewer.requested().precision_mode,
+            &mut precision_mode,
+            &mut frame_loop,
+            &mut plan,
+            &mut viewer,
+        )
+        .expect("deterministic mode is restored everywhere");
+        assert_eq!(precision_mode, PrecisionMode::Deterministic);
+        assert_eq!(plan.precision_mode, PrecisionMode::Deterministic);
+        assert_eq!(
+            viewer
+                .owner()
+                .navigation_centre()
+                .expect("configured centre")
+                .precision_bits,
+            1_024
+        );
+        assert_eq!(frame_loop.due(), Some(RefinementLevel::Preview));
+        complete_preview(&mut frame_loop, 43);
+        assert_eq!(frame_loop.due(), Some(RefinementLevel::Interactive));
     }
 
     fn wait_for_unused_shallow_orbit() -> Result<(), MathError> {
