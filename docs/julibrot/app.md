@@ -404,6 +404,8 @@ The ring has three slots, `hot_stride=align_up(128,min_uniform_buffer_offset_ali
 
 `App::refresh(now_ms:f64)->Result<RefreshOutcome,AppError>` executes §2.5, while input callbacks stage worker/palette/view controls and schedule rather than re-entering GPU state; every Promise rejection is caught and published.
 
+`PrecisionMode` has one requested source in `ViewerController`: `BrowserFrameLoop::new` constructs from that value, and every refresh reconciles a changed request through `apply_precision_mode`, where incompatible MAIN work re-plans the kernel ladder, applies the owner's centre width, updates the frame loop's mode, and restarts scheduling at Preview before another scene can be submitted.
+
 `RefreshOutcome` is `{epoch:u64,generation:u32,refresh_id:u64,warp_id:Option<u64>,scene_id:Option<u64>,presented:bool,status:RefreshStatus}`, where status is `Waiting`, `Submitted`, `Presented`, `SkippedTimeout`, `Cancelled`, or `FailedTyped`.
 
 `SavedView` is the app-owned CPU record `{ plane_angles:[f64;2], plane_origin:[f64;4], view:ViewControls, zoom_log2:f64, centre:[EncodedBigScalar;4], centre_precision_bits:u32 }`; it is the whole row that determines the picture except cap and palette, it round-trips through its encoded centre exactly, and `SavedView::lerp(a,b,t)` composes math's interpolators without performing arithmetic of its own.
