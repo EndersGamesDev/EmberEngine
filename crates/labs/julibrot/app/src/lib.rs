@@ -32,7 +32,7 @@ pub use saved::{SavedCentre, SavedCoordinate, SavedView};
 pub use state::{
     BOX_CLICK_THRESHOLD_PX, HotFrame, INITIAL_ITERATION_CAP, NavigationEdit, PRESET_ROWS,
     PresetRow, RequestedControls, SCALE_RANGE_LOG2, ViewerController, anchor_px_up,
-    box_zoom_delta_log2, drag_delta_px_down, is_box_selection, preset_row,
+    box_zoom_delta_log2, css_from_anchor_px_up, drag_delta_px_down, is_box_selection, preset_row,
 };
 pub use surface::{PendingSurface, SurfaceAction, SurfaceState};
 pub use timing::{LEVEL_TIMING_CAPACITY, LevelTimingLedger, LevelTimingRecord, TimingLevel};
@@ -225,7 +225,8 @@ mod wasm_entry {
 
     use crate::{
         App, JULIBROT_ABI_VERSION, PageFacts, SavedCentre, SavedView, anchor_px_up,
-        box_zoom_delta_log2, is_box_selection, preset_row,
+        box_zoom_delta_log2, css_from_anchor_px_up, drag_delta_px_down, is_box_selection,
+        preset_row,
     };
 
     thread_local! {
@@ -265,11 +266,12 @@ mod wasm_entry {
         })
     }
 
-    /// Places the target at a clicked canvas point, whose plane point becomes the centre.
+    /// Stores the clicked canvas point as a point on the slice, without moving the picture.
     ///
-    /// The click arrives as canvas-relative DOM CSS pixels beside the canvas client rectangle,
-    /// exactly as the retired wheel did, so centring, the CSS-to-grid scale and the y flip stay on
-    /// this one boundary and the target reaches the worker in the pixels its scale is expressed in.
+    /// The click arrives as canvas-relative DOM CSS pixels beside the canvas client rectangle, so
+    /// centring, the CSS-to-grid scale and the y flip stay on this one boundary. What the app then
+    /// keeps is the point, not the pixel: a click changes nothing the eye can see except where the
+    /// crosshair is drawn, and the picture is left exactly where it was.
     #[wasm_bindgen]
     pub fn app_set_target(
         pointer_css_x: f64,
@@ -285,10 +287,72 @@ mod wasm_entry {
                 grid,
             )
             .map_err(app_js_error)?;
+            app.viewer_mut().set_crosshair(anchor).map_err(app_js_error)
+        })
+    }
+
+    /// Translates the picture by a drag displacement in canvas CSS pixels.
+    ///
+    /// The stored point is untouched, so the crosshair travels with the feature it was set on
+    /// rather than with the screen.
+    #[wasm_bindgen]
+    pub fn app_pan_px(
+        delta_css_x: f64,
+        delta_css_y_down: f64,
+        rect_css_width: f64,
+        rect_css_height: f64,
+    ) -> Result<(), JsValue> {
+        with_app_mut(|app| {
+            let grid = app.grid_extent();
+            let delta = drag_delta_px_down(
+                [delta_css_x, delta_css_y_down],
+                [rect_css_width, rect_css_height],
+                grid,
+            )
+            .map_err(app_js_error)?;
             app.viewer_mut()
-                .set_target(anchor, 0.0)
+                .pan_px(delta)
                 .map(|_| ())
                 .map_err(app_js_error)
+        })
+    }
+
+    /// Returns where the stored point now falls, in the page's own canvas CSS pixels.
+    ///
+    /// The page draws the crosshair from this and nothing else, so the marker is a projection of
+    /// the point rather than a memory of a pixel. `on_surface` is false when the point has left
+    /// the canvas box; the point is kept either way.
+    #[wasm_bindgen]
+    pub fn app_crosshair_json(rect_css_width: f64, rect_css_height: f64) -> Result<String, JsValue> {
+        with_app(|app| {
+            let grid = app.grid_extent();
+            let viewer = app.viewer();
+            let Some(plane_px) = viewer.crosshair_plane_px() else {
+                return Ok(r#"{"crosshair_present":false}"#.to_string());
+            };
+            let rect = [rect_css_width, rect_css_height];
+            let css = css_from_anchor_px_up(plane_px, rect, grid).map_err(app_js_error)?;
+            let on_surface =
+                css[0] >= 0.0 && css[0] <= rect[0] && css[1] >= 0.0 && css[1] <= rect[1];
+            let precision_bits = viewer.crosshair_precision_bits().unwrap_or_default();
+            let mirror = viewer.crosshair_centre_f64().unwrap_or_default();
+            Ok(format!(
+                concat!(
+                    r#"{{"crosshair_present":true,"crosshair_plane_px":[{},{}],"#,
+                    r#""crosshair_css":[{},{}],"crosshair_on_surface":{},"#,
+                    r#""crosshair_precision_bits":{},"crosshair_point_f64":[{},{},{},{}]}}"#
+                ),
+                plane_px[0],
+                plane_px[1],
+                css[0],
+                css[1],
+                on_surface,
+                precision_bits,
+                mirror[0],
+                mirror[1],
+                mirror[2],
+                mirror[3],
+            ))
         })
     }
 
@@ -322,11 +386,13 @@ mod wasm_entry {
                 grid,
             )
             .map_err(app_js_error)?;
-            let delta_log2 = if is_box_selection(extent) {
-                box_zoom_delta_log2(extent, rect).map_err(app_js_error)?
-            } else {
-                0.0
-            };
+            app.viewer_mut()
+                .set_crosshair(anchor)
+                .map_err(app_js_error)?;
+            if !is_box_selection(extent) {
+                return Ok(());
+            }
+            let delta_log2 = box_zoom_delta_log2(extent, rect).map_err(app_js_error)?;
             app.viewer_mut()
                 .set_target(anchor, delta_log2)
                 .map(|_| ())
@@ -334,7 +400,7 @@ mod wasm_entry {
         })
     }
 
-    /// Moves the absolute `scale` control, zooming about the target at the screen centre.
+    /// Moves the absolute `scale` control, zooming about the stored crosshair point.
     #[wasm_bindgen]
     pub fn app_set_scale(zoom_log2: f64) -> Result<(), JsValue> {
         with_app_mut(|app| {
@@ -578,9 +644,9 @@ mod wasm_entry {
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm_entry::{
-    app_facts_json, app_morph_view, app_needs_refresh, app_preset, app_refresh, app_request_frame,
-    app_request_measurement, app_saved_view_json, app_set_camera, app_set_centre,
-    app_set_distances, app_set_height, app_set_iteration_cap, app_set_palette,
+    app_crosshair_json, app_facts_json, app_morph_view, app_needs_refresh, app_pan_px, app_preset,
+    app_refresh, app_request_frame, app_request_measurement, app_saved_view_json, app_set_camera,
+    app_set_centre, app_set_distances, app_set_height, app_set_iteration_cap, app_set_palette,
     app_set_plane_angles, app_set_plane_origin, app_set_precision_mode, app_set_scale,
     app_set_target, app_set_view_angles, app_zoom_box, julibrot_abi_version, start_julibrot,
 };

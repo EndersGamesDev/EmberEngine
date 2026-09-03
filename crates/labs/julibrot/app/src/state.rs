@@ -2,7 +2,7 @@
 
 use ember_julibrot_math::{
     Axis4, BigCentre, NavigationDelta, Plane, PlaneAngles, Pose, PrecisionMode, SEED_AXES,
-    ViewControls, construct_plane,
+    ViewControls, construct_plane, pixel_scale,
 };
 use ember_julibrot_present::PaletteId;
 use ember_julibrot_worker::{
@@ -178,6 +178,33 @@ pub fn anchor_px_up(
     ])
 }
 
+/// Projects a canvas-centred render-grid offset with positive y upward back onto the DOM position
+/// inside the canvas box, in CSS pixels with y downward.
+///
+/// It is the exact inverse of `anchor_px_up`, and it exists so that one screen point converted to
+/// a point on the slice can be drawn again wherever the current map puts it. A crosshair drawn by
+/// remembering the pixel it was clicked at is a crosshair that lies the moment the picture moves;
+/// a crosshair re-projected from the point it was set on is the only one that can be an accuracy
+/// oracle.
+///
+/// # Errors
+///
+/// Returns a math failure for non-finite input, a degenerate client rectangle, or a zero grid.
+pub fn css_from_anchor_px_up(
+    anchor_px_up: [f64; 2],
+    rect_css: [f64; 2],
+    grid: [u32; 2],
+) -> Result<[f64; 2], AppError> {
+    if !anchor_px_up.iter().all(|value| value.is_finite()) {
+        return Err(AppError::Math("anchor offset is not finite".to_string()));
+    }
+    let scale = css_to_grid_scale(rect_css, grid)?;
+    Ok([
+        anchor_px_up[0] / scale[0] + rect_css[0] / 2.0,
+        rect_css[1] / 2.0 - anchor_px_up[1] / scale[1],
+    ])
+}
+
 /// Converts a DOM drag displacement in CSS pixels into render-grid pixels, keeping DOM-down y for
 /// the control boundary that flips it.
 ///
@@ -291,6 +318,7 @@ pub struct ViewerController {
     staged_main: MainState,
     pending_reason: Option<OrbitReason>,
     grid_width: u32,
+    crosshair: Option<BigCentre>,
 }
 
 impl ViewerController {
@@ -344,6 +372,7 @@ impl ViewerController {
             staged_main: initial.main,
             pending_reason: Some(OrbitReason::INITIAL),
             grid_width,
+            crosshair: None,
         })
     }
 
@@ -464,7 +493,114 @@ impl ViewerController {
         })
     }
 
-    /// Moves the `scale` control to an absolute zoom exponent, about the screen centre.
+    /// Stores one screen point as a point on the slice, without moving the picture.
+    ///
+    /// A click is not a navigation edit. The point under the pointer is converted once, through
+    /// the very plane basis and pixel scale the owner's own navigation arithmetic uses, into the
+    /// bignum point of the slice it names; the picture does not move and no reference orbit is
+    /// asked for. Everything else about the crosshair follows from that one conversion: it is
+    /// re-projected for drawing, it rides along under a pan because the point did not move, and it
+    /// is the anchor every later zoom is taken about.
+    ///
+    /// # Errors
+    ///
+    /// Returns a math failure for non-finite input or unconfigured navigation.
+    pub fn set_crosshair(&mut self, anchor_px_up: [f64; 2]) -> Result<(), AppError> {
+        if !anchor_px_up.iter().all(|component| component.is_finite()) {
+            return Err(AppError::Math("crosshair input is not finite".to_string()));
+        }
+        let (centre, plane, grid_width) = self.navigation_frame()?;
+        let zoom_log2 = self.requested.zoom_log2;
+        let mut point = centre;
+        point
+            .apply_navigation(
+                &NavigationDelta {
+                    pan_canvas_px: [-anchor_px_up[0], -anchor_px_up[1]],
+                    zoom_delta_log2: 0.0,
+                    anchor_canvas_px: [0.0; 2],
+                },
+                &plane,
+                zoom_log2,
+                zoom_log2,
+                grid_width,
+            )
+            .map_err(math_error)?;
+        self.crosshair = Some(point);
+        Ok(())
+    }
+
+    /// Forgets the stored point, so later zooms are taken about the screen centre again.
+    pub fn clear_crosshair(&mut self) {
+        self.crosshair = None;
+    }
+
+    /// Returns the stored point's offset from the current centre in render-grid pixels, `+y` up.
+    ///
+    /// This is the projection: it is recomputed from the point and the current map every time it
+    /// is asked for, so a pan, a zoom, or an accepted reference all move the drawn crosshair with
+    /// the feature it was set on rather than leaving it behind.
+    #[must_use]
+    pub fn crosshair_plane_px(&self) -> Option<[f64; 2]> {
+        let target = self.crosshair.as_ref()?;
+        let (centre, plane, grid_width) = self.navigation_frame().ok()?;
+        let scale = pixel_scale(self.requested.zoom_log2, grid_width).ok()?;
+        let bits = target.precision_bits.max(centre.precision_bits);
+        let target = target.with_precision(bits).ok()?;
+        let centre = centre.with_precision(bits).ok()?;
+        target.displacement_px(&centre, &plane, scale).ok()
+    }
+
+    /// Returns the Astro-float precision the stored point is held at.
+    #[must_use]
+    pub fn crosshair_precision_bits(&self) -> Option<u32> {
+        self.crosshair.as_ref().map(|point| point.precision_bits)
+    }
+
+    /// Returns the finite mirror of the stored point, for the facts overlay only.
+    #[must_use]
+    pub fn crosshair_centre_f64(&self) -> Option<[f64; 4]> {
+        self.crosshair
+            .as_ref()
+            .map(ember_julibrot_math::BigCentre::to_f64_mirror)
+    }
+
+    /// Translates the picture by a DOM drag displacement, leaving the stored point where it is.
+    ///
+    /// # Errors
+    ///
+    /// Returns a math failure for non-finite input or result.
+    pub fn pan_px(&mut self, delta_dom: [f64; 2]) -> Result<NavigationEdit, AppError> {
+        self.drag_pan(delta_dom)
+    }
+
+    /// Changes the zoom about the stored point, or about the screen centre when none is stored.
+    ///
+    /// # Errors
+    ///
+    /// Returns a math failure for non-finite input or result, or a typed owner refusal.
+    pub fn zoom_about_crosshair(&mut self, delta_log2: f64) -> Result<NavigationEdit, AppError> {
+        let anchor = self.crosshair_plane_px().unwrap_or([0.0; 2]);
+        self.wheel_zoom(delta_log2, anchor)
+    }
+
+    /// Returns the centre, plane basis and grid width one conversion needs, or a typed refusal.
+    fn navigation_frame(&self) -> Result<(BigCentre, Plane, u32), AppError> {
+        let centre = self
+            .owner
+            .navigation_centre()
+            .ok_or_else(|| AppError::Math("navigation is unconfigured".to_string()))?;
+        let plane = self
+            .owner
+            .navigation_plane()
+            .ok_or_else(|| AppError::Math("navigation is unconfigured".to_string()))?;
+        let grid_width = self
+            .owner
+            .navigation_grid_width()
+            .ok_or_else(|| AppError::Math("navigation is unconfigured".to_string()))?;
+        Ok((centre, plane, grid_width))
+    }
+
+    /// Moves the `scale` control to an absolute zoom exponent, about the stored point.
     ///
     /// The worker's centre update needs the scale before and the scale after, so an absolute
     /// slider reaches it as the difference; the accumulated sum equals the slider's own number to
@@ -482,7 +618,7 @@ impl ViewerController {
                 "scale {zoom_log2} is outside the control range"
             )));
         }
-        self.wheel_zoom(zoom_log2 - self.requested.zoom_log2, [0.0, 0.0])
+        self.zoom_about_crosshair(zoom_log2 - self.requested.zoom_log2)
     }
 
     /// Stages two independent plane angles without resetting other HOT controls.
@@ -523,6 +659,7 @@ impl ViewerController {
             return Err(AppError::Math("plane origin is not finite".to_string()));
         }
         self.synchronize_shadow()?;
+        self.crosshair = None;
         self.requested.plane_origin = origin;
         self.requested.zoom_log2 = 0.0;
         let angles = self.requested.plane_angles;
@@ -578,6 +715,7 @@ impl ViewerController {
     /// Returns a typed math or owner refusal for an invalid plane, scale, or centre.
     pub fn set_centre(&mut self, centre: BigCentre) -> Result<(), AppError> {
         self.synchronize_shadow()?;
+        self.crosshair = None;
         let plane = construct_plane(self.requested.plane_angles).map_err(math_error)?;
         self.owner
             .configure_navigation(NavigationConfig {
@@ -840,12 +978,125 @@ mod tests {
 
     use super::{
         BOX_CLICK_THRESHOLD_PX, NavigationEdit, PRESET_ROWS, SCALE_RANGE_LOG2, ViewerController,
-        anchor_px_up, box_zoom_delta_log2, drag_delta_px_down, is_box_selection, preset_row,
+        anchor_px_up, box_zoom_delta_log2, css_from_anchor_px_up, drag_delta_px_down,
+        is_box_selection, preset_row,
     };
 
     /// The reference browser geometry: a 960x540 render grid laid out at this client rectangle.
     const REFERENCE_RECT: [f64; 2] = [1_022.793_762_207_031_2, 575.315_673_828_125];
     const REFERENCE_GRID: [u32; 2] = [960, 540];
+
+    /// The screen-to-slice conversion and the slice-to-screen one are each other's inverse.
+    ///
+    /// The crosshair is drawn from the projection and the point is stored from the conversion, so
+    /// a discrepancy between the two would be a marker that sits beside the feature it names — the
+    /// exact complaint this pair of functions exists to answer.
+    #[test]
+    fn the_pointer_conversion_and_its_projection_round_trip() {
+        for point in [
+            [0.0, 0.0],
+            [REFERENCE_RECT[0] / 2.0, REFERENCE_RECT[1] / 2.0],
+            [REFERENCE_RECT[0], REFERENCE_RECT[1]],
+            [17.5, 431.25],
+            [1_002.5, 3.75],
+        ] {
+            let anchor =
+                anchor_px_up(point, REFERENCE_RECT, REFERENCE_GRID).expect("a finite anchor");
+            let back = css_from_anchor_px_up(anchor, REFERENCE_RECT, REFERENCE_GRID)
+                .expect("a finite projection");
+            assert!((back[0] - point[0]).abs() < 1.0e-9, "x round trip");
+            assert!((back[1] - point[1]).abs() < 1.0e-9, "y round trip");
+        }
+        // The centre of the client rectangle is the origin of the slice offset, and the y axis is
+        // flipped exactly once on the way through.
+        let centre = anchor_px_up(
+            [REFERENCE_RECT[0] / 2.0, REFERENCE_RECT[1] / 2.0],
+            REFERENCE_RECT,
+            REFERENCE_GRID,
+        )
+        .expect("a finite anchor");
+        assert!(centre[0].abs() < 1.0e-12 && centre[1].abs() < 1.0e-12);
+        let above = anchor_px_up(
+            [REFERENCE_RECT[0] / 2.0, REFERENCE_RECT[1] / 2.0 - 10.0],
+            REFERENCE_RECT,
+            REFERENCE_GRID,
+        )
+        .expect("a finite anchor");
+        assert!(above[1] > 0.0, "a pointer above the centre is +y up");
+        assert!(css_from_anchor_px_up([f64::NAN, 0.0], REFERENCE_RECT, REFERENCE_GRID).is_err());
+        assert!(css_from_anchor_px_up([0.0, 0.0], [0.0, 1.0], REFERENCE_GRID).is_err());
+    }
+
+    /// A click stores a point on the slice and moves nothing.
+    #[test]
+    fn a_click_stores_a_point_and_leaves_the_picture_where_it_was() {
+        let mut viewer = ViewerController::new(960).expect("canonical viewer");
+        let before_zoom = viewer.requested().zoom_log2;
+        let before_centre = viewer
+            .owner()
+            .navigation_centre()
+            .expect("configured navigation")
+            .to_f64_mirror();
+        assert_eq!(viewer.crosshair_plane_px(), None);
+        viewer.set_crosshair([120.0, -45.0]).expect("finite click");
+        let after_centre = viewer
+            .owner()
+            .navigation_centre()
+            .expect("configured navigation")
+            .to_f64_mirror();
+        assert!((viewer.requested().zoom_log2 - before_zoom).abs() < f64::EPSILON);
+        assert_eq!(before_centre, after_centre, "a click is not a navigation edit");
+        let drawn = viewer.crosshair_plane_px().expect("a stored point projects");
+        assert!((drawn[0] - 120.0).abs() < 1.0e-6);
+        assert!((drawn[1] + 45.0).abs() < 1.0e-6);
+        assert!(viewer.crosshair_precision_bits().is_some());
+        viewer.clear_crosshair();
+        assert_eq!(viewer.crosshair_plane_px(), None);
+    }
+
+    /// Zooming about the crosshair leaves the point under it, which is the accuracy oracle.
+    #[test]
+    fn a_zoom_about_the_crosshair_leaves_the_point_under_it() {
+        let mut viewer = ViewerController::new(960).expect("canonical viewer");
+        viewer.set_crosshair([200.0, 130.0]).expect("finite click");
+        for step in [3.0, 7.5, -2.25] {
+            viewer.zoom_about_crosshair(step).expect("finite zoom");
+            let drawn = viewer.crosshair_plane_px().expect("a stored point projects");
+            assert!(
+                (drawn[0] - 200.0).abs() < 1.0e-6 && (drawn[1] - 130.0).abs() < 1.0e-6,
+                "the crosshair moved to {drawn:?} after a zoom of {step}"
+            );
+        }
+        // With no point stored the anchor is the screen centre, which is the old behaviour.
+        let mut plain = ViewerController::new(960).expect("canonical viewer");
+        let before = plain
+            .owner()
+            .navigation_centre()
+            .expect("configured navigation")
+            .to_f64_mirror();
+        plain.zoom_about_crosshair(4.0).expect("finite zoom");
+        let after = plain
+            .owner()
+            .navigation_centre()
+            .expect("configured navigation")
+            .to_f64_mirror();
+        assert_eq!(before, after, "a centred zoom does not move the centre");
+    }
+
+    /// A translation moves the picture and the crosshair together, because the point does not move.
+    #[test]
+    fn a_translation_carries_the_crosshair_with_its_feature() {
+        let mut viewer = ViewerController::new(960).expect("canonical viewer");
+        viewer.set_crosshair([60.0, -20.0]).expect("finite click");
+        let before = viewer.crosshair_plane_px().expect("a stored point projects");
+        let delta = drag_delta_px_down([40.0, 25.0], REFERENCE_RECT, REFERENCE_GRID)
+            .expect("a finite drag");
+        viewer.pan_px(delta).expect("finite pan");
+        let after = viewer.crosshair_plane_px().expect("a stored point projects");
+        // A drag right and down carries the content with it: `+x` on screen, `-y` up.
+        assert!((after[0] - before[0] - delta[0]).abs() < 1.0e-6);
+        assert!((after[1] - before[1] + delta[1]).abs() < 1.0e-6);
+    }
 
     /// A box that is half the screen on its limiting side is exactly one zoom step.
     #[test]
