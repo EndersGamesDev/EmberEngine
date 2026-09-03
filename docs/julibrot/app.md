@@ -52,7 +52,7 @@ On rebase, the implementation reconstructs `Z₀` from reference record zero, se
 
 When the reference index reaches `length` before escape or `max_iter`, the pixel sets `glitch=1` and stops; present shows the honest debug tint, and re-rendering glitched pixels with another reference remains out of scope.
 
-Reference texels remain double-single `[re_hi,im_hi,re_lo,im_lo]`; math’s `D_work` versus `D_work+16` comparison and scaled deep-classification corpus decide whether that roughly 48-bit relative record is sufficient, and a failing oracle requires a reviewed record change.
+Reference transfers carry `[re,im]`, one binary32 word per coordinate; app expands them to heap texels `[re,im,0,0]`, and math’s `D_work` versus `D_work+16` comparison plus the scaled deep-classification corpus decide whether the words are sufficient. A failing Final escalates precision and is never silently accepted.
 
 The shallow kernel is selected below `zoom_log2=14` and perturbation at or above it; 14 is a displayed POLICY justified by math's f32 error argument. Below the switch app accepts the current centre revision and starts shallow refinement without requesting, transferring, or credit-gating an orbit; at or above the switch a matching orbit remains mandatory, so a shallow-to-deep crossing waits exactly as the deep path does today.
 
@@ -214,7 +214,7 @@ Math exposes `construct_plane(preset,angles)->Result<Plane,MathError>`, `split_c
 
 `ScaleSplit` is math’s `{ mantissa:f32, exponent:i32 }` with `mantissa∈[0.5,1)`; `PrecisionPlan` is `{ floor_digits:u32, working_digits:u32, requested_bits:u32, policy_digits:u32 }`, and the policy ceiling is 300 decimal digits.
 
-`ReferenceOrbitRecord` is one 16-byte RGBA32F texel: byte 0 `re_hi`, 4 `im_hi`, 8 `re_lo`, and 12 `im_lo`; index zero is `Z₀`, stored indices are `0..max_iter−1`, and `length=min(max_iter,escape_index+1)`.
+`ReferenceOrbitRecord` is an 8-byte transfer record: byte 0 `re` and byte 4 `im`; app expands each point to one 16-byte heap RGBA32F texel `(re,im,0,0)`. Index zero is `Z₀`, stored indices are `0..max_iter−1`, and `length=min(max_iter,escape_index+1)`.
 
 `EscapeGridRecord` is one 16-byte RGBA32F texel: byte 0 `smooth_iter`, 4 `escaped`, 8 `rebase_count`, and 12 `glitch`; flags are exactly 0 or 1, the count is integer-valued, escape stores `n+1−log₂(log₂|zₙ|)`, and non-escape stores `−1.0`.
 
@@ -307,7 +307,7 @@ Each 16-byte `CoordinateDescriptor` is `{sign:u32,exponent_twos_complement:u32,l
 
 Canonical zero has sign zero, exponent zero, `limb_count=0`, and `limb_start=previous_end`; negative zero, leading zero limbs, unused limbs, range overlap, and out-of-range descriptors are typed refusals.
 
-For current `max_iter=M`, two request-pool and two orbit-pool buffers each have capacity `48+16M`; request fit is `116+4·limb_word_count≤32+16M`, resize occurs only when M changes after all four buffers return, and each replacement increments `allocation_events`.
+For current `max_iter=M`, two request-pool and two orbit-pool buffers each have capacity `max(644,64+8M)`; request fit is `116+4·limb_word_count≤capacity−16`, resize occurs only when M changes after all four buffers return, and each replacement increments `allocation_events`.
 
 App pins minimum requestable `max_iter=64`, which admits the 300-digit centre under that request-pool inequality; exceeding capacity remains honest `CentreEncodingWall` rather than a precision-driven resize.
 
@@ -463,7 +463,7 @@ Native precision tests pin `depth_digits`, `D_floor`, `D_work`, bit conversion, 
 
 Native layout tests assert `Plane=32`, `CentreSplit=32`, `EscapeParams=8`, shallow uniform 96, perturbation uniform 64 with signed exponent at byte 60, both RGBA records 16, HOT 128, scene 80, palette 48, HOT state 40, MAIN 128, ViewerState 176, header 32, trailer 16, all offsets, enum discriminants, little-endian round trips including precision mode, and zero reserved words.
 
-Native wire tests construct all nine message kinds, trailers and `ErrorRecord` values, validate canonical coordinate descriptors, capacity `64+16M`, request inequality, exact lease disposition, four-buffer ownership, resize-only-on-cap change, credit 250,000, cancellation charge, same-thread trace equality, and shutdown bounds.
+Native wire tests construct all nine message kinds, trailers and `ErrorRecord` values, validate canonical coordinate descriptors, capacity `max(644,64+8M)`, request inequality, exact lease disposition, four-buffer ownership, resize-only-on-cap change, credit 250,000, cancellation charge, same-thread trace equality, and shutdown bounds.
 
 Native owner tests enumerate HOT/MAIN staging and drains, require one shared incrementing epoch without using equality for compatibility, prove the new centre and reference-shift fields across two deep recentres, reject registry generation mismatch, and prove no accepted MAIN state snaps newer controls backward.
 
@@ -496,7 +496,7 @@ Native measurement tests pin separate present-owned scene and warp fences, poll-
 |Plane rotation still fails to make hybrids|π/2 endpoint and intermediate nonzero-both-subspaces math fixtures.|
 |Scaled recurrence loses exponent state|f64 scaled mirror over renormalization, rebase, deep corpus and exact outside-envelope classification.|
 |Nonzero-Z₀ rebase shifts the reconstructed pixel|Fixture checks invariant before rebase, after assignment and after the mandatory ordinary advance.|
-|Double-single orbit is inadequate at deep zoom|D-versus-D+16 records plus deep classification corpus; failure forces reviewed record growth.|
+|One-word reference coordinates are inadequate at deep zoom|D-versus-D+16 records plus deep classification corpus; failure escalates Final precision.|
 |Reference acceptance causes a visual snap|Two-deep-recentre owner trace plus visible retained-pose rebase using `reference_shift_px`.|
 |A stale orbit or scene publishes|Every-yield transport and app/present event model with delayed old generations.|
 |Surface is presented inside its measured interval|Source-order test and event model require matching warp completion before app present.|
@@ -544,12 +544,12 @@ The refined app estimate is approximately 2,710 net new lines including the Phas
 |----|-----------|----------------|
 |J1|ACCEPTED|Uses ℝ⁴ `R₁₃·R₂₄`, removes projection/Gram–Schmidt/degenerate stages, pins one f32 rounding, hybrid oracle and unchanged presets.|
 |J2|ACCEPTED|Uses `δ←zₙ−Z₀`, reset, count and exactly one advance; nonzero-Z₀ is a pass fixture.|
-|J3|ACCEPTED|Adopts scaled perturbation, mantissa/exponent upload, renormalization, f64 mirror and double-single sufficiency oracle.|
+|J3|ACCEPTED|Adopts scaled perturbation, mantissa/exponent upload, renormalization, f64 mirror and consumed-word sufficiency oracle.|
 |J4|ACCEPTED|Pins 32-byte origin-free `Plane` and separate 32-byte `CentreSplit`; retires the former origin field.|
 |J5|ACCEPTED|Duplicates kernels’ 96-byte shallow and 64-byte perturbation tables with mantissa at 32 and signed exponent at 60.|
 |J6|ACCEPTED|Withdraws the 192-byte dual-pose payload and adopts present’s 128-byte CPU-planned homography block and stride.|
 |J7|ACCEPTED|Uses math-owned `Pose` and `ViewControls`; present re-exports `ViewControls`, so no dependency cycle exists.|
-|J8|ACCEPTED|Withdraws JBRT/four kinds and adopts JBL1, nine kinds, 16-byte trailer and `48+16M` capacity.|
+|J8|ACCEPTED|Withdraws JBRT/four kinds and adopts JBL1, nine kinds, a 16-byte trailer, and the versioned pool capacity.|
 |J9|ACCEPTED|Withdraws app’s scalar codec and adopts worker’s four descriptors, 0/1 sign and canonical zero with no limbs.|
 |J10|ACCEPTED|Pins 40-byte HOT, 120-byte MAIN, 168-byte viewer, centre displacement, reference shift, retained-pose rebase and cap/origin-only clear.|
 |J11|ACCEPTED|Pins eight-byte `EscapeParams {max_iter,bailout}` with squared radius 256.0.|

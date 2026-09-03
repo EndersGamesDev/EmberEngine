@@ -54,7 +54,7 @@ The first working request is `D_work=D_floor+ceil(log10(max(max_iter,1)))`, requ
 
 Centre precision is a separate picture-space plan. For `PictureFast`, one quarter pixel is `2^-(zoom_log2+log₂W)`, so a centre rounded at `b` bits and allowed a conservative one last-place unit of accumulated error per edit needs `E·2^-b≤2^-(zoom_log2+log₂W+2)` for edit budget `E`; therefore `b=ceil(zoom_log2+log₂W)+ceil(log₂(4E))`, clamped to 64 and rounded upward to Astro-float's 64-bit unit. The shipped edit budget is 10,000, hence the guard is `ceil(log₂40,000)=16` bits. Width may grow as zoom or the consumed edit count grows but never shrinks within a navigation session, because widening cannot recover bits already rounded away. `Deterministic` retains 1,024 bits.
 
-`PrecisionMode::Deterministic` retains the paired `D_work` and `D_work+16` computation for every pass. In `PrecisionMode::PictureFast`, `ReferencePass::Preview` publishes the single `D_work` orbit immediately with `ReferenceVerification::Deferred`, while Final and Measure compute the pair, require the same escape index and every GPU-consumed coordinate word within two `f32` ulps, publish the maximum observed word error, and raise `D_work` by 16 on failure until a stable Final is re-issued or the displayed 300-digit POLICY returns `PrecisionExhausted`; escalation count and failure are never silent.
+`PrecisionMode::Deterministic` retains the paired `D_work` and `D_work+16` computation for every pass. In `PrecisionMode::PictureFast`, `ReferencePass::Preview` publishes the single `D_work` orbit immediately with `ReferenceVerification::Deferred`, while Final and Measure compute the pair, require the same escape index and both GPU-consumed coordinate words within two `f32` ulps, publish the maximum observed word error, and raise `D_work` by 16 on failure until a stable Final is re-issued or the displayed 300-digit POLICY returns `PrecisionExhausted`; escalation count and failure are never silent.
 
 The authoritative centre `C∈ℝ⁴` is four Astro-float-backed `BigScalar` values in the worker; the owner mirror rounds each coordinate directly to nearest `f64` with ties to even, rejects a non-finite result, and is only navigation, display, pose, and shallow-path evidence, never deep arithmetic authority.
 
@@ -78,11 +78,11 @@ To avoid ever forming tiny `p` in `f32`, let `q=2−zoom_log2−log₂W`, choose
 
 The perturbation uniform carries `pixel_scale=m` and `scale_exponent=s`; each pixel forms `o′=(xu+yv)m`, begins with exponent `e=s`, `δ′₀=δz₀′=(o′₁,o′₂)`, and `δc′=(o′₃,o′₄)=δc/2^e`, so the represented actual delta is `δ=2^eδ′` without an absolute small `f32` scale.
 
-At global iteration `n` and reference index `r`, display reconstruction is `Zᵣ=(re_hi+re_lo)+i(im_hi+im_lo)` in binary32, but the ordinary advance retains the two-word reference through its first complex product as `Zᵣδ′ₙ=complex_mul(hi,δ′ₙ)+complex_mul(lo,δ′ₙ)` before the two contributions are added; form the actual delta with exponent-aware `ldexp`, set `zₙ=Zᵣ+2^eδ′ₙ`, and test escape before any rebase or advance.
+At global iteration `n` and reference index `r`, the stored reference is exactly `Zᵣ=re+i·im` with one binary32 word per coordinate; form the actual delta with exponent-aware `ldexp`, set `zₙ=Zᵣ+2^eδ′ₙ`, and test escape before any rebase or advance. The ordinary advance uses the original single `complex_mul(Zᵣ,δ′ₙ)` operation sequence in both precision modes.
 
 An ordinary advance is `δ′ₙ₊₁=2Zᵣδ′ₙ+2^e(δ′ₙ)²+δc′`, followed by `r←r+1`; the f64 mirror uses the same operation sequence, `ldexp` points, exponent changes, escape order, and reference-index order.
 
-For the propagated per-pixel envelope, let `Dₙ` bound the represented perturbation error, `Rᵣ` bound the residual error of the two-word reference, `C` bound the current scale-split centre offset, and `ηₙ` bound all binary32 products, sums, scaling and subnormal loss in the advance; the implemented recurrence is `Dₙ₊₁ ≤ 2(|Zᵣ|+|δₙ|)Dₙ + Dₙ² + 2Rᵣ(|δₙ|+Dₙ) + C + ηₙ`, display error adds `Rᵣ`, the represented-delta error and binary32 reconstruction/addition allowance, every renormalization adds a scaled minimum-subnormal allowance, and every rebase replaces the carried term by `D_rebase ≤ Eₙ + R₀ + η_rebase` before the next ordinary advance rather than resetting it.
+For the propagated per-pixel envelope, let `Dₙ` bound the represented perturbation error, `Rᵣ` be the half-ulp reconstruction bound of the stored binary32 reference, `C` bound the current scale-split centre offset, and `ηₙ` bound all binary32 products, sums, scaling and subnormal loss in the advance; the implemented recurrence is `Dₙ₊₁ ≤ 2(|Zᵣ|+|δₙ|)Dₙ + Dₙ² + 2Rᵣ(|δₙ|+Dₙ) + C + ηₙ`, display error adds `Rᵣ`, the represented-delta error and binary32 addition allowance, every renormalization adds a scaled minimum-subnormal allowance, and every rebase replaces the carried term by `D_rebase ≤ Eₙ + R₀ + η_rebase` before the next ordinary advance rather than resetting it.
 
 REBASING is repeatable and occurs after the current escape test but before advancing when `|zₙ|<|2^eδ′ₙ|`; if the scaled delta underflows to zero the predicate is false, equality is false, and the comparison uses a robust norm that does not square into overflow or underflow.
 
@@ -154,7 +154,7 @@ All transferred and GPU words are little-endian, `f32` and `f64` are IEEE-754 bi
 |`EscapeSample`|`{ smooth_iter:f32, escaped:bool, escape_index:Option<u32> }`; CPU-only oracle output|kernels tests|
 |`PerturbSample`|`{ smooth_iter:f32, escaped:bool, escape_index:Option<u32>, rebase_count:u32, glitch:bool }`; CPU-only oracle output|kernels tests|
 |`PerturbationEnvelope`|`{ delta_abs_error:f64, escape_norm2_error:f64, smooth_error:f64, minimum_escape_margin:f64 }`; CPU-only propagated-error evidence|kernels tests|
-|`ReferenceOrbitRecord`|`#[repr(C)] { re_hi:f32, im_hi:f32, re_lo:f32, im_lo:f32 }`; 16 bytes|worker, kernels|
+|`ReferenceOrbitRecord`|`#[repr(C)] { re:f32, im:f32 }`; 8 bytes|worker, kernels|
 |`ComputedOrbit`|`{ records:Vec<ReferenceOrbitRecord>, length:u32, precision_bits:u32, escape_index:Option<u32>, verification:ReferenceVerification, max_consumed_word_error_ulps:Option<u32>, precision_escalations:u32 }`; reusable linear-memory records plus verification facts|worker|
 |`OrbitStep`|`Pending { stored:u32 }` or `Complete(ComputedOrbit)`; CPU-only cooperative result|worker|
 |`Pose`|CPU-only exact field list below, no byte ABI|present, app|
@@ -180,7 +180,7 @@ The worker document's unresolved authoritative-navigation API is resolved by ado
 
 |Record|Bytes and exact fields|Producer → consumer|
 |------|----------------------|-------------------|
-|Reference orbit RGBA32F|16 bytes: 0 `re_hi:f32`, 4 `im_hi:f32`, 8 `re_lo:f32`, 12 `im_lo:f32`; texel zero is `Z₀`|worker → kernels|
+|Reference orbit transfer / RGBA32F heap texel|8 transferred bytes: 0 `re:f32`, 4 `im:f32`; app expands each point to 16 GPU bytes `(re,im,0,0)`; texel zero is `Z₀`|worker → app → kernels|
 |Escape grid RGBA32F|16 bytes: 0 `smooth_iter:f32`, 4 `escaped:f32`, 8 `rebase_count:f32`, 12 `glitch:f32`; flags are 0 or 1 and count is integer-valued|kernels → present|
 |`ShallowUniform`|96 bytes: 0 `basis_u:[f32;4]`, 16 `basis_v:[f32;4]`, 32 `centre_hi:[f32;4]`, 48 `centre_lo:[f32;4]`, 64 `pixel_scale:f32`, 68 `width:u32`, 72 `height:u32`, 76 `max_iter:u32`, 80 `bailout:f32`, 84 `level:u32`, 88 `padding:[u32;2]`|app/math → kernels|
 |`PerturbUniform`|64 bytes: 0 `basis_u:[f32;4]`, 16 `basis_v:[f32;4]`, 32 `pixel_scale:f32` mantissa, 36 `width:u32`, 40 `height:u32`, 44 `max_iter:u32`, 48 `bailout:f32`, 52 `orbit_length:u32`, 56 `level:u32`, 60 `scale_exponent:i32`|app/math → kernels|
@@ -221,11 +221,11 @@ Every standalone message buffer begins with `MessageHeader`, eight little-endian
 
 The last 16 bytes are `PoolTrailer { pool:u32,slot:u32,capacity_bytes:u32,trailer_magic:u32 }`, `trailer_magic=0x544c424a`, request pool is 1, orbit pool is 2, and `slot∈{0,1}`; it is initialized once and round-trips bit-exactly.
 
-For current `max_iter=M`, each of the four buffers has capacity `64+16M`; two circulate independently in each direction, resizing all four occurs only when `max_iter` changes after ownership reconciliation, and each resize is a reported allocation event.
+For current `max_iter=M`, each of the four buffers has capacity `max(644,64+8M)`; the 644-byte floor fits the maximum 300-digit request at cap 64, two buffers circulate independently in each direction, resizing all four occurs only when `max_iter` changes after ownership reconciliation, and each resize is a reported allocation event.
 
 `OrbitRequest` is `{ generation:u32, centre:EncodedCentre, depth_digits:u32, precision_bits:u32, max_iter:u32, precision_mode:PrecisionMode, reason:OrbitReason, reference_pass:ReferencePass }`; header fields carry generation, precision, and cap, while the body at byte 32 is `{ depth_digits:u32,reason_bits_and_pass:u32,centre_revision:u32,limb_word_count:u32,coordinates:[CoordinateDescriptor;4],precision_mode:u32,limbs:[u32;limb_word_count] }`.
 
-Coordinate descriptors start at bytes 48, 64, 80, and 96, the precision-mode word is at byte 112, and limbs start at byte 116; request fit requires `116+4·limb_word_count≤32+16M`, otherwise worker returns the displayed `CentreEncodingWall` without truncation or hidden allocation.
+Coordinate descriptors start at bytes 48, 64, 80, and 96, the precision-mode word is at byte 112, and limbs start at byte 116; request fit requires `116+4·limb_word_count≤capacity−16`, otherwise worker returns the displayed `CentreEncodingWall` without truncation or hidden allocation.
 
 `CoordinateDescriptor` is exactly 16 bytes `{ sign:u32,exponent_twos_complement:u32,limb_start:u32,limb_count:u32 }`; a nonzero value is `(−1)^sign·(Σ limbs[limb_start+k]·2^(32k))·2^exponent`, limbs are least-significant first, `sign∈{0,1}`, and the high stored limb is nonzero.
 
@@ -241,7 +241,7 @@ Precision rounds to 64 rather than to the machine word because Astro-float's wor
 
 `ErrorRecord` begins at byte 32 and is `{ code:u32,detail:u32,requested_bytes:u32,available_bytes:u32 }`; stable codes are `1 BadMagic`, `2 BadVersion`, `3 BadKind`, `4 BadLength`, `5 BadTrailer`, `6 CentreEncodingWall`, `7 GenerationExhausted`, `8 EpochExhausted`, `9 TimingOverflow`, `10 BufferStarved`, and `11 MathFailure`.
 
-`OrbitResponse` is the header followed at byte 32 by `length` 16-byte reference records and a fixed 16-byte fact tail immediately before the pool trailer; the fact tail is `{ verification:u32,max_consumed_word_error_ulps:u32,precision_escalations:u32,reserved:u32 }`, `u32::MAX` denotes a deferred maximum, `1≤length≤max_iter`, unused capacity between records and facts is zero, and `compute_ms=f64(compute_us)/1000` is only a display conversion.
+`OrbitResponse` is the header followed at byte 32 by `length` 8-byte reference records and a fixed 16-byte fact tail immediately before the pool trailer; the fact tail is `{ verification:u32,max_consumed_word_error_ulps:u32,precision_escalations:u32,reserved:u32 }`, `u32::MAX` denotes a deferred maximum, `1≤length≤max_iter`, unused capacity between records and facts is zero, and `compute_ms=f64(compute_us)/1000` is only a display conversion.
 
 The owner's credit POLICY is `250,000` microseconds per second and is displayed; the returned `CreditApplied` or `CreditStale` header preserves generation, precision, and compute time, sets length zero, and carries the measured remaining `credit_us` without fabrication.
 
@@ -302,7 +302,7 @@ The page facts contributed or constrained here are `{ requested_generation,accep
 |math → worker/app|`PlaneSpec`, `PlaneAngles`, `PlanePreset`, `CentreF64`, centre adapter|ℝ⁴ axes, independent radians, worker-owned bignum, f64 mirror|
 |math → kernels/present|`Plane`|32 bytes, two rounded f32 ℝ⁴ basis vectors|
 |math → kernels|`CentreSplit`, `ScaleSplit`, `EscapeParams`|32 bytes; f32 mantissa plus i32 exponent; 8 bytes|
-|worker → kernels|reference record|RGBA32F `[re_hi,im_hi,re_lo,im_lo]`, 16 bytes per index|
+|worker → app → kernels|reference record|8-byte `[re,im]` transfer, expanded to RGBA32F `[re,im,0,0]` per heap index|
 |kernels → present|escape record|RGBA32F `[smooth_iter,escaped,rebase_count,glitch]`, 16 bytes per pixel|
 |kernels → present|`EscapeGrid`|typed `DataSpan`, active `width,height`, `RefinementLevel`|
 |owner → app/present|`ViewerState`|176-byte repr(C), shared epoch, latest-wins HOT and MAIN|
@@ -358,7 +358,7 @@ Native split tests cover signed zero, exact and halfway values, finite range edg
 
 Native precision tests pin every rounding boundary, distinguish floor, working, requested, and delivered precision, exercise checked conversion and the `D+16` loop, and prove exhaustion reports the 300-digit policy rather than silently lowering a request.
 
-Native orbit tests compare Astro-float with the same recurrence at `D+16`, pin record zero, escape truncation and `0..max_iter−1`, hi/lo channel order, codec round trips, malformed codec refusal, generation independence, and the request-pool `CentreEncodingWall`; app's minimum requestable cap of 64 must fit every canonical centre through 300 digits.
+Native orbit tests compare Astro-float with the same recurrence at `D+16`, pin record zero, escape truncation and `0..max_iter−1`, `re/im` channel order, codec round trips, malformed codec refusal, generation independence, and the request-pool `CentreEncodingWall`; app's minimum requestable cap of 64 must fit every canonical centre through 300 digits.
 
 Shallow GPU conformance requires escape classification and integer escape index exactly equal to `escape_f32` at sampled pixels and smooth value within `10⁻⁴`; its readback and image evidence `requires visible replay`.
 
@@ -393,7 +393,7 @@ A hand-rolled fixed-point scalar would make scaling explicit but would also make
 |Two-f32 orbit records carry much less precision than a 100–300 digit worker orbit.|The `D` versus `D+16` comparison and deep scaled-classification corpus must pass; otherwise the record grows in a reviewed interface change.|
 |The working-precision heuristic cannot bound every chaotic orbit.|The mandatory convergence loop either accepts measured agreement, raises precision, or returns `PrecisionExhausted` at the displayed policy.|
 |Scaled recurrence may lose invariance at renormalization or nonzero-reference rebase.|The f64 mirror corpus forces both exponent directions and nonzero `Z₀`, comparing every step with direct iteration.|
-|The f32 mantissa and double-single reference may move a bailout-boundary classification.|The propagated envelope identifies boundary fixtures; all samples outside it require exact class and index.|
+|The f32 mantissa and one-word-per-coordinate reference may move a bailout-boundary classification.|The propagated envelope identifies boundary fixtures; all samples outside it require exact class and index.|
 |A reference shift expressed in current pixels may be misapplied to an older pose.|The native pose-rebase test transforms the shift through both bases and scales, then compares reconstructed ℝ⁴ centres.|
 |Authoritative navigation may use a rounded mirror, the wrong drag scale, or the wrong sign.|The Astro-float navigation fixtures pin the anchor invariant through depth, exact negative after-scale drag, displacement round-trip, and atomic failure on invalid arithmetic.|
 |A single native bignum probe does not predict wasm worker speed or memory.|A labelled visible replay reports `compute_us`, credit, wasm size, and both instance memories at all four probe points.|
@@ -422,7 +422,7 @@ The implementation estimate is about 2,410 new Rust and test lines; Cargo metada
 
 ## 8. Unresolved joint-review list
 
-- The two-f32 reference record remains an oracle-backed bet rather than a proof at every accepted 100–300 digit centre; failure requires a reviewed record expansion.
+- The one-f32-per-coordinate reference remains an oracle-backed bet rather than a proof at every accepted 100–300 digit centre; a failed Final requires precision escalation and explicit refusal on policy exhaustion.
 - The 300-digit ceiling and 4,096 iteration cap are product policies, not mathematical completeness claims, and some accepted navigation requests will honestly refuse.
 - `reference_shift_px` is zero for the first accepted reference by convention because no old reference exists; worker and present tests must agree on that first-arrival sentinel without treating it as a measured zero shift.
 - Cross-slice source fixtures pin math's records, discriminants, callable signatures, cooperative orbit boundary, displacement directions, and authoritative navigation API; worker's formerly unresolved navigation item is closed by this math-owned interface, while downstream adoption remains orchestrator integration work.

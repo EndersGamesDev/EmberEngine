@@ -182,7 +182,7 @@ All GPU records and transferred numeric buffers are little-endian; byte offsets 
 
 `EscapeParams` is `#[repr(C)] { max_iter: u32, bailout: f32 }`, exactly 8 bytes with `max_iter` at 0–3 and squared-radius `bailout` at 4–7; Julibrot v1 fixes `bailout = 256.0`.
 
-The reference-orbit `RGBA32F` texel is exactly 16 bytes `[re_hi,im_hi,re_lo,im_lo]` for `Zₙ`, with index zero equal to `Z₀`, the centre's z part, and stored length `min(max_iter,escape_index+1)`.
+The reference orbit transfers as 8-byte `[re,im]` points; app expands each point to one `RGBA32F` heap texel `[re,im,0,0]` for `Zₙ`, with index zero equal to `Z₀`, the centre's z part, and stored length `min(max_iter,escape_index+1)`.
 
 The escape-grid `RGBA32F` texel is exactly 16 bytes `[smooth_iter,escaped,rebase_count,glitch]`; `escaped` and `glitch` are binary f32 values, `rebase_count` is integer-valued f32, and `smooth_iter = n+1−log₂(log₂|zₙ|)` at escape or `−1.0` when not escaped.
 
@@ -306,7 +306,7 @@ The HOT buffer size is `3·slot_stride`, where `slot_stride = align_up(128,devic
 |math → shallow kernel|`CentreSplit`|`hi@0`, `lo@16`|32 bytes; four f32 hi+lo pairs|
 |math → present|`Pose`|`epoch,orbit_generation,plane,plane_theta_1,plane_theta_2,zoom_log2,view,grid_width,grid_height,centre_from_reference_px`|CPU-only math record; radians, log₂ zoom, pixels|
 |math → kernels/present|`EscapeParams`|`max_iter`, `bailout=256.0`|8 bytes; iterations and squared radius|
-|worker → math/kernels|reference record|`re_hi,im_hi,re_lo,im_lo`|RGBA32F, 16 bytes per iteration|
+|worker → app → kernels|reference record|`re,im`, then zero padding|8 bytes transferred, RGBA32F heap texel per iteration|
 |kernels → present|escape record|`smooth_iter,escaped,rebase_count,glitch`|RGBA32F, 16 bytes per pixel|
 |kernels → present|`RefinementLevel`|`Preview=0,Interactive=1,Final=2`|`repr(u32)` closed enum|
 |kernels → present|`EscapeGrid`|`DataSpan,width,height,RefinementLevel`|CPU record; row-major from bottom; active prefix `width·height`|
