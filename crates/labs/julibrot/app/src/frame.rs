@@ -1437,7 +1437,7 @@ pub use browser::BrowserFrameLoop;
 #[cfg(test)]
 mod tests {
     use ember_julibrot_kernels::{GridExtent, plan_refinement};
-    use ember_julibrot_math::EscapeParams;
+    use ember_julibrot_math::{EscapeParams, PrecisionMode};
 
     use super::{
         FenceRefusal, FrameLoop, LEVELS, PresenterPoll, RefinementLevel, RefinementSchedule,
@@ -1678,6 +1678,7 @@ mod tests {
                 id: scene_id,
                 source_scene_id: None,
                 sample_class: SampleClass::Measured,
+                precision_mode: PrecisionMode::Deterministic.as_str(),
                 wall_ms: 2.5,
                 fence_wait_ms: 2.0,
                 polls: 2,
@@ -1688,6 +1689,7 @@ mod tests {
             id: 99,
             source_scene_id: Some(scene_id),
             sample_class: SampleClass::Measured,
+            precision_mode: PrecisionMode::Deterministic.as_str(),
             wall_ms: 0.75,
             fence_wait_ms: 0.5,
             polls: 1,

@@ -160,6 +160,7 @@ fn milliseconds_to_microseconds(milliseconds: f64) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    use ember_julibrot_math::PrecisionMode;
     use ember_julibrot_present::{SampleClass, SubmissionKind};
 
     use super::*;
@@ -175,6 +176,7 @@ mod tests {
             id,
             source_scene_id,
             sample_class: SampleClass::Measured,
+            precision_mode: PrecisionMode::Deterministic.as_str(),
             wall_ms,
             fence_wait_ms: wall_ms,
             polls: 1,
