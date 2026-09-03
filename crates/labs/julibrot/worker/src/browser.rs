@@ -13,6 +13,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent, WorkerGlobalScope};
 
+use crate::codec::visit_transfer_request_body_words;
 use crate::wire::{BUFFER_OVERHEAD_BYTES, WireBuffer, validate_message_layout};
 use crate::{
     Admission, ChannelError, CreditAccount, CreditCharge, ErrorCode, HEADER_BYTES,
@@ -471,32 +472,12 @@ pub fn encode_transfer_request(
     header.length = request.max_iter();
     header.precision_bits = request.precision_bits();
     buffer.write_header(header)?;
-    write_words_at(
-        &buffer.bytes,
-        u32::try_from(HEADER_BYTES).unwrap_or(32),
-        &[
-            request.depth_digits(),
-            request.reason().bits(),
-            request.centre().revision,
-            u32::try_from(request.centre().limbs.len())
-                .map_err(|_| ChannelError::new(ErrorCode::BadLength, 0, u32::MAX, 0))?,
-        ],
-    );
-    for (index, descriptor) in request.centre().coordinates.iter().enumerate() {
-        let offset = 48 + u32::try_from(index).unwrap_or(0) * 16;
-        write_words_at(
-            &buffer.bytes,
-            offset,
-            &[
-                descriptor.sign,
-                descriptor.exponent_twos_complement,
-                descriptor.limb_start,
-                descriptor.limb_count,
-            ],
-        );
-    }
-    write_words_at(&buffer.bytes, 112, &request.centre().limbs);
-    Ok(())
+    visit_transfer_request_body_words(request, |offset, words| {
+        let offset = u32::try_from(offset)
+            .map_err(|_| ChannelError::new(ErrorCode::BadLength, 0, u32::MAX, 0))?;
+        write_words_at(&buffer.bytes, offset, words);
+        Ok(())
+    })
 }
 
 /// Reads and validates one standalone transfer header and immutable trailer.

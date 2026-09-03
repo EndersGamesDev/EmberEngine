@@ -1,5 +1,10 @@
 //! Canonical dyadic centre validation and request encoding.
 
+#![allow(
+    clippy::redundant_pub_crate,
+    reason = "request-layout seams are shared with a private wasm sibling but are not public ABI"
+)]
+
 use crate::compute::math_error;
 use crate::wire::{
     HEADER_BYTES, MessageHeader, MessageKind, POOL_TRAILER_BYTES, Pool, WireBuffer,
@@ -8,7 +13,14 @@ use crate::wire::{
 use crate::{ChannelError, ErrorCode};
 use ember_julibrot_math::PrecisionMode;
 
-const REQUEST_FIXED_END: usize = 116;
+const REQUEST_DEPTH_OFFSET: usize = HEADER_BYTES;
+const REQUEST_REASON_OFFSET: usize = 36;
+const REQUEST_CENTRE_REVISION_OFFSET: usize = 40;
+const REQUEST_LIMB_COUNT_OFFSET: usize = 44;
+const REQUEST_DESCRIPTORS_OFFSET: usize = 48;
+const REQUEST_DESCRIPTOR_BYTES: usize = 16;
+pub(crate) const REQUEST_MODE_OFFSET: usize = 112;
+pub(crate) const REQUEST_FIXED_END: usize = 116;
 const COORDINATE_COUNT: usize = 4;
 const KNOWN_REASON_BITS: u32 = 0b1_1111;
 
@@ -333,34 +345,11 @@ impl OrbitRequest {
         header.precision_bits = self.precision_bits;
         buffer.write_header(header)?;
         let message = buffer.message_bytes_mut();
-        write_words(
-            &mut message[HEADER_BYTES..48],
-            &[
-                self.depth_digits,
-                self.reason.bits(),
-                self.centre.revision,
-                u32::try_from(self.centre.limbs.len())
-                    .map_err(|_| ChannelError::new(ErrorCode::BadLength, 0, u32::MAX, 0))?,
-            ],
-        );
-        for (index, descriptor) in self.centre.coordinates.iter().enumerate() {
-            let offset = 48 + index * 16;
-            write_words(
-                &mut message[offset..offset + 16],
-                &[
-                    descriptor.sign,
-                    descriptor.exponent_twos_complement,
-                    descriptor.limb_start,
-                    descriptor.limb_count,
-                ],
-            );
-        }
-        write_words(&mut message[112..116], &[self.precision_mode as u32]);
-        write_words(
-            &mut message[REQUEST_FIXED_END..requested],
-            &self.centre.limbs,
-        );
-        Ok(())
+        visit_transfer_request_body_words(self, |offset, words| {
+            let end = offset + words.len() * 4;
+            write_words(&mut message[offset..end], words);
+            Ok(())
+        })
     }
 
     /// Decodes and validates an owned semantic request.
@@ -380,6 +369,42 @@ impl OrbitRequest {
             reason: view.reason,
         })
     }
+}
+
+/// Visits the request-body word runs emitted by the browser transfer writer.
+///
+/// # Errors
+///
+/// Returns `BadLength` if the canonical limb count cannot be represented on the wire, or forwards
+/// a refusal from the supplied writer.
+pub(crate) fn visit_transfer_request_body_words(
+    request: &OrbitRequest,
+    mut write: impl FnMut(usize, &[u32]) -> Result<(), ChannelError>,
+) -> Result<(), ChannelError> {
+    let limb_count = u32::try_from(request.centre.limbs.len())
+        .map_err(|_| ChannelError::new(ErrorCode::BadLength, 0, u32::MAX, 0))?;
+    write(
+        REQUEST_DEPTH_OFFSET,
+        &[
+            request.depth_digits,
+            request.reason.bits(),
+            request.centre.revision,
+            limb_count,
+        ],
+    )?;
+    for (index, descriptor) in request.centre.coordinates.iter().enumerate() {
+        write(
+            REQUEST_DESCRIPTORS_OFFSET + index * REQUEST_DESCRIPTOR_BYTES,
+            &[
+                descriptor.sign,
+                descriptor.exponent_twos_complement,
+                descriptor.limb_start,
+                descriptor.limb_count,
+            ],
+        )?;
+    }
+    write(REQUEST_MODE_OFFSET, &[request.precision_mode as u32])?;
+    write(REQUEST_FIXED_END, &request.centre.limbs)
 }
 
 /// Allocation-free borrowed view of a validated request body.
@@ -419,11 +444,11 @@ impl RequestBodyView {
             return Err(ChannelError::new(
                 ErrorCode::BadLength,
                 0,
-                116,
+                u32::try_from(REQUEST_FIXED_END).unwrap_or(u32::MAX),
                 u32::try_from(bytes.len()).unwrap_or(u32::MAX),
             ));
         }
-        let limb_count = usize::try_from(read_u32(bytes, 44))
+        let limb_count = usize::try_from(read_u32(bytes, REQUEST_LIMB_COUNT_OFFSET))
             .map_err(|_| ChannelError::new(ErrorCode::BadLength, 0, 0, 0))?;
         let used = limb_count
             .checked_mul(4)
@@ -440,7 +465,7 @@ impl RequestBodyView {
         }
         let mut coordinates = [CoordinateDescriptor::default(); COORDINATE_COUNT];
         for (index, descriptor) in coordinates.iter_mut().enumerate() {
-            let offset = 48 + index * 16;
+            let offset = REQUEST_DESCRIPTORS_OFFSET + index * REQUEST_DESCRIPTOR_BYTES;
             *descriptor = CoordinateDescriptor {
                 sign: read_u32(bytes, offset),
                 exponent_twos_complement: read_u32(bytes, offset + 4),
@@ -453,20 +478,27 @@ impl RequestBodyView {
             .map(|offset| read_u32(bytes, offset))
             .collect::<Vec<_>>();
         let centre = EncodedCentre {
-            revision: read_u32(bytes, 40),
+            revision: read_u32(bytes, REQUEST_CENTRE_REVISION_OFFSET),
             coordinates,
             limbs,
         };
         centre.validate()?;
-        let precision_mode = PrecisionMode::from_u32(read_u32(bytes, 112))
-            .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, read_u32(bytes, 112), 0, 0))?;
+        let precision_mode = PrecisionMode::from_u32(read_u32(bytes, REQUEST_MODE_OFFSET))
+            .ok_or_else(|| {
+                ChannelError::new(
+                    ErrorCode::BadLength,
+                    read_u32(bytes, REQUEST_MODE_OFFSET),
+                    0,
+                    0,
+                )
+            })?;
         Ok(Self {
             generation: header.generation,
-            depth_digits: read_u32(bytes, 32),
+            depth_digits: read_u32(bytes, REQUEST_DEPTH_OFFSET),
             precision_bits: header.precision_bits,
             max_iter: header.length,
             precision_mode,
-            reason: OrbitReason::from_bits(read_u32(bytes, 36))?,
+            reason: OrbitReason::from_bits(read_u32(bytes, REQUEST_REASON_OFFSET))?,
             centre_revision: centre.revision,
             coordinates,
             limbs: centre.limbs,
