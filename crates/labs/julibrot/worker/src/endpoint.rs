@@ -60,7 +60,7 @@ pub(crate) trait OwnerPort {
     /// Transferred pool buffer.
     type Slot: OwnerSlot;
 
-    /// Allocates one trailer-bearing pool buffer of exactly `48 + 16 * max_iter` bytes.
+    /// Allocates one trailer-bearing pool buffer sized for the orbit and minimum request wall.
     fn allocate(&self, pool: Pool, slot: u32, max_iter: u32) -> Result<Self::Slot, ChannelError>;
 
     /// Transfers one slot to the producer, detaching this side.
@@ -710,9 +710,14 @@ mod tests {
             compute_us: u32,
             records: &[ReferenceOrbitRecord],
         ) -> Result<(), ChannelError> {
-            self.buffer
-                .borrow_mut()
-                .write_orbit(generation, 64, compute_us, 250_000, records)
+            self.buffer.borrow_mut().write_orbit(
+                generation,
+                64,
+                compute_us,
+                250_000,
+                records,
+                crate::wire::OrbitVerificationFacts::stable(0, 0),
+            )
         }
     }
 
@@ -987,12 +992,7 @@ mod tests {
     }
 
     const fn zero_record() -> ReferenceOrbitRecord {
-        ReferenceOrbitRecord {
-            re_hi: 0.0,
-            im_hi: 0.0,
-            re_lo: 0.0,
-            im_lo: 0.0,
-        }
+        ReferenceOrbitRecord { re: 0.0, im: 0.0 }
     }
 
     fn orbit_records(count: usize) -> Vec<ReferenceOrbitRecord> {
@@ -1188,7 +1188,7 @@ mod tests {
             arrival.length(),
             buffer_capacity(512).unwrap(),
         );
-        assert_eq!(arrival.records.record_bytes().unwrap().len(), 8 * 16);
+        assert_eq!(arrival.records.record_bytes().unwrap().len(), 8 * 8);
         owner
             .return_credit(&mut arrival, OrbitDisposition::Stale, 0)
             .unwrap();

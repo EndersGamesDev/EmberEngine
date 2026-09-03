@@ -36,7 +36,7 @@ For a grid of width `W`, the conceptual `pixel_scale = 4/(2^zoom_log2·W)` stays
 
 Displayed zoom depth is `zoom_digits = zoom_log2·log10(2)` and `depth_digits = ceil(max(0,zoom_digits))`; precision uses `D_floor = ceil(zoom_log2·log10(2)+log10(W))+8`, `D_work = D_floor+ceil(log10(max(max_iter,1)))`, and `precision_bits = ceil(D_work·log₂(10))`, rounded upward by math to a 64-bit boundary before it reaches Astro-float, so the delivered precision is the same number in the native gate and in the browser, where Astro-float's own word is 32 bits.
 
-The worker validates each reference by recomputing at `D_work+16` decimal digits and requiring the same escape index plus every emitted high/low component within two `f32` ulps; failure raises `D_work` in 16-digit steps through the displayed 300-digit POLICY, and exhaustion returns `PrecisionExhausted` rather than publishing an unverified orbit.
+The default `Deterministic` policy validates each reference by recomputing at `D_work+16` decimal digits. `PictureFast` Preview instead publishes the single working-precision orbit immediately and marks verification deferred; PictureFast Final and Measure compute the verification orbit, require the same escape index plus both GPU-consumed coordinate words within two `f32` ulps, publish the maximum word error and escalation count, and raise `D_work` in 16-digit steps through the displayed 300-digit POLICY before re-issuing Final, with exhaustion returned as `PrecisionExhausted` rather than silently accepting an unstable orbit.
 
 Deep samples contain no absolute GPU origin: centred pixel coordinates are `x = i+0.5−W/2` and `y = j+0.5−H/2`, the scaled offset is `o′ = (x·u+y·v)·m`, the per-pixel exponent begins at `e₀ = s`, `δz₀′` is the `(e₁,e₂)` part of `o′`, and `δc′` is its `(e₃,e₄)` part; `+v` is up, row zero is at the bottom, pixels are square, and `W×H` follows canvas aspect.
 
@@ -50,7 +50,7 @@ The bignum reference starts at the centre's z component and holds the centre's c
 
 Reference entry zero is `Z₀`; if escape is first observed at index `n`, stored length is `min(max_iter,n+1)`, and a non-escaping orbit stores exactly `max_iter` entries indexed `0..max_iter−1`.
 
-Each high/low component is split without decimal formatting: `hi = round_f32(x)` and `lo = round_f32(x−exact(hi))`; the approximately 48-bit relative record remains fixed unless math's `D_work` versus `D_work+16` validation or deep-classification corpus rejects it, and the worker performs the sole wasm-to-standalone-buffer copy after math has filled reusable linear-memory scratch.
+Each reference coordinate is narrowed without decimal formatting as `round_f32(x)`. The production-shaped PL-05 fixture proved that its old residual never changed a consumed coordinate word, Final/Measure validation may escalate the source precision, and the worker performs the sole wasm-to-standalone-buffer copy after math has filled reusable linear-memory scratch.
 
 Scaled perturbation carries `δ′ = δ/S` with `S = 2^e` and iterates `δ′ₙ₊₁ = 2Zᵣδ′ₙ+S·δ′ₙ²+δc′`, with `δ′₀ = δz₀′`, `δc′ = δc/S`, and full value `zₙ = Zᵣ+S·δ′ₙ` evaluated through `ldexp`.
 
@@ -66,7 +66,7 @@ The common squared bailout radius is `256.0`; at escape the grid stores `smooth_
 
 ### 2.2 One-module worker packaging
 
-One wasm module is loaded on the main thread and again in the Web Worker; the worker calls the exported `worker_main` entry, all loader URLs retain the independently pinned `?v=1`, exported `JULIBROT_ABI_VERSION = 2` must equal the message version before startup, the browser cache avoids a second network payload, and the second instance still pays separate wasm linear memory, globals, initialization, and bignum scratch.
+One wasm module is loaded on the main thread and again in the Web Worker; the worker calls the exported `worker_main` entry, all loader URLs retain the independently pinned `?v=1`, exported `JULIBROT_ABI_VERSION = 3` must equal the message version before startup, the browser cache avoids a second network payload, and the second instance still pays separate wasm linear memory, globals, initialization, and bignum scratch.
 
 A second wasm artifact is rejected because it adds a separately versioned URL, duplicate code-generation output, cache identity, and loader failure mode without reducing `postMessage` payload bytes; the one-module choice makes deployment atomic even though instance memory cannot be shared.
 
@@ -84,11 +84,11 @@ The request pair permits one message to be in browser delivery while main overwr
 
 Each message kind has capacity one in its pending queue and a later message of the same kind replaces the earlier unstarted message; request-buffer returns and credit returns are ownership traffic and are never coalesced.
 
-For current `max_iter = M`, every buffer has `capacity_bytes = 48+16M`: 32 header bytes, room for `M` orbit records or the request body, and a 16-byte immutable pool trailer; app's minimum requestable `M` is 64, changing `M` arms one drain of all four buffers, delivers a queued arrival to app for its own stale disposition rather than swallowing it behind app's one-in-flight coalescing, replaces all four buffers only after all four return to the allocator or the four-second return deadline expires, restarts the producer from the cached module artifact, increments `allocation_events`, re-encodes the coalesced request at the new capacity, and is the only steady-session resize event.
+For current `max_iter = M`, every buffer has `capacity_bytes = max(644,64+8M)`: 32 header bytes, room for `M` orbit records or the request body, a 16-byte orbit-verification tail, and a 16-byte immutable pool trailer; app's minimum requestable `M` is 64, changing `M` arms one drain of all four buffers, delivers a queued arrival to app for its own stale disposition rather than swallowing it behind app's one-in-flight coalescing, replaces all four buffers only after all four return to the allocator or the four-second return deadline expires, restarts the producer from the cached module artifact, increments `allocation_events`, re-encodes the coalesced request at the new capacity, and is the only steady-session resize event.
 
-The request body must fit before the trailer, so `116+4·limb_word_count ≤ 32+16M`; at the 300-digit POLICY four coordinates need at most `4·ceil(300·log₂(10)/32) = 128` limbs, hence request bytes are at most `116+4·128 = 628 ≤ 32+16·64 = 1,056`, while any failure remains a displayed `CentreEncodingWall` with requested bytes and capacity, never truncation or a hidden allocation.
+The request body must fit before the trailer, so `116+4·limb_word_count ≤ capacity_bytes−16`; at the 300-digit POLICY four coordinates need at most `4·ceil(300·log₂(10)/32) = 128` limbs, hence request bytes are at most `116+4·128 = 628`, exactly the usable request region at the 644-byte floor, while any failure remains a displayed `CentreEncodingWall` with requested bytes and capacity, never truncation or a hidden allocation.
 
-The main-to-worker boundary copies no orbit payload, and the worker-to-main boundary performs exactly one `O(16L)` memcpy from wasm linear scratch into the standalone orbit buffer before transfer; transfer and same-thread queue movement are `O(1)` ownership changes, so the path is `O(payload)` rather than `O(DAG)`.
+The main-to-worker boundary copies no orbit payload, and the worker-to-main boundary performs exactly one `O(8L)` memcpy from wasm linear scratch into the standalone orbit buffer before transfer; transfer and same-thread queue movement are `O(1)` ownership changes, so the path is `O(payload)` rather than `O(DAG)`.
 
 The standalone buffer is returned only after app has synchronously handed its orbit bytes to kernels for a regional heap write and installed the resulting `OrbitHandle`; holding a transferred buffer across a frame is a channel bug visible as an outstanding-buffer count.
 
@@ -138,6 +138,8 @@ At admission the producer subtracts `P` from its projected local balance, and th
 
 Worker `compute_us` begins immediately before decoding the centre into bignum scratch and ends after the one standalone-buffer copy, uses `ceil(1,000·performance.now elapsed milliseconds)`, and returns a typed `TimingOverflow` rather than saturating beyond `u32::MAX`.
 
+The sokol worker measurement uses seven orbit samples and reports the median, then repeats fixed-buffer packing 256 times. At zoom 100 and width 960, the paired 16-byte baseline versus the final one-orbit 8-byte path was: cap 512, time-to-first orbit 1,416→324 us, payload 8,192→4,096 bytes, pack mean 19,681→6,076 ns, admission price 1,416→324 us and depleted wait 5,664→1,296 us; cap 4,096, time 6,740→2,572 us, payload 65,536→32,768 bytes, pack mean 94,821→47,981 ns, price 6,740→2,572 us and wait 26,960→10,288 us. The baseline arm is documented historical evidence rather than code in the final harness and remains a PF-R follow-up.
+
 If the returned warm-up measurement is zero, `Admission::TimingUnavailable` emits a typed `TimingOverflow` channel event instead of inventing a price or admitting an unbounded stream; the overlay distinguishes this unavailable state from a measured zero credit balance.
 
 ### 2.6 Versioned owner and two drains
@@ -167,7 +169,7 @@ Every message starts with `MessageHeader`, exactly eight `u32` words and 32 byte
 |Byte|Field|Type|Meaning|
 |---:|-----|----|-------|
 |0|`magic`|`u32`|`0x314c424a`|
-|4|`version`|`u32`|wire version `2`|
+|4|`version`|`u32`|wire version `3`|
 |8|`generation`|`u32`|request generation, response generation, or generation being acknowledged|
 |12|`kind`|`u32`|`MessageKind` discriminant|
 |16|`length`|`u32`|kind-specific length from the table below|
@@ -193,13 +195,13 @@ The last 16 bytes are `PoolTrailer { pool: u32, slot: u32, capacity_bytes: u32, 
 
 ### 3.2 Orbit request and bignum centre encoding
 
-The Rust-level request is `OrbitRequest { generation: u32, centre: EncodedCentre, depth_digits: u32, precision_bits: u32, max_iter: u32, precision_mode: PrecisionMode, reason: OrbitReason }`; header words carry generation, precision, and max iteration, while the request body carries the remaining fields.
+The Rust-level request is `OrbitRequest { generation: u32, centre: EncodedCentre, depth_digits: u32, precision_bits: u32, max_iter: u32, precision_mode: PrecisionMode, reason: OrbitReason, reference_pass: ReferencePass }`; header words carry generation, precision, and max iteration, while the request body carries the remaining fields.
 
 `depth_digits = ceil(max(0,zoom_log2·log10(2)))`; it is the integral request label, while the overlay retains the unrounded `f64` decimal-depth fact.
 
-The request body is `{ depth_digits: u32, reason_bits: u32, centre_revision: u32, limb_word_count: u32, coordinates: [CoordinateDescriptor; 4], precision_mode: u32, limbs: [u32; limb_word_count] }` with descriptors at bytes 48, 64, 80, and 96, the validated mode discriminant at byte 112, and limbs beginning at byte 116.
+The request body is `{ depth_digits: u32, reason_bits_and_pass: u32, centre_revision: u32, limb_word_count: u32, coordinates: [CoordinateDescriptor; 4], precision_mode: u32, limbs: [u32; limb_word_count] }` with descriptors at bytes 48, 64, 80, and 96, the validated mode discriminant at byte 112, and limbs beginning at byte 116.
 
-`reason_bits` assigns bit 0 to initial reference, bit 1 to centre-threshold crossing, bit 2 to zoom-threshold crossing, bit 3 to max-iteration change, and bit 4 to precision-mode change; unknown bits are a version-two `BadLength` error rather than silently ignored.
+The combined word assigns bit 0 to initial reference, bit 1 to centre-threshold crossing, bit 2 to zoom-threshold crossing, bit 3 to max-iteration change, bit 4 to precision-mode change, and bits 5–6 to Preview, Final, or Measure only for `PictureFast`; mode itself is read exclusively from byte 112, deterministic requests require zero pass bits and decode as Final, and unknown or contradictory bits are a version-three `BadLength` error rather than silently ignored.
 
 Each 16-byte `CoordinateDescriptor` is `{ sign: u32, exponent_twos_complement: u32, limb_start: u32, limb_count: u32 }`; descriptors appear in `(z.re,z.im,c.re,c.im)` order at bytes 48, 64, 80, and 96.
 
@@ -213,9 +215,9 @@ The library-independent dyadic encoding lets math's selected Astro-float `BigSca
 
 ### 3.3 Orbit response and credit return
 
-`OrbitResponse` is the 32-byte header followed immediately by `length` reference records; used bytes are `32+16·length`, unused capacity before the pool trailer is zero, and `1 ≤ length ≤ max_iter`.
+`OrbitResponse` is the 32-byte header followed immediately by `length` reference records, a zero unused region, a 16-byte verification-fact tail, and the 16-byte pool trailer; records use `32+8·length` bytes, the fact tail is `{ verification:u32,max_consumed_word_error_ulps:u32,precision_escalations:u32,reserved:u32 }`, deferred error is `u32::MAX`, and `1 ≤ length ≤ max_iter`.
 
-The high-level response view is `OrbitResponseView { generation: u32, length: u32, compute_us: u32, precision_bits: u32, admission_credit_us: u32, cancelled: bool, records: OrbitLease }`; a cancelled response has `length = 0` and no record bytes, while `compute_ms()` is exactly `f64::from(compute_us)/1,000` and is a display conversion, not another measurement.
+The high-level response view exposes generation, length, compute wall, delivered precision, admission credit, cancellation, the exclusive orbit lease, `reference_verification()`, `max_consumed_word_error_ulps()`, and `precision_escalations()`; a cancelled response has `length = 0`, no record bytes, and deferred verification, while `compute_ms()` is exactly `f64::from(compute_us)/1,000` and is a display conversion, not another measurement.
 
 On return, main preserves `generation`, `precision_bits`, and `compute_us`, changes kind to `CreditApplied` or `CreditStale`, sets length to zero, and writes its newly computed `credit_us`; that header is the CREDIT record and states whether the named generation was applied.
 
@@ -223,11 +225,11 @@ On return, main preserves `generation`, `precision_bits`, and `compute_us`, chan
 
 On wasm32 `OrbitResponseView::from_transfer(buffer: ArrayBuffer) -> Result<OrbitResponseView, ChannelError>` adopts a standalone buffer and applies the same shared trailer, header, pool, kind, length, and zero-unused-byte validator as `WireBuffer`; its detached view is inspection-only, while `BrowserOwnerEndpoint::next_arrival` binds the same checked view to the owner port so `OrbitLease::return_credit` can transfer it back.
 
-`OrbitLease::transfer_record_bytes() -> Result<Uint8Array, ChannelError>` is the zero-copy browser payload view corresponding to same-thread `record_bytes() -> Result<&[u8], ChannelError>`; both expose exactly `16·length` initialized bytes and refuse use after credit return.
+`OrbitLease::transfer_record_bytes() -> Result<Uint8Array, ChannelError>` is the zero-copy browser payload view corresponding to same-thread `record_bytes() -> Result<&[u8], ChannelError>`; both expose exactly `8·length` initialized bytes and refuse use after credit return.
 
 ### 3.4 Shared GPU records recorded on the worker side
 
-`ReferenceOrbitRecord` is one little-endian RGBA32F texel and 16 bytes: byte 0 `re_hi: f32`, byte 4 `im_hi: f32`, byte 8 `re_lo: f32`, and byte 12 `im_lo: f32` for `Zₙ`.
+`ReferenceOrbitRecord` is 8 little-endian bytes: byte 0 `re: f32` and byte 4 `im: f32` for `Zₙ`. App expands each transfer record to one 16-byte heap RGBA32F texel `(re,im,0,0)` because packing two points per texel would spread address changes into heap code owned by another lane; transfer and credit pay only the 8-byte record.
 
 `EscapeGridRecord` is one little-endian RGBA32F texel and 16 bytes: byte 0 `smooth_iter: f32`, byte 4 `escaped: f32`, byte 8 `rebase_count: f32`, and byte 12 `glitch: f32`; the last three are independently interpreted, `escaped` and `glitch` are exactly `0.0` or `1.0`, and `rebase_count` is integer-valued.
 
@@ -384,11 +386,11 @@ The first-frame law remains app-owned: clear colour plus honest overlay text pre
 
 All tests in this section are native unless explicitly labelled `requires visible replay`; native tests use the same-thread lowering and injected monotonic clocks, never browser guesses.
 
-The wire-layout golden constructs every message kind byte-for-byte, checks all offsets, endianness, reserved zeroes, canonical centre descriptors, precision-mode round-trip, record count arithmetic `32+16L`, trailer preservation, bad magic/version/kind/length rejection, and all typed errors.
+The wire-layout golden constructs every message kind byte-for-byte, checks all offsets, endianness, reserved zeroes, canonical centre descriptors, precision-mode round-trip, record count arithmetic `32+8L`, trailer preservation, bad magic/version/kind/length rejection, and all typed errors.
 
 Bit-identity assertions use the cfg-free `PrecisionMode::requires_bit_identity` policy: dyadic word round-trips, identical Astro-float delivered widths, exact CPU-mirror operation order, exact rebase-count agreement, and exact `D` versus `D+16` words belong to Deterministic conformance, while canonical byte validation and every accuracy comparison to that exact path remain unconditional in both modes.
 
-The orbit-record golden checks index zero, escaping and non-escaping lengths, high/low reconstruction, squared bailout `256.0`, exact `[re_hi,im_hi,re_lo,im_lo]` bytes, Astro-float word-rounded delivered precision, and the `D_work` versus `D_work+16` validation supplied by deterministic math fixtures.
+The orbit-record golden checks index zero, escaping and non-escaping lengths, squared bailout `256.0`, exact `[re,im]` bytes, zero-padded `(re,im,0,0)` GPU expansion, Astro-float word-rounded delivered precision, and the `D_work` versus `D_work+16` validation supplied by deterministic math fixtures.
 
 The ownership model enumerates every legal transfer of request slots zero and one and orbit slots zero and one, proving exactly one owner per slot, no send by a detached owner, exactly-once credit return, resize only after all four return or the bounded deadline expires, and bounded shutdown diagnostics for each missing slot.
 
@@ -456,7 +458,7 @@ Phase 0 adds the package shell, pinned records, canonical codec, four-slot owner
 
 Phase 1 adds the same-thread bounded queues, generation/coalescing state machine, Copy-cell owner, bignum-derived centre displacement, reference-shift publication, two drains, exhaustive interleavings, and compact orbit registry seam, estimated at 460 lines.
 
-Phase 2 adds the Astro-float codec adapter, reusable bignum/orbit scratch, validated reference computation, high/low packing, cooperative task yields, cancellation, and scaled-recurrence fixtures, estimated at 470 lines.
+Phase 2 adds the Astro-float codec adapter, reusable bignum/orbit scratch, validated reference computation, one-word coordinate packing, cooperative task yields, cancellation, and scaled-recurrence fixtures, estimated at 470 lines.
 
 Phase 3 adds the wasm `worker_main`, transferable backend, one-copy bridge, four-buffer resize/reconciliation, shutdown deadline, panic reporting, and page-flag selection, estimated at 390 Rust and JavaScript lines.
 

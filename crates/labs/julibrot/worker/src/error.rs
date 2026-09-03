@@ -8,7 +8,7 @@ use core::fmt;
 pub enum ErrorCode {
     /// Header magic was not `JBL1`.
     BadMagic = 1,
-    /// Wire or module ABI version differed from version two.
+    /// Wire or module ABI version differed from the active version.
     BadVersion = 2,
     /// Message-kind discriminant was unknown or illegal for a pool.
     BadKind = 3,

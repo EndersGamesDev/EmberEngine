@@ -73,7 +73,7 @@ fn perturb_finite(value: vec2<f32>) -> bool {
 }
 
 fn perturb_reference(record: vec4<f32>) -> vec2<f32> {
-    return vec2<f32>(record.x + record.z, record.y + record.w);
+    return record.xy;
 }
 
 fn perturb_smooth(iteration: u32, value: vec2<f32>) -> f32 {

@@ -185,7 +185,7 @@ mod tests {
         assert_eq!(size_of::<CentreSplit>(), 32);
         assert_eq!(align_of::<CentreSplit>(), 16);
         assert_eq!(size_of::<EscapeParams>(), 8);
-        assert_eq!(size_of::<ReferenceOrbitRecord>(), 16);
+        assert_eq!(size_of::<ReferenceOrbitRecord>(), 8);
         assert_eq!(size_of::<EscapeGridRecord>(), 16);
         assert_eq!(size_of::<ShallowUniform>(), 96);
         assert_eq!(align_of::<ShallowUniform>(), 16);

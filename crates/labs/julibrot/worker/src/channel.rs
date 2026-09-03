@@ -11,10 +11,11 @@ use crate::browser::TransferBuffer;
 #[cfg(target_arch = "wasm32")]
 use crate::browser_owner::BrowserOwnerEndpoint;
 use crate::slots::{FourSlotModel, SlotId};
-use crate::wire::{HEADER_BYTES, ORBIT_RECORD_BYTES, Pool, WireBuffer};
+use crate::wire::{HEADER_BYTES, ORBIT_RECORD_BYTES, OrbitVerificationFacts, Pool, WireBuffer};
 use crate::{
     Admission, ChannelError, CreditAccount, ErrorCode, MessageHeader, MessageKind,
-    OrbitDisposition, OrbitRequest, ProducerShaper, ReferenceOrbitRecord, WorkerFacts,
+    OrbitDisposition, OrbitRequest, ProducerShaper, ReferenceOrbitRecord, ReferenceVerification,
+    WorkerFacts,
 };
 
 /// Minimum app-requestable orbit length.
@@ -223,6 +224,17 @@ impl OwnerEndpoint {
         } else {
             0
         };
+        let verification_facts = if cancelled {
+            OrbitVerificationFacts::deferred()
+        } else {
+            match buffer.orbit_facts() {
+                Ok(facts) => facts,
+                Err(error) => {
+                    core.last_error = Some(error);
+                    return None;
+                }
+            }
+        };
         Some(OrbitResponseView {
             generation: header.generation,
             centre_revision,
@@ -230,6 +242,7 @@ impl OwnerEndpoint {
             compute_us: header.compute_us,
             precision_bits: header.precision_bits,
             admission_credit_us: header.credit_us,
+            verification_facts,
             cancelled,
             records: OrbitLease {
                 backend: OrbitLeaseBackend::Queue {
@@ -428,6 +441,30 @@ impl ProducerEndpoint {
         compute_us: u32,
         admission_credit_us: u32,
     ) -> Result<(), ChannelError> {
+        self.complete_with_facts(
+            lease,
+            records,
+            delivered_precision_bits,
+            compute_us,
+            admission_credit_us,
+            OrbitVerificationFacts::stable(0, 0),
+        )
+    }
+
+    /// Returns a completed orbit together with its explicit verification facts.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same typed ownership, capacity, or queue refusal as [`Self::complete`].
+    pub fn complete_with_facts(
+        &self,
+        lease: RequestLease,
+        records: &[ReferenceOrbitRecord],
+        delivered_precision_bits: u32,
+        compute_us: u32,
+        admission_credit_us: u32,
+        facts: OrbitVerificationFacts,
+    ) -> Result<(), ChannelError> {
         let generation = lease.request.generation();
         let Some(queue) = self.queue_core() else {
             return Err(browser_producer_refusal());
@@ -444,6 +481,7 @@ impl ProducerEndpoint {
             compute_us,
             admission_credit_us,
             records,
+            facts,
         )?;
         core.send_to_main(orbit, MessageKind::OrbitResponse)?;
         core.pump_pending();
@@ -563,6 +601,7 @@ pub struct OrbitResponseView {
     compute_us: u32,
     precision_bits: u32,
     admission_credit_us: u32,
+    verification_facts: OrbitVerificationFacts,
     cancelled: bool,
     /// Exclusive ownership of transferred record bytes until credit return.
     pub records: OrbitLease,
@@ -613,6 +652,11 @@ impl OrbitResponseView {
             ));
         }
         let header = buffer.header()?;
+        let verification_facts = if kind == MessageKind::OrbitResponse {
+            buffer.orbit_facts()?
+        } else {
+            OrbitVerificationFacts::deferred()
+        };
         Ok(Self {
             generation: header.generation,
             centre_revision,
@@ -620,6 +664,7 @@ impl OrbitResponseView {
             compute_us: header.compute_us,
             precision_bits: header.precision_bits,
             admission_credit_us: header.credit_us,
+            verification_facts,
             cancelled: kind == MessageKind::OrbitCancelled,
             records: OrbitLease {
                 backend: OrbitLeaseBackend::Browser {
@@ -671,6 +716,28 @@ impl OrbitResponseView {
     #[must_use]
     pub const fn admission_credit_us(&self) -> u32 {
         self.admission_credit_us
+    }
+
+    /// Returns whether Final/Measure word verification ran for this orbit.
+    #[must_use]
+    pub const fn reference_verification(&self) -> ReferenceVerification {
+        if self.verification_facts.verification == ReferenceVerification::Stable as u32 {
+            ReferenceVerification::Stable
+        } else {
+            ReferenceVerification::Deferred
+        }
+    }
+
+    /// Returns the maximum ULP error over consumed reference words, or `None` for Preview.
+    #[must_use]
+    pub const fn max_consumed_word_error_ulps(&self) -> Option<u32> {
+        self.verification_facts.max_consumed_word_error_ulps()
+    }
+
+    /// Returns the number of sixteen-digit precision escalations before publication.
+    #[must_use]
+    pub const fn precision_escalations(&self) -> u32 {
+        self.verification_facts.precision_escalations
     }
 
     /// Reports whether this arrival is measured stale work without an orbit payload.
@@ -1091,7 +1158,7 @@ mod tests {
     };
     use crate::{
         CoordinateDescriptor, EncodedCentre, OrbitDisposition, OrbitReason, OrbitRequest,
-        ReferenceOrbitRecord,
+        OrbitVerificationFacts, ReferenceOrbitRecord, ReferenceVerification,
     };
 
     fn request(generation: u32, revision: u32) -> OrbitRequest {
@@ -1128,11 +1195,24 @@ mod tests {
         let lease = producer.next_request().unwrap().unwrap();
         assert_eq!(lease.request().generation(), 1);
         producer
-            .complete(lease, &[zero_record()], 64, 10, 250_000)
+            .complete_with_facts(
+                lease,
+                &[zero_record()],
+                64,
+                10,
+                250_000,
+                OrbitVerificationFacts::stable(2, 1),
+            )
             .unwrap();
         let mut response = owner.next_arrival().unwrap();
         assert_eq!(response.generation(), 1);
-        assert_eq!(response.records.record_bytes().unwrap().len(), 16);
+        assert_eq!(response.records.record_bytes().unwrap().len(), 8);
+        assert_eq!(
+            response.reference_verification(),
+            ReferenceVerification::Stable
+        );
+        assert_eq!(response.max_consumed_word_error_ulps(), Some(2));
+        assert_eq!(response.precision_escalations(), 1);
         response
             .records
             .return_credit(OrbitDisposition::Stale, 10)
@@ -1378,11 +1458,6 @@ mod tests {
     }
 
     const fn zero_record() -> ReferenceOrbitRecord {
-        ReferenceOrbitRecord {
-            re_hi: 0.0,
-            im_hi: 0.0,
-            re_lo: 0.0,
-            im_lo: 0.0,
-        }
+        ReferenceOrbitRecord { re: 0.0, im: 0.0 }
     }
 }

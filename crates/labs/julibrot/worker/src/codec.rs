@@ -11,7 +11,7 @@ use crate::wire::{
     buffer_capacity, read_u32, write_words,
 };
 use crate::{ChannelError, ErrorCode};
-use ember_julibrot_math::PrecisionMode;
+use ember_julibrot_math::{PrecisionMode, ReferencePass};
 
 const REQUEST_DEPTH_OFFSET: usize = HEADER_BYTES;
 const REQUEST_REASON_OFFSET: usize = 36;
@@ -23,6 +23,9 @@ pub(crate) const REQUEST_MODE_OFFSET: usize = 112;
 pub(crate) const REQUEST_FIXED_END: usize = 116;
 const COORDINATE_COUNT: usize = 4;
 const KNOWN_REASON_BITS: u32 = 0b1_1111;
+const REFERENCE_PASS_SHIFT: u32 = 5;
+const REFERENCE_PASS_MASK: u32 = 0b11 << REFERENCE_PASS_SHIFT;
+const KNOWN_REQUEST_BITS: u32 = KNOWN_REASON_BITS | REFERENCE_PASS_MASK;
 
 /// One canonical dyadic coordinate descriptor.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -198,7 +201,7 @@ impl OrbitReason {
     /// Requested precision policy changed.
     pub const PRECISION_MODE_CHANGE: Self = Self(1 << 4);
 
-    /// Validates and constructs version-two reason bits.
+    /// Validates and constructs version-three reason bits.
     ///
     /// # Errors
     ///
@@ -240,6 +243,8 @@ pub struct OrbitRequest {
     precision_mode: PrecisionMode,
     /// Triggering policy reason or reasons.
     reason: OrbitReason,
+    /// Reference pass selected by Preview, Final, or Measure.
+    reference_pass: ReferencePass,
 }
 
 impl OrbitRequest {
@@ -279,7 +284,26 @@ impl OrbitRequest {
             max_iter,
             precision_mode,
             reason,
+            reference_pass: match precision_mode {
+                PrecisionMode::Deterministic => ReferencePass::Final,
+                PrecisionMode::PictureFast => ReferencePass::Preview,
+            },
         })
+    }
+
+    /// Selects the `PictureFast` stage policy carried in the request body.
+    #[must_use]
+    pub const fn with_precision_policy(
+        mut self,
+        precision_mode: PrecisionMode,
+        reference_pass: ReferencePass,
+    ) -> Self {
+        self.precision_mode = precision_mode;
+        self.reference_pass = match precision_mode {
+            PrecisionMode::Deterministic => ReferencePass::Final,
+            PrecisionMode::PictureFast => reference_pass,
+        };
+        self
     }
 
     /// Returns the checked request generation.
@@ -312,16 +336,22 @@ impl OrbitRequest {
         self.max_iter
     }
 
-    /// Returns the requested precision policy.
+    /// Returns the policy reasons that triggered this request.
+    #[must_use]
+    pub const fn reason(&self) -> OrbitReason {
+        self.reason
+    }
+
+    /// Returns the transported precision policy.
     #[must_use]
     pub const fn precision_mode(&self) -> PrecisionMode {
         self.precision_mode
     }
 
-    /// Returns the policy reasons that triggered this request.
+    /// Returns the transported Preview, Final, or Measure pass.
     #[must_use]
-    pub const fn reason(&self) -> OrbitReason {
-        self.reason
+    pub const fn reference_pass(&self) -> ReferencePass {
+        self.reference_pass
     }
 
     /// Encodes this request into one request-pool buffer without resizing it.
@@ -367,6 +397,7 @@ impl OrbitRequest {
             max_iter: view.max_iter,
             precision_mode: view.precision_mode,
             reason: view.reason,
+            reference_pass: view.reference_pass,
         })
     }
 }
@@ -387,7 +418,11 @@ pub(crate) fn visit_transfer_request_body_words(
         REQUEST_DEPTH_OFFSET,
         &[
             request.depth_digits,
-            request.reason.bits(),
+            encode_request_bits(
+                request.reason,
+                request.precision_mode,
+                request.reference_pass,
+            ),
             request.centre.revision,
             limb_count,
         ],
@@ -422,6 +457,8 @@ pub struct RequestBodyView {
     pub(crate) precision_mode: PrecisionMode,
     /// Triggering reasons.
     pub(crate) reason: OrbitReason,
+    /// Transported Preview, Final, or Measure pass.
+    pub(crate) reference_pass: ReferencePass,
     /// Authoritative-centre revision.
     pub(crate) centre_revision: u32,
     /// Four canonical coordinate descriptors.
@@ -492,18 +529,57 @@ impl RequestBodyView {
                     0,
                 )
             })?;
+        let (reason, reference_pass) =
+            decode_request_bits(read_u32(bytes, REQUEST_REASON_OFFSET), precision_mode)?;
         Ok(Self {
             generation: header.generation,
             depth_digits: read_u32(bytes, REQUEST_DEPTH_OFFSET),
             precision_bits: header.precision_bits,
             max_iter: header.length,
             precision_mode,
-            reason: OrbitReason::from_bits(read_u32(bytes, REQUEST_REASON_OFFSET))?,
+            reason,
+            reference_pass,
             centre_revision: centre.revision,
             coordinates,
             limbs: centre.limbs,
         })
     }
+}
+
+const fn encode_request_bits(
+    reason: OrbitReason,
+    precision_mode: PrecisionMode,
+    reference_pass: ReferencePass,
+) -> u32 {
+    match precision_mode {
+        PrecisionMode::Deterministic => reason.bits(),
+        PrecisionMode::PictureFast => {
+            reason.bits() | ((reference_pass as u32) << REFERENCE_PASS_SHIFT)
+        }
+    }
+}
+
+fn decode_request_bits(
+    bits: u32,
+    precision_mode: PrecisionMode,
+) -> Result<(OrbitReason, ReferencePass), ChannelError> {
+    if bits & !KNOWN_REQUEST_BITS != 0 {
+        return Err(ChannelError::new(ErrorCode::BadLength, bits, 0, 0));
+    }
+    let reason = OrbitReason::from_bits(bits & KNOWN_REASON_BITS)?;
+    if precision_mode == PrecisionMode::Deterministic {
+        if bits & REFERENCE_PASS_MASK != 0 {
+            return Err(ChannelError::new(ErrorCode::BadLength, bits, 0, 0));
+        }
+        return Ok((reason, ReferencePass::Final));
+    }
+    let pass = match (bits & REFERENCE_PASS_MASK) >> REFERENCE_PASS_SHIFT {
+        0 => ReferencePass::Preview,
+        1 => ReferencePass::Final,
+        2 => ReferencePass::Measure,
+        _ => return Err(ChannelError::new(ErrorCode::BadLength, bits, 0, 0)),
+    };
+    Ok((reason, pass))
 }
 
 const fn bad_descriptor(detail: u32) -> ChannelError {
@@ -512,7 +588,7 @@ const fn bad_descriptor(detail: u32) -> ChannelError {
 
 #[cfg(test)]
 mod tests {
-    use ember_julibrot_math::PrecisionMode;
+    use ember_julibrot_math::{PrecisionMode, ReferencePass};
 
     use super::{
         CoordinateDescriptor, EncodedCentre, OrbitReason, OrbitRequest, REQUEST_FIXED_END,
@@ -592,6 +668,18 @@ mod tests {
         );
         assert_eq!(&buffer.as_bytes()[112..116], &1_u32.to_le_bytes());
         assert_eq!(&buffer.as_bytes()[116..120], &0x0123_4567_u32.to_le_bytes());
+
+        let picture =
+            request.with_precision_policy(PrecisionMode::PictureFast, ReferencePass::Measure);
+        picture.encode_into(&mut buffer).unwrap();
+        let decoded = OrbitRequest::decode(&buffer).unwrap();
+        assert_eq!(decoded, picture);
+        assert_eq!(decoded.precision_mode(), PrecisionMode::PictureFast);
+        assert_eq!(decoded.reference_pass(), ReferencePass::Measure);
+        assert_eq!(
+            u32::from_le_bytes(buffer.as_bytes()[36..40].try_into().unwrap()),
+            69
+        );
     }
 
     #[test]
@@ -747,6 +835,6 @@ mod tests {
         let mut buffer = WireBuffer::new(Pool::Request, 0, 64).unwrap();
         request.encode_into(&mut buffer).unwrap();
         assert_eq!(request.centre.request_bytes().unwrap(), 628);
-        assert_eq!(buffer.capacity(), 1_072);
+        assert_eq!(buffer.capacity(), 644);
     }
 }

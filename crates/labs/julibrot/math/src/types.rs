@@ -1,3 +1,20 @@
+/// Consumer stage that decides whether `PictureFast` verifies a reference orbit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum ReferencePass {
+    Preview = 0,
+    Final = 1,
+    Measure = 2,
+}
+
+/// Whether the published reference was checked against its higher-precision orbit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum ReferenceVerification {
+    Deferred = 0,
+    Stable = 1,
+}
+
 /// Axis in the fixed order `(z.re, z.im, c.re, c.im)`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
@@ -160,10 +177,8 @@ pub struct PerturbationEnvelope {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(C)]
 pub struct ReferenceOrbitRecord {
-    pub re_hi: f32,
-    pub im_hi: f32,
-    pub re_lo: f32,
-    pub im_lo: f32,
+    pub re: f32,
+    pub im: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -181,6 +196,9 @@ pub struct ComputedOrbit {
     pub length: u32,
     pub precision_bits: u32,
     pub escape_index: Option<u32>,
+    pub verification: ReferenceVerification,
+    pub max_consumed_word_error_ulps: Option<u32>,
+    pub precision_escalations: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -338,7 +356,7 @@ mod tests {
         assert_eq!(offset_of!(CentreSplit, hi), 0);
         assert_eq!(offset_of!(CentreSplit, lo), 16);
         assert_eq!(size_of::<EscapeParams>(), 8);
-        assert_eq!(size_of::<ReferenceOrbitRecord>(), 16);
+        assert_eq!(size_of::<ReferenceOrbitRecord>(), 8);
         assert_eq!(size_of::<EscapeGridRecord>(), 16);
         assert_eq!(size_of::<CentreF64>(), 32);
     }

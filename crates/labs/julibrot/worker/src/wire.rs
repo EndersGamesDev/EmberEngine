@@ -1,9 +1,10 @@
 //! Fixed-layout little-endian wire records and owned pool buffers.
 
-use crate::{ChannelError, ErrorCode, ReferenceOrbitRecord};
+use crate::{ChannelError, ComputedOrbit, ErrorCode, ReferenceOrbitRecord};
+use ember_julibrot_math::ReferenceVerification;
 
 /// Exported module and wire ABI version.
-pub const JULIBROT_ABI_VERSION: u32 = 2;
+pub const JULIBROT_ABI_VERSION: u32 = 3;
 /// Little-endian byte string `JBL1`.
 pub const MAGIC: u32 = 0x314c_424a;
 /// Little-endian pool-trailer byte string `JBLT`.
@@ -12,14 +13,17 @@ pub const TRAILER_MAGIC: u32 = 0x544c_424a;
 pub const HEADER_BYTES: usize = 32;
 /// Pool-trailer size in bytes.
 pub const POOL_TRAILER_BYTES: usize = 16;
+/// Verification-fact tail size in bytes.
+pub const ORBIT_FACT_BYTES: usize = 16;
 /// Per-buffer bytes outside orbit-record capacity.
-pub const BUFFER_OVERHEAD_BYTES: usize = HEADER_BYTES + POOL_TRAILER_BYTES;
+pub const BUFFER_OVERHEAD_BYTES: usize = HEADER_BYTES + ORBIT_FACT_BYTES + POOL_TRAILER_BYTES;
 /// One reference-orbit record size in bytes.
-pub const ORBIT_RECORD_BYTES: usize = 16;
+pub const ORBIT_RECORD_BYTES: usize = 8;
 /// One error record size in bytes.
 pub const ERROR_RECORD_BYTES: usize = 16;
+const MIN_BUFFER_CAPACITY_BYTES: usize = 644;
 
-/// Returns the exact capacity `48 + 16 * max_iter` with checked arithmetic.
+/// Returns `max(644, 64 + 8 * max_iter)` so a cap-64 request still fits the 300-digit policy.
 ///
 /// # Errors
 ///
@@ -30,10 +34,11 @@ pub fn buffer_capacity(max_iter: u32) -> Result<usize, ChannelError> {
         .and_then(|count| count.checked_mul(ORBIT_RECORD_BYTES));
     records
         .and_then(|bytes| bytes.checked_add(BUFFER_OVERHEAD_BYTES))
+        .map(|bytes| bytes.max(MIN_BUFFER_CAPACITY_BYTES))
         .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, max_iter, u32::MAX, 0))
 }
 
-/// The nine version-two wire messages.
+/// The nine version-three wire messages.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum MessageKind {
@@ -99,7 +104,7 @@ pub struct MessageHeader {
 }
 
 impl MessageHeader {
-    /// Builds a canonical version-two header.
+    /// Builds a canonical version-three header.
     #[must_use]
     pub const fn new(kind: MessageKind, generation: u32) -> Self {
         Self {
@@ -180,6 +185,118 @@ pub struct ErrorRecord {
     pub requested_bytes: u32,
     /// Available bytes for a capacity refusal.
     pub available_bytes: u32,
+}
+
+/// Verification facts carried outside the initialized orbit-record range.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct OrbitVerificationFacts {
+    /// [`ReferenceVerification`] discriminant.
+    pub verification: u32,
+    /// Maximum ULP distance over the four consumed reference words, or `u32::MAX` when deferred.
+    pub max_consumed_word_error_ulps: u32,
+    /// Number of sixteen-digit precision escalations before publication.
+    pub precision_escalations: u32,
+    /// Reserved zero word.
+    pub reserved: u32,
+}
+
+impl OrbitVerificationFacts {
+    /// Creates deferred-verification facts for a `PictureFast` Preview orbit.
+    #[must_use]
+    pub const fn deferred() -> Self {
+        Self {
+            verification: ReferenceVerification::Deferred as u32,
+            max_consumed_word_error_ulps: u32::MAX,
+            precision_escalations: 0,
+            reserved: 0,
+        }
+    }
+
+    /// Creates completed-verification facts.
+    #[must_use]
+    pub const fn stable(max_consumed_word_error_ulps: u32, precision_escalations: u32) -> Self {
+        Self {
+            verification: ReferenceVerification::Stable as u32,
+            max_consumed_word_error_ulps,
+            precision_escalations,
+            reserved: 0,
+        }
+    }
+
+    /// Converts math's completed-orbit facts into the fixed wire tail.
+    #[must_use]
+    pub fn from_orbit(orbit: &ComputedOrbit) -> Self {
+        Self {
+            verification: orbit.verification as u32,
+            max_consumed_word_error_ulps: orbit.max_consumed_word_error_ulps.unwrap_or(u32::MAX),
+            precision_escalations: orbit.precision_escalations,
+            reserved: 0,
+        }
+    }
+
+    /// Returns the validated verification state.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BadLength` for an unknown state, a contradictory maximum, or nonzero reserve.
+    pub const fn status(self) -> Result<ReferenceVerification, ChannelError> {
+        if self.reserved != 0 {
+            return Err(ChannelError::new(ErrorCode::BadLength, self.reserved, 0, 0));
+        }
+        match self.verification {
+            value if value == ReferenceVerification::Deferred as u32 => {
+                if self.max_consumed_word_error_ulps != u32::MAX || self.precision_escalations != 0
+                {
+                    return Err(ChannelError::new(
+                        ErrorCode::BadLength,
+                        self.max_consumed_word_error_ulps,
+                        0,
+                        0,
+                    ));
+                }
+                Ok(ReferenceVerification::Deferred)
+            }
+            value if value == ReferenceVerification::Stable as u32 => {
+                if self.max_consumed_word_error_ulps > 2 {
+                    return Err(ChannelError::new(ErrorCode::BadLength, value, 0, 0));
+                }
+                Ok(ReferenceVerification::Stable)
+            }
+            value => Err(ChannelError::new(ErrorCode::BadLength, value, 0, 0)),
+        }
+    }
+
+    /// Returns the maximum consumed-word error when verification ran.
+    #[must_use]
+    pub const fn max_consumed_word_error_ulps(self) -> Option<u32> {
+        if self.max_consumed_word_error_ulps == u32::MAX {
+            None
+        } else {
+            Some(self.max_consumed_word_error_ulps)
+        }
+    }
+
+    fn write_to(self, destination: &mut [u8]) {
+        write_words(
+            destination,
+            &[
+                self.verification,
+                self.max_consumed_word_error_ulps,
+                self.precision_escalations,
+                self.reserved,
+            ],
+        );
+    }
+
+    const fn read_from(source: &[u8]) -> Self {
+        Self {
+            verification: read_u32(source, 0),
+            max_consumed_word_error_ulps: read_u32(source, 4),
+            precision_escalations: read_u32(source, 8),
+            reserved: read_u32(source, 12),
+        }
+    }
 }
 
 impl ErrorRecord {
@@ -402,9 +519,13 @@ impl WireBuffer {
     pub(crate) fn validate_message(&self) -> Result<MessageKind, ChannelError> {
         let (pool, _) = self.identity()?;
         let header = self.header()?;
-        validate_message_layout(pool, self.capacity(), header, |used, message_end| {
+        let kind = validate_message_layout(pool, self.capacity(), header, |used, message_end| {
             self.bytes[used..message_end].iter().all(|byte| *byte == 0)
-        })
+        })?;
+        if kind == MessageKind::OrbitResponse {
+            self.orbit_facts()?.status()?;
+        }
+        Ok(kind)
     }
 
     /// Writes a typed channel-error message and its four-word body.
@@ -442,14 +563,16 @@ impl WireBuffer {
         compute_us: u32,
         admission_credit_us: u32,
         records: &[ReferenceOrbitRecord],
+        facts: OrbitVerificationFacts,
     ) -> Result<(), ChannelError> {
+        facts.status()?;
         let (pool, _) = self.identity()?;
         let requested = records
             .len()
             .checked_mul(ORBIT_RECORD_BYTES)
             .and_then(|bytes| HEADER_BYTES.checked_add(bytes))
             .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, 0, u32::MAX, 0))?;
-        let available = self.capacity() - POOL_TRAILER_BYTES;
+        let available = self.capacity() - POOL_TRAILER_BYTES - ORBIT_FACT_BYTES;
         if pool != Pool::Orbit || records.is_empty() || requested > available {
             return Err(ChannelError::new(
                 ErrorCode::BadLength,
@@ -470,15 +593,21 @@ impl WireBuffer {
             let offset = HEADER_BYTES + index * ORBIT_RECORD_BYTES;
             write_words(
                 &mut message[offset..offset + ORBIT_RECORD_BYTES],
-                &[
-                    record.re_hi.to_bits(),
-                    record.im_hi.to_bits(),
-                    record.re_lo.to_bits(),
-                    record.im_lo.to_bits(),
-                ],
+                &[record.re.to_bits(), record.im.to_bits()],
             );
         }
+        let facts_offset = message.len() - ORBIT_FACT_BYTES;
+        facts.write_to(&mut message[facts_offset..]);
         Ok(())
+    }
+
+    /// Reads and validates the fixed verification-fact tail.
+    pub(crate) fn orbit_facts(&self) -> Result<OrbitVerificationFacts, ChannelError> {
+        let offset = self.capacity() - POOL_TRAILER_BYTES - ORBIT_FACT_BYTES;
+        let facts =
+            OrbitVerificationFacts::read_from(&self.bytes[offset..offset + ORBIT_FACT_BYTES]);
+        facts.status()?;
+        Ok(facts)
     }
 
     /// Decodes a validated orbit payload into CPU records.
@@ -498,10 +627,8 @@ impl WireBuffer {
             .map(|index| {
                 let offset = HEADER_BYTES + index * ORBIT_RECORD_BYTES;
                 ReferenceOrbitRecord {
-                    re_hi: f32::from_bits(read_u32(&self.bytes, offset)),
-                    im_hi: f32::from_bits(read_u32(&self.bytes, offset + 4)),
-                    re_lo: f32::from_bits(read_u32(&self.bytes, offset + 8)),
-                    im_lo: f32::from_bits(read_u32(&self.bytes, offset + 12)),
+                    re: f32::from_bits(read_u32(&self.bytes, offset)),
+                    im: f32::from_bits(read_u32(&self.bytes, offset + 4)),
                 }
             })
             .collect())
@@ -584,7 +711,9 @@ pub fn validate_message_layout(
             HEADER_BYTES
         }
     };
-    let message_end = capacity - POOL_TRAILER_BYTES;
+    let message_end = capacity
+        - POOL_TRAILER_BYTES
+        - usize::from(kind == MessageKind::OrbitResponse) * ORBIT_FACT_BYTES;
     if !unused_is_zero(used, message_end) {
         return Err(ChannelError::new(
             ErrorCode::BadLength,
@@ -599,8 +728,9 @@ pub fn validate_message_layout(
 #[cfg(test)]
 mod tests {
     use super::{
-        BUFFER_OVERHEAD_BYTES, ERROR_RECORD_BYTES, HEADER_BYTES, MessageHeader, MessageKind,
-        ORBIT_RECORD_BYTES, POOL_TRAILER_BYTES, Pool, PoolTrailer, WireBuffer, buffer_capacity,
+        ERROR_RECORD_BYTES, HEADER_BYTES, MIN_BUFFER_CAPACITY_BYTES, MessageHeader, MessageKind,
+        ORBIT_FACT_BYTES, ORBIT_RECORD_BYTES, OrbitVerificationFacts, POOL_TRAILER_BYTES, Pool,
+        PoolTrailer, WireBuffer, buffer_capacity,
     };
     use crate::{ErrorCode, ReferenceOrbitRecord};
 
@@ -611,11 +741,9 @@ mod tests {
         assert_eq!(size_of::<PoolTrailer>(), POOL_TRAILER_BYTES);
         assert_eq!(align_of::<PoolTrailer>(), 4);
         assert_eq!(size_of::<super::ErrorRecord>(), ERROR_RECORD_BYTES);
+        assert_eq!(size_of::<super::OrbitVerificationFacts>(), ORBIT_FACT_BYTES);
         assert_eq!(size_of::<ReferenceOrbitRecord>(), ORBIT_RECORD_BYTES);
-        assert_eq!(
-            buffer_capacity(64).unwrap(),
-            BUFFER_OVERHEAD_BYTES + 64 * 16
-        );
+        assert_eq!(buffer_capacity(64).unwrap(), MIN_BUFFER_CAPACITY_BYTES);
     }
 
     #[test]
@@ -687,26 +815,20 @@ mod tests {
     #[test]
     fn orbit_and_error_payloads_have_exact_bytes_and_zero_tail() {
         let records = [
-            ReferenceOrbitRecord {
-                re_hi: 1.0,
-                im_hi: -2.0,
-                re_lo: 0.25,
-                im_lo: -0.125,
-            },
-            ReferenceOrbitRecord {
-                re_hi: 0.0,
-                im_hi: 0.0,
-                re_lo: 0.0,
-                im_lo: 0.0,
-            },
+            ReferenceOrbitRecord { re: 1.0, im: -2.0 },
+            ReferenceOrbitRecord { re: 0.0, im: 0.0 },
         ];
         let mut orbit = WireBuffer::new(Pool::Orbit, 0, 64).unwrap();
-        orbit.write_orbit(7, 320, 901, 249_099, &records).unwrap();
+        let facts = OrbitVerificationFacts::stable(2, 1);
+        orbit
+            .write_orbit(7, 320, 901, 249_099, &records, facts)
+            .unwrap();
         assert_eq!(orbit.validate_message(), Ok(MessageKind::OrbitResponse));
         assert_eq!(orbit.orbit_records().unwrap(), records);
+        assert_eq!(orbit.orbit_facts().unwrap(), facts);
         assert_eq!(&orbit.as_bytes()[32..36], &1.0_f32.to_le_bytes());
         assert!(
-            orbit.as_bytes()[64..orbit.capacity() - 16]
+            orbit.as_bytes()[48..orbit.capacity() - 32]
                 .iter()
                 .all(|byte| *byte == 0)
         );

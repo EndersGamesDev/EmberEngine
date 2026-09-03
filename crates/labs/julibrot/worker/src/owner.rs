@@ -882,12 +882,7 @@ mod tests {
         producer
             .complete(
                 request,
-                &[ReferenceOrbitRecord {
-                    re_hi: 0.0,
-                    im_hi: 0.0,
-                    re_lo: 0.0,
-                    im_lo: 0.0,
-                }],
+                &[ReferenceOrbitRecord { re: 0.0, im: 0.0 }],
                 128,
                 40,
                 250_000,

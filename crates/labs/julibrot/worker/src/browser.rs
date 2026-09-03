@@ -14,7 +14,10 @@ use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{DedicatedWorkerGlobalScope, MessageEvent, WorkerGlobalScope};
 
 use crate::codec::visit_transfer_request_body_words;
-use crate::wire::{BUFFER_OVERHEAD_BYTES, WireBuffer, validate_message_layout};
+use crate::wire::{
+    BUFFER_OVERHEAD_BYTES, ORBIT_FACT_BYTES, OrbitVerificationFacts, WireBuffer,
+    validate_message_layout,
+};
 use crate::{
     Admission, ChannelError, CreditAccount, CreditCharge, ErrorCode, HEADER_BYTES,
     JULIBROT_ABI_VERSION, MessageHeader, MessageKind, MonotonicClock, ORBIT_RECORD_BYTES,
@@ -225,7 +228,7 @@ impl TransferBuffer {
         let header = self.header()?;
         let capacity = usize::try_from(self.bytes.length())
             .map_err(|_| ChannelError::new(ErrorCode::BadLength, 0, u32::MAX, 0))?;
-        validate_message_layout(pool, capacity, header, |used, message_end| {
+        let kind = validate_message_layout(pool, capacity, header, |used, message_end| {
             let Ok(used) = u32::try_from(used) else {
                 return false;
             };
@@ -233,7 +236,27 @@ impl TransferBuffer {
                 return false;
             };
             (used..message_end).all(|offset| self.bytes.get_index(offset) == 0)
-        })
+        })?;
+        if kind == MessageKind::OrbitResponse {
+            self.orbit_facts()?.status()?;
+        }
+        Ok(kind)
+    }
+
+    pub(crate) fn orbit_facts(&self) -> Result<OrbitVerificationFacts, ChannelError> {
+        let offset = self
+            .bytes
+            .length()
+            .checked_sub(u32::try_from(POOL_TRAILER_BYTES + ORBIT_FACT_BYTES).unwrap_or(32))
+            .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, 0, 0, 0))?;
+        let facts = OrbitVerificationFacts {
+            verification: self.word(offset),
+            max_consumed_word_error_ulps: self.word(offset + 4),
+            precision_escalations: self.word(offset + 8),
+            reserved: self.word(offset + 12),
+        };
+        facts.status()?;
+        Ok(facts)
     }
 
     pub(crate) fn record_bytes(&self) -> Result<Uint8Array, ChannelError> {
@@ -253,7 +276,7 @@ impl TransferBuffer {
             .checked_add(
                 header
                     .length
-                    .checked_mul(u32::try_from(ORBIT_RECORD_BYTES).unwrap_or(16))
+                    .checked_mul(u32::try_from(ORBIT_RECORD_BYTES).unwrap_or(8))
                     .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, header.length, 0, 0))?,
             )
             .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, header.length, 0, 0))?;
@@ -306,7 +329,9 @@ impl TransferBuffer {
         compute_us: u32,
         credit_us: u32,
         records: &[ReferenceOrbitRecord],
+        facts: OrbitVerificationFacts,
     ) -> Result<(), ChannelError> {
+        facts.status()?;
         let record_count = u32::try_from(records.len())
             .map_err(|_| ChannelError::new(ErrorCode::BadLength, u32::MAX, 0, 0))?;
         let used = u32::try_from(HEADER_BYTES)
@@ -317,7 +342,8 @@ impl TransferBuffer {
                     .and_then(|bytes| header.checked_add(bytes))
             })
             .ok_or_else(|| ChannelError::new(ErrorCode::BadLength, record_count, u32::MAX, 0))?;
-        let available = self.bytes.length() - u32::try_from(POOL_TRAILER_BYTES).unwrap_or(16);
+        let available = self.bytes.length()
+            - u32::try_from(POOL_TRAILER_BYTES + ORBIT_FACT_BYTES).unwrap_or(32);
         if records.is_empty() || used > available || self.pool()? != Pool::Orbit {
             return Err(ChannelError::new(
                 ErrorCode::BadLength,
@@ -336,18 +362,25 @@ impl TransferBuffer {
             let index = u32::try_from(index)
                 .map_err(|_| ChannelError::new(ErrorCode::BadLength, record_count, 0, 0))?;
             let offset = u32::try_from(HEADER_BYTES).unwrap_or(32)
-                + index * u32::try_from(ORBIT_RECORD_BYTES).unwrap_or(16);
+                + index * u32::try_from(ORBIT_RECORD_BYTES).unwrap_or(8);
             write_words_at(
                 &self.bytes,
                 offset,
-                &[
-                    record.re_hi.to_bits(),
-                    record.im_hi.to_bits(),
-                    record.re_lo.to_bits(),
-                    record.im_lo.to_bits(),
-                ],
+                &[record.re.to_bits(), record.im.to_bits()],
             );
         }
+        let facts_offset = self.bytes.length()
+            - u32::try_from(POOL_TRAILER_BYTES + ORBIT_FACT_BYTES).unwrap_or(32);
+        write_words_at(
+            &self.bytes,
+            facts_offset,
+            &[
+                facts.verification,
+                facts.max_consumed_word_error_ulps,
+                facts.precision_escalations,
+                facts.reserved,
+            ],
+        );
         Ok(())
     }
 
@@ -418,7 +451,7 @@ impl crate::MonotonicClock for BrowserClock {
     }
 }
 
-/// Allocates one standalone version-two transfer buffer and initializes its immutable trailer.
+/// Allocates one standalone version-three transfer buffer and initializes its immutable trailer.
 ///
 /// # Errors
 ///
@@ -806,12 +839,14 @@ async fn run_producer_inner() -> Result<(), ChannelError> {
                 }
                 OrbitTaskPoll::Complete { orbit, compute_us } => {
                     let copy_started = clock.now_us();
+                    let facts = OrbitVerificationFacts::from_orbit(&orbit);
                     transfer.write_orbit(
                         request.generation(),
                         orbit.precision_bits,
                         compute_us,
                         admission_credit,
                         &orbit.records,
+                        facts,
                     )?;
                     let copy_us = clock
                         .now_us()

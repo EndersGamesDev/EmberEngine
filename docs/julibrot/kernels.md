@@ -66,7 +66,7 @@ Let the exact pixel scale be `m·2^s` with `m ∈ [0.5,1)` carried as `f32` and 
 
 The represented initial components are `δz₀ = 2^s·δz₀′` and `δc = 2^s·δc′`; Mandelbrot has `δz₀′ = 0` when its rotated basis remains in `span(e₃,e₄)`, Julia has `δc′ = 0` when its rotated basis remains in `span(e₁,e₂)`, and a hybrid plane retains both components.
 
-Reference record `r` reconstructs `Zᵣ = (re_hi+re_lo, im_hi+im_lo)` in `f32`, the represented delta is `δₙ = S·δ′ₙ` for `S = 2^e`, full pixel state is `zₙ = Zᵣ+S·δ′ₙ`, and the scaled update is `δ′ₙ₊₁ = 2·Zᵣ·δ′ₙ+S·δ′ₙ²+δc′` with the same pinned complex multiplication order and the shared bit-constructed scaling below.
+Reference record `r` supplies the displayed `Zᵣ = (re,im)` directly as two `f32` values; the represented delta is `δₙ = S·δ′ₙ` for `S = 2^e`, full pixel state is `zₙ = Zᵣ+S·δ′ₙ`, and the scaled update is `δ′ₙ₊₁ = 2·Zᵣ·δ′ₙ+S·δ′ₙ²+δc′` with the merge-base complex multiplication order and shared bit-constructed scaling below.
 
 For each outer iteration `n < max_iter`, the kernel first refuses an unavailable reference index as a glitch, then loads `Zᵣ`, constructs `zₙ`, and tests escape; if the pixel does not escape and `n+1 = max_iter`, it records a capped pixel without loading or advancing to another reference, otherwise it applies any rebase and performs exactly one ordinary advance, so escape wins over rebase at the same state.
 
@@ -151,16 +151,16 @@ Every interface in this section is this slice's side of the shared contract and 
 
 The underlying worker message has the independent eight-word little-endian `u32` header `{magic,version,generation,kind,length,precision_bits,compute_us,credit_us}` at bytes 0–31, `magic = 0x314c424a` (`JBL1`), and `version = 1`; its nine kinds are `OrbitRequest = 1`, `RequestReturn = 2`, `OrbitResponse = 3`, `CreditApplied = 4`, `CreditStale = 5`, `OrbitCancelled = 6`, `ChannelError = 7`, `Shutdown = 8`, and `ShutdownAck = 9`.
 
-Each pool buffer has capacity `48+16·M` for current maximum orbit length `M` and ends in the 16-byte worker-owned trailer `{pool:u32,slot:u32,capacity_bytes:u32,trailer_magic:u32}`; an `OrbitResponse` begins its `length` records at byte 32, and kernels do not parse, retain, credit, or return this transport buffer.
+Each pool buffer has capacity `max(644,64+8·M)` for current maximum orbit length `M` and ends with a 16-byte worker verification-fact tail followed by the 16-byte worker-owned trailer `{pool:u32,slot:u32,capacity_bytes:u32,trailer_magic:u32}`; an `OrbitResponse` begins its 8-byte `length` records at byte 32, and kernels do not parse, retain, credit, or return this transport buffer.
 
-Reference-orbit texel `n` is one 16-byte RGBA32F record with index zero equal to `Z₀`, the centre's complex `z` part, with `length = min(max_iter,escape_index+1)` when the reference escapes and `length = max_iter` when it does not.
+Reference point `n` is transferred as 8-byte `(re,im)` with index zero equal to `Z₀`, the centre's complex `z` part; app expands it to one 16-byte RGBA32F heap texel `(re,im,0,0)`. Length is `min(max_iter,escape_index+1)` when the reference escapes and `max_iter` when it does not.
 
 |Byte range|RGBA lane|Meaning|
 |---------:|---------|-------|
-|0–3|R|`re_hi`, the high `f32` word of `Zₙ.re`|
-|4–7|G|`im_hi`, the high `f32` word of `Zₙ.im`|
-|8–11|B|`re_lo`, the residual `f32` word of `Zₙ.re`|
-|12–15|A|`im_lo`, the residual `f32` word of `Zₙ.im`|
+|0–3|R|`re`, the consumed `f32` word of `Zₙ.re`|
+|4–7|G|`im`, the consumed `f32` word of `Zₙ.im`|
+|8–11|B|zero padding added by app during heap upload|
+|12–15|A|zero padding added by app during heap upload|
 
 The transferred payload is little-endian IEEE-754 binary32; owner uploads changed orbit records with regional writes into ordinary DATA pages, and the perturbation accessor resolves the span by `directory_index`, ordered descriptor handles, and each page descriptor's own width like every dialect-v2 DATA input.
 
@@ -236,7 +236,7 @@ The inherited input resource entry is exactly 16 bytes `{ directory_index: u32, 
 
 `perturb_scaled_offset(uniforms: &PerturbUniform, orbit: &[ReferenceOrbitRecord], offset_prime: [f32;4]) -> Result<KernelSample, KernelError>` and `perturb_scaled_pixel(uniforms: &PerturbUniform, orbit: &[ReferenceOrbitRecord], index: u32) -> Result<KernelSample, KernelError>` expose the source-ordered scaled CPU mirror and return arithmetic failure as the honest per-pixel glitch record while refusing invalid host inputs.
 
-`evaluate_shallow_conformance(observed: KernelSample, expected: math::EscapeSample) -> ConformanceResult` applies the exact classification/index and `1×10⁻⁴` smooth criteria, while `evaluate_perturbation_conformance(observed: KernelSample, expected: math::PerturbSample, envelope: math::PerturbationEnvelope) -> ConformanceResult` returns the closed `ConformanceVerdict::{Pass,Boundary,Fail}`, never promoting a predeclared boundary sample to an exact pass, and applies the `2×10⁻³` tolerance plus exact rebase and glitch criteria.
+`evaluate_shallow_conformance(observed: KernelSample, expected: math::EscapeSample) -> ConformanceResult` applies the exact classification/index and `1×10⁻⁴` smooth criteria, while `evaluate_perturbation_conformance(observed: KernelSample, expected: math::PerturbSample, envelope: math::PerturbationEnvelope) -> ConformanceResult` returns the closed `ConformanceVerdict::{Pass,Boundary,Fail}`, never promotes a predeclared boundary sample to an exact pass, requires the observed smooth error to fit both the propagated smooth envelope and the `2×10⁻³` picture tolerance, and retains exact rebase and glitch criteria.
 
 `ConformanceVerdict` is `repr(u32)` with `Pass=0`, `Boundary=1`, and `Fail=2`; `ConformanceResult` is the CPU-only record `{ verdict:ConformanceVerdict,boundary:bool,record_well_formed:bool,classification_exact:bool,escape_index_exact:bool,rebase_count_exact:bool,glitch_exact:bool,smooth_abs_error:f32,smooth_tolerance:f32 }` with no stable byte ABI.
 
@@ -304,7 +304,7 @@ The external warp oracle requires `max|H⁻¹H−I| ≤ 10⁻⁹` in `f64` at `z
 
 ## 5. Oracles and tests
 
-Native layout tests assert `Plane = 32`, `CentreSplit = 32`, shallow uniform `= 96`, perturbation uniform `= 64`, reference and escape records `= 16`, every byte offset in §3, little-endian pack/unpack fixtures, zero padding, exact signed exponent bytes, and exact enum discriminants.
+Native layout tests assert `Plane = 32`, `CentreSplit = 32`, shallow uniform `= 96`, perturbation uniform `= 64`, reference record `= 8`, escape record `= 16`, every byte offset in §3, little-endian pack/unpack fixtures, zero padding, exact signed exponent bytes, and exact enum discriminants.
 
 Native math-and-kernels coordinate tests cover both presets, the `R₁₃·R₂₄` multiplication order, the `π/2` plane exchange, hybrid bases with nonzero z and c components, the `8·f32::EPSILON` postcondition, odd and even extents, bottom-left and top-row pixel centres, row-zero-at-bottom indexing, square pixels, and checked scale-exponent overflow.
 
@@ -320,7 +320,7 @@ Math's merged `escape_f32`, `perturb_scaled_f64`, and propagated-envelope functi
 
 Perturbation conformance requires exact classification and integer escape index outside math's propagated error envelope, exact rebase count and glitch flag, and `|smooth_gpu−smooth_cpu| ≤ 2×10⁻³`; samples inside the envelope remain explicit boundary fixtures and are never silently removed from reported counts.
 
-The reference adequacy oracle recomputes at working precision `D` and `D+16`, requires identical escape index and emitted hi/lo records within two f32 ulps componentwise, then runs the deep scaled-classification corpus; failure grows the reference record only through a reviewed interface change.
+The reference adequacy oracle recomputes at working precision `D` and `D+16`, requires identical escape index and both emitted coordinate words within two f32 ulps, then runs the deep scaled-classification corpus; failure escalates precision before a Final is re-issued.
 
 The production-output oracle checks every sampled record for finite channels, exact binary encodings of booleans and `−1.0`, integer-valued rebase count, zero shallow rebase count, and no read or presentation access beyond the active prefix.
 
@@ -376,7 +376,7 @@ The corpus covers the zoom-14 boundary, zooms 40, 80, 100, 256, 512, and the las
 
 ## 9. Unresolved joint-review findings
 
-- The two-f32 reference record carries about 48 relative bits rather than the worker's full 100–300 decimal-digit precision; the accepted D-versus-D+16 validation and deep scaled corpus decide adequacy, and a failure requires a reviewed record change.
+- Each reference coordinate carries one binary32 word rather than the worker's full 100–300 decimal-digit precision; the accepted D-versus-D+16 validation, half-ulp reconstruction bound, and deep scaled corpus decide adequacy, and a failure escalates Final precision.
 
 - Bit-constructed power-of-two scaling now avoids GLSL ES 3.10-only builtins and has native GLSL ES 3.00 translation coverage for both stages; a clean visible WebGL2 replay must still confirm the device compiler and underflow mode, while exponent wrap, NaN, or backend validation failure remains unacceptable.
 
