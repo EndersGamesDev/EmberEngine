@@ -32,6 +32,7 @@ pub enum FenceDecision {
 }
 
 impl FenceLedger {
+    #[allow(clippy::too_many_arguments)]
     pub const fn new(
         kind: SubmissionKind,
         id: u64,
