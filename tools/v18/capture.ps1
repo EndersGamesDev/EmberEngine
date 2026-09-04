@@ -1,36 +1,75 @@
 <#
 .SYNOPSIS
-The v18 capture harness: a local server, one or two native clients, synthetic
-input, and screenshots of the client windows.
+The capture harness: a local server, one or two native clients that drive
+THEMSELVES, and screenshots of the client windows.
 
 .DESCRIPTION
-Nothing of the v16/v17 harness was committed; this is the rewrite the v18
-plan (section 9.4) budgets. What the earlier sessions learned and this
-script encodes:
+THE CONTRACT, and it is the first thing to read: this script must never take
+the operator's input again. Someone is using this machine. Nothing here may
+move the cursor, synthesise a key or a click, or take the foreground — no
+SetCursorPos, no mouse_event, no keybd_event, no SendInput, no
+SetForegroundWindow, no ShowWindow. The earlier version did all of those,
+and every run stole the machine from whoever was sitting at it: their
+pointer was dragged into a game window, their clicks landed in it, and their
+own mouse motion turned our camera (winit delivers raw mouse motion to a
+window whether it is focused or not, which is why captured frames came back
+with a view jump in them).
 
-  * keybd_event / SendInput keyboard input reaches the winit window;
-  * SetForegroundWindow from a background script is refused by the Windows
-    foreground lock, so a window is focused by a synthetic CLICK at its
-    centre (which also captures the mouse, as the game asks for);
-  * a second client is told where to look with EMBER_CAM, the first is left
-    in first person, and both windows are captured in one pass so a
-    screenshot pair proves the input landed on the right side.
+Driving the game is now the CLIENT'S job. `EMBER_SCRIPT` carries a timeline
+of what to do and the client feeds it into its own input state each frame;
+while it is set the client reads no keyboard, no mouse, no mouse motion and
+no gamepad, and it never grabs the cursor. The grammar and the reasoning
+live in one place, `crates/arena/src/script.rs`; the short of it is that
+steps are separated by `;`, a step is a few words and an optional duration
+in seconds, and time is the client's own frame clock:
+
+    wait 1.5; walk w 2; sprint w 2; crouch w 2; aim 90; ads fire 0.12; wait 0.5
+
+This script's only jobs are: start the server on 7778 and the clients with
+their environment, place their windows apart, capture window rectangles, and
+stop everything.
+
+What earlier sessions paid for and this still encodes:
+
+  * the game window is found by enumerating a pid's visible top-level
+    windows and taking the one whose title starts with "ember";
+  * NEVER ShowWindow(SW_SHOW) a winit window from outside — measured on
+    2026-09-03, it HIDES it (IsWindowVisible flips to false and stays);
+  * the two windows open at the same spot, so they are placed apart or a
+    capture holds the wrong client;
+  * a shot is proved from the client's own `status=` lines (the ammo count),
+    not from the picture;
+  * a second client is told where to look with EMBER_CAM and both windows
+    are captured in one pass, so a pair proves which side the action was on.
+
+The capture reads the screen rectangle of each window, so the windows are
+raised to topmost with SWP_NOACTIVATE — raised, never activated: that takes
+screen space, which is visible and reversible, and never takes focus or
+input. Anything the operator drags over them will land in the picture, so
+give them a clear corner (-X, -Y, -Gap) or a second monitor.
 
 Usage (from the repo root, after `cargo build -p arena -p arena-server --bins`; -Profile release for release binaries):
 
     powershell -ExecutionPolicy Bypass -File tools/v18/capture.ps1 -Out tools/v18 -Prefix smoke `
-        -Steps @(@{name='idle';wait=1.5}, @{name='melee';key='E';wait=0.25}, @{name='shot';mouse=300;wait=0.05})
+        -ScriptA 'wait 1.5; melee; wait 0.25; fire 0.05; wait 0.5' `
+        -Shots @(@{name='idle'; at=1.4}, @{name='melee'; at=1.9}, @{name='shot'; at=2.3})
 
-Each step focuses client A, optionally presses a key (virtual-key name from
-[System.Windows.Forms.Keys]) or holds the left mouse button for N ms, waits,
-and captures every client window to <Out>/<Prefix>-<name>-<client>.png.
-An `rmb` step holds the RIGHT button (aim down the sights) across the wait
-and the capture, for at least N ms, so the scope is on screen when the
-picture is taken; `mouse` inside the same step fires while it is held.
+-ScriptA is client A's timeline; -Shots are the moments to photograph, in
+seconds from the moment every client logged "EMBER_SCRIPT starts" (its first
+scripted frame — NOT when its window appeared, which is several seconds
+earlier), each written to <Out>/<Prefix>-<name>-<client>.png (-Out is
+relative to the repo root, or absolute). -ScriptB is client B's, and
+defaults to a long `wait` so the observer is hands-off too — an unscripted
+client would still ask for the cursor if anything clicked it.
+
 -Map picks the lobby's map (v18 servers), -Mode the lobby's mode (v19
-servers: ffa, tdm or hill), -Cam pins the observer camera,
--Weapon sets EMBER_WEAPON on client A (a native debug override of the drawn
-weapon, when the client supports it). -KeepRunning leaves everything up.
+servers: ffa, tdm or hill), -Cam pins client B's observer camera, -Weapon
+sets EMBER_WEAPON on both (a native debug override of the DRAWN weapon).
+-KeepRunning leaves everything up; -StopOnly just tears down.
+
+(-Steps is gone. It described synthetic key presses and mouse buttons, which
+is exactly what may no longer happen here; it is replaced by -ScriptA plus
+-Shots.)
 #>
 param(
     [int]$Port = 7778,
@@ -42,7 +81,12 @@ param(
     [int]$Clients = 2,
     [string]$Out = "tools/v18",
     [string]$Prefix = "cap",
-    [object[]]$Steps = @(@{name = 'idle'; wait = 1.5 }),
+    [string]$ScriptA = "wait 3",
+    [string]$ScriptB = "wait 3600",
+    [object[]]$Shots = @(@{name = 'idle'; at = 1.5 }),
+    [int]$X = 0,
+    [int]$Y = 40,
+    [int]$Gap = 860,
     [string]$Profile = "debug",
     [switch]$KeepRunning,
     [switch]$StopOnly
@@ -55,28 +99,31 @@ $server = Join-Path $repo "target\$Profile\arena-server.exe"
 $client = Join-Path $repo "target\$Profile\arena-app.exe"
 $runDir = Join-Path $env:TEMP "ember-v18-capture"
 New-Item -ItemType Directory -Force $runDir | Out-Null
-New-Item -ItemType Directory -Force (Join-Path $repo $Out) | Out-Null
+# An absolute -Out is taken as it stands, so a run can write outside the repo.
+$outDir = if ([System.IO.Path]::IsPathRooted($Out)) { $Out } else { Join-Path $repo $Out }
+New-Item -ItemType Directory -Force $outDir | Out-Null
 
 Add-Type -AssemblyName System.Drawing
-Add-Type -AssemblyName System.Windows.Forms
+# Only what a hands-off harness needs: measure a window, place it, read the
+# screen. Nothing in here can produce an input event, and nothing may be
+# added that can.
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
 public static class Win {
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
-    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
-    [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, uint data, UIntPtr extra);
-    [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
-    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
-    [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr h, int x, int y, int w, int ht, bool repaint);
+    [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
     public delegate bool EnumProc(IntPtr h, IntPtr l);
     [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, System.Text.StringBuilder s, int n);
-    public const uint LEFTDOWN = 0x0002, LEFTUP = 0x0004, RIGHTDOWN = 0x0008, RIGHTUP = 0x0010, KEYUP = 0x0002;
+    public static readonly IntPtr TOPMOST = new IntPtr(-1);
+    /// Raise and place without ever activating: SWP_NOACTIVATE only. No
+    /// SWP_SHOWWINDOW - it is ShowWindow by another name, and ShowWindow
+    /// hides a winit window.
+    public const uint NOACTIVATE = 0x0010;
     /// The visible top-level window of a process whose title starts with "ember", or zero.
     public static IntPtr GameWindow(uint pid) {
         IntPtr found = IntPtr.Zero;
@@ -139,19 +186,19 @@ function Start-Client([string]$handle, [string]$action, [hashtable]$envExtra) {
     return $p
 }
 Remove-Item (Join-Path $runDir "*.log") -ErrorAction SilentlyContinue
-$envA = @{}
+# EMBER_SCRIPT is what makes a client hands-off, so BOTH get one.
+$envA = @{ EMBER_SCRIPT = $ScriptA }
 if ($Weapon -gt 0) { $envA["EMBER_WEAPON"] = "$Weapon" }
 $a = Start-Client "alpha" "create" $envA
 Start-Sleep -Seconds 2
 $b = $null
 if ($Clients -ge 2) {
     # The observer draws remote players with the same override, or its third-person capture would show the real (sidearm) gun.
-    $envB = @{}
+    $envB = @{ EMBER_SCRIPT = $ScriptB }
     if ($Weapon -gt 0) { $envB["EMBER_WEAPON"] = "$Weapon" }
     if ($Cam) { $envB["EMBER_CAM"] = $Cam }
     $b = Start-Client "bravo" "join" $envB
 }
-Start-Sleep -Seconds 3
 
 function Get-Rect([System.Diagnostics.Process]$p) {
     $h = [Win]::GameWindow([uint32]$p.Id)
@@ -160,25 +207,12 @@ function Get-Rect([System.Diagnostics.Process]$p) {
     [void][Win]::GetWindowRect($h, [ref]$r)
     return @{ h = $h; l = $r.L; t = $r.T; w = ($r.R - $r.L); ht = ($r.B - $r.T) }
 }
-# The two windows open at the same spot; side by side, a click lands on the one it is aimed at and a capture holds one client only.
+# Wait for the window, then place it and raise it WITHOUT activating it.
 function Place-Client([System.Diagnostics.Process]$p, [int]$x) {
-    $deadline = (Get-Date).AddSeconds(10)
+    $deadline = (Get-Date).AddSeconds(15)
     while ((Get-Date) -lt $deadline -and [Win]::GameWindow([uint32]$p.Id) -eq [IntPtr]::Zero) { Start-Sleep -Milliseconds 100 }
     $r = Get-Rect $p
-    [void][Win]::MoveWindow($r.h, $x, 40, $r.w, $r.ht, $true)
-}
-Place-Client $a 0
-if ($b) { Place-Client $b 860 }
-Start-Sleep -Milliseconds 400
-# A synthetic click at the window's centre focuses it and captures the mouse. Never ShowWindow(SW_SHOW) a winit window from outside: measured on 2026-09-03, it HIDES the window (IsWindowVisible flips to false and stays there).
-function Focus-Client([System.Diagnostics.Process]$p) {
-    $r = Get-Rect $p
-    [void][Win]::SetCursorPos($r.l + [int]($r.w / 2), $r.t + [int]($r.ht / 2))
-    [Win]::mouse_event([Win]::LEFTDOWN, 0, 0, 0, [UIntPtr]::Zero)
-    Start-Sleep -Milliseconds 60
-    [Win]::mouse_event([Win]::LEFTUP, 0, 0, 0, [UIntPtr]::Zero)
-    Start-Sleep -Milliseconds 250
-    return ([Win]::GetForegroundWindow() -eq $r.h)
+    [void][Win]::SetWindowPos($r.h, [Win]::TOPMOST, $x, $Y, $r.w, $r.ht, [Win]::NOACTIVATE)
 }
 function Capture-Client([System.Diagnostics.Process]$p, [string]$path) {
     $r = Get-Rect $p
@@ -188,66 +222,60 @@ function Capture-Client([System.Diagnostics.Process]$p, [string]$path) {
     $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
     $g.Dispose(); $bmp.Dispose()
 }
-function Press-Key([string]$name, [int]$holdMs) {
-    $vk = [byte][int][System.Windows.Forms.Keys]::$name
-    [Win]::keybd_event($vk, 0, 0, [UIntPtr]::Zero)
-    Start-Sleep -Milliseconds $holdMs
-    [Win]::keybd_event($vk, 0, [Win]::KEYUP, [UIntPtr]::Zero)
+
+Place-Client $a $X
+if ($b) { Place-Client $b ($X + $Gap) }
+# A window appears BEFORE the GPU context is built, so the window is not the
+# starting gun: the client logs "EMBER_SCRIPT starts" on the frame its first
+# step runs, and the shot clock starts once every client has said it. An
+# earlier version timed from the window instead and photographed three
+# identical frames of a client that had not begun.
+function Wait-Script([string]$handle, [int]$seconds) {
+    $log = Join-Path $runDir "$handle.log"
+    $deadline = (Get-Date).AddSeconds($seconds)
+    while ((Get-Date) -lt $deadline) {
+        if ((Test-Path $log) -and (Select-String -Path $log -Pattern "EMBER_SCRIPT starts" -Quiet)) { return $true }
+        Start-Sleep -Milliseconds 50
+    }
+    Write-Warning "$handle never logged 'EMBER_SCRIPT starts' - the shot times will not line up"
+    return $false
+}
+# The clock is ALPHA's, because alpha is the client the script drives. B
+# comes up two seconds later and loads the same assets, so head a script
+# with a `wait` long enough for it, or B's first picture is of a client that
+# is not drawing yet; how much of the clock B cost is reported.
+[void](Wait-Script "alpha" 60)
+$clock = [Diagnostics.Stopwatch]::StartNew()
+if ($b) {
+    [void](Wait-Script "bravo" 30)
+    $late = $clock.Elapsed.TotalSeconds
+    if ($late -gt 0.1) { Write-Warning ("bravo started {0:n2}s after alpha's script did; every shot time is that much late" -f $late) }
 }
 
-# 3. The steps.
-$focused = Focus-Client $a
-Write-Host ("client A focused: {0}" -f $focused)
-foreach ($s in $Steps) {
-    $name = $s.name
-    # `key` with `hold` holds one key; `tap` at `tapAt` ms presses a second key (Space) while the first is held, for a running jump.
-    if ($s.ContainsKey('key')) {
-        $hold = $(if ($s.ContainsKey('hold')) { $s.hold } else { 80 })
-        if ($s.ContainsKey('tap')) {
-            $vk = [byte][int][System.Windows.Forms.Keys]::($s.key)
-            [Win]::keybd_event($vk, 0, 0, [UIntPtr]::Zero)
-            Start-Sleep -Milliseconds $s.tapAt
-            Press-Key $s.tap 60
-            Start-Sleep -Milliseconds ([Math]::Max(0, $hold - $s.tapAt - 60))
-            [Win]::keybd_event($vk, 0, [Win]::KEYUP, [UIntPtr]::Zero)
-        } else {
-            Press-Key $s.key $hold
-        }
-    }
-    # `rmb` holds the right button from here past the capture: the game reads it as ADS, and the eased zoom needs the wait to settle before the picture.
-    $rmbHeld = $null
-    if ($s.ContainsKey('rmb')) {
-        [Win]::mouse_event([Win]::RIGHTDOWN, 0, 0, 0, [UIntPtr]::Zero)
-        $rmbHeld = [Diagnostics.Stopwatch]::StartNew()
-    }
-    if ($s.ContainsKey('mouse')) {
-        [Win]::mouse_event([Win]::LEFTDOWN, 0, 0, 0, [UIntPtr]::Zero)
-        Start-Sleep -Milliseconds $s.mouse
-        [Win]::mouse_event([Win]::LEFTUP, 0, 0, 0, [UIntPtr]::Zero)
-    }
-    if ($s.ContainsKey('wait')) { Start-Sleep -Milliseconds ([int](1000 * $s.wait)) }
-    # A movement step (nocap) only drives the player; nothing is captured.
-    if (-not $s.ContainsKey('nocap')) {
-        Capture-Client $a (Join-Path $repo (Join-Path $Out "$Prefix-$name-A.png"))
-        if ($b) { Capture-Client $b (Join-Path $repo (Join-Path $Out "$Prefix-$name-B.png")) }
-    }
-    if ($rmbHeld) {
-        $left = [int]$s.rmb - [int]$rmbHeld.ElapsedMilliseconds
-        if ($left -gt 0) { Start-Sleep -Milliseconds $left }
-        [Win]::mouse_event([Win]::RIGHTUP, 0, 0, 0, [UIntPtr]::Zero)
-    }
-    if ($s.ContainsKey('nocap')) { continue }
-    Write-Host ("captured {0} at {1:n1}s" -f $name, $sw.Elapsed.TotalSeconds)
+# 3. The photographs, at their moments.
+foreach ($s in ($Shots | Sort-Object { [double]$_.at })) {
+    $left = [int](1000 * [double]$s.at) - [int]$clock.ElapsedMilliseconds
+    if ($left -gt 0) { Start-Sleep -Milliseconds $left }
+    Capture-Client $a (Join-Path $outDir "$Prefix-$($s.name)-A.png")
+    if ($b) { Capture-Client $b (Join-Path $outDir "$Prefix-$($s.name)-B.png") }
+    Write-Host ("captured {0} at {1:n2}s of script ({2:n1}s wall)" -f $s.name, $clock.Elapsed.TotalSeconds, $sw.Elapsed.TotalSeconds)
 }
 
-# 4. Evidence from the logs: the status lines carry the ammo count.
+# 4. Evidence from the logs: that each client took its script at all (a
+#    client that did not is a client that would read the operator's device),
+#    and the status lines, which carry the ammo count and so prove a shot.
 Start-Sleep -Milliseconds 500
 foreach ($h in @("alpha", "bravo")) {
     $log = Join-Path $runDir "$h.log"
-    if (Test-Path $log) {
-        $lines = Get-Content $log | Select-String -Pattern "status=" | Select-Object -Last 3
-        Write-Host "--- $h last status lines:"; $lines | ForEach-Object { Write-Host ("    " + $_.Line.Substring([Math]::Max(0, $_.Line.IndexOf('status=')))) }
-    }
+    if (-not (Test-Path $log)) { continue }
+    $lines = Get-Content $log
+    $drives = $lines | Select-String -Pattern "EMBER_SCRIPT drives this client" | Select-Object -Last 1
+    if ($drives) { Write-Host "--- $h is script-driven (hands-off)" }
+    else { Write-Warning "$h never reported EMBER_SCRIPT: it is reading the DEVICE. Fix that before the next run." }
+    $spent = $lines | Select-String -Pattern "EMBER_SCRIPT is spent" | Select-Object -Last 1
+    if ($spent) { Write-Host "    script finished" }
+    $status = $lines | Select-String -Pattern "status=" | Select-Object -Last 3
+    $status | ForEach-Object { Write-Host ("    " + $_.Line.Substring([Math]::Max(0, $_.Line.IndexOf('status=')))) }
 }
 if (-not $KeepRunning) { Stop-All }
 Write-Host ("done in {0:n1}s; logs in {1}" -f $sw.Elapsed.TotalSeconds, $runDir)

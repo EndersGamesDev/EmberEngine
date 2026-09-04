@@ -652,6 +652,7 @@ pub fn engine_config() -> EngineConfig {
     EngineConfig {
         title: "ember — editor".to_string(),
         capture_mouse: false,
+        activate: true,
         meshes: Vec::new(),
     }
 }

@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 use arena_core::proto::color_for;
 use arena_core::shooter::{
     Cover, HILL_CONTESTED, HILL_FREE, Hill, Projectile, SHOT_COVER, SHOT_FLOOR, SHOT_WALL, hash64,
-    weapon_stats,
+    stance_speed, weapon_stats,
 };
 use ember_engine::Rumble;
 use ember_engine::glam::{Quat, Vec2, Vec3};
@@ -1468,11 +1468,551 @@ pub fn traces(weapon: u8) -> bool {
     weapon_stats(weapon).kind == Projectile::Bullet
 }
 
+// ---- v20: footsteps ----
+
+/// The gait a body is heard in. Crouch is not a gait: a crouched body is
+/// silent whatever its speed, which is the whole point of crouching.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Gait {
+    Walk,
+    Run,
+}
+
+/// Where in the walk cycle the left foot lands.
+///
+/// `rig::walk_pose` swings the left leg by `sin(phase)` and the right by
+/// `sin(phase + PI)`, so the left leg reaches its forward extreme - the
+/// heel strike - at `phase = PI/2` and the right at `3PI/2`. Two plants to
+/// a cycle, one stride. Nothing here may drift from that constant without
+/// the steps sliding off the boots.
+const PLANT_OFFSET: f32 = std::f32::consts::FRAC_PI_2;
+
+/// The phase between one plant and the next: half a cycle, one foot.
+const PLANT_SPACING: f32 = std::f32::consts::PI;
+
+/// How many feet a body has put down by this phase, which is also its step
+/// counter and so what picks the variant. `puppet::advance_anim` only ever
+/// adds to a phase, so this only ever rises.
+#[must_use]
+pub fn plant_index(phase: f32) -> i64 {
+    // A phase advances 6 radians per metre walked; a match cannot walk
+    // anywhere near 2^63 of them, and a NaN phase reports no plants.
+    #[allow(clippy::cast_possible_truncation)]
+    let k = ((phase - PLANT_OFFSET) / PLANT_SPACING).floor() as i64;
+    k + 1
+}
+
+/// How many feet landed while the phase went from `prev` to `now`.
+#[must_use]
+pub fn plants_crossed(prev: f32, now: f32) -> u32 {
+    u32::try_from((plant_index(now) - plant_index(prev)).max(0)).unwrap_or(u32::MAX)
+}
+
+/// Under this share of the walking stance speed a body is standing about,
+/// not moving. It sits below the crouching speed (a crouch-walk is moving,
+/// it is simply silent) and above the jitter a lerped remote position
+/// leaves in a one-frame difference.
+const STEP_FLOOR_SHARE: f32 = 0.25;
+
+/// Over this multiple of the sprinting stance speed a body did not run,
+/// it was moved: a respawn, or a reconciliation snapping a remote across
+/// the yard. Nothing is heard, rather than one very loud sprint step.
+const TELEPORT_SHARE: f32 = 1.5;
+
+/// The gait a measured horizontal speed reads as, `None` for a body that
+/// is barely moving or was teleported.
+///
+/// The boundary between the two gaits is the midpoint of `arena_core`'s own
+/// walking and sprinting stance speeds, so it moves when they do; it is
+/// never a guess about how fast a runner looks. There is no sprint flag on
+/// the wire, and this is the reason none is needed.
+#[must_use]
+pub fn gait(speed: f32) -> Option<Gait> {
+    let walk = stance_speed(false, false, false);
+    let run = stance_speed(true, false, false);
+    if speed.is_nan() || speed < walk * STEP_FLOOR_SHARE || speed > run * TELEPORT_SHARE {
+        return None;
+    }
+    if speed >= f32::midpoint(walk, run) {
+        Some(Gait::Run)
+    } else {
+        Some(Gait::Walk)
+    }
+}
+
+/// The shortest gap between two steps of a walking body, seconds.
+///
+/// The legs are not a metronome: `puppet::advance_anim` advances the walk
+/// phase by 6 radians per metre and a plant falls every PI of them, so at
+/// this arena's 9 m/s walk the animation plants about 17 times a second and
+/// at a 14.4 m/s sprint about 27. Played straight that is a rattle, not a
+/// pair of boots (measured on a scripted client: 7 plants in 0.35 s). The
+/// speeds are the game's and are not up for negotiation here, so the ear
+/// gets a floor instead: a step sounds only if this body has been quiet for
+/// at least this long, and it still lands ON a plant, so the sound is on a
+/// foot that is going down. 0.34 s is about three steps a second, a brisk
+/// walk.
+pub const WALK_GAP: f32 = 0.34;
+
+/// The same for a sprint: about four steps a second, and a fifth quicker
+/// than the walk so a runner is heard to be running before the cue itself
+/// is recognised.
+pub const RUN_GAP: f32 = 0.26;
+
+/// The floor for a gait.
+#[must_use]
+pub const fn step_gap(g: Gait) -> f32 {
+    match g {
+        Gait::Walk => WALK_GAP,
+        Gait::Run => RUN_GAP,
+    }
+}
+
+/// A stranger's walking step, at the ear, before distance. Above the
+/// casing's tink (0.18) and well under an impact (0.25 to 0.35): a boot
+/// next to you is information, a boot is not a bullet.
+pub const STEP_WALK_VOLUME: f32 = 0.30;
+
+/// A stranger's sprinting step: half again as loud as their walk, on top
+/// of being a heavier cue.
+pub const STEP_RUN_VOLUME: f32 = 0.50;
+
+/// My own steps, as a share of a stranger's at the same distance.
+///
+/// They are at my own feet, so physically they would be the loudest thing
+/// in the mix - and they are also the one sound in the game that tells me
+/// nothing I do not already know, played twice a stride for as long as I
+/// am moving. At two fifths my own walk lands on the hitmarker tick's 0.12
+/// and my own sprint on the casing's 0.18: present, and never loud enough
+/// to mask the stranger it is my job to hear.
+pub const OWN_STEP_SHARE: f32 = 0.4;
+
+/// How far a footstep carries. A rifle is heard across the map (its volume
+/// only floors out at 40 m); a boot on cobbles is not, and a step audible
+/// from across the yard would turn eight players into weather. Eighteen
+/// metres is just inside the pop's own earshot (20 m), the other cue that
+/// means "someone is near me right now".
+pub const STEP_EARSHOT: f32 = 18.0;
+
+/// How many footsteps one frame may start, before the frame's own
+/// `BUDGET`. The walk cycle advances with distance, so a lobby of eight
+/// sprinters can put several boots down in one frame; this keeps them from
+/// taking the whole budget, and `priority` keeps the survivors behind
+/// everything that matters. Under `BUDGET`, deliberately: a frame's worth
+/// of footsteps must never be able to drop a gunshot on its own.
+pub const STEP_CAP: usize = 3;
+
+/// A body is in the air when its vertical speed is not zero: `step_vertical`
+/// zeroes `vy` the moment the feet are supported and the wire carries that
+/// value, so this needs no new field and no guess about ground height.
+const AIRBORNE_VY: f32 = 0.05;
+
+/// A footstep's volume at `dist` metres, `None` beyond earshot. My own is
+/// a flat share of a stranger's: my feet do not get further from my ears.
+#[must_use]
+pub fn step_volume(g: Gait, dist: f32, own: bool) -> Option<f32> {
+    let base = match g {
+        Gait::Walk => STEP_WALK_VOLUME,
+        Gait::Run => STEP_RUN_VOLUME,
+    };
+    if own {
+        return Some(base * OWN_STEP_SHARE);
+    }
+    // A NaN distance is out of earshot rather than at the ear.
+    if dist.is_nan() || dist >= STEP_EARSHOT {
+        return None;
+    }
+    let k = 1.0 - dist.max(0.0) / STEP_EARSHOT;
+    Some(base * k * k)
+}
+
+/// How many boots each gait has. Three is enough that a run does not
+/// tick like a clock and few enough to keep the kit small; the cue
+/// table in `sound` has exactly this many per gait.
+pub const STEP_VARIANTS: u8 = 3;
+
+/// Which variant a body's step uses: the sim's own hash finaliser over the
+/// player and the step's index. No state is carried between frames and
+/// nothing is drawn from a shared generator, so two clients watching one
+/// runner pick the same boots and a hitch cannot shift the pattern.
+#[must_use]
+pub fn step_variant(who: u8, index: i64) -> u8 {
+    let h = hash64(
+        index
+            .unsigned_abs()
+            .wrapping_mul(0x100)
+            .wrapping_add(u64::from(who)),
+    );
+    u8::try_from(h % u64::from(STEP_VARIANTS)).unwrap_or(0)
+}
+
+/// The cue one body's step plays.
+#[must_use]
+pub fn step_sfx(g: Gait, who: u8, index: i64) -> Sfx {
+    Sfx::step(g == Gait::Run, step_variant(who, index))
+}
+
+/// Everything known about one body at the instant a foot might land.
+///
+/// Nothing here is new on the wire: `PState` carries the position the speed
+/// is measured from, `vy`, `crouch` and `alive`, and the phase is the one
+/// the body's own legs are already posed from.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Stepper {
+    pub who: u8,
+    pub alive: bool,
+    pub crouch: bool,
+    /// Vertical speed, from the state or from my own prediction.
+    pub vy: f32,
+    /// Measured horizontal speed in m/s: this frame's displacement over
+    /// `dt`, never an intended speed and never a wire field.
+    pub speed: f32,
+    /// The walk phase before and after this frame advanced it.
+    pub prev_phase: f32,
+    pub phase: f32,
+    /// Seconds since this body last sounded a step, `f32::INFINITY` if it
+    /// never has. The cadence floor below reads it.
+    pub since_last: f32,
+}
+
+/// Whether a cue is a footstep at all, and whether it is a walking one.
+/// The tests read a frame's played cues through these rather than listing
+/// six variants at every call site; nothing in the game asks, so they are
+/// built only for the test profile.
+#[cfg(test)]
+#[must_use]
+pub fn is_step(s: Sfx) -> bool {
+    (0..STEP_VARIANTS).any(|v| s == Sfx::step(false, v) || s == Sfx::step(true, v))
+}
+
+#[cfg(test)]
+#[must_use]
+pub fn is_walk_step(s: Sfx) -> bool {
+    (0..STEP_VARIANTS).any(|v| s == Sfx::step(false, v))
+}
+
+/// The cue and volume a body's frame plays, if any.
+///
+/// `None` for a crouched body at any speed, a dead one, one off the ground,
+/// one that is barely moving or was teleported, one out of earshot, and for
+/// any frame in which no foot reached the floor. A frame that crossed
+/// several plants at once was a hitch, and plays one step rather than a
+/// burst.
+#[must_use]
+pub fn footstep(b: &Stepper, dist: f32, own: bool) -> Option<(Sfx, f32)> {
+    if !b.alive || b.crouch || b.vy.abs() > AIRBORNE_VY {
+        return None;
+    }
+    if plants_crossed(b.prev_phase, b.phase) == 0 {
+        return None;
+    }
+    let g = gait(b.speed)?;
+    if b.since_last < step_gap(g) {
+        return None;
+    }
+    let vol = step_volume(g, dist, own)?;
+    Some((step_sfx(g, b.who, plant_index(b.phase) - 1), vol))
+}
+
 #[cfg(test)]
 mod feel_tests {
     use super::*;
     use crate::sound::{BUDGET, prioritize};
     use arena_core::shooter::{SHOT_BODY, SHOT_EXPIRED, SHOT_SHIELD, WEAPON_COUNT};
+
+    /// A body standing still, alive, on the ground.
+    fn body() -> Stepper {
+        Stepper {
+            who: 3,
+            alive: true,
+            crouch: false,
+            vy: 0.0,
+            speed: 0.0,
+            since_last: f32::INFINITY,
+            prev_phase: 0.0,
+            phase: 0.0,
+        }
+    }
+
+    /// Walk `b` at `speed` for `secs` at 60 Hz, advancing its phase through
+    /// the SAME `puppet::advance_anim` that poses a remote body's legs, and
+    /// collect everything it plays. Returns the cues and the phase it
+    /// finished on.
+    fn walk_for(
+        mut b: Stepper,
+        speed: f32,
+        secs: f32,
+        dist: f32,
+        own: bool,
+    ) -> (Vec<(Sfx, f32)>, f32) {
+        let dt = 1.0 / 60.0;
+        let mut slot = (0.0f32, b.phase, 0.0f32);
+        let mut out = Vec::new();
+        b.speed = speed;
+        // A whole number of 60 Hz frames.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let frames = (secs / dt).round().max(0.0) as u32;
+        for _ in 0..frames {
+            b.prev_phase = slot.1;
+            ember_engine::puppet::advance_anim(&mut slot, Vec2::new(speed, 0.0), dt);
+            b.phase = slot.1;
+            if let Some(c) = footstep(&b, dist, own) {
+                out.push(c);
+            }
+        }
+        (out, slot.1)
+    }
+
+    fn walk_speed() -> f32 {
+        stance_speed(false, false, false)
+    }
+
+    fn run_speed() -> f32 {
+        stance_speed(true, false, false)
+    }
+
+    /// Crouching is silence, at every speed a body can reach - and the same
+    /// body standing is heard at the same speed, so it is the crouch that
+    /// silences it and not the speed.
+    #[test]
+    fn a_crouching_body_is_never_heard() {
+        for speed in [walk_speed() * 0.5, walk_speed(), run_speed()] {
+            let mut crouched = body();
+            crouched.crouch = true;
+            let (cues, _) = walk_for(crouched, speed, 2.0, 1.0, false);
+            assert!(
+                cues.is_empty(),
+                "heard {} crouched cues at {speed}",
+                cues.len()
+            );
+            let (heard, _) = walk_for(body(), speed, 2.0, 1.0, false);
+            assert!(!heard.is_empty(), "nothing at {speed} standing");
+            // My own crouch is silent too: the point of a crouch is that
+            // the OTHER player cannot hear me, and both peers run this.
+            let (mine, _) = walk_for(crouched, speed, 2.0, 0.0, true);
+            assert!(mine.is_empty(), "heard my own crouch at {speed}");
+        }
+    }
+
+    /// A step lands on a foot plant: the left at PI/2, the right at 3PI/2,
+    /// two to a stride, and one cue for each.
+    #[test]
+    fn a_stride_is_two_steps_one_for_each_foot() {
+        use std::f32::consts::{FRAC_PI_2, PI, TAU};
+        assert_eq!(plant_index(0.0), 0);
+        assert_eq!(plant_index(FRAC_PI_2 - 1e-4), 0);
+        assert_eq!(plant_index(FRAC_PI_2 + 1e-4), 1);
+        assert_eq!(plant_index(PI), 1);
+        assert_eq!(plant_index(3.0 * FRAC_PI_2 + 1e-4), 2);
+        assert_eq!(plants_crossed(0.0, TAU), 2, "two feet to a stride");
+        assert_eq!(plants_crossed(0.0, 10.0 * TAU), 20);
+        assert_eq!(plants_crossed(TAU, 0.0), 0, "a phase never runs back");
+        assert_eq!(plants_crossed(1.0, 1.0), 0);
+        // And through the animation clock: exactly one cue per plant the
+        // walk crossed, no more and no fewer.
+        let (cues, phase) = walk_for(body(), walk_speed(), 1.0, 1.0, false);
+        assert_eq!(
+            u32::try_from(cues.len()).unwrap(),
+            plants_crossed(0.0, phase),
+            "{} cues over {phase} radians",
+            cues.len()
+        );
+        assert!(
+            cues.len() > 4,
+            "a second of walking is more than four steps"
+        );
+    }
+
+    /// A sprint is a different cue at a higher rate, and it is louder.
+    #[test]
+    fn a_sprint_is_the_run_cue_faster_and_louder() {
+        let (walk, walk_phase) = walk_for(body(), walk_speed(), 1.0, 1.0, false);
+        let (run, run_phase) = walk_for(body(), run_speed(), 1.0, 1.0, false);
+        assert!(run_phase > walk_phase);
+        assert!(
+            run.len() > walk.len(),
+            "{} run steps against {} walk steps",
+            run.len(),
+            walk.len()
+        );
+        let walk_row = [Sfx::StepWalkA, Sfx::StepWalkB, Sfx::StepWalkC];
+        let run_row = [Sfx::StepRunA, Sfx::StepRunB, Sfx::StepRunC];
+        assert!(walk.iter().all(|(s, _)| walk_row.contains(s)), "{walk:?}");
+        assert!(run.iter().all(|(s, _)| run_row.contains(s)), "{run:?}");
+        assert!(run[0].1 > walk[0].1, "a sprint step is the louder one");
+        // The boundary is arena_core's, not a guess: the crouching speed
+        // reads as a walk, the sprinting speed as a run, and the midpoint
+        // of the two stances is where it turns over.
+        assert_eq!(gait(stance_speed(false, true, false)), Some(Gait::Walk));
+        assert_eq!(gait(walk_speed()), Some(Gait::Walk));
+        assert_eq!(gait(run_speed()), Some(Gait::Run));
+        let mid = f32::midpoint(walk_speed(), run_speed());
+        assert_eq!(gait(mid), Some(Gait::Run));
+        assert_eq!(gait(mid - 0.01), Some(Gait::Walk));
+        // A body that is standing about, and one that was teleported.
+        assert_eq!(gait(0.0), None);
+        assert_eq!(gait(walk_speed() * 0.2), None);
+        assert_eq!(gait(run_speed() * 2.0), None);
+        assert_eq!(gait(f32::NAN), None);
+        // A run does not sound like a machine: more than one variant comes
+        // out of it, and the variant is a pure function of who and when.
+        let mut kinds: Vec<Sfx> = run.iter().map(|(s, _)| *s).collect();
+        kinds.sort_by_key(|s| format!("{s:?}"));
+        kinds.dedup();
+        assert!(kinds.len() > 1, "one run, one variant: {kinds:?}");
+        assert_eq!(step_variant(7, 41), step_variant(7, 41));
+        let spread: std::collections::BTreeSet<u8> = (0..60).map(|i| step_variant(2, i)).collect();
+        assert_eq!(spread, [0, 1, 2].into_iter().collect());
+    }
+
+    /// Off the ground, or dead, and there is nothing to hear.
+    #[test]
+    fn a_body_in_the_air_or_on_its_back_makes_no_sound() {
+        for vy in [4.0, -6.0, 0.2, -0.2] {
+            let mut jumping = body();
+            jumping.vy = vy;
+            let (cues, _) = walk_for(jumping, run_speed(), 2.0, 1.0, false);
+            assert!(cues.is_empty(), "heard a body at vy {vy}");
+        }
+        let mut dead = body();
+        dead.alive = false;
+        let (buried, _) = walk_for(dead, run_speed(), 2.0, 1.0, false);
+        assert!(
+            buried.is_empty(),
+            "heard {} cues from a corpse",
+            buried.len()
+        );
+        // The grounded epsilon does not silence a body on a floor:
+        // `step_vertical` reports vy exactly zero there.
+        let (grounded, _) = walk_for(body(), run_speed(), 2.0, 1.0, false);
+        assert!(!grounded.is_empty(), "a body on the floor is silent");
+    }
+
+    /// Boots, not a rattle: the cadence floor holds however fast the legs
+    /// spin.
+    ///
+    /// `puppet::advance_anim` adds 6 radians of walk phase per metre and a
+    /// foot plants every PI of them, so this arena's 9 m/s walk plants
+    /// about 17 times a second and its 14.4 m/s sprint about 27. Played
+    /// plant for plant that is a machine gun, which is what a scripted
+    /// client recorded before this floor existed: 7 steps in 0.35 s. One
+    /// second of each gait is walked here through the same phase arithmetic
+    /// the animation uses, and what comes out is a step rate a boot could
+    /// make, with the sprint quicker than the walk.
+    #[test]
+    fn the_cadence_is_boots_and_not_the_leg_animation() {
+        let walk = stance_speed(false, false, false);
+        let run = stance_speed(true, false, false);
+        let dt = 1.0 / 120.0;
+        let sound = |speed: f32| {
+            let mut b = body();
+            b.speed = speed;
+            let mut phase = 0.0f32;
+            let mut last: Option<f32> = None;
+            let mut steps = 0;
+            let mut t = 0.0f32;
+            while t < 1.0 {
+                b.prev_phase = phase;
+                phase += speed * dt * 6.0;
+                b.phase = phase;
+                b.since_last = last.map_or(f32::INFINITY, |l: f32| t - l);
+                if footstep(&b, 1.0, false).is_some() {
+                    steps += 1;
+                    last = Some(t);
+                }
+                t += dt;
+            }
+            steps
+        };
+        let plants = plants_crossed(0.0, walk * 6.0);
+        assert!(plants > 15, "the legs really do plant that fast: {plants}");
+        let heard_walking = sound(walk);
+        let heard_running = sound(run);
+        assert!(
+            (2..=4).contains(&heard_walking),
+            "a walk is about three steps a second, not {heard_walking}"
+        );
+        assert!(
+            (3..=5).contains(&heard_running),
+            "a sprint is about four, not {heard_running}"
+        );
+        assert!(
+            heard_running > heard_walking,
+            "and a runner is heard to be running: {heard_running} against {heard_walking}"
+        );
+    }
+
+    /// A step falls off with distance and stops entirely at earshot.
+    #[test]
+    fn a_far_step_is_quieter_and_past_earshot_is_nothing() {
+        let (near, _) = walk_for(body(), run_speed(), 1.0, 1.0, false);
+        let (far, _) = walk_for(body(), run_speed(), 1.0, 12.0, false);
+        assert_eq!(near.len(), far.len(), "distance changes volume, not rate");
+        for (n, f) in near.iter().zip(&far) {
+            assert_eq!(n.0, f.0, "the same step is the same cue");
+            assert!(f.1 < n.1, "{} at 12 m is not under {} at 1 m", f.1, n.1);
+        }
+        for d in [STEP_EARSHOT, STEP_EARSHOT + 5.0, 100.0, f32::NAN] {
+            let (gone, _) = walk_for(body(), run_speed(), 1.0, d, false);
+            assert!(gone.is_empty(), "heard a step at {d} m");
+        }
+        assert_eq!(step_volume(Gait::Walk, STEP_EARSHOT, false), None);
+        assert!(step_volume(Gait::Walk, STEP_EARSHOT - 0.01, false).is_some());
+    }
+
+    /// My own steps are at my own ears: quieter than a stranger's would be
+    /// at the same distance, and they do not fall off.
+    #[test]
+    fn my_own_steps_are_the_quieter_own_ear_volume() {
+        for g in [Gait::Walk, Gait::Run] {
+            let mine = step_volume(g, 0.0, true).unwrap();
+            assert!(mine < step_volume(g, 0.0, false).unwrap());
+            // Quieter than a stranger anywhere inside the room I am in.
+            for d in 0..=6u8 {
+                let stranger = step_volume(g, f32::from(d), false).unwrap();
+                assert!(mine < stranger, "mine {mine} against {stranger} at {d} m");
+            }
+            // And unchanged by a distance that does not apply to me.
+            assert_eq!(step_volume(g, 100.0, true), Some(mine));
+        }
+        assert!(
+            step_volume(Gait::Run, 0.0, true).unwrap()
+                > step_volume(Gait::Walk, 0.0, true).unwrap()
+        );
+        let (mine, _) = walk_for(body(), run_speed(), 1.0, 0.0, true);
+        let (stranger, _) = walk_for(body(), run_speed(), 1.0, 0.0, false);
+        assert_eq!(mine.len(), stranger.len());
+        for (m, s) in mine.iter().zip(&stranger) {
+            assert_eq!(m.0, s.0);
+            assert!(m.1 < s.1, "my own step {} is not under {}", m.1, s.1);
+        }
+    }
+
+    /// A frame's worth of footsteps can never cost a player a gunshot: the
+    /// cap is under the budget, and the priority puts steps last anyway.
+    #[test]
+    fn footsteps_cannot_flood_one_frame() {
+        // A frame's footsteps can never fill the budget on their own.
+        const { assert!(STEP_CAP < BUDGET) }
+        let mut queue: Vec<Play> = Vec::new();
+        for i in 0..8u8 {
+            queue.push(Play::centre(step_sfx(Gait::Run, i, i64::from(i)), 0.5));
+        }
+        queue.push(Play::centre(Sfx::ShotAkMid, 0.4));
+        queue.push(Play::centre(Sfx::Blast, 0.9));
+        prioritize_plays(&mut queue);
+        let played: Vec<Sfx> = queue.iter().take(BUDGET).map(|p| p.sfx).collect();
+        assert_eq!(played[0], Sfx::Blast);
+        assert_eq!(played[1], Sfx::ShotAkMid);
+        // And the plain queue sorts the same way.
+        let mut plain: Vec<(Sfx, f32)> = vec![
+            (Sfx::StepRunA, 0.5),
+            (Sfx::Crack, 0.7),
+            (Sfx::StepWalkB, 0.3),
+        ];
+        prioritize(&mut plain);
+        assert_eq!(plain[0].0, Sfx::Crack);
+    }
 
     #[test]
     fn a_tracer_head_travels_at_the_weapons_speed() {

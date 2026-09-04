@@ -32,6 +32,8 @@ pub fn run_local() {
             // The board is clicked on the page and steered with the
             // keyboard; grabbing the pointer would only take it away.
             capture_mouse: false,
+            // A player opened this; it takes the foreground like any app.
+            activate: true,
             meshes,
         },
         hotseat::Hotseat::new(ids),
@@ -51,6 +53,8 @@ pub fn run_online(cfg: online_game::Config) -> Result<(), String> {
         EngineConfig {
             title: "ember: four kings (online)".to_string(),
             capture_mouse: false,
+            // A player opened this; it takes the foreground like any app.
+            activate: true,
             meshes,
         },
         game,
