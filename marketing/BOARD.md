@@ -7,7 +7,7 @@ How this board works: the repo is the medium (`docs/worker-protocol.md`). A sess
 | # | Task | Owner | State | Next concrete step |
 |---|---|---|---|---|
 | 1 | **Merge decision** — `marketing/launch-kit` (6 commits) is pushed but the org blocks PR creation for enderPeer, so it cannot land via PR from this account | Ender | **blocked on Ender** | one of: (a) open the PR from the web UI (one click on the branch), (b) tell barza to push the branch to `main` directly (main is unprotected; barza has admin push — an exception to the branch-only rule, recorded here), (c) grant enderPeer PR creation in the org settings and barza opens it |
-| 2 | Verify `engine.html` is live | barza | open | webfetch https://endersgamesdev.github.io/EmberEngine/engine.html and read the h1; it 404'd at 21:09 (CDN propagation after the gh-pages push 05ded8e) |
+| 2 | ~~Verify `engine.html` is live~~ | barza | done 21:1x | HTTP 200 at https://endersgamesdev.github.io/EmberEngine/engine.html after CDN propagation (the 21:09 404 was propagation, not a miss) |
 | 3 | Seed the GitHub wiki | barza | open | retry `git clone https://github.com/EndersGamesDev/EmberEngine.wiki.git` (enabled at 21:05, not materialized by 21:12); when it clones, push `marketing/wiki/github-wiki-home.md` as `Home.md` |
 | 4 | Paste the Show HN post | Ender | open | `marketing/posts/show-hn.md`, 09:00–11:00 US Eastern; the author account answers the first replies; pin the hub link |
 | 5 | Record a 20 s arena clip | Ender | open | one loot bonk + one headshot on the v20 page; needed for r/gamedev and the YouTube cold open |
@@ -36,3 +36,4 @@ How this board works: the repo is the medium (`docs/worker-protocol.md`). A sess
 
 - 2026-09-04 20:4x: board created by barza; phase 1 presence work done on branch `marketing/launch-kit` (pushed); the loop machinery installed (scheduled task `EmberEngineHeartbeat` hourly; the `heartbeat` workflow lands with the branch); release v20, description, topics, gh-pages engine page done.
 - 2026-09-04 21:13: session 1 closed. Top of board = the merge decision (task 1), which needs Ender.
+- 2026-09-04 21:1x: engine page verified live (HTTP 200); task 2 closed. The wiki repo is still not materialized; task 3 stays open.
