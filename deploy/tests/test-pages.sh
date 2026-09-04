@@ -31,13 +31,14 @@ ln -s "$PY" "$SHIMS/python3"
 ln -s "$PY" "$SHIMS/python"
 export PATH="$SHIMS:$PATH"
 
-mkdir -p "$REPO/deploy" "$REPO/web/games/arena/v18" "$REPO/web/games/arena/v0"
+mkdir -p "$REPO/deploy" "$REPO/web/games/arena/v19" "$REPO/web/games/arena/v0"
 mkdir -p "$REPO/web/games/fire/v2" "$REPO/web/games/kings/v1" "$REPO/web/games/what-is-this/v1"
 mkdir -p "$REPO/crates/arena-core/src" "$REPO/crates/fire-core/src" "$REPO/crates/kings-core/src"
 cp "$DEPLOY/deploy-pages.sh" "$DEPLOY/stamp-version.sh" "$DEPLOY/publish-host.sh" "$REPO/deploy/"
 cp "$DEPLOY/../web/games.json" "$REPO/web/games.json"
 printf 'hub\n' > "$REPO/web/index.html"
-printf 'arena v18\n' > "$REPO/web/games/arena/v18/index.html"
+printf '{}\n' > "$REPO/web/version.json"
+printf 'arena v19\n' > "$REPO/web/games/arena/v19/index.html"
 printf 'arena v0\n' > "$REPO/web/games/arena/v0/index.html"
 printf 'fire v2\n' > "$REPO/web/games/fire/v2/index.html"
 printf 'kings v1\n' > "$REPO/web/games/kings/v1/index.html"
@@ -78,7 +79,7 @@ done
 
 mkdir -p "$EXPECTED"
 cp -R "$SEED/games" "$EXPECTED/"
-for spec in "arena/v18 arena" "arena/v0 arena" "fire/v2 fire" "kings/v1 kings"; do
+for spec in "arena/v19 arena" "arena/v0 arena" "fire/v2 fire" "kings/v1 kings"; do
     set -- $spec
     live="$1"
     bundle="$2"
