@@ -44,6 +44,9 @@ Repo public, 1 star, 0 forks, 0 watchers, 2 issues, 0 releases, wiki off, descri
 - Still blocked: the wiki git repo 404s ~15 min after enabling; the seed is ready at `marketing/wiki/github-wiki-home.md`.
 - Not verified this session: the v22 pages deploy (in flight), the wiki, the issue comments in a browser (the API returned their URLs).
 
-## KPIs (2026-09-04 22:0x)
+- 22:2x Correction: codex had already completed the full v22 deployment (host and Pages) before this loop registered it — barza seq 54/55 (21:58/22:02 local): Pages commit 3dc4514, public version.json r1265/d85a40f. Verified 22:2x: `/games/arena/v22/` HTTP 200, `engine.html` HTTP 200, version.json `{"version":"r1265","commit":"d85a40f"}`. My own pages-deploy attempt from ember-host is aborted: the first launch hit `deploy-pages.sh`'s hardcoded relative target path against `CARGO_TARGET_DIR` (worked around with a git-ignored junction `ember-host\target → C:\Users\end\dev\ember\target`), the second launch hung on headless `start /LOW`. The one-off `ember-pages-deploy` task is deleted, and the host wrapper is restored to codex's durable version (their request, seq 54: keep it on `C:\Users\end\dev\ember-environment`, own target). `ember-host` remains a clean main worktree for this loop's commits.
+- 22:2x Release **v22** created: tag `v22` at d85a40f, title "v22 - skies and weather", notes from `docs/environment-weather.md` and the commit's verification evidence. https://github.com/EndersGamesDev/EmberEngine/releases/tag/v22
 
-1 star, 0 forks, 0 watchers, 2 issues (both with reactions), 1 release (v20; v22 pending), wiki enabled (unseeded), description set, engine page + hub live. Host and pages converge on d85a40f (v22) as this deploy finishes.
+## KPIs (2026-09-04 22:2x)
+
+1 star, 0 forks, 0 watchers, 2 issues (both with reactions), 2 releases (v20, v22), wiki enabled (unseeded), description set, engine page + hub live. Host and pages both at r1265/d85a40f (v22), protocol 17 — converged.
