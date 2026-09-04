@@ -39,11 +39,13 @@ The scene pass is deliberately small. Work with it, not against it.
 | **Mipmaps are built at upload** (full CPU box-filtered chain, trilinear sampler) | Distant textures no longer shimmer, and texture memory is 4/3 of the picture's own size. Bake at the size the picture needs up close; the chain handles distance. |
 | **One GPU texture per mesh id, cloned per primitive, never shared** | VRAM = parts x w x h x 4. Seven 2048² parts is ~112 MB for one prop. |
 | **`cull_mode: None`** | No backface culling. Interiors of open shapes render solid. |
-| **`BlendState::REPLACE`** | No additive or transparent anything. A muzzle flash can only be an opaque box. |
-| **One scene pass, one depth buffer, one camera, near/far `0.1`/`500`** | There is no separate viewmodel pass, so the gun clips into walls and anything within 0.1 of the eye is clipped. Expect it; it is not a regression you introduced. |
-| **`Instance`**: position, `Vec3` scale, colour, `rot: Quat`, mesh id | Scale applies **before** rotation. Normals use the same matrix, so non-uniform scale skews lighting. |
+| **Opaque meshes use `BlendState::REPLACE`; `Frame.particles` uses sorted alpha billboards** | Material texture alpha is not transparency. Smoke and rain use the separate particle channel, depth-tested without depth writes; there is no additive material mode. |
+| **One scene camera, near/far `0.1`/`500`; optional directional shadow pass** | There is no separate viewmodel pass, so the gun clips into walls and anything within 0.1 of the eye is clipped. First-person/HUD geometry must opt out of casting and receiving shadows with `without_shadow()`. |
+| **`Instance`**: position, `Vec3` scale, colour, `rot: Quat`, mesh id, shadow/wetness flags | Scale applies **before** rotation. Outdoor lighting uses inverse-scale normals. Wetness is opt-in sky/sun reflection, not PBR or scene-geometry reflection. |
 
 The device floor is WebGL2 plus `EXT_color_buffer_float`, nothing else: **`docs/minimum-requirements.md`**. A feature that needs more is a project decision recorded there first.
+
+Outdoor sun, shadows, moving clouds and alpha particles are shared engine features, enabled through `Frame.environment`; existing games keep their default lighting. Weather stays presentation-only. API, budgets and verification: **`docs/environment-weather.md`**.
 
 `include_bytes!` bakes assets into the wasm bundle and the deploy ships one bundle with no runtime fetch — every byte you add to an asset is a byte every web player downloads.
 

@@ -48,7 +48,7 @@ pub enum Prop {
     Floor,
     /// The far ground plane closing the void beyond the wall.
     Ground,
-    /// The sky cylinder.
+    /// Retired sky cylinder slot, retained so later mesh IDs stay stable.
     Sky,
     /// Generated: bronze equestrian statue.
     Statue,
@@ -166,9 +166,6 @@ const SKY_SEGMENTS: u32 = 48;
 pub const GROUND_SIZE: f32 = 200.0;
 pub const GROUND_Y: f32 = -0.05;
 pub const GROUND_DIM: f32 = 0.55;
-/// The sky is lit like everything else, so its picture is over-driven to
-/// read as bright sky rather than as a lit surface.
-pub const SKY_DRIVE: f32 = 1.6;
 /// Tiles across the arena floor (about one per 1.5 m over 50 m).
 const FLOOR_TILES: f32 = 32.0;
 /// Tiles across the far ground plane.
@@ -560,11 +557,18 @@ impl Props {
         };
         let scale = target / ms;
         let pos = center - rot * (b.center() * scale);
-        frame.instances.push(
-            Instance::new(pos, scale, color)
-                .with_rot(rot)
-                .with_mesh(self.mesh(p)),
-        );
+        let mut instance = Instance::new(pos, scale, color)
+            .with_rot(rot)
+            .with_mesh(self.mesh(p));
+        // Painted metal and dressed stone hold a sheen; rough wood,
+        // sandbags and loose rubble retain their diffuse surface.
+        if matches!(
+            p,
+            Prop::Container | Prop::TrenchWall | Prop::TunnelRoof | Prop::Plinth | Prop::CityWall
+        ) {
+            instance = instance.with_wetness();
+        }
+        frame.instances.push(instance);
     }
 
     /// Draw one cover box by kind. A raised box (`base > 0`) is drawn from
@@ -659,19 +663,18 @@ impl Props {
         );
     }
 
-    /// The sky cylinder and the far ground plane.
-    pub fn push_sky_and_ground(&self, frame: &mut Frame) {
-        frame.instances.push(
-            Instance::new(Vec3::ZERO, Vec3::ONE, Vec3::splat(SKY_DRIVE))
-                .with_mesh(self.mesh(Prop::Sky)),
-        );
+    /// The far ground closes the world beyond the wall. The renderer now
+    /// supplies sky, sun and clouds; the old cylinder would hide all three.
+    pub fn push_ground(&self, frame: &mut Frame) {
         frame.instances.push(
             Instance::new(
                 Vec3::new(0.0, GROUND_Y, 0.0),
                 Vec3::new(GROUND_SIZE, 1.0, GROUND_SIZE),
                 Vec3::splat(GROUND_DIM),
             )
-            .with_mesh(self.mesh(Prop::Ground)),
+            .with_mesh(self.mesh(Prop::Ground))
+            .with_wetness()
+            .without_shadow(),
         );
     }
 }
@@ -826,6 +829,33 @@ mod tests {
             base: 7,
             fits: measure(&meshes),
         }
+    }
+
+    #[test]
+    fn moving_sky_is_unobstructed_and_wet_materials_are_selected() {
+        let props = props();
+        let mut frame = Frame::default();
+        props.push_ground(&mut frame);
+        assert_eq!(frame.instances.len(), 1);
+        assert_eq!(frame.instances[0].mesh, props.mesh(Prop::Ground));
+        assert!(frame.instances[0].wettable);
+        assert!(!frame.instances[0].casts_shadow);
+        for (kind, wettable) in [
+            (Prop::Container, true),
+            (Prop::Crate, false),
+            (Prop::Sandbags, false),
+        ] {
+            props.push_fitted(&mut frame, kind, Vec3::ZERO, Vec3::ONE, Vec3::ONE);
+            let instance = frame.instances.last().unwrap();
+            assert!(instance.casts_shadow);
+            assert_eq!(instance.wettable, wettable);
+        }
+        assert!(
+            frame
+                .instances
+                .iter()
+                .all(|i| i.mesh != props.mesh(Prop::Sky))
+        );
     }
 
     /// A box longer in z than x is drawn turned, and still lands exactly on

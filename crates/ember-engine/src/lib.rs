@@ -11,6 +11,7 @@
 //! `renderer` owns the GPU; nothing above it touches wgpu directly.
 
 pub mod assets;
+pub mod environment;
 pub mod feedback;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod overlay;
@@ -25,6 +26,7 @@ mod input;
 pub use app::init_diagnostics;
 pub use app::{EngineConfig, run};
 pub use feedback::{Feedback, Rumble};
+pub use environment::{Environment, Particle, Weather};
 pub use input::{InputState, PadButton, PadState};
 pub use renderer::{Camera, Fog, Frame, Instance, MeshData, MeshVertex, TextureData};
 

@@ -835,11 +835,11 @@ impl Tracer {
     }
 }
 
-/// One short-lived opaque particle: a spark, a splinter, a puff of dust
+/// One short-lived particle: a spark, a splinter, a puff of dust
 /// or smoke. The frame owns the integration; this is the spawn.
 ///
-/// It was a cube of edge `size` and is now a ball of radius
-/// `size * PUFF_BALL` (`rounds::puff`): the same bulk with no corners.
+/// Solid fragments use a ball of radius `size * PUFF_BALL`
+/// (`rounds::puff`); drifting smoke uses an alpha billboard of the same diameter.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Puff {
     pub pos: Vec3,
@@ -864,8 +864,8 @@ pub const PUFF_BALL: f32 = 0.5;
 /// the share of its life still to run (1 at birth, 0 at death): the factor
 /// on its `size` and the factor on its colour. A falling particle (a
 /// spark, a splinter: `gravity` above zero) shrinks away and keeps its
-/// colour; a drifting one (smoke, dust) swells by 40% and dims to 40%,
-/// which is the only way an opaque pass can thin a puff out.
+/// colour; a drifting one (smoke, dust) swells by 40% and dims to 40%.
+/// Its billboard also fades in alpha in the game frame.
 ///
 /// The frame draws the ball at `size * factor * PUFF_BALL`; the plume's
 /// clearance test reads the same pair, so what the eye is promised and
