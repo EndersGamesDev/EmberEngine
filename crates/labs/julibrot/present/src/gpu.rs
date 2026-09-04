@@ -895,9 +895,8 @@ impl Presenter {
             FenceDecision::Pending => None,
             FenceDecision::Complete(measurement) => {
                 let readback_result = take_glitch_readback_result(pending);
-                let census = census_if_ready(readback_result, || {
-                    mapped_census(&self.gpu.glitch_readback)
-                });
+                let census =
+                    census_if_ready(readback_result, || mapped_census(&self.gpu.glitch_readback));
                 if pending.glitch_readback.is_some() {
                     self.gpu.glitch_readback.buffer.unmap();
                 }
@@ -2080,8 +2079,10 @@ fn census_bytes(bytes: &[u8], extent: [u32; 2], bytes_per_row: u32) -> SceneCens
             .as_chunks::<{ RGBA8_BYTES_PER_TEXEL as usize }>()
             .0;
         for (column, rgba) in texels.iter().enumerate() {
-            census.glitch_pixel_count = census.glitch_pixel_count.saturating_add(u32::from(rgba[0]));
-            let located = rgba[3] != 0 && (census.reference_sample.is_none() || rgba[1] > best_rank);
+            census.glitch_pixel_count =
+                census.glitch_pixel_count.saturating_add(u32::from(rgba[0]));
+            let located =
+                rgba[3] != 0 && (census.reference_sample.is_none() || rgba[1] > best_rank);
             if !located {
                 continue;
             }
@@ -2296,7 +2297,7 @@ mod tests {
             census.reference_sample,
             Some(2 * GLITCH_RECORDS_PER_TEXEL + 2)
         );
-        let empty = census_bytes(&vec![0_u8; 32], [2, 2], 16);
+        let empty = census_bytes(&[0_u8; 32], [2, 2], 16);
         assert_eq!(empty, SceneCensus::EMPTY);
     }
 

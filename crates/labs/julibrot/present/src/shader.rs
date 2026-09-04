@@ -354,9 +354,18 @@ mod tests {
     fn glitch_census_reads_each_active_status_once() {
         let source = glitch_count_shader(limits());
         assert!(source.contains("let start = group * 255u;"));
-        assert!(source.contains("index < active_records && load_escape(index).w == 1.0"));
+        assert!(source.contains("if (index >= active_records) { continue; }"));
+        assert!(source.contains("if (record.w == 1.0) { count += 1u; }"));
         assert!(source.contains("f32(count) / 255.0"));
         assert!(source.contains("if (scene.span.z != 0u)"));
+        // The rank ladder is the reference-choice policy: never escaped, then glitched, then the
+        // longest-lived escape, with the group's lowest offset kept on a tie.
+        assert!(source.contains("var rank = 255.0;"));
+        assert!(source.contains("rank = 254.0;"));
+        assert!(
+            source.contains("rank = floor(253.0 * clamp(ceil(record.x), 0.0, cap) / cap + 0.5);")
+        );
+        assert!(source.contains("if (located == 0.0 || rank > best_rank)"));
         assert_translates_to_webgl2(&source, naga::ShaderStage::Vertex, "glitch_count_vertex");
         assert_translates_to_webgl2(
             &source,

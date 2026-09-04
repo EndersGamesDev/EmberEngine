@@ -74,7 +74,7 @@ fn select_reference_candidate(
                 254
             } else if record.escaped == 0.0 {
                 255
-            } else if record.escaped == 1.0 && record.smooth_iter.is_finite() {
+            } else if record.escaped != 0.0 && record.smooth_iter.is_finite() {
                 let reached = f64::from(record.smooth_iter.ceil().max(0.0)).min(cap);
                 (253.0 * reached / cap + 0.5).floor() as u8
             } else {
@@ -1715,11 +1715,7 @@ mod browser {
                             frame.level,
                         ) {
                             self.prepared_level = None;
-                            self.maybe_request_sampled_reference(
-                                viewer,
-                                &frame,
-                                reference_sample,
-                            );
+                            self.maybe_request_sampled_reference(viewer, &frame, reference_sample);
                         }
                     }
                     PresentEvent::SceneDropped {
@@ -1848,7 +1844,10 @@ mod browser {
             {
                 return;
             }
-            if viewer.request_reference_for_pixel(index, frame.extent).is_ok() {
+            if viewer
+                .request_reference_for_pixel(index, frame.extent)
+                .is_ok()
+            {
                 self.sampled_references = self.sampled_references.saturating_add(1);
             }
         }
@@ -3027,18 +3026,27 @@ mod tests {
         ];
         let candidate =
             select_reference_candidate(&records, CAP).expect("the grid holds a candidate");
-        assert_eq!(candidate.index, 2, "a record that never escaped outranks every other");
+        assert_eq!(
+            candidate.index, 2,
+            "a record that never escaped outranks every other"
+        );
         assert_eq!(candidate.rank, 255);
         assert_eq!(
             select_reference_candidate(&records[..2], CAP)
                 .expect("a glitched record is still a candidate"),
-            super::ReferenceCandidate { index: 1, rank: 254 },
+            super::ReferenceCandidate {
+                index: 1,
+                rank: 254
+            },
             "a glitched record outranks every escaping record"
         );
         assert_eq!(
             select_reference_candidate(&records[..1], CAP)
                 .expect("an escaping record is the last resort"),
-            super::ReferenceCandidate { index: 0, rank: 253 }
+            super::ReferenceCandidate {
+                index: 0,
+                rank: 253
+            }
         );
         assert_eq!(
             select_reference_candidate(&records[4..], CAP),
@@ -3060,6 +3068,10 @@ mod tests {
     /// onto its pixel without moving the navigation centre, and renders again until the Final
     /// carries no glitches with an orbit at least as long as the frame's maximum count.
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the pin is one measured sequence: seed, opening Final, census exchange, delivery"
+    )]
     fn the_exact_origin_row_at_zoom_fourteen_corrects_to_a_glitch_free_final() {
         const WIDTH: u32 = 960;
         const HEIGHT: u32 = 540;
@@ -3069,8 +3081,16 @@ mod tests {
         const EXHAUSTED_AT: u32 = 41;
         assert_eq!(KernelMode::for_zoom(12.0), KernelMode::Shallow);
         assert_eq!(KernelMode::for_zoom(14.0), KernelMode::Perturbation);
-        assert!(!perturbation_reference_is_current(14.0, 14, Some((12, 12.0))));
-        assert!(perturbation_reference_is_current(14.0, 14, Some((14, 14.0))));
+        assert!(!perturbation_reference_is_current(
+            14.0,
+            14,
+            Some((12, 12.0))
+        ));
+        assert!(perturbation_reference_is_current(
+            14.0,
+            14,
+            Some((14, 14.0))
+        ));
 
         let precision = precision_for(14.0, WIDTH, CAP).expect("zoom fourteen precision");
         let view_centre = BigCentre::from_f64(
@@ -3121,7 +3141,11 @@ mod tests {
                 final_scale,
                 extent,
                 EscapeParams::new(CAP),
-                if round == 0 { EXHAUSTED_AT } else { orbit.length },
+                if round == 0 {
+                    EXHAUSTED_AT
+                } else {
+                    orbit.length
+                },
                 RefinementLevel::Final,
             )
             .expect("referenced Final uniform");
@@ -3142,7 +3166,11 @@ mod tests {
                 .map(|sample| sample.escape_index.map_or(CAP, |index| index + 1))
                 .max()
                 .expect("Final is nonempty");
-            let orbit_length = if round == 0 { EXHAUSTED_AT } else { orbit.length };
+            let orbit_length = if round == 0 {
+                EXHAUSTED_AT
+            } else {
+                orbit.length
+            };
             if opening.is_none() {
                 assert!(
                     orbit.length >= EXHAUSTED_AT,
@@ -3162,8 +3190,8 @@ mod tests {
                 .iter()
                 .map(|sample| sample.record)
                 .collect::<Vec<_>>();
-            let candidate =
-                select_reference_candidate(&records, CAP).expect("a Final always holds a candidate");
+            let candidate = select_reference_candidate(&records, CAP)
+                .expect("a Final always holds a candidate");
             let generation = viewer
                 .request_reference_for_pixel(candidate.index, [WIDTH, HEIGHT])
                 .expect("deterministic census reference");

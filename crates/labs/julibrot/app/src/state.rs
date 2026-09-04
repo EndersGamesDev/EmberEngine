@@ -717,8 +717,8 @@ impl ViewerController {
         let column = index % width;
         let row = index / width;
         let anchor = [
-            f64::from(column) + 0.5 - 0.5 * f64::from(width),
-            f64::from(row) + 0.5 - 0.5 * f64::from(height),
+            0.5f64.mul_add(-f64::from(width), f64::from(column) + 0.5),
+            0.5f64.mul_add(-f64::from(height), f64::from(row) + 0.5),
         ];
         let map = self.screen_map(grid_extent)?;
         let PoseMap::Mapped(map) = map else {
