@@ -2,6 +2,15 @@
 # Build the wasm bundle and publish the games hub to GitHub Pages (gh-pages).
 # Run from anywhere (git-bash): bash deploy/deploy-pages.sh
 #
+# Server-build/workstation-publish recipe (the workstation holds the push key):
+#   cargo build --target wasm32-unknown-unknown --release -p fire -p arena -p kings -p what-is-this --lib
+#   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/fire.wasm
+#   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/arena.wasm
+#   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/kings.wasm
+#   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/what_is_this.wasm
+# Copy web/pkg from the server into this checkout, then publish without builds:
+#   EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh
+#
 # Layout on gh-pages:
 #   index.html            games hub (lobby showcase + catalog)
 #   games.json            catalog — the newest version of each game is "live"
@@ -10,6 +19,7 @@
 #   games/arena/v0/       live arena v0 pong classic (page + frozen pkg)
 #   games/fire/v2/        live fire racer build (castle circuit, online)
 #   games/kings/v1/       live four kings build (2D page board + 3D wasm view, online)
+#   games/what-is-this/v1/ live browser and hardware diagnostic
 #   games/pong/v1/        archived first web build (materialized from history)
 #   games/fire/v1/        archived first fire build; already on the branch and
 #                         deliberately never touched again — only $FIRE_LIVE is
@@ -17,24 +27,48 @@
 #   pkg/                  legacy root bundle, kept fresh for old cached pages
 set -euo pipefail
 
+die() { echo "deploy-pages: $*" >&2; exit 1; }
+PY="$(command -v python3 || command -v python)" || die "need python3 or python on PATH"
+
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_DIR"
 # gh-pages commit holding the original first web build (auto-run pong).
 V1_COMMIT="e7b85e8"
 
+if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
+    missing=()
+    for bundle in fire arena kings what_is_this; do
+        for artifact in "$bundle.js" "${bundle}_bg.wasm"; do
+            [ -f "web/pkg/$artifact" ] || missing+=("web/pkg/$artifact")
+        done
+    done
+    if [ "${#missing[@]}" -ne 0 ]; then
+        echo "FAILED: EMBER_PAGES_PREBUILT=1 requires all four bundles in web/pkg; missing:" >&2
+        printf '  %s\n' "${missing[@]}" >&2
+        exit 1
+    fi
+fi
+
 echo "== stamping the build ticker =="
 bash deploy/stamp-version.sh
 
-echo "== building wasm =="
-cargo build --target wasm32-unknown-unknown --release -p fire --lib
-cargo build --target wasm32-unknown-unknown --release -p arena --lib
-cargo build --target wasm32-unknown-unknown --release -p kings --lib
-wasm-bindgen --target web --no-typescript --out-dir web/pkg \
-    target/wasm32-unknown-unknown/release/fire.wasm
-wasm-bindgen --target web --no-typescript --out-dir web/pkg \
-    target/wasm32-unknown-unknown/release/arena.wasm
-wasm-bindgen --target web --no-typescript --out-dir web/pkg \
-    target/wasm32-unknown-unknown/release/kings.wasm
+if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
+    echo "== using four prebuilt wasm bundles from web/pkg =="
+else
+    echo "== building wasm =="
+    cargo build --target wasm32-unknown-unknown --release -p fire --lib
+    cargo build --target wasm32-unknown-unknown --release -p arena --lib
+    cargo build --target wasm32-unknown-unknown --release -p kings --lib
+    cargo build --target wasm32-unknown-unknown --release -p what-is-this --lib
+    wasm-bindgen --target web --no-typescript --out-dir web/pkg \
+        target/wasm32-unknown-unknown/release/fire.wasm
+    wasm-bindgen --target web --no-typescript --out-dir web/pkg \
+        target/wasm32-unknown-unknown/release/arena.wasm
+    wasm-bindgen --target web --no-typescript --out-dir web/pkg \
+        target/wasm32-unknown-unknown/release/kings.wasm
+    wasm-bindgen --target web --no-typescript --out-dir web/pkg \
+        target/wasm32-unknown-unknown/release/what_is_this.wasm
+fi
 
 echo "== publishing gh-pages =="
 # Detached at what ORIGIN has, never at the local branch. `git worktree add
@@ -61,11 +95,12 @@ ARENA_LIVE="games/arena/v20"
 ARENA_V0_LIVE="games/arena/v0"
 FIRE_LIVE="games/fire/v2"
 KINGS_LIVE="games/kings/v1"
+WHAT_LIVE="games/what-is-this/v1"
 
 rm -rf "$PAGES_DIR"/index.html "$PAGES_DIR"/pkg \
-    "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$ARENA_V0_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR/$KINGS_LIVE" \
+    "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$ARENA_V0_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR/$KINGS_LIVE" "$PAGES_DIR/$WHAT_LIVE" \
     "$PAGES_DIR"/games.json
-mkdir -p "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$ARENA_V0_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR/$KINGS_LIVE"
+mkdir -p "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$ARENA_V0_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR/$KINGS_LIVE" "$PAGES_DIR/$WHAT_LIVE"
 cp web/index.html web/games.json web/version.json "$PAGES_DIR"/
 # The shared host-picking logic (docs/hosts.md §5). It lives at the pages root
 # and every live page imports it from there, so there is one copy of the rule
@@ -82,6 +117,7 @@ cp "web/$ARENA_LIVE/index.html" "$PAGES_DIR/$ARENA_LIVE/"
 cp "web/$ARENA_V0_LIVE/index.html" "$PAGES_DIR/$ARENA_V0_LIVE/"
 cp "web/$FIRE_LIVE/index.html" "$PAGES_DIR/$FIRE_LIVE/"
 cp "web/$KINGS_LIVE/index.html" "$PAGES_DIR/$KINGS_LIVE/"
+cp "web/$WHAT_LIVE/index.html" "$PAGES_DIR/$WHAT_LIVE/"
 # Each game gets ONLY its own bundle. Copying the whole of web/pkg into every
 # game directory shipped arena's 18 MB wasm to fire players and fire's to arena
 # players — a fire player was downloading ~23 MB to run a ~6 MB game. The
@@ -99,6 +135,7 @@ copy_pkg "$PAGES_DIR/$ARENA_LIVE/pkg" arena
 copy_pkg "$PAGES_DIR/$ARENA_V0_LIVE/pkg" arena
 copy_pkg "$PAGES_DIR/$FIRE_LIVE/pkg" fire
 copy_pkg "$PAGES_DIR/$KINGS_LIVE/pkg" kings
+copy_pkg "$PAGES_DIR/$WHAT_LIVE/pkg" what_is_this
 cp -r web/pkg "$PAGES_DIR"/pkg
 # Compatibility shim for cached pre-rename pages that import from root pkg/.
 cp "$PAGES_DIR/pkg/arena.js" "$PAGES_DIR/pkg/pong.js"
@@ -114,6 +151,18 @@ if [ ! -f "$PAGES_DIR/games/pong/v1/index.html" ]; then
     git show "$V1_COMMIT:pkg/pong_bg.wasm" > "$PAGES_DIR"/games/pong/v1/pkg/pong_bg.wasm
 fi
 
+# The catalog is the hub's promise. Refuse to publish a live link unless this
+# assembly actually produced its page, so games.json and this script cannot
+# silently drift apart again.
+LIVE_PATHS="$("$PY" -c 'import json, sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print("\n".join(v["path"] for g in d["games"] for v in g["versions"] if v.get("live") is True))' web/games.json)"
+while IFS= read -r live_path; do
+    [ -n "$live_path" ] || continue
+    if [ ! -f "$PAGES_DIR/${live_path%/}/index.html" ]; then
+        echo "FAILED: live catalog path was not assembled: $live_path" >&2
+        exit 1
+    fi
+done <<< "$LIVE_PATHS"
+
 # Bump the deploy stamp in server.json (preserving the ws url): the pages
 # use it to cache-bust the wasm bundles once per deploy. The stamp also
 # records the protocol version this bundle speaks, so a bump is caught
@@ -125,7 +174,7 @@ FIRE_PROTO="$(grep -oE 'PROTO_VERSION: u16 = [0-9]+' crates/fire-core/src/proto.
 # Four Kings likewise: its own crate, its own number, its own server.json key.
 KINGS_PROTO="$(grep -oE 'PROTO_VERSION: u16 = [0-9]+' crates/kings-core/src/proto.rs | grep -oE '[0-9]+$')"
 echo "== shipping arena protocol v$PROTO, fire protocol v$FIRE_PROTO, kings protocol v$KINGS_PROTO =="
-python - "$PAGES_DIR/server.json" "$PROTO" "$FIRE_PROTO" "$KINGS_PROTO" <<'EOF'
+"$PY" - "$PAGES_DIR/server.json" "$PROTO" "$FIRE_PROTO" "$KINGS_PROTO" <<'EOF'
 import json, os, sys, time
 p, proto, fire_proto, kings_proto = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 

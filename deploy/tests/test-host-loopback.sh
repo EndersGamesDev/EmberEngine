@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The whole of host.sh, end to end, on loopback: clone, build, start both
+# The whole of host.sh, end to end, on loopback: clone, build, start all three
 # servers, prove each one with the repo's own probes, mint an address from a
 # stub tunnel, publish the entry into a local bare repository, then update,
 # status and down.
@@ -72,10 +72,11 @@ export EMBER_REPO="$SRC_REPO"
 export EMBER_REF="$REF"
 export EMBER_PUBLISH="$PAGES#gh-pages"
 export EMBER_TUNNEL_BIN="$TMP/bin/cloudflared"
-# High ports, so a real host running the games on 7780/7781 is not disturbed
+# High ports, so a real host running the games on 7780/7781/7782 is not disturbed
 # by a test run.
 export EMBER_ARENA_PORT=17780
 export EMBER_FIRE_PORT=17781
+export EMBER_KINGS_PORT=17782
 
 echo "== host.sh up (from $SRC_REPO at $REF) =="
 T0="$(date +%s)"
@@ -89,16 +90,18 @@ else
 fi
 sed 's/^/    /' "$TMP/up.log" | tail -30
 
-echo "== it proved both servers, locally and through the address it published =="
+echo "== it proved all three servers, locally and through the address it published =="
 contains "$(cat "$TMP/up.log")" "local health check for arena" "arena probed on loopback"
 contains "$(cat "$TMP/up.log")" "local health check for fire" "fire probed on loopback"
+contains "$(cat "$TMP/up.log")" "local health check for kings" "Kings probed on loopback"
 contains "$(cat "$TMP/up.log")" "health check for arena through ws://127.0.0.1:17780" "arena probed through its address"
 contains "$(cat "$TMP/up.log")" "health check for fire through ws://127.0.0.1:17781" "fire probed through its address"
+contains "$(cat "$TMP/up.log")" "health check for kings through ws://127.0.0.1:17782" "Kings probed through its address"
 
 echo "== the servers are up and named =="
 NAME="$(EMBER_NAME_FILE="$TMP/conf/host-name" bash "$DEPLOY/host-name.sh")"
 is "$(printf '%s' "$NAME" | grep -cE '^[a-z0-9-]{3,32}$')" "1" "the host has a generated name ($NAME)"
-for id in arena fire; do
+for id in arena fire kings; do
     PID="$(pidof_file "$EMBER_HOME/run/server-$id.pid")"
     if kill -0 "$PID" 2>/dev/null; then ok "$id server is running (pid $PID)"; else bad "$id server is not running"; fi
     if kill -0 "$(pidof_file "$EMBER_HOME/run/tunnel-$id.pid")" 2>/dev/null; then
@@ -143,8 +146,10 @@ BOOK="$ENTRY/host.json"
 is "$(jget "$BOOK" 'd["name"]')" "$NAME" "name"
 is "$(jget "$BOOK" 'd["ws"]')" "ws://127.0.0.1:17780" "ws"
 is "$(jget "$BOOK" 'd["fire_ws"]')" "ws://127.0.0.1:17781" "fire_ws"
+is "$(jget "$BOOK" 'd["kings_ws"]')" "ws://127.0.0.1:17782" "kings_ws"
 is "$(jget "$BOOK" 'str(d["proto"]).isdigit()')" "True" "proto is a number"
 is "$(jget "$BOOK" 'str(d["fire_proto"]).isdigit()')" "True" "fire_proto is a number"
+is "$(jget "$BOOK" 'str(d["kings_proto"]).isdigit()')" "True" "kings_proto is a number"
 is "$(jget "$BOOK" 'bool(d["version"].startswith("r"))')" "True" "version is r<N>"
 is "$(jget "$BOOK" 'bool(len(d["commit"]) >= 7)')" "True" "commit is a short sha"
 is "$(jget "$BOOK" 'bool(d["updated"].endswith("Z"))')" "True" "updated is UTC"
@@ -158,6 +163,7 @@ bash "$DEPLOY/host.sh" status > "$TMP/status.log" 2>&1 || bad "status exited non
 sed 's/^/    /' "$TMP/status.log"
 contains "$(cat "$TMP/status.log")" "arena server: running" "status sees the arena server"
 contains "$(cat "$TMP/status.log")" "fire server: running" "status sees the fire server"
+contains "$(cat "$TMP/status.log")" "kings server: running" "status sees the Kings server"
 contains "$(cat "$TMP/status.log")" "ws://127.0.0.1:17780" "status shows the address"
 contains "$(cat "$TMP/status.log")" "published: {" "status reads the published entry back"
 contains "$(cat "$TMP/status.log")" "$NAME" "and it is this host's"
@@ -173,14 +179,16 @@ echo "    update took $(( $(date +%s) - T1 ))s"
 echo "== down leaves nothing running =="
 ARENA_PID="$(pidof_file "$EMBER_HOME/run/server-arena.pid")"
 FIRE_PID="$(pidof_file "$EMBER_HOME/run/server-fire.pid")"
+KINGS_PID="$(pidof_file "$EMBER_HOME/run/server-kings.pid")"
 TUN_A="$(pidof_file "$EMBER_HOME/run/tunnel-arena.pid")"
 TUN_F="$(pidof_file "$EMBER_HOME/run/tunnel-fire.pid")"
+TUN_K="$(pidof_file "$EMBER_HOME/run/tunnel-kings.pid")"
 bash "$DEPLOY/host.sh" down > "$TMP/down.log" 2>&1 || bad "down exited non-zero"
 sleep 1
-for p in "$ARENA_PID" "$FIRE_PID" "$TUN_A" "$TUN_F"; do
+for p in "$ARENA_PID" "$FIRE_PID" "$KINGS_PID" "$TUN_A" "$TUN_F" "$TUN_K"; do
     if kill -0 "$p" 2>/dev/null; then bad "pid $p survived down"; else ok "pid $p is gone"; fi
 done
-for id in arena fire; do
+for id in arena fire kings; do
     if [ -f "$EMBER_HOME/run/server-$id.pid" ]; then bad "$id pid file left behind"; else ok "$id pid file removed"; fi
 done
 
@@ -188,5 +196,6 @@ echo "== status after down =="
 bash "$DEPLOY/host.sh" status > "$TMP/status2.log" 2>&1 || bad "status after down exited non-zero"
 contains "$(cat "$TMP/status2.log")" "arena server: DOWN" "status reports the arena down"
 contains "$(cat "$TMP/status2.log")" "fire tunnel: DOWN" "status reports the fire tunnel down"
+contains "$(cat "$TMP/status2.log")" "kings server: DOWN" "status reports Kings down"
 
 summary host-loopback
