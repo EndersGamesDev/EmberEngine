@@ -163,8 +163,11 @@ fn lattice_value(index: usize) -> f64 {
 /// geometry and is dropped by the scene shader, so it is dropped here too. Nothing a pose fails to
 /// project can therefore improve the answer.
 ///
-/// The heights are sampled, so the reachable set is a subset of the true one and the returned share
-/// is an upper bound on the sky the pose cannot avoid.
+/// The heights are sampled, so the reachable set is a subset of the true one in that direction. The
+/// mesh is coarser than the drawn one, which errs the other way: near the projective horizon a long
+/// chord cuts across the curved image and covers ground the fine mesh leaves as sky, so the share
+/// is not a bound in either direction. It is the same rule the picture is drawn by, evaluated at a
+/// stated resolution, and it is compared only against itself.
 fn uncovered_fraction(chain: &VertexChain<'_>, extent: [u32; 2], apron_scale: f64) -> f64 {
     let side = COVERAGE_LATTICE_SIDE;
     let mut reached = vec![false; side * side];
@@ -428,8 +431,9 @@ fn clipped_fraction(chain: &VertexChain<'_>, grid_w: u32, grid_h: u32, apron_sca
 
 #[cfg(test)]
 mod tests {
-    use super::{SceneFootprint, scene_footprint};
-    use crate::{ObjectAngles, PlaneAngles, ViewControls};
+    use super::{SceneFootprint, VertexChain, scene_footprint, uncovered_fraction};
+    use crate::screen::camera_matrix;
+    use crate::{ObjectAngles, PlaneAngles, ViewControls, construct_plane};
 
     const OWNER_THETA: f64 = -core::f64::consts::FRAC_PI_2;
 
@@ -606,6 +610,36 @@ mod tests {
             footprint.uncovered_fraction
         );
         assert!(footprint.uncovered_fraction > 0.15);
+    }
+
+    /// How much the coverage layer is actually worth at the close owner row.
+    ///
+    /// The published fact measures the frame the backdrop reaches. The comparison the design rests
+    /// on is against the main grid alone, at the same pose through the same mirror with the apron
+    /// set to one: the wide layer is a large real improvement there, not a rounding one, and the
+    /// remaining sky is honest rather than a measurement artefact.
+    #[test]
+    fn the_backdrop_reaches_far_more_of_the_close_row_than_the_main_grid_alone() {
+        let (object, view) = close_owner_row();
+        let map = crate::screen_to_plane(&object, &view, 0.0, 960, 540, 960.0 / 540.0)
+            .expect("relief pose maps");
+        let chain = VertexChain {
+            map: &map,
+            plane: construct_plane(object).expect("relief plane"),
+            view: &view,
+            matrix: camera_matrix(&view),
+        };
+        let main_alone = uncovered_fraction(&chain, [960, 540], 1.0);
+        let with_backdrop = uncovered_fraction(&chain, [960, 540], 5.0);
+        assert!(
+            (main_alone - 813.0 / 4225.0).abs() < 1.0e-12
+                && (with_backdrop - 650.0 / 4225.0).abs() < 1.0e-12,
+            "main alone {main_alone}, with backdrop {with_backdrop}"
+        );
+        assert!(
+            with_backdrop < main_alone,
+            "the backdrop must reach more of the frame, not less"
+        );
     }
 
     /// The clipping census keeps its whole fixed denominator.
