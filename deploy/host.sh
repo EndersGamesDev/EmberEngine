@@ -96,7 +96,9 @@ mkdir -p "$RUN" "$LOGS"
 PY=""
 for py_candidate in python3 python; do
     py_found="$(command -v "$py_candidate" || true)"
-    [ -n "$py_found" ] && "$py_found" -c '' >/dev/null 2>&1 || continue
+    if [ -z "$py_found" ] || ! "$py_found" -c '' >/dev/null 2>&1; then
+        continue
+    fi
     PY="$py_found"
     break
 done
