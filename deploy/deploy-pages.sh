@@ -16,7 +16,7 @@
 #   index.html            games hub (lobby showcase + catalog)
 #   games.json            catalog — the newest version of each game is "live"
 #   server.json           {ws, v} — current tunnel domain + deploy stamp
-#   games/arena/v21/      live arena build — boots: footsteps on the walk cycle, silent while crouched, heavier at a sprint (page + its own frozen pkg)
+#   games/arena/v22/      live arena build — sun, shadows, moving clouds and rain (page + its own frozen pkg)
 #   games/arena/v0/       live arena v0 pong classic (page + frozen pkg)
 #   games/fire/v2/        live fire racer build (castle circuit, online)
 #   games/kings/v1/       live four kings build (2D page board + 3D wasm view, online)
@@ -111,7 +111,7 @@ trap 'st=$?; git worktree remove --force "$PAGES_DIR" >/dev/null 2>&1 || true; r
 git worktree add -q --detach "$PAGES_DIR" FETCH_HEAD
 
 # Live version dirs (older versions stay frozen on the branch untouched).
-ARENA_LIVE="games/arena/v21"
+ARENA_LIVE="games/arena/v22"
 ARENA_V0_LIVE="games/arena/v0"
 FIRE_LIVE="games/fire/v2"
 KINGS_LIVE="games/kings/v1"
@@ -134,6 +134,12 @@ if [ -f web/hosts.js ]; then
     cp web/hosts.js "$PAGES_DIR"/
 else
     echo "   note: web/hosts.js does not exist in this checkout; not copying it"
+fi
+# The developer landing page (marketing): one static file with no build of its
+# own. Guarded for the same reason as hosts.js: an older checkout must still
+# deploy.
+if [ -f web/engine.html ]; then
+    cp web/engine.html "$PAGES_DIR"/
 fi
 cp "web/$ARENA_LIVE/index.html" "$PAGES_DIR/$ARENA_LIVE/"
 cp "web/$ARENA_V0_LIVE/index.html" "$PAGES_DIR/$ARENA_V0_LIVE/"
@@ -326,9 +332,7 @@ done
     if git diff --cached --quiet; then
         echo "nothing changed; skipping commit"
     else
-        git commit -m "Deploy games hub
-
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+        git commit -m "Deploy games hub"
         # The worktree is detached, so name both ends of the refspec.
         git push origin HEAD:refs/heads/gh-pages
     fi

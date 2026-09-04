@@ -1,0 +1,36 @@
+name: Feature request
+description: A capability the engine or a game does not have yet
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you cannot do today, and why it matters.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: The proposal
+    validations:
+      required: true
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Which layer does it touch?
+      description: The layering is one-way: game, then scene/simulation, then renderer, then platform.
+      options:
+        - game (one of the games in crates/)
+        - scene / simulation
+        - renderer
+        - platform
+        - protocol (a new or changed message)
+        - docs / deploy
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it fits
+      description: If it touches the shared sim, say how determinism survives (fixed 60 Hz, seeded RNG, fixed update order, bullets server-side only). If it touches the renderer, say why the scene pass stays small.

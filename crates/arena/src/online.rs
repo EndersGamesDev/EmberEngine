@@ -16,6 +16,7 @@ use arena_core::shooter::{
 use ember_engine::glam::{Mat3, Quat, Vec2, Vec3};
 use ember_engine::{
     Camera, EmberGame, Feedback, Frame, InputState, Instance, KeyCode, MouseButton, PadButton,
+    Particle,
 };
 use serde::Deserialize;
 
@@ -24,6 +25,7 @@ use crate::props::{LOOT_SPENT_TINT, Prop, Props, tex};
 use crate::rounds::{self, Round, Rounds};
 use crate::script;
 use crate::sound::{Audio, BUDGET, Dist, Sfx};
+use crate::weather;
 
 /// What a part does when the weapon fires (v15). Decided by the part's
 /// node name, which is the asset's contract with this file: `cylinder*`
@@ -862,10 +864,9 @@ struct Cmd {
     sent_at: f32,
 }
 
-/// One short-lived opaque ball (`rounds::puff`, drawn at `feel::PUFF_BALL`
-/// of `size`): sparks on a hit, shards and smoke from a blast, the launch
-/// smoke behind a rocket. `life` is the ttl it started with, so a size or
-/// colour can fade against it.
+/// One short-lived visual effect: falling sparks and shards use the round
+/// puff mesh, while drifting smoke uses a soft transparent billboard.
+/// `life` is the initial ttl, so size, colour and opacity follow its lifetime.
 #[derive(Clone, Copy)]
 struct Fx {
     pos: Vec3,
@@ -1378,6 +1379,9 @@ pub struct ShooterGame {
     /// one-frame status event still learns who won.
     round_line: Option<String>,
     arena_half: f32,
+    /// Presentation only: the map's daylight and native capture override.
+    climate: weather::Climate,
+    weather_override: Option<ember_engine::Weather>,
     obstacles: Vec<Obstacle>,
     metas: HashMap<u8, PlayerMeta>,
     from: HashMap<u8, PSnap>,
@@ -1587,6 +1591,7 @@ impl ShooterGame {
 
     /// The game over an already-open channel; `connect` and the tests both
     /// build one here so the field list lives in one place.
+    #[allow(clippy::too_many_lines)] // One initialization literal keeps all client state visible.
     fn with_chan(chan: net::NetChan, assets: Option<Assets>, audio: Option<Audio>) -> Self {
         Self {
             chan,
@@ -1598,6 +1603,8 @@ impl ShooterGame {
             hill: None,
             round_line: None,
             arena_half: 24.0,
+            climate: weather::Climate::Yard,
+            weather_override: weather::capture_override(),
             obstacles: Vec::new(),
             metas: HashMap::new(),
             from: HashMap::new(),
@@ -1896,8 +1903,8 @@ impl ShooterGame {
         ))
     }
 
-    /// A rocket went off: one flash ball, twelve shards under gravity,
-    /// eight balls of smoke rising. Directions are a fixed fan, not random:
+    /// A rocket went off: one soft flash, twelve shards under gravity,
+    /// eight smoke puffs rising. Directions are a fixed fan, not random:
     /// there is no RNG on the client and a burst does not need one. A blast
     /// is all born at once — the delay is the muzzle plume's alone.
     fn blast_fx(&mut self, at: Vec3) {
@@ -2276,6 +2283,7 @@ impl EmberGame for ShooterGame {
                     // cover; the seed is only what an unknown name falls
                     // back to.
                     let level = Level::named(&map, seed);
+                    self.climate = weather::Climate::for_map(&map);
                     self.hill = level.hill;
                     self.team_score = [0, 0];
                     self.hill_holder = HILL_FREE;
@@ -3320,37 +3328,42 @@ impl EmberGame for ShooterGame {
         let scoped = feel::scoped(my_weapon, self.zoom);
 
         // ---- build the scene ----
+        let (environment, fog, rain) = self.climate.conditions(self.time, self.weather_override);
         let mut frame = Frame {
             camera,
             instances: Vec::with_capacity(160),
-            // Golden hour over the city: a warm haze the sky cylinder reads
-            // bright through, instead of the pre-v13 navy that turned the
-            // panorama into night at 60 m. Post-tonemap light, per `Fog`.
-            fog: ember_engine::Fog {
-                color: [0.62, 0.50, 0.40],
-                density: 0.006,
-            },
+            fog,
+            environment,
+            particles: weather::rain(
+                camera.eye,
+                self.time,
+                rain,
+                environment.wind,
+                &self.obstacles,
+            ),
         };
         let half = self.arena_half;
         let inst = |frame: &mut Frame, p: Vec3, s: Vec3, c: Vec3| {
             frame.instances.push(Instance::new(p, s, c));
         };
 
-        // The city: sky cylinder and the far ground first, then the arena
-        // floor and its boundary wall. env_base > 0: the armour picture for
+        // The city: far ground first, then the arena floor and its boundary
+        // wall. The engine draws the moving sky. env_base > 0: the armour picture for
         // box-body players; the props carry every other picture.
         let env = self.env_base;
         let props = self.props;
         if let Some(pr) = &props {
-            pr.push_sky_and_ground(&mut frame);
+            pr.push_ground(&mut frame);
         }
         // The floor slab: what the arena stands on, and what closes the gap
         // between the cobble plane and the far ground.
-        inst(
-            &mut frame,
-            Vec3::new(0.0, -0.5, 0.0),
-            Vec3::new(half * 2.0 + 2.0, 1.0, half * 2.0 + 2.0),
-            Vec3::new(0.12, 0.13, 0.17),
+        frame.instances.push(
+            Instance::new(
+                Vec3::new(0.0, -0.5, 0.0),
+                Vec3::new(half * 2.0 + 2.0, 1.0, half * 2.0 + 2.0),
+                Vec3::new(0.12, 0.13, 0.17),
+            )
+            .with_wetness(),
         );
         if let Some(pr) = &props {
             frame.instances.push(
@@ -3359,7 +3372,8 @@ impl EmberGame for ShooterGame {
                     Vec3::new(half * 2.0 + 2.0, 1.0, half * 2.0 + 2.0),
                     Vec3::ONE,
                 )
-                .with_mesh(pr.mesh(Prop::Floor)),
+                .with_mesh(pr.mesh(Prop::Floor))
+                .with_wetness(),
             );
         }
         for (px, pz, sx, sz) in [
@@ -3434,10 +3448,14 @@ impl EmberGame for ShooterGame {
                 (self.hill_holder < HILL_CONTESTED).then(|| self.player_color(self.hill_holder));
             let color = feel::hill_color(self.hill_holder, holder_color, self.time);
             for (centre, size) in feel::hill_bars(h) {
-                inst(&mut frame, centre, size, color);
+                frame
+                    .instances
+                    .push(Instance::new(centre, size, color).without_shadow());
             }
             let (centre, size) = feel::hill_marker(h);
-            inst(&mut frame, centre, size, color);
+            frame
+                .instances
+                .push(Instance::new(centre, size, color).without_shadow());
         }
 
         // Cover, drawn by kind: the same boxes prediction resolves against,
@@ -3699,30 +3717,38 @@ impl EmberGame for ShooterGame {
                 Vec3::new(0.3, 0.9, 0.4)
             };
             for h in 0..p.hp {
-                inst(
-                    &mut frame,
-                    Vec3::new(pos.x - 0.3 + f32::from(h) * 0.3, feet_y + pip_y, pos.y),
-                    Vec3::splat(0.16),
-                    pip,
+                frame.instances.push(
+                    Instance::new(
+                        Vec3::new(pos.x - 0.3 + f32::from(h) * 0.3, feet_y + pip_y, pos.y),
+                        Vec3::splat(0.16),
+                        pip,
+                    )
+                    .without_shadow(),
                 );
             }
         }
 
-        // Impact marks, tracers, particles and remote flashes (v20) all
-        // wear the round meshes; without them registered (a frame built by
-        // a test that did not ask) none is drawn, since the cubes they
-        // replaced are the look the operator sent back.
-        if let Some(rs) = self.rounds {
-            // Sparks, shards and smoke: opaque balls (`rounds::puff`) at
-            // `feel::PUFF_BALL` of the size that used to be a cube's edge,
-            // which is the only particle the scene pass can draw. Shards
-            // shrink out; smoke swells and dims. No yaw any more: a ball
-            // turned about its centre is the same ball, so the spin the
-            // cubes needed to look less like boxes is work no pixel could
-            // show. A puff still waiting out a flash is not drawn.
-            for f in self.fx.iter().filter(|f| f.born <= self.time) {
-                let k = (f.ttl / f.life).clamp(0.0, 1.0);
-                let (edge, dim) = feel::puff_draw(f.gravity, k);
+        // Everything following the physical world and remote players is
+        // an effect or camera-space furniture. The viewmodel is deliberately
+        // absent from the shadow map: a gun 0.6 m from the eye must not paint
+        // a huge silhouette onto the level or darken the player's hands.
+        let effects_begin = frame.instances.len();
+
+        // Smoke keeps its existing drift, growth and birth delay but fades
+        // through the transparent particle pass. The billboard's full edge
+        // equals the old ball's diameter, preserving the muzzle clearance.
+        // Sparks and shards remain solid meshes and shrink as before.
+        for f in self.fx.iter().filter(|f| f.born <= self.time) {
+            let k = (f.ttl / f.life).clamp(0.0, 1.0);
+            let (edge, dim) = feel::puff_draw(f.gravity, k);
+            if f.gravity <= 0.0 {
+                frame.particles.push(Particle {
+                    position: f.pos,
+                    color: f.color * dim,
+                    size: Vec2::splat(f.size * edge),
+                    opacity: 0.68 * k,
+                });
+            } else if let Some(rs) = self.rounds {
                 frame.instances.push(
                     Instance::new(
                         f.pos,
@@ -3732,6 +3758,11 @@ impl EmberGame for ShooterGame {
                     .with_mesh(rs.puff()),
                 );
             }
+        }
+        // Impact marks, tracers and remote flashes wear the round meshes;
+        // without those registered a test draws none of them. Smoke uses
+        // the engine's built-in billboard and needs no registered mesh.
+        if let Some(rs) = self.rounds {
             // Impact marks: near-black holes on the faces rounds hit, each
             // the width its round makes (`Mark::diameter`), drawn after the
             // cover so the depth test lays them on it; the disc is sunk
@@ -4023,7 +4054,7 @@ impl EmberGame for ShooterGame {
                     }
                 }
             }
-            // The rocket's launch smoke: six grey balls drifting back from
+            // The rocket's launch smoke: six soft grey puffs drifting back from
             // the muzzle, spawned on the frame the shot was confirmed and
             // held back by the launch flash like the plume, so the star
             // has the first frames of the launch to itself.
@@ -4209,6 +4240,10 @@ impl EmberGame for ShooterGame {
         // The plume of a shot confirmed on a frame with no viewmodel (dead
         // by the time the state arrived) has no muzzle: dropped.
         self.own_plume = false;
+
+        for instance in &mut frame.instances[effects_begin..] {
+            instance.casts_shadow = false;
+        }
 
         // Play the queued cues under a per-frame budget, the important ones
         // first, so a crowded frame drops a footfall and never the boom.
@@ -4797,6 +4832,90 @@ mod wire_tests {
             ack_age_ticks: 0,
             team: 0,
         }
+    }
+
+    /// Weather differs between clients' presentation clocks; the same input
+    /// must still predict the same motion and produce the same wire packets.
+    #[test]
+    fn weather_changes_the_frame_but_never_prediction_or_input_packets() {
+        let (clear_chan, clear_wire) = net::NetChan::detached();
+        let (rain_chan, rain_wire) = net::NetChan::detached();
+        let mut clear = ShooterGame::with_chan(clear_chan, None, None);
+        let mut rain = ShooterGame::with_chan(rain_chan, None, None);
+        for game in [&mut clear, &mut rain] {
+            game.my_id = Some(2);
+            game.latest.insert(2, me(2));
+            game.was_alive = true;
+            game.script = None;
+            game.obstacles = Level::trench_city().obstacles;
+            game.climate = weather::Climate::City;
+            game.time = 5.0;
+        }
+        clear.weather_override = Some(ember_engine::Weather::Clear);
+        rain.weather_override = Some(ember_engine::Weather::Rain);
+        let input = InputState::from_parts(&[KeyCode::KeyW], &[], (0.0, 0.0), None);
+        for _ in 0..24 {
+            let dry_frame = clear.update(&input, 1.0 / 60.0);
+            let wet_frame = rain.update(&input, 1.0 / 60.0);
+            assert_eq!(dry_frame.particles, []);
+            assert_ne!(wet_frame.particles, []);
+            assert!(wet_frame.environment.wetness > dry_frame.environment.wetness);
+            assert_eq!(clear.pred_pos, rain.pred_pos);
+            assert_eq!(clear.pred_y, rain.pred_y);
+            assert_eq!(clear.pred_vy, rain.pred_vy);
+            assert_eq!(clear.aim, rain.aim);
+            assert_eq!(clear.pitch, rain.pitch);
+        }
+        let packets = |wire: std::sync::mpsc::Receiver<C2S>| {
+            wire.try_iter()
+                .map(|message| serde_json::to_string(&message).unwrap())
+                .collect::<Vec<_>>()
+        };
+        let dry_packets = packets(clear_wire);
+        let wet_packets = packets(rain_wire);
+        assert_ne!(dry_packets, [] as [String; 0]);
+        assert_eq!(dry_packets, wet_packets);
+    }
+
+    #[test]
+    fn level_casts_shadows_but_viewmodel_and_markers_do_not() {
+        let (chan, _wire) = net::NetChan::detached();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.my_id = Some(2);
+        game.latest.insert(2, me(2));
+        game.was_alive = true;
+        game.script = None;
+        game.hitmarker_t = 0.1;
+        game.obstacles = vec![Obstacle::boxed(
+            Cover::Container,
+            [6.0, -1.0],
+            [9.0, 1.0],
+            0.0,
+            2.6,
+        )];
+        let frame = game.update(&InputState::default(), 0.001);
+        let floor = frame.instances.iter().find(|i| i.position.y < 0.0).unwrap();
+        assert!(floor.casts_shadow && floor.wettable);
+        let cover = frame
+            .instances
+            .iter()
+            .find(|i| (i.position.x - 7.5).abs() < 0.01)
+            .unwrap();
+        assert!(cover.casts_shadow);
+        let markers: Vec<_> = frame
+            .instances
+            .iter()
+            .filter(|i| i.color == Vec3::ONE)
+            .collect();
+        assert!(
+            markers.len() >= 4,
+            "the hitmarker's four white arms are present"
+        );
+        assert!(markers.iter().all(|i| !i.casts_shadow));
+        assert!(
+            frame.instances.iter().filter(|i| !i.casts_shadow).count() > 4,
+            "the held weapon and hands are absent from the shadow map too"
+        );
     }
 
     /// The recoil kick and the climb move the camera and the model, never
@@ -5654,6 +5773,75 @@ mod wire_tests {
         );
     }
 
+    #[test]
+    fn smoke_waits_for_birth_then_grows_and_fades_while_sparks_stay_solid() {
+        let (chan, _wire) = net::NetChan::detached();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.weather_override = Some(ember_engine::Weather::Clear);
+        game.script = None;
+        game.set_rounds(500);
+        let smoke_pos = Vec3::new(4.0, 2.0, 0.0);
+        let smoke = Fx {
+            pos: smoke_pos,
+            vel: Vec3::ZERO,
+            ttl: 0.4,
+            life: 0.4,
+            size: 0.3,
+            color: Vec3::splat(0.25),
+            gravity: 0.0,
+            born: 0.08,
+        };
+        game.fx.push(smoke);
+        game.fx.push(Fx {
+            pos: Vec3::new(5.0, 2.0, 0.0),
+            gravity: 9.0,
+            born: 0.0,
+            ..smoke
+        });
+        let input = InputState::default();
+        let early = game.update(&input, 0.04);
+        assert!(early.particles.is_empty(), "no smoke before its birth time");
+        assert_eq!(game.fx[0].ttl, smoke.ttl, "a waiting puff does not age");
+        assert_eq!(game.fx[0].pos, smoke_pos);
+        let solid = |frame: &Frame| {
+            frame
+                .instances
+                .iter()
+                .filter(|i| i.mesh == 500 + rounds::PUFF_OFFSET)
+                .count()
+        };
+        assert_eq!(
+            solid(&early),
+            1,
+            "only the falling spark is a solid puff mesh"
+        );
+        let born = game.update(&input, 0.05);
+        assert_eq!(born.particles.len(), 1);
+        assert_eq!(
+            solid(&born),
+            1,
+            "smoke is never drawn a second time as a mesh"
+        );
+        let first = born.particles[0];
+        assert_eq!(first.position, smoke_pos);
+        assert!(first.opacity > 0.0 && first.opacity < 1.0);
+        assert!(first.size.x >= smoke.size);
+        let later = game.update(&input, 0.1);
+        assert_eq!(later.particles.len(), 1);
+        assert!(
+            later.particles[0].opacity < first.opacity,
+            "smoke fades in alpha"
+        );
+        assert!(
+            later.particles[0].size.x > first.size.x,
+            "smoke retains its authored growth"
+        );
+        assert!(
+            game.update(&input, 0.4).particles.is_empty(),
+            "expired smoke disappears"
+        );
+    }
+
     /// A shot reads as light first and smoke second (v20, the fourth
     /// pass). The plume used to be born with the star, four opaque cubes
     /// of edge 0.10 m over a muzzle for a quarter second while the star
@@ -5705,8 +5893,9 @@ mod wire_tests {
             })
             .unwrap();
         let muzzle = game.drawn_muzzle(3).expect("the shooter's gun is drawn");
-        // The star's five cones, and the balls of smoke at that muzzle:
+        // The star's five cones, and the soft smoke puffs at that muzzle:
         // the impact's dust is 30 m up the line and is not smoke here.
+        game.weather_override = Some(ember_engine::Weather::Clear);
         let star = |f: &Frame| {
             f.instances
                 .iter()
@@ -5714,11 +5903,9 @@ mod wire_tests {
                 .count()
         };
         let smoke = |f: &Frame| {
-            f.instances
+            f.particles
                 .iter()
-                .filter(|i| {
-                    i.mesh == 500 + rounds::PUFF_OFFSET && (i.position - muzzle).length() < 1.0
-                })
+                .filter(|p| (p.position - muzzle).length() < 1.0)
                 .count()
         };
         let frame = game.update(&input, 0.001);

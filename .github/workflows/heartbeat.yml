@@ -1,0 +1,37 @@
+# Hourly heartbeat: is the work moving?
+# When no commit landed in the last hour it appends marketing/heartbeat.log and
+# commits the marker, so the public record shows the lane was quiet. When work
+# is moving it leaves no trace. Protocol: marketing/HEARTBEAT.md.
+name: heartbeat
+
+on:
+  schedule:
+    - cron: "7 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+      - name: check the last hour
+        run: |
+          now=$(date +%s)
+          last=$(git log -1 --pretty=%ct)
+          age=$(( now - last ))
+          if [ "$age" -lt 3600 ]; then
+            echo "last commit ${age}s ago - work is moving, no marker"
+            exit 0
+          fi
+          ts=$(date -u +'%Y-%m-%d %H:%M:%S UTC')
+          echo "no commit in the last hour - leaving a marker"
+          printf '%s idle heartbeat (no commit in the previous hour)\n' "$ts" >> marketing/heartbeat.log
+          git config user.name "ember-heartbeat"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add marketing/heartbeat.log
+          git commit -m "heartbeat: $ts - the lane was quiet for an hour"
+          git push

@@ -22,6 +22,8 @@ use glam::{Mat4, Quat, Vec3};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
+use crate::environment::{Environment, Particle};
+
 /// A vertex of a registered mesh (matches the built-in cube's layout).
 #[derive(Clone, Copy, Debug)]
 pub struct MeshVertex {
@@ -141,6 +143,11 @@ pub struct Instance {
     pub rot: Quat,
     /// Mesh id: 0 = built-in cube, 1..=N = EngineConfig.meshes entries.
     pub mesh: u32,
+    /// Opaque world geometry casts and receives directional shadows. Disable
+    /// for first-person weapons, sky geometry and emissive decoration.
+    pub casts_shadow: bool,
+    /// Allow the environment's wetness to add sky and sun reflections.
+    pub wettable: bool,
 }
 
 impl Instance {
@@ -152,6 +159,8 @@ impl Instance {
             color,
             rot: Quat::IDENTITY,
             mesh: 0,
+            casts_shadow: true,
+            wettable: false,
         }
     }
 
@@ -170,6 +179,18 @@ impl Instance {
     #[must_use]
     pub const fn with_mesh(mut self, mesh: u32) -> Self {
         self.mesh = mesh;
+        self
+    }
+
+    #[must_use]
+    pub const fn without_shadow(mut self) -> Self {
+        self.casts_shadow = false;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_wetness(mut self) -> Self {
+        self.wettable = true;
         self
     }
 }
@@ -230,6 +251,10 @@ pub struct Frame {
     pub instances: Vec<Instance>,
     /// Per-frame fog; `Fog::default()` is the pre-v13 look.
     pub fog: Fog,
+    /// Opt-in outdoor sky, directional light, shadows and wet reflections.
+    pub environment: Environment,
+    /// Camera-facing alpha particles drawn after opaque geometry.
+    pub particles: Vec<Particle>,
 }
 
 /// Scene-pass uniform (group 0, binding 0). Mirrors `SceneUniform` in
@@ -241,17 +266,116 @@ struct SceneUniform {
     view_proj: [[f32; 4]; 4],
     /// `Fog::color` in xyz, `Fog::density` in w.
     fog: [f32; 4],
+    inverse_view_proj: [[f32; 4]; 4],
+    light_view_proj: [[f32; 4]; 4],
+    eye: [f32; 4],
+    sun_direction: [f32; 4],
+    sun_color: [f32; 4],
+    sky_zenith: [f32; 4],
+    sky_horizon: [f32; 4],
+    wind_time: [f32; 4],
+    camera_right: [f32; 4],
+    camera_up: [f32; 4],
 }
 
 impl SceneUniform {
     const SIZE: u64 = std::mem::size_of::<Self>() as u64;
 
-    const fn new(view_proj: Mat4, fog: Fog) -> Self {
+    fn new(frame: &Frame, aspect: f32) -> Self {
+        let environment = &frame.environment;
+        let eye = finite_vec3(frame.camera.eye, Vec3::new(0.0, 32.0, 40.0));
+        let forward = finite_vec3(frame.camera.target - eye, -Vec3::Z)
+            .try_normalize()
+            .unwrap_or(-Vec3::Z);
+        let up = if forward.cross(Vec3::Y).length_squared() < 1.0e-8 {
+            Vec3::Z
+        } else {
+            Vec3::Y
+        };
+        let right = forward.cross(up).normalize();
+        let camera_up = right.cross(forward).normalize();
+        let view_proj = Mat4::perspective_rh(
+            finite_clamp(frame.camera.fov_y_deg, 50.0, 1.0, 179.0).to_radians(),
+            finite_clamp(aspect, 1.0, 0.01, 100.0),
+            0.1,
+            500.0,
+        ) * Mat4::look_at_rh(eye, eye + forward, up);
+        let sun_direction = finite_vec3(environment.sun_direction, Vec3::new(0.4, 1.0, 0.3))
+            .try_normalize()
+            .unwrap_or(Vec3::Y);
+        let extent = finite_clamp(environment.shadow_extent, 90.0, 16.0, 180.0);
+        // Camera-centred orthographic map: quantize its two lateral coordinates
+        // to shadow texels so walking does not make static shadows shimmer.
+        let light_up = if sun_direction.dot(Vec3::Y).abs() > 0.995 {
+            Vec3::Z
+        } else {
+            Vec3::Y
+        };
+        let light_right = (-sun_direction).cross(light_up).normalize();
+        let light_vertical = light_right.cross(-sun_direction).normalize();
+        let texel = 2.0 * extent / SHADOW_SIZE as f32;
+        let center = eye
+            + light_right
+                * (eye.dot(light_right) / texel)
+                    .round()
+                    .mul_add(texel, -eye.dot(light_right))
+            + light_vertical
+                * (eye.dot(light_vertical) / texel)
+                    .round()
+                    .mul_add(texel, -eye.dot(light_vertical));
+        let light_view_proj =
+            Mat4::orthographic_rh(-extent, extent, -extent, extent, 0.1, extent * 4.0)
+                * Mat4::look_at_rh(center + sun_direction * extent * 2.0, center, light_up);
+        let fog_color = finite_vec3(
+            Vec3::from_array(frame.fog.color),
+            Vec3::from_array(Fog::default().color),
+        )
+        .clamp(Vec3::ZERO, Vec3::ONE);
         Self {
             view_proj: view_proj.to_cols_array_2d(),
-            fog: [fog.color[0], fog.color[1], fog.color[2], fog.density],
+            fog: fog_color
+                .extend(finite_clamp(frame.fog.density, 0.005, 0.0, 1.0))
+                .to_array(),
+            inverse_view_proj: view_proj.inverse().to_cols_array_2d(),
+            light_view_proj: light_view_proj.to_cols_array_2d(),
+            eye: eye.extend(1.0).to_array(),
+            sun_direction: sun_direction
+                .extend(f32::from(u8::from(environment.enabled)))
+                .to_array(),
+            sun_color: finite_vec3(environment.sun_color, Vec3::ONE)
+                .clamp(Vec3::ZERO, Vec3::splat(4.0))
+                .extend(finite_clamp(environment.sun_intensity, 1.15, 0.0, 8.0))
+                .to_array(),
+            sky_zenith: finite_vec3(environment.sky_zenith, Vec3::new(0.12, 0.3, 0.65))
+                .clamp(Vec3::ZERO, Vec3::splat(4.0))
+                .extend(finite_clamp(environment.cloud_coverage, 0.45, 0.0, 1.0))
+                .to_array(),
+            sky_horizon: finite_vec3(environment.sky_horizon, Vec3::new(0.55, 0.65, 0.75))
+                .clamp(Vec3::ZERO, Vec3::splat(4.0))
+                .extend(finite_clamp(environment.wetness, 0.0, 0.0, 1.0))
+                .to_array(),
+            wind_time: [
+                finite_clamp(environment.wind.x, 0.0, -30.0, 30.0),
+                finite_clamp(environment.wind.y, 0.0, -30.0, 30.0),
+                finite_clamp(environment.time, 0.0, 0.0, 1.0e7),
+                extent,
+            ],
+            camera_right: right.extend(0.0).to_array(),
+            camera_up: camera_up.extend(0.0).to_array(),
         }
     }
+}
+
+const fn finite_clamp(value: f32, fallback: f32, min: f32, max: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(min, max)
+    } else {
+        fallback
+    }
+}
+
+fn finite_vec3(value: Vec3, fallback: Vec3) -> Vec3 {
+    if value.is_finite() { value } else { fallback }
 }
 
 #[repr(C)]
@@ -269,6 +393,28 @@ struct InstanceRaw {
     scale: [f32; 3],
     color: [f32; 3],
     rot: [f32; 4],
+    /// Wettable, then casts/receives shadows.
+    material: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ParticleRaw {
+    position: [f32; 3],
+    size: [f32; 2],
+    color: [f32; 3],
+    opacity: f32,
+}
+
+const SHADOW_SIZE: u32 = 1536;
+const MAX_PARTICLES: usize = 4096;
+// Packed depth is colour-renderable and textureLoad-readable on WebGL2.
+const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+struct ShadowTargets {
+    color_view: wgpu::TextureView,
+    depth_view: wgpu::TextureView,
+    bind: wgpu::BindGroup,
 }
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -307,6 +453,11 @@ pub struct Renderer {
     /// to screen capture).
     presented_size: [u32; 2],
     scene_pipeline: wgpu::RenderPipeline,
+    sky_pipeline: wgpu::RenderPipeline,
+    shadow_pipeline: wgpu::RenderPipeline,
+    particle_pipeline: wgpu::RenderPipeline,
+    shadow: ShadowTargets,
+    particle_buf: wgpu::Buffer,
     scene_uniform_buf: wgpu::Buffer,
     scene_uniform_bind: wgpu::BindGroup,
     /// Per mesh id (0 = built-in cube): buffer, count, texture bind group.
@@ -326,6 +477,8 @@ pub struct Renderer {
     // Native hot reload reads this layout; wasm intentionally retains it without reading it.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     scene_pipeline_layout: wgpu::PipelineLayout,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    effect_pipeline_layout: wgpu::PipelineLayout,
     // Native hot reload reads this layout; wasm intentionally retains it without reading it.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     present_pipeline_layout: wgpu::PipelineLayout,
@@ -605,13 +758,41 @@ impl Renderer {
             }],
         });
 
+        let shadow_layout = create_shadow_layout(&device);
+        let shadow = create_shadow_targets(&device, &shadow_layout);
         let scene_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("scene pipeline layout"),
-                bind_group_layouts: &[&scene_uniform_layout, &mesh_tex_layout],
+                bind_group_layouts: &[&scene_uniform_layout, &mesh_tex_layout, &shadow_layout],
                 push_constant_ranges: &[],
             });
         let scene_pipeline = build_scene_pipeline(&device, &scene_pipeline_layout, &shader);
+        let effect_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("environment pipeline layout"),
+                bind_group_layouts: &[&scene_uniform_layout],
+                push_constant_ranges: &[],
+            });
+        let sky_pipeline =
+            build_effect_pipeline(&device, &effect_pipeline_layout, &shader, EffectPass::Sky);
+        let shadow_pipeline = build_effect_pipeline(
+            &device,
+            &effect_pipeline_layout,
+            &shader,
+            EffectPass::Shadow,
+        );
+        let particle_pipeline = build_effect_pipeline(
+            &device,
+            &effect_pipeline_layout,
+            &shader,
+            EffectPass::Particle,
+        );
+        let particle_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("weather particles"),
+            size: (MAX_PARTICLES * std::mem::size_of::<ParticleRaw>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         let instance_cap = 64;
         let instance_buf = create_instance_buf(&device, instance_cap);
@@ -676,6 +857,11 @@ impl Renderer {
             scene_scale,
             presented_size: [0, 0],
             scene_pipeline,
+            sky_pipeline,
+            shadow_pipeline,
+            particle_pipeline,
+            shadow,
+            particle_buf,
             scene_uniform_buf,
             scene_uniform_bind,
             meshes,
@@ -687,6 +873,7 @@ impl Renderer {
             present_sampler,
             surface_view_format,
             scene_pipeline_layout,
+            effect_pipeline_layout,
             present_pipeline_layout,
             #[cfg(not(target_arch = "wasm32"))]
             shader_reload: ShaderReload::default(),
@@ -817,30 +1004,45 @@ impl Renderer {
                 self.last_scene_at = std::time::Instant::now();
             }
             let aspect = self.scene.width as f32 / self.scene.height.max(1) as f32;
-            let uniform = SceneUniform::new(frame.camera.view_proj(aspect), frame.fog);
+            let uniform = SceneUniform::new(frame, aspect);
             self.queue
                 .write_buffer(&self.scene_uniform_buf, 0, bytemuck::bytes_of(&uniform));
 
             // Bucket instances by mesh so each mesh draws with one instanced
             // call over a contiguous range of the shared instance buffer.
             let mut buckets: Vec<Vec<InstanceRaw>> = vec![Vec::new(); self.meshes.len()];
+            let mut noncasters: Vec<Vec<InstanceRaw>> = vec![Vec::new(); self.meshes.len()];
             for i in &frame.instances {
                 let m = (i.mesh as usize).min(self.meshes.len() - 1);
-                buckets[m].push(InstanceRaw {
+                let bucket = if i.casts_shadow {
+                    &mut buckets[m]
+                } else {
+                    &mut noncasters[m]
+                };
+                bucket.push(InstanceRaw {
                     pos: i.position.to_array(),
                     scale: i.scale.to_array(),
                     color: i.color.to_array(),
                     rot: i.rot.to_array(),
+                    material: [
+                        f32::from(u8::from(i.wettable)),
+                        f32::from(u8::from(i.casts_shadow)),
+                    ],
                 });
             }
             let mut raws: Vec<InstanceRaw> = Vec::with_capacity(frame.instances.len());
             let mut ranges: Vec<(usize, std::ops::Range<u32>)> = Vec::new();
+            let mut shadow_ranges: Vec<(usize, std::ops::Range<u32>)> = Vec::new();
             for (mi, b) in buckets.iter().enumerate() {
-                if b.is_empty() {
+                if b.is_empty() && noncasters[mi].is_empty() {
                     continue;
                 }
                 let start = raws.len() as u32;
                 raws.extend_from_slice(b);
+                if !b.is_empty() {
+                    shadow_ranges.push((mi, start..raws.len() as u32));
+                }
+                raws.extend_from_slice(&noncasters[mi]);
                 ranges.push((mi, start..raws.len() as u32));
             }
             if raws.len() > self.instance_cap {
@@ -851,6 +1053,11 @@ impl Renderer {
                 self.queue
                     .write_buffer(&self.instance_buf, 0, bytemuck::cast_slice(&raws));
             }
+            let particles = particle_instances(frame, &uniform);
+            if !particles.is_empty() {
+                self.queue
+                    .write_buffer(&self.particle_buf, 0, bytemuck::cast_slice(&particles));
+            }
 
             // Separate command buffers per pass, per the ATW doc's sliced-
             // submission rule: the presenter must never wait behind scene work
@@ -860,6 +1067,37 @@ impl Renderer {
                     .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                         label: Some("scene encoder"),
                     });
+            if frame.environment.enabled {
+                let mut pass = scene_enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("directional shadow pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &self.shadow.color_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.shadow.depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Discard,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                pass.set_pipeline(&self.shadow_pipeline);
+                pass.set_bind_group(0, &self.scene_uniform_bind, &[]);
+                pass.set_vertex_buffer(1, self.instance_buf.slice(..));
+                for (mi, range) in &shadow_ranges {
+                    let mesh = &self.meshes[*mi];
+                    pass.set_vertex_buffer(0, mesh.buf.slice(..));
+                    pass.draw(0..mesh.count, range.clone());
+                }
+            }
             {
                 let mut pass = scene_enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("scene pass"),
@@ -889,9 +1127,15 @@ impl Renderer {
                     timestamp_writes: None,
                     occlusion_query_set: None,
                 });
+                if frame.environment.enabled {
+                    pass.set_pipeline(&self.sky_pipeline);
+                    pass.set_bind_group(0, &self.scene_uniform_bind, &[]);
+                    pass.draw(0..3, 0..1);
+                }
                 if !raws.is_empty() {
                     pass.set_pipeline(&self.scene_pipeline);
                     pass.set_bind_group(0, &self.scene_uniform_bind, &[]);
+                    pass.set_bind_group(2, &self.shadow.bind, &[]);
                     pass.set_vertex_buffer(1, self.instance_buf.slice(..));
                     for (mi, range) in &ranges {
                         let mesh = &self.meshes[*mi];
@@ -899,6 +1143,12 @@ impl Renderer {
                         pass.set_vertex_buffer(0, mesh.buf.slice(..));
                         pass.draw(0..mesh.count, range.clone());
                     }
+                }
+                if !particles.is_empty() {
+                    pass.set_pipeline(&self.particle_pipeline);
+                    pass.set_bind_group(0, &self.scene_uniform_bind, &[]);
+                    pass.set_vertex_buffer(0, self.particle_buf.slice(..));
+                    pass.draw(0..6, 0..particles.len() as u32);
                 }
             }
             Some(scene_enc.finish())
@@ -998,9 +1248,40 @@ impl Renderer {
         if check_mtime(SCENE_SRC, &mut self.shader_reload.scene_mtime)
             && let Some(module) = self.try_compile(SCENE_SRC, "scene shader (hot-reload)")
         {
-            self.scene_pipeline =
-                build_scene_pipeline(&self.device, &self.scene_pipeline_layout, &module);
-            tracing::info!(path = SCENE_SRC, "scene shader hot-reloaded");
+            // Entry-point/layout mismatches are pipeline errors, not module
+            // errors. Validate the complete family before replacing any part.
+            self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let scene = build_scene_pipeline(&self.device, &self.scene_pipeline_layout, &module);
+            let sky = build_effect_pipeline(
+                &self.device,
+                &self.effect_pipeline_layout,
+                &module,
+                EffectPass::Sky,
+            );
+            let shadow = build_effect_pipeline(
+                &self.device,
+                &self.effect_pipeline_layout,
+                &module,
+                EffectPass::Shadow,
+            );
+            let particle = build_effect_pipeline(
+                &self.device,
+                &self.effect_pipeline_layout,
+                &module,
+                EffectPass::Particle,
+            );
+            if let Some(error) = pollster::block_on(self.device.pop_error_scope()) {
+                tracing::error!(path = SCENE_SRC, %error, "scene shader hot-reload rejected; keeping all old pipelines");
+            } else {
+                self.scene_pipeline = scene;
+                self.sky_pipeline = sky;
+                self.shadow_pipeline = shadow;
+                self.particle_pipeline = particle;
+                tracing::info!(
+                    path = SCENE_SRC,
+                    "scene and environment shaders hot-reloaded"
+                );
+            }
         }
         if check_mtime(PRESENT_SRC, &mut self.shader_reload.present_mtime)
             && let Some(module) = self.try_compile(PRESENT_SRC, "present shader (hot-reload)")
@@ -1040,6 +1321,199 @@ impl Renderer {
         }
         Some(module)
     }
+}
+
+fn particle_instances(frame: &Frame, uniform: &SceneUniform) -> Vec<ParticleRaw> {
+    let eye = Vec3::from_slice(&uniform.eye);
+    let forward =
+        Vec3::from_slice(&uniform.camera_up).cross(Vec3::from_slice(&uniform.camera_right));
+    let mut particles: Vec<&Particle> = frame
+        .particles
+        .iter()
+        .filter(|particle| {
+            particle.position.is_finite()
+                && particle.size.is_finite()
+                && particle.color.is_finite()
+                && particle.opacity.is_finite()
+                && particle.opacity > 0.0
+                && particle.size.min_element() > 0.0
+        })
+        .take(MAX_PARTICLES)
+        .collect();
+    particles.sort_by(|a, b| {
+        let a_depth = (a.position - eye).dot(forward);
+        let b_depth = (b.position - eye).dot(forward);
+        b_depth.total_cmp(&a_depth)
+    });
+    particles
+        .into_iter()
+        .map(|particle| ParticleRaw {
+            position: particle.position.to_array(),
+            size: particle.size.min(glam::Vec2::splat(20.0)).to_array(),
+            color: particle
+                .color
+                .clamp(Vec3::ZERO, Vec3::splat(8.0))
+                .to_array(),
+            opacity: particle.opacity.clamp(0.0, 1.0),
+        })
+        .collect()
+}
+
+fn create_shadow_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("packed shadow texture layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        }],
+    })
+}
+
+fn create_shadow_targets(device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> ShadowTargets {
+    let make = |label, format, usage| {
+        device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: SHADOW_SIZE,
+                    height: SHADOW_SIZE,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default())
+    };
+    let color_view = make(
+        "directional shadow packed depth",
+        SHADOW_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+    );
+    let depth_view = make(
+        "directional shadow depth",
+        DEPTH_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT,
+    );
+    let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("directional shadow texture"),
+        layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::TextureView(&color_view),
+        }],
+    });
+    ShadowTargets {
+        color_view,
+        depth_view,
+        bind,
+    }
+}
+
+const fn mesh_vertex_layouts() -> [wgpu::VertexBufferLayout<'static>; 2] {
+    const VERTEX_ATTRIBUTES: [wgpu::VertexAttribute; 3] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2];
+    const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![3 => Float32x3, 4 => Float32x3, 5 => Float32x3, 6 => Float32x4, 7 => Float32x2];
+    [
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Vertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &VERTEX_ATTRIBUTES,
+        },
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<InstanceRaw>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &INSTANCE_ATTRIBUTES,
+        },
+    ]
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum EffectPass {
+    Sky,
+    Shadow,
+    Particle,
+}
+
+fn build_effect_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    effect: EffectPass,
+) -> wgpu::RenderPipeline {
+    const PARTICLE_ATTRIBUTES: [wgpu::VertexAttribute; 4] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x3, 3 => Float32];
+    let (label, vertex, fragment) = match effect {
+        EffectPass::Sky => ("sky pipeline", "vs_sky", "fs_sky"),
+        EffectPass::Shadow => ("shadow pipeline", "vs_shadow", "fs_shadow"),
+        EffectPass::Particle => ("particle pipeline", "vs_particle", "fs_particle"),
+    };
+    let mesh_buffers = mesh_vertex_layouts();
+    let particle_buffers = [wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<ParticleRaw>() as u64,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &PARTICLE_ATTRIBUTES,
+    }];
+    let buffers = match effect {
+        EffectPass::Sky => &[][..],
+        EffectPass::Shadow => &mesh_buffers[..],
+        EffectPass::Particle => &particle_buffers[..],
+    };
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some(vertex),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers,
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some(fragment),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: if effect == EffectPass::Shadow {
+                    SHADOW_FORMAT
+                } else {
+                    SCENE_FORMAT
+                },
+                blend: if effect == EffectPass::Particle {
+                    Some(wgpu::BlendState::ALPHA_BLENDING)
+                } else {
+                    None
+                },
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: effect == EffectPass::Shadow,
+            depth_compare: if effect == EffectPass::Sky {
+                wgpu::CompareFunction::Always
+            } else {
+                wgpu::CompareFunction::LessEqual
+            },
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    })
 }
 
 fn create_scene_targets(
@@ -1117,18 +1591,7 @@ fn build_scene_pipeline(
             module: shader,
             entry_point: Some("vs_main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[
-                wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Vertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2],
-                },
-                wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<InstanceRaw>() as u64,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &wgpu::vertex_attr_array![3 => Float32x3, 4 => Float32x3, 5 => Float32x3, 6 => Float32x4],
-                },
-            ],
+            buffers: &mesh_vertex_layouts(),
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
@@ -1424,19 +1887,121 @@ mod tests {
     }
 
     #[test]
-    fn scene_uniform_packs_fog_into_the_trailing_vec4() {
-        assert_eq!(SceneUniform::SIZE, 80, "mat4 + vec4, a multiple of 16");
-        let u = SceneUniform::new(
-            Mat4::IDENTITY,
-            Fog {
+    fn scene_uniform_keeps_fog_offsets_and_packs_environment_in_vec4s() {
+        assert_eq!(SceneUniform::SIZE, 336, "three mat4 + nine vec4");
+        let frame = Frame {
+            fog: Fog {
                 color: [0.1, 0.2, 0.3],
                 density: 0.4,
             },
-        );
+            ..Frame::default()
+        };
+        let u = SceneUniform::new(&frame, 1.0);
         assert_eq!(u.fog, [0.1, 0.2, 0.3, 0.4]);
         let bytes = bytemuck::bytes_of(&u);
-        assert_eq!(bytes.len(), 80);
+        assert_eq!(bytes.len(), 336);
         assert_eq!(&bytes[64..68], &0.1f32.to_le_bytes());
         assert_eq!(&bytes[76..80], &0.4f32.to_le_bytes());
     }
+
+    #[test]
+    fn uniform_handles_vertical_sun_degenerate_camera_and_invalid_weather() {
+        let mut frame = Frame::default();
+        frame.camera.eye = Vec3::ZERO;
+        frame.camera.target = Vec3::ZERO;
+        frame.camera.fov_y_deg = f32::NAN;
+        frame.environment.sun_direction = Vec3::Y;
+        frame.environment.cloud_coverage = f32::INFINITY;
+        frame.environment.shadow_extent = f32::NAN;
+        frame.environment.wind.x = f32::NAN;
+        frame.environment.sun_intensity = f32::INFINITY;
+        let uniform = SceneUniform::new(&frame, f32::NAN);
+        let values: &[f32] = bytemuck::cast_slice(bytemuck::bytes_of(&uniform));
+        assert!(values.iter().all(|value| value.is_finite()));
+        let light = Mat4::from_cols_array_2d(&uniform.light_view_proj);
+        assert!(light.determinant().abs() > 1.0e-10);
+    }
+
+    #[test]
+    fn uniform_preserves_sniper_scope_projection() {
+        let frame = Frame {
+            camera: Camera {
+                eye: Vec3::new(3.0, 1.7, 4.0),
+                target: Vec3::new(0.0, 2.0, -10.0),
+                fov_y_deg: 3.5,
+            },
+            ..Frame::default()
+        };
+        let uniform = SceneUniform::new(&frame, 16.0 / 9.0);
+        let actual = Mat4::from_cols_array_2d(&uniform.view_proj);
+        assert!(actual.abs_diff_eq(frame.camera.view_proj(16.0 / 9.0), 0.0001));
+    }
+
+    #[test]
+    fn near_vertical_camera_preserves_roll_and_projection() {
+        let pitch = 1.53_f32;
+        let frame = Frame {
+            camera: Camera {
+                eye: Vec3::ZERO,
+                target: Vec3::new(0.0, pitch.sin(), -pitch.cos()),
+                fov_y_deg: 60.0,
+            },
+            ..Frame::default()
+        };
+        let uniform = SceneUniform::new(&frame, 1.0);
+        assert!(
+            Mat4::from_cols_array_2d(&uniform.view_proj)
+                .abs_diff_eq(frame.camera.view_proj(1.0), 0.0001)
+        );
+        assert!(Vec3::from_slice(&uniform.camera_right).abs_diff_eq(Vec3::X, 0.0001));
+    }
+
+    #[test]
+    fn particle_upload_rejects_invalid_values_and_orders_by_view_depth() {
+        let mut frame = Frame {
+            camera: Camera {
+                eye: Vec3::ZERO,
+                target: -Vec3::Z,
+                fov_y_deg: 60.0,
+            },
+            ..Frame::default()
+        };
+        let particle = |position| Particle {
+            position,
+            size: glam::Vec2::ONE,
+            color: Vec3::ONE,
+            opacity: 0.5,
+        };
+        // Distance alone is wrong here: the off-axis near drop is farther
+        // from the eye, but the centre far drop must blend first.
+        frame.particles = vec![
+            particle(Vec3::new(10.0, 0.0, -2.0)),
+            particle(Vec3::new(0.0, 0.0, -5.0)),
+            particle(Vec3::splat(f32::NAN)),
+        ];
+        let uniform = SceneUniform::new(&frame, 1.0);
+        let raw = particle_instances(&frame, &uniform);
+        assert_eq!(raw.len(), 2);
+        assert_eq!(raw[0].position, [0.0, 0.0, -5.0]);
+        assert_eq!(raw[1].position, [10.0, 0.0, -2.0]);
+    }
+
+    #[test]
+    fn environment_wgsl_validates_all_entrypoints() {
+        let module = wgpu::naga::front::wgsl::parse_str(include_str!("shader.wgsl"))
+            .expect("environment shader must parse");
+        wgpu::naga::valid::Validator::new(
+            wgpu::naga::valid::ValidationFlags::all(),
+            wgpu::naga::valid::Capabilities::empty(),
+        )
+        .validate(&module)
+        .expect(
+            "all scene/environment shader entrypoints must validate without optional capabilities",
+        );
+        assert_eq!(module.entry_points.len(), 8);
+    }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "renderer_gpu_test.rs"]
+mod gpu_tests;

@@ -1,0 +1,42 @@
+name: Bug report
+description: Something behaves differently from what the docs or the sim say
+title: ""
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, in the game or on the page. If it is a web page, which game and which version (the hub's version picker shows it).
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: input
+    id: where
+    attributes:
+      label: Where
+      description: Web or native; browser and version if web.
+  - type: input
+    id: protocol
+    attributes:
+      label: Protocol version
+      description: The number in the page header's host chip. The join gate is exact equality, so two peers on different protocols play different games.
+  - type: input
+    id: host
+    attributes:
+      label: Host
+      description: The name in the header chip (like amber-otter) and the round trip it shows.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+  - type: textarea
+    id: report
+    attributes:
+      label: "what is this? report (optional)"
+      description: Run the diagnostic in the hub and paste the JSON if you can; it saves a round trip.

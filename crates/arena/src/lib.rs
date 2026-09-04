@@ -15,6 +15,7 @@ mod props;
 mod rounds;
 mod script;
 mod sound;
+mod weather;
 
 use ember_engine::glam::Vec3;
 use ember_engine::{Camera, EmberGame, EngineConfig, Frame, InputState, Instance, KeyCode};
@@ -58,6 +59,7 @@ fn build_scene(p: &SceneParams) -> Frame {
         camera,
         instances: Vec::with_capacity(32),
         fog: ember_engine::Fog::default(),
+        ..Frame::default()
     };
     let inst = |frame: &mut Frame, pos: Vec3, scale: Vec3, color: Vec3| {
         frame.instances.push(Instance::new(pos, scale, color));

@@ -700,6 +700,7 @@ pub fn scene(state: &State, meshes: &Meshes, view: &View, camera: Camera) -> Fra
         camera,
         instances: Vec::with_capacity(TILES + 64 + 40),
         fog: ember_engine::Fog::default(),
+        ..Frame::default()
     };
     push_tiles(&mut frame, meshes);
     push_pieces(&mut frame, state, meshes);

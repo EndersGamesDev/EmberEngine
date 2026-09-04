@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ember — a from-scratch Rust game engine for the web</title>
+  <meta name="description" content="Ember is a from-scratch game engine in Rust: wgpu rendering, a deterministic 60 Hz simulation, and games that run natively and in the browser from the same crates.">
+  <style>
+    :root { color-scheme: dark; --ink: #f4f1e8; --muted: #aeb8c7; --line: rgba(225, 235, 255, .15); --panel: rgba(11, 20, 38, .78); --gold: #ffc857; --mint: #73e2b5; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh;
+      background: radial-gradient(circle at 12% -10%, #25436b 0, transparent 34rem), radial-gradient(circle at 90% 8%, #512f51 0, transparent 30rem), #07101f;
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      line-height: 1.55;
+    }
+    .wrap { width: min(1080px, 92vw); margin: 0 auto; }
+    header { display: flex; align-items: center; justify-content: space-between; margin-top: 22px; }
+    .wordmark { font-size: 1.1rem; letter-spacing: .2em; text-transform: uppercase; font-weight: 800; }
+    .wordmark span { color: var(--gold); }
+    nav { display: flex; gap: 10px; flex-wrap: wrap; }
+    nav a { font-size: .8rem; color: var(--muted); text-decoration: none; border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; }
+    nav a:hover { color: var(--ink); border-color: var(--gold); }
+    .hero { padding: 72px 0 40px; }
+    .eyebrow { color: var(--gold); font-size: .76rem; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+    .hero h1 { margin: 10px 0 6px; font-size: clamp(3rem, 9vw, 6.5rem); line-height: .9; letter-spacing: -.06em; }
+    .hero .sub { max-width: 62ch; color: var(--muted); font-size: 1.05rem; margin: 0 0 26px; }
+    .cta { display: flex; gap: 12px; flex-wrap: wrap; }
+    .cta a { text-decoration: none; font-weight: 700; font-size: .95rem; border-radius: 12px; padding: 12px 20px; border: 1px solid var(--line); color: var(--ink); }
+    .cta a.primary { background: linear-gradient(135deg, rgba(255, 200, 87, .22), rgba(115, 226, 181, .08)); border-color: rgba(255, 200, 87, .55); }
+    .cta a:hover { border-color: var(--gold); }
+    .strip { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 30px; }
+    .strip span { font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; }
+    section { padding: 34px 0; border-top: 1px solid var(--line); }
+    h2 { font-size: .78rem; color: var(--muted); letter-spacing: .14em; text-transform: uppercase; margin: 8px 0 18px; }
+    h2 .dot { color: var(--mint); }
+    .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px; }
+    .card h3 { margin: 0 0 8px; font-size: 1.05rem; letter-spacing: -.02em; }
+    .card p { margin: 0; color: var(--muted); font-size: .9rem; }
+    .card .tag { font-size: .7rem; color: var(--gold); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+    .layers { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; align-items: stretch; }
+    .layer { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; position: relative; }
+    .layer b { display: block; font-size: .95rem; margin-bottom: 4px; }
+    .layer p { margin: 0; color: var(--muted); font-size: .8rem; }
+    .layer:not(:last-child)::after { content: '→'; position: absolute; right: -13px; top: 50%; transform: translateY(-50%); color: var(--gold); font-weight: 800; z-index: 1; }
+    .layers-note { margin-top: 12px; color: var(--muted); font-size: .9rem; max-width: 70ch; }
+    .games { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; }
+    .game { position: relative; overflow: hidden; isolation: isolate; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px; display: flex; flex-direction: column; gap: 8px; min-height: 190px; }
+    .game::before { content: ''; position: absolute; z-index: -1; inset: 0 0 auto; height: 90px; opacity: .8; background: radial-gradient(circle at 85% 5%, var(--accent-2), transparent 42%), linear-gradient(125deg, var(--accent), transparent 64%); }
+    .game[data-game="arena"] { --accent: #8b333a; --accent-2: #e7a654; }
+    .game[data-game="fire"] { --accent: #a54128; --accent-2: #fac45b; }
+    .game[data-game="kings"] { --accent: #3c427f; --accent-2: #b47dc4; }
+    .game[data-game="wit"] { --accent: #12615a; --accent-2: #76dbbb; }
+    .game h3 { margin: auto 0 0; font-size: 1.25rem; letter-spacing: -.03em; }
+    .game p { margin: 0; color: var(--muted); font-size: .85rem; }
+    .cols3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; }
+    a.inline { color: var(--mint); text-decoration: none; border-bottom: 1px dotted rgba(115, 226, 181, .5); }
+    a.inline:hover { border-bottom-style: solid; }
+    .honest { background: linear-gradient(135deg, rgba(255, 200, 87, .10), rgba(115, 226, 181, .04)); border: 1px solid var(--line); border-radius: 16px; padding: 20px 22px; max-width: 80ch; }
+    .honest p { margin: 0 0 8px; color: var(--muted); font-size: .92rem; }
+    .honest p b { color: var(--ink); }
+    footer { border-top: 1px solid var(--line); margin-top: 30px; padding: 26px 0 40px; }
+    footer .wrap { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: .82rem; }
+    footer a { color: var(--muted); text-decoration: none; }
+    footer a:hover { color: var(--gold); }
+    @media (max-width: 720px) { .layers { grid-template-columns: 1fr 1fr; } .layer:not(:last-child)::after { display: none; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="wordmark">ember<span>·</span>engine</div>
+      <nav>
+        <a href="./">play the games</a>
+        <a href="https://github.com/EndersGamesDev/EmberEngine">source</a>
+        <a href="https://github.com/EndersGamesDev/EmberEngine/tree/main/docs">docs</a>
+        <a href="https://github.com/EndersGamesDev/EmberEngine/wiki">wiki</a>
+      </nav>
+    </header>
+
+    <div class="hero">
+      <div class="eyebrow">a from-scratch game engine</div>
+      <h1>ember</h1>
+      <p class="sub">Rust and wgpu, one wasm bundle. A deterministic engine whose games run in a browser tab and on the desktop from the same code — no install, no CDN, no backend for the player.</p>
+      <div class="cta">
+        <a class="primary" href="./">Play the games</a>
+        <a href="https://github.com/EndersGamesDev/EmberEngine">Read the source</a>
+        <a href="https://github.com/EndersGamesDev/EmberEngine/blob/main/CONTRIBUTING.md">Build on it</a>
+      </div>
+      <div class="strip">
+        <span>rust</span><span>wgpu</span><span>wasm</span><span>webgl2 floor</span><span>60 hz lockstep</span><span>one-way layering</span>
+      </div>
+    </div>
+
+    <section>
+      <h2><span class="dot">●</span> the four pillars</h2>
+      <div class="grid2">
+        <div class="card">
+          <div class="tag">engine = compiler + small runtime</div>
+          <h3>Baked, not parsed</h3>
+          <p>Assets — glTF, textures, shaders — are compiled offline into flat, memory-mappable blobs. The shipped runtime maps, uploads, runs; it never parses at startup, and the web bundle carries every byte at compile time.</p>
+        </div>
+        <div class="card">
+          <div class="tag">gpu-driven rendering</div>
+          <h3>The CPU hands over a camera</h3>
+          <p>Bindless resources, culling in compute, indirect draws, a small render graph — the direction of travel. Today the scene pass is deliberately small and documented, and the constraints it lives under are the design.</p>
+        </div>
+        <div class="card">
+          <div class="tag">deterministic simulation</div>
+          <h3>60 Hz, seeded, fixed order</h3>
+          <p>Fixed timestep, seeded RNG (two world-generation LCGs and nothing else), fixed update order. Replays, save states and rollback netcode fall out of it for free; the client predicts and the server is authoritative.</p>
+        </div>
+        <div class="card">
+          <div class="tag">iteration speed is a feature</div>
+          <h3>Blender edits, the engine inspects</h3>
+          <p>Hot-reloadable shaders, an in-engine overlay, time-travel debugging on top of the deterministic sim. Blender is the content editor; the engine is where the running game is inspected.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2><span class="dot">●</span> what runs on it</h2>
+      <div class="games">
+        <div class="game" data-game="arena">
+          <div class="tag">online · first person · up to 8</div>
+          <h3>Arena Shooter</h3>
+          <p>Three modes, seven guns, real muzzle velocities, tracers and spatial sound. Loot a gun by bonking a ? block from below; raise a shield that reflects the round back.</p>
+        </div>
+        <div class="game" data-game="fire">
+          <div class="tag">local + online · 8 cars · 3 laps</div>
+          <h3>Fire Racer</h3>
+          <p>Drift racing through a gothic castle bailey — a 920 m circuit with a fountain chicane and a hairpin. Practice alone or race on an authoritative server.</p>
+        </div>
+        <div class="game" data-game="kings">
+          <div class="tag">online · turn based · 2–4 players</div>
+          <h3>Four Kings</h3>
+          <p>Four-corner chess on a 10×10 board, one action per 15-second turn, two new legend pieces, last king standing wins.</p>
+        </div>
+        <div class="game" data-game="wit">
+          <div class="tag">local diagnostic</div>
+          <h3>what is this?</h3>
+          <p>A playful, staged answer to a practical question: what kind of machine and browser is this? Runs wasm kernels and can optionally upload the report.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2><span class="dot">●</span> the shape of it</h2>
+      <div class="layers">
+        <div class="layer"><b>game</b><p>arena, fire, kings — each with its own server and its own protocol number</p></div>
+        <div class="layer"><b>scene / simulation</b><p>the deterministic 60 Hz sims, shared by prediction and authority</p></div>
+        <div class="layer"><b>renderer</b><p>owns wgpu; the scene pass, the presenter, the GPU heap</p></div>
+        <div class="layer"><b>platform</b><p>winit window, events, input — the only layer that touches the OS</p></div>
+      </div>
+      <p class="layers-note">Strict one-way layering: nothing reaches back up, and nothing above the renderer touches the GPU. A change in a shared sim crate is a protocol question until it is proved not to be — that single rule is what keeps a client and a server playing the same game.</p>
+    </section>
+
+    <section>
+      <h2><span class="dot">●</span> the web story</h2>
+      <div class="cols3">
+        <div class="card">
+          <h3>One bundle, no runtime fetch</h3>
+          <p>Each game is a single wasm file with every asset baked in at compile time. The page is the download; the deploy is a static host. The cost is measured in megabytes and tracked in the backlog.</p>
+        </div>
+        <div class="card">
+          <h3>A documented floor</h3>
+          <p>WebGL2 plus one extension — no WebGPU, no cross-origin isolation. The exact floor, and the real devices it excludes, are written down in <a class="inline" href="https://github.com/EndersGamesDev/EmberEngine/blob/main/docs/minimum-requirements.md">docs/minimum-requirements.md</a>. A device below it gets a typed refusal, never a blank canvas.</p>
+        </div>
+        <div class="card">
+          <h3>An address book, not a central server</h3>
+          <p>Any machine can host a game behind a tunnel. The page fetches the book, asks every host in one round trip, and picks the newest build that speaks its protocol — the emptiest among those, the nearest among those. Old versions stay playable on old hosts. The full model is <a class="inline" href="https://github.com/EndersGamesDev/EmberEngine/blob/main/docs/hosts.md">docs/hosts.md</a>.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2><span class="dot">●</span> determinism, for free</h2>
+      <div class="honest">
+        <p><b>Fixed 60 Hz, two seeded LCGs, fixed update order.</b> The client predicts its own movement against the same sim the authoritative server steps, and reconciles against 30 Hz server state. Bullets are stepped server-side only — the sole reason hit registration can use ordinary floats.</p>
+        <p><b>So:</b> replays, save states, rollback netcode, and reproducible bugs. If a replay diverges, the divergence is a bug with an address, not a mystery.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2><span class="dot">●</span> honest state</h2>
+      <div class="honest">
+        <p><b>Young, pre-1.0, one developer, AI-assisted.</b> The games ship; the engine is still earning its keep. Public roadmap, in the README: physics (rapier) is the next sim addition; an offline asset compiler and the GPU-driven rendering pass are the next big two; shadow mapping is still open.</p>
+        <p><b>The backlog is one line per known gap</b> — <a class="inline" href="https://github.com/EndersGamesDev/EmberEngine/blob/main/docs/plans/backlog.md">docs/plans/backlog.md</a> — several of them small enough to be a first pull request. <a class="inline" href="https://github.com/EndersGamesDev/EmberEngine/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a> is the short version of the rules; <a class="inline" href="https://github.com/EndersGamesDev/EmberEngine/blob/main/CLAUDE.md">CLAUDE.md</a> the long one.</p>
+      </div>
+    </section>
+
+    <footer>
+      <div class="wrap">
+        <div>the games run on ember — the engine is the point</div>
+        <div>
+          <a href="./">games hub</a> ·
+          <a href="https://github.com/EndersGamesDev/EmberEngine">github</a> ·
+          <a href="https://github.com/EndersGamesDev/EmberEngine/wiki">wiki</a> ·
+          <a href="https://github.com/EndersGamesDev/EmberEngine/issues">issues</a>
+        </div>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>
