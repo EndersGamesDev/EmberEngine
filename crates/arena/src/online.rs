@@ -10,8 +10,8 @@ use arena_core::proto::{BState, C2S, PROTO_VERSION, PState, PlayerMeta, S2C, STA
 use arena_core::shooter::{
     Cover, Decor, EYE_CROUCH, EYE_STAND, FFA_FRAG_LIMIT, FIXED_DT, GameMode, HILL_CONTESTED,
     HILL_FREE, HILL_LIMIT, Hill, Level, MAX_HP, MAX_PITCH, MELEE_COOLDOWN, Obstacle, Projectile,
-    RESERVE_INFINITE, SIDEARM, TDM_FRAG_LIMIT, WEAPON_COUNT, move_circle, stance_speed,
-    step_vertical, weapon_name, weapon_stats,
+    RESERVE_INFINITE, SHOT_BODY, SHOT_SHIELD, SIDEARM, TDM_FRAG_LIMIT, WEAPON_COUNT, move_circle,
+    stance_speed, step_vertical, weapon_name, weapon_stats,
 };
 use ember_engine::glam::{Mat3, Quat, Vec2, Vec3};
 use ember_engine::{
@@ -19,9 +19,9 @@ use ember_engine::{
 };
 use serde::Deserialize;
 
-use crate::feel::{self, Climb, Cue, GLOW_BLUE, Shake, weapon_feel};
+use crate::feel::{self, Climb, Cue, GLOW_BLUE, Mark, Play, Puff, Shake, Tracer, weapon_feel};
 use crate::props::{LOOT_SPENT_TINT, Prop, Props, tex};
-use crate::sound::{Audio, BUDGET, Sfx, prioritize};
+use crate::sound::{Audio, BUDGET, Dist, Sfx};
 
 /// What a part does when the weapon fires (v15). Decided by the part's
 /// node name, which is the asset's contract with this file: `cylinder*`
@@ -802,6 +802,77 @@ struct Fx {
     gravity: f32,
 }
 
+impl From<Puff> for Fx {
+    fn from(p: Puff) -> Self {
+        Self {
+            pos: p.pos,
+            vel: p.vel,
+            ttl: p.ttl,
+            life: p.ttl,
+            size: p.size,
+            color: p.color,
+            gravity: p.gravity,
+        }
+    }
+}
+
+/// A remote muzzle flash (v20): one cube at a shooter's muzzle from the
+/// `Shot` event, gone at `until`. Remote flashes used to wait for a state
+/// that happened to carry the round; at real speeds most never did.
+#[derive(Clone, Copy)]
+struct Flash {
+    pos: Vec3,
+    size: f32,
+    until: f32,
+}
+
+/// A brass casing out of my own gun (v20): falls under gravity from the
+/// ejection port, stops where it lands, and is gone at `CASING_SECS`.
+#[derive(Clone, Copy)]
+struct Casing {
+    pos: Vec3,
+    vel: Vec3,
+    /// The height it lands on: my feet, which is the floor or the box I
+    /// stand on.
+    land_y: f32,
+    born: f32,
+}
+
+/// My own shot's segment, held from the event until the render pass has
+/// the viewmodel's muzzle to start the streak from (v20). The sim's origin
+/// is the eye height a hand ahead of the eye; the muzzle reads better, and
+/// only the render pass knows where it is this frame.
+#[derive(Clone, Copy)]
+struct PendingShot {
+    from: Vec3,
+    to: Vec3,
+    weapon: u8,
+}
+
+/// How long the end point of a body or shield hit is remembered as a point
+/// a later segment may start from. A pierce's second segment arrives in
+/// the same tick; a reflection's return segment ends a few ticks later.
+const CONTINUATION_SECS: f32 = 1.5;
+
+/// How close a segment's start has to be to a remembered end point to be
+/// its continuation rather than a new shot.
+const CONTINUATION_EPS: f32 = 1e-3;
+
+/// How far down a remote round's line its flash and plume are drawn from
+/// the sim's launch point (metres): the launch point is 0.2 m ahead of the
+/// eye, inside the drawn head, and the drawn gun's muzzle is about this
+/// far out.
+const REMOTE_MUZZLE: f32 = 0.75;
+
+/// Where the listener is and which way is right, for the spatial cues: my
+/// eye at the top of the frame, before the look moves it, which is a frame
+/// of lag on a pan and nothing on a delay.
+#[derive(Clone, Copy)]
+struct Ear {
+    at: Vec3,
+    right: Vec3,
+}
+
 /// A weapon rising out of a bonked block: which block, which gun, when.
 #[derive(Clone, Copy)]
 struct Pop {
@@ -998,6 +1069,26 @@ pub struct ShooterGame {
     sprint_latch: bool,
     /// Whether the pad status has been shown on the status line yet.
     pad_status_shown: &'static str,
+    // ---- v20: the realism pass ----
+    /// Streaks from `S2C::Shot`, drawn until each has flown and faded.
+    tracers: Vec<Tracer>,
+    /// Impact marks in age order, capped at `feel::MARK_CAP`.
+    marks: VecDeque<Mark>,
+    /// Remote muzzle flashes from `Shot`.
+    flashes: Vec<Flash>,
+    /// My own casings in the air and on the ground.
+    casings: Vec<Casing>,
+    /// My own shots waiting for the render pass to anchor their streaks at
+    /// the viewmodel's muzzle.
+    pending_shots: Vec<PendingShot>,
+    /// Where a round was reflected or pierced through, and when: the
+    /// point the next segment of that round starts from. A segment that
+    /// starts here is the same round going on, which draws a streak and
+    /// an impact but no second flash, plume or gunshot.
+    continuations: Vec<(Vec3, f32)>,
+    /// A shot of mine was confirmed this frame: the render pass spawns the
+    /// plume and the casing at the muzzle, which only it knows.
+    own_plume: bool,
 }
 
 impl ShooterGame {
@@ -1096,18 +1187,181 @@ impl ShooterGame {
             prev_l3: false,
             sprint_latch: false,
             pad_status_shown: "none",
+            tracers: Vec::new(),
+            marks: VecDeque::new(),
+            flashes: Vec::new(),
+            casings: Vec::new(),
+            pending_shots: Vec::new(),
+            continuations: Vec::new(),
+            own_plume: false,
         }
     }
 
     /// Apply one event cue: raise the shake, queue the rumble, queue the
     /// sound. The camera's part of an event is a timer set by the caller.
-    fn cue(&mut self, c: Cue, sfx: &mut Vec<(Sfx, f32)>) {
+    fn cue(&mut self, c: Cue, sfx: &mut Vec<Play>) {
         self.shake.hit(c.shake);
         if let Some(r) = c.rumble {
             self.feedback.rumble(r.strong, r.weak, r.ms);
         }
         if let Some(s) = c.sfx {
-            sfx.push(s);
+            sfx.push(Play::from_cue(s));
+        }
+    }
+
+    /// `cue`, with the sound placed at `source` in the world: panned to its
+    /// bearing from the ear and late by its distance (v20).
+    fn cue_at(&mut self, c: Cue, source: Vec3, ear: Ear, sfx: &mut Vec<Play>) {
+        self.shake.hit(c.shake);
+        if let Some(r) = c.rumble {
+            self.feedback.rumble(r.strong, r.weak, r.ms);
+        }
+        if let Some((s, v)) = c.sfx {
+            sfx.push(Play::spatial(s, v, source, ear.at, ear.right));
+        }
+    }
+
+    /// Spawn a burst of particles.
+    fn puffs(&mut self, puffs: Vec<Puff>) {
+        self.fx.extend(puffs.into_iter().map(Fx::from));
+    }
+
+    /// One `S2C::Shot`: a round's segment ended. The streak, the muzzle
+    /// flash and plume, the gunshot, the crack, the impact and its mark and
+    /// sound, all from this one event (v20).
+    ///
+    /// A segment that starts where a shield reflected a round or a body was
+    /// pierced is the same round going on: it draws its streak and its
+    /// impact, but the muzzle it never left gets no flash, no plume and no
+    /// gunshot. A rocket's segment draws no streak (the rocket is a mesh
+    /// flown from the state) and no impact (the `Blast` beside it is the
+    /// impact); it leaves its mark.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    fn on_shot(
+        &mut self,
+        owner: u8,
+        weapon: u8,
+        from: Vec3,
+        to: Vec3,
+        hit: u8,
+        cover: u8,
+        normal: [i8; 3],
+        ear: Ear,
+        sfx: &mut Vec<Play>,
+    ) {
+        let now = self.time;
+        self.continuations
+            .retain(|(_, t0)| now - t0 < CONTINUATION_SECS);
+        let continuation = self
+            .continuations
+            .iter()
+            .any(|(p, _)| (*p - from).length() < CONTINUATION_EPS);
+        let mine = Some(owner) == self.my_id;
+        let traces = feel::traces(weapon);
+        let stats = weapon_stats(weapon);
+        let row = weapon_feel(weapon);
+        let dir = (to - from).normalize_or_zero();
+        if traces && !continuation {
+            if mine {
+                self.pending_shots.push(PendingShot { from, to, weapon });
+            } else {
+                self.tracers.push(Tracer {
+                    from,
+                    to,
+                    weapon,
+                    born: now,
+                });
+                // The remote shot, seen and heard from its muzzle: the
+                // flash, the plume, and the gunshot at the distance's
+                // variant, late by the distance and panned to it. The
+                // sim's launch point is a hand ahead of the shooter's eye,
+                // inside the drawn head, so the flash and the plume sit
+                // `REMOTE_MUZZLE` further down the line, about where the
+                // drawn gun ends; the streak still starts at the point
+                // the server gives.
+                let muzzle = from + dir * REMOTE_MUZZLE;
+                self.flashes.push(Flash {
+                    pos: muzzle,
+                    size: row.flash,
+                    until: now + row.flash_ms,
+                });
+                self.puffs(feel::plume(muzzle, dir));
+                let d = (from - ear.at).length();
+                sfx.push(Play::spatial(
+                    feel::shot_sfx(weapon, Dist::at(d)),
+                    feel::remote_shot_volume(&row, d),
+                    from,
+                    ear.at,
+                    ear.right,
+                ));
+            }
+        } else if traces {
+            self.tracers.push(Tracer {
+                from,
+                to,
+                weapon,
+                born: now,
+            });
+        }
+        // The crack of a round passing my head: mine never do, and it is
+        // never late, because it arrives with the round.
+        if !mine && let Some(vol) = feel::crack(from, to, ear.at, stats.speed_max) {
+            sfx.push(Play::centre(Sfx::Crack, vol));
+        }
+        let d = (to - ear.at).length();
+        let n = feel::mark_normal(normal);
+        if let Some(material) = feel::impact_material(hit, cover) {
+            feel::add_mark(
+                &mut self.marks,
+                Mark {
+                    pos: to,
+                    normal: n,
+                    born: now,
+                },
+            );
+            if traces {
+                self.puffs(material.burst(to, n));
+                sfx.push(Play::spatial(
+                    material.sfx(),
+                    material.volume() * feel::falloff(d),
+                    to,
+                    ear.at,
+                    ear.right,
+                ));
+                if material == feel::Material::Metal && feel::ricochets(to.to_array()) {
+                    self.puffs(feel::ricochet_sparks(to, n));
+                    sfx.push(Play::spatial(
+                        Sfx::Ricochet,
+                        feel::RICOCHET_VOLUME * feel::falloff(d),
+                        to,
+                        ear.at,
+                        ear.right,
+                    ));
+                }
+            }
+        } else if hit == SHOT_BODY && traces {
+            self.puffs(feel::body_sparks(to));
+            sfx.push(Play::spatial(
+                Sfx::ImpactBody,
+                0.4 * feel::falloff(d),
+                to,
+                ear.at,
+                ear.right,
+            ));
+        } else if hit == SHOT_SHIELD {
+            // Off the plate: metal sparks and the ring of it, for the
+            // holder and for everyone watching.
+            self.puffs(feel::Material::Metal.burst(to, -dir));
+            sfx.push(Play::spatial(
+                Sfx::ImpactMetal,
+                feel::Material::Metal.volume() * feel::falloff(d),
+                to,
+                ear.at,
+                ear.right,
+            ));
+        }
+        if hit == SHOT_BODY || hit == SHOT_SHIELD {
+            self.continuations.push((to, now));
         }
     }
 
@@ -1125,22 +1379,6 @@ impl ShooterGame {
             f32::midpoint(o.base, o.h),
             f32::midpoint(o.min[1], o.max[1]),
         ))
-    }
-
-    /// Spark burst on a body that was hit.
-    fn sparks(&mut self, x: f32, y: f32, z: f32) {
-        for k in 0_u8..6 {
-            let a = f32::from(k) * std::f32::consts::TAU / 6.0;
-            self.fx.push(Fx {
-                pos: Vec3::new(x, y, z),
-                vel: Vec3::new(a.cos() * 2.2, 1.8, a.sin() * 2.2),
-                ttl: 0.3,
-                life: 0.3,
-                size: 0.09,
-                color: Vec3::new(1.0, 0.62, 0.2),
-                gravity: 9.0,
-            });
-        }
     }
 
     /// A rocket went off: one flash cube, twelve shards under gravity,
@@ -1430,7 +1668,16 @@ impl EmberGame for ShooterGame {
         let mut status_event: Option<String> = None;
         // Queue sounds and play at the end under a budget: a backlogged
         // burst (hidden tab catching up) must not blast every buffered cue.
-        let mut sfx: Vec<(Sfx, f32)> = Vec::new();
+        let mut sfx: Vec<Play> = Vec::new();
+        // The listener for every spatial cue this frame: my eye and my
+        // right, from last frame's look.
+        let ear = {
+            let (sz, cx) = self.yaw.sin_cos();
+            Ear {
+                at: Vec3::new(self.pred_pos.x, self.pred_y + self.eye_h, self.pred_pos.y),
+                right: Vec3::new(-sz, 0.0, cx),
+            }
+        };
         let mut drained: Vec<S2C> = Vec::new();
         while let Some(msg) = self.chan.poll() {
             drained.push(msg);
@@ -1561,15 +1808,27 @@ impl EmberGame for ShooterGame {
                             e.1 = [b.x, b.z];
                             e.2 = b.weapon;
                         }
-                        // Remote shots (mine are cued from ammo below).
+                        // Remote rocket launches (mine are cued from ammo
+                        // below). A bullet's shot is cued from its `Shot`
+                        // event since v20; a rocket's event arrives when
+                        // it detonates, seconds after the launch, so the
+                        // launch is still read off the state that first
+                        // carries the rocket, where it is at the muzzle.
                         for (&owner, &(n, pos, weapon)) in &curr {
                             if Some(owner) != self.my_id
+                                && !feel::traces(weapon)
                                 && n > prev_counts.get(&owner).copied().unwrap_or(0)
                             {
-                                let d = (Vec2::new(pos[0], pos[1]) - self.pred_pos).length();
+                                let at = Vec3::new(pos[0], ear.at.y, pos[1]);
+                                let d = (at - ear.at).length();
                                 let f = weapon_feel(weapon);
-                                let vol = (f.volume * 0.9 * (1.0 - d / 40.0)).clamp(0.05, f.volume);
-                                sfx.push((f.sound, vol));
+                                sfx.push(Play::spatial(
+                                    feel::shot_sfx(weapon, Dist::at(d)),
+                                    feel::remote_shot_volume(&f, d),
+                                    at,
+                                    ear.at,
+                                    ear.right,
+                                ));
                             }
                         }
                         // My own transitions, from authoritative state.
@@ -1599,7 +1858,12 @@ impl EmberGame for ShooterGame {
                                 for _ in new_me.ammo..me.ammo {
                                     self.climb.shot(&f);
                                 }
-                                sfx.push((f.sound, f.volume));
+                                // My own shot: the near variant, centred,
+                                // now.
+                                sfx.push(Play::centre(
+                                    feel::shot_sfx(new_me.weapon, Dist::Near),
+                                    f.volume,
+                                ));
                                 self.feedback
                                     .rumble(f.rumble.strong, f.rumble.weak, f.rumble.ms);
                                 self.shake.hit(f.launch_shake);
@@ -1608,6 +1872,7 @@ impl EmberGame for ShooterGame {
                                 // that the SERVER agrees left the weapon.
                                 self.shot_started = Some(self.time);
                                 self.shots = self.shots.wrapping_add(1);
+                                self.own_plume = true;
                                 if weapon_stats(new_me.weapon).kind == Projectile::Rocket {
                                     self.launch_smoke = true;
                                 }
@@ -1622,12 +1887,12 @@ impl EmberGame for ShooterGame {
                                 self.cue(feel::holster(), &mut sfx);
                             } else if changed && self.time - self.last_pop_at > 0.5 {
                                 // A grant with no pop before it: a pad.
-                                sfx.push((Sfx::Upgrade, 0.55));
+                                sfx.push(Play::centre(Sfx::Upgrade, 0.55));
                                 status_event =
                                     Some(format!("⬆ picked up: {}", loadout_of(new_me.weapon)));
                             }
                             if new_me.reloading && !me.reloading {
-                                self.cue(feel::reload_start(), &mut sfx);
+                                self.cue(feel::reload_start(new_me.weapon), &mut sfx);
                                 self.reload_started = Some(self.time);
                             } else if !new_me.reloading {
                                 if me.reloading && new_me.alive {
@@ -1783,7 +2048,7 @@ impl EmberGame for ShooterGame {
                                 self.render_y_own = my.y;
                                 self.history.clear();
                                 if newly_alive {
-                                    sfx.push((Sfx::Respawn, 0.4));
+                                    sfx.push(Play::centre(Sfx::Respawn, 0.4));
                                 }
                             } else {
                                 self.pred_pos = rebased;
@@ -1801,7 +2066,7 @@ impl EmberGame for ShooterGame {
                         // Big red confirm marker: the elimination register.
                         self.kill_t = 0.55;
                     } else {
-                        sfx.push((Sfx::Hit, 0.12));
+                        sfx.push(Play::centre(Sfx::Hit, 0.12));
                     }
                     let line = if killer == victim && Some(victim) == self.my_id {
                         "☠ you blew yourself up".to_string()
@@ -1846,18 +2111,18 @@ impl EmberGame for ShooterGame {
                     }
                     if Some(victim) == self.my_id {
                         self.cue(feel::hurt(), &mut sfx);
-                    } else if let Some(v) = self.latest.get(&victim).copied() {
+                    } else {
                         // Visual confirmation on the body: a damage flash
-                        // and a spark burst, for everyone watching.
+                        // for everyone watching. The sparks moved to the
+                        // `Shot` event (v20), which knows the exact point
+                        // the round met the body.
                         self.flash.insert(victim, 0.18);
-                        self.sparks(v.x, v.y + 1.1, v.z);
                     }
                 }
                 S2C::Blast { x, y, z, owner: _ } => {
                     let at = Vec3::new(x, y, z);
-                    let eye = Vec3::new(self.pred_pos.x, self.pred_y + self.eye_h, self.pred_pos.y);
-                    let d = (at - eye).length();
-                    self.cue(feel::blast(d), &mut sfx);
+                    let d = (at - ear.at).length();
+                    self.cue_at(feel::blast(d), at, ear, &mut sfx);
                     self.blast_fx(at);
                 }
                 S2C::Loot {
@@ -1889,7 +2154,7 @@ impl EmberGame for ShooterGame {
                         && (c - Vec3::new(self.pred_pos.x, self.pred_y, self.pred_pos.y)).length()
                             < feel::POP_EARSHOT
                     {
-                        self.cue(feel::pop(false), &mut sfx);
+                        self.cue_at(feel::pop(false), c, ear, &mut sfx);
                     }
                 }
                 // The client never asks for a listing; a page's lobby
@@ -1921,20 +2186,42 @@ impl EmberGame for ShooterGame {
                     status_event = Some(line.clone());
                     self.round_line = Some(line);
                 }
+                // `Shot`: a round's segment ended (v20). The streak, the
+                // flash and plume, the gunshot, the crack, the impact and
+                // its mark all come from here. `victim` is not read: the
+                // damage flash on the body arrives as `Hit`.
+                S2C::Shot {
+                    owner,
+                    weapon,
+                    x0,
+                    y0,
+                    z0,
+                    x1,
+                    y1,
+                    z1,
+                    hit,
+                    cover,
+                    victim: _,
+                    normal,
+                } => {
+                    self.on_shot(
+                        owner,
+                        weapon,
+                        Vec3::new(x0, y0, z0),
+                        Vec3::new(x1, y1, z1),
+                        hit,
+                        cover,
+                        normal,
+                        ear,
+                        &mut sfx,
+                    );
+                }
                 S2C::Pong { .. } => {}
             }
         }
         if self.chan.is_dead() && !self.lost {
             self.lost = true;
             set_status("connection lost — reload to play again");
-        }
-        // Play the queued cues under a per-frame budget, the important ones
-        // first, so a crowded frame drops a footfall and never the boom.
-        if !suppress_sfx && let Some(audio) = self.audio.as_ref() {
-            prioritize(&mut sfx);
-            for (s, v) in sfx.into_iter().take(BUDGET) {
-                audio.play(s, v);
-            }
         }
 
         // ---- the pad, merged with the keys: either device at any moment ----
@@ -2195,8 +2482,8 @@ impl EmberGame for ShooterGame {
                     self.cue(feel::bonk_dead(), &mut cues);
                 }
                 if let Some(audio) = self.audio.as_ref() {
-                    for (s, v) in cues {
-                        audio.play(s, v);
+                    for p in cues {
+                        audio.play(p.sfx, p.vol);
                     }
                 }
             }
@@ -2262,6 +2549,24 @@ impl EmberGame for ShooterGame {
             f.pos += f.vel * dt;
             f.ttl -= dt;
             f.ttl > 0.0
+        });
+        // The v20 leftovers: streaks that have faded, flashes that are
+        // over, marks past twenty seconds, casings past their time. A
+        // casing falls until it lands and then lies there.
+        let now = self.time;
+        self.tracers.retain(|t| t.alive(now));
+        self.flashes.retain(|f| f.until > now);
+        feel::expire_marks(&mut self.marks, now);
+        self.casings.retain_mut(|c| {
+            if c.pos.y > c.land_y {
+                c.vel.y -= feel::CASING_GRAVITY * dt;
+                c.pos += c.vel * dt;
+                if c.pos.y <= c.land_y {
+                    c.pos.y = c.land_y;
+                    c.vel = Vec3::ZERO;
+                }
+            }
+            now - c.born < feel::CASING_SECS
         });
         self.pops
             .retain(|p| self.time - p.started < POP_SECS && p.slot < self.loot_index.len());
@@ -2698,16 +3003,67 @@ impl EmberGame for ShooterGame {
                 .push(Instance::new(f.pos, Vec3::splat(edge), color).with_yaw(f.ttl * 12.0));
         }
 
-        // Bullets: tracers along the server's real 3D path, extrapolation
-        // bounded to ~2 state intervals so stalls don't fly them through
-        // walls. A round is drawn as a streak stretched along its flight
-        // direction with a hotter head, which reads as something moving
-        // fast rather than as a floating cube; the rod's length, thickness
-        // and colour are the shooter's weapon's, from `BState.weapon`. A
-        // rocket is the rocket mesh flown along the path with an exhaust
-        // rod behind it.
+        // Impact marks: near-black plates on the faces rounds hit, drawn
+        // after the cover so the depth test lays them on it; they stand a
+        // hair off the face so they never fight it for the pixel.
+        for m in &self.marks {
+            let (pos, scale, rot) = m.placement();
+            frame
+                .instances
+                .push(Instance::new(pos, scale, feel::MARK_COLOR).with_rot(rot));
+        }
+
+        // Tracers from shot events (v20): a bright core rod behind a head
+        // replayed along the segment at the weapon's speed, a dimmer tail
+        // behind that, both thinning out over the last 120 ms. Scale is
+        // applied before rotation, so a box long in X becomes a rod along
+        // the flight direction.
+        for t in &self.tracers {
+            let rot = Quat::from_rotation_arc(Vec3::X, t.dir());
+            for rod in t.rods(self.time) {
+                frame.instances.push(
+                    Instance::new(
+                        rod.center,
+                        Vec3::new(rod.len, rod.thick, rod.thick),
+                        rod.color,
+                    )
+                    .with_rot(rot),
+                );
+            }
+        }
+        // Remote muzzle flashes, from the same events.
+        for f in &self.flashes {
+            inst(
+                &mut frame,
+                f.pos,
+                Vec3::splat(f.size),
+                Vec3::new(1.0, 0.9, 0.5),
+            );
+        }
+        // My casings, tumbling while they fly and still once they land.
+        for c in &self.casings {
+            let age = self.time - c.born;
+            let rot = if c.vel == Vec3::ZERO {
+                Quat::from_rotation_y(c.born * 7.0)
+            } else {
+                Quat::from_rotation_y(age * 25.0) * Quat::from_rotation_x(age * 18.0)
+            };
+            frame
+                .instances
+                .push(Instance::new(c.pos, feel::CASING_SIZE, feel::CASING_COLOR).with_rot(rot));
+        }
+
+        // The rocket, from the state: the mesh flown along the server's
+        // real 3D path with an exhaust rod behind it, extrapolation bounded
+        // to ~2 state intervals so stalls don't fly it through walls. A
+        // bullet in a state is skipped: since v20 it is drawn as a streak
+        // from its `Shot` event, and drawing it here as well would show
+        // the same round twice.
         let age = self.bullets_age.min(0.12);
         for b in &self.bullets {
+            if feel::traces(b.weapon) {
+                continue;
+            }
             let at = Vec3::new(b.x + b.vx * age, b.y + b.vy * age, b.z + b.vz * age);
             let vel = Vec3::new(b.vx, b.vy, b.vz);
             let speed = vel.length();
@@ -2887,6 +3243,43 @@ impl EmberGame for ShooterGame {
                 push_gun(&mut frame, base, forward2, accent);
                 base + look * 0.95
             };
+            // My own streaks start at this muzzle, not at the sim's launch
+            // point: the segment's end is the server's, its start is where
+            // the gun is drawn.
+            for p in std::mem::take(&mut self.pending_shots) {
+                self.tracers.push(Tracer {
+                    from: muzzle,
+                    to: p.to,
+                    weapon: p.weapon,
+                    born: self.time,
+                });
+            }
+            // The plume and the casing of a confirmed shot of mine, at the
+            // muzzle. The casing is thrown right and up out of the port
+            // and lands on whatever my feet are on; its tink is queued now,
+            // late by the fall, and only off the floor (a crate top is not
+            // cobbles).
+            if std::mem::take(&mut self.own_plume) {
+                self.puffs(feel::plume(muzzle, look));
+                if feel::traces(my_weapon) {
+                    let (pos, vel) = feel::casing_eject(muzzle, right3, look);
+                    let land_y = self.pred_y;
+                    self.casings.push(Casing {
+                        pos,
+                        vel,
+                        land_y,
+                        born: self.time,
+                    });
+                    if land_y < 0.05 {
+                        sfx.push(Play {
+                            sfx: Sfx::Casing,
+                            vol: feel::CASING_VOLUME,
+                            pan: 0.0,
+                            delay: feel::fall_secs(pos.y - land_y, vel.y),
+                        });
+                    }
+                }
+            }
             // The rocket's launch smoke: six grey cubes drifting back from
             // the muzzle, spawned on the frame the shot was confirmed.
             if std::mem::take(&mut self.launch_smoke) {
@@ -3043,6 +3436,29 @@ impl EmberGame for ShooterGame {
                         GUNMETAL * 1.6 + accent * 0.10,
                     ),
                 }
+            }
+        }
+        // A shot of mine that arrived while I was dead (the round outlived
+        // me) starts where the sim says; there is no gun to start it from.
+        for p in std::mem::take(&mut self.pending_shots) {
+            self.tracers.push(Tracer {
+                from: p.from,
+                to: p.to,
+                weapon: p.weapon,
+                born: self.time,
+            });
+        }
+        // The plume of a shot confirmed on a frame with no viewmodel (dead
+        // by the time the state arrived) has no muzzle: dropped.
+        self.own_plume = false;
+
+        // Play the queued cues under a per-frame budget, the important ones
+        // first, so a crowded frame drops a footfall and never the boom.
+        // After the render pass, because the casing's tink is queued there.
+        if !suppress_sfx && let Some(audio) = self.audio.as_ref() {
+            feel::prioritize_plays(&mut sfx);
+            for p in sfx.into_iter().take(BUDGET) {
+                audio.play_spatial(p.sfx, p.vol, p.pan, p.delay);
             }
         }
 
@@ -3784,6 +4200,170 @@ mod wire_tests {
         game.pred_jump = true;
         let (bonks, _) = run(&mut game, 20);
         assert_eq!(bonks, 1, "a later jump bonks again");
+    }
+
+    /// One `S2C::Shot` on the wire is one streak in the frame (v20): a
+    /// remote round's starts at the shooter's muzzle with a flash and a
+    /// plume there and leaves a mark on the face it hit; my own starts at
+    /// the viewmodel's muzzle, not at the sim's origin, and flashes
+    /// nothing (the viewmodel's own flash does that); a segment that goes
+    /// on from a pierced body is a streak and nothing else; a rocket's
+    /// segment is no streak at all, only its mark.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn a_shot_event_produces_a_tracer() {
+        use arena_core::shooter::{SHOT_COVER, SHOT_FLOOR};
+
+        let (chan, inbox, _wire) = net::NetChan::detached_duplex();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.my_id = Some(2);
+        game.latest.insert(2, me(2));
+        let mut other = me(3);
+        other.x = 10.0;
+        game.latest.insert(3, other);
+        game.was_alive = true;
+        game.time = 5.0;
+        let shot = |owner: u8,
+                    weapon: u8,
+                    from: [f32; 3],
+                    to: [f32; 3],
+                    hit: u8,
+                    cover: u8,
+                    normal: [i8; 3]| {
+            S2C::Shot {
+                owner,
+                weapon,
+                x0: from[0],
+                y0: from[1],
+                z0: from[2],
+                x1: to[0],
+                y1: to[1],
+                z1: to[2],
+                hit,
+                cover,
+                victim: 255,
+                normal,
+            }
+        };
+        let input = InputState::default();
+        let flash_colour = Vec3::new(1.0, 0.9, 0.5);
+        // A remote AK round from 10 m to my right, north into a container.
+        inbox
+            .send(shot(
+                3,
+                3,
+                [10.0, 1.45, 0.0],
+                [10.0, 1.45, 30.0],
+                SHOT_COVER,
+                Cover::Container.index(),
+                [0, 0, -1],
+            ))
+            .unwrap();
+        game.update(&input, 0.001);
+        assert_eq!(game.tracers.len(), 1);
+        let t = game.tracers[0];
+        assert_eq!(t.from, Vec3::new(10.0, 1.45, 0.0));
+        assert_eq!(t.to, Vec3::new(10.0, 1.45, 30.0));
+        assert_eq!((t.weapon, t.born), (3, game.time));
+        // The frame it arrived on the head has not left the muzzle; a
+        // millisecond later the AK's 715 m/s has it 0.7 m out.
+        let frame = game.update(&input, 0.001);
+        let ak = weapon_feel(3).tracer;
+        let rods: Vec<&Instance> = frame.instances.iter().filter(|i| i.color == ak).collect();
+        assert_eq!(rods.len(), 1, "a millisecond in, the core rod alone");
+        assert!(
+            rods[0].scale.x > 0.5 && rods[0].scale.x < 1.0,
+            "{}",
+            rods[0].scale
+        );
+        assert!(
+            frame.instances.iter().any(|i| {
+                (i.position - (t.from + Vec3::Z * REMOTE_MUZZLE)).length() < 1e-4
+                    && i.color == flash_colour
+            }),
+            "the remote flash at the drawn muzzle"
+        );
+        assert_eq!(game.marks.len(), 1);
+        assert_eq!(game.marks[0].pos, t.to);
+        assert_eq!(game.marks[0].normal, -Vec3::Z);
+        assert!(
+            frame.instances.iter().any(|i| i.color == feel::MARK_COLOR),
+            "the mark is drawn"
+        );
+        assert!(game.fx.len() >= 12, "plume and sparks: {}", game.fx.len());
+        assert!(game.continuations.is_empty(), "cover ends a round");
+        // My own round into a body 20 m ahead: the streak starts at the
+        // viewmodel's muzzle, a hand's reach ahead of the eye and below
+        // it, not at the sim's launch point.
+        let launch = Vec3::new(0.2, 1.45, 0.0);
+        inbox
+            .send(shot(
+                2,
+                3,
+                launch.to_array(),
+                [20.0, 1.45, 0.0],
+                SHOT_BODY,
+                255,
+                [0, 0, 0],
+            ))
+            .unwrap();
+        game.update(&input, 0.001);
+        assert_eq!(game.tracers.len(), 2);
+        let own = game.tracers[1];
+        assert!(
+            (own.from - launch).length() > 0.3 && own.from.x > 0.5 && own.from.y < 1.45,
+            "anchored at the muzzle: {}",
+            own.from
+        );
+        assert_eq!(own.to, Vec3::new(20.0, 1.45, 0.0));
+        assert_eq!(game.flashes.len(), 1, "no second flash for my own shot");
+        assert_eq!(game.marks.len(), 1, "a body takes no mark");
+        assert_eq!(
+            game.continuations.len(),
+            1,
+            "the body is a point to go on from"
+        );
+        // The same round going on through that body to the floor: a
+        // streak from the body, no flash, no plume, a mark on the floor.
+        let fx_before = game.fx.len();
+        inbox
+            .send(shot(
+                2,
+                3,
+                [20.0, 1.45, 0.0],
+                [40.0, 0.0, 0.0],
+                SHOT_FLOOR,
+                255,
+                [0, 1, 0],
+            ))
+            .unwrap();
+        game.update(&input, 0.001);
+        assert_eq!(game.tracers.len(), 3);
+        assert_eq!(game.tracers[2].from, Vec3::new(20.0, 1.45, 0.0));
+        assert_eq!(game.flashes.len(), 1);
+        assert_eq!(game.marks.len(), 2);
+        assert_eq!(game.marks[1].normal, Vec3::Y);
+        assert_eq!(
+            game.fx.len() - fx_before,
+            6,
+            "the floor's dust and nothing else"
+        );
+        // A rocket's segment: no streak (the mesh flies from the state),
+        // its mark on the floor.
+        inbox
+            .send(shot(
+                3,
+                7,
+                [10.0, 1.45, 0.0],
+                [10.0, 0.0, 12.0],
+                SHOT_FLOOR,
+                255,
+                [0, 1, 0],
+            ))
+            .unwrap();
+        game.update(&input, 0.001);
+        assert_eq!(game.tracers.len(), 3);
+        assert_eq!(game.marks.len(), 3);
     }
 
     /// Rumble requests accumulate through a frame and the platform takes
