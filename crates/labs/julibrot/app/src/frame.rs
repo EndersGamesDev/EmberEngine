@@ -3116,7 +3116,7 @@ mod tests {
         viewer.set_zoom_log2(14.0).expect("zoom fourteen");
 
         let mut centre_from_reference = [0.0_f64; 2];
-        let mut reference_centre = view_centre.clone();
+        let mut reference_centre = view_centre;
         let mut opening = None;
         let mut delivered = None;
         let mut references = 0;
@@ -3216,8 +3216,8 @@ mod tests {
                 )
                 .expect("accepted navigation context");
             let anchor = [
-                f64::from(candidate.index % WIDTH) + 0.5 - 0.5 * f64::from(WIDTH),
-                f64::from(candidate.index / WIDTH) + 0.5 - 0.5 * f64::from(HEIGHT),
+                0.5f64.mul_add(-f64::from(WIDTH), f64::from(candidate.index % WIDTH) + 0.5),
+                0.5f64.mul_add(-f64::from(HEIGHT), f64::from(candidate.index / WIDTH) + 0.5),
             ];
             assert!(
                 (centre_from_reference[0] + anchor[0]).abs() < 0.5
