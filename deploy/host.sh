@@ -236,8 +236,12 @@ record_pid() {
     echo "$pid ${st:--}" > "$RUN/$label.pid"
 }
 
-pid_of()   { [ -f "$RUN/$1.pid" ] && cut -d' ' -f1 "$RUN/$1.pid" || true; }
-stamp_of() { [ -f "$RUN/$1.pid" ] && cut -d' ' -s -f2 "$RUN/$1.pid" || true; }
+pid_of() {
+    if [ -f "$RUN/$1.pid" ]; then cut -d' ' -f1 "$RUN/$1.pid"; fi
+}
+stamp_of() {
+    if [ -f "$RUN/$1.pid" ]; then cut -d' ' -s -f2 "$RUN/$1.pid"; fi
+}
 
 alive() {
     local pid stamp now
@@ -293,8 +297,9 @@ stop_all() {
 # line it prints is taken verbatim instead — that is what lets the entire path,
 # publish included, be exercised on loopback with no Cloudflare account.
 wait_for_tunnel() {
-    local id="$1" log="$RUN/tunnel-$id.log" i url
-    for i in $(seq 1 60); do
+    local id="$1" log url
+    log="$RUN/tunnel-$id.log"
+    for _ in $(seq 1 60); do
         url="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$log" 2>/dev/null | head -1 || true)"
         if [ -n "$url" ]; then echo "wss://${url#https://}"; return 0; fi
         if [ "$EMBER_TUNNEL_BIN" != "$DEFAULT_TUNNEL_BIN" ]; then

@@ -75,8 +75,8 @@ echo "== three pid/url pairs and the local entry =="
 is "$(find "$EMBER_HOME/run" -name '*.pid' -type f | wc -l | tr -d ' ')" "6" "exactly three server/tunnel pid pairs exist"
 is "$(find "$EMBER_HOME/run" -name '*.url' -type f | wc -l | tr -d ' ')" "3" "exactly three game URL files exist"
 for game in arena fire kings; do
-    [ -s "$EMBER_HOME/run/server-$game.pid" ] && ok "$game server pid recorded" || bad "$game server pid missing"
-    [ -s "$EMBER_HOME/run/tunnel-$game.pid" ] && ok "$game tunnel pid recorded" || bad "$game tunnel pid missing"
+    if [ -s "$EMBER_HOME/run/server-$game.pid" ]; then ok "$game server pid recorded"; else bad "$game server pid missing"; fi
+    if [ -s "$EMBER_HOME/run/tunnel-$game.pid" ]; then ok "$game tunnel pid recorded"; else bad "$game tunnel pid missing"; fi
 done
 LOCAL="$EMBER_HOME/run/host.json"
 is "$(jget "$LOCAL" 'd["name"]')" "quiet-egret" "local entry names the host"
@@ -89,7 +89,7 @@ BEFORE="$(pidof_file "$EMBER_HOME/run/server-kings.pid")"
 bash "$DEPLOY/host.sh" update > "$TMP/update.log" 2>&1 || bad "unchanged update failed"
 contains "$(cat "$TMP/update.log")" "all three servers are running" "update requires all three servers"
 is "$(pidof_file "$EMBER_HOME/run/server-kings.pid")" "$BEFORE" "unchanged update did not restart Kings"
-[ -s "$LOCAL" ] && ok "unchanged update left host.json current" || bad "unchanged update lost host.json"
+if [ -s "$LOCAL" ]; then ok "unchanged update left host.json current"; else bad "unchanged update lost host.json"; fi
 
 echo "== down stops exactly the three pairs =="
 PIDS=()

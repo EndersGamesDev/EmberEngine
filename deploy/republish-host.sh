@@ -29,8 +29,10 @@ done
 [ -n "$BRANCH" ] || { echo "republish-host: --branch needs a value" >&2; exit 2; }
 
 PY="$(command -v python3 || command -v python || true)"
-[ -n "$PY" ] && "$PY" -c '' >/dev/null 2>&1 \
-    || { echo "republish-host: need a working python3 (or python) on PATH" >&2; exit 1; }
+if [ -z "$PY" ] || ! "$PY" -c '' >/dev/null 2>&1; then
+    echo "republish-host: need a working python3 (or python) on PATH" >&2
+    exit 1
+fi
 
 WORK="$(mktemp -d -t ember-republish-XXXXXX)"
 cleanup() { rm -rf "$WORK"; }
