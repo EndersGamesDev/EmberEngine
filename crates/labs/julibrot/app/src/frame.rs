@@ -58,6 +58,38 @@ fn backdrop_extent(final_extent: [u32; 2]) -> Option<[u32; 2]> {
     (backdrop_records <= final_records / 4).then_some(extent)
 }
 
+/// Which layer takes the next scene turn when both the coverage backdrop and the ladder are due.
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CoverageTurn {
+    Backdrop,
+    Main,
+}
+
+/// Decides whether a fresh coverage backdrop may pre-empt the main refinement ladder this turn.
+///
+/// Coverage comes first, but only for its own delivery, not for the whole gesture. The backdrop is
+/// requested against the current view stamp, and under a continuous drag that stamp moves every
+/// frame: a rule that simply prefers the backdrop whenever its stamp is stale dispatches a fresh
+/// backdrop before the ladder ever runs, so the whole drag is presented at the backdrop's coarse
+/// sampling — at an apron of five that is about one sample per five main samples per axis — and the
+/// main grid is never seen until the pose settles. The two alternate instead: one backdrop, then
+/// one main level, then the next backdrop.
+///
+/// A turn is also yielded while a main scene is already submitted. Switching the presented layer
+/// replaces the presenter's selection and drops whatever scene is in flight, so pre-empting a
+/// running main dispatch would discard the very level this alternation exists to let through.
+///
+/// Returns whether the backdrop takes this turn, and the turn to carry into the next contest.
+#[cfg(any(target_arch = "wasm32", test))]
+const fn coverage_pre_empts(turn: CoverageTurn, main_in_flight: bool) -> (bool, CoverageTurn) {
+    if main_in_flight || matches!(turn, CoverageTurn::Main) {
+        (false, CoverageTurn::Backdrop)
+    } else {
+        (true, CoverageTurn::Main)
+    }
+}
+
 /// Converts a map's applied apron into the kernel-only zoom offset.
 #[cfg(any(target_arch = "wasm32", test))]
 fn sampling_zoom_log2(zoom_log2: f64, apron_scale: f64) -> Result<f64, AppError> {
@@ -1099,6 +1131,7 @@ mod browser {
         grid: EscapeGrid,
         backdrop: Option<BackdropGrid>,
         active_backdrop_map: Option<PoseMap>,
+        coverage_turn: super::CoverageTurn,
         main: ember_julibrot_worker::MainState,
         scene_selection: Option<SceneSelection>,
         loop_state: FrameLoop,
@@ -1255,6 +1288,7 @@ mod browser {
                 grid,
                 backdrop: None,
                 active_backdrop_map: None,
+                coverage_turn: super::CoverageTurn::Backdrop,
                 main,
                 scene_selection: None,
                 loop_state,
@@ -1755,6 +1789,16 @@ mod browser {
                     .ready
                     .is_some_and(|ready| ready.stamp.render_equivalent(stamp))
             }) {
+                self.coverage_turn = super::CoverageTurn::Backdrop;
+                self.active_backdrop_map = None;
+                return Ok(false);
+            }
+            let (pre_empts, next_turn) = super::coverage_pre_empts(
+                self.coverage_turn,
+                self.presenter.facts().in_flight_scene_id.is_some(),
+            );
+            self.coverage_turn = next_turn;
+            if !pre_empts {
                 self.active_backdrop_map = None;
                 return Ok(false);
             }
@@ -1815,6 +1859,7 @@ mod browser {
 
         fn release_backdrop(&mut self) -> Result<(), AppError> {
             self.active_backdrop_map = None;
+            self.coverage_turn = super::CoverageTurn::Backdrop;
             if let Some(backdrop) = self.backdrop.take() {
                 self.kernels
                     .free_grid(&mut self.executor, backdrop.grid)
@@ -2828,14 +2873,14 @@ mod tests {
     };
 
     use super::{
-        BACKDROP_PRESENT_LEVEL, FenceRefusal, FrameLoop, LEVELS, PresenterPoll,
+        BACKDROP_PRESENT_LEVEL, CoverageTurn, FenceRefusal, FrameLoop, LEVELS, PresenterPoll,
         REFERENCE_RECORD_BYTES, REFERENCE_TEXEL_BYTES, RefinementLevel, RefinementSchedule,
         RefusalClass, SceneMode, SubmissionKind, apply_precision_mode, arrival_is_current,
-        backdrop_extent, defer_scene_until_relief_redraw, expand_reference_texels_into,
-        fence_error, hold_redraw_during_scene, horizon_facts, main_for_grid,
-        perturbation_reference_is_current, published_iteration_cap, sampling_zoom_log2,
-        schedule_exposure_fill, stamp_scene_level, stamped_extent, stamped_screen_map,
-        view_projection_changed,
+        backdrop_extent, coverage_pre_empts, defer_scene_until_relief_redraw,
+        expand_reference_texels_into, fence_error, hold_redraw_during_scene, horizon_facts,
+        main_for_grid, perturbation_reference_is_current, published_iteration_cap,
+        sampling_zoom_log2, schedule_exposure_fill, stamp_scene_level, stamped_extent,
+        stamped_screen_map, view_projection_changed,
     };
     use crate::{AppError, FramePolicy, LevelTimingLedger, ViewerController};
     use ember_julibrot_present::{SampleClass, SubmissionMeasurement, WarpKind};
@@ -4618,6 +4663,153 @@ mod tests {
                     .to_string()
             ),
             "a later refusal never overwrites the cause the page is reporting"
+        );
+    }
+
+    /// The coverage backdrop yields its turn to the main ladder, and to a running main dispatch.
+    #[test]
+    fn coverage_takes_one_turn_and_then_yields_one() {
+        assert_eq!(
+            coverage_pre_empts(CoverageTurn::Backdrop, false),
+            (true, CoverageTurn::Main),
+            "the first delivery in a pose family is the wide coverage"
+        );
+        assert_eq!(
+            coverage_pre_empts(CoverageTurn::Main, false),
+            (false, CoverageTurn::Backdrop),
+            "and the turn after it belongs to the ladder"
+        );
+        assert_eq!(
+            coverage_pre_empts(CoverageTurn::Backdrop, true),
+            (false, CoverageTurn::Backdrop),
+            "a running main dispatch is never pre-empted, and keeps coverage's claim"
+        );
+    }
+
+    /// Three seconds of continuous drag at 30 Hz, then a second of stillness.
+    ///
+    /// The regression this pins is the whole drag being presented at the coarse backdrop. The
+    /// backdrop is requested against the view stamp, the stamp moves every frame of a drag, and a
+    /// scheduler that always prefers a stale backdrop therefore dispatches a new one before the
+    /// ladder ever runs: the main grid is never seen until the gesture ends. Here the two share the
+    /// schedule, no two backdrops are dispatched without a main level between them, and the pose
+    /// that settles still walks its ladder to Final.
+    #[test]
+    fn a_continuous_drag_alternates_the_backdrop_with_the_main_ladder() {
+        const DRAG_FRAMES: usize = 90;
+        const SETTLE_FRAMES: usize = 30;
+        /// Frames a dispatched scene occupies the presenter before its fence completes.
+        const FLIGHT_FRAMES: usize = 3;
+        /// Preview, Interactive, Final.
+        const LADDER_LEVELS: usize = 3;
+
+        let mut turn = CoverageTurn::Backdrop;
+        let mut flight: Option<(bool, usize)> = None;
+        let mut dispatched: Vec<(usize, bool)> = Vec::new();
+        let mut completed_levels = 0_usize;
+        let mut coverage_is_stale = true;
+
+        for frame in 0..DRAG_FRAMES + SETTLE_FRAMES {
+            let dragging = frame < DRAG_FRAMES;
+            if let Some((is_backdrop, remaining)) = flight {
+                let remaining = remaining - 1;
+                if remaining > 0 {
+                    flight = Some((is_backdrop, remaining));
+                } else {
+                    flight = None;
+                    if is_backdrop {
+                        // A completed backdrop matches the stamp it was requested for, and a drag
+                        // has moved that stamp again by the time it lands.
+                        coverage_is_stale = dragging;
+                    } else if dragging {
+                        // The moved view restarts the ladder: every drag level is a Preview.
+                        completed_levels = 0;
+                    } else {
+                        completed_levels += 1;
+                    }
+                }
+            }
+            // The contest runs every frame, in flight or not, exactly as the browser loop does.
+            let main_in_flight = flight.is_some_and(|(is_backdrop, _)| !is_backdrop);
+            let (pre_empts, next_turn) = if coverage_is_stale {
+                coverage_pre_empts(turn, main_in_flight)
+            } else {
+                (false, CoverageTurn::Backdrop)
+            };
+            turn = next_turn;
+            if flight.is_some() {
+                continue;
+            }
+            if pre_empts {
+                dispatched.push((frame, true));
+                flight = Some((true, FLIGHT_FRAMES));
+            } else if completed_levels < LADDER_LEVELS {
+                dispatched.push((frame, false));
+                flight = Some((false, FLIGHT_FRAMES));
+            }
+        }
+
+        let backdrops = dispatched.iter().filter(|(_, wide)| *wide).count();
+        let mains = dispatched.len() - backdrops;
+        assert!(
+            backdrops >= 2,
+            "the drag must have re-requested coverage more than once, not {backdrops} times"
+        );
+        assert!(
+            mains + 1 >= backdrops,
+            "the main ladder ran {mains} times against {backdrops} backdrops"
+        );
+        for pair in dispatched.windows(2) {
+            assert!(
+                !(pair[0].1 && pair[1].1),
+                "two backdrops in a row, the second at frame {}",
+                pair[1].0
+            );
+        }
+        assert_eq!(
+            completed_levels, LADDER_LEVELS,
+            "the settled pose must still walk its ladder to Final"
+        );
+    }
+
+    /// The browser loop asks the shared policy rather than preferring a stale backdrop outright,
+    /// and a settled coverage layer hands its claim back for the next pose family.
+    #[test]
+    fn browser_backdrop_preparation_routes_through_the_coverage_turn() {
+        let source = include_str!("frame.rs");
+        assert!(source.contains("super::coverage_pre_empts("));
+        assert!(source.contains("in_flight_scene_id.is_some()"));
+        assert!(source.contains("self.coverage_turn = next_turn;"));
+        assert!(source.contains("coverage_turn: super::CoverageTurn::Backdrop,"));
+        assert!(source.contains("self.coverage_turn = super::CoverageTurn::Backdrop;"));
+    }
+
+    /// The backdrop dispatch is behind the SAME reference-generation and zoom guards as the main.
+    ///
+    /// `submit_due_scene` refuses while a reference submission is outstanding or a navigation is
+    /// pending, and again while the zoom's kernel mode has no accepted reference; only then does it
+    /// route to the backdrop. A stale orbit must never drive the wide layer either: it samples the
+    /// same field through the same reference, and reaching it before those guards would let it do
+    /// so from an orbit the main grid has already refused.
+    #[test]
+    fn the_backdrop_dispatch_is_behind_the_main_reference_and_zoom_guards() {
+        let source = include_str!("frame.rs");
+        let submit = source
+            .find("fn submit_due_scene(")
+            .expect("the scene submission exists");
+        let body = &source[submit..];
+        let references = body
+            .find("if matches!(map, PoseMap::Mapped(_))")
+            .expect("the outstanding-reference guard exists");
+        let ready = body
+            .find("if !self.scene_ready(viewer.requested().zoom_log2) {")
+            .expect("the zoom guard exists");
+        let route = body
+            .find("return self.submit_due_backdrop(")
+            .expect("the backdrop route exists");
+        assert!(
+            references < ready && ready < route,
+            "the backdrop route must follow both guards, found at {references}/{ready}/{route}"
         );
     }
 }

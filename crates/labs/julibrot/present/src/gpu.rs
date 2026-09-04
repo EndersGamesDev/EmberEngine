@@ -2636,6 +2636,72 @@ mod tests {
         assert!(!compares(SCENE_DEPTH_COMPARE, 0.75, 0.25));
     }
 
+    /// The status-one census counts the MAIN grid's records, with or without a backdrop attached.
+    ///
+    /// The census pass binds one scene group and draws one full-screen triangle over it. The
+    /// backdrop split that binding into a two-slot array, so the census would silently have started
+    /// counting whichever slot the rebase left in place. It binds slot zero and names nothing of
+    /// the backdrop: a Final main therefore publishes the same glitch count either way.
+    #[test]
+    fn the_glitch_census_reads_the_main_grid_alone() {
+        let source = include_str!("gpu.rs");
+        let start = source
+            .find("fn encode_glitch_count(")
+            .expect("the census encoder exists");
+        let body = &source[start..];
+        let end = body.find("\nfn ").expect("the census encoder ends");
+        let body = &body[..end];
+        assert!(body.contains("pass.set_bind_group(1, &gpu.scene_groups[0], &[hot_offset]);"));
+        assert!(
+            !body.contains("scene_groups[1]") && !body.to_lowercase().contains("backdrop_indices"),
+            "the census must never draw or bind the backdrop layer"
+        );
+    }
+
+    /// A backdrop attaching or expiring drops the scene in flight and never the held picture.
+    ///
+    /// `set_main` treats a changed backdrop as a replaced selection, which is right: an in-flight
+    /// scene was composed for the other backdrop and is stale. But manual mode holds the retained
+    /// picture across a refused warp, and a coverage layer arriving or going stale is not a reason
+    /// to take that picture away — during a drag it happens repeatedly.
+    #[test]
+    fn a_changed_backdrop_never_clears_a_held_picture() {
+        let mut ledger = SceneLedger::default();
+        let sampled = promote_binding_scene(&mut ledger, 53);
+        // The only thing a backdrop attach or expiry reaches in `set_main`.
+        ledger.mark_replaced();
+        assert_eq!(
+            ledger.retained().map(|frame| frame.scene_id),
+            Some(sampled.scene_id),
+            "the retained picture survives a replaced selection"
+        );
+        let held = apply_hold_policy(clear_warp_plan(false, true), ledger.retained(), true);
+        assert_eq!(held.kind, WarpKind::HoldStale);
+        assert_eq!(held.source_scene_id, Some(sampled.scene_id));
+        assert!(held.source_valid);
+
+        let source = include_str!("gpu.rs");
+        let start = source
+            .find("pub fn set_main(")
+            .expect("the main publication exists");
+        let body = &source[start..];
+        let end = body
+            .find("self.main = Some(main);")
+            .expect("the main publication ends");
+        let body = &body[..end];
+        assert_eq!(
+            body.matches("backdrop").count(),
+            2,
+            "the backdrop may reach set_main only as the selection comparison"
+        );
+        assert!(body.contains("previous.backdrop != main.backdrop"));
+        assert!(
+            body.find("previous.backdrop != main.backdrop")
+                < body.find("if self.ledger.invalidate_incompatible("),
+            "the backdrop comparison belongs to the selection test, never to the clear"
+        );
+    }
+
     /// The stamp needs a stencil aspect, and the engine's floor has to admit the format.
     #[test]
     fn the_scene_depth_target_carries_a_stencil_aspect() {
