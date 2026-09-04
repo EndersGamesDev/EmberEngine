@@ -1,10 +1,10 @@
 # Julibrot presentation slice
 
-Status: implementation complete for `crates/labs/julibrot/present`; the merged math and heap seams drive the f64 anchor planner, exact app records, two-texture runtime, HOT ring, the one scene pass, the sole warp pass, bounded four-byte fences, and app-facing facts, while target-browser facts remain labelled `requires visible replay`.
+Status: implementation complete for `crates/labs/julibrot/present`; the merged math and heap seams drive the f64 anchor planner, exact app records, two-texture runtime, HOT ring, the one image scene pass, the Final-only status census, the sole warp pass, bounded four-byte fences, and app-facing facts, while target-browser facts remain labelled `requires visible replay`.
 
 ## 1. Ownership and boundary
 
-The present slice owns pixels after an `EscapeGrid` exists: the one height-field scene from flat chart to full relief, palette records and palette evaluation, the two scene textures, the one warp pass, the three-slot HOT uniform ring, scene and warp completion measurements, and the present facts exported to the app.
+The present slice owns pixels after an `EscapeGrid` exists: the one height-field image scene from flat chart to full relief, palette records and palette evaluation, the two scene textures, the Final-only packed status census target, the one warp pass, the three-slot HOT uniform ring, scene and warp completion measurements, and the present facts exported to the app.
 
 The present slice allocates the HOT GPU buffer and exposes infallible `Presenter::write_hot`; the app calls it from the owner's HOT drain once per surface refresh, selects the slot by refresh number, acquires and presents the surface texture, and draws the honest page overlay outside the warped scene image.
 
@@ -18,7 +18,7 @@ The app owns wgpu 24 GL device creation, the sole surface-acquisition token, sur
 
 Present is cosmetic authority only: a missing grid, stale span, invalid warp, pole rejection, timeout, or device error can change or clear pixels and publish a typed fact, but cannot author navigation, iteration, worker, simulation, protocol, or reconciliation truth.
 
-The general DAG and petgraph, more than one world, a simulation tick, more than one heap class, shared-memory workers, WebGPU, a second glitch reference, mipmaps, blending, MSAA, motion vectors, depth-aware warp, and any pass beyond the selected scene pass plus the warp pass are deliberately absent.
+The general DAG and petgraph, more than one world, a simulation tick, more than one heap class, shared-memory workers, WebGPU, a second glitch reference, mipmaps, blending, MSAA, motion vectors, depth-aware warp, and any image pass beyond the selected scene pass plus the warp pass are deliberately absent; the Final-only status census is measurement work and never paints or replaces the retained image.
 
 ## 2. Design
 
@@ -58,7 +58,7 @@ The clamp is where the beyond-bailout samples land, and they are not rare. The s
 
 A status-2 Horizon record is shaded as exterior at zero smooth iterations, not clear; status-3 MapUncertain is shaded from its sampled record. Only a warp coordinate outside its retained source uses the palette's honest clear colour temporarily.
 
-The shader tests `glitch == 1` before `escaped`, emits the fixed opaque debug tint `(1,0,1,1)`, and never filters that classification; malformed non-binary `escaped` or `glitch` is also debug tinted and counted as a presentation contract violation. A non-finite `smooth_iter` on an escaped record is a violation too. A negative one is not: the debug tint is reserved for records the contract cannot account for, and treating a legitimate beyond-bailout escape as one of them painted an opaque magenta half-frame over every pose whose sampled plane reached past radius `16`.
+The shader tests status `Glitch` before `escaped`, emits the fixed opaque diagnostic `(1,0.375,0,1)`, and never filters that classification; the magenta debug tint `(1,0,1,1)` is reserved for malformed records and other presentation contract violations. A non-finite `smooth_iter` on an escaped record is a violation too. A negative one is not: treating a legitimate beyond-bailout escape as a violation painted an opaque magenta half-frame over every pose whose sampled plane reached past radius `16`.
 
 ### 2.3 Height field, VIEW, camera, and projection
 
@@ -66,7 +66,7 @@ The scene uses one indexed triangle-list mesh with `width·height` vertices and 
 
 The neutral-height screen coordinate comes directly from `(i,j)`. For relief, the vertex maps that screen pixel through the scene's `M`, forms the ambient object point `p=plane_origin+(4/width)(o_u u+o_v v)`, lifts it to `(p,hH)∈ℝ⁵`, and projects that point through the same camera chain math used to build `F`; therefore height zero returns to the starting screen coordinate by construction.
 
-For a valid escaped sample the record's own height is `H = 4·clamp(smooth_iter/max(max_iter,1),0,1)−2`; an interior sample uses `H = −2`, and a glitch or malformed sample uses neutral `H = 0` plus the debug tint so the geometry does not pretend to know the missing orbit continuation. The clamp's lower bound is reached, not decorative: a beyond-bailout escape's negative count puts it on the floor beside the interior, which is where a sample that escaped at or before iteration zero belongs.
+For a valid escaped sample the record's own height is `H = 4·clamp(smooth_iter/max(max_iter,1),0,1)−2`; an interior sample uses `H = −2`, and a glitch or malformed sample uses neutral `H = 0` so the geometry does not pretend to know the missing continuation. Glitches receive the orange diagnostic and malformed records receive the magenta debug tint. The clamp's lower bound is reached, not decorative: a beyond-bailout escape's negative count puts it on the floor beside the interior, which is where a sample that escaped at or before iteration zero belongs.
 
 The displayed fifth coordinate is `h₅ = h·H` for the height control `h ∈ [0,4]`, so `h=0` is exactly the flat chart, `h=1` is the amplitude the lab shipped with, and every value between is a continuous morph rather than a switch; the range extends to four because the relief is a display choice and there is no reason to forbid exaggerating it, while `h<0` is refused because it would silently invert interior and escaped and is reachable anyway by a half turn of `θᵥ₂`.
 
@@ -100,7 +100,7 @@ The depth expression is rawgl's OpenGL projection converted to wgpu's zero-to-on
 
 The scene fragment obtains a surface normal from derivatives of the interpolated double-projected world position, uses fallback `(0,0,1)` when the derivative cross product is degenerate, and applies the heap-pinned light `0.58 + 0.24·|n·normalize(0.4,0.7,0.6)|` and colour `mix(white,hue_rgb,colour_mix)·value·light`.
 
-The fragment also performs a nearest integer escape-record load from the interpolated grid coordinate and branches on its exact glitch flag, so the debug tint is not interpolated across neighbouring vertices; rawgl's `0.013` long-box thickness is explicitly inapplicable to a triangle height field and is the only §10 heap presentation literal not used.
+The fragment also performs a nearest integer escape-record load from the interpolated grid coordinate and branches on its exact glitch status, so the diagnostic is not interpolated across neighbouring vertices; rawgl's `0.013` long-box thickness is explicitly inapplicable to a triangle height field and is the only §10 heap presentation literal not used.
 
 All six object rotations, ten camera rotations, five camera translations, observer angles, height, and both distances are HOT presentation controls; the four plane-origin coordinates remain MAIN sampling state because moving the origin selects a translated affine slice and may need a new reference orbit.
 
@@ -253,7 +253,7 @@ Scaled perturbation stores `δ′=δ/S` with `S=2^e`: `δ′ₙ₊₁=2Zᵣδ′
 
 After the current escape test and before ordinary advance, rebase tests `|zₙ|<|S·δ′ₙ|`, with an underflowed `S·δ′` correctly making the test false; on success kernels set `δ←zₙ−Z₀` using reference record zero reconstructed hi plus lo, reset `r←0`, increment `rebase_count`, and perform exactly one ordinary advance against `Z₀`, preserving `zₙ=Zᵣ+δₙ` for nonzero `Z₀`.
 
-If reference index `r` reaches the stored orbit length before escape or `max_iter`, kernels stop that pixel with `glitch=1`; re-rendering it from a second reference is out of scope, and present must show the fixed debug tint rather than interpolate, conceal, or continue it.
+If reference index `r` reaches the stored orbit length before escape or `max_iter`, kernels stop that pixel with status `Glitch`; present must show the fixed orange diagnostic rather than interpolate, conceal, continue, or mislabel it as a magenta contract violation. App prevents stale-reference dispatch and a future second-reference correction may replace a real glitch before delivery.
 
 Perturbation conformance requires CPU-f64 and GPU escape classification to agree exactly outside math's propagated error envelope and smooth iteration to agree within `2×10⁻³`; boundary fixtures inside the envelope remain explicitly labelled rather than converted into a false exactness claim.
 
@@ -410,13 +410,13 @@ There is no shared memory or worker special path in present; ownership crosses t
 
 Honesty is structural: requested values remain app facts, delivered extent and iteration cap come from the current grid, `depth_digits=ceil(max(0,zoom_log2·log10(2)))`, `D_floor=max(1,ceil(zoom_log2·log10(2)+log10(grid_width))+8)`, `D_work=D_floor+ceil(log10(max(max_iter,1)))`, and the overlay keeps floor, working, and delivered precision separate.
 
-Aggregate `rebase_count` and `glitch` totals are `unavailable` in normal rendering because present only gathers texels for rasterization; only an explicitly requested and labelled measurement readback may count them, every other unavailable measurement uses `Option`, warm-ups stay labelled, polls are counted, and no timeout path loops forever.
+Aggregate `rebase_count` remains unavailable in normal rendering. Every Final additionally renders an exact status census in which one `Rgba8Unorm` audit texel sums 255 escape records, maps the padded audit rows as part of the ordered scene-fence completion, and publishes `glitch_pixel_count`; at 960 by 540 the audit target is 960 by 3 and the mapped payload is 11,520 bytes. Preview and Interactive keep the fact unavailable, map failure follows the existing typed device-fence refusal, polls are counted, and no timeout path loops forever.
 
 The app installs the panic hook and replaces wgpu's fatal uncaptured-error handler before `Presenter::new`; every present device operation returns or publishes a typed error, and no bare `unreachable`, unchecked surface acquisition, or panic is an error protocol.
 
 Hand-written f64 remains the matrix implementation unless the shared warp oracle fails its `1e−9` bound; `faer` may enter only after that measured failure, never for style or anticipation.
 
-Renderer austerity is one selected scene pass plus the sole warp pass, no mips, no blend, `cull_mode: None`, one sample, and two scene textures total; kernel fragment-compute passes are data production and do not loosen this render-pass count.
+Renderer austerity is one selected image scene pass plus the sole warp pass, no mips, no blend, `cull_mode: None`, one sample, and two retained scene textures total; the packed Final census is an auxiliary measurement render target rather than another image pass, and kernel fragment-compute passes remain data production.
 
 ## 5. Oracles and tests
 
@@ -426,7 +426,7 @@ Native PLANE tests pin `R₁₃(θ₁)R₂₄(θ₂)` operation order, the zero-
 
 Native heap-address tests build multipage `DataSpan` fixtures and prove index `j·width+i`, page quotient/remainder, descriptor decoding, bottom-row orientation, last-page padding, stale-handle rejection, and canonical-zero out-of-range behavior.
 
-Native pixel tests use asymmetric 2-by-2 and 3-by-2 fixtures to prove centre sampling, `+v` up, row zero at bottom, nearest level resampling, exact interior classification, exact magenta glitch classification, malformed-flag tinting, and palette arithmetic within one f32 ulp of its scalar reference.
+Native pixel tests use asymmetric 2-by-2 and 3-by-2 fixtures to prove centre sampling, `+v` up, row zero at bottom, nearest level resampling, exact interior classification, exact orange glitch classification distinct from magenta malformed-record tinting, and palette arithmetic within one f32 ulp of its scalar reference.
 
 Native mesh tests prove vertex count `width·height`, index count `6(width−1)(height−1)`, the exact six-index cell order, bounds for every index, no triangles across rows, square-pixel q coordinates, neutral glitch height, and overflow refusal before allocation.
 
@@ -454,11 +454,11 @@ The coverage oracle rasterizes the CPU vertex mirror over a pose lattice includi
 
 Native state-machine tests permute scene completion, HOT writes, MAIN replacement, accepted-reference shift, incompatible cap, plane origin, or precision mode, control movement, resize, warp completion, deadline, and poll-limit events and prove exactly one retained plus one in-flight texture, latest-wins promotion, exactly-once pose rebasing, no third allocation, bounded retirement, and correct `reprojected_per_scene` attribution.
 
-Native page-contract tests pin the eight callable entries `new`, `set_main`, `write_hot`, `submit_scene`, `frame`, `poll`, `facts`, and `Warp::reproject`, the exact initial overlay phrase, required facts fields, requested-versus-delivered separation, unavailable aggregate counts, all three sample labels, refresh order, app surface ownership through warp completion, and panic/error setup before `Presenter::new`.
+Native page-contract tests pin the eight callable entries `new`, `set_main`, `write_hot`, `submit_scene`, `frame`, `poll`, `facts`, and `Warp::reproject`, the exact initial overlay phrase, required facts fields, requested-versus-delivered separation, Final glitch count and unavailable rebase aggregates, all three sample labels, refresh order, app surface ownership through warp completion, and panic/error setup before `Presenter::new`.
 
 Browser initialization, GL backend identity, `EXT_color_buffer_float`, vertex-stage DATA access, actual surface format, exact scratch-copy visibility, and absence of validation or console errors are `requires visible replay`.
 
-Image orientation at height zero and under relief, the continuity of the morph as each control moves, pole clipping, magenta glitch isolation under scene and warp movement, clear disocclusion, clear first frame, refinement resizing, and rapid HOT motion while a scene is in flight are `requires visible replay`.
+Image orientation at height zero and under relief, the continuity of the morph as each control moves, pole clipping, orange glitch isolation from magenta contract violations under scene and warp movement, clear disocclusion, clear first frame, refinement resizing, and rapid HOT motion while a scene is in flight are `requires visible replay`.
 
 Warp cost per refresh, scene-frame cost, fence wait, polls, warm-up exclusion, frames reprojected per scene, texture reallocations, and direct-versus-warp pixel error under relief on the target browser are `requires visible replay`; no native estimate may populate those overlay fields.
 

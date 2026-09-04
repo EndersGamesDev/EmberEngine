@@ -414,7 +414,7 @@ impl Presenter {
             .is_some()
     }
 
-    /// Submits the one scene pass plus its four-byte completion fence.
+    /// Submits the one image scene pass, optional Final census, and completion fence.
     ///
     /// # Errors
     ///

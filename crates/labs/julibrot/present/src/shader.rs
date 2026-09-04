@@ -166,11 +166,11 @@ struct CountVertex { @builtin(position) position: vec4<f32>, }
     if (scene.span.z != 0u) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
     let group = u32(position.y) * scene.grid.x + u32(position.x);
     let start = group * 255u;
-    let active = scene.grid.x * scene.grid.y;
+    let active_records = scene.grid.x * scene.grid.y;
     var count = 0u;
     for (var offset = 0u; offset < 255u; offset += 1u) {
         let index = start + offset;
-        if (index < active && load_escape(index).w == 1.0) { count += 1u; }
+        if (index < active_records && load_escape(index).w == 1.0) { count += 1u; }
     }
     return vec4<f32>(f32(count) / 255.0, 0.0, 0.0, 1.0);
 }
@@ -321,9 +321,15 @@ mod tests {
     fn glitch_census_reads_each_active_status_once() {
         let source = glitch_count_shader(limits());
         assert!(source.contains("let start = group * 255u;"));
-        assert!(source.contains("index < active && load_escape(index).w == 1.0"));
+        assert!(source.contains("index < active_records && load_escape(index).w == 1.0"));
         assert!(source.contains("f32(count) / 255.0"));
         assert!(source.contains("if (scene.span.z != 0u)"));
+        assert_translates_to_webgl2(&source, naga::ShaderStage::Vertex, "glitch_count_vertex");
+        assert_translates_to_webgl2(
+            &source,
+            naga::ShaderStage::Fragment,
+            "glitch_count_fragment",
+        );
     }
 
     #[test]
