@@ -377,7 +377,9 @@ fn shown_weapon(id: u8) -> u8 {
 }
 
 /// Whether `EMBER_ROUNDS` is "1": the round showcase (`push_showcase`) is
-/// drawn every frame. Read once, native only, like `EMBER_WEAPON`.
+/// drawn every frame the local player is alive and not through the scope
+/// (the scope mask would black out all of it but the circle). Read once,
+/// native only, like `EMBER_WEAPON`.
 #[cfg(not(target_arch = "wasm32"))]
 fn debug_rounds() -> bool {
     static ROUNDS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -936,15 +938,26 @@ fn push_flash(frame: &mut Frame, rs: Rounds, muzzle: Vec3, dir: Vec3, size: f32)
     cone(bore, size * FLASH_FORWARD);
 }
 
-/// Push a round in flight: its mesh at `pos`, nose along `dir`, at
-/// `ROUND_SCALE` times its calibre, untinted (the jacket picture is the
-/// colour). A round is a body of revolution, so `from_rotation_arc` has
-/// no roll to get wrong on it.
-fn push_round(frame: &mut Frame, rs: Rounds, round: Round, pos: Vec3, dir: Vec3) {
+/// A round as it is drawn: which profile, and how many times its real
+/// size. In play the scale is `ROUND_SCALE`; the showcase shrinks it with
+/// the field of view so its rows keep their size on screen. The streak is
+/// measured from the same pair, so the two never disagree about how big
+/// the round they belong to is.
+#[derive(Clone, Copy)]
+struct Drawn {
+    round: Round,
+    scale: f32,
+}
+
+/// Push a round in flight: its mesh at `pos`, nose along `dir`, at its
+/// drawn scale, untinted (the jacket picture is the colour). A round is a
+/// body of revolution, so `from_rotation_arc` has no roll to get wrong on
+/// it.
+fn push_round(frame: &mut Frame, rs: Rounds, drawn: Drawn, pos: Vec3, dir: Vec3) {
     frame.instances.push(
-        Instance::new(pos, Vec3::splat(rounds::ROUND_SCALE), Vec3::ONE)
+        Instance::new(pos, Vec3::splat(drawn.scale), Vec3::ONE)
             .with_rot(Quat::from_rotation_arc(Vec3::X, dir))
-            .with_mesh(rs.mesh(round)),
+            .with_mesh(rs.mesh(drawn.round)),
     );
 }
 
@@ -959,18 +972,20 @@ fn push_round(frame: &mut Frame, rs: Rounds, round: Round, pos: Vec3, dir: Vec3)
 /// ends in a point. The base radius is the round's drawn heel times
 /// `STREAK_LEAD` times `fade`, so the streak thins out through the
 /// linger. Scale is applied before rotation, so a shape long in +X is
-/// turned onto MINUS the flight direction.
+/// turned onto MINUS the flight direction. The streak is measured from
+/// the round's own drawn size (`Drawn`), so it thickens and thins with it.
 fn push_streak(
     frame: &mut Frame,
     rs: Rounds,
-    round: Round,
+    drawn: Drawn,
     head: Vec3,
     dir: Vec3,
     rods: &[Rod],
     fade: f32,
 ) {
-    let half_len = round.length() * 0.5 * rounds::ROUND_SCALE;
-    let r = round.heel_radius() * rounds::ROUND_SCALE * rounds::STREAK_LEAD * fade;
+    let Drawn { round, scale } = drawn;
+    let half_len = round.length() * 0.5 * scale;
+    let r = round.heel_radius() * scale * rounds::STREAK_LEAD * fade;
     let back = Quat::from_rotation_arc(Vec3::X, -dir);
     for (i, rod) in rods.iter().enumerate() {
         let rear = rod.center - dir * (rod.len * 0.5);
@@ -1003,7 +1018,10 @@ fn push_streak(
 /// The showcase's layout: how far ahead of the eye it hangs, the gap
 /// between rounds in the top row, the drop from one row to the next, the
 /// streak's length in the second row and the flash star's size in the
-/// third.
+/// third. Every one of them is a length at the hip; the offsets and the
+/// mesh scales are multiplied by the tangent ratio of the field to the
+/// hip's, at the same fixed distance, so the layout keeps its size on
+/// screen as the field narrows down the sights.
 #[cfg(not(target_arch = "wasm32"))]
 const SHOWCASE_DIST: f32 = 0.5;
 #[cfg(not(target_arch = "wasm32"))]
@@ -1014,6 +1032,15 @@ const SHOWCASE_DROP: f32 = 0.06;
 const SHOWCASE_STREAK: f32 = 0.4;
 #[cfg(not(target_arch = "wasm32"))]
 const SHOWCASE_FLASH: f32 = 0.08;
+
+/// How much the showcase shrinks at `fov_deg`: the tangent of its half
+/// angle over the hip's, which is the factor that holds a thing's share
+/// of the view when the field narrows and the depth does not change.
+#[cfg(not(target_arch = "wasm32"))]
+fn showcase_scale(fov_deg: f32) -> f32 {
+    let half = |deg: f32| (deg * 0.5).to_radians().tan();
+    half(fov_deg.clamp(1.0, 179.0)) / half(feel::HIP_FOV)
+}
 
 /// The round showcase (`EMBER_ROUNDS=1`, native only): every v20 shape
 /// hung in the eye's own frame so the operator can judge each in one
@@ -1036,32 +1063,67 @@ const SHOWCASE_FLASH: f32 = 0.08;
 /// the eye's right and half down the look so both the petals and the
 /// forward cone show. Occludes the crosshair and the gun; it is a review
 /// aid, not a view to play in.
+///
+/// The metres above are the hip's. Every offset and every mesh scale
+/// here is multiplied by `k`, the tangent ratio of `fov_deg` to
+/// `HIP_FOV` (NOT the crosshair's linear `fov_now / HIP_FOV`, which is
+/// close enough for a two-pixel bar and is not close enough for a
+/// 0.7 m row: at 44 degrees the tangent has fallen to 0.58 of the hip's
+/// where the ratio of the angles is 0.63), at the same fixed
+/// `SHOWCASE_DIST`. A lateral offset over its depth divided by the
+/// field's tangent is exactly the fraction of the half-view a thing
+/// covers, so scaling the offsets and the sizes by that ratio at a fixed
+/// depth holds every row where it sits on screen; scaling the distance
+/// too would be a similarity about the eye, which holds the ANGLE and so
+/// lets the rows swell across a narrowed view. Unscaled, row one ran off
+/// a 4:3 window at the narrowest sight (44 degrees). Drawn only while the
+/// local player is alive and never through the scope, whose mask would
+/// black out all but the circle anyway; see `debug_rounds`.
 #[cfg(not(target_arch = "wasm32"))]
-fn push_showcase(frame: &mut Frame, rs: Rounds, eye: Vec3, look: Vec3, right3: Vec3, now: f32) {
+fn push_showcase(
+    frame: &mut Frame,
+    rs: Rounds,
+    eye: Vec3,
+    look: Vec3,
+    right3: Vec3,
+    now: f32,
+    fov_deg: f32,
+) {
     let up = right3.cross(look).normalize();
     let right = look.cross(up);
+    // One factor on every offset and every mesh, the depth left alone:
+    // at the hip it is 1 and every number below is the metres it reads as.
+    let k = showcase_scale(fov_deg);
+    let round_scale = rounds::ROUND_SCALE * k;
     let centre = eye + look * SHOWCASE_DIST;
+    let gap = SHOWCASE_GAP * k;
+    let drop = SHOWCASE_DROP * k;
     // Row one: the rounds, nose to tail along the right, centred.
     let total = Round::ALL
         .iter()
-        .map(|r| r.length() * rounds::ROUND_SCALE + SHOWCASE_GAP)
+        .map(|r| r.length() * round_scale + gap)
         .sum::<f32>()
-        - SHOWCASE_GAP;
+        - gap;
     let mut x = -total * 0.5;
     for r in Round::ALL {
-        let len = r.length() * rounds::ROUND_SCALE;
-        push_round(frame, rs, r, centre + right * (x + len * 0.5), right);
-        x += len + SHOWCASE_GAP;
+        let len = r.length() * round_scale;
+        let drawn = Drawn {
+            round: r,
+            scale: round_scale,
+        };
+        push_round(frame, rs, drawn, centre + right * (x + len * 0.5), right);
+        x += len + gap;
     }
     // Row two: the Lapua flying along the right with its streak behind
     // it, the core `TRACER_CORE_LEN` of `TRACER_TAIL_LEN` of the length
     // (the proportion at which the two are one straight taper), the
     // core rod measured from the head as `Tracer::rods` measures it.
     let round = Round::Lapua;
-    let head = centre - up * SHOWCASE_DROP + right * 0.30;
-    let inset = round.length() * 0.5 * rounds::ROUND_SCALE * (1.0 - rounds::STREAK_INSET);
-    let core = inset + SHOWCASE_STREAK * (feel::TRACER_CORE_LEN / feel::TRACER_TAIL_LEN);
-    let tail = inset + SHOWCASE_STREAK - core;
+    let head = centre - up * drop + right * (0.30 * k);
+    let inset = round.length() * 0.5 * round_scale * (1.0 - rounds::STREAK_INSET);
+    let streak = SHOWCASE_STREAK * k;
+    let core = inset + streak * (feel::TRACER_CORE_LEN / feel::TRACER_TAIL_LEN);
+    let tail = inset + streak - core;
     let color = weapon_feel(feel::SCOPED_WEAPON).tracer;
     let rods = [
         Rod {
@@ -1075,10 +1137,14 @@ fn push_showcase(frame: &mut Frame, rs: Rounds, eye: Vec3, look: Vec3, right3: V
             color: color * feel::TRACER_TAIL_DIM,
         },
     ];
-    push_streak(frame, rs, round, head, right, &rods, 1.0);
-    push_round(frame, rs, round, head, right);
+    let drawn = Drawn {
+        round,
+        scale: round_scale,
+    };
+    push_streak(frame, rs, drawn, head, right, &rods, 1.0);
+    push_round(frame, rs, drawn, head, right);
     // Row three: the holes, facing the eye, and the star.
-    let row = centre - up * (SHOWCASE_DROP * 2.0 + 0.04);
+    let row = centre - up * (drop * 2.0 + 0.04 * k);
     let hole = |weapon: u8, at: Vec3, shrink: f32| {
         let m = Mark {
             pos: at,
@@ -1089,18 +1155,18 @@ fn push_showcase(frame: &mut Frame, rs: Rounds, eye: Vec3, look: Vec3, right3: V
         let (pos, scale, rot) = m.placement();
         Instance::new(
             pos,
-            Vec3::new(scale.x, scale.y * shrink, scale.z * shrink),
+            Vec3::new(scale.x * k, scale.y * shrink * k, scale.z * shrink * k),
             feel::MARK_COLOR,
         )
         .with_rot(rot)
         .with_mesh(rs.disc())
     };
-    frame.instances.push(hole(3, row - right * 0.30, 1.0));
+    frame.instances.push(hole(3, row - right * (0.30 * k), 1.0));
     frame
         .instances
-        .push(hole(7, row - right * 0.15, 0.1 / feel::ROCKET_MARK));
+        .push(hole(7, row - right * (0.15 * k), 0.1 / feel::ROCKET_MARK));
     let bore = (right + look).normalize();
-    push_flash(frame, rs, row + right * 0.10, bore, SHOWCASE_FLASH);
+    push_flash(frame, rs, row + right * (0.10 * k), bore, SHOWCASE_FLASH * k);
 }
 
 /// A brass casing out of my own gun (v20): falls under gravity from the
@@ -3301,8 +3367,10 @@ impl EmberGame for ShooterGame {
         if let Some(rs) = self.rounds {
             // Impact marks: near-black holes on the faces rounds hit, each
             // the width its round makes (`Mark::diameter`), drawn after the
-            // cover so the depth test lays them on it; they stand a hair
-            // off the face so they never fight it for the pixel.
+            // cover so the depth test lays them on it; the disc is sunk
+            // into the face with 1 mm proud (`Mark::placement`), so it
+            // never fights the face for the pixel and never reads as a
+            // puck stuck on the wall at a grazing angle.
             for m in &self.marks {
                 let (pos, scale, rot) = m.placement();
                 frame.instances.push(
@@ -3324,9 +3392,13 @@ impl EmberGame for ShooterGame {
                 let dir = t.dir();
                 let head = t.head(self.time);
                 let rods = t.rods(self.time);
-                push_streak(&mut frame, rs, round, head, dir, &rods, t.fade(self.time));
+                let drawn = Drawn {
+                    round,
+                    scale: rounds::ROUND_SCALE,
+                };
+                push_streak(&mut frame, rs, drawn, head, dir, &rods, t.fade(self.time));
                 if t.flying(self.time) {
-                    push_round(&mut frame, rs, round, head, dir);
+                    push_round(&mut frame, rs, drawn, head, dir);
                 }
             }
             // Remote muzzle flashes, from the same events: a star along
@@ -3693,9 +3765,10 @@ impl EmberGame for ShooterGame {
             // The round showcase, a review aid: see `push_showcase`.
             #[cfg(not(target_arch = "wasm32"))]
             if debug_rounds()
+                && !scoped
                 && let Some(rs) = self.rounds
             {
-                push_showcase(&mut frame, rs, eye, look, right3, self.time);
+                push_showcase(&mut frame, rs, eye, look, right3, self.time, fov_now);
             }
 
             // ---- the off-hand shield, in the hand the pistol is not ----
@@ -4616,9 +4689,9 @@ mod wire_tests {
         assert_eq!(game.marks[0].pos, t.to);
         assert_eq!(game.marks[0].normal, -Vec3::Z);
         assert_eq!(game.marks[0].weapon, 3, "the mark knows what made it");
-        // The mark is the AK's hole: the disc, 24 mm across, its back a
-        // millimetre off the container's south face, thick along the
-        // normal; not a square.
+        // The mark is the AK's hole: the disc, 23.7 mm across, sunk into
+        // the container's south face with a millimetre of it proud, thick
+        // along the normal; not a square.
         let holes: Vec<&Instance> = frame
             .instances
             .iter()
@@ -4630,7 +4703,11 @@ mod wire_tests {
         assert!((h.scale.y * 2.0 - 0.0237).abs() < 1e-4, "{}", h.scale);
         assert_eq!(h.scale.y, h.scale.z);
         assert_eq!(h.scale.x, feel::MARK_THICK);
-        assert!((h.position - (t.to - Vec3::Z * feel::MARK_LIFT)).length() < 1e-6);
+        assert!(
+            (h.position - (t.to + Vec3::Z * (feel::MARK_THICK - feel::MARK_LIFT))).length() < 1e-6,
+            "sunk into the face, not standing off it: {}",
+            h.position
+        );
         assert!(
             (h.rot * Vec3::X + Vec3::Z).length() < 1e-5,
             "thick along the normal"
@@ -5299,5 +5376,94 @@ mod viewmodel_tests {
             (placed - expected).length() < 1e-5,
             "{placed} vs {expected}"
         );
+    }
+    /// The `EMBER_ROUNDS` showcase draws every v20 shape, and draws all
+    /// of it inside the view: the five rounds, the Lapua's two-rod
+    /// streak with its round at the head, the AK's hole and the rocket's
+    /// shrunk one, and the five cones of a flash star. Its offsets and
+    /// its mesh scales are multiplied by `showcase_scale`, so every row
+    /// keeps the same share of the view down the sights as at the hip;
+    /// unscaled, row one ran off a 4:3 window at the narrowest sight
+    /// (44 of 70 degrees), which is what the frustum half of this test
+    /// pins. Nothing here can judge the copper, the taper or the star's
+    /// proportions: that wants a capture.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn the_showcase_hangs_every_shape_in_front_of_the_eye_at_any_field() {
+        let eye = Vec3::new(3.0, 1.45, -2.0);
+        let look = Vec3::new(0.6, -0.2, 0.8).normalize();
+        // The camera's right as the frame builds it, then its own up.
+        let right3 = look.cross(Vec3::Y).normalize();
+        let up = right3.cross(look).normalize();
+        let rs = rounds::Rounds { base: 500 };
+        // The hip, and the narrowest sight any weapon has (44 degrees).
+        for fov in [feel::HIP_FOV, 44.0_f32] {
+            let view_scale = showcase_scale(fov);
+            let mut frame = Frame::default();
+            push_showcase(&mut frame, rs, eye, look, right3, 5.0, fov);
+            let n = |mesh: u32| frame.instances.iter().filter(|i| i.mesh == mesh).count();
+            assert_eq!(
+                frame.instances.len(),
+                15,
+                "5 rounds + 2 streak rods + the flying round + 2 holes + 5 flash cones"
+            );
+            for r in rounds::Round::ALL {
+                let want = if r == rounds::Round::Lapua { 2 } else { 1 };
+                assert_eq!(n(500 + r.offset()), want, "{r:?}");
+            }
+            // The streak is a core frustum with a cone tail behind it;
+            // the star is five cones, so the streak mesh carries six.
+            assert_eq!(n(500 + rounds::CORE_OFFSET), 1, "the core frustum");
+            assert_eq!(n(500 + rounds::STREAK_OFFSET), 6, "the tail and the star");
+            assert_eq!(n(500 + rounds::DISC_OFFSET), 2, "two holes");
+            // A textured round is pushed untinted or the jacket is
+            // double-tinted; the holes and the star wear their colours.
+            for i in frame.instances.iter().filter(|i| {
+                rounds::Round::ALL
+                    .iter()
+                    .any(|r| i.mesh == 500 + r.offset())
+            }) {
+                assert_eq!(i.color, Vec3::ONE, "the jacket is the colour");
+            }
+            // The rocket's blast mark is drawn at 0.1 m for the row, the
+            // AK's hole at its own 24 mm, both times the view scale.
+            let mut holes: Vec<f32> = frame
+                .instances
+                .iter()
+                .filter(|i| i.mesh == 500 + rounds::DISC_OFFSET)
+                .map(|i| i.scale.y * 2.0)
+                .collect();
+            holes.sort_by(f32::total_cmp);
+            assert!((holes[0] - 0.0237 * view_scale).abs() < 1e-4, "{holes:?}");
+            assert!((holes[1] - 0.1 * view_scale).abs() < 1e-4, "{holes:?}");
+            // Everything sits in front of the eye, past the 0.1 m near
+            // plane, and inside the field. A 4:3 window is the narrowest
+            // the arena runs, so the half-height at a depth is
+            // tan(fov/2) * depth and the half-width 4/3 of that.
+            let half = (fov * 0.5).to_radians().tan();
+            let lateral = half * SHOWCASE_DIST * 4.0 / 3.0;
+            for i in &frame.instances {
+                let to = i.position - eye;
+                let d = to.dot(look);
+                assert!(d > 0.1, "inside the near plane: {i:?}");
+                assert!(to.dot(up).abs() < half * d, "off the top or bottom: {i:?}");
+                assert!(to.dot(right3).abs() < lateral, "off the side: {i:?}");
+            }
+            // The instance origins are not the widest points: check the
+            // two that are, row one's outer nose and the Lapua's nose in
+            // row two. Both are lengths times the same view scale as the
+            // window they sit in, so what fits at the hip fits down the
+            // sights — which is the whole point of scaling the layout.
+            let scale = rounds::ROUND_SCALE * view_scale;
+            let row_one = (rounds::Round::ALL
+                .iter()
+                .map(|r| r.length() * scale + SHOWCASE_GAP * view_scale)
+                .sum::<f32>()
+                - SHOWCASE_GAP * view_scale)
+                * 0.5;
+            assert!(row_one < lateral, "row one runs off: {row_one} vs {lateral}");
+            let row_two = 0.30 * view_scale + rounds::Round::Lapua.length() * scale * 0.5;
+            assert!(row_two < lateral, "row two runs off: {row_two} vs {lateral}");
+        }
     }
 }

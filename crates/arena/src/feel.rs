@@ -1107,8 +1107,13 @@ pub const MARK_CALIBRES: f32 = 3.0;
 /// The rocket's blast mark: its diameter, metres.
 pub const ROCKET_MARK: f32 = 0.5;
 /// The hole's depth (the disc's thickness along the normal) and how far its
-/// back face stands off the surface, so it never z-fights the face it sits
-/// on: 1 mm, as the plate's near face stood.
+/// front face stands proud of the surface, so it never z-fights the face it
+/// sits on: 1 mm. The rest of the disc is SUNK into the obstacle, which is
+/// opaque and hides it. It stood the other way round at first, the whole
+/// 4 mm slab outside the face; the first capture through the scope showed a
+/// hole head-on but a black puck glued to the wall at a grazing angle, so
+/// the free variable — where the slab sits along the normal — went the
+/// other way. Only the 1 mm shows now, from every angle.
 pub const MARK_THICK: f32 = 0.004;
 pub const MARK_LIFT: f32 = 0.001;
 const _: () = assert!(MARK_LIFT > 0.0 && MARK_LIFT < MARK_THICK);
@@ -1135,16 +1140,20 @@ impl Mark {
             .map_or(ROCKET_MARK, |r| r.calibre_mm().0 * MARK_CALIBRES * 0.001)
     }
 
-    /// Where the hole's disc goes: its back face lifted `MARK_LIFT` off the
-    /// surface, its thickness along the normal (scale applies before
-    /// rotation, so the disc, radius 1 in its YZ plane and thick along its
-    /// own +X from 0 to 1, is scaled `(thick, r, r)` and +X is rotated onto
-    /// the normal).
+    /// Where the hole's disc goes: sunk into the surface so that only
+    /// `MARK_LIFT` of its thickness stands proud of the face, the rest
+    /// inside the (opaque) obstacle. The disc's own base sits at
+    /// `pos - normal * (MARK_THICK - MARK_LIFT)` and it grows along the
+    /// normal from there, so its front face is `MARK_LIFT` out and never
+    /// fights the face for the pixel while nothing of the slab's side
+    /// shows at a grazing angle. Scale applies before rotation, so the
+    /// disc — radius 1 in its YZ plane, thick along its own +X from 0 to
+    /// 1 — is scaled `(thick, r, r)` and +X is rotated onto the normal.
     #[must_use]
     pub fn placement(&self) -> (Vec3, Vec3, Quat) {
         let r = self.diameter() * 0.5;
         (
-            self.pos + self.normal * MARK_LIFT,
+            self.pos - self.normal * (MARK_THICK - MARK_LIFT),
             Vec3::new(MARK_THICK, r, r),
             Quat::from_rotation_arc(Vec3::X, self.normal),
         )
@@ -1525,8 +1534,10 @@ mod feel_tests {
         assert_eq!(marks.len(), MARK_CAP - 1);
         expire_marks(&mut marks, 1000.0);
         assert!(marks.is_empty());
-        // The hole lies on the face, its back lifted 1 mm off it, its
-        // thickness along the normal.
+        // The hole is sunk into the face: only MARK_LIFT of it stands
+        // proud, the rest inside the box, its thickness along the normal.
+        // On a -X face the disc's base is 3 mm INSIDE (at x = 5 + 0.003)
+        // and it grows out to x = 5 - 0.001.
         let m = Mark {
             pos: Vec3::new(5.0, 1.0, 2.0),
             normal: -Vec3::X,
@@ -1534,7 +1545,11 @@ mod feel_tests {
             born: 0.0,
         };
         let (pos, scale, rot) = m.placement();
-        assert_eq!(pos, Vec3::new(5.0 - MARK_LIFT, 1.0, 2.0));
+        assert_eq!(pos, Vec3::new(5.0 + (MARK_THICK - MARK_LIFT), 1.0, 2.0));
+        assert!(
+            (pos + m.normal * MARK_THICK - (m.pos + m.normal * MARK_LIFT)).length() < 1e-6,
+            "the front face stands exactly MARK_LIFT proud of the surface"
+        );
         let r = m.diameter() * 0.5;
         assert_eq!(scale, Vec3::new(MARK_THICK, r, r));
         assert!(
@@ -1551,7 +1566,7 @@ mod feel_tests {
     /// the view as one black square. A 9 mm leaves 27 mm, the AK's 7.9 mm
     /// 24 mm, the M4's 5.7 mm 17 mm, the Casull 35 mm, the Lapua 26 mm;
     /// the rocket's blast mark is half a metre; and the disc is thinner
-    /// than any hole is wide, with its 1 mm stand-off kept.
+    /// than any hole is wide, sunk into the face with 1 mm of it proud.
     #[test]
     fn a_mark_is_a_hole_three_calibres_wide_not_a_square_plate() {
         let mark = |weapon: u8| Mark {

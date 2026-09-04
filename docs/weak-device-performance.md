@@ -83,7 +83,7 @@ The absolute cost is small today — the arithmetic below shows the scene is not
 - static geometry: 1 floor + 4 walls + 14 obstacles (`generate_arena` returns exactly 14, `shooter.rs:99-100`) + 4 pad slabs + up to 4 active pickups (`generate_pads` returns 4, `shooter.rs:131`) = 27 instances;
 - seven remote players at 1 body + 1 head + 8 gun parts + 3 health pips each (`online.rs:872-899`) = 91 instances;
 - own viewmodel at 8 gun parts + 4 arm parts + 5 muzzle flash cones (the star, since the v20 rounds pass) + the crosshair (2 hairline bars on native, 0 on the web, where the page's own `div#crosshair` stands in; the aim dot this line once counted is gone since v20) = 17 to 19 instances;
-- total ≈ **132 instances**, plus bullets.
+- total ≈ **135 to 137 instances**, plus bullets, and plus what v20 adds on top of this list: a remote player who is firing carries 5 flash cones for the 35 to 60 ms of `flash_ms` where v19 gave him 1 cube, and up to `feel::MARK_CAP` (96) impact-hole discs can be live on the surfaces at once, each 20 s old at most.
 
 The gun and arm part counts come from the viewmodel GLB itself, which carries twelve mesh primitives named `slide`, `barrel`, `frame`, `grip`, `guard`, `sight_f`, `sight_r`, `strip`, `hand_r`, `arm_r`, `hand_l`, `arm_l`; the first eight are gun parts and the four hand/arm names are split off by prefix at `online.rs:50-53`. With the built-in cube that is 13 mesh entries, so at most **13 draw calls** per frame (`renderer.rs:714-719`). Roughly 64 of the instances use the 36-vertex cube (`renderer.rs:1057`), giving about 2,300 cube vertices plus a small number from the 19 KB viewmodel — on the order of **3–5 thousand vertices per displayed frame**.
 
