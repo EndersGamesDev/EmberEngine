@@ -77,7 +77,33 @@ pub fn scene_indices(extent: [u32; 2]) -> Result<Vec<u32>, MeshError> {
     Ok(indices)
 }
 
-/// Computes display-normalized `(q_u,q_v)` at one bottom-row-first pixel centre.
+/// Returns one mesh vertex's screen offset from the frame centre along one axis.
+///
+/// A grid of `count` samples covers `count` pixels, so the mesh spanning their centres stops half a
+/// pixel short of the frame at both ends. The rasterizer's fill rule hides that at the low end and
+/// exposes it at the high end, leaving the last column and row painted with the scene pass's clear
+/// rather than from a record. The outermost samples are therefore placed on the frame boundary, so
+/// the mesh tiles the frame it was sampled for; interior samples keep their pixel centre exactly.
+///
+/// This is the drawn rule, not the sampling rule: which plane point a record carries is still the
+/// pixel centre that `ember_julibrot_math` chose, and the fragment stage still resolves every pixel
+/// to its own record.
+#[must_use]
+pub fn grid_screen(index: u32, count: u32) -> f64 {
+    let centre = 0.5 * f64::from(count);
+    if count <= 1 {
+        return 0.0;
+    }
+    if index == 0 {
+        return -centre;
+    }
+    if index + 1 == count {
+        return centre;
+    }
+    f64::from(index) + 0.5 - centre
+}
+
+/// Computes display-normalized `(q_u,q_v)` at one bottom-row-first mesh vertex.
 ///
 /// # Errors
 ///
@@ -89,11 +115,10 @@ pub fn display_coordinate(extent: [u32; 2], pixel: [u32; 2]) -> Result<[f32; 2],
     if width == 0 || height == 0 || column >= width || row >= height {
         return Err(MeshError::InvalidInput);
     }
-    let width = f64::from(width);
-    let height = f64::from(height);
+    let span = f64::from(width);
     Ok([
-        (4.0 * ((f64::from(column) + 0.5) / width - 0.5)) as f32,
-        (4.0 * height.mul_add(-0.5, f64::from(row) + 0.5) / width) as f32,
+        (4.0 * grid_screen(column, width) / span) as f32,
+        (4.0 * grid_screen(row, height) / span) as f32,
     ])
 }
 
@@ -255,12 +280,97 @@ mod tests {
     }
 
     #[test]
-    fn coordinates_are_pixel_centred_square_and_bottom_first() -> Result<(), MeshError> {
-        assert_eq!(display_coordinate([2, 2], [0, 0])?, [-1.0, -1.0]);
-        assert_eq!(display_coordinate([2, 2], [1, 1])?, [1.0, 1.0]);
-        assert_eq!(display_coordinate([4, 2], [0, 0])?, [-1.5, -0.5]);
-        assert_eq!(display_coordinate([4, 2], [0, 1])?, [-1.5, 0.5]);
+    fn the_outer_ring_is_the_frame_and_interiors_keep_their_centre() -> Result<(), MeshError> {
+        // Every sample of a two-wide axis is an outer one, so both land on the frame boundary.
+        assert_eq!(display_coordinate([2, 2], [0, 0])?, [-2.0, -2.0]);
+        assert_eq!(display_coordinate([2, 2], [1, 1])?, [2.0, 2.0]);
+        // The display box is square in q_u, so a 4-by-2 frame is +/-2 across and +/-1 tall.
+        assert_eq!(display_coordinate([4, 2], [0, 0])?, [-2.0, -1.0]);
+        assert_eq!(display_coordinate([4, 2], [3, 1])?, [2.0, 1.0]);
+        // Interior samples are untouched: column 1 of 4 keeps its pixel centre at screen -0.5.
+        assert_eq!(display_coordinate([4, 4], [1, 2])?, [-0.5, 0.5]);
+        assert_eq!(grid_screen(1, 3), 0.0);
+        assert_eq!(grid_screen(0, 1), 0.0);
         Ok(())
+    }
+
+    /// The whole point of the outer ring: the drawn mesh has to cover the frame, and every pixel
+    /// has to resolve to its own record. A pixel-centred mesh leaves the last column and row
+    /// uncovered, and the scene pass paints those with its clear -- a colour no record carries.
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "the asserted grid coordinate is a rounded index inside the fixture extent"
+    )]
+    #[test]
+    fn the_mesh_covers_every_pixel_and_each_reads_its_own_record() -> Result<(), MeshError> {
+        let extent = [4_u32, 3_u32];
+        let [width, height] = extent;
+        // Vertex positions in pixel units, mirroring the shader's `grid_screen` placement.
+        let vertex = |index: u32| -> [f64; 2] {
+            [
+                0.5_f64.mul_add(f64::from(width), grid_screen(index % width, width)),
+                0.5_f64.mul_add(f64::from(height), grid_screen(index / width, height)),
+            ]
+        };
+        let indices = scene_indices(extent)?;
+        for row in 0..height {
+            for column in 0..width {
+                let centre = [f64::from(column) + 0.5, f64::from(row) + 0.5];
+                let mut resolved = None;
+                for triangle in indices.as_chunks::<3>().0 {
+                    let corners = [
+                        vertex(triangle[0]),
+                        vertex(triangle[1]),
+                        vertex(triangle[2]),
+                    ];
+                    let Some(weights) = barycentric(centre, corners) else {
+                        continue;
+                    };
+                    let grid: [f64; 2] = core::array::from_fn(|axis| {
+                        weights.iter().zip(triangle.iter().copied()).fold(
+                            0.0,
+                            |sum, (weight, index)| {
+                                let coordinate = if axis == 0 {
+                                    index % width
+                                } else {
+                                    index / width
+                                };
+                                weight.mul_add(f64::from(coordinate), sum)
+                            },
+                        )
+                    });
+                    resolved = Some(grid.map(|value| value.round() as u32));
+                    break;
+                }
+                assert_eq!(
+                    resolved,
+                    Some([column, row]),
+                    "pixel ({column},{row}) must be covered and must read its own record"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns the barycentric weights of `point` in `triangle`, or `None` when it is outside.
+    fn barycentric(point: [f64; 2], triangle: [[f64; 2]; 3]) -> Option<[f64; 3]> {
+        let [a, b, c] = triangle;
+        let cross = |u: [f64; 2], v: [f64; 2]| u[0].mul_add(v[1], -(u[1] * v[0]));
+        let edge = |from: [f64; 2], to: [f64; 2]| [to[0] - from[0], to[1] - from[1]];
+        let denominator = cross(edge(a, b), edge(a, c));
+        if denominator == 0.0 {
+            return None;
+        }
+        let weights = [
+            cross(edge(point, b), edge(point, c)) / denominator,
+            cross(edge(point, c), edge(point, a)) / denominator,
+            cross(edge(point, a), edge(point, b)) / denominator,
+        ];
+        weights
+            .iter()
+            .all(|weight| *weight >= -1.0e-12)
+            .then_some(weights)
     }
 
     #[test]

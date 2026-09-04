@@ -61,6 +61,21 @@ fn record_height(record: vec4<f32>) -> f32 {
 const SCENE_BODY: &str = r"
 struct SceneVertex { @builtin(position) position: vec4<f32>, @location(0) world: vec3<f32>, @location(1) grid_coordinate: vec2<f32>, @location(2) valid: f32, @location(3) clamped: f32, }
 struct Ambient5 { low: vec4<f32>, fifth: f32, }
+// A grid of width samples covers width pixels, so the mesh spanning their centres stops half a
+// pixel short of the frame on every side. The rasterizer's fill rule hides that on the left and
+// top, whose boundary lands exactly on the outermost pixel centres and counts as covered, and
+// exposes it on the right and bottom, where the same boundary counts as outside: the last column
+// and row keep the pass's clear and show sky no record carries. The outermost samples are
+// therefore drawn on the frame boundary, so the mesh tiles the frame it was sampled for. Interior
+// samples keep their pixel centre exactly, and the fragment stage still resolves every pixel to
+// its own record.
+fn grid_screen(index: u32, count: u32) -> f32 {
+    let centre = 0.5 * f32(count);
+    if (count <= 1u) { return 0.0; }
+    if (index == 0u) { return -centre; }
+    if (index + 1u == count) { return centre; }
+    return f32(index) + 0.5 - centre;
+}
 fn rotate_12(value: Ambient5, pair: vec2<f32>) -> Ambient5 { var out = value; out.low.x = pair.x * value.low.x - pair.y * value.low.y; out.low.y = pair.y * value.low.x + pair.x * value.low.y; return out; }
 fn rotate_13(value: Ambient5, pair: vec2<f32>) -> Ambient5 { var out = value; out.low.x = pair.x * value.low.x - pair.y * value.low.z; out.low.z = pair.y * value.low.x + pair.x * value.low.z; return out; }
 fn rotate_14(value: Ambient5, pair: vec2<f32>) -> Ambient5 { var out = value; out.low.x = pair.x * value.low.x - pair.y * value.low.w; out.low.w = pair.y * value.low.x + pair.x * value.low.w; return out; }
@@ -90,8 +105,8 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     let column = index % scene.grid.x;
     let row = index / scene.grid.x;
     let record = load_escape(index);
-    let screen_x = f32(column) + 0.5 - 0.5 * f32(scene.grid.x);
-    let screen_y = f32(row) + 0.5 - 0.5 * f32(scene.grid.y);
+    let screen_x = grid_screen(column, scene.grid.x);
+    let screen_y = grid_screen(row, scene.grid.y);
     let direct_ndc = vec2<f32>(2.0 * screen_x / f32(scene.grid.x), 2.0 * screen_y / f32(scene.grid.y));
     var output: SceneVertex;
     output.world = vec3<f32>(0.0);
@@ -388,8 +403,10 @@ mod tests {
         assert_eq!(ember_julibrot_math::RELIEF_NEAR_FRACTION, 0.05);
         let source = scene_shader(limits());
         for required in [
-            "let screen_x = f32(column) + 0.5 - 0.5 * f32(scene.grid.x);",
-            "let screen_y = f32(row) + 0.5 - 0.5 * f32(scene.grid.y);",
+            "let screen_x = grid_screen(column, scene.grid.x);",
+            "let screen_y = grid_screen(row, scene.grid.y);",
+            "if (index == 0u) { return -centre; }",
+            "if (index + 1u == count) { return centre; }",
             "let plane_homogeneous = vec3<f32>(dot(scene.screen_to_plane_row_0.xyz, screen), dot(scene.screen_to_plane_row_1.xyz, screen), dot(scene.screen_to_plane_row_2.xyz, screen));",
             "let chart_scale = 4.0 * scene.screen_to_plane_row_2.w / f32(scene.grid.x);",
             "let display = chart_scale * (plane_offset.x * scene.basis_u + plane_offset.y * scene.basis_v);",
