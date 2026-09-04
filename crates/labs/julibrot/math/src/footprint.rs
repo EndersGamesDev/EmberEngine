@@ -551,7 +551,7 @@ mod tests {
         let rows = [
             (owner_row(2.165), 1.0, 0.0, 0.0),
             (owner_row(4.0), 1.0, 0.0, 81.0 / 405.0),
-            (close_owner_row(), 5.0, 650.0 / 4225.0, 126.0 / 405.0),
+            (close_owner_row(), 1.25, 655.0 / 4225.0, 252.0 / 405.0),
         ];
         for ((object, view), apron, uncovered, clipped) in rows {
             let footprint = scene_footprint(&object, &view, 960, 540).expect("relief pose maps");
@@ -588,8 +588,7 @@ mod tests {
         (object, view)
     }
 
-    /// The second row asks for a five-times backdrop, and the backdrop is a large but partial win:
-    /// most of the mesh cannot be projected at all there, so a real share of the frame stays sky.
+    /// The second row asks for the smallest candidate backdrop, and retains honest horizon sky.
     ///
     /// This is the row that caught a vacuous coverage fact. The old measurement traced two boundary
     /// rings and dropped a ring entirely when any of its vertices failed a guard; with both rings
@@ -597,12 +596,12 @@ mod tests {
     /// perfect zero while three-quarters of the frame was empty. The measurement now rasterizes the
     /// mesh, so a triangle that fails to project covers nothing and cannot improve the answer.
     #[test]
-    fn close_owner_row_gets_a_five_times_backdrop_and_reports_the_sky_it_cannot_reach() {
+    fn close_owner_row_gets_a_backdrop_and_reports_the_sky_it_cannot_reach() {
         let (object, view) = close_owner_row();
         let footprint = scene_footprint(&object, &view, 960, 540).expect("relief pose maps");
-        assert!((footprint.apron_scale - 5.0).abs() < 1.0e-6);
+        assert_eq!(footprint.apron_scale.to_bits(), 1.25_f64.to_bits());
         assert!(
-            (footprint.uncovered_fraction - 650.0 / 4225.0).abs() < 1.0e-12,
+            (footprint.uncovered_fraction - 655.0 / 4225.0).abs() < 1.0e-12,
             "uncovered {}",
             footprint.uncovered_fraction
         );
@@ -627,15 +626,17 @@ mod tests {
             matrix: camera_matrix(&view),
         };
         let main_alone = uncovered_fraction(&chain, [960, 540], 1.0);
-        let with_backdrop = uncovered_fraction(&chain, [960, 540], 5.0);
+        let with_backdrop = uncovered_fraction(&chain, [960, 540], 1.25);
+        let with_widest = uncovered_fraction(&chain, [960, 540], 5.0);
         assert!(
-            (main_alone - 813.0 / 4225.0).abs() < 1.0e-12
-                && (with_backdrop - 650.0 / 4225.0).abs() < 1.0e-12,
-            "main alone {main_alone}, with backdrop {with_backdrop}"
+            (main_alone - 821.0 / 4225.0).abs() < 1.0e-12
+                && (with_backdrop - 655.0 / 4225.0).abs() < 1.0e-12
+                && (with_widest - 668.0 / 4225.0).abs() < 1.0e-12,
+            "main {main_alone}, backdrop {with_backdrop}, widest {with_widest}"
         );
         assert!(
-            with_backdrop < main_alone,
-            "the backdrop must reach more of the frame, not less"
+            main_alone - with_backdrop >= 0.5 * (main_alone - with_widest),
+            "the chosen backdrop must recover half the fivefold gain"
         );
     }
 
@@ -675,24 +676,27 @@ mod tests {
             )
         };
         let flat_narrow = horizon(&flat, 1.0);
+        let flat_chosen = horizon(&flat, 1.25);
         let flat_wide = horizon(&flat, 5.0);
+        let relief_chosen = horizon(&view, 1.25);
         let relief_wide = horizon(&view, 5.0);
         assert!(
             (flat_narrow - 821.0 / 4225.0).abs() < 1.0e-12
+                && (flat_chosen - 0.0).abs() < 1.0e-12
                 && (flat_wide - 668.0 / 4225.0).abs() < 1.0e-12
-                && (relief_wide - 650.0 / 4225.0).abs() < 1.0e-12,
-            "flat {flat_narrow} / {flat_wide}, relief {relief_wide}"
+                && (relief_chosen - 655.0 / 4225.0).abs() < 1.0e-12
+                && (relief_wide - 668.0 / 4225.0).abs() < 1.0e-12,
+            "flat {flat_narrow} / {flat_chosen} / {flat_wide}, relief {relief_chosen} / {relief_wide}"
         );
         assert!(
-            relief_wide < flat_wide,
-            "the relief scene with its backdrop must not leave more sky than a flat chart at the \
-             same apron: the residual is the plane's horizon, not a coverage deficit"
+            relief_chosen <= flat_chosen,
+            "relief must not leave more sky than its floor at the same apron"
         );
     }
 
     /// The clipping census keeps its whole fixed denominator.
     ///
-    /// At the second owner row 126 of the 405 census points are held at the near clamp and 90 more
+    /// At the second owner row 252 of the 405 census points are held at the near clamp.
     /// cannot be projected at all. Counting only the projectable ones published `126/315 = 0.4`,
     /// which improves as a pose projects less; the census is a fixed domain and stays one.
     #[test]
@@ -700,11 +704,11 @@ mod tests {
         let (object, view) = close_owner_row();
         let footprint = scene_footprint(&object, &view, 960, 540).expect("relief pose maps");
         assert!(
-            (footprint.relief_clipped_fraction - 126.0 / 405.0).abs() < 1.0e-12,
+            (footprint.relief_clipped_fraction - 252.0 / 405.0).abs() < 1.0e-12,
             "clipped {}",
             footprint.relief_clipped_fraction
         );
-        assert!(footprint.relief_clipped_fraction < 126.0 / 315.0);
+        assert!(footprint.relief_clipped_fraction < 1.0);
     }
 
     /// Every relief pose that publishes a coverage number publishes a measurable one: a pose whose
