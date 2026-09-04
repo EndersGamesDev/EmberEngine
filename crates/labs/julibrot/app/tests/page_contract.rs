@@ -173,9 +173,12 @@ fn loader_version_one_and_abi_three_are_pinned_before_orbit_transfer() {
     assert!(WIRE.contains("pub const JULIBROT_ABI_VERSION: u32 = 3;"));
     assert!(MANIFEST.contains("name = \"ember_lab_julibrot\""));
     assert_eq!(WORKER.matches("ember_lab_julibrot.js?v=1").count(), 1);
+    assert_eq!(MAIN.matches("./worker.js?v=1").count(), 1);
+    assert!(MAIN.contains("globalThis.JULIBROT_WORKER_URL = \"./worker.js?v=1\""));
     assert!(FRAME.contains("WorkerChannel::new("));
     assert!(FRAME.contains("WorkerMode::WebWorker"));
-    assert!(WORKER_OWNER.contains("const WORKER_URL: &str = \"./worker.js?v=1\""));
+    assert!(WORKER_OWNER.contains("const WORKER_URL_GLOBAL: &str = \"JULIBROT_WORKER_URL\""));
+    assert!(WORKER_OWNER.contains("const WORKER_URL_FALLBACK: &str = \"./worker.js?v=1\""));
 }
 #[test]
 fn runtime_is_gl_only_and_handlers_precede_the_first_post_device_work() {

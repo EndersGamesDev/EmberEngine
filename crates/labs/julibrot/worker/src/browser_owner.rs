@@ -21,7 +21,8 @@ use crate::{
     OrbitResponseView, Pool, SubmitOutcome, WorkerConfig, WorkerFacts,
 };
 
-const WORKER_URL: &str = "./worker.js?v=1";
+const WORKER_URL_GLOBAL: &str = "JULIBROT_WORKER_URL";
+const WORKER_URL_FALLBACK: &str = "./worker.js?v=1";
 
 /// Main-thread endpoint connected to `worker_main` through one browser Worker port.
 #[derive(Clone)]
@@ -51,8 +52,8 @@ impl BrowserOwnerEndpoint {
 
     /// Attaches the four-buffer owner endpoint to an app-created module Worker.
     ///
-    /// The worker loads the bootstrap at `./worker.js?v=1`; no pool buffer moves until its object
-    /// handshake acknowledges the active ABI version.
+    /// The worker was created from the page-published deployment URL; no pool buffer moves until
+    /// its object handshake acknowledges the active ABI version.
     ///
     /// # Errors
     ///
@@ -347,7 +348,12 @@ fn spawn_worker() -> Result<Worker, ChannelError> {
     let options = WorkerOptions::new();
     options.set_type(WorkerType::Module);
     options.set_name("julibrot-orbit");
-    Worker::new_with_options(WORKER_URL, &options)
+    let url = Reflect::get(&js_sys::global(), &JsValue::from_str(WORKER_URL_GLOBAL))
+        .ok()
+        .and_then(|value| value.as_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| WORKER_URL_FALLBACK.to_owned());
+    Worker::new_with_options(&url, &options)
         .map_err(|_| ChannelError::new(ErrorCode::BufferStarved, 0, 0, 0))
 }
 
