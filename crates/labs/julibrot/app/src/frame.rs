@@ -31,9 +31,6 @@ const LEVELS: [RefinementLevel; 3] = [
 #[cfg(any(target_arch = "wasm32", test))]
 const BACKDROP_PRESENT_LEVEL: RefinementLevel = RefinementLevel::Preview;
 
-/// Bound on sampled reference requests per accepted navigation.
-#[cfg(any(target_arch = "wasm32", test))]
-const SAMPLED_REFERENCE_LIMIT: u32 = 4;
 #[cfg(any(target_arch = "wasm32", test))]
 const REFERENCE_RECORD_BYTES: usize = 8;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -1027,6 +1024,8 @@ mod browser {
     const DIRECTORY_BYTES: u32 = SPAN_CAPACITY * 16 + HANDLE_CAPACITY * 4;
     const MAX_HEADER_PAGES: u32 = 64;
     const MAX_HEADER_SETS: u32 = 6;
+    /// Bound on sampled reference requests per accepted navigation.
+    const SAMPLED_REFERENCE_LIMIT: u32 = 4;
 
     fn expand_reference_texels_from_array(
         records: &js_sys::Uint8Array,
@@ -1818,7 +1817,7 @@ mod browser {
         /// glitched record ranks at the cap, so a Final that still carries glitches names one of
         /// them and each request lands on a point whose orbit outlives the reference it replaces.
         /// The navigation centre never moves; only the orbit point does. At most
-        /// [`super::SAMPLED_REFERENCE_LIMIT`] requests per accepted navigation, so glitches with
+        /// [`SAMPLED_REFERENCE_LIMIT`] requests per accepted navigation, so glitches with
         /// another cause cannot drive an unbounded chase.
         fn maybe_request_sampled_reference(
             &mut self,
@@ -1831,7 +1830,7 @@ mod browser {
             };
             let final_cap = self.plan.level(RefinementLevel::Final).iteration_cap;
             if KernelMode::for_zoom(viewer.requested().zoom_log2) != KernelMode::Perturbation
-                || self.sampled_references >= super::SAMPLED_REFERENCE_LIMIT
+                || self.sampled_references >= SAMPLED_REFERENCE_LIMIT
                 || self.main.orbit_length == 0
                 || self.main.orbit_length >= final_cap
             {
