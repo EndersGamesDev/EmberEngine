@@ -186,6 +186,17 @@ const fn arrival_is_current(
     !cancelled && response_generation == endpoint_generation && navigation_pending_depth == 0
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+fn perturbation_reference_is_current(
+    requested_zoom_log2: f64,
+    main_generation: u32,
+    reference: Option<(u32, f64)>,
+) -> bool {
+    reference.is_some_and(|(generation, zoom_log2)| {
+        generation == main_generation && zoom_log2.to_bits() == requested_zoom_log2.to_bits()
+    })
+}
+
 /// Returns the iteration cap MAIN publishes to present for the current selection.
 ///
 /// Present reads MAIN's delivered cap as the selection identity and drops its retained scene
@@ -1971,6 +1982,9 @@ mod browser {
             {
                 return Ok(None);
             }
+            if !self.scene_ready(viewer.requested().zoom_log2) {
+                return Ok(None);
+            }
             let Some(level) = self.loop_state.due() else {
                 return Ok(None);
             };
@@ -2082,7 +2096,15 @@ mod browser {
         fn scene_ready(&self, zoom_log2: f64) -> bool {
             match KernelMode::for_zoom(zoom_log2) {
                 KernelMode::Shallow => self.shallow_centre.is_some(),
-                KernelMode::Perturbation => self.current_orbit.is_some(),
+                KernelMode::Perturbation => super::perturbation_reference_is_current(
+                    zoom_log2,
+                    self.main.generation_applied,
+                    self.current_orbit
+                        .zip(self.accepted_reference_zoom_log2)
+                        .map(|(handle, reference_zoom_log2)| {
+                            (handle.generation, reference_zoom_log2)
+                        }),
+                ),
             }
         }
 
@@ -2384,11 +2406,13 @@ mod tests {
     };
 
     use ember_julibrot_kernels::{
-        EscapeGrid, GridExtent, KernelMode, RefinementPlan, plan_refinement,
+        EscapeGrid, GridExtent, KernelMode, PerturbUniform, RefinementPlan, SampleStatus,
+        perturb_scaled_pixel, plan_refinement,
     };
     use ember_julibrot_math::{
-        BigCentre, EscapeParams, Homography, MathError, ObjectAngles, OrbitStep, PoseMap,
-        PrecisionMode, ReferenceOrbitBuilder, ViewControls, precision_for, screen_to_plane,
+        BigCentre, EscapeParams, Homography, MathError, ObjectAngles, OrbitStep, Plane, PoseMap,
+        PrecisionMode, ReferenceOrbitBuilder, ViewControls, precision_for, scale_split,
+        screen_to_plane,
     };
 
     use super::{
@@ -2396,8 +2420,9 @@ mod tests {
         REFERENCE_TEXEL_BYTES, RefinementLevel, RefinementSchedule, RefusalClass, SceneMode,
         SubmissionKind, apply_precision_mode, arrival_is_current, defer_scene_until_relief_redraw,
         expand_reference_texels_into, fence_error, hold_redraw_during_scene, horizon_facts,
-        main_for_grid, published_iteration_cap, schedule_exposure_fill, stamp_scene_level,
-        stamped_extent, stamped_screen_map, view_projection_changed,
+        main_for_grid, perturbation_reference_is_current, published_iteration_cap,
+        schedule_exposure_fill, stamp_scene_level, stamped_extent, stamped_screen_map,
+        view_projection_changed,
     };
     use crate::{AppError, FramePolicy, LevelTimingLedger, ViewerController};
     use ember_julibrot_present::{SampleClass, SubmissionMeasurement, WarpKind};
@@ -2406,6 +2431,72 @@ mod tests {
     /// Poll budget and wall the version-three present configuration refuses at.
     const SCENE_POLLS: u32 = 4_096;
     const SCENE_DEADLINE_MS: f64 = 30_000.0;
+
+    #[test]
+    fn zoom_twelve_to_fourteen_waits_for_a_matching_reference_and_finishes_without_glitches() {
+        const WIDTH: u32 = 960;
+        const HEIGHT: u32 = 540;
+        const CAP: u32 = 512;
+        const ZOOM_TWELVE_GENERATION: u32 = 12;
+        const ZOOM_FOURTEEN_GENERATION: u32 = 14;
+        assert_eq!(KernelMode::for_zoom(12.0), KernelMode::Shallow);
+        assert_eq!(KernelMode::for_zoom(14.0), KernelMode::Perturbation);
+        assert!(!perturbation_reference_is_current(
+            14.0,
+            ZOOM_FOURTEEN_GENERATION,
+            Some((ZOOM_TWELVE_GENERATION, 12.0))
+        ));
+        assert!(perturbation_reference_is_current(
+            14.0,
+            ZOOM_FOURTEEN_GENERATION,
+            Some((ZOOM_FOURTEEN_GENERATION, 14.0))
+        ));
+
+        let precision = precision_for(14.0, WIDTH, CAP).expect("zoom fourteen precision");
+        let centre = BigCentre::from_f64(
+            [0.0, 0.0, -0.743_643_887_037_151, 0.131_825_904_205_33],
+            precision.requested_bits,
+        )
+        .expect("finite seahorse centre");
+        let mut builder = ReferenceOrbitBuilder::new(&centre, precision, EscapeParams::new(CAP))
+            .expect("reference builder");
+        let orbit = loop {
+            match builder
+                .step(NonZeroU32::new(CAP).expect("nonzero cap"))
+                .expect("reference step")
+            {
+                OrbitStep::Complete(orbit) => break orbit,
+                OrbitStep::Pending { .. } => {}
+            }
+        };
+        let uniforms = PerturbUniform::pack(
+            Plane {
+                basis_u: [0.0, 0.0, 1.0, 0.0],
+                basis_v: [0.0, 0.0, 0.0, 1.0],
+            },
+            &Homography::IDENTITY,
+            scale_split(14.0, WIDTH).expect("zoom fourteen scale"),
+            GridExtent {
+                width: WIDTH,
+                height: HEIGHT,
+            },
+            EscapeParams::new(CAP),
+            orbit.length,
+            RefinementLevel::Final,
+        )
+        .expect("matching-reference uniform");
+        let glitch_pixel_count = (0..WIDTH * HEIGHT)
+            .filter(|index| {
+                perturb_scaled_pixel(&uniforms, &orbit.records, *index)
+                    .expect("canonical pixel index")
+                    .record
+                    .status
+                    == SampleStatus::Glitch.as_f32()
+            })
+            .count();
+        assert_eq!(orbit.length, CAP);
+        assert_eq!(glitch_pixel_count, 0);
+    }
 
     #[test]
     fn relief_redraw_precedes_final_and_holds_while_final_overwrites_data() {

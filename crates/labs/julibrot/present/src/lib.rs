@@ -37,7 +37,7 @@ pub use palette::{
 pub use planner::{
     WARP_MAX_ERROR_PX, Warp, project_scene_point, project_scene_vertex, renders_same_picture,
 };
-pub use shader::scene_shader;
+pub use shader::{glitch_count_shader, scene_shader};
 pub use uniform::{
     HOT_PAYLOAD_BYTES, HOT_RING_SLOTS, HotSlot, HotUniform, PresentDataError, SCENE_PAYLOAD_BYTES,
     SceneUniform, hot_ring_bytes, hot_stride,

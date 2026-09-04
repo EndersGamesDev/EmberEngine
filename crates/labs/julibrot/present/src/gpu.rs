@@ -11,8 +11,8 @@ use crate::{
     Pose, PoseMap, PresentConfig, PresentDataError, PresentError, PresentEvent, PresentFacts,
     PresentHot, PresentMain, PresentStatus, RefinementLevel, SCENE_PAYLOAD_BYTES, SampleClass,
     SceneUniform, SubmissionKind, Warp, WarpKind, WarpValidation, camera_rotation,
-    camera_rotation_pairs, camera_translation, exterior_zero, hot_ring_bytes, pack_homography_rows,
-    palette, scene_indices, scene_shader, view_scale, warp_shader,
+    camera_rotation_pairs, camera_translation, exterior_zero, glitch_count_shader, hot_ring_bytes,
+    pack_homography_rows, palette, scene_indices, scene_shader, view_scale, warp_shader,
 };
 
 const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -20,6 +20,8 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
 const FENCE_BYTES: u64 = 4;
 const HOT_SOURCE_VALID_BYTE_OFFSET: u64 = 280;
 const EXPOSURE_FACT_STEPS: u32 = 9;
+const GLITCH_RECORDS_PER_TEXEL: u32 = 255;
+const RGBA8_BYTES_PER_TEXEL: u32 = 4;
 
 struct SceneTexture {
     _texture: wgpu::Texture,
@@ -40,11 +42,27 @@ struct IndexTarget {
     extent: [u32; 2],
 }
 
+struct GlitchCountTarget {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    extent: [u32; 2],
+}
+
 type MapSignal = Arc<Mutex<Option<Result<(), ()>>>>;
 
 struct PendingFence {
     ledger: FenceLedger,
     signal: MapSignal,
+    signal_result: Option<Result<(), ()>>,
+    glitch_readback: Option<PendingGlitchReadback>,
+}
+
+struct PendingGlitchReadback {
+    buffer: wgpu::Buffer,
+    signal: MapSignal,
+    signal_result: Option<Result<(), ()>>,
+    extent: [u32; 2],
+    bytes_per_row: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -125,7 +143,9 @@ struct GpuState {
     scene_textures: [SceneTexture; 2],
     depth: DepthTarget,
     indices: Option<IndexTarget>,
+    glitch_count_target: GlitchCountTarget,
     scene_pipeline: wgpu::RenderPipeline,
+    glitch_count_pipeline: wgpu::RenderPipeline,
     relief_redraw_pipeline: wgpu::RenderPipeline,
     warp_pipeline: wgpu::RenderPipeline,
     scene_fence: wgpu::Buffer,
@@ -467,6 +487,9 @@ impl Presenter {
             }
             ensure_indices(device, gpu, extent)?;
             ensure_depth(device, gpu, extent)?;
+            if main.grid.level == RefinementLevel::Final {
+                ensure_glitch_count_target(device, gpu, extent);
+            }
             Ok(crate::state::PendingScene {
                 scene_id,
                 pose,
@@ -484,6 +507,8 @@ impl Presenter {
         self.next_scene_id = next_scene_id;
         self.queue
             .write_buffer(&self.gpu.scene_buffer, 0, bytemuck::bytes_of(&uniform));
+        let glitch_readback = (main.grid.level == RefinementLevel::Final)
+            .then(|| create_glitch_readback(&self.device, self.gpu.glitch_count_target.extent));
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -496,10 +521,31 @@ impl Presenter {
             hot_slot.dynamic_offset(),
             palette_record,
         );
+        if let Some(readback) = &glitch_readback {
+            encode_glitch_count(&mut encoder, &self.gpu, hot_slot.dynamic_offset());
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.gpu.glitch_count_target.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &readback.buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(readback.bytes_per_row),
+                        rows_per_image: Some(readback.extent[1]),
+                    },
+                },
+                extent_3d(readback.extent),
+            );
+        }
         encoder.clear_buffer(&self.gpu.scene_fence, 0, Some(FENCE_BYTES));
         self.queue.submit([encoder.finish()]);
         self.scene_fence = Some(arm_fence(
             &self.gpu.scene_fence,
+            glitch_readback.map(arm_glitch_readback),
             FenceLedger::new(
                 SubmissionKind::Scene,
                 scene_id,
@@ -614,6 +660,7 @@ impl Presenter {
         self.queue.submit([encoder.finish()]);
         self.warp_fence = Some(arm_fence(
             &self.gpu.warp_fence,
+            None,
             FenceLedger::new(
                 SubmissionKind::Warp,
                 warp_id,
@@ -695,6 +742,10 @@ impl Presenter {
         match decision {
             FenceDecision::Pending => None,
             FenceDecision::Complete(measurement) => {
+                let glitch_pixel_count = pending.glitch_readback.as_ref().map(mapped_glitch_count);
+                if let Some(readback) = &pending.glitch_readback {
+                    readback.buffer.unmap();
+                }
                 self.gpu.scene_fence.unmap();
                 self.scene_fence = None;
                 self.scene_samples.completed();
@@ -712,7 +763,7 @@ impl Presenter {
                     .complete_preserving_accepted_best(measurement, preserve_accepted_best)?
                 {
                     SceneCompletion::Promoted(frame) => {
-                        self.publish_promoted(&frame);
+                        self.publish_promoted(&frame, glitch_pixel_count);
                         Some(PresentEvent::SceneCompleted { frame })
                     }
                     SceneCompletion::KeptBest(frame) => {
@@ -737,6 +788,9 @@ impl Presenter {
                 precision_mode,
             } => {
                 let id = pending.ledger.id();
+                if let Some(readback) = &pending.glitch_readback {
+                    readback.buffer.unmap();
+                }
                 self.gpu.scene_fence.unmap();
                 self.scene_fence = None;
                 self.ledger.cancel_pending();
@@ -798,7 +852,7 @@ impl Presenter {
         }
     }
 
-    fn publish_promoted(&mut self, frame: &crate::SceneFrame) {
+    fn publish_promoted(&mut self, frame: &crate::SceneFrame, glitch_pixel_count: Option<u32>) {
         let fills_current = self
             .hot
             .iter()
@@ -822,6 +876,11 @@ impl Presenter {
         self.facts.delivered_height = frame.extent[1];
         self.facts.delivered_level = Some(frame.level);
         self.facts.iteration_cap = Some(frame.iteration_cap);
+        self.facts.glitch_pixel_count = if frame.level == RefinementLevel::Final {
+            glitch_pixel_count
+        } else {
+            None
+        };
         self.facts.palette = frame.palette;
         self.facts.view = frame.pose.view;
         self.facts.status = PresentStatus::ShowingCompletedScene;
@@ -834,6 +893,7 @@ impl Presenter {
         self.facts.delivered_height = 0;
         self.facts.delivered_level = None;
         self.facts.iteration_cap = None;
+        self.facts.glitch_pixel_count = None;
         self.active_warp_scene = None;
         self.active_warp_count = 0;
     }
@@ -967,6 +1027,7 @@ fn create_gpu_state(
         create_scene_texture(device, &warp_texture_layout, &sampler, [1, 1]),
         create_scene_texture(device, &warp_texture_layout, &sampler, [1, 1]),
     ];
+    let glitch_count_target = create_glitch_count_target(device, [1, 1]);
     let depth = create_depth_target(device, [1, 1]);
     let source = scene_shader(heap_limits);
     let scene_pipeline = create_scene_pipeline(
@@ -979,6 +1040,17 @@ fn create_gpu_state(
         &scene_layout,
         SCENE_FORMAT,
         true,
+    );
+    let glitch_count_pipeline = create_scene_pipeline(
+        device,
+        "Julibrot glitch census pipeline",
+        &glitch_count_shader(heap_limits),
+        "glitch_count_vertex",
+        "glitch_count_fragment",
+        &heap_layout,
+        &scene_layout,
+        SCENE_FORMAT,
+        false,
     );
     let relief_redraw_pipeline = create_scene_pipeline(
         device,
@@ -1008,7 +1080,9 @@ fn create_gpu_state(
         scene_textures,
         depth,
         indices: None,
+        glitch_count_target,
         scene_pipeline,
+        glitch_count_pipeline,
         relief_redraw_pipeline,
         warp_pipeline,
         scene_fence: create_fence(device, "Julibrot scene four-byte fence"),
@@ -1173,6 +1247,25 @@ fn create_depth_target(device: &wgpu::Device, extent: [u32; 2]) -> DepthTarget {
     }
 }
 
+fn create_glitch_count_target(device: &wgpu::Device, extent: [u32; 2]) -> GlitchCountTarget {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Julibrot status-one census target"),
+        size: extent_3d(extent),
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: SCENE_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    GlitchCountTarget {
+        texture,
+        view,
+        extent,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn create_scene_pipeline(
     device: &wgpu::Device,
@@ -1292,6 +1385,16 @@ fn ensure_scene_texture(
     Ok(true)
 }
 
+fn ensure_glitch_count_target(device: &wgpu::Device, gpu: &mut GpuState, scene_extent: [u32; 2]) {
+    let extent = [
+        scene_extent[0],
+        scene_extent[1].div_ceil(GLITCH_RECORDS_PER_TEXEL),
+    ];
+    if gpu.glitch_count_target.extent != extent {
+        gpu.glitch_count_target = create_glitch_count_target(device, extent);
+    }
+}
+
 fn ensure_depth(
     device: &wgpu::Device,
     gpu: &mut GpuState,
@@ -1358,6 +1461,27 @@ fn encode_scene(
         scene_load_color(selected),
         "Julibrot scene pass",
     );
+}
+
+fn encode_glitch_count(encoder: &mut wgpu::CommandEncoder, gpu: &GpuState, hot_offset: u32) {
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Julibrot status-one census pass"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &gpu.glitch_count_target.view,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        occlusion_query_set: None,
+        timestamp_writes: None,
+    });
+    pass.set_pipeline(&gpu.glitch_count_pipeline);
+    pass.set_bind_group(0, &gpu.heap_group, &[]);
+    pass.set_bind_group(1, &gpu.scene_group, &[hot_offset]);
+    pass.draw(0..3, 0..1);
 }
 
 fn encode_relief_redraw(
@@ -1559,7 +1683,43 @@ fn create_fence(device: &wgpu::Device, label: &'static str) -> wgpu::Buffer {
     })
 }
 
-fn arm_fence(buffer: &wgpu::Buffer, ledger: FenceLedger) -> PendingFence {
+fn create_glitch_readback(device: &wgpu::Device, extent: [u32; 2]) -> PendingGlitchReadback {
+    let packed_row = extent[0] * RGBA8_BYTES_PER_TEXEL;
+    let bytes_per_row = packed_row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+        * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Julibrot status-one census readback"),
+        size: u64::from(bytes_per_row) * u64::from(extent[1]),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    PendingGlitchReadback {
+        buffer,
+        signal: Arc::new(Mutex::new(None)),
+        signal_result: None,
+        extent,
+        bytes_per_row,
+    }
+}
+
+fn arm_glitch_readback(pending: PendingGlitchReadback) -> PendingGlitchReadback {
+    let callback = Arc::clone(&pending.signal);
+    pending
+        .buffer
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, move |result| {
+            if let Ok(mut slot) = callback.lock() {
+                *slot = Some(result.map_err(|_| ()));
+            }
+        });
+    pending
+}
+
+fn arm_fence(
+    buffer: &wgpu::Buffer,
+    glitch_readback: Option<PendingGlitchReadback>,
+    ledger: FenceLedger,
+) -> PendingFence {
     let signal = Arc::new(Mutex::new(None));
     let callback = Arc::clone(&signal);
     buffer
@@ -1569,12 +1729,52 @@ fn arm_fence(buffer: &wgpu::Buffer, ledger: FenceLedger) -> PendingFence {
                 *slot = Some(result.map_err(|_| ()));
             }
         });
-    PendingFence { ledger, signal }
+    PendingFence {
+        ledger,
+        signal,
+        signal_result: None,
+        glitch_readback,
+    }
 }
 
 fn observe_fence(pending: &mut PendingFence, now_ms: f64) -> FenceDecision {
-    let callback = pending.signal.lock().ok().and_then(|mut slot| slot.take());
+    if pending.signal_result.is_none() {
+        pending.signal_result = pending.signal.lock().ok().and_then(|mut slot| slot.take());
+    }
+    if let Some(readback) = &mut pending.glitch_readback
+        && readback.signal_result.is_none()
+    {
+        readback.signal_result = readback.signal.lock().ok().and_then(|mut slot| slot.take());
+    }
+    let readback_result = pending
+        .glitch_readback
+        .as_ref()
+        .map_or(Some(Ok(())), |readback| readback.signal_result);
+    let callback = match (pending.signal_result, readback_result) {
+        (Some(Err(())), _) | (_, Some(Err(()))) => Some(Err(())),
+        (Some(Ok(())), Some(Ok(()))) => Some(Ok(())),
+        _ => None,
+    };
     pending.ledger.observe(now_ms, callback)
+}
+
+fn mapped_glitch_count(readback: &PendingGlitchReadback) -> u32 {
+    let bytes = readback.buffer.slice(..).get_mapped_range();
+    let count = sum_glitch_count_bytes(&bytes, readback.extent, readback.bytes_per_row);
+    drop(bytes);
+    count
+}
+
+fn sum_glitch_count_bytes(bytes: &[u8], extent: [u32; 2], bytes_per_row: u32) -> u32 {
+    let packed_row = extent[0] as usize * RGBA8_BYTES_PER_TEXEL as usize;
+    (0..extent[1] as usize)
+        .flat_map(|row| {
+            let start = row * bytes_per_row as usize;
+            bytes[start..start + packed_row]
+                .chunks_exact(RGBA8_BYTES_PER_TEXEL as usize)
+                .map(|rgba| u32::from(rgba[0]))
+        })
+        .sum()
 }
 
 fn color(rgba: [f32; 4]) -> wgpu::Color {
@@ -1749,6 +1949,14 @@ mod tests {
     use super::*;
     use crate::SubmissionMeasurement;
     use crate::state::PendingScene;
+
+    #[test]
+    fn glitch_census_sums_red_counts_and_ignores_row_padding() {
+        let mut bytes = vec![99_u8; 32];
+        bytes[..8].copy_from_slice(&[7, 0, 0, 255, 11, 0, 0, 255]);
+        bytes[16..24].copy_from_slice(&[13, 0, 0, 255, 17, 0, 0, 255]);
+        assert_eq!(sum_glitch_count_bytes(&bytes, [2, 2], 16), 48);
+    }
 
     fn binding_pose() -> Pose {
         Pose {

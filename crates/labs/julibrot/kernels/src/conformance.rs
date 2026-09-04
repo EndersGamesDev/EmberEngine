@@ -224,17 +224,79 @@ fn smooth_error(observed: f32, expected: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use core::num::NonZeroU32;
     use std::collections::BTreeSet;
 
     use ember_julibrot_math::{
-        EscapeGridRecord, EscapeParams, PerturbationEnvelope, PrecisionMode, escape_f32,
+        BigCentre, EscapeGridRecord, EscapeParams, Homography, ObjectAngles, OrbitStep,
+        PerturbationEnvelope, Plane, PrecisionMode, ReferenceOrbitBuilder, construct_plane,
+        escape_f32, pixel_scale, precision_for, scale_split,
     };
 
     use super::{
         ConformanceVerdict, VISIBLE_REPLAY_CARDS, evaluate_perturbation_conformance,
         evaluate_shallow_conformance,
     };
-    use crate::{KernelSample, escape_shallow_point};
+    use crate::{
+        GridExtent, KernelSample, PerturbUniform, RefinementLevel, SampleStatus,
+        escape_shallow_point, perturb_scaled_pixel,
+    };
+
+    #[test]
+    fn reused_zoom_twelve_reference_is_classified_as_a_zoom_fourteen_glitch() {
+        const WIDTH: u32 = 960;
+        const HEIGHT: u32 = 540;
+        const CAP: u32 = 512;
+        const GLITCH_INDEX: u32 = 387 * WIDTH + 478;
+        let target = [-0.743_643_887_037_151, 0.131_825_904_205_33];
+        let zoom_twelve_scale = pixel_scale(12.0, WIDTH).expect("zoom twelve scale");
+        let plan = precision_for(12.0, WIDTH, CAP).expect("zoom twelve precision");
+        let centre = BigCentre::from_f64(
+            [0.0, 0.0, target[0], target[1] + 30.0 * zoom_twelve_scale],
+            plan.requested_bits,
+        )
+        .expect("finite seahorse reference");
+        let mut builder = ReferenceOrbitBuilder::new(&centre, plan, EscapeParams::new(CAP))
+            .expect("reference builder");
+        let orbit = loop {
+            match builder
+                .step(NonZeroU32::new(CAP).expect("nonzero cap"))
+                .expect("reference step")
+            {
+                OrbitStep::Complete(orbit) => break orbit,
+                OrbitStep::Pending { .. } => {}
+            }
+        };
+        let map = Homography {
+            rows: [1.0, 0.0, 0.0, 0.0, 1.0, -120.0, 0.0, 0.0, 1.0],
+            inverse: [1.0, 0.0, 0.0, 0.0, 1.0, 120.0, 0.0, 0.0, 1.0],
+            condition_number: 1.0,
+        };
+        let plane: Plane = construct_plane(ObjectAngles::IDENTITY).expect("Mandelbrot plane");
+        let uniforms = PerturbUniform::pack(
+            plane,
+            &map,
+            scale_split(14.0, WIDTH).expect("zoom fourteen scale"),
+            GridExtent {
+                width: WIDTH,
+                height: HEIGHT,
+            },
+            EscapeParams::new(CAP),
+            orbit.length,
+            RefinementLevel::Final,
+        )
+        .expect("reused-reference uniform");
+        let sample = perturb_scaled_pixel(&uniforms, &orbit.records, GLITCH_INDEX)
+            .expect("pinned pixel is in bounds");
+
+        assert_eq!(plan.requested_bits, 60);
+        assert_eq!(orbit.length, 78);
+        assert_eq!(
+            SampleStatus::from_f32(sample.record.status),
+            Some(SampleStatus::Glitch)
+        );
+        assert_eq!(sample.escape_index, None);
+    }
 
     #[test]
     fn shallow_oracle_pass_and_exact_failure_are_distinct() {
