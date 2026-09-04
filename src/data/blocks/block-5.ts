@@ -226,7 +226,7 @@ export const block5: Question[] = [
     unit: "Elemente",
     answerFormat: "integer",
     explanation:
-      "Von Wasserstoff bis Oganesson ist die Reihe seit 2015 vollständig gefüllt, ohne eine einzige Lücke. Die schwersten Vertreter entstehen ausschließlich in Teilchenbeschleunigern und zerfallen oft schon nach Sekundenbruchteilen wieder. Natürlich auf der Erde vorkommen tun deutlich weniger als hundert davon.",
+      "Von Wasserstoff bis Oganesson ist die Reihe seit 2015 vollständig gefüllt, ohne eine einzige Lücke. Die schwersten Vertreter entstehen ausschließlich in Teilchenbeschleunigern und zerfallen oft schon nach Sekundenbruchteilen wieder. Natürlich auf der Erde kommen deutlich weniger als hundert davon vor.",
     sources: [
       { title: "Wikipedia: Periodensystem", url: "https://de.wikipedia.org/wiki/Periodensystem" },
     ],
@@ -253,7 +253,7 @@ export const block5: Question[] = [
     unit: "Darsteller",
     answerFormat: "integer",
     explanation:
-      "Sean Connery, George Lazenby, Roger Moore, Timothy Dalton, Pierce Brosnan und Daniel Craig teilen sich die Rolle seit 1962 untereinander auf. Am häufigsten schlüpfte Roger Moore in den Smoking, nämlich siebenmal, während George Lazenby es bei einem einzigen Auftritt beließ. Filme außerhalb der Eon-Reihe zählen in dieser Rechnung nicht mit.",
+      "Sean Connery, George Lazenby, Roger Moore, Timothy Dalton, Pierce Brosnan und Daniel Craig teilen sich die Rolle seit 1962 untereinander auf. George Lazenby beließ es bei einem einzigen Auftritt, Daniel Craig war mit fünf Filmen der dienstälteste Bond nach Jahren. Filme außerhalb der Eon-Reihe zählen in dieser Rechnung nicht mit.",
     sources: [{ title: "Wikipedia: James Bond", url: "https://de.wikipedia.org/wiki/James_Bond" }],
     difficulty: 1,
   },

@@ -242,3 +242,89 @@ beantworten HEAD gar nicht oder mit 405; erst bei einem Status außerhalb von
 15 s per `AbortSignal.timeout`, Nebenläufigkeit 6. Der Exit-Code ist 1, sobald
 mindestens eine Quelle tot ist. Der Response-Body wird verworfen, sonst bleiben
 Verbindungen unnötig offen.
+
+## Phase 2: Fragen
+
+### Fünf Block-Dateien à 20 Fragen, `questions.ts` aggregiert
+
+Die 100 Fragen liegen nicht in einer Datei, sondern in
+`src/data/blocks/block-1.ts` bis `block-5.ts` mit je 20 Fragen und den Exports
+`block1` bis `block5`. `src/data/questions.ts` importiert die fünf Blöcke, hängt
+sie in ID-Reihenfolge aneinander und schickt das Ergebnis durch
+`questionsSchema.parse`. Diese Validierung läuft beim Import und damit auch beim
+Build: Fehlerhafte Daten brechen `pnpm build` ab, statt erst im Browser
+aufzufallen. Der Zuschnitt hat zwei Gründe: Eine Datei mit 100 Einträgen wäre
+über 1.400 Zeilen lang und in der Bearbeitung unhandlich, und fünf getrennte
+Dateien lassen sich parallel schreiben, ohne dass sich die Agents gegenseitig
+überschreiben. Die im Prompt vorgesehene Erweiterung auf 350 Fragen bedeutet
+folgerichtig weitere Blöcke (`block-6.ts` und folgende) mit denselben 20er-Paketen
+plus je eine Zeile Import und Spread in `questions.ts` – die Blockgrenzen sind
+reine Dateiaufteilung und im Datenmodell nirgends sichtbar.
+
+Jeder Block hat zusätzlich einen eigenen Test unter `tests/unit/data/`, der die
+20 Fragen für sich prüft (IDs, Schema, zwei Fragen je Kategorie). Der
+Gesamtbestand wird davon getrennt in `tests/unit/questions.test.ts` geprüft. So
+zeigt ein roter Test sofort, ob ein einzelner Block kaputt ist oder eine Regel
+erst über den ganzen Bestand verletzt wird.
+
+### Redaktionsprozess: fünf Agents mit getrennten Themen-Lanes
+
+Die Blöcke wurden parallel von fünf Agents geschrieben. Damit sich die Fragen
+nicht doppeln, bekam jeder Block dieselbe feste Kategorie-Reihenfolge (zwei
+Fragen je Kategorie), aber innerhalb der Kategorie eine eigene Themen-Lane – im
+Block 1 zum Beispiel Anatomie und Grundlagen, im Block 3 Rekorde und Extremwerte.
+Die ID-Bereiche waren vorab vergeben (q001–q020, q021–q040 …), sodass keine
+Kollisionen entstehen konnten. Jede Zahl wurde vor dem Schreiben durch Abruf der
+Quelle verifiziert, nicht aus dem Gedächtnis übernommen; unsichere Fakten wurden
+verworfen statt geschätzt. Als Quelle dienen vorrangig die deutschen
+Wikipedia-Artikel zum Thema, bei englischsprachigen Spezialthemen die englische
+Wikipedia, dazu einzelne Primärquellen (WHO, Water Footprint Network, lotto.de,
+scinexx).
+
+### Abweichungen von den ursprünglichen Themenvorschlägen
+
+- **Block 2, „Tweet-Limit 140 Zeichen“ → 24-Bit-Farbtiefe 16.777.216 Farben
+  (q032):** Der Block brauchte nach der Regel „mindestens zwei Antworten über
+  100.000 pro Block“ eine zweite sehr große Zahl. Das Tweet-Limit ist außerdem
+  seit 2017 nicht mehr 140, wäre also ein instabiler Fakt.
+- **Block 2, „Vatikanstadt 44 ha“ → Grönland 2.166.086 km² (q028):** dieselbe
+  Regel; 44 ha ist eine sehr kleine Zahl in einem Block, der ohnehin viele
+  kleine Antworten hatte.
+- **Block 2, A7-Länge (q040):** auf die belegten 962,2 km korrigiert statt der
+  gerundeten Zahl aus dem Vorschlag.
+- **Block 3, Elefantenrüssel 150.000 statt 40.000 Muskeln (q041):** Die häufig
+  zitierten 40.000 stehen so nicht in der Quelle; der Wikipedia-Artikel „Rüssel“
+  nennt „schätzungsweise rund 150.000“ Einzelmuskeln.
+- **Block 3, Hyperion 115,85 m (q042):** mit Bezugsjahr 2017 in der Frage, weil
+  der Baum weiterwächst und die Angabe sonst still veralten würde.
+- **Block 4, „Staaten Afrikas 54“ → Mitgliedstaaten der Afrikanischen Union 55
+  (q067):** Die Zahl der Staaten Afrikas ist wegen der Westsahara strittig und
+  hätte keine eindeutige Antwort. Die Mitgliederzahl der AU ist dagegen ein
+  belegbarer, eindeutiger Wert.
+- **Block 4, „Blutmenge circa 5 Liter“ → Vollblutspende 500 ml (q063):** Die
+  Quelle nennt für das Blutvolumen nur eine Spanne (fünf bis sechs Liter), womit
+  die Regel „genau eine sinnvolle numerische Antwort“ verletzt wäre. Die
+  Spendenmenge ist ein fester Wert.
+- **Block 4, „Zauberwürfel-Stellungen“ → Lotto-Tippreihen 13.983.816 (q080):**
+  43.252.003.274.489.856.000 lässt sich als JavaScript-`number` nicht exakt
+  darstellen (jenseits von `Number.MAX_SAFE_INTEGER`), die Antwort wäre also
+  schon im Datenmodell falsch.
+- **Block 4, Ironman-Schwimmstrecke in Metern statt Kilometern (q074):** 3.860 m
+  statt 3,86 km, damit die Eingabe eine Ganzzahl bleibt und nicht an der
+  Nachkommastelle scheitert.
+- **Block 5, „Zellen des Körpers 37,2 Billionen“ → Nervenzellen im Gehirn
+  86 Milliarden (q084):** Die Gesamtzahl der Körperzellen ist in der Literatur
+  uneindeutig (Angaben zwischen 30 und 40 Billionen) und damit keine belegbare
+  Einzelzahl. Die 86 Milliarden Neuronen sind dagegen ein etablierter Messwert.
+- **Block 1:** keine Abweichungen.
+
+### Ergebnis von `pnpm check:sources`
+
+Die 100 Fragen tragen zusammen 104 Quellenangaben – vier Fragen (q017, q020,
+q040, q080) führen je zwei Belege. Das Skript prüft dedupliziert und kommt damit
+auf 103 verschiedene URLs; der Artikel „Physiologischer Brennwert“ wird von zwei
+Fragen genutzt. Beim Lauf über den fertigen Bestand waren 103 von 103
+Quellen erreichbar, 0 tot – es musste kein Link ersetzt werden. Das ist kein
+Zufall: Die Blöcke wurden beim Schreiben je einzeln gegen das Skript geprüft, und
+weil jede Zahl ohnehin durch Abruf der Quelle belegt werden musste, konnte gar
+keine tote oder erfundene URL in die Daten geraten.

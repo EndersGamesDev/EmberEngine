@@ -141,7 +141,7 @@ export const block2: Question[] = [
     unit: "g",
     answerFormat: "integer",
     explanation:
-      "In 100 Millilitern sind es durchschnittlich 10,6 Gramm, also etwa drei Zuckerwürfel pro Glas. Auf den Liter hochgerechnet landest du bei rund 35 Würfeln, die niemand freiwillig am Stück essen würde. Dass es nicht sirupartig schmeckt, liegt an der Säure, die die Süße überdeckt.",
+      "In 100 Millilitern stecken durchschnittlich 10,6 Gramm, also gut drei Zuckerwürfel in einem kleinen Schluck. Auf den Liter hochgerechnet landest du bei rund 35 Würfeln, die niemand freiwillig am Stück essen würde. Dass es nicht sirupartig schmeckt, liegt an der Säure, die die Süße überdeckt.",
     sources: [{ title: "Wikipedia: Coca-Cola", url: "https://de.wikipedia.org/wiki/Coca-Cola" }],
     difficulty: 2,
   },
