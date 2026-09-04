@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# A fake `git` for deploy/tests/test-pages.sh. It supplies the build stamp,
+# materializes the detached Pages tree, and captures the tree a push would send.
+set -euo pipefail
+
+LOG="${SHIM_LOG:-/dev/null}"
+{ printf 'git'; for a in "$@"; do printf ' [%s]' "$a"; done; printf '\n'; } >> "$LOG"
+
+case "${1:-}" in
+    rev-list) echo 1 ;;
+    rev-parse) echo deadbee ;;
+    log) echo "pages deploy test" ;;
+    diff)
+        if [ "${2:-}" = --cached ] && [ -f "${SHIM_GIT_INDEX:-/nonexistent}" ]; then
+            exit 1
+        fi
+        ;;
+    fetch) ;;
+    worktree)
+        case "${2:-}" in
+            add)
+                dest="${5:-}"
+                mkdir -p "$dest"
+                cp -R "${SHIM_PAGES_SEED:?}/." "$dest/"
+                ;;
+            remove) ;;
+            *) echo "git shim: unsupported worktree command: $*" >&2; exit 97 ;;
+        esac
+        ;;
+    show) echo "git shim: unexpected archive materialization" >&2; exit 97 ;;
+    add) : > "${SHIM_GIT_INDEX:?}" ;;
+    commit) ;;
+    push)
+        mkdir -p "${SHIM_PUBLISHED:?}"
+        cp -R . "$SHIM_PUBLISHED/"
+        ;;
+    *) echo "git shim: unsupported command: $*" >&2; exit 97 ;;
+esac

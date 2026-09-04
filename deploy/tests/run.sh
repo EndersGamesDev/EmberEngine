@@ -6,6 +6,7 @@
 #
 # Suites:
 #   syntax        bash -n, usage lines, line endings — instant
+#   pages         pages assembly and prebuilt bundles against PATH shims — seconds
 #   publish-host  the address book's only writer, against temp files — seconds
 #   ssh-deploys   both workstation deploys against PATH shims — seconds
 #   watchdog      what the off-host watchdog decides, against PATH shims and a
@@ -19,7 +20,7 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SUITES="${*:-syntax publish-host ssh-deploys watchdog host-pids host-loopback}"
+SUITES="${*:-syntax pages publish-host ssh-deploys watchdog host-pids host-loopback}"
 
 T0="$(date +%s)"
 failed=""

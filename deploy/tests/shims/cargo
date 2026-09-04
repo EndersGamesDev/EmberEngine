@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# A fake `cargo` for deploy/tests/test-ssh-deploys.sh.
+# A fake `cargo` for the deploy tests.
 #
 # The only cargo the deploy scripts run LOCALLY is the health check through
 # the public URL (wsbot / the fire probe), and there is no public URL in a

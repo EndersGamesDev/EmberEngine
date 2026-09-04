@@ -174,3 +174,19 @@ The on-host units from `install-watchdog.sh` pass the name through `EMBER_HOST_N
 - No automatic pruning of the book. A host that vanishes is dropped by the probe, not by the book; `publish-host.sh --remove <name>` deletes an entry by hand, and `--drop-game <id>` retires one game's four keys from an entry that keeps running the others.
 - Quick tunnels still change address on restart. A named tunnel per host would make a reboot self-healing; see `deploy/README-watchdog.md`.
 - The `feature/one-server` branch folds the three server binaries into one process behind one tunnel. It changes what runs **on** a host, not how many hosts there are: a one-server host publishes the same entry with the same keys, pointing at its legacy selectors.
+
+## 11. Pages layout and publishing
+
+`deploy/deploy-pages.sh` assembles the hub at the root of gh-pages and gives each live catalog version its own frozen directory and game-specific wasm bundle: Arena v18 and v0, Fire Racer v2, Four Kings v1, and what-is-this v1. Before committing, the deploy checks every version marked `live` in `web/games.json` and fails closed if that path has no assembled `index.html`, so adding a live catalog link also requires adding its page to the deploy.
+
+Builds belong on a compute server while the workstation holding the Pages push key performs the publish. On the server, from the same checkout, run:
+
+```sh
+cargo build --target wasm32-unknown-unknown --release -p fire -p arena -p kings -p what-is-this --lib
+wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/fire.wasm
+wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/arena.wasm
+wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/kings.wasm
+wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/what_is_this.wasm
+```
+
+Copy `web/pkg` from that server checkout into the workstation checkout, then run `EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh`. Prebuilt mode invokes neither Cargo nor wasm-bindgen and refuses to publish unless the JavaScript and background wasm files for all four bundles are already present.
