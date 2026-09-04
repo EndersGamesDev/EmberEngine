@@ -110,6 +110,7 @@ is "$(jget "$SHIM_PUBLISHED/games.json" '[v["path"] for g in d["games"] if g.get
 mkdir -p "$EXPECTED"
 cp -R "$SEED/games" "$EXPECTED/"
 for spec in "arena/v20 arena" "arena/v0 arena" "fire/v2 fire" "kings/v1 kings"; do
+    # shellcheck disable=SC2086
     set -- $spec
     live="$1"
     bundle="$2"

@@ -95,6 +95,7 @@ PAGES_DIR="$(mktemp -d -t ember-pages-XXXX)"
 # and of either game — died at its own `worktree add` until a human ran
 # `git worktree remove`. The status is preserved: the trap reports the failure
 # that caused it, not the cleanup's own.
+# shellcheck disable=SC2154
 trap 'st=$?; git worktree remove --force "$PAGES_DIR" >/dev/null 2>&1 || true; rm -rf "$PAGES_DIR"; exit $st' EXIT
 git worktree add -q --detach "$PAGES_DIR" FETCH_HEAD
 
@@ -106,10 +107,10 @@ KINGS_LIVE="games/kings/v1"
 WHAT_LIVE="games/what-is-this/v1"
 LAB_JULIBROT_LIVE="labs/julibrot"
 
-rm -rf "$PAGES_DIR"/index.html "$PAGES_DIR"/pkg \
-    "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$ARENA_V0_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR/$KINGS_LIVE" "$PAGES_DIR/$WHAT_LIVE" \
-    "$PAGES_DIR/$LAB_JULIBROT_LIVE" \
-    "$PAGES_DIR"/games.json
+rm -rf "${PAGES_DIR:?}"/index.html "${PAGES_DIR:?}"/pkg \
+    "${PAGES_DIR:?}/$ARENA_LIVE" "${PAGES_DIR:?}/$ARENA_V0_LIVE" "${PAGES_DIR:?}/$FIRE_LIVE" "${PAGES_DIR:?}/$KINGS_LIVE" "${PAGES_DIR:?}/$WHAT_LIVE" \
+    "${PAGES_DIR:?}/$LAB_JULIBROT_LIVE" \
+    "${PAGES_DIR:?}"/games.json
 mkdir -p "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$ARENA_V0_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR/$KINGS_LIVE" "$PAGES_DIR/$WHAT_LIVE" "$PAGES_DIR/$LAB_JULIBROT_LIVE/pkg"
 cp web/index.html web/games.json web/version.json "$PAGES_DIR"/
 # The shared host-picking logic (docs/hosts.md §5). It lives at the pages root
