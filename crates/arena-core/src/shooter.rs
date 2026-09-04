@@ -139,11 +139,19 @@ pub const fn head_lo(crouch: bool) -> f32 {
 /// input and is re-clamped here, where it decides who dies.
 pub const MAX_PITCH: f32 = 1.45;
 /// The sidearm's numbers, kept as named constants because the sidearm row
-/// of the weapon table IS today's pistol and every shot test written before
+/// of the weapon table IS the pistol and every shot test written before
 /// v18 reads its world through these.
-pub const BULLET_SPEED: f32 = 34.0;
+///
+/// v20 set them to the .45 ACP's real muzzle velocity and a 60 m range
+/// (`docs/plans/arena-v20-realism.md` section 3.1). A round now crosses
+/// 4.67 m a tick, which is why every test on the segment below is exact
+/// rather than sampled: the old 34 m/s was the speed at which a sampled
+/// head band and an end-point cover test happened to be good enough. The
+/// ttl is written as the range over the speed so the range is the number
+/// that is exact and the seconds follow from it.
+pub const BULLET_SPEED: f32 = 280.0;
 pub const BULLET_R: f32 = 0.22;
-pub const BULLET_TTL: f32 = 1.6;
+pub const BULLET_TTL: f32 = 60.0 / BULLET_SPEED;
 pub const RELOAD_SECS: f32 = 1.1;
 pub const PAD_RESPAWN_SECS: f32 = 15.0;
 pub const PAD_RADIUS: f32 = 1.3;
@@ -204,9 +212,21 @@ pub struct WeaponStats {
     /// Rounds outside the magazine when the gun is picked up.
     pub reserve: u8,
     pub damage: u8,
-    /// Muzzle speed, units per second; the horizontal `vel` magnitude.
+    /// Muzzle speed, units per second; the horizontal `vel` magnitude at
+    /// launch. Since v20 every bullet row is the cartridge's real muzzle
+    /// velocity.
     pub speed: f32,
-    /// Seconds of flight; `speed * ttl` is the range.
+    /// The sustainer: how much the horizontal speed grows per second in
+    /// flight, up to `speed_max`. Zero for every bullet; the rocket motor
+    /// is the one row that has it, and it changes the round's direction
+    /// as it goes because `vy` keeps only gravity.
+    pub accel: f32,
+    /// The speed the sustainer stops at. Equal to `speed` on a row with
+    /// no sustainer, so `speed_max` is always the fastest the round flies.
+    pub speed_max: f32,
+    /// Seconds of flight; `speed * ttl` is the range of a round with no
+    /// sustainer, and the rows below spell it as `range / speed` so the
+    /// metres are the exact number.
     pub ttl: f32,
     /// Hit radius of the round itself.
     pub radius: f32,
@@ -245,8 +265,11 @@ pub const fn weapon_stats(id: u8) -> WeaponStats {
             mag: 30,
             reserve: 60,
             damage: 1,
-            speed: 34.0,
-            ttl: 0.75,
+            // 9x19 out of a short barrel: 380 m/s, 40 m.
+            speed: 380.0,
+            accel: 0.0,
+            speed_max: 380.0,
+            ttl: 40.0 / 380.0,
             radius: BULLET_R,
             spread: 0.015,
             bloom: 0.005,
@@ -264,8 +287,11 @@ pub const fn weapon_stats(id: u8) -> WeaponStats {
             mag: 30,
             reserve: 30,
             damage: 1,
-            speed: 44.0,
-            ttl: 1.1,
+            // 7.62x39: 715 m/s, 80 m.
+            speed: 715.0,
+            accel: 0.0,
+            speed_max: 715.0,
+            ttl: 80.0 / 715.0,
             radius: BULLET_R,
             spread: 0.006,
             bloom: 0.006,
@@ -283,8 +309,11 @@ pub const fn weapon_stats(id: u8) -> WeaponStats {
             mag: 30,
             reserve: 30,
             damage: 1,
-            speed: 40.0,
-            ttl: 0.85,
+            // 5.56x45: 880 m/s, 80 m.
+            speed: 880.0,
+            accel: 0.0,
+            speed_max: 880.0,
+            ttl: 80.0 / 880.0,
             radius: BULLET_R,
             spread: 0.008,
             bloom: 0.003,
@@ -302,14 +331,19 @@ pub const fn weapon_stats(id: u8) -> WeaponStats {
             mag: 6,
             reserve: 12,
             damage: 2,
-            speed: 30.0,
-            ttl: 1.5,
+            // .454 Casull: 450 m/s, 60 m, and the real g. The drop at 60
+            // m is 0.09 m; the v18 "lead up" identity went with the v18
+            // speed, because realism was what was asked for.
+            speed: 450.0,
+            accel: 0.0,
+            speed_max: 450.0,
+            ttl: 60.0 / 450.0,
             radius: BULLET_R,
             spread: 0.0,
             bloom: 0.0,
             spread_max: 0.0,
             ads_spread: 1.0,
-            gravity: -3.0,
+            gravity: -9.81,
             pierce: 0,
             kind: Projectile::Bullet,
             splash_r: 0.0,
@@ -321,17 +355,20 @@ pub const fn weapon_stats(id: u8) -> WeaponStats {
             mag: 5,
             reserve: 5,
             damage: 2,
-            // 60, not 90: at MAX_PITCH the head-band walk clamps at 32
-            // samples, and 60 m/s is 0.26 m per sample, under HEAD_H 0.30.
-            // At 90 a steep headshot would be a coin flip.
-            speed: 60.0,
-            ttl: 1.0,
+            // .338 Lapua: 900 m/s, 120 m, the real g. 15 m a tick, which
+            // the v18 sampled head band could not have taken (60 m/s was
+            // its ceiling); the exact overlap test in the sweep is what
+            // lets the real number ship.
+            speed: 900.0,
+            accel: 0.0,
+            speed_max: 900.0,
+            ttl: 120.0 / 900.0,
             radius: BULLET_R,
             spread: 0.06,
             bloom: 0.0,
             spread_max: 0.06,
             ads_spread: 0.0,
-            gravity: 0.0,
+            gravity: -9.81,
             pierce: 1,
             kind: Projectile::Bullet,
             splash_r: 0.0,
@@ -343,21 +380,27 @@ pub const fn weapon_stats(id: u8) -> WeaponStats {
             mag: 1,
             reserve: 2,
             damage: 3,
-            speed: 24.0,
-            ttl: 2.5,
+            // The booster leaves the tube at 120 m/s and the sustainer
+            // adds 180 m/s over the first half second, to 300. Inside a
+            // 48 m arena the cap is only ever reached by a round that
+            // has already left it; the numbers are the launcher's.
+            speed: 120.0,
+            accel: 360.0,
+            speed_max: 300.0,
+            ttl: 5.0,
             radius: 0.35,
             spread: 0.0,
             bloom: 0.0,
             spread_max: 0.0,
             ads_spread: 1.0,
-            gravity: -5.0,
+            gravity: -3.0,
             pierce: 0,
             kind: Projectile::Rocket,
             splash_r: 3.0,
             reload: 2.4,
         },
-        // The sidearm: today's pistol, through the same constants the
-        // pre-v18 shot tests read, so its round is bit-identical.
+        // The sidearm: the pistol, through the same constants the
+        // pre-v18 shot tests read.
         _ => WeaponStats {
             name: "Sidearm",
             cooldown: 0.18,
@@ -365,6 +408,8 @@ pub const fn weapon_stats(id: u8) -> WeaponStats {
             reserve: RESERVE_INFINITE,
             damage: 1,
             speed: BULLET_SPEED,
+            accel: 0.0,
+            speed_max: BULLET_SPEED,
             ttl: BULLET_TTL,
             radius: BULLET_R,
             spread: 0.0,
@@ -443,24 +488,22 @@ pub fn loot_roll(seed: u64, tick: u64, who: u8, holding: u8) -> u8 {
         .unwrap_or(LOOT_POOL[0])
 }
 
-/// Exact slab test of a 3D segment `a -> b` against a box.
+/// The slab test itself: where a segment `a -> b` enters the box
+/// `[lo, hi]`, as a parameter in `[0, 1]`, and through which face.
 ///
-/// The box is `[min, max] x [base, h]`. Arithmetic only, so it is safe
-/// wherever the sweep runs: a rocket's splash reads it to ask whether a body
-/// has line of sight to the blast, and unlike the sweep's conservative span
-/// test it clears a target whose chest is above a crate the blast sits
-/// behind.
-#[must_use]
-pub fn segment_hits_box(a: [f32; 3], b: [f32; 3], o: &Obstacle) -> bool {
-    let lo = [o.min[0], o.base, o.min[1]];
-    let hi = [o.max[0], o.h, o.max[1]];
+/// The face is the axis whose near plane set the final entry parameter,
+/// signed toward the outside the segment came from; a segment that starts
+/// inside the box enters at 0 through no face and reports a zero normal.
+/// Arithmetic only, so it is safe wherever the sweep runs.
+fn slab_entry(a: [f32; 3], b: [f32; 3], lo: [f32; 3], hi: [f32; 3]) -> Option<(f32, [i8; 3])> {
     let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    let mut normal = [0i8; 3];
     for axis in 0..3 {
         let d = b[axis] - a[axis];
         if d.abs() < 1e-9 {
             // Parallel to this slab: inside it or never.
             if a[axis] < lo[axis] || a[axis] > hi[axis] {
-                return false;
+                return None;
             }
             continue;
         }
@@ -469,13 +512,51 @@ pub fn segment_hits_box(a: [f32; 3], b: [f32; 3], o: &Obstacle) -> bool {
         if near > far {
             std::mem::swap(&mut near, &mut far);
         }
-        t0 = t0.max(near);
+        if near > t0 {
+            t0 = near;
+            normal = [0; 3];
+            // Travelling +d meets the low face, whose outward normal is
+            // negative on this axis.
+            normal[axis] = if d > 0.0 { -1 } else { 1 };
+        }
         t1 = t1.min(far);
         if t0 > t1 {
-            return false;
+            return None;
         }
     }
-    true
+    Some((t0, normal))
+}
+
+/// Exact slab test of a 3D segment `a -> b` against a box: the parameter
+/// along the segment at which it enters, or `None` when it misses.
+///
+/// The box is `[min, max] x [base, h]`. This is the test the v20 sweep
+/// ends a round with (the smallest entry over every box, the floor and the
+/// wall is where the round stops), so it has to be exact and it has to be
+/// arithmetic only: a rocket's splash reads it too, to ask whether a body
+/// has line of sight to the blast.
+#[must_use]
+pub fn segment_box_entry(a: [f32; 3], b: [f32; 3], o: &Obstacle) -> Option<f32> {
+    segment_box_entry_face(a, b, o).map(|(t, _)| t)
+}
+
+/// `segment_box_entry` with the face the segment came in through, as an
+/// axis-aligned outward normal, which is what a client needs to lay an
+/// impact mark flat on the surface.
+#[must_use]
+pub fn segment_box_entry_face(a: [f32; 3], b: [f32; 3], o: &Obstacle) -> Option<(f32, [i8; 3])> {
+    slab_entry(
+        a,
+        b,
+        [o.min[0], o.base, o.min[1]],
+        [o.max[0], o.h, o.max[1]],
+    )
+}
+
+/// Does the segment meet the box at all: `segment_box_entry` is some.
+#[must_use]
+pub fn segment_hits_box(a: [f32; 3], b: [f32; 3], o: &Obstacle) -> bool {
+    segment_box_entry(a, b, o).is_some()
 }
 
 /// `segment_hits_box` against every box: does any cover lie on the line?
@@ -483,14 +564,66 @@ pub fn segment_hits_box(a: [f32; 3], b: [f32; 3], o: &Obstacle) -> bool {
 pub fn segment_hits_cover(a: [f32; 3], b: [f32; 3], obstacles: &[Obstacle]) -> bool {
     obstacles.iter().any(|o| segment_hits_box(a, b, o))
 }
+
+/// How a round ended, on `ShotEvent.hit` and on the wire as `S2C::Shot.hit`.
+/// Flight time ran out.
+pub const SHOT_EXPIRED: u8 = 0;
+/// Stopped by a cover box; `cover` names its kind.
+pub const SHOT_COVER: u8 = 1;
+/// Hit a body; `victim` names it. A pierced body gets one of these and the
+/// round goes on.
+pub const SHOT_BODY: u8 = 2;
+/// Met a raised shield; `victim` is the holder. A bullet is reflected and
+/// starts a new segment there, a rocket goes off there.
+pub const SHOT_SHIELD: u8 = 3;
+/// Into the floor.
+pub const SHOT_FLOOR: u8 = 4;
+/// Into the arena wall.
+pub const SHOT_WALL: u8 = 5;
+/// `ShotEvent.cover` and `ShotEvent.victim` when there is none.
+pub const SHOT_NONE: u8 = 255;
+
+/// A round's segment ended: where it started, where it stopped, what it met.
+///
+/// One per segment: a reflected round produces one at the plate and then a
+/// fresh one from there, a pierced round one per body and one at its end.
+/// The client draws a tracer along `from -> to` and an impact at `to`; the
+/// server forwards it as `S2C::Shot`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShotEvent {
+    pub owner: u8,
+    pub weapon: u8,
+    /// The muzzle at launch, or the plate or body the previous segment
+    /// ended at.
+    pub from: [f32; 3],
+    pub to: [f32; 3],
+    /// One of the `SHOT_*` kinds.
+    pub hit: u8,
+    /// `Cover::index` of the box when `hit == SHOT_COVER`, else `SHOT_NONE`.
+    pub cover: u8,
+    /// The player id when `hit` is `SHOT_BODY` or `SHOT_SHIELD`, else
+    /// `SHOT_NONE`.
+    pub victim: u8,
+    /// The outward normal of the surface met, one of the six axis
+    /// directions: the entry face of a box, up on the floor, inward off
+    /// the arena wall. Zero on a body, a shield and an expiry.
+    pub normal: [i8; 3],
+}
+
+/// The standoff a rocket's blast is pushed back off the face it hit, along
+/// the face normal, so the line-of-sight test from the blast to each body
+/// does not start exactly on the box and read as inside it.
+pub const BLAST_STANDOFF: f32 = 0.02;
+
 /// Active bullets per player, so holding fire can't flood the state.
 ///
-/// Counted by owner, and a reflected round changes owner — so rounds you
+/// Counted by owner, and a reflected round changes owner, so rounds you
 /// caught on the shield sit against your own cap until they expire. Left
 /// that way deliberately: you cannot fire behind a raised shield anyway, no
-/// round lives longer than `BULLET_TTL`, and being briefly short of the cap
-/// after catching ten rounds in 1.6 s is a fair price for having caught
-/// them. Telling the two apart would need a flag on `Bullet`.
+/// round outlives its row's ttl (a fifth of a second for the sidearm), and
+/// being briefly short of the cap after catching ten rounds is a fair
+/// price for having caught them. Telling the two apart would need a flag
+/// on `Bullet`.
 pub const MAX_BULLETS_PER_PLAYER: usize = 10;
 pub const MAX_HP: u8 = 3;
 pub const RESPAWN_SECS: f32 = 2.5;
@@ -553,6 +686,37 @@ pub enum Cover {
     /// reporting which box it hit. Appended last so every existing match
     /// grows one arm and the decode default stays `Container`.
     Loot,
+}
+
+impl Cover {
+    /// The kind as the byte `ShotEvent.cover` and `S2C::Shot.cover` carry:
+    /// its position in the declaration above, which is append-only for
+    /// exactly this reason (the decode default and every match rely on it
+    /// too). `Container` is 0, `Loot` is 8.
+    #[must_use]
+    pub const fn index(self) -> u8 {
+        self as u8
+    }
+
+    /// The kind an `S2C::Shot.cover` byte names, or `None` for `SHOT_NONE`
+    /// and for an index this build does not know (a later kind appended by
+    /// a newer peer), so the client picks a fallback material rather than
+    /// a wrong one.
+    #[must_use]
+    pub const fn from_index(i: u8) -> Option<Self> {
+        Some(match i {
+            0 => Self::Container,
+            1 => Self::Crate,
+            2 => Self::Ammo,
+            3 => Self::Sandbag,
+            4 => Self::Wall,
+            5 => Self::Roof,
+            6 => Self::Rubble,
+            7 => Self::Plinth,
+            8 => Self::Loot,
+            _ => return None,
+        })
+    }
 }
 
 /// Axis-aligned obstacle on the XZ plane, with a top and a bottom.
@@ -1478,13 +1642,18 @@ pub struct Bullet {
     pub vel: [f32; 2],
     /// Height above the arena floor, and its rate of change. Height is a
     /// scalar RIDING ALONGSIDE the 2D path rather than a third component of
-    /// it: `vel` keeps its full `BULLET_SPEED` magnitude at any elevation, so
-    /// horizontal range, flight time and every timing-sensitive test behave
-    /// exactly as before. The ray's DIRECTION is still exactly the shooter's
-    /// look direction, because `vy / BULLET_SPEED == tan(pitch)`.
+    /// it: `vel` keeps its row's full speed at any elevation, so horizontal
+    /// range, flight time and every timing-sensitive test behave exactly as
+    /// before. The ray's DIRECTION is still exactly the shooter's look
+    /// direction, because `vy / speed == tan(pitch)` at launch.
     pub y: f32,
     pub vy: f32,
     pub ttl: f32,
+    /// Where the current segment began: the muzzle at launch, then the
+    /// plate or the pierced body the last `ShotEvent` ended at. Carried on
+    /// the round so the event that ends it can say where it came from
+    /// without the sim keeping a side table.
+    pub from: [f32; 3],
     pub owner: u8,
     pub dmg: u8,
     /// Owner's view delay when fired: targets rewind this far on hit tests.
@@ -1509,6 +1678,113 @@ pub struct Bullet {
 /// a crash in the sweep.
 const fn id_bit(id: u8) -> u8 {
     if id < 8 { 1 << id } else { 0 }
+}
+
+impl Bullet {
+    /// The event that ends this round's current segment at `to`.
+    const fn ended(
+        &self,
+        to: [f32; 3],
+        hit: u8,
+        cover: u8,
+        victim: u8,
+        normal: [i8; 3],
+    ) -> ShotEvent {
+        ShotEvent {
+            owner: self.owner,
+            weapon: self.weapon,
+            from: self.from,
+            to,
+            hit,
+            cover,
+            victim,
+            normal,
+        }
+    }
+}
+
+/// What the world puts in a round's way this tick: the first thing on the
+/// segment among every box, the floor and the arena wall.
+#[derive(Clone, Copy, Debug)]
+struct WorldEnd {
+    /// Parameter along the tick's segment.
+    t: f32,
+    /// The point on the surface.
+    at: [f32; 3],
+    /// `SHOT_COVER`, `SHOT_FLOOR` or `SHOT_WALL`.
+    hit: u8,
+    cover: u8,
+    normal: [i8; 3],
+}
+
+/// The first thing on the segment `p0 -> p1` (heights `y0 -> y1`), or
+/// `None` when the tick is clear.
+///
+/// The round is a point against the world: a box is met where the segment
+/// enters it, the floor where the height crosses zero, and the wall where
+/// the position crosses `ARENA_HALF - radius` on either axis (the radius
+/// keeps a rocket's blast drawn inside the wall, as it always was). The
+/// smallest parameter wins; a tie keeps the earlier of floor, wall, boxes
+/// in list order, so the answer is the same on every peer. The wall
+/// coordinate is snapped to the wall exactly rather than recomputed from
+/// the parameter, so the point is on the surface and not a rounding error
+/// short of it.
+fn world_end(
+    p0: [f32; 2],
+    p1: [f32; 2],
+    y0: f32,
+    y1: f32,
+    radius: f32,
+    obstacles: &[Obstacle],
+) -> Option<WorldEnd> {
+    let (sx, sz) = (p1[0] - p0[0], p1[1] - p0[1]);
+    let at = |t: f32| [p0[0] + sx * t, y0 + (y1 - y0) * t, p0[1] + sz * t];
+    let mut best: Option<WorldEnd> = None;
+    let mut consider = |t: f32, at: [f32; 3], hit: u8, cover: u8, normal: [i8; 3]| {
+        if best.is_none_or(|b| t < b.t) {
+            best = Some(WorldEnd {
+                t,
+                at,
+                hit,
+                cover,
+                normal,
+            });
+        }
+    };
+    if y1 < 0.0 && y0 > y1 {
+        // y0 >= 0 (a round below the floor ended last tick) and y1 < 0,
+        // so the crossing is in [0, 1) and the divisor is never zero.
+        let t = (y0 / (y0 - y1)).clamp(0.0, 1.0);
+        let p = at(t);
+        consider(t, [p[0], 0.0, p[2]], SHOT_FLOOR, SHOT_NONE, [0, 1, 0]);
+    }
+    let lim = ARENA_HALF - radius;
+    for axis in 0..2 {
+        let (a, b) = (p0[axis], p1[axis]);
+        let wall = if b > lim {
+            lim
+        } else if b < -lim {
+            -lim
+        } else {
+            continue;
+        };
+        // b is outside and a inside (or the round ended last tick), so the
+        // divisor is not zero.
+        let t = ((wall - a) / (b - a)).clamp(0.0, 1.0);
+        let mut p = at(t);
+        p[if axis == 0 { 0 } else { 2 }] = wall;
+        let mut normal = [0i8; 3];
+        normal[if axis == 0 { 0 } else { 2 }] = if wall > 0.0 { -1 } else { 1 };
+        consider(t, p, SHOT_WALL, SHOT_NONE, normal);
+    }
+    let a = [p0[0], y0, p0[1]];
+    let b = [p1[0], y1, p1[1]];
+    for o in obstacles {
+        if let Some((t, normal)) = segment_box_entry_face(a, b, o) {
+            consider(t, at(t), SHOT_COVER, o.kind.index(), normal);
+        }
+    }
+    best
 }
 
 /// One round leaving the muzzle: the pure function behind the trigger.
@@ -1568,15 +1844,17 @@ pub fn launch(
     // swept collision skips the owner, and starting further out would
     // leave a point-blank dead zone.
     let muzzle = [p.pos[0] + aim[0] * 0.2, p.pos[1] + aim[1] * 0.2];
+    let y = p.y + eye_h(p.crouch);
     out.push(Bullet {
         pos: muzzle,
         vel: [aim[0] * stats.speed, aim[1] * stats.speed],
         // Leaves at eye level and climbs or falls at the tangent of the aim
         // elevation, which makes the ray exactly the shooter's look
         // direction.
-        y: p.y + eye_h(p.crouch),
+        y,
         vy: pitch.tan() * stats.speed,
         ttl: stats.ttl,
+        from: [muzzle[0], y, muzzle[1]],
         owner: p.id,
         dmg: stats.damage,
         delay: delay.min(MAX_REWIND_TICKS),
@@ -1650,6 +1928,12 @@ pub struct Sim {
     pub hits: Vec<(u8, u8, u8, bool)>,
     /// (position, owner) of every rocket that detonated the last step.
     pub blasts: Vec<([f32; 3], u8)>,
+    /// Every round segment that ended the last step, in sweep order (the
+    /// bullets in list order, and for one round its bodies along the
+    /// segment). What the client draws its tracers and impacts from,
+    /// since a round at 280 m/s and up rarely lives long enough to appear
+    /// in a state.
+    pub shots: Vec<ShotEvent>,
     /// (player, block index into `loot`, weapon) for every block paid out
     /// the last step.
     pub loot_events: Vec<(u8, u8, u8)>,
@@ -1763,6 +2047,7 @@ impl Sim {
             events: Vec::new(),
             hits: Vec::new(),
             blasts: Vec::new(),
+            shots: Vec::new(),
             loot_events: Vec::new(),
             seed,
             tick: 0,
@@ -1974,6 +2259,7 @@ impl Sim {
         self.events.clear();
         self.hits.clear();
         self.blasts.clear();
+        self.shots.clear();
         self.loot_events.clear();
         self.round_over.clear();
         self.tick += 1;
@@ -2233,9 +2519,12 @@ impl Sim {
             self.history.pop_front();
         }
 
-        // Bullets: swept player collision (segment vs circle — no tunneling,
-        // no point-blank dead zone) against targets REWOUND by the shooter's
-        // view delay, then integrate, then world collision.
+        // Bullets: the world's first crossing on the tick's segment, then
+        // swept player collision (segment vs circle, exact on the segment,
+        // so no tunneling at any speed and no point-blank dead zone)
+        // against targets REWOUND by the shooter's view delay, then the
+        // round ends at whichever came first or integrates to the
+        // segment's end.
         let mut hits: Vec<(u8, u8, u8, bool)> = Vec::new(); // (owner, victim, dmg, head)
 
         // ---- the melee strike (E) ----
@@ -2316,6 +2605,14 @@ impl Sim {
         let obstacles = std::mem::take(&mut self.obstacles);
         let mut bullets = std::mem::take(&mut self.bullets);
         let mut blasts: Vec<([f32; 3], u8)> = Vec::new();
+        let mut shots: Vec<ShotEvent> = Vec::new();
+        // (contact parameter, player index, head) of every body a round's
+        // segment meets this tick, gathered and then taken in segment
+        // order, so the nearest body is the one a round without pierce
+        // stops in and the one a raised plate reflects it off, whatever
+        // the players' list order. At 15 m a tick the list order would
+        // otherwise decide who was hit.
+        let mut bodies: Vec<(f32, usize, bool)> = Vec::new();
         bullets.retain_mut(|b| {
             // The table is the one source: gravity, kind and radius are read
             // through the round's weapon rather than carried on it.
@@ -2324,36 +2621,66 @@ impl Sim {
             let radius = stats.radius;
             b.ttl -= dt;
             if b.ttl <= 0.0 {
-                // A rocket out of flight time goes off where it is.
+                // A rocket out of flight time goes off where it is, and
+                // every round reports the expiry, so a tracer ends where
+                // the round faded and not where the last state left it.
+                let at = [b.pos[0], b.y, b.pos[1]];
                 if rocket {
-                    self.detonate(
-                        &obstacles,
-                        b,
-                        [b.pos[0], b.y, b.pos[1]],
-                        None,
-                        None,
-                        &mut hits,
-                        &mut blasts,
-                    );
+                    self.detonate(&obstacles, b, at, None, None, &mut hits, &mut blasts);
                 }
+                shots.push(b.ended(at, SHOT_EXPIRED, SHOT_NONE, SHOT_NONE, [0; 3]));
                 return false;
             }
             // Gravity, semi-implicit Euler like the player's: the vertical
             // speed is charged BEFORE the segment is formed. The horizontal
-            // `vel` is untouched, so every range-per-tick invariant stands,
-            // and a zero-gravity row adds exactly zero, so the sidearm's
-            // line is the v17 line bit for bit.
+            // `vel` keeps its magnitude, so every range-per-tick invariant
+            // stands, and a zero-gravity row adds exactly zero.
             b.vy += stats.gravity * dt;
+            // The sustainer: the horizontal speed grows along its own
+            // direction until the row's cap, charged before the segment
+            // like gravity, so the launch tick already flies a little
+            // faster than the muzzle speed. `vy` is left to gravity, so a
+            // rocket flattens as its motor runs. Only the rocket has one.
+            if stats.accel > 0.0 {
+                let speed_h = (b.vel[0] * b.vel[0] + b.vel[1] * b.vel[1]).sqrt();
+                if speed_h > 1e-6 && speed_h < stats.speed_max {
+                    let k = (speed_h + stats.accel * dt).min(stats.speed_max) / speed_h;
+                    b.vel = [b.vel[0] * k, b.vel[1] * k];
+                }
+            }
             let p0 = b.pos;
             let p1 = [p0[0] + b.vel[0] * dt, p0[1] + b.vel[1] * dt];
             let y0 = b.y;
             let y1 = b.y + b.vy * dt;
             let (sx, sz) = (p1[0] - p0[0], p1[1] - p0[1]);
             let seg_len_sq = sx * sx + sz * sz;
-            for p in &self.players {
+            let along = |t: f32| [p0[0] + sx * t, y0 + (y1 - y0) * t, p0[1] + sz * t];
+
+            // ---- the world ----
+            //
+            // Judged FIRST and on the whole segment: the first box, floor
+            // or wall crossing along it is where the round stops if no
+            // body is met before it. A round is never stopped by the box
+            // under its end point; it is stopped by the first thing on
+            // its line, which at 4.67 to 15 m a tick is the only test that
+            // does not tunnel. Every body below is gated on being nearer
+            // than this, which is the old "cover at contact" test made
+            // exact: the slab test from the segment's start to the point
+            // of contact. Heights used to be hashed with a sin() in this
+            // pass; they are carried on the box now, but the rule that
+            // made that sound still holds and still matters: bullets are
+            // simulated server-side exclusively, and if client-side shot
+            // prediction is ever added, every f32 transcendental on the
+            // shot's path (the tan() at launch) becomes a desync source.
+            let world = world_end(p0, p1, y0, y1, radius, &obstacles);
+            let t_world = world.map_or(f32::INFINITY, |w| w.t);
+
+            // ---- the bodies ----
+            bodies.clear();
+            for (j, p) in self.players.iter().enumerate() {
                 // A body this round already went through is never hit
-                // twice: a pierced target is overlapped on consecutive
-                // ticks, and the mask is what stops the second one.
+                // twice: the mask is what stops a pierced target being
+                // counted again on the tick after.
                 if p.id == b.owner || b.hit_mask & id_bit(p.id) != 0 {
                     continue;
                 }
@@ -2373,7 +2700,8 @@ impl Sim {
                     continue;
                 }
                 let rr = hit_radius(tcrouch) + radius;
-                // Closest point on [p0, p1] to the (rewound) center.
+                // Closest point on [p0, p1] to the (rewound) centre: the
+                // cheap reject, which most bodies fail.
                 let t = if seg_len_sq <= 1e-8 {
                     0.0
                 } else {
@@ -2383,6 +2711,33 @@ impl Sim {
                 if ex * ex + ez * ez >= rr * rr {
                     continue;
                 }
+                // The exact overlap of the segment with the circle:
+                // |p0 + s t - tpos|^2 = rr^2 is a quadratic in t, and its
+                // two roots clipped to [0, 1] are where the round enters
+                // and leaves the circle. The round's height is linear in
+                // t, so its height over that interval is an interval too,
+                // and the hit is decided on intervals rather than samples:
+                // there is no speed at which a head can fall between two
+                // samples, because there are no samples.
+                let (t_in, t_out) = if seg_len_sq <= 1e-8 {
+                    (0.0, 0.0)
+                } else {
+                    let (fx, fz) = (p0[0] - tpos[0], p0[1] - tpos[1]);
+                    let half_b = fx * sx + fz * sz;
+                    let c = fx * fx + fz * fz - rr * rr;
+                    let half_b_sq = half_b * half_b;
+                    let disc = half_b_sq - seg_len_sq * c;
+                    if disc < 0.0 {
+                        continue;
+                    }
+                    let root = disc.sqrt();
+                    let t_in = ((-half_b - root) / seg_len_sq).max(0.0);
+                    let t_out = ((-half_b + root) / seg_len_sq).min(1.0);
+                    if t_in > t_out {
+                        continue;
+                    }
+                    (t_in, t_out)
+                };
                 // Vertical band, with the bullet's own radius on both ends
                 // so it matches the horizontal sum-of-radii test. This is
                 // what turns the hit volume from a cylinder of infinite
@@ -2393,310 +2748,204 @@ impl Sim {
                 // chest, not a silhouette edge, and padding it outward would
                 // quietly make the head bigger than the one being drawn.
                 let head_lo = ty + head_lo(tcrouch);
-                let travel = (y1 - b.y).abs();
-                let by = b.y + (y1 - b.y) * t;
-                let mut connected = by >= lo && by <= hi;
-                let mut head = connected && by >= head_lo;
-                // Where along the tick the round met the body: the closest
-                // approach, or the first walked sample that connected when
-                // the closest approach did not. The cover test below runs
-                // there.
-                let mut contact = t;
-                // Walk the segment when one tick's vertical travel could
-                // straddle the SMALLEST zone under test. This used to key on
-                // the body band, and for the body that is right - a tick
-                // cannot skip 2.14 m below ~1.31 rad. A head band is about
-                // seven times smaller and the arithmetic is unforgiving:
-                // vertical travel is tan(pitch) * BULLET_SPEED * dt, which is
-                // 0.567 * tan(pitch), so a 0.30 m head is straddled from just
-                // 0.49 rad (~28 deg) - ordinary aiming, not a trick shot.
-                // Keyed on the body band a headshot between 28 and 75 degrees
-                // would have been a coin flip, which is not worth shipping.
-                //
-                // Both tests are still evaluated at the SAME parameter, so
-                // this can only find hits that are real; it cannot invent one.
-                if travel > HEAD_H && !head {
-                    let steps = ((travel / HEAD_H).ceil() as u32 * 4).clamp(1, 32);
-                    for k in 0..=steps {
-                        let u = k as f32 / steps as f32;
-                        let byk = b.y + (y1 - b.y) * u;
-                        if byk < lo || byk > hi {
-                            continue;
-                        }
-                        let (gx, gz) = (tpos[0] - (p0[0] + sx * u), tpos[1] - (p0[1] + sz * u));
-                        if gx * gx + gz * gz < rr * rr {
-                            if !connected {
-                                contact = u;
-                            }
-                            connected = true;
-                            // Keep walking only to upgrade a body hit to a head
-                            // hit: a round that passed through the head IS a
-                            // headshot, even when the closest-approach sample
-                            // happened to land in the chest.
-                            if byk >= head_lo {
-                                head = true;
-                                break;
-                            }
-                        }
-                    }
+                let (ya, yb) = (y0 + (y1 - y0) * t_in, y0 + (y1 - y0) * t_out);
+                let (ymin, ymax) = (ya.min(yb), ya.max(yb));
+                // Body iff the height interval meets [lo, hi]; head iff it
+                // meets [head_lo, hi], and given the first the second is
+                // one comparison. A round that passed through the head IS
+                // a headshot, wherever else on the body it also was.
+                if ymax < lo || ymin > hi {
+                    continue;
                 }
-                if connected {
-                    // Cover between the muzzle and the body stops the round
-                    // before the body does. This is the world test below
-                    // (which judges the tick's END point) run at the point
-                    // of CONTACT, with the tick's vertical span up to it. A
-                    // round that meets a body from INSIDE a tunnel roof -
-                    // climbing at 30 degrees from the tunnel floor at a
-                    // player on the roof, whose hit column starts BULLET_R
-                    // below their feet, or dropping at MAX_PITCH from the
-                    // roof at the player underneath - was passing through
-                    // the slab when it connected, and the slab wins. Judged
-                    // at the contact and not the end point so a point-blank
-                    // hit on a body backed against a wall is still a hit:
-                    // the end point is inside the wall, the contact is not.
-                    // Conservative like the world test (span, not segment),
-                    // for the same reason. Ahead of the shield: cover in
-                    // front of a raised plate stops the round before the
-                    // plate could send it back.
-                    let cy = b.y + (y1 - b.y) * contact;
-                    let (cx, cz) = (p0[0] + sx * contact, p0[1] + sz * contact);
-                    if obstacles.iter().any(|o| {
-                        y0.min(cy) < obstacle_height(o)
-                            && y0.max(cy) > o.base
-                            && cx > o.min[0] - radius
-                            && cx < o.max[0] + radius
-                            && cz > o.min[1] - radius
-                            && cz < o.max[1] + radius
-                    }) {
-                        // A rocket stopped by cover goes off at the last
-                        // free point, the start of this tick's segment.
+                let head = ymax >= head_lo;
+                // Where the round met the body: where it entered the
+                // circle, unless it was still above or below the volume
+                // there, in which case where its height came into the
+                // band. That is the exact contact with the volume, and it
+                // is where the tracer ends and the cover gate is judged.
+                let contact = if ya > hi {
+                    t_in + (t_out - t_in) * ((hi - ya) / (yb - ya))
+                } else if ya < lo {
+                    t_in + (t_out - t_in) * ((lo - ya) / (yb - ya))
+                } else {
+                    t_in
+                };
+                // Cover between the muzzle and the body stops the round
+                // before the body does: the world's first crossing lies
+                // before the contact. A round that meets a body from
+                // INSIDE a tunnel roof was passing through the slab when
+                // it connected, and the slab wins. Judged at the contact
+                // and not the end point so a point-blank hit on a body
+                // backed against a wall is still a hit. Ahead of the
+                // shield: cover in front of a raised plate stops the round
+                // before the plate could send it back.
+                if contact >= t_world {
+                    continue;
+                }
+                bodies.push((contact, j, head));
+            }
+            bodies.sort_by(|a, b| a.0.total_cmp(&b.0));
+            for &(contact, j, head) in &bodies {
+                let p = &self.players[j];
+                let at = along(contact);
+                // ---- the off-hand shield ----
+                //
+                // Placed exactly where the damage decision is, so a
+                // reflected round is precisely one that WOULD have hit.
+                // TTL was already charged above, so a shield never extends
+                // a round's life.
+                //
+                // The shield is judged in the PRESENT, this tick's flag and
+                // this tick's facing, while the body test above stays
+                // lag-compensated. That is deliberately unlike crouch,
+                // which rewinds with position: crouch answers "where was
+                // the body", which is the shooter's question, and the
+                // shield answers "is the defender blocking right now",
+                // which is the defender's. Rewinding the flag without also
+                // rewinding the facing it points along would answer
+                // neither.
+                if p.shield {
+                    let n = p.aim; // unit: the sim normalizes it on input
+                    let dot = b.vel[0] * n[0] + b.vel[1] * n[1];
+                    let speed_h = (b.vel[0] * b.vel[0] + b.vel[1] * b.vel[1]).sqrt();
+                    // Inside the cover arc iff the round is travelling
+                    // into the plate's face: its heading within half the
+                    // arc of -n. Tested on the heading rather than on the
+                    // bearing from holder to round, because the point of
+                    // contact sits by construction on the flight line and
+                    // a bearing taken there is noise. For anything but a
+                    // point-blank shot the two agree anyway. cos() is a
+                    // transcendental in hit registration, sound for
+                    // exactly the reason the tan() at launch is: bullets
+                    // are stepped server-side only.
+                    if speed_h > 1e-6 && -dot >= (SHIELD_ARC * 0.5).cos() * speed_h {
+                        // A rocket detonates ON the plate and never comes
+                        // back: a plate is cover, not a launcher, and a
+                        // three-damage rocket bounced by a 120 degree arc
+                        // would be a free kill on the shooter with no
+                        // counterplay. The holder is spared the splash;
+                        // the plate took it.
                         if rocket {
                             self.detonate(
                                 &obstacles,
                                 b,
-                                [p0[0], y0, p0[1]],
+                                at,
                                 None,
-                                None,
+                                Some(p.id),
                                 &mut hits,
                                 &mut blasts,
                             );
+                            shots.push(b.ended(at, SHOT_SHIELD, SHOT_NONE, p.id, [0; 3]));
+                            return false;
                         }
-                        return false;
+                        // Mirror about the plate: v' = v - 2(v.n)n. The
+                        // normal is horizontal, so vy is untouched and a
+                        // round arcing down at you comes back arcing down,
+                        // keeping its range rather than being launched at
+                        // the sky. A mirror is an isometry, so horizontal
+                        // speed survives and the invariant pinned by
+                        // pitch_does_not_shorten_a_shot survives
+                        // reflection. Damage rides along: catch a revolver
+                        // round and you send two damage back.
+                        b.vel = [b.vel[0] - 2.0 * dot * n[0], b.vel[1] - 2.0 * dot * n[1]];
+                        // The segment that ended at the plate was the
+                        // shooter's: recorded before the round changes
+                        // hands, so the tracer up to the plate is drawn
+                        // in the shooter's name and the one back in the
+                        // catcher's.
+                        shots.push(b.ended(at, SHOT_SHIELD, SHOT_NONE, p.id, [0; 3]));
+                        // The round belongs to whoever caught it. It can
+                        // now kill anyone, the shooter included, and the
+                        // frag is the reflector's. remove_player drops
+                        // bullets by owner, so this also decides that a
+                        // reflected round outlives the shooter leaving and
+                        // dies with the reflector instead, which is what
+                        // the transfer means, not an accident of it.
+                        b.owner = p.id;
+                        // Nobody aimed this round, so there is nothing for
+                        // lag compensation to honour: from here it
+                        // hit-tests against the present.
+                        b.delay = 0;
+                        // A caught round is a fresh round: whatever it went
+                        // through on the way in is forgotten, and it does
+                        // not go through anyone on the way back. The mask
+                        // must clear or the round could never hit the body
+                        // it pierced coming in, and the pierce must clear
+                        // or a reflected sniper round would be a two-body
+                        // reward for the catcher that the shooter never
+                        // earned.
+                        b.pierce = 0;
+                        b.hit_mask = 0;
+                        // The segment ends at the plate and the next one
+                        // starts there: the round is moved to the point of
+                        // contact rather than left at the tick's start, so
+                        // the tracer the client draws from the next event
+                        // begins where this one ended. Safe to do in one
+                        // pass because the bodies are taken in segment
+                        // order: everyone nearer was already tested, and
+                        // everyone further was never on the new path. The
+                        // holder is the owner now and is skipped. It costs
+                        // one tick, as it always did.
+                        b.pos = [at[0], at[2]];
+                        b.y = at[1];
+                        b.from = at;
+                        return true;
                     }
-                    // ---- the off-hand shield ----
-                    //
-                    // Placed exactly where the damage decision was, so a
-                    // reflected round is precisely one that WOULD have hit.
-                    // The rest of the sweep's order is deliberate around it:
-                    // TTL was already charged above, so a shield never
-                    // extends a round's life; and the floor/wall/cover checks
-                    // below are skipped on the reflect tick because the round
-                    // does not advance — it departs next tick from a position
-                    // that already passed them.
-                    //
-                    // The shield is judged in the PRESENT — this tick's flag
-                    // and this tick's facing — while the body test above
-                    // stays lag-compensated. That is deliberately unlike
-                    // crouch, which rewinds with position: crouch answers
-                    // "where was the body", which is the shooter's question,
-                    // and the shield answers "is the defender blocking right
-                    // now", which is the defender's. Rewinding the flag
-                    // without also rewinding the facing it points along
-                    // would answer neither.
-                    if p.shield {
-                        let n = p.aim; // unit: the sim normalizes it on input
-                        let dot = b.vel[0] * n[0] + b.vel[1] * n[1];
-                        let speed_h = (b.vel[0] * b.vel[0] + b.vel[1] * b.vel[1]).sqrt();
-                        // Inside the cover arc iff the round is travelling
-                        // into the plate's face — its heading within half the
-                        // arc of -n. Tested on the heading rather than on the
-                        // bearing from holder to round, because the point of
-                        // contact sits by construction perpendicular to the
-                        // flight line and a bearing taken there is noise. For
-                        // anything but a point-blank shot the two agree
-                        // anyway: a round that connects with a 0.82-radius
-                        // body from 5 units out arrives within ~9° of
-                        // straight-on. cos() is a transcendental in hit
-                        // registration, sound for exactly the reason the
-                        // tan() at launch is — bullets are stepped
-                        // server-side only.
-                        if speed_h > 1e-6 && -dot >= (SHIELD_ARC * 0.5).cos() * speed_h {
-                            // A rocket detonates ON the plate and never
-                            // comes back: a plate is cover, not a launcher,
-                            // and a three-damage rocket bounced by a 120
-                            // degree arc would be a free kill on the
-                            // shooter with no counterplay. The holder is
-                            // spared the splash; the plate took it.
-                            if rocket {
-                                self.detonate(
-                                    &obstacles,
-                                    b,
-                                    [cx, cy, cz],
-                                    None,
-                                    Some(p.id),
-                                    &mut hits,
-                                    &mut blasts,
-                                );
-                                return false;
-                            }
-                            // Mirror about the plate: v' = v - 2(v·n)n. The
-                            // normal is horizontal, so vy is untouched and a
-                            // round arcing down at you comes back arcing
-                            // down, keeping its range rather than being
-                            // launched at the sky. A mirror is an isometry,
-                            // so horizontal speed stays BULLET_SPEED and the
-                            // invariant pinned by pitch_does_not_shorten_a_shot
-                            // survives reflection. Damage rides along: catch
-                            // a revolver round and you send two damage back.
-                            b.vel = [b.vel[0] - 2.0 * dot * n[0], b.vel[1] - 2.0 * dot * n[1]];
-                            // The round belongs to whoever caught it. It can
-                            // now kill anyone, the shooter included, and the
-                            // frag is the reflector's. remove_player drops
-                            // bullets by owner, so this also decides that a
-                            // reflected round outlives the shooter leaving
-                            // and dies with the reflector instead — which is
-                            // what the transfer means, not an accident of it.
-                            b.owner = p.id;
-                            // Nobody aimed this round, so there is nothing for
-                            // lag compensation to honour: from here it
-                            // hit-tests against the present.
-                            b.delay = 0;
-                            // A caught round is a fresh round: whatever it
-                            // went through on the way in is forgotten, and
-                            // it does not go through anyone on the way
-                            // back. The mask must clear or the round could
-                            // never hit the body it pierced coming in, and
-                            // the pierce must clear or a reflected sniper
-                            // round would be a two-body reward for the
-                            // catcher that the shooter never earned.
-                            b.pierce = 0;
-                            b.hit_mask = 0;
-                            // Keeping the round's position for this tick is
-                            // what makes the reflection single-pass: the
-                            // players after this one in the loop are being
-                            // tested against a segment computed from the OLD
-                            // velocity, and leaving now is the only way none
-                            // of them is judged against a path the round is
-                            // no longer on. It costs one tick, 17 ms.
-                            return true;
-                        }
-                    }
-                    // A rocket on a body is a direct hit and a blast at the
-                    // point of contact; the body it struck takes the direct
-                    // damage and is left out of the splash.
-                    if rocket {
-                        self.detonate(
-                            &obstacles,
-                            b,
-                            [cx, cy, cz],
-                            Some(p.id),
-                            None,
-                            &mut hits,
-                            &mut blasts,
-                        );
-                        return false;
-                    }
-                    // A head hit kills outright, whatever the weapon and
-                    // whatever the remaining HP. Routed as damage rather than
-                    // as a special case so respawn, scoring and the kill event
-                    // all stay on the one path.
-                    hits.push((b.owner, p.id, if head { MAX_HP } else { b.dmg }, head));
-                    if b.pierce == 0 {
-                        return false;
-                    }
-                    // Pierce: the round goes on, remembering this body, and
-                    // the loop CONTINUES so a second body on this same
-                    // tick's segment is hit too. A `break` here would skip
-                    // that body for good, because the segment is formed
-                    // once per tick and next tick's starts beyond it.
-                    b.pierce -= 1;
-                    b.hit_mask |= id_bit(p.id);
                 }
+                // A rocket on a body is a direct hit and a blast at the
+                // point of contact; the body it struck takes the direct
+                // damage and is left out of the splash.
+                if rocket {
+                    self.detonate(&obstacles, b, at, Some(p.id), None, &mut hits, &mut blasts);
+                    shots.push(b.ended(at, SHOT_BODY, SHOT_NONE, p.id, [0; 3]));
+                    return false;
+                }
+                // A head hit kills outright, whatever the weapon and
+                // whatever the remaining HP. Routed as damage rather than
+                // as a special case so respawn, scoring and the kill event
+                // all stay on the one path.
+                hits.push((b.owner, p.id, if head { MAX_HP } else { b.dmg }, head));
+                shots.push(b.ended(at, SHOT_BODY, SHOT_NONE, p.id, [0; 3]));
+                if b.pierce == 0 {
+                    return false;
+                }
+                // Pierce: the round goes on, remembering this body, and
+                // the loop CONTINUES so a second body on this same tick's
+                // segment is hit too. The next event starts at this body,
+                // so a pierced round's events chain end to end.
+                b.pierce -= 1;
+                b.hit_mask |= id_bit(p.id);
+                b.from = at;
+            }
+            if let Some(w) = world {
+                // Stopped by the world. A rocket goes off there: on the
+                // floor lifted to 0.05 so the blast is drawn above the
+                // ground it hit, off a box pushed back by the standoff so
+                // the splash's line-of-sight test does not start on the
+                // box's own face, on the wall at the wall.
+                if rocket {
+                    let blast = match w.hit {
+                        SHOT_FLOOR => [w.at[0], 0.05, w.at[2]],
+                        SHOT_COVER => [
+                            w.at[0] + f32::from(w.normal[0]) * BLAST_STANDOFF,
+                            w.at[1] + f32::from(w.normal[1]) * BLAST_STANDOFF,
+                            w.at[2] + f32::from(w.normal[2]) * BLAST_STANDOFF,
+                        ],
+                        _ => w.at,
+                    };
+                    self.detonate(&obstacles, b, blast, None, None, &mut hits, &mut blasts);
+                }
+                shots.push(b.ended(w.at, w.hit, w.cover, SHOT_NONE, w.normal));
+                return false;
             }
             b.pos = p1;
             b.y = y1;
-            // Into the floor. A rocket goes off where it crossed it, lifted
-            // to 0.05 so the blast is drawn above the ground it hit.
-            if b.y < 0.0 {
-                if rocket {
-                    // y0 >= 0 (a round below the floor was culled last
-                    // tick) and y1 < 0, so the crossing parameter is in
-                    // [0, 1) and the divisor is never zero.
-                    let t = y0 / (y0 - y1);
-                    self.detonate(
-                        &obstacles,
-                        b,
-                        [p0[0] + sx * t, 0.05, p0[1] + sz * t],
-                        None,
-                        None,
-                        &mut hits,
-                        &mut blasts,
-                    );
-                }
-                return false;
-            }
-            if b.pos[0].abs() > ARENA_HALF - radius || b.pos[1].abs() > ARENA_HALF - radius {
-                // A rocket goes off against the wall, at the position
-                // clamped back inside it.
-                if rocket {
-                    let lim = ARENA_HALF - radius;
-                    self.detonate(
-                        &obstacles,
-                        b,
-                        [b.pos[0].clamp(-lim, lim), b.y, b.pos[1].clamp(-lim, lim)],
-                        None,
-                        None,
-                        &mut hits,
-                        &mut blasts,
-                    );
-                }
-                return false;
-            }
-            // Cover now stops only what actually passes THROUGH it, so a
-            // shot arcing over a crate from a container top clears it, and
-            // a level round travels the length of a tunnel under its roof.
-            // Heights used to be hashed with a sin() right here; they are
-            // carried on the box now, but the rule that made that sound
-            // still holds and still matters: bullets are simulated
-            // server-side exclusively — clients never step their own. If
-            // client-side shot prediction is ever added, every f32
-            // transcendental on the shot's path (the tan() at launch)
-            // becomes a desync source.
-            // Gated on the tick's vertical SPAN against the box's [base, h],
-            // not on its end point: a climbing bullet that enters a crate's
-            // footprint below the top and ends the tick above it would
-            // otherwise pass straight through the crate's side wall.
-            // Conservative — this can only over-block — and a shot arcing
-            // down from a container top over a crate still has both
-            // endpoints above it. For `base == 0` the lower clause is always
-            // true, because a round below the floor was already culled.
-            if obstacles.iter().any(|o| {
-                y0.min(b.y) < obstacle_height(o)
-                    && y0.max(b.y) > o.base
-                    && b.pos[0] > o.min[0] - radius
-                    && b.pos[0] < o.max[0] + radius
-                    && b.pos[1] > o.min[1] - radius
-                    && b.pos[1] < o.max[1] + radius
-            }) {
-                // The last free point is where this tick's segment began.
-                if rocket {
-                    self.detonate(
-                        &obstacles,
-                        b,
-                        [p0[0], y0, p0[1]],
-                        None,
-                        None,
-                        &mut hits,
-                        &mut blasts,
-                    );
-                }
-                return false;
-            }
             true
         });
         self.bullets = bullets;
         self.obstacles = obstacles;
         self.blasts = blasts;
+        self.shots = shots;
 
         // Apply damage after the bullet pass (avoids double-borrow). Only a
         // hit that lands on a living body is reported, so `hits` is what
@@ -3001,8 +3250,8 @@ mod tests {
                     ..Default::default()
                 },
             );
-            // Bullet flight to x=6 takes ~11 ticks — still inside the
-            // 12-tick rewind window.
+            // Bullet flight to x=6 takes two ticks at 280 m/s, well inside
+            // the 12-tick rewind window.
             for _ in 0..12 {
                 sim.players[0].pos = [0.0, 0.0];
                 sim.players.iter_mut().find(|p| p.id == 1).unwrap().pos = [6.0, 5.0];
@@ -3226,6 +3475,22 @@ mod tests {
             assert!(s.speed > 0.0, "{id}: no speed");
             assert!(s.ttl > 0.0, "{id}: no range");
             assert!(s.gravity <= 0.0, "{id}: gravity points up");
+            assert!(s.accel >= 0.0, "{id}: a sustainer that slows the round");
+            assert!(
+                s.speed_max >= s.speed,
+                "{id}: the cap {} is under the muzzle speed {}",
+                s.speed_max,
+                s.speed
+            );
+            assert_eq!(
+                s.accel > 0.0,
+                s.kind == Projectile::Rocket,
+                "{id}: only the rocket has a motor"
+            );
+            assert!(
+                s.accel > 0.0 || s.speed_max.to_bits() == s.speed.to_bits(),
+                "{id}: a cap above the muzzle speed with nothing to reach it"
+            );
             assert!(
                 s.spread <= s.spread_max,
                 "{id}: base cone wider than its cap"
@@ -3377,6 +3642,76 @@ mod tests {
         assert!(!segment_hits_box([-3.0, 1.0, 0.0], [3.0, 1.0, 0.0], o));
         assert!(segment_hits_cover([-3.0, 2.7, 0.0], [3.0, 2.7, 0.0], &obs));
         assert!(!segment_hits_cover([-3.0, 2.7, 0.0], [3.0, 2.7, 0.0], &[]));
+    }
+
+    #[test]
+    fn segment_box_entry_reports_where_and_which_face() {
+        // A unit-ish box on the floor at [0, 2] on both axes, two tall.
+        // The entry parameter is where the segment meets the box, and the
+        // face is the one it came in through, as an outward normal: that
+        // is where a round stops and how the client lays its mark.
+        let o = Obstacle::boxed(Cover::Crate, [0.0, 0.0], [2.0, 2.0], 0.0, 2.0);
+        let entry = |a, b| segment_box_entry_face(a, b, &o).expect("a hit");
+        let (t, n) = entry([-1.0, 1.0, 1.0], [3.0, 1.0, 1.0]);
+        assert!((t - 0.25).abs() < 1e-6, "{t}");
+        assert_eq!(n, [-1, 0, 0], "in through the west face");
+        let (t, n) = entry([3.0, 1.0, 1.0], [-1.0, 1.0, 1.0]);
+        assert!((t - 0.25).abs() < 1e-6, "{t}");
+        assert_eq!(n, [1, 0, 0], "in through the east face");
+        let (t, n) = entry([1.0, 5.0, 1.0], [1.0, -1.0, 1.0]);
+        assert!((t - 0.5).abs() < 1e-6, "{t}");
+        assert_eq!(n, [0, 1, 0], "down through the top");
+        let (t, n) = entry([1.0, 1.0, 4.0], [1.0, 1.0, -2.0]);
+        assert!((t - 1.0 / 3.0).abs() < 1e-6, "{t}");
+        assert_eq!(n, [0, 0, 1], "in through the +z face");
+        // Starting inside: entered at 0 through no face.
+        assert_eq!(entry([1.0, 1.0, 1.0], [5.0, 1.0, 1.0]), (0.0, [0, 0, 0]));
+        // A miss on any axis is a miss, and the two spellings agree.
+        for (a, b) in [
+            ([-1.0, 3.0, 1.0], [3.0, 3.0, 1.0]),
+            ([-1.0, 1.0, 3.0], [3.0, 1.0, 3.0]),
+            ([-1.0, 1.0, 1.0], [-0.5, 1.0, 1.0]),
+        ] {
+            assert_eq!(segment_box_entry(a, b, &o), None, "{a:?} -> {b:?}");
+            assert!(!segment_hits_box(a, b, &o));
+        }
+        assert_eq!(
+            segment_box_entry([-1.0, 1.0, 1.0], [3.0, 1.0, 1.0], &o),
+            Some(0.25)
+        );
+        // Entry is monotone in where the segment starts: the same line
+        // from further back enters later along itself.
+        let (near, _) = entry([-1.0, 1.0, 1.0], [3.0, 1.0, 1.0]);
+        let (far, _) = entry([-3.0, 1.0, 1.0], [3.0, 1.0, 1.0]);
+        assert!(far > near);
+    }
+
+    #[test]
+    fn cover_index_is_the_declaration_order() {
+        // What `S2C::Shot.cover` carries; the enum is append-only so these
+        // never move.
+        let all = [
+            Cover::Container,
+            Cover::Crate,
+            Cover::Ammo,
+            Cover::Sandbag,
+            Cover::Wall,
+            Cover::Roof,
+            Cover::Rubble,
+            Cover::Plinth,
+            Cover::Loot,
+        ];
+        for (i, k) in all.iter().enumerate() {
+            assert_eq!(usize::from(k.index()), i, "{k:?}");
+            assert_eq!(Cover::from_index(k.index()), Some(*k), "{k:?}");
+        }
+        assert_ne!(Cover::Loot.index(), SHOT_NONE);
+        assert_eq!(Cover::from_index(SHOT_NONE), None);
+        assert_eq!(
+            Cover::from_index(9),
+            None,
+            "a kind this build does not know"
+        );
     }
 
     #[test]
@@ -3897,14 +4232,16 @@ mod tests {
             sim.pads.clear();
             sim.add_player(0);
             // Headroom, so this test measures what it claims to. At the
-            // clamp a round descends tan(1.45) * BULLET_SPEED * dt ~= 4.67
+            // clamp a round descends tan(1.45) * BULLET_SPEED * dt ~= 38
             // units in its FIRST tick, and bullets are extended into the
-            // list before that same tick's sweep runs — so a straight-down
-            // shot fired from ground level is culled by the floor before it
-            // can be inspected at all. That culling is correct, and is
+            // list before that same tick's sweep runs, so a straight-down
+            // shot fired from ground level is ended by the floor before it
+            // can be inspected at all. That ending is correct, and is
             // asserted on its own in the test below; it is just not the
-            // property being pinned here.
-            sim.players[0].y = 8.0;
+            // property being pinned here. And at the west wall, so the
+            // east wall is not met on the same tick either.
+            sim.players[0].y = 40.0;
+            sim.players[0].pos = [-20.0, 0.0];
             let mut inputs = HashMap::new();
             inputs.insert(
                 0,
@@ -4088,16 +4425,17 @@ mod tests {
     #[test]
     fn a_raised_shield_sends_the_round_back() {
         // The whole feature: a frontal round is not absorbed, it is mirrored
-        // and changes hands. 10 ticks is past the ~7 the round needs to
-        // reach the defender's circle and short of the ~15 by which it is
-        // back at the shooter and consumed, so it is caught mid-return.
-        let sim = shield_duel(5.0, [-1.0, 0.0], true, 10);
+        // and changes hands. Twenty metres at 4.67 m a tick: six ticks is
+        // past the five the round needs to reach the defender's circle at
+        // 19.2 m and short of the nine by which it is back at the shooter
+        // and consumed, so it is caught mid-return.
+        let sim = shield_duel(20.0, [-1.0, 0.0], true, 6);
         let b = sim
             .bullets
             .first()
             .expect("a reflected round must still be in flight");
         assert_eq!(b.owner, 1, "the round belongs to whoever caught it");
-        // Head-on off a shield facing -x: v = (+34, 0) becomes (-34, 0).
+        // Head-on off a shield facing -x: v = (+280, 0) becomes (-280, 0).
         assert!(
             b.vel[0] < 0.0,
             "the round must be travelling back downrange, got {:?}",
@@ -4213,6 +4551,10 @@ mod tests {
         sim.obstacles.clear();
         sim.pads.clear();
         sim.add_player(0);
+        // At the west wall, firing east: from the spawn ring a 280 m/s
+        // round can meet the wall on the tick it leaves and be gone before
+        // the assertion below sees it.
+        sim.players[0].pos = [-20.0, 0.0];
         let mag = weapon_stats(1).mag;
         let mut inputs = HashMap::new();
         inputs.insert(
@@ -4354,12 +4696,14 @@ mod tests {
 
         // Negative control: the same shot from high enough up survives the
         // tick, so the assertion above is about the floor and not about
-        // steep shots failing to spawn at all.
+        // steep shots failing to spawn at all. Forty metres, because at the
+        // clamp a 280 m/s round drops 38 m in one tick.
         let mut sim = Sim::new(25);
         sim.obstacles.clear();
         sim.pads.clear();
         sim.add_player(0);
-        sim.players[0].y = 8.0;
+        sim.players[0].y = 40.0;
+        sim.players[0].pos = [-20.0, 0.0];
         step_with(&mut sim, &inputs);
         assert_eq!(
             sim.bullets.len(),
@@ -4731,51 +5075,86 @@ mod tests {
 
     #[test]
     fn a_steep_headshot_still_registers() {
-        // The regression guard for the sub-stepping threshold.
+        // The regression guard for the exact head band, on every bullet
+        // weapon in the table.
         //
-        // Vertical travel in one tick is tan(pitch) * BULLET_SPEED * FIXED_DT
-        // = 0.567 * tan(pitch). The walk used to trigger only when that
-        // exceeded the whole BODY band (2.14 m), i.e. past ~1.31 rad. A head
-        // band of 0.22 is straddled from just 0.37 rad, so between those two
-        // angles consecutive samples could step clean over a head while the
-        // guard stayed asleep - and the headshot became a coin flip across
-        // the entire range of ordinary downward aiming.
+        // Vertical travel in one tick is tan(pitch) * speed * FIXED_DT: at
+        // 280 m/s and a 45 degree drop that is 4.67 m, at the sniper's 900
+        // it is 15 m, against a head band 0.30 tall. The v18 sweep walked
+        // the tick in at most 32 samples and could only pass this up to
+        // about 60 m/s, which is what kept the sniper off its real speed.
+        // The v20 sweep intersects the segment with the circle and reads
+        // the round's height over the overlap as an interval, so there is
+        // no speed at which the head falls between two samples: this is
+        // the test a sampled band could not pass.
         //
-        // Fire down from a container top through the target's head. At this
-        // angle one tick covers far more than the head band, so this only
-        // passes because the walk is keyed on the SMALLEST zone under test.
+        // Fire down from a container top through the target's head, aimed
+        // so the round's line crosses 1.60, the middle of the head band,
+        // at the target's centre.
         let from_y = 3.0;
         let gap = 3.0;
-        // Aim so the round arrives at ~1.60, the middle of the head band.
         let drop = (from_y + EYE_STAND) - 1.60;
         let pitch = -(drop / gap).atan();
-        let per_tick = pitch.tan().abs() * BULLET_SPEED * FIXED_DT;
-        assert!(
-            per_tick > HEAD_H,
-            "test must actually exercise the straddle case: {per_tick} vs {HEAD_H}"
-        );
-        assert!(
-            per_tick < BODY_H_STAND + 2.0 * BULLET_R,
-            "and must sit BELOW the old body-band trigger, or it proves nothing"
-        );
-        assert!(
-            one_shot_kills(from_y, gap, pitch, false),
-            "a steep round through the head must still be a headshot"
-        );
-        // And on the sniper, whose 60 m/s is the fastest round in the
-        // table: at MAX_PITCH the walk clamps at 32 samples and 60 gives
-        // 0.26 m per sample, under HEAD_H. This is the number that kept the
-        // sniper off 90.
-        let sniper = weapon_stats(6);
-        let per_tick = pitch.tan().abs() * sniper.speed * FIXED_DT;
-        assert!(
-            per_tick > HEAD_H,
-            "the sniper must straddle too: {per_tick}"
-        );
-        assert!(
-            one_shot_kills_with(6, from_y, gap, pitch, false),
-            "a steep sniper round through the head must still be a headshot"
-        );
+        for weapon in 1..=WEAPON_COUNT {
+            let stats = weapon_stats(weapon);
+            if stats.kind != Projectile::Bullet {
+                continue;
+            }
+            let per_tick = pitch.tan().abs() * stats.speed * FIXED_DT;
+            assert!(
+                per_tick > HEAD_H,
+                "{}: the tick must straddle the head band: {per_tick} vs {HEAD_H}",
+                stats.name
+            );
+            assert!(
+                one_shot_kills_with(weapon, from_y, gap, pitch, false),
+                "{}: a steep round through the head must be a headshot at {} m/s",
+                stats.name,
+                stats.speed
+            );
+        }
+    }
+
+    #[test]
+    fn a_head_hit_is_found_wherever_along_the_tick_it_happens() {
+        // The sniper's tick is 15 m long. A head at any point along it,
+        // from just past the muzzle to just short of the segment's end, is
+        // found on that one tick: the overlap interval is solved, not
+        // sampled, so where on the segment the head sits cannot matter.
+        // Each shot is aimed to cross 1.60 at the target's centre.
+        let from_y = 3.0;
+        for gap in [1.5, 3.0, 6.0, 9.0, 12.0, 14.0] {
+            let drop = (from_y + EYE_STAND) - 1.60;
+            let pitch = -(drop / gap).atan();
+            assert!(
+                pitch.abs() <= MAX_PITCH,
+                "gap {gap}: the aim {pitch} is past the clamp"
+            );
+            let mut sim = open_sim(11, 2);
+            arm(&mut sim.players[0], 6);
+            let mut inputs = HashMap::new();
+            inputs.insert(
+                0,
+                PlayerIn {
+                    ads: true,
+                    ..shot(0, [1.0, 0.0], pitch)
+                },
+            );
+            hold(&mut sim, &[(0, [0.0, 0.0], from_y), (1, [gap, 0.0], 0.0)]);
+            step_with(&mut sim, &inputs);
+            assert_eq!(
+                sim.hits,
+                vec![(0, 1, MAX_HP, true)],
+                "gap {gap}: a headshot on the tick the round left"
+            );
+            let s = sim.shots.first().expect("the round ended in the body");
+            assert_eq!((s.hit, s.victim), (SHOT_BODY, 1), "gap {gap}");
+            assert!(
+                s.to[0] > 0.2 && s.to[0] < gap,
+                "gap {gap}: the contact {:?} is between the muzzle and the centre",
+                s.to
+            );
+        }
     }
 
     // ---- v13: an obstacle with a bottom --------------------------------
@@ -5863,6 +6242,9 @@ mod tests {
             u64::from(b.y.to_bits()),
             u64::from(b.vy.to_bits()),
             u64::from(b.ttl.to_bits()),
+            u64::from(b.from[0].to_bits()),
+            u64::from(b.from[1].to_bits()),
+            u64::from(b.from[2].to_bits()),
             u64::from(b.owner),
             u64::from(b.dmg),
             u64::from(b.delay),
@@ -6257,16 +6639,18 @@ mod tests {
 
     #[test]
     fn a_revolver_slug_drops_under_gravity_and_keeps_its_horizontal_speed() {
-        // Level fire from eight metres up so the slug has a second of air.
-        // After sixty ticks the horizontal speed is exactly the table's and
-        // the drop is a half g t squared (semi-implicit Euler lands a hair
-        // over: 1.525 for 1.5).
+        // Level fire from eight metres up, from the west wall so the slug
+        // has the arena's width of air: at 7.5 m a tick it meets the east
+        // wall on the sixth tick, so it is read after five. The horizontal
+        // speed is exactly the table's, and the drop is semi-implicit
+        // Euler's g dt^2 n(n+1)/2, which a half g t^2 lands a hair under.
         let mut sim = open_sim(1, 1);
         arm(&mut sim.players[0], 5);
         let stats = weapon_stats(5);
         let mut inputs = HashMap::new();
         let mut eye = 0.0f32;
-        for t in 0..60u32 {
+        let ticks = 5u32;
+        for t in 0..ticks {
             hold(&mut sim, &[(0, [-20.0, 0.0], 8.0)]);
             inputs.insert(0, shot(t, [1.0, 0.0], 0.0));
             step_with(&mut sim, &inputs);
@@ -6281,9 +6665,10 @@ mod tests {
         let h_speed = (b.vel[0] * b.vel[0] + b.vel[1] * b.vel[1]).sqrt();
         assert_eq!(h_speed.to_bits(), stats.speed.to_bits());
         let fell = eye - b.y;
-        let expected = 0.5 * stats.gravity.abs() * 1.0;
+        let n = ticks as f32;
+        let expected = stats.gravity.abs() * FIXED_DT * FIXED_DT * n * (n + 1.0) / 2.0;
         assert!(
-            (fell - expected).abs() < 0.03,
+            (fell - expected).abs() < 1e-3,
             "fell {fell}, expected {expected}"
         );
         assert!(b.vy < 0.0, "the slug is falling");
@@ -6292,13 +6677,14 @@ mod tests {
     #[test]
     fn a_zero_gravity_round_flies_the_old_straight_line() {
         // A sidearm round's height each tick is the v17 formula, `y += vy
-        // dt`, bit for bit: a zero gravity row adds exactly zero.
+        // dt`, bit for bit: a zero gravity row adds exactly zero. Eight
+        // ticks from the west wall: the ninth would meet the east wall.
         let mut sim = open_sim(1, 1);
         let pitch = 0.3f32;
         let vy = pitch.tan() * BULLET_SPEED;
         let mut inputs = HashMap::new();
         let mut y = 0.0f32;
-        for t in 0..40u32 {
+        for t in 0..8u32 {
             hold(&mut sim, &[(0, [-20.0, 0.0], 8.0)]);
             inputs.insert(0, shot(t, [1.0, 0.0], pitch));
             step_with(&mut sim, &inputs);
@@ -6349,26 +6735,38 @@ mod tests {
     fn a_sniper_round_passes_through_one_body_and_hits_the_next() {
         // Three targets on a line 3 m apart: the first two lose two points
         // each, the third is untouched, because pierce 1 is two bodies.
-        let (sim, hp) = sniper_line(Vec::new(), &[3.0, 6.0, 9.0], 30);
+        // All on the first tick, at 15 m a tick, and the two events chain:
+        // the second body's segment starts where the first's ended.
+        let (sim, hp) = sniper_line(Vec::new(), &[3.0, 6.0, 9.0], 1);
         assert_eq!(hp, vec![1, 1, MAX_HP]);
         assert!(
             sim.bullets.is_empty(),
             "the round stopped in the second body"
         );
+        let shots = &sim.shots;
+        assert_eq!(shots.len(), 2, "{shots:?}");
+        assert_eq!((shots[0].hit, shots[0].victim), (SHOT_BODY, 1));
+        assert_eq!((shots[1].hit, shots[1].victim), (SHOT_BODY, 2));
+        assert!(
+            same_point(shots[1].from, shots[0].to),
+            "the events chain end to end: {shots:?}"
+        );
+        assert!(shots[0].to[0] < shots[1].to[0], "in segment order");
     }
 
     #[test]
     fn two_bodies_on_one_segment_are_both_hit() {
-        // Two bodies inside one tick's metre of sniper travel: both are hit
-        // on the SAME tick, which is what the loop continuing after a
-        // pierced hit buys. A break would have skipped the second for good,
-        // because the next tick's segment starts beyond it.
+        // Two bodies ten metres apart inside one tick's fifteen metres of
+        // sniper travel: both are hit on the SAME tick, which is what the
+        // loop continuing after a pierced hit buys. A break would have
+        // skipped the second for good, because the next tick's segment
+        // starts beyond it.
         let mut sim = open_sim(1, 3);
         arm(&mut sim.players[0], 6);
         let spots = [
             (0, [0.0, 0.0], 0.0),
             (1, [4.05, 0.0], 0.0),
-            (2, [4.15, 0.0], 0.0),
+            (2, [14.05, 0.0], 0.0),
         ];
         let mut inputs = HashMap::new();
         let mut both_on_one_tick = false;
@@ -6394,9 +6792,11 @@ mod tests {
 
     #[test]
     fn a_pierced_body_is_not_hit_twice() {
-        // A body is 1.64 m across to a sniper round doing a metre a tick,
-        // so the round overlaps it on consecutive ticks; the mask is what
-        // makes that one hit.
+        // A body is 1.64 m across; at v18's metre a tick the round
+        // overlapped it on consecutive ticks and the mask was what made
+        // that one hit. At 15 m a tick the segment leaves the body the
+        // tick it entered, and the mask still stands for a round whose
+        // next segment starts inside a body (a reflected one, say).
         let (sim, hp) = sniper_line(Vec::new(), &[5.0], 30);
         assert_eq!(hp, vec![1]);
         assert_eq!(player(&sim, 1).death_count, 0);
@@ -6413,9 +6813,10 @@ mod tests {
 
     #[test]
     fn a_reflected_sniper_round_no_longer_pierces() {
-        // Caught at 5 m (tick 4 of a metre a tick) and read on tick 6, on
-        // its way back: the pierce and the mask are gone, the weapon stays.
-        let sim = shield_duel_with(6, 5.0, [-1.0, 0.0], true, 6);
+        // Caught at 20 m (on tick 1 of 15 m a tick) and read after tick 2,
+        // on its way back: the pierce and the mask are gone, the weapon
+        // stays.
+        let sim = shield_duel_with(6, 20.0, [-1.0, 0.0], true, 3);
         let b = sim.bullets.first().expect("the round is coming back");
         assert_eq!(b.owner, 1, "caught");
         assert!(b.vel[0] < 0.0);
@@ -6423,17 +6824,17 @@ mod tests {
         assert_eq!(b.pierce, 0, "a caught round pierces nothing");
         assert_eq!(b.hit_mask, 0);
         // The sniper round (2 damage) came home: a body hit, not a kill.
-        let sim = shield_duel_with(6, 5.0, [-1.0, 0.0], true, 20);
+        let sim = shield_duel_with(6, 20.0, [-1.0, 0.0], true, 20);
         assert_eq!(player(&sim, 0).hp, MAX_HP - 2);
         assert_eq!(player(&sim, 1).hp, MAX_HP);
     }
 
     #[test]
     fn a_reflected_round_keeps_its_weapon_and_gravity() {
-        // A revolver slug (0.5 m a tick, so caught around tick 8) read on
-        // ticks 10 and 11: still a revolver slug, still falling faster.
-        let a = shield_duel_with(5, 5.0, [-1.0, 0.0], true, 10);
-        let b = shield_duel_with(5, 5.0, [-1.0, 0.0], true, 11);
+        // A revolver slug (7.5 m a tick, so caught at 20 m on tick 2) read
+        // after ticks 3 and 4: still a revolver slug, still falling faster.
+        let a = shield_duel_with(5, 20.0, [-1.0, 0.0], true, 4);
+        let b = shield_duel_with(5, 20.0, [-1.0, 0.0], true, 5);
         let (ra, rb) = (
             a.bullets.first().expect("in flight at 10"),
             b.bullets.first().expect("in flight at 11"),
@@ -6505,9 +6906,11 @@ mod tests {
     }
 
     /// A rocket fired level along +x into a container face at x 5, with
-    /// targets wherever the test puts them. The rocket does 0.4 m a tick
-    /// from a muzzle at 0.2, so its last free point is x 4.6 and that is
-    /// where it goes off. Returns the sim after the blast.
+    /// targets wherever the test puts them. The world pass ends the rocket
+    /// where its segment enters the container, the face at x 5, and the
+    /// blast is pushed back off it by `BLAST_STANDOFF` so the splash's
+    /// line-of-sight test does not start on the face. Returns the sim
+    /// after the blast.
     fn rocket_into_the_wall(targets: &[[f32; 2]], delay: u16, dodge_to: Option<[f32; 2]>) -> Sim {
         let mut sim = open_sim(1, 1 + targets.len() as u8);
         sim.obstacles = vec![Obstacle::boxed(
@@ -6547,8 +6950,20 @@ mod tests {
                 assert_eq!(sim.blasts.len(), 1);
                 let ([x, y, z], owner) = sim.blasts[0];
                 assert!(
-                    (x - 4.6).abs() < 1e-3,
-                    "went off at x {x}, not the last free point"
+                    (x - (5.0 - BLAST_STANDOFF)).abs() < 1e-3,
+                    "went off at x {x}, not on the face"
+                );
+                let s = sim
+                    .shots
+                    .iter()
+                    .find(|s| s.hit == SHOT_COVER)
+                    .expect("the shot ended on cover");
+                assert_eq!(s.cover, Cover::Container.index());
+                assert_eq!(s.normal, [-1, 0, 0]);
+                assert!(
+                    (s.to[0] - 5.0).abs() < 1e-3,
+                    "the event is on the face: {:?}",
+                    s.to
                 );
                 assert!(y > 1.0 && y < EYE_STAND, "at {y}, a little under the eye");
                 assert!(z.abs() < 1e-6);
@@ -6654,8 +7069,11 @@ mod tests {
         };
         let (ttl, _) = run([-20.0, 0.0], 8.0, 0.0, true);
         assert!(ttl[1] > 8.0, "went off in the air at {ttl:?}");
+        // One tick of flight, with the sustainer's first charge on it.
+        let stats = weapon_stats(7);
+        let first_tick = (stats.speed + stats.accel * FIXED_DT) * FIXED_DT;
         assert!(
-            (ttl[0] - (-20.0 + 0.2 + 0.4)).abs() < 1e-3,
+            (ttl[0] - (-20.0 + 0.2 + first_tick)).abs() < 1e-3,
             "after one tick of flight: {ttl:?}"
         );
         let (floor, _) = run([0.0, 0.0], 0.0, -1.0, false);
@@ -6665,6 +7083,712 @@ mod tests {
         let lim = ARENA_HALF - weapon_stats(7).radius;
         assert_eq!(wall[0].to_bits(), lim.to_bits(), "{wall:?}");
         assert!(wall[1] > 8.0, "{wall:?}");
+    }
+
+    #[test]
+    fn a_fast_round_does_not_tunnel_through_a_wall() {
+        // The sniper's 900 m/s round crosses 15 m a tick. Fired level at a
+        // 0.4 m trench wall three metres away with a body ten metres
+        // behind it: the round ends on the wall's near face, the event
+        // says cover and names the wall, the mark's normal faces the
+        // shooter, and the body is untouched. The v18 sweep tested cover
+        // at the tick's end point, 12 m past the wall, and would have
+        // hit the body.
+        let wall = Obstacle::boxed(Cover::Wall, [3.0, -2.0], [3.4, 2.0], 0.0, 2.6);
+        let (sim, hp) = sniper_line(vec![wall], &[13.0], 1);
+        assert_eq!(hp, vec![MAX_HP], "the body behind the wall is untouched");
+        assert!(sim.bullets.is_empty(), "the round is gone");
+        assert_eq!(sim.shots.len(), 1, "{:?}", sim.shots);
+        let s = sim.shots[0];
+        assert_eq!((s.owner, s.weapon), (0, 6));
+        assert_eq!(s.hit, SHOT_COVER);
+        assert_eq!(s.cover, Cover::Wall.index());
+        assert_eq!(s.victim, SHOT_NONE);
+        assert!(
+            (s.to[0] - 3.0).abs() < 0.05,
+            "stopped on the near face: {:?}",
+            s.to
+        );
+        assert!((s.to[1] - EYE_STAND).abs() < 1e-3 && s.to[2].abs() < 1e-6);
+        assert_eq!(s.normal, [-1, 0, 0], "the face the round came in through");
+        assert!(
+            (s.from[0] - 0.2).abs() < 1e-6 && (s.from[1] - EYE_STAND).abs() < 1e-3,
+            "from the muzzle: {:?}",
+            s.from
+        );
+        // Control: with the wall gone the same round reaches the body.
+        let (_, hp) = sniper_line(Vec::new(), &[13.0], 1);
+        assert_eq!(hp, vec![1]);
+    }
+
+    #[test]
+    fn the_first_box_on_the_segment_wins() {
+        // A crate at 5 and a container at 10 on the line, listed container
+        // first: the round ends on the crate's near face and the event
+        // names the crate, not the first box in the list and not the box
+        // the segment's end lies past. The sniper's 15 m tick reaches
+        // beyond both.
+        let crate_box = Obstacle::boxed(Cover::Crate, [5.0, -1.0], [6.0, 1.0], 0.0, 1.5);
+        let container = Obstacle::boxed(Cover::Container, [10.0, -1.0], [11.0, 1.0], 0.0, 2.6);
+        for order in [vec![container, crate_box], vec![crate_box, container]] {
+            let (sim, _) = sniper_line(order, &[], 1);
+            assert_eq!(sim.shots.len(), 1);
+            let s = sim.shots[0];
+            assert_eq!(s.hit, SHOT_COVER);
+            assert_eq!(s.cover, Cover::Crate.index(), "{s:?}");
+            assert!((s.to[0] - 5.0).abs() < 1e-3, "{:?}", s.to);
+            assert_eq!(s.normal, [-1, 0, 0]);
+        }
+    }
+
+    #[test]
+    fn the_rocket_reaches_its_sustainer_speed_in_half_a_second() {
+        // The horizontal speed climbs from the table's 120 by 360 m/s^2,
+        // charged once a tick before the segment like gravity, and caps at
+        // 300 on the thirtieth tick. The rocket is held at the origin
+        // between ticks so the wall never ends it: in the arena the cap
+        // lies 105 m out, beyond any wall, which the row's comment says.
+        let mut sim = open_sim(1, 1);
+        arm(&mut sim.players[0], 7);
+        let stats = weapon_stats(7);
+        let mut inputs = HashMap::new();
+        let mut speeds = Vec::new();
+        for t in 0..40u32 {
+            hold(&mut sim, &[(0, [0.0, 0.0], 8.0)]);
+            inputs.insert(0, shot(t, [1.0, 0.0], 0.0));
+            step_with(&mut sim, &inputs);
+            let b = sim.bullets.first_mut().expect("the rocket is in flight");
+            speeds.push((b.vel[0] * b.vel[0] + b.vel[1] * b.vel[1]).sqrt());
+            assert_eq!(b.vel[1], 0.0, "tick {t}: the direction is kept");
+            b.pos = [0.0, 0.0];
+            b.y = 8.0;
+        }
+        for (t, &s) in speeds.iter().enumerate() {
+            let charges = t as f32 + 1.0;
+            let expected = (stats.speed + stats.accel * FIXED_DT * charges).min(stats.speed_max);
+            assert!((s - expected).abs() < 1e-2, "tick {t}: {s} vs {expected}");
+        }
+        assert!(speeds[28] < stats.speed_max - 1.0, "not yet at tick 29");
+        assert!(
+            (speeds[29] - stats.speed_max).abs() < 1e-3,
+            "at half a second the cap: {}",
+            speeds[29]
+        );
+        assert!(
+            (speeds[39] - stats.speed_max).abs() < 1e-3,
+            "and it stays there: {}",
+            speeds[39]
+        );
+        // And a bullet row has no motor: the sidearm's speed is the same
+        // bits on every tick it flies.
+        let mut sim = open_sim(1, 1);
+        let mut inputs = HashMap::new();
+        for t in 0..5u32 {
+            hold(&mut sim, &[(0, [-20.0, 0.0], 8.0)]);
+            inputs.insert(0, shot(t, [1.0, 0.0], 0.0));
+            step_with(&mut sim, &inputs);
+            let b = sim.bullets.first().expect("in flight");
+            assert_eq!(b.vel[0].to_bits(), BULLET_SPEED.to_bits(), "tick {t}");
+        }
+    }
+
+    #[test]
+    fn every_round_ends_in_exactly_one_shot_event_per_segment() {
+        // Four players on the yard for 400 ticks of the v18 script with
+        // the sidearm only (the blocks and pads removed, so nothing
+        // pierces and nothing is a rocket) and the reload key ignored (the
+        // script's reload, against the sidearm's bottomless reserve, would
+        // spend most of the run reloading): on every tick the rounds that
+        // left the list are exactly the events that end a segment for
+        // good; a reflection leaves the round in the list and starts its
+        // next segment where the event ended; and every event is a finite
+        // segment on or inside the arena with the fields its kind says.
+        let mut level = Level::freight_yard();
+        level.obstacles.retain(|o| o.kind != Cover::Loot);
+        level.pads.clear();
+        let mut sim = Sim::from_level(&level, 7, GameMode::Ffa);
+        for id in 0..4 {
+            sim.add_player(id);
+        }
+        let mut segments = 0usize;
+        let mut kinds = [0usize; 6];
+        for tick in 0..400u64 {
+            let before = sim.bullets.len();
+            let ammo: Vec<u8> = sim.players.iter().map(|p| p.ammo).collect();
+            sim.step(&|id| PlayerIn {
+                reload: false,
+                ..v18_script(tick, id)
+            });
+            // A magazine only ever drops by the rounds that left it; a
+            // refill or a respawn raises it and counts as nothing.
+            let launched: usize = sim
+                .players
+                .iter()
+                .zip(&ammo)
+                .map(|(p, &was)| usize::from(was.saturating_sub(p.ammo)))
+                .sum();
+            let removed = before + launched - sim.bullets.len();
+            let ended = sim.shots.iter().filter(|s| s.hit != SHOT_SHIELD).count();
+            assert_eq!(removed, ended, "tick {tick}: {:?}", sim.shots);
+            for s in &sim.shots {
+                assert_eq!(s.weapon, SIDEARM, "tick {tick}: {s:?}");
+                assert!(s.owner < 4, "tick {tick}: {s:?}");
+                for k in 0..3 {
+                    assert!(
+                        s.from[k].is_finite() && s.to[k].is_finite(),
+                        "tick {tick}: {s:?}"
+                    );
+                }
+                assert!(
+                    s.to[0].abs() <= ARENA_HALF && s.to[2].abs() <= ARENA_HALF && s.to[1] >= 0.0,
+                    "tick {tick}: {s:?}"
+                );
+                match s.hit {
+                    SHOT_COVER => {
+                        assert_ne!(s.cover, SHOT_NONE, "tick {tick}: {s:?}");
+                        assert_eq!(s.victim, SHOT_NONE, "tick {tick}: {s:?}");
+                        assert_ne!(s.normal, [0, 0, 0], "tick {tick}: {s:?}");
+                    }
+                    SHOT_BODY | SHOT_SHIELD => {
+                        assert_eq!(s.cover, SHOT_NONE, "tick {tick}: {s:?}");
+                        assert!(s.victim < 4 && s.victim != s.owner, "tick {tick}: {s:?}");
+                        assert_eq!(s.normal, [0, 0, 0], "tick {tick}: {s:?}");
+                    }
+                    SHOT_FLOOR => assert_eq!(s.normal, [0, 1, 0], "tick {tick}: {s:?}"),
+                    SHOT_WALL => assert_ne!(s.normal, [0, 0, 0], "tick {tick}: {s:?}"),
+                    SHOT_EXPIRED => assert_eq!(s.normal, [0, 0, 0], "tick {tick}: {s:?}"),
+                    other => panic!("tick {tick}: unknown kind {other}"),
+                }
+                if s.hit == SHOT_SHIELD {
+                    assert!(
+                        sim.bullets
+                            .iter()
+                            .any(|b| same_point(b.from, s.to) && b.owner == s.victim),
+                        "tick {tick}: the caught round's next segment starts at the plate"
+                    );
+                }
+                kinds[usize::from(s.hit)] += 1;
+            }
+            segments += sim.shots.len();
+        }
+        // Eight rounds at 0.18 s, then 1.1 s of auto-reload, on half the
+        // ticks: about twenty rounds a player over the run.
+        assert!(segments > 60, "the script fired {segments} segments");
+        assert!(
+            kinds[usize::from(SHOT_COVER)] > 0 && kinds[usize::from(SHOT_FLOOR)] > 0,
+            "{kinds:?}"
+        );
+        assert!(
+            kinds[usize::from(SHOT_WALL)] > 0 || kinds[usize::from(SHOT_EXPIRED)] > 0,
+            "{kinds:?}"
+        );
+
+        // A reflection, pinned on its own: the plate ends one segment and
+        // the round's next starts there, owned by the catcher.
+        let sim = shield_duel(20.0, [-1.0, 0.0], true, 5);
+        assert_eq!(sim.shots.len(), 1, "{:?}", sim.shots);
+        let s = sim.shots[0];
+        assert_eq!(
+            (s.hit, s.victim, s.owner),
+            (SHOT_SHIELD, 1, 0),
+            "the shooter's segment"
+        );
+        let b = sim.bullets.first().expect("still flying");
+        assert!(same_point(b.from, s.to), "{:?} vs {:?}", b.from, s.to);
+        assert_eq!(b.owner, 1);
+        assert!(
+            (s.to[0] - (20.0 - hit_radius(false) - BULLET_R)).abs() < 1e-3,
+            "{:?}",
+            s.to
+        );
+    }
+
+    /// What `Sim.hits` holds: (shooter, victim, damage, head), as the
+    /// drivers below collect it across ticks.
+    type HitList = Vec<(u8, u8, u8, bool)>;
+
+    #[test]
+    fn the_table_flies_real_muzzle_velocities() {
+        // Section 3.1 of the v20 plan, pinned row by row: the muzzle
+        // velocity, the range the ttl spells, the gravity, the cap and the
+        // pierce of every bullet, and the rocket's booster, sustainer and
+        // cap. These are the numbers that ship; a retune is a deliberate
+        // edit here and in the plan, never a drift.
+        let rows: [(u8, f32, f32, f32, u8); 6] = [
+            (SIDEARM, 280.0, 60.0, 0.0, 0),
+            (2, 380.0, 40.0, 0.0, 0),
+            (3, 715.0, 80.0, 0.0, 0),
+            (4, 880.0, 80.0, 0.0, 0),
+            (5, 450.0, 60.0, -9.81, 0),
+            (6, 900.0, 120.0, -9.81, 1),
+        ];
+        for (id, speed, range, gravity, pierce) in rows {
+            let s = weapon_stats(id);
+            assert_eq!(s.speed.to_bits(), speed.to_bits(), "{}: speed", s.name);
+            assert!(
+                (s.speed * s.ttl - range).abs() < 1e-3,
+                "{}: range {} is not {range}",
+                s.name,
+                s.speed * s.ttl
+            );
+            assert_eq!(
+                s.gravity.to_bits(),
+                gravity.to_bits(),
+                "{}: gravity",
+                s.name
+            );
+            assert_eq!(s.accel.to_bits(), 0.0f32.to_bits(), "{}: a motor", s.name);
+            assert_eq!(s.speed_max.to_bits(), speed.to_bits(), "{}: cap", s.name);
+            assert_eq!(s.pierce, pierce, "{}: pierce", s.name);
+            assert_eq!(s.kind, Projectile::Bullet, "{}", s.name);
+        }
+        let r = weapon_stats(7);
+        assert_eq!(r.kind, Projectile::Rocket);
+        assert_eq!(
+            [r.speed, r.accel, r.speed_max, r.ttl, r.gravity].map(f32::to_bits),
+            [120.0f32, 360.0, 300.0, 5.0, -3.0].map(f32::to_bits)
+        );
+        assert!(
+            ((r.speed_max - r.speed) / r.accel - 0.5).abs() < 1e-6,
+            "the sustainer takes half a second to reach the cap"
+        );
+        // The sidearm's constants are the sidearm's row, and a round flies
+        // twelve full segments of 4.67 m before its thirteenth charge of
+        // ttl ends it: 56 m in the sim against 60 m in the table, the
+        // tick's worth the expiry charge takes, as it always has.
+        assert_eq!(BULLET_TTL.to_bits(), (60.0f32 / BULLET_SPEED).to_bits());
+        assert!((BULLET_SPEED * FIXED_DT - 4.6667).abs() < 1e-3);
+        assert_eq!((BULLET_TTL / FIXED_DT).ceil() as u32, 13);
+        assert!((weapon_stats(6).speed * FIXED_DT - 15.0).abs() < 1e-4);
+        // The bullet cap: rounds in flight from a held trigger is the ttl
+        // over the cooldown, rounded up, per row. Every row is inside the
+        // ten the cap allows with room to spare; the AK, revolver and
+        // sniper never have two rounds up at once.
+        let in_flight: Vec<usize> = (1..=WEAPON_COUNT)
+            .map(|id| {
+                let s = weapon_stats(id);
+                (s.ttl / s.cooldown).ceil() as usize
+            })
+            .collect();
+        assert_eq!(in_flight, vec![2, 2, 1, 2, 1, 1, 5]);
+        assert!(in_flight.iter().all(|&n| n <= MAX_BULLETS_PER_PLAYER));
+    }
+
+    /// One shooter held at `spot` and `y`, firing once along `aim` at
+    /// `pitch` on tick 0 against `obstacles`, run for `ticks`: every shot
+    /// event with the tick it landed on.
+    fn one_shot(
+        obstacles: Vec<Obstacle>,
+        spot: [f32; 2],
+        y: f32,
+        aim: [f32; 2],
+        pitch: f32,
+        ticks: u32,
+    ) -> Vec<(u32, ShotEvent)> {
+        let mut sim = open_sim(3, 1);
+        sim.obstacles = obstacles;
+        let mut inputs = HashMap::new();
+        let mut out = Vec::new();
+        for t in 0..ticks {
+            hold(&mut sim, &[(0, spot, y)]);
+            inputs.insert(0, shot(t, aim, pitch));
+            step_with(&mut sim, &inputs);
+            out.extend(sim.shots.iter().map(|&s| (t, s)));
+        }
+        assert!(sim.bullets.is_empty(), "the round is still in flight");
+        out
+    }
+
+    #[test]
+    fn the_world_pass_ends_a_round_at_the_first_crossing_of_every_kind() {
+        // The entry-parameter pass, exit by exit: the floor, a box, each
+        // arena wall and the expiry, every one reporting exactly one
+        // event, on the tick the round ended, with `to` on the surface it
+        // met and on the round's own line. Where two things lie on one
+        // segment the nearer one is the answer and the box under the
+        // segment's end point is never consulted.
+        let lim = ARENA_HALF - BULLET_R;
+        let crate_box = Obstacle::boxed(Cover::Crate, [4.0, -1.0], [5.5, 1.0], 0.0, 1.5);
+        let wall = Obstacle::boxed(Cover::Wall, [1.0, -1.0], [1.4, 1.0], 0.0, 2.6);
+        let pitch = -0.5f32;
+        // Down at the floor with a crate under the segment's end: the
+        // floor is crossed at 2.65 m out, the crate would be entered at
+        // 3.8, and the floor is the answer.
+        let shots = one_shot(vec![crate_box], [0.0, 0.0], 0.0, [1.0, 0.0], pitch, 3);
+        assert_eq!(shots.len(), 1, "{shots:?}");
+        let (t, s) = shots[0];
+        assert_eq!(t, 0, "on the tick it was fired");
+        assert_eq!(
+            (s.hit, s.cover, s.victim),
+            (SHOT_FLOOR, SHOT_NONE, SHOT_NONE)
+        );
+        assert_eq!(s.normal, [0, 1, 0]);
+        assert_eq!(s.to[1].to_bits(), 0.0f32.to_bits(), "on the floor exactly");
+        let reach = 0.2 + EYE_STAND / pitch.abs().tan();
+        assert!((s.to[0] - reach).abs() < 1e-3, "{:?} vs {reach}", s.to);
+        assert_eq!(s.to[2].to_bits(), 0.0f32.to_bits());
+        assert!((s.from[0] - 0.2).abs() < 1e-6 && (s.from[1] - EYE_STAND).abs() < 1e-3);
+        // The same shot with a wall 0.8 m out: entered on its near face
+        // at the height the line has there, before the floor.
+        let shots = one_shot(vec![wall], [0.0, 0.0], 0.0, [1.0, 0.0], pitch, 3);
+        assert_eq!(shots.len(), 1, "{shots:?}");
+        let (t, s) = shots[0];
+        assert_eq!(t, 0);
+        assert_eq!(s.hit, SHOT_COVER);
+        assert_eq!((s.cover, s.victim), (Cover::Wall.index(), SHOT_NONE));
+        assert_eq!(s.normal, [-1, 0, 0]);
+        let at_y = EYE_STAND - 0.8 * pitch.abs().tan();
+        assert!(
+            (s.to[0] - 1.0).abs() < 1e-3 && (s.to[1] - at_y).abs() < 1e-3,
+            "{:?}",
+            s.to
+        );
+        // Each arena wall, from the air so nothing else is on the line:
+        // the crossing coordinate is the wall exactly, the normal points
+        // back in, and level fire keeps its height bit for bit.
+        for (spot, aim, axis, sign) in [
+            ([20.0, 0.0], [1.0, 0.0], 0, 1.0f32),
+            ([-20.0, 0.0], [-1.0, 0.0], 0, -1.0),
+            ([0.0, 20.0], [0.0, 1.0], 2, 1.0),
+            ([0.0, -20.0], [0.0, -1.0], 2, -1.0),
+        ] {
+            let shots = one_shot(Vec::new(), spot, 8.0, aim, 0.0, 3);
+            assert_eq!(shots.len(), 1, "{shots:?}");
+            let (t, s) = shots[0];
+            assert_eq!(t, 0, "{aim:?}");
+            assert_eq!(
+                (s.hit, s.cover, s.victim),
+                (SHOT_WALL, SHOT_NONE, SHOT_NONE)
+            );
+            assert_eq!(
+                s.to[axis].to_bits(),
+                (sign * lim).to_bits(),
+                "{aim:?}: {:?}",
+                s.to
+            );
+            let mut normal = [0i8; 3];
+            normal[axis] = if sign > 0.0 { -1 } else { 1 };
+            assert_eq!(s.normal, normal, "{aim:?}");
+            assert_eq!(s.to[1].to_bits(), s.from[1].to_bits(), "{aim:?}: level");
+            assert_eq!(
+                s.to[2 - axis].to_bits(),
+                0.0f32.to_bits(),
+                "{aim:?}: {:?}",
+                s.to
+            );
+        }
+        // Along the diagonal from a corner the wall is 61 m off and the
+        // round runs out of flight time first: twelve segments of 4.67 m,
+        // the event on the thirteenth tick, where the round faded.
+        let d = std::f32::consts::FRAC_1_SQRT_2;
+        let shots = one_shot(Vec::new(), [-20.0, -20.0], 8.0, [d, d], 0.0, 20);
+        assert_eq!(shots.len(), 1, "{shots:?}");
+        let (t, s) = shots[0];
+        assert_eq!(t, 12);
+        assert_eq!(
+            (s.hit, s.cover, s.victim),
+            (SHOT_EXPIRED, SHOT_NONE, SHOT_NONE)
+        );
+        assert_eq!(s.normal, [0, 0, 0]);
+        let flown = ((s.to[0] - s.from[0]).powi(2) + (s.to[2] - s.from[2]).powi(2)).sqrt();
+        assert!(
+            (flown - 12.0 * BULLET_SPEED * FIXED_DT).abs() < 0.02,
+            "{flown}"
+        );
+        assert_eq!(s.to[1].to_bits(), s.from[1].to_bits());
+        assert!((s.from[0] - (-20.0 + 0.2 * d)).abs() < 1e-5, "{:?}", s.from);
+    }
+
+    #[test]
+    fn a_tracer_ends_on_the_body_it_hit() {
+        // A body event's `to` is the contact with the body volume: on the
+        // hit circle (`hit_radius + BULLET_R` from the centre) at a height
+        // inside the band, for every bullet row at its real speed, so the
+        // tracer the client draws ends just short of the body and never
+        // in it or past it. A round that enters the circle above the head
+        // is judged where its height came down into the band, so `to` sits
+        // on the top of the volume and not up in the air over it.
+        let rr = hit_radius(false) + BULLET_R;
+        for weapon in 1..=WEAPON_COUNT {
+            let stats = weapon_stats(weapon);
+            if stats.kind != Projectile::Bullet {
+                continue;
+            }
+            let mut sim = open_sim(11, 2);
+            arm(&mut sim.players[0], weapon);
+            let mut inputs = HashMap::new();
+            inputs.insert(
+                0,
+                PlayerIn {
+                    ads: true,
+                    ..shot(0, [1.0, 0.0], 0.0)
+                },
+            );
+            hold(&mut sim, &[(0, [0.0, 0.0], 0.0), (1, [3.0, 0.0], 0.0)]);
+            step_with(&mut sim, &inputs);
+            assert_eq!(sim.hits.len(), 1, "{}: {:?}", stats.name, sim.hits);
+            let s = sim.shots.first().expect("the body event");
+            assert_eq!(
+                (s.hit, s.victim, s.weapon),
+                (SHOT_BODY, 1, weapon),
+                "{}",
+                stats.name
+            );
+            let dist = ((s.to[0] - 3.0).powi(2) + s.to[2].powi(2)).sqrt();
+            assert!(
+                (dist - rr).abs() < 1e-3,
+                "{}: {:?} is {dist} from the centre",
+                stats.name,
+                s.to
+            );
+            assert!(s.to[0] < 3.0, "{}: on the near side", stats.name);
+            assert!(
+                (s.to[1] - EYE_STAND).abs() < 0.01,
+                "{}: {:?}",
+                stats.name,
+                s.to
+            );
+            // The muzzle is 0.2 out along the round's own line, which a hip
+            // cone turns a hair off the x axis.
+            assert!((s.from[0] - 0.2).abs() < 1e-3 && (s.from[1] - EYE_STAND).abs() < 1e-3);
+        }
+        // Steeply down from 6 m up at a body 1.5 m out, aimed at its
+        // centre: the round enters the circle 5.4 m up, far above the
+        // 2.08 top of the volume, and the contact is where it crossed
+        // that top. Through the head, so it kills; the sidearm and the
+        // sniper both, the second at 15 m a tick.
+        let from_y = 6.0;
+        let gap = 1.5;
+        let pitch = -((from_y + EYE_STAND - 1.0) / gap).atan();
+        assert!(pitch.abs() < MAX_PITCH);
+        let hi = BODY_H_STAND + BULLET_R;
+        for weapon in [SIDEARM, 6] {
+            let mut sim = open_sim(11, 2);
+            arm(&mut sim.players[0], weapon);
+            let mut inputs = HashMap::new();
+            inputs.insert(
+                0,
+                PlayerIn {
+                    ads: true,
+                    ..shot(0, [1.0, 0.0], pitch)
+                },
+            );
+            hold(&mut sim, &[(0, [0.0, 0.0], from_y), (1, [gap, 0.0], 0.0)]);
+            step_with(&mut sim, &inputs);
+            assert_eq!(sim.hits, vec![(0, 1, MAX_HP, true)], "weapon {weapon}");
+            let s = sim.shots.first().expect("the body event");
+            assert_eq!((s.hit, s.victim), (SHOT_BODY, 1), "weapon {weapon}");
+            assert!((s.to[1] - hi).abs() < 1e-3, "weapon {weapon}: {:?}", s.to);
+            let x = 0.2 + (s.from[1] - hi) / pitch.abs().tan();
+            assert!(
+                (s.to[0] - x).abs() < 1e-2,
+                "weapon {weapon}: {:?} vs {x}",
+                s.to
+            );
+            let dist = ((s.to[0] - gap).powi(2) + s.to[2].powi(2)).sqrt();
+            assert!(dist < rr, "weapon {weapon}: inside the circle's footprint");
+        }
+    }
+
+    #[test]
+    fn a_point_blank_hit_on_a_body_against_cover_still_lands() {
+        // The body's back is to a container 0.4 m behind its circle and
+        // the sidearm's 4.67 m segment ends inside the container: the
+        // cover gate is judged at the contact, which lies before the box,
+        // so the hit lands and the round's one event is the body. The
+        // v18 sweep would have agreed here (it tested cover at contact
+        // too); what is pinned is that the exact pass did not lose it.
+        // The control puts a thin wall between them instead: cover, and
+        // no hit.
+        let run = |box_: Obstacle| -> (HitList, Vec<ShotEvent>) {
+            let mut sim = open_sim(5, 2);
+            sim.obstacles = vec![box_];
+            let mut inputs = HashMap::new();
+            inputs.insert(0, shot(0, [1.0, 0.0], 0.0));
+            hold(&mut sim, &[(0, [0.0, 0.0], 0.0), (1, [2.0, 0.0], 0.0)]);
+            step_with(&mut sim, &inputs);
+            (sim.hits.clone(), sim.shots.clone())
+        };
+        let behind = Obstacle::boxed(Cover::Container, [3.0, -1.0], [4.0, 1.0], 0.0, 2.6);
+        let (hits, shots) = run(behind);
+        assert_eq!(hits, vec![(0, 1, 1, false)]);
+        assert_eq!(shots.len(), 1, "{shots:?}");
+        assert_eq!((shots[0].hit, shots[0].victim), (SHOT_BODY, 1));
+        let between = Obstacle::boxed(Cover::Wall, [0.6, -1.0], [0.8, 1.0], 0.0, 2.6);
+        let (hits, shots) = run(between);
+        assert!(hits.is_empty(), "{hits:?}");
+        assert_eq!(shots.len(), 1, "{shots:?}");
+        assert_eq!(
+            (shots[0].hit, shots[0].cover),
+            (SHOT_COVER, Cover::Wall.index())
+        );
+        assert!((shots[0].to[0] - 0.6).abs() < 1e-3, "{:?}", shots[0].to);
+    }
+
+    #[test]
+    fn a_rewound_headshot_uses_the_head_where_it_was() {
+        // The target stood on a crate top (feet 1.5 up) while the shooter
+        // took aim, then dropped to the floor. A shooter twelve ticks
+        // behind fires at the head where it was, 3.2 m up: the rewound
+        // body's exact head band is up there and it is a kill, and the
+        // tracer ends up in the air where the shooter saw the head. The
+        // same round in the present passes clean over a body whose top is
+        // at 2.08. The v18 sampled band and the v20 interval must agree on
+        // the rewind reading height and stance with position; this pins
+        // the height at the new speed.
+        let pitch = ((3.2 - EYE_STAND) / 5.8).atan();
+        let run = |delay: u16| -> (HitList, Vec<ShotEvent>) {
+            let mut sim = open_sim(12, 2);
+            let idle = HashMap::new();
+            for _ in 0..15 {
+                hold(&mut sim, &[(0, [0.0, 0.0], 0.0), (1, [6.0, 0.0], 1.5)]);
+                step_with(&mut sim, &idle);
+            }
+            // The drop, and the shot: the round reaches the body on its
+            // second tick, still deep inside the rewind window.
+            let mut inputs = HashMap::new();
+            let (mut hits, mut shots) = (Vec::new(), Vec::new());
+            for t in 0..3u32 {
+                hold(&mut sim, &[(0, [0.0, 0.0], 0.0), (1, [6.0, 0.0], 0.0)]);
+                inputs.insert(
+                    0,
+                    PlayerIn {
+                        delay_ticks: delay,
+                        ..shot(t, [1.0, 0.0], pitch)
+                    },
+                );
+                step_with(&mut sim, &inputs);
+                hits.extend(sim.hits.iter().copied());
+                shots.extend(sim.shots.iter().copied());
+            }
+            (hits, shots)
+        };
+        let (hits, shots) = run(12);
+        assert_eq!(
+            hits,
+            vec![(0, 1, MAX_HP, true)],
+            "judged where the shooter saw it"
+        );
+        let s = shots.first().expect("the body event");
+        assert_eq!((s.hit, s.victim), (SHOT_BODY, 1));
+        assert!(
+            s.to[1] > 1.5 + head_lo(false) - 0.3,
+            "the contact is up at the old head: {:?}",
+            s.to
+        );
+        let (hits, shots) = run(0);
+        assert!(
+            hits.is_empty(),
+            "in the present the body is on the floor: {hits:?}"
+        );
+        assert!(
+            shots.iter().all(|s| s.hit != SHOT_BODY),
+            "nothing was hit: {shots:?}"
+        );
+    }
+
+    #[test]
+    fn a_reflected_round_reports_two_segments() {
+        // The full arc of a caught round, event by event: the shooter's
+        // segment ends on the plate at the holder's circle, owned by the
+        // shooter and naming the holder, and the return segment starts at
+        // that exact point, owned by the holder, and ends in the shooter's
+        // body naming the shooter. Two events, one hit, credited to the
+        // catcher.
+        let mut sim = open_sim(31, 2);
+        let mut inputs = HashMap::new();
+        let mut shots = Vec::new();
+        let mut hits = Vec::new();
+        for t in 0..12u32 {
+            hold(&mut sim, &[(0, [0.0, 0.0], 0.0), (1, [20.0, 0.0], 0.0)]);
+            inputs.insert(0, shot(t, [1.0, 0.0], 0.0));
+            inputs.insert(
+                1,
+                PlayerIn {
+                    aim: [-1.0, 0.0],
+                    shield: true,
+                    ..Default::default()
+                },
+            );
+            step_with(&mut sim, &inputs);
+            shots.extend(sim.shots.iter().map(|&s| (t, s)));
+            hits.extend(sim.hits.iter().copied());
+        }
+        assert!(sim.bullets.is_empty(), "the round came home");
+        assert_eq!(shots.len(), 2, "{shots:?}");
+        let (t_out, out) = shots[0];
+        let (t_back, back) = shots[1];
+        assert_eq!(
+            (out.owner, out.weapon, out.hit, out.victim),
+            (0, SIDEARM, SHOT_SHIELD, 1)
+        );
+        assert_eq!((out.cover, out.normal), (SHOT_NONE, [0, 0, 0]));
+        let plate = 20.0 - hit_radius(false) - BULLET_R;
+        assert!((out.to[0] - plate).abs() < 1e-3, "{:?}", out.to);
+        assert!((out.from[0] - 0.2).abs() < 1e-6, "{:?}", out.from);
+        assert_eq!(
+            (back.owner, back.weapon, back.hit, back.victim),
+            (1, SIDEARM, SHOT_BODY, 0)
+        );
+        assert!(
+            same_point(back.from, out.to),
+            "{:?} vs {:?}",
+            back.from,
+            out.to
+        );
+        let home = hit_radius(false) + BULLET_R;
+        assert!((back.to[0] - home).abs() < 1e-3, "{:?}", back.to);
+        assert!(t_back > t_out, "{t_out} then {t_back}");
+        assert_eq!(hits, vec![(1, 0, 1, false)]);
+        assert_eq!(player(&sim, 0).hp, MAX_HP - 1);
+        assert_eq!(player(&sim, 1).hp, MAX_HP);
+    }
+
+    #[test]
+    fn a_rocket_direct_hit_reports_the_body_and_the_blast_together() {
+        // A rocket into a body five metres out: the tick it lands carries
+        // one `SHOT_BODY` event naming the body and one blast at the very
+        // same point, the contact on the hit circle, so the client's
+        // impact and the blast are drawn in one place. Nothing follows:
+        // the rocket is gone.
+        let mut sim = open_sim(1, 2);
+        arm(&mut sim.players[0], 7);
+        let mut inputs = HashMap::new();
+        let mut landed = None;
+        for t in 0..30u32 {
+            hold(&mut sim, &[(0, [0.0, 0.0], 0.0), (1, [5.0, 0.0], 0.0)]);
+            inputs.insert(0, shot(t, [1.0, 0.0], 0.0));
+            step_with(&mut sim, &inputs);
+            if landed.is_some() {
+                assert!(sim.shots.is_empty() && sim.blasts.is_empty(), "tick {t}");
+                continue;
+            }
+            if sim.blasts.is_empty() {
+                assert!(sim.shots.is_empty(), "tick {t}: {:?}", sim.shots);
+                continue;
+            }
+            assert_eq!(sim.shots.len(), 1, "tick {t}: {:?}", sim.shots);
+            let s = sim.shots[0];
+            assert_eq!((s.owner, s.weapon, s.hit, s.victim), (0, 7, SHOT_BODY, 1));
+            assert_eq!((s.cover, s.normal), (SHOT_NONE, [0, 0, 0]));
+            assert_eq!(sim.blasts.len(), 1);
+            assert!(
+                same_point(sim.blasts[0].0, s.to),
+                "{:?} vs {:?}",
+                sim.blasts[0],
+                s.to
+            );
+            assert_eq!(sim.hits, vec![(0, 1, 3, false)]);
+            let rr = hit_radius(false) + weapon_stats(7).radius;
+            assert!((s.to[0] - (5.0 - rr)).abs() < 1e-3, "{:?}", s.to);
+            assert!(sim.bullets.is_empty(), "the rocket is gone");
+            landed = Some(t);
+        }
+        assert_eq!(
+            landed,
+            Some(1),
+            "2.1 m on the launch tick, the body on the next"
+        );
     }
 
     /// The v18 determinism driver's input table: four players on the yard
@@ -6715,10 +7839,30 @@ mod tests {
         }
     }
 
+    /// Bit equality of two points, so an event's end and a round's start
+    /// are compared exactly and not up to a float tolerance.
+    fn same_point(a: [f32; 3], b: [f32; 3]) -> bool {
+        a.iter().zip(&b).all(|(x, y)| x.to_bits() == y.to_bits())
+    }
+
+    /// Every field of a shot event as bits.
+    fn shot_bits(s: &ShotEvent) -> Vec<u64> {
+        let mut v = vec![u64::from(s.owner), u64::from(s.weapon)];
+        v.extend(s.from.iter().chain(&s.to).map(|x| u64::from(x.to_bits())));
+        v.extend([u64::from(s.hit), u64::from(s.cover), u64::from(s.victim)]);
+        v.extend(
+            s.normal
+                .iter()
+                .map(|&n| u64::from(n.unsigned_abs()) | (u64::from(n < 0) << 8)),
+        );
+        v
+    }
+
     /// Folds one tick of a sim into `h`: every player and every round as
-    /// bits, then the tick's kills, hits, blasts and loot payouts. The
-    /// v18 fields only, in the v18 order, which is what makes the fold
-    /// comparable with a sim that predates v19.
+    /// bits, then the tick's kills, hits, blasts and loot payouts, then
+    /// (since v20) its shot events. The v18 fields in the v18 order, with
+    /// the shots appended last so the prefix of the fold is still the v18
+    /// fold.
     fn fold_tick(h: &mut u64, sim: &Sim) {
         for p in &sim.players {
             fold(h, player_bits(p));
@@ -6755,48 +7899,59 @@ mod tests {
                 .iter()
                 .flat_map(|&(a, b, c)| [u64::from(a), u64::from(b), u64::from(c)]),
         );
+        for s in &sim.shots {
+            fold(h, shot_bits(s));
+        }
     }
 
     /// FNV-1a's offset basis: where every fold starts.
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 
-    /// `fold_tick` of the v18 driver after ticks 99, 199, ... 599, computed
-    /// once from the v18 sim (commit `1d8d51b`, the tree before any v19
-    /// field existed, built as a standalone crate with the same fold and
-    /// the same script) on this machine, the Windows workstation that
-    /// hosts the arena. The script and the launch go through `cos`, `sin`
-    /// and `tan`, which are the platform's, so a toolchain on another libm
+    /// `fold_tick` of the driver after ticks 99, 199, ... 599, computed
+    /// once from THIS tree on this machine, the Windows workstation that
+    /// hosts the arena, and pinned. It was the v18 sim's fingerprint until
+    /// v20 (commit `1d8d51b` made it; the v19 sim matched it bit for bit,
+    /// which proved the modes changed nothing in free for all). v20 gave
+    /// every round its real speed and made the sweep exact, so the v18
+    /// fingerprint could not hold and the pin was regenerated from the
+    /// v20 tree; from here on its purpose is regression, not v18
+    /// identity. The script and the launch go through `cos`, `sin` and
+    /// `tan`, which are the platform's, so a toolchain on another libm
     /// could legitimately differ in the last bit; the tests have only ever
     /// run here, and if that changes the pin is regenerated the same way,
-    /// from v18.
-    const V18_CHECKPOINTS: [u64; 6] = [
-        0xba46_f694_c54a_381b,
-        0x1aa0_29fd_4da2_27a8,
-        0xaf42_76d1_7721_bc4d,
-        0x569f_2c4b_6c46_c8b8,
-        0x0957_317b_0cff_0810,
-        0x96ea_d49f_aa21_f7e3,
+    /// from the tree that is being pinned.
+    const FINGERPRINT_CHECKPOINTS: [u64; 6] = [
+        0x62b2_7bcc_b997_35fc,
+        0x0f6b_fe48_debd_f47e,
+        0x892d_dc01_c008_1454,
+        0x0a98_bd84_cf17_ed5c,
+        0x81b9_c2bf_38b9_453c,
+        0xb5a5_3150_6c66_2954,
     ];
+    /// The script's kills over the 600 ticks, and every player's score
+    /// at the end, from the same run. v18's script landed one kill, a
+    /// self-kill by a rocket's own splash; at real speeds the same
+    /// trigger pulls land none, because the rocket is well clear of its
+    /// owner before anything stops it.
+    const FINGERPRINT_KILLS: usize = 0;
+    const FINGERPRINT_SCORES: [u32; 4] = [0, 0, 0, 0];
 
     #[test]
     fn free_for_all_is_bit_identical_to_v18_until_the_limit() {
-        // The v19 sim in free for all must BE the v18 sim until a round
-        // ends: the same players, rounds, kills, hits, blasts and payouts
-        // bit for bit, tick for tick, against a fingerprint taken from the
-        // v18 code. v19 put friendly-fire gates in the sweep, the melee
-        // and the splash, a hill pass and a round check into `step`, and
-        // this is the proof that in the mode every v18 lobby plays they
-        // change nothing. The frag limit is nowhere near in 600 ticks (the
-        // script lands one kill, a self-kill), which is what "until the
-        // limit" means here: the round never ends, so the v19 state stays
-        // inert the whole way.
+        // The name is the v19 test's, kept so the docs that cite it still
+        // find it; what it pins since v20 is the fingerprint above. The
+        // sim in free for all must BE the pinned sim until a round ends:
+        // the same players, rounds, kills, hits, blasts, payouts and shot
+        // events bit for bit, tick for tick. The frag limit is nowhere
+        // near in 600 ticks, which is what "until the limit" means here:
+        // the round never ends, so the v19 round state stays inert the
+        // whole way. King of the hill on the same script is free for all
+        // with a different scoreboard: identical in every bit but
+        // `score`, whose frags move to `frags`. Driven alongside, because
+        // that claim is what lets the hill pass sit inside `step` without
+        // a pin of its own.
         let level = Level::freight_yard();
         let mut ffa = Sim::from_level(&level, 7, GameMode::Ffa);
-        // King of the hill on the same script is free for all with a
-        // different scoreboard: identical in every bit but `score`, whose
-        // frags move to `frags`. Driven alongside, because that claim is
-        // what lets the hill pass sit inside `step` without a v18 pin of
-        // its own.
         let mut hill = Sim::from_level(&level, 7, GameMode::Hill);
         for id in 0..4 {
             ffa.add_player(id);
@@ -6804,6 +7959,7 @@ mod tests {
         }
         let mut h = FNV_OFFSET;
         let mut kills = 0;
+        let mut seen = Vec::new();
         for tick in 0..600u64 {
             v18_grants(&mut ffa, tick);
             v18_grants(&mut hill, tick);
@@ -6811,11 +7967,7 @@ mod tests {
             hill.step(&|id| v18_script(tick, id));
             fold_tick(&mut h, &ffa);
             if tick % 100 == 99 {
-                assert_eq!(
-                    h,
-                    V18_CHECKPOINTS[usize::try_from(tick / 100).unwrap()],
-                    "tick {tick}: free for all diverged from v18 in the hundred ticks before this"
-                );
+                seen.push(h);
             }
             kills += ffa.events.len();
             // The v19 state a free-for-all round never touches.
@@ -6849,13 +8001,20 @@ mod tests {
             assert_eq!(ffa.hits, hill.hits, "tick {tick}");
             assert_eq!(ffa.blasts, hill.blasts, "tick {tick}");
             assert_eq!(ffa.loot_events, hill.loot_events, "tick {tick}");
+            assert_eq!(ffa.shots, hill.shots, "tick {tick}");
         }
-        assert_eq!(h, V18_CHECKPOINTS[5], "the whole run");
-        assert_eq!(kills, 1, "the script's one kill, as in v18");
-        assert!(
-            ffa.players.iter().all(|p| p.score == 0),
-            "and it was a self-kill, so nobody scored: {:?}",
-            ffa.players.iter().map(|p| p.score).collect::<Vec<_>>()
+        let scores: Vec<u32> = ffa.players.iter().map(|p| p.score).collect();
+        assert_eq!(
+            seen,
+            FINGERPRINT_CHECKPOINTS.to_vec(),
+            "the fingerprint diverged in the hundred ticks before the first checkpoint that differs (kills {kills}, scores {scores:?})"
+        );
+        assert_eq!(h, FINGERPRINT_CHECKPOINTS[5], "the whole run");
+        assert_eq!(kills, FINGERPRINT_KILLS, "the script's kills");
+        assert_eq!(
+            scores,
+            FINGERPRINT_SCORES.to_vec(),
+            "and who they were credited to"
         );
     }
 
@@ -6897,6 +8056,14 @@ mod tests {
             assert_eq!(a.hits, b.hits);
             assert_eq!(a.blasts, b.blasts);
             assert_eq!(a.loot_events, b.loot_events);
+            assert_eq!(a.shots.len(), b.shots.len(), "tick {tick}");
+            for (sa, sb) in a.shots.iter().zip(&b.shots) {
+                assert_eq!(shot_bits(sa), shot_bits(sb), "tick {tick}");
+                // A round that ended on the tick it left never appears in
+                // the list, and at real speeds most do: the event is the
+                // record that it flew.
+                rounds_seen[usize::from(sa.weapon)] = true;
+            }
         }
         // The script really did fire every row.
         for id in 1..=WEAPON_COUNT {
@@ -7685,8 +8852,10 @@ mod tests {
         assert_eq!(player(&sim, 0).score, FFA_FRAG_LIMIT);
         assert_eq!(sim.round, 0);
 
-        // The pause: everyone keeps playing (player 0 keeps a round in the
-        // air so the restart has something to clear), nothing else ends.
+        // The pause: everyone keeps playing (player 0 keeps firing, and
+        // every round fired is parked in the air with its life held so
+        // the restart has something to clear: at 715 m/s an AK round
+        // would otherwise be gone within two ticks), nothing else ends.
         let mut inputs = HashMap::new();
         inputs.insert(
             0,
@@ -7701,6 +8870,11 @@ mod tests {
         while sim.round == 0 {
             hold(&mut sim, &[(0, [0.0, 0.0], 0.0), (1, [3.0, 0.0], 0.0)]);
             step_with(&mut sim, &inputs);
+            for b in &mut sim.bullets {
+                b.ttl = 4.0;
+                b.pos = [0.0, 5.0];
+                b.vel = [0.0, 0.0];
+            }
             ticks += 1;
             round_overs += sim.round_over.len();
             assert!(ticks <= 602, "the pause never ended");

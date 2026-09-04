@@ -503,8 +503,10 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
             }
 
             // The sim's events of this tick, in the order they happened:
-            // a hit before the kill it caused, then the blasts and the loot
-            // pay-outs. Each is serialised once per lobby, like the state.
+            // a hit before the kill it caused, then the rounds that ended
+            // (the tracers and impacts those hits were), then the blasts
+            // and the loot pay-outs. Each is serialised once per lobby,
+            // like the state.
             let sim = &lobby.sim;
             let outbound = sim
                 .hits
@@ -520,6 +522,20 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
                         .iter()
                         .map(|&(killer, victim)| S2C::Kill { killer, victim }),
                 )
+                .chain(sim.shots.iter().map(|s| S2C::Shot {
+                    owner: s.owner,
+                    weapon: s.weapon,
+                    x0: s.from[0],
+                    y0: s.from[1],
+                    z0: s.from[2],
+                    x1: s.to[0],
+                    y1: s.to[1],
+                    z1: s.to[2],
+                    hit: s.hit,
+                    cover: s.cover,
+                    victim: s.victim,
+                    normal: s.normal,
+                }))
                 .chain(
                     sim.blasts
                         .iter()

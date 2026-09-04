@@ -225,6 +225,81 @@ fn drop_in_arena_flow_with_password() {
 }
 
 #[test]
+fn a_shot_event_reaches_every_member_the_tick_the_round_ends() {
+    // v20: the guest holds fire, and both members are told where each
+    // round ended as `S2C::Shot`, with the guest as its owner. The round
+    // lives a fifth of a second, so the event and not the state stream is
+    // how a peer learns a shot happened at all.
+    let port = start_server();
+    let mut host = connect(port, "alice");
+    send(
+        &mut host,
+        &C2S::CreateLobby {
+            name: "range".into(),
+            password: None,
+            map: MAP_FREIGHT_YARD.into(),
+            mode: String::new(),
+        },
+    );
+    recv_until(&mut host, 5, |m| {
+        matches!(m, S2C::GameJoined { .. }).then_some(())
+    });
+    let mut guest = connect(port, "bob");
+    send(
+        &mut guest,
+        &C2S::JoinLobby {
+            name: "range".into(),
+            password: None,
+        },
+    );
+    let guest_pid = recv_until(&mut guest, 5, |m| match m {
+        S2C::GameJoined { id, .. } => Some(id),
+        _ => None,
+    });
+    send(
+        &mut guest,
+        &C2S::Input {
+            seq: 1,
+            view_tick: 0,
+            mx: 0.0,
+            my: 0.0,
+            ax: 1.0,
+            az: 0.0,
+            pitch: 0.0,
+            fire: true,
+            sprint: false,
+            crouch: false,
+            reload: false,
+            jump: false,
+            shield: false,
+            melee: false,
+            ads: false,
+        },
+    );
+    let check = |m: S2C| match m {
+        S2C::Shot {
+            owner,
+            weapon,
+            x0,
+            y0,
+            x1,
+            y1,
+            hit,
+            ..
+        } if owner == guest_pid => {
+            assert_eq!(weapon, arena_core::shooter::SIDEARM);
+            assert!(x0.is_finite() && y0.is_finite() && x1.is_finite() && y1.is_finite());
+            assert!(x1 > x0, "fired along +x: {x0} -> {x1}");
+            assert!(hit <= 5, "a kind the sim names: {hit}");
+            Some(())
+        }
+        _ => None,
+    };
+    recv_until(&mut guest, 5, check);
+    recv_until(&mut host, 5, check);
+}
+
+#[test]
 fn old_proto_may_list_but_not_join() {
     let port = start_server();
     // A current-proto host opens a lobby.

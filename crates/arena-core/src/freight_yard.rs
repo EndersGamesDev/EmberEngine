@@ -529,14 +529,14 @@ pub(crate) mod level_helpers {
     /// the ray is exactly the aim: spread would make a sightline a die
     /// roll.
     ///
-    /// The shooter holds the sidearm, whose round expires at 54 m
-    /// (`BULLET_TTL` 1.6 s at `BULLET_SPEED`), which is short of the far
-    /// spawn pairs of a 48 m arena; a test that could not reach a pair could
+    /// The shooter holds the sidearm, whose round expires at 60 m
+    /// (`BULLET_TTL` at `BULLET_SPEED`), which is short of the 68 m
+    /// diagonal of a 48 m arena; a test that could not reach a pair could
     /// not fail for it. So every round in flight is held at 4 s of life on
     /// every tick, which is to say it never expires inside the driver's
-    /// 180-tick window, and the window itself is the range: 3 s at 34 m/s
-    /// is 102 m, half again the diagonal. This asks whether the geometry
-    /// blocks the line, not whether the sidearm reaches it.
+    /// 180-tick window; at 280 m/s the arena wall ends it within ten ticks
+    /// and the window is generous. This asks whether the geometry blocks
+    /// the line, not whether the sidearm reaches it.
     pub fn shot_over(level: &Level, from: [f32; 2], from_y: f32, pitch: f32, to: [f32; 2]) -> bool {
         let mut sim = Sim::from_level(level, 0, GameMode::Ffa);
         sim.add_player(0);

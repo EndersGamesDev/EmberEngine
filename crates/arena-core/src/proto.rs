@@ -189,7 +189,29 @@ use crate::shooter::HILL_FREE;
 /// travel as strings, so the next mode is additive; `RoundOver` is
 /// dropped by an old `NetChan::poll` as an unknown tag and would not have
 /// bumped on its own.
-pub const PROTO_VERSION: u16 = 16;
+///
+/// v17: real ballistics, and `S2C::Shot`.
+///
+/// Every row of the weapon table now flies at its cartridge's muzzle
+/// velocity, 280 to 900 m/s, where v16 flew 34 to 60, and the server
+/// reports each round the tick it ends as `S2C::Shot`: where it started,
+/// where it stopped, what it met. Nothing in `BState` changed shape, and
+/// `Shot` is a new variant an old `NetChan::poll` drops as an unknown tag,
+/// so every frame decodes on both sides. That is not the test. Ask what a
+/// v16 peer DOES. A v16 client draws its rounds from `BState` alone, and
+/// against a v17 server a round crosses the map in three ticks and
+/// appears in a 30 Hz state once if at all: the client sees almost
+/// nothing fly, hears a shot only when a state happened to catch one in
+/// flight, and watches bodies drop to rounds it never saw. A v17 client on
+/// a v16 server would fare no better, drawing 34 m/s rounds it never
+/// gets a `Shot` for. Both play a different game, which is the same shape
+/// as the v13 map bump: the world moved under an unchanged wire. So 17 it
+/// is, and the frozen v19 page goes list-only against a v17 host exactly
+/// as at every bump; the lobby browser is unaffected (`proto: 0` against
+/// the ungated `ListLobbies`). `Shot.normal` is `serde(default)` and
+/// deliberately not a bump trigger of its own: a peer that reads a zero
+/// normal lays its mark flat on the floor and plays the same game.
+pub const PROTO_VERSION: u16 = 17;
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
 pub const MAX_PASSWORD_LEN: usize = 40;
@@ -544,6 +566,34 @@ pub enum S2C {
         dmg: u8,
         head: bool,
     },
+    /// A round's segment ended, from `Sim.shots`: one per round the tick it
+    /// ends, from `(x0, y0, z0)` (the muzzle at launch, or the plate or
+    /// body the previous segment ended at) to `(x1, y1, z1)`. `hit` is
+    /// the `shooter::SHOT_*` kind: 0 expired, 1 cover, 2 body, 3 shield,
+    /// 4 floor, 5 arena wall. `cover` is the `Cover::index` of the box
+    /// when `hit == 1`, else 255; `victim` the player id when `hit` is 2
+    /// or 3, else 255. `normal` is the outward axis normal of the surface
+    /// met (a box's entry face, up on the floor, inward off the wall),
+    /// zero on a body, a shield and an expiry; defaulted so the event
+    /// decodes without it and a peer that never reads it still ends its
+    /// tracer at the right point. Cosmetic: the damage arrives as `Hit`,
+    /// the blast as `Blast`. Dropped by a v16 peer, which is why v17
+    /// bumps (see `PROTO_VERSION`).
+    Shot {
+        owner: u8,
+        weapon: u8,
+        x0: f32,
+        y0: f32,
+        z0: f32,
+        x1: f32,
+        y1: f32,
+        z1: f32,
+        hit: u8,
+        cover: u8,
+        victim: u8,
+        #[serde(default)]
+        normal: [i8; 3],
+    },
     /// A rocket detonated at `(x, y, z)`, fired by `owner`, from
     /// `Sim.blasts`. Cosmetic: the damage it did arrives as `Hit`s.
     Blast {
@@ -655,6 +705,34 @@ mod tests {
         assert!(
             matches!(back, C2S::CreateLobby { ref map, ref mode, .. } if map == crate::shooter::MAP_FREIGHT_YARD && mode == "tdm")
         );
+
+        let s = serde_json::to_string(&S2C::Shot {
+            owner: 1,
+            weapon: 3,
+            x0: -1.0,
+            y0: 1.45,
+            z0: 2.0,
+            x1: 4.0,
+            y1: 1.3,
+            z1: 2.5,
+            hit: 4,
+            cover: 255,
+            victim: 255,
+            normal: [0, 1, 0],
+        })
+        .unwrap();
+        assert!(s.contains("\"t\":\"shot\""), "{s}");
+        let back: S2C = serde_json::from_str(&s).unwrap();
+        assert!(matches!(
+            back,
+            S2C::Shot {
+                owner: 1,
+                weapon: 3,
+                hit: 4,
+                normal: [0, 1, 0],
+                ..
+            }
+        ));
 
         let s = serde_json::to_string(&S2C::State {
             tick: 9,
@@ -993,6 +1071,97 @@ mod tests {
         // that is what makes the three additive, and it is the decode
         // error it sees, not a panic.
         assert!(serde_json::from_str::<S2C>(r#"{"t":"no_such_event"}"#).is_err());
+    }
+
+    #[test]
+    fn a_shot_event_survives_the_codec() {
+        use crate::shooter::{
+            SHOT_BODY, SHOT_COVER, SHOT_EXPIRED, SHOT_FLOOR, SHOT_SHIELD, SHOT_WALL,
+        };
+        let ev = S2C::Shot {
+            owner: 2,
+            weapon: 6,
+            x0: 0.2,
+            y0: 1.45,
+            z0: 0.0,
+            x1: 3.0,
+            y1: 1.45,
+            z1: 0.0,
+            hit: 1,
+            cover: 4,
+            victim: 255,
+            normal: [-1, 0, 0],
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(s.contains("\"t\":\"shot\""), "{s}");
+        assert!(s.contains("\"hit\":1"), "{s}");
+        assert!(s.contains("\"normal\":[-1,0,0]"), "{s}");
+        let back: S2C = serde_json::from_str(&s).unwrap();
+        assert_eq!(format!("{back:?}"), format!("{ev:?}"));
+        // The normal is defaulted: a frame without it reads as no surface,
+        // which a peer lays flat, and plays the same game.
+        let bare = r#"{"t":"shot","owner":2,"weapon":6,"x0":0.2,"y0":1.45,"z0":0.0,
+            "x1":3.0,"y1":1.45,"z1":0.0,"hit":2,"cover":255,"victim":1}"#;
+        let S2C::Shot {
+            hit,
+            victim,
+            normal,
+            ..
+        } = serde_json::from_str(bare).unwrap()
+        else {
+            panic!("a shot without a normal must decode");
+        };
+        assert_eq!((hit, victim, normal), (2, 1, [0, 0, 0]));
+        // And the kinds are the sim's, by number.
+        assert_eq!(
+            [
+                SHOT_EXPIRED,
+                SHOT_COVER,
+                SHOT_BODY,
+                SHOT_SHIELD,
+                SHOT_FLOOR,
+                SHOT_WALL
+            ],
+            [0, 1, 2, 3, 4, 5]
+        );
+    }
+
+    #[test]
+    fn a_v16_peer_is_why_this_bumps() {
+        // Documentary. A v16 peer's `NetChan::poll` drops `Shot` as an
+        // unknown tag, which is exactly what makes the frame decode
+        // everywhere, and exactly why decoding is not the test: the only
+        // rounds it draws are the ones a 30 Hz state catches in flight,
+        // and at v17's speeds a round is in flight for a handful of states
+        // at most. The sidearm's 60 m at 280 m/s is 0.21 s, six states;
+        // the sniper's 120 m at 900 is four; an AK round across an open
+        // 20 m lane is caught once or never. A v16 client on a v17 server
+        // sees a game where nothing flies and bodies fall.
+        use crate::shooter::{FIXED_DT, SIDEARM, weapon_stats};
+        assert_eq!(
+            STATE_EVERY_TICKS, 2,
+            "the arithmetic below assumes 30 Hz states"
+        );
+        let per_state = 2.0 * FIXED_DT;
+        for id in [SIDEARM, 3, 6] {
+            let s = weapon_stats(id);
+            let states_in_flight = s.ttl / per_state;
+            assert!(
+                states_in_flight < 8.0,
+                "{}: {states_in_flight} states catch a round from launch to expiry",
+                s.name
+            );
+            assert!(
+                s.speed * per_state > 9.0,
+                "{}: a round moves {} m between states",
+                s.name,
+                s.speed * per_state
+            );
+        }
+        assert!(
+            serde_json::from_str::<S2C>(r#"{"t":"shot_v99"}"#).is_err(),
+            "an unknown tag is the decode error an old poll drops, not a panic"
+        );
     }
 
     #[test]

@@ -154,6 +154,9 @@ fn main() {
     let mut max_players = 0usize;
     let mut bullets_seen: u64 = 0;
     let (mut hits_seen, mut blasts_seen, mut loot_seen) = (0u64, 0u64, 0u64);
+    // Rounds that ended (v20's `Shot`): the evidence a round flew at all
+    // now that a 280 m/s round is gone before most states can carry it.
+    let mut shots_seen: u64 = 0;
     let mut rounds_seen: u64 = 0;
     let now = Instant::now();
     let mut last_input = now.checked_sub(Duration::from_secs(1)).unwrap_or(now);
@@ -327,6 +330,7 @@ fn main() {
                     );
                 }
                 Ok(S2C::Hit { .. }) => hits_seen += 1,
+                Ok(S2C::Shot { .. }) => shots_seen += 1,
                 Ok(S2C::Blast { .. }) => blasts_seen += 1,
                 Ok(S2C::Loot {
                     player,
@@ -372,11 +376,16 @@ fn main() {
     }
 
     // A shielding bot cannot fire - the server blocks its own trigger while
-    // the plate is up - so bullets are only evidence of a working loop when
-    // this bot was actually shooting.
+    // the plate is up - so rounds are only evidence of a working loop when
+    // this bot was actually shooting. Since v20 a round lives a fifth of a
+    // second and may never appear in a state, so the `Shot` that ends it
+    // counts as evidence too; either is enough, and a run that sees
+    // neither is a broken loop.
     let expects_bullets = !nofire && !shield;
-    if !in_game || states < 10 || (expects_bullets && bullets_seen == 0) {
-        eprintln!("WSBOT FAIL: in_game={in_game} states={states} bullets_seen={bullets_seen}");
+    if !in_game || states < 10 || (expects_bullets && bullets_seen == 0 && shots_seen == 0) {
+        eprintln!(
+            "WSBOT FAIL: in_game={in_game} states={states} bullets_seen={bullets_seen} shots_seen={shots_seen}"
+        );
         std::process::exit(1);
     }
     let modes_note = if modes.is_empty() {
@@ -386,6 +395,6 @@ fn main() {
     };
     let bonk_note = if bonk { " bonk" } else { "" };
     println!(
-        "WSBOT OK: states={states} max_players={max_players} bullets_seen={bullets_seen} kills_seen={kills_seen} hits_seen={hits_seen} blasts_seen={blasts_seen} loot_seen={loot_seen} rounds_seen={rounds_seen}{modes_note}{bonk_note}"
+        "WSBOT OK: states={states} max_players={max_players} bullets_seen={bullets_seen} shots_seen={shots_seen} kills_seen={kills_seen} hits_seen={hits_seen} blasts_seen={blasts_seen} loot_seen={loot_seen} rounds_seen={rounds_seen}{modes_note}{bonk_note}"
     );
 }
