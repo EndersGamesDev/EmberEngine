@@ -216,6 +216,7 @@ fn kernel(index: u32, uniforms: PerturbUniform) -> PerturbResult {
     var reference_index = 0u;
     var iteration = 0u;
     var rebases = 0u;
+    var accumulated_relative_error = 0.00000011920928955078125;
     let z_zero = perturb_reference(load_reference(0u));
     let initial = perturb_normalize(delta_prime, delta_c_prime, exponent);
     if (initial.glitch) {
@@ -238,12 +239,13 @@ fn kernel(index: u32, uniforms: PerturbUniform) -> PerturbResult {
             return perturb_glitch(rebases, -2.0);
         }
         let z_squared = dot(z, z);
+        let reference_squared = dot(reference, reference);
         if (z_squared > uniforms.bailout) {
             var escaped: PerturbResult;
             escaped.escape = vec4<f32>(perturb_smooth(iteration, z), 1.0, f32(rebases), mapped.status);
             return escaped;
         }
-        if (z_squared < 0.000001 * dot(reference, reference)) {
+        if (z_squared < 0.000001 * reference_squared) {
             return perturb_glitch(rebases, -2.0);
         }
         if (iteration + 1u >= uniforms.max_iter) {
@@ -256,6 +258,12 @@ fn kernel(index: u32, uniforms: PerturbUniform) -> PerturbResult {
             }
             let minimum_exponent = -2147483647i - 1i;
             if (exponent == minimum_exponent) {
+                return perturb_glitch(rebases, -2.0);
+            }
+            let cancellation_gain = sqrt(reference_squared / z_squared);
+            accumulated_relative_error = accumulated_relative_error * cancellation_gain;
+            accumulated_relative_error += 0.00000011920928955078125;
+            if (!perturb_map_finite(accumulated_relative_error) || accumulated_relative_error > 0.001) {
                 return perturb_glitch(rebases, -2.0);
             }
             delta_prime = perturb_scale(z - z_zero, -exponent);

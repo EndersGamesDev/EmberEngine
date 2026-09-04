@@ -233,15 +233,19 @@ mod tests {
 
     use ember_julibrot_math::{
         BigCentre, EscapeGridRecord, EscapeParams, Homography, ObjectAngles, OrbitStep,
-        PerturbationEnvelope, Plane, PrecisionMode, ReferenceOrbitBuilder, construct_plane,
-        escape_f32, pixel_scale, precision_for, scale_split,
+        PerturbationEnvelope, Plane, PrecisionMode, ReferenceOrbitBuilder, ReferenceOrbitRecord,
+        ScaleSplit, construct_plane, escape_f32, pixel_scale, precision_for, scale_split,
     };
 
     use super::{
         ConformanceVerdict, VISIBLE_REPLAY_CARDS, evaluate_perturbation_conformance,
         evaluate_shallow_conformance,
     };
-    use crate::perturb::{PAULDELBROT_GLITCH_EPSILON, perturb_scaled_pixel_for_epsilon};
+    use crate::perturb::{
+        ACCUMULATED_ERROR_LIMIT, PAULDELBROT_GLITCH_EPSILON,
+        perturb_scaled_offset_for_accumulated_error, perturb_scaled_pixel_for_accumulated_error,
+        perturb_scaled_pixel_for_epsilon,
+    };
     use crate::{
         GridExtent, KernelSample, PerturbUniform, RefinementLevel, SampleStatus,
         escape_shallow_point, perturb_scaled_pixel,
@@ -311,8 +315,11 @@ mod tests {
             .find("if (z_squared > uniforms.bailout)")
             .expect("GPU escape test");
         let gpu_glitch = gpu_source
-            .find("if (z_squared < 0.000001 * dot(reference, reference))")
+            .find("if (z_squared < 0.000001 * reference_squared)")
             .expect("GPU Pauldelbrot test");
+        let gpu_accumulated = gpu_source
+            .find("accumulated_relative_error > 0.001")
+            .expect("GPU accumulated-error test");
         let gpu_rebase = gpu_source
             .find("if (perturb_norm(z) < perturb_norm(represented_delta))")
             .expect("GPU rebase test");
@@ -329,6 +336,7 @@ mod tests {
             Some(SampleStatus::Sampled)
         );
         assert!(gpu_escape < gpu_glitch && gpu_glitch < gpu_rebase);
+        assert!(gpu_rebase < gpu_accumulated);
         assert_eq!(sample.escape_index, None);
         assert_eq!(
             SampleStatus::from_f32(sample.record.status),
@@ -341,11 +349,8 @@ mod tests {
     fn a_true_interior_pixel_is_not_a_relative_precision_glitch() {
         const CAP: u32 = 512;
         let plan = precision_for(14.0, 960, CAP).expect("zoom fourteen precision");
-        let centre = BigCentre::from_f64(
-            [0.0, 0.0, -0.743_643_887_037_151, 0.131_825_904_205_33],
-            plan.requested_bits,
-        )
-        .expect("finite seahorse reference");
+        let centre =
+            BigCentre::from_f64([0.0; 4], plan.requested_bits).expect("finite interior reference");
         let mut builder = ReferenceOrbitBuilder::new(&centre, plan, EscapeParams::new(CAP))
             .expect("reference builder");
         let orbit = loop {
@@ -374,6 +379,7 @@ mod tests {
             perturb_scaled_pixel(&uniforms, &orbit.records, 0).expect("interior pixel is valid");
 
         assert_eq!(orbit.length, CAP);
+        assert_eq!(exact_mandelbrot_escape_index([0.0; 2], CAP), None);
         assert_eq!(sample.escape_index, None);
         assert_eq!(sample.record.smooth_iter, -1.0);
         assert_eq!(
@@ -447,6 +453,163 @@ mod tests {
     #[ignore = "native kernels measurement harness"]
     #[allow(
         clippy::print_stderr,
+        reason = "the explicitly selected error-bound sweep reports measured fractions"
+    )]
+    fn measures_accumulated_error_bounds_on_seahorse_corpus() {
+        const WIDTH: u32 = 960;
+        const HEIGHT: u32 = 540;
+        const CAP: u32 = 512;
+        const REFERENCE_LENGTH: u32 = 41;
+        let target = [-0.743_643_887_037_151, 0.131_825_904_205_33];
+        let plan = precision_for(14.0, WIDTH, CAP).expect("zoom fourteen precision");
+        let centre = BigCentre::from_f64([0.0, 0.0, target[0], target[1]], plan.requested_bits)
+            .expect("finite seahorse reference");
+        let mut builder = ReferenceOrbitBuilder::new(&centre, plan, EscapeParams::new(CAP))
+            .expect("reference builder");
+        let orbit = loop {
+            match builder
+                .step(NonZeroU32::new(CAP).expect("nonzero cap"))
+                .expect("reference step")
+            {
+                OrbitStep::Complete(orbit) => break orbit,
+                OrbitStep::Pending { .. } => {}
+            }
+        };
+        let uniforms = PerturbUniform::pack(
+            construct_plane(ObjectAngles::IDENTITY).expect("Mandelbrot plane"),
+            &Homography::IDENTITY,
+            scale_split(14.0, WIDTH).expect("zoom fourteen scale"),
+            GridExtent {
+                width: WIDTH,
+                height: HEIGHT,
+            },
+            EscapeParams::new(CAP),
+            REFERENCE_LENGTH,
+            RefinementLevel::Final,
+        )
+        .expect("standard-corpus uniform");
+        let scale = pixel_scale(14.0, WIDTH).expect("Final pixel scale");
+        let corpus = WIDTH * HEIGHT;
+
+        for limit in [1.0e-4_f32, ACCUMULATED_ERROR_LIMIT, 1.0e-2_f32] {
+            let pinned = perturb_scaled_pixel_for_accumulated_error(
+                &uniforms,
+                &orbit.records,
+                696,
+                Some(limit),
+            )
+            .expect("pinned corpus pixel");
+            let mut flagged = 0_u32;
+            let mut no_escape_within_cap = 0_u32;
+            let mut verified_correct_escape = 0_u32;
+            let mut detected_wrong = 0_u32;
+            for index in 0..corpus {
+                let sample = perturb_scaled_pixel_for_accumulated_error(
+                    &uniforms,
+                    &orbit.records,
+                    index,
+                    Some(limit),
+                )
+                .expect("standard-corpus pixel");
+                if sample.record.smooth_iter.to_bits() != crate::GLITCH_NUMERIC_FAILURE.to_bits() {
+                    continue;
+                }
+                flagged += 1;
+                let x = f64::from(index % WIDTH) + 0.5 - 0.5 * f64::from(WIDTH);
+                let y = f64::from(index / WIDTH) + 0.5 - 0.5 * f64::from(HEIGHT);
+                let c = [x.mul_add(scale, target[0]), y.mul_add(scale, target[1])];
+                let exact = exact_mandelbrot_escape_index(c, CAP);
+                let baseline = perturb_scaled_pixel_for_accumulated_error(
+                    &uniforms,
+                    &orbit.records,
+                    index,
+                    None,
+                )
+                .expect("baseline corpus pixel");
+                match exact {
+                    None => no_escape_within_cap += 1,
+                    Some(exact_index) if baseline.escape_index == Some(exact_index) => {
+                        verified_correct_escape += 1;
+                    }
+                    Some(_) => detected_wrong += 1,
+                }
+            }
+            #[allow(clippy::cast_precision_loss)]
+            let fraction = f64::from(flagged) / f64::from(corpus);
+            eprintln!(
+                "accumulated_error limit={limit:e} corpus={corpus} flagged={flagged} fraction={fraction:.9} detected_wrong={detected_wrong} verified_correct_escape={verified_correct_escape} no_escape_within_cap={no_escape_within_cap} pinned_status={} pinned_rebases={}",
+                pinned.record.status, pinned.record.rebase_count
+            );
+        }
+
+        let escaped_orbit = [
+            ReferenceOrbitRecord { re: 0.0, im: 0.0 },
+            ReferenceOrbitRecord { re: 2.0, im: 0.0 },
+            ReferenceOrbitRecord { re: 6.0, im: 0.0 },
+            ReferenceOrbitRecord { re: 38.0, im: 0.0 },
+        ];
+        let zero_orbit = [ReferenceOrbitRecord { re: 0.0, im: 0.0 }; 2];
+        let standard_cases: &[(&[ReferenceOrbitRecord], [f32; 4], i32, u32)] = &[
+            (&escaped_orbit, [0.0; 4], -900, 4),
+            (&escaped_orbit, [0.25, -0.125, 0.5, 0.0], -8, 4),
+            (&zero_orbit, [2.0_f32.powi(80), 0.0, 0.0, 0.0], -80, 2),
+            (&zero_orbit, [2.0_f32.powi(-80), 0.0, 0.0, 0.0], 80, 2),
+        ];
+        for limit in [1.0e-4_f32, ACCUMULATED_ERROR_LIMIT, 1.0e-2_f32] {
+            let mut flagged = 0_usize;
+            let mut false_positive = 0_usize;
+            for &(case_orbit, offset, exponent, max_iter) in standard_cases {
+                let case_uniforms = PerturbUniform::pack(
+                    Plane {
+                        basis_u: [1.0, 0.0, 0.0, 0.0],
+                        basis_v: [0.0, 1.0, 0.0, 0.0],
+                    },
+                    &Homography::IDENTITY,
+                    ScaleSplit {
+                        mantissa: 0.5,
+                        exponent,
+                    },
+                    GridExtent {
+                        width: 1,
+                        height: 1,
+                    },
+                    EscapeParams::new(max_iter),
+                    u32::try_from(case_orbit.len()).expect("fixture orbit length fits"),
+                    RefinementLevel::Final,
+                )
+                .expect("standard conformance uniform");
+                let sample = perturb_scaled_offset_for_accumulated_error(
+                    &case_uniforms,
+                    case_orbit,
+                    offset,
+                    Some(limit),
+                )
+                .expect("standard conformance sample");
+                let numeric =
+                    sample.record.smooth_iter.to_bits() == crate::GLITCH_NUMERIC_FAILURE.to_bits();
+                flagged += usize::from(numeric);
+                let (exact, _) = ember_julibrot_math::perturb_scaled_f64_with_envelope(
+                    case_orbit,
+                    offset.map(f64::from),
+                    exponent,
+                    EscapeParams::new(max_iter),
+                )
+                .expect("standard conformance oracle");
+                false_positive += usize::from(numeric && !exact.glitch);
+            }
+            #[allow(clippy::cast_precision_loss)]
+            let fraction = flagged as f64 / standard_cases.len() as f64;
+            eprintln!(
+                "accumulated_error_standard limit={limit:e} corpus={} flagged={flagged} fraction={fraction:.9} false_positive={false_positive}",
+                standard_cases.len()
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "native kernels measurement harness"]
+    #[allow(
+        clippy::print_stderr,
         reason = "the explicitly selected performance harness reports its wall"
     )]
     fn measures_pauldelbrot_comparison_cost() {
@@ -494,6 +657,93 @@ mod tests {
             "pauldelbrot_cost rounds={ROUNDS} iterations={iterations} wall_us={} ps_per_iteration={}",
             wall.as_micros(),
             wall.as_nanos() * 1_000 / iterations
+        );
+    }
+
+    #[test]
+    #[ignore = "native kernels measurement harness"]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the explicitly selected performance harness reports per-rebase cost"
+    )]
+    fn measures_accumulated_error_cost_per_rebase() {
+        const WIDTH: u32 = 960;
+        const HEIGHT: u32 = 540;
+        const CAP: u32 = 512;
+        const ROUNDS: u32 = 100_000;
+        let plan = precision_for(14.0, WIDTH, CAP).expect("zoom fourteen precision");
+        let centre = BigCentre::from_f64(
+            [0.0, 0.0, -0.743_643_887_037_151, 0.131_825_904_205_33],
+            plan.requested_bits,
+        )
+        .expect("finite seahorse reference");
+        let mut builder = ReferenceOrbitBuilder::new(&centre, plan, EscapeParams::new(CAP))
+            .expect("reference builder");
+        let orbit = loop {
+            match builder
+                .step(NonZeroU32::new(CAP).expect("nonzero cap"))
+                .expect("reference step")
+            {
+                OrbitStep::Complete(orbit) => break orbit,
+                OrbitStep::Pending { .. } => {}
+            }
+        };
+        let uniforms = PerturbUniform::pack(
+            construct_plane(ObjectAngles::IDENTITY).expect("Mandelbrot plane"),
+            &Homography::IDENTITY,
+            scale_split(14.0, WIDTH).expect("zoom fourteen scale"),
+            GridExtent {
+                width: WIDTH,
+                height: HEIGHT,
+            },
+            EscapeParams::new(CAP),
+            41,
+            RefinementLevel::Final,
+        )
+        .expect("cost uniform");
+        let baseline =
+            perturb_scaled_pixel_for_accumulated_error(&uniforms, &orbit.records, 696, None)
+                .expect("baseline pixel");
+        assert_eq!(baseline.record.rebase_count, 27.0);
+        std::hint::black_box(
+            perturb_scaled_pixel_for_accumulated_error(
+                &uniforms,
+                &orbit.records,
+                696,
+                Some(f32::INFINITY),
+            )
+            .expect("warm accumulated pixel"),
+        );
+
+        let baseline_start = Instant::now();
+        for _ in 0..ROUNDS {
+            std::hint::black_box(
+                perturb_scaled_pixel_for_accumulated_error(&uniforms, &orbit.records, 696, None)
+                    .expect("baseline pixel"),
+            );
+        }
+        let baseline_wall = baseline_start.elapsed();
+        let accumulated_start = Instant::now();
+        for _ in 0..ROUNDS {
+            std::hint::black_box(
+                perturb_scaled_pixel_for_accumulated_error(
+                    &uniforms,
+                    &orbit.records,
+                    696,
+                    Some(f32::INFINITY),
+                )
+                .expect("accumulated pixel"),
+            );
+        }
+        let accumulated_wall = accumulated_start.elapsed();
+        let rebase_events = f64::from(ROUNDS) * f64::from(baseline.record.rebase_count);
+        let delta_ns_per_rebase =
+            (accumulated_wall.as_secs_f64() - baseline_wall.as_secs_f64()) * 1.0e9 / rebase_events;
+        eprintln!(
+            "accumulated_error_cost rounds={ROUNDS} rebases_per_round={} baseline_us={} accumulated_us={} delta_ns_per_rebase={delta_ns_per_rebase:.3}",
+            baseline.record.rebase_count,
+            baseline_wall.as_micros(),
+            accumulated_wall.as_micros()
         );
     }
 
