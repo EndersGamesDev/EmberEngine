@@ -2345,7 +2345,11 @@ mod browser {
                 None,
             );
             self.rebuild_grid_if_needed(viewer.requested().iteration_cap)?;
-            match self.sampled_resume_level.take().filter(|_| submitted.sampled) {
+            match self
+                .sampled_resume_level
+                .take()
+                .filter(|_| submitted.sampled)
+            {
                 Some(level) => self
                     .loop_state
                     .scene_input_resumed(response.generation(), level),
@@ -3117,8 +3121,7 @@ mod tests {
         expand_reference_texels_into, fence_error, hold_redraw_during_scene, horizon_facts,
         main_for_grid, perturbation_reference_is_current, published_iteration_cap,
         sampling_zoom_log2, schedule_exposure_fill, select_reference_candidate, stamp_scene_level,
-        stamped_extent,
-        stamped_screen_map, view_projection_changed,
+        stamped_extent, stamped_screen_map, view_projection_changed,
     };
     use crate::{AppError, FramePolicy, LevelTimingLedger, ViewerController};
     use ember_julibrot_present::{SampleClass, SubmissionMeasurement, WarpKind};
@@ -3166,18 +3169,10 @@ mod tests {
         // The bound and the shallow path still refuse, and a reference already long enough asks
         // for nothing at all.
         assert!(!super::sampled_reference_due(
-            false,
-            FINAL_CAP,
-            ORBIT,
-            0,
-            None
+            false, FINAL_CAP, ORBIT, 0, None
         ));
         assert!(!super::sampled_reference_due(
-            true,
-            FINAL_CAP,
-            FINAL_CAP,
-            0,
-            None
+            true, FINAL_CAP, FINAL_CAP, 0, None
         ));
         assert!(!super::sampled_reference_due(
             true,

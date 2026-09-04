@@ -369,9 +369,11 @@ mod tests {
         // failure, with the group's lowest offset kept on a tie.
         assert!(source.contains("var rank = 255.0;"));
         assert!(source.contains("if (record.x == -1.0) { rank = 254.0; }"));
-        assert!(source.contains(
-            "rank = 1.0 + floor(252.0 * clamp(ceil(record.x), 0.0, cap) / cap + 0.5);"
-        ));
+        assert!(
+            source.contains(
+                "rank = 1.0 + floor(252.0 * clamp(ceil(record.x), 0.0, cap) / cap + 0.5);"
+            )
+        );
         assert!(source.contains("if (located == 0.0 || rank > best_rank)"));
         assert_translates_to_webgl2(&source, naga::ShaderStage::Vertex, "glitch_count_vertex");
         assert_translates_to_webgl2(
