@@ -1,6 +1,6 @@
 {
-  "version": "r1251+dirty",
-  "commit": "b595d60",
-  "built": "2026-09-04T19:14:45Z",
-  "subject": "Merge branch 'lane/arena-v18'"
+  "version": "r1265",
+  "commit": "d85a40f",
+  "built": "2026-09-04T19:59:02Z",
+  "subject": "release(arena): publish v22 skies and weather"
 }
