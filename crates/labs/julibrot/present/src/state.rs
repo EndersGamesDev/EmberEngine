@@ -203,6 +203,18 @@ impl SceneLedger {
         self.retained_grid.as_ref()
     }
 
+    pub fn forget_retained_grid(&mut self, grid: &EscapeGrid) -> bool {
+        let matches = self
+            .retained_grid
+            .as_ref()
+            .is_some_and(|retained| retained.span == grid.span);
+        if matches {
+            self.retained = None;
+            self.retained_grid = None;
+        }
+        matches
+    }
+
     #[cfg(test)]
     pub const fn pending(&self) -> Option<&PendingScene> {
         self.pending.as_ref()
@@ -395,6 +407,26 @@ mod tests {
             Some(SceneCompletion::Promoted(_))
         ));
         assert_eq!(begin(&mut ledger, 3, 1), 0);
+    }
+
+    #[test]
+    fn freeing_the_promoted_record_grid_forgets_its_retained_scene() {
+        let mut ledger = SceneLedger::default();
+        begin(&mut ledger, 1, 1);
+        assert!(matches!(
+            ledger.complete(measurement(1)),
+            Some(SceneCompletion::Promoted(_))
+        ));
+        let retained = ledger
+            .retained_grid()
+            .expect("promoted scene retains its record grid")
+            .clone();
+        let unrelated = grid([64, 36], RefinementLevel::Preview);
+        assert!(!ledger.forget_retained_grid(&unrelated));
+        assert_eq!(ledger.retained().map(|frame| frame.scene_id), Some(1));
+        assert!(ledger.forget_retained_grid(&retained));
+        assert!(ledger.retained().is_none());
+        assert!(ledger.retained_grid().is_none());
     }
 
     #[test]

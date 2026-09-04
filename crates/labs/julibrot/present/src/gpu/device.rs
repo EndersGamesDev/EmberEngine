@@ -25,7 +25,7 @@ use ledger::{
 };
 use redraw::encode_relief_redraw;
 #[cfg(test)]
-use redraw::relief_scene_uniform;
+use redraw::{relief_scene_uniform, retained_grid_is_live_main};
 use scene::{
     create_depth_target, create_scene_pipeline, create_scene_texture, encode_scene,
     encode_scene_mesh, ensure_backdrop_indices, ensure_depth, ensure_indices, ensure_scene_texture,
@@ -389,6 +389,13 @@ impl Presenter {
             self.facts.palette = palette_id;
         }
         self.main = Some(main);
+    }
+
+    /// Forgets a retained scene whose record span has just left the owning heap allocator.
+    pub fn forget_retained_grid(&mut self, grid: &ember_julibrot_kernels::EscapeGrid) {
+        if self.ledger.forget_retained_grid(grid) {
+            self.clear_retained_facts();
+        }
     }
 
     const fn clear_retained_facts(&mut self) {

@@ -382,7 +382,7 @@ pub struct PresentFacts {
     pub reprojected_per_scene: Option<u32>,
     /// Retained-record relief redraws submitted as warp work.
     pub relief_redraw_count: u64,
-    /// Refused automatic or manual warps submitted as bounded stale-picture holds.
+    /// Refused warps submitted as stale-picture holds; automatic holds are round-bounded.
     pub warp_hold_count: u64,
     /// Refresh submissions without a retained scene.
     pub refreshes_without_scene: u64,

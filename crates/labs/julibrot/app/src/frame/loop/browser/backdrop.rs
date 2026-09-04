@@ -99,9 +99,10 @@ impl BrowserFrameLoop {
         self.active_backdrop_map = None;
         self.coverage_turn = super::CoverageTurn::Backdrop;
         if let Some(backdrop) = self.backdrop.take() {
-            self.kernels
-                .free_grid(&mut self.executor, backdrop.grid)
-                .map_err(kernel_error)?;
+            if let Err(error) = self.free_grid(&backdrop.grid) {
+                self.backdrop = Some(backdrop);
+                return Err(error);
+            }
         }
         Ok(())
     }

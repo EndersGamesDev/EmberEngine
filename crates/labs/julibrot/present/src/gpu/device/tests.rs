@@ -639,6 +639,13 @@ fn relief_redraw_refuses_a_retained_grid_whose_extent_no_longer_matches_its_fram
 }
 
 #[test]
+fn relief_redraw_refuses_records_that_the_live_main_grid_can_overwrite() {
+    let main = binding_main();
+    assert!(retained_grid_is_live_main(&main.grid, Some(&main)));
+    assert!(!retained_grid_is_live_main(&main.grid, None));
+}
+
+#[test]
 fn every_gpu_dynamic_offset_comes_from_the_opaque_slot() {
     let mut source = String::from(include_str!("../device.rs"));
     source.push_str(include_str!("census.rs"));
