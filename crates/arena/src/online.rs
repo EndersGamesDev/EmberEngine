@@ -332,6 +332,11 @@ const PART_GLBS: [(&[u8], f32); 5] = [
 /// Fixed camera from `EMBER_CAM` ("ex,ey,ez,tx,ty,tz"): an overview of the
 /// arena for reviewing level and character work in screenshots. Parsed
 /// once; None when unset or malformed (and always None on the web).
+///
+/// The fourth of this native debug set is `EMBER_SCRIPT` (see
+/// [`crate::script`]), which drives the client instead of a person: while it
+/// is set the client reads no key, no mouse and no pad, and never grabs the
+/// cursor, so a capture leaves the operator's machine alone.
 fn debug_camera() -> Option<Camera> {
     static CAM: std::sync::OnceLock<Option<Camera>> = std::sync::OnceLock::new();
     *CAM.get_or_init(|| {
@@ -2803,6 +2808,13 @@ impl EmberGame for ShooterGame {
             self.script_began = true;
             tracing::info!("EMBER_SCRIPT starts");
         }
+        // …and one line per step boundary, on the client's OWN clock. The
+        // harness's wall clock and this timeline drift apart, because a
+        // frame longer than the engine's `dt` clamp loses script time for
+        // good, so a shot can be timed off a step instead of off seconds.
+        if let Some(n) = tick.as_ref().and_then(|t| t.began) {
+            tracing::info!(step = n, "EMBER_SCRIPT step begins");
+        }
         if !self.script_spent && self.script.as_ref().is_some_and(script::Timeline::is_done) {
             self.script_spent = true;
             tracing::info!("EMBER_SCRIPT is spent; the client stays up and stays hands-off");
@@ -3186,7 +3198,17 @@ impl EmberGame for ShooterGame {
         // is the one moment the whole table matters, and nobody should
         // have to find Tab to see it.
         self.since_score_ui += dt;
-        let tab = input.down(KeyCode::Tab) || pad_down(PadButton::Start) || self.round_pause > 0.0;
+        // Gated like every other device read. The harness raises the client
+        // windows over the operator's work, so a click of theirs can focus
+        // one; from that moment their Tab (alt-tab, a shell completion)
+        // would flip the scoreboard overlay into our pictures. It cannot
+        // move the player, so this corrupts a capture rather than stealing
+        // the machine — but "the client reads no device" has to be true
+        // without an asterisk, or the next reader will not believe the rest.
+        let tab = tick.as_ref().map_or_else(
+            || input.down(KeyCode::Tab) || pad_down(PadButton::Start),
+            |_| false,
+        ) || self.round_pause > 0.0;
         if tab && self.my_id.is_some() {
             if self.since_score_ui > 0.25 || !self.score_shown {
                 self.since_score_ui = 0.0;
@@ -4297,8 +4319,26 @@ mod net {
                                 return;
                             }
                             Ok(_) => {}
+                            // os error 997 is Windows ERROR_IO_PENDING: the
+                            // 20 ms read timeout above firing inside an
+                            // overlapped read. Rust maps it to neither
+                            // WouldBlock nor TimedOut, so without the raw
+                            // check the arm below declared the channel dead
+                            // on an ordinary quiet 20 ms and the client sat
+                            // there showing "connection lost" while the
+                            // server logged a plain disconnect. Measured on
+                            // 2026-09-04: a capture's alpha dropped 7.5 s in
+                            // with nothing in either log. Every other read
+                            // loop in this workspace already carries this
+                            // predicate (`arena-server/src/lib.rs`,
+                            // `arena-server/examples/wsbot.rs`,
+                            // `ember-client-net::transport`,
+                            // `fire_core::proto::is_transient_read`); this
+                            // one was the exception, so it is inlined here
+                            // rather than depending on any of them.
                             Err(tungstenite::Error::Io(e))
-                                if e.kind() == std::io::ErrorKind::WouldBlock
+                                if e.raw_os_error() == Some(997)
+                                    || e.kind() == std::io::ErrorKind::WouldBlock
                                     || e.kind() == std::io::ErrorKind::TimedOut => {}
                             Err(_) => {
                                 dead.store(true, Ordering::Relaxed);
@@ -4806,94 +4846,172 @@ mod wire_tests {
         assert_eq!(game.pitch, 0.3);
     }
 
-    /// While a script drives the client, the device is not read at all.
+    /// A device saying everything at once, for the two tests below.
     ///
-    /// The same snapshot — W and Shift and R held, the left button down, a
-    /// pad on full trigger, and 400 x 120 px of raw mouse motion — is fed to
-    /// two clients. The scripted one turns only where its script says, and
-    /// sends only what its script holds; the unscripted one does everything
-    /// the device asked. Remove any one gate in `update` and the scripted
-    /// half fails: the mouse turns the view, or the keys walk it forward, or
-    /// the trigger and the reload come back.
-    #[test]
-    fn a_script_drives_the_client_and_the_device_is_ignored() {
-        let device = InputState::from_parts(
-            &[KeyCode::KeyW, KeyCode::ShiftLeft, KeyCode::KeyR],
-            &[MouseButton::Left],
+    /// Every intent `update` reads from a device is held here, and each one
+    /// is what makes the matching gate in `update` load-bearing: W (move),
+    /// Shift (sprint), R (reload), Tab (the scoreboard), Q (shield), Space
+    /// (jump), E (melee), both mouse buttons (fire and ADS), 400 x 120 px of
+    /// raw mouse motion (the look — this is the read that used to hand the
+    /// operator's mouse our camera), and a pad on full trigger with both
+    /// sticks pushed. Deliberately absent: C, because the scripted half
+    /// asserts that crouch came from the script, and a device C would make
+    /// that assertion pass with the gate deleted.
+    fn a_busy_device() -> InputState {
+        InputState::from_parts(
+            &[
+                KeyCode::KeyW,
+                KeyCode::ShiftLeft,
+                KeyCode::KeyR,
+                KeyCode::Tab,
+                KeyCode::KeyQ,
+                KeyCode::Space,
+                KeyCode::KeyE,
+            ],
+            &[MouseButton::Left, MouseButton::Right],
             (400.0, 120.0),
             Some(ember_engine::PadState {
                 rt: 1.0,
+                left: [1.0, 1.0],
+                right: [1.0, 0.0],
                 ..ember_engine::PadState::default()
             }),
-        );
-        // (yaw, pitch, every Input that reached the wire)
-        let run = |src: Option<&str>| {
-            let (chan, wire) = net::NetChan::detached();
-            let mut game = ShooterGame::with_chan(chan, None, None);
-            game.my_id = Some(2);
-            game.latest.insert(2, me(2));
-            game.was_alive = true;
-            game.script = src.map(|s| script::Timeline::parse(s).expect("the script parses"));
-            for _ in 0..12 {
-                game.update(&device, 0.02);
-            }
-            let mut sent = Vec::new();
-            while let Ok(msg) = wire.try_recv() {
-                if let C2S::Input {
-                    mx,
-                    my,
-                    fire,
-                    crouch,
-                    sprint,
-                    reload,
-                    ..
-                } = msg
-                {
-                    sent.push((mx, my, fire, crouch, sprint, reload));
-                }
-            }
-            (game.yaw, game.pitch, sent)
-        };
+        )
+    }
 
+    /// Run a client for 12 frames against [`a_busy_device`], scripted or
+    /// not, and return it with every `Input` that reached the wire.
+    fn run_against_device(src: Option<&str>) -> (ShooterGame, Vec<C2S>) {
+        let device = a_busy_device();
+        let (chan, wire) = net::NetChan::detached();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.my_id = Some(2);
+        game.latest.insert(2, me(2));
+        game.was_alive = true;
+        game.script = src.map(|s| script::Timeline::parse(s).expect("the script parses"));
+        for _ in 0..12 {
+            game.update(&device, 0.02);
+        }
+        let mut sent = Vec::new();
+        while let Ok(msg) = wire.try_recv() {
+            if matches!(msg, C2S::Input { .. }) {
+                sent.push(msg);
+            }
+        }
+        (game, sent)
+    }
+
+    /// While a script drives the client, the device is not read at all.
+    ///
+    /// [`a_busy_device`] is fed to a scripted client, which must turn only
+    /// where its script says and send only what its script holds. Every
+    /// assertion here pins one gate in `update`, and the companion test
+    /// below proves none of them is vacuous. Delete a gate and this fails:
+    /// the mouse or the right stick turns the view, the keys walk it
+    /// forward, the trigger, reload, shield, jump, melee or scope come back,
+    /// or Tab flips the scoreboard into the picture.
+    #[test]
+    fn a_script_drives_the_client_and_the_device_is_ignored() {
         // Face +Z, then crouch-strafe left for the rest of the run.
-        let (yaw, pitch, sent) = run(Some("aim 90; crouch a 5"));
+        let (game, sent) = run_against_device(Some("aim 90; crouch a 5"));
         assert!(!sent.is_empty(), "the scripted client still sends input");
+        let yaw = game.yaw;
         assert!(
             (yaw - std::f32::consts::FRAC_PI_2).abs() < 1e-5,
-            "yaw {yaw}: the script set the heading and the mouse never moved it"
+            "yaw {yaw}: the script set the heading, and neither the mouse nor the right stick moved it"
         );
         assert!(
-            pitch.abs() < 1e-6,
-            "pitch {pitch}: 120 px of device motion did not tilt the view"
+            game.pitch.abs() < 1e-6,
+            "pitch {}: 120 px of device motion did not tilt the view",
+            game.pitch
         );
-        for &(mx, my, fire, crouch, sprint, reload) in &sent {
-            // Facing +Z, left of that is +X: the script's strafe, not W.
+        assert!(
+            game.zoom < 1e-3,
+            "zoom {}: the held right button did not raise the scope",
+            game.zoom
+        );
+        assert!(
+            !game.score_shown,
+            "the held Tab did not put the scoreboard in the picture"
+        );
+        for m in &sent {
+            let C2S::Input {
+                mx,
+                my,
+                fire,
+                crouch,
+                sprint,
+                reload,
+                jump,
+                shield,
+                melee,
+                ads,
+                ..
+            } = *m
+            else {
+                unreachable!("filtered to Input")
+            };
+            // Facing +Z, left of that is +X: the script's strafe, not W and
+            // not the left stick.
             assert!(mx > 0.9 && my.abs() < 0.1, "moved ({mx}, {my}), not left");
             assert!(!fire, "the held trigger and the pad's did not fire");
             assert!(!sprint, "the held Shift did not sprint");
             assert!(!reload, "the held R did not reload");
+            assert!(!shield, "the held Q did not raise the shield");
+            assert!(!jump, "the held Space did not jump");
+            assert!(!melee, "the held E did not swing");
+            assert!(!ads, "the held right button did not go to the sim");
             assert!(crouch, "the script's crouch is what reached the wire");
         }
+    }
 
-        // The same device with no script: proof the assertions above are not
-        // vacuous — every one of them flips.
-        let (yaw, pitch, sent) = run(None);
+    /// The same device with no script: proof the assertions above are not
+    /// vacuous — every one of them flips.
+    #[test]
+    fn without_a_script_that_same_device_does_all_of_it() {
+        let (game, sent) = run_against_device(None);
         assert!(
-            yaw.abs() > 1.0,
-            "unscripted, the mouse turns the view: {yaw}"
+            game.yaw.abs() > 1.0,
+            "unscripted, the mouse turns the view: {}",
+            game.yaw
         );
         assert!(
-            pitch.abs() > 0.01,
-            "unscripted, the mouse tilts it: {pitch}"
+            game.pitch.abs() > 0.01,
+            "unscripted, the mouse tilts it: {}",
+            game.pitch
         );
-        let last = *sent.last().expect("the unscripted client sends input");
-        // W walks at full speed along whatever heading the mouse left.
+        assert!(game.zoom > 0.1, "unscripted, the right button scopes");
+        assert!(game.score_shown, "unscripted, Tab shows the scoreboard");
+        let held = |f: fn(&C2S) -> bool| sent.iter().any(f);
+        // Jump and melee are edge-latched, so they land in one packet, not
+        // all of them; the rest are held every frame.
+        assert!(held(|m| matches!(m, C2S::Input { jump: true, .. })), "jump");
         assert!(
-            (last.0.hypot(last.1) - 1.0).abs() < 0.05,
-            "unscripted, W walks: {last:?}"
+            held(|m| matches!(m, C2S::Input { melee: true, .. })),
+            "melee"
         );
-        assert!(last.2 && last.4 && last.5, "unscripted: fire/sprint/reload");
-        assert!(!last.3, "unscripted, nothing crouches");
+        let C2S::Input {
+            mx,
+            my,
+            fire,
+            crouch,
+            sprint,
+            reload,
+            shield,
+            ads,
+            ..
+        } = *sent.last().expect("the unscripted client sends input")
+        else {
+            unreachable!("filtered to Input")
+        };
+        // W and the left stick walk at full speed along the mouse's heading.
+        assert!(
+            (mx.hypot(my) - 1.0).abs() < 0.05,
+            "unscripted, W walks: ({mx}, {my})"
+        );
+        assert!(fire && sprint && reload, "unscripted: fire/sprint/reload");
+        assert!(shield && ads, "unscripted: shield/ads");
+        assert!(!crouch, "unscripted, nothing crouches");
     }
 
     /// The scope view is a frame-level fact: the sniper mostly zoomed draws

@@ -89,6 +89,12 @@ struct App<G: EmberGame> {
     /// does, but a pad is polled, not delivered, so the platform has to
     /// remember focus itself to give the pad the same rule: an alt-tabbed
     /// game neither reads a held trigger nor buzzes the pad.
+    ///
+    /// Seeded from [`EngineConfig::activate`], not from `true`: a window
+    /// that opened without activating is never sent `Focused(false)` (there
+    /// was no focus to lose), so a `true` here would have left a hands-off
+    /// client polling the operator's gamepad and buzzing its motors for the
+    /// whole of a capture — reading and driving a device in their hands.
     focused: bool,
     last_frame: Instant,
     /// Rate limit for stall warnings so one bad stretch doesn't spam.
@@ -427,6 +433,7 @@ pub fn run<G: EmberGame + 'static>(config: EngineConfig, game: G) {
     // would busy-spin the event loop between frames.
     #[cfg(target_arch = "wasm32")]
     event_loop.set_control_flow(ControlFlow::Wait);
+    let focused = config.activate;
     let app = App {
         config,
         window: None,
@@ -436,7 +443,7 @@ pub fn run<G: EmberGame + 'static>(config: EngineConfig, game: G) {
         game,
         input: InputState::default(),
         haptics: Haptics::new(),
-        focused: true,
+        focused,
         last_frame: Instant::now(),
         last_stall_warn: None,
         #[cfg(not(target_arch = "wasm32"))]

@@ -18,12 +18,20 @@ with a view jump in them).
 Driving the game is now the CLIENT'S job. `EMBER_SCRIPT` carries a timeline
 of what to do and the client feeds it into its own input state each frame;
 while it is set the client reads no keyboard, no mouse, no mouse motion and
-no gamepad, and it never grabs the cursor. The grammar and the reasoning
-live in one place, `crates/arena/src/script.rs`; the short of it is that
-steps are separated by `;`, a step is a few words and an optional duration
-in seconds, and time is the client's own frame clock:
+no gamepad, it never grabs the cursor, and its window opens without taking
+the foreground. The grammar and the reasoning live in one place,
+`crates/arena/src/script.rs`; the short of it is that steps are separated by
+`;`, a step is a few words and an optional duration in seconds, and time is
+the client's own frame clock:
 
     wait 1.5; walk w 2; sprint w 2; crouch w 2; aim 90; ads fire 0.12; wait 0.5
+
+EVERY client gets a script, including an idle observer, and an EMPTY one
+counts: `EMBER_SCRIPT=""` is a blank timeline, not an unscripted client.
+This script refuses to launch a client without one, because a client with no
+EMBER_SCRIPT at all is the pre-fix client — it grabs the pointer, takes the
+foreground and reads the device — and that is one flag away from happening
+by accident.
 
 This script's only jobs are: start the server on 7778 and the clients with
 their environment, place their windows apart, capture window rectangles, and
@@ -45,27 +53,64 @@ What earlier sessions paid for and this still encodes:
 The capture reads the screen rectangle of each window, so the windows are
 raised to topmost with SWP_NOACTIVATE — raised, never activated: that takes
 screen space, which is visible and reversible, and never takes focus or
-input. Anything the operator drags over them will land in the picture, so
-give them a clear corner (-X, -Y, -Gap) or a second monitor.
+input. They are dropped back to NOTOPMOST in a `finally`, so a `-KeepRunning`
+run does not leave two game windows sitting over the operator's work.
+Anything the operator drags over them while the shots are being taken will
+land in the picture, so give them a clear corner (-X, -Y, -Gap) or a second
+monitor.
 
 Usage (from the repo root, after `cargo build -p arena -p arena-server --bins`; -Profile release for release binaries):
 
     powershell -ExecutionPolicy Bypass -File tools/v18/capture.ps1 -Out tools/v18 -Prefix smoke `
         -ScriptA 'wait 1.5; melee; wait 0.25; fire 0.05; wait 0.5' `
-        -Shots @(@{name='idle'; at=1.4}, @{name='melee'; at=1.9}, @{name='shot'; at=2.3})
+        -Shots 'idle@1.4;melee#2;shot@2.3'
 
--ScriptA is client A's timeline; -Shots are the moments to photograph, in
-seconds from the moment every client logged "EMBER_SCRIPT starts" (its first
-scripted frame — NOT when its window appeared, which is several seconds
-earlier), each written to <Out>/<Prefix>-<name>-<client>.png (-Out is
-relative to the repo root, or absolute). -ScriptB is client B's, and
-defaults to a long `wait` so the observer is hands-off too — an unscripted
-client would still ask for the cursor if anything clicked it.
+-ScriptA is client A's timeline; -ScriptB is client B's, and defaults to a
+long `wait` so the observer is hands-off too. -Shots are the moments to
+photograph, ONE `;`-separated string (an array works too, in-process), each
+written to <Out>/<Prefix>-<name>-<client>.png (-Out is relative to the repo
+root, or absolute), in either of two forms:
+
+  * `name@SECONDS` — seconds on this script's WALL clock, counted from the
+    moment client A logged "EMBER_SCRIPT starts" (its first scripted frame —
+    NOT when its window appeared, which is several seconds earlier);
+  * `name#N` — when client A begins step N of its script, read from A's own
+    log. Prefer this. The two clocks drift: the engine clamps `dt` at 100 ms,
+    so every frame slower than 10 fps loses script time for good, and a dev
+    client on a machine someone is working at does hitch.
+
+Both forms depend on the client's stdout, which reaches this script through
+`Register-ObjectEvent` handlers that only run when the runspace is idle. At
+startup that lags — measured at 2.0 s, while a burst of wgpu INFO lines
+drains — so the wall clock is back-dated to the client's own stamp on
+"EMBER_SCRIPT starts" and the lag is printed. A `#N` shot is still only as
+prompt as the log stream, so do NOT photograph step 1 — its line arrives
+during that drain (measured: `idle#1` landed 3.5 s into a script whose step 1
+was `wait 3.0`, i.e. after it had ended). Head every script with a `wait` and
+photograph from step 2 on; by then the stream has caught up, and every later
+step in the runs this was written for landed within about 20 ms of the step
+the client logged.
+
+The evidence pass at the end waits, bounded, for alpha to log "EMBER_SCRIPT
+is spent" before reading the status lines: the last photograph is usually
+taken before the last step runs, and reading the log at that moment shows a
+magazine that has not been fired yet.
+
+Shots are taken in the order you give them, so the two forms interleave.
+Both take a hashtable too (`@{name='shot'; at=2.3}`, `@{name='shot';
+step=4}`) when the script is called IN-PROCESS. Through `powershell -File`
+every argument arrives as a string and a hashtable is lost — the repo paid
+for that once with `-Steps` — so the string forms above are the ones the
+usage line uses, and they work either way.
 
 -Map picks the lobby's map (v18 servers), -Mode the lobby's mode (v19
 servers: ffa, tdm or hill), -Cam pins client B's observer camera, -Weapon
 sets EMBER_WEAPON on both (a native debug override of the DRAWN weapon).
 -KeepRunning leaves everything up; -StopOnly just tears down.
+
+Teardown kills only what a capture can own: the -Profile client image this
+script launches, and whatever listens on -Port. An operator's own release
+client is not ours to kill.
 
 (-Steps is gone. It described synthetic key presses and mouse buttons, which
 is exactly what may no longer happen here; it is replaced by -ScriptA plus
@@ -83,7 +128,7 @@ param(
     [string]$Prefix = "cap",
     [string]$ScriptA = "wait 3",
     [string]$ScriptB = "wait 3600",
-    [object[]]$Shots = @(@{name = 'idle'; at = 1.5 }),
+    [object[]]$Shots = @("idle@1.5"),   # 'a@1.0;b#4' or @('a@1.0','b#4') or @{name='a';at=1.0}; see Read-Shots
     [int]$X = 0,
     [int]$Y = 40,
     [int]$Gap = 860,
@@ -103,6 +148,38 @@ New-Item -ItemType Directory -Force $runDir | Out-Null
 $outDir = if ([System.IO.Path]::IsPathRooted($Out)) { $Out } else { Join-Path $repo $Out }
 New-Item -ItemType Directory -Force $outDir | Out-Null
 
+# A client with no script is the pre-fix client: it grabs the pointer, takes
+# the foreground and reads the operator's keyboard and mouse. An empty string
+# is a blank timeline in the client and would be safe, but .NET DROPS an
+# empty environment variable rather than passing it, so the client would come
+# up with EMBER_SCRIPT unset. Refuse both, here, before anything launches.
+if ([string]::IsNullOrWhiteSpace($ScriptA)) {
+    throw "-ScriptA is empty: a client without EMBER_SCRIPT reads the operator's device and grabs their cursor. Use 'wait 3600' for a client that does nothing."
+}
+if ($Clients -ge 2 -and [string]::IsNullOrWhiteSpace($ScriptB)) {
+    throw "-ScriptB is empty: a client without EMBER_SCRIPT reads the operator's device and grabs their cursor. Use 'wait 3600' for an idle observer."
+}
+
+# -Shots, in either form, to a list of @{name; at} / @{name; step}.
+function Read-Shots([object[]]$raw) {
+    $out = @()
+    foreach ($s in $raw) {
+        if ($s -is [hashtable]) { $out += , $s; continue }
+        # One string may carry the whole list. It has to: a shell that is not
+        # PowerShell hands `-Shots 'a','b'` across a `-File` boundary as the
+        # single token "a,b", and an array that silently became one string is
+        # how the old `-Steps` lost its arguments.
+        foreach ($t in ([string]$s).Split(@(';', ','), [StringSplitOptions]::RemoveEmptyEntries)) {
+            $t = $t.Trim()
+            if ($t -match '^(?<n>[^@#]+)#(?<v>\d+)$') { $out += , @{ name = $Matches.n; step = [int]$Matches.v } }
+            elseif ($t -match '^(?<n>[^@#]+)@(?<v>[\d.]+)$') { $out += , @{ name = $Matches.n; at = [double]$Matches.v } }
+            else { throw "cannot read shot '$t': write it as name@SECONDS or name#STEP, separated by ';'" }
+        }
+    }
+    return $out
+}
+$shotList = Read-Shots $Shots
+
 Add-Type -AssemblyName System.Drawing
 # Only what a hands-off harness needs: measure a window, place it, read the
 # screen. Nothing in here can produce an input event, and nothing may be
@@ -120,10 +197,15 @@ public static class Win {
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, System.Text.StringBuilder s, int n);
     public static readonly IntPtr TOPMOST = new IntPtr(-1);
+    /// Where a raised window goes back to when the shots are done: a capture
+    /// borrows the operator's screen space, it does not keep it.
+    public static readonly IntPtr NOTOPMOST = new IntPtr(-2);
     /// Raise and place without ever activating: SWP_NOACTIVATE only. No
     /// SWP_SHOWWINDOW - it is ShowWindow by another name, and ShowWindow
     /// hides a winit window.
     public const uint NOACTIVATE = 0x0010;
+    /// Keep the position and size a SetWindowPos already set.
+    public const uint NOMOVESIZE = 0x0002 | 0x0001;
     /// The visible top-level window of a process whose title starts with "ember", or zero.
     public static IntPtr GameWindow(uint pid) {
         IntPtr found = IntPtr.Zero;
@@ -140,8 +222,13 @@ public static class Win {
 }
 "@
 
+# Kill only what a capture can own. Never by image name alone: the operator
+# may be playing a release client, or running one from another checkout, and
+# that is not ours to stop (the same rule MEMORY records for cloudflared).
 function Stop-All {
-    Get-Process arena-app -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Get-Process arena-app -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -eq $client } |
+        Stop-Process -Force -ErrorAction SilentlyContinue
     $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
     foreach ($c in $conn) { Stop-Process -Id $c.OwningProcess -Force -ErrorAction SilentlyContinue }
 }
@@ -213,6 +300,11 @@ function Place-Client([System.Diagnostics.Process]$p, [int]$x) {
     while ((Get-Date) -lt $deadline -and [Win]::GameWindow([uint32]$p.Id) -eq [IntPtr]::Zero) { Start-Sleep -Milliseconds 100 }
     $r = Get-Rect $p
     [void][Win]::SetWindowPos($r.h, [Win]::TOPMOST, $x, $Y, $r.w, $r.ht, [Win]::NOACTIVATE)
+    return $r.h
+}
+# Give the screen space back. Still never activates, still never ShowWindow.
+function Unraise([IntPtr]$h) {
+    if ($h -ne [IntPtr]::Zero) { [void][Win]::SetWindowPos($h, [Win]::NOTOPMOST, 0, 0, 0, 0, [Win]::NOACTIVATE -bor [Win]::NOMOVESIZE) }
 }
 function Capture-Client([System.Diagnostics.Process]$p, [string]$path) {
     $r = Get-Rect $p
@@ -223,47 +315,101 @@ function Capture-Client([System.Diagnostics.Process]$p, [string]$path) {
     $g.Dispose(); $bmp.Dispose()
 }
 
-Place-Client $a $X
-if ($b) { Place-Client $b ($X + $Gap) }
+$hA = Place-Client $a $X
+$hB = [IntPtr]::Zero
+if ($b) { $hB = Place-Client $b ($X + $Gap) }
 # A window appears BEFORE the GPU context is built, so the window is not the
 # starting gun: the client logs "EMBER_SCRIPT starts" on the frame its first
 # step runs, and the shot clock starts once every client has said it. An
 # earlier version timed from the window instead and photographed three
 # identical frames of a client that had not begun.
-function Wait-Script([string]$handle, [int]$seconds) {
+function Wait-Log([string]$handle, [string]$pattern, [int]$seconds) {
     $log = Join-Path $runDir "$handle.log"
     $deadline = (Get-Date).AddSeconds($seconds)
     while ((Get-Date) -lt $deadline) {
-        if ((Test-Path $log) -and (Select-String -Path $log -Pattern "EMBER_SCRIPT starts" -Quiet)) { return $true }
+        if (Test-Path $log) {
+            $m = Select-String -Path $log -Pattern $pattern | Select-Object -First 1
+            if ($m) { return $m.Line }
+        }
         Start-Sleep -Milliseconds 50
     }
-    Write-Warning "$handle never logged 'EMBER_SCRIPT starts' - the shot times will not line up"
-    return $false
+    return $null
+}
+# How old a log line already was when we read it. The client's stdout reaches
+# this script through Register-ObjectEvent handlers that only run when the
+# runspace is idle, so a line can be SECONDS old by the time Wait-Log sees it
+# (measured 2.0 s on a one-client run). Every `@SECONDS` shot would be that
+# much late; the client stamps its own lines, so read the stamp instead.
+function Log-Age([string]$line) {
+    if ($line -and $line -match '^(\S+Z)\s') {
+        $t = [datetime]::Parse($Matches[1], [cultureinfo]::InvariantCulture,
+            [System.Globalization.DateTimeStyles]::AdjustToUniversal -bor [System.Globalization.DateTimeStyles]::AssumeUniversal)
+        return [int]((Get-Date).ToUniversalTime() - $t).TotalMilliseconds
+    }
+    return 0
 }
 # The clock is ALPHA's, because alpha is the client the script drives. B
 # comes up two seconds later and loads the same assets, so head a script
 # with a `wait` long enough for it, or B's first picture is of a client that
 # is not drawing yet; how much of the clock B cost is reported.
-[void](Wait-Script "alpha" 60)
+$startLine = Wait-Log "alpha" "EMBER_SCRIPT starts" 60
 $clock = [Diagnostics.Stopwatch]::StartNew()
+$lagMs = 0
+if ($startLine) {
+    $lagMs = Log-Age $startLine
+    if ($lagMs -gt 100) { Write-Host ("alpha's log reached this script {0} ms late; the shot clock is back-dated by that" -f $lagMs) }
+}
+else { Write-Warning "alpha never logged 'EMBER_SCRIPT starts' - the shot times will not line up" }
+# The script clock is ALPHA's own, `$lagMs` ahead of this stopwatch.
+function Script-Ms { return [int]$clock.ElapsedMilliseconds + $lagMs }
 if ($b) {
-    [void](Wait-Script "bravo" 30)
-    $late = $clock.Elapsed.TotalSeconds
-    if ($late -gt 0.1) { Write-Warning ("bravo started {0:n2}s after alpha's script did; every shot time is that much late" -f $late) }
+    $bLine = Wait-Log "bravo" "EMBER_SCRIPT starts" 30
+    if (-not $bLine) { Write-Warning "bravo never logged 'EMBER_SCRIPT starts' - it may not be drawing yet" }
+    else {
+        $late = ((Script-Ms) - (Log-Age $bLine)) / 1000.0
+        if ($late -gt 0.1) { Write-Warning ('bravo started {0:n2}s after alpha''s script did; head the script with a wait that long or B''s first picture is of a client that is not drawing yet' -f $late) }
+    }
 }
 
-# 3. The photographs, at their moments.
-foreach ($s in ($Shots | Sort-Object { [double]$_.at })) {
-    $left = [int](1000 * [double]$s.at) - [int]$clock.ElapsedMilliseconds
-    if ($left -gt 0) { Start-Sleep -Milliseconds $left }
-    Capture-Client $a (Join-Path $outDir "$Prefix-$($s.name)-A.png")
-    if ($b) { Capture-Client $b (Join-Path $outDir "$Prefix-$($s.name)-B.png") }
-    Write-Host ("captured {0} at {1:n2}s of script ({2:n1}s wall)" -f $s.name, $clock.Elapsed.TotalSeconds, $sw.Elapsed.TotalSeconds)
+# 3. The photographs, at their moments. A `#N` shot waits for alpha's own log
+#    to say that step began, which is the client's clock and cannot drift; an
+#    `@S` shot waits on this wall clock, which can.
+try {
+    # In the ORDER YOU GAVE THEM, so the two forms interleave correctly. A
+    # wall-clock moment already past is taken at once and said so.
+    foreach ($s in $shotList) {
+        if ($s.ContainsKey('at')) {
+            $left = [int](1000 * [double]$s.at) - (Script-Ms)
+            if ($left -gt 0) { Start-Sleep -Milliseconds $left }
+            else { Write-Warning ("'{0}' at {1}s was already past when its turn came; taken at once" -f $s.name, $s.at) }
+            $when = ("{0:n2}s" -f ((Script-Ms) / 1000.0))
+        }
+        else {
+            $n = [int]$s.step
+            if (-not (Wait-Log "alpha" "EMBER_SCRIPT step begins step=$n\b" 120)) { Write-Warning "alpha never reached step $n; '$($s.name)' is a photograph of whatever it was doing instead" }
+            $when = ("step {0} at {1:n2}s" -f $n, ((Script-Ms) / 1000.0))
+        }
+        Capture-Client $a (Join-Path $outDir "$Prefix-$($s.name)-A.png")
+        if ($b) { Capture-Client $b (Join-Path $outDir "$Prefix-$($s.name)-B.png") }
+        Write-Host ("captured {0} at {1} ({2:n1}s wall)" -f $s.name, $when, $sw.Elapsed.TotalSeconds)
+    }
+}
+finally {
+    # Whatever happened above, the operator gets their screen back.
+    Unraise $hA
+    Unraise $hB
 }
 
 # 4. Evidence from the logs: that each client took its script at all (a
 #    client that did not is a client that would read the operator's device),
-#    and the status lines, which carry the ammo count and so prove a shot.
+#    that the script PARSED (an empty timeline is hands-off but photographs a
+#    client standing still, and says so nowhere else), and the status lines,
+#    which carry the ammo count and so prove a shot.
+#    Wait for alpha's script to finish first, bounded: the last photograph is
+#    often taken BEFORE the last step runs, and reading the log at that moment
+#    shows a magazine that has not been fired yet. Measured: a `fire 0.6` two
+#    steps past the final shot reported 8/8 and looked like a dud.
+if (-not (Wait-Log "alpha" "EMBER_SCRIPT is spent" 8)) { Write-Host "alpha's script was still running 8s after the last shot; the status lines below are from mid-script" }
 Start-Sleep -Milliseconds 500
 foreach ($h in @("alpha", "bravo")) {
     $log = Join-Path $runDir "$h.log"
@@ -272,10 +418,19 @@ foreach ($h in @("alpha", "bravo")) {
     $drives = $lines | Select-String -Pattern "EMBER_SCRIPT drives this client" | Select-Object -Last 1
     if ($drives) { Write-Host "--- $h is script-driven (hands-off)" }
     else { Write-Warning "$h never reported EMBER_SCRIPT: it is reading the DEVICE. Fix that before the next run." }
+    if ($lines | Select-String -Pattern "EMBER_SCRIPT did not parse" -Quiet) {
+        Write-Warning "$h's script DID NOT PARSE - it stood still for the whole run and every picture of it is worthless. The client logs the reason above."
+    }
+    elseif ($drives -and $drives.Line -match 'steps=(\d+)' -and [int]$Matches[1] -eq 0) {
+        Write-Warning "$h's script has no steps: it stood still for the whole run."
+    }
     $spent = $lines | Select-String -Pattern "EMBER_SCRIPT is spent" | Select-Object -Last 1
     if ($spent) { Write-Host "    script finished" }
     $status = $lines | Select-String -Pattern "status=" | Select-Object -Last 3
     $status | ForEach-Object { Write-Host ("    " + $_.Line.Substring([Math]::Max(0, $_.Line.IndexOf('status=')))) }
 }
-if (-not $KeepRunning) { Stop-All }
+if (-not $KeepRunning) {
+    foreach ($p in @($a, $b, $srv)) { if ($p) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } }
+    Stop-All
+}
 Write-Host ("done in {0:n1}s; logs in {1}" -f $sw.Elapsed.TotalSeconds, $runDir)
