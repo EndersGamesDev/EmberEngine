@@ -146,6 +146,53 @@ pub enum DispatchError {
     /// Static header count or offsets disagree with the output plan.
     #[error("static dispatch headers do not match output pages")]
     HeaderMismatch,
+    /// No immutable header set was supplied for a reservation.
+    #[error("a header reservation requires at least one set")]
+    EmptyHeaderSets,
+    /// A header set exceeds the executor's per-set page capacity.
+    #[error("header set has {actual} pages; executor capacity is {capacity}")]
+    HeaderPageCapacity {
+        /// Supplied page count.
+        actual: u32,
+        /// Fixed pages per set.
+        capacity: u32,
+    },
+    /// The fixed header-set regions cannot admit the requested reservation.
+    #[error(
+        "header buffer cannot reserve contiguous run of {requested_sets} sets; {total_free_sets} total set regions are free and the longest free run is {longest_free_run}"
+    )]
+    HeaderSetCapacity {
+        /// Contiguous set regions requested.
+        requested_sets: u32,
+        /// Total currently free set regions.
+        total_free_sets: u32,
+        /// Largest currently free contiguous run of set regions.
+        longest_free_run: u32,
+    },
+    /// A handle came from another executor.
+    #[error("header-set handle belongs to another executor")]
+    ForeignHeaderSet,
+    /// A handle names a released or reused reservation.
+    #[error("header-set handle is stale")]
+    StaleHeaderSet,
+    /// A selector names no resident set in its reservation.
+    #[error("header set {set} is outside reservation count {set_count}")]
+    HeaderSetSelection {
+        /// Requested set index.
+        set: u32,
+        /// Number of resident sets.
+        set_count: u32,
+    },
+    /// A selector names no page in its resident set.
+    #[error("header page {page} is outside set {set} page count {page_count}")]
+    HeaderPageSelection {
+        /// Selected set.
+        set: u32,
+        /// Requested page.
+        page: u32,
+        /// Number of resident pages in the set.
+        page_count: u32,
+    },
 }
 
 /// One fragment pass selected by a static dynamic-uniform offset.
@@ -182,6 +229,7 @@ pub struct RegisteredKernel {
     input_count: usize,
     output_count: usize,
     uniform_size: u32,
+    output_page_side: u16,
     output_page_records: u32,
 }
 
@@ -331,6 +379,7 @@ impl RegisteredKernel {
             input_count: desc.accessors.len(),
             output_count: desc.output_fields.len(),
             uniform_size: desc.uniform_size,
+            output_page_side: desc.output_page_side,
             output_page_records: u32::from(desc.output_page_side).pow(2),
         })
     }
@@ -345,6 +394,24 @@ impl RegisteredKernel {
     #[must_use]
     pub fn source(&self) -> &str {
         &self.source
+    }
+
+    /// Number of RGBA32F outputs written through MRT.
+    #[must_use]
+    pub const fn output_count(&self) -> usize {
+        self.output_count
+    }
+
+    /// Exact uniform payload size in bytes.
+    #[must_use]
+    pub const fn uniform_size(&self) -> u32 {
+        self.uniform_size
+    }
+
+    /// Constant square side of every output page.
+    #[must_use]
+    pub const fn output_page_side(&self) -> u16 {
+        self.output_page_side
     }
 
     /// Validates dynamic span handles and constructs the static page sequence.

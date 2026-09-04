@@ -10,6 +10,8 @@ WebGL2, that is OpenGL ES 3.0 semantics in the browser, is required; WebGL1 is n
 
 The decision rests on where the extension is missing: WebGL2 implementations on desktop GPUs, on Apple GPUs since the WebGL2 introduction in Safari, and on the Adreno, Mali and PowerVR generations that expose WebGL2 at all carry it; the devices that lack it are overwhelmingly devices that lack WebGL2 entirely, so requiring the extension excludes almost nobody the WebGL2 requirement did not already exclude.
 
+A combined depth-and-stencil attachment, `Depth24PlusStencil8` in wgpu and `DEPTH24_STENCIL8` in the underlying API, is required. OpenGL ES 3.0 makes it a mandatory renderbuffer-renderable format and WebGL2 exposes it without an extension, so it sits inside the floor rather than raising it, and WebGPU lists `depth24plus-stencil8` as a core format needing no feature. Ember asks for the stencil because two independently sampled surfaces of the same field cannot be composed by depth: the Julibrot scene pass stamps the main grid's fragments and admits the coverage backdrop only where no stamp is present (`docs/julibrot/present.md`). A device that cannot allocate the combined format is refused the usual way rather than silently losing the composition rule.
+
 The WebGL2 guaranteed minimums Ember relies on, and therefore never queries as if they were optional, are 4 colour attachments (the dialect's maximum of four kernel outputs is chosen to match), 16 KiB uniform blocks (1,024 descriptor records), 16 vertex-stage texture units, 256 texture-array layers and 2,048 texels of texture dimension; a device may expose more, and the runtime capability probe reports what it actually exposes, but the design must work at the minimums.
 
 ## 2. What is deliberately not required

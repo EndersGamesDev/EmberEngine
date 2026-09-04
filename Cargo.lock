@@ -237,6 +237,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "astro-float"
+version = "0.9.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2cf6ecd69dd6fbe3763187ff2fa2b0e475b79f04ed86f631a7bc6b04ede0355e"
+dependencies = [
+ "astro-float-macro",
+ "astro-float-num",
+]
+
+[[package]]
+name = "astro-float-macro"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9c007205ae7076600c8a59022866990afac02ff186f9031839f67ecce4df2146"
+dependencies = [
+ "astro-float-num",
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
+name = "astro-float-num"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc7f6a0312e8f5845f84241b21bd2394d49940b6bc333c6a84f992e6dc9ebb85"
+dependencies = [
+ "itertools",
+ "lazy_static",
+]
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1122,6 +1154,72 @@ dependencies = [
  "serde_json",
  "sha2",
  "tracing",
+]
+
+[[package]]
+name = "ember-julibrot-app"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "ember-julibrot-kernels",
+ "ember-julibrot-math",
+ "ember-julibrot-present",
+ "ember-julibrot-worker",
+ "ember-lab-heap",
+ "js-sys",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu",
+]
+
+[[package]]
+name = "ember-julibrot-kernels"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "ember-julibrot-math",
+ "ember-lab-heap",
+ "naga",
+ "thiserror 2.0.20",
+ "wgpu",
+]
+
+[[package]]
+name = "ember-julibrot-math"
+version = "0.1.0"
+dependencies = [
+ "astro-float",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "ember-julibrot-present"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "ember-julibrot-kernels",
+ "ember-julibrot-math",
+ "ember-julibrot-worker",
+ "ember-lab-heap",
+ "naga",
+ "thiserror 2.0.20",
+ "wgpu",
+]
+
+[[package]]
+name = "ember-julibrot-worker"
+version = "0.1.0"
+dependencies = [
+ "ember-julibrot-math",
+ "ember-lab-heap",
+ "js-sys",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
@@ -2076,9 +2174,9 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
 name = "itertools"
-version = "0.13.0"
+version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
+checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
 dependencies = [
  "either",
 ]

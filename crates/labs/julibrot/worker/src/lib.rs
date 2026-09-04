@@ -1,0 +1,52 @@
+//! Reference-orbit worker, ownership channel, and versioned viewer state.
+
+#![deny(missing_docs)]
+
+#[cfg(target_arch = "wasm32")]
+mod browser;
+#[cfg(target_arch = "wasm32")]
+mod browser_owner;
+mod channel;
+pub(crate) mod codec;
+mod compute;
+mod credit;
+#[cfg(any(test, target_arch = "wasm32"))]
+mod endpoint;
+mod error;
+mod owner;
+mod registry;
+pub(crate) mod slots;
+mod wire;
+
+#[cfg(target_arch = "wasm32")]
+pub use browser::{
+    allocate_transfer_buffer, encode_transfer_request, read_transfer_header, transfer_record_bytes,
+    worker_main, write_transfer_credit, write_transfer_shutdown,
+};
+#[cfg(target_arch = "wasm32")]
+pub use browser_owner::BrowserOwnerEndpoint;
+pub use channel::{
+    BUFFER_RETURN_DEADLINE_US, JULIBROT_PHASE_IMPLEMENTED, MIN_MAX_ITER,
+    ORBIT_BUDGET_US_PER_SECOND, OrbitLease, OrbitResponseView, OwnerEndpoint, ProducerEndpoint,
+    RequestLease, SubmitOutcome, WorkerChannel, WorkerConfig, WorkerMode, worker_mode_from_search,
+};
+pub use codec::{CoordinateDescriptor, EncodedCentre, OrbitReason, OrbitRequest};
+pub use compute::{
+    MathFailureCode, MonotonicClock, ORBIT_CHUNK_MAX_ITERATIONS, ORBIT_CHUNK_MAX_US, OrbitTaskPoll,
+    ReferenceOrbitTask,
+};
+pub use credit::{Admission, CreditAccount, CreditCharge, ProducerShaper, WorkerFacts};
+pub use ember_julibrot_math::{
+    ComputedOrbit, PrecisionMode, ReferenceOrbitRecord, ReferencePass, ReferenceVerification,
+};
+pub use error::{ChannelError, ErrorCode};
+pub use owner::{
+    HotDrain, HotState, MainDrain, MainState, NavigationConfig, NavigationSubmission,
+    OrbitDisposition, OrbitHandle, OwnerError, ViewerOwner, ViewerState,
+};
+pub use registry::{OrbitRegistry, RegistryError};
+pub use wire::{
+    BUFFER_OVERHEAD_BYTES, ERROR_RECORD_BYTES, ErrorRecord, HEADER_BYTES, JULIBROT_ABI_VERSION,
+    MAGIC, MessageHeader, MessageKind, ORBIT_FACT_BYTES, ORBIT_RECORD_BYTES,
+    OrbitVerificationFacts, POOL_TRAILER_BYTES, Pool, PoolTrailer, TRAILER_MAGIC, buffer_capacity,
+};
