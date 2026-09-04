@@ -25,7 +25,7 @@ const SAVED: &str = include_str!("../src/saved.rs");
 const WIRE: &str = include_str!("../../worker/src/wire.rs");
 
 /// Every field the page facts must carry, in publication order.
-const PAGE_FACT_FIELDS: [&str; 118] = [
+const PAGE_FACT_FIELDS: [&str; 119] = [
     "abi_version",
     "adapter_name",
     "backend",
@@ -116,6 +116,7 @@ const PAGE_FACT_FIELDS: [&str; 118] = [
     "warp_source_scene_id",
     "reprojected_per_scene",
     "relief_redraw_count",
+    "warp_hold_count",
     "refreshes_without_scene",
     "chart_residual",
     "warp_max_error_px",
@@ -701,6 +702,7 @@ fn page_facts_carry_every_contract_field_without_fake_aggregate_counts() {
     assert!(FACTS.contains("sampled_reference_discards: loop_facts.sampled_reference_discards()"));
     assert!(FACTS.contains("last_draft_skip_reason: loop_facts.last_draft_skip_reason()"));
     assert!(FACTS.contains("relief_redraw_count: present.relief_redraw_count"));
+    assert!(FACTS.contains("warp_hold_count: present.warp_hold_count"));
     assert!(FACTS.contains("warp_exposed_fraction: present.warp_exposed_fraction"));
 }
 

@@ -217,7 +217,7 @@ pub enum WarpKind {
     AnchorHomography,
     /// Honest clear because no compatible source or finite plan exists.
     ClearOnly,
-    /// Unmoved retained picture held while manual mode waits for an explicit scene update.
+    /// Unmoved retained picture held by the app's manual or pending-replacement policy.
     HoldStale,
     /// Retained-record scene-mesh redraw because no image map can carry the relief deformation.
     ReliefRedraw,
@@ -382,6 +382,8 @@ pub struct PresentFacts {
     pub reprojected_per_scene: Option<u32>,
     /// Retained-record relief redraws submitted as warp work.
     pub relief_redraw_count: u64,
+    /// Refused warps submitted as stale-picture holds while replacement work remains pending.
+    pub warp_hold_count: u64,
     /// Refresh submissions without a retained scene.
     pub refreshes_without_scene: u64,
     /// Scene-target reallocations after initial construction.
@@ -407,6 +409,10 @@ pub struct PresentFacts {
 impl PresentFacts {
     pub(crate) const fn record_relief_redraw(&mut self) {
         self.relief_redraw_count = self.relief_redraw_count.saturating_add(1);
+    }
+
+    pub(crate) const fn record_warp_hold(&mut self) {
+        self.warp_hold_count = self.warp_hold_count.saturating_add(1);
     }
 
     /// Records the planner and exposure facts from one warp plan.
@@ -450,6 +456,7 @@ impl Default for PresentFacts {
             last_warp: None,
             reprojected_per_scene: None,
             relief_redraw_count: 0,
+            warp_hold_count: 0,
             refreshes_without_scene: 0,
             texture_reallocations: 0,
             warp_exposed: false,
@@ -566,6 +573,7 @@ mod tests {
         assert_eq!(facts.glitch_pixel_count, None);
         assert_eq!(facts.last_scene, None);
         assert_eq!(facts.relief_redraw_count, 0);
+        assert_eq!(facts.warp_hold_count, 0);
         assert_eq!(facts.status, PresentStatus::WaitingForFirstScene);
     }
 

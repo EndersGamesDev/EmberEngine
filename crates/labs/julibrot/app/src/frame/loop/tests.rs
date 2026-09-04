@@ -4,13 +4,13 @@ use std::{
 };
 
 use ember_julibrot_kernels::{
-    EscapeGrid, GridExtent, KernelMode, PerturbUniform, RefinementPlan, SampleStatus,
+    EscapeGrid, GridExtent, KernelError, KernelMode, PerturbUniform, RefinementPlan, SampleStatus,
     perturb_scaled_pixel, plan_refinement,
 };
 use ember_julibrot_math::{
     BigCentre, EscapeGridRecord, EscapeParams, Homography, MathError, ObjectAngles, OrbitStep,
-    Plane, PoseMap, PrecisionMode, ReferenceOrbitBuilder, ViewControls, pixel_scale, precision_for,
-    scale_split, screen_to_plane,
+    Plane, Pose, PoseMap, PrecisionMode, ReferenceOrbitBuilder, ViewControls, pixel_scale,
+    precision_for, scale_split, screen_to_plane,
 };
 
 use super::{
@@ -19,12 +19,15 @@ use super::{
     RefusalClass, SceneMode, SubmissionKind, apply_precision_mode, arrival_is_current,
     backdrop_extent, coverage_pre_empts, defer_scene_until_relief_redraw,
     expand_reference_texels_into, fence_error, hold_redraw_during_scene, horizon_facts,
-    main_for_grid, perturbation_reference_is_current, published_iteration_cap, sampling_zoom_log2,
-    schedule_exposure_fill, select_reference_candidate, stamp_scene_level, stamped_extent,
-    stamped_screen_map, view_projection_changed,
+    main_for_grid, optional_backdrop_plan, perturbation_reference_is_current,
+    published_iteration_cap, sampling_zoom_log2, schedule_exposure_fill,
+    select_reference_candidate, stamp_scene_level, stamped_extent, stamped_screen_map,
+    view_projection_changed,
 };
 use crate::{AppError, FramePolicy, LevelTimingLedger, ViewerController};
-use ember_julibrot_present::{SampleClass, SubmissionMeasurement, WarpKind};
+use ember_julibrot_present::{
+    PaletteId, SampleClass, SceneFrame, SubmissionMeasurement, Warp, WarpKind, WarpValidation,
+};
 use ember_lab_heap::SpanArena;
 
 /// Poll budget and wall the version-three present configuration refuses at.
@@ -678,6 +681,7 @@ struct FakePresenter {
     next_id: u64,
     pending: Option<PendingFakeScene>,
     pending_warp: Option<u64>,
+    pending_warp_kind: Option<WarpKind>,
     callback: Option<FakeEvent>,
     warp_callback: Option<FakeEvent>,
     fence_observations: u32,
@@ -690,7 +694,11 @@ struct FakePresenter {
     presented_scene: Option<u64>,
     pending_warp_source: Option<u64>,
     refuse_warp: bool,
+    relief_redraw: bool,
+    forced_warp_kind: Option<WarpKind>,
     warp_kind: Option<WarpKind>,
+    warp_hold_count: u64,
+    presented_clear_only: u64,
 }
 
 impl FakePresenter {
@@ -708,26 +716,39 @@ impl FakePresenter {
 
     fn write_hot(&mut self, hold_refused_warp: bool) {
         self.hot_writes += 1;
-        self.warp_kind = Some(if self.refuse_warp {
+        let planned = self.forced_warp_kind.unwrap_or_else(|| {
+            if self.relief_redraw && self.retained_scene.is_some() {
+                WarpKind::ReliefRedraw
+            } else if self.refuse_warp {
+                WarpKind::ClearOnly
+            } else if self.retained_scene.is_some() {
+                WarpKind::AnchorHomography
+            } else {
+                WarpKind::ClearOnly
+            }
+        });
+        self.warp_kind = Some(if planned == WarpKind::ClearOnly {
             if hold_refused_warp && self.retained_scene.is_some() {
                 WarpKind::HoldStale
             } else {
                 WarpKind::ClearOnly
             }
-        } else if self.retained_scene.is_some() {
-            WarpKind::AnchorHomography
         } else {
-            WarpKind::ClearOnly
+            planned
         });
     }
 
     fn submit_warp(&mut self) -> u64 {
         self.next_id += 1;
         self.pending_warp = Some(self.next_id);
+        self.pending_warp_kind = self.warp_kind;
         self.pending_warp_source = match self.warp_kind {
             Some(WarpKind::ClearOnly) | None => None,
             Some(_) => self.retained_scene,
         };
+        if self.warp_kind == Some(WarpKind::HoldStale) {
+            self.warp_hold_count = self.warp_hold_count.saturating_add(1);
+        }
         self.warp_submissions.push(self.next_id);
         self.next_id
     }
@@ -777,8 +798,12 @@ impl PresenterPoll for FakePresenter {
             self.warp_fence_observations += 1;
             if let Some(event) = self.warp_callback.take() {
                 if matches!(event, FakeEvent::WarpCompleted(_)) {
+                    if self.pending_warp_kind == Some(WarpKind::ClearOnly) {
+                        self.presented_clear_only = self.presented_clear_only.saturating_add(1);
+                    }
                     self.presented_scene = self.pending_warp_source.take();
                 }
+                self.pending_warp_kind = None;
                 self.pending_warp = None;
                 events.push(event);
             }
@@ -849,7 +874,8 @@ fn drive_turn(
     if frame_loop.stopped().is_some() {
         return outcome;
     }
-    presenter.write_hot(frame_loop.hold_refused_warp());
+    let has_retained_scene = presenter.retained_scene.is_some();
+    presenter.write_hot(frame_loop.hold_refused_warp(has_retained_scene));
     if !outcome.refused
         && let Some(level) = frame_loop.due()
     {
@@ -1491,24 +1517,65 @@ fn viewer_harness_holds_manual_refusal_until_update_scene_presents_final() {
 }
 
 #[test]
-fn viewer_harness_keeps_auto_clear_then_final_fill_for_the_same_refusal() {
+fn viewer_harness_holds_an_auto_refusal_while_the_final_fill_is_pending() {
     let mut frame_loop = FrameLoop::default();
     frame_loop.accept_request(37, true);
     let mut presenter = retained_presenter(true);
     let mut clock = FakeClock::default();
 
-    let cleared = drive_viewer_harness(&mut frame_loop, &mut presenter, clock, true);
-    assert!(cleared.scene_id.is_some());
-    assert!(cleared.warp_id.is_some());
-    assert_eq!(presenter.warp_kind, Some(WarpKind::ClearOnly));
-    assert_eq!(presenter.pending_warp_source, None);
+    let held = drive_viewer_harness(&mut frame_loop, &mut presenter, clock, true);
+    assert!(held.scene_id.is_some());
+    assert!(held.warp_id.is_some());
+    assert_eq!(presenter.warp_kind, Some(WarpKind::HoldStale));
+    assert_eq!(presenter.pending_warp_source, Some(37));
+    assert_eq!(presenter.warp_hold_count, 1);
     presenter.fire_warp_completed();
     clock.advance(1.0);
     assert!(drive_viewer_harness(&mut frame_loop, &mut presenter, clock, false).presented);
-    assert_eq!(presenter.presented_scene, None);
+    assert_eq!(presenter.presented_scene, Some(37));
 
     let final_scene = finish_pending_refused_ladder(&mut frame_loop, &mut presenter, &mut clock);
     assert_ne!(final_scene, 37);
+}
+
+#[test]
+fn automatic_stale_hold_tracks_pending_replacement_work() {
+    let mut frame_loop = FrameLoop::default();
+    frame_loop.accept_request(37, true);
+    assert!(frame_loop.hold_refused_warp(true));
+
+    frame_loop.schedule.pause();
+    assert!(!frame_loop.hold_refused_warp(true));
+
+    frame_loop.scene_input_resumed(38, RefinementLevel::Interactive);
+    assert!(frame_loop.hold_refused_warp(true));
+}
+
+#[test]
+fn viewer_harness_keeps_the_picture_when_a_non_final_round_is_retired_and_resumed() {
+    let mut frame_loop = FrameLoop::default();
+    frame_loop.accept_request(37, true);
+    let mut presenter = retained_presenter(true);
+    let mut clock = FakeClock::default();
+
+    let first = drive_viewer_harness(&mut frame_loop, &mut presenter, clock, true);
+    let retired_scene = first.scene_id.expect("the first round submits Preview");
+    assert_eq!(presenter.warp_kind, Some(WarpKind::HoldStale));
+    presenter.fire_warp_completed();
+    clock.advance(1.0);
+    assert!(drive_viewer_harness(&mut frame_loop, &mut presenter, clock, false).presented);
+    assert_eq!(presenter.presented_scene, Some(37));
+
+    assert!(frame_loop.retired(retired_scene));
+    presenter.pending = None;
+    frame_loop.scene_input_resumed(38, RefinementLevel::Interactive);
+    frame_loop.accept_request(38, false);
+    let resumed = drive_viewer_harness(&mut frame_loop, &mut presenter, clock, true);
+    assert!(resumed.scene_id.is_some());
+    assert!(resumed.warp_id.is_some());
+    assert_eq!(presenter.warp_kind, Some(WarpKind::HoldStale));
+    assert_eq!(presenter.pending_warp_source, Some(37));
+    assert_eq!(presenter.warp_hold_count, 2);
 }
 
 #[test]
@@ -1535,7 +1602,7 @@ fn manual_control_change_writes_hot_and_schedules_no_scene() {
     let mut presenter = FakePresenter::default();
     let clock = FakeClock::default();
     frame_loop.set_scene_mode(SceneMode::Manual, 7, true);
-    assert!(frame_loop.hold_refused_warp());
+    assert!(frame_loop.hold_refused_warp(false));
     frame_loop.accept_request(7, true);
     frame_loop.scene_selection_changed(7);
     assert!(!frame_loop.skip_drafts_for_accepted_warp(Some((RefinementLevel::Final, true))));
@@ -1698,7 +1765,7 @@ fn exposed_accepted_final_warp_submits_final_directly_and_returns_to_idle() {
 #[test]
 fn refused_warp_and_first_scene_run_the_full_ladder() {
     let mut refused = FrameLoop::default();
-    assert!(!refused.hold_refused_warp());
+    assert!(!refused.hold_refused_warp(false));
     refused.accept_request(37, true);
     assert!(!refused.skip_drafts_for_accepted_warp(None));
     assert_eq!(refused.due(), Some(RefinementLevel::Preview));
@@ -2171,6 +2238,336 @@ fn a_continuous_drag_alternates_the_backdrop_with_the_main_ladder() {
         completed_levels, LADDER_LEVELS,
         "the settled pose must still walk its ladder to Final"
     );
+}
+
+#[derive(Clone, Copy, Debug)]
+struct HeightDragRow {
+    name: &'static str,
+    distance_five: f64,
+    expected_clear_only: u64,
+}
+
+fn owner_height_drag_pose(row: HeightDragRow, height_scale: f64) -> Pose {
+    let object = ObjectAngles {
+        rho_13: -1.316_653_720_171_549_4,
+        rho_24: -1.316_653_720_171_549_4,
+        ..ObjectAngles::IDENTITY
+    };
+    let mut camera = [0.0; 10];
+    camera[1] = -0.254_142_606_623_347_1;
+    camera[4] = -0.254_142_606_623_347_1;
+    let view = ViewControls {
+        camera,
+        camera_yaw: 0.96,
+        camera_pitch: core::f64::consts::PI,
+        height_scale,
+        distance_five: row.distance_five,
+        distance_four: row.distance_five,
+        ..ViewControls::NEUTRAL
+    };
+    let extent = [96, 54];
+    let plane = ember_julibrot_math::construct_plane(object).expect("owner drag plane");
+    let map = screen_to_plane(
+        &object,
+        &view,
+        3.92,
+        extent[0],
+        extent[1],
+        f64::from(extent[0]) / f64::from(extent[1]),
+    )
+    .map_or(PoseMap::EdgeOn, PoseMap::Mapped);
+    Pose {
+        epoch: 1,
+        orbit_generation: 37,
+        plane,
+        object,
+        plane_origin: [0.0, 0.0, -0.671, 0.131],
+        zoom_log2: 3.92,
+        view,
+        grid_width: extent[0],
+        grid_height: extent[1],
+        map,
+        centre_from_reference_px: [0.0; 2],
+    }
+}
+
+fn owner_height_drag_plan(
+    row: HeightDragRow,
+    retained_height_scale: f64,
+    requested_height_scale: f64,
+) -> WarpKind {
+    let retained = owner_height_drag_pose(row, retained_height_scale);
+    let frame = SceneFrame {
+        scene_id: 37,
+        pose: retained,
+        palette: PaletteId::Classic,
+        iteration_cap: 128,
+        level: RefinementLevel::Final,
+        extent: [retained.grid_width, retained.grid_height],
+        texture_index: 0,
+        centre_revision: 1,
+        plane_origin_f64: retained.plane_origin,
+        precision_mode: PrecisionMode::PictureFast.as_str(),
+        measurement: SubmissionMeasurement {
+            kind: SubmissionKind::Scene,
+            id: 37,
+            source_scene_id: None,
+            sample_class: SampleClass::Measured,
+            precision_mode: PrecisionMode::PictureFast.as_str(),
+            wall_ms: 1.0,
+            fence_wait_ms: 0.5,
+            polls: 1,
+        },
+    };
+    Warp::reproject(
+        &frame,
+        &retained,
+        &owner_height_drag_pose(row, requested_height_scale),
+        PrecisionMode::PictureFast,
+        WarpValidation::Ordinary,
+    )
+    .kind
+}
+
+#[test]
+fn manual_final_height_change_keeps_the_accepted_relief_redraw_live() {
+    let mut frame_loop = FrameLoop::default();
+    frame_loop.set_scene_mode(SceneMode::Manual, 37, true);
+    assert_eq!(frame_loop.due(), None);
+    assert_eq!(
+        owner_height_drag_plan(
+            HeightDragRow {
+                name: "close-d5-2",
+                distance_five: 2.0,
+                expected_clear_only: 81,
+            },
+            0.0,
+            0.4,
+        ),
+        WarpKind::ReliefRedraw
+    );
+    assert!(frame_loop.stopped().is_none());
+}
+
+#[test]
+fn non_dispatching_manual_and_deep_reference_waits_keep_retained_records() {
+    let source = include_str!("browser/submit.rs");
+    let submit = source
+        .find("fn submit_due_scene(")
+        .expect("the main submit path exists");
+    let body = &source[submit..];
+    let reference_wait = body
+        .find("if matches!(map, PoseMap::Mapped(_))")
+        .expect("the deep-reference wait exists");
+    let due = body
+        .find("let Some(level) = self.loop_state.due()")
+        .expect("the paused-schedule wait exists");
+    let overwrite = body
+        .find("self.presenter.forget_retained_records(&self.grid);")
+        .expect("record invalidation marks the actual overwrite");
+    assert!(reference_wait < overwrite && due < overwrite);
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct HeightDragStats {
+    clear_only_before: u64,
+    clear_only_presentations: u64,
+    hold_presentations: u64,
+    final_after_drag_ms: f64,
+}
+
+/// Drives a moving retained source while the counterfactual `clear_only_before` classification is
+/// measured from one fixed flat source; they agree at these owner rows only because refusal is
+/// destination-driven there.
+#[allow(
+    clippy::print_stderr,
+    clippy::too_many_lines,
+    reason = "the timed two-row drag harness keeps its scheduler, presenter, and reported counts in one visible trace"
+)]
+fn drive_height_drag(row: HeightDragRow) -> HeightDragStats {
+    const DRAG_FRAMES: u32 = 90;
+    const FLIGHT_FRAMES: usize = 3;
+    const FRAME_MS: f64 = 1_000.0 / 30.0;
+
+    assert!(matches!(row.distance_five, 2.0 | 8.0), "{}", row.name);
+    let mut frame_loop = FrameLoop::default();
+    frame_loop.schedule.precision_mode = PrecisionMode::PictureFast;
+    let mut presenter = retained_presenter(false);
+    presenter.relief_redraw = true;
+    let mut clock = FakeClock::default();
+    let mut flight_frames = 0_usize;
+    let mut last_scene_id = 0_u64;
+    let mut retained_height_scale = 0.0;
+    let mut pending_height_scale = None;
+    let mut clear_only_before = 0_u64;
+
+    for input in 1..=DRAG_FRAMES {
+        let requested_height_scale = 4.0 * f64::from(input) / f64::from(DRAG_FRAMES);
+        if owner_height_drag_plan(row, 0.0, requested_height_scale) == WarpKind::ClearOnly {
+            clear_only_before = clear_only_before.saturating_add(1);
+        }
+        if presenter.pending.is_some() {
+            flight_frames += 1;
+            if flight_frames == FLIGHT_FRAMES {
+                presenter.fire_completed_callback();
+                flight_frames = 0;
+                retained_height_scale = pending_height_scale
+                    .take()
+                    .expect("an in-flight scene carries its requested height");
+                let events = FrameLoop::refresh(&mut presenter, clock.now_ms);
+                assert_eq!(events.len(), 1, "{} completed scene event", row.name);
+                let FakeEvent::Completed(scene) = events[0] else {
+                    panic!("{} completed scene event", row.name);
+                };
+                assert!(frame_loop.completed(scene.id, scene.generation, scene.level));
+                frame_loop.restart(37);
+            }
+        }
+        if presenter.pending_warp.is_some() {
+            presenter.fire_warp_completed();
+        }
+        frame_loop.accept_request(37, true);
+        frame_loop.skip_drafts_for_accepted_warp(Some((RefinementLevel::Final, false)));
+        presenter.forced_warp_kind = Some(owner_height_drag_plan(
+            row,
+            retained_height_scale,
+            requested_height_scale,
+        ));
+        let turn = drive_viewer_harness(&mut frame_loop, &mut presenter, clock, true);
+        if let Some(scene_id) = turn.scene_id {
+            assert!(scene_id > last_scene_id, "{} scene ids", row.name);
+            last_scene_id = scene_id;
+            pending_height_scale = Some(requested_height_scale);
+        }
+        assert_ne!(
+            presenter.warp_kind,
+            Some(WarpKind::ClearOnly),
+            "{}",
+            row.name
+        );
+        clock.advance(FRAME_MS);
+    }
+
+    let drag_ended_ms = clock.now_ms;
+    let settled_scene = loop {
+        if presenter.pending_warp.is_some() {
+            presenter.fire_warp_completed();
+        }
+        if presenter.pending.is_some() {
+            flight_frames += 1;
+            if flight_frames == FLIGHT_FRAMES {
+                presenter.fire_completed_callback();
+                flight_frames = 0;
+                retained_height_scale = pending_height_scale
+                    .take()
+                    .expect("an in-flight scene carries its requested height");
+            }
+        } else {
+            frame_loop.restart(37);
+            frame_loop.skip_drafts_for_accepted_warp(Some((RefinementLevel::Final, false)));
+        }
+        presenter.forced_warp_kind = Some(owner_height_drag_plan(row, retained_height_scale, 4.0));
+        let turn = drive_viewer_harness(&mut frame_loop, &mut presenter, clock, true);
+        if let Some(scene_id) = turn.scene_id {
+            assert!(scene_id > last_scene_id, "{} settled scene id", row.name);
+            last_scene_id = scene_id;
+            pending_height_scale = Some(4.0);
+        }
+        if presenter
+            .retained_scene
+            .is_some_and(|scene_id| scene_id == last_scene_id && presenter.pending.is_none())
+        {
+            break last_scene_id;
+        }
+        clock.advance(FRAME_MS);
+    };
+    assert_eq!(presenter.retained_scene, Some(settled_scene));
+    let stats = HeightDragStats {
+        clear_only_before,
+        clear_only_presentations: presenter.presented_clear_only,
+        hold_presentations: presenter.warp_hold_count,
+        final_after_drag_ms: clock.now_ms - drag_ended_ms,
+    };
+    eprintln!(
+        "height_drag row={} clear_only_before={} clear_only_after={} holds={} final_ms={:.3}",
+        row.name,
+        stats.clear_only_before,
+        stats.clear_only_presentations,
+        stats.hold_presentations,
+        stats.final_after_drag_ms,
+    );
+    stats
+}
+
+#[test]
+fn three_second_height_drag_keeps_both_owner_rows_painted_and_settles_in_one_round() {
+    for row in [
+        HeightDragRow {
+            name: "gentle-d5-8",
+            distance_five: 8.0,
+            expected_clear_only: 24,
+        },
+        HeightDragRow {
+            name: "close-d5-2",
+            distance_five: 2.0,
+            expected_clear_only: 81,
+        },
+    ] {
+        let stats = drive_height_drag(row);
+        assert_eq!(
+            stats.clear_only_before, row.expected_clear_only,
+            "{}",
+            row.name
+        );
+        assert_eq!(stats.clear_only_presentations, 0, "{}", row.name);
+        assert_eq!(
+            stats.hold_presentations, row.expected_clear_only,
+            "{}",
+            row.name
+        );
+        assert!(
+            stats.final_after_drag_ms <= 3.0 * (1_000.0 / 30.0),
+            "{}",
+            row.name
+        );
+    }
+}
+
+#[test]
+fn browser_main_ladder_keeps_one_alternate_final_capacity_grid() {
+    let source = include_str!("../loop.rs");
+    let submit = include_str!("browser/submit.rs");
+    assert!(source.contains("const MAX_HEADER_SETS: u32 = 9;"));
+    assert!(source.contains("spare_grid: Option<EscapeGrid>,"));
+    assert!(source.contains("grid_round: u64,"));
+    assert!(source.contains("JulibrotKernels::plan_grid_pair"));
+    assert!(source.contains("allocate_grid_pair(&mut executor, &plan)"));
+    assert!(submit.contains("std::mem::swap(&mut self.grid, spare);"));
+    assert!(submit.contains("self.grid_round != self.loop_state.ladder_round()"));
+}
+
+#[test]
+fn heap_exhaustion_degrades_to_a_main_only_frame() {
+    assert_eq!(optional_backdrop_plan(Err(KernelError::Heap)), Ok(None));
+}
+
+#[test]
+fn precision_replacement_installs_the_plan_that_sized_the_new_pair() {
+    let source = include_str!("browser/submit.rs");
+    let synchronize = source
+        .find("fn synchronize_precision_mode(")
+        .expect("the precision synchronizer exists");
+    let body = &source[synchronize..];
+    let allocation = body
+        .find("allocate_grid_pair(&mut self.executor, &next_plan)")
+        .expect("the replacement pair uses the new plan");
+    let install = body
+        .find("self.plan = next_plan;")
+        .expect("the new plan is installed");
+    let grid = body
+        .find("self.grid = next_grid;")
+        .expect("the new grid is installed");
+    assert!(allocation < install && install < grid);
 }
 
 /// The browser loop asks the shared policy rather than preferring a stale backdrop outright,

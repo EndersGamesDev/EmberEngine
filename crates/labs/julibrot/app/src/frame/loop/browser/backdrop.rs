@@ -40,7 +40,10 @@ impl BrowserFrameLoop {
             self.active_backdrop_map = None;
             return Ok(false);
         }
-        self.ensure_backdrop_grid(requested_extent, viewer.requested().iteration_cap)?;
+        if !self.ensure_backdrop_grid(requested_extent, viewer.requested().iteration_cap)? {
+            self.active_backdrop_map = None;
+            return Ok(false);
+        }
         let delivered_extent = self
             .backdrop
             .as_ref()
@@ -62,7 +65,7 @@ impl BrowserFrameLoop {
         &mut self,
         requested_extent: [u32; 2],
         requested_iter_cap: u32,
-    ) -> Result<(), AppError> {
+    ) -> Result<bool, AppError> {
         let requested_extent = GridExtent {
             width: requested_extent[0],
             height: requested_extent[1],
@@ -72,36 +75,40 @@ impl BrowserFrameLoop {
                 && backdrop.plan.requested_max_iter == requested_iter_cap
                 && backdrop.plan.precision_mode == self.precision_mode
         }) {
-            return Ok(());
+            return Ok(true);
         }
         self.release_backdrop()?;
-        let plan = JulibrotKernels::plan(
+        let Some(plan) = super::super::optional_backdrop_plan(JulibrotKernels::plan(
             &self.executor,
             requested_extent,
             EscapeParams::new(requested_iter_cap),
-        )
-        .map_err(kernel_error)?
-        .with_precision_mode(self.precision_mode);
-        let grid = self
-            .kernels
-            .allocate_grid(&mut self.executor, &plan)
-            .map_err(kernel_error)?;
+        ))?
+        else {
+            return Ok(false);
+        };
+        let plan = plan.with_precision_mode(self.precision_mode);
+        let grid = match self.kernels.allocate_grid(&mut self.executor, &plan) {
+            Ok(grid) => grid,
+            Err(KernelError::Heap) => return Ok(false),
+            Err(error) => return Err(kernel_error(error)),
+        };
         self.backdrop = Some(BackdropGrid {
             plan,
             grid,
             ready: None,
             in_flight: None,
         });
-        Ok(())
+        Ok(true)
     }
 
     pub(super) fn release_backdrop(&mut self) -> Result<(), AppError> {
         self.active_backdrop_map = None;
         self.coverage_turn = super::CoverageTurn::Backdrop;
         if let Some(backdrop) = self.backdrop.take() {
-            self.kernels
-                .free_grid(&mut self.executor, backdrop.grid)
-                .map_err(kernel_error)?;
+            if let Err(error) = self.free_grid(&backdrop.grid) {
+                self.backdrop = Some(backdrop);
+                return Err(error);
+            }
         }
         Ok(())
     }
@@ -131,6 +138,13 @@ impl BrowserFrameLoop {
         let params = EscapeParams::new(viewer.requested().iteration_cap);
         let sampling_zoom =
             super::sampling_zoom_log2(viewer.requested().zoom_log2, screen_to_plane.apron_scale)?;
+        let record_grid = self
+            .backdrop
+            .as_ref()
+            .ok_or_else(|| AppError::Kernel("backdrop dispatch has no grid".to_string()))?
+            .grid
+            .clone();
+        self.presenter.forget_retained_records(&record_grid);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {

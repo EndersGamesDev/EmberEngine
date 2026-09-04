@@ -1,7 +1,7 @@
-use crate::{PaletteRecord, PresentDataError, PresentError, PresentMain, SceneUniform};
+use crate::{PaletteRecord, PresentDataError, PresentError, SceneUniform};
 
 use super::{
-    GpuState, Presenter, encode_scene_mesh, ensure_depth, ensure_indices, validate_grid,
+    GpuState, Presenter, encode_scene_mesh, ensure_depth, ensure_indices, validate_grid_parts,
     warp_load_color,
 };
 
@@ -11,19 +11,32 @@ impl Presenter {
         source: &crate::SceneFrame,
         surface_extent: [u32; 2],
         selected: PaletteRecord,
-    ) -> Result<(), PresentError> {
-        let main = self.main.as_ref().ok_or(PresentError::InvalidGrid {
-            width: source.extent[0],
-            height: source.extent[1],
-            logical_len: 0,
-        })?;
-        validate_grid(main, self.gpu.heap_limits)?;
-        let uniform = relief_scene_uniform(main, source, selected)?;
+    ) -> Result<bool, PresentError> {
+        let Some(grid) = self.ledger.retained_grid() else {
+            return Ok(false);
+        };
+        if validate_grid_parts(grid, source.iteration_cap, self.gpu.heap_limits).is_err() {
+            return Ok(false);
+        }
+        let Ok(uniform) = relief_scene_uniform(grid, source, selected) else {
+            return Ok(false);
+        };
         ensure_indices(&self.device, &mut self.gpu, source.extent)?;
         ensure_depth(&self.device, &mut self.gpu, surface_extent)?;
         self.queue
             .write_buffer(&self.gpu.scene_buffers[0], 0, bytemuck::bytes_of(&uniform));
-        Ok(())
+        Ok(true)
+    }
+
+    pub(super) fn retained_records_support_relief_redraw(
+        &self,
+        source: &crate::SceneFrame,
+        selected: PaletteRecord,
+    ) -> bool {
+        self.ledger.retained_grid().is_some_and(|grid| {
+            validate_grid_parts(grid, source.iteration_cap, self.gpu.heap_limits).is_ok()
+                && relief_scene_uniform(grid, source, selected).is_ok()
+        })
     }
 }
 
@@ -46,23 +59,23 @@ pub(super) fn encode_relief_redraw(
 }
 
 pub(super) fn relief_scene_uniform(
-    main: &PresentMain,
+    grid: &ember_julibrot_kernels::EscapeGrid,
     source: &crate::SceneFrame,
     selected: PaletteRecord,
 ) -> Result<SceneUniform, PresentError> {
-    if [main.grid.width, main.grid.height] != source.extent {
+    if [grid.width, grid.height] != source.extent {
         return Err(PresentError::InvalidGrid {
             width: source.extent[0],
             height: source.extent[1],
-            logical_len: main.grid.span.logical_len,
+            logical_len: grid.span.logical_len,
         });
     }
     SceneUniform::new(
         source.extent,
         source.level as u32,
         source.iteration_cap,
-        main.grid.span.directory_index,
-        main.grid.span.logical_len,
+        grid.span.directory_index,
+        grid.span.logical_len,
         source.pose.plane,
         source.pose.map,
         selected,
@@ -74,7 +87,7 @@ pub(super) fn relief_scene_uniform(
         _ => PresentError::InvalidGrid {
             width: source.extent[0],
             height: source.extent[1],
-            logical_len: main.grid.span.logical_len,
+            logical_len: grid.span.logical_len,
         },
     })
 }

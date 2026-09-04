@@ -209,6 +209,7 @@ fn promote_binding_scene(ledger: &mut SceneLedger, scene_id: u64) -> crate::Scen
                 iteration_cap: 64,
                 level: RefinementLevel::Final,
                 extent: [64, 36],
+                grid: binding_main().grid,
                 texture_index,
                 centre_revision: 1,
                 plane_origin_f64: [0.0; 4],
@@ -287,7 +288,7 @@ fn manual_hold_keeps_a_refused_warp_on_the_retained_picture() {
     assert_eq!(facts.warp_kind.as_str(), "HoldStale");
 
     let mut hot = WarpSourceSlot::default();
-    hot.write_hot(&held);
+    hot.write_hot(&held, false);
     assert_eq!(
         hot.frame(ledger.retained()).map(|frame| frame.scene_id),
         Some(37)
@@ -337,7 +338,7 @@ fn browser_order_clears_a_hot_plan_after_scene_promotion() {
     plan.source_texture_index = Some(sampled.texture_index);
     plan.source_valid = true;
     let mut hot = WarpSourceSlot::default();
-    hot.write_hot(&plan);
+    hot.write_hot(&plan, false);
     assert_eq!(
         hot.frame(ledger.retained()).map(|frame| frame.scene_id),
         Some(41)
@@ -363,7 +364,7 @@ fn accepted_exposed_plan_remains_a_source_and_reports_its_clear_share() {
     plan.source_valid = true;
     plan.rows[0][2] = 16.0;
     let mut hot = WarpSourceSlot::default();
-    hot.write_hot(&plan);
+    hot.write_hot(&plan, false);
 
     assert_eq!(
         hot.frame(ledger.retained()).map(|frame| frame.scene_id),
@@ -385,18 +386,20 @@ fn relief_redraw_reuses_the_retained_grid_and_scene_uniform_contract() {
     plan.source_texture_index = Some(sampled.texture_index);
     plan.source_valid = true;
     let mut hot = WarpSourceSlot::default();
-    hot.write_hot(&plan);
+    hot.write_hot(&plan, false);
     assert_eq!(
         hot.relief_frame(ledger.retained())
             .map(|frame| frame.scene_id),
         Some(61)
     );
 
-    let main = binding_main();
-    let uniform = relief_scene_uniform(&main, &sampled, crate::CLASSIC_PALETTE)
+    let retained_grid = ledger
+        .retained_grid()
+        .expect("retained frame owns its record grid");
+    let uniform = relief_scene_uniform(retained_grid, &sampled, crate::CLASSIC_PALETTE)
         .expect("compatible records form a scene uniform");
     assert_eq!(uniform.grid, [64, 36, RefinementLevel::Final as u32, 64]);
-    assert_eq!(uniform.span[0], main.grid.span.directory_index);
+    assert_eq!(uniform.span[0], retained_grid.span.directory_index);
     assert_eq!(uniform.span[1], 64 * 36);
     assert_eq!(uniform.basis_u, sampled.pose.plane.basis_u);
     assert_eq!(uniform.screen_to_plane_row_0, [1.0, 0.0, 0.0, 0.0]);
@@ -623,13 +626,32 @@ fn relief_redraw_disocclusion_is_clear_and_distinct_from_exterior() {
 }
 
 #[test]
-fn relief_redraw_refuses_a_retained_grid_from_an_old_extent() {
+fn relief_redraw_refuses_a_retained_grid_whose_extent_no_longer_matches_its_frame() {
     let mut ledger = SceneLedger::default();
     let sampled = promote_binding_scene(&mut ledger, 62);
-    let mut main = binding_main();
-    main.grid.width /= 2;
-    main.grid.height /= 2;
-    assert!(relief_scene_uniform(&main, &sampled, crate::CLASSIC_PALETTE).is_err());
+    let mut retained_grid = ledger
+        .retained_grid()
+        .expect("retained frame owns its record grid")
+        .clone();
+    retained_grid.width /= 2;
+    retained_grid.height /= 2;
+    assert!(relief_scene_uniform(&retained_grid, &sampled, crate::CLASSIC_PALETTE).is_err());
+}
+
+#[test]
+fn relief_redraw_accepts_records_in_the_idle_live_main_grid() {
+    let main = binding_main();
+    let mut ledger = SceneLedger::default();
+    let sampled = promote_binding_scene(&mut ledger, 63);
+    assert_eq!(
+        ledger
+            .retained_grid()
+            .expect("the promoted Final keeps its records")
+            .span
+            .directory_index,
+        main.grid.span.directory_index
+    );
+    assert!(relief_scene_uniform(&main.grid, &sampled, crate::CLASSIC_PALETTE).is_ok());
 }
 
 #[test]
@@ -642,6 +664,6 @@ fn every_gpu_dynamic_offset_comes_from_the_opaque_slot() {
     source.push_str(include_str!("warp.rs"));
     let accessor = [".dynamic_", "offset()"].concat();
     let bypass = ["index()", " * self.gpu.hot_stride"].concat();
-    assert_eq!(source.matches(&accessor).count(), 6);
+    assert_eq!(source.matches(&accessor).count(), 7);
     assert!(!source.contains(&bypass));
 }

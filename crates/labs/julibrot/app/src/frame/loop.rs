@@ -13,7 +13,7 @@ use super::warp::{defer_scene_until_relief_redraw, hold_redraw_during_scene};
 #[cfg(test)]
 use ember_julibrot_kernels::SampleStatus;
 #[cfg(any(target_arch = "wasm32", test))]
-use ember_julibrot_kernels::{RefinementLevel, RefinementPlan};
+use ember_julibrot_kernels::{KernelError, RefinementLevel, RefinementPlan};
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_math::PoseMap;
 #[cfg(test)]
@@ -368,11 +368,22 @@ const fn published_iteration_cap(plan: &RefinementPlan) -> u32 {
     plan.delivered_max_iter
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+fn optional_backdrop_plan(
+    result: Result<RefinementPlan, KernelError>,
+) -> Result<Option<RefinementPlan>, AppError> {
+    match result {
+        Ok(plan) => Ok(Some(plan)),
+        Err(KernelError::Heap) => Ok(None),
+        Err(error) => Err(AppError::Kernel(error.to_string())),
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 mod browser {
     use ember_julibrot_kernels::{
-        DispatchFacts, EscapeGrid, GridExtent, JulibrotKernels, KERNEL_UNIFORM_BYTES, KernelMode,
-        OUTPUT_PAGE_SIDE, ReferenceOrbitInput, RefinementLevel, RefinementPlan,
+        DispatchFacts, EscapeGrid, GridExtent, JulibrotKernels, KERNEL_UNIFORM_BYTES, KernelError,
+        KernelMode, OUTPUT_PAGE_SIDE, ReferenceOrbitInput, RefinementLevel, RefinementPlan,
     };
     use ember_julibrot_math::{
         BigCentre, EscapeParams, ObjectAngles, Plane, PoseMap, PrecisionMode, pixel_scale,
@@ -411,7 +422,7 @@ mod browser {
     const HANDLE_CAPACITY: u32 = 128;
     const DIRECTORY_BYTES: u32 = SPAN_CAPACITY * 16 + HANDLE_CAPACITY * 4;
     const MAX_HEADER_PAGES: u32 = 64;
-    const MAX_HEADER_SETS: u32 = 6;
+    const MAX_HEADER_SETS: u32 = 9;
 
     #[derive(Debug)]
     struct RegisteredOrbit {
@@ -529,6 +540,8 @@ mod browser {
         reference_upload: Vec<u8>,
         plan: RefinementPlan,
         grid: EscapeGrid,
+        spare_grid: Option<EscapeGrid>,
+        grid_round: u64,
         backdrop: Option<BackdropGrid>,
         active_backdrop_map: Option<PoseMap>,
         coverage_turn: super::CoverageTurn,
@@ -606,7 +619,7 @@ mod browser {
             };
             let params = EscapeParams::new(requested.iteration_cap);
             let mut plan =
-                JulibrotKernels::plan(&executor, extent, params).map_err(kernel_error)?;
+                JulibrotKernels::plan_grid_pair(&executor, extent, params).map_err(kernel_error)?;
             let mut reference_upload = Vec::new();
             reference_upload
                 .try_reserve_exact(super::reference_texel_bytes(requested.iteration_cap)?)
@@ -627,8 +640,8 @@ mod browser {
                 .reference_centre()
                 .ok_or_else(|| AppError::Worker("owner navigation is unconfigured".to_string()))?;
             let mut kernels = kernels;
-            let grid = kernels
-                .allocate_grid(&mut executor, &plan)
+            let [grid, spare_grid] = kernels
+                .allocate_grid_pair(&mut executor, &plan)
                 .map_err(kernel_error)?;
             let config = PresentConfig {
                 surface_format: runtime.surface_format(),
@@ -692,6 +705,8 @@ mod browser {
                 reference_upload,
                 plan,
                 grid,
+                spare_grid: Some(spare_grid),
+                grid_round: loop_state.ladder_round(),
                 backdrop: None,
                 active_backdrop_map: None,
                 coverage_turn: super::CoverageTurn::Backdrop,
@@ -835,7 +850,9 @@ mod browser {
             } else {
                 WarpValidation::Ordinary
             };
-            let hold_refused_warp = self.loop_state.hold_refused_warp();
+            let hold_refused_warp = self
+                .loop_state
+                .hold_refused_warp(self.presenter.facts().completed_scene_id.is_some());
             self.presenter.write_hot(
                 slot,
                 PresentHot {

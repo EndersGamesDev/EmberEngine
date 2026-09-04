@@ -1254,3 +1254,83 @@ fn observer_bars() {
         Expected::Relief,
     );
 }
+
+#[test]
+#[allow(
+    clippy::print_stderr,
+    reason = "the requested two-row oracle reports its exact planner classification table"
+)]
+fn thirty_hertz_height_drag_keeps_both_owner_rows_inside_the_exact_redraw_family() {
+    const DRAG_FRAMES: u32 = 90;
+    const ANGLE: f64 = -1.316_653_720_171_549_4;
+    const CAMERA_ANGLE: f64 = -0.254_142_606_623_347_1;
+    const ORIGIN: [f64; 4] = [0.0, 0.0, -0.671, 0.131];
+    const ZOOM_LOG2: f64 = 3.92;
+
+    let object = ObjectAngles {
+        rho_13: ANGLE,
+        rho_24: ANGLE,
+        ..ObjectAngles::IDENTITY
+    };
+    let mut camera = [0.0; 10];
+    camera[1] = CAMERA_ANGLE;
+    camera[4] = CAMERA_ANGLE;
+    assert_eq!(camera[0], 0.0, "q12");
+    assert_eq!(camera[8], 0.0, "q35");
+
+    for (distance_five, expected_clear_only, expected_relief_redraws, expected_homographies) in
+        [(8.0, 24, 65, 1), (2.0, 81, 9, 0)]
+    {
+        let flat_view = ViewControls {
+            camera,
+            camera_yaw: 0.96,
+            camera_pitch: core::f64::consts::PI,
+            height_scale: 0.0,
+            distance_five,
+            distance_four: distance_five,
+            ..ViewControls::NEUTRAL
+        };
+        let retained = pose(object, flat_view, ORIGIN, ZOOM_LOG2, [0.0; 2]);
+        let retained_frame = frame(&retained);
+        let mut clear_only = 0_u32;
+        let mut relief_redraws = 0_u32;
+        let mut homographies = 0_u32;
+        for input in 1..=DRAG_FRAMES {
+            let to = pose(
+                object,
+                ViewControls {
+                    height_scale: 4.0 * f64::from(input) / f64::from(DRAG_FRAMES),
+                    ..flat_view
+                },
+                ORIGIN,
+                ZOOM_LOG2,
+                [0.0; 2],
+            );
+            match Warp::reproject(
+                &retained_frame,
+                &retained,
+                &to,
+                PrecisionMode::PictureFast,
+                WarpValidation::Ordinary,
+            )
+            .kind
+            {
+                WarpKind::ClearOnly => clear_only = clear_only.saturating_add(1),
+                WarpKind::ReliefRedraw => relief_redraws = relief_redraws.saturating_add(1),
+                WarpKind::AnchorHomography => {
+                    homographies = homographies.saturating_add(1);
+                }
+                WarpKind::HoldStale => panic!("the planner does not apply presentation holds"),
+            }
+        }
+        eprintln!(
+            "height_drag_planner d5={distance_five} clear_only={clear_only} relief_redraws={relief_redraws} homographies={homographies}"
+        );
+        assert_eq!(clear_only, expected_clear_only, "d5={distance_five}");
+        assert_eq!(
+            relief_redraws, expected_relief_redraws,
+            "d5={distance_five}"
+        );
+        assert_eq!(homographies, expected_homographies, "d5={distance_five}");
+    }
+}

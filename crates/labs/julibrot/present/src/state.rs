@@ -1,3 +1,4 @@
+use ember_julibrot_kernels::EscapeGrid;
 use ember_julibrot_math::{Plane, Pose, plane_chart_relation};
 
 use crate::{
@@ -12,6 +13,7 @@ pub struct PendingScene {
     pub iteration_cap: u32,
     pub level: RefinementLevel,
     pub extent: [u32; 2],
+    pub grid: EscapeGrid,
     pub texture_index: u32,
     pub centre_revision: u32,
     pub plane_origin_f64: [f64; 4],
@@ -55,6 +57,7 @@ impl ExposureLatch {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SceneLedger {
     retained: Option<SceneFrame>,
+    retained_grid: Option<EscapeGrid>,
     pending: Option<PendingScene>,
 }
 
@@ -125,6 +128,7 @@ impl SceneLedger {
         {
             return Some(SceneCompletion::KeptBest(frame));
         }
+        self.retained_grid = Some(pending.grid);
         self.retained = Some(frame.clone());
         Some(SceneCompletion::Promoted(frame))
     }
@@ -148,6 +152,7 @@ impl SceneLedger {
         });
         if retained_invalid {
             self.retained = None;
+            self.retained_grid = None;
         }
         if let Some(pending) = &mut self.pending
             && (pending.iteration_cap != iteration_cap
@@ -192,6 +197,33 @@ impl SceneLedger {
 
     pub const fn retained(&self) -> Option<&SceneFrame> {
         self.retained.as_ref()
+    }
+
+    pub const fn retained_grid(&self) -> Option<&EscapeGrid> {
+        self.retained_grid.as_ref()
+    }
+
+    pub fn forget_retained_grid(&mut self, grid: &EscapeGrid) -> bool {
+        let matches = self
+            .retained_grid
+            .as_ref()
+            .is_some_and(|retained| retained.span == grid.span);
+        if matches {
+            self.retained = None;
+            self.retained_grid = None;
+        }
+        matches
+    }
+
+    pub fn forget_retained_records(&mut self, grid: &EscapeGrid) -> bool {
+        let matches = self
+            .retained_grid
+            .as_ref()
+            .is_some_and(|retained| retained.span == grid.span);
+        if matches {
+            self.retained_grid = None;
+        }
+        matches
     }
 
     #[cfg(test)]
@@ -284,6 +316,20 @@ mod tests {
     const ORIGIN: [f64; 4] = [0.0; 4];
     const MODE: &str = PrecisionMode::Deterministic.as_str();
 
+    fn grid(extent: [u32; 2], level: RefinementLevel) -> EscapeGrid {
+        let mut arena = ember_lab_heap::SpanArena::new(2_048, 1, 1_024, 4_096, 16)
+            .expect("scene-ledger fixture arena is valid");
+        let span = arena
+            .allocate_span(extent[0] * extent[1], 64)
+            .expect("scene-ledger fixture grid fits");
+        EscapeGrid {
+            span,
+            width: extent[0],
+            height: extent[1],
+            level,
+        }
+    }
+
     fn pose(generation: u32) -> Pose {
         Pose {
             epoch: 1,
@@ -326,6 +372,7 @@ mod tests {
                     iteration_cap: 64,
                     level: RefinementLevel::Preview,
                     extent: [800, 600],
+                    grid: grid([800, 600], RefinementLevel::Preview),
                     texture_index,
                     centre_revision: generation,
                     plane_origin_f64: ORIGIN,
@@ -351,6 +398,7 @@ mod tests {
                     iteration_cap: 64,
                     level: RefinementLevel::Preview,
                     extent: [800, 600],
+                    grid: grid([800, 600], RefinementLevel::Preview),
                     texture_index,
                     centre_revision: 1,
                     plane_origin_f64: ORIGIN,
@@ -370,6 +418,48 @@ mod tests {
             Some(SceneCompletion::Promoted(_))
         ));
         assert_eq!(begin(&mut ledger, 3, 1), 0);
+    }
+
+    #[test]
+    fn freeing_the_promoted_record_grid_forgets_its_retained_scene() {
+        let mut ledger = SceneLedger::default();
+        begin(&mut ledger, 1, 1);
+        assert!(matches!(
+            ledger.complete(measurement(1)),
+            Some(SceneCompletion::Promoted(_))
+        ));
+        let retained = ledger
+            .retained_grid()
+            .expect("promoted scene retains its record grid")
+            .clone();
+        let unrelated = grid([64, 36], RefinementLevel::Preview);
+        assert!(!ledger.forget_retained_grid(&unrelated));
+        assert_eq!(ledger.retained().map(|frame| frame.scene_id), Some(1));
+        assert!(ledger.forget_retained_grid(&retained));
+        assert!(ledger.retained().is_none());
+        assert!(ledger.retained_grid().is_none());
+    }
+
+    #[test]
+    fn overwriting_retained_records_keeps_the_completed_image() {
+        let mut ledger = SceneLedger::default();
+        begin(&mut ledger, 72, 1);
+        let sampled = match ledger.complete(measurement(72)) {
+            Some(SceneCompletion::Promoted(frame)) => frame,
+            completion => panic!("expected promoted scene, got {completion:?}"),
+        };
+        let retained = ledger
+            .retained_grid()
+            .expect("the promoted scene keeps its records")
+            .clone();
+
+        assert!(ledger.forget_retained_records(&retained));
+        assert_eq!(
+            ledger.retained().map(|frame| frame.scene_id),
+            Some(sampled.scene_id)
+        );
+        assert!(ledger.retained_grid().is_none());
+        assert!(!ledger.forget_retained_records(&retained));
     }
 
     #[test]
@@ -589,6 +679,7 @@ mod tests {
                     iteration_cap: 64,
                     level: RefinementLevel::Final,
                     extent: [1_920, 1_080],
+                    grid: grid([1_920, 1_080], RefinementLevel::Final),
                     texture_index,
                     centre_revision: 1,
                     plane_origin_f64: ORIGIN,
