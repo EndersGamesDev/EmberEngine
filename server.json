@@ -1,6 +1,6 @@
 {
   "ws": "wss://his-cartoon-story-remark.trycloudflare.com",
-  "v": "1788457850",
+  "v": "1788512856",
   "proto": 15,
   "fire_ws": "wss://msg-crest-remembered-literally.trycloudflare.com",
   "fire_proto": 1,
@@ -26,12 +26,12 @@
     },
     {
       "name": "dusky-osprey",
-      "ws": "wss://his-cartoon-story-remark.trycloudflare.com",
-      "proto": 15,
-      "version": "r580",
-      "commit": "fa12c2a",
+      "ws": "wss://gadgets-retrieval-machinery-gospel.trycloudflare.com",
+      "proto": 16,
+      "version": "r585",
+      "commit": "f23ebc4",
       "by": "end@DESKTOP-E9PKJUK",
-      "updated": "2026-09-03T17:29:56Z"
+      "updated": "2026-09-04T09:07:36Z"
     }
   ]
 }
