@@ -328,3 +328,158 @@ Quellen erreichbar, 0 tot – es musste kein Link ersetzt werden. Das ist kein
 Zufall: Die Blöcke wurden beim Schreiben je einzeln gegen das Skript geprüft, und
 weil jede Zahl ohnehin durch Abruf der Quelle belegt werden musste, konnte gar
 keine tote oder erfundene URL in die Daten geraten.
+
+## Phase 3: UI
+
+### Hydration: `useHydrated()` statt `setState` im Effekt
+
+Alles, was aus `localStorage` oder `sessionStorage` kommt (laufende Runde,
+Einstellungen, Bestleistungen, Highscore-Merker), darf erst nach der Hydration
+sichtbar werden – sonst weicht der erste Client-Render von dem ab, was der
+Server gerendert hat. Der naheliegende Weg (`useState` + `useEffect` mit
+`setState` im Effekt) scheitert an der Lint-Regel `react-hooks/set-state-in-effect`,
+die in `eslint-config-next` aktiv ist – zu Recht, denn er erzwingt einen
+zusätzlichen Renderdurchlauf.
+
+Stattdessen gibt `src/components/useHydrated.ts` über `useSyncExternalStore`
+auf dem Server `false` und im Browser `true` zurück; React kennt den Unterschied
+zwischen Server- und Client-Schnappschuss und plant die zweite Darstellung
+selbst ein. Jeder Bildschirm zeigt bis dahin denselben neutralen Platzhalter mit
+derselben Kartenhülle und Mindesthöhe, damit beim Umschalten nichts springt.
+
+### Provider: Lazy-Initializer statt `RESTORE`-Aktion
+
+`GameProvider` nutzt `useReducer(gameReducer, initialGameState, restoreState)`.
+Der Initializer liest die laufende Runde direkt aus dem `sessionStorage`, sodass
+`src/lib/game-reducer.ts` unverändert bleibt und weiterhin nichts von Persistenz
+weiß – ein zusätzlicher Wrapper-Reducer mit `RESTORE`-Aktion wäre nur ein Umweg
+zum selben Ergebnis gewesen. Auf dem Server gibt es kein `sessionStorage`, dort
+bleibt es beim Startzustand; sichtbar wird der wiederhergestellte Zustand
+ohnehin erst mit `hydrated === true`.
+
+Geschrieben wird in einem Effekt, der auf jede Zustandsänderung reagiert: in der
+Phase `idle` `clearGameSession()`, sonst `saveGameSession(state)`.
+
+### Der Merker „neuer Highscore“ braucht eigenen Speicher
+
+`saveHighscore` überschreibt den alten Bestwert. Wer danach auf `/ergebnis`
+neu lädt, könnte nicht mehr feststellen, ob die Runde ein Bestwert _war_ – der
+Vergleich ginge gegen den eigenen, gerade gespeicherten Wert. Deshalb drei neue,
+rein additive Funktionen in `src/lib/storage.ts`: `loadNewHighscoreFlag`,
+`saveNewHighscoreFlag`, `clearNewHighscoreFlag`, gespeichert im `sessionStorage`
+neben der Runde und mit ihr zusammen gelöscht (Unit-Tests in
+`tests/unit/storage.test.ts`, Abschnitt „Merker ‚neuer Highscore‘“). Die
+Reihenfolge beim Rundenende ist entscheidend: erst `isNewHighscore(...)`
+auswerten, dann `saveHighscore(...)` rufen.
+
+### Farben und Kontraste
+
+- **Kategorien und Bewertungsstufen** bekommen helle, kräftige Füllfarben mit
+  ink-farbener Schrift und schwarzer Kontur. Alle zehn Kategoriefarben und alle
+  sechs Label-Farben (Grün `#57D175` bis Rot `#F2705B`) liegen mit `#1B1B1B`
+  deutlich über den 4,5:1 der Stufe AA – der dunkelste Ton, „Naja …“ `#ED7A21`,
+  kommt auf rund 6,4:1.
+- **`--color-success` (`#1F7A3D`) und `--color-error` (`#C02718`)** wurden auf
+  Creme `#FFF8E7` nachgerechnet: 5,1:1 und 5,7:1, beide AA-tauglich. Die Tokens
+  bleiben deshalb, wie Phase 1 sie gesetzt hat. Auf dem gelben Grund `#FFC83D`
+  reichen sie dagegen nicht (3,5:1 bzw. 3,9:1) – sie werden ausschließlich auf
+  Kartenflächen eingesetzt.
+- **Akzent `#F2542D` mit ink-Text** liegt bei rund 5:1 und trägt damit auch
+  kleine Beschriftungen; weißer Text auf Akzent kommt nirgends vor.
+- **`text-ink/70`** (Nebentexte) ergibt auf Creme rund 6,2:1 und wird nur dort
+  verwendet.
+
+### Enter-Behandlung in der Auflösung
+
+Zwei Wege führen weiter, und sie dürfen sich nicht überschneiden: Die
+Schaltfläche „Weiter“ bekommt beim Erscheinen den Fokus, dort löst Enter ganz
+normal den Klick aus. Zusätzlich hängt ein `keydown`-Handler am `document`, der
+aber aussteigt, sobald das Ereignisziel in einem `a`, `button`, `input`,
+`textarea`, `select` oder `contenteditable` liegt – sonst würde ein Enter auf
+der fokussierten Schaltfläche doppelt zählen.
+
+Der Fokus wird mit `focus({ preventScroll: true })` gesetzt. Ohne das scrollt
+der Browser die Schaltfläche ins Bild und schiebt auf schmalen Geräten
+Wortmarke und Fortschrittsbalken aus dem sichtbaren Bereich.
+
+### Count-up mit `requestAnimationFrame` statt Motion-Value
+
+Der Endwert muss zeichengenau `formatWithUnit(answer, unit)` sein – eine
+interpolierte Motion-Value liefert das nicht zuverlässig. `CountUp` hält
+deshalb nur den Fortschritt 0…1 als Zustand (gesetzt ausschließlich im
+rAF-Callback, nie synchron im Effekt) und rechnet daraus `value * easeOutCubic(p)`.
+`easeOutCubic(1)` ist exakt 1, der Endwert also exakt `value`. Ganzzahlige
+Antworten zählen ganzzahlig hoch, sonst flackerten unterwegs Nachkommastellen
+auf, die es in der Antwort gar nicht gibt. Bei `prefers-reduced-motion` steht
+der Endwert vom ersten Render an.
+
+### Konfetti ohne Zusatzbibliothek
+
+`Confetti` erzeugt 40 `motion.span` mit zufälliger Position, Größe, Farbe,
+Drehung und Verzögerung in einem `fixed`, `aria-hidden`, `pointer-events-none`
+Container und entfernt sich nach 2,5 Sekunden selbst. Die Fallstrecke ist in
+`vh` angegeben statt in Pixeln aus `window.innerHeight` – so kommen die Teilchen
+unabhängig von der Fenstergröße unten an, ohne dass die Komponente die
+Fenstermaße kennen muss. Bei `prefers-reduced-motion` entsteht kein einziges
+Teilchen. Die Zufallswerte fallen erst beim ersten Render an, und der findet
+immer im Browser statt (die Auflösung wird bis zur Hydration gar nicht
+gerendert) – ein Hydration-Unterschied ist damit ausgeschlossen.
+
+### `prefers-reduced-motion` an zwei Stellen
+
+`globals.css` dreht per Media Query alle CSS-Animationen und Übergänge auf
+faktisch null (Karten-Einblendung, Badge-Pop, Fortschrittsbalken). Count-up und
+Konfetti fragen die Einstellung zusätzlich in JavaScript ab
+(`useReducedMotionSafe`, ebenfalls über `useSyncExternalStore`) und laufen dann
+gar nicht erst an, statt nur schnell abzulaufen.
+
+### Eingabefeld: `key` statt Zustands-Reset
+
+`EstimateInput` hält seinen Eingabetext selbst. Statt ihn beim Fragenwechsel per
+Effekt zurückzusetzen, bekommt die Komponente in `PlayScreen` die Fragen-ID als
+React-`key`: Jede neue Frage erzeugt eine frische Instanz – leeres Feld, Fokus
+im Feld, kein `setState` im Effekt. `RevealCard` bekommt denselben `key`, damit
+der Count-up bei jeder Frage neu losläuft.
+
+### Fallbacks
+
+- **Zwischenablage:** Fehlt `navigator.clipboard` (unsicherer Kontext, alter
+  Browser) oder schlägt `writeText` fehl, erscheint der Share-Text in einem
+  `readonly`-Feld zum Selbstkopieren. Der `catch` versteckt hier nichts, er
+  übersetzt den Fehler in eine sichtbare Alternative.
+- **Leerer Kategoriefilter:** „Los geht's“ ist deaktiviert, dazu ein Hinweis in
+  einer `aria-live`-Region. `startRound` meldet zusätzlich `false`, wenn die
+  Auswahl keine Frage liefert – dann wird gar nicht erst navigiert.
+- **Direktaufruf:** `/spielen` ohne laufende Runde leitet auf `/` um,
+  `/ergebnis` ohne beendete Runde ebenfalls. Beide Wächter warten auf
+  `hydrated`, sonst würde ein Reload mitten in der Runde fälschlich umleiten.
+- **Alle Kategorien aktiv** wird als leere Liste gespeichert („kein Filter“),
+  damit später ergänzte Kategorien automatisch mitspielen.
+
+### Layout und Screenshots
+
+Der Fragebildschirm hält den Kopfbereich bewusst klein (kleine Wortmarke,
+Fortschritt, kein großer Titel). Auf 375 × 667 sind Fortschritt, Kategorie,
+Fragetext, Eingabefeld und beide Schaltflächen ohne Scrollen sichtbar
+(Unterkante der Schaltflächen bei 462 px), und
+`document.documentElement.scrollWidth` bleibt auf allen drei Routen bei 375.
+Frage- und Auflösungskarte teilen sich dieselbe Hülle mit `min-h-[24rem]`,
+damit beim Wechsel nichts springt.
+
+Die Ergebnistabelle liegt auf `table-fixed` mit festen Spaltenanteilen
+(36/23/23/18 %) und `break-words`: Ohne das drücken lange Einheiten wie
+„Chromosomen“ die Punktespalte auf schmalen Geräten aus dem Bild.
+
+`devIndicators: false` in `next.config.ts` schaltet das schwebende Dev-Abzeichen
+ab – es lag sonst über dem Inhalt und landete in jedem Screenshot. Der
+Produktionsbuild ist davon nicht betroffen.
+
+### Test-Setup: `matchMedia` und Aufräumen
+
+jsdom bringt `window.matchMedia` nicht mit. `tests/support/reduced-motion.ts`
+stellt einen echten `MediaQueryList`-Ersatz bereit (Unterklasse von
+`EventTarget`, damit die Ereignis-Signaturen ohne Casts stimmen);
+`tests/setup.ts` hängt ihn vor jedem Test frisch an und setzt ihn auf „keine
+reduzierte Bewegung“ zurück. Tests schalten mit `setReducedMotion(true)` um.
+Weil `globals: false` gesetzt ist, räumt Testing Library nicht von allein auf –
+`cleanup()` läuft deshalb ebenfalls im globalen `afterEach`.

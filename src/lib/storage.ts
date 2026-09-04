@@ -22,6 +22,7 @@ export const STORAGE_KEYS = {
   playedIds: `${KEY_PREFIX}played-ids`,
   settings: `${KEY_PREFIX}settings`,
   session: `${KEY_PREFIX}session`,
+  newHighscore: `${KEY_PREFIX}new-highscore`,
 } as const;
 
 export interface Highscore {
@@ -216,6 +217,30 @@ export function saveGameSession(state: GameState): void {
 
 export function clearGameSession(): void {
   removeRaw("session", STORAGE_KEYS.session);
+}
+
+// --- Neuer Highscore (Merker fuer die Ergebnisseite) -------------------------
+
+/**
+ * Ob die zuletzt beendete Runde ein neuer Bestwert war.
+ *
+ * Der Merker liegt bewusst im `sessionStorage` neben der Runde selbst: Die
+ * Ergebnisseite muss den Hinweis „Neuer Highscore!“ auch nach einem Reload
+ * noch zeigen können, und `saveHighscore` hat den alten Bestwert zu diesem
+ * Zeitpunkt bereits überschrieben — nachträglich lässt er sich also nicht mehr
+ * berechnen. Mit der Runde zusammen wird er beim Zurücksetzen wieder gelöscht.
+ */
+export function loadNewHighscoreFlag(): boolean {
+  const parsed = z.boolean().safeParse(readJson("session", STORAGE_KEYS.newHighscore));
+  return parsed.success ? parsed.data : false;
+}
+
+export function saveNewHighscoreFlag(value: boolean): void {
+  writeJson("session", STORAGE_KEYS.newHighscore, value);
+}
+
+export function clearNewHighscoreFlag(): void {
+  removeRaw("session", STORAGE_KEYS.newHighscore);
 }
 
 // --- Einstellungen -----------------------------------------------------------

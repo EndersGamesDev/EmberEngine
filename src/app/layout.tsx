@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { Luckiest_Guy, Nunito } from "next/font/google";
 import type { ReactNode } from "react";
+
+import { Doodles } from "@/components/Doodles";
+import { GameProvider } from "@/components/GameProvider";
 import "./globals.css";
 
 // Display-Schrift fuer Titel, Zahlen und Labels (Abschnitt 6.2).
@@ -20,7 +23,7 @@ const nunito = Nunito({
 
 export const metadata: Metadata = {
   title: "Verschätz dich",
-  description: "Daneben ist auch drin.",
+  description: "Daneben ist auch drin. Ein Schätzspiel mit schrägen Fragen und echten Zahlen.",
 };
 
 // Bewusst eigener Props-Typ statt des globalen `LayoutProps<"/">`:
@@ -29,7 +32,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="de" className={`${luckiestGuy.variable} ${nunito.variable}`}>
-      <body className="bg-bg text-ink font-body min-h-dvh antialiased">{children}</body>
+      <body className="bg-bg text-ink font-body min-h-dvh overflow-x-hidden antialiased">
+        <Doodles />
+        <GameProvider>{children}</GameProvider>
+      </body>
     </html>
   );
 }

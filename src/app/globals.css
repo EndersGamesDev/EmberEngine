@@ -33,8 +33,80 @@
   font-family: var(--font-body), system-ui, sans-serif;
 }
 
+/*
+ * Kartenhuelle im Neo-Brutalismus-Stil: Cremeflaeche, dicke Kontur, harter
+ * Schatten. Als eigene Utility, damit Frage- und Aufloesungskarte garantiert
+ * identisch aussehen und beim Wechsel nichts springt.
+ */
+@utility card {
+  background-color: var(--color-card);
+  border: 3px solid var(--color-ink);
+  border-radius: 1rem;
+  box-shadow: 6px 6px 0 0 var(--color-ink);
+}
+
+/* Karten-Einblendung beim Phasenwechsel. */
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@utility animate-card-in {
+  animation: card-in 240ms ease-out both;
+}
+
+/* Kurzer Pop fuer das Punkte-Abzeichen in der Aufloesung. */
+@keyframes badge-pop {
+  0% {
+    transform: scale(0.82) rotate(-4deg);
+  }
+  60% {
+    transform: scale(1.06) rotate(1deg);
+  }
+  100% {
+    transform: scale(1) rotate(-1deg);
+  }
+}
+
+@utility animate-badge-pop {
+  animation: badge-pop 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 body {
   background-color: var(--color-bg);
   color: var(--color-ink);
   font-family: var(--font-body), system-ui, sans-serif;
+  /* Die Kritzeleien im Hintergrund duerfen nie zu Querscrollen fuehren. */
+  overflow-x: hidden;
+}
+
+/*
+ * Ein sichtbarer Fokusring auf allem, was fokussierbar ist — auch auf
+ * Elementen, die ihren Ring nicht selbst mitbringen.
+ */
+:focus-visible {
+  outline: 4px solid var(--color-ink);
+  outline-offset: 2px;
+}
+
+/*
+ * `prefers-reduced-motion` (Abschnitt 6.4): CSS-Animationen und Uebergaenge
+ * werden global auf faktisch null gesetzt. Count-up und Konfetti pruefen die
+ * Einstellung zusaetzlich in JavaScript und laufen dann gar nicht erst an.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

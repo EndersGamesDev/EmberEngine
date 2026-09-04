@@ -4,13 +4,16 @@ import { gameReducer, initialGameState, type GameState } from "@/lib/game-reduce
 import {
   STORAGE_KEYS,
   clearGameSession,
+  clearNewHighscoreFlag,
   isNewHighscore,
   loadGameSession,
   loadHighscores,
+  loadNewHighscoreFlag,
   loadPlayedIds,
   loadSettings,
   saveGameSession,
   saveHighscore,
+  saveNewHighscoreFlag,
   savePlayedIds,
   saveSettings,
   type Highscore,
@@ -222,6 +225,34 @@ describe("Einstellungen", () => {
       JSON.stringify({ count: 7, categories: ["Gibt es nicht"] }),
     );
     expect(loadSettings()).toEqual({ count: 10, categories: [] });
+  });
+});
+
+describe("Merker „neuer Highscore“", () => {
+  it("ist ohne gespeicherten Wert false", () => {
+    expect(loadNewHighscoreFlag()).toBe(false);
+  });
+
+  it("merkt sich den Wert im sessionStorage und lässt sich löschen", () => {
+    saveNewHighscoreFlag(true);
+    expect(sessionStorageMock.store.has(STORAGE_KEYS.newHighscore)).toBe(true);
+    expect(localStorageMock.store.has(STORAGE_KEYS.newHighscore)).toBe(false);
+    expect(loadNewHighscoreFlag()).toBe(true);
+
+    saveNewHighscoreFlag(false);
+    expect(loadNewHighscoreFlag()).toBe(false);
+
+    saveNewHighscoreFlag(true);
+    clearNewHighscoreFlag();
+    expect(loadNewHighscoreFlag()).toBe(false);
+  });
+
+  it("ignoriert kaputte Werte", () => {
+    sessionStorageMock.store.set(STORAGE_KEYS.newHighscore, "{kaputt");
+    expect(loadNewHighscoreFlag()).toBe(false);
+
+    sessionStorageMock.store.set(STORAGE_KEYS.newHighscore, JSON.stringify("ja"));
+    expect(loadNewHighscoreFlag()).toBe(false);
   });
 });
 
