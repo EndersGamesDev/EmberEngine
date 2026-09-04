@@ -632,7 +632,9 @@ fn relief_redraw_refuses_a_retained_grid_from_an_old_extent() {
 
 #[test]
 fn every_gpu_dynamic_offset_comes_from_the_opaque_slot() {
-    let source = include_str!("../device.rs");
+    let mut source = String::from(include_str!("../device.rs"));
+    source.push_str(include_str!("census.rs"));
+    source.push_str(include_str!("scene.rs"));
     let accessor = [".dynamic_", "offset()"].concat();
     let bypass = ["index()", " * self.gpu.hot_stride"].concat();
     assert_eq!(source.matches(&accessor).count(), 6);
