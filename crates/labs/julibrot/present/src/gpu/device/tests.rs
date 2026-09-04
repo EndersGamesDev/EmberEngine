@@ -636,6 +636,7 @@ fn every_gpu_dynamic_offset_comes_from_the_opaque_slot() {
     source.push_str(include_str!("census.rs"));
     source.push_str(include_str!("redraw.rs"));
     source.push_str(include_str!("scene.rs"));
+    source.push_str(include_str!("scene/submit.rs"));
     source.push_str(include_str!("warp.rs"));
     let accessor = [".dynamic_", "offset()"].concat();
     let bypass = ["index()", " * self.gpu.hot_stride"].concat();

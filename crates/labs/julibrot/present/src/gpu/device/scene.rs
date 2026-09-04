@@ -9,6 +9,8 @@ use super::{
     stencil_reference,
 };
 
+mod submit;
+
 pub(super) fn create_scene_texture(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
