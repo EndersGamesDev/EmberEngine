@@ -120,7 +120,9 @@ fn exact_relief_redraw_family(from: &Pose, to: &Pose) -> bool {
     if [from.grid_width, from.grid_height] != [to.grid_width, to.grid_height] {
         return false;
     }
-    neutral_five_camera(from.view) && neutral_five_camera(to.view)
+    (neutral_five_camera(from.view)
+        && neutral_five_camera(to.view)
+        && same_sampling_lattice(from, to))
         || pure_height_or_fifth_distance(from, to)
 }
 
@@ -138,6 +140,12 @@ fn pure_height_or_fifth_distance(from: &Pose, to: &Pose) -> bool {
         && close(from.view.camera_pitch, to.view.camera_pitch)
         && close(from.view.distance_four, to.view.distance_four)
         && close(from.zoom_log2, to.zoom_log2)
+        && arrays_close(from.plane_origin, to.plane_origin)
+        && arrays_close(from.centre_from_reference_px, to.centre_from_reference_px)
+}
+
+fn same_sampling_lattice(from: &Pose, to: &Pose) -> bool {
+    close(from.zoom_log2, to.zoom_log2)
         && arrays_close(from.plane_origin, to.plane_origin)
         && arrays_close(from.centre_from_reference_px, to.centre_from_reference_px)
 }
@@ -1149,9 +1157,12 @@ mod tests {
         neutral_observer.view.camera_yaw = 0.4;
         neutral_observer.view.camera_pitch = -0.2;
         neutral_observer.view.distance_four = 6.0;
-        neutral_observer.zoom_log2 = 0.25;
-        neutral_observer.centre_from_reference_px = [3.0, -2.0];
         assert!(exact_relief_redraw_family(&neutral, &neutral_observer));
+
+        let mut resampled = neutral_observer;
+        resampled.zoom_log2 = 0.25;
+        resampled.centre_from_reference_px = [3.0, -2.0];
+        assert!(!exact_relief_redraw_family(&neutral, &resampled));
 
         let tumbled = pose(relief(0.4), [0.0; 2]);
         let mut pure_height = tumbled;
@@ -1173,9 +1184,10 @@ mod tests {
     }
 
     #[test]
-    fn the_five_dimensional_pole_is_clamped_to_a_finite_relief_redraw() {
+    fn the_five_dimensional_pole_is_clamped_but_resampling_still_clears() {
         // The bounded near plane turns the former five-dimensional pole into a closed finite
-        // surface. The retained records can therefore be redrawn instead of being discarded.
+        // surface. Moving the sampling lattice still requires fresh records, so this finite
+        // over-ceiling plan clears rather than mislabelling stale records as an exact redraw.
         let view = ViewControls {
             height_scale: 1.0,
             distance_five: 1.0,
@@ -1186,8 +1198,8 @@ mod tests {
         to.zoom_log2 += 0.125;
         assert_ne!(from, to);
         let plan = reproject(&frame(&from), &from, &to);
-        assert_eq!(plan.kind, WarpKind::ReliefRedraw);
-        assert!(plan.source_valid);
+        assert_eq!(plan.kind, WarpKind::ClearOnly);
+        assert!(!plan.source_valid);
         assert!(plan.approx_max_error_px.is_some_and(f64::is_finite));
     }
 
