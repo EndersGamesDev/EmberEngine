@@ -261,8 +261,10 @@ pub fn run_online(cfg: OnlineConfig) -> Result<(), String> {
     let prop_fits = props::measure(&prop_meshes);
     meshes.extend(prop_meshes);
     // The rounds (arena v20): the five bullet meshes, the streak cone, the
-    // core frustum and the hole disc, after the props, in `rounds::Round`
-    // order with the streak, the core and then the disc last.
+    // core frustum, the hole disc and the particle puff, after the props,
+    // in `rounds::Round` order with the streak, the core, the disc and then
+    // the puff last. A new mesh in this group goes on the END of it, or
+    // every id after it shifts.
     let rounds_base =
         u32::try_from(meshes.len()).map_err(|_| "prop mesh count exceeds u32".to_string())? + 1;
     meshes.extend(rounds::round_meshes());
