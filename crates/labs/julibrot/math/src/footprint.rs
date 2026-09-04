@@ -642,6 +642,57 @@ mod tests {
         );
     }
 
+    /// The close row's residual sky is the plane's own projective horizon, not a coverage failure.
+    ///
+    /// A tumbled plane seen from close in has a large part of the frame looking past its own
+    /// horizon: those screen points fail the sampling map outright, no height and no apron can
+    /// recover them, and honest sky is the correct picture there. Measured through the same mirror
+    /// at the same pose with the height set to zero — a flat chart, no relief at all — the frame is
+    /// still `821/4225` uncovered at apron one and `668/4225` at apron five.
+    ///
+    /// The relief scene with its backdrop leaves `650/4225`, which is BELOW the flat chart's own
+    /// floor at the same apron: the lift brings a little more surface into view than the discarded
+    /// clipped rim costs. So the backdrop closes the whole recoverable gap at this row, and the
+    /// residual is geometry rather than a deficit. It also explains why the published pair looks
+    /// like a small win — the `813/4225` main-alone baseline was already almost all horizon sky.
+    #[test]
+    fn the_close_row_residual_is_the_plane_horizon_and_not_a_coverage_deficit() {
+        let (object, view) = close_owner_row();
+        let flat = ViewControls {
+            height_scale: 0.0,
+            ..view
+        };
+        let map = crate::screen_to_plane(&object, &view, 0.0, 960, 540, 960.0 / 540.0)
+            .expect("relief pose maps");
+        let plane = construct_plane(object).expect("relief plane");
+        let horizon = |view: &ViewControls, apron: f64| {
+            uncovered_fraction(
+                &VertexChain {
+                    map: &map,
+                    plane,
+                    view,
+                    matrix: camera_matrix(view),
+                },
+                [960, 540],
+                apron,
+            )
+        };
+        let flat_narrow = horizon(&flat, 1.0);
+        let flat_wide = horizon(&flat, 5.0);
+        let relief_wide = horizon(&view, 5.0);
+        assert!(
+            (flat_narrow - 821.0 / 4225.0).abs() < 1.0e-12
+                && (flat_wide - 668.0 / 4225.0).abs() < 1.0e-12
+                && (relief_wide - 650.0 / 4225.0).abs() < 1.0e-12,
+            "flat {flat_narrow} / {flat_wide}, relief {relief_wide}"
+        );
+        assert!(
+            relief_wide < flat_wide,
+            "the relief scene with its backdrop must not leave more sky than a flat chart at the \
+             same apron: the residual is the plane's horizon, not a coverage deficit"
+        );
+    }
+
     /// The clipping census keeps its whole fixed denominator.
     ///
     /// At the second owner row 126 of the 405 census points are held at the near clamp and 90 more
