@@ -229,7 +229,7 @@ fn smooth_error(observed: f32, expected: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use core::num::NonZeroU32;
-    use std::collections::BTreeSet;
+    use std::{collections::BTreeSet, time::Instant};
 
     use ember_julibrot_math::{
         BigCentre, EscapeGridRecord, EscapeParams, Homography, ObjectAngles, OrbitStep,
@@ -245,6 +245,130 @@ mod tests {
         GridExtent, KernelSample, PerturbUniform, RefinementLevel, SampleStatus,
         escape_shallow_point, perturb_scaled_pixel,
     };
+
+    #[allow(clippy::suboptimal_flops)]
+    fn exact_mandelbrot_escape_index(c: [f64; 2], cap: u32) -> Option<u32> {
+        let mut z = [0.0_f64; 2];
+        for iteration in 0..cap {
+            if z[0] * z[0] + z[1] * z[1] > f64::from(EscapeParams::BAILOUT) {
+                return Some(iteration);
+            }
+            if iteration + 1 == cap {
+                break;
+            }
+            z = [z[0] * z[0] - z[1] * z[1] + c[0], 2.0 * z[0] * z[1] + c[1]];
+        }
+        None
+    }
+
+    #[test]
+    fn pauldelbrot_cancellation_is_a_numeric_glitch() {
+        const WIDTH: u32 = 960;
+        const HEIGHT: u32 = 540;
+        const CAP: u32 = 512;
+        const REFERENCE_LENGTH: u32 = 41;
+        const EXACT_ESCAPE_INDEX: u32 = 251;
+        const PIXEL_INDEX: u32 = 325 * WIDTH + 939;
+        let target = [-0.743_643_887_037_151, 0.131_825_904_205_33];
+        let plan = precision_for(14.0, WIDTH, CAP).expect("zoom fourteen precision");
+        let centre = BigCentre::from_f64([0.0, 0.0, target[0], target[1]], plan.requested_bits)
+            .expect("finite seahorse reference");
+        let mut builder = ReferenceOrbitBuilder::new(&centre, plan, EscapeParams::new(CAP))
+            .expect("reference builder");
+        let orbit = loop {
+            match builder
+                .step(NonZeroU32::new(CAP).expect("nonzero cap"))
+                .expect("reference step")
+            {
+                OrbitStep::Complete(orbit) => break orbit,
+                OrbitStep::Pending { .. } => {}
+            }
+        };
+        let uniforms = PerturbUniform::pack(
+            construct_plane(ObjectAngles::IDENTITY).expect("Mandelbrot plane"),
+            &Homography::IDENTITY,
+            scale_split(14.0, WIDTH).expect("zoom fourteen scale"),
+            GridExtent {
+                width: WIDTH,
+                height: HEIGHT,
+            },
+            EscapeParams::new(CAP),
+            REFERENCE_LENGTH,
+            RefinementLevel::Final,
+        )
+        .expect("short-reference uniform");
+        let scale = pixel_scale(14.0, WIDTH).expect("zoom fourteen pixel scale");
+        let x = f64::from(PIXEL_INDEX % WIDTH) + 0.5 - 0.5 * f64::from(WIDTH);
+        let y = f64::from(PIXEL_INDEX / WIDTH) + 0.5 - 0.5 * f64::from(HEIGHT);
+        let c = [x.mul_add(scale, target[0]), y.mul_add(scale, target[1])];
+        let sample = perturb_scaled_pixel(&uniforms, &orbit.records, PIXEL_INDEX)
+            .expect("cancellation pixel is valid");
+
+        assert_eq!(
+            exact_mandelbrot_escape_index(c, CAP),
+            Some(EXACT_ESCAPE_INDEX)
+        );
+        assert_eq!(sample.escape_index, None);
+        assert_eq!(
+            SampleStatus::from_f32(sample.record.status),
+            Some(SampleStatus::Glitch)
+        );
+        assert_eq!(sample.record.smooth_iter, crate::GLITCH_NUMERIC_FAILURE);
+    }
+
+    #[test]
+    #[ignore = "native kernels measurement harness"]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the explicitly selected performance harness reports its wall"
+    )]
+    fn measures_pauldelbrot_comparison_cost() {
+        const CAP: u32 = 512;
+        const ROUNDS: u32 = 200_000;
+        let plan = precision_for(14.0, 960, CAP).expect("zoom fourteen precision");
+        let centre = BigCentre::from_f64(
+            [0.0, 0.0, -0.743_643_887_037_151, 0.131_825_904_205_33],
+            plan.requested_bits,
+        )
+        .expect("finite seahorse reference");
+        let mut builder = ReferenceOrbitBuilder::new(&centre, plan, EscapeParams::new(CAP))
+            .expect("reference builder");
+        let orbit = loop {
+            match builder
+                .step(NonZeroU32::new(CAP).expect("nonzero cap"))
+                .expect("reference step")
+            {
+                OrbitStep::Complete(orbit) => break orbit,
+                OrbitStep::Pending { .. } => {}
+            }
+        };
+        let uniforms = PerturbUniform::pack(
+            construct_plane(ObjectAngles::IDENTITY).expect("Mandelbrot plane"),
+            &Homography::IDENTITY,
+            scale_split(14.0, 960).expect("zoom fourteen scale"),
+            GridExtent {
+                width: 1,
+                height: 1,
+            },
+            EscapeParams::new(CAP),
+            orbit.length,
+            RefinementLevel::Final,
+        )
+        .expect("measurement uniform");
+        let start = Instant::now();
+        for _ in 0..ROUNDS {
+            std::hint::black_box(
+                perturb_scaled_pixel(&uniforms, &orbit.records, 0).expect("interior sample"),
+            );
+        }
+        let wall = start.elapsed();
+        let iterations = u128::from(ROUNDS) * u128::from(CAP);
+        eprintln!(
+            "pauldelbrot_cost rounds={ROUNDS} iterations={iterations} wall_us={} ps_per_iteration={}",
+            wall.as_micros(),
+            wall.as_nanos() * 1_000 / iterations
+        );
+    }
 
     #[test]
     fn reused_zoom_twelve_reference_is_classified_as_a_zoom_fourteen_glitch() {
