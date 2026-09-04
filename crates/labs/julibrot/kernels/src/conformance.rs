@@ -241,6 +241,7 @@ mod tests {
         ConformanceVerdict, VISIBLE_REPLAY_CARDS, evaluate_perturbation_conformance,
         evaluate_shallow_conformance,
     };
+    use crate::perturb::{PAULDELBROT_GLITCH_EPSILON, perturb_scaled_pixel_for_epsilon};
     use crate::{
         GridExtent, KernelSample, PerturbUniform, RefinementLevel, SampleStatus,
         escape_shallow_point, perturb_scaled_pixel,
@@ -267,8 +268,8 @@ mod tests {
         const HEIGHT: u32 = 540;
         const CAP: u32 = 512;
         const REFERENCE_LENGTH: u32 = 41;
-        const EXACT_ESCAPE_INDEX: u32 = 251;
-        const PIXEL_INDEX: u32 = 325 * WIDTH + 939;
+        const PIXEL_INDEX: u32 = 696;
+        const EXACT_ESCAPE_INDEX: u32 = 250;
         let target = [-0.743_643_887_037_151, 0.131_825_904_205_33];
         let plan = precision_for(14.0, WIDTH, CAP).expect("zoom fourteen precision");
         let centre = BigCentre::from_f64([0.0, 0.0, target[0], target[1]], plan.requested_bits)
@@ -297,23 +298,149 @@ mod tests {
             RefinementLevel::Final,
         )
         .expect("short-reference uniform");
-        let scale = pixel_scale(14.0, WIDTH).expect("zoom fourteen pixel scale");
+        let before = perturb_scaled_pixel_for_epsilon(&uniforms, &orbit.records, PIXEL_INDEX, 0.0)
+            .expect("old kernel mirror");
+        let sample = perturb_scaled_pixel(&uniforms, &orbit.records, PIXEL_INDEX)
+            .expect("cancellation pixel is valid");
+        let scale = pixel_scale(14.0, WIDTH).expect("Final pixel scale");
         let x = f64::from(PIXEL_INDEX % WIDTH) + 0.5 - 0.5 * f64::from(WIDTH);
         let y = f64::from(PIXEL_INDEX / WIDTH) + 0.5 - 0.5 * f64::from(HEIGHT);
         let c = [x.mul_add(scale, target[0]), y.mul_add(scale, target[1])];
-        let sample = perturb_scaled_pixel(&uniforms, &orbit.records, PIXEL_INDEX)
-            .expect("cancellation pixel is valid");
+        let gpu_source = crate::perturbation_kernel().body;
+        let gpu_escape = gpu_source
+            .find("if (z_squared > uniforms.bailout)")
+            .expect("GPU escape test");
+        let gpu_glitch = gpu_source
+            .find("if (z_squared < 0.000001 * dot(reference, reference))")
+            .expect("GPU Pauldelbrot test");
+        let gpu_rebase = gpu_source
+            .find("if (perturb_norm(z) < perturb_norm(represented_delta))")
+            .expect("GPU rebase test");
 
         assert_eq!(
             exact_mandelbrot_escape_index(c, CAP),
             Some(EXACT_ESCAPE_INDEX)
         );
+        assert_eq!(before.escape_index, None);
+        assert_eq!(before.record.smooth_iter, -1.0);
+        assert_eq!(before.record.rebase_count, 27.0);
+        assert_eq!(
+            SampleStatus::from_f32(before.record.status),
+            Some(SampleStatus::Sampled)
+        );
+        assert!(gpu_escape < gpu_glitch && gpu_glitch < gpu_rebase);
         assert_eq!(sample.escape_index, None);
         assert_eq!(
             SampleStatus::from_f32(sample.record.status),
             Some(SampleStatus::Glitch)
         );
         assert_eq!(sample.record.smooth_iter, crate::GLITCH_NUMERIC_FAILURE);
+    }
+
+    #[test]
+    fn a_true_interior_pixel_is_not_a_relative_precision_glitch() {
+        const CAP: u32 = 512;
+        let plan = precision_for(14.0, 960, CAP).expect("zoom fourteen precision");
+        let centre = BigCentre::from_f64(
+            [0.0, 0.0, -0.743_643_887_037_151, 0.131_825_904_205_33],
+            plan.requested_bits,
+        )
+        .expect("finite seahorse reference");
+        let mut builder = ReferenceOrbitBuilder::new(&centre, plan, EscapeParams::new(CAP))
+            .expect("reference builder");
+        let orbit = loop {
+            match builder
+                .step(NonZeroU32::new(CAP).expect("nonzero cap"))
+                .expect("reference step")
+            {
+                OrbitStep::Complete(orbit) => break orbit,
+                OrbitStep::Pending { .. } => {}
+            }
+        };
+        let uniforms = PerturbUniform::pack(
+            construct_plane(ObjectAngles::IDENTITY).expect("Mandelbrot plane"),
+            &Homography::IDENTITY,
+            scale_split(14.0, 960).expect("zoom fourteen scale"),
+            GridExtent {
+                width: 1,
+                height: 1,
+            },
+            EscapeParams::new(CAP),
+            orbit.length,
+            RefinementLevel::Final,
+        )
+        .expect("interior uniform");
+        let sample =
+            perturb_scaled_pixel(&uniforms, &orbit.records, 0).expect("interior pixel is valid");
+
+        assert_eq!(orbit.length, CAP);
+        assert_eq!(sample.escape_index, None);
+        assert_eq!(sample.record.smooth_iter, -1.0);
+        assert_eq!(
+            SampleStatus::from_f32(sample.record.status),
+            Some(SampleStatus::Sampled)
+        );
+    }
+
+    #[test]
+    #[ignore = "native kernels measurement harness"]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the explicitly selected epsilon sweep reports the measured fractions"
+    )]
+    fn measures_pauldelbrot_epsilon_on_standard_seahorse_corpus() {
+        const WIDTH: u32 = 960;
+        const HEIGHT: u32 = 540;
+        const CAP: u32 = 512;
+        const REFERENCE_LENGTH: u32 = 41;
+        let plan = precision_for(14.0, WIDTH, CAP).expect("zoom fourteen precision");
+        let centre = BigCentre::from_f64(
+            [0.0, 0.0, -0.743_643_887_037_151, 0.131_825_904_205_33],
+            plan.requested_bits,
+        )
+        .expect("finite seahorse reference");
+        let mut builder = ReferenceOrbitBuilder::new(&centre, plan, EscapeParams::new(CAP))
+            .expect("reference builder");
+        let orbit = loop {
+            match builder
+                .step(NonZeroU32::new(CAP).expect("nonzero cap"))
+                .expect("reference step")
+            {
+                OrbitStep::Complete(orbit) => break orbit,
+                OrbitStep::Pending { .. } => {}
+            }
+        };
+        let uniforms = PerturbUniform::pack(
+            construct_plane(ObjectAngles::IDENTITY).expect("Mandelbrot plane"),
+            &Homography::IDENTITY,
+            scale_split(14.0, WIDTH).expect("zoom fourteen scale"),
+            GridExtent {
+                width: WIDTH,
+                height: HEIGHT,
+            },
+            EscapeParams::new(CAP),
+            REFERENCE_LENGTH,
+            RefinementLevel::Final,
+        )
+        .expect("standard-corpus uniform");
+        let corpus = WIDTH * HEIGHT;
+
+        for epsilon in [1.0e-4_f32, PAULDELBROT_GLITCH_EPSILON, 1.0e-8_f32] {
+            let flagged = (0..corpus)
+                .map(|index| {
+                    perturb_scaled_pixel_for_epsilon(&uniforms, &orbit.records, index, epsilon)
+                        .expect("standard-corpus pixel")
+                })
+                .filter(|sample| {
+                    sample.record.smooth_iter.to_bits() == crate::GLITCH_NUMERIC_FAILURE.to_bits()
+                })
+                .count();
+            #[allow(clippy::cast_precision_loss)]
+            let fraction = flagged as f64 / f64::from(corpus);
+            eprintln!(
+                "pauldelbrot_epsilon epsilon={epsilon:e} corpus={corpus} flagged={flagged} fraction={fraction:.9}"
+            );
+        }
     }
 
     #[test]

@@ -237,10 +237,14 @@ fn kernel(index: u32, uniforms: PerturbUniform) -> PerturbResult {
         if (!perturb_finite(z)) {
             return perturb_glitch(rebases, -2.0);
         }
-        if (dot(z, z) > uniforms.bailout) {
+        let z_squared = dot(z, z);
+        if (z_squared > uniforms.bailout) {
             var escaped: PerturbResult;
             escaped.escape = vec4<f32>(perturb_smooth(iteration, z), 1.0, f32(rebases), mapped.status);
             return escaped;
+        }
+        if (z_squared < 0.000001 * dot(reference, reference)) {
+            return perturb_glitch(rebases, -2.0);
         }
         if (iteration + 1u >= uniforms.max_iter) {
             break;

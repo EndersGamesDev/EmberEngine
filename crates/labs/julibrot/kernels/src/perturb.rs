@@ -21,6 +21,7 @@ const LDEXP_EXPONENT_LIMIT: i32 = 512;
 const F32_EXPONENT_MASK: u32 = 0x7f80_0000;
 const F32_SIGN_MASK: u32 = 0x8000_0000;
 const MAX_RESCALE_STEPS: u32 = u32::MAX / 64;
+pub(crate) const PAULDELBROT_GLITCH_EPSILON: f32 = 1.0e-6;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ScaledState {
@@ -282,6 +283,15 @@ pub fn perturb_scaled_offset(
     orbit: &[ReferenceOrbitRecord],
     offset_prime: [f32; 4],
 ) -> Result<KernelSample, KernelError> {
+    perturb_scaled_offset_with_epsilon(uniforms, orbit, offset_prime, PAULDELBROT_GLITCH_EPSILON)
+}
+
+fn perturb_scaled_offset_with_epsilon(
+    uniforms: &PerturbUniform,
+    orbit: &[ReferenceOrbitRecord],
+    offset_prime: [f32; 4],
+    glitch_epsilon: f32,
+) -> Result<KernelSample, KernelError> {
     validate_params(EscapeParams {
         max_iter: uniforms.max_iter,
         bailout: uniforms.bailout,
@@ -317,7 +327,8 @@ pub fn perturb_scaled_offset(
         if !finite(z) {
             return Ok(glitch(rebases, false));
         }
-        if radius_squared(z) > uniforms.bailout {
+        let z_squared = radius_squared(z);
+        if z_squared > uniforms.bailout {
             return Ok(KernelSample {
                 record: EscapeGridRecord {
                     smooth_iter: smooth_iteration(iteration, z),
@@ -327,6 +338,9 @@ pub fn perturb_scaled_offset(
                 },
                 escape_index: Some(iteration),
             });
+        }
+        if z_squared < glitch_epsilon * radius_squared(reference) {
+            return Ok(glitch(rebases, false));
         }
         if iteration + 1 >= uniforms.max_iter {
             break;
@@ -374,6 +388,15 @@ pub fn perturb_scaled_pixel(
     orbit: &[ReferenceOrbitRecord],
     index: u32,
 ) -> Result<KernelSample, KernelError> {
+    perturb_scaled_pixel_with_epsilon(uniforms, orbit, index, PAULDELBROT_GLITCH_EPSILON)
+}
+
+fn perturb_scaled_pixel_with_epsilon(
+    uniforms: &PerturbUniform,
+    orbit: &[ReferenceOrbitRecord],
+    index: u32,
+    glitch_epsilon: f32,
+) -> Result<KernelSample, KernelError> {
     let extent = GridExtent {
         width: uniforms.width,
         height: uniforms.height,
@@ -399,11 +422,22 @@ pub fn perturb_scaled_pixel(
         Ok(mapped) => mapped,
         Err(status) => return Ok(terminal_sample(status)),
     };
-    let mut sample = perturb_scaled_offset(uniforms, orbit, mapped.offset)?;
+    let mut sample =
+        perturb_scaled_offset_with_epsilon(uniforms, orbit, mapped.offset, glitch_epsilon)?;
     if SampleStatus::from_f32(sample.record.status) != Some(SampleStatus::Glitch) {
         sample.record.status = mapped.status.as_f32();
     }
     Ok(sample)
+}
+
+#[cfg(test)]
+pub(crate) fn perturb_scaled_pixel_for_epsilon(
+    uniforms: &PerturbUniform,
+    orbit: &[ReferenceOrbitRecord],
+    index: u32,
+    glitch_epsilon: f32,
+) -> Result<KernelSample, KernelError> {
+    perturb_scaled_pixel_with_epsilon(uniforms, orbit, index, glitch_epsilon)
 }
 
 #[cfg(test)]
