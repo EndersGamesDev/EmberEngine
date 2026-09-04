@@ -2286,6 +2286,102 @@ mod tests {
         assert_eq!(census.reference_sample, Some(GLITCH_RECORDS_PER_TEXEL + 5));
     }
 
+    /// Packs one grid of escape records the way the census fragment shader would.
+    ///
+    /// This mirrors the shader's arithmetic on the CPU rather than executing it: the same 255-record
+    /// groups, the same four-tier rank, the same unorm quantisation to a byte, and the same
+    /// row-padded readback layout. It exists so the decode is exercised against shader-shaped bytes
+    /// instead of hand-written ones.
+    fn census_texels(records: &[[f32; 4]], cap: f32, grid_width: u32) -> (Vec<u8>, [u32; 2], u32) {
+        let groups = u32::try_from(records.len().div_ceil(GLITCH_RECORDS_PER_TEXEL as usize))
+            .expect("group count fits");
+        let extent = [grid_width, groups.div_ceil(grid_width).max(1)];
+        let bytes_per_row = (extent[0] * RGBA8_BYTES_PER_TEXEL)
+            .div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let mut bytes = vec![0xAB_u8; (bytes_per_row * extent[1]) as usize];
+        for row in 0..extent[1] {
+            for column in 0..extent[0] {
+                let group = row * extent[0] + column;
+                let start = (group * GLITCH_RECORDS_PER_TEXEL) as usize;
+                let mut count = 0_u32;
+                let mut best_rank = 0.0_f32;
+                let mut best_offset = 0_u32;
+                let mut located = 0.0_f32;
+                for offset in 0..GLITCH_RECORDS_PER_TEXEL {
+                    let Some(record) = records.get(start + offset as usize) else {
+                        break;
+                    };
+                    if record[3] == 1.0 {
+                        count += 1;
+                    }
+                    if record[3] == 2.0 || record[3] == 3.0 {
+                        continue;
+                    }
+                    let rank = if record[3] == 1.0 {
+                        if record[0] == -1.0 { 254.0 } else { 0.0 }
+                    } else if record[1] == 1.0 {
+                        (252.0 * record[0].ceil().clamp(0.0, cap) / cap + 0.5).floor() + 1.0
+                    } else {
+                        255.0
+                    };
+                    if located == 0.0 || rank > best_rank {
+                        best_rank = rank;
+                        best_offset = offset;
+                        located = 1.0;
+                    }
+                }
+                let texel = (row * bytes_per_row + column * RGBA8_BYTES_PER_TEXEL) as usize;
+                bytes[texel] = u8::try_from(count).expect("group count is at most 255");
+                bytes[texel + 1] = best_rank as u8;
+                bytes[texel + 2] = u8::try_from(best_offset).expect("offset is at most 254");
+                bytes[texel + 3] = if located == 0.0 { 0 } else { 255 };
+            }
+        }
+        (bytes, extent, bytes_per_row)
+    }
+
+    /// Pins the decode against shader-shaped bytes, including what the byte rank cannot separate.
+    #[test]
+    fn the_census_decodes_shader_shaped_bytes_and_keeps_the_lowest_index_on_a_quantised_tie() {
+        const CAP: f32 = 512.0;
+        const GRID_WIDTH: u32 = 4;
+        let escaped = |count: f32| [count, 1.0, 0.0, 0.0];
+        let interior = [-1.0, 0.0, 0.0, 0.0];
+        let exhausted = [-1.0, 0.0, 0.0, 1.0];
+        let numeric = [-2.0, 0.0, 0.0, 1.0];
+
+        // Two escaping records one iteration apart share a byte rank; the lower index must win, and
+        // the higher exact count loses. The mirror over exact counts would name the other one.
+        let mut records = vec![escaped(10.0); 3 * GLITCH_RECORDS_PER_TEXEL as usize];
+        records[7] = escaped(400.0);
+        records[GLITCH_RECORDS_PER_TEXEL as usize + 3] = escaped(401.0);
+        let (bytes, extent, bytes_per_row) = census_texels(&records, CAP, GRID_WIDTH);
+        assert_eq!(
+            census_bytes(&bytes, extent, bytes_per_row).reference_sample,
+            Some(7),
+            "a byte rank cannot separate 400 from 401, and the lowest index keeps the tie"
+        );
+
+        // The four tiers, decoded end to end: numeric failure below every escape, an exhaustion
+        // glitch above them, and a record that never escaped above that.
+        records[GLITCH_RECORDS_PER_TEXEL as usize + 4] = numeric;
+        records[2 * GLITCH_RECORDS_PER_TEXEL as usize + 9] = exhausted;
+        let (bytes, extent, bytes_per_row) = census_texels(&records, CAP, GRID_WIDTH);
+        let census = census_bytes(&bytes, extent, bytes_per_row);
+        assert_eq!(census.glitch_pixel_count, 2);
+        assert_eq!(
+            census.reference_sample,
+            Some(2 * GLITCH_RECORDS_PER_TEXEL + 9)
+        );
+        records[5] = interior;
+        let (bytes, extent, bytes_per_row) = census_texels(&records, CAP, GRID_WIDTH);
+        assert_eq!(
+            census_bytes(&bytes, extent, bytes_per_row).reference_sample,
+            Some(5)
+        );
+    }
+
     #[test]
     fn the_census_reference_candidate_is_the_lowest_index_of_the_highest_rank() {
         let mut bytes = vec![0_u8; 32];

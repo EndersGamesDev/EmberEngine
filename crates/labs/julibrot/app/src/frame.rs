@@ -1522,6 +1522,12 @@ mod browser {
                 self.loop_state.scene_changed(self.main.generation_applied);
                 self.prepared_level = None;
                 self.prepare_due_level();
+                // Re-selecting the level changes the prepared extent, and the drained pose is
+                // expressed in that extent's pixels: the screen map and centre_from_reference_px
+                // both rescale with it, so the first drain no longer describes this scene.
+                hot = viewer.drain_hot(self.prepared_extent())?;
+                self.owner_epoch = hot.state.epoch;
+                self.main = hot.state.main;
             }
             self.install_main(viewer, hot.pose.object, hot.plane, hot.pose.map);
             let mut slot = HotSlot::for_refresh(self.refresh_id, self.hot_stride, hot.state.epoch)
