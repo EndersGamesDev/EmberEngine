@@ -25,6 +25,9 @@ use ledger::{
     apply_hold_policy, clear_warp_plan, identity_rows, pose_is_finite, select_warp_source,
     warp_exposed_fraction,
 };
+use redraw::encode_relief_redraw;
+#[cfg(test)]
+use redraw::relief_scene_uniform;
 use scene::{
     create_depth_target, create_scene_pipeline, create_scene_texture, encode_scene,
     encode_scene_mesh, ensure_backdrop_indices, ensure_depth, ensure_indices, ensure_scene_texture,
@@ -36,6 +39,7 @@ use uniforms::{
 
 mod census;
 mod ledger;
+mod redraw;
 mod scene;
 mod uniforms;
 
@@ -56,7 +60,6 @@ enum SceneLayer {
     Backdrop,
     Main,
 }
-
 const MAIN_THEN_BACKDROP: [SceneLayer; 2] = [SceneLayer::Main, SceneLayer::Backdrop];
 const MAIN_ONLY: [SceneLayer; 1] = [SceneLayer::Main];
 
@@ -167,7 +170,6 @@ impl SceneCensus {
     const fn glitch_pixel_count(self) -> u32 {
         self.glitch_pixel_count
     }
-
     const fn reference_sample(self) -> Option<u32> {
         self.reference_sample
     }
@@ -873,26 +875,6 @@ impl Presenter {
         );
     }
 
-    fn prepare_relief_redraw(
-        &mut self,
-        source: &crate::SceneFrame,
-        surface_extent: [u32; 2],
-        selected: PaletteRecord,
-    ) -> Result<(), PresentError> {
-        let main = self.main.as_ref().ok_or(PresentError::InvalidGrid {
-            width: source.extent[0],
-            height: source.extent[1],
-            logical_len: 0,
-        })?;
-        validate_grid(main, self.gpu.heap_limits)?;
-        let uniform = relief_scene_uniform(main, source, selected)?;
-        ensure_indices(&self.device, &mut self.gpu, source.extent)?;
-        ensure_depth(&self.device, &mut self.gpu, surface_extent)?;
-        self.queue
-            .write_buffer(&self.gpu.scene_buffers[0], 0, bytemuck::bytes_of(&uniform));
-        Ok(())
-    }
-
     /// Observes every pending fence once without waiting and returns terminal events.
     #[must_use]
     pub fn poll(&mut self, now_ms: f64) -> Vec<PresentEvent> {
@@ -1353,24 +1335,6 @@ fn create_warp_pipeline(
     })
 }
 
-fn encode_relief_redraw(
-    encoder: &mut wgpu::CommandEncoder,
-    gpu: &GpuState,
-    surface_view: &wgpu::TextureView,
-    hot_offset: u32,
-    selected: PaletteRecord,
-) {
-    encode_scene_mesh(
-        encoder,
-        gpu,
-        surface_view,
-        &gpu.relief_redraw_pipeline,
-        hot_offset,
-        warp_load_color(selected),
-        "Julibrot relief redraw pass",
-    );
-}
-
 fn encode_image_warp(
     encoder: &mut wgpu::CommandEncoder,
     gpu: &GpuState,
@@ -1401,40 +1365,6 @@ fn encode_image_warp(
 
 fn warp_load_color(selected: PaletteRecord) -> wgpu::Color {
     color(selected.clear_rgba)
-}
-
-fn relief_scene_uniform(
-    main: &PresentMain,
-    source: &crate::SceneFrame,
-    selected: PaletteRecord,
-) -> Result<SceneUniform, PresentError> {
-    if [main.grid.width, main.grid.height] != source.extent {
-        return Err(PresentError::InvalidGrid {
-            width: source.extent[0],
-            height: source.extent[1],
-            logical_len: main.grid.span.logical_len,
-        });
-    }
-    SceneUniform::new(
-        source.extent,
-        source.level as u32,
-        source.iteration_cap,
-        main.grid.span.directory_index,
-        main.grid.span.logical_len,
-        source.pose.plane,
-        source.pose.map,
-        selected,
-    )
-    .map_err(|error| match error {
-        PresentDataError::InvalidMap => PresentError::Device {
-            operation: "pack relief redraw source map",
-        },
-        _ => PresentError::InvalidGrid {
-            width: source.extent[0],
-            height: source.extent[1],
-            logical_len: main.grid.span.logical_len,
-        },
-    })
 }
 
 fn selected_or_classic(main: Option<&PresentMain>) -> (PaletteId, PaletteRecord) {
