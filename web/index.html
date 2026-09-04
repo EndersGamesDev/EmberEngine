@@ -381,9 +381,13 @@
       }
       if (livePath) sel.value = livePath;
       const btn = document.createElement('button');
-      btn.textContent = `Play ${live ? live.v : ''}`.trim();
-      btn.title = `Play the latest ${g.title} build`;
-      btn.addEventListener('click', () => launch(sel.value));
+      const isLab = g.kind === 'lab';
+      btn.textContent = isLab ? 'Open lab' : `Play ${live ? live.v : ''}`.trim();
+      btn.title = isLab ? `Open ${g.title}` : `Play the latest ${g.title} build`;
+      btn.addEventListener('click', () => {
+        if (isLab) location.href = sel.value;
+        else launch(sel.value);
+      });
       row.append(sel, btn);
       card.append(h, tag, desc, update, row);
       cards.append(card);
@@ -424,7 +428,7 @@
       const ov = override();
       const pin = readPin();
       perGame.clear();
-      await Promise.all(catalog.games.map(async (g) => {
+      await Promise.all(catalog.games.filter((g) => g.kind !== 'lab').map(async (g) => {
         const k = keysFor(g.id);
         // The override replaces the arena's whole host list with one address:
         // it beats the book, the pin and the ranking alike.
