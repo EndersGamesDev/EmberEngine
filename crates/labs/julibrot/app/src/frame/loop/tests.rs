@@ -1538,15 +1538,42 @@ fn viewer_harness_holds_an_auto_refusal_until_the_rounds_final_fill() {
 }
 
 #[test]
-fn automatic_stale_hold_expires_after_one_ladder_round_without_a_final() {
+fn automatic_stale_hold_rearms_when_a_round_resumes_without_a_final() {
     let mut frame_loop = FrameLoop::default();
     frame_loop.accept_request(37, true);
     assert!(frame_loop.hold_refused_warp(true));
     let held_round = frame_loop.ladder_round();
 
-    frame_loop.restart(38);
+    frame_loop.scene_input_resumed(38, RefinementLevel::Interactive);
     assert_ne!(frame_loop.ladder_round(), held_round);
-    assert!(!frame_loop.hold_refused_warp(true));
+    assert!(frame_loop.hold_refused_warp(true));
+}
+
+#[test]
+fn viewer_harness_keeps_the_picture_when_a_non_final_round_is_retired_and_resumed() {
+    let mut frame_loop = FrameLoop::default();
+    frame_loop.accept_request(37, true);
+    let mut presenter = retained_presenter(true);
+    let mut clock = FakeClock::default();
+
+    let first = drive_viewer_harness(&mut frame_loop, &mut presenter, clock, true);
+    let retired_scene = first.scene_id.expect("the first round submits Preview");
+    assert_eq!(presenter.warp_kind, Some(WarpKind::HoldStale));
+    presenter.fire_warp_completed();
+    clock.advance(1.0);
+    assert!(drive_viewer_harness(&mut frame_loop, &mut presenter, clock, false).presented);
+    assert_eq!(presenter.presented_scene, Some(37));
+
+    assert!(frame_loop.retired(retired_scene));
+    presenter.pending = None;
+    frame_loop.scene_input_resumed(38, RefinementLevel::Interactive);
+    frame_loop.accept_request(38, false);
+    let resumed = drive_viewer_harness(&mut frame_loop, &mut presenter, clock, true);
+    assert!(resumed.scene_id.is_some());
+    assert!(resumed.warp_id.is_some());
+    assert_eq!(presenter.warp_kind, Some(WarpKind::HoldStale));
+    assert_eq!(presenter.pending_warp_source, Some(37));
+    assert_eq!(presenter.warp_hold_count, 2);
 }
 
 #[test]
@@ -2308,6 +2335,9 @@ struct HeightDragStats {
     final_after_drag_ms: f64,
 }
 
+/// Drives a moving retained source while the counterfactual `clear_only_before` classification is
+/// measured from one fixed flat source; they agree at these owner rows only because refusal is
+/// destination-driven there.
 #[allow(
     clippy::print_stderr,
     clippy::too_many_lines,
@@ -2469,6 +2499,8 @@ fn browser_main_ladder_keeps_one_alternate_final_capacity_grid() {
     assert!(source.contains("const MAX_HEADER_SETS: u32 = 9;"));
     assert!(source.contains("spare_grid: Option<EscapeGrid>,"));
     assert!(source.contains("grid_round: u64,"));
+    assert!(source.contains("JulibrotKernels::plan_grid_pair"));
+    assert!(source.contains("allocate_grid_pair(&mut executor, &plan)"));
     assert!(submit.contains("std::mem::swap(&mut self.grid, spare);"));
     assert!(submit.contains("self.grid_round != self.loop_state.ladder_round()"));
 }

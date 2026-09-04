@@ -275,6 +275,7 @@ impl FrameLoop {
         match self.scene_mode {
             SceneMode::Auto => {
                 self.ladder_round = self.ladder_round.saturating_add(1);
+                self.auto_hold_round = None;
                 self.schedule.next = Some(RefinementLevel::Preview);
                 self.schedule.in_flight = None;
                 if self.requested_run {
@@ -287,6 +288,7 @@ impl FrameLoop {
 
     pub(super) const fn restart(&mut self, generation: u32) {
         self.ladder_round = self.ladder_round.saturating_add(1);
+        self.auto_hold_round = None;
         self.schedule.restart(generation);
         self.restart_after_scene = None;
         if self.requested_run {
@@ -321,6 +323,7 @@ impl FrameLoop {
     pub(super) const fn scene_input_resumed(&mut self, generation: u32, level: RefinementLevel) {
         if matches!(self.scene_mode, SceneMode::Auto) || self.manual_rendering {
             self.ladder_round = self.ladder_round.saturating_add(1);
+            self.auto_hold_round = None;
             self.schedule.resume_at(generation, level);
             self.restart_after_scene = None;
             if self.requested_run {
