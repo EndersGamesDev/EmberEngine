@@ -8,6 +8,9 @@
 
 # Local AI-orchestration working notes
 /.claude/
+# marketing: the local heartbeat log stays on the machine (the committed
+# heartbeat is marketing/heartbeat.log, written by the Actions workflow)
+/marketing/heartbeat.local.log
 assets/swat/
 assets/swat-operator-remastered.zip
 assets/9mm/
