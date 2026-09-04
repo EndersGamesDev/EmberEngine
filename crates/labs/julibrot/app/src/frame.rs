@@ -2400,7 +2400,7 @@ mod tests {
         stamped_extent, stamped_screen_map, view_projection_changed,
     };
     use crate::{AppError, FramePolicy, LevelTimingLedger, ViewerController};
-    use ember_julibrot_present::{SampleClass, SubmissionMeasurement};
+    use ember_julibrot_present::{SampleClass, SubmissionMeasurement, WarpKind};
     use ember_lab_heap::SpanArena;
 
     /// Poll budget and wall the version-three present configuration refuses at.
@@ -2660,6 +2660,11 @@ mod tests {
         submissions: Vec<RefinementLevel>,
         warp_submissions: Vec<u64>,
         presented_warps: Vec<u64>,
+        retained_scene: Option<u64>,
+        presented_scene: Option<u64>,
+        pending_warp_source: Option<u64>,
+        refuse_warp: bool,
+        warp_kind: Option<WarpKind>,
     }
 
     impl FakePresenter {
@@ -2675,13 +2680,28 @@ mod tests {
             scene.id
         }
 
-        fn write_hot(&mut self) {
+        fn write_hot(&mut self, hold_refused_warp: bool) {
             self.hot_writes += 1;
+            self.warp_kind = Some(if self.refuse_warp {
+                if hold_refused_warp && self.retained_scene.is_some() {
+                    WarpKind::HoldStale
+                } else {
+                    WarpKind::ClearOnly
+                }
+            } else if self.retained_scene.is_some() {
+                WarpKind::AnchorHomography
+            } else {
+                WarpKind::ClearOnly
+            });
         }
 
         fn submit_warp(&mut self) -> u64 {
             self.next_id += 1;
             self.pending_warp = Some(self.next_id);
+            self.pending_warp_source = match self.warp_kind {
+                Some(WarpKind::ClearOnly) | None => None,
+                Some(_) => self.retained_scene,
+            };
             self.warp_submissions.push(self.next_id);
             self.next_id
         }
@@ -2717,6 +2737,12 @@ mod tests {
             if self.pending.is_some() {
                 self.fence_observations += 1;
                 if let Some(event) = self.callback.take() {
+                    if let FakeEvent::Completed(scene) = event {
+                        if self.retained_scene.is_none() || scene.level == RefinementLevel::Final {
+                            self.retained_scene = Some(scene.id);
+                            self.refuse_warp = false;
+                        }
+                    }
                     self.pending = None;
                     events.push(event);
                 }
@@ -2724,6 +2750,9 @@ mod tests {
             if self.pending_warp.is_some() {
                 self.warp_fence_observations += 1;
                 if let Some(event) = self.warp_callback.take() {
+                    if matches!(event, FakeEvent::WarpCompleted(_)) {
+                        self.presented_scene = self.pending_warp_source.take();
+                    }
                     self.pending_warp = None;
                     events.push(event);
                 }
@@ -2794,7 +2823,7 @@ mod tests {
         if frame_loop.stopped().is_some() {
             return outcome;
         }
-        presenter.write_hot();
+        presenter.write_hot(frame_loop.hold_refused_warp());
         if !outcome.refused
             && let Some(level) = frame_loop.due()
         {
@@ -2822,6 +2851,69 @@ mod tests {
             false,
         )
         .scene_id
+    }
+
+    fn drive_viewer_harness(
+        frame_loop: &mut FrameLoop,
+        presenter: &mut FakePresenter,
+        clock: FakeClock,
+        warps: bool,
+    ) -> TurnOutcome {
+        drive_turn(
+            frame_loop,
+            presenter,
+            clock,
+            FramePolicy::SingleFrameOnDemand,
+            warps,
+        )
+    }
+
+    fn retained_presenter(refuse_warp: bool) -> FakePresenter {
+        FakePresenter {
+            next_id: 37,
+            retained_scene: Some(37),
+            presented_scene: Some(37),
+            refuse_warp,
+            ..FakePresenter::default()
+        }
+    }
+
+    fn finish_pending_refused_ladder(
+        frame_loop: &mut FrameLoop,
+        presenter: &mut FakePresenter,
+        clock: &mut FakeClock,
+    ) -> u64 {
+        assert_eq!(
+            presenter.pending.map(|scene| scene.level),
+            Some(RefinementLevel::Preview)
+        );
+        presenter.fire_completed_callback();
+        clock.advance(1.0);
+        let interactive = drive_viewer_harness(frame_loop, presenter, *clock, false);
+        assert_eq!(
+            presenter.pending.map(|scene| scene.level),
+            Some(RefinementLevel::Interactive)
+        );
+        assert!(interactive.scene_id.is_some());
+        presenter.fire_completed_callback();
+        clock.advance(1.0);
+        let final_turn = drive_viewer_harness(frame_loop, presenter, *clock, false);
+        let final_scene = final_turn.scene_id.expect("Final scene is submitted");
+        assert_eq!(
+            presenter.pending.map(|scene| scene.level),
+            Some(RefinementLevel::Final)
+        );
+        presenter.fire_completed_callback();
+        clock.advance(1.0);
+        let fill = drive_viewer_harness(frame_loop, presenter, *clock, true);
+        assert!(fill.warp_id.is_some());
+        assert_eq!(presenter.retained_scene, Some(final_scene));
+        assert_eq!(presenter.warp_kind, Some(WarpKind::AnchorHomography));
+        presenter.fire_warp_completed();
+        clock.advance(1.0);
+        assert!(drive_viewer_harness(frame_loop, presenter, *clock, false).presented);
+        assert_eq!(presenter.presented_scene, Some(final_scene));
+        final_scene
     }
 
     fn precision_runtime_from_viewer(
@@ -3344,6 +3436,74 @@ mod tests {
         scheduled.restart(5);
         assert!(scheduled.refinement_pending());
         assert!(scheduled.needs_refresh(false, false, false, false));
+    }
+
+    #[test]
+    fn viewer_harness_holds_manual_refusal_until_update_scene_presents_final() {
+        let mut frame_loop = FrameLoop::default();
+        frame_loop.set_scene_mode(SceneMode::Manual, 37, true);
+        frame_loop.accept_request(37, true);
+        let mut presenter = retained_presenter(true);
+        let mut clock = FakeClock::default();
+
+        let held = drive_viewer_harness(&mut frame_loop, &mut presenter, clock, true);
+        assert_eq!(held.scene_id, None);
+        assert!(held.warp_id.is_some());
+        assert_eq!(presenter.warp_kind, Some(WarpKind::HoldStale));
+        assert_eq!(presenter.pending_warp_source, Some(37));
+        presenter.fire_warp_completed();
+        clock.advance(1.0);
+        assert!(drive_viewer_harness(&mut frame_loop, &mut presenter, clock, false).presented);
+        assert_eq!(presenter.presented_scene, Some(37));
+        assert!(frame_loop.scene_update_pending());
+
+        frame_loop.request_scene_update(37);
+        let update = drive_viewer_harness(&mut frame_loop, &mut presenter, clock, false);
+        assert!(update.scene_id.is_some());
+        let final_scene =
+            finish_pending_refused_ladder(&mut frame_loop, &mut presenter, &mut clock);
+        assert_ne!(final_scene, 37);
+        assert!(!frame_loop.scene_update_pending());
+    }
+
+    #[test]
+    fn viewer_harness_keeps_auto_clear_then_final_fill_for_the_same_refusal() {
+        let mut frame_loop = FrameLoop::default();
+        frame_loop.accept_request(37, true);
+        let mut presenter = retained_presenter(true);
+        let mut clock = FakeClock::default();
+
+        let cleared = drive_viewer_harness(&mut frame_loop, &mut presenter, clock, true);
+        assert!(cleared.scene_id.is_some());
+        assert!(cleared.warp_id.is_some());
+        assert_eq!(presenter.warp_kind, Some(WarpKind::ClearOnly));
+        assert_eq!(presenter.pending_warp_source, None);
+        presenter.fire_warp_completed();
+        clock.advance(1.0);
+        assert!(drive_viewer_harness(&mut frame_loop, &mut presenter, clock, false).presented);
+        assert_eq!(presenter.presented_scene, None);
+
+        let final_scene =
+            finish_pending_refused_ladder(&mut frame_loop, &mut presenter, &mut clock);
+        assert_ne!(final_scene, 37);
+    }
+
+    #[test]
+    fn viewer_harness_keeps_bounded_manual_warps_moving_the_retained_picture() {
+        let mut frame_loop = FrameLoop::default();
+        frame_loop.set_scene_mode(SceneMode::Manual, 37, true);
+        frame_loop.accept_request(37, true);
+        let mut presenter = retained_presenter(false);
+        let mut clock = FakeClock::default();
+
+        let bounded = drive_viewer_harness(&mut frame_loop, &mut presenter, clock, true);
+        assert!(bounded.warp_id.is_some());
+        assert_eq!(presenter.warp_kind, Some(WarpKind::AnchorHomography));
+        assert_eq!(presenter.pending_warp_source, Some(37));
+        presenter.fire_warp_completed();
+        clock.advance(1.0);
+        assert!(drive_viewer_harness(&mut frame_loop, &mut presenter, clock, false).presented);
+        assert_eq!(presenter.presented_scene, Some(37));
     }
 
     #[test]
