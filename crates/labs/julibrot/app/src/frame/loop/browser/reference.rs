@@ -40,7 +40,7 @@ fn expand_reference_texels_from_array(
     Ok(())
 }
 
-fn viewer_precision_mode(value: u32) -> &'static str {
+pub(super) fn viewer_precision_mode(value: u32) -> &'static str {
     PrecisionMode::from_u32(value).map_or("unavailable", PrecisionMode::as_str)
 }
 

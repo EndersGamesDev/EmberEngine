@@ -2,10 +2,11 @@
 
 #[cfg(any(target_arch = "wasm32", test))]
 use super::schedule::{
-    FrameLoop, PresenterPoll, RefinementSchedule, RefusalClass, SceneMode, apply_precision_mode,
-    classify_refusal, fence_error, schedule_exposure_fill, stamp_scene_level, stamped_extent,
-    stamped_screen_map, view_projection_changed,
+    FrameLoop, RefusalClass, SceneMode, apply_precision_mode, fence_error, schedule_exposure_fill,
+    stamp_scene_level, stamped_screen_map, view_projection_changed,
 };
+#[cfg(test)]
+use super::schedule::{PresenterPoll, RefinementSchedule, classify_refusal, stamped_extent};
 #[cfg(any(target_arch = "wasm32", test))]
 use super::warp::{defer_scene_until_relief_redraw, hold_redraw_during_scene};
 
@@ -15,7 +16,7 @@ use ember_julibrot_kernels::SampleStatus;
 use ember_julibrot_kernels::{RefinementLevel, RefinementPlan};
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_math::PoseMap;
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(test)]
 use ember_julibrot_present::{FenceRefusal, SubmissionKind};
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -1025,7 +1026,7 @@ mod browser {
                 scene_id,
                 presented,
                 status,
-                precision_mode: viewer_precision_mode(self.main.precision_mode),
+                precision_mode: reference::viewer_precision_mode(self.main.precision_mode),
             }
         }
 
