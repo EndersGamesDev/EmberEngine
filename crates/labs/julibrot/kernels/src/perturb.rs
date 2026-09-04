@@ -93,10 +93,10 @@ impl PerturbUniform {
         let mut referenced_map = *screen_to_plane;
         for column in 0..3 {
             let denominator = screen_to_plane.rows[6 + column];
-            referenced_map.rows[column] = centre_from_reference_px[0]
-                .mul_add(denominator, screen_to_plane.rows[column]);
-            referenced_map.rows[3 + column] = centre_from_reference_px[1]
-                .mul_add(denominator, screen_to_plane.rows[3 + column]);
+            referenced_map.rows[column] =
+                centre_from_reference_px[0].mul_add(denominator, screen_to_plane.rows[column]);
+            referenced_map.rows[3 + column] =
+                centre_from_reference_px[1].mul_add(denominator, screen_to_plane.rows[3 + column]);
         }
         Ok(Self::from_parts(
             plane,

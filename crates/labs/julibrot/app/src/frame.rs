@@ -2958,6 +2958,16 @@ mod tests {
         const PREVIEW_CAP: u32 = 32;
         assert_eq!(KernelMode::for_zoom(12.0), KernelMode::Shallow);
         assert_eq!(KernelMode::for_zoom(14.0), KernelMode::Perturbation);
+        assert!(!perturbation_reference_is_current(
+            14.0,
+            14,
+            Some((12, 12.0))
+        ));
+        assert!(perturbation_reference_is_current(
+            14.0,
+            14,
+            Some((14, 14.0))
+        ));
 
         let precision = precision_for(14.0, WIDTH, CAP).expect("zoom fourteen precision");
         let view_centre = BigCentre::from_f64(

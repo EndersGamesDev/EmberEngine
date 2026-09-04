@@ -710,7 +710,9 @@ impl ViewerController {
         let active_len = width
             .checked_mul(height)
             .filter(|length| *length > 0 && index < *length)
-            .ok_or_else(|| AppError::Math("reference sample index is outside its grid".to_string()))?;
+            .ok_or_else(|| {
+                AppError::Math("reference sample index is outside its grid".to_string())
+            })?;
         debug_assert!(active_len > index);
         let column = index % width;
         let row = index / width;
