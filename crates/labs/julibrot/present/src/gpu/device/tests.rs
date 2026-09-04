@@ -288,7 +288,7 @@ fn manual_hold_keeps_a_refused_warp_on_the_retained_picture() {
     assert_eq!(facts.warp_kind.as_str(), "HoldStale");
 
     let mut hot = WarpSourceSlot::default();
-    hot.write_hot(&held);
+    hot.write_hot(&held, false);
     assert_eq!(
         hot.frame(ledger.retained()).map(|frame| frame.scene_id),
         Some(37)
@@ -338,7 +338,7 @@ fn browser_order_clears_a_hot_plan_after_scene_promotion() {
     plan.source_texture_index = Some(sampled.texture_index);
     plan.source_valid = true;
     let mut hot = WarpSourceSlot::default();
-    hot.write_hot(&plan);
+    hot.write_hot(&plan, false);
     assert_eq!(
         hot.frame(ledger.retained()).map(|frame| frame.scene_id),
         Some(41)
@@ -364,7 +364,7 @@ fn accepted_exposed_plan_remains_a_source_and_reports_its_clear_share() {
     plan.source_valid = true;
     plan.rows[0][2] = 16.0;
     let mut hot = WarpSourceSlot::default();
-    hot.write_hot(&plan);
+    hot.write_hot(&plan, false);
 
     assert_eq!(
         hot.frame(ledger.retained()).map(|frame| frame.scene_id),
@@ -386,7 +386,7 @@ fn relief_redraw_reuses_the_retained_grid_and_scene_uniform_contract() {
     plan.source_texture_index = Some(sampled.texture_index);
     plan.source_valid = true;
     let mut hot = WarpSourceSlot::default();
-    hot.write_hot(&plan);
+    hot.write_hot(&plan, false);
     assert_eq!(
         hot.relief_frame(ledger.retained())
             .map(|frame| frame.scene_id),
@@ -639,10 +639,19 @@ fn relief_redraw_refuses_a_retained_grid_whose_extent_no_longer_matches_its_fram
 }
 
 #[test]
-fn relief_redraw_refuses_records_that_the_live_main_grid_can_overwrite() {
+fn relief_redraw_accepts_records_in_the_idle_live_main_grid() {
     let main = binding_main();
-    assert!(retained_grid_is_live_main(&main.grid, Some(&main)));
-    assert!(!retained_grid_is_live_main(&main.grid, None));
+    let mut ledger = SceneLedger::default();
+    let sampled = promote_binding_scene(&mut ledger, 63);
+    assert_eq!(
+        ledger
+            .retained_grid()
+            .expect("the promoted Final keeps its records")
+            .span
+            .directory_index,
+        main.grid.span.directory_index
+    );
+    assert!(relief_scene_uniform(&main.grid, &sampled, crate::CLASSIC_PALETTE).is_ok());
 }
 
 #[test]
@@ -655,6 +664,6 @@ fn every_gpu_dynamic_offset_comes_from_the_opaque_slot() {
     source.push_str(include_str!("warp.rs"));
     let accessor = [".dynamic_", "offset()"].concat();
     let bypass = ["index()", " * self.gpu.hot_stride"].concat();
-    assert_eq!(source.matches(&accessor).count(), 6);
+    assert_eq!(source.matches(&accessor).count(), 7);
     assert!(!source.contains(&bypass));
 }

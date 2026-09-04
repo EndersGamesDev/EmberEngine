@@ -4,7 +4,7 @@ use std::{
 };
 
 use ember_julibrot_kernels::{
-    EscapeGrid, GridExtent, KernelMode, PerturbUniform, RefinementPlan, SampleStatus,
+    EscapeGrid, GridExtent, KernelError, KernelMode, PerturbUniform, RefinementPlan, SampleStatus,
     perturb_scaled_pixel, plan_refinement,
 };
 use ember_julibrot_math::{
@@ -19,9 +19,10 @@ use super::{
     RefusalClass, SceneMode, SubmissionKind, apply_precision_mode, arrival_is_current,
     backdrop_extent, coverage_pre_empts, defer_scene_until_relief_redraw,
     expand_reference_texels_into, fence_error, hold_redraw_during_scene, horizon_facts,
-    main_for_grid, perturbation_reference_is_current, published_iteration_cap, sampling_zoom_log2,
-    schedule_exposure_fill, select_reference_candidate, stamp_scene_level, stamped_extent,
-    stamped_screen_map, view_projection_changed,
+    main_for_grid, optional_backdrop_plan, perturbation_reference_is_current,
+    published_iteration_cap, sampling_zoom_log2, schedule_exposure_fill,
+    select_reference_candidate, stamp_scene_level, stamped_extent, stamped_screen_map,
+    view_projection_changed,
 };
 use crate::{AppError, FramePolicy, LevelTimingLedger, ViewerController};
 use ember_julibrot_present::{
@@ -1516,7 +1517,7 @@ fn viewer_harness_holds_manual_refusal_until_update_scene_presents_final() {
 }
 
 #[test]
-fn viewer_harness_holds_an_auto_refusal_until_the_rounds_final_fill() {
+fn viewer_harness_holds_an_auto_refusal_while_the_final_fill_is_pending() {
     let mut frame_loop = FrameLoop::default();
     frame_loop.accept_request(37, true);
     let mut presenter = retained_presenter(true);
@@ -1538,14 +1539,15 @@ fn viewer_harness_holds_an_auto_refusal_until_the_rounds_final_fill() {
 }
 
 #[test]
-fn automatic_stale_hold_rearms_when_a_round_resumes_without_a_final() {
+fn automatic_stale_hold_tracks_pending_replacement_work() {
     let mut frame_loop = FrameLoop::default();
     frame_loop.accept_request(37, true);
     assert!(frame_loop.hold_refused_warp(true));
-    let held_round = frame_loop.ladder_round();
+
+    frame_loop.schedule.pause();
+    assert!(!frame_loop.hold_refused_warp(true));
 
     frame_loop.scene_input_resumed(38, RefinementLevel::Interactive);
-    assert_ne!(frame_loop.ladder_round(), held_round);
     assert!(frame_loop.hold_refused_warp(true));
 }
 
@@ -2327,6 +2329,45 @@ fn owner_height_drag_plan(
     .kind
 }
 
+#[test]
+fn manual_final_height_change_keeps_the_accepted_relief_redraw_live() {
+    let mut frame_loop = FrameLoop::default();
+    frame_loop.set_scene_mode(SceneMode::Manual, 37, true);
+    assert_eq!(frame_loop.due(), None);
+    assert_eq!(
+        owner_height_drag_plan(
+            HeightDragRow {
+                name: "close-d5-2",
+                distance_five: 2.0,
+                expected_clear_only: 81,
+            },
+            0.0,
+            0.4,
+        ),
+        WarpKind::ReliefRedraw
+    );
+    assert!(frame_loop.stopped().is_none());
+}
+
+#[test]
+fn non_dispatching_manual_and_deep_reference_waits_keep_retained_records() {
+    let source = include_str!("browser/submit.rs");
+    let submit = source
+        .find("fn submit_due_scene(")
+        .expect("the main submit path exists");
+    let body = &source[submit..];
+    let reference_wait = body
+        .find("if matches!(map, PoseMap::Mapped(_))")
+        .expect("the deep-reference wait exists");
+    let due = body
+        .find("let Some(level) = self.loop_state.due()")
+        .expect("the paused-schedule wait exists");
+    let overwrite = body
+        .find("self.presenter.forget_retained_records(&self.grid);")
+        .expect("record invalidation marks the actual overwrite");
+    assert!(reference_wait < overwrite && due < overwrite);
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct HeightDragStats {
     clear_only_before: u64,
@@ -2503,6 +2544,30 @@ fn browser_main_ladder_keeps_one_alternate_final_capacity_grid() {
     assert!(source.contains("allocate_grid_pair(&mut executor, &plan)"));
     assert!(submit.contains("std::mem::swap(&mut self.grid, spare);"));
     assert!(submit.contains("self.grid_round != self.loop_state.ladder_round()"));
+}
+
+#[test]
+fn heap_exhaustion_degrades_to_a_main_only_frame() {
+    assert_eq!(optional_backdrop_plan(Err(KernelError::Heap)), Ok(None));
+}
+
+#[test]
+fn precision_replacement_installs_the_plan_that_sized_the_new_pair() {
+    let source = include_str!("browser/submit.rs");
+    let synchronize = source
+        .find("fn synchronize_precision_mode(")
+        .expect("the precision synchronizer exists");
+    let body = &source[synchronize..];
+    let allocation = body
+        .find("allocate_grid_pair(&mut self.executor, &next_plan)")
+        .expect("the replacement pair uses the new plan");
+    let install = body
+        .find("self.plan = next_plan;")
+        .expect("the new plan is installed");
+    let grid = body
+        .find("self.grid = next_grid;")
+        .expect("the new grid is installed");
+    assert!(allocation < install && install < grid);
 }
 
 /// The browser loop asks the shared policy rather than preferring a stale backdrop outright,
