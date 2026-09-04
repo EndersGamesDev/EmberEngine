@@ -3352,6 +3352,7 @@ mod tests {
         let mut presenter = FakePresenter::default();
         let clock = FakeClock::default();
         frame_loop.set_scene_mode(SceneMode::Manual, 7, true);
+        assert!(frame_loop.hold_refused_warp());
         frame_loop.accept_request(7, true);
         frame_loop.scene_selection_changed(7);
         assert!(!frame_loop.skip_drafts_for_accepted_warp(Some((RefinementLevel::Final, true))));
@@ -3514,6 +3515,7 @@ mod tests {
     #[test]
     fn refused_warp_and_first_scene_run_the_full_ladder() {
         let mut refused = FrameLoop::default();
+        assert!(!refused.hold_refused_warp());
         refused.accept_request(37, true);
         assert!(!refused.skip_drafts_for_accepted_warp(None));
         assert_eq!(refused.due(), Some(RefinementLevel::Preview));

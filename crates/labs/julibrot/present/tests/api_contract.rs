@@ -18,7 +18,8 @@ type NewPresenter = fn(
 fn app_facing_callable_surface_has_the_pinned_signatures() {
     let new: NewPresenter = Presenter::new;
     let set_main: fn(&mut Presenter, PresentMain) = Presenter::set_main;
-    let write_hot: fn(&mut Presenter, HotSlot, PresentHot, WarpValidation) = Presenter::write_hot;
+    let write_hot: fn(&mut Presenter, HotSlot, PresentHot, WarpValidation, bool) =
+        Presenter::write_hot;
     let submit_scene: fn(&mut Presenter, HotSlot, f64) -> Result<u64, PresentError> =
         Presenter::submit_scene;
     let frame: for<'a> fn(

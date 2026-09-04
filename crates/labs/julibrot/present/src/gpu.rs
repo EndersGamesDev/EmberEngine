@@ -1863,6 +1863,11 @@ mod tests {
         assert!(!held.exposed);
         assert_eq!(held.rows, identity_rows());
 
+        let mut facts = PresentFacts::default();
+        facts.record_warp_plan(&held, Some(0.0));
+        assert_eq!(facts.warp_kind, WarpKind::HoldStale);
+        assert_eq!(facts.warp_kind.as_str(), "HoldStale");
+
         let mut hot = WarpSourceSlot::default();
         hot.write_hot(&held);
         assert_eq!(
@@ -1887,6 +1892,16 @@ mod tests {
         bounded.source_valid = true;
         let accepted = apply_hold_policy(bounded, ledger.retained(), true);
         assert_eq!(accepted, bounded);
+
+        let mut facts = PresentFacts::default();
+        facts.record_warp_plan(&apply_hold_policy(
+            clear_warp_plan(false, true),
+            ledger.retained(),
+            true,
+        ), Some(0.0));
+        assert_eq!(facts.warp_kind, WarpKind::HoldStale);
+        facts.record_warp_plan(&accepted, Some(0.0));
+        assert_eq!(facts.warp_kind, WarpKind::AnchorHomography);
     }
 
     #[test]
