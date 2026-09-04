@@ -23,6 +23,8 @@ import {
   verKeysFor,
 } from './hosts.js';
 
+const CATALOG = JSON.parse(readFileSync(new URL('./games.json', import.meta.url), 'utf8'));
+
 // ---- key derivation ------------------------------------------------------
 
 test('keysFor: the arena owns the bare names, everyone else is prefixed', () => {
@@ -39,6 +41,15 @@ test('verKeysFor: the build stamp is derived the same way as the address', () =>
 
 test('PIN_KEY is the documented localStorage key', () => {
   assert.equal(PIN_KEY, 'ember-host');
+});
+
+test('catalog: a lab declares no protocol or handover contract', () => {
+  const lab = CATALOG.games.find((entry) => entry.kind === 'lab');
+  assert.ok(lab);
+  for (const version of lab.versions) {
+    assert.equal('proto' in version, false);
+    assert.equal('handover' in version, false);
+  }
 });
 
 // ---- versions ------------------------------------------------------------
