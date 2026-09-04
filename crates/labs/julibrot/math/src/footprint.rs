@@ -516,9 +516,8 @@ mod tests {
         }
     }
 
-    /// At the ordinary distance, the slider maximum asks the backdrop to span twice the frame, and
-    /// the records at the top of the domain reach the near clamp: a fifth of the census is held
-    /// there, and the backdrop still covers the frame because the lower heights reach it.
+    /// At the ordinary distance the floor still covers the frame without a backdrop, while records
+    /// at the top of the domain reach the near clamp: a fifth of the census is held there.
     #[test]
     fn maximum_height_keeps_the_floor_covered_and_reports_peak_clipping() {
         let (object, view) = owner_row(4.0);
