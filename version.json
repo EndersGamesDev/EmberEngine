@@ -1,6 +1,6 @@
 {
-  "version": "r1237",
-  "commit": "3355d05",
-  "built": "2026-09-04T16:02:55Z",
-  "subject": "deploy: strip the CR Python's stdout adds before matching a catalog path"
+  "version": "r1239",
+  "commit": "e409e6e1",
+  "built": "2026-09-04T16:29:08Z",
+  "subject": "merge lane/pages-julibrot: publish the Julibrot lab on GitHub Pages"
 }

@@ -1,0 +1,102 @@
+:root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #090b10; color: #e7e9ee; }
+* { box-sizing: border-box; }
+body { margin: 0; background: radial-gradient(circle at top, #1a2030, #090b10 42rem); }
+
+/* One viewport-filling stage. The picture holds the middle row and never scrolls away: the only
+   region that scrolls is the control strip in the bottom row, so every control can be reached
+   while the render surface is still on screen. */
+main {
+  height: 100dvh;
+  display: grid;
+  grid-template-columns: minmax(11rem, 15rem) minmax(0, 1fr) minmax(11rem, 15rem);
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  grid-template-areas:
+    "mast  mast  mast"
+    "morph morph morph"
+    "boxa  view  boxb"
+    "zoom  zoom  zoom"
+    "dash  dash  dash";
+  gap: .4rem;
+  padding: .4rem clamp(.4rem, 1.2vw, 1rem);
+}
+#masthead { grid-area: mast; display: flex; align-items: baseline; gap: .8rem; flex-wrap: wrap; min-width: 0; }
+#morph-bar { grid-area: morph; }
+#box-a { grid-area: boxa; }
+#stage-view { grid-area: view; }
+#box-b { grid-area: boxb; }
+#zoom-bar { grid-area: zoom; }
+#dash { grid-area: dash; }
+
+.eyebrow { margin: 0; color: #ff8b5e; letter-spacing: .12em; text-transform: uppercase; font-size: .7rem; }
+h1 { margin: 0; font-family: ui-serif, Georgia, serif; font-size: 1.5rem; font-weight: 500; line-height: 1.1; }
+.tagline { margin: 0; color: #79839a; font-size: .72rem; flex: 1 1 12rem; min-width: 0; }
+
+/* The two wide bars: the A-to-B transition above the view, the zoom below it. */
+.bar { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: .6rem; padding: .25rem .6rem; border: 1px solid #2d3445; background: #10141e; }
+.bar-title { color: #ff8b5e; font-size: .7rem; letter-spacing: .1em; text-transform: uppercase; }
+.bar-track { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: .5rem; margin: 0; }
+.bar-end { color: #adb5c7; font-size: .75rem; }
+.bar-track > input[type="range"] { width: 100%; min-height: 1.8rem; }
+/* The note costs the bar no height — it shares the row with the slider — so it is dropped on
+   width, where it competes with the track, and never on height, where it competes with nothing. */
+.bar-note { max-width: 30rem; text-align: right; }
+@media (max-width: 1200px) { .bar-note { display: none; } }
+
+/* The render surface. `.viewer` is exactly the canvas box, so the target marker and the rubber
+   band — absolutely positioned inside it — share the canvas's own origin however the CSS scaling
+   lands. The frame is an inset shadow rather than a border for the same reason: a border would
+   take two pixels out of the 16:9 the pointer conversion assumes. */
+#stage-view { min-width: 0; min-height: 0; container-type: size; display: grid; place-items: center; }
+.viewer { position: relative; aspect-ratio: 16 / 9; width: min(100cqw, calc(100cqh * 16 / 9)); background: #0f1119; box-shadow: inset 0 0 0 1px #394155, 0 1rem 4rem #0009; }
+canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.target { position: absolute; width: 1.4rem; height: 1.4rem; margin: -.7rem 0 0 -.7rem; pointer-events: none; background: linear-gradient(#ff8b5e, #ff8b5e) center/100% 1px no-repeat, linear-gradient(#ff8b5e, #ff8b5e) center/1px 100% no-repeat; }
+.rubber { position: absolute; pointer-events: none; border: 1px dashed #ff8b5e; background: #ff8b5e14; }
+.status { position: absolute; left: .5rem; bottom: .5rem; margin: 0; padding: .3rem .5rem; font-size: .72rem; background: #090b10df; border: 1px solid #59627a; }
+.status.failed { color: #ff8b8b; border-color: #a43b46; }
+
+/* The two view-box columns. */
+.box-column { min-height: 0; overflow-y: auto; }
+.box-column fieldset { display: grid; gap: .3rem; margin: 0; padding: .4rem .5rem .5rem; border: 1px solid #2d3445; background: #0d1018; }
+.row-tools { display: grid; grid-template-columns: 1fr auto; gap: .3rem; }
+.row-tools > * { min-width: 0; }
+.copy { width: 100%; }
+.copy-fallback { width: 100%; resize: vertical; font: inherit; font-size: .7rem; border: 1px solid #b64d2d; background: #171c29; color: inherit; padding: .3rem .4rem; }
+.message { color: #ffb08b; }
+.message:empty { display: none; }
+
+/* The remaining controls, dense, in a row that scrolls inside itself. */
+#dash { max-height: clamp(7rem, 30vh, 21rem); overflow-y: auto; display: grid; gap: .4rem; align-content: start; }
+.controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .4rem; padding: .4rem; border: 1px solid #2d3445; background: #10141e; align-items: start; }
+.controls fieldset { display: grid; gap: .25rem; margin: 0; padding: .4rem .5rem .5rem; border: 1px solid #2d3445; background: #0d1018; }
+legend { padding: 0 .3rem; color: #ff8b5e; font-size: .7rem; letter-spacing: .1em; text-transform: uppercase; }
+.note { margin: 0; color: #79839a; font-size: .7rem; }
+.controls label:has(input[type="number"]) { grid-template-columns: 1fr 4.5rem; align-items: center; }
+.controls label:has(input[type="number"]) > input[type="range"] { grid-column: 1; }
+.controls label:has(input[type="number"]) > input[type="number"] { grid-column: 2; }
+label { display: grid; gap: .2rem; color: #adb5c7; font-size: .75rem; }
+input, select, button { min-height: 1.8rem; border: 1px solid #465069; border-radius: 0; background: #171c29; color: inherit; padding: .15rem .35rem; font: inherit; font-size: .75rem; }
+button { cursor: pointer; border-color: #b64d2d; }
+button:disabled { cursor: default; border-color: #465069; color: #6c7590; }
+
+.facts { border: 1px solid #2d3445; background: #10141e; padding: .3rem .4rem; }
+summary { color: #ff8b5e; font-size: .7rem; letter-spacing: .1em; text-transform: uppercase; cursor: pointer; }
+.facts p { margin: .3rem 0; color: #79839a; font-size: .7rem; }
+dl { display: grid; grid-template-columns: repeat(2, minmax(8rem, 1fr) minmax(6rem, 1.3fr)); margin: 0; border-top: 1px solid #2d3445; }
+dt, dd { margin: 0; padding: .15rem .4rem; font-size: .7rem; border-bottom: 1px solid #202637; overflow-wrap: anywhere; }
+dt { color: #9da7bb; }
+dd { background: #0d1018; }
+
+/* One column, and the page scrolls, once the three-column stage no longer fits. */
+@media (max-width: 1100px) { dl { grid-template-columns: minmax(8rem, 1fr) minmax(6rem, 1.3fr); } }
+@media (max-width: 900px) {
+  main {
+    height: auto;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "mast" "morph" "view" "boxa" "boxb" "zoom" "dash";
+  }
+  #stage-view { container-type: inline-size; }
+  .viewer { width: 100cqw; }
+  .box-column { overflow-y: visible; }
+  #dash { max-height: none; overflow-y: visible; }
+  .bar-note { display: none; }
+}

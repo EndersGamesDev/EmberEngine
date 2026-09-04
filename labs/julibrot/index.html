@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ember Julibrot lab</title>
+  <link rel="stylesheet" href="./style.css?v=1788539353">
+</head>
+<body>
+  <main>
+    <header id="masthead">
+      <p class="eyebrow">Ember laboratory · WebGL2</p>
+      <h1>Julibrot</h1>
+      <p class="tagline">Deep four-dimensional slices, with every delivered limit and measurement left visible.</p>
+    </header>
+    <div id="morph-bar" class="bar">
+      <span class="bar-title">Transition</span>
+      <label class="bar-track"><span class="bar-end">A</span><input id="morph" type="range" min="0" max="1" value="0" step="any" disabled><span class="bar-end">B</span></label>
+      <p class="note bar-note">The slider writes the interpolated row into every control and applies it through the handlers your own movement reaches.</p>
+    </div>
+    <aside id="box-a" class="box-column">
+      <fieldset>
+        <legend>View box A</legend>
+        <label>Row<select id="rows-a"></select></label>
+        <div class="row-tools">
+          <input id="name-a" type="text" placeholder="name" autocomplete="off" spellcheck="false" aria-label="Name for the row saved into A">
+          <button id="save-a" type="button">Save preset</button>
+        </div>
+        <div class="row-tools">
+          <button id="load-a" type="button" disabled>Load A</button>
+          <button id="delete-a" type="button" disabled>Delete row</button>
+        </div>
+        <button id="copy-a" type="button" class="copy" disabled>Copy row</button>
+        <p id="message-a" class="note message" role="status"></p>
+        <p id="readout-a" class="note">A is empty</p>
+      </fieldset>
+    </aside>
+    <section id="stage-view">
+      <div class="viewer">
+        <canvas id="julibrot" width="960" height="540"></canvas>
+        <div id="target" class="target" hidden aria-hidden="true"></div>
+        <div id="rubber" class="rubber" hidden aria-hidden="true"></div>
+        <p id="status" class="status" role="status">waiting for first completed scene</p>
+      </div>
+    </section>
+    <aside id="box-b" class="box-column">
+      <fieldset>
+        <legend>View box B</legend>
+        <label>Row<select id="rows-b"></select></label>
+        <div class="row-tools">
+          <input id="name-b" type="text" placeholder="name" autocomplete="off" spellcheck="false" aria-label="Name for the row saved into B">
+          <button id="save-b" type="button">Save preset</button>
+        </div>
+        <div class="row-tools">
+          <button id="load-b" type="button" disabled>Load B</button>
+          <button id="delete-b" type="button" disabled>Delete row</button>
+        </div>
+        <button id="copy-b" type="button" class="copy" disabled>Copy row</button>
+        <p id="message-b" class="note message" role="status"></p>
+        <p id="readout-b" class="note">B is empty</p>
+      </fieldset>
+    </aside>
+    <div id="zoom-bar" class="bar">
+      <span class="bar-title">Zoom</span>
+      <label class="bar-track"><span class="bar-end">−2</span><input id="scale" type="range" min="-2" max="120" value="0" step="any"><span class="bar-end">120</span></label>
+      <p class="note bar-note">Click to place the crosshair on a point of the slice; drag to translate; shift and drag a box to fill the screen with it. Zoom is always about the crosshair. There is no wheel.</p>
+    </div>
+    <div id="dash">
+      <section class="controls" aria-label="Viewer controls">
+        <fieldset>
+          <legend>object</legend>
+          <label>o₁₂<input id="o12" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>o₁₃<input id="o13" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>o₁₄<input id="o14" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>o₂₃<input id="o23" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>o₂₄<input id="o24" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>o₃₄<input id="o34" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+        </fieldset>
+        <fieldset>
+          <legend>camera</legend>
+          <label>q₁₂<input id="q12" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>q₁₃<input id="q13" type="range" min="-3.141593" max="3.141593" value="-1.5707963267948966" step="any"></label>
+          <label>q₁₄<input id="q14" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>q₂₃<input id="q23" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>q₂₄<input id="q24" type="range" min="-3.141593" max="3.141593" value="-1.5707963267948966" step="any"></label>
+          <label>q₃₄<input id="q34" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>q₁₅<input id="q15" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>q₂₅<input id="q25" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>q₃₅<input id="q35" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>q₄₅<input id="q45" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>t₁<input id="t1" type="range" min="-8" max="8" value="0" step="0.001"></label>
+          <label>t₂<input id="t2" type="range" min="-8" max="8" value="0" step="0.001"></label>
+          <label>t₃<input id="t3" type="range" min="-8" max="8" value="0" step="0.001"></label>
+          <label>t₄<input id="t4" type="range" min="-8" max="8" value="0" step="0.001"></label>
+          <label>t₅<input id="t5" type="range" min="-8" max="8" value="0" step="0.001"></label>
+          <p class="note">The ±8 chart-unit range crosses the four-unit neutral chart and can retreat past either perspective pole.</p>
+        </fieldset>
+        <fieldset>
+          <legend>Plane origin</legend>
+          <label>z real<input id="origin-z-re" type="range" min="-2" max="2" value="0" step="0.001"><input id="origin-z-re-number" type="number" min="-2" max="2" value="0" step="0.001"></label>
+          <label>z imaginary<input id="origin-z-im" type="range" min="-2" max="2" value="0" step="0.001"><input id="origin-z-im-number" type="number" min="-2" max="2" value="0" step="0.001"></label>
+          <label>c real<input id="origin-c-re" type="range" min="-2" max="2" value="0" step="0.001"><input id="origin-c-re-number" type="number" min="-2" max="2" value="0" step="0.001"></label>
+          <label>c imaginary<input id="origin-c-im" type="range" min="-2" max="2" value="0" step="0.001"><input id="origin-c-im-number" type="number" min="-2" max="2" value="0" step="0.001"></label>
+          <p class="note">The origin is MAIN work: releasing a slider asks the worker for a new reference orbit.</p>
+        </fieldset>
+        <fieldset>
+          <legend>Observer</legend>
+          <label>Height<input id="height" type="range" min="0" max="4" value="0" step="0.001"></label>
+          <label>Yaw<input id="camera-yaw" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>Pitch<input id="camera-pitch" type="range" min="-3.141593" max="3.141593" value="0" step="any"></label>
+          <label>d₅<input id="distance-five" type="range" min="2" max="64" value="8" step="0.1"></label>
+          <label>d₄<input id="distance-four" type="range" min="2" max="64" value="8" step="0.1"></label>
+        </fieldset>
+        <fieldset>
+          <legend>Sampling</legend>
+          <label>precision<select id="precision"><option value="0">Deterministic</option><option value="1" selected>PictureFast</option></select></label>
+          <label>Iteration cap<select id="iteration-cap"><option>64</option><option>256</option><option selected>512</option><option>1024</option><option>2048</option><option>4096</option></select></label>
+          <label>Palette<select id="palette"><option value="0">Classic</option><option value="1">Ember</option><option value="2">Ice</option></select></label>
+          <label><input id="auto-scene" type="checkbox" checked>Auto scene</label>
+          <button id="update-scene" type="button">Update scene</button>
+          <button id="one-frame" type="button">Render one frame</button>
+          <button id="measure" type="button">Measure</button>
+          <button id="copy-current" type="button" class="copy">Copy current row</button>
+          <p id="message-current" class="note message" role="status"></p>
+          <p class="note">A row is a set of control values and nothing else; every control stays live after a row is applied.</p>
+        </fieldset>
+      </section>
+      <textarea id="copy-fallback" class="copy-fallback" readonly hidden rows="3" aria-label="The row to copy by hand"></textarea>
+      <section class="facts" aria-labelledby="facts-title">
+        <details id="facts-panel" open>
+          <summary id="facts-title">Facts</summary>
+          <p>Null delivered values mean unavailable; browser observations retain the label “requires visible replay”. Existing wgpu lab bundles are approximately 4.5 MB, never a substitute for the exact bytes below.</p>
+          <dl id="facts-grid"></dl>
+        </details>
+      </section>
+    </div>
+  </main>
+  <script type="module" src="./main.js?v=1788539353"></script>
+</body>
+</html>
