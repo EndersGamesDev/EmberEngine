@@ -294,7 +294,7 @@ mod tests {
     const MODE: &str = PrecisionMode::Deterministic.as_str();
 
     fn grid(extent: [u32; 2], level: RefinementLevel) -> EscapeGrid {
-        let mut arena = ember_lab_heap::SpanArena::new(2_048, 1, 1_024, 4_096, 1_024)
+        let mut arena = ember_lab_heap::SpanArena::new(2_048, 1, 1_024, 4_096, 16)
             .expect("scene-ledger fixture arena is valid");
         let span = arena
             .allocate_span(extent[0] * extent[1], 64)
