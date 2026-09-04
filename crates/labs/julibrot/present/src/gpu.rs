@@ -1662,7 +1662,9 @@ fn encode_glitch_count(encoder: &mut wgpu::CommandEncoder, gpu: &GpuState, hot_o
     });
     pass.set_pipeline(&gpu.glitch_count_pipeline);
     pass.set_bind_group(0, &gpu.heap_group, &[]);
-    pass.set_bind_group(1, &gpu.scene_group, &[hot_offset]);
+    // The census counts the MAIN grid's records. Slot one is the backdrop and never enters it: a
+    // Final main must publish the same glitch count with a backdrop attached as without one.
+    pass.set_bind_group(1, &gpu.scene_groups[0], &[hot_offset]);
     pass.draw(0..3, 0..1);
 }
 

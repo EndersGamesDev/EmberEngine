@@ -276,6 +276,7 @@ mod tests {
             rows: [1.0, 0.0, 0.0, 0.0, 1.0, -120.0, 0.0, 0.0, 1.0],
             inverse: [1.0, 0.0, 0.0, 0.0, 1.0, 120.0, 0.0, 0.0, 1.0],
             condition_number: 1.0,
+            apron_scale: 1.0,
         };
         let plane: Plane = construct_plane(ObjectAngles::IDENTITY).expect("Mandelbrot plane");
         let uniforms = PerturbUniform::pack(
