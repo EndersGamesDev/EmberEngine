@@ -1,7 +1,7 @@
 use ember_julibrot_kernels::{EscapeParams, KernelSample, RefinementLevel, escape_shallow_point};
 use ember_julibrot_math::{
     EscapeGridRecord, ObjectAngles, Pose, PoseMap, PrecisionMode, ViewControls, construct_plane,
-    pixel_scale, screen_to_plane,
+    pixel_scale, scene_footprint, screen_to_plane,
 };
 use ember_julibrot_present::{
     CLASSIC_PALETTE, PaletteId, SampleClass, SceneFrame, SubmissionKind, SubmissionMeasurement,
@@ -786,6 +786,29 @@ fn retained_warp_matches_independent_fresh_scenes() {
         &relief_rotation,
         1.0,
         Expected::ReliefExposed,
+    );
+
+    let owner_height = ViewControls {
+        height_scale: 2.165,
+        distance_five: 8.0,
+        ..ViewControls::NEUTRAL
+    };
+    let owner_height_to = pose(
+        ObjectAngles::JULIA,
+        owner_height,
+        BASE_ORIGIN,
+        0.0,
+        [0.0; 2],
+    );
+    let footprint = scene_footprint(&ObjectAngles::JULIA, &owner_height, EXTENT[0], EXTENT[1])
+        .expect("owner height has a finite backdrop footprint");
+    assert!((footprint.apron_scale - 1.541_25).abs() < 1.0e-9);
+    assert_fixture(
+        "height 0 -> 2.165 across the apron",
+        &base,
+        &owner_height_to,
+        1.0,
+        Expected::Relief,
     );
 
     let lifted_camera_expectations = [

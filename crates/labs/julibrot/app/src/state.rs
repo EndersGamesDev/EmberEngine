@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use ember_julibrot_math::{
     Axis4, BigCentre, Homography, MathError, NavigationDelta, ObjectAngles, Plane, PlaneAngles,
     Pose, PoseMap, PrecisionMode, SEED_AXES, ViewControls, construct_plane, navigation_delta,
-    pixel_scale, plane_chart_relation, plane_to_screen, screen_to_plane,
+    pixel_scale, plane_chart_relation, plane_to_screen, scene_footprint, screen_to_plane,
 };
 use ember_julibrot_present::PaletteId;
 use ember_julibrot_worker::{
@@ -1083,6 +1083,34 @@ impl ViewerController {
         Ok(map)
     }
 
+    /// Builds the coarse backdrop map from the cached main homography at the same extent.
+    ///
+    /// The cache owns only the neutral-height presented-camera rows. The returned copy carries the
+    /// footprint's unbounded apron, so backdrop use cannot evict an otherwise identical main map.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed math refusal for an invalid extent, footprint, or map.
+    pub fn backdrop_map(&self, grid_extent: [u32; 2]) -> Result<Option<PoseMap>, AppError> {
+        let footprint = scene_footprint(
+            &self.requested.object_angles,
+            &self.requested.view,
+            grid_extent[0],
+            grid_extent[1],
+        )
+        .map_err(math_error)?;
+        if footprint.boundary_scale >= 1.0 {
+            return Ok(None);
+        }
+        match self.screen_map(grid_extent)? {
+            PoseMap::Mapped(mut map) => {
+                map.apron_scale = footprint.apron_scale;
+                Ok(Some(PoseMap::Mapped(map)))
+            }
+            PoseMap::EdgeOn => Ok(None),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) const fn map_construction_count(&self) -> u64 {
         self.map_constructions.get()
@@ -1610,6 +1638,91 @@ mod tests {
             .expect("signed-zero VIEW controls");
         viewer.drain_hot([800, 600]).expect("signed-zero VIEW map");
         assert_eq!(viewer.map_constructions.get(), 6);
+    }
+
+    #[test]
+    fn backdrop_map_copies_the_cached_main_rows_and_adds_only_its_apron() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        viewer
+            .set_object_angles(ObjectAngles::JULIA)
+            .expect("Julia object angles");
+        viewer
+            .set_view_controls(ViewControls {
+                height_scale: 2.165,
+                distance_five: 8.0,
+                ..ViewControls::NEUTRAL
+            })
+            .expect("owner relief view");
+        let PoseMap::Mapped(main) = viewer.screen_map(REFERENCE_GRID).expect("main map") else {
+            panic!("owner row is mapped");
+        };
+        assert_eq!(main.apron_scale.to_bits(), 1.0_f64.to_bits());
+        assert_eq!(viewer.map_construction_count(), 1);
+        let Some(PoseMap::Mapped(backdrop)) =
+            viewer.backdrop_map(REFERENCE_GRID).expect("backdrop map")
+        else {
+            panic!("owner row requests a backdrop");
+        };
+        assert_eq!(backdrop.rows, main.rows);
+        assert_eq!(backdrop.inverse, main.inverse);
+        assert_eq!(backdrop.condition_number, main.condition_number);
+        assert!((backdrop.apron_scale - 1.541_25).abs() < 1.0e-4);
+        assert_eq!(
+            viewer.map_construction_count(),
+            1,
+            "the backdrop copy reuses the extent-keyed main cache slot"
+        );
+    }
+
+    #[test]
+    fn second_owner_row_requests_an_unclamped_fivefold_backdrop() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        viewer
+            .set_object_angles(ObjectAngles {
+                rho_13: -1.316_653_720_171_549_4,
+                rho_24: -1.316_653_720_171_549_4,
+                ..ObjectAngles::IDENTITY
+            })
+            .expect("owner object angles");
+        let mut camera = [0.0; 10];
+        camera[1] = -0.254_142_606_623_347_1;
+        camera[4] = -0.254_142_606_623_347_1;
+        viewer
+            .set_view_controls(ViewControls {
+                height_scale: 4.0,
+                distance_five: 2.0,
+                distance_four: 2.0,
+                camera_yaw: 0.960_422_302_787_256,
+                camera_pitch: core::f64::consts::PI,
+                camera,
+                camera_translation: [0.0; 5],
+            })
+            .expect("owner relief view");
+        let Some(PoseMap::Mapped(backdrop)) =
+            viewer.backdrop_map(REFERENCE_GRID).expect("backdrop map")
+        else {
+            panic!("owner row requests a backdrop");
+        };
+        assert!((backdrop.apron_scale - 5.0).abs() < 1.0e-9);
+        let PoseMap::Mapped(main) = viewer.screen_map(REFERENCE_GRID).expect("main map") else {
+            panic!("owner row is mapped");
+        };
+        assert_eq!(main.apron_scale.to_bits(), 1.0_f64.to_bits());
+    }
+
+    #[test]
+    fn flat_view_never_constructs_a_distinct_backdrop_map() {
+        let viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        let main = viewer.screen_map(REFERENCE_GRID).expect("flat main map");
+        assert_eq!(
+            viewer.backdrop_map(REFERENCE_GRID).expect("flat footprint"),
+            None
+        );
+        assert_eq!(
+            viewer.screen_map(REFERENCE_GRID).expect("cached flat map"),
+            main
+        );
+        assert_eq!(viewer.map_construction_count(), 1);
     }
 
     #[test]

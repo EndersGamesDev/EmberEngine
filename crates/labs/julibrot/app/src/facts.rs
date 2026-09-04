@@ -158,10 +158,16 @@ pub struct PageFacts<'a> {
     pub height_scale: f64,
     pub distance_five: f64,
     pub distance_four: f64,
-    /// Share of the surface the lifted scene mesh cannot reach; the sky stands there instead.
+    /// Share of the surface the lifted scene mesh cannot reach after the applied apron.
     pub surface_uncovered_fraction: Option<f64>,
-    /// Sampling overscan that would close that gap, as a multiple of the frame extent.
+    /// Footprint-requested sampling overscan, as a multiple of the frame extent.
     pub scene_apron_scale: Option<f64>,
+    /// Applied sampling overscan of the coarse backdrop; absent for a flat scene.
+    pub scene_backdrop_scale: Option<f64>,
+    /// Coarse backdrop record extent; absent for a flat scene.
+    pub scene_backdrop_extent: Option<[u32; 2]>,
+    /// Share of the bounded relief census clamped at the five-dimensional near limit.
+    pub relief_clipped_fraction: Option<f64>,
     pub horizon_pixels: u64,
     pub horizon_fraction: f64,
     pub uncertain_pixels: u64,
@@ -227,6 +233,7 @@ impl<'a> PageFacts<'a> {
         let dispatch = loop_facts.dispatch_facts();
         let worker = loop_facts.worker_facts();
         let plan = loop_facts.plan();
+        let backdrop = loop_facts.backdrop_facts(app.viewer());
         Self {
             abi_version: JULIBROT_ABI_VERSION,
             adapter_name: &device.adapter_name,
@@ -310,6 +317,9 @@ impl<'a> PageFacts<'a> {
             distance_four: requested.view.distance_four,
             surface_uncovered_fraction: footprint.map(|value| value.uncovered_fraction),
             scene_apron_scale: footprint.map(|value| value.apron_scale),
+            scene_backdrop_scale: backdrop.map(|value| value.0),
+            scene_backdrop_extent: backdrop.map(|value| value.1),
+            relief_clipped_fraction: footprint.map(|value| value.relief_clipped_fraction),
             horizon_pixels: loop_facts.horizon_pixels(),
             horizon_fraction: loop_facts.horizon_fraction(),
             uncertain_pixels: loop_facts.uncertain_pixels(),

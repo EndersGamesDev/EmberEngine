@@ -71,7 +71,7 @@ pub struct SceneUniform {
     pub screen_to_plane_row_0: [f32; 4],
     /// Second padded row of the map used to sample this grid.
     pub screen_to_plane_row_1: [f32; 4],
-    /// Third padded row of the map used to sample this grid.
+    /// Third padded row of the map; its fourth lane carries the applied sampling apron.
     pub screen_to_plane_row_2: [f32; 4],
     /// Palette period, phase, colour mix, and value.
     pub palette_map: [f32; 4],
@@ -194,6 +194,10 @@ impl SceneUniform {
     ///
     /// Returns an error when the extent is empty, overflows, or exceeds the span length.
     #[allow(
+        clippy::cast_possible_truncation,
+        reason = "the checked binary64 map apron is narrowed once into the binary32 GPU ABI"
+    )]
+    #[allow(
         clippy::too_many_arguments,
         reason = "the scene ABI constructor names every independently validated payload field"
     )]
@@ -216,11 +220,18 @@ impl SceneUniform {
                 height,
                 logical_len,
             })?;
-        let (rows, edge_on) = match map {
-            PoseMap::Mapped(map) => (
-                pack_homography_rows(map.rows).ok_or(PresentDataError::InvalidMap)?,
-                0,
-            ),
+        let (mut rows, edge_on, apron_scale) = match map {
+            PoseMap::Mapped(map) => {
+                let apron_scale = map.apron_scale as f32;
+                if !apron_scale.is_finite() || apron_scale < 1.0 {
+                    return Err(PresentDataError::InvalidMap);
+                }
+                (
+                    pack_homography_rows(map.rows).ok_or(PresentDataError::InvalidMap)?,
+                    0,
+                    apron_scale,
+                )
+            }
             PoseMap::EdgeOn => (
                 [
                     [1.0, 0.0, 0.0, 0.0],
@@ -228,8 +239,10 @@ impl SceneUniform {
                     [0.0, 0.0, 1.0, 0.0],
                 ],
                 1,
+                1.0,
             ),
         };
+        rows[2][3] = apron_scale;
         Ok(Self {
             grid: [width, height, level, max_iter],
             span: [directory_index, active_len, edge_on, 0],
@@ -382,6 +395,14 @@ mod tests {
             .expect("six active records fit twelve-record capacity");
         assert_eq!(uniform.grid, [3, 2, 1, 64]);
         assert_eq!(uniform.span, [7, 6, 0, 0]);
+        assert_eq!(uniform.screen_to_plane_row_2[3], 1.0);
+        let apron_map = PoseMap::Mapped(ember_julibrot_math::Homography {
+            apron_scale: 1.5,
+            ..ember_julibrot_math::Homography::IDENTITY
+        });
+        let apron = SceneUniform::new([3, 2], 1, 64, 7, 12, plane, apron_map, CLASSIC_PALETTE)
+            .expect("apron map packs");
+        assert_eq!(apron.screen_to_plane_row_2, [0.0, 0.0, 1.0, 1.5]);
         assert_eq!(
             SceneUniform::new([4, 4], 0, 64, 7, 12, plane, map, CLASSIC_PALETTE),
             Err(PresentDataError::InvalidGrid {
@@ -402,5 +423,6 @@ mod tests {
         )
         .expect("edge-on scene uses finite map placeholders");
         assert_eq!(sky.span, [7, 6, 1, 0]);
+        assert_eq!(sky.screen_to_plane_row_2[3], 1.0);
     }
 }

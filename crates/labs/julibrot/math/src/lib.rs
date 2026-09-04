@@ -18,7 +18,7 @@ pub use big::{
     centre_precision_for, decode_big_scalar, encode_big_scalar,
 };
 pub use drift::{navigation_drift_f32, navigation_drift_f64};
-pub use footprint::{SceneFootprint, scene_footprint};
+pub use footprint::{RELIEF_NEAR_FRACTION, SceneFootprint, scene_footprint};
 pub use morph::{
     MORPH_EXTRA_BITS, lerp_centre, lerp_f64, lerp_object_angles, lerp_origin, lerp_plane_angles,
     lerp_view, morph_precision_bits, round_centre,

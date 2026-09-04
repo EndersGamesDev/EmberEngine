@@ -24,24 +24,53 @@
 
 use crate::{MathError, ObjectAngles, Plane, ViewControls, construct_plane, screen::camera_matrix};
 
-/// Points sampled along each of the four frame edges when tracing the lifted boundary.
-const BOUNDARY_SAMPLES_PER_EDGE: usize = 64;
+/// Vertices per axis of the mirrored sampling mesh whose triangles are rasterized for coverage.
+const COVERAGE_MESH_SIDE: u32 = 65;
 
 /// Side of the fixed square lattice the uncovered share is counted on.
+///
+/// The samples run from `-1` to `+1` inclusive, so the frame corners and edges are tested points
+/// rather than cell centres: a mesh that falls short of the frame by less than one cell is counted
+/// short instead of being rounded into coverage.
 const COVERAGE_LATTICE_SIDE: usize = 65;
 
 /// Guard the scene shader applies to both perspective denominators before dividing.
 const DENOMINATOR_EPSILON: f64 = 1.0e-4;
+
+/// Minimum retained distance from the five-dimensional eye, as a fraction of `distance_five`.
+///
+/// Five percent leaves twenty-times perspective magnification available for relief while keeping
+/// every lifted vertex strictly in front of the eye. A later limit-model study owns replacing this
+/// small 2D-projection rule with a true model-space clipping distance.
+pub const RELIEF_NEAR_FRACTION: f64 = 0.05;
+
+/// Record heights sampled by both pose censuses, in units of the height control.
+const CENSUS_HEIGHTS: [f64; 5] = [-2.0, -1.0, 0.0, 1.0, 2.0];
+
+/// Screen samples per axis in the clipping census.
+const CLIP_LATTICE_SIDE: u32 = 9;
 
 /// Where one pose's lifted mesh lands relative to the frame it was sampled for.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SceneFootprint {
     /// Smallest radial scale the frame boundary reaches under the height range; `1.0` covers.
     pub boundary_scale: f64,
-    /// Screen-space overscan the sampling extent needs before the lifted mesh covers the frame.
+    /// Unclamped screen-space overscan applied to the coarse backdrop sampling extent.
     pub apron_scale: f64,
-    /// Share of the render surface no lifted mesh vertex can reach, in `[0,1]`.
+    /// Share of the render surface no record of any admissible height can reach.
+    ///
+    /// Measured by rasterizing the mirrored sampling mesh at every census height, through the
+    /// backdrop's apron, into a fixed lattice that includes the frame corners. A triangle whose
+    /// vertices do not all project, or whose three vertices are all held at the near clamp, covers
+    /// nothing — the same rule the scene shader applies — so a pose whose mesh falls apart reports
+    /// more sky, never less.
     pub uncovered_fraction: f64,
+    /// Share of the fixed plane-and-height census clamped at the five-dimensional near limit.
+    ///
+    /// The denominator is the whole fixed census. A census point that cannot be projected at all is
+    /// not clipped and is not removed either: dropping it would let a pose that projects almost
+    /// nothing publish a small clipped share.
+    pub relief_clipped_fraction: f64,
 }
 
 impl SceneFootprint {
@@ -50,6 +79,7 @@ impl SceneFootprint {
         boundary_scale: 1.0,
         apron_scale: 1.0,
         uncovered_fraction: 0.0,
+        relief_clipped_fraction: 0.0,
     };
 }
 
@@ -78,134 +108,194 @@ pub fn scene_footprint(
     let aspect = f64::from(grid_w) / f64::from(grid_h);
     let map = crate::screen_to_plane(object, view, 0.0, grid_w, grid_h, aspect)?;
     let plane = construct_plane(*object)?;
+    if view.height_scale == 0.0 {
+        return Ok(SceneFootprint::COVERED);
+    }
 
-    // `record_height` spans [-2,2]; the height control scales it. The fifth coordinate is affine
-    // in the record height and `d₅/(d₅ − h)` is monotone in it, so the extremes of the range bound
-    // every intermediate lift and two boundary traces are enough.
+    // `record_height` spans [-2,2]. The floor is therefore lifted to `-2 * height_scale` and the
+    // five-to-four perspective contracts all four plane coordinates by the closed-form factor
+    // below. Widening the input plane by its reciprocal restores the exact height-zero four-point
+    // before the later four-to-three perspective and observer, irrespective of those transforms.
     let amplitude = 2.0 * view.height_scale;
-    let boundaries = [-amplitude, amplitude]
-        .map(|height| lifted_boundary(&map, plane, view, grid_w, grid_h, aspect, height));
-
-    let traced: Vec<&Vec<[f64; 2]>> = boundaries.iter().flatten().collect();
-    if traced.is_empty() {
-        // Every boundary vertex fell past a perspective pole. The shader clips those triangles and
-        // paints sky there, which is the geometry answering rather than a coverage shortfall.
-        return Ok(SceneFootprint {
-            boundary_scale: 1.0,
-            apron_scale: 1.0,
-            uncovered_fraction: 1.0,
-        });
-    }
-    let mut covered = 0_usize;
-    let mut total = 0_usize;
-    for row in 0..COVERAGE_LATTICE_SIDE {
-        for column in 0..COVERAGE_LATTICE_SIDE {
-            let point = lattice_point(column, row);
-            total += 1;
-            if traced.iter().all(|ring| encloses(ring, point)) {
-                covered += 1;
-            }
-        }
-    }
-    let mut boundary_scale = 1.0_f64;
-    for point in traced.iter().flat_map(|ring| ring.iter()) {
-        let radius = point[0].abs().max(point[1].abs());
-        boundary_scale = boundary_scale.min(radius);
-    }
+    let boundary_scale = view.distance_five / (view.distance_five + amplitude);
     if !boundary_scale.is_finite() || boundary_scale <= 0.0 {
         return Err(MathError::DegenerateViewMap);
     }
-    let uncovered = 1.0 - covered as f64 / total as f64;
+    let apron_scale = 1.0 / boundary_scale;
+    let chain = VertexChain {
+        map: &map,
+        plane,
+        view,
+        matrix: camera_matrix(view),
+    };
+    let uncovered = uncovered_fraction(&chain, [grid_w, grid_h], apron_scale);
+    let relief_clipped_fraction = clipped_fraction(&chain, grid_w, grid_h, apron_scale);
     Ok(SceneFootprint {
         boundary_scale,
-        apron_scale: 1.0 / boundary_scale,
+        apron_scale,
         uncovered_fraction: uncovered,
+        relief_clipped_fraction,
     })
 }
 
-/// Normalized device coordinate of one lattice cell centre across the frame.
-fn lattice_point(column: usize, row: usize) -> [f64; 2] {
-    let side = COVERAGE_LATTICE_SIDE as f64;
-    [
-        2.0 * ((column as f64 + 0.5) / side) - 1.0,
-        2.0 * ((row as f64 + 0.5) / side) - 1.0,
-    ]
+/// The fixed part of the scene vertex chain, built once per pose.
+///
+/// The sampling map, its plane, the view controls and the five-dimensional camera matrix are the
+/// same for every vertex of every census height; carrying them together is what keeps the mirror's
+/// per-vertex signatures readable, and it also builds the camera matrix once instead of per point.
+struct VertexChain<'a> {
+    map: &'a crate::Homography,
+    plane: Plane,
+    view: &'a ViewControls,
+    matrix: [[f64; 5]; 5],
 }
 
-/// Traces the frame boundary through the scene chain at one fixed lift, in device coordinates.
+/// One frame sample position on the closed `[-1,1]` lattice.
+fn lattice_value(index: usize) -> f64 {
+    2.0 * (index as f64 / (COVERAGE_LATTICE_SIDE - 1) as f64) - 1.0
+}
+
+/// Rasterizes the mirrored sampling mesh at every census height and counts what it never reaches.
 ///
-/// Returns `None` when any boundary vertex fails a perspective guard, which is the same condition
-/// under which the shader clips the vertex and leaves the sky behind it.
-fn lifted_boundary(
-    map: &crate::Homography,
-    plane: Plane,
-    view: &ViewControls,
-    grid_w: u32,
-    grid_h: u32,
-    aspect: f64,
-    height: f64,
-) -> Option<Vec<[f64; 2]>> {
-    let half_w = f64::from(grid_w) * 0.5;
-    let half_h = f64::from(grid_h) * 0.5;
-    let steps = BOUNDARY_SAMPLES_PER_EDGE;
-    let mut ring = Vec::with_capacity(4 * steps);
-    for edge in 0..4 {
-        for step in 0..steps {
-            let t = step as f64 / steps as f64;
-            let screen = match edge {
-                0 => [-half_w + 2.0 * half_w * t, -half_h],
-                1 => [half_w, -half_h + 2.0 * half_h * t],
-                2 => [half_w - 2.0 * half_w * t, half_h],
-                _ => [-half_w, half_h - 2.0 * half_h * t],
-            };
-            ring.push(project_vertex(
-                map, plane, view, grid_w, aspect, screen, height,
-            )?);
+/// This is the picture's own rule mirrored in binary64: the mesh is a lattice of quads, each drawn
+/// as two triangles, and a triangle is drawn only when all three of its vertices project. A
+/// triangle whose three vertices are all held at the five-dimensional near clamp is fabricated
+/// geometry and is dropped by the scene shader, so it is dropped here too. Nothing a pose fails to
+/// project can therefore improve the answer.
+///
+/// The heights are sampled, so the reachable set is a subset of the true one in that direction. The
+/// mesh is coarser than the drawn one, which errs the other way: near the projective horizon a long
+/// chord cuts across the curved image and covers ground the fine mesh leaves as sky, so the share
+/// is not a bound in either direction. It is the same rule the picture is drawn by, evaluated at a
+/// stated resolution, and it is compared only against itself.
+fn uncovered_fraction(chain: &VertexChain<'_>, extent: [u32; 2], apron_scale: f64) -> f64 {
+    let side = COVERAGE_LATTICE_SIDE;
+    let mut reached = vec![false; side * side];
+    let mesh = COVERAGE_MESH_SIDE as usize;
+    let mut projected: Vec<Option<([f64; 2], bool)>> = vec![None; mesh * mesh];
+    let [grid_w, grid_h] = extent;
+    for record_height in CENSUS_HEIGHTS {
+        let height = chain.view.height_scale * record_height;
+        for row in 0..mesh {
+            for column in 0..mesh {
+                let screen = [
+                    (column as f64 / (mesh - 1) as f64 - 0.5) * f64::from(grid_w),
+                    (row as f64 / (mesh - 1) as f64 - 0.5) * f64::from(grid_h),
+                ];
+                projected[row * mesh + column] =
+                    project_vertex(chain, extent, screen, height, apron_scale);
+            }
+        }
+        for row in 0..mesh - 1 {
+            for column in 0..mesh - 1 {
+                let corners = [
+                    projected[row * mesh + column],
+                    projected[row * mesh + column + 1],
+                    projected[(row + 1) * mesh + column + 1],
+                    projected[(row + 1) * mesh + column],
+                ];
+                for triangle in [
+                    [corners[0], corners[1], corners[2]],
+                    [corners[0], corners[2], corners[3]],
+                ] {
+                    let Some(drawn) = drawn_triangle(triangle) else {
+                        continue;
+                    };
+                    mark_triangle(&mut reached, drawn);
+                }
+            }
         }
     }
-    Some(ring)
+    let covered = reached.iter().filter(|hit| **hit).count();
+    1.0 - covered as f64 / (side * side) as f64
+}
+
+/// The scene shader's primitive rule: every vertex must project, and not every one may be clamped.
+fn drawn_triangle(triangle: [Option<([f64; 2], bool)>; 3]) -> Option<[[f64; 2]; 3]> {
+    let mut points = [[0.0_f64; 2]; 3];
+    let mut clamped = 0_u8;
+    for (slot, vertex) in triangle.iter().enumerate() {
+        let (point, is_clamped) = (*vertex)?;
+        points[slot] = point;
+        clamped += u8::from(is_clamped);
+    }
+    (clamped < 3).then_some(points)
+}
+
+/// Marks every lattice sample inside one device-space triangle.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the bounding-box indices are floored from values already clamped to [0, span]"
+)]
+fn mark_triangle(reached: &mut [bool], triangle: [[f64; 2]; 3]) {
+    let side = COVERAGE_LATTICE_SIDE;
+    let xs = [triangle[0][0], triangle[1][0], triangle[2][0]];
+    let ys = [triangle[0][1], triangle[1][1], triangle[2][1]];
+    let minimum = |values: [f64; 3]| values.iter().copied().fold(f64::INFINITY, f64::min);
+    let maximum = |values: [f64; 3]| values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let (x0, x1, y0, y1) = (minimum(xs), maximum(xs), minimum(ys), maximum(ys));
+    if !(x0.is_finite() && x1.is_finite() && y0.is_finite() && y1.is_finite())
+        || x1 < -1.0
+        || x0 > 1.0
+        || y1 < -1.0
+        || y0 > 1.0
+    {
+        return;
+    }
+    let span = (side - 1) as f64;
+    // `value.mul_add(0.5, 0.5)` is the single-rounding form of `(value + 1.0) * 0.5`, and lands on
+    // the same binary64 result; it is written this way so the expression is a scale of the device
+    // coordinate rather than a midpoint of two bounds, which is what it means.
+    let index_of = |value: f64| (value.mul_add(0.5, 0.5) * span).floor();
+    let low = |value: f64| index_of(value).max(0.0) as usize;
+    let high = |value: f64| index_of(value).min(span).max(0.0) as usize + 1;
+    let (column_first, column_last) = (low(x0), high(x1).min(side - 1));
+    let (row_first, row_last) = (low(y0), high(y1).min(side - 1));
+    let [ax, ay] = triangle[0];
+    let [bx, by] = triangle[1];
+    let [cx, cy] = triangle[2];
+    let area = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+    if area == 0.0 || !area.is_finite() {
+        return;
+    }
+    for row in row_first..=row_last {
+        let point_y = lattice_value(row);
+        for column in column_first..=column_last {
+            let slot = row * side + column;
+            if reached[slot] {
+                continue;
+            }
+            let point_x = lattice_value(column);
+            let first = ((by - cy) * (point_x - cx) + (cx - bx) * (point_y - cy)) / area;
+            let second = ((cy - ay) * (point_x - cx) + (ax - cx) * (point_y - cy)) / area;
+            let third = 1.0 - first - second;
+            if first >= 0.0 && second >= 0.0 && third >= 0.0 {
+                reached[slot] = true;
+            }
+        }
+    }
 }
 
 /// Mirrors one scene-shader vertex: map to the chart, lift, both perspectives, then the observer.
+///
+/// The second component reports whether the lift reached the five-dimensional near clamp, which is
+/// what lets a caller apply the shader's all-clamped primitive rule.
 fn project_vertex(
-    map: &crate::Homography,
-    plane: Plane,
-    view: &ViewControls,
-    grid_w: u32,
-    aspect: f64,
+    chain: &VertexChain<'_>,
+    extent: [u32; 2],
     screen: [f64; 2],
     height: f64,
-) -> Option<[f64; 2]> {
-    let rows = map.rows;
-    let homogeneous: [f64; 3] = core::array::from_fn(|row| {
-        rows[3 * row] * screen[0] + rows[3 * row + 1] * screen[1] + rows[3 * row + 2]
-    });
-    if !homogeneous.iter().all(|value| value.is_finite()) || homogeneous[2] <= 0.0 {
-        return None;
-    }
-    let offset = [
-        homogeneous[0] / homogeneous[2],
-        homogeneous[1] / homogeneous[2],
-    ];
-    let chart_scale = 4.0 / f64::from(grid_w);
-    let display: [f64; 4] = core::array::from_fn(|axis| {
-        chart_scale
-            * offset[0].mul_add(
-                f64::from(plane.basis_u[axis]),
-                offset[1] * f64::from(plane.basis_v[axis]),
-            )
-    });
-
-    let ambient_in = [display[0], display[1], display[2], display[3], height];
-    let matrix = camera_matrix(view);
-    let mut ambient: [f64; 5] = core::array::from_fn(|row| {
-        (0..5).fold(0.0, |sum, column| {
-            matrix[row][column].mul_add(ambient_in[column], sum)
-        })
-    });
-    for (axis, value) in ambient.iter_mut().enumerate() {
-        *value += view.camera_translation[axis];
-    }
+    apron_scale: f64,
+) -> Option<([f64; 2], bool)> {
+    let [grid_w, grid_h] = extent;
+    let view = chain.view;
+    let aspect = f64::from(grid_w) / f64::from(grid_h);
+    let mut ambient = ambient_vertex(chain, grid_w, screen, height, apron_scale)?;
+    let near_five = RELIEF_NEAR_FRACTION * view.distance_five;
+    let maximum_fifth = view.distance_five - near_five;
+    let clamped = ambient[4] > maximum_fifth;
+    ambient[4] = ambient[4].min(maximum_fifth);
 
     let denominator_five = view.distance_five - ambient[4];
     if denominator_five <= DENOMINATOR_EPSILON {
@@ -250,28 +340,100 @@ fn project_vertex(
         perspective_scale * view_point[0] / aspect / clip_w,
         perspective_scale * view_point[1] / clip_w,
     ];
-    ndc.iter().all(|value| value.is_finite()).then_some(ndc)
+    ndc.iter()
+        .all(|value| value.is_finite())
+        .then_some((ndc, clamped))
 }
 
-/// Crossing-count test for a point against the traced boundary ring.
-fn encloses(ring: &[[f64; 2]], point: [f64; 2]) -> bool {
-    let mut inside = false;
-    for (index, &a) in ring.iter().enumerate() {
-        let b = ring[(index + 1) % ring.len()];
-        if (a[1] > point[1]) != (b[1] > point[1]) {
-            let crossing = (b[0] - a[0]) * (point[1] - a[1]) / (b[1] - a[1]) + a[0];
-            if point[0] < crossing {
-                inside = !inside;
+/// Maps one grid point through the sampling chart and five-dimensional camera, before clipping.
+fn ambient_vertex(
+    chain: &VertexChain<'_>,
+    grid_w: u32,
+    screen: [f64; 2],
+    height: f64,
+    apron_scale: f64,
+) -> Option<[f64; 5]> {
+    let (plane, view, matrix) = (chain.plane, chain.view, &chain.matrix);
+    let rows = chain.map.rows;
+    let homogeneous: [f64; 3] = core::array::from_fn(|row| {
+        rows[3 * row] * screen[0] + rows[3 * row + 1] * screen[1] + rows[3 * row + 2]
+    });
+    if !homogeneous.iter().all(|value| value.is_finite()) || homogeneous[2] <= 0.0 {
+        return None;
+    }
+    let offset = [
+        homogeneous[0] / homogeneous[2],
+        homogeneous[1] / homogeneous[2],
+    ];
+    let chart_scale = 4.0 * apron_scale / f64::from(grid_w);
+    let display: [f64; 4] = core::array::from_fn(|axis| {
+        chart_scale
+            * offset[0].mul_add(
+                f64::from(plane.basis_u[axis]),
+                offset[1] * f64::from(plane.basis_v[axis]),
+            )
+    });
+
+    let ambient_in = [display[0], display[1], display[2], display[3], height];
+    let mut ambient: [f64; 5] = core::array::from_fn(|row| {
+        (0..5).fold(0.0, |sum, column| {
+            matrix[row][column].mul_add(ambient_in[column], sum)
+        })
+    });
+    for (axis, value) in ambient.iter_mut().enumerate() {
+        *value += view.camera_translation[axis];
+    }
+    ambient
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(ambient)
+}
+
+/// Measures the share of the bounded record domain that reaches the five-dimensional near clamp.
+///
+/// The denominator is the whole fixed census, projectable or not. A point beyond the projective
+/// horizon is not at the clamp, but removing it from the denominator would let a pose that projects
+/// almost nothing publish a comfortable share.
+fn clipped_fraction(chain: &VertexChain<'_>, grid_w: u32, grid_h: u32, apron_scale: f64) -> f64 {
+    let view = chain.view;
+    let mut clipped = 0_u32;
+    let mut total = 0_u32;
+    for row in 0..CLIP_LATTICE_SIDE {
+        for column in 0..CLIP_LATTICE_SIDE {
+            let screen = [
+                (f64::from(column) / f64::from(CLIP_LATTICE_SIDE - 1) - 0.5) * f64::from(grid_w),
+                (f64::from(row) / f64::from(CLIP_LATTICE_SIDE - 1) - 0.5) * f64::from(grid_h),
+            ];
+            for record_height in CENSUS_HEIGHTS {
+                total += 1;
+                let Some(ambient) = ambient_vertex(
+                    chain,
+                    grid_w,
+                    screen,
+                    view.height_scale * record_height,
+                    apron_scale,
+                ) else {
+                    continue;
+                };
+                let near_five = RELIEF_NEAR_FRACTION * view.distance_five;
+                if view.distance_five - ambient[4] < near_five {
+                    clipped += 1;
+                }
             }
         }
     }
-    inside
+    if total == 0 {
+        0.0
+    } else {
+        f64::from(clipped) / f64::from(total)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{SceneFootprint, scene_footprint};
-    use crate::{ObjectAngles, PlaneAngles, ViewControls};
+    use super::{SceneFootprint, VertexChain, scene_footprint, uncovered_fraction};
+    use crate::screen::camera_matrix;
+    use crate::{ObjectAngles, PlaneAngles, ViewControls, construct_plane};
 
     const OWNER_THETA: f64 = -core::f64::consts::FRAC_PI_2;
 
@@ -292,9 +454,10 @@ mod tests {
     fn flat_chart_covers_its_own_frame() {
         let (object, view) = owner_row(0.0);
         let footprint = scene_footprint(&object, &view, 960, 540).expect("flat pose maps");
+        assert_eq!(footprint.apron_scale.to_bits(), 1.0_f64.to_bits());
         assert!((footprint.boundary_scale - 1.0).abs() < 1.0e-9);
-        assert!((footprint.apron_scale - 1.0).abs() < 1.0e-9);
         assert_eq!(footprint.uncovered_fraction, 0.0);
+        assert_eq!(footprint.relief_clipped_fraction, 0.0);
         assert_eq!(SceneFootprint::COVERED.uncovered_fraction, 0.0);
     }
 
@@ -312,16 +475,8 @@ mod tests {
             footprint.boundary_scale
         );
         assert!((footprint.apron_scale - 1.0 / expected).abs() < 1.0e-6);
-        // A pure radial contraction leaves the complement of a centred box uncovered. The counted
-        // share is quantized to the fixed lattice, whose cell is 2/65 of the frame in each axis,
-        // so the continuous area is approached to about one cell rather than exactly.
-        let continuous = 1.0 - expected * expected;
-        assert!(
-            (footprint.uncovered_fraction - continuous).abs() < 0.03,
-            "uncovered {} continuous {continuous}",
-            footprint.uncovered_fraction
-        );
-        assert!(footprint.uncovered_fraction > 0.5);
+        assert_eq!(footprint.uncovered_fraction, 0.0);
+        assert_eq!(footprint.relief_clipped_fraction, 0.0);
     }
 
     /// Zoom never enters the scene map or the vertex chain, only the kernels' pixel scale, so the
@@ -335,7 +490,7 @@ mod tests {
             .expect("zoom -1.0014");
         assert_eq!(flat.rows, deep.rows);
         let footprint = scene_footprint(&object, &view, 960, 540).expect("relief pose maps");
-        assert!(footprint.uncovered_fraction > 0.5);
+        assert_eq!(footprint.uncovered_fraction, 0.0);
     }
 
     /// The apron bound is what the sampling extent must be multiplied by: scaling the traced frame
@@ -357,7 +512,9 @@ mod tests {
         }
     }
 
-    /// The slider maximum doubles the sampled extent, which is four times the records.
+    /// At the ordinary distance, the slider maximum asks the backdrop to span twice the frame, and
+    /// the records at the top of the domain reach the near clamp: a fifth of the census is held
+    /// there, and the backdrop still covers the frame because the lower heights reach it.
     #[test]
     fn maximum_height_needs_a_doubled_extent() {
         let (object, view) = owner_row(4.0);
@@ -366,6 +523,209 @@ mod tests {
             (footprint.apron_scale - 2.0).abs() < 1.0e-6,
             "apron {}",
             footprint.apron_scale
+        );
+        assert_eq!(footprint.uncovered_fraction, 0.0);
+        assert!(
+            (footprint.relief_clipped_fraction - 81.0 / 405.0).abs() < 1.0e-12,
+            "clipped {}",
+            footprint.relief_clipped_fraction
+        );
+    }
+
+    /// The three rows published in `docs/julibrot/present.md`, asserted exactly.
+    ///
+    /// The documented table is a claim about what the engine reports, so it is transcribed from a
+    /// run rather than reasoned about, and pinned here so prose and code cannot drift apart. The
+    /// close row is the one that matters: it publishes real sky, where the old measurement
+    /// published a vacuous zero.
+    #[test]
+    fn the_published_owner_rows_are_the_documented_ones() {
+        let rows = [
+            (
+                owner_row(2.165),
+                0.648_824_006_488_24,
+                1.541_250_000_000_000_2,
+                0.0,
+                0.0,
+            ),
+            (owner_row(4.0), 0.5, 2.0, 0.0, 81.0 / 405.0),
+            (close_owner_row(), 0.2, 5.0, 650.0 / 4225.0, 126.0 / 405.0),
+        ];
+        for ((object, view), boundary, apron, uncovered, clipped) in rows {
+            let footprint = scene_footprint(&object, &view, 960, 540).expect("relief pose maps");
+            assert!(
+                (footprint.boundary_scale - boundary).abs() < 1.0e-12
+                    && (footprint.apron_scale - apron).abs() < 1.0e-12
+                    && (footprint.uncovered_fraction - uncovered).abs() < 1.0e-12
+                    && (footprint.relief_clipped_fraction - clipped).abs() < 1.0e-12,
+                "documented row {boundary}/{apron}/{uncovered}/{clipped} reads {footprint:?}"
+            );
+        }
+    }
+
+    /// The owner's second row: a tumbled plane seen from close in, at the slider maximum height.
+    fn close_owner_row() -> (ObjectAngles, ViewControls) {
+        let angle = -1.316_653_720_171_549_4;
+        let object = ObjectAngles {
+            rho_13: angle,
+            rho_24: angle,
+            ..ObjectAngles::IDENTITY
+        };
+        let camera_angle = -0.254_142_606_623_347_1;
+        let mut camera = [0.0; 10];
+        camera[1] = camera_angle;
+        camera[4] = camera_angle;
+        let view = ViewControls {
+            camera,
+            camera_yaw: 0.960_422_302_787_256,
+            camera_pitch: core::f64::consts::PI,
+            height_scale: 4.0,
+            distance_five: 2.0,
+            distance_four: 2.0,
+            ..ViewControls::NEUTRAL
+        };
+        (object, view)
+    }
+
+    /// The second row asks for a five-times backdrop, and the backdrop is a large but partial win:
+    /// most of the mesh cannot be projected at all there, so a real share of the frame stays sky.
+    ///
+    /// This is the row that caught a vacuous coverage fact. The old measurement traced two boundary
+    /// rings and dropped a ring entirely when any of its vertices failed a guard; with both rings
+    /// dropped, "covered by every ring" was true of every lattice point and the pose published a
+    /// perfect zero while three-quarters of the frame was empty. The measurement now rasterizes the
+    /// mesh, so a triangle that fails to project covers nothing and cannot improve the answer.
+    #[test]
+    fn close_owner_row_gets_a_five_times_backdrop_and_reports_the_sky_it_cannot_reach() {
+        let (object, view) = close_owner_row();
+        let footprint = scene_footprint(&object, &view, 960, 540).expect("relief pose maps");
+        assert!(
+            (footprint.boundary_scale - 0.2).abs() < 1.0e-6,
+            "footprint was {footprint:?}"
+        );
+        assert!((footprint.apron_scale - 5.0).abs() < 1.0e-6);
+        assert!(
+            (footprint.uncovered_fraction - 650.0 / 4225.0).abs() < 1.0e-12,
+            "uncovered {}",
+            footprint.uncovered_fraction
+        );
+        assert!(footprint.uncovered_fraction > 0.15);
+    }
+
+    /// How much the coverage layer is actually worth at the close owner row.
+    ///
+    /// The published fact measures the frame the backdrop reaches. The comparison the design rests
+    /// on is against the main grid alone, at the same pose through the same mirror with the apron
+    /// set to one: the wide layer is a large real improvement there, not a rounding one, and the
+    /// remaining sky is honest rather than a measurement artefact.
+    #[test]
+    fn the_backdrop_reaches_far_more_of_the_close_row_than_the_main_grid_alone() {
+        let (object, view) = close_owner_row();
+        let map = crate::screen_to_plane(&object, &view, 0.0, 960, 540, 960.0 / 540.0)
+            .expect("relief pose maps");
+        let chain = VertexChain {
+            map: &map,
+            plane: construct_plane(object).expect("relief plane"),
+            view: &view,
+            matrix: camera_matrix(&view),
+        };
+        let main_alone = uncovered_fraction(&chain, [960, 540], 1.0);
+        let with_backdrop = uncovered_fraction(&chain, [960, 540], 5.0);
+        assert!(
+            (main_alone - 813.0 / 4225.0).abs() < 1.0e-12
+                && (with_backdrop - 650.0 / 4225.0).abs() < 1.0e-12,
+            "main alone {main_alone}, with backdrop {with_backdrop}"
+        );
+        assert!(
+            with_backdrop < main_alone,
+            "the backdrop must reach more of the frame, not less"
+        );
+    }
+
+    /// The close row's residual sky is the plane's own projective horizon, not a coverage failure.
+    ///
+    /// A tumbled plane seen from close in has a large part of the frame looking past its own
+    /// horizon: those screen points fail the sampling map outright, no height and no apron can
+    /// recover them, and honest sky is the correct picture there. Measured through the same mirror
+    /// at the same pose with the height set to zero — a flat chart, no relief at all — the frame is
+    /// still `821/4225` uncovered at apron one and `668/4225` at apron five.
+    ///
+    /// The relief scene with its backdrop leaves `650/4225`, which is BELOW the flat chart's own
+    /// floor at the same apron: the lift brings a little more surface into view than the discarded
+    /// clipped rim costs. So the backdrop closes the whole recoverable gap at this row, and the
+    /// residual is geometry rather than a deficit. It also explains why the published pair looks
+    /// like a small win — the `813/4225` main-alone baseline was already almost all horizon sky.
+    #[test]
+    fn the_close_row_residual_is_the_plane_horizon_and_not_a_coverage_deficit() {
+        let (object, view) = close_owner_row();
+        let flat = ViewControls {
+            height_scale: 0.0,
+            ..view
+        };
+        let map = crate::screen_to_plane(&object, &view, 0.0, 960, 540, 960.0 / 540.0)
+            .expect("relief pose maps");
+        let plane = construct_plane(object).expect("relief plane");
+        let horizon = |view: &ViewControls, apron: f64| {
+            uncovered_fraction(
+                &VertexChain {
+                    map: &map,
+                    plane,
+                    view,
+                    matrix: camera_matrix(view),
+                },
+                [960, 540],
+                apron,
+            )
+        };
+        let flat_narrow = horizon(&flat, 1.0);
+        let flat_wide = horizon(&flat, 5.0);
+        let relief_wide = horizon(&view, 5.0);
+        assert!(
+            (flat_narrow - 821.0 / 4225.0).abs() < 1.0e-12
+                && (flat_wide - 668.0 / 4225.0).abs() < 1.0e-12
+                && (relief_wide - 650.0 / 4225.0).abs() < 1.0e-12,
+            "flat {flat_narrow} / {flat_wide}, relief {relief_wide}"
+        );
+        assert!(
+            relief_wide < flat_wide,
+            "the relief scene with its backdrop must not leave more sky than a flat chart at the \
+             same apron: the residual is the plane's horizon, not a coverage deficit"
+        );
+    }
+
+    /// The clipping census keeps its whole fixed denominator.
+    ///
+    /// At the second owner row 126 of the 405 census points are held at the near clamp and 90 more
+    /// cannot be projected at all. Counting only the projectable ones published `126/315 = 0.4`,
+    /// which improves as a pose projects less; the census is a fixed domain and stays one.
+    #[test]
+    fn the_clipping_census_counts_every_point_it_sampled() {
+        let (object, view) = close_owner_row();
+        let footprint = scene_footprint(&object, &view, 960, 540).expect("relief pose maps");
+        assert!(
+            (footprint.relief_clipped_fraction - 126.0 / 405.0).abs() < 1.0e-12,
+            "clipped {}",
+            footprint.relief_clipped_fraction
+        );
+        assert!(footprint.relief_clipped_fraction < 126.0 / 315.0);
+    }
+
+    /// Every relief pose that publishes a coverage number publishes a measurable one: a pose whose
+    /// mesh falls apart reports more sky, never less.
+    #[test]
+    fn no_relief_pose_reports_perfect_coverage_it_could_not_measure() {
+        let (object, view) = close_owner_row();
+        let flat = ViewControls {
+            height_scale: 0.0,
+            ..view
+        };
+        let covered = scene_footprint(&object, &flat, 960, 540).expect("flat pose maps");
+        assert_eq!(covered.uncovered_fraction, 0.0);
+        assert_eq!(covered.relief_clipped_fraction, 0.0);
+        let relief = scene_footprint(&object, &view, 960, 540).expect("relief pose maps");
+        assert!(
+            relief.uncovered_fraction > covered.uncovered_fraction,
+            "the tumbled relief row cannot be as covered as its own flat chart"
         );
     }
 }

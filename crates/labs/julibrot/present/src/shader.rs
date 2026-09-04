@@ -59,7 +59,7 @@ fn record_height(record: vec4<f32>) -> f32 {
 }
 ";
 const SCENE_BODY: &str = r"
-struct SceneVertex { @builtin(position) position: vec4<f32>, @location(0) world: vec3<f32>, @location(1) grid_coordinate: vec2<f32>, @location(2) valid: f32, }
+struct SceneVertex { @builtin(position) position: vec4<f32>, @location(0) world: vec3<f32>, @location(1) grid_coordinate: vec2<f32>, @location(2) valid: f32, @location(3) clamped: f32, }
 struct Ambient5 { low: vec4<f32>, fifth: f32, }
 fn rotate_12(value: Ambient5, pair: vec2<f32>) -> Ambient5 { var out = value; out.low.x = pair.x * value.low.x - pair.y * value.low.y; out.low.y = pair.y * value.low.x + pair.x * value.low.y; return out; }
 fn rotate_13(value: Ambient5, pair: vec2<f32>) -> Ambient5 { var out = value; out.low.x = pair.x * value.low.x - pair.y * value.low.z; out.low.z = pair.y * value.low.x + pair.x * value.low.z; return out; }
@@ -97,6 +97,7 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     output.world = vec3<f32>(0.0);
     output.grid_coordinate = vec2<f32>(f32(column), f32(row));
     output.valid = 1.0;
+    output.clamped = 0.0;
     output.position = vec4<f32>(direct_ndc, 0.0, 1.0);
     if (scene.span.z != 0u || record.w == 2.0 || hot.view_scale.x == 0.0) { return output; }
     let screen = vec3<f32>(screen_x, screen_y, 1.0);
@@ -104,7 +105,7 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     if (!all(vec3<bool>(finite(plane_homogeneous.x), finite(plane_homogeneous.y), finite(plane_homogeneous.z))) || plane_homogeneous.z <= 0.0) { return output; }
     let plane_offset = plane_homogeneous.xy / plane_homogeneous.z;
     if (!all(vec2<bool>(finite(plane_offset.x), finite(plane_offset.y)))) { return output; }
-    let chart_scale = 4.0 / f32(scene.grid.x);
+    let chart_scale = 4.0 * scene.screen_to_plane_row_2.w / f32(scene.grid.x);
     let display = chart_scale * (plane_offset.x * scene.basis_u + plane_offset.y * scene.basis_v);
     let height = hot.view_scale.x * record_height(record);
     let ambient = ambient_camera(Ambient5(display, height));
@@ -112,7 +113,8 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
     let distance_five = hot.view_scale.y;
     let distance_four = hot.view_scale.z;
-    let denominator_five = distance_five - ambient.fifth;
+    let denominator_five = max(distance_five - ambient.fifth, 0.05 * distance_five);
+    output.clamped = select(0.0, 1.0, distance_five - ambient.fifth < 0.05 * distance_five);
     if (denominator_five <= 1.0e-4) { return output; }
     let scale_five = distance_five / denominator_five;
     let projected_four = ambient.low * scale_five;
@@ -139,6 +141,7 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
 }
 @fragment fn scene_fragment(input: SceneVertex) -> @location(0) vec4<f32> {
     if (input.valid < 0.999999) { discard; }
+    if (input.clamped >= 0.999999) { discard; }
     let limit = vec2<f32>(f32(scene.grid.x - 1u), f32(scene.grid.y - 1u));
     let coordinate = vec2<u32>(clamp(floor(input.grid_coordinate + vec2<f32>(0.5)), vec2<f32>(0.0), limit));
     let record = load_escape(coordinate.y * scene.grid.x + coordinate.x);
@@ -334,11 +337,13 @@ mod tests {
 
     #[test]
     fn the_scene_pins_heap_rotation_poles_camera_depth_and_light() {
+        assert_eq!(ember_julibrot_math::RELIEF_NEAR_FRACTION, 0.05);
         let source = scene_shader(limits());
         for required in [
             "let screen_x = f32(column) + 0.5 - 0.5 * f32(scene.grid.x);",
             "let screen_y = f32(row) + 0.5 - 0.5 * f32(scene.grid.y);",
             "let plane_homogeneous = vec3<f32>(dot(scene.screen_to_plane_row_0.xyz, screen), dot(scene.screen_to_plane_row_1.xyz, screen), dot(scene.screen_to_plane_row_2.xyz, screen));",
+            "let chart_scale = 4.0 * scene.screen_to_plane_row_2.w / f32(scene.grid.x);",
             "let display = chart_scale * (plane_offset.x * scene.basis_u + plane_offset.y * scene.basis_v);",
             "let height = hot.view_scale.x * record_height(record);",
             "scene.span.z != 0u || record.w == 2.0 || hot.view_scale.x == 0.0",
@@ -350,7 +355,17 @@ mod tests {
             "rotated.fifth += hot.camera_translation_1.x;",
             "let distance_five = hot.view_scale.y;",
             "let distance_four = hot.view_scale.z;",
-            "let denominator_five = distance_five - ambient.fifth;",
+            "let denominator_five = max(distance_five - ambient.fifth, 0.05 * distance_five);",
+            // The near clamp keeps a lifted vertex in front of the eye and bounds its perspective
+            // magnification at twenty times, but it also fabricates geometry: a triangle whose
+            // three vertices are ALL held at the limit is entirely invented and used to be drawn
+            // across the frame. The vertex flags the clamp and the fragment discards where the
+            // interpolated flag is one, which is the whole primitive exactly when all three
+            // vertices are clamped, and nowhere but a degenerate edge otherwise. A triangle with at
+            // least one honest vertex is still drawn, so the surface stays closed at the limit.
+            "output.clamped = select(0.0, 1.0, distance_five - ambient.fifth < 0.05 * distance_five);",
+            "if (input.clamped >= 0.999999) { discard; }",
+            "@location(3) clamped: f32,",
             "let denominator_four = distance_four - projected_four.w;",
             "if (denominator_five <= 1.0e-4) { return output; }",
             "if (denominator_four <= 1.0e-4) { return output; }",

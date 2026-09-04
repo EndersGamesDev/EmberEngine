@@ -16,12 +16,82 @@ use crate::{
 };
 
 const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
+const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 const FENCE_BYTES: u64 = 4;
 const HOT_SOURCE_VALID_BYTE_OFFSET: u64 = 280;
 const EXPOSURE_FACT_STEPS: u32 = 9;
 const GLITCH_RECORDS_PER_TEXEL: u32 = 255;
 const RGBA8_BYTES_PER_TEXEL: u32 = 4;
+const SCENE_DEPTH_COMPARE: wgpu::CompareFunction = wgpu::CompareFunction::LessEqual;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SceneLayer {
+    Backdrop,
+    Main,
+}
+
+const MAIN_THEN_BACKDROP: [SceneLayer; 2] = [SceneLayer::Main, SceneLayer::Backdrop];
+const MAIN_ONLY: [SceneLayer; 1] = [SceneLayer::Main];
+
+/// The main grid is drawn FIRST and the backdrop second.
+///
+/// Depth alone cannot compose the two: they are independent samplings of the same escape-time
+/// field, their record heights are uncorrelated, and the coarse backdrop's long chords land nearer
+/// than the fine surface over large areas, so a depth test admits the backdrop straight through the
+/// interior of the picture. The stencil decides instead — see [`scene_stencil`].
+const fn scene_draw_order(has_backdrop: bool) -> &'static [SceneLayer] {
+    if has_backdrop {
+        &MAIN_THEN_BACKDROP
+    } else {
+        &MAIN_ONLY
+    }
+}
+
+/// The stencil value a drawn main-grid fragment leaves behind, and so the value the backdrop is
+/// refused at. Zero is the pass's clear value: the untouched frame.
+const MAIN_STENCIL: u32 = 1;
+const BACKDROP_STENCIL: u32 = 0;
+
+/// The stencil reference each layer is drawn with.
+const fn stencil_reference(layer: SceneLayer) -> u32 {
+    match layer {
+        SceneLayer::Main => MAIN_STENCIL,
+        SceneLayer::Backdrop => BACKDROP_STENCIL,
+    }
+}
+
+/// The composition rule, as the fixed-function state that enforces it.
+///
+/// The main grid stamps every fragment it draws, whatever its depth; the backdrop is admitted only
+/// where the stamp is absent and stamps nothing itself. So the backdrop is visible exactly where
+/// the main grid has no fragment — its sky, its discarded records, and the frame outside its own
+/// extent — and never over a drawn main record. Within each layer the depth buffer still orders the
+/// layer against itself, so the backdrop keeps its own internal ordering.
+const fn scene_stencil(layer: SceneLayer) -> wgpu::StencilState {
+    let face = match layer {
+        SceneLayer::Main => wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Always,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::Replace,
+        },
+        SceneLayer::Backdrop => wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Equal,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::Keep,
+        },
+    };
+    wgpu::StencilState {
+        front: face,
+        back: face,
+        read_mask: 0xff,
+        write_mask: match layer {
+            SceneLayer::Main => 0xff,
+            SceneLayer::Backdrop => 0,
+        },
+    }
+}
 
 struct SceneTexture {
     _texture: wgpu::Texture,
@@ -136,18 +206,20 @@ impl SampleTracker {
 
 struct GpuState {
     heap_group: wgpu::BindGroup,
-    scene_group: wgpu::BindGroup,
+    scene_groups: [wgpu::BindGroup; 2],
     warp_hot_group: wgpu::BindGroup,
     warp_texture_layout: wgpu::BindGroupLayout,
     scene_sampler: wgpu::Sampler,
     hot_buffer: wgpu::Buffer,
-    scene_buffer: wgpu::Buffer,
+    scene_buffers: [wgpu::Buffer; 2],
     scene_textures: [SceneTexture; 2],
     depth: DepthTarget,
     indices: Option<IndexTarget>,
+    backdrop_indices: Option<IndexTarget>,
     glitch_count_target: GlitchCountTarget,
     glitch_readback: GlitchReadback,
     scene_pipeline: wgpu::RenderPipeline,
+    backdrop_pipeline: wgpu::RenderPipeline,
     glitch_count_pipeline: wgpu::RenderPipeline,
     relief_redraw_pipeline: wgpu::RenderPipeline,
     warp_pipeline: wgpu::RenderPipeline,
@@ -235,7 +307,9 @@ impl Presenter {
             .as_ref()
             .is_none_or(|previous| previous.state.centre_revision != main.state.centre_revision);
         let selection_replaced = self.main.as_ref().is_some_and(|previous| {
-            previous.state.palette_id != main.state.palette_id || previous.grid != main.grid
+            previous.state.palette_id != main.state.palette_id
+                || previous.grid != main.grid
+                || previous.backdrop != main.backdrop
         });
         if revision_advanced {
             self.ledger.apply_reference_shift(
@@ -441,6 +515,9 @@ impl Presenter {
             logical_len: 0,
         })?;
         validate_grid(main, self.gpu.heap_limits)?;
+        if let Some(backdrop) = &main.backdrop {
+            validate_backdrop(backdrop, self.gpu.heap_limits)?;
+        }
         let pose = self.hot[hot_slot.index() as usize].ok_or(PresentError::Device {
             operation: "select unwritten HOT slot",
         })?;
@@ -472,6 +549,41 @@ impl Presenter {
                 logical_len: main.grid.span.logical_len,
             },
         })?;
+        let backdrop_uniform = main
+            .backdrop
+            .as_ref()
+            .map(|backdrop| {
+                SceneUniform::new(
+                    [backdrop.grid.width, backdrop.grid.height],
+                    backdrop.grid.level as u32,
+                    backdrop.iteration_cap,
+                    backdrop.grid.span.directory_index,
+                    backdrop.grid.span.logical_len,
+                    backdrop.plane,
+                    backdrop.map,
+                    palette_record,
+                )
+            })
+            .transpose()
+            .map_err(|error| match error {
+                PresentDataError::InvalidMap => PresentError::Device {
+                    operation: "pack backdrop screen map",
+                },
+                _ => PresentError::InvalidGrid {
+                    width: main
+                        .backdrop
+                        .as_ref()
+                        .map_or(0, |backdrop| backdrop.grid.width),
+                    height: main
+                        .backdrop
+                        .as_ref()
+                        .map_or(0, |backdrop| backdrop.grid.height),
+                    logical_len: main
+                        .backdrop
+                        .as_ref()
+                        .map_or(0, |backdrop| backdrop.grid.span.logical_len),
+                },
+            })?;
         let scene_id = self.next_scene_id;
         let next_scene_id = scene_id.checked_add(1).ok_or(PresentError::Device {
             operation: "advance scene identity",
@@ -489,6 +601,13 @@ impl Presenter {
                 warp_samples.reset();
             }
             ensure_indices(device, gpu, extent)?;
+            ensure_backdrop_indices(
+                device,
+                gpu,
+                main.backdrop
+                    .as_ref()
+                    .map(|backdrop| [backdrop.grid.width, backdrop.grid.height]),
+            )?;
             ensure_depth(device, gpu, extent)?;
             if main.grid.level == RefinementLevel::Final {
                 ensure_glitch_count_resources(device, gpu, extent);
@@ -509,7 +628,14 @@ impl Presenter {
         })?;
         self.next_scene_id = next_scene_id;
         self.queue
-            .write_buffer(&self.gpu.scene_buffer, 0, bytemuck::bytes_of(&uniform));
+            .write_buffer(&self.gpu.scene_buffers[0], 0, bytemuck::bytes_of(&uniform));
+        if let Some(backdrop_uniform) = backdrop_uniform {
+            self.queue.write_buffer(
+                &self.gpu.scene_buffers[1],
+                0,
+                bytemuck::bytes_of(&backdrop_uniform),
+            );
+        }
         let collect_glitch_count = main.grid.level == RefinementLevel::Final;
         let mut encoder = self
             .device
@@ -522,6 +648,7 @@ impl Presenter {
             texture_index as usize,
             hot_slot.dynamic_offset(),
             palette_record,
+            main.backdrop.is_some(),
         );
         if collect_glitch_count {
             let readback = &self.gpu.glitch_readback;
@@ -719,7 +846,7 @@ impl Presenter {
         ensure_indices(&self.device, &mut self.gpu, source.extent)?;
         ensure_depth(&self.device, &mut self.gpu, surface_extent)?;
         self.queue
-            .write_buffer(&self.gpu.scene_buffer, 0, bytemuck::bytes_of(&uniform));
+            .write_buffer(&self.gpu.scene_buffers[0], 0, bytemuck::bytes_of(&uniform));
         Ok(())
     }
 
@@ -975,34 +1102,48 @@ fn create_gpu_state(
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    let scene_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Julibrot regional scene uniform"),
-        size: u64::from(SCENE_PAYLOAD_BYTES),
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
+    let scene_buffers = [
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Julibrot main scene uniform"),
+            size: u64::from(SCENE_PAYLOAD_BYTES),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }),
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Julibrot backdrop scene uniform"),
+            size: u64::from(SCENE_PAYLOAD_BYTES),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }),
+    ];
     let scene_layout = create_scene_layout(device);
-    let scene_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Julibrot immutable scene and HOT group"),
-        layout: &scene_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &scene_buffer,
-                    offset: 0,
-                    size: NonZeroU64::new(u64::from(SCENE_PAYLOAD_BYTES)),
-                }),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &hot_buffer,
-                    offset: 0,
-                    size: NonZeroU64::new(u64::from(HOT_PAYLOAD_BYTES)),
-                }),
-            },
-        ],
+    let scene_groups = [
+        ("Julibrot main scene and HOT group", &scene_buffers[0]),
+        ("Julibrot backdrop scene and HOT group", &scene_buffers[1]),
+    ]
+    .map(|(label, scene_buffer)| {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout: &scene_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: scene_buffer,
+                        offset: 0,
+                        size: NonZeroU64::new(u64::from(SCENE_PAYLOAD_BYTES)),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &hot_buffer,
+                        offset: 0,
+                        size: NonZeroU64::new(u64::from(HOT_PAYLOAD_BYTES)),
+                    }),
+                },
+            ],
+        })
     });
     let warp_texture_layout = create_warp_texture_layout(device);
     let warp_hot_layout = create_warp_hot_layout(device);
@@ -1021,7 +1162,7 @@ fn create_gpu_state(
             wgpu::BindGroupEntry {
                 binding: 1,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &scene_buffer,
+                    buffer: &scene_buffers[0],
                     offset: 0,
                     size: NonZeroU64::new(u64::from(SCENE_PAYLOAD_BYTES)),
                 }),
@@ -1052,7 +1193,20 @@ fn create_gpu_state(
         &heap_layout,
         &scene_layout,
         SCENE_FORMAT,
-        true,
+        Some(SceneLayer::Main),
+    );
+    // Same shader, same target, one differing fixed-function state: the backdrop is stencil-tested
+    // against the stamp the main pass leaves, so it reaches only the pixels the main grid missed.
+    let backdrop_pipeline = create_scene_pipeline(
+        device,
+        "Julibrot backdrop scene pipeline",
+        &source,
+        "scene_vertex",
+        "scene_fragment",
+        &heap_layout,
+        &scene_layout,
+        SCENE_FORMAT,
+        Some(SceneLayer::Backdrop),
     );
     let glitch_count_pipeline = create_scene_pipeline(
         device,
@@ -1063,7 +1217,7 @@ fn create_gpu_state(
         &heap_layout,
         &scene_layout,
         SCENE_FORMAT,
-        false,
+        None,
     );
     let relief_redraw_pipeline = create_scene_pipeline(
         device,
@@ -1074,7 +1228,7 @@ fn create_gpu_state(
         &heap_layout,
         &scene_layout,
         config.surface_format,
-        true,
+        Some(SceneLayer::Main),
     );
     let warp_pipeline = create_warp_pipeline(
         device,
@@ -1084,18 +1238,20 @@ fn create_gpu_state(
     );
     Ok(GpuState {
         heap_group,
-        scene_group,
+        scene_groups,
         warp_hot_group,
         warp_texture_layout,
         scene_sampler: sampler,
         hot_buffer,
-        scene_buffer,
+        scene_buffers,
         scene_textures,
         depth,
         indices: None,
+        backdrop_indices: None,
         glitch_count_target,
         glitch_readback,
         scene_pipeline,
+        backdrop_pipeline,
         glitch_count_pipeline,
         relief_redraw_pipeline,
         warp_pipeline,
@@ -1290,7 +1446,7 @@ fn create_scene_pipeline(
     heap_layout: &wgpu::BindGroupLayout,
     scene_layout: &wgpu::BindGroupLayout,
     color_format: wgpu::TextureFormat,
-    depth: bool,
+    depth: Option<SceneLayer>,
 ) -> wgpu::RenderPipeline {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(label),
@@ -1325,11 +1481,11 @@ fn create_scene_pipeline(
             cull_mode: None,
             ..Default::default()
         },
-        depth_stencil: depth.then_some(wgpu::DepthStencilState {
+        depth_stencil: depth.map(|layer| wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
             depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::LessEqual,
-            stencil: wgpu::StencilState::default(),
+            depth_compare: SCENE_DEPTH_COMPARE,
+            stencil: scene_stencil(layer),
             bias: wgpu::DepthBiasState::default(),
         }),
         multisample: wgpu::MultisampleState::default(),
@@ -1464,22 +1620,104 @@ fn ensure_indices(
     Ok(())
 }
 
+fn ensure_backdrop_indices(
+    device: &wgpu::Device,
+    gpu: &mut GpuState,
+    extent: Option<[u32; 2]>,
+) -> Result<(), PresentError> {
+    let Some(extent) = extent else {
+        return Ok(());
+    };
+    if gpu
+        .backdrop_indices
+        .as_ref()
+        .is_some_and(|indices| indices.extent == extent)
+    {
+        return Ok(());
+    }
+    let values = scene_indices(extent).map_err(|_| PresentError::IndexCountOverflow {
+        width: extent[0],
+        height: extent[1],
+    })?;
+    let count = u32::try_from(values.len()).map_err(|_| PresentError::IndexCountOverflow {
+        width: extent[0],
+        height: extent[1],
+    })?;
+    let contents = if values.is_empty() {
+        &[0_u32][..]
+    } else {
+        &values
+    };
+    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Julibrot backdrop u32 index buffer"),
+        contents: bytemuck::cast_slice(contents),
+        usage: wgpu::BufferUsages::INDEX,
+    });
+    gpu.backdrop_indices = Some(IndexTarget {
+        buffer,
+        count,
+        extent,
+    });
+    Ok(())
+}
+
 fn encode_scene(
     encoder: &mut wgpu::CommandEncoder,
     gpu: &GpuState,
     texture_index: usize,
     hot_offset: u32,
     selected: PaletteRecord,
+    has_backdrop: bool,
 ) {
-    encode_scene_mesh(
-        encoder,
-        gpu,
-        &gpu.scene_textures[texture_index].view,
-        &gpu.scene_pipeline,
-        hot_offset,
-        scene_load_color(selected),
-        "Julibrot scene pass",
-    );
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Julibrot main then backdrop scene pass"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &gpu.scene_textures[texture_index].view,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(scene_load_color(selected)),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: Some(scene_depth_attachment(&gpu.depth.view)),
+        occlusion_query_set: None,
+        timestamp_writes: None,
+    });
+    pass.set_bind_group(0, &gpu.heap_group, &[]);
+    for layer in scene_draw_order(has_backdrop) {
+        let (pipeline, group, indices) = match layer {
+            SceneLayer::Main => (
+                &gpu.scene_pipeline,
+                &gpu.scene_groups[0],
+                gpu.indices.as_ref(),
+            ),
+            SceneLayer::Backdrop => (
+                &gpu.backdrop_pipeline,
+                &gpu.scene_groups[1],
+                gpu.backdrop_indices.as_ref(),
+            ),
+        };
+        pass.set_pipeline(pipeline);
+        pass.set_stencil_reference(stencil_reference(*layer));
+        draw_scene_mesh(&mut pass, group, indices, hot_offset);
+    }
+}
+
+/// The scene depth-stencil attachment: depth cleared to the far plane, the stamp cleared to none.
+const fn scene_depth_attachment(
+    view: &wgpu::TextureView,
+) -> wgpu::RenderPassDepthStencilAttachment<'_> {
+    wgpu::RenderPassDepthStencilAttachment {
+        view,
+        depth_ops: Some(wgpu::Operations {
+            load: wgpu::LoadOp::Clear(1.0),
+            store: wgpu::StoreOp::Discard,
+        }),
+        stencil_ops: Some(wgpu::Operations {
+            load: wgpu::LoadOp::Clear(BACKDROP_STENCIL),
+            store: wgpu::StoreOp::Discard,
+        }),
+    }
 }
 
 fn encode_glitch_count(encoder: &mut wgpu::CommandEncoder, gpu: &GpuState, hot_offset: u32) {
@@ -1499,7 +1737,9 @@ fn encode_glitch_count(encoder: &mut wgpu::CommandEncoder, gpu: &GpuState, hot_o
     });
     pass.set_pipeline(&gpu.glitch_count_pipeline);
     pass.set_bind_group(0, &gpu.heap_group, &[]);
-    pass.set_bind_group(1, &gpu.scene_group, &[hot_offset]);
+    // The census counts the MAIN grid's records. Slot one is the backdrop and never enters it: a
+    // Final main must publish the same glitch count with a backdrop attached as without one.
+    pass.set_bind_group(1, &gpu.scene_groups[0], &[hot_offset]);
     pass.draw(0..3, 0..1);
 }
 
@@ -1562,14 +1802,7 @@ fn encode_scene_mesh(
     load_color: wgpu::Color,
     label: &'static str,
 ) {
-    let depth_attachment = Some(wgpu::RenderPassDepthStencilAttachment {
-        view: &gpu.depth.view,
-        depth_ops: Some(wgpu::Operations {
-            load: wgpu::LoadOp::Clear(1.0),
-            store: wgpu::StoreOp::Discard,
-        }),
-        stencil_ops: None,
-    });
+    let depth_attachment = Some(scene_depth_attachment(&gpu.depth.view));
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some(label),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1585,9 +1818,24 @@ fn encode_scene_mesh(
         timestamp_writes: None,
     });
     pass.set_bind_group(0, &gpu.heap_group, &[]);
-    pass.set_bind_group(1, &gpu.scene_group, &[hot_offset]);
     pass.set_pipeline(pipeline);
-    if let Some(indices) = &gpu.indices {
+    pass.set_stencil_reference(stencil_reference(SceneLayer::Main));
+    draw_scene_mesh(
+        &mut pass,
+        &gpu.scene_groups[0],
+        gpu.indices.as_ref(),
+        hot_offset,
+    );
+}
+
+fn draw_scene_mesh<'pass>(
+    pass: &mut wgpu::RenderPass<'pass>,
+    scene_group: &'pass wgpu::BindGroup,
+    indices: Option<&'pass IndexTarget>,
+    hot_offset: u32,
+) {
+    pass.set_bind_group(1, scene_group, &[hot_offset]);
+    if let Some(indices) = indices {
         pass.set_index_buffer(indices.buffer.slice(..), wgpu::IndexFormat::Uint32);
         pass.draw_indexed(0..indices.count, 0, 0..1);
     }
@@ -1641,37 +1889,50 @@ fn selected_or_classic(main: Option<&PresentMain>) -> (PaletteId, PaletteRecord)
 }
 
 fn validate_grid(main: &PresentMain, limits: DialectLimits) -> Result<(), PresentError> {
-    let active_len = main
-        .grid
+    validate_grid_parts(&main.grid, main.state.delivered_iter_cap, limits)
+}
+
+fn validate_grid_parts(
+    grid: &ember_julibrot_kernels::EscapeGrid,
+    iteration_cap: u32,
+    limits: DialectLimits,
+) -> Result<(), PresentError> {
+    let active_len = grid
         .width
-        .checked_mul(main.grid.height)
-        .filter(|length| *length > 0 && *length <= main.grid.span.logical_len)
+        .checked_mul(grid.height)
+        .filter(|length| *length > 0 && *length <= grid.span.logical_len)
         .ok_or(PresentError::InvalidGrid {
-            width: main.grid.width,
-            height: main.grid.height,
-            logical_len: main.grid.span.logical_len,
+            width: grid.width,
+            height: grid.height,
+            logical_len: grid.span.logical_len,
         })?;
-    if main.grid.span.directory_index >= limits.span_capacity
-        || main.grid.span.page_count > limits.handle_capacity
-        || main
-            .grid
+    if grid.span.directory_index >= limits.span_capacity
+        || grid.span.page_count > limits.handle_capacity
+        || grid
             .span
             .handles()
             .iter()
             .any(|handle| handle.index() >= limits.descriptor_capacity)
     {
         return Err(PresentError::StaleSpan {
-            directory_index: main.grid.span.directory_index,
+            directory_index: grid.span.directory_index,
         });
     }
-    if active_len == 0 || main.state.delivered_iter_cap == 0 {
+    if active_len == 0 || iteration_cap == 0 {
         return Err(PresentError::InvalidGrid {
-            width: main.grid.width,
-            height: main.grid.height,
-            logical_len: main.grid.span.logical_len,
+            width: grid.width,
+            height: grid.height,
+            logical_len: grid.span.logical_len,
         });
     }
     Ok(())
+}
+
+fn validate_backdrop(
+    backdrop: &crate::PresentBackdrop,
+    limits: DialectLimits,
+) -> Result<(), PresentError> {
+    validate_grid_parts(&backdrop.grid, backdrop.iteration_cap, limits)
 }
 
 fn validate_extent(device: &wgpu::Device, extent: [u32; 2]) -> Result<(), PresentError> {
@@ -1828,12 +2089,14 @@ fn pose_is_finite(pose: &Pose) -> bool {
             .chain(pose.plane.basis_v)
             .all(f32::is_finite)
         && match pose.map {
-            PoseMap::Mapped(map) => map
-                .rows
-                .into_iter()
-                .chain(map.inverse)
-                .chain([map.condition_number])
-                .all(f64::is_finite),
+            PoseMap::Mapped(map) => {
+                map.rows
+                    .into_iter()
+                    .chain(map.inverse)
+                    .chain([map.condition_number, map.apron_scale])
+                    .all(f64::is_finite)
+                    && map.apron_scale >= 1.0
+            }
             PoseMap::EdgeOn => true,
         }
 }
@@ -2090,6 +2353,7 @@ mod tests {
             object: ember_julibrot_math::ObjectAngles::JULIA,
             plane: binding_pose().plane,
             map: PoseMap::EdgeOn,
+            backdrop: None,
         }
     }
 
@@ -2245,10 +2509,207 @@ mod tests {
         assert_eq!(uniform.span[1], 64 * 36);
         assert_eq!(uniform.basis_u, sampled.pose.plane.basis_u);
         assert_eq!(uniform.screen_to_plane_row_0, [1.0, 0.0, 0.0, 0.0]);
-        assert_eq!(uniform.screen_to_plane_row_2, [0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(uniform.screen_to_plane_row_2, [0.0, 0.0, 1.0, 1.0]);
         let load = scene_load_color(crate::CLASSIC_PALETTE);
         let sky = crate::exterior_zero(crate::CLASSIC_PALETTE);
         assert_eq!([load.r, load.g, load.b, load.a], sky.map(f64::from));
+    }
+
+    /// What one pixel of the scene attachment holds when the pass is over.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum ComposedPixel {
+        Sky,
+        Backdrop,
+        Main,
+    }
+
+    /// Runs the pass's real depth and stencil state over one pixel, in draw order.
+    ///
+    /// Nothing here knows the intended answer: it reads `scene_draw_order`, `scene_stencil`,
+    /// `stencil_reference` and `SCENE_DEPTH_COMPARE` — the same values the pipelines and the
+    /// encoder are built from — and applies the fixed-function rules to them. Restore the old
+    /// backdrop-first, stencil-free composition and the interior cases below fail.
+    fn compose_pixel(main: Option<f32>, backdrop: Option<f32>) -> ComposedPixel {
+        let mut colour = ComposedPixel::Sky;
+        let mut depth = 1.0_f32;
+        let mut stencil = BACKDROP_STENCIL;
+        for layer in scene_draw_order(backdrop.is_some()) {
+            let (fragment, drawn) = match layer {
+                SceneLayer::Main => (main, ComposedPixel::Main),
+                SceneLayer::Backdrop => (backdrop, ComposedPixel::Backdrop),
+            };
+            let Some(fragment) = fragment else {
+                continue;
+            };
+            let state = scene_stencil(*layer);
+            let reference = stencil_reference(*layer);
+            let face = state.front;
+            let operation = if !compares(
+                face.compare,
+                f64::from(reference & state.read_mask),
+                f64::from(stencil & state.read_mask),
+            ) {
+                face.fail_op
+            } else if !compares(SCENE_DEPTH_COMPARE, fragment.into(), depth.into()) {
+                face.depth_fail_op
+            } else {
+                depth = fragment;
+                colour = drawn;
+                face.pass_op
+            };
+            let written = stencil_write(operation, reference, stencil);
+            stencil = (stencil & !state.write_mask) | (written & state.write_mask);
+        }
+        colour
+    }
+
+    /// The WebGPU comparison functions, over a new value and the stored one.
+    #[allow(
+        clippy::float_cmp,
+        reason = "the fixed-function equality test is exact by definition"
+    )]
+    fn compares(compare: wgpu::CompareFunction, new: f64, stored: f64) -> bool {
+        match compare {
+            wgpu::CompareFunction::Never => false,
+            wgpu::CompareFunction::Less => new < stored,
+            wgpu::CompareFunction::Equal => new == stored,
+            wgpu::CompareFunction::LessEqual => new <= stored,
+            wgpu::CompareFunction::Greater => new > stored,
+            wgpu::CompareFunction::NotEqual => new != stored,
+            wgpu::CompareFunction::GreaterEqual => new >= stored,
+            wgpu::CompareFunction::Always => true,
+        }
+    }
+
+    /// The WebGPU stencil operations, before the write mask is applied.
+    fn stencil_write(operation: wgpu::StencilOperation, reference: u32, stored: u32) -> u32 {
+        match operation {
+            wgpu::StencilOperation::Keep => stored,
+            wgpu::StencilOperation::Zero => 0,
+            wgpu::StencilOperation::Replace => reference,
+            wgpu::StencilOperation::Invert => !stored & 0xff,
+            wgpu::StencilOperation::IncrementClamp => stored.saturating_add(1).min(0xff),
+            wgpu::StencilOperation::DecrementClamp => stored.saturating_sub(1),
+            wgpu::StencilOperation::IncrementWrap => (stored + 1) & 0xff,
+            wgpu::StencilOperation::DecrementWrap => stored.wrapping_sub(1) & 0xff,
+        }
+    }
+
+    /// The composition rule, driven through the state the pass actually carries.
+    ///
+    /// The two grids are independent samplings of the same field, so the coarse backdrop's chords
+    /// land nearer than the fine surface over large areas. Depth alone therefore lets the backdrop
+    /// punch through the interior of the picture; the stencil is what makes the main grid own every
+    /// pixel it reaches, and the backdrop own exactly the rest.
+    #[test]
+    fn the_backdrop_shows_only_where_the_main_grid_has_no_fragment() {
+        for main in [0.1_f32, 0.5, 0.9] {
+            for backdrop in [0.05_f32, 0.5, 0.95] {
+                assert_eq!(
+                    compose_pixel(Some(main), Some(backdrop)),
+                    ComposedPixel::Main,
+                    "main at {main} lost to a backdrop chord at {backdrop}"
+                );
+            }
+        }
+        assert_eq!(
+            compose_pixel(None, Some(0.5)),
+            ComposedPixel::Backdrop,
+            "a pixel the main grid misses must show the backdrop"
+        );
+        assert_eq!(
+            compose_pixel(Some(0.5), None),
+            ComposedPixel::Main,
+            "a pose with no backdrop still draws its main grid"
+        );
+        assert_eq!(
+            compose_pixel(None, None),
+            ComposedPixel::Sky,
+            "neither grid reaching the pixel leaves the distinct sky"
+        );
+    }
+
+    /// The backdrop keeps its own internal ordering: it is depth-tested against itself.
+    #[test]
+    fn the_backdrop_is_ordered_against_itself_by_depth() {
+        assert_eq!(SCENE_DEPTH_COMPARE, wgpu::CompareFunction::LessEqual);
+        assert_eq!(scene_stencil(SceneLayer::Backdrop).write_mask, 0);
+        assert!(compares(SCENE_DEPTH_COMPARE, 0.25, 0.75));
+        assert!(!compares(SCENE_DEPTH_COMPARE, 0.75, 0.25));
+    }
+
+    /// The status-one census counts the MAIN grid's records, with or without a backdrop attached.
+    ///
+    /// The census pass binds one scene group and draws one full-screen triangle over it. The
+    /// backdrop split that binding into a two-slot array, so the census would silently have started
+    /// counting whichever slot the rebase left in place. It binds slot zero and names nothing of
+    /// the backdrop: a Final main therefore publishes the same glitch count either way.
+    #[test]
+    fn the_glitch_census_reads_the_main_grid_alone() {
+        let source = include_str!("gpu.rs");
+        let start = source
+            .find("fn encode_glitch_count(")
+            .expect("the census encoder exists");
+        let body = &source[start..];
+        let end = body.find("\nfn ").expect("the census encoder ends");
+        let body = &body[..end];
+        assert!(body.contains("pass.set_bind_group(1, &gpu.scene_groups[0], &[hot_offset]);"));
+        assert!(
+            !body.contains("scene_groups[1]") && !body.to_lowercase().contains("backdrop_indices"),
+            "the census must never draw or bind the backdrop layer"
+        );
+    }
+
+    /// A backdrop attaching or expiring drops the scene in flight and never the held picture.
+    ///
+    /// `set_main` treats a changed backdrop as a replaced selection, which is right: an in-flight
+    /// scene was composed for the other backdrop and is stale. But manual mode holds the retained
+    /// picture across a refused warp, and a coverage layer arriving or going stale is not a reason
+    /// to take that picture away — during a drag it happens repeatedly.
+    #[test]
+    fn a_changed_backdrop_never_clears_a_held_picture() {
+        let mut ledger = SceneLedger::default();
+        let sampled = promote_binding_scene(&mut ledger, 53);
+        // The only thing a backdrop attach or expiry reaches in `set_main`.
+        ledger.mark_replaced();
+        assert_eq!(
+            ledger.retained().map(|frame| frame.scene_id),
+            Some(sampled.scene_id),
+            "the retained picture survives a replaced selection"
+        );
+        let held = apply_hold_policy(clear_warp_plan(false, true), ledger.retained(), true);
+        assert_eq!(held.kind, WarpKind::HoldStale);
+        assert_eq!(held.source_scene_id, Some(sampled.scene_id));
+        assert!(held.source_valid);
+
+        let source = include_str!("gpu.rs");
+        let start = source
+            .find("pub fn set_main(")
+            .expect("the main publication exists");
+        let body = &source[start..];
+        let end = body
+            .find("self.main = Some(main);")
+            .expect("the main publication ends");
+        let body = &body[..end];
+        assert_eq!(
+            body.matches("backdrop").count(),
+            2,
+            "the backdrop may reach set_main only as the selection comparison"
+        );
+        assert!(body.contains("previous.backdrop != main.backdrop"));
+        assert!(
+            body.find("previous.backdrop != main.backdrop")
+                < body.find("if self.ledger.invalidate_incompatible("),
+            "the backdrop comparison belongs to the selection test, never to the clear"
+        );
+    }
+
+    /// The stamp needs a stencil aspect, and the engine's floor has to admit the format.
+    #[test]
+    fn the_scene_depth_target_carries_a_stencil_aspect() {
+        assert_eq!(DEPTH_FORMAT, wgpu::TextureFormat::Depth24PlusStencil8);
+        assert!(DEPTH_FORMAT.has_stencil_aspect());
+        assert!(DEPTH_FORMAT.has_depth_aspect());
     }
 
     #[test]

@@ -53,6 +53,7 @@ pub fn screen_to_plane(
         rows,
         inverse: forward,
         condition_number,
+        apron_scale: 1.0,
     })
 }
 
