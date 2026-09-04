@@ -122,7 +122,7 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     if (!all(vec2<bool>(finite(plane_offset.x), finite(plane_offset.y)))) { return output; }
     let chart_scale = 4.0 * scene.screen_to_plane_row_2.w / f32(scene.grid.x);
     let display = chart_scale * (plane_offset.x * scene.basis_u + plane_offset.y * scene.basis_v);
-    let height = hot.view_scale.x * record_height(record);
+    let height = hot.view_scale.x * (record_height(record) + 2.0) * 0.5;
     let ambient = ambient_camera(Ambient5(display, height));
     output.valid = 0.0;
     output.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
@@ -410,7 +410,7 @@ mod tests {
             "let plane_homogeneous = vec3<f32>(dot(scene.screen_to_plane_row_0.xyz, screen), dot(scene.screen_to_plane_row_1.xyz, screen), dot(scene.screen_to_plane_row_2.xyz, screen));",
             "let chart_scale = 4.0 * scene.screen_to_plane_row_2.w / f32(scene.grid.x);",
             "let display = chart_scale * (plane_offset.x * scene.basis_u + plane_offset.y * scene.basis_v);",
-            "let height = hot.view_scale.x * record_height(record);",
+            "let height = hot.view_scale.x * (record_height(record) + 2.0) * 0.5;",
             "scene.span.z != 0u || record.w == 2.0 || hot.view_scale.x == 0.0",
             "output.position = vec4<f32>(direct_ndc, 0.0, 1.0);",
             "rotate_45(value, hot.camera_rotation_pairs_4.zw)",

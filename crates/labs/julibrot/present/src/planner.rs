@@ -512,7 +512,7 @@ fn project_scene_vertex_with_shortcut(
         mapped_homogeneous[0] / mapped_homogeneous[2],
         mapped_homogeneous[1] / mapped_homogeneous[2],
     ];
-    let height = pose.view.height_scale * record_height;
+    let height = pose.view.height_scale * (record_height + 2.0) * 0.5;
     if flat_shortcut && height == 0.0 && map.apron_scale.to_bits() == 1.0_f64.to_bits() {
         return Some((screen, 1.0));
     }

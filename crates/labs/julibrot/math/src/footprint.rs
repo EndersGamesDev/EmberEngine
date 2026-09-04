@@ -175,7 +175,7 @@ fn uncovered_fraction(chain: &VertexChain<'_>, extent: [u32; 2], apron_scale: f6
     let mut projected: Vec<Option<([f64; 2], bool)>> = vec![None; mesh * mesh];
     let [grid_w, grid_h] = extent;
     for record_height in CENSUS_HEIGHTS {
-        let height = chain.view.height_scale * record_height;
+        let height = chain.view.height_scale * (record_height + 2.0) * 0.5;
         for row in 0..mesh {
             for column in 0..mesh {
                 let screen = [
@@ -410,7 +410,7 @@ fn clipped_fraction(chain: &VertexChain<'_>, grid_w: u32, grid_h: u32, apron_sca
                     chain,
                     grid_w,
                     screen,
-                    view.height_scale * record_height,
+                    view.height_scale * (record_height + 2.0) * 0.5,
                     apron_scale,
                 ) else {
                     continue;
