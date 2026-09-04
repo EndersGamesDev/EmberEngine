@@ -483,3 +483,125 @@ stellt einen echten `MediaQueryList`-Ersatz bereit (Unterklasse von
 reduzierte Bewegung“ zurück. Tests schalten mit `setReducedMotion(true)` um.
 Weil `globals: false` gesetzt ist, räumt Testing Library nicht von allein auf –
 `cleanup()` läuft deshalb ebenfalls im globalen `afterEach`.
+
+## Phase 4: E2E
+
+### Aufteilung der Specs
+
+Fünf Dateien unter `tests/e2e/`, zehn Tests, dazu `helpers.ts` mit den
+gemeinsamen Schritten:
+
+- `smoke.spec.ts` (1): Titel, Claim und Startknopf sind da.
+- `runde.spec.ts` (3): komplette Runde mit fünf Fragen, „Keine Ahnung“,
+  Tastaturbedienung.
+- `persistenz.spec.ts` (4): Reload in der Frage und in der Auflösung,
+  Highscore über zwei Runden hinweg, Direktaufruf von `/ergebnis` und von
+  `/spielen`.
+- `mobile.spec.ts` (1): Layoutprüfung auf 375 × 667, nur im Mobile-Projekt.
+- `screenshots.spec.ts` (1): die vier Bildschirme nach `screenshots/`.
+
+Beide Projekte führen alle Tests aus; der Mobile-Layouttest überspringt sich im
+Desktop-Projekt selbst. Macht 19 ausgeführte und einen übersprungenen Lauf.
+
+### Determinismus trotz zufälliger Fragen
+
+Die Runde zieht ihre Fragen zufällig – eine feste Erwartung wie „10 Punkte“
+wäre damit nicht formulierbar. Die Tests lesen deshalb den Fragetext aus dem
+DOM und schlagen die Frage in `src/data/questions.ts` nach; Playwright läuft in
+Node und kann die Datei direkt importieren. Die 100 Fragetexte sind eindeutig
+(Datentest in `tests/unit/questions.test.ts`) und taugen darum als Schlüssel.
+
+Aus der so bekannten Antwort ergibt sich die Schätzung als Faktor: 1 gibt einen
+Volltreffer, 1,1 / 1,25 / 1,4 treffen die mittleren Stufen, 1000 ist eine
+sichere Niete. Die komplette Runde landet dadurch in jedem Lauf bei 25 von 50
+Punkten, ohne dass eine einzige Frage vorgegeben wäre.
+
+`toInputText` schreibt die Zahl so, wie ein Mensch sie eintippt: ganze Zahlen
+unverändert, gebrochene mit Dezimalkomma. Das Komma ist Absicht – ein Punkt
+wäre bei genau drei Nachkommastellen („1.234“) ein Tausenderpunkt und damit
+mehrdeutig.
+
+Wo die Auswahl selbst festliegen muss, setzt `seedUnplayedQuestions` vor dem
+ersten Laden die Liste der bereits gespielten IDs so, dass genau fünf Fragen
+übrig bleiben. `selectQuestions` bedient sich zuerst bei den ungespielten, also
+steht die Auswahl fest; zufällig bleibt nur ihre Reihenfolge. Der Mobile-Test
+bekommt darüber die fünf längsten Fragen des Bestands – den ungünstigsten Fall
+für „ohne Scrollen sichtbar“ – und die Screenshots ein festes Fünferpack aus
+fünf Kategorien.
+
+### Klicken vor der Hydration
+
+Der Startbildschirm wird auch auf dem Server gerendert. Ein Klick auf
+„5 Fragen“, der vor der Hydration ankommt, verpufft wirkungslos: Der Knopf ist
+da, der Handler noch nicht. `chooseRoundSize` klickt deshalb in einer
+`expect(...).toPass()`-Schleife, bis `aria-pressed="true"` steht. Das ist
+zugleich der Beweis, dass die Seite interaktiv ist – ein fester Sleep wäre
+entweder zu kurz oder Zeitverschwendung. Alle weiteren Bildschirme brauchen den
+Kniff nicht: Frage-, Auflösungs- und Ergebnisinhalt entstehen erst nach der
+Hydration (`useHydrated`), vorher steht dort nur der Platzhalter.
+
+### Eigenes Ausgabeverzeichnis für den Testserver
+
+Next 16 lässt pro `distDir` nur einen `next dev` laufen und legt dafür die
+Sperrdatei `<distDir>/dev/lock` an. Ein offener Entwicklungsserver – auch auf
+einem ganz anderen Port – brachte `pnpm test:e2e` deshalb mit „Another next dev
+server is already running“ zum Abbruch, noch bevor ein Test lief.
+
+`next.config.ts` liest den Ausgabeort jetzt aus `NEXT_DIST_DIR` (Standard
+bleibt `.next`), und der `webServer` in `playwright.config.ts` setzt die
+Variable auf `.next-e2e`. Damit stören sich Entwicklungs- und Testserver nicht
+mehr, und der Testlauf klaut dem laufenden `next dev` auch nicht den Cache.
+`.next-e2e` steht in `.gitignore`, `.prettierignore`, den ESLint-Ignores und
+der `exclude`-Liste der tsconfig. Die beiden `.next-e2e/…`-Einträge unter
+`include` schreibt `next dev` selbst hinein; sie stehen nur deshalb in der
+Datei, damit der Arbeitsbaum nach einem Testlauf sauber bleibt. Wirkung haben
+sie keine – `exclude` sticht.
+
+Der Produktionsbuild ist von alldem nicht betroffen: `next build` schreibt in
+`<distDir>` selbst, der Entwicklungsserver in `<distDir>/dev`.
+
+### Zeitlimit 90 Sekunden
+
+Eine komplette Runde mit fünf Fragen ist ein langer Test, und `next dev`
+übersetzt jede Route beim ersten Aufruf frisch. Die 30 Sekunden der
+Voreinstellung sind dafür knapp; 90 Sekunden lassen Luft, ohne einen echten
+Hänger zu verschleiern. Gemessen dauert der komplette Lauf rund 17 Sekunden.
+
+### Warten statt schlafen
+
+Gewartet wird durchweg über die Auto-Wait-Zusicherungen (`toHaveText`,
+`toBeVisible`, `toBeFocused`, `waitForURL`). Feste Pausen gibt es nur im
+Screenshot-Spec und nur für Animationen: 900 ms für den Count-up (läuft
+800 ms) und 400 ms für Karten- und Abzeichen-Einblendung (240 bzw. 360 ms).
+Das Konfetti lebt 2,5 Sekunden – beide Aufnahmen der Auflösung müssen in
+dieses Fenster passen, deshalb stehen sie direkt hintereinander.
+
+### Screenshots
+
+Zwölf Dateien in `screenshots/`: je Bildschirm und Projekt eine Aufnahme des
+Viewports (`start-`, `frage-`, `aufloesung-`, `ergebnis-` mit `-desktop` bzw.
+`-mobile`), dazu `aufloesung-…-full.png` und `ergebnis-…-full.png` mit
+`fullPage: true`. Die Frage-Aufnahme bleibt bewusst auf den Viewport begrenzt:
+Auf dem Handy ist gerade die Frage interessant, ob alles ohne Scrollen zu sehen
+ist. Die Auflösung zeigt einen Volltreffer, damit das Konfetti im Bild ist.
+
+Der Zielordner wird über `__dirname` bestimmt, nicht über
+`testInfo.config.rootDir` – letzteres zeigt auf `testDir`, die Bilder wären
+sonst in `tests/e2e/screenshots/` gelandet.
+
+### Zusatzprüfung gegen `overflow-x: hidden`
+
+`document.documentElement.scrollWidth <= 375` ist die in Abschnitt 8.4
+geforderte Prüfung, für sich genommen aber schwach: `body { overflow-x: hidden }`
+(nötig für die Kritzeleien) wird auf den Viewport übertragen und deckelt den
+Wert ohnehin. `expectNoHorizontalScroll` prüft deshalb zusätzlich, dass der
+Inhaltsbereich `<main>` vollständig in den Viewport passt. Über einzelne
+Elemente lässt sich das nicht sagen – die Doodles ragen absichtlich hinaus.
+
+### Gefundene Fehler
+
+Keine. Alle sieben Punkte aus Abschnitt 8.4 waren auf Anhieb grün; an `src/`
+musste nichts geändert werden, auch keine fehlende `data-testid` (der Vertrag
+war vollständig umgesetzt). Die einzige Änderung außerhalb von `tests/`
+betrifft das Ausgabeverzeichnis des Testservers und ist eine Frage der
+Testumgebung, nicht der App.
