@@ -3,8 +3,10 @@
 #[cfg(any(target_arch = "wasm32", test))]
 use std::sync::Arc;
 
+#[cfg(test)]
+use ember_julibrot_kernels::SampleStatus;
 #[cfg(any(target_arch = "wasm32", test))]
-use ember_julibrot_kernels::{EscapeGrid, RefinementPlan, SampleStatus};
+use ember_julibrot_kernels::{EscapeGrid, RefinementPlan};
 use ember_julibrot_kernels::{RefinementLevel, next_refinement_level};
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_math::PICTURE_FAST_EDIT_BUDGET;
