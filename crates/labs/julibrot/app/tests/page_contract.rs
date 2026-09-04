@@ -14,6 +14,7 @@ static FRAME: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     let mut source = String::from(include_str!("../src/frame/schedule.rs"));
     source.push_str(include_str!("../src/frame/loop.rs"));
     source.push_str(include_str!("../src/frame/loop/browser/backdrop.rs"));
+    source.push_str(include_str!("../src/frame/loop/browser/facts.rs"));
     source.push_str(include_str!("../src/frame/loop/browser/reference.rs"));
     source.push_str(include_str!("../src/frame/loop/browser/submit.rs"));
     source
