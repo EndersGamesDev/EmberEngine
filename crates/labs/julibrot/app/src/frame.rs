@@ -2693,13 +2693,25 @@ mod browser {
             self.plan
         }
 
-        /// Returns the allocated backdrop's capacity-selected Final extent.
+        /// Returns the applied backdrop scale and its capacity-selected Final extent.
         #[must_use]
-        pub fn backdrop_extent(&self) -> Option<[u32; 2]> {
-            self.backdrop.as_ref().map(|backdrop| {
-                let final_spec = backdrop.plan.level(RefinementLevel::Final);
-                [final_spec.extent.width, final_spec.extent.height]
-            })
+        pub fn backdrop_facts(&self, viewer: &ViewerController) -> Option<(f64, [u32; 2])> {
+            let backdrop = self.backdrop.as_ref()?;
+            let current_stamp = self.view_stamp(viewer);
+            let map = self.active_backdrop_map.or_else(|| {
+                backdrop
+                    .ready
+                    .filter(|ready| ready.stamp.render_equivalent(current_stamp))
+                    .map(|ready| ready.map)
+            })?;
+            let PoseMap::Mapped(map) = map else {
+                return None;
+            };
+            let final_spec = backdrop.plan.level(RefinementLevel::Final);
+            Some((
+                map.apron_scale,
+                [final_spec.extent.width, final_spec.extent.height],
+            ))
         }
 
         /// Returns the share of current grid centres beyond the neutral-height horizon.

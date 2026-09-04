@@ -233,9 +233,7 @@ impl<'a> PageFacts<'a> {
         let dispatch = loop_facts.dispatch_facts();
         let worker = loop_facts.worker_facts();
         let plan = loop_facts.plan();
-        let backdrop_extent = footprint
-            .filter(|value| value.apron_scale > 1.0)
-            .and_then(|_| loop_facts.backdrop_extent());
+        let backdrop = loop_facts.backdrop_facts(app.viewer());
         Self {
             abi_version: JULIBROT_ABI_VERSION,
             adapter_name: &device.adapter_name,
@@ -319,9 +317,8 @@ impl<'a> PageFacts<'a> {
             distance_four: requested.view.distance_four,
             surface_uncovered_fraction: footprint.map(|value| value.uncovered_fraction),
             scene_apron_scale: footprint.map(|value| value.apron_scale),
-            scene_backdrop_scale: footprint
-                .and_then(|value| backdrop_extent.map(|_| value.apron_scale)),
-            scene_backdrop_extent: backdrop_extent,
+            scene_backdrop_scale: backdrop.map(|value| value.0),
+            scene_backdrop_extent: backdrop.map(|value| value.1),
             relief_clipped_fraction: footprint.map(|value| value.relief_clipped_fraction),
             horizon_pixels: loop_facts.horizon_pixels(),
             horizon_fraction: loop_facts.horizon_fraction(),
