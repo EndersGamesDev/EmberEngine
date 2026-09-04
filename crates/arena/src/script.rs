@@ -134,6 +134,12 @@ pub struct Tick {
     pub held: Held,
     pub yaw: Option<Turn>,
     pub pitch: Option<f32>,
+    /// The 1-based step that begins on this frame, if one does. The client
+    /// logs it, so a capture can time a photograph off the client's own
+    /// clock instead of the harness's wall clock — the two drift apart,
+    /// because a frame longer than the engine's `dt` clamp loses script
+    /// time for good.
+    pub began: Option<usize>,
 }
 
 /// The words a step can be built from, for the error message.
@@ -233,7 +239,11 @@ fn parse_step(src: &str, n: usize) -> Result<Step, String> {
             "jump" => step.held.set(Hold::Jump),
             "melee" => step.held.set(Hold::Melee),
             other => {
-                let Some(v) = number(other) else { continue };
+                let v = number(other).ok_or_else(|| {
+                    bad(&format!(
+                        "unknown word `{other}` (expected one of: {VERBS}, or a duration in seconds)"
+                    ))
+                })?;
                 if v < 0.0 {
                     return Err(bad(&format!(
                         "a duration cannot be negative, got `{other}`"
@@ -308,7 +318,13 @@ impl Timeline {
     /// it still reads no device. It never grabs the cursor on the way out —
     /// the grab was refused once, at startup, and is never re-asked.
     pub fn advance(&mut self, dt: f32) -> Tick {
-        while self.started && self.steps.get(self.at).is_some_and(|s| self.held >= s.secs) {
+        // `if`, not `while`, and deliberately: at most one step is retired
+        // per frame, so a zero-duration step still gets its one frame. `jump`
+        // and `melee` are edge-latched by the client, and a step skipped
+        // inside a catch-up loop would be a press that never happens. The
+        // cost is that a script never catches up after a hitch — see the
+        // shot-clock note in `tools/v18/capture.ps1`.
+        if self.started && self.steps.get(self.at).is_some_and(|s| self.held >= s.secs) {
             self.at += 1;
             self.held = 0.0;
             self.started = false;
@@ -323,21 +339,26 @@ impl Timeline {
             held: step.held,
             yaw: if first { step.yaw } else { None },
             pitch: if first { step.pitch } else { None },
+            // 1-based, matching the step numbers the parser's errors use.
+            began: first.then_some(self.at + 1),
         }
     }
 }
 
 /// `EMBER_SCRIPT`, read once. Native only: there is no operator to protect
 /// on the web and no environment to read it from.
+///
+/// PRESENCE is the switch, never the content. An empty or blank value used
+/// to be filtered away here, which quietly turned a client back into a
+/// hands-ON one — it grabbed the cursor, took the foreground and read the
+/// operator's device — and `-ScriptB ''` is the obvious way for a caller to
+/// write "this client does nothing". A blank script is a blank *timeline*:
+/// the client does nothing and still touches nothing.
 #[cfg(not(target_arch = "wasm32"))]
 fn env_script() -> Option<&'static str> {
     static SRC: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    SRC.get_or_init(|| {
-        std::env::var("EMBER_SCRIPT")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-    })
-    .as_deref()
+    SRC.get_or_init(|| std::env::var("EMBER_SCRIPT").ok())
+        .as_deref()
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -518,8 +539,36 @@ mod tests {
 
     #[test]
     fn an_empty_or_comment_only_script_is_a_spent_timeline() {
-        let t = Timeline::parse("  # nothing here \n\n ;; ").expect("parses");
-        assert_eq!(t.steps(), []);
+        // Blank included, and that is the point: `EMBER_SCRIPT=""` is how a
+        // caller says "this client does nothing", and it must mean a blank
+        // timeline (hands-off, doing nothing) and never a client that falls
+        // back to the operator's keyboard and mouse. Presence is the switch;
+        // see `env_script`.
+        for src in ["", "   ", "\n", "  # nothing here \n\n ;; "] {
+            let mut t = Timeline::parse(src).expect("a blank script parses");
+            assert_eq!(t.steps(), [], "`{src}`");
+            assert!(t.is_done(), "`{src}`");
+            assert_eq!(t.advance(0.016), Tick::default(), "`{src}`");
+        }
+    }
+
+    #[test]
+    fn each_step_reports_the_frame_it_begins_on() {
+        // The client logs this, and a capture times its photographs off it:
+        // the timeline runs on the frame clock, the harness on a wall clock,
+        // and the two drift because a frame longer than the engine's `dt`
+        // clamp loses script time for good.
+        let mut t = Timeline::parse("wait 0.1; jump; wait 0.1").expect("parses");
+        assert_eq!(t.advance(0.05).began, Some(1));
+        assert_eq!(t.advance(0.05).began, None, "held, not begun again");
+        let jump = t.advance(0.05);
+        assert_eq!(jump.began, Some(2));
+        assert!(jump.held.down(Hold::Jump));
+        assert_eq!(t.advance(0.05).began, Some(3));
+        assert_eq!(t.advance(0.2).began, None);
+        // Spent: no more beginnings, ever.
+        assert_eq!(t.advance(0.05), Tick::default());
         assert!(t.is_done());
+        assert_eq!(t.advance(0.05).began, None);
     }
 }
