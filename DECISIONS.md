@@ -111,3 +111,134 @@ erneut (`node_modules/next/dist/server/lib/generate-agent-files.js`). Sie
 bleiben deshalb im Projekt und werden mitcommittet — so bleibt der Arbeitsbaum
 sauber. In `.prettierignore` stehen sie, damit ein spaeter geaenderter
 Generator nicht `pnpm format:check` rot färbt.
+
+## Phase 1: Spiellogik
+
+### Highscore je Rundengröße statt eines globalen Bestwerts
+
+`Highscores` ist ein `Partial<Record<RoundSize, Highscore>>`, gespeichert unter
+`verschaetz-dich:highscores`. Ein Bestwert über alle Rundengrößen hinweg wäre
+sinnlos: 40 von 50 Punkten (80 %) und 63 von 100 Punkten (63 %) sind absolut
+nicht vergleichbar, und die 20er-Runde würde jede 5er-Runde automatisch
+schlagen. `saveHighscore` ersetzt einen Eintrag nur, wenn die Punktzahl echt
+größer ist – bei Gleichstand bleibt der ältere Eintrag stehen, damit „neuer
+Highscore“ auch wirklich etwas Neues meint.
+
+Beim Lesen wird nach dem Feld `count` des Eintrags indiziert, nicht nach dem
+JSON-Schlüssel: JSON-Schlüssel sind immer Strings, `count` ist typsicher eine
+`RoundSize`.
+
+### Reset-Regel der Fragenauswahl
+
+`selectQuestions` zieht zuerst ausschließlich Fragen des Kategoriefilters, die
+noch nicht in `playedIds` stehen. Reichen diese nicht für die gewünschte
+Rundengröße, gilt der gefilterte Pool als durchgespielt und wird zurückgesetzt
+(`poolReset: true`). Dabei gilt:
+
+- Die verbliebenen ungespielten Fragen sind garantiert in der Runde – sonst
+  könnten einzelne Fragen über viele Runden hinweg nie erscheinen.
+- Aufgefüllt wird aus den bereits gespielten Fragen desselben Filters, nie
+  doppelt innerhalb einer Runde.
+- Zurückgesetzt wird nur der gefilterte Teil: `playedIds` anderer Kategorien
+  bleiben unverändert erhalten. Wer nur „Sport“ durchspielt, verliert damit
+  nicht den Fortschritt in allen anderen Kategorien.
+- `count` wird auf die Größe des gefilterten Pools gekappt; bei einem Filter
+  mit 4 Fragen ergibt eine 10er-Runde eben 4 Fragen statt einer Endlosschleife.
+
+Die Zufallsquelle (`random`) ist injizierbar (Standard `Math.random`), damit
+die Auswahl im Test deterministisch prüfbar ist. Gemischt wird mit
+Fisher-Yates.
+
+### Parse-Regeln für `parseGermanNumber`
+
+Deutsche Eingaben sind mehrdeutig: „1.250“ kann 1250 oder 1,25 meinen. Die
+Funktion entscheidet nach festen Regeln, statt zu raten:
+
+- Erlaubt sind nur Ziffern, Punkt, Komma und Leerraum. Kein Vorzeichen, kein
+  Exponent, keine Einheit – Antworten sind per Schema immer positiv, und „12
+  km“ soll als Fehleingabe auffallen statt still zu 12 zu werden.
+- Höchstens ein Komma. Wenn eines da ist, ist es immer das Dezimaltrennzeichen;
+  Punkte davor müssen eine gültige Tausendergruppierung bilden („1.250,75“ →
+  1250,75, „1,250.5“ → ungültig).
+- Ohne Komma: Mehrere Punkte müssen dem Muster `\d{1,3}(\.\d{3})+` folgen
+  („1.250.000“ → 1250000, „1.25.000“ → ungültig).
+- Ein einzelner Punkt ist ein Tausenderpunkt, wenn er dem Muster oben
+  entspricht („1.250“ → 1250), sonst ein Dezimalpunkt („12.5“ → 12,5,
+  „1.2345“ → 1,2345). Die Drei-Ziffern-Regel ist die einzige, die zu dem passt,
+  was Leute tatsächlich tippen; Handytastaturen bieten oft nur den Punkt an.
+- Leerraum innerhalb der Zahl wird entfernt („1 250 000“ → 1250000).
+- Leere oder ungültige Eingaben ergeben `null`, ebenso alles, was keine
+  endliche Zahl ergibt.
+
+### Epsilon an den Punkte-Schwellen
+
+Die Schwellen 1,05 / 1,15 / 1,3 / 1,5 / 2 sind in IEEE-754 nicht exakt
+darstellbar. Für glatte Fälle stimmt der Vergleich zwar (115/100 trifft
+denselben Double wie das Literal 1.15), bei krummen Antworten aber nicht:
+3,45 / 3 ergibt 1.1500000000000001 und läge ohne Toleranz eine Stufe zu tief.
+`scoreGuess` vergleicht deshalb mit `ratio <= schwelle + 1e-9`. Das Epsilon ist
+um Größenordnungen kleiner als jeder Punkteunterschied und größer als der
+Rundungsfehler in diesem Wertebereich.
+
+### `START` nur aus dem Zustand `idle`
+
+Der Zustandsautomat ist bewusst eng: `START` wirkt nur in `idle`, `SUBMIT_GUESS`
+und `SKIP` nur in `question`, `NEXT` nur in `reveal`. Jede Aktion im falschen
+Zustand gibt dieselbe State-Referenz zurück, damit React bei einem versehentlich
+doppelten Dispatch (Doppelklick, Enter-Wiederholung) nicht neu rendert und keine
+zweite Bewertung entsteht. Für die UI heißt das: Nach dem Ergebnis erst `RESET`,
+dann `START`.
+
+### Große Ganzzahlen werden als `BigInt` formatiert
+
+`Intl.NumberFormat` rundet einen Double intern auf rund 16 signifikante Stellen
+und macht aus 43.252.003.274.489.856.000 (den Stellungen eines Zauberwürfels)
+„43.252.003.274.489.860.000“. Als `BigInt` formatiert Intl exakt den Wert des
+Doubles. `formatNumber` wechselt deshalb bei Ganzzahlen oberhalb von
+`Number.MAX_SAFE_INTEGER` auf den BigInt-Pfad.
+
+### `ratio: Infinity` überlebt JSON nicht von allein
+
+`scoreGuess` liefert für ungültige Schätzungen (und für „Keine Ahnung“)
+`ratio = Infinity`. JSON kennt kein Infinity, `JSON.stringify` macht daraus
+`null`. Das Session-Schema akzeptiert deshalb `number | null` für `ratio` und
+setzt `null` beim Lesen wieder auf `Infinity`. Ohne diese Sonderbehandlung
+würde ein Reload jede Runde mit einer übersprungenen Frage komplett verwerfen.
+
+### `try/catch` um die Speicherzugriffe
+
+Abschnitt 9 verbietet, Fehler mit `try/catch` zu verstecken. In `storage.ts`
+ist der Zugriffsschutz trotzdem gesetzt und auf genau drei Stellen begrenzt
+(Zugriff auf das Storage-Objekt, `getItem`/`setItem`/`removeItem`, `JSON.parse`).
+Grund: Safari im Privatmodus und Browser mit blockierten Website-Daten werfen
+schon beim Lesen der Property `window.localStorage`, und ein volles Kontingent
+lässt `setItem` werfen. Ein gespeicherter Spielstand ist Komfort, kein
+kritischer Wert – die App muss ohne ihn weiterlaufen. Versteckt wird dabei
+nichts: Ungültige oder fehlende Daten führen zu den dokumentierten
+Standardwerten (`{}`, `[]`, `null`, Standard-Settings).
+
+### Zusätzlicher Export `STORAGE_KEYS`
+
+`storage.ts` exportiert die vier Schlüssel (`verschaetz-dich:highscores`,
+`:played-ids`, `:settings`, `:session`) als Konstanten-Objekt. Die E2E-Tests aus
+Phase 4 müssen `localStorage` gezielt vorbelegen und leeren; ohne diesen Export
+stünden die Schlüssel doppelt im Code.
+
+### Test-Fixtures unter `tests/fixtures/`
+
+Die Fragen für die Logiktests kommen aus `tests/fixtures/questions.ts`, nicht
+aus dem echten Fragenbestand: Die Logiktests sollen nicht rot werden, wenn sich
+eine Frage ändert. Jede Fixture läuft durch `questionSchema.parse`, damit sie
+nicht unbemerkt vom echten Datenvertrag abweicht. Der Ordner liegt bewusst
+neben `tests/unit/`, weil Vitest nur `tests/unit/**/*.test.{ts,tsx}` einsammelt.
+
+### `check-sources.ts`: erst HEAD, dann GET
+
+Das Skript sammelt alle Quellen-URLs dedupliziert ein (mit den Fragen-IDs, die
+sie benutzen) und prüft jede zuerst per `HEAD`. Viele Server – auch große –
+beantworten HEAD gar nicht oder mit 405; erst bei einem Status außerhalb von
+2xx/3xx folgt deshalb ein `GET`. Gesendet wird ein eigener `User-Agent`
+(Wikipedia antwortet ohne einen mit 403) und `Accept-Language: de`, Timeout
+15 s per `AbortSignal.timeout`, Nebenläufigkeit 6. Der Exit-Code ist 1, sobald
+mindestens eine Quelle tot ist. Der Response-Body wird verworfen, sonst bleiben
+Verbindungen unnötig offen.
