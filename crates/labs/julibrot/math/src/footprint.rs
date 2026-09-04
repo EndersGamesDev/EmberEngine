@@ -118,21 +118,15 @@ pub fn scene_footprint(
     };
     let extent = [grid_w, grid_h];
     let main_uncovered = uncovered_fraction(&chain, extent, 1.0);
-    let candidates = APRON_CANDIDATES.map(|apron_scale| {
-        (
-            apron_scale,
-            uncovered_fraction(&chain, extent, apron_scale),
-        )
-    });
+    let candidates = APRON_CANDIDATES
+        .map(|apron_scale| (apron_scale, uncovered_fraction(&chain, extent, apron_scale)));
     let widest_uncovered = candidates[APRON_CANDIDATES.len() - 1].1;
     let widest_gain = main_uncovered - widest_uncovered;
     let (apron_scale, uncovered) = if widest_gain > 0.0 {
         let required_gain = 0.5 * widest_gain;
         candidates
             .into_iter()
-            .find(|(_, candidate_uncovered)| {
-                main_uncovered - candidate_uncovered >= required_gain
-            })
+            .find(|(_, candidate_uncovered)| main_uncovered - candidate_uncovered >= required_gain)
             .unwrap_or((5.0, widest_uncovered))
     } else {
         (1.0, main_uncovered)

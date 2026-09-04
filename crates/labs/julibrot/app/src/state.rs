@@ -1794,7 +1794,9 @@ mod tests {
             })
             .expect("owner relief view");
         assert_eq!(
-            viewer.backdrop_map(REFERENCE_GRID).expect("owner footprint"),
+            viewer
+                .backdrop_map(REFERENCE_GRID)
+                .expect("owner footprint"),
             None
         );
     }

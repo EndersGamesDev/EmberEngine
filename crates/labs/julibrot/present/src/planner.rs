@@ -842,13 +842,9 @@ mod tests {
                         };
                         let shortcut = project_scene_point(&posed, screen, record_height)
                             .expect("the floor shortcut projects");
-                        let full = project_scene_point_with_shortcut(
-                            &posed,
-                            screen,
-                            record_height,
-                            false,
-                        )
-                        .expect("the full floor chain projects");
+                        let full =
+                            project_scene_point_with_shortcut(&posed, screen, record_height, false)
+                                .expect("the full floor chain projects");
                         assert_eq!(shortcut, screen);
                         let error = (shortcut[0] - full[0]).hypot(shortcut[1] - full[1]);
                         assert!(error <= 1.0e-9, "full-chain error was {error} px");

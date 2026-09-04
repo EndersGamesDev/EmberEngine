@@ -347,9 +347,9 @@ mod tests {
         let source = scene_shader(limits());
         assert!(source.contains("@vertex fn scene_vertex"));
         assert!(source.contains("let record = load_escape(index);"));
-        assert!(source.contains(
-            "let height = hot.view_scale.x * (record_height(record) + 2.0) * 0.5;"
-        ));
+        assert!(
+            source.contains("let height = hot.view_scale.x * (record_height(record) + 2.0) * 0.5;")
+        );
         assert_translates_to_webgl2(&source, naga::ShaderStage::Vertex, "scene_vertex");
     }
 
