@@ -807,7 +807,7 @@ mod tests {
     }
 
     #[test]
-    fn height_zero_shortcut_matches_the_full_forward_chain() {
+    fn floor_shortcut_matches_the_full_forward_chain() {
         let mut moved_camera = [0.0; 10];
         moved_camera[0] = 0.6;
         moved_camera[8] = -0.3;
@@ -835,15 +835,38 @@ mod tests {
                             (f64::from(row) / f64::from(SCREEN_STEPS - 1) - 0.5)
                                 * f64::from(extent[1]),
                         ];
-                        let shortcut = project_scene_point(&posed, screen, 0.0)
-                            .expect("the flat shortcut projects");
-                        let full = project_scene_point_with_shortcut(&posed, screen, 0.0, false)
-                            .expect("the full flat chain projects");
+                        let record_height = if view.height_scale.to_bits() == 0.0_f64.to_bits() {
+                            0.0
+                        } else {
+                            -2.0
+                        };
+                        let shortcut = project_scene_point(&posed, screen, record_height)
+                            .expect("the floor shortcut projects");
+                        let full = project_scene_point_with_shortcut(
+                            &posed,
+                            screen,
+                            record_height,
+                            false,
+                        )
+                        .expect("the full floor chain projects");
                         assert_eq!(shortcut, screen);
                         let error = (shortcut[0] - full[0]).hypot(shortcut[1] - full[1]);
                         assert!(error <= 1.0e-9, "full-chain error was {error} px");
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn zero_height_amplitude_is_bit_identical_for_every_record_height() {
+        let posed = pose(ViewControls::NEUTRAL, [0.0; 2]);
+        for record_height in HEIGHT_SAMPLES {
+            for screen in screen_corners(&posed).into_iter().chain([[0.0; 2]]) {
+                assert_eq!(
+                    project_scene_point(&posed, screen, record_height),
+                    Some(screen)
+                );
             }
         }
     }
@@ -1309,9 +1332,9 @@ mod tests {
             .inverse;
         for target in [[-321.0, 117.0], [0.0, 0.0], [287.0, -91.0]] {
             let source_flat = apply_homography(inverse, target).expect("flat source is finite");
-            let destination = project_scene_point_with_shortcut(&to, target, 0.0, false)
+            let destination = project_scene_point_with_shortcut(&to, target, -2.0, false)
                 .expect("translated full chain projects");
-            let expected = project_scene_point_with_shortcut(&from, source_flat, 0.0, false)
+            let expected = project_scene_point_with_shortcut(&from, source_flat, -2.0, false)
                 .expect("source full chain projects");
             let actual = apply_homography(inverse, destination).expect("warp projects");
             let error = (actual[0] - expected[0]).hypot(actual[1] - expected[1]);
