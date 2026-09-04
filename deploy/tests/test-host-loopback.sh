@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The whole of host.sh, end to end, on loopback: clone, build, start both
+# The whole of host.sh, end to end, on loopback: clone, build, start all three
 # servers, prove each one with the repo's own probes, mint an address from a
 # stub tunnel, publish the entry into a local bare repository, then update,
 # status and down.

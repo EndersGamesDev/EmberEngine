@@ -529,7 +529,7 @@ cmd_up() {
     done
     echo "   public probes passed in $(( $(date +%s) - tp ))s"
 
-    # WHAT IS RUNNING is recorded as soon as it is proven running — both
+    # WHAT IS RUNNING is recorded as soon as it is proven running — all three
     # servers answered on loopback and through their public addresses — and
     # before the publish, which is a different question. It used to come after,
     # so a host with no push rights on EMBER_REPO (the documented normal case
