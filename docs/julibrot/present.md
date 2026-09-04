@@ -184,7 +184,7 @@ For scheduling, `ReliefRedraw` is an accepted warp from the retained level. Auto
 
 Every refresh follows the fixed order `poll completed fences → drain HOT → write_hot(refresh_id mod 3) → frame(state,hot_slot) → app present`, with `submit_scene` when the app schedule says a scene is due; after `frame` the app drives `poll` through cooperative browser yields until the matching warp fence completes, captures the ending timestamp, and only then presents its singly owned surface texture.
 
-When no compatible completed frame exists, the warp pass writes only `clear_rgba`; a completed scene always covers the whole target with mesh or exterior sky. During an automatic ladder round a refused warp may instead hold the last retained picture unmoved while newer work is pending; a new round re-arms that per-round allowance if reference resumption or retirement ended the prior round without a Final, and slice incompatibility is never shown as motion.
+When no compatible completed frame exists, the warp pass writes only `clear_rgba`; a completed scene always covers the whole target with mesh or exterior sky. In automatic mode a refused warp may instead hold the last retained picture unmoved exactly while newer work is pending, with no round, elapsed-time, or hold-count expiry; completion or retirement ends that condition, and slice incompatibility is never shown as motion.
 
 The warp samples the retained `Rgba8Unorm` texture with a nearest sampler and no mipmaps, preserving debug-tint classification; the disocclusion test happens before the sample and uses the palette's clear colour.
 
