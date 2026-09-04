@@ -197,6 +197,21 @@
           "note": "diagnostic suite + optional report submission"
         }
       ]
+    },
+    {
+      "id": "julibrot",
+      "kind": "lab",
+      "title": "Julibrot Lab",
+      "tag": "four-dimensional slices · local lab · WebGL2",
+      "desc": "A four-dimensional slice viewer with every delivered limit and measurement left visible. WebGL2 with EXT_color_buffer_float is required.",
+      "versions": [
+        {
+          "v": "v1",
+          "path": "labs/julibrot/",
+          "live": true,
+          "note": "interactive slice viewer with visible limits and measurements"
+        }
+      ]
     }
   ]
 }

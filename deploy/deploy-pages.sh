@@ -3,11 +3,12 @@
 # Run from anywhere (git-bash): bash deploy/deploy-pages.sh
 #
 # Server-build/workstation-publish recipe (the workstation holds the push key):
-#   cargo build --target wasm32-unknown-unknown --release -p fire -p arena -p kings -p what-is-this --lib
+#   cargo build --target wasm32-unknown-unknown --release -p fire -p arena -p kings -p what-is-this -p ember-julibrot-app --lib
 #   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/fire.wasm
 #   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/arena.wasm
 #   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/kings.wasm
 #   wasm-bindgen --target web --no-typescript --out-dir web/pkg target/wasm32-unknown-unknown/release/what_is_this.wasm
+#   wasm-bindgen --target web --no-typescript --out-dir web/labs/julibrot/pkg target/wasm32-unknown-unknown/release/ember_lab_julibrot.wasm
 # Copy web/pkg from the server into this checkout, then publish without builds:
 #   EMBER_PAGES_PREBUILT=1 bash deploy/deploy-pages.sh
 #
@@ -20,6 +21,7 @@
 #   games/fire/v2/        live fire racer build (castle circuit, online)
 #   games/kings/v1/       live four kings build (2D page board + 3D wasm view, online)
 #   games/what-is-this/v1/ live browser and hardware diagnostic
+#   labs/julibrot/        live four-dimensional slice viewer lab
 #   games/pong/v1/        archived first web build (materialized from history)
 #   games/fire/v1/        archived first fire build; already on the branch and
 #                         deliberately never touched again — only $FIRE_LIVE is
@@ -53,8 +55,11 @@ if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
             [ -f "web/pkg/$artifact" ] || missing+=("web/pkg/$artifact")
         done
     done
+    for artifact in ember_lab_julibrot.js ember_lab_julibrot_bg.wasm; do
+        [ -f "web/labs/julibrot/pkg/$artifact" ] || missing+=("web/labs/julibrot/pkg/$artifact")
+    done
     if [ "${#missing[@]}" -ne 0 ]; then
-        echo "FAILED: EMBER_PAGES_PREBUILT=1 requires all four bundles in web/pkg; missing:" >&2
+        echo "FAILED: EMBER_PAGES_PREBUILT=1 requires all four game bundles and the Julibrot lab bundle; missing:" >&2
         printf '  %s\n' "${missing[@]}" >&2
         exit 1
     fi
@@ -64,13 +69,14 @@ echo "== stamping the build ticker =="
 bash deploy/stamp-version.sh
 
 if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
-    echo "== using four prebuilt wasm bundles from web/pkg =="
+    echo "== using four prebuilt game bundles from web/pkg and the Julibrot lab bundle =="
 else
     echo "== building wasm =="
     cargo build --target wasm32-unknown-unknown --release -p fire --lib
     cargo build --target wasm32-unknown-unknown --release -p arena --lib
     cargo build --target wasm32-unknown-unknown --release -p kings --lib
     cargo build --target wasm32-unknown-unknown --release -p what-is-this --lib
+    cargo build --target wasm32-unknown-unknown --release -p ember-julibrot-app --lib
     wasm-bindgen --target web --no-typescript --out-dir web/pkg \
         target/wasm32-unknown-unknown/release/fire.wasm
     wasm-bindgen --target web --no-typescript --out-dir web/pkg \
@@ -79,6 +85,8 @@ else
         target/wasm32-unknown-unknown/release/kings.wasm
     wasm-bindgen --target web --no-typescript --out-dir web/pkg \
         target/wasm32-unknown-unknown/release/what_is_this.wasm
+    wasm-bindgen --target web --no-typescript --out-dir web/labs/julibrot/pkg \
+        target/wasm32-unknown-unknown/release/ember_lab_julibrot.wasm
 fi
 
 echo "== publishing gh-pages =="
@@ -98,6 +106,7 @@ PAGES_DIR="$(mktemp -d -t ember-pages-XXXX)"
 # and of either game — died at its own `worktree add` until a human ran
 # `git worktree remove`. The status is preserved: the trap reports the failure
 # that caused it, not the cleanup's own.
+# shellcheck disable=SC2154
 trap 'st=$?; git worktree remove --force "$PAGES_DIR" >/dev/null 2>&1 || true; rm -rf "$PAGES_DIR"; exit $st' EXIT
 git worktree add -q --detach "$PAGES_DIR" FETCH_HEAD
 
@@ -107,11 +116,13 @@ ARENA_V0_LIVE="games/arena/v0"
 FIRE_LIVE="games/fire/v2"
 KINGS_LIVE="games/kings/v1"
 WHAT_LIVE="games/what-is-this/v1"
+LAB_JULIBROT_LIVE="labs/julibrot"
 
-rm -rf "$PAGES_DIR"/index.html "$PAGES_DIR"/pkg \
-    "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$ARENA_V0_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR/$KINGS_LIVE" "$PAGES_DIR/$WHAT_LIVE" \
-    "$PAGES_DIR"/games.json
-mkdir -p "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$ARENA_V0_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR/$KINGS_LIVE" "$PAGES_DIR/$WHAT_LIVE"
+rm -rf "${PAGES_DIR:?}"/index.html "${PAGES_DIR:?}"/pkg \
+    "${PAGES_DIR:?}/$ARENA_LIVE" "${PAGES_DIR:?}/$ARENA_V0_LIVE" "${PAGES_DIR:?}/$FIRE_LIVE" "${PAGES_DIR:?}/$KINGS_LIVE" "${PAGES_DIR:?}/$WHAT_LIVE" \
+    "${PAGES_DIR:?}/$LAB_JULIBROT_LIVE" \
+    "${PAGES_DIR:?}"/games.json
+mkdir -p "$PAGES_DIR/$ARENA_LIVE" "$PAGES_DIR/$ARENA_V0_LIVE" "$PAGES_DIR/$FIRE_LIVE" "$PAGES_DIR/$KINGS_LIVE" "$PAGES_DIR/$WHAT_LIVE" "$PAGES_DIR/$LAB_JULIBROT_LIVE/pkg"
 cp web/index.html web/games.json web/version.json "$PAGES_DIR"/
 # The shared host-picking logic (docs/hosts.md §5). It lives at the pages root
 # and every live page imports it from there, so there is one copy of the rule
@@ -129,6 +140,12 @@ cp "web/$ARENA_V0_LIVE/index.html" "$PAGES_DIR/$ARENA_V0_LIVE/"
 cp "web/$FIRE_LIVE/index.html" "$PAGES_DIR/$FIRE_LIVE/"
 cp "web/$KINGS_LIVE/index.html" "$PAGES_DIR/$KINGS_LIVE/"
 cp "web/$WHAT_LIVE/index.html" "$PAGES_DIR/$WHAT_LIVE/"
+cp "web/$LAB_JULIBROT_LIVE/index.html" "web/$LAB_JULIBROT_LIVE/main.js" \
+    "web/$LAB_JULIBROT_LIVE/worker.js" "web/$LAB_JULIBROT_LIVE/style.css" \
+    "$PAGES_DIR/$LAB_JULIBROT_LIVE/"
+cp "web/$LAB_JULIBROT_LIVE/pkg/ember_lab_julibrot.js" \
+    "web/$LAB_JULIBROT_LIVE/pkg/ember_lab_julibrot_bg.wasm" \
+    "$PAGES_DIR/$LAB_JULIBROT_LIVE/pkg/"
 # Each game gets ONLY its own bundle. Copying the whole of web/pkg into every
 # game directory shipped arena's 18 MB wasm to fire players and fire's to arena
 # players — a fire player was downloading ~23 MB to run a ~6 MB game. The
@@ -279,6 +296,29 @@ EOF
 # instead of leaving every frozen and live page on a host they can no longer
 # join until somebody redeploys a server.
 bash "$REPO_DIR/deploy/publish-host.sh" --book "$PAGES_DIR/server.json" --recompute
+
+# The checked-in lab loader stays pinned at v=1 for its page contract. Only
+# assembled copies receive the final deployment stamp after address recompute.
+DEPLOY_STAMP="$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["v"])' "$PAGES_DIR/server.json")"
+for loader in index.html main.js worker.js; do
+    assembled="$PAGES_DIR/$LAB_JULIBROT_LIVE/$loader"
+    if ! grep -qE '\?v=1([^0-9]|$)' "$assembled"; then
+        echo "FAILED: Julibrot cache key rewrite matched no ?v=1 token in $loader" >&2
+        exit 1
+    fi
+    "$PY" - "$assembled" "$DEPLOY_STAMP" <<'PY'
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1])
+text = p.read_text(encoding="utf-8")
+stamped = re.sub(r"\?v=1(?![0-9])", "?v=" + sys.argv[2], text)
+with open(p, "w", encoding="utf-8", newline="") as fh:
+    fh.write(stamped)
+PY
+    if grep -qE '\?v=1([^0-9]|$)' "$assembled"; then
+        echo "FAILED: Julibrot cache key rewrite left ?v=1 in $loader" >&2
+        exit 1
+    fi
+done
 
 (
     cd "$PAGES_DIR"
