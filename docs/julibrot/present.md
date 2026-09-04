@@ -503,6 +503,8 @@ Warp cost per refresh, scene-frame cost, fence wait, polls, warm-up exclusion, f
 
 ## 7. Implementation phases and line budget
 
+The GPU implementation map is `gpu.rs` for the public façade and re-export, `gpu/device.rs` for adapter/resource construction and selection setup, `device/uniforms.rs` for bind-group layouts, `device/scene.rs` plus `scene/submit.rs` for target management, stencil-composed draw order and scene submission, `device/warp.rs` for HOT publication and image warp, `device/redraw.rs` for relief redraw, `device/census.rs` for census render/readback/decode, `device/ledger.rs` for retained-source and HoldStale policy, `device/poll.rs` for fence/event publication, and `device/tests.rs` for the moved presenter test corpus.
+
 Phase 0A is implemented: the package shell, exact palette records, 288-byte HOT and 160-byte scene layouts, checked three-slot ring arithmetic, and finite homography solver and packer consume math-owned `ViewControls`, `Plane`, `Pose`, and `warp_matrix`.
 
 Phase 3A now also implements checked mesh index and coordinate construction, present's VIEW coefficients, and an oracle bridge to heap's exported `mode_a_endpoint` without constructing any heap resource or math-owned type.

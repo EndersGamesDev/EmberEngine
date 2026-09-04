@@ -2,9 +2,11 @@ use ember_julibrot_kernels::{EscapeGrid, RefinementLevel};
 use ember_julibrot_math::{PrecisionMode, ViewControls};
 use ember_julibrot_worker::MainState;
 
+use super::census::{census_if_ready, observe_fence, take_glitch_readback_result};
 use super::*;
-use crate::SubmissionMeasurement;
-use crate::state::PendingScene;
+use crate::fence::FenceDecision;
+use crate::state::{PendingScene, SceneCompletion};
+use crate::{PresentFacts, SubmissionKind, SubmissionMeasurement};
 
 #[test]
 fn glitch_census_sums_red_counts_and_ignores_row_padding() {
