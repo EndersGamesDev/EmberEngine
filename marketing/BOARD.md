@@ -6,7 +6,7 @@ How this board works: the repo is the medium (`docs/worker-protocol.md`). A sess
 
 | # | Task | Owner | State | Next concrete step |
 |---|---|---|---|---|
-| 1 | **Merge decision** — `marketing/launch-kit` (6 commits) is pushed but the org blocks PR creation for enderPeer, so it cannot land via PR from this account | Ender | **blocked on Ender** | one of: (a) open the PR from the web UI (one click on the branch), (b) tell barza to push the branch to `main` directly (main is unprotected; barza has admin push — an exception to the branch-only rule, recorded here), (c) grant enderPeer PR creation in the org settings and barza opens it |
+| 1 | ~~**Merge decision**~~ — branch landed on `main` by direct push, owner-approved (the org blocks PR creation for enderPeer, so a PR was impossible from this account; recorded as an exception to the branch-only rule) | Ender/barza | done 21:2x | `b595d60..eebec28` — included a merge of `origin/main` (arena v21 landed while the branch was in flight; `deploy-pages.sh` auto-merged, both the v21 live dir and the engine.html guard verified present) |
 | 2 | ~~Verify `engine.html` is live~~ | barza | done 21:1x | HTTP 200 at https://endersgamesdev.github.io/EmberEngine/engine.html after CDN propagation (the 21:09 404 was propagation, not a miss) |
 | 3 | Seed the GitHub wiki | barza | open | retry `git clone https://github.com/EndersGamesDev/EmberEngine.wiki.git` (enabled at 21:05, not materialized by 21:12); when it clones, push `marketing/wiki/github-wiki-home.md` as `Home.md` |
 | 4 | Paste the Show HN post | Ender | open | `marketing/posts/show-hn.md`, 09:00–11:00 US Eastern; the author account answers the first replies; pin the hub link |
@@ -37,3 +37,4 @@ How this board works: the repo is the medium (`docs/worker-protocol.md`). A sess
 - 2026-09-04 20:4x: board created by barza; phase 1 presence work done on branch `marketing/launch-kit` (pushed); the loop machinery installed (scheduled task `EmberEngineHeartbeat` hourly; the `heartbeat` workflow lands with the branch); release v20, description, topics, gh-pages engine page done.
 - 2026-09-04 21:13: session 1 closed. Top of board = the merge decision (task 1), which needs Ender.
 - 2026-09-04 21:1x: engine page verified live (HTTP 200); task 2 closed. The wiki repo is still not materialized; task 3 stays open.
+- 2026-09-04 21:2x: task 1 closed — the owner approved a direct push to main (`b595d60..eebec28`). Main had moved first (arena v21), so the branch merged it; `deploy-pages.sh` auto-merged with both changes verified. The `heartbeat` workflow is now on main; a manual run (33911297701) was triggered to prove it executes.

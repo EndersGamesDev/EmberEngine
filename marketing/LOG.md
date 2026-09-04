@@ -19,8 +19,11 @@ Repo public, 1 star, 0 forks, 0 watchers, 2 issues, 0 releases, wiki off, descri
 - 21:11 Local heartbeat installed: the scheduled task `EmberEngineHeartbeat` (hourly, next run 22:11, status Ready) runs the installed copy at `C:\Users\end\AppData\Local\Temp\opencode\ember-heartbeat\heartbeat.ps1`; test run appended `2026-09-04 21:11:20 status=IDLE last=6f8e424 dirty=18`.
 - 21:12 Verification: every new file `i/lf w/lf` per `git ls-files --eol`, UTF-8 without BOM; `bash -n deploy/deploy-pages.sh` passes (bash from Git at `C:\Program Files\Git\bin\bash.exe`). Not verified: the workflow's first run, the issue templates in a browser, the engine page through a real browser.
 
-**Session 1 wall time: 20:40:09 → 21:13 ≈ 33 min.**
+- 21:16 The merge decision came back: **direct push to main, owner-approved** (the PR path is blocked by the org, so this is the recorded exception to the branch-only rule). `origin/main` had moved in the meantime — arena v21 (`b595d60`), which also touches `deploy-pages.sh` — so the branch merged it first: clean auto-merge, and both the v21 live dir (`ARENA_LIVE="games/arena/v21"`) and the `engine.html` guard verified present in the result. Pushed `b595d60..eebec28` to main.
+- 21:27 The `heartbeat` workflow is now on main and a manual run was triggered to prove it executes (run 33911297701, `workflow_dispatch`); with a fresh commit on main it should report "work is moving, no marker" and leave no trace — exactly the designed behaviour.
+
+**Session 1 wall time: 20:40:09 → 21:28 ≈ 48 min.**
 
 ## KPIs (2026-09-04 21:12)
 
-1 star, 0 forks, 0 watchers, 2 issues, 1 release (v20), wiki enabled (unseeded), description set. The machine-side presence work is done; the next movement comes from the distribution phase (human posts) and the merge decision on the board.
+1 star, 0 forks, 0 watchers, 2 issues, 1 release (v20), wiki enabled (unseeded), description set. The machine-side presence work is done and on main; the next movement comes from the distribution phase (the human pastes `marketing/posts/`) and from the weekly loop.
