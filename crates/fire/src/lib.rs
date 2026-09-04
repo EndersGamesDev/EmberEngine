@@ -37,6 +37,8 @@ pub fn run_local() {
             // The car is steered with the keyboard; grabbing the pointer
             // would only take the cursor away for nothing.
             capture_mouse: false,
+            // A player opened this; it takes the foreground like any app.
+            activate: true,
             meshes,
         },
         game,
@@ -57,6 +59,8 @@ pub fn run_online(cfg: &online_game::Config) -> Result<(), String> {
         EngineConfig {
             title: "ember — fire racer (online)".to_string(),
             capture_mouse: false,
+            // A player opened this; it takes the foreground like any app.
+            activate: true,
             meshes,
         },
         game,

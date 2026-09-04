@@ -158,6 +158,30 @@ impl Default for InputState {
 }
 
 impl InputState {
+    /// An input snapshot built by hand, as if the platform had just filled
+    /// it: keys held, buttons held, raw mouse motion since the last frame,
+    /// and a pad.
+    ///
+    /// The setters are `pub(crate)` because only the platform may fill this
+    /// from a device; this exists so a game's own tests can present one —
+    /// notably to prove that a client which is *not* meant to read the
+    /// device ignores a snapshot that has everything held down.
+    #[must_use]
+    pub fn from_parts(
+        keys: &[KeyCode],
+        buttons: &[MouseButton],
+        mouse_delta: (f32, f32),
+        pad: Option<PadState>,
+    ) -> Self {
+        Self {
+            pressed: keys.iter().copied().collect(),
+            mouse: buttons.iter().copied().collect(),
+            mouse_delta,
+            pad,
+            ..Self::default()
+        }
+    }
+
     #[must_use]
     pub fn down(&self, key: KeyCode) -> bool {
         self.pressed.contains(&key)

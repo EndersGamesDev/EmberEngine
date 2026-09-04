@@ -13,6 +13,7 @@ mod feel;
 mod online;
 mod props;
 mod rounds;
+mod script;
 mod sound;
 
 use ember_engine::glam::Vec3;
@@ -276,7 +277,14 @@ pub fn run_online(cfg: OnlineConfig) -> Result<(), String> {
     ember_engine::run(
         EngineConfig {
             title: format!("ember arena — {}", cfg.lobby),
-            capture_mouse: true,
+            // A scripted client (`EMBER_SCRIPT`) never grabs the cursor: the
+            // operator keeps their pointer while a capture runs, and since
+            // the grab is refused here, once, it cannot come back when the
+            // script ends. See `script`.
+            capture_mouse: !script::scripted(),
+            // …and it does not take the foreground when it opens either: the
+            // operator keeps the window they were typing into.
+            activate: !script::scripted(),
             meshes,
         },
         game,
