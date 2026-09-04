@@ -108,18 +108,8 @@ pub fn scene_footprint(
         return Err(MathError::DegenerateViewMap);
     }
     let apron_scale = 1.0 / boundary_scale;
-    let applied_boundaries = [-amplitude, amplitude].map(|height| {
-        lifted_boundary(
-            &map,
-            plane,
-            view,
-            grid_w,
-            grid_h,
-            aspect,
-            height,
-            apron_scale,
-        )
-    });
+    let applied_boundaries = [-amplitude, amplitude]
+        .map(|height| lifted_boundary(&map, plane, view, [grid_w, grid_h], height, apron_scale));
     let applied_traces: Vec<&Vec<[f64; 2]>> = applied_boundaries.iter().flatten().collect();
     let mut covered = 0_usize;
     let mut total = 0_usize;
@@ -159,12 +149,11 @@ fn lifted_boundary(
     map: &crate::Homography,
     plane: Plane,
     view: &ViewControls,
-    grid_w: u32,
-    grid_h: u32,
-    aspect: f64,
+    extent: [u32; 2],
     height: f64,
     apron_scale: f64,
 ) -> Option<Vec<[f64; 2]>> {
+    let [grid_w, grid_h] = extent;
     let half_w = f64::from(grid_w) * 0.5;
     let half_h = f64::from(grid_h) * 0.5;
     let steps = BOUNDARY_SAMPLES_PER_EDGE;
@@ -182,8 +171,7 @@ fn lifted_boundary(
                 map,
                 plane,
                 view,
-                grid_w,
-                aspect,
+                extent,
                 screen,
                 height,
                 apron_scale,
@@ -198,12 +186,13 @@ fn project_vertex(
     map: &crate::Homography,
     plane: Plane,
     view: &ViewControls,
-    grid_w: u32,
-    aspect: f64,
+    extent: [u32; 2],
     screen: [f64; 2],
     height: f64,
     apron_scale: f64,
 ) -> Option<[f64; 2]> {
+    let [grid_w, grid_h] = extent;
+    let aspect = f64::from(grid_w) / f64::from(grid_h);
     let mut ambient = ambient_vertex(map, plane, view, grid_w, screen, height, apron_scale)?;
     let near_five = RELIEF_NEAR_FRACTION * view.distance_five;
     let maximum_fifth = view.distance_five - near_five;
