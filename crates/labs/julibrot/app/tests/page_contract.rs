@@ -10,7 +10,11 @@ const RUNTIME: &str = include_str!("../src/runtime.rs");
 const STATE: &str = include_str!("../src/state.rs");
 const FACTS: &str = include_str!("../src/facts.rs");
 const MEASUREMENT: &str = include_str!("../src/measurement.rs");
-const FRAME: &str = include_str!("../src/frame/loop.rs");
+static FRAME: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    let mut source = String::from(include_str!("../src/frame/schedule.rs"));
+    source.push_str(include_str!("../src/frame/loop.rs"));
+    source
+});
 const WORKER_BROWSER: &str = include_str!("../../worker/src/browser.rs");
 const WORKER_OWNER: &str = include_str!("../../worker/src/browser_owner.rs");
 const SAVED: &str = include_str!("../src/saved.rs");
