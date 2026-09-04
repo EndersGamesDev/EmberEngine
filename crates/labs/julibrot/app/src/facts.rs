@@ -111,6 +111,12 @@ pub struct PageFacts<'a> {
     pub scene_mode: &'static str,
     pub scene_update_pending: bool,
     pub draft_skipped_count: u64,
+    /// Reference requests the census candidate drove for the current accepted navigation.
+    pub sampled_reference_requests: u32,
+    /// Accepted census references, each of which resumed the refinement ladder once.
+    pub sampled_reference_rounds: u32,
+    /// Census arrivals discarded for not lengthening the accepted reference orbit.
+    pub sampled_reference_discards: u32,
     pub last_draft_skip_reason: Option<&'static str>,
     pub extent_divisor: Option<u32>,
     pub active_pixels: Option<u32>,
@@ -268,6 +274,9 @@ impl<'a> PageFacts<'a> {
             scene_mode: loop_facts.scene_mode().as_str(),
             scene_update_pending: loop_facts.scene_update_pending(),
             draft_skipped_count: loop_facts.draft_skipped_count(),
+            sampled_reference_requests: loop_facts.sampled_reference_requests(),
+            sampled_reference_rounds: loop_facts.sampled_reference_rounds(),
+            sampled_reference_discards: loop_facts.sampled_reference_discards(),
             last_draft_skip_reason: loop_facts.last_draft_skip_reason(),
             extent_divisor: Some(plan.extent_divisor),
             active_pixels: dispatch.map(|facts| facts.active_pixels),

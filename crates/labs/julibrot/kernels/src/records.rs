@@ -40,6 +40,18 @@ pub enum SampleStatus {
     MapUncertain = 3,
 }
 
+/// Smooth lane of a glitch whose reference ran out before the pixel escaped or capped.
+///
+/// This is the only glitch that says something about the pixel: it survived every reference step
+/// available to it, so its own orbit is at least as long as the reference it was rendered against.
+pub const GLITCH_REFERENCE_EXHAUSTED: f32 = -1.0;
+
+/// Smooth lane of a glitch produced by arithmetic failure inside the pixel.
+///
+/// Non-finite state, rebase-count saturation, exponent floor, and every normalization refusal land
+/// here. Such a pixel says nothing about orbit length and must never be preferred as a reference.
+pub const GLITCH_NUMERIC_FAILURE: f32 = -2.0;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PixelOffset {
     pub offset: [f32; 4],

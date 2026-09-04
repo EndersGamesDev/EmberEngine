@@ -193,7 +193,7 @@ Escape-grid texel `(i,j)` is record `j·width+i`, one 16-byte RGBA32F value with
 
 |Byte range|RGBA lane|Meaning|
 |---------:|---------|-------|
-|0–3|R|`smooth_iter: f32`, the specified smooth value at escape or exactly `−1.0` otherwise; the escape value is negative whenever `log₂(log₂|zₙ|) > n+1`, which every escape from outside radius `16` at index zero satisfies|
+|0–3|R|`smooth_iter: f32`, the specified smooth value at escape, exactly `−1.0` for a non-escaping sampled, uncertain or horizon record, and for a glitch the kind that produced it: exactly `−1.0` when the reference index ran past the orbit length and exactly `−2.0` for every arithmetic failure; the escape value is negative whenever `log₂(log₂|zₙ|) > n+1`, which every escape from outside radius `16` at index zero satisfies|
 |4–7|G|`escaped: f32`, exactly `0.0` or `1.0`|
 |8–11|B|`rebase_count: f32`, a nonnegative exactly representable integer, zero for shallow|
 |12–15|A|`status: f32`, exactly `0.0` sampled, `1.0` glitch, `2.0` horizon, or `3.0` uncertified near horizon|
@@ -377,7 +377,7 @@ Dispatch walls, scene walls, and poll counts are browser facts measured by app a
 |Reference replacement could pair new metadata with old DATA records.|Generation-tagged upload fixtures delay publication until data and resource words are queued, then deliberately dispatch stale generations and require `StaleReference`.|
 |Extracting the paid GPU executor or prefix helper could accidentally fork heap semantics.|An integration oracle runs the heap golden and Julibrot dispatch through the same executor type and compares bind-group identity, full and prefix header bytes, copy regions, capacity facts, and typed failures; a non-visibility extraction stops the app lane.|
 |RGBA32F or copy usage may be absent despite nominal WebGL2.|Initialization checks live format usages and the standing output-path golden; refusal names the adapter, backend, and failed usage.|
-|A status-one region reaches Final without an observable count.|Present's Final-only packed census publishes the numeric count when its optional mapping is ready at scene completion and always retains the per-pixel orange diagnostic.|
+|A status-one region reaches Final without an observable count.|Present's packed census publishes the numeric count when its optional mapping is ready at scene completion and always retains the per-pixel orange diagnostic.|
 
 ## 7. Implementation phases and line budget
 
@@ -421,7 +421,9 @@ The corpus covers the zoom-14 boundary, zooms 40, 80, 100, 256, 512, and the las
 
 - Backlog owner decision: shallow acceptance retains the last deep reference so its picture can support reprojection while replacement work is pending; clearing `current_orbit` and `accepted_reference_zoom_log2` there would make stale perturbation dispatch unrepresentable, at the cost of forfeiting that retained deep source, so the generation-and-zoom dispatch guard remains the chosen safety wall.
 
-- Backlog: a reference can legitimately end before a nearby pixel escapes even when its generation and zoom match; second-reference correction is deferred because it needs region selection and merge ownership, and costs at least one additional high-precision worker orbit plus a regional kernel and presentation pass per corrected cluster. Until then v1 exposes the exact count and orange diagnostic without confusing it with a contract violation.
+- A reference can legitimately end before a nearby pixel escapes even when its generation and zoom match. That case is now corrected by choice of the primary reference rather than by a second one: present's census ranks every record of a completed grid and app moves the orbit point onto the top-ranked one whenever the level's cap outlasts the accepted orbit. The perturbation kernel returns a glitch from seven places and only one of them — the reference index running past the orbit length — says anything about the pixel, so the smooth lane carries the glitch kind and only that kind is preferred to an escaping record.
+- The top rank is a heuristic and not a certificate, and the exchange it feeds is bounded rather than monotone. A record that reports no escape within the cap can still name a point whose exact orbit is far shorter: the Zhuoran rebase recomputes `δ ← z − Z₀` in binary32 and resets the reference index, so when `|z| ≪ |Zᵣ|` the delta cancels to noise and a pixel can run the whole cap against a 41-record reference with no test firing. Measured on the zoom-14 seahorse row, the first census candidate reported no escape at a 512 cap while its own reference orbit ended at 251 records. What makes the exchange safe is keeping the best: an arriving sampled reference that does not lengthen the accepted one is discarded. Rebasing also means the corrected reference need not be as long as the frame's own maximum count for the picture to come out clean.
+- Backlog: regional second-reference correction of a residual cluster is deferred because it needs region selection and merge ownership, and costs at least one additional high-precision worker orbit plus a regional kernel and presentation pass per corrected cluster. Until then v1 exposes the exact count and orange diagnostic without confusing it with a contract violation.
 
 - Exact shallow classification across CPU and browser shader still depends on math's predeclared boundary fixtures and contracted operation order; fused-operation behavior must not be accommodated by selecting samples after GPU results are seen.
 

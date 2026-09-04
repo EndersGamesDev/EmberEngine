@@ -182,9 +182,9 @@ fn perturb_normalize(
     return state;
 }
 
-fn perturb_glitch(rebases: u32) -> PerturbResult {
+fn perturb_glitch(rebases: u32, kind: f32) -> PerturbResult {
     var result: PerturbResult;
-    result.escape = vec4<f32>(-1.0, 0.0, f32(rebases), 1.0);
+    result.escape = vec4<f32>(kind, 0.0, f32(rebases), 1.0);
     return result;
 }
 
@@ -219,7 +219,7 @@ fn kernel(index: u32, uniforms: PerturbUniform) -> PerturbResult {
     let z_zero = perturb_reference(load_reference(0u));
     let initial = perturb_normalize(delta_prime, delta_c_prime, exponent);
     if (initial.glitch) {
-        return perturb_glitch(rebases);
+        return perturb_glitch(rebases, -2.0);
     }
     delta_prime = initial.delta;
     delta_c_prime = initial.delta_c;
@@ -229,13 +229,13 @@ fn kernel(index: u32, uniforms: PerturbUniform) -> PerturbResult {
             break;
         }
         if (reference_index >= uniforms.orbit_length) {
-            return perturb_glitch(rebases);
+            return perturb_glitch(rebases, -1.0);
         }
         let reference = perturb_reference(load_reference(reference_index));
         let represented_delta = perturb_scale(delta_prime, exponent);
         let z = reference + represented_delta;
         if (!perturb_finite(z)) {
-            return perturb_glitch(rebases);
+            return perturb_glitch(rebases, -2.0);
         }
         if (dot(z, z) > uniforms.bailout) {
             var escaped: PerturbResult;
@@ -248,18 +248,18 @@ fn kernel(index: u32, uniforms: PerturbUniform) -> PerturbResult {
         var advance_reference = reference;
         if (perturb_norm(z) < perturb_norm(represented_delta)) {
             if (rebases >= 16777216u) {
-                return perturb_glitch(rebases);
+                return perturb_glitch(rebases, -2.0);
             }
             let minimum_exponent = -2147483647i - 1i;
             if (exponent == minimum_exponent) {
-                return perturb_glitch(rebases);
+                return perturb_glitch(rebases, -2.0);
             }
             delta_prime = perturb_scale(z - z_zero, -exponent);
             reference_index = 0u;
             rebases += 1u;
             let converted = perturb_normalize(delta_prime, delta_c_prime, exponent);
             if (converted.glitch) {
-                return perturb_glitch(rebases);
+                return perturb_glitch(rebases, -2.0);
             }
             delta_prime = converted.delta;
             delta_c_prime = converted.delta_c;
@@ -273,7 +273,7 @@ fn kernel(index: u32, uniforms: PerturbUniform) -> PerturbResult {
         iteration += 1u;
         let normalized = perturb_normalize(delta_prime, delta_c_prime, exponent);
         if (normalized.glitch) {
-            return perturb_glitch(rebases);
+            return perturb_glitch(rebases, -2.0);
         }
         delta_prime = normalized.delta;
         delta_c_prime = normalized.delta_c;

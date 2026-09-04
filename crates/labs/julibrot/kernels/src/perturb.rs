@@ -46,6 +46,39 @@ impl PerturbUniform {
         orbit_length: u32,
         level: RefinementLevel,
     ) -> Result<Self, KernelError> {
+        Self::pack_referenced(
+            plane,
+            screen_to_plane,
+            [0.0; 2],
+            scale,
+            extent,
+            params,
+            orbit_length,
+            level,
+        )
+    }
+
+    /// Packs a payload whose reference may differ from the centre of the sampled view.
+    ///
+    /// `centre_from_reference_px` is expressed in pixels of this level. Adding it to the
+    /// homogeneous quotient makes every perturbation relative to the sampled reference while the
+    /// screen map remains relative to the view centre.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same typed refusals as [`Self::pack`], plus an invalid-map refusal for a
+    /// non-finite displacement or translated row.
+    #[allow(clippy::too_many_arguments)]
+    pub fn pack_referenced(
+        plane: Plane,
+        screen_to_plane: &Homography,
+        centre_from_reference_px: [f64; 2],
+        scale: ScaleSplit,
+        extent: GridExtent,
+        params: EscapeParams,
+        orbit_length: u32,
+        level: RefinementLevel,
+    ) -> Result<Self, KernelError> {
         validate_extent(extent)?;
         validate_params(params)?;
         if !finite_scalar(scale.mantissa) || !(0.5..1.0).contains(&scale.mantissa) {
@@ -54,9 +87,20 @@ impl PerturbUniform {
         if orbit_length == 0 || orbit_length > params.max_iter {
             return Err(KernelError::ReferenceLengthMismatch);
         }
+        if !centre_from_reference_px.into_iter().all(f64::is_finite) {
+            return Err(KernelError::InvalidMap);
+        }
+        let mut referenced_map = *screen_to_plane;
+        for column in 0..3 {
+            let denominator = screen_to_plane.rows[6 + column];
+            referenced_map.rows[column] =
+                centre_from_reference_px[0].mul_add(denominator, screen_to_plane.rows[column]);
+            referenced_map.rows[3 + column] =
+                centre_from_reference_px[1].mul_add(denominator, screen_to_plane.rows[3 + column]);
+        }
         Ok(Self::from_parts(
             plane,
-            pack_map_rows(screen_to_plane)?,
+            pack_map_rows(&referenced_map)?,
             scale,
             extent,
             params.max_iter,
@@ -192,13 +236,30 @@ fn smooth_iteration(iteration: u32, value: [f32; 2]) -> f32 {
     iteration as f32 + 1.0 - log2_norm(value).log2()
 }
 
-const fn record(rebases: u32, glitch: bool) -> KernelSample {
+const fn capped(rebases: u32) -> KernelSample {
     KernelSample {
         record: EscapeGridRecord {
             smooth_iter: -1.0,
             escaped: 0.0,
             rebase_count: rebases as f32,
-            status: if glitch { 1.0 } else { 0.0 },
+            status: 0.0,
+        },
+        escape_index: None,
+    }
+}
+
+/// Builds the honest glitch record, carrying which of the two glitch kinds produced it.
+const fn glitch(rebases: u32, exhausted: bool) -> KernelSample {
+    KernelSample {
+        record: EscapeGridRecord {
+            smooth_iter: if exhausted {
+                crate::GLITCH_REFERENCE_EXHAUSTED
+            } else {
+                crate::GLITCH_NUMERIC_FAILURE
+            },
+            escaped: 0.0,
+            rebase_count: rebases as f32,
+            status: 1.0,
         },
         escape_index: None,
     }
@@ -242,19 +303,19 @@ pub fn perturb_scaled_offset(
         glitch: false,
     });
     if state.glitch {
-        return Ok(record(0, true));
+        return Ok(glitch(0, false));
     }
     let mut reference_index = 0_u32;
     let mut rebases = 0_u32;
     for iteration in 0..uniforms.max_iter {
         if reference_index >= uniforms.orbit_length {
-            return Ok(record(rebases, true));
+            return Ok(glitch(rebases, true));
         }
         let reference = reconstruct(orbit[reference_index as usize]);
         let represented_delta = scale(state.delta, state.exponent);
         let z = add(reference, represented_delta);
         if !finite(z) {
-            return Ok(record(rebases, true));
+            return Ok(glitch(rebases, false));
         }
         if radius_squared(z) > uniforms.bailout {
             return Ok(KernelSample {
@@ -272,17 +333,17 @@ pub fn perturb_scaled_offset(
         }
         let advance_reference = if robust_norm(z) < robust_norm(represented_delta) {
             if rebases >= REBASE_EXACT_LIMIT {
-                return Ok(record(rebases, true));
+                return Ok(glitch(rebases, false));
             }
             let Some(reverse_exponent) = state.exponent.checked_neg() else {
-                return Ok(record(rebases, true));
+                return Ok(glitch(rebases, false));
             };
             state.delta = scale(subtract(z, z_zero), reverse_exponent);
             reference_index = 0;
             rebases += 1;
             state = normalize_scaled(state);
             if state.glitch {
-                return Ok(record(rebases, true));
+                return Ok(glitch(rebases, false));
             }
             z_zero
         } else {
@@ -297,10 +358,10 @@ pub fn perturb_scaled_offset(
         reference_index += 1;
         state = normalize_scaled(state);
         if state.glitch {
-            return Ok(record(rebases, true));
+            return Ok(glitch(rebases, false));
         }
     }
-    Ok(record(rebases, false))
+    Ok(capped(rebases))
 }
 
 /// Forms one normalized bottom-up pixel offset and mirrors the scaled perturbation kernel.

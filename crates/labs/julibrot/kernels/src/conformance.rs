@@ -94,7 +94,11 @@ pub fn record_is_well_formed(sample: KernelSample, mode: KernelMode) -> bool {
         SampleStatus::Sampled | SampleStatus::MapUncertain if escaped => {
             record.smooth_iter.is_finite()
         }
-        SampleStatus::Sampled | SampleStatus::MapUncertain | SampleStatus::Glitch if !escaped => {
+        SampleStatus::Glitch if !escaped => {
+            record.smooth_iter.to_bits() == crate::GLITCH_REFERENCE_EXHAUSTED.to_bits()
+                || record.smooth_iter.to_bits() == crate::GLITCH_NUMERIC_FAILURE.to_bits()
+        }
+        SampleStatus::Sampled | SampleStatus::MapUncertain if !escaped => {
             record.smooth_iter.to_bits() == (-1.0_f32).to_bits()
         }
         SampleStatus::Horizon => {
@@ -302,6 +306,71 @@ mod tests {
             Some(SampleStatus::Glitch)
         );
         assert_eq!(sample.escape_index, None);
+    }
+
+    #[test]
+    fn forty_one_record_reference_exhaustion_is_corrected_by_a_cap_length_reference() {
+        const CAP: u32 = 512;
+        let target = BigCentre::from_f64(
+            [0.0, 0.0, -0.743_643_887_037_151, 0.131_825_904_205_33],
+            precision_for(14.0, 960, CAP)
+                .expect("zoom fourteen precision")
+                .requested_bits,
+        )
+        .expect("finite seahorse reference");
+        let plan = precision_for(14.0, 960, CAP).expect("zoom fourteen precision");
+        let mut builder = ReferenceOrbitBuilder::new(&target, plan, EscapeParams::new(CAP))
+            .expect("reference builder");
+        let orbit = loop {
+            match builder
+                .step(NonZeroU32::new(CAP).expect("nonzero cap"))
+                .expect("reference step")
+            {
+                OrbitStep::Complete(orbit) => break orbit,
+                OrbitStep::Pending { .. } => {}
+            }
+        };
+        let plane = construct_plane(ObjectAngles::IDENTITY).expect("Mandelbrot plane");
+        let extent = GridExtent {
+            width: 1,
+            height: 1,
+        };
+        let early = PerturbUniform::pack(
+            plane,
+            &Homography::IDENTITY,
+            scale_split(14.0, 960).expect("zoom fourteen scale"),
+            extent,
+            EscapeParams::new(CAP),
+            41,
+            RefinementLevel::Final,
+        )
+        .expect("short-reference uniform");
+        let corrected = PerturbUniform::pack(
+            plane,
+            &Homography::IDENTITY,
+            scale_split(14.0, 960).expect("zoom fourteen scale"),
+            extent,
+            EscapeParams::new(CAP),
+            orbit.length,
+            RefinementLevel::Final,
+        )
+        .expect("long-reference uniform");
+
+        let before = perturb_scaled_pixel(&early, &orbit.records[..41], 0)
+            .expect("short reference is represented honestly");
+        let after = perturb_scaled_pixel(&corrected, &orbit.records, 0)
+            .expect("long reference corrects the sample");
+
+        assert_eq!(orbit.length, CAP);
+        assert_eq!(
+            SampleStatus::from_f32(before.record.status),
+            Some(SampleStatus::Glitch)
+        );
+        assert_eq!(
+            SampleStatus::from_f32(after.record.status),
+            Some(SampleStatus::Sampled)
+        );
+        assert_eq!(after.escape_index, None);
     }
 
     #[test]

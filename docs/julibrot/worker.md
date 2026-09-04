@@ -12,7 +12,7 @@ Kernels own refinement LEVELS, including grid sizes, iteration caps, and span re
 
 The worker imports `crates/labs/heap` only through downstream typed seams where implementation needs its public handles; it never copies heap code, and any heap generalization remains an app-documented implementation-round seam under the visibility-only rule.
 
-The general resource DAG and petgraph, more than one world, the simulation tick, more than one heap class, shared-memory threads, WebGPU, and second-reference repair of glitched pixels are deliberately absent.
+The general resource DAG and petgraph, more than one world, the simulation tick, more than one heap class, shared-memory threads, WebGPU, and regional second-reference repair of glitched pixels are deliberately absent.
 
 ## 2. Design
 
@@ -111,6 +111,8 @@ The worker endpoint projects the bignum difference `C−C_ref` onto current `u,v
 Let `d_px = hypot(centre_from_reference_px[0],centre_from_reference_px[1])`; the reference trigger trips when `d_px > grid_width/4` or `|zoom_log2−reference_zoom_log2| > 2`, exactly the centre displacement of one quarter of the width extent without a tiny absolute subtraction.
 
 After a trigger, the worker remains disarmed while work is in flight and coalesces newer edits; it re-arms after an applied reference when `d_px ≤ grid_width/8` and `|zoom_log2−reference_zoom_log2| ≤ 1`, otherwise it immediately retains only the newest pending request, giving the thresholds explicit hysteresis.
+
+The requested reference point is not required to be the navigation centre. A reference is only the orbit perturbation expands around, so app may request one at a pixel of a completed grid instead, and the owner then carries the view centre and the reference centre as two separate exact points whose difference is HOT's `centre_from_reference_px`. `reference_shift_px` measures something else and remains a diagnostic of reference staleness: it is the new accepted reference against the *previously accepted* one, in the pixels of the current zoom, so a jump from the default origin to a deep target reads as millions of pixels simply because a deep pixel is tiny, not because anything is wrong.
 
 On acceptance, worker publishes `reference_shift_px = project(C_ref_new−C_ref_old)/pixel_scale_current` in MAIN and recomputes HOT's `centre_from_reference_px` against the new accepted reference; present re-bases the retained pose by that shift and clears only when `max_iter` or the defining plane origin `c₀` changes, not merely because orbit generation changed.
 

@@ -1,10 +1,10 @@
 # Julibrot presentation slice
 
-Status: implementation complete for `crates/labs/julibrot/present`; the merged math and heap seams drive the f64 anchor planner, exact app records, two-texture runtime, HOT ring, the one image scene pass, the Final-only status census, the sole warp pass, bounded four-byte fences, and app-facing facts, while target-browser facts remain labelled `requires visible replay`.
+Status: implementation complete for `crates/labs/julibrot/present`; the merged math and heap seams drive the f64 anchor planner, exact app records, two-texture runtime, HOT ring, the one image scene pass, the per-level status and reference census, the sole warp pass, bounded four-byte fences, and app-facing facts, while target-browser facts remain labelled `requires visible replay`.
 
 ## 1. Ownership and boundary
 
-The present slice owns pixels after an `EscapeGrid` exists: the main height-field image scene from flat chart to full relief plus its optional coarse backdrop, palette records and palette evaluation, the two scene textures, the Final-only packed status census target, the one warp pass, the three-slot HOT uniform ring, scene and warp completion measurements, and the present facts exported to the app.
+The present slice owns pixels after an `EscapeGrid` exists: the main height-field image scene from flat chart to full relief plus its optional coarse backdrop, palette records and palette evaluation, the two scene textures, the packed status and reference census target, the one warp pass, the three-slot HOT uniform ring, scene and warp completion measurements, and the present facts exported to the app.
 
 The present slice allocates the HOT GPU buffer and exposes infallible `Presenter::write_hot`; the app calls it from the owner's HOT drain once per surface refresh, selects the slot by refresh number, acquires and presents the surface texture, and draws the honest page overlay outside the warped scene image.
 
@@ -18,7 +18,7 @@ The app owns wgpu 24 GL device creation, the sole surface-acquisition token, sur
 
 Present is cosmetic authority only: a missing grid, stale span, invalid warp, pole rejection, timeout, or device error can change or clear pixels and publish a typed fact, but cannot author navigation, iteration, worker, simulation, protocol, or reconciliation truth.
 
-The general DAG and petgraph, more than one world, a simulation tick, more than one heap class, shared-memory workers, WebGPU, a second glitch reference, mipmaps, blending, MSAA, motion vectors, depth-aware warp, and any image pass beyond the selected scene pass plus the warp pass are deliberately absent; the Final-only status census is measurement work and never paints or replaces the retained image.
+The general DAG and petgraph, more than one world, a simulation tick, more than one heap class, shared-memory workers, WebGPU, a second glitch reference, mipmaps, blending, MSAA, motion vectors, depth-aware warp, and any image pass beyond the selected scene pass plus the warp pass are deliberately absent; the status and reference census is measurement work and never paints or replaces the retained image.
 
 ## 2. Design
 
@@ -268,7 +268,7 @@ Scaled perturbation stores `δ′=δ/S` with `S=2^e`: `δ′ₙ₊₁=2Zᵣδ′
 
 After the current escape test and before ordinary advance, rebase tests `|zₙ|<|S·δ′ₙ|`, with an underflowed `S·δ′` correctly making the test false; on success kernels set `δ←zₙ−Z₀` using reference record zero reconstructed hi plus lo, reset `r←0`, increment `rebase_count`, and perform exactly one ordinary advance against `Z₀`, preserving `zₙ=Zᵣ+δₙ` for nonzero `Z₀`.
 
-If reference index `r` reaches the stored orbit length before escape or `max_iter`, kernels stop that pixel with status `Glitch`; present must show the fixed orange diagnostic rather than interpolate, conceal, continue, or mislabel it as a magenta contract violation. App prevents stale-reference dispatch and a future second-reference correction may replace a real glitch before delivery.
+If reference index `r` reaches the stored orbit length before escape or `max_iter`, kernels stop that pixel with status `Glitch`; present must show the fixed orange diagnostic rather than interpolate, conceal, continue, or mislabel it as a magenta contract violation. App prevents stale-reference dispatch, and the census candidate lets app replace a reference that is too short for the level before the next delivery; regional second-reference repair of a residual cluster remains deferred.
 
 Perturbation conformance requires CPU-f64 and GPU escape classification to agree exactly outside math's propagated error envelope and smooth iteration to agree within `2×10⁻³`; boundary fixtures inside the envelope remain explicitly labelled rather than converted into a false exactness claim.
 
@@ -425,13 +425,15 @@ There is no shared memory or worker special path in present; ownership crosses t
 
 Honesty is structural: requested values remain app facts, delivered extent and iteration cap come from the current grid, `depth_digits=ceil(max(0,zoom_log2·log10(2)))`, `D_floor=max(1,ceil(zoom_log2·log10(2)+log10(grid_width))+8)`, `D_work=D_floor+ceil(log10(max(max_iter,1)))`, and the overlay keeps floor, working, and delivered precision separate.
 
-Aggregate `rebase_count` remains unavailable in normal rendering. Every Final additionally renders an exact status census in which one `Rgba8Unorm` audit texel sums 255 escape records; at 960 by 540 the audit target is 960 by 3 and the mapped payload is 11,520 bytes. Its target and readback buffer are cached together by census extent. The scene fence alone controls picture delivery: present samples the census callback without waiting when that fence completes, publishes `glitch_pixel_count` only if the mapping is already successful, and otherwise cancels the mapping and leaves the optional fact unavailable. Preview and Interactive keep the fact unavailable, while a failed or slow instrumentation callback can neither delay nor refuse a correct Final.
+Aggregate `rebase_count` remains unavailable in normal rendering. Every completed level renders an exact census in which one `Rgba8Unorm` audit texel covers 255 escape records; at 960 by 540 the audit target is 960 by 3 and the mapped payload is 11,520 bytes. Its target and readback buffer are cached together by census extent. Each texel carries four things about its 255 records: the exact status-one count in red, the best reference candidate's rank in green, that candidate's local offset in blue, and whether the group holds a candidate at all in alpha. The rank is a total order over the records a reference may be taken from: a record that never escaped within this level's cap ranks 255, a glitch that exhausted its reference ranks 254, an escaped record ranks by its own count over 1..253, and a glitch from arithmetic failure ranks 0; equal ranks keep the lowest record index, so the same completed grid always names the same point.
+
+Only the exhaustion glitch says anything about orbit length, which is why the kernel's smooth lane carries the glitch kind: that pixel survived every reference step available to it, while the six arithmetic-failure paths say nothing and would otherwise have steered the reference toward the numerically worst records in the frame. The top rank is a heuristic and not a certificate. A record can report no escape within the cap and still name a point whose exact orbit is far shorter — measured on the zoom-14 seahorse row, where the first candidate reported no escape at a 512 cap while its own reference orbit ended at 251 records — because the rebase recomputes the delta in binary32 and the kernel has no relative-precision test to catch the cancellation. The exchange is therefore bounded rather than monotone, and it is made safe by keeping the longest accepted orbit: an arriving sampled reference that does not lengthen the accepted one is discarded. The scene fence alone controls picture delivery: present samples the census callback without waiting when that fence completes, publishes `glitch_pixel_count` and the candidate only if the mapping is already successful, and otherwise cancels the mapping and leaves both unavailable. `glitch_pixel_count` stays unavailable for Preview and Interactive, while a failed or slow instrumentation callback can neither delay nor refuse a correct Final, and the candidate it did not deliver only means no reference request is made from that grid.
 
 The app installs the panic hook and replaces wgpu's fatal uncaptured-error handler before `Presenter::new`; every present device operation returns or publishes a typed error, and no bare `unreachable`, unchecked surface acquisition, or panic is an error protocol.
 
 Hand-written f64 remains the matrix implementation unless the shared warp oracle fails its `1e−9` bound; `faer` may enter only after that measured failure, never for style or anticipation.
 
-Renderer austerity is one selected image scene pass plus the sole warp pass, no mips, no blend, `cull_mode: None`, one sample, and two retained scene textures total; the packed Final census is an auxiliary measurement render target rather than another image pass, and kernel fragment-compute passes remain data production.
+Renderer austerity is one selected image scene pass plus the sole warp pass, no mips, no blend, `cull_mode: None`, one sample, and two retained scene textures total; the packed census is an auxiliary measurement render target rather than another image pass, and kernel fragment-compute passes remain data production.
 
 ## 5. Oracles and tests
 

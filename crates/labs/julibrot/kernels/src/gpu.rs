@@ -261,6 +261,7 @@ impl JulibrotKernels {
         level: RefinementLevel,
         plane: &Plane,
         screen_to_plane: &Homography,
+        centre_from_reference_px: [f64; 2],
         scale: ScaleSplit,
         params: EscapeParams,
         reference: ReferenceOrbitInput<'_>,
@@ -273,9 +274,10 @@ impl JulibrotKernels {
         }
         let selected = allocation.plan.level(level);
         let used_orbit_length = reference.length.min(selected.iteration_cap);
-        let uniform = PerturbUniform::pack(
+        let uniform = PerturbUniform::pack_referenced(
             *plane,
             screen_to_plane,
+            centre_from_reference_px,
             scale,
             selected.extent,
             delivered_params(params, selected.iteration_cap),

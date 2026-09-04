@@ -166,16 +166,36 @@ struct CountVertex { @builtin(position) position: vec4<f32>, }
     return output;
 }
 @fragment fn glitch_count_fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    if (scene.span.z != 0u) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
+    if (scene.span.z != 0u) { return vec4<f32>(0.0, 0.0, 0.0, 0.0); }
     let group = u32(position.y) * scene.grid.x + u32(position.x);
     let start = group * 255u;
     let active_records = scene.grid.x * scene.grid.y;
+    let cap = max(f32(scene.grid.w), 1.0);
     var count = 0u;
+    var best_rank = 0.0;
+    var best_offset = 0u;
+    var located = 0.0;
     for (var offset = 0u; offset < 255u; offset += 1u) {
         let index = start + offset;
-        if (index < active_records && load_escape(index).w == 1.0) { count += 1u; }
+        if (index >= active_records) { continue; }
+        let record = load_escape(index);
+        if (record.w == 1.0) { count += 1u; }
+        if (malformed(record) || record.w == 2.0 || record.w == 3.0) { continue; }
+        var rank = 255.0;
+        if (record.w == 1.0) {
+            rank = 0.0;
+            if (record.x == -1.0) { rank = 254.0; }
+        } else if (record.y == 1.0) {
+            if (!finite(record.x)) { continue; }
+            rank = 1.0 + floor(252.0 * clamp(ceil(record.x), 0.0, cap) / cap + 0.5);
+        }
+        if (located == 0.0 || rank > best_rank) {
+            best_rank = rank;
+            best_offset = offset;
+            located = 1.0;
+        }
     }
-    return vec4<f32>(f32(count) / 255.0, 0.0, 0.0, 1.0);
+    return vec4<f32>(f32(count) / 255.0, best_rank / 255.0, f32(best_offset) / 255.0, located);
 }
 ";
 
@@ -194,6 +214,22 @@ pub fn scene_shader(limits: DialectLimits) -> String {
 }
 
 /// Instantiates the exact status-one census shader at immutable heap capacities.
+///
+/// Each texel covers 255 consecutive records and carries, in one pass: the exact status-one count
+/// in red, the group's best reference candidate as an iteration rank in green, that candidate's
+/// local offset in blue, and whether the group holds a candidate at all in alpha.
+///
+/// The rank is a total order over the records a reference may be taken from: a record that never
+/// escaped within this grid's cap ranks 255, a glitch that exhausted its reference ranks 254, an
+/// escaped record ranks by its own count over 1..253, and a glitch from arithmetic failure ranks 0.
+/// Only the exhaustion glitch says anything about orbit length — it survived every reference step
+/// available to it — which is why the smooth lane carries the glitch kind and the six arithmetic
+/// failure paths rank below every escaping record instead of above them.
+///
+/// The top rank is a heuristic, not a proof. A record can report no escape within the cap and
+/// still name a point whose exact orbit is much shorter, because the rebase recomputes the delta
+/// in binary32 and no relative-precision test fires; the exchange this rank feeds is therefore
+/// bounded and keeps the longest accepted orbit rather than trusting the certificate.
 #[must_use]
 pub fn glitch_count_shader(limits: DialectLimits) -> String {
     let mut source = HEAP_SCENE_PREFIX
@@ -324,9 +360,21 @@ mod tests {
     fn glitch_census_reads_each_active_status_once() {
         let source = glitch_count_shader(limits());
         assert!(source.contains("let start = group * 255u;"));
-        assert!(source.contains("index < active_records && load_escape(index).w == 1.0"));
+        assert!(source.contains("if (index >= active_records) { continue; }"));
+        assert!(source.contains("if (record.w == 1.0) { count += 1u; }"));
         assert!(source.contains("f32(count) / 255.0"));
         assert!(source.contains("if (scene.span.z != 0u)"));
+        // The rank ladder is the reference-choice policy: never escaped, then the glitch that
+        // exhausted its reference, then the longest-lived escape, then a glitch from arithmetic
+        // failure, with the group's lowest offset kept on a tie.
+        assert!(source.contains("var rank = 255.0;"));
+        assert!(source.contains("if (record.x == -1.0) { rank = 254.0; }"));
+        assert!(
+            source.contains(
+                "rank = 1.0 + floor(252.0 * clamp(ceil(record.x), 0.0, cap) / cap + 0.5);"
+            )
+        );
+        assert!(source.contains("if (located == 0.0 || rank > best_rank)"));
         assert_translates_to_webgl2(&source, naga::ShaderStage::Vertex, "glitch_count_vertex");
         assert_translates_to_webgl2(
             &source,
