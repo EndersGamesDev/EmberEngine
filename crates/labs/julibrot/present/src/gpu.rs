@@ -2292,6 +2292,12 @@ mod tests {
     /// groups, the same four-tier rank, the same unorm quantisation to a byte, and the same
     /// row-padded readback layout. It exists so the decode is exercised against shader-shaped bytes
     /// instead of hand-written ones.
+    #[allow(
+        clippy::float_cmp,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "the mirror reproduces the census fragment's exact comparisons and unorm rounding"
+    )]
     fn census_texels(records: &[[f32; 4]], cap: f32, grid_width: u32) -> (Vec<u8>, [u32; 2], u32) {
         let groups = u32::try_from(records.len().div_ceil(GLITCH_RECORDS_PER_TEXEL as usize))
             .expect("group count fits");

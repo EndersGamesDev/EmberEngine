@@ -1055,8 +1055,8 @@ mod browser {
         OUTPUT_PAGE_SIDE, ReferenceOrbitInput, RefinementLevel, RefinementPlan,
     };
     use ember_julibrot_math::{
-        BigCentre, EscapeParams, ObjectAngles, Plane, PoseMap, PrecisionMode, precision_for,
-        reference_shift_px, scale_split, shallow_pixel_scale, split_centre,
+        BigCentre, EscapeParams, ObjectAngles, Plane, PoseMap, PrecisionMode, pixel_scale,
+        precision_for, reference_shift_px, scale_split, shallow_pixel_scale, split_centre,
     };
     use ember_julibrot_present::{
         FrameState, HotSlot, PresentBackdrop, PresentConfig, PresentEvent, PresentHot, PresentMain,
@@ -1230,6 +1230,8 @@ mod browser {
         accepted_reference: Option<BigCentre>,
         shallow_centre: Option<BigCentre>,
         accepted_reference_zoom_log2: Option<f64>,
+        /// Centre-minus-reference displacement of the latest HOT drain, in requested-extent pixels.
+        centre_from_reference_px: [f64; 2],
         sampled_references: u32,
         sampled_request_at_length: Option<u32>,
         sampled_reference_rounds: u32,
@@ -1392,6 +1394,7 @@ mod browser {
                 accepted_reference: Some(accepted_reference),
                 shallow_centre: None,
                 accepted_reference_zoom_log2: None,
+                centre_from_reference_px: [0.0; 2],
                 sampled_references: 0,
                 sampled_request_at_length: None,
                 sampled_reference_rounds: 0,
@@ -1517,6 +1520,7 @@ mod browser {
             let mut hot = viewer.drain_hot(extent)?;
             self.owner_epoch = hot.state.epoch;
             self.main = hot.state.main;
+            self.centre_from_reference_px = hot.state.hot.centre_from_reference_px;
             self.observe_scene_selection(viewer);
             if !self.loop_state.refinement_pending() && self.presented_view_is_stale(viewer) {
                 self.loop_state.scene_changed(self.main.generation_applied);
@@ -1528,6 +1532,7 @@ mod browser {
                 hot = viewer.drain_hot(self.prepared_extent())?;
                 self.owner_epoch = hot.state.epoch;
                 self.main = hot.state.main;
+                self.centre_from_reference_px = hot.state.hot.centre_from_reference_px;
             }
             self.install_main(viewer, hot.pose.object, hot.plane, hot.pose.map);
             let mut slot = HotSlot::for_refresh(self.refresh_id, self.hot_stride, hot.state.epoch)
@@ -2698,6 +2703,20 @@ mod browser {
                         let scale =
                             scale_split(sampling_zoom, backdrop.plan.level(level).extent.width)
                                 .map_err(math_error)?;
+                        // The backdrop samples the same view at its own width and apron-widened
+                        // zoom, so the drained displacement is re-expressed in this grid's pixels:
+                        // a fixed plane offset costs pixels in inverse proportion to pixel scale.
+                        let backdrop_pixel =
+                            pixel_scale(sampling_zoom, backdrop.plan.level(level).extent.width)
+                                .map_err(math_error)?;
+                        let requested_pixel = pixel_scale(
+                            viewer.requested().zoom_log2,
+                            self.plan.requested_extent.width,
+                        )
+                        .map_err(math_error)?;
+                        let ratio = requested_pixel / backdrop_pixel;
+                        let centre_from_reference =
+                            self.centre_from_reference_px.map(|value| value * ratio);
                         self.kernels
                             .encode_perturbation(
                                 &self.executor,
@@ -2708,6 +2727,7 @@ mod browser {
                                 level,
                                 &plane,
                                 &screen_to_plane,
+                                centre_from_reference,
                                 scale,
                                 params,
                                 ReferenceOrbitInput {
