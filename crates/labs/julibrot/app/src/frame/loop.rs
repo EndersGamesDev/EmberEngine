@@ -411,7 +411,7 @@ mod browser {
     const HANDLE_CAPACITY: u32 = 128;
     const DIRECTORY_BYTES: u32 = SPAN_CAPACITY * 16 + HANDLE_CAPACITY * 4;
     const MAX_HEADER_PAGES: u32 = 64;
-    const MAX_HEADER_SETS: u32 = 6;
+    const MAX_HEADER_SETS: u32 = 9;
 
     #[derive(Debug)]
     struct RegisteredOrbit {
@@ -477,6 +477,8 @@ mod browser {
     struct BackdropGrid {
         plan: RefinementPlan,
         grid: EscapeGrid,
+        spare_grid: Option<EscapeGrid>,
+        grid_round: u64,
         ready: Option<BackdropReady>,
         in_flight: Option<BackdropFlight>,
     }
@@ -630,6 +632,9 @@ mod browser {
             let grid = kernels
                 .allocate_grid(&mut executor, &plan)
                 .map_err(kernel_error)?;
+            let spare_grid = kernels
+                .allocate_grid(&mut executor, &plan)
+                .map_err(kernel_error)?;
             let config = PresentConfig {
                 surface_format: runtime.surface_format(),
                 min_uniform_buffer_offset_alignment: device
@@ -692,6 +697,8 @@ mod browser {
                 reference_upload,
                 plan,
                 grid,
+                spare_grid: Some(spare_grid),
+                grid_round: loop_state.ladder_round(),
                 backdrop: None,
                 active_backdrop_map: None,
                 coverage_turn: super::CoverageTurn::Backdrop,
@@ -835,7 +842,9 @@ mod browser {
             } else {
                 WarpValidation::Ordinary
             };
-            let hold_refused_warp = self.loop_state.hold_refused_warp();
+            let hold_refused_warp = self
+                .loop_state
+                .hold_refused_warp(self.presenter.facts().completed_scene_id.is_some());
             self.presenter.write_hot(
                 slot,
                 PresentHot {

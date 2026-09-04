@@ -29,7 +29,7 @@ use redraw::relief_scene_uniform;
 use scene::{
     create_depth_target, create_scene_pipeline, create_scene_texture, encode_scene,
     encode_scene_mesh, ensure_backdrop_indices, ensure_depth, ensure_indices, ensure_scene_texture,
-    extent_3d, validate_backdrop, validate_extent, validate_grid,
+    extent_3d, validate_backdrop, validate_extent, validate_grid, validate_grid_parts,
 };
 use uniforms::{
     create_heap_layout, create_scene_layout, create_warp_hot_layout, create_warp_texture_layout,

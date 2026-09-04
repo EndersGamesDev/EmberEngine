@@ -257,6 +257,9 @@ impl Presenter {
                 hot_slot.dynamic_offset(),
                 selected.1,
             );
+            if source_slot.held_stale {
+                self.facts.record_warp_hold();
+            }
         }
         encoder.clear_buffer(&self.gpu.warp_fence, 0, Some(FENCE_BYTES));
         self.queue.submit([encoder.finish()]);

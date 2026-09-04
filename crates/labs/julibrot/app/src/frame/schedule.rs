@@ -153,6 +153,8 @@ pub(super) struct FrameLoop {
     pub(super) scene_update_pending: bool,
     pub(super) draft_skipped_count: u64,
     pub(super) last_draft_skip_reason: Option<&'static str>,
+    pub(super) ladder_round: u64,
+    pub(super) auto_hold_round: Option<u64>,
     pub(super) manual_rendering: bool,
     pub(super) restart_after_scene: Option<u32>,
     pub(super) requested_run: bool,
@@ -272,6 +274,7 @@ impl FrameLoop {
         self.schedule.precision_mode = precision_mode;
         match self.scene_mode {
             SceneMode::Auto => {
+                self.ladder_round = self.ladder_round.saturating_add(1);
                 self.schedule.next = Some(RefinementLevel::Preview);
                 self.schedule.in_flight = None;
                 if self.requested_run {
@@ -283,6 +286,7 @@ impl FrameLoop {
     }
 
     pub(super) const fn restart(&mut self, generation: u32) {
+        self.ladder_round = self.ladder_round.saturating_add(1);
         self.schedule.restart(generation);
         self.restart_after_scene = None;
         if self.requested_run {
@@ -316,6 +320,7 @@ impl FrameLoop {
     #[cfg(any(target_arch = "wasm32", test))]
     pub(super) const fn scene_input_resumed(&mut self, generation: u32, level: RefinementLevel) {
         if matches!(self.scene_mode, SceneMode::Auto) || self.manual_rendering {
+            self.ladder_round = self.ladder_round.saturating_add(1);
             self.schedule.resume_at(generation, level);
             self.restart_after_scene = None;
             if self.requested_run {
@@ -434,6 +439,9 @@ impl FrameLoop {
         if completed && self.manual_rendering {
             self.scene_update_pending = false;
         }
+        if completed && level == RefinementLevel::Final {
+            self.auto_hold_round = None;
+        }
         if self.requested_run && !self.schedule.pending() {
             self.completed_run = true;
         }
@@ -467,8 +475,24 @@ impl FrameLoop {
         matches!(self.scene_mode, SceneMode::Manual) && self.scene_update_pending
     }
 
-    pub(super) const fn hold_refused_warp(&self) -> bool {
-        matches!(self.scene_mode, SceneMode::Manual)
+    pub(super) const fn hold_refused_warp(&mut self, has_retained_scene: bool) -> bool {
+        if matches!(self.scene_mode, SceneMode::Manual) {
+            return true;
+        }
+        if !has_retained_scene || !self.refinement_pending() {
+            return false;
+        }
+        match self.auto_hold_round {
+            Some(round) => round == self.ladder_round,
+            None => {
+                self.auto_hold_round = Some(self.ladder_round);
+                true
+            }
+        }
+    }
+
+    pub(super) const fn ladder_round(&self) -> u64 {
+        self.ladder_round
     }
 
     pub(super) const fn draft_skipped_count(&self) -> u64 {

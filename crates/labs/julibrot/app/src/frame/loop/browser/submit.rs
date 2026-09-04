@@ -11,6 +11,14 @@ impl BrowserFrameLoop {
         if self.prepared_level == Some(level) {
             return false;
         }
+        if self.grid_round != self.loop_state.ladder_round() {
+            let spare = self
+                .spare_grid
+                .as_mut()
+                .expect("every main ladder owns one alternate record grid");
+            std::mem::swap(&mut self.grid, spare);
+            self.grid_round = self.loop_state.ladder_round();
+        }
         self.prepared_level = Some(level);
         level == RefinementLevel::Final
     }
@@ -180,6 +188,11 @@ impl BrowserFrameLoop {
         if next == self.plan {
             return Ok(());
         }
+        if let Some(spare) = self.spare_grid.take() {
+            self.kernels
+                .free_grid(&mut self.executor, spare)
+                .map_err(kernel_error)?;
+        }
         let next_grid = self
             .kernels
             .allocate_grid(&mut self.executor, &next)
@@ -188,7 +201,13 @@ impl BrowserFrameLoop {
         self.kernels
             .free_grid(&mut self.executor, old_grid)
             .map_err(kernel_error)?;
+        self.spare_grid = Some(
+            self.kernels
+                .allocate_grid(&mut self.executor, &next)
+                .map_err(kernel_error)?,
+        );
         self.plan = next;
+        self.grid_round = self.loop_state.ladder_round();
         Ok(())
     }
 
@@ -202,6 +221,11 @@ impl BrowserFrameLoop {
         }
         self.release_backdrop()?;
         let next_plan = self.plan.with_precision_mode(next);
+        if let Some(spare) = self.spare_grid.take() {
+            self.kernels
+                .free_grid(&mut self.executor, spare)
+                .map_err(kernel_error)?;
+        }
         let next_grid = self
             .kernels
             .allocate_grid(&mut self.executor, &next_plan)
@@ -222,6 +246,12 @@ impl BrowserFrameLoop {
         self.kernels
             .free_grid(&mut self.executor, old_grid)
             .map_err(kernel_error)?;
+        self.spare_grid = Some(
+            self.kernels
+                .allocate_grid(&mut self.executor, &next_plan)
+                .map_err(kernel_error)?,
+        );
+        self.grid_round = self.loop_state.ladder_round();
         self.prepared_level = None;
         self.scene_selection = None;
         Ok(())
