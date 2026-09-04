@@ -12,6 +12,7 @@
 mod feel;
 mod online;
 mod props;
+mod rounds;
 mod sound;
 
 use ember_engine::glam::Vec3;
@@ -259,10 +260,17 @@ pub fn run_online(cfg: OnlineConfig) -> Result<(), String> {
     let prop_meshes = props::prop_meshes();
     let prop_fits = props::measure(&prop_meshes);
     meshes.extend(prop_meshes);
+    // The rounds (arena v20): the five bullet meshes, the streak cone, the
+    // core frustum and the hole disc, after the props, in `rounds::Round`
+    // order with the streak, the core and then the disc last.
+    let rounds_base =
+        u32::try_from(meshes.len()).map_err(|_| "prop mesh count exceeds u32".to_string())? + 1;
+    meshes.extend(rounds::round_meshes());
     let mut game = online::ShooterGame::connect(&cfg, assets)?;
     game.set_env_base(env_base);
     game.set_parts(parts);
     game.set_props(props_base, &prop_fits);
+    game.set_rounds(rounds_base);
     ember_engine::run(
         EngineConfig {
             title: format!("ember arena — {}", cfg.lobby),

@@ -18,6 +18,7 @@ use arena_core::shooter::{
 use ember_engine::Rumble;
 use ember_engine::glam::{Quat, Vec2, Vec3};
 
+use crate::rounds;
 use crate::sound::{Dist, SPEED_OF_SOUND, Sfx};
 
 /// The sidearm's glow, the accent every fallback part list inherits.
@@ -42,14 +43,15 @@ pub struct WeaponFeel {
     pub yaw_alt: f32,
     /// The pad's answer to one round.
     pub rumble: Rumble,
-    /// Muzzle flash cube edge, and how long it shows.
+    /// Muzzle flash size (the star's petal length; `online::push_flash`
+    /// sizes the star from it), and how long it shows.
     pub flash: f32,
     pub flash_ms: f32,
-    /// Tracer rod: length, thickness, colour; and the hot head's size.
+    /// The streak's colour; and the exhaust rod behind a rocket in flight
+    /// (length, thickness), the one round still drawn from the state.
     pub tracer_len: f32,
     pub tracer_thick: f32,
     pub tracer: Vec3,
-    pub head: f32,
     /// The strip colour on the viewmodel and the fallback mesh, so a weapon
     /// whose node is missing still reads as itself.
     pub accent: Vec3,
@@ -90,7 +92,6 @@ pub const fn weapon_feel(id: u8) -> WeaponFeel {
             tracer_len: 0.45,
             tracer_thick: 0.06,
             tracer: Vec3::new(1.0, 0.95, 0.70),
-            head: 0.16,
             accent: Vec3::new(1.0, 0.90, 0.40),
             sound: Sfx::ShotVityazNear,
             volume: 0.45,
@@ -111,7 +112,6 @@ pub const fn weapon_feel(id: u8) -> WeaponFeel {
             tracer_len: 0.9,
             tracer_thick: 0.08,
             tracer: Vec3::new(1.0, 0.62, 0.2),
-            head: 0.24,
             accent: Vec3::new(1.0, 0.55, 0.15),
             sound: Sfx::ShotAkNear,
             volume: 0.5,
@@ -132,7 +132,6 @@ pub const fn weapon_feel(id: u8) -> WeaponFeel {
             tracer_len: 0.7,
             tracer_thick: 0.07,
             tracer: Vec3::new(1.0, 1.0, 1.0),
-            head: 0.20,
             accent: Vec3::new(0.90, 0.92, 0.98),
             sound: Sfx::ShotM4Near,
             // The M4 at nine tenths of the AK's volume.
@@ -154,7 +153,6 @@ pub const fn weapon_feel(id: u8) -> WeaponFeel {
             tracer_len: 1.0,
             tracer_thick: 0.11,
             tracer: Vec3::new(1.0, 1.0, 0.95),
-            head: 0.28,
             accent: Vec3::new(1.0, 0.25, 0.20),
             sound: Sfx::ShotRevolverNear,
             volume: 0.55,
@@ -175,7 +173,6 @@ pub const fn weapon_feel(id: u8) -> WeaponFeel {
             tracer_len: 1.6,
             tracer_thick: 0.05,
             tracer: Vec3::new(0.75, 1.0, 1.0),
-            head: 0.20,
             accent: Vec3::new(0.40, 0.95, 1.0),
             sound: Sfx::ShotSniperNear,
             volume: 0.6,
@@ -199,7 +196,6 @@ pub const fn weapon_feel(id: u8) -> WeaponFeel {
             tracer_len: 0.6,
             tracer_thick: 0.09,
             tracer: Vec3::new(1.0, 0.50, 0.15),
-            head: 0.0,
             accent: Vec3::new(1.0, 0.35, 0.10),
             sound: Sfx::ShotRpgNear,
             volume: 0.55,
@@ -221,7 +217,6 @@ pub const fn weapon_feel(id: u8) -> WeaponFeel {
             tracer_thick: 0.075,
             // Today's streak: GLOW_BLUE at 0.55.
             tracer: Vec3::new(0.11, 0.3575, 0.55),
-            head: 0.22,
             accent: GLOW_BLUE,
             sound: Sfx::ShotSidearmNear,
             volume: 0.5,
@@ -669,10 +664,12 @@ pub fn hill_marker(hill: &Hill) -> (Vec3, Vec3) {
 // `Audio` calls, and the tests here pin the numbers without a frame.
 
 /// A round's streak, from one `S2C::Shot`: the segment it flew and when it
-/// was seen. The bright head is replayed along the segment at the weapon's
-/// own speed from `born`, so a streak reads as something that flew rather
-/// than as a line that appeared, and the whole thing outlives the flight by
-/// `TRACER_LINGER` while its rods thin out.
+/// was seen. The head is replayed along the segment at the weapon's own
+/// speed from `born`, so a streak reads as something that flew rather than
+/// as a line that appeared, and the whole thing outlives the flight by
+/// `TRACER_LINGER` while its rods thin out. What the frame draws at the
+/// head is the round itself (`rounds::round_for`), and each rod is a
+/// tapered streak behind it; the rods here are the where and the how long.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tracer {
     pub from: Vec3,
@@ -681,10 +678,6 @@ pub struct Tracer {
     pub born: f32,
 }
 
-/// The core rod: thin, the weapon's colour at full, from the head back.
-pub const TRACER_CORE_THICK: f32 = 0.03;
-/// The tail rod: thicker, dimmer, behind the core.
-pub const TRACER_TAIL_THICK: f32 = 0.06;
 /// How far behind the head the core reaches, metres.
 pub const TRACER_CORE_LEN: f32 = 2.5;
 /// How far behind the head the tail reaches, metres.
@@ -695,13 +688,14 @@ pub const TRACER_LINGER: f32 = 0.12;
 pub const TRACER_TAIL_DIM: f32 = 0.45;
 
 /// One opaque rod of a tracer: where its centre is, how long it is along
-/// the flight direction, how thick, what colour. The renderer draws it as a
-/// box scaled `(len, thick, thick)` and rotated from +X onto the direction.
+/// the flight direction, what colour. How thick is not the rod's to say:
+/// the frame draws it as a streak (`rounds`) whose base radius is the
+/// round's drawn heel times `rounds::STREAK_LEAD` times `Tracer::fade`,
+/// a frustum for the core with a cone behind it, or a cone alone.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rod {
     pub center: Vec3,
     pub len: f32,
-    pub thick: f32,
     pub color: Vec3,
 }
 
@@ -751,11 +745,28 @@ impl Tracer {
         now - self.born < self.life()
     }
 
+    /// Whether the round is still flying at `now`: the head has not
+    /// reached the end of the segment. The frame draws the round itself
+    /// only then; through the linger only the streak remains.
+    #[must_use]
+    pub fn flying(&self, now: f32) -> bool {
+        self.alive(now) && self.progress(now) < self.len()
+    }
+
+    /// How much of the streak is left at `now`: 1 through the flight,
+    /// falling to 0 over the last `TRACER_LINGER` seconds of the life.
+    #[must_use]
+    pub fn fade(&self, now: f32) -> f32 {
+        let remaining = self.life() - (now - self.born);
+        (remaining / TRACER_LINGER).clamp(0.0, 1.0)
+    }
+
     /// The rods to draw at `now`: the core from the head back, then the
-    /// tail behind the core (never overlapping it: a thin box inside a
-    /// thick one is invisible, so the tail starts where the core ends), both
-    /// thinned by the fade over the last `TRACER_LINGER` seconds. Nothing
-    /// before the head has left the muzzle or after the streak is gone.
+    /// tail behind the core (never overlapping it: one opaque shape inside
+    /// another is invisible, so the tail starts where the core ends). The
+    /// frame thins both by `fade` over the last `TRACER_LINGER` seconds.
+    /// Nothing before the head has left the muzzle or after the streak is
+    /// gone.
     #[must_use]
     pub fn rods(&self, now: f32) -> Vec<Rod> {
         let mut rods = Vec::with_capacity(2);
@@ -766,8 +777,6 @@ impl Tracer {
         if progress <= 1e-3 {
             return rods;
         }
-        let remaining = self.life() - (now - self.born);
-        let fade = (remaining / TRACER_LINGER).clamp(0.0, 1.0);
         let dir = self.dir();
         let head = self.head(now);
         let color = weapon_feel(self.weapon).tracer;
@@ -775,7 +784,6 @@ impl Tracer {
         rods.push(Rod {
             center: head - dir * (core * 0.5),
             len: core,
-            thick: TRACER_CORE_THICK * fade,
             color,
         });
         let tail = progress.min(TRACER_TAIL_LEN) - core;
@@ -783,7 +791,6 @@ impl Tracer {
             rods.push(Rod {
                 center: head - dir * (core + tail * 0.5),
                 len: tail,
-                thick: TRACER_TAIL_THICK * fade,
                 color: color * TRACER_TAIL_DIM,
             });
         }
@@ -1023,7 +1030,7 @@ pub fn ricochets(to: [f32; 3]) -> bool {
 }
 
 /// The muzzle plume: four grey cubes off `at` drifting along `dir` and
-/// rising, a quarter second, beside the flash cube.
+/// rising, a quarter second, beside the flash star.
 #[must_use]
 pub fn plume(at: Vec3, dir: Vec3) -> Vec<Puff> {
     let (_, t1, t2) = tangents(dir);
@@ -1071,13 +1078,20 @@ pub fn fall_secs(height: f32, vy: f32) -> f32 {
     (vy + (vy * vy + 2.0 * CASING_GRAVITY * height).sqrt()) / CASING_GRAVITY
 }
 
-/// An impact mark: a near-black plate laid flat on the surface a round hit,
-/// so a fight leaves its history on the containers.
+/// An impact mark: a near-black hole laid flat on the surface a round hit,
+/// so a fight leaves its history on the containers. It was a 0.1 m square
+/// plate whatever hit; through the sniper's scope at 4.7 m the plate filled
+/// the view as one black square. Now it is a disc (`rounds::DISC_OFFSET`)
+/// sized by the round that made it (`Mark::diameter`), so the weapon rides
+/// along.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Mark {
     pub pos: Vec3,
     /// Unit outward normal of the surface.
     pub normal: Vec3,
+    /// The weapon that fired the round, from the `Shot` event: what sizes
+    /// the hole.
+    pub weapon: u8,
     pub born: f32,
 }
 
@@ -1085,11 +1099,19 @@ pub struct Mark {
 pub const MARK_CAP: usize = 96;
 /// Seconds a mark stays.
 pub const MARK_SECS: f32 = 20.0;
-/// The plate's edge, its thickness, and how far it stands off the surface
-/// so it never z-fights the face it sits on.
-pub const MARK_SIZE: f32 = 0.10;
-pub const MARK_THICK: f32 = 0.01;
-pub const MARK_LIFT: f32 = 0.006;
+/// A bullet's hole is this many calibres across: a 9 mm leaves 27 mm, a
+/// .338 Lapua 26 mm, a .454 Casull 35 mm. Real holes in sheet steel are
+/// nearer one calibre, but the mark is the only lasting trace of a hit
+/// and at one calibre it is under a pixel past a few metres.
+pub const MARK_CALIBRES: f32 = 3.0;
+/// The rocket's blast mark: its diameter, metres.
+pub const ROCKET_MARK: f32 = 0.5;
+/// The hole's depth (the disc's thickness along the normal) and how far its
+/// back face stands off the surface, so it never z-fights the face it sits
+/// on: 1 mm, as the plate's near face stood.
+pub const MARK_THICK: f32 = 0.004;
+pub const MARK_LIFT: f32 = 0.001;
+const _: () = assert!(MARK_LIFT > 0.0 && MARK_LIFT < MARK_THICK);
 pub const MARK_COLOR: Vec3 = Vec3::splat(0.04);
 
 /// The event's axis normal as a unit vector; zero (a peer that sent none)
@@ -1105,15 +1127,26 @@ pub fn mark_normal(n: [i8; 3]) -> Vec3 {
 }
 
 impl Mark {
-    /// Where the plate's box goes: its centre lifted off the surface, its
-    /// thin axis turned onto the normal (scale applies before rotation, so
-    /// the box is thin along its own +Y and +Y is rotated onto the normal).
+    /// The hole's diameter, metres: `MARK_CALIBRES` times the round's real
+    /// calibre for a bullet weapon, `ROCKET_MARK` for the rocket.
+    #[must_use]
+    pub fn diameter(&self) -> f32 {
+        rounds::round_for(self.weapon)
+            .map_or(ROCKET_MARK, |r| r.calibre_mm().0 * MARK_CALIBRES * 0.001)
+    }
+
+    /// Where the hole's disc goes: its back face lifted `MARK_LIFT` off the
+    /// surface, its thickness along the normal (scale applies before
+    /// rotation, so the disc, radius 1 in its YZ plane and thick along its
+    /// own +X from 0 to 1, is scaled `(thick, r, r)` and +X is rotated onto
+    /// the normal).
     #[must_use]
     pub fn placement(&self) -> (Vec3, Vec3, Quat) {
+        let r = self.diameter() * 0.5;
         (
             self.pos + self.normal * MARK_LIFT,
-            Vec3::new(MARK_SIZE, MARK_THICK, MARK_SIZE),
-            Quat::from_rotation_arc(Vec3::Y, self.normal),
+            Vec3::new(MARK_THICK, r, r),
+            Quat::from_rotation_arc(Vec3::X, self.normal),
         )
     }
 
@@ -1305,23 +1338,28 @@ mod feel_tests {
             let (core, tail) = (rods[0], rods[1]);
             assert!((core.len - TRACER_CORE_LEN).abs() < 1e-4);
             assert!((core.center - (head - Vec3::Z * 1.25)).length() < 1e-3);
-            assert_eq!(core.thick, TRACER_CORE_THICK);
             assert_eq!(core.color, weapon_feel(id).tracer);
             assert!((tail.len - (TRACER_TAIL_LEN - TRACER_CORE_LEN)).abs() < 1e-4);
             let tail_front = tail.center + Vec3::Z * (tail.len * 0.5);
             let core_back = core.center - Vec3::Z * (core.len * 0.5);
             assert!((tail_front - core_back).length() < 1e-3, "tail meets core");
-            assert_eq!(tail.thick, TRACER_TAIL_THICK);
             assert_eq!(tail.color, weapon_feel(id).tracer * TRACER_TAIL_DIM);
             // Just after leaving: only the core, and only as long as the
             // head has travelled.
             let early = t.rods(3.0 + 0.5 / s.speed_max);
             assert_eq!(early.len(), 1);
             assert!((early[0].len - 0.5).abs() < 1e-3);
-            // The fade: half way through the linger both rods are half as
-            // thick.
+            // The fade: half way through the linger the streak is half as
+            // wide, and both rods are still there to be drawn.
             let half = t.rods(3.0 + flight + TRACER_LINGER * 0.5);
-            assert!((half[0].thick - TRACER_CORE_THICK * 0.5).abs() < 1e-3);
+            assert_eq!(half.len(), 2, "both rods through the linger");
+            assert!((t.fade(3.0 + flight + TRACER_LINGER * 0.5) - 0.5).abs() < 1e-3);
+            assert_eq!(t.fade(now), 1.0, "no fade in flight");
+            // The round itself flies until the head lands, and not
+            // through the linger.
+            assert!(t.flying(now));
+            assert!(!t.flying(3.0 + flight + 1e-3), "landed");
+            assert!(!t.flying(3.0 + flight + TRACER_LINGER + 1.0), "gone");
         }
         // A degenerate segment has a direction and no rods.
         let dot = Tracer {
@@ -1472,6 +1510,7 @@ mod feel_tests {
             let m = Mark {
                 pos: Vec3::new(k as f32, 0.0, 0.0),
                 normal: Vec3::Y,
+                weapon: 3,
                 born: k as f32 * 0.01,
             };
             add_mark(&mut marks, m);
@@ -1486,22 +1525,60 @@ mod feel_tests {
         assert_eq!(marks.len(), MARK_CAP - 1);
         expire_marks(&mut marks, 1000.0);
         assert!(marks.is_empty());
-        // The plate lies on the face, lifted off it, thin along the normal.
+        // The hole lies on the face, its back lifted 1 mm off it, its
+        // thickness along the normal.
         let m = Mark {
             pos: Vec3::new(5.0, 1.0, 2.0),
             normal: -Vec3::X,
+            weapon: 3,
             born: 0.0,
         };
         let (pos, scale, rot) = m.placement();
         assert_eq!(pos, Vec3::new(5.0 - MARK_LIFT, 1.0, 2.0));
-        assert_eq!(scale, Vec3::new(MARK_SIZE, MARK_THICK, MARK_SIZE));
+        let r = m.diameter() * 0.5;
+        assert_eq!(scale, Vec3::new(MARK_THICK, r, r));
         assert!(
-            (rot * Vec3::Y + Vec3::X).length() < 1e-5,
-            "thin axis on the normal"
+            (rot * Vec3::X + Vec3::X).length() < 1e-5,
+            "thickness on the normal"
         );
         assert_eq!(mark_normal([0, 0, -1]), -Vec3::Z);
         assert_eq!(mark_normal([0, 0, 0]), Vec3::Y, "no normal lies flat");
         assert!(m.alive(MARK_SECS - 0.1) && !m.alive(MARK_SECS));
+    }
+
+    /// A mark is a hole three calibres across, not the 0.1 m square plate
+    /// it was: through the sniper's 20x scope at 4.7 m the plate filled
+    /// the view as one black square. A 9 mm leaves 27 mm, the AK's 7.9 mm
+    /// 24 mm, the M4's 5.7 mm 17 mm, the Casull 35 mm, the Lapua 26 mm;
+    /// the rocket's blast mark is half a metre; and the disc is thinner
+    /// than any hole is wide, with its 1 mm stand-off kept.
+    #[test]
+    fn a_mark_is_a_hole_three_calibres_wide_not_a_square_plate() {
+        let mark = |weapon: u8| Mark {
+            pos: Vec3::ZERO,
+            normal: Vec3::Y,
+            weapon,
+            born: 0.0,
+        };
+        let mm = |weapon: u8| (mark(weapon).diameter() * 1000.0).round();
+        assert_eq!(mm(1), 27.0, "the sidearm's 9 mm");
+        assert_eq!(mm(2), 27.0, "the Vityaz shares it");
+        assert_eq!(mm(3), 24.0, "the AK's 7.9 mm");
+        assert_eq!(mm(4), 17.0, "the M4's 5.7 mm");
+        assert_eq!(mm(5), 35.0, "the .454 Casull");
+        assert_eq!(mm(6), 26.0, "the .338 Lapua");
+        assert_eq!(mm(7), 500.0, "the rocket's blast");
+        assert_eq!(mm(0), 27.0, "an id off the table is the sidearm's");
+        for weapon in 1..=7 {
+            let m = mark(weapon);
+            let (_, scale, _) = m.placement();
+            assert!(scale.x < scale.y, "id {weapon}: thinner than wide");
+            assert_eq!(scale.y, scale.z, "id {weapon}: round");
+            assert!(
+                scale.y * 2.0 < 0.1 || weapon == 7,
+                "id {weapon}: a bullet's hole is under the old plate"
+            );
+        }
     }
 
     #[test]

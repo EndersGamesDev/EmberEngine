@@ -19,8 +19,9 @@ use ember_engine::{
 };
 use serde::Deserialize;
 
-use crate::feel::{self, Climb, Cue, GLOW_BLUE, Mark, Play, Puff, Shake, Tracer, weapon_feel};
+use crate::feel::{self, Climb, Cue, GLOW_BLUE, Mark, Play, Puff, Rod, Shake, Tracer, weapon_feel};
 use crate::props::{LOOT_SPENT_TINT, Prop, Props, tex};
+use crate::rounds::{self, Round, Rounds};
 use crate::sound::{Audio, BUDGET, Dist, Sfx};
 
 /// What a part does when the weapon fires (v15). Decided by the part's
@@ -351,7 +352,12 @@ fn debug_camera() -> Option<Camera> {
 /// only way to a looted gun in play is a random roll. Cosmetic like
 /// `EMBER_CAM`: the sim's weapon, ammo and cooldown are untouched, so a
 /// shot fired under it still leaves the sidearm's magazine. Parsed once;
-/// None when unset or malformed (and always None on the web).
+/// None when unset or malformed (and always None on the web). The third
+/// of the set is `EMBER_ROUNDS=1` (`debug_rounds`), which hangs every v20
+/// shape (the five rounds, a streak, two holes, a flash star) half a metre
+/// in front of the eye so they can be judged in one frame: a round crosses
+/// the view in one frame at its real speed, so no capture of play shows
+/// one.
 fn debug_weapon() -> Option<u8> {
     static WEAPON: std::sync::OnceLock<Option<u8>> = std::sync::OnceLock::new();
     *WEAPON.get_or_init(|| {
@@ -368,6 +374,14 @@ fn debug_weapon() -> Option<u8> {
 /// when one is set, else the real one.
 fn shown_weapon(id: u8) -> u8 {
     debug_weapon().unwrap_or(id)
+}
+
+/// Whether `EMBER_ROUNDS` is "1": the round showcase (`push_showcase`) is
+/// drawn every frame. Read once, native only, like `EMBER_WEAPON`.
+#[cfg(not(target_arch = "wasm32"))]
+fn debug_rounds() -> bool {
+    static ROUNDS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ROUNDS.get_or_init(|| std::env::var("EMBER_ROUNDS").is_ok_and(|v| v.trim() == "1"))
 }
 
 /// The artist-made SWAT operator, split one mesh per rig joint by
@@ -425,6 +439,50 @@ pub fn part_meshes(
 /// it stands for.
 const fn weapon_accent(id: u8) -> Vec3 {
     weapon_feel(id).accent
+}
+
+/// The native crosshair: how far ahead of the eye it sits, how long each
+/// of its two bars is and how thick, metres at hip field of view. The
+/// same 1.2 m as the hit markers, so a wall closer than that occludes
+/// both the same way. At 1.2 m under a 70 degree field a metre is 0.60
+/// screen heights, so 16 mm is ten pixels on a 1080-line screen (six on
+/// 600, twenty on 2160) and 3 mm is two (one on 600, four on 2160): a
+/// fine "+" at every size. The thickness must be over one pixel: the
+/// screen's centre is a pixel boundary on any even height, and a bar
+/// thinner than a pixel there straddles two pixel centres without
+/// covering either, so the first cut's 1.5 mm (0.66 px at 600 lines,
+/// 0.96 at 1080) drew nothing at all in the first capture. The web page
+/// has no use for it: its `div#crosshair` is the crosshair there.
+#[cfg(not(target_arch = "wasm32"))]
+const CROSSHAIR_DIST: f32 = 1.2;
+#[cfg(not(target_arch = "wasm32"))]
+const CROSSHAIR_LEN: f32 = 0.016;
+#[cfg(not(target_arch = "wasm32"))]
+const CROSSHAIR_THICK: f32 = 0.003;
+#[cfg(not(target_arch = "wasm32"))]
+const CROSSHAIR_COLOR: Vec3 = Vec3::ONE;
+
+/// Push the two white hairline bars of a "+" at the centre of the view:
+/// one along the camera's right, one along its up, both scaled by
+/// `view_scale` like the hit markers so the cross keeps its size on
+/// screen as the field narrows. The up is the camera's own (the right
+/// crossed with the look), the same basis the hit markers use, so neither
+/// overlay foreshortens as the aim pitches. Scale applies before rotation:
+/// a cube long in X is turned onto the right, one long in Y onto the up.
+#[cfg(not(target_arch = "wasm32"))]
+fn push_crosshair(frame: &mut Frame, eye: Vec3, look: Vec3, right: Vec3, view_scale: f32) {
+    let up = right.cross(look).normalize();
+    let center = eye + look * CROSSHAIR_DIST;
+    let len = CROSSHAIR_LEN * view_scale;
+    let thick = CROSSHAIR_THICK * view_scale;
+    frame.instances.push(
+        Instance::new(center, Vec3::new(len, thick, thick), CROSSHAIR_COLOR)
+            .with_rot(Quat::from_rotation_arc(Vec3::X, right)),
+    );
+    frame.instances.push(
+        Instance::new(center, Vec3::new(thick, len, thick), CROSSHAIR_COLOR)
+            .with_rot(Quat::from_rotation_arc(Vec3::Y, up)),
+    );
 }
 
 /// The mechanical state of the weapon, for the parts that move.
@@ -816,14 +874,233 @@ impl From<Puff> for Fx {
     }
 }
 
-/// A remote muzzle flash (v20): one cube at a shooter's muzzle from the
-/// `Shot` event, gone at `until`. Remote flashes used to wait for a state
-/// that happened to carry the round; at real speeds most never did.
+/// A remote muzzle flash (v20): a star at a shooter's muzzle from the
+/// `Shot` event, along the round's direction, gone at `until`. Remote
+/// flashes used to wait for a state that happened to carry the round; at
+/// real speeds most never did.
 #[derive(Clone, Copy)]
 struct Flash {
     pos: Vec3,
+    /// The bore: the shot's direction, which the star's forward cone
+    /// follows and its four petals stand square to.
+    dir: Vec3,
     size: f32,
     until: f32,
+}
+
+/// The muzzle flash colour: a hot yellow-white, the same for every gun.
+const FLASH_COLOR: Vec3 = Vec3::new(1.0, 0.9, 0.5);
+/// The star's cones as fractions of the weapon's `flash` size: every
+/// cone's base radius, the four petals' length, the forward cone's length.
+const FLASH_BASE: f32 = 0.22;
+const FLASH_PETAL: f32 = 1.0;
+const FLASH_FORWARD: f32 = 1.6;
+
+/// Push a muzzle flash as a star of five streak cones radiating from the
+/// muzzle: four petals in the plane square to the bore (up, down, left and
+/// right of it), each with its base ring at the muzzle and its point
+/// `size` away, and one longer cone forward along the bore, its point
+/// `size * FLASH_FORWARD` out. Nothing back along the bore: that would
+/// point into the gun. What stood here was one opaque cube of edge `size`,
+/// a block on the end of the barrel in every capture; the star is opaque
+/// too (the scene pass has no blending), but five thin spikes read as a
+/// flash where a cube reads as a box. The plane's basis is the bore
+/// crossed with the world up, or with the world Z when the bore is near
+/// vertical and that cross would vanish; which way the petals turn round
+/// the bore does not show, the four being symmetric. Scale before
+/// rotation: the cone is long in +X, turned onto each spike's direction.
+fn push_flash(frame: &mut Frame, rs: Rounds, muzzle: Vec3, dir: Vec3, size: f32) {
+    let bore = if dir.length_squared() < 1e-6 {
+        Vec3::X
+    } else {
+        dir.normalize()
+    };
+    let seed = if bore.y.abs() > 0.99 {
+        Vec3::Z
+    } else {
+        Vec3::Y
+    };
+    let across = bore.cross(seed).normalize();
+    let up = across.cross(bore).normalize();
+    let base = size * FLASH_BASE;
+    let mut cone = |d: Vec3, len: f32| {
+        frame.instances.push(
+            Instance::new(muzzle, Vec3::new(len, base, base), FLASH_COLOR)
+                .with_rot(Quat::from_rotation_arc(Vec3::X, d))
+                .with_mesh(rs.streak()),
+        );
+    };
+    for d in [up, -up, across, -across] {
+        cone(d, size * FLASH_PETAL);
+    }
+    cone(bore, size * FLASH_FORWARD);
+}
+
+/// Push a round in flight: its mesh at `pos`, nose along `dir`, at
+/// `ROUND_SCALE` times its calibre, untinted (the jacket picture is the
+/// colour). A round is a body of revolution, so `from_rotation_arc` has
+/// no roll to get wrong on it.
+fn push_round(frame: &mut Frame, rs: Rounds, round: Round, pos: Vec3, dir: Vec3) {
+    frame.instances.push(
+        Instance::new(pos, Vec3::splat(rounds::ROUND_SCALE), Vec3::ONE)
+            .with_rot(Quat::from_rotation_arc(Vec3::X, dir))
+            .with_mesh(rs.mesh(round)),
+    );
+}
+
+/// Push the streak behind a round whose head is at `head` flying along
+/// `dir`: the tracer's rods (`Tracer::rods`, the core from the head back
+/// and the tail behind it) as one taper. The core is a frustum whose base
+/// (its fat end) sits `STREAK_INSET` inside the round's tail, so the
+/// bullet leads it and the two base discs never share a plane, and whose
+/// back end is where the core rod ends; the tail is a cone whose base is
+/// the frustum's narrow end (`CORE_NECK` of the base) and whose point
+/// trails. A core with no tail behind it is the cone, so a streak always
+/// ends in a point. The base radius is the round's drawn heel times
+/// `STREAK_LEAD` times `fade`, so the streak thins out through the
+/// linger. Scale is applied before rotation, so a shape long in +X is
+/// turned onto MINUS the flight direction.
+fn push_streak(
+    frame: &mut Frame,
+    rs: Rounds,
+    round: Round,
+    head: Vec3,
+    dir: Vec3,
+    rods: &[Rod],
+    fade: f32,
+) {
+    let half_len = round.length() * 0.5 * rounds::ROUND_SCALE;
+    let r = round.heel_radius() * rounds::ROUND_SCALE * rounds::STREAK_LEAD * fade;
+    let back = Quat::from_rotation_arc(Vec3::X, -dir);
+    for (i, rod) in rods.iter().enumerate() {
+        let rear = rod.center - dir * (rod.len * 0.5);
+        // The core's front is inside the round; the tail's is where the
+        // core ends, at the frustum's narrow end.
+        let (front, radius) = if i == 0 {
+            let to_base = half_len * (1.0 - rounds::STREAK_INSET);
+            (head - dir * to_base, r)
+        } else {
+            (rod.center + dir * (rod.len * 0.5), r * rounds::CORE_NECK)
+        };
+        let len = (front - rear).dot(dir);
+        if len <= 1e-4 {
+            // The head has barely left the round's own length: the round
+            // covers it.
+            continue;
+        }
+        // A rod with another behind it wears the frustum; the last one,
+        // the cone.
+        let last = i + 1 == rods.len();
+        let mesh = if last { rs.streak() } else { rs.core() };
+        frame.instances.push(
+            Instance::new(front, Vec3::new(len, radius, radius), rod.color)
+                .with_rot(back)
+                .with_mesh(mesh),
+        );
+    }
+}
+
+/// The showcase's layout: how far ahead of the eye it hangs, the gap
+/// between rounds in the top row, the drop from one row to the next, the
+/// streak's length in the second row and the flash star's size in the
+/// third.
+#[cfg(not(target_arch = "wasm32"))]
+const SHOWCASE_DIST: f32 = 0.5;
+#[cfg(not(target_arch = "wasm32"))]
+const SHOWCASE_GAP: f32 = 0.02;
+#[cfg(not(target_arch = "wasm32"))]
+const SHOWCASE_DROP: f32 = 0.06;
+#[cfg(not(target_arch = "wasm32"))]
+const SHOWCASE_STREAK: f32 = 0.4;
+#[cfg(not(target_arch = "wasm32"))]
+const SHOWCASE_FLASH: f32 = 0.08;
+
+/// The round showcase (`EMBER_ROUNDS=1`, native only): every v20 shape
+/// hung in the eye's own frame so the operator can judge each in one
+/// frame, since a round crosses the view in one frame at its real speed
+/// and no capture of play has shown one. `SHOWCASE_DIST` ahead of the
+/// eye, in the basis the scope mask uses (the camera's right, its up,
+/// its look), three rows: the five rounds side by side along the right,
+/// noses along the right so the profile is seen side-on, nose to tail
+/// with `SHOWCASE_GAP` between them (a fixed 0.11 m pitch would overlap
+/// them: the Lapua alone is 0.205 m at `ROUND_SCALE`, so the row is laid
+/// by length instead), each at `ROUND_SCALE` in its jacket;
+/// `SHOWCASE_DROP` below them the Lapua with a streak `SHOWCASE_STREAK`
+/// long behind it exactly as the tracer loop draws one (the core frustum
+/// inset in the tail, the tail cone on its neck, the sniper's tracer
+/// colour, no fade); and a row below that (the second row is too wide to
+/// share; a 4:3 window shows 0.93 m across at this distance) two holes
+/// facing the eye (the AK's 24 mm, then the rocket's 0.5 m blast mark
+/// scaled to a fifth, 0.1 m, so it fits the row: its shape is the same
+/// disc) and one flash star at `SHOWCASE_FLASH`, its bore half toward
+/// the eye's right and half down the look so both the petals and the
+/// forward cone show. Occludes the crosshair and the gun; it is a review
+/// aid, not a view to play in.
+#[cfg(not(target_arch = "wasm32"))]
+fn push_showcase(frame: &mut Frame, rs: Rounds, eye: Vec3, look: Vec3, right3: Vec3, now: f32) {
+    let up = right3.cross(look).normalize();
+    let right = look.cross(up);
+    let centre = eye + look * SHOWCASE_DIST;
+    // Row one: the rounds, nose to tail along the right, centred.
+    let total = Round::ALL
+        .iter()
+        .map(|r| r.length() * rounds::ROUND_SCALE + SHOWCASE_GAP)
+        .sum::<f32>()
+        - SHOWCASE_GAP;
+    let mut x = -total * 0.5;
+    for r in Round::ALL {
+        let len = r.length() * rounds::ROUND_SCALE;
+        push_round(frame, rs, r, centre + right * (x + len * 0.5), right);
+        x += len + SHOWCASE_GAP;
+    }
+    // Row two: the Lapua flying along the right with its streak behind
+    // it, the core `TRACER_CORE_LEN` of `TRACER_TAIL_LEN` of the length
+    // (the proportion at which the two are one straight taper), the
+    // core rod measured from the head as `Tracer::rods` measures it.
+    let round = Round::Lapua;
+    let head = centre - up * SHOWCASE_DROP + right * 0.30;
+    let inset = round.length() * 0.5 * rounds::ROUND_SCALE * (1.0 - rounds::STREAK_INSET);
+    let core = inset + SHOWCASE_STREAK * (feel::TRACER_CORE_LEN / feel::TRACER_TAIL_LEN);
+    let tail = inset + SHOWCASE_STREAK - core;
+    let color = weapon_feel(feel::SCOPED_WEAPON).tracer;
+    let rods = [
+        Rod {
+            center: head - right * (core * 0.5),
+            len: core,
+            color,
+        },
+        Rod {
+            center: head - right * (core + tail * 0.5),
+            len: tail,
+            color: color * feel::TRACER_TAIL_DIM,
+        },
+    ];
+    push_streak(frame, rs, round, head, right, &rods, 1.0);
+    push_round(frame, rs, round, head, right);
+    // Row three: the holes, facing the eye, and the star.
+    let row = centre - up * (SHOWCASE_DROP * 2.0 + 0.04);
+    let hole = |weapon: u8, at: Vec3, shrink: f32| {
+        let m = Mark {
+            pos: at,
+            normal: -look,
+            weapon,
+            born: now,
+        };
+        let (pos, scale, rot) = m.placement();
+        Instance::new(
+            pos,
+            Vec3::new(scale.x, scale.y * shrink, scale.z * shrink),
+            feel::MARK_COLOR,
+        )
+        .with_rot(rot)
+        .with_mesh(rs.disc())
+    };
+    frame.instances.push(hole(3, row - right * 0.30, 1.0));
+    frame
+        .instances
+        .push(hole(7, row - right * 0.15, 0.1 / feel::ROCKET_MARK));
+    let bore = (right + look).normalize();
+    push_flash(frame, rs, row + right * 0.10, bore, SHOWCASE_FLASH);
 }
 
 /// A brass casing out of my own gun (v20): falls under gravity from the
@@ -1006,6 +1283,11 @@ pub struct ShooterGame {
     /// The v13 prop set (cover by kind, city, sky, ground) and where it got
     /// registered; None = plain coloured boxes and no city.
     props: Option<Props>,
+    /// The round meshes, the streak and the core (v20) and where they got
+    /// registered. `run_online` always sets it; None (a frame built by a
+    /// test that did not ask) draws no tracer at all, since the box rods
+    /// the rounds replaced are the look the operator sent back.
+    rounds: Option<Rounds>,
     /// The level's decor list, from `GameJoined`: client-only, but listed
     /// by the level so every client draws the same city.
     decor: Vec<Decor>,
@@ -1159,6 +1441,7 @@ impl ShooterGame {
             since_status: 0.0,
             lost: false,
             props: None,
+            rounds: None,
             decor: Vec::new(),
             env_base: 0,
             rig_character: None,
@@ -1282,6 +1565,7 @@ impl ShooterGame {
                 let muzzle = from + dir * REMOTE_MUZZLE;
                 self.flashes.push(Flash {
                     pos: muzzle,
+                    dir,
                     size: row.flash,
                     until: now + row.flash_ms,
                 });
@@ -1316,6 +1600,7 @@ impl ShooterGame {
                 Mark {
                     pos: to,
                     normal: n,
+                    weapon,
                     born: now,
                 },
             );
@@ -1430,6 +1715,12 @@ impl ShooterGame {
     /// sizes (set by `run_online` after load).
     pub const fn set_props(&mut self, base: u32, fits: &crate::props::PropFits) {
         self.props = Some(Props { base, fits: *fits });
+    }
+
+    /// Where `rounds::round_meshes()` got registered (set by `run_online`
+    /// after load).
+    pub const fn set_rounds(&mut self, base: u32) {
+        self.rounds = Some(Rounds { base });
     }
 
     /// Install the jointed character (set by `run_online` after load).
@@ -2613,8 +2904,8 @@ impl EmberGame for ShooterGame {
             target: eye + look,
             fov_y_deg: fov_now,
         });
-        // Screen-space furniture (the crosshair markers, the aim dot) is a
-        // world-space cube a fixed distance ahead, so it grows as the view
+        // Screen-space furniture (the hit markers, the native crosshair) is
+        // a world-space cube a fixed distance ahead, so it grows as the view
         // narrows; scaled by the narrowing it keeps its size on screen, and
         // through the 20x scope it stays a marker rather than a wall.
         let view_scale = fov_now / feel::HIP_FOV;
@@ -3003,42 +3294,46 @@ impl EmberGame for ShooterGame {
                 .push(Instance::new(f.pos, Vec3::splat(edge), color).with_yaw(f.ttl * 12.0));
         }
 
-        // Impact marks: near-black plates on the faces rounds hit, drawn
-        // after the cover so the depth test lays them on it; they stand a
-        // hair off the face so they never fight it for the pixel.
-        for m in &self.marks {
-            let (pos, scale, rot) = m.placement();
-            frame
-                .instances
-                .push(Instance::new(pos, scale, feel::MARK_COLOR).with_rot(rot));
-        }
-
-        // Tracers from shot events (v20): a bright core rod behind a head
-        // replayed along the segment at the weapon's speed, a dimmer tail
-        // behind that, both thinning out over the last 120 ms. Scale is
-        // applied before rotation, so a box long in X becomes a rod along
-        // the flight direction.
-        for t in &self.tracers {
-            let rot = Quat::from_rotation_arc(Vec3::X, t.dir());
-            for rod in t.rods(self.time) {
+        // Impact marks, tracers and remote flashes (v20) all wear the
+        // round meshes; without them registered (a frame built by a test
+        // that did not ask) none is drawn, since the cubes they replaced
+        // are the look the operator sent back.
+        if let Some(rs) = self.rounds {
+            // Impact marks: near-black holes on the faces rounds hit, each
+            // the width its round makes (`Mark::diameter`), drawn after the
+            // cover so the depth test lays them on it; they stand a hair
+            // off the face so they never fight it for the pixel.
+            for m in &self.marks {
+                let (pos, scale, rot) = m.placement();
                 frame.instances.push(
-                    Instance::new(
-                        rod.center,
-                        Vec3::new(rod.len, rod.thick, rod.thick),
-                        rod.color,
-                    )
-                    .with_rot(rot),
+                    Instance::new(pos, scale, feel::MARK_COLOR)
+                        .with_rot(rot)
+                        .with_mesh(rs.disc()),
                 );
             }
-        }
-        // Remote muzzle flashes, from the same events.
-        for f in &self.flashes {
-            inst(
-                &mut frame,
-                f.pos,
-                Vec3::splat(f.size),
-                Vec3::new(1.0, 0.9, 0.5),
-            );
+            // Tracers from shot events: the round itself at the head,
+            // replayed along the segment at the weapon's speed and drawn
+            // at `ROUND_SCALE` times its calibre, with a bright streak
+            // behind it and a dimmer one behind that (`push_streak`), both
+            // thinning out over the last 120 ms. Through the linger only
+            // the streak remains.
+            for t in &self.tracers {
+                let Some(round) = rounds::round_for(t.weapon) else {
+                    continue;
+                };
+                let dir = t.dir();
+                let head = t.head(self.time);
+                let rods = t.rods(self.time);
+                push_streak(&mut frame, rs, round, head, dir, &rods, t.fade(self.time));
+                if t.flying(self.time) {
+                    push_round(&mut frame, rs, round, head, dir);
+                }
+            }
+            // Remote muzzle flashes, from the same events: a star along
+            // the shot.
+            for f in &self.flashes {
+                push_flash(&mut frame, rs, f.pos, f.dir, f.size);
+            }
         }
         // My casings, tumbling while they fly and still once they land.
         for c in &self.casings {
@@ -3056,9 +3351,10 @@ impl EmberGame for ShooterGame {
         // The rocket, from the state: the mesh flown along the server's
         // real 3D path with an exhaust rod behind it, extrapolation bounded
         // to ~2 state intervals so stalls don't fly it through walls. A
-        // bullet in a state is skipped: since v20 it is drawn as a streak
-        // from its `Shot` event, and drawing it here as well would show
-        // the same round twice.
+        // bullet in a state is skipped: since v20 it is drawn as a round
+        // and a streak from its `Shot` event, and drawing it here as well
+        // would show the same round twice. So what reaches the body of the
+        // loop is a rocket, the one projectile kind that does not trace.
         let age = self.bullets_age.min(0.12);
         for b in &self.bullets {
             if feel::traces(b.weapon) {
@@ -3075,7 +3371,6 @@ impl EmberGame for ShooterGame {
             // a rod pointing along the flight direction.
             let rot = Quat::from_rotation_arc(Vec3::X, dir);
             let row = weapon_feel(b.weapon);
-            let rocket = weapon_stats(b.weapon).kind == Projectile::Rocket;
             // The trail is clamped so it cannot reach back through the
             // camera. Your own round is only ~0.77 from the eye on the
             // first state that carries it, so a fixed tail would end up
@@ -3093,50 +3388,43 @@ impl EmberGame for ShooterGame {
                     .with_rot(rot),
                 );
             }
-            if rocket {
-                // The rocket is a body, not a rod: `from_rotation_arc`
-                // rolls it with its heading, so the same mesh reads
-                // differently on every bearing. The held launcher's own
-                // convention (a yaw, then an elevation) is roll-stable.
-                let rocket_rot = weapon_rot(-dir.z.atan2(dir.x), dir.y.asin());
-                match self.assets.as_ref().filter(|a| !a.rocket.is_empty()) {
-                    Some(a) => {
-                        // The mesh lives in the launcher's frame, so drawing
-                        // it at the bullet position would put the launcher's
-                        // origin (the grip) on the server's path and the bore
-                        // a hand's width off it. Shift it so the rocket's own
-                        // centre, on the bore line, sits on the path.
-                        let bore = a.muzzles[slot(7)];
-                        let centre = Vec3::new(ROCKET_CENTRE_X, bore.y, bore.z);
-                        push_parts(
-                            &mut frame,
-                            &a.rocket,
-                            at - rocket_rot * centre,
-                            rocket_rot,
-                            row.accent,
-                            Action::REST,
-                        );
-                    }
-                    None => frame.instances.push(
-                        Instance::new(at, Vec3::new(0.5, 0.16, 0.16), Vec3::new(0.35, 0.4, 0.3))
-                            .with_rot(rocket_rot),
-                    ),
+            // The rocket is a body, not a rod: `from_rotation_arc` rolls
+            // it with its heading, so the same mesh reads differently on
+            // every bearing. The held launcher's own convention (a yaw,
+            // then an elevation) is roll-stable.
+            let rocket_rot = weapon_rot(-dir.z.atan2(dir.x), dir.y.asin());
+            match self.assets.as_ref().filter(|a| !a.rocket.is_empty()) {
+                Some(a) => {
+                    // The mesh lives in the launcher's frame, so drawing it
+                    // at the bullet position would put the launcher's
+                    // origin (the grip) on the server's path and the bore a
+                    // hand's width off it. Shift it so the rocket's own
+                    // centre, on the bore line, sits on the path.
+                    let bore = a.muzzles[slot(7)];
+                    let centre = Vec3::new(ROCKET_CENTRE_X, bore.y, bore.z);
+                    push_parts(
+                        &mut frame,
+                        &a.rocket,
+                        at - rocket_rot * centre,
+                        rocket_rot,
+                        row.accent,
+                        Action::REST,
+                    );
                 }
-            } else {
-                frame.instances.push(
-                    Instance::new(
-                        at,
-                        Vec3::new(row.head, row.head * 0.68, row.head * 0.68),
-                        Vec3::new(1.0, 0.95, 0.75),
-                    )
-                    .with_rot(rot),
-                );
+                None => frame.instances.push(
+                    Instance::new(at, Vec3::new(0.5, 0.16, 0.16), Vec3::new(0.35, 0.4, 0.3))
+                        .with_rot(rocket_rot),
+                ),
             }
         }
 
         // ---- crosshair markers: hit (white X) and kill (red X, larger) ----
+        // In the camera's own basis (the right, and the right crossed
+        // with the look), the same as the native crosshair, so the X keeps
+        // its shape on a pitched aim instead of foreshortening against a
+        // "+" that does not.
         if self.hitmarker_t > 0.0 || self.kill_t > 0.0 {
-            let up = Vec3::Y;
+            let up = right3.cross(look).normalize();
             let center = eye + look * 1.2;
             let (off, edge, col) = if self.kill_t > 0.0 {
                 (
@@ -3380,25 +3668,35 @@ impl EmberGame for ShooterGame {
                 );
             }
 
+            // The star along the look, which is where the plume goes and
+            // where the round the server confirms will have gone.
             let flashing = self
                 .shot_started
                 .is_some_and(|t0| self.time - t0 < my_feel.flash_ms);
-            if flashing && !scoped {
-                inst(
-                    &mut frame,
-                    muzzle,
-                    Vec3::splat(my_feel.flash),
-                    Vec3::new(1.0, 0.9, 0.5),
-                );
+            if flashing
+                && !scoped
+                && let Some(rs) = self.rounds
+            {
+                push_flash(&mut frame, rs, muzzle, look, my_feel.flash);
             }
-            // Aim dot floating on the sight line (occluded by walls,
-            // which reads like a laser sight).
-            inst(
-                &mut frame,
-                eye + look * 4.0,
-                Vec3::splat(0.05 * view_scale),
-                accent,
-            );
+            // The crosshair. What stood here was an aim dot: an opaque
+            // cube in the weapon's accent 4 m down the sight line, which
+            // on the web sat as a coloured square under the page's own "+"
+            // (`div#crosshair`) and down the sights was a block. The page
+            // is the crosshair on the web; the native client, which has no
+            // page, gets a hairline here. Not through the scope, which has
+            // its own reticle.
+            #[cfg(not(target_arch = "wasm32"))]
+            if !scoped {
+                push_crosshair(&mut frame, eye, look, right3, view_scale);
+            }
+            // The round showcase, a review aid: see `push_showcase`.
+            #[cfg(not(target_arch = "wasm32"))]
+            if debug_rounds()
+                && let Some(rs) = self.rounds
+            {
+                push_showcase(&mut frame, rs, eye, look, right3, self.time);
+            }
 
             // ---- the off-hand shield, in the hand the pistol is not ----
             // Drawn last so it is the newest instance, though the scene pass
@@ -4223,6 +4521,7 @@ mod wire_tests {
         game.latest.insert(3, other);
         game.was_alive = true;
         game.time = 5.0;
+        game.set_rounds(500);
         let shot = |owner: u8,
                     weapon: u8,
                     from: [f32; 3],
@@ -4246,7 +4545,7 @@ mod wire_tests {
             }
         };
         let input = InputState::default();
-        let flash_colour = Vec3::new(1.0, 0.9, 0.5);
+        let flash_colour = FLASH_COLOR;
         // A remote AK round from 10 m to my right, north into a container.
         inbox
             .send(shot(
@@ -4266,29 +4565,75 @@ mod wire_tests {
         assert_eq!(t.to, Vec3::new(10.0, 1.45, 30.0));
         assert_eq!((t.weapon, t.born), (3, game.time));
         // The frame it arrived on the head has not left the muzzle; a
-        // millisecond later the AK's 715 m/s has it 0.7 m out.
+        // millisecond later the AK's 715 m/s has it 0.7 m out, and the
+        // streak behind it (the round's own drawn length shorter) is the
+        // core alone.
         let frame = game.update(&input, 0.001);
         let ak = weapon_feel(3).tracer;
         let rods: Vec<&Instance> = frame.instances.iter().filter(|i| i.color == ak).collect();
-        assert_eq!(rods.len(), 1, "a millisecond in, the core rod alone");
+        assert_eq!(rods.len(), 1, "a millisecond in, the core streak alone");
         assert!(
             rods[0].scale.x > 0.5 && rods[0].scale.x < 1.0,
             "{}",
             rods[0].scale
         );
-        assert!(
-            frame.instances.iter().any(|i| {
+        // The remote flash: a star of five streak cones with their bases
+        // at the drawn muzzle, four square to the shot and one along it,
+        // none back along it.
+        let star: Vec<&Instance> = frame
+            .instances
+            .iter()
+            .filter(|i| {
                 (i.position - (t.from + Vec3::Z * REMOTE_MUZZLE)).length() < 1e-4
                     && i.color == flash_colour
-            }),
-            "the remote flash at the drawn muzzle"
+            })
+            .collect();
+        assert_eq!(star.len(), 5, "the remote flash star at the drawn muzzle");
+        let ak_flash = weapon_feel(3).flash;
+        let (mut across, mut along) = (0, 0);
+        for c in &star {
+            assert_eq!(c.mesh, 500 + rounds::STREAK_OFFSET, "a streak cone");
+            assert!((c.scale.y - ak_flash * FLASH_BASE).abs() < 1e-6);
+            let d = (c.rot * Vec3::X).dot(Vec3::Z);
+            if d.abs() < 1e-5 {
+                across += 1;
+                assert!((c.scale.x - ak_flash * FLASH_PETAL).abs() < 1e-6);
+            } else {
+                assert!(d > 0.999, "forward, never back: {d}");
+                along += 1;
+                assert!((c.scale.x - ak_flash * FLASH_FORWARD).abs() < 1e-6);
+            }
+        }
+        assert_eq!((across, along), (4, 1));
+        assert!(
+            !frame
+                .instances
+                .iter()
+                .any(|i| i.mesh == 0 && i.color == flash_colour),
+            "no flash cube"
         );
         assert_eq!(game.marks.len(), 1);
         assert_eq!(game.marks[0].pos, t.to);
         assert_eq!(game.marks[0].normal, -Vec3::Z);
+        assert_eq!(game.marks[0].weapon, 3, "the mark knows what made it");
+        // The mark is the AK's hole: the disc, 24 mm across, its back a
+        // millimetre off the container's south face, thick along the
+        // normal; not a square.
+        let holes: Vec<&Instance> = frame
+            .instances
+            .iter()
+            .filter(|i| i.color == feel::MARK_COLOR)
+            .collect();
+        assert_eq!(holes.len(), 1, "the mark is drawn");
+        let h = holes[0];
+        assert_eq!(h.mesh, 500 + rounds::DISC_OFFSET, "a disc, not a cube");
+        assert!((h.scale.y * 2.0 - 0.0237).abs() < 1e-4, "{}", h.scale);
+        assert_eq!(h.scale.y, h.scale.z);
+        assert_eq!(h.scale.x, feel::MARK_THICK);
+        assert!((h.position - (t.to - Vec3::Z * feel::MARK_LIFT)).length() < 1e-6);
         assert!(
-            frame.instances.iter().any(|i| i.color == feel::MARK_COLOR),
-            "the mark is drawn"
+            (h.rot * Vec3::X + Vec3::Z).length() < 1e-5,
+            "thick along the normal"
         );
         assert!(game.fx.len() >= 12, "plume and sparks: {}", game.fx.len());
         assert!(game.continuations.is_empty(), "cover ends a round");
@@ -4343,6 +4688,7 @@ mod wire_tests {
         assert_eq!(game.flashes.len(), 1);
         assert_eq!(game.marks.len(), 2);
         assert_eq!(game.marks[1].normal, Vec3::Y);
+        assert_eq!(game.marks[1].weapon, 3);
         assert_eq!(
             game.fx.len() - fx_before,
             6,
@@ -4364,6 +4710,213 @@ mod wire_tests {
         game.update(&input, 0.001);
         assert_eq!(game.tracers.len(), 3);
         assert_eq!(game.marks.len(), 3);
+        assert_eq!(game.marks[2].weapon, 7, "the rocket's blast mark");
+        assert!((game.marks[2].diameter() - feel::ROCKET_MARK).abs() < 1e-6);
+    }
+
+    /// With the round meshes registered a tracer is the round itself at
+    /// the head, at `ROUND_SCALE` times its calibre and with no tint, and
+    /// one streak behind it: a cone alone while only the core exists, its
+    /// base inside the round's tail and its point trailing; a frustum core
+    /// and a cone tail once the tail exists, the tail's base the frustum's
+    /// narrow end. Once the head lands the round goes and the streaks stay
+    /// through the linger, thinning. The aim dot is gone: nothing stands
+    /// 4 m down the look; on native the crosshair is two white hairlines
+    /// 1.2 m ahead.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn a_tracer_is_the_round_with_a_streak_behind_it() {
+        use arena_core::shooter::SHOT_COVER;
+
+        let (chan, inbox, _wire) = net::NetChan::detached_duplex();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.my_id = Some(2);
+        game.latest.insert(2, me(2));
+        let mut other = me(3);
+        other.x = 10.0;
+        game.latest.insert(3, other);
+        game.was_alive = true;
+        game.time = 5.0;
+        game.set_rounds(500);
+        let round_id = 500 + rounds::Round::Ak.offset();
+        let streak_id = 500 + rounds::STREAK_OFFSET;
+        let core_id = 500 + rounds::CORE_OFFSET;
+        let input = InputState::default();
+        // A remote AK round from 10 m to my right, north into a container.
+        inbox
+            .send(S2C::Shot {
+                owner: 3,
+                weapon: 3,
+                x0: 10.0,
+                y0: 1.45,
+                z0: 0.0,
+                x1: 10.0,
+                y1: 1.45,
+                z1: 30.0,
+                hit: SHOT_COVER,
+                cover: Cover::Container.index(),
+                victim: 255,
+                normal: [0, 0, -1],
+            })
+            .unwrap();
+        game.update(&input, 0.001);
+        let t = game.tracers[0];
+        let ak = weapon_feel(3).tracer;
+        let half_len = rounds::Round::Ak.length() * 0.5 * rounds::ROUND_SCALE;
+        // The streak's base: the lead fraction of the drawn heel, a tenth
+        // of the half-length inside the round's tail.
+        let lead = rounds::Round::Ak.heel_radius() * rounds::ROUND_SCALE * rounds::STREAK_LEAD;
+        let inset = half_len * (1.0 - rounds::STREAK_INSET);
+        assert!(lead < rounds::Round::Ak.heel_radius() * rounds::ROUND_SCALE);
+        // Two milliseconds in the head is 1.43 m out: the round is at it,
+        // nose north, at five times its size, untinted.
+        let frame = game.update(&input, 0.002);
+        let now = game.time;
+        let drawn: Vec<&Instance> = frame
+            .instances
+            .iter()
+            .filter(|i| i.mesh == round_id)
+            .collect();
+        assert_eq!(drawn.len(), 1, "one round in flight");
+        let r = drawn[0];
+        assert!((r.position - t.head(now)).length() < 1e-4, "{}", r.position);
+        assert_eq!(r.scale, Vec3::splat(rounds::ROUND_SCALE));
+        assert_eq!(r.color, Vec3::ONE, "a textured part carries no tint");
+        assert!(
+            (r.rot * Vec3::X - Vec3::Z).length() < 1e-5,
+            "nose along the flight"
+        );
+        // The core streak alone this early, as the cone (nothing behind
+        // it): the AK's colour, its base radius the lead fraction of the
+        // round's drawn heel, its base inside the round's tail, its back
+        // where the core rod ends (so it is the rod less the inset), its
+        // point trailing south. The remote flash star wears the same cone
+        // in the flash colour; it is not a streak.
+        let streaks: Vec<&Instance> = frame
+            .instances
+            .iter()
+            .filter(|i| i.mesh == streak_id && i.color != FLASH_COLOR)
+            .collect();
+        assert_eq!(streaks.len(), 1, "the core alone");
+        assert!(
+            !frame.instances.iter().any(|i| i.mesh == core_id),
+            "no frustum without a tail"
+        );
+        let s = streaks[0];
+        let rods = t.rods(now);
+        assert_eq!(s.color, ak);
+        assert!(
+            (s.scale.x - (rods[0].len - inset)).abs() < 1e-5,
+            "{}",
+            s.scale
+        );
+        assert!((s.scale.y - lead).abs() < 1e-6 && (s.scale.z - lead).abs() < 1e-6);
+        assert!(
+            (s.rot * Vec3::X + Vec3::Z).length() < 1e-5,
+            "the point trails"
+        );
+        let base = t.head(now) - Vec3::Z * inset;
+        assert!(
+            (s.position - base).length() < 1e-4,
+            "the base inside the round's tail: {} vs {base}",
+            s.position
+        );
+        let core_back = t.head(now) - Vec3::Z * rods[0].len;
+        assert!(
+            (s.position - Vec3::Z * s.scale.x - core_back).length() < 1e-4,
+            "the point where the core rod ends"
+        );
+        assert!(
+            !frame.instances.iter().any(|i| i.mesh == 0 && i.color == ak),
+            "no box rods with the meshes registered"
+        );
+        // Sixty milliseconds on the AK's 30 m (42 ms) are flown: the round
+        // is gone, both streaks stay, thinned by the fade: the core as the
+        // frustum, the tail as the cone with its base the frustum's narrow
+        // end, exactly where the core ends.
+        let frame = game.update(&input, 0.06);
+        let now = game.time;
+        assert!(!t.flying(now) && t.alive(now), "in the linger");
+        assert!(
+            !frame.instances.iter().any(|i| i.mesh == round_id),
+            "no round in the linger"
+        );
+        let cores: Vec<&Instance> = frame
+            .instances
+            .iter()
+            .filter(|i| i.mesh == core_id)
+            .collect();
+        let tails: Vec<&Instance> = frame
+            .instances
+            .iter()
+            .filter(|i| i.mesh == streak_id && i.color != FLASH_COLOR)
+            .collect();
+        assert_eq!((cores.len(), tails.len()), (1, 1), "a core and a tail");
+        let (core, tail) = (cores[0], tails[0]);
+        let fade = t.fade(now);
+        assert!(fade > 0.5 && fade < 1.0, "fading: {fade}");
+        assert!((core.scale.y - lead * fade).abs() < 1e-6, "{}", core.scale);
+        assert!(
+            (tail.scale.y - lead * fade * rounds::CORE_NECK).abs() < 1e-6,
+            "{}",
+            tail.scale
+        );
+        assert_eq!(core.color, ak);
+        assert_eq!(tail.color, ak * feel::TRACER_TAIL_DIM);
+        let rods = t.rods(now);
+        assert!((core.scale.x - (rods[0].len - inset)).abs() < 1e-5);
+        assert!((tail.scale.x - rods[1].len).abs() < 1e-5);
+        let core_end = core.position - Vec3::Z * core.scale.x;
+        assert!(
+            (tail.position - core_end).length() < 1e-4,
+            "the tail starts where the core ends"
+        );
+        for s in [core, tail] {
+            assert!((s.rot * Vec3::X + Vec3::Z).length() < 1e-5, "trailing");
+        }
+        if debug_camera().is_none() {
+            // The aim dot is gone: no cube 4 m down the look.
+            let look = (frame.camera.target - frame.camera.eye).normalize();
+            let dot = frame.camera.eye + look * 4.0;
+            assert!(
+                !frame
+                    .instances
+                    .iter()
+                    .any(|i| i.mesh == 0 && (i.position - dot).length() < 1e-3),
+                "the aim dot"
+            );
+            // The native crosshair: two white hairlines 1.2 m ahead, one
+            // along the right and one along the up, never thicker than a
+            // hairline.
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let at = frame.camera.eye + look * CROSSHAIR_DIST;
+                let hair: Vec<&Instance> = frame
+                    .instances
+                    .iter()
+                    .filter(|i| i.mesh == 0 && i.color == CROSSHAIR_COLOR)
+                    .filter(|i| (i.position - at).length() < 1e-4)
+                    .collect();
+                assert_eq!(hair.len(), 2, "two bars");
+                for h in &hair {
+                    assert!(h.scale.max_element() <= CROSSHAIR_LEN + 1e-6, "{}", h.scale);
+                    assert!(h.scale.min_element() <= CROSSHAIR_THICK + 1e-6);
+                }
+                let along: Vec<Vec3> = hair
+                    .iter()
+                    .map(|h| {
+                        let axis = if h.scale.x > h.scale.y {
+                            Vec3::X
+                        } else {
+                            Vec3::Y
+                        };
+                        h.rot * axis
+                    })
+                    .collect();
+                assert!(along[0].dot(look).abs() < 1e-4 && along[1].dot(look).abs() < 1e-4);
+                assert!(along[0].dot(along[1]).abs() < 1e-4, "a cross");
+            }
+        }
     }
 
     /// Rumble requests accumulate through a frame and the platform takes
