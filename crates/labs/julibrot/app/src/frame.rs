@@ -187,6 +187,11 @@ const fn arrival_is_current(
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
+/// Tests whether the accepted perturbation reference belongs to the requested scene.
+///
+/// `ViewerController` writes requested zoom and owner HOT zoom from the same edit result, and its
+/// HOT drain refuses any divergence. Their bit equality is therefore an identity invariant rather
+/// than an approximate comparison between independently rounded coordinates.
 fn perturbation_reference_is_current(
     requested_zoom_log2: f64,
     main_generation: u32,
@@ -2497,6 +2502,35 @@ mod tests {
             .count();
         assert_eq!(orbit.length, CAP);
         assert_eq!(glitch_pixel_count, 0);
+    }
+
+    #[test]
+    fn requested_and_owner_hot_zoom_keep_bit_identity_through_every_absolute_reset_path() {
+        const EXTENT: [u32; 2] = [960, 540];
+
+        fn assert_zoom_identity(viewer: &mut ViewerController) {
+            let requested = viewer.requested().zoom_log2.to_bits();
+            assert_eq!(
+                viewer
+                    .drain_hot(EXTENT)
+                    .expect("bit-identical HOT zoom drains")
+                    .state
+                    .hot
+                    .zoom_log2
+                    .to_bits(),
+                requested
+            );
+        }
+
+        let mut viewer = ViewerController::new(EXTENT).expect("canonical viewer");
+        viewer.set_zoom_log2(12.0).expect("slider zoom");
+        assert_zoom_identity(&mut viewer);
+        viewer.wheel_zoom(0.375, [37.0, -19.0]).expect("wheel zoom");
+        assert_zoom_identity(&mut viewer);
+        viewer
+            .set_plane_origin([0.0, 0.0, -0.75, 0.1])
+            .expect("finite origin reset");
+        assert_zoom_identity(&mut viewer);
     }
 
     #[test]
