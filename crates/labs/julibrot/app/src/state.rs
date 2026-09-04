@@ -1967,7 +1967,7 @@ mod tests {
         assert_eq!(backdrop.rows, main.rows);
         assert_eq!(backdrop.inverse, main.inverse);
         assert_eq!(backdrop.condition_number, main.condition_number);
-        assert_eq!(backdrop.apron_scale.to_bits(), 1.25_f64.to_bits());
+        assert_eq!(backdrop.apron_scale.to_bits(), 2.0_f64.to_bits());
         assert_eq!(viewer.footprint_construction_count(), 1);
         assert_eq!(
             viewer
@@ -1975,7 +1975,7 @@ mod tests {
                 .expect("cached footprint")
                 .apron_scale
                 .to_bits(),
-            1.25_f64.to_bits()
+            2.0_f64.to_bits()
         );
         assert_eq!(viewer.footprint_construction_count(), 1);
         assert_eq!(
@@ -1994,7 +1994,7 @@ mod tests {
         else {
             panic!("owner row requests a backdrop");
         };
-        assert_eq!(backdrop.apron_scale.to_bits(), 1.25_f64.to_bits());
+        assert_eq!(backdrop.apron_scale.to_bits(), 2.0_f64.to_bits());
         let PoseMap::Mapped(main) = viewer.screen_map(REFERENCE_GRID).expect("main map") else {
             panic!("owner row is mapped");
         };
@@ -2038,36 +2038,31 @@ mod tests {
     }
 
     #[test]
-    fn shipped_presets_pin_the_minimum_gain_backdrop_policy() {
+    fn shipped_presets_refuse_sub_threshold_backdrops() {
         let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
         let backdrop_extent = [REFERENCE_GRID[0] / 2, REFERENCE_GRID[1] / 2];
-        for (row, expected_apron, expected_uncovered, expected_backdrop) in [
-            (PRESET_ROWS[0], 1.0_f64, 0.0, false),
-            (PRESET_ROWS[1], 1.0_f64, 0.0, false),
-            (PRESET_ROWS[2], 1.0_f64, 7.0 / 3969.0, false),
-            (PRESET_ROWS[3], 1.0_f64, 0.0, false),
-        ] {
+        for row in PRESET_ROWS {
             viewer.apply_preset(row).expect("relief preset is valid");
             let footprint = viewer
                 .scene_footprint(backdrop_extent)
                 .expect("preset footprint");
             assert_eq!(
                 footprint.apron_scale.to_bits(),
-                expected_apron.to_bits(),
+                1.0_f64.to_bits(),
                 "{} footprint",
                 row.name
             );
-            assert_eq!(
-                footprint.uncovered_fraction, expected_uncovered,
-                "{} uncovered",
-                row.name
+            assert!(
+                footprint.uncovered_fraction < 40.0 / 3969.0,
+                "{} has a policy-significant uncovered share of {}",
+                row.name,
+                footprint.uncovered_fraction
             );
-            assert_eq!(
+            assert!(
                 viewer
                     .backdrop_map(backdrop_extent)
                     .expect("preset backdrop")
-                    .is_some(),
-                expected_backdrop,
+                    .is_none(),
                 "{} backdrop",
                 row.name
             );

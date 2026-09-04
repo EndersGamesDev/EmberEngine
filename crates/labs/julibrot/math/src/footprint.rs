@@ -9,8 +9,8 @@
 //! This module mirrors the scene shader's vertex chain in binary64 and reports, for one pose, how
 //! much of the surface the main mesh and candidate backdrop spans can reach. It reads no records:
 //! the raster census covers the whole record domain and selects the smallest reviewed apron that
-//! recovers at least half the best candidate gain, provided that gain is at least one percent of
-//! the interior census lattice. The outermost lattice ring lies exactly on the frame rim and is
+//! recovers at least half the best candidate gain and itself recovers at least one percent of the
+//! interior census lattice. The outermost lattice ring lies exactly on the frame rim and is
 //! excluded: its triangle-edge ties are raster arithmetic, not reachable ground.
 
 #![allow(
@@ -145,7 +145,8 @@ pub fn scene_footprint(
     let (apron_scale, uncovered) = if best_gain >= MINIMUM_BACKDROP_GAIN_POINTS {
         let mut selected = best;
         for candidate in candidates {
-            if main_uncovered.saturating_sub(candidate.1) * 2 >= best_gain {
+            let candidate_gain = main_uncovered.saturating_sub(candidate.1);
+            if candidate_gain >= MINIMUM_BACKDROP_GAIN_POINTS && candidate_gain * 2 >= best_gain {
                 selected = candidate;
                 break;
             }
@@ -502,8 +503,9 @@ fn clipped_fraction(chain: &VertexChain<'_>, grid_w: u32, grid_h: u32, apron_sca
 mod tests {
     use super::{
         APRON_CANDIDATES, CENSUS_HEIGHTS, COVERAGE_CENSUS_POINTS, COVERAGE_LATTICE_POINTS,
-        COVERAGE_LATTICE_SIDE, COVERAGE_MESH_SIDE, SceneFootprint, VertexChain, displayed_height,
-        rasterize_height, scene_footprint, uncovered_fraction, uncovered_points,
+        COVERAGE_LATTICE_SIDE, COVERAGE_MESH_SIDE, MINIMUM_BACKDROP_GAIN_POINTS, SceneFootprint,
+        VertexChain, displayed_height, rasterize_height, scene_footprint, uncovered_fraction,
+        uncovered_points,
     };
     use crate::screen::camera_matrix;
     use crate::{ObjectAngles, PlaneAngles, ViewControls, construct_plane};
@@ -606,7 +608,7 @@ mod tests {
         let rows = [
             (owner_row(2.165), 1.0, 0.0, 0.0),
             (owner_row(4.0), 1.0, 0.0, 81.0 / 405.0),
-            (close_owner_row(), 1.25, 572.0 / 3969.0, 252.0 / 405.0),
+            (close_owner_row(), 2.0, 571.0 / 3969.0, 252.0 / 405.0),
         ];
         for ((object, view), apron, uncovered, clipped) in rows {
             let footprint = scene_footprint(&object, &view, 960, 540).expect("relief pose maps");
@@ -654,9 +656,9 @@ mod tests {
     fn close_owner_row_gets_a_backdrop_and_reports_the_sky_it_cannot_reach() {
         let (object, view) = close_owner_row();
         let footprint = scene_footprint(&object, &view, 960, 540).expect("relief pose maps");
-        assert_eq!(footprint.apron_scale.to_bits(), 1.25_f64.to_bits());
+        assert_eq!(footprint.apron_scale.to_bits(), 2.0_f64.to_bits());
         assert!(
-            (footprint.uncovered_fraction - 572.0 / 3969.0).abs() < 1.0e-12,
+            (footprint.uncovered_fraction - 571.0 / 3969.0).abs() < 1.0e-12,
             "uncovered {}",
             footprint.uncovered_fraction
         );
@@ -666,10 +668,10 @@ mod tests {
     /// Every candidate's deterministic lattice count at the close owner row.
     ///
     /// The best candidate is scale three, not the widest candidate, because raster quantization is
-    /// not monotonic in apron. Scale 1.25 is nevertheless the smallest candidate that recovers at
-    /// least half the best gain and therefore is the policy's requested span.
+    /// not monotonic in apron. Scale two is the smallest candidate that both clears the absolute
+    /// gain floor and recovers at least half the best gain, so it is the policy's requested span.
     #[test]
-    fn the_close_row_candidate_spread_and_half_best_gain_are_pinned() {
+    fn the_close_row_candidate_spread_and_selected_gain_are_pinned() {
         let (object, view) = close_owner_row();
         let map = crate::screen_to_plane(&object, &view, 0.0, 960, 540, 960.0 / 540.0)
             .expect("relief pose maps");
@@ -685,9 +687,12 @@ mod tests {
         assert_eq!(candidates, [572, 573, 571, 569, 585]);
         let best_gain = main_alone - candidates[3];
         assert_eq!(best_gain, 42);
-        assert!(2 * (main_alone - candidates[0]) >= best_gain);
+        assert_eq!(main_alone - candidates[0], 39);
+        assert!(main_alone - candidates[0] < MINIMUM_BACKDROP_GAIN_POINTS);
+        assert_eq!(main_alone - candidates[2], MINIMUM_BACKDROP_GAIN_POINTS);
+        assert!(2 * (main_alone - candidates[2]) >= best_gain);
         let footprint = scene_footprint(&object, &view, 960, 540).expect("relief pose maps");
-        assert_eq!(footprint.apron_scale.to_bits(), 1.25_f64.to_bits());
+        assert_eq!(footprint.apron_scale.to_bits(), 2.0_f64.to_bits());
     }
 
     /// Four lifted census meshes at the close row are wholly clamped and contribute no triangles.
@@ -831,7 +836,7 @@ mod tests {
         );
     }
 
-    fn shipped_relief_rows() -> [(&'static str, ObjectAngles, ViewControls, usize); 2] {
+    fn shipped_relief_rows() -> [(&'static str, ObjectAngles, ViewControls); 2] {
         let quarter_turn = core::f64::consts::FRAC_PI_2;
         [
             (
@@ -855,7 +860,6 @@ mod tests {
                     height_scale: 1.0,
                     ..ViewControls::NEUTRAL
                 },
-                7,
             ),
             (
                 "Julia relief",
@@ -867,16 +871,15 @@ mod tests {
                     height_scale: 1.0,
                     ..ViewControls::NEUTRAL
                 },
-                0,
             ),
         ]
     }
 
-    /// Pins the exact raster spread behind the two shipped relief preset policy decisions.
+    /// Pins the sub-threshold raster spread behind the two shipped relief preset decisions.
     #[test]
-    fn shipped_relief_preset_candidate_spreads_are_pinned() {
+    fn shipped_relief_presets_refuse_sub_threshold_backdrops() {
         let extent = [480, 270];
-        for (name, object, view, expected_main) in shipped_relief_rows() {
+        for (name, object, view) in shipped_relief_rows() {
             let map = crate::screen_to_plane(
                 &object,
                 &view,
@@ -893,11 +896,13 @@ mod tests {
                 matrix: camera_matrix(&view),
             };
             let main = uncovered_points(&chain, extent, 1.0);
-            let candidates = APRON_CANDIDATES.map(|apron| uncovered_points(&chain, extent, apron));
             let footprint =
                 scene_footprint(&object, &view, extent[0], extent[1]).expect("preset footprint");
-            assert_eq!(main, expected_main, "{name} main");
-            assert_eq!(candidates, [0; 5], "{name} candidates");
+            eprintln!("{name}: {main} residual interior samples");
+            assert!(
+                main < MINIMUM_BACKDROP_GAIN_POINTS,
+                "{name}: {main} residual interior samples"
+            );
             assert_eq!(
                 footprint.apron_scale.to_bits(),
                 1.0_f64.to_bits(),
@@ -905,8 +910,7 @@ mod tests {
             );
             assert_eq!(
                 footprint.uncovered_fraction,
-                expected_main as f64 / COVERAGE_CENSUS_POINTS as f64,
-                "{name} uncovered"
+                main as f64 / COVERAGE_CENSUS_POINTS as f64
             );
         }
     }
@@ -915,10 +919,11 @@ mod tests {
     #[test]
     fn coverage_is_exactly_invariant_across_power_of_two_extents() {
         let (close_object, close_view) = close_owner_row();
-        let rows = shipped_relief_rows()
-            .map(|(name, object, view, _)| (name, object, view))
-            .into_iter()
-            .chain([("close owner row", close_object, close_view)]);
+        let rows = shipped_relief_rows().into_iter().chain([(
+            "close owner row",
+            close_object,
+            close_view,
+        )]);
         for (name, object, view) in rows {
             let baseline = scene_footprint(&object, &view, 480, 270).expect("baseline footprint");
             for extent in [[960, 540], [1_920, 1_080]] {
