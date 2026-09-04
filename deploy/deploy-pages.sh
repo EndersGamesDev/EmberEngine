@@ -165,7 +165,10 @@ fi
 # The catalog is the hub's promise. Refuse to publish a live link unless this
 # assembly actually produced its page, so games.json and this script cannot
 # silently drift apart again.
-LIVE_PATHS="$("$PY" -c 'import json, sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print("\n".join(v["path"] for g in d["games"] for v in g["versions"] if v.get("live") is True))' web/games.json)"
+# Piped through tr: Python's stdout is a text stream, so on Windows every
+# newline it prints leaves the pipe as CR LF and `read -r` keeps the CR in
+# the value, which made this check reject a path it had just assembled.
+LIVE_PATHS="$("$PY" -c 'import json, sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print("\n".join(v["path"] for g in d["games"] for v in g["versions"] if v.get("live") is True))' web/games.json | tr -d '\r')"
 while IFS= read -r live_path; do
     [ -n "$live_path" ] || continue
     if [ ! -f "$PAGES_DIR/${live_path%/}/index.html" ]; then
