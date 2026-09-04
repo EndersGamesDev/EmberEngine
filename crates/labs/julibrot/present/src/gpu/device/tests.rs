@@ -535,12 +535,14 @@ fn the_backdrop_is_ordered_against_itself_by_depth() {
 /// the backdrop: a Final main therefore publishes the same glitch count either way.
 #[test]
 fn the_glitch_census_reads_the_main_grid_alone() {
-    let source = include_str!("../device.rs");
+    let source = include_str!("census.rs");
     let start = source
         .find("fn encode_glitch_count(")
         .expect("the census encoder exists");
     let body = &source[start..];
-    let end = body.find("\nfn ").expect("the census encoder ends");
+    let end = body
+        .find("\npub(super) fn ")
+        .expect("the census encoder ends");
     let body = &body[..end];
     assert!(body.contains("pass.set_bind_group(1, &gpu.scene_groups[0], &[hot_offset]);"));
     assert!(
