@@ -2173,7 +2173,8 @@ fn a_continuous_drag_alternates_the_backdrop_with_the_main_ladder() {
 /// and a settled coverage layer hands its claim back for the next pose family.
 #[test]
 fn browser_backdrop_preparation_routes_through_the_coverage_turn() {
-    let source = include_str!("../loop.rs");
+    let mut source = String::from(include_str!("../loop.rs"));
+    source.push_str(include_str!("browser/backdrop.rs"));
     assert!(source.contains("super::coverage_pre_empts("));
     assert!(source.contains("in_flight_scene_id.is_some()"));
     assert!(source.contains("self.coverage_turn = next_turn;"));
