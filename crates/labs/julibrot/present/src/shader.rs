@@ -33,7 +33,8 @@ fn hue_component(hue: f32, offset: f32) -> f32 {
     return clamp(abs(fract(hue + offset) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
 }
 fn shade(record: vec4<f32>) -> vec4<f32> {
-    if (malformed(record) || record.w == 1.0) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
+    if (malformed(record)) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
+    if (record.w == 1.0) { return vec4<f32>(1.0, 0.375, 0.0, 1.0); }
     if (record.w == 2.0) { return hot.exterior_zero_rgba; }
     if (record.y == 0.0) {
         if (record.x == -1.0) { return scene.interior_rgba; }
@@ -141,7 +142,8 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     let limit = vec2<f32>(f32(scene.grid.x - 1u), f32(scene.grid.y - 1u));
     let coordinate = vec2<u32>(clamp(floor(input.grid_coordinate + vec2<f32>(0.5)), vec2<f32>(0.0), limit));
     let record = load_escape(coordinate.y * scene.grid.x + coordinate.x);
-    if (malformed(record) || record.w == 1.0) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
+    if (malformed(record)) { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
+    if (record.w == 1.0) { return vec4<f32>(1.0, 0.375, 0.0, 1.0); }
     if (record.w == 2.0 || scene.span.z != 0u) { return hot.exterior_zero_rgba; }
     let normal_cross = cross(dpdx(input.world), dpdy(input.world));
     var normal = vec3<f32>(0.0, 0.0, 1.0);
@@ -149,6 +151,28 @@ fn ambient_camera(value: Ambient5) -> Ambient5 {
     let light = 0.58 + 0.24 * abs(dot(normal, normalize(vec3<f32>(0.4, 0.7, 0.6))));
     let base = shade(record);
     return vec4<f32>(base.rgb * light, base.a);
+}
+";
+
+const GLITCH_COUNT_BODY: &str = r"
+struct CountVertex { @builtin(position) position: vec4<f32>, }
+@vertex fn glitch_count_vertex(@builtin(vertex_index) index: u32) -> CountVertex {
+    var positions = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
+    var output: CountVertex;
+    output.position = vec4<f32>(positions[index], 0.0, 1.0);
+    return output;
+}
+@fragment fn glitch_count_fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    if (scene.span.z != 0u) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
+    let group = u32(position.y) * scene.grid.x + u32(position.x);
+    let start = group * 255u;
+    let active_records = scene.grid.x * scene.grid.y;
+    var count = 0u;
+    for (var offset = 0u; offset < 255u; offset += 1u) {
+        let index = start + offset;
+        if (index < active_records && load_escape(index).w == 1.0) { count += 1u; }
+    }
+    return vec4<f32>(f32(count) / 255.0, 0.0, 0.0, 1.0);
 }
 ";
 
@@ -163,6 +187,20 @@ pub fn scene_shader(limits: DialectLimits) -> String {
             &limits.handle_capacity.div_ceil(4).to_string(),
         );
     source.push_str(SCENE_BODY);
+    source
+}
+
+/// Instantiates the exact status-one census shader at immutable heap capacities.
+#[must_use]
+pub fn glitch_count_shader(limits: DialectLimits) -> String {
+    let mut source = HEAP_SCENE_PREFIX
+        .replace("__DESCRIPTORS__", &limits.descriptor_capacity.to_string())
+        .replace("__SPANS__", &limits.span_capacity.to_string())
+        .replace(
+            "__HANDLE_GROUPS__",
+            &limits.handle_capacity.div_ceil(4).to_string(),
+        );
+    source.push_str(GLITCH_COUNT_BODY);
     source
 }
 
@@ -259,10 +297,14 @@ mod tests {
     }
 
     #[test]
-    fn the_scene_loads_bottom_row_and_debugs_before_escape() {
+    fn the_scene_loads_bottom_row_and_keeps_glitches_out_of_debug() {
         let source = scene_shader(limits());
         assert!(source.contains("let row = index / scene.grid.x;"));
-        assert!(source.contains("malformed(record) || record.w == 1.0"));
+        assert!(source.contains("if (malformed(record))"));
+        assert!(
+            source.contains("if (record.w == 1.0) { return vec4<f32>(1.0, 0.375, 0.0, 1.0); }")
+        );
+        assert!(!source.contains("if (malformed(record) || record.w == 1.0) { return vec4<f32>"));
         assert!(source.contains("if (record.w == 2.0) { return hot.exterior_zero_rgba; }"));
         assert!(!source.contains("record.w == 2.0 || record.w == 3.0"));
         // A beyond-bailout escape carries a negative smooth count and is an ordinary exterior
@@ -273,6 +315,21 @@ mod tests {
         assert!(source.contains("if (!finite(record.x)) { return 0.0; }"));
         assert!(source.contains("vec4<f32>(1.0, 0.0, 1.0, 1.0)"));
         assert!(source.contains("textureLoad(heap_data"));
+    }
+
+    #[test]
+    fn glitch_census_reads_each_active_status_once() {
+        let source = glitch_count_shader(limits());
+        assert!(source.contains("let start = group * 255u;"));
+        assert!(source.contains("index < active_records && load_escape(index).w == 1.0"));
+        assert!(source.contains("f32(count) / 255.0"));
+        assert!(source.contains("if (scene.span.z != 0u)"));
+        assert_translates_to_webgl2(&source, naga::ShaderStage::Vertex, "glitch_count_vertex");
+        assert_translates_to_webgl2(
+            &source,
+            naga::ShaderStage::Fragment,
+            "glitch_count_fragment",
+        );
     }
 
     #[test]

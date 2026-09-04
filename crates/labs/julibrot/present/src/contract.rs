@@ -344,6 +344,8 @@ pub struct PresentFacts {
     pub delivered_level: Option<RefinementLevel>,
     /// Delivered iteration cap.
     pub iteration_cap: Option<u32>,
+    /// Exact status-one record count for the delivered Final scene.
+    pub glitch_pixel_count: Option<u32>,
     /// Latest MAIN palette selection.
     pub palette: PaletteId,
     /// Latest VIEW controls carried by a HOT write.
@@ -419,6 +421,7 @@ impl Default for PresentFacts {
             delivered_height: 0,
             delivered_level: None,
             iteration_cap: None,
+            glitch_pixel_count: None,
             palette: PaletteId::Classic,
             view: ViewControls::NEUTRAL,
             centre_from_reference_px: [0.0; 2],
@@ -539,6 +542,7 @@ mod tests {
         let facts = PresentFacts::default();
         assert_eq!(facts.delivered_width, 0);
         assert_eq!(facts.delivered_level, None);
+        assert_eq!(facts.glitch_pixel_count, None);
         assert_eq!(facts.last_scene, None);
         assert_eq!(facts.relief_redraw_count, 0);
         assert_eq!(facts.status, PresentStatus::WaitingForFirstScene);

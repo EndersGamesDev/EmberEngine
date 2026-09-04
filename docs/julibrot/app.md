@@ -52,11 +52,11 @@ When `|δ′|` leaves `[2⁻⁶⁴,2⁶⁴]`, the pixel renormalizes by `δ′�
 
 On rebase, the implementation reconstructs `Z₀` from reference record zero, sets the unscaled delta to `zₙ−Z₀`, represents that difference at the current scale, resets `r←0`, increments `rebase_count`, and performs exactly one ordinary advance against `Z₀`; therefore `zₙ=Zᵣ+δₙ` remains true for nonzero `Z₀`.
 
-When the reference index reaches `length` before escape or `max_iter`, the pixel sets `glitch=1` and stops; present shows the honest debug tint, and re-rendering glitched pixels with another reference remains out of scope.
+When the reference index reaches `length` before escape or `max_iter`, the pixel sets status `Glitch` and stops; present shows the opaque orange diagnostic, while the magenta debug tint remains reserved for contract violations.
 
 Reference transfers carry `[re,im]`, one binary32 word per coordinate; app expands them to heap texels `[re,im,0,0]`, and math’s `D_work` versus `D_work+16` comparison plus the scaled deep-classification corpus decide whether the words are sufficient. A failing Final escalates precision and is never silently accepted.
 
-The shallow kernel is selected below `zoom_log2=14` and perturbation at or above it; 14 is a displayed POLICY justified by math's f32 error argument. Below the switch app accepts the current centre revision and starts shallow refinement without requesting, transferring, or credit-gating an orbit; at or above the switch a matching orbit remains mandatory, so a shallow-to-deep crossing waits exactly as the deep path does today.
+The shallow kernel is selected below `zoom_log2=14` and perturbation at or above it; 14 is a displayed POLICY justified by math's f32 error argument. Below the switch app accepts the current centre revision and starts shallow refinement without requesting, transferring, or credit-gating an orbit; at or above the switch app requires both the accepted orbit generation and its captured zoom to match current MAIN and the requested zoom exactly, so a 12-to-14 crossing cannot dispatch the carried shallow-generation reference and waits for a freshly generated zoom-14 orbit.
 
 Displayed integral depth is `depth_digits=ceil(max(0,zoom_log2·log10(2)))`; the overlay separately reports `D_floor=ceil(zoom_log2·log10(2)+log10(W))+8`, `D_work=D_floor+ceil(log10(max(max_iter,1)))`, requested bits, and delivered bits after Astro-float’s word rounding and `D_work+16` validation.
 
@@ -106,7 +106,7 @@ Four facts separate the three ways the reference path can go quiet, because the 
 
 The loop reports its own liveness on the same terms: `refresh_status` names the terminal state of the last completed turn, `transient_fence_refusals` counts the bounded fence refusals the loop retried rather than died on, `last_transient_refusal` renders the newest of them as its typed text, `presented_view_stale` says whether the image on the canvas belongs to an older requested view than the one now requested, and `loop_stopped_reason` is absent until the loop stops and then carries the one typed cause it stopped for. None of these is a measurement and none is ever given a number that was not observed.
 
-Aggregate rebase and glitch totals are `unavailable` during normal gather-only rendering; only an explicit labelled measurement readback may populate them, with its own fence, poll count, bytes, and wall.
+Aggregate rebase totals remain `unavailable` during normal gather-only rendering. Every Final requests numeric `glitch_pixel_count` from present's status census; Preview and Interactive report it as unavailable, and a census callback that has not succeeded when the independent scene fence completes leaves the optional fact unavailable without delaying or refusing the picture.
 
 App publishes `horizon_pixels`/`horizon_fraction`, `uncertain_pixels`/`uncertain_fraction`, `edge_on`, and `map_condition_number`. PictureFast samples and paints positive-denominator MapUncertain pixels; Deterministic may refuse them. Edge-on becomes an all-sky scene, and a completed scene paints every surface pixel as mesh or exterior sky.
 
@@ -419,7 +419,7 @@ The ring has three slots, `hot_stride=align_up(288,min_uniform_buffer_offset_ali
 
 `SavedView` carries six object angles, four origin coordinates, ten camera angles, five camera translations, yaw, pitch, height, distances, zoom, encoded centre, and readout mirror; `SavedView::lerp` composes math's interpolators.
 
-`PageFacts` follows source publication order and page-contract coverage. In addition to the existing transport, precision, ladder, timing, allocation, and delivery fields it publishes `scene_mode`, `scene_update_pending`, `draft_skipped_count`, `last_draft_skip_reason`, `object_angles`, `plane_origin`, `camera_angles`, `camera_translation`, observer and distance controls, `horizon_pixels`, `horizon_fraction`, `uncertain_pixels`, `uncertain_fraction`, `edge_on`, `map_condition_number`, `warp_exposed_fraction`, `relief_redraw_count`, warp kind and error facts, `level_timings`, and discarded draft pixels/iterations.
+`PageFacts` follows source publication order and page-contract coverage. In addition to the existing transport, precision, ladder, timing, allocation, and delivery fields it publishes `glitch_pixel_count` for a delivered Final, `scene_mode`, `scene_update_pending`, `draft_skipped_count`, `last_draft_skip_reason`, `object_angles`, `plane_origin`, `camera_angles`, `camera_translation`, observer and distance controls, `horizon_pixels`, `horizon_fraction`, `uncertain_pixels`, `uncertain_fraction`, `edge_on`, `map_condition_number`, `warp_exposed_fraction`, `relief_redraw_count`, warp kind and error facts, `level_timings`, and discarded draft pixels/iterations.
 
 The page contributes four more facts of its own to the same overlay: `view_box_a_held` and `view_box_b_held`, `morph_t`, and `view_box_storage`. They are not `PageFacts` fields because none of them is app state — two boxes and a slider live in the document and in per-viewer storage, and pushing them into the app would invent a second owner for them. `morph_t` is `null` while the slider is disabled, and `view_box_storage` names the refusal when the storage accessor threw, so a page with no memory says so rather than silently holding nothing.
 
@@ -427,7 +427,7 @@ The page contributes four more facts of its own to the same overlay: `view_box_a
 
 The current queue has no fence between the kernels SCRATCH-to-DATA dispatch and the following scene pass, so `dispatch_us` is unavailable without adding a fence and remains `null`. `scene_us` and `warp_us` are converted from the two present-owned four-byte fence walls already submitted, with no added fence or wait. Worker reference time comes from the response's measured `compute_us`; the existing `credit_us` response word is admission balance rather than elapsed wait, so `credit_wait_us` remains unavailable until the worker protocol exposes an elapsed boundary instead of relabelling balance as time. The native frame-loop harness drives submission, scene completion, source-named warp completion, and discard events through this ledger and requires a populated record.
 
-Normal rendering sets the three aggregate rebase/glitch fields to `unavailable`; explicit labelled measurement may set measured values, and all absent browser facts render `requires visible replay` rather than zero.
+Normal rendering leaves both rebase aggregate fields unavailable and publishes the numeric status-one count when the Final census is mapped by the time its independent scene fence completes; all genuinely absent browser facts, including a failed or late census, render `requires visible replay` rather than zero.
 
 `AppError` is the typed union `VersionSkew`, `Capability`, `DeviceLost`, `UncapturedGpu`, `CapturedGpu`, `SurfaceBusy`, `SurfaceSkipped`, `Surface`, `StaleGeneration`, `EpochExhausted`, `GenerationExhausted`, `Deadline`, `CompletionPollLimit`, `Mapping`, `Worker`, `Math`, `Kernel`, `Present`, and `Serialization`; each carries operation and generation or epoch where meaningful.
 
@@ -461,7 +461,7 @@ The executor is extraction, not a fork or new backend abstraction; if implementa
 |Never hang|Worker yields, four-second buffer return, 4,096 GPU polls, 30-second fences/suites, finite timer probes, cancellation and checked generations bound progress.|
 |Arbitrary zoom|Scaled perturbation carries mantissa and signed exponent and never uploads a tiny absolute f32 scale.|
 |Math evidence|Astro-float remains selected; hand-written f64 stays for navigation and warp unless its binding oracle fails.|
-|Austere authority|One world, one scene pass plus warp, one heap class, no tick, DAG, shared-memory path, second reference, WebGPU, or gameplay truth.|
+|Austere authority|One world, one image scene pass plus warp and a Final-only status census, one heap class, no tick, DAG, shared-memory path, second reference, WebGPU, or gameplay truth.|
 |Versioned deployment|One ABI value pins page, glue, wasm, worker and JBL1; mismatch refuses before orbit transfer and deploy is atomic.|
 
 ## 5. Oracles and tests
@@ -476,11 +476,11 @@ Native wire tests construct all nine message kinds, trailers and `ErrorRecord` v
 
 Native owner tests enumerate HOT/MAIN staging and drains, require one shared incrementing epoch without using equality for compatibility, prove the new centre and reference-shift fields across two deep recentres, reject registry generation mismatch, and prove no accepted MAIN state snaps newer controls backward.
 
-Native kernels integration tests pin all three levels and caps, power-of-two degradation, immutable Final span, dense-prefix headers, `RefinementLevel` propagation, one logical dispatch per submitted level, exact SCRATCH rows/bytes, shallow classification and index exact with smooth `≤10⁻⁴`, and scaled perturbation smooth `≤2·10⁻³` with exact classification outside math’s error envelope.
+Native kernels integration tests pin all three levels and caps, power-of-two degradation, immutable Final span, dense-prefix headers, `RefinementLevel` propagation, one logical dispatch per submitted level, exact SCRATCH rows/bytes, shallow classification and index exact with smooth `≤10⁻⁴`, scaled perturbation smooth `≤2·10⁻³` with exact classification outside math’s error envelope, and the status-one result from reusing the pinned 78-record zoom-12 reference at zoom 14.
 
 Native present tests pin screen-aligned identity, exterior sky coverage, status shading, sampled-pose reference rebasing, source texture identity, slice and half-pixel residual compatibility, exact flat and camera-translation warps, one-pixel enforcement, 288/160-byte layouts, WebGL2 shader translation, three slots, and two textures.
 
-Native app state tests model §§2.5–2.7 at every asynchronous boundary and require poll before HOT drain, HOT write before frame, current deep orbit upload before acceptance, direct shallow acceptance without an orbit, a deep crossing that remains blocked until its orbit, scene submission only when due and available, app-held surface keyed by warp id, fence event before present, stale drop, both precision ladders, latest-wins schedule, manual HOT-only reprojection, explicit manual ladder restart, unsuppressed MAIN orbit work, pending-manual return to auto, automatic first scene, and no re-entrant borrow. On osprey, the native frame-loop timing oracle measured median time to first shallow scene over five warmed samples as 1,317.104892 ms before the removed paired-orbit wait and 0.000100 ms after it; this is a test-profile wall under idle scheduling, not a browser GPU measurement.
+Native app state tests model §§2.5–2.7 at every asynchronous boundary and require poll before HOT drain, HOT write before frame, current deep orbit upload before acceptance, direct shallow acceptance without an orbit, a deep crossing that remains blocked until an orbit with matching generation and exact zoom, scene submission only when due and available, app-held surface keyed by warp id, fence event before present, stale drop, both precision ladders, latest-wins schedule, manual HOT-only reprojection, explicit manual ladder restart, unsuppressed MAIN orbit work, pending-manual return to auto, automatic first scene, and no re-entrant borrow. The 960-by-540 seahorse viewer harness drives the 12-to-14 guard, generates the matching 512-record zoom-14 orbit, renders Final through the CPU perturbation mirror, and requires `glitch_pixel_count=0`. On osprey, the native frame-loop timing oracle measured median time to first shallow scene over five warmed samples as 1,317.104892 ms before the removed paired-orbit wait and 0.000100 ms after it; this is a test-profile wall under idle scheduling, not a browser GPU measurement.
 
 The native `accepted_reference_upload_reuses_scratch_without_copying_the_transfer` frame-loop harness measures a cap-4,096 accepted reference at two per-edit allocations and 65,536 copied transfer bytes before, versus zero per-edit allocations and 32,768 copied bytes after the app-owned 65,536-byte upload scratch is warm; the remaining copy expands each eight-byte transfer record into its required sixteen-byte heap texel.
 
@@ -500,7 +500,7 @@ Native page-contract tests pin ABI and URLs, one wasm artifact plus `worker_main
 
 Native measurement tests pin separate present-owned scene and warp fences, poll-before-yield, 4,096 polls, 30,000 ms, post-fence present, first-frame labels, second-frame 100 ms decision, timer-probe bounds, three adaptive warm-ups, 15 samples, 32 quanta, 250 ms batch, 4,096 repeats, 30-second suite, median and nearest-rank p95.
 
-`requires visible replay`: GL identity, RGBA32F usages, scratch-copy visibility, height-zero and relief orientation, the continuity of the morph as each control moves, corrected hybrid planes, scaled deep zoom beyond the former f32-underflow boundary, debug glitch tint, clear disocclusion, and a clean console.
+`requires visible replay`: GL identity, RGBA32F usages, scratch-copy visibility, height-zero and relief orientation, the continuity of the morph as each control moves, corrected hybrid planes, scaled deep zoom beyond the former f32-underflow boundary, orange glitch diagnostics distinct from magenta contract violations, numeric Final glitch census, clear disocclusion, and a clean console.
 
 `requires visible replay`: rapid pan, zoom, angle, preset, cap, precision-mode, and palette changes while worker, scene and warp work overlap must end at the newest controls, translate smoothly at depth, rebase retained frames across accepted references, and clear only on cap, plane-origin, or precision-mode changes.
 
@@ -527,7 +527,7 @@ Native measurement tests pin separate present-owned scene and warp fences, poll-
 |Extent churn overwrites retained texture|Two-texture interleaving tests and visible level walk with `texture_reallocations`.|
 |Transfer clones, leaks, or starves buffers|Four-slot model, sender-detachment replay, trailer identity and bounded shutdown.|
 |Credit becomes invented throttling|Exact worker token-bucket model with 250,000 policy, warm-up, cancellation and overfeed facts.|
-|Normal overlay invents rebase/glitch totals|Snapshot test requires `unavailable`; explicit readback is separately labelled and fenced.|
+|Normal overlay invents rebase/glitch totals|Snapshot test keeps rebases unavailable; the ordered Final census alone supplies numeric `glitch_pixel_count`.|
 |Loader combines cached incompatible artifacts|Pinned URL/ABI tests and deliberate main/worker skew refusal.|
 |Bundle cost is hidden|Release artifact byte gate and visible two-instance memory report.|
 |Math/present type ownership creates a dependency cycle|Compile-time dependency test plus resolution of the `Pose.view` representation before implementation imports.|
@@ -542,7 +542,7 @@ Phase 2 integrates the published `ViewerOwner`, owner records, centre/reference 
 
 Phase 3 integrates affine object/camera poses, screen-aligned kernel dispatch, mode ladders, dense-prefix facts, power-of-two delivery, present's 288-byte ring and exterior sky, source-bound measured warp planner, asynchronous events, and post-fence surface presentation.
 
-Phase 4 builds the page, one-module worker bootstrap, version handshake, stable controls, requested/delivered facts, unavailable gather totals, DOM overlay, bundle disclosure, and typed status rendering, estimated at 470 HTML, CSS, JavaScript, Rust and test lines.
+Phase 4 builds the page, one-module worker bootstrap, version handshake, stable controls, requested/delivered facts, unavailable rebase totals, the Final glitch census, DOM overlay, bundle disclosure, and typed status rendering, estimated at 470 HTML, CSS, JavaScript, Rust and test lines.
 
 Phase 5 adds adaptive timing, single-frame policy, finite fence and timer-probe accounting, and replay instrumentation, estimated at 210 Rust, JavaScript and test lines.
 
@@ -552,6 +552,7 @@ The refined app estimate is approximately 2,710 net new lines including the Phas
 
 ## 8. Unresolved for implementation review
 
+- Backlog: second-reference correction for a real glitch from an otherwise current orbit is deferred because it requires cluster selection, another worker orbit, regional rerender, and merge ownership; its minimum cost is one additional high-precision reference computation and one regional kernel/presentation pass per corrected cluster, while the current contract reports and paints those residual pixels diagnostically.
 - The 250,000-microsecond credit and zoom-14 switch are accepted policies without browser field evidence; implementation may not silently tune them.
 - The concrete release script for atomic page/glue/wasm/worker publication remains to be selected, although ABI and refusal semantics are fixed.
 - Hidden-page suspension can delay JavaScript before it observes a 30-second or four-second deadline; the first resumed poll refuses, but wasm cannot bound unscheduled browser time.
@@ -583,7 +584,7 @@ The refined app estimate is approximately 2,710 net new lines including the Phas
 |J18|ACCEPTED|Each drain bumps shared u64 epoch and app never uses equality as compatibility.|
 |J19|ACCEPTED|Passes and displays 250,000 microseconds per second as implementation-constant POLICY.|
 |J20|ACCEPTED|Keeps `c₀` in MAIN plane origin and sets absolute centre to preset origin.|
-|J21|ACCEPTED|Normal rebase/glitch aggregates are unavailable; explicit measurement readback is labelled and fenced.|
+|J21|ACCEPTED|Rebase aggregates remain unavailable; every delivered Final gets an ordered, mapped and numerically published glitch census.|
 |J22|ACCEPTED|Displays integral depth, floor, working, requested and delivered precision separately.|
 |J23|ACCEPTED|Pins reference indices and `length=min(max_iter,escape_index+1)`.|
 |J24|ACCEPTED|Pins `2·10⁻³` smooth tolerance, propagated envelope, exact outside-envelope classification and boundary fixtures.|

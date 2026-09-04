@@ -46,7 +46,7 @@ For either flat preset-faced chart and exact `aspect=W/H`, the normalized invers
 
 Zoom depth is `zoom_log2·log10(2)` decimal digits, integral `depth_digits = ceil(max(0,zoom_log2·log10(2)))`, and the precision floor is `D_floor = ceil(zoom_log2·log10(2)+log10(W))+8`; worker adds its working margin and reports floor, working, and delivered precision separately, while kernels retain only the supplied orbit bits.
 
-At or above the deep switch, the owner requests a new reference when the centre moves more than one quarter of the view extent or `zoom_log2` differs by more than two from the reference zoom, with worker-owned hysteresis; below the switch app accepts the current centre directly and shallow kernels receive no reference input.
+At or above the deep switch, a scene dispatch requires a reference whose worker generation equals current MAIN and whose captured `zoom_log2` is bit-identical to the requested zoom; a reference retained across a shallow scene may support reprojection while the replacement is pending, but it may not drive new perturbation work. Below the switch app accepts the current centre directly and shallow kernels receive no reference input.
 
 ### 2.2 Shallow escape kernel
 
@@ -88,7 +88,7 @@ The mirrors retain a defensive limit of `floor((i32::MAX−i32::MIN)/64) = 67,10
 
 Every represented-value operation uses one shared bit construction in the WGSL kernel and CPU mirror: finite nonzero inputs with exponent above `512` produce signed infinity, those below `−512` produce signed zero, and an exponent in `[-512,512]` is consumed in steps clamped to `[-126,127]`, each multiplying by the exact normal power of two whose f32 bits are `(step+127)<<23`; at most five steps are required. The repeated f32 multiplication preserves IEEE-754 overflow and gradual-underflow behavior bit for bit across the mirror and kernel, infinity is caught by the following exponent-bit finiteness check as a glitch, and an underflowed rebase comparison remains false because a negligible delta must not trigger rebasing.
 
-When `r` reaches reference `length` before escape or the outer iteration cap, iteration stops with `smooth_iter = −1.0`, `escaped = 0`, the accumulated integer-valued `rebase_count`, and `status = Glitch`; glitch takes precedence over the uncertainty annotation, re-rendering those pixels with a second reference is explicitly out of scope, and present uses the honest debug tint.
+When `r` reaches reference `length` before escape or the outer iteration cap, iteration stops with `smooth_iter = −1.0`, `escaped = 0`, the accumulated integer-valued `rebase_count`, and `status = Glitch`; glitch takes precedence over the uncertainty annotation. App prevents the known stale-reference case by waiting for a generation-and-zoom-matching orbit, while any residual real glitch remains a valid measured kernel state that present paints with its opaque orange diagnostic rather than the magenta contract-violation tint.
 
 A non-escaping perturbation pixel that reaches `max_iter` records `[-1.0,0.0,rebase_count,status]` with status zero or three; all branch outputs are finite, so NaN and infinity are neither sentinel values nor accepted records.
 
@@ -178,12 +178,12 @@ The transferred payload is little-endian IEEE-754 binary32; owner uploads change
 
 `EscapeGrid` is the typed Rust wrapper `{ span: DataSpan, width: u32, height: u32, level: RefinementLevel }`; `span.logical_len` is Final capacity, while `width·height` is the initialized dense prefix present may fetch for the current level.
 
-`SampleStatus` is the closed semantic enum `Sampled=0`, `Glitch=1`, `Horizon=2`, and `MapUncertain=3`; its RGBA32F encoding is the exactly representable corresponding f32 integer and unknown values are malformed. `Sampled` and `MapUncertain` both carry escape/interior results for palette evaluation, `Glitch` is the debug terminal, and `Horizon` is the immediate-exterior terminal.
+`SampleStatus` is the closed semantic enum `Sampled=0`, `Glitch=1`, `Horizon=2`, and `MapUncertain=3`; its RGBA32F encoding is the exactly representable corresponding f32 integer and unknown values are malformed. `Sampled` and `MapUncertain` both carry escape/interior results for palette evaluation, `Glitch` is the measured numerical terminal, and `Horizon` is the immediate-exterior terminal.
 
 |Status|Kernel action|Scene presentation|
 |------|-------------|------------------|
 |`Sampled=0`|Run the recurrence and retain its finite escaped or capped record.|Evaluate the ordinary exterior/interior palette path.|
-|`Glitch=1`|Stop on the existing arithmetic/reference failure with a finite record.|Paint the fixed opaque debug tint.|
+|`Glitch=1`|Stop on the existing arithmetic/reference failure with a finite record.|Paint the fixed opaque orange diagnostic and include it in the Final count.|
 |`Horizon=2`|Do not divide or iterate; write `[-1,0,0,2]`.|Paint the palette exterior at zero smooth iterations.|
 |`MapUncertain=3`|In `PictureFast`, divide and run the recurrence with sticky status three; only `Deterministic` may refuse the grid.|Evaluate the recorded exterior/interior result exactly like status zero.|
 
@@ -196,7 +196,7 @@ Escape-grid texel `(i,j)` is record `j·width+i`, one 16-byte RGBA32F value with
 |8–11|B|`rebase_count: f32`, a nonnegative exactly representable integer, zero for shallow|
 |12–15|A|`status: f32`, exactly `0.0` sampled, `1.0` glitch, `2.0` horizon, or `3.0` uncertified near horizon|
 
-Present consumes `&EscapeGrid`, resolves its DATA span through the unchanged heap bind group, treats row zero as bottom and `+v` as up, displays status one in the honest debug tint, displays status two as the palette exterior at zero smooth iterations, evaluates status three from its sampled record exactly like status zero, and never samples padding records from `span.logical_len−width·height`.
+Present consumes `&EscapeGrid`, resolves its DATA span through the unchanged heap bind group, treats row zero as bottom and `+v` as up, displays status one in the orange diagnostic, displays status two as the palette exterior at zero smooth iterations, evaluates status three from its sampled record exactly like status zero, and never samples padding records from `span.logical_len−width·height`.
 
 ### 3.4 Uniform blocks
 
@@ -349,6 +349,8 @@ Math's merged `escape_f32`, `perturb_scaled_f64`, and propagated-envelope functi
 
 Perturbation conformance requires exact classification and integer escape index outside math's propagated error envelope, exact rebase count and status, and `|smooth_gpu−smooth_cpu| ≤ 2×10⁻³`; samples inside the envelope remain explicit boundary fixtures and are never silently removed from reported counts.
 
+The seahorse conformance pin chooses a 60-bit zoom-12 reference 30 pixels above the target, whose orbit ends at 78 records, reuses it through the corresponding translated map at zoom 14, and requires pixel `(478,387)` of the 960-by-540 grid to classify as `Glitch`; this proves that reference exhaustion is a real kernel result rather than a shallow-switch palette artefact.
+
 The reference adequacy oracle recomputes at working precision `D` and `D+16`, requires identical escape index and both emitted coordinate words within two f32 ulps, then runs the deep scaled-classification corpus; failure escalates precision before a Final is re-issued.
 
 The production-output oracle checks every record for finite channels, exact binary escaped values, one of the four exact status codes, the exact fixed `Horizon` record, sampled invariants for every `MapUncertain` record, integer-valued rebase count, zero shallow rebase count, and no read or presentation access beyond the active prefix.
@@ -373,7 +375,7 @@ Dispatch walls, scene walls, and poll counts are browser facts measured by app a
 |Reference replacement could pair new metadata with old DATA records.|Generation-tagged upload fixtures delay publication until data and resource words are queued, then deliberately dispatch stale generations and require `StaleReference`.|
 |Extracting the paid GPU executor or prefix helper could accidentally fork heap semantics.|An integration oracle runs the heap golden and Julibrot dispatch through the same executor type and compares bind-group identity, full and prefix header bytes, copy regions, capacity facts, and typed failures; a non-visibility extraction stops the app lane.|
 |RGBA32F or copy usage may be absent despite nominal WebGL2.|Initialization checks live format usages and the standing output-path golden; refusal names the adapter, backend, and failed usage.|
-|Aggregate rebase and glitch totals are unavailable without readback or another reduction kernel.|The normal overlay labels totals unavailable and presents per-pixel debug tint; an explicitly requested measurement readback may count them and must report its fence and polls.|
+|A status-one region reaches Final without an observable count.|Present's Final-only packed census publishes the numeric count when its optional mapping is ready at scene completion and always retains the per-pixel orange diagnostic.|
 
 ## 7. Implementation phases and line budget
 
@@ -413,9 +415,11 @@ The corpus covers the zoom-14 boundary, zooms 40, 80, 100, 256, 512, and the las
 
 - `EscapeGrid` owns a cloneable `DataSpan`, while present may retain or submit a scene that names it; app and present must prove the lifetime handoff that prevents `free_grid` from reclaiming a span still in flight.
 
-- Aggregate rebase and glitch totals remain unavailable during normal gather-only rendering; an explicitly requested measurement readback may count them, but its fence, polls, generation, and effect on timing qualification still need implementation evidence.
+- Aggregate rebase totals remain unavailable during normal gather-only rendering; present counts status-one records for every Final, but its optional readback never delays or refuses the picture and publishes `glitch_pixel_count` only when mapping has already succeeded at scene completion.
 
-- A reference can legitimately end before a nearby pixel escapes, but no policy requests another reference from a high glitch fraction; second-reference repair is out of scope, so v1 exposes only the debug tint and measured limit.
+- Backlog owner decision: shallow acceptance retains the last deep reference so its picture can support reprojection while replacement work is pending; clearing `current_orbit` and `accepted_reference_zoom_log2` there would make stale perturbation dispatch unrepresentable, at the cost of forfeiting that retained deep source, so the generation-and-zoom dispatch guard remains the chosen safety wall.
+
+- Backlog: a reference can legitimately end before a nearby pixel escapes even when its generation and zoom match; second-reference correction is deferred because it needs region selection and merge ownership, and costs at least one additional high-precision worker orbit plus a regional kernel and presentation pass per corrected cluster. Until then v1 exposes the exact count and orange diagnostic without confusing it with a contract violation.
 
 - Exact shallow classification across CPU and browser shader still depends on math's predeclared boundary fixtures and contracted operation order; fused-operation behavior must not be accommodated by selecting samples after GPU results are seen.
 

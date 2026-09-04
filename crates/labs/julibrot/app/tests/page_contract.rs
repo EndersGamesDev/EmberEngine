@@ -662,7 +662,8 @@ fn page_facts_carry_every_contract_field_without_fake_aggregate_counts() {
             "missing PageFacts.{field}"
         );
     }
-    assert_eq!(FACTS.matches("\"unavailable\"").count(), 3);
+    assert_eq!(FACTS.matches("\"unavailable\"").count(), 2);
+    assert!(FACTS.contains("glitch_pixel_count: present.glitch_pixel_count"));
     assert!(FACTS.contains("\"requires visible replay\""));
     assert!(INDEX.contains("approximately 4.5 MB"));
     assert!(MAIN.contains("wasm_bundle_bytes"));
