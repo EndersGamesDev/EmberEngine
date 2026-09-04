@@ -16,7 +16,7 @@ use crate::{
 };
 
 const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
+const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 const FENCE_BYTES: u64 = 4;
 const HOT_SOURCE_VALID_BYTE_OFFSET: u64 = 280;
 const EXPOSURE_FACT_STEPS: u32 = 9;
@@ -30,25 +30,66 @@ enum SceneLayer {
     Main,
 }
 
-const BACKDROP_THEN_MAIN: [SceneLayer; 2] = [SceneLayer::Backdrop, SceneLayer::Main];
+const MAIN_THEN_BACKDROP: [SceneLayer; 2] = [SceneLayer::Main, SceneLayer::Backdrop];
 const MAIN_ONLY: [SceneLayer; 1] = [SceneLayer::Main];
 
+/// The main grid is drawn FIRST and the backdrop second.
+///
+/// Depth alone cannot compose the two: they are independent samplings of the same escape-time
+/// field, their record heights are uncorrelated, and the coarse backdrop's long chords land nearer
+/// than the fine surface over large areas, so a depth test admits the backdrop straight through the
+/// interior of the picture. The stencil decides instead — see [`scene_stencil`].
 const fn scene_draw_order(has_backdrop: bool) -> &'static [SceneLayer] {
     if has_backdrop {
-        &BACKDROP_THEN_MAIN
+        &MAIN_THEN_BACKDROP
     } else {
         &MAIN_ONLY
     }
 }
 
-#[cfg(test)]
-const fn composed_layer(main_covered: bool, backdrop_covered: bool) -> Option<SceneLayer> {
-    if main_covered {
-        Some(SceneLayer::Main)
-    } else if backdrop_covered {
-        Some(SceneLayer::Backdrop)
-    } else {
-        None
+/// The stencil value a drawn main-grid fragment leaves behind, and so the value the backdrop is
+/// refused at. Zero is the pass's clear value: the untouched frame.
+const MAIN_STENCIL: u32 = 1;
+const BACKDROP_STENCIL: u32 = 0;
+
+/// The stencil reference each layer is drawn with.
+const fn stencil_reference(layer: SceneLayer) -> u32 {
+    match layer {
+        SceneLayer::Main => MAIN_STENCIL,
+        SceneLayer::Backdrop => BACKDROP_STENCIL,
+    }
+}
+
+/// The composition rule, as the fixed-function state that enforces it.
+///
+/// The main grid stamps every fragment it draws, whatever its depth; the backdrop is admitted only
+/// where the stamp is absent and stamps nothing itself. So the backdrop is visible exactly where
+/// the main grid has no fragment — its sky, its discarded records, and the frame outside its own
+/// extent — and never over a drawn main record. Within each layer the depth buffer still orders the
+/// layer against itself, so the backdrop keeps its own internal ordering.
+fn scene_stencil(layer: SceneLayer) -> wgpu::StencilState {
+    let face = match layer {
+        SceneLayer::Main => wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Always,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::Replace,
+        },
+        SceneLayer::Backdrop => wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Equal,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::Keep,
+        },
+    };
+    wgpu::StencilState {
+        front: face,
+        back: face,
+        read_mask: 0xff,
+        write_mask: match layer {
+            SceneLayer::Main => 0xff,
+            SceneLayer::Backdrop => 0,
+        },
     }
 }
 
@@ -178,6 +219,7 @@ struct GpuState {
     glitch_count_target: GlitchCountTarget,
     glitch_readback: GlitchReadback,
     scene_pipeline: wgpu::RenderPipeline,
+    backdrop_pipeline: wgpu::RenderPipeline,
     glitch_count_pipeline: wgpu::RenderPipeline,
     relief_redraw_pipeline: wgpu::RenderPipeline,
     warp_pipeline: wgpu::RenderPipeline,
@@ -1151,7 +1193,20 @@ fn create_gpu_state(
         &heap_layout,
         &scene_layout,
         SCENE_FORMAT,
-        true,
+        Some(SceneLayer::Main),
+    );
+    // Same shader, same target, one differing fixed-function state: the backdrop is stencil-tested
+    // against the stamp the main pass leaves, so it reaches only the pixels the main grid missed.
+    let backdrop_pipeline = create_scene_pipeline(
+        device,
+        "Julibrot backdrop scene pipeline",
+        &source,
+        "scene_vertex",
+        "scene_fragment",
+        &heap_layout,
+        &scene_layout,
+        SCENE_FORMAT,
+        Some(SceneLayer::Backdrop),
     );
     let glitch_count_pipeline = create_scene_pipeline(
         device,
@@ -1162,7 +1217,7 @@ fn create_gpu_state(
         &heap_layout,
         &scene_layout,
         SCENE_FORMAT,
-        false,
+        None,
     );
     let relief_redraw_pipeline = create_scene_pipeline(
         device,
@@ -1173,7 +1228,7 @@ fn create_gpu_state(
         &heap_layout,
         &scene_layout,
         config.surface_format,
-        true,
+        Some(SceneLayer::Main),
     );
     let warp_pipeline = create_warp_pipeline(
         device,
@@ -1196,6 +1251,7 @@ fn create_gpu_state(
         glitch_count_target,
         glitch_readback,
         scene_pipeline,
+        backdrop_pipeline,
         glitch_count_pipeline,
         relief_redraw_pipeline,
         warp_pipeline,
@@ -1390,7 +1446,7 @@ fn create_scene_pipeline(
     heap_layout: &wgpu::BindGroupLayout,
     scene_layout: &wgpu::BindGroupLayout,
     color_format: wgpu::TextureFormat,
-    depth: bool,
+    depth: Option<SceneLayer>,
 ) -> wgpu::RenderPipeline {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(label),
@@ -1425,11 +1481,11 @@ fn create_scene_pipeline(
             cull_mode: None,
             ..Default::default()
         },
-        depth_stencil: depth.then_some(wgpu::DepthStencilState {
+        depth_stencil: depth.map(|layer| wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
             depth_write_enabled: true,
             depth_compare: SCENE_DEPTH_COMPARE,
-            stencil: wgpu::StencilState::default(),
+            stencil: scene_stencil(layer),
             bias: wgpu::DepthBiasState::default(),
         }),
         multisample: wgpu::MultisampleState::default(),
@@ -1614,7 +1670,7 @@ fn encode_scene(
     has_backdrop: bool,
 ) {
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("Julibrot backdrop then main scene pass"),
+        label: Some("Julibrot main then backdrop scene pass"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
             view: &gpu.scene_textures[texture_index].view,
             resolve_target: None,
@@ -1623,25 +1679,42 @@ fn encode_scene(
                 store: wgpu::StoreOp::Store,
             },
         })],
-        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-            view: &gpu.depth.view,
-            depth_ops: Some(wgpu::Operations {
-                load: wgpu::LoadOp::Clear(1.0),
-                store: wgpu::StoreOp::Discard,
-            }),
-            stencil_ops: None,
-        }),
+        depth_stencil_attachment: Some(scene_depth_attachment(&gpu.depth.view)),
         occlusion_query_set: None,
         timestamp_writes: None,
     });
     pass.set_bind_group(0, &gpu.heap_group, &[]);
-    pass.set_pipeline(&gpu.scene_pipeline);
     for layer in scene_draw_order(has_backdrop) {
-        let (group, indices) = match layer {
-            SceneLayer::Backdrop => (&gpu.scene_groups[1], gpu.backdrop_indices.as_ref()),
-            SceneLayer::Main => (&gpu.scene_groups[0], gpu.indices.as_ref()),
+        let (pipeline, group, indices) = match layer {
+            SceneLayer::Main => (
+                &gpu.scene_pipeline,
+                &gpu.scene_groups[0],
+                gpu.indices.as_ref(),
+            ),
+            SceneLayer::Backdrop => (
+                &gpu.backdrop_pipeline,
+                &gpu.scene_groups[1],
+                gpu.backdrop_indices.as_ref(),
+            ),
         };
+        pass.set_pipeline(pipeline);
+        pass.set_stencil_reference(stencil_reference(*layer));
         draw_scene_mesh(&mut pass, group, indices, hot_offset);
+    }
+}
+
+/// The scene depth-stencil attachment: depth cleared to the far plane, the stamp cleared to none.
+fn scene_depth_attachment(view: &wgpu::TextureView) -> wgpu::RenderPassDepthStencilAttachment<'_> {
+    wgpu::RenderPassDepthStencilAttachment {
+        view,
+        depth_ops: Some(wgpu::Operations {
+            load: wgpu::LoadOp::Clear(1.0),
+            store: wgpu::StoreOp::Discard,
+        }),
+        stencil_ops: Some(wgpu::Operations {
+            load: wgpu::LoadOp::Clear(BACKDROP_STENCIL),
+            store: wgpu::StoreOp::Discard,
+        }),
     }
 }
 
@@ -1727,14 +1800,7 @@ fn encode_scene_mesh(
     load_color: wgpu::Color,
     label: &'static str,
 ) {
-    let depth_attachment = Some(wgpu::RenderPassDepthStencilAttachment {
-        view: &gpu.depth.view,
-        depth_ops: Some(wgpu::Operations {
-            load: wgpu::LoadOp::Clear(1.0),
-            store: wgpu::StoreOp::Discard,
-        }),
-        stencil_ops: None,
-    });
+    let depth_attachment = Some(scene_depth_attachment(&gpu.depth.view));
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some(label),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1751,6 +1817,7 @@ fn encode_scene_mesh(
     });
     pass.set_bind_group(0, &gpu.heap_group, &[]);
     pass.set_pipeline(pipeline);
+    pass.set_stencil_reference(stencil_reference(SceneLayer::Main));
     draw_scene_mesh(
         &mut pass,
         &gpu.scene_groups[0],
@@ -2446,16 +2513,135 @@ mod tests {
         assert_eq!([load.r, load.g, load.b, load.a], sky.map(f64::from));
     }
 
+    /// What one pixel of the scene attachment holds when the pass is over.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum ComposedPixel {
+        Sky,
+        Backdrop,
+        Main,
+    }
+
+    /// Runs the pass's real depth and stencil state over one pixel, in draw order.
+    ///
+    /// Nothing here knows the intended answer: it reads `scene_draw_order`, `scene_stencil`,
+    /// `stencil_reference` and `SCENE_DEPTH_COMPARE` — the same values the pipelines and the
+    /// encoder are built from — and applies the fixed-function rules to them. Restore the old
+    /// backdrop-first, stencil-free composition and the interior cases below fail.
+    fn compose_pixel(main: Option<f32>, backdrop: Option<f32>) -> ComposedPixel {
+        let mut colour = ComposedPixel::Sky;
+        let mut depth = 1.0_f32;
+        let mut stencil = BACKDROP_STENCIL;
+        for layer in scene_draw_order(backdrop.is_some()) {
+            let (fragment, drawn) = match layer {
+                SceneLayer::Main => (main, ComposedPixel::Main),
+                SceneLayer::Backdrop => (backdrop, ComposedPixel::Backdrop),
+            };
+            let Some(fragment) = fragment else {
+                continue;
+            };
+            let state = scene_stencil(*layer);
+            let reference = stencil_reference(*layer);
+            let face = state.front;
+            let operation = if !compares(
+                face.compare,
+                f64::from(reference & state.read_mask),
+                f64::from(stencil & state.read_mask),
+            ) {
+                face.fail_op
+            } else if !compares(SCENE_DEPTH_COMPARE, fragment.into(), depth.into()) {
+                face.depth_fail_op
+            } else {
+                depth = fragment;
+                colour = drawn;
+                face.pass_op
+            };
+            let written = stencil_write(operation, reference, stencil);
+            stencil = (stencil & !state.write_mask) | (written & state.write_mask);
+        }
+        colour
+    }
+
+    /// The WebGPU comparison functions, over a new value and the stored one.
+    #[allow(
+        clippy::float_cmp,
+        reason = "the fixed-function equality test is exact by definition"
+    )]
+    fn compares(compare: wgpu::CompareFunction, new: f64, stored: f64) -> bool {
+        match compare {
+            wgpu::CompareFunction::Never => false,
+            wgpu::CompareFunction::Less => new < stored,
+            wgpu::CompareFunction::Equal => new == stored,
+            wgpu::CompareFunction::LessEqual => new <= stored,
+            wgpu::CompareFunction::Greater => new > stored,
+            wgpu::CompareFunction::NotEqual => new != stored,
+            wgpu::CompareFunction::GreaterEqual => new >= stored,
+            wgpu::CompareFunction::Always => true,
+        }
+    }
+
+    /// The WebGPU stencil operations, before the write mask is applied.
+    fn stencil_write(operation: wgpu::StencilOperation, reference: u32, stored: u32) -> u32 {
+        match operation {
+            wgpu::StencilOperation::Keep => stored,
+            wgpu::StencilOperation::Zero => 0,
+            wgpu::StencilOperation::Replace => reference,
+            wgpu::StencilOperation::Invert => !stored & 0xff,
+            wgpu::StencilOperation::IncrementClamp => stored.saturating_add(1).min(0xff),
+            wgpu::StencilOperation::DecrementClamp => stored.saturating_sub(1),
+            wgpu::StencilOperation::IncrementWrap => (stored + 1) & 0xff,
+            wgpu::StencilOperation::DecrementWrap => stored.wrapping_sub(1) & 0xff,
+        }
+    }
+
+    /// The composition rule, driven through the state the pass actually carries.
+    ///
+    /// The two grids are independent samplings of the same field, so the coarse backdrop's chords
+    /// land nearer than the fine surface over large areas. Depth alone therefore lets the backdrop
+    /// punch through the interior of the picture; the stencil is what makes the main grid own every
+    /// pixel it reaches, and the backdrop own exactly the rest.
     #[test]
-    fn backdrop_is_drawn_first_and_main_wins_equal_depth() {
+    fn the_backdrop_shows_only_where_the_main_grid_has_no_fragment() {
+        for main in [0.1_f32, 0.5, 0.9] {
+            for backdrop in [0.05_f32, 0.5, 0.95] {
+                assert_eq!(
+                    compose_pixel(Some(main), Some(backdrop)),
+                    ComposedPixel::Main,
+                    "main at {main} lost to a backdrop chord at {backdrop}"
+                );
+            }
+        }
         assert_eq!(
-            scene_draw_order(true),
-            &[SceneLayer::Backdrop, SceneLayer::Main]
+            compose_pixel(None, Some(0.5)),
+            ComposedPixel::Backdrop,
+            "a pixel the main grid misses must show the backdrop"
         );
+        assert_eq!(
+            compose_pixel(Some(0.5), None),
+            ComposedPixel::Main,
+            "a pose with no backdrop still draws its main grid"
+        );
+        assert_eq!(
+            compose_pixel(None, None),
+            ComposedPixel::Sky,
+            "neither grid reaching the pixel leaves the distinct sky"
+        );
+    }
+
+    /// The backdrop keeps its own internal ordering: it is depth-tested against itself.
+    #[test]
+    fn the_backdrop_is_ordered_against_itself_by_depth() {
         assert_eq!(SCENE_DEPTH_COMPARE, wgpu::CompareFunction::LessEqual);
-        assert_eq!(composed_layer(true, true), Some(SceneLayer::Main));
-        assert_eq!(composed_layer(false, true), Some(SceneLayer::Backdrop));
-        assert_eq!(composed_layer(false, false), None);
+        assert_eq!(scene_stencil(SceneLayer::Backdrop).write_mask, 0);
+        assert!(compares(SCENE_DEPTH_COMPARE, 0.25, 0.75));
+        assert!(!compares(SCENE_DEPTH_COMPARE, 0.75, 0.25));
+    }
+
+    /// The stamp needs a stencil aspect, and the engine's floor has to admit the format.
+    #[test]
+    fn the_scene_depth_target_carries_a_stencil_aspect() {
+        assert_eq!(DEPTH_FORMAT, wgpu::TextureFormat::Depth24PlusStencil8);
+        assert!(DEPTH_FORMAT.has_stencil_aspect());
+        assert!(DEPTH_FORMAT.has_depth_aspect());
     }
 
     #[test]
