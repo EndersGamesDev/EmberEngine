@@ -123,14 +123,7 @@ pub fn scene_footprint(
     }
     let apron_scale = 1.0 / boundary_scale;
     let matrix = camera_matrix(view);
-    let uncovered = uncovered_fraction(
-        &map,
-        plane,
-        view,
-        &matrix,
-        [grid_w, grid_h],
-        apron_scale,
-    );
+    let uncovered = uncovered_fraction(&map, plane, view, &matrix, [grid_w, grid_h], apron_scale);
     let relief_clipped_fraction =
         clipped_fraction(&map, plane, view, &matrix, grid_w, grid_h, apron_scale);
     Ok(SceneFootprint {
@@ -177,8 +170,16 @@ fn uncovered_fraction(
                     (column as f64 / (mesh - 1) as f64 - 0.5) * f64::from(grid_w),
                     (row as f64 / (mesh - 1) as f64 - 0.5) * f64::from(grid_h),
                 ];
-                projected[row * mesh + column] =
-                    project_vertex(map, plane, view, matrix, extent, screen, height, apron_scale);
+                projected[row * mesh + column] = project_vertex(
+                    map,
+                    plane,
+                    view,
+                    matrix,
+                    extent,
+                    screen,
+                    height,
+                    apron_scale,
+                );
             }
         }
         for row in 0..mesh - 1 {
@@ -189,11 +190,10 @@ fn uncovered_fraction(
                     projected[(row + 1) * mesh + column + 1],
                     projected[(row + 1) * mesh + column],
                 ];
-                for triangle in [[corners[0], corners[1], corners[2]], [
-                    corners[0],
-                    corners[2],
-                    corners[3],
-                ]] {
+                for triangle in [
+                    [corners[0], corners[1], corners[2]],
+                    [corners[0], corners[2], corners[3]],
+                ] {
                     let Some(drawn) = drawn_triangle(triangle) else {
                         continue;
                     };
@@ -281,7 +281,16 @@ fn project_vertex(
 ) -> Option<([f64; 2], bool)> {
     let [grid_w, grid_h] = extent;
     let aspect = f64::from(grid_w) / f64::from(grid_h);
-    let mut ambient = ambient_vertex(map, plane, view, matrix, grid_w, screen, height, apron_scale)?;
+    let mut ambient = ambient_vertex(
+        map,
+        plane,
+        view,
+        matrix,
+        grid_w,
+        screen,
+        height,
+        apron_scale,
+    )?;
     let near_five = RELIEF_NEAR_FRACTION * view.distance_five;
     let maximum_fifth = view.distance_five - near_five;
     let clamped = ambient[4] > maximum_fifth;
@@ -531,6 +540,31 @@ mod tests {
             "clipped {}",
             footprint.relief_clipped_fraction
         );
+    }
+
+    /// The three rows published in `docs/julibrot/present.md`, asserted exactly.
+    ///
+    /// The documented table is a claim about what the engine reports, so it is transcribed from a
+    /// run rather than reasoned about, and pinned here so prose and code cannot drift apart. The
+    /// close row is the one that matters: it publishes real sky, where the old measurement
+    /// published a vacuous zero.
+    #[test]
+    fn the_published_owner_rows_are_the_documented_ones() {
+        let rows = [
+            (owner_row(2.165), 0.648_824_006_488_24, 1.541_250_000_000_000_2, 0.0, 0.0),
+            (owner_row(4.0), 0.5, 2.0, 0.0, 81.0 / 405.0),
+            (close_owner_row(), 0.2, 5.0, 650.0 / 4225.0, 126.0 / 405.0),
+        ];
+        for ((object, view), boundary, apron, uncovered, clipped) in rows {
+            let footprint = scene_footprint(&object, &view, 960, 540).expect("relief pose maps");
+            assert!(
+                (footprint.boundary_scale - boundary).abs() < 1.0e-12
+                    && (footprint.apron_scale - apron).abs() < 1.0e-12
+                    && (footprint.uncovered_fraction - uncovered).abs() < 1.0e-12
+                    && (footprint.relief_clipped_fraction - clipped).abs() < 1.0e-12,
+                "documented row {boundary}/{apron}/{uncovered}/{clipped} reads {footprint:?}"
+            );
+        }
     }
 
     /// The owner's second row: a tumbled plane seen from close in, at the slider maximum height.

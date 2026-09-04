@@ -222,10 +222,17 @@ A bound of twenty is not by itself an honest picture, and the clamp has to be pa
 
 `scene_footprint` reports the unclamped requested `scene_apron_scale`, post-backdrop `surface_uncovered_fraction`, and the share of its fixed 9-by-9-by-5 bounded record-domain census at the near clamp. `scene_backdrop_scale` and `scene_backdrop_extent` are absent until a backdrop is actually allocated and then report its applied scale and capacity-selected extent; `relief_clipped_fraction` publishes the census result.
 
+Coverage is measured the way the picture is drawn, because the earlier measurement was vacuous exactly where the answer mattered. It traced the frame boundary at the two extreme record heights and dropped a whole ring when any of its vertices failed a perspective guard, and "inside every traced ring" is true of every point when no ring survives: the close owner row, where both rings fall apart, published zero uncovered surface while three quarters of the frame was sky. The mirror now rasterizes the sampling mesh itself, at every census height, through the backdrop's apron, into a lattice whose samples run to `±1` inclusive so the frame corners and edges are tested points rather than cell centres. A triangle is drawn only when all three of its vertices project and not all three are held at the near clamp — the scene shader's own primitive rule — so a pose whose mesh falls apart reports more sky and never less. The census heights are sampled, so the reachable set is a subset of the true one and the published share is an upper bound on unavoidable sky.
+
+The clipping census keeps its whole fixed denominator, all 405 points. A census point beyond the projective horizon is not at the clamp, but removing it from the denominator let a pose that projects almost nothing publish a comfortable share: the close row read `126/315 = 0.4` and reads `126/405`.
+
 | Owner row | `boundary_scale` | `scene_apron_scale` / applied backdrop | Post-backdrop uncovered | Near-clipped census |
 |---|---:|---:|---:|---:|
 | Julia, `height_scale=2.165`, `d₅=8` | 0.648824 | 1.54125 | 0 | 0 |
-| Julia, `height_scale=4`, `d₅=2` | 0.2 | 5.0 | 0 | 0.4 |
+| Julia, `height_scale=4`, `d₅=8` | 0.5 | 2.0 | 0 | 81/405 = 0.2 |
+| Julia, `height_scale=4`, `d₅=2` | 0.2 | 5.0 | 650/4225 ≈ 0.1538 | 126/405 ≈ 0.3111 |
+
+The close row is the honest one and it is a partial win, not a clean one. At `d₅=2` with the slider at maximum, most of the sampling mesh cannot be projected at all: records with `height_scale·record_height ≥ d₅` lift to or past the eye, and the backdrop at an apron of five leaves about a seventh of the frame as sky. That is a large improvement on the main grid alone, which reaches barely a quarter of the frame there, and the fact now says so instead of claiming a perfect zero.
 
 The retained scene texture already contains the composed backdrop and main image, so `AnchorHomography` remains an image warp on the presented frame and gains no scale field or second source. The sampled `Pose` and every warp anchor retain the main map at scale one; the independent fresh-scene oracle likewise renders its main samples unchanged, while the backdrop has no role in the warp algebra.
 
