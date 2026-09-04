@@ -449,7 +449,9 @@ fn backdrop_only_frame_cannot_skip_the_main_preview() {
     frame_loop.accept_request(1, true);
     assert!(!frame_loop.skip_drafts_for_accepted_warp(Some((BACKDROP_PRESENT_LEVEL, false,))));
     assert_eq!(frame_loop.due(), Some(RefinementLevel::Preview));
-    assert!(include_str!("../loop.rs").contains("grid.level = super::BACKDROP_PRESENT_LEVEL;"));
+    assert!(
+        include_str!("browser/submit.rs").contains("grid.level = super::BACKDROP_PRESENT_LEVEL;")
+    );
 }
 
 #[test]
@@ -2191,7 +2193,7 @@ fn browser_backdrop_preparation_routes_through_the_coverage_turn() {
 /// so from an orbit the main grid has already refused.
 #[test]
 fn the_backdrop_dispatch_is_behind_the_main_reference_and_zoom_guards() {
-    let source = include_str!("../loop.rs");
+    let source = include_str!("browser/submit.rs");
     let submit = source
         .find("fn submit_due_scene(")
         .expect("the scene submission exists");

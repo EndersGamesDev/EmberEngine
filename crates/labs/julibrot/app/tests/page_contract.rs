@@ -15,6 +15,7 @@ static FRAME: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     source.push_str(include_str!("../src/frame/loop.rs"));
     source.push_str(include_str!("../src/frame/loop/browser/backdrop.rs"));
     source.push_str(include_str!("../src/frame/loop/browser/reference.rs"));
+    source.push_str(include_str!("../src/frame/loop/browser/submit.rs"));
     source
 });
 const WORKER_BROWSER: &str = include_str!("../../worker/src/browser.rs");
