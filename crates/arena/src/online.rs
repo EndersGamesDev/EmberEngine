@@ -787,6 +787,19 @@ fn push_shield(frame: &mut Frame, center: Vec3, rot: Quat, plate: Vec3, color: V
     );
 }
 
+/// The cube-fallback pistol's barrel-tip box, in the gun's own frame:
+/// where its centre sits and how big it is. `push_gun` draws it and
+/// `BOX_MUZZLE` reads its front face, so a flash hung on the fallback gun
+/// is on the end of the barrel that is actually on screen.
+const BOX_TIP_AT: Vec3 = Vec3::new(0.76, 0.09, 0.0);
+const BOX_TIP_SIZE: Vec3 = Vec3::new(0.16, 0.13, 0.13);
+
+/// The tip of the cube pistol's barrel: the front face of that box. Not
+/// `LEGACY_MUZZLE`, which is 0.11 m past the end of it — that number is
+/// where the old first-person flash hung, and nobody sees the fallback
+/// gun's own tip from behind their own eye.
+const BOX_MUZZLE: Vec3 = Vec3::new(BOX_TIP_AT.x + BOX_TIP_SIZE.x * 0.5, BOX_TIP_AT.y, 0.0);
+
 /// Cube-fallback pistol: held at `hand`, pointing along `aim`.
 /// Local space is +X forward; each part is rotated by the shared yaw.
 fn push_gun(frame: &mut Frame, hand: Vec3, aim: Vec2, accent: Vec3) {
@@ -807,11 +820,7 @@ fn push_gun(frame: &mut Frame, hand: Vec3, aim: Vec2, accent: Vec3) {
         Vec3::new(0.74, 0.17, 0.15),
         GUNMETAL,
     );
-    part(
-        Vec3::new(0.76, 0.09, 0.0),
-        Vec3::new(0.16, 0.13, 0.13),
-        BRONZE,
-    );
+    part(BOX_TIP_AT, BOX_TIP_SIZE, BRONZE);
     part(
         Vec3::new(0.32, 0.03, 0.0),
         Vec3::new(0.58, 0.045, 0.17),
@@ -922,7 +931,10 @@ const FLASH_FORWARD: f32 = 1.6;
 /// was ever shorter than the ball. What this earns is the frame the
 /// handover happens on: a star narrower than the smoke that replaces it
 /// reads as a small light swallowed by a big ball, and it is the margin
-/// that keeps a future fatter plume from taking the star back.
+/// that keeps a future fatter plume from taking the star back. The plume
+/// is now a ring with the bore clear through it, so the star also stands
+/// in the hole rather than behind the smoke; the floor is unchanged
+/// because `plume_reach` is (`feel::PLUME_RING`).
 const FLASH_CLEAR: f32 = 1.4;
 
 /// The size of the star at a shot from `row`: the weapon's own `flash`,
@@ -938,7 +950,8 @@ const FLASH_CLEAR: f32 = 1.4;
 /// otherwise be lost in it. `push_showcase` passes its own size and is not
 /// touched: nothing smokes in the showcase.
 fn shot_flash(row: &feel::WeaponFeel) -> f32 {
-    row.flash.max(feel::plume_reach() * FLASH_CLEAR / FLASH_PETAL)
+    row.flash
+        .max(feel::plume_reach() * FLASH_CLEAR / FLASH_PETAL)
 }
 
 /// Push a muzzle flash as a star of five streak cones radiating from the
@@ -1209,7 +1222,13 @@ fn push_showcase(
         .instances
         .push(hole(7, row - right * (0.15 * k), 0.1 / feel::ROCKET_MARK));
     let bore = (right + look).normalize();
-    push_flash(frame, rs, row + right * (0.10 * k), bore, SHOWCASE_FLASH * k);
+    push_flash(
+        frame,
+        rs,
+        row + right * (0.10 * k),
+        bore,
+        SHOWCASE_FLASH * k,
+    );
 }
 
 /// A brass casing out of my own gun (v20): falls under gravity from the
@@ -1244,11 +1263,47 @@ const CONTINUATION_SECS: f32 = 1.5;
 /// its continuation rather than a new shot.
 const CONTINUATION_EPS: f32 = 1e-3;
 
-/// How far down a remote round's line its flash and plume are drawn from
-/// the sim's launch point (metres): the launch point is 0.2 m ahead of the
-/// eye, inside the drawn head, and the drawn gun's muzzle is about this
-/// far out.
+/// How far down a remote round's line its flash and plume are drawn when
+/// there is no drawn gun to hang them on (metres): the shooter has left
+/// the state, or is not alive in it, so nothing of that body is on screen
+/// and the only honest anchor is the round's own line. When the body IS
+/// drawn, `ShooterGame::drawn_muzzle` gives the tip of the weapon actually
+/// on screen and this is not used: the sim fires from `EYE_STAND` while
+/// the weapon is drawn at the hand, so this number put every remote flash
+/// about 0.6 m above the gun that fired it (captured).
 const REMOTE_MUZZLE: f32 = 0.75;
+
+/// How far ahead of a remote player's body centre the gun hand reaches,
+/// metres. The body box is 1.0 across, so anything held closer than 0.5 is
+/// held inside the torso and never shows.
+const HAND_REACH: f32 = 0.55;
+
+/// How far a drawn muzzle may stand from the point the sim fired from
+/// before it is disowned (metres). A gun on the shooter's own body is
+/// about 1.3 m from it at most — 0.6 down from the eye to the hand and
+/// the length of the longest weapon forward — so this passes every real
+/// pose and refuses a body drawn somewhere else entirely, which is what a
+/// missing or stale interpolation snapshot looks like.
+const MUZZLE_SANITY: f32 = 2.5;
+
+/// The heights a remote body is drawn at, above its own feet: the body
+/// box's full height, the head, the gun hand and the hp pips. Crouching
+/// pulls all four down. One table, read by the render pass and by
+/// `ShooterGame::drawn_muzzle`, so a flash cannot land somewhere the gun
+/// is not.
+const fn body_heights(crouch: bool) -> (f32, f32, f32, f32) {
+    if crouch {
+        (0.75, 0.95, 0.62, 1.5)
+    } else {
+        (1.1, 1.35, 0.85, 2.0)
+    }
+}
+
+/// Where a remote player's gun hand is drawn: `hand_y` above its feet and
+/// `HAND_REACH` forward along its aim, which is where the body faces.
+fn hand_at(pos: Vec2, feet_y: f32, aim: Vec2, hand_y: f32) -> Vec3 {
+    Vec3::new(pos.x, feet_y + hand_y, pos.y) + Vec3::new(aim.x, 0.0, aim.y) * HAND_REACH
+}
 
 /// Where the listener is and which way is right, for the spatial cues: my
 /// eye at the top of the frame, before the look moves it, which is a frame
@@ -1658,21 +1713,36 @@ impl ShooterGame {
             if mine {
                 self.pending_shots.push(PendingShot { from, to, weapon });
             } else {
+                // The remote shot, seen and heard from its muzzle: the
+                // flash, the plume, and the gunshot at the distance's
+                // variant, late by the distance and panned to it.
+                //
+                // The sim fires from the shooter's eye (`EYE_STAND` a hand
+                // ahead of it) while the client draws that shooter's weapon
+                // at the hand, so the event's own origin is about 0.6 m
+                // above and behind the drawn barrel: hanging the light
+                // there put it in mid air with wall showing between it and
+                // the gun. `drawn_muzzle` is the barrel that is on screen.
+                // Nothing about the round moves: `from`, `to`, the head,
+                // the hit and the impact are the server's, and the muzzle
+                // only says where the streak is drawn from.
+                //
+                // A drawn gun further than `MUZZLE_SANITY` from where the
+                // sim fired is not this shot's gun — a body drawn off a
+                // snapshot we have not got, or an id whose interpolation
+                // is stale — and the round's own line is the honest
+                // anchor again.
+                let muzzle = self
+                    .drawn_muzzle(owner)
+                    .filter(|m| (*m - from).length() < MUZZLE_SANITY)
+                    .unwrap_or_else(|| from + dir * REMOTE_MUZZLE);
                 self.tracers.push(Tracer {
                     from,
+                    muzzle,
                     to,
                     weapon,
                     born: now,
                 });
-                // The remote shot, seen and heard from its muzzle: the
-                // flash, the plume, and the gunshot at the distance's
-                // variant, late by the distance and panned to it. The
-                // sim's launch point is a hand ahead of the shooter's eye,
-                // inside the drawn head, so the flash and the plume sit
-                // `REMOTE_MUZZLE` further down the line, about where the
-                // drawn gun ends; the streak still starts at the point
-                // the server gives.
-                let muzzle = from + dir * REMOTE_MUZZLE;
                 self.flashes.push(Flash {
                     pos: muzzle,
                     dir,
@@ -1690,8 +1760,12 @@ impl ShooterGame {
                 ));
             }
         } else if traces {
+            // A continuation left no muzzle: it starts where a shield
+            // reflected it or a body let it through, and that point is the
+            // server's exactly.
             self.tracers.push(Tracer {
                 from,
+                muzzle: from,
                 to,
                 weapon,
                 born: now,
@@ -1856,6 +1930,34 @@ impl ShooterGame {
         let f = self.from.get(&id).copied().unwrap_or_default();
         let to = self.to.get(&id).copied().unwrap_or_default();
         f.y + (to.y - f.y) * a
+    }
+
+    /// The tip of the gun player `id` is drawn holding, in the world, or
+    /// `None` when no gun of theirs is on screen (no state for them, or
+    /// they are not alive in it — the render pass skips both, and a flash
+    /// on a body nobody can see is worse than one on the round's line).
+    ///
+    /// Every number here is the render pass's own: the interpolated feet
+    /// and position it draws the body at, `body_heights` for the hand, and
+    /// `weapon_rot` with the model-space muzzle the sidecar gives the
+    /// weapon `shown_weapon` picks. So the flash, the smoke and the start
+    /// of the streak land on the barrel that is drawn, crouching or
+    /// standing, however steeply the shooter is aiming. Without the
+    /// viewmodel loaded the body carries the cube pistol, whose barrel tip
+    /// is `BOX_MUZZLE` and which is yawed only, exactly as `push_gun`
+    /// draws it.
+    fn drawn_muzzle(&self, id: u8) -> Option<Vec3> {
+        let p = self.latest.get(&id).filter(|p| p.alive)?;
+        let aim = Vec2::new(p.ax, p.az);
+        let (_, _, hand_y, _) = body_heights(p.crouch);
+        let hand = hand_at(self.render_pos(id), self.render_y(id), aim, hand_y);
+        let yaw = -aim.y.atan2(aim.x);
+        Some(
+            hand + self.assets.as_ref().map_or_else(
+                || Quat::from_rotation_y(yaw) * BOX_MUZZLE,
+                |a| weapon_rot(yaw, p.pitch) * a.muzzle_of(shown_weapon(p.weapon)),
+            ),
+        )
     }
 
     fn handle_of(&self, id: u8) -> String {
@@ -3256,11 +3358,7 @@ impl EmberGame for ShooterGame {
             let feet_y = self.render_y(id);
             let color = self.player_color(id);
             let aim = Vec2::new(p.ax, p.az);
-            let (body_h, head_y, hand_y, pip_y) = if p.crouch {
-                (0.75, 0.95, 0.62, 1.5)
-            } else {
-                (1.1, 1.35, 0.85, 2.0)
-            };
+            let (body_h, head_y, hand_y, pip_y) = body_heights(p.crouch);
             // Hitbox truth ring: a flat plate exactly the server's hit
             // circle footprint (radius PLAYER_R) — what you aim at is real.
             let flash = self.flash.get(&id).copied().unwrap_or(0.0) / 0.18;
@@ -3337,8 +3435,7 @@ impl EmberGame for ShooterGame {
             // hand_y and pip_y are heights above the FEET, so both need this
             // player's own feet height added. Without it someone standing on
             // a crate carried their gun down at floor level.
-            let hand =
-                Vec3::new(pos.x, feet_y + hand_y, pos.y) + Vec3::new(aim.x, 0.0, aim.y) * 0.55;
+            let hand = hand_at(pos, feet_y, aim, hand_y);
             let accent = weapon_accent(p.weapon);
             // The off-hand shield, on the side the pistol is not. The plate
             // is yawed only: a shield is carried upright whatever its owner
@@ -3416,14 +3513,14 @@ impl EmberGame for ShooterGame {
             // show. A puff still waiting out a flash is not drawn.
             for f in self.fx.iter().filter(|f| f.born <= self.time) {
                 let k = (f.ttl / f.life).clamp(0.0, 1.0);
-                let (edge, color) = if f.gravity > 0.0 {
-                    (f.size * k, f.color)
-                } else {
-                    (f.size * (1.4 - 0.4 * k), f.color * (0.4 + 0.6 * k))
-                };
+                let (edge, dim) = feel::puff_draw(f.gravity, k);
                 frame.instances.push(
-                    Instance::new(f.pos, Vec3::splat(edge * feel::PUFF_BALL), color)
-                        .with_mesh(rs.puff()),
+                    Instance::new(
+                        f.pos,
+                        Vec3::splat(f.size * edge * feel::PUFF_BALL),
+                        f.color * dim,
+                    )
+                    .with_mesh(rs.puff()),
                 );
             }
             // Impact marks: near-black holes on the faces rounds hit, each
@@ -3457,7 +3554,19 @@ impl EmberGame for ShooterGame {
                     round,
                     scale: rounds::ROUND_SCALE,
                 };
-                push_streak(&mut frame, rs, drawn, head, dir, &rods, t.fade(self.time));
+                // The streak runs back to the muzzle the client drew; the
+                // round itself flies along the server's segment. The two
+                // directions differ by the width of a shooter's body over
+                // the first metre or so and by nothing after that.
+                push_streak(
+                    &mut frame,
+                    rs,
+                    drawn,
+                    head,
+                    t.streak_dir(self.time),
+                    &rods,
+                    t.fade(self.time),
+                );
                 if t.flying(self.time) {
                     push_round(&mut frame, rs, drawn, head, dir);
                 }
@@ -3666,10 +3775,14 @@ impl EmberGame for ShooterGame {
             };
             // My own streaks start at this muzzle, not at the sim's launch
             // point: the segment's end is the server's, its start is where
-            // the gun is drawn.
+            // the gun is drawn. Unlike a remote shot, the whole line is
+            // moved rather than the streak alone — the viewmodel's muzzle
+            // travels with the view, and a round of mine drawn on the
+            // server's line would swim beside my own barrel as I turn.
             for p in std::mem::take(&mut self.pending_shots) {
                 self.tracers.push(Tracer {
                     from: muzzle,
+                    muzzle,
                     to: p.to,
                     weapon: p.weapon,
                     born: self.time,
@@ -3878,6 +3991,7 @@ impl EmberGame for ShooterGame {
         for p in std::mem::take(&mut self.pending_shots) {
             self.tracers.push(Tracer {
                 from: p.from,
+                muzzle: p.from,
                 to: p.to,
                 weapon: p.weapon,
                 born: self.time,
@@ -4655,7 +4769,19 @@ mod wire_tests {
         game.latest.insert(2, me(2));
         let mut other = me(3);
         other.x = 10.0;
+        // Facing the way it shoots, and drawn where it stands: the flash
+        // hangs on the gun those two place, so the interpolation snaps
+        // have to say the same thing the state does.
+        other.ax = 0.0;
+        other.az = 1.0;
         game.latest.insert(3, other);
+        let snap = PSnap {
+            x: 10.0,
+            z: 0.0,
+            y: 0.0,
+        };
+        game.from.insert(3, snap);
+        game.to.insert(3, snap);
         game.was_alive = true;
         game.time = 5.0;
         game.set_rounds(500);
@@ -4715,15 +4841,18 @@ mod wire_tests {
             rods[0].scale
         );
         // The remote flash: a star of five streak cones with their bases
-        // at the drawn muzzle, four square to the shot and one along it,
-        // none back along it.
+        // at the drawn muzzle — the tip of the gun this body is holding,
+        // not the sim's eye-height launch point — four square to the shot
+        // and one along it, none back along it.
+        let muzzle = game.drawn_muzzle(3).expect("the shooter's gun is drawn");
+        assert!(
+            (muzzle - t.from).length() > 0.5 && muzzle.y < t.from.y - 0.4,
+            "the drawn gun is well below and ahead of the sim's origin: {muzzle}"
+        );
         let star: Vec<&Instance> = frame
             .instances
             .iter()
-            .filter(|i| {
-                (i.position - (t.from + Vec3::Z * REMOTE_MUZZLE)).length() < 1e-4
-                    && i.color == flash_colour
-            })
+            .filter(|i| (i.position - muzzle).length() < 1e-4 && i.color == flash_colour)
             .collect();
         assert_eq!(star.len(), 5, "the remote flash star at the drawn muzzle");
         let ak_flash = weapon_feel(3).flash;
@@ -4855,6 +4984,186 @@ mod wire_tests {
         assert!((game.marks[2].diameter() - feel::ROCKET_MARK).abs() < 1e-6);
     }
 
+    /// Plant the shooter 10 m to the right of the watcher, facing and
+    /// firing north, in the pose the case under test needs.
+    fn place_shooter(game: &mut ShooterGame, crouch: bool, pitch: f32) {
+        let mut p = me(3);
+        p.x = 10.0;
+        p.ax = 0.0;
+        p.az = 1.0;
+        p.crouch = crouch;
+        p.pitch = pitch;
+        game.latest.insert(3, p);
+        let snap = PSnap {
+            x: 10.0,
+            z: 0.0,
+            y: 0.0,
+        };
+        game.from.insert(3, snap);
+        game.to.insert(3, snap);
+    }
+    /// Put one `Shot` from that shooter on the wire: the server's own
+    /// geometry, from the eye it fires from to wherever the round ended.
+    fn fire_shot(inbox: &std::sync::mpsc::Sender<S2C>, launch: Vec3, to: Vec3) {
+        inbox
+            .send(S2C::Shot {
+                owner: 3,
+                weapon: 3,
+                x0: launch.x,
+                y0: launch.y,
+                z0: launch.z,
+                x1: to.x,
+                y1: to.y,
+                z1: to.z,
+                hit: arena_core::shooter::SHOT_COVER,
+                cover: Cover::Container.index(),
+                victim: 255,
+                normal: [0, 0, -1],
+            })
+            .unwrap();
+    }
+    /// The tip of the barrel the remote body actually draws, read out of
+    /// the frame rather than recomputed from the numbers under test.
+    fn drawn_tip(frame: &Frame) -> Vec3 {
+        let tip = frame
+            .instances
+            .iter()
+            .find(|i| i.scale == BOX_TIP_SIZE && i.position.x > 5.0)
+            .expect("the remote body's barrel tip");
+        tip.position + tip.rot * Vec3::X * (BOX_TIP_SIZE.x * 0.5)
+    }
+    /// A remote shot's light and smoke belong on the gun that is drawn.
+    ///
+    /// The sim fires from the shooter's eye (`EYE_STAND`, a hand ahead of
+    /// it) while the client draws that shooter's weapon at the hand, so
+    /// hanging the flash on the event's own origin put it about 0.6 m
+    /// above the barrel with wall showing in between: every remote shot
+    /// anyone saw, captured. The round is not re-aimed to fix it. The
+    /// head, the segment's end and the mark stay the server's, and only
+    /// the flash, the smoke and the streak's start move onto the barrel.
+    ///
+    /// Crouching drops it, a near-vertical aim swings it up with the
+    /// weapon's own elevation, and a shooter whose body is not drawn at
+    /// all falls back to the round's line.
+    #[test]
+    fn a_remote_flash_sits_on_the_gun_that_is_drawn() {
+        let (chan, inbox, _wire) = net::NetChan::detached_duplex();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.my_id = Some(2);
+        game.latest.insert(2, me(2));
+        game.was_alive = true;
+        game.time = 5.0;
+        game.set_rounds(500);
+        let input = InputState::default();
+        // The shooter: 10 m to my right, facing and firing north.
+        let launch = Vec3::new(10.0, EYE_STAND, 0.0);
+        let end = Vec3::new(10.0, EYE_STAND, 30.0);
+        // ---- standing ----
+        place_shooter(&mut game, false, 0.0);
+        fire_shot(&inbox, launch, end);
+        let frame = game.update(&input, 0.001);
+        let flash = game.flashes[0].pos;
+        let standing = flash;
+        assert!(
+            (flash - drawn_tip(&frame)).length() < 0.03,
+            "the flash is on the drawn barrel: {flash} against {}",
+            drawn_tip(&frame)
+        );
+        assert!(
+            (flash - launch).length() > 0.5,
+            "and not on the event's origin: {flash}"
+        );
+        assert!(
+            flash.y < launch.y - 0.4,
+            "the gun is well below the eye that fired: {flash}"
+        );
+        // The smoke is on the same barrel, not on the event's origin.
+        let plume: Vec<&Fx> = game.fx.iter().filter(|f| f.born > game.time).collect();
+        assert_eq!(plume.len(), 4, "the plume is held back and is four balls");
+        assert!(
+            plume
+                .iter()
+                .all(|f| (f.pos - flash).length() < feel::PLUME_LEAD + feel::plume_reach() + 1e-3),
+            "the smoke rings the drawn muzzle"
+        );
+        // The round itself is untouched: its head, and so its drawn body,
+        // is on the server's segment, and the segment's end is exactly
+        // what the server sent.
+        let t = game.tracers[0];
+        assert_eq!((t.from, t.to), (launch, end));
+        assert_eq!(t.muzzle, flash, "the streak starts where the light is");
+        let head = t.head(game.time);
+        let seg = (t.to - t.from).normalize();
+        let off = head - t.from;
+        assert!(
+            (off - seg * off.dot(seg)).length() < 1e-4,
+            "the round flies on the server's line: {head}"
+        );
+        assert_eq!(game.marks[0].pos, end, "and it hit where it hit");
+
+        // ---- crouching: the hand drops, the flash with it ----
+        game.flashes.clear();
+        game.fx.clear();
+        place_shooter(&mut game, true, 0.0);
+        fire_shot(&inbox, launch, end);
+        let frame = game.update(&input, 0.001);
+        let crouched = game.flashes[0].pos;
+        assert!(
+            (crouched - drawn_tip(&frame)).length() < 0.03,
+            "still on the drawn barrel when crouched: {crouched}"
+        );
+        let (_, _, stand_y, _) = body_heights(false);
+        let (_, _, crouch_y, _) = body_heights(true);
+        assert!(
+            ((standing.y - crouched.y) - (stand_y - crouch_y)).abs() < 1e-4,
+            "it dropped by exactly the hand: {} against {}",
+            standing.y - crouched.y,
+            stand_y - crouch_y
+        );
+
+        // ---- a near-vertical aim ----
+        // The fallback cube pistol is drawn yaw-only, so the light on it
+        // is too: on the barrel that is on screen, which is the whole
+        // rule. The aim's yaw and its elevation stay two things — folding
+        // them into one 3D direction would swing the body as well as the
+        // gun.
+        game.flashes.clear();
+        game.fx.clear();
+        place_shooter(&mut game, false, 1.5);
+        fire_shot(&inbox, launch, Vec3::new(10.0, 30.0, 2.0));
+        let frame = game.update(&input, 0.001);
+        let steep = game.flashes[0].pos;
+        assert!(
+            (steep - drawn_tip(&frame)).length() < 0.03,
+            "on the barrel however steep the aim: {steep}"
+        );
+        // With the real viewmodel the weapon tilts with its owner's
+        // elevation (`weapon_rot`), and the muzzle climbs with it.
+        let (_, assets) = load_assets();
+        game.assets = Some(assets.expect("the embedded viewmodel loads"));
+        place_shooter(&mut game, false, 0.0);
+        let level = game.drawn_muzzle(3).expect("the gun is drawn");
+        place_shooter(&mut game, false, 1.5);
+        let raised = game.drawn_muzzle(3).expect("the gun is drawn");
+        assert!(
+            raised.y > level.y + 0.2 && raised.z < level.z,
+            "the barrel came up and drew in: {level} to {raised}"
+        );
+        game.assets = None;
+
+        // ---- no body drawn: back to the round's own line ----
+        game.flashes.clear();
+        game.fx.clear();
+        game.latest.remove(&3);
+        fire_shot(&inbox, launch, end);
+        game.update(&input, 0.001);
+        let orphan = game.flashes[0].pos;
+        assert!(
+            (orphan - (launch + Vec3::Z * REMOTE_MUZZLE)).length() < 1e-4,
+            "nothing of that shooter is on screen, so the line it is: {orphan}"
+        );
+    }
+
     /// A shot reads as light first and smoke second (v20, the fourth
     /// pass). The plume used to be born with the star, four opaque cubes
     /// of edge 0.10 m over a muzzle for a quarter second while the star
@@ -4874,7 +5183,16 @@ mod wire_tests {
         game.latest.insert(2, me(2));
         let mut other = me(3);
         other.x = 10.0;
+        other.ax = 0.0;
+        other.az = 1.0;
         game.latest.insert(3, other);
+        let snap = PSnap {
+            x: 10.0,
+            z: 0.0,
+            y: 0.0,
+        };
+        game.from.insert(3, snap);
+        game.to.insert(3, snap);
         game.was_alive = true;
         game.time = 5.0;
         game.set_rounds(500);
@@ -4896,10 +5214,15 @@ mod wire_tests {
                 normal: [0, 0, -1],
             })
             .unwrap();
-        let muzzle = Vec3::new(10.0, 1.45, REMOTE_MUZZLE);
+        let muzzle = game.drawn_muzzle(3).expect("the shooter's gun is drawn");
         // The star's five cones, and the balls of smoke at that muzzle:
         // the impact's dust is 30 m up the line and is not smoke here.
-        let star = |f: &Frame| f.instances.iter().filter(|i| i.color == FLASH_COLOR).count();
+        let star = |f: &Frame| {
+            f.instances
+                .iter()
+                .filter(|i| i.color == FLASH_COLOR)
+                .count()
+        };
         let smoke = |f: &Frame| {
             f.instances
                 .iter()
@@ -5623,9 +5946,15 @@ mod viewmodel_tests {
                 .sum::<f32>()
                 - SHOWCASE_GAP * view_scale)
                 * 0.5;
-            assert!(row_one < lateral, "row one runs off: {row_one} vs {lateral}");
+            assert!(
+                row_one < lateral,
+                "row one runs off: {row_one} vs {lateral}"
+            );
             let row_two = 0.30 * view_scale + rounds::Round::Lapua.length() * scale * 0.5;
-            assert!(row_two < lateral, "row two runs off: {row_two} vs {lateral}");
+            assert!(
+                row_two < lateral,
+                "row two runs off: {row_two} vs {lateral}"
+            );
         }
     }
 }

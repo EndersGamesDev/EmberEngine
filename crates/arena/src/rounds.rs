@@ -882,7 +882,10 @@ mod tests {
             let n = Vec3::from(v.normal);
             assert!((pos.length() - 1.0).abs() < 1e-4, "radius {pos}");
             assert!((n.length() - 1.0).abs() < 1e-4, "unit normal {n}");
-            assert!((n - pos.normalize()).length() < 1e-4, "outward: {n} at {pos}");
+            assert!(
+                (n - pos.normalize()).length() < 1e-4,
+                "outward: {n} at {pos}"
+            );
         }
     }
 

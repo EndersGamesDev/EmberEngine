@@ -672,7 +672,17 @@ pub fn hill_marker(hill: &Hill) -> (Vec3, Vec3) {
 /// tapered streak behind it; the rods here are the where and the how long.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tracer {
+    /// Where the sim launched the round. The head is replayed from here,
+    /// so the round's own body is always on the server's segment.
     pub from: Vec3,
+    /// Where the streak is drawn from: the muzzle of the gun the client
+    /// draws, which for a remote shooter is about 0.6 m off `from` (the sim
+    /// fires from eye height, the drawn weapon is at the hand). Only the
+    /// streak reads it — the rods are laid back from the head toward this
+    /// point — so a shot leaves the gun that is on screen and rejoins the
+    /// server's line within a metre or two of flight. `from` itself
+    /// whenever there is no drawn muzzle to start from.
+    pub muzzle: Vec3,
     pub to: Vec3,
     pub weapon: u8,
     pub born: f32,
@@ -761,12 +771,36 @@ impl Tracer {
         (remaining / TRACER_LINGER).clamp(0.0, 1.0)
     }
 
+    /// Where the streak runs and how long it is: back from the head toward
+    /// the `muzzle` the client drew, and the distance between the two. That
+    /// is the flight's own direction and the distance flown whenever the
+    /// muzzle is the sim's origin; when it is a remote shooter's drawn gun
+    /// it starts the streak on that gun and swings onto the flight line as
+    /// the round pulls away, since a fixed 0.6 m offset is a degree at
+    /// 30 m. `dir` and a zero reach for a segment with no length.
+    fn streak(&self, now: f32) -> (Vec3, f32) {
+        let back = self.head(now) - self.muzzle;
+        let reach = back.length();
+        if reach > 1e-4 {
+            (back / reach, reach)
+        } else {
+            (self.dir(), 0.0)
+        }
+    }
+
+    /// The direction the frame draws the streak's cones along: back toward
+    /// the drawn muzzle, which the rods are laid out on.
+    #[must_use]
+    pub fn streak_dir(&self, now: f32) -> Vec3 {
+        self.streak(now).0
+    }
+
     /// The rods to draw at `now`: the core from the head back, then the
     /// tail behind the core (never overlapping it: one opaque shape inside
     /// another is invisible, so the tail starts where the core ends). The
     /// frame thins both by `fade` over the last `TRACER_LINGER` seconds.
-    /// Nothing before the head has left the muzzle or after the streak is
-    /// gone.
+    /// Nothing before the head has left the sim's launch point or after the
+    /// streak is gone.
     #[must_use]
     pub fn rods(&self, now: f32) -> Vec<Rod> {
         let mut rods = Vec::with_capacity(2);
@@ -777,16 +811,19 @@ impl Tracer {
         if progress <= 1e-3 {
             return rods;
         }
-        let dir = self.dir();
         let head = self.head(now);
+        let (dir, reach) = self.streak(now);
+        if reach <= 1e-3 {
+            return rods;
+        }
         let color = weapon_feel(self.weapon).tracer;
-        let core = progress.min(TRACER_CORE_LEN);
+        let core = reach.min(TRACER_CORE_LEN);
         rods.push(Rod {
             center: head - dir * (core * 0.5),
             len: core,
             color,
         });
-        let tail = progress.min(TRACER_TAIL_LEN) - core;
+        let tail = reach.min(TRACER_TAIL_LEN) - core;
         if tail > 1e-3 {
             rods.push(Rod {
                 center: head - dir * (core + tail * 0.5),
@@ -822,6 +859,25 @@ pub struct Puff {
 /// A puff's drawn radius as a fraction of its `size`: the ball inscribed
 /// in the cube it replaced, so nothing grew when the shape changed.
 pub const PUFF_BALL: f32 = 0.5;
+
+/// How a particle is drawn `k` of the way through its life, where `k` is
+/// the share of its life still to run (1 at birth, 0 at death): the factor
+/// on its `size` and the factor on its colour. A falling particle (a
+/// spark, a splinter: `gravity` above zero) shrinks away and keeps its
+/// colour; a drifting one (smoke, dust) swells by 40% and dims to 40%,
+/// which is the only way an opaque pass can thin a puff out.
+///
+/// The frame draws the ball at `size * factor * PUFF_BALL`; the plume's
+/// clearance test reads the same pair, so what the eye is promised and
+/// what the frame draws cannot drift apart.
+#[must_use]
+pub fn puff_draw(gravity: f32, k: f32) -> (f32, f32) {
+    if gravity > 0.0 {
+        (k, 1.0)
+    } else {
+        (1.4 - 0.4 * k, 0.4 + 0.6 * k)
+    }
+}
 
 /// A basis across a surface normal: two unit tangents, so a burst can fan
 /// out over the face it hit. A zero normal (a body, a shield, an event from
@@ -1044,11 +1100,24 @@ pub fn ricochets(to: [f32; 3]) -> bool {
     h.trailing_zeros() >= 3
 }
 
-/// The plume's cube edge, which is twice its drawn ball's radius.
-pub const PLUME_SIZE: f32 = 0.10;
+/// The plume's cube edge, which is twice its drawn ball's radius. Small on
+/// purpose: at 0.10 the four balls were 5 cm across at birth and 7 at
+/// death, and on a muzzle 0.7 m from the eye they hid the front sight, the
+/// barrel tip and part of what was being shot at for the whole quarter
+/// second (captured). At 0.04 a ball is 2 cm across at birth and 2.8 at
+/// death, which is a puff at arm's length and still a puff from across the
+/// yard, where the thing that reads is the spread of the ring rather than
+/// any one ball.
+pub const PLUME_SIZE: f32 = 0.04;
 
 /// The radius of the ring the four plume puffs are spawned on, metres.
-pub const PLUME_RING: f32 = 0.04;
+/// Wider than a ball is (`PLUME_CLEAR`), so the ring is a ring: the bore
+/// shows through the middle of the smoke, and with it the front sight and
+/// the target, instead of standing behind a solid mass of it. Ring plus
+/// ball still comes to the 0.09 m it always did, so `plume_reach` and the
+/// star floor that reads it (`online::FLASH_CLEAR`) are unmoved and no
+/// weapon's flash changes size.
+pub const PLUME_RING: f32 = 0.07;
 
 /// How far down the bore from the muzzle the plume starts, metres: the
 /// flash star is born at the muzzle itself, so the smoke buds ahead of the
@@ -1073,6 +1142,22 @@ pub const fn plume_reach() -> f32 {
     PLUME_RING + plume_radius()
 }
 
+/// The radius of the hole down the bore the plume leaves when it is born,
+/// metres: the spawn ring less one ball, 0.05 m as the two are set. The
+/// sight picture lives in this hole — the front sight, the barrel tip and
+/// whatever is behind them all sit within a couple of degrees of the bore
+/// from where the shooter's eye is — so it has to stay open for the whole
+/// life of the smoke. Birth is the tightest moment: the balls leave the
+/// ring faster than they swell and faster than they rise, so the hole only
+/// widens from here (`the_plume_never_closes_the_sight_line` walks it).
+pub const PLUME_CLEAR: f32 = PLUME_RING - plume_radius();
+
+/// A ring no wider than its own ball is not a ring: the four puffs meet
+/// over the bore and the sight picture goes back behind solid smoke, which
+/// is the defect this pair of numbers was set to fix. Whoever grows
+/// `PLUME_SIZE` grows `PLUME_RING` with it or fails here.
+const _: () = assert!(PLUME_CLEAR > 0.0);
+
 /// How long a weapon's plume is held back: exactly the life of its flash,
 /// so the star has the first 35 to 60 ms of the shot to itself and the
 /// smoke arrives as the light goes. A shot reads as light first, smoke
@@ -1082,9 +1167,13 @@ pub const fn plume_delay_of(weapon: u8) -> f32 {
     weapon_feel(weapon).flash_ms
 }
 
-/// The muzzle plume of `weapon`: four grey balls off `at`, `PLUME_LEAD`
-/// down the bore, drifting along `dir` and rising, a quarter second,
-/// after the flash rather than beside it.
+/// The muzzle plume of `weapon`: four small dark balls in a ring about the
+/// bore, `PLUME_LEAD` down it from `at`, drifting along `dir`, opening out
+/// and rising a little, a quarter second, after the flash rather than
+/// beside it. Four and a quarter second as they always were; what changed
+/// is that they are smaller, darker and spread wide enough to leave the
+/// bore clear (`PLUME_CLEAR`), so the smoke is at the edge of the sight
+/// picture rather than across it.
 ///
 /// The delay rides on the puff instead of on a queue of pending plumes in
 /// the frame: one field and one branch in the retain that already walks
@@ -1102,10 +1191,24 @@ pub fn plume(at: Vec3, dir: Vec3, weapon: u8) -> Vec<Puff> {
             let (s, c) = a.sin_cos();
             Puff {
                 pos: from + (t1 * c + t2 * s) * PLUME_RING,
-                vel: dir * 1.2 + (t1 * c + t2 * s) * 0.35 + Vec3::Y * 0.5,
+                // Out of the ring faster than it rises. The old drift rose
+                // at 0.5 m/s and opened at 0.35, so the lower balls floated
+                // up into the bore over the quarter second and closed the
+                // hole they were born with; at 0.6 out against 0.25 up the
+                // hole only widens.
+                vel: dir * 1.2 + (t1 * c + t2 * s) * 0.6 + Vec3::Y * 0.25,
                 ttl: 0.25,
                 size: PLUME_SIZE,
-                color: Vec3::new(0.50, 0.48, 0.45),
+                // Powder smoke, not steam. Every untextured grey in the map
+                // is darker than the 0.50 this was: the floor slab is
+                // 0.12-0.17, the arena wall 0.26-0.34, gunmetal 0.16-0.20.
+                // A colour brighter than every surface in the scene is what
+                // made the plume read as white against a rusty container in
+                // a golden-hour light, post-tonemap. 0.22 sits just under
+                // the wall's grey, so the smoke is a dark thing in front of
+                // a lit map from any angle, and it is still well clear of
+                // the mark's near-black.
+                color: Vec3::new(0.22, 0.21, 0.20),
                 gravity: 0.0,
                 delay,
             }
@@ -1377,6 +1480,7 @@ mod feel_tests {
             let s = weapon_stats(id);
             let t = Tracer {
                 from: Vec3::new(1.0, 1.45, -2.0),
+                muzzle: Vec3::new(1.0, 1.45, -2.0),
                 to: Vec3::new(1.0, 1.45, 40.0),
                 weapon: id,
                 born: 3.0,
@@ -1436,6 +1540,7 @@ mod feel_tests {
         // A degenerate segment has a direction and no rods.
         let dot = Tracer {
             from: Vec3::ONE,
+            muzzle: Vec3::ONE,
             to: Vec3::ONE,
             weapon: 1,
             born: 0.0,
@@ -1497,11 +1602,13 @@ mod feel_tests {
         assert_eq!(body_sparks(at).len(), 6);
         assert_eq!(ricochet_sparks(at, n).len(), 4);
         assert_eq!(plume(at, Vec3::Z, 3).len(), 4);
-        assert!(
-            plume(at, Vec3::Z, 3)
-                .iter()
-                .all(|p| p.vel.z > 1.0 && p.vel.y > 0.0)
-        );
+        // Every puff goes down the bore, and the ring as a whole rises
+        // while opening: the ball on the low side of the ring is pushed
+        // out faster than the plume lifts, which is what keeps the hole
+        // down the bore open (`the_plume_never_closes_the_sight_line`).
+        let ring = plume(at, Vec3::Z, 3);
+        assert!(ring.iter().all(|p| p.vel.z > 1.0));
+        assert!(ring.iter().map(|p| p.vel.y).sum::<f32>() > 0.0);
         // Every burst is born at once; the plume waits out its weapon's
         // flash and starts a little down the bore, not on the muzzle.
         assert!(
@@ -1540,6 +1647,103 @@ mod feel_tests {
         assert_eq!(reload_start(1).sfx, Some((Sfx::ReloadPistol, 0.45)));
         assert_eq!(reload_start(6).sfx, Some((Sfx::ReloadSniper, 0.45)));
         assert_eq!(reload_start(7).sfx, Some((Sfx::ReloadRpg, 0.45)));
+    }
+
+    /// The shooter must be able to see what is being shot at through and
+    /// around the smoke at every moment of its life, so the bore stays
+    /// clear: every plume puff, integrated over its whole life at the size
+    /// the frame actually draws it (`puff_draw`), keeps its ball off the
+    /// line of the shot. Birth is the tightest moment; the balls open out
+    /// faster than they swell and faster than they rise, so the hole only
+    /// grows. And it is still a puff, not a wisp: the ring stands as wide
+    /// off the bore as it ever did.
+    #[test]
+    fn the_plume_never_closes_the_sight_line() {
+        let at = Vec3::new(2.0, 1.4, -3.0);
+        // Down the bore, across it, and a near-vertical shot, whose
+        // tangent basis is the one `tangents` picks off the world Z.
+        for dir in [
+            Vec3::Z,
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.05, 0.998, 0.0).normalize(),
+        ] {
+            for id in 1..=WEAPON_COUNT {
+                let mut tightest = f32::MAX;
+                for puff in plume(at, dir, id) {
+                    for step in 0..=25u8 {
+                        let t = puff.ttl * f32::from(step) / 25.0;
+                        let k = 1.0 - t / puff.ttl;
+                        let pos = puff.pos + puff.vel * t;
+                        let (edge, _) = puff_draw(puff.gravity, k);
+                        let radius = puff.size * edge * PUFF_BALL;
+                        // Distance from the line of the shot, which is
+                        // where the sights, the barrel tip and the target
+                        // all are.
+                        let off = pos - at;
+                        let clear = (off - dir * off.dot(dir)).length() - radius;
+                        tightest = tightest.min(clear);
+                    }
+                }
+                assert!(
+                    tightest > 0.04,
+                    "id {id} along {dir}: the smoke closed to {tightest} m of the shot line"
+                );
+                assert!(
+                    (tightest - PLUME_CLEAR).abs() < 1e-3,
+                    "id {id}: the tightest moment is birth, at PLUME_CLEAR"
+                );
+            }
+        }
+        // Still a puff: the ring reaches as far off the bore as it did
+        // before it was hollowed out, so a shot smokes from the outside.
+        assert!((plume_reach() - 0.09).abs() < 1e-6, "{}", plume_reach());
+        // And it reads as smoke, not steam: darker than every untextured
+        // grey the map draws itself with (the arena wall's 0.26 is the
+        // brightest).
+        for puff in plume(at, Vec3::Z, 3) {
+            assert!(
+                puff.color.max_element() < 0.26,
+                "darker than the map's greys: {}",
+                puff.color
+            );
+        }
+    }
+
+    /// A streak is laid back from the head toward the muzzle the client
+    /// drew, so a remote shot leaves the gun on screen; the head itself,
+    /// and with it the round's own body, stays on the server's segment.
+    #[test]
+    fn a_streak_starts_at_the_drawn_muzzle_and_rejoins_the_line() {
+        let from = Vec3::new(0.0, 1.45, 0.0);
+        let muzzle = Vec3::new(0.0, 0.85, 0.6);
+        let t = Tracer {
+            from,
+            muzzle,
+            to: Vec3::new(0.0, 1.45, 60.0),
+            weapon: 3,
+            born: 0.0,
+        };
+        // Five centimetres of flight: the streak already runs from the
+        // drawn muzzle to the head, while the head is on the sim's line.
+        let early = 0.05 / t.speed();
+        let rods = t.rods(early);
+        let rear = rods[0].center - t.streak_dir(early) * (rods[0].len * 0.5);
+        assert!(
+            (rear - muzzle).length() < 1e-3,
+            "the streak leaves the drawn gun: {rear}"
+        );
+        assert!((t.head(early).x - from.x).abs() < 1e-6 && t.head(early).y > 1.4);
+        // Well down range the streak has swung onto the flight line: the
+        // 0.6 m offset is under a degree by 40 m.
+        let late = 40.0 / t.speed();
+        assert!(
+            t.streak_dir(late).dot(t.dir()) > 0.9998,
+            "{}",
+            t.streak_dir(late).dot(t.dir())
+        );
+        // Nothing before the round has left, and the end is the server's.
+        assert!(t.rods(0.0).is_empty(), "no streak before the shot moves");
+        assert_eq!(t.to.z, 60.0);
     }
 
     #[test]
