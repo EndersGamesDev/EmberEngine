@@ -118,6 +118,7 @@ for f in index.html main.js worker.js; do
         bad "Julibrot source $f was rewritten"
     fi
 done
+contains "$(cat "$SHIM_PUBLISHED/labs/julibrot/main.js")" "JULIBROT_WORKER_URL = \"./worker.js?v=$STAMP\"" "the worker bootstrap URL uses the deploy stamp"
 contains "$(cat "$SHIM_PUBLISHED/labs/julibrot/main.js")" "./future.js?v=10" "a future two-digit cache key is not partly rewritten"
 is "$(jget "$SHIM_PUBLISHED/games.json" '[v["path"] for g in d["games"] if g.get("kind") == "lab" for v in g["versions"] if v.get("live")][0]')" "labs/julibrot/" "the live Julibrot catalog path was published"
 

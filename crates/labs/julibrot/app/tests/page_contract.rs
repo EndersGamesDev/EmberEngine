@@ -174,7 +174,13 @@ fn loader_version_one_and_abi_three_are_pinned_before_orbit_transfer() {
     assert!(MANIFEST.contains("name = \"ember_lab_julibrot\""));
     assert_eq!(WORKER.matches("ember_lab_julibrot.js?v=1").count(), 1);
     assert_eq!(MAIN.matches("./worker.js?v=1").count(), 1);
-    assert!(MAIN.contains("globalThis.JULIBROT_WORKER_URL = \"./worker.js?v=1\""));
+    let worker_url = MAIN
+        .find("globalThis.JULIBROT_WORKER_URL = \"./worker.js?v=1\"")
+        .expect("page publishes the worker URL");
+    let module_import = MAIN
+        .find("import(\"./pkg/ember_lab_julibrot.js")
+        .expect("page imports the main wasm module");
+    assert!(worker_url < module_import);
     assert!(FRAME.contains("WorkerChannel::new("));
     assert!(FRAME.contains("WorkerMode::WebWorker"));
     assert!(WORKER_OWNER.contains("const WORKER_URL_GLOBAL: &str = \"JULIBROT_WORKER_URL\""));

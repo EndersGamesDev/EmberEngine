@@ -183,7 +183,7 @@ The on-host units from `install-watchdog.sh` pass the name through `EMBER_HOST_N
 
 ## 11. Pages layout and publishing
 
-`deploy/deploy-pages.sh` assembles the hub at the root of gh-pages and gives each live catalog version its own frozen directory and game-specific wasm bundle: Arena v18 and v0, Fire Racer v2, Four Kings v1, and what-is-this v1. Before committing, the deploy checks every version marked `live` in `web/games.json` and fails closed if that path has no assembled `index.html`, so adding a live catalog link also requires adding its page to the deploy.
+`deploy/deploy-pages.sh` assembles the hub at the root of gh-pages and gives each live catalog version its own directory and bundle: Arena v20 and v0, Fire Racer v2, Four Kings v1, what-is-this v1, and the Julibrot lab at `labs/julibrot/`. Before committing, the deploy checks every version marked `live` in `web/games.json` and fails closed if that path has no assembled `index.html`, so adding a live catalog link also requires adding its page to the deploy.
 
 Catalog entries without a `kind` are hosted games; `kind: "lab"` means the entry has no host, protocol, or handover fields, opens its live relative path directly from the hub, and is excluded from host discovery and lobby listing.
 
