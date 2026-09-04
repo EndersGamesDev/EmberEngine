@@ -209,6 +209,7 @@ fn promote_binding_scene(ledger: &mut SceneLedger, scene_id: u64) -> crate::Scen
                 iteration_cap: 64,
                 level: RefinementLevel::Final,
                 extent: [64, 36],
+                grid: binding_main().grid,
                 texture_index,
                 centre_revision: 1,
                 plane_origin_f64: [0.0; 4],
@@ -392,11 +393,13 @@ fn relief_redraw_reuses_the_retained_grid_and_scene_uniform_contract() {
         Some(61)
     );
 
-    let main = binding_main();
-    let uniform = relief_scene_uniform(&main, &sampled, crate::CLASSIC_PALETTE)
+    let retained_grid = ledger
+        .retained_grid()
+        .expect("retained frame owns its record grid");
+    let uniform = relief_scene_uniform(retained_grid, &sampled, crate::CLASSIC_PALETTE)
         .expect("compatible records form a scene uniform");
     assert_eq!(uniform.grid, [64, 36, RefinementLevel::Final as u32, 64]);
-    assert_eq!(uniform.span[0], main.grid.span.directory_index);
+    assert_eq!(uniform.span[0], retained_grid.span.directory_index);
     assert_eq!(uniform.span[1], 64 * 36);
     assert_eq!(uniform.basis_u, sampled.pose.plane.basis_u);
     assert_eq!(uniform.screen_to_plane_row_0, [1.0, 0.0, 0.0, 0.0]);
@@ -623,13 +626,16 @@ fn relief_redraw_disocclusion_is_clear_and_distinct_from_exterior() {
 }
 
 #[test]
-fn relief_redraw_refuses_a_retained_grid_from_an_old_extent() {
+fn relief_redraw_refuses_a_retained_grid_whose_extent_no_longer_matches_its_frame() {
     let mut ledger = SceneLedger::default();
     let sampled = promote_binding_scene(&mut ledger, 62);
-    let mut main = binding_main();
-    main.grid.width /= 2;
-    main.grid.height /= 2;
-    assert!(relief_scene_uniform(&main, &sampled, crate::CLASSIC_PALETTE).is_err());
+    let mut retained_grid = ledger
+        .retained_grid()
+        .expect("retained frame owns its record grid")
+        .clone();
+    retained_grid.width /= 2;
+    retained_grid.height /= 2;
+    assert!(relief_scene_uniform(&retained_grid, &sampled, crate::CLASSIC_PALETTE).is_err());
 }
 
 #[test]

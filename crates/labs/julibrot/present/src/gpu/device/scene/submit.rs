@@ -134,6 +134,7 @@ impl Presenter {
                 iteration_cap: main.state.delivered_iter_cap,
                 level: main.grid.level,
                 extent,
+                grid: main.grid.clone(),
                 texture_index,
                 centre_revision: main.state.centre_revision,
                 plane_origin_f64: main.state.plane_origin_f64,
