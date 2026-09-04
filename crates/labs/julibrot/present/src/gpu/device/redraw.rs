@@ -11,35 +11,33 @@ impl Presenter {
         source: &crate::SceneFrame,
         surface_extent: [u32; 2],
         selected: PaletteRecord,
-    ) -> Result<(), PresentError> {
-        let grid = self
-            .ledger
-            .retained_grid()
-            .ok_or(PresentError::InvalidGrid {
-                width: source.extent[0],
-                height: source.extent[1],
-                logical_len: 0,
-            })?;
-        if retained_grid_is_live_main(grid, self.main.as_ref()) {
-            return Err(PresentError::StaleSpan {
-                directory_index: grid.span.directory_index,
-            });
+    ) -> Result<bool, PresentError> {
+        let Some(grid) = self.ledger.retained_grid() else {
+            return Ok(false);
+        };
+        if validate_grid_parts(grid, source.iteration_cap, self.gpu.heap_limits).is_err() {
+            return Ok(false);
         }
-        validate_grid_parts(grid, source.iteration_cap, self.gpu.heap_limits)?;
-        let uniform = relief_scene_uniform(grid, source, selected)?;
+        let Ok(uniform) = relief_scene_uniform(grid, source, selected) else {
+            return Ok(false);
+        };
         ensure_indices(&self.device, &mut self.gpu, source.extent)?;
         ensure_depth(&self.device, &mut self.gpu, surface_extent)?;
         self.queue
             .write_buffer(&self.gpu.scene_buffers[0], 0, bytemuck::bytes_of(&uniform));
-        Ok(())
+        Ok(true)
     }
-}
 
-pub(super) fn retained_grid_is_live_main(
-    retained: &ember_julibrot_kernels::EscapeGrid,
-    main: Option<&crate::PresentMain>,
-) -> bool {
-    main.is_some_and(|main| main.grid.span.directory_index == retained.span.directory_index)
+    pub(super) fn retained_records_support_relief_redraw(
+        &self,
+        source: &crate::SceneFrame,
+        selected: PaletteRecord,
+    ) -> bool {
+        self.ledger.retained_grid().is_some_and(|grid| {
+            validate_grid_parts(grid, source.iteration_cap, self.gpu.heap_limits).is_ok()
+                && relief_scene_uniform(grid, source, selected).is_ok()
+        })
+    }
 }
 
 pub(super) fn encode_relief_redraw(

@@ -25,7 +25,7 @@ use ledger::{
 };
 use redraw::encode_relief_redraw;
 #[cfg(test)]
-use redraw::{relief_scene_uniform, retained_grid_is_live_main};
+use redraw::relief_scene_uniform;
 use scene::{
     create_depth_target, create_scene_pipeline, create_scene_texture, encode_scene,
     encode_scene_mesh, ensure_backdrop_indices, ensure_depth, ensure_indices, ensure_scene_texture,
@@ -50,6 +50,7 @@ pub use scene::scene_load_color;
 const SCENE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 const FENCE_BYTES: u64 = 4;
+const HOT_HOMOGRAPHY_BYTE_OFFSET: u64 = 144;
 const HOT_SOURCE_VALID_BYTE_OFFSET: u64 = 280;
 const EXPOSURE_FACT_STEPS: u32 = 9;
 const GLITCH_RECORDS_PER_TEXEL: u32 = 255;
@@ -199,16 +200,18 @@ struct WarpSourceSlot {
     planned: Option<(u64, u32)>,
     held_stale: bool,
     relief_redraw: bool,
+    hold_on_redraw_refusal: bool,
 }
 
 impl WarpSourceSlot {
-    fn write_hot(&mut self, plan: &crate::WarpPlan) {
+    fn write_hot(&mut self, plan: &crate::WarpPlan, hold_on_redraw_refusal: bool) {
         self.planned = plan
             .source_scene_id
             .zip(plan.source_texture_index)
             .filter(|_| plan.source_valid);
         self.held_stale = plan.kind == WarpKind::HoldStale;
         self.relief_redraw = plan.kind == WarpKind::ReliefRedraw;
+        self.hold_on_redraw_refusal = hold_on_redraw_refusal;
     }
     fn frame<'a>(&self, retained: Option<&'a crate::SceneFrame>) -> Option<&'a crate::SceneFrame> {
         select_warp_source(self.planned, retained)
@@ -396,6 +399,13 @@ impl Presenter {
         if self.ledger.forget_retained_grid(grid) {
             self.clear_retained_facts();
         }
+    }
+
+    /// Forgets retained records immediately before their live span is overwritten.
+    ///
+    /// The completed image remains available for ordinary reprojection and stale-picture holds.
+    pub fn forget_retained_records(&mut self, grid: &ember_julibrot_kernels::EscapeGrid) {
+        self.ledger.forget_retained_records(grid);
     }
 
     const fn clear_retained_facts(&mut self) {

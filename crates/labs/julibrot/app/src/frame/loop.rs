@@ -13,7 +13,7 @@ use super::warp::{defer_scene_until_relief_redraw, hold_redraw_during_scene};
 #[cfg(test)]
 use ember_julibrot_kernels::SampleStatus;
 #[cfg(any(target_arch = "wasm32", test))]
-use ember_julibrot_kernels::{RefinementLevel, RefinementPlan};
+use ember_julibrot_kernels::{KernelError, RefinementLevel, RefinementPlan};
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_math::PoseMap;
 #[cfg(test)]
@@ -368,11 +368,22 @@ const fn published_iteration_cap(plan: &RefinementPlan) -> u32 {
     plan.delivered_max_iter
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+fn optional_backdrop_plan(
+    result: Result<RefinementPlan, KernelError>,
+) -> Result<Option<RefinementPlan>, AppError> {
+    match result {
+        Ok(plan) => Ok(Some(plan)),
+        Err(KernelError::Heap) => Ok(None),
+        Err(error) => Err(AppError::Kernel(error.to_string())),
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 mod browser {
     use ember_julibrot_kernels::{
-        DispatchFacts, EscapeGrid, GridExtent, JulibrotKernels, KERNEL_UNIFORM_BYTES, KernelMode,
-        OUTPUT_PAGE_SIDE, ReferenceOrbitInput, RefinementLevel, RefinementPlan,
+        DispatchFacts, EscapeGrid, GridExtent, JulibrotKernels, KERNEL_UNIFORM_BYTES, KernelError,
+        KernelMode, OUTPUT_PAGE_SIDE, ReferenceOrbitInput, RefinementLevel, RefinementPlan,
     };
     use ember_julibrot_math::{
         BigCentre, EscapeParams, ObjectAngles, Plane, PoseMap, PrecisionMode, pixel_scale,

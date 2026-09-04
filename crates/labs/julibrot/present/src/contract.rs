@@ -217,7 +217,7 @@ pub enum WarpKind {
     AnchorHomography,
     /// Honest clear because no compatible source or finite plan exists.
     ClearOnly,
-    /// Unmoved retained picture held while manual mode waits for an explicit scene update.
+    /// Unmoved retained picture held by the app's manual or pending-replacement policy.
     HoldStale,
     /// Retained-record scene-mesh redraw because no image map can carry the relief deformation.
     ReliefRedraw,
@@ -382,7 +382,7 @@ pub struct PresentFacts {
     pub reprojected_per_scene: Option<u32>,
     /// Retained-record relief redraws submitted as warp work.
     pub relief_redraw_count: u64,
-    /// Refused warps submitted as stale-picture holds; automatic holds are round-bounded.
+    /// Refused warps submitted as stale-picture holds while replacement work remains pending.
     pub warp_hold_count: u64,
     /// Refresh submissions without a retained scene.
     pub refreshes_without_scene: u64,

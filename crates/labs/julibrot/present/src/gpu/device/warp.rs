@@ -7,15 +7,16 @@ use crate::{
 };
 
 use super::{
-    FENCE_BYTES, GpuState, HOT_SOURCE_VALID_BYTE_OFFSET, Presenter, apply_hold_policy, arm_fence,
-    clear_warp_plan, encode_relief_redraw, identity_rows, pose_is_finite, warp_exposed_fraction,
+    FENCE_BYTES, GpuState, HOT_HOMOGRAPHY_BYTE_OFFSET, HOT_SOURCE_VALID_BYTE_OFFSET, Presenter,
+    apply_hold_policy, arm_fence, clear_warp_plan, encode_relief_redraw, identity_rows,
+    pose_is_finite, warp_exposed_fraction,
 };
 
 impl Presenter {
     /// Writes exactly one 288-byte HOT payload into the checked three-slot ring.
     ///
     /// When `hold_refused_warp` is true, a clear-only plan with a retained picture becomes an
-    /// identity `HoldStale` plan so manual mode cannot replace that picture with a permanent clear.
+    /// identity `HoldStale` plan so the app cannot replace that picture with a disallowed clear.
     #[allow(
         clippy::too_many_lines,
         reason = "HOT publication keeps pose, source identity, and exposure in one transaction"
@@ -47,6 +48,7 @@ impl Presenter {
             };
             pose_is_finite(&pose).then_some(pose)
         });
+        let selected = selected_or_classic(self.main.as_ref());
         let plan = pose.as_ref().map_or_else(
             || clear_warp_plan(false, true),
             |to_pose| {
@@ -62,8 +64,15 @@ impl Presenter {
                 }
             },
         );
+        let plan = if plan.kind == WarpKind::ReliefRedraw
+            && self.ledger.retained().is_none_or(|source| {
+                !self.retained_records_support_relief_redraw(source, selected.1)
+            }) {
+            clear_warp_plan(plan.edge_on, true)
+        } else {
+            plan
+        };
         let plan = apply_hold_policy(plan, self.ledger.retained(), hold_refused_warp);
-        let selected = selected_or_classic(self.main.as_ref());
         // A refused control falls back to the neutral row rather than to a stale one, so a
         // non-finite value shows the flat chart instead of the last thing that happened to be
         // in the lane.
@@ -111,7 +120,7 @@ impl Presenter {
             .write_buffer(&self.gpu.hot_buffer, offset, bytemuck::bytes_of(&uniform));
         self.hot[slot.index() as usize] = pose;
         self.latest_hot_slot = Some(slot);
-        self.hot_warp_source[slot.index() as usize].write_hot(&plan);
+        self.hot_warp_source[slot.index() as usize].write_hot(&plan, hold_refused_warp);
         // A refusal against the pose the retained scene was rendered at is not a disocclusion.
         // Exposure means the destination shows ground the source cannot cover, and the answer to
         // it is a completed scene; when the source already is the completed scene at this exact
@@ -211,11 +220,11 @@ impl Presenter {
         })?;
         let source_slot = self.hot_warp_source[hot_slot.index() as usize];
         let source = source_slot.frame(self.ledger.retained()).cloned();
-        let source_scene_id = source.as_ref().map(|frame| frame.scene_id);
-        let texture_index = source
+        let mut source_scene_id = source.as_ref().map(|frame| frame.scene_id);
+        let mut texture_index = source
             .as_ref()
             .map_or(0, |frame| frame.texture_index as usize);
-        let relief_redraw = source_slot.relief_frame(self.ledger.retained()).is_some();
+        let planned_relief_redraw = source_slot.relief_frame(self.ledger.retained()).is_some();
         if source.is_none() {
             self.clear_hot_source(hot_slot);
         }
@@ -224,7 +233,7 @@ impl Presenter {
             .as_ref()
             .and_then(PresentMain::selected_palette)
             .unwrap_or((PaletteId::Classic, palette(PaletteId::Classic)));
-        if relief_redraw {
+        let relief_redraw = if planned_relief_redraw {
             let source = source.as_ref().ok_or(PresentError::Device {
                 operation: "select relief redraw source",
             })?;
@@ -232,7 +241,25 @@ impl Presenter {
                 source,
                 [state.canvas_width, state.canvas_height],
                 selected.1,
-            )?;
+            )?
+        } else {
+            false
+        };
+        let mut held_stale = source_slot.held_stale;
+        if planned_relief_redraw && !relief_redraw {
+            let fallback = apply_hold_policy(
+                clear_warp_plan(false, true),
+                source.as_ref(),
+                source_slot.hold_on_redraw_refusal,
+            );
+            self.rewrite_hot_warp(hot_slot, &fallback);
+            self.hot_exposed[hot_slot.index() as usize] = fallback.exposed;
+            self.facts.record_warp_plan(&fallback, None);
+            held_stale = fallback.kind == WarpKind::HoldStale;
+            if !fallback.source_valid {
+                source_scene_id = None;
+                texture_index = 0;
+            }
         }
         let mut encoder = self
             .device
@@ -257,7 +284,7 @@ impl Presenter {
                 hot_slot.dynamic_offset(),
                 selected.1,
             );
-            if source_slot.held_stale {
+            if held_stale {
                 self.facts.record_warp_hold();
             }
         }
@@ -296,6 +323,20 @@ impl Presenter {
             &self.gpu.hot_buffer,
             u64::from(hot_slot.dynamic_offset()) + HOT_SOURCE_VALID_BYTE_OFFSET,
             bytemuck::bytes_of(&0_u32),
+        );
+    }
+
+    fn rewrite_hot_warp(&self, hot_slot: HotSlot, plan: &crate::WarpPlan) {
+        let offset = u64::from(hot_slot.dynamic_offset());
+        self.queue.write_buffer(
+            &self.gpu.hot_buffer,
+            offset + HOT_HOMOGRAPHY_BYTE_OFFSET,
+            bytemuck::bytes_of(&plan.rows),
+        );
+        self.queue.write_buffer(
+            &self.gpu.hot_buffer,
+            offset + HOT_SOURCE_VALID_BYTE_OFFSET,
+            bytemuck::bytes_of(&u32::from(plan.source_valid)),
         );
     }
 }

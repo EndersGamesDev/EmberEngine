@@ -248,6 +248,7 @@ impl BrowserFrameLoop {
             self.restore_main_grid_pair(&old_plan)?;
             return Err(error);
         }
+        self.plan = next_plan;
         self.grid = next_grid;
         self.spare_grid = Some(next_spare);
         self.grid_round = self.loop_state.ladder_round();
@@ -331,6 +332,7 @@ impl BrowserFrameLoop {
             super::stamp_scene_level(&mut self.grid, &self.plan, level);
         }
         let facts = if let PoseMap::Mapped(screen_to_plane) = map {
+            self.presenter.forget_retained_records(&self.grid);
             let params = EscapeParams::new(viewer.requested().iteration_cap);
             let mut encoder = self
                 .device
