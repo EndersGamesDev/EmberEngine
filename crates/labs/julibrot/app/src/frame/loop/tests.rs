@@ -2308,6 +2308,11 @@ struct HeightDragStats {
     final_after_drag_ms: f64,
 }
 
+#[allow(
+    clippy::print_stderr,
+    clippy::too_many_lines,
+    reason = "the timed two-row drag harness keeps its scheduler, presenter, and reported counts in one visible trace"
+)]
 fn drive_height_drag(row: HeightDragRow) -> HeightDragStats {
     const DRAG_FRAMES: u32 = 90;
     const FLIGHT_FRAMES: usize = 3;

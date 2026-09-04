@@ -1256,6 +1256,10 @@ fn observer_bars() {
 }
 
 #[test]
+#[allow(
+    clippy::print_stderr,
+    reason = "the requested two-row oracle reports its exact planner classification table"
+)]
 fn thirty_hertz_height_drag_keeps_both_owner_rows_inside_the_exact_redraw_family() {
     const DRAG_FRAMES: u32 = 90;
     const ANGLE: f64 = -1.316_653_720_171_549_4;

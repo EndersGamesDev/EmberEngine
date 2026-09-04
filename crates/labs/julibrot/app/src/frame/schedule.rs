@@ -482,12 +482,11 @@ impl FrameLoop {
         if !has_retained_scene || !self.refinement_pending() {
             return false;
         }
-        match self.auto_hold_round {
-            Some(round) => round == self.ladder_round,
-            None => {
-                self.auto_hold_round = Some(self.ladder_round);
-                true
-            }
+        if let Some(round) = self.auto_hold_round {
+            round == self.ladder_round
+        } else {
+            self.auto_hold_round = Some(self.ladder_round);
+            true
         }
     }
 
