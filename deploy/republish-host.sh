@@ -28,8 +28,17 @@ done
 [ -n "$REPO" ] || { echo "republish-host: --repo needs a value" >&2; exit 2; }
 [ -n "$BRANCH" ] || { echo "republish-host: --branch needs a value" >&2; exit 2; }
 
-PY="$(command -v python3 || command -v python || true)"
-if [ -z "$PY" ] || ! "$PY" -c '' >/dev/null 2>&1; then
+# Windows puts an App Execution Alias stub named python3 on PATH: it prints
+# "Python was not found" and runs nothing, so the first name `command -v`
+# finds may be unusable and the next one has to be tried.
+PY=""
+for cand in python3 python; do
+    c="$(command -v "$cand" 2>/dev/null)" || continue
+    "$c" -c "pass" >/dev/null 2>&1 || continue
+    PY="$c"
+    break
+done
+if [ -z "$PY" ]; then
     echo "republish-host: need a working python3 (or python) on PATH" >&2
     exit 1
 fi

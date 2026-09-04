@@ -28,7 +28,18 @@
 set -euo pipefail
 
 die() { echo "deploy-pages: $*" >&2; exit 1; }
-PY="$(command -v python3 || command -v python)" || die "need python3 or python on PATH"
+# Windows puts an App Execution Alias stub named python3 on PATH: it prints
+# "Python was not found" and exits without running anything, so `command -v`
+# alone picks an interpreter that cannot execute a line. A candidate counts
+# only once it has run one.
+PY=""
+for cand in python3 python; do
+    c="$(command -v "$cand" 2>/dev/null)" || continue
+    "$c" -c "pass" >/dev/null 2>&1 || continue
+    PY="$c"
+    break
+done
+[ -n "$PY" ] || die "need a working python3 or python on PATH"
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_DIR"
