@@ -563,10 +563,7 @@ impl ViewerOwner {
         self.staged_main.set(main);
 
         let mut hot = self.staged_hot.get();
-        if let Some(navigation) = self.navigation.as_mut() {
-            navigation.reference_centre = navigation.centre.clone();
-            hot.centre_from_reference_px = [0.0; 2];
-        } else {
+        if self.navigation.is_none() {
             hot.centre_from_reference_px[0] -= reference_shift_px[0];
             hot.centre_from_reference_px[1] -= reference_shift_px[1];
         }

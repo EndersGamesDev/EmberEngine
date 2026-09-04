@@ -367,6 +367,8 @@ struct CheckedScreenMap {
 pub struct ReferenceSubmission {
     /// Exact navigation snapshot released by the owner.
     pub navigation: NavigationSubmission,
+    /// Exact point whose orbit will serve that navigation snapshot.
+    pub reference_centre: BigCentre,
     /// All reasons coalesced since the preceding released request.
     pub reason: OrbitReason,
 }
@@ -386,6 +388,7 @@ pub struct ViewerController {
     staged_hot: HotState,
     staged_main: MainState,
     pending_reason: Option<OrbitReason>,
+    pending_reference_centre: Option<(u32, BigCentre)>,
     grid_width: u32,
     crosshair: Option<BigCentre>,
     grid_extent: [u32; 2],
@@ -468,6 +471,7 @@ impl ViewerController {
             staged_hot: initial.hot,
             staged_main: initial.main,
             pending_reason: Some(OrbitReason::INITIAL),
+            pending_reference_centre: None,
             grid_width,
             crosshair: None,
             grid_extent,
@@ -688,6 +692,64 @@ impl ViewerController {
         self.zoom_about_crosshair(zoom_log2 - self.requested.zoom_log2)
     }
 
+    /// Requests a new reference at one deterministic pixel of a completed refinement level.
+    ///
+    /// The navigation centre stays fixed. Only the orbit point moves, so the next perturbation
+    /// uniform carries the centre-minus-reference displacement needed to sample the same view.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed refusal for an invalid extent/index, an uncertified screen map, bignum
+    /// arithmetic failure, or generation exhaustion.
+    pub fn request_reference_for_pixel(
+        &mut self,
+        index: u32,
+        grid_extent: [u32; 2],
+    ) -> Result<u32, AppError> {
+        let [width, height] = grid_extent;
+        let active_len = width
+            .checked_mul(height)
+            .filter(|length| *length > 0 && index < *length)
+            .ok_or_else(|| AppError::Math("reference sample index is outside its grid".to_string()))?;
+        debug_assert!(active_len > index);
+        let column = index % width;
+        let row = index / width;
+        let anchor = [
+            f64::from(column) + 0.5 - 0.5 * f64::from(width),
+            f64::from(row) + 0.5 - 0.5 * f64::from(height),
+        ];
+        let map = self.screen_map(grid_extent)?;
+        let PoseMap::Mapped(map) = map else {
+            return Err(AppError::Math(
+                "an edge-on view has no reference sample".to_string(),
+            ));
+        };
+        let plane_offset = navigation_delta(&map, [0.0; 2], 0.0, anchor)
+            .map_err(math_error)?
+            .anchor_canvas_px;
+        let (mut point, plane, _) = self.navigation_frame()?;
+        point
+            .apply_navigation(
+                &NavigationDelta {
+                    pan_canvas_px: [-plane_offset[0], -plane_offset[1]],
+                    zoom_delta_log2: 0.0,
+                    anchor_canvas_px: [0.0; 2],
+                },
+                &plane,
+                self.requested.zoom_log2,
+                self.requested.zoom_log2,
+                width,
+            )
+            .map_err(math_error)?;
+        let generation = self.owner.navigate(NavigationDelta::default());
+        if let Some(error) = self.owner.take_navigation_error() {
+            return Err(owner_error(error));
+        }
+        self.pending_reference_centre = Some((generation, point));
+        self.add_reason(OrbitReason::CENTRE_THRESHOLD);
+        Ok(generation)
+    }
+
     /// Stages all six ordered object angles without resetting other HOT controls.
     ///
     /// # Errors
@@ -813,6 +875,7 @@ impl ViewerController {
             return Err(owner_error(error));
         }
         self.pending_reason = Some(OrbitReason::INITIAL);
+        self.pending_reference_centre = None;
         self.navigation_centre_f64 = origin;
         Ok(())
     }
@@ -1009,11 +1072,20 @@ impl ViewerController {
     /// Releases one newest exact centre snapshot and its coalesced request reason.
     pub fn take_reference_submission(&mut self) -> Option<ReferenceSubmission> {
         let navigation = self.owner.take_navigation_submission()?;
+        let reference_centre = self
+            .pending_reference_centre
+            .take()
+            .filter(|(generation, _)| *generation == navigation.generation)
+            .map_or_else(|| navigation.centre.clone(), |(_, centre)| centre);
         let reason = self
             .pending_reason
             .take()
             .unwrap_or(OrbitReason::CENTRE_THRESHOLD);
-        Some(ReferenceSubmission { navigation, reason })
+        Some(ReferenceSubmission {
+            navigation,
+            reference_centre,
+            reason,
+        })
     }
 
     /// Marks a worker response terminal so a coalesced successor may be released.

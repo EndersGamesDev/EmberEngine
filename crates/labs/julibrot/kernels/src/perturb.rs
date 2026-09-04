@@ -46,6 +46,39 @@ impl PerturbUniform {
         orbit_length: u32,
         level: RefinementLevel,
     ) -> Result<Self, KernelError> {
+        Self::pack_referenced(
+            plane,
+            screen_to_plane,
+            [0.0; 2],
+            scale,
+            extent,
+            params,
+            orbit_length,
+            level,
+        )
+    }
+
+    /// Packs a payload whose reference may differ from the centre of the sampled view.
+    ///
+    /// `centre_from_reference_px` is expressed in pixels of this level. Adding it to the
+    /// homogeneous quotient makes every perturbation relative to the sampled reference while the
+    /// screen map remains relative to the view centre.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same typed refusals as [`Self::pack`], plus an invalid-map refusal for a
+    /// non-finite displacement or translated row.
+    #[allow(clippy::too_many_arguments)]
+    pub fn pack_referenced(
+        plane: Plane,
+        screen_to_plane: &Homography,
+        centre_from_reference_px: [f64; 2],
+        scale: ScaleSplit,
+        extent: GridExtent,
+        params: EscapeParams,
+        orbit_length: u32,
+        level: RefinementLevel,
+    ) -> Result<Self, KernelError> {
         validate_extent(extent)?;
         validate_params(params)?;
         if !finite_scalar(scale.mantissa) || !(0.5..1.0).contains(&scale.mantissa) {
@@ -54,9 +87,20 @@ impl PerturbUniform {
         if orbit_length == 0 || orbit_length > params.max_iter {
             return Err(KernelError::ReferenceLengthMismatch);
         }
+        if !centre_from_reference_px.into_iter().all(f64::is_finite) {
+            return Err(KernelError::InvalidMap);
+        }
+        let mut referenced_map = *screen_to_plane;
+        for column in 0..3 {
+            let denominator = screen_to_plane.rows[6 + column];
+            referenced_map.rows[column] = centre_from_reference_px[0]
+                .mul_add(denominator, screen_to_plane.rows[column]);
+            referenced_map.rows[3 + column] = centre_from_reference_px[1]
+                .mul_add(denominator, screen_to_plane.rows[3 + column]);
+        }
         Ok(Self::from_parts(
             plane,
-            pack_map_rows(screen_to_plane)?,
+            pack_map_rows(&referenced_map)?,
             scale,
             extent,
             params.max_iter,

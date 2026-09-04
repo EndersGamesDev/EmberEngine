@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 #[cfg(any(target_arch = "wasm32", test))]
-use ember_julibrot_kernels::{EscapeGrid, RefinementPlan};
+use ember_julibrot_kernels::{EscapeGrid, RefinementPlan, SampleStatus};
 use ember_julibrot_kernels::{RefinementLevel, next_refinement_level};
 #[cfg(any(target_arch = "wasm32", test))]
 use ember_julibrot_math::PICTURE_FAST_EDIT_BUDGET;
@@ -35,6 +35,49 @@ const BACKDROP_PRESENT_LEVEL: RefinementLevel = RefinementLevel::Preview;
 const REFERENCE_RECORD_BYTES: usize = 8;
 #[cfg(any(target_arch = "wasm32", test))]
 const REFERENCE_TEXEL_BYTES: usize = 16;
+
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReferenceCandidate {
+    index: u32,
+    iteration_count: u32,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a finite smooth count is clamped to the delivered u32 iteration cap"
+)]
+fn select_reference_candidate(
+    records: &[ember_julibrot_math::EscapeGridRecord],
+    iteration_cap: u32,
+) -> Option<ReferenceCandidate> {
+    records
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| {
+            let status = SampleStatus::from_f32(record.status)?;
+            if status == SampleStatus::Horizon {
+                return None;
+            }
+            let iteration_count = if status == SampleStatus::Glitch || record.escaped == 0.0 {
+                iteration_cap
+            } else if record.escaped == 1.0 && record.smooth_iter.is_finite() {
+                (record.smooth_iter.ceil().max(0.0) as u32).min(iteration_cap)
+            } else {
+                return None;
+            };
+            Some(ReferenceCandidate {
+                index: u32::try_from(index).ok()?,
+                iteration_count,
+            })
+        })
+        .fold(None, |best, candidate| match best {
+            Some(best) if best.iteration_count >= candidate.iteration_count => Some(best),
+            _ => Some(candidate),
+        })
+}
 
 #[cfg(any(target_arch = "wasm32", test))]
 fn reference_texel_bytes(length: u32) -> Result<usize, AppError> {
@@ -1033,7 +1076,9 @@ mod browser {
     #[derive(Debug)]
     struct SubmittedReference {
         generation: u32,
-        centre: BigCentre,
+        view_centre: BigCentre,
+        reference_centre: BigCentre,
+        sampled: bool,
         zoom_log2: f64,
         plane: Plane,
         precision_mode: &'static str,
@@ -1125,6 +1170,7 @@ mod browser {
         accepted_reference: Option<BigCentre>,
         shallow_centre: Option<BigCentre>,
         accepted_reference_zoom_log2: Option<f64>,
+        reference_from_sample: bool,
         submitted_references: Vec<SubmittedReference>,
         reference_upload: Vec<u8>,
         plan: RefinementPlan,
@@ -1282,6 +1328,7 @@ mod browser {
                 accepted_reference: Some(accepted_reference),
                 shallow_centre: None,
                 accepted_reference_zoom_log2: None,
+                reference_from_sample: false,
                 submitted_references: Vec::with_capacity(2),
                 reference_upload,
                 plan,
@@ -1513,6 +1560,7 @@ mod browser {
                     hot.pose.object,
                     hot.plane,
                     hot.pose.map,
+                    hot.pose.centre_from_reference_px,
                     slot,
                     hot.state.epoch,
                     now_ms,
@@ -2098,10 +2146,10 @@ mod browser {
                 .accepted_reference
                 .as_ref()
                 .map_or(Ok([0.0; 2]), |old| {
-                    let old = old.with_precision(submitted.centre.precision_bits)?;
+                    let old = old.with_precision(submitted.reference_centre.precision_bits)?;
                     reference_shift_px(
                         &old,
-                        &submitted.centre,
+                        &submitted.reference_centre,
                         &submitted.plane,
                         submitted.zoom_log2,
                         self.plan.requested_extent.width,
@@ -2114,8 +2162,8 @@ mod browser {
                 }
             };
             if let Err(error) = viewer.configure_navigation_context(
-                submitted.centre.clone(),
-                submitted.centre.clone(),
+                submitted.view_centre,
+                submitted.reference_centre.clone(),
                 submitted.plane,
             ) {
                 self.remove_orbit(handle)?;
@@ -2127,8 +2175,9 @@ mod browser {
                 return Ok((disposition, false));
             }
             self.replace_current_orbit(handle)?;
-            self.accepted_reference = Some(submitted.centre);
+            self.accepted_reference = Some(submitted.reference_centre);
             self.accepted_reference_zoom_log2 = Some(submitted.zoom_log2);
+            self.reference_from_sample = submitted.sampled;
             self.main = viewer.drain_main()?.main;
             self.level_timings.record_worker(
                 response.centre_revision(),
@@ -2163,6 +2212,7 @@ mod browser {
                 return Ok(false);
             };
             let navigation = submission.navigation;
+            let sampled = submission.reference_centre != navigation.centre;
             let requested = viewer.requested();
             if KernelMode::for_zoom(navigation.zoom_log2) == KernelMode::Shallow {
                 if !viewer.owner_mut().accept_navigation_without_orbit(
@@ -2186,8 +2236,11 @@ mod browser {
                 requested.iteration_cap,
             )
             .map_err(math_error)?;
-            let centre = EncodedCentre::encode_math(&navigation.centre, navigation.centre_revision)
-                .map_err(worker_error)?;
+            let centre = EncodedCentre::encode_math(
+                &submission.reference_centre,
+                navigation.centre_revision,
+            )
+            .map_err(worker_error)?;
             let request = OrbitRequest::new(
                 navigation.generation,
                 centre,
@@ -2217,7 +2270,9 @@ mod browser {
             }
             self.submitted_references.push(SubmittedReference {
                 generation: navigation.generation,
-                centre: navigation.centre,
+                view_centre: navigation.centre,
+                reference_centre: submission.reference_centre,
+                sampled,
                 zoom_log2: navigation.zoom_log2,
                 plane,
                 precision_mode: viewer_precision_mode(navigation.precision_mode),
@@ -2294,6 +2349,7 @@ mod browser {
             object: ObjectAngles,
             plane: Plane,
             map: PoseMap,
+            centre_from_reference_px: [f64; 2],
             slot: HotSlot,
             owner_epoch: u64,
             now_ms: f64,
@@ -2374,6 +2430,7 @@ mod browser {
                                 level,
                                 &plane,
                                 &screen_to_plane,
+                                centre_from_reference_px,
                                 scale,
                                 params,
                                 ReferenceOrbitInput {
@@ -2868,8 +2925,8 @@ mod tests {
     };
     use ember_julibrot_math::{
         BigCentre, EscapeParams, Homography, MathError, ObjectAngles, OrbitStep, Plane, PoseMap,
-        PrecisionMode, ReferenceOrbitBuilder, ViewControls, precision_for, scale_split,
-        screen_to_plane,
+        PrecisionMode, ReferenceOrbitBuilder, ViewControls, pixel_scale, precision_for,
+        scale_split, screen_to_plane,
     };
 
     use super::{
@@ -2879,7 +2936,8 @@ mod tests {
         backdrop_extent, coverage_pre_empts, defer_scene_until_relief_redraw,
         expand_reference_texels_into, fence_error, hold_redraw_during_scene, horizon_facts,
         main_for_grid, perturbation_reference_is_current, published_iteration_cap,
-        sampling_zoom_log2, schedule_exposure_fill, stamp_scene_level, stamped_extent,
+        sampling_zoom_log2, schedule_exposure_fill, select_reference_candidate, stamp_scene_level,
+        stamped_extent,
         stamped_screen_map, view_projection_changed,
     };
     use crate::{AppError, FramePolicy, LevelTimingLedger, ViewerController};
@@ -2891,35 +2949,27 @@ mod tests {
     const SCENE_DEADLINE_MS: f64 = 30_000.0;
 
     #[test]
-    fn zoom_twelve_to_fourteen_waits_for_a_matching_reference_and_finishes_without_glitches() {
+    fn exact_origin_zoom_fourteen_chooses_a_long_reference_and_finishes_without_glitches() {
         const WIDTH: u32 = 960;
         const HEIGHT: u32 = 540;
         const CAP: u32 = 512;
-        const ZOOM_TWELVE_GENERATION: u32 = 12;
-        const ZOOM_FOURTEEN_GENERATION: u32 = 14;
+        const PREVIEW_WIDTH: u32 = WIDTH.div_ceil(8);
+        const PREVIEW_HEIGHT: u32 = HEIGHT.div_ceil(8);
+        const PREVIEW_CAP: u32 = 32;
         assert_eq!(KernelMode::for_zoom(12.0), KernelMode::Shallow);
         assert_eq!(KernelMode::for_zoom(14.0), KernelMode::Perturbation);
-        assert!(!perturbation_reference_is_current(
-            14.0,
-            ZOOM_FOURTEEN_GENERATION,
-            Some((ZOOM_TWELVE_GENERATION, 12.0))
-        ));
-        assert!(perturbation_reference_is_current(
-            14.0,
-            ZOOM_FOURTEEN_GENERATION,
-            Some((ZOOM_FOURTEEN_GENERATION, 14.0))
-        ));
 
         let precision = precision_for(14.0, WIDTH, CAP).expect("zoom fourteen precision");
-        let centre = BigCentre::from_f64(
+        let view_centre = BigCentre::from_f64(
             [0.0, 0.0, -0.743_643_887_037_151, 0.131_825_904_205_33],
             precision.requested_bits,
         )
         .expect("finite seahorse centre");
-        let mut builder = ReferenceOrbitBuilder::new(&centre, precision, EscapeParams::new(CAP))
-            .expect("reference builder");
-        let orbit = loop {
-            match builder
+        let mut initial_builder =
+            ReferenceOrbitBuilder::new(&view_centre, precision, EscapeParams::new(CAP))
+                .expect("initial reference builder");
+        let initial_orbit = loop {
+            match initial_builder
                 .step(NonZeroU32::new(CAP).expect("nonzero cap"))
                 .expect("reference step")
             {
@@ -2927,33 +2977,107 @@ mod tests {
                 OrbitStep::Pending { .. } => {}
             }
         };
-        let uniforms = PerturbUniform::pack(
-            Plane {
-                basis_u: [0.0, 0.0, 1.0, 0.0],
-                basis_v: [0.0, 0.0, 0.0, 1.0],
-            },
+        let plane = Plane {
+            basis_u: [0.0, 0.0, 1.0, 0.0],
+            basis_v: [0.0, 0.0, 0.0, 1.0],
+        };
+        let preview_uniforms = PerturbUniform::pack(
+            plane,
             &Homography::IDENTITY,
-            scale_split(14.0, WIDTH).expect("zoom fourteen scale"),
+            scale_split(14.0, PREVIEW_WIDTH).expect("zoom fourteen Preview scale"),
+            GridExtent {
+                width: PREVIEW_WIDTH,
+                height: PREVIEW_HEIGHT,
+            },
+            EscapeParams::new(PREVIEW_CAP),
+            PREVIEW_CAP,
+            RefinementLevel::Preview,
+        )
+        .expect("Preview uniform");
+        let preview_records = (0..PREVIEW_WIDTH * PREVIEW_HEIGHT)
+            .map(|index| {
+                perturb_scaled_pixel(
+                    &preview_uniforms,
+                    &initial_orbit.records[..usize::try_from(PREVIEW_CAP).expect("small cap")],
+                    index,
+                )
+                .expect("canonical Preview pixel")
+                .record
+            })
+            .collect::<Vec<_>>();
+        let candidate = select_reference_candidate(&preview_records, PREVIEW_CAP)
+            .expect("Preview has a sampleable reference candidate");
+        assert_eq!(candidate.iteration_count, PREVIEW_CAP);
+
+        let mut viewer = ViewerController::new([WIDTH, HEIGHT]).expect("canonical viewer");
+        viewer
+            .set_plane_origin(view_centre.to_f64_mirror())
+            .expect("finite origin controls");
+        viewer.set_zoom_log2(14.0).expect("zoom fourteen");
+        let generation = viewer
+            .request_reference_for_pixel(candidate.index, [PREVIEW_WIDTH, PREVIEW_HEIGHT])
+            .expect("deterministic Preview reference");
+        let selected = viewer
+            .take_reference_submission()
+            .expect("selected reference submission");
+        assert_eq!(selected.navigation.generation, generation);
+        let centre_from_reference = selected
+            .navigation
+            .centre
+            .displacement_px(
+                &selected.reference_centre,
+                &plane,
+                pixel_scale(14.0, WIDTH).expect("Final pixel scale"),
+            )
+            .expect("reference displacement");
+        let mut selected_builder = ReferenceOrbitBuilder::new(
+            &selected.reference_centre,
+            precision,
+            EscapeParams::new(CAP),
+        )
+        .expect("selected reference builder");
+        let selected_orbit = loop {
+            match selected_builder
+                .step(NonZeroU32::new(CAP).expect("nonzero cap"))
+                .expect("selected reference step")
+            {
+                OrbitStep::Complete(orbit) => break orbit,
+                OrbitStep::Pending { .. } => {}
+            }
+        };
+        let uniforms = PerturbUniform::pack_referenced(
+            plane,
+            &Homography::IDENTITY,
+            centre_from_reference,
+            scale_split(14.0, WIDTH).expect("zoom fourteen Final scale"),
             GridExtent {
                 width: WIDTH,
                 height: HEIGHT,
             },
             EscapeParams::new(CAP),
-            orbit.length,
+            selected_orbit.length,
             RefinementLevel::Final,
         )
-        .expect("matching-reference uniform");
-        let glitch_pixel_count = (0..WIDTH * HEIGHT)
-            .filter(|index| {
-                SampleStatus::from_f32(
-                    perturb_scaled_pixel(&uniforms, &orbit.records, *index)
-                        .expect("canonical pixel index")
-                        .record
-                        .status,
-                ) == Some(SampleStatus::Glitch)
+        .expect("selected-reference uniform");
+        let samples = (0..WIDTH * HEIGHT)
+            .map(|index| {
+                perturb_scaled_pixel(&uniforms, &selected_orbit.records, index)
+                    .expect("canonical Final pixel")
+            })
+            .collect::<Vec<_>>();
+        let glitch_pixel_count = samples
+            .iter()
+            .filter(|sample| {
+                SampleStatus::from_f32(sample.record.status) == Some(SampleStatus::Glitch)
             })
             .count();
-        assert_eq!(orbit.length, CAP);
+        let frame_max_count = samples
+            .iter()
+            .map(|sample| sample.escape_index.map_or(CAP, |index| index + 1))
+            .max()
+            .expect("Final is nonempty");
+
+        assert!(selected_orbit.length >= frame_max_count);
         assert_eq!(glitch_pixel_count, 0);
     }
 
