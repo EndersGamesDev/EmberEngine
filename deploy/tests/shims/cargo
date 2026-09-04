@@ -9,4 +9,30 @@
 set -uo pipefail
 LOG="${SHIM_LOG:-/dev/null}"
 { printf 'cargo'; for a in "$@"; do printf ' [%s]' "$a"; done; printf '\n'; } >> "$LOG"
+
+# host.sh's fast wiring test asks this shim to materialize inert executables.
+# The ordinary ssh-deploy tests leave these variables unset and retain the
+# original log-and-succeed behaviour above.
+if [ -n "${EMBER_FAKE_CARGO_TARGET:-}" ]; then
+    example=""
+    packages=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -p) packages="$packages ${2:-}"; shift 2 ;;
+            --example) example="${2:-}"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    if [ -n "$example" ]; then
+        mkdir -p "$EMBER_FAKE_CARGO_TARGET/release/examples"
+        cp "$EMBER_FAKE_PROBE" "$EMBER_FAKE_CARGO_TARGET/release/examples/$example"
+        chmod +x "$EMBER_FAKE_CARGO_TARGET/release/examples/$example"
+    else
+        mkdir -p "$EMBER_FAKE_CARGO_TARGET/release"
+        for package in $packages; do
+            cp "$EMBER_FAKE_SERVER" "$EMBER_FAKE_CARGO_TARGET/release/$package"
+            chmod +x "$EMBER_FAKE_CARGO_TARGET/release/$package"
+        done
+    fi
+fi
 exit 0

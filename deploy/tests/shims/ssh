@@ -17,6 +17,10 @@ LOG="${SHIM_LOG:-/dev/null}"
 { printf 'ssh'; for a in "$@"; do printf ' [%s]' "$a"; done; printf '\n'; } >> "$LOG"
 
 ARGS="$*"
+if [ -n "${REPUBLISH_HOST_JSON:-}" ] && [[ "$ARGS" == *ember-host/run/host.json* ]]; then
+    cat "$REPUBLISH_HOST_JSON"
+    exit 0
+fi
 case "$ARGS" in
     *"bash -s"*)
         # host-name.sh is piped in. Consume it, so the writing end never sees
