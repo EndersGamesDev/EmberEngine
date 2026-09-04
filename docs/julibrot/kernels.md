@@ -78,7 +78,32 @@ Reference record `r` supplies the displayed `Zᵣ = (re,im)` directly as two `f3
 
 For each outer iteration `n < max_iter`, the kernel first refuses an unavailable reference index as a glitch, then loads `Zᵣ`, constructs `zₙ`, and tests escape; if the pixel does not escape and `n+1 = max_iter`, it records a capped pixel without loading or advancing to another reference, otherwise it applies any rebase and performs exactly one ordinary advance, so escape wins over rebase at the same state.
 
+After escape and before the cap and rebase decisions, the single-step Pauldelbrot test requires `|zₙ|² ≥ 10⁻⁶·|Zᵣ|²`; failure returns the numeric glitch kind `−2.0`, never reference exhaustion. Binary32 carries 24 significand bits, and the square-root ratio behind `10⁻⁶` detects a cancellation of at least `10³` in magnitude, or about ten lost bits, while the independent `2⁻⁶⁴` normalization floor below handles absolute represented-delta range; the `10⁻⁶` test therefore measures relative cancellation rather than duplicating the exponent floor.
+
+The selected `10⁻⁶` threshold flagged zero pixels in the 518,400-pixel zoom-14 centre-reference seahorse corpus, and every non-glitch record was bit-identical to the detector-disabled CPU mirror; `10⁻⁴` flagged 38 pixels and `10⁻⁸` also flagged zero. After the reference policy's census correction shifts the reference, the delivered Final contains zero reference-exhaustion glitches and five numeric glitches that meet the Pauldelbrot criterion; app publishes that measured count and paints those pixels orange. A direct true-interior fixture at `c = 0` remains sampled through cap 512 rather than being flagged.
+
 The corrected rebasing rule is repeatable: when `|zₙ| < |2^e·δ′ₙ|`, set represented `δ ← zₙ−Z₀`, reset reference index `r ← 0`, increment `rebase_count`, normalize that delta as `(δ′,e)`, then perform exactly one ordinary scaled advance against `Z₀` and advance `r` to one; the invariant `zₙ = Zᵣ+δₙ` holds by construction.
+
+#### Accumulated cancellation error is measured, not yet detected
+
+No accumulated-error threshold ships in either production mirror. The ignored native harness retains a test-only binary32 estimator that starts at `a = f32::EPSILON` and, only when a rebase is taken, evaluates `g = sqrt(|Zᵣ|²/|zₙ|²)`, `a ← fl32(a·g)`, then `a ← fl32(a+f32::EPSILON)`; the condition factor `g` amplifies inherited relative error by the cancellation ratio and the added epsilon models rounding in the new subtraction `δ ← zₙ−Z₀`. This code is compiled only for Rust tests and contributes no state or arithmetic to the shipped CPU or WGSL kernels.
+
+The harness deliberately omits a per-iteration growth term: the quadratic map can double relative error in a worst-case step, but unconditional doubling would move binary32 epsilon past `10⁻³` in about fourteen iterations and reject ordinary long-lived pixels without accounting for the local derivative or reference precision.
+
+On the corrected 960-by-540 Final, the threshold sweep produced the following measurements; “apparent false positives” means detector flags whose old kernel result agreed with the direct binary64 orbit under the study's one-iteration-or-classification rule, excluding five pre-existing glitch records.
+
+|Candidate `E`|Flags|Apparent false positives versus binary64|Pixel `(696,0)` with 41-record reference|
+|------------:|----:|---------------------------------------:|:---------------------------------------|
+|`10⁻³`|3,071|926/3,066 = 30.20%|Flags at rebase 25|
+|`3·10⁻³`|1,474|552/1,469 = 37.58%|Not flagged|
+|`10⁻²`|771|409/766 = 53.39%|Not flagged|
+|`3·10⁻²`|513|344/508 = 67.72%|Not flagged|
+
+At `E = 10⁻³`, 2,140 of 3,066 comparable flagged pixels, or 69.80%, differed from binary64 by more than one iteration, by more than one smooth-count unit, or by escape/interior classification; 57 of a deterministic 1,024 unflagged-pixel sample, or 5.57%, differed by the same rule. These are not detector true-positive and false-negative rates: near the boundary at zoom 14 the escape index is chaotic and a direct binary64 orbit is not exact, so disagreement with binary64 is only an upper bound on kernel error, not a measurement of it.
+
+Production therefore leaves the accumulated detector disabled. Pixel `(696,0)` with the 41-record centre reference still reaches cap 512 as sampled after 27 rebases under the single-step Pauldelbrot test, while the direct binary64 comparison escapes at zero-based index 250, state 251; this is evidence of a counterexample but not exact ground truth.
+
+The next study must compare a deterministic pixel sample against bignum direct orbits at the worker's 1,024-bit reference precision before choosing a detector. Candidate designs include Zhuoran-style rebasing with error tracked in the reference's own precision and periodic re-anchoring; until that evidence exists, cancellation accumulated across individually quiet rebases remains undetected.
 
 A rebase attempt when the current `rebase_count = 2²⁴` glitches before incrementing because the next count is not exactly representable in `f32`; the prior accepted increment may produce the exactly representable value `2²⁴`, so the CPU mirror, WGSL, and record validator share the same boundary.
 
@@ -193,7 +218,7 @@ Escape-grid texel `(i,j)` is record `j·width+i`, one 16-byte RGBA32F value with
 
 |Byte range|RGBA lane|Meaning|
 |---------:|---------|-------|
-|0–3|R|`smooth_iter: f32`, the specified smooth value at escape, exactly `−1.0` for a non-escaping sampled, uncertain or horizon record, and for a glitch the kind that produced it: exactly `−1.0` when the reference index ran past the orbit length and exactly `−2.0` for every arithmetic failure; the escape value is negative whenever `log₂(log₂|zₙ|) > n+1`, which every escape from outside radius `16` at index zero satisfies|
+|0–3|R|`smooth_iter: f32`, the specified smooth value at escape, exactly `−1.0` for a non-escaping sampled, uncertain or horizon record, and for a glitch the kind that produced it: exactly `−1.0` when the reference index ran past the orbit length and exactly `−2.0` for every arithmetic failure; the escape value is negative whenever `log₂(log₂\|zₙ\|) > n+1`, which every escape from outside radius `16` at index zero satisfies|
 |4–7|G|`escaped: f32`, exactly `0.0` or `1.0`|
 |8–11|B|`rebase_count: f32`, a nonnegative exactly representable integer, zero for shallow|
 |12–15|A|`status: f32`, exactly `0.0` sampled, `1.0` glitch, `2.0` horizon, or `3.0` uncertified near horizon|
@@ -347,6 +372,8 @@ The shallow CPU conformance fixture uses deterministic pixels in both presets an
 
 The perturbation CPU fixture uses math's scaled `f64` mirror and deterministic pixels that include normalized `δz₀′ = 0`, `δc′ = 0`, both nonzero, exponents on both sides of the normal f32 range, exact bit-constructed scaling boundaries, gradual underflow and signed saturation, upward and downward repeat-until-restored renormalization from the smallest subnormal, zero and repeated rebases, reference exhaustion, and nonzero `Z₀`; the corrected nonzero-`Z₀` rebase is a PASS criterion.
 
+The relative-precision conformance pin uses pixel `(696,0)` in the 960-by-540 zoom-14 seahorse row with a 41-record centre reference and cap 512: both production mirrors report a sampled cap after 27 rebases although the direct binary64 orbit escapes at index 250, because the single-step Pauldelbrot test does not detect error accumulated across quiet rebases. Native source conformance pins the WGSL escape, Pauldelbrot, and rebase ordering; the ignored harness records where the test-only estimator would flag, while actual shader readback remains one of the visible-replay requirements below.
+
 Math's merged `escape_f32`, `perturb_scaled_f64`, and propagated-envelope functions are unconditional test dependencies with no placeholder feature; every ordinary package and workspace test run executes their cross-package comparisons.
 
 Perturbation conformance requires exact classification and integer escape index outside math's propagated error envelope, exact rebase count and status, and `|smooth_gpu−smooth_cpu| ≤ 2×10⁻³`; samples inside the envelope remain explicit boundary fixtures and are never silently removed from reported counts.
@@ -421,8 +448,10 @@ The corpus covers the zoom-14 boundary, zooms 40, 80, 100, 256, 512, and the las
 
 - Backlog owner decision: shallow acceptance retains the last deep reference so its picture can support reprojection while replacement work is pending; clearing `current_orbit` and `accepted_reference_zoom_log2` there would make stale perturbation dispatch unrepresentable, at the cost of forfeiting that retained deep source, so the generation-and-zoom dispatch guard remains the chosen safety wall.
 
-- A reference can legitimately end before a nearby pixel escapes even when its generation and zoom match. That case is now corrected by choice of the primary reference rather than by a second one: present's census ranks every record of a completed grid and app moves the orbit point onto the top-ranked one whenever the level's cap outlasts the accepted orbit. The perturbation kernel returns a glitch from seven places and only one of them — the reference index running past the orbit length — says anything about the pixel, so the smooth lane carries the glitch kind and only that kind is preferred to an escaping record.
-- The top rank is a heuristic and not a certificate, and the exchange it feeds is bounded rather than monotone. A record that reports no escape within the cap can still name a point whose exact orbit is far shorter: the Zhuoran rebase recomputes `δ ← z − Z₀` in binary32 and resets the reference index, so when `|z| ≪ |Zᵣ|` the delta cancels to noise and a pixel can run the whole cap against a 41-record reference with no test firing. Measured on the zoom-14 seahorse row, the first census candidate reported no escape at a 512 cap while its own reference orbit ended at 251 records. What makes the exchange safe is keeping the best: an arriving sampled reference that does not lengthen the accepted one is discarded. Rebasing also means the corrected reference need not be as long as the frame's own maximum count for the picture to come out clean.
+- A reference can legitimately end before a nearby pixel escapes even when its generation and zoom match. That case is now corrected by choice of the primary reference rather than by a second one: present's census ranks every record of a completed grid and app moves the orbit point onto the top-ranked one whenever the level's cap outlasts the accepted orbit. The perturbation kernel returns a glitch from eight source sites and only one of them — the reference index running past the orbit length — says anything about the pixel, so the smooth lane carries the glitch kind and only that kind is preferred to an escaping record.
+
+- The top rank is a heuristic and not a certificate, and the exchange it feeds is bounded rather than monotone. The single-step Pauldelbrot test now catches catastrophic relative cancellation as a numeric rather than exhaustion glitch, but the measured 27-rebase failure remains undetected because the accumulated estimator did not establish a useful production threshold. What keeps residual undetected error safe is still keeping the best: an arriving sampled reference that does not lengthen the accepted one is discarded. Rebasing also means the corrected reference need not be as long as the frame's own maximum count for the picture to come out clean.
+
 - Backlog: regional second-reference correction of a residual cluster is deferred because it needs region selection and merge ownership, and costs at least one additional high-precision worker orbit plus a regional kernel and presentation pass per corrected cluster. Until then v1 exposes the exact count and orange diagnostic without confusing it with a contract violation.
 
 - Exact shallow classification across CPU and browser shader still depends on math's predeclared boundary fixtures and contracted operation order; fused-operation behavior must not be accommodated by selecting samples after GPU results are seen.
