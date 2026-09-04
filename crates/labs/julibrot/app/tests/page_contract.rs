@@ -25,7 +25,7 @@ const SAVED: &str = include_str!("../src/saved.rs");
 const WIRE: &str = include_str!("../../worker/src/wire.rs");
 
 /// Every field the page facts must carry, in publication order.
-const PAGE_FACT_FIELDS: [&str; 118] = [
+const PAGE_FACT_FIELDS: [&str; 119] = [
     "abi_version",
     "adapter_name",
     "backend",
