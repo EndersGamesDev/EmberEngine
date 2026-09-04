@@ -135,6 +135,12 @@ if [ -f web/hosts.js ]; then
 else
     echo "   note: web/hosts.js does not exist in this checkout; not copying it"
 fi
+# The developer landing page (marketing): one static file with no build of its
+# own. Guarded for the same reason as hosts.js: an older checkout must still
+# deploy.
+if [ -f web/engine.html ]; then
+    cp web/engine.html "$PAGES_DIR"/
+fi
 cp "web/$ARENA_LIVE/index.html" "$PAGES_DIR/$ARENA_LIVE/"
 cp "web/$ARENA_V0_LIVE/index.html" "$PAGES_DIR/$ARENA_V0_LIVE/"
 cp "web/$FIRE_LIVE/index.html" "$PAGES_DIR/$FIRE_LIVE/"
