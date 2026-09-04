@@ -2487,11 +2487,12 @@ mod tests {
         .expect("matching-reference uniform");
         let glitch_pixel_count = (0..WIDTH * HEIGHT)
             .filter(|index| {
-                perturb_scaled_pixel(&uniforms, &orbit.records, *index)
-                    .expect("canonical pixel index")
-                    .record
-                    .status
-                    == SampleStatus::Glitch.as_f32()
+                SampleStatus::from_f32(
+                    perturb_scaled_pixel(&uniforms, &orbit.records, *index)
+                        .expect("canonical pixel index")
+                        .record
+                        .status,
+                ) == Some(SampleStatus::Glitch)
             })
             .count();
         assert_eq!(orbit.length, CAP);

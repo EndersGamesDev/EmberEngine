@@ -578,6 +578,10 @@ impl Presenter {
         result
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "warp submission keeps validation and its ordered GPU transaction together"
+    )]
     fn try_frame(
         &mut self,
         state: FrameState<'_>,
@@ -1771,7 +1775,9 @@ fn sum_glitch_count_bytes(bytes: &[u8], extent: [u32; 2], bytes_per_row: u32) ->
         .flat_map(|row| {
             let start = row * bytes_per_row as usize;
             bytes[start..start + packed_row]
-                .chunks_exact(RGBA8_BYTES_PER_TEXEL as usize)
+                .as_chunks::<{ RGBA8_BYTES_PER_TEXEL as usize }>()
+                .0
+                .iter()
                 .map(|rgba| u32::from(rgba[0]))
         })
         .sum()

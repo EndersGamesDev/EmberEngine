@@ -252,7 +252,12 @@ mod tests {
         let zoom_twelve_scale = pixel_scale(12.0, WIDTH).expect("zoom twelve scale");
         let plan = precision_for(12.0, WIDTH, CAP).expect("zoom twelve precision");
         let centre = BigCentre::from_f64(
-            [0.0, 0.0, target[0], target[1] + 30.0 * zoom_twelve_scale],
+            [
+                0.0,
+                0.0,
+                target[0],
+                30.0_f64.mul_add(zoom_twelve_scale, target[1]),
+            ],
             plan.requested_bits,
         )
         .expect("finite seahorse reference");
