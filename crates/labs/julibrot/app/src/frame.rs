@@ -2693,6 +2693,15 @@ mod browser {
             self.plan
         }
 
+        /// Returns the allocated backdrop's capacity-selected Final extent.
+        #[must_use]
+        pub fn backdrop_extent(&self) -> Option<[u32; 2]> {
+            self.backdrop.as_ref().map(|backdrop| {
+                let final_spec = backdrop.plan.level(RefinementLevel::Final);
+                [final_spec.extent.width, final_spec.extent.height]
+            })
+        }
+
         /// Returns the share of current grid centres beyond the neutral-height horizon.
         #[must_use]
         pub const fn horizon_fraction(&self) -> f64 {

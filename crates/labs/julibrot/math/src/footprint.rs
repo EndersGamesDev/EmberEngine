@@ -482,7 +482,7 @@ mod tests {
             "footprint was {footprint:?}"
         );
         assert!((footprint.apron_scale - 5.0).abs() < 1.0e-6);
-        assert!(footprint.uncovered_fraction < 0.01);
-        assert!(footprint.relief_clipped_fraction > 0.0);
+        assert_eq!(footprint.uncovered_fraction, 0.0);
+        assert_eq!(footprint.relief_clipped_fraction, 0.4);
     }
 }

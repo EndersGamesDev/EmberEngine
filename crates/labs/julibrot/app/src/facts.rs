@@ -233,16 +233,9 @@ impl<'a> PageFacts<'a> {
         let dispatch = loop_facts.dispatch_facts();
         let worker = loop_facts.worker_facts();
         let plan = loop_facts.plan();
-        let backdrop_extent = footprint.and_then(|value| {
-            if value.apron_scale > 1.0 {
-                crate::frame::backdrop_extent([
-                    plan.delivered_extent.width,
-                    plan.delivered_extent.height,
-                ])
-            } else {
-                None
-            }
-        });
+        let backdrop_extent = footprint
+            .filter(|value| value.apron_scale > 1.0)
+            .and_then(|_| loop_facts.backdrop_extent());
         Self {
             abi_version: JULIBROT_ABI_VERSION,
             adapter_name: &device.adapter_name,
@@ -327,7 +320,7 @@ impl<'a> PageFacts<'a> {
             surface_uncovered_fraction: footprint.map(|value| value.uncovered_fraction),
             scene_apron_scale: footprint.map(|value| value.apron_scale),
             scene_backdrop_scale: footprint
-                .and_then(|value| (value.apron_scale > 1.0).then_some(value.apron_scale)),
+                .and_then(|value| backdrop_extent.map(|_| value.apron_scale)),
             scene_backdrop_extent: backdrop_extent,
             relief_clipped_fraction: footprint.map(|value| value.relief_clipped_fraction),
             horizon_pixels: loop_facts.horizon_pixels(),
