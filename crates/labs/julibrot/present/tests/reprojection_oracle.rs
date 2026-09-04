@@ -1274,7 +1274,9 @@ fn thirty_hertz_height_drag_keeps_both_owner_rows_inside_the_exact_redraw_family
     assert_eq!(camera[0], 0.0, "q12");
     assert_eq!(camera[8], 0.0, "q35");
 
-    for distance_five in [8.0, 2.0] {
+    for (distance_five, expected_clear_only, expected_relief_redraws, expected_homographies) in
+        [(8.0, 24, 65, 1), (2.0, 81, 9, 0)]
+    {
         let flat_view = ViewControls {
             camera,
             camera_yaw: 0.96,
@@ -1288,6 +1290,7 @@ fn thirty_hertz_height_drag_keeps_both_owner_rows_inside_the_exact_redraw_family
         let retained_frame = frame(&retained);
         let mut clear_only = 0_u32;
         let mut relief_redraws = 0_u32;
+        let mut homographies = 0_u32;
         for input in 1..=DRAG_FRAMES {
             let to = pose(
                 object,
@@ -1310,14 +1313,20 @@ fn thirty_hertz_height_drag_keeps_both_owner_rows_inside_the_exact_redraw_family
             {
                 WarpKind::ClearOnly => clear_only = clear_only.saturating_add(1),
                 WarpKind::ReliefRedraw => relief_redraws = relief_redraws.saturating_add(1),
-                WarpKind::AnchorHomography => {}
+                WarpKind::AnchorHomography => {
+                    homographies = homographies.saturating_add(1);
+                }
                 WarpKind::HoldStale => panic!("the planner does not apply presentation holds"),
             }
         }
         eprintln!(
-            "height_drag_planner d5={distance_five} clear_only={clear_only} relief_redraws={relief_redraws}"
+            "height_drag_planner d5={distance_five} clear_only={clear_only} relief_redraws={relief_redraws} homographies={homographies}"
         );
-        assert!(clear_only > 0, "d5={distance_five}");
-        assert!(relief_redraws > 0, "d5={distance_five}");
+        assert_eq!(clear_only, expected_clear_only, "d5={distance_five}");
+        assert_eq!(
+            relief_redraws, expected_relief_redraws,
+            "d5={distance_five}"
+        );
+        assert_eq!(homographies, expected_homographies, "d5={distance_five}");
     }
 }

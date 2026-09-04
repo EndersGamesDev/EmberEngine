@@ -2215,6 +2215,7 @@ fn a_continuous_drag_alternates_the_backdrop_with_the_main_ladder() {
 struct HeightDragRow {
     name: &'static str,
     distance_five: f64,
+    expected_clear_only: u64,
 }
 
 fn owner_height_drag_pose(row: HeightDragRow, height_scale: f64) -> Pose {
@@ -2428,16 +2429,26 @@ fn three_second_height_drag_keeps_both_owner_rows_painted_and_settles_in_one_rou
         HeightDragRow {
             name: "gentle-d5-8",
             distance_five: 8.0,
+            expected_clear_only: 24,
         },
         HeightDragRow {
             name: "close-d5-2",
             distance_five: 2.0,
+            expected_clear_only: 81,
         },
     ] {
         let stats = drive_height_drag(row);
-        assert!(stats.clear_only_before > 0, "{}", row.name);
+        assert_eq!(
+            stats.clear_only_before, row.expected_clear_only,
+            "{}",
+            row.name
+        );
         assert_eq!(stats.clear_only_presentations, 0, "{}", row.name);
-        assert!(stats.hold_presentations > 0, "{}", row.name);
+        assert_eq!(
+            stats.hold_presentations, row.expected_clear_only,
+            "{}",
+            row.name
+        );
         assert!(
             stats.final_after_drag_ms <= 3.0 * (1_000.0 / 30.0),
             "{}",
