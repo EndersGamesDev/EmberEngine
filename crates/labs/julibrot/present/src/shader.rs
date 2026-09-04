@@ -183,10 +183,11 @@ struct CountVertex { @builtin(position) position: vec4<f32>, }
         if (malformed(record) || record.w == 2.0 || record.w == 3.0) { continue; }
         var rank = 255.0;
         if (record.w == 1.0) {
-            rank = 254.0;
+            rank = 0.0;
+            if (record.x == -1.0) { rank = 254.0; }
         } else if (record.y == 1.0) {
             if (!finite(record.x)) { continue; }
-            rank = floor(253.0 * clamp(ceil(record.x), 0.0, cap) / cap + 0.5);
+            rank = 1.0 + floor(252.0 * clamp(ceil(record.x), 0.0, cap) / cap + 0.5);
         }
         if (located == 0.0 || rank > best_rank) {
             best_rank = rank;
@@ -219,11 +220,16 @@ pub fn scene_shader(limits: DialectLimits) -> String {
 /// local offset in blue, and whether the group holds a candidate at all in alpha.
 ///
 /// The rank is a total order over the records a reference may be taken from: a record that never
-/// escaped within this grid's cap ranks 255, a glitched record ranks 254, and an escaped record
-/// ranks by its own count over 0..253. A record that never escaped certifies an orbit at least as
-/// long as this grid's cap, which is the property a reference needs; a glitched record certifies
-/// only that it outlived the reference it was rendered against, so it is preferred to every
-/// escaping record and to nothing else.
+/// escaped within this grid's cap ranks 255, a glitch that exhausted its reference ranks 254, an
+/// escaped record ranks by its own count over 1..253, and a glitch from arithmetic failure ranks 0.
+/// Only the exhaustion glitch says anything about orbit length — it survived every reference step
+/// available to it — which is why the smooth lane carries the glitch kind and the six arithmetic
+/// failure paths rank below every escaping record instead of above them.
+///
+/// The top rank is a heuristic, not a proof. A record can report no escape within the cap and
+/// still name a point whose exact orbit is much shorter, because the rebase recomputes the delta
+/// in binary32 and no relative-precision test fires; the exchange this rank feeds is therefore
+/// bounded and keeps the longest accepted orbit rather than trusting the certificate.
 #[must_use]
 pub fn glitch_count_shader(limits: DialectLimits) -> String {
     let mut source = HEAP_SCENE_PREFIX
