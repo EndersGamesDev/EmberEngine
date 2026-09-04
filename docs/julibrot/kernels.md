@@ -375,7 +375,7 @@ Dispatch walls, scene walls, and poll counts are browser facts measured by app a
 |Reference replacement could pair new metadata with old DATA records.|Generation-tagged upload fixtures delay publication until data and resource words are queued, then deliberately dispatch stale generations and require `StaleReference`.|
 |Extracting the paid GPU executor or prefix helper could accidentally fork heap semantics.|An integration oracle runs the heap golden and Julibrot dispatch through the same executor type and compares bind-group identity, full and prefix header bytes, copy regions, capacity facts, and typed failures; a non-visibility extraction stops the app lane.|
 |RGBA32F or copy usage may be absent despite nominal WebGL2.|Initialization checks live format usages and the standing output-path golden; refusal names the adapter, backend, and failed usage.|
-|A status-one region reaches Final without an observable count.|Present's Final-only packed census shares the ordered scene completion, publishes the numeric count, and retains the per-pixel orange diagnostic.|
+|A status-one region reaches Final without an observable count.|Present's Final-only packed census publishes the numeric count when its optional mapping is ready at scene completion and always retains the per-pixel orange diagnostic.|
 
 ## 7. Implementation phases and line budget
 
@@ -415,7 +415,9 @@ The corpus covers the zoom-14 boundary, zooms 40, 80, 100, 256, 512, and the las
 
 - `EscapeGrid` owns a cloneable `DataSpan`, while present may retain or submit a scene that names it; app and present must prove the lifetime handoff that prevents `free_grid` from reclaiming a span still in flight.
 
-- Aggregate rebase totals remain unavailable during normal gather-only rendering; present now counts status-one records for every Final and publishes `glitch_pixel_count` after the ordered census readback completes.
+- Aggregate rebase totals remain unavailable during normal gather-only rendering; present counts status-one records for every Final, but its optional readback never delays or refuses the picture and publishes `glitch_pixel_count` only when mapping has already succeeded at scene completion.
+
+- Backlog owner decision: shallow acceptance retains the last deep reference so its picture can support reprojection while replacement work is pending; clearing `current_orbit` and `accepted_reference_zoom_log2` there would make stale perturbation dispatch unrepresentable, at the cost of forfeiting that retained deep source, so the generation-and-zoom dispatch guard remains the chosen safety wall.
 
 - Backlog: a reference can legitimately end before a nearby pixel escapes even when its generation and zoom match; second-reference correction is deferred because it needs region selection and merge ownership, and costs at least one additional high-precision worker orbit plus a regional kernel and presentation pass per corrected cluster. Until then v1 exposes the exact count and orange diagnostic without confusing it with a contract violation.
 
