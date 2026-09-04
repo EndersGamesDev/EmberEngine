@@ -42,42 +42,51 @@ const REFERENCE_TEXEL_BYTES: usize = 16;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ReferenceCandidate {
     index: u32,
-    iteration_count: u32,
+    rank: u8,
 }
 
-/// Mirrors the present census candidate on CPU records: highest count, ties by lowest index.
+/// Mirrors the present census candidate on CPU records.
+///
+/// The rank is the same total order the census shader encodes: a record that never escaped within
+/// the grid's cap ranks 255, a glitched record ranks 254, and an escaped record ranks by its own
+/// count over 0..253. Equal ranks keep the lowest record index, so the same grid always names the
+/// same reference point.
 #[cfg(test)]
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    reason = "a finite smooth count is clamped to the delivered u32 iteration cap"
+    reason = "a finite smooth count is clamped into the encoded rank range"
 )]
 fn select_reference_candidate(
     records: &[ember_julibrot_math::EscapeGridRecord],
     iteration_cap: u32,
 ) -> Option<ReferenceCandidate> {
+    let cap = f64::from(iteration_cap.max(1));
     records
         .iter()
         .enumerate()
         .filter_map(|(index, record)| {
             let status = SampleStatus::from_f32(record.status)?;
-            if status == SampleStatus::Horizon {
+            if status == SampleStatus::Horizon || status == SampleStatus::MapUncertain {
                 return None;
             }
-            let iteration_count = if status == SampleStatus::Glitch || record.escaped == 0.0 {
-                iteration_cap
+            let rank = if status == SampleStatus::Glitch {
+                254
+            } else if record.escaped == 0.0 {
+                255
             } else if record.escaped == 1.0 && record.smooth_iter.is_finite() {
-                (record.smooth_iter.ceil().max(0.0) as u32).min(iteration_cap)
+                let reached = f64::from(record.smooth_iter.ceil().max(0.0)).min(cap);
+                (253.0 * reached / cap + 0.5).floor() as u8
             } else {
                 return None;
             };
             Some(ReferenceCandidate {
                 index: u32::try_from(index).ok()?,
-                iteration_count,
+                rank,
             })
         })
         .fold(None, |best, candidate| match best {
-            Some(best) if best.iteration_count >= candidate.iteration_count => Some(best),
+            Some(best) if best.rank >= candidate.rank => Some(best),
             _ => Some(candidate),
         })
 }
@@ -1811,16 +1820,18 @@ mod browser {
             refusal.map_or(Ok(observed), Err)
         }
 
-        /// Requests one reference at a completed grid's highest-iteration record.
+        /// Requests one reference at a completed grid's best census candidate.
         ///
-        /// A reference whose own orbit escapes before the Final cap turns every longer-lived pixel
-        /// into a glitch, so a short accepted reference is replaced by the census candidate: the
-        /// highest-iteration record of the grid just completed, ties broken by the lowest index. A
-        /// glitched record ranks at the cap, so a Final that still carries glitches names one of
-        /// them and each request lands on a point whose orbit outlives the reference it replaces.
-        /// The navigation centre never moves; only the orbit point does. At most
-        /// [`SAMPLED_REFERENCE_LIMIT`] requests per accepted navigation, so glitches with
-        /// another cause cannot drive an unbounded chase.
+        /// A reference whose own orbit escapes before a level's cap turns every longer-lived pixel
+        /// of that level into a glitch, so a short accepted reference is replaced by the record the
+        /// census ranked highest: one that never escaped within the completed grid's cap where the
+        /// grid holds one, a glitched record next, and the longest-lived escaping record last, ties
+        /// broken by the lowest index. The request is made only when the completed grid's cap is
+        /// strictly longer than the accepted orbit, because only then does its top-ranked record
+        /// certify a longer orbit than the one in hand; that alone makes the exchange monotone and
+        /// stops it the moment the reference outlasts the level. The navigation centre never moves;
+        /// only the orbit point does. At most [`SAMPLED_REFERENCE_LIMIT`] requests are made per
+        /// accepted navigation, so a grid whose glitches have another cause cannot drive a chase.
         fn maybe_request_sampled_reference(
             &mut self,
             viewer: &mut ViewerController,
@@ -1830,11 +1841,10 @@ mod browser {
             let Some(index) = candidate else {
                 return;
             };
-            let final_cap = self.plan.level(RefinementLevel::Final).iteration_cap;
             if KernelMode::for_zoom(viewer.requested().zoom_log2) != KernelMode::Perturbation
                 || self.sampled_references >= SAMPLED_REFERENCE_LIMIT
                 || self.main.orbit_length == 0
-                || self.main.orbit_length >= final_cap
+                || frame.iteration_cap <= self.main.orbit_length
             {
                 return;
             }
@@ -2972,9 +2982,9 @@ mod tests {
         perturb_scaled_pixel, plan_refinement,
     };
     use ember_julibrot_math::{
-        BigCentre, EscapeParams, Homography, MathError, ObjectAngles, OrbitStep, Plane, PoseMap,
-        PrecisionMode, ReferenceOrbitBuilder, ViewControls, pixel_scale, precision_for,
-        scale_split, screen_to_plane,
+        BigCentre, EscapeGridRecord, EscapeParams, Homography, MathError, ObjectAngles, OrbitStep,
+        Plane, PoseMap, PrecisionMode, ReferenceOrbitBuilder, ViewControls, pixel_scale,
+        precision_for, scale_split, screen_to_plane,
     };
 
     use super::{
@@ -2997,25 +3007,70 @@ mod tests {
     const SCENE_DEADLINE_MS: f64 = 30_000.0;
 
     #[test]
-    fn exact_origin_zoom_fourteen_chooses_a_long_reference_and_finishes_without_glitches() {
+    fn the_census_candidate_ranks_interior_over_glitch_over_the_longest_escape() {
+        fn record(status: SampleStatus, escaped: f32, smooth_iter: f32) -> EscapeGridRecord {
+            EscapeGridRecord {
+                smooth_iter,
+                escaped,
+                rebase_count: 0.0,
+                status: status.as_f32(),
+            }
+        }
+        const CAP: u32 = 512;
+
+        let records = [
+            record(SampleStatus::Sampled, 1.0, 511.0),
+            record(SampleStatus::Glitch, 0.0, -1.0),
+            record(SampleStatus::Sampled, 0.0, -1.0),
+            record(SampleStatus::Sampled, 0.0, -1.0),
+            record(SampleStatus::Horizon, 0.0, -1.0),
+        ];
+        let candidate =
+            select_reference_candidate(&records, CAP).expect("the grid holds a candidate");
+        assert_eq!(candidate.index, 2, "a record that never escaped outranks every other");
+        assert_eq!(candidate.rank, 255);
+        assert_eq!(
+            select_reference_candidate(&records[..2], CAP)
+                .expect("a glitched record is still a candidate"),
+            super::ReferenceCandidate { index: 1, rank: 254 },
+            "a glitched record outranks every escaping record"
+        );
+        assert_eq!(
+            select_reference_candidate(&records[..1], CAP)
+                .expect("an escaping record is the last resort"),
+            super::ReferenceCandidate { index: 0, rank: 253 }
+        );
+        assert_eq!(
+            select_reference_candidate(&records[4..], CAP),
+            None,
+            "a horizon record is never a reference"
+        );
+    }
+
+    /// Pins the exact repro row: plane origin c = (-0.743643887037151, 0.13182590420533), scale 14.
+    ///
+    /// The delivered row reported a reference orbit of 41 records against a 512 cap. That origin is
+    /// itself a point of the set, so a reference taken exactly there runs the whole cap: the row
+    /// glitches because the reference is not that point but wherever the view centre landed, and
+    /// the centre is carried off the origin by a zoom about a crosshair. The kernel condition is
+    /// the reference length alone — a record is a glitch when it needs more reference steps than
+    /// the orbit has — so this harness reproduces it on the row's own view by driving the opening
+    /// Final with the first 41 records of the reference, exactly as a reference that escaped at 41
+    /// would. The delivered loop then takes that Final's census candidate, moves the orbit point
+    /// onto its pixel without moving the navigation centre, and renders again until the Final
+    /// carries no glitches with an orbit at least as long as the frame's maximum count.
+    #[test]
+    fn the_exact_origin_row_at_zoom_fourteen_corrects_to_a_glitch_free_final() {
         const WIDTH: u32 = 960;
         const HEIGHT: u32 = 540;
         const CAP: u32 = 512;
-        const PREVIEW_WIDTH: u32 = WIDTH.div_ceil(8);
-        const PREVIEW_HEIGHT: u32 = HEIGHT.div_ceil(8);
-        const PREVIEW_CAP: u32 = 32;
+        const ROUND_LIMIT: u32 = 4;
+        /// Reference length the delivered row reported for this view.
+        const EXHAUSTED_AT: u32 = 41;
         assert_eq!(KernelMode::for_zoom(12.0), KernelMode::Shallow);
         assert_eq!(KernelMode::for_zoom(14.0), KernelMode::Perturbation);
-        assert!(!perturbation_reference_is_current(
-            14.0,
-            14,
-            Some((12, 12.0))
-        ));
-        assert!(perturbation_reference_is_current(
-            14.0,
-            14,
-            Some((14, 14.0))
-        ));
+        assert!(!perturbation_reference_is_current(14.0, 14, Some((12, 12.0))));
+        assert!(perturbation_reference_is_current(14.0, 14, Some((14, 14.0))));
 
         let precision = precision_for(14.0, WIDTH, CAP).expect("zoom fourteen precision");
         let view_centre = BigCentre::from_f64(
@@ -3023,120 +3078,147 @@ mod tests {
             precision.requested_bits,
         )
         .expect("finite seahorse centre");
-        let mut initial_builder =
-            ReferenceOrbitBuilder::new(&view_centre, precision, EscapeParams::new(CAP))
-                .expect("initial reference builder");
-        let initial_orbit = loop {
-            match initial_builder
-                .step(NonZeroU32::new(CAP).expect("nonzero cap"))
-                .expect("reference step")
-            {
-                OrbitStep::Complete(orbit) => break orbit,
-                OrbitStep::Pending { .. } => {}
-            }
-        };
         let plane = Plane {
             basis_u: [0.0, 0.0, 1.0, 0.0],
             basis_v: [0.0, 0.0, 0.0, 1.0],
         };
-        let preview_uniforms = PerturbUniform::pack(
-            plane,
-            &Homography::IDENTITY,
-            scale_split(14.0, PREVIEW_WIDTH).expect("zoom fourteen Preview scale"),
-            GridExtent {
-                width: PREVIEW_WIDTH,
-                height: PREVIEW_HEIGHT,
-            },
-            EscapeParams::new(PREVIEW_CAP),
-            PREVIEW_CAP,
-            RefinementLevel::Preview,
-        )
-        .expect("Preview uniform");
-        let preview_records = (0..PREVIEW_WIDTH * PREVIEW_HEIGHT)
-            .map(|index| {
-                perturb_scaled_pixel(
-                    &preview_uniforms,
-                    &initial_orbit.records[..usize::try_from(PREVIEW_CAP).expect("small cap")],
-                    index,
-                )
-                .expect("canonical Preview pixel")
-                .record
-            })
-            .collect::<Vec<_>>();
-        let candidate = select_reference_candidate(&preview_records, PREVIEW_CAP)
-            .expect("Preview has a sampleable reference candidate");
-        assert_eq!(candidate.iteration_count, PREVIEW_CAP);
+        let extent = GridExtent {
+            width: WIDTH,
+            height: HEIGHT,
+        };
+        let final_scale = scale_split(14.0, WIDTH).expect("zoom fourteen Final scale");
+        let final_pixel = pixel_scale(14.0, WIDTH).expect("Final pixel scale");
 
         let mut viewer = ViewerController::new([WIDTH, HEIGHT]).expect("canonical viewer");
         viewer
             .set_plane_origin(view_centre.to_f64_mirror())
             .expect("finite origin controls");
         viewer.set_zoom_log2(14.0).expect("zoom fourteen");
-        let generation = viewer
-            .request_reference_for_pixel(candidate.index, [PREVIEW_WIDTH, PREVIEW_HEIGHT])
-            .expect("deterministic Preview reference");
-        let selected = viewer
-            .take_reference_submission()
-            .expect("selected reference submission");
-        assert_eq!(selected.navigation.generation, generation);
-        let centre_from_reference = selected
-            .navigation
-            .centre
-            .displacement_px(
-                &selected.reference_centre,
-                &plane,
-                pixel_scale(14.0, WIDTH).expect("Final pixel scale"),
-            )
-            .expect("reference displacement");
-        let mut selected_builder = ReferenceOrbitBuilder::new(
-            &selected.reference_centre,
-            precision,
-            EscapeParams::new(CAP),
-        )
-        .expect("selected reference builder");
-        let selected_orbit = loop {
-            match selected_builder
-                .step(NonZeroU32::new(CAP).expect("nonzero cap"))
-                .expect("selected reference step")
-            {
-                OrbitStep::Complete(orbit) => break orbit,
-                OrbitStep::Pending { .. } => {}
-            }
-        };
-        let uniforms = PerturbUniform::pack_referenced(
-            plane,
-            &Homography::IDENTITY,
-            centre_from_reference,
-            scale_split(14.0, WIDTH).expect("zoom fourteen Final scale"),
-            GridExtent {
-                width: WIDTH,
-                height: HEIGHT,
-            },
-            EscapeParams::new(CAP),
-            selected_orbit.length,
-            RefinementLevel::Final,
-        )
-        .expect("selected-reference uniform");
-        let samples = (0..WIDTH * HEIGHT)
-            .map(|index| {
-                perturb_scaled_pixel(&uniforms, &selected_orbit.records, index)
-                    .expect("canonical Final pixel")
-            })
-            .collect::<Vec<_>>();
-        let glitch_pixel_count = samples
-            .iter()
-            .filter(|sample| {
-                SampleStatus::from_f32(sample.record.status) == Some(SampleStatus::Glitch)
-            })
-            .count();
-        let frame_max_count = samples
-            .iter()
-            .map(|sample| sample.escape_index.map_or(CAP, |index| index + 1))
-            .max()
-            .expect("Final is nonempty");
 
-        assert!(selected_orbit.length >= frame_max_count);
-        assert_eq!(glitch_pixel_count, 0);
+        let mut centre_from_reference = [0.0_f64; 2];
+        let mut reference_centre = view_centre.clone();
+        let mut opening = None;
+        let mut delivered = None;
+        let mut references = 0;
+
+        for round in 0..=ROUND_LIMIT {
+            let mut builder =
+                ReferenceOrbitBuilder::new(&reference_centre, precision, EscapeParams::new(CAP))
+                    .expect("reference builder");
+            let orbit = loop {
+                match builder
+                    .step(NonZeroU32::new(CAP).expect("nonzero cap"))
+                    .expect("reference step")
+                {
+                    OrbitStep::Complete(orbit) => break orbit,
+                    OrbitStep::Pending { .. } => {}
+                }
+            };
+            let uniforms = PerturbUniform::pack_referenced(
+                plane,
+                &Homography::IDENTITY,
+                centre_from_reference,
+                final_scale,
+                extent,
+                EscapeParams::new(CAP),
+                if round == 0 { EXHAUSTED_AT } else { orbit.length },
+                RefinementLevel::Final,
+            )
+            .expect("referenced Final uniform");
+            let samples = (0..WIDTH * HEIGHT)
+                .map(|index| {
+                    perturb_scaled_pixel(&uniforms, &orbit.records, index)
+                        .expect("canonical Final pixel")
+                })
+                .collect::<Vec<_>>();
+            let glitch_pixel_count = samples
+                .iter()
+                .filter(|sample| {
+                    SampleStatus::from_f32(sample.record.status) == Some(SampleStatus::Glitch)
+                })
+                .count();
+            let frame_max_count = samples
+                .iter()
+                .map(|sample| sample.escape_index.map_or(CAP, |index| index + 1))
+                .max()
+                .expect("Final is nonempty");
+            let orbit_length = if round == 0 { EXHAUSTED_AT } else { orbit.length };
+            if opening.is_none() {
+                assert!(
+                    orbit.length >= EXHAUSTED_AT,
+                    "the origin's own orbit must reach the reported {EXHAUSTED_AT} records"
+                );
+                assert!(
+                    glitch_pixel_count > 0,
+                    "a reference exhausted at {EXHAUSTED_AT} against a {CAP} cap must leave the recorded defect"
+                );
+                opening = Some((EXHAUSTED_AT, glitch_pixel_count));
+            }
+            delivered = Some((orbit_length, glitch_pixel_count, frame_max_count));
+            if orbit_length >= CAP || round == ROUND_LIMIT {
+                break;
+            }
+            let records = samples
+                .iter()
+                .map(|sample| sample.record)
+                .collect::<Vec<_>>();
+            let candidate =
+                select_reference_candidate(&records, CAP).expect("a Final always holds a candidate");
+            let generation = viewer
+                .request_reference_for_pixel(candidate.index, [WIDTH, HEIGHT])
+                .expect("deterministic census reference");
+            let submission = viewer
+                .take_reference_submission()
+                .expect("selected reference submission");
+            assert_eq!(submission.navigation.generation, generation);
+            centre_from_reference = submission
+                .navigation
+                .centre
+                .displacement_px(&submission.reference_centre, &plane, final_pixel)
+                .expect("reference displacement");
+            assert!(
+                viewer.finish_reference_submission(generation),
+                "the accepted reference must release its coalesced successor"
+            );
+            viewer
+                .configure_navigation_context(
+                    submission.navigation.centre.clone(),
+                    submission.reference_centre.clone(),
+                    plane,
+                )
+                .expect("accepted navigation context");
+            let anchor = [
+                f64::from(candidate.index % WIDTH) + 0.5 - 0.5 * f64::from(WIDTH),
+                f64::from(candidate.index / WIDTH) + 0.5 - 0.5 * f64::from(HEIGHT),
+            ];
+            assert!(
+                (centre_from_reference[0] + anchor[0]).abs() < 0.5
+                    && (centre_from_reference[1] + anchor[1]).abs() < 0.5,
+                "the reference must land on its own census pixel: centre_from_reference {centre_from_reference:?} against anchor {anchor:?}"
+            );
+            reference_centre = submission.reference_centre;
+            references += 1;
+        }
+
+        let (opening_length, opening_glitches) = opening.expect("the opening Final was measured");
+        let (orbit_length, glitch_pixel_count, frame_max_count) =
+            delivered.expect("a Final was delivered");
+        assert!(
+            opening_length < CAP && opening_glitches > 0,
+            "opening reference {opening_length} left {opening_glitches} glitches"
+        );
+        assert_eq!(
+            glitch_pixel_count, 0,
+            "the delivered Final still carries glitches after {references} census references"
+        );
+        assert!(
+            orbit_length >= frame_max_count,
+            "delivered reference orbit {orbit_length} is shorter than the frame maximum {frame_max_count}"
+        );
+        assert!(
+            (1..=ROUND_LIMIT).contains(&references),
+            "the correction took {references} references"
+        );
     }
 
     #[test]

@@ -181,12 +181,13 @@ struct CountVertex { @builtin(position) position: vec4<f32>, }
         let record = load_escape(index);
         if (record.w == 1.0) { count += 1u; }
         if (malformed(record) || record.w == 2.0 || record.w == 3.0) { continue; }
-        var reached = cap;
-        if (record.w == 0.0 && record.y == 1.0) {
+        var rank = 255.0;
+        if (record.w == 1.0) {
+            rank = 254.0;
+        } else if (record.y == 1.0) {
             if (!finite(record.x)) { continue; }
-            reached = clamp(ceil(record.x), 0.0, cap);
+            rank = floor(253.0 * clamp(ceil(record.x), 0.0, cap) / cap + 0.5);
         }
-        let rank = floor(255.0 * reached / cap + 0.5);
         if (located == 0.0 || rank > best_rank) {
             best_rank = rank;
             best_offset = offset;
@@ -216,6 +217,13 @@ pub fn scene_shader(limits: DialectLimits) -> String {
 /// Each texel covers 255 consecutive records and carries, in one pass: the exact status-one count
 /// in red, the group's best reference candidate as an iteration rank in green, that candidate's
 /// local offset in blue, and whether the group holds a candidate at all in alpha.
+///
+/// The rank is a total order over the records a reference may be taken from: a record that never
+/// escaped within this grid's cap ranks 255, a glitched record ranks 254, and an escaped record
+/// ranks by its own count over 0..253. A record that never escaped certifies an orbit at least as
+/// long as this grid's cap, which is the property a reference needs; a glitched record certifies
+/// only that it outlived the reference it was rendered against, so it is preferred to every
+/// escaping record and to nothing else.
 #[must_use]
 pub fn glitch_count_shader(limits: DialectLimits) -> String {
     let mut source = HEAP_SCENE_PREFIX
