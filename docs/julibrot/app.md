@@ -542,6 +542,8 @@ Native measurement tests pin separate present-owned scene and warp fences, poll-
 
 ## 7. Implementation phases and line budget
 
+The frame implementation map is `frame.rs` for the public façade and re-exports, `frame/schedule.rs` for the refinement ladder, resume/restart and accepted-warp/manual draft policy, `frame/warp.rs` for redraw hold gates, `frame/loop.rs` for browser-loop wiring and shared facts math, `frame/loop/browser/submit.rs` for scene selection and submission, `reference.rs` for reference upload and sampled-reference keep-the-best policy, `backdrop.rs` for coverage turns and backdrop dispatch, `facts.rs` for published accessors, and `frame/loop/tests.rs` for the moved native test corpus.
+
 Phase 0 extracts and re-exports only the §3.8 heap seams, runs the standing heap golden through `GpuKernelExecutor`, pins `HeapPresentResources` Arc identities, and proves immutable dense-prefix headers, estimated at 300 heap Rust and integration-test lines; the lane stops if the change exceeds visibility/extraction.
 
 Phase 1 creates the app crate, ABI/error types, GL-only device, hook and handler ordering, scoped initialization, single surface owner, pending-surface event bridge, and clear-first-frame path, estimated at 390 Rust and test lines.
