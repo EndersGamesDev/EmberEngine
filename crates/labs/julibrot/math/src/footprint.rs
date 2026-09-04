@@ -86,7 +86,7 @@ impl SceneFootprint {
 /// The result is independent of `zoom_log2`: zoom enters the picture only through
 /// [`crate::pixel_scale`], which converts plane offsets into complex coordinates for the kernels.
 /// The scene map and the vertex chain are built from the plane, the view controls and the grid
-/// width alone, so the inward pull is a screen-space quantity and the same at every zoom.
+/// width alone, so the rasterized coverage result is the same at every zoom.
 ///
 /// # Errors
 ///

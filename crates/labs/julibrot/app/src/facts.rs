@@ -164,13 +164,13 @@ pub struct PageFacts<'a> {
     pub height_scale: f64,
     pub distance_five: f64,
     pub distance_four: f64,
-    /// Share of the surface the lifted scene mesh cannot reach after the applied apron.
+    /// Share of the surface the lifted scene mesh cannot reach after the requested apron.
     pub surface_uncovered_fraction: Option<f64>,
-    /// Footprint-requested sampling overscan, as a multiple of the frame extent.
+    /// Raster-selected sampling overscan request, as a multiple of the frame extent.
     pub scene_apron_scale: Option<f64>,
-    /// Applied sampling overscan of the coarse backdrop; absent for a flat scene.
+    /// Applied sampling overscan of the coarse backdrop; absent when none is requested or ready.
     pub scene_backdrop_scale: Option<f64>,
-    /// Coarse backdrop record extent; absent for a flat scene.
+    /// Coarse backdrop record extent; absent when none is requested or ready.
     pub scene_backdrop_extent: Option<[u32; 2]>,
     /// Share of the bounded relief census clamped at the five-dimensional near limit.
     pub relief_clipped_fraction: Option<f64>,
