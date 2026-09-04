@@ -5,13 +5,16 @@
 
 //! Headless arena bot (works over `ws://` and `wss://`).
 //!
-//!     cargo run -p arena-server --example wsbot -- [--map NAME] [--bonk] <URL> create|join <LOBBY> [PASSWORD|-] [HANDLE] [SECS] [MODES]
+//!     cargo run -p arena-server --example wsbot -- [--map NAME] [--mode NAME] [--bonk] <URL> create|join <LOBBY> [PASSWORD|-] [HANDLE] [SECS] [MODES]
 //!
 //! Creates or joins a game, runs in circles spraying bullets, and reports
 //! how many state updates it saw. Exit 0 = the online loop works.
 //!
 //! `--map NAME` (or `--map=NAME`) is the level a `create` asks for; the
-//! default is `freight-yard`, the server's own default. `--bonk` (also
+//! default is `freight-yard`, the server's own default. `--mode NAME` (or
+//! `--mode=NAME`) is the `GameMode` a `create` asks for: `ffa` (the
+//! default), `tdm` or `hill`; a joiner plays whatever the lobby runs and the
+//! bot prints the round it sees end. `--bonk` (also
 //! spelled `bonk` in MODES) hunts loot blocks: the bot rebuilds the level
 //! from `GameJoined` exactly as a client does, walks a straight line to the
 //! nearest block a floor jump can reach, and presses jump every 60 ticks
@@ -41,6 +44,7 @@ use tungstenite::stream::MaybeTlsStream;
 fn main() {
     // Flags first, wherever they sit; what is left is positional.
     let mut map = MAP_FREIGHT_YARD.to_string();
+    let mut mode = String::new();
     let mut bonk_flag = false;
     let mut positional: Vec<String> = Vec::new();
     let mut raw = std::env::args().skip(1);
@@ -52,6 +56,13 @@ fn main() {
                 eprintln!("WSBOT FAIL: --map needs a level name");
                 std::process::exit(1);
             });
+        } else if let Some(m) = a.strip_prefix("--mode=") {
+            mode = m.to_string();
+        } else if a == "--mode" {
+            mode = raw.next().unwrap_or_else(|| {
+                eprintln!("WSBOT FAIL: --mode needs a mode name");
+                std::process::exit(1);
+            });
         } else if a == "--bonk" {
             bonk_flag = true;
         } else {
@@ -61,7 +72,7 @@ fn main() {
     let mut args = positional.into_iter();
     let url = args
         .next()
-        .expect("usage: wsbot [--map NAME] [--bonk] URL create|join LOBBY [PASSWORD|-] [HANDLE] [SECS] [MODES]");
+        .expect("usage: wsbot [--map NAME] [--mode NAME] [--bonk] URL create|join LOBBY [PASSWORD|-] [HANDLE] [SECS] [MODES]");
     let action = args.next().expect("create|join");
     let lobby = args.next().expect("lobby name");
     let password = args.next().filter(|p| !p.is_empty() && p != "-");
@@ -119,6 +130,7 @@ fn main() {
                 name: lobby,
                 password,
                 map,
+                mode,
             },
         ),
         "join" => send(
@@ -142,6 +154,7 @@ fn main() {
     let mut max_players = 0usize;
     let mut bullets_seen: u64 = 0;
     let (mut hits_seen, mut blasts_seen, mut loot_seen) = (0u64, 0u64, 0u64);
+    let mut rounds_seen: u64 = 0;
     let now = Instant::now();
     let mut last_input = now.checked_sub(Duration::from_secs(1)).unwrap_or(now);
     let mut last_ping = Instant::now();
@@ -244,10 +257,11 @@ fn main() {
                     seed,
                     players,
                     map,
+                    mode,
                     ..
                 }) => {
                     println!(
-                        "wsbot {handle}: in the arena as #{id} (map \"{map}\", seed {seed}, {} players)",
+                        "wsbot {handle}: in the arena as #{id} (map \"{map}\", mode \"{mode}\", seed {seed}, {} players)",
                         players.len()
                     );
                     my_id = Some(id);
@@ -300,6 +314,17 @@ fn main() {
                     } else if victim == me {
                         println!("wsbot {handle}: fragged by #{killer}");
                     }
+                }
+                Ok(S2C::RoundOver {
+                    winner,
+                    team,
+                    scores,
+                }) => {
+                    rounds_seen += 1;
+                    println!(
+                        "wsbot {handle}: round over, {} {winner} wins; scores {scores:?}",
+                        if team { "team" } else { "player" }
+                    );
                 }
                 Ok(S2C::Hit { .. }) => hits_seen += 1,
                 Ok(S2C::Blast { .. }) => blasts_seen += 1,
@@ -361,6 +386,6 @@ fn main() {
     };
     let bonk_note = if bonk { " bonk" } else { "" };
     println!(
-        "WSBOT OK: states={states} max_players={max_players} bullets_seen={bullets_seen} kills_seen={kills_seen} hits_seen={hits_seen} blasts_seen={blasts_seen} loot_seen={loot_seen}{modes_note}{bonk_note}"
+        "WSBOT OK: states={states} max_players={max_players} bullets_seen={bullets_seen} kills_seen={kills_seen} hits_seen={hits_seen} blasts_seen={blasts_seen} loot_seen={loot_seen} rounds_seen={rounds_seen}{modes_note}{bonk_note}"
     );
 }

@@ -126,6 +126,10 @@ pub fn to_level(objects: &[Obj], arena_half: f32) -> Level {
         spawns,
         pads: Vec::new(),
         decor: Vec::new(),
+        // The editor places obstacles and spawns only; a hill is a hand-written
+        // level property, so an exported level plays king of the hill as
+        // free-for-all until someone adds one to the JSON.
+        hill: None,
     }
 }
 

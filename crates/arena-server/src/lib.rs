@@ -33,7 +33,8 @@ use arena_core::proto::{
     PlayerMeta, S2C, STATE_EVERY_TICKS, color_for, sanitize_text,
 };
 use arena_core::shooter::{
-    ARENA_HALF, FIXED_DT, Level, MAP_FREIGHT_YARD, MAP_TRENCH_CITY, MAX_PLAYERS, PlayerIn, Sim,
+    ARENA_HALF, FIXED_DT, GameMode, Level, MAP_FREIGHT_YARD, MAP_TRENCH_CITY, MAX_PLAYERS,
+    PlayerIn, Sim,
 };
 use tungstenite::Message;
 use tungstenite::protocol::WebSocketConfig;
@@ -148,6 +149,10 @@ struct Lobby {
     /// The level's name, as `CreateLobby.map` resolved: what `GameJoined`
     /// and `LobbyInfo` carry, and what every joiner rebuilds.
     map: String,
+    /// The rules, as `CreateLobby.mode` resolved; `GameJoined` and
+    /// `LobbyInfo` carry its name. The sim holds the same value and reads
+    /// it; this copy is what the wire is written from.
+    mode: GameMode,
     /// Minted per lobby and sent in `GameJoined`: what a peer falls back to
     /// for a map name it does not know, and since v14 the seed of every
     /// spread and loot roll the sim makes (`Sim.seed`).
@@ -528,7 +533,16 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
                             block,
                             weapon,
                         }),
-                );
+                )
+                // A round's end, last, with everyone's score at that
+                // instant: the scores reset only when the pause runs out,
+                // but the announcement must not depend on a state that
+                // may be thinned or arrive after it.
+                .chain(sim.round_over.iter().map(|&(winner, team)| S2C::RoundOver {
+                    winner,
+                    team,
+                    scores: sim.players.iter().map(|p| (p.id, p.score)).collect(),
+                }));
             for msg in outbound {
                 if let Ok(text) = serde_json::to_string(&msg) {
                     for &m in &lobby.members {
@@ -569,6 +583,7 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
                                 .map_or(0, |(_, _, _, recv_tick)| {
                                     bounded_tick_age(lobby.sim.tick, *recv_tick)
                                 }),
+                            team: p.team,
                         })
                         .collect(),
                     bullets: lobby
@@ -588,6 +603,9 @@ fn hub_loop(events_rx: &Receiver<Ev>, cfg: &ServerConfig) -> io::Result<()> {
                         .collect(),
                     pads: lobby.sim.pads.iter().map(|p| p.respawn_t <= 0.0).collect(),
                     loot: lobby.sim.loot.iter().map(|l| l.respawn_t <= 0.0).collect(),
+                    team_score: lobby.sim.team_score,
+                    hill: lobby.sim.hill_holder,
+                    round_pause: lobby.sim.round_pause,
                 };
                 // Serialize once per lobby, not once per recipient.
                 if let Ok(text) = serde_json::to_string(&state) {
@@ -797,6 +815,7 @@ fn handle_event(
                                 .expect("lobby membership is capped below u8::MAX"),
                             cap: u8::try_from(MAX_PLAYERS).expect("MAX_PLAYERS fits in u8"),
                             map: l.map.clone(),
+                            mode: l.mode.name().to_string(),
                         })
                         .collect();
                     let _ = send_to(conns, id, &S2C::LobbyList { lobbies: list });
@@ -806,6 +825,7 @@ fn handle_event(
                         name,
                         password,
                         map,
+                        mode,
                     },
                     true,
                 ) => {
@@ -885,6 +905,20 @@ fn handle_event(
                         );
                         return;
                     }
+                    // The mode, by name, on the same terms as the map:
+                    // empty is free for all, a name this build does not
+                    // know is refused rather than played as something
+                    // else.
+                    let Some(mode) = GameMode::from_name(&mode) else {
+                        let _ = send_to(
+                            conns,
+                            id,
+                            &S2C::Error {
+                                message: "unknown mode".into(),
+                            },
+                        );
+                        return;
+                    };
                     *lobby_counter += 1;
                     let mut hasher = DefaultHasher::new();
                     name.hash(&mut hasher);
@@ -892,10 +926,28 @@ fn handle_event(
                     let seed = hasher.finish();
 
                     let level = Level::named(&map, seed);
+                    // King of the hill needs a hill. The sim would play
+                    // free for all on a level without one, which is a
+                    // lobby that says one thing and runs another; refusing
+                    // is the honest answer, and the counter above is not
+                    // rolled back because the seed it minted was never
+                    // used.
+                    if mode == GameMode::Hill && level.hill.is_none() {
+                        tracing::warn!(conn = id, map = %map, "king of the hill asked for on a level with no hill");
+                        let _ = send_to(
+                            conns,
+                            id,
+                            &S2C::Error {
+                                message: "this map has no hill".into(),
+                            },
+                        );
+                        return;
+                    }
                     let mut lobby = Lobby {
                         password,
-                        sim: Sim::from_level(&level, seed),
+                        sim: Sim::from_level(&level, seed, mode),
                         map,
+                        mode,
                         seed,
                         members: vec![id],
                         pids: HashMap::new(),
@@ -911,8 +963,9 @@ fn handle_event(
                         arena_half: ARENA_HALF,
                         players: roster(&lobby, conns),
                         map: lobby.map.clone(),
+                        mode: lobby.mode.name().to_string(),
                     };
-                    tracing::info!(conn = id, lobby = %name, map = %lobby.map, "game created");
+                    tracing::info!(conn = id, lobby = %name, map = %lobby.map, mode = lobby.mode.name(), "game created");
                     lobbies.insert(name.clone(), lobby);
                     let _ = send_to(conns, id, &joined);
                 }
@@ -997,6 +1050,7 @@ fn handle_event(
                         arena_half: ARENA_HALF,
                         players: roster(lobby, conns),
                         map: lobby.map.clone(),
+                        mode: lobby.mode.name().to_string(),
                     };
                     let others: Vec<u64> =
                         lobby.members.iter().copied().filter(|&m| m != id).collect();

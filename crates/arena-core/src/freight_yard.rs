@@ -26,12 +26,21 @@
 //! what decide it: a sightline or a clearance the tests reject is moved by
 //! the smallest amount and the move is recorded in the plan's deviations.
 
-use crate::shooter::{ARENA_HALF, Cover, Decor, DecorKind, LOOT_SIZE, Level, Obstacle};
+use crate::shooter::{ARENA_HALF, Cover, Decor, DecorKind, Hill, LOOT_SIZE, Level, Obstacle};
 
 /// The dock: a jumpable stage in the open yard, `Cover::Plinth` because the
 /// client draws a plinth as a flat stone slab, which is what a loading dock
 /// looks like.
 const DOCK: Obstacle = Obstacle::boxed(Cover::Plinth, [-4.0, -2.0], [4.0, 2.0], 0.0, 1.2);
+
+/// The hill (v19): the dock's top, the spot the king block hangs over.
+/// Spelled out rather than derived from `DOCK` so the rule and the box can
+/// be moved apart on purpose and never drift apart by accident.
+const YARD_HILL: Hill = Hill {
+    min: [-4.0, -2.0],
+    max: [4.0, 2.0],
+    top: 1.2,
+};
 
 /// The king block's bottom. From the dock a 0.39 m hop; from the floor a
 /// running jump that has to clear the dock's step-up line before it can
@@ -201,6 +210,7 @@ impl Level {
             spawns,
             pads: Vec::new(),
             decor: freight_yard_decor(),
+            hill: Some(YARD_HILL),
         }
     }
 }
@@ -282,8 +292,8 @@ pub(crate) mod level_helpers {
     #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
     use crate::shooter::{
-        BODY_H_STAND, FIXED_DT, Level, MAX_HP, MOVE_SPEED, Obstacle, PLAYER_R, PlayerIn, STEP_UP,
-        Sim, VStep, move_circle, step_vertical, support_height,
+        BODY_H_STAND, FIXED_DT, GameMode, Level, MAX_HP, MOVE_SPEED, Obstacle, PLAYER_R, PlayerIn,
+        STEP_UP, Sim, VStep, move_circle, step_vertical, support_height,
     };
     use std::collections::HashMap;
 
@@ -528,7 +538,7 @@ pub(crate) mod level_helpers {
     /// is 102 m, half again the diagonal. This asks whether the geometry
     /// blocks the line, not whether the sidearm reaches it.
     pub fn shot_over(level: &Level, from: [f32; 2], from_y: f32, pitch: f32, to: [f32; 2]) -> bool {
-        let mut sim = Sim::from_level(level, 0);
+        let mut sim = Sim::from_level(level, 0, GameMode::Ffa);
         sim.add_player(0);
         sim.add_player(1);
         let aim = [(to[0] - from[0]), (to[1] - from[1])];
@@ -584,8 +594,8 @@ mod tests {
     };
     use super::*;
     use crate::shooter::{
-        BODY_H_STAND, FIXED_DT, MAP_FREIGHT_YARD, MOVE_SPEED, PLAYER_R, STEP_UP, Sim, move_circle,
-        stance_speed, step_vertical, support_height,
+        BODY_H_STAND, FIXED_DT, GameMode, MAP_FREIGHT_YARD, MOVE_SPEED, PLAYER_R, STEP_UP, Sim,
+        move_circle, stance_speed, step_vertical, support_height,
     };
 
     /// The frozen v18 Trench City, written once from `Level::trench_city()`
@@ -635,7 +645,7 @@ mod tests {
         assert_eq!(king.min, [-0.5, -0.5]);
         assert_eq!(king.max, [0.5, 0.5]);
         assert_eq!((king.base, king.h), (KING_BASE, KING_BASE + LOOT_SIZE));
-        let sim = Sim::from_level(&level, 7);
+        let sim = Sim::from_level(&level, 7, GameMode::Ffa);
         assert_eq!(sim.seed, 7);
         let blocks = loot_blocks(&level);
         assert_eq!(sim.loot.len(), blocks.len());
@@ -669,7 +679,7 @@ mod tests {
         }
         // The sim places players there in slot order, and the first four
         // slots land in four different quadrants.
-        let mut sim = Sim::from_level(&level, 0);
+        let mut sim = Sim::from_level(&level, 0, GameMode::Ffa);
         for id in 0..8u8 {
             sim.add_player(id);
         }
@@ -1408,8 +1418,8 @@ mod tests {
         assert_eq!(back, level);
         assert!(json.contains("\"Loot\""), "the blocks travel by kind name");
         // And the round trip keeps the blocks armed in the same order.
-        let a = Sim::from_level(&level, 3);
-        let b = Sim::from_level(&back, 3);
+        let a = Sim::from_level(&level, 3, GameMode::Ffa);
+        let b = Sim::from_level(&back, 3, GameMode::Ffa);
         assert_eq!(
             a.loot.iter().map(|l| l.obstacle).collect::<Vec<_>>(),
             b.loot.iter().map(|l| l.obstacle).collect::<Vec<_>>()
@@ -1431,7 +1441,7 @@ mod tests {
         let old: Level = serde_json::from_str(&json).unwrap();
         assert_eq!(old.obstacles.len(), 1 + 4 * 21);
         assert!(old.obstacles.iter().all(|o| o.kind != Cover::Loot));
-        let sim = Sim::from_level(&old, 0);
+        let sim = Sim::from_level(&old, 0, GameMode::Ffa);
         assert!(
             sim.loot.is_empty(),
             "a level without blocks plays without blocks"
@@ -1446,7 +1456,7 @@ mod tests {
         assert_eq!(roofed.obstacles[0].kind, Cover::Roof);
         assert_eq!(roofed.obstacles[0].base, 2.5);
         assert!(
-            Sim::from_level(&roofed, 0).loot.is_empty(),
+            Sim::from_level(&roofed, 0, GameMode::Ffa).loot.is_empty(),
             "a raised roof must not arm a block"
         );
     }

@@ -5,7 +5,7 @@ use std::net::{TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
 use arena_core::proto::{C2S, PROTO_VERSION, S2C};
-use arena_core::shooter::{MAP_FREIGHT_YARD, MAP_TRENCH_CITY};
+use arena_core::shooter::{GameMode, HILL_FREE, MAP_FREIGHT_YARD, MAP_TRENCH_CITY};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 
@@ -87,6 +87,7 @@ fn drop_in_arena_flow_with_password() {
             name: "arena".into(),
             password: Some("s3cret".into()),
             map: MAP_TRENCH_CITY.into(),
+            mode: String::new(),
         },
     );
     let (host_pid, seed) = recv_until(&mut host, 5, |m| match m {
@@ -234,6 +235,7 @@ fn old_proto_may_list_but_not_join() {
             name: "arena".into(),
             password: None,
             map: String::new(),
+            mode: String::new(),
         },
     );
     recv_until(&mut host, 5, |m| {
@@ -304,6 +306,7 @@ fn a_lobby_lists_its_map() {
             name: "default".into(),
             password: None,
             map: String::new(),
+            mode: String::new(),
         },
     );
     recv_until(&mut alice, 5, |m| match m {
@@ -322,6 +325,7 @@ fn a_lobby_lists_its_map() {
             name: "trench".into(),
             password: None,
             map: MAP_TRENCH_CITY.into(),
+            mode: String::new(),
         },
     );
     recv_until(&mut bob, 5, |m| match m {
@@ -382,6 +386,7 @@ fn an_unknown_map_is_refused() {
             name: "moon".into(),
             password: None,
             map: "moon-base".into(),
+            mode: String::new(),
         },
     );
     match recv(&mut alice) {
@@ -400,6 +405,7 @@ fn an_unknown_map_is_refused() {
             name: "moon".into(),
             password: None,
             map: MAP_FREIGHT_YARD.into(),
+            mode: String::new(),
         },
     );
     recv_until(&mut alice, 5, |m| {
@@ -442,6 +448,7 @@ fn an_airborne_state_carries_the_velocity_that_made_it() {
             name: "jump-wire".into(),
             password: None,
             map: String::new(),
+            mode: String::new(),
         },
     );
     let me = recv_until(&mut host, 5, |m| match m {
@@ -505,6 +512,7 @@ fn one_jump_press_launches_once_and_does_not_bunny_hop() {
             name: "hop-once".into(),
             password: None,
             map: String::new(),
+            mode: String::new(),
         },
     );
     let me = recv_until(&mut host, 5, |m| match m {
@@ -571,6 +579,7 @@ fn a_state_reports_how_long_the_acked_command_has_been_applied() {
             name: "ack-age".into(),
             password: None,
             map: String::new(),
+            mode: String::new(),
         },
     );
     let me = recv_until(&mut host, 5, |m| match m {
@@ -633,6 +642,7 @@ fn a_press_survives_a_second_input_in_the_same_tick() {
             name: "coalesce".into(),
             password: None,
             map: String::new(),
+            mode: String::new(),
         },
     );
     let me = recv_until(&mut host, 5, |m| match m {
@@ -729,6 +739,7 @@ fn welcome_names_the_host_and_reports_its_live_load() {
             name: "arena".into(),
             password: None,
             map: String::new(),
+            mode: String::new(),
         },
     );
     recv_until(&mut alice, 5, |m| {
@@ -789,4 +800,185 @@ fn a_default_server_is_unnamed_and_its_welcome_still_decodes() {
         }
         other => panic!("expected Welcome, got {other:?}"),
     }
+}
+
+/// A lobby names its mode, in the listing and in `GameJoined`, and an empty
+/// name resolves to free for all rather than to nothing. A joiner of a
+/// team game is put on a team, and the state says which.
+#[test]
+// Three lobbies, a listing and a join, asserted in wire order like the flow test.
+#[allow(clippy::too_many_lines)]
+fn a_lobby_lists_its_mode() {
+    let port = start_server();
+
+    // No mode named: free for all, and the creator is told so by name.
+    let mut alice = connect(port, "alice");
+    send(
+        &mut alice,
+        &C2S::CreateLobby {
+            name: "plain".into(),
+            password: None,
+            map: String::new(),
+            mode: String::new(),
+        },
+    );
+    recv_until(&mut alice, 5, |m| match m {
+        S2C::GameJoined { mode, .. } => {
+            assert_eq!(
+                GameMode::from_name(&mode),
+                Some(GameMode::Ffa),
+                "an empty mode is free for all: {mode:?}"
+            );
+            Some(())
+        }
+        _ => None,
+    });
+
+    // Named: team deathmatch and king of the hill, exactly as asked.
+    let mut bob = connect(port, "bob");
+    send(
+        &mut bob,
+        &C2S::CreateLobby {
+            name: "teams".into(),
+            password: None,
+            map: MAP_TRENCH_CITY.into(),
+            mode: GameMode::Tdm.name().into(),
+        },
+    );
+    recv_until(&mut bob, 5, |m| match m {
+        S2C::GameJoined { mode, map, .. } => {
+            assert_eq!(mode, GameMode::Tdm.name());
+            assert_eq!(map, MAP_TRENCH_CITY);
+            Some(())
+        }
+        _ => None,
+    });
+    let mut carol = connect(port, "carol");
+    send(
+        &mut carol,
+        &C2S::CreateLobby {
+            name: "king".into(),
+            password: None,
+            map: MAP_FREIGHT_YARD.into(),
+            mode: GameMode::Hill.name().into(),
+        },
+    );
+    recv_until(&mut carol, 5, |m| match m {
+        S2C::GameJoined { mode, .. } => {
+            assert_eq!(mode, GameMode::Hill.name());
+            Some(())
+        }
+        _ => None,
+    });
+
+    // The listing carries all three, so a browser can show the mode pill
+    // beside the map pill before joining.
+    let mut dave = connect(port, "dave");
+    send(&mut dave, &C2S::ListLobbies);
+    match recv(&mut dave) {
+        S2C::LobbyList { lobbies } => {
+            assert_eq!(lobbies.len(), 3);
+            let mode_of = |name: &str| {
+                lobbies
+                    .iter()
+                    .find(|l| l.name == name)
+                    .unwrap_or_else(|| panic!("no lobby {name}"))
+                    .mode
+                    .clone()
+            };
+            assert_eq!(mode_of("plain"), GameMode::Ffa.name());
+            assert_eq!(mode_of("teams"), GameMode::Tdm.name());
+            assert_eq!(mode_of("king"), GameMode::Hill.name());
+        }
+        other => panic!("expected LobbyList, got {other:?}"),
+    }
+
+    // A joiner is told the mode the lobby was created with, and in team
+    // deathmatch lands on the other side from the creator.
+    send(
+        &mut dave,
+        &C2S::JoinLobby {
+            name: "teams".into(),
+            password: None,
+        },
+    );
+    let me = recv_until(&mut dave, 5, |m| match m {
+        S2C::GameJoined { id, mode, .. } => {
+            assert_eq!(
+                mode,
+                GameMode::Tdm.name(),
+                "the joiner builds the same rules"
+            );
+            Some(id)
+        }
+        _ => None,
+    });
+    recv_until(&mut dave, 5, |m| match m {
+        S2C::State {
+            players,
+            team_score,
+            hill,
+            round_pause,
+            ..
+        } => {
+            assert_eq!(players.len(), 2);
+            let mine = players
+                .iter()
+                .find(|p| p.id == me)
+                .expect("I am in the state");
+            let theirs = players
+                .iter()
+                .find(|p| p.id != me)
+                .expect("bob is in the state");
+            assert_ne!(
+                mine.team, theirs.team,
+                "two players in a team game face each other"
+            );
+            assert_eq!(team_score, [0, 0], "nobody has scored");
+            assert_eq!(hill, HILL_FREE, "no hill in team deathmatch");
+            assert_eq!(round_pause, 0.0, "the round is running");
+            Some(())
+        }
+        _ => None,
+    });
+}
+
+/// A mode name that is no mode is refused, never silently played as free
+/// for all: a page with a typo must be told, and the connection stays open
+/// to try again.
+#[test]
+fn an_unknown_mode_is_refused() {
+    let port = start_server();
+    let mut alice = connect(port, "alice");
+    send(
+        &mut alice,
+        &C2S::CreateLobby {
+            name: "flags".into(),
+            password: None,
+            map: String::new(),
+            mode: "ctf".into(),
+        },
+    );
+    match recv(&mut alice) {
+        S2C::Error { message } => assert!(message.contains("unknown mode"), "{message}"),
+        other => panic!("expected Error, got {other:?}"),
+    }
+    // Nothing was created, and the same connection may still create.
+    send(&mut alice, &C2S::ListLobbies);
+    match recv(&mut alice) {
+        S2C::LobbyList { lobbies } => assert!(lobbies.is_empty(), "{lobbies:?}"),
+        other => panic!("expected LobbyList, got {other:?}"),
+    }
+    send(
+        &mut alice,
+        &C2S::CreateLobby {
+            name: "flags".into(),
+            password: None,
+            map: String::new(),
+            mode: GameMode::Ffa.name().into(),
+        },
+    );
+    recv_until(&mut alice, 5, |m| {
+        matches!(m, S2C::GameJoined { .. }).then_some(())
+    });
 }

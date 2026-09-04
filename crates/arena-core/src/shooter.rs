@@ -756,6 +756,121 @@ pub const MAP_TRENCH_CITY: &str = "trench-city";
 /// `freight_yard.rs`, and what an empty `CreateLobby.map` resolves to.
 pub const MAP_FREIGHT_YARD: &str = "freight-yard";
 
+/// The rules a lobby plays by: who a round may hit, how a point is earned
+/// and when the round ends (`docs/plans/arena-v19-modes.md`).
+///
+/// Chosen at creation beside the map and carried by name on the wire
+/// (`CreateLobby.mode`, `LobbyInfo.mode`, `GameJoined.mode`), so the next
+/// mode is an additive string rather than a bump, exactly as the map is.
+/// The sim resolves the name once, in `Sim::from_level`, and every rule
+/// below reads the enum; nothing reads the string twice.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum GameMode {
+    /// Every player for themselves, the v18 game with an end: first to
+    /// `FFA_FRAG_LIMIT` frags wins the round.
+    #[default]
+    Ffa,
+    /// Blue (team 0) against red (team 1): no friendly fire, spawns split
+    /// by side, and the team's frag total is the score; first team to
+    /// `TDM_FRAG_LIMIT` wins.
+    Tdm,
+    /// King of the hill: alone on the level's `Hill` earns a point a
+    /// second, contested earns nothing, first to `HILL_LIMIT` wins. Frags
+    /// still happen and are counted in `PlayerSt::frags`, but the hill is
+    /// the score.
+    Hill,
+}
+
+impl GameMode {
+    /// The mode a wire name resolves to.
+    ///
+    /// The empty string is free for all because that is what an absent
+    /// field decodes to and what a peer that predates modes plays. A name
+    /// this build does not know is `None`, never a fallback: the server
+    /// refuses it with `Error("unknown mode")`, so a typo on a page is
+    /// told rather than quietly handed a different game.
+    #[must_use]
+    pub fn from_name(s: &str) -> Option<Self> {
+        match s {
+            "" | "ffa" => Some(Self::Ffa),
+            "tdm" => Some(Self::Tdm),
+            "hill" => Some(Self::Hill),
+            _ => None,
+        }
+    }
+
+    /// The name that travels on the wire; `from_name` inverts it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Ffa => "ffa",
+            Self::Tdm => "tdm",
+            Self::Hill => "hill",
+        }
+    }
+}
+
+/// Frags that end a free-for-all round.
+pub const FFA_FRAG_LIMIT: u32 = 20;
+/// A team's frags that end a team deathmatch round.
+pub const TDM_FRAG_LIMIT: u32 = 30;
+/// Hill points that end a king-of-the-hill round.
+pub const HILL_LIMIT: u32 = 60;
+/// Seconds alone on the hill per hill point.
+pub const HILL_TICK_SECS: f32 = 1.0;
+/// The pause between a round's end and the next round's start, during
+/// which everyone keeps moving and shooting but nothing scores.
+pub const ROUND_PAUSE_SECS: f32 = 10.0;
+/// `Sim::hill_holder` (and `State.hill`) when nobody stands on the hill.
+pub const HILL_FREE: u8 = 255;
+/// `Sim::hill_holder` (and `State.hill`) when two or more stand on it.
+/// Below `HILL_FREE` so `holder < HILL_CONTESTED` is "a player holds it".
+pub const HILL_CONTESTED: u8 = 254;
+
+/// The hill: a footprint and the height feet must be at to stand on it.
+///
+/// A level property beside the spawns rather than something derived from
+/// a box, because the hill is a rule about where a body is and the box it
+/// happens to sit on (the dock, the plinth) is cover like any other; the
+/// seeded arena's hill is an open square with no box under it at all.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Hill {
+    pub min: [f32; 2],
+    pub max: [f32; 2],
+    pub top: f32,
+}
+
+impl Hill {
+    /// Whether a body with its centre at `pos` and its feet at `feet`
+    /// stands on the hill. The 0.05 slack under `top` is for feet resting
+    /// on a box top through `support_height`, which lands them exactly on
+    /// it, and for a level whose hill is the floor.
+    #[must_use]
+    pub fn stands_on(&self, pos: [f32; 2], feet: f32) -> bool {
+        feet >= self.top - 0.05
+            && pos[0] >= self.min[0]
+            && pos[0] <= self.max[0]
+            && pos[1] >= self.min[1]
+            && pos[1] <= self.max[1]
+    }
+}
+
+/// Trench City's hill: the statue's plinth (`TRENCH_CENTRE`), reached
+/// from the sandbags around it.
+const TRENCH_HILL: Hill = Hill {
+    min: [-1.6, -1.6],
+    max: [1.6, 1.6],
+    top: 2.2,
+};
+
+/// The seeded arena's hill: the open centre at floor level, a placeholder
+/// square so the seeded tests can drive the mode without an authored map.
+const SEEDED_HILL: Hill = Hill {
+    min: [-2.0, -2.0],
+    max: [2.0, 2.0],
+    top: 0.0,
+};
+
 /// A whole arena as data: what the editor authors and what the sim is
 /// handed.
 ///
@@ -766,8 +881,9 @@ pub const MAP_FREIGHT_YARD: &str = "freight-yard";
 /// Spawns are carried rather than derived because an authored arena
 /// decides where players start; a seeded one reproduces the golden-angle
 /// ring the sim has always used. Pads are carried for the same reason.
-/// `pads` and `decor` default on decode so a level written before they
-/// existed still loads (and plays without pads, as its author left it).
+/// `pads`, `decor` and `hill` default on decode so a level written before
+/// they existed still loads (and plays without pads, as its author left
+/// it, and without a hill, which the server refuses king of the hill on).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Level {
     pub arena_half: f32,
@@ -777,6 +893,10 @@ pub struct Level {
     pub pads: Vec<[f32; 2]>,
     #[serde(default)]
     pub decor: Vec<Decor>,
+    /// Where king of the hill is played on this level; `None` for a level
+    /// that has no such place, on which the mode cannot be created.
+    #[serde(default)]
+    pub hill: Option<Hill>,
 }
 
 /// One authored box before rotation: kind, the two XZ corners, base, top.
@@ -881,6 +1001,7 @@ impl Level {
             spawns: (0..MAX_PLAYERS as u32).map(spawn_point).collect(),
             pads: generate_pads(seed),
             decor: Vec::new(),
+            hill: Some(SEEDED_HILL),
         }
     }
 
@@ -922,6 +1043,7 @@ impl Level {
             spawns,
             pads: Vec::new(),
             decor: trench_city_decor(),
+            hill: Some(TRENCH_HILL),
         }
     }
 
@@ -945,6 +1067,27 @@ impl Level {
     #[must_use]
     pub fn spawn(&self, slot: u32) -> [f32; 2] {
         spawn_from(&self.spawns, slot)
+    }
+
+    /// Team `team`'s spawns in team deathmatch: team 0 the level's spawns
+    /// with `z > 0`, team 1 the rest, and the whole list when a half would
+    /// be empty so a level authored with every spawn on one side still
+    /// starts both teams. Slot order inside the half is `spawn_from`'s.
+    /// The client never needs this: the server places every player and
+    /// the wire carries the position.
+    #[must_use]
+    pub fn spawns_for(&self, team: u8) -> Vec<[f32; 2]> {
+        let half: Vec<[f32; 2]> = self
+            .spawns
+            .iter()
+            .copied()
+            .filter(|s| (s[1] > 0.0) == (team == 0))
+            .collect();
+        if half.is_empty() {
+            self.spawns.clone()
+        } else {
+            half
+        }
     }
 }
 
@@ -1290,7 +1433,15 @@ pub struct PlayerSt {
     /// weapons tilt with their actual aim instead of staying level.
     pub pitch: f32,
     pub hp: u8,
+    /// The mode's score: frags in free for all and team deathmatch, hill
+    /// points in king of the hill. Reset to zero when a round restarts.
     pub score: u32,
+    /// Frags, whatever the mode, so the scoreboard shows them beside
+    /// deaths when the hill is the score. Reset with `score`.
+    pub frags: u32,
+    /// 0 (blue) or 1 (red) in team deathmatch, assigned on join to the
+    /// smaller team; 0 for everyone in every other mode.
+    pub team: u8,
     pub alive: bool,
     pub crouch: bool,
     /// Off-hand shield raised. Broadcast, because a shield nobody can see is
@@ -1453,6 +1604,28 @@ pub struct LootBlock {
 }
 
 pub struct Sim {
+    /// The rules this sim plays by, resolved once from the lobby's mode
+    /// name in `from_level`.
+    pub mode: GameMode,
+    /// Frag totals per team in team deathmatch; both zero elsewhere.
+    pub team_score: [u32; 2],
+    /// Who stands alone on the hill, exactly as `State.hill` carries it:
+    /// a player id, `HILL_FREE` or `HILL_CONTESTED`. `HILL_FREE` outside
+    /// king of the hill.
+    pub hill_holder: u8,
+    /// The holder's accumulated seconds toward the next hill point; back
+    /// to zero on every change of holder, so stepping off costs the
+    /// partial second.
+    hill_t: f32,
+    /// Seconds left in the pause after a round; 0 while a round runs.
+    pub round_pause: f32,
+    /// Rounds completed since creation.
+    pub round: u32,
+    /// (winner, `is_team`) for a round that ended this step: a player id or
+    /// a team index. Cleared each step like `events`.
+    pub round_over: Vec<(u8, bool)>,
+    /// The level's hill, read by the king-of-the-hill pass alone.
+    pub hill: Option<Hill>,
     pub obstacles: Vec<Obstacle>,
     pub pads: Vec<Pad>,
     /// One per `Cover::Loot` obstacle, in obstacle order, so `State.loot`
@@ -1462,6 +1635,9 @@ pub struct Sim {
     /// Placement goes through `Level::spawn` semantics for both the first
     /// spawn and every respawn.
     pub spawns: Vec<[f32; 2]>,
+    /// `spawns` split by team through `Level::spawns_for`, indexed by
+    /// team and read in team deathmatch only.
+    team_spawns: [Vec<[f32; 2]>; 2],
     pub players: Vec<PlayerSt>,
     pub bullets: Vec<Bullet>,
     /// (killer, victim) pairs from the last step.
@@ -1486,23 +1662,81 @@ pub struct Sim {
     history: std::collections::VecDeque<HistoryFrame>,
 }
 
+/// Where a player of `team` spawns: the team's half of the list in team
+/// deathmatch, the whole list in every other mode, so free for all places
+/// players exactly as v18 did. A free function over the sim's fields so
+/// the respawn path can call it while it holds one player mutably.
+fn spawns_of<'a>(
+    mode: GameMode,
+    spawns: &'a [[f32; 2]],
+    team_spawns: &'a [Vec<[f32; 2]>; 2],
+    team: u8,
+) -> &'a [[f32; 2]] {
+    if mode == GameMode::Tdm {
+        &team_spawns[usize::from(team & 1)]
+    } else {
+        spawns
+    }
+}
+
+/// A player back to life at a fresh spawn with the sidearm: the one
+/// respawn path, shared by the death timer and the round restart so the
+/// two cannot drift. The spawn slot advances every time so consecutive
+/// spawns walk the list.
+fn respawn(p: &mut PlayerSt, spawns: &[[f32; 2]]) {
+    p.deaths = p.deaths.wrapping_add(1);
+    p.pos = spawn_from(
+        spawns,
+        p.deaths.wrapping_mul(3).wrapping_add(u32::from(p.id)),
+    );
+    p.y = 0.0;
+    p.vy = 0.0;
+    p.hp = MAX_HP;
+    p.alive = true;
+    p.cooldown = 0.3;
+    // Death costs your loot: the sidearm is back.
+    p.weapon = SIDEARM;
+    p.ammo = weapon_stats(SIDEARM).mag;
+    p.reserve = RESERVE_INFINITE;
+    p.fired = 0;
+    p.reload_t = 0.0;
+}
+
 impl Sim {
-    /// The seeded arena: exactly `from_level(&Level::from_seed(seed), seed)`,
-    /// kept as the short spelling every existing test uses.
+    /// The seeded arena in free for all: exactly
+    /// `from_level(&Level::from_seed(seed), seed, GameMode::Ffa)`, kept as
+    /// the short spelling every existing test uses.
     #[must_use]
     pub fn new(seed: u64) -> Self {
-        Self::from_level(&Level::from_seed(seed), seed)
+        Self::from_level(&Level::from_seed(seed), seed, GameMode::Ffa)
     }
 
     /// A sim on an authored level: its obstacles, its pads (all active), its
-    /// loot blocks (all armed), its spawns. `arena_half` is NOT read - the
-    /// wall is `ARENA_HALF` in the shared `blocked`, and making it per-level
-    /// is a `move_circle` signature change on both peers that eight players
-    /// did not need. `seed` is the lobby's, which the server already mints
-    /// and sends in `GameJoined`; every spread and loot roll hashes it.
+    /// loot blocks (all armed), its spawns, its hill. `arena_half` is NOT
+    /// read - the wall is `ARENA_HALF` in the shared `blocked`, and making
+    /// it per-level is a `move_circle` signature change on both peers that
+    /// eight players did not need. `seed` is the lobby's, which the server
+    /// already mints and sends in `GameJoined`; every spread and loot roll
+    /// hashes it. `mode` is the lobby's rules; king of the hill on a level
+    /// with no hill plays as free for all, which the server refuses to
+    /// create in the first place, so a sim never waits on a point nobody
+    /// can earn.
     #[must_use]
-    pub fn from_level(level: &Level, seed: u64) -> Self {
+    pub fn from_level(level: &Level, seed: u64, mode: GameMode) -> Self {
+        let mode = if mode == GameMode::Hill && level.hill.is_none() {
+            GameMode::Ffa
+        } else {
+            mode
+        };
         Self {
+            mode,
+            team_score: [0; 2],
+            hill_holder: HILL_FREE,
+            hill_t: 0.0,
+            round_pause: 0.0,
+            round: 0,
+            round_over: Vec::new(),
+            hill: level.hill,
             obstacles: level.obstacles.clone(),
             pads: level
                 .pads
@@ -1523,6 +1757,7 @@ impl Sim {
                 })
                 .collect(),
             spawns: level.spawns.clone(),
+            team_spawns: [level.spawns_for(0), level.spawns_for(1)],
             players: Vec::new(),
             bullets: Vec::new(),
             events: Vec::new(),
@@ -1535,19 +1770,38 @@ impl Sim {
         }
     }
 
+    /// A player joins, on the smaller team in team deathmatch (ties by id
+    /// parity, so two players joining an empty lobby face each other) and
+    /// on team 0 everywhere else. Teams rebalance only on join:
+    /// `remove_player` leaves them as they are.
     pub fn add_player(&mut self, id: u8) {
         // Player count is capped at eight by the public protocol.
         #[allow(clippy::cast_possible_truncation)]
         let slot = self.players.len() as u32;
+        let team = if self.mode == GameMode::Tdm {
+            let count = |t: u8| self.players.iter().filter(|p| p.team == t).count();
+            match count(0).cmp(&count(1)) {
+                std::cmp::Ordering::Less => 0,
+                std::cmp::Ordering::Greater => 1,
+                std::cmp::Ordering::Equal => id % 2,
+            }
+        } else {
+            0
+        };
         self.players.push(PlayerSt {
             id,
-            pos: spawn_from(&self.spawns, slot),
+            pos: spawn_from(
+                spawns_of(self.mode, &self.spawns, &self.team_spawns, team),
+                slot,
+            ),
             y: 0.0,
             vy: 0.0,
             aim: [1.0, 0.0],
             pitch: 0.0,
             hp: MAX_HP,
             score: 0,
+            frags: 0,
+            team,
             alive: true,
             crouch: false,
             shield: false,
@@ -1572,6 +1826,52 @@ impl Sim {
         // would land on positions the new player never occupied).
         for frame in &mut self.history {
             frame.retain(|(pid, _, _, _, _)| *pid != id);
+        }
+    }
+
+    /// Whether two ids are on one team. False for everyone outside team
+    /// deathmatch, so every friendly-fire gate in `step` is a no-op in free
+    /// for all and king of the hill and those modes resolve every hit
+    /// exactly as v18 did. True for an id and itself in team deathmatch,
+    /// which is why the splash rule below checks the owner separately.
+    fn same_team(&self, a: u8, b: u8) -> bool {
+        if self.mode != GameMode::Tdm {
+            return false;
+        }
+        let team = |id: u8| self.players.iter().find(|p| p.id == id).map(|p| p.team);
+        match (team(a), team(b)) {
+            (Some(ta), Some(tb)) => ta == tb,
+            _ => false,
+        }
+    }
+
+    /// The next round: scores, frags, deaths and the team totals to zero,
+    /// everyone alive at a fresh spawn with the sidearm through the one
+    /// respawn path, every round cleared, every block and pad armed, the
+    /// hill free. Stepped in the sim, so the server and any replay agree.
+    fn restart_round(&mut self) {
+        self.round += 1;
+        self.team_score = [0; 2];
+        self.hill_holder = HILL_FREE;
+        self.hill_t = 0.0;
+        self.bullets.clear();
+        for slot in &mut self.loot {
+            slot.respawn_t = 0.0;
+        }
+        for pad in &mut self.pads {
+            pad.respawn_t = 0.0;
+        }
+        for p in &mut self.players {
+            p.score = 0;
+            p.frags = 0;
+            p.death_count = 0;
+            p.respawn_in = 0.0;
+            p.melee_cd = 0.0;
+            p.shield = false;
+            respawn(
+                p,
+                spawns_of(self.mode, &self.spawns, &self.team_spawns, p.team),
+            );
         }
     }
 
@@ -1630,6 +1930,12 @@ impl Sim {
             if Some(q.id) == direct || Some(q.id) == spare {
                 continue;
             }
+            // A teammate is spared the splash; the owner's own splash still
+            // hurts the owner, which is what makes a rocket at your feet a
+            // self-kill and not a free escape.
+            if q.id != b.owner && self.same_team(b.owner, q.id) {
+                continue;
+            }
             let (qpos, qy, qalive, qcrouch) = self
                 .rewound(q.id, b.delay)
                 .unwrap_or((q.pos, q.y, q.alive, q.crouch));
@@ -1669,6 +1975,7 @@ impl Sim {
         self.hits.clear();
         self.blasts.clear();
         self.loot_events.clear();
+        self.round_over.clear();
         self.tick += 1;
         let dt = FIXED_DT;
         // What every roll this tick hashes: the lobby's seed and this tick.
@@ -1690,22 +1997,10 @@ impl Sim {
                 p.shield = false;
                 p.respawn_in -= dt;
                 if p.respawn_in <= 0.0 {
-                    p.deaths = p.deaths.wrapping_add(1);
-                    p.pos = spawn_from(
-                        &self.spawns,
-                        p.deaths.wrapping_mul(3).wrapping_add(u32::from(p.id)),
+                    respawn(
+                        p,
+                        spawns_of(self.mode, &self.spawns, &self.team_spawns, p.team),
                     );
-                    p.y = 0.0;
-                    p.vy = 0.0;
-                    p.hp = MAX_HP;
-                    p.alive = true;
-                    p.cooldown = 0.3;
-                    // Death costs your loot: the sidearm is back.
-                    p.weapon = SIDEARM;
-                    p.ammo = weapon_stats(SIDEARM).mag;
-                    p.reserve = RESERVE_INFINITE;
-                    p.fired = 0;
-                    p.reload_t = 0.0;
                 }
                 continue;
             }
@@ -1834,11 +2129,58 @@ impl Sim {
         }
         self.bullets.extend(new_bullets);
 
+        // ---- the hill ----
+        //
+        // After the movement pass, so it judges where everyone stands this
+        // tick. One living body on it alone is the holder and earns a point
+        // for every whole `HILL_TICK_SECS` it stays; nobody frees it; two or
+        // more contest it and earn nothing. Any change of holder drops the
+        // partial second, so stepping off and back on starts over.
+        if self.mode == GameMode::Hill
+            && let Some(hill) = self.hill
+        {
+            let mut on = self
+                .players
+                .iter()
+                .filter(|p| p.alive && hill.stands_on(p.pos, p.y))
+                .map(|p| p.id);
+            let holder = match (on.next(), on.next()) {
+                (None, _) => HILL_FREE,
+                (Some(id), None) => id,
+                (Some(_), Some(_)) => HILL_CONTESTED,
+            };
+            if holder != self.hill_holder {
+                self.hill_holder = holder;
+                self.hill_t = 0.0;
+            } else if holder < HILL_CONTESTED {
+                self.hill_t += dt;
+                if self.hill_t >= HILL_TICK_SECS {
+                    self.hill_t -= HILL_TICK_SECS;
+                    if self.round_pause == 0.0
+                        && let Some(p) = self.players.iter_mut().find(|p| p.id == holder)
+                    {
+                        p.score += 1;
+                    }
+                }
+            }
+        }
+
+        // Nothing pays during the pause after a round: the blocks and the
+        // pads stay armed for the restart rather than being spent on a
+        // round that is already over.
+        let paused = self.round_pause > 0.0;
+        if paused {
+            bonks.clear();
+        }
+
         // Weapon pads: tick respawns, hand out loot on contact. A pad rolls
         // the same table as a block, so there is exactly one reward rule.
         for pad in &mut self.pads {
             if pad.respawn_t > 0.0 {
                 pad.respawn_t = (pad.respawn_t - dt).max(0.0);
+                continue;
+            }
+            if paused {
                 continue;
             }
             for p in &mut self.players {
@@ -1941,7 +2283,7 @@ impl Sim {
                     let t = &self.players[j];
                     (t.pos, t.y, t.alive, t.crouch)
                 });
-                if !talive {
+                if !talive || self.same_team(aid, tid) {
                     continue;
                 }
                 // Reach is centre to centre less the target's own radius, so a
@@ -2013,6 +2355,13 @@ impl Sim {
                 // twice: a pierced target is overlapped on consecutive
                 // ticks, and the mask is what stops the second one.
                 if p.id == b.owner || b.hit_mask & id_bit(p.id) != 0 {
+                    continue;
+                }
+                // A teammate is neither hit nor pierced nor reflects: the
+                // round passes as if the body were not there, raised plate
+                // included, because the plate is tested only on a body the
+                // round may hit and this is not one.
+                if self.same_team(b.owner, p.id) {
                     continue;
                 }
                 // Where (in what stance, and at what height) the shooter
@@ -2369,11 +2718,59 @@ impl Sim {
                 // reads as `Kill { killer: id, victim: id }` on every
                 // client; only the score asks whether it was someone else.
                 self.events.push((owner, victim));
+                // A frag is always a frag; whether it is also a point is
+                // the mode's question, and nothing is a point during the
+                // pause after a round. A self-kill is neither.
                 if owner != victim
                     && let Some(k) = self.players.iter_mut().find(|p| p.id == owner)
                 {
-                    k.score += 1;
+                    k.frags += 1;
+                    if self.round_pause == 0.0 {
+                        match self.mode {
+                            GameMode::Ffa => k.score += 1,
+                            GameMode::Tdm => {
+                                k.score += 1;
+                                self.team_score[usize::from(k.team & 1)] += 1;
+                            }
+                            GameMode::Hill => {}
+                        }
+                    }
                 }
+            }
+        }
+
+        // ---- the round ----
+        //
+        // A limit reached ends the round: the winner is recorded for the
+        // server to announce and the pause starts. During the pause
+        // everything above keeps running but nothing scores (the gates on
+        // `round_pause` above), and when it runs out the next round starts
+        // from a clean slate. Checked last so the tick that reaches the
+        // limit still reports its own kill and score.
+        if self.round_pause > 0.0 {
+            self.round_pause = (self.round_pause - dt).max(0.0);
+            if self.round_pause == 0.0 {
+                self.restart_round();
+            }
+        } else {
+            let winner = match self.mode {
+                GameMode::Ffa => self
+                    .players
+                    .iter()
+                    .find(|p| p.score >= FFA_FRAG_LIMIT)
+                    .map(|p| (p.id, false)),
+                GameMode::Hill => self
+                    .players
+                    .iter()
+                    .find(|p| p.score >= HILL_LIMIT)
+                    .map(|p| (p.id, false)),
+                GameMode::Tdm => (0..2u8)
+                    .find(|&t| self.team_score[usize::from(t)] >= TDM_FRAG_LIMIT)
+                    .map(|t| (t, true)),
+            };
+            if let Some(w) = winner {
+                self.round_over.push(w);
+                self.round_pause = ROUND_PAUSE_SECS;
             }
         }
     }
@@ -3248,6 +3645,7 @@ mod tests {
             spawns: Vec::new(),
             pads: Vec::new(),
             decor: Vec::new(),
+            hill: None,
         };
         assert_eq!(level.spawn(3), spawn_point(3));
         // A short authored list wraps rather than panicking.
@@ -3257,19 +3655,20 @@ mod tests {
             spawns: vec![[1.0, 2.0], [3.0, 4.0]],
             pads: Vec::new(),
             decor: Vec::new(),
+            hill: None,
         };
         assert_eq!(two.spawn(0), [1.0, 2.0]);
         assert_eq!(two.spawn(5), [3.0, 4.0]);
         // And the sim places players by the same rule, first spawn and
         // respawn alike.
-        let mut sim = Sim::from_level(&two, 0);
+        let mut sim = Sim::from_level(&two, 0, GameMode::Ffa);
         sim.add_player(0);
         sim.add_player(1);
         sim.add_player(2);
         assert_eq!(sim.players[0].pos, [1.0, 2.0]);
         assert_eq!(sim.players[1].pos, [3.0, 4.0]);
         assert_eq!(sim.players[2].pos, [1.0, 2.0], "wraps");
-        let mut none = Sim::from_level(&level, 0);
+        let mut none = Sim::from_level(&level, 0, GameMode::Ffa);
         none.add_player(3);
         assert_eq!(
             none.players[0].pos,
@@ -4598,7 +4997,7 @@ mod tests {
         }
         // The sim places players there in slot order, and the first four
         // slots land on four different sides.
-        let mut sim = Sim::from_level(&level, 0);
+        let mut sim = Sim::from_level(&level, 0, GameMode::Ffa);
         for id in 0..8u8 {
             sim.add_player(id);
         }
@@ -5034,7 +5433,7 @@ mod tests {
             .filter(|(_, o)| o.kind == Cover::Loot)
             .collect();
         assert_eq!(blocks.len(), 4, "one block per side");
-        let sim = Sim::from_level(&level, 0);
+        let sim = Sim::from_level(&level, 0, GameMode::Ffa);
         assert!(sim.pads.is_empty(), "the sim arms no pad on Trench City");
         assert_eq!(sim.loot.len(), 4, "the sim arms one slot per block");
         for (slot, (k, _)) in sim.loot.iter().zip(&blocks) {
@@ -5178,7 +5577,7 @@ mod tests {
     #[test]
     fn a_bonk_on_a_trench_city_block_pays_a_pool_weapon() {
         let level = Level::trench_city();
-        let mut sim = Sim::from_level(&level, 5);
+        let mut sim = Sim::from_level(&level, 5, GameMode::Ffa);
         sim.add_player(0);
         let (k, block) = level
             .obstacles
@@ -5322,7 +5721,7 @@ mod tests {
         assert_eq!(old.decor, Vec::<Decor>::new());
         assert_eq!(old.spawns, vec![[5.0, 6.0]]);
         // And it still plays.
-        let mut sim = Sim::from_level(&old, 0);
+        let mut sim = Sim::from_level(&old, 0, GameMode::Ffa);
         sim.add_player(0);
         assert_eq!(sim.players[0].pos, [5.0, 6.0]);
         assert_eq!(sim.pads.len(), 0, "a level without pads plays without pads");
@@ -5357,7 +5756,7 @@ mod tests {
             }
             // Sim::new IS from_level of this: identical world either way.
             let a = Sim::new(seed);
-            let b = Sim::from_level(&level, seed);
+            let b = Sim::from_level(&level, seed, GameMode::Ffa);
             assert_eq!(a.obstacles, b.obstacles);
             assert_eq!(a.spawns, b.spawns);
             assert_eq!(a.spawns, level.spawns);
@@ -5398,8 +5797,10 @@ mod tests {
                 spawns: Vec::new(),
                 pads: Vec::new(),
                 decor: Vec::new(),
+                hill: None,
             },
             seed,
+            GameMode::Ffa,
         )
     }
 
@@ -6266,51 +6667,218 @@ mod tests {
         assert!(wall[1] > 8.0, "{wall:?}");
     }
 
+    /// The v18 determinism driver's input table: four players on the yard
+    /// firing, jumping, crouching, scoping, shielding, swinging and
+    /// reloading on a hash of the tick and the id. Shared by the two-sim
+    /// test and the v18 pin below so the pin is of exactly this table.
+    fn v18_script(tick: u64, id: u8) -> PlayerIn {
+        let hash = hash64(tick.wrapping_mul(8).wrapping_add(u64::from(id)) ^ 0xabcd);
+        let (lift, turn) = unit_pair(hash);
+        let ang = std::f32::consts::TAU * turn;
+        let wander = std::f32::consts::TAU * (tick / 60) as f32 / 7.0;
+        PlayerIn {
+            mv: [wander.cos(), wander.sin()],
+            aim: [ang.cos(), ang.sin()],
+            pitch: (lift - 0.5) * 2.0 * MAX_PITCH,
+            fire: hash & 1 == 0,
+            sprint: hash & 16 != 0,
+            crouch: hash & 4 != 0,
+            reload: hash & 32 != 0,
+            jump: tick % 50 == u64::from(id) * 7,
+            shield: id == 2 && tick % 97 < 10,
+            melee: tick % 123 == u64::from(id),
+            ads: hash & 8 != 0,
+            delay_ticks: ((hash >> 8) % 19) as u16,
+        }
+    }
+
+    /// The driver's weapon rotation: every 75 ticks everyone is handed the
+    /// next row of the table, so every weapon flies inside 600 ticks.
+    fn v18_grants(sim: &mut Sim, tick: u64) {
+        if tick.is_multiple_of(75) {
+            for (k, p) in sim.players.iter_mut().enumerate() {
+                grant(p, 1 + ((tick / 75 + k as u64) % 7) as u8);
+            }
+        }
+    }
+
+    /// FNV-1a 64 over little-endian words. Spelled out rather than taken
+    /// from `std::hash`, whose `DefaultHasher` is not promised to be the
+    /// same function from one toolchain to the next, so that a number
+    /// pinned in a test means the same thing next year.
+    fn fold(h: &mut u64, words: impl IntoIterator<Item = u64>) {
+        for w in words {
+            for b in w.to_le_bytes() {
+                *h ^= u64::from(b);
+                *h = h.wrapping_mul(0x0100_0000_01b3);
+            }
+        }
+    }
+
+    /// Folds one tick of a sim into `h`: every player and every round as
+    /// bits, then the tick's kills, hits, blasts and loot payouts. The
+    /// v18 fields only, in the v18 order, which is what makes the fold
+    /// comparable with a sim that predates v19.
+    fn fold_tick(h: &mut u64, sim: &Sim) {
+        for p in &sim.players {
+            fold(h, player_bits(p));
+        }
+        for b in &sim.bullets {
+            fold(h, bullet_bits(b));
+        }
+        fold(
+            h,
+            sim.events
+                .iter()
+                .flat_map(|&(a, b)| [u64::from(a), u64::from(b)]),
+        );
+        fold(
+            h,
+            sim.hits
+                .iter()
+                .flat_map(|&(a, b, c, d)| [u64::from(a), u64::from(b), u64::from(c), u64::from(d)]),
+        );
+        fold(
+            h,
+            sim.blasts.iter().flat_map(|&(p, w)| {
+                [
+                    u64::from(p[0].to_bits()),
+                    u64::from(p[1].to_bits()),
+                    u64::from(p[2].to_bits()),
+                    u64::from(w),
+                ]
+            }),
+        );
+        fold(
+            h,
+            sim.loot_events
+                .iter()
+                .flat_map(|&(a, b, c)| [u64::from(a), u64::from(b), u64::from(c)]),
+        );
+    }
+
+    /// FNV-1a's offset basis: where every fold starts.
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+
+    /// `fold_tick` of the v18 driver after ticks 99, 199, ... 599, computed
+    /// once from the v18 sim (commit `1d8d51b`, the tree before any v19
+    /// field existed, built as a standalone crate with the same fold and
+    /// the same script) on this machine, the Windows workstation that
+    /// hosts the arena. The script and the launch go through `cos`, `sin`
+    /// and `tan`, which are the platform's, so a toolchain on another libm
+    /// could legitimately differ in the last bit; the tests have only ever
+    /// run here, and if that changes the pin is regenerated the same way,
+    /// from v18.
+    const V18_CHECKPOINTS: [u64; 6] = [
+        0xba46_f694_c54a_381b,
+        0x1aa0_29fd_4da2_27a8,
+        0xaf42_76d1_7721_bc4d,
+        0x569f_2c4b_6c46_c8b8,
+        0x0957_317b_0cff_0810,
+        0x96ea_d49f_aa21_f7e3,
+    ];
+
+    #[test]
+    fn free_for_all_is_bit_identical_to_v18_until_the_limit() {
+        // The v19 sim in free for all must BE the v18 sim until a round
+        // ends: the same players, rounds, kills, hits, blasts and payouts
+        // bit for bit, tick for tick, against a fingerprint taken from the
+        // v18 code. v19 put friendly-fire gates in the sweep, the melee
+        // and the splash, a hill pass and a round check into `step`, and
+        // this is the proof that in the mode every v18 lobby plays they
+        // change nothing. The frag limit is nowhere near in 600 ticks (the
+        // script lands one kill, a self-kill), which is what "until the
+        // limit" means here: the round never ends, so the v19 state stays
+        // inert the whole way.
+        let level = Level::freight_yard();
+        let mut ffa = Sim::from_level(&level, 7, GameMode::Ffa);
+        // King of the hill on the same script is free for all with a
+        // different scoreboard: identical in every bit but `score`, whose
+        // frags move to `frags`. Driven alongside, because that claim is
+        // what lets the hill pass sit inside `step` without a v18 pin of
+        // its own.
+        let mut hill = Sim::from_level(&level, 7, GameMode::Hill);
+        for id in 0..4 {
+            ffa.add_player(id);
+            hill.add_player(id);
+        }
+        let mut h = FNV_OFFSET;
+        let mut kills = 0;
+        for tick in 0..600u64 {
+            v18_grants(&mut ffa, tick);
+            v18_grants(&mut hill, tick);
+            ffa.step(&|id| v18_script(tick, id));
+            hill.step(&|id| v18_script(tick, id));
+            fold_tick(&mut h, &ffa);
+            if tick % 100 == 99 {
+                assert_eq!(
+                    h,
+                    V18_CHECKPOINTS[usize::try_from(tick / 100).unwrap()],
+                    "tick {tick}: free for all diverged from v18 in the hundred ticks before this"
+                );
+            }
+            kills += ffa.events.len();
+            // The v19 state a free-for-all round never touches.
+            assert!(ffa.round_over.is_empty(), "tick {tick}");
+            assert_eq!(ffa.round_pause, 0.0, "tick {tick}");
+            assert_eq!(ffa.round, 0, "tick {tick}");
+            assert_eq!(ffa.hill_holder, HILL_FREE, "tick {tick}");
+            assert_eq!(ffa.team_score, [0, 0], "tick {tick}");
+            for p in &ffa.players {
+                assert_eq!(p.team, 0, "tick {tick} player {}", p.id);
+                assert_eq!(p.frags, p.score, "tick {tick} player {}", p.id);
+                assert!(p.score < FFA_FRAG_LIMIT, "tick {tick} player {}", p.id);
+            }
+            // And the hill sim, score masked, is the same sim.
+            for (a, b) in ffa.players.iter().zip(&hill.players) {
+                let mut masked = b.clone();
+                masked.score = a.score;
+                assert_eq!(
+                    player_bits(a),
+                    player_bits(&masked),
+                    "tick {tick} player {}",
+                    a.id
+                );
+                assert_eq!(a.score, b.frags, "tick {tick} player {}", a.id);
+            }
+            assert_eq!(ffa.bullets.len(), hill.bullets.len(), "tick {tick}");
+            for (a, b) in ffa.bullets.iter().zip(&hill.bullets) {
+                assert_eq!(bullet_bits(a), bullet_bits(b), "tick {tick}");
+            }
+            assert_eq!(ffa.events, hill.events, "tick {tick}");
+            assert_eq!(ffa.hits, hill.hits, "tick {tick}");
+            assert_eq!(ffa.blasts, hill.blasts, "tick {tick}");
+            assert_eq!(ffa.loot_events, hill.loot_events, "tick {tick}");
+        }
+        assert_eq!(h, V18_CHECKPOINTS[5], "the whole run");
+        assert_eq!(kills, 1, "the script's one kill, as in v18");
+        assert!(
+            ffa.players.iter().all(|p| p.score == 0),
+            "and it was a self-kill, so nobody scored: {:?}",
+            ffa.players.iter().map(|p| p.score).collect::<Vec<_>>()
+        );
+    }
+
     #[test]
     fn two_sims_with_the_same_seed_and_inputs_agree_bit_for_bit() {
-        // Four players on the yard, 600 ticks of a scripted input table
-        // that fires, jumps, crouches, scopes, shields, swings, reloads and
-        // cycles every weapon in the table, compared field by field as bits
-        // after every tick. What this pins is that nothing in the step is
-        // hidden state: no RNG, no hash-map order, no time.
+        // Four players on the yard, 600 ticks of `v18_script`, which fires,
+        // jumps, crouches, scopes, shields, swings, reloads and cycles
+        // every weapon in the table, compared field by field as bits after
+        // every tick. What this pins is that nothing in the step is hidden
+        // state: no RNG, no hash-map order, no time.
         let level = Level::freight_yard();
-        let mut a = Sim::from_level(&level, 7);
-        let mut b = Sim::from_level(&level, 7);
+        let mut a = Sim::from_level(&level, 7, GameMode::Ffa);
+        let mut b = Sim::from_level(&level, 7, GameMode::Ffa);
         for id in 0..4 {
             a.add_player(id);
             b.add_player(id);
         }
-        let script = |tick: u64, id: u8| -> PlayerIn {
-            let hash = hash64(tick.wrapping_mul(8).wrapping_add(u64::from(id)) ^ 0xabcd);
-            let (lift, turn) = unit_pair(hash);
-            let ang = std::f32::consts::TAU * turn;
-            let wander = std::f32::consts::TAU * (tick / 60) as f32 / 7.0;
-            PlayerIn {
-                mv: [wander.cos(), wander.sin()],
-                aim: [ang.cos(), ang.sin()],
-                pitch: (lift - 0.5) * 2.0 * MAX_PITCH,
-                fire: hash & 1 == 0,
-                sprint: hash & 16 != 0,
-                crouch: hash & 4 != 0,
-                reload: hash & 32 != 0,
-                jump: tick % 50 == u64::from(id) * 7,
-                shield: id == 2 && tick % 97 < 10,
-                melee: tick % 123 == u64::from(id),
-                ads: hash & 8 != 0,
-                delay_ticks: ((hash >> 8) % 19) as u16,
-            }
-        };
         let mut rounds_seen = [false; 8];
         for tick in 0..600u64 {
-            if tick % 75 == 0 {
-                for sim in [&mut a, &mut b] {
-                    for (k, p) in sim.players.iter_mut().enumerate() {
-                        grant(p, 1 + ((tick / 75 + k as u64) % 7) as u8);
-                    }
-                }
-            }
-            a.step(&|id| script(tick, id));
-            b.step(&|id| script(tick, id));
+            v18_grants(&mut a, tick);
+            v18_grants(&mut b, tick);
+            a.step(&|id| v18_script(tick, id));
+            b.step(&|id| v18_script(tick, id));
             assert_eq!(a.players.len(), b.players.len());
             for (pa, pb) in a.players.iter().zip(&b.players) {
                 assert_eq!(
@@ -6344,7 +6912,7 @@ mod tests {
         // met are the same tick by tick, and the server pays out exactly
         // when the client's prediction says the head met an armed block.
         let level = Level::freight_yard();
-        let mut sim = Sim::from_level(&level, 7);
+        let mut sim = Sim::from_level(&level, 7, GameMode::Ffa);
         sim.add_player(0);
         // Start on the dock under the king block: a hop from there bonks it.
         let start = ([0.0f32, 0.0f32], 1.2f32);
@@ -6671,5 +7239,536 @@ mod tests {
         }
         assert_eq!(sim.loot[0].respawn_t, 0.0);
         assert_eq!(sim.players[0].y, 0.0);
+    }
+
+    // ---- v19: modes ----
+
+    /// The seeded arena with no cover and no pads, in `mode`, so a mode
+    /// test places every body by hand and nothing else moves the geometry.
+    fn mode_sim(seed: u64, n: u8, mode: GameMode) -> Sim {
+        let mut sim = Sim::from_level(&Level::from_seed(seed), seed, mode);
+        sim.obstacles.clear();
+        sim.pads.clear();
+        for id in 0..n {
+            sim.add_player(id);
+        }
+        sim
+    }
+
+    #[test]
+    fn every_mode_survives_serde_and_an_unknown_name_is_refused() {
+        for mode in [GameMode::Ffa, GameMode::Tdm, GameMode::Hill] {
+            assert_eq!(GameMode::from_name(mode.name()), Some(mode));
+        }
+        assert_eq!(
+            GameMode::from_name(""),
+            Some(GameMode::Ffa),
+            "an absent name is free for all"
+        );
+        assert_eq!(GameMode::from_name("ctf"), None);
+        assert_eq!(GameMode::from_name("TDM"), None, "names are exact");
+        // Every level carries its hill through the codec, and king of the
+        // hill on a level with none plays as free for all.
+        for level in [
+            Level::freight_yard(),
+            Level::trench_city(),
+            Level::from_seed(3),
+        ] {
+            let json = serde_json::to_string(&level).unwrap();
+            let back: Level = serde_json::from_str(&json).unwrap();
+            assert!(level.hill.is_some(), "every shipped level has a hill");
+            assert_eq!(back.hill, level.hill);
+            assert_eq!(
+                Sim::from_level(&level, 1, GameMode::Hill).mode,
+                GameMode::Hill
+            );
+        }
+        let mut bare = Level::from_seed(3);
+        bare.hill = None;
+        assert_eq!(
+            Sim::from_level(&bare, 1, GameMode::Hill).mode,
+            GameMode::Ffa,
+            "no hill, no king"
+        );
+        assert_eq!(Sim::new(3).mode, GameMode::Ffa);
+    }
+
+    #[test]
+    fn teams_are_balanced_on_join() {
+        let level = Level::freight_yard();
+        let mut sim = Sim::from_level(&level, 5, GameMode::Tdm);
+        for id in 0..8 {
+            sim.add_player(id);
+        }
+        let count = |sim: &Sim, t: u8| sim.players.iter().filter(|p| p.team == t).count();
+        assert_eq!((count(&sim, 0), count(&sim, 1)), (4, 4));
+        // Every join was a tie broken by parity, so the sides alternate.
+        for p in &sim.players {
+            assert_eq!(p.team, p.id % 2, "player {}", p.id);
+        }
+        // A leaver from blue, and the ninth joiner lands on blue.
+        sim.remove_player(2);
+        sim.add_player(9);
+        assert_eq!(player(&sim, 9).team, 0, "the smaller team");
+        assert_eq!((count(&sim, 0), count(&sim, 1)), (4, 4));
+        // Outside team deathmatch everyone is team 0, whatever the id.
+        let mut ffa = Sim::from_level(&level, 5, GameMode::Ffa);
+        for id in 0..8 {
+            ffa.add_player(id);
+        }
+        assert!(ffa.players.iter().all(|p| p.team == 0));
+        assert_eq!(ffa.team_score, [0, 0]);
+    }
+
+    #[test]
+    fn teammates_spawn_on_their_side() {
+        let level = Level::freight_yard();
+        assert_eq!(level.spawns_for(0).len(), 4, "the north backlot");
+        assert_eq!(level.spawns_for(1).len(), 4, "the south backlot");
+        assert!(level.spawns_for(0).iter().all(|s| s[1] > 0.0));
+        assert!(level.spawns_for(1).iter().all(|s| s[1] < 0.0));
+        // A level whose spawns all sit on one side hands both teams the
+        // whole list rather than nothing.
+        let mut lop = level.clone();
+        lop.spawns.retain(|s| s[1] > 0.0);
+        assert_eq!(lop.spawns_for(1), lop.spawns);
+
+        let mut sim = Sim::from_level(&level, 5, GameMode::Tdm);
+        for id in 0..4 {
+            sim.add_player(id);
+        }
+        for p in &sim.players {
+            assert_eq!(p.pos[1] > 0.0, p.team == 0, "first spawn of {}", p.id);
+        }
+        // Two hundred respawns each: killed by hand, back on the next tick,
+        // always on their own side.
+        let inputs = HashMap::new();
+        let mut respawns = 0;
+        for _ in 0..200 {
+            for p in &mut sim.players {
+                p.alive = false;
+                p.hp = 0;
+                p.respawn_in = 0.0;
+            }
+            step_with(&mut sim, &inputs);
+            for p in &sim.players {
+                assert!(p.alive);
+                assert_eq!(p.pos[1] > 0.0, p.team == 0, "respawn of {}", p.id);
+                respawns += 1;
+            }
+        }
+        assert_eq!(respawns, 800);
+        // And free for all still walks the whole list, as v18 did.
+        let mut ffa = Sim::from_level(&level, 5, GameMode::Ffa);
+        ffa.add_player(0);
+        ffa.add_player(1);
+        assert_eq!(ffa.players[0].pos, level.spawn(0));
+        assert_eq!(ffa.players[1].pos, level.spawn(1));
+    }
+
+    #[test]
+    fn a_teammate_is_never_hit() {
+        // 0 and 2 are blue, 1 is red. A round from 0 through 2 hits 1.
+        let mut sim = mode_sim(1, 3, GameMode::Tdm);
+        assert_eq!(
+            (
+                player(&sim, 0).team,
+                player(&sim, 1).team,
+                player(&sim, 2).team
+            ),
+            (0, 1, 0)
+        );
+        let spots = [
+            (0, [0.0, 0.0], 0.0),
+            (2, [2.0, 0.0], 0.0),
+            (1, [4.0, 0.0], 0.0),
+        ];
+        let mut inputs = HashMap::new();
+        let mut hits = Vec::new();
+        for t in 0..15u32 {
+            inputs.insert(0, shot(t, [1.0, 0.0], 0.0));
+            hold(&mut sim, &spots);
+            step_with(&mut sim, &inputs);
+            hits.extend(sim.hits.iter().copied());
+        }
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!((hits[0].0, hits[0].1), (0, 1), "the enemy behind");
+        assert_eq!(player(&sim, 2).hp, MAX_HP, "the teammate in front");
+
+        // A swing at a teammate is a swing at nothing, but it still costs
+        // the cooldown.
+        let mut sim = mode_sim(1, 3, GameMode::Tdm);
+        let mut inputs = HashMap::new();
+        inputs.insert(
+            0,
+            PlayerIn {
+                aim: [1.0, 0.0],
+                melee: true,
+                ..Default::default()
+            },
+        );
+        hold(
+            &mut sim,
+            &[
+                (0, [0.0, 0.0], 0.0),
+                (2, [1.0, 0.0], 0.0),
+                (1, [12.0, 0.0], 0.0),
+            ],
+        );
+        step_with(&mut sim, &inputs);
+        assert!(sim.hits.is_empty(), "{:?}", sim.hits);
+        assert_eq!(player(&sim, 2).hp, MAX_HP);
+        assert!(player(&sim, 0).melee_cd > 0.0, "the swing happened");
+
+        // A rocket at the owner's own feet: the teammate beside is spared,
+        // the enemy on the other side and the owner are not.
+        let mut sim = mode_sim(1, 3, GameMode::Tdm);
+        arm(&mut sim.players[0], 7);
+        let mut inputs = HashMap::new();
+        inputs.insert(0, shot(0, [1.0, 0.0], -MAX_PITCH));
+        hold(
+            &mut sim,
+            &[
+                (0, [0.0, 0.0], 0.0),
+                (2, [0.9, 0.0], 0.0),
+                (1, [-0.9, 0.0], 0.0),
+            ],
+        );
+        step_with(&mut sim, &inputs);
+        assert_eq!(sim.blasts.len(), 1, "went off on the first tick");
+        let victims: Vec<u8> = sim.hits.iter().map(|h| h.1).collect();
+        assert!(
+            victims.contains(&0),
+            "the owner eats the splash: {victims:?}"
+        );
+        assert!(victims.contains(&1), "the enemy beside it too: {victims:?}");
+        assert!(!victims.contains(&2), "the teammate is spared: {victims:?}");
+    }
+
+    #[test]
+    fn a_teammates_shield_does_not_catch_a_friendly_round() {
+        // Blue 2 stands between blue 0 and red 1 with the plate up and
+        // facing 0: a friendly round passes through the plate as if the
+        // body were not there, hits the enemy, and is never reflected.
+        let mut sim = mode_sim(1, 3, GameMode::Tdm);
+        let spots = [
+            (0, [0.0, 0.0], 0.0),
+            (2, [2.0, 0.0], 0.0),
+            (1, [4.0, 0.0], 0.0),
+        ];
+        let mut inputs = HashMap::new();
+        inputs.insert(
+            2,
+            PlayerIn {
+                aim: [-1.0, 0.0],
+                shield: true,
+                ..Default::default()
+            },
+        );
+        let mut hits = Vec::new();
+        for t in 0..15u32 {
+            inputs.insert(0, shot(t, [1.0, 0.0], 0.0));
+            hold(&mut sim, &spots);
+            step_with(&mut sim, &inputs);
+            hits.extend(sim.hits.iter().copied());
+            assert!(
+                sim.bullets.iter().all(|b| b.owner == 0),
+                "tick {t}: a reflected round would belong to the catcher"
+            );
+        }
+        assert!(player(&sim, 2).shield, "the plate was up");
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!((hits[0].0, hits[0].1), (0, 1));
+        assert_eq!(player(&sim, 0).hp, MAX_HP, "nothing came back");
+    }
+
+    /// One sidearm round from 0 at 1, both held in place, until it lands
+    /// or `ticks` run out. Returns every kill event seen.
+    fn kill_shot(sim: &mut Sim, ticks: u32) -> Vec<(u8, u8)> {
+        let spots = [(0, [0.0, 0.0], 0.0), (1, [3.0, 0.0], 0.0)];
+        let mut inputs = HashMap::new();
+        let mut events = Vec::new();
+        for t in 0..ticks {
+            inputs.insert(0, shot(t, [1.0, 0.0], 0.0));
+            hold(sim, &spots);
+            step_with(sim, &inputs);
+            events.extend(sim.events.iter().copied());
+            if !events.is_empty() {
+                break;
+            }
+        }
+        events
+    }
+
+    #[test]
+    fn team_frags_score_for_the_team_and_a_self_kill_scores_for_nobody() {
+        let mut sim = mode_sim(1, 2, GameMode::Tdm);
+        sim.players[1].hp = 1;
+        assert_eq!(kill_shot(&mut sim, 20), vec![(0, 1)]);
+        assert_eq!(sim.team_score, [1, 0], "blue's frag is blue's point");
+        assert_eq!(player(&sim, 0).score, 1);
+        assert_eq!(player(&sim, 0).frags, 1);
+        assert_eq!(player(&sim, 1).death_count, 1);
+
+        // A rocket into the floor at the owner's own feet with one point
+        // left: a death, a self-kill event, and no score anywhere.
+        let mut sim = mode_sim(1, 2, GameMode::Tdm);
+        arm(&mut sim.players[0], 7);
+        sim.players[0].hp = 1;
+        let mut inputs = HashMap::new();
+        inputs.insert(0, shot(0, [1.0, 0.0], -MAX_PITCH));
+        hold(&mut sim, &[(0, [0.0, 0.0], 0.0), (1, [15.0, 0.0], 0.0)]);
+        step_with(&mut sim, &inputs);
+        assert_eq!(sim.events, vec![(0, 0)]);
+        assert_eq!(sim.team_score, [0, 0]);
+        assert_eq!(player(&sim, 0).score, 0);
+        assert_eq!(player(&sim, 0).frags, 0);
+        assert_eq!(player(&sim, 0).death_count, 1);
+    }
+
+    #[test]
+    fn alone_on_the_hill_earns_a_point_a_second() {
+        // The seeded hill is the open centre at floor level. Player 0
+        // stands on it from tick 1 and starts earning from tick 2 (the tick
+        // that makes it the holder pays nothing), so at tick 1800 it has
+        // banked 1799 ticks, just under thirty seconds, and at 1830 just
+        // over.
+        let mut sim = mode_sim(3, 2, GameMode::Hill);
+        let spots = [(0, [0.0, 0.0], 0.0), (1, [15.0, 15.0], 0.0)];
+        let inputs = HashMap::new();
+        let mut round_overs = Vec::new();
+        for tick in 1..=61 * 60u32 {
+            hold(&mut sim, &spots);
+            step_with(&mut sim, &inputs);
+            round_overs.extend(sim.round_over.iter().copied());
+            assert_eq!(sim.hill_holder, 0, "tick {tick}");
+            match tick {
+                1800 => assert_eq!(player(&sim, 0).score, 29, "just under thirty seconds"),
+                1830 => assert_eq!(player(&sim, 0).score, 30, "just over"),
+                3500 => assert!(sim.round_pause == 0.0, "still running"),
+                _ => {}
+            }
+        }
+        assert_eq!(
+            player(&sim, 0).score,
+            HILL_LIMIT,
+            "sixty points in sixty-one seconds"
+        );
+        assert_eq!(player(&sim, 1).score, 0);
+        assert_eq!(player(&sim, 0).frags, 0, "hill points are not frags");
+        assert_eq!(
+            round_overs,
+            vec![(0, false)],
+            "the sixtieth point is the round"
+        );
+        assert!(sim.round_pause > 0.0 && sim.round_pause < ROUND_PAUSE_SECS);
+    }
+
+    #[test]
+    fn a_contested_hill_pays_nobody() {
+        let mut sim = mode_sim(3, 2, GameMode::Hill);
+        let inputs = HashMap::new();
+        for _ in 0..5 * 60 {
+            hold(&mut sim, &[(0, [0.5, 0.0], 0.0), (1, [-0.5, 0.0], 0.0)]);
+            step_with(&mut sim, &inputs);
+            assert_eq!(sim.hill_holder, HILL_CONTESTED);
+        }
+        assert_eq!(player(&sim, 0).score, 0);
+        assert_eq!(player(&sim, 1).score, 0);
+        // The moment 1 steps off, 0 holds it and the clock starts from
+        // zero: a point after a whole second, not before.
+        for tick in 1..=61u32 {
+            hold(&mut sim, &[(0, [0.5, 0.0], 0.0), (1, [15.0, 0.0], 0.0)]);
+            step_with(&mut sim, &inputs);
+            assert_eq!(sim.hill_holder, 0);
+            if tick < 61 {
+                assert_eq!(player(&sim, 0).score, 0, "tick {tick}");
+            }
+        }
+        for _ in 0..10 {
+            hold(&mut sim, &[(0, [0.5, 0.0], 0.0), (1, [15.0, 0.0], 0.0)]);
+            step_with(&mut sim, &inputs);
+        }
+        assert_eq!(player(&sim, 0).score, 1);
+        // A dead body on the hill does not hold it.
+        sim.players[0].alive = false;
+        sim.players[0].respawn_in = RESPAWN_SECS;
+        step_with(&mut sim, &inputs);
+        assert_eq!(sim.hill_holder, HILL_FREE);
+    }
+
+    #[test]
+    fn stepping_off_the_hill_resets_the_second() {
+        let mut sim = mode_sim(3, 1, GameMode::Hill);
+        let inputs = HashMap::new();
+        let on = [(0, [0.0, 0.0], 0.0)];
+        let off = [(0, [10.0, 0.0], 0.0)];
+        for _ in 0..54 {
+            hold(&mut sim, &on);
+            step_with(&mut sim, &inputs);
+        }
+        hold(&mut sim, &off);
+        step_with(&mut sim, &inputs);
+        assert_eq!(sim.hill_holder, HILL_FREE);
+        for _ in 0..54 {
+            hold(&mut sim, &on);
+            step_with(&mut sim, &inputs);
+        }
+        assert_eq!(sim.hill_holder, 0);
+        assert_eq!(player(&sim, 0).score, 0, "two part seconds are no second");
+        for _ in 0..10 {
+            hold(&mut sim, &on);
+            step_with(&mut sim, &inputs);
+        }
+        assert_eq!(player(&sim, 0).score, 1, "and the second one completes");
+    }
+
+    #[test]
+    fn the_hill_is_on_the_dock_and_the_plinth() {
+        let yard = Level::freight_yard();
+        let dock = yard.hill.unwrap();
+        assert!(dock.stands_on([0.0, 0.0], 1.2), "on the dock");
+        assert!(dock.stands_on([3.9, -1.9], 1.2), "at the dock's corner");
+        assert!(
+            !dock.stands_on([0.0, 0.0], 0.0),
+            "at the floor under the king block"
+        );
+        assert!(!dock.stands_on([4.5, 0.0], 1.2), "beside the dock");
+        let city = Level::trench_city();
+        let plinth = city.hill.unwrap();
+        assert!(plinth.stands_on([0.0, 0.0], 2.2), "on the plinth");
+        assert!(
+            !plinth.stands_on([0.0, 0.0], 1.1),
+            "at the sandbags' height"
+        );
+        assert!(!plinth.stands_on([2.0, 0.0], 2.2), "beside the plinth");
+
+        // And the sim agrees, with the level's own cover under the feet:
+        // a body the dock supports holds the hill, the same body at a
+        // spawn does not.
+        for (level, top) in [(yard, 1.2), (city, 2.2)] {
+            let mut sim = Sim::from_level(&level, 5, GameMode::Hill);
+            sim.add_player(0);
+            sim.add_player(1);
+            let inputs = HashMap::new();
+            let away = level.spawn(1);
+            for _ in 0..3 {
+                hold(&mut sim, &[(0, [0.0, 0.0], top), (1, away, 0.0)]);
+                step_with(&mut sim, &inputs);
+            }
+            assert_eq!(sim.hill_holder, 0);
+            assert_eq!(player(&sim, 0).y, top, "the box holds the feet at the top");
+            for _ in 0..3 {
+                hold(&mut sim, &[(0, level.spawn(0), 0.0), (1, away, 0.0)]);
+                step_with(&mut sim, &inputs);
+            }
+            assert_eq!(sim.hill_holder, HILL_FREE);
+        }
+    }
+
+    #[test]
+    fn a_round_ends_at_the_frag_limit_and_restarts_after_the_pause() {
+        // Free for all on one hanging block. Player 0 is one frag short and
+        // the block is spent; the twentieth frag ends the round and, ten
+        // seconds later, the next one starts from nothing.
+        let mut sim = block_sim(1, vec![block(8.0, 8.0, 2.3)]);
+        sim.add_player(0);
+        sim.add_player(1);
+        sim.players[0].score = FFA_FRAG_LIMIT - 1;
+        sim.players[0].frags = FFA_FRAG_LIMIT - 1;
+        sim.players[1].hp = 1;
+        sim.loot[0].respawn_t = 7.0;
+        arm(&mut sim.players[0], 3);
+        assert_eq!(kill_shot(&mut sim, 20), vec![(0, 1)]);
+        assert_eq!(sim.round_over, vec![(0, false)], "the winner, once");
+        assert_eq!(sim.round_pause, ROUND_PAUSE_SECS);
+        assert_eq!(player(&sim, 0).score, FFA_FRAG_LIMIT);
+        assert_eq!(sim.round, 0);
+
+        // The pause: everyone keeps playing (player 0 keeps a round in the
+        // air so the restart has something to clear), nothing else ends.
+        let mut inputs = HashMap::new();
+        inputs.insert(
+            0,
+            PlayerIn {
+                aim: [0.0, 1.0],
+                fire: true,
+                ..Default::default()
+            },
+        );
+        let mut ticks = 0u32;
+        let mut round_overs = 0;
+        while sim.round == 0 {
+            hold(&mut sim, &[(0, [0.0, 0.0], 0.0), (1, [3.0, 0.0], 0.0)]);
+            step_with(&mut sim, &inputs);
+            ticks += 1;
+            round_overs += sim.round_over.len();
+            assert!(ticks <= 602, "the pause never ended");
+            if ticks == 599 {
+                assert!(sim.round_pause > 0.0);
+                assert!(!sim.bullets.is_empty(), "rounds fly during the pause");
+            }
+        }
+        assert_eq!(round_overs, 0, "a round ends once");
+        assert!(
+            (600..=601).contains(&ticks),
+            "the pause is ROUND_PAUSE_SECS to the tick: {ticks}"
+        );
+        assert_eq!(sim.round, 1);
+        assert_eq!(sim.round_pause, 0.0);
+        assert!(sim.bullets.is_empty(), "every round cleared");
+        assert_eq!(sim.loot[0].respawn_t, 0.0, "the block is armed again");
+        assert_eq!(sim.hill_holder, HILL_FREE);
+        for p in &sim.players {
+            assert_eq!(
+                (p.score, p.frags, p.death_count),
+                (0, 0, 0),
+                "player {}",
+                p.id
+            );
+            assert!(p.alive, "player {}", p.id);
+            assert_eq!(
+                (p.hp, p.weapon, p.ammo),
+                (MAX_HP, SIDEARM, weapon_stats(SIDEARM).mag)
+            );
+            assert_eq!(p.reserve, RESERVE_INFINITE);
+            assert_eq!(p.y, 0.0, "back on the floor at a spawn");
+        }
+        // The spawns are the seeded ring's, walked by the respawn rule.
+        assert!(
+            sim.players.iter().all(|p| (0..64).any(|slot| {
+                let s = spawn_point(slot);
+                p.pos[0].to_bits() == s[0].to_bits() && p.pos[1].to_bits() == s[1].to_bits()
+            })),
+            "everyone stands on a spawn point"
+        );
+    }
+
+    #[test]
+    fn nothing_scores_during_the_pause() {
+        // A frag during the pause is a frag and a death, never a point.
+        let mut sim = mode_sim(1, 2, GameMode::Tdm);
+        sim.round_pause = 5.0;
+        sim.players[1].hp = 1;
+        assert_eq!(kill_shot(&mut sim, 20), vec![(0, 1)]);
+        assert_eq!(player(&sim, 0).frags, 1);
+        assert_eq!(player(&sim, 0).score, 0);
+        assert_eq!(sim.team_score, [0, 0]);
+        assert_eq!(player(&sim, 1).death_count, 1);
+        assert!(sim.round_over.is_empty(), "{:?}", sim.round_over);
+        // Alone on the hill during the pause earns nothing either.
+        let mut sim = mode_sim(3, 1, GameMode::Hill);
+        sim.round_pause = 5.0;
+        let inputs = HashMap::new();
+        for _ in 0..120 {
+            hold(&mut sim, &[(0, [0.0, 0.0], 0.0)]);
+            step_with(&mut sim, &inputs);
+        }
+        assert_eq!(sim.hill_holder, 0, "held, but not paid");
+        assert_eq!(player(&sim, 0).score, 0);
+        assert!(
+            sim.round_pause > 0.0 && sim.round_pause < 5.0,
+            "the pause ran"
+        );
     }
 }

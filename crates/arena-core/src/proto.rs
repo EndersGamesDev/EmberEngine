@@ -7,6 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::shooter::HILL_FREE;
+
 /// Protocol v9 adds the reflecting off-hand shield.
 ///
 /// `shield` is `#[serde(default)]` on input and player state, so both directions
@@ -168,7 +170,26 @@ use serde::{Deserialize, Serialize};
 /// name is the one thing that stayed the same. The join gate is exact
 /// equality, so 15 it is: the same rule as every bump before it, paid for
 /// by the frozen v18 page going list-only against a v15 host.
-pub const PROTO_VERSION: u16 = 15;
+///
+/// v16: a mode per lobby, and teams.
+///
+/// `CreateLobby.mode`, `LobbyInfo.mode` and `GameJoined.mode` carry the
+/// rules by name the way the map travels; `PState.team` says which side a
+/// body is on; `State.team_score`, `State.hill` and `State.round_pause`
+/// carry the mode's scoreboard; and `S2C::RoundOver` announces a winner.
+/// Every field is `serde(default)` and decodes everywhere, and that is
+/// not the test. Ask what an old peer DOES. A v15 client in team
+/// deathmatch shoots a teammate and watches the round vanish into them
+/// with no hit, no marker and no kill: it plays a different game. In king
+/// of the hill it watches scores climb with nobody dying, on a hill it
+/// cannot see. And a v16 client on a v15 server creates a lobby with a
+/// mode the server drops, then plays free for all believing it is on a
+/// team. So 16 it is, and the frozen v18 page goes list-only against a
+/// v16 host exactly as at every bump. The map name and the mode name both
+/// travel as strings, so the next mode is additive; `RoundOver` is
+/// dropped by an old `NetChan::poll` as an unknown tag and would not have
+/// bumped on its own.
+pub const PROTO_VERSION: u16 = 16;
 pub const MAX_HANDLE_LEN: usize = 20;
 pub const MAX_LOBBY_LEN: usize = 24;
 pub const MAX_PASSWORD_LEN: usize = 40;
@@ -190,6 +211,10 @@ pub struct LobbyInfo {
     /// not knowing it.
     #[serde(default)]
     pub map: String,
+    /// The `GameMode` this lobby plays, by name (`GameMode::name`), so a
+    /// browser can show it beside the map. Listing only, like `map`.
+    #[serde(default)]
+    pub mode: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -260,6 +285,13 @@ pub struct PState {
     /// start at the instant this state describes instead of at a guess.
     #[serde(default)]
     pub ack_age_ticks: u16,
+    /// 0 (blue) or 1 (red) in team deathmatch; 0 for everyone in every
+    /// other mode. Defaulted, so a pre-v16 server reads as one team of
+    /// nobody, which is exactly the free for all it is running; a v15
+    /// client dropping it is one of the reasons the gate moved
+    /// (`PROTO_VERSION`).
+    #[serde(default)]
+    pub team: u8,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
@@ -308,6 +340,14 @@ pub enum C2S {
         /// yard it would then predict against Trench City.
         #[serde(default)]
         map: String,
+        /// The `GameMode` the lobby plays, by name: `""` or `"ffa"`,
+        /// `"tdm"`, `"hill"`. A name this build does not know is answered
+        /// with `Error("unknown mode")`, and `"hill"` on a level with no
+        /// hill with `Error("this map has no hill")`; neither is silently
+        /// played as something else. Defaulted so a v15 frame decodes to
+        /// free for all, which is the game a v15 client is playing.
+        #[serde(default)]
+        mode: String,
     },
     JoinLobby {
         name: String,
@@ -433,6 +473,13 @@ pub enum S2C {
         /// played, for the reasons at `PROTO_VERSION`.
         #[serde(default)]
         map: String,
+        /// The `GameMode` this lobby plays, by name; the client resolves
+        /// it through `GameMode::from_name` and an empty or unknown name is
+        /// free for all. Defaulted so the frame decodes from a v15 server,
+        /// which the gate stops being played for the reasons at
+        /// `PROTO_VERSION`.
+        #[serde(default)]
+        mode: String,
     },
     PlayerJoined {
         meta: PlayerMeta,
@@ -454,6 +501,33 @@ pub enum S2C {
         /// a level without any.
         #[serde(default)]
         loot: Vec<bool>,
+        /// Frag totals per team in team deathmatch, `[0, 0]` elsewhere and
+        /// on a server that predates teams, which shows no team score.
+        #[serde(default)]
+        team_score: [u32; 2],
+        /// Who holds the hill: `HILL_FREE` when nobody stands on it,
+        /// `HILL_CONTESTED` when two or more do, else the holder's id.
+        /// Defaults to `HILL_FREE` rather than to 0, so a state from a
+        /// server that predates the hill reads as nobody holding it and
+        /// never as player 0 being king.
+        #[serde(default = "hill_free")]
+        hill: u8,
+        /// Seconds left in the pause after a round, 0 while a round runs.
+        /// Defaulted, so a server that never pauses reads as always
+        /// playing.
+        #[serde(default)]
+        round_pause: f32,
+    },
+    /// A round ended, from `Sim.round_over`: `winner` is a player id, or a
+    /// team index when `team` is set, and `scores` is every player's
+    /// `(id, score)` at that instant, so the announcement can name the
+    /// runners-up without waiting for a state. Dropped by a v15 peer's
+    /// `NetChan::poll` as an unknown tag; the pause that follows still
+    /// arrives in `State.round_pause`.
+    RoundOver {
+        winner: u8,
+        team: bool,
+        scores: Vec<(u8, u32)>,
     },
     /// A kill. `killer == victim` is a self-kill (a rocket's own splash)
     /// and the shape is unchanged: a v13 client prints "X fragged X".
@@ -492,6 +566,11 @@ pub enum S2C {
     },
 }
 
+/// `State.hill`'s default: an absent hill is a free one.
+const fn hill_free() -> u8 {
+    HILL_FREE
+}
+
 /// Stable per-player color, by in-lobby id.
 #[must_use]
 pub const fn color_for(id: u8) -> [f32; 3] {
@@ -524,8 +603,13 @@ pub fn sanitize_text(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shooter::{GameMode, HILL_CONTESTED};
 
+    // One round trip per message shape, in one place, so a field added to
+    // the wire is added here too: splitting it by message would only hide
+    // the list.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn json_roundtrip() {
         let s = serde_json::to_string(&C2S::Input {
             seq: 7,
@@ -562,12 +646,14 @@ mod tests {
             name: "yard".into(),
             password: None,
             map: crate::shooter::MAP_FREIGHT_YARD.to_string(),
+            mode: GameMode::Tdm.name().to_string(),
         })
         .unwrap();
         assert!(s.contains("\"map\":\"freight-yard\""), "{s}");
+        assert!(s.contains("\"mode\":\"tdm\""), "{s}");
         let back: C2S = serde_json::from_str(&s).unwrap();
         assert!(
-            matches!(back, C2S::CreateLobby { ref map, .. } if map == crate::shooter::MAP_FREIGHT_YARD)
+            matches!(back, C2S::CreateLobby { ref map, ref mode, .. } if map == crate::shooter::MAP_FREIGHT_YARD && mode == "tdm")
         );
 
         let s = serde_json::to_string(&S2C::State {
@@ -585,14 +671,21 @@ mod tests {
             }],
             pads: vec![true],
             loot: vec![true, false],
+            team_score: [12, 9],
+            hill: HILL_CONTESTED,
+            round_pause: 4.5,
         })
         .unwrap();
         assert!(s.contains("\"loot\":[true,false]"), "{s}");
         assert!(s.contains("\"weapon\":7"), "{s}");
+        assert!(s.contains("\"team_score\":[12,9]"), "{s}");
+        assert!(s.contains("\"hill\":254"), "{s}");
+        assert!(s.contains("\"round_pause\":4.5"), "{s}");
         let back: S2C = serde_json::from_str(&s).unwrap();
         assert!(matches!(
             back,
-            S2C::State { ref loot, ref bullets, .. } if loot == &[true, false] && bullets[0].weapon == 7
+            S2C::State { ref loot, ref bullets, team_score: [12, 9], hill: HILL_CONTESTED, round_pause, .. }
+                if loot == &[true, false] && bullets[0].weapon == 7 && (round_pause - 4.5).abs() < f32::EPSILON
         ));
 
         let info = LobbyInfo {
@@ -602,9 +695,11 @@ mod tests {
             players: 1,
             cap: 8,
             map: crate::shooter::MAP_FREIGHT_YARD.to_string(),
+            mode: GameMode::Hill.name().to_string(),
         };
         let s = serde_json::to_string(&info).unwrap();
         assert!(s.contains("\"map\":\"freight-yard\""), "{s}");
+        assert!(s.contains("\"mode\":\"hill\""), "{s}");
         assert_eq!(serde_json::from_str::<LobbyInfo>(&s).unwrap(), info);
 
         let s = serde_json::to_string(&S2C::GameJoined {
@@ -617,9 +712,11 @@ mod tests {
                 color: color_for(2),
             }],
             map: crate::shooter::MAP_TRENCH_CITY.to_string(),
+            mode: GameMode::Tdm.name().to_string(),
         })
         .unwrap();
         assert!(s.contains("\"map\":\"trench-city\""), "{s}");
+        assert!(s.contains("\"mode\":\"tdm\""), "{s}");
         let back: S2C = serde_json::from_str(&s).unwrap();
         assert!(matches!(
             back,
@@ -627,9 +724,93 @@ mod tests {
                 id: 2,
                 seed: 987_654_321,
                 ref map,
+                ref mode,
                 ..
-            } if map == crate::shooter::MAP_TRENCH_CITY
+            } if map == crate::shooter::MAP_TRENCH_CITY && GameMode::from_name(mode) == Some(GameMode::Tdm)
         ));
+    }
+
+    #[test]
+    fn a_v15_create_lobby_reads_as_free_for_all() {
+        // What a v15 page sends: a map and no mode. The empty name is free
+        // for all, which is the only game a v15 client can play; the gate
+        // is what stops it playing that inside a team game.
+        let old = r#"{"t":"create_lobby","name":"x","password":null,"map":"trench-city"}"#;
+        let back: C2S = serde_json::from_str(old).unwrap();
+        let C2S::CreateLobby { mode, .. } = back else {
+            panic!("expected CreateLobby");
+        };
+        assert_eq!(mode, "", "an absent mode is the empty name");
+        assert_eq!(GameMode::from_name(&mode), Some(GameMode::Ffa));
+        // And a joined frame without one builds the same rules.
+        let old = r#"{"t":"game_joined","id":1,"seed":42,"arena_half":24.0,"players":[],"map":"freight-yard"}"#;
+        let S2C::GameJoined { mode, .. } = serde_json::from_str(old).unwrap() else {
+            panic!("expected GameJoined");
+        };
+        assert_eq!(GameMode::from_name(&mode), Some(GameMode::Ffa));
+    }
+
+    #[test]
+    fn a_state_without_a_hill_reads_as_free() {
+        // A v15 state names no hill, no team score and no pause. The hill
+        // must read as FREE and not as `0`, or a v16 client on an old host
+        // would crown player 0 on a hill nobody is standing on.
+        let old = r#"{"t":"state","tick":3,"players":[],"bullets":[]}"#;
+        let S2C::State {
+            hill,
+            team_score,
+            round_pause,
+            ..
+        } = serde_json::from_str(old).unwrap()
+        else {
+            panic!("expected State");
+        };
+        assert_eq!(hill, HILL_FREE, "an absent hill is a free one");
+        assert_eq!(team_score, [0, 0]);
+        assert_eq!(round_pause, 0.0, "an absent pause is a running round");
+    }
+
+    #[test]
+    fn the_round_over_event_survives_the_codec() {
+        let ev = S2C::RoundOver {
+            winner: 1,
+            team: true,
+            scores: vec![(0, 12), (1, 30), (2, 7)],
+        };
+        let s = serde_json::to_string(&ev).unwrap();
+        assert!(s.contains("\"t\":\"round_over\""), "{s}");
+        assert!(s.contains("\"scores\":[[0,12],[1,30],[2,7]]"), "{s}");
+        let back: S2C = serde_json::from_str(&s).unwrap();
+        assert_eq!(format!("{back:?}"), format!("{ev:?}"));
+        // A v15 peer's net layer drops the unknown tag rather than failing,
+        // which is what makes the event additive on its own.
+        assert!(serde_json::from_str::<S2C>(r#"{"t":"no_such_event"}"#).is_err());
+    }
+
+    #[test]
+    fn a_v15_state_with_a_team_is_why_this_bumps() {
+        // Documentary: a v15 client decodes a v16 team state without
+        // complaint and reads nothing from `team`, so it draws two teams
+        // in eight id colours and shoots at a teammate whose body the
+        // server lets the round pass through. Decoding is not the test.
+        let p: PState = serde_json::from_str(
+            r#"{"id":3,"x":0.0,"z":0.0,"ax":1.0,"az":0.0,"hp":3,"score":0,
+            "alive":true,"crouch":false,"team":1}"#,
+        )
+        .unwrap();
+        assert_eq!(p.team, 1, "decodes fine; decoding is not the test");
+        let old: PState = serde_json::from_str(
+            r#"{"id":3,"x":0.0,"z":0.0,"ax":1.0,"az":0.0,"hp":3,"score":0,
+            "alive":true,"crouch":false}"#,
+        )
+        .unwrap();
+        assert_eq!(old.team, 0, "a v15 state puts everyone on one team");
+        assert_eq!(
+            color_for(0),
+            [0.25, 0.55, 0.95],
+            "blue is the palette's first"
+        );
+        assert_eq!(color_for(1), [0.92, 0.32, 0.28], "red is its second");
     }
 
     #[test]
@@ -673,9 +854,11 @@ mod tests {
             deaths: 1,
             ack: 42,
             ack_age_ticks: 7,
+            team: 1,
         };
         let s = serde_json::to_string(&p).unwrap();
         assert!(s.contains("\"shield\":true"), "{s}");
+        assert!(s.contains("\"team\":1"), "{s}");
         let back: PState = serde_json::from_str(&s).unwrap();
         assert!(back.shield);
         assert_eq!(
