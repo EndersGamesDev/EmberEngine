@@ -58,7 +58,7 @@ echo "== stamping the build ticker =="
 bash deploy/stamp-version.sh
 
 if [ "${EMBER_PAGES_PREBUILT:-}" = 1 ]; then
-    echo "== using four prebuilt wasm bundles from web/pkg =="
+    echo "== using four prebuilt game bundles from web/pkg and the Julibrot lab bundle =="
 else
     echo "== building wasm =="
     cargo build --target wasm32-unknown-unknown --release -p fire --lib
@@ -275,22 +275,6 @@ elif was != proto:
 """)
 EOF
 
-# The checked-in lab loader stays pinned at v=1 for its page contract. Only
-# assembled copies receive the deployment stamp written to server.json above.
-DEPLOY_STAMP="$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["v"])' "$PAGES_DIR/server.json")"
-for loader in index.html main.js worker.js; do
-    assembled="$PAGES_DIR/$LAB_JULIBROT_LIVE/$loader"
-    if ! grep -qE '\?v=1([^0-9]|$)' "$assembled"; then
-        echo "FAILED: Julibrot cache key rewrite matched no ?v=1 token in $loader" >&2
-        exit 1
-    fi
-    "$PY" -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1]); p.write_text(p.read_text(encoding="utf-8").replace("?v=1", "?v=" + sys.argv[2]), encoding="utf-8")' "$assembled" "$DEPLOY_STAMP"
-    if grep -qE '\?v=1([^0-9]|$)' "$assembled"; then
-        echo "FAILED: Julibrot cache key rewrite left ?v=1 in $loader" >&2
-        exit 1
-    fi
-done
-
 # The top-level protocol keys just moved, and the legacy top-level ADDRESS
 # keys are defined against them: `ws` must name a host that speaks the
 # protocol the pages now ship. Recompute them from the host list immediately,
@@ -298,6 +282,29 @@ done
 # instead of leaving every frozen and live page on a host they can no longer
 # join until somebody redeploys a server.
 bash "$REPO_DIR/deploy/publish-host.sh" --book "$PAGES_DIR/server.json" --recompute
+
+# The checked-in lab loader stays pinned at v=1 for its page contract. Only
+# assembled copies receive the final deployment stamp after address recompute.
+DEPLOY_STAMP="$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["v"])' "$PAGES_DIR/server.json")"
+for loader in index.html main.js worker.js; do
+    assembled="$PAGES_DIR/$LAB_JULIBROT_LIVE/$loader"
+    if ! grep -qE '\?v=1([^0-9]|$)' "$assembled"; then
+        echo "FAILED: Julibrot cache key rewrite matched no ?v=1 token in $loader" >&2
+        exit 1
+    fi
+    "$PY" - "$assembled" "$DEPLOY_STAMP" <<'PY'
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1])
+text = p.read_text(encoding="utf-8")
+stamped = re.sub(r"\?v=1(?![0-9])", "?v=" + sys.argv[2], text)
+with open(p, "w", encoding="utf-8", newline="") as fh:
+    fh.write(stamped)
+PY
+    if grep -qE '\?v=1([^0-9]|$)' "$assembled"; then
+        echo "FAILED: Julibrot cache key rewrite left ?v=1 in $loader" >&2
+        exit 1
+    fi
+done
 
 (
     cd "$PAGES_DIR"
