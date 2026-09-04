@@ -1,0 +1,14 @@
+[package]
+name = "ember-julibrot-math"
+edition.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+astro-float = { version = "=0.9.6", default-features = false }
+thiserror.workspace = true
+
+[lints]
+workspace = true

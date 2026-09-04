@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# A fake `wasm-bindgen` for deploy/tests/test-pages.sh: log the invocation and
+# make the two files a web-target invocation would write.
+set -euo pipefail
+
+LOG="${SHIM_LOG:-/dev/null}"
+{ printf 'wasm-bindgen'; for a in "$@"; do printf ' [%s]' "$a"; done; printf '\n'; } >> "$LOG"
+
+OUT=""
+INPUT=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --out-dir) OUT="${2:-}"; shift 2 ;;
+        --target) shift 2 ;;
+        --no-typescript) shift ;;
+        *) INPUT="$1"; shift ;;
+    esac
+done
+[ -n "$OUT" ] && [ -n "$INPUT" ] || { echo "wasm-bindgen shim: missing output or input" >&2; exit 2; }
+stem="$(basename "$INPUT" .wasm)"
+mkdir -p "$OUT"
+printf 'shim js for %s\n' "$stem" > "$OUT/$stem.js"
+printf 'shim wasm for %s\n' "$stem" > "$OUT/${stem}_bg.wasm"

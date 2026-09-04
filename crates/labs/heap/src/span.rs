@@ -47,6 +47,29 @@ pub struct DataSpan {
     handles: Vec<Handle>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SpanIdentity {
+    logical_len: u32,
+    page_records: u32,
+    page_count: u32,
+    first_directory_slot: u32,
+    directory_index: u32,
+    handles: Vec<Handle>,
+}
+
+/// Exact result of a non-mutating single-span allocation trial.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct SpanPlan {
+    /// Physical pages a real allocation would consume.
+    pub pages: u32,
+    /// Square buddy side selected for every page.
+    pub page_class: u16,
+    /// RGBA32F bytes reserved including final-page padding.
+    pub reserved_bytes: u64,
+    /// Contiguous page-handle directory slots consumed.
+    pub directory_slots: u32,
+}
+
 impl DataSpan {
     /// Ordered page handles, validated by generation on every debug CPU access.
     #[must_use]
@@ -92,6 +115,45 @@ impl DataSpan {
     #[must_use]
     pub const fn padding_records(&self) -> u64 {
         self.reserved_records() - self.logical_len as u64
+    }
+
+    pub(crate) fn identity(&self) -> SpanIdentity {
+        SpanIdentity {
+            logical_len: self.logical_len,
+            page_records: self.page_records,
+            page_count: self.page_count,
+            first_directory_slot: self.first_directory_slot,
+            directory_index: self.directory_index,
+            handles: self.handles.clone(),
+        }
+    }
+
+    pub(crate) fn prefix(&self, active_len: u32) -> Result<Self, SpanError> {
+        if active_len == 0 {
+            return Err(SpanError::ZeroLength);
+        }
+        if active_len > self.logical_len {
+            return Err(SpanError::IndexOutOfBounds {
+                index: active_len - 1,
+                logical_len: self.logical_len,
+            });
+        }
+        let page_count = active_len.div_ceil(self.page_records);
+        let handle_count =
+            usize::try_from(page_count).map_err(|_| SpanError::ArithmeticOverflow)?;
+        let handles = self
+            .handles
+            .get(..handle_count)
+            .ok_or(SpanError::DirectoryCorrupt)?
+            .to_vec();
+        Ok(Self {
+            logical_len: active_len,
+            page_records: self.page_records,
+            page_count,
+            first_directory_slot: self.first_directory_slot,
+            directory_index: self.directory_index,
+            handles,
+        })
     }
 }
 
@@ -196,6 +258,30 @@ impl SpanDirectory {
             *slot = None;
         }
         Ok(())
+    }
+
+    fn contains(&self, identity: &SpanIdentity) -> bool {
+        let expected = PackedSpan::new(
+            identity.page_records,
+            identity.page_count,
+            identity.first_directory_slot,
+        );
+        let Some(record) = self.records.get(identity.directory_index as usize) else {
+            return false;
+        };
+        if *record != Some(expected) {
+            return false;
+        }
+        let first = identity.first_directory_slot as usize;
+        let Some(end) = first.checked_add(identity.handles.len()) else {
+            return false;
+        };
+        self.handles.get(first..end).is_some_and(|handles| {
+            handles
+                .iter()
+                .zip(&identity.handles)
+                .all(|(stored, expected)| *stored == Some(*expected))
+        })
     }
 
     /// Packs the whole binding with span records first and raw handle words second.
@@ -309,6 +395,23 @@ impl SpanArena {
         Ok(span)
     }
 
+    /// Trials one exact allocation against a clone, leaving this arena untouched.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same typed capacity, fragmentation, directory, class, or arithmetic failure
+    /// that a real allocation against the current arena would return.
+    pub fn plan_span(&self, logical_len: u32, page_side: u16) -> Result<SpanPlan, SpanError> {
+        let mut trial = self.clone();
+        let span = trial.allocate_one(logical_len, page_side)?;
+        Ok(SpanPlan {
+            pages: span.page_count,
+            page_class: page_side,
+            reserved_bytes: span.reserved_records() * 16,
+            directory_slots: span.page_count,
+        })
+    }
+
     /// Allocates two equal-class spans atomically; failure leaves this arena byte-for-byte logical.
     ///
     /// # Errors
@@ -368,6 +471,16 @@ impl SpanArena {
         }
         Ok(())
     }
+
+    pub(crate) fn validate_header_owner(&self, identity: &SpanIdentity) -> Result<(), SpanError> {
+        if !self.directory.contains(identity) {
+            return Err(SpanError::DirectoryCorrupt);
+        }
+        for handle in &identity.handles {
+            self.heap.resolve(*handle)?;
+        }
+        Ok(())
+    }
 }
 
 /// One static, dynamically selected per-page dispatch uniform.
@@ -390,6 +503,7 @@ pub struct StaticHeaders {
     pub offsets: Vec<u32>,
     /// Runtime-aligned stride in bytes.
     pub stride: u32,
+    owner: SpanIdentity,
 }
 
 impl StaticHeaders {
@@ -425,7 +539,23 @@ impl StaticHeaders {
             bytes,
             offsets,
             stride,
+            owner: span.identity(),
         })
+    }
+
+    /// Builds immutable headers for a dense prefix of a larger allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the prefix is empty, exceeds the span, or its byte layout overflows.
+    pub fn for_prefix(span: &DataSpan, active_len: u32, alignment: u32) -> Result<Self, SpanError> {
+        let mut headers = Self::for_span(&span.prefix(active_len)?, alignment)?;
+        headers.owner = span.identity();
+        Ok(headers)
+    }
+
+    pub(crate) const fn owner(&self) -> &SpanIdentity {
+        &self.owner
     }
 }
 
@@ -512,7 +642,27 @@ pub enum SpanError {
 
 #[cfg(test)]
 mod tests {
-    use super::{DeliveryPlan, SpanArena, SpanError, StaticHeaders, WallTerm};
+    use crate::HeapKind;
+
+    use super::{DeliveryPlan, SpanArena, SpanError, SpanPlan, StaticHeaders, WallTerm};
+
+    fn snapshot(arena: &SpanArena) -> (Vec<crate::PackedDescriptor>, Vec<u32>, usize, usize) {
+        (
+            arena.heap().packed_table(),
+            arena.directory().packed_words(),
+            arena.heap().free_descriptor_count(),
+            arena.heap().free_block_count(HeapKind::Data),
+        )
+    }
+
+    fn allocated_plan(span: &super::DataSpan, page_class: u16) -> SpanPlan {
+        SpanPlan {
+            pages: span.page_count,
+            page_class,
+            reserved_bytes: span.reserved_records() * 16,
+            directory_slots: span.page_count,
+        }
+    }
 
     #[test]
     fn constant_class_span_crosses_layers_by_quotient_and_remainder() {
@@ -557,6 +707,64 @@ mod tests {
     }
 
     #[test]
+    fn single_span_trial_matches_real_success_and_never_mutates() {
+        let mut arena =
+            SpanArena::new(16, 3, 32, 16 * 8 + 4 * 16, 8).expect("arena configuration fits");
+        let before = snapshot(&arena);
+        let trial = arena.plan_span(700, 16).expect("three pages fit");
+        assert_eq!(snapshot(&arena), before);
+        let allocated = arena
+            .allocate_span(700, 16)
+            .expect("the real allocation follows the trial");
+        assert_eq!(trial, allocated_plan(&allocated, 16));
+    }
+
+    #[test]
+    fn single_span_trial_matches_fragmentation_and_directory_run_failures() {
+        let mut fragmented =
+            SpanArena::new(8, 1, 64, 16 * 32 + 4 * 32, 32).expect("arena configuration fits");
+        let blocks = (0..16)
+            .map(|_| {
+                fragmented
+                    .allocate_span(4, 2)
+                    .expect("class-two block fits")
+            })
+            .collect::<Vec<_>>();
+        for index in (0..blocks.len()).step_by(2) {
+            fragmented
+                .free(blocks[index].clone())
+                .expect("alternating block frees");
+        }
+        let before = snapshot(&fragmented);
+        let trial = fragmented.plan_span(16, 4);
+        assert_eq!(snapshot(&fragmented), before);
+        let mut real = fragmented.clone();
+        assert_eq!(
+            trial,
+            real.allocate_span(16, 4)
+                .map(|span| allocated_plan(&span, 4))
+        );
+
+        let mut directory =
+            SpanArena::new(8, 1, 64, 16 * 8 + 4 * 6, 8).expect("arena configuration fits");
+        let first = directory.allocate_span(8, 2).expect("first run fits");
+        let _middle = directory.allocate_span(8, 2).expect("middle run fits");
+        let last = directory.allocate_span(8, 2).expect("last run fits");
+        directory.free(first).expect("first run frees");
+        directory.free(last).expect("last run frees");
+        let before = snapshot(&directory);
+        let trial = directory.plan_span(12, 2);
+        assert_eq!(trial, Err(SpanError::PageDirectoryFull));
+        assert_eq!(snapshot(&directory), before);
+        let mut real = directory.clone();
+        assert_eq!(
+            trial,
+            real.allocate_span(12, 2)
+                .map(|span| allocated_plan(&span, 2))
+        );
+    }
+
+    #[test]
     fn directory_packing_and_static_headers_match_the_ubo_contract() {
         let mut arena =
             SpanArena::new(16, 4, 16, 16 * 4 + 4 * 8, 4).expect("arena configuration fits");
@@ -579,6 +787,35 @@ mod tests {
         );
         arena.free(span).expect("first frees");
         arena.free(other).expect("second frees");
+    }
+
+    #[test]
+    fn dense_prefix_headers_are_immutable_and_stop_at_the_active_tail() {
+        let mut arena =
+            SpanArena::new(16, 4, 16, 16 * 4 + 4 * 8, 4).expect("arena configuration fits");
+        let span = arena
+            .allocate_span(700, 16)
+            .expect("three pages fit in the arena");
+        let before = span.clone();
+        let headers = StaticHeaders::for_prefix(&span, 300, 256).expect("prefix is valid");
+        assert_eq!(headers.offsets, [0, 256]);
+        assert_eq!(headers.bytes.len(), 512);
+        assert_eq!(
+            bytemuck::from_bytes::<[u32; 4]>(&headers.bytes[256..272]),
+            &[256, 44, 0, 0]
+        );
+        assert_eq!(span, before);
+        assert_eq!(
+            StaticHeaders::for_prefix(&span, 0, 256),
+            Err(SpanError::ZeroLength)
+        );
+        assert_eq!(
+            StaticHeaders::for_prefix(&span, 701, 256),
+            Err(SpanError::IndexOutOfBounds {
+                index: 700,
+                logical_len: 700,
+            })
+        );
     }
 
     #[test]

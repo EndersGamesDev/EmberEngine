@@ -8,20 +8,35 @@ pub struct PollCounter {
 }
 
 impl PollCounter {
+    /// Starts a completion observation before its first poll.
+    #[must_use]
     pub const fn new() -> Self {
         Self { polls: 0 }
     }
 
+    /// Number of recorded device polls.
+    #[must_use]
     pub const fn polls(self) -> u32 {
         self.polls
     }
 
+    /// Records one poll without exceeding the fixed bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns the terminal poll count when no further observation is admitted.
     pub const fn record(&mut self) -> Result<u32, u32> {
         if self.polls >= MAX_COMPLETION_POLLS {
             return Err(self.polls);
         }
         self.polls += 1;
         Ok(self.polls)
+    }
+}
+
+impl Default for PollCounter {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

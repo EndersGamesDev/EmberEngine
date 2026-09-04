@@ -13,7 +13,6 @@ use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use bytemuck::Zeroable as _;
 use ember_lab_layer::geometry::{
     Prism, lattice_copy_count, lattice_edge_count, lattice_steps, prism,
 };
@@ -28,10 +27,11 @@ use crate::conformance::{
     NumericComparison, RECORD_BYTES, RECORD_STRIDE, compare_images, compare_records,
     deterministic_indices,
 };
+use crate::executor::texture;
 use crate::selection::{SelectionEpoch, SurfaceOwnership};
 use crate::{
-    BOX_INDICES, ComparatorWork, DataSpan, DialectLimits, DispatchPlan, EqualWorkSignature,
-    FrameUniform, KernelDesc, ModeCFrameUniform, RegisteredKernel, SpanArena, StaticHeaders,
+    BOX_INDICES, ComparatorWork, DataSpan, EqualWorkSignature, ExecutorDispatch, GpuKernel,
+    GpuKernelExecutor, GpuKernelExecutorConfig, KernelDesc, ModeCFrameUniform, RegisteredKernel,
     box_vertices, frame_for, layer_comparator_draw_shader, layer_comparator_kernel, mode_a_records,
     mode_a_shader, mode_c_register, mode_c_shader,
 };
@@ -326,8 +326,7 @@ impl Drop for OwnedSurfaceFrame {
 }
 
 struct HeapDispatch {
-    plan: DispatchPlan,
-    page_side: u16,
+    dispatch: ExecutorDispatch,
     mode: Mode,
 }
 
@@ -354,20 +353,9 @@ struct LatticeLab {
     surface_ownership: Rc<Cell<SurfaceOwnership>>,
     error_scope_ownership: Rc<Cell<SurfaceOwnership>>,
     object: Prism,
-    arena: SpanArena,
-    data: wgpu::Texture,
-    scratch: wgpu::Texture,
-    heap_group: wgpu::BindGroup,
-    descriptor_buffer: wgpu::Buffer,
-    directory_buffer: wgpu::Buffer,
-    header_buffer: wgpu::Buffer,
-    resources_buffer: wgpu::Buffer,
-    frame_buffer: wgpu::Buffer,
-    header_stride: u32,
-    mode_a_kernel: RegisteredKernel,
-    mode_c_kernel: RegisteredKernel,
-    mode_a_compute: wgpu::RenderPipeline,
-    mode_c_compute: wgpu::RenderPipeline,
+    executor: GpuKernelExecutor,
+    mode_a_kernel: GpuKernel,
+    mode_c_kernel: GpuKernel,
     mode_a_draw: wgpu::RenderPipeline,
     mode_c_draw: wgpu::RenderPipeline,
     layer_compute_layout: wgpu::BindGroupLayout,
@@ -422,30 +410,6 @@ async fn yield_to_browser() -> Result<(), LatticeError> {
         .map_err(|error| LatticeError::Mapping(format!("browser yield failed: {error:?}")))
 }
 
-fn texture(
-    device: &wgpu::Device,
-    label: &'static str,
-    side: u32,
-    layers: u32,
-    format: wgpu::TextureFormat,
-    usage: wgpu::TextureUsages,
-) -> wgpu::Texture {
-    device.create_texture(&wgpu::TextureDescriptor {
-        label: Some(label),
-        size: wgpu::Extent3d {
-            width: side,
-            height: side,
-            depth_or_array_layers: layers,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage,
-        view_formats: &[],
-    })
-}
-
 fn rectangular_texture(
     device: &wgpu::Device,
     label: &'static str,
@@ -487,91 +451,6 @@ fn depth_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureVi
             view_formats: &[],
         })
         .create_view(&wgpu::TextureViewDescriptor::default())
-}
-
-fn heap_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-    let uniform = |binding, dynamic, size| wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Uniform,
-            has_dynamic_offset: dynamic,
-            min_binding_size: NonZeroU64::new(size),
-        },
-        count: None,
-    };
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("heap lattice immutable group layout"),
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2Array,
-                    multisampled: false,
-                },
-                count: None,
-            },
-            uniform(1, false, u64::from(DESCRIPTOR_CAPACITY) * 16),
-            uniform(2, false, u64::from(DIRECTORY_BYTES)),
-            uniform(3, true, 16),
-            uniform(4, false, 8 * 16),
-            uniform(5, false, 192),
-        ],
-    })
-}
-
-fn compute_pipeline(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    label: &'static str,
-    source: &str,
-) -> wgpu::RenderPipeline {
-    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some(label),
-        source: wgpu::ShaderSource::Wgsl(source.into()),
-    });
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some(label),
-        bind_group_layouts: &[layout],
-        push_constant_ranges: &[],
-    });
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &module,
-            entry_point: Some("heap_kernel_vertex"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[],
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &module,
-            entry_point: Some("heap_kernel_fragment"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: &[
-                Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba32Float,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                }),
-                Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba32Float,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                }),
-            ],
-        }),
-        primitive: wgpu::PrimitiveState {
-            cull_mode: None,
-            ..Default::default()
-        },
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        multiview: None,
-        cache: None,
-    })
 }
 
 const BOX_ATTRIBUTES: [wgpu::VertexAttribute; 1] = [wgpu::VertexAttribute {
@@ -805,50 +684,6 @@ fn upload_square(
     texture
 }
 
-fn upload_span(
-    queue: &wgpu::Queue,
-    data: &wgpu::Texture,
-    arena: &SpanArena,
-    span: &DataSpan,
-    records: &[[f32; 4]],
-) -> Result<(), LatticeError> {
-    let side = span.page_records.isqrt();
-    for (page, handle) in span.handles().iter().enumerate() {
-        let descriptor = arena
-            .heap()
-            .resolve(*handle)
-            .map_err(|error| LatticeError::Resource(error.to_string()))?;
-        let start = page * span.page_records as usize;
-        let end = records.len().min(start + span.page_records as usize);
-        let mut padded = vec![[0.0_f32; 4]; span.page_records as usize];
-        padded[..end - start].copy_from_slice(&records[start..end]);
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: data,
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: u32::from(descriptor.x),
-                    y: u32::from(descriptor.y),
-                    z: u32::from(descriptor.layer),
-                },
-                aspect: wgpu::TextureAspect::All,
-            },
-            bytemuck::cast_slice(&padded),
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(side * 16),
-                rows_per_image: Some(side),
-            },
-            wgpu::Extent3d {
-                width: side,
-                height: side,
-                depth_or_array_layers: 1,
-            },
-        );
-    }
-    Ok(())
-}
-
 impl LatticeLab {
     async fn new(
         canvas: web_sys::HtmlCanvasElement,
@@ -965,120 +800,45 @@ impl LatticeLab {
         surface.configure(&device, &config);
         let object = prism();
         let records = mode_a_records(&object);
-        let mut arena = SpanArena::new(
-            HEAP_SIDE,
-            HEAP_LAYERS,
-            DESCRIPTOR_CAPACITY,
-            DIRECTORY_BYTES,
-            SPAN_CAPACITY,
+        let mut executor = GpuKernelExecutor::new(
+            Arc::new(device.clone()),
+            Arc::new(queue.clone()),
+            GpuKernelExecutorConfig {
+                heap_side: HEAP_SIDE,
+                heap_layers: HEAP_LAYERS,
+                descriptor_capacity: DESCRIPTOR_CAPACITY,
+                span_capacity: SPAN_CAPACITY,
+                directory_binding_bytes: DIRECTORY_BYTES,
+                scratch_layers: 4,
+                max_header_pages: MAX_HEADER_PAGES,
+                max_header_sets: 3,
+                kernel_uniform_bytes: 192,
+            },
         )
         .map_err(|error| LatticeError::Resource(error.to_string()))?;
-        let base_four = arena
+        let base_four = executor
             .allocate_span(1_200, MODE_A_PAGE)
             .map_err(|error| LatticeError::Resource(error.to_string()))?;
-        let base_fifth = arena
+        let base_fifth = executor
             .allocate_span(1_200, MODE_A_PAGE)
             .map_err(|error| LatticeError::Resource(error.to_string()))?;
-        let edge = arena
+        let edge = executor
             .allocate_span(3_000, MODE_A_PAGE)
             .map_err(|error| LatticeError::Resource(error.to_string()))?;
-        let mode_a_outputs = arena
+        let mode_a_outputs = executor
             .allocate_pair(1_200, MODE_A_PAGE)
             .map_err(|error| LatticeError::Resource(error.to_string()))?;
-        let data = texture(
-            &device,
-            "heap lattice DATA",
-            u32::from(HEAP_SIDE),
-            u32::from(HEAP_LAYERS),
-            wgpu::TextureFormat::Rgba32Float,
-            required_usage,
-        );
-        let scratch = texture(
-            &device,
-            "heap lattice SCRATCH",
-            u32::from(HEAP_SIDE),
-            4,
-            wgpu::TextureFormat::Rgba32Float,
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        );
-        upload_span(&queue, &data, &arena, &base_four, &records.base_four)?;
-        upload_span(&queue, &data, &arena, &base_fifth, &records.base_fifth)?;
-        upload_span(&queue, &data, &arena, &edge, &records.edges)?;
-        let descriptor_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("heap lattice descriptor UBO"),
-            contents: bytemuck::cast_slice(&arena.heap().packed_table()),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-        let directory_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("heap lattice span directory UBO"),
-            contents: bytemuck::cast_slice(&arena.directory().packed_words()),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-        let header_stride = device.limits().min_uniform_buffer_offset_alignment.max(16);
-        let header_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("heap lattice static dispatch headers"),
-            size: u64::from(header_stride) * u64::from(MAX_HEADER_PAGES),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let resources_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("heap lattice step resources"),
-            contents: bytemuck::bytes_of(&[[0_u32; 4]; 8]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-        let frame_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("heap lattice 192-byte frame uniform"),
-            contents: bytemuck::bytes_of(&FrameUniform::zeroed()),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-        let layout = heap_layout(&device);
-        let data_view = data.create_view(&wgpu::TextureViewDescriptor {
-            label: Some("heap lattice full DATA array view"),
-            dimension: Some(wgpu::TextureViewDimension::D2Array),
-            base_array_layer: 0,
-            array_layer_count: Some(u32::from(HEAP_LAYERS)),
-            ..Default::default()
-        });
-        let heap_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("heap lattice one immutable bind group"),
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&data_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: descriptor_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: directory_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &header_buffer,
-                        offset: 0,
-                        size: NonZeroU64::new(16),
-                    }),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: resources_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: frame_buffer.as_entire_binding(),
-                },
-            ],
-        });
-        let limits = DialectLimits {
-            descriptor_capacity: DESCRIPTOR_CAPACITY,
-            span_capacity: SPAN_CAPACITY,
-            handle_capacity: HANDLE_CAPACITY,
-        };
-        let mode_a_kernel = RegisteredKernel::register(
+        executor
+            .write_span(&base_four, bytemuck::cast_slice(&records.base_four))
+            .map_err(|error| LatticeError::Resource(error.to_string()))?;
+        executor
+            .write_span(&base_fifth, bytemuck::cast_slice(&records.base_fifth))
+            .map_err(|error| LatticeError::Resource(error.to_string()))?;
+        executor
+            .write_span(&edge, bytemuck::cast_slice(&records.edges))
+            .map_err(|error| LatticeError::Resource(error.to_string()))?;
+        let limits = executor.dialect_limits();
+        let mode_a_registered = RegisteredKernel::register(
             &KernelDesc {
                 name: "mode_a_rotation",
                 body: crate::MODE_A_ROTATION_KERNEL,
@@ -1091,23 +851,17 @@ impl LatticeLab {
             limits,
         )
         .map_err(|error| LatticeError::Resource(error.to_string()))?;
-        let mode_c_kernel = mode_c_register(MODE_C_PAGE, limits)
+        let mode_c_registered = mode_c_register(MODE_C_PAGE, limits)
             .map_err(|error| LatticeError::Resource(error.to_string()))?;
-        let mode_a_compute = compute_pipeline(
-            &device,
-            &layout,
-            "heap lattice Mode A rotation pipeline",
-            mode_a_kernel.source(),
-        );
-        let mode_c_compute = compute_pipeline(
-            &device,
-            &layout,
-            "heap lattice Mode C exact layer kernel pipeline",
-            mode_c_kernel.source(),
-        );
+        let mode_a_kernel = executor
+            .register_kernel(mode_a_registered)
+            .map_err(|error| LatticeError::Resource(error.to_string()))?;
+        let mode_c_kernel = executor
+            .register_kernel(mode_c_registered)
+            .map_err(|error| LatticeError::Resource(error.to_string()))?;
         let mode_a_draw = draw_pipeline(
             &device,
-            &layout,
+            executor.bind_group_layout(),
             "heap lattice Mode A indexed draw",
             &mode_a_shader(limits),
             "mode_a_vertex",
@@ -1116,7 +870,7 @@ impl LatticeLab {
         );
         let mode_c_draw = draw_pipeline(
             &device,
-            &layout,
+            executor.bind_group_layout(),
             "heap lattice Mode C indexed draw",
             &mode_c_shader(limits),
             "mode_c_vertex",
@@ -1203,20 +957,9 @@ impl LatticeLab {
                 surface_ownership: Rc::new(Cell::new(SurfaceOwnership::default())),
                 error_scope_ownership: Rc::new(Cell::new(SurfaceOwnership::default())),
                 object,
-                arena,
-                data,
-                scratch,
-                heap_group,
-                descriptor_buffer,
-                directory_buffer,
-                header_buffer,
-                resources_buffer,
-                frame_buffer,
-                header_stride,
+                executor,
                 mode_a_kernel,
                 mode_c_kernel,
-                mode_a_compute,
-                mode_c_compute,
                 mode_a_draw,
                 mode_c_draw,
                 layer_compute_layout,
@@ -1244,41 +987,6 @@ impl LatticeLab {
         ))
     }
 
-    fn sync_heap_metadata(&self) {
-        self.queue.write_buffer(
-            &self.descriptor_buffer,
-            0,
-            bytemuck::cast_slice(&self.arena.heap().packed_table()),
-        );
-        self.queue.write_buffer(
-            &self.directory_buffer,
-            0,
-            bytemuck::cast_slice(&self.arena.directory().packed_words()),
-        );
-    }
-
-    fn sync_dispatch(&self, plan: &DispatchPlan, headers: &StaticHeaders) {
-        self.queue.write_buffer(
-            &self.resources_buffer,
-            0,
-            bytemuck::cast_slice(&plan.resource_words),
-        );
-        self.queue
-            .write_buffer(&self.header_buffer, 0, &headers.bytes);
-    }
-
-    fn copy_command_count(plan: &DispatchPlan, page_side: u16) -> u32 {
-        let side = u32::from(page_side);
-        plan.passes
-            .iter()
-            .map(|pass| {
-                let regions = u32::from(pass.valid_length / side > 0)
-                    + u32::from(pass.valid_length % side > 0);
-                regions * pass.destinations.len() as u32
-            })
-            .sum()
-    }
-
     fn select(
         &mut self,
         mode: Mode,
@@ -1297,8 +1005,8 @@ impl LatticeLab {
         self.layer_step = None;
         if let Some(outputs) = self.mode_c_outputs.take() {
             for output in outputs {
-                self.arena
-                    .free(output)
+                self.executor
+                    .free_span(output)
                     .map_err(|error| LatticeError::Resource(error.to_string()))?;
             }
         }
@@ -1315,39 +1023,34 @@ impl LatticeLab {
                     0.0,
                     self.config.width as f32 / self.config.height as f32,
                 );
-                let headers = StaticHeaders::for_span(&self.mode_a_outputs[0], self.header_stride)
+                let headers = self
+                    .executor
+                    .prefix_headers(&self.mode_a_outputs[0], self.mode_a_outputs[0].logical_len)
                     .map_err(|error| LatticeError::Resource(error.to_string()))?;
-                let mut plan = self
-                    .mode_a_kernel
+                let mut dispatch = self
+                    .executor
                     .plan_dispatch(
-                        &self.arena,
+                        &self.mode_a_kernel,
                         &[&self.base_four, &self.base_fifth],
                         &[&self.mode_a_outputs[0], &self.mode_a_outputs[1]],
                         bytemuck::bytes_of(&frame),
-                        &headers,
+                        headers,
                     )
                     .map_err(|error| LatticeError::Resource(error.to_string()))?;
-                plan.resource_words[2] = [self.edge.directory_index, self.edge.logical_len, 0, 0];
-                plan.resource_words[3] = [
-                    self.mode_a_outputs[0].directory_index,
-                    self.mode_a_outputs[0].logical_len,
-                    0,
-                    0,
-                ];
-                plan.resource_words[4] = [
-                    self.mode_a_outputs[1].directory_index,
-                    self.mode_a_outputs[1].logical_len,
-                    0,
-                    0,
-                ];
-                self.sync_heap_metadata();
-                self.sync_dispatch(&plan, &headers);
-                let copy_commands = Self::copy_command_count(&plan, MODE_A_PAGE);
-                self.heap_dispatch = Some(HeapDispatch {
-                    plan,
-                    page_side: MODE_A_PAGE,
-                    mode,
-                });
+                dispatch
+                    .set_resource(2, &self.edge)
+                    .map_err(|error| LatticeError::Resource(error.to_string()))?;
+                dispatch
+                    .set_resource(3, &self.mode_a_outputs[0])
+                    .map_err(|error| LatticeError::Resource(error.to_string()))?;
+                dispatch
+                    .set_resource(4, &self.mode_a_outputs[1])
+                    .map_err(|error| LatticeError::Resource(error.to_string()))?;
+                self.executor
+                    .sync_dispatch(&dispatch)
+                    .map_err(|error| LatticeError::Resource(error.to_string()))?;
+                let copy_commands = dispatch.copy_commands();
+                self.heap_dispatch = Some(HeapDispatch { dispatch, mode });
                 let limiting_term = if requested_edges <= u64::from(u32::MAX)
                     && requested_edges <= u64::from(policy)
                 {
@@ -1394,7 +1097,7 @@ impl LatticeLab {
             Mode::C => {
                 let address_copies = u64::from(u32::MAX) / 3_000;
                 let draw_copies = u64::from(policy.min(u32::MAX)) / 3_000;
-                let heap_copies = self.arena.plan_paired_copies(
+                let heap_copies = self.executor.plan_paired_copies(
                     requested_copies.min(address_copies).min(draw_copies),
                     3_000,
                     MODE_C_PAGE,
@@ -1411,7 +1114,7 @@ impl LatticeLab {
                 let mut reserved_output_bytes = 0;
                 if delivered_edges > 0 {
                     let outputs = self
-                        .arena
+                        .executor
                         .allocate_pair(delivered_edges, MODE_C_PAGE)
                         .map_err(|error| LatticeError::Resource(error.to_string()))?;
                     let frame = frame_for(
@@ -1421,39 +1124,40 @@ impl LatticeLab {
                         self.config.width as f32 / self.config.height as f32,
                     );
                     let uniform = ModeCFrameUniform::from_frame(&frame);
-                    let headers = StaticHeaders::for_span(&outputs[0], self.header_stride)
+                    let headers = self
+                        .executor
+                        .prefix_headers(&outputs[0], outputs[0].logical_len)
                         .map_err(|error| LatticeError::Resource(error.to_string()))?;
-                    let mut plan = self
-                        .mode_c_kernel
+                    let mut dispatch = self
+                        .executor
                         .plan_dispatch(
-                            &self.arena,
+                            &self.mode_c_kernel,
                             &[&self.edge, &self.base_four, &self.base_fifth],
                             &[&outputs[0], &outputs[1]],
                             bytemuck::bytes_of(&uniform),
-                            &headers,
+                            headers,
                         )
                         .map_err(|error| LatticeError::Resource(error.to_string()))?;
-                    plan.resource_words[3] =
-                        [outputs[0].directory_index, outputs[0].logical_len, 0, 0];
-                    plan.resource_words[4] =
-                        [outputs[1].directory_index, outputs[1].logical_len, 0, 0];
-                    compute_passes = plan.passes.len() as u32;
-                    copy_commands = Self::copy_command_count(&plan, MODE_C_PAGE);
-                    gpu_copy_bytes = plan.gpu_copy_bytes;
+                    dispatch
+                        .set_resource(3, &outputs[0])
+                        .map_err(|error| LatticeError::Resource(error.to_string()))?;
+                    dispatch
+                        .set_resource(4, &outputs[1])
+                        .map_err(|error| LatticeError::Resource(error.to_string()))?;
+                    compute_passes = dispatch.plan().passes.len() as u32;
+                    copy_commands = dispatch.copy_commands();
+                    gpu_copy_bytes = dispatch.plan().gpu_copy_bytes;
                     reserved_output_bytes = outputs
                         .iter()
                         .map(|span| span.reserved_records() * 16)
                         .sum();
-                    self.sync_heap_metadata();
-                    self.sync_dispatch(&plan, &headers);
-                    self.heap_dispatch = Some(HeapDispatch {
-                        plan,
-                        page_side: MODE_C_PAGE,
-                        mode,
-                    });
+                    self.executor
+                        .sync_dispatch(&dispatch)
+                        .map_err(|error| LatticeError::Resource(error.to_string()))?;
+                    self.heap_dispatch = Some(HeapDispatch { dispatch, mode });
                     self.mode_c_outputs = Some(outputs);
                 } else {
-                    self.sync_heap_metadata();
+                    self.executor.sync_heap_metadata();
                 }
                 let limiting_term = [
                     ("requested", requested_copies),
@@ -1626,7 +1330,7 @@ impl LatticeLab {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: self.frame_buffer.as_entire_binding(),
+                    resource: self.executor.kernel_uniform_buffer().as_entire_binding(),
                 },
             ],
         });
@@ -1646,7 +1350,7 @@ impl LatticeLab {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: self.frame_buffer.as_entire_binding(),
+                    resource: self.executor.kernel_uniform_buffer().as_entire_binding(),
                 },
             ],
         });
@@ -1663,129 +1367,19 @@ impl LatticeLab {
         })
     }
 
-    fn scratch_view(&self, layer: u32) -> wgpu::TextureView {
-        self.scratch.create_view(&wgpu::TextureViewDescriptor {
-            label: Some("heap lattice one-layer SCRATCH attachment"),
-            dimension: Some(wgpu::TextureViewDimension::D2),
-            base_array_layer: layer,
-            array_layer_count: Some(1),
-            ..Default::default()
-        })
-    }
-
     fn encode_heap_compute(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         dispatch: &HeapDispatch,
     ) -> Result<(), LatticeError> {
-        let pipeline = if dispatch.mode == Mode::A {
-            &self.mode_a_compute
+        let kernel = if dispatch.mode == Mode::A {
+            &self.mode_a_kernel
         } else {
-            &self.mode_c_compute
+            &self.mode_c_kernel
         };
-        let side = u32::from(dispatch.page_side);
-        for page in &dispatch.plan.passes {
-            let views: Vec<_> = page
-                .destinations
-                .iter()
-                .enumerate()
-                .map(|(layer, _)| self.scratch_view(layer as u32))
-                .collect();
-            let attachments: Vec<_> = views
-                .iter()
-                .map(|view| {
-                    Some(wgpu::RenderPassColorAttachment {
-                        view,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })
-                })
-                .collect();
-            {
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("heap dialect page into SCRATCH"),
-                    color_attachments: &attachments,
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                });
-                pass.set_pipeline(pipeline);
-                pass.set_bind_group(0, &self.heap_group, &[page.header_offset]);
-                pass.set_viewport(0.0, 0.0, side as f32, side as f32, 0.0, 1.0);
-                pass.draw(0..3, 0..1);
-            }
-            for (scratch_layer, destination) in page.destinations.iter().enumerate() {
-                let descriptor = self
-                    .arena
-                    .heap()
-                    .resolve(*destination)
-                    .map_err(|error| LatticeError::Resource(error.to_string()))?;
-                let full_rows = page.valid_length / side;
-                let tail = page.valid_length % side;
-                if full_rows > 0 {
-                    encoder.copy_texture_to_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &self.scratch,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d {
-                                x: 0,
-                                y: 0,
-                                z: scratch_layer as u32,
-                            },
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &self.data,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d {
-                                x: u32::from(descriptor.x),
-                                y: u32::from(descriptor.y),
-                                z: u32::from(descriptor.layer),
-                            },
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::Extent3d {
-                            width: side,
-                            height: full_rows,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-                }
-                if tail > 0 {
-                    encoder.copy_texture_to_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &self.scratch,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d {
-                                x: 0,
-                                y: full_rows,
-                                z: scratch_layer as u32,
-                            },
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &self.data,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d {
-                                x: u32::from(descriptor.x),
-                                y: u32::from(descriptor.y) + full_rows,
-                                z: u32::from(descriptor.layer),
-                            },
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::Extent3d {
-                            width: tail,
-                            height: 1,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-                }
-            }
-        }
-        Ok(())
+        self.executor
+            .encode_dispatch(encoder, kernel, &dispatch.dispatch)
+            .map_err(|error| LatticeError::Resource(error.to_string()))
     }
 
     fn encode_layer_compute(&self, encoder: &mut wgpu::CommandEncoder, step: &LayerStep) {
@@ -1874,11 +1468,11 @@ impl LatticeLab {
         match self.heap_dispatch.as_ref().map(|dispatch| dispatch.mode) {
             Some(Mode::A) => {
                 pass.set_pipeline(&self.mode_a_draw);
-                pass.set_bind_group(0, &self.heap_group, &[0]);
+                pass.set_bind_group(0, self.executor.bind_group(), &[0]);
             }
             Some(Mode::C) => {
                 pass.set_pipeline(&self.mode_c_draw);
-                pass.set_bind_group(0, &self.heap_group, &[0]);
+                pass.set_bind_group(0, self.executor.bind_group(), &[0]);
             }
             _ if self.layer_step.is_some() => {
                 let step = self.layer_step.as_ref().expect("checked layer step");
@@ -1985,7 +1579,19 @@ impl LatticeLab {
         generation: u64,
     ) -> Result<(), LatticeError> {
         let uniform = self.frame_uniform(time);
-        self.queue.write_buffer(&self.frame_buffer, 0, &uniform);
+        if let Some(dispatch) = &self.heap_dispatch {
+            let kernel = if dispatch.mode == Mode::A {
+                &self.mode_a_kernel
+            } else {
+                &self.mode_c_kernel
+            };
+            self.executor
+                .write_kernel_uniform(kernel, &uniform)
+                .map_err(|error| LatticeError::Resource(error.to_string()))?;
+        } else {
+            self.queue
+                .write_buffer(self.executor.kernel_uniform_buffer(), 0, &uniform);
+        }
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -2087,17 +1693,18 @@ impl LatticeLab {
                 for (sample, index) in indices.iter().copied().enumerate() {
                     for (field, span) in outputs.iter().enumerate() {
                         let (handle, local) = span
-                            .resolve_record(self.arena.heap(), index)
+                            .resolve_record(self.executor.arena().heap(), index)
                             .map_err(|error| LatticeError::Conformance(error.to_string()))?;
                         let descriptor = self
-                            .arena
+                            .executor
+                            .arena()
                             .heap()
                             .resolve(handle)
                             .map_err(|error| LatticeError::Conformance(error.to_string()))?;
                         let width = u32::from(descriptor.width);
                         Self::copy_record(
                             &mut encoder,
-                            &self.data,
+                            self.executor.data_texture(),
                             wgpu::Origin3d {
                                 x: u32::from(descriptor.x) + local % width,
                                 y: u32::from(descriptor.y) + local / width,
@@ -2761,7 +2368,7 @@ pub async fn start_heap_lattice(canvas: web_sys::HtmlCanvasElement) -> Result<St
         descriptor_capacity: DESCRIPTOR_CAPACITY,
         span_capacity: SPAN_CAPACITY,
         handle_capacity: HANDLE_CAPACITY,
-        header_stride: lab.header_stride,
+        header_stride: lab.executor.capacity_report().header_stride,
         max_texture_dimension_2d: lab.device.limits().max_texture_dimension_2d,
         max_texture_array_layers: lab.device.limits().max_texture_array_layers,
         max_uniform_buffer_binding_size: lab.device.limits().max_uniform_buffer_binding_size,

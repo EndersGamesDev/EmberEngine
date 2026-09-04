@@ -287,7 +287,7 @@ echo "== deploy-pages.sh is the book's OTHER writer, and refuses one too =="
 # lifted out of the script as it ships rather than copied here, so the test
 # cannot drift from what actually runs.
 STAMP="$TMP/pages-stamp.py"
-awk '/^python - /{f=1;next} f && /^EOF$/{exit} f' "$DEPLOY/deploy-pages.sh" > "$STAMP"
+awk '/^"\$PY" - /{f=1;next} f && /^EOF$/{exit} f' "$DEPLOY/deploy-pages.sh" > "$STAMP"
 if [ -s "$STAMP" ] && grep -q 'kings_proto' "$STAMP"; then
     ok "the deploy-pages.sh book writer was extracted"
 else

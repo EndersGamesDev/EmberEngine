@@ -4,6 +4,7 @@
 # generated wasm bindings (built by CI/deploy, not source)
 /web/pkg/
 /web/games/*/*/pkg/
+/web/labs/*/pkg/
 
 # Local AI-orchestration working notes
 /.claude/

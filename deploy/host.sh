@@ -16,12 +16,10 @@
 # git, a Rust toolchain, cloudflared and python3. The first build takes minutes;
 # later ones seconds.
 #
-# WHY THE NAME GOES THROUGH THE ENVIRONMENT. The servers are started with
-# EMBER_HOST_NAME in their environment rather than a `--name` flag, because a
-# host is allowed to stay on an older commit (§7) and an older binary that has
-# never heard of the flag would refuse to start. An unknown environment
-# variable is ignored by every build there has ever been; an unknown flag is
-# a crash loop.
+# WHY THE ARENA AND FIRE NAMES GO THROUGH THE ENVIRONMENT. Those servers are
+# started with EMBER_HOST_NAME rather than a `--name` flag, because a host may
+# stay on an older commit (§7) whose binary never heard of the flag. Kings was
+# introduced with `--name`, so its argv follows its standalone recipe.
 set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -52,9 +50,10 @@ if [ ! -f "$CONF" ]; then
 #   <git url>#<branch>  write host.json there and list it as a mirror
 #EMBER_PUBLISH=none
 
-# Loopback ports the two servers bind. The tunnels are what the world sees.
+# Loopback ports the three servers bind. The tunnels are what the world sees.
 #EMBER_ARENA_PORT=7780
 #EMBER_FIRE_PORT=7781
+#EMBER_KINGS_PORT=7782
 
 # Working directory: source checkout, logs, pid files.
 #EMBER_HOME=$HOME/ember-host
@@ -78,6 +77,7 @@ EMBER_REF="${EMBER_REF:-origin/main}"
 EMBER_PUBLISH="${EMBER_PUBLISH:-none}"
 EMBER_ARENA_PORT="${EMBER_ARENA_PORT:-7780}"
 EMBER_FIRE_PORT="${EMBER_FIRE_PORT:-7781}"
+EMBER_KINGS_PORT="${EMBER_KINGS_PORT:-7782}"
 EMBER_HOME="${EMBER_HOME:-$HOME/ember-host}"
 DEFAULT_TUNNEL_BIN="$HOME/bin/cloudflared"
 EMBER_TUNNEL_BIN="${EMBER_TUNNEL_BIN:-$DEFAULT_TUNNEL_BIN}"
@@ -96,7 +96,9 @@ mkdir -p "$RUN" "$LOGS"
 PY=""
 for py_candidate in python3 python; do
     py_found="$(command -v "$py_candidate" || true)"
-    [ -n "$py_found" ] && "$py_found" -c '' >/dev/null 2>&1 || continue
+    if [ -z "$py_found" ] || ! "$py_found" -c '' >/dev/null 2>&1; then
+        continue
+    fi
     PY="$py_found"
     break
 done
@@ -120,9 +122,9 @@ helper() {
     if [ -f "$SELF_DIR/$1" ]; then echo "$SELF_DIR/$1"; else echo "$SRC/deploy/$1"; fi
 }
 
-# --- the two games ---------------------------------------------------------
+# --- the three games -------------------------------------------------------
 # id, crate the protocol number lives in, binary, and how that binary wants
-# its bind address. The two servers disagree about the flag, which is exactly
+# its bind address. The three servers disagree about the flag, which is exactly
 # the kind of thing that must be stated once rather than remembered twice.
 #
 # The arena's names are read from the CHECKOUT rather than fixed here. It was
@@ -130,21 +132,29 @@ helper() {
 # older than that (§7) — every published arena build up to v11 is on the far
 # side of it. A fixed table meant such a ref could not be built at all:
 # `cargo build -p arena-server` in a tree whose package is `pong-server` dies
-# with "package ID specification did not match any packages". Fire was never
-# renamed, so its names stay literal.
-game_ids() { echo "arena fire"; }
-game_port()  { case "$1" in arena) echo "$EMBER_ARENA_PORT" ;; fire) echo "$EMBER_FIRE_PORT" ;; esac; }
+# with "package ID specification did not match any packages". Fire and Kings
+# were never renamed, so their names stay literal.
+game_ids() { echo "arena fire kings"; }
+game_port() {
+    case "$1" in
+        arena) echo "$EMBER_ARENA_PORT" ;;
+        fire) echo "$EMBER_FIRE_PORT" ;;
+        kings) echo "$EMBER_KINGS_PORT" ;;
+    esac
+}
 arena_is_renamed() { [ -d "$SRC/crates/arena-core" ]; }
 game_crate() {
     case "$1" in
         arena) if arena_is_renamed; then echo arena-core; else echo pong-core; fi ;;
         fire)  echo fire-core ;;
+        kings) echo kings-core ;;
     esac
 }
 game_pkg() {
     case "$1" in
         arena) if arena_is_renamed; then echo arena-server; else echo pong-server; fi ;;
         fire)  echo fire-server ;;
+        kings) echo kings-server ;;
     esac
 }
 game_bin() { game_pkg "$1"; }
@@ -152,6 +162,7 @@ game_bind()  {
     case "$1" in
         arena) echo "--bind 127.0.0.1:$(game_port arena)" ;;
         fire)  echo "127.0.0.1:$(game_port fire)" ;;
+        kings) echo "127.0.0.1:$(game_port kings)" ;;
     esac
 }
 
@@ -183,7 +194,7 @@ proto_of() {
 # stamped again. And a probe that failed to COMPILE was reported as "the server
 # did not answer".
 probe_game() {
-    local id="$1" url="$2" label="${3:-check}" bin
+    local id="$1" url="$2" label="${3:-check}" expect_commit="${4:-}" bin
     case "$id" in
         arena)
             bin="$(target_dir)/release/examples/wsbot"
@@ -191,9 +202,15 @@ probe_game() {
             "$bin" "$url" create "health-$label" - "health-$label" 6 >/dev/null
             ;;
         fire)
-            bin="$(target_dir)/release/examples/probe"
+            bin="$(target_dir)/release/examples/fire-probe"
             [ -x "$bin" ] || die "$bin was not built"
             "$bin" "$url" >/dev/null
+            ;;
+        kings)
+            bin="$(target_dir)/release/examples/kings-probe"
+            [ -x "$bin" ] || die "$bin was not built"
+            [ -n "$expect_commit" ] || die "the kings probe needs the deployed commit"
+            "$bin" "$url" --expect-commit "$expect_commit" >/dev/null
             ;;
     esac
 }
@@ -221,8 +238,12 @@ record_pid() {
     echo "$pid ${st:--}" > "$RUN/$label.pid"
 }
 
-pid_of()   { [ -f "$RUN/$1.pid" ] && cut -d' ' -f1 "$RUN/$1.pid" || true; }
-stamp_of() { [ -f "$RUN/$1.pid" ] && cut -d' ' -s -f2 "$RUN/$1.pid" || true; }
+pid_of() {
+    if [ -f "$RUN/$1.pid" ]; then cut -d' ' -f1 "$RUN/$1.pid"; fi
+}
+stamp_of() {
+    if [ -f "$RUN/$1.pid" ]; then cut -d' ' -s -f2 "$RUN/$1.pid"; fi
+}
 
 alive() {
     local pid stamp now
@@ -239,7 +260,7 @@ alive() {
 }
 
 stop_one() {
-    local label="$1" pid i
+    local label="$1" pid
     pid="$(pid_of "$label")"
     if [ -z "$pid" ] || ! alive "$label"; then
         # Gone, or the number now belongs to something that is not ours.
@@ -247,7 +268,7 @@ stop_one() {
         return 0
     fi
     kill "$pid" 2>/dev/null || true
-    for i in $(seq 1 25); do
+    for _ in $(seq 1 25); do
         if ! kill -0 "$pid" 2>/dev/null; then
             echo "   stopped $label ($pid)"
             rm -f "$RUN/$label.pid"
@@ -278,8 +299,9 @@ stop_all() {
 # line it prints is taken verbatim instead — that is what lets the entire path,
 # publish included, be exercised on loopback with no Cloudflare account.
 wait_for_tunnel() {
-    local id="$1" log="$RUN/tunnel-$id.log" i url
-    for i in $(seq 1 60); do
+    local id="$1" log url
+    log="$RUN/tunnel-$id.log"
+    for _ in $(seq 1 60); do
         url="$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$log" 2>/dev/null | head -1 || true)"
         if [ -n "$url" ]; then echo "wss://${url#https://}"; return 0; fi
         if [ "$EMBER_TUNNEL_BIN" != "$DEFAULT_TUNNEL_BIN" ]; then
@@ -302,13 +324,11 @@ publish_entry() {
     args=(--name "$name" "$@")
     case "$pub" in
         none|"")
-            # Print it and change nothing. Still goes through publish-host.sh
-            # so what is shown is exactly what would be published.
-            local tmp; tmp="$(mktemp -d -t ember-entry-XXXXXX)"
-            bash "$(helper publish-host.sh)" --book "$tmp/host.json" --file host.json "${args[@]}" >/dev/null
+            # Print the local entry and change nothing elsewhere. It already
+            # went through publish-host.sh, so this is exactly what a writer
+            # can fetch with republish-host.sh.
             echo "EMBER_PUBLISH=none, so this entry was NOT published:"
-            cat "$tmp/host.json"
-            rm -rf "$tmp"
+            cat "$RUN/host.json"
             ;;
         upstream)
             bash "$(helper publish-host.sh)" --repo "$EMBER_REPO" --branch gh-pages \
@@ -322,6 +342,16 @@ publish_entry() {
             die "EMBER_PUBLISH='$pub' is not none, upstream, or <git url>#<branch>"
             ;;
     esac
+}
+
+# Always leave the proven, current entry on the host itself. A workstation
+# with the upstream key can fetch this file and republish it; the host never
+# needs that key. Kept separate from publish_entry so an unchanged `update`
+# can refresh the file without pushing or restarting anything.
+write_local_entry() {
+    local name="$1"; shift
+    bash "$(helper publish-host.sh)" --book "$RUN/host.json" --file host.json \
+        --name "$name" "$@" >/dev/null
 }
 
 # Print the published file this host writes to, or nothing if it is out of
@@ -398,11 +428,15 @@ cmd_up() {
         # package: a single multi-package `--example` line has to resolve the
         # target name across packages and is easy to get subtly wrong.
         # shellcheck disable=SC2086
-        $NICE cargo build --release -p "$(game_pkg arena)" -p "$(game_pkg fire)"
+        $NICE cargo build --release -p "$(game_pkg arena)" -p "$(game_pkg fire)" -p "$(game_pkg kings)"
         # shellcheck disable=SC2086
         $NICE cargo build --release -p "$(game_pkg arena)" --example wsbot
         # shellcheck disable=SC2086
         $NICE cargo build --release -p "$(game_pkg fire)" --example probe
+        cp "$(target_dir)/release/examples/probe" "$(target_dir)/release/examples/fire-probe"
+        # shellcheck disable=SC2086
+        $NICE cargo build --release -p "$(game_pkg kings)" --example probe
+        cp "$(target_dir)/release/examples/probe" "$(target_dir)/release/examples/kings-probe"
     ) || die "build failed"
     echo "   built in $(( $(date +%s) - tb ))s"
 
@@ -417,10 +451,19 @@ cmd_up() {
         [ -x "$bin" ] || die "$bin was not built"
         bind="$(game_bind "$id")"
         say "starting $id on 127.0.0.1:$port"
-        # EMBER_HOST_NAME, never --name: see the note at the top of the file.
-        # shellcheck disable=SC2086
-        EMBER_HOST_NAME="$name" RUST_LOG=info \
-            nohup "$bin" $bind >> "$LOGS/$id-server.log" 2>&1 &
+        if [ "$id" = kings ]; then
+            # Kings was born with this flag; its standalone recipe uses it and
+            # the explicit argv is the clearest identity evidence in a ps row.
+            # shellcheck disable=SC2086
+            RUST_LOG=info nohup "$bin" $bind --name "$name" \
+                >> "$LOGS/$id-server.log" 2>&1 &
+        else
+            # EMBER_HOST_NAME, never --name: see the note at the top of the
+            # file. This keeps every historical arena/fire ref runnable.
+            # shellcheck disable=SC2086
+            EMBER_HOST_NAME="$name" RUST_LOG=info \
+                nohup "$bin" $bind >> "$LOGS/$id-server.log" 2>&1 &
+        fi
         record_pid "server-$id" "$!"
         sleep 1
         alive "server-$id" || { tail -20 "$LOGS/$id-server.log" >&2; die "$id server did not stay up"; }
@@ -433,7 +476,7 @@ cmd_up() {
         say "local health check for $id"
         # Loopback first, so a failure at the public URL below is unambiguously
         # the tunnel rather than the server.
-        probe_game "$id" "ws://127.0.0.1:$port" local \
+        probe_game "$id" "ws://127.0.0.1:$port" local "$commit" \
             || die "$id server is listening but did not answer"
     done
     echo "   local probes passed in $(( $(date +%s) - tl ))s"
@@ -480,7 +523,7 @@ cmd_up() {
         say "health check for $id through $url"
         local ok="" attempt
         for attempt in $(seq 1 24); do
-            if probe_game "$id" "$url" public; then ok=1; break; fi
+            if probe_game "$id" "$url" public "$commit"; then ok=1; break; fi
             [ "$attempt" -lt 24 ] && sleep 5
         done
         [ -n "$ok" ] || die "the $id tunnel is up but the server did not answer through it within two minutes"
@@ -488,7 +531,7 @@ cmd_up() {
     done
     echo "   public probes passed in $(( $(date +%s) - tp ))s"
 
-    # WHAT IS RUNNING is recorded as soon as it is proven running — both
+    # WHAT IS RUNNING is recorded as soon as it is proven running — all three
     # servers answered on loopback and through their public addresses — and
     # before the publish, which is a different question. It used to come after,
     # so a host with no push rights on EMBER_REPO (the documented normal case
@@ -505,6 +548,9 @@ cmd_up() {
     for id in $(game_ids); do
         args+=(--game "$id" --url "$(cat "$RUN/$id.url")" --proto "$(proto_of "$id")")
     done
+    write_local_entry "$name" "${args[@]}" \
+        --version "$version" --commit "$commit" \
+        --by "$(id -un)@$(hostname 2>/dev/null || uname -n)"
     # Loud and non-zero, but no longer fatal to the record above: a host absent
     # from the book IS a failure and a wrapper must see it, while `update` must
     # stop mistaking an unpublished host for an undeployed one.
@@ -524,8 +570,22 @@ cmd_update() {
     local rev deployed
     rev="$(resolve_ref)" || die "EMBER_REF='$EMBER_REF' names no commit"
     deployed="$(cat "$RUN/deployed" 2>/dev/null || echo none)"
-    if [ "$rev" = "$deployed" ] && alive server-arena && alive server-fire; then
-        echo "up to date at ${rev:0:7} and both servers are running; nothing to do"
+    local all_up=1 id
+    for id in $(game_ids); do
+        alive "server-$id" || all_up=""
+    done
+    if [ "$rev" = "$deployed" ] && [ -n "$all_up" ]; then
+        local name version commit args=()
+        name="$(bash "$(helper host-name.sh)")"
+        version="r$(git -C "$SRC" rev-list --count HEAD)"
+        commit="$(git -C "$SRC" rev-parse --short HEAD)"
+        for id in $(game_ids); do
+            args+=(--game "$id" --url "$(cat "$RUN/$id.url")" --proto "$(proto_of "$id")")
+        done
+        write_local_entry "$name" "${args[@]}" \
+            --version "$version" --commit "$commit" \
+            --by "$(id -un)@$(hostname 2>/dev/null || uname -n)"
+        echo "up to date at ${rev:0:7} and all three servers are running; nothing to do"
         return 0
     fi
     if [ "$rev" = "$deployed" ]; then
