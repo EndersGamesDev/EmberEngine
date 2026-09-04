@@ -52,6 +52,11 @@ pub struct EngineConfig {
     /// FPS-style mouse capture: clicking the window grabs the cursor
     /// (pointer lock on the web) and mouse-look deltas start flowing.
     pub capture_mouse: bool,
+    /// Whether the window takes the foreground when it opens. True is what a
+    /// player wants. False is for a window nobody is going to look away from
+    /// their own work for: it opens without stealing focus, so the person at
+    /// the machine keeps typing into whatever they were typing into.
+    pub activate: bool,
     /// Extra meshes registered at startup; instances reference them by id
     /// (1..=N, in order — 0 is the built-in cube).
     pub meshes: Vec<crate::renderer::MeshData>,
@@ -62,6 +67,7 @@ impl Default for EngineConfig {
         Self {
             title: "ember".to_string(),
             capture_mouse: false,
+            activate: true,
             meshes: Vec::new(),
         }
     }
@@ -101,7 +107,11 @@ impl<G: EmberGame> ApplicationHandler for App<G> {
         }
         let window = Arc::new(
             event_loop
-                .create_window(Window::default_attributes().with_title(&self.config.title))
+                .create_window(
+                    Window::default_attributes()
+                        .with_title(&self.config.title)
+                        .with_active(self.config.activate),
+                )
                 .expect("failed to create window"),
         );
 

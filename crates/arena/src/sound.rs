@@ -107,11 +107,19 @@ pub enum Sfx {
     ReloadSniper,
     /// A hollow tube slide.
     ReloadRpg,
+    // The v20 footsteps: one boot landing, three variants per gait so a
+    // run is not a machine. `Sfx::step(run, variant)` picks one.
+    StepWalkA,
+    StepWalkB,
+    StepWalkC,
+    StepRunA,
+    StepRunB,
+    StepRunC,
 }
 
 /// Every variant, so both platforms synthesise the same set once and the
 /// tests walk every cue.
-const ALL: [Sfx; 52] = [
+const ALL: [Sfx; 58] = [
     Sfx::Shot,
     Sfx::Hit,
     Sfx::Hurt,
@@ -164,6 +172,12 @@ const ALL: [Sfx; 52] = [
     Sfx::ReloadRevolver,
     Sfx::ReloadSniper,
     Sfx::ReloadRpg,
+    Sfx::StepWalkA,
+    Sfx::StepWalkB,
+    Sfx::StepWalkC,
+    Sfx::StepRunA,
+    Sfx::StepRunB,
+    Sfx::StepRunC,
 ];
 
 /// How many cues one frame may start. A backlogged burst (a hidden tab
@@ -205,9 +219,11 @@ impl Sfx {
     /// remote shot). Being hurt and landing a hit sit between those: each
     /// happens once per event and a crowded frame is exactly when a player
     /// needs to hear that they were shot, so they must not queue behind a
-    /// remote burst's footfalls. Impacts on the world, ricochets and
-    /// casings are decoration and go last, so a crowded frame drops a
-    /// casing before a shot.
+    /// remote burst's footfalls. Impacts on the world, ricochets, casings
+    /// and footsteps are decoration and go last, so a crowded frame drops
+    /// a casing before a shot. A footstep sits there because the next one
+    /// is a fifth of a second away: dropping this one costs a player
+    /// nothing a gunshot's slot would not cost them more.
     #[must_use]
     pub const fn priority(self) -> u8 {
         match self {
@@ -224,8 +240,29 @@ impl Sfx {
             | Self::ImpactWood
             | Self::ImpactSand
             | Self::Ricochet
-            | Self::Casing => 9,
+            | Self::Casing
+            | Self::StepWalkA
+            | Self::StepWalkB
+            | Self::StepWalkC
+            | Self::StepRunA
+            | Self::StepRunB
+            | Self::StepRunC => 9,
             _ => 8,
+        }
+    }
+
+    /// The footstep of a gait: the run's row when `run`, the walk's
+    /// otherwise, in one of the three variants. Anything outside 0..3 wraps
+    /// onto the first, so a caller's hash never has to know the count.
+    #[must_use]
+    pub const fn step(run: bool, variant: u8) -> Self {
+        match (run, variant % 3) {
+            (false, 0) => Self::StepWalkA,
+            (false, 1) => Self::StepWalkB,
+            (false, _) => Self::StepWalkC,
+            (true, 0) => Self::StepRunA,
+            (true, 1) => Self::StepRunB,
+            (true, _) => Self::StepRunC,
         }
     }
 
@@ -334,6 +371,12 @@ impl Sfx {
             Self::ReloadRevolver => "reload_revolver",
             Self::ReloadSniper => "reload_sniper",
             Self::ReloadRpg => "reload_rpg",
+            Self::StepWalkA => "step_walk_a",
+            Self::StepWalkB => "step_walk_b",
+            Self::StepWalkC => "step_walk_c",
+            Self::StepRunA => "step_run_a",
+            Self::StepRunB => "step_run_b",
+            Self::StepRunC => "step_run_c",
         }
     }
 }
@@ -1070,6 +1113,127 @@ fn reload_rpg(seed: u32) -> Vec<f32> {
     finish(&out)
 }
 
+// ---------------------------------------------------------------------------
+// 6.4 A footstep
+// ---------------------------------------------------------------------------
+
+/// One boot landing.
+///
+/// A footstep is three things arriving at once: the heel's edge, a click
+/// off the leather; the grit that goes out from under it, a short band of
+/// noise; and the boot's weight going through the floor, a low tone that
+/// falls as it dies. All of it is over inside a fifth of a second, which is
+/// why a step can be fired at the animation's own cadence without the cues
+/// piling into a drone.
+///
+/// The two gaits are separate rows and not one row at two volumes: a run
+/// lands on a lower, longer body with far more grit and a harder heel, and
+/// that difference is a different sound, not a louder one. The volume
+/// difference is the caller's (`feel::step_volume`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StepParams {
+    /// The boot's weight: where the low tone starts, and how long it rings.
+    pub thud_hz: f32,
+    pub thud_ms: f32,
+    /// The grit under the sole: the noise band and how long it lasts.
+    pub grit_hz: f32,
+    pub grit_ms: f32,
+    pub grit_gain: f32,
+    /// How much of the heel's click is in the mix.
+    pub heel_gain: f32,
+    /// The noise seed, distinct per row so no two steps share a burst.
+    pub seed: u32,
+}
+
+/// The three walking variants: a body's weight put down, not thrown.
+pub const STEPS_WALK: [StepParams; 3] = [
+    StepParams {
+        thud_hz: 105.0,
+        thud_ms: 80.0,
+        grit_hz: 3200.0,
+        grit_ms: 38.0,
+        grit_gain: 0.45,
+        heel_gain: 0.50,
+        seed: 0x2000_0001,
+    },
+    StepParams {
+        thud_hz: 96.0,
+        thud_ms: 86.0,
+        grit_hz: 2800.0,
+        grit_ms: 44.0,
+        grit_gain: 0.50,
+        heel_gain: 0.45,
+        seed: 0x2000_0002,
+    },
+    StepParams {
+        thud_hz: 112.0,
+        thud_ms: 74.0,
+        grit_hz: 3600.0,
+        grit_ms: 32.0,
+        grit_gain: 0.40,
+        heel_gain: 0.55,
+        seed: 0x2000_0003,
+    },
+];
+
+/// The three sprinting variants: lower, longer, grittier, harder.
+pub const STEPS_RUN: [StepParams; 3] = [
+    StepParams {
+        thud_hz: 74.0,
+        thud_ms: 130.0,
+        grit_hz: 2400.0,
+        grit_ms: 60.0,
+        grit_gain: 0.80,
+        heel_gain: 0.85,
+        seed: 0x2000_0011,
+    },
+    StepParams {
+        thud_hz: 68.0,
+        thud_ms: 140.0,
+        grit_hz: 2100.0,
+        grit_ms: 68.0,
+        grit_gain: 0.85,
+        heel_gain: 0.80,
+        seed: 0x2000_0012,
+    },
+    StepParams {
+        thud_hz: 80.0,
+        thud_ms: 120.0,
+        grit_hz: 2700.0,
+        grit_ms: 54.0,
+        grit_gain: 0.75,
+        heel_gain: 0.90,
+        seed: 0x2000_0013,
+    },
+];
+
+/// One row of `STEPS_WALK` or `STEPS_RUN` rendered: the thud with the grit
+/// mixed over it and the heel's click placed at the front, soft-clipped and
+/// normalised like every other cue.
+#[must_use]
+pub fn footstep(p: &StepParams) -> Vec<f32> {
+    let thud_secs = p.thud_ms * 0.001;
+    let grit_secs = p.grit_ms * 0.001;
+    // The weight: a low sine falling a fifth over its length, decaying on
+    // the body curve so the peak stays at the front of the step.
+    let thud = shaped(
+        &sweep(p.thud_hz, p.thud_hz * 0.66, thud_secs),
+        &envelope(0.002, 0.0, thud_secs - 0.002, 5.0),
+    );
+    // The grit: a band of noise that is loudest the instant the sole
+    // arrives and gone a fraction of the thud later.
+    let grit = normalize(
+        &shaped(
+            &bandpass(&noise(grit_secs, p.seed ^ 0x2545_f491), p.grit_hz, 0.8),
+            &envelope(0.0005, 0.0, grit_secs - 0.0005, 3.0),
+        ),
+        1.0,
+    );
+    let mut out = mix(&[(&thud, 1.0), (&grit, p.grit_gain)]);
+    place(&mut out, &click(p.seed, 1200.0, 2.5), 0.0, p.heel_gain);
+    finish(&out)
+}
+
 /// The v18 sweep voice, kept bit for bit for the eighteen cues that
 /// predate the kit: a pitch sweep with exponential decay whose shape morphs
 /// between sine (0) and square (1), with a noise share.
@@ -1221,6 +1385,12 @@ fn synth(sfx: Sfx) -> Vec<f32> {
         Sfx::ReloadRevolver => reload_revolver(seed),
         Sfx::ReloadSniper => reload_sniper(seed),
         Sfx::ReloadRpg => reload_rpg(seed),
+        Sfx::StepWalkA => footstep(&STEPS_WALK[0]),
+        Sfx::StepWalkB => footstep(&STEPS_WALK[1]),
+        Sfx::StepWalkC => footstep(&STEPS_WALK[2]),
+        Sfx::StepRunA => footstep(&STEPS_RUN[0]),
+        Sfx::StepRunB => footstep(&STEPS_RUN[1]),
+        Sfx::StepRunC => footstep(&STEPS_RUN[2]),
     }
 }
 
@@ -1770,6 +1940,69 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), ALL.len());
+    }
+
+    /// The two gaits are two sounds, not one sound at two volumes: every
+    /// run variant is lower in the body and grittier on top than every
+    /// walk variant, no two variants of a gait are the same buffer, and a
+    /// step is over well inside a fifth of a second so firing at the
+    /// animation's cadence cannot turn into a drone.
+    #[test]
+    fn a_run_lands_lower_and_grittier_than_a_walk() {
+        // The fundamental of the body, read off the low-passed cue past
+        // the first 15 ms, where the heel and the front of the grit are:
+        // the crossing rate of a tone is twice its frequency.
+        let body_hz = |b: &[f32]| {
+            let from = sample_count(0.015).min(b.len());
+            zero_crossings_per_second(&lowpass(&b[from..], 150.0)) * 0.5
+        };
+        // The grit, read over the first 40 ms, where every variant of both
+        // gaits still has all of its own.
+        let grit = |b: &[f32]| {
+            let n = sample_count(0.04).min(b.len());
+            rms(&highpass(&b[..n], 1500.0))
+        };
+        let walk: Vec<Vec<f32>> = STEPS_WALK.iter().map(footstep).collect();
+        let run: Vec<Vec<f32>> = STEPS_RUN.iter().map(footstep).collect();
+        for (i, r) in run.iter().enumerate() {
+            for (j, w) in walk.iter().enumerate() {
+                assert!(
+                    body_hz(r) < 0.85 * body_hz(w),
+                    "run {i} body {} Hz is not under walk {j}'s {}",
+                    body_hz(r),
+                    body_hz(w)
+                );
+                assert!(
+                    grit(r) > 1.2 * grit(w),
+                    "run {i} grit {} is not over walk {j}'s {}",
+                    grit(r),
+                    grit(w)
+                );
+            }
+        }
+        // Three distinct variants a side, and the picker hands them out.
+        let all: Vec<Vec<f32>> = walk.iter().chain(run.iter()).cloned().collect();
+        for (i, a) in all.iter().enumerate() {
+            for b in all.iter().skip(i + 1) {
+                assert_ne!(a, b, "two step variants are the same buffer");
+            }
+            assert!(secs(a.len()) < 0.2, "a step runs {} s", secs(a.len()));
+        }
+        for v in 0..3u8 {
+            assert_eq!(synth(Sfx::step(false, v)), walk[usize::from(v)]);
+            assert_eq!(synth(Sfx::step(true, v)), run[usize::from(v)]);
+        }
+        // A variant out of range wraps rather than panicking.
+        assert_eq!(Sfx::step(false, 3), Sfx::StepWalkA);
+        assert_eq!(Sfx::step(true, 200), Sfx::StepRunC);
+        // Six new cues, all in the walked set, all decoration-ranked.
+        for run in [false, true] {
+            for v in 0..3u8 {
+                let s = Sfx::step(run, v);
+                assert!(ALL.contains(&s), "{s:?} is not in ALL");
+                assert_eq!(s.priority(), Sfx::Casing.priority(), "{s:?}");
+            }
+        }
     }
 
     /// A little-endian PCM16 mono 44.1 kHz WAV around `samples`, the

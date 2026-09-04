@@ -22,6 +22,7 @@ use serde::Deserialize;
 use crate::feel::{self, Climb, Cue, GLOW_BLUE, Mark, Play, Puff, Rod, Shake, Tracer, weapon_feel};
 use crate::props::{LOOT_SPENT_TINT, Prop, Props, tex};
 use crate::rounds::{self, Round, Rounds};
+use crate::script;
 use crate::sound::{Audio, BUDGET, Dist, Sfx};
 
 /// What a part does when the weapon fires (v15). Decided by the part's
@@ -1339,6 +1340,15 @@ fn bonk_is_new(last: Option<f32>, now: f32) -> bool {
     last.is_none_or(|t| now - t >= BONK_DEBOUNCE)
 }
 
+/// When a body last sounded a footstep: one clock per remote id and one
+/// for me. Two fields of one idea, kept together so the game's own
+/// constructor does not grow a line per boot.
+#[derive(Default)]
+struct StepClocks {
+    body: HashMap<u8, f32>,
+    own: Option<f32>,
+}
+
 // These flags represent independent input, connection, animation, and UI state transitions.
 #[allow(clippy::struct_excessive_bools)]
 pub struct ShooterGame {
@@ -1462,6 +1472,12 @@ pub struct ShooterGame {
     /// Per-player (yaw, `walk_phase`, amplitude) + previous render position.
     anim: HashMap<u8, (f32, f32, f32)>,
     prev_pos: HashMap<u8, Vec2>,
+    /// The cues the last frame put out, in the order they were played.
+    heard: Vec<Play>,
+    /// When each body last sounded a step, and when I last sounded mine.
+    /// The legs plant far faster than boots do (`feel::WALK_GAP` says how
+    /// much), so the cue needs a clock the phase cannot give it.
+    steps: StepClocks,
     /// Per-player eased crouch amount (0..1) so the pose sinks smoothly.
     crouch_ease: HashMap<u8, f32>,
     // ---- shot-feel feedback (v9.1) ----
@@ -1535,6 +1551,25 @@ pub struct ShooterGame {
     /// A shot of mine was confirmed this frame: the render pass spawns the
     /// plume and the casing at the muzzle, which only it knows.
     own_plume: bool,
+    /// My own (yaw, `walk_phase`, amplitude), advanced by the same
+    /// `puppet::advance_anim` every remote body's legs are advanced by, off
+    /// my predicted movement. My body is the camera and is never posed, but
+    /// my footsteps have to land on the same clock a listener next to me
+    /// hears from my legs, and the camera bob is a time-based sine that
+    /// would put my cadence somewhere else entirely.
+    own_anim: (f32, f32, f32),
+    /// The scripted-input timeline (`EMBER_SCRIPT`), when this client drives
+    /// itself instead of a person. `Some` for the whole run once it is set,
+    /// including after the timeline is spent: a scripted client stays
+    /// hands-off forever, so the operator's keyboard and mouse are never
+    /// read and the cursor is never grabbed. See `crate::script`.
+    script: Option<script::Timeline>,
+    /// Whether the "script starts"/"script is spent" lines have been logged;
+    /// the harness waits on the first (a script's clock starts on its first
+    /// frame, not when the window appears) and reads the second to know the
+    /// timeline finished rather than timing the run.
+    script_began: bool,
+    script_spent: bool,
 }
 
 impl ShooterGame {
@@ -1610,6 +1645,8 @@ impl ShooterGame {
             env_base: 0,
             rig_character: None,
             anim: HashMap::new(),
+            heard: Vec::new(),
+            steps: StepClocks::default(),
             prev_pos: HashMap::new(),
             crouch_ease: HashMap::new(),
             hitmarker_t: 0.0,
@@ -1641,6 +1678,10 @@ impl ShooterGame {
             pending_shots: Vec::new(),
             continuations: Vec::new(),
             own_plume: false,
+            own_anim: (0.0, 0.0, 0.0),
+            script: script::from_env(),
+            script_began: false,
+            script_spent: false,
         }
     }
 
@@ -2177,6 +2218,11 @@ impl EmberGame for ShooterGame {
         // Queue sounds and play at the end under a budget: a backlogged
         // burst (hidden tab catching up) must not blast every buffered cue.
         let mut sfx: Vec<Play> = Vec::new();
+        // Footsteps started this frame, against `feel::STEP_CAP`: my own
+        // first (it is one cue and it is mine), then as many of the lobby's
+        // as the cap allows. A step dropped here costs nothing a player can
+        // act on; the next one is a fraction of a second behind it.
+        let mut steps_queued = 0usize;
         // The listener for every spatial cue this frame: my eye and my
         // right, from last frame's look.
         let ear = {
@@ -2253,9 +2299,15 @@ impl EmberGame for ShooterGame {
                     for m in players {
                         self.metas.insert(m.id, m);
                     }
-                    status_event = Some(
-                        "in the arena — click to capture mouse · WASD move · Shift sprint · C crouch · Q shield (reflects!) · click fire".into(),
-                    );
+                    // A scripted client has no player to instruct, and the
+                    // line must not tell a capture's reader to click: this
+                    // client ignores clicks and never takes the cursor.
+                    status_event = Some(if self.script.is_some() {
+                        "in the arena — driven by EMBER_SCRIPT · keyboard, mouse and pad ignored"
+                            .into()
+                    } else {
+                        "in the arena — click to capture mouse · WASD move · Shift sprint · C crouch · Q shield (reflects!) · click fire".to_string()
+                    });
                 }
                 S2C::PlayerJoined { meta } => {
                     status_event = Some(format!("{} joined the arena", meta.handle));
@@ -2732,8 +2784,32 @@ impl EmberGame for ShooterGame {
             set_status("connection lost — reload to play again");
         }
 
+        // ---- the script, when one drives this client (`EMBER_SCRIPT`) ----
+        // A scripted client is hands-off: every read of `input` below is
+        // behind this tick, so no key, no mouse button, no mouse motion and
+        // no pad reaches the game. That is the whole point — the operator
+        // keeps their machine while a capture runs, and their stray mouse
+        // cannot turn our camera (winit delivers raw mouse motion whether
+        // the window is focused or not). Once spent, the tick is neutral
+        // forever; the client keeps drawing frames and still touches
+        // nothing.
+        let tick = self.script.as_mut().map(|s| s.advance(dt));
+        let scripted = tick.is_some();
+        // Two lines the harness waits on: the first scripted frame (which is
+        // well after the window appears — the GPU context is built in
+        // between — so it, not the window, is when a shot list's clock
+        // starts), and the frame the timeline runs out.
+        if scripted && !self.script_began {
+            self.script_began = true;
+            tracing::info!("EMBER_SCRIPT starts");
+        }
+        if !self.script_spent && self.script.as_ref().is_some_and(script::Timeline::is_done) {
+            self.script_spent = true;
+            tracing::info!("EMBER_SCRIPT is spent; the client stays up and stays hands-off");
+        }
+
         // ---- the pad, merged with the keys: either device at any moment ----
-        let pad = input.pad();
+        let pad = if scripted { None } else { input.pad() };
         if pad.is_some() && self.pad_status_shown != input.pad_status() {
             self.pad_status_shown = input.pad_status();
             status_event = Some(format!("gamepad: {}", self.pad_status_shown));
@@ -2743,7 +2819,10 @@ impl EmberGame for ShooterGame {
         let stick_r = pad.map_or([0.0, 0.0], |p| p.right);
 
         // ---- ADS (RMB or LT): tighter FOV, the look slowed to match ----
-        let aiming = input.mouse_down(MouseButton::Right) || pad.is_some_and(|p| p.lt > 0.5);
+        let aiming = tick.as_ref().map_or_else(
+            || input.mouse_down(MouseButton::Right) || pad.is_some_and(|p| p.lt > 0.5),
+            |t| t.held.down(script::Hold::Ads),
+        );
         let zoom_target = if aiming { 1.0 } else { 0.0 };
         self.zoom += (zoom_target - self.zoom) * (1.0 - (-dt * 14.0).exp());
         // The gun I am drawn with decides the field of view, and the field
@@ -2761,10 +2840,29 @@ impl EmberGame for ShooterGame {
 
         // ---- first-person look: mouse deltas and the right stick -> yaw/pitch ----
         let sens = LOOK_SENS * look_scale;
-        let (mdx, mdy) = input.mouse_delta();
+        // The device's raw motion, or nothing at all while a script drives:
+        // this is the read that used to hand the operator's mouse our camera.
+        let (mdx, mdy) = if scripted {
+            (0.0, 0.0)
+        } else {
+            input.mouse_delta()
+        };
         self.yaw += mdx * sens + stick_r[0] * 2.8 * dt * look_scale;
         self.pitch = (self.pitch - mdy * sens + stick_r[1] * 2.0 * dt * look_scale)
             .clamp(-MAX_PITCH, MAX_PITCH);
+        // A script's `aim`/`turn`/`look` lands once, on the frame its step
+        // begins, and the heading then holds: the timeline sets the angle,
+        // it does not sweep to it.
+        if let Some(t) = tick.as_ref() {
+            match t.yaw {
+                Some(script::Turn::To(y)) => self.yaw = y,
+                Some(script::Turn::By(d)) => self.yaw += d,
+                None => {}
+            }
+            if let Some(p) = t.pitch {
+                self.pitch = p.clamp(-MAX_PITCH, MAX_PITCH);
+            }
+        }
         let (fz, fx) = self.yaw.sin_cos();
         self.aim = Vec2::new(fx, fz);
         let forward2 = self.aim;
@@ -2782,25 +2880,48 @@ impl EmberGame for ShooterGame {
         if stick_l[0].hypot(stick_l[1]) < 0.5 {
             self.sprint_latch = false;
         }
-        let sprint =
-            input.down(KeyCode::ShiftLeft) || input.down(KeyCode::ShiftRight) || self.sprint_latch;
-        let crouch = input.down(KeyCode::KeyC) || pad_down(PadButton::East);
+        let sprint = tick.as_ref().map_or_else(
+            || {
+                input.down(KeyCode::ShiftLeft)
+                    || input.down(KeyCode::ShiftRight)
+                    || self.sprint_latch
+            },
+            |t| t.held.down(script::Hold::Sprint),
+        );
+        let crouch = tick.as_ref().map_or_else(
+            || input.down(KeyCode::KeyC) || pad_down(PadButton::East),
+            |t| t.held.down(script::Hold::Crouch),
+        );
         // Held, like every other intent: there is no local toggle state that
         // a dropped input packet could leave disagreeing with the server.
-        let shield = input.down(KeyCode::KeyQ) || pad_down(PadButton::LB);
+        let shield = tick.as_ref().map_or_else(
+            || input.down(KeyCode::KeyQ) || pad_down(PadButton::LB),
+            |t| t.held.down(script::Hold::Shield),
+        );
         self.shield_raise +=
             ((if shield { 1.0 } else { 0.0 }) - self.shield_raise) * (1.0 - (-dt * 16.0).exp());
         let target_eye = if crouch { EYE_CROUCH } else { EYE_STAND };
         self.eye_h += (target_eye - self.eye_h) * (1.0 - (-dt * 12.0).exp());
 
         // The left stick is already dead-zoned and curved by the platform.
-        let mut mv = forward2 * (input.axis(KeyCode::KeyS, KeyCode::KeyW) + stick_l[1])
-            + right2 * (input.axis(KeyCode::KeyA, KeyCode::KeyD) + stick_l[0]);
+        let (ax_fwd, ax_right) = tick.as_ref().map_or_else(
+            || {
+                (
+                    input.axis(KeyCode::KeyS, KeyCode::KeyW) + stick_l[1],
+                    input.axis(KeyCode::KeyA, KeyCode::KeyD) + stick_l[0],
+                )
+            },
+            |t| (t.held.fwd, t.held.right),
+        );
+        let mut mv = forward2 * ax_fwd + right2 * ax_right;
         if mv.length_squared() > 1.0 {
             mv = mv.normalize();
         }
         let moving = mv.length_squared() > 0.01;
-        let fire = input.mouse_down(MouseButton::Left) || pad.is_some_and(|p| p.rt > 0.5);
+        let fire = tick.as_ref().map_or_else(
+            || input.mouse_down(MouseButton::Left) || pad.is_some_and(|p| p.rt > 0.5),
+            |t| t.held.down(script::Hold::Fire),
+        );
         // The dry trigger: once per press, while the magazine is out for a
         // reload. An empty magazine that is not reloading cannot be seen
         // from here, because the sim starts the reload on the tick the last
@@ -2828,7 +2949,10 @@ impl EmberGame for ShooterGame {
         // held key at 20 Hz dropped taps shorter than 50 ms outright, and a
         // held key re-launched the player off every surface they touched.
         // The pad's South button is the same latch.
-        let space = input.down(KeyCode::Space) || pad_down(PadButton::South);
+        let space = tick.as_ref().map_or_else(
+            || input.down(KeyCode::Space) || pad_down(PadButton::South),
+            |t| t.held.down(script::Hold::Jump),
+        );
         let jump = space && !self.prev_space;
         self.prev_space = space;
         self.jump_pending |= jump;
@@ -2839,7 +2963,10 @@ impl EmberGame for ShooterGame {
         // exactly the reason it resolves bullets there, and a client that
         // guessed a kill would have to un-kill someone when the server
         // disagreed. The swing is sent; the outcome comes back.
-        let e_down = input.down(KeyCode::KeyE) || pad_down(PadButton::RB);
+        let e_down = tick.as_ref().map_or_else(
+            || input.down(KeyCode::KeyE) || pad_down(PadButton::RB),
+            |t| t.held.down(script::Hold::Melee),
+        );
         let melee = e_down && !self.prev_e;
         self.prev_e = e_down;
         self.melee_pending |= melee;
@@ -2920,7 +3047,10 @@ impl EmberGame for ShooterGame {
                 fire,
                 sprint,
                 crouch,
-                reload: input.down(KeyCode::KeyR) || pad_down(PadButton::West),
+                reload: tick.as_ref().map_or_else(
+                    || input.down(KeyCode::KeyR) || pad_down(PadButton::West),
+                    |t| t.held.down(script::Hold::Reload),
+                ),
                 jump: jump_press,
                 // Sent raw: the trigger gate lives in the sim, so `fire` is
                 // reported honestly even while Q is down and the server is
@@ -2943,6 +3073,7 @@ impl EmberGame for ShooterGame {
         // Predict my own movement locally — instant response; the State
         // handler above rebases this on the server's authority.
         if me_alive {
+            let was = self.pred_pos;
             let p = move_circle(
                 self.pred_pos.to_array(),
                 self.pred_y,
@@ -3002,6 +3133,34 @@ impl EmberGame for ShooterGame {
             }
             self.pred_y = y;
             self.pred_vy = vy;
+            // My own boots. The speed is what I actually covered, not what
+            // I asked for, so walking into a wall is silent; the phase is
+            // the leg cycle, so my cadence is the one a listener beside me
+            // hears off my legs, and it rises when I sprint because the
+            // cycle is per metre. Crouch, the air and death are the pure
+            // rule's, in `feel::footstep`, so both peers apply them.
+            let moved = if dt > 0.0 {
+                (self.pred_pos - was) / dt
+            } else {
+                Vec2::ZERO
+            };
+            let prev_phase = self.own_anim.1;
+            ember_engine::puppet::advance_anim(&mut self.own_anim, moved, dt);
+            let mine = feel::Stepper {
+                who: self.my_id.unwrap_or(0),
+                alive: true,
+                crouch,
+                vy,
+                speed: moved.length(),
+                prev_phase,
+                phase: self.own_anim.1,
+                since_last: self.steps.own.map_or(f32::INFINITY, |t| self.time - t),
+            };
+            if let Some((s, v)) = feel::footstep(&mine, 0.0, true) {
+                sfx.push(Play::centre(s, v));
+                self.steps.own = Some(self.time);
+                steps_queued += 1;
+            }
         }
         // Tight smoothing absorbs reconciliation nudges without adding lag.
         let k = 1.0 - (-dt * 25.0).exp();
@@ -3373,23 +3532,51 @@ impl EmberGame for ShooterGame {
                 color.y + (1.0 - color.y) * flash,
                 color.z + (1.0 - color.z) * flash,
             );
+            // The gait, ahead of the pose: the walk phase the legs are
+            // posed from is also the clock this body's footsteps land on,
+            // so a step is heard exactly when a boot reaches the floor and
+            // a sprinter's arrive faster because the cycle is per metre.
+            // Advanced whether or not the rig is loaded, so a lobby drawn
+            // as boxes still has feet.
+            let prev = self.prev_pos.insert(id, pos).unwrap_or(pos);
+            let vel = if dt > 0.0 {
+                (pos - prev) / dt
+            } else {
+                Vec2::ZERO
+            };
+            let slot = self.anim.entry(id).or_insert((0.0, 0.0, 0.0));
+            let prev_phase = slot.1;
+            ember_engine::puppet::advance_anim(slot, vel, dt);
+            let (walk_phase, walk_amp) = (slot.1, slot.2);
+            if steps_queued < feel::STEP_CAP {
+                let at = Vec3::new(pos.x, feet_y, pos.y);
+                let last = self.steps.body.get(&id).copied();
+                let stepper = feel::Stepper {
+                    who: id,
+                    alive: p.alive,
+                    crouch: p.crouch,
+                    vy: p.vy,
+                    speed: vel.length(),
+                    prev_phase,
+                    phase: walk_phase,
+                    since_last: last.map_or(f32::INFINITY, |t| self.time - t),
+                };
+                if let Some((s, v)) = feel::footstep(&stepper, (at - ear.at).length(), false) {
+                    sfx.push(Play::spatial(s, v, at, ear.at, ear.right));
+                    self.steps.body.insert(id, self.time);
+                    steps_queued += 1;
+                }
+            }
             // Jointed rig when parts loaded; textured/plain boxes else.
             if let Some(rc) = &self.rig_character {
-                let prev = self.prev_pos.insert(id, pos).unwrap_or(pos);
-                let vel = if dt > 0.0 {
-                    (pos - prev) / dt
-                } else {
-                    Vec2::ZERO
-                };
-                let slot = self.anim.entry(id).or_insert((0.0, 0.0, 0.0));
-                ember_engine::puppet::advance_anim(slot, vel, dt);
                 let crouch = self.crouch_ease.entry(id).or_insert(0.0);
                 let target = if p.crouch { 1.0 } else { 0.0 };
                 *crouch += (target - *crouch) * (1.0 - (-10.0 * dt).exp());
                 // Bodies face where the player AIMS (shooter convention).
                 let aim_yaw = aim.x.atan2(aim.y);
-                let pose =
-                    ember_engine::rig::walk_pose(slot.1, slot.2, *crouch, self.time, &rc.dims);
+                let pose = ember_engine::rig::walk_pose(
+                    walk_phase, walk_amp, *crouch, self.time, &rc.dims,
+                );
                 ember_engine::rig::push_rig(
                     &mut frame,
                     &rc.parts,
@@ -4004,11 +4191,18 @@ impl EmberGame for ShooterGame {
         // Play the queued cues under a per-frame budget, the important ones
         // first, so a crowded frame drops a footfall and never the boom.
         // After the render pass, because the casing's tink is queued there.
-        if !suppress_sfx && let Some(audio) = self.audio.as_ref() {
+        if !suppress_sfx {
             feel::prioritize_plays(&mut sfx);
-            for p in sfx.into_iter().take(BUDGET) {
-                audio.play_spatial(p.sfx, p.vol, p.pan, p.delay);
+            let heard: Vec<Play> = sfx.into_iter().take(BUDGET).collect();
+            if let Some(audio) = self.audio.as_ref() {
+                for p in &heard {
+                    audio.play_spatial(p.sfx, p.vol, p.pan, p.delay);
+                }
             }
+            // What this frame put out, for the tests: a client built by
+            // `with_chan` has no audio device, so without this the only way
+            // to check a cue is to trust the code that queued it.
+            self.heard = heard;
         }
 
         frame
@@ -4612,6 +4806,96 @@ mod wire_tests {
         assert_eq!(game.pitch, 0.3);
     }
 
+    /// While a script drives the client, the device is not read at all.
+    ///
+    /// The same snapshot — W and Shift and R held, the left button down, a
+    /// pad on full trigger, and 400 x 120 px of raw mouse motion — is fed to
+    /// two clients. The scripted one turns only where its script says, and
+    /// sends only what its script holds; the unscripted one does everything
+    /// the device asked. Remove any one gate in `update` and the scripted
+    /// half fails: the mouse turns the view, or the keys walk it forward, or
+    /// the trigger and the reload come back.
+    #[test]
+    fn a_script_drives_the_client_and_the_device_is_ignored() {
+        let device = InputState::from_parts(
+            &[KeyCode::KeyW, KeyCode::ShiftLeft, KeyCode::KeyR],
+            &[MouseButton::Left],
+            (400.0, 120.0),
+            Some(ember_engine::PadState {
+                rt: 1.0,
+                ..ember_engine::PadState::default()
+            }),
+        );
+        // (yaw, pitch, every Input that reached the wire)
+        let run = |src: Option<&str>| {
+            let (chan, wire) = net::NetChan::detached();
+            let mut game = ShooterGame::with_chan(chan, None, None);
+            game.my_id = Some(2);
+            game.latest.insert(2, me(2));
+            game.was_alive = true;
+            game.script = src.map(|s| script::Timeline::parse(s).expect("the script parses"));
+            for _ in 0..12 {
+                game.update(&device, 0.02);
+            }
+            let mut sent = Vec::new();
+            while let Ok(msg) = wire.try_recv() {
+                if let C2S::Input {
+                    mx,
+                    my,
+                    fire,
+                    crouch,
+                    sprint,
+                    reload,
+                    ..
+                } = msg
+                {
+                    sent.push((mx, my, fire, crouch, sprint, reload));
+                }
+            }
+            (game.yaw, game.pitch, sent)
+        };
+
+        // Face +Z, then crouch-strafe left for the rest of the run.
+        let (yaw, pitch, sent) = run(Some("aim 90; crouch a 5"));
+        assert!(!sent.is_empty(), "the scripted client still sends input");
+        assert!(
+            (yaw - std::f32::consts::FRAC_PI_2).abs() < 1e-5,
+            "yaw {yaw}: the script set the heading and the mouse never moved it"
+        );
+        assert!(
+            pitch.abs() < 1e-6,
+            "pitch {pitch}: 120 px of device motion did not tilt the view"
+        );
+        for &(mx, my, fire, crouch, sprint, reload) in &sent {
+            // Facing +Z, left of that is +X: the script's strafe, not W.
+            assert!(mx > 0.9 && my.abs() < 0.1, "moved ({mx}, {my}), not left");
+            assert!(!fire, "the held trigger and the pad's did not fire");
+            assert!(!sprint, "the held Shift did not sprint");
+            assert!(!reload, "the held R did not reload");
+            assert!(crouch, "the script's crouch is what reached the wire");
+        }
+
+        // The same device with no script: proof the assertions above are not
+        // vacuous — every one of them flips.
+        let (yaw, pitch, sent) = run(None);
+        assert!(
+            yaw.abs() > 1.0,
+            "unscripted, the mouse turns the view: {yaw}"
+        );
+        assert!(
+            pitch.abs() > 0.01,
+            "unscripted, the mouse tilts it: {pitch}"
+        );
+        let last = *sent.last().expect("the unscripted client sends input");
+        // W walks at full speed along whatever heading the mouse left.
+        assert!(
+            (last.0.hypot(last.1) - 1.0).abs() < 0.05,
+            "unscripted, W walks: {last:?}"
+        );
+        assert!(last.2 && last.4 && last.5, "unscripted: fire/sprint/reload");
+        assert!(!last.3, "unscripted, nothing crouches");
+    }
+
     /// The scope view is a frame-level fact: the sniper mostly zoomed draws
     /// the 24 near-black slabs of the mask 0.30 m ahead of the eye at the
     /// scope's own field of view; any other gun, or the sniper still
@@ -5032,6 +5316,94 @@ mod wire_tests {
             .expect("the remote body's barrel tip");
         tip.position + tip.rot * Vec3::X * (BOX_TIP_SIZE.x * 0.5)
     }
+    /// You hear a stranger walk, you hear them run louder, and you do not
+    /// hear them crouch. The whole chain, not the rule alone: a body on the
+    /// wire, the walk cycle its legs are posed from, the earshot and the
+    /// cadence floor, and the cue that came out of the frame.
+    ///
+    /// The listener stands still five metres away. The walker is moved by
+    /// hand between frames at exactly the stance speed for the gait under
+    /// test, which is what the client measures a remote body's speed from.
+    #[test]
+    fn a_stranger_is_heard_walking_and_running_but_never_crouching() {
+        /// How far the stranger walks from the listener, metres.
+        const RING: f32 = 5.0;
+
+        use arena_core::shooter::stance_speed;
+
+        let heard_over = |sprint: bool, crouch: bool| -> Vec<Sfx> {
+            let (chan, _inbox, _wire) = net::NetChan::detached_duplex();
+            let mut game = ShooterGame::with_chan(chan, None, None);
+            game.my_id = Some(2);
+            game.latest.insert(2, me(2));
+            game.was_alive = true;
+            game.set_rounds(500);
+            let input = InputState::default();
+            let speed = stance_speed(sprint, crouch, false);
+            let dt = 1.0 / 60.0;
+            let mut out = Vec::new();
+            // Two seconds of moving at a constant five metres, walked round
+            // the listener rather than past them: a sprinter walked in a
+            // straight line simply leaves earshot sooner and is heard less,
+            // which says nothing about the cadence under test.
+            let mut a = 0.0f32;
+            for _ in 0..120 {
+                a += speed * dt / RING;
+                let (sn, cs) = a.sin_cos();
+                let (x, z) = (RING * cs, RING * sn);
+                let mut p = me(3);
+                p.x = x;
+                p.z = z;
+                p.crouch = crouch;
+                game.latest.insert(3, p);
+                let snap = PSnap { x, z, y: 0.0 };
+                game.from.insert(3, snap);
+                game.to.insert(3, snap);
+                game.update(&input, dt);
+                out.extend(game.heard.iter().map(|p| p.sfx));
+            }
+            out
+        };
+
+        let walking: Vec<Sfx> = heard_over(false, false)
+            .into_iter()
+            .filter(|s| feel::is_step(*s))
+            .collect();
+        let running: Vec<Sfx> = heard_over(true, false)
+            .into_iter()
+            .filter(|s| feel::is_step(*s))
+            .collect();
+        let crouching: Vec<Sfx> = heard_over(false, true)
+            .into_iter()
+            .filter(|s| feel::is_step(*s))
+            .collect();
+
+        assert!(
+            (4..=8).contains(&walking.len()),
+            "two seconds of walking is about six steps, not {}",
+            walking.len()
+        );
+        assert!(
+            running.len() > walking.len(),
+            "a runner is heard more often: {} against {}",
+            running.len(),
+            walking.len()
+        );
+        assert!(
+            crouching.is_empty(),
+            "a crouching body is silent, but {} steps came out",
+            crouching.len()
+        );
+        assert!(
+            walking.iter().all(|s| feel::is_walk_step(*s)),
+            "a walk plays the walk cue"
+        );
+        assert!(
+            running.iter().all(|s| !feel::is_walk_step(*s)),
+            "and a sprint plays the other one"
+        );
+    }
+
     /// A remote shot's light and smoke belong on the gun that is drawn.
     ///
     /// The sim fires from the shooter's eye (`EYE_STAND`, a hand ahead of
