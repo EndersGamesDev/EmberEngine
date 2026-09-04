@@ -1,0 +1,15 @@
+node_modules
+.next
+out
+build
+coverage
+playwright-report
+test-results
+screenshots
+pnpm-lock.yaml
+next-env.d.ts
+PROMPT.md
+
+# von `next dev` generiert und bei jedem Start neu geschrieben
+AGENTS.md
+CLAUDE.md

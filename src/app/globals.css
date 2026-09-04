@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+/*
+ * Design-Tokens aus Abschnitt 6.1 der Spezifikation.
+ * In Tailwind v4 leitet `@theme` aus jeder Farb-Variablen automatisch die
+ * Utilities ab: `--color-bg` -> `bg-bg`, `text-bg`, `border-bg` usw.
+ * `static` sorgt dafuer, dass wirklich alle Tokens als CSS-Variablen im Output
+ * landen, auch die (noch) ungenutzten — sonst schuettelt Tailwind sie weg und
+ * `var(--color-success)` waere zur Laufzeit leer.
+ */
+@theme static {
+  --color-bg: #ffc83d;
+  --color-accent: #f2542d;
+  --color-secondary: #e38a00;
+  --color-ink: #1b1b1b;
+  --color-card: #fff8e7;
+  --color-success: #1f7a3d;
+  --color-error: #c02718;
+}
+
+/*
+ * Die Schrift-Variablen `--font-display` und `--font-body` setzt `next/font`
+ * ueber die Klassen am <html>-Element. Sie stehen deshalb bewusst nicht im
+ * `@theme`-Block: dort wuerden sie sich selbst referenzieren
+ * (`--font-display: var(--font-display), ...`), der Wert waere zyklisch und
+ * damit ungueltig. Die passenden Utilities kommen stattdessen direkt.
+ */
+@utility font-display {
+  font-family: var(--font-display), system-ui, sans-serif;
+}
+
+@utility font-body {
+  font-family: var(--font-body), system-ui, sans-serif;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-body), system-ui, sans-serif;
+}
