@@ -40,7 +40,7 @@ fn reference_texel_bytes(length: u32) -> Result<usize, AppError> {
 
 /// Chooses the coarse backdrop extent within one quarter of the Final record count.
 #[cfg(any(target_arch = "wasm32", test))]
-pub(crate) fn backdrop_extent(final_extent: [u32; 2]) -> Option<[u32; 2]> {
+fn backdrop_extent(final_extent: [u32; 2]) -> Option<[u32; 2]> {
     let [width, height] = final_extent;
     let extent = [width / 2, height / 2];
     if extent.contains(&0) {
