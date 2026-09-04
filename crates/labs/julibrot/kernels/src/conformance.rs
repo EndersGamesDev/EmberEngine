@@ -252,18 +252,35 @@ mod tests {
     };
 
     #[allow(clippy::suboptimal_flops)]
-    fn exact_mandelbrot_escape_index(c: [f64; 2], cap: u32) -> Option<u32> {
+    fn exact_mandelbrot_sample(c: [f64; 2], cap: u32) -> (Option<u32>, f64) {
         let mut z = [0.0_f64; 2];
         for iteration in 0..cap {
-            if z[0] * z[0] + z[1] * z[1] > f64::from(EscapeParams::BAILOUT) {
-                return Some(iteration);
+            let norm_squared = z[0] * z[0] + z[1] * z[1];
+            if norm_squared > f64::from(EscapeParams::BAILOUT) {
+                let smooth = f64::from(iteration) + 1.0 - norm_squared.sqrt().log2().log2();
+                return (Some(iteration), smooth);
             }
             if iteration + 1 == cap {
                 break;
             }
             z = [z[0] * z[0] - z[1] * z[1] + c[0], 2.0 * z[0] * z[1] + c[1]];
         }
-        None
+        (None, -1.0)
+    }
+
+    fn exact_mandelbrot_escape_index(c: [f64; 2], cap: u32) -> Option<u32> {
+        exact_mandelbrot_sample(c, cap).0
+    }
+
+    fn old_sample_is_wrong(old: KernelSample, exact_index: Option<u32>, exact_smooth: f64) -> bool {
+        match (old.escape_index, exact_index) {
+            (Some(old_index), Some(exact_index)) => {
+                old_index.abs_diff(exact_index) > 1
+                    || (f64::from(old.record.smooth_iter) - exact_smooth).abs() > 1.0
+            }
+            (None, None) => false,
+            _ => true,
+        }
     }
 
     #[test]
@@ -603,6 +620,217 @@ mod tests {
             eprintln!(
                 "accumulated_error_standard limit={limit:e} corpus={} flagged={flagged} fraction={fraction:.9} false_positive={false_positive}",
                 standard_cases.len()
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "native kernels measurement harness"]
+    #[allow(
+        clippy::print_stderr,
+        clippy::too_many_lines,
+        reason = "the explicit corrected-Final audit compares every detector flag with binary64"
+    )]
+    fn measures_corrected_final_detector_precision() {
+        const WIDTH: u32 = 960;
+        const HEIGHT: u32 = 540;
+        const CAP: u32 = 512;
+        const UNFLAGGED_SAMPLE: usize = 1_024;
+        let view_centre = [-0.743_643_887_037_151, 0.131_825_904_205_33];
+        let reference_centre = [-0.743_753_114_541_220_1, 0.131_757_366_807_549_76];
+        let plan = precision_for(14.0, WIDTH, CAP).expect("zoom fourteen precision");
+        let centre = BigCentre::from_f64(
+            [0.0, 0.0, reference_centre[0], reference_centre[1]],
+            plan.requested_bits,
+        )
+        .expect("finite corrected reference");
+        let mut builder = ReferenceOrbitBuilder::new(&centre, plan, EscapeParams::new(CAP))
+            .expect("reference builder");
+        let orbit = loop {
+            match builder
+                .step(NonZeroU32::new(CAP).expect("nonzero cap"))
+                .expect("reference step")
+            {
+                OrbitStep::Complete(orbit) => break orbit,
+                OrbitStep::Pending { .. } => {}
+            }
+        };
+        let uniforms = PerturbUniform::pack_referenced(
+            construct_plane(ObjectAngles::IDENTITY).expect("Mandelbrot plane"),
+            &Homography::IDENTITY,
+            [429.5, 269.5],
+            scale_split(14.0, WIDTH).expect("zoom fourteen scale"),
+            GridExtent {
+                width: WIDTH,
+                height: HEIGHT,
+            },
+            EscapeParams::new(CAP),
+            orbit.length,
+            RefinementLevel::Final,
+        )
+        .expect("corrected-Final uniform");
+        let scale = pixel_scale(14.0, WIDTH).expect("Final pixel scale");
+        let corpus = WIDTH * HEIGHT;
+        let mut flagged = Vec::new();
+        let mut production = Vec::with_capacity(usize::try_from(corpus).expect("corpus fits"));
+        for index in 0..corpus {
+            let sample = perturb_scaled_pixel(&uniforms, &orbit.records, index)
+                .expect("corrected-Final pixel");
+            if sample.record.smooth_iter.to_bits() == crate::GLITCH_NUMERIC_FAILURE.to_bits() {
+                flagged.push(index);
+            }
+            production.push(sample);
+        }
+
+        let mut old_wrong = 0_usize;
+        let mut old_right = 0_usize;
+        let mut old_glitch = 0_usize;
+        for &index in &flagged {
+            let old =
+                perturb_scaled_pixel_for_accumulated_error(&uniforms, &orbit.records, index, None)
+                    .expect("detector-disabled pixel");
+            if SampleStatus::from_f32(old.record.status) == Some(SampleStatus::Glitch) {
+                old_glitch += 1;
+                continue;
+            }
+            let x = 0.5_f64.mul_add(-f64::from(WIDTH), f64::from(index % WIDTH) + 0.5);
+            let y = 0.5_f64.mul_add(-f64::from(HEIGHT), f64::from(index / WIDTH) + 0.5);
+            let c = [
+                x.mul_add(scale, view_centre[0]),
+                y.mul_add(scale, view_centre[1]),
+            ];
+            let (exact_index, exact_smooth) = exact_mandelbrot_sample(c, CAP);
+            if old_sample_is_wrong(old, exact_index, exact_smooth) {
+                old_wrong += 1;
+            } else {
+                old_right += 1;
+            }
+        }
+        let comparable = old_wrong + old_right;
+        #[allow(clippy::cast_precision_loss)]
+        let true_positive_fraction = old_wrong as f64 / comparable as f64;
+
+        let mut unflagged_checked = 0_usize;
+        let mut unflagged_wrong = 0_usize;
+        for step in 0..corpus {
+            let index = step * 509 % corpus;
+            if production[usize::try_from(index).expect("sample index fits")]
+                .record
+                .smooth_iter
+                .to_bits()
+                == crate::GLITCH_NUMERIC_FAILURE.to_bits()
+            {
+                continue;
+            }
+            let old =
+                perturb_scaled_pixel_for_accumulated_error(&uniforms, &orbit.records, index, None)
+                    .expect("unflagged detector-disabled pixel");
+            if SampleStatus::from_f32(old.record.status) == Some(SampleStatus::Glitch) {
+                continue;
+            }
+            let x = 0.5_f64.mul_add(-f64::from(WIDTH), f64::from(index % WIDTH) + 0.5);
+            let y = 0.5_f64.mul_add(-f64::from(HEIGHT), f64::from(index / WIDTH) + 0.5);
+            let c = [
+                x.mul_add(scale, view_centre[0]),
+                y.mul_add(scale, view_centre[1]),
+            ];
+            let (exact_index, exact_smooth) = exact_mandelbrot_sample(c, CAP);
+            unflagged_wrong += usize::from(old_sample_is_wrong(old, exact_index, exact_smooth));
+            unflagged_checked += 1;
+            if unflagged_checked == UNFLAGGED_SAMPLE {
+                break;
+            }
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let false_negative_fraction = unflagged_wrong as f64 / unflagged_checked as f64;
+        eprintln!(
+            "corrected_final_precision limit={ACCUMULATED_ERROR_LIMIT:e} corpus={corpus} flagged={} old_wrong={old_wrong} old_right={old_right} old_glitch={old_glitch} true_positive_fraction={true_positive_fraction:.9} unflagged_checked={unflagged_checked} unflagged_wrong={unflagged_wrong} false_negative_fraction={false_negative_fraction:.9}",
+            flagged.len()
+        );
+
+        let pin_centre = BigCentre::from_f64(
+            [0.0, 0.0, view_centre[0], view_centre[1]],
+            plan.requested_bits,
+        )
+        .expect("finite pin reference");
+        let mut pin_builder = ReferenceOrbitBuilder::new(&pin_centre, plan, EscapeParams::new(CAP))
+            .expect("pin reference builder");
+        let pin_orbit = loop {
+            match pin_builder
+                .step(NonZeroU32::new(CAP).expect("nonzero cap"))
+                .expect("pin reference step")
+            {
+                OrbitStep::Complete(orbit) => break orbit,
+                OrbitStep::Pending { .. } => {}
+            }
+        };
+        let pin_uniforms = PerturbUniform::pack(
+            construct_plane(ObjectAngles::IDENTITY).expect("Mandelbrot plane"),
+            &Homography::IDENTITY,
+            scale_split(14.0, WIDTH).expect("zoom fourteen scale"),
+            GridExtent {
+                width: WIDTH,
+                height: HEIGHT,
+            },
+            EscapeParams::new(CAP),
+            41,
+            RefinementLevel::Final,
+        )
+        .expect("pin uniform");
+        for limit in [3.0e-3_f32, 1.0e-2_f32, 3.0e-2_f32] {
+            let pin = perturb_scaled_pixel_for_accumulated_error(
+                &pin_uniforms,
+                &pin_orbit.records,
+                696,
+                Some(limit),
+            )
+            .expect("pin pixel");
+            let mut candidate_flagged = 0_usize;
+            let mut candidate_wrong = 0_usize;
+            let mut candidate_right = 0_usize;
+            let mut candidate_old_glitch = 0_usize;
+            for index in 0..corpus {
+                let sample = perturb_scaled_pixel_for_accumulated_error(
+                    &uniforms,
+                    &orbit.records,
+                    index,
+                    Some(limit),
+                )
+                .expect("candidate-bound pixel");
+                if sample.record.smooth_iter.to_bits() != crate::GLITCH_NUMERIC_FAILURE.to_bits() {
+                    continue;
+                }
+                candidate_flagged += 1;
+                let old = perturb_scaled_pixel_for_accumulated_error(
+                    &uniforms,
+                    &orbit.records,
+                    index,
+                    None,
+                )
+                .expect("candidate detector-disabled pixel");
+                if SampleStatus::from_f32(old.record.status) == Some(SampleStatus::Glitch) {
+                    candidate_old_glitch += 1;
+                    continue;
+                }
+                let x = 0.5_f64.mul_add(-f64::from(WIDTH), f64::from(index % WIDTH) + 0.5);
+                let y = 0.5_f64.mul_add(-f64::from(HEIGHT), f64::from(index / WIDTH) + 0.5);
+                let c = [
+                    x.mul_add(scale, view_centre[0]),
+                    y.mul_add(scale, view_centre[1]),
+                ];
+                let (exact_index, exact_smooth) = exact_mandelbrot_sample(c, CAP);
+                if old_sample_is_wrong(old, exact_index, exact_smooth) {
+                    candidate_wrong += 1;
+                } else {
+                    candidate_right += 1;
+                }
+            }
+            let candidate_comparable = candidate_wrong + candidate_right;
+            #[allow(clippy::cast_precision_loss)]
+            let false_positive_fraction = candidate_right as f64 / candidate_comparable as f64;
+            eprintln!(
+                "corrected_final_candidate limit={limit:e} flagged={candidate_flagged} old_wrong={candidate_wrong} old_right={candidate_right} old_glitch={candidate_old_glitch} false_positive_fraction={false_positive_fraction:.9} pin_status={} pin_rebases={}",
+                pin.record.status, pin.record.rebase_count
             );
         }
     }
