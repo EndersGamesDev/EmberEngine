@@ -108,7 +108,9 @@ Four facts separate the three ways the reference path can go quiet, because the 
 
 The loop reports its own liveness on the same terms: `refresh_status` names the terminal state of the last completed turn, `transient_fence_refusals` counts the bounded fence refusals the loop retried rather than died on, `last_transient_refusal` renders the newest of them as its typed text, `presented_view_stale` says whether the image on the canvas belongs to an older requested view than the one now requested, and `loop_stopped_reason` is absent until the loop stops and then carries the one typed cause it stopped for. None of these is a measurement and none is ever given a number that was not observed.
 
-Aggregate rebase totals remain `unavailable` during normal gather-only rendering. Every Final requests numeric `glitch_pixel_count` from present's status census; Preview and Interactive report it as unavailable, and a census callback that has not succeeded when the independent scene fence completes leaves the optional fact unavailable without delaying or refusing the picture.
+Aggregate rebase totals remain `unavailable` during normal gather-only rendering. Every Final requests numeric `glitch_pixel_count` from present's census; Preview and Interactive report it as unavailable, and a census callback that has not succeeded when the independent scene fence completes leaves the optional fact unavailable without delaying or refusing the picture.
+
+The same census names one reference candidate per completed level, and app uses it to choose the reference point. The reference is not required to be the navigation centre: the centre is where the view is, while the reference is only the orbit perturbation is expanded around, and a reference whose own orbit ends before a level's cap turns every record that outlives it into a glitch. On a completed level whose cap is strictly longer than the accepted orbit, app requests a new orbit at the candidate's pixel through `ViewerController::request_reference_for_pixel`, which moves the orbit point without moving the navigation centre and leaves the resulting displacement in HOT's `centre_from_reference_px`; the strict comparison is what makes the exchange monotone, because only a grid whose cap outlasts the accepted orbit can name a record certifying a longer one, and it stops the moment the reference outlasts the level. At most four such requests are made per accepted navigation, so a grid whose glitches have another cause cannot drive an unbounded chase, and a refused request simply leaves the Final delivered with its glitches counted.
 
 App publishes `horizon_pixels`/`horizon_fraction`, `uncertain_pixels`/`uncertain_fraction`, `edge_on`, and `map_condition_number`. PictureFast samples and paints positive-denominator MapUncertain pixels; Deterministic may refuse them. Edge-on becomes an all-sky scene, and a completed scene paints every surface pixel as mesh or exterior sky.
 
@@ -463,7 +465,7 @@ The executor is extraction, not a fork or new backend abstraction; if implementa
 |Never hang|Worker yields, four-second buffer return, 4,096 GPU polls, 30-second fences/suites, finite timer probes, cancellation and checked generations bound progress.|
 |Arbitrary zoom|Scaled perturbation carries mantissa and signed exponent and never uploads a tiny absolute f32 scale.|
 |Math evidence|Astro-float remains selected; hand-written f64 stays for navigation and warp unless its binding oracle fails.|
-|Austere authority|One world, one image scene pass plus warp and a Final-only status census, one heap class, no tick, DAG, shared-memory path, second reference, WebGPU, or gameplay truth.|
+|Austere authority|One world, one image scene pass plus warp and one per-level status and reference census, one heap class, no tick, DAG, shared-memory path, regional second-reference repair, WebGPU, or gameplay truth.|
 |Versioned deployment|One ABI value pins page, glue, wasm, worker and JBL1; mismatch refuses before orbit transfer and deploy is atomic.|
 
 ## 5. Oracles and tests
@@ -554,7 +556,8 @@ The refined app estimate is approximately 2,710 net new lines including the Phas
 
 ## 8. Unresolved for implementation review
 
-- Backlog: second-reference correction for a real glitch from an otherwise current orbit is deferred because it requires cluster selection, another worker orbit, regional rerender, and merge ownership; its minimum cost is one additional high-precision reference computation and one regional kernel/presentation pass per corrected cluster, while the current contract reports and paints those residual pixels diagnostically.
+- The reference-exhaustion case is now corrected by choice of the primary reference: the census candidate replaces a reference the level outlasts, and the harness pin drives the exact zoom-14 seahorse row from a reference exhausted at 41 records, through two census references, to a delivered Final with zero glitches and an orbit as long as the frame's maximum count.
+- Backlog: regional second-reference correction of a residual cluster is still deferred because it requires cluster selection, another worker orbit, regional rerender, and merge ownership; its minimum cost is one additional high-precision reference computation and one regional kernel/presentation pass per corrected cluster, while the current contract reports and paints those residual pixels diagnostically.
 - The 250,000-microsecond credit and zoom-14 switch are accepted policies without browser field evidence; implementation may not silently tune them.
 - The concrete release script for atomic page/glue/wasm/worker publication remains to be selected, although ABI and refusal semantics are fixed.
 - Hidden-page suspension can delay JavaScript before it observes a 30-second or four-second deadline; the first resumed poll refuses, but wasm cannot bound unscheduled browser time.

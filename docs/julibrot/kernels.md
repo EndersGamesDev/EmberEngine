@@ -377,7 +377,7 @@ Dispatch walls, scene walls, and poll counts are browser facts measured by app a
 |Reference replacement could pair new metadata with old DATA records.|Generation-tagged upload fixtures delay publication until data and resource words are queued, then deliberately dispatch stale generations and require `StaleReference`.|
 |Extracting the paid GPU executor or prefix helper could accidentally fork heap semantics.|An integration oracle runs the heap golden and Julibrot dispatch through the same executor type and compares bind-group identity, full and prefix header bytes, copy regions, capacity facts, and typed failures; a non-visibility extraction stops the app lane.|
 |RGBA32F or copy usage may be absent despite nominal WebGL2.|Initialization checks live format usages and the standing output-path golden; refusal names the adapter, backend, and failed usage.|
-|A status-one region reaches Final without an observable count.|Present's Final-only packed census publishes the numeric count when its optional mapping is ready at scene completion and always retains the per-pixel orange diagnostic.|
+|A status-one region reaches Final without an observable count.|Present's packed census publishes the numeric count when its optional mapping is ready at scene completion and always retains the per-pixel orange diagnostic.|
 
 ## 7. Implementation phases and line budget
 
@@ -421,7 +421,8 @@ The corpus covers the zoom-14 boundary, zooms 40, 80, 100, 256, 512, and the las
 
 - Backlog owner decision: shallow acceptance retains the last deep reference so its picture can support reprojection while replacement work is pending; clearing `current_orbit` and `accepted_reference_zoom_log2` there would make stale perturbation dispatch unrepresentable, at the cost of forfeiting that retained deep source, so the generation-and-zoom dispatch guard remains the chosen safety wall.
 
-- Backlog: a reference can legitimately end before a nearby pixel escapes even when its generation and zoom match; second-reference correction is deferred because it needs region selection and merge ownership, and costs at least one additional high-precision worker orbit plus a regional kernel and presentation pass per corrected cluster. Until then v1 exposes the exact count and orange diagnostic without confusing it with a contract violation.
+- A reference can legitimately end before a nearby pixel escapes even when its generation and zoom match. That case is now corrected by choice of the primary reference rather than by a second one: present's census ranks every record of a completed grid, a record that never escaped within the grid's cap certifies an orbit at least as long as that cap, and app moves the orbit point onto it whenever the level outlasts the accepted orbit. Rebasing means the corrected reference need not be as long as the frame's own maximum count for the picture to come out clean, but a reference that reaches the cap is the outcome the pinned row converges to.
+- Backlog: regional second-reference correction of a residual cluster is deferred because it needs region selection and merge ownership, and costs at least one additional high-precision worker orbit plus a regional kernel and presentation pass per corrected cluster. Until then v1 exposes the exact count and orange diagnostic without confusing it with a contract violation.
 
 - Exact shallow classification across CPU and browser shader still depends on math's predeclared boundary fixtures and contracted operation order; fused-operation behavior must not be accommodated by selecting samples after GPU results are seen.
 
