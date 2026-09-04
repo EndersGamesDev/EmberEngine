@@ -12,6 +12,15 @@ DEPLOY="$(cd "$HERE/.." && pwd)"
 # shellcheck source=deploy/tests/lib.sh
 . "$HERE/lib.sh"
 
+# Exercise the production live slot without freezing a second release number
+# into the fixture. The independent catalog check below still catches a
+# disagreement between deploy-pages.sh and games.json.
+ARENA_LIVE="$(sed -n 's/^ARENA_LIVE="\([^"]*\)"$/\1/p' "$DEPLOY/deploy-pages.sh" | tr -d '\r')"
+if [[ ! "$ARENA_LIVE" =~ ^games/arena/v[0-9]+$ ]]; then
+    echo "pages fixture: cannot determine deploy-pages.sh's live arena path" >&2
+    exit 1
+fi
+
 TMP="$(mktemp -d -t ember-pagestest-XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 REPO="$TMP/repo"
@@ -31,7 +40,7 @@ ln -s "$PY" "$SHIMS/python3"
 ln -s "$PY" "$SHIMS/python"
 export PATH="$SHIMS:$PATH"
 
-mkdir -p "$REPO/deploy" "$REPO/web/games/arena/v20" "$REPO/web/games/arena/v0"
+mkdir -p "$REPO/deploy" "$REPO/web/$ARENA_LIVE" "$REPO/web/games/arena/v0"
 mkdir -p "$REPO/web/games/fire/v2" "$REPO/web/games/kings/v1" "$REPO/web/games/what-is-this/v1"
 mkdir -p "$REPO/web/labs/julibrot/pkg"
 mkdir -p "$REPO/crates/arena-core/src" "$REPO/crates/fire-core/src" "$REPO/crates/kings-core/src"
@@ -50,7 +59,7 @@ PY
 cp "$DEPLOY/../web/games.json" "$REPO/web/games.json"
 printf 'hub\n' > "$REPO/web/index.html"
 printf '{}\n' > "$REPO/web/version.json"
-printf 'arena v20\n' > "$REPO/web/games/arena/v20/index.html"
+printf 'arena live\n' > "$REPO/web/$ARENA_LIVE/index.html"
 printf 'arena v0\n' > "$REPO/web/games/arena/v0/index.html"
 printf 'fire v2\n' > "$REPO/web/games/fire/v2/index.html"
 printf 'kings v1\n' > "$REPO/web/games/kings/v1/index.html"
@@ -124,7 +133,7 @@ is "$(jget "$SHIM_PUBLISHED/games.json" '[v["path"] for g in d["games"] if g.get
 
 mkdir -p "$EXPECTED"
 cp -R "$SEED/games" "$EXPECTED/"
-for spec in "arena/v20 arena" "arena/v0 arena" "fire/v2 fire" "kings/v1 kings"; do
+for spec in "${ARENA_LIVE#games/} arena" "arena/v0 arena" "fire/v2 fire" "kings/v1 kings"; do
     # shellcheck disable=SC2086
     set -- $spec
     live="$1"
