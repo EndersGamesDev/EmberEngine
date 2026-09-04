@@ -22,7 +22,21 @@ enum Expected {
     ///
     /// The retained records still describe the destination, so the fixture additionally proves
     /// that redrawing them under the destination pose needs no new sampling.
-    Relief,
+    Relief {
+        compared: u32,
+        uncertain: u32,
+        disoccluded: u32,
+        maximum_millipixels: u32,
+    },
+}
+
+const fn expected_relief(maximum_millipixels: u32) -> Expected {
+    Expected::Relief {
+        compared: 181,
+        uncertain: 0,
+        disoccluded: 0,
+        maximum_millipixels,
+    }
 }
 
 fn pose_at(
@@ -542,7 +556,7 @@ fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Exp
     );
     if plan.kind == WarpKind::ReliefRedraw {
         assert!(
-            matches!(expected, Expected::Relief),
+            matches!(expected, Expected::Relief { .. }),
             "{name}: unexpectedly selected a relief redraw"
         );
         assert!(
@@ -560,13 +574,24 @@ fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Exp
             .expect("a relief redraw is measured, never unmeasurable");
         assert!(maximum > WARP_MAX_ERROR_PX, "{name}: {maximum}");
         let (compared, disoccluded, uncertain) = compare_redraw(name, from, to);
+        let Expected::Relief {
+            compared: expected_compared,
+            uncertain: expected_uncertain,
+            disoccluded: expected_disoccluded,
+            maximum_millipixels,
+        } = expected
+        else {
+            unreachable!("the relief branch checked its expected kind")
+        };
         assert_eq!(
-            uncertain, 0,
-            "{name}: displayed relief redraw had resampling uncertainty"
+            (compared, uncertain, disoccluded),
+            (expected_compared, expected_uncertain, expected_disoccluded,),
+            "{name}: relief coverage tuple"
         );
-        assert_eq!(
-            disoccluded, 0,
-            "{name}: exact-family redraw and fresh main mesh must cover the same ground"
+        let expected_maximum = f64::from(maximum_millipixels) / 1_000.0;
+        assert!(
+            (maximum - expected_maximum).abs() < 0.0005,
+            "{name}: measured {maximum} px, expected {expected_maximum} px"
         );
         eprintln!(
             "oracle fixture | {name} | relief redraw | samples={compared} | uncertain={uncertain} | disoccluded={disoccluded} | homography={maximum:.3} px"
@@ -781,7 +806,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
         &retained_relief,
         &relief_rotation,
         1.0,
-        Expected::Relief,
+        expected_relief(9_179),
     );
 
     let owner_height = ViewControls {
@@ -805,7 +830,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
         &base,
         &owner_height_to,
         1.0,
-        Expected::Relief,
+        expected_relief(64_977),
     );
 
     let lifted_camera_expectations = [
@@ -887,7 +912,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
         }
         let relief_to = pose(ObjectAngles::JULIA, relief_view, BASE_ORIGIN, 0.0, [0.0; 2]);
         let lifted_expected = if field == 5 {
-            Expected::Relief
+            expected_relief(5_433)
         } else {
             Expected::Clear
         };
@@ -908,7 +933,7 @@ fn retained_warp_matches_independent_fresh_scenes() {
         &relief_from,
         &height_to,
         1.0,
-        Expected::Relief,
+        expected_relief(8_203),
     );
 
     let mut translated_view = relief();
@@ -1183,7 +1208,7 @@ fn observer_bars() {
                 view
             },
             Expected::Agree,
-            Expected::Relief,
+            expected_relief(9_179),
         ),
         (
             "distance four",
@@ -1231,7 +1256,7 @@ fn observer_bars() {
         &flat_from,
         &lifted_from,
         1.0,
-        Expected::Relief,
+        expected_relief(18_358),
     );
     let half = pose(
         ObjectAngles::JULIA,
@@ -1248,7 +1273,7 @@ fn observer_bars() {
         &lifted_from,
         &half,
         1.0,
-        Expected::Relief,
+        expected_relief(10_490),
     );
 }
 
