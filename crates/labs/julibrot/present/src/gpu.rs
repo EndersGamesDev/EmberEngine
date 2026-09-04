@@ -67,7 +67,7 @@ const fn stencil_reference(layer: SceneLayer) -> u32 {
 /// the main grid has no fragment — its sky, its discarded records, and the frame outside its own
 /// extent — and never over a drawn main record. Within each layer the depth buffer still orders the
 /// layer against itself, so the backdrop keeps its own internal ordering.
-fn scene_stencil(layer: SceneLayer) -> wgpu::StencilState {
+const fn scene_stencil(layer: SceneLayer) -> wgpu::StencilState {
     let face = match layer {
         SceneLayer::Main => wgpu::StencilFaceState {
             compare: wgpu::CompareFunction::Always,
@@ -1704,7 +1704,9 @@ fn encode_scene(
 }
 
 /// The scene depth-stencil attachment: depth cleared to the far plane, the stamp cleared to none.
-fn scene_depth_attachment(view: &wgpu::TextureView) -> wgpu::RenderPassDepthStencilAttachment<'_> {
+const fn scene_depth_attachment(
+    view: &wgpu::TextureView,
+) -> wgpu::RenderPassDepthStencilAttachment<'_> {
     wgpu::RenderPassDepthStencilAttachment {
         view,
         depth_ops: Some(wgpu::Operations {
