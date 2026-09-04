@@ -1173,7 +1173,7 @@ impl ViewerController {
             grid_extent[1],
         )
         .map_err(math_error)?;
-        if footprint.boundary_scale >= 1.0 {
+        if footprint.apron_scale.to_bits() == 1.0_f64.to_bits() {
             return Ok(None);
         }
         match self.screen_map(grid_extent)? {
