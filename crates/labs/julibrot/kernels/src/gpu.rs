@@ -89,6 +89,33 @@ impl JulibrotKernels {
         requested_extent: GridExtent,
         params: EscapeParams,
     ) -> Result<RefinementPlan, KernelError> {
+        Self::plan_for_grid_count(executor, requested_extent, params, 1, |records| {
+            executor.plan_span(records, crate::OUTPUT_PAGE_SIDE).is_ok()
+        })
+    }
+
+    /// Selects a plan whose Final-capacity record span can be allocated twice atomically.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed input, arithmetic, or live-capacity refusal without mutating the executor.
+    pub fn plan_grid_pair(
+        executor: &GpuKernelExecutor,
+        requested_extent: GridExtent,
+        params: EscapeParams,
+    ) -> Result<RefinementPlan, KernelError> {
+        Self::plan_for_grid_count(executor, requested_extent, params, 2, |records| {
+            executor.plan_paired_copies(1, records, crate::OUTPUT_PAGE_SIDE) == 1
+        })
+    }
+
+    fn plan_for_grid_count(
+        executor: &GpuKernelExecutor,
+        requested_extent: GridExtent,
+        params: EscapeParams,
+        grid_count: u32,
+        mut spans_fit: impl FnMut(u32) -> bool,
+    ) -> Result<RefinementPlan, KernelError> {
         let capacity = executor.capacity_report();
         let page_records = u32::from(crate::OUTPUT_PAGE_SIDE).pow(2);
         let header_record_capacity = capacity
@@ -100,11 +127,12 @@ impl JulibrotKernels {
             .ok_or(KernelError::ArithmeticOverflow)?;
         let required_header_bytes = bytes_per_set
             .checked_mul(u64::from(LEVEL_COUNT))
+            .and_then(|bytes| bytes.checked_mul(u64::from(grid_count)))
             .ok_or(KernelError::ArithmeticOverflow)?;
         crate::plan_refinement(requested_extent, params, |records| {
             records <= header_record_capacity
                 && capacity.free_header_bytes >= required_header_bytes
-                && executor.plan_span(records, crate::OUTPUT_PAGE_SIDE).is_ok()
+                && spans_fit(records)
         })
     }
 
@@ -185,6 +213,48 @@ impl JulibrotKernels {
             reference_dispatches: RefCell::new(Vec::with_capacity(2)),
         });
         Ok(grid)
+    }
+
+    /// Allocates two Final-capacity spans atomically and installs both grid records together.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed plan, allocation, or header-capacity refusal and rolls back both spans when
+    /// either grid record cannot be prepared.
+    pub fn allocate_grid_pair(
+        &mut self,
+        executor: &mut GpuKernelExecutor,
+        plan: &RefinementPlan,
+    ) -> Result<[EscapeGrid; 2], KernelError> {
+        validate_plan(plan)?;
+        let logical_len = pixel_count(plan.delivered_extent)?;
+        let span_plan = executor
+            .plan_span(logical_len, crate::OUTPUT_PAGE_SIDE)
+            .map_err(|_| KernelError::Heap)?;
+        let spans = executor
+            .allocate_pair(logical_len, crate::OUTPUT_PAGE_SIDE)
+            .map_err(|_| KernelError::Heap)?;
+        let prepared = spans
+            .clone()
+            .map(|span| prepare_grid_allocation(executor, &self.shallow, span, plan, span_plan));
+        let [first, second] = match prepared {
+            [Ok(first), Ok(second)] => [first, second],
+            [first, second] => {
+                let error = first
+                    .err()
+                    .or_else(|| second.err())
+                    .unwrap_or(KernelError::Dispatch);
+                for span in spans {
+                    executor.free_span(span).map_err(|_| KernelError::Heap)?;
+                }
+                return Err(error);
+            }
+        };
+        let first_grid = first.0;
+        let second_grid = second.0;
+        self.grids.push(first.1);
+        self.grids.push(second.1);
+        Ok([first_grid, second_grid])
     }
 
     /// Encodes one shallow logical level through SCRATCH and exact DATA copies.
@@ -481,6 +551,58 @@ fn pixel_count(extent: GridExtent) -> Result<u32, KernelError> {
     crate::shallow::validate_extent(extent)
 }
 
+fn prepare_grid_allocation(
+    executor: &mut GpuKernelExecutor,
+    shallow: &GpuKernel,
+    span: DataSpan,
+    plan: &RefinementPlan,
+    span_plan: SpanPlan,
+) -> Result<(EscapeGrid, GridAllocation), KernelError> {
+    let headers = plan
+        .levels
+        .iter()
+        .map(|level| {
+            pixel_count(level.extent)
+                .map_err(|_| KernelError::Dispatch)
+                .and_then(|active_len| {
+                    executor
+                        .prefix_headers(&span, active_len)
+                        .map_err(|_| KernelError::Dispatch)
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let header_sets = executor
+        .reserve_header_sets(&headers)
+        .map_err(|_| KernelError::Dispatch)?;
+    if header_sets.set_count() != LEVEL_COUNT {
+        return Err(KernelError::Dispatch);
+    }
+    let shallow_dispatches = dispatch_templates(
+        executor,
+        shallow,
+        &[],
+        &span,
+        plan,
+        &[0; core::mem::size_of::<ShallowUniform>()],
+    )?;
+    let first = plan.level(RefinementLevel::Preview);
+    let grid = EscapeGrid {
+        span: span.clone(),
+        width: first.extent.width,
+        height: first.extent.height,
+        level: first.level,
+    };
+    let allocation = GridAllocation {
+        span,
+        headers: header_sets,
+        plan: *plan,
+        span_plan,
+        shallow_dispatches,
+        reference_dispatches: RefCell::new(Vec::with_capacity(2)),
+    };
+    Ok((grid, allocation))
+}
+
 fn dispatch_templates(
     executor: &GpuKernelExecutor,
     kernel: &GpuKernel,
@@ -671,6 +793,77 @@ mod tests {
         fn templates(&self) -> [DispatchPlan; 3] {
             [self.plan(0), self.plan(1), self.plan(2)]
         }
+    }
+
+    fn app_main_pair_plan(requested_extent: GridExtent) -> (SpanArena, crate::RefinementPlan) {
+        let arena =
+            SpanArena::new(512, 16, 64, 16 * 16 + 128 * 4, 16).expect("browser heap planner arena");
+        let plan = plan_refinement(requested_extent, EscapeParams::new(4_096), |records| {
+            arena.plan_paired_copies(1, records, crate::OUTPUT_PAGE_SIDE) == 1
+        })
+        .expect("a degraded paired browser plan fits");
+        (arena, plan)
+    }
+
+    #[test]
+    fn browser_final_pair_admission_degrades_only_extents_that_exceed_63_pages() {
+        for (requested_extent, delivered_extent, divisor) in [
+            (
+                GridExtent {
+                    width: 1_600,
+                    height: 900,
+                },
+                GridExtent {
+                    width: 1_600,
+                    height: 900,
+                },
+                1,
+            ),
+            (
+                GridExtent {
+                    width: 1_920,
+                    height: 1_080,
+                },
+                GridExtent {
+                    width: 960,
+                    height: 540,
+                },
+                2,
+            ),
+            (
+                GridExtent {
+                    width: 2_560,
+                    height: 1_440,
+                },
+                GridExtent {
+                    width: 1_280,
+                    height: 720,
+                },
+                2,
+            ),
+        ] {
+            let (mut arena, plan) = app_main_pair_plan(requested_extent);
+            assert_eq!(plan.delivered_extent, delivered_extent);
+            assert_eq!(plan.extent_divisor, divisor);
+            let records = delivered_extent.width * delivered_extent.height;
+            let pair = arena
+                .allocate_pair(records, crate::OUTPUT_PAGE_SIDE)
+                .expect("the admitted Final pair allocates atomically");
+            assert_eq!(pair[0].page_count, pair[1].page_count);
+        }
+
+        let (arena, _) = app_main_pair_plan(GridExtent {
+            width: 1_920,
+            height: 1_080,
+        });
+        assert_eq!(
+            arena.plan_paired_copies(1, 2_031_616, crate::OUTPUT_PAGE_SIDE),
+            1
+        );
+        assert_eq!(
+            arena.plan_paired_copies(1, 2_031_617, crate::OUTPUT_PAGE_SIDE),
+            0
+        );
     }
 
     #[test]

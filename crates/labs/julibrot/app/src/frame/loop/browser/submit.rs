@@ -12,10 +12,9 @@ impl BrowserFrameLoop {
             return false;
         }
         if self.grid_round != self.loop_state.ladder_round() {
-            let spare = self
-                .spare_grid
-                .as_mut()
-                .expect("every main ladder owns one alternate record grid");
+            let Some(spare) = self.spare_grid.as_mut() else {
+                return false;
+            };
             std::mem::swap(&mut self.grid, spare);
             self.grid_round = self.loop_state.ladder_round();
         }
@@ -177,35 +176,29 @@ impl BrowserFrameLoop {
             return Ok(());
         }
         self.release_backdrop()?;
+        let old_plan = self.plan;
         let requested_extent = self.plan.requested_extent;
-        let next = JulibrotKernels::plan(
+        self.retire_main_grid_pair()?;
+        let next = match JulibrotKernels::plan_grid_pair(
             &self.executor,
             requested_extent,
             EscapeParams::new(requested_max_iter),
-        )
-        .map_err(kernel_error)?
-        .with_precision_mode(self.precision_mode);
-        if next == self.plan {
-            return Ok(());
-        }
-        if let Some(spare) = self.spare_grid.take() {
-            self.kernels
-                .free_grid(&mut self.executor, spare)
-                .map_err(kernel_error)?;
-        }
-        let next_grid = self
-            .kernels
-            .allocate_grid(&mut self.executor, &next)
-            .map_err(kernel_error)?;
-        let old_grid = std::mem::replace(&mut self.grid, next_grid);
-        self.kernels
-            .free_grid(&mut self.executor, old_grid)
-            .map_err(kernel_error)?;
-        self.spare_grid = Some(
-            self.kernels
-                .allocate_grid(&mut self.executor, &next)
-                .map_err(kernel_error)?,
-        );
+        ) {
+            Ok(plan) => plan.with_precision_mode(self.precision_mode),
+            Err(error) => {
+                self.restore_main_grid_pair(&old_plan)?;
+                return Err(kernel_error(error));
+            }
+        };
+        let [grid, spare] = match self.kernels.allocate_grid_pair(&mut self.executor, &next) {
+            Ok(pair) => pair,
+            Err(error) => {
+                self.restore_main_grid_pair(&old_plan)?;
+                return Err(kernel_error(error));
+            }
+        };
+        self.grid = grid;
+        self.spare_grid = Some(spare);
         self.plan = next;
         self.grid_round = self.loop_state.ladder_round();
         Ok(())
@@ -220,16 +213,29 @@ impl BrowserFrameLoop {
             return Ok(());
         }
         self.release_backdrop()?;
-        let next_plan = self.plan.with_precision_mode(next);
-        if let Some(spare) = self.spare_grid.take() {
-            self.kernels
-                .free_grid(&mut self.executor, spare)
-                .map_err(kernel_error)?;
-        }
-        let next_grid = self
+        let old_plan = self.plan;
+        self.retire_main_grid_pair()?;
+        let next_plan = match JulibrotKernels::plan_grid_pair(
+            &self.executor,
+            old_plan.requested_extent,
+            EscapeParams::new(old_plan.requested_max_iter),
+        ) {
+            Ok(plan) => plan.with_precision_mode(next),
+            Err(error) => {
+                self.restore_main_grid_pair(&old_plan)?;
+                return Err(kernel_error(error));
+            }
+        };
+        let [next_grid, next_spare] = match self
             .kernels
-            .allocate_grid(&mut self.executor, &next_plan)
-            .map_err(kernel_error)?;
+            .allocate_grid_pair(&mut self.executor, &next_plan)
+        {
+            Ok(pair) => pair,
+            Err(error) => {
+                self.restore_main_grid_pair(&old_plan)?;
+                return Err(kernel_error(error));
+            }
+        };
         if let Err(error) = super::super::apply_precision_mode(
             next,
             &mut self.precision_mode,
@@ -237,23 +243,58 @@ impl BrowserFrameLoop {
             &mut self.plan,
             viewer,
         ) {
-            self.kernels
-                .free_grid(&mut self.executor, next_grid)
-                .map_err(kernel_error)?;
+            self.free_grid(&next_grid)?;
+            self.free_grid(&next_spare)?;
+            self.restore_main_grid_pair(&old_plan)?;
             return Err(error);
         }
-        let old_grid = std::mem::replace(&mut self.grid, next_grid);
-        self.kernels
-            .free_grid(&mut self.executor, old_grid)
-            .map_err(kernel_error)?;
-        self.spare_grid = Some(
-            self.kernels
-                .allocate_grid(&mut self.executor, &next_plan)
-                .map_err(kernel_error)?,
-        );
+        self.grid = next_grid;
+        self.spare_grid = Some(next_spare);
         self.grid_round = self.loop_state.ladder_round();
         self.prepared_level = None;
         self.scene_selection = None;
+        Ok(())
+    }
+
+    fn retire_main_grid_pair(&mut self) -> Result<(), AppError> {
+        let Some(spare) = self.spare_grid.take() else {
+            return Err(AppError::Kernel(
+                "main grid replacement has no alternate grid".to_string(),
+            ));
+        };
+        if let Err(error) = self.free_grid(&spare) {
+            self.spare_grid = Some(spare);
+            return Err(error);
+        }
+        let current = self.grid.clone();
+        if let Err(error) = self.free_grid(&current) {
+            self.spare_grid = self
+                .kernels
+                .allocate_grid(&mut self.executor, &self.plan)
+                .map(Some)
+                .map_err(kernel_error)?;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn restore_main_grid_pair(&mut self, plan: &RefinementPlan) -> Result<(), AppError> {
+        let [grid, spare] = self
+            .kernels
+            .allocate_grid_pair(&mut self.executor, plan)
+            .map_err(kernel_error)?;
+        self.grid = grid;
+        self.spare_grid = Some(spare);
+        self.plan = *plan;
+        self.grid_round = self.loop_state.ladder_round();
+        Ok(())
+    }
+
+    pub(super) fn free_grid(&mut self, grid: &EscapeGrid) -> Result<(), AppError> {
+        self.kernels
+            .free_grid(&mut self.executor, grid.clone())
+            .map_err(kernel_error)?;
+        self.presenter.forget_retained_grid(grid);
         Ok(())
     }
 

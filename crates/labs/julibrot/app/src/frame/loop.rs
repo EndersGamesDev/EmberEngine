@@ -608,7 +608,7 @@ mod browser {
             };
             let params = EscapeParams::new(requested.iteration_cap);
             let mut plan =
-                JulibrotKernels::plan(&executor, extent, params).map_err(kernel_error)?;
+                JulibrotKernels::plan_grid_pair(&executor, extent, params).map_err(kernel_error)?;
             let mut reference_upload = Vec::new();
             reference_upload
                 .try_reserve_exact(super::reference_texel_bytes(requested.iteration_cap)?)
@@ -629,11 +629,8 @@ mod browser {
                 .reference_centre()
                 .ok_or_else(|| AppError::Worker("owner navigation is unconfigured".to_string()))?;
             let mut kernels = kernels;
-            let grid = kernels
-                .allocate_grid(&mut executor, &plan)
-                .map_err(kernel_error)?;
-            let spare_grid = kernels
-                .allocate_grid(&mut executor, &plan)
+            let [grid, spare_grid] = kernels
+                .allocate_grid_pair(&mut executor, &plan)
                 .map_err(kernel_error)?;
             let config = PresentConfig {
                 surface_format: runtime.surface_format(),
