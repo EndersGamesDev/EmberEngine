@@ -477,8 +477,6 @@ mod browser {
     struct BackdropGrid {
         plan: RefinementPlan,
         grid: EscapeGrid,
-        spare_grid: Option<EscapeGrid>,
-        grid_round: u64,
         ready: Option<BackdropReady>,
         in_flight: Option<BackdropFlight>,
     }
@@ -531,6 +529,8 @@ mod browser {
         reference_upload: Vec<u8>,
         plan: RefinementPlan,
         grid: EscapeGrid,
+        spare_grid: Option<EscapeGrid>,
+        grid_round: u64,
         backdrop: Option<BackdropGrid>,
         active_backdrop_map: Option<PoseMap>,
         coverage_turn: super::CoverageTurn,
