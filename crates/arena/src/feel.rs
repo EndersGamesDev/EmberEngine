@@ -8,6 +8,8 @@
 //! The numbers are `docs/plans/arena-v18-freight-yard.md` section 6.3; every
 //! one ships as written unless a test proves it wrong.
 
+use arena_core::proto::color_for;
+use arena_core::shooter::{HILL_CONTESTED, HILL_FREE, Hill};
 use ember_engine::Rumble;
 use ember_engine::glam::{Vec2, Vec3};
 
@@ -546,6 +548,107 @@ pub fn blast(d: f32) -> Cue {
     cue(near, Some(r), Some((Sfx::Blast, vol)))
 }
 
+// ---- v19: modes ----
+
+/// `S2C::RoundOver`: the frag jingle when I or my team won, the death fall
+/// otherwise, and one long even rumble either way so the pad marks the
+/// end of the round whichever side of it the player was on.
+#[must_use]
+pub const fn round_over(won: bool) -> Cue {
+    let s = if won {
+        (Sfx::Kill, 0.55)
+    } else {
+        (Sfx::Death, 0.5)
+    };
+    cue(0.0, Some(rumble(0.6, 0.6, 250)), Some(s))
+}
+
+/// A team's colour in team deathmatch: blue for team 0, red for team 1,
+/// the palette's first two (`color_for`), so a two-player free for all and
+/// a team game agree on what blue and red look like. Any other team index
+/// reads as red, because the sim only ever assigns 0 or 1 and a value off
+/// that range is a bug best seen, not hidden.
+#[must_use]
+pub const fn team_color(team: u8) -> Vec3 {
+    let c = color_for(if team == 0 { 0 } else { 1 });
+    Vec3::new(c[0], c[1], c[2])
+}
+
+/// The team's name for the status line and the scoreboard header.
+#[must_use]
+pub const fn team_name(team: u8) -> &'static str {
+    if team == 0 { "BLUE" } else { "RED" }
+}
+
+/// The hill's edge bars: thin along the footprint's edges, low, lifted a
+/// hair above the box top so they never z-fight with the dock or the
+/// plinth they sit on.
+pub const HILL_BAR_THICK: f32 = 0.06;
+pub const HILL_BAR_TALL: f32 = 0.12;
+pub const HILL_BAR_LIFT: f32 = 0.06;
+/// The marker cube: high enough over the hill to be seen across the map,
+/// small enough not to read as cover.
+pub const HILL_MARKER_RISE: f32 = 3.0;
+pub const HILL_MARKER_EDGE: f32 = 0.3;
+/// Nobody on the hill.
+pub const HILL_FREE_COLOR: Vec3 = Vec3::ONE;
+/// Two or more on it: orange, pulsing at `HILL_PULSE_HZ` so a contested
+/// hill is seen to be contested from across the map without a text line.
+pub const HILL_CONTESTED_COLOR: Vec3 = Vec3::new(1.0, 0.55, 0.15);
+pub const HILL_PULSE_HZ: f32 = 4.0;
+
+/// The colour the hill's bars and marker take for `holder` (a `State.hill`
+/// value) at time `t`: white free, the holder's own colour (`holder_color`,
+/// which the caller resolves through the same rule that colours bodies, so
+/// the king's hill matches the king) when held, orange pulsing between
+/// just over half and full brightness when contested. A held hill whose
+/// holder this client cannot colour (a state that named a player it has
+/// not met) reads as free rather than as a wrong player's.
+#[must_use]
+pub fn hill_color(holder: u8, holder_color: Option<Vec3>, t: f32) -> Vec3 {
+    match holder {
+        HILL_FREE => HILL_FREE_COLOR,
+        HILL_CONTESTED => {
+            let pulse = 0.5 + 0.5 * (std::f32::consts::TAU * HILL_PULSE_HZ * t).sin();
+            HILL_CONTESTED_COLOR * (0.55 + 0.45 * pulse)
+        }
+        _ => holder_color.unwrap_or(HILL_FREE_COLOR),
+    }
+}
+
+/// The four bars along the hill's edges as (centre, full size) boxes, at
+/// `top + HILL_BAR_LIFT`: two along x at the z edges, two along z at the x
+/// edges, each the footprint's full length so the corners meet.
+#[must_use]
+pub fn hill_bars(hill: &Hill) -> [(Vec3, Vec3); 4] {
+    let cx = f32::midpoint(hill.min[0], hill.max[0]);
+    let cz = f32::midpoint(hill.min[1], hill.max[1]);
+    let y = hill.top + HILL_BAR_LIFT;
+    let len_x = hill.max[0] - hill.min[0];
+    let len_z = hill.max[1] - hill.min[1];
+    let along_x = Vec3::new(len_x, HILL_BAR_TALL, HILL_BAR_THICK);
+    let along_z = Vec3::new(HILL_BAR_THICK, HILL_BAR_TALL, len_z);
+    [
+        (Vec3::new(cx, y, hill.min[1]), along_x),
+        (Vec3::new(cx, y, hill.max[1]), along_x),
+        (Vec3::new(hill.min[0], y, cz), along_z),
+        (Vec3::new(hill.max[0], y, cz), along_z),
+    ]
+}
+
+/// The marker cube over the hill's centre: (centre, full size).
+#[must_use]
+pub fn hill_marker(hill: &Hill) -> (Vec3, Vec3) {
+    (
+        Vec3::new(
+            f32::midpoint(hill.min[0], hill.max[0]),
+            hill.top + HILL_MARKER_RISE,
+            f32::midpoint(hill.min[1], hill.max[1]),
+        ),
+        Vec3::splat(HILL_MARKER_EDGE),
+    )
+}
+
 #[cfg(test)]
 mod feel_tests {
     use super::*;
@@ -847,5 +950,96 @@ mod feel_tests {
         assert!(vol(blast(100.0)) >= 0.15, "a far blast is still heard");
         assert!(pop(true).rumble.is_some());
         assert_eq!(pop(false).rumble, None);
+    }
+
+    /// The plan's team colours are the palette's first two, by value, so a
+    /// palette edit that moved blue or red would be caught here and not on
+    /// a player's screen.
+    #[test]
+    fn team_colours_are_blue_and_red() {
+        assert_eq!(team_color(0), Vec3::new(0.25, 0.55, 0.95));
+        assert_eq!(team_color(1), Vec3::new(0.92, 0.32, 0.28));
+        assert_eq!(team_color(7), team_color(1), "off-range reads as red");
+        assert_eq!(team_name(0), "BLUE");
+        assert_eq!(team_name(1), "RED");
+    }
+
+    #[test]
+    fn hill_colour_follows_the_holder_state() {
+        let king = Vec3::new(0.3, 0.8, 0.4);
+        assert_eq!(hill_color(HILL_FREE, None, 1.0), HILL_FREE_COLOR);
+        assert_eq!(
+            hill_color(3, Some(king), 1.0),
+            king,
+            "held: the king's colour"
+        );
+        assert_eq!(
+            hill_color(3, None, 1.0),
+            HILL_FREE_COLOR,
+            "an unknown king reads as free"
+        );
+        // Contested: orange, pulsing at 4 Hz between 0.55 and 1.0 of it.
+        let mut lo = f32::MAX;
+        let mut hi = f32::MIN;
+        let mut t = 0.0;
+        while t < 0.25 {
+            let c = hill_color(HILL_CONTESTED, Some(king), t);
+            let k = c.x / HILL_CONTESTED_COLOR.x;
+            assert!(
+                (c - HILL_CONTESTED_COLOR * k).length() < 1e-5,
+                "hue kept at {t}"
+            );
+            lo = lo.min(k);
+            hi = hi.max(k);
+            t += 0.001;
+        }
+        assert!(
+            (lo - 0.55).abs() < 0.01 && (hi - 1.0).abs() < 0.01,
+            "{lo}..{hi}"
+        );
+        // One full pulse takes a quarter second.
+        let a = hill_color(HILL_CONTESTED, None, 0.1);
+        let b = hill_color(HILL_CONTESTED, None, 0.1 + 1.0 / HILL_PULSE_HZ);
+        assert!((a - b).length() < 1e-4, "periodic at 4 Hz");
+    }
+
+    #[test]
+    fn hill_bars_trace_the_footprint() {
+        let dock = Hill {
+            min: [-4.0, -2.0],
+            max: [4.0, 2.0],
+            top: 1.2,
+        };
+        let bars = hill_bars(&dock);
+        for (c, s) in &bars {
+            assert!(
+                (c.y - (1.2 + HILL_BAR_LIFT)).abs() < 1e-6,
+                "lifted off the top"
+            );
+            assert!((s.y - HILL_BAR_TALL).abs() < 1e-6);
+            // Thin one way, the footprint's full length the other, so the
+            // corners meet.
+            let along_x = *s == Vec3::new(8.0, HILL_BAR_TALL, HILL_BAR_THICK);
+            let along_z = *s == Vec3::new(HILL_BAR_THICK, HILL_BAR_TALL, 4.0);
+            assert!(along_x || along_z, "bar size {s}");
+            // Each bar is centred on an edge.
+            let east_or_west = (c.x.abs() - 4.0).abs() < 1e-6 && c.z.abs() < 1e-6;
+            let north_or_south = (c.z.abs() - 2.0).abs() < 1e-6 && c.x.abs() < 1e-6;
+            assert!(east_or_west || north_or_south, "bar centre {c}");
+        }
+        let (m, s) = hill_marker(&dock);
+        assert_eq!(m, Vec3::new(0.0, 1.2 + HILL_MARKER_RISE, 0.0));
+        assert_eq!(s, Vec3::splat(HILL_MARKER_EDGE));
+    }
+
+    #[test]
+    fn the_round_over_cue_is_a_win_or_a_loss_and_one_rumble() {
+        let won = round_over(true);
+        let lost = round_over(false);
+        assert_eq!(won.sfx.unwrap().0, Sfx::Kill);
+        assert_eq!(lost.sfx.unwrap().0, Sfx::Death);
+        assert_eq!(won.rumble, Some(rumble(0.6, 0.6, 250)));
+        assert_eq!(lost.rumble, won.rumble);
+        assert_eq!(won.shake, 0.0);
     }
 }

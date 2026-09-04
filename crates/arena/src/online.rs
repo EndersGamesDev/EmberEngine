@@ -8,8 +8,9 @@ use std::fmt::Write as _;
 
 use arena_core::proto::{BState, C2S, PROTO_VERSION, PState, PlayerMeta, S2C, STATE_EVERY_TICKS};
 use arena_core::shooter::{
-    Cover, Decor, EYE_CROUCH, EYE_STAND, FIXED_DT, Level, MAX_HP, MAX_PITCH, MELEE_COOLDOWN,
-    Obstacle, Projectile, RESERVE_INFINITE, SIDEARM, WEAPON_COUNT, move_circle, stance_speed,
+    Cover, Decor, EYE_CROUCH, EYE_STAND, FFA_FRAG_LIMIT, FIXED_DT, GameMode, HILL_CONTESTED,
+    HILL_FREE, HILL_LIMIT, Hill, Level, MAX_HP, MAX_PITCH, MELEE_COOLDOWN, Obstacle, Projectile,
+    RESERVE_INFINITE, SIDEARM, TDM_FRAG_LIMIT, WEAPON_COUNT, move_circle, stance_speed,
     step_vertical, weapon_name, weapon_stats,
 };
 use ember_engine::glam::{Mat3, Quat, Vec2, Vec3};
@@ -624,6 +625,10 @@ pub struct OnlineConfig {
     /// `join`, where the lobby already has one.
     #[serde(default)]
     pub map: String,
+    /// The `GameMode` a `create` asks for, by name (`GameMode::name`);
+    /// empty is free for all. Ignored on a `join`, like `map`.
+    #[serde(default)]
+    pub mode: String,
 }
 
 impl OnlineConfig {
@@ -633,6 +638,7 @@ impl OnlineConfig {
                 name: self.lobby.clone(),
                 password: self.password.clone().filter(|p| !p.is_empty()),
                 map: self.map.clone(),
+                mode: self.mode.clone(),
             },
             "join" => C2S::JoinLobby {
                 name: self.lobby.clone(),
@@ -826,6 +832,24 @@ fn bonk_is_new(last: Option<f32>, now: f32) -> bool {
 pub struct ShooterGame {
     chan: net::NetChan,
     my_id: Option<u8>,
+    /// The rules this lobby plays, from `GameJoined.mode`; free for all
+    /// until joined. Decides the status line, the scoreboard's shape,
+    /// whether bodies wear team colours and whether the hill is drawn.
+    mode: GameMode,
+    // ---- v19: the match, from `State` ----
+    /// Frag totals per team, `[0, 0]` outside team deathmatch.
+    team_score: [u32; 2],
+    /// `State.hill`: `HILL_FREE`, `HILL_CONTESTED` or the king's id.
+    hill_holder: u8,
+    /// Seconds left in the pause after a round, 0 while a round runs.
+    round_pause: f32,
+    /// The level's hill, kept from `GameJoined` so it can be drawn; only
+    /// drawn in `GameMode::Hill`.
+    hill: Option<Hill>,
+    /// The announcement the last `RoundOver` made, shown beside the pause
+    /// countdown until the next round starts, so a player who missed the
+    /// one-frame status event still learns who won.
+    round_line: Option<String>,
     arena_half: f32,
     obstacles: Vec<Obstacle>,
     metas: HashMap<u8, PlayerMeta>,
@@ -990,6 +1014,12 @@ impl ShooterGame {
         Self {
             chan,
             my_id: None,
+            mode: GameMode::Ffa,
+            team_score: [0, 0],
+            hill_holder: HILL_FREE,
+            round_pause: 0.0,
+            hill: None,
+            round_line: None,
             arena_half: 24.0,
             obstacles: Vec::new(),
             metas: HashMap::new(),
@@ -1190,14 +1220,122 @@ impl ShooterGame {
             .map_or_else(|| format!("player {id}"), |m| m.handle.clone())
     }
 
-    /// Full Tab-overlay scoreboard: frags and deaths, sorted.
+    /// The colour a player's body, ring, pips and hill are drawn in: the
+    /// team's in team deathmatch, so a teammate is told from an enemy at a
+    /// glance and never by remembering eight id colours; the id colour
+    /// from `PlayerMeta` everywhere else. A player the state names but
+    /// the metas do not is grey, as before.
+    fn player_color(&self, id: u8) -> Vec3 {
+        if self.mode == GameMode::Tdm
+            && let Some(p) = self.latest.get(&id)
+        {
+            return feel::team_color(p.team);
+        }
+        self.metas
+            .get(&id)
+            .map_or(Vec3::splat(0.6), |m| Vec3::from_array(m.color))
+    }
+
+    /// My team, 0 when I am not in the state yet.
+    fn my_team(&self) -> u8 {
+        self.my_id
+            .and_then(|id| self.latest.get(&id))
+            .map_or(0, |p| p.team)
+    }
+
+    /// What `S2C::RoundOver` says: the team by name, the king by handle,
+    /// the free-for-all winner by handle with the frags that ended it
+    /// (from the message's own scores, since the state that follows may
+    /// already be the reset).
+    fn round_over_line(&self, winner: u8, team: bool, scores: &[(u8, u32)]) -> String {
+        if team {
+            return format!("{} wins the round", feel::team_name(winner));
+        }
+        let name = self.handle_of(winner);
+        if self.mode == GameMode::Hill {
+            return format!("{name} is king of the hill");
+        }
+        let frags = scores
+            .iter()
+            .find(|(id, _)| *id == winner)
+            .map_or(0, |(_, s)| *s);
+        format!("{name} wins the round ({frags} frags)")
+    }
+
+    /// The match segment of the status line: the pause countdown while a
+    /// round is over (with the winner's line still beside it), else the
+    /// mode's own score against its limit. In team deathmatch my team is
+    /// named first; the status element is plain text, so the colour the
+    /// plan asks for is the page's to add and the order is what this
+    /// line can do.
+    fn mode_line(&self, me: Option<&PState>) -> String {
+        if self.round_pause > 0.0 {
+            let secs = self.round_pause.ceil();
+            let wait = format!("next round in {secs:.0} s");
+            return match &self.round_line {
+                Some(line) => format!("{line} · {wait}"),
+                None => wait,
+            };
+        }
+        let score = me.map_or(0, |p| p.score);
+        match self.mode {
+            GameMode::Ffa => format!("frags {score} / {FFA_FRAG_LIMIT}"),
+            GameMode::Tdm => {
+                let mine = self.my_team();
+                let theirs = 1 - (mine & 1);
+                format!(
+                    "{} {} · {} {} / {TDM_FRAG_LIMIT}",
+                    feel::team_name(mine),
+                    self.team_score[usize::from(mine & 1)],
+                    feel::team_name(theirs),
+                    self.team_score[usize::from(theirs)]
+                )
+            }
+            GameMode::Hill => {
+                let king = match self.hill_holder {
+                    HILL_FREE => "hill free".to_string(),
+                    HILL_CONTESTED => "contested".to_string(),
+                    id => format!("king: {}", self.handle_of(id)),
+                };
+                format!("hill {score} / {HILL_LIMIT} · {king}")
+            }
+        }
+    }
+
+    /// Full Tab-overlay scoreboard, shaped by the mode: frags and deaths
+    /// sorted by score in free for all; the same under a header per team,
+    /// blue first, in team deathmatch; hill points as SCORE in king of
+    /// the hill, where the score is not the frags (the wire carries only
+    /// the mode's score per player, so the frag column waits on a
+    /// `PState.frags`).
     fn scoreboard_text(&self) -> String {
         let mut rows: Vec<&PState> = self.latest.values().collect();
-        rows.sort_by(|a, b| b.score.cmp(&a.score).then(a.id.cmp(&b.id)));
-        let mut s = format!("{:<20} {:>6} {:>7}\n", "PLAYER", "FRAGS", "DEATHS");
+        let by_score = |a: &PState, b: &PState| b.score.cmp(&a.score).then(a.id.cmp(&b.id));
+        if self.mode == GameMode::Tdm {
+            rows.sort_by(|a, b| a.team.cmp(&b.team).then(by_score(a, b)));
+        } else {
+            rows.sort_by(|a, b| by_score(a, b));
+        }
+        let column = if self.mode == GameMode::Hill {
+            "SCORE"
+        } else {
+            "FRAGS"
+        };
+        let mut s = format!("{:<20} {column:>6} {:>7}\n", "PLAYER", "DEATHS");
         s.push_str(&"─".repeat(35));
         s.push('\n');
+        let mut header: Option<u8> = None;
         for p in rows {
+            if self.mode == GameMode::Tdm && header != Some(p.team) {
+                header = Some(p.team);
+                writeln!(
+                    s,
+                    "{} {}",
+                    feel::team_name(p.team),
+                    self.team_score[usize::from(p.team & 1)]
+                )
+                .expect("writing to a String cannot fail");
+            }
             let me = if Some(p.id) == self.my_id {
                 "▶ "
             } else {
@@ -1235,13 +1373,14 @@ impl ShooterGame {
             })
             .unwrap_or_default();
         let gun = me.map(gun_line).unwrap_or_default();
+        let mode = self.mode_line(me);
         let pad = if self.pad_status_shown == "none" {
             String::new()
         } else {
             format!("   gamepad: {}", self.pad_status_shown)
         };
         format!(
-            "{hp}  {gun}   {list}   ({} in arena){pad}",
+            "{hp}  {gun}   {mode}   {list}   ({} in arena){pad}",
             self.latest.len()
         )
     }
@@ -1321,14 +1460,21 @@ impl EmberGame for ShooterGame {
                     arena_half,
                     players,
                     map,
+                    mode,
                 } => {
                     self.my_id = Some(id);
+                    self.mode = GameMode::from_name(&mode).unwrap_or_default();
                     self.arena_half = arena_half;
                     // The same level the server built its lobby from, so
                     // prediction and authority resolve against identical
                     // cover; the seed is only what an unknown name falls
                     // back to.
                     let level = Level::named(&map, seed);
+                    self.hill = level.hill;
+                    self.team_score = [0, 0];
+                    self.hill_holder = HILL_FREE;
+                    self.round_pause = 0.0;
+                    self.round_line = None;
                     self.obstacles = level.obstacles;
                     self.pads_pos = level.pads;
                     self.decor = level.decor;
@@ -1373,9 +1519,24 @@ impl EmberGame for ShooterGame {
                     bullets,
                     pads,
                     loot,
+                    team_score,
+                    hill,
+                    round_pause,
                 } => {
                     self.last_tick = tick;
                     self.pads_active = pads;
+                    // The round restarting: the pause ran out in this
+                    // state. Everyone is respawned with the sidearm and
+                    // every score is zero, none of which is a holster, a
+                    // pickup or a death, so the cues below that read a
+                    // weapon change stay quiet for it.
+                    let restarted = self.round_pause > 0.0 && round_pause <= 0.0;
+                    if restarted {
+                        self.round_line = None;
+                    }
+                    self.team_score = team_score;
+                    self.hill_holder = hill;
+                    self.round_pause = round_pause;
                     // A block the server never mentions stays armed: the
                     // list is index-aligned, and a short one is a server
                     // that predates a block, not a spent block.
@@ -1451,7 +1612,10 @@ impl EmberGame for ShooterGame {
                                     self.launch_smoke = true;
                                 }
                             }
-                            let changed = new_me.weapon != me.weapon && me.alive && new_me.alive;
+                            let changed = new_me.weapon != me.weapon
+                                && me.alive
+                                && new_me.alive
+                                && !restarted;
                             if changed && new_me.weapon == SIDEARM {
                                 // A looted gun ran dry: the sidearm is back.
                                 self.holster_started = Some(self.time);
@@ -1733,8 +1897,29 @@ impl EmberGame for ShooterGame {
                 S2C::LobbyList { lobbies } => {
                     tracing::debug!(
                         maps = ?lobbies.iter().map(|l| l.map.as_str()).collect::<Vec<_>>(),
+                        modes = ?lobbies.iter().map(|l| l.mode.as_str()).collect::<Vec<_>>(),
                         "unsolicited lobby list"
                     );
+                }
+                // A round ended. The line names the winner in the mode's
+                // own words; the pause that follows arrives in `State`
+                // and keeps the line on screen beside the countdown.
+                S2C::RoundOver {
+                    winner,
+                    team,
+                    scores,
+                } => {
+                    let won = if team {
+                        self.my_id
+                            .and_then(|id| self.latest.get(&id))
+                            .is_some_and(|p| p.team == winner)
+                    } else {
+                        Some(winner) == self.my_id
+                    };
+                    self.cue(feel::round_over(won), &mut sfx);
+                    let line = self.round_over_line(winner, team, &scores);
+                    status_event = Some(line.clone());
+                    self.round_line = Some(line);
                 }
                 S2C::Pong { .. } => {}
             }
@@ -2043,8 +2228,11 @@ impl EmberGame for ShooterGame {
         }
 
         // ---- Tab scoreboard overlay ----
+        // Forced on through the pause after a round: the round's result
+        // is the one moment the whole table matters, and nobody should
+        // have to find Tab to see it.
         self.since_score_ui += dt;
-        let tab = input.down(KeyCode::Tab) || pad_down(PadButton::Start);
+        let tab = input.down(KeyCode::Tab) || pad_down(PadButton::Start) || self.round_pause > 0.0;
         if tab && self.my_id.is_some() {
             if self.since_score_ui > 0.25 || !self.score_shown {
                 self.since_score_ui = 0.0;
@@ -2233,6 +2421,24 @@ impl EmberGame for ShooterGame {
             }
         }
 
+        // The hill, in king of the hill only: four thin bars along its
+        // footprint and a marker cube high over its centre, white while
+        // free, the king's colour while held, pulsing orange while
+        // contested, so the state of the hill is read from anywhere on
+        // the map without a line of text.
+        if self.mode == GameMode::Hill
+            && let Some(h) = &self.hill
+        {
+            let holder_color =
+                (self.hill_holder < HILL_CONTESTED).then(|| self.player_color(self.hill_holder));
+            let color = feel::hill_color(self.hill_holder, holder_color, self.time);
+            for (centre, size) in feel::hill_bars(h) {
+                inst(&mut frame, centre, size, color);
+            }
+            let (centre, size) = feel::hill_marker(h);
+            inst(&mut frame, centre, size, color);
+        }
+
         // Cover, drawn by kind: the same boxes prediction resolves against,
         // so what you see is what stops you. A raised box (a tunnel roof)
         // is drawn from its base, not from the floor.
@@ -2330,10 +2536,7 @@ impl EmberGame for ShooterGame {
             }
             let pos = self.render_pos(id);
             let feet_y = self.render_y(id);
-            let color = self
-                .metas
-                .get(&id)
-                .map_or(Vec3::splat(0.6), |m| Vec3::from_array(m.color));
+            let color = self.player_color(id);
             let aim = Vec2::new(p.ax, p.az);
             let (body_h, head_y, hand_y, pip_y) = if p.crouch {
                 (0.75, 0.95, 0.62, 1.5)
@@ -2463,12 +2666,20 @@ impl EmberGame for ShooterGame {
             } else {
                 push_gun(&mut frame, hand, aim, accent);
             }
+            // Hp pips: green, or the team's colour in team deathmatch so
+            // the pips over a head say whose head it is before the body
+            // reads.
+            let pip = if self.mode == GameMode::Tdm {
+                color
+            } else {
+                Vec3::new(0.3, 0.9, 0.4)
+            };
             for h in 0..p.hp {
                 inst(
                     &mut frame,
                     Vec3::new(pos.x - 0.3 + f32::from(h) * 0.3, feet_y + pip_y, pos.y),
                     Vec3::splat(0.16),
-                    Vec3::new(0.3, 0.9, 0.4),
+                    pip,
                 );
             }
         }
@@ -3361,6 +3572,7 @@ mod melee_tests {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod wire_tests {
     use super::*;
+    use arena_core::proto::color_for;
 
     const fn me(id: u8) -> PState {
         PState {
@@ -3384,6 +3596,7 @@ mod wire_tests {
             deaths: 0,
             ack: 0,
             ack_age_ticks: 0,
+            team: 0,
         }
     }
 
@@ -3553,6 +3766,9 @@ mod wire_tests {
                 bullets: Vec::new(),
                 pads: Vec::new(),
                 loot: vec![true],
+                team_score: [0, 0],
+                hill: arena_core::shooter::HILL_FREE,
+                round_pause: 0.0,
             })
             .unwrap();
         let (bonks, top) = run(&mut game, 20);
@@ -3581,6 +3797,262 @@ mod wire_tests {
         let fb = game.feedback();
         assert_eq!(fb.rumbles.len(), 2);
         assert_eq!(game.feedback(), Feedback::default());
+    }
+
+    fn meta(id: u8, handle: &str) -> PlayerMeta {
+        PlayerMeta {
+            id,
+            handle: handle.into(),
+            color: color_for(id),
+        }
+    }
+
+    /// In team deathmatch a remote body and its pips wear the team's
+    /// colour and the id colour from `PlayerMeta` appears nowhere; in free
+    /// for all the id colour is back and the pips are green.
+    #[test]
+    fn team_colours_replace_id_colours_in_tdm() {
+        let frame_for = |mode: GameMode| {
+            let (chan, _wire) = net::NetChan::detached();
+            let mut game = ShooterGame::with_chan(chan, None, None);
+            game.my_id = Some(2);
+            game.mode = mode;
+            game.latest.insert(2, me(2));
+            let mut other = me(3);
+            other.x = 4.0;
+            other.team = 1;
+            other.hp = 3;
+            game.latest.insert(3, other);
+            // Player 3's id colour is the palette's green.
+            game.metas.insert(3, meta(3, "green"));
+            game.was_alive = true;
+            game.time = 5.0;
+            game.update(&InputState::default(), 0.001)
+        };
+        let green = Vec3::from_array(color_for(3));
+        let red = feel::team_color(1);
+        let pip_green = Vec3::new(0.3, 0.9, 0.4);
+        let count = |f: &Frame, c: Vec3| f.instances.iter().filter(|i| i.color == c).count();
+        let tdm = frame_for(GameMode::Tdm);
+        assert!(
+            count(&tdm, red) >= 4,
+            "the body and three pips in red: {}",
+            count(&tdm, red)
+        );
+        assert_eq!(count(&tdm, green), 0, "no id colour in a team game");
+        assert_eq!(count(&tdm, pip_green), 0, "pips take the team colour");
+        let ffa = frame_for(GameMode::Ffa);
+        assert!(count(&ffa, green) >= 1, "the id colour outside a team game");
+        assert_eq!(count(&ffa, red), 0);
+        assert!(
+            count(&ffa, pip_green) >= 3,
+            "green pips outside a team game"
+        );
+    }
+
+    /// The status line's match segment per mode, my team first in team
+    /// deathmatch, the king by handle in king of the hill, and the pause
+    /// countdown with the winner's line beside it; and the scoreboard's
+    /// shape: a team header per side and a SCORE column on the hill.
+    #[test]
+    fn the_status_line_names_the_mode() {
+        let (chan, _wire) = net::NetChan::detached();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.my_id = Some(2);
+        let mut mine = me(2);
+        mine.score = 5;
+        mine.team = 1;
+        game.latest.insert(2, mine);
+        game.latest.insert(3, me(3));
+        game.metas.insert(3, meta(3, "kestrel"));
+        let line = |g: &ShooterGame| g.mode_line(g.latest.get(&2));
+        game.mode = GameMode::Ffa;
+        assert_eq!(line(&game), "frags 5 / 20");
+        assert!(
+            game.scoreboard().contains("frags 5 / 20"),
+            "on the status line"
+        );
+        game.mode = GameMode::Tdm;
+        game.team_score = [12, 9];
+        assert_eq!(line(&game), "RED 9 · BLUE 12 / 30", "my team first");
+        game.latest.get_mut(&2).unwrap().team = 0;
+        assert_eq!(line(&game), "BLUE 12 · RED 9 / 30");
+        game.mode = GameMode::Hill;
+        game.latest.get_mut(&2).unwrap().score = 23;
+        game.hill_holder = HILL_FREE;
+        assert_eq!(line(&game), "hill 23 / 60 · hill free");
+        game.hill_holder = HILL_CONTESTED;
+        assert_eq!(line(&game), "hill 23 / 60 · contested");
+        game.hill_holder = 3;
+        assert_eq!(line(&game), "hill 23 / 60 · king: kestrel");
+        game.hill_holder = 2;
+        assert_eq!(line(&game), "hill 23 / 60 · king: player 2");
+        // The pause replaces it with the countdown, rounded up so the
+        // line never says 0 while the round is still paused.
+        game.round_pause = 6.2;
+        assert_eq!(line(&game), "next round in 7 s");
+        game.round_line = Some("kestrel is king of the hill".into());
+        assert_eq!(
+            line(&game),
+            "kestrel is king of the hill · next round in 7 s"
+        );
+        game.round_pause = 0.0;
+        // The hill's scoreboard scores hill points, not frags.
+        let board = game.scoreboard_text();
+        assert!(
+            board.contains("SCORE") && !board.contains("FRAGS"),
+            "{board}"
+        );
+        // The team scoreboard: blue's header, blue's rows, red's header,
+        // red's rows.
+        game.mode = GameMode::Tdm;
+        game.latest.get_mut(&3).unwrap().team = 1;
+        let board = game.scoreboard_text();
+        assert!(board.contains("FRAGS"), "{board}");
+        let blue = board.find("BLUE 12").expect("blue header");
+        let mine = board.find("▶ player 2").expect("my row");
+        let red = board.find("RED 9").expect("red header");
+        let theirs = board.find("  kestrel").expect("their row");
+        assert!(blue < mine && mine < red && red < theirs, "{board}");
+    }
+
+    /// The hill's four bars and its marker are drawn in king of the hill
+    /// only, white while free, in the king's own colour while held (mine
+    /// when it is me), pulsing orange while contested.
+    #[test]
+    fn the_hill_bars_take_the_holders_colour() {
+        let dock = Hill {
+            min: [-4.0, -2.0],
+            max: [4.0, 2.0],
+            top: 1.2,
+        };
+        let frame_for = |mode: GameMode, holder: u8| {
+            let (chan, _wire) = net::NetChan::detached();
+            let mut game = ShooterGame::with_chan(chan, None, None);
+            game.my_id = Some(2);
+            game.mode = mode;
+            game.hill = Some(dock);
+            game.hill_holder = holder;
+            game.latest.insert(2, me(2));
+            game.latest.insert(3, me(3));
+            game.metas.insert(2, meta(2, "me"));
+            game.metas.insert(3, meta(3, "them"));
+            game.was_alive = true;
+            game.time = 5.0;
+            let frame = game.update(&InputState::default(), 0.001);
+            (frame, game.time)
+        };
+        let bar_y = dock.top + feel::HILL_BAR_LIFT;
+        let marker = Vec3::new(0.0, dock.top + feel::HILL_MARKER_RISE, 0.0);
+        let hill_colours = |f: &Frame| -> Vec<Vec3> {
+            f.instances
+                .iter()
+                .filter(|i| {
+                    (i.position.y - bar_y).abs() < 1e-5 || (i.position - marker).length() < 1e-5
+                })
+                .map(|i| i.color)
+                .collect()
+        };
+        let (free, _) = frame_for(GameMode::Hill, HILL_FREE);
+        let colours = hill_colours(&free);
+        assert_eq!(colours.len(), 5, "four bars and a marker");
+        assert!(colours.iter().all(|c| *c == feel::HILL_FREE_COLOR));
+        let (held, _) = frame_for(GameMode::Hill, 3);
+        let king = Vec3::from_array(color_for(3));
+        let colours = hill_colours(&held);
+        assert_eq!(colours.len(), 5);
+        assert!(colours.iter().all(|c| *c == king), "the king's colour");
+        let (mine, _) = frame_for(GameMode::Hill, 2);
+        let me_colour = Vec3::from_array(color_for(2));
+        assert!(hill_colours(&mine).iter().all(|c| *c == me_colour));
+        let (contested, t) = frame_for(GameMode::Hill, HILL_CONTESTED);
+        let expected = feel::hill_color(HILL_CONTESTED, None, t);
+        let colours = hill_colours(&contested);
+        assert_eq!(colours.len(), 5);
+        assert!(colours.iter().all(|c| (*c - expected).length() < 1e-6));
+        let (ffa, _) = frame_for(GameMode::Ffa, 3);
+        assert!(hill_colours(&ffa).is_empty(), "no hill outside the mode");
+    }
+
+    /// One `RoundOver` on the wire is one announcement: one rumble, one
+    /// line, and the line stays through the pause (with the scoreboard
+    /// forced on) until the state that restarts the round clears it.
+    #[test]
+    fn round_over_is_announced_once() {
+        let (chan, inbox, _wire) = net::NetChan::detached_duplex();
+        let mut game = ShooterGame::with_chan(chan, None, None);
+        game.my_id = Some(2);
+        game.mode = GameMode::Tdm;
+        game.latest.insert(2, me(2));
+        let mut other = me(3);
+        other.team = 1;
+        game.latest.insert(3, other);
+        game.was_alive = true;
+        inbox
+            .send(S2C::RoundOver {
+                winner: 0,
+                team: true,
+                scores: vec![(2, 7), (3, 4)],
+            })
+            .unwrap();
+        let rumble = feel::round_over(true).rumble.unwrap();
+        let input = InputState::default();
+        let mut felt = 0;
+        for _ in 0..30 {
+            game.update(&input, 1.0 / 60.0);
+            felt += game
+                .feedback()
+                .rumbles
+                .iter()
+                .filter(|r| **r == rumble)
+                .count();
+        }
+        assert_eq!(felt, 1, "announced once");
+        assert_eq!(game.round_line.as_deref(), Some("BLUE wins the round"));
+        let state = |pause: f32| S2C::State {
+            tick: 1,
+            players: vec![me(2), other],
+            bullets: Vec::new(),
+            pads: Vec::new(),
+            loot: Vec::new(),
+            team_score: [30, 12],
+            hill: HILL_FREE,
+            round_pause: pause,
+        };
+        inbox.send(state(9.5)).unwrap();
+        game.update(&input, 1.0 / 60.0);
+        assert_eq!(game.round_pause, 9.5);
+        assert_eq!(game.team_score, [30, 12]);
+        assert!(
+            game.score_shown,
+            "the scoreboard is forced on through the pause"
+        );
+        assert!(
+            game.round_line.is_some(),
+            "the line stays through the pause"
+        );
+        assert!(
+            game.scoreboard()
+                .contains("BLUE wins the round · next round in 10 s")
+        );
+        inbox.send(state(0.0)).unwrap();
+        game.update(&input, 1.0 / 60.0);
+        assert!(!game.score_shown, "the restart releases the scoreboard");
+        assert_eq!(game.round_line, None, "the restart clears the line");
+        assert_eq!(game.feedback(), Feedback::default(), "nothing else rumbled");
+        // The other two modes' lines.
+        game.metas.insert(3, meta(3, "kestrel"));
+        game.mode = GameMode::Ffa;
+        assert_eq!(
+            game.round_over_line(3, false, &[(3, 20), (2, 11)]),
+            "kestrel wins the round (20 frags)"
+        );
+        game.mode = GameMode::Hill;
+        assert_eq!(
+            game.round_over_line(3, false, &[(3, 60)]),
+            "kestrel is king of the hill"
+        );
+        assert_eq!(game.round_over_line(1, true, &[]), "RED wins the round");
     }
 }
 
