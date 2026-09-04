@@ -33,6 +33,9 @@ const LEVELS: [RefinementLevel; 3] = [
 #[cfg(any(target_arch = "wasm32", test))]
 const BACKDROP_PRESENT_LEVEL: RefinementLevel = RefinementLevel::Preview;
 
+/// Bound on sampled reference requests per accepted navigation.
+#[cfg(any(target_arch = "wasm32", test))]
+const SAMPLED_REFERENCE_LIMIT: u32 = 4;
 #[cfg(any(target_arch = "wasm32", test))]
 const REFERENCE_RECORD_BYTES: usize = 8;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -92,6 +95,27 @@ fn select_reference_candidate(
             Some(best) if best.rank >= candidate.rank => Some(best),
             _ => Some(candidate),
         })
+}
+
+/// Decides whether one completed level should buy a new reference at its census candidate.
+///
+/// The level's cap must strictly outlast the accepted orbit, because only then can that grid's
+/// top-ranked record name a longer one; the bound must not be spent; and no request may already be
+/// outstanding for this same orbit length, or a ladder whose Interactive and Final caps both
+/// outlast one short reference would spend two slots to buy a single correction.
+#[cfg(any(target_arch = "wasm32", test))]
+const fn sampled_reference_due(
+    perturbation: bool,
+    level_cap: u32,
+    accepted_orbit_length: u32,
+    requests_made: u32,
+    request_at_length: Option<u32>,
+) -> bool {
+    perturbation
+        && requests_made < SAMPLED_REFERENCE_LIMIT
+        && accepted_orbit_length != 0
+        && level_cap > accepted_orbit_length
+        && !matches!(request_at_length, Some(length) if length == accepted_orbit_length)
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
@@ -1059,8 +1083,6 @@ mod browser {
     const DIRECTORY_BYTES: u32 = SPAN_CAPACITY * 16 + HANDLE_CAPACITY * 4;
     const MAX_HEADER_PAGES: u32 = 64;
     const MAX_HEADER_SETS: u32 = 6;
-    /// Bound on sampled reference requests per accepted navigation.
-    const SAMPLED_REFERENCE_LIMIT: u32 = 4;
 
     fn expand_reference_texels_from_array(
         records: &js_sys::Uint8Array,
@@ -1862,7 +1884,7 @@ mod browser {
         /// One request is issued per accepted orbit: a ladder whose Interactive and Final caps both
         /// outlast the same short reference would otherwise spend two of the bounded slots to buy
         /// one correction, because the second request only supersedes the first. At most
-        /// [`SAMPLED_REFERENCE_LIMIT`] requests are made per accepted navigation, so a grid whose
+        /// [`super::SAMPLED_REFERENCE_LIMIT`] requests per accepted navigation, so a grid whose
         /// glitches have another cause cannot drive a chase, and the top rank is a heuristic rather
         /// than a proof, which is why the arrival keeps the longest orbit rather than the newest.
         fn maybe_request_sampled_reference(
@@ -1874,12 +1896,13 @@ mod browser {
             let Some(index) = candidate else {
                 return;
             };
-            if KernelMode::for_zoom(viewer.requested().zoom_log2) != KernelMode::Perturbation
-                || self.sampled_references >= SAMPLED_REFERENCE_LIMIT
-                || self.main.orbit_length == 0
-                || frame.iteration_cap <= self.main.orbit_length
-                || self.sampled_request_at_length == Some(self.main.orbit_length)
-            {
+            if !super::sampled_reference_due(
+                KernelMode::for_zoom(viewer.requested().zoom_log2) == KernelMode::Perturbation,
+                frame.iteration_cap,
+                self.main.orbit_length,
+                self.sampled_references,
+                self.sampled_request_at_length,
+            ) {
                 return;
             }
             if viewer
@@ -3078,6 +3101,91 @@ mod tests {
     /// Poll budget and wall the version-three present configuration refuses at.
     const SCENE_POLLS: u32 = 4_096;
     const SCENE_DEADLINE_MS: f64 = 30_000.0;
+
+    /// Pins fix (1): a boundary reference buys exactly one correction and skips the levels below.
+    ///
+    /// Preview 64, Interactive 256, Final 512 against an accepted orbit of 200: only the two levels
+    /// whose cap outlasts that orbit could ask, and once one has asked the other must not, or the
+    /// second request supersedes the first and one correction has cost two of the four slots. The
+    /// resumed ladder then restarts at the level that asked rather than at Preview, because a
+    /// reference exchange replaces the orbit the same view is expanded around and repaints nothing.
+    #[test]
+    fn a_boundary_reference_spends_one_request_and_resumes_at_the_level_that_asked() {
+        const PREVIEW_CAP: u32 = 64;
+        const INTERACTIVE_CAP: u32 = 256;
+        const FINAL_CAP: u32 = 512;
+        const ORBIT: u32 = 200;
+
+        let mut requests = 0;
+        let mut at_length = None;
+        let mut asked = Vec::new();
+        for (level, cap) in [
+            (RefinementLevel::Preview, PREVIEW_CAP),
+            (RefinementLevel::Interactive, INTERACTIVE_CAP),
+            (RefinementLevel::Final, FINAL_CAP),
+        ] {
+            if super::sampled_reference_due(true, cap, ORBIT, requests, at_length) {
+                requests += 1;
+                at_length = Some(ORBIT);
+                asked.push(level);
+            }
+        }
+        assert_eq!(
+            asked,
+            vec![RefinementLevel::Interactive],
+            "one request per accepted orbit, at the first level whose cap outlasts it"
+        );
+        assert_eq!(requests, 1);
+
+        // The bound and the shallow path still refuse, and a reference already long enough asks
+        // for nothing at all.
+        assert!(!super::sampled_reference_due(
+            false,
+            FINAL_CAP,
+            ORBIT,
+            0,
+            None
+        ));
+        assert!(!super::sampled_reference_due(
+            true,
+            FINAL_CAP,
+            FINAL_CAP,
+            0,
+            None
+        ));
+        assert!(!super::sampled_reference_due(
+            true,
+            FINAL_CAP,
+            ORBIT,
+            super::SAMPLED_REFERENCE_LIMIT,
+            None
+        ));
+        // A longer accepted orbit re-arms the request: the outstanding one was for the old length.
+        assert!(super::sampled_reference_due(
+            true,
+            FINAL_CAP,
+            ORBIT + 51,
+            1,
+            Some(ORBIT)
+        ));
+
+        let mut resumed = FrameLoop::default();
+        resumed.restart(7);
+        assert_eq!(resumed.due(), Some(RefinementLevel::Preview));
+        resumed.scene_input_resumed(8, RefinementLevel::Interactive);
+        assert_eq!(
+            resumed.due(),
+            Some(RefinementLevel::Interactive),
+            "a correction round resumes at the level whose census named the candidate"
+        );
+        let mut restarted = FrameLoop::default();
+        restarted.scene_input_ready(9);
+        assert_eq!(
+            restarted.due(),
+            Some(RefinementLevel::Preview),
+            "an ordinary navigation still starts the ladder from Preview"
+        );
+    }
 
     #[test]
     fn the_census_candidate_ranks_interior_over_glitch_over_the_longest_escape() {
