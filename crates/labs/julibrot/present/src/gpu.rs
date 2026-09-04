@@ -2325,11 +2325,10 @@ mod tests {
                 panic!("a successful scene fence must deliver independently of its census");
             };
             assert_eq!(measurement.id, 29);
-            let glitch_pixel_count =
-                glitch_count_if_ready(take_glitch_readback_result(&mut pending), || {
-                    panic!("an unavailable census must not be read")
-                });
-            assert_eq!(glitch_pixel_count, None);
+            let census = census_if_ready(take_glitch_readback_result(&mut pending), || {
+                panic!("an unavailable census must not be read")
+            });
+            assert_eq!(census, None);
         }
     }
 
