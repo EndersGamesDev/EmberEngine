@@ -2737,11 +2737,12 @@ mod tests {
             if self.pending.is_some() {
                 self.fence_observations += 1;
                 if let Some(event) = self.callback.take() {
-                    if let FakeEvent::Completed(scene) = event {
-                        if self.retained_scene.is_none() || scene.level == RefinementLevel::Final {
-                            self.retained_scene = Some(scene.id);
-                            self.refuse_warp = false;
-                        }
+                    if let FakeEvent::Completed(scene) = event
+                        && (self.retained_scene.is_none()
+                            || scene.level == RefinementLevel::Final)
+                    {
+                        self.retained_scene = Some(scene.id);
+                        self.refuse_warp = false;
                     }
                     self.pending = None;
                     events.push(event);
