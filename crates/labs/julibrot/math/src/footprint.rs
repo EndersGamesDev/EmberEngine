@@ -1,8 +1,8 @@
 //! Where the lifted scene mesh actually lands on the render surface.
 //!
 //! Screen-aligned sampling chooses chart points by inverting the scene map at height zero, so at
-//! `height_scale = 0` every mesh vertex is its own screen pixel and the mesh tiles the frame
-//! exactly. Lifting a vertex into the fifth coordinate moves it: the five-to-four perspective
+//! `height_scale = 0` every interior mesh vertex is its own screen pixel, the outermost ring is
+//! drawn on the frame boundary, and the mesh tiles the frame exactly. Lifting a vertex into the fifth coordinate moves it: the five-to-four perspective
 //! divides by `d₅ − h`, so a vertex whose record sits below the chart is pulled toward the frame
 //! centre and one above it is pushed out. The frame's own boundary vertices are therefore no
 //! longer on the frame boundary, and the mesh stops covering the surface it was sampled for.
