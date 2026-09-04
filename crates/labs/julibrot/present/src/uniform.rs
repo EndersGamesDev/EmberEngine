@@ -194,6 +194,10 @@ impl SceneUniform {
     ///
     /// Returns an error when the extent is empty, overflows, or exceeds the span length.
     #[allow(
+        clippy::cast_possible_truncation,
+        reason = "the checked binary64 map apron is narrowed once into the binary32 GPU ABI"
+    )]
+    #[allow(
         clippy::too_many_arguments,
         reason = "the scene ABI constructor names every independently validated payload field"
     )]
