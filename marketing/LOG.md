@@ -27,3 +27,23 @@ Repo public, 1 star, 0 forks, 0 watchers, 2 issues, 0 releases, wiki off, descri
 ## KPIs (2026-09-04 21:12)
 
 1 star, 0 forks, 0 watchers, 2 issues, 1 release (v20), wiki enabled (unseeded), description set. The machine-side presence work is done and on main; the next movement comes from the distribution phase (the human pastes `marketing/posts/`) and from the weekly loop.
+
+## 2026-09-04 — session 2 (barza, the superloop: ops + promotion)
+
+- 21:35 Session 2 opened under the standing superloop order: run the loop in parallel with the codex agent, coordinate over the barza board (https://enderpeer.github.io/barza/), make own decisions, no questions in between.
+- 21:38 Barza board recovery: the service and tunnel were down (no liveness at 19:09Z) and the watchdog had died silently at boot (watchdog.log: start line 12:27:20Z, nothing after). Ran `barza-up.ps1` → service healthy (seq 51), fresh tunnel `experienced-inns-tunnel-presented`, address book republished. Restarted the watchdog, then handed it to the `barza-watchdog` scheduled task (task-owned; the session pid was stopped).
+- 21:4x Recon: the machine rebooted at 14:27 local; the logon host deploy failed its dirty-tree check (lane tree, `crates/arena/src/online.rs`); a 15:35 local re-run had published r590/5563d80 to the book while pages already ran r1251+dirty @ b595d60 (v21). Book lagged pages.
+- 21:50 Created clean worktree `C:\Users\end\dev\ember-host` at origin/main and rewrote the `ember-arena-host` task wrapper: build from ember-host, warm shared cargo target (`C:\Users\end\dev\ember\target`), `/LOW` priority. Original wrapper backed up as `ember-arena-host.cmd.bak-barza`.
+- 21:55 Triggered the host redeploy via the task. Codex's v22 release flow overwrote the wrapper mid-run (their ember-environment worktree); the deploy built d85a40f (tip of `codex/environment-weather`, r1265) and published it to the book. Run verified: wsbot healthcheck OK (states=180, 29 bullets, 22 shots), fresh tunnel `wss://seem-excerpt-confidence-logged.trycloudflare.com`, `ONLINE … r1265 d85a40f`.
+- 21:58 Codex merged v22 to main — d85a40f `release(arena): publish v22 skies and weather`, including b12219d, the fix for the script-parser unknown-token compile failure they reported (no separate fix needed from this loop). The live host is now exactly main. Reset ember-host to d85a40f; re-pointed the wrapper at ember-host (codex-era wrapper backed up as `ember-arena-host.cmd.bak-v22`).
+- 22:0x Barza post (seq 53): the recovery, the host deploy, the wrapper/worktree design, the v22 integration plan, the `Unos/` non-recurrence confirmation, board state.
+- 22:0x Triage pass: posted a reaction to issue #1 (4D arena corpus — pressure on the gates: the ATW stabilizer finding, a ten-second "where is home" comprehension gate, the 18 MB worst-case slice upload against the one-bundle cost law, rank four as the default) and to issue #2 (authority and time — the disposition table's rollback re-run clause, the protocol bump's number and shipping order, plus the two clauses named as correct).
+- 22:0x KPI: stars=1, watchers=0, forks=0, open_issues=2; latest external event is wildskymaker (2026-09-02).
+- 22:0x Launched the v22 pages deploy from ember-host (`deploy/deploy-pages.sh`, LOW priority, log `~/.ember/arena-local/pages-deploy.log`): pages still ship v21 (r1251+dirty); this puts the v22 build on the hub with a clean stamp.
+- 22:0x Release v22 is open: main's HEAD (d85a40f) has no tag or release yet (only v20 exists); the board task creates it.
+- Still blocked: the wiki git repo 404s ~15 min after enabling; the seed is ready at `marketing/wiki/github-wiki-home.md`.
+- Not verified this session: the v22 pages deploy (in flight), the wiki, the issue comments in a browser (the API returned their URLs).
+
+## KPIs (2026-09-04 22:0x)
+
+1 star, 0 forks, 0 watchers, 2 issues (both with reactions), 1 release (v20; v22 pending), wiki enabled (unseeded), description set, engine page + hub live. Host and pages converge on d85a40f (v22) as this deploy finishes.
