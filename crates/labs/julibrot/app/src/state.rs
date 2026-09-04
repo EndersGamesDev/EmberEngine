@@ -367,13 +367,7 @@ struct CheckedScreenMap {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SceneFootprintKey {
     object: [u64; 6],
-    camera: [u64; 10],
-    camera_translation: [u64; 5],
-    camera_yaw: u64,
-    camera_pitch: u64,
-    height_scale: u64,
-    distance_five: u64,
-    distance_four: u64,
+    view: [u64; 20],
     extent: [u32; 2],
 }
 
@@ -381,13 +375,7 @@ impl SceneFootprintKey {
     fn new(object: ObjectAngles, view: ViewControls, extent: [u32; 2]) -> Self {
         Self {
             object: object.as_array().map(f64::to_bits),
-            camera: view.camera.map(f64::to_bits),
-            camera_translation: view.camera_translation.map(f64::to_bits),
-            camera_yaw: view.camera_yaw.to_bits(),
-            camera_pitch: view.camera_pitch.to_bits(),
-            height_scale: view.height_scale.to_bits(),
-            distance_five: view.distance_five.to_bits(),
-            distance_four: view.distance_four.to_bits(),
+            view: view.as_array().map(f64::to_bits),
             extent,
         }
     }
@@ -1381,6 +1369,52 @@ mod tests {
             .expect("owner relief view");
     }
 
+    fn object_angles_from_array(values: [f64; 6]) -> ObjectAngles {
+        let [rho_12, rho_13, rho_14, rho_23, rho_24, rho_34] = values;
+        ObjectAngles {
+            rho_12,
+            rho_13,
+            rho_14,
+            rho_23,
+            rho_24,
+            rho_34,
+        }
+    }
+
+    fn view_controls_from_array(values: [f64; 20]) -> ViewControls {
+        let [
+            c12,
+            c13,
+            c14,
+            c23,
+            c24,
+            c34,
+            c15,
+            c25,
+            c35,
+            c45,
+            t1,
+            t2,
+            t3,
+            t4,
+            t5,
+            camera_yaw,
+            camera_pitch,
+            height_scale,
+            distance_five,
+            distance_four,
+        ] = values;
+        ViewControls {
+            camera: [c12, c13, c14, c23, c24, c34, c15, c25, c35, c45],
+            camera_translation: [t1, t2, t3, t4, t5],
+            camera_yaw,
+            camera_pitch,
+            height_scale,
+            distance_five,
+            distance_four,
+        }
+    }
+
     /// The screen-to-slice conversion and the slice-to-screen one are each other's inverse.
     ///
     /// The crosshair is drawn from the projection and the point is stored from the conversion, so
@@ -1870,6 +1904,53 @@ mod tests {
     }
 
     #[test]
+    fn each_object_and_view_scalar_requires_a_footprint_recompute() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        set_close_owner_row(&mut viewer);
+        let base_object = viewer.requested().object_angles;
+        let base_view = viewer.requested().view;
+        viewer
+            .scene_footprint(REFERENCE_GRID)
+            .expect("base footprint");
+        assert_eq!(viewer.footprint_construction_count(), 1);
+
+        for scalar in 0..26 {
+            viewer
+                .set_object_angles(base_object)
+                .expect("restore base object");
+            viewer
+                .set_view_controls(base_view)
+                .expect("restore base view");
+            viewer
+                .scene_footprint(REFERENCE_GRID)
+                .expect("cached base footprint");
+            let before = viewer.footprint_construction_count();
+
+            if scalar < 6 {
+                let mut values = base_object.as_array();
+                values[scalar] -= 1.0e-6;
+                viewer
+                    .set_object_angles(object_angles_from_array(values))
+                    .expect("changed object scalar");
+            } else {
+                let mut values = base_view.as_array();
+                values[scalar - 6] -= 1.0e-6;
+                viewer
+                    .set_view_controls(view_controls_from_array(values))
+                    .expect("changed view scalar");
+            }
+            viewer
+                .scene_footprint(REFERENCE_GRID)
+                .expect("changed-scalar footprint");
+            assert_eq!(
+                viewer.footprint_construction_count(),
+                before + 1,
+                "scalar {scalar} reused the base cache entry"
+            );
+        }
+    }
+
+    #[test]
     fn backdrop_map_copies_the_cached_main_rows_and_adds_only_its_apron() {
         let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
         set_close_owner_row(&mut viewer);
@@ -1960,11 +2041,11 @@ mod tests {
     fn shipped_presets_pin_the_minimum_gain_backdrop_policy() {
         let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
         let backdrop_extent = [REFERENCE_GRID[0] / 2, REFERENCE_GRID[1] / 2];
-        for (row, expected_apron, expected_backdrop) in [
-            (PRESET_ROWS[0], 1.0_f64, false),
-            (PRESET_ROWS[1], 1.0_f64, false),
-            (PRESET_ROWS[2], 1.25_f64, true),
-            (PRESET_ROWS[3], 1.25_f64, true),
+        for (row, expected_apron, expected_uncovered, expected_backdrop) in [
+            (PRESET_ROWS[0], 1.0_f64, 0.0, false),
+            (PRESET_ROWS[1], 1.0_f64, 0.0, false),
+            (PRESET_ROWS[2], 1.0_f64, 7.0 / 3969.0, false),
+            (PRESET_ROWS[3], 1.0_f64, 0.0, false),
         ] {
             viewer.apply_preset(row).expect("relief preset is valid");
             let footprint = viewer
@@ -1974,6 +2055,11 @@ mod tests {
                 footprint.apron_scale.to_bits(),
                 expected_apron.to_bits(),
                 "{} footprint",
+                row.name
+            );
+            assert_eq!(
+                footprint.uncovered_fraction, expected_uncovered,
+                "{} uncovered",
                 row.name
             );
             assert_eq!(

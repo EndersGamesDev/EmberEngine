@@ -164,7 +164,7 @@ pub struct PageFacts<'a> {
     pub height_scale: f64,
     pub distance_five: f64,
     pub distance_four: f64,
-    /// Share of the surface the lifted scene mesh cannot reach after the requested apron.
+    /// Share of the interior footprint census the lifted mesh cannot reach after its apron.
     pub surface_uncovered_fraction: Option<f64>,
     /// Raster-selected sampling overscan request, as a multiple of the frame extent.
     pub scene_apron_scale: Option<f64>,
