@@ -694,6 +694,8 @@ fn scene_update_controls_bind_the_checkbox_and_button_to_distinct_app_commands()
     assert!(MAIN.contains("api.app_set_scene_mode(event.target.checked ? 1 : 0);"));
     assert!(MAIN.contains("api.app_update_scene();"));
     assert!(MAIN.contains("facts.scene_mode === \"manual\" && facts.scene_update_pending"));
+    assert!(MAIN.contains("facts.warp_kind === \"HoldStale\""));
+    assert!(MAIN.contains("warp refused, showing scene ${facts.completed_scene_id} unmoved"));
 }
 
 #[test]
