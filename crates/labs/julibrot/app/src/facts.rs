@@ -1,7 +1,7 @@
 //! Honest requested, delivered, measured, unavailable, and replay-only page facts.
 
 use ember_julibrot_kernels::{KernelMode, RefinementLevel};
-use ember_julibrot_math::{precision_for, scaled_pixel_scale, scene_footprint};
+use ember_julibrot_math::{precision_for, scaled_pixel_scale};
 use ember_julibrot_present::{SampleClass, SubmissionMeasurement};
 use std::fmt;
 use std::sync::Arc;
@@ -228,13 +228,10 @@ impl<'a> PageFacts<'a> {
         let scale = scaled_pixel_scale(requested.zoom_log2, device.width).ok();
         let zoom_digits_f64 = requested.zoom_log2 * core::f64::consts::LOG10_2;
         let depth_digits = ceil_nonnegative_to_u32(zoom_digits_f64);
-        let footprint = scene_footprint(
-            &requested.object_angles,
-            &requested.view,
-            device.width,
-            device.height,
-        )
-        .ok();
+        let footprint = app
+            .viewer()
+            .scene_footprint([device.width, device.height])
+            .ok();
         let loop_facts = app.frame_loop();
         let present = loop_facts.present_facts();
         let dispatch = loop_facts.dispatch_facts();

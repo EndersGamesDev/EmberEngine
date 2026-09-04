@@ -9,7 +9,8 @@
 //! This module mirrors the scene shader's vertex chain in binary64 and reports, for one pose, how
 //! much of the surface the main mesh and candidate backdrop spans can reach. It reads no records:
 //! the raster census covers the whole record domain and selects the smallest reviewed apron that
-//! recovers at least half the coverage gained at scale five.
+//! recovers at least half the best candidate gain, provided that gain is at least one percent of
+//! the census lattice.
 
 #![allow(
     clippy::cast_precision_loss,
@@ -31,6 +32,15 @@ const COVERAGE_MESH_SIDE: u32 = 65;
 /// rather than cell centres: a mesh that falls short of the frame by less than one cell is counted
 /// short instead of being rounded into coverage.
 const COVERAGE_LATTICE_SIDE: usize = 65;
+
+/// Number of samples in the fixed coverage lattice.
+const COVERAGE_LATTICE_POINTS: usize = COVERAGE_LATTICE_SIDE * COVERAGE_LATTICE_SIDE;
+
+/// Smallest absolute improvement worth buying a separate coarse grid for.
+///
+/// One percent of 4,225 lattice points rounds up to 43, so a 42-point improvement is still too
+/// small and a 43-point improvement is admitted.
+const MINIMUM_BACKDROP_GAIN_POINTS: usize = 43;
 
 /// Guard the scene shader applies to both perspective denominators before dividing.
 const DENOMINATOR_EPSILON: f64 = 1.0e-4;
@@ -117,24 +127,32 @@ pub fn scene_footprint(
         matrix: camera_matrix(view),
     };
     let extent = [grid_w, grid_h];
-    let main_uncovered = uncovered_fraction(&chain, extent, 1.0);
+    let main_uncovered = uncovered_points(&chain, extent, 1.0);
     let candidates = APRON_CANDIDATES
-        .map(|apron_scale| (apron_scale, uncovered_fraction(&chain, extent, apron_scale)));
-    let widest_uncovered = candidates[APRON_CANDIDATES.len() - 1].1;
-    let widest_gain = main_uncovered - widest_uncovered;
-    let (apron_scale, uncovered) = if widest_gain > 0.0 {
-        let required_gain = 0.5 * widest_gain;
-        candidates
-            .into_iter()
-            .find(|(_, candidate_uncovered)| main_uncovered - candidate_uncovered >= required_gain)
-            .unwrap_or((5.0, widest_uncovered))
+        .map(|apron_scale| (apron_scale, uncovered_points(&chain, extent, apron_scale)));
+    let mut best = candidates[0];
+    for candidate in candidates.iter().copied().skip(1) {
+        if candidate.1 < best.1 {
+            best = candidate;
+        }
+    }
+    let best_gain = main_uncovered.saturating_sub(best.1);
+    let (apron_scale, uncovered) = if best_gain >= MINIMUM_BACKDROP_GAIN_POINTS {
+        let mut selected = best;
+        for candidate in candidates {
+            if main_uncovered.saturating_sub(candidate.1) * 2 >= best_gain {
+                selected = candidate;
+                break;
+            }
+        }
+        selected
     } else {
         (1.0, main_uncovered)
     };
     let relief_clipped_fraction = clipped_fraction(&chain, grid_w, grid_h, apron_scale);
     Ok(SceneFootprint {
         apron_scale,
-        uncovered_fraction: uncovered,
+        uncovered_fraction: uncovered as f64 / COVERAGE_LATTICE_POINTS as f64,
         relief_clipped_fraction,
     })
 }
@@ -169,46 +187,84 @@ fn lattice_value(index: usize) -> f64 {
 /// chord cuts across the curved image and covers ground the fine mesh leaves as sky, so the share
 /// is not a bound in either direction. It is the same rule the picture is drawn by, evaluated at a
 /// stated resolution, and it is compared only against itself.
-fn uncovered_fraction(chain: &VertexChain<'_>, extent: [u32; 2], apron_scale: f64) -> f64 {
+fn uncovered_points(chain: &VertexChain<'_>, extent: [u32; 2], apron_scale: f64) -> usize {
     let side = COVERAGE_LATTICE_SIDE;
     let mut reached = vec![false; side * side];
     let mesh = COVERAGE_MESH_SIDE as usize;
     let mut projected: Vec<Option<([f64; 2], bool)>> = vec![None; mesh * mesh];
-    let [grid_w, grid_h] = extent;
     for record_height in CENSUS_HEIGHTS {
-        let height = displayed_height(chain.view.height_scale, record_height);
-        for row in 0..mesh {
-            for column in 0..mesh {
-                let screen = [
-                    (column as f64 / (mesh - 1) as f64 - 0.5) * f64::from(grid_w),
-                    (row as f64 / (mesh - 1) as f64 - 0.5) * f64::from(grid_h),
-                ];
-                projected[row * mesh + column] =
-                    project_vertex(chain, extent, screen, height, apron_scale);
+        rasterize_height(
+            chain,
+            extent,
+            apron_scale,
+            record_height,
+            &mut reached,
+            &mut projected,
+        );
+    }
+    let covered = reached.iter().filter(|hit| **hit).count();
+    side * side - covered
+}
+
+/// Converts the exact uncovered-point census to the public fraction.
+#[cfg(test)]
+fn uncovered_fraction(chain: &VertexChain<'_>, extent: [u32; 2], apron_scale: f64) -> f64 {
+    uncovered_points(chain, extent, apron_scale) as f64 / COVERAGE_LATTICE_POINTS as f64
+}
+
+/// Counts which vertices survive one census height while adding its drawn triangles to `reached`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct HeightRasterStats {
+    projected_vertices: usize,
+    unclamped_vertices: usize,
+}
+
+fn rasterize_height(
+    chain: &VertexChain<'_>,
+    extent: [u32; 2],
+    apron_scale: f64,
+    record_height: f64,
+    reached: &mut [bool],
+    projected: &mut [Option<([f64; 2], bool)>],
+) -> HeightRasterStats {
+    let mesh = COVERAGE_MESH_SIDE as usize;
+    let [grid_w, grid_h] = extent;
+    let height = displayed_height(chain.view.height_scale, record_height);
+    let mut stats = HeightRasterStats::default();
+    for row in 0..mesh {
+        for column in 0..mesh {
+            let screen = [
+                (column as f64 / (mesh - 1) as f64 - 0.5) * f64::from(grid_w),
+                (row as f64 / (mesh - 1) as f64 - 0.5) * f64::from(grid_h),
+            ];
+            let vertex = project_vertex(chain, extent, screen, height, apron_scale);
+            if let Some((_, clamped)) = vertex {
+                stats.projected_vertices += 1;
+                stats.unclamped_vertices += usize::from(!clamped);
             }
+            projected[row * mesh + column] = vertex;
         }
-        for row in 0..mesh - 1 {
-            for column in 0..mesh - 1 {
-                let corners = [
-                    projected[row * mesh + column],
-                    projected[row * mesh + column + 1],
-                    projected[(row + 1) * mesh + column + 1],
-                    projected[(row + 1) * mesh + column],
-                ];
-                for triangle in [
-                    [corners[0], corners[1], corners[2]],
-                    [corners[0], corners[2], corners[3]],
-                ] {
-                    let Some(drawn) = drawn_triangle(triangle) else {
-                        continue;
-                    };
-                    mark_triangle(&mut reached, drawn);
-                }
+    }
+    for row in 0..mesh - 1 {
+        for column in 0..mesh - 1 {
+            let corners = [
+                projected[row * mesh + column],
+                projected[row * mesh + column + 1],
+                projected[(row + 1) * mesh + column + 1],
+                projected[(row + 1) * mesh + column],
+            ];
+            for triangle in [
+                [corners[0], corners[1], corners[2]],
+                [corners[0], corners[2], corners[3]],
+            ] {
+                let Some(drawn) = drawn_triangle(triangle) else {
+                    continue;
+                };
+                mark_triangle(reached, drawn);
             }
         }
     }
-    let covered = reached.iter().filter(|hit| **hit).count();
-    1.0 - covered as f64 / (side * side) as f64
+    stats
 }
 
 /// Applies the same left-to-right height operation as the scene WGSL.
@@ -438,8 +494,9 @@ fn clipped_fraction(chain: &VertexChain<'_>, grid_w: u32, grid_h: u32, apron_sca
 #[cfg(test)]
 mod tests {
     use super::{
-        APRON_CANDIDATES, SceneFootprint, VertexChain, displayed_height, scene_footprint,
-        uncovered_fraction,
+        APRON_CANDIDATES, CENSUS_HEIGHTS, COVERAGE_LATTICE_POINTS, COVERAGE_MESH_SIDE,
+        SceneFootprint, VertexChain, displayed_height, rasterize_height, scene_footprint,
+        uncovered_fraction, uncovered_points,
     };
     use crate::screen::camera_matrix;
     use crate::{ObjectAngles, PlaneAngles, ViewControls, construct_plane};
@@ -599,14 +656,13 @@ mod tests {
         assert!(footprint.uncovered_fraction > 0.15);
     }
 
-    /// How much the coverage layer is actually worth at the close owner row.
+    /// Every candidate's deterministic lattice count at the close owner row.
     ///
-    /// The published fact measures the frame the backdrop reaches. The comparison the design rests
-    /// on is against the main grid alone, at the same pose through the same mirror with the apron
-    /// set to one: the wide layer is a large real improvement there, not a rounding one, and the
-    /// remaining sky is honest rather than a measurement artefact.
+    /// The best candidate is scale three, not the widest candidate, because raster quantization is
+    /// not monotonic in apron. Scale 1.25 is nevertheless the smallest candidate that recovers at
+    /// least half the best gain and therefore is the policy's requested span.
     #[test]
-    fn the_backdrop_reaches_far_more_of_the_close_row_than_the_main_grid_alone() {
+    fn the_close_row_candidate_spread_and_half_best_gain_are_pinned() {
         let (object, view) = close_owner_row();
         let map = crate::screen_to_plane(&object, &view, 0.0, 960, 540, 960.0 / 540.0)
             .expect("relief pose maps");
@@ -616,43 +672,73 @@ mod tests {
             view: &view,
             matrix: camera_matrix(&view),
         };
-        let main_alone = uncovered_fraction(&chain, [960, 540], 1.0);
-        let with_backdrop = uncovered_fraction(&chain, [960, 540], 1.25);
-        let with_widest = uncovered_fraction(&chain, [960, 540], 5.0);
-        assert!(
-            (main_alone - 821.0 / 4225.0).abs() < 1.0e-12
-                && (with_backdrop - 655.0 / 4225.0).abs() < 1.0e-12
-                && (with_widest - 668.0 / 4225.0).abs() < 1.0e-12,
-            "main {main_alone}, backdrop {with_backdrop}, widest {with_widest}"
-        );
-        assert!(
-            main_alone - with_backdrop >= 0.5 * (main_alone - with_widest),
-            "the chosen backdrop must recover half the fivefold gain"
-        );
+        let main_alone = uncovered_points(&chain, [960, 540], 1.0);
+        let candidates = APRON_CANDIDATES.map(|apron| uncovered_points(&chain, [960, 540], apron));
+        assert_eq!(main_alone, 821);
+        assert_eq!(candidates, [655, 656, 654, 652, 668]);
+        let best_gain = main_alone - candidates[3];
+        assert_eq!(best_gain, 169);
+        assert!(2 * (main_alone - candidates[0]) >= best_gain);
+        let footprint = scene_footprint(&object, &view, 960, 540).expect("relief pose maps");
+        assert_eq!(footprint.apron_scale.to_bits(), 1.25_f64.to_bits());
     }
 
-    /// The close row's residual sky is the plane's own projective horizon, not a coverage failure.
+    /// Four lifted census meshes at the close row are wholly clamped and contribute no triangles.
     ///
-    /// A tumbled plane seen from close in has a large part of the frame looking past its own
-    /// horizon: those screen points fail the sampling map outright, no height and no apron can
-    /// recover them, and honest sky is the correct picture there. Measured through the same mirror
-    /// at the same pose with the height set to zero — a flat chart, no relief at all — the frame is
-    /// still `821/4225` uncovered at apron one, `655/4225` at the chosen 1.25 apron, and
-    /// `668/4225` at apron five. The small non-monotonic step is raster-lattice quantization.
-    ///
-    /// The relief scene matches those flat-floor fractions exactly, so the residual is the plane's
-    /// projective horizon rather than relief coverage that a still-wider backdrop could repair.
+    /// The floor mesh is the flat chart and reaches 3,404 lattice points at apron one. Each higher
+    /// census mesh still projects vertices, but every one of those vertices is at the near clamp,
+    /// so the shader's all-clamped primitive rule drops every triangle from those four meshes.
     #[test]
-    fn the_close_row_residual_is_the_plane_horizon_and_not_a_coverage_deficit() {
+    fn the_close_row_is_its_floor_because_four_lifted_meshes_are_fully_clamped() {
         let (object, view) = close_owner_row();
-        let flat = ViewControls {
-            height_scale: 0.0,
-            ..view
-        };
         let map = crate::screen_to_plane(&object, &view, 0.0, 960, 540, 960.0 / 540.0)
             .expect("relief pose maps");
+        let chain = VertexChain {
+            map: &map,
+            plane: construct_plane(object).expect("relief plane"),
+            view: &view,
+            matrix: camera_matrix(&view),
+        };
+        let mesh = COVERAGE_MESH_SIDE as usize;
+        for (index, record_height) in CENSUS_HEIGHTS.into_iter().enumerate() {
+            let mut reached = vec![false; COVERAGE_LATTICE_POINTS];
+            let mut projected = vec![None; mesh * mesh];
+            let stats = rasterize_height(
+                &chain,
+                [960, 540],
+                1.0,
+                record_height,
+                &mut reached,
+                &mut projected,
+            );
+            let covered = reached.iter().filter(|hit| **hit).count();
+            if index == 0 {
+                assert_eq!(covered, 3_404);
+                assert!(stats.unclamped_vertices > 0);
+            } else {
+                assert!(stats.projected_vertices > 0);
+                assert_eq!(stats.unclamped_vertices, 0, "height {record_height}");
+                assert_eq!(covered, 0, "height {record_height}");
+            }
+        }
+    }
+
+    /// A surviving lifted mesh adds coverage beyond the flat floor at a non-saturated pose.
+    #[test]
+    fn surviving_lifted_mesh_strictly_improves_on_the_flat_floor() {
+        let (object, close) = close_owner_row();
+        let relief = ViewControls {
+            height_scale: 1.0,
+            ..close
+        };
+        let flat = ViewControls {
+            height_scale: 0.0,
+            ..close
+        };
+        let map = crate::screen_to_plane(&object, &relief, 0.0, 960, 540, 960.0 / 540.0)
+            .expect("relief pose maps");
         let plane = construct_plane(object).expect("relief plane");
-        let horizon = |view: &ViewControls, apron: f64| {
+        let measure = |view: &ViewControls| {
             uncovered_fraction(
                 &VertexChain {
                     map: &map,
@@ -661,25 +747,14 @@ mod tests {
                     matrix: camera_matrix(view),
                 },
                 [960, 540],
-                apron,
+                1.0,
             )
         };
-        let flat_narrow = horizon(&flat, 1.0);
-        let flat_chosen = horizon(&flat, 1.25);
-        let flat_wide = horizon(&flat, 5.0);
-        let relief_chosen = horizon(&view, 1.25);
-        let relief_wide = horizon(&view, 5.0);
+        let flat_uncovered = measure(&flat);
+        let relief_uncovered = measure(&relief);
         assert!(
-            (flat_narrow - 821.0 / 4225.0).abs() < 1.0e-12
-                && (flat_chosen - 655.0 / 4225.0).abs() < 1.0e-12
-                && (flat_wide - 668.0 / 4225.0).abs() < 1.0e-12
-                && (relief_chosen - 655.0 / 4225.0).abs() < 1.0e-12
-                && (relief_wide - 668.0 / 4225.0).abs() < 1.0e-12,
-            "flat {flat_narrow} / {flat_chosen} / {flat_wide}, relief {relief_chosen} / {relief_wide}"
-        );
-        assert!(
-            relief_chosen <= flat_chosen,
-            "relief must not leave more sky than its floor at the same apron"
+            relief_uncovered < flat_uncovered,
+            "surviving relief {relief_uncovered} must reach beyond floor {flat_uncovered}"
         );
     }
 
@@ -716,5 +791,105 @@ mod tests {
             relief.uncovered_fraction > covered.uncovered_fraction,
             "the tumbled relief row cannot be as covered as its own flat chart"
         );
+    }
+
+    /// Reports the native wall of the exact six-rasterization path used by one uncached footprint.
+    #[test]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the requested native cost measurement is a published test artifact"
+    )]
+    fn scene_footprint_native_wall_is_reported() {
+        const RUNS: u32 = 10;
+        let (object, view) = close_owner_row();
+        let started = std::time::Instant::now();
+        let mut checksum = 0_u64;
+        for _ in 0..RUNS {
+            let footprint = std::hint::black_box(
+                scene_footprint(
+                    std::hint::black_box(&object),
+                    std::hint::black_box(&view),
+                    960,
+                    540,
+                )
+                .expect("timed footprint maps"),
+            );
+            checksum = checksum.wrapping_add(footprint.uncovered_fraction.to_bits());
+        }
+        let elapsed = started.elapsed();
+        assert_ne!(checksum, 0);
+        eprintln!(
+            "scene footprint wall | runs={RUNS} | total_ms={:.3} | per_call_ms={:.3}",
+            elapsed.as_secs_f64() * 1_000.0,
+            elapsed.as_secs_f64() * 1_000.0 / f64::from(RUNS)
+        );
+    }
+
+    /// Pins the exact raster spread behind the two shipped relief preset policy decisions.
+    #[test]
+    fn shipped_relief_preset_candidate_spreads_are_pinned() {
+        let quarter_turn = core::f64::consts::FRAC_PI_2;
+        let extent = [480, 270];
+        let rows = [
+            (
+                "Mandelbrot relief",
+                ObjectAngles::IDENTITY,
+                [
+                    0.6,
+                    -quarter_turn,
+                    0.0,
+                    0.0,
+                    -quarter_turn,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.97,
+                    0.0,
+                ],
+                97,
+            ),
+            (
+                "Julia relief",
+                ObjectAngles::JULIA,
+                [0.6, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.97, 0.0],
+                47,
+            ),
+        ];
+        for (name, object, camera, expected_main) in rows {
+            let view = ViewControls {
+                camera,
+                camera_yaw: 0.349,
+                camera_pitch: 0.262,
+                height_scale: 1.0,
+                ..ViewControls::NEUTRAL
+            };
+            let map = crate::screen_to_plane(
+                &object,
+                &view,
+                0.0,
+                extent[0],
+                extent[1],
+                f64::from(extent[0]) / f64::from(extent[1]),
+            )
+            .expect("preset maps");
+            let chain = VertexChain {
+                map: &map,
+                plane: construct_plane(object).expect("preset plane"),
+                view: &view,
+                matrix: camera_matrix(&view),
+            };
+            let main = uncovered_points(&chain, extent, 1.0);
+            let candidates = APRON_CANDIDATES.map(|apron| uncovered_points(&chain, extent, apron));
+            let footprint =
+                scene_footprint(&object, &view, extent[0], extent[1]).expect("preset footprint");
+            assert_eq!(main, expected_main, "{name} main");
+            assert_eq!(candidates, [0; 5], "{name} candidates");
+            assert_eq!(
+                footprint.apron_scale.to_bits(),
+                1.25_f64.to_bits(),
+                "{name} selected"
+            );
+            assert_eq!(footprint.uncovered_fraction, 0.0, "{name} uncovered");
+        }
     }
 }

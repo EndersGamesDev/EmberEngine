@@ -6,8 +6,9 @@ use std::cell::RefCell;
 
 use ember_julibrot_math::{
     Axis4, BigCentre, Homography, MathError, NavigationDelta, ObjectAngles, Plane, PlaneAngles,
-    Pose, PoseMap, PrecisionMode, SEED_AXES, ViewControls, construct_plane, navigation_delta,
-    pixel_scale, plane_chart_relation, plane_to_screen, scene_footprint, screen_to_plane,
+    Pose, PoseMap, PrecisionMode, SEED_AXES, SceneFootprint, ViewControls, construct_plane,
+    navigation_delta, pixel_scale, plane_chart_relation, plane_to_screen, scene_footprint,
+    screen_to_plane,
 };
 use ember_julibrot_present::PaletteId;
 use ember_julibrot_worker::{
@@ -362,6 +363,43 @@ struct CheckedScreenMap {
     map: PoseMap,
 }
 
+/// The bit-exact inputs that determine one rasterized scene footprint.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SceneFootprintKey {
+    object: [u64; 6],
+    camera: [u64; 10],
+    camera_translation: [u64; 5],
+    camera_yaw: u64,
+    camera_pitch: u64,
+    height_scale: u64,
+    distance_five: u64,
+    distance_four: u64,
+    extent: [u32; 2],
+}
+
+impl SceneFootprintKey {
+    fn new(object: ObjectAngles, view: ViewControls, extent: [u32; 2]) -> Self {
+        Self {
+            object: object.as_array().map(f64::to_bits),
+            camera: view.camera.map(f64::to_bits),
+            camera_translation: view.camera_translation.map(f64::to_bits),
+            camera_yaw: view.camera_yaw.to_bits(),
+            camera_pitch: view.camera_pitch.to_bits(),
+            height_scale: view.height_scale.to_bits(),
+            distance_five: view.distance_five.to_bits(),
+            distance_four: view.distance_four.to_bits(),
+            extent,
+        }
+    }
+}
+
+/// One rasterized footprint and the exact key that produced it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CheckedSceneFootprint {
+    key: SceneFootprintKey,
+    footprint: SceneFootprint,
+}
+
 /// One worker-owned centre snapshot paired with the app's accumulated request reason.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReferenceSubmission {
@@ -380,10 +418,13 @@ pub struct ViewerController {
     requested: RequestedControls,
     checked_plane: Plane,
     checked_screen_maps: RefCell<[Option<CheckedScreenMap>; 2]>,
+    checked_scene_footprints: RefCell<[Option<CheckedSceneFootprint>; 2]>,
     #[cfg(test)]
     plane_constructions: u64,
     #[cfg(test)]
     map_constructions: Cell<u64>,
+    #[cfg(test)]
+    footprint_constructions: Cell<u64>,
     navigation_centre_f64: [f64; 4],
     staged_hot: HotState,
     staged_main: MainState,
@@ -463,10 +504,13 @@ impl ViewerController {
             requested,
             checked_plane: plane,
             checked_screen_maps: RefCell::new([None; 2]),
+            checked_scene_footprints: RefCell::new([None; 2]),
             #[cfg(test)]
             plane_constructions: 1,
             #[cfg(test)]
             map_constructions: Cell::new(0),
+            #[cfg(test)]
+            footprint_constructions: Cell::new(0),
             navigation_centre_f64: origin,
             staged_hot: initial.hot,
             staged_main: initial.main,
@@ -1157,6 +1201,37 @@ impl ViewerController {
         Ok(map)
     }
 
+    /// Returns the cached rasterized footprint for the current object, view, and extent.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed math refusal for an invalid extent, footprint, or map.
+    pub fn scene_footprint(&self, grid_extent: [u32; 2]) -> Result<SceneFootprint, AppError> {
+        let object = self.requested.object_angles;
+        let view = self.requested.view;
+        let key = SceneFootprintKey::new(object, view, grid_extent);
+        let cached = self
+            .checked_scene_footprints
+            .borrow()
+            .iter()
+            .copied()
+            .flatten()
+            .find(|cached| cached.key == key)
+            .map(|cached| cached.footprint);
+        if let Some(cached) = cached {
+            return Ok(cached);
+        }
+        let footprint =
+            scene_footprint(&object, &view, grid_extent[0], grid_extent[1]).map_err(math_error)?;
+        let mut cached = self.checked_scene_footprints.borrow_mut();
+        cached[0] = cached[1];
+        cached[1] = Some(CheckedSceneFootprint { key, footprint });
+        #[cfg(test)]
+        self.footprint_constructions
+            .set(self.footprint_constructions.get().saturating_add(1));
+        Ok(footprint)
+    }
+
     /// Builds the coarse backdrop map from the cached main homography at the same extent.
     ///
     /// The cache owns only the neutral-height presented-camera rows. The returned copy carries the
@@ -1167,13 +1242,7 @@ impl ViewerController {
     ///
     /// Returns a typed math refusal for an invalid extent, footprint, or map.
     pub fn backdrop_map(&self, grid_extent: [u32; 2]) -> Result<Option<PoseMap>, AppError> {
-        let footprint = scene_footprint(
-            &self.requested.object_angles,
-            &self.requested.view,
-            grid_extent[0],
-            grid_extent[1],
-        )
-        .map_err(math_error)?;
+        let footprint = self.scene_footprint(grid_extent)?;
         if footprint.apron_scale.to_bits() == 1.0_f64.to_bits() {
             return Ok(None);
         }
@@ -1189,6 +1258,11 @@ impl ViewerController {
     #[cfg(test)]
     pub(crate) const fn map_construction_count(&self) -> u64 {
         self.map_constructions.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn footprint_construction_count(&self) -> u64 {
+        self.footprint_constructions.get()
     }
 
     fn mapped_screen_map(&self, grid_extent: [u32; 2]) -> Result<Homography, AppError> {
@@ -1740,6 +1814,62 @@ mod tests {
     }
 
     #[test]
+    fn footprint_cache_is_bit_exact_on_object_view_and_extent() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        set_close_owner_row(&mut viewer);
+        assert_eq!(viewer.footprint_construction_count(), 0);
+        let first = viewer
+            .scene_footprint(REFERENCE_GRID)
+            .expect("close footprint");
+        assert_eq!(viewer.footprint_construction_count(), 1);
+        for _ in 0..8 {
+            assert_eq!(
+                viewer
+                    .scene_footprint(REFERENCE_GRID)
+                    .expect("cached footprint"),
+                first
+            );
+            viewer
+                .backdrop_map(REFERENCE_GRID)
+                .expect("cached backdrop");
+        }
+        assert_eq!(viewer.footprint_construction_count(), 1);
+
+        viewer
+            .wheel_zoom(1.0, [0.0; 2])
+            .expect("zoom is outside the footprint key");
+        assert_eq!(
+            viewer
+                .scene_footprint(REFERENCE_GRID)
+                .expect("zoom-invariant footprint"),
+            first
+        );
+        assert_eq!(viewer.footprint_construction_count(), 1);
+
+        let mut view = viewer.requested().view;
+        view.height_scale = 3.5;
+        viewer.set_view_controls(view).expect("changed height");
+        viewer
+            .scene_footprint(REFERENCE_GRID)
+            .expect("changed-view footprint");
+        assert_eq!(viewer.footprint_construction_count(), 2);
+        viewer
+            .scene_footprint([800, 600])
+            .expect("changed-extent footprint");
+        assert_eq!(viewer.footprint_construction_count(), 3);
+
+        let mut signed_zero = viewer.requested().view;
+        signed_zero.camera_translation[4] = -0.0;
+        viewer
+            .set_view_controls(signed_zero)
+            .expect("signed-zero view");
+        viewer
+            .scene_footprint([800, 600])
+            .expect("bit-distinct footprint key");
+        assert_eq!(viewer.footprint_construction_count(), 4);
+    }
+
+    #[test]
     fn backdrop_map_copies_the_cached_main_rows_and_adds_only_its_apron() {
         let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
         set_close_owner_row(&mut viewer);
@@ -1757,6 +1887,16 @@ mod tests {
         assert_eq!(backdrop.inverse, main.inverse);
         assert_eq!(backdrop.condition_number, main.condition_number);
         assert_eq!(backdrop.apron_scale.to_bits(), 1.25_f64.to_bits());
+        assert_eq!(viewer.footprint_construction_count(), 1);
+        assert_eq!(
+            viewer
+                .scene_footprint(REFERENCE_GRID)
+                .expect("cached footprint")
+                .apron_scale
+                .to_bits(),
+            1.25_f64.to_bits()
+        );
+        assert_eq!(viewer.footprint_construction_count(), 1);
         assert_eq!(
             viewer.map_construction_count(),
             1,
@@ -1814,6 +1954,38 @@ mod tests {
             main
         );
         assert_eq!(viewer.map_construction_count(), 1);
+    }
+
+    #[test]
+    fn shipped_presets_pin_the_minimum_gain_backdrop_policy() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        let backdrop_extent = [REFERENCE_GRID[0] / 2, REFERENCE_GRID[1] / 2];
+        for (row, expected_apron, expected_backdrop) in [
+            (PRESET_ROWS[0], 1.0_f64, false),
+            (PRESET_ROWS[1], 1.0_f64, false),
+            (PRESET_ROWS[2], 1.25_f64, true),
+            (PRESET_ROWS[3], 1.25_f64, true),
+        ] {
+            viewer.apply_preset(row).expect("relief preset is valid");
+            let footprint = viewer
+                .scene_footprint(backdrop_extent)
+                .expect("preset footprint");
+            assert_eq!(
+                footprint.apron_scale.to_bits(),
+                expected_apron.to_bits(),
+                "{} footprint",
+                row.name
+            );
+            assert_eq!(
+                viewer
+                    .backdrop_map(backdrop_extent)
+                    .expect("preset backdrop")
+                    .is_some(),
+                expected_backdrop,
+                "{} backdrop",
+                row.name
+            );
+        }
     }
 
     #[test]

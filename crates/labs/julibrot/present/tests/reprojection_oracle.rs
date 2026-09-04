@@ -23,8 +23,6 @@ enum Expected {
     /// The retained records still describe the destination, so the fixture additionally proves
     /// that redrawing them under the destination pose needs no new sampling.
     Relief,
-    /// An exact retained-record redraw that must also expose honest disocclusion.
-    ReliefExposed,
 }
 
 fn pose_at(
@@ -544,7 +542,7 @@ fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Exp
     );
     if plan.kind == WarpKind::ReliefRedraw {
         assert!(
-            matches!(expected, Expected::Relief | Expected::ReliefExposed),
+            matches!(expected, Expected::Relief),
             "{name}: unexpectedly selected a relief redraw"
         );
         assert!(
@@ -566,12 +564,10 @@ fn assert_fixture(name: &str, from: &Pose, to: &Pose, height: f64, expected: Exp
             uncertain, 0,
             "{name}: displayed relief redraw had resampling uncertainty"
         );
-        if expected == Expected::ReliefExposed {
-            assert!(
-                disoccluded > 0,
-                "{name}: fixture did not exercise redraw disocclusion"
-            );
-        }
+        assert_eq!(
+            disoccluded, 0,
+            "{name}: exact-family redraw and fresh main mesh must cover the same ground"
+        );
         eprintln!(
             "oracle fixture | {name} | relief redraw | samples={compared} | uncertain={uncertain} | disoccluded={disoccluded} | homography={maximum:.3} px"
         );
