@@ -24,6 +24,13 @@ const LEVELS: [RefinementLevel; 3] = [
     RefinementLevel::Final,
 ];
 
+/// Presentation rank of the coverage-first backdrop while it is the only completed layer.
+///
+/// Its records come from the backdrop plan's Final level, but calling the temporary composed
+/// frame Final would let accepted-warp policy skip the main grid's still-due Preview.
+#[cfg(any(target_arch = "wasm32", test))]
+const BACKDROP_PRESENT_LEVEL: RefinementLevel = RefinementLevel::Preview;
+
 #[cfg(any(target_arch = "wasm32", test))]
 const REFERENCE_RECORD_BYTES: usize = 8;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -1840,7 +1847,7 @@ mod browser {
                     let final_spec = backdrop.plan.level(RefinementLevel::Final);
                     grid.width = final_spec.extent.width;
                     grid.height = final_spec.extent.height;
-                    grid.level = RefinementLevel::Final;
+                    grid.level = super::BACKDROP_PRESENT_LEVEL;
                     (
                         grid,
                         source_map,
@@ -2821,11 +2828,11 @@ mod tests {
     };
 
     use super::{
-        FenceRefusal, FrameLoop, LEVELS, PresenterPoll, REFERENCE_RECORD_BYTES,
-        REFERENCE_TEXEL_BYTES, RefinementLevel, RefinementSchedule, RefusalClass, SceneMode,
-        SubmissionKind, apply_precision_mode, arrival_is_current, backdrop_extent,
-        defer_scene_until_relief_redraw, expand_reference_texels_into, fence_error,
-        hold_redraw_during_scene, horizon_facts, main_for_grid,
+        BACKDROP_PRESENT_LEVEL, FenceRefusal, FrameLoop, LEVELS, PresenterPoll,
+        REFERENCE_RECORD_BYTES, REFERENCE_TEXEL_BYTES, RefinementLevel, RefinementSchedule,
+        RefusalClass, SceneMode, SubmissionKind, apply_precision_mode, arrival_is_current,
+        backdrop_extent, defer_scene_until_relief_redraw, expand_reference_texels_into,
+        fence_error, hold_redraw_during_scene, horizon_facts, main_for_grid,
         perturbation_reference_is_current, published_iteration_cap, sampling_zoom_log2,
         schedule_exposure_fill, stamp_scene_level, stamped_extent, stamped_screen_map,
         view_projection_changed,
@@ -2982,6 +2989,16 @@ mod tests {
         let widened = sampling_zoom_log2(zoom, 5.0).expect("fivefold backdrop");
         assert_eq!(widened, zoom - 5.0_f64.log2());
         assert!(sampling_zoom_log2(zoom, 0.5).is_err());
+    }
+
+    #[test]
+    fn backdrop_only_frame_cannot_skip_the_main_preview() {
+        assert_eq!(BACKDROP_PRESENT_LEVEL, RefinementLevel::Preview);
+        let mut frame_loop = FrameLoop::default();
+        frame_loop.accept_request(1, true);
+        assert!(!frame_loop.skip_drafts_for_accepted_warp(Some((BACKDROP_PRESENT_LEVEL, false,))));
+        assert_eq!(frame_loop.due(), Some(RefinementLevel::Preview));
+        assert!(include_str!("frame.rs").contains("grid.level = super::BACKDROP_PRESENT_LEVEL;"));
     }
 
     #[test]
