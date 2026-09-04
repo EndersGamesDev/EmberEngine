@@ -78,7 +78,7 @@ impl BrowserFrameLoop {
             return Ok(true);
         }
         self.release_backdrop()?;
-        let Some(plan) = super::optional_backdrop_plan(JulibrotKernels::plan(
+        let Some(plan) = super::super::optional_backdrop_plan(JulibrotKernels::plan(
             &self.executor,
             requested_extent,
             EscapeParams::new(requested_iter_cap),
