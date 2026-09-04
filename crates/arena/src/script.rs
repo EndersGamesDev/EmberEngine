@@ -233,7 +233,11 @@ fn parse_step(src: &str, n: usize) -> Result<Step, String> {
             "jump" => step.held.set(Hold::Jump),
             "melee" => step.held.set(Hold::Melee),
             other => {
-                let Some(v) = number(other) else { continue };
+                let v = number(other).ok_or_else(|| {
+                    bad(&format!(
+                        "unknown word `{other}` (expected one of: {VERBS}, or a duration in seconds)"
+                    ))
+                })?;
                 if v < 0.0 {
                     return Err(bad(&format!(
                         "a duration cannot be negative, got `{other}`"
