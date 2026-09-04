@@ -266,7 +266,7 @@ pub enum FenceRefusal {
 /// because a `Pose` now carries every VIEW control. Boxing it would trade one fixed move for a
 /// heap allocation on every completed scene, and a completed scene is a fenced GPU submission
 /// costing milliseconds; the move is not the cost worth optimizing, and the pinned interface says
-/// `SceneCompleted { frame: SceneFrame }`.
+/// `SceneCompleted { frame: SceneFrame, reference_sample: Option<u32> }`.
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum PresentEvent {
@@ -274,6 +274,11 @@ pub enum PresentEvent {
     SceneCompleted {
         /// Newly completed frame.
         frame: SceneFrame,
+        /// Bottom-up row-major record index of this grid's deterministic reference candidate.
+        ///
+        /// The candidate is the highest-iteration record of the completed grid, ties broken by the
+        /// lowest index. It is absent when the non-blocking census readback was not ready.
+        reference_sample: Option<u32>,
     },
     /// A scene completed and was measured but was not compatible.
     SceneDropped {

@@ -124,6 +124,28 @@ struct GlitchReadback {
     bytes_per_row: u32,
 }
 
+/// One completed grid's census: its exact status-one count and its reference candidate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SceneCensus {
+    glitch_pixel_count: u32,
+    reference_sample: Option<u32>,
+}
+
+impl SceneCensus {
+    const EMPTY: Self = Self {
+        glitch_pixel_count: 0,
+        reference_sample: None,
+    };
+
+    const fn glitch_pixel_count(self) -> u32 {
+        self.glitch_pixel_count
+    }
+
+    const fn reference_sample(self) -> Option<u32> {
+        self.reference_sample
+    }
+}
+
 type MapSignal = Arc<Mutex<Option<Result<(), ()>>>>;
 
 struct PendingFence {
@@ -609,9 +631,7 @@ impl Presenter {
                     .map(|backdrop| [backdrop.grid.width, backdrop.grid.height]),
             )?;
             ensure_depth(device, gpu, extent)?;
-            if main.grid.level == RefinementLevel::Final {
-                ensure_glitch_count_resources(device, gpu, extent);
-            }
+            ensure_glitch_count_resources(device, gpu, extent);
             Ok(crate::state::PendingScene {
                 scene_id,
                 pose,
@@ -636,7 +656,6 @@ impl Presenter {
                 bytemuck::bytes_of(&backdrop_uniform),
             );
         }
-        let collect_glitch_count = main.grid.level == RefinementLevel::Final;
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -650,31 +669,28 @@ impl Presenter {
             palette_record,
             main.backdrop.is_some(),
         );
-        if collect_glitch_count {
-            let readback = &self.gpu.glitch_readback;
-            encode_glitch_count(&mut encoder, &self.gpu, hot_slot.dynamic_offset());
-            encoder.copy_texture_to_buffer(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.gpu.glitch_count_target.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
+        let readback = &self.gpu.glitch_readback;
+        encode_glitch_count(&mut encoder, &self.gpu, hot_slot.dynamic_offset());
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.gpu.glitch_count_target.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &readback.buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(readback.bytes_per_row),
+                    rows_per_image: Some(readback.extent[1]),
                 },
-                wgpu::TexelCopyBufferInfo {
-                    buffer: &readback.buffer,
-                    layout: wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(readback.bytes_per_row),
-                        rows_per_image: Some(readback.extent[1]),
-                    },
-                },
-                extent_3d(readback.extent),
-            );
-        }
+            },
+            extent_3d(readback.extent),
+        );
         encoder.clear_buffer(&self.gpu.scene_fence, 0, Some(FENCE_BYTES));
         self.queue.submit([encoder.finish()]);
-        let glitch_readback =
-            collect_glitch_count.then(|| arm_glitch_readback(&self.gpu.glitch_readback.buffer));
+        let glitch_readback = Some(arm_glitch_readback(&self.gpu.glitch_readback.buffer));
         self.scene_fence = Some(arm_fence(
             &self.gpu.scene_fence,
             glitch_readback,
@@ -879,8 +895,8 @@ impl Presenter {
             FenceDecision::Pending => None,
             FenceDecision::Complete(measurement) => {
                 let readback_result = take_glitch_readback_result(pending);
-                let glitch_pixel_count = glitch_count_if_ready(readback_result, || {
-                    mapped_glitch_count(&self.gpu.glitch_readback)
+                let census = census_if_ready(readback_result, || {
+                    mapped_census(&self.gpu.glitch_readback)
                 });
                 if pending.glitch_readback.is_some() {
                     self.gpu.glitch_readback.buffer.unmap();
@@ -902,12 +918,16 @@ impl Presenter {
                     .complete_preserving_accepted_best(measurement, preserve_accepted_best)?
                 {
                     SceneCompletion::Promoted(frame) => {
-                        self.publish_promoted(&frame, glitch_pixel_count);
-                        Some(PresentEvent::SceneCompleted { frame })
+                        self.publish_promoted(&frame, census.map(SceneCensus::glitch_pixel_count));
+                        Some(PresentEvent::SceneCompleted {
+                            frame,
+                            reference_sample: census.and_then(SceneCensus::reference_sample),
+                        })
                     }
-                    SceneCompletion::KeptBest(frame) => {
-                        Some(PresentEvent::SceneCompleted { frame })
-                    }
+                    SceneCompletion::KeptBest(frame) => Some(PresentEvent::SceneCompleted {
+                        frame,
+                        reference_sample: census.and_then(SceneCensus::reference_sample),
+                    }),
                     SceneCompletion::Dropped {
                         pending,
                         reason,
@@ -2032,32 +2052,52 @@ fn take_glitch_readback_result(pending: &mut PendingFence) -> Option<Result<(), 
         .and_then(|mut slot| slot.take())
 }
 
-fn glitch_count_if_ready(
+fn census_if_ready(
     result: Option<Result<(), ()>>,
-    count: impl FnOnce() -> u32,
-) -> Option<u32> {
-    matches!(result, Some(Ok(()))).then(count)
+    census: impl FnOnce() -> SceneCensus,
+) -> Option<SceneCensus> {
+    matches!(result, Some(Ok(()))).then(census)
 }
 
-fn mapped_glitch_count(readback: &GlitchReadback) -> u32 {
+fn mapped_census(readback: &GlitchReadback) -> SceneCensus {
     let bytes = readback.buffer.slice(..).get_mapped_range();
-    let count = sum_glitch_count_bytes(&bytes, readback.extent, readback.bytes_per_row);
+    let census = census_bytes(&bytes, readback.extent, readback.bytes_per_row);
     drop(bytes);
-    count
+    census
 }
 
-fn sum_glitch_count_bytes(bytes: &[u8], extent: [u32; 2], bytes_per_row: u32) -> u32 {
+/// Decodes one census readback: the exact status-one sum and the deterministic best candidate.
+///
+/// The candidate is the record of highest encoded iteration rank; equal ranks keep the lowest
+/// record index, so the same completed grid always names the same reference point.
+fn census_bytes(bytes: &[u8], extent: [u32; 2], bytes_per_row: u32) -> SceneCensus {
     let packed_row = extent[0] as usize * RGBA8_BYTES_PER_TEXEL as usize;
-    (0..extent[1] as usize)
-        .flat_map(|row| {
-            let start = row * bytes_per_row as usize;
-            bytes[start..start + packed_row]
-                .as_chunks::<{ RGBA8_BYTES_PER_TEXEL as usize }>()
-                .0
-                .iter()
-                .map(|rgba| u32::from(rgba[0]))
-        })
-        .sum()
+    let mut census = SceneCensus::EMPTY;
+    let mut best_rank = 0;
+    for row in 0..extent[1] {
+        let start = row as usize * bytes_per_row as usize;
+        let texels = bytes[start..start + packed_row]
+            .as_chunks::<{ RGBA8_BYTES_PER_TEXEL as usize }>()
+            .0;
+        for (column, rgba) in texels.iter().enumerate() {
+            census.glitch_pixel_count = census.glitch_pixel_count.saturating_add(u32::from(rgba[0]));
+            let located = rgba[3] != 0 && (census.reference_sample.is_none() || rgba[1] > best_rank);
+            if !located {
+                continue;
+            }
+            let Some(index) = u32::try_from(column)
+                .ok()
+                .and_then(|column| row.checked_mul(extent[0])?.checked_add(column))
+                .and_then(|group| group.checked_mul(GLITCH_RECORDS_PER_TEXEL))
+                .and_then(|base| base.checked_add(u32::from(rgba[2])))
+            else {
+                continue;
+            };
+            best_rank = rgba[1];
+            census.reference_sample = Some(index);
+        }
+    }
+    census
 }
 
 fn color(rgba: [f32; 4]) -> wgpu::Color {
@@ -2238,9 +2278,26 @@ mod tests {
     #[test]
     fn glitch_census_sums_red_counts_and_ignores_row_padding() {
         let mut bytes = vec![99_u8; 32];
-        bytes[..8].copy_from_slice(&[7, 0, 0, 255, 11, 0, 0, 255]);
-        bytes[16..24].copy_from_slice(&[13, 0, 0, 255, 17, 0, 0, 255]);
-        assert_eq!(sum_glitch_count_bytes(&bytes, [2, 2], 16), 48);
+        bytes[..8].copy_from_slice(&[7, 10, 3, 255, 11, 40, 5, 255]);
+        bytes[16..24].copy_from_slice(&[13, 40, 9, 255, 17, 0, 0, 0]);
+        let census = census_bytes(&bytes, [2, 2], 16);
+        assert_eq!(census.glitch_pixel_count, 48);
+        assert_eq!(census.reference_sample, Some(GLITCH_RECORDS_PER_TEXEL + 5));
+    }
+
+    #[test]
+    fn the_census_reference_candidate_is_the_lowest_index_of_the_highest_rank() {
+        let mut bytes = vec![0_u8; 32];
+        bytes[..8].copy_from_slice(&[0, 200, 4, 255, 0, 200, 1, 255]);
+        bytes[16..24].copy_from_slice(&[0, 201, 2, 255, 0, 255, 0, 0]);
+        let census = census_bytes(&bytes, [2, 2], 16);
+        assert_eq!(census.glitch_pixel_count, 0);
+        assert_eq!(
+            census.reference_sample,
+            Some(2 * GLITCH_RECORDS_PER_TEXEL + 2)
+        );
+        let empty = census_bytes(&vec![0_u8; 32], [2, 2], 16);
+        assert_eq!(empty, SceneCensus::EMPTY);
     }
 
     #[test]

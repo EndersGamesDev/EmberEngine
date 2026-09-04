@@ -31,19 +31,23 @@ const LEVELS: [RefinementLevel; 3] = [
 #[cfg(any(target_arch = "wasm32", test))]
 const BACKDROP_PRESENT_LEVEL: RefinementLevel = RefinementLevel::Preview;
 
+/// Bound on sampled reference requests per accepted navigation.
+#[cfg(any(target_arch = "wasm32", test))]
+const SAMPLED_REFERENCE_LIMIT: u32 = 4;
 #[cfg(any(target_arch = "wasm32", test))]
 const REFERENCE_RECORD_BYTES: usize = 8;
 #[cfg(any(target_arch = "wasm32", test))]
 const REFERENCE_TEXEL_BYTES: usize = 16;
 
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ReferenceCandidate {
     index: u32,
     iteration_count: u32,
 }
 
-#[cfg(any(target_arch = "wasm32", test))]
+/// Mirrors the present census candidate on CPU records: highest count, ties by lowest index.
+#[cfg(test)]
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -1170,7 +1174,7 @@ mod browser {
         accepted_reference: Option<BigCentre>,
         shallow_centre: Option<BigCentre>,
         accepted_reference_zoom_log2: Option<f64>,
-        reference_from_sample: bool,
+        sampled_references: u32,
         submitted_references: Vec<SubmittedReference>,
         reference_upload: Vec<u8>,
         plan: RefinementPlan,
@@ -1328,7 +1332,7 @@ mod browser {
                 accepted_reference: Some(accepted_reference),
                 shallow_centre: None,
                 accepted_reference_zoom_log2: None,
-                reference_from_sample: false,
+                sampled_references: 0,
                 submitted_references: Vec::with_capacity(2),
                 reference_upload,
                 plan,
@@ -1415,7 +1419,7 @@ mod browser {
                 .checked_add(1)
                 .ok_or(AppError::GenerationExhausted)?;
             let events = FrameLoop::refresh(&mut self.presenter, now_ms);
-            let observed = self.handle_events(runtime, events)?;
+            let observed = self.handle_events(runtime, viewer, events)?;
             self.synchronize_precision_mode(viewer)?;
             let presented = observed.presented;
             if requests.frame {
@@ -1666,13 +1670,17 @@ mod browser {
         fn handle_events(
             &mut self,
             runtime: &mut BrowserRuntime,
+            viewer: &mut ViewerController,
             events: Vec<PresentEvent>,
         ) -> Result<ObservedEvents, AppError> {
             let mut observed = ObservedEvents::default();
             let mut refusal = None;
             for event in events {
                 match event {
-                    PresentEvent::SceneCompleted { frame } => {
+                    PresentEvent::SceneCompleted {
+                        frame,
+                        reference_sample,
+                    } => {
                         self.level_timings
                             .complete_scene(frame.scene_id, frame.measurement);
                         let backdrop_completed = self.backdrop.as_mut().is_some_and(|backdrop| {
@@ -1697,6 +1705,11 @@ mod browser {
                             frame.level,
                         ) {
                             self.prepared_level = None;
+                            self.maybe_request_sampled_reference(
+                                viewer,
+                                &frame,
+                                reference_sample,
+                            );
                         }
                     }
                     PresentEvent::SceneDropped {
@@ -1795,6 +1808,38 @@ mod browser {
                 }
             }
             refusal.map_or(Ok(observed), Err)
+        }
+
+        /// Requests one reference at a completed grid's highest-iteration record.
+        ///
+        /// A reference whose own orbit escapes before the Final cap turns every longer-lived pixel
+        /// into a glitch, so a short accepted reference is replaced by the census candidate: the
+        /// highest-iteration record of the grid just completed, ties broken by the lowest index. A
+        /// glitched record ranks at the cap, so a Final that still carries glitches names one of
+        /// them and each request lands on a point whose orbit outlives the reference it replaces.
+        /// The navigation centre never moves; only the orbit point does. At most
+        /// [`super::SAMPLED_REFERENCE_LIMIT`] requests per accepted navigation, so glitches with
+        /// another cause cannot drive an unbounded chase.
+        fn maybe_request_sampled_reference(
+            &mut self,
+            viewer: &mut ViewerController,
+            frame: &ember_julibrot_present::SceneFrame,
+            candidate: Option<u32>,
+        ) {
+            let Some(index) = candidate else {
+                return;
+            };
+            let final_cap = self.plan.level(RefinementLevel::Final).iteration_cap;
+            if KernelMode::for_zoom(viewer.requested().zoom_log2) != KernelMode::Perturbation
+                || self.sampled_references >= super::SAMPLED_REFERENCE_LIMIT
+                || self.main.orbit_length == 0
+                || self.main.orbit_length >= final_cap
+            {
+                return;
+            }
+            if viewer.request_reference_for_pixel(index, frame.extent).is_ok() {
+                self.sampled_references = self.sampled_references.saturating_add(1);
+            }
         }
 
         fn prepare_due_level(&mut self) -> bool {
@@ -2177,7 +2222,9 @@ mod browser {
             self.replace_current_orbit(handle)?;
             self.accepted_reference = Some(submitted.reference_centre);
             self.accepted_reference_zoom_log2 = Some(submitted.zoom_log2);
-            self.reference_from_sample = submitted.sampled;
+            if !submitted.sampled {
+                self.sampled_references = 0;
+            }
             self.main = viewer.drain_main()?.main;
             self.level_timings.record_worker(
                 response.centre_revision(),

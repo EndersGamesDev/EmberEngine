@@ -166,16 +166,34 @@ struct CountVertex { @builtin(position) position: vec4<f32>, }
     return output;
 }
 @fragment fn glitch_count_fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    if (scene.span.z != 0u) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
+    if (scene.span.z != 0u) { return vec4<f32>(0.0, 0.0, 0.0, 0.0); }
     let group = u32(position.y) * scene.grid.x + u32(position.x);
     let start = group * 255u;
     let active_records = scene.grid.x * scene.grid.y;
+    let cap = max(f32(scene.grid.w), 1.0);
     var count = 0u;
+    var best_rank = 0.0;
+    var best_offset = 0u;
+    var located = 0.0;
     for (var offset = 0u; offset < 255u; offset += 1u) {
         let index = start + offset;
-        if (index < active_records && load_escape(index).w == 1.0) { count += 1u; }
+        if (index >= active_records) { continue; }
+        let record = load_escape(index);
+        if (record.w == 1.0) { count += 1u; }
+        if (malformed(record) || record.w == 2.0 || record.w == 3.0) { continue; }
+        var reached = cap;
+        if (record.w == 0.0 && record.y == 1.0) {
+            if (!finite(record.x)) { continue; }
+            reached = clamp(ceil(record.x), 0.0, cap);
+        }
+        let rank = floor(255.0 * reached / cap + 0.5);
+        if (located == 0.0 || rank > best_rank) {
+            best_rank = rank;
+            best_offset = offset;
+            located = 1.0;
+        }
     }
-    return vec4<f32>(f32(count) / 255.0, 0.0, 0.0, 1.0);
+    return vec4<f32>(f32(count) / 255.0, best_rank / 255.0, f32(best_offset) / 255.0, located);
 }
 ";
 
@@ -194,6 +212,10 @@ pub fn scene_shader(limits: DialectLimits) -> String {
 }
 
 /// Instantiates the exact status-one census shader at immutable heap capacities.
+///
+/// Each texel covers 255 consecutive records and carries, in one pass: the exact status-one count
+/// in red, the group's best reference candidate as an iteration rank in green, that candidate's
+/// local offset in blue, and whether the group holds a candidate at all in alpha.
 #[must_use]
 pub fn glitch_count_shader(limits: DialectLimits) -> String {
     let mut source = HEAP_SCENE_PREFIX
