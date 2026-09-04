@@ -27,6 +27,9 @@
 #   pkg/                  legacy root bundle, kept fresh for old cached pages
 set -euo pipefail
 
+die() { echo "deploy-pages: $*" >&2; exit 1; }
+PY="$(command -v python3 || command -v python)" || die "need python3 or python on PATH"
+
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_DIR"
 # gh-pages commit holding the original first web build (auto-run pong).
@@ -151,7 +154,7 @@ fi
 # The catalog is the hub's promise. Refuse to publish a live link unless this
 # assembly actually produced its page, so games.json and this script cannot
 # silently drift apart again.
-LIVE_PATHS="$(python -c 'import json, sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print("\n".join(v["path"] for g in d["games"] for v in g["versions"] if v.get("live") is True))' web/games.json)"
+LIVE_PATHS="$("$PY" -c 'import json, sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print("\n".join(v["path"] for g in d["games"] for v in g["versions"] if v.get("live") is True))' web/games.json)"
 while IFS= read -r live_path; do
     [ -n "$live_path" ] || continue
     if [ ! -f "$PAGES_DIR/${live_path%/}/index.html" ]; then
@@ -171,7 +174,7 @@ FIRE_PROTO="$(grep -oE 'PROTO_VERSION: u16 = [0-9]+' crates/fire-core/src/proto.
 # Four Kings likewise: its own crate, its own number, its own server.json key.
 KINGS_PROTO="$(grep -oE 'PROTO_VERSION: u16 = [0-9]+' crates/kings-core/src/proto.rs | grep -oE '[0-9]+$')"
 echo "== shipping arena protocol v$PROTO, fire protocol v$FIRE_PROTO, kings protocol v$KINGS_PROTO =="
-python - "$PAGES_DIR/server.json" "$PROTO" "$FIRE_PROTO" "$KINGS_PROTO" <<'EOF'
+"$PY" - "$PAGES_DIR/server.json" "$PROTO" "$FIRE_PROTO" "$KINGS_PROTO" <<'EOF'
 import json, os, sys, time
 p, proto, fire_proto, kings_proto = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 

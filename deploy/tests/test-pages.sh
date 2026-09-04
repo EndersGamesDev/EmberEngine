@@ -27,6 +27,7 @@ for shim in cargo wasm-bindgen git; do
     cp "$HERE/shims/$shim" "$SHIMS/$shim"
     chmod +x "$SHIMS/$shim"
 done
+ln -s "$PY" "$SHIMS/python3"
 ln -s "$PY" "$SHIMS/python"
 export PATH="$SHIMS:$PATH"
 
