@@ -6,11 +6,11 @@ impl BrowserFrameLoop {
         let Some(requested_extent) =
             super::backdrop_extent([final_spec.extent.width, final_spec.extent.height])
         else {
-            self.active_backdrop_map = None;
+            self.release_backdrop()?;
             return Ok(false);
         };
         let Some(mut map) = viewer.backdrop_map(requested_extent)? else {
-            self.active_backdrop_map = None;
+            self.release_backdrop()?;
             return Ok(false);
         };
         if let Some(flight) = self

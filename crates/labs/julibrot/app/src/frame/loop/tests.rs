@@ -442,8 +442,8 @@ fn backdrop_sampling_zoom_widens_only_the_coarse_kernel_grid() {
         sampling_zoom_log2(zoom, 1.0).expect("identity").to_bits(),
         zoom.to_bits()
     );
-    let widened = sampling_zoom_log2(zoom, 5.0).expect("fivefold backdrop");
-    assert_eq!(widened, zoom - 5.0_f64.log2());
+    let widened = sampling_zoom_log2(zoom, 1.25).expect("selected backdrop");
+    assert_eq!(widened, zoom - 1.25_f64.log2());
     assert!(sampling_zoom_log2(zoom, 0.5).is_err());
 }
 
@@ -2403,7 +2403,8 @@ fn drive_height_drag(row: HeightDragRow) -> HeightDragStats {
 
     for input in 1..=DRAG_FRAMES {
         let requested_height_scale = 4.0 * f64::from(input) / f64::from(DRAG_FRAMES);
-        if owner_height_drag_plan(row, 0.0, requested_height_scale) == WarpKind::ClearOnly {
+        let flat_source_plan = owner_height_drag_plan(row, 0.0, requested_height_scale);
+        if flat_source_plan == WarpKind::ClearOnly {
             clear_only_before = clear_only_before.saturating_add(1);
         }
         if presenter.pending.is_some() {
@@ -2428,11 +2429,15 @@ fn drive_height_drag(row: HeightDragRow) -> HeightDragStats {
         }
         frame_loop.accept_request(37, true);
         frame_loop.skip_drafts_for_accepted_warp(Some((RefinementLevel::Final, false)));
-        presenter.forced_warp_kind = Some(owner_height_drag_plan(
-            row,
-            retained_height_scale,
-            requested_height_scale,
-        ));
+        let moving_source_plan =
+            owner_height_drag_plan(row, retained_height_scale, requested_height_scale);
+        assert_eq!(
+            moving_source_plan == WarpKind::ClearOnly,
+            flat_source_plan == WarpKind::ClearOnly,
+            "{} input {input}: refusal must remain destination-driven",
+            row.name
+        );
+        presenter.forced_warp_kind = Some(moving_source_plan);
         let turn = drive_viewer_harness(&mut frame_loop, &mut presenter, clock, true);
         if let Some(scene_id) = turn.scene_id {
             assert!(scene_id > last_scene_id, "{} scene ids", row.name);
@@ -2549,6 +2554,41 @@ fn browser_main_ladder_keeps_one_alternate_final_capacity_grid() {
 #[test]
 fn heap_exhaustion_degrades_to_a_main_only_frame() {
     assert_eq!(optional_backdrop_plan(Err(KernelError::Heap)), Ok(None));
+}
+
+#[test]
+fn no_backdrop_and_main_only_fallbacks_release_retained_backdrop_records() {
+    let backdrop = include_str!("browser/backdrop.rs");
+    let release_branch =
+        "else {\n            self.release_backdrop()?;\n            return Ok(false);\n        };";
+    assert_eq!(backdrop.matches(release_branch).count(), 2);
+
+    let ensure = backdrop
+        .find("fn ensure_backdrop_grid(")
+        .expect("the optional backdrop allocator exists");
+    let ensure_body = &backdrop[ensure..];
+    let release = ensure_body
+        .find("self.release_backdrop()?;")
+        .expect("an old backdrop is released first");
+    let optional = ensure_body
+        .find("optional_backdrop_plan(")
+        .expect("heap exhaustion can select the main-only fallback");
+    let allocation = ensure_body
+        .find("allocate_grid(&mut self.executor, &plan)")
+        .expect("allocation can select the main-only fallback");
+    assert!(release < optional && optional < allocation);
+
+    let release_backdrop = ensure_body
+        .find("pub(super) fn release_backdrop(")
+        .expect("the backdrop release hook exists");
+    let release_body = &ensure_body[release_backdrop..];
+    assert!(release_body.contains("self.free_grid(&backdrop.grid)"));
+
+    let submit = include_str!("browser/submit.rs");
+    let free = submit
+        .find("pub(super) fn free_grid(")
+        .expect("the shared grid-free hook exists");
+    assert!(submit[free..].contains("self.presenter.forget_retained_grid(grid);"));
 }
 
 #[test]

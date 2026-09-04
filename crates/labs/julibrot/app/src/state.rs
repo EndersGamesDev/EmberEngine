@@ -6,8 +6,9 @@ use std::cell::RefCell;
 
 use ember_julibrot_math::{
     Axis4, BigCentre, Homography, MathError, NavigationDelta, ObjectAngles, Plane, PlaneAngles,
-    Pose, PoseMap, PrecisionMode, SEED_AXES, ViewControls, construct_plane, navigation_delta,
-    pixel_scale, plane_chart_relation, plane_to_screen, scene_footprint, screen_to_plane,
+    Pose, PoseMap, PrecisionMode, SEED_AXES, SceneFootprint, ViewControls, construct_plane,
+    navigation_delta, pixel_scale, plane_chart_relation, plane_to_screen, scene_footprint,
+    screen_to_plane,
 };
 use ember_julibrot_present::PaletteId;
 use ember_julibrot_worker::{
@@ -362,6 +363,31 @@ struct CheckedScreenMap {
     map: PoseMap,
 }
 
+/// The bit-exact inputs that determine one rasterized scene footprint.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SceneFootprintKey {
+    object: [u64; 6],
+    view: [u64; 20],
+    extent: [u32; 2],
+}
+
+impl SceneFootprintKey {
+    fn new(object: ObjectAngles, view: ViewControls, extent: [u32; 2]) -> Self {
+        Self {
+            object: object.as_array().map(f64::to_bits),
+            view: view.as_array().map(f64::to_bits),
+            extent,
+        }
+    }
+}
+
+/// One rasterized footprint and the exact key that produced it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CheckedSceneFootprint {
+    key: SceneFootprintKey,
+    footprint: SceneFootprint,
+}
+
 /// One worker-owned centre snapshot paired with the app's accumulated request reason.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReferenceSubmission {
@@ -380,10 +406,13 @@ pub struct ViewerController {
     requested: RequestedControls,
     checked_plane: Plane,
     checked_screen_maps: RefCell<[Option<CheckedScreenMap>; 2]>,
+    checked_scene_footprints: RefCell<[Option<CheckedSceneFootprint>; 2]>,
     #[cfg(test)]
     plane_constructions: u64,
     #[cfg(test)]
     map_constructions: Cell<u64>,
+    #[cfg(test)]
+    footprint_constructions: Cell<u64>,
     navigation_centre_f64: [f64; 4],
     staged_hot: HotState,
     staged_main: MainState,
@@ -463,10 +492,13 @@ impl ViewerController {
             requested,
             checked_plane: plane,
             checked_screen_maps: RefCell::new([None; 2]),
+            checked_scene_footprints: RefCell::new([None; 2]),
             #[cfg(test)]
             plane_constructions: 1,
             #[cfg(test)]
             map_constructions: Cell::new(0),
+            #[cfg(test)]
+            footprint_constructions: Cell::new(0),
             navigation_centre_f64: origin,
             staged_hot: initial.hot,
             staged_main: initial.main,
@@ -1157,23 +1189,49 @@ impl ViewerController {
         Ok(map)
     }
 
+    /// Returns the cached rasterized footprint for the current object, view, and extent.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed math refusal for an invalid extent, footprint, or map.
+    pub fn scene_footprint(&self, grid_extent: [u32; 2]) -> Result<SceneFootprint, AppError> {
+        let object = self.requested.object_angles;
+        let view = self.requested.view;
+        let key = SceneFootprintKey::new(object, view, grid_extent);
+        let cached = self
+            .checked_scene_footprints
+            .borrow()
+            .iter()
+            .copied()
+            .flatten()
+            .find(|cached| cached.key == key)
+            .map(|cached| cached.footprint);
+        if let Some(cached) = cached {
+            return Ok(cached);
+        }
+        let footprint =
+            scene_footprint(&object, &view, grid_extent[0], grid_extent[1]).map_err(math_error)?;
+        let mut cached = self.checked_scene_footprints.borrow_mut();
+        cached[0] = cached[1];
+        cached[1] = Some(CheckedSceneFootprint { key, footprint });
+        #[cfg(test)]
+        self.footprint_constructions
+            .set(self.footprint_constructions.get().saturating_add(1));
+        Ok(footprint)
+    }
+
     /// Builds the coarse backdrop map from the cached main homography at the same extent.
     ///
     /// The cache owns only the neutral-height presented-camera rows. The returned copy carries the
-    /// footprint's unbounded apron, so backdrop use cannot evict an otherwise identical main map.
+    /// footprint's raster-selected apron, so backdrop use cannot evict an otherwise identical main
+    /// map.
     ///
     /// # Errors
     ///
     /// Returns a typed math refusal for an invalid extent, footprint, or map.
     pub fn backdrop_map(&self, grid_extent: [u32; 2]) -> Result<Option<PoseMap>, AppError> {
-        let footprint = scene_footprint(
-            &self.requested.object_angles,
-            &self.requested.view,
-            grid_extent[0],
-            grid_extent[1],
-        )
-        .map_err(math_error)?;
-        if footprint.boundary_scale >= 1.0 {
+        let footprint = self.scene_footprint(grid_extent)?;
+        if footprint.apron_scale.to_bits() == 1.0_f64.to_bits() {
             return Ok(None);
         }
         match self.screen_map(grid_extent)? {
@@ -1188,6 +1246,11 @@ impl ViewerController {
     #[cfg(test)]
     pub(crate) const fn map_construction_count(&self) -> u64 {
         self.map_constructions.get()
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn footprint_construction_count(&self) -> u64 {
+        self.footprint_constructions.get()
     }
 
     fn mapped_screen_map(&self, grid_extent: [u32; 2]) -> Result<Homography, AppError> {
@@ -1281,6 +1344,76 @@ mod tests {
     /// The reference browser geometry: a 960x540 render grid laid out at this client rectangle.
     const REFERENCE_RECT: [f64; 2] = [1_022.793_762_207_031_2, 575.315_673_828_125];
     const REFERENCE_GRID: [u32; 2] = [960, 540];
+
+    fn set_close_owner_row(viewer: &mut ViewerController) {
+        viewer
+            .set_object_angles(ObjectAngles {
+                rho_13: -1.316_653_720_171_549_4,
+                rho_24: -1.316_653_720_171_549_4,
+                ..ObjectAngles::IDENTITY
+            })
+            .expect("owner object angles");
+        let mut camera = [0.0; 10];
+        camera[1] = -0.254_142_606_623_347_1;
+        camera[4] = -0.254_142_606_623_347_1;
+        viewer
+            .set_view_controls(ViewControls {
+                height_scale: 4.0,
+                distance_five: 2.0,
+                distance_four: 2.0,
+                camera_yaw: 0.960_422_302_787_256,
+                camera_pitch: core::f64::consts::PI,
+                camera,
+                camera_translation: [0.0; 5],
+            })
+            .expect("owner relief view");
+    }
+
+    fn object_angles_from_array(values: [f64; 6]) -> ObjectAngles {
+        let [rho_12, rho_13, rho_14, rho_23, rho_24, rho_34] = values;
+        ObjectAngles {
+            rho_12,
+            rho_13,
+            rho_14,
+            rho_23,
+            rho_24,
+            rho_34,
+        }
+    }
+
+    fn view_controls_from_array(values: [f64; 20]) -> ViewControls {
+        let [
+            c12,
+            c13,
+            c14,
+            c23,
+            c24,
+            c34,
+            c15,
+            c25,
+            c35,
+            c45,
+            t1,
+            t2,
+            t3,
+            t4,
+            t5,
+            camera_yaw,
+            camera_pitch,
+            height_scale,
+            distance_five,
+            distance_four,
+        ] = values;
+        ViewControls {
+            camera: [c12, c13, c14, c23, c24, c34, c15, c25, c35, c45],
+            camera_translation: [t1, t2, t3, t4, t5],
+            camera_yaw,
+            camera_pitch,
+            height_scale,
+            distance_five,
+            distance_four,
+        }
+    }
 
     /// The screen-to-slice conversion and the slice-to-screen one are each other's inverse.
     ///
@@ -1715,7 +1848,161 @@ mod tests {
     }
 
     #[test]
+    fn footprint_cache_is_bit_exact_on_object_view_and_extent() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        set_close_owner_row(&mut viewer);
+        assert_eq!(viewer.footprint_construction_count(), 0);
+        let first = viewer
+            .scene_footprint(REFERENCE_GRID)
+            .expect("close footprint");
+        assert_eq!(viewer.footprint_construction_count(), 1);
+        for _ in 0..8 {
+            assert_eq!(
+                viewer
+                    .scene_footprint(REFERENCE_GRID)
+                    .expect("cached footprint"),
+                first
+            );
+            viewer
+                .backdrop_map(REFERENCE_GRID)
+                .expect("cached backdrop");
+        }
+        assert_eq!(viewer.footprint_construction_count(), 1);
+
+        viewer
+            .wheel_zoom(1.0, [0.0; 2])
+            .expect("zoom is outside the footprint key");
+        assert_eq!(
+            viewer
+                .scene_footprint(REFERENCE_GRID)
+                .expect("zoom-invariant footprint"),
+            first
+        );
+        assert_eq!(viewer.footprint_construction_count(), 1);
+
+        let mut view = viewer.requested().view;
+        view.height_scale = 3.5;
+        viewer.set_view_controls(view).expect("changed height");
+        viewer
+            .scene_footprint(REFERENCE_GRID)
+            .expect("changed-view footprint");
+        assert_eq!(viewer.footprint_construction_count(), 2);
+        viewer
+            .scene_footprint([800, 600])
+            .expect("changed-extent footprint");
+        assert_eq!(viewer.footprint_construction_count(), 3);
+
+        let mut signed_zero = viewer.requested().view;
+        signed_zero.camera_translation[4] = -0.0;
+        viewer
+            .set_view_controls(signed_zero)
+            .expect("signed-zero view");
+        viewer
+            .scene_footprint([800, 600])
+            .expect("bit-distinct footprint key");
+        assert_eq!(viewer.footprint_construction_count(), 4);
+    }
+
+    #[test]
+    fn each_object_and_view_scalar_requires_a_footprint_recompute() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        set_close_owner_row(&mut viewer);
+        let base_object = viewer.requested().object_angles;
+        let base_view = viewer.requested().view;
+        viewer
+            .scene_footprint(REFERENCE_GRID)
+            .expect("base footprint");
+        assert_eq!(viewer.footprint_construction_count(), 1);
+
+        for scalar in 0..26 {
+            viewer
+                .set_object_angles(base_object)
+                .expect("restore base object");
+            viewer
+                .set_view_controls(base_view)
+                .expect("restore base view");
+            viewer
+                .scene_footprint(REFERENCE_GRID)
+                .expect("cached base footprint");
+            let before = viewer.footprint_construction_count();
+
+            if scalar < 6 {
+                let mut values = base_object.as_array();
+                values[scalar] -= 1.0e-6;
+                viewer
+                    .set_object_angles(object_angles_from_array(values))
+                    .expect("changed object scalar");
+            } else {
+                let mut values = base_view.as_array();
+                values[scalar - 6] -= 1.0e-6;
+                viewer
+                    .set_view_controls(view_controls_from_array(values))
+                    .expect("changed view scalar");
+            }
+            viewer
+                .scene_footprint(REFERENCE_GRID)
+                .expect("changed-scalar footprint");
+            assert_eq!(
+                viewer.footprint_construction_count(),
+                before + 1,
+                "scalar {scalar} reused the base cache entry"
+            );
+        }
+    }
+
+    #[test]
     fn backdrop_map_copies_the_cached_main_rows_and_adds_only_its_apron() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        set_close_owner_row(&mut viewer);
+        let PoseMap::Mapped(main) = viewer.screen_map(REFERENCE_GRID).expect("main map") else {
+            panic!("owner row is mapped");
+        };
+        assert_eq!(main.apron_scale.to_bits(), 1.0_f64.to_bits());
+        assert_eq!(viewer.map_construction_count(), 1);
+        let Some(PoseMap::Mapped(backdrop)) =
+            viewer.backdrop_map(REFERENCE_GRID).expect("backdrop map")
+        else {
+            panic!("close owner row requests a backdrop");
+        };
+        assert_eq!(backdrop.rows, main.rows);
+        assert_eq!(backdrop.inverse, main.inverse);
+        assert_eq!(backdrop.condition_number, main.condition_number);
+        assert_eq!(backdrop.apron_scale.to_bits(), 2.0_f64.to_bits());
+        assert_eq!(viewer.footprint_construction_count(), 1);
+        assert_eq!(
+            viewer
+                .scene_footprint(REFERENCE_GRID)
+                .expect("cached footprint")
+                .apron_scale
+                .to_bits(),
+            2.0_f64.to_bits()
+        );
+        assert_eq!(viewer.footprint_construction_count(), 1);
+        assert_eq!(
+            viewer.map_construction_count(),
+            1,
+            "the backdrop copy reuses the extent-keyed main cache slot"
+        );
+    }
+
+    #[test]
+    fn second_owner_row_requests_the_smallest_qualifying_backdrop() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        set_close_owner_row(&mut viewer);
+        let Some(PoseMap::Mapped(backdrop)) =
+            viewer.backdrop_map(REFERENCE_GRID).expect("backdrop map")
+        else {
+            panic!("owner row requests a backdrop");
+        };
+        assert_eq!(backdrop.apron_scale.to_bits(), 2.0_f64.to_bits());
+        let PoseMap::Mapped(main) = viewer.screen_map(REFERENCE_GRID).expect("main map") else {
+            panic!("owner row is mapped");
+        };
+        assert_eq!(main.apron_scale.to_bits(), 1.0_f64.to_bits());
+    }
+
+    #[test]
+    fn first_owner_row_needs_no_backdrop_at_positive_height() {
         let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
         viewer
             .set_object_angles(ObjectAngles::JULIA)
@@ -1727,61 +2014,12 @@ mod tests {
                 ..ViewControls::NEUTRAL
             })
             .expect("owner relief view");
-        let PoseMap::Mapped(main) = viewer.screen_map(REFERENCE_GRID).expect("main map") else {
-            panic!("owner row is mapped");
-        };
-        assert_eq!(main.apron_scale.to_bits(), 1.0_f64.to_bits());
-        assert_eq!(viewer.map_construction_count(), 1);
-        let Some(PoseMap::Mapped(backdrop)) =
-            viewer.backdrop_map(REFERENCE_GRID).expect("backdrop map")
-        else {
-            panic!("owner row requests a backdrop");
-        };
-        assert_eq!(backdrop.rows, main.rows);
-        assert_eq!(backdrop.inverse, main.inverse);
-        assert_eq!(backdrop.condition_number, main.condition_number);
-        assert!((backdrop.apron_scale - 1.541_25).abs() < 1.0e-4);
         assert_eq!(
-            viewer.map_construction_count(),
-            1,
-            "the backdrop copy reuses the extent-keyed main cache slot"
+            viewer
+                .backdrop_map(REFERENCE_GRID)
+                .expect("owner footprint"),
+            None
         );
-    }
-
-    #[test]
-    fn second_owner_row_requests_an_unclamped_fivefold_backdrop() {
-        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
-        viewer
-            .set_object_angles(ObjectAngles {
-                rho_13: -1.316_653_720_171_549_4,
-                rho_24: -1.316_653_720_171_549_4,
-                ..ObjectAngles::IDENTITY
-            })
-            .expect("owner object angles");
-        let mut camera = [0.0; 10];
-        camera[1] = -0.254_142_606_623_347_1;
-        camera[4] = -0.254_142_606_623_347_1;
-        viewer
-            .set_view_controls(ViewControls {
-                height_scale: 4.0,
-                distance_five: 2.0,
-                distance_four: 2.0,
-                camera_yaw: 0.960_422_302_787_256,
-                camera_pitch: core::f64::consts::PI,
-                camera,
-                camera_translation: [0.0; 5],
-            })
-            .expect("owner relief view");
-        let Some(PoseMap::Mapped(backdrop)) =
-            viewer.backdrop_map(REFERENCE_GRID).expect("backdrop map")
-        else {
-            panic!("owner row requests a backdrop");
-        };
-        assert!((backdrop.apron_scale - 5.0).abs() < 1.0e-9);
-        let PoseMap::Mapped(main) = viewer.screen_map(REFERENCE_GRID).expect("main map") else {
-            panic!("owner row is mapped");
-        };
-        assert_eq!(main.apron_scale.to_bits(), 1.0_f64.to_bits());
     }
 
     #[test]
@@ -1797,6 +2035,38 @@ mod tests {
             main
         );
         assert_eq!(viewer.map_construction_count(), 1);
+    }
+
+    #[test]
+    fn shipped_presets_refuse_sub_threshold_backdrops() {
+        let mut viewer = ViewerController::new(REFERENCE_GRID).expect("canonical viewer");
+        let backdrop_extent = [REFERENCE_GRID[0] / 2, REFERENCE_GRID[1] / 2];
+        for row in PRESET_ROWS {
+            viewer.apply_preset(row).expect("relief preset is valid");
+            let footprint = viewer
+                .scene_footprint(backdrop_extent)
+                .expect("preset footprint");
+            assert_eq!(
+                footprint.apron_scale.to_bits(),
+                1.0_f64.to_bits(),
+                "{} footprint",
+                row.name
+            );
+            assert!(
+                footprint.uncovered_fraction < 40.0 / 3969.0,
+                "{} has a policy-significant uncovered share of {}",
+                row.name,
+                footprint.uncovered_fraction
+            );
+            assert!(
+                viewer
+                    .backdrop_map(backdrop_extent)
+                    .expect("preset backdrop")
+                    .is_none(),
+                "{} backdrop",
+                row.name
+            );
+        }
     }
 
     #[test]

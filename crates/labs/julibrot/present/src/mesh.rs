@@ -124,8 +124,8 @@ pub fn display_coordinate(extent: [u32; 2], pixel: [u32; 2]) -> Result<[f32; 2],
 
 /// Applies the exact record height and honest-debug decision to an escape record.
 ///
-/// The returned height is the record's own `H` in `[-2,2]`; the height control multiplies it, so
-/// `h=0` flattens every vertex without changing this classification.
+/// The returned height is the record's own `H` in `[-2,2]`; presentation maps that domain from the
+/// chart floor zero through the former positive peak, without changing this classification.
 ///
 /// # Errors
 ///

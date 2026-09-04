@@ -512,7 +512,7 @@ fn project_scene_vertex_with_shortcut(
         mapped_homogeneous[0] / mapped_homogeneous[2],
         mapped_homogeneous[1] / mapped_homogeneous[2],
     ];
-    let height = pose.view.height_scale * record_height;
+    let height = pose.view.height_scale * (record_height + 2.0) * 0.5;
     if flat_shortcut && height == 0.0 && map.apron_scale.to_bits() == 1.0_f64.to_bits() {
         return Some((screen, 1.0));
     }
@@ -807,7 +807,7 @@ mod tests {
     }
 
     #[test]
-    fn height_zero_shortcut_matches_the_full_forward_chain() {
+    fn floor_shortcut_matches_the_full_forward_chain() {
         let mut moved_camera = [0.0; 10];
         moved_camera[0] = 0.6;
         moved_camera[8] = -0.3;
@@ -835,15 +835,34 @@ mod tests {
                             (f64::from(row) / f64::from(SCREEN_STEPS - 1) - 0.5)
                                 * f64::from(extent[1]),
                         ];
-                        let shortcut = project_scene_point(&posed, screen, 0.0)
-                            .expect("the flat shortcut projects");
-                        let full = project_scene_point_with_shortcut(&posed, screen, 0.0, false)
-                            .expect("the full flat chain projects");
+                        let record_height = if view.height_scale.to_bits() == 0.0_f64.to_bits() {
+                            0.0
+                        } else {
+                            -2.0
+                        };
+                        let shortcut = project_scene_point(&posed, screen, record_height)
+                            .expect("the floor shortcut projects");
+                        let full =
+                            project_scene_point_with_shortcut(&posed, screen, record_height, false)
+                                .expect("the full floor chain projects");
                         assert_eq!(shortcut, screen);
                         let error = (shortcut[0] - full[0]).hypot(shortcut[1] - full[1]);
                         assert!(error <= 1.0e-9, "full-chain error was {error} px");
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn zero_height_amplitude_is_bit_identical_for_every_record_height() {
+        let posed = pose(ViewControls::NEUTRAL, [0.0; 2]);
+        for record_height in HEIGHT_SAMPLES {
+            for screen in screen_corners(&posed).into_iter().chain([[0.0; 2]]) {
+                assert_eq!(
+                    project_scene_point(&posed, screen, record_height),
+                    Some(screen)
+                );
             }
         }
     }
@@ -1097,10 +1116,9 @@ mod tests {
 
     /// The height control is the one observer degree of freedom the image homography cannot hold.
     ///
-    /// The same plan is proved exact wherever the record height is zero and beyond the ceiling as
-    /// soon as it is not, which is what makes the refusal geometry rather than arithmetic: the
-    /// destination differs from the retained image by a displacement each pixel takes in
-    /// proportion to its own escape height.
+    /// The same plan is proved exact on the record floor and beyond the ceiling above it, which is
+    /// what makes the refusal geometry rather than arithmetic: the destination differs from the
+    /// retained image by a displacement each pixel takes from its height above that floor.
     #[test]
     fn a_pure_height_change_selects_a_relief_redraw_and_is_flat_exact() {
         let mut lifted = ViewControls::NEUTRAL;
@@ -1124,10 +1142,10 @@ mod tests {
         );
 
         let displayed = unpack_rows(plan.rows);
-        let mut flat_error = 0.0_f64;
+        let mut floor_error = 0.0_f64;
         let mut lifted_error = 0.0_f64;
         for corner in screen_corners(&to).into_iter().chain([[0.0; 2]]) {
-            for (height, worst) in [(0.0, &mut flat_error), (1.0, &mut lifted_error)] {
+            for (height, worst) in [(-2.0, &mut floor_error), (1.0, &mut lifted_error)] {
                 let source =
                     apply_homography(displayed, corner).expect("displayed map has no pole");
                 let destination =
@@ -1141,12 +1159,62 @@ mod tests {
             }
         }
         assert!(
-            flat_error <= 1.0e-6,
-            "the same map carries every flat record exactly: {flat_error}"
+            floor_error <= 1.0e-6,
+            "the same map carries every floor record exactly: {floor_error}"
         );
         assert!(
             lifted_error > WARP_MAX_ERROR_PX,
             "the record height alone breaks it: {lifted_error}"
+        );
+    }
+
+    #[test]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the requested relief corpus publishes its freshly measured pixel table"
+    )]
+    fn floor_anchored_relief_corpus_pins_the_published_measurements() {
+        fn published_pose(height_scale: f64, distance_five: f64) -> Pose {
+            let mut posed = pose(
+                ViewControls {
+                    height_scale,
+                    distance_five,
+                    ..ViewControls::NEUTRAL
+                },
+                [0.0; 2],
+            );
+            set_extent(&mut posed, [960, 540]);
+            posed
+        }
+
+        fn maximum(from: &Pose, to: &Pose) -> f64 {
+            reproject(&frame(from), from, to)
+                .approx_max_error_px
+                .expect("the published relief fixture is measurable")
+        }
+
+        let flat = published_pose(0.0, 8.0);
+        let step = published_pose(0.005, 8.0);
+        let one = published_pose(1.0, 8.0);
+        let half = published_pose(0.5, 8.0);
+        let nearer = published_pose(1.0, 6.0);
+        let measured = [
+            maximum(&flat, &step),
+            maximum(&flat, &one),
+            maximum(&one, &half),
+            maximum(&one, &nearer),
+        ];
+        let expected = [0.689, 183.58, 104.90, 91.79];
+        let tolerances = [0.0005, 0.005, 0.005, 0.005];
+        for ((actual, expected), tolerance) in measured.into_iter().zip(expected).zip(tolerances) {
+            assert!(
+                (actual - expected).abs() < tolerance,
+                "measured {actual} px, expected published rounding {expected} px"
+            );
+        }
+        eprintln!(
+            "floor relief corpus | 0 -> 0.005 = {:.6} px | 0 -> 1 = {:.6} px | 1 -> 0.5 = {:.6} px | d5 8 -> 6 h1 = {:.6} px",
+            measured[0], measured[1], measured[2], measured[3]
         );
     }
 
@@ -1310,9 +1378,9 @@ mod tests {
             .inverse;
         for target in [[-321.0, 117.0], [0.0, 0.0], [287.0, -91.0]] {
             let source_flat = apply_homography(inverse, target).expect("flat source is finite");
-            let destination = project_scene_point_with_shortcut(&to, target, 0.0, false)
+            let destination = project_scene_point_with_shortcut(&to, target, -2.0, false)
                 .expect("translated full chain projects");
-            let expected = project_scene_point_with_shortcut(&from, source_flat, 0.0, false)
+            let expected = project_scene_point_with_shortcut(&from, source_flat, -2.0, false)
                 .expect("source full chain projects");
             let actual = apply_homography(inverse, destination).expect("warp projects");
             let error = (actual[0] - expected[0]).hypot(actual[1] - expected[1]);

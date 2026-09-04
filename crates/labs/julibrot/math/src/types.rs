@@ -352,8 +352,8 @@ impl ViewControls {
         ]
     }
 
-    /// Reports whether every control is finite, the height is non-negative, and both distances are
-    /// strictly positive.
+    /// Reports whether every control is finite, the height is in the page's closed `[0,4]` range,
+    /// and both distances are strictly positive.
     #[must_use]
     pub fn is_valid(self) -> bool {
         self.as_array().iter().all(|value| value.is_finite())
@@ -361,7 +361,7 @@ impl ViewControls {
                 .camera
                 .into_iter()
                 .all(|angle| angle.abs() <= core::f64::consts::PI)
-            && self.height_scale >= 0.0
+            && (0.0..=4.0).contains(&self.height_scale)
             && self.distance_five > 0.0
             && self.distance_four > 0.0
     }
@@ -474,6 +474,7 @@ pub enum MathError {
 mod tests {
     use super::{
         CentreF64, CentreSplit, EscapeGridRecord, EscapeParams, Plane, ReferenceOrbitRecord,
+        ViewControls,
     };
     use std::mem::{align_of, offset_of, size_of};
 
@@ -492,5 +493,27 @@ mod tests {
         assert_eq!(size_of::<EscapeGridRecord>(), 16);
         assert_eq!(offset_of!(EscapeGridRecord, status), 12);
         assert_eq!(size_of::<CentreF64>(), 32);
+    }
+
+    #[test]
+    fn view_height_is_bounded_to_the_reachable_page_control() {
+        for height_scale in [0.0, 1.0, 4.0] {
+            assert!(
+                ViewControls {
+                    height_scale,
+                    ..ViewControls::NEUTRAL
+                }
+                .is_valid()
+            );
+        }
+        for height_scale in [-f64::EPSILON, 4.0 + 1.0e-12, f64::INFINITY] {
+            assert!(
+                !ViewControls {
+                    height_scale,
+                    ..ViewControls::NEUTRAL
+                }
+                .is_valid()
+            );
+        }
     }
 }
