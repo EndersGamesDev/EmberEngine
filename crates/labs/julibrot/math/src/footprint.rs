@@ -877,6 +877,10 @@ mod tests {
 
     /// Pins the sub-threshold raster spread behind the two shipped relief preset decisions.
     #[test]
+    #[allow(
+        clippy::print_stderr,
+        reason = "the exact target-local count is diagnostic rather than a cross-target pin"
+    )]
     fn shipped_relief_presets_refuse_sub_threshold_backdrops() {
         let extent = [480, 270];
         for (name, object, view) in shipped_relief_rows() {
