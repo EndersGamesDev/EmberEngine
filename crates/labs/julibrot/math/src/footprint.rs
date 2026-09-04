@@ -122,16 +122,32 @@ pub fn scene_footprint(
         return Err(MathError::DegenerateViewMap);
     }
     let apron_scale = 1.0 / boundary_scale;
-    let matrix = camera_matrix(view);
-    let uncovered = uncovered_fraction(&map, plane, view, &matrix, [grid_w, grid_h], apron_scale);
-    let relief_clipped_fraction =
-        clipped_fraction(&map, plane, view, &matrix, grid_w, grid_h, apron_scale);
+    let chain = VertexChain {
+        map: &map,
+        plane,
+        view,
+        matrix: camera_matrix(view),
+    };
+    let uncovered = uncovered_fraction(&chain, [grid_w, grid_h], apron_scale);
+    let relief_clipped_fraction = clipped_fraction(&chain, grid_w, grid_h, apron_scale);
     Ok(SceneFootprint {
         boundary_scale,
         apron_scale,
         uncovered_fraction: uncovered,
         relief_clipped_fraction,
     })
+}
+
+/// The fixed part of the scene vertex chain, built once per pose.
+///
+/// The sampling map, its plane, the view controls and the five-dimensional camera matrix are the
+/// same for every vertex of every census height; carrying them together is what keeps the mirror's
+/// per-vertex signatures readable, and it also builds the camera matrix once instead of per point.
+struct VertexChain<'a> {
+    map: &'a crate::Homography,
+    plane: Plane,
+    view: &'a ViewControls,
+    matrix: [[f64; 5]; 5],
 }
 
 /// One frame sample position on the closed `[-1,1]` lattice.
@@ -149,37 +165,22 @@ fn lattice_value(index: usize) -> f64 {
 ///
 /// The heights are sampled, so the reachable set is a subset of the true one and the returned share
 /// is an upper bound on the sky the pose cannot avoid.
-fn uncovered_fraction(
-    map: &crate::Homography,
-    plane: Plane,
-    view: &ViewControls,
-    matrix: &[[f64; 5]; 5],
-    extent: [u32; 2],
-    apron_scale: f64,
-) -> f64 {
+fn uncovered_fraction(chain: &VertexChain<'_>, extent: [u32; 2], apron_scale: f64) -> f64 {
     let side = COVERAGE_LATTICE_SIDE;
     let mut reached = vec![false; side * side];
     let mesh = COVERAGE_MESH_SIDE as usize;
     let mut projected: Vec<Option<([f64; 2], bool)>> = vec![None; mesh * mesh];
     let [grid_w, grid_h] = extent;
     for record_height in CENSUS_HEIGHTS {
-        let height = view.height_scale * record_height;
+        let height = chain.view.height_scale * record_height;
         for row in 0..mesh {
             for column in 0..mesh {
                 let screen = [
                     (column as f64 / (mesh - 1) as f64 - 0.5) * f64::from(grid_w),
                     (row as f64 / (mesh - 1) as f64 - 0.5) * f64::from(grid_h),
                 ];
-                projected[row * mesh + column] = project_vertex(
-                    map,
-                    plane,
-                    view,
-                    matrix,
-                    extent,
-                    screen,
-                    height,
-                    apron_scale,
-                );
+                projected[row * mesh + column] =
+                    project_vertex(chain, extent, screen, height, apron_scale);
             }
         }
         for row in 0..mesh - 1 {
@@ -219,6 +220,11 @@ fn drawn_triangle(triangle: [Option<([f64; 2], bool)>; 3]) -> Option<[[f64; 2]; 
 }
 
 /// Marks every lattice sample inside one device-space triangle.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the bounding-box indices are floored from values already clamped to [0, span]"
+)]
 fn mark_triangle(reached: &mut [bool], triangle: [[f64; 2]; 3]) {
     let side = COVERAGE_LATTICE_SIDE;
     let xs = [triangle[0][0], triangle[1][0], triangle[2][0]];
@@ -235,7 +241,10 @@ fn mark_triangle(reached: &mut [bool], triangle: [[f64; 2]; 3]) {
         return;
     }
     let span = (side - 1) as f64;
-    let index_of = |value: f64| ((value + 1.0) * 0.5 * span).floor();
+    // `value.mul_add(0.5, 0.5)` is the single-rounding form of `(value + 1.0) * 0.5`, and lands on
+    // the same binary64 result; it is written this way so the expression is a scale of the device
+    // coordinate rather than a midpoint of two bounds, which is what it means.
+    let index_of = |value: f64| (value.mul_add(0.5, 0.5) * span).floor();
     let low = |value: f64| index_of(value).max(0.0) as usize;
     let high = |value: f64| index_of(value).min(span).max(0.0) as usize + 1;
     let (column_first, column_last) = (low(x0), high(x1).min(side - 1));
@@ -270,27 +279,16 @@ fn mark_triangle(reached: &mut [bool], triangle: [[f64; 2]; 3]) {
 /// The second component reports whether the lift reached the five-dimensional near clamp, which is
 /// what lets a caller apply the shader's all-clamped primitive rule.
 fn project_vertex(
-    map: &crate::Homography,
-    plane: Plane,
-    view: &ViewControls,
-    matrix: &[[f64; 5]; 5],
+    chain: &VertexChain<'_>,
     extent: [u32; 2],
     screen: [f64; 2],
     height: f64,
     apron_scale: f64,
 ) -> Option<([f64; 2], bool)> {
     let [grid_w, grid_h] = extent;
+    let view = chain.view;
     let aspect = f64::from(grid_w) / f64::from(grid_h);
-    let mut ambient = ambient_vertex(
-        map,
-        plane,
-        view,
-        matrix,
-        grid_w,
-        screen,
-        height,
-        apron_scale,
-    )?;
+    let mut ambient = ambient_vertex(chain, grid_w, screen, height, apron_scale)?;
     let near_five = RELIEF_NEAR_FRACTION * view.distance_five;
     let maximum_fifth = view.distance_five - near_five;
     let clamped = ambient[4] > maximum_fifth;
@@ -346,16 +344,14 @@ fn project_vertex(
 
 /// Maps one grid point through the sampling chart and five-dimensional camera, before clipping.
 fn ambient_vertex(
-    map: &crate::Homography,
-    plane: Plane,
-    view: &ViewControls,
-    matrix: &[[f64; 5]; 5],
+    chain: &VertexChain<'_>,
     grid_w: u32,
     screen: [f64; 2],
     height: f64,
     apron_scale: f64,
 ) -> Option<[f64; 5]> {
-    let rows = map.rows;
+    let (plane, view, matrix) = (chain.plane, chain.view, &chain.matrix);
+    let rows = chain.map.rows;
     let homogeneous: [f64; 3] = core::array::from_fn(|row| {
         rows[3 * row] * screen[0] + rows[3 * row + 1] * screen[1] + rows[3 * row + 2]
     });
@@ -395,15 +391,8 @@ fn ambient_vertex(
 /// The denominator is the whole fixed census, projectable or not. A point beyond the projective
 /// horizon is not at the clamp, but removing it from the denominator would let a pose that projects
 /// almost nothing publish a comfortable share.
-fn clipped_fraction(
-    map: &crate::Homography,
-    plane: Plane,
-    view: &ViewControls,
-    matrix: &[[f64; 5]; 5],
-    grid_w: u32,
-    grid_h: u32,
-    apron_scale: f64,
-) -> f64 {
+fn clipped_fraction(chain: &VertexChain<'_>, grid_w: u32, grid_h: u32, apron_scale: f64) -> f64 {
+    let view = chain.view;
     let mut clipped = 0_u32;
     let mut total = 0_u32;
     for row in 0..CLIP_LATTICE_SIDE {
@@ -415,10 +404,7 @@ fn clipped_fraction(
             for record_height in CENSUS_HEIGHTS {
                 total += 1;
                 let Some(ambient) = ambient_vertex(
-                    map,
-                    plane,
-                    view,
-                    matrix,
+                    chain,
                     grid_w,
                     screen,
                     view.height_scale * record_height,
