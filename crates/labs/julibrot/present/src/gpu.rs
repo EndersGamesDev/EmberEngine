@@ -1894,11 +1894,10 @@ mod tests {
         assert_eq!(accepted, bounded);
 
         let mut facts = PresentFacts::default();
-        facts.record_warp_plan(&apply_hold_policy(
-            clear_warp_plan(false, true),
-            ledger.retained(),
-            true,
-        ), Some(0.0));
+        facts.record_warp_plan(
+            &apply_hold_policy(clear_warp_plan(false, true), ledger.retained(), true),
+            Some(0.0),
+        );
         assert_eq!(facts.warp_kind, WarpKind::HoldStale);
         facts.record_warp_plan(&accepted, Some(0.0));
         assert_eq!(facts.warp_kind, WarpKind::AnchorHomography);
